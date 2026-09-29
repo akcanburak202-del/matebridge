@@ -64,3 +64,7 @@ Tablette 60 fps içerik ~57 fps geliyor (NOTES 2026-09-29, T-016 ölçümleri). 
 
 Varsayılan ayarla `--dump-video` + Safari 60 fps: cap 60,0 fps, p50/95/99 16,7/16,7/16,7, late 0, overwritten 0, sent 60,0. Canlı: tablete ~60 fps, gecikme Wi-Fi 26–33 ms, USB ~19 ms. Codex incelemesi ayrıca işlenecek.
 
+
+## T-017b: gate düzeltmesi (Codex P1/P2)
+
+`FramePacer` + `FrameGate` (Core) yeniden yazıldı: uygunluk şimdiki zamana göre (statik ekranda bekleyen kare sonsuza dek ertelenmez), doğrudan gönderilen daha yeni kare eski bekleyeni atar (overwritten), son gönderilenden eski PTS asla gönderilmez, kapı slot biriktirici (`nextSlot += interval`, 1 aralıktan fazla geride ise yeniden çapalanır, ~2 ms tolerans) ile ortalama hızı sınırlar. `--dump-video` son pencereyi alıp ticker beklendikten sonra TOTAL yazar. Testler `FrameGateTests`. Cihazda yeniden doğrulanmadı.
