@@ -61,6 +61,9 @@ class SessionMachine(private val hello: Hello) {
 
     private var hostName = ""
     private var sessionId = 0L
+
+    /** For log correlation only. */
+    val currentSessionId: Long get() = sessionId
     private var videoPort = 0
     private var config: StreamConfig? = null
 

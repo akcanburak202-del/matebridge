@@ -1,8 +1,10 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.FrameDecoder
 import dev.matebridge.client.protocol.Hello
+import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
@@ -123,18 +125,50 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
 
     private fun dispatch(e: SessionMachine.Event) {
         if (e is SessionMachine.Event.Start) videoFrames.set(0)
+        logEvent(e)
         val actions = machine.handle(e, nowUs())
         inputAllowed = machine.inputAllowed
+        MbLog.sid = machine.currentSessionId
         for (a in actions) exec(a)
+    }
+
+    /** Concise session log (docs/LOGGING.md). Never per frame, never names or message text. */
+    private fun logEvent(e: SessionMachine.Event) {
+        when (e) {
+            is SessionMachine.Event.Start -> MbLog.i("session_start", "host=${e.endpoint.host} port=${e.endpoint.port}")
+            SessionMachine.Event.Stop -> MbLog.i("session_stop")
+            is SessionMachine.Event.ControlOpened -> MbLog.i("connect_ok")
+            is SessionMachine.Event.ControlClosed ->
+                if (e.connectFailed) MbLog.w("connect_fail") else MbLog.w("control_closed")
+            is SessionMachine.Event.ProtocolError -> MbLog.e("protocol_error")
+            is SessionMachine.Event.VideoClosed -> MbLog.w("video_closed", "vgen=${e.gen}")
+            is SessionMachine.Event.Received -> when (val m = e.msg) {
+                is HelloAck -> MbLog.i("hello_ack", "status=${m.status} video_port=${m.videoPort}")
+                is StreamConfig -> MbLog.i(
+                    "stream_config",
+                    "config_id=${m.configId} codec=${m.codec} size=${m.widthPx}x${m.heightPx} fps=${m.fps}",
+                )
+                is Bye -> MbLog.i("bye_recv", "reason=${m.reason}")
+                else -> Unit
+            }
+            is SessionMachine.Event.Tick -> Unit
+        }
     }
 
     private fun exec(a: SessionMachine.Action) {
         when (a) {
             is SessionMachine.Action.OpenControl -> {
+                MbLog.gen = a.gen
+                MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint).also { it.startThreads() }
             }
             is SessionMachine.Action.Send -> {
+                when (val m = a.msg) {
+                    is Hello -> MbLog.i("hello_sent", "proto=${m.protocolVersion}")
+                    is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
+                    else -> Unit
+                }
                 control?.link?.send(a.msg) // overflow is reported through the link itself
             }
             is SessionMachine.Action.CloseControl -> {
@@ -142,15 +176,24 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                 control = null
             }
             is SessionMachine.Action.OpenVideo -> {
+                MbLog.i("video_open", "vgen=${a.gen} port=${a.endpoint.port} config_id=${a.hello.configId}")
                 video?.abort()
                 video = VideoConn(a.gen, a.endpoint, a.hello).also { it.startThread() }
             }
             SessionMachine.Action.CloseVideo -> {
+                if (video != null) MbLog.i("video_close")
                 video?.abort()
                 video = null
             }
             is SessionMachine.Action.ApplyConfig -> listener.onStreamConfig(a.config)
-            is SessionMachine.Action.Ui -> listener.onUi(a.state)
+            is SessionMachine.Action.Ui -> {
+                when (val u = a.state) {
+                    is SessionUi.Disconnected -> MbLog.i("reconnect", "cause=${u.cause} delay_ms=${u.retryInMs}")
+                    is SessionUi.Failed -> MbLog.w("session_failed", "cause=${u.cause}")
+                    else -> Unit
+                }
+                listener.onUi(a.state)
+            }
         }
     }
 

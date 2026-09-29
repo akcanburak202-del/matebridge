@@ -71,6 +71,7 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         started = true
+        dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
         render(SessionUi.Searching)
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         started = false
+        dev.matebridge.client.session.MbLog.i("activity_stop")
         discovery?.stop()
         discovery = null
         controller.stop() // sends BYE, closes both connections
