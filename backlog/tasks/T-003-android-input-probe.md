@@ -48,5 +48,5 @@ Gradle projesi (AGP 9.4.1 yerleşik Kotlin, Gradle 9.8.0 wrapper) `probes/input-
 
 776b179 APK'sı MatePad'e kuruldu, kullanıcı kalem/klavye/trackpad/pointer capture senaryosunu uyguladı. İki oturum, ~4.850 hareket ve 120 tuş olayı. Tüm alanlar kaydedildi, çökme yok. Bulgular `docs/NOTES.md` → "2026-09-29 — Girdi probu sonuçları". Ham JSONL dosyaları repoya konmadı (tuş kodları içeriyor).
 
-Açık kalan: Tab DOWN, Backspace ve Cmd/Meta hiç görülmedi (bkz. NOTES). Kısa bir tekrar testi T-007 öncesi yapılacak.
+Tekrar testi yapıldı: Tab düzgün. Fn ve Huawei halka tuşu uygulamaya ulaşmıyor, klavyede Cmd/Meta yok. Backspace hâlâ test edilmedi (bkz. NOTES).
 
