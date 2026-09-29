@@ -64,13 +64,14 @@ def render(title, lines):
     return "\n".join(out) + "\n"
 
 
-PEN_FLAGS = {0x01: "IN_RANGE", 0x02: "CONTACT", 0x04: "BUTTON"}
+PEN_FLAGS = {0x01: "IN_RANGE", 0x02: "CONTACT", 0x04: "BUTTON", 0x08: "STROKE_START"}
 
 
 def pen_sample(dt_us, x, y, p, tx, ty, flags, note):
     # Guard against fixture typos: the comment is derived from the bits, and the documented invariants hold.
-    assert flags & ~0x07 == 0, "undefined pen flag bits"
+    assert flags & ~0x0F == 0, "undefined pen flag bits"
     assert not (flags & 0x02) or (flags & 0x01), "CONTACT requires IN_RANGE"
+    assert not (flags & 0x08) or (flags & 0x02), "STROKE_START requires CONTACT"
     assert (p > 0) <= bool(flags & 0x02), "pressure > 0 requires CONTACT"
     assert -32767 <= tx <= 32767 and -32767 <= ty <= 32767, "tilt range"
     names = "|".join(n for b, n in PEN_FLAGS.items() if flags & b) or "none"
@@ -136,7 +137,7 @@ FIXTURES = {
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 1127411618000),
     ] + pen_sample(0, 22364, 12738, 0, 3000, 2500, 0x01, "IN_RANGE")
-      + pen_sample(3000, 22380, 12750, 288, 3000, 2500, 0x03, "IN_RANGE|CONTACT")
+      + pen_sample(3000, 22380, 12750, 288, 3000, 2500, 0x0B, "IN_RANGE|CONTACT|STROKE_START")
       + pen_sample(6000, 22410, 12771, 32768, 2980, 2490, 0x03, "IN_RANGE|CONTACT")
       + pen_sample(9000, 22430, 12790, 0, 2980, 2490, 0x01, "IN_RANGE, contact lifted"))),
     "pen_leave": ("PEN: out of range (proximity leave)", frame("PEN", [
@@ -145,12 +146,12 @@ FIXTURES = {
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 1127411700000),
     ] + pen_sample(0, 22430, 12790, 0, 0, 0, 0x00, "not in range"))),
-    "pen_eraser": ("PEN: eraser tool in contact with barrel button", frame("PEN", [
+    "pen_eraser": ("PEN: eraser stroke starts directly (no hover) with barrel button", frame("PEN", [
         field("u8", "tool", 1, "ERASER"),
         field("u8", "count", 1),
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 1127411800000),
-    ] + pen_sample(0, 1000, 2000, 65535, -32767, 0, 0x07, "IN_RANGE|CONTACT|BUTTON"))),
+    ] + pen_sample(0, 1000, 2000, 65535, -32767, 0, 0x0F, "IN_RANGE|CONTACT|BUTTON|STROKE_START"))),
     "key_down": ("KEY: A down", frame("KEY", [
         field("u64", "time_us", 1127463498000),
         field("u16", "scan_code", 30, "evdev KEY_A"),

@@ -161,10 +161,10 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 | pressure | u16 | 0…65535. `CONTACT` yoksa 0. |
 | tilt_x | i16 | −1…1 (§1). Pozitif: kalemin üst ucu sağa (+x) yatık. |
 | tilt_y | i16 | −1…1. Pozitif: üst uç aşağıya (+y, kullanıcıya doğru) yatık. |
-| flags | u8 | bit0 `IN_RANGE` (yakınlıkta: hover veya temas), bit1 `CONTACT` (ekrana değiyor), bit2 `BUTTON` (kalem yan tuşu; Aşama 0'da hiç görülmedi, doğrulanmadı) |
+| flags | u8 | bit0 `IN_RANGE` (yakınlıkta: hover veya temas), bit1 `CONTACT` (ekrana değiyor), bit2 `BUTTON` (kalem yan tuşu; Aşama 0'da hiç görülmedi, doğrulanmadı), bit3 `STROKE_START` (yalnızca bir temasın ilk örneğinde, yani Android `ACTION_DOWN` örneğinde; `CONTACT` ile birlikte) |
 | reserved | u8 | |
 
-`CONTACT` her zaman `IN_RANGE` ile birlikte gelir. `CONTACT=1, IN_RANGE=0` gelirse host bunu `flags = 0` sayar.
+`CONTACT` her zaman `IN_RANGE` ile, `STROKE_START` her zaman `CONTACT` ile birlikte gelir. `CONTACT=1, IN_RANGE=0` gelirse host bunu `flags = 0` sayar.
 
 **Eğim yönü:** Mac tarafında `tilt_x`/`tilt_y` doğrudan `NSEvent.tilt` anlamındadır: x −1 sol … +1 sağ, y −1 üst … +1 alt. Android dönüşümü **geçicidir ve cihazda kalibre edilecektir**: `θ = AXIS_TILT` (0 = dik), `φ = AXIS_ORIENTATION` (0 = yukarı, saat yönünde pozitif), `tilt_x = sin θ · sin φ`, `tilt_y = −sin θ · cos φ`. Aşama 0'da temas sırasında eğimin seyrek güncellendiği görüldü. İstemci son bilinen değeri tekrarlar.
 
@@ -187,7 +187,7 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 | `IN_RANGE` 1→0 | temas sürüyorsa önce mouse **up**, sonra proximity **leave** |
 | `tool` değişti | eski araç için up (gerekirse) + leave, yeni araç için enter |
 
-**Reset sonrası kural:** release-all (§7) sonrasında gelen ilk örneklerde `CONTACT=1` ise, bu yeni bir basış **sayılmaz**. Host bu örnekleri yalnızca hover olarak işler ve `CONTACT=0` görene kadar down üretmez. Bu kural, TCP tıkanmasından sonra gecikmiş gelen eski vuruş örneklerinin Mac'te "sürükleme" başlatmasını önler.
+**Kilit (latch) kuralı:** Host'un **kendi başlattığı** release-all'dan sonra (heartbeat sessizliği veya kalem watchdog'u, §7) o araç için kilit kurulur. Kilit varken `CONTACT=1` örnekler yeni bir basış **sayılmaz** ve yalnızca hover olarak işlenir. Kilit, `CONTACT=0` olan bir örnek veya `STROKE_START` bayraklı bir örnek geldiğinde kalkar. Bu kural, TCP tıkanmasından sonra gecikmiş gelen eski vuruş ortası örneklerinin Mac'te "sürükleme" başlatmasını önler. Yeni bir vuruş ise `STROKE_START` ile hemen başlar. İstemcinin gönderdiği `RELEASE_ALL`, `BYE` ve yeni oturum kilit **kurmaz**, çünkü TCP sırası sonrasındaki örneklerin gerçekten yeni olduğunu garanti eder.
 
 ### 0x11 KEY (C→H)
 
@@ -393,9 +393,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - Kalem `IN_RANGE` iken **500 ms** PEN gelmezse host o araç için up (temas varsa) + leave üretir ve `flags = 0` sayar.
 - SCROLL hareketi açıkken **500 ms** SCROLL gelmezse host hareketi bitirir.
 
-**Kaynak ayrımı:** Host kalem, işaretçi (POINTER_REL/ABS) ve dokunma durumlarını ayrı tutar.
-- Sol düğmenin sahibi, onu basan kaynaktır. Başka bir kaynağın `buttons = 0` göndermesi, kalemin tuttuğu sol düğmeyi bırakmaz.
-- Kalem `IN_RANGE` iken `POINTER_ABS source=TOUCH` yok sayılır (avuç).
+**Kaynak ayrımı:** Host her kaynak için (kalem teması, `POINTER_REL`, `POINTER_ABS source=MOUSE`, `POINTER_ABS source=TOUCH`) basılı düğmeleri **ayrı** tutar. Mac'e giden düğme durumu, kaynakların **birleşimidir** (OR).
+- Birleşik durum 0→1 olduğunda down, 1→0 olduğunda up üretilir. Bir kaynağın bırakması, başka bir kaynak aynı düğmeyi hâlâ tutuyorsa up üretmez. Örnek: fare sol tuşu basılıyken kalem değer, sonra fare bırakılır → kalem vuruşu sürer.
+- Birleşik düğme basılıyken gelen hareketler dragged olarak üretilir. Kalem teması sürerken basınç ve eğim kalem örneklerinden gelir.
+- Kalem `IN_RANGE` iken `POINTER_ABS source=TOUCH` mesajlarındaki **yeni basışlar** yok sayılır (avuç reddi). **Bırakmalar asla yok sayılmaz:** dokunma kaynağının tuttuğu düğme, kalem menzildeyken de bırakılır.
 
 **İstemcinin yükümlülüğü:** İstemci bir DOWN gönderdiyse ilgili UP'u da gönderir. Göndermeden bağlantı koparsa host release-all ile telafi eder.
 
