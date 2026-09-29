@@ -11,7 +11,6 @@ import dev.matebridge.client.protocol.VideoHello
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
@@ -43,11 +42,10 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
     /** Messages from control reader threads; bounded, and only those threads ever block on it. */
     private val events = LinkedBlockingQueue<SessionMachine.Event>(EVENT_QUEUE_CAP)
 
-    /** Commands and close notifications: non-blocking to post from any thread, drained by the engine. */
-    private val urgent = ConcurrentLinkedQueue<SessionMachine.Event>()
-
-    /** Engine-thread-only follow-up events (handled inline, never through a blocking queue). */
-    private val local = ArrayDeque<SessionMachine.Event>()
+    /** Commands and close notifications: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine. */
+    private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
+    private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
+    private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
     private val videoFrames = AtomicLong()
     private val running = AtomicBoolean(false)
@@ -64,18 +62,18 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
     fun start(endpoint: Endpoint) {
         if (terminated.get()) return
         ensureEngine()
-        urgent.add(SessionMachine.Event.Start(endpoint))
+        intent.post(SessionMachine.Event.Start(endpoint))
     }
 
     /** Non-blocking. */
     fun stop() {
-        urgent.add(SessionMachine.Event.Stop)
+        intent.post(SessionMachine.Event.Stop)
     }
 
     /** Terminal: stops the session (BYE goes out gracefully) and the engine; later [start] calls are ignored. */
     fun shutdown() {
         if (!terminated.compareAndSet(false, true)) return
-        urgent.add(SessionMachine.Event.Stop)
+        intent.post(SessionMachine.Event.Stop)
         stopAfterDrain = true
     }
 
@@ -101,7 +99,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e = local.removeFirstOrNull() ?: urgent.poll()
+                var e: SessionMachine.Event? = intent.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = TICK_MS - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -186,7 +184,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         }
 
         private fun notifyClosed(connectFailed: Boolean) {
-            if (closedPosted.compareAndSet(false, true)) urgent.add(SessionMachine.Event.ControlClosed(gen, connectFailed))
+            if (closedPosted.compareAndSet(false, true)) controlClosed.post(SessionMachine.Event.ControlClosed(gen, connectFailed))
         }
 
         private fun readerLoop() {
@@ -194,6 +192,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
             } catch (e: IOException) {
+                closeQuietly(socket)
                 notifyClosed(connectFailed = true)
                 return
             }
@@ -276,7 +275,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                 // fall through
             }
             closeQuietly(socket)
-            if (closedPosted.compareAndSet(false, true)) urgent.add(SessionMachine.Event.VideoClosed(gen))
+            if (closedPosted.compareAndSet(false, true)) videoClosed.post(SessionMachine.Event.VideoClosed(gen))
         }
     }
 

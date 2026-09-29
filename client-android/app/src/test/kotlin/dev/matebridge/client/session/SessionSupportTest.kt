@@ -116,4 +116,21 @@ class SessionSupportTest {
         assertFalse(link.send(dev.matebridge.client.protocol.Bye(0)))
         assertEquals(0, closes)
     }
+
+    @Test fun rapidStartStopCoalescesToOneIntent() {
+        val latest = Latest<SessionMachine.Event>()
+        repeat(10_000) { i ->
+            latest.post(if (i % 2 == 0) SessionMachine.Event.Start(Endpoint("h", 1 + i % 60000)) else SessionMachine.Event.Stop)
+        }
+        assertEquals(SessionMachine.Event.Stop, latest.take()) // last of 10,000 wins
+        assertNull(latest.take()) // nothing else retained
+    }
+
+    @Test fun closeNotificationsKeepOnlyNewestGeneration() {
+        val slot = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
+        repeat(10_000) { slot.post(SessionMachine.Event.ControlClosed(it % 50)) }
+        slot.post(SessionMachine.Event.ControlClosed(7))
+        assertEquals(49, slot.take()!!.gen)
+        assertNull(slot.take())
+    }
 }

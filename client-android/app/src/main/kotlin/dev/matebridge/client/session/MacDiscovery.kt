@@ -51,7 +51,9 @@ class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
             override fun onServiceFound(info: NsdServiceInfo) {
                 synchronized(this@MacDiscovery) {
                     if (gen != generation) return
+                    pending.removeAll { it.serviceName == info.serviceName }
                     pending.addLast(info)
+                    while (pending.size > MAX_PENDING) pending.removeFirst() // drop the oldest
                 }
                 resolveNext(gen)
             }
@@ -110,5 +112,6 @@ class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
     private companion object {
         const val SERVICE_TYPE = "_matebridge._tcp."
         const val RETRY_MS = 3000L
+        const val MAX_PENDING = 16
     }
 }
