@@ -11,29 +11,61 @@ class FrameDecoder(private val maxPayload: Int) {
     private var buf = ByteArray(4096)
     private var start = 0
     private var end = 0
+    private var scanPos = 0 // start of the next header not yet validated (may lie beyond end)
     private var failure: ProtocolException? = null
 
     /** Number of unknown-type frames skipped so far. */
     var skippedFrames = 0
         private set
 
-    fun feed(data: ByteArray, offset: Int = 0, length: Int = data.size) {
-        if (failure != null) return
-        if (start == end) { start = 0; end = 0 }
-        if (end + length > buf.size) {
-            val live = end - start
-            if (live + length <= buf.size) {
-                System.arraycopy(buf, start, buf, 0, live)
-            } else {
-                val bigger = ByteArray(maxOf(buf.size * 2, live + length))
-                System.arraycopy(buf, start, bigger, 0, live)
-                buf = bigger
+    /**
+     * Appends bytes. Each 5-byte header is validated the moment it is complete, before any of its
+     * payload is buffered, so an oversized length fails immediately and buffered data stays bounded
+     * by header + [maxPayload] per frame. Bytes after a failure are discarded.
+     */
+    fun feed(data: ByteArray, offset: Int = 0, length: Int = data.size - offset) {
+        require(offset >= 0 && length >= 0 && offset + length <= data.size) { "bad range" }
+        var pos = offset
+        var left = length
+        while (left > 0 && failure == null) {
+            val have = end - scanPos
+            val take = if (have < 0) minOf(left, -have) // payload of an already validated frame
+            else minOf(left, HEADER - have) // rest of the next header (have < HEADER always here)
+            append(data, pos, take)
+            pos += take
+            left -= take
+            if (end - scanPos >= HEADER) {
+                val len = readLength(scanPos)
+                if (len > maxPayload) {
+                    failure = ProtocolException(ProtocolException.Kind.OVERSIZE, "payload $len > $maxPayload")
+                    return
+                }
+                scanPos += HEADER + len.toInt()
             }
+        }
+    }
+
+    internal fun bufferedBytes(): Int = end - start
+
+    private fun readLength(at: Int): Long =
+        (buf[at + 1].toLong() and 0xFF) or
+            ((buf[at + 2].toLong() and 0xFF) shl 8) or
+            ((buf[at + 3].toLong() and 0xFF) shl 16) or
+            ((buf[at + 4].toLong() and 0xFF) shl 24)
+
+    private fun append(data: ByteArray, off: Int, n: Int) {
+        if (start == end) { scanPos -= start; start = 0; end = 0 }
+        if (end + n > buf.size) {
+            val live = end - start
+            val target = if (live + n <= buf.size) buf else ByteArray(maxOf(buf.size * 2, live + n))
+            System.arraycopy(buf, start, target, 0, live)
+            buf = target
+            scanPos -= start
             start = 0
             end = live
         }
-        System.arraycopy(data, offset, buf, end, length)
-        end += length
+        System.arraycopy(data, off, buf, end, n)
+        end += n
     }
 
     /** Returns the next complete known message, or null when more bytes are needed. */

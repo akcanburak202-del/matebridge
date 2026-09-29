@@ -116,6 +116,8 @@ object Codec {
     /** Encodes a full frame: 5-byte header plus payload. */
     fun encode(msg: Message): ByteArray {
         val payload = encodePayload(msg)
+        val limit = if (msg is VideoHello || msg is VideoFrame) Limits.VIDEO_MAX_PAYLOAD else Limits.CONTROL_MAX_PAYLOAD
+        require(payload.size <= limit) { "payload ${payload.size} exceeds limit $limit" }
         val out = Writer(payload.size + 5)
         out.u8(msg.type)
         out.u32(payload.size.toLong())
@@ -262,8 +264,12 @@ object Codec {
                 val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(1)
                 val index = r.u16(); val count = r.u16(); r.skip(2)
                 val size = r.u32()
-                // TCP: data is the rest of the payload.
-                VideoFrame(seq, capture, flags, index, count, size, Bytes(r.bytes(r.remaining())))
+                // TCP v0: single fragment, data is the rest of the payload.
+                val data = r.bytes(r.remaining())
+                if (index != 0 || count != 1 || size != data.size.toLong()) {
+                    throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "bad video fragment fields")
+                }
+                VideoFrame(seq, capture, flags, index, count, size, Bytes(data))
             }
             else -> null
         }

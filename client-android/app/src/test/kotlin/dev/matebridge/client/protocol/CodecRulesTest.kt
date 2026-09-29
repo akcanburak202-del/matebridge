@@ -232,4 +232,55 @@ class CodecRulesTest {
         }
         assertEquals(msg, got)
     }
+
+    private fun videoPayload(index: Int, count: Int, size: Long, data: ByteArray): ByteArray {
+        val b = ByteBuffer.allocate(24 + data.size).order(ByteOrder.LITTLE_ENDIAN)
+        b.putInt(0).putLong(0).put(1).put(0).putShort(index.toShort()).putShort(count.toShort()).putShort(0)
+        b.putInt(size.toInt()).put(data)
+        return b.array()
+    }
+
+    @Test
+    fun videoFragmentFieldsMustDescribeSingleFragment() {
+        val d = ByteArray(4)
+        assertTrue(decode(frame(MsgType.VIDEO_FRAME, videoPayload(0, 1, 4, d)), FrameDecoder.video()) is VideoFrame)
+        for (p in listOf(videoPayload(1, 1, 4, d), videoPayload(0, 2, 4, d), videoPayload(0, 0, 4, d), videoPayload(0, 1, 5, d), videoPayload(0, 1, 3, d))) {
+            val dec = FrameDecoder.video(); dec.feed(frame(MsgType.VIDEO_FRAME, p))
+            expectError(ProtocolException.Kind.INVALID_VALUE, dec)
+        }
+    }
+
+    @Test
+    fun encodeRefusesOversizePayload() {
+        val ok = VideoFrame(0, 0, 0, 0, 1, (Limits.VIDEO_MAX_PAYLOAD - 24).toLong(), Bytes(ByteArray(Limits.VIDEO_MAX_PAYLOAD - 24)))
+        assertEquals(Limits.VIDEO_MAX_PAYLOAD + 5, Codec.encode(ok).size)
+        val big = ok.copy(frameSize = ok.frameSize + 1, data = Bytes(ByteArray(Limits.VIDEO_MAX_PAYLOAD - 23)))
+        try { Codec.encode(big); fail() } catch (e: IllegalArgumentException) { }
+    }
+
+    @Test
+    fun oversizeFailsInFeedWithoutBufferingPayload() {
+        val dec = FrameDecoder.control()
+        val chunk = ByteArray(10_000_000)
+        chunk[0] = 0x7f; chunk[4] = 0x01 // length 16 MiB, far above the control limit
+        dec.feed(chunk)
+        expectError(ProtocolException.Kind.OVERSIZE, dec)
+        assertTrue(dec.bufferedBytes() < 100)
+    }
+
+    @Test
+    fun feedOffsetDefaultsLengthToRemainder() {
+        val bytes = byteArrayOf(9, 9, 9) + Codec.encode(Ping(1, 2))
+        val dec = FrameDecoder.control()
+        dec.feed(bytes, 3)
+        assertEquals(Ping(1, 2), dec.next())
+    }
+
+    @Test
+    fun headerSplitAcrossFeedsIsValidated() {
+        val dec = FrameDecoder.control()
+        dec.feed(byteArrayOf(0x7f, 0x01, 0x00))
+        dec.feed(byteArrayOf(0x01, 0x00))
+        expectError(ProtocolException.Kind.OVERSIZE, dec)
+    }
 }
