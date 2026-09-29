@@ -28,4 +28,4 @@ case "${1:-}" in
      range="the changes in git diff $base...$head (read files at $head with git show $head:<path>)" ;;
 esac
 
-codex exec "${args[@]}" "Review $range. $focus"
+codex exec "${args[@]}" "Review $range. $focus" </dev/null  # closed stdin: codex otherwise waits for more input
