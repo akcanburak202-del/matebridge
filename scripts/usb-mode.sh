@@ -20,7 +20,8 @@ fi
 ensure_server() {
   if ! launchctl list dev.matebridge.adb >/dev/null 2>&1; then
     "$ADB" kill-server >/dev/null 2>&1 || true
-    launchctl submit -l dev.matebridge.adb -- "$ADB" -a nodaemon server
+    # adb 37.0.1 aborts in its mDNS bridge (FQServiceName parsing) on this network; we never need adb mDNS.
+    launchctl submit -l dev.matebridge.adb -- /usr/bin/env ADB_MDNS=0 ADB_MDNS_AUTO_CONNECT=0 "$ADB" -a nodaemon server
     sleep 2
   fi
 }
