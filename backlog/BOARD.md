@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## in-progress
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-002](tasks/T-002-toolchain-and-tablet-setup.md) | Geliştirme araçlarını ve tableti hazırla | 0 | user | [] |
-
 ## todo
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -23,3 +17,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-001](tasks/T-001-repo-bootstrap.md) | Repo iskeletini kur ve GitHub'a yayınla | 0 | orchestrator | [] |
+| [T-002](tasks/T-002-toolchain-and-tablet-setup.md) | Geliştirme araçlarını ve tableti hazırla | 0 | user | [] |
