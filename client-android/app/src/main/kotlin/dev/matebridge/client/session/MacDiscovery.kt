@@ -51,6 +51,7 @@ class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
             override fun onServiceFound(info: NsdServiceInfo) {
                 synchronized(this@MacDiscovery) {
                     if (gen != generation) return
+                    MbLog.i("discovery_found")
                     pending.removeAll { it.serviceName == info.serviceName }
                     pending.addLast(info)
                     while (pending.size > MAX_PENDING) pending.removeFirst() // drop the oldest
@@ -99,7 +100,10 @@ class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
                     if (alive && addr != null && info.port > 0) {
                         // Literal IPv4 only; link-local IPv6 would need a scope id.
                         val host = addr.hostAddress
-                        if (host != null && !host.contains(':')) onFound(Endpoint(host, info.port))
+                        if (host != null && !host.contains(':')) {
+                            MbLog.i("discovery_resolved", "host=$host port=${info.port}")
+                            onFound(Endpoint(host, info.port))
+                        }
                     }
                     done()
                 }
