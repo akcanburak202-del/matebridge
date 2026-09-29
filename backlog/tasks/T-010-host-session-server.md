@@ -1,7 +1,7 @@
 ---
 id: T-010
 title: Mac oturum sunucusu — Bonjour, kontrol bağlantısı, onay, heartbeat
-status: review
+status: done
 phase: 1
 owner: mac-host-dev
 depends_on: [T-008]
@@ -19,14 +19,14 @@ Tabletin Mac'i bulup bağlanabilmesi: PROTOCOL.md §2, §3 ve §6'nın host tara
 
 ## Kabul kriterleri
 
-- [ ] Oturum durum makinesi `MateBridgeCore/Session`'da, saf ve birim testli: HELLO zaman aşımı, sürüm uyuşmazlığı, BUSY, aynı `device_id` ile devralma (eski oturum önce kapanır), PENDING → ACCEPTED/REJECTED, 60 sn onay süresi, 1,5 sn sessizlikte "release-all" olayı, 5 sn'de kapanma, PING→PONG, onay öncesi girdinin yok sayılması. Zaman soyutlanmış (test saatiyle).
-- [ ] `MateBridgeHost/Session`: Network.framework ile TCP dinleyici (kontrol + video portu), `TCP_NODELAY`, Bonjour `_matebridge._tcp` (TXT `v=0`). Video bağlantısında `VIDEO_HELLO` `session_id`/`config_id` doğrulaması.
-- [ ] Onaylı cihazlar `~/Library/Application Support/MateBridge/` altında kalıcı (yalnızca `device_id` ve ad). Menüde "Onaylı cihazları unut".
-- [ ] `MateBridgeApp`: bağlantı isteğinde onay penceresi ("<ad> bağlanmak istiyor → İzin ver / Reddet"), menüde durum (dinliyor / bağlı: <ad>).
-- [ ] `Info.plist` şablonuna `NSBonjourServices` ekleme ihtiyacı Açık sorular'a yazılır (dosya bu kartın dışında, orkestratör ekler).
-- [ ] Test için: `nc` ve fixture baytlarıyla elle HELLO gönderip HELLO_ACK alındığı Handoff'ta gösterilir.
-- [ ] Loglar `docs/LOGGING.md` formatında, cihaz adı loglanmaz.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] Oturum durum makinesi `MateBridgeCore/Session`'da, saf ve birim testli: HELLO zaman aşımı, sürüm uyuşmazlığı, BUSY, aynı `device_id` ile devralma (eski oturum önce kapanır), PENDING → ACCEPTED/REJECTED, 60 sn onay süresi, 1,5 sn sessizlikte "release-all" olayı, 5 sn'de kapanma, PING→PONG, onay öncesi girdinin yok sayılması. Zaman soyutlanmış (test saatiyle).
+- [x] `MateBridgeHost/Session`: Network.framework ile TCP dinleyici (kontrol + video portu), `TCP_NODELAY`, Bonjour `_matebridge._tcp` (TXT `v=0`). Video bağlantısında `VIDEO_HELLO` `session_id`/`config_id` doğrulaması.
+- [x] Onaylı cihazlar `~/Library/Application Support/MateBridge/` altında kalıcı (yalnızca `device_id` ve ad). Menüde "Onaylı cihazları unut".
+- [x] `MateBridgeApp`: bağlantı isteğinde onay penceresi ("<ad> bağlanmak istiyor → İzin ver / Reddet"), menüde durum (dinliyor / bağlı: <ad>).
+- [x] `Info.plist` şablonuna `NSBonjourServices` ekleme ihtiyacı Açık sorular'a yazılır (dosya bu kartın dışında, orkestratör ekler).
+- [x] Test için: `nc` ve fixture baytlarıyla elle HELLO gönderip HELLO_ACK alındığı Handoff'ta gösterilir.
+- [x] Loglar `docs/LOGGING.md` formatında, cihaz adı loglanmaz.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -56,3 +56,7 @@ Tabletin Mac'i bulup bağlanabilmesi: PROTOCOL.md §2, §3 ve §6'nın host tara
   - `Info.plist` şablonuna (kart dışı, orkestratör ekler): `NSBonjourServices` = [`_matebridge._tcp`]. Yayın için gerekmeyebilir ama Local Network izniyle birlikte koymak güvenli. `NSLocalNetworkUsageDescription` zaten var.
   - Onay penceresi `runModal` kullanıyor; bağlantı düşerse `abortModal` ile kapanıyor, gerçek uygulamada denenmeli.
   - `MateBridgeHost/Placeholder.swift` kart dışı olduğu için dokunulmadı.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+Canlı test (MateBridge.app + tablet T-012/T-012b): Bonjour keşfi, HELLO → PENDING → onay paneli → ACCEPTED → STREAM_CONFIG → video bağlantısı. Onaylı cihaz `~/Library/Application Support/MateBridge/approved-devices.json` (dizin 0700, dosya 0600). Yeniden bağlanmada onaysız ACCEPTED. Host kapanıp açılınca tablet kendiliğinden bağlandı. İlk sürümdeki modal onay hatası (abortModal olay beklemesi) T-010b'de modal olmayan panelle düzeltildi. Macos 'yerel ağ' izni sormadı. Not: STREAM_CONFIG codec hâlâ yer tutucu (H.264); T-014 HEVC yapacak.

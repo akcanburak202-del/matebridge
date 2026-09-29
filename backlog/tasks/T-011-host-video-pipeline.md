@@ -1,7 +1,7 @@
 ---
 id: T-011
 title: Mac görüntü hattı — sanal ekran, yakalama, HEVC kodlama, sınırlı kuyruk
-status: review
+status: done
 phase: 1
 owner: mac-host-dev
 depends_on: [T-008]
@@ -20,13 +20,13 @@ Sanal ekrandan `VIDEO_FRAME` mesajlarına kadar olan hat. Ağa bağlanmaz: çık
 
 ## Kabul kriterleri
 
-- [ ] `VirtualDisplay.swift`: `probes/vdisplay-probe`'daki çalışan yaklaşımın ürün sürümü (HiDPI'da yalnız nokta boyutlu mod, NOTES 2026-09-29). Private API yalnızca bu dosyada.
-- [ ] ScreenCaptureKit → VideoToolbox **HEVC** (düşük gecikme: real-time, B-frame yok, ayarlanabilir bitrate/FPS, keyframe isteğe bağlı) → Annex-B. İlk çıktı `CODEC_CONFIG`, sonra keyframe. Renk etiketleri `STREAM_CONFIG` ile tutarlı (sRGB/BT.709, tam aralık).
-- [ ] Kodlayıcı → sink arasında en çok 2 kare (PROTOCOL.md §5). Politika saf ve `MateBridgeCore/Video`'da birim testli: taşmada eski keyframe olmayan kareler atılır, sonraki kare keyframe istenir.
-- [ ] `requestKeyframe()`, `STREAM_CONFIG` değerlerini üreten yapı, temiz durdurma (sanal ekran ve akış kapanır).
-- [ ] Doğrulama aracı: `MateBridgeApp --dump-video <dosya> --seconds N` (veya ayrı bir alt komut) Annex-B `.h265` dosyası yazar ve kare sayısı / ortalama boyut / keyframe sayısı / kodlama süresi yazdırır. Bu dosya T-013'te tablette çözme testi için kullanılacak.
-- [ ] Ekran Kaydı izni yoksa anlaşılır hata, çökme yok.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `VirtualDisplay.swift`: `probes/vdisplay-probe`'daki çalışan yaklaşımın ürün sürümü (HiDPI'da yalnız nokta boyutlu mod, NOTES 2026-09-29). Private API yalnızca bu dosyada.
+- [x] ScreenCaptureKit → VideoToolbox **HEVC** (düşük gecikme: real-time, B-frame yok, ayarlanabilir bitrate/FPS, keyframe isteğe bağlı) → Annex-B. İlk çıktı `CODEC_CONFIG`, sonra keyframe. Renk etiketleri `STREAM_CONFIG` ile tutarlı (sRGB/BT.709, tam aralık).
+- [x] Kodlayıcı → sink arasında en çok 2 kare (PROTOCOL.md §5). Politika saf ve `MateBridgeCore/Video`'da birim testli: taşmada eski keyframe olmayan kareler atılır, sonraki kare keyframe istenir.
+- [x] `requestKeyframe()`, `STREAM_CONFIG` değerlerini üreten yapı, temiz durdurma (sanal ekran ve akış kapanır).
+- [x] Doğrulama aracı: `MateBridgeApp --dump-video <dosya> --seconds N` (veya ayrı bir alt komut) Annex-B `.h265` dosyası yazar ve kare sayısı / ortalama boyut / keyframe sayısı / kodlama süresi yazdırır. Bu dosya T-013'te tablette çözme testi için kullanılacak.
+- [x] Ekran Kaydı izni yoksa anlaşılır hata, çökme yok.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -50,3 +50,7 @@ Sanal ekrandan `VIDEO_FRAME` mesajlarına kadar olan hat. Ağa bağlanmaz: çık
   - `VirtualDisplay` oluşturulunca HiDPI modunu `CGDisplaySetDisplayMode` ile seçer (cihazda doğrulanmadı).
   - **T-014 için:** `captureTimeUs` host zaman saatidir (`CMClockGetHostTimeClock` = mach absolute time, µs). PING/PONG `sender_time_us`/`responder_time_us` aynı saati kullanmalı (PROTOCOL §6 saat farkı hesabı).
 - **Açık sorular:**
+
+## Orkestratör cihaz testi (2026-09-29)
+
+`--dump-video` 5 sn: 100 kare, 1 keyframe, kodlama ort. 14 ms. Bit akışındaki SPS VUI: full_range=true, 1/13/1, STREAM_CONFIG ile eşleşiyor. `PrioritizeEncodingSpeedOverQuality` M6'da desteklenmiyor (-12900, zararsız). İlk sürümün dökümü tablette 0 atmayla çözüldü (T-013 notu). Durağan ekranda istek üzerine keyframe ve CGDisplaySetDisplayMode yolu cihazda ayrıca tetiklenmedi.
