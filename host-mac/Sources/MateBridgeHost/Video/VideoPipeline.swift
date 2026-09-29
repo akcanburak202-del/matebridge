@@ -88,6 +88,9 @@ public final class VideoPipeline: @unchecked Sendable {
         }
     }
 
+    /// Colour tags the encoder session reports (VUI source), for diagnostics.
+    public var encoderColorReadback: String { encoder?.colorReadback() ?? "no encoder" }
+
     public func requestKeyframe() { encoder?.requestKeyframe() }
 
     /// Call when a new consumer attaches: re-queues CODEC_CONFIG and forces a keyframe.

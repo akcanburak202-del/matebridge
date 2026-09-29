@@ -62,6 +62,11 @@ public enum VideoDump {
         }
         print("dumping \(o.seconds)s of \(settings.widthPx)x\(settings.heightPx) HEVC @ \(settings.fps) fps, \(settings.bitrateKbps) kbps to \(path)")
 
+        let cfg = settings.streamConfig(configID: 0)
+        print("STREAM_CONFIG colour (H.273): primaries=\(cfg.colorPrimaries) transfer=\(cfg.transfer) matrix=\(cfg.matrix) "
+              + "range=\(cfg.fullRange ? "full" : "limited") (capture pixel format 420f = full range)")
+        print("encoder session colour: \(pipeline.encoderColorReadback)")
+
         let deadline = Date().addingTimeInterval(o.seconds)
         let stopper = Task {
             try? await Task.sleep(nanoseconds: UInt64(o.seconds * 1_000_000_000))

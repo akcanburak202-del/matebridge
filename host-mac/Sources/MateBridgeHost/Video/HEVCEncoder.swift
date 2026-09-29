@@ -70,6 +70,20 @@ final class HEVCEncoder: @unchecked Sendable {
         VTCompressionSessionPrepareToEncodeFrames(s)
     }
 
+    /// Colour properties as the session reports them (what ends up in the VUI), for the dump tool.
+    func colorReadback() -> String {
+        guard let session else { return "session closed" }
+        func read(_ key: CFString) -> String {
+            var v: CFTypeRef?
+            let st = VTSessionCopyProperty(session, key: key, allocator: nil, valueOut: &v)
+            guard st == noErr, let v else { return "unset(\(st))" }
+            return "\(v)"
+        }
+        return "primaries=\(read(kVTCompressionPropertyKey_ColorPrimaries)) "
+            + "transfer=\(read(kVTCompressionPropertyKey_TransferFunction)) "
+            + "matrix=\(read(kVTCompressionPropertyKey_YCbCrMatrix))"
+    }
+
     /// The next encoded frame will be a keyframe.
     func requestKeyframe() {
         lock.lock(); forceKeyframe = true; lock.unlock()
