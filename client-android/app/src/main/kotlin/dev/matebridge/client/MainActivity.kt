@@ -36,7 +36,9 @@ import dev.matebridge.client.video.GlPresenter
 import dev.matebridge.client.video.PresentStats
 import dev.matebridge.client.video.VideoRenderer
 import dev.matebridge.client.video.VsyncClock
+import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
+import dev.matebridge.client.session.Transport
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
 import dev.matebridge.client.session.SessionController
@@ -120,6 +122,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var currentEndpoint: Endpoint? = null
     private var manualMode = false
     private var started = false
+    private var transport = Transport.WIFI
+    private var usbStartMs = 0L
+    private var hostReached = false
+    private val usbHintCheck = Runnable { render(lastUi) }
     private var lastUi: SessionUi = SessionUi.Searching
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -164,6 +170,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
         findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
+        findViewById<Button>(R.id.connect_usb).setOnClickListener { selectTransport(Transport.USB) }
+        findViewById<Button>(R.id.connect_wifi).setOnClickListener { selectTransport(Transport.WIFI) }
 
         controller = SessionController(buildHello(), object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
@@ -419,7 +427,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
             val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs))
-            statsView.text = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
+            val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
+            val ep = currentEndpoint
+            val tr = if (ep != null) ConnectMode.transportOf(ep) else transport
+            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) + "\n" + withGl
         }
         if (gl != null) {
             MbLog.i(
@@ -453,10 +464,38 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
+        transport = settings.transport()
+        hostReached = false
         render(SessionUi.Searching)
         ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
-        discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
+        applyTransport()
+    }
+
+    /** USB: connect straight to loopback and skip NSD; Wi-Fi: NSD discovery (auto-connect) as before. */
+    private fun applyTransport() {
+        discovery?.stop()
+        discovery = null
+        ui.removeCallbacks(usbHintCheck)
+        if (ConnectMode.autoDiscover(transport)) {
+            manualMode = false
+            discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
+        } else {
+            manualMode = true
+            usbStartMs = SystemClock.elapsedRealtime()
+            hostReached = false
+            ui.postDelayed(usbHintCheck, ConnectMode.USB_TIMEOUT_MS)
+            connect(ConnectMode.usbEndpoint)
+        }
+    }
+
+    private fun selectTransport(t: Transport) {
+        transport = t
+        settings.setTransport(t)
+        currentEndpoint = null
+        controller.stop()
+        render(SessionUi.Searching)
+        applyTransport()
     }
 
     override fun onStop() {
@@ -465,6 +504,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(ticker)
         discovery?.stop()
         discovery = null
+        ui.removeCallbacks(usbHintCheck)
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         controller.stop() // sends BYE, closes both connections
         super.onStop()
@@ -502,12 +542,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun connect(ep: Endpoint) {
         currentEndpoint = ep
+        MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName}")
         controller.start(ep)
     }
 
     private fun render(state: SessionUi) {
         if (!started || isDestroyed) return
         lastUi = state
+        if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected) hostReached = true
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
@@ -521,6 +563,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 R.string.state_disconnected, causeText(state.cause), (state.retryInMs + 999) / 1000,
             )
             is SessionUi.Failed -> getString(R.string.state_failed, causeText(state.cause))
+        }
+        if (ConnectMode.showUsbHint(transport, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
+            status.text = getString(R.string.usb_missing)
         }
     }
 

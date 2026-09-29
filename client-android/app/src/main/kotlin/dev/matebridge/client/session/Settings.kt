@@ -31,6 +31,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStatsOverlay(on: Boolean) = store.putString(KEY_STATS, if (on) "1" else "0")
 
+    /** Last chosen connection mode; Wi-Fi (discovery) by default. */
+    fun transport(): Transport = Transport.parse(store.getString(KEY_TRANSPORT))
+
+    fun setTransport(t: Transport) = store.putString(KEY_TRANSPORT, t.logName)
+
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
 
     private fun fromHex(s: String): ByteArray? {
@@ -45,6 +50,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
     private companion object {
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
+        const val KEY_TRANSPORT = "transport"
         const val KEY_STATS = "stats_overlay"
     }
 }
