@@ -185,7 +185,6 @@ func runInject(_ a: [String]) {
         s.resume()
         return s
     }
-    _ = sources  // keeps the signal sources alive; they are cancelled if deallocated
 
     let worker = Thread {
         do {
@@ -213,5 +212,6 @@ func runInject(_ a: [String]) {
         exit(0)
     }
     worker.start()
-    dispatchMain()
+    // dispatchMain() never returns; withExtendedLifetime keeps the signal sources alive for the process.
+    withExtendedLifetime(sources) { dispatchMain() }
 }

@@ -101,9 +101,13 @@ public enum PenInjectionError: Error, CustomStringConvertible {
 
 /// Builds pen events. Never posts, so it is safe to unit-test.
 public struct PenInjector: Sendable {
-    public init() {}
+    /// Test hook: when it returns true, event creation fails.
+    let failCreation: (@Sendable () -> Bool)?
+    public init() { failCreation = nil }
+    init(failCreation: @escaping @Sendable () -> Bool) { self.failCreation = failCreation }
 
     public func buildProximity(entering: Bool) throws -> CGEvent {
+        if failCreation?() == true { throw PenInjectionError.eventCreationFailed }
         guard let e = CGEvent(source: CGEventSource(stateID: .hidSystemState)) else {
             throw PenInjectionError.eventCreationFailed
         }
@@ -113,6 +117,7 @@ public struct PenInjector: Sendable {
     }
 
     public func buildPoint(_ s: PenSample, inContact: Bool) throws -> CGEvent {
+        if failCreation?() == true { throw PenInjectionError.eventCreationFailed }
         let type = PenEventFields.mouseType(for: s.phase, inContact: inContact)
         guard let e = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type,
                               mouseCursorPosition: CGPoint(x: s.x, y: s.y), mouseButton: .left) else {
@@ -129,7 +134,7 @@ public struct PenInjector: Sendable {
 /// releases from the true state, at the last posted position.
 public final class PenSession: @unchecked Sendable {
     private let lock = NSLock()
-    private let injector = PenInjector()
+    private let injector: PenInjector
     private let post: @Sendable (CGEvent) -> Void
     private var cancelled = false
     private var inContact = false
@@ -139,6 +144,12 @@ public final class PenSession: @unchecked Sendable {
     /// Default poster posts to the HID tap (requires Accessibility).
     public init(post: @escaping @Sendable (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }) {
         self.post = post
+        self.injector = PenInjector()
+    }
+
+    init(injector: PenInjector, post: @escaping @Sendable (CGEvent) -> Void) {
+        self.post = post
+        self.injector = injector
     }
 
     /// Returns false (and posts nothing) once cancelled.
@@ -147,6 +158,7 @@ public final class PenSession: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if cancelled { return false }
         if entering == inProximity { return true }
+        if !entering { try releaseContactLocked() }  // never leave proximity with the button down
         post(try injector.buildProximity(entering: entering))
         inProximity = entering
         return true
@@ -180,13 +192,25 @@ public final class PenSession: @unchecked Sendable {
         releaseLocked()
     }
 
-    private func releaseLocked() {
-        if inContact, let e = try? injector.buildPoint(
-            PenSample(x: last.x, y: last.y, pressure: 0, tiltX: 0, tiltY: 0, phase: .up), inContact: true) {
-            post(e)
-        }
+    /// Posts mouse-up at the last position if in contact. The flag is cleared only after a successful post.
+    private func releaseContactLocked() throws {
+        guard inContact else { return }
+        let e = try injector.buildPoint(
+            PenSample(x: last.x, y: last.y, pressure: 0, tiltX: 0, tiltY: 0, phase: .up), inContact: true)
+        post(e)
         inContact = false
-        if inProximity, let e = try? injector.buildProximity(entering: false) { post(e) }
+    }
+
+    private func releaseProximityLocked() throws {
+        guard inProximity else { return }
+        let e = try injector.buildProximity(entering: false)
+        post(e)
         inProximity = false
+    }
+
+    /// Best effort: each step is attempted; a failed step keeps its flag so a later release() retries.
+    private func releaseLocked() {
+        try? releaseContactLocked()
+        try? releaseProximityLocked()
     }
 }

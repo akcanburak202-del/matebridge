@@ -98,6 +98,49 @@ final class PenInjectionTests: XCTestCase {
         XCTAssertEqual(rec.all.count, 4)
     }
 
+    func testLeavingProximityWhileInContactReleasesButtonFirst() throws {
+        let rec = Recorder()
+        let s = PenSession(post: { rec.add($0) })
+        try s.setProximity(true)
+        try s.send(PenSample(x: 7, y: 8, pressure: 0.5, tiltX: 0, tiltY: 0, phase: .down))
+        try s.setProximity(false)
+        XCTAssertEqual(rec.all.map { $0.0 }, [.tabletProximity, .leftMouseDown, .leftMouseUp, .tabletProximity])
+        XCTAssertEqual(rec.all[2].1.x, 7, accuracy: 0.01)
+    }
+
+    final class Toggle: @unchecked Sendable {
+        private let lock = NSLock(); private var v = false
+        var on: Bool { get { lock.lock(); defer { lock.unlock() }; return v } set { lock.lock(); v = newValue; lock.unlock() } }
+    }
+
+    func testFailedReleaseKeepsFlagsForRetry() throws {
+        let rec = Recorder()
+        let fail = Toggle()
+        let s = PenSession(injector: PenInjector(failCreation: { fail.on }), post: { rec.add($0) })
+        try s.setProximity(true)
+        try s.send(PenSample(x: 5, y: 6, pressure: 0.5, tiltX: 0, tiltY: 0, phase: .down))
+        fail.on = true
+        s.release()                       // both creations fail: nothing posted, flags kept
+        XCTAssertEqual(rec.all.count, 2)
+        fail.on = false
+        s.release()                       // retry succeeds
+        XCTAssertEqual(rec.all.map { $0.0 }, [.tabletProximity, .leftMouseDown, .leftMouseUp, .tabletProximity])
+        s.release()                       // idempotent afterwards
+        XCTAssertEqual(rec.all.count, 4)
+    }
+
+    func testFailedProximityLeaveKeepsProximityFlag() throws {
+        let rec = Recorder()
+        let fail = Toggle()
+        let s = PenSession(injector: PenInjector(failCreation: { fail.on }), post: { rec.add($0) })
+        try s.setProximity(true)
+        fail.on = true
+        XCTAssertThrowsError(try s.setProximity(false))
+        fail.on = false
+        s.release()
+        XCTAssertEqual(rec.all.map { $0.0 }, [.tabletProximity, .tabletProximity])
+    }
+
     func testCapabilityMaskPinned() {
         XCTAssertEqual(PenEventFields.capabilityMask, 0x25C7)
         XCTAssertEqual(PenDevice.pointerType, 1)  // NX_TABLET_POINTER_PEN
