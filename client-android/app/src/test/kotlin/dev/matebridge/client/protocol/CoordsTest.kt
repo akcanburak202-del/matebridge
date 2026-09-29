@@ -68,4 +68,28 @@ class CoordsTest {
         val (x3, _) = Coords.penTilt(h, -h)
         assertEquals(-1f, x3, 1e-6f)
     }
+
+    @Test
+    fun roundingIsHalfAwayFromZero() {
+        assertEquals(3, Coords.roundHalfAway(2.5))
+        assertEquals(-3, Coords.roundHalfAway(-2.5))
+        assertEquals(1, Coords.roundHalfAway(0.5))
+        assertEquals(-1, Coords.roundHalfAway(-0.5))
+        assertEquals(0, Coords.roundHalfAway(0.49))
+        assertEquals(-2, Coords.roundHalfAway(-1.5))
+        assertEquals(0, Coords.roundHalfAway(-0.0))
+    }
+
+    @Test
+    fun exactTiesInConversions() {
+        // 0.5 * 32767 = 16383.5 -> 16384; negative mirrors (Math.round would give -16383)
+        assertEquals(16384, Coords.signed(0.5f))
+        assertEquals(-16384, Coords.signed(-0.5f))
+        // 0.5 * 65535 = 32767.5 -> 32768
+        assertEquals(32768, Coords.pressure(0.5f))
+        // px 1 of 2 is exactly half: 32767.5 -> 32768
+        assertEquals(32768, Coords.normalize(1f, 0f, 2f))
+        // tilt of -0.5/32767 is a 0.5 tie in i16 units
+        assertEquals(-1, Coords.roundHalfAway(-0.5 / 32767.0 * 32767.0))
+    }
 }

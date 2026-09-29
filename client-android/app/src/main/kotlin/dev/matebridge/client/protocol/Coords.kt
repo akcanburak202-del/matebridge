@@ -6,25 +6,34 @@ import kotlin.math.sin
 /** Pure conversions for PROTOCOL.md section 1 and section 4 (PEN "Egim yonu"). */
 object Coords {
     /**
+     * PROTOCOL.md section 1 rounding: half away from zero, `sign(v) * floor(|v| + 0.5)`.
+     * Not Math.round (ties toward +inf) and not kotlin.math.round (half-even).
+     */
+    fun roundHalfAway(v: Double): Int {
+        val r = Math.floor(Math.abs(v) + 0.5)
+        return (if (v < 0) -r else r).toInt()
+    }
+
+    /**
      * Normalized axis coordinate: `round(clamp((px - origin) / size, 0, 1) * 65535)`.
      * [origin]/[size] describe the video surface on that axis (excluding letterbox bands).
      */
     fun normalize(px: Float, origin: Float, size: Float): Int {
         if (size <= 0f || px.isNaN()) return 0
         val t = ((px - origin).toDouble() / size).coerceIn(0.0, 1.0)
-        return Math.round(t * 65535.0).toInt()
+        return roundHalfAway(t * 65535.0)
     }
 
     /** Pressure 0..1 to u16. */
     fun pressure(p: Float): Int {
         if (p.isNaN()) return 0
-        return Math.round(p.toDouble().coerceIn(0.0, 1.0) * 65535.0).toInt()
+        return roundHalfAway(p.toDouble().coerceIn(0.0, 1.0) * 65535.0)
     }
 
     /** Signed -1..1 to i16 `round(v * 32767)`; the result is within -32767..32767. */
     fun signed(v: Float): Int {
         if (v.isNaN()) return 0
-        return Math.round(v.toDouble().coerceIn(-1.0, 1.0) * 32767.0).toInt()
+        return roundHalfAway(v.toDouble().coerceIn(-1.0, 1.0) * 32767.0)
     }
 
     /** Inverse of [signed], for decoding. */

@@ -55,8 +55,11 @@ files:
   - Decode her bilinen tipi yöne bakmadan çözer (fixture testi iki yönü de gerektiriyor).
   - Ek doğrulamalar (PROTOCOL.md açıkça hata demiyor ama makul): `str8` > 64 bayt veya geçersiz UTF-8 -> hata; PEN `tilt` -32768 -> -32767 (§1). `status/reason/codec/phase` ham Int, aralık denetimi yok (ileri uyumluluk).
   - `FrameDecoder` hata sonrası kalıcı başarısız; çağıran bağlantıyı kapatır. Boyut sınırı yalnızca başlıktan denetlenir (bilinmeyen tipte de geçerli).
+  - Yuvarlama: sıfırdan uzağa yarım yuvarlama (`Coords.roundHalfAway`).
   - Encode, geçersiz girdiyi `IllegalArgumentException` ile reddeder (pen sayısı, dt sırası, NaN vb.).
   - `targetSdk 31`, `compileSdk 37`, AGP 9.4.1, Gradle 9.8.0 probe ile aynı. `kotlinx-coroutines` henüz eklenmedi (gerek yok).
   - Fixture dizini Gradle test görevindeki `matebridge.fixtures` sistem özelliğiyle bulunur.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh` geçti (JVM testleri dahil). Cihazda: APK kurulunca `MainActivity` yatay, tam ekran, siyah zeminde "MateBridge — bağlantı yok" göstermeli; ekran açık kalmalı. Ağ/video/girdi yok.
 - **Açık sorular:** PROTOCOL.md `PEN_GESTURE`/`SCROLL.phase`/`POINTER_ABS.source` için geçersiz değer davranışını belirtmiyor (PEN_GESTURE bilinmeyeni yok sayılır; diğerleri ham geçiriliyor).
+
+- **Açık sorular (T-013 için, inceleme düşük bulguları):** (1) `VIDEO_FRAME.frame_size` ile veri uzunluğu eşitliği denetlenmiyor. (2) `FrameDecoder` tamponu büyük kareden sonra küçülmüyor. (3) Hata sonrası `feed` çağrısının sessizce yok sayılması belgelenmedi.
