@@ -1,7 +1,7 @@
 ---
 id: T-018
 title: Tablette sunum kontrolü — GL yolu (SurfaceTexture), vsync'e hizalı çizim, 120 Hz denemesi
-status: review
+status: done
 phase: 1
 owner: android-client-dev
 depends_on: [T-016, T-017]
@@ -51,3 +51,8 @@ Mac tarafı artık kusursuz 60 fps veriyor (T-017). USB'de bile tablette "hâlâ
 - **NOT: GL yolunda `shown_` yalnız çizim ritmidir** (karenin çizildiği vsync'in Choreographer zamanı); gerçek ekranda görünme zamanı DEĞİL, surface yolunun `shown_` değeriyle birebir kıyaslanamaz.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** hiçbiri cihazda çalıştırılmadı (yalnız derleme + JVM). (1) GL yolu görüntü veriyor mu; renk (siyah seviyesi) ve 1:1 keskinlik; (2) `gl_vsync_period_us` 8333 mü (120 Hz) yoksa 16667 mi; (3) `gl_wait_avg_ms` <= ~1 vsync; (4) `shown_` >1,5xvsync sayısını surface yoluyla karşılaştır; (5) arka plana gidip dönme / yüzey yeniden oluşması, `gl_stop_slow` logu yok; (6) `--ez glpts true` etkisi; (7) `--ei frate 120` iki yolda.
 - **Açık sorular:** SurfaceTexture tüketicisi kare işlemezken decoder çıkışını bloklarsa `ready` aralıkları bozulur; cihazda gözlenmeli. Vsync döngüsü 120 Hz alınırsa 60 fps içerikte de 120 uyanma/sn yapar; gerekirse sonra seyreltilir.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+Wi-Fi, Safari 60 fps. A (surface): 60 Hz, geç kare 6–11/sn, gecikme ~42 ms. B (gl): GL yüzeyinde `setFrameRate(120, FIXED_SOURCE)` + mod isteğine rağmen **vsync 60 Hz** (HarmonyOS GL yüzeyini de sınırlıyor), 61 vsync'te 48–59 kare çizildi (geç gelen kare yüzünden boş vsync'ler), gecikme ~40–47 ms, `gl_missed=0`, swap ~1,2 ms. Çıkış formatı 2816×1840, crop 0,0,2799,1839. Kullanıcı: "A ile aynı gibi, takılma hâlâ var". Renk/netlik şikâyeti yok. GL yolu seçenek olarak kalıyor (varsayılan surface) → T-019 (GL + titreşim tamponu, Wi-Fi düşük gecikme kilidi).
+
