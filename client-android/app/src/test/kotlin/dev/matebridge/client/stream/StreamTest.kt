@@ -85,6 +85,14 @@ class VideoViewportTest {
         assertEquals(32768, v.normY(500f))
     }
 
+    @Test fun laidOutRectIsRootCoordinates() {
+        val v = VideoViewport.ofRect(100, 50, 800, 400)
+        assertEquals(0, v.normX(100f))
+        assertEquals(65535, v.normX(900f))
+        assertEquals(0, v.normY(50f))
+        assertEquals(65535, v.normY(450f))
+    }
+
     @Test fun degenerateIsEmptyAndSafe() {
         val v = VideoViewport(0, 0, 0, 0)
         assertTrue(v.isEmpty)

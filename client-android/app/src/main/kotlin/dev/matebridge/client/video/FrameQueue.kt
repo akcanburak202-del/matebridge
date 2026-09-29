@@ -76,9 +76,10 @@ class FrameQueue(private val stats: VideoStats) {
      * Restart (surface came back, codec recreated): clears frames, closes the gate, replays the last
      * CODEC_CONFIG. Returns [reason] (the request to send).
      */
-    fun reset(reason: Int = KeyframeRequest.STARTUP): Int = synchronized(lock) {
+    fun reset(reason: Int = KeyframeRequest.STARTUP, keepConfig: Boolean = true): Int = synchronized(lock) {
         queue.clear()
         waitingKeyframe = true
+        if (!keepConfig) lastConfig = null // new stream configuration: the old parameter sets are invalid
         lastConfig?.let { queue.addLast(it) }
         reason
     }

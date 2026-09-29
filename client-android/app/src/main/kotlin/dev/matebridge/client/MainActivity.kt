@@ -66,7 +66,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var statsOn = false
     private var lastStatsMs = 0L
 
-    /** The one place view pixels map to normalized video coordinates (input capture will use it). */
+    /**
+     * The one place view pixels map to normalized video coordinates (input capture will use it).
+     * Built from the actual laid-out SurfaceView (integer size, `video.left/top`), so it is in
+     * ROOT (SurfaceView parent, = window content) coordinates: use it with MotionEvents delivered to
+     * `root`/the window (or convert view-local events by adding `video.left/top`). Empty until laid out.
+     */
     var viewport: VideoViewport = VideoViewport(0, 0, 0, 0)
         private set
 
@@ -87,6 +92,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         statsView = findViewById(R.id.stats)
         video.holder.addCallback(this)
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
+        video.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
+            else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+        }
         video.setOnLongClickListener { toggleStats(); true }
         findViewById<Button>(R.id.toggle_stats).setOnClickListener { toggleStats() }
         endpointField = findViewById(R.id.endpoint)
@@ -108,6 +117,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // Never feed the queue while no surface is attached (T-013 handoff).
                 renderer?.let { if (it.attached) it.onFrame(frame) }
             }
+
+            override fun onSessionStart() { clock.reset() }
 
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
@@ -151,7 +162,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceValid = true
-        renderer?.attachSurface(holder.surface)
+        if (streamConfig != null) renderer?.attachSurface(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
@@ -162,32 +173,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun installConfig(config: StreamConfig) {
-        releaseRenderer()
+        if (!started || isDestroyed) return
         streamConfig = config
-        val r = VideoRenderer(
+        val r = renderer ?: VideoRenderer(
             config,
             onKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason)) },
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
-        )
-        r.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
-        renderer = r
+        ).also {
+            it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
+            renderer = it
+        }
         layoutVideo()
         lastStatsMs = SystemClock.elapsedRealtime()
-        if (surfaceValid) r.attachSurface(video.holder.surface)
+        r.reconfigure(config) // restarts the codec without blocking when a surface is attached
+        if (!r.attached && surfaceValid) r.attachSurface(video.holder.surface)
     }
 
+    /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
     private fun releaseRenderer() {
         renderer?.detachSurface()
-        renderer = null
         streamConfig = null
+        statsView.text = ""
     }
 
     /** Fits the SurfaceView to the stream aspect so the surface equals the video area (letterbox = black bands). */
     private fun layoutVideo() {
         val c = streamConfig
-        viewport = if (c == null) VideoViewport(root.width, root.height, 0, 0)
-        else VideoViewport(root.width, root.height, c.widthPx, c.heightPx)
-        val vp = viewport
+        val vp = if (c == null) VideoViewport(0, 0, 0, 0) else VideoViewport(root.width, root.height, c.widthPx, c.heightPx)
         val w = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.width)
         val h = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.height)
         val lp = video.layoutParams as FrameLayout.LayoutParams
@@ -240,6 +252,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         currentEndpoint = null
         manualMode = false
         render(SessionUi.Searching)
+        ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
         discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
     }
@@ -256,6 +269,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
         releaseRenderer()
         controller.shutdown()
         super.onDestroy()
@@ -284,11 +298,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun connect(ep: Endpoint) {
         currentEndpoint = ep
-        clock.reset()
         controller.start(ep)
     }
 
     private fun render(state: SessionUi) {
+        if (!started || isDestroyed) return
         lastUi = state
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null

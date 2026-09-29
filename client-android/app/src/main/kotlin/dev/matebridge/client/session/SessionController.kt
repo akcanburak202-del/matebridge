@@ -31,6 +31,9 @@ interface SessionListener {
     /** One VIDEO_FRAME wire fragment, from the video reader thread. Frames are only counted in T-012. */
     fun onVideoFrame(frame: VideoFrame) {}
 
+    /** A new control connection is being opened (first start and every automatic reconnect); reset per-session state. */
+    fun onSessionStart() {}
+
     /** A PONG arrived (engine thread). Times are microseconds; [nowUs] is the client monotonic clock (`nanoTime/1000`). */
     fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
 }
@@ -62,6 +65,9 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
     @Volatile private var control: ControlConn? = null
     @Volatile private var video: VideoConn? = null
     @Volatile private var inputAllowed = false
+
+    /** config_id of the latest applied STREAM_CONFIG; frames from a video connection of another config are dropped. */
+    @Volatile private var currentConfigId = -1
     @Volatile private var stopAfterDrain = false
 
     /** Non-blocking. Ignored after [shutdown]. */
@@ -166,6 +172,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
             is SessionMachine.Action.OpenControl -> {
                 MbLog.gen = a.gen
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
+                listener.onSessionStart()
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint).also { it.startThreads() }
             }
@@ -191,7 +198,10 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                 video?.abort()
                 video = null
             }
-            is SessionMachine.Action.ApplyConfig -> listener.onStreamConfig(a.config)
+            is SessionMachine.Action.ApplyConfig -> {
+                currentConfigId = a.config.configId
+                listener.onStreamConfig(a.config)
+            }
             is SessionMachine.Action.Ui -> {
                 when (val u = a.state) {
                     is SessionUi.Disconnected -> MbLog.i("reconnect", "cause=${u.cause} delay_ms=${u.retryInMs}")
@@ -314,7 +324,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                         val msg = decoder.next() ?: break
                         if (msg is VideoFrame) {
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
-                            listener.onVideoFrame(msg)
+                            if (hello.configId == currentConfigId) listener.onVideoFrame(msg)
                         }
                     }
                 }

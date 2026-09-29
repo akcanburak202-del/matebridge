@@ -22,15 +22,17 @@ fun interface VideoFrameSink {
  *
  * Lifecycle: [attachSurface] when the SurfaceView surface exists, [detachSurface] when it is
  * destroyed or the activity stops. Each attachment has its own token; a new attachment's thread
- * first waits for the previous thread to exit, so two codecs never run at once. UI-thread blocking
- * is bounded (see [JOIN_MS]).
+ * first waits for the previous thread to exit, so two codecs never run at once. [detachSurface]
+ * blocks the UI thread for at most [JOIN_MS] (the surface must be free before it is destroyed);
+ * [attachSurface] and [reconfigure] never block: the new thread does the waiting itself.
+ * Keep ONE renderer for the whole app run and call [reconfigure] on a new STREAM_CONFIG.
  *
  * Decoder errors restart the codec on the same surface (queue reset, last CODEC_CONFIG replayed,
  * KEYFRAME_REQUEST(DECODE_ERROR)), at most 3 times per 10 s; after that [onGiveUp] is called.
  * [onKeyframeRequest] and [onGiveUp] are called from arbitrary threads.
  */
 class VideoRenderer(
-    private val config: StreamConfig,
+    initialConfig: StreamConfig,
     private val onKeyframeRequest: (Int) -> Unit,
     private val onGiveUp: (String) -> Unit = {},
 ) : VideoFrameSink {
@@ -39,6 +41,9 @@ class VideoRenderer(
     }
 
     private val tag = "MB/decoder"
+
+    /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
+    @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
     private val queue = FrameQueue(stats)
 
@@ -48,6 +53,7 @@ class VideoRenderer(
     }
 
     private var current: Attachment? = null // UI thread only
+    private var lingering: Thread? = null // last retired decoder thread; the next one waits for it (UI thread only)
 
     /** Codec description for on-screen diagnostics. */
     @Volatile var codecInfo: String = "-"
@@ -64,38 +70,57 @@ class VideoRenderer(
     }
 
     fun attachSurface(surface: Surface) {
-        val old = detachInternal()
+        retire(wait = false)
         attached = true
         onKeyframeRequest(queue.reset())
-        val att = Attachment(surface, old)
+        start(surface)
+    }
+
+    fun detachSurface() {
+        attached = false
+        retire(wait = true)
+    }
+
+    /**
+     * New STREAM_CONFIG: drops queued frames and stored parameter sets. If a surface is attached the
+     * codec is restarted on it without blocking the caller (the new thread waits for the old one).
+     */
+    fun reconfigure(newConfig: StreamConfig) {
+        config = newConfig
+        val surface = current?.surface
+        retire(wait = false)
+        val reason = queue.reset(KeyframeRequest.STARTUP, keepConfig = false)
+        if (surface != null) {
+            onKeyframeRequest(reason)
+            start(surface)
+        }
+    }
+
+    private fun start(surface: Surface) {
+        val att = Attachment(surface, lingering)
         att.thread = Thread({ decodeLoop(att) }, "mb-decoder")
         current = att
         att.thread.start()
     }
 
-    fun detachSurface() {
-        attached = false
-        detachInternal()
-    }
-
-    /** Signals the current thread to stop and waits briefly. Returns the thread if still alive. */
-    private fun detachInternal(): Thread? {
-        val att = current ?: return null
+    /** Signals the current thread to stop; optionally waits briefly. The thread is remembered for the next start. */
+    private fun retire(wait: Boolean) {
+        val att = current ?: return
         att.active = false
-        att.thread.join(JOIN_MS)
-        if (att.thread.isAlive) {
-            Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=detach_slow")
-            return att.thread // the next attachment's thread waits for it
-        }
         current = null
-        return null
+        lingering = att.thread
+        if (wait) {
+            att.thread.join(JOIN_MS)
+            if (att.thread.isAlive) Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=detach_slow")
+        }
     }
 
-    private fun mime() = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC
+    private fun mime(config: StreamConfig) = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC
     else MediaFormat.MIMETYPE_VIDEO_HEVC
 
     private fun createCodec(surface: Surface): MediaCodec {
-        val mime = mime()
+        val config = this.config
+        val mime = mime(config)
         val format = MediaFormat.createVideoFormat(mime, config.widthPx, config.heightPx)
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
