@@ -40,7 +40,7 @@ class VideoRenderer(
     /** Jitter buffer in content frames, 0..2. 0 = render each frame as soon as decoded (T-015 behavior). */
     bufferFrames: Int = 1,
     /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
-    private val codecReportsShown: Boolean = true,
+    codecReportsShown: Boolean = true,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -51,6 +51,9 @@ class VideoRenderer(
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
+
+    /** Read at each codec start; switch before re-attaching a surface (GL -> SurfaceView fallback). */
+    @Volatile var codecReportsShown: Boolean = codecReportsShown
 
     /** Jitter buffer size in content frames (0..2); takes effect on the next frame. */
     @Volatile var bufferFrames: Int = bufferFrames.coerceIn(0, 2)
@@ -304,7 +307,9 @@ class VideoRenderer(
         fun key(k: String) = if (f.containsKey(k)) f.getInteger(k).toString() else "unset"
         Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=output_format " +
             "range=${key(MediaFormat.KEY_COLOR_RANGE)} standard=${key(MediaFormat.KEY_COLOR_STANDARD)} " +
-            "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)}")
+            "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)} " +
+            "size=${key(MediaFormat.KEY_WIDTH)}x${key(MediaFormat.KEY_HEIGHT)} " +
+            "crop=${key("crop-left")},${key("crop-top")},${key("crop-right")},${key("crop-bottom")}")
     }
 
     private fun nowUs() = SystemClock.elapsedRealtimeNanos() / 1000

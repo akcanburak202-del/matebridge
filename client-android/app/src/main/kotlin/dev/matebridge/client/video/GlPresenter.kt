@@ -43,16 +43,23 @@ class GlPresenter(
     private val presentStats: PresentStats,
     private val vsync: VsyncClock,
     private val presentationTime: Boolean = false,
+    /**
+     * Called from the GL thread when GL setup or drawing failed for good. The decoder Surface has been
+     * released by then, so a decoder still rendering to it errors out instead of stalling silently.
+     */
+    private val onFailed: (String) -> Unit = {},
 ) {
     private companion object {
         const val TAG = "render"
-        const val JOIN_MS = 500L
+
+        /** Thread of the most recently stopped presenter (UI thread only); the next one waits for it. */
+        var lingering: Thread? = null
 
         const val VERTEX = """
             attribute vec4 aPos;
             attribute vec2 aTex;
             uniform mat4 uTexMatrix;
-            varying vec2 vTex;
+            varying highp vec2 vTex;
             void main() {
                 gl_Position = aPos;
                 vTex = (uTexMatrix * vec4(aTex, 0.0, 1.0)).xy;
@@ -60,8 +67,14 @@ class GlPresenter(
         """
         const val FRAGMENT = """
             #extension GL_OES_EGL_image_external : require
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #define HP highp
+            #else
             precision mediump float;
-            varying vec2 vTex;
+            #define HP mediump
+            #endif
+            varying HP vec2 vTex;
             uniform samplerExternalOES uTex;
             void main() { gl_FragColor = texture2D(uTex, vTex); }
         """
@@ -97,29 +110,35 @@ class GlPresenter(
     private var lastAvailNs = 0L
     private var loopRunning = false
     private var failed = false
+    private var loggedMatrix = false
 
     private val frameCallback = Choreographer.FrameCallback { t -> onVsync(t) }
 
     fun start(target: Surface, onReady: (Surface) -> Unit) {
         stop()
+        val previous = lingering
         val t = HandlerThread("mb-gl").also { it.start() }
         thread = t
+        lingering = t
         val h = Handler(t.looper)
         handler = h
         h.post {
+            try { previous?.join() } catch (_: InterruptedException) { return@post }
             try {
                 setupGl(target)
                 onReady(decoderSurface!!)
                 if (active) startLoop()
             } catch (e: Exception) {
-                failed = true
                 MbLog.e("gl_setup_failed", "err=${e.javaClass.simpleName} egl=0x${Integer.toHexString(EGL14.eglGetError())}", TAG)
-                teardownGl()
+                fail("setup")
             }
         }
     }
 
-    /** Releases GL and the decoder Surface. Blocks the caller for at most [JOIN_MS]. */
+    /**
+     * Releases GL and the decoder Surface on the GL thread without blocking the caller; a presenter
+     * started afterwards waits for this one to finish. The decoder must already be detached.
+     */
     fun stop() {
         val t = thread ?: return
         val h = handler
@@ -131,8 +150,14 @@ class GlPresenter(
             teardownGl()
             t.quitSafely()
         }
-        try { t.join(JOIN_MS) } catch (_: InterruptedException) {}
-        if (t.isAlive) MbLog.w("gl_stop_slow", "", TAG)
+    }
+
+    /** GL thread: give up. Releasing the decoder Surface makes a decoder still writing to it fail loudly. */
+    private fun fail(why: String) {
+        if (failed) return
+        failed = true
+        teardownGl()
+        onFailed(why)
     }
 
     // ---- GL thread ----
@@ -157,9 +182,7 @@ class GlPresenter(
         check(eglSurface != EGL14.EGL_NO_SURFACE) { "eglCreateWindowSurface" }
         check(EGL14.eglMakeCurrent(display, eglSurface, eglSurface, context)) { "eglMakeCurrent" }
         EGL14.eglSwapInterval(display, 1)
-        val dim = IntArray(1)
-        EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_WIDTH, dim, 0); width = dim[0]
-        EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_HEIGHT, dim, 0); height = dim[0]
+        querySize()
 
         program = buildProgram(VERTEX, FRAGMENT)
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
@@ -200,7 +223,8 @@ class GlPresenter(
             EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
             if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, eglSurface)
             if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context)
-            EGL14.eglTerminate(display)
+            // No eglTerminate: the default display is shared with the rest of the process.
+            EGL14.eglReleaseThread()
         }
         display = EGL14.EGL_NO_DISPLAY
         context = EGL14.EGL_NO_CONTEXT
@@ -221,8 +245,8 @@ class GlPresenter(
         presentStats.onVsync(frameTimeNs, vsync.periodNs)
         if (pending > 0 && !failed) {
             try { draw(frameTimeNs) } catch (e: Exception) {
-                failed = true
                 MbLog.e("gl_draw_failed", "err=${e.javaClass.simpleName} egl=0x${Integer.toHexString(EGL14.eglGetError())}", TAG)
+                fail("draw")
             }
         }
         if (active && !failed) {
@@ -238,10 +262,18 @@ class GlPresenter(
         val st = surfaceTexture ?: return
         val startNs = System.nanoTime()
         val waited = startNs - lastAvailNs
-        val coalesced = pending - 1
+        // updateTexImage latches one queued buffer per call: drain every frame that arrived, keep the
+        // last (newest wins). This also frees the decoder's output slots so it cannot stall.
+        val n = pending
         pending = 0
-        st.updateTexImage()
+        for (i in 0 until n) st.updateTexImage()
+        val coalesced = n - 1
         st.getTransformMatrix(texMatrix)
+        if (!loggedMatrix) {
+            loggedMatrix = true
+            MbLog.i("gl_tex_matrix", "m=" + texMatrix.joinToString(",") { "%.4f".format(java.util.Locale.ROOT, it) }, TAG)
+        }
+        querySize()
 
         GLES20.glViewport(0, 0, width, height)
         GLES20.glUseProgram(program)
@@ -270,6 +302,12 @@ class GlPresenter(
         // "Shown" proxy: the vsync this frame was queued for. EGL_ANDROID_get_frame_timestamps has no
         // Java binding, so real display times are not available; gaps are multiples of the vsync period.
         onShown(vsyncNs / 1000)
+    }
+
+    private fun querySize() {
+        val dim = IntArray(1)
+        if (EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_WIDTH, dim, 0)) width = dim[0]
+        if (EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_HEIGHT, dim, 0)) height = dim[0]
     }
 
     private fun buildProgram(vs: String, fs: String): Int {

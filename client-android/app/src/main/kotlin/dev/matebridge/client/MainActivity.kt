@@ -141,13 +141,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.i("render_mode", "mode=${if (glMode) "gl" else "surface"} frate=$frameRateOverride glpts=$glPresentationTime", "render")
         panel = findViewById(R.id.panel)
         statsView = findViewById(R.id.stats)
-        videoView.holder.addCallback(this)
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
-        videoView.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
-            else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+        // Both views are wired: the GL path can fall back to the SurfaceView at runtime.
+        for (sv in listOf(video, videoGl)) {
+            sv.holder.addCallback(this)
+            sv.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+                if (v === videoView) {
+                    viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
+                    else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+                }
+            }
+            sv.setOnLongClickListener { toggleStats(); true }
         }
-        videoView.setOnLongClickListener { toggleStats(); true }
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
         findViewById<Button>(R.id.toggle_stats).setOnClickListener { toggleStats() }
         endpointField = findViewById(R.id.endpoint)
         val prefs = getSharedPreferences("matebridge", Context.MODE_PRIVATE)
@@ -212,11 +217,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // ---- video surface and renderer ----
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        if (holder !== videoView.holder) return
         surfaceValid = true
         if (streamConfig != null) setSurfaceFrameRate(true)
         if (glMode) {
             val gen = ++glGeneration
-            val p = GlPresenter({ us -> renderer?.stats?.onShown(us) }, presentStats, glVsync, glPresentationTime)
+            val p = GlPresenter(
+                { us -> renderer?.stats?.onShown(us) }, presentStats, glVsync, glPresentationTime,
+                onFailed = { why -> runOnUiThread { if (gen == glGeneration) fallBackToSurface(why) } },
+            )
             presenter = p
             p.active = streamConfig != null
             p.start(holder.surface) { s ->
@@ -233,7 +242,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
+    /** GL setup or drawing failed: continue on the plain MediaCodec -> SurfaceView path. */
+    private fun fallBackToSurface(why: String) {
+        if (!glMode || isDestroyed) return
+        MbLog.w("gl_fallback", "reason=$why to=surface", "render")
+        renderer?.detachSurface()
+        glGeneration++
+        glDecoderSurface = null
+        presenter?.stop()
+        presenter = null
+        glMode = false
+        renderer?.codecReportsShown = true
+        surfaceValid = false
+        videoGl.visibility = View.GONE
+        video.visibility = View.VISIBLE
+        videoView = video
+        layoutVideo() // the SurfaceView's surfaceCreated then attaches the renderer
+    }
+
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        if (holder !== videoView.holder) return
         surfaceValid = false
         renderer?.detachSurface()
         if (glMode) {
