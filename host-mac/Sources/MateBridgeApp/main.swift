@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var server: SessionServer?
+    private let coordinator = StreamCoordinator()
+    private let videoLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var approvalPanel: ApprovalPanel?
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
@@ -23,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLine.isEnabled = false
         statusLine.title = "Başlatılıyor…"
         menu.addItem(statusLine)
+        videoLine.isEnabled = false
+        videoLine.isHidden = true
+        menu.addItem(videoLine)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Onaylı cihazları unut", action: #selector(forgetDevices), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -41,18 +46,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handlers.approvalCancelled = { [weak self] id in
             Task { @MainActor in self?.cancelApproval(id) }
         }
-        // Input injection, video and the log file arrive with later tasks; releaseInput is a no-op until then.
-        let server = SessionServer(handlers: handlers)
+        // Video: session events drive the display/encoder/sender (T-014). Input injection arrives with a later
+        // task; releaseInput is a no-op until then.
+        let coordinator = self.coordinator
+        handlers.sessionStarted = { sid, cid in coordinator.sessionStarted(sessionID: sid, configID: cid) }
+        handlers.sessionEnded = { coordinator.sessionEnded() }
+        handlers.videoAttached = { coordinator.videoAttached($0) }
+        handlers.deliver = { coordinator.deliver($0) }
+        coordinator.onSummary = { [weak self] text in
+            Task { @MainActor in self?.showVideo(text) }
+        }
+        coordinator.start()
+        let server = SessionServer(handlers: handlers, makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
+        coordinator.onOverflow = { [server] in server.endSessions() }
         server.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()  // release input, BYE(SHUTTING_DOWN) to peers
+        coordinator.shutdown()  // stop capture/encoder and remove the virtual display
     }
 
     @objc private func forgetDevices() {
         server?.forgetApprovedDevices()
+    }
+
+    private func showVideo(_ text: String) {
+        videoLine.title = text
+        videoLine.isHidden = text.isEmpty
     }
 
     private func show(_ state: SessionServerState) {

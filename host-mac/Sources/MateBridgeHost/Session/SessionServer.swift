@@ -234,6 +234,16 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
+    /// Ends every session (release input, BYE SHUTTING_DOWN, close) but keeps listening, so clients reconnect.
+    /// Used when the host cannot keep up with its own events.
+    public func endSessions() {
+        queue.async { [self] in
+            guard !stopped else { return }
+            logger.log(.warning, "sessions_ended_by_host", sessionID: currentSessionID, generation: currentConfigID)
+            apply(machine.shutdown())
+        }
+    }
+
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
     public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in
@@ -529,7 +539,8 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Time
 
-    private func nowUs() -> UInt64 { DispatchTime.now().uptimeNanoseconds / 1000 }
+    /// Host clock shared with `VIDEO_FRAME.capture_time_us` (PROTOCOL.md section 6).
+    private func nowUs() -> UInt64 { HostClock.nowUs() }
 
     private func startTicking() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -541,4 +552,8 @@ public final class SessionServer: @unchecked Sendable {
         timer.resume()
         tickTimer = timer
     }
+}
+
+extension VideoLink: VideoTransport {
+    public func setReadyHandler(_ handler: (@Sendable () -> Void)?) { onReady = handler }
 }
