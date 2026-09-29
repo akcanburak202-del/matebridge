@@ -28,7 +28,7 @@ class FrameQueue(private val stats: VideoStats) {
     fun offer(frame: VideoFrame): Int? {
         var request: Int? = null
         synchronized(lock) {
-            stats.onReceived(frame.data.size)
+            stats.onReceived(frame.data.size, isConfig = frame.isCodecConfig)
             when {
                 frame.isCodecConfig -> {
                     queue.removeAll { it.isCodecConfig }
@@ -78,6 +78,7 @@ class FrameQueue(private val stats: VideoStats) {
      */
     fun reset(reason: Int = KeyframeRequest.STARTUP, keepConfig: Boolean = true): Int = synchronized(lock) {
         queue.clear()
+        stats.breakGaps()
         waitingKeyframe = true
         if (!keepConfig) lastConfig = null // new stream configuration: the old parameter sets are invalid
         lastConfig?.let { queue.addLast(it) }
