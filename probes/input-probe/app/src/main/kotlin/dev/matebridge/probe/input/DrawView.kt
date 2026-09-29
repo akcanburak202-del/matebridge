@@ -50,15 +50,24 @@ class DrawView(context: Context) : View(context) {
         drawing = true
     }
 
+    private fun isPen(e: MotionEvent, i: Int): Boolean {
+        val t = e.getToolType(i)
+        return t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> drawing = false
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { drawing = false; return true }
         }
+        // Draw only from the first stylus pointer; ignore finger and palm.
+        var i = -1
+        for (k in 0 until e.pointerCount) if (isPen(e, k)) { i = k; break }
+        if (i < 0) return true
         for (h in 0 until e.historySize) {
-            segment(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h))
+            segment(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalPressure(i, h))
         }
-        segment(e.x, e.y, e.pressure)
+        segment(e.getX(i), e.getY(i), e.getPressure(i))
         invalidate()
         return true
     }

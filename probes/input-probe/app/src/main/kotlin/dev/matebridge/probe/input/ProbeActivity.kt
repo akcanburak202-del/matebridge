@@ -168,13 +168,14 @@ class ProbeActivity : Activity() {
     private fun record(e: MotionEvent, callback: String, isCaptured: Boolean) {
         val r = EventMapper.motion(e, callback, isCaptured)
         sink.write(EventJson.motion(r))
-        val p = r.pointers.firstOrNull()
-        if (p != null && (p.toolType == "STYLUS" || p.toolType == "ERASER")) {
+        val pen = r.pointers.firstOrNull { it.toolType == "STYLUS" || it.toolType == "ERASER" }
+        val p = pen ?: r.pointers.firstOrNull()
+        if (pen != null) {
             for (h in r.history) penRate.add(h.eventTime)
             penRate.add(r.eventTime)
-            lastPressure = p.pressure
-            lastTilt = p.tilt
-            lastOrientation = p.orientation
+            lastPressure = pen.pressure
+            lastTilt = pen.tilt
+            lastOrientation = pen.orientation
         }
         val short = r.action.removePrefix("ACTION_")
         push(
@@ -198,6 +199,14 @@ class ProbeActivity : Activity() {
             sink.lines, if (captured) "ON" else "off",
         )
         list.text = recent.joinToString("\n")
+        val err = sink.error
+        if (err != null) {
+            fileLabel.text = err
+            fileLabel.setTextColor(Color.RED)
+        } else {
+            fileLabel.text = sink.file?.absolutePath ?: ""
+            fileLabel.setTextColor(Color.GRAY)
+        }
     }
 
     // ---- lifecycle: release capture, flush file ----
