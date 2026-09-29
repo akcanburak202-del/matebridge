@@ -1,7 +1,7 @@
 ---
 id: T-010
 title: Mac oturum sunucusu — Bonjour, kontrol bağlantısı, onay, heartbeat
-status: todo
+status: review
 phase: 1
 owner: mac-host-dev
 depends_on: [T-008]
@@ -30,12 +30,29 @@ Tabletin Mac'i bulup bağlanabilmesi: PROTOCOL.md §2, §3 ve §6'nın host tara
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `MateBridgeCore/Session`: saf `SessionMachine` (olay -> eylem listesi, zaman `now` parametresiyle), `ApprovedDeviceStore` (JSON, 0600), `LogFormat`.
+2. `MateBridgeHost/Session`: `SessionServer` (NWListener x2, TCP_NODELAY, Bonjour `_matebridge._tcp` TXT v=0, FrameDecoder, 100 ms tick), `SessionLogger` (os.Logger).
+3. `MateBridgeApp`: durum satırı, onay NSAlert, "Onaylı cihazları unut", çıkışta `stop()`.
+4. Birim testler: makine (BUSY, devralma sırası, onay, zaman aşımları, heartbeat, video doğrulama), store, log biçimi.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `git log task/T-010-session-server` (tek T-010 commit'i)
+- **Dokunulan dosyalar:** `Core/Session/{SessionMachine,ApprovedDeviceStore,LogFormat}.swift`, `Host/Session/{SessionServer,SessionLogger}.swift`, `MateBridgeApp/main.swift`, `Tests/.../Session/{SessionMachineTests,SessionSupportTests}.swift`, bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Kontrol portu dinamik (Bonjour); `adb reverse` için `SessionServer(controlPort:)` sabit port alır. Video portu her zaman dinamik.
+  - HELLO'dan önce HELLO dışı mesaj = protokol hatası (BYE PROTOCOL_ERROR). Onay bekleyen oturum da tek oturum yuvasını tutar: başka cihaz BUSY alır; aynı `device_id` bekleyen oturumu da devralır.
+  - HELLO zaman aşımında ve onay reddinde BYE gönderilmez (HELLO_ACK(REJECTED) / sessiz kapanış). Video bağlantısında 5 sn içinde VIDEO_HELLO gelmezse kapatılır (spesifikasyonda yok, eklendi).
+  - `STREAM_CONFIG` yer tutucu: `SessionServer.defaultStreamConfig` (tabletin ekranı, nokta = piksel/2, H.264, 60 fps, 40 Mbit/s, config_id=1). T-011 gerçek değerleri `makeStreamConfig` ile verir. Ayar değişikliği (§3.7, yeni config_id) makinede henüz yok.
+  - `releaseInput` ve `deliver` işleyicileri App'te boş; enjeksiyon sonraki görev. Tüm tetikleyiciler (RELEASE_ALL, BYE, kopma, protokol hatası, 1,5 sn sessizlik, devralma, kapanış) `SessionAction.releaseInput` ile hazır ve testli.
+  - Log yalnızca os.Logger'a gider (`host.log` dosyası bu kartta yok). Cihaz adı hiçbir logda yok (test var).
+  - `VideoLink` (Host/Session) doğrulanmış video bağlantısını T-011'e verir; T-011 farklı arayüz isterse orkestratör uyarlar.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ağ katmanı (NWListener, Bonjour yayını, TCP_NODELAY, kapatmada BYE'ın flush edilmesi) ve NSAlert akışı çalıştırılmadı (TCC/Local Network istemi tetiklememek için). `swift test` 61 test geçiyor, `check.sh` ALL OK.
+  Elle deneme (uygulama çalışırken; portu `dns-sd -B _matebridge._tcp` ve `dns-sd -L <ad> _matebridge._tcp local` ile bul):
+  `cd protocol/fixtures && (sed 's/#.*//' hello.hex | xxd -r -p; sleep 70) | nc 127.0.0.1 <control_port> | xxd`
+  Beklenen: Mac'te onay penceresi; ilk yanıt `02 ..` HELLO_ACK status=1 (pending); "İzin ver" sonrası ikinci HELLO_ACK (status 0) ve `03 ..` STREAM_CONFIG.
+- **Review düzeltmeleri (2. commit):** onay id'ye bağlı (`resolveApproval(id:)`), tek main-actor onay yolu (yeni istek eskisini değiştirir), `transportClosed` her zaman `cancel()`, `stop()` en fazla 200 ms BYE flush bekler (best effort), gönderim tavanı 256 KiB/bağlantı, en çok 4 kimliksiz kontrol ve 4 kimliksiz video bağlantısı, doğrulanmamış video bağlantısında elle ayrıştırılan en çok 1 KiB VIDEO_HELLO, store 0700/0600 atomik yazım, dinleyici hatasında iptal + üstel geri çekilme yeniden deneme, `VideoLink` en çok 2 uçuşta gönderim (`send` false döner, `canSend`, `onReady`). Bekleyen onay için bayat tıklama testi eklendi. Yeniden deneme ve geri basınç yolları gerçek ağda denenmedi.
 - **Açık sorular:**
+  - `Info.plist` şablonuna (kart dışı, orkestratör ekler): `NSBonjourServices` = [`_matebridge._tcp`]. Yayın için gerekmeyebilir ama Local Network izniyle birlikte koymak güvenli. `NSLocalNetworkUsageDescription` zaten var.
+  - Onay penceresi `runModal` kullanıyor; bağlantı düşerse `abortModal` ile kapanıyor, gerçek uygulamada denenmeli.
+  - `MateBridgeHost/Placeholder.swift` kart dışı olduğu için dokunulmadı.
