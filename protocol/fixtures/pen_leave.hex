@@ -12,5 +12,5 @@ f6 31                    #   u16 y = 12790
 00 00                    #   u16 pressure = 0
 00 00                    #   i16 tilt_x = 0
 00 00                    #   i16 tilt_y = 0
-00                       #   u8 flags = 0 (not in range)
+00                       #   u8 flags = 0 (none)
 00                       #   u8 reserved = 0

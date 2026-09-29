@@ -64,7 +64,17 @@ def render(title, lines):
     return "\n".join(out) + "\n"
 
 
+PEN_FLAGS = {0x01: "IN_RANGE", 0x02: "CONTACT", 0x04: "BUTTON"}
+
+
 def pen_sample(dt_us, x, y, p, tx, ty, flags, note):
+    # Guard against fixture typos: the comment is derived from the bits, and the documented invariants hold.
+    assert flags & ~0x07 == 0, "undefined pen flag bits"
+    assert not (flags & 0x02) or (flags & 0x01), "CONTACT requires IN_RANGE"
+    assert (p > 0) <= bool(flags & 0x02), "pressure > 0 requires CONTACT"
+    assert -32767 <= tx <= 32767 and -32767 <= ty <= 32767, "tilt range"
+    names = "|".join(n for b, n in PEN_FLAGS.items() if flags & b) or "none"
+    note = names if "," not in note else names + note[note.index(","):]
     parts = [
         field("u32", "dt_us", dt_us), field("u16", "x", x), field("u16", "y", y),
         field("u16", "pressure", p), field("i16", "tilt_x", tx), field("i16", "tilt_y", ty),
@@ -102,11 +112,14 @@ FIXTURES = {
         field("u16", "video_port", 0),
         field("str8", "host_name", "Mac mini"),
     ])),
-    "stream_config": ("STREAM_CONFIG: HEVC 2800x1840@60, sRGB full range", frame("STREAM_CONFIG", [
+    "stream_config": ("STREAM_CONFIG: HEVC 2800x1840 (1400x920 pt) @60, sRGB full range", frame("STREAM_CONFIG", [
+        field("u16", "config_id", 1),
         field("u8", "codec", 2, "HEVC"),
         field("u8", "reserved", 0),
         field("u16", "width_px", 2800),
         field("u16", "height_px", 1840),
+        field("u16", "width_pt", 1400),
+        field("u16", "height_pt", 920),
         field("u16", "fps", 60),
         field("u32", "bitrate_kbps", 50000),
         field("u8", "color_primaries", 1, "BT.709"),
@@ -122,10 +135,10 @@ FIXTURES = {
         field("u8", "count", 4),
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 1127411618000),
-    ] + pen_sample(0, 22364, 12738, 0, 3000, 2500, 0x02, "IN_RANGE")
+    ] + pen_sample(0, 22364, 12738, 0, 3000, 2500, 0x01, "IN_RANGE")
       + pen_sample(3000, 22380, 12750, 288, 3000, 2500, 0x03, "IN_RANGE|CONTACT")
       + pen_sample(6000, 22410, 12771, 32768, 2980, 2490, 0x03, "IN_RANGE|CONTACT")
-      + pen_sample(9000, 22430, 12790, 0, 2980, 2490, 0x02, "IN_RANGE, contact lifted"))),
+      + pen_sample(9000, 22430, 12790, 0, 2980, 2490, 0x01, "IN_RANGE, contact lifted"))),
     "pen_leave": ("PEN: out of range (proximity leave)", frame("PEN", [
         field("u8", "tool", 0, "PEN"),
         field("u8", "count", 1),
@@ -138,20 +151,20 @@ FIXTURES = {
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 1127411800000),
     ] + pen_sample(0, 1000, 2000, 65535, -32767, 0, 0x07, "IN_RANGE|CONTACT|BUTTON"))),
-    "key_down": ("KEY: A down, Num Lock on", frame("KEY", [
+    "key_down": ("KEY: A down", frame("KEY", [
         field("u64", "time_us", 1127463498000),
         field("u16", "scan_code", 30, "evdev KEY_A"),
         field("u16", "android_key_code", 29, "KEYCODE_A"),
         field("u8", "action", 1, "DOWN"),
-        field("u8", "lock_state", 0x02, "NUM_LOCK"),
+        field("u8", "lock_state", 0x00),
         field("u16", "reserved", 0),
     ])),
-    "key_up_caps": ("KEY: Caps Lock up, Caps and Num Lock on", frame("KEY", [
+    "key_up_caps": ("KEY: Caps Lock up, Caps Lock now on", frame("KEY", [
         field("u64", "time_us", 1127463600000),
         field("u16", "scan_code", 58, "evdev KEY_CAPSLOCK"),
         field("u16", "android_key_code", 115, "KEYCODE_CAPS_LOCK"),
         field("u8", "action", 0, "UP"),
-        field("u8", "lock_state", 0x03, "CAPS_LOCK|NUM_LOCK"),
+        field("u8", "lock_state", 0x01, "CAPS_LOCK"),
         field("u16", "reserved", 0),
     ])),
     "pen_gesture": ("PEN_GESTURE: M-Pencil double tap", frame("PEN_GESTURE", [
@@ -181,8 +194,8 @@ FIXTURES = {
         field("f32", "dx", 0.0),
         field("f32", "dy", 12.5),
         field("u8", "phase", 2, "CHANGED"),
-        field("u8", "momentum_phase", 0, "NONE"),
-        field("u16", "reserved", 0),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
     ])),
     "release_all": ("RELEASE_ALL: app went to background", frame("RELEASE_ALL", [
         field("u8", "reason", 1, "BACKGROUND"),
@@ -211,17 +224,17 @@ FIXTURES = {
     ])),
     "video_hello": ("VIDEO_HELLO: first message on the video connection", frame("VIDEO_HELLO", [
         field("u16", "protocol_version", 0),
-        field("u16", "reserved", 0),
+        field("u16", "config_id", 1),
         field("u32", "session_id", 0xA1B2C3D4),
     ])),
     "video_frame": ("VIDEO_FRAME: HEVC keyframe, single fragment (payload shortened)", frame("VIDEO_FRAME", [
         field("u32", "frame_seq", 1),
         field("u64", "capture_time_us", 98765000000),
         field("u8", "flags", 0x01, "KEYFRAME"),
-        field("u8", "codec", 2, "HEVC"),
+        field("u8", "reserved", 0),
         field("u16", "fragment_index", 0),
         field("u16", "fragment_count", 1),
-        field("u16", "reserved", 0),
+        field("u16", "reserved2", 0),
         field("u32", "frame_size", 8),
         field("bytes", "data", bytes.fromhex("0000000126010af0"), "Annex-B, IDR NAL start"),
     ])),
@@ -229,12 +242,76 @@ FIXTURES = {
         field("u32", "frame_seq", 0),
         field("u64", "capture_time_us", 98764990000),
         field("u8", "flags", 0x02, "CODEC_CONFIG"),
-        field("u8", "codec", 2, "HEVC"),
+        field("u8", "reserved", 0),
         field("u16", "fragment_index", 0),
         field("u16", "fragment_count", 1),
-        field("u16", "reserved", 0),
+        field("u16", "reserved2", 0),
         field("u32", "frame_size", 6),
         field("bytes", "data", bytes.fromhex("000000014001"), "Annex-B, VPS NAL start"),
+    ])),
+    "hello_utf8_name": ("HELLO: multibyte UTF-8 device name, fewer capabilities", frame("HELLO", [
+        field("u16", "protocol_version", 0),
+        field("bytes", "device_id", bytes(range(16)), "random per install"),
+        field("u16", "screen_width_px", 2800),
+        field("u16", "screen_height_px", 1840),
+        field("u16", "density_dpi", 360),
+        field("u16", "max_refresh_hz", 60),
+        field("u32", "capabilities", 0x00000049, "PEN|KEYBOARD|H264"),
+        field("str8", "device_name", "Çizim Tableti ğüşöı"),
+    ])),
+    "hello_ack_busy": ("HELLO_ACK: another tablet already has the session", frame("HELLO_ACK", [
+        field("u16", "protocol_version", 0),
+        field("u8", "status", 4, "BUSY"),
+        field("u8", "reserved", 0),
+        field("u32", "session_id", 0),
+        field("u16", "video_port", 0),
+        field("str8", "host_name", ""),
+    ])),
+    "pen_extremes": ("PEN: two samples at the bottom-right corner, full pressure and full tilt", frame("PEN", [
+        field("u8", "tool", 0, "PEN"),
+        field("u8", "count", 2),
+        field("u16", "reserved", 0),
+        field("u64", "base_time_us", 0),
+    ] + pen_sample(0, 65535, 65535, 65535, 32767, -32767, 0x03, "IN_RANGE|CONTACT")
+      + pen_sample(4294967295, 65535, 65535, 65535, -32767, 32767, 0x03, "IN_RANGE|CONTACT"))),
+    "key_no_scan": ("KEY: key without a scan code (android_key_code fallback), down", frame("KEY", [
+        field("u64", "time_us", 1127463700000),
+        field("u16", "scan_code", 0, "unknown"),
+        field("u16", "android_key_code", 85, "KEYCODE_MEDIA_PLAY_PAUSE"),
+        field("u8", "action", 1, "DOWN"),
+        field("u8", "lock_state", 0x00),
+        field("u16", "reserved", 0),
+    ])),
+    "scroll_began": ("SCROLL: gesture begins", frame("SCROLL", [
+        field("u64", "time_us", 1127500590000),
+        field("f32", "dx", 0.0),
+        field("f32", "dy", 0.0),
+        field("u8", "phase", 1, "BEGAN"),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+    ])),
+    "scroll_ended": ("SCROLL: gesture ends", frame("SCROLL", [
+        field("u64", "time_us", 1127500700000),
+        field("f32", "dx", 0.0),
+        field("f32", "dy", 0.0),
+        field("u8", "phase", 3, "ENDED"),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+    ])),
+    "unknown_type": ("MUST BE SKIPPED: unknown message type 0x7f with a 3-byte payload", [
+        (struct.pack("<B", 0x7F), "header u8 type = 0x7f (unknown)"),
+        (struct.pack("<I", 3), "header u32 length = 3"),
+        (bytes([0xAA, 0xBB, 0xCC]), "bytes payload = aabbcc (skip)"),
+    ]),
+    "invalid_pen_count_zero": ("MUST BE REJECTED (PROTOCOL_ERROR): PEN with count = 0", frame("PEN", [
+        field("u8", "tool", 0, "PEN"),
+        field("u8", "count", 0, "invalid"),
+        field("u16", "reserved", 0),
+        field("u64", "base_time_us", 0),
+    ])),
+    "invalid_key_short": ("MUST BE REJECTED (PROTOCOL_ERROR): KEY payload shorter than 16 bytes", frame("KEY", [
+        field("u64", "time_us", 0),
+        field("u16", "scan_code", 30),
     ])),
 }
 

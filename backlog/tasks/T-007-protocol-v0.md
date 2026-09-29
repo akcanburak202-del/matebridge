@@ -11,6 +11,7 @@ files:
   - protocol/fixtures/
   - docs/NOTES.md
   - scripts/check.sh
+  - docs/decisions/0003-keyboard-physical-keycodes.md
 ---
 
 ## Amaç
