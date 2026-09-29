@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.start()
         let server = SessionServer(handlers: handlers, makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
+        coordinator.onOverflow = { [server] in server.endSessions() }
         server.start()
     }
 

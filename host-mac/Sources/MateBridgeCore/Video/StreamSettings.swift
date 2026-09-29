@@ -4,7 +4,7 @@ extension VideoSettings {
     public static let defaultFps = 60
 
     /// Settings for a connecting tablet: virtual display at the tablet's native pixel size, 2x HiDPI
-    /// (points = pixels / 2), HEVC, the tablet's refresh rate capped at `defaultFps`.
+    /// (points = pixels / 2), HEVC, `min(tablet max_refresh_hz, 60)` fps (60 if the tablet reports 0).
     /// A HELLO with an unusable size (zero, odd, or larger than `maxEdgePx`) falls back to `tabletDefault`.
     public static func forTablet(_ hello: Hello) -> VideoSettings {
         let w = Int(hello.screenWidthPx)
@@ -17,7 +17,7 @@ extension VideoSettings {
             settings.heightPt = h / 2
         }
         let hz = Int(hello.maxRefreshHz)
-        settings.fps = hz >= 30 ? min(hz, defaultFps) : defaultFps
+        settings.fps = hz > 0 ? min(hz, defaultFps) : defaultFps
         return settings
     }
 }

@@ -36,6 +36,8 @@ public final class VideoSender: @unchecked Sendable {
     private let lock = NSLock()
     private var counters = Counters()
     private var failed = false
+    private var lastKeyframeRequestNs: UInt64?
+    static let keyframeRequestIntervalNs: UInt64 = 500_000_000
     private var task: Task<Void, Never>?
 
     /// - Parameters:
@@ -82,14 +84,21 @@ public final class VideoSender: @unchecked Sendable {
                 guard await iterator.next() != nil else { return .cancelled }
             }
             if hasFailed { return .transportFailed }
-            guard let encoded = await frames.next() else { return Task.isCancelled ? .cancelled : .queueClosed }
+            guard let encoded = await frames.next() else {
+                if Task.isCancelled { return .cancelled }
+                return hasFailed ? .transportFailed : .queueClosed
+            }
             let frame = encoded.toVideoFrame(seq: seq)
             let size = frame.data.count
             let accepted = transport.send(frame) { [self] ok in
                 if !ok { markFailed(); signal.yield() }
             }
             record(accepted: accepted, bytes: size, keyframe: encoded.isKeyframe)
-            if accepted { seq &+= 1 } else { requestKeyframe() }
+            if accepted {
+                seq &+= 1
+            } else if keyframeRequestAllowed() {
+                requestKeyframe()
+            }
         }
         return .cancelled
     }
@@ -108,10 +117,21 @@ public final class VideoSender: @unchecked Sendable {
 
     private var hasFailed: Bool { lock.lock(); defer { lock.unlock() }; return failed }
 
+    /// A refused frame asks for a keyframe, but not more often than every 500 ms.
+    private func keyframeRequestAllowed() -> Bool {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return lock.withLock {
+            if let last = lastKeyframeRequestNs, now - last < Self.keyframeRequestIntervalNs { return false }
+            lastKeyframeRequestNs = now
+            return true
+        }
+    }
+
     private func markFailed() {
         lock.lock()
         failed = true
         counters.sendFailures += 1
         lock.unlock()
+        frames.detachConsumer()  // wakes run() if it is waiting for a frame, so it ends promptly
     }
 }

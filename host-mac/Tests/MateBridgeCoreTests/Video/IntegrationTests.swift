@@ -24,6 +24,8 @@ final class StreamSettingsTests: XCTestCase {
         let s = VideoSettings.forTablet(hello(w: 1920, h: 1200, hz: 30))
         XCTAssertEqual([s.widthPx, s.heightPx, s.widthPt, s.heightPt, s.fps], [1920, 1200, 960, 600, 30])
         XCTAssertEqual(VideoSettings.forTablet(hello(hz: 0)).fps, 60)
+        XCTAssertEqual(VideoSettings.forTablet(hello(hz: 24)).fps, 24, "fps = min(tablet Hz, 60)")
+        XCTAssertEqual(VideoSettings.forTablet(hello(hz: 120)).fps, 60)
     }
 
     func testGarbageSizeFallsBackToDefault() {
@@ -183,8 +185,7 @@ final class VideoSenderTests: XCTestCase {
         sender.start()
         frames.push(key(1))
         await waitUntil("sent") { transport.sentCount == 1 }
-        transport.complete(false)
-        frames.push(delta(2))
+        transport.complete(false)  // no further frame arrives: the sender must still end promptly
         await waitUntil("ended") { ended.get() != nil }
         guard case .transportFailed? = ended.get() else { return XCTFail("expected transportFailed") }
         XCTAssertEqual(sender.currentCounters.sendFailures, 1)
@@ -269,6 +270,31 @@ final class RotatingLogFileTests: XCTestCase {
         XCTAssertEqual(mode, 0o600)
     }
 
+    func testDropsOldestWhenBufferFullAndCountsThem() throws {
+        let dir = makeDir()
+        let log = RotatingLogFile(directory: dir, maxPendingLines: 10)
+        for i in 0..<2000 { log.append("l\(i)") }
+        log.close()
+        let text = try String(contentsOf: dir.appendingPathComponent("host.log"), encoding: .utf8)
+        let written = text.split(separator: "\n").filter { $0.hasPrefix("l") }.count
+        XCTAssertEqual(written + log.droppedLines, 2000, "every line is either written or counted as dropped")
+        XCTAssertTrue(text.contains("l1999"), "newest lines are kept")
+    }
+
+    func testTightensExistingModes() throws {
+        let dir = makeDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o755])
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("host.log").path, contents: nil,
+                                       attributes: [.posixPermissions: 0o644])
+        let log = RotatingLogFile(directory: dir)
+        log.append("x")
+        log.close()
+        let fm = FileManager.default
+        XCTAssertEqual(try fm.attributesOfItem(atPath: dir.path)[.posixPermissions] as? Int, 0o700)
+        XCTAssertEqual(try fm.attributesOfItem(atPath: dir.appendingPathComponent("host.log").path)[.posixPermissions] as? Int, 0o600)
+    }
+
     func testRotationKeepsBoundedFiles() throws {
         let dir = makeDir()
         let log = RotatingLogFile(directory: dir, maxBytes: 20, keep: 3)
@@ -282,5 +308,37 @@ final class RotatingLogFileTests: XCTestCase {
             let size = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(n).path)[.size] as? Int ?? 0
             XCTAssertLessThanOrEqual(size, 20)
         }
+    }
+}
+
+final class BoundedMailboxTests: XCTestCase {
+    func testCoalescedEventsKeepLatestAndDoNotCountAgainstCapacity() {
+        let m = BoundedMailbox<String>(capacity: 2)
+        for i in 0..<100 { m.post("stats\(i)", coalesceKey: 1) }
+        m.post("kf", coalesceKey: 2)
+        XCTAssertEqual(m.count, 2)
+        XCTAssertEqual(m.post("a"), .queued)
+        XCTAssertEqual(m.post("b"), .queued)
+        XCTAssertEqual(m.take(), "stats99", "coalesced entry keeps its position, newest value")
+        XCTAssertEqual(m.take(), "kf")
+        XCTAssertEqual(m.take(), "a")
+    }
+
+    func testLifecycleOverflowIsReportedNotStored() {
+        let m = BoundedMailbox<Int>(capacity: 3)
+        for i in 0..<3 { XCTAssertEqual(m.post(i), .queued) }
+        XCTAssertEqual(m.post(3), .overflow)
+        XCTAssertEqual(m.count, 3)
+        XCTAssertEqual(m.post(99, forced: true), .queued, "forced events bypass the cap")
+        XCTAssertEqual(m.removeAll(), [0, 1, 2, 99])
+        XCTAssertNil(m.take())
+    }
+
+    func testWakeSignalsConsumer() async {
+        let m = BoundedMailbox<Int>()
+        m.post(1)
+        var it = m.wake.makeAsyncIterator()
+        _ = await it.next()
+        XCTAssertEqual(m.take(), 1)
     }
 }
