@@ -1,7 +1,7 @@
 ---
 id: T-007
 title: Protokol v0 taslağı ve altın örnekler
-status: in-progress
+status: done
 phase: 0
 owner: orchestrator
 depends_on: [T-003, T-004, T-005]
@@ -24,7 +24,7 @@ Aşama 0 bulgularına dayanarak Mac ve tabletin konuşacağı mesajları dondurm
 - [x] `docs/PROTOCOL.md`: çerçeveleme, HELLO/yetenekler, video kare başlığı, kalem örneği (toplu + geçmiş örnekler), tuş, işaretçi, kaydırma, dokunma, release-all, heartbeat, istatistik.
 - [x] Her mesaj için `protocol/fixtures/*.hex`.
 - [x] Codex incelemesi (`--high`) yapıldı, bulgular işlendi.
-- [ ] Kullanıcıya Aşama 0 raporu sunuldu, Aşama 1'e geçiş onayı alındı.
+- [x] Kullanıcıya Aşama 0 raporu sunuldu, Aşama 1'e geçiş onayı alındı.
 
 ## Plan
 
@@ -43,3 +43,5 @@ Aşama 0 bulgularına dayanarak Mac ve tabletin konuşacağı mesajları dondurm
 - **İncelemeler:** İç inceleyici (16 bulgu) + Codex `--high` üç tur. Codex 1: hover fixture'ı `CONTACT` bitiyle kodlanmıştı (düzeltildi, üreteç artık bayrak değişmezlerini denetliyor), gönderim kuyruğu sınırı, video bağlantısında hata yolu. Codex 2: dokunma bırakışı, çoklu kaynak düğme durumu, release sonrası ilk vuruş. Codex 3: kalem önceliği, istemci sıralaması, geç vuruş (kabul edilen davranış olarak belgelendi).
 - **Test edilmeyenler:** Swift veya Kotlin codec'i henüz yok. Bayt uyumu ancak Aşama 1'de iki tarafın fixture testleriyle doğrulanacak. Eğim dönüşüm formülü, CGEvent tuş tekrarı ve Caps Lock kilit ayarı cihazda doğrulanmadı.
 - **Açık sorular:** Girdi hakemliği kuralları (kilit, kaynak sahipliği, watchdog) `MateBridgeCore`'da birim testleriyle kapsanmalı. Codex yeni turlarda nadir kenar durumları bulmaya devam edebilir; bunlar uygulama testleriyle ele alınacak.
+
+Kullanıcı 2026-09-29'da Aşama 0 raporunu onayladı, Aşama 1'e geçiş onayı verildi.
