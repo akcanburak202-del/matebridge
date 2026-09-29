@@ -1,7 +1,7 @@
 ---
 id: T-015
 title: Android entegrasyonu — oturum + görüntü, tam ekran, istatistik katmanı
-status: review
+status: done
 phase: 1
 owner: android-client-dev
 depends_on: [T-012, T-013]
@@ -43,3 +43,7 @@ Bağlı oturumda video bağlantısındaki kareleri tam ekran göstermek, STATS g
 - **ClockSync** her yeni kontrol bağlantısında (`SessionListener.onSessionStart`, otomatik yeniden bağlanma dahil) sıfırlanır. Video bağlantısının `config_id`'si güncel STREAM_CONFIG ile eşleşmiyorsa kareler controller'da atılır.
 - Yaşam döngüsü: `installConfig`/`render` `!started || isDestroyed` ise döner; `onDestroy` `removeCallbacksAndMessages(null)`; `onStart` ticker'ı önce siler; renderer bırakılınca katman metni temizlenir.
 - **Test edilmeyen uç durumlar:** config değişiminde eski codec yavaş çıkarsa (detach_slow) yeni thread'in beklemesi; yeni video bağlantısı açılmadan UI thread reconfigure'dan önce gelen yeni-config karelerinin eski codec'e gitmesi (keyframe kapısı + 500 ms yeniden istek toparlar); cihaz dönmesi/çoklu pencere ile viewport değişimi; onStop sonrası gelen geç callback'ler.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+İlk canlı görüntü testi: panel kapandı, video tam ekran. `MB/decoder`/`MB/render` saniyede bir stats: recv=dec=shown, drop=0, decode_avg ~15 ms, latency ~39 ms, RTT ~24 ms. Kullanıcı: yazılar Parsec'e göre "kat be kat keskin", 13/11 px Türkçe karakterler temiz. **Hafif takılma ve ara ara fps düşüşü** görüldü (tablet 60 Hz modunda, kareler geldiği anda çiziliyor) → T-016. Arka plan/ön plan ve config değişimi cihazda ayrıca denenmedi.

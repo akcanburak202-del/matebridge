@@ -1,7 +1,7 @@
 ---
 id: T-014
 title: Mac entegrasyonu — oturum + görüntü hattı, istatistik, uçtan uca akış
-status: review
+status: done
 phase: 1
 owner: mac-host-dev
 depends_on: [T-010, T-011]
@@ -54,3 +54,7 @@ Onaylanan oturumda sanal ekranı açıp kareleri video bağlantısına akıtmak.
 ## Review düzeltmeleri (2. commit)
 
 Olay kuyruğu sınırlı (`BoundedMailbox`: STATS/KEYFRAME_REQUEST/tick birleştirilir, yaşam döngüsü olayları en çok 16, taşarsa `SessionServer.endSessions()` ile oturumlar kapanır); sender/pipeline sonunda video bağlantısı `cancel()` edilir, canlı oturumda pipeline hatasında 1 sn bekleyip bir kez yeniden kurulur; gönderim hatası `detachConsumer` ile bekleyen döngüyü uyandırır; `host.log` ayrı seri kuyrukta, 2048 satırlık sınırlı tampon (taşan en eski satırlar atılır, sayılır ve `dropped_lines` satırı yazılır); fps = min(tablet Hz, 60) (0 ise 60); `shuttingDown` bayrağı; log dosyası/dizin izinleri sıkılaştırılır; HELLO boyutundan farklı ekran için uyarı; reddedilen kare sonrası keyframe isteği 500 ms'de bir. Commit: bkz. `git log task/T-014-host-integration` (ilk commit 5656ea1, düzeltme commit'i üstünde).
+
+## Orkestratör cihaz testi (2026-09-29)
+
+İlk canlı görüntü testi: onaylı oturumda sanal ekran 2800×1840 açıldı, HEVC akışı tablete gitti. host.log/os.Logger: `display_created`, `video_streaming`, `stats`. Durağan ekranda ~10 fps, hareketli sayfada (Safari animasyonu) **56–59 fps, 0 atma, ~36–41 ms gecikme**, çözme ~15 ms. Not: bu test MateBridge.app'in ikili dosyası Terminal'den başlatılarak yapıldı (Terminal'in Ekran Kaydı izniyle); uygulamanın kendi izni henüz verilmedi. 10 sn grace, yeniden kullanım, izin yokken hata yolu cihazda denenmedi.
