@@ -1,16 +1,15 @@
 import AppKit
 import MateBridgeCore
 import MateBridgeHost
+import os
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var server: SessionServer?
-    /// Approval flow state. Everything runs on the main actor, so these are serialized.
-    private var approvalRunning = false
-    private var shownApprovalID: UInt64?
-    private var latestRequest: ApprovalRequest?
+    private var approvalPanel: ApprovalPanel?
+    private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -65,44 +64,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A new request replaces any queued one and aborts the dialog still showing an older request.
-    /// The next alert is only shown after `runModal` has returned, so a takeover never loses its dialog.
+    /// The dialog always shows the latest request: a new one replaces the visible panel immediately.
     private func askApproval(_ request: ApprovalRequest) {
-        latestRequest = request
-        if approvalRunning {
-            NSApp.abortModal()
-        } else {
-            Task { @MainActor in self.pumpApprovals() }
+        approvalPanel?.dismiss()
+        let panel = ApprovalPanel(requestID: request.id, deviceName: request.deviceName) { [weak self] approved in
+            self?.approvalPanel = nil
+            // Bound to this request's id; the server ignores the answer if it is no longer pending.
+            self?.server?.resolveApproval(id: request.id, approved: approved)
         }
+        approvalPanel = panel
+        panel.show()
+        log("approval_shown", "conn=\(request.id)")
     }
 
     private func cancelApproval(_ id: UInt64) {
-        if latestRequest?.id == id { latestRequest = nil }
-        if approvalRunning, shownApprovalID == id { NSApp.abortModal() }
+        guard let panel = approvalPanel, panel.requestID == id else { return }
+        panel.dismiss()
+        approvalPanel = nil
+        log("approval_dismissed", "conn=\(id)")
     }
 
-    private func pumpApprovals() {
-        guard !approvalRunning else { return }
-        while let request = latestRequest {
-            latestRequest = nil
-            approvalRunning = true
-            shownApprovalID = request.id
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "\(request.deviceName) bağlanmak istiyor"
-            alert.informativeText = "İzin verirsen bu cihaz ekranını görebilir ve bu Mac'i kontrol edebilir."
-            alert.addButton(withTitle: "İzin ver")
-            alert.addButton(withTitle: "Reddet")
-            let response = alert.runModal()
-            approvalRunning = false
-            shownApprovalID = nil
-            // The answer is bound to this request's id; the server ignores it if that request is no longer pending.
-            switch response {
-            case .alertFirstButtonReturn: server?.resolveApproval(id: request.id, approved: true)
-            case .alertSecondButtonReturn: server?.resolveApproval(id: request.id, approved: false)
-            default: break  // aborted: cancelled or replaced by a newer request
-            }
-        }
+    private func log(_ event: String, _ fields: String) {
+        let line = LogFormat.line(monoMs: DispatchTime.now().uptimeNanoseconds / 1_000_000, level: .info,
+                                  component: "session", sessionID: 0, generation: 0, event: event, fields: fields)
+        logger.info("\(line, privacy: .public)")
     }
 }
 
