@@ -45,7 +45,10 @@ files:
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. SwiftPM paketi (Swift 6, macOS 15): Core, Host (yer tutucu), App, CoreTests.
+2. Core: `ByteIO` (LE okuyucu/yazıcı), `Messages` (değer tipleri + tipli enum'lar), `Message` (encode/decode), `FrameDecoder` (akış, başlıkta sınır denetimi, sınırlı tampon), `Geometry` (koordinat/basınç/eğim, sıfırdan uzağa yuvarlama).
+3. Testler: fixture tablosu (decode, encode, 1 bayt / rastgele parça), her `.hex` için kapsama testi, ek kodek testleri.
+4. App: NSStatusItem + Quit.
 
 ## Handoff
 
