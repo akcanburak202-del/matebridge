@@ -5,7 +5,7 @@ import CoreGraphics
 final class PenInjectionTests: XCTestCase {
     func testPointFieldsRoundTrip() throws {
         let s = PenSample(x: 100, y: 200, pressure: 0.75, tiltX: -0.5, tiltY: 0.25, rotation: 30, phase: .move)
-        let e = try PenInjector().buildPoint(s)
+        let e = try PenInjector().buildPoint(s, inContact: true)
         XCTAssertEqual(e.type, .leftMouseDragged)
         XCTAssertEqual(e.getIntegerValueField(.mouseEventSubtype), Int64(CGEventMouseSubtype.tabletPoint.rawValue))
         XCTAssertEqual(e.getDoubleValueField(.tabletEventPointPressure), 0.75, accuracy: 0.005)
@@ -25,10 +25,10 @@ final class PenInjectionTests: XCTestCase {
     }
 
     func testMouseTypes() {
-        XCTAssertEqual(PenEventFields.mouseType(for: .down, pressure: 0.1), .leftMouseDown)
-        XCTAssertEqual(PenEventFields.mouseType(for: .up, pressure: 0), .leftMouseUp)
-        XCTAssertEqual(PenEventFields.mouseType(for: .move, pressure: 0), .mouseMoved)
-        XCTAssertEqual(PenEventFields.mouseType(for: .move, pressure: 0.5), .leftMouseDragged)
+        XCTAssertEqual(PenEventFields.mouseType(for: .down, inContact: false), .leftMouseDown)
+        XCTAssertEqual(PenEventFields.mouseType(for: .up, inContact: true), .leftMouseUp)
+        XCTAssertEqual(PenEventFields.mouseType(for: .move, inContact: false), .mouseMoved)
+        XCTAssertEqual(PenEventFields.mouseType(for: .move, inContact: true), .leftMouseDragged)
     }
 
     func testProximityEvent() throws {
@@ -54,5 +54,55 @@ final class PenInjectionTests: XCTestCase {
         let t = PenPattern.tilt.strokeSamples(originX: 0, originY: 0, width: 100, height: 10, count: 101)
         XCTAssertEqual(t[0].tiltX, -1, accuracy: 1e-9)
         XCTAssertEqual(t[100].tiltX, 1, accuracy: 1e-9)
+    }
+
+    func testProximityCapabilityAndButtonFields() throws {
+        let e = try PenInjector().buildProximity(entering: true)
+        XCTAssertEqual(e.getIntegerValueField(.tabletProximityEventCapabilityMask), PenEventFields.capabilityMask)
+        XCTAssertEqual(e.getIntegerValueField(.tabletProximityEventSystemTabletID), PenDevice.systemTabletID)
+        let d = try PenInjector().buildPoint(PenSample(x: 1, y: 1, pressure: 0.5, tiltX: 0, tiltY: 0, phase: .down), inContact: false)
+        XCTAssertEqual(d.getIntegerValueField(.mouseEventClickState), 1)
+        XCTAssertEqual(d.getIntegerValueField(.mouseEventButtonNumber), 0)
+    }
+
+    final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(CGEventType, CGPoint)] = []
+        func add(_ e: CGEvent) { lock.lock(); items.append((e.type, e.location)); lock.unlock() }
+        var all: [(CGEventType, CGPoint)] { lock.lock(); defer { lock.unlock() }; return items }
+    }
+
+    func testZeroPressureMidStrokeStaysDragged() throws {
+        let rec = Recorder()
+        let s = PenSession(post: { rec.add($0) })
+        try s.setProximity(true)
+        try s.send(PenSample(x: 1, y: 1, pressure: 0.5, tiltX: 0, tiltY: 0, phase: .down))
+        try s.send(PenSample(x: 2, y: 2, pressure: 0, tiltX: 0, tiltY: 0, phase: .move))
+        try s.send(PenSample(x: 3, y: 3, pressure: 0, tiltX: 0, tiltY: 0, phase: .up))
+        try s.send(PenSample(x: 4, y: 4, pressure: 0, tiltX: 0, tiltY: 0, phase: .move))
+        XCTAssertEqual(rec.all.map { $0.0 }, [.tabletProximity, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved])
+    }
+
+    func testCancelReleasesAtLastPositionAndBlocksLaterSends() throws {
+        let rec = Recorder()
+        let s = PenSession(post: { rec.add($0) })
+        try s.setProximity(true)
+        try s.send(PenSample(x: 10, y: 20, pressure: 0.5, tiltX: 0, tiltY: 0, phase: .down))
+        s.cancel()
+        XCTAssertEqual(rec.all.map { $0.0 }, [.tabletProximity, .leftMouseDown, .leftMouseUp, .tabletProximity])
+        XCTAssertEqual(rec.all[2].1.x, 10, accuracy: 0.01)
+        XCTAssertEqual(rec.all[2].1.y, 20, accuracy: 0.01)
+        XCTAssertFalse(try s.send(PenSample(x: 1, y: 1, pressure: 1, tiltX: 0, tiltY: 0, phase: .down)))
+        XCTAssertFalse(try s.setProximity(true))
+        s.release()
+        XCTAssertEqual(rec.all.count, 4)
+    }
+
+    func testCancelBeforeAnythingPostsNothing() throws {
+        let rec = Recorder()
+        let s = PenSession(post: { rec.add($0) })
+        s.cancel()
+        XCTAssertFalse(try s.setProximity(true))
+        XCTAssertTrue(rec.all.isEmpty)
     }
 }

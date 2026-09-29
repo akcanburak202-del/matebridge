@@ -75,10 +75,13 @@ final class PenView: NSView {
         let w = CGFloat(e.pressure) * 14
         switch e.type {
         case .leftMouseDown: current = [(p, w)]
-        case .leftMouseDragged: current.append((p, w))
+        case .leftMouseDragged:
+            current.append((p, w))
+            if current.count > 5000 { current.removeFirst(current.count - 5000) }
         case .leftMouseUp:
             current.append((p, w))
             strokes.append(current); current = []
+            if strokes.count > 50 { strokes.removeFirst(strokes.count - 50) }
         default: break
         }
         needsDisplay = true
@@ -135,30 +138,6 @@ func runPenView() {
 
 // MARK: - inject
 
-/// Tracks what is currently held so a signal can release it.
-final class InjectState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var down = false, inProx = false
-    private var last = CGPoint.zero
-    func set(down: Bool? = nil, prox: Bool? = nil, at p: CGPoint? = nil) {
-        lock.lock(); defer { lock.unlock() }
-        if let down { self.down = down }
-        if let prox { inProx = prox }
-        if let p { last = p }
-    }
-    func snapshot() -> (down: Bool, prox: Bool, at: CGPoint) {
-        lock.lock(); defer { lock.unlock() }
-        return (down, inProx, last)
-    }
-}
-
-@Sendable func releaseAll(_ inj: PenInjector, _ st: InjectState) {
-    let s = st.snapshot()
-    if s.down, let e = try? inj.buildPoint(PenSample(x: s.at.x, y: s.at.y, pressure: 0, tiltX: 0, tiltY: 0, phase: .up)) { inj.post(e) }
-    if s.prox, let e = try? inj.buildProximity(entering: false) { inj.post(e) }
-    st.set(down: false, prox: false)
-}
-
 func runInject(_ a: [String]) {
     var pattern = PenPattern.ramp
     var rect: [String: Double] = [:]
@@ -193,36 +172,36 @@ func runInject(_ a: [String]) {
     let bounds = CGDisplayBounds(CGMainDisplayID())
     let w = rect["w"] ?? 800, h = rect["h"] ?? 300
     let ox = rect["x"] ?? (bounds.midX - w / 2), oy = rect["y"] ?? (bounds.midY - h / 2)
-    let inj = PenInjector()
-    let st = InjectState()
+    let session = PenSession()
     let pat = pattern, reps = repeats
 
-    signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
-    let sources = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
+    // SIGINT/SIGTERM/SIGHUP/SIGQUIT: cancel() takes the same lock as the worker's posts, so release happens
+    // from the true state and the worker can no longer post afterwards.
+    let signals = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
+    for sig in signals { signal(sig, SIG_IGN) }
+    let sources = signals.map { sig -> DispatchSourceSignal in
         let s = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        s.setEventHandler { releaseAll(inj, st); exit(130) }
+        s.setEventHandler { session.cancel(); exit(130) }
         s.resume()
         return s
     }
-    _ = sources
+    _ = sources  // keeps the signal sources alive; they are cancelled if deallocated
 
     let worker = Thread {
         do {
-            try inj.post(inj.buildProximity(entering: true)); st.set(prox: true)
+            guard try session.setProximity(true) else { return }
             usleep(50_000)
-            for _ in 0..<reps {
+            outer: for _ in 0..<reps {
                 let samples = pat.strokeSamples(originX: ox, originY: oy, width: w, height: h)
                 // A few hover moves first so the app sees the pen approach.
                 let first = samples[0]
-                for k in 0..<5 {
+                for _ in 0..<5 {
                     let hover = PenSample(x: first.x, y: first.y, pressure: 0, tiltX: first.tiltX, tiltY: first.tiltY, phase: .move)
-                    _ = k
-                    try inj.post(inj.buildPoint(hover)); st.set(at: CGPoint(x: first.x, y: first.y)); usleep(8_000)
+                    guard try session.send(hover) else { break outer }
+                    usleep(8_000)
                 }
                 for s in samples {
-                    if s.phase == .down { st.set(down: true) }
-                    try inj.post(inj.buildPoint(s)); st.set(at: CGPoint(x: s.x, y: s.y))
-                    if s.phase == .up { st.set(down: false) }
+                    guard try session.send(s) else { break outer }
                     usleep(8_000)
                 }
                 usleep(100_000)
@@ -230,7 +209,7 @@ func runInject(_ a: [String]) {
         } catch {
             FileHandle.standardError.write(Data("inject failed: \(error)\n".utf8))
         }
-        releaseAll(inj, st)
+        session.release()
         exit(0)
     }
     worker.start()

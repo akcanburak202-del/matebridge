@@ -45,3 +45,5 @@ SwiftPM paketi `probes/pen-sink-probe`: `PenInjection` kütüphanesi (alan eşle
   5. Krita: `inject --pattern ramp --x N --y N --w N --h N` ile tuval üzerine; çizgi kalınlaşıp incelmeli.
   Accessibility yoksa çıkış kodu 3 ve açıklayıcı mesaj beklenir (AXIsProcessTrusted, prompt tetiklemez).
 - **Açık sorular:** Yok. NSEvent.pressure ile CGEvent tablet pressure eşlemesi macOS 27'de farklı çıkarsa yalnızca PenEventFields düzeltilir.
+
+- **Düzeltme turu (review):** PenSession tüm postları tek kilit altında serileştirir, cancel() bayrağı + gerçek durumdan bırakma; SIGHUP/SIGQUIT eklendi; drag/move temas durumundan; proximity yeteneği maskesi + buttonNumber/clickState eklendi; pen-view sınırlandı. Yetenek maskesi bit değerleri IOLLEvent.h/bellekten, doğrulanmadı; android-display alan listesiyle karşılaştırılmadı (kaynağa erişilmedi). Test: 9 test geçti.
