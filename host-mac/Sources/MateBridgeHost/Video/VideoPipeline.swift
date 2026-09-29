@@ -1,0 +1,184 @@
+import CoreGraphics
+import Foundation
+import MateBridgeCore
+
+public enum VideoPipelineError: Error, CustomStringConvertible {
+    case screenRecordingDenied
+    case unsupportedCodec
+    case alreadyStarted
+
+    public var description: String {
+        switch self {
+        case .screenRecordingDenied: return ScreenCaptureError.permissionDenied.description
+        case .unsupportedCodec: return "only HEVC is implemented"
+        case .alreadyStarted: return "video pipeline was already started (create a new one to restart)"
+        }
+    }
+}
+
+/// Virtual display -> ScreenCaptureKit -> HEVC -> bounded queue (`frames`).
+/// Does not touch the network: the session (T-014) consumes `frames` and wraps each frame in a `VIDEO_FRAME`.
+///
+/// Lifecycle: one `start()` per instance (a second call throws `alreadyStarted`); `stop()` is idempotent. If capture
+/// or the encoder fails on its own, the pipeline stops itself (closing the virtual display and `frames`) and then
+/// calls `onFailure` once, so the owner only needs to react, not clean up.
+///
+/// `captureTimeUs` of every frame is the host time clock (`CMClockGetHostTimeClock`, i.e. mach absolute time) in
+/// microseconds. Session PING/PONG timestamps must use the same clock (PROTOCOL.md section 6).
+public final class VideoPipeline: @unchecked Sendable {
+    private enum State { case idle, starting, running, stopped }
+
+    public let settings: VideoSettings
+    /// Encoder output: CODEC_CONFIG first, then keyframe, then frames. At most 2 wait here.
+    public let frames: VideoFrameQueue
+
+    private let lock = NSLock()
+    private var state = State.idle
+    private var display: VirtualDisplay?
+    private var capture: ScreenCapture?
+    private var encoder: HEVCEncoder?
+    private var failureNotified = false
+    private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
+    private let onFailure: @Sendable (Error) -> Void
+    private let box: EncoderBox
+
+    /// - Parameters:
+    ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
+    ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
+    public init(settings: VideoSettings = .tabletDefault,
+                tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
+                onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+        self.settings = settings
+        self.tap = tap
+        self.onFailure = onFailure
+        // The queue's keyframe callback needs the encoder, which exists only after start().
+        let box = EncoderBox()
+        self.box = box
+        self.frames = VideoFrameQueue(keyframeNeeded: { box.requestKeyframe() })
+    }
+
+    /// Fills `STREAM_CONFIG` (pixel/point size, fps, bitrate, colour tags).
+    public func streamConfig(configID: UInt16) -> StreamConfig { settings.streamConfig(configID: configID) }
+
+    public func start() async throws {
+        try beginStart()
+
+        do {
+            guard settings.codec == .hevc else { throw VideoPipelineError.unsupportedCodec }
+            // Check before creating the display so a denied permission leaves nothing behind.
+            guard ScreenCapture.hasPermission else { throw VideoPipelineError.screenRecordingDenied }
+
+            let frames = self.frames
+            let tap = self.tap
+            let encoder = try HEVCEncoder(settings: settings, output: { frame, encodeUs in
+                frames.push(frame)
+                tap?(frame, encodeUs)
+            }, onFailure: { [weak self] error in self?.fail(error) })
+            box.encoder = encoder
+            set { $0.encoder = encoder }
+
+            let display = try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx,
+                                             pixelHeight: settings.heightPx, hidpi: true,
+                                             refreshRate: Double(settings.fps))
+            set { $0.display = display }
+            let cap = ScreenCapture(handler: { [weak encoder] pb, pts, us in
+                encoder?.encode(pb, presentationTime: pts, captureTimeUs: us)
+            }, onStop: { [weak self] error in self?.fail(error) })
+            set { $0.capture = cap }
+            // ScreenCaptureKit needs about a second to see a new display.
+            var lastError: Error?
+            for _ in 0..<20 {
+                do { try await cap.start(displayID: display.displayID, settings: settings); lastError = nil; break }
+                catch ScreenCaptureError.displayNotFound(let id) {
+                    lastError = ScreenCaptureError.displayNotFound(id)
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                }
+            }
+            if let lastError { throw lastError }
+
+            let stoppedMeanwhile = markRunning()
+            if stoppedMeanwhile { await teardown() }  // stop() raced with start(): release what start() created
+        } catch {
+            await stop()
+            await teardown()
+            throw error
+        }
+    }
+
+    public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }
+
+    /// Call when a new consumer attaches: the queue is reset to hold only [CODEC_CONFIG], stale delta frames are
+    /// refused, and a keyframe is forced (also on a static screen, by re-encoding the last captured buffer). The
+    /// consumer therefore sees CODEC_CONFIG, then a keyframe, then frames.
+    public func prepareForNewConsumer() {
+        frames.startNewConsumer(config: box.encoder?.currentCodecConfig())
+        box.encoder?.requestKeyframe(resubmitNow: true)
+    }
+
+    /// Colour tags the encoder session reports (VUI source), for diagnostics.
+    public var encoderColorReadback: String { box.encoder?.colorReadback() ?? "no encoder" }
+
+    /// `VTSessionSetProperty` failures at encoder creation (empty when all were accepted).
+    public var encoderPropertyFailures: [String] { box.encoder?.propertyFailures ?? [] }
+
+    /// Stops capture, flushes and closes the encoder, removes the virtual display, ends the queue. Idempotent.
+    public func stop() async {
+        guard markStopped() else { return }
+        await teardown()
+    }
+
+    // Synchronous lock helpers (NSLock cannot be used directly in async functions).
+    private func beginStart() throws {
+        try lock.withLock {
+            guard state == .idle else { throw VideoPipelineError.alreadyStarted }
+            state = .starting
+        }
+    }
+    private func set(_ f: (VideoPipeline) -> Void) { lock.withLock { f(self) } }
+    /// Returns true if stop() already ran.
+    private func markRunning() -> Bool {
+        lock.withLock { if state == .stopped { return true }; state = .running; return false }
+    }
+    /// Returns false if already stopped.
+    private func markStopped() -> Bool {
+        lock.withLock { if state == .stopped { return false }; state = .stopped; return true }
+    }
+    private func takeResources() -> (ScreenCapture?, HEVCEncoder?, VirtualDisplay?) {
+        lock.withLock {
+            defer { capture = nil; encoder = nil; display = nil }
+            return (capture, encoder, display)
+        }
+    }
+
+    private func teardown() async {
+        let (cap, enc, disp) = takeResources()
+        await cap?.stop()
+        enc?.stop()
+        box.encoder = nil
+        frames.finish()
+        disp?.invalidate()
+    }
+
+    /// Unexpected failure: tear down, then tell the owner once.
+    private func fail(_ error: Error) {
+        lock.lock()
+        let first = !failureNotified && state != .stopped
+        failureNotified = true
+        lock.unlock()
+        guard first else { return }
+        Task { [self] in
+            await stop()
+            onFailure(error)
+        }
+    }
+}
+
+private final class EncoderBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _encoder: HEVCEncoder?
+    var encoder: HEVCEncoder? {
+        get { lock.lock(); defer { lock.unlock() }; return _encoder }
+        set { lock.lock(); _encoder = newValue; lock.unlock() }
+    }
+    func requestKeyframe() { encoder?.requestKeyframe() }
+}
