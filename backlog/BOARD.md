@@ -2,7 +2,7 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## todo
+## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|

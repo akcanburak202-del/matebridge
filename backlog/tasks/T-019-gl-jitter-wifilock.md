@@ -1,7 +1,7 @@
 ---
 id: T-019
 title: Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi
-status: todo
+status: blocked
 phase: 1
 owner: android-client-dev
 depends_on: [T-018]
@@ -43,3 +43,12 @@ _(Ajan doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+## Orkestratör cihaz testi ve karar (2026-09-29)
+
+Dal `task/T-019-gl-jitter` main'e **birleştirilmedi** (park edildi).
+- f5f7e73: tampon hiç dolmuyor (depth 0), gljitter 0/1/2 aynı. wifilock açık/kapalı ağ p95'te fark yok (~19–21 ms).
+- 1a23ebc (priming): J0 drawn 43–46/61, underrun 14–18; J1 drawn 52–61, underrun 0–8 (iki pencere 61/0); J2 drawn 49–57. depth_max ≤1. **Kullanıcı J1'de: "takılma daha da arttı gibi"** (ölçüm iyileşse de algı kötüleşti; yarı dolan tampon hareket hızını dalgalandırıyor olabilir).
+- b91f6cc (her çıktıyı yüzeye bırak): soğuk başlangıçta `gl_start_timeout frames_arrived=0` (decoder yüzeyi bağlı ama SurfaceTexture'a kare gelmedi) → otomatik surface'e düştü. Aynı soğuk başlangıç sorunu 1a23ebc öncesinde de bir kez görüldü.
+- Karar: varsayılan yol surface kalır (kullanıcı: "takılma azalmış"). Akıcılık çalışması Mac Ethernet'e bağlanana kadar park. Tekrar ele alındığında: soğuk başlangıç hatası, BufferQueue derinliği (FBO doku halkası), algısal değerlendirme.
+
