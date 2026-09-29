@@ -2,6 +2,8 @@ import AppKit
 import MateBridgeCore
 import MateBridgeHost
 
+DumpVideoCommand.runIfRequested()  // T-011: `--dump-video` CLI mode, exits before the menu bar app starts
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
