@@ -529,7 +529,8 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Time
 
-    private func nowUs() -> UInt64 { DispatchTime.now().uptimeNanoseconds / 1000 }
+    /// Host clock shared with `VIDEO_FRAME.capture_time_us` (PROTOCOL.md section 6).
+    private func nowUs() -> UInt64 { HostClock.nowUs() }
 
     private func startTicking() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -541,4 +542,8 @@ public final class SessionServer: @unchecked Sendable {
         timer.resume()
         tickTimer = timer
     }
+}
+
+extension VideoLink: VideoTransport {
+    public func setReadyHandler(_ handler: (@Sendable () -> Void)?) { onReady = handler }
 }
