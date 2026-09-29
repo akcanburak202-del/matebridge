@@ -27,3 +27,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0003 | Klavye: karakter değil fiziksel tuş kodu | kabul |
 | 0004 | Android: Views + SurfaceView, Compose yok, GMS yok | kabul |
 | 0005 | Yalnızca test için bağımlılıklar (JUnit 4, kotlin-test, XCTest) kayıt gerektirmez | kabul |
+| 0006 | Faz 2 girdi: çift dokunma = fırça/silgi geçişi (eraser pointer), çizimde parmak kapalı, yan tuş yok | kabul |

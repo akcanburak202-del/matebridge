@@ -24,7 +24,9 @@ PLAN Aşama 2 "Bitti" ölçütünü kullanıcıyla doğrulamak.
 - [ ] Kalem gecikmesi: hover/uç ile imleç arasındaki fark (telefon slow-motion ya da log zaman damgaları); gerekirse tablette yerel imleç noktası kararı.
 - [ ] Sonuç tablosu `docs/NOTES.md`'de; kullanıcının kullandığı tasarım uygulamaları varsa onlar da.
 
-## Kullanıcı kararları (Faz 2 başında sorulacak)
+## Kullanıcı kararları — verildi (karar 0006, 2026-09-30): çift dokunma = fırça/silgi geçişi, çizimde parmak kapalı, yan tuş yok.
+
+### Sorulan sorular
 
 1. Kalemin çift dokunuşu ne yapsın? (ör. silgi/fırça geçişi — Krita'da `E` tuşu; geri al — Cmd+Z; sağ tık; hiçbir şey)
 2. Parmakla dokunma: tık/sürükle olsun mu, yoksa çizim uygulamalarında yanlış dokunmayı önlemek için tamamen kapalı mı (ayar)?

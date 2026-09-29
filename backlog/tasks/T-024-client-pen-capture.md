@@ -5,7 +5,7 @@ status: todo
 phase: 2
 owner: android-client-dev
 depends_on: [T-015]
-decisions: [0004]
+decisions: [0004, 0006]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/input/
   - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
@@ -23,7 +23,7 @@ Tabletten Mac'e kalem ve dokunma: PROTOCOL.md §4 (PEN, POINTER_ABS, PEN_GESTURE
 - [ ] Eğim: §4 geçici dönüşüm (`tilt_x = sinθ·sinφ`, `tilt_y = −sinθ·cosφ`), temas sırasında son bilinen değer tekrarlanır. Basınç u16. Koordinatlar T-015'in `VideoViewport`'u ile normalize (tek yer).
 - [ ] **Menzil canlılığı**: `IN_RANGE` iken 100 ms'de bir yeni örnek yoksa son örnek güncel zamanla tekrar gönderilir.
 - [ ] **PEN_GESTURE**: M-Pencil çift dokunma (`keyCode 718 / scanCode 190`, iki kısa DOWN/UP) → tek `DOUBLE_TAP`; bu tuş olayları KEY olarak gitmez.
-- [ ] **Dokunma**: tek parmak → `POINTER_ABS source=TOUCH` (basılı = LEFT); iki parmak → `SCROLL` (BEGAN/CHANGED/ENDED, Mac nokta ölçeği `STREAM_CONFIG.width_pt`). **Avuç reddi**: kalem `IN_RANGE` iken yeni parmak basışları gönderilmez (bırakışlar her zaman gönderilir).
+- [ ] **Dokunma**: tek parmak → `POINTER_ABS source=TOUCH` (basılı = LEFT); iki parmak → `SCROLL` (BEGAN/CHANGED/ENDED, Mac nokta ölçeği `STREAM_CONFIG.width_pt`). **Avuç reddi / çizimde parmak kapalı** (karar 0006): kalem `IN_RANGE` iken ve son kalem örneğinden sonraki 1 sn boyunca yeni parmak basışları gönderilmez (bırakışlar her zaman gönderilir). Ayarlarda "Parmak dokunmasını tamamen kapat" seçeneği (varsayılan kapalı değil).
 - [ ] **RELEASE_ALL**: arka plan, odak kaybı, cihaz ayrılması; sonrasında kalem temasının ortası gönderilmez (§7).
 - [ ] **Tek sıralı FIFO** (§7): tüm girdi mesajları UI iş parçacığından, üretildiği sırayla T-012'nin sınırlı gönderim kuyruğuna; tıkanmada yalnızca hover örnekleri ve SCROLL CHANGED birleştirilir (§5).
 - [ ] Saf dönüşüm/toplama mantığı JVM testli (MotionEvent'ten bağımsız bir ara model üzerinden); fixture'larla bayt uyumu zaten T-009'da.
