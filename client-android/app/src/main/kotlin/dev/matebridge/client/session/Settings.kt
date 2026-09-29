@@ -26,6 +26,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun saveEndpoint(endpoint: Endpoint) = store.putString(KEY_ENDPOINT, endpoint.toString())
 
+    /** Whether the on-screen statistics overlay is enabled (default off). */
+    fun statsOverlay(): Boolean = store.getString(KEY_STATS) == "1"
+
+    fun setStatsOverlay(on: Boolean) = store.putString(KEY_STATS, if (on) "1" else "0")
+
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
 
     private fun fromHex(s: String): ByteArray? {
@@ -40,6 +45,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
     private companion object {
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
+        const val KEY_STATS = "stats_overlay"
     }
 }
 

@@ -6,6 +6,7 @@ import dev.matebridge.client.protocol.FrameDecoder
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
+import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
@@ -29,6 +30,9 @@ interface SessionListener {
 
     /** One VIDEO_FRAME wire fragment, from the video reader thread. Frames are only counted in T-012. */
     fun onVideoFrame(frame: VideoFrame) {}
+
+    /** A PONG arrived (engine thread). Times are microseconds; [nowUs] is the client monotonic clock (`nanoTime/1000`). */
+    fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
 }
 
 /**
@@ -126,7 +130,9 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
     private fun dispatch(e: SessionMachine.Event) {
         if (e is SessionMachine.Event.Start) videoFrames.set(0)
         logEvent(e)
-        val actions = machine.handle(e, nowUs())
+        val now = nowUs()
+        if (e is SessionMachine.Event.Received && e.msg is Pong) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+        val actions = machine.handle(e, now)
         inputAllowed = machine.inputAllowed
         MbLog.sid = machine.currentSessionId
         for (a in actions) exec(a)
@@ -326,10 +332,13 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         try { s.close() } catch (_: IOException) {}
     }
 
-    private companion object {
-        const val TICK_MS = 100L
-        const val GRACEFUL_CLOSE_MS = 1000L
-        const val CONNECT_TIMEOUT_MS = 5000
-        const val EVENT_QUEUE_CAP = 1024
+    companion object {
+        /** The clock all session/latency times use. */
+        fun clockUs() = System.nanoTime() / 1000
+
+        private const val TICK_MS = 100L
+        private const val GRACEFUL_CLOSE_MS = 1000L
+        private const val CONNECT_TIMEOUT_MS = 5000
+        private const val EVENT_QUEUE_CAP = 1024
     }
 }

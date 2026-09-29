@@ -53,12 +53,19 @@ class VideoRenderer(
     @Volatile var codecInfo: String = "-"
         private set
 
+    /** True while a surface is attached. The session must not feed frames while false. */
+    @Volatile var attached = false
+        private set
+
+    fun isWaitingKeyframe() = queue.isWaitingKeyframe()
+
     override fun onFrame(frame: VideoFrame) {
         queue.offer(frame)?.let(onKeyframeRequest)
     }
 
     fun attachSurface(surface: Surface) {
         val old = detachInternal()
+        attached = true
         onKeyframeRequest(queue.reset())
         val att = Attachment(surface, old)
         att.thread = Thread({ decodeLoop(att) }, "mb-decoder")
@@ -67,6 +74,7 @@ class VideoRenderer(
     }
 
     fun detachSurface() {
+        attached = false
         detachInternal()
     }
 
@@ -170,7 +178,7 @@ class VideoRenderer(
                 buf.clear()
                 buf.put(frame.data.value)
                 val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-                stats.onInput(frame.frameSeq, nowUs())
+                stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
             }
         } catch (e: Exception) {

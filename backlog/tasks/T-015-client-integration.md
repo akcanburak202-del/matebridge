@@ -1,7 +1,7 @@
 ---
 id: T-015
 title: Android entegrasyonu — oturum + görüntü, tam ekran, istatistik katmanı
-status: todo
+status: review
 phase: 1
 owner: android-client-dev
 depends_on: [T-012, T-013]
@@ -17,20 +17,21 @@ Bağlı oturumda video bağlantısındaki kareleri tam ekran göstermek, STATS g
 
 ## Kabul kriterleri
 
-- [ ] Bağlanınca tam ekran, immersive, yatay, ekran açık kalır. Video yüzeyi ↔ normalize koordinat dönüşümü tek yerde (siyah bant dahil, PROTOCOL.md §1).
-- [ ] Saat farkı tahmini (§6) ve `STATS` her 1 sn.
-- [ ] İstatistik katmanı (aç/kapa): FPS, bitrate, çözme süresi, tahmini gecikme, atılan kare.
-- [ ] Arka plana geçince video durur, geri gelince keyframe istenir. Bağlantı yoksa "Bağlantı yok" ekranı.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] Bağlanınca tam ekran, immersive, yatay, ekran açık kalır. Video yüzeyi ↔ normalize koordinat dönüşümü tek yerde (siyah bant dahil, PROTOCOL.md §1).
+- [x] Saat farkı tahmini (§6) ve `STATS` her 1 sn.
+- [x] İstatistik katmanı (aç/kapa): FPS, bitrate, çözme süresi, tahmini gecikme, atılan kare.
+- [x] Arka plana geçince video durur, geri gelince keyframe istenir. Bağlantı yoksa "Bağlantı yok" ekranı.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
-_(Ajan doldurur.)_
+- Saf mantık `stream/`: `ClockSync` (min-rtt ofset, §6), `VideoViewport` (tek koordinat dönüşümü, siyah bant dışlanır), `StatsFormat` (STATS mesajı + katman metni). `VideoStats` gecikme hook'u (`latencyOf`) ve `latencyAvgUs` kazanır.
+- `SessionListener.onPong`; `MainActivity` SurfaceView'ı akış oranına oturtur (yüzey = video alanı), STREAM_CONFIG'te renderer kurar, yüzey yokken kare vermez, 500 ms'de keyframe yeniden ister, 1 sn'de STATS gönderir ve `MB/decoder`+`MB/render` `ev=stats` loglar.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `git log task/T-015-client-integration`
+- **Dokunulan dosyalar:** stream/{ClockSync,VideoViewport,StatsFormat}.kt (yeni); MainActivity.kt; session/{SessionController,Settings}.kt; video/{VideoRenderer,VideoStats}.kt; res/layout/activity_main.xml; res/values/strings.xml; test/.../stream/StreamTest.kt
+- **Varsayımlar:** Bağlı + en az 1 kare gelince bağlantı paneli gizlenir, aksi halde panel (durum/IP girişi) görünür. Arka plana geçişte (onStop) oturum BYE ile kapanır (T-012 tasarımı), dönünce yeniden bağlanıp STARTUP keyframe istenir; ayrıca yüzey dönünce renderer reset+STARTUP. İstatistik katmanı: panelde düğme, video üzerinde uzun basma veya F3; seçim saklanır. Gecikme = decoder çıkışı zamanı (gösterimden birkaç ms önce). Saat: `System.nanoTime/1000` (oturum motoruyla aynı). PONG örneği motor kuyruğundan geçtiği için rtt biraz şişebilir, min-rtt filtresi bunu azaltır. Config değişiminde eski video bağlantısından gelen birkaç kare yeni renderer'a gidebilir (keyframe kapısı korur).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Hepsi cihazda: (1) Mac akışı başlayınca panel kapanıp tam ekran video, çubuk yok, ekran açık kalıyor; oran farklıysa siyah bant. (2) Uzun basma/F3 ile katman: FPS, Mbps, çözme, gecikme (ofset oturmadan önce `?`), atılan. (3) `adb logcat -s 'MB/decoder' 'MB/render'`: saniyede bir `ev=stats`; Mac tarafında STATS geliyor mu. (4) Home'a çıkıp dön: video durur, dönünce yeniden bağlanıp görüntü geliyor. (5) Host'u kapat: "Bağlantı yok" paneli, host açılınca otomatik dönüş. (6) Keyframe beklerken 500 ms'de bir KEYFRAME_REQUEST (Mac logu). Activity/SurfaceView/MediaCodec bağlaması hiç çalıştırılmadı.
+- **Açık sorular:** Yok. Not: input yakalama `MainActivity.viewport`'u koordinat dönüşümü için tek kaynak olarak kullanmalı.
