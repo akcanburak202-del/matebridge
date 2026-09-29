@@ -1,7 +1,7 @@
 ---
 id: T-009
 title: Android iskeleti ve protokol kodeki — fixture testleriyle
-status: todo
+status: review
 phase: 1
 owner: android-client-dev
 depends_on: [T-007]
@@ -41,12 +41,28 @@ files:
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `probes/input-probe` araç zinciri (AGP 9.4.1, Gradle 9.8.0, compileSdk 37) kopyalanarak `client-android/` Gradle projesi; tek `app` modülü, yalnızca JUnit 4 test bağımlılığı.
+2. `protocol` paketi: `Messages.kt` (veri sınıfları; u8/u16/i16 -> Int, u32 -> Long, u64 -> Long ham bit deseni), `Codec.kt` (LE okuyucu/yazıcı, encode/decode, doğrulamalar), `FrameDecoder.kt` (artımlı akış çözücü, başlıkta boyut sınırı, bilinmeyen tip atlama, kalıcı hata), `Coords.kt` (normalize, basınç, eğim).
+3. Testler: fixture okuyucu (yorum/boşluk atar), elle yazılmış beklenen değerler, dizindeki her .hex için vaka kontrolü, 1 bayt ve rastgele parça besleme, ek kural testleri, Coords testleri.
+4. `MainActivity`: tam ekran, yatay, ekran açık, sabit metin.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** bu branch'in tek commit'i (SHA orkestratör tarafından branch ucundan okunur)
+- **Dokunulan dosyalar:** yalnızca `client-android/` (Gradle iskeleti, `app/`, `MainActivity`, `protocol/{Messages,Codec,FrameDecoder,Coords}.kt`, testler `FixtureTest`, `CodecRulesTest`, `CoordsTest`) ve bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - Tip seçimi: u8/u16/i16 -> `Int`, u32 -> `Long`, u64 -> `Long` (ham bit deseni; zaman damgaları pozitif aralıkta).
+  - Decode her bilinen tipi yöne bakmadan çözer (fixture testi iki yönü de gerektiriyor).
+  - Enum kuralı (PROTOCOL.md §2): durumu belirleyen alanlarda bilinmeyen değer protokol hatası (`HELLO_ACK.status` 0..4, `STREAM_CONFIG.codec` 1..2, `PEN.tool` 0..1, `KEY.action` 0..1, `POINTER_ABS.source` 0..1, `SCROLL.phase` 0..4); decode ve encode aynı. Bilgi amaçlı alanlar (`BYE/RELEASE_ALL/KEYFRAME_REQUEST.reason`, `PEN_GESTURE.gesture`, renk kodları) ham Int olarak kabul edilir.
+  - Ek doğrulamalar: `str8` > 64 bayt veya geçersiz UTF-8 -> hata; PEN `tilt` -32768 -> -32767 (§1).
+  - VIDEO_FRAME: `fragment_index == 0`, `fragment_count == 1` şart; `data` tam `frame_size` bayt, payload'da `24 + frame_size`'dan az varsa `SHORT_PAYLOAD`, fazlası yok sayılır. Encoder `frame_size == data.size` ister.
+  - Encoder payload'ı bağlantı sınırıyla denetler (kontrol 64 KiB, video 16 MiB; VIDEO_HELLO/VIDEO_FRAME video).
+  - `FrameDecoder`: her 5 baytlık başlık `feed()` içinde tamamlanır tamamlanmaz denetlenir (payload tamponlanmadan `OVERSIZE`). `feed()` çağrı başına en çok `READ_CHUNK` (64 KiB) alır, fazlası `IllegalArgumentException` (çağıran hatası). Toplam tampon üst sınırı `bufferCap` = 5 + max payload + `READ_CHUNK`; yalnızca `next()` ile henüz döndürülmemiş baytlar sayılır. Çağıran her `feed()` sonrası `next()`/`drain()` ile boşaltmalıdır, aksi halde `BUFFER_OVERFLOW`. Hata sonrası kalıcı başarısız; çağıran bağlantıyı kapatır, hata sonrası gelen baytlar yok sayılır.
+  - Yuvarlama: sıfırdan uzağa yarım yuvarlama (`Coords.roundHalfAway`).
+  - Encode, geçersiz girdiyi `IllegalArgumentException` ile reddeder (pen sayısı, dt sırası, NaN vb.).
+  - `targetSdk 31`, `compileSdk 37`, AGP 9.4.1, Gradle 9.8.0 probe ile aynı. `kotlinx-coroutines` henüz eklenmedi (gerek yok).
+  - Fixture dizini Gradle test görevindeki `matebridge.fixtures` sistem özelliğiyle bulunur.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh` geçti (JVM testleri dahil). Cihazda: APK kurulunca `MainActivity` yatay, tam ekran, siyah zeminde "MateBridge — bağlantı yok" göstermeli; ekran açık kalmalı. Ağ/video/girdi yok.
+- **Açık sorular:** yok.
+
+- **Açık sorular (T-013 için, inceleme düşük bulguları):** (1) `FrameDecoder` tamponu büyük kareden sonra küçülmüyor. (2) Codex bulgularının çoğu giderildi (frame_size denetimi, hata sonrası feed belgelendi).
