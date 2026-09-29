@@ -25,6 +25,9 @@ class ProtocolException(val kind: Kind, message: String) : Exception(message) {
 
         /** Malformed str8 (too long, bad UTF-8). */
         INVALID_STRING,
+
+        /** Decoder fed past its buffer cap without being drained. */
+        BUFFER_OVERFLOW,
     }
 }
 
@@ -113,6 +116,13 @@ internal class Writer(capacity: Int = 64) {
 }
 
 object Codec {
+    private fun checkEnum(v: Int, range: IntRange, what: String) {
+        if (v !in range) throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "unknown $what $v")
+    }
+
+    private fun requireEnum(v: Int, range: IntRange, what: String) =
+        require(v in range) { "unknown $what $v" }
+
     /** Encodes a full frame: 5-byte header plus payload. */
     fun encode(msg: Message): ByteArray {
         val payload = encodePayload(msg)
@@ -138,11 +148,13 @@ object Codec {
                 w.str8(msg.deviceName)
             }
             is HelloAck -> {
+                requireEnum(msg.status, 0..4, "HELLO_ACK.status")
                 w.u16(msg.protocolVersion); w.u8(msg.status); w.u8(0)
                 w.u32(msg.sessionId); w.u16(msg.videoPort)
                 w.str8(msg.hostName)
             }
             is StreamConfig -> {
+                requireEnum(msg.codec, 1..2, "STREAM_CONFIG.codec")
                 w.u16(msg.configId); w.u8(msg.codec); w.u8(0)
                 w.u16(msg.widthPx); w.u16(msg.heightPx)
                 w.u16(msg.widthPt); w.u16(msg.heightPt)
@@ -173,10 +185,12 @@ object Codec {
                 w.u8(msg.buttons); w.u8(0); w.u16(0)
             }
             is PointerAbs -> {
+                requireEnum(msg.source, 0..1, "POINTER_ABS.source")
                 w.u64(msg.timeUs); w.u16(msg.x); w.u16(msg.y)
                 w.u8(msg.buttons); w.u8(msg.source); w.u16(0)
             }
             is Scroll -> {
+                requireEnum(msg.phase, 0..4, "SCROLL.phase")
                 w.u64(msg.timeUs); w.f32(msg.dx); w.f32(msg.dy)
                 w.u8(msg.phase); w.u8(0); w.u16(0)
             }
@@ -192,6 +206,9 @@ object Codec {
             is KeyframeRequest -> w.u8(msg.reason)
             is VideoHello -> { w.u16(msg.protocolVersion); w.u16(msg.configId); w.u32(msg.sessionId) }
             is VideoFrame -> {
+                require(msg.fragmentIndex == 0 && msg.fragmentCount == 1 && msg.frameSize == msg.data.size.toLong()) {
+                    "VIDEO_FRAME must be a single fragment with frame_size == data length"
+                }
                 w.u32(msg.frameSeq); w.u64(msg.captureTimeUs); w.u8(msg.flags); w.u8(0)
                 w.u16(msg.fragmentIndex); w.u16(msg.fragmentCount); w.u16(0)
                 w.u32(msg.frameSize); w.bytes(msg.data.value)
@@ -217,10 +234,12 @@ object Codec {
             )
             MsgType.HELLO_ACK -> {
                 val version = r.u16(); val status = r.u8(); r.skip(1)
+                checkEnum(status, 0..4, "HELLO_ACK.status")
                 HelloAck(version, status, r.u32(), r.u16(), r.str8())
             }
             MsgType.STREAM_CONFIG -> {
                 val configId = r.u16(); val codec = r.u8(); r.skip(1)
+                checkEnum(codec, 1..2, "STREAM_CONFIG.codec")
                 StreamConfig(
                     configId, codec,
                     widthPx = r.u16(), heightPx = r.u16(), widthPt = r.u16(), heightPt = r.u16(),
@@ -244,10 +263,12 @@ object Codec {
             }
             MsgType.POINTER_ABS -> {
                 val time = r.u64(); val x = r.u16(); val y = r.u16(); val buttons = r.u8(); val source = r.u8(); r.skip(2)
+                checkEnum(source, 0..1, "POINTER_ABS.source")
                 PointerAbs(time, x, y, buttons, source)
             }
             MsgType.SCROLL -> {
                 val time = r.u64(); val dx = r.f32(); val dy = r.f32(); val phase = r.u8(); r.skip(3)
+                checkEnum(phase, 0..4, "SCROLL.phase")
                 Scroll(time, dx, dy, phase)
             }
             MsgType.PEN_GESTURE -> {

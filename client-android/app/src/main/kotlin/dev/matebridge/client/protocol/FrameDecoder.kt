@@ -8,6 +8,9 @@ package dev.matebridge.client.protocol
  * The payload limit is checked on the header, before any payload is buffered.
  */
 class FrameDecoder(private val maxPayload: Int) {
+    /** Hard cap on buffered bytes: one maximal frame plus one read chunk. */
+    val bufferCap: Int = HEADER + maxPayload + READ_CHUNK
+
     private var buf = ByteArray(4096)
     private var start = 0
     private var end = 0
@@ -22,6 +25,10 @@ class FrameDecoder(private val maxPayload: Int) {
      * Appends bytes. Each 5-byte header is validated the moment it is complete, before any of its
      * payload is buffered, so an oversized length fails immediately and buffered data stays bounded
      * by header + [maxPayload] per frame. Bytes after a failure are discarded.
+     *
+     * Callers MUST call [next] (or [drain]) until it returns null after every feed. Total buffered
+     * bytes are hard-capped at [bufferCap] (header + max payload + [READ_CHUNK]); feeding past it
+     * without draining fails with [ProtocolException.Kind.BUFFER_OVERFLOW] instead of exhausting memory.
      */
     fun feed(data: ByteArray, offset: Int = 0, length: Int = data.size - offset) {
         require(offset >= 0 && length >= 0 && offset + length <= data.size) { "bad range" }
@@ -31,6 +38,10 @@ class FrameDecoder(private val maxPayload: Int) {
             val have = end - scanPos
             val take = if (have < 0) minOf(left, -have) // payload of an already validated frame
             else minOf(left, HEADER - have) // rest of the next header (have < HEADER always here)
+            if (end - start + take > bufferCap) {
+                failure = ProtocolException(ProtocolException.Kind.BUFFER_OVERFLOW, "decoder not drained: buffer cap $bufferCap")
+                return
+            }
             append(data, pos, take)
             pos += take
             left -= take
@@ -104,6 +115,9 @@ class FrameDecoder(private val maxPayload: Int) {
 
     companion object {
         const val HEADER = 5
+
+        /** Largest single socket read the caller is expected to feed at once. */
+        const val READ_CHUNK = 64 * 1024
 
         fun control() = FrameDecoder(Limits.CONTROL_MAX_PAYLOAD)
         fun video() = FrameDecoder(Limits.VIDEO_MAX_PAYLOAD)

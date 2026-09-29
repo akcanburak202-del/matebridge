@@ -283,4 +283,63 @@ class CodecRulesTest {
         dec.feed(byteArrayOf(0x01, 0x00))
         expectError(ProtocolException.Kind.OVERSIZE, dec)
     }
+
+    @Test
+    fun undrainedFeedHitsCapWithTypedError() {
+        val dec = FrameDecoder.control()
+        // a frame header announcing the maximum payload, then endless payload chunks, never drained
+        dec.feed(byteArrayOf(0x7f, 0x00, 0x00, 0x01, 0x00))
+        val chunk = ByteArray(FrameDecoder.READ_CHUNK)
+        repeat(3) { dec.feed(chunk) } // still within the cap
+        val big = FrameDecoder.control()
+        val ping = Codec.encode(Ping(1, 1))
+        repeat(100_000) { big.feed(ping) } // many small complete frames, never drained
+        expectError(ProtocolException.Kind.BUFFER_OVERFLOW, big)
+        assertTrue(big.bufferedBytes() <= big.bufferCap)
+    }
+
+    @Test
+    fun encodeRefusesBadVideoFragmentFields() {
+        val d = Bytes(ByteArray(4))
+        for (bad in listOf(
+            VideoFrame(0, 0, 0, 1, 1, 4, d), VideoFrame(0, 0, 0, 0, 2, 4, d),
+            VideoFrame(0, 0, 0, 0, 1, 5, d), VideoFrame(0, 0, 0, 0, 1, 3, d),
+        )) {
+            try { Codec.encode(bad); fail() } catch (e: IllegalArgumentException) { }
+        }
+    }
+
+    @Test
+    fun statusDeterminingEnumsRejectUnknownValues() {
+        // (message, payload offset of the enum byte, bad value)
+        val cases = listOf(
+            Triple(HelloAck(0, 0, 1, 1, ""), 2, 5),
+            Triple(StreamConfig(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), 2, 3),
+            Triple(StreamConfig(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1), 2, 0),
+            Triple(PointerAbs(0, 0, 0, 0, 0), 13, 2),
+            Triple(Scroll(0, 0f, 0f, 0), 16, 5),
+        )
+        for ((msg, off, bad) in cases) {
+            val p = Codec.encodePayload(msg)
+            p[off] = bad.toByte()
+            val dec = FrameDecoder.control(); dec.feed(frame(msg.type, p))
+            expectError(ProtocolException.Kind.INVALID_VALUE, dec)
+        }
+        for (msg in listOf(
+            HelloAck(0, 5, 0, 0, ""), StreamConfig(1, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+            PointerAbs(0, 0, 0, 0, 2), Scroll(0, 0f, 0f, 5),
+        )) {
+            try { Codec.encode(msg); fail() } catch (e: IllegalArgumentException) { }
+        }
+    }
+
+    @Test
+    fun informationalEnumsAcceptUnknownValues() {
+        for (msg in listOf(
+            Bye(200), ReleaseAll(200), KeyframeRequest(200), PenGesture(0, 99),
+            StreamConfig(1, 1, 1, 1, 1, 1, 1, 1, 99, 99, 99, 7),
+        )) {
+            assertEquals(msg, decode(Codec.encode(msg)))
+        }
+    }
 }
