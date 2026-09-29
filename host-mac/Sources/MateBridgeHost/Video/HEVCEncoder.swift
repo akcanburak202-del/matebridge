@@ -57,11 +57,16 @@ final class HEVCEncoder: @unchecked Sendable {
     private var idleTimer: DispatchSourceTimer?
 
     let settings: VideoSettings
+    private let meter: CadenceMeter?
     /// `VTSessionSetProperty` failures at creation (key: OSStatus), for diagnostics.
     private(set) var propertyFailures: [String] = []
+    /// Every property the encoder tried to set: "Name=ok" or "Name=<OSStatus>" (T-017: was it applied?).
+    private(set) var propertyReport: [String] = []
 
-    init(settings: VideoSettings, output: @escaping Output, onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
+    init(settings: VideoSettings, meter: CadenceMeter? = nil, output: @escaping Output,
+         onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
+        self.meter = meter
         self.output = output
         self.onFailure = onFailure
 
@@ -79,8 +84,10 @@ final class HEVCEncoder: @unchecked Sendable {
         session = s
 
         var failures: [String] = []
+        var report: [String] = []
         func set(_ name: String, _ key: CFString, _ value: CFTypeRef) {
             let st = VTSessionSetProperty(s, key: key, value: value)
+            report.append("\(name)=\(st == noErr ? "ok" : String(st))")
             if st != noErr {
                 failures.append("\(name)=\(st)")
                 HEVCEncoder.log.error("ev=prop_set_failed key=\(name, privacy: .public) status=\(st)")
@@ -90,6 +97,9 @@ final class HEVCEncoder: @unchecked Sendable {
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
+        if let delay = settings.maxFrameDelayCount {
+            set("MaxFrameDelayCount", kVTCompressionPropertyKey_MaxFrameDelayCount, delay as CFNumber)
+        }
         set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
         // Cap bursts (bytes per second) at 2x the average.
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
@@ -103,6 +113,7 @@ final class HEVCEncoder: @unchecked Sendable {
         set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB)
         set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
         propertyFailures = failures
+        propertyReport = report
         VTCompressionSessionPrepareToEncodeFrames(s)
 
         // Idle keyframe: a pending keyframe request with no new frames for ~1 s re-encodes the last buffer.
@@ -111,6 +122,22 @@ final class HEVCEncoder: @unchecked Sendable {
         timer.setEventHandler { [weak self] in self?.idleTick() }
         idleTimer = timer
         timer.resume()
+    }
+
+    /// Read-back of the cadence-related properties as the session reports them (not just what we asked for).
+    func cadenceReadback() -> String {
+        lock.lock(); let s = session; lock.unlock()
+        guard let s else { return "session closed" }
+        func read(_ key: CFString) -> String {
+            var raw: UnsafeMutableRawPointer?
+            let st = VTSessionCopyProperty(s, key: key, allocator: nil, valueOut: &raw)
+            guard st == noErr, let raw else { return "unset(\(st))" }
+            return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
+        }
+        return "RealTime=\(read(kVTCompressionPropertyKey_RealTime)) "
+            + "ExpectedFrameRate=\(read(kVTCompressionPropertyKey_ExpectedFrameRate)) "
+            + "MaxFrameDelayCount=\(read(kVTCompressionPropertyKey_MaxFrameDelayCount)) "
+            + "Hardware=\(read(kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder))"
     }
 
     /// Colour properties as the session reports them, for the dump tool.
@@ -138,6 +165,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Encodes one captured frame (full-range 4:2:0, see `ScreenCapture`). Never blocks and never grows a queue:
     /// if the encoder is backed up the frame replaces the single pending one.
     func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64) {
+        meter?.recordEncoderIn()
         submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs))
     }
 
@@ -162,6 +190,7 @@ final class HEVCEncoder: @unchecked Sendable {
         guard !stopped, let s = session else { lock.unlock(); return }
         last = input
         if inFlight >= HEVCEncoder.maxInFlight {
+            if pending != nil { meter?.recordOverwritten() }
             pending = input                    // newest wins
             lock.unlock()
             return
@@ -205,7 +234,10 @@ final class HEVCEncoder: @unchecked Sendable {
     /// A submitted frame produced output (or none); frees the slot and starts the pending frame, if any.
     private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeTimeUs: UInt64) {
         let ok = status == noErr && sampleBuffer != nil
-        if let sb = sampleBuffer, ok { handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs) }
+        if let sb = sampleBuffer, ok {
+            meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
+            handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs)
+        }
         if ok { lock.lock(); consecutiveFailures = 0; lock.unlock() }
         if !ok {
             // A frame the encoder dropped or failed breaks the reference chain: recover with a keyframe.

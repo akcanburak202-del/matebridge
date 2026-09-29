@@ -46,6 +46,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private static let tickKey = 1, statsKey = 2, keyframeKey = 3
 
     private let logger = SessionLogger(component: "net")
+    private let videoLogger = SessionLogger(component: "video")
     private let mailbox = BoundedMailbox<Event>(capacity: 16)
     private let shutdownLock = NSLock()
     private var shuttingDown = false
@@ -65,6 +66,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var session: ActiveSession?
     private var lastSent = VideoSender.Counters()
     private var pipelineRetried = false
+    private var lastStatsText = ""
+    private var lastCadenceText = ""
 
     public init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
         lease = DisplayLease(graceUs: graceUs)
@@ -106,7 +109,11 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Called by the session
     /// machine right before it reports `sessionStarted`, so the pair (device, settings) stays consistent.
     public func streamConfig(for hello: Hello) -> StreamConfig {
-        let settings = VideoSettings.forTablet(hello)
+        var settings = VideoSettings.forTablet(hello)
+        // Experiment knobs (T-017): MATEBRIDGE_REFRESH=60|120 (virtual display Hz), MATEBRIDGE_FRAME_DELAY=0|1.
+        let env = ProcessInfo.processInfo.environment
+        settings.displayRefreshHz = VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"])
+        settings.maxFrameDelayCount = VideoSettings.parseFrameDelay(env["MATEBRIDGE_FRAME_DELAY"])
         pendingLock.withLock { pendingHello = (hello.deviceID, settings) }
         if settings.widthPx != Int(hello.screenWidthPx) || settings.heightPx != Int(hello.screenHeightPx) {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
@@ -173,6 +180,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             onStats(stats)
         case .tick:
             await perform(lease.tick(now: HostClock.nowUs()))
+            reportCadence()
         case .pipelineFailed(let id, let message):
             await onPipelineFailed(id: id, message: message)
         case .senderEnded(let id, let reason):
@@ -199,6 +207,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSessionEnded() async {
         session = nil
         lastSent = VideoSender.Counters()
+        lastStatsText = ""
+        lastCadenceText = ""
         await stopConsumer()
         lease.sessionEnded(now: HostClock.nowUs())
         if pipeline != nil {
@@ -252,7 +262,28 @@ public final class StreamCoordinator: @unchecked Sendable {
             lastSent = now
         }
         log(.info, "stats", fields)
-        onSummary(summary.menuText)
+        lastStatsText = summary.menuText
+        publishSummary()
+    }
+
+    /// Once a second: closes the pipeline's cadence window, logs `component=video ev=cadence`, updates the menu.
+    private func reportCadence() {
+        guard let pipeline else { return }
+        var sentTotal = 0
+        if case .sender(_, let sender, _) = consumer { sentTotal = sender.currentCounters.framesSent }
+        let w = pipeline.cadenceWindow(sentTotal: sentTotal)
+        guard w.durationUs > 0 else { return }
+        if !w.isEmpty {
+            videoLogger.log(.info, "cadence", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
+                            fields: w.logFields)
+        }
+        lastCadenceText = w.menuText
+        publishSummary()
+    }
+
+    private func publishSummary() {
+        guard session != nil, case .sender = consumer else { return }
+        onSummary([lastStatsText, lastCadenceText].filter { !$0.isEmpty }.joined(separator: " · "))
     }
 
     private func onPipelineFailed(id: Int, message: String) async {
@@ -312,6 +343,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             pipeline = p
             startDrain()
             log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx)")
+            videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
+                            generation: session?.configID ?? 0, fields: p.cadenceSetup)
             onSummary("")
         } catch {
             log(.error, "display_create_failed", "error=\(error)")

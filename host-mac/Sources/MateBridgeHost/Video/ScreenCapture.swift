@@ -24,12 +24,15 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     /// pixel buffer, presentation time, host monotonic microseconds of the frame
     typealias Handler = @Sendable (CVPixelBuffer, CMTime, UInt64) -> Void
 
+    static let queueDepth = 5
     private let handler: Handler
     private let onStop: @Sendable (Error) -> Void
+    private let meter: CadenceMeter?
     private var stream: SCStream?
     private let sampleQueue = DispatchQueue(label: "matebridge.capture", qos: .userInteractive)
 
-    init(handler: @escaping Handler, onStop: @escaping @Sendable (Error) -> Void = { _ in }) {
+    init(meter: CadenceMeter? = nil, handler: @escaping Handler, onStop: @escaping @Sendable (Error) -> Void = { _ in }) {
+        self.meter = meter
         self.handler = handler
         self.onStop = onStop
     }
@@ -50,7 +53,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
-        cfg.queueDepth = 5  // > encoder in-flight limit + the retained last buffer
+        cfg.queueDepth = ScreenCapture.queueDepth  // > encoder in-flight limit + the retained last buffer
         cfg.showsCursor = true
         let s = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                          configuration: cfg, delegate: self)
@@ -68,14 +71,32 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     func stream(_ stream: SCStream, didStopWithError error: Error) { onStop(error) }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, sb.isValid,
-              let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
-                as? [[SCStreamFrameInfo: Any]],
-              let raw = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
-              let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+        guard type == .screen else { return }
+        let arrivalUs = HostClock.nowUs()
+        guard sb.isValid else { meter?.recordCapture(status: "invalid", ptsUs: 0, arrivalUs: arrivalUs); return }
+        let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
+            as? [[SCStreamFrameInfo: Any]]
+        let raw = attachments?.first?[.status] as? Int
         let pts = CMSampleBufferGetPresentationTimeStamp(sb)
         // SCK timestamps are on the host time clock (mach absolute time based).
         let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
+        let status = raw.flatMap { SCFrameStatus(rawValue: $0) }
+        meter?.recordCapture(status: ScreenCapture.statusName(status), ptsUs: us, arrivalUs: arrivalUs)
+        guard status == .complete, let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         handler(pb, pts, us)
+    }
+
+    /// Log-friendly name of an SCK frame status ("unknown" when the attachment is missing).
+    static func statusName(_ status: SCFrameStatus?) -> String {
+        switch status {
+        case .complete: return "complete"
+        case .idle: return "idle"
+        case .blank: return "blank"
+        case .suspended: return "suspended"
+        case .started: return "started"
+        case .stopped: return "stopped"
+        case nil: return "unknown"
+        @unknown default: return "other"
+        }
     }
 }

@@ -1,7 +1,7 @@
 ---
 id: T-017
 title: Mac kare temposu — yakalama aralığı ölçümü, sanal ekran yenileme hızı, kayıp karelerin kaynağı
-status: todo
+status: review
 phase: 1
 owner: mac-host-dev
 depends_on: [T-014]
@@ -34,12 +34,18 @@ Tablette 60 fps içerik ~57 fps geliyor (NOTES 2026-09-29, T-016 ölçümleri). 
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Core (saf, testli): `CadenceWindow`/`CadenceMeter` (SCK aralık p50/p95/p99, geç aralık sayısı, durum sayaçları, enc in/out, overwritten, kuyruk atma, gönderilen; log ve menü metni), `VideoSettings.displayRefreshHz` + `maxFrameDelayCount` ve ayrıştırıcıları.
+2. Host: `ScreenCapture` durum adı + varış saatini meter'a yazar; `HEVCEncoder` in/out/overwritten sayar, uygulanan özellikleri raporlar ve okur; `VirtualDisplay` istenen Hz'e en yakın modu seçer ve gerçek modu bildirir; `VideoPipeline` pencereyi kapatır.
+3. Koordinatör: saniyede bir `component=video ev=cadence` logu + menüye "cap/enc/sent fps", `cadence_setup` logu. Ortam değişkenleri `MATEBRIDGE_REFRESH=60|120`, `MATEBRIDGE_FRAME_DELAY=0|1`.
+4. `--dump-video`: `--refresh`, `--frame-delay`, saniyelik `cadence` satırı + TOTAL.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `git log task/T-017-frame-cadence`
+- **Dokunulan dosyalar:** Core: `Video/CadenceMeter.swift` (yeni), `Video/VideoSettings.swift`; Host: `Video/{HEVCEncoder,ScreenCapture,VideoPipeline,VideoDump}.swift`, `VirtualDisplay.swift`, `Session/StreamCoordinator.swift`; Tests: `Video/CadenceTests.swift`; bu kart. `main.swift` ve `DumpVideoCommand.swift` değişmedi (menü satırı mevcut `onSummary` üzerinden).
+- **Ne ölçülüyor (saniyede bir, `component=video ev=cadence`):** `cap_int_ms_p50_95_99` SCK'nın kendi PTS'i ile ardışık `complete` kareler arası; `arr_int_ms_*` aynısı ama örnek işleyicisinin çağrılma saatiyle (teslim titreşimi); `cap_late/arr_late` >1,5x hedef aralık; `status=` SCK durumları (complete/idle/blank/suspended/started/stopped); `enc_in/enc_out`, `enc_ms_p50_95`, `overwritten` (tek `pending` slotunda ezilen), `queue_drops`, `sent`. Kayıp hattı: cap > enc_in ise yakalamada; enc_in > enc_out ise `overwritten`/kodlayıcı; enc_out > sent ise `queue_drops`. Menü: "58 fps · 30.0 Mbit/s · 35 ms · cap 60 / enc 60 / sent 60 fps".
+- **`cadence_setup` logu (display_created sonrası) ve dump'ta `cadence setup:`:** sanal ekranın istenen Hz'i, mod seçildi mi, sistemin bildirdiği gerçek mod (`applied=... 120Hz`; sistem 0 Hz bildirirse 0 görünür); kodlayıcıya set edilen her özellik `Ad=ok|OSStatus`, oturumun geri okuduğu `RealTime/ExpectedFrameRate/MaxFrameDelayCount/Hardware`; SCK `minimumFrameInterval` ve `queueDepth`.
+- **Ayarlar:** `--dump-video ... --refresh 60|120 [--frame-delay 0|1]`; uygulamada `MATEBRIDGE_REFRESH=60|120` ve `MATEBRIDGE_FRAME_DELAY=0|1` ortam değişkenleri (Terminal'den başlatılan ikili için). Varsayılan 60 Hz, `MaxFrameDelayCount` ayarlanmaz (ölçüm önce). 120 Hz'de akış fps'i ve SCK `minimumFrameInterval` 1/60 kalır (`displayRefreshHz` STREAM_CONFIG'e girmez).
+- **Varsayımlar:** `ExpectedFrameRate` ve `RealTime` zaten set ediliyordu (artık loglanıyor). Mod seçimi "en yüksek Hz" yerine "istenene en yakın Hz". Durağan ekranda SCK kare vermediği için ölçüm boş, log satırı atlanır.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Yalnızca derleme + Core birim testleri (`CadenceTests`), uygulama çalıştırılmadı. Orkestratör: Safari 60 fps sayfası ile `--dump-video x.h265 --seconds 10 --refresh 60` ve `--refresh 120`; TOTAL satırında `cap_fps`, `cap_late`, `status=`, `overwritten` karşılaştırın. Şüphe (ölçülmedi): SCK `minimumFrameInterval`=1/60 iken 60 Hz ekranda kareler aralığın hemen altında gelirse SCK bazılarını eler (cap_fps ~57); 120 Hz sanal ekranda düzelmeli. macOS sanal ekranda 120 Hz'i kabul etmezse `applied=` 60 gösterir. `MaxFrameDelayCount` etkisi `--frame-delay 0|1` ile denenebilir.
+- **Açık sorular:** Yok. Kart `files:` dışına çıkılmadı.
