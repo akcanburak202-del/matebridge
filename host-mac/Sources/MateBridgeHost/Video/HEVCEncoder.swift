@@ -29,7 +29,7 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
 final class HEVCEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
-    private struct Input {
+    private struct Input: @unchecked Sendable {
         var buffer: CVPixelBuffer
         var pts: CMTime
         var captureTimeUs: UInt64
@@ -49,13 +49,12 @@ final class HEVCEncoder: @unchecked Sendable {
     private var forceKeyframe = true          // the very first frame is a keyframe
     private var lastParameterSets: [UInt8] = []
     private var inFlight = 0
-    private var pending: Input?
     private var last: Input?
     private var lastPTS = CMTime.invalid
     private var lastSubmitNs: UInt64 = DispatchTime.now().uptimeNanoseconds
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
-    private var gate: FrameGate
+    private var pacer: FramePacer<Input>
     private var flushScheduled = false
 
     let settings: VideoSettings
@@ -69,7 +68,7 @@ final class HEVCEncoder: @unchecked Sendable {
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
         self.meter = meter
-        self.gate = FrameGate(streamFps: settings.fps)
+        self.pacer = FramePacer<Input>(streamFps: settings.fps)
         self.output = output
         self.onFailure = onFailure
 
@@ -194,20 +193,24 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.lock()
         guard !stopped, let s = session else { lock.unlock(); return }
         last = input
-        let wait = bypassGate ? 0 : gate.waitUs(forPtsUs: input.captureTimeUs)
-        if wait > 0 || inFlight >= HEVCEncoder.maxInFlight {
-            // Too early for the send-rate gate, or the encoder is full: the frame becomes the single pending one
-            // (newest wins) and goes out when a slot is free and the gate allows.
-            if pending != nil { meter?.recordOverwritten() }
-            pending = input
-            let delay = wait > 0 && inFlight < HEVCEncoder.maxInFlight ? scheduleFlushLocked(afterUs: wait) : nil
-            lock.unlock()
-            if let delay { armFlush(delay) }
-            return
+        var toSend: (Input, Bool)?
+        var delay: UInt64?
+        // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
+        switch pacer.offer(input, ptsUs: input.captureTimeUs, nowUs: HostClock.nowUs(),
+                           slotFree: inFlight < HEVCEncoder.maxInFlight, bypassGate: bypassGate) {
+        case .submit(let f): toSend = reserveSlot(f)
+        case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
+        case .drop: break
         }
-        let (frame, key) = reserveSlot(input)
+        reportOverwrittenLocked()
         lock.unlock()
-        send(frame, key: key, session: s)
+        if let delay { armFlush(delay) }
+        if let (frame, key) = toSend { send(frame, key: key, session: s) }
+    }
+
+    private func reportOverwrittenLocked() {
+        let n = pacer.takeOverwritten()
+        for _ in 0..<n { meter?.recordOverwritten() }
     }
 
     /// Must hold `lock`. Claims an in-flight slot, consumes the keyframe flag and makes the PTS increase.
@@ -216,7 +219,6 @@ final class HEVCEncoder: @unchecked Sendable {
         var f = input
         if lastPTS.isValid, f.pts <= lastPTS { f.pts = lastPTS + CMTime(value: 1, timescale: 1000) }
         lastPTS = f.pts
-        gate.accept(ptsUs: f.captureTimeUs)
         lastSubmitNs = DispatchTime.now().uptimeNanoseconds
         let key = forceKeyframe
         forceKeyframe = false
@@ -280,15 +282,18 @@ final class HEVCEncoder: @unchecked Sendable {
         if let (f, k, s) = next { send(f, key: k, session: s) }
     }
 
-    /// Must hold `lock`. Claims the pending frame if a slot is free and the gate allows; otherwise returns the delay
-    /// after which a flush should retry (nil when nothing needs scheduling).
+    /// Must hold `lock`. Claims the pending frame if a slot is free and the gate is open (judged by the current time,
+    /// not the frame's capture time); otherwise returns the delay after which a flush should retry.
     private func takePendingLocked() -> ((Input, Bool, VTCompressionSession)?, UInt64?) {
-        guard !stopped, let p = pending, let s = session, inFlight < HEVCEncoder.maxInFlight else { return (nil, nil) }
-        let wait = gate.waitUs(forPtsUs: p.captureTimeUs)
-        if wait > 0 { return (nil, scheduleFlushLocked(afterUs: wait)) }
-        pending = nil
-        let (f, k) = reserveSlot(p)
-        return ((f, k, s), nil)
+        guard !stopped, let s = session else { return (nil, nil) }
+        defer { reportOverwrittenLocked() }
+        switch pacer.takePending(nowUs: HostClock.nowUs(), slotFree: inFlight < HEVCEncoder.maxInFlight) {
+        case .submit(let f):
+            let (frame, key) = reserveSlot(f)
+            return ((frame, key, s), nil)
+        case .retry(let wait): return (nil, scheduleFlushLocked(afterUs: wait))
+        case .none: return (nil, nil)
+        }
     }
 
     /// Must hold `lock`. Returns the delay to arm, or nil if a flush is already scheduled.
@@ -320,7 +325,7 @@ final class HEVCEncoder: @unchecked Sendable {
         stopped = true
         let s = session
         session = nil
-        pending = nil
+        pacer.clearPending()
         last = nil
         let timer = idleTimer
         idleTimer = nil

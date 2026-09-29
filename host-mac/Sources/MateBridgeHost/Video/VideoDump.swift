@@ -111,7 +111,11 @@ public enum VideoDump {
         while await pipeline.frames.next() != nil { drained.mutate { $0 += 1 } }
         await stopper.value
         ticker.cancel()
+        await ticker.value
         await pipeline.stop()
+        // The last partial window belongs in the total too.
+        let last = pipeline.cadenceWindow(sentTotal: drained.value)
+        if last.durationUs > 0 { totals.mutate { $0.merge(last) } }
         let total = totals.value
         print("cadence TOTAL (\(String(format: "%.1f", Double(total.durationUs) / 1e6)) s, refresh \(o.refreshHz) Hz): \(total.logFields)")
 
