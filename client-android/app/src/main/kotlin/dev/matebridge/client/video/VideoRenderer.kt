@@ -39,6 +39,8 @@ class VideoRenderer(
     private val vsync: VsyncClock = VsyncClock(),
     /** Jitter buffer in content frames, 0..2. 0 = render each frame as soon as decoded (T-015 behavior). */
     bufferFrames: Int = 1,
+    /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
+    codecReportsShown: Boolean = true,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -49,6 +51,9 @@ class VideoRenderer(
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
+
+    /** Read at each codec start; switch before re-attaching a surface (GL -> SurfaceView fallback). */
+    @Volatile var codecReportsShown: Boolean = codecReportsShown
 
     /** Jitter buffer size in content frames (0..2); takes effect on the next frame. */
     @Volatile var bufferFrames: Int = bufferFrames.coerceIn(0, 2)
@@ -190,10 +195,12 @@ class VideoRenderer(
             val info = MediaCodec.BufferInfo()
             var held: VideoFrame? = null
             val pacer = FramePacer(vsync, bufferFrames, if (config.fps > 0) 1_000_000_000L / config.fps else 0)
-            codec.setOnFrameRenderedListener(
-                { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
-                android.os.Handler(android.os.Looper.getMainLooper()),
-            )
+            if (codecReportsShown) {
+                codec.setOnFrameRenderedListener(
+                    { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }
             var loggedFormat = false
             while (att.active) {
                 if (drainOutput(codec, info, pacer) && !loggedFormat) {
@@ -300,7 +307,9 @@ class VideoRenderer(
         fun key(k: String) = if (f.containsKey(k)) f.getInteger(k).toString() else "unset"
         Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=output_format " +
             "range=${key(MediaFormat.KEY_COLOR_RANGE)} standard=${key(MediaFormat.KEY_COLOR_STANDARD)} " +
-            "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)}")
+            "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)} " +
+            "size=${key(MediaFormat.KEY_WIDTH)}x${key(MediaFormat.KEY_HEIGHT)} " +
+            "crop=${key("crop-left")},${key("crop-top")},${key("crop-right")},${key("crop-bottom")}")
     }
 
     private fun nowUs() = SystemClock.elapsedRealtimeNanos() / 1000
