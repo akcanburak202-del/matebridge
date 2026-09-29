@@ -1,7 +1,7 @@
 ---
 id: T-017
 title: Mac kare temposu — yakalama aralığı ölçümü, sanal ekran yenileme hızı, kayıp karelerin kaynağı
-status: review
+status: done
 phase: 1
 owner: mac-host-dev
 depends_on: [T-014]
@@ -21,11 +21,11 @@ Tablette 60 fps içerik ~57 fps geliyor (NOTES 2026-09-29, T-016 ölçümleri). 
 
 ## Kabul kriterleri
 
-- [ ] **Ölçüm:** host saniyede bir `component=video ev=cadence` logu yazar: SCK kare varış aralığı p50/p95/p99 ve >1,5×hedef aralık sayısı, SCK'nın bildirdiği kare durumları (complete/idle/blank/suspended…) sayıları, kodlayıcıya giren/çıkan kare sayısı, kodlama süresi p50/p95, `pending` slot üzerine yazılan (en yeni kazanır) kare sayısı, kuyruk atmaları, gönderilen kare sayısı. Saf istatistik kısmı Core'da ve testli. Menüdeki özet satırına "cap fps / enc fps / sent fps" eklenir.
-- [ ] **Sanal ekran yenileme hızı:** `VirtualDisplay` modu 60 ve 120 Hz ile oluşturulabilir (ayar/ortam değişkeni/komut satırı, varsayılan 60). 120 Hz sanal ekranda SCK `minimumFrameInterval` 1/60 olarak kalır (tablete giden en fazla 60 fps). Seçilen mod ve gerçekten uygulanan yenileme hızı loglanır.
-- [ ] `--dump-video` aynı ölçüm özetini yazdırır ve `--refresh 60|120` alır; orkestratör Safari 60 fps animasyon sayfasıyla iki modu karşılaştırır.
-- [ ] Kodlayıcı ayarları gözden geçirilir: `ExpectedFrameRate`, `MaxFrameDelayCount` (0/1), gerekirse `RealTime`; her birinin uygulanıp uygulanmadığı loglanır.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] **Ölçüm:** host saniyede bir `component=video ev=cadence` logu yazar: SCK kare varış aralığı p50/p95/p99 ve >1,5×hedef aralık sayısı, SCK'nın bildirdiği kare durumları (complete/idle/blank/suspended…) sayıları, kodlayıcıya giren/çıkan kare sayısı, kodlama süresi p50/p95, `pending` slot üzerine yazılan (en yeni kazanır) kare sayısı, kuyruk atmaları, gönderilen kare sayısı. Saf istatistik kısmı Core'da ve testli. Menüdeki özet satırına "cap fps / enc fps / sent fps" eklenir.
+- [x] **Sanal ekran yenileme hızı:** `VirtualDisplay` modu 60 ve 120 Hz ile oluşturulabilir (ayar/ortam değişkeni/komut satırı, varsayılan 60). 120 Hz sanal ekranda SCK `minimumFrameInterval` 1/60 olarak kalır (tablete giden en fazla 60 fps). Seçilen mod ve gerçekten uygulanan yenileme hızı loglanır.
+- [x] `--dump-video` aynı ölçüm özetini yazdırır ve `--refresh 60|120` alır; orkestratör Safari 60 fps animasyon sayfasıyla iki modu karşılaştırır.
+- [x] Kodlayıcı ayarları gözden geçirilir: `ExpectedFrameRate`, `MaxFrameDelayCount` (0/1), gerekirse `RealTime`; her birinin uygulanıp uygulanmadığı loglanır.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Notlar
 
@@ -59,3 +59,8 @@ Tablette 60 fps içerik ~57 fps geliyor (NOTES 2026-09-29, T-016 ölçümleri). 
   Kök neden: `minimumFrameInterval` tam 1/fps iken SCK biraz erken gelen kareleri eler. **`--refresh 120` yardımcı olmadı** (57.8 fps, düzensizlik daha kötü); seçenek olarak duruyor, varsayılan 60.
 - **Düzeltme (2. tur):** (1) SCK `minimumFrameInterval` = 1/(2 x akış fps); sanal ekran 60 Hz, STREAM_CONFIG fps değişmedi. (2) Core `FrameGate` + `HEVCEncoder`: iki kabul edilen kare arası en az 0,75 x akış aralığı; daha erken gelen kare atılmaz, tek `pending` slotuna yazılır (en yeni kazanır, `overwritten` sayılır) ve aralık dolunca zamanlayıcıyla gönderilir, böylece gönderim ~akış fps'ini geçmez ve durağan ekranda son kare bayat kalmaz. Anahtar kare yeniden gönderimleri kapıyı atlar. 0,75 seçimi: 1'e yakın sabit titreşimde kareleri geciktirir, 0,5 ise 120 fps patlamayı 60'a indirmez; sürekli üst sınır ~66 fps. Testler `FrameGateTests`. (3) `late` zaten akış aralığına göre (`CadenceMeter(fps: settings.fps)`); 547 yanlış `late`, `--fps 120` ile akış fps'i 120 yapılıp hedefin 8,33 ms olmasındandı, SCK minimumundan değil. Şimdi SCK minimumu akış fps'inden bağımsız.
 - **Açık sorular:** Yok. Kart `files:` dışına çıkılmadı.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+Varsayılan ayarla `--dump-video` + Safari 60 fps: cap 60,0 fps, p50/95/99 16,7/16,7/16,7, late 0, overwritten 0, sent 60,0. Canlı: tablete ~60 fps, gecikme Wi-Fi 26–33 ms, USB ~19 ms. Codex incelemesi ayrıca işlenecek.
+
