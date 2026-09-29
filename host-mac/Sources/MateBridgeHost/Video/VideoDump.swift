@@ -51,9 +51,18 @@ public enum VideoDump {
         }
         defer { try? file.close() }
 
-        let stats = LockedBox(VideoStats())
+        // The dump is written from the encoder tap (every frame, in order), never from the bounded queue.
+        let state = LockedBox(DumpState())
         let pipeline = VideoPipeline(settings: settings, tap: { frame, us in
-            stats.mutate { $0.record(frame, encodeTimeUs: us) }
+            state.mutate { st in
+                st.stats.record(frame, encodeTimeUs: us)
+                if frame.isCodecConfig, st.vui == nil {
+                    st.vui = AnnexB.nalUnits(frame.data).lazy.compactMap { HEVCSPS.vuiColor(sps: $0) }.first
+                }
+                if st.writeError == nil {
+                    do { try file.write(contentsOf: Data(frame.data)) } catch { st.writeError = "\(error)" }
+                }
+            }
         }, onFailure: { print("capture stopped: \($0)") })
 
         do { try await pipeline.start() } catch {
@@ -66,28 +75,49 @@ public enum VideoDump {
         print("STREAM_CONFIG colour (H.273): primaries=\(cfg.colorPrimaries) transfer=\(cfg.transfer) matrix=\(cfg.matrix) "
               + "range=\(cfg.fullRange ? "full" : "limited") (capture pixel format 420f = full range)")
         print("encoder session colour: \(pipeline.encoderColorReadback)")
+        let failures = pipeline.encoderPropertyFailures
+        if !failures.isEmpty { print("warning: VTSessionSetProperty failed: \(failures.joined(separator: ", "))") }
 
-        let deadline = Date().addingTimeInterval(o.seconds)
         let stopper = Task {
             try? await Task.sleep(nanoseconds: UInt64(o.seconds * 1_000_000_000))
             await pipeline.stop()
         }
-        while let frame = await pipeline.frames.next() {
-            try? file.write(contentsOf: Data(frame.data))
-            if Date() > deadline { break }
-        }
+        // Drain the sink so the bounded queue never backs up; its content is not what gets written.
+        while await pipeline.frames.next() != nil {}
         await stopper.value
         await pipeline.stop()
 
-        let s = stats.value
+        let snap = state.value
+        let s = snap.stats
         print("frames: \(s.frames), keyframes: \(s.keyframes), bytes: \(s.bytes)")
         print(String(format: "avg frame: %.0f B, max frame: %d B, avg bitrate: %.0f kbps",
                      s.averageFrameBytes, s.maxFrameBytes, s.bitrateKbps(overSeconds: o.seconds)))
         print(String(format: "encode time: avg %.2f ms, max %.2f ms; queue drops: %d",
                      s.averageEncodeTimeUs / 1000, Double(s.maxEncodeTimeUs) / 1000, pipeline.frames.droppedCount))
+        var exit: Int32 = 0
+        if let v = snap.vui {
+            let match = v.colourDescriptionPresent && v.fullRange == cfg.fullRange && v.colourPrimaries == cfg.colorPrimaries
+                && v.transferCharacteristics == cfg.transfer && v.matrixCoefficients == cfg.matrix
+            print("SPS VUI (in the bitstream): full_range=\(v.fullRange) colour_description_present=\(v.colourDescriptionPresent) "
+                  + "primaries=\(v.colourPrimaries) transfer=\(v.transferCharacteristics) matrix=\(v.matrixCoefficients) "
+                  + (match ? "-> matches STREAM_CONFIG" : "-> MISMATCH with STREAM_CONFIG"))
+            if !match { exit = 4 }
+        } else {
+            print("SPS VUI: not found or has no signal-type info (decoders will assume defaults)")
+        }
+        if let e = snap.writeError {
+            print("error: writing the dump failed (\(e)); the file is incomplete")
+            exit = 3
+        }
         if s.frames == 0 { print("warning: no frames captured (a static screen produces few frames; move something)") }
-        return 0
+        return exit
     }
+}
+
+private struct DumpState: Sendable {
+    var stats = VideoStats()
+    var vui: HEVCVUIColor?
+    var writeError: String?
 }
 
 private final class LockedBox<T: Sendable>: @unchecked Sendable {

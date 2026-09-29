@@ -11,6 +11,7 @@ files:
   - host-mac/Sources/MateBridgeHost/Video/
   - host-mac/Sources/MateBridgeHost/VirtualDisplay.swift
   - host-mac/Tests/MateBridgeCoreTests/Video/
+  - host-mac/Sources/MateBridgeApp/   # orkestratör onayıyla: yalnız yeni DumpVideoCommand.swift + main.swift içinde 1 satır (--dump-video)
 ---
 
 ## Amaç
@@ -40,4 +41,12 @@ Sanal ekrandan `VIDEO_FRAME` mesajlarına kadar olan hat. Ağa bağlanmaz: çık
 - **Dokunulan dosyalar:** `Sources/MateBridgeCore/Video/*`, `Sources/MateBridgeHost/Video/*`, `Sources/MateBridgeHost/VirtualDisplay.swift`, `Tests/MateBridgeCoreTests/Video/VideoTests.swift`. Kart dışı (orkestratör onayıyla): `Sources/MateBridgeApp/DumpVideoCommand.swift` (yeni) ve `Sources/MateBridgeApp/main.swift` içine tek satır `DumpVideoCommand.runIfRequested()` (T-010 ile birleştirirken çakışabilir; satır importlardan hemen sonra).
 - **Varsayımlar:** `frame_seq` kodlayıcıda değil oturumda (T-014) atanır (`EncodedVideoFrame.toVideoFrame(seq:)`), böylece atılan karelerde boşluk olmaz. CODEC_CONFIG ilk çıktıda ve parametre setleri değişince gelir; yeni tüketici için `VideoPipeline.prepareForNewConsumer()` config'i yeniden kuyruğa koyar ve keyframe ister. Kuyruk taşmasında yalnız en eski keyframe-olmayan kare atılır ve keyframe istenir; sonraki delta karelerin istemci tarafında (PROTOCOL §5) yok sayılması beklenir. Kodlayıcıda en çok 3 kare uçuşta, fazlası yakalamada atlanır. Varsayılan 60 fps / 30 Mbps, `VideoSettings` ile ayarlanır. Kullanım: `--dump-video <dosya> --seconds N [--fps F] [--bitrate-kbps K]`.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Yalnızca Core birim testleri ve derleme çalıştırıldı. Sanal ekran, SCK, VideoToolbox hiç çalıştırılmadı (izin/ekran oluşturma yasaktı). Orkestratör: bundle + `--dump-video ~/x.h265 --seconds 5`; kare sayısı, keyframe>=1, dosyanın ffprobe/ffplay ile açılması, LowLatencyRateControl'ün HEVC'de M6'da kabulü, `TransferFunction=sRGB` özelliğinin VT'de kabulü (set hatası yutuluyor, VUI'yi doğrulayın), SCK'nın 420 full range + `colorMatrix` ile kare vermesi, izin yokken temiz hata mesajı. Statik ekranda SCK az kare üretir.
+- **Gözden geçirme düzeltmeleri (cihaz testi + Codex sonrası):**
+  - Statik ekran: son `CVPixelBuffer` tutulur; `requestKeyframe()` / `prepareForNewConsumer()` onu yeni PTS ile zorunlu keyframe olarak yeniden kodlar; bekleyen keyframe isteği ~1 sn boşta kalırsa da aynısı olur.
+  - Yeni tüketici: kuyruk sıfırlanır, yalnız `[CODEC_CONFIG, keyframe, ...]` görür (eski delta kareler reddedilir). `VideoFrameQueue` Core'a taşındı; iptal/`detachConsumer()` bekleyeni serbest bırakır, testli.
+  - Kodlayıcı: kilit + `stopped` bayrağı, en yeni kare kazanır (tek `pending`), `maxInFlight=2` (yukarıdaki "3" eskidi), SCK `queueDepth=5`, art arda 5 hata `onFailure`'a gider; `VTSessionSetProperty` hataları loglanır ve dump'ta yazılır.
+  - Pipeline: `start` bir kez (`alreadyStarted`), `stop` idempotent, yakalama/kodlayıcı hatasında kendini kapatıp `onFailure` çağırır.
+  - Dump: dosya kodlayıcı tap'inden yazılır (delik yok), yazma hatası çıkış kodu 3; SPS VUI'si ayrıştırılıp STREAM_CONFIG ile karşılaştırılır (uyuşmazlık çıkış kodu 4). `HEVCSPS` ayrıştırıcısı Apple'ın gerçek SPS'i ile test edildi.
+  - `VirtualDisplay` oluşturulunca HiDPI modunu `CGDisplaySetDisplayMode` ile seçer (cihazda doğrulanmadı).
+  - **T-014 için:** `captureTimeUs` host zaman saatidir (`CMClockGetHostTimeClock` = mach absolute time, µs). PING/PONG `sender_time_us`/`responder_time_us` aynı saati kullanmalı (PROTOCOL §6 saat farkı hesabı).
 - **Açık sorular:**

@@ -106,6 +106,27 @@ final class VirtualDisplay: @unchecked Sendable {
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
         self.display = created
         self.displayID = id
+        self.modeSelected = VirtualDisplay.selectMode(id, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi)
+    }
+
+    /// True if the requested pixel-size mode was made current (best effort; capture works either way
+    /// only if the default mode already matches).
+    private(set) var modeSelected = false
+
+    /// Makes the mode with the wanted pixel size current (HiDPI: 2x, i.e. points = pixels / 2), highest refresh
+    /// rate first. The mode list appears shortly after creation, so retry for up to ~2 s.
+    private static func selectMode(_ id: CGDirectDisplayID, pixelWidth: Int, pixelHeight: Int, hidpi: Bool) -> Bool {
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes as String: true] as CFDictionary
+        for _ in 0..<20 {
+            let all = (CGDisplayCopyAllDisplayModes(id, opts) as? [CGDisplayMode]) ?? []
+            let match = all
+                .filter { $0.pixelWidth == pixelWidth && $0.pixelHeight == pixelHeight
+                    && ($0.pixelWidth > $0.width) == hidpi }
+                .max { $0.refreshRate < $1.refreshRate }
+            if let match { return CGDisplaySetDisplayMode(id, match, nil) == .success }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
     }
 
     /// Releases the retained object, which removes the virtual display.

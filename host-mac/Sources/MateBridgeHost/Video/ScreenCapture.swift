@@ -50,7 +50,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
-        cfg.queueDepth = 3
+        cfg.queueDepth = 5  // > encoder in-flight limit + the retained last buffer
         cfg.showsCursor = true
         let s = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                          configuration: cfg, delegate: self)
