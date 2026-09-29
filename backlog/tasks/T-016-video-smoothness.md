@@ -1,7 +1,7 @@
 ---
 id: T-016
 title: Görüntü akıcılığı — kare zamanlaması, 120 Hz, titreşim ölçümü
-status: review
+status: done
 phase: 1
 owner: android-client-dev
 depends_on: [T-015]
@@ -46,3 +46,8 @@ files:
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbir Android yolu çalıştırılmadı. (1) `adb logcat -s 'MB/render'`: `ev=display_mode` (modlar listesi, seçilen id/Hz; HarmonyOS `preferredDisplayModeId`'yi dinliyor mu, `ev=stats` içinde `hz=`), akış bitince mod eski haline dönüyor mu. (2) Karşılaştırma: `adb shell am start -n dev.matebridge.client/.MainActivity --ei jitter 0 --ei hz 0` (eski davranış) ve `--ei jitter 1 --ei hz 120`, `--ei jitter 2`; `ev=stats` satırındaki `net_/ready_/shown_` p50/p95/p99/over ve overlay (uzun bas/F3). Shown aralığı p95/over düşmeli; `pace_add_ms` ~1 vsync periyodu civarında olmalı, uçtan uca gecikme artışı <= ~17 ms. 60->120 Hz geçişinde `vsync_period_us` ~8333'e oturuyor mu. (3) `releaseOutputBuffer(idx, ns)` bu HiSilicon codec'inde kareleri gerçekten zamanlıyor mu (shown aralığı tam vsync katları mı; değilse hepsi hemen çiziliyor demektir). (4) Kare kaybı (drop) tampon 1'de artıyor mu (çarpışma sayılır). (5) Home'a çıkıp dönünce mod geri/tekrar uygulanıyor, Choreographer durup başlıyor.
 - **Cihaz sonuçları (orkestratör, 60 fps Safari animasyonu):** 120 Hz isteği seçiliyor (mod 1, 120 Hz) ama uygulanmıyor: uygulama vsync'i 16,67 ms'de kalıyor, `mActiveModeId=3` (60 Hz) sistem yenileme "High" iken de sürüyor; HarmonyOS FrameRateManager video uygulamalarını 60'a sınırlıyor gibi. `shown_over` her konfigürasyonda 5-15/s (A: j0 hz0, B: j1 hz120, C: j2 hz120, D: j1 hz0, E/F tekrar): tamponun ölçülebilir faydası yok. Kaynak fps ~57 (Mac kare atıyor, ayrıca incelenecek). Karar: varsayılan `jitter` = 0 (ek gecikme yok), 1/2 başlatma extra'sıyla seçilebilir; hz=120 isteği varsayılan kalır (zararsız).
 - **Açık sorular:** HarmonyOS 60 Hz cap for video surfaces — try Surface.setFrameRate(120, FIXED_SOURCE) / vendor keys later. Faz (0,5) ve `MAX_SAMPLES`/eşik cihazda ayarlanmalı gerekirse. Ayrıca tampon kalıcı ayar istenirse `Settings.kt` kart kapsamına eklenmeli.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+Mac'te Safari 60 fps animasyonu, her ayar ~20 sn. `shown_over` (>1,5 vsync aralık/sn): A j0/60 Hz 5–10, B j1/120 istek 6–9, C j2/120 7–9, D j1/60 8–11; tabletin sistem ayarı Yüksek iken E j0 9–15, F j1 2–6. p95 gösterim aralığı hep 33 ms. 120 Hz modu seçilip isteniyor ama app vsync 16,67 ms'de kalıyor (`mActiveModeId=3`), HarmonyOS video yüzeyini 60 Hz'e sınırlıyor. Kaynak ~57 fps (Mac kare kaybediyor) → T-017. Sonuç: tampon varsayılan 0 (gecikme eklemiyor), ölçüm altyapısı kalıyor. Kabul kriterlerinden "takılmasız akış" karşılanmadı; kaynak Mac tarafında.
+
