@@ -1,7 +1,7 @@
 ---
 id: T-009
 title: Android iskeleti ve protokol kodeki — fixture testleriyle
-status: todo
+status: review
 phase: 1
 owner: android-client-dev
 depends_on: [T-007]
@@ -41,12 +41,22 @@ files:
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `probes/input-probe` araç zinciri (AGP 9.4.1, Gradle 9.8.0, compileSdk 37) kopyalanarak `client-android/` Gradle projesi; tek `app` modülü, yalnızca JUnit 4 test bağımlılığı.
+2. `protocol` paketi: `Messages.kt` (veri sınıfları; u8/u16/i16 -> Int, u32 -> Long, u64 -> Long ham bit deseni), `Codec.kt` (LE okuyucu/yazıcı, encode/decode, doğrulamalar), `FrameDecoder.kt` (artımlı akış çözücü, başlıkta boyut sınırı, bilinmeyen tip atlama, kalıcı hata), `Coords.kt` (normalize, basınç, eğim).
+3. Testler: fixture okuyucu (yorum/boşluk atar), elle yazılmış beklenen değerler, dizindeki her .hex için vaka kontrolü, 1 bayt ve rastgele parça besleme, ek kural testleri, Coords testleri.
+4. `MainActivity`: tam ekran, yatay, ekran açık, sabit metin.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** bu branch'in tek commit'i (SHA orkestratör tarafından branch ucundan okunur)
+- **Dokunulan dosyalar:** yalnızca `client-android/` (Gradle iskeleti, `app/`, `MainActivity`, `protocol/{Messages,Codec,FrameDecoder,Coords}.kt`, testler `FixtureTest`, `CodecRulesTest`, `CoordsTest`) ve bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - Tip seçimi: u8/u16/i16 -> `Int`, u32 -> `Long`, u64 -> `Long` (ham bit deseni; zaman damgaları pozitif aralıkta).
+  - Decode her bilinen tipi yöne bakmadan çözer (fixture testi iki yönü de gerektiriyor).
+  - Ek doğrulamalar (PROTOCOL.md açıkça hata demiyor ama makul): `str8` > 64 bayt veya geçersiz UTF-8 -> hata; PEN `tilt` -32768 -> -32767 (§1). `status/reason/codec/phase` ham Int, aralık denetimi yok (ileri uyumluluk).
+  - `FrameDecoder` hata sonrası kalıcı başarısız; çağıran bağlantıyı kapatır. Boyut sınırı yalnızca başlıktan denetlenir (bilinmeyen tipte de geçerli).
+  - Encode, geçersiz girdiyi `IllegalArgumentException` ile reddeder (pen sayısı, dt sırası, NaN vb.).
+  - `targetSdk 31`, `compileSdk 37`, AGP 9.4.1, Gradle 9.8.0 probe ile aynı. `kotlinx-coroutines` henüz eklenmedi (gerek yok).
+  - Fixture dizini Gradle test görevindeki `matebridge.fixtures` sistem özelliğiyle bulunur.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh` geçti (JVM testleri dahil). Cihazda: APK kurulunca `MainActivity` yatay, tam ekran, siyah zeminde "MateBridge — bağlantı yok" göstermeli; ekran açık kalmalı. Ağ/video/girdi yok.
+- **Açık sorular:** PROTOCOL.md `PEN_GESTURE`/`SCROLL.phase`/`POINTER_ABS.source` için geçersiz değer davranışını belirtmiyor (PEN_GESTURE bilinmeyeni yok sayılır; diğerleri ham geçiriliyor).
