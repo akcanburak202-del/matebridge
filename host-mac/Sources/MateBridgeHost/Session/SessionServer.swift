@@ -16,10 +16,12 @@ public final class VideoLink: @unchecked Sendable {
     public let configID: UInt16
     private let connection: NWConnection
     private let lock = NSLock()
+    private let logger: SessionLogger
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
 
-    fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection) {
+    fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection, logger: SessionLogger) {
+        self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
         self.connection = connection
@@ -36,9 +38,16 @@ public final class VideoLink: @unchecked Sendable {
         set { lock.lock(); readyHandler = newValue; lock.unlock() }
     }
 
-    /// Returns false (nothing sent) while `maxInFlight` sends are outstanding. `completion(true)` means written.
+    /// Encodes and sends one frame. Returns false (nothing sent) while `maxInFlight` sends are outstanding
+    /// or when the frame is not a valid single-fragment VIDEO_FRAME within the 16 MiB payload limit
+    /// (logged). `completion(true)` means written.
     @discardableResult
-    public func send(_ bytes: [UInt8], completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
+    public func send(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
+        guard let bytes = try? Message.videoFrame(frame).encode() else {
+            logger.log(.warning, "video_frame_refused", sessionID: sessionID, generation: configID,
+                       fields: "reason=invalid_or_oversized")
+            return false
+        }
         lock.lock()
         guard inFlight < Self.maxInFlight else { lock.unlock(); return false }
         inFlight += 1
@@ -93,6 +102,7 @@ public final class SessionServer: @unchecked Sendable {
     public static let bonjourType = "_matebridge._tcp"
 
     private let queue = DispatchQueue(label: "dev.matebridge.session")
+    private let queueKey = DispatchSpecificKey<Bool>()
     private let handlers: Handlers
     private let store: ApprovedDeviceStore
     private let requestedControlPort: UInt16
@@ -130,6 +140,7 @@ public final class SessionServer: @unchecked Sendable {
                 hostName: String = Host.current().localizedName ?? "Mac", controlPort: UInt16 = 0,
                 makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig = SessionServer.defaultStreamConfig) {
         self.handlers = handlers
+        queue.setSpecific(key: queueKey, value: true)
         self.store = store
         self.requestedControlPort = controlPort
         let known = store.load()
@@ -178,6 +189,9 @@ public final class SessionServer: @unchecked Sendable {
     /// Established sessions keep running; only new connections are affected meanwhile.
     private func listenersFailed(_ what: String) {
         fail(what)
+        // A restart changes the video port that live clients hold, so end every session first
+        // (release input, BYE SHUTTING_DOWN, close). Clients reconnect and learn the new port.
+        apply(machine.shutdown())
         controlListener?.cancel()
         videoListener?.cancel()
         controlListener = nil
@@ -197,8 +211,11 @@ public final class SessionServer: @unchecked Sendable {
 
     /// Releases input and sends BYE(SHUTTING_DOWN) to every peer. Delivery of the BYE is best effort:
     /// waits up to 200 ms for the sends to be processed, then returns regardless.
+    /// Safe to call from any thread, including a handler running on the session queue: there it runs
+    /// inline and does not wait for the BYE flush (nothing could complete while blocked on the queue).
     public func stop() {
-        queue.sync {
+        let onQueue = DispatchQueue.getSpecific(key: queueKey) == true
+        let body = { [self] in
             stopped = true
             apply(machine.shutdown())
             tickTimer?.cancel()
@@ -209,7 +226,12 @@ public final class SessionServer: @unchecked Sendable {
             videoListener = nil
             setState(.stopped)
         }
-        _ = flushGroup.wait(timeout: .now() + .milliseconds(200))  // completions run on `queue`, so wait outside it
+        if onQueue {
+            body()
+        } else {
+            queue.sync(execute: body)
+            _ = flushGroup.wait(timeout: .now() + .milliseconds(200))  // completions run on `queue`, so wait outside it
+        }
     }
 
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
@@ -466,7 +488,7 @@ public final class SessionServer: @unchecked Sendable {
                 handlers.sessionEnded()
             case .videoAttached(let vid, _, let sid, let configID):
                 if let c = videoConnections[vid] {
-                    let link = VideoLink(sessionID: sid, configID: configID, connection: c)
+                    let link = VideoLink(sessionID: sid, configID: configID, connection: c, logger: logger)
                     videoLinks[vid] = link
                     handlers.videoAttached(link)
                 }

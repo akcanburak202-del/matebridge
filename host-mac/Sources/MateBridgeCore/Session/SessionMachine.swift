@@ -158,8 +158,9 @@ public struct SessionMachine: Sendable {
 
     /// The user answered the approval dialog. Ignored unless the connection is still pending.
     public mutating func approvalDecided(_ id: ConnectionID, approved: Bool, now: UInt64) -> [SessionAction] {
-        guard case .pending(let hello, _)? = connections[id]?.phase else { return [] }
-        guard approved else {
+        guard case .pending(let hello, let deadline)? = connections[id]?.phase else { return [] }
+        // An answer that arrives after the deadline (before tick ran) counts as a rejection.
+        guard approved, now < deadline else {
             connections[id] = nil
             return [.send(id, ack(.rejected)), .close(id),
                     .log(.info, ev: "approval_rejected", conn: id, fields: "")]

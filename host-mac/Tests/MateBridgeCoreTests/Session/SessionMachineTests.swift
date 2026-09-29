@@ -127,6 +127,17 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.approvalDecided(A, approved: true, now: 61 * sec).isEmpty)
     }
 
+    @Test func lateApprovalIsRejected() {
+        var m = makeMachine()
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(), now: 0)
+        let actions = m.approvalDecided(A, approved: true, now: 60 * sec)  // tick has not run yet
+        #expect(ackStatuses(actions, to: A) == [.rejected])
+        #expect(!m.approvedDevices.contains(device(1)))
+        #expect(!actions.contains { if case .rememberDevice = $0 { true } else { false } })
+        #expect(m.status == .idle)
+    }
+
     @Test func pendingConnectionDropCancelsApproval() {
         var m = makeMachine()
         _ = m.connectionOpened(A, now: 0)
