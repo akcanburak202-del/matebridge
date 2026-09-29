@@ -285,11 +285,14 @@ object Codec {
                 val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(1)
                 val index = r.u16(); val count = r.u16(); r.skip(2)
                 val size = r.u32()
-                // TCP v0: single fragment, data is the rest of the payload.
-                val data = r.bytes(r.remaining())
-                if (index != 0 || count != 1 || size != data.size.toLong()) {
+                // TCP v0: single fragment; data is exactly frame_size bytes.
+                if (index != 0 || count != 1) {
                     throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "bad video fragment fields")
                 }
+                if (size > r.remaining()) {
+                    throw ProtocolException(ProtocolException.Kind.SHORT_PAYLOAD, "video data shorter than frame_size")
+                }
+                val data = r.bytes(size.toInt()) // exactly frame_size bytes; trailing bytes are future fields
                 VideoFrame(seq, capture, flags, index, count, size, Bytes(data))
             }
             else -> null

@@ -244,10 +244,23 @@ class CodecRulesTest {
     fun videoFragmentFieldsMustDescribeSingleFragment() {
         val d = ByteArray(4)
         assertTrue(decode(frame(MsgType.VIDEO_FRAME, videoPayload(0, 1, 4, d)), FrameDecoder.video()) is VideoFrame)
-        for (p in listOf(videoPayload(1, 1, 4, d), videoPayload(0, 2, 4, d), videoPayload(0, 0, 4, d), videoPayload(0, 1, 5, d), videoPayload(0, 1, 3, d))) {
+        for (p in listOf(videoPayload(1, 1, 4, d), videoPayload(0, 2, 4, d), videoPayload(0, 0, 4, d))) {
             val dec = FrameDecoder.video(); dec.feed(frame(MsgType.VIDEO_FRAME, p))
             expectError(ProtocolException.Kind.INVALID_VALUE, dec)
         }
+        // fewer data bytes than frame_size is a protocol error
+        val dec = FrameDecoder.video(); dec.feed(frame(MsgType.VIDEO_FRAME, videoPayload(0, 1, 5, d)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+        val huge = FrameDecoder.video(); huge.feed(frame(MsgType.VIDEO_FRAME, videoPayload(0, 1, -1, d)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, huge)
+    }
+
+    @Test
+    fun videoTrailingBytesAfterDataAreIgnored() {
+        val p = videoPayload(0, 1, 3, byteArrayOf(1, 2, 3, 9, 9))
+        val f = decode(frame(MsgType.VIDEO_FRAME, p), FrameDecoder.video()) as VideoFrame
+        assertEquals(Bytes(byteArrayOf(1, 2, 3)), f.data)
+        assertEquals(3L, f.frameSize)
     }
 
     @Test
