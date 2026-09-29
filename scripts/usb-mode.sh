@@ -15,11 +15,21 @@ if [ -z "$ADB" ]; then
   exit 1
 fi
 
+# `adb reverse` tunnels live in the adb server and vanish when it restarts. A server spawned by a
+# short-lived shell can be killed with that shell, so run it under launchd where it survives.
+ensure_server() {
+  if ! launchctl list dev.matebridge.adb >/dev/null 2>&1; then
+    "$ADB" kill-server >/dev/null 2>&1 || true
+    launchctl submit -l dev.matebridge.adb -- "$ADB" -a nodaemon server
+    sleep 2
+  fi
+}
+
 # The adb server occasionally fails to start; retry a few times.
 adb_retry() {
   local i out
   for i in 1 2 3 4; do
-    "$ADB" start-server >/dev/null 2>&1 || true
+    ensure_server
     # Keep only the command's own output; the server prints "daemon started" lines we must not parse.
     if out=$("$ADB" "$@" 2>&1); then printf '%s\n' "$out" | grep -v '^\* daemon'; return 0; fi
     case "$out" in
@@ -51,6 +61,7 @@ case "$cmd" in
   off)
     require_device
     for p in "${PORTS[@]}"; do adb_retry reverse --remove "tcp:$p" >/dev/null 2>&1 || true; done
+    launchctl remove dev.matebridge.adb 2>/dev/null || true
     echo "USB mode off."
     ;;
   status)
