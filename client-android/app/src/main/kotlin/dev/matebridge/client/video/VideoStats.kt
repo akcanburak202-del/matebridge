@@ -11,6 +11,12 @@ class VideoStats {
         val bytesReceived: Long,
         /** Average capture-to-output latency in the window, or null when unknown (no clock offset yet). */
         val latencyAvgUs: Long? = null,
+        /** Gaps between frame arrivals from the network. */
+        val network: IntervalSummary = IntervalSummary.EMPTY,
+        /** Gaps between decoded frames becoming ready. */
+        val ready: IntervalSummary = IntervalSummary.EMPTY,
+        /** Gaps between frames shown on screen (MediaCodec frame-rendered callback). */
+        val shown: IntervalSummary = IntervalSummary.EMPTY,
     )
 
     private var received = 0L
@@ -25,10 +31,23 @@ class VideoStats {
     private var latencySumUs = 0L
     private var latencyCount = 0L
 
+    private val networkGaps = IntervalHistogram()
+    private val readyGaps = IntervalHistogram()
+    private val shownGaps = IntervalHistogram()
+
     /** Maps a host capture time to the latency now (client clock), or null if unknown. Set by the session layer. */
     @Volatile var latencyOf: ((Long) -> Long?)? = null
 
-    @Synchronized fun onReceived(size: Int) { received++; bytes += size }
+    @Synchronized fun onReceived(size: Int, nowUs: Long = System.nanoTime() / 1000, isConfig: Boolean = false) {
+        received++; bytes += size
+        if (!isConfig) networkGaps.mark(nowUs)
+    }
+
+    /** A frame reached the screen at [nowUs] (client monotonic clock). */
+    fun onShown(nowUs: Long) = shownGaps.mark(nowUs)
+
+    /** Stream restart: gaps must not span it. */
+    fun breakGaps() { networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence() }
     @Synchronized fun onDropped(n: Int) { dropped += n }
     @Synchronized fun onRendered() { rendered++ }
 
@@ -43,6 +62,7 @@ class VideoStats {
     /** Decoder produced an output for [ptsUs]. */
     @Synchronized fun onOutput(ptsUs: Long, nowUs: Long) {
         decoded++
+        readyGaps.mark(nowUs)
         inputTimes.remove(ptsUs)?.let { decodeSumUs += (nowUs - it).coerceAtLeast(0); decodeCount++ }
         captureTimes.remove(ptsUs)?.let { cap ->
             latencyOf?.invoke(cap)?.let { latencySumUs += it; latencyCount++ }
@@ -53,7 +73,8 @@ class VideoStats {
     @Synchronized fun snapshot(reset: Boolean = false): Snapshot {
         val s = Snapshot(received, decoded, rendered, dropped,
             if (decodeCount > 0) decodeSumUs / decodeCount else 0, bytes,
-            if (latencyCount > 0) latencySumUs / latencyCount else null)
+            if (latencyCount > 0) latencySumUs / latencyCount else null,
+            networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset))
         if (reset) {
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0

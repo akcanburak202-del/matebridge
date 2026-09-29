@@ -35,6 +35,10 @@ class VideoRenderer(
     initialConfig: StreamConfig,
     private val onKeyframeRequest: (Int) -> Unit,
     private val onGiveUp: (String) -> Unit = {},
+    /** Vsync grid fed by the UI thread's Choreographer; without samples frames render immediately. */
+    private val vsync: VsyncClock = VsyncClock(),
+    /** Jitter buffer in content frames, 0..2. 0 = render each frame as soon as decoded (T-015 behavior). */
+    bufferFrames: Int = 1,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -45,6 +49,10 @@ class VideoRenderer(
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
+
+    /** Jitter buffer size in content frames (0..2); takes effect on the next frame. */
+    @Volatile var bufferFrames: Int = bufferFrames.coerceIn(0, 2)
+        set(v) { field = v.coerceIn(0, 2) }
     private val queue = FrameQueue(stats)
 
     private class Attachment(val surface: Surface, val previous: Thread?) {
@@ -181,9 +189,14 @@ class VideoRenderer(
             codec = createCodec(att.surface)
             val info = MediaCodec.BufferInfo()
             var held: VideoFrame? = null
+            val pacer = FramePacer(vsync, bufferFrames, if (config.fps > 0) 1_000_000_000L / config.fps else 0)
+            codec.setOnFrameRenderedListener(
+                { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
+                android.os.Handler(android.os.Looper.getMainLooper()),
+            )
             var loggedFormat = false
             while (att.active) {
-                if (drainOutput(codec, info) && !loggedFormat) {
+                if (drainOutput(codec, info, pacer) && !loggedFormat) {
                     loggedFormat = true
                     logOutputFormat(codec)
                 }
@@ -219,18 +232,33 @@ class VideoRenderer(
     private var formatChanged = false
 
     /**
-     * Releases every ready output; only the newest is rendered, skipped ones count as dropped.
+     * Releases every ready output. With [bufferFrames] == 0 only the newest is rendered at once and the
+     * skipped ones count as dropped (T-015 behavior). Otherwise each frame gets a vsync-aligned render
+     * timestamp from [pacer]; a frame that would exceed the bounded backlog shares the previous slot, so
+     * the compositor shows the newer one (counted as dropped).
      * Returns true once an output-format change has been seen (for one-time logging).
      */
-    private fun drainOutput(codec: MediaCodec, info: MediaCodec.BufferInfo): Boolean {
+    private fun drainOutput(codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer): Boolean {
+        pacer.bufferFrames = bufferFrames
+        val paced = pacer.bufferFrames > 0
         var prev = -1
         formatChanged = false
         while (true) {
             val idx = codec.dequeueOutputBuffer(info, 0)
             if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) { formatChanged = true; continue }
             if (idx < 0) break
-            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                stats.onOutput(info.presentationTimeUs, nowUs())
+            val isFrame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
+            if (isFrame) stats.onOutput(info.presentationTimeUs, nowUs())
+            if (paced) {
+                if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
+                val d = pacer.schedule(System.nanoTime())
+                if (d == null) codec.releaseOutputBuffer(idx, true)
+                else {
+                    codec.releaseOutputBuffer(idx, d.renderNs)
+                    if (d.collided) stats.onDropped(1)
+                }
+                stats.onRendered()
+                continue
             }
             if (prev >= 0) {
                 codec.releaseOutputBuffer(prev, false)

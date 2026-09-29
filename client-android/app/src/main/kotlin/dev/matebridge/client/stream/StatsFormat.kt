@@ -1,6 +1,7 @@
 package dev.matebridge.client.stream
 
 import dev.matebridge.client.protocol.Stats
+import dev.matebridge.client.video.IntervalSummary
 import dev.matebridge.client.video.VideoStats
 import java.util.Locale
 
@@ -20,7 +21,7 @@ object StatsFormat {
     )
 
     /** Overlay lines: FPS, bitrate, decode time, estimated latency, dropped frames. */
-    fun overlay(s: VideoStats.Snapshot, intervalMs: Long, latencyAvgUs: Long?): String {
+    fun overlay(s: VideoStats.Snapshot, intervalMs: Long, latencyAvgUs: Long?, pacing: String? = null): String {
         val secs = intervalMs.coerceAtLeast(1) / 1000.0
         val fps = s.rendered / secs
         val mbps = s.bytesReceived * 8 / secs / 1_000_000.0
@@ -28,6 +29,21 @@ object StatsFormat {
         return String.format(
             Locale.ROOT, "FPS %.1f | %.1f Mbps\nÇözme %.1f ms | Gecikme %s\nAtılan %d",
             fps, mbps, s.decodeTimeAvgUs / 1000.0, lat, s.dropped,
-        )
+        ) + (if (pacing != null) "\n$pacing" else "") +
+            "\n" + gaps("Ağ", s.network) + "\n" + gaps("Hazır", s.ready) + "\n" + gaps("Gösterim", s.shown)
     }
+
+    /** "Ağ 16.7/24.1/40.2 ms >16.7:5": p50/p95/p99 of the gap between two frames, and the count over 16.7 ms. */
+    fun gaps(label: String, g: IntervalSummary): String = String.format(
+        Locale.ROOT, "%s %.1f/%.1f/%.1f ms >16.7:%d",
+        label, g.p50Us / 1000.0, g.p95Us / 1000.0, g.p99Us / 1000.0, g.overThreshold,
+    )
+
+    /** Log fields for one interval summary, e.g. `net_p50_us=... net_p95_us=... net_p99_us=... net_over=...`. */
+    fun gapFields(prefix: String, g: IntervalSummary) =
+        "${prefix}_p50_us=${g.p50Us} ${prefix}_p95_us=${g.p95Us} ${prefix}_p99_us=${g.p99Us} ${prefix}_over=${g.overThreshold}"
+
+    /** Overlay line for the display mode and jitter buffer. */
+    fun pacingLine(modeHz: Float, bufferFrames: Int) =
+        String.format(Locale.ROOT, "Mod %.0f Hz | Tampon %d", modeHz, bufferFrames)
 }

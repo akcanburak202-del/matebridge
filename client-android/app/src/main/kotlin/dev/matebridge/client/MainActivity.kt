@@ -7,7 +7,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.hardware.display.DisplayManager
+import android.view.Choreographer
 import android.view.KeyEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -25,9 +28,12 @@ import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.session.MbLog
 import dev.matebridge.client.stream.ClockSync
+import dev.matebridge.client.stream.DisplayModeInfo
+import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.VideoRenderer
+import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.session.Endpoint
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
@@ -66,6 +72,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var statsOn = false
     private var lastStatsMs = 0L
 
+    // T-016 smoothness knobs. Launch extras: `--ei jitter 0|1|2` (jitter buffer in content frames,
+    // 0 = render at once as in T-015) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
+    private var bufferFrames = 1
+    private var targetHz = 120
+    private val vsync = VsyncClock()
+    private var choreographerOn = false
+    private var modeApplied = false
+    private val vsyncCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            vsync.onVsync(frameTimeNanos)
+            if (choreographerOn) Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) { vsync.setNominalHz(currentHz()) }
+    }
+
     /**
      * The one place view pixels map to normalized video coordinates (input capture will use it).
      * Built from the actual laid-out SurfaceView (integer size, `video.left/top`), so it is in
@@ -84,6 +109,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        bufferFrames = intent?.getIntExtra("jitter", 1)?.coerceIn(0, 2) ?: 1
+        targetHz = intent?.getIntExtra("hz", 120) ?: 120
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -163,6 +190,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceValid = true
         if (streamConfig != null) renderer?.attachSurface(holder.surface)
+        if (modeApplied) setSurfaceFrameRate(true)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
@@ -179,11 +207,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             config,
             onKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason)) },
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
+            vsync = vsync,
+            bufferFrames = bufferFrames,
         ).also {
             it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
             renderer = it
         }
         layoutVideo()
+        applyRefreshRate()
         lastStatsMs = SystemClock.elapsedRealtime()
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
         if (!r.attached && surfaceValid) r.attachSurface(video.holder.surface)
@@ -194,6 +225,50 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.detachSurface()
         streamConfig = null
         statsView.text = ""
+        releaseRefreshRate()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentHz(): Float = windowManager.defaultDisplay.refreshRate
+
+    /** While streaming, prefer the supported mode closest to [targetHz] at the current resolution. */
+    @Suppress("DEPRECATION")
+    private fun applyRefreshRate() {
+        if (modeApplied || targetHz <= 0) return
+        val d = windowManager.defaultDisplay
+        val cur = d.mode
+        val all = d.supportedModes.map { DisplayModeInfo(it.modeId, it.physicalWidth, it.physicalHeight, it.refreshRate) }
+        val pick = DisplayModePicker.pick(
+            all, DisplayModeInfo(cur.modeId, cur.physicalWidth, cur.physicalHeight, cur.refreshRate), targetHz.toFloat(),
+        )
+        MbLog.i(
+            "display_mode",
+            "requested_hz=$targetHz current_id=${cur.modeId} current_hz=${cur.refreshRate} " +
+                "picked_id=${pick?.id ?: -1} picked_hz=${pick?.refreshHz ?: -1f} modes=" +
+                all.joinToString(",") { "${it.id}:${it.refreshHz.roundToInt()}" },
+            "render",
+        )
+        if (pick == null) return
+        modeApplied = true
+        window.attributes = window.attributes.also { it.preferredDisplayModeId = pick.id }
+        vsync.setNominalHz(pick.refreshHz)
+        setSurfaceFrameRate(true)
+    }
+
+    private fun releaseRefreshRate() {
+        if (!modeApplied) return
+        modeApplied = false
+        setSurfaceFrameRate(false)
+        window.attributes = window.attributes.also { it.preferredDisplayModeId = 0 }
+    }
+
+    private fun setSurfaceFrameRate(on: Boolean) {
+        if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
+        try {
+            video.holder.surface.setFrameRate(if (on) targetHz.toFloat() else 0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+        } catch (e: Exception) {
+            MbLog.w("set_frame_rate_failed", "err=${e.javaClass.simpleName}", "render")
+        }
     }
 
     /** Fits the SurfaceView to the stream aspect so the surface equals the video area (letterbox = black bands). */
@@ -229,7 +304,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val s = r.stats.snapshot(reset = true)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
-        if (statsOn) statsView.text = StatsFormat.overlay(s, interval, lat)
+        if (statsOn) {
+            statsView.text = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames))
+        }
         val fps = s.rendered * 1000.0 / interval.coerceAtLeast(1)
         MbLog.i(
             "stats",
@@ -240,7 +317,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.i(
             "stats",
             "fps=${"%.1f".format(java.util.Locale.ROOT, fps)} latency_us=${lat ?: -1} " +
-                "clock_offset_us=${clock.offsetUs() ?: 0} rtt_us=${clock.bestRttUs() ?: -1}",
+                "clock_offset_us=${clock.offsetUs() ?: 0} rtt_us=${clock.bestRttUs() ?: -1} " +
+                "hz=${"%.0f".format(java.util.Locale.ROOT, currentHz())} buffer=${r.bufferFrames} " +
+                StatsFormat.gapFields("net", s.network) + " " + StatsFormat.gapFields("ready", s.ready) + " " +
+                StatsFormat.gapFields("shown", s.shown),
             "render",
         )
     }
@@ -254,6 +334,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         render(SessionUi.Searching)
         ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
+        if (!choreographerOn) {
+            choreographerOn = true
+            Choreographer.getInstance().postFrameCallback(vsyncCallback)
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
+        }
         discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
     }
 
@@ -261,6 +346,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         started = false
         dev.matebridge.client.session.MbLog.i("activity_stop")
         ui.removeCallbacks(ticker)
+        choreographerOn = false
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+        (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(displayListener)
         discovery?.stop()
         discovery = null
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
