@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MateBridge</string>
+    <string name="state_idle">Hazır</string>
+    <string name="state_searching">Mac aranıyor…</string>
+    <string name="state_connecting">%1$s adresine bağlanılıyor…</string>
+    <string name="state_awaiting_approval">Mac\'te onay bekleniyor (%1$s)</string>
+    <string name="state_connected">Bağlı: %1$s\nGelen kare: %2$d</string>
+    <string name="state_disconnected">Bağlantı yok (%1$s)\n%2$d sn içinde yeniden denenecek</string>
+    <string name="state_failed">Bağlanılamadı (%1$s)</string>
+    <string name="cause_lost">bağlantı koptu</string>
+    <string name="cause_host_closed">Mac kapattı</string>
+    <string name="cause_busy">Mac meşgul</string>
+    <string name="cause_rejected">Mac reddetti</string>
+    <string name="cause_version_mismatch">sürüm uyumsuz</string>
+    <string name="cause_protocol_error">protokol hatası</string>
+    <string name="cause_connect_failed">Mac\'e ulaşılamadı</string>
+    <string name="endpoint_hint">IP:port (örn. 192.168.1.20:7420)</string>
+    <string name="connect">Bağlan</string>
+    <string name="invalid_endpoint">Geçersiz adres, IP:port biçiminde girin</string>
+</resources>
