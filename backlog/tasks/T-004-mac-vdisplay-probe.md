@@ -1,7 +1,7 @@
 ---
 id: T-004
 title: Mac sanal ekran probu — 2800×1840 sanal ekran oluştur ve yakala
-status: review
+status: done
 phase: 0
 owner: mac-host-dev
 depends_on: []
@@ -20,15 +20,15 @@ Projenin en kritik Mac varsayımını doğrulamak: macOS 27'de `CGVirtualDisplay
 
 ## Kabul kriterleri
 
-- [ ] Swift paketi, komut satırı aracı: `swift run vdisplay-probe --width 2800 --height 1840 --hidpi --seconds 30`.
-- [ ] Sanal ekran oluşur. Aktif ekran listesinde ID, piksel boyutu ve nokta boyutu (HiDPI ise 1400×920 pt) yazdırılır.
-- [ ] Mevcut modlar listelenir (HiDPI 2x modu dahil). Hangi modun seçildiği yazdırılır.
-- [ ] ScreenCaptureKit ile bu ekran yakalanır: ilk kare PNG olarak `probes/vdisplay-probe/out/` altına kaydedilir. 10 saniye boyunca kare sayısı/FPS ölçülür (ekranda hareket yokken ve varken).
-- [ ] Screen Recording izni yoksa anlaşılır hata mesajı verilir, çökmez.
-- [ ] Süre dolunca veya Ctrl+C'de sanal ekran temizce kaldırılır.
-- [ ] Private API tek bir `VirtualDisplay.swift` dosyasında. android-display'den uyarlanan kısımlar yorumla kaynak gösterir.
-- [ ] `out/` dizini `.gitignore`'da.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] Swift paketi, komut satırı aracı: `swift run vdisplay-probe --width 2800 --height 1840 --hidpi --seconds 30`.
+- [x] Sanal ekran oluşur. Aktif ekran listesinde ID, piksel boyutu ve nokta boyutu (HiDPI ise 1400×920 pt) yazdırılır.
+- [x] Mevcut modlar listelenir (HiDPI 2x modu dahil). Hangi modun seçildiği yazdırılır.
+- [x] ScreenCaptureKit ile bu ekran yakalanır: ilk kare PNG olarak `probes/vdisplay-probe/out/` altına kaydedilir. 10 saniye boyunca kare sayısı/FPS ölçülür (ekranda hareket yokken ve varken).
+- [x] Screen Recording izni yoksa anlaşılır hata mesajı verilir, çökmez.
+- [x] Süre dolunca veya Ctrl+C'de sanal ekran temizce kaldırılır.
+- [x] Private API tek bir `VirtualDisplay.swift` dosyasında. android-display'den uyarlanan kısımlar yorumla kaynak gösterir.
+- [x] `out/` dizini `.gitignore`'da.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -46,3 +46,10 @@ SwiftPM paketi `probes/vdisplay-probe`: `ProbeCore` (arg parse, mod seçimi, kar
   4. İzin kapalıyken çalıştır: çıkış kodu 77 ve açıklayıcı mesaj beklenir.
   Olası sorunlar: applySettings false dönerse mod/hiDPI kombinasyonunu ayarla; SCK ekranı görmezse bekleme süresini (1 sn) artır; CGDisplaySetDisplayMode başarısız olabilir.
 - **Açık sorular:** Yok.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+- `--hidpi --seconds 15` → ekran id=5 oluştu, seçilen mod 1400×920 pt / 2800×1840 px @60 (setMode=ok), `first-frame.png` 2800×1840. Boşta pencere ~17 fps (Terminal'deki animasyon yüzünden ekran boş değildi).
+- SIGINT (6. saniyede) → temiz kaldırıldı, sonrasında yalnız 1920×1080 fiziksel ekran kaldı.
+- İzin yokken → çıkış kodu 77, açıklayıcı mesaj.
+- Küçük kusur: "active displays" satırı mod seçiminden önce yazdırıldığı için 1400x920 px gösteriyor; seçilen mod satırı doğru. Ürün kodunda liste mod seçiminden sonra yazdırılmalı.
