@@ -116,17 +116,19 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 ### Aşama 1 — Görüntü (Wi-Fi üzerinden sanal ekran)
 
-- [ ] Repo iskeleti (bkz. §7), iki uygulama derleniyor.
-- [ ] Mac: tablet çözünürlüğünde sanal ekran → ScreenCaptureKit → VideoToolbox → ağ.
-- [ ] Android: Bonjour ile Mac'i bulur → bağlanır → MediaCodec → tam ekran.
-- [ ] Mac'te bağlantı onayı (bkz. §5.4).
-- [ ] En yeni kare kazanır: her aşamada kuyruk en fazla 1–2 kare.
-- [ ] İstatistik katmanı: FPS, bitrate, kodlama ve ağ süresi.
-- [ ] Bağlantı kopunca "Bağlantı yok" gösterilir, ağ geri gelince yeniden bağlanır.
-- [ ] TCP ve UDP video karşılaştırması. Kazanan yol seçilir.
-- [ ] Aynı kodla USB modu (`adb reverse`) çalışıyor.
+- [x] Repo iskeleti (bkz. §7), iki uygulama derleniyor.
+- [x] Mac: tablet çözünürlüğünde sanal ekran → ScreenCaptureKit → VideoToolbox → ağ.
+- [x] Android: Bonjour ile Mac'i bulur → bağlanır → MediaCodec → tam ekran.
+- [x] Mac'te bağlantı onayı (bkz. §5.4).
+- [x] En yeni kare kazanır: her aşamada kuyruk en fazla 1–2 kare.
+- [x] İstatistik katmanı: FPS, bitrate, kodlama ve ağ süresi.
+- [x] Bağlantı kopunca "Bağlantı yok" gösterilir, ağ geri gelince yeniden bağlanır.
+- [ ] TCP ve UDP video karşılaştırması. Kazanan yol seçilir. (Ertelendi: USB ve Wi-Fi ölçümlerinde ağ tarafı darboğaz değil; akıcılık Faz 5.)
+- [x] Aynı kodla USB modu (`adb reverse`) çalışıyor.
 
 **Bitti:** Tablet Mac'in ikinci ekranı olarak 60 FPS'e yakın çalışıyor. Yazılar tabletin OLED'inde net. 30 dakika boyunca bellek şişmiyor, donma yok.
+
+**Durum (2026-09-30):** Tamamlandı. Kanıt: NOTES 2026-09-29/30. Akıcılık iyileştirmesi Faz 5'e taşındı.
 
 ### Aşama 2 — Kalem ve dokunma (projenin asıl farkı)
 

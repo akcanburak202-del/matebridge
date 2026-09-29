@@ -1,7 +1,7 @@
 ---
 id: T-021
 title: Android — "USB ile bağlan" seçeneği
-status: review
+status: done
 phase: 1
 owner: android-client-dev
 depends_on: [T-015]
@@ -19,11 +19,11 @@ USB modunda (PROTOCOL.md §3.1) tabletin `127.0.0.1:47001`'e tek dokunuşla bağ
 
 ## Kabul kriterleri
 
-- [ ] Bağlantı panelinde **"USB ile bağlan"** düğmesi: `127.0.0.1:47001`'e elle mod olarak bağlanır (NSD keşfi bu sırada otomatik bağlanmaz). Seçim hatırlanır; bir sonraki açılışta USB modu seçiliyse önce USB denenir, 3 sn içinde bağlanamazsa panelde "USB bağlantısı yok — adb reverse kurulu mu?" gösterilir ve Wi-Fi keşfine dönmek için "Wi-Fi ile bağlan" düğmesi olur.
-- [ ] Video bağlantısı, kontrol bağlantısının adresini kullanır (127.0.0.1 + `HELLO_ACK.video_port`); mevcut davranış doğrulanır, gerekirse düzeltilir.
-- [ ] İstatistik katmanında bağlantı türü (USB / Wi-Fi) görünür; `MB/session` logunda `transport=usb|wifi`.
-- [ ] Mod seçimi mantığı saf ve JVM testli.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] Bağlantı panelinde **"USB ile bağlan"** düğmesi: `127.0.0.1:47001`'e elle mod olarak bağlanır (NSD keşfi bu sırada otomatik bağlanmaz). Seçim hatırlanır; bir sonraki açılışta USB modu seçiliyse önce USB denenir, 3 sn içinde bağlanamazsa panelde "USB bağlantısı yok — adb reverse kurulu mu?" gösterilir ve Wi-Fi keşfine dönmek için "Wi-Fi ile bağlan" düğmesi olur.
+- [x] Video bağlantısı, kontrol bağlantısının adresini kullanır (127.0.0.1 + `HELLO_ACK.video_port`); mevcut davranış doğrulanır, gerekirse düzeltilir.
+- [x] İstatistik katmanında bağlantı türü (USB / Wi-Fi) görünür; `MB/session` logunda `transport=usb|wifi`.
+- [x] Mod seçimi mantığı saf ve JVM testli.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -36,3 +36,8 @@ Saf mantık `session/ConnectMode.kt` (Transport, usbEndpoint, transportOf, autoD
 - **Varsayımlar:** Varsayılan mod Wi-Fi. USB modunda host'a ulaşılamazsa makine yeniden denemeye devam eder; 3 sn sonra yalnızca durum metni ipucuna dönüşür. Ulaşıldı = AwaitingApproval/Connected görüldü. Tür USB = kontrol host'u loopback. Stats katmanına "Bağlantı: USB/Wi-Fi" satırı, logda `ev=transport transport=usb|wifi`.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `adb reverse tcp:47001/47002` ile "USB ile bağlan" akışı; reverse yokken 3 sn sonra ipucu; "Wi-Fi ile bağlan" ile NSD'ye dönüş; uygulama yeniden açılınca mod hatırlanıyor mu; stats katmanı (uzun bas/F3) ve `adb logcat -s MB/session` çıktısı.
 - **Açık sorular:**
+
+## Orkestratör cihaz testi (2026-09-30)
+
+Cihaz: "USB ile bağlan" ile 127.0.0.1:47001'e bağlandı, katmanda "Bağlantı: USB". Yeniden açılışta USB seçimi hatırlandı. 30 dk dayanıklılık testi USB üzerinden yapıldı (kopma 0).
+
