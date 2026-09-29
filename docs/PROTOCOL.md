@@ -50,6 +50,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 ## 3. Oturum akışı
 
 1. **Keşif:** Host Bonjour ile `_matebridge._tcp` hizmetini yayınlar (TXT: `v=0`). İstemci Android `NsdManager` ile bulur, ya da IP/port elle girilir.
+   - **Varsayılan portlar:** host önce **kontrol 47001**, **video 47002** portlarını dener; doluysa sistemin verdiği portları kullanır (Bonjour ve `HELLO_ACK.video_port` her zaman gerçek portu bildirir). USB modunda (`adb reverse tcp:47001 tcp:47001` ve `tcp:47002 tcp:47002`) istemci `127.0.0.1:47001`'e bağlanır; video bağlantısı da `127.0.0.1:<video_port>` adresine gider.
 2. **HELLO:** İstemci kontrol bağlantısını açar ve ilk mesaj olarak `HELLO` gönderir. Host ilk 5 sn içinde `HELLO` almazsa bağlantıyı kapatır.
 3. **HELLO_ACK:**
    - `protocol_version` farklıysa `VERSION_MISMATCH`, bağlantı kapanır.
