@@ -106,6 +106,7 @@ public final class SessionServer: @unchecked Sendable {
     private let handlers: Handlers
     private let store: ApprovedDeviceStore
     private let requestedControlPort: UInt16
+    private let requestedVideoPort: UInt16
     private let logger = SessionLogger()
 
     private var machine: SessionMachine
@@ -134,15 +135,19 @@ public final class SessionServer: @unchecked Sendable {
     static let maxVideoHandshakePayload = 1024
 
     /// - Parameters:
-    ///   - controlPort: 0 lets the system pick (found via Bonjour). A fixed port is needed for `adb reverse`.
+    ///   - controlPort: preferred control port (default 47001, for `adb reverse`); falls back to a system-assigned
+    ///     port when taken. 0 means system-assigned only.
+    ///   - videoPort: same for the video listener (default 47002).
     ///   - makeStreamConfig: placeholder until the video pipeline (T-011) supplies the real configuration.
     public init(handlers: Handlers, store: ApprovedDeviceStore = ApprovedDeviceStore(directory: ApprovedDeviceStore.defaultDirectory()),
-                hostName: String = Host.current().localizedName ?? "Mac", controlPort: UInt16 = 0,
+                hostName: String = Host.current().localizedName ?? "Mac", controlPort: UInt16 = DefaultPorts.control,
+                videoPort: UInt16 = DefaultPorts.video,
                 makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig = SessionServer.defaultStreamConfig) {
         self.handlers = handlers
         queue.setSpecific(key: queueKey, value: true)
         self.store = store
         self.requestedControlPort = controlPort
+        self.requestedVideoPort = videoPort
         let known = store.load()
         self.knownDevices = known
         self.machine = SessionMachine(configuration: .init(hostName: hostName, makeStreamConfig: makeStreamConfig),
@@ -171,18 +176,50 @@ public final class SessionServer: @unchecked Sendable {
 
     private func startListeners() {
         guard !stopped else { return }
+        startVideoListener(plan: ListenerPortPlan(preferred: requestedVideoPort))
+    }
+
+    /// Tries the preferred video port, then a system-assigned one (logged).
+    private func startVideoListener(plan: ListenerPortPlan) {
+        guard !stopped else { return }
+        var plan = plan
+        guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
+        let fixed = plan.lastWasPreferred
+        let nextPlan = plan
         do {
-            let video = try NWListener(using: Self.tcpParameters())
+            let video = try NWListener(using: Self.tcpParameters(), on: Self.endpointPort(port))
             video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
             video.stateUpdateHandler = { [weak self, weak video] s in
                 guard let self, let video, video === videoListener else { return }
+                if case .failed = s, fixed {
+                    logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
+                               fields: "listener=video wanted=\(port)")
+                    video.cancel()
+                    videoListener = nil
+                    return startVideoListener(plan: nextPlan)
+                }
                 videoListenerState(s)
             }
             videoListener = video
             video.start(queue: queue)
         } catch {
-            listenersFailed("video_listener_create")
+            if fixed {
+                logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
+                           fields: "listener=video wanted=\(port)")
+                startVideoListener(plan: nextPlan)
+            } else {
+                listenersFailed("video_listener_create")
+            }
         }
+    }
+
+    private func logFallback(_ listener: String, _ wanted: UInt16) {
+        logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
+                   fields: "listener=\(listener) wanted=\(wanted)")
+    }
+
+    private static func endpointPort(_ port: UInt16) -> NWEndpoint.Port {
+        port == 0 ? .any : (NWEndpoint.Port(rawValue: port) ?? .any)
     }
 
     /// Cancels both listeners and retries with exponential backoff (1 s ... 30 s).
@@ -293,9 +330,18 @@ public final class SessionServer: @unchecked Sendable {
 
     private func startControlListener(videoPort: UInt16) {
         guard controlListener == nil else { return }
+        startControlListener(videoPort: videoPort, plan: ListenerPortPlan(preferred: requestedControlPort))
+    }
+
+    /// Tries the preferred control port, then a system-assigned one (logged).
+    private func startControlListener(videoPort: UInt16, plan: ListenerPortPlan) {
+        guard !stopped else { return }
+        var plan = plan
+        guard let port = plan.nextPort() else { return listenersFailed("control_listener_create") }
+        let fixed = plan.lastWasPreferred
+        let nextPlan = plan
         do {
-            let port = requestedControlPort == 0 ? NWEndpoint.Port.any : NWEndpoint.Port(rawValue: requestedControlPort)!
-            let listener = try NWListener(using: Self.tcpParameters(), on: port)
+            let listener = try NWListener(using: Self.tcpParameters(), on: Self.endpointPort(port))
             listener.service = NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType,
                                                   domain: nil, txtRecord: NWTXTRecord(["v": "0"]))
             listener.newConnectionHandler = { [weak self] c in self?.accept(c, video: false) }
@@ -307,14 +353,27 @@ public final class SessionServer: @unchecked Sendable {
                     logger.log(.info, "listening", sessionID: 0, generation: 0,
                                fields: "control_port=\(listener.port?.rawValue ?? 0) video_port=\(videoPort)")
                     if case .starting = state { setState(.listening) }
-                case .failed: listenersFailed("control_listener_failed")
+                case .failed:
+                    if fixed {
+                        logFallback("control", port)
+                        listener.cancel()
+                        controlListener = nil
+                        startControlListener(videoPort: videoPort, plan: nextPlan)
+                    } else {
+                        listenersFailed("control_listener_failed")
+                    }
                 default: break
                 }
             }
             controlListener = listener
             listener.start(queue: queue)
         } catch {
-            listenersFailed("control_listener_create")
+            if fixed {
+                logFallback("control", port)
+                startControlListener(videoPort: videoPort, plan: nextPlan)
+            } else {
+                listenersFailed("control_listener_create")
+            }
         }
     }
 
