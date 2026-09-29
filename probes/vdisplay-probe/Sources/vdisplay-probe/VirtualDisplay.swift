@@ -6,9 +6,8 @@ import ObjectiveC
 //
 // The classes are looked up at runtime (NSClassFromString) and driven via KVC / IMP calls,
 // so no private headers are needed and a missing class yields a clear error instead of a
-// link failure. Class/selector names and the descriptor/settings shape follow
-// LukeLogix/android-display (Apache-2.0) and the widely documented CGVirtualDisplay
-// interface (CGVirtualDisplayDescriptor, CGVirtualDisplaySettings, CGVirtualDisplayMode).
+// link failure. Written from the publicly known CGVirtualDisplay interface (class and
+// selector names as used by DeskPad and LukeLogix/android-display); no code was copied.
 //
 // The display disappears when the CGVirtualDisplay object is deallocated, so this type
 // retains it until `invalidate()` or deinit.
@@ -63,18 +62,18 @@ final class VirtualDisplay: @unchecked Sendable {
         descriptor.setValue(queue, forKey: "queue")
 
         let initSel = NSSelectorFromString("initWithDescriptor:")
-        guard let initMethod = class_getMethodImplementation(displayClass, initSel) as IMP?,
-              displayClass.instancesRespond(to: initSel) else {
+        guard displayClass.instancesRespond(to: initSel) else {
             throw VirtualDisplayError.apiUnavailable("initWithDescriptor:")
         }
         typealias InitFn = @convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<AnyObject>?
-        let initImp = unsafeBitCast(initMethod, to: InitFn.self)
+        let initImp = unsafeBitCast(class_getMethodImplementation(displayClass, initSel), to: InitFn.self)
         guard let allocated = displayClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue(),
               let created = initImp(allocated, initSel, descriptor)?.takeRetainedValue() as? NSObject else {
             throw VirtualDisplayError.creationFailed
         }
 
-        // Modes: 1x at full pixel size; with hidpi also the 2x mode (half the points).
+        // Under hiDPI=1 the mode size is in POINTS (pixels = 2x), so register only the half-size
+        // mode and keep maxPixels at the full size. Without hidpi, register the 1x full-size mode.
         typealias ModeInitFn = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double) -> Unmanaged<AnyObject>?
         let modeSel = NSSelectorFromString("initWithWidth:height:refreshRate:")
         guard modeClass.instancesRespond(to: modeSel) else { throw VirtualDisplayError.apiUnavailable("initWithWidth:height:refreshRate:") }
@@ -84,8 +83,11 @@ final class VirtualDisplay: @unchecked Sendable {
             return modeImp(a, modeSel, UInt32(w), UInt32(h), refreshRate)?.takeRetainedValue() as? NSObject
         }
         var modes: [NSObject] = []
-        if hidpi, let m = makeMode(pixelWidth / 2, pixelHeight / 2) { modes.append(m) }
-        if let m = makeMode(pixelWidth, pixelHeight) { modes.append(m) }
+        if hidpi {
+            if let m = makeMode(pixelWidth / 2, pixelHeight / 2) { modes.append(m) }
+        } else if let m = makeMode(pixelWidth, pixelHeight) {
+            modes.append(m)
+        }
 
         let settings = settingsClass.init()
         settings.setValue(UInt32(hidpi ? 1 : 0), forKey: "hiDPI")

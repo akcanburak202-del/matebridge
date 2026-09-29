@@ -6,7 +6,7 @@ import ProbeCore
 import ScreenCaptureKit
 
 /// Captures one display via ScreenCaptureKit, saves the first frame as PNG and counts frames.
-final class DisplayCapture: NSObject, SCStreamOutput, @unchecked Sendable {
+final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var counter = FrameCounter()
     private var savedFirst = false
@@ -31,10 +31,14 @@ final class DisplayCapture: NSObject, SCStreamOutput, @unchecked Sendable {
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.queueDepth = 3
         cfg.showsCursor = true
-        let s = SCStream(filter: filter, configuration: cfg, delegate: nil)
+        let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
         try await s.startCapture()
         stream = s
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        FileHandle.standardError.write(Data("capture stream stopped with error: \(error)\n".utf8))
     }
 
     func stop() async {

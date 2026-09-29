@@ -36,7 +36,7 @@ SwiftPM paketi `probes/vdisplay-probe`: `ProbeCore` (arg parse, mod seçimi, kar
 
 ## Handoff
 
-- **Commit:** son commit of `task/T-004-vdisplay-probe` (`git log -1`)
+- **Commit:** 02d697e (initial), review fixes in the following commit on the same branch (hiDPI registers only the point-size mode; signals checked around awaits, SIGHUP added; SCStream delegate logging)
 - **Dokunulan dosyalar:** `probes/vdisplay-probe/` (Package.swift, Sources/ProbeCore, Sources/vdisplay-probe/{VirtualDisplay,Capture,main}.swift, Tests/ProbeCoreTests), bu kart. `out/` zaten `probes/**/out/` ile .gitignore'da.
 - **Varsayımlar:** CGVirtualDisplay runtime'da `CGVirtualDisplayDescriptor/Settings/Mode/CGVirtualDisplay` sınıfları ve KVC anahtarlarıyla (name, maxPixelsWide/High, sizeInMillimeters, vendorID/productID/serialNum, queue, hiDPI, modes) sürülüyor. HiDPI için modlar 1400x920 (2x) + 2800x1840 (1x), hiDPI=1. macOS 27'de bu değişmiş olabilir.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Sanal ekran oluşturma, mod seçimi, SCK yakalama, FPS, temiz kaldırma HİÇ çalıştırılmadı (paralel T-005 nedeniyle). Yalnızca build, 4 birim testi ve `--bogus` hata yolu çalıştı. Orkestratör çalıştırmalı (Screen Recording izni terminal uygulamasında verilmiş olmalı):

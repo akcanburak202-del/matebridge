@@ -36,12 +36,14 @@ func run() async -> Int32 {
     }
 
     let stop = StopFlag()
-    signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)
+    signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN); signal(SIGHUP, SIG_IGN)
     let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
     let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+    let sighup = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
     sigint.setEventHandler { stop.set() }
     sigterm.setEventHandler { stop.set() }
-    sigint.resume(); sigterm.resume()
+    sighup.setEventHandler { stop.set() }
+    sigint.resume(); sigterm.resume(); sighup.resume()
 
     let vd: VirtualDisplay
     do {
@@ -53,6 +55,7 @@ func run() async -> Int32 {
     }
     defer { vd.invalidate() }
     try? await Task.sleep(for: .seconds(1)) // let WindowServer register the display
+    if stop.isSet { print("interrupted; removing virtual display"); return 130 }
 
     let id = vd.displayID
     print("virtual display created: id=\(id)")
@@ -81,9 +84,11 @@ func run() async -> Int32 {
     }
 
     try? FileManager.default.createDirectory(atPath: "out", withIntermediateDirectories: true)
+    if stop.isSet { return 130 }
     let capture = DisplayCapture(outputURL: URL(fileURLWithPath: "out/first-frame.png"))
     do {
         try await capture.start(displayID: id, pixelWidth: options.width, pixelHeight: options.height)
+        if stop.isSet { await capture.stop(); print("interrupted; removing virtual display"); return 130 }
     } catch {
         FileHandle.standardError.write(Data("error: capture failed: \(error)\n".utf8))
         return 1
