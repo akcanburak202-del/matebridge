@@ -1,7 +1,7 @@
 ---
 id: T-020
 title: Mac — sabit varsayılan portlar ve USB modu betiği
-status: todo
+status: review
 phase: 1
 owner: mac-host-dev
 depends_on: [T-014]
@@ -26,12 +26,12 @@ USB modunu (PLAN Aşama 1: "Aynı kodla USB modu (adb reverse) çalışıyor") e
 
 ## Plan
 
-_(Ajan doldurur.)_
+ListenerPortPlan (Core, saf): tercih, sonra 0, sonra nil. SessionServer her dinleyicide plan kullanır; sabit port başarısız olursa (init throw ya da .failed) loglayıp sistem portuna düşer. Yeniden başlatmada yeni plan. usb-mode.sh: adb reverse on/off/status, 4 deneme.
 
 ## Handoff
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Dokunulan dosyalar:** SessionServer.swift, Core/Session/ListenerPortPlan.swift, Tests/.../ListenerPortPlanTests.swift, scripts/usb-mode.sh, bu kart
+- **Varsayımlar:** NWListener dolu portta .failed olur (ya da init fırlatır); ikisi de ele alındı. SessionServer varsayılanı artık 47001/47002.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek port çakışmasında geri düşüş (yalnız plan mantığı testli); usb-mode.sh tablet bağlıyken on/off; Android 127.0.0.1:47001 bağlantısı.
 - **Açık sorular:**
