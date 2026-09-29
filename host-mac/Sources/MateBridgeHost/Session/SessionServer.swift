@@ -237,8 +237,16 @@ public final class SessionServer: @unchecked Sendable {
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
     public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in
-            guard let pending = pendingApproval, pending.raw == id else { return }
+            guard let pending = pendingApproval, pending.raw == id else {
+                logger.log(.info, "approval_stale_ignored", sessionID: currentSessionID,
+                           generation: currentConfigID, fields: "conn=\(id)")
+                return
+            }
             pendingApproval = nil
+            if approved {
+                logger.log(.info, "approval_approved", sessionID: currentSessionID,
+                           generation: currentConfigID, fields: "conn=\(id)")
+            }
             apply(machine.approvalDecided(pending, approved: approved, now: nowUs()))
         }
     }
