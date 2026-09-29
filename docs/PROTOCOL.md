@@ -39,6 +39,10 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
+- **Bilinmeyen enum değerleri:**
+  - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`.
+  - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
+  - Tanımsız `capabilities` ve bayrak bitleri yok sayılır.
 - **Protokol hatası:**
   - Kontrol bağlantısında: alıcı `BYE(PROTOCOL_ERROR)` gönderir, **iki bağlantıyı da** kapatır.
   - Video bağlantısında: alıcı **yalnızca video bağlantısını** kapatır, `BYE` göndermez. Host'ta hata loglanır. İstemci video bağlantısını yeniden açabilir (§3.5).
