@@ -165,8 +165,9 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 ### Aşama 5 — İsteğe bağlı iyileştirmeler (ihtiyaç oldukça)
 
+- **Akıcılık: kare zamanlaması (frame pacing).** Kullanıcı kararı, 2026-09-29. Faz 1 sonunda Mac 60,0 fps düzenli gönderiyor, USB'de geç kare çoğu saniye 0. Ama iki bağımsız 60 Hz saat (Mac sanal ekranı ve tablet paneli) yüzünden periyodik takılma kalıyor. Kullanıcıya göre **Parsec aynı tablette daha az takılıyor**, yani iyileştirme payı var. Hedef: Parsec'le göz karşılaştırmasında en az eşit. Denenmiş olanlar: T-016 (zamanlı `releaseOutputBuffer`), T-018 (GL yolu), T-019 (GL titreşim tamponu, park edildi). Bulgular NOTES 2026-09-29.
 - 4:4:4 renk deneyi (yazı/ince çizgi netliği)
-- Tabletin yüksek yenileme hızı (90/120 Hz)
+- Tabletin yüksek yenileme hızı (90/120 Hz). Engeller: HarmonyOS video ve GL yüzeyini 60 Hz'de tutuyor, decoder kapasitesi "4K@60" (2800×1840'ta kabaca ~90 fps), Mac'te kare başına kodlama ~13–15 ms. Önce 60 fps akıcılığı. Kalem için 120 Hz gerekmez (kalem 330 Hz örnekleniyor ve ekran hızından bağımsız gönderiliyor).
 - Kalem için tahmini ink (local prediction)
 - Ses aktarımı, pano paylaşımı
 - Kısayol çubuğu (tasarım uygulamaları için ekranda tuşlar: geri al, fırça boyutu vb.)
