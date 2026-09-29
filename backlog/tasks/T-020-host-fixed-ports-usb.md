@@ -30,7 +30,7 @@ ListenerPortPlan (Core, saf): tercih, sonra 0, sonra nil. SessionServer her dinl
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** 7f8e139
 - **Dokunulan dosyalar:** SessionServer.swift, Core/Session/ListenerPortPlan.swift, Tests/.../ListenerPortPlanTests.swift, scripts/usb-mode.sh, bu kart
 - **Varsayımlar:** NWListener dolu portta .failed olur (ya da init fırlatır); ikisi de ele alındı. SessionServer varsayılanı artık 47001/47002.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek port çakışmasında geri düşüş (yalnız plan mantığı testli); usb-mode.sh tablet bağlıyken on/off; Android 127.0.0.1:47001 bağlantısı.
