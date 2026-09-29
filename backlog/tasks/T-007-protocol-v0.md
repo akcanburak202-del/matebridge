@@ -10,6 +10,7 @@ files:
   - docs/PROTOCOL.md
   - protocol/fixtures/
   - docs/NOTES.md
+  - scripts/check.sh
 ---
 
 ## Amaç

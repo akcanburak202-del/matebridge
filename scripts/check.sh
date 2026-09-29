@@ -29,6 +29,11 @@ for proj in client-android probes/*; do
   run "gradle ($proj)" "$proj" ./gradlew --quiet assembleDebug testDebugUnitTest
 done
 
+# Protocol fixtures must be up to date with the reference encoder
+if [ -f protocol/fixtures/gen.py ]; then
+  run "protocol fixtures up to date" . python3 protocol/fixtures/gen.py --check
+fi
+
 # Protocol fixtures must be referenced by docs (cheap consistency guard)
 for fx in protocol/fixtures/*.hex; do
   [ -e "$fx" ] || continue
