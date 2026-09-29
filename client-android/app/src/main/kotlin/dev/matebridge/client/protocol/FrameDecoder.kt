@@ -26,12 +26,14 @@ class FrameDecoder(private val maxPayload: Int) {
      * payload is buffered, so an oversized length fails immediately and buffered data stays bounded
      * by header + [maxPayload] per frame. Bytes after a failure are discarded.
      *
-     * Callers MUST call [next] (or [drain]) until it returns null after every feed. Total buffered
+     * At most [READ_CHUNK] bytes per call (larger input is a caller bug: IllegalArgumentException).
+     * The cap counts only bytes not yet returned by [next]. Callers MUST call [next] (or [drain]) until it returns null after every feed. Total buffered
      * bytes are hard-capped at [bufferCap] (header + max payload + [READ_CHUNK]); feeding past it
      * without draining fails with [ProtocolException.Kind.BUFFER_OVERFLOW] instead of exhausting memory.
      */
     fun feed(data: ByteArray, offset: Int = 0, length: Int = data.size - offset) {
         require(offset >= 0 && length >= 0 && offset + length <= data.size) { "bad range" }
+        require(length <= READ_CHUNK) { "feed() takes at most $READ_CHUNK bytes per call; split larger reads" }
         var pos = offset
         var left = length
         while (left > 0 && failure == null) {

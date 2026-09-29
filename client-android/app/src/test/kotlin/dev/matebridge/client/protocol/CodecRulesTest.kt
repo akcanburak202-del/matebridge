@@ -274,7 +274,7 @@ class CodecRulesTest {
     @Test
     fun oversizeFailsInFeedWithoutBufferingPayload() {
         val dec = FrameDecoder.control()
-        val chunk = ByteArray(10_000_000)
+        val chunk = ByteArray(FrameDecoder.READ_CHUNK)
         chunk[0] = 0x7f; chunk[4] = 0x01 // length 16 MiB, far above the control limit
         dec.feed(chunk)
         expectError(ProtocolException.Kind.OVERSIZE, dec)
@@ -354,5 +354,24 @@ class CodecRulesTest {
         )) {
             assertEquals(msg, decode(Codec.encode(msg)))
         }
+    }
+
+    @Test
+    fun fullReadChunkOfSmallFramesDrainsCompletely() {
+        val ping = Codec.encode(Ping(1, 1)) // 17 bytes
+        val n = FrameDecoder.READ_CHUNK / ping.size
+        val chunk = ByteArray(FrameDecoder.READ_CHUNK)
+        for (i in 0 until n) System.arraycopy(ping, 0, chunk, i * ping.size, ping.size)
+        val dec = FrameDecoder.control()
+        repeat(5) { // repeated feed/drain cycles: the cap counts only bytes not yet returned by next()
+            dec.feed(chunk, 0, n * ping.size)
+            assertEquals(n, dec.drain().size)
+        }
+    }
+
+    @Test
+    fun feedLargerThanReadChunkIsCallerBug() {
+        val dec = FrameDecoder.control()
+        try { dec.feed(ByteArray(FrameDecoder.READ_CHUNK + 1)); fail() } catch (e: IllegalArgumentException) { }
     }
 }
