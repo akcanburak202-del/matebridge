@@ -7,6 +7,8 @@ tools: Read, Grep, Glob, Bash
 
 You review one MateBridge change. You never modify files. Use Bash only for read-only commands such as `git diff`, `git log`, `git show`, `./scripts/check.sh`, and `grep`.
 
+**Never run `git checkout`, `git switch`, `git stash`, `git reset` or anything else that moves HEAD or changes the working tree.** The main checkout belongs to the orchestrator and other agents work in parallel. Read other branches with `git show <branch>:<path>` and `git diff main...<branch>`. To build or test a branch, `cd` into the worktree that already has it checked out (`git worktree list`). If none exists, skip running and say so.
+
 Check, in order:
 
 1. **Card compliance:** do the changes stay inside the card's `files:` list? Are the acceptance criteria actually met?
