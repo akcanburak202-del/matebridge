@@ -54,11 +54,11 @@ class SessionSupportTest {
     @Test fun sendQueueIsFifoAndBoundedByBytes() {
         val q = SendQueue(maxBytes = 10)
         assertTrue(q.offer(ByteArray(6) { 1 }, 0))
-        assertFalse(q.offer(ByteArray(5), 0)) // 11 > 10
         assertTrue(q.offer(ByteArray(4) { 2 }, 0))
         assertEquals(1, q.take()!![0].toInt())
         assertEquals(2, q.take()!![0].toInt())
         assertTrue(q.offer(ByteArray(10), 0)) // space freed
+        assertFalse(q.offer(ByteArray(1), 0)) // 11 > 10
     }
 
     @Test fun sendQueueOverflowsWhenOldestIsTooOld() {
@@ -83,5 +83,37 @@ class SessionSupportTest {
         q.abort()
         assertNull(q.take())
         assertEquals(0, q.size())
+    }
+
+    @Test fun overflowRefusesEveryLaterOffer() {
+        val q = SendQueue(maxBytes = 10)
+        assertTrue(q.offer(ByteArray(8), 0))
+        assertFalse(q.offer(ByteArray(5), 0)) // overflow
+        assertTrue(q.isOverflowed())
+        assertFalse(q.offer(ByteArray(1), 0)) // would fit, but must be refused
+        q.take()
+        assertFalse(q.offer(ByteArray(1), 0))
+    }
+
+    @Test fun controlLinkOverflowForcesConnectionCloseExactlyOnce() {
+        var closes = 0
+        // Tiny bound: a KEY message (13 byte payload + header) does not fit twice.
+        val link = ControlLink(SendQueue(maxBytes = 30), { 0L }) { closes++ }
+        val key = dev.matebridge.client.protocol.Key(0, 30, 0, dev.matebridge.client.protocol.Key.UP, 0)
+        assertTrue(link.send(key))
+        assertFalse(link.send(key))
+        assertEquals(1, closes)
+        assertFalse(link.send(dev.matebridge.client.protocol.ReleaseAll(0))) // later events refused too
+        assertEquals(1, closes)
+    }
+
+    @Test fun controlLinkGracefulCloseIsNotAnOverflow() {
+        var closes = 0
+        val q = SendQueue()
+        val link = ControlLink(q, { 0L }) { closes++ }
+        assertTrue(link.send(dev.matebridge.client.protocol.Bye(0)))
+        q.closeGracefully()
+        assertFalse(link.send(dev.matebridge.client.protocol.Bye(0)))
+        assertEquals(0, closes)
     }
 }

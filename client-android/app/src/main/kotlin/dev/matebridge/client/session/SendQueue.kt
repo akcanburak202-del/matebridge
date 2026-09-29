@@ -1,10 +1,15 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.protocol.Codec
+import dev.matebridge.client.protocol.Message
+
 /**
  * Bounded single FIFO for the control connection (PROTOCOL.md section 5, 7): at most [maxBytes] queued
- * or oldest entry older than [maxAgeMs]. Overflow makes [offer] return false; the caller then closes
- * and reconnects (the host releases all input on disconnect), so a state transition is never dropped
- * silently. Coalescing of hover/rel/scroll samples belongs to the input tasks.
+ * or oldest entry older than [maxAgeMs]. The first failed [offer] because of the bound marks the queue
+ * [isOverflowed] and every later offer is refused too, so once one message was lost no later message
+ * can slip through (an UP after a dropped DOWN would be worse than nothing). The owner must then close
+ * and reconnect (the host releases all input on disconnect). Coalescing of hover/rel/scroll samples
+ * belongs to the input tasks.
  */
 class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Long = 1000) {
     private class Entry(val bytes: ByteArray, val atMs: Long)
@@ -14,13 +19,16 @@ class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Lo
     private var queuedBytes = 0
     private var closing = false
     private var aborted = false
+    private var overflowed = false
 
     /** Returns false when the bound is exceeded (or the queue is closed); nothing is enqueued then. */
     fun offer(bytes: ByteArray, nowMs: Long): Boolean = synchronized(lock) {
-        if (closing || aborted) return false
+        if (closing || aborted || overflowed) return false
         val oldest = items.firstOrNull()
-        if (queuedBytes + bytes.size > maxBytes) return false
-        if (oldest != null && nowMs - oldest.atMs > maxAgeMs) return false
+        if (queuedBytes + bytes.size > maxBytes || (oldest != null && nowMs - oldest.atMs > maxAgeMs)) {
+            overflowed = true
+            return false
+        }
         items.addLast(Entry(bytes, nowMs))
         queuedBytes += bytes.size
         lock.notifyAll()
@@ -49,5 +57,28 @@ class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Lo
     /** Drop everything; [take] returns null immediately. */
     fun abort() = synchronized(lock) { aborted = true; items.clear(); queuedBytes = 0; lock.notifyAll() }
 
+    fun isOverflowed(): Boolean = synchronized(lock) { overflowed }
+
     fun size(): Int = synchronized(lock) { items.size }
+}
+
+/**
+ * Sender side of one control connection. A failed send caused by overflow invokes [onOverflow]
+ * exactly once, and the owner must abort the connection and report it closed so the session reconnects.
+ */
+class ControlLink(
+    private val queue: SendQueue,
+    private val clockMs: () -> Long,
+    private val onOverflow: () -> Unit,
+) {
+    private var reported = false
+
+    fun send(msg: Message): Boolean {
+        if (queue.offer(Codec.encode(msg), clockMs())) return true
+        if (queue.isOverflowed()) {
+            val first = synchronized(this) { !reported.also { reported = true } }
+            if (first) onOverflow()
+        }
+        return false
+    }
 }

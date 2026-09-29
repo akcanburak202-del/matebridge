@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     // Main-thread state
     private var currentEndpoint: Endpoint? = null
     private var manualMode = false
+    private var started = false
     private var lastUi: SessionUi = SessionUi.Searching
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,6 +70,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        started = true
         currentEndpoint = null
         manualMode = false
         render(SessionUi.Searching)
@@ -76,6 +78,7 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        started = false
         discovery?.stop()
         discovery = null
         controller.stop() // sends BYE, closes both connections
@@ -88,7 +91,7 @@ class MainActivity : Activity() {
     }
 
     private fun onDiscovered(ep: Endpoint) {
-        if (manualMode) return
+        if (!started || manualMode) return
         if (currentEndpoint == null || lastUi is SessionUi.Disconnected) {
             connect(ep)
         }
