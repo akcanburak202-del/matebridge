@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# Swift / SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.app
+*.dSYM/
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Signing material — never commit
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+
+# Logs and probe output (may contain device data)
+*.log
+logs/
+probes/**/out/
+*.jsonl
+
+# Local tooling
+.claude/settings.local.json
+.claude/worktrees/
