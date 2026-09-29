@@ -1,7 +1,7 @@
 ---
 id: T-002
 title: Geliştirme araçlarını ve tableti hazırla
-status: todo
+status: in-progress
 phase: 0
 owner: user
 depends_on: []
@@ -16,7 +16,7 @@ Ajanların Android projelerini derleyebilmesi ve orkestratörün APK'yı tablete
 ## Kabul kriterleri
 
 Kullanıcı:
-- [ ] Android Studio (Quail 4, Apple chip) kuruldu, ilk açılışta **Standard** kurulum tamamlandı.
+- [x] Android Studio (Quail 4, Apple chip) kuruldu, ilk açılışta **Standard** kurulum tamamlandı. (2026.1, JBR 25, SDK platform android-37, build-tools 36.0.0, adb 37.0.1)
 - [ ] MatePad: Geliştirici seçenekleri açık, **USB hata ayıklama** açık, "Saf mod" kapalı.
 - [ ] Tablet USB ile Mac'e takılı, "USB hata ayıklamaya izin ver" onaylandı (her zaman izin ver).
 - [ ] Krita Mac'e kuruldu (krita.org).
