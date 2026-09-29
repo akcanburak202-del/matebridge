@@ -48,4 +48,14 @@ Tablette 60 fps içerik ~57 fps geliyor (NOTES 2026-09-29, T-016 ölçümleri). 
 - **Ayarlar:** `--dump-video ... --refresh 60|120 [--frame-delay 0|1]`; uygulamada `MATEBRIDGE_REFRESH=60|120` ve `MATEBRIDGE_FRAME_DELAY=0|1` ortam değişkenleri (Terminal'den başlatılan ikili için). Varsayılan 60 Hz, `MaxFrameDelayCount` ayarlanmaz (ölçüm önce). 120 Hz'de akış fps'i ve SCK `minimumFrameInterval` 1/60 kalır (`displayRefreshHz` STREAM_CONFIG'e girmez).
 - **Varsayımlar:** `ExpectedFrameRate` ve `RealTime` zaten set ediliyordu (artık loglanıyor). Mod seçimi "en yüksek Hz" yerine "istenene en yakın Hz". Durağan ekranda SCK kare vermediği için ölçüm boş, log satırı atlanır.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Yalnızca derleme + Core birim testleri (`CadenceTests`), uygulama çalıştırılmadı. Orkestratör: Safari 60 fps sayfası ile `--dump-video x.h265 --seconds 10 --refresh 60` ve `--refresh 120`; TOTAL satırında `cap_fps`, `cap_late`, `status=`, `overwritten` karşılaştırın. Şüphe (ölçülmedi): SCK `minimumFrameInterval`=1/60 iken 60 Hz ekranda kareler aralığın hemen altında gelirse SCK bazılarını eler (cap_fps ~57); 120 Hz sanal ekranda düzelmeli. macOS sanal ekranda 120 Hz'i kabul etmezse `applied=` 60 gösterir. `MaxFrameDelayCount` etkisi `--frame-delay 0|1` ile denenebilir.
+- **Orkestratör cihaz sonuçları ve kök neden (Safari 60 fps sayfası, Safari sekme başlığında sabit 60 fps):**
+
+  | run | cap_fps | cap_int p50/p95/p99 | notes |
+  |---|---|---|---|
+  | refresh 60, SCK min 16.67 ms | 57.4 | 16.7/16.7/33.3 | all frames complete, enc/sent same, no overwrites |
+  | refresh 120, SCK min 16.67 ms | 57.8 | 16.7/25.0/33.3 | worse regularity |
+  | refresh 60, SCK min 8.33 ms (--fps 120) | 60.0 | 16.7/16.7/16.7 | enc 59.9, sent 60.0 |
+
+  Kök neden: `minimumFrameInterval` tam 1/fps iken SCK biraz erken gelen kareleri eler. **`--refresh 120` yardımcı olmadı** (57.8 fps, düzensizlik daha kötü); seçenek olarak duruyor, varsayılan 60.
+- **Düzeltme (2. tur):** (1) SCK `minimumFrameInterval` = 1/(2 x akış fps); sanal ekran 60 Hz, STREAM_CONFIG fps değişmedi. (2) Core `FrameGate` + `HEVCEncoder`: iki kabul edilen kare arası en az 0,75 x akış aralığı; daha erken gelen kare atılmaz, tek `pending` slotuna yazılır (en yeni kazanır, `overwritten` sayılır) ve aralık dolunca zamanlayıcıyla gönderilir, böylece gönderim ~akış fps'ini geçmez ve durağan ekranda son kare bayat kalmaz. Anahtar kare yeniden gönderimleri kapıyı atlar. 0,75 seçimi: 1'e yakın sabit titreşimde kareleri geciktirir, 0,5 ise 120 fps patlamayı 60'a indirmez; sürekli üst sınır ~66 fps. Testler `FrameGateTests`. (3) `late` zaten akış aralığına göre (`CadenceMeter(fps: settings.fps)`); 547 yanlış `late`, `--fps 120` ile akış fps'i 120 yapılıp hedefin 8,33 ms olmasındandı, SCK minimumundan değil. Şimdi SCK minimumu akış fps'inden bağımsız.
 - **Açık sorular:** Yok. Kart `files:` dışına çıkılmadı.

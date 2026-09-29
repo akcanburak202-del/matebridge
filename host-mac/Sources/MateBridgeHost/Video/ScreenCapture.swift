@@ -52,7 +52,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
-        cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
+        // SCK discards frames that arrive slightly before the interval, so with exactly 1/fps a 60 Hz source
+        // loses ~5% (measured 57.4 fps). Half the interval lets every frame through; the encoder's
+        // `FrameGate` keeps the send rate at the stream fps.
+        cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps * 2))
         cfg.queueDepth = ScreenCapture.queueDepth  // > encoder in-flight limit + the retained last buffer
         cfg.showsCursor = true
         let s = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),

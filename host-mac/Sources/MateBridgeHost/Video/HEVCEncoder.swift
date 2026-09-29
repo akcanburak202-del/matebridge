@@ -55,6 +55,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastSubmitNs: UInt64 = DispatchTime.now().uptimeNanoseconds
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
+    private var gate: FrameGate
+    private var flushScheduled = false
 
     let settings: VideoSettings
     private let meter: CadenceMeter?
@@ -67,6 +69,7 @@ final class HEVCEncoder: @unchecked Sendable {
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
         self.meter = meter
+        self.gate = FrameGate(streamFps: settings.fps)
         self.output = output
         self.onFailure = onFailure
 
@@ -174,7 +177,8 @@ final class HEVCEncoder: @unchecked Sendable {
         guard !stopped, let l = last else { lock.unlock(); return }
         lock.unlock()
         let now = CMClockGetTime(CMClockGetHostTimeClock())
-        submit(Input(buffer: l.buffer, pts: now, captureTimeUs: UInt64(max(0, CMTimeGetSeconds(now)) * 1_000_000)))
+        submit(Input(buffer: l.buffer, pts: now, captureTimeUs: UInt64(max(0, CMTimeGetSeconds(now)) * 1_000_000)),
+               bypassGate: true)
     }
 
     private func idleTick() {
@@ -185,14 +189,20 @@ final class HEVCEncoder: @unchecked Sendable {
         if due { resubmitLast() }
     }
 
-    private func submit(_ input: Input) {
+    /// `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
+    private func submit(_ input: Input, bypassGate: Bool = false) {
         lock.lock()
         guard !stopped, let s = session else { lock.unlock(); return }
         last = input
-        if inFlight >= HEVCEncoder.maxInFlight {
+        let wait = bypassGate ? 0 : gate.waitUs(forPtsUs: input.captureTimeUs)
+        if wait > 0 || inFlight >= HEVCEncoder.maxInFlight {
+            // Too early for the send-rate gate, or the encoder is full: the frame becomes the single pending one
+            // (newest wins) and goes out when a slot is free and the gate allows.
             if pending != nil { meter?.recordOverwritten() }
-            pending = input                    // newest wins
+            pending = input
+            let delay = wait > 0 && inFlight < HEVCEncoder.maxInFlight ? scheduleFlushLocked(afterUs: wait) : nil
             lock.unlock()
+            if let delay { armFlush(delay) }
             return
         }
         let (frame, key) = reserveSlot(input)
@@ -206,6 +216,7 @@ final class HEVCEncoder: @unchecked Sendable {
         var f = input
         if lastPTS.isValid, f.pts <= lastPTS { f.pts = lastPTS + CMTime(value: 1, timescale: 1000) }
         lastPTS = f.pts
+        gate.accept(ptsUs: f.captureTimeUs)
         lastSubmitNs = DispatchTime.now().uptimeNanoseconds
         let key = forceKeyframe
         forceKeyframe = false
@@ -263,13 +274,42 @@ final class HEVCEncoder: @unchecked Sendable {
     private func releaseSlotAndDrain() {
         lock.lock()
         inFlight -= 1
-        var next: (Input, Bool, VTCompressionSession)?
-        if !stopped, let p = pending, let s = session, inFlight < HEVCEncoder.maxInFlight {
-            pending = nil
-            let (f, k) = reserveSlot(p)
-            next = (f, k, s)
-        }
+        let (next, delay) = takePendingLocked()
         lock.unlock()
+        if let delay { armFlush(delay) }
+        if let (f, k, s) = next { send(f, key: k, session: s) }
+    }
+
+    /// Must hold `lock`. Claims the pending frame if a slot is free and the gate allows; otherwise returns the delay
+    /// after which a flush should retry (nil when nothing needs scheduling).
+    private func takePendingLocked() -> ((Input, Bool, VTCompressionSession)?, UInt64?) {
+        guard !stopped, let p = pending, let s = session, inFlight < HEVCEncoder.maxInFlight else { return (nil, nil) }
+        let wait = gate.waitUs(forPtsUs: p.captureTimeUs)
+        if wait > 0 { return (nil, scheduleFlushLocked(afterUs: wait)) }
+        pending = nil
+        let (f, k) = reserveSlot(p)
+        return ((f, k, s), nil)
+    }
+
+    /// Must hold `lock`. Returns the delay to arm, or nil if a flush is already scheduled.
+    private func scheduleFlushLocked(afterUs: UInt64) -> UInt64? {
+        if flushScheduled { return nil }
+        flushScheduled = true
+        return afterUs
+    }
+
+    private func armFlush(_ delayUs: UInt64) {
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .microseconds(Int(delayUs))) { [weak self] in
+            self?.flushPending()
+        }
+    }
+
+    private func flushPending() {
+        lock.lock()
+        flushScheduled = false
+        let (next, delay) = takePendingLocked()
+        lock.unlock()
+        if let delay { armFlush(delay) }
         if let (f, k, s) = next { send(f, key: k, session: s) }
     }
 

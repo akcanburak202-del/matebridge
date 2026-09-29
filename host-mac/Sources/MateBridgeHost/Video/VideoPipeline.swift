@@ -122,7 +122,7 @@ public final class VideoPipeline: @unchecked Sendable {
         let props = box.encoder?.propertyReport.joined(separator: ",") ?? "none"
         return "display[\(lock.withLock { displayInfo })] stream_fps=\(settings.fps) "
             + "encoder_set[\(props)] encoder_read[\(box.encoder?.cadenceReadback() ?? "none")] "
-            + "sck_min_interval_ms=\(String(format: "%.2f", 1000 / Double(max(1, settings.fps)))) sck_queue_depth=\(ScreenCapture.queueDepth)"
+            + "sck_min_interval_ms=\(String(format: "%.2f", 500 / Double(max(1, settings.fps)))) sck_queue_depth=\(ScreenCapture.queueDepth)"
     }
 
     public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }
