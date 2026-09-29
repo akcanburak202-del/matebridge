@@ -38,7 +38,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 
 - **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
-- **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
+- **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **Bilinmeyen enum değerleri:**
   - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`.
   - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
@@ -351,10 +351,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 | fragment_index | u16 | TCP'de `0` |
 | fragment_count | u16 | TCP'de `1` |
 | reserved2 | u16 | |
-| frame_size | u32 | Karenin tüm parçalarının toplam veri boyutu. TCP'de bu mesajdaki veri uzunluğuna eşit. |
-| data | bytes | Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla) |
+| frame_size | u32 | Karenin tüm parçalarının toplam veri boyutu. TCP'de bu mesajdaki `data` uzunluğudur. |
+| data | bytes[frame_size] | Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla). Tam olarak `frame_size` bayt. Payload bundan sonra devam ederse fazlası gelecekteki alanlardır ve yok sayılır (§2). |
 
-`fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır. TCP'de `fragment_index ≠ 0`, `fragment_count ≠ 1` veya `frame_size ≠ veri uzunluğu` **protokol hatasıdır** (video bağlantısı kapanır, §2).
+`fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır. TCP'de `fragment_index ≠ 0`, `fragment_count ≠ 1` veya payload'da `24 + frame_size` bayttan az veri olması **protokol hatasıdır** (video bağlantısı kapanır, §2).
 
 ## 5. Kuyruk sınırları (AGENTS.md: yalnızca sınırlı kuyruk)
 
