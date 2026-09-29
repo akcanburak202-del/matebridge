@@ -39,6 +39,8 @@ class VideoRenderer(
     private val vsync: VsyncClock = VsyncClock(),
     /** Jitter buffer in content frames, 0..2. 0 = render each frame as soon as decoded (T-015 behavior). */
     bufferFrames: Int = 1,
+    /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
+    private val codecReportsShown: Boolean = true,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -190,10 +192,12 @@ class VideoRenderer(
             val info = MediaCodec.BufferInfo()
             var held: VideoFrame? = null
             val pacer = FramePacer(vsync, bufferFrames, if (config.fps > 0) 1_000_000_000L / config.fps else 0)
-            codec.setOnFrameRenderedListener(
-                { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
-                android.os.Handler(android.os.Looper.getMainLooper()),
-            )
+            if (codecReportsShown) {
+                codec.setOnFrameRenderedListener(
+                    { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }
             var loggedFormat = false
             while (att.active) {
                 if (drainOutput(codec, info, pacer) && !loggedFormat) {
