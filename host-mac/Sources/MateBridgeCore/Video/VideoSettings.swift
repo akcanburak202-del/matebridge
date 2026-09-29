@@ -1,3 +1,5 @@
+import Foundation
+
 /// Tunable video parameters and the `STREAM_CONFIG` derived from them.
 public struct VideoSettings: Equatable, Sendable {
     public var widthPx: Int
@@ -8,6 +10,10 @@ public struct VideoSettings: Equatable, Sendable {
     public var fps: Int
     public var bitrateKbps: Int
     public var codec: Codec
+    /// Refresh rate of the virtual display (60 or 120). Not part of `STREAM_CONFIG`: the stream stays at `fps`.
+    public var displayRefreshHz: Int = 60
+    /// VideoToolbox `MaxFrameDelayCount`; nil leaves the encoder default (T-017 experiment knob).
+    public var maxFrameDelayCount: Int?
 
     /// Tablet native panel, 2x HiDPI.
     public static let tabletDefault = VideoSettings(
@@ -26,6 +32,18 @@ public struct VideoSettings: Equatable, Sendable {
     }
 
     // H.273 codes: sRGB primaries = BT.709 primaries; transfer 13 = sRGB; matrix 1 = BT.709; full range.
+    /// Accepts "60" or "120"; anything else (or nil) is 60.
+    public static func parseRefreshHz(_ text: String?) -> Int {
+        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), v == 60 || v == 120 else { return 60 }
+        return v
+    }
+
+    /// Accepts "0" or "1"; anything else (or nil) leaves the encoder default.
+    public static func parseFrameDelay(_ text: String?) -> Int? {
+        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), v == 0 || v == 1 else { return nil }
+        return v
+    }
+
     public static let colorPrimaries: UInt8 = 1
     public static let transfer: UInt8 = 13
     public static let matrix: UInt8 = 1

@@ -31,6 +31,8 @@ public final class VideoPipeline: @unchecked Sendable {
     public let settings: VideoSettings
     /// Encoder output: CODEC_CONFIG first, then keyframe, then frames. At most 2 wait here.
     public let frames: VideoFrameQueue
+    /// Cadence measurements (T-017): SCK arrival, encoder in/out, overwritten pending frames.
+    public let meter: CadenceMeter
 
     private let lock = NSLock()
     private var state = State.idle
@@ -41,6 +43,7 @@ public final class VideoPipeline: @unchecked Sendable {
     private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
     private let onFailure: @Sendable (Error) -> Void
     private let box: EncoderBox
+    private var displayInfo = "no display"
 
     /// - Parameters:
     ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
@@ -51,6 +54,7 @@ public final class VideoPipeline: @unchecked Sendable {
         self.settings = settings
         self.tap = tap
         self.onFailure = onFailure
+        self.meter = CadenceMeter(fps: settings.fps)
         // The queue's keyframe callback needs the encoder, which exists only after start().
         let box = EncoderBox()
         self.box = box
@@ -70,7 +74,7 @@ public final class VideoPipeline: @unchecked Sendable {
 
             let frames = self.frames
             let tap = self.tap
-            let encoder = try HEVCEncoder(settings: settings, output: { frame, encodeUs in
+            let encoder = try HEVCEncoder(settings: settings, meter: meter, output: { frame, encodeUs in
                 frames.push(frame)
                 tap?(frame, encodeUs)
             }, onFailure: { [weak self] error in self?.fail(error) })
@@ -79,9 +83,10 @@ public final class VideoPipeline: @unchecked Sendable {
 
             let display = try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx,
                                              pixelHeight: settings.heightPx, hidpi: true,
-                                             refreshRate: Double(settings.fps))
+                                             refreshRate: Double(settings.displayRefreshHz))
+            set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
             set { $0.display = display }
-            let cap = ScreenCapture(handler: { [weak encoder] pb, pts, us in
+            let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us in
                 encoder?.encode(pb, presentationTime: pts, captureTimeUs: us)
             }, onStop: { [weak self] error in self?.fail(error) })
             set { $0.capture = cap }
@@ -96,6 +101,7 @@ public final class VideoPipeline: @unchecked Sendable {
             }
             if let lastError { throw lastError }
 
+            meter.start(nowUs: HostClock.nowUs())
             let stoppedMeanwhile = markRunning()
             if stoppedMeanwhile { await teardown() }  // stop() raced with start(): release what start() created
         } catch {
@@ -103,6 +109,20 @@ public final class VideoPipeline: @unchecked Sendable {
             await teardown()
             throw error
         }
+    }
+
+    /// Closes the current cadence window (call about once a second). `sentTotal` is the sender's cumulative
+    /// frame count.
+    public func cadenceWindow(sentTotal: Int) -> CadenceWindow {
+        meter.take(nowUs: HostClock.nowUs(), queueDropsTotal: frames.droppedCount, sentTotal: sentTotal)
+    }
+
+    /// Virtual display mode requested vs. applied, and the encoder's cadence-related properties, for the log.
+    public var cadenceSetup: String {
+        let props = box.encoder?.propertyReport.joined(separator: ",") ?? "none"
+        return "display[\(lock.withLock { displayInfo })] stream_fps=\(settings.fps) "
+            + "encoder_set[\(props)] encoder_read[\(box.encoder?.cadenceReadback() ?? "none")] "
+            + "sck_min_interval_ms=\(String(format: "%.2f", 500 / Double(max(1, settings.fps)))) sck_queue_depth=\(ScreenCapture.queueDepth)"
     }
 
     public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }

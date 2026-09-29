@@ -106,23 +106,34 @@ final class VirtualDisplay: @unchecked Sendable {
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
         self.display = created
         self.displayID = id
-        self.modeSelected = VirtualDisplay.selectMode(id, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi)
+        self.requestedRefreshHz = refreshRate
+        self.modeSelected = VirtualDisplay.selectMode(id, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi,
+                                                      refreshRate: refreshRate)
+    }
+
+    /// Refresh rate the display mode was created with.
+    let requestedRefreshHz: Double
+
+    /// Current mode as the system reports it, e.g. "2800x1840px 1400x920pt 120Hz" (0 Hz = the system reports none).
+    var appliedModeDescription: String {
+        guard let m = CGDisplayCopyDisplayMode(displayID) else { return "unknown" }
+        return "\(m.pixelWidth)x\(m.pixelHeight)px \(m.width)x\(m.height)pt \(String(format: "%.0f", m.refreshRate))Hz"
     }
 
     /// True if the requested pixel-size mode was made current (best effort; capture works either way
     /// only if the default mode already matches).
     private(set) var modeSelected = false
 
-    /// Makes the mode with the wanted pixel size current (HiDPI: 2x, i.e. points = pixels / 2), highest refresh
-    /// rate first. The mode list appears shortly after creation, so retry for up to ~2 s.
-    private static func selectMode(_ id: CGDirectDisplayID, pixelWidth: Int, pixelHeight: Int, hidpi: Bool) -> Bool {
+    /// Makes the mode with the wanted pixel size current (HiDPI: 2x, i.e. points = pixels / 2),
+    /// refresh rate closest to the requested one first. The mode list appears shortly after creation, so retry for up to ~2 s.
+    private static func selectMode(_ id: CGDirectDisplayID, pixelWidth: Int, pixelHeight: Int, hidpi: Bool, refreshRate: Double) -> Bool {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes as String: true] as CFDictionary
         for _ in 0..<20 {
             let all = (CGDisplayCopyAllDisplayModes(id, opts) as? [CGDisplayMode]) ?? []
             let match = all
                 .filter { $0.pixelWidth == pixelWidth && $0.pixelHeight == pixelHeight
                     && ($0.pixelWidth > $0.width) == hidpi }
-                .max { $0.refreshRate < $1.refreshRate }
+                .min { abs($0.refreshRate - refreshRate) < abs($1.refreshRate - refreshRate) }
             if let match { return CGDisplaySetDisplayMode(id, match, nil) == .success }
             Thread.sleep(forTimeInterval: 0.1)
         }
