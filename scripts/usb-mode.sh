@@ -19,7 +19,9 @@ fi
 adb_retry() {
   local i out
   for i in 1 2 3 4; do
-    if out=$("$ADB" "$@" 2>&1); then printf '%s\n' "$out"; return 0; fi
+    "$ADB" start-server >/dev/null 2>&1 || true
+    # Keep only the command's own output; the server prints "daemon started" lines we must not parse.
+    if out=$("$ADB" "$@" 2>&1); then printf '%s\n' "$out" | grep -v '^\* daemon'; return 0; fi
     case "$out" in
       *"no devices"*|*"unauthorized"*|*"offline"*|*"not found"*) printf '%s\n' "$out" >&2; return 2 ;;
     esac
