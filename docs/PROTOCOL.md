@@ -36,7 +36,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 | `length` | u32 | Yalnızca payload uzunluğu (başlık hariç) |
 | payload | `length` bayt | Mesaja göre |
 
-- **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt.
+- **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **Protokol hatası:**
@@ -350,7 +350,7 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 | frame_size | u32 | Karenin tüm parçalarının toplam veri boyutu. TCP'de bu mesajdaki veri uzunluğuna eşit. |
 | data | bytes | Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla) |
 
-`fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır.
+`fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır. TCP'de `fragment_index ≠ 0`, `fragment_count ≠ 1` veya `frame_size ≠ veri uzunluğu` **protokol hatasıdır** (video bağlantısı kapanır, §2).
 
 ## 5. Kuyruk sınırları (AGENTS.md: yalnızca sınırlı kuyruk)
 
