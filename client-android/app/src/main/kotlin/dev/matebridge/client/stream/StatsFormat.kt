@@ -33,10 +33,10 @@ object StatsFormat {
             "\n" + gaps("Ağ", s.network) + "\n" + gaps("Hazır", s.ready) + "\n" + gaps("Gösterim", s.shown)
     }
 
-    /** "Ağ 16.7/24.1/40.2 ms >16.7:5": p50/p95/p99 of the gap between two frames, and the count over 16.7 ms. */
+    /** "Ağ 16.7/24.1/40.2 ms >25.0:5": p50/p95/p99 of the gap between two frames, and the count over the threshold (1.5 x vsync period). */
     fun gaps(label: String, g: IntervalSummary): String = String.format(
-        Locale.ROOT, "%s %.1f/%.1f/%.1f ms >16.7:%d",
-        label, g.p50Us / 1000.0, g.p95Us / 1000.0, g.p99Us / 1000.0, g.overThreshold,
+        Locale.ROOT, "%s %.1f/%.1f/%.1f ms >%.1f:%d",
+        label, g.p50Us / 1000.0, g.p95Us / 1000.0, g.p99Us / 1000.0, g.thresholdUs / 1000.0, g.overThreshold,
     )
 
     /** Log fields for one interval summary, e.g. `net_p50_us=... net_p95_us=... net_p99_us=... net_over=...`. */
@@ -44,6 +44,7 @@ object StatsFormat {
         "${prefix}_p50_us=${g.p50Us} ${prefix}_p95_us=${g.p95Us} ${prefix}_p99_us=${g.p99Us} ${prefix}_over=${g.overThreshold}"
 
     /** Overlay line for the display mode and jitter buffer. */
-    fun pacingLine(modeHz: Float, bufferFrames: Int) =
-        String.format(Locale.ROOT, "Mod %.0f Hz | Tampon %d", modeHz, bufferFrames)
+    fun pacingLine(modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null) =
+        String.format(Locale.ROOT, "Mod %.0f Hz | Tampon %d", modeHz, bufferFrames) +
+            (if (paceAddUs != null) String.format(Locale.ROOT, " | +%.1f ms", paceAddUs / 1000.0) else "")
 }

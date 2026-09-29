@@ -8,6 +8,8 @@ data class IntervalSummary(
     val p99Us: Long,
     /** Number of intervals longer than the histogram's threshold (exact, not sampled). */
     val overThreshold: Int,
+    /** The threshold [overThreshold] was counted against. */
+    val thresholdUs: Long = 16_700,
 ) {
     companion object {
         val EMPTY = IntervalSummary(0, 0, 0, 0, 0)
@@ -16,10 +18,12 @@ data class IntervalSummary(
 
 /**
  * Records the gap between consecutive events ([mark]) and summarizes a window as p50/p95/p99 plus the
- * number of gaps above [thresholdUs] (16.7 ms = one 60 Hz frame). Pure Kotlin, thread-safe, bounded
+ * number of gaps above [thresholdUs] (default 16.7 ms). Pure Kotlin, thread-safe, bounded
  * (at most [MAX_SAMPLES] samples per window; the over-threshold count stays exact).
  */
-class IntervalHistogram(private val thresholdUs: Long = 16_700) {
+class IntervalHistogram(thresholdUs: Long = 16_700) {
+    /** Gaps longer than this count as over; may be changed while running (e.g. 1.5 x vsync period). */
+    @Volatile var thresholdUs: Long = thresholdUs
     companion object {
         const val MAX_SAMPLES = 4096
     }
@@ -50,7 +54,7 @@ class IntervalHistogram(private val thresholdUs: Long = 16_700) {
         val s = if (n == 0) IntervalSummary.EMPTY else {
             val sorted = samples.copyOf(n).also { it.sort() }
             fun pct(p: Int) = sorted[((n * p + 99) / 100 - 1).coerceIn(0, n - 1)]
-            IntervalSummary(total, pct(50), pct(95), pct(99), over)
+            IntervalSummary(total, pct(50), pct(95), pct(99), over, thresholdUs)
         }
         if (reset) { n = 0; over = 0; total = 0 }
         return s

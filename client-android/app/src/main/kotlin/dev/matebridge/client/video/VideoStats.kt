@@ -17,6 +17,8 @@ class VideoStats {
         val ready: IntervalSummary = IntervalSummary.EMPTY,
         /** Gaps between frames shown on screen (MediaCodec frame-rendered callback). */
         val shown: IntervalSummary = IntervalSummary.EMPTY,
+        /** Average delay the pacer added versus presenting at the earliest vsync, or null when unpaced. */
+        val paceAddAvgUs: Long? = null,
     )
 
     private var received = 0L
@@ -42,6 +44,17 @@ class VideoStats {
         received++; bytes += size
         if (!isConfig) networkGaps.mark(nowUs)
     }
+
+    private var paceAddSumUs = 0L
+    private var paceAddCount = 0L
+
+    /** Threshold for the ">threshold" gap counters (1.5 x vsync period). */
+    fun setGapThresholdUs(us: Long) {
+        networkGaps.thresholdUs = us; readyGaps.thresholdUs = us; shownGaps.thresholdUs = us
+    }
+
+    /** Delay the pacer added to one frame. */
+    @Synchronized fun onPaceAdd(us: Long) { paceAddSumUs += us; paceAddCount++ }
 
     /** A frame reached the screen at [nowUs] (client monotonic clock). */
     fun onShown(nowUs: Long) = shownGaps.mark(nowUs)
@@ -74,11 +87,13 @@ class VideoStats {
         val s = Snapshot(received, decoded, rendered, dropped,
             if (decodeCount > 0) decodeSumUs / decodeCount else 0, bytes,
             if (latencyCount > 0) latencySumUs / latencyCount else null,
-            networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset))
+            networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset),
+            if (paceAddCount > 0) paceAddSumUs / paceAddCount else null)
         if (reset) {
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
             latencySumUs = 0; latencyCount = 0
+            paceAddSumUs = 0; paceAddCount = 0
         }
         return s
     }

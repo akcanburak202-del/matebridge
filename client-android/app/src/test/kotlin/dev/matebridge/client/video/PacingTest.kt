@@ -69,20 +69,47 @@ class PacerTest {
 
     private fun clock(hz: Float, startNs: Long = 0): VsyncClock = VsyncClock(hz).also { it.onVsync(startNs) }
 
+    private fun feed(v: VsyncClock, fromNs: Long, deltaNs: Long, n: Int): Long {
+        var t = fromNs
+        repeat(n) { t += deltaNs; v.onVsync(t) }
+        return t
+    }
+
     @Test fun noSamplesMeansImmediate() {
         assertNull(FramePacer(VsyncClock(60f), 1, period60).schedule(1_000))
     }
 
-    @Test fun periodIgnoresOutOfRangeAndSkippedCallbacks() {
+    @Test fun reseedsFrom60To120AndBack() {
         val v = VsyncClock(60f)
-        var t = 0L
-        repeat(10) { v.onVsync(t); t += 8_333_333L } // 120 Hz samples while nominal is 60: ignored
-        assertEquals(period60, v.periodNs)
-        val v2 = VsyncClock(60f)
-        v2.onVsync(0); v2.onVsync(period60); v2.onVsync(period60 * 4) // 2 callbacks skipped
-        assertTrue(Math.abs(v2.periodNs - period60) < 100_000)
-        v.setNominalHz(120f)
-        assertEquals(8_333_333L, v.periodNs)
+        v.onVsync(0)
+        var t = feed(v, 0, period60, 10)
+        assertTrue(Math.abs(v.periodNs - period60) < 50_000)
+        t = feed(v, t, 8_333_333L, VsyncClock.RESEED_AFTER + 1) // display switched to 120 Hz
+        assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - 8_333_333L) < 200_000)
+        feed(v, t, period60, VsyncClock.RESEED_AFTER + 1) // and back to 60 Hz
+        assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - period60) < 200_000)
+    }
+
+    @Test fun reseedsFrom120To60() {
+        val v = VsyncClock(120f)
+        v.onVsync(0)
+        feed(v, 0, period60, VsyncClock.RESEED_AFTER + 1) // gaps look like skipped callbacks, but persist
+        assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - period60) < 200_000)
+    }
+
+    @Test fun oneSkippedCallbackDoesNotReseed() {
+        val v = VsyncClock(60f)
+        v.onVsync(0)
+        val t = feed(v, 0, period60, 5)
+        v.onVsync(t + period60 * 3) // 2 callbacks skipped
+        feed(v, t + period60 * 3, period60, 5)
+        assertTrue(Math.abs(v.periodNs - period60) < 100_000)
+    }
+
+    @Test fun resetForgetsPhase() {
+        val v = clock(60f)
+        v.reset()
+        assertFalse(v.hasSample)
     }
 
     @Test fun slotsLieOnTheMidPeriodGrid() {
@@ -91,39 +118,59 @@ class PacerTest {
         assertEquals(period60 / 2 + period60, v.slotAtOrAfter(period60 / 2 + 1, 0.5))
     }
 
-    @Test fun bufferDelaysByContentFramesAndKeepsCadence() {
+    @Test fun bufferOnePresentsOneVsyncAfterTheEarliest() {
         val pacer = FramePacer(clock(60f), 1, period60)
-        val a = pacer.schedule(1 * ms)!!
-        assertFalse(a.collided)
-        assertTrue(a.renderNs >= 1 * ms + period60)
-        val b = pacer.schedule(1 * ms)!! // same instant: one cadence step later, not the same slot
-        assertEquals(a.renderNs + period60, b.renderNs)
+        val d = pacer.schedule(1 * ms)!!
+        assertFalse(d.collided)
+        assertEquals(period60, d.addedNs) // earliest vsync is period60, V is one period later
+        assertEquals(2 * period60 - period60 / 2, d.renderNs)
     }
 
-    @Test fun cadenceIsTwoVsyncsAt120HzFor60FpsContent() {
+    @Test fun addedLatencyStaysWithinOneVsyncPlusHalfAFrame() {
+        for (hz in listOf(60f, 120f)) {
+            val v = clock(hz)
+            val pacer = FramePacer(v, 1, period60)
+            var t = 0L
+            var seed = 12345L
+            repeat(500) {
+                seed = (seed * 1103515245 + 12345) and 0x7fffffff
+                t += period60 + (seed % (12 * ms)) - 6 * ms // 60 fps with +-6 ms arrival jitter
+                val d = pacer.schedule(t)!!
+                assertTrue("hz=$hz added=${d.addedNs}", d.addedNs <= v.periodNs + period60 / 2)
+            }
+        }
+    }
+
+    @Test fun cadenceKeepsTwoVsyncsAt120HzWhenDebtIsSmall() {
         val v = clock(120f)
         val pacer = FramePacer(v, 1, period60)
         val a = pacer.schedule(0)!!
-        val b = pacer.schedule(0)!!
+        val b = pacer.schedule(4 * ms)!!
+        assertFalse(b.collided)
         assertEquals(2 * v.periodNs, b.renderNs - a.renderNs)
     }
 
-    @Test fun backlogIsBoundedAndNewestSharesTheSlot() {
+    @Test fun burstCollidesOnTheSameSlotAndRecovers() {
         val pacer = FramePacer(clock(60f), 1, period60)
-        pacer.schedule(0)
-        val second = pacer.schedule(0)!!
-        assertFalse(second.collided)
-        val third = pacer.schedule(0)!! // would be 2 frames beyond the base
-        assertTrue(third.collided)
-        assertEquals(second.renderNs, third.renderNs)
-    }
-
-    @Test fun recoversAfterAGap() {
-        val pacer = FramePacer(clock(60f), 2, period60)
-        pacer.schedule(0)
+        val a = pacer.schedule(0)!!
+        val b = pacer.schedule(0)!! // debt of a full frame: re-anchored onto a's slot
+        assertTrue(b.collided)
+        assertEquals(a.renderNs, b.renderNs)
         val late = pacer.schedule(1_000 * ms)!!
         assertFalse(late.collided)
-        assertTrue(late.renderNs >= 1_000 * ms + 2 * period60)
+    }
+
+    @Test fun cadenceDebtDoesNotAccumulate() {
+        val v = clock(60f)
+        val pacer = FramePacer(v, 1, period60)
+        var t = 0L
+        var maxAdded = 0L
+        repeat(300) { // source 2% faster than the display cadence
+            t += period60 * 98 / 100
+            val d = pacer.schedule(t)!!
+            maxAdded = maxOf(maxAdded, d.addedNs)
+        }
+        assertTrue("added=$maxAdded", maxAdded <= v.periodNs + period60 / 2)
     }
 
     @Test fun bufferIsClampedToTwo() {
@@ -131,6 +178,23 @@ class PacerTest {
         val a = FramePacer(v, 5, period60).schedule(0)!!
         val b = FramePacer(v, 2, period60).schedule(0)!!
         assertEquals(b.renderNs, a.renderNs)
+    }
+
+    @Test fun gapThresholdIsFollowedAndReported() {
+        val h = IntervalHistogram()
+        h.thresholdUs = 25_000
+        h.record(20_000); h.record(30_000)
+        val s = h.summary()
+        assertEquals(1, s.overThreshold)
+        assertEquals(25_000L, s.thresholdUs)
+        assertTrue(StatsFormat.gaps("X", s).contains(">25.0:1"))
+    }
+
+    @Test fun paceAddIsAveragedPerWindow() {
+        val st = VideoStats()
+        st.onPaceAdd(10_000); st.onPaceAdd(20_000)
+        assertEquals(15_000L, st.snapshot(reset = true).paceAddAvgUs)
+        assertNull(st.snapshot().paceAddAvgUs)
     }
 }
 
