@@ -7,11 +7,11 @@ owner: android-client-dev
 depends_on: [T-009]
 decisions: [0004]
 files:
-  - client-android/app/src/main/java/dev/matebridge/client/session/
-  - client-android/app/src/main/java/dev/matebridge/client/MainActivity.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/main/res/
   - client-android/app/src/main/AndroidManifest.xml
-  - client-android/app/src/test/java/dev/matebridge/client/session/
+  - client-android/app/src/test/kotlin/dev/matebridge/client/session/
 ---
 
 ## Amaç

@@ -15,6 +15,7 @@ Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 
   - İstemci: `x = round(clamp(px / surface_width, 0, 1) × 65535)`. Video yüzeyi ekranın tamamı değilse (siyah bant) bant çıkarılır. Yüzey dışındaki noktalar kenara sıkıştırılır.
   - Host: `x_pt = origin_x + x / 65535 × width_pt`, sonra `[origin_x, origin_x + width_pt − 1/scale]` aralığına sıkıştırılır. `origin` ve `width_pt` sanal ekranın global koordinatlarıdır (`CGDisplayBounds`). Sanal ekran ana ekran olduğunda origin (0,0) olur, ama bu varsayılmaz.
 - **Eğim ve basınç kodlaması:** `-1…1` aralığındaki değer `round(v × 32767)` ile `i16`'ya çevrilir. `-32768` gelirse `-32767` sayılır. `0…1` aralığındaki basınç `round(v × 65535)` ile `u16`'ya çevrilir.
+- **Yuvarlama:** Bu belgedeki bütün `round()` işlemleri **sıfırdan uzağa yarım yuvarlama**dır (`round(2.5) = 3`, `round(−2.5) = −3`). Swift `.rounded()` varsayılanı budur. Kotlin/Java'da `Math.round` (pozitif sonsuza) ve `kotlin.math.round` (çifte) farklıdır, kullanılmaz: `sign(v) × floor(|v| + 0.5)`.
 
 ## 2. Bağlantılar ve çerçeveleme
 
