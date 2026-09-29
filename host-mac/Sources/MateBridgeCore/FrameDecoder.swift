@@ -18,6 +18,7 @@ public struct FrameDecoder: Sendable {
     private var buffer: [UInt8] = []
     private var start = 0
     private var failed = false
+    private var overflowed = false
 
     public init(connection: Connection) { self.connection = connection }
 
@@ -33,6 +34,7 @@ public struct FrameDecoder: Sendable {
         guard !failed else { return }
         if bufferedCount > ProtocolConstants.headerSize + connection.maxPayload {
             failed = true
+            overflowed = true
             buffer.removeAll()
             start = 0
             return
@@ -42,6 +44,7 @@ public struct FrameDecoder: Sendable {
 
     /// Next complete known message, or nil when more bytes are needed.
     public mutating func nextMessage() throws -> Message? {
+        if overflowed { overflowed = false; throw ProtocolError.bufferOverflow }
         if failed { throw ProtocolError.decoderFailed }
         do {
             while true {

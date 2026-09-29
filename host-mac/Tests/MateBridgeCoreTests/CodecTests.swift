@@ -224,6 +224,7 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         let chunk = [UInt8](repeating: 0, count: 40_000)
         d.append([0x7f, 0x00, 0x00, 0x01, 0x00])  // 65536-byte unknown frame, payload pending
         for _ in 0..<10 { d.append(chunk) }  // never drained
+        #expect(throws: ProtocolError.bufferOverflow) { try d.nextMessage() }
         #expect(throws: ProtocolError.decoderFailed) { try d.nextMessage() }
         #expect(d.bufferedCount == 0)
     }

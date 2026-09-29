@@ -10,6 +10,8 @@ public enum ProtocolError: Error, Equatable, Sendable {
     case nonFiniteFloat(String)
     /// PEN samples with a decreasing dt_us.
     case decreasingSampleTime
+    /// Bytes were fed without draining: buffered data exceeded header + max payload.
+    case bufferOverflow
     /// The stream decoder already failed; the connection must be closed.
     case decoderFailed
 }
