@@ -19,4 +19,9 @@
     <string name="connect">Bağlan</string>
     <string name="stats_toggle">İstatistik katmanı aç/kapa</string>
     <string name="invalid_endpoint">Geçersiz adres, IP:port biçiminde girin</string>
+    <string name="connect_usb">USB ile bağlan</string>
+    <string name="connect_wifi">Wi-Fi ile bağlan</string>
+    <string name="usb_missing">USB bağlantısı yok — adb reverse kurulu mu?</string>
+    <string name="transport_usb">Bağlantı: USB</string>
+    <string name="transport_wifi">Bağlantı: Wi-Fi</string>
 </resources>
