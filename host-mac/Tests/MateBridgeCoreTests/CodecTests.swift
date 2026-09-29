@@ -249,4 +249,25 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         #expect(try d.nextMessage() == ping)
         #expect(try d.nextMessage() == nil)
     }
+
+    @Test func unknownColorCodesAndUndefinedBitsAreAccepted() throws {
+        var w = ByteWriter()
+        w.u16(1); w.u8(1); w.u8(0); w.u16(10); w.u16(10); w.u16(5); w.u16(5); w.u16(60); w.u32(1000)
+        w.u8(99); w.u8(98); w.u8(97); w.u8(1)
+        guard case .streamConfig(let c) = try decodeOne(frame(0x03, w.bytes)) else { Issue.record("not config"); return }
+        #expect(c.colorPrimaries == 99 && c.transfer == 98 && c.matrix == 97)
+        #expect(throws: ProtocolError.invalidField("codec")) {
+            var b = w.bytes; b[2] = 9
+            return try decodeOne(frame(0x03, b))
+        }
+        // Undefined capability and pen flag bits do not fail decoding.
+        var pen = ByteWriter()
+        pen.u8(0); pen.u8(1); pen.u16(0); pen.u64(0)
+        pen.u32(0); pen.u16(0); pen.u16(0); pen.u16(0); pen.i16(0); pen.i16(0); pen.u8(0xF1); pen.u8(0)
+        #expect(try decodeOne(frame(0x10, pen.bytes)) != nil)
+        var hello = ByteWriter()
+        hello.u16(0); hello.raw([UInt8](repeating: 1, count: 16)); hello.u16(1); hello.u16(1); hello.u16(1); hello.u16(1)
+        hello.u32(0xFFFF_FF00); hello.u8(0)
+        #expect(try decodeOne(frame(0x01, hello.bytes)) != nil)
+    }
 }
