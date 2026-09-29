@@ -30,6 +30,9 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MateBridge streams the screen to your tablet and receives its pen and keyboard input over the local network.</string>
-	<!-- NSBonjourServices is added once the discovery service type is fixed in docs/PROTOCOL.md (T-007). -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_matebridge._tcp</string>
+	</array>
 </dict>
 </plist>
