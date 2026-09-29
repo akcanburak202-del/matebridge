@@ -24,7 +24,7 @@ import java.io.File
  * through the same VideoRenderer the session will use, and shows the counters.
  *
  * adb push test.h265 /sdcard/Android/data/dev.matebridge.client/files/test.h265
- * adb shell am start -n dev.matebridge.client/.debug.VideoTestActivity [--ei fps 60]
+ * adb shell am start -n dev.matebridge.client/.debug.VideoTestActivity [--ei fps 60] [--ei full_range 0|1] [--ei primaries 1|12]
  */
 class VideoTestActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var overlay: TextView
@@ -41,8 +41,11 @@ class VideoTestActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         fps = intent.getIntExtra("fps", 60)
-        val config = StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, fps, 0, 1, 1, 1, 0)
-        renderer = VideoRenderer(config) { keyframeRequests++ }
+        val fullRange = intent.getIntExtra("full_range", 1) // host plans full-range sRGB
+        val primaries = intent.getIntExtra("primaries", 1)
+        val config = StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, fps, 0,
+            primaries, 13, 1, fullRange)
+        renderer = VideoRenderer(config, { keyframeRequests++ }, { msg -> status = "GAVE UP: $msg" })
 
         val file = File(getExternalFilesDir(null), "test.h265")
         status = if (file.exists()) {

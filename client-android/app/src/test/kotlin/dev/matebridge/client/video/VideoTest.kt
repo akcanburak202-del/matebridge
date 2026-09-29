@@ -160,3 +160,12 @@ class AnnexBSplitterTest {
         assertEquals(4 + 4, f[0].data.size) // start code + 4 NAL bytes, trailing zero stripped
     }
 }
+
+class RestartPolicyTest {
+    @Test fun allowsThreeThenGivesUpUntilWindowPasses() {
+        val p = RestartPolicy(3, 10_000)
+        assertTrue(p.allow(0)); assertTrue(p.allow(1000)); assertTrue(p.allow(2000))
+        assertFalse(p.allow(3000))
+        assertTrue(p.allow(10_000)) // first attempt left the window
+    }
+}

@@ -63,9 +63,6 @@ class FrameQueue(private val stats: VideoStats) {
         queue.removeFirstOrNull()
     }
 
-    /** Puts a frame back at the head (decoder had no free input buffer). */
-    fun pushBack(frame: VideoFrame) = synchronized(lock) { queue.addFirst(frame) }
-
     fun pending(): Int = synchronized(lock) { queue.size }
 
     /** Decoder error: drops pending frames and closes the gate; returns the request reason. */
@@ -77,13 +74,13 @@ class FrameQueue(private val stats: VideoStats) {
 
     /**
      * Restart (surface came back, codec recreated): clears frames, closes the gate, replays the last
-     * CODEC_CONFIG. Returns the request reason to send (STARTUP).
+     * CODEC_CONFIG. Returns [reason] (the request to send).
      */
-    fun reset(): Int = synchronized(lock) {
+    fun reset(reason: Int = KeyframeRequest.STARTUP): Int = synchronized(lock) {
         queue.clear()
         waitingKeyframe = true
         lastConfig?.let { queue.addLast(it) }
-        KeyframeRequest.STARTUP
+        reason
     }
 
     fun isWaitingKeyframe(): Boolean = synchronized(lock) { waitingKeyframe }
