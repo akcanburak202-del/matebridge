@@ -301,6 +301,20 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.tick(now: 5 * sec).contains(.closeVideo(V)))
     }
 
+    @Test func staleApprovalCannotApproveTakeoverConnection() {
+        var m = makeMachine()
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(), now: 0)  // pending
+        _ = m.connectionOpened(B, now: 1)
+        let takeover = m.received(B, hello(), now: 1)  // same device: A is cancelled, B pending
+        #expect(takeover.contains(.cancelApproval(A)))
+        #expect(takeover.contains(.requestApproval(B, deviceID: device(1), deviceName: "Pad")))
+        #expect(m.approvalDecided(A, approved: true, now: 2).isEmpty)  // stale click for A
+        #expect(m.status == .pending(deviceName: "Pad"))
+        #expect(!m.approvedDevices.contains(device(1)))
+        #expect(ackStatuses(m.approvalDecided(B, approved: true, now: 3), to: B) == [.accepted])
+    }
+
     @Test func forgetDevicesRequiresApprovalAgain() {
         var m = makeMachine(approved: [device(1)])
         m.forgetApprovedDevices()

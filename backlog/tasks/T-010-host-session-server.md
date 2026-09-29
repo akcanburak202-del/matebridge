@@ -51,6 +51,7 @@ Tabletin Mac'i bulup bağlanabilmesi: PROTOCOL.md §2, §3 ve §6'nın host tara
   Elle deneme (uygulama çalışırken; portu `dns-sd -B _matebridge._tcp` ve `dns-sd -L <ad> _matebridge._tcp local` ile bul):
   `cd protocol/fixtures && (sed 's/#.*//' hello.hex | xxd -r -p; sleep 70) | nc 127.0.0.1 <control_port> | xxd`
   Beklenen: Mac'te onay penceresi; ilk yanıt `02 ..` HELLO_ACK status=1 (pending); "İzin ver" sonrası ikinci HELLO_ACK (status 0) ve `03 ..` STREAM_CONFIG.
+- **Review düzeltmeleri (2. commit):** onay id'ye bağlı (`resolveApproval(id:)`), tek main-actor onay yolu (yeni istek eskisini değiştirir), `transportClosed` her zaman `cancel()`, `stop()` en fazla 200 ms BYE flush bekler (best effort), gönderim tavanı 256 KiB/bağlantı, en çok 4 kimliksiz kontrol ve 4 kimliksiz video bağlantısı, doğrulanmamış video bağlantısında elle ayrıştırılan en çok 1 KiB VIDEO_HELLO, store 0700/0600 atomik yazım, dinleyici hatasında iptal + üstel geri çekilme yeniden deneme, `VideoLink` en çok 2 uçuşta gönderim (`send` false döner, `canSend`, `onReady`). Bekleyen onay için bayat tıklama testi eklendi. Yeniden deneme ve geri basınç yolları gerçek ağda denenmedi.
 - **Açık sorular:**
   - `Info.plist` şablonuna (kart dışı, orkestratör ekler): `NSBonjourServices` = [`_matebridge._tcp`]. Yayın için gerekmeyebilir ama Local Network izniyle birlikte koymak güvenli. `NSLocalNetworkUsageDescription` zaten var.
   - Onay penceresi `runModal` kullanıyor; bağlantı düşerse `abortModal` ile kapanıyor, gerçek uygulamada denenmeli.

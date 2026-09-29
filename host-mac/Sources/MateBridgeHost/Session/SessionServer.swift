@@ -3,11 +3,21 @@ import MateBridgeCore
 import Network
 
 /// A validated video connection handed to the video pipeline (PROTOCOL.md section 3.5).
-/// Send-only from the host's point of view; `cancel()` closes just this connection.
+///
+/// Send contract (PROTOCOL.md section 5, newest frame wins): at most `maxInFlight` (2) sends may be
+/// outstanding. `send` returns false and transmits nothing when the limit is reached; the caller must then
+/// drop or replace the frame and request a keyframe. `canSend` and `onReady` expose the same backpressure:
+/// `onReady` fires (on the network queue) whenever an outstanding send completes.
+/// `cancel()` closes just this connection.
 public final class VideoLink: @unchecked Sendable {
+    public static let maxInFlight = 2
+
     public let sessionID: UInt32
     public let configID: UInt16
     private let connection: NWConnection
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var readyHandler: (@Sendable () -> Void)?
 
     fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection) {
         self.sessionID = sessionID
@@ -15,8 +25,33 @@ public final class VideoLink: @unchecked Sendable {
         self.connection = connection
     }
 
-    public func send(_ bytes: [UInt8], completion: @escaping @Sendable (Bool) -> Void = { _ in }) {
-        connection.send(content: Data(bytes), completion: .contentProcessed { completion($0 == nil) })
+    public var canSend: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return inFlight < Self.maxInFlight
+    }
+
+    public var onReady: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return readyHandler }
+        set { lock.lock(); readyHandler = newValue; lock.unlock() }
+    }
+
+    /// Returns false (nothing sent) while `maxInFlight` sends are outstanding. `completion(true)` means written.
+    @discardableResult
+    public func send(_ bytes: [UInt8], completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
+        lock.lock()
+        guard inFlight < Self.maxInFlight else { lock.unlock(); return false }
+        inFlight += 1
+        lock.unlock()
+        connection.send(content: Data(bytes), completion: .contentProcessed { [self] error in
+            lock.lock()
+            inFlight -= 1
+            let ready = readyHandler
+            lock.unlock()
+            completion(error == nil)
+            ready?()
+        })
+        return true
     }
 
     public func cancel() { connection.cancel() }
@@ -32,6 +67,8 @@ public enum SessionServerState: Equatable, Sendable {
 }
 
 public struct ApprovalRequest: Sendable {
+    /// Identifies the connection being asked about; pass it back to `resolveApproval`.
+    public let id: UInt64
     public let deviceName: String
 }
 
@@ -41,7 +78,8 @@ public final class SessionServer: @unchecked Sendable {
     public struct Handlers: Sendable {
         public var stateChanged: @Sendable (SessionServerState) -> Void = { _ in }
         public var approvalRequested: @Sendable (ApprovalRequest) -> Void = { _ in }
-        public var approvalCancelled: @Sendable () -> Void = {}
+        /// The request with this id is void (connection gone or superseded).
+        public var approvalCancelled: @Sendable (_ id: UInt64) -> Void = { _ in }
         /// Input, STATS and KEYFRAME_REQUEST from the approved session.
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
@@ -72,6 +110,18 @@ public final class SessionServer: @unchecked Sendable {
     private var tickTimer: DispatchSourceTimer?
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
+    private var stopped = false
+    private var restartAttempts = 0
+    private var restartScheduled = false
+    private var inflightBytes: [ConnectionID: Int] = [:]
+    private var videoBuffers: [ConnectionID: [UInt8]] = [:]
+    private var videoHelloSeen: Set<ConnectionID> = []
+    private var videoLinks: [ConnectionID: VideoLink] = [:]
+    private let flushGroup = DispatchGroup()
+
+    static let maxInflightBytes = 256 * 1024
+    static let maxUnauthenticated = 4
+    static let maxVideoHandshakePayload = 1024
 
     /// - Parameters:
     ///   - controlPort: 0 lets the system pick (found via Bonjour). A fixed port is needed for `adb reverse`.
@@ -100,24 +150,56 @@ public final class SessionServer: @unchecked Sendable {
 
     public func start() {
         queue.async { [self] in
-            guard controlListener == nil else { return }
+            guard tickTimer == nil else { return }
+            stopped = false
             setState(.starting)
-            do {
-                let video = try NWListener(using: Self.tcpParameters())
-                video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
-                video.stateUpdateHandler = { [weak self] s in self?.videoListenerState(s) }
-                videoListener = video
-                video.start(queue: queue)
-            } catch {
-                fail("video_listener_create")
-            }
+            startListeners()
             startTicking()
         }
     }
 
-    /// Blocks until input is released and every peer got BYE(SHUTTING_DOWN).
+    private func startListeners() {
+        guard !stopped else { return }
+        do {
+            let video = try NWListener(using: Self.tcpParameters())
+            video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
+            video.stateUpdateHandler = { [weak self, weak video] s in
+                guard let self, let video, video === videoListener else { return }
+                videoListenerState(s)
+            }
+            videoListener = video
+            video.start(queue: queue)
+        } catch {
+            listenersFailed("video_listener_create")
+        }
+    }
+
+    /// Cancels both listeners and retries with exponential backoff (1 s ... 30 s).
+    /// Established sessions keep running; only new connections are affected meanwhile.
+    private func listenersFailed(_ what: String) {
+        fail(what)
+        controlListener?.cancel()
+        videoListener?.cancel()
+        controlListener = nil
+        videoListener = nil
+        guard !stopped, !restartScheduled else { return }
+        restartScheduled = true
+        let delay = min(30.0, pow(2.0, Double(restartAttempts)))
+        restartAttempts += 1
+        queue.asyncAfter(deadline: .now() + delay) { [self] in
+            restartScheduled = false
+            guard !stopped else { return }
+            logger.log(.info, "listener_restart", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "attempt=\(restartAttempts)")
+            startListeners()
+        }
+    }
+
+    /// Releases input and sends BYE(SHUTTING_DOWN) to every peer. Delivery of the BYE is best effort:
+    /// waits up to 200 ms for the sends to be processed, then returns regardless.
     public func stop() {
         queue.sync {
+            stopped = true
             apply(machine.shutdown())
             tickTimer?.cancel()
             tickTimer = nil
@@ -127,13 +209,15 @@ public final class SessionServer: @unchecked Sendable {
             videoListener = nil
             setState(.stopped)
         }
+        _ = flushGroup.wait(timeout: .now() + .milliseconds(200))  // completions run on `queue`, so wait outside it
     }
 
-    public func resolveApproval(approved: Bool) {
+    /// Answers the approval request `id`. Ignored unless it is still the pending one.
+    public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in
-            guard let id = pendingApproval else { return }
+            guard let pending = pendingApproval, pending.raw == id else { return }
             pendingApproval = nil
-            apply(machine.approvalDecided(id, approved: approved, now: nowUs()))
+            apply(machine.approvalDecided(pending, approved: approved, now: nowUs()))
         }
     }
 
@@ -162,7 +246,7 @@ public final class SessionServer: @unchecked Sendable {
             machine.videoPort = port
             startControlListener(videoPort: port)
         case .failed:
-            fail("video_listener_failed")
+            listenersFailed("video_listener_failed")
         default: break
         }
     }
@@ -175,21 +259,22 @@ public final class SessionServer: @unchecked Sendable {
             listener.service = NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType,
                                                   domain: nil, txtRecord: NWTXTRecord(["v": "0"]))
             listener.newConnectionHandler = { [weak self] c in self?.accept(c, video: false) }
-            listener.stateUpdateHandler = { [weak self] s in
-                guard let self else { return }
+            listener.stateUpdateHandler = { [weak self, weak listener] s in
+                guard let self, let listener, listener === controlListener else { return }
                 switch s {
                 case .ready:
+                    restartAttempts = 0
                     logger.log(.info, "listening", sessionID: 0, generation: 0,
                                fields: "control_port=\(listener.port?.rawValue ?? 0) video_port=\(videoPort)")
                     if case .starting = state { setState(.listening) }
-                case .failed: fail("control_listener_failed")
+                case .failed: listenersFailed("control_listener_failed")
                 default: break
                 }
             }
             controlListener = listener
             listener.start(queue: queue)
         } catch {
-            fail("control_listener_create")
+            listenersFailed("control_listener_create")
         }
     }
 
@@ -201,6 +286,14 @@ public final class SessionServer: @unchecked Sendable {
     // MARK: Connections
 
     private func accept(_ connection: NWConnection, video: Bool) {
+        // Bounded: refuse new connections while too many have not yet authenticated (HELLO / VIDEO_HELLO).
+        let unauthenticated = video ? machine.pendingVideoCount : machine.awaitingHelloCount
+        guard unauthenticated < Self.maxUnauthenticated else {
+            logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "video=\(video) reason=too_many_unauthenticated")
+            connection.cancel()
+            return
+        }
         nextID += 1
         let id = ConnectionID(nextID)
         connection.stateUpdateHandler = { [weak self] s in
@@ -226,18 +319,20 @@ public final class SessionServer: @unchecked Sendable {
             guard let self else { return }
             var decoder = decoder
             if let data, !data.isEmpty {
-                decoder.append([UInt8](data))
-                do {
-                    while let message = try decoder.nextMessage() {
-                        if video { handleVideo(id, message) } else {
+                if video {
+                    guard receiveVideoBytes(id, [UInt8](data)) else { return }
+                } else {
+                    decoder.append([UInt8](data))
+                    do {
+                        while let message = try decoder.nextMessage() {
                             apply(machine.received(id, message, now: nowUs()))
                         }
+                    } catch {
+                        logger.log(.warning, "decode_error", sessionID: currentSessionID,
+                                   generation: currentConfigID, fields: "video=false")
+                        apply(machine.protocolError(id))
+                        return
                     }
-                } catch {
-                    logger.log(.warning, "decode_error", sessionID: currentSessionID, generation: currentConfigID,
-                               fields: "video=\(video)")
-                    if video { closeVideo(id) } else { apply(machine.protocolError(id)) }
-                    return
                 }
             }
             let stillOpen = video ? videoConnections[id] != nil : controlConnections[id] != nil
@@ -249,39 +344,87 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
-    private func handleVideo(_ id: ConnectionID, _ message: Message) {
-        // Only VIDEO_HELLO is valid C->H on the video connection; a second one or anything else is an error.
-        if case .videoHello(let hello) = message, videoLinks[id] == nil {
-            apply(machine.videoHello(id, hello, now: nowUs()))
-        } else {
+    /// Video connection input: only one VIDEO_HELLO (type 0x40, payload at most 1 KiB) is valid C->H.
+    /// Hand-parsed so an unauthenticated peer can never make us buffer the 16 MiB video payload limit.
+    /// Returns false when the connection was closed.
+    private func receiveVideoBytes(_ id: ConnectionID, _ bytes: [UInt8]) -> Bool {
+        func reject() -> Bool {
+            logger.log(.warning, "video_hello_invalid", sessionID: currentSessionID, generation: currentConfigID)
             closeVideo(id)
+            return false
         }
+        guard !videoHelloSeen.contains(id) else { return reject() }
+        var buffer = videoBuffers[id, default: []]
+        buffer += bytes
+        var length = 0
+        if buffer.count >= ProtocolConstants.headerSize {
+            guard buffer[0] == MessageType.videoHello.rawValue else { return reject() }
+            let l = (0..<4).reduce(UInt32(0)) { $0 | UInt32(buffer[1 + $1]) << (8 * UInt32($1)) }
+            guard l <= UInt32(Self.maxVideoHandshakePayload) else { return reject() }
+            length = Int(l)
+            let total = ProtocolConstants.headerSize + length
+            if buffer.count >= total {
+                guard buffer.count == total else { return reject() }
+                var d = FrameDecoder(connection: .video)
+                d.append(buffer)
+                guard case .videoHello(let hello)? = try? d.nextMessage() else { return reject() }
+                videoBuffers[id] = nil
+                videoHelloSeen.insert(id)
+                apply(machine.videoHello(id, hello, now: nowUs()))
+                return true
+            }
+        }
+        videoBuffers[id] = buffer
+        return true
     }
 
-    private var videoLinks: [ConnectionID: VideoLink] = [:]
-
-    /// The transport is gone (peer closed, error, or we cancelled it). Idempotent.
+    /// The transport is gone (peer closed, error, or we cancelled it). Idempotent; always cancels the socket.
     private func transportClosed(_ id: ConnectionID, video: Bool) {
         if video {
-            guard videoConnections.removeValue(forKey: id) != nil else { return }
+            guard let c = videoConnections.removeValue(forKey: id) else { return }
+            c.cancel()
             videoLinks[id] = nil
+            videoBuffers[id] = nil
+            videoHelloSeen.remove(id)
             apply(machine.videoClosed(id))
         } else {
-            guard controlConnections.removeValue(forKey: id) != nil else { return }
+            guard let c = controlConnections.removeValue(forKey: id) else { return }
+            c.cancel()
+            inflightBytes[id] = nil
             apply(machine.connectionClosed(id))
         }
     }
 
     private func closeVideo(_ id: ConnectionID) {
-        guard let c = videoConnections[id] else { return }
-        c.cancel()  // stateUpdateHandler(.cancelled) -> transportClosed
+        transportClosed(id, video: true)
     }
 
     private func closeControl(_ id: ConnectionID) {
         guard let c = controlConnections.removeValue(forKey: id) else { return }
+        inflightBytes[id] = nil
         // Queued sends (BYE, REJECTED) are flushed before the FIN, then the socket is cancelled.
+        flushGroup.enter()
         c.send(content: nil, contentContext: .finalMessage, isComplete: true,
-               completion: .contentProcessed { _ in c.cancel() })
+               completion: .contentProcessed { [flushGroup] _ in
+                   c.cancel()
+                   flushGroup.leave()
+               })
+    }
+
+    private func sendControl(_ id: ConnectionID, _ bytes: [UInt8]) {
+        guard let c = controlConnections[id] else { return }
+        let pending = inflightBytes[id, default: 0] + bytes.count
+        guard pending <= Self.maxInflightBytes else {
+            // The peer is not reading. Drop the connection: input is released via connectionClosed.
+            logger.log(.warning, "send_backlog", sessionID: currentSessionID, generation: currentConfigID)
+            transportClosed(id, video: false)
+            return
+        }
+        inflightBytes[id] = pending
+        c.send(content: Data(bytes), completion: .contentProcessed { [weak self] _ in
+            guard let self, let n = inflightBytes[id] else { return }
+            inflightBytes[id] = max(0, n - bytes.count)
+        })
     }
 
     // MARK: Applying machine actions
@@ -290,8 +433,8 @@ public final class SessionServer: @unchecked Sendable {
         for action in actions {
             switch action {
             case .send(let id, let message):
-                guard let c = controlConnections[id], let bytes = try? message.encode() else { break }
-                c.send(content: Data(bytes), completion: .contentProcessed { _ in })
+                guard let bytes = try? message.encode() else { break }
+                sendControl(id, bytes)
             case .close(let id):
                 closeControl(id)
             case .closeVideo(let id):
@@ -302,11 +445,11 @@ public final class SessionServer: @unchecked Sendable {
                 handlers.deliver(message)
             case .requestApproval(let id, _, let name):
                 pendingApproval = id
-                handlers.approvalRequested(ApprovalRequest(deviceName: name))
+                handlers.approvalRequested(ApprovalRequest(id: id.raw, deviceName: name))
             case .cancelApproval(let id):
                 if pendingApproval == id {
                     pendingApproval = nil
-                    handlers.approvalCancelled()
+                    handlers.approvalCancelled(id.raw)
                 }
             case .rememberDevice(let id, let name):
                 knownDevices[id] = name

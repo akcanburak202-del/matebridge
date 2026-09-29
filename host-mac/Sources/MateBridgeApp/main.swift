@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var server: SessionServer?
+    /// Approval flow state. Everything runs on the main actor, so these are serialized.
     private var approvalRunning = false
+    private var shownApprovalID: UInt64?
+    private var latestRequest: ApprovalRequest?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -34,8 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handlers.approvalRequested = { [weak self] request in
             Task { @MainActor in self?.askApproval(request) }
         }
-        handlers.approvalCancelled = { [weak self] in
-            Task { @MainActor in self?.dismissApproval() }
+        handlers.approvalCancelled = { [weak self] id in
+            Task { @MainActor in self?.cancelApproval(id) }
         }
         // Input injection, video and the log file arrive with later tasks; releaseInput is a no-op until then.
         let server = SessionServer(handlers: handlers)
@@ -62,26 +65,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A new request replaces any queued one and aborts the dialog still showing an older request.
+    /// The next alert is only shown after `runModal` has returned, so a takeover never loses its dialog.
     private func askApproval(_ request: ApprovalRequest) {
-        guard !approvalRunning else { return }
-        approvalRunning = true
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "\(request.deviceName) bağlanmak istiyor"
-        alert.informativeText = "İzin verirsen bu cihaz ekranını görebilir ve bu Mac'i kontrol edebilir."
-        alert.addButton(withTitle: "İzin ver")
-        alert.addButton(withTitle: "Reddet")
-        let response = alert.runModal()
-        approvalRunning = false
-        switch response {
-        case .alertFirstButtonReturn: server?.resolveApproval(approved: true)
-        case .alertSecondButtonReturn: server?.resolveApproval(approved: false)
-        default: break  // aborted: the connection went away, nothing to answer
+        latestRequest = request
+        if approvalRunning {
+            NSApp.abortModal()
+        } else {
+            Task { @MainActor in self.pumpApprovals() }
         }
     }
 
-    private func dismissApproval() {
-        if approvalRunning { NSApp.abortModal() }
+    private func cancelApproval(_ id: UInt64) {
+        if latestRequest?.id == id { latestRequest = nil }
+        if approvalRunning, shownApprovalID == id { NSApp.abortModal() }
+    }
+
+    private func pumpApprovals() {
+        guard !approvalRunning else { return }
+        while let request = latestRequest {
+            latestRequest = nil
+            approvalRunning = true
+            shownApprovalID = request.id
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "\(request.deviceName) bağlanmak istiyor"
+            alert.informativeText = "İzin verirsen bu cihaz ekranını görebilir ve bu Mac'i kontrol edebilir."
+            alert.addButton(withTitle: "İzin ver")
+            alert.addButton(withTitle: "Reddet")
+            let response = alert.runModal()
+            approvalRunning = false
+            shownApprovalID = nil
+            // The answer is bound to this request's id; the server ignores it if that request is no longer pending.
+            switch response {
+            case .alertFirstButtonReturn: server?.resolveApproval(id: request.id, approved: true)
+            case .alertSecondButtonReturn: server?.resolveApproval(id: request.id, approved: false)
+            default: break  // aborted: cancelled or replaced by a newer request
+            }
+        }
     }
 }
 

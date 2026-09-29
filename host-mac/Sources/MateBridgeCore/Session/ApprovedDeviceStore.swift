@@ -48,9 +48,18 @@ public struct ApprovedDeviceStore: Sendable {
         let entries = devices.map { Entry(deviceID: Self.hex($0.key), name: $0.value) }
             .sorted { $0.deviceID < $1.deviceID }
         let data = try JSONEncoder().encode(entries)
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try data.write(to: fileURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        let fm = FileManager.default
+        let dir = fileURL.deletingLastPathComponent()
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        // Temp file is created 0600 (never world-readable), then renamed over the target atomically.
+        let temp = dir.appendingPathComponent(".approved-devices.\(UUID().uuidString).tmp")
+        guard fm.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        if rename(temp.path, fileURL.path) != 0 {
+            try? fm.removeItem(at: temp)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 }

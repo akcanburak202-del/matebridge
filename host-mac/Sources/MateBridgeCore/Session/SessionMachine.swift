@@ -113,6 +113,14 @@ public struct SessionMachine: Sendable {
         return .idle
     }
 
+    /// Control connections that have not sent HELLO yet (unauthenticated; the host caps these).
+    public var awaitingHelloCount: Int {
+        connections.values.filter { if case .awaitingHello = $0.phase { true } else { false } }.count
+    }
+
+    /// Video connections that have not yet passed VIDEO_HELLO.
+    public var pendingVideoCount: Int { videoConnections.count }
+
     public mutating func forgetApprovedDevices() { approvedDevices.removeAll() }
 
     // MARK: Control connection events
