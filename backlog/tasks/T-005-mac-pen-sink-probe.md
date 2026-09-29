@@ -1,7 +1,7 @@
 ---
 id: T-005
 title: Mac kalem alıcı probu — sentetik tablet olayları enjekte et ve doğrula
-status: review
+status: done
 phase: 0
 owner: mac-host-dev
 depends_on: []
@@ -20,13 +20,13 @@ Tablete ihtiyaç duymadan Mac tarafının kalem yolunu doğrulamak: `CGEvent` il
 
 ## Kabul kriterleri
 
-- [ ] `pen-view` modu: küçük bir AppKit penceresi. Gelen her `NSEvent` için tip, subtype, pressure, tilt, rotation, proximity (enter/leave, pointerType), deviceID gösterilir. Basınca göre kalınlaşan çizgi çizer.
-- [ ] `inject` modu: `swift run pen-sink-probe inject --pattern ramp|circle|tilt` → yakınlık girişi, basıncı 0→1→0 değişen, eğimi taranan bir vuruş, yakınlık çıkışı. Kalem olayları android-display'deki yöntemle (proximity + `kCGEventMouseSubtypeTabletPoint`) üretilir.
-- [ ] Accessibility izni yoksa anlaşılır mesaj verilir, çökmez.
-- [ ] `pen-view` açıkken `inject` çalıştırıldığında pencerede basınç/eğim değerleri beklenen aralıkta görülür (kullanıcı/orkestratör doğrular).
-- [ ] Krita'da basınçlı fırçayla `inject --pattern ramp` çizgisinin kalınlaşıp inceldiği kontrol edilir (kullanıcı doğrular).
-- [ ] Enjeksiyon mantığı (olay alanlarını dolduran kısım) ileride `MateBridgeHost`'a taşınabilecek şekilde ayrı bir dosyada.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `pen-view` modu: küçük bir AppKit penceresi. Gelen her `NSEvent` için tip, subtype, pressure, tilt, rotation, proximity (enter/leave, pointerType), deviceID gösterilir. Basınca göre kalınlaşan çizgi çizer.
+- [x] `inject` modu: `swift run pen-sink-probe inject --pattern ramp|circle|tilt` → yakınlık girişi, basıncı 0→1→0 değişen, eğimi taranan bir vuruş, yakınlık çıkışı. Kalem olayları android-display'deki yöntemle (proximity + `kCGEventMouseSubtypeTabletPoint`) üretilir.
+- [x] Accessibility izni yoksa anlaşılır mesaj verilir, çökmez.
+- [x] `pen-view` açıkken `inject` çalıştırıldığında pencerede basınç/eğim değerleri beklenen aralıkta görülür (kullanıcı/orkestratör doğrular).
+- [x] Krita'da basınçlı fırçayla `inject --pattern ramp` çizgisinin kalınlaşıp inceldiği kontrol edilir (kullanıcı doğrular).
+- [x] Enjeksiyon mantığı (olay alanlarını dolduran kısım) ileride `MateBridgeHost`'a taşınabilecek şekilde ayrı bir dosyada.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -47,3 +47,10 @@ SwiftPM paketi `probes/pen-sink-probe`: `PenInjection` kütüphanesi (alan eşle
 - **Açık sorular:** Yok. NSEvent.pressure ile CGEvent tablet pressure eşlemesi macOS 27'de farklı çıkarsa yalnızca PenEventFields düzeltilir.
 
 - **Düzeltme turu (review):** PenSession tüm postları tek kilit altında serileştirir, cancel() bayrağı + gerçek durumdan bırakma; SIGHUP/SIGQUIT eklendi; drag/move temas durumundan; proximity yeteneği maskesi + buttonNumber/clickState eklendi; pen-view sınırlandı. Yetenek maskesi SDK IOLLEvent.h:316-329 değerleriyle (0x25C7) sabitlendi, testle pinli; VendorPointerType set edilmiyor (satıcıya özel değer); android-display alan listesiyle karşılaştırılmadı (kaynağa erişilmedi). Test: 9 test geçti.
+
+## Orkestratör cihaz testi (2026-09-29)
+
+- `pen-view` + `inject --pattern ramp` → `tabletProximity IN`, `leftMouseDragged sub=1`, basınç 0→1→0, çizgi kalınlaşıp inceliyor. `--pattern tilt` → eğim −1…+1 taranıyor. Vuruş sonu: `leftMouseUp` ardından `tabletProximity enter=false pointerType=1 deviceID=1`.
+- Krita 5.3.4, "Basic-5 Size Opacity" fırçası: `ramp` ve `circle` desenleri basınca göre kalınlık ve opaklık değiştiriyor. Krita sentetik kalemi basınçlı kalem olarak tanıyor.
+- İlk denemede pen-view önde değildi, olaylar öndeki Terminal'e gitti. Bu probun değil test kurulumunun hatası.
+
