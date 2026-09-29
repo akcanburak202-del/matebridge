@@ -12,6 +12,8 @@ public enum ProtocolError: Error, Equatable, Sendable {
     case decreasingSampleTime
     /// Bytes were fed without draining: buffered data exceeded header + max payload.
     case bufferOverflow
+    /// A single `append` call exceeded `FrameDecoder.maxReadChunk` (64 KiB).
+    case chunkTooLarge
     /// The stream decoder already failed; the connection must be closed.
     case decoderFailed
 }

@@ -18,33 +18,73 @@ public struct FrameDecoder: Sendable {
     private var buffer: [UInt8] = []
     private var start = 0
     private var failed = false
-    private var overflowed = false
+    private var pendingError: ProtocolError?
 
     public init(connection: Connection) { self.connection = connection }
 
     /// Bytes buffered and not yet consumed.
     public var bufferedCount: Int { buffer.count - start }
 
-    /// Feed received bytes, then drain with `nextMessage()` until it returns nil. Buffered bytes stay below
-    /// `headerSize + maxPayload` when drained; a caller that keeps appending without draining fails the decoder.
+    /// Largest input accepted per `append` call, and the slack the total-buffer cap allows on top of
+    /// `headerSize + maxPayload`. Larger calls are a caller error (`.chunkTooLarge`).
+    public static let maxReadChunk = 65_536
+
+    // Append-time frame scanner: validates each header the moment its 5 bytes are buffered.
+    private var scanHeaderFill = 0
+    private var scanPayloadRemaining = 0
+    private var scanStopped = false  // an oversized header is buffered; nothing after it is kept
+
+    /// Feed received bytes, then drain with `nextMessage()` until it returns nil.
+    /// Each header is checked as soon as it is complete, so an oversized length never causes its payload
+    /// to be buffered. Total buffered bytes are capped at `headerSize + maxPayload + maxReadChunk`; beyond
+    /// that (counting only bytes not yet returned by `nextMessage()`) the next `nextMessage()` throws `.bufferOverflow`.
     public mutating func append(_ bytes: [UInt8]) { append(bytes[...]) }
 
     /// Slices are honored by their own indices (`startIndex` need not be 0).
     public mutating func append(_ bytes: ArraySlice<UInt8>) {
-        guard !failed else { return }
-        if bufferedCount > ProtocolConstants.headerSize + connection.maxPayload {
+        guard !failed, !scanStopped else { return }
+        guard bytes.count <= Self.maxReadChunk else {
             failed = true
-            overflowed = true
+            pendingError = .chunkTooLarge
             buffer.removeAll()
             start = 0
             return
         }
-        buffer.append(contentsOf: bytes)
+        var i = bytes.startIndex
+        while i < bytes.endIndex {
+            if scanPayloadRemaining > 0 {
+                let n = min(scanPayloadRemaining, bytes.endIndex - i)
+                buffer.append(contentsOf: bytes[i..<i + n])
+                scanPayloadRemaining -= n
+                i += n
+            } else {
+                buffer.append(bytes[i])
+                i += 1
+                scanHeaderFill += 1
+                if scanHeaderFill == ProtocolConstants.headerSize {
+                    scanHeaderFill = 0
+                    var length: UInt32 = 0
+                    for k in 0..<4 { length |= UInt32(buffer[buffer.count - 4 + k]) << (8 * UInt32(k)) }
+                    if Int(length) > connection.maxPayload {
+                        scanStopped = true  // header stays buffered; nextMessage() reports it
+                        return
+                    }
+                    scanPayloadRemaining = Int(length)
+                }
+            }
+            if bufferedCount > ProtocolConstants.headerSize + connection.maxPayload + Self.maxReadChunk {
+                failed = true
+                pendingError = .bufferOverflow
+                buffer.removeAll()
+                start = 0
+                return
+            }
+        }
     }
 
     /// Next complete known message, or nil when more bytes are needed.
     public mutating func nextMessage() throws -> Message? {
-        if overflowed { overflowed = false; throw ProtocolError.bufferOverflow }
+        if let e = pendingError { pendingError = nil; throw e }
         if failed { throw ProtocolError.decoderFailed }
         do {
             while true {

@@ -98,6 +98,9 @@ public enum Message: Equatable, Sendable {
             guard (1...ProtocolConstants.penMaxSamples).contains(m.samples.count) else {
                 throw ProtocolError.invalidField("count")
             }
+            for (a, b) in zip(m.samples, m.samples.dropFirst()) where b.dtUs < a.dtUs {
+                throw ProtocolError.decreasingSampleTime
+            }
         case .videoFrame(let m):
             guard m.fragmentIndex == 0, m.fragmentCount == 1, Int(m.frameSize) == m.data.count else {
                 throw ProtocolError.invalidField("video fragment")

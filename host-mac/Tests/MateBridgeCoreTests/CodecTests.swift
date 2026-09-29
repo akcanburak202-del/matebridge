@@ -89,7 +89,9 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         #expect(throws: ProtocolError.payloadTooLarge(length: 65537, limit: 65536)) { try control.nextMessage() }
 
         var atLimit = FrameDecoder(connection: .control)
-        atLimit.append(frame(0x7f, [UInt8](repeating: 0, count: 65536)))
+        let big = frame(0x7f, [UInt8](repeating: 0, count: 65536))
+        atLimit.append(big[..<30_000])
+        atLimit.append(big[30_000...])
         #expect(try atLimit.nextMessage() == nil)
 
         var video = FrameDecoder(connection: .video)
@@ -180,8 +182,14 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
             return w.bytes
         }
         #expect(try decodeOne(frame(0x41, videoPayload()), .video) != nil)
+        // Trailing bytes after frame_size bytes of data are future fields.
+        if case .videoFrame(let f)? = try decodeOne(frame(0x41, videoPayload(size: 3)), .video) {
+            #expect(f.data == [1, 1, 1] && f.frameSize == 3)
+        } else {
+            Issue.record("expected video frame")
+        }
         for bad in [videoPayload(index: 1), videoPayload(count: 2), videoPayload(count: 0),
-                    videoPayload(size: 5), videoPayload(size: 3)] {
+                    videoPayload(size: 5)] {
             #expect(throws: ProtocolError.invalidField("video fragment")) { try decodeOne(frame(0x41, bad), .video) }
         }
     }
@@ -223,7 +231,7 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         var d = FrameDecoder(connection: .control)
         let chunk = [UInt8](repeating: 0, count: 40_000)
         d.append([0x7f, 0x00, 0x00, 0x01, 0x00])  // 65536-byte unknown frame, payload pending
-        for _ in 0..<10 { d.append(chunk) }  // never drained
+        for _ in 0..<30 { d.append(chunk) }  // never drained, 1.2 MB
         #expect(throws: ProtocolError.bufferOverflow) { try d.nextMessage() }
         #expect(throws: ProtocolError.decoderFailed) { try d.nextMessage() }
         #expect(d.bufferedCount == 0)
@@ -269,5 +277,65 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         hello.u16(0); hello.raw([UInt8](repeating: 1, count: 16)); hello.u16(1); hello.u16(1); hello.u16(1); hello.u16(1)
         hello.u32(0xFFFF_FF00); hello.u8(0)
         #expect(try decodeOne(frame(0x01, hello.bytes)) != nil)
+    }
+
+    @Test func oversizedHeaderInLargeInputIsNotBuffered() throws {
+        var d = FrameDecoder(connection: .control)
+        var first = [UInt8](repeating: 0xAB, count: 65_536)
+        first.replaceSubrange(0..<5, with: [0x10, 0xff, 0xff, 0xff, 0x7f])
+        d.append(first)
+        #expect(d.bufferedCount == 5)  // only the offending header is kept
+        for _ in 0..<150 { d.append([UInt8](repeating: 0xAB, count: 65_536)) }  // ~10 MB total, dropped
+        #expect(d.bufferedCount == 5)
+        #expect(throws: ProtocolError.payloadTooLarge(length: 0x7fff_ffff, limit: 65536)) { try d.nextMessage() }
+
+        // A valid frame before the bad header is still delivered first.
+        let ping = Message.ping(Ping(seq: 1, senderTimeUs: 2))
+        var d2 = FrameDecoder(connection: .control)
+        d2.append(try ping.encode())
+        d2.append(first)
+        #expect(try d2.nextMessage() == ping)
+        #expect(throws: ProtocolError.payloadTooLarge(length: 0x7fff_ffff, limit: 65536)) { try d2.nextMessage() }
+    }
+
+    @Test func appendAcceptsAtMost64KiBPerCall() {
+        var d = FrameDecoder(connection: .control)
+        d.append([UInt8](repeating: 0, count: 10_000_000))
+        #expect(throws: ProtocolError.chunkTooLarge) { try d.nextMessage() }
+        #expect(throws: ProtocolError.decoderFailed) { try d.nextMessage() }
+    }
+
+    @Test func fullChunkOfSmallFramesDrainsWithoutOverflow() throws {
+        let ping = Message.ping(Ping(seq: 9, senderTimeUs: 1))
+        let one = try ping.encode()  // 17 bytes
+        let count = 65_536 / one.count
+        var stream: [UInt8] = []
+        for _ in 0..<count { stream += one }
+        var d = FrameDecoder(connection: .control)
+        var drained = 0
+        for _ in 0..<20 {  // consumed bytes do not count toward the cap
+            d.append(stream)
+            while let m = try d.nextMessage() {
+                #expect(m == ping)
+                drained += 1
+            }
+        }
+        #expect(drained == count * 20)
+        #expect(d.bufferedCount == 0)
+    }
+
+    @Test func videoFrameShortDataIsProtocolError() {
+        var w = ByteWriter()
+        w.u32(0); w.u64(0); w.u8(0); w.u8(0); w.u16(0); w.u16(1); w.u16(0); w.u32(10); w.raw([1, 2, 3])
+        #expect(throws: ProtocolError.invalidField("video fragment")) { try decodeOne(frame(0x41, w.bytes), .video) }
+    }
+
+    @Test func penEncoderRejectsDecreasingTime() {
+        let a = PenSample(dtUs: 5, x: 0, y: 0, pressure: 0, tiltX: 0, tiltY: 0, flags: [])
+        var b = a
+        b.dtUs = 4
+        #expect(throws: ProtocolError.decreasingSampleTime) {
+            try Message.pen(PenBatch(tool: .pen, baseTimeUs: 0, samples: [a, b])).encode()
+        }
     }
 }

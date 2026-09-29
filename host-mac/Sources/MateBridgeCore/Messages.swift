@@ -616,11 +616,12 @@ public struct VideoFrame: Equatable, Sendable {
         try r.skip(2)
         let size = try r.u32()
         // TCP carries whole frames only (PROTOCOL.md VIDEO_FRAME).
-        guard index == 0, count == 1, Int(size) == r.remaining else {
+        // `data` is exactly frame_size bytes; trailing bytes are future fields and ignored.
+        guard index == 0, count == 1, Int(size) <= r.remaining else {
             throw ProtocolError.invalidField("video fragment")
         }
         return VideoFrame(frameSeq: seq, captureTimeUs: capture, flags: VideoFrameFlags(rawValue: flags),
                           fragmentIndex: index, fragmentCount: count, frameSize: size,
-                          data: try r.raw(r.remaining))
+                          data: try r.raw(Int(size)))
     }
 }
