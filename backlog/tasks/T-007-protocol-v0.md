@@ -26,6 +26,16 @@ Aşama 0 bulgularına dayanarak Mac ve tabletin konuşacağı mesajları dondurm
 - [ ] Codex incelemesi (`--high`) yapıldı, bulgular işlendi.
 - [ ] Kullanıcıya Aşama 0 raporu sunuldu, Aşama 1'e geçiş onayı alındı.
 
+## Plan
+
+1. Aşama 0 bulgularını NOTES'ta özetle (tablo).
+2. `docs/PROTOCOL.md`: iki TCP bağlantısı (kontrol+girdi / video), 5 bayt çerçeve, LE. Oturum akışı, tek oturum, onay. Mesaj başına tablo.
+3. `protocol/fixtures/gen.py` referans kodlayıcı + açıklamalı `.hex` fixture'lar. `check.sh` güncelliği denetler.
+4. İç inceleyici + Codex (`--high`). Bulgular işlenir, Codex tekrar çalıştırılır.
+5. Kullanıcıya Aşama 0 raporu, Aşama 1 onayı.
+
+(Plan uygulama sonrası yazıldı. Codex'in hatırlatması üzerine kayda geçirildi.)
+
 ## Handoff
 
 - **Açık sorular:**

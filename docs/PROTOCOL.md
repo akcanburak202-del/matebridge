@@ -187,7 +187,9 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 | `IN_RANGE` 1→0 | temas sürüyorsa önce mouse **up**, sonra proximity **leave** |
 | `tool` değişti | eski araç için up (gerekirse) + leave, yeni araç için enter |
 
-**Kilit (latch) kuralı:** Host'un **kendi başlattığı** release-all'dan sonra (heartbeat sessizliği veya kalem watchdog'u, §7) o araç için kilit kurulur. Kilit varken `CONTACT=1` örnekler yeni bir basış **sayılmaz** ve yalnızca hover olarak işlenir. Kilit, `CONTACT=0` olan bir örnek veya `STROKE_START` bayraklı bir örnek geldiğinde kalkar. Bu kural, TCP tıkanmasından sonra gecikmiş gelen eski vuruş ortası örneklerinin Mac'te "sürükleme" başlatmasını önler. Yeni bir vuruş ise `STROKE_START` ile hemen başlar. İstemcinin gönderdiği `RELEASE_ALL`, `BYE` ve yeni oturum kilit **kurmaz**, çünkü TCP sırası sonrasındaki örneklerin gerçekten yeni olduğunu garanti eder.
+**Kilit (latch) kuralı:** **Her** release-all'dan sonra (§7, sebebi ne olursa olsun) her araç için kilit kurulur. Kilit varken `CONTACT=1` örnekler yeni bir basış **sayılmaz** ve yalnızca hover olarak işlenir. Kilit, `CONTACT=0` olan bir örnek veya `STROKE_START` bayraklı bir örnek geldiğinde kalkar. Bu kural, gecikmiş gelen eski vuruş **ortası** örneklerinin Mac'te sürükleme başlatmasını önler. Yeni bir vuruş `STROKE_START` ile hemen başlar.
+
+**Kabul edilen davranış:** Bağlantı tıkanıp host watchdog'u çalıştıktan sonra, kuyrukta bekleyen **tam** bir vuruş (`STROKE_START`…bırakma) geç de olsa çizilir. Bu takılı girdi yaratmaz, çünkü vuruşun bırakma örneği aynı sıralı akışta arkasından gelir. Gecikmenin üst sınırı istemci kuyruk sınırıdır (§5, 1 sn).
 
 ### 0x11 KEY (C→H)
 
@@ -393,12 +395,17 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - Kalem `IN_RANGE` iken **500 ms** PEN gelmezse host o araç için up (temas varsa) + leave üretir ve `flags = 0` sayar.
 - SCROLL hareketi açıkken **500 ms** SCROLL gelmezse host hareketi bitirir.
 
-**Kaynak ayrımı:** Host her kaynak için (kalem teması, `POINTER_REL`, `POINTER_ABS source=MOUSE`, `POINTER_ABS source=TOUCH`) basılı düğmeleri **ayrı** tutar. Mac'e giden düğme durumu, kaynakların **birleşimidir** (OR).
-- Birleşik durum 0→1 olduğunda down, 1→0 olduğunda up üretilir. Bir kaynağın bırakması, başka bir kaynak aynı düğmeyi hâlâ tutuyorsa up üretmez. Örnek: fare sol tuşu basılıyken kalem değer, sonra fare bırakılır → kalem vuruşu sürer.
-- Birleşik düğme basılıyken gelen hareketler dragged olarak üretilir. Kalem teması sürerken basınç ve eğim kalem örneklerinden gelir.
-- Kalem `IN_RANGE` iken `POINTER_ABS source=TOUCH` mesajlarındaki **yeni basışlar** yok sayılır (avuç reddi). **Bırakmalar asla yok sayılmaz:** dokunma kaynağının tuttuğu düğme, kalem menzildeyken de bırakılır.
+**Kaynak ayrımı:** Host her kaynak için (kalem teması, `POINTER_REL`, `POINTER_ABS source=MOUSE`, `POINTER_ABS source=TOUCH`) basılı düğmeleri **ayrı** tutar.
+- **Sol düğmenin tek sahibi vardır.** Sahip olmayan bir kaynağın sol düğme basışı ve bırakışı Mac'e gitmez, yalnızca o kaynağın kendi durumunu günceller.
+- **Kalem önceliklidir:** Kalem teması başladığında (`CONTACT` 0→1) sol düğme başka bir kaynaktaysa, host önce o kaynak adına **up** üretir, sonra kalem için tablet-point **down** üretir. Böylece çizim programı kalem vuruşunu her zaman ayrı ve basınçlı bir vuruş olarak görür. Önceki sahibin sonraki bırakışı etkisizdir. Tekrar basmak için önce bırakıp yeniden basması gerekir.
+- Kalem temas halindeyken başka kaynakların sol düğme basışları yok sayılır.
+- Sağ, orta, geri ve ileri düğmeleri için Mac'e giden durum, kaynakların birleşimidir (OR). Birleşik durum 0→1 olunca down, 1→0 olunca up üretilir.
+- Kalem `IN_RANGE` iken `POINTER_ABS source=TOUCH` mesajlarındaki **yeni basışlar** yok sayılır (avuç reddi). **Sahibin bırakışı asla yok sayılmaz:** dokunma kaynağı sol düğmenin sahibiyse, kalem menzildeyken de bırakılır.
 
-**İstemcinin yükümlülüğü:** İstemci bir DOWN gönderdiyse ilgili UP'u da gönderir. Göndermeden bağlantı koparsa host release-all ile telafi eder.
+**İstemcinin yükümlülükleri:**
+- İstemci bir DOWN gönderdiyse ilgili UP'u da gönderir. Göndermeden bağlantı koparsa host release-all ile telafi eder.
+- **Tek sıralı gönderim:** Bütün girdi mesajları ve `RELEASE_ALL`, olayların üretildiği sırayla **tek bir FIFO**'ya yazılır. Android'de girdi olayları ve yaşam döngüsü çağrıları (`onPause`, odak kaybı) aynı UI iş parçacığında gelir; kuyruğa oradan, o sırayla yazılır. Başka bir iş parçacığı girdi mesajı üretmez.
+- `RELEASE_ALL`'dan sonra istemci, ilgili cihaz/odak geri gelene kadar girdi göndermez. Geri geldiğinde kalem için ilk temas örneği `STROKE_START` taşımıyorsa (vuruşun ortası) temas olarak gönderilmez, yalnızca hover olarak gönderilir.
 
 ## 8. Fixture'lar
 
