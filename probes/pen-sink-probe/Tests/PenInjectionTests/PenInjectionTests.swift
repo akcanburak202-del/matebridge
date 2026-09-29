@@ -98,6 +98,11 @@ final class PenInjectionTests: XCTestCase {
         XCTAssertEqual(rec.all.count, 4)
     }
 
+    func testCapabilityMaskPinned() {
+        XCTAssertEqual(PenEventFields.capabilityMask, 0x25C7)
+        XCTAssertEqual(PenDevice.pointerType, 1)  // NX_TABLET_POINTER_PEN
+    }
+
     func testCancelBeforeAnythingPostsNothing() throws {
         let rec = Recorder()
         let s = PenSession(post: { rec.add($0) })

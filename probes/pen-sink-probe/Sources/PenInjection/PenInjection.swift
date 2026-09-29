@@ -29,7 +29,7 @@ public enum PenDevice {
     public static let vendorID: Int64 = 0x4D42       // "MB"
     public static let tabletID: Int64 = 1
     public static let pointerID: Int64 = 1
-    public static let pointerType: Int64 = 1         // NX_TABLET_POINTER_PEN
+    public static let pointerType: Int64 = 1         // NX_TABLET_POINTER_PEN (IOLLEvent.h:337)
     public static let systemTabletID: Int64 = 1
 }
 
@@ -65,9 +65,10 @@ public enum PenEventFields {
         return f
     }
 
-    /// Tablet capability bits (NX_TABLET_CAPABILITY_* from IOLLEvent.h, recalled from memory, not re-verified):
-    /// deviceID 0x2, absX 0x4, absY 0x8, buttons 0x80, tiltX 0x100, tiltY 0x200, pressure 0x800, rotation 0x4000.
-    public static let capabilityMask: Int64 = 0x2 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 | 0x800 | 0x4000
+    /// Tablet capability bits, literal copies of NX_TABLET_CAPABILITY_* from the SDK's
+    /// IOKit.framework/Headers/hidsystem/IOLLEvent.h lines 316-329:
+    /// DEVICEID 0x1, ABSX 0x2, ABSY 0x4, BUTTONS 0x40, TILTX 0x80, TILTY 0x100, PRESSURE 0x400, ROTATION 0x2000.
+    public static let capabilityMask: Int64 = 0x0001 | 0x0002 | 0x0004 | 0x0040 | 0x0080 | 0x0100 | 0x0400 | 0x2000
 
     /// Integer fields for a proximity event.
     public static func proximityIntFields(entering: Bool) -> [(CGEventField, Int64)] {
@@ -77,7 +78,6 @@ public enum PenEventFields {
             (.tabletProximityEventPointerID, PenDevice.pointerID),
             (.tabletProximityEventDeviceID, PenDevice.deviceID),
             (.tabletProximityEventSystemTabletID, PenDevice.systemTabletID),
-            (.tabletProximityEventVendorPointerType, PenDevice.pointerType),
             (.tabletProximityEventPointerType, PenDevice.pointerType),
             (.tabletProximityEventCapabilityMask, capabilityMask),
             (.tabletProximityEventEnterProximity, entering ? 1 : 0),
