@@ -74,7 +74,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // T-016 smoothness knobs. Launch extras: `--ei jitter 0|1|2` (jitter buffer in content frames,
     // 0 = render at once as in T-015) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
-    private var bufferFrames = 1
+    private var bufferFrames = 0
     private var targetHz = 120
     private val vsync = VsyncClock()
     private var choreographerOn = false
@@ -109,7 +109,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        bufferFrames = intent?.getIntExtra("jitter", 1)?.coerceIn(0, 2) ?: 1
+        bufferFrames = intent?.getIntExtra("jitter", 0)?.coerceIn(0, 2) ?: 0
         targetHz = intent?.getIntExtra("hz", 120) ?: 120
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
