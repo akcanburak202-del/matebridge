@@ -22,6 +22,7 @@ done
 # Android client + Android probes (any directory with a Gradle wrapper)
 AS_JBR="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 if [ -z "${JAVA_HOME:-}" ] && [ -d "$AS_JBR" ]; then export JAVA_HOME="$AS_JBR"; fi
+if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk"; fi
 for proj in client-android probes/*; do
   [ -x "$proj/gradlew" ] || continue
   if [ -z "${JAVA_HOME:-}" ]; then echo "    FAIL: $proj needs a JDK (install Android Studio)"; fail=1; continue; fi

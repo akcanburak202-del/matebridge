@@ -26,3 +26,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0002 | Mac tarafı yalnızca Swift Package Manager (xcodeproj yok) | kabul |
 | 0003 | Klavye: karakter değil fiziksel tuş kodu | kabul |
 | 0004 | Android: Views + SurfaceView, Compose yok, GMS yok | kabul |
+| 0005 | Yalnızca test için bağımlılıklar (JUnit 4, kotlin-test, XCTest) kayıt gerektirmez | kabul |
