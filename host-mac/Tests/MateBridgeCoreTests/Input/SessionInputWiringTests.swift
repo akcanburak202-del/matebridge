@@ -44,7 +44,7 @@ private struct WiredSession {
             case .deliver(_, let message):
                 model.apply(pipe.handle(message, now: now, environment: env))
             case .sessionStarted:
-                model.apply(pipe.sessionStarted())
+                model.apply(pipe.sessionStarted(environment: env))
             case .sessionEnded:
                 model.apply(pipe.sessionEnded(now: now, environment: env))
             default: break

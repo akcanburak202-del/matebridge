@@ -15,15 +15,27 @@ import Testing
 //   app shutdown          PIPE-2 (`.shutdown`), PIPE-11
 //   display gone          PIPE-4, PIPE-7, PIPE-16     permission missing/revoked   PIPE-5, PIPE-6
 
+/// Where an event is located, if it has a position.
+func eventPosition(_ e: MacEvent) -> DisplayPoint? {
+    switch e {
+    case .tabletProximity: nil
+    case .tabletPoint(let p): p.position
+    case .mouse(let m): m.position
+    case .scroll(let s): s.position
+    }
+}
+
 /// A pipeline plus a clock, an environment the test changes at will, and an independent model of the Mac.
 struct PipeDriver {
     var pipe = InputPipeline()
     var now: UInt64 = 10_000_000
     var env = openEnv
     var model = MacEventModel()
+    /// What the most recent call produced.
+    var lastEmitted: [MacEvent] = []
 
     init(session: Bool = true) {
-        if session { model.apply(pipe.sessionStarted()) }
+        if session { model.apply(pipe.sessionStarted(environment: env)) }
     }
 
     @discardableResult
@@ -31,6 +43,7 @@ struct PipeDriver {
         now += after
         let events = pipe.handle(message, now: now, environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
@@ -39,6 +52,7 @@ struct PipeDriver {
         now += after
         let events = pipe.tick(now: now, environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
@@ -46,6 +60,7 @@ struct PipeDriver {
     mutating func release(_ cause: ReleaseCause) -> [MacEvent] {
         let events = pipe.release(cause, now: now, environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
@@ -53,13 +68,15 @@ struct PipeDriver {
     mutating func endSession() -> [MacEvent] {
         let events = pipe.sessionEnded(now: now, environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
     @discardableResult
     mutating func startSession() -> [MacEvent] {
-        let events = pipe.sessionStarted()
+        let events = pipe.sessionStarted(environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
@@ -67,6 +84,7 @@ struct PipeDriver {
     mutating func shutdown() -> [MacEvent] {
         let events = pipe.shutdown(now: now, environment: env)
         model.apply(events)
+        lastEmitted = events
         return events
     }
 
@@ -138,7 +156,7 @@ struct InputPipelineTests {
         #expect(events.first == tabletEvent(.up, x: 1010, y: 2010))
         #expect(events.contains(proximityEvent(entering: false)))
         #expect(events.contains(mouseEvent(.up, .right, at: penAt, clickState: 1)))
-        #expect(events.last == .scroll(MacScroll(phase: .ended, dx: 0, dy: 0)))
+        #expect(events.last == scrollEvent(.ended, at: penAt))
         #expect(d.model.isIdle && d.model.violations.isEmpty && !d.pipe.isHoldingInput)
     }
 
@@ -441,6 +459,12 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool) -> [String] {
     func check(_ step: Int, _ label: String, releaseExpected: Bool = false) {
         func fail(_ text: String) { failures.append("seed \(seed) step \(step) \(label): \(text)") }
         if !d.model.violations.isEmpty { fail("violations \(d.model.violations)") }
+        // Every positioned event lies on the display that is current now (closing events with no display excepted).
+        if let g = d.env.geometry {
+            for e in d.lastEmitted {
+                if let p = eventPosition(e), !g.contains(p) { fail("event outside the current display: \(e)") }
+            }
+        }
         if d.pipe.reconciliations != 0 { fail("planner held what the machine did not") }
         if d.pipe.machine?.hasHeldInput != true && !d.model.isIdle { fail("Mac holds input the machine does not") }
         if !d.env.isOpen && !d.model.isIdle { fail("Mac holds input while the gate is closed") }

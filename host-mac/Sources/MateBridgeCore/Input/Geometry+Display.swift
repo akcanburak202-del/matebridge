@@ -57,6 +57,13 @@ public struct DisplayGeometry: Equatable, Sendable {
 
     public var center: DisplayPoint { DisplayPoint(x: originX + widthPt / 2, y: originY + heightPt / 2) }
 
+    /// Whether `p` is a point of this display, i.e. inside the bounds `point(x:y:)` and `clamped` map to.
+    public func contains(_ p: DisplayPoint) -> Bool {
+        let eps = 1e-9
+        return p.x >= originX - eps && p.x <= originX + widthPt - 1 / scale + eps
+            && p.y >= originY - eps && p.y <= originY + heightPt - 1 / scale + eps
+    }
+
     /// The same bounds `point(x:y:)` uses. A non-finite value maps to the origin.
     public func clamped(_ p: DisplayPoint) -> DisplayPoint {
         DisplayPoint(x: Self.clamp(p.x, origin: originX, extent: widthPt, scale: scale),
@@ -157,11 +164,15 @@ public struct MacScroll: Equatable, Sendable {
     public var phase: Phase
     public var dx: Int32
     public var dy: Int32
+    /// Where the event is located: on the virtual display (the cached cursor if it is still on it, else the center).
+    /// A scroll event without a location takes the live cursor, which may be on another display.
+    public var position: DisplayPoint
 
-    public init(phase: Phase, dx: Int32, dy: Int32) {
+    public init(phase: Phase, dx: Int32, dy: Int32, position: DisplayPoint) {
         self.phase = phase
         self.dx = dx
         self.dy = dy
+        self.position = position
     }
 }
 
@@ -285,6 +296,8 @@ public struct InjectionPlanner: Sendable {
     private var scrollCarryX = 0.0
     private var scrollCarryY = 0.0
     private var clicks: ClickCounter
+    /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
+    private var display: DisplayGeometry?
 
     public init(configuration: Configuration = Configuration()) {
         clicks = ClickCounter(configuration: configuration.clicks)
@@ -300,16 +313,18 @@ public struct InjectionPlanner: Sendable {
     /// PLAN-*: plan one ordered action list. `now` is the host clock at the moment the message was received.
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
                               now: UInt64) -> [MacEvent] {
+        display = env.geometry
         var out: [MacEvent] = []
         for action in actions { apply(action, env, now, &out) }
         counters.events += out.count
         return out
     }
 
-    /// Releases everything the shadow state holds, in the state machine's order (left button, pen leave, other
-    /// buttons, scroll end). Needs no environment: releasing is never gated. Idempotent. This is the safety net under
-    /// the state machine's own release-all.
-    public mutating func releaseAll() -> [MacEvent] {
+    /// Releases everything the shadow state holds, in the state machine's order (pen up, left button, pen leave,
+    /// other buttons, scroll end). Releasing is never gated; the environment only says where the cached positions are
+    /// still valid (see `resolved`). Idempotent. This is the safety net under the state machine's own release-all.
+    public mutating func releaseAll(environment env: InjectionEnvironment) -> [MacEvent] {
+        display = env.geometry
         var out: [MacEvent] = []
         if penContact { releasePenContact(&out) }
         if let cs = heldButtons.removeValue(forKey: .left) { emitButtonUp(.left, cs, &out) }
@@ -368,7 +383,7 @@ public struct InjectionPlanner: Sendable {
         case .penUp(_, let p):
             guard penContact, let active = proximity else { counters.droppedNotHeld += 1; return }
             // Closing: never gated. Without a display the pen lifts where it last was.
-            let position = env.geometry.map { $0.point(p) } ?? lastTablet?.position ?? cursor ?? .zero
+            let position = env.geometry.map { $0.point(p) } ?? resolved(lastTablet?.position ?? cursor)
             let e = tablet(.up, active, position, p.withPressure(0), clickState: 1)
             cursor = e.position
             lastTablet = e
@@ -382,10 +397,10 @@ public struct InjectionPlanner: Sendable {
             switch motion {
             case .absolute(let x, let y):
                 target = g.point(x: x, y: y)
-                if let c = cursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
+                if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
             case .relative(let dx, let dy):
                 // A relative move needs a starting point; before any injected position that is the display center.
-                let base = cursor ?? g.center
+                let base = validCursor ?? g.center
                 target = g.moved(base, dx: Double(dx), dy: Double(dy))
                 delta = DisplayPoint(x: target.x - base.x, y: target.y - base.y)
             }
@@ -399,7 +414,7 @@ public struct InjectionPlanner: Sendable {
             if down {
                 guard let g = openGate(env) else { return }
                 guard heldButtons[button] == nil else { counters.droppedNotHeld += 1; return }
-                let position = cursor ?? g.center
+                let position = validCursor ?? g.center
                 cursor = position
                 let count = clicks.press(button, at: position, now: now)
                 heldButtons[button] = count
@@ -417,7 +432,11 @@ public struct InjectionPlanner: Sendable {
         case .scrollWheel(let dx, let dy):
             guard openGate(env) != nil else { return }
             let px = Self.pixels(Double(dx)), py = Self.pixels(Double(dy))
-            if px != 0 || py != 0 { out.append(.scroll(MacScroll(phase: .none, dx: px, dy: py))) }
+            if px != 0 || py != 0 {
+                let position = resolved(cursor)
+                cursor = position
+                out.append(.scroll(MacScroll(phase: .none, dx: px, dy: py, position: position)))
+            }
         }
     }
 
@@ -431,7 +450,9 @@ public struct InjectionPlanner: Sendable {
             scrollCarryX = 0
             scrollCarryY = 0
             let (px, py) = takePixels(Double(dx), Double(dy))
-            out.append(.scroll(MacScroll(phase: .began, dx: px, dy: py)))
+            let position = resolved(cursor)
+            cursor = position
+            out.append(.scroll(MacScroll(phase: .began, dx: px, dy: py, position: position)))
 
         case .changed:
             guard scrollOpen else { counters.droppedNotHeld += 1; return }
@@ -440,7 +461,11 @@ public struct InjectionPlanner: Sendable {
             guard env.canInject else { counters.droppedNoPermission += 1; return }
             guard env.geometry != nil else { counters.droppedNoDisplay += 1; return }
             let (px, py) = takePixels(Double(dx), Double(dy))
-            if px != 0 || py != 0 { out.append(.scroll(MacScroll(phase: .changed, dx: px, dy: py))) }
+            if px != 0 || py != 0 {
+                let position = resolved(cursor)
+                cursor = position
+                out.append(.scroll(MacScroll(phase: .changed, dx: px, dy: py, position: position)))
+            }
 
         case .ended, .cancelled:
             guard scrollOpen else { counters.droppedNotHeld += 1; return }
@@ -483,7 +508,7 @@ public struct InjectionPlanner: Sendable {
     private mutating func releasePenContact(_ out: inout [MacEvent]) {
         guard penContact, let tool = proximity else { return }
         let last = lastTablet
-        let e = MacTabletPoint(kind: .up, tool: tool, position: last?.position ?? cursor ?? .zero, pressure: 0,
+        let e = MacTabletPoint(kind: .up, tool: tool, position: resolved(last?.position ?? cursor), pressure: 0,
                                tiltX: last?.tiltX ?? 0, tiltY: last?.tiltY ?? 0, clickState: 1)
         lastTablet = e
         penContact = false
@@ -491,7 +516,7 @@ public struct InjectionPlanner: Sendable {
     }
 
     private func emitButtonUp(_ button: MouseButton, _ clickState: Int, _ out: inout [MacEvent]) {
-        out.append(.mouse(MacMouse(kind: .up, button: button, position: cursor ?? .zero, deltaX: 0, deltaY: 0,
+        out.append(.mouse(MacMouse(kind: .up, button: button, position: resolved(cursor), deltaX: 0, deltaY: 0,
                                    clickState: clickState)))
     }
 
@@ -499,7 +524,23 @@ public struct InjectionPlanner: Sendable {
         scrollOpen = false
         scrollCarryX = 0
         scrollCarryY = 0
-        out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy)))
+        out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: resolved(cursor))))
+    }
+
+    /// The cached cursor if it is still on the display of this call.
+    private var validCursor: DisplayPoint? {
+        guard let c = cursor, let g = display, g.contains(c) else { return nil }
+        return c
+    }
+
+    /// Where a cached position (last cursor, last pen point) is used now. With a display it is that position if it
+    /// still lies on it, otherwise the display center: a display that came back at another origin or size must never
+    /// receive a click at the old point, which could be on a physical monitor. Without a display (closing events only)
+    /// it is the last known position, or the origin as a last resort that a closing event never actually reaches.
+    private func resolved(_ p: DisplayPoint?) -> DisplayPoint {
+        guard let g = display else { return p ?? .zero }
+        if let p, g.contains(p) { return p }
+        return g.center
     }
 
     private func tablet(_ kind: MacTabletPoint.Kind, _ tool: PenTool, _ position: DisplayPoint, _ p: PenPoint,
@@ -555,8 +596,8 @@ public struct InputPipeline: Sendable {
 
     /// PIPE-*: a new approved session. Leftovers on the Mac (there should be none) are released first; then the
     /// session gets a FRESH machine, latched from the start (PROTOCOL.md section 4).
-    public mutating func sessionStarted() -> [MacEvent] {
-        let out = planner.releaseAll()
+    public mutating func sessionStarted(environment env: InjectionEnvironment) -> [MacEvent] {
+        let out = planner.releaseAll(environment: env)
         machine = InputStateMachine(configuration: machineConfiguration)
         lastReleaseCause = nil
         return out
@@ -582,7 +623,7 @@ public struct InputPipeline: Sendable {
         var out = releaseIfGateLost(now: now, environment: env)
         let actions = machine?.handle(message, now: now) ?? []
         out += planner.plan(actions, environment: env, now: now)
-        out += reconcile()
+        out += reconcile(environment: env)
         return out
     }
 
@@ -592,7 +633,7 @@ public struct InputPipeline: Sendable {
         var out = releaseIfGateLost(now: now, environment: env)
         let actions = machine?.tick(now: now) ?? []
         out += planner.plan(actions, environment: env, now: now)
-        out += reconcile()
+        out += reconcile(environment: env)
         return out
     }
 
@@ -607,7 +648,7 @@ public struct InputPipeline: Sendable {
         lastReleaseCause = cause
         let actions = machine?.releaseAll(cause) ?? []
         var out = planner.plan(actions, environment: env, now: now)
-        out += planner.releaseAll()
+        out += planner.releaseAll(environment: env)
         return out
     }
 
@@ -619,9 +660,9 @@ public struct InputPipeline: Sendable {
     }
 
     /// Safety net: the planner can only hold what the machine holds. If it does not, release the leftover.
-    private mutating func reconcile() -> [MacEvent] {
+    private mutating func reconcile(environment env: InjectionEnvironment) -> [MacEvent] {
         guard planner.isHoldingInput, machine?.hasHeldInput != true else { return [] }
         reconciliations += 1
-        return planner.releaseAll()
+        return planner.releaseAll(environment: env)
     }
 }

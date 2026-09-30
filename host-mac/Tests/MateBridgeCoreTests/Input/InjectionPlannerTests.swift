@@ -19,6 +19,11 @@ func tabletEvent(_ kind: MacTabletPoint.Kind, _ tool: PenTool = .pen, x: UInt16 
                                 clickState: (kind == .down || kind == .up) ? 1 : 0))
 }
 
+/// A scroll `MacEvent`; the position defaults to the center of `testGeometry` (a planner with no cursor yet).
+func scrollEvent(_ phase: MacScroll.Phase, _ dx: Int32 = 0, _ dy: Int32 = 0, at p: DisplayPoint = testGeometry.center) -> MacEvent {
+    .scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: p))
+}
+
 func proximityEvent(_ tool: PenTool = .pen, entering: Bool) -> MacEvent { .tabletProximity(tool: tool, entering: entering) }
 
 func mouseEvent(_ kind: MacMouse.Kind, _ button: MouseButton = .left, at p: DisplayPoint, delta: DisplayPoint = .zero,
@@ -297,7 +302,7 @@ struct PlannerMouseTests {
         #expect(click(500, at: 600_000) == 1)      // 600 ms later
         #expect(click(20_000, at: 700_000) == 1)   // far away
         #expect(click(20_000, at: 800_000) == 2)
-        _ = p.releaseAll()
+        _ = p.releaseAll(environment: openEnv)
         #expect(click(20_000, at: 850_000) == 1)   // history cleared
     }
 
@@ -387,7 +392,7 @@ struct PlannerGateTests {
         #expect(planOnce(&p, [moveAbs(510, 610, dragging: .left), .scroll(.changed, dx: 0, dy: 3)], noPermissionEnv).isEmpty)
         let events = planOnce(&p, [.mouseButton(.left, down: false), .scroll(.ended, dx: 0, dy: 2)], noPermissionEnv)
         #expect(events == [mouseEvent(.up, at: testGeometry.point(x: 500, y: 600), clickState: 1),
-                           .scroll(MacScroll(phase: .ended, dx: 0, dy: 0))])
+                           scrollEvent(.ended, at: testGeometry.point(x: 500, y: 600))])
         #expect(!p.isHoldingInput)
     }
 
@@ -398,14 +403,14 @@ struct PlannerGateTests {
                           .scroll(.began, dx: 0, dy: 1)])
         _ = planOnce(&p, [penEnter(), .penDown(tool: .pen, penPt(9, 9, 100))])
         let at = testGeometry.point(x: 9, y: 9)
-        let events = p.releaseAll()
+        let events = p.releaseAll(environment: openEnv)
         #expect(events == [
             tabletEvent(.up, x: 9, y: 9), proximityEvent(entering: false),
             mouseEvent(.up, .right, at: at, clickState: 1), mouseEvent(.up, .back, at: at, clickState: 1),
-            .scroll(MacScroll(phase: .ended, dx: 0, dy: 0)),
+            scrollEvent(.ended, at: at),
         ])
         #expect(!p.isHoldingInput)
-        #expect(p.releaseAll().isEmpty)
+        #expect(p.releaseAll(environment: openEnv).isEmpty)
     }
 
     @Test("PLAN-26 releaseAll releases a pointer-held left button before the pen leaves")
@@ -413,7 +418,7 @@ struct PlannerGateTests {
         var p = InjectionPlanner()
         _ = planOnce(&p, [penEnter(), .penHover(tool: .pen, penPt(1, 1))])
         _ = planOnce(&p, [.mouseButton(.left, down: true)])
-        let events = p.releaseAll()
+        let events = p.releaseAll(environment: openEnv)
         #expect(events.count == 2)
         guard case .mouse(let up) = events[0] else { Issue.record("expected the left up first"); return }
         #expect(up.kind == .up && up.button == .left)
@@ -436,7 +441,7 @@ struct PlannerGateTests {
 @Suite("PLAN: scroll")
 struct PlannerScrollTests {
     private func scroll(_ phase: MacScroll.Phase, _ dx: Int32 = 0, _ dy: Int32 = 0) -> MacEvent {
-        .scroll(MacScroll(phase: phase, dx: dx, dy: dy))
+        scrollEvent(phase, dx, dy)
     }
 
     @Test("PLAN-30 a gesture: began, changed, ended in pixel units, no momentum")
@@ -523,5 +528,90 @@ struct PlannerScrollTests {
         var p = InjectionPlanner()
         _ = planOnce(&p, [.scroll(.began, dx: 0, dy: 1)])
         #expect(planOnce(&p, [.scroll(.ended, dx: 5, dy: 5)], noPermissionEnv) == [scroll(.ended, 0, 0)])
+    }
+}
+
+@Suite("PLAN: positions follow the current display")
+struct PlannerGeometryChangeTests {
+    /// The display came back at another origin (negative y) and a smaller size, scale 1.
+    private let moved = DisplayGeometry(originX: 2000, originY: -300, widthPt: 700, heightPt: 460, scale: 1)!
+    private var movedEnv: InjectionEnvironment { InjectionEnvironment(canInject: true, geometry: moved) }
+
+    @Test("PLAN-40 a button-only press after the display came back elsewhere hits the middle of the new display, not the old point")
+    func plan40_buttonAfterChange() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [moveAbs(500, 600)])  // the cached cursor is on the old display
+        let events = planOnce(&p, [.mouseButton(.left, down: true)], movedEnv)
+        #expect(events == [mouseEvent(.down, at: moved.center, clickState: 1)])
+        #expect(p.cursor == moved.center)
+    }
+
+    @Test("PLAN-41 relative movement and an absolute move's delta start from the new display, not from the stale cursor")
+    func plan41_moveAfterChange() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [moveAbs(500, 600)])
+        let relative = planOnce(&p, [.mouseMove(.relative(dx: 10, dy: -5), dragging: nil)], movedEnv)
+        let c = moved.center
+        #expect(relative == [mouseEvent(.moved, at: DisplayPoint(x: c.x + 10, y: c.y - 5), delta: DisplayPoint(x: 10, y: -5))])
+
+        var q = InjectionPlanner()
+        _ = planOnce(&q, [moveAbs(500, 600)])
+        let absolute = planOnce(&q, [moveAbs(0, 0)], movedEnv)
+        #expect(absolute == [mouseEvent(.moved, at: DisplayPoint(x: 2000, y: -300))])  // no delta from a point on another display
+    }
+
+    @Test("PLAN-42 a release after the change is inside the new display; with no display it is where the button went down")
+    func plan42_releaseAfterChange() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [moveAbs(500, 600), .mouseButton(.right, down: true)])
+        #expect(planOnce(&p, [.mouseButton(.right, down: false)], movedEnv) == [mouseEvent(.up, .right, at: moved.center, clickState: 1)])
+
+        var q = InjectionPlanner()
+        _ = planOnce(&q, [moveAbs(500, 600), .mouseButton(.right, down: true)])
+        let at = testGeometry.point(x: 500, y: 600)
+        #expect(planOnce(&q, [.mouseButton(.right, down: false)], noDisplayEnv) == [mouseEvent(.up, .right, at: at, clickState: 1)])
+    }
+
+    @Test("PLAN-43 a pen lifted or released after the change lifts inside the new display")
+    func plan43_penAfterChange() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [penEnter(), .penDown(tool: .pen, penPt(70, 80, 900))])
+        guard case .tabletPoint(let up) = p.releaseAll(environment: movedEnv)[0] else { Issue.record("expected the up first"); return }
+        #expect(up.kind == .up && up.position == moved.center)
+
+        var q = InjectionPlanner()
+        _ = planOnce(&q, [penEnter(), .penDown(tool: .pen, penPt(70, 80, 900))])
+        let events = planOnce(&q, [penLeave()], movedEnv)
+        guard case .tabletPoint(let lift) = events[0] else { Issue.record("expected the up first"); return }
+        #expect(lift.position == moved.center)
+    }
+
+    @Test("PLAN-44 a cached cursor that is still on the display is kept")
+    func plan44_stillValid() {
+        // An origin change that keeps the old point inside: same size, shifted by a few points.
+        let shifted = DisplayGeometry(originX: 90, originY: 40, widthPt: 1400, heightPt: 920, scale: 2)!
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [moveAbs(500, 600)])
+        let old = testGeometry.point(x: 500, y: 600)
+        #expect(shifted.contains(old))
+        let events = planOnce(&p, [.mouseButton(.left, down: true)], InjectionEnvironment(canInject: true, geometry: shifted))
+        #expect(events == [mouseEvent(.down, at: old, clickState: 1)])
+    }
+
+    @Test("PLAN-45 scroll events are located on the display: the cursor while valid, the center otherwise, the last place without a display")
+    func plan45_scrollPositions() {
+        var p = InjectionPlanner()
+        #expect(planOnce(&p, [.scroll(.began, dx: 0, dy: 3)]) == [scrollEvent(.began, 0, 3, at: testGeometry.center)])
+        _ = planOnce(&p, [.scroll(.ended, dx: 0, dy: 0)])
+
+        _ = planOnce(&p, [moveAbs(500, 600)])
+        let at = testGeometry.point(x: 500, y: 600)
+        #expect(planOnce(&p, [.scroll(.began, dx: 0, dy: 3)]) == [scrollEvent(.began, 0, 3, at: at)])
+        #expect(planOnce(&p, [.scrollWheel(dx: 0, dy: 10)]) == [scrollEvent(.none, 0, 10, at: at)])
+        // The display comes back elsewhere while the gesture is open: the next step is on the new display.
+        #expect(planOnce(&p, [.scroll(.changed, dx: 0, dy: 4)], movedEnv) == [scrollEvent(.changed, 0, 4, at: moved.center)])
+        #expect(planOnce(&p, [.scrollWheel(dx: 0, dy: 10)], movedEnv) == [scrollEvent(.none, 0, 10, at: moved.center)])
+        // No display: only the closing event, at the last known place.
+        #expect(planOnce(&p, [.scroll(.ended, dx: 0, dy: 0)], noDisplayEnv) == [scrollEvent(.ended, at: moved.center)])
     }
 }

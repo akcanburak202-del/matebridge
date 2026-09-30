@@ -102,7 +102,7 @@ public final class InputController: @unchecked Sendable {
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
-            post(pipeline.sessionStarted())
+            post(pipeline.sessionStarted(environment: environment()))
             log(.info, "input_session_start")
             rearmWatchdog()
         }

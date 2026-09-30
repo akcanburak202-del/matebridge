@@ -140,6 +140,9 @@ enum CGEventFactory {
     private static func scroll(_ s: MacScroll, source: CGEventSource?) -> CGEvent? {
         guard let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                               wheel1: s.dy, wheel2: s.dx, wheel3: 0) else { return nil }
+        // A scroll event built without a location takes the live cursor, which may be on another display. Locate it
+        // on the virtual display explicitly. Whether WindowServer routes by this location is a live check (T-023).
+        e.location = CGPoint(x: s.position.x, y: s.position.y)
         // `kCGScrollWheelEventScrollPhase` takes CGScrollPhase values (began 1, changed 2, ended 4, cancelled 8),
         // not NSEventPhase. No momentum phase is ever set: the injector generates no momentum.
         let phase: Int64
