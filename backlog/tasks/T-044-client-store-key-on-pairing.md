@@ -1,7 +1,7 @@
 ---
 id: T-044
 title: Tablet — eşleşme anahtarını PAIRING başında sakla (bağlantı koptuktan sonra onay için)
-status: todo
+status: review
 phase: 4
 owner: android-client-dev
 depends_on: [T-042]
@@ -31,12 +31,15 @@ PROTOCOL §9 "Bağlantı koptuktan sonra onay" (T-043 ile birlikte). Kullanıcı
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `SecureSession.onMessage` (ACCEPTED'da saklar) yerine `storePairKey(store)` (idempotent, yalnız PAIRING).
+2. `SessionController`: ilk HELLO_ACK doğrulanıp `Secure` çıkınca, `Secured` olayından önce `storePairKey`; hata -> `KeyStoreFailed` (mevcut yol), oturum kapanır. `readRecords`'taki ACCEPTED'da saklama kaldırılır.
+3. MainActivity kod ekranına ek satır.
+4. Testler: ilk ACK'te saklama (host'un türettiği anahtarla aynı), ACCEPTED'dan önce kopunca anahtar kalır ve PAIRED el sıkışması tamamlanır, eski anahtar değişir, PAIRED oturum yazmaz, saklama hatası yüzeye çıkar.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** kod son commit'ten önceki "T-044: plan" + "store pairing key at the first HELLO_ACK" commitleri; SHA orkestratöre mesajla bildirildi (HEAD).
+- **Dokunulan dosyalar:** security/Handshake.kt (`onMessage` -> `storePairKey`), session/SessionController.kt (ilk ACK'te sakla, hata -> KeyStoreFailed), MainActivity.kt (kod ekranına Parsec satırı), test/security/CryptoVectorsTest.kt + SecureChannelTest.kt, bu kart.
+- **Varsayımlar:** Saklama `Secured` olayından önce, reader thread'inde yapılır; `rePairing` uyarısı ve kod ekranı aynı. Golden `new_pair_key` vektörü ilk ACK sonrası saklanan anahtarla eşleşiyor.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** (1) Mac yeni cihazken bağlan, kod görününce tableti arka plana at (bağlantı kopsun), Mac'te onayla (T-043 ile), geri dön: PAIRED bağlanmalı. (2) Mac'te "unut" sonrası yeniden eşleşmede uyarı + yeni Parsec satırı görünmeli. (3) Normal akış (kodu tabletten görüp onaylama) bozulmamış olmalı.
+- **Açık sorular:** Yok. Not: worktree'de `client-android/local.properties` yoktu; gradle için ANDROID_HOME=~/Library/Android/sdk export edildi.

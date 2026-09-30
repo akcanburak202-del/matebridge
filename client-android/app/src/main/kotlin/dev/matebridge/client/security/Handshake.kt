@@ -59,12 +59,13 @@ class SecureSession(
     private var committed = false
 
     /**
-     * Call for every decoded control message. When the (encrypted) `HELLO_ACK(ACCEPTED)` of a pairing arrives, the new
-     * key replaces any old one under `host_id` (once). Returns true when a key was stored.
+     * PAIRING only: persists the new key under `host_id` (replacing any old one), once. Call right after the first
+     * HELLO_ACK was validated, not at ACCEPTED: the user may leave for the Mac's approval dialog and the connection may
+     * drop before the approval; the Mac keeps this handshake's key on approval (PROTOCOL.md section 9). Returns true
+     * when a key was stored; throws when it could not be persisted (the session must then fail).
      */
-    fun onMessage(msg: Message, store: PairKeyStore): Boolean {
+    fun storePairKey(store: PairKeyStore): Boolean {
         if (!secrets.pairing || committed) return false
-        if (msg !is HelloAck || msg.status != HelloAck.ACCEPTED) return false
         committed = true
         val key = secrets.newPairKey()
         try {

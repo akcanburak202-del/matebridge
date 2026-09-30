@@ -336,6 +336,15 @@ class SessionController(
                     }
                     is HandshakeOutcome.Secure -> {
                         val sec = outcome.session
+                        try {
+                            // Stored at the first ack, before the Mac's approval: the connection may drop meanwhile.
+                            if (sec.storePairKey(pairKeys)) MbLog.i("pair_key_stored")
+                        } catch (e: Exception) {
+                            // Not persisted: a later PAIRED handshake would have no key. Fail instead of pretending.
+                            closedPosted.set(true)
+                            events.put(SessionMachine.Event.KeyStoreFailed(gen)) // the key itself is never logged
+                            return
+                        }
                         secrets = sec.secrets
                         sealer = sec.sealer
                         sealerReady.countDown()
@@ -364,15 +373,6 @@ class SessionController(
                 decoder.feed(buf, 0, n)
                 while (true) {
                     val msg = decoder.next() ?: break
-                    try {
-                        // The new pairing key is stored when the Mac's approval arrives, before the UI shows "connected".
-                        if (sec.onMessage(msg, pairKeys)) MbLog.i("pair_key_stored")
-                    } catch (e: Exception) {
-                        // Not persisted: the next connection would be PAIRED without a key. Fail instead of pretending.
-                        closedPosted.set(true)
-                        events.put(SessionMachine.Event.KeyStoreFailed(gen)) // the key itself is never logged
-                        return
-                    }
                     events.put(SessionMachine.Event.Received(gen, msg))
                 }
             }
