@@ -37,7 +37,14 @@ Kullanıcı (2026-10-01) performans modu istedi (T-049'un Amaç'ı). Protokol `p
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Kodek** (`protocol/`): `MsgType.STREAM_PREFS = 0x05`, `StreamPrefs(fps, scalePermille)` (C→H, u16 u16 u32 reserved), Codec encode/decode; `FixtureTest`'e `stream_prefs`.
+2. **Mod tablosu** (`stream/StreamMode.kt`, tek yer): enum `CLARITY/SMOOTH/PERFORMANCE/PERFORMANCE_144` (fps, permille, ad); `next()` dongusu, `parse`, `toPrefs()`, dugme ve Toast metinleri. Varsayilan SMOOTH.
+3. **Kalicilik** (`Settings`): `streamMode()`/`setStreamMode()` (bilinmeyen deger -> varsayilan).
+4. **Gonderim** (`SessionMachine`/`SessionController`): makine `StreamMode` tercihini tutar; ACCEPTED'da kanit PING'inden hemen sonra `Send(StreamPrefs)`; yeni `Event.SetPrefs` (yalniz inputAllowed iken gonderir, her durumda saklar). Controller `Latest` posta kutusuyla olayi motora iletir (`setStreamMode`). Oturum bitince tercih saklanir, yeniden baglanmada yine gonderilir.
+5. **Yerel kisayol** (`KeyTracker`): `LocalAction.STREAM_MODE`, Ctrl+Shift+7 (scan 8), ayni `localOnly` mekanizmasi; Mac'e gitmez.
+6. **UI** (`MainActivity`): panelde mod dugmesi (tikla = dongu), kisayol satiri guncel, Toast "Performans: 120 fps, %75"; istatistik katmaninda mod ve kodlanan boyut satiri. Yerlesim: `layoutVideo` en-boyu `VideoLayout.aspect` ile (width_pt/height_pt ya da px) hesaplar, boylece kucuk kodlanan boyutun yuvarlamasi normalize koordinati kaydirmaz; cozucu zaten `widthPx x heightPx` ile kurulur, yuzey gorunum boyutunda kalir ve sistem olcekler. T-046 kare hizi istegi `streamConfig.fps`'i izledigi icin 144 dahil yeni STREAM_CONFIG ile otomatik degisir.
+7. **Testler**: fixture, mod tablosu/dongu/parse, Settings kaliciligi, makine (ACCEPTED sonrasi PING sonra PREFS, SetPrefs zamanlamasi, oturum disinda gonderilmez), KeyTracker (kisayol Mac'e gitmez, Ctrl+Shift olmadan 7 gider), VideoLayout kucuk boyut yerlesimi.
+
 
 ## Handoff
 
