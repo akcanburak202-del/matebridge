@@ -372,6 +372,26 @@ public struct StreamPrefs: Equatable, Sendable {
     }
 }
 
+/// `DISPLAY_RATE` (C->H, docs/PROTOCOL.md 0x07): the tablet panel's current refresh rate. Transient; it never
+/// reconfigures the stream, the host only decimates captured frames to `min(stream fps, hz)`.
+public struct DisplayRate: Equatable, Sendable {
+    /// Measured panel rate rounded to an integer; 0 = unknown.
+    public var hz: UInt16
+
+    public init(hz: UInt16) { self.hz = hz }
+
+    func write(_ w: inout ByteWriter) {
+        w.u16(hz)
+        w.u16(0)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> DisplayRate {
+        let hz = try r.u16()
+        try r.skip(2)
+        return DisplayRate(hz: hz)
+    }
+}
+
 /// `CLIPBOARD` (both directions, docs/PROTOCOL.md 0x06). `kind` stays raw: unknown kinds decode fine and are ignored
 /// by the receiver. The contents are private: never log `data`.
 public struct Clipboard: Equatable, Sendable {

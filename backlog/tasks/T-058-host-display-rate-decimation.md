@@ -1,7 +1,7 @@
 ---
 id: T-058
 title: Mac — DISPLAY_RATE ile kodlamadan önce seyreltme (60/120), yeniden başlatmasız; BoundedFrameQueue kurtarma düzeltmesi
-status: todo
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-049]
@@ -43,8 +43,10 @@ NOTES 2026-10-01 ~02:20. Tablet paneli dokunma yokken 60 Hz; host 120 fps gönde
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** tip of `task/T-058-host-display-rate-decimation` (SHA in the agent's report).
+- **Dokunulan dosyalar:** MateBridgeCore: `ProtocolConstants.swift`, `Message.swift`, `Messages.swift` (`DisplayRate`), `Session/SessionMachine.swift` (delivers 0x07 like STREAM_PREFS), `Input/InputStateMachine.swift` (one case added to an exhaustive switch), `Video/DisplayRatePolicy.swift` (new), `Video/FrameGate.swift`, `Video/BoundedFrameQueue.swift`, `Video/CadenceMeter.swift`. MateBridgeHost: `Video/HEVCEncoder.swift`, `Video/VideoPipeline.swift`, `Session/StreamCoordinator.swift`. Tests: `FixtureTests.swift` (display_rate), `Video/FrameGateTests.swift` (DecimationTests), `Video/VideoTests.swift`, `Video/CadenceTests.swift`. Merged `proto/display-rate` (87e36db).
+- **check.sh:** Swift (host-mac 131 XCTest + swift-testing, probes) green. Gradle red as expected: only `FixtureTest.everyFixtureFileHasATestCase` (no Kotlin `display_rate` case until T-059).
+- **Varsayimlar:** effective fps = `min(stream fps, hz)`; hz 0 or >= stream fps gives stream fps; hz below 24 is clamped to 24 (card silent; guards a garbled report). The decimation grid runs on capture timestamps (same host clock as `HostClock.nowUs`); decimation tolerance is min(2 ms, source interval/4) so 120 to 60 picks exactly every second capture. A frame before its slot is dropped, never held (no timer flush of an old frame). If the encoder slot is busy a grid-passing frame is held as the single pending (newest wins) and submitted on slot release. Keyframe re-submissions bypass the gate; encoded frames are never dropped. Normal mode (no message, or hz >= stream fps) is the old code path (test compares both). The coordinator stores the rate, re-applies it to every new pipeline (reconfiguration builds a new encoder), and resets it on session start/end (a grace-period pipeline returns to the stream fps). `decimated=` added to the cadence log. `ev=display_rate hz= effective_fps=` (component net) is logged only when hz or effective fps changes.
+- **BoundedFrameQueue:** dropping a delta now sets `awaitingKeyframe`; later deltas are refused until a keyframe is pushed (CODEC_CONFIG does not lift it). Frames already queued when the drop happens (including the incoming delta that caused it) are kept, as the existing `testKeyframeSurvivesOverflow` requires; they depend on the dropped frame, so the client may still see one or two broken deltas before the keyframe. Purging them too would be a further change (not done).
+- **Test edilmeyenler / cihazda dogrulanacaklar:** nothing ran against real capture/encoder. With T-059 on device: hz=60 on a 120 fps stream gives `enc_fps`~60, `decimated`~60/s, `cap_fps`~120 (SCK untouched), even 16.7 ms presentation gaps; touching the screen (hz 120) returns to ~120 at once with no `stream_reconfigure` and no video reconnect; `cap_late` is judged against the new target.
+- **Acik sorular:** `InputStateMachine.swift` was touched only for the exhaustive switch (inside `MateBridgeCore/`). No Kotlin codec (T-059).

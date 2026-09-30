@@ -20,6 +20,8 @@ public struct CadenceWindow: Sendable {
     public private(set) var encodeTimesUs: [UInt64] = []
     public var queueDrops = 0
     public var sent = 0
+    /// Captures skipped on purpose to match the tablet panel rate (T-058); not a loss.
+    public private(set) var decimated = 0
 
     static let maxSamples = 2048
 
@@ -36,6 +38,7 @@ public struct CadenceWindow: Sendable {
     }
     public mutating func recordEncoderIn() { encoderIn += 1 }
     public mutating func recordOverwritten() { overwritten += 1 }
+    public mutating func recordDecimated() { decimated += 1 }
     public mutating func recordEncoderOut(encodeTimeUs: UInt64) {
         encoderOut += 1
         if encodeTimesUs.count < Self.maxSamples { encodeTimesUs.append(encodeTimeUs) }
@@ -50,6 +53,7 @@ public struct CadenceWindow: Sendable {
         encoderIn += o.encoderIn
         encoderOut += o.encoderOut
         overwritten += o.overwritten
+        decimated += o.decimated
         encodeTimesUs += o.encodeTimesUs.prefix(max(0, Self.maxSamples - encodeTimesUs.count))
         queueDrops += o.queueDrops
         sent += o.sent
@@ -98,7 +102,7 @@ public struct CadenceWindow: Sendable {
             + " status=\(status.isEmpty ? "none" : status)"
             + " enc_in=\(encoderIn) enc_out=\(encoderOut) enc_fps=\(String(format: "%.1f", encoderOutFps))"
             + " enc_ms_p50_95_99=\(pct(encodeTimesUs)) enc_behind=\(encoderBehind)"
-            + " overwritten=\(overwritten) queue_drops=\(queueDrops) sent=\(sent) sent_fps=\(String(format: "%.1f", sentFps))"
+            + " overwritten=\(overwritten) decimated=\(decimated) queue_drops=\(queueDrops) sent=\(sent) sent_fps=\(String(format: "%.1f", sentFps))"
     }
 
     /// Short text for the menu line.
@@ -116,7 +120,7 @@ public final class CadenceMeter: @unchecked Sendable {
     private var lastArrivalUs: UInt64?
     private var lastQueueDrops = 0
     private var lastSent = 0
-    private let targetIntervalUs: UInt64
+    private var targetIntervalUs: UInt64
 
     public init(fps: Int) {
         targetIntervalUs = 1_000_000 / UInt64(max(1, fps))
@@ -141,6 +145,15 @@ public final class CadenceMeter: @unchecked Sendable {
 
     public func recordEncoderIn() { lock.lock(); window.recordEncoderIn(); lock.unlock() }
     public func recordOverwritten() { lock.lock(); window.recordOverwritten(); lock.unlock() }
+    public func recordDecimated() { lock.lock(); window.recordDecimated(); lock.unlock() }
+
+    /// The effective encode rate changed (T-058): late-interval statistics judge against the new target from now on.
+    public func setTargetFps(_ fps: Int) {
+        lock.lock()
+        targetIntervalUs = 1_000_000 / UInt64(max(1, fps))
+        window.targetIntervalUs = targetIntervalUs
+        lock.unlock()
+    }
     public func recordEncoderOut(encodeTimeUs: UInt64) {
         lock.lock(); window.recordEncoderOut(encodeTimeUs: encodeTimeUs); lock.unlock()
     }

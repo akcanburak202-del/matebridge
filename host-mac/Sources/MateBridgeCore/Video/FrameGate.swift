@@ -9,13 +9,21 @@
 public struct FrameGate: Sendable {
     public static let defaultToleranceUs: UInt64 = 2_000
 
-    public let intervalUs: UInt64
-    public let toleranceUs: UInt64
+    public private(set) var intervalUs: UInt64
+    public private(set) var toleranceUs: UInt64
     public private(set) var nextSlotUs: UInt64?
 
     public init(streamFps: Int, toleranceUs: UInt64 = FrameGate.defaultToleranceUs) {
         intervalUs = 1_000_000 / UInt64(max(1, streamFps))
         self.toleranceUs = toleranceUs
+    }
+
+    /// Changes the send rate while running (T-058). The grid restarts: the next frame is accepted at once and
+    /// anchors the new grid, so a rise is effective immediately and a fall starts from a clean slot.
+    public mutating func setFps(_ fps: Int, toleranceUs: UInt64? = nil) {
+        intervalUs = 1_000_000 / UInt64(max(1, fps))
+        if let toleranceUs { self.toleranceUs = toleranceUs }
+        nextSlotUs = nil
     }
 
     /// Microseconds from `nowUs` until a frame may be accepted; 0 = accept now.
@@ -54,12 +62,38 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     }
 
     public private(set) var gate: FrameGate
+    public let streamFps: Int
+    /// Target rate below the stream fps (T-058): captures are picked on the capture-timestamp grid, see `offer`.
+    public private(set) var decimating = false
+    private var decimatedCount = 0
+    private let baseToleranceUs: UInt64
     private var pending: (frame: Frame, ptsUs: UInt64)?
     public private(set) var lastSubmittedPtsUs: UInt64?
     private var overwrittenCount = 0
 
     public init(streamFps: Int, toleranceUs: UInt64 = FrameGate.defaultToleranceUs) {
+        self.streamFps = streamFps
+        self.baseToleranceUs = toleranceUs
         gate = FrameGate(streamFps: streamFps, toleranceUs: toleranceUs)
+    }
+
+    /// Sets the target send rate (`min(stream fps, panel Hz)`, T-058). Below the stream fps the pacer decimates:
+    /// the gate runs on capture timestamps and a frame that arrives before its slot is dropped, never held, so an
+    /// old pending frame cannot be flushed by a timer between two grid frames (uneven motion). At or above the
+    /// stream fps the pre-T-058 behaviour returns; a rise applies to the very next frame.
+    public mutating func setTargetFps(_ fps: Int) {
+        let target = min(max(1, fps), streamFps)
+        decimating = target < streamFps
+        // Decimation judges jittered capture timestamps: stay well below half a source interval, or a frame of the
+        // dropped half could pass the gate.
+        let sourceIntervalUs = 1_000_000 / UInt64(max(1, streamFps))
+        gate.setFps(target, toleranceUs: decimating ? min(baseToleranceUs, sourceIntervalUs / 4) : baseToleranceUs)
+    }
+
+    /// Captures dropped by decimation since the last call (intended, not a loss).
+    public mutating func takeDecimated() -> Int {
+        defer { decimatedCount = 0 }
+        return decimatedCount
     }
 
     public var hasPending: Bool { pending != nil }
@@ -79,6 +113,22 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         if let last = lastSubmittedPtsUs, ptsUs <= last {
             overwrittenCount += 1
             return .drop
+        }
+        if decimating, !bypassGate {
+            // The grid is on capture timestamps (one host clock). A frame before its slot is dropped, not held.
+            guard gate.waitUs(nowUs: ptsUs) == 0 else {
+                decimatedCount += 1
+                return .drop
+            }
+            gate.accept(nowUs: ptsUs)
+            if slotFree {
+                if pending != nil { pending = nil; overwrittenCount += 1 }
+                lastSubmittedPtsUs = ptsUs
+                return .submit(frame)
+            }
+            if pending != nil { overwrittenCount += 1 }
+            pending = (frame, ptsUs)
+            return .hold(retryAfterUs: nil)   // the next slot release submits it
         }
         let wait = gate.waitUs(nowUs: nowUs)
         if slotFree, bypassGate || wait == 0 {
@@ -100,10 +150,11 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             overwrittenCount += 1
             return .none
         }
-        let wait = gate.waitUs(nowUs: nowUs)
+        // A decimated frame already passed the grid when it was held: it goes out as soon as a slot is free.
+        let wait = decimating ? 0 : gate.waitUs(nowUs: nowUs)
         if wait > 0 { return .retry(afterUs: wait) }
         pending = nil
-        submitted(ptsUs: p.ptsUs, nowUs: nowUs)
+        if decimating { lastSubmittedPtsUs = p.ptsUs } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs) }
         return .submit(p.frame)
     }
 

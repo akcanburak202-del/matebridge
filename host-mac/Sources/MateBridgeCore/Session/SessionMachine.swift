@@ -703,7 +703,7 @@ public struct SessionMachine: Sendable {
             return protocolError(id)
         case .releaseAll(let reason):
             return isActive ? [.releaseInput(id, .clientRequest(reason))] : []
-        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard:
+        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard, .displayRate:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
         case .helloAck, .streamConfig, .pong, .videoHello, .videoFrame:

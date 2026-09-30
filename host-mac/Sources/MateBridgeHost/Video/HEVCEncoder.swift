@@ -219,6 +219,16 @@ final class HEVCEncoder: @unchecked Sendable {
     private func reportOverwrittenLocked() {
         let n = pacer.takeOverwritten()
         for _ in 0..<n { meter?.recordOverwritten() }
+        let d = pacer.takeDecimated()
+        for _ in 0..<d { meter?.recordDecimated() }
+    }
+
+    /// Target send rate `min(stream fps, panel Hz)` (T-058). Only the frame gate changes: the session, the virtual
+    /// display and capture keep running and already encoded frames are never dropped.
+    func setTargetFps(_ fps: Int) {
+        lock.lock()
+        pacer.setTargetFps(fps)
+        lock.unlock()
     }
 
     /// Must hold `lock`. Claims an in-flight slot, consumes the keyframe flag and makes the PTS increase.

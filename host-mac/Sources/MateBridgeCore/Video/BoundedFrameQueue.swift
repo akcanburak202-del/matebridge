@@ -1,7 +1,8 @@
 /// Bounded encoder-to-sink queue policy (PROTOCOL.md section 5): at most `capacity` (2) frames wait.
 ///
 /// On overflow the oldest frame that is not a keyframe / CODEC_CONFIG is dropped. Because a dropped
-/// delta frame breaks the reference chain, a keyframe is then requested (`takeKeyframeRequest`).
+/// delta frame breaks the reference chain, a keyframe is then requested (`takeKeyframeRequest`) and deltas pushed
+/// afterwards are refused until a keyframe has been pushed.
 /// Dropping a keyframe never needs a request: it can only happen when a newer keyframe (or
 /// config) is already queued or arriving.
 public struct BoundedFrameQueue: Sendable {
@@ -43,7 +44,11 @@ public struct BoundedFrameQueue: Sendable {
             ?? 0
         let dropped = frames.remove(at: idx)
         droppedCount += 1
-        if !dropped.isProtected { keyframeNeeded = true }
+        if !dropped.isProtected {
+            // The chain is broken: ask for a keyframe and refuse later deltas until it arrives (their reference is gone).
+            keyframeNeeded = true
+            awaitingKeyframe = true
+        }
         return 1
     }
 

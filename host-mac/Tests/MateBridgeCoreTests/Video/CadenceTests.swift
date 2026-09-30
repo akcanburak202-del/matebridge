@@ -100,3 +100,16 @@ final class CadenceTests: XCTestCase {
         XCTAssertEqual(s.streamConfig(configID: 1).fps, 60)
     }
 }
+
+final class CadenceTargetTests: XCTestCase {
+    func testTargetFollowsTheEffectiveRate() {
+        let m = CadenceMeter(fps: 120)
+        m.setTargetFps(60)
+        m.recordDecimated()
+        let w = m.take(nowUs: 1_000_000, queueDropsTotal: 0, sentTotal: 0)
+        XCTAssertEqual(w.targetIntervalUs, 16_666)
+        XCTAssertEqual(w.decimated, 1)
+        XCTAssertTrue(w.logFields.contains("target_ms=16.7"))
+        XCTAssertTrue(w.logFields.contains("decimated=1"))
+    }
+}

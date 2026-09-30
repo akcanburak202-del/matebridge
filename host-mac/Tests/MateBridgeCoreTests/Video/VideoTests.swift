@@ -28,6 +28,31 @@ final class BoundedFrameQueueTests: XCTestCase {
         XCTAssertEqual(q.droppedCount, 1)
     }
 
+    /// T-058: after a dropped delta the dependents must not reach the client before the requested keyframe.
+    func testDeltasAreRefusedAfterADropUntilKeyframe() {
+        var q = BoundedFrameQueue()
+        q.push(delta(1)); q.push(delta(2)); q.push(delta(3))   // delta 1 dropped: chain broken
+        XCTAssertTrue(q.takeKeyframeRequest())
+        XCTAssertEqual(q.pop()?.data, [2]); XCTAssertEqual(q.pop()?.data, [3])
+        XCTAssertEqual(q.push(delta(4)), 1, "dependent delta refused")
+        XCTAssertEqual(q.push(delta(5)), 1)
+        XCTAssertTrue(q.isEmpty)
+        XCTAssertEqual(q.push(key(6)), 0)
+        XCTAssertEqual(q.push(delta(7)), 0, "deltas pass again once the keyframe is in")
+        XCTAssertEqual(q.pop()?.data, [6]); XCTAssertEqual(q.pop()?.data, [7])
+    }
+
+    func testCodecConfigDoesNotLiftTheRefusal() {
+        var q = BoundedFrameQueue()
+        q.push(delta(1)); q.push(delta(2)); q.push(delta(3))
+        _ = q.pop(); _ = q.pop()
+        q.push(config())
+        XCTAssertEqual(q.push(delta(4)), 1)
+        q.push(key(5))
+        _ = q.pop()   // make room: the config leaves
+        XCTAssertEqual(q.push(delta(6)), 0, "a keyframe has lifted the refusal")
+    }
+
     func testKeyframeSurvivesOverflow() {
         var q = BoundedFrameQueue()
         q.push(key(1)); q.push(delta(2))
