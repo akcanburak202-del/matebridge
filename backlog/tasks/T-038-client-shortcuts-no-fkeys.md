@@ -31,7 +31,10 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): yakınlaştırma, kaydırma ve `Ctr
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `KeyTracker.localChord`: scan 9/10/11 (rakam 8/9/0) icin STATS/SPEED_DOWN/SPEED_UP eslemesi ekle (yalniz Ctrl+Shift ile); keyCode'a bakilmaz (duzenden bagimsiz).
+2. Mevcut `localOnly` mekanizmasi aynen kullanilir; `InputCapture.onKey` degismez (oturum yokken rakamlar Android'de kalir).
+3. MainActivity kisayol satirini guncelle.
+4. KeyTrackerTest: 3 kombinasyon, rakam tek basina / yalniz Ctrl ile Mac'e gider, yinelenen DOWN yerel.
 
 ## Handoff
 
