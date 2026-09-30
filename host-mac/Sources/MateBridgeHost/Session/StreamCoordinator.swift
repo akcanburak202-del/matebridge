@@ -14,7 +14,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     public static let configID: UInt16 = 1
 
     private enum Event: Sendable {
-        case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?)
+        case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?,
+                          base: VideoSettings?)
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
@@ -78,7 +79,14 @@ public final class StreamCoordinator: @unchecked Sendable {
     private let liveSessionLock = NSLock()
     private var liveSessionID: UInt32?
 
-    public init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
+    private let prefsStore: StreamPrefsStoring
+
+    public convenience init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
+        self.init(graceUs: graceUs, prefsStore: UserDefaultsStreamPrefsStore())
+    }
+
+    init(graceUs: UInt64, prefsStore: StreamPrefsStoring) {
+        self.prefsStore = prefsStore
         lease = DisplayLease(graceUs: graceUs)
     }
 
@@ -124,19 +132,25 @@ public final class StreamCoordinator: @unchecked Sendable {
         tickTimer = timer
     }
 
-    /// Settings of a session from its tablet's HELLO. Pure: nothing is remembered, so a HELLO that never becomes
-    /// a session (an unproven reconnect) cannot change the settings of the live one.
-    private static func settings(for hello: Hello) -> VideoSettings {
+    /// Settings of a session from its tablet's HELLO: `base` (HELLO + experiment knobs) and `initial` (`base` with
+    /// the device's remembered `STREAM_PREFS` on top, so a reconnect starts in the last chosen mode). Pure apart from
+    /// reading the store: nothing is remembered here, so a HELLO that never becomes a session (an unproven reconnect)
+    /// cannot change the settings of the live one.
+    private func settings(for hello: Hello) -> (base: VideoSettings, initial: VideoSettings) {
         // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
         // MATEBRIDGE_FRAME_DELAY=0|1.
-        let settings = VideoSettings.forTablet(hello).applyingExperimentKnobs(ProcessInfo.processInfo.environment)
-        return settings
+        let env = ProcessInfo.processInfo.environment
+        let base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
+        let initial = VideoSettings.initialSettings(
+            defaults: base, stored: prefsStore.load(device: hello.deviceID),
+            defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
+        return (base, initial)
     }
 
     /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Side-effect free (apart from
     /// a log line); the session machine may call it for a connection that never becomes the session.
     public func streamConfig(for hello: Hello) -> StreamConfig {
-        let settings = Self.settings(for: hello)
+        let settings = self.settings(for: hello).initial
         if settings.widthPx != Int(hello.screenWidthPx) || settings.heightPx != Int(hello.screenHeightPx) {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
                        fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.widthPx)x\(settings.heightPx)")
@@ -147,8 +161,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello) {
         liveSessionLock.withLock { liveSessionID = sessionID }
+        let (base, initial) = settings(for: hello)
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
-                             settings: Self.settings(for: hello)))
+                             settings: initial, base: base))
     }
 
     public func sessionEnded() {
@@ -197,8 +212,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         switch event {
-        case .sessionStarted(let sid, let cid, let device, let settings):
-            await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings)
+        case .sessionStarted(let sid, let cid, let device, let settings, let base):
+            await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings, base: base)
         case .sessionEnded:
             await onSessionEnded()
         case .videoAttached(let link):
@@ -228,17 +243,18 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
-                                  settings: VideoSettings?) async {
-        guard let device, let settings else {
+                                  settings: VideoSettings?, base: VideoSettings?) async {
+        guard let device, let settings, let base else {
             log(.error, "session_without_config")
             return
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
         session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
-                                base: settings)
+                                base: base)
         prefsGate = StreamPrefsGate()
-        log(.info, "stream_session", "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
+        log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
+            + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
         await perform(lease.sessionStarted(device: device, settings: settings))
     }
 
@@ -255,12 +271,13 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     /// Derives the settings, and if they differ from the running ones: new `config_id`, session layer notified
-    /// (`STREAM_CONFIG` + video close), capture and encoder rebuilt on the same virtual display (its refresh rate is
-    /// switched in place; `VideoPipeline` replaces the display only if that fails).
+    /// (`STREAM_CONFIG` + video close), capture and encoder rebuilt; the virtual display is kept unless the
+    /// refresh rate changes (`VideoPipeline` recreates it then, SCK cannot follow an in-place mode switch).
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
         let env = ProcessInfo.processInfo.environment
         let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
+        prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
         guard wanted != live.settings else { return }
         let old = live.settings
         live.settings = wanted

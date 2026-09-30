@@ -113,4 +113,47 @@ final class StreamPrefsTests: XCTestCase {
         var l = DisplayLease()
         XCTAssertTrue(l.reconfigure(settings: base.applying(StreamPrefs(fps: 120, scalePermille: 1000))).isEmpty)
     }
+
+    // MARK: initial settings from remembered prefs
+
+    private let deviceA = DeviceID(bytes: [UInt8](repeating: 0xA1, count: 16))!
+    private let deviceB = DeviceID(bytes: [UInt8](repeating: 0xB2, count: 16))!
+
+    func testStoredPrefsAreUsedAndUnknownDeviceGetsDefaults() {
+        let store = InMemoryStreamPrefsStore()
+        store.save(StreamPrefs(fps: 120, scalePermille: 750), device: deviceA)
+        let a = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA), defaultRefreshHz: 60)
+        XCTAssertEqual([a.fps, a.scalePermille, a.displayRefreshHz], [120, 750, 120])
+        let b = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceB), defaultRefreshHz: 60)
+        XCTAssertEqual(b, base, "unknown device: defaults unchanged")
+    }
+
+    func testEnvKnobsStillSetTheDefaultsAndStoredPrefsWinOverThem() {
+        let env = ["MATEBRIDGE_FPS": "120", "MATEBRIDGE_BITRATE_KBPS": "45000"]
+        let defaults = base.applyingExperimentKnobs(env)
+        let unknown = VideoSettings.initialSettings(defaults: defaults, stored: nil, defaultRefreshHz: 60)
+        XCTAssertEqual([unknown.fps, unknown.bitrateKbps, unknown.displayRefreshHz], [120, 45_000, 120])
+        let stored = VideoSettings.initialSettings(defaults: defaults, stored: StreamPrefs(fps: 60, scalePermille: 1000),
+                                                   defaultRefreshHz: 60)
+        XCTAssertEqual([stored.fps, stored.displayRefreshHz], [60, 60])
+    }
+
+    func testStoreNormalizesAndReturningTabletWithStoredPrefsReusesTheDisplay() {
+        let store = InMemoryStreamPrefsStore()
+        store.save(StreamPrefs(fps: 90, scalePermille: 20), device: deviceA)
+        XCTAssertEqual(store.load(device: deviceA), StreamPrefs(fps: 60, scalePermille: 500))
+        let mode = StreamPrefs(fps: 120, scalePermille: 750)
+        store.save(mode, device: deviceA)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA), defaultRefreshHz: 60)
+        var lease = DisplayLease()
+        _ = lease.sessionStarted(device: deviceA, settings: initial)
+        lease.sessionEnded(now: 0)
+        XCTAssertEqual(lease.sessionStarted(device: deviceA, settings: initial), [.reuse])
+        // The tablet's first STREAM_PREFS equals the remembered one: nothing to reconfigure.
+        XCTAssertEqual(base.applying(mode), initial)
+    }
+
+    func testShortHexShowsOnlyAPrefix() {
+        XCTAssertEqual(deviceA.shortHex, "a1a1a1a1")
+    }
 }
