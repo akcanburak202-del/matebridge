@@ -206,6 +206,20 @@ struct PlannerPenTests {
         let down = planOnce(&q, [.penDown(tool: .pen, penPt(3, 4, 700))])
         #expect(down == [proximityEvent(entering: true), tabletEvent(.down, x: 3, y: 4, pressure: 700)])
     }
+    @Test("PLAN-9 the pen lifts (CONTACT 1->0) while the display or the permission is gone: the up is still posted, the pen stays in range")
+    func plan9_upWithoutGate() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [penEnter(), .penDown(tool: .pen, penPt(70, 80, 900))])
+        // No display: it lifts where it last was.
+        #expect(planOnce(&p, [.penUp(tool: .pen, penPt(71, 81))], noDisplayEnv) == [tabletEvent(.up, x: 70, y: 80)])
+        #expect(p.isPenInRange && !p.isPenInContact)
+
+        var q = InjectionPlanner()
+        _ = planOnce(&q, [penEnter(), .penDown(tool: .pen, penPt(70, 80, 900))])
+        // No permission: the display is known, so it lifts at the position the sample says.
+        #expect(planOnce(&q, [.penUp(tool: .pen, penPt(71, 81))], noPermissionEnv) == [tabletEvent(.up, x: 71, y: 81)])
+        #expect(q.isPenInRange && !q.isPenInContact)
+    }
 }
 
 @Suite("PLAN: mouse, touch and click state")
@@ -474,6 +488,17 @@ struct PlannerScrollTests {
         }
         #expect(total == 3)   // 10 x 0.3
         #expect(events == 3)  // the sub-pixel steps produced no event of their own
+    }
+
+    @Test("PLAN-34b the horizontal remainder is carried over as well")
+    func plan34b_carryX() {
+        var p = InjectionPlanner()
+        _ = planOnce(&p, [.scroll(.began, dx: 0, dy: 0)])
+        var total: Int32 = 0
+        for _ in 0..<10 {
+            for case .scroll(let s) in planOnce(&p, [.scroll(.changed, dx: -0.3, dy: 0)]) { total += s.dx }
+        }
+        #expect(total == -3)
     }
 
     @Test("PLAN-35 CHANGED without an open gesture is dropped; BEGAN over an open one ends the old one first")
