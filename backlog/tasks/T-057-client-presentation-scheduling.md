@@ -1,7 +1,7 @@
 ---
 id: T-057
 title: Tablet — sunum zamanlaması düzeltmeleri (yuva başına tek bırakma, son yuvaya gecikme sınırı, faz kalibrasyonu, çözücü doluluğu)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-052]
@@ -62,3 +62,7 @@ NOTES 2026-10-01 ~02:20 (ölçüm + gpt-6-astra danışması). Kalan takılma: 1
 - Öncü (lead) varsayılanı **0,72 P** (120 Hz'te 6,0 ms): tek adlandırılmış sabit `VsyncClock.FAST_PANEL_LEAD_FRACTION`; yalnızca periyot < 11,2 ms (>= ~90 Hz) panelde. 60 Hz **P/2 kalır**: ölçülmedi, 0,72 P = 12 ms orada kanıtsız ve SF ufkuna fazla yakın olur; kesirli biçimin 60 Hz'te doğru olduğu gösterilmedi. `--ei lead_us` her iki durumda geçersiz kılar.
 - Ölçüm: baz main %11,5; P/2 %6,4; 2 ms %13,0; 5 ms %5,5; 6 ms %0,2/1,1/7,1; 6,5 ms %4,1; 7,5 ms %4,8; inflight 3 -> %6,3, 4 -> %8,6 (kazanç yok, varsayılan 0 kalır).
 - **Açık soru:** 6 ms'te koşudan koşuya büyük fark (0,2 -> 7,1) Mac ile tablet 120 Hz saatleri arasında yavaş faz kaymasına işaret ediyor. Fikirler: yakalama zamanı ile vsync fazını (capture mod P) izleyip kaymayı ölçmek ve öncüyü ±1 ms içinde yavaşça ayarlamak (tekrar oranı pencerelerine göre geri besleme, `onSkipWindow` gibi); host yakalama kadansını tablet vsync'ine kilitlemek (T-058/T-059 tarafı); `lead` taramasını daha uzun pencerelerle (60 sn+) tekrarlamak.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Cihazda ölçüldü (NOTES ~03:00): 120 Hz'te tekrar %11,5 → ortalama ~%3 (öncü 6 ms). Codex turu yapılmadı (video sunumu). Faz kayması açık soru.

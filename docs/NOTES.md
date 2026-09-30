@@ -325,3 +325,22 @@ Performans 120, `anim`. SurfaceFlinger sunum aralıkları (~125 kare) ve `MB/ren
 - Güncel (T-052/T-056 sonrası, Performans 120, `anim`): 120 Hz (dokunma) 16,7 ms tekrar %2,4–4,8, `pace_ms` ~8, çözme p95 ~10 ms; 60 Hz (boşta, akış 120 fps) 33 ms boşluk %6–8, arada 25/41/50 ms.
 - Kullanıcı gpt-6-astra danışmasına izin verdi (Codex, high). Önerilerin özeti (öncelik sırasıyla): (1) `AdaptivePacer`'da gecikme sınırını son sunum yuvasına uygula, geç kareleri sonraki yuvaya itmek yerine at; `drainOutput`'ta çekilişler arası "çarpışma" önceki bırakmayı geri alamıyor → yuva başına tek bırakma, en fazla bir değiştirilebilir bekleyen çıkış. (2) Faz: Choreographer zamanı sunum ızgarası değil; `Display.getAppVsyncOffsetNanos` hesaba katılmalı, bırakma öncüsü SF'ye göre kalibre edilmeli (FrameTimeline API 33, bu cihazda yok); taban/jitter değişimleri yumuşatılmalı. (3) Panel 60 Hz'teyken host kodlamadan önce 60'a seyreltsin (SCK/ekran 120'de kalır, yeniden başlatma yok) — geçici oran geri bildirimi, STREAM_PREFS'ten ayrı. (4) Çözücü içindeki kare sayısını ölç/sınırla (2/3/4); host `BoundedFrameQueue.push()` delta atınca keyframe isteyip bağımlı deltaları geçiriyor → düzelt. (5) İçerik güdümlü yakalama doğru, kopya kare yok. (6) Bit hızı sıçramalarını ancak kaçırmalarla ilişkiliyse ayarla. (7) SurfaceControl şimdilik değil.
 - → T-057 (tablet sunum zamanlaması), T-058 (protokol DISPLAY_RATE + host seyreltme + kuyruk düzeltmesi), T-059 (tablet panel hızını bildirir).
+
+## 2026-10-01 ~03:00 — Sunum zamanlaması (T-057) uzun pencerelerle
+
+Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `anim`, dokunma ile 120 Hz.
+
+| Yapılandırma | 8,3 ms | 16,7 ms tekrar | ≥25 ms |
+|---|---|---|---|
+| main öncesi (T-052) | %88,1 | **%11,5** | %0,5 |
+| T-057, öncü P/2 (4,17 ms) | %93,3 | %6,4 | %0,3 |
+| öncü 2 ms | %86,3 | %13,0 | %0,6 |
+| öncü 5 ms | %94,0 | %5,5 | %0,5 |
+| **öncü 6 ms** (3 tur) | %99,8 / %98,7 / %92,5 | **%0,2 / %1,1 / %7,1** | ≤%0,4 |
+| öncü 6,5 ms | %95,7 | %4,1 | %0,2 |
+| öncü 7,5 ms | %94,9 | %4,8 | %0,4 |
+| inflight 3 / 4 | %93,0 / %90,2 | %6,3 / %8,6 | – |
+
+- HarmonyOS değerleri: `appVsyncOffset=1,0 ms`, `presentationDeadline=13,33 ms`. Varsayılan öncü 0,72·P (120 Hz'te 6 ms), 60 Hz'te P/2. `slot_dups=0`, `late_drops≈0`, `in_codec_p95` 2–3.
+- 6 ms'de turlar arası fark büyük (%0,2–%7,1): Mac ve tablet 120 Hz saatleri arasında yavaş faz kayması olası → kapalı döngü öncü ayarı (±1 ms) ya da host yakalamasını tablet vsync'ine kilitleme (açık soru).
+- 60 Hz boşta (akış 120): 33 ms ve üstü boşluk %2,3–3,1 (değişmedi) → T-058/T-059 seyreltme.
