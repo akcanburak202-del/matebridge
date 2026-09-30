@@ -289,3 +289,15 @@ Host `STREAM_PREFS` ile yeniden yapılandırıyor; içerik: scratch `anim` (120/
 - Tablet ayarı ve panel: **Dinamik**: boşta 60 Hz, dokunurken 120 Hz (144 isteğinde de 120). **Orta**: boşta ve (adb swipe ile) dokunurken 60 Hz — önerilmez. **Yüksek**: boşta 60, dokunurken 120; 144 Hz video uygulamasına hiç verilmiyor. → Performans 144 modu kaldırıldı; önerilen: tablet "Dinamik", mod Performans (çizim/oyun) ya da Akıcı/Netlik (yazı).
 - ScreenCaptureKit, sanal ekran hangi yenileme hızıyla yaratıldıysa o hızda veriyor; yerinde mod değişimi (60→120) yakalamayı hızlandırmıyor. Host yenileme değişiminde ekranı yeniden yaratıyor (`display_recreate reason=refresh_change`) ve her cihazın son tercihini hatırlıyor (`from_stored=true`), böylece yeniden bağlanmada ekran yeniden yaratılmıyor.
 - **T-051 ölçümü (01:07–01:08, kullanıcı, gerçek touchpad/fare/kalem, Performans modu, tablet "Dinamik"):** touchpad ve fare ile sürüklerken panel **120 Hz**, gösterim 105–117 fps (`rel_msgs` ~115–119/sn); kalemle 120 Hz, 119–121 fps (`pen_samples` 360/sn); hareket bitince 60 Hz. Yani Huawei fareyi/touchpad'i de etkinlik sayıyor; önceki "68–70 fps" gözlemi tam boyutlu Akıcı moddaki çözücü sınırı ve/veya "Orta" ayarıyla ilgiliydi. Touchpad/fare ile ~112 fps, Mac'teki pencerenin fare olay hızında (~117/sn) güncellenmesinden. Ek iş gerekmiyor.
+
+## 2026-10-01 — Takılma ölçümü (Performans 120, dokunma ile panel 120 Hz)
+
+İçerik: `anim` (120 Hz). Ölçüm: `dumpsys SurfaceFlinger --latency` video katmanı sunum aralıkları (~1,2 sn pencere), host `cadence`.
+
+| İstemci tamponu (`--ei jitter N`) | 8,3 ms | 16,7 ms (atlanan vsync) | 33 ms | ek gecikme (`pace_add`) |
+|---|---|---|---|---|
+| 0 (varsayılan) | 99 | 26 (%21) | 0 | 0 |
+| 1 | 98 | 27 (%21) | 0 | 8,35 ms |
+| 2 | 123 | 0 | 2 | 16,7 ms |
+
+- Host kusursuz: yakalama aralığı p50/95/99 = 8,3/8,3/8,3 ms, varış 8,3/8,9/9,6 ms, kodlama ~6–7 ms, tablet `drop=0`. **Takılma tablette sunumda**: çözme süresi (~9–12 ms, vsync'ten uzun) dalgalanınca iki kare aynı vsync'e düşüyor, ardından bir vsync boş kalıyor. 2 karelik tampon gideriyor ama +16,7 ms. 1 karelik tamponun hiç etkisiz olması şüpheli (pacer hatası olabilir). → T-052 (uyarlanır kare zamanlaması). Kullanıcı: "demo animasyonlarda takılma çok göze batıyordu … performans modu akıcı görünüyor".
