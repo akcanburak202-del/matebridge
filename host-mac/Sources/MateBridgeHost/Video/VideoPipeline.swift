@@ -145,6 +145,16 @@ public final class VideoPipeline: @unchecked Sendable {
             + "sck_min_interval_ms=\(String(format: "%.2f", 500 / Double(max(1, settings.fps)))) sck_queue_depth=\(ScreenCapture.queueDepth)"
     }
 
+    /// Applies the tablet panel rate (`DISPLAY_RATE`): the encoder feed is decimated to `min(stream fps, hz)` without
+    /// restarting anything. Remembered, so an encoder created later starts at the same rate. Returns the effective fps.
+    @discardableResult
+    public func setDisplayRate(hz: Int) -> Int {
+        let fps = DisplayRateState.effectiveFps(streamFps: settings.fps, hz: hz)
+        box.encoder?.setTargetFps(fps)
+        meter.setTargetFps(fps)
+        return fps
+    }
+
     public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }
 
     /// Handles a client `KEYFRAME_REQUEST`. For reasons that imply a rebuilt decoder (`resendsCodecConfig`) the

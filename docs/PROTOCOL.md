@@ -80,6 +80,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x04 | BYE | iki yön | kontrol | `bye` |
 | 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs` |
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
+| 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -191,6 +192,18 @@ Pano paylaşımı (Faz 5): bir taraftaki panoya kopyalanan **metin** diğer tara
 - Parola yöneticisi gibi "gizli" işaretli içerik (Mac: `org.nspasteboard.ConcealedType` ya da `TransientType`; Android: `ClipDescription.EXTRA_IS_SENSITIVE`) **gönderilmez**.
 - Özellik iki tarafta da ayarla kapatılabilir (varsayılan: açık). Pano içeriği **asla loglanmaz**; yalnızca uzunluk ve yön (`ev=clipboard dir=… bytes=…`).
 - Mesaj yalnızca `ACCEPTED` sonrası (şifreli kanalda, §9) gider.
+
+### 0x07 DISPLAY_RATE (C→H, kontrol)
+
+Tablet panelinin **o anki** yenileme hızı (Huawei paneli dokunma yokken 60 Hz'e indiriyor, NOTES 2026-10-01). Geçicidir; `STREAM_PREFS`'ten ayrıdır ve yeniden yapılandırma **tetiklemez**.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| hz | u16 | Ölçülen panel hızı, tam sayıya yuvarlanmış (60, 90, 120, 144). 0 = bilinmiyor. |
+| reserved | u16 | |
+
+- İstemci: `ACCEPTED`'dan sonra bir kez ve hız değişince gönderir. Yükselişi hemen, düşüşü ~0,5 sn kararlı kaldıktan sonra bildirir; saniyede en çok 4 mesaj.
+- Host: kodlayıcıya giden kare hızını `min(akış fps'i, hz)`'e **seyreltir** (sanal ekran, SCK ve kodlayıcı oturumu değişmez; yakalamalar eşit aralıkla seçilir; kodlanmış kareler atılmaz). `hz` 0 ya da akış fps'inden büyükse akış fps'i. `STREAM_CONFIG` değişmez; istemci sunum zamanlamasını kendi ölçtüğü panel hızına göre yapar.
 
 ### 0x10 PEN (C→H)
 
@@ -523,7 +536,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `clipboard_text`, `clipboard_empty`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `clipboard_text`, `clipboard_empty`, `display_rate`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`

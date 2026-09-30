@@ -20,6 +20,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
         case streamPrefs(sessionID: UInt32, StreamPrefs)
+        case displayRate(sessionID: UInt32, hz: UInt16)
         case stats(Stats)
         case tick
         case pipelineFailed(id: Int, message: String)
@@ -54,6 +55,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private static let tickKey = 1, statsKey = 2, keyframeKey = 3
     private static func prefsKey(_ sessionID: UInt32) -> Int { (1 << 40) + Int(sessionID) }
+    private static func displayRateKey(_ sessionID: UInt32) -> Int { (2 << 40) + Int(sessionID) }
 
     private let logger = SessionLogger(component: "net")
     private let videoLogger = SessionLogger(component: "video")
@@ -75,6 +77,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var lastStatsText = ""
     private var lastCadenceText = ""
     private var prefsGate = StreamPrefsGate()
+    /// Tablet panel rate from `DISPLAY_RATE` (T-058), and the last (hz, effective fps) that was logged.
+    private var rateState = DisplayRateState()
+    private var lastLoggedRate: (hz: Int, fps: Int)?
     /// Session id of the live session as seen by the entry points (any thread); nil between sessions.
     private let liveSessionLock = NSLock()
     private var liveSessionID: UInt32?
@@ -183,6 +188,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             // order). The key includes the session id, so prefs of two sessions are never merged.
             guard let sid = liveSessionLock.withLock({ liveSessionID }) else { return }
             post(.streamPrefs(sessionID: sid, prefs), key: Self.prefsKey(sid))
+        case .displayRate(let rate):
+            guard let sid = liveSessionLock.withLock({ liveSessionID }) else { return }
+            post(.displayRate(sessionID: sid, hz: rate.hz), key: Self.displayRateKey(sid))
         default: break
         }
     }
@@ -225,6 +233,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             }
         case .streamPrefs(let sid, let prefs):
             await onStreamPrefs(prefs, sessionID: sid)
+        case .displayRate(let sid, let hz):
+            onDisplayRate(hz, sessionID: sid)
         case .stats(let stats):
             onStats(stats)
         case .tick:
@@ -253,6 +263,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
                                 base: base)
         prefsGate = StreamPrefsGate()
+        resetDisplayRate()
         log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
             + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
         await perform(lease.sessionStarted(device: device, settings: settings))
@@ -268,6 +279,30 @@ public final class StreamCoordinator: @unchecked Sendable {
         let p = prefs.normalized
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
+    }
+
+    /// `DISPLAY_RATE`: the encoder feed is decimated to `min(stream fps, hz)`. Nothing restarts, no `STREAM_CONFIG`.
+    private func onDisplayRate(_ hz: UInt16, sessionID: UInt32) {
+        guard let live = session, live.sessionID == sessionID else { return }
+        rateState.update(hz: hz)
+        applyDisplayRate(streamFps: live.settings.fps)
+    }
+
+    /// Pushes the remembered panel rate to the current pipeline (also right after one was created, because a
+    /// reconfiguration builds a new encoder). Logs `ev=display_rate` only when hz or the effective fps changed.
+    private func applyDisplayRate(streamFps: Int) {
+        let effective = rateState.effectiveFps(streamFps: streamFps)
+        pipeline?.setDisplayRate(hz: rateState.hz)
+        guard lastLoggedRate?.hz != rateState.hz || lastLoggedRate?.fps != effective else { return }
+        lastLoggedRate = (rateState.hz, effective)
+        log(.info, "display_rate", "hz=\(rateState.hz) effective_fps=\(effective)")
+    }
+
+    /// No report yet (new session, or none any more): the pipeline runs at the stream fps again.
+    private func resetDisplayRate() {
+        rateState.reset()
+        lastLoggedRate = nil
+        pipeline?.setDisplayRate(hz: 0)
     }
 
     /// Derives the settings, and if they differ from the running ones: new `config_id`, session layer notified
@@ -294,6 +329,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionEnded() async {
         session = nil
+        resetDisplayRate()
         lastSent = VideoSender.Counters()
         lastStatsText = ""
         lastCadenceText = ""
@@ -446,6 +482,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                 return
             }
             pipeline = p
+            if rateState.hz != 0 { applyDisplayRate(streamFps: settings.fps) }
             startDrain()
             log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)")
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,

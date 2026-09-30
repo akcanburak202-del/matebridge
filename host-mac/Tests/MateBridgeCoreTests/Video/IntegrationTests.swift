@@ -151,9 +151,13 @@ final class VideoSenderTests: XCTestCase {
         XCTAssertEqual(transport.sentCount, 2, "never more than 2 in flight")
         XCTAssertGreaterThan(keyframeRequests.value, 0, "overflow asks for a keyframe")
 
+        // Delta 3 was dropped and its dependents (4, 5) purged: nothing stale may follow; the keyframe resyncs.
         transport.complete()
-        await waitUntil("next frame after a slot frees") { transport.sentCount == 3 }
-        XCTAssertEqual(transport.sent.last?.data, [4], "oldest queued delta (3) was dropped, newest kept")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(transport.sentCount, 2, "no dependent delta is sent after the drop")
+        frames.push(key(6))
+        await waitUntil("keyframe sent after a slot frees") { transport.sentCount == 3 }
+        XCTAssertEqual(transport.sent.last?.data, [6])
         XCTAssertEqual(transport.sent.last?.frameSeq, 2, "no gaps in frame_seq")
         await sender.stop()
         XCTAssertEqual(sender.currentCounters.framesSent, 3)
