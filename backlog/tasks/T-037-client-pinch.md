@@ -1,7 +1,7 @@
 ---
 id: T-037
 title: Tablet — iki parmakla yakınlaştırma (dokunmatik ekran ve touchpad) → PINCH
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-034, T-035]
@@ -44,8 +44,11 @@ PROTOCOL.md §4 `0x17 PINCH` istemci kuralları, §5 birleştirme ve karar 0009.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** dalın son commit'i (`git log -1 task/T-037-client-pinch`).
+- **Dokunulan dosyalar:** `protocol/Messages.kt`, `protocol/Codec.kt` (Pinch); `input/TwoFingerClassifier.kt` (yeni, tüm eşikler), `TouchTracker.kt`, `RelPointerTracker.kt`, `InputCapture.kt` (gate), `InputOutbox.kt` (birleştirme, sayaç), `Model.kt` (`pinch_msgs`); testler: `PinchTest.kt` (yeni), `FixtureTest`, `CodecRulesTest`, `TestSupport` (`slide` yardımcısı), `TouchTrackerTest`, `InputHardeningTest`, `InputCaptureTest`, `RelPointerCaptureTest` (BEGAN ertelemesi için güncellendi).
+- **Sınıflama eşikleri** (`TwoFingerClassifier`): PINCH_REL = %6 (baz çizgisine göre parmak uzaklığı değişimi); ortak hareket eşiği dokunmatikte 16 px (`SLOP_PX`), touchpad'de `extent * 0,02` (mevcut `SLOP_FRAC`); taban mesafe alt sınırı dokunmatikte 140 px, touchpad'de `extent * 0,05` (yakın parmak gürültüsü); aynı karede ikisi de aşılırsa `|Δd| >= 2·ortak` ise PINCH, değilse SCROLL. Karar bir kez verilir, hareket boyunca değişmez (5 sn boşta ENDED sonrası aynı türle yeniden başlar).
+- **Davranış değişikliği (dokunmatik kaydırma):** ikinci parmakta SCROLL BEGAN artık hemen gitmez; ilk anlamlı harekette (BEGAN + birikmiş CHANGED) gider. Sınıflama için zorunlu. Hareketsiz iki parmak artık keepalive göndermez (açık hareket yok). Mevcut testler buna göre güncellendi.
+- **Varsayımlar:** karar anında birikmiş ölçek BEGAN'ın ardından ilk CHANGED'de gider (kayıp yok). Bırakma yolları SCROLL ile aynı: dokunmatikte CANCELLED (kalem girişi, release-all, devre dışı, cihaz sökülmesi), touchpad'de ENDED (capture kaybı, release). Tek mesajda ölçek sıkıştırılırsa sonraki `d_önceki` güncel mesafe olur. Outbox birleştirmede çarpım `[-0,5, 1,0]` dışına çıkarsa birleştirilmez. Gate sahibi = (kaynak, tür). Touchpad'de `finishGesture` artık açık kaydırmayı/yakınlaştırmayı ENDED ile kapatır (iki parmak aynı karede kalkarsa açık kalmasın diye).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** iki parmak yakınlaştırmanın (ekran ve touchpad) eşik hissi (%6 / 16 px; gerekirse `TwoFingerClassifier`, `TouchTracker.SLOP_PX`); dokunmatikte kaydırmanın başlangıç gecikmesi (BEGAN ilk ~16 px harekete kadar bekliyor); kalemle çizerken parmak yakınlaştırmanın başlamaması; Mac tarafı T-036 ile uçtan uca (Krita tuval yakınlaştırma). HarmonyOS'un iki parmak hareketini kendi tüketip tüketmediği bilinmiyor.
+- **Swift durumu:** `./scripts/check.sh` Gradle kısımları (client-android, input-probe) geçiyor; `swift test` yalnızca `FixtureTests.everyFixtureFileHasATestCase` ile düşüyor (yeni `pinch*` fixture'ları host'ta yok, T-036 bekleniyor). Başka hata yok.
+- **Açık sorular:** yok.

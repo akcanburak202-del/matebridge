@@ -347,6 +347,20 @@ class CodecRulesTest {
     }
 
     @Test
+    fun pinchRejectsUnknownPhaseAndSource() {
+        val ok = Pinch(0, 0f, 0, 0, Pinch.BEGAN, Pinch.SOURCE_TOUCH)
+        for ((off, bad) in listOf(16 to 0, 16 to 5, 17 to 2)) { // phase 0 is invalid too
+            val p = Codec.encodePayload(ok)
+            p[off] = bad.toByte()
+            val dec = FrameDecoder.control(); dec.feed(frame(ok.type, p))
+            expectError(ProtocolException.Kind.INVALID_VALUE, dec)
+        }
+        for (bad in listOf(Pinch(0, 0f, 0, 0, 0, 0), Pinch(0, 0f, 0, 0, 5, 0), Pinch(0, 0f, 0, 0, 1, 2))) {
+            try { Codec.encode(bad); fail() } catch (e: IllegalArgumentException) { }
+        }
+    }
+
+    @Test
     fun informationalEnumsAcceptUnknownValues() {
         for (msg in listOf(
             Bye(200), ReleaseAll(200), KeyframeRequest(200), PenGesture(0, 99),

@@ -248,6 +248,7 @@ class InputHardeningTest {
         val b = touchTracker()
         b.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         b.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        b.slide(10)
         assertTrue(b.follows(TOUCH_DEVICE, 1) && b.follows(TOUCH_DEVICE, 2))
         val end = b.onFrame(touchFrame(TouchAction.UP, 40, 2, finger(1, 1000f, 900f)), 40)
         assertEquals(listOf(Scroll.ENDED), scrolls(end).map { it.phase })
@@ -362,6 +363,8 @@ class InputHardeningTest {
         val r = Rig()
         r.touch(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f))
         r.touch(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f))
+        assertFalse(r.host.scrollOpen) // classified at the first movement
+        r.touch(TouchAction.MOVE, 10, -1, finger(1, 1000f, 930f), finger(2, 1200f, 930f))
         assertTrue(r.host.scrollOpen)
         return r
     }
@@ -389,7 +392,7 @@ class InputHardeningTest {
         r.touch(TouchAction.MOVE, 6_000, -1, finger(1, 1000f, 960f), finger(2, 1200f, 960f))
         val fresh = r.sink.sent.drop(n).filterIsInstance<Scroll>()
         assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), fresh.map { it.phase })
-        assertEquals(30f, fresh[1].dy, 0.001f) // 60 px = 30 pt: the movement that restarted it is not lost
+        assertEquals(15f, fresh[1].dy, 0.001f) // 30 px since the park (930 -> 960) = 15 pt: the movement that restarted it is not lost
         assertTrue(r.host.scrollOpen)
         r.touch(TouchAction.UP, 6_100, 1, finger(1, 1000f, 960f), finger(2, 1200f, 960f))
         assertFalse(r.host.scrollOpen)
@@ -577,6 +580,7 @@ class InputHardeningTest {
         val t = touchTracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        t.slide(10)
         var now = 5L
         while (now < 5_100) { now += 25; t.tick(now) } // idle end: parked
         presence.inRange = true
@@ -589,6 +593,7 @@ class InputHardeningTest {
         val t = touchTracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        t.slide(10)
         var now = 5L
         while (now < 5_100) { now += 25; t.tick(now) }
         assertTrue(t.onPenRangeBegan(5_200).isEmpty()) // ENDED already went out at the idle end
@@ -601,6 +606,7 @@ class InputHardeningTest {
         val t = touchTracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        t.slide(10)
         val end = t.onFrame(touchFrame(TouchAction.UP, 40, 1, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 40)
         assertEquals(listOf(Scroll.ENDED), scrolls(end).map { it.phase })
         assertTrue(t.isLockedOut)
@@ -620,6 +626,7 @@ class InputHardeningTest {
         val t = touchTracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        t.slide(10)
         t.onFrame(touchFrame(TouchAction.UP, 40, 1, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 40)
         assertTrue(t.isLockedOut)
         // The leftover finger vanished without us seeing its UP: a DOWN with nobody else down is a new touch.

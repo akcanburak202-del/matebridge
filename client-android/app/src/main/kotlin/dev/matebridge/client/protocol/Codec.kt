@@ -194,6 +194,12 @@ object Codec {
                 w.u64(msg.timeUs); w.f32(msg.dx); w.f32(msg.dy)
                 w.u8(msg.phase); w.u8(0); w.u16(0)
             }
+            is Pinch -> {
+                requireEnum(msg.phase, 1..4, "PINCH.phase")
+                requireEnum(msg.source, 0..1, "PINCH.source")
+                w.u64(msg.timeUs); w.f32(msg.scale); w.u16(msg.x); w.u16(msg.y)
+                w.u8(msg.phase); w.u8(msg.source); w.u16(0)
+            }
             is PenGesture -> { w.u64(msg.timeUs); w.u8(msg.gesture); w.u8(0); w.u16(0) }
             is ReleaseAll -> w.u8(msg.reason)
             is Ping -> { w.u32(msg.seq); w.u64(msg.senderTimeUs) }
@@ -270,6 +276,13 @@ object Codec {
                 val time = r.u64(); val dx = r.f32(); val dy = r.f32(); val phase = r.u8(); r.skip(3)
                 checkEnum(phase, 0..4, "SCROLL.phase")
                 Scroll(time, dx, dy, phase)
+            }
+            MsgType.PINCH -> {
+                val time = r.u64(); val scale = r.f32(); val x = r.u16(); val y = r.u16()
+                val phase = r.u8(); val source = r.u8(); r.skip(2)
+                checkEnum(phase, 1..4, "PINCH.phase")
+                checkEnum(source, 0..1, "PINCH.source")
+                Pinch(time, scale, x, y, phase, source)
             }
             MsgType.PEN_GESTURE -> {
                 val time = r.u64(); val gesture = r.u8(); r.skip(3)
