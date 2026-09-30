@@ -132,17 +132,19 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 ### Aşama 2 — Kalem ve dokunma (projenin asıl farkı)
 
-- [ ] Girdi kanalı ve `docs/PROTOCOL.md`.
+- [x] Girdi kanalı ve `docs/PROTOCOL.md`.
 - [ ] Koordinat dönüşümü: tablet pikseli ↔ sanal ekran noktası. Tek bir yerde tanımlanır.
 - [ ] Kalem: yakınlık (proximity) giriş/çıkış, uç down/up, basınç, eğim, hover, geçmiş örnekler.
 - [ ] Kalem tuşu → sağ tık veya ayarlanabilir eylem. Silgi (varsa).
-- [ ] Avuç içi reddi: kalem yakındayken dokunma yok sayılır.
-- [ ] Dokunma: tek dokunuş = tık, sürükleme; iki parmakla kaydırma.
+- [x] Avuç içi reddi: kalem yakındayken dokunma yok sayılır.
+- [x] Dokunma: tek dokunuş = tık, sürükleme; iki parmakla kaydırma.
 - [ ] Bağlantı koparsa kalem/tık durumu bırakılır.
 - [ ] Uygulama testleri: **Krita** (ücretsiz, basınç testi için ideal) + kullandığın tasarım uygulamaları. Sonuçlar `NOTES.md`'de tabloya yazılır.
 - [ ] Kalem gecikmesi ölçülür. Gerekirse tablette yerel imleç/hover noktası çizilir.
 
 **Bitti:** Krita'da basınçla kalınlaşan/incelen fırça ve eğim çalışıyor. 15 dakikalık çizimde kopuk çizgi veya takılı kalan tık olmuyor.
+
+**Durum (2026-09-30):** Kod `main`'de (T-022, T-023, T-024, T-026). İlk canlı denemede hover, basınç, avuç reddi, dokunma ve kaydırma çalıştı; kalem olayları USB'de Mac'e 2,8 ms aralıkla ulaşıyor. Cihaz doğrulaması (T-025) sürüyor. Açık: bir kez görülen ve tekrarlanamayan "kalem çizmedi" olayı, çift dokunmanın Krita'da fırça değiştirmemesi (T-027), eğim, vuruş ortasında bağlantı kesme denemeleri, uçtan uca kalem gecikmesi, 15 dakikalık çizim. Ayrıntı: NOTES 2026-09-30, T-025 kartı.
 
 ### Aşama 3 — Klavye ve trackpad
 
