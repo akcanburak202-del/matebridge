@@ -1,7 +1,7 @@
 ---
 id: T-056
 title: Tablet — yerel kalem göstergesi (imleç noktası + kısa sönümlenen iz) ile algılanan gecikmeyi azalt
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-052]
@@ -35,12 +35,17 @@ PLAN Aşama 2/5: "Kalem gecikmesi … gerekirse tablette yerel imleç/hover nokt
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `overlay/PenInkModel.kt` (saf, JVM testli): sabit boyutlu halka tampon (zaman, x, y, basinc, vurus-baslangici); nokta durumu (hover/temas/silgi); `forEachSegment(now)` son 40 ms penceresi ve 70 ms dogrusal sonumleme; sabitler `PenInkStyle` icinde tek yerde.
+2. `input/PenInkListener.kt`: `InputCapture.onPen` kabul edilen her kare icin agdan once dinleyiciyi cagirir (PenTracker'in dogrulama/bekletmesinden bagimsiz, yani gosterge Mac gidis-donusunu beklemez); `forget()` (release-all/oturum sifirlama/kaynak kaybi) dinleyiciyi temizler. Silgi = silgi ucu VEYA cift dokunusla yerel ayna bayragi (host her DOUBLE_TAP'te degistirir; forget'te sifirlanir).
+3. `overlay/PenOverlayView.kt`: root'un ustune saydam, dokunulmaz View; donanim hizlandirmali Canvas, `postInvalidateOnAnimation` ile vsync; video viewport'una clip (letterbox disinda cizim yok); model koordinatlari zaten root/viewport uzayinda.
+4. `Settings`: `penTrail()` / `penDot()` (varsayilan acik). MainActivity: katman eklenir, baglanti paneline iki dugme, ayarlar modele yansir; viewport degisince katmana verilir.
+5. Testler: model (pencere, sonumleme, vurus kirilmasi, silgi, kapali ayarlar, ring tasmasi), Settings, InputCapture dinleyici/clear/eraser ayna.
+
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** (bkz. branch `task/T-056-client-local-pen-overlay` ucu; SHA orkestratore raporlandi)
+- **Dokunulan dosyalar:** `overlay/PenInkModel.kt`, `overlay/PenOverlayView.kt` (yeni), `input/PenInkListener.kt` (yeni), `input/InputCapture.kt` (`penInk` kancasi + eraser aynasi), `session/Settings.kt` (`penTrail`/`penDot`), `MainActivity.kt` (katman, iki panel dugmesi), testler: `overlay/PenInkModelTest`, `InputCaptureTest`, `SessionSupportTest`.
+- **Varsayimlar:** Katman root'a eklenir, stats metninin altinda / videonun ustunde; koordinatlar `PenFrame` ile ayni root uzayinda, cizim `VideoViewport` dikdortgenine klip edilir. Gosterge `InputCapture.onPen` icinde, `PenTracker` bekletmesinden (T-029 10 ms onay) onceki kareyi gorur: yani nokta/iz aga gitmeyi beklemez. Silgi = `TOOL_TYPE_ERASER` VEYA cift dokunusla yerel ayna bayragi (host her DOUBLE_TAP'te degistirir; release-all/oturum sifirlamada sifirlanir). Ayna, host bir PEN_GESTURE'i yok sayarsa sapabilir. Iz rengi nötr gri (0x8C8C8C) yari saydam; nokta: hover'da halka, temasta dolu, silgide buyuk halka. Sabitler: `PenInkStyle` (pencere 40 ms, sonum 70 ms, alfa 0.55).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Gercek kalemle: (1) hover'da nokta kalemi gecikmesiz izliyor mu; (2) cizerken kisa iz Mac cizgisinin onunde mi, 70 ms'de kayboluyor mu, kalinlik basincla artiyor mu; (3) letterbox bandinda cizim yok, noktalar video ile hizali; (4) cift dokunus sonrasi yalniz halka, iz yok (Krita silgi); (5) panelden "Kalem izi"/"Kalem noktasi" kapat/ac etkisi ve kalicilik; (6) video karesi/pacing (stats) katman yuzunden bozulmuyor; (7) kalem menzilden cikinca/uygulama arka plana gidince nokta kayboluyor. Frame basina <1 ms ciziim sure olculmedi. Sol alt kose gibi yerlerde GL yolunda (`--es render gl`) z-sirasi da kontrol edilmeli.
+- **Açık sorular:** Kalem menzil disina cikar ama HOVER_EXIT gelmezse nokta ekranda kalir (zaman asimi yok; duran kalem hover olayi uretmedigi icin bilerek eklenmedi).

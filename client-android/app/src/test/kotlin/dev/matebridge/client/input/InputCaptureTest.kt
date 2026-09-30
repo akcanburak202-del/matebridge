@@ -427,4 +427,41 @@ class InputCaptureTest {
         touch(TouchAction.UP, 510, 1, finger(1, Float.MAX_VALUE, -Float.MAX_VALUE))
         assertTrue(sink.sent.isNotEmpty())
     }
+
+    // ---- local pen indicator (T-056) ----
+
+    private class InkSpy : PenInkListener {
+        val frames = ArrayList<Pair<PenAction, Boolean>>()
+        var clears = 0
+        override fun onPenFrame(f: PenFrame, eraser: Boolean) { frames += f.action to eraser }
+        override fun onPenClear() { clears++ }
+    }
+
+    @Test fun inkSeesEveryAcceptedFrameImmediatelyIncludingUnconfirmedDown() {
+        val ink = InkSpy().also { cap.penInk = it }
+        pen(PenAction.HOVER_MOVE, 10, pt(10))
+        pen(PenAction.DOWN, 20, pt(20)) // held by the confirm timer, not sent yet
+        assertEquals(listOf(PenAction.HOVER_MOVE, PenAction.DOWN), ink.frames.map { it.first })
+    }
+
+    @Test fun inkGetsNothingWhileSuspendedAndIsClearedOnRelease() {
+        val ink = InkSpy().also { cap.penInk = it }
+        releaseAll(ReleaseAll.FOCUS_LOST, 30)
+        assertTrue(ink.clears >= 1)
+        pen(PenAction.HOVER_MOVE, 40, pt(40))
+        assertTrue(ink.frames.isEmpty())
+    }
+
+    @Test fun inkEraserFollowsToolAndDoubleTapMirror() {
+        val ink = InkSpy().also { cap.penInk = it }
+        pen(PenAction.HOVER_MOVE, 10, pt(10), eraser = true)
+        onGestureKeyDown(100)
+        onGestureKeyDown(200)
+        pen(PenAction.HOVER_MOVE, 210, pt(210))
+        assertEquals(listOf(true, true), ink.frames.map { it.second })
+        onGestureKeyDown(1000)
+        onGestureKeyDown(1100)
+        pen(PenAction.HOVER_MOVE, 1110, pt(1110))
+        assertFalse(ink.frames.last().second)
+    }
 }
