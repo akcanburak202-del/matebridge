@@ -6,6 +6,7 @@ public enum Message: Equatable, Sendable {
     case bye(ByeReason)
     case streamPrefs(StreamPrefs)
     case clipboard(Clipboard)
+    case displayRate(DisplayRate)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -29,6 +30,7 @@ public enum Message: Equatable, Sendable {
         case .bye: .bye
         case .streamPrefs: .streamPrefs
         case .clipboard: .clipboard
+        case .displayRate: .displayRate
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -56,6 +58,7 @@ public enum Message: Equatable, Sendable {
         case .bye(let r): w.u8(r.rawValue)
         case .streamPrefs(let m): m.write(&w)
         case .clipboard(let m): m.write(&w)
+        case .displayRate(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -152,6 +155,7 @@ public enum Message: Equatable, Sendable {
         case .bye: return .bye(ByeReason(rawValue: try r.u8()))
         case .streamPrefs: return .streamPrefs(try StreamPrefs.read(&r))
         case .clipboard: return .clipboard(try Clipboard.read(&r))
+        case .displayRate: return .displayRate(try DisplayRate.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))

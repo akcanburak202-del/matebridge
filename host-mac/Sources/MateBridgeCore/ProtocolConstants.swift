@@ -26,6 +26,7 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case bye = 0x04
     case streamPrefs = 0x05
     case clipboard = 0x06
+    case displayRate = 0x07
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12

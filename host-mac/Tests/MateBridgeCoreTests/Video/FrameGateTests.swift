@@ -149,3 +149,104 @@ final class FrameGateTests: XCTestCase {
         XCTAssertLessThanOrEqual(sim.sent.count, 602)
     }
 }
+
+/// T-058: decimation to the tablet panel rate.
+final class DecimationTests: XCTestCase {
+    /// Offers a source at `fps` (capture time = arrival time, `count` frames from `startUs`) and returns sent times.
+    private func run(_ p: inout FramePacer<UInt64>, fps: Double, from startUs: UInt64, count: Int,
+                     jitter: [Int64] = [0]) -> [UInt64] {
+        var sent: [UInt64] = []
+        for i in 0..<count {
+            let t = UInt64(Int64(startUs) + Int64(Double(i) * 1_000_000 / fps) + jitter[i % jitter.count])
+            if case .submit(let f) = p.offer(t, ptsUs: t, nowUs: t, slotFree: true) { sent.append(f) }
+        }
+        return sent
+    }
+
+    func testEffectiveFpsPolicy() {
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 120, hz: 60), 60)
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 120, hz: 0), 120)
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 120, hz: 144), 120)
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 120, hz: 120), 120)
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 60, hz: 120), 60)
+        XCTAssertEqual(DisplayRateState.effectiveFps(streamFps: 120, hz: 5), 24, "garbage is clamped")
+        var s = DisplayRateState()
+        XCTAssertTrue(s.update(hz: 60))
+        XCTAssertFalse(s.update(hz: 60), "same report is no change")
+        XCTAssertTrue(s.update(hz: 120))
+    }
+
+    func testDecimates120To60PickingEverySecondCaptureEvenly() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let sent = run(&p, fps: 120, from: 1_000_000, count: 240)
+        XCTAssertEqual(sent.count, 120)
+        let gaps = zip(sent.dropFirst(), sent).map { $0 - $1 }
+        XCTAssertLessThanOrEqual(gaps.max()! - gaps.min()!, 1, "every second capture, equal spacing: \(gaps.prefix(6))")
+        XCTAssertFalse(p.hasPending, "decimated frames are dropped, never held for a timer")
+        XCTAssertEqual(p.takeDecimated(), 120)
+        XCTAssertEqual(p.takeOverwritten(), 0)
+    }
+
+    func testDecimationStaysEvenWithCaptureJitter() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let sent = run(&p, fps: 120, from: 1_000_000, count: 600, jitter: [0, 900, -700, 500, -400, 800])
+        XCTAssertEqual(sent.count, 300)
+        let gaps = zip(sent.dropFirst(), sent).map { Int64($0) - Int64($1) }
+        XCTAssertTrue(gaps.allSatisfy { (14_000...19_500).contains($0) }, "gaps: \(gaps.min()!)...\(gaps.max()!)")
+    }
+
+    func testRaisingTo120AppliesOnTheNextFrame() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = run(&p, fps: 120, from: 0, count: 10)
+        p.setTargetFps(120)
+        XCTAssertFalse(p.decimating)
+        var sent: [UInt64] = []
+        for i in 0..<10 {
+            let t = 100_000 + UInt64(Double(i) * 1_000_000 / 120)
+            if case .submit(let f) = p.offer(t, ptsUs: t, nowUs: t, slotFree: true) { sent.append(f) }
+        }
+        XCTAssertEqual(sent.count, 10, "all captures pass at 120")
+    }
+
+    func testLoweringAppliesImmediately() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        XCTAssertEqual(run(&p, fps: 120, from: 0, count: 20).count, 20)
+        p.setTargetFps(60)
+        XCTAssertEqual(run(&p, fps: 120, from: 200_000, count: 20).count, 10)
+    }
+
+    func testNoDisplayRateMessageLeavesBehaviourUnchanged() {
+        var a = FramePacer<UInt64>(streamFps: 120)
+        var b = FramePacer<UInt64>(streamFps: 120)
+        b.setTargetFps(DisplayRateState().effectiveFps(streamFps: 120))   // hz 0: stream fps
+        XCTAssertFalse(b.decimating)
+        let jitter: [Int64] = [0, 1_500, -1_200, 600]
+        XCTAssertEqual(run(&a, fps: 120, from: 0, count: 240, jitter: jitter),
+                       run(&b, fps: 120, from: 0, count: 240, jitter: jitter))
+        b.setTargetFps(500)   // above the stream fps: capped, still not decimating
+        XCTAssertFalse(b.decimating)
+    }
+
+    func testBusyEncoderHoldsNewestPassedFrameWhileDecimating() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = p.offer(0, ptsUs: 0, nowUs: 0, slotFree: true)
+        if case .hold(let retry) = p.offer(16_700, ptsUs: 16_700, nowUs: 16_700, slotFree: false) {
+            XCTAssertNil(retry, "no timer: the slot release submits it")
+        } else { XCTFail("expected hold") }
+        if case .submit(let f) = p.takePending(nowUs: 17_000, slotFree: true) { XCTAssertEqual(f, 16_700) } else { XCTFail() }
+        // The grid was advanced once: the next capture at 33.4 ms passes, the one at 25 ms does not.
+        if case .drop = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true) {} else { XCTFail("25 ms is off-grid") }
+        if case .submit = p.offer(33_400, ptsUs: 33_400, nowUs: 33_400, slotFree: true) {} else { XCTFail("33.4 ms is on-grid") }
+    }
+
+    func testKeyframeBypassStillGoesThroughWhileDecimating() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = p.offer(0, ptsUs: 0, nowUs: 0, slotFree: true)
+        if case .submit = p.offer(3_000, ptsUs: 3_000, nowUs: 3_000, slotFree: true, bypassGate: true) {} else { XCTFail() }
+    }
+}
