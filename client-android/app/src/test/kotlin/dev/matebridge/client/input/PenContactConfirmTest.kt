@@ -94,6 +94,29 @@ class PenContactConfirmTest {
         assertEquals(1L, counters.bounceDropped)
     }
 
+    @Test fun anUpCarryingHistoryConfirmsTheContactAndTheStrokeGoesOutWhole() {
+        // DOWN at 0 ms, then ONE UP event with history at 3 and 6 ms and the lift sample at 8 ms (inside the window).
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(0, x = 100f)), 0).isEmpty())
+        val out = t.onFrame(penFrame(PenAction.UP, pt(3, x = 110f), pt(6, x = 120f), pt(8, x = 125f, pressure = 0f)), 8)
+        assertEquals(0L, counters.bounceDropped)
+        assertEquals(listOf(IR or CT or SS, IR or CT, IR or CT, IR), flags(out))
+        val s = penSamples(out.messages())
+        assertEquals(listOf(nx(100f), nx(110f), nx(120f), nx(125f)), s.map { it.x })
+        // The held DOWN and the UP's samples may travel in separate messages: compare absolute times.
+        val abs = out.map { it.msg as Pen }.flatMap { m -> m.samples.map { m.baseTimeUs + it.dtUs } }
+        assertEquals("original timestamps, in order", listOf(0L, 3000L, 6000L, 8000L), abs)
+        assertEquals(PenTracker.State.HOVER, t.state)
+        assertFalse(t.contactHeld)
+        assertEquals(NO_DEVICE, t.contactDeviceId)
+    }
+
+    @Test fun aBareUpInsideTheWindowIsStillABounce() {
+        // The single DOWN sample is the whole contact: UP without history, inside the window.
+        t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        assertEquals(listOf(IR), flags(t.onFrame(penFrame(PenAction.UP, pt(9)), 9)))
+        assertEquals(1L, counters.bounceDropped)
+    }
+
     @Test fun aHoverEventEndsAHeldContactLikeAnUp() {
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
         assertEquals(listOf(IR), flags(t.onFrame(penFrame(PenAction.HOVER_ENTER, pt(6)), 6)))
@@ -155,6 +178,28 @@ class PenContactConfirmTest {
         assertEquals(listOf(Pen.TOOL_PEN, Pen.TOOL_ERASER), out2.map { (it.msg as Pen).tool })
         assertEquals(listOf(0, IR), flags(out2))
         assertFalse(t2.contactHeld)
+    }
+
+    @Test fun aMoveThatChangesTheToolWhileHeldDropsTheHeldContactAndNeverSendsAContact() {
+        t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.DOWN, pt(5)), 5)
+        val out = t.onFrame(penFrame(PenAction.MOVE, pt(8), eraser = true), 8)
+        // The host held the pen in range: it gets its flags = 0, then the eraser is only hover (its contact never began).
+        assertEquals(listOf(Pen.TOOL_PEN, Pen.TOOL_ERASER), out.map { (it.msg as Pen).tool })
+        assertEquals(listOf(0, IR), flags(out))
+        assertFalse(t.contactHeld)
+        assertEquals(PenTracker.State.HOVER, t.state)
+        assertTrue(t.tick(100).none { m -> (m.msg as Pen).samples.any { it.flags and CT != 0 } })
+    }
+
+    @Test fun aHoverExitWhileHeldFromOutOfRangeDropsItAndLeavesWithFlagsZero() {
+        t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0) // host state OUT
+        assertEquals(PenTracker.State.OUT, t.state)
+        val out = t.onFrame(penFrame(PenAction.HOVER_EXIT, pt(8)), 8)
+        assertEquals(listOf(0), flags(out)) // state is OUT, so the exit is not deferred
+        assertFalse(t.inRange)
+        assertFalse(t.contactHeld)
+        assertEquals(1L, counters.bounceDropped)
     }
 
     // ================= tracker: state while held =================
@@ -305,6 +350,22 @@ class PenContactConfirmTest {
         assertEquals(1, penSamples(r.sink.sent).count { it.flags and PenSample.STROKE_START != 0 })
         assertTrue(r.host.violations.isEmpty())
         assertEquals(0, r.sink.pressesRejected)
+    }
+
+    @Test fun aTickConfirmedContactAfterASwallowedExitIsEndedByACancelAndTheHostIsClean() {
+        val r = Rig()
+        r.pen(PenAction.HOVER_ENTER, 0, pt(0))
+        r.pen(PenAction.HOVER_EXIT, 10, pt(10))
+        r.pen(PenAction.DOWN, 12, pt(12)) // swallows the exit, held
+        r.tick(25) // 13 ms after the DOWN: the timer confirms it
+        assertTrue(r.host.penContact)
+        r.pen(PenAction.CANCEL, 30, pt(30))
+        assertFalse(r.host.penContact)
+        assertFalse(r.host.penInRange)
+        assertTrue(r.host.clear)
+        assertFalse(r.cap.penInRange)
+        assertEquals(1, penSamples(r.sink.sent).count { it.flags and PenSample.STROKE_START != 0 })
+        assertTrue(r.host.violations.isEmpty())
     }
 
     @Test fun aFingerCannotStartWhileAContactIsHeld() {

@@ -14,6 +14,8 @@ import dev.matebridge.client.stream.VideoViewport
  *  - focus loss, background, device removal, deactivation: [releaseAll] flushes held data, sends the
  *    natural releases, then `RELEASE_ALL`, and (focus/background) suspends input until [resume];
  *  - after a release a stroke in progress resumes as hover only (PenTracker needs a fresh DOWN);
+ *  - a pen DOWN is held until confirmed (T-029): the host knows nothing of it, so every release path above just drops it
+ *    (no extra release), while the pen counts as in range for the finger gate and the (device, pointer) pair is followed;
  *  - backpressure: only plain hover PEN and SCROLL CHANGED are ever held ([InputOutbox]); a release flushes
  *    them first and is never held; a queue overflow means the connection is reset, the model is forgotten
  *    ([onRefused]) and the host releases on disconnect;

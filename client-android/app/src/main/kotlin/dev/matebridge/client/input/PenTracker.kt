@@ -33,8 +33,8 @@ import dev.matebridge.client.stream.VideoViewport
  *    never do (they use [emit] directly), so no state change can be lost to it. A same-position sample with a
  *    different time is sent and only counted (`dup_pos`);
  *  - contact confirmation (T-029, decision 0007): an `ACTION_DOWN` is not sent at once. It is held ([pending]) and
- *    confirmed by the first of: a second real sample of the same contact (a MOVE, or more than one sample in the DOWN
- *    itself), or an event or a [tick] at least [CONFIRM_MS] after the DOWN. Confirming sends the held samples with their
+ *    confirmed by the first of: a second real sample of the same contact (a MOVE, history inside the DOWN itself, or
+ *    history inside the UP that ends it), or an event or a [tick] at least [CONFIRM_MS] after the DOWN. Confirming sends the held samples with their
  *    original times, `STROKE_START` on the first. A contact that ends while held (UP, cancel, a hover event, a tool
  *    change, [release], [reset]) is dropped and never reaches the host (pen tip bounce: one DOWN sample, UP ~8 ms later,
  *    the real stroke ~20 ms after that); UP, cancel and hover endings are counted as `bounce_dropped`. The host is never
@@ -232,9 +232,10 @@ class PenTracker(
 
     /**
      * Decides the fate of a held contact when [f] arrives. Returns true when the frame was consumed: a MOVE is the second
-     * real sample, so the contact is confirmed with it. A cancel drops the contact. Any other frame (UP, hover, a second
-     * DOWN) confirms it when at least [CONFIRM_MS] passed since the DOWN by event time and drops it (a bounce) otherwise;
-     * the frame is then handled as usual on top of that state.
+     * real sample, so the contact is confirmed with it. An UP that carries history has more contact samples too and
+     * confirms it (the history goes out as contact, then the lift). A cancel drops the contact. Any other frame (a bare
+     * UP, hover, a second DOWN) confirms it when at least [CONFIRM_MS] passed since the DOWN by event time and drops it
+     * (a bounce: the DOWN was the only contact sample) otherwise; the frame is then handled as usual on top of that state.
      */
     private fun resolvePending(f: PenFrame, nowMs: Long, out: MutableList<Outgoing>): Boolean {
         val p = pending ?: return false
@@ -244,9 +245,12 @@ class PenTracker(
                 return true
             }
             PenAction.CANCEL -> dropPending(count = true)
-            else ->
-                if (f.points.last().timeUs - p.downTimeUs >= CONFIRM_MS * 1000) confirmPending(emptyList(), nowMs, out)
+            else -> {
+                // An UP that carries history has further contact samples (all but its last one, the lift): a real stroke.
+                val moreContact = f.action == PenAction.UP && f.points.size > 1
+                if (moreContact || f.points.last().timeUs - p.downTimeUs >= CONFIRM_MS * 1000) confirmPending(emptyList(), nowMs, out)
                 else dropPending(count = true)
+            }
         }
         return false
     }

@@ -141,10 +141,15 @@ class InputFuzzTest {
                     in 0..3 -> pen(PenAction.HOVER_MOVE, 1 + rnd.nextInt(3))
                     4, 5 -> { penState = 0; pen(PenAction.HOVER_EXIT) }
                     6 -> { // T-029 tip bounce: DOWN, then UP a few ms later with no sample in between; the pen stays in range
+                        if (rnd.nextInt(3) == 0) penEraser = !penEraser // the bounce may be the other tool (eraser end)
                         pen(PenAction.HOVER_EXIT)
                         pen(PenAction.DOWN)
+                        if (chaos && rnd.nextInt(4) == 0) { // a second DOWN while the first is still held
+                            advance(1 + rnd.nextInt(14))
+                            pen(PenAction.DOWN)
+                        }
                         advance(1 + rnd.nextInt(12)) // both sides of the 10 ms confirmation window
-                        penUp()
+                        penUp(if (rnd.nextInt(4) == 0) 2 + rnd.nextInt(3) else 1) // an UP with history is a real stroke
                         pen(PenAction.HOVER_ENTER)
                     }
                     else -> { // touches down: Android sends HOVER_EXIT right before DOWN
