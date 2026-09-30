@@ -170,7 +170,7 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 **Host kuralları:**
 - Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz).
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
-- Tercih oturuma aittir; host saklamaz (istemci her bağlantıda yeniden gönderir). Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
+- İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
 
 ### 0x10 PEN (C→H)
 

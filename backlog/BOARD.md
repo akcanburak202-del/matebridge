@@ -13,8 +13,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-049](tasks/T-049-host-stream-prefs.md) | Mac — STREAM_PREFS: fps (60/120/144) ve küçültülmüş kodlama boyutu (performans modu) | 5 | mac-host-dev | [T-045, T-047] |
-| [T-050](tasks/T-050-client-stream-modes.md) | Tablet — görüntü modları (Netlik / Akıcı / Performans / Performans 144): seçim, kalıcılık, STREAM_PREFS | 5 | android-client-dev | [T-046] |
 | [T-051](tasks/T-051-refresh-boost-mouse-trackpad.md) | Touchpad/fare ile sürüklerken fps ~68–70, kalemle ~120 — Huawei 120 Hz yükseltmesini fare/touchpad için de sağlamak | 5 | orchestrator | [T-049, T-050] |
 
 ## done
@@ -67,3 +65,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-046](tasks/T-046-client-request-120hz.md) | Tablet — video yüzeyi için akış fps'inde yenileme iste (setFrameRate) ve gerçek panel hızını ölç | 5 | android-client-dev | [T-045] |
 | [T-047](tasks/T-047-host-encoder-throughput.md) | Mac — HEVC kodlayıcı hız ölçümü (2800×1840'ta 120 fps mümkün mü?) ve ayar denemeleri | 5 | mac-host-dev | [T-045] |
 | [T-048](tasks/T-048-client-textureview-render.md) | Tablet — TextureView ile gösterim deneyi (Huawei yenileme yöneticisi video yüzeyini 60 Hz'e indiriyor) | 5 | android-client-dev | [T-046] |
+| [T-049](tasks/T-049-host-stream-prefs.md) | Mac — STREAM_PREFS: fps (60/120/144) ve küçültülmüş kodlama boyutu (performans modu) | 5 | mac-host-dev | [T-045, T-047] |
+| [T-050](tasks/T-050-client-stream-modes.md) | Tablet — görüntü modları (Netlik / Akıcı / Performans / Performans 144): seçim, kalıcılık, STREAM_PREFS | 5 | android-client-dev | [T-046] |

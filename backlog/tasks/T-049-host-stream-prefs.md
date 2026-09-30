@@ -1,7 +1,7 @@
 ---
 id: T-049
 title: Mac — STREAM_PREFS: fps (60/120/144) ve küçültülmüş kodlama boyutu (performans modu)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-045, T-047]
@@ -56,3 +56,7 @@ Kullanıcı (2026-10-01): "120 çizim sırasında daha akıcı … daha pürüzs
 - **Test edilmeyenler / cihazda doğrulanacaklar:** uçtan uca (tablet STREAM_PREFS gönderir, video yeniden açılır, yeni boyutta çözülür) T-050 ile; 144 fps'te kodlayıcı (`highRate` >= 120 yolu, 144'te ölçülmedi); SCK ölçekleme ve HEVC SPS ara boyutlarda; mod değişiminde Mac pencerelerinin yerinde kalması; reconfigure sırasında video açığı süresi. Uygulama çalıştırılmadı, olay gönderilmedi.
 - **check.sh:** Swift tarafı tamam (488 test). Gradle (client-android) **1 başarısız**: `FixtureTest.everyFixtureFileHasATestCase`, yalnızca `stream_prefs` fixture'ının Kotlin karşılığı yok (T-050'de kapanır). Başka hata yok.
 - **Açık sorular:** `main.swift` (kart `files` dışı) tek satır eklendi; reddedilirse bağlantı başka yerden kurulmalı.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Codex (medium) bir tur: iki P2 (tercihlerin oturum sınırını aşması, ekran yeniden yaratma yedeği) düzeltildi. Cihazda bulunan: yenileme değişiminden sonra SCK 60'ta kalıyordu → ekran yeniden yaratma; cihaz başına tercih hafızası. Ölçümler NOTES 2026-10-01 "Performans modu cihazda". `MateBridgeApp/main.swift` tek satır (kapsam dışı, onaylandı).

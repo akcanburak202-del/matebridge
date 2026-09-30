@@ -1,7 +1,7 @@
 ---
 id: T-050
 title: Tablet — görüntü modları (Netlik / Akıcı / Performans / Performans 144): seçim, kalıcılık, STREAM_PREFS
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-046]
@@ -65,3 +65,7 @@ Kullanıcı (2026-10-01) performans modu istedi (T-049'un Amaç'ı). Protokol `p
   - Ctrl+Shift+7 Mac'e hiçbir tuş göndermiyor mu.
 - **Sonradan (cihaz testi):** Huawei video uygulamasına 144 Hz vermiyor; `PERFORMANCE_144` modu tablodan ve döngüden kaldırıldı (3 mod kaldı). Kayıtlı `performance144` değeri `PERFORMANCE` olarak okunur. Protokolde 144 geçerli kalır.
 - **Açık sorular:** `setFixedSize` denenmedi (öneri, zorunlu değil); donanım ölçekleme kalitesi kötüyse orkestratör karar versin.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Cihazda doğrulandı (NOTES). Huawei 144 Hz vermediği için Performans 144 modu kaldırıldı; protokolde 144 geçerli.
