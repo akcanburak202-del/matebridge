@@ -10,6 +10,8 @@ import android.view.Surface
 import dev.matebridge.client.protocol.KeyframeRequest
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
+import dev.matebridge.client.session.MbLog
+import dev.matebridge.client.stream.StatsFormat
 
 /** Anything that produces VIDEO_FRAMEs pushes them here (session in T-015, file player in debug). */
 fun interface VideoFrameSink {
@@ -51,6 +53,8 @@ class VideoRenderer(
         private const val PTS_MAP_MAX = 64
         /** Blocking wait of the output thread per dequeue; bounds shutdown latency only. */
         private const val OUTPUT_WAIT_US = 5_000L
+        /** Margin added to the presentation deadline when deciding how long an output may be held back (T-057). */
+        const val DISPATCH_MARGIN_NS = 1_000_000L
     }
 
     private val tag = "MB/decoder"
@@ -67,6 +71,15 @@ class VideoRenderer(
         set(v) { field = v.coerceIn(BUFFER_ADAPTIVE, 2) }
 
     @Volatile private var adaptive: AdaptivePacer? = null
+
+    /**
+     * Upper bound on frames inside the decoder (queued input minus released/discarded output, held buffers
+     * included): 0 = unlimited (the pre-T-057 behavior), else 2..4 for experiments. Read on each frame.
+     */
+    @Volatile var maxInFlight: Int = 0
+
+    private val counters = PresentCounters()
+    private val gauge = InFlightGauge()
 
     /** KEY_OPERATING_RATE policy, see [OperatingRate]; read at each codec start. */
     @Volatile var operatingRate: Int = OperatingRate.STREAM_FPS
@@ -88,7 +101,20 @@ class VideoRenderer(
     /** Slack D of the adaptive pacer for the latest frame, in microseconds (0 when not adaptive/unknown). */
     fun paceDUs(): Long = (adaptive?.lastDNs ?: 0L) / 1000
 
-    fun onSkipWindow(skipPct: Double?) { adaptive?.onSkipWindow(skipPct) }
+    /**
+     * Once per stats window (called by the activity's stats tick): feeds the adaptive pacer and writes the
+     * scheduler's own line (`MB/render ev=present`), see [StatsFormat.presentFields].
+     */
+    fun onSkipWindow(skipPct: Double?) {
+        adaptive?.onSkipWindow(skipPct)
+        val c = counters.snapshot(reset = true)
+        val p95 = gauge.p95AndReset()
+        MbLog.i(
+            "present",
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight),
+            "render",
+        )
+    }
     private val queue = FrameQueue(stats)
 
     private class Attachment(val surface: Surface, val previous: Thread?) {
@@ -244,6 +270,9 @@ class VideoRenderer(
             val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
             adaptive = adaptivePacer
             captureByPts.clear(); readyByPts.clear()
+            gauge.reset()
+            val sink = CodecSink(codec)
+            val releaser = SlotReleaser(sink, counters)
             if (codecReportsShown) {
                 codec.setOnFrameRenderedListener(
                     { _, pts, nanoTime ->
@@ -263,7 +292,12 @@ class VideoRenderer(
                 var loggedFormat = false
                 try {
                     while (att.active && outRunning.get()) {
-                        if (drainOutput(c, outInfo, pacer, adaptivePacer, OUTPUT_WAIT_US) && !loggedFormat) {
+                        val untilDeadline = releaser.untilDeadlineNs(System.nanoTime())
+                        val waitUs = if (untilDeadline == null) OUTPUT_WAIT_US
+                        else (untilDeadline / 1000).coerceIn(0, OUTPUT_WAIT_US)
+                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, waitUs)
+                        releaser.flushDue(System.nanoTime())
+                        if (changed && !loggedFormat) {
                             loggedFormat = true
                             logOutputFormat(c)
                         }
@@ -278,6 +312,13 @@ class VideoRenderer(
                 val frame = held ?: queue.poll(4)
                 held = null
                 if (frame == null) continue
+                if (!frame.isCodecConfig && !gauge.canQueue(maxInFlight, System.nanoTime())) {
+                    // Decoder occupancy limit (experiment): keep the frame, try again shortly.
+                    if (held == null) gauge.onHeld()
+                    held = frame
+                    java.util.concurrent.locks.LockSupport.parkNanos(1_000_000L)
+                    continue
+                }
                 val idx = codec.dequeueInputBuffer(4_000)
                 if (idx < 0) { held = frame; continue }
                 val buf = codec.getInputBuffer(idx)!!
@@ -293,6 +334,7 @@ class VideoRenderer(
                 val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 if (!frame.isCodecConfig) captureByPts.put(frame.frameSeq, frame.captureTimeUs)
+                if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
             }
             if (att.active) error = outError.get()
@@ -311,17 +353,38 @@ class VideoRenderer(
 
     private var formatChanged = false
 
+    /** Output-buffer release with bookkeeping (stats, decoder occupancy). Output thread only. */
+    private inner class CodecSink(private val codec: MediaCodec) : SlotReleaser.Sink {
+        override fun release(idx: Int, renderNs: Long) {
+            codec.releaseOutputBuffer(idx, renderNs)
+            stats.onRendered(); gauge.onDone(System.nanoTime())
+        }
+        override fun discard(idx: Int) {
+            codec.releaseOutputBuffer(idx, false)
+            stats.onDropped(1); gauge.onDone(System.nanoTime())
+        }
+        fun releaseNow(idx: Int) {
+            codec.releaseOutputBuffer(idx, true)
+            stats.onRendered(); gauge.onDone(System.nanoTime())
+        }
+    }
+
+    /** How long an output may be held for a possible same-slot successor: the compositor needs it this long before the slot. */
+    private fun dispatchLeadNs(): Long {
+        val g = vsync.grid()
+        return if (g.deadlineNs > 0) g.deadlineNs + DISPATCH_MARGIN_NS else g.periodNs
+    }
+
     /**
-     * Releases every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
-     * with [bufferFrames] == 0 only the newest is rendered at once and the
-     * skipped ones count as dropped (T-015 behavior). Otherwise each frame gets a vsync-aligned render
-     * timestamp from [pacer]; a frame that would exceed the bounded backlog shares the previous slot, so
-     * the older one is not rendered when both are ready in the same drain (counted as dropped, not rendered).
-     * Returns true once an output-format change has been seen (for one-time logging).
+     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
+     * with [bufferFrames] == 0 only the newest is rendered at once and the skipped ones count as dropped
+     * (T-015 behavior). Otherwise each frame gets a vsync slot and render timestamp from its pacer and goes to
+     * [releaser]: at most one release per slot, at most one replaceable buffer held back across drains until its
+     * dispatch deadline (T-057). Returns true once an output-format change has been seen (one-time logging).
      */
     private fun drainOutput(
         codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
-        firstWaitUs: Long = 0,
+        sink: CodecSink, releaser: SlotReleaser, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
         val mode = bufferFrames
@@ -330,8 +393,6 @@ class VideoRenderer(
         val paced = useAdaptive || mode > 0
         stats.setGapThresholdUs(vsync.periodNs * 3 / 2 / 1000)
         var prev = -1
-        var pendingIdx = -1 // paced: newest buffer not yet released (waits for a possible same-slot successor)
-        var pendingNs = 0L
         formatChanged = false
         while (true) {
             val idx = codec.dequeueOutputBuffer(info, waitUs)
@@ -349,43 +410,20 @@ class VideoRenderer(
                 val d = if (useAdaptive) adaptivePacer.schedule(captureByPts.get(info.presentationTimeUs), readyNs)
                 else pacer.schedule(readyNs)
                 if (d == null) {
-                    if (pendingIdx >= 0) { codec.releaseOutputBuffer(pendingIdx, pendingNs); stats.onRendered(); pendingIdx = -1 }
-                    codec.releaseOutputBuffer(idx, true)
-                    stats.onRendered()
+                    releaser.flushAll()
+                    sink.releaseNow(idx)
                     continue
                 }
                 stats.onPaceAdd(d.addedNs / 1000)
                 if (useAdaptive) stats.onScheduled(d.skipped)
-                if (pendingIdx >= 0) {
-                    if (d.collided) {
-                        // Same slot as the waiting older buffer: it would be superseded, so do not render it.
-                        codec.releaseOutputBuffer(pendingIdx, false)
-                        stats.onDropped(1)
-                    } else {
-                        codec.releaseOutputBuffer(pendingIdx, pendingNs)
-                        stats.onRendered()
-                    }
-                } else if (d.collided) {
-                    stats.onDropped(1) // supersedes a frame released in an earlier drain
-                }
-                pendingIdx = idx
-                pendingNs = d.renderNs
+                if (d.lateDrop) counters.onLateDrop()
+                releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs)
                 continue
             }
-            if (prev >= 0) {
-                codec.releaseOutputBuffer(prev, false)
-                stats.onDropped(1)
-            }
+            if (prev >= 0) sink.discard(prev)
             prev = idx
         }
-        if (pendingIdx >= 0) {
-            codec.releaseOutputBuffer(pendingIdx, pendingNs)
-            stats.onRendered()
-        }
-        if (prev >= 0) {
-            codec.releaseOutputBuffer(prev, true)
-            stats.onRendered()
-        }
+        if (prev >= 0) sink.releaseNow(prev)
         return formatChanged
     }
 

@@ -87,14 +87,14 @@ class PacerTest {
         assertTrue(Math.abs(v.periodNs - period60) < 50_000)
         t = feed(v, t, 8_333_333L, VsyncClock.RESEED_AFTER + 1) // display switched to 120 Hz
         assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - 8_333_333L) < 200_000)
-        feed(v, t, period60, VsyncClock.RESEED_AFTER + 1) // and back to 60 Hz
+        feed(v, t, period60, VsyncClock.RESEED_AFTER_MULTIPLE + 1) // and back to 60 Hz
         assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - period60) < 200_000)
     }
 
     @Test fun reseedsFrom120To60() {
         val v = VsyncClock(120f)
         v.onVsync(0)
-        feed(v, 0, period60, VsyncClock.RESEED_AFTER + 1) // gaps look like skipped callbacks, but persist
+        feed(v, 0, period60, VsyncClock.RESEED_AFTER_MULTIPLE + 1) // gaps look like skipped callbacks, but persist
         assertTrue("period ${v.periodNs}", Math.abs(v.periodNs - period60) < 200_000)
     }
 

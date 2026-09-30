@@ -138,6 +138,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var glPresentationTime = false
     private val presentStats = PresentStats()
     private val glVsync = VsyncClock()
+    private var inflightLimit = 0 // T-057: `--ei inflight N` (0 = unlimited)
     private var presenter: GlPresenter? = null
     private var glDecoderSurface: Surface? = null
     private var glGeneration = 0
@@ -153,7 +154,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {}
         override fun onDisplayRemoved(displayId: Int) {}
-        override fun onDisplayChanged(displayId: Int) { vsync.setNominalHz(currentHz()) }
+        override fun onDisplayChanged(displayId: Int) { vsync.setNominalHz(currentHz()); applyDisplayTiming(log = false) }
     }
 
     /**
@@ -186,6 +187,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             glMode -> 0 // the GL presenter aligns to vsync itself; SurfaceTexture ignores release timestamps
             intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
             else -> intent.getIntExtra("jitter", 0).coerceIn(0, 2) // -1 (adaptive off) -> 0
+        }
+        inflightLimit = intent?.getIntExtra("inflight", 0)?.coerceIn(0, 8) ?: 0
+        intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let {
+            vsync.leadOverrideNs = it * 1000L
+            glVsync.leadOverrideNs = it * 1000L
         }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setContentView(R.layout.activity_main)
@@ -673,6 +679,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             codecReportsShown = !glMode,
         ).also {
             it.operatingRate = operatingRate
+            it.maxInFlight = inflightLimit
             it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
             renderer = it
         }
@@ -706,6 +713,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (choreographerOn) return
         choreographerOn = true
         vsync.setNominalHz(currentHz())
+        applyDisplayTiming(log = true)
         vsyncGaps.breakSequence()
         vsyncGaps.summary(reset = true)
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
@@ -718,6 +726,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(displayListener)
         vsync.reset()
+    }
+
+    /** T-057: app vsync offset and presentation deadline of the display feed both grids; logged once per start. */
+    @Suppress("DEPRECATION")
+    private fun applyDisplayTiming(log: Boolean) {
+        val d = windowManager.defaultDisplay
+        val off = d.appVsyncOffsetNanos
+        val deadline = d.presentationDeadlineNanos
+        vsync.setDisplayTiming(off, deadline)
+        glVsync.setDisplayTiming(off, deadline)
+        if (log) {
+            MbLog.i(
+                "display_timing",
+                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} " +
+                    "inflight=${renderer?.maxInFlight ?: inflightLimit}",
+                "render",
+            )
+        }
     }
 
     @Suppress("DEPRECATION")
