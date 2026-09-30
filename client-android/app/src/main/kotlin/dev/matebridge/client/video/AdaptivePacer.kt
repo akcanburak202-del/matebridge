@@ -23,6 +23,15 @@ package dev.matebridge.client.video
  *  - Phase and period come from one [VsyncClock.Grid] snapshot; the panel-rate epoch (not a period
  *    comparison) resets the state; an idle gap longer than [IDLE_REANCHOR_NS] re-anchors it.
  *
+ *  - Phase lock (T-060): when the content interval is about one panel period (+-15%, no thinning left to do),
+ *    per-frame rounding of each time to "its" vsync flips jittery frames between two slots (double slot + empty
+ *    slot, 33 ms gaps at 60 Hz). Then slots follow frame order instead: slot(n) = slot(n-1) + round(dCapture/P),
+ *    snapped to the real grid. The lock slot is first chosen so the arrival window [ideal, ideal + p99 jitter]
+ *    sits in the middle of the slot (never earlier than the worst case needs). The error between that ideal
+ *    and the slot is tracked on the jitter-free ideal time, so one late frame never moves the lock: it either
+ *    fits its slot or is dropped (newest wins) and the next frames continue on the lock. Only an error above
+ *    half a period (or missed slots) that lasts [REPHASE_FRAMES] frames re-phases (hysteresis).
+ *
  * Decoder/output thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
 class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: Long = 0) {
@@ -51,6 +60,10 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         const val D_SLEW_DOWN_NS = 100_000L
         /** No frame for this long (static screen): window, baseline and slot are forgotten. */
         const val IDLE_REANCHOR_NS = 1_000_000_000L
+        /** Phase lock applies when the content interval is within this fraction of the panel period. */
+        const val LOCK_TOLERANCE = 0.15
+        /** Consecutive frames with slot error above half a period (or a missed slot) before re-phasing. */
+        const val REPHASE_FRAMES = 30
     }
 
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
@@ -65,6 +78,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     private var lastScheduleNs = Long.MIN_VALUE
     private var baseNs = Long.MIN_VALUE // slewed baseline b
     private var dNs = Long.MIN_VALUE // slewed D
+    private var lockSlot = Long.MIN_VALUE // slot of the previous frame on the phase lock (MIN = not locked)
+    private var badRun = 0
+    private var lastCaptureUs = Long.MIN_VALUE
 
     /**
      * Slack level added by the skip feedback on top of the measured jitter: 0 = none, 1 = half a vsync,
@@ -79,6 +95,14 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
 
     /** T-059: effective content interval for a given panel period; null = the stream's own interval. */
     @Volatile var intervalProvider: ((Long) -> Long)? = null
+
+    /** T-060 diagnostics: slots are currently assigned on the phase lock. */
+    @Volatile var phaseLock = false
+        private set
+
+    /** T-060 diagnostics: number of re-phasings of an established lock since the last reset (cumulative). */
+    @Volatile var rephases = 0L
+        private set
 
     /** Diagnostics: the slack D applied to the latest frame. */
     @Volatile var lastDNs = 0L
@@ -97,6 +121,8 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         }
         lastScheduleNs = nowNs
         lastPeriod = period
+        val prevCaptureUs = lastCaptureUs
+        lastCaptureUs = captureUs
 
         val x = nowNs - captureUs * 1000
         while (minX.isNotEmpty() && minX.last() >= x) { minX.removeLast(); minT.removeLast() }
@@ -111,8 +137,11 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         // at most, and a frame whose slot is already taken replaces the older one (newest wins).
         val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
         val surplus = fi * 4 < period * 3
-        val dTarget = if (surplus) (percentile() + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
-        else (percentile() + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)
+        val lockable = Math.abs(fi - period) <= period * LOCK_TOLERANCE
+        val jitter = percentile()
+        val dTarget = if (surplus) (jitter + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
+        else if (lockable) (jitter + MARGIN_NS + extraNs).coerceAtMost(period)
+        else (jitter + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)
         val d = if (dNs == Long.MIN_VALUE) dTarget else slew(dNs, dTarget, D_SLEW_UP_NS, D_SLEW_DOWN_NS)
         dNs = d
         devs[devPos] = dev
@@ -121,6 +150,10 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         lastDNs = d
         // Earliest vsync a frame handed over now can still make (the compositor needs the deadline before it).
         val earliest = grid.slotAtOrAfter(nowNs + grid.deadlineNs, 0.0)
+        if (lockable) {
+            return scheduleLocked(grid, nowNs, captureUs, prevCaptureUs, dev, d, jitter, earliest)
+        }
+        phaseLock = false; lockSlot = Long.MIN_VALUE; badRun = 0
         val targetSlot = grid.slotAtOrAfter(nowNs - dev + d + grid.deadlineNs, 0.0)
         val late = targetSlot < earliest // the frame missed its own ideal slot: the content gap is our doing
         // Latency bound on the final slot: at most one vsync after the earliest possible one.
@@ -142,6 +175,57 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         return FramePacer.Decision(
             slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), skipped,
             slotNs = slot, lateDrop = lateDrop,
+        )
+    }
+
+    /** Slot assignment on the phase lock (see class doc). [dev] is this frame's extra delay, [jitter] the p99. */
+    private fun scheduleLocked(
+        grid: VsyncClock.Grid, nowNs: Long, captureUs: Long, prevCaptureUs: Long, dev: Long, d: Long, jitter: Long,
+        earliest: Long,
+    ): FramePacer.Decision {
+        val period = grid.periodNs
+        val ideal = nowNs - dev + grid.deadlineNs // jitter-free ready time of this frame, plus the deadline
+        val centered = ideal + jitter / 2 + period / 2 // slot point that puts the arrival window mid-slot
+        val minimum = ideal + d // slot point below which the worst-case jitter would miss the slot
+        fun acquire(): Long {
+            val nearest = grid.slotAtOrAfter(centered - period / 2, 0.0)
+            return maxOf(nearest, grid.slotAtOrAfter(minimum, 0.0), earliest)
+        }
+        // Latency bound (T-057) for the final slot: one period after the earliest possible one, plus the half-jitter
+        // the centered phase adds on purpose.
+        val latencyBound = period + minOf(jitter, period) / 2
+        var slot: Long
+        if (lockSlot == Long.MIN_VALUE || prevCaptureUs == Long.MIN_VALUE) {
+            slot = acquire()
+            badRun = 0
+        } else {
+            val k = Math.round((captureUs - prevCaptureUs) * 1000.0 / period).coerceAtLeast(0)
+            slot = grid.slotAtOrAfter(lockSlot + k * period - period / 2, 0.0)
+            // The lock is off when a fresh acquisition would pick another slot: the error to the centered point
+            // is above half a period, or the worst-case jitter / this frame would miss the slot. The error is
+            // measured on the jitter-free ideal time, so one late frame does not count as drift by itself.
+            if (slot != acquire() || slot > earliest + latencyBound) badRun++ else badRun = 0
+            if (badRun >= REPHASE_FRAMES) {
+                slot = acquire()
+                badRun = 0
+                rephases++
+            }
+        }
+        phaseLock = true
+        lockSlot = slot
+        val previous = lastSlot
+        if (previous != Long.MIN_VALUE && (slot < earliest || slot > earliest + latencyBound)) {
+            // Too late for its own slot, or a backlog that would exceed the latency bound: dropped (newest wins, it
+            // shares the previous slot), the next frames stay on the lock.
+            return FramePacer.Decision(
+                previous - vsync.leadNs(), true, 0, slot < earliest, slotNs = previous, lateDrop = true,
+            )
+        }
+        var collided = false
+        if (previous != Long.MIN_VALUE && slot <= previous) { slot = previous; collided = true }
+        lastSlot = slot
+        return FramePacer.Decision(
+            slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
         )
     }
 
@@ -175,12 +259,14 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         minT.clear(); minX.clear()
         devN = 0; devPos = 0
         lastSlot = Long.MIN_VALUE
+        lockSlot = Long.MIN_VALUE; badRun = 0; lastCaptureUs = Long.MIN_VALUE; phaseLock = false
         baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
     }
 
     private fun resetState() {
         reanchor()
         level = 0; highRun = 0; lowRun = 0; hold = 0
+        rephases = 0
     }
 
     fun reset() { resetState(); lastPeriod = 0; epoch = -1; lastScheduleNs = Long.MIN_VALUE }

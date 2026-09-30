@@ -135,7 +135,9 @@ class InFlightGaugeTest {
 
     @Test fun presentFieldsFormat() {
         val f = StatsFormat.presentFields(3, 2, 4, 4_166_666, 9_500, 0)
-        assertEquals("slot_dups=3 late_drops=2 in_codec_p95=4 lead_ms=4.17 d_us=9500 inflight_limit=0", f)
+        assertEquals("slot_dups=3 late_drops=2 in_codec_p95=4 lead_ms=4.17 d_us=9500 inflight_limit=0 phase_lock=0 rephase=0", f)
+        val g = StatsFormat.presentFields(0, 0, 2, 6_000_000, 100, 0, true, 3)
+        assertTrue(g, g.endsWith("phase_lock=1 rephase=3"))
         assertTrue(StatsFormat.presentFields(0, 0, null, 0, 0, 3).contains("in_codec_p95=-"))
     }
 }
