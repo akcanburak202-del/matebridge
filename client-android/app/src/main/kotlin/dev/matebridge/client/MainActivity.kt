@@ -217,20 +217,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
         capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
-        // T-026: ask the system not to batch pen samples per display frame while input capture is active.
+        // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
+        // sits on a LEAF view, `video` (a fixed child of root, also while the GL view is the one in use): a ViewGroup
+        // recomputes its own unbuffered source from its children (ViewGroup.onDescendantUnbufferedRequested, e.g. on
+        // a focus change), so a request stored on `root` itself would be overwritten, while a leaf's request is
+        // re-derived by every ancestor.
         unbufferedPen = UnbufferedPenDispatch(
             Build.VERSION.SDK_INT,
             UnbufferedPenDispatch.Backend { on ->
-                if (!root.isAttachedToWindow) return@Backend false // no window yet; sync retries
+                if (on && !video.isAttachedToWindow) return@Backend false // no window yet; sync retries
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // View.requestUnbufferedDispatch(int) is API 30
-                    root.requestUnbufferedDispatch(if (on) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_CLASS_NONE)
+                    // View ignores a request equal to its current value; clear first so a set always reaches the window.
+                    video.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
+                    if (on) video.requestUnbufferedDispatch(InputDevice.SOURCE_STYLUS)
                 }
                 true
             },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         )
         // A new window (ViewRootImpl) starts without the request: request it again.
-        root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+        video.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
             override fun onViewDetachedFromWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
         })
@@ -281,7 +287,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
             // Old API only: the per-gesture request has to be repeated on every pen DOWN (the source form covers all).
             if (unbufferedPen.wantsPerGestureRequest() && ev.actionMasked == MotionEvent.ACTION_DOWN && isPenTool(ev)) {
-                root.requestUnbufferedDispatch(ev)
+                video.requestUnbufferedDispatch(ev)
             }
             // Events arrive in window coordinates; the viewport is in root coordinates.
             root.getLocationInWindow(rootLoc)

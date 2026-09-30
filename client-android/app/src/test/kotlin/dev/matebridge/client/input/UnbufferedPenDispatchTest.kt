@@ -74,6 +74,43 @@ class UnbufferedPenDispatchTest {
         assertEquals(1, events.size)
     }
 
+    @Test fun aRequestThatMayBeInForceIsClearedEvenWhenAnInvalidationCameFirst() {
+        // Capture active, focus returns (invalidation), the session drops before the next active sync: the panel is
+        // shown again and must not inherit unbuffered input.
+        val p = policy(31)
+        p.sync(true)
+        p.reapplyOnNextSync()
+        p.sync(false)
+        assertEquals(listOf(true, false), calls)
+        p.sync(false)
+        assertEquals(listOf(true, false), calls) // cleared once, nothing left to clear
+        p.sync(true)
+        assertEquals(listOf(true, false, true), calls)
+    }
+
+    @Test fun afterAnInvalidationTheNextActiveSyncAssertsAgainAndTheClearStillFollows() {
+        val p = policy(31)
+        p.sync(true)
+        p.reapplyOnNextSync()
+        p.sync(true)
+        p.sync(true)
+        assertEquals(listOf(true, true), calls)
+        p.sync(false)
+        assertEquals(listOf(true, true, false), calls)
+    }
+
+    @Test fun aClearThatCouldNotBeAppliedIsRetriedAndTheRequestIsNotForgotten() {
+        val p = policy(31)
+        p.sync(true)
+        attached = false
+        p.sync(false)
+        p.sync(false)
+        assertEquals(listOf(true), calls) // still believed in force
+        attached = true
+        p.sync(false)
+        assertEquals(listOf(true, false), calls)
+    }
+
     @Test fun reapplyingWhileInactiveDoesNothing() {
         val p = policy(31)
         p.sync(true)
