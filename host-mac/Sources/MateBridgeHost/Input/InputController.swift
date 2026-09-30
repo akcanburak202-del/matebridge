@@ -117,8 +117,10 @@ public final class InputController: @unchecked Sendable {
             beginActivity()
             // The user's key repeat settings as of now (System Settings > Keyboard), for this session's machine.
             var machine = pipeline.nextMachineConfiguration
-            machine.keyRepeatDelayUs = Self.microseconds(NSEvent.keyRepeatDelay, fallback: machine.keyRepeatDelayUs)
-            machine.keyRepeatIntervalUs = Self.microseconds(NSEvent.keyRepeatInterval, fallback: machine.keyRepeatIntervalUs)
+            let delay = NSEvent.keyRepeatDelay, interval = NSEvent.keyRepeatInterval
+            machine.keyRepeatEnabled = Self.repeatEnabled(delay: delay, interval: interval)
+            machine.keyRepeatDelayUs = Self.microseconds(delay, fallback: machine.keyRepeatDelayUs)
+            machine.keyRepeatIntervalUs = Self.microseconds(interval, fallback: machine.keyRepeatIntervalUs)
             pipeline.setMachineConfiguration(machine)
             let now = HostClock.nowUs()
             flush(pipeline.sessionStarted(now: now, environment: environment()), now: now)
@@ -219,6 +221,14 @@ public final class InputController: @unchecked Sendable {
     }
 
     // MARK: Queue-confined work
+
+    /// macOS has no explicit "off" value that could be confirmed here; the UI slider's far end and the `KeyRepeat` /
+    /// `InitialKeyRepeat` defaults can be set to huge values that mean "off", which `NSEvent.keyRepeatDelay/Interval`
+    /// report as seconds in the thousands. Anything of 10 s or more (or not a finite number) is treated as off, and
+    /// repeat is then never armed. To confirm on the real Mac (T-032 handoff).
+    static func repeatEnabled(delay: TimeInterval, interval: TimeInterval) -> Bool {
+        delay.isFinite && interval.isFinite && delay < 10 && interval < 10
+    }
 
     /// Seconds to microseconds for a repeat setting; the fallback when the system reports nonsense.
     private static func microseconds(_ seconds: TimeInterval, fallback: UInt64) -> UInt64 {

@@ -80,7 +80,7 @@ extension InputStateMachine {
                 case .modifier(let m): out.append(.modifierDown(m))
                 }
             }
-            if case .key(let code) = injected {
+            if case .key(let code) = injected, configuration.keyRepeatEnabled {
                 keyRepeat = KeyRepeat(identity: identity, keyCode: code, nextAt: now &+ configuration.keyRepeatDelayUs)
             }
         case .up:

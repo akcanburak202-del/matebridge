@@ -177,7 +177,11 @@ public struct OwedRelease: Equatable, Sendable {
         }
         due.sort { $0.order < $1.order }
         var events = due.map(\.event)
-        Self.reflowFlags(&events, keyboard: keyboard)
+        // Modifier ups that are owed but not due yet are still held on the Mac: they count for every replayed flag.
+        let pending = Set(entries.keys.compactMap { slot -> ModifierKey? in
+            if case .modifier(let m) = slot { m } else { nil }
+        })
+        Self.reflowFlags(&events, keyboard: keyboard, pending: pending)
         return events
     }
 
@@ -186,12 +190,12 @@ public struct OwedRelease: Equatable, Sendable {
     /// as held, and nothing would ever clear it). The Mac's modifier state at replay time is what the planner holds
     /// now plus the modifier ups still owed. A release that is not a modifier up sees all of those (modifier ups come
     /// last in replay order); each modifier up sees the owed ones that come after it. Caps Lock follows the planner.
-    static func reflowFlags(_ events: inout [MacEvent], keyboard: KeyboardSnapshot) {
+    static func reflowFlags(_ events: inout [MacEvent], keyboard: KeyboardSnapshot, pending: Set<ModifierKey> = []) {
         var owed: [ModifierKey] = []
         for event in events {
             if case .key(let k) = event, k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) { owed.append(m) }
         }
-        var remaining = Set(owed)
+        var remaining = Set(owed).union(pending)
         let base = keyboard.modifiers
         for index in events.indices {
             var caps: KeyFlags = keyboard.capsLock ? .capsLock : []

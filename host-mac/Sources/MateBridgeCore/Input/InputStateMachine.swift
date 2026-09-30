@@ -40,6 +40,8 @@ public struct InputStateMachine: Sendable {
         /// settings, `NSEvent.keyRepeatDelay` / `keyRepeatInterval`; these are the macOS defaults).
         public var keyRepeatDelayUs: UInt64 = 500_000
         public var keyRepeatIntervalUs: UInt64 = 83_000
+        /// False when macOS has key repeat turned off: no repeat is ever armed.
+        public var keyRepeatEnabled = true
         /// Key identity to Mac key (decision 0008 default modifier mapping).
         public var keyMap = KeyMap()
         public init() {}

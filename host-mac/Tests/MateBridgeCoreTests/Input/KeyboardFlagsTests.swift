@@ -127,7 +127,49 @@ struct KeyboardFlagsTests {
         #expect(d.model.isIdle)
     }
 
+    @Test("KFLAG-11 a replay counts modifier ups that are owed but not due yet: A-up retried before Command-up still carries Command")
+    func kflag11_pendingModifier() {
+        var d = PipeDriver()
+        d.send(keyDown(Scan.lctrl))  // Command
+        d.send(keyDown(Scan.a))
+        d.failing = { if case .key(let k) = $0 { k.kind == .keyUp || k.kind == .modifierUp } else { false } }
+        d.send(keyUp(Scan.a))  // fails at T, retry due at T + 250 ms
+        d.send(keyUp(Scan.lctrl), after: 100 * msec)  // fails at T + 100 ms, retry due at T + 350 ms
+        #expect(d.pipe.owed.count == 2)
+        d.failing = { _ in false }
+        let first = d.tick(after: 150 * msec)  // T + 250 ms: only the A-up is due
+        #expect(first.count == 1)
+        #expect(first.compactMap(flagsOf) == [cmd])
+        let second = d.tick(after: 100 * msec)  // T + 350 ms
+        #expect(second.compactMap(flagsOf) == [[]])
+        #expect(d.model.isIdle && d.pipe.owed.isEmpty)
+    }
+
+    @Test("KFLAG-12 a deferred pointer release also keeps the flags of a modifier up that is still owed")
+    func kflag12_pendingForPointer() {
+        var pending = OwedRelease()
+        let up = MacEvent.mouse(MacMouse(kind: .up, button: .left, position: .zero, deltaX: 0, deltaY: 0, clickState: 1))
+        let cmdUp = MacEvent.key(MacKey(kind: .modifierUp, keyCode: ModifierKey.leftCommand.keyCode, flags: []))
+        pending.owe([up], now: 0, countsAsAttempt: true)
+        pending.owe([cmdUp], now: 100_000, countsAsAttempt: true)
+        let due = pending.replay(now: 250_000, force: false, geometry: nil)
+        #expect(due.compactMap(flagsOf) == [cmd])
+        #expect(pending.count == 1)
+    }
+
     // MARK: Repeat
+
+    @Test("KFLAG-13 macOS key repeat off: no repeat is ever armed")
+    func kflag13_repeatOff() {
+        var c = InputStateMachine.Configuration()
+        c.keyRepeatEnabled = false
+        var d = Driver(configuration: c)
+        #expect(withoutCaps(d.send(keyDown(Scan.a))) == [.keyDown(keyCode: 0x00, autorepeat: false)])
+        #expect(d.machine.nextDeadline(now: d.now) == nil)
+        #expect(d.tick(after: 10_000 * msec) == [])
+        #expect(d.machine.keyCounters.repeats == 0)
+        #expect(withoutCaps(d.send(keyUp(Scan.a))) == [.keyUp(keyCode: 0x00)])
+    }
 
     @Test("KFLAG-10 the Caps key's DOWN and an unmapped key's DOWN stop the repeat; a duplicate DOWN of the repeating key does not")
     func kflag10_repeatStops() {

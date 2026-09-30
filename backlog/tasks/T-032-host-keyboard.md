@@ -79,3 +79,8 @@ Mimari: klavye mevcut boru hattına (InputStateMachine → InjectionPlanner → 
 - **P2 tekrar:** başka herhangi bir kimliğin DOWN'u (Caps ve eşlenmemiş tuş dahil) tekrarı durdurur; tekrar eden tuşun kendi yinelenen DOWN'u durdurmaz. Test: KFLAG-10.
 - **Fare/kalem/kaydırma flags:** `MacMouse`, `MacTabletPoint`, `MacScroll` artık `flags` taşır; planner'da tek kural (`stampFlags`): her olay üretildiği anki klavye flags'ini (Caps dahil) alır, kapatan olaylar da; `releaseAll`'da işaretçi up'ları değiştirici up'lardan önce gelir, yani Shift'i görür. `CGEventFactory` her zaman açık `flags` atar (boş dahil), HID kaynağına güvenmez. Testler: KFLAG-1..7.
 - Bilinen sınır: bir değiştirici up'ı başarısız olup borçluyken üretilen yeni KAPATAN olaylar (ör. Shift up) planner gölge durumu yüzünden borçlu değiştiriciyi flags'te göstermez; borçlu up tekrar oynatılınca durum düzelir, açan olaylar zaten engelli.
+
+### Review turu 2
+
+- **Bekleyen borçlu değiştirici up:** `OwedRelease.replay` artık vadesi henüz gelmemiş borçlu değiştirici up'larını da (`pending`) her tekrar oynatılan olayın flags'ine katar; bir değiştirici up'ı yayınlanınca kümeden çıkar. Testler: KFLAG-11 (Cmd+A senaryosu), KFLAG-12 (bekleyen işaretçi up).
+- **Tekrar kapalı:** `Configuration.keyRepeatEnabled`; false iken tekrar hiç kurulmaz (KFLAG-13). Host `InputController.repeatEnabled`: `NSEvent.keyRepeatDelay/Interval` sonsuz/NaN ya da >= 10 s ise kapalı sayılır. macOS'un "Off" değerini burada DOĞRULAYAMADIM (varsayım: Off = çok büyük değer). Mac'te Ayarlar > Klavye > Tuş tekrarı en sona çekilip `defaults read -g KeyRepeat` ve tekrarın durduğu doğrulanmalı.
