@@ -54,6 +54,8 @@ import dev.matebridge.client.session.MbLog
 import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.DisplayModeInfo
 import dev.matebridge.client.stream.DisplayModePicker
+import dev.matebridge.client.stream.FrameRatePolicy
+import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.GlPresenter
@@ -111,7 +113,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-016 smoothness knobs. Launch extras: `--ei jitter 0|1|2` (jitter buffer in content frames,
     // 0 = render at once as in T-015) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
     private var bufferFrames = 0
-    private var targetHz = 120
+    private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
+    private var appliedModeHz = 0
+    private val vsyncGaps = IntervalHistogram()
     private val vsync = VsyncClock()
 
     // T-018: `--es render surface|gl` picks the presentation path; `--ei frate N` sets Surface.setFrameRate(N,
@@ -130,6 +134,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val vsyncCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             vsync.onVsync(frameTimeNanos)
+            vsyncGaps.mark(frameTimeNanos / 1000)
             if (choreographerOn) Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -165,7 +170,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         frameRateOverride = intent?.getIntExtra("frate", -1) ?: -1
         glPresentationTime = intent?.getBooleanExtra("glpts", false) ?: false
         bufferFrames = if (glMode) 0 else intent?.getIntExtra("jitter", 0)?.coerceIn(0, 2) ?: 0
-        targetHz = intent?.getIntExtra("hz", 120) ?: 120
+        targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -605,6 +610,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (choreographerOn) return
         choreographerOn = true
         vsync.setNominalHz(currentHz())
+        vsyncGaps.breakSequence()
+        vsyncGaps.summary(reset = true)
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
     }
@@ -623,22 +630,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** While streaming, prefer the supported mode closest to [targetHz] at the current resolution. */
     @Suppress("DEPRECATION")
     private fun applyRefreshRate() {
-        if (modeApplied || targetHz <= 0) return
+        val target = FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0)
+        if (target <= 0 || (modeApplied && appliedModeHz == target)) return
         val d = windowManager.defaultDisplay
         val cur = d.mode
         val all = d.supportedModes.map { DisplayModeInfo(it.modeId, it.physicalWidth, it.physicalHeight, it.refreshRate) }
         val pick = DisplayModePicker.pick(
-            all, DisplayModeInfo(cur.modeId, cur.physicalWidth, cur.physicalHeight, cur.refreshRate), targetHz.toFloat(),
+            all, DisplayModeInfo(cur.modeId, cur.physicalWidth, cur.physicalHeight, cur.refreshRate), target.toFloat(),
         )
         MbLog.i(
             "display_mode",
-            "requested_hz=$targetHz current_id=${cur.modeId} current_hz=${cur.refreshRate} " +
+            "requested_hz=$target current_id=${cur.modeId} current_hz=${cur.refreshRate} " +
                 "picked_id=${pick?.id ?: -1} picked_hz=${pick?.refreshHz ?: -1f} modes=" +
                 all.joinToString(",") { "${it.id}:${it.refreshHz.roundToInt()}" },
             "render",
         )
         if (pick == null) return
         modeApplied = true
+        appliedModeHz = target
         window.attributes = window.attributes.also { it.preferredDisplayModeId = pick.id }
         setSurfaceFrameRate(true) // vsync period follows via DisplayListener once the mode settles
     }
@@ -646,27 +655,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun releaseRefreshRate() {
         if (!modeApplied) return
         modeApplied = false
+        appliedModeHz = 0
         setSurfaceFrameRate(false)
         window.attributes = window.attributes.also { it.preferredDisplayModeId = 0 }
     }
 
     private fun setSurfaceFrameRate(on: Boolean) {
         if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
-        // Default (surface path): content rate with DEFAULT compatibility, the 120 Hz request goes through
-        // preferredDisplayModeId. GL path default and `frate` override: FIXED_SOURCE at the requested rate.
-        var rate = (streamConfig?.fps ?: 0).toFloat()
-        var compat = Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
-        if (frameRateOverride > 0) {
-            rate = frameRateOverride.toFloat(); compat = Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
-        } else if (frameRateOverride < 0 && glMode && targetHz > 0) {
-            rate = targetHz.toFloat(); compat = Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
-        } else if (frameRateOverride == 0) {
-            rate = 0f
-        }
+        // T-046: always an explicit FIXED_SOURCE request at the stream fps (surface and GL paths alike);
+        // `frate` overrides it. On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
+        val rate = FrameRatePolicy.surfaceRate(frameRateOverride, streamConfig?.fps ?: 0).toFloat()
+        val compat = Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
         if (on && rate <= 0f) return
         try {
-            videoView.holder.surface.setFrameRate(if (on) rate else 0f, compat)
-            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=${compat == Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE}", "render")
+            val sf = videoView.holder.surface
+            if (Build.VERSION.SDK_INT >= 31) {
+                sf.setFrameRate(if (on) rate else 0f, compat, Surface.CHANGE_FRAME_RATE_ALWAYS)
+            } else {
+                sf.setFrameRate(if (on) rate else 0f, compat)
+            }
+            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
         } catch (e: Exception) {
             MbLog.w("set_frame_rate_failed", "err=${e.javaClass.simpleName}", "render")
         }
@@ -703,11 +711,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val interval = now - lastStatsMs
         lastStatsMs = now
         val s = r.stats.snapshot(reset = true)
+        val vg = vsyncGaps.summary(reset = true)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
-            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs))
+            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs)) +
+                (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val ep = currentEndpoint
             val tr = if (ep != null) ConnectMode.transportOf(ep) else transport
@@ -732,6 +742,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             "fps=${"%.1f".format(java.util.Locale.ROOT, fps)} latency_us=${lat ?: -1} " +
                 "clock_offset_us=${clock.offsetUs() ?: 0} rtt_us=${clock.bestRttUs() ?: -1} " +
                 "hz=${"%.0f".format(java.util.Locale.ROOT, currentHz())} vsync_period_us=${vsync.periodNs / 1000} " +
+                "display_hz=${"%.1f".format(java.util.Locale.ROOT, currentHz())} vsync_ms_p50=${if (vg.count > 0) "%.2f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) else "-"} " +
                 "buffer=${r.bufferFrames} pace_add_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 StatsFormat.gapFields("net", s.network) + " " + StatsFormat.gapFields("ready", s.ready) + " " +
                 StatsFormat.gapFields("shown", s.shown),
