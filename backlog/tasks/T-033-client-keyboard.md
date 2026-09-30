@@ -1,7 +1,7 @@
 ---
 id: T-033
 title: Tablet klavye — fiziksel tuşları KEY olarak gönder, Android'e bırakma, sökülünce bırak
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-024]
@@ -44,8 +44,8 @@ PROTOCOL.md §4 `0x11 KEY` istemci kuralları ve §7 istemci yükümlülükleri.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** `git log task/T-033-client-keyboard` ("T-033: client keyboard KEY capture ...")
+- **Dokunulan dosyalar:** `input/KeyTracker.kt` (yeni), `input/InputCapture.kt`, `input/Model.kt` (key_msgs), `input/InputOutbox.kt`, `MainActivity.kt`, `test/.../KeyTrackerTest.kt` (yeni), bu kart.
+- **Varsayımlar:** Fiziksel klavye = `!isVirtual && source&SOURCE_KEYBOARD && keyboardType==ALPHABETIC` (karta ek: tabletin ses/güç tuşları KEY olmasın). Tüm `KEYCODE_BACK` (yalnız scan 1 değil) düşürülür ve tüketilir. Oturum yokken (input_active değil) F3/Ctrl+Shift+F3 yerel, diğer tuşlar Android'e gider (IP alanı yazılabilsin). Basılı F3'ün UP'u, arada Ctrl+Shift basılsa da gönderilir (takılmasın). `key_msgs` istatistik satırında `scroll_idle_end`'den sonra (mevcut testler satır sonuna bakıyor). Tuş kimliği hiç loglanmıyor.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek Glide Keyboard'da `isVirtual` ve `keyboardType` değerleri (ALPHABETIC değilse hiç KEY gitmez; `MB/input` satırında key_msgs sıfır kalırsa ilk şüpheli); Tab/Esc/Space/Enter Android'e gitmiyor mu; Esc'in BACK'i uygulamadan çıkarmıyor mu; Ctrl+Shift+F3 istatistik katmanı, düz F3 Mac'e; klavye sökülünce basılı tuşun UP'u; arka plana geçince basılı tuşun Mac'te takılmaması. Android'in uygulamaya vermediği sistem kısayolları (Home vb.) gözlenmedi.
+- **Açık sorular:** yok.

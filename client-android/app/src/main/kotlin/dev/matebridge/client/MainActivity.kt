@@ -27,6 +27,8 @@ import android.widget.Toast
 import dev.matebridge.client.input.DoubleTapDetector
 import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
+import dev.matebridge.client.input.KeyFrame
+import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.input.UnbufferedPenDispatch
 import dev.matebridge.client.protocol.Capabilities
@@ -333,6 +335,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 capture.onGestureKeyDown(ev.eventTime)
             }
             return true
+        }
+        val dev = ev.device
+        if (dev != null && KeyTracker.isPhysicalKeyboard(dev.isVirtual, ev.source, dev.keyboardType)) {
+            syncInputActive()
+            val d = capture.onKey(
+                KeyFrame(
+                    deviceId = ev.deviceId, scanCode = ev.scanCode, keyCode = ev.keyCode,
+                    down = ev.action == KeyEvent.ACTION_DOWN, repeatCount = ev.repeatCount,
+                    ctrl = ev.metaState and KeyEvent.META_CTRL_ON != 0,
+                    shift = ev.metaState and KeyEvent.META_SHIFT_ON != 0,
+                    capsOn = ev.metaState and KeyEvent.META_CAPS_LOCK_ON != 0,
+                    timeUs = ev.eventTime * 1000,
+                ),
+            )
+            if (d.localToggle) toggleStats()
+            if (d.consumed) return true
         }
         return super.dispatchKeyEvent(ev)
     }

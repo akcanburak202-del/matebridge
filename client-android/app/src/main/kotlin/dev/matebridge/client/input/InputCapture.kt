@@ -33,6 +33,7 @@ class InputCapture(
     private val pen = PenTracker(viewport, counters)
     private val touch = TouchTracker(viewport, pen, counters)
     private val doubleTap = DoubleTapDetector()
+    private val keys = KeyTracker()
     private val outbox = InputOutbox(sink, counters) { onRefused() }
 
     private var active = false
@@ -117,6 +118,22 @@ class InputCapture(
         }
     }
 
+    /**
+     * A physical-keyboard event (T-033). The caller consumes the event when [KeyDecision.consumed]; a
+     * [KeyDecision.localToggle] flips the stats overlay. When input is not accepted only F3 (plain or
+     * Ctrl+Shift) is handled locally and everything else stays with Android (the connect panel needs its keys).
+     */
+    fun onKey(f: KeyFrame): KeyDecision {
+        if (!accepting) {
+            val f3 = f.keyCode == KeyTracker.KEYCODE_F3
+            if (f3 && f.down && f.repeatCount == 0) return KeyDecision(consumed = true, localToggle = true)
+            return KeyDecision(consumed = f3)
+        }
+        val d = keys.onKey(f)
+        if (d.out.isNotEmpty()) dispatch(d.out)
+        return d
+    }
+
     /** Every ~25 ms: liveness repeats, stale guards, deferred DOWNs, scroll keepalive, held-message flush, stats. */
     fun tick(nowMs: Long) {
         if (accepting) {
@@ -152,6 +169,7 @@ class InputCapture(
             // (PROTOCOL.md section 7, the host's pointer lock would swallow the next press otherwise).
             outs += touch.release(nowMs)
             doubleTap.reset()
+            keys.reset() // the host releases held keys on RELEASE_ALL; a later physical UP must not be sent
             if (reason == ReleaseAll.BACKGROUND || reason == ReleaseAll.FOCUS_LOST) suspended = true
             outs += Outgoing(ReleaseAll(reason))
             queued = dispatch(outs)
@@ -181,6 +199,8 @@ class InputCapture(
 
     /** An input device went away; release if it was one we were reading pen/finger events from. */
     fun onDeviceRemoved(deviceId: Int, nowMs: Long) {
+        // A detached keyboard releases only its own keys; pen and finger state is untouched.
+        if (keys.holdsDevice(deviceId)) dispatch(keys.releaseDevice(deviceId, nowMs * 1000))
         if (devices.remove(deviceId)) releaseAll(ReleaseAll.DEVICE_DETACHED, nowMs)
     }
 
@@ -198,6 +218,7 @@ class InputCapture(
         pen.reset()
         touch.reset()
         doubleTap.reset()
+        keys.reset()
         outbox.dropHeld()
     }
 
