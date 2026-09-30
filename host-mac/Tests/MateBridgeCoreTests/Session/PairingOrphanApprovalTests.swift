@@ -130,6 +130,38 @@ private func pairingHandshake(_ m: inout SessionMachine, _ id: ConnectionID, now
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
     }
 
+    @Test func aReconnectWhileTheOrphanSaveIsInFlightIsBusyThenPaired() throws {
+        let keys = InMemoryPairKeyStore()
+        var m = makeMachine(keys: keys)
+        let (_, clientKey) = try pairingHandshake(&m, A, now: 0)
+        _ = m.connectionClosed(A)
+        let allow = m.approvalDecided(A, approved: true, now: 10 * sec)
+        #expect(orphanPersists(allow) == [clientKey])
+        // The Keychain save has not finished: the device must not start another PAIRING (it would replace its key).
+        let during = connect(&m, B, now: 11 * sec, client: TestClient(device: 1, eph: EphemeralKeyPair()))
+        #expect(requests(during).isEmpty && firstAck(during)?.status == .busy)
+        #expect(during.contains(.close(B)))
+        // Another device is unaffected by the in-flight save.
+        let other = connect(&m, C, dev: 2, now: 11 * sec)
+        #expect(requests(other) == [C])
+        _ = m.connectionClosed(C)
+        // Save done: the same device's next HELLO is PAIRED through the normal lookup.
+        try keys.save(clientKey, for: device(1))
+        m.orphanPairingPersisted(deviceID: device(1), stored: true)
+        let after = connect(&m, ConnectionID(4), now: 12 * sec, client: TestClient(device: 1, eph: EphemeralKeyPair()))
+        #expect(firstAck(after)?.keyMode == .paired)
+    }
+
+    @Test func aFailedOrDiscardedOrphanSaveAlsoEndsTheBusyPeriod() {
+        var m = makeMachine()
+        _ = connect(&m, A, now: 0)
+        _ = m.connectionClosed(A)
+        _ = m.approvalDecided(A, approved: true, now: 1 * sec)
+        m.orphanPairingPersisted(deviceID: device(1), stored: false)  // failed, or revoked by "forget" meanwhile
+        #expect(!m.approvedDevices.contains(device(1)))
+        #expect(requests(connect(&m, B, now: 2 * sec)) == [B])  // asks normally again
+    }
+
     @Test func rejectAndExpiryStoreNothing() throws {
         var m = makeMachine()
         _ = connect(&m, A, now: 0)
@@ -167,7 +199,8 @@ private func pairingHandshake(_ m: inout SessionMachine, _ id: ConnectionID, now
         var m = makeMachine()
         _ = connect(&m, A, now: 0)
         _ = m.connectionClosed(A)
-        _ = m.approvalDecided(A, approved: true, now: 1 * sec)  // approved, key store never got the key (server not run)
+        _ = m.approvalDecided(A, approved: true, now: 1 * sec)
+        m.orphanPairingPersisted(deviceID: device(1), stored: true)  // approved, but the key store never got the key
         // Without a stored key a HELLO with the same device_id (any ephemeral key) is PAIRING and asks the user again.
         let hello = connect(&m, B, now: 2 * sec, client: TestClient(device: 1, eph: EphemeralKeyPair()))
         #expect(requests(hello) == [B])

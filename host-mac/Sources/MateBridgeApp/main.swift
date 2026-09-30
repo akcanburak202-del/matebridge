@@ -91,6 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         handlers.approvalCancelled = { [weak self] id in
             Task { @MainActor in self?.cancelApproval(id) }
         }
+        handlers.approvalKeychainBusy = { [weak self] request in
+            Task { @MainActor in
+                self?.askApproval(request)
+                self?.approvalPanel?.setNotice("Anahtar Zinciri meşgul, tekrar dene.")
+            }
+        }
         handlers.approvalOrphaned = { [weak self] id in
             Task { @MainActor in self?.markApprovalDisconnected(id) }
         }

@@ -109,6 +109,9 @@ public final class SessionServer: @unchecked Sendable {
         public var approvalCancelled: @Sendable (_ id: UInt64) -> Void = { _ in }
         /// The tablet of this request left; keep the window open and say so ("Allow" then pre-approves the device).
         public var approvalOrphaned: @Sendable (_ id: UInt64) -> Void = { _ in }
+        /// "Allow" could not be stored because the Keychain queue is full: show the request again with the notice
+        /// "Anahtar Zinciri meşgul, tekrar dene" (the answer is still open).
+        public var approvalKeychainBusy: @Sendable (ApprovalRequest) -> Void = { _ in }
         /// Input, STATS and KEYFRAME_REQUEST from the approved session.
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
@@ -144,6 +147,10 @@ public final class SessionServer: @unchecked Sendable {
     private var sealers: [ConnectionID: RecordSealer] = [:]
     private var videoConnections: [ConnectionID: NWConnection] = [:]
     private var pendingApproval: ConnectionID?
+    private var pendingRequest: ApprovalRequest?
+    /// Incremented by every "forget" (and identity replacement). A Keychain save that completes under an older value
+    /// was revoked meanwhile: its result is discarded and the key it stored is deleted (compare-and-delete).
+    private var revocationGeneration = 0
     /// Control connections whose pair-key lookup is in flight; read from the Keychain queue to skip stale jobs.
     private let liveLookups = LockedSet<ConnectionID>()
     private var tickTimer: DispatchSourceTimer?
@@ -327,7 +334,15 @@ public final class SessionServer: @unchecked Sendable {
                            generation: currentConfigID, fields: "conn=\(id)")
                 return
             }
+            if approved, !pairKeys.hasCapacity {
+                // The Keychain queue is full (stuck): refuse explicitly and keep the window, the user can retry.
+                logger.log(.warning, "keychain_busy_approval_refused", sessionID: currentSessionID,
+                           generation: currentConfigID, fields: "conn=\(id)")
+                if let request = pendingRequest, request.id == id { handlers.approvalKeychainBusy(request) }
+                return
+            }
             pendingApproval = nil
+            pendingRequest = nil
             if approved {
                 logger.log(.info, "approval_approved", sessionID: currentSessionID,
                            generation: currentConfigID, fields: "conn=\(id)")
@@ -349,6 +364,7 @@ public final class SessionServer: @unchecked Sendable {
     /// Clears the approved list and enqueues deletion of every pair key on the Keychain queue. The delete is
     /// enqueued NOW, so a pairing saved later (enqueued later) can never be deleted by it.
     private func dropPairing(reason: String) {
+        revocationGeneration += 1
         machine.forgetApprovedDevices()
         knownDevices.removeAll()
         try? store.save(knownDevices)
@@ -712,20 +728,30 @@ public final class SessionServer: @unchecked Sendable {
                 handlers.deliver(message)
             case .requestApproval(let id, _, let name, let code):
                 pendingApproval = id
-                handlers.approvalRequested(ApprovalRequest(id: id.raw, deviceName: name, code: code.digits))
+                let request = ApprovalRequest(id: id.raw, deviceName: name, code: code.digits)
+                pendingRequest = request
+                handlers.approvalRequested(request)
             case .approvalOrphaned(let id):
                 handlers.approvalOrphaned(id.raw)  // pendingApproval stays: the window's answer is still valid
             case .cancelApproval(let id):
                 if pendingApproval == id {
                     pendingApproval = nil
+                    pendingRequest = nil
                     handlers.approvalCancelled(id.raw)
                 }
             case .persistOrphanPairing(_, let device, let name, let key):
                 // Same store path as a live approval, minus the ACCEPTED: key first, then the device list.
-                pairKeys.save(key, for: device) { [weak self] saved in
+                let generation = revocationGeneration
+                let enqueued = pairKeys.save(key, for: device) { [weak self] saved in
                     self?.queue.async { [weak self] in
-                        self?.finishOrphanPairing(device: device, name: name, key: key, keySaved: saved)
+                        self?.finishOrphanPairing(device: device, name: name, key: key, keySaved: saved,
+                                                  generation: generation)
                     }
+                }
+                if !enqueued {  // the window's answer checks capacity first; this is only a safety net
+                    logger.log(.error, "keychain_busy_save_refused", sessionID: currentSessionID,
+                               generation: currentConfigID)
+                    machine.orphanPairingPersisted(deviceID: device, stored: false)
                 }
             case .lookupPairKey(let conn, let device):
                 // Off the session queue: the Keychain may block. The connection sends nothing until it answers
@@ -751,10 +777,17 @@ public final class SessionServer: @unchecked Sendable {
                 }
             case .persistPairing(let conn, let device, let name, let key):
                 // Key first (Keychain queue), then the device list; ACCEPTED goes out only when both are stored.
-                pairKeys.save(key, for: device) { [weak self] saved in
+                let generation = revocationGeneration
+                let enqueued = pairKeys.save(key, for: device) { [weak self] saved in
                     self?.queue.async { [weak self] in
-                        self?.finishPairing(conn, device: device, name: name, key: key, keySaved: saved)
+                        self?.finishPairing(conn, device: device, name: name, key: key, keySaved: saved,
+                                            generation: generation)
                     }
+                }
+                if !enqueued {  // safety net, see above: reject instead of accepting a key that was never stored
+                    logger.log(.error, "keychain_busy_save_refused", sessionID: currentSessionID,
+                               generation: currentConfigID)
+                    apply(machine.pairingPersisted(conn, stored: false, now: nowUs()))
                 }
             case .sessionStarted(let id, let sid, let configID, let hello):
                 activeTransport = Self.transport(of: controlConnections[id])
@@ -783,7 +816,15 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Session queue: the Keychain save finished.
-    private func finishPairing(_ conn: ConnectionID, device: DeviceID, name: String, key: SecretBytes, keySaved: Bool) {
+    private func finishPairing(_ conn: ConnectionID, device: DeviceID, name: String, key: SecretBytes, keySaved: Bool,
+                               generation: Int) {
+        guard generation == revocationGeneration else {
+            // "Forget" happened while the save was in flight: the approval is void, the stored key goes.
+            if keySaved { pairKeys.remove(device, ifEquals: key) }
+            logger.log(.info, "pairing_revoked_discarded", sessionID: currentSessionID, generation: currentConfigID)
+            apply(machine.pairingPersisted(conn, stored: false, now: nowUs()))
+            return
+        }
         guard machine.isPendingApproval(conn) else {
             // The connection ended meanwhile (e.g. "forget" ended it): nobody will use this key. Compare-and-delete:
             // a newer key saved for the same device meanwhile must survive.
@@ -806,8 +847,16 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Session queue: the Keychain save of an orphaned approval finished.
-    private func finishOrphanPairing(device: DeviceID, name: String, key: SecretBytes, keySaved: Bool) {
+    private func finishOrphanPairing(device: DeviceID, name: String, key: SecretBytes, keySaved: Bool,
+                                     generation: Int) {
+        guard generation == revocationGeneration else {
+            if keySaved { pairKeys.remove(device, ifEquals: key) }
+            machine.orphanPairingPersisted(deviceID: device, stored: false)
+            logger.log(.info, "pairing_revoked_discarded", sessionID: currentSessionID, generation: currentConfigID)
+            return
+        }
         guard keySaved else {
+            machine.orphanPairingPersisted(deviceID: device, stored: false)
             logger.log(.error, "pair_key_save_failed", sessionID: currentSessionID, generation: currentConfigID)
             return
         }
@@ -815,6 +864,7 @@ public final class SessionServer: @unchecked Sendable {
         do { try store.save(knownDevices) } catch {
             knownDevices[device] = nil
             pairKeys.remove(device, ifEquals: key)
+            machine.orphanPairingPersisted(deviceID: device, stored: false)
             logger.log(.error, "store_save_failed", sessionID: currentSessionID, generation: currentConfigID)
             return
         }

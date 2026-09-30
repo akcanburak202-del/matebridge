@@ -191,6 +191,9 @@ public struct SessionMachine: Sendable {
     private var videoConnections: [ConnectionID: UInt64] = [:]  // opened, awaiting VIDEO_HELLO
     private var videoProofs: [ConnectionID: VideoProof] = [:]  // VIDEO_HELLO valid, awaiting the authenticated PING
     private var orphan: Orphan?
+    /// Devices whose orphaned approval is being stored right now. Their HELLO gets BUSY until it finished: a reconnect
+    /// that started another PAIRING meanwhile would make the tablet replace the key that is about to be approved.
+    private var persistingOrphans: Set<DeviceID> = []
     /// Latest `now` seen, for events that carry none (`connectionClosed`).
     private var clock: UInt64 = 0
 
@@ -318,6 +321,7 @@ public struct SessionMachine: Sendable {
         guard approved, now < o.deadline else {
             return [.cancelApproval(o.id), .log(.info, ev: "approval_rejected", conn: o.id, fields: "disconnected=true")]
         }
+        persistingOrphans.insert(o.deviceID)
         return [.cancelApproval(o.id),
                 .persistOrphanPairing(o.id, deviceID: o.deviceID, name: o.deviceName, key: o.newPairKey),
                 .log(.info, ev: "approval_accepted", conn: o.id, fields: "disconnected=true")]
@@ -326,6 +330,7 @@ public struct SessionMachine: Sendable {
     /// The caller finished storing an orphaned approval. On success the device counts as approved (its key is in the
     /// store), so its next connection takes the PAIRED path through the normal lookup.
     public mutating func orphanPairingPersisted(deviceID: DeviceID, stored: Bool) {
+        persistingOrphans.remove(deviceID)
         if stored { approvedDevices.insert(deviceID) }
     }
 
@@ -509,6 +514,10 @@ public struct SessionMachine: Sendable {
             connections[id] = nil
             return [.send(id, ack(.versionMismatch)), .close(id),
                     .log(.warning, ev: "version_mismatch", conn: id, fields: "peer_version=\(hello.protocolVersion)")]
+        }
+        if persistingOrphans.contains(hello.deviceID) {
+            connections[id] = nil
+            return [.send(id, ack(.busy)), .close(id), .log(.info, ev: "busy", conn: id, fields: "reason=key_storing")]
         }
         // Another device holding the slot is BUSY whatever the key situation: no lookup needed.
         if let owner = slotOwner {

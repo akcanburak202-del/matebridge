@@ -54,7 +54,11 @@ final class ApprovalPanel: NSObject {
     /// The tablet left while this request was open (e.g. the user switched to another app). The window stays; "İzin ver"
     /// now lets the tablet pair the next time it connects.
     func markDisconnected() {
-        notice.stringValue = "Tablet ayrıldı. İzin verirsen tablet yeniden bağlandığında eşleşir."
+        setNotice("Tablet ayrıldı. İzin verirsen tablet yeniden bağlandığında eşleşir.")
+    }
+
+    func setNotice(_ text: String) {
+        notice.stringValue = text
         notice.isHidden = false
         if let stack = panel.contentView as? NSStackView { panel.setContentSize(stack.fittingSize) }
     }
