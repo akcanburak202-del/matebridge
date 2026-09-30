@@ -65,6 +65,7 @@ import dev.matebridge.client.video.GlPresenter
 import dev.matebridge.client.video.PresentStats
 import dev.matebridge.client.video.VideoRenderer
 import dev.matebridge.client.video.OperatingRate
+import dev.matebridge.client.stream.DisplayRateDebouncer
 import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
@@ -718,11 +719,32 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         vsyncGaps.summary(reset = true)
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
+        rateDebouncer = DisplayRateDebouncer()
+        ui.removeCallbacks(rateTicker)
+        ui.post(rateTicker)
+    }
+
+    /** T-059: the measured panel rate (from the vsync period), debounced, goes to the session (host thins frames to it). */
+    private var rateDebouncer = DisplayRateDebouncer()
+    private val rateTicker = object : Runnable {
+        override fun run() {
+            if (!choreographerOn) return
+            val period = vsync.periodNs
+            if (period > 0) {
+                val hz = Math.round(1e9 / period).toInt()
+                rateDebouncer.observe(hz, SystemClock.elapsedRealtime())?.let {
+                    controller.setDisplayRate(it)
+                    MbLog.i("display_rate", "hz=$it", "render")
+                }
+            }
+            ui.postDelayed(this, RATE_POLL_MS)
+        }
     }
 
     private fun stopVsync() {
         if (!choreographerOn) return
         choreographerOn = false
+        ui.removeCallbacks(rateTicker)
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(displayListener)
         vsync.reset()
@@ -1028,6 +1050,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEYFRAME_RETRY_MS = 500L
+        const val RATE_POLL_MS = 100L
         const val INPUT_TICK_MS = 25L
         const val POINTER_CAPTURE_RETRY_MS = 500L
         const val INPUT_FAULT_BACKOFF_MS = 1000L

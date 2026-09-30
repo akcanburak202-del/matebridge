@@ -86,6 +86,7 @@ class VideoRenderer(
 
     // frameSeq (codec pts) -> host capture time (us) / time the decoded frame became ready (ns, System.nanoTime).
     private val captureByPts = BoundedMap()
+    private val arrival = ArrivalTracker()
     private val readyByPts = BoundedMap()
 
     private class BoundedMap {
@@ -268,6 +269,11 @@ class VideoRenderer(
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
             val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
             val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
+            // T-059: the host thins frames to the reported panel rate; follow the measured arrivals, never the codec.
+            val intervalOf: (Long) -> Long = { period -> FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs) }
+            pacer.intervalProvider = intervalOf
+            adaptivePacer.intervalProvider = intervalOf
+            arrival.reset()
             adaptive = adaptivePacer
             captureByPts.clear(); readyByPts.clear()
             gauge.reset()
@@ -277,7 +283,7 @@ class VideoRenderer(
                 codec.setOnFrameRenderedListener(
                     { _, pts, nanoTime ->
                         val period = vsync.periodNs
-                        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+                        val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
                         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
                         stats.onShownPaced(readyByPts.get(pts), nanoTime, period, cadence)
                     },
@@ -333,7 +339,7 @@ class VideoRenderer(
                 buf.put(frame.data.value)
                 val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
-                if (!frame.isCodecConfig) captureByPts.put(frame.frameSeq, frame.captureTimeUs)
+                if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
             }

@@ -24,6 +24,7 @@ object MsgType {
     const val BYE = 0x04
     const val STREAM_PREFS = 0x05
     const val CLIPBOARD = 0x06
+    const val DISPLAY_RATE = 0x07
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -140,6 +141,11 @@ data class StreamConfig(
 /** Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144) and encoded size in permille of the display. */
 data class StreamPrefs(val fps: Int, val scalePermille: Int) : Message {
     override val type get() = MsgType.STREAM_PREFS
+}
+
+/** Current panel refresh rate of the tablet (C to H, PROTOCOL.md 0x07): [hz] rounded to an integer, 0 = unknown. */
+data class DisplayRate(val hz: Int) : Message {
+    override val type get() = MsgType.DISPLAY_RATE
 }
 
 /** Shared text clipboard (both directions, PROTOCOL.md 0x06). [data] holds UTF-8 text for [KIND_TEXT_UTF8], nothing for [KIND_EMPTY]. Never log [data]. */

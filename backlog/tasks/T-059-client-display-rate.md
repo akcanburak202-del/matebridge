@@ -1,7 +1,7 @@
 ---
 id: T-059
 title: Tablet — panel hızını host'a bildir (DISPLAY_RATE)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-057]
@@ -38,8 +38,11 @@ PROTOCOL `0x07 DISPLAY_RATE` (`proto/display-rate`, `87e36db`) istemci tarafı. 
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. dal ucu (`task/T-059-client-display-rate`); `./scripts/check.sh`: Android gradle + fixture kontrolleri OK; tek FAIL `swift test (host-mac)` `everyFixtureFileHasATestCase` (`display_rate` host testi T-058'de; beklenen).
+- **Dokunulan dosyalar:** `protocol/Messages.kt`, `Codec.kt` (DisplayRate 0x07); `session/SessionMachine.kt`, `SessionController.kt` (SetDisplayRate, mailbox); `stream/DisplayRateDebouncer.kt` (yeni); `video/FrameInterval.kt` (yeni: FrameInterval, ArrivalTracker), `FramePacer.kt`, `AdaptivePacer.kt` (`intervalProvider`), `VideoRenderer.kt`; `MainActivity.kt` (100 ms `rateTicker`); testler `DisplayRateTest`, `SessionMachineTest`, `FixtureTest`.
+- **Varsayimlar:**
+  - Panel hizi = `round(1e9 / vsync.periodNs)` (VsyncClock; epoch/panel-degisimi tespiti T-057'den). Debouncer: ilk deger ve yukselis hemen, dusus 500 ms kararli, en az 250 ms aralik (<=4/sn). Debouncer her `startVsync`'te yenilenir; makine ayni degeri tekrar gondermez ve ACCEPTED'da (PING, STREAM_PREFS'ten sonra) bilinen degeri bir kez yollar (yeniden baglanmada da).
+  - Sunum: etkin aralik = gelen kare araligi (yakalama zamanlarinin EMA'si, >= 0.75 P ise) panel periyoduna yakin/uzunsa `max(akis araligi, P)`, degilse akis araligi (host henuz seyreltmedi: fazla kareler atilabilir yolu). Boylece 60 Hz panel + 120 fps akista host seyreltince pacer `surplus` yolundan cikip P kadansina gecer. MediaCodec yeniden yaratilmaz; `intervalProvider` calisma aninda okunur. 120 Hz panel davranisi degismez.
+  - GL yolu (`GlPresenter`) dokunulmadi (vsync'e kendisi hizalar).
+- **Test edilmeyenler / cihazda dogrulanacaklar:** hepsi. T-058 ile birlestirip: bosta (60 Hz) `MB/render ev=display_rate hz=60` ve host `cadence` yakalama/kodlama ~60; dokununca `hz=120`, hemen yukselis; dusus ~0,5 sn sonra; SF `--latency` 60 Hz bosta 33 ms bosluk %2-3'ten dusmeli; 120 Hz tekrar orani (~%3) bozulmamali; yeniden baglanmada ACCEPTED sonrasi bir `display_rate_sent`. `vsync.periodNs` panel degisiminde gec guncellenirse (reseed 4-12 ornek) bildirim o kadar gecikir.
+- **Acik sorular:** yok.

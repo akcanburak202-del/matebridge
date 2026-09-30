@@ -1,6 +1,7 @@
 package dev.matebridge.client.session
 
 import dev.matebridge.client.protocol.Bye
+import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
@@ -41,6 +42,8 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
         data class KeyStoreFailed(val gen: Int) : Event
         /** The user picked a display mode (T-050): remembered for this and later connections, sent now when input is allowed. */
         data class SetPrefs(val prefs: StreamPrefs) : Event
+        /** The debounced panel rate (T-059): remembered, sent now when input is allowed and the value changed. */
+        data class SetDisplayRate(val hz: Int) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -80,6 +83,7 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
     private var config: StreamConfig? = null
 
     private var prefs = initialPrefs
+    private var displayHz = 0 // 0 = not measured yet: nothing is sent
     private var pingSeq = 0L
     private var nextPingUs = 0L
     private var lastPongUs = 0L
@@ -148,6 +152,12 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
                     if (inputAllowed) out += Action.Send(prefs)
                 }
             }
+            is Event.SetDisplayRate -> {
+                if (event.hz != displayHz) {
+                    displayHz = event.hz
+                    if (inputAllowed && displayHz > 0) out += Action.Send(DisplayRate(displayHz))
+                }
+            }
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
         }
         return out
@@ -181,6 +191,7 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
                 // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
                 out += Action.Send(Ping(pingSeq++, nowUs))
                 out += Action.Send(prefs) // T-050: right after the proof PING, never before it
+                if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
                 nextPingUs = nowUs + PING_INTERVAL_US
                 hostName = ack.hostName
                 sessionId = ack.sessionId

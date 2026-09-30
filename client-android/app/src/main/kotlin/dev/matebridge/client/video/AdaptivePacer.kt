@@ -77,6 +77,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     private var lowRun = 0
     private var hold = 0
 
+    /** T-059: effective content interval for a given panel period; null = the stream's own interval. */
+    @Volatile var intervalProvider: ((Long) -> Long)? = null
+
     /** Diagnostics: the slack D applied to the latest frame. */
     @Volatile var lastDNs = 0L
         private set
@@ -106,7 +109,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         // Content faster than the panel (e.g. 120 fps on a 60 Hz panel): some frames must be dropped. Never queue
         // them behind each other (that builds latency and stalls the decoder's output buffers): one vsync of slack
         // at most, and a frame whose slot is already taken replaces the older one (newest wins).
-        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+        val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
         val surplus = fi * 4 < period * 3
         val dTarget = if (surplus) (percentile() + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
         else (percentile() + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)

@@ -10,6 +10,7 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
+import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoFrame
@@ -82,6 +83,7 @@ class SessionController(
     /** Commands and close notifications: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine. */
     private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
+    private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
@@ -111,6 +113,13 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         prefsMailbox.post(SessionMachine.Event.SetPrefs(mode.toPrefs()))
+    }
+
+    /** Non-blocking. The (already debounced) panel rate in Hz; sent when accepted and on change (T-059). */
+    fun setDisplayRate(hz: Int) {
+        if (terminated.get()) return
+        ensureEngine()
+        rateMailbox.post(SessionMachine.Event.SetDisplayRate(hz))
     }
 
     /** Non-blocking. */
@@ -160,7 +169,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = TICK_MS - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -217,6 +226,7 @@ class SessionController(
                 else -> Unit
             }
             is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille}")
+            is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.Tick -> Unit
         }
     }
@@ -234,6 +244,7 @@ class SessionController(
                 when (val m = a.msg) {
                     is Hello -> MbLog.i("hello_sent", "proto=${m.protocolVersion}")
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
+                    is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille}")
                     else -> Unit
                 }

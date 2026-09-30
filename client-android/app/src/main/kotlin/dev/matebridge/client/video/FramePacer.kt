@@ -143,6 +143,9 @@ class FramePacer(
     @Volatile var bufferFrames: Int,
     private val frameIntervalNs: Long,
 ) {
+    /** T-059: effective content interval for a given panel period; null = the stream's own interval. */
+    @Volatile var intervalProvider: ((Long) -> Long)? = null
+
     /**
      * [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the earliest possible vsync; [slotNs]
      * is the target vsync (display time). [lateDrop]: the frame found no slot within the latency bound and shares
@@ -160,7 +163,7 @@ class FramePacer(
         if (!vsync.hasSample) return null
         val grid = vsync.grid()
         val period = grid.periodNs
-        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+        val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
         val earliest = grid.slotAtOrAfter(nowNs, 0.0)
         val base = grid.slotAtOrAfter(nowNs + bufferFrames.coerceIn(0, 2) * period, 0.0)
         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
