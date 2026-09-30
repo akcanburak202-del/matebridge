@@ -110,6 +110,35 @@ class PhaseLockTest {
         assertTrue(r.slots.all { (it - first) % period == 0L })
     }
 
+    @Test fun lateFrameWhileTheVsyncAnchorAdvancesKeepsTheLock() {
+        val clk = clock(1_000_000_000L / 60)
+        val period = clk.grid().periodNs
+        val pacer = AdaptivePacer(clk, period)
+        val start = 1_000_000_000L
+        val base = 20 * ms + ((period / 2 - (start + 20 * ms)) % period + period) % period
+        var prevSlot = Long.MIN_VALUE
+        var vsyncT = 0L
+        fun feedVsyncUpTo(t: Long) { while (vsyncT + period <= t) { vsyncT += period; clk.onVsync(vsyncT) } }
+        val slots = HashMap<Int, Long>()
+        for (k in 0 until 400) {
+            val cap = start + k * period
+            var ready = cap + base
+            if (k == 200) ready += 45 * ms // 2.7 periods late
+            feedVsyncUpTo(ready)
+            val d = pacer.schedule(cap / 1000, ready)!!
+            if (k == 200) assertTrue("late frame dropped", d.lateDrop)
+            else if (!d.collided) slots[k] = d.slotNs // frames queued behind the late one are dropped too
+            if (k in 100..199) prevSlot = d.slotNs
+        }
+        assertEquals(0L, pacer.rephases)
+        // Before and after the late frame the slots stay on one lattice: frame k sits k - 150 periods from frame 150.
+        val ref = slots[150]!!
+        for (k in intArrayOf(120, 199, 300, 399)) {
+            val diff = slots[k]!! - ref - (k - 150) * period
+            assertTrue("k=$k off by $diff", Math.abs(diff) <= 1000)
+        }
+    }
+
     @Test fun sustainedMissedSlotsRephaseOnce() {
         val clk = clock(1_000_000_000L / 60)
         val period = clk.grid().periodNs

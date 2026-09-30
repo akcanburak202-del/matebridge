@@ -38,6 +38,12 @@ class VsyncClock(private val initialHz: Float = 60f) {
             val n = (tNs - origin + periodNs - 1) / periodNs
             return origin + n * periodNs
         }
+
+        /**
+         * First grid point `lastNs + n * period` (any integer n, also before the anchor) that is >= [tNs].
+         * Pure arithmetic, no clamping to the live anchor (T-060: a locked slot in the past stays in the past).
+         */
+        fun gridSlotAtOrAfter(tNs: Long): Long = lastNs + Math.floorDiv(tNs - lastNs + periodNs - 1, periodNs) * periodNs
     }
 
     @Volatile private var grid = Grid(-1, hzToPeriod(initialHz), 0, 0)

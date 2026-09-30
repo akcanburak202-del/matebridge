@@ -200,7 +200,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             badRun = 0
         } else {
             val k = Math.round((captureUs - prevCaptureUs) * 1000.0 / period).coerceAtLeast(0)
-            slot = grid.slotAtOrAfter(lockSlot + k * period - period / 2, 0.0)
+            slot = grid.gridSlotAtOrAfter(lockSlot + k * period - period / 2) // may lie before the live anchor
             // The lock is off when a fresh acquisition would pick another slot: the error to the centered point
             // is above half a period, or the worst-case jitter / this frame would miss the slot. The error is
             // measured on the jitter-free ideal time, so one late frame does not count as drift by itself.
