@@ -1,7 +1,7 @@
 ---
 id: T-022
 title: Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli)
-status: review
+status: done
 phase: 2
 owner: mac-host-dev
 depends_on: [T-014]

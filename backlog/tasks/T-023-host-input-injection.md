@@ -33,7 +33,7 @@ T-022'nin `InjectAction`'larını gerçek macOS olaylarına çevirmek ve oturumd
 T-022'nin `InputStateMachine`'ini tüketirken uyulacak sözleşme (PROTOCOL.md §4 ve §7, aynı tarihli netleştirmeler):
 
 - **Oturum başına yeni makine.** Bir oturumun makinesi sonrakine taşınmaz.
-- **Tek saat.** `handle(_:now:)` ve `tick(now:)` aynı monoton saatten (`HostClock`) beslenir. Zamanlayıcı `nextDeadline`'a göre kurulur.
+- **Tek saat.** `handle(_:now:)` ve `tick(now:)` aynı monoton saatten (`HostClock`) beslenir. Zamanlayıcı `nextDeadline(now:)`'a göre kurulur (mutating; makine `var` olarak tutulur).
 - **Tek kuyruk.** Makine kilitsiz bir değer tipidir; mesaj, tick ve release-all yalnızca oturum kuyruğundan çağrılır.
 - **`mouseButton` imlecin o anki konumunda uygulanır.** Injector son enjekte ettiği konumu tutar.
 - **Kaydırma:** sıfır deltalı `CHANGED` (istemcinin canlılık mesajı) enjekte edilmez. Zorla bitirilen hareket ENDED olarak enjekte edilir ve atalet üretilmez. Release-all, süren ataleti de durdurur (makinede bunun durumu yok; injector'ın işi).

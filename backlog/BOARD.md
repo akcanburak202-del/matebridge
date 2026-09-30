@@ -12,7 +12,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
-| [T-022](tasks/T-022-host-input-state.md) | Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli) | 2 | mac-host-dev | [T-014] |
 | [T-023](tasks/T-023-host-input-injection.md) | Mac girdi enjeksiyonu — CGEvent kalem/fare, koordinat dönüşümü, oturuma bağlama | 2 | mac-host-dev | [T-022] |
 | [T-024](tasks/T-024-client-pen-capture.md) | Tablet kalem ve dokunma yakalama — PEN toplu örnekler, POINTER_ABS, avuç reddi, RELEASE_ALL | 2 | android-client-dev | [T-015] |
 | [T-025](tasks/T-025-phase2-device-validation.md) | Faz 2 cihaz doğrulaması — Krita test matrisi, kalem gecikmesi, takılı girdi avı | 2 | orchestrator | [T-023, T-024] |
@@ -41,3 +40,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-018](tasks/T-018-client-gl-presentation.md) | Tablette sunum kontrolü — GL yolu (SurfaceTexture), vsync'e hizalı çizim, 120 Hz denemesi | 1 | android-client-dev | [T-016, T-017] |
 | [T-020](tasks/T-020-host-fixed-ports-usb.md) | Mac — sabit varsayılan portlar ve USB modu betiği | 1 | mac-host-dev | [T-014] |
 | [T-021](tasks/T-021-client-usb-connect.md) | Android — "USB ile bağlan" seçeneği | 1 | android-client-dev | [T-015] |
+| [T-022](tasks/T-022-host-input-state.md) | Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli) | 2 | mac-host-dev | [T-014] |
