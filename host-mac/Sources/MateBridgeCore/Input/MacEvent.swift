@@ -101,6 +101,30 @@ public struct MacScroll: Equatable, Sendable {
     }
 }
 
+/// One step of a trackpad magnify gesture (decision 0009). `value` is the relative magnification of the step (0.05 is
+/// 5 percent larger); it is 0 on began and ended. The Mac sees no cancel: every gesture ends with `ended`.
+public struct MacMagnify: Equatable, Sendable {
+    public enum Phase: Equatable, Sendable {
+        case began
+        case changed
+        case ended
+    }
+
+    public var phase: Phase
+    public var value: Double
+    /// Where the gesture is located: the cursor, which a touchscreen pinch moved to the finger center first.
+    public var position: DisplayPoint
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Cmd+pinch and the like.
+    public var flags: KeyFlags
+
+    public init(phase: Phase, value: Double, position: DisplayPoint, flags: KeyFlags = []) {
+        self.phase = phase
+        self.value = value
+        self.position = position
+        self.flags = flags
+    }
+}
+
 /// A keyboard event. `modifierDown` / `modifierUp` are `flagsChanged` events of `keyCode`; `flags` is the complete
 /// modifier state after the event (for key events: while it happens).
 public struct MacKey: Equatable, Sendable {
@@ -132,6 +156,7 @@ public enum MacEvent: Equatable, Sendable {
     case tabletPoint(MacTabletPoint)
     case mouse(MacMouse)
     case scroll(MacScroll)
+    case magnify(MacMagnify)
     case key(MacKey)
     /// Make the Mac's Caps Lock state this (an absolute state, not a toggle, so posting it twice is harmless).
     case capsLock(on: Bool)

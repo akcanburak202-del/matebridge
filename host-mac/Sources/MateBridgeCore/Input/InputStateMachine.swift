@@ -33,6 +33,8 @@ public struct InputStateMachine: Sendable {
         public var penWatchdogUs: UInt64 = 500_000
         /// Open scroll gesture without a SCROLL message for this long: end it (PROTOCOL.md section 7).
         public var scrollWatchdogUs: UInt64 = 500_000
+        /// Open pinch gesture without a PINCH message for this long: end it (PROTOCOL.md section 7).
+        public var pinchWatchdogUs: UInt64 = 500_000
         /// New TOUCH presses are ignored while the pen is in range and for this long after the last pen sample
         /// (decision 0006).
         public var touchGateHoldUs: UInt64 = 1_000_000
@@ -100,6 +102,15 @@ public struct InputStateMachine: Sendable {
     /// Host time of the last SCROLL BEGAN/CHANGED. Re-anchored to `now` when the clock goes backwards.
     var lastScrollAt: UInt64 = 0
 
+    // Pinch (magnify gesture). Mutually exclusive with scroll (`InputStateMachine+Pinch.swift`).
+    var pinchOpen = false
+    /// Host time of the last PINCH BEGAN/CHANGED. Re-anchored to `now` when the clock goes backwards.
+    var lastPinchAt: UInt64 = 0
+    /// PINCH messages seen in this session, for the log (counts only).
+    public internal(set) var pinchMessages = 0
+    /// Forced ends not yet taken by `takePinchForcedEnds()`, for the `pinch_forced_end` log event.
+    var pendingPinchEnds: [PinchEndCause] = []
+
     // Keyboard.
     /// Keys held, in press order, with what was injected for them (the UP releases the record, never the current
     /// mapping).
@@ -117,7 +128,7 @@ public struct InputStateMachine: Sendable {
     /// True while anything is held on the Mac: pen proximity or contact, any button, an open scroll gesture.
     /// After `releaseAll` this is always false.
     public var hasHeldInput: Bool {
-        activePen != nil || leftOwner != nil || !macOtherButtons.isEmpty || scrollOpen || !heldKeys.isEmpty
+        activePen != nil || leftOwner != nil || !macOtherButtons.isEmpty || scrollOpen || pinchOpen || !heldKeys.isEmpty
     }
 
     /// Pen proximity is currently entered on the Mac.
@@ -147,6 +158,10 @@ public struct InputStateMachine: Sendable {
             let due = lastScrollAt &+ configuration.scrollWatchdogUs
             earliest = earliest.map { Swift.min($0, due) } ?? due
         }
+        if pinchOpen {
+            let due = lastPinchAt &+ configuration.pinchWatchdogUs
+            earliest = earliest.map { Swift.min($0, due) } ?? due
+        }
         if let r = keyRepeat { earliest = earliest.map { Swift.min($0, r.nextAt) } ?? r.nextAt }
         return earliest
     }
@@ -169,6 +184,9 @@ public struct InputStateMachine: Sendable {
                                  motion: .absolute(x: m.x, y: m.y), now: now)
         case .scroll(let m):
             out += handleScroll(m, now: now)
+        case .pinch(let m):
+            pinchMessages += 1
+            out += handlePinch(m, now: now)
         case .penGesture(let g):
             handlePenGesture(g)
         case .releaseAll(let reason):
@@ -193,6 +211,7 @@ public struct InputStateMachine: Sendable {
     private mutating func reanchorWatchdogs(now: UInt64) {
         if activePen != nil, penWatchdogAnchor > now { penWatchdogAnchor = now }
         if scrollOpen, lastScrollAt > now { lastScrollAt = now }
+        if pinchOpen, lastPinchAt > now { lastPinchAt = now }
         // A repeat due further ahead than one repeat delay cannot have been scheduled by this clock: count from `now`.
         if let r = keyRepeat, r.nextAt > now &+ Swift.max(configuration.keyRepeatDelayUs, configuration.keyRepeatIntervalUs) {
             keyRepeat?.nextAt = now &+ configuration.keyRepeatIntervalUs
@@ -212,6 +231,7 @@ public struct InputStateMachine: Sendable {
                 out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
             }
         }
+        if pinchOpen, now - lastPinchAt >= configuration.pinchWatchdogUs { out += forceEndPinch(.watchdog) }
         out += repeatKeyIfDue(now: now)
         return out
     }
@@ -245,6 +265,7 @@ public struct InputStateMachine: Sendable {
             scrollOpen = false
             out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
         }
+        out += forceEndPinch(.releaseAll)
         out += releaseKeys()
 
         isEraserMode = false

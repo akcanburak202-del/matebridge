@@ -9,6 +9,7 @@ import MateBridgeCore
 ///     MateBridgeApp --inject-test --stroke ramp|circle|tilt [--repeat N]
 ///     MateBridgeApp --inject-test --tap 2            (touch taps at the display center; 2 = double click)
 ///     MateBridgeApp --inject-test --scroll           (one precise scroll gesture at the display center, finger moving down)
+///     MateBridgeApp --inject-test --pinch in|out     (one magnify gesture at the display center: BEGAN, 20 CHANGED, ENDED)
 ///     MateBridgeApp --inject-test --wheel 5          (5 mouse-wheel steps at the display center)
 ///     MateBridgeApp --inject-test --keys "cmd+a,tab"  (keyboard combos, see below; goes to the focused app)
 ///
@@ -32,6 +33,8 @@ public enum InjectTest {
         public var stroke: String?
         public var taps = 0
         public var scrollGesture = false
+        /// "in" (fingers closing, zoom out) or "out" (fingers spreading, zoom in).
+        public var pinch: String?
         public var wheelSteps = 0
         public var keys: String?
         public var keyHoldMs = 60
@@ -45,7 +48,7 @@ public enum InjectTest {
 
     public static let usage = """
         usage: MateBridgeApp --inject-test [--fixture NAME]... [--stroke ramp|circle|tilt] [--tap N]
-                             [--scroll] [--wheel N] [--keys COMBOS] [--key-hold MS] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
+                             [--scroll] [--pinch in|out] [--wheel N] [--keys COMBOS] [--key-hold MS] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
         """
 
     /// nil when `--inject-test` is absent. Any argument it does not know, or a stray value, is an error.
@@ -68,6 +71,9 @@ public enum InjectTest {
                 guard let v = value(), let n = Int(v), (1...5).contains(n) else { return fail("--tap needs 1...5") }
                 o.taps = n; i += 1
             case "--scroll": o.scrollGesture = true
+            case "--pinch":
+                guard let v = value(), ["in", "out"].contains(v) else { return fail("--pinch needs in or out") }
+                o.pinch = v; i += 1
             case "--wheel":
                 guard let v = value(), let n = Int(v), (1...50).contains(n) else { return fail("--wheel needs 1...50") }
                 o.wheelSteps = n; i += 1
@@ -96,7 +102,7 @@ public enum InjectTest {
             }
             i += 1
         }
-        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.wheelSteps == 0 && o.keys == nil {
+        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.pinch == nil && o.wheelSteps == 0 && o.keys == nil {
             return fail("nothing to inject")
         }
         return .success(o)
@@ -220,6 +226,7 @@ public enum InjectTest {
             script += tapScript(o.taps, afterPen: o.stroke != nil || !o.fixtures.isEmpty)
         }
         if o.scrollGesture { script += scrollScript() }
+        if let pinch = o.pinch { script += pinchScript(spreading: pinch == "out") }
         if o.wheelSteps > 0 { script += wheelScript(o.wheelSteps) }
         if let keys = o.keys { script += try keyScript(keys, holdMs: o.keyHoldMs) }
         return script
@@ -336,6 +343,19 @@ public enum InjectTest {
         var script = [scroll(.began, dy: 0, delay: 1000)]
         for _ in 0..<40 { script.append(scroll(.changed, dy: 6, delay: 16)) }
         script.append(scroll(.ended, dy: 0, delay: 16))
+        return script
+    }
+
+    /// One magnify gesture from the touchscreen at the display center: BEGAN, 20 CHANGED of +-3 percent every 16 ms,
+    /// ENDED. `spreading` zooms in.
+    private static func pinchScript(spreading: Bool) -> [Step] {
+        func pinch(_ phase: PinchPhase, scale: Float, delay: Int) -> Step {
+            Step(delayMs: delay, message: .pinch(Pinch(timeUs: 0, scale: scale, x: 32768, y: 32768, phase: phase,
+                                                        source: .touch)))
+        }
+        var script = [pinch(.began, scale: 0, delay: 1000)]
+        for _ in 0..<20 { script.append(pinch(.changed, scale: spreading ? 0.03 : -0.03, delay: 16)) }
+        script.append(pinch(.ended, scale: 0, delay: 16))
         return script
     }
 

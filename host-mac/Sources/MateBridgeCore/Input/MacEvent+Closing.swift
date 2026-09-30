@@ -10,6 +10,7 @@ extension MacEvent {
         case .tabletPoint(let p): p.kind == .up
         case .mouse(let m): m.kind == .up
         case .scroll(let s): s.phase == .ended || s.phase == .cancelled
+        case .magnify(let g): g.phase == .ended
         case .key(let k): k.kind == .keyUp || k.kind == .modifierUp
         case .capsLock: false
         }
@@ -29,6 +30,7 @@ extension MacEvent {
         case .tabletPoint(var e): e.flags = flags; return .tabletPoint(e)
         case .mouse(var e): e.flags = flags; return .mouse(e)
         case .scroll(var e): e.flags = flags; return .scroll(e)
+        case .magnify(var e): e.flags = flags; return .magnify(e)
         case .key(var k): k.flags = flags; return .key(k)
         case .tabletProximity, .capsLock: return self
         }
@@ -41,6 +43,7 @@ extension MacEvent {
         case .tabletPoint(let p): p.position
         case .mouse(let m): m.position
         case .scroll(let s): s.position
+        case .magnify(let g): g.position
         }
     }
 
@@ -57,6 +60,9 @@ extension MacEvent {
         case .scroll(var e):
             e.position = p
             return .scroll(e)
+        case .magnify(var e):
+            e.position = p
+            return .magnify(e)
         }
     }
 

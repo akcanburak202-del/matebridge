@@ -10,6 +10,7 @@ extension InputStateMachine {
             // SCROLL-3: a BEGAN over an open gesture first ends the old one (forced end, no momentum).
             var out: [InjectAction] = []
             if scrollOpen { out.append(.scroll(.forcedEnd, dx: 0, dy: 0)) }
+            out += forceEndPinch(.newScroll)  // SCROLL and PINCH exclude each other
             scrollOpen = true
             lastScrollAt = now
             out.append(.scroll(.began, dx: m.dx, dy: m.dy))

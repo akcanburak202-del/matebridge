@@ -134,12 +134,14 @@ public final class InputController: @unchecked Sendable {
         queue.sync {
             let now = HostClock.nowUs()
             let keys = pipeline.machine?.keyCounters ?? KeyCounters()  // the machine goes away with the session
+            let pinchMessages = pipeline.machine?.pinchMessages ?? 0
             let events = pipeline.sessionEnded(now: now, environment: environment())
             flush(events, now: now)
             let d = pipeline.planner.counters
             log(.info, "input_session_end",
                 "messages=\(messages) events=\(eventsPosted) released=\(events.count) "
                     + "key_msgs=\(keys.messages) unknown_keys=\(keys.unknown) repeats=\(keys.repeats) "
+                    + "pinch_msgs=\(pinchMessages) "
                     + "dropped_no_permission=\(d.droppedNoPermission - loggedDrops.droppedNoPermission) "
                     + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)")
             loggedDrops = d
@@ -153,7 +155,7 @@ public final class InputController: @unchecked Sendable {
     /// One message from the approved session (`SessionServer` `deliver`). Non-input messages are ignored here.
     public func deliver(_ message: Message) {
         switch message {
-        case .pen, .pointerRel, .pointerAbs, .scroll, .penGesture, .releaseAll, .bye, .key: break
+        case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .releaseAll, .bye, .key: break
         default: return
         }
         queue.sync {
@@ -264,6 +266,8 @@ public final class InputController: @unchecked Sendable {
 
     /// One `input_release` line per release the pipeline recorded: cause and counts, never coordinates.
     private func logRecords() {
+        // State changes only (a pinch the host had to end itself), never coordinates.
+        for cause in pipeline.takePinchForcedEnds() { log(.info, "pinch_forced_end", "cause=\(cause.rawValue)") }
         for record in pipeline.takeReleaseRecords() {
             let level: LogLevel = record.cause == .gateLost || record.slowed > 0 || record.reason == "owed_replay" ? .warning
                 : (record.events > 0 ? .info : .debug)

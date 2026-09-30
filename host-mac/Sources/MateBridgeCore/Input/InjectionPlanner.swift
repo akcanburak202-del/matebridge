@@ -6,7 +6,7 @@
 ///
 /// - Opening actions (proximity enter, hover, down, cursor moves, button down, scroll begin, wheel) are dropped
 ///   unless `environment.isOpen`: no permission, or no virtual display, means no input (never on another display).
-/// - Closing actions (up, leave, button up, scroll end) are produced whenever the shadow state holds the thing being
+/// - Closing actions (up, leave, button up, scroll end, magnify end) are produced whenever the shadow state holds the thing being
 ///   closed, whatever the environment says. An event that was never posted is never released, and one that was posted
 ///   is always released, at the last known position when the display is gone.
 /// - The injector owns what the state machine does not: the last injected cursor position (a `mouseButton` applies
@@ -29,7 +29,7 @@ public struct InjectionPlanner: Sendable {
         public var droppedNotHeld = 0
         /// Opening actions dropped because a release is owed: a newer press must not be overtaken by an older release.
         public var droppedOwed = 0
-        /// Zero-delta `scroll(.changed)` keepalives (never injected).
+        /// Zero-delta `scroll(.changed)` and `pinch(.changed)` keepalives (never injected).
         public var droppedKeepalive = 0
         public init() {}
     }
@@ -45,6 +45,7 @@ public struct InjectionPlanner: Sendable {
     /// Held mouse buttons and the click count of their down (the matching up repeats it).
     private var heldButtons: [MouseButton: Int] = [:]
     private var scrollOpen = false
+    private var magnifyOpen = false
     /// Keys and modifiers posted and not yet released, in press order. The flags of every keyboard event come from
     /// `heldModifiers`, so a modifier that was dropped at the gate never shows up in a later key's flags.
     private var heldKeys: [UInt16] = []
@@ -63,12 +64,13 @@ public struct InjectionPlanner: Sendable {
 
     /// True while anything posted to the Mac has not been released.
     public var isHoldingInput: Bool {
-        proximity != nil || penContact || !heldButtons.isEmpty || scrollOpen || !heldKeys.isEmpty || !heldModifiers.isEmpty
+        proximity != nil || penContact || !heldButtons.isEmpty || scrollOpen || magnifyOpen || !heldKeys.isEmpty || !heldModifiers.isEmpty
     }
     public var isPenInRange: Bool { proximity != nil }
     public var isPenInContact: Bool { penContact }
     public var heldMouseButtons: Set<MouseButton> { Set(heldButtons.keys) }
     public var isScrollOpen: Bool { scrollOpen }
+    public var isMagnifyOpen: Bool { magnifyOpen }
     public var heldKeyCodes: [UInt16] { heldKeys }
     public var heldModifierKeys: [ModifierKey] { heldModifiers }
 
@@ -99,6 +101,7 @@ public struct InjectionPlanner: Sendable {
             if let cs = heldButtons.removeValue(forKey: button) { emitButtonUp(button, cs, &out) }
         }
         if scrollOpen { closeScroll(.ended, dx: 0, dy: 0, &out) }
+        if magnifyOpen { closeMagnify(&out) }
         stampFlags(&out, from: 0)
         // Keys last pressed first, then modifiers (each up carries the flags that remain).
         while let code = heldKeys.popLast() { out.append(.key(MacKey(kind: .keyUp, keyCode: code, flags: currentFlags))) }
@@ -132,6 +135,8 @@ public struct InjectionPlanner: Sendable {
                     scrollCarryX = 0
                     scrollCarryY = 0
                 }
+            case .magnify(let g):
+                if g.phase == .began { magnifyOpen = false }
             case .key(let k):
                 // A repeat does not open anything: its key stays down.
                 if k.kind == .keyDown, !k.isRepeat { heldKeys.removeAll { $0 == k.keyCode } }
@@ -233,6 +238,9 @@ public struct InjectionPlanner: Sendable {
         case .scroll(let phase, let dx, let dy):
             applyScroll(phase, dx, dy, env, &out)
 
+        case .pinch(let phase, let scale, let center):
+            applyPinch(phase, scale, center, env, &out)
+
         case .keyDown(let code, let autorepeat):
             if autorepeat {
                 // Continues a key that was posted; needs permission and a display, not "new input" checks.
@@ -324,6 +332,54 @@ public struct InjectionPlanner: Sendable {
         }
     }
 
+    /// Magnify gesture (decision 0009). Opening needs the gate; changes need permission and a display; the end is
+    /// never gated and is always produced while the shadow state holds an open gesture.
+    private mutating func applyPinch(_ phase: InjectPinchPhase, _ scale: Float, _ center: PinchCenter?,
+                                     _ env: InjectionEnvironment, _ out: inout [MacEvent]) {
+        switch phase {
+        case .began:
+            guard let g = openGate(env) else { return }
+            if magnifyOpen { closeMagnify(&out) }
+            if let center {
+                // A touchscreen pinch is applied at the cursor by the apps: move the cursor to the finger center first
+                // (a plain move, no drag: no button is held, the machine ignores a BEGAN while the left one is).
+                let target = g.point(x: center.x, y: center.y)
+                var delta = DisplayPoint.zero
+                if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
+                out.append(.mouse(MacMouse(kind: .moved, button: .left, position: target, deltaX: delta.x,
+                                           deltaY: delta.y, clickState: 0)))
+                cursor = target
+            }
+            magnifyOpen = true
+            let position = resolved(cursor)
+            cursor = position
+            out.append(.magnify(MacMagnify(phase: .began, value: 0, position: position)))
+
+        case .changed:
+            guard magnifyOpen else { counters.droppedNotHeld += 1; return }
+            // The client's keepalive carries no change and must not reach the Mac.
+            guard scale != 0 else { counters.droppedKeepalive += 1; return }
+            guard env.canInject else { counters.droppedNoPermission += 1; return }
+            guard env.geometry != nil else { counters.droppedNoDisplay += 1; return }
+            out.append(.magnify(MacMagnify(phase: .changed, value: Self.magnification(scale), position: resolved(cursor))))
+
+        case .ended, .cancelled, .forcedEnd:
+            guard magnifyOpen else { counters.droppedNotHeld += 1; return }
+            closeMagnify(&out)
+        }
+    }
+
+    private mutating func closeMagnify(_ out: inout [MacEvent]) {
+        magnifyOpen = false
+        out.append(.magnify(MacMagnify(phase: .ended, value: 0, position: resolved(cursor))))
+    }
+
+    /// The per-message range of PROTOCOL.md section 4 PINCH, enforced here too: a bad client cannot zoom absurdly.
+    static func magnification(_ scale: Float) -> Double {
+        guard scale.isFinite else { return 0 }
+        return Swift.min(Swift.max(Double(scale), -0.5), 1.0)
+    }
+
     // MARK: Helpers
 
     /// The one rule for keyboard modifiers on pointer, pen and scroll events: every such event carries the flags
@@ -333,7 +389,7 @@ public struct InjectionPlanner: Sendable {
         let flags = currentFlags
         for i in start..<out.count {
             switch out[i] {
-            case .tabletPoint, .mouse, .scroll: out[i] = out[i].with(flags: flags)
+            case .tabletPoint, .mouse, .scroll, .magnify: out[i] = out[i].with(flags: flags)
             case .key, .tabletProximity, .capsLock: break
             }
         }

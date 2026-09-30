@@ -83,6 +83,39 @@ public enum InjectScrollPhase: Equatable, Sendable {
     case forcedEnd
 }
 
+/// Where a pinch is centered, in the protocol's normalized form (`POINTER_ABS` convention, PROTOCOL.md section 1).
+public struct PinchCenter: Equatable, Sendable {
+    public var x: UInt16
+    public var y: UInt16
+    public init(x: UInt16, y: UInt16) {
+        self.x = x
+        self.y = y
+    }
+}
+
+/// Why the host ended a pinch gesture itself (the `cause` of the `pinch_forced_end` log event).
+public enum PinchEndCause: String, Equatable, Sendable {
+    /// A new PINCH BEGAN over an open one.
+    case newPinch = "new_pinch"
+    /// A SCROLL BEGAN over an open pinch (the two are mutually exclusive).
+    case newScroll = "new_scroll"
+    /// 500 ms without a PINCH message (PROTOCOL.md section 7).
+    case watchdog
+    case releaseAll = "release_all"
+    /// A BEGAN that was ignored (left button owner, finger gate) while an older pinch was still open.
+    case ignoredBegan = "ignored_began"
+}
+
+/// Phase of a pinch gesture on the Mac side (PROTOCOL.md section 4 PINCH). The Mac sees only began, changed and
+/// ended: `cancelled` and `forcedEnd` both become "ended" (Qt has no cancel), but the state machine keeps them apart.
+public enum InjectPinchPhase: Equatable, Sendable {
+    case began
+    case changed
+    case ended
+    case cancelled
+    case forcedEnd(PinchEndCause)
+}
+
 /// One abstract event for the injector. Execute in list order.
 public enum InjectAction: Equatable, Sendable {
     // MARK: Pen (tablet events; the pen presses the left button, tablet-point subtype)
@@ -116,6 +149,12 @@ public enum InjectAction: Equatable, Sendable {
     case scroll(InjectScrollPhase, dx: Float, dy: Float)
     /// A single mouse wheel step (`SCROLL phase = NONE`); carries no state.
     case scrollWheel(dx: Float, dy: Float)
+
+    // MARK: Pinch
+
+    /// One step of a magnify gesture. `scale` is the relative change since the previous step (0 on began and ended).
+    /// `center` is set on a `began` from the touchscreen only: the cursor moves there before the gesture starts.
+    case pinch(InjectPinchPhase, scale: Float, center: PinchCenter?)
 
     // MARK: Keyboard (decision 0003: physical keys; the flags of each event are the planner's business)
 

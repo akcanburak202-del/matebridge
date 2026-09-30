@@ -480,6 +480,56 @@ public struct Scroll: Equatable, Sendable {
     }
 }
 
+/// PROTOCOL.md section 4 PINCH. Same numbering as `ScrollPhase` without `none` (0 is invalid).
+public enum PinchPhase: UInt8, Sendable {
+    case began = 1, changed = 2, ended = 3, cancelled = 4
+}
+
+public enum PinchSource: UInt8, Sendable {
+    case touch = 0, touchpad = 1
+}
+
+public struct Pinch: Equatable, Sendable {
+    public var timeUs: UInt64
+    /// Relative change of the finger distance since the previous PINCH message. 0 on BEGAN and ENDED.
+    public var scale: Float
+    /// Normalized center of the two fingers; meaningful for `source == .touch` only.
+    public var x: UInt16
+    public var y: UInt16
+    public var phase: PinchPhase
+    public var source: PinchSource
+
+    public init(timeUs: UInt64, scale: Float, x: UInt16, y: UInt16, phase: PinchPhase, source: PinchSource) {
+        self.timeUs = timeUs
+        self.scale = scale
+        self.x = x
+        self.y = y
+        self.phase = phase
+        self.source = source
+    }
+
+    func write(_ w: inout ByteWriter) {
+        w.u64(timeUs)
+        w.f32(scale)
+        w.u16(x)
+        w.u16(y)
+        w.u8(phase.rawValue)
+        w.u8(source.rawValue)
+        w.u16(0)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> Pinch {
+        let t = try r.u64()
+        let scale = try r.f32("scale")
+        let x = try r.u16()
+        let y = try r.u16()
+        guard let phase = PinchPhase(rawValue: try r.u8()) else { throw ProtocolError.invalidField("phase") }
+        guard let source = PinchSource(rawValue: try r.u8()) else { throw ProtocolError.invalidField("source") }
+        try r.skip(2)
+        return Pinch(timeUs: t, scale: scale, x: x, y: y, phase: phase, source: source)
+    }
+}
+
 public struct PenGesture: Equatable, Sendable {
     public var timeUs: UInt64
     public var gesture: PenGestureKind

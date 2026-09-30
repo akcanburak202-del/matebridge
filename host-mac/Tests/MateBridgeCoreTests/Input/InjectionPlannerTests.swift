@@ -38,11 +38,12 @@ struct MacEventModel {
     var penContact = false
     var buttons: Set<MouseButton> = []
     var scrollOpen = false
+    var magnifyOpen = false
     var keys: Set<UInt16> = []
     var modifiers: Set<ModifierKey> = []
     private(set) var violations: [String] = []
 
-    var isIdle: Bool { proximity == nil && !penContact && buttons.isEmpty && !scrollOpen && keys.isEmpty && modifiers.isEmpty }
+    var isIdle: Bool { proximity == nil && !penContact && buttons.isEmpty && !scrollOpen && !magnifyOpen && keys.isEmpty && modifiers.isEmpty }
 
     private mutating func fail(_ text: String, _ e: MacEvent) { violations.append("\(text): \(e)") }
 
@@ -96,12 +97,28 @@ struct MacEventModel {
             case .none: break
             case .began:
                 if scrollOpen { fail("scroll began while open", event) }
+                if magnifyOpen { fail("scroll began while a magnify gesture is open", event) }
                 scrollOpen = true
             case .changed:
                 if !scrollOpen { fail("scroll changed while closed", event) }
             case .ended, .cancelled:
                 if !scrollOpen { fail("scroll end while closed", event) }
                 scrollOpen = false
+            }
+        case .magnify(let g):
+            switch g.phase {
+            case .began:
+                if magnifyOpen { fail("magnify began while open", event) }
+                if scrollOpen { fail("magnify began while a scroll gesture is open", event) }
+                if g.value != 0 { fail("magnify began with a value", event) }
+                magnifyOpen = true
+            case .changed:
+                if !magnifyOpen { fail("magnify changed while closed", event) }
+                if g.value == 0 { fail("zero magnify change reached the Mac", event) }
+            case .ended:
+                if !magnifyOpen { fail("magnify end while closed", event) }
+                if g.value != 0 { fail("magnify end with a value", event) }
+                magnifyOpen = false
             }
         case .capsLock:
             break

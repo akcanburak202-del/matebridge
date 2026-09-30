@@ -1,7 +1,7 @@
 ---
 id: T-036
 title: Mac — PINCH kodeki, yakınlaştırma durum makinesi ve büyütme hareketi enjeksiyonu
-status: in-progress
+status: review
 phase: 3
 owner: mac-host-dev
 depends_on: [T-032]
@@ -43,8 +43,14 @@ Sira: kodek -> durum makinesi -> planlayici -> poster/inject-test/log. Her adim 
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** dalin son commiti `T-036: PINCH codec, ...` (SHA orkestrator `git log task/T-036-host-pinch` ile gorur; plan commiti 7a26d55).
+- **Dokunulan dosyalar:** Core: `Messages.swift`, `Message.swift`, `ProtocolConstants.swift`, `Session/SessionMachine.swift` (PINCH deliver), `Input/InjectAction.swift`, `Input/InputStateMachine.swift`, yeni `Input/InputStateMachine+Pinch.swift`, `Input/InputStateMachine+Scroll.swift` (SCROLL BEGAN acik PINCH'i bitirir), `Input/MacEvent.swift` (`MacMagnify`, `.magnify`), `Input/MacEvent+Closing.swift`, `Input/InjectionPlanner.swift`, `Input/OwedRelease.swift` (`magnifyEnd` yuvasi), `Input/InputPipeline.swift`, `Input/ReleaseRecord.swift`. Host: yeni `Input/MagnifyGestureEvent.swift` (tip 29 / alan 110, 132, 113 yalnizca burada), `Input/CGEventPoster.swift`, `Input/InputController.swift`, `Input/InjectTest.swift`. Testler: yeni `Input/PinchTests.swift`; `FixtureTests`, `InjectionPlannerTests`, `InputTestSupport`, `InputPipelineTests`, `InputFuzzTests`, `KeyboardFlagsTests` (modeller ve fuzz PINCH'i kapsar).
+- **Varsayımlar / tasarım:**
+  - BEGAN yok sayilirsa (sol dugme sahibi, parmak kapisi) acik bir PINCH de `ignored_began` nedeniyle zorla bitirilir; aksi halde yoksayilan hareketin CHANGED'leri eski hareketin sanilirdi (protokolde yazmiyor, guvenli taraf).
+  - Mac'e giden deger `[-0.5, 1.0]`'a planlayicida da sikistirilir (istemci kurali, ikinci savunma); NaN 0 olur.
+  - BEGAN ve ENDED degeri 0. CHANGED'de konum = imlecin son yeri (TOUCH'ta BEGAN merkezi).
+  - Kalem menzile girince acik pinch'i host kendisi bitirmez (protokol istemcinin CANCELLED gondermesini ister; 500 ms watchdog yedek).
+  - Log: `pinch_forced_end cause=` nedenleri `new_pinch`, `new_scroll`, `watchdog`, `release_all`, `ignored_began`. `pinch_msgs` `input_session_end` satirinda. Release kaydina `pinch=N` alani eklendi (yalniz N>0 ise). `docs/LOGGING.md` kartin `files:` listesinde degil, guncellenmedi.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Hicbir gercek olay gonderilmedi (`--inject-test --pinch in|out` yalnizca eklendi, calistirilmadi). Gercek Mac'te: tip 29 olayinin `CGEvent(source:)` + `type=` ile kurulup kurulmadigi (nil donerse `event_create_failed` loglanir ve ended owed olur), Krita/Safari/Preview'da yon (`--pinch out` = yakinlas beklenir), BEGAN'da imlec tasindiktan sonra yakinlasma merkezinin dogrulugu, Chromium'da ilk degisimlerin yutulmasi (karar 0009), Cmd basiliyken davranis.
+- **check.sh:** Swift tarafi (host-mac build + 386 test, probes, fixtures) yesil. `gradle (client-android)` tek testte kirmizi: `FixtureTest.everyFixtureFileHasATestCase`, yeni pinch fixture'larinin Kotlin test kaydi olmadigi icin; T-037 kapatir, bu kartin kapsami disi.
+- **Açık sorular:** yok.

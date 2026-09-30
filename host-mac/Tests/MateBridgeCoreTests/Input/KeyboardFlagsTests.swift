@@ -12,6 +12,7 @@ private func flagsOf(_ e: MacEvent) -> KeyFlags? {
     case .mouse(let m): m.flags
     case .tabletPoint(let p): p.flags
     case .scroll(let s): s.flags
+    case .magnify(let g): g.flags
     case .key(let k): k.flags
     case .tabletProximity, .capsLock: nil
     }
