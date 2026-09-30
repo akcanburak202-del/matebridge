@@ -269,7 +269,10 @@ public final class InputController: @unchecked Sendable {
     private func watchdogFired() {
         guard !stopped else { return }
         let now = HostClock.nowUs()
-        flush(pipeline.tick(now: now, environment: environment()), now: now)
+        let events = pipeline.tick(now: now, environment: environment())
+        flush(events, now: now)
+        // A watchdog close (pen or scroll silent for 500 ms) is not a release-all and is not recorded as one.
+        if !events.isEmpty { log(.info, "input_watchdog", "events=\(events.count)") }
         rearmWatchdog()
     }
 

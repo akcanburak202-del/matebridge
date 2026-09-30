@@ -514,6 +514,25 @@ struct InputPipelineTests {
         #expect(d.model.isIdle && d.pipe.owed.isEmpty)
     }
 
+    @Test("PIPE-26 the pipeline owes releases produced without permission by itself, whether or not the host reports the refusal")
+    func pipe26_owedWithoutHostReport() {
+        var pipe = InputPipeline()
+        var model = MacEventModel()
+        var now: UInt64 = 1_000_000
+        model.apply(pipe.sessionStarted(now: now, environment: openEnv))
+        now += 1_000
+        model.apply(pipe.handle(penMsg(.pen, penSample(1, 1, hoverFlags)), now: now, environment: openEnv))
+        model.apply(pipe.handle(penMsg(.pen, penSample(2, 2, startFlags, pressure: 400)), now: now, environment: openEnv))
+        #expect(model.penContact)
+        // Permission gone; the host never calls postFailed. The release is produced (and lost) and stays owed.
+        let lost = pipe.release(.bye, now: now, environment: noPermissionEnv)
+        #expect(lost.count == 2 && pipe.owed.count == 2 && model.penContact)
+        now += 1_000
+        let back = pipe.tick(now: now, environment: openEnv)
+        model.apply(back)
+        #expect(back.count == 2 && model.isIdle && pipe.owed.isEmpty)
+    }
+
     @Test("PIPE-25 zero-delta scroll CHANGED (the client's keepalive) through the whole chain injects nothing")
     func pipe25_keepalive() {
         var d = PipeDriver()

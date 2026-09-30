@@ -8,6 +8,8 @@ import MateBridgeCore
 ///     MateBridgeApp --inject-test --fixture pen_hover_to_contact [--fixture pen_leave ...]
 ///     MateBridgeApp --inject-test --stroke ramp|circle|tilt [--repeat N]
 ///     MateBridgeApp --inject-test --tap 2            (touch taps at the display center; 2 = double click)
+///     MateBridgeApp --inject-test --scroll           (one precise scroll gesture at the display center, finger moving down)
+///     MateBridgeApp --inject-test --wheel 5          (5 mouse-wheel steps at the display center)
 ///
 /// Options: `--countdown S` (default 5: time to bring the target window to the virtual display),
 /// `--create-display` (make a virtual display when none exists; conflicts with a running host, which owns the fixed
@@ -20,6 +22,8 @@ public enum InjectTest {
         public var fixtures: [String] = []
         public var stroke: String?
         public var taps = 0
+        public var scrollGesture = false
+        public var wheelSteps = 0
         public var repeats = 1
         public var countdown: Double = 5
         public var createDisplay = false
@@ -30,7 +34,7 @@ public enum InjectTest {
 
     public static let usage = """
         usage: MateBridgeApp --inject-test [--fixture NAME]... [--stroke ramp|circle|tilt] [--tap N]
-                             [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
+                             [--scroll] [--wheel N] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
         """
 
     /// nil when `--inject-test` is absent. Any argument it does not know, or a stray value, is an error.
@@ -52,6 +56,10 @@ public enum InjectTest {
             case "--tap":
                 guard let v = value(), let n = Int(v), (1...5).contains(n) else { return fail("--tap needs 1...5") }
                 o.taps = n; i += 1
+            case "--scroll": o.scrollGesture = true
+            case "--wheel":
+                guard let v = value(), let n = Int(v), (1...50).contains(n) else { return fail("--wheel needs 1...50") }
+                o.wheelSteps = n; i += 1
             case "--repeat":
                 guard let v = value(), let n = Int(v), (1...20).contains(n) else { return fail("--repeat needs 1...20") }
                 o.repeats = n; i += 1
@@ -69,7 +77,9 @@ public enum InjectTest {
             }
             i += 1
         }
-        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 { return fail("nothing to inject") }
+        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.wheelSteps == 0 {
+            return fail("nothing to inject")
+        }
         return .success(o)
     }
 
@@ -190,6 +200,8 @@ public enum InjectTest {
         if o.taps > 0 {
             script += tapScript(o.taps, afterPen: o.stroke != nil || !o.fixtures.isEmpty)
         }
+        if o.scrollGesture { script += scrollScript() }
+        if o.wheelSteps > 0 { script += wheelScript(o.wheelSteps) }
         return script
     }
 
@@ -293,6 +305,25 @@ public enum InjectTest {
             index += 3
         }
         return script
+    }
+
+    /// One precise scroll gesture: BEGAN, 40 CHANGED of 6 pt every 16 ms (finger moving down: natural direction moves
+    /// the content down), ENDED. Nothing has moved the cursor before it, so it is located at the display center.
+    private static func scrollScript() -> [Step] {
+        func scroll(_ phase: ScrollPhase, dy: Float, delay: Int) -> Step {
+            Step(delayMs: delay, message: .scroll(Scroll(timeUs: 0, dx: 0, dy: dy, phase: phase)))
+        }
+        var script = [scroll(.began, dy: 0, delay: 1000)]
+        for _ in 0..<40 { script.append(scroll(.changed, dy: 6, delay: 16)) }
+        script.append(scroll(.ended, dy: 0, delay: 16))
+        return script
+    }
+
+    /// Mouse wheel steps of 10 pt (the client's assumed one tick), 100 ms apart.
+    private static func wheelScript(_ steps: Int) -> [Step] {
+        (0..<steps).map { i in
+            Step(delayMs: i == 0 ? 1000 : 100, message: .scroll(Scroll(timeUs: 0, dx: 0, dy: 10, phase: .none)))
+        }
     }
 
     /// Touch taps at the display center, 60 ms down and 120 ms apart: N presses close in time and place, so N = 2 is a
