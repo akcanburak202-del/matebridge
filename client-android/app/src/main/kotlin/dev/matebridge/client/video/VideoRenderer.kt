@@ -37,13 +37,20 @@ class VideoRenderer(
     private val onGiveUp: (String) -> Unit = {},
     /** Vsync grid fed by the UI thread's Choreographer; without samples frames render immediately. */
     private val vsync: VsyncClock = VsyncClock(),
-    /** Jitter buffer in content frames, 0..2. 0 = render each frame as soon as decoded (T-015 behavior). */
+    /**
+     * [BUFFER_ADAPTIVE] (adaptive pacing, T-052), or a fixed jitter buffer in content frames, 0..2.
+     * 0 = render each frame as soon as decoded (T-015 behavior).
+     */
     bufferFrames: Int = 1,
     /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
     codecReportsShown: Boolean = true,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
+        const val BUFFER_ADAPTIVE = -1
+        private const val PTS_MAP_MAX = 64
+        /** Blocking wait of the output thread per dequeue; bounds shutdown latency only. */
+        private const val OUTPUT_WAIT_US = 5_000L
     }
 
     private val tag = "MB/decoder"
@@ -55,9 +62,33 @@ class VideoRenderer(
     /** Read at each codec start; switch before re-attaching a surface (GL -> SurfaceView fallback). */
     @Volatile var codecReportsShown: Boolean = codecReportsShown
 
-    /** Jitter buffer size in content frames (0..2); takes effect on the next frame. */
-    @Volatile var bufferFrames: Int = bufferFrames.coerceIn(0, 2)
-        set(v) { field = v.coerceIn(0, 2) }
+    /** [BUFFER_ADAPTIVE] or jitter buffer size in content frames (0..2); takes effect on the next frame. */
+    @Volatile var bufferFrames: Int = bufferFrames.coerceIn(BUFFER_ADAPTIVE, 2)
+        set(v) { field = v.coerceIn(BUFFER_ADAPTIVE, 2) }
+
+    @Volatile private var adaptive: AdaptivePacer? = null
+
+    /** KEY_OPERATING_RATE policy, see [OperatingRate]; read at each codec start. */
+    @Volatile var operatingRate: Int = OperatingRate.STREAM_FPS
+
+    // frameSeq (codec pts) -> host capture time (us) / time the decoded frame became ready (ns, System.nanoTime).
+    private val captureByPts = BoundedMap()
+    private val readyByPts = BoundedMap()
+
+    private class BoundedMap {
+        private val m = object : LinkedHashMap<Long, Long>() {
+            override fun removeEldestEntry(e: MutableMap.MutableEntry<Long, Long>) = size > PTS_MAP_MAX
+        }
+        @Synchronized fun put(k: Long, v: Long) { m[k] = v }
+        @Synchronized fun get(k: Long): Long? = m[k]
+        @Synchronized fun clear() = m.clear()
+    }
+
+    /** Stats-window feedback for the adaptive pacer (skip percentage of the window just ended). */
+    /** Slack D of the adaptive pacer for the latest frame, in microseconds (0 when not adaptive/unknown). */
+    fun paceDUs(): Long = (adaptive?.lastDNs ?: 0L) / 1000
+
+    fun onSkipWindow(skipPct: Double?) { adaptive?.onSkipWindow(skipPct) }
     private val queue = FrameQueue(stats)
 
     private class Attachment(val surface: Surface, val previous: Thread?) {
@@ -138,6 +169,8 @@ class VideoRenderer(
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
+        val rate = OperatingRate.resolve(operatingRate, config.fps)
+        if (rate != null) format.setInteger(MediaFormat.KEY_OPERATING_RATE, rate)
         ColorMapping.standard(config.matrix)?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
         ColorMapping.transfer(config.transfer)?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
         format.setInteger(MediaFormat.KEY_COLOR_RANGE, ColorMapping.range(config.fullRange))
@@ -164,8 +197,18 @@ class VideoRenderer(
             throw e
         }
         codecInfo = "${codec.name} ${config.widthPx}x${config.heightPx} lowLatency=$lowLatency"
+        val accepted = try {
+            val f = codec.inputFormat
+            fun key(k: String): String = when {
+                !f.containsKey(k) -> "unset"
+                else -> runCatching { f.getInteger(k).toString() }
+                    .getOrElse { runCatching { f.getFloat(k).toString() }.getOrDefault("?") }
+            }
+            "priority=${key(MediaFormat.KEY_PRIORITY)} operating_rate=${key(MediaFormat.KEY_OPERATING_RATE)} " +
+                "low_latency_fmt=${key(MediaFormat.KEY_LOW_LATENCY)}"
+        } catch (e: Exception) { "input_format=unavailable" }
         Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=codec_start name=${codec.name} mime=$mime " +
-            "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency")
+            "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency requested_rate=${rate ?: "none"} accepted $accepted")
         return codec
     }
 
@@ -190,23 +233,48 @@ class VideoRenderer(
     private fun runCodec(att: Attachment): String? {
         var codec: MediaCodec? = null
         var error: String? = null
+        var outThread: Thread? = null
+        val outRunning = java.util.concurrent.atomic.AtomicBoolean(true)
+        val outError = java.util.concurrent.atomic.AtomicReference<String?>(null)
         try {
             codec = createCodec(att.surface)
-            val info = MediaCodec.BufferInfo()
             var held: VideoFrame? = null
-            val pacer = FramePacer(vsync, bufferFrames, if (config.fps > 0) 1_000_000_000L / config.fps else 0)
+            val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
+            val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
+            val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
+            adaptive = adaptivePacer
+            captureByPts.clear(); readyByPts.clear()
             if (codecReportsShown) {
                 codec.setOnFrameRenderedListener(
-                    { _, _, nanoTime -> stats.onShown(nanoTime / 1000) },
+                    { _, pts, nanoTime ->
+                        val period = vsync.periodNs
+                        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+                        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+                        stats.onShownPaced(readyByPts.get(pts), nanoTime, period, cadence)
+                    },
                     android.os.Handler(android.os.Looper.getMainLooper()),
                 )
             }
-            var loggedFormat = false
-            while (att.active) {
-                if (drainOutput(codec, info, pacer) && !loggedFormat) {
-                    loggedFormat = true
-                    logOutputFormat(codec)
+            // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
+            // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
+            val c = codec
+            val t = Thread({
+                val outInfo = MediaCodec.BufferInfo()
+                var loggedFormat = false
+                try {
+                    while (att.active && outRunning.get()) {
+                        if (drainOutput(c, outInfo, pacer, adaptivePacer, OUTPUT_WAIT_US) && !loggedFormat) {
+                            loggedFormat = true
+                            logOutputFormat(c)
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (outRunning.get()) outError.set(e.javaClass.simpleName)
                 }
+            }, "mb-decoder-out")
+            outThread = t
+            t.start()
+            while (att.active && outError.get() == null) {
                 val frame = held ?: queue.poll(4)
                 held = null
                 if (frame == null) continue
@@ -224,11 +292,16 @@ class VideoRenderer(
                 buf.put(frame.data.value)
                 val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
+                if (!frame.isCodecConfig) captureByPts.put(frame.frameSeq, frame.captureTimeUs)
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
             }
+            if (att.active) error = outError.get()
         } catch (e: Exception) {
             error = e.javaClass.simpleName
         } finally {
+            outRunning.set(false)
+            try { outThread?.join(500) } catch (_: InterruptedException) {}
+            adaptive = null
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
             Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=codec_stop")
@@ -239,29 +312,42 @@ class VideoRenderer(
     private var formatChanged = false
 
     /**
-     * Releases every ready output. With [bufferFrames] == 0 only the newest is rendered at once and the
+     * Releases every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
+     * with [bufferFrames] == 0 only the newest is rendered at once and the
      * skipped ones count as dropped (T-015 behavior). Otherwise each frame gets a vsync-aligned render
      * timestamp from [pacer]; a frame that would exceed the bounded backlog shares the previous slot, so
      * the older one is not rendered when both are ready in the same drain (counted as dropped, not rendered).
      * Returns true once an output-format change has been seen (for one-time logging).
      */
-    private fun drainOutput(codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer): Boolean {
-        pacer.bufferFrames = bufferFrames
-        val paced = pacer.bufferFrames > 0
+    private fun drainOutput(
+        codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
+        firstWaitUs: Long = 0,
+    ): Boolean {
+        var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
+        val mode = bufferFrames
+        pacer.bufferFrames = mode
+        val useAdaptive = mode == BUFFER_ADAPTIVE
+        val paced = useAdaptive || mode > 0
         stats.setGapThresholdUs(vsync.periodNs * 3 / 2 / 1000)
         var prev = -1
         var pendingIdx = -1 // paced: newest buffer not yet released (waits for a possible same-slot successor)
         var pendingNs = 0L
         formatChanged = false
         while (true) {
-            val idx = codec.dequeueOutputBuffer(info, 0)
+            val idx = codec.dequeueOutputBuffer(info, waitUs)
             if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) { formatChanged = true; continue }
             if (idx < 0) break
+            waitUs = 0
             val isFrame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
-            if (isFrame) stats.onOutput(info.presentationTimeUs, nowUs())
+            val readyNs = System.nanoTime()
+            if (isFrame) {
+                stats.onOutput(info.presentationTimeUs, nowUs())
+                readyByPts.put(info.presentationTimeUs, readyNs)
+            }
             if (paced) {
                 if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
-                val d = pacer.schedule(System.nanoTime())
+                val d = if (useAdaptive) adaptivePacer.schedule(captureByPts.get(info.presentationTimeUs), readyNs)
+                else pacer.schedule(readyNs)
                 if (d == null) {
                     if (pendingIdx >= 0) { codec.releaseOutputBuffer(pendingIdx, pendingNs); stats.onRendered(); pendingIdx = -1 }
                     codec.releaseOutputBuffer(idx, true)
@@ -269,6 +355,7 @@ class VideoRenderer(
                     continue
                 }
                 stats.onPaceAdd(d.addedNs / 1000)
+                if (useAdaptive) stats.onScheduled(d.skipped)
                 if (pendingIdx >= 0) {
                     if (d.collided) {
                         // Same slot as the waiting older buffer: it would be superseded, so do not render it.

@@ -301,3 +301,15 @@ Host `STREAM_PREFS` ile yeniden yapılandırıyor; içerik: scratch `anim` (120/
 | 2 | 123 | 0 | 2 | 16,7 ms |
 
 - Host kusursuz: yakalama aralığı p50/95/99 = 8,3/8,3/8,3 ms, varış 8,3/8,9/9,6 ms, kodlama ~6–7 ms, tablet `drop=0`. **Takılma tablette sunumda**: çözme süresi (~9–12 ms, vsync'ten uzun) dalgalanınca iki kare aynı vsync'e düşüyor, ardından bir vsync boş kalıyor. 2 karelik tampon gideriyor ama +16,7 ms. 1 karelik tamponun hiç etkisiz olması şüpheli (pacer hatası olabilir). → T-052 (uyarlanır kare zamanlaması). Kullanıcı: "demo animasyonlarda takılma çok göze batıyordu … performans modu akıcı görünüyor".
+
+## 2026-10-01 01:35 — HATA (orkestratör): kurulum betiği istenmeyen uygulamalar kurdu
+
+- Gece kurulumu kullanıcısız yapmak için yazılan scratch `install.sh`, `uiautomator` ekranında "DEVAM ET" **ya da "YÜKLE"** metnine basıyordu. Paket yükleyicinin "DEVAM ET" düğmesine doğru bastı, ardından **Huawei AppGallery'nin risk denetimi ekranındaki (`InstallDistActivity`) önerilen uygulamaların "YÜKLE" düğmelerine** de bastı. Tablete kuruldu: `com.live.soulchill`, `com.alibaba.intl.android.apps.poseidon`, `ctrip.english`, `com.dreamgames.royalmatch.huawei`, `com.zhiliaoapp.musically` (TikTok). `com.huawei.appmarket` zorla durduruldu; sonra yeni kurulum olmadı. `com.live.soulchill` daha sonra listede görünmedi (yarım kalmış olabilir). **Kalan dört uygulamanın kaldırılması kullanıcıya bırakıldı** (otomatik kaldırmaya izin verilmedi).
+- Betik düzeltildi: yalnızca `com.android.packageinstaller` içindeki `android:id/button1` "DEVAM ET"e basar; AppGallery'de hiçbir şeye basmaz. Ders: ekran otomasyonunda metinle değil paket + kaynak kimliğiyle eşleştir; mağaza ekranlarına asla dokunma.
+
+## 2026-10-01 — Uyarlanır kare zamanlaması cihazda (T-052)
+
+Performans 120, `anim`. SurfaceFlinger sunum aralıkları (~125 kare) ve `MB/render`:
+- Önce (tampon yok): 16,7 ms atlama **%21**. Sabit 2 kare tampon: %2, +16,7 ms.
+- T-052 (çıkış ayrı iş parçacığında, uyarlanır D, doğru atlama ölçümü, histerezis): 120 Hz'te (dokunma) atlama **%1–3**, `pace_ms` 7–16 ms (çoğunlukla ~8–12), çözme p95 ~10–14 ms. 60 Hz'te (boşta, 120 fps akış) D sınırlı, gecikme ~15 ms, kareler bilinçli olarak atılıyor (en yeni kazanır).
+- `KEY_OPERATING_RATE` / `KEY_PRIORITY` HiSilicon çözücüsünde kabul edilmiyor (`unset`). Oluşturma zaman damgaları (`OnFrameRenderedListener`) gerçek gösterim zamanı değil; atlama ölçümü pacer'ın kendi planından.
