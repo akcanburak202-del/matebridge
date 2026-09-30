@@ -31,7 +31,10 @@ NOTES 2026-10-01 "120 fps ölçümü": yakalama 120,0 fps, ama VideoToolbox HEVC
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Core: `EncodeBenchOptions` (argüman ayrıştırma: --fps, --seconds, --config tekrarlı) ve `EncodeBenchConfig` (saf veri + isimli katalog) + testler.
+2. Host: `EncodeBench` (sentetik 420f IOSurface kareler havuzu, config başına bağımsız VT oturumları, max-hız ve --fps modu, p50/p95/p99, bit hızı, `VTCopyVideoEncoderList`). `HEVCEncoder` bu aşamada değişmez.
+3. App: `EncodeBenchCommand` + main.swift'te tek satır kanca.
+4. Tezgâhı tüm configlerde çalıştır, tabloyu Handoff'a yaz; 120'ye yetişen config varsa HEVCEncoder'a MATEBRIDGE_FPS=120 iken uygula.
 
 ## Handoff
 
