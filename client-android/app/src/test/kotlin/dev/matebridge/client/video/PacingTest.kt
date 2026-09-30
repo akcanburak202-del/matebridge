@@ -2,6 +2,7 @@ package dev.matebridge.client.video
 
 import dev.matebridge.client.stream.DisplayModeInfo
 import dev.matebridge.client.stream.DisplayModePicker
+import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.stream.StatsFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -226,5 +227,31 @@ class DisplayModeTest {
         assertTrue(text.contains("Ağ 16.7/24.1/40.2 ms >16.7:5"))
         assertTrue(text.contains("Gösterim"))
         assertEquals("net_p50_us=16700 net_p95_us=24100 net_p99_us=40200 net_over=5", StatsFormat.gapFields("net", g))
+    }
+}
+
+class FrameRatePolicyTest {
+    @Test fun modeTargetFollowsStreamFpsByDefault() {
+        assertEquals(120, FrameRatePolicy.modeTargetHz(FrameRatePolicy.HZ_FOLLOW_STREAM, 120))
+        assertEquals(60, FrameRatePolicy.modeTargetHz(FrameRatePolicy.HZ_FOLLOW_STREAM, 60))
+        assertEquals(0, FrameRatePolicy.modeTargetHz(FrameRatePolicy.HZ_FOLLOW_STREAM, 0))
+    }
+
+    @Test fun modeTargetExplicitExtraWins() {
+        assertEquals(0, FrameRatePolicy.modeTargetHz(0, 120))
+        assertEquals(144, FrameRatePolicy.modeTargetHz(144, 60))
+    }
+
+    @Test fun surfaceRateFollowsStreamUnlessOverridden() {
+        assertEquals(120, FrameRatePolicy.surfaceRate(-1, 120))
+        assertEquals(60, FrameRatePolicy.surfaceRate(-1, 60))
+        assertEquals(0, FrameRatePolicy.surfaceRate(0, 120))
+        assertEquals(90, FrameRatePolicy.surfaceRate(90, 60))
+    }
+
+    @Test fun requestPicksModeForStreamFps() {
+        val modes = listOf(DisplayModeInfo(1, 2800, 1840, 60f), DisplayModeInfo(2, 2800, 1840, 120f))
+        assertEquals(1, DisplayModePicker.pick(modes, modes[1], FrameRatePolicy.modeTargetHz(-1, 60).toFloat())?.id)
+        assertEquals(2, DisplayModePicker.pick(modes, modes[0], FrameRatePolicy.modeTargetHz(-1, 120).toFloat())?.id)
     }
 }
