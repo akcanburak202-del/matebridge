@@ -40,7 +40,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **Bilinmeyen enum değerleri:**
-  - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`.
+  - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`, `PINCH.phase`, `PINCH.source`.
   - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
   - Tanımsız `capabilities` ve bayrak bitleri yok sayılır.
 - **Protokol hatası:**
@@ -83,6 +83,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). Ş
 | 0x14 | SCROLL | C→H | kontrol | `scroll_began`, `scroll`, `scroll_ended` |
 | 0x15 | PEN_GESTURE | C→H | kontrol | `pen_gesture` |
 | 0x16 | RELEASE_ALL | C→H | kontrol | `release_all` |
+| 0x17 | PINCH | C→H | kontrol | `pinch_began`, `pinch`, `pinch_ended` |
 | 0x20 | PING | iki yön | kontrol | `ping` |
 | 0x21 | PONG | iki yön | kontrol | `pong` |
 | 0x22 | STATS | C→H | kontrol | `stats` |
@@ -303,6 +304,33 @@ Host bu oturumun basılı tuttuğu her şeyi bırakır (§7).
 
 İstemci bunu şu durumlarda gönderir: uygulama arka plana geçtiğinde, pencere odağı kaybolduğunda, pointer capture kapandığında, bir girdi cihazı ayrıldığında, video görünümü gizlendiğinde (ör. bağlantı paneli açıldığında; `reason = USER`).
 
+### 0x17 PINCH (C→H)
+
+İki parmakla yakınlaştırma (Faz 3, kullanıcı isteği 2026-09-30). Mac'te trackpad'in büyütme hareketi olarak enjekte edilir (Krita'da tuval yakınlaştırma, Safari/Preview'da sayfa yakınlaştırma). Dokunmatik ekrandan ya da pointer capture altındaki touchpad'den gelir.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| time_us | u64 | |
+| scale | f32 | Önceki PINCH mesajından bu yana göreli ölçek değişimi: `d_şimdi / d_önceki − 1` (parmaklar arası uzaklık). `+` açılma (yakınlaş), `−` kapanma. BEGAN ve ENDED'de `0`. |
+| x | u16 | Normalize (§1) hareket merkezi (iki parmağın ortası). Yalnızca `source = TOUCH` iken anlamlı; TOUCHPAD'de `0`. |
+| y | u16 | Normalize merkez |
+| phase | u8 | `1` BEGAN, `2` CHANGED, `3` ENDED, `4` CANCELLED (SCROLL ile aynı numaralar; `0` geçersiz) |
+| source | u8 | `0` TOUCH (dokunmatik ekran), `1` TOUCHPAD |
+| reserved | u16 | |
+
+**İstemci kuralları:**
+- İki parmak hareketi **ya** kaydırma (SCROLL) **ya** yakınlaştırmadır, hareket boyunca değişmez. Karar ilk anlamlı harekette verilir: parmaklar arası uzaklığın göreli değişimi, ortak kaydırma hareketinden baskınsa PINCH (eşik istemcide, sabit ya da ayar).
+- Her BEGAN'ın ardından ENDED veya CANCELLED gelir. SCROLL'daki canlılık kuralı aynen geçerlidir: hareket açıkken en geç **200 ms**'de bir `CHANGED` (`scale = 0`), parmaklar **5 sn** hareketsizse `ENDED`.
+- Dokunmatik ekrandan gelen PINCH, PROTOCOL §7'deki parmak kuralına tabidir: kalem `IN_RANGE` iken ve son PEN'den sonraki 1 sn boyunca yeni PINCH başlatılmaz.
+- Tek bir mesajdaki `scale` `[-0,5, 1,0]` aralığına sıkıştırılır.
+
+**Host kuralları:**
+- Aynı anda tek bir açık PINCH olur; açık SCROLL ile de birlikte olamaz. PINCH BEGAN geldiğinde açık SCROLL ya da PINCH varsa önce o zorla bitirilir (§4 SCROLL zorla bitirme). SCROLL BEGAN geldiğinde açık PINCH de aynı şekilde bitirilir.
+- Sol düğmenin sahibi varken (sürükleme sürüyor) PINCH BEGAN yok sayılır; o hareketin CHANGED/ENDED'i de yok sayılır. BEGAN olmadan gelen CHANGED/ENDED yok sayılır.
+- `source = TOUCH` ise host BEGAN'da imleci merkeze taşır (sürüklemesiz fare hareketi), çünkü macOS uygulamaları büyütmeyi imleç konumunda uygular. TOUCHPAD'de imleç yerinde kalır.
+- Mac'e giden olay: büyütme hareketi (başla / değişim = `scale` / bitti). Sıfır `scale`'li CHANGED enjekte edilmez. **CANCELLED Mac'e "bitti" olarak gider** (Qt'de iptalin karşılığı yok; hareket açık kalırdı).
+- Zorla bitirme (yeni BEGAN, watchdog, release-all, kapı kapanması) Mac'e "bitti" olarak gider.
+
 ### 0x20 PING / 0x21 PONG (iki yön)
 
 PING:
@@ -378,8 +406,9 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - Tıkanma varken birleştirilebilecekler:
   - ardışık hover PEN örnekleri (yalnız `IN_RANGE`, son örnek kalır),
   - ardışık `POINTER_REL` (dx/dy toplanır, `buttons` aynıysa),
-  - ardışık `SCROLL` CHANGED (dx/dy toplanır).
-- **Durum geçişleri asla birleştirilmez veya atılmaz:** `CONTACT`/`IN_RANGE` değişen örnekler, `KEY`, düğme değişimi, SCROLL BEGAN/ENDED/CANCELLED, `RELEASE_ALL`.
+  - ardışık `SCROLL` CHANGED (dx/dy toplanır),
+  - ardışık `PINCH` CHANGED (`scale`: `(1+a)(1+b) − 1`, merkez sonuncununki).
+- **Durum geçişleri asla birleştirilmez veya atılmaz:** `CONTACT`/`IN_RANGE` değişen örnekler, `KEY`, düğme değişimi, SCROLL ve PINCH BEGAN/ENDED/CANCELLED, `RELEASE_ALL`.
 - Sınır birleştirmeye rağmen aşılırsa istemci bağlantıyı kapatıp yeniden bağlanır. Host bağlantı kopunca release-all uygular (§7). Böylece bir bırakma olayı hiçbir zaman sessizce kaybolmaz.
 
 ## 6. Heartbeat ve saat farkı
@@ -398,7 +427,8 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - basılı tuşlar için UP (kayıtlı virtual keycode ile) ve otomatik tekrarın durması,
 - basılı fare düğmeleri için up,
 - kalem teması için up ve yakınlık için leave, araç başına `flags = 0` ve reset sonrası kuralı (§4 PEN), silgi modunun kapanması,
-- açık kaydırma hareketi için ENDED (ataletsiz, §4 SCROLL) ve süren ataletin durması.
+- açık kaydırma hareketi için ENDED (ataletsiz, §4 SCROLL) ve süren ataletin durması,
+- açık yakınlaştırma hareketi için "bitti" (§4 PINCH).
 
 İşaretçi kaynaklarının **bildirdiği** düğme durumu release-all'da sıfırlanmaz (aşağıda "işaretçi kilidi"). Host her oturum için girdi durumunu sıfırdan kurar; bir oturumun durumu sonrakine taşınmaz.
 
@@ -412,6 +442,7 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 **Girdi watchdog'ları** (bağlantı canlı olsa bile, çünkü PING girdi yolunu kanıtlamaz):
 - Kalem `IN_RANGE` iken **500 ms** PEN gelmezse host o araç için up (temas varsa) + leave üretir ve `flags = 0` sayar.
 - SCROLL hareketi açıkken **500 ms** SCROLL gelmezse host hareketi bitirir (zorla bitirme, §4 SCROLL).
+- PINCH hareketi açıkken **500 ms** PINCH gelmezse host hareketi bitirir (§4 PINCH).
 - Süre host'un **tek** monoton saatiyle, mesajın **alındığı** ana göre ölçülür (mesajdaki `*_time_us` kullanılmaz). Her girdi mesajı işlenmeden önce süresi dolmuş watchdog'lar uygulanır: önce kapanış, sonra mesaj. Böylece sonuç zamanlayıcının ne zaman çalıştığına bağlı olmaz. Saat geri gitmiş görünürse süre o andan yeniden başlatılır; watchdog en kötü 500 ms gecikir, hiçbir zaman devre dışı kalmaz.
 - Watchdog kapanışı release-all **değildir**: kilit kurmaz (§4), silgi modunu ve diğer kaynakları etkilemez.
 
@@ -448,7 +479,7 @@ Swift ve Kotlin testleri:
 - Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
-- İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`
+- İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`
 - Video: `video_hello`, `video_frame`, `video_frame_config`
 - Diğer: `unknown_type`
