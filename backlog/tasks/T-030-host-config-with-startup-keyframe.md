@@ -1,7 +1,7 @@
 ---
 id: T-030
 title: Mac — STARTUP/DECODE_ERROR keyframe isteğinde CODEC_CONFIG'i yeniden gönder (hızlı yeniden bağlanmada siyah ekran)
-status: todo
+status: review
 phase: 2
 owner: mac-host-dev
 depends_on: [T-014]
@@ -44,12 +44,31 @@ Yeni ekranda sorun yok, çünkü kodlayıcı yeni ve ilk karesi tabletin reset'i
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `MateBridgeCore/Video`: `KeyframeReason.resendsCodecConfig` (STARTUP, DECODE_ERROR, bilinmeyen: true; FRAMES_DROPPED: false).
+2. `BoundedFrameQueue.resync(config:)`: kuyruğu boşaltıp yalnızca `[config]` bırakır ve `awaitingKeyframe = true` yapar (yeni tüketici mantığıyla aynı). Böylece config, o istekten doğan keyframe'den önce kuyrukta durur; araya gelen eski delta kareler reddedilir, config atılmaz, birikmez (kuyruk her seferinde sıfırlanır). Ek olarak `push`, kuyrukta zaten aynı içerikte bir `CODEC_CONFIG` varsa ikincisini yutar (kodlayıcı ile yeniden gönderim çakışırsa çift config birikmez).
+3. `VideoFrameQueue.resync(config:)`: aynı işlem kilit altında; bekleyen tüketici varsa config'i hemen ona verir (bir sonraki push'u beklemez).
+4. `VideoPipeline.requestKeyframe(reason:) -> Bool`: sebep config gerektiriyor ve kodlayıcıda parametre seti varsa önce `frames.resync(config:)`, SONRA `encoder.requestKeyframe(resubmitNow: true)`. Sıra garantisi bu happens-before ile sağlanır: keyframe ancak `forceKeyframe` bayrağı kurulduktan sonra üretilir, bayrak ise kuyruk sıfırlandıktan sonra kurulur; yani o keyframe her zaman config'in arkasından push'lanır. Parametre seti yoksa bugünkü davranış (yalnızca keyframe isteği). Eski parametresiz `requestKeyframe()` (sender'ın reddedilen kare yolu) değişmez.
+5. `StreamCoordinator`: `.keyframeRequest(reason)` artık `pipeline.requestKeyframe(reason:)` çağırır; config yeniden gönderildiyse tek satır `ev=codec_config_resent reason=<n>` (component `net`).
+6. Testler (`Tests/MateBridgeCoreTests/Video`): STARTUP/DECODE_ERROR/bilinmeyen -> `[config, keyframe]` sırası; FRAMES_DROPPED sebebi config gerektirmez; art arda iki resync tek config; dolu kuyrukta config atılmaz; aynı config'in çift push'u tek kalır; async kuyrukta bekleyen tüketiciye config hemen teslim edilir.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** b403cfe (dal `task/T-030-host-config-with-startup-keyframe`; plan commit'i fabe2c9; kart durumu sonraki commit'te)
+- **Dokunulan dosyalar:** `MateBridgeCore/Video/KeyframeResync.swift` (yeni: `KeyframeReason.resendsCodecConfig`), `BoundedFrameQueue.swift` (`resync(config:)`, aynı config'in çift push'unu yutma), `VideoFrameQueue.swift` (`resync(config:)`, bekleyen tüketiciye anında teslim), `MateBridgeHost/Video/VideoPipeline.swift` (`requestKeyframe(reason:)`), `Session/StreamCoordinator.swift` (sebebi iletir, `ev=codec_config_resent reason=<n>` loglar, component `net`), `Tests/MateBridgeCoreTests/Video/KeyframeResyncTests.swift`.
+- **Sıra garantisi:** `VideoPipeline.requestKeyframe(reason:)` önce `frames.resync(config:)` (kuyruk kilit altında sıfırlanır: yalnızca `[config]`, `awaitingKeyframe = true`), sonra `encoder.requestKeyframe(resubmitNow: true)` çağırır. Keyframe ancak `forceKeyframe` bayrağı kurulunca üretilir, bayrak kuyruk sıfırlandıktan sonra kurulur; dolayısıyla o keyframe her zaman config'in arkasından push'lanır. Sıfırlamadan önce kodlanmış eski delta kareler `awaitingKeyframe` ile reddedilir (kabul kriterindeki "arada eski delta gidebilir" ifadesinden daha sıkı: hiç gitmezler). Kuyrukta bekleyen tüketici varsa config hemen ona verilir.
+- **Varsayımlar:** Bilinmeyen sebep DECODE_ERROR gibi (config gönderilir). Parametre seti yoksa yalnızca keyframe isteği (eski davranış), log yok. Sender'ın reddedilen-kare yolundaki parametresiz `requestKeyframe()` değişmedi. Aynı içerikli iki `CODEC_CONFIG` kuyrukta tek kalır; farklı içerikli config'ler (kodlayıcı yeniden ayarı) birbirini silmez.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `HEVCEncoder`/`VideoPipeline`/`StreamCoordinator` yalnızca derlendi (donanım gerektirir). `check.sh` geçti. Cihazda: `am force-stop` + 2 sn + `am start` beş kez; her seferinde host log'unda `keyframe_request reason=0` ardından `codec_config_resent reason=0`, tablet log'unda `output_format` ve `dec>0`. Ayrıca yeni ekranda (display_reused değil) regresyon olmadığı ve akış ortasında FRAMES_DROPPED sonrası config gelmediği.
+- **Açık sorular:** Yok.
+
+### İnceleme turu 1 (commit f0b260e)
+
+Kod commit'i: **f0b260e** (ilk uygulama b403cfe'dir). Durum `review`. `check.sh` geçti (ALL OK, uyarısız).
+
+1. **Bulgu 1 gerçekti.** `BoundedMailbox.post` aynı `coalesceKey`'li bekleyen olayı "latest wins" ile eziyordu; tüm keyframe istekleri tek anahtarı (`keyframeKey`) paylaştığından bekleyen STARTUP'ı sonradan gelen FRAMES_DROPPED ezebiliyordu (config yeniden gönderilmez, siyah ekran).
+   - Düzeltme: saf kural `KeyframeReason.merged(pending:incoming:)` (`MateBridgeCore/Video/KeyframeResync.swift`): bekleyen istek config gerektiriyor ve gelen gerektirmiyorsa bekleyen kalır, aksi halde sonradan gelen kazanır. `BoundedMailbox.post` isteğe bağlı `merge` kapanışı aldı (varsayılan latest-wins; diğer olaylar değişmedi). `StreamCoordinator.post` her zaman `mergeEvents` geçirir; yalnızca iki `keyframeRequest` birleşirken kural devreye girer.
+   - Testler: `merged` tablosu, mailbox'ta STARTUP -> FRAMES_DROPPED ve ters sıra, merge'siz post'un hâlâ latest-wins olduğu.
+2. **Bulgu 2: seçilen çözüm, anlık görüntüyü kuyruk kilidi altında almak.** `VideoFrameQueue.resync(config: () -> EncodedVideoFrame?)` ve `startNewConsumer(configProvider:)` sağlayıcıyı kuyruk kilidi tutulurken çağırır; kodlayıcı çıktısı `push` ile aynı kilidi kullandığından, kodlayıcının duyurduğu bir config anlık görüntü ile sıfırlama arasına giremez: ya zaten kuyruktadır (sağlayıcı yeni olanı görür) ya sıfırlamadan sonra kuyruğa girer. `VideoPipeline.requestKeyframe(reason:)` ve `prepareForNewConsumer` bunu kullanır (kilit sırası kuyruk -> kodlayıcı; `HEVCEncoder.handle` kendi kilidini `output` çağrısından önce bırakır, tersi yol yok).
+   - Neden bu seçenek: `HEVCEncoder` değişmiyor (donanım gerektiren dosyaya dokunulmadı), yeni kilit ya da durum yok, iki çağrı yeri de kapanıyor, saf çekirdekte test edilebiliyor. "Sonraki keyframe'de yeniden duyur" seçeneği kodlayıcıda bayrak ve yarış yüzeyi eklerdi.
+   - Yan etki için ek kural: anlık görüntü A, sıfırlama, sonra B'nin push'u durumunda kuyruk `[A, B]` olur ve 2 kapasitede keyframe'in kendisi atılırdı. `BoundedFrameQueue.push` artık kuyrukta yalnızca config'ler beklerken gelen farklı içerikli config'in eskileri değiştirmesini sağlar (`[B]`); gerçek karelerin arkasındaki config'lere dokunulmaz. Yani "farklı config'ler birbirini silmez" varsayımı yalnızca gerçek kareler kuyruktayken geçerli.
+   - Testler: sağlayıcı içinde eşzamanlı config push'u başlatılıp sağlayıcı 150 ms uyutulur (kilitsiz uygulamada B sıfırlamada silinirdi); sonuç `[B, keyframe]`. Ayrıca sağlayıcı nil dönerse kuyruk dokunulmadan kalır, `[config A] + push(B) + keyframe` durumunda keyframe yerini korur.
+3. **Hâlâ test edilmeyen:** kodlayıcı-kuyruk kilit etkileşimi gerçek `HEVCEncoder` ile (yalnızca derlendi); iki ardışık isteğin (STARTUP + FRAMES_DROPPED) cihazda tek `codec_config_resent reason=0` bırakması; yukarıdaki cihaz senaryoları.

@@ -25,10 +25,13 @@ public final class BoundedMailbox<Event: Sendable>: @unchecked Sendable {
     }
 
     @discardableResult
-    public func post(_ event: Event, coalesceKey: Int? = nil, forced: Bool = false) -> PostResult {
+    /// - Parameter merge: for a coalesced post, decides what the pending entry becomes given (pending, incoming).
+    ///   Default is latest wins. Use it when a later event must not downgrade an earlier one (keyframe requests).
+    public func post(_ event: Event, coalesceKey: Int? = nil, forced: Bool = false,
+                     merge: (@Sendable (_ pending: Event, _ incoming: Event) -> Event)? = nil) -> PostResult {
         let result: PostResult = lock.withLock {
             if let key = coalesceKey, let i = entries.firstIndex(where: { $0.key == key }) {
-                entries[i].event = event
+                entries[i].event = merge?(entries[i].event, event) ?? event
                 return .queued
             }
             if coalesceKey == nil, !forced, entries.filter({ $0.key == nil }).count >= capacity {
