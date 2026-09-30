@@ -172,6 +172,7 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 - 4:4:4 renk deneyi (yazı/ince çizgi netliği)
 - Tabletin yüksek yenileme hızı (90/120 Hz). Engeller: HarmonyOS video ve GL yüzeyini 60 Hz'de tutuyor, decoder kapasitesi "4K@60" (2800×1840'ta kabaca ~90 fps), Mac'te kare başına kodlama ~13–15 ms. Önce 60 fps akıcılığı. Kalem için 120 Hz gerekmez (kalem 330 Hz örnekleniyor ve ekran hızından bağımsız gönderiliyor).
 - Kalem için tahmini ink (local prediction)
+- **Wi-Fi'de kalem örneklerini zamana yayma (host).** Kullanıcı kararı, 2026-09-30: acelesi yok, en sona. Ölçüm (NOTES aynı tarih): USB'de kalem olayları Mac'e 2,8 ms aralıkla düzgün ulaşıyor; Wi-Fi'de aynı ~362 olay/sn öbekleniyor (aralık medyan 0,5–1,1 ms, %95 ~10 ms, en çok 10–14 ms) ve Krita'da hızlı eğriler köşeli görünüyor. Çözüm fikri: host örnekleri tabletin zaman damgasına göre enjekte eder (Wi-Fi'de tahminen 8–12 ms ek gecikme, USB'de ~0; kalem kalkışı ve release-all beklemeyi anında boşaltır). Kullanıcı çizim ve oyun için USB kullanacağını söyledi.
 - Ses aktarımı, pano paylaşımı
 - Kısayol çubuğu (tasarım uygulamaları için ekranda tuşlar: geri al, fırça boyutu vb.)
 
