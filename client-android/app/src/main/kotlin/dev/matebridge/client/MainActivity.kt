@@ -242,6 +242,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onViewAttachedToWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
             override fun onViewDetachedFromWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
         })
+        for (sv in listOf(video, videoGl)) {
+            sv.isFocusable = true
+            sv.isFocusableInTouchMode = true
+            sv.setOnCapturedPointerListener(capturedPointerListener)
+        }
         addFingerToggle()
         applyImmersive()
         render(SessionUi.Searching)
@@ -278,7 +283,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val on = started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty
         capture.setActive(on, nowMs)
         unbufferedPen.sync(on)
+        syncPointerCapture(on, nowMs)
         return on
+    }
+
+    private var lastCaptureRequestMs = 0L
+
+    /**
+     * Pointer capture (touchpad and mouse, T-034) is wanted while input is accepted, the window has focus and input is not
+     * suspended. The system drops it on focus loss, so it is requested again (at most every
+     * [POINTER_CAPTURE_RETRY_MS]). The touchscreen and the pen are not captured devices: their events keep coming through
+     * dispatchTouchEvent unchanged.
+     */
+    private fun syncPointerCapture(on: Boolean, nowMs: Long) {
+        val want = on && hasWindowFocus() && !capture.isSuspended
+        val v = videoView
+        if (want) {
+            if (!v.hasPointerCapture() && nowMs - lastCaptureRequestMs >= POINTER_CAPTURE_RETRY_MS) {
+                lastCaptureRequestMs = nowMs
+                v.requestFocus()
+                v.requestPointerCapture()
+            }
+        } else if (v.hasPointerCapture()) {
+            v.releasePointerCapture()
+        }
+    }
+
+    /** Captured pointer events (source TOUCHPAD / MOUSE_RELATIVE) go to the focused view; the activity hook may see them first. */
+    private val capturedPointerListener = View.OnCapturedPointerListener { _, ev -> routeToCapture(ev) }
+
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+        super.onPointerCaptureChanged(hasCapture)
+        if (hasCapture || !::capture.isInitialized) return
+        // Capture lost (focus, system, our own release): reported buttons go to 0 and an open pad scroll ends.
+        try {
+            capture.onPointerCaptureLost(SystemClock.uptimeMillis())
+        } catch (e: RuntimeException) {
+            inputFailed(e, SystemClock.uptimeMillis())
+        }
     }
 
     private fun routeToCapture(ev: MotionEvent): Boolean {
@@ -767,6 +809,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private companion object {
         const val KEYFRAME_RETRY_MS = 500L
         const val INPUT_TICK_MS = 25L
+        const val POINTER_CAPTURE_RETRY_MS = 500L
         const val INPUT_FAULT_BACKOFF_MS = 1000L
     }
 

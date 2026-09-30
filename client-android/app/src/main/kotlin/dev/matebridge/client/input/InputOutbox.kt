@@ -5,6 +5,7 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pen
 import dev.matebridge.client.protocol.PenSample
 import dev.matebridge.client.protocol.PointerAbs
+import dev.matebridge.client.protocol.PointerRel
 import dev.matebridge.client.protocol.ReleaseAll
 import dev.matebridge.client.protocol.Scroll
 
@@ -80,6 +81,7 @@ class InputOutbox(
                 is Pen -> counters.penMsgs++
                 is PointerAbs, is Scroll -> counters.touchMsgs++
                 is Key -> counters.keyMsgs++
+                is PointerRel -> counters.relMsgs++
                 else -> counters.otherMsgs++
             }
             return true
@@ -105,6 +107,10 @@ class InputOutbox(
             }
             if (a is Scroll && b is Scroll && a.phase == Scroll.CHANGED && b.phase == Scroll.CHANGED) {
                 return Scroll(b.timeUs, a.dx + b.dx, a.dy + b.dy, Scroll.CHANGED)
+            }
+            if (a is PointerRel && b is PointerRel && a.buttons == b.buttons) {
+                // A button change is never merged: only motion with an unchanged button state adds up.
+                return PointerRel(b.timeUs, a.dx + b.dx, a.dy + b.dy, b.buttons)
             }
             return null
         }
