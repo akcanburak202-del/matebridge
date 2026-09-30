@@ -28,6 +28,17 @@ T-022'nin `InjectAction`'larını gerçek macOS olaylarına çevirmek ve oturumd
 - [ ] Doğrulama aracı: `MateBridgeApp --inject-test` benzeri bir mod, fixture PEN mesaj dizisini (ör. `pen_hover_to_contact`) sanal ekrana enjekte eder; orkestratör Krita'da kontrol eder.
 - [ ] `./scripts/check.sh` geçiyor.
 
+## Notlar (T-022 incelemesinden, 2026-09-30)
+
+T-022'nin `InputStateMachine`'ini tüketirken uyulacak sözleşme (PROTOCOL.md §4 ve §7, aynı tarihli netleştirmeler):
+
+- **Oturum başına yeni makine.** Bir oturumun makinesi sonrakine taşınmaz.
+- **Tek saat.** `handle(_:now:)` ve `tick(now:)` aynı monoton saatten (`HostClock`) beslenir. Zamanlayıcı `nextDeadline`'a göre kurulur.
+- **Tek kuyruk.** Makine kilitsiz bir değer tipidir; mesaj, tick ve release-all yalnızca oturum kuyruğundan çağrılır.
+- **`mouseButton` imlecin o anki konumunda uygulanır.** Injector son enjekte ettiği konumu tutar.
+- **Kaydırma:** zorla bitirilen hareket ENDED olarak enjekte edilir ve atalet üretilmez. Release-all, süren ataleti de durdurur (makinede bunun durumu yok; injector'ın işi).
+- Kritik: bu kart da Codex `--high` incelemesinden geçer.
+
 ## Plan
 
 _(Ajan doldurur.)_

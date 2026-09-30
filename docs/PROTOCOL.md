@@ -174,14 +174,14 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 
 **Eğim yönü:** Mac tarafında `tilt_x`/`tilt_y` doğrudan `NSEvent.tilt` anlamındadır: x −1 sol … +1 sağ, y −1 üst … +1 alt. Android dönüşümü **geçicidir ve cihazda kalibre edilecektir**: `θ = AXIS_TILT` (0 = dik), `φ = AXIS_ORIENTATION` (0 = yukarı, saat yönünde pozitif), `tilt_x = sin θ · sin φ`, `tilt_y = −sin θ · cos φ`. Aşama 0'da temas sırasında eğimin seyrek güncellendiği görüldü. İstemci son bilinen değeri tekrarlar.
 
-**Menzil canlılığı:** Kalem `IN_RANGE` iken istemci en az **100 ms**'de bir PEN mesajı gönderir. Yeni örnek yoksa son örneği güncel zamanla tekrarlar. Host bunu watchdog için kullanır (§7). Android `HOVER_EXIT` göndermeden kalem kaybolsa bile Mac'te kalem takılı kalmaz.
+**Menzil canlılığı:** Kalem `IN_RANGE` iken istemci en az **100 ms**'de bir PEN mesajı gönderir. Yeni örnek yoksa son örneği güncel zamanla tekrarlar. Tekrarlanan örnek `STROKE_START` **taşımaz** (bayrak yalnızca gerçek `ACTION_DOWN` örneğindedir). Host bunu watchdog için kullanır (§7). Android `HOVER_EXIT` göndermeden kalem kaybolsa bile Mac'te kalem takılı kalmaz.
 
 **İstemci kuralları:**
 - `ACTION_HOVER_EXIT` ve kalemin menzilden çıkması `flags = 0` olan bir örnekle bildirilir.
 - `ACTION_CANCEL` de `flags = 0` olan bir örnek olarak gönderilir.
 - Avuç (FINGER tool) örnekleri PEN'e girmez.
 
-**Host durum makinesi:** her araç için önceki örneğin durumu tutulur (başlangıçta ve her release-all sonrasında `flags = 0`).
+**Host durum makinesi:** tek bir fiziksel kalem vardır, bu yüzden aynı anda en çok **bir** araç menzildedir. Host etkin aracı ve onun önceki örneğinin durumunu tutar (oturum başında ve her release-all sonrasında `flags = 0`).
 
 | Geçiş | Host'un ürettiği |
 |---|---|
@@ -192,10 +192,17 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 | `IN_RANGE` 1→1, temas yok | mouse **moved** (hover) |
 | `IN_RANGE` 1→0 | temas sürüyorsa önce mouse **up**, sonra proximity **leave** |
 | `tool` değişti | eski araç için up (gerekirse) + leave, yeni araç için enter |
+| `STROKE_START`, temas sürerken | mouse **up** + mouse **down** (yeni vuruş). İstemci bunu normalde üretmez: iki vuruş arasında her zaman `CONTACT=0` olan bir örnek vardır (§5). |
 
-**Kilit (latch) kuralı:** **Her** release-all'dan sonra (§7, sebebi ne olursa olsun) her araç için kilit kurulur. Kilit varken `CONTACT=1` örnekler yeni bir basış **sayılmaz** ve yalnızca hover olarak işlenir. Kilit, `CONTACT=0` olan bir örnek veya `STROKE_START` bayraklı bir örnek geldiğinde kalkar. Bu kural, gecikmiş gelen eski vuruş **ortası** örneklerinin Mac'te sürükleme başlatmasını önler. Yeni bir vuruş `STROKE_START` ile hemen başlar.
+- **Bırakma araçtan bağımsızdır:** `IN_RANGE=0` olan bir örnek, hangi `tool` değeriyle gelirse gelsin etkin aracı kapatır (up gerekirse + leave). Bir bırakma hiçbir zaman "yanlış araç" diye yok sayılmaz.
+- **Etkin araç:** host'ta silgi modu açıksa (0x15 `PEN_GESTURE`, karar 0006) `tool=PEN` örnekler silgi sayılır. Mod değişimi bir sonraki PEN örneğinde `tool` değişti satırıyla uygulanır.
 
-**Kabul edilen davranış:** Bağlantı tıkanıp host watchdog'u çalıştıktan sonra, kuyrukta bekleyen **tam** bir vuruş (`STROKE_START`…bırakma) geç de olsa çizilir. Bu takılı girdi yaratmaz, çünkü vuruşun bırakma örneği aynı sıralı akışta arkasından gelir. Gecikmenin üst sınırı istemci kuyruk sınırıdır (§5, 1 sn).
+**Kilit (latch) kuralı:** **Oturum başında** ve **her** release-all'dan sonra (§7, sebebi ne olursa olsun) her araç için kilit kurulur. Kilit varken `CONTACT=1` örnekler yeni bir basış **sayılmaz** ve yalnızca hover olarak işlenir. Kilit, `CONTACT=0` olan bir örnek veya `STROKE_START` bayraklı bir örnek geldiğinde kalkar. Bu kural, gecikmiş gelen eski vuruş **ortası** örneklerinin Mac'te sürükleme başlatmasını önler. Yeni bir vuruş `STROKE_START` ile hemen başlar.
+
+- Temas sürerken araç değişirse (çift dokunmayla silgi modu dahil) **yeni araç kilitli başlar**: vuruşun kalanı hover olarak işlenir, yeni araçla çizmek için kalemi kaldırıp yeniden basmak gerekir.
+- **Watchdog kilit kurmaz** (§7). Watchdog kapanışından sonra gelen vuruş ortası örnekleri yeni bir vuruş başlatır; kısa bir ağ takılmasında çizginin kalanı kaybolmaz, iki vuruşa bölünür.
+
+**Kabul edilen davranış:** Bağlantı tıkanıp host watchdog'u çalıştıktan sonra, kuyrukta bekleyen bir vuruş (tam ya da yarıda kalmış) geç de olsa çizilir. Bu takılı girdi yaratmaz, çünkü vuruşun bırakma örneği aynı sıralı akışta arkasından gelir. Gecikmenin üst sınırı istemci kuyruk sınırıdır (§5, 1 sn).
 
 ### 0x11 KEY (C→H)
 
@@ -269,6 +276,7 @@ Pointer capture'daki ham iki parmak hareketinden istemcinin ürettiği hassas ka
 - Doğal kaydırma yönü, ölçek ve atalet (momentum) host'ta uygulanır. Protokol yalnızca parmak hareketini taşır.
 - Her BEGAN'ın ardından ENDED veya CANCELLED gelmesi zorunludur.
 - Host kuralları: BEGAN olmadan gelen CHANGED/ENDED yok sayılır. Açık bir hareket varken yeni BEGAN gelirse önce eskisi bitirilir.
+- **Zorla bitirme:** host'un kendi bitirdiği hareket (yeni BEGAN, watchdog, release-all; §7) Mac'e **ENDED** olarak gider ve ardından **atalet üretilmez**. İstemciden gelen `CANCELLED` ise Mac'e iptal olarak gider.
 
 ### 0x15 PEN_GESTURE (C→H)
 
@@ -281,7 +289,7 @@ Kalemin kendi hareketleri. M-Pencil'in çift dokunması ayrı bir Bluetooth ciha
 | reserved | u8 | |
 | reserved2 | u16 | |
 
-Host'taki karşılığı bir ayardır (ör. silgiye geç, geri al).
+Host'taki karşılığı bir ayardır. Varsayılan (karar 0006): `DOUBLE_TAP` **silgi modunu** açıp kapatır. Mod oturum boyunca kalır; release-all'da ve oturum sonunda kalem moduna döner.
 
 ### 0x16 RELEASE_ALL (C→H)
 
@@ -387,8 +395,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 **Release-all**, host'un bu oturum için tuttuğu **bütün** girdi durumunu bırakıp sıfırlaması demektir:
 - basılı tuşlar için UP (kayıtlı virtual keycode ile) ve otomatik tekrarın durması,
 - basılı fare düğmeleri için up,
-- kalem teması için up ve yakınlık için leave, araç başına `flags = 0` ve reset sonrası kuralı (§4 PEN),
-- açık kaydırma hareketi için ENDED.
+- kalem teması için up ve yakınlık için leave, araç başına `flags = 0` ve reset sonrası kuralı (§4 PEN), silgi modunun kapanması,
+- açık kaydırma hareketi için ENDED (ataletsiz, §4 SCROLL) ve süren ataletin durması.
+
+İşaretçi kaynaklarının **bildirdiği** düğme durumu release-all'da sıfırlanmaz (aşağıda "işaretçi kilidi"). Host her oturum için girdi durumunu sıfırdan kurar; bir oturumun durumu sonrakine taşınmaz.
 
 **Tetikleyiciler** (her biri tek başına yeterli):
 - `RELEASE_ALL` mesajı, `BYE` (gelen veya giden)
@@ -399,19 +409,24 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 
 **Girdi watchdog'ları** (bağlantı canlı olsa bile, çünkü PING girdi yolunu kanıtlamaz):
 - Kalem `IN_RANGE` iken **500 ms** PEN gelmezse host o araç için up (temas varsa) + leave üretir ve `flags = 0` sayar.
-- SCROLL hareketi açıkken **500 ms** SCROLL gelmezse host hareketi bitirir.
+- SCROLL hareketi açıkken **500 ms** SCROLL gelmezse host hareketi bitirir (zorla bitirme, §4 SCROLL).
+- Süre host'un **tek** monoton saatiyle, mesajın **alındığı** ana göre ölçülür (mesajdaki `*_time_us` kullanılmaz). Her girdi mesajı işlenmeden önce süresi dolmuş watchdog'lar uygulanır: önce kapanış, sonra mesaj. Böylece sonuç zamanlayıcının ne zaman çalıştığına bağlı olmaz. Saat geri gitmiş görünürse süre o andan yeniden başlatılır; watchdog en kötü 500 ms gecikir, hiçbir zaman devre dışı kalmaz.
+- Watchdog kapanışı release-all **değildir**: kilit kurmaz (§4), silgi modunu ve diğer kaynakları etkilemez.
 
 **Kaynak ayrımı:** Host her kaynak için (kalem teması, `POINTER_REL`, `POINTER_ABS source=MOUSE`, `POINTER_ABS source=TOUCH`) basılı düğmeleri **ayrı** tutar.
 - **Sol düğmenin tek sahibi vardır.** Sahip olmayan bir kaynağın sol düğme basışı ve bırakışı Mac'e gitmez, yalnızca o kaynağın kendi durumunu günceller.
 - **Kalem önceliklidir:** Kalem teması başladığında (`CONTACT` 0→1) sol düğme başka bir kaynaktaysa, host önce o kaynak adına **up** üretir, sonra kalem için tablet-point **down** üretir. Böylece çizim programı kalem vuruşunu her zaman ayrı ve basınçlı bir vuruş olarak görür. Önceki sahibin sonraki bırakışı etkisizdir. Tekrar basmak için önce bırakıp yeniden basması gerekir.
 - Kalem temas halindeyken başka kaynakların sol düğme basışları yok sayılır.
 - Sağ, orta, geri ve ileri düğmeleri için Mac'e giden durum, kaynakların birleşimidir (OR). Birleşik durum 0→1 olunca down, 1→0 olunca up üretilir.
-- Kalem `IN_RANGE` iken `POINTER_ABS source=TOUCH` mesajlarındaki **yeni basışlar** yok sayılır (avuç reddi). **Sahibin bırakışı asla yok sayılmaz:** dokunma kaynağı sol düğmenin sahibiyse, kalem menzildeyken de bırakılır.
+- Kalem `IN_RANGE` iken ve son PEN mesajından sonraki **1 sn** boyunca (karar 0006) `POINTER_ABS source=TOUCH` mesajlarındaki **yeni basışlar** yok sayılır (avuç reddi). **Sahibin bırakışı asla yok sayılmaz:** dokunma kaynağı sol düğmenin sahibiyse, kalem menzildeyken de bırakılır.
+- **İmleç hareketi:** sol düğmenin sahibi varken diğer kaynakların imleç hareketi (kalem hover dahil) Mac'e gitmez. Basışı kabul edilmemiş bir parmak imleci taşımaz.
+- **İşaretçi kilidi:** `POINTER_*` mesajları kenar değil **tam durum** taşır; host basış/bırakışı kaynağın son bildirdiği duruma göre hesaplar ve bu bildirilen durumu release-all'da **sıfırlamaz**. Release-all anında basılı bildirilmiş bir düğme, o kaynak onu bırakılmış bildirene kadar yeni basış sayılmaz. Kalemdeki kilidin karşılığıdır: gecikmiş bir "hâlâ basılı" mesajı hayalet tık ya da sürükleme üretmez.
 
 **İstemcinin yükümlülükleri:**
 - İstemci bir DOWN gönderdiyse ilgili UP'u da gönderir. Göndermeden bağlantı koparsa host release-all ile telafi eder.
 - **Tek sıralı gönderim:** Bütün girdi mesajları ve `RELEASE_ALL`, olayların üretildiği sırayla **tek bir FIFO**'ya yazılır. Android'de girdi olayları ve yaşam döngüsü çağrıları (`onPause`, odak kaybı) aynı UI iş parçacığında gelir; kuyruğa oradan, o sırayla yazılır. Başka bir iş parçacığı girdi mesajı üretmez.
 - `RELEASE_ALL`'dan sonra istemci, ilgili cihaz/odak geri gelene kadar girdi göndermez. Geri geldiğinde kalem için ilk temas örneği `STROKE_START` taşımıyorsa (vuruşun ortası) temas olarak gönderilmez, yalnızca hover olarak gönderilir.
+- **İşaretçi düğmeleri ve `RELEASE_ALL`:** istemci `RELEASE_ALL` göndermeden **hemen önce**, o anda basılı bildirdiği her işaretçi kaynağı için `buttons = 0` olan bir mesaj gönderir (`POINTER_ABS`'ta son bilinen konumla). Sonrasında bir düğmeyi yalnızca **yeni bir basış olayı** gördüğünde basılı bildirir (parmakta `ACTION_DOWN`, farede `ACTION_BUTTON_PRESS`). Odak geri geldiğinde hâlâ basılı olan düğme ya da süren dokunuş, bırakılıp yeniden basılana kadar bildirilmez. Bu kural olmadan host'taki işaretçi kilidi, release-all'dan sonraki ilk dokunuşu yutardı.
 
 ## 8. Fixture'lar
 

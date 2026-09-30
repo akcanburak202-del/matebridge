@@ -21,6 +21,7 @@ PLAN Aşama 2 "Bitti" ölçütünü kullanıcıyla doğrulamak.
 - [ ] 15 dakikalık serbest çizim: kopuk çizgi yok, takılı kalan tık yok. Arada Wi-Fi kesme / uygulamayı arka plana alma / kablo çekme denemeleri → Mac'te hiçbir düğme basılı kalmaz.
 - [ ] Avuç reddi: kalemle çizerken avuç ekrana değince çizgi bozulmaz.
 - [ ] Dokunma: tek dokunuş tık, sürükleme, iki parmak kaydırma.
+- [ ] T-022 incelemesinden gelen kontroller: uygulamayı arka plana alıp döndükten sonraki **ilk** dokunuş tık üretiyor (işaretçi kilidi, PROTOCOL §7); kalem ekranda kıpırdamadan dururken çizgi 100 ms'de bir bölünmüyor (canlılık tekrarı `STROKE_START` taşımıyor); parmakla sürüklerken kalem yaklaşınca imleç iki konum arasında zıplamıyor.
 - [ ] Kalem gecikmesi: hover/uç ile imleç arasındaki fark (telefon slow-motion ya da log zaman damgaları); gerekirse tablette yerel imleç noktası kararı.
 - [ ] Sonuç tablosu `docs/NOTES.md`'de; kullanıcının kullandığı tasarım uygulamaları varsa onlar da.
 
