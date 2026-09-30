@@ -1,7 +1,7 @@
 ---
 id: T-032
 title: Mac klavye — KEY → macOS keycode, değiştiriciler, otomatik tekrar, Caps Lock, release-all
-status: todo
+status: review
 phase: 3
 owner: mac-host-dev
 depends_on: [T-023]
@@ -50,8 +50,25 @@ Mimari: klavye mevcut boru hattına (InputStateMachine → InjectionPlanner → 
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** `ba38470` (kod) + bir handoff commit'i; dal `task/T-032-host-keyboard`. `./scripts/check.sh` → ALL OK (Core testleri dahil ~360 test; klavye: KMAP-*, KEY-*, PLAN-K*, KPIPE-*, KFUZZ-*).
 - **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Core (yeni): `Input/KeyMap.swift` (tablo, `ModifierKey`, `KeyFlags`, `ModifierMapping`), `Input/InputStateMachine+Keyboard.swift`.
+  - Core (değişen): `InjectAction` (keyDown/keyUp/modifierDown/modifierUp/setCapsLock), `MacEvent` (`.key(MacKey)`, `.capsLock(on:)`, `InjectionEnvironment.capsLockOn`), `MacEvent+Closing`, `InjectionPlanner` (gölge durum + flags), `OwedRelease` (slotlar + bayat flags düzeltmesi), `ReleaseRecord`, `InputPipeline` (`setMachineConfiguration`), `InputStateMachine`.
+  - Host: `CGEventPoster.swift` (klavye olayı, ISO türü), `CapsLock.swift` (yeni; `CapsLockControlling`/`SystemCapsLock`), `InputController.swift`, `InjectTest.swift` (`--keys`, `--key-hold`; ÇALIŞTIRILMADI).
+  - Testler: yeni `KeyMapTests`, `KeyboardStateTests`, `KeyboardPlannerTests`, `KeyboardFuzzTests`; mevcutlarda yalnızca kapsamlı `switch`'lere klavye dalları (`InputTestSupport`, `InjectionPlannerTests`, `InputPipelineTests`) ve `SafetyTests` MISC-1 (KEY artık yok sayılmıyor).
+- **Varsayımlar / kararlar:**
+  - **Klavye türü:** `CGEventFactory.isoKeyboardType = 41` (`kbdtype` numaralandırması: 40 ANSI, 41 ISO, 42 JIS). Bu sayıyı belgeden değil bellekten aldım; **cihazda doğrulanmalı** (belirti: `"`/`<` tuşlarında yanlış karakter). Yalnızca event alanı (`keyboardEventKeyboardType`) ayarlanır, `CGEventSource`'a dokunulmaz. Yanlışsa tek sabit değişir.
+  - **ISO takası:** evdev 41 → 0x0A (`kVK_ISO_Section`), evdev 86 → 0x32 (`kVK_ANSI_Grave`) (karar 0008).
+  - **Insert** → `Help` (0x72). Num Lock, Scroll Lock, SysRq, Menu, medya tuşları eşlenmedi (bilinmeyen sayılır).
+  - **Caps Lock API:** `IOHIDSetModifierLockState(conn, kIOHIDCapsLockState, on)` (mutlak durum, toggle değil; okuma `IOHIDGetModifierLockState`), tek tipte (`SystemCapsLock`, `CapsLockControlling` arkasında). `MacEvent.capsLock(on:)` Core'dan soyut; Mac durumu `InjectionEnvironment.capsLockOn` ile (yalnızca KEY mesajlarında örneklenir) gelir, planner farklıysa olay üretir. Hata `caps_lock_set_failed` olarak bir kez loglanır, batch durmaz, bir sonraki KEY mesajı yeniden dener. Caps Lock açıkken olayların explicit `flags` değeri `.capsLock` bitini taşır (yoksa flags ataması Caps bitini düşürür ve harfler küçük çıkar).
+  - **Caps semantiği:** Caps DOWN hiçbir şey yapmaz; Caps UP ve diğer her KEY olayı (bilinmeyen/yinelenen dahil) `lock_state`'i uygulatır, olaydan önce.
+  - **Flags** planner'ın kendi gölge durumundan (basılı değiştiriciler) hesaplanır: kapıda düşen bir değiştirici sonraki tuşun flags'ine girmez. Aggregate bit + sol/sağ cihaz biti ayrı tutulur; iki taraf basılıyken biri kalkınca aggregate kalır.
+  - **Otomatik tekrar:** makinenin `nextDeadline`/`tick` düzeninde; değiştirici olmayan son DOWN tekrarlar; başka **her** kabul edilmiş DOWN (değiştirici dahil) durdurur; geç zamanlayıcı tek tekrar üretir (patlama yok); geri giden saat yeniden çıpalanır. Gecikme/aralık `NSEvent.keyRepeatDelay/Interval`'dan her oturum başında örneklenir (saçma değerde varsayılan 0.5 s / 83 ms).
+  - Aynı Mac tuşuna iki kimlik (ör. scan 30 ve android 29) → tek down, son up'ta tek up.
+  - **Bayat flags düzeltmesi (OwedRelease):** borçlu değiştirici up'ları slot sırasıyla tekrar oynatıldığı için üretimdeki flags yanlış olabiliyordu (son up hâlâ bir değiştiriciyi basılı gösterip flagsChanged ile yapışık flags bırakabilirdi; fuzz yakaladı). Tekrar oynatmada flags yeniden hesaplanır (`reflowModifierFlags`).
+  - Gizlilik: yalnızca sayaçlar (`key_msgs`, `unknown_keys`, `repeats` → `input_session_end` satırı) ve bilinmeyen kimliğin numarası `debug` düzeyinde (`key_unknown`). Karakter/metin hiç loglanmaz.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** hiçbir CGEvent gönderilmedi. Doğrulanacak: (1) `isoKeyboardType = 41` ve ISO takası: Türkçe karakterler (ğüşıöç, `"`, `<`, AltGr+Q=@); (2) `flagsChanged` ile `CGEvent(keyboardEventSource:)` yapısı ve explicit flags'in uygulamalarda Cmd+C/V/Tab'ı doğru tetiklemesi; (3) `IOHIDSetModifierLockState`'in macOS 27'de ek izin isteyip istemediği ve Caps Lock'un gerçekten değişmesi (yoksa yedek: sentetik Caps flagsChanged); (4) sentetik tuşların tekrar üretimi (`keyboardEventAutorepeat=1`) ve tekrar hızı; (5) arka plana alınca basılı tuş kalmaması; (6) `--inject-test --keys "cmd+a,tab" --key-hold 1500` (yalnızca eklendi, çalıştırılmadı).
 - **Açık sorular:**
+  - Fare/kalem olaylarına değiştirici flags (Cmd+tık) eklenmedi; kapsam dışı sayıldı (MacMouse/MacTabletPoint imzası değişirdi). İstenirse ayrı kart.
+  - Bir istemci UP'ı kaybeder ama bağlı kalırsa tuş sonsuza dek tekrarlar (protokol "her DOWN için UP" diyor; release-all/oturum sonu koruyor). Gerekirse tekrar için üst süre (ör. 30 s) eklenebilir.
+  - `KeyMap` Android yedek tablosu yalnızca yaygın tuşları kapsar (harf, rakam, ok, F1-F12, keypad, değiştiriciler).
