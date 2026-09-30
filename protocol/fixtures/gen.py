@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 T = {
     "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
-    "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16,
+    "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
 }
@@ -298,6 +298,33 @@ FIXTURES = {
         field("u8", "phase", 3, "ENDED"),
         field("u8", "reserved", 0),
         field("u16", "reserved2", 0),
+    ])),
+    "pinch_began": ("PINCH: two-finger pinch begins on the touchscreen, center left of middle", frame("PINCH", [
+        field("u64", "time_us", 1127500800000),
+        field("f32", "scale", 0.0),
+        field("u16", "x", 24576),
+        field("u16", "y", 32768),
+        field("u8", "phase", 1, "BEGAN"),
+        field("u8", "source", 0, "TOUCH"),
+        field("u16", "reserved", 0),
+    ])),
+    "pinch": ("PINCH: fingers spread 5 percent since the previous message", frame("PINCH", [
+        field("u64", "time_us", 1127500816000),
+        field("f32", "scale", 0.05),
+        field("u16", "x", 24576),
+        field("u16", "y", 32768),
+        field("u8", "phase", 2, "CHANGED"),
+        field("u8", "source", 0, "TOUCH"),
+        field("u16", "reserved", 0),
+    ])),
+    "pinch_ended": ("PINCH: gesture ends on the touchpad", frame("PINCH", [
+        field("u64", "time_us", 1127500900000),
+        field("f32", "scale", 0.0),
+        field("u16", "x", 0),
+        field("u16", "y", 0),
+        field("u8", "phase", 3, "ENDED"),
+        field("u8", "source", 1, "TOUCHPAD"),
+        field("u16", "reserved", 0),
     ])),
     "unknown_type": ("MUST BE SKIPPED: unknown message type 0x7f with a 3-byte payload", [
         (struct.pack("<B", 0x7F), "header u8 type = 0x7f (unknown)"),
