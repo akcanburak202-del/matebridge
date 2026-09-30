@@ -1,7 +1,7 @@
 ---
 id: T-028
 title: Hızlı yeniden bağlanmada siyah ekran — sanal ekran yeniden kullanılınca tablet hiç kare çözmüyor
-status: todo
+status: done
 phase: 2
 owner: orchestrator
 depends_on: [T-014, T-015]
@@ -34,9 +34,9 @@ Tablet, host'un 10 saniyelik sanal ekran bekleme süresi (`display_grace_started
 
 ## Kabul kriterleri
 
-- [ ] Kök neden NOTES'ta, kanıtıyla.
-- [ ] Düzeltme kartı açıldı ve merge edildi; 2 sn içinde yeniden bağlanmada görüntü 1 sn içinde geliyor (5/5), durağan ekranda da.
-- [ ] Tablet, kare alıp N ms içinde hiç çıktı üretemezse anahtar kare istiyor (kurtarma) — ya da neden gerekmediği yazılı.
+- [x] Kök neden NOTES'ta, kanıtıyla.
+- [x] Düzeltme kartı açıldı ve merge edildi (T-030); 2 sn içinde yeniden bağlanmada görüntü 1 sn içinde geliyor (5/5), durağan ekranda da.
+- [x] Tablet, kare alıp N ms içinde hiç çıktı üretemezse anahtar kare istiyor (kurtarma) — ya da neden gerekmediği yazılı. Gerekmedi: tablet zaten `KEYFRAME_REQUEST(STARTUP)` gönderiyordu; eksik olan host'un config'i yeniden göndermesiydi (T-030).
 
 ## Geçici çözüm
 
@@ -52,8 +52,8 @@ Yeniden kullanılan ekranda host `[CODEC_CONFIG, keyframe]`'i video bağlantıs�
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** T-030 merge 3edf9d0; cihazda 5/5 doğrulandı (2026-09-30).
 - **Dokunulan dosyalar:**
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Açık sorular:** İstemci `STREAM_CONFIG`'i video bağlantısını açmadan önce uygulamıyor (PROTOCOL §3 adım 5 sırası). T-030 ile zararsız; ilk kare ≈50 ms gecikiyor. Faz 4 temizliğine aday.

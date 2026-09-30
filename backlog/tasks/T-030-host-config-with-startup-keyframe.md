@@ -1,7 +1,7 @@
 ---
 id: T-030
 title: Mac — STARTUP/DECODE_ERROR keyframe isteğinde CODEC_CONFIG'i yeniden gönder (hızlı yeniden bağlanmada siyah ekran)
-status: review
+status: done
 phase: 2
 owner: mac-host-dev
 depends_on: [T-014]
@@ -72,3 +72,7 @@ Kod commit'i: **f0b260e** (ilk uygulama b403cfe'dir). Durum `review`. `check.sh`
    - Yan etki için ek kural: anlık görüntü A, sıfırlama, sonra B'nin push'u durumunda kuyruk `[A, B]` olur ve 2 kapasitede keyframe'in kendisi atılırdı. `BoundedFrameQueue.push` artık kuyrukta yalnızca config'ler beklerken gelen farklı içerikli config'in eskileri değiştirmesini sağlar (`[B]`); gerçek karelerin arkasındaki config'lere dokunulmaz. Yani "farklı config'ler birbirini silmez" varsayımı yalnızca gerçek kareler kuyruktayken geçerli.
    - Testler: sağlayıcı içinde eşzamanlı config push'u başlatılıp sağlayıcı 150 ms uyutulur (kilitsiz uygulamada B sıfırlamada silinirdi); sonuç `[B, keyframe]`. Ayrıca sağlayıcı nil dönerse kuyruk dokunulmadan kalır, `[config A] + push(B) + keyframe` durumunda keyframe yerini korur.
 3. **Hâlâ test edilmeyen:** kodlayıcı-kuyruk kilit etkileşimi gerçek `HEVCEncoder` ile (yalnızca derlendi); iki ardışık isteğin (STARTUP + FRAMES_DROPPED) cihazda tek `codec_config_resent reason=0` bırakması; yukarıdaki cihaz senaryoları.
+
+### Cihaz doğrulaması (orkestratör, 2026-09-30 18:35)
+
+Yeni host paketiyle `am force-stop` + 2 sn + `am start` beş kez: 5/5 `display_reused` → `keyframe_request reason=0` → `codec_config_resent reason=0`; tablette her seferinde `output_format` ve durağan ekranda `recv=2 dec=1 shown=1`. Yeni ekranda (ilk bağlantı) regresyon yok. Akış ortasında FRAMES_DROPPED sonrası config gelmediği ve STARTUP+FRAMES_DROPPED birleşmesi canlı oturumda izlenecek (T-025).
