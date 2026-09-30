@@ -102,6 +102,29 @@ class SessionMachineTest {
         assertFalse(r.has<Action.Send>())
     }
 
+    @Test fun acceptedSendsOneImmediatePingFirstAndSecond() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val pend = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
+        assertFalse(pend.has<Action.Send>())
+        val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
+        assertTrue(acc.only<Action.Send>().msg is Ping)
+        // direct ACCEPTED (PAIRED) also proves the key at once
+        val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen2))
+        val acc2 = step(Event.Received(gen2, ack(HelloAck.ACCEPTED, 6, 7421)))
+        assertTrue(acc2.only<Action.Send>().msg is Ping)
+    }
+
+    @Test fun keyStoreFailureFailsTheSessionWithoutRetry() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val r = step(Event.KeyStoreFailed(gen))
+        assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED)), r.ui())
+        assertFalse(m.inputAllowed)
+        assertFalse(step(Event.Tick(0), 60_000_000).has<Action.OpenControl>())
+    }
+
     @Test fun rejectedAndVersionMismatchAreTerminal() {
         for ((status, cause) in listOf(
             HelloAck.REJECTED to SessionUi.Cause.REJECTED,

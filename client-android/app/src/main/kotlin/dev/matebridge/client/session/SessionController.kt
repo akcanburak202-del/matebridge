@@ -22,6 +22,7 @@ import dev.matebridge.client.security.RecordDecoder
 import dev.matebridge.client.security.RecordOpener
 import dev.matebridge.client.security.RecordSealer
 import dev.matebridge.client.security.SecureSession
+import dev.matebridge.client.security.VideoChannel
 import dev.matebridge.client.security.SessionSecrets
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
@@ -188,6 +189,7 @@ class SessionController(
             is SessionMachine.Event.ProtocolError -> MbLog.e("protocol_error")
             is SessionMachine.Event.Secured -> MbLog.i("secured", "pairing=${e.code != null} re_pairing=${e.rePairing}") // never the code
             is SessionMachine.Event.KeyMissing -> MbLog.w("pair_key_missing")
+            is SessionMachine.Event.KeyStoreFailed -> MbLog.w("pair_key_store_failed")
             is SessionMachine.Event.VideoClosed -> MbLog.w("video_closed", "vgen=${e.gen}")
             is SessionMachine.Event.Received -> when (val m = e.msg) {
                 is HelloAck -> MbLog.i("hello_ack", "status=${m.status} key_mode=${m.keyMode} video_port=${m.videoPort}")
@@ -366,7 +368,10 @@ class SessionController(
                         // The new pairing key is stored when the Mac's approval arrives, before the UI shows "connected".
                         if (sec.onMessage(msg, pairKeys)) MbLog.i("pair_key_stored")
                     } catch (e: Exception) {
-                        MbLog.w("pair_key_store_failed") // the session continues; the next connection pairs again
+                        // Not persisted: the next connection would be PAIRED without a key. Fail instead of pretending.
+                        closedPosted.set(true)
+                        events.put(SessionMachine.Event.KeyStoreFailed(gen)) // the key itself is never logged
+                        return
                     }
                     events.put(SessionMachine.Event.Received(gen, msg))
                 }
@@ -424,12 +429,12 @@ class SessionController(
             try {
                 // Fresh nonce per video connection; both directions' keys come from it (section 9).
                 val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
-                val keys = secrets.videoKeys(nonce)
-                val decoder = RecordDecoder(Limits.VIDEO_MAX_PAYLOAD, RecordOpener(keys.h2c))
-                keys.c2h.fill(0) // the client sends nothing on the video connection after VIDEO_HELLO
+                val channel = VideoChannel(secrets.videoKeys(nonce))
+                val decoder = channel.decoder
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
-                socket.getOutputStream().apply { write(Codec.encode(hello.copy(videoNonce = Bytes(nonce)))); flush() }
+                // VIDEO_HELLO in plaintext, then one sealed PING as proof of the key (the host sends no frames before it).
+                socket.getOutputStream().apply { write(channel.opening(hello, nonce, nowUs())); flush() }
                 val input = socket.getInputStream()
                 while (true) {
                     val n = input.read(buf)

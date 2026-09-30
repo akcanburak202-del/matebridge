@@ -18,5 +18,5 @@ sealed interface SessionUi {
     /** Terminal until the user retries: no automatic reconnect. */
     data class Failed(val cause: Cause) : SessionUi
 
-    enum class Cause { LOST, HOST_CLOSED, BUSY, REJECTED, VERSION_MISMATCH, PROTOCOL_ERROR, CONNECT_FAILED, KEY_MISSING }
+    enum class Cause { LOST, HOST_CLOSED, BUSY, REJECTED, VERSION_MISMATCH, PROTOCOL_ERROR, CONNECT_FAILED, KEY_MISSING, KEY_STORE_FAILED }
 }

@@ -35,6 +35,8 @@ class SessionMachine(private val hello: Hello) {
         data class Secured(val gen: Int, val code: String?, val rePairing: Boolean) : Event
         /** PAIRED HELLO_ACK but no stored key for this host: re-pairing is required (no retry). */
         data class KeyMissing(val gen: Int) : Event
+        /** The new pairing key could not be persisted: pairing must not be reported as successful. */
+        data class KeyStoreFailed(val gen: Int) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -120,6 +122,11 @@ class SessionMachine(private val hello: Hello) {
                 pairingCode = event.code
                 rePairing = event.rePairing
             }
+            is Event.KeyStoreFailed -> if (event.gen == controlGen) {
+                closeAll(out, graceful = false)
+                phase = Phase.FAILED
+                out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
+            }
             is Event.KeyMissing -> if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED
@@ -160,6 +167,9 @@ class SessionMachine(private val hello: Hello) {
             HelloAck.ACCEPTED -> {
                 lastPongUs = nowUs
                 pairingCode = null
+                // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
+                out += Action.Send(Ping(pingSeq++, nowUs))
+                nextPingUs = nowUs + PING_INTERVAL_US
                 hostName = ack.hostName
                 sessionId = ack.sessionId
                 videoPort = ack.videoPort

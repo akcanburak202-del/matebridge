@@ -324,3 +324,56 @@ class PairKeyStoreTest {
         }
     }
 }
+
+class VideoChannelTest {
+    private val keys = { VideoKeys(ByteArray(32) { 1 }, ByteArray(32) { 2 }) }
+    private val hello = dev.matebridge.client.protocol.VideoHello(1, 3, 99)
+
+    @Test
+    fun openingIsPlainVideoHelloThenASealedPingWithTheC2hKey() {
+        val nonce = ByteArray(16) { it.toByte() }
+        val bytes = VideoChannel(keys()).opening(hello, nonce, 1234)
+        val helloFrame = Codec.encode(hello.copy(videoNonce = Bytes(nonce)))
+        assertArrayEquals(helloFrame, bytes.copyOf(helloFrame.size))
+        val rec = bytes.copyOfRange(helloFrame.size, bytes.size)
+        val plain = RecordOpener(ByteArray(32) { 1 }).open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+        assertEquals(0x20, plain[0].toInt() and 0xFF) // PING
+        val decoded = Codec.decodePayload(0x20, plain.copyOfRange(1, plain.size))
+        assertEquals(Ping(0, 1234), decoded)
+    }
+
+    @Test
+    fun everyVideoConnectionGetsADifferentKeyScheduleAndNonce() {
+        val secrets = SessionSecrets(ByteArray(32) { 7 }, pairing = false, hostId = ByteArray(16))
+        val rnd = java.security.SecureRandom()
+        val seen = HashSet<String>()
+        repeat(50) {
+            val nonce = ByteArray(16).also { rnd.nextBytes(it) }
+            assertTrue(seen.add(nonce.joinToString("") { "%02x".format(it) }))
+            val k = secrets.videoKeys(nonce)
+            val rec = VideoChannel(k).opening(hello, nonce, 0)
+            assertTrue(rec.size > 5 + 24)
+        }
+        val a = secrets.videoKeys(ByteArray(16) { 1 })
+        val b = secrets.videoKeys(ByteArray(16) { 2 })
+        assertTrue(!a.h2c.contentEquals(b.h2c) && !a.c2h.contentEquals(b.c2h))
+    }
+
+    @Test
+    fun aFailingKeyStoreSurfacesFromOnMessageSoTheSessionCanFail() {
+        val eph = EphemeralKeyPair(P256.generate().privateKey, P256.generate().publicBytes)
+        val prk = ByteArray(32) { 4 }
+        val sec = SecureSession(
+            HelloAck(1, 1, 0, 0, ""), SessionSecrets(prk, true, ByteArray(16)),
+            RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), "000000", false,
+        )
+        val failing = object : PairKeyStore {
+            override fun get(hostId: ByteArray): ByteArray? = null
+            override fun put(hostId: ByteArray, key: ByteArray) { throw java.io.IOException("commit failed") }
+        }
+        try {
+            sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 1, 1, ""), failing); fail()
+        } catch (e: java.io.IOException) {
+        }
+    }
+}

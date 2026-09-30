@@ -6,6 +6,8 @@ import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Limits
 import dev.matebridge.client.protocol.Message
+import dev.matebridge.client.protocol.Ping
+import dev.matebridge.client.protocol.VideoHello
 import dev.matebridge.client.protocol.MsgType
 import dev.matebridge.client.protocol.ProtocolException
 import java.io.EOFException
@@ -178,4 +180,22 @@ object PlainFrames {
         }
         return out
     }
+}
+
+/** Client side of one video connection's crypto (PROTOCOL.md sections 3 step 5 and 9). */
+class VideoChannel(keys: VideoKeys) {
+    private val sealer = RecordSealer(keys.c2h)
+    val decoder = RecordDecoder(Limits.VIDEO_MAX_PAYLOAD, RecordOpener(keys.h2c))
+
+    init {
+        keys.c2h.fill(0) // the sealer holds its own copy
+    }
+
+    /**
+     * Bytes to write first: the plaintext VIDEO_HELLO carrying [nonce], then one sealed PING (counter 0, video c2h key)
+     * that proves key possession. The host answers no PING on the video connection.
+     */
+    fun opening(hello: VideoHello, nonce: ByteArray, nowUs: Long): ByteArray =
+        Codec.encode(hello.copy(videoNonce = Bytes(nonce))) +
+            sealer.sealFrame(Codec.encode(Ping(0, nowUs)))
 }

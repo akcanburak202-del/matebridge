@@ -207,7 +207,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             object : KeyValueStore {
                 val secure = getSharedPreferences("matebridge_pairkeys", Context.MODE_PRIVATE)
                 override fun getString(key: String) = secure.getString(key, null)
-                override fun putString(key: String, value: String) { secure.edit().putString(key, value).commit() }
+                override fun putString(key: String, value: String) {
+                    // A pairing key that did not persist must not count as paired.
+                    if (!secure.edit().putString(key, value).commit()) throw java.io.IOException("prefs commit failed")
+                }
             },
             AndroidKeystoreWrapper(),
         )
@@ -833,7 +836,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun render(state: SessionUi) {
         if (!started || isDestroyed) return
         lastUi = state
-        if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected) hostReached = true
+        if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
@@ -849,6 +852,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             )
             is SessionUi.Failed ->
                 if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
+                else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
                 else getString(R.string.state_failed, causeText(state.cause))
         }
         if (ConnectMode.showUsbHint(transport, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
@@ -880,6 +884,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private companion object {
+        const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEYFRAME_RETRY_MS = 500L
         const val INPUT_TICK_MS = 25L
@@ -896,7 +901,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
-            SessionUi.Cause.KEY_MISSING -> R.string.cause_protocol_error // shown via KEY_MISSING_TEXT in render()
+            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED -> R.string.cause_protocol_error // literal texts in render()
         },
     )
 
