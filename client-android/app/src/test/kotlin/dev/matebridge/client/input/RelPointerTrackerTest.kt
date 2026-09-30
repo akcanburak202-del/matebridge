@@ -246,6 +246,22 @@ class RelPointerTrackerTest {
         assertEquals(listOf(Buttons.RIGHT or Buttons.LEFT, Buttons.RIGHT), tap.map { it.buttons })
     }
 
+    @Test fun upAtAFarPositionWithoutMoveIsNotATap() {
+        pad(PadAction.DOWN, 0, 0, f(0, 100f, 100f))
+        assertTrue(pad(PadAction.UP, 100, 0, f(0, 160f, 100f)).isEmpty())
+        assertEquals(0L, counters.taps)
+    }
+
+    @Test fun mouseClickArrivingAsDownThenButtonPressAfterResetIsReported() {
+        t.reset()
+        // ACTION_DOWN already carries the button, the explicit BUTTON_PRESS follows.
+        assertTrue(t.onMouse(MouseFrame(1000, 0f, 0f, Buttons.LEFT, 0, deviceId = MOUSE), 1).isEmpty())
+        val press = rels(t.onMouse(MouseFrame(2000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = MOUSE), 2).messages())
+        assertEquals(listOf(Buttons.LEFT), press.map { it.buttons })
+        val drag = rels(t.onMouse(MouseFrame(3000, 5f, 0f, Buttons.LEFT, deviceId = MOUSE), 3).messages())
+        assertEquals(Buttons.LEFT, drag.single().buttons)
+    }
+
     private companion object {
         const val PAD = 7
         const val MOUSE = 8

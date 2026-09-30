@@ -101,4 +101,52 @@ class RelPointerCaptureTest {
         cap.onDeviceRemoved(7, 90)
         assertEquals(listOf(0), sink.sent.filterIsInstance<PointerRel>().map { it.buttons })
     }
+
+    private fun touch(action: TouchAction, ms: Long, acting: Int, vararg fs: Finger) {
+        sink.nowMs = ms
+        cap.onTouch(TouchFrame(action, acting, fs.toList(), ms * 1000, 2), ms)
+    }
+
+    private fun openPadScroll() {
+        pad(PadAction.DOWN, 0, 0, Finger(0, 100f, 100f))
+        pad(PadAction.DOWN, 5, 1, Finger(0, 100f, 100f), Finger(1, 300f, 100f))
+        pad(PadAction.MOVE, 30, -1, Finger(0, 100f, 140f), Finger(1, 300f, 140f))
+    }
+
+    private fun phases() = sink.sent.filterIsInstance<Scroll>().map { it.phase }
+
+    @Test fun touchscreenScrollIsIgnoredWhilePadOwnsTheHostScroll() {
+        openPadScroll()
+        sink.sent.clear()
+        touch(TouchAction.DOWN, 100, 0, Finger(0, 500f, 500f))
+        touch(TouchAction.DOWN, 110, 1, Finger(0, 500f, 500f), Finger(1, 700f, 500f)) // touch BEGAN: dropped
+        touch(TouchAction.MOVE, 120, -1, Finger(0, 500f, 540f), Finger(1, 700f, 540f))
+        touch(TouchAction.UP, 130, 1, Finger(0, 500f, 540f), Finger(1, 700f, 540f)) // touch ENDED: dropped
+        assertTrue(phases().isEmpty())
+        // The pad's gesture is still alive on the host and continues.
+        pad(PadAction.MOVE, 140, -1, Finger(0, 100f, 160f), Finger(1, 300f, 160f))
+        assertEquals(listOf(Scroll.CHANGED), phases())
+        pad(PadAction.UP, 150, 1, Finger(0, 100f, 160f), Finger(1, 300f, 160f))
+        assertEquals(listOf(Scroll.CHANGED, Scroll.ENDED), phases())
+    }
+
+    @Test fun padScrollIsIgnoredWhileTouchscreenOwnsTheHostScrollAndOwnershipIsFreedAfterwards() {
+        touch(TouchAction.DOWN, 0, 0, Finger(0, 500f, 500f))
+        touch(TouchAction.DOWN, 10, 1, Finger(0, 500f, 500f), Finger(1, 700f, 500f))
+        assertEquals(listOf(Scroll.BEGAN), phases())
+        sink.sent.clear()
+        openPadScroll() // dropped entirely
+        assertTrue(phases().isEmpty())
+        touch(TouchAction.UP, 200, 1, Finger(0, 500f, 500f), Finger(1, 700f, 500f))
+        assertEquals(listOf(Scroll.ENDED), phases())
+        touch(TouchAction.UP, 210, 0, Finger(0, 500f, 500f))
+        // Free again: a new pad scroll gets through once the pad fingers are fresh.
+        pad(PadAction.UP, 300, 0)
+        pad(PadAction.UP, 305, 1)
+        sink.sent.clear()
+        pad(PadAction.DOWN, 400, 0, Finger(0, 100f, 100f))
+        pad(PadAction.DOWN, 405, 1, Finger(0, 100f, 100f), Finger(1, 300f, 100f))
+        pad(PadAction.MOVE, 430, -1, Finger(0, 100f, 140f), Finger(1, 300f, 140f))
+        assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), phases())
+    }
 }

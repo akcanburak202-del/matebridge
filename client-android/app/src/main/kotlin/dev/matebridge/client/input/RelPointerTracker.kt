@@ -109,7 +109,8 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
                 ignore = phys and pressed.inv() // held before we looked: not a press we saw
                 synced = true
             }
-            ignore = ignore and phys
+            // The explicit press of an ignored bit (ACTION_DOWN may carry the button before its BUTTON_PRESS) makes it real.
+            ignore = ignore and pressed.inv() and phys
             return phys and ignore.inv()
         }
 
@@ -203,7 +204,8 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
             if (scroll != ScrollMode.NONE) endScroll(timeUs, out)
             locked = true
         }
-        if (n > 0) for ((id, p) in cur) downPos[id]?.let { if (hypot(p[0] - it[0], p[1] - it[1]) > slop) moved = true }
+        // Includes the departing finger of an UP frame: its final position counts (DOWN, then UP elsewhere, is no tap).
+        for (fg in f.fingers) downPos[fg.id]?.let { p -> val d = floatArrayOf(fg.x, fg.y); if (hypot(d[0] - p[0], d[1] - p[1]) > slop) moved = true }
 
         updatePadButtons(f, n, nowMs, timeUs, out)
 

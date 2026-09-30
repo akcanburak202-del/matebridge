@@ -2,6 +2,7 @@ package dev.matebridge.client.input
 
 import dev.matebridge.client.protocol.PenGesture
 import dev.matebridge.client.protocol.ReleaseAll
+import dev.matebridge.client.protocol.Scroll
 import dev.matebridge.client.stream.VideoViewport
 
 /**
@@ -81,7 +82,7 @@ class InputCapture(
 
     /** "Parmak dokunmasını tamamen kapat". Turning it on releases any finger currently held. */
     fun setFingersDisabled(disabled: Boolean, nowMs: Long) {
-        val outs = touch.setDisabled(disabled, nowMs)
+        val outs = gate(Src.TOUCH, touch.setDisabled(disabled, nowMs))
         if (outs.isNotEmpty()) dispatch(outs)
     }
 
@@ -101,19 +102,19 @@ class InputCapture(
         devices += f.deviceId
         val wasInRange = pen.inRange
         if (!dispatch(pen.onFrame(f, nowMs))) return
-        if (!wasInRange && pen.inRange) dispatch(touch.onPenRangeBegan(nowMs))
+        if (!wasInRange && pen.inRange) dispatch(gate(Src.TOUCH, touch.onPenRangeBegan(nowMs)))
     }
 
     fun onTouch(f: TouchFrame, nowMs: Long) {
         if (!accepting) return
         devices += f.deviceId
-        dispatch(touch.onFrame(f, nowMs))
+        dispatch(gate(Src.TOUCH, touch.onFrame(f, nowMs)))
     }
 
     /** A touchpad event under pointer capture (T-034). The touchscreen and the pen never come through here. */
     fun onPad(f: PadFrame, nowMs: Long) {
         if (!accepting) return
-        dispatch(rel.onPad(f, nowMs))
+        dispatch(gate(Src.PAD, rel.onPad(f, nowMs)))
     }
 
     /** A mouse event under pointer capture (T-034). */
@@ -128,7 +129,7 @@ class InputCapture(
      * Works while suspended or inactive too, so nothing reported stays pressed.
      */
     fun onPointerCaptureLost(nowMs: Long) {
-        val outs = rel.release(nowMs)
+        val outs = gate(Src.PAD, rel.release(nowMs))
         if (outs.isNotEmpty()) dispatch(outs)
     }
 
@@ -164,8 +165,8 @@ class InputCapture(
     fun tick(nowMs: Long) {
         if (accepting) {
             if (!dispatch(pen.tick(nowMs))) return finishTick(nowMs)
-            if (!dispatch(touch.tick(nowMs))) return finishTick(nowMs)
-            if (!dispatch(rel.tick(nowMs))) return finishTick(nowMs)
+            if (!dispatch(gate(Src.TOUCH, touch.tick(nowMs)))) return finishTick(nowMs)
+            if (!dispatch(gate(Src.PAD, rel.tick(nowMs)))) return finishTick(nowMs)
             outbox.tick()
         }
         finishTick(nowMs)
@@ -194,8 +195,8 @@ class InputCapture(
             outs += pen.release(nowMs)
             // Pointer sources go last: buttons = 0 for everything reported pressed sits immediately before RELEASE_ALL
             // (PROTOCOL.md section 7, the host's pointer lock would swallow the next press otherwise).
-            outs += touch.release(nowMs)
-            outs += rel.release(nowMs)
+            outs += gate(Src.TOUCH, touch.release(nowMs))
+            outs += gate(Src.PAD, rel.release(nowMs))
             doubleTap.reset()
             keys.reset() // the host releases held keys on RELEASE_ALL; a later physical UP must not be sent
             if (reason == ReleaseAll.BACKGROUND || reason == ReleaseAll.FOCUS_LOST) suspended = true
@@ -230,7 +231,7 @@ class InputCapture(
         // A detached keyboard releases only its own keys; pen and finger state is untouched.
         if (keys.holdsDevice(deviceId)) dispatch(keys.releaseDevice(deviceId, nowMs * 1000))
         // A detached touchpad or mouse ends its own scroll and buttons only.
-        if (rel.holdsDevice(deviceId)) dispatch(rel.release(nowMs))
+        if (rel.holdsDevice(deviceId)) dispatch(gate(Src.PAD, rel.release(nowMs)))
         if (devices.remove(deviceId)) releaseAll(ReleaseAll.DEVICE_DETACHED, nowMs)
     }
 
@@ -245,12 +246,39 @@ class InputCapture(
     }
 
     private fun forget() {
+        scrollOwner = Src.NONE
         pen.reset()
         touch.reset()
         doubleTap.reset()
         keys.reset()
         rel.reset()
         outbox.dropHeld()
+    }
+
+    private enum class Src { NONE, TOUCH, PAD }
+
+    /** Which tracker owns the host's single open phased SCROLL gesture (PROTOCOL.md section 4). */
+    private var scrollOwner = Src.NONE
+
+    /**
+     * One open scroll gesture at a time: the host has one. The first source to BEGIN owns it; the other source's phased
+     * SCROLL messages (BEGAN, CHANGED, ENDED, CANCELLED) are dropped until the owner ends. The suppressed tracker thinks
+     * its gesture is open, which is harmless: it sends nothing the host needs, and its ENDED is dropped as well.
+     * Wheel notches (phase NONE) are not phased and always pass.
+     */
+    private fun gate(src: Src, outs: List<Outgoing>): List<Outgoing> {
+        if (outs.none { it.msg is Scroll && (it.msg as Scroll).phase != Scroll.NONE }) return outs
+        val kept = ArrayList<Outgoing>(outs.size)
+        for (o in outs) {
+            val m = o.msg
+            if (m !is Scroll || m.phase == Scroll.NONE) { kept += o; continue }
+            when (m.phase) {
+                Scroll.BEGAN -> if (scrollOwner == Src.NONE || scrollOwner == src) { scrollOwner = src; kept += o }
+                Scroll.CHANGED -> if (scrollOwner == src) kept += o
+                else -> if (scrollOwner == src) { scrollOwner = Src.NONE; kept += o }
+            }
+        }
+        return kept
     }
 
     /** Sends a batch in order; stops at the first refusal (the model was already reset then). */
