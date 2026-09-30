@@ -140,6 +140,18 @@ class InputFuzzTest {
                 1 -> when (rnd.nextInt(10)) {
                     in 0..3 -> pen(PenAction.HOVER_MOVE, 1 + rnd.nextInt(3))
                     4, 5 -> { penState = 0; pen(PenAction.HOVER_EXIT) }
+                    6 -> { // T-029 tip bounce: DOWN, then UP a few ms later with no sample in between; the pen stays in range
+                        if (rnd.nextInt(3) == 0) penEraser = !penEraser // the bounce may be the other tool (eraser end)
+                        pen(PenAction.HOVER_EXIT)
+                        pen(PenAction.DOWN)
+                        if (chaos && rnd.nextInt(4) == 0) { // a second DOWN while the first is still held
+                            advance(1 + rnd.nextInt(14))
+                            pen(PenAction.DOWN)
+                        }
+                        advance(1 + rnd.nextInt(12)) // both sides of the 10 ms confirmation window
+                        penUp(if (rnd.nextInt(4) == 0) 2 + rnd.nextInt(3) else 1) // an UP with history is a real stroke
+                        pen(PenAction.HOVER_ENTER)
+                    }
                     else -> { // touches down: Android sends HOVER_EXIT right before DOWN
                         penState = 2
                         pen(PenAction.HOVER_EXIT)
@@ -279,7 +291,9 @@ class InputFuzzTest {
             assertTrue("$label: a finger event or a tick cut the pen stroke Android still reports as touching", !strokeCut)
             if (!sink.accept) return
             assertEquals("$label: pen contact", cap.penInContact, h.penContact)
-            assertEquals("$label: pen in range", cap.penInRange, h.penInRange)
+            assertEquals("$label: pen in range", cap.penHostInRange, h.penInRange)
+            // A held (unconfirmed) contact counts as in range for the finger gate but the host must not know about it.
+            assertTrue("$label: in range belief lost", cap.penInRange || !cap.penHostInRange)
             assertEquals("$label: finger pressed", cap.fingerPressed, h.touchDown)
             assertEquals("$label: scroll open", cap.scrollOpen, h.scrollOpen)
             assertEquals("$label: host refused a press the client sent (gate or pointer lock mismatch)", 0, sink.pressesRejected)

@@ -22,6 +22,19 @@ fun pt(
 fun penFrame(action: PenAction, vararg pts: PenPoint, eraser: Boolean = false, device: Int = 1, pointerId: Int = 0) =
     PenFrame(action, eraser, pts.toList(), device, pointerId)
 
+/**
+ * A pen DOWN that is confirmed by the timer (T-029): the DOWN, then a tick [PenTracker.CONFIRM_MS] later. Returns what the
+ * DOWN and the tick sent (the contact's STROKE_START sample, plus the end of an old contact when there was one).
+ */
+fun PenTracker.downConfirmed(f: PenFrame, nowMs: Long): List<Outgoing> =
+    onFrame(f, nowMs) + tick(nowMs + PenTracker.CONFIRM_MS)
+
+/** Same on the capture level: DOWN, then a tick [PenTracker.CONFIRM_MS] later. */
+fun InputCapture.downConfirmed(f: PenFrame, nowMs: Long) {
+    onPen(f, nowMs)
+    tick(nowMs + PenTracker.CONFIRM_MS)
+}
+
 fun finger(id: Int, x: Float, y: Float) = Finger(id, x, y)
 
 fun touchFrame(action: TouchAction, tMs: Long, actingId: Int, vararg fingers: Finger, device: Int = 2) =

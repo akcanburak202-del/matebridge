@@ -24,8 +24,9 @@ class PenTrackerTest {
         assertEquals(listOf(IR), flagsOf(t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(3)), 3)))
         // HarmonyOS sends HOVER_EXIT right before DOWN; it is absorbed, so the pen stays in range.
         assertTrue(t.onFrame(penFrame(PenAction.HOVER_EXIT, pt(6)), 6).isEmpty())
-        assertEquals(listOf(IR or CT or SS), flagsOf(t.onFrame(penFrame(PenAction.DOWN, pt(7)), 7)))
-        assertEquals(listOf(IR or CT, IR or CT), flagsOf(t.onFrame(penFrame(PenAction.MOVE, pt(9), pt(12)), 12)))
+        // T-029: the DOWN is held until the second sample; both go out together, STROKE_START first.
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(7)), 7).isEmpty())
+        assertEquals(listOf(IR or CT or SS, IR or CT, IR or CT), flagsOf(t.onFrame(penFrame(PenAction.MOVE, pt(9), pt(12)), 12)))
         assertEquals(listOf(IR), flagsOf(t.onFrame(penFrame(PenAction.UP, pt(15, pressure = 0f)), 15)))
         assertEquals(PenTracker.State.HOVER, t.state)
     }
@@ -45,6 +46,7 @@ class PenTrackerTest {
     @Test fun allHistoricalSamplesTravelInOneMessageWithNonDecreasingDt() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(90)), 90)
+        t.onFrame(penFrame(PenAction.MOVE, pt(93)), 93) // confirms the contact
         val out = t.onFrame(penFrame(PenAction.MOVE, pt(100), pt(103), pt(106), pt(106, x = 1500f), pt(109)), 109)
         assertEquals(1, out.size)
         val pen = out[0].msg as Pen
@@ -56,11 +58,11 @@ class PenTrackerTest {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
         val pts = Array(130) { pt(10L + it, x = 100f + it) }
-        val out = t.onFrame(penFrame(PenAction.MOVE, *pts), 200)
+        val out = t.onFrame(penFrame(PenAction.MOVE, *pts), 200) // confirms the held DOWN: 131 samples in all
         val pens = out.map { it.msg as Pen }
-        assertEquals(listOf(64, 64, 2), pens.map { it.samples.size })
+        assertEquals(listOf(64, 64, 3), pens.map { it.samples.size })
         val xs = pens.flatMap { it.samples }.map { it.x }
-        assertEquals(pts.map { VP.normX(it.x) }, xs)
+        assertEquals((listOf(pt(0)) + pts).map { VP.normX(it.x) }, xs)
         // Each message has non-decreasing dt and a base not before the previous message's last sample.
         for (p in pens) assertEquals(p.samples.sortedBy { it.dtUs }, p.samples)
         assertTrue(pens[1].baseTimeUs >= pens[0].baseTimeUs + pens[0].samples.last().dtUs)
@@ -99,10 +101,13 @@ class PenTrackerTest {
         t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(0)), 0)
         t.onFrame(penFrame(PenAction.HOVER_EXIT, pt(3)), 3)
         val out = t.onFrame(penFrame(PenAction.DOWN, pt(5), eraser = true), 5)
+        // The old tool is closed at once; the eraser contact is held (T-029) and confirmed by its second sample.
         val pens = out.map { it.msg as Pen }
-        assertEquals(listOf(Pen.TOOL_PEN, Pen.TOOL_ERASER), pens.map { it.tool })
+        assertEquals(listOf(Pen.TOOL_PEN), pens.map { it.tool })
         assertEquals(listOf(0), pens[0].samples.map { it.flags })
-        assertEquals(listOf(IR or CT or SS), pens[1].samples.map { it.flags })
+        val confirm = t.onFrame(penFrame(PenAction.MOVE, pt(8), eraser = true), 8).map { it.msg as Pen }
+        assertEquals(listOf(Pen.TOOL_ERASER), confirm.map { it.tool })
+        assertEquals(listOf(IR or CT or SS, IR or CT), confirm[0].samples.map { it.flags })
     }
 
     @Test fun exitFollowedByDownAfterTheDeferralWindowIsNotAbsorbed() {
@@ -110,12 +115,14 @@ class PenTrackerTest {
         t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(0)), 0)
         t.onFrame(penFrame(PenAction.HOVER_EXIT, pt(3)), 3)
         val out = t.onFrame(penFrame(PenAction.DOWN, pt(60)), 60)
-        assertEquals(listOf(0, IR or CT or SS), flagsOf(out))
+        assertEquals(listOf(0), flagsOf(out)) // the exit goes out; the contact is held (T-029)
+        assertEquals(listOf(IR or CT or SS), flagsOf(t.tick(70)))
     }
 
     @Test fun eraserToolMapsToToolOne() {
         val t = tracker()
-        val out = t.onFrame(penFrame(PenAction.DOWN, pt(0), eraser = true), 0)
+        t.onFrame(penFrame(PenAction.DOWN, pt(0), eraser = true), 0)
+        val out = t.tick(10)
         assertEquals(Pen.TOOL_ERASER, (out[0].msg as Pen).tool)
         val hover = tracker().onFrame(penFrame(PenAction.HOVER_MOVE, pt(0)), 0)
         assertEquals(Pen.TOOL_PEN, (hover[0].msg as Pen).tool)
@@ -124,6 +131,7 @@ class PenTrackerTest {
     @Test fun toolChangeEndsTheOldToolFirst() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(3)), 3) // confirmed: the host holds the pen contact
         val out = t.onFrame(penFrame(PenAction.HOVER_ENTER, pt(5), eraser = true), 5)
         val pens = out.map { it.msg as Pen }
         assertEquals(listOf(Pen.TOOL_PEN, Pen.TOOL_ERASER), pens.map { it.tool })
@@ -146,7 +154,8 @@ class PenTrackerTest {
         val counters = InputCounters()
         val t = tracker(counters = counters)
         val hover = penSamples(t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(0, tilt = 0.4f, ori = 2f)), 0).messages())[0]
-        val down = penSamples(t.onFrame(penFrame(PenAction.DOWN, pt(5, tilt = 0f, ori = 0f)), 5).messages())[0]
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(5, tilt = 0f, ori = 0f)), 5).isEmpty())
+        val down = penSamples(t.tick(15).messages())[0]
         assertEquals(hover.tiltX, down.tiltX)
         assertEquals(hover.tiltY, down.tiltY)
         val nan = penSamples(t.onFrame(penFrame(PenAction.MOVE, pt(8, tilt = Float.NaN, ori = Float.NaN)), 8).messages())[0]
@@ -170,10 +179,10 @@ class PenTrackerTest {
         val t = tracker()
         val hover = penSamples(t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(0, pressure = 0.7f)), 0).messages())[0]
         assertEquals(0, hover.pressure)
-        val down = penSamples(t.onFrame(penFrame(PenAction.DOWN, pt(5, pressure = 0.5f)), 5).messages())[0]
-        assertEquals(Coords.pressure(0.5f), down.pressure)
-        val hard = penSamples(t.onFrame(penFrame(PenAction.MOVE, pt(8, pressure = 1.5f)), 8).messages())[0]
-        assertEquals(65535, hard.pressure)
+        t.onFrame(penFrame(PenAction.DOWN, pt(5, pressure = 0.5f)), 5)
+        val both = penSamples(t.onFrame(penFrame(PenAction.MOVE, pt(8, pressure = 1.5f)), 8).messages())
+        assertEquals(Coords.pressure(0.5f), both[0].pressure) // the held DOWN sample
+        assertEquals(65535, both[1].pressure)
         val up = penSamples(t.onFrame(penFrame(PenAction.UP, pt(10, pressure = 0.3f)), 10).messages())[0]
         assertEquals(0, up.pressure) // contact ended
     }
@@ -198,7 +207,8 @@ class PenTrackerTest {
 
     @Test fun buttonStateSetsTheButtonFlagWhileInRange() {
         val t = tracker()
-        val s = penSamples(t.onFrame(penFrame(PenAction.DOWN, pt(0, button = true)), 0).messages())[0]
+        t.onFrame(penFrame(PenAction.DOWN, pt(0, button = true)), 0)
+        val s = penSamples(t.tick(10).messages())[0]
         assertEquals(IR or CT or SS or PenSample.BUTTON, s.flags)
         val leave = penSamples(t.onFrame(penFrame(PenAction.CANCEL, pt(3, button = true)), 3).messages())[0]
         assertEquals(0, leave.flags)
@@ -220,7 +230,8 @@ class PenTrackerTest {
     @Test fun livenessDuringContactRepeatsPressureWithoutStrokeStart() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0, pressure = 0.6f)), 0)
-        val rep = penSamples(t.tick(100).messages())
+        t.onFrame(penFrame(PenAction.MOVE, pt(3, pressure = 0.6f)), 3) // confirms the contact
+        val rep = penSamples(t.tick(103).messages())
         assertEquals(1, rep.size)
         assertEquals(IR or CT, rep[0].flags)
         assertEquals(Coords.pressure(0.6f), rep[0].pressure)
@@ -275,7 +286,8 @@ class PenTrackerTest {
         assertEquals(listOf(IR, IR), flagsOf(out))
         assertTrue(penSamples(out.messages()).all { it.pressure == 0 })
         // The next real stroke starts normally.
-        assertEquals(listOf(IR or CT or SS), flagsOf(t.onFrame(penFrame(PenAction.DOWN, pt(10)), 10)))
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(10)), 10).isEmpty())
+        assertEquals(listOf(IR or CT or SS, IR or CT), flagsOf(t.onFrame(penFrame(PenAction.MOVE, pt(13)), 13)))
     }
 
     @Test fun resetForgetsAContactSoTheMiddleOfThatStrokeIsHover() {
@@ -293,14 +305,29 @@ class PenTrackerTest {
     @Test fun downWhileAlreadyInContactEndsTheOldContactFirst() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(3)), 3) // confirmed: the host holds the contact
         val out = t.onFrame(penFrame(PenAction.DOWN, pt(20)), 20)
-        assertEquals(listOf(IR, IR or CT or SS), flagsOf(out))
+        assertEquals(listOf(IR), flagsOf(out)) // the old contact ends at once, the new one is held
+        assertEquals(listOf(IR or CT or SS, IR or CT), flagsOf(t.onFrame(penFrame(PenAction.MOVE, pt(23)), 23)))
+    }
+
+    @Test fun downWhileHeldConfirmsOrDropsTheHeldContactByEventAge() {
+        val counters = InputCounters()
+        val t = tracker(counters = counters)
+        t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        // 5 ms later: the first DOWN was a bounce, it is dropped without a trace; the new one is held.
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(5)), 5).isEmpty())
+        assertEquals(1L, counters.bounceDropped)
+        // 15 ms later: the held contact was long enough to be real; it goes out, ends, and the new one is held.
+        assertEquals(listOf(IR or CT or SS, IR), flagsOf(t.onFrame(penFrame(PenAction.DOWN, pt(20)), 20)))
+        assertEquals(1L, counters.bounceDropped)
     }
 
     @Test fun releaseSendsFlagsZeroOnlyWhenSomethingWasInRange() {
         val t = tracker()
         assertTrue(t.release(0).isEmpty())
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(3)), 3)
         assertEquals(listOf(0), flagsOf(t.release(10)))
         assertEquals(PenTracker.State.OUT, t.state)
         assertTrue(t.release(20).isEmpty())
@@ -322,8 +349,9 @@ class PenTrackerTest {
         assertTrue(t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(3)), 3)[0].mergeable)
         assertTrue(t.tick(103)[0].mergeable)
         // contact samples never
-        assertFalse(t.onFrame(penFrame(PenAction.DOWN, pt(200)), 200)[0].mergeable)
+        assertTrue(t.onFrame(penFrame(PenAction.DOWN, pt(200)), 200).isEmpty()) // held (T-029)
         assertFalse(t.onFrame(penFrame(PenAction.MOVE, pt(203)), 203)[0].mergeable)
+        assertFalse(t.onFrame(penFrame(PenAction.MOVE, pt(204)), 204)[0].mergeable)
         // the hover sample right after the lift is CONTACT 1->0: a transition
         assertFalse(t.onFrame(penFrame(PenAction.UP, pt(206)), 206)[0].mergeable)
         assertTrue(t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(209)), 209)[0].mergeable)
@@ -334,6 +362,7 @@ class PenTrackerTest {
     @Test fun upWithHistoryKeepsTheContactSamplesThenLifts() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(2)), 2) // confirmed
         assertEquals(listOf(IR or CT, IR), flagsOf(t.onFrame(penFrame(PenAction.UP, pt(3), pt(6)), 6)))
     }
 
