@@ -10,14 +10,15 @@
 | Orkestratör | Claude Opus 5.5 | Görev bölme, mimari/protokol, kritik kod (kalem enjeksiyonu, koordinat dönüşümü, girdi durumu), birleştirme, son inceleme, raporlama |
 | Uygulayıcı | Claude Sonnet 5.5 alt ajanları | Net tanımlı görevler: iskelet, arayüz, tablolar, test uygulamaları. Gerekirse ayrı git worktree'lerde paralel çalışır. |
 | İç denetçi | Claude Sonnet 5.5 `reviewer` alt ajanı | Her görevin diff'ini kart ve AGENTS.md kurallarına göre salt okunur inceler |
-| Bağımsız denetçi | Codex (`gpt-6-sol`, varsayılan efor) | Kritik değişiklikleri **salt okunur** inceler (`scripts/codex-review.sh`). Dosya değiştirmez. |
+| Bağımsız denetçi | Codex (`gpt-6.1-sol`, efor en az medium) | Kritik değişiklikleri **salt okunur** inceler (`scripts/codex-review.sh`). Dosya değiştirmez. |
 
 Alt ajan tanımları `.claude/agents/` altında: `mac-host-dev`, `android-client-dev`, `reviewer`. İş akışı `backlog/README.md`'de.
 
 ### Codex kullanımı
 
-- Varsayılan: `codex exec review` veya `codex exec -s read-only -m gpt-6-sol "<inceleme isteği>"`
-- Efor: varsayılan (medium). Yalnızca çok kritik incelemelerde (protokol, girdi durumu, güvenlik) `-c model_reasoning_effort="high"` kullanılır.
+- Varsayılan: `./scripts/codex-review.sh` veya `codex exec -s read-only -m gpt-6.1-sol -c model_reasoning_effort="medium" "<inceleme isteği>"`
+- Model: `gpt-6.1-sol` (2026-09-30'dan beri; öncesinde `gpt-6-sol`).
+- Efor: **en az medium** ve her çağrıda açıkça verilir, çünkü CLI varsayılanı low olabilir. Kritik incelemelerde (protokol, girdi durumu, güvenlik) high kullanılır (`--high`).
 - `gpt-6-astra` pahalı, **kullanıcı onayı olmadan kullanılmaz.**
 
 ## Kurallar

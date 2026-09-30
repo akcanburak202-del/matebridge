@@ -4,15 +4,17 @@
 #        ./scripts/codex-review.sh [--high] --commit SHA | --uncommitted
 #   --high  raise reasoning effort for critical changes (protocol, input state, security)
 # Example (task branch, run from main checkout): ./scripts/codex-review.sh main task/T-005-pen-sink-probe
-# Model is fixed to gpt-6-sol. gpt-6-astra requires explicit user approval (docs/WORKFLOW.md).
+# Model is fixed to gpt-6.1-sol. Effort is always set explicitly (the CLI default may be low): medium, or high
+# with --high. Never below medium. gpt-6-astra requires explicit user approval (docs/WORKFLOW.md).
 #
 # `codex exec review` presets (--base/--commit/--uncommitted) reject a custom prompt, so the
 # branch/commit forms use plain `codex exec` in a read-only sandbox with the diff range in the prompt.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-args=(-m gpt-6-sol -s read-only)
-if [ "${1:-}" = "--high" ]; then args+=(-c 'model_reasoning_effort="high"'); shift; fi
+effort=medium
+if [ "${1:-}" = "--high" ]; then effort=high; shift; fi
+args=(-m gpt-6.1-sol -s read-only -c "model_reasoning_effort=\"$effort\"")
 
 focus="Review per AGENTS.md hard rules and the task card(s) touched by the diff. Focus: Swift/Kotlin protocol consistency, lost key/button/pen up events, unbounded queues, threading, resource cleanup, text/character logging. Report findings by severity with file:line and a concrete failure scenario. Do not modify files."
 
