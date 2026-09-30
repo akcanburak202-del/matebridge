@@ -179,6 +179,7 @@ object Codec {
                 w.u32(msg.seq); w.u8(msg.kind); w.u8(0); w.u16(msg.data.size); w.bytes(msg.data.value)
             }
             is Bye -> w.u8(msg.reason)
+            is DisplayRate -> { w.u16(msg.hz); w.u16(0) }
             is StreamPrefs -> { w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(0) }
             is Pen -> {
                 require(msg.tool == Pen.TOOL_PEN || msg.tool == Pen.TOOL_ERASER) { "invalid tool" }
@@ -290,6 +291,7 @@ object Codec {
                 Clipboard(seq, kind, Bytes(r.bytes(len)))
             }
             MsgType.BYE -> Bye(r.u8())
+            MsgType.DISPLAY_RATE -> { val hz = r.u16(); r.skip(2); DisplayRate(hz) }
             MsgType.STREAM_PREFS -> { val fps = r.u16(); val pm = r.u16(); r.skip(4); StreamPrefs(fps, pm) }
             MsgType.PEN -> decodePen(r)
             MsgType.KEY -> {
