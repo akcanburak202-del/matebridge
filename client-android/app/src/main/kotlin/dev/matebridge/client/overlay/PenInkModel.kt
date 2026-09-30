@@ -15,6 +15,9 @@ object PenInkStyle {
     /** Opacity of the newest trail part, 0..1 (neutral, semi transparent). */
     const val TRAIL_ALPHA = 0.55f
 
+    /** No pen sample for this long hides the ring and clears the trail (a missing HOVER_EXIT must not leave a stuck dot). */
+    const val STALE_MS = 250L
+
     const val DOT_RADIUS_DP = 3f
     const val ERASER_RING_RADIUS_DP = 9f
     const val MIN_WIDTH_DP = 1.5f
@@ -50,6 +53,7 @@ class PenInkModel : PenInkListener {
     private var head = 0 // index of the oldest
     private var size = 0
     private var inStroke = false
+    private var lastSampleMs = 0L
 
     var dotVisible = false
         private set
@@ -67,6 +71,7 @@ class PenInkModel : PenInkListener {
         val pts = f.points
         if (pts.isEmpty()) return
         val last = pts[pts.size - 1]
+        lastSampleMs = last.timeUs / 1000
         when (f.action) {
             PenAction.DOWN, PenAction.MOVE, PenAction.UP -> {
                 if (f.action == PenAction.DOWN) inStroke = false
@@ -112,8 +117,18 @@ class PenInkModel : PenInkListener {
         return now - t[idx(size - 1)] < FADE
     }
 
-    /** The dot is shown (enabled and the pen is known to be in range). */
-    val showDot get() = dotEnabled && dotVisible
+    /** The dot is shown (enabled, the pen is known to be in range and a sample arrived within [PenInkStyle.STALE_MS]). */
+    fun showDot(now: Long) = dotEnabled && dotVisible && now - lastSampleMs < PenInkStyle.STALE_MS
+
+    /** Clears everything when the last sample is older than [PenInkStyle.STALE_MS]. Returns true if it cleared. */
+    fun expireIfStale(now: Long): Boolean {
+        if ((dotVisible || size > 0) && now - lastSampleMs >= PenInkStyle.STALE_MS) { clear(); return true }
+        return false
+    }
+
+    /** Ms until [expireIfStale] would clear, or -1 when there is nothing to expire. */
+    fun msUntilStale(now: Long): Long =
+        if (dotVisible || size > 0) maxOf(1L, lastSampleMs + PenInkStyle.STALE_MS - now) else -1L
 
     /** Emits every visible segment at [now], oldest first. */
     fun forEachSegment(now: Long, v: InkSegmentVisitor) {

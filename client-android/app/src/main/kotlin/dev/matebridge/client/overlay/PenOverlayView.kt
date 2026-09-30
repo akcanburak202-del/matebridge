@@ -57,13 +57,14 @@ class PenOverlayView(context: Context) : View(context), PenInkListener {
     override fun onDraw(canvas: Canvas) {
         if (viewport.isEmpty) return
         val now = SystemClock.uptimeMillis()
+        model.expireIfStale(now)
         canvas.save()
         canvas.clipRect(viewport.left, viewport.top, viewport.left + viewport.width, viewport.top + viewport.height)
         drawCanvas = canvas
         paint.color = NEUTRAL
         model.forEachSegment(now, segmentDrawer)
         drawCanvas = null
-        if (model.showDot) {
+        if (model.showDot(now)) {
             paint.color = NEUTRAL
             paint.alpha = 210
             paint.strokeWidth = 1.5f * density
@@ -77,6 +78,9 @@ class PenOverlayView(context: Context) : View(context), PenInkListener {
         }
         canvas.restore()
         if (model.hasLiveTrail(now)) postInvalidateOnAnimation()
+        // One delayed redraw at the moment the last sample goes stale (no thread, no per-frame loop while hovering).
+        val stale = model.msUntilStale(now)
+        if (stale > 0) postInvalidateDelayed(stale)
     }
 
     private companion object {

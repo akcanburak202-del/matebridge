@@ -25,19 +25,19 @@ class PenInkModelTest {
 
     @Test fun hoverShowsDotAtLastSampleAndExitHidesIt() {
         move(PenAction.HOVER_MOVE, pt(0, 10f, 20f), pt(3, 30f, 40f))
-        assertTrue(m.showDot)
+        assertTrue(m.showDot(10))
         assertEquals(30f, m.dotX, 0f)
         assertEquals(40f, m.dotY, 0f)
         assertFalse(m.inContact)
         assertTrue(segs(3).isEmpty())
         move(PenAction.HOVER_EXIT, pt(6, 30f, 40f))
-        assertFalse(m.showDot)
+        assertFalse(m.showDot(10))
     }
 
     @Test fun dotSettingOffHidesDot() {
         m.dotEnabled = false
         move(PenAction.HOVER_MOVE, pt(0))
-        assertFalse(m.showDot)
+        assertFalse(m.showDot(10))
     }
 
     @Test fun contactBuildsTrailFromAllBatchedSamples() {
@@ -82,7 +82,7 @@ class PenInkModelTest {
     @Test fun upKeepsDotAsHoverAndTrailFades() {
         move(PenAction.DOWN, pt(0, 0f))
         move(PenAction.UP, pt(5, 10f))
-        assertTrue(m.showDot)
+        assertTrue(m.showDot(10))
         assertFalse(m.inContact)
         assertEquals(1, segs(5).size)
     }
@@ -91,7 +91,7 @@ class PenInkModelTest {
         move(PenAction.DOWN, pt(0, 0f), eraser = true)
         move(PenAction.MOVE, pt(3, 10f), eraser = true)
         assertTrue(segs(3).isEmpty())
-        assertTrue(m.showDot)
+        assertTrue(m.showDot(10))
         assertTrue(m.eraser)
     }
 
@@ -101,14 +101,14 @@ class PenInkModelTest {
         move(PenAction.MOVE, pt(3, 10f))
         assertTrue(segs(3).isEmpty())
         assertFalse(m.hasLiveTrail(3))
-        assertTrue(m.showDot)
+        assertTrue(m.showDot(10))
     }
 
     @Test fun clearAndCancelForget() {
         move(PenAction.DOWN, pt(0, 0f))
         move(PenAction.MOVE, pt(3, 10f))
         move(PenAction.CANCEL, pt(4, 10f))
-        assertFalse(m.showDot)
+        assertFalse(m.showDot(10))
         m.onPenClear()
         assertTrue(segs(4).isEmpty())
         assertFalse(m.hasLiveTrail(4))
@@ -120,6 +120,20 @@ class PenInkModelTest {
         val s = segs(1)
         assertTrue(s.isNotEmpty())
         assertEquals(999f, s.last().x1, 0f)
+    }
+
+    @Test fun staleAfter250msHidesDotAndClears() {
+        move(PenAction.DOWN, pt(100, 0f))
+        move(PenAction.MOVE, pt(110, 10f))
+        assertTrue(m.showDot(359))
+        assertFalse(m.expireIfStale(359))
+        assertEquals(1L, m.msUntilStale(359))
+        assertFalse(m.showDot(360))
+        assertTrue(m.expireIfStale(360))
+        assertFalse(m.showDot(360))
+        assertEquals(-1L, m.msUntilStale(360))
+        move(PenAction.HOVER_MOVE, pt(400, 5f))
+        assertTrue(m.showDot(401))
     }
 
     @Test fun widthFollowsPressure() {
