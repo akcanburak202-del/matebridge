@@ -144,7 +144,9 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 **Bitti:** Krita'da basınçla kalınlaşan/incelen fırça ve eğim çalışıyor. 15 dakikalık çizimde kopuk çizgi veya takılı kalan tık olmuyor.
 
-**Durum (2026-09-30):** Kod `main`'de (T-022, T-023, T-024, T-026). İlk canlı denemede hover, basınç, avuç reddi, dokunma ve kaydırma çalıştı; kalem olayları USB'de Mac'e 2,8 ms aralıkla ulaşıyor. Cihaz doğrulaması (T-025) sürüyor. Açık: bir kez görülen ve tekrarlanamayan "kalem çizmedi" olayı, çift dokunmanın Krita'da fırça değiştirmemesi (T-027), eğim, vuruş ortasında bağlantı kesme denemeleri, uçtan uca kalem gecikmesi, 15 dakikalık çizim. Ayrıntı: NOTES 2026-09-30, T-025 kartı.
+**Kapanış (2026-09-30):** Faz 2 kullanıcı kararıyla kapandı. Doğrulanan: basınç, eğim, hover, çift dokunmayla silgi (T-027/T-031), avuç reddi, dokunma/kaydırma, vuruş ortasında kablo çekme/Home/bildirim paneli/force-stop. Kullanım sırasında bakılacak (kullanıcı sorun görürse bildirecek): uçtan uca kalem gecikmesi, 15 dakikalık çizim, Wi-Fi kesme. Krita'da "Temel" pürüzsüzleştirme dikeni Krita kaynaklı ("Yok" önerilir).
+
+**Durum (2026-09-30, eski):** Kod `main`'de (T-022, T-023, T-024, T-026). İlk canlı denemede hover, basınç, avuç reddi, dokunma ve kaydırma çalıştı; kalem olayları USB'de Mac'e 2,8 ms aralıkla ulaşıyor. Cihaz doğrulaması (T-025) sürüyor. Açık: bir kez görülen ve tekrarlanamayan "kalem çizmedi" olayı, çift dokunmanın Krita'da fırça değiştirmemesi (T-027), eğim, vuruş ortasında bağlantı kesme denemeleri, uçtan uca kalem gecikmesi, 15 dakikalık çizim. Ayrıntı: NOTES 2026-09-30, T-025 kartı.
 
 ### Aşama 3 — Klavye ve trackpad
 

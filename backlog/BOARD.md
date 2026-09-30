@@ -2,17 +2,18 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## in-progress
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-025](tasks/T-025-phase2-device-validation.md) | Faz 2 cihaz doğrulaması — Krita test matrisi, kalem gecikmesi, takılı girdi avı | 2 | orchestrator | [T-023, T-024] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
+
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-032](tasks/T-032-host-keyboard.md) | Mac klavye — KEY → macOS keycode, değiştiriciler, otomatik tekrar, Caps Lock, release-all | 3 | mac-host-dev | [T-023] |
+| [T-033](tasks/T-033-client-keyboard.md) | Tablet klavye — fiziksel tuşları KEY olarak gönder, Android'e bırakma, sökülünce bırak | 3 | android-client-dev | [T-024] |
 
 ## done
 
@@ -41,6 +42,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-022](tasks/T-022-host-input-state.md) | Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli) | 2 | mac-host-dev | [T-014] |
 | [T-023](tasks/T-023-host-input-injection.md) | Mac girdi enjeksiyonu — CGEvent kalem/fare, koordinat dönüşümü, oturuma bağlama | 2 | mac-host-dev | [T-022] |
 | [T-024](tasks/T-024-client-pen-capture.md) | Tablet kalem ve dokunma yakalama — PEN toplu örnekler, POINTER_ABS, avuç reddi, RELEASE_ALL | 2 | android-client-dev | [T-015] |
+| [T-025](tasks/T-025-phase2-device-validation.md) | Faz 2 cihaz doğrulaması — Krita test matrisi, kalem gecikmesi, takılı girdi avı | 2 | orchestrator | [T-023, T-024] |
 | [T-026](tasks/T-026-client-pen-unbuffered.md) | Tablet — kalem örneklerini bekletmeden ilet (unbuffered dispatch), yinelenen örnek sayacı | 2 | android-client-dev | [T-024] |
 | [T-027](tasks/T-027-krita-eraser-switch.md) | Çift dokunma Krita'da fırça değiştirmiyor — nedenini bul, karar 0006'yı doğrula ya da değiştir | 2 | orchestrator | [T-023] |
 | [T-028](tasks/T-028-black-screen-on-display-reuse.md) | Hızlı yeniden bağlanmada siyah ekran — sanal ekran yeniden kullanılınca tablet hiç kare çözmüyor | 2 | orchestrator | [T-014, T-015] |

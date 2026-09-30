@@ -1,7 +1,7 @@
 ---
 id: T-025
 title: Faz 2 cihaz doğrulaması — Krita test matrisi, kalem gecikmesi, takılı girdi avı
-status: in-progress
+status: done
 phase: 2
 owner: orchestrator
 depends_on: [T-023, T-024]
@@ -73,9 +73,13 @@ Ayrıntı ve ölçümler: `docs/NOTES.md` 2026-09-30 "Faz 2 ilk canlı deneme" v
 
 Sıradaki oturum, sırayla: (1) T-027 (çift dokunma Krita'da fırça değiştirmiyor: Krita tablet olay günlüğü, `vendorPointerType` ve benzersiz kimlik denemesi), (2) eğim ve `--inject-test` fixture'ları, (3) uçtan uca kalem gecikmesi, (4) Wi-Fi kesme ve force-stop vuruş ortasında, arka plandan dönüşte ilk dokunuş, (5) 15 dakikalık serbest çizim ("Yok" ayarıyla), (6) sonuç tablosu ve kapanış. Oturum başında: `scripts/usb-mode.sh on`, tablet log ve Mac olay kaydedicisini yeniden başlat (scratch araçları oturumla silinir; tarifleri bellekte).
 
+## Kapanış (2026-09-30)
+
+Kullanıcı kararı: kalan maddeler (uçtan uca gecikme, 15 dakikalık çizim, Wi-Fi kesme, `--inject-test` adımları, sonuç tablosu) ayrı test turu yapılmadan kullanım sırasında izlenecek; kullanıcı sorun görürse bildirecek. PLAN Aşama 2 kapanış notu.
+
 ## Handoff
 
-- **Commit:**
+- **Commit:** ac5be4c (son ilerleme)
 - **Dokunulan dosyalar:**
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
