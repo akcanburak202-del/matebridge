@@ -13,6 +13,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
+| [T-045](tasks/T-045-host-fps-experiment-knobs.md) | Mac — 120 fps deneyi için ayar düğmeleri (MATEBRIDGE_FPS, MATEBRIDGE_BITRATE_KBPS) ve kodlama süresi ölçümü | 5 | mac-host-dev | [T-017] |
 
 ## done
 
