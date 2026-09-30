@@ -1,22 +1,29 @@
 package dev.matebridge.client.video
 
 /**
- * Adaptive frame scheduling (T-052). Replaces the fixed N-period jitter buffer of [FramePacer], which
+ * Adaptive frame scheduling (T-052, T-057). Replaces the fixed N-period jitter buffer of [FramePacer], which
  * was only an integer shift of the vsync grid (ceil(t + P) = ceil(t) + P) and therefore never changed
  * which vsync a jittery frame landed on.
  *
  * The host captures frames at an exactly regular cadence, so the capture timestamp is the ideal clock:
  *  - x = readyNs - captureUs*1000 (the constant host/tablet clock offset cancels out); m = its minimum over
- *    a sliding [WINDOW_NS] window = best-case pipeline delay; dev = x - m >= 0 is this frame's extra delay.
- *  - D = p98 of recent dev + margin + feedback [extraNs]. Target display time = readyNs - dev + D, i.e.
- *    capture + m + D: frames are evenly spaced by the content interval, so the jitter is absorbed and each
+ *    a sliding [WINDOW_NS] window = best-case pipeline delay; dev = x - b >= 0 is this frame's extra delay,
+ *    where b is m followed with a bounded step per frame ([BASE_SLEW_UP_NS]/[BASE_SLEW_DOWN_NS]).
+ *  - D = p99 of recent dev + margin + feedback [extraNs], followed with a bounded step per frame too, and at
+ *    most 1.5 periods. Target display time = readyNs - dev + D (+ the presentation deadline), i.e.
+ *    capture + b + D: frames are evenly spaced by the content interval, so the jitter is absorbed and each
  *    frame maps to its own vsync. Added latency is about D (usually below one vsync) plus the wait for the grid.
- *  - Slot = first vsync >= target (never before the earliest vsync), at least one period after the previous
- *    slot. When the backlog would exceed D + 2 periods the newest frame takes the previous slot (collided).
+ *  - Slot = first vsync >= target, never before the earliest vsync a frame handed over now can make, never
+ *    after the earliest + one period (the latency bound applies to the FINAL slot, T-057), at least one period
+ *    after the previous slot. A frame that would land beyond the bound shares the previous frame's slot
+ *    (collided + lateDrop): the newer frame replaces a still-pending older one or is dropped, instead of being
+ *    pushed onto a later free slot.
  *  - [onSkipWindow] closes the loop with the measured skip percentage: more slack when frames are skipped,
  *    slowly less when none are.
+ *  - Phase and period come from one [VsyncClock.Grid] snapshot; the panel-rate epoch (not a period
+ *    comparison) resets the state; an idle gap longer than [IDLE_REANCHOR_NS] re-anchors it.
  *
- * Decoder thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
+ * Decoder/output thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
 class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: Long = 0) {
     companion object {
@@ -34,6 +41,16 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         /** Windows after any level change during which no further change is made (anti-flapping). */
         const val HOLD_WINDOWS = 10
         const val MAX_LEVEL = 2
+        /** D never exceeds this many half periods (3 = 1.5 periods). */
+        const val MAX_D_HALF_PERIODS = 3L
+        /** Per-frame slew of the baseline m: rises slowly (a spike must not look like a new normal), falls faster. */
+        const val BASE_SLEW_UP_NS = 50_000L
+        const val BASE_SLEW_DOWN_NS = 200_000L
+        /** Per-frame slew of D: rises fast enough to absorb new jitter within a few frames, falls slowly. */
+        const val D_SLEW_UP_NS = 1_000_000L
+        const val D_SLEW_DOWN_NS = 100_000L
+        /** No frame for this long (static screen): window, baseline and slot are forgotten. */
+        const val IDLE_REANCHOR_NS = 1_000_000_000L
     }
 
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
@@ -44,6 +61,10 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     private var devPos = 0
     private var lastSlot = Long.MIN_VALUE
     private var lastPeriod = 0L
+    private var epoch = -1
+    private var lastScheduleNs = Long.MIN_VALUE
+    private var baseNs = Long.MIN_VALUE // slewed baseline b
+    private var dNs = Long.MIN_VALUE // slewed D
 
     /**
      * Slack level added by the skip feedback on top of the measured jitter: 0 = none, 1 = half a vsync,
@@ -63,46 +84,66 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     /** Null when no vsync sample or capture time is known: the caller renders at once. */
     fun schedule(captureUs: Long?, nowNs: Long): FramePacer.Decision? {
         if (captureUs == null || !vsync.hasSample) return null
-        val period = vsync.periodNs
-        if (lastPeriod != 0L && Math.abs(period - lastPeriod) * 10 > lastPeriod) {
-            resetState() // panel rate changed (60 <-> 120): everything measured against the old grid is stale
+        val grid = vsync.grid() // one snapshot: phase, period, epoch and deadline belong together
+        val period = grid.periodNs
+        if (epoch != grid.epoch) {
+            resetState() // panel rate really changed (60 <-> 120): everything measured against the old grid is stale
+            epoch = grid.epoch
+        } else if (lastScheduleNs != Long.MIN_VALUE && nowNs - lastScheduleNs > IDLE_REANCHOR_NS) {
+            reanchor()
         }
+        lastScheduleNs = nowNs
         lastPeriod = period
 
         val x = nowNs - captureUs * 1000
         while (minX.isNotEmpty() && minX.last() >= x) { minX.removeLast(); minT.removeLast() }
         minX.addLast(x); minT.addLast(nowNs)
         while (minT.first() < nowNs - WINDOW_NS) { minT.removeFirst(); minX.removeFirst() }
-        val dev = x - minX.first()
+        val m = minX.first()
+        baseNs = if (baseNs == Long.MIN_VALUE) m else slew(baseNs, m, BASE_SLEW_UP_NS, BASE_SLEW_DOWN_NS)
+        val dev = (x - baseNs).coerceAtLeast(0)
         // Slack comes from the jitter seen so far: a frame that is worse than everything before it is late.
         // Content faster than the panel (e.g. 120 fps on a 60 Hz panel): some frames must be dropped. Never queue
         // them behind each other (that builds latency and stalls the decoder's output buffers): one vsync of slack
         // at most, and a frame whose slot is already taken replaces the older one (newest wins).
         val fi = if (frameIntervalNs > 0) frameIntervalNs else period
         val surplus = fi * 4 < period * 3
-        val d = if (surplus) (percentile() + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
-        else (percentile() + MARGIN_NS + extraNs).coerceAtMost(3 * period)
+        val dTarget = if (surplus) (percentile() + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
+        else (percentile() + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)
+        val d = if (dNs == Long.MIN_VALUE) dTarget else slew(dNs, dTarget, D_SLEW_UP_NS, D_SLEW_DOWN_NS)
+        dNs = d
         devs[devPos] = dev
         devPos = (devPos + 1) % DEV_SAMPLES
         if (devN < DEV_SAMPLES) devN++
         lastDNs = d
-        val earliest = vsync.slotAtOrAfter(nowNs, 0.0)
-        val targetSlot = vsync.slotAtOrAfter(nowNs - dev + d, 0.0)
+        // Earliest vsync a frame handed over now can still make (the compositor needs the deadline before it).
+        val earliest = grid.slotAtOrAfter(nowNs + grid.deadlineNs, 0.0)
+        val targetSlot = grid.slotAtOrAfter(nowNs - dev + d + grid.deadlineNs, 0.0)
         val late = targetSlot < earliest // the frame missed its own ideal slot: the content gap is our doing
-        var slot = maxOf(targetSlot, earliest)
+        // Latency bound on the final slot: at most one vsync after the earliest possible one.
+        val limit = earliest + period
+        var slot = minOf(maxOf(targetSlot, earliest), limit)
         var collided = false
+        var lateDrop = false
         val previous = lastSlot
-        if (lastSlot != Long.MIN_VALUE && slot <= lastSlot) {
-            // Same vsync as the previous frame (or earlier): one period after it, unless that is too far behind.
-            val pushed = lastSlot + period
-            if (!surplus && pushed - earliest <= d + 2 * period) slot = pushed else { slot = lastSlot; collided = true }
+        if (previous != Long.MIN_VALUE && slot <= previous) {
+            // Same vsync as the previous frame (or earlier): the next free one, unless that is beyond the bound.
+            val pushed = previous + period
+            if (!surplus && pushed <= limit) slot = pushed
+            else { slot = previous; collided = true; lateDrop = !surplus }
         }
         lastSlot = slot
         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
         // A skip: a vsync went by without a new frame although this one was decoded (late, not an idle source).
         val skipped = late && previous != Long.MIN_VALUE && (slot - previous) * 2 > cadence * 3
-        return FramePacer.Decision(slot - period / 2, collided, (slot - earliest).coerceAtLeast(0), skipped)
+        return FramePacer.Decision(
+            slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), skipped,
+            slotNs = slot, lateDrop = lateDrop,
+        )
     }
+
+    private fun slew(cur: Long, target: Long, up: Long, down: Long) =
+        if (target > cur) minOf(target, cur + up) else maxOf(target, cur - down)
 
     private fun percentile(): Long {
         if (devN == 0) return 0
@@ -126,12 +167,18 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         else if (lowRun >= LOW_WINDOWS && level > 0) { level--; hold = HOLD_WINDOWS; lowRun = 0 }
     }
 
-    private fun resetState() {
+    /** After a long idle gap: measurements restart, the feedback level is kept. */
+    private fun reanchor() {
         minT.clear(); minX.clear()
         devN = 0; devPos = 0
         lastSlot = Long.MIN_VALUE
+        baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
+    }
+
+    private fun resetState() {
+        reanchor()
         level = 0; highRun = 0; lowRun = 0; hold = 0
     }
 
-    fun reset() { resetState(); lastPeriod = 0 }
+    fun reset() { resetState(); lastPeriod = 0; epoch = -1; lastScheduleNs = Long.MIN_VALUE }
 }

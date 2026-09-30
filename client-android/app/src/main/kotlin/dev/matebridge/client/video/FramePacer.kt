@@ -2,20 +2,41 @@ package dev.matebridge.client.video
 
 /**
  * Estimated display vsync grid, fed from Choreographer frame times (System.nanoTime domain).
- * Written on the UI thread, read on the decoder thread; the state is one immutable object.
+ * Written on the UI thread, read on the decoder thread; the whole state is one immutable [Grid], so a reader
+ * always sees a phase and period that belong together ([grid]).
  *
- * The period follows an EMA of the observed vsync gaps. Gaps that do not fit the current period
- * (a 60 <-> 120 Hz switch) re-seed it after [RESEED_AFTER] consecutive consistent samples; a single
- * odd gap (skipped callback) is ignored. Also seed it with [setNominalHz] from the real display rate.
+ * The period follows an EMA of the observed vsync gaps. A gap that is not one period is either a missed
+ * Choreographer callback (one-off, or an exact multiple of the period) or a real panel-rate change. The
+ * authoritative source for a rate change is the display listener ([setNominalHz]); from samples alone a
+ * persistent, consistent odd gap re-seeds the period after [RESEED_AFTER] samples, or [RESEED_AFTER_MULTIPLE]
+ * when the gap is an integer multiple of the period (indistinguishable from a run of missed callbacks for a
+ * while). [Grid.epoch] increases only when the period really changed by more than 10 percent.
+ *
+ * Phase: Choreographer reports the app vsync, which lags the display vsync by `appVsyncOffsetNanos`; the grid
+ * is kept in display time (frame time - offset). [Grid.deadlineNs] is `presentationDeadlineNanos`.
  */
 class VsyncClock(private val initialHz: Float = 60f) {
     companion object {
         const val RESEED_AFTER = 4
+        const val RESEED_AFTER_MULTIPLE = 12
     }
 
-    private class State(val lastNs: Long, val periodNs: Long)
+    /** One consistent view of the grid. [lastNs] is a display-time vsync (-1: none yet). */
+    class Grid(val lastNs: Long, val periodNs: Long, val epoch: Int, val deadlineNs: Long) {
+        /** First point of the grid `vsync + phase * period` that is >= [tNs]. [phase] in 0..1. */
+        fun slotAtOrAfter(tNs: Long, phase: Double): Long {
+            val origin = lastNs + (periodNs * phase).toLong()
+            if (tNs <= origin) return origin
+            val n = (tNs - origin + periodNs - 1) / periodNs
+            return origin + n * periodNs
+        }
+    }
 
-    @Volatile private var state = State(-1, hzToPeriod(initialHz))
+    @Volatile private var grid = Grid(-1, hzToPeriod(initialHz), 0, 0)
+    @Volatile private var appOffsetNs = 0L
+
+    /** Release-timestamp lead before the slot; negative = use half a period. Tunable (T-057). */
+    @Volatile var leadOverrideNs = -1L
 
     // UI-thread only: run of consecutive gaps that disagree with the current period.
     private var oddRun = 0
@@ -23,51 +44,76 @@ class VsyncClock(private val initialHz: Float = 60f) {
 
     private fun hzToPeriod(hz: Float) = (1_000_000_000.0 / hz.coerceIn(24f, 240f)).toLong()
 
-    val hasSample: Boolean get() = state.lastNs >= 0
-    val periodNs: Long get() = state.periodNs
+    fun grid(): Grid = grid
+    val hasSample: Boolean get() = grid.lastNs >= 0
+    val periodNs: Long get() = grid.periodNs
+    val deadlineNs: Long get() = grid.deadlineNs
+
+    /** Timestamp lead handed to the codec: render time = slot - lead. */
+    fun leadNs(): Long {
+        val g = grid
+        return if (leadOverrideNs >= 0) leadOverrideNs.coerceAtMost(g.periodNs) else g.periodNs / 2
+    }
+
+    /**
+     * Display timing from `Display.getAppVsyncOffsetNanos()` and `presentationDeadlineNanos`. The phase is
+     * kept: the anchor moves by the change of the offset.
+     */
+    fun setDisplayTiming(appVsyncOffsetNs: Long, presentationDeadlineNs: Long) {
+        val g = grid
+        val off = appVsyncOffsetNs.coerceIn(0, g.periodNs)
+        val last = if (g.lastNs >= 0) g.lastNs + (appOffsetNs - off) else g.lastNs
+        appOffsetNs = off
+        grid = Grid(last, g.periodNs, g.epoch, presentationDeadlineNs.coerceIn(0, g.periodNs))
+    }
 
     /** Sets the nominal refresh rate (display mode change); keeps the phase. */
     fun setNominalHz(hz: Float) {
         oddRun = 0
-        val s = state
-        state = State(s.lastNs, hzToPeriod(hz))
+        val g = grid
+        val p = hzToPeriod(hz)
+        grid = Grid(g.lastNs, p, if (periodChanged(g.periodNs, p)) g.epoch + 1 else g.epoch, g.deadlineNs)
     }
 
     /** Forgets phase and observations (streaming stopped). */
     fun reset() {
         oddRun = 0
-        state = State(-1, state.periodNs)
+        val g = grid
+        grid = Grid(-1, g.periodNs, g.epoch, g.deadlineNs)
     }
 
+    private fun periodChanged(a: Long, b: Long) = Math.abs(a - b) * 10 > a
+
     /** UI thread: one Choreographer callback. */
-    fun onVsync(frameTimeNs: Long) {
-        val s = state
-        if (s.lastNs < 0 || frameTimeNs <= s.lastNs) { state = State(frameTimeNs, s.periodNs); return }
-        val delta = frameTimeNs - s.lastNs
-        val k = Math.round(delta.toDouble() / s.periodNs).coerceAtLeast(1)
+    fun onVsync(callbackTimeNs: Long) {
+        val frameTimeNs = callbackTimeNs - appOffsetNs
+        val g = grid
+        if (g.lastNs < 0 || frameTimeNs <= g.lastNs) { grid = Grid(frameTimeNs, g.periodNs, g.epoch, g.deadlineNs); return }
+        val delta = frameTimeNs - g.lastNs
+        val k = Math.round(delta.toDouble() / g.periodNs).coerceAtLeast(1)
         val sample = delta / k
-        val fits = k == 1L && sample in s.periodNs * 3 / 4..s.periodNs * 5 / 4
-        var period = s.periodNs
+        val fits = k == 1L && sample in g.periodNs * 3 / 4..g.periodNs * 5 / 4
+        var period = g.periodNs
+        var epoch = g.epoch
         if (fits) {
             oddRun = 0
-            period = (s.periodNs * 15 + sample) / 16
+            period = (g.periodNs * 15 + sample) / 16
         } else {
-            // Either a skipped callback (one-off) or the real period changed (persistent, consistent).
+            // Either a missed callback (one-off, often an exact multiple) or the real period changed (persistent).
             if (oddRun > 0 && Math.abs(delta - oddDeltaNs) * 8 <= oddDeltaNs) oddRun++ else oddRun = 1
             oddDeltaNs = delta
-            if (oddRun >= RESEED_AFTER && delta in 3_000_000L..50_000_000L) { period = delta; oddRun = 0 }
+            val multiple = Math.abs(delta - k * g.periodNs) * 8 <= g.periodNs && k >= 2
+            val need = if (multiple) RESEED_AFTER_MULTIPLE else RESEED_AFTER
+            if (oddRun >= need && delta in 3_000_000L..50_000_000L) {
+                if (periodChanged(g.periodNs, delta)) epoch++
+                period = delta; oddRun = 0
+            }
         }
-        state = State(frameTimeNs, period)
+        grid = Grid(frameTimeNs, period, epoch, g.deadlineNs)
     }
 
     /** First point of the grid `vsync + phase * period` that is >= [tNs]. [phase] in 0..1. */
-    fun slotAtOrAfter(tNs: Long, phase: Double): Long {
-        val s = state
-        val origin = s.lastNs + (s.periodNs * phase).toLong()
-        if (tNs <= origin) return origin
-        val n = (tNs - origin + s.periodNs - 1) / s.periodNs
-        return origin + n * s.periodNs
-    }
+    fun slotAtOrAfter(tNs: Long, phase: Double): Long = grid.slotAtOrAfter(tNs, phase)
 }
 
 /**
@@ -87,25 +133,33 @@ class FramePacer(
     @Volatile var bufferFrames: Int,
     private val frameIntervalNs: Long,
 ) {
-    /** [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the earliest possible vsync. */
-    class Decision(val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false)
+    /**
+     * [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the earliest possible vsync; [slotNs]
+     * is the target vsync (display time). [lateDrop]: the frame found no slot within the latency bound and shares
+     * the previous frame's slot instead of queueing behind it.
+     */
+    class Decision(
+        val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false,
+        val slotNs: Long = 0, val lateDrop: Boolean = false,
+    )
 
     private var lastVsyncNs = Long.MIN_VALUE
 
     /** Null when no vsync sample exists yet: the caller renders immediately. */
     fun schedule(nowNs: Long): Decision? {
         if (!vsync.hasSample) return null
-        val period = vsync.periodNs
+        val grid = vsync.grid()
+        val period = grid.periodNs
         val fi = if (frameIntervalNs > 0) frameIntervalNs else period
-        val earliest = vsync.slotAtOrAfter(nowNs, 0.0)
-        val base = vsync.slotAtOrAfter(nowNs + bufferFrames.coerceIn(0, 2) * period, 0.0)
+        val earliest = grid.slotAtOrAfter(nowNs, 0.0)
+        val base = grid.slotAtOrAfter(nowNs + bufferFrames.coerceIn(0, 2) * period, 0.0)
         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
         var v = if (lastVsyncNs == Long.MIN_VALUE) base else maxOf(base, lastVsyncNs + cadence)
         if (v - base > fi / 2) v = base // re-anchor: too much cadence debt
         var collided = false
         if (lastVsyncNs != Long.MIN_VALUE && v <= lastVsyncNs) { v = lastVsyncNs; collided = true }
         lastVsyncNs = v
-        return Decision(v - period / 2, collided, (v - earliest).coerceAtLeast(0))
+        return Decision(v - vsync.leadNs(), collided, (v - earliest).coerceAtLeast(0), slotNs = v)
     }
 
     fun reset() { lastVsyncNs = Long.MIN_VALUE }

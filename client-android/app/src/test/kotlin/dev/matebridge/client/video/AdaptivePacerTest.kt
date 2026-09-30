@@ -144,7 +144,7 @@ class AdaptivePacerTest {
         repeat(AdaptivePacer.HIGH_WINDOWS) { pacer.onSkipWindow(10.0) }
         assertTrue(pacer.extraNs > 0)
         // Panel goes to 60 Hz: after the clock re-seeds, the pacer drops its stale feedback.
-        repeat(VsyncClock.RESEED_AFTER + 1) { t += p60; v.onVsync(t) }
+        repeat(VsyncClock.RESEED_AFTER_MULTIPLE + 1) { t += p60; v.onVsync(t) }
         assertEquals(p60, v.periodNs)
         assertNotNull(pacer.schedule(60 * p120 / 1000, 1_000_000_000L + 60 * p120 + 20 * ms))
         assertEquals(0L, pacer.extraNs)

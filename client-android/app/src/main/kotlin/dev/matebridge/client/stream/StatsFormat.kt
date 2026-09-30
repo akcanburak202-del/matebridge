@@ -43,6 +43,14 @@ object StatsFormat {
     fun gapFields(prefix: String, g: IntervalSummary) =
         "${prefix}_p50_us=${g.p50Us} ${prefix}_p95_us=${g.p95Us} ${prefix}_p99_us=${g.p99Us} ${prefix}_over=${g.overThreshold}"
 
+    /**
+     * Log fields of the presentation scheduler (T-057): second release attempts per slot, frames folded onto the
+     * previous slot by the latency bound, p95 frames inside the decoder, timestamp lead, slack D.
+     */
+    fun presentFields(slotDups: Long, lateDrops: Long, inCodecP95: Int?, leadNs: Long, dUs: Long, limit: Int) =
+        "slot_dups=$slotDups late_drops=$lateDrops in_codec_p95=${inCodecP95 ?: "-"} " +
+            String.format(Locale.ROOT, "lead_ms=%.2f", leadNs / 1e6) + " d_us=$dUs inflight_limit=$limit"
+
     /** Overlay line for the display mode and jitter buffer ([bufferFrames] < 0 = adaptive pacing). */
     fun pacingLine(
         modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null, skipPct: Double? = null,
