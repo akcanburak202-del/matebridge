@@ -1,7 +1,7 @@
 ---
 id: T-038
 title: Tablet — F tuşu olmayan klavye için yerel kısayollar (Ctrl+Shift+8/9/0)
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-035]
@@ -31,12 +31,15 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): yakınlaştırma, kaydırma ve `Ctr
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `KeyTracker.localChord`: scan 9/10/11 (rakam 8/9/0) icin STATS/SPEED_DOWN/SPEED_UP eslemesi ekle (yalniz Ctrl+Shift ile); keyCode'a bakilmaz (duzenden bagimsiz).
+2. Mevcut `localOnly` mekanizmasi aynen kullanilir; `InputCapture.onKey` degismez (oturum yokken rakamlar Android'de kalir).
+3. MainActivity kisayol satirini guncelle.
+4. KeyTrackerTest: 3 kombinasyon, rakam tek basina / yalniz Ctrl ile Mac'e gider, yinelenen DOWN yerel.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Commit:** (see branch head, task/T-038-client-shortcuts-no-fkeys)
+- **Dokunulan dosyalar:** KeyTracker.kt, MainActivity.kt (kisayol satiri), KeyTrackerTest.kt, bu kart
+- **Varsayımlar:** Eslesme yalniz scan code (9/10/11); scan code 0 gelen klavyede rakam kisayolu calismaz (F tuslari keyCode ile de eslesir). InputCapture degismedi: oturum yokken yalniz F3 yerel, rakamlar Android'de.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Glide Keyboard'da Ctrl+Shift+9/0 imleç hizi, Ctrl+Shift+8 istatistik; rakamlar Mac'e sizmiyor; oturum yokken IP alanina rakam yazilabiliyor; panel satiri.
 - **Açık sorular:**

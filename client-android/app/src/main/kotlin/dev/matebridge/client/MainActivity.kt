@@ -460,7 +460,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun addShortcutHint() {
         val p = panel as? LinearLayout ?: return
         val t = TextView(this)
-        t.text = "Kısayollar: Ctrl+Shift+F3 istatistik, F1/F2 imleç hızı -/+, Esc Android'e dön"
+        t.text = "Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · Ctrl+Shift+8: istatistik"
         val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         lp.topMargin = (8 * resources.displayMetrics.density).toInt()
         p.addView(t, lp)
