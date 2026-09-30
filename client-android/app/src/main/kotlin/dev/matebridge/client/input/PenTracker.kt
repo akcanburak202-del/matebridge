@@ -14,8 +14,13 @@ import dev.matebridge.client.stream.VideoViewport
  *  - a contact sample is only produced after an `ACTION_DOWN` was seen ([State.CONTACT]); a MOVE that
  *    arrives without one (stroke in progress when input resumed after RELEASE_ALL, or when the model was
  *    reset) goes out as hover, so a stroke middle never starts a drag;
- *  - `STROKE_START` only on the DOWN sample; a DOWN while already in contact first ends the old contact;
+ *  - `STROKE_START` only on the first sample of the DOWN (any history the DOWN carries follows as ordinary
+ *    contact); a DOWN while already in contact first ends the old contact;
  *  - `ACTION_CANCEL` and hover exit produce a `flags = 0` sample; a tool change first sends `flags = 0` for the old tool;
+ *  - a release (UP / CANCEL) ends the active tool whatever tool type the frame reports, and the contact remembers
+ *    the pointer id that opened it ([followsPointer]) so the adapter can route the release by id;
+ *  - [lastSentMs] (time of the last emitted PEN message, repeats and synthetic `flags = 0` included) is the clock of
+ *    the host's finger gate; [lastEventMs] (last real Android event) only drives the stale guards below;
  *  - liveness: while in range a sample is repeated every [LIVENESS_MS] (host watchdog is 500 ms);
  *  - the client never repeats forever on stale belief: hover with no real event for [HOVER_STALE_MS]
  *    (Android did not report the exit, e.g. a fast lift after `ACTION_UP`) and contact with no event for
@@ -37,8 +42,20 @@ class PenTracker(
     var state = State.OUT
         private set
     override val inRange get() = state != State.OUT
-    override var lastEventMs = NEVER_MS
+
+    /** Uptime ms of the last real Android pen event (hover exit and cancel included); drives the stale guards. */
+    var lastEventMs = NEVER_MS
         private set
+
+    /** Uptime ms of the last emitted PEN message: the host's finger-gate clock. */
+    override val lastSentMs get() = lastEmitMs
+
+    /** Android pointer id of the contact the host holds, or -1. Releases are routed by this id, not by tool type. */
+    var contactPointerId = -1
+        private set
+
+    /** True while a pen contact is open on the host and [id] is the pointer that opened it. */
+    fun followsPointer(id: Int) = state == State.CONTACT && contactPointerId == id
 
     private class S(
         val timeUs: Long, val x: Int, val y: Int, val pressure: Int,
@@ -60,18 +77,23 @@ class PenTracker(
         if (f.points.isEmpty()) return emptyList()
         val out = ArrayList<Outgoing>(2)
         lastEventMs = nowMs
-        val newTool = if (f.eraser) Pen.TOOL_ERASER else Pen.TOOL_PEN
+        // A release ends whichever tool is active, whatever tool type the platform reports for it now (PROTOCOL.md section 4).
+        val releaseFrame = f.action == PenAction.UP || f.action == PenAction.CANCEL
+        val newTool = if (releaseFrame && state != State.OUT) tool else if (f.eraser) Pen.TOOL_ERASER else Pen.TOOL_PEN
         settlePendingExit(absorb = f.action == PenAction.DOWN && newTool == tool, nowMs, out)
         if (state != State.OUT && newTool != tool) leaveAtLast(f.points.first().timeUs, nowMs, out)
         tool = newTool
         val pts = f.points
         when (f.action) {
             PenAction.DOWN -> {
-                val p = pts.last()
-                val s = ArrayList<S>(2)
-                if (state == State.CONTACT) s += sample(p, IN_RANGE) // missed UP: end the old contact first
-                s += sample(p, IN_RANGE or CONTACT or STROKE_START)
+                // Android batches only moves, but any history a DOWN carries is kept: STROKE_START rides on the
+                // first (oldest) sample only, the rest of the segment is ordinary contact.
+                val s = ArrayList<S>(pts.size + 1)
+                if (state == State.CONTACT) s += sample(pts.first(), IN_RANGE) // missed UP: end the old contact first
+                s += sample(pts.first(), IN_RANGE or CONTACT or STROKE_START)
+                for (i in 1 until pts.size) s += sample(pts[i], IN_RANGE or CONTACT)
                 state = State.CONTACT
+                contactPointerId = f.pointerId
                 emit(s, nowMs, out)
             }
             PenAction.MOVE -> {
@@ -86,6 +108,7 @@ class PenTracker(
                 for (i in 0 until pts.size - 1) s += sample(pts[i], if (contact) IN_RANGE or CONTACT else IN_RANGE)
                 s += sample(pts.last(), IN_RANGE) // contact ended; the pen may still hover
                 state = State.HOVER
+                contactPointerId = -1
                 emit(s, nowMs, out)
             }
             PenAction.CANCEL -> leaveAt(pts.last(), nowMs, out)
@@ -93,8 +116,15 @@ class PenTracker(
                 state = State.HOVER
                 emit(pts.map { sample(it, IN_RANGE) }, nowMs, out)
             }
-            PenAction.HOVER_EXIT ->
+            PenAction.HOVER_EXIT -> {
+                // Samples batched into the exit event are real hover positions: keep them, then close.
+                if (state != State.OUT && pts.size > 1) {
+                    state = State.HOVER
+                    contactPointerId = -1
+                    emit(pts.dropLast(1).map { sample(it, IN_RANGE) }, nowMs, out)
+                }
                 if (state == State.HOVER) pendingExit = PendingExit(pts.last(), nowMs) else leaveAt(pts.last(), nowMs, out)
+            }
         }
         return out
     }
@@ -149,6 +179,7 @@ class PenTracker(
      */
     fun reset() {
         state = State.OUT
+        contactPointerId = -1
         pendingExit = null
         last = null
         lastFlags = 0
@@ -222,6 +253,7 @@ class PenTracker(
     private fun toOut() {
         state = State.OUT
         lastTilt = null
+        contactPointerId = -1
     }
 
     private fun leaveAt(p: PenPoint, nowMs: Long, out: MutableList<Outgoing>) {

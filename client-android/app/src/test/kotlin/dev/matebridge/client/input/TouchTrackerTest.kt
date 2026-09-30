@@ -161,14 +161,14 @@ class TouchTrackerTest {
     @Test fun newPressIsRefusedWhileThePenIsInRangeAndForOneSecondAfter() {
         val t = tracker()
         presence.inRange = true
-        presence.lastEventMs = 0
+        presence.lastSentMs = 0
         assertTrue(t.onFrame(touchFrame(TouchAction.DOWN, 100, 1, finger(1, 10f, 10f)), 100).isEmpty())
         assertTrue(t.tick(500).isEmpty())
         assertTrue(t.isIdle)
         assertEquals(1L, counters.palmRejects)
         // The pen left at t=200: still refused for 1 s...
         presence.inRange = false
-        presence.lastEventMs = 200
+        presence.lastSentMs = 200
         t.onFrame(touchFrame(TouchAction.DOWN, 1100, 2, finger(2, 10f, 10f)), 1100)
         assertTrue(t.isIdle)
         assertEquals(2L, counters.palmRejects)
@@ -182,7 +182,7 @@ class TouchTrackerTest {
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 300f, 400f)), 0)
         t.tick(50)
         presence.inRange = true // pen arrives (the capture layer would call onPenRangeBegan; here it does not)
-        presence.lastEventMs = 60
+        presence.lastSentMs = 60
         val up = t.onFrame(touchFrame(TouchAction.UP, 80, 1, finger(1, 300f, 400f)), 80)
         assertEquals(listOf(0), buttons(up))
     }

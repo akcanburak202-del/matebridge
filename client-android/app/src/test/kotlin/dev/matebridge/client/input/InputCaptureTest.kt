@@ -27,15 +27,27 @@ class InputCaptureTest {
     private val cap = InputCapture(sink, { VP }, onEvent = { ev, f -> events += "$ev $f".trim() }) { lines += it }
 
     init {
-        cap.setActive(true, 0)
+        setActive(true, 0)
         cap.setStreamGeometry(1400, 920)
     }
 
-    private fun pen(action: PenAction, now: Long, vararg pts: PenPoint, eraser: Boolean = false, device: Int = 1) =
+    // Every call sets the host's receipt clock to the same test time the capture is given.
+    private fun pen(action: PenAction, now: Long, vararg pts: PenPoint, eraser: Boolean = false, device: Int = 1) {
+        sink.nowMs = now
         cap.onPen(penFrame(action, *pts, eraser = eraser, device = device), now)
+    }
 
-    private fun touch(action: TouchAction, now: Long, acting: Int, vararg f: Finger, device: Int = 2) =
+    private fun touch(action: TouchAction, now: Long, acting: Int, vararg f: Finger, device: Int = 2) {
+        sink.nowMs = now
         cap.onTouch(touchFrame(action, now, acting, *f, device = device), now)
+    }
+
+    private fun tick(t: Long) { sink.nowMs = t; sink.tickHost(); cap.tick(t) }
+    private fun releaseAll(reason: Int, t: Long) { sink.nowMs = t; cap.releaseAll(reason, t) }
+    private fun setActive(on: Boolean, t: Long) { sink.nowMs = t; cap.setActive(on, t) }
+    private fun onDeviceRemoved(id: Int, t: Long) { sink.nowMs = t; cap.onDeviceRemoved(id, t) }
+    private fun onGestureKeyDown(t: Long) { sink.nowMs = t; cap.onGestureKeyDown(t) }
+    private fun setFingersDisabled(off: Boolean, t: Long) { sink.nowMs = t; cap.setFingersDisabled(off, t) }
 
     private fun flags() = penSamples(sink.sent).map { it.flags }
     private fun types() = sink.sent.map { it.javaClass.simpleName }
@@ -58,7 +70,7 @@ class InputCaptureTest {
         assertFalse(sink.host.penContact)
         assertTrue(sink.host.penInRange)
         pen(PenAction.HOVER_EXIT, 18, pt(18))
-        cap.tick(100)
+        tick(100)
         assertFalse(sink.host.penInRange)
         assertTrue(sink.host.violations.isEmpty())
         assertTrue(sink.sent.all { it is Pen })
@@ -78,7 +90,7 @@ class InputCaptureTest {
 
     @Test fun focusLossSendsTheNaturalReleasesThenReleaseAllAndSuspendsInput() {
         startStroke()
-        cap.releaseAll(ReleaseAll.FOCUS_LOST, 30)
+        releaseAll(ReleaseAll.FOCUS_LOST, 30)
         assertEquals(listOf(0), flags().takeLast(1))
         assertEquals(ReleaseAll.FOCUS_LOST, (sink.sent.last() as ReleaseAll).reason)
         assertTrue(sink.host.clear)
@@ -87,15 +99,15 @@ class InputCaptureTest {
         pen(PenAction.MOVE, 35, pt(35))
         pen(PenAction.UP, 40, pt(40))
         touch(TouchAction.DOWN, 45, 1, finger(1, 5f, 5f))
-        cap.tick(200)
+        tick(200)
         assertEquals(n, sink.sent.size) // nothing is sent while focus is away
     }
 
     @Test fun focusLossWithAPressedFingerReleasesItBeforeReleaseAll() {
         touch(TouchAction.DOWN, 0, 1, finger(1, 300f, 400f))
-        cap.tick(60) // held-back DOWN goes out
+        tick(60) // held-back DOWN goes out
         assertTrue(sink.host.touchDown)
-        cap.releaseAll(ReleaseAll.FOCUS_LOST, 70)
+        releaseAll(ReleaseAll.FOCUS_LOST, 70)
         assertEquals(listOf("PointerAbs", "PointerAbs", "ReleaseAll"), types())
         assertEquals(0, (sink.sent[1] as PointerAbs).buttons)
         assertTrue(sink.host.clear)
@@ -105,29 +117,42 @@ class InputCaptureTest {
         touch(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f))
         touch(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f))
         assertTrue(sink.host.scrollOpen)
-        cap.releaseAll(ReleaseAll.FOCUS_LOST, 20)
+        releaseAll(ReleaseAll.FOCUS_LOST, 20)
         assertEquals(Scroll.CANCELLED, sink.sent.filterIsInstance<Scroll>().last().phase)
         assertTrue(sink.host.clear)
     }
 
-    @Test fun backgroundingReleasesEverythingBeforeTheSessionIsClosed() {
+    /**
+     * MainActivity calls releaseAll(BACKGROUND) from onPause, before onStop() asks the controller to send BYE, so the
+     * queue order is [... pen leave, RELEASE_ALL, BYE]. The BYE itself belongs to the session controller (not tested
+     * here); what this pins down is that the capture side is complete and last when that call returns.
+     */
+    @Test fun backgroundingEndsThePenThenSendsReleaseAllAsTheLastMessageAndNothingFollows() {
         startStroke()
-        cap.releaseAll(ReleaseAll.BACKGROUND, 40)
-        // The controller stops the session (BYE) after this call; RELEASE_ALL must already be queued.
-        assertEquals(ReleaseAll::class.java, sink.sent.last().javaClass)
+        releaseAll(ReleaseAll.BACKGROUND, 40)
+        val tail = sink.sent.takeLast(2)
+        assertTrue(tail[0] is Pen)
+        assertTrue(penSamples(listOf(tail[0])).all { it.flags == 0 }) // the pen leaves first
+        assertEquals(ReleaseAll.BACKGROUND, (tail[1] as ReleaseAll).reason)
         assertEquals(listOf(ReleaseAll.BACKGROUND), releaseAlls())
         assertTrue(sink.host.clear)
+        assertFalse(sink.host.penInRange)
         assertTrue(cap.isSuspended)
+        val n = sink.sent.size
+        pen(PenAction.MOVE, 50, pt(50))
+        touch(TouchAction.DOWN, 55, 1, finger(1, 5f, 5f))
+        tick(500)
+        assertEquals(n, sink.sent.size) // nothing follows RELEASE_ALL while backgrounded
     }
 
     @Test fun releaseAllIsSentEvenWhenNothingLooksHeld() {
-        cap.releaseAll(ReleaseAll.BACKGROUND, 10)
+        releaseAll(ReleaseAll.BACKGROUND, 10)
         assertEquals(listOf(ReleaseAll.BACKGROUND), releaseAlls())
     }
 
     @Test fun afterAReleaseTheMiddleOfTheOldStrokeIsHoverOnlyAndTheNextStrokeStartsNormally() {
         startStroke()
-        cap.releaseAll(ReleaseAll.FOCUS_LOST, 30)
+        releaseAll(ReleaseAll.FOCUS_LOST, 30)
         cap.resume()
         pen(PenAction.MOVE, 40, pt(40), pt(43)) // Android still reports the old stroke as touching
         assertEquals(listOf(IR, IR), flags().takeLast(2))
@@ -140,10 +165,10 @@ class InputCaptureTest {
 
     @Test fun deviceRemovalReleasesOnlyDevicesWeWereReadingFrom() {
         startStroke()
-        cap.onDeviceRemoved(99, 50)
+        onDeviceRemoved(99, 50)
         assertTrue(releaseAlls().isEmpty())
         assertTrue(sink.host.penContact)
-        cap.onDeviceRemoved(1, 60)
+        onDeviceRemoved(1, 60)
         assertEquals(listOf(ReleaseAll.DEVICE_DETACHED), releaseAlls())
         assertTrue(sink.host.clear)
         assertFalse(cap.isSuspended) // input from other or returning devices keeps flowing
@@ -217,10 +242,10 @@ class InputCaptureTest {
         sink.congestedNow = true
         pen(PenAction.HOVER_MOVE, 3, pt(3, x = 99f))
         assertEquals(1, sink.sent.size)
-        cap.tick(10)
+        tick(10)
         assertEquals(1, sink.sent.size)
         sink.congestedNow = false
-        cap.tick(35)
+        tick(35)
         assertEquals(VP.normX(99f), penSamples(sink.sent).last().x)
     }
 
@@ -231,7 +256,7 @@ class InputCaptureTest {
         assertFalse(cap.penInContact)
         sink.reconnect()
         cap.onSessionReset()
-        cap.tick(300)
+        tick(300)
         // nothing but hover may follow, even though Android still reports contact
         pen(PenAction.MOVE, 310, pt(310))
         assertTrue(penSamples(sink.sent.takeLast(1)).all { it.flags == IR })
@@ -239,16 +264,16 @@ class InputCaptureTest {
 
     @Test fun deactivationReleasesEverythingAndIgnoresLaterEvents() {
         startStroke()
-        cap.setActive(false, 50)
+        setActive(false, 50)
         assertEquals(listOf(ReleaseAll.USER), releaseAlls())
         assertTrue(sink.host.clear)
         val n = sink.sent.size
         pen(PenAction.MOVE, 60, pt(60))
         touch(TouchAction.DOWN, 61, 1, finger(1, 1f, 1f))
-        cap.tick(300)
+        tick(300)
         assertEquals(n, sink.sent.size)
         assertFalse(cap.isSuspended)
-        cap.setActive(true, 400)
+        setActive(true, 400)
         pen(PenAction.HOVER_ENTER, 410, pt(410))
         assertEquals(IR, flags().last())
     }
@@ -257,8 +282,8 @@ class InputCaptureTest {
         pen(PenAction.HOVER_ENTER, 0, pt(0))
         sink.congestedNow = true
         pen(PenAction.HOVER_MOVE, 3, pt(3, x = 77f))
-        cap.onGestureKeyDown(1000)
-        cap.onGestureKeyDown(1012)
+        onGestureKeyDown(1000)
+        onGestureKeyDown(1012)
         val gestures = sink.sent.filterIsInstance<PenGesture>()
         assertEquals(1, gestures.size)
         assertEquals(PenGesture.DOUBLE_TAP, gestures[0].gesture)
@@ -269,30 +294,30 @@ class InputCaptureTest {
     }
 
     @Test fun aSingleGestureKeyPairSendsNothing() {
-        cap.onGestureKeyDown(1000)
+        onGestureKeyDown(1000)
         assertTrue(sink.sent.isEmpty())
     }
 
     @Test fun palmRejectionBlocksFingerPressesWhileThePenIsNearAndForOneSecondAfter() {
         pen(PenAction.HOVER_MOVE, 0, pt(0))
         touch(TouchAction.DOWN, 100, 1, finger(1, 300f, 300f))
-        cap.tick(150)
+        tick(150)
         touch(TouchAction.UP, 160, 1, finger(1, 300f, 300f))
         assertTrue(sink.sent.none { it is PointerAbs })
         pen(PenAction.HOVER_EXIT, 200, pt(200))
-        cap.tick(260) // exit settles: pen out
+        tick(260) // exit settles: pen out
         touch(TouchAction.DOWN, 1000, 2, finger(2, 300f, 300f)) // 800 ms after the last pen event
-        cap.tick(1100)
+        tick(1100)
         assertTrue(sink.sent.none { it is PointerAbs })
         touch(TouchAction.UP, 1150, 2, finger(2, 300f, 300f))
         touch(TouchAction.DOWN, 1300, 3, finger(3, 300f, 300f)) // > 1 s
-        cap.tick(1350)
+        tick(1350)
         assertTrue(sink.sent.any { it is PointerAbs && it.buttons == 1 })
     }
 
     @Test fun aPressedFingerIsStillReleasedWhilePenIsInRange() {
         touch(TouchAction.DOWN, 0, 1, finger(1, 300f, 300f))
-        cap.tick(60)
+        tick(60)
         assertTrue(sink.host.touchDown)
         pen(PenAction.HOVER_ENTER, 70, pt(70)) // pen arrives: the finger (palm?) is released
         assertFalse(sink.host.touchDown)
@@ -303,23 +328,23 @@ class InputCaptureTest {
     }
 
     @Test fun fingerTouchCanBeDisabledCompletely() {
-        cap.setFingersDisabled(true, 0)
+        setFingersDisabled(true, 0)
         assertTrue(cap.fingersDisabled)
         touch(TouchAction.DOWN, 10, 1, finger(1, 300f, 300f))
-        cap.tick(100)
+        tick(100)
         touch(TouchAction.UP, 110, 1, finger(1, 300f, 300f))
         assertTrue(sink.sent.isEmpty())
         // The pen is unaffected.
         pen(PenAction.HOVER_ENTER, 200, pt(200))
         assertEquals(1, sink.sent.size)
-        cap.setFingersDisabled(false, 300)
+        setFingersDisabled(false, 300)
         assertFalse(cap.fingersDisabled)
     }
 
     @Test fun disablingFingersWhileOneIsPressedReleasesIt() {
         touch(TouchAction.DOWN, 0, 1, finger(1, 300f, 300f))
-        cap.tick(60)
-        cap.setFingersDisabled(true, 70)
+        tick(60)
+        setFingersDisabled(true, 70)
         assertFalse(sink.host.touchDown)
     }
 
@@ -332,30 +357,30 @@ class InputCaptureTest {
         pen(PenAction.HOVER_MOVE, 0, pt(0))
         var now = 0L
         val before = sink.sent.size
-        while (now < 490) { now += 25; cap.tick(now) }
+        while (now < 490) { now += 25; tick(now) }
         // one repeat per 100 ms, well inside the host's 500 ms window
         assertTrue(sink.sent.size - before >= 4)
     }
 
     @Test fun oneSummaryLinePerSecondWithCountersOnly() {
-        cap.tick(0)
+        tick(0)
         pen(PenAction.HOVER_ENTER, 10, pt(10, x = 123f, y = 456f))
         pen(PenAction.HOVER_MOVE, 13, pt(13, x = 124f, y = 457f))
-        cap.tick(500)
+        tick(500)
         assertTrue(lines.isEmpty())
-        cap.tick(1000)
+        tick(1000)
         assertEquals(1, lines.size)
         assertTrue(lines[0], lines[0].startsWith("interval_ms=1000 pen_samples="))
         assertTrue(lines[0].contains("palm_reject=0"))
         assertFalse(lines[0].contains("123") || lines[0].contains("456"))
-        cap.tick(1500)
-        cap.tick(2000)
+        tick(1500)
+        tick(2000)
         assertEquals(2, lines.size) // the pen is still in range, so the summary continues
     }
 
     @Test fun lifecycleEventsAreLoggedWithoutAnyCoordinates() {
         startStroke()
-        cap.releaseAll(ReleaseAll.FOCUS_LOST, 30)
+        releaseAll(ReleaseAll.FOCUS_LOST, 30)
         cap.resume()
         cap.onSessionReset()
         assertTrue(events.toString(), events.contains("input_active on=1"))

@@ -82,6 +82,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val clock = ClockSync()
     private lateinit var capture: InputCapture
     private val rootLoc = IntArray(2)
+    private var inputFaultUntilMs = 0L
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
@@ -207,6 +208,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)
                 override fun congested() = controller.isSendCongested()
+                override fun closeConnection() = controller.dropConnection()
             },
             { viewport },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
@@ -251,11 +253,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun routeToCapture(ev: MotionEvent): Boolean {
         val now = SystemClock.uptimeMillis()
-        if (!syncInputActive(now)) return false
-        if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
-        // Events arrive in window coordinates; the viewport is in root coordinates.
-        root.getLocationInWindow(rootLoc)
         return try {
+            if (!syncInputActive(now)) return false
+            if (now < inputFaultUntilMs) return true // recovering from an input fault: consumed, nothing half-processed
+            if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
+            // Events arrive in window coordinates; the viewport is in root coordinates.
+            root.getLocationInWindow(rootLoc)
             MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
         } catch (e: RuntimeException) {
             inputFailed(e, now)
@@ -263,10 +266,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    /** A bug in the input path must not kill the app mid-stroke: log it and release everything on the host. */
+    /**
+     * A bug in the input path must not kill the app mid-stroke: log it and release everything on the host. A
+     * persistent fault would otherwise repeat this (log plus RELEASE_ALL) at event rate, so input is paused for
+     * [INPUT_FAULT_BACKOFF_MS] after each fault; the model was forgotten by the release, so resuming is consistent.
+     */
     private fun inputFailed(e: RuntimeException, nowMs: Long) {
+        if (nowMs < inputFaultUntilMs) return
+        inputFaultUntilMs = nowMs + INPUT_FAULT_BACKOFF_MS
         MbLog.e("input_error", "err=${e.javaClass.simpleName}", "input")
-        try { capture.releaseAll(ReleaseAll.USER, nowMs) } catch (_: RuntimeException) {}
+        try {
+            capture.releaseAll(ReleaseAll.USER, nowMs)
+        } catch (_: RuntimeException) {
+            controller.dropConnection() // last resort: the host releases on disconnect
+        }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean =
@@ -292,7 +305,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val now = SystemClock.uptimeMillis()
             try {
                 syncInputActive(now)
-                capture.tick(now)
+                if (now >= inputFaultUntilMs) capture.tick(now)
             } catch (e: RuntimeException) {
                 inputFailed(e, now)
             }
@@ -698,6 +711,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private companion object {
         const val KEYFRAME_RETRY_MS = 500L
         const val INPUT_TICK_MS = 25L
+        const val INPUT_FAULT_BACKOFF_MS = 1000L
     }
 
     private fun causeText(c: SessionUi.Cause) = getString(

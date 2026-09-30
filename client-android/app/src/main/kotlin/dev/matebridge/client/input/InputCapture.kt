@@ -48,6 +48,15 @@ class InputCapture(
     internal val fingerPressed get() = touch.isPressed
     internal val scrollOpen get() = touch.isScrolling
 
+    /** True when the pen tracker holds an open contact opened by pointer [id] (release routing by id, not tool type). */
+    fun followsPenPointer(id: Int) = pen.followsPointer(id)
+
+    /** True when the finger tracker holds state for pointer [id]. */
+    fun followsFingerPointer(id: Int) = touch.follows(id)
+
+    /** Pointer id of the open pen contact, or -1. */
+    val penContactPointerId get() = pen.contactPointerId
+
     /** True when events are turned into messages: capture is active (video visible) and not suspended. */
     private val accepting get() = active && !suspended
 
@@ -125,17 +134,35 @@ class InputCapture(
      * also suspend input until [resume]. Always sends RELEASE_ALL, even when nothing seems held.
      */
     fun releaseAll(reason: Int, nowMs: Long) {
-        onEvent("release_all", "reason=$reason contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)}")
-        val outs = ArrayList<Outgoing>(3)
-        outs += pen.release(nowMs)
-        outs += touch.release(nowMs)
-        doubleTap.reset()
-        if (reason == ReleaseAll.BACKGROUND || reason == ReleaseAll.FOCUS_LOST) suspended = true
-        outs += Outgoing(ReleaseAll(reason))
-        dispatch(outs)
-        // The host has released (or the connection is going away): forget everything so a stroke in
-        // progress cannot come back as a contact from the middle.
-        forget()
+        var queued = false
+        try {
+            // Inside the try: a failing log hook must not be able to skip the release or the reset below.
+            onEvent("release_all", "reason=$reason contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)}")
+            val outs = ArrayList<Outgoing>(3)
+            outs += pen.release(nowMs)
+            // Pointer sources go last: buttons = 0 for everything reported pressed sits immediately before RELEASE_ALL
+            // (PROTOCOL.md section 7, the host's pointer lock would swallow the next press otherwise).
+            outs += touch.release(nowMs)
+            doubleTap.reset()
+            if (reason == ReleaseAll.BACKGROUND || reason == ReleaseAll.FOCUS_LOST) suspended = true
+            outs += Outgoing(ReleaseAll(reason))
+            queued = dispatch(outs)
+        } finally {
+            // Whatever happened, the model must not keep believing in a press: the host has released, or is about
+            // to (connection closed below), so a stroke in progress cannot come back as a contact from the middle.
+            forget()
+            // If RELEASE_ALL could not be queued the host still holds what it holds: drop the connection so the
+            // host releases on disconnect (PROTOCOL.md section 7).
+            if (!queued) closeConnectionSafely()
+        }
+    }
+
+    private fun closeConnectionSafely() {
+        try {
+            sink.closeConnection()
+        } catch (_: RuntimeException) {
+            // nothing left to try; the heartbeat silence rule of the host is the last line
+        }
     }
 
     /** Window focus is back: input flows again. */

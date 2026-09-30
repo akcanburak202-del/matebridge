@@ -130,6 +130,7 @@ class InputOutboxTest {
                 return true
             }
             override fun congested() = false
+            override fun closeConnection() {}
         }
         val ob = InputOutbox(throwing, counters) { refusedCount++ }
         assertFalse(ob.send(pen(0)))
