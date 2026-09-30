@@ -19,6 +19,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-027](tasks/T-027-krita-eraser-switch.md) | Çift dokunma Krita'da fırça değiştirmiyor — nedenini bul, karar 0006'yı doğrula ya da değiştir | 2 | orchestrator | [T-023] |
+| [T-028](tasks/T-028-black-screen-on-display-reuse.md) | Hızlı yeniden bağlanmada siyah ekran — sanal ekran yeniden kullanılınca tablet hiç kare çözmüyor | 2 | orchestrator | [T-014, T-015] |
 
 ## done
 

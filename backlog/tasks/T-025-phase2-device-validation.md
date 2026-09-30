@@ -54,6 +54,13 @@ Ayrıntı ve ölçümler: `docs/NOTES.md` 2026-09-30 "Faz 2 ilk canlı deneme" v
 - **Henüz yürütülmeyen adımlar** (T-023 kartındaki 11 adımlık listeden): 1c ve 3 (`--inject-test` ile eğim/silgi fixture'ları), 2 (vuruş ortasında Quit / Ctrl-C / SIGTERM), 4 (sıfır olmayan ve negatif origin), 7 (her release tetikleyicisi gerçek ağda), 8–9 (izin iptali, ekranın düşmesi), 10 (App Nap sonrası watchdog). T-024 kartındaki tablet listesinden: Home/bildirim paneli/kablo çekme vuruş ortasında, harf kutulu (letterbox) koordinat kontrolü.
 - **Ölçüm araçları** (repo dışında, oturumun scratch dizininde kaldı; gerekirse yeniden yazılır ya da probe'a taşınması için kart açılır): alınan fare/tablet olaylarını vuruş başına sayan AppKit penceresi (birleştirme açılıştan sonra kapatılmalı) ve `getevent` çıktısını temas satırlarına çeviren betik.
 
+## İlerleme (2026-09-30, ikinci oturum)
+
+- **Vuruş ortasında kablo çekme:** geçti. Host `input_release cause=disconnected pen_up=1 pen_leave=1`; basılı kalan yok. (`input_session_end released=0` sayaç tutarsızlığı not edildi.)
+- **Yeni hata:** 10 sn içinde yeniden bağlanınca siyah ekran → T-028. Geçici çözüm: 15 sn bekle.
+- Kablo geri takılınca tüneller kendiliğinden gelmiyor (`usb-mode.sh on` gerekir) → Faz 4 notu, NOTES'ta.
+- Kalan release denemeleri: Home ve bildirim paneli vuruş ortasında, Wi-Fi kesme, force-stop; hareketsiz basılı tutma (100 ms bölünme), arka plandan dönüşte ilk dokunuş.
+
 ## Plan
 
 Sıradaki oturum: (1) vuruş ortasında bağlantı kesme ve uygulama kapatma denemeleri, (2) T-027 (Krita tablet olay günlüğü), (3) eğim ve `--inject-test` fixture'ları, (4) uçtan uca kalem gecikmesi, (5) 15 dakikalık serbest çizim, (6) sonuç tablosu ve kapanış.
