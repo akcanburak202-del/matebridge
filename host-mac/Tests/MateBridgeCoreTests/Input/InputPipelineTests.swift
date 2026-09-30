@@ -22,6 +22,7 @@ func eventPosition(_ e: MacEvent) -> DisplayPoint? {
     case .tabletPoint(let p): p.position
     case .mouse(let m): m.position
     case .scroll(let s): s.position
+    case .magnify(let g): g.position
     }
 }
 
@@ -968,7 +969,7 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
         if !faults && !stale && d.env.canInject && d.pipe.owed.isEmpty {
             let p = d.pipe.planner
             if (d.model.proximity != nil) != p.isPenInRange || d.model.penContact != p.isPenInContact
-                || d.model.buttons != p.heldMouseButtons || d.model.scrollOpen != p.isScrollOpen {
+                || d.model.buttons != p.heldMouseButtons || d.model.scrollOpen != p.isScrollOpen || d.model.magnifyOpen != p.isMagnifyOpen {
                 fail("Mac and planner disagree")
             }
         }

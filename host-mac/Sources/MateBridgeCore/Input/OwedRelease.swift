@@ -31,6 +31,7 @@ public struct OwedRelease: Equatable, Sendable {
         case button(MouseButton)
         case penLeave
         case scrollEnd
+        case magnifyEnd
         case key(UInt16)
         case modifier(ModifierKey)
 
@@ -40,6 +41,7 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletProximity(_, let entering) where !entering: self = .penLeave
             case .mouse(let m) where m.kind == .up: self = .button(m.button)
             case .scroll(let s) where s.phase == .ended || s.phase == .cancelled: self = .scrollEnd
+            case .magnify(let g) where g.phase == .ended: self = .magnifyEnd
             case .key(let k) where k.kind == .keyUp: self = .key(k.keyCode)
             case .key(let k) where k.kind == .modifierUp:
                 guard let m = ModifierKey(rawValue: k.keyCode) else { return nil }
@@ -55,6 +57,7 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletPoint(let p) where p.kind == .down: self = .penUp
             case .mouse(let m) where m.kind == .down: self = .button(m.button)
             case .scroll(let s) where s.phase == .began: self = .scrollEnd
+            case .magnify(let g) where g.phase == .began: self = .magnifyEnd
             // A repeat is not an opening: its key went down before, and the batch that held that down decides.
             case .key(let k) where k.kind == .keyDown && !k.isRepeat: self = .key(k.keyCode)
             case .key(let k) where k.kind == .modifierDown:
@@ -70,6 +73,7 @@ public struct OwedRelease: Equatable, Sendable {
             case .button(let b): b == .left ? 1 : 3 + Int(b.rawValue)
             case .penLeave: 2
             case .scrollEnd: 10
+            case .magnifyEnd: 11
             case .key(let code): 20 + Int(code)  // keys before modifiers, by code (any fixed order will do)
             case .modifier(let m): 400 + Int(m.rawValue)
             }

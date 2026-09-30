@@ -40,6 +40,11 @@ func scrollMsg(_ phase: ScrollPhase, _ dx: Float = 0, _ dy: Float = 0) -> Messag
     .scroll(Scroll(timeUs: 0, dx: dx, dy: dy, phase: phase))
 }
 
+func pinchMsg(_ phase: PinchPhase, scale: Float = 0, x: UInt16 = 500, y: UInt16 = 600,
+              source: PinchSource = .touch) -> Message {
+    .pinch(Pinch(timeUs: 0, scale: scale, x: x, y: y, phase: phase, source: source))
+}
+
 let doubleTap: Message = .penGesture(PenGesture(timeUs: 0, gesture: .doubleTap))
 
 func penEnter(_ tool: PenTool = .pen) -> InjectAction { .penProximity(tool: tool, entering: true) }
@@ -110,12 +115,13 @@ struct MacInputModel {
     var penContact = false
     var buttonsDown: Set<MouseButton> = []
     var scrollOpen = false
+    var pinchOpen = false
     var keysDown: Set<UInt16> = []
     var modifiersDown: Set<ModifierKey> = []
     private(set) var violations: [String] = []
 
     var isIdle: Bool {
-        proximity == nil && !penContact && buttonsDown.isEmpty && !scrollOpen && keysDown.isEmpty && modifiersDown.isEmpty
+        proximity == nil && !penContact && buttonsDown.isEmpty && !scrollOpen && !pinchOpen && keysDown.isEmpty && modifiersDown.isEmpty
     }
     var leftIsDown: Bool { penContact || buttonsDown.contains(.left) }
 
@@ -166,12 +172,26 @@ struct MacInputModel {
             switch phase {
             case .began:
                 if scrollOpen { fail("scroll began while open", action) }
+                if pinchOpen { fail("scroll began while a pinch is open", action) }
                 scrollOpen = true
             case .changed:
                 if !scrollOpen { fail("scroll changed while closed", action) }
             case .ended, .cancelled, .forcedEnd:
                 if !scrollOpen { fail("scroll end while closed", action) }
                 scrollOpen = false
+            }
+        case .pinch(let phase, _, _):
+            switch phase {
+            case .began:
+                if pinchOpen { fail("pinch began while open", action) }
+                if scrollOpen { fail("pinch began while a scroll is open", action) }
+                if leftIsDown { fail("pinch began while the left button is down", action) }
+                pinchOpen = true
+            case .changed:
+                if !pinchOpen { fail("pinch changed while closed", action) }
+            case .ended, .cancelled, .forcedEnd:
+                if !pinchOpen { fail("pinch end while closed", action) }
+                pinchOpen = false
             }
         case .scrollWheel, .setCapsLock:
             break

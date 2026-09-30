@@ -11,6 +11,7 @@ public enum Message: Equatable, Sendable {
     case scroll(Scroll)
     case penGesture(PenGesture)
     case releaseAll(ReleaseReason)
+    case pinch(Pinch)
     case ping(Ping)
     case pong(Pong)
     case stats(Stats)
@@ -31,6 +32,7 @@ public enum Message: Equatable, Sendable {
         case .scroll: .scroll
         case .penGesture: .penGesture
         case .releaseAll: .releaseAll
+        case .pinch: .pinch
         case .ping: .ping
         case .pong: .pong
         case .stats: .stats
@@ -55,6 +57,7 @@ public enum Message: Equatable, Sendable {
         case .scroll(let m): m.write(&w)
         case .penGesture(let m): m.write(&w)
         case .releaseAll(let r): w.u8(r.rawValue)
+        case .pinch(let m): m.write(&w)
         case .ping(let m):
             w.u32(m.seq)
             w.u64(m.senderTimeUs)
@@ -136,6 +139,7 @@ public enum Message: Equatable, Sendable {
         case .scroll: return .scroll(try Scroll.read(&r))
         case .penGesture: return .penGesture(try PenGesture.read(&r))
         case .releaseAll: return .releaseAll(ReleaseReason(rawValue: try r.u8()))
+        case .pinch: return .pinch(try Pinch.read(&r))
         case .ping: return .ping(Ping(seq: try r.u32(), senderTimeUs: try r.u64()))
         case .pong: return .pong(Pong(seq: try r.u32(), echoTimeUs: try r.u64(), responderTimeUs: try r.u64()))
         case .stats:

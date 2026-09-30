@@ -86,6 +86,8 @@ enum CGEventFactory {
             return flagged(mouse(m, source: source), m.flags)
         case .scroll(let s):
             return flagged(scroll(s, source: source), s.flags)
+        case .magnify(let g):
+            return flagged(MagnifyGestureEvent.make(g, source: source), g.flags)
         case .key(let k):
             return key(k, source: source)
         case .capsLock:

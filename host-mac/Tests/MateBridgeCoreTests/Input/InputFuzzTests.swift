@@ -77,6 +77,10 @@ private func randomStep(_ g: inout InputFuzzRNG) -> Step {
     case 80..<83: return .message(.releaseAll(ReleaseReason(rawValue: UInt8.random(in: 0...4, using: &g))))
     case 83..<84: return .message(.bye(.normal))
     case 84..<86: return .release(allReleaseCauses.randomElement(using: &g)!)
+    case 86..<94:
+        let phase = PinchPhase(rawValue: UInt8.random(in: 1...4, using: &g))!
+        let source: PinchSource = Bool.random(using: &g) ? .touch : .touchpad
+        return .message(pinchMsg(phase, scale: Float.random(in: -0.1...0.1, using: &g), source: source))
     default: return .tick
     }
 }
@@ -164,6 +168,8 @@ struct InputFuzzTests {
                 case .penProximity(_, let entering): if entering { counts.enter += 1 } else { counts.leave += 1 }
                 case .mouseButton(_, let down): if down { counts.buttonDown += 1 } else { counts.buttonUp += 1 }
                 case .scroll(let phase, _, _):
+                    if phase == .began { counts.began += 1 } else if phase != .changed { counts.ended += 1 }
+                case .pinch(let phase, _, _):
                     if phase == .began { counts.began += 1 } else if phase != .changed { counts.ended += 1 }
                 default: break
                 }
@@ -283,12 +289,12 @@ struct InputFuzzTests {
                         var exact = m
                         if exact.tick(now: due).isEmpty { failures.append("seed \(seed) step \(step): silent at the deadline") }
                         // Never later than one period after the observation (PROTOCOL.md section 7).
-                        let period = Swift.max(m.configuration.penWatchdogUs, m.configuration.scrollWatchdogUs)
+                        let period = Swift.max(m.configuration.penWatchdogUs, m.configuration.scrollWatchdogUs, m.configuration.pinchWatchdogUs)
                         if due - probeNow > period { failures.append("seed \(seed) step \(step): deadline more than a period away") }
                     } else {
                         var far = m
                         if !far.tick(now: probeNow + 3_600_000_000).isEmpty { failures.append("seed \(seed) step \(step): nil deadline but tick acts") }
-                        if m.isPenInRange || m.scrollOpen { failures.append("seed \(seed) step \(step): armed state without a deadline") }
+                        if m.isPenInRange || m.scrollOpen || m.pinchOpen { failures.append("seed \(seed) step \(step): armed state without a deadline") }
                     }
                 }
             }

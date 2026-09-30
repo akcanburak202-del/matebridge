@@ -32,6 +32,8 @@ public struct InputPipeline: Sendable {
     /// Closing events the Mac may not have received.
     public internal(set) var owed = OwedRelease()
     private var records: [ReleaseRecord] = []
+    /// Pinch gestures the machine ended on its own since the last `takePinchForcedEnds()` (for the log).
+    private var pinchForcedEnds: [PinchEndCause] = []
     private var machineConfiguration: InputStateMachine.Configuration
 
     public init(planner: InjectionPlanner.Configuration = .init(), machine: InputStateMachine.Configuration = .init()) {
@@ -52,6 +54,21 @@ public struct InputPipeline: Sendable {
 
     /// Anything held on the Mac, or by the machine.
     public var isHoldingInput: Bool { planner.isHoldingInput || machine?.hasHeldInput == true }
+
+    /// The causes of the pinch gestures the host ended itself since the last call, oldest first (the `cause` of the
+    /// `pinch_forced_end` log event). Collected from the machine after every call into it, so none is lost when the
+    /// machine goes away with its session.
+    public mutating func takePinchForcedEnds() -> [PinchEndCause] {
+        defer { pinchForcedEnds.removeAll() }
+        return pinchForcedEnds
+    }
+
+    private mutating func collectPinchEnds() {
+        guard machine != nil else { return }
+        let ends = machine?.takePinchForcedEnds() ?? []
+        if pinchForcedEnds.count + ends.count > 64 { pinchForcedEnds.removeFirst(pinchForcedEnds.count + ends.count - 64) }
+        pinchForcedEnds += ends
+    }
 
     /// The releases done since the last call, for the log (at most the last 64 are kept).
     public mutating func takeReleaseRecords() -> [ReleaseRecord] {
@@ -92,6 +109,7 @@ public struct InputPipeline: Sendable {
         guard machine != nil else { return out }
         out += releaseIfGateLost(now: now, environment: env)
         let actions = machine?.handle(message, now: now) ?? []
+        collectPinchEnds()
         let gated = gating(env)
         var produced = planner.plan(actions, environment: gated, now: now)
         produced += reconcile(environment: gated)
@@ -105,6 +123,7 @@ public struct InputPipeline: Sendable {
         guard machine != nil else { return out }
         out += releaseIfGateLost(now: now, environment: env)
         let actions = machine?.tick(now: now) ?? []
+        collectPinchEnds()
         let gated = gating(env)
         var produced = planner.plan(actions, environment: gated, now: now)
         produced += reconcile(environment: gated)
@@ -132,6 +151,7 @@ public struct InputPipeline: Sendable {
         lastReleaseCause = cause
         var out = replayingOwed ? replayOwed(now: now, environment: env, force: true) : []
         let actions = machine?.releaseAll(cause) ?? []
+        collectPinchEnds()
         var produced = planner.plan(actions, environment: env, now: now)
         produced += planner.releaseAll(environment: env)
         record(ReleaseRecord(reason: cause.logName, cause: cause, events: produced))
