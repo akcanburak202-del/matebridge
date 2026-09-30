@@ -61,9 +61,16 @@ Ayrıntı ve ölçümler: `docs/NOTES.md` 2026-09-30 "Faz 2 ilk canlı deneme" v
 - Kablo geri takılınca tüneller kendiliğinden gelmiyor (`usb-mode.sh on` gerekir) → Faz 4 notu, NOTES'ta.
 - Kalan release denemeleri: Home ve bildirim paneli vuruş ortasında, Wi-Fi kesme, force-stop; hareketsiz basılı tutma (100 ms bölünme), arka plandan dönüşte ilk dokunuş.
 
+## İlerleme (2026-09-30, ikinci oturumun sonu)
+
+- T-028/T-030 (hızlı yeniden bağlanmada siyah ekran): düzeltildi, cihazda 5/5.
+- T-029 (tek örneklik temas süzgeci): merge edildi, cihazda yapay kalem olaylarıyla doğrulandı. Krita'daki dikeni **çözmüyor**.
+- Krita "diken": ölçüldü (NOTES). "Temel" pürüzsüzleştirmede vuruşların ~%12'si, "Yok"ta 0/120. Olay akışında denenen hiçbir değişiklik gidermiyor. Kullanıcı Krita'da "Yok" ile çalışacak; diğer kipler ölçülmedi (kullanıcı kararı).
+- Geçen release denemeleri: kablo çekme, Home, bildirim paneli, hareketsiz basılı tutma.
+
 ## Plan
 
-Sıradaki oturum: (1) vuruş ortasında bağlantı kesme ve uygulama kapatma denemeleri, (2) T-027 (Krita tablet olay günlüğü), (3) eğim ve `--inject-test` fixture'ları, (4) uçtan uca kalem gecikmesi, (5) 15 dakikalık serbest çizim, (6) sonuç tablosu ve kapanış.
+Sıradaki oturum, sırayla: (1) T-027 (çift dokunma Krita'da fırça değiştirmiyor: Krita tablet olay günlüğü, `vendorPointerType` ve benzersiz kimlik denemesi), (2) eğim ve `--inject-test` fixture'ları, (3) uçtan uca kalem gecikmesi, (4) Wi-Fi kesme ve force-stop vuruş ortasında, arka plandan dönüşte ilk dokunuş, (5) 15 dakikalık serbest çizim ("Yok" ayarıyla), (6) sonuç tablosu ve kapanış. Oturum başında: `scripts/usb-mode.sh on`, tablet log ve Mac olay kaydedicisini yeniden başlat (scratch araçları oturumla silinir; tarifleri bellekte).
 
 ## Handoff
 
