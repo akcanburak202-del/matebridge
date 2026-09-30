@@ -265,6 +265,7 @@ class InputCaptureTest {
         assertEquals(1_012_000L, gestures[0].timeUs)
         val order = sink.sent.map { it.javaClass.simpleName }
         assertEquals(listOf("Pen", "Pen", "PenGesture"), order) // the held hover went out before the gesture
+        assertEquals(1, events.count { it == "pen_gesture gesture=double_tap" })
     }
 
     @Test fun aSingleGestureKeyPairSendsNothing() {

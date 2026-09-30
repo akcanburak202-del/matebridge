@@ -94,7 +94,10 @@ class InputCapture(
      */
     fun onGestureKeyDown(eventTimeMs: Long) {
         if (!accepting) return
-        if (doubleTap.onDown(eventTimeMs)) dispatch(listOf(Outgoing(PenGesture(eventTimeMs * 1000, PenGesture.DOUBLE_TAP))))
+        if (doubleTap.onDown(eventTimeMs)) {
+            onEvent("pen_gesture", "gesture=double_tap")
+            dispatch(listOf(Outgoing(PenGesture(eventTimeMs * 1000, PenGesture.DOUBLE_TAP))))
+        }
     }
 
     /** Every ~25 ms: liveness repeats, stale guards, deferred DOWNs, scroll keepalive, held-message flush, stats. */
