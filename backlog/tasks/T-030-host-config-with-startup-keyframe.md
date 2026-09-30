@@ -44,7 +44,12 @@ Yeni ekranda sorun yok, çünkü kodlayıcı yeni ve ilk karesi tabletin reset'i
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `MateBridgeCore/Video`: `KeyframeReason.resendsCodecConfig` (STARTUP, DECODE_ERROR, bilinmeyen: true; FRAMES_DROPPED: false).
+2. `BoundedFrameQueue.resync(config:)`: kuyruğu boşaltıp yalnızca `[config]` bırakır ve `awaitingKeyframe = true` yapar (yeni tüketici mantığıyla aynı). Böylece config, o istekten doğan keyframe'den önce kuyrukta durur; araya gelen eski delta kareler reddedilir, config atılmaz, birikmez (kuyruk her seferinde sıfırlanır). Ek olarak `push`, kuyrukta zaten aynı içerikte bir `CODEC_CONFIG` varsa ikincisini yutar (kodlayıcı ile yeniden gönderim çakışırsa çift config birikmez).
+3. `VideoFrameQueue.resync(config:)`: aynı işlem kilit altında; bekleyen tüketici varsa config'i hemen ona verir (bir sonraki push'u beklemez).
+4. `VideoPipeline.requestKeyframe(reason:) -> Bool`: sebep config gerektiriyor ve kodlayıcıda parametre seti varsa önce `frames.resync(config:)`, SONRA `encoder.requestKeyframe(resubmitNow: true)`. Sıra garantisi bu happens-before ile sağlanır: keyframe ancak `forceKeyframe` bayrağı kurulduktan sonra üretilir, bayrak ise kuyruk sıfırlandıktan sonra kurulur; yani o keyframe her zaman config'in arkasından push'lanır. Parametre seti yoksa bugünkü davranış (yalnızca keyframe isteği). Eski parametresiz `requestKeyframe()` (sender'ın reddedilen kare yolu) değişmez.
+5. `StreamCoordinator`: `.keyframeRequest(reason)` artık `pipeline.requestKeyframe(reason:)` çağırır; config yeniden gönderildiyse tek satır `ev=codec_config_resent reason=<n>` (component `net`).
+6. Testler (`Tests/MateBridgeCoreTests/Video`): STARTUP/DECODE_ERROR/bilinmeyen -> `[config, keyframe]` sırası; FRAMES_DROPPED sebebi config gerektirmez; art arda iki resync tek config; dolu kuyrukta config atılmaz; aynı config'in çift push'u tek kalır; async kuyrukta bekleyen tüketiciye config hemen teslim edilir.
 
 ## Handoff
 
