@@ -36,7 +36,11 @@ PLAN Aşama 4: Mac tarafında "hiçbir şey yapmadan çalışsın". Bugün host 
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Core/Usb (saf, testli):** `AdbOutput` (`adb devices` / `reverse --list` ayrıştırma, cihaz seçimi), `AdbLocator` (adb aday yolları: ANDROID_HOME, SDK varsayılanı, PATH, Homebrew), `UsbTunnelPlanner` (snapshot → durum + eylem: sunucu yok → startServer, cihaz yok → bekle, tünel eksik → installTunnels, tamam → none; durum değişimi dedup'u; 2 sn → 30 sn geri çekilme), `SessionTransport.classify` (loopback eş → USB).
+2. **Host/Usb:** `UsbTunnelWatcher` kendi DispatchQueue'sunda, tick'ler seri ve `asyncAfter` ile zincirli (çakışmaz). Sunucu ayakta mı: 127.0.0.1:5037'ye TCP bağlantı denemesi (adb'yi yanlışlıkla kendiliğinden başlatmamak için); yoksa `launchctl remove` + `launchctl submit` (betikteki yöntem). Tüm alt süreçler zaman aşımlı (`ProcessRunner`, süre dolunca terminate/kill). Kapatılınca tünelleri `reverse --remove` ile kaldırır; adb sunucusuna dokunmaz. Yalnız durum değişimi loglanır (`component=usb`), seri numarası loglanmaz.
+3. **Session:** `SessionServerState.connected` taşıma (usb/network) bilgisini de taşır (kontrol bağlantısının eş adresi loopback mı).
+4. **Uygulama:** `LoginItem` (SMAppService.mainApp, ilk açılışta bir kez kayıt, tercih UserDefaults), menüde "Oturum açılışında başlat", "USB modu" (onay işaretli, varsayılan açık), "Logları aç", durum satırı "Bağlı: ad (USB)". Durum menü açılırken okunur.
+5. `usb-mode.sh` başına not; `bundle-host.sh` değişmez (gerekmedikçe).
 
 ## Handoff
 
