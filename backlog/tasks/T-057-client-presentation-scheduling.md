@@ -32,7 +32,13 @@ NOTES 2026-10-01 ~02:20 (ölçüm + gpt-6-astra danışması). Kalan takılma: 1
 
 ## Plan
 
-_(Ajan doldurur.)_
+- **Kapsam notu:** `MainActivity.kt` kart `files:` listesinde yok; bu yüzden cihaz bilgisi/intent bağlantısı (`Display.getAppVsyncOffsetNanos`, `presentationDeadlineNanos`, `--ei inflight`, `--ei lead`) `VsyncClock`/`VideoRenderer` üzerinde ayarlayıcı (setter) olarak sunulur; bağlantıyı orkestratör yapar. Yeni istatistik satırı `VideoRenderer.onSkipWindow` içinden (MainActivity'nin mevcut saniyelik çağrısı) `MB/render ev=present` olarak yazılır.
+- **VsyncClock:** tek tutarlı `Grid(lastNs, periodNs, epoch, deadlineNs)` anlık görüntüsü; `setDisplayTiming(appOffset, deadline)` (görüntü-alanı = Choreographer − appOffset); `epoch` yalnızca gerçek periyot değişiminde (>%10: `setNominalHz` ya da yeniden tohumlama) artar. Kaçırılan geri çağrı (aralık = tam kat, tek seferlik) periyodu bozmaz; tam kat aralıklarla yeniden tohumlama için daha uzun kanıt (12) gerekir (asıl yetkili kaynak ekran dinleyicisi). `leadNs()` = override ya da P/2.
+- **AdaptivePacer:** epoch değişince sıfırla; boşta (>1 sn) yeniden çapa; taban `b` ve `D` yumuşak değişir (slew, yukarı/aşağı ayrı sabitler); hedef = capture + b + D + presentationDeadline; en erken yuva = `ilk vsync >= şimdi + deadline`; nihai yuva `en erken + P`'yi aşamaz (kıstırılır); önceki yuvaya çarparsa ve `+P` sınırı aşılırsa yeni kare önceki yuvayı paylaşır (collided, `lateDrop`); `D` tavanı 1,5 P (fazla içerikte P).
+- **SlotReleaser (yeni, saf):** yuva başına tek `release`; aynı yuvaya ikinci kare: bekleyen değiştirilir (eski atılır, `slot_dups`), zaten bırakılmış yuvaya ise yeni kare atılır. En çok 1 bekleyen çıkış; gönderim son anı = yuva − `dispatchLead` (bilinmiyorsa P), geçmişse hemen bırakılır; çıkış iş parçacığı bekleme süresini son ana göre kısaltır.
+- **InFlightGauge (yeni, saf):** gönderilen − (bırakılan/atılan) sayacı, pencere p95 histogramı, `canQueue(limit)` (limit 0 = sınırsız = bugünkü davranış; 100 ms çıkış olmazsa kilitlenmemek için serbest bırakır).
+- **Sayaçlar/istatistik:** `PresentCounters` (slot_dups, late_drops) + `StatsFormat.presentFields` -> `MB/render ev=present slot_dups late_drops in_codec_p95 lead_ms d_us`.
+- **Testler:** SlotReleaserTest (yuva çarpışması, bekleyen değişimi, son an, tek bırakma), InFlightGaugeTest, AdaptivePacerTest ek (son yuva sınırı, D tavanı, slew, idle re-anchor, 60/120 ve 120 fps->60 Hz), VsyncClockTest (epoch, kaçırılan geri çağrı, offset), StatsFormat.
 
 ## Handoff
 
