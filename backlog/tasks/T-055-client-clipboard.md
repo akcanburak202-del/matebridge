@@ -1,7 +1,7 @@
 ---
 id: T-055
 title: Tablet — pano paylaşımı (CLIPBOARD, metin)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-042]
@@ -34,12 +34,16 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Codec: `Clipboard` mesajı (Messages.kt) + Codec encode/decode; fixture testleri.
+2. `clipboard/ClipboardSync.kt` (saf mantık): gönderim kararı (ayar, ACCEPTED, gizli, boş, >60000 bayt, yankı özeti, tekrar), gelen metin doğrulama (UTF-8, kind), seq sayacı.
+3. `clipboard/ClipboardBridge.kt` (Android): ClipboardManager dinleyici, onResume denetimi, setPrimaryClip.
+4. Settings'e `clipboardShare` (varsayılan açık); SessionController gelen mesajı/gönderimi bağlar; MainActivity'de küçük panel düğmesi + yaşam döngüsü kancaları.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** dal `task/T-055-client-clipboard` ucu (`proto/clipboard` merge edilmiş)
+- **Dokunulan dosyalar:** protocol/Messages.kt, Codec.kt (Clipboard); session/Settings.kt (`clipboardShare`), SessionController.kt (`SessionListener.onClipboard`); yeni `clipboard/ClipboardSync.kt` (saf mantık), `clipboard/ClipboardBridge.kt` (Android); MainActivity.kt (küçük: alan, listener, odak kancası, `render` başına 1 satır, `addClipboardToggle`); testler `FixtureTest` (2 fixture) + `ClipboardSyncTest`.
+- **Varsayımlar:** Oturum ACCEPTED olunca (UI `Connected`) o ana kadarki pano "zaten orada" sayılır (ClipDescription.timestamp <= kabul anı gönderilmez), yalnız sonradan kopyalananlar gider. Dinleyici pencere odaktayken (`onWindowFocusChanged`) kayıtlı; odak gelince bir kez denetim. Yankı önleme: son alınan/gönderilen metin eşitse gönderilmez (aynı metni art arda kopyalamak tekrar gitmez). Mac'ten gelen EMPTY/bilinmeyen kind/geçersiz UTF-8/boş/60000+ yok sayılır. >60000 bayt: Toast bir kez (aynı metin için). Gizli: `android.content.extra.IS_SENSITIVE` (API 33 sabiti, string literal); gizli içerik String'e bile çevrilmez. Log yalnız `ev=clipboard dir=in|out bytes=N`.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh`: gradle OK; `swift test (host-mac)` FAIL (beklenen: host fixture kapsamı T-054'te, paralel). Cihazda: (1) tablette metin kopyala, Mac'te yapıştır; (2) Mac'te kopyala, tablette yapıştır, yankı/döngü yok; (3) panel düğmesi "Pano paylaşımı: açık/kapalı" kapalıyken iki yön de durur; (4) bağlanmadan önce kopyalanan metin gitmez; (5) HarmonyOS "uygulama panoya erişti" bildirimi çıkabilir; arka plandayken tablet->Mac gitmez (odak gelince denetlenir); (6) logcat'te pano içeriği yok.
+- **Review turu 1 (Codex):** main (T-052) merge edildi, çakışma yok. (1) Gelen yazmalar `ClipboardBridge.postRemote`: `Latest` tek slot + tek bekleyen UI post (sınırsız kuyruk yok). (2) Bekleyen yazma kontrol gen'ini taşır; `ClipboardSync.onRemote(msg, gen)` `accepted` ve gen eşleşmesini ister (gen, `render`'da `MbLog.gen`'den alınır). (3) `lastText` her yeni ACCEPTED'de sıfırlanır; yalnız baseline kuralı kalır. Testler: `ClipboardSyncTest` (2 yeni), `LatestMailboxTest`. check.sh: gradle OK, yalnız `swift test (host-mac)` FAIL (T-054 bu dalda yok).
+- **Açık sorular:** Mac->tablet `setPrimaryClip` HarmonyOS'ta arka plandayken çalışır mı (yazma için beklenen evet) cihazda görülmeli.

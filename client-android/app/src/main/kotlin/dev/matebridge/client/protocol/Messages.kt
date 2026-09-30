@@ -23,6 +23,7 @@ object MsgType {
     const val STREAM_CONFIG = 0x03
     const val BYE = 0x04
     const val STREAM_PREFS = 0x05
+    const val CLIPBOARD = 0x06
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -139,6 +140,17 @@ data class StreamConfig(
 /** Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144) and encoded size in permille of the display. */
 data class StreamPrefs(val fps: Int, val scalePermille: Int) : Message {
     override val type get() = MsgType.STREAM_PREFS
+}
+
+/** Shared text clipboard (both directions, PROTOCOL.md 0x06). [data] holds UTF-8 text for [KIND_TEXT_UTF8], nothing for [KIND_EMPTY]. Never log [data]. */
+data class Clipboard(val seq: Long, val kind: Int, val data: Bytes) : Message {
+    override val type get() = MsgType.CLIPBOARD
+
+    companion object {
+        const val KIND_EMPTY = 0
+        const val KIND_TEXT_UTF8 = 1
+        const val MAX_DATA_BYTES = 60_000
+    }
 }
 
 data class Bye(val reason: Int) : Message {

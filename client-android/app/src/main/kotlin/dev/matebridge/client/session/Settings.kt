@@ -37,6 +37,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStreamMode(m: dev.matebridge.client.stream.StreamMode) = store.putString(KEY_STREAM_MODE, m.id)
 
+    /** Clipboard sharing (T-055); default on. */
+    fun clipboardShare(): Boolean = store.getString(KEY_CLIPBOARD) != "0"
+
+    fun setClipboardShare(on: Boolean) = store.putString(KEY_CLIPBOARD, if (on) "1" else "0")
+
     /** Last chosen connection mode; Wi-Fi (discovery) by default. */
     fun transport(): Transport = Transport.parse(store.getString(KEY_TRANSPORT))
 
@@ -87,6 +92,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
+        const val KEY_CLIPBOARD = "clipboard_share"
         const val KEY_FINGER_OFF = "finger_touch_disabled"
     }
 }

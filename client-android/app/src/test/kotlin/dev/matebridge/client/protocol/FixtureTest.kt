@@ -60,6 +60,8 @@ class FixtureTest {
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
             "bye" to Bye(Bye.NORMAL),
             "stream_prefs" to StreamPrefs(120, 750),
+            "clipboard_text" to Clipboard(3, Clipboard.KIND_TEXT_UTF8, Bytes("Merhaba ğüşıöç — kopyala".toByteArray())),
+            "clipboard_empty" to Clipboard(4, Clipboard.KIND_EMPTY, Bytes(ByteArray(0))),
             "pen_hover_to_contact" to Pen(
                 Pen.TOOL_PEN, 1127411618000L,
                 listOf(

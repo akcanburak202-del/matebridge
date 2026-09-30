@@ -70,6 +70,9 @@ import dev.matebridge.client.session.Endpoint
 import dev.matebridge.client.session.Transport
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
+import dev.matebridge.client.clipboard.ClipboardBridge
+import dev.matebridge.client.clipboard.ClipboardSync
+import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.session.SessionController
 import dev.matebridge.client.session.SessionListener
 import dev.matebridge.client.session.SessionUi
@@ -94,6 +97,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var controller: SessionController
     private var streamMode = StreamMode.DEFAULT
     private var modeButton: Button? = null
+    private lateinit var clipboard: ClipboardBridge // T-055
     private var discovery: MacDiscovery? = null
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
@@ -248,6 +252,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
             }
+
+            override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
         }, streamMode)
         capture = InputCapture(
             object : InputSink {
@@ -288,8 +294,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.isFocusableInTouchMode = true
             sv.setOnCapturedPointerListener(capturedPointerListener)
         }
+        clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }, { controller.trySend(it) }, { runOnUiThread(it) })
         addFingerToggle()
         addModeButton()
+        addClipboardToggle()
         addShortcutHint()
         applyImmersive()
         render(SessionUi.Searching)
@@ -308,6 +316,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyImmersive()
+        if (::clipboard.isInitialized) { if (hasFocus) clipboard.start() else clipboard.stop() } // clipboard reads need focus
         if (!::capture.isInitialized) return
         if (hasFocus) unbufferedPen.reapplyOnNextSync() // the request is idempotent; re-assert it when the window is back
         if (hasFocus) capture.resume() else capture.releaseAll(ReleaseAll.FOCUS_LOST, SystemClock.uptimeMillis())
@@ -479,6 +488,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val off = !capture.fingersDisabled
             settings.setFingerTouchDisabled(off)
             capture.setFingersDisabled(off, SystemClock.uptimeMillis())
+            label()
+        }
+        label()
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(b, lp)
+    }
+
+    /** T-055: connect-panel switch for clipboard sharing, persisted in [Settings] (default on). */
+    private fun addClipboardToggle() {
+        val p = panel as? LinearLayout ?: return
+        val b = Button(this)
+        fun label() { b.text = "Pano paylaşımı: " + if (clipboard.sync.enabled) "açık" else "kapalı" }
+        b.setOnClickListener {
+            clipboard.sync.enabled = !clipboard.sync.enabled
+            settings.setClipboardShare(clipboard.sync.enabled)
             label()
         }
         label()
@@ -887,6 +912,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun render(state: SessionUi) {
+        if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
         if (!started || isDestroyed) return
         lastUi = state
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
