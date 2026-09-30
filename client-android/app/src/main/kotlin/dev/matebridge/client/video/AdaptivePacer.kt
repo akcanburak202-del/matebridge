@@ -18,15 +18,22 @@ package dev.matebridge.client.video
  *
  * Decoder thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
-class AdaptivePacer(private val vsync: VsyncClock) {
+class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: Long = 0) {
     companion object {
         const val WINDOW_NS = 2_000_000_000L
         const val DEV_SAMPLES = 256
-        const val PERCENTILE = 98
+        const val PERCENTILE = 99
         const val MARGIN_NS = 500_000L
-        const val SKIP_HIGH_PCT = 2.0
-        const val SKIP_LOW_PCT = 0.5
-        const val QUIET_WINDOWS = 5
+        /** Skip rate above which a window counts toward adding slack, below which toward removing it. */
+        const val SKIP_HIGH_PCT = 3.0
+        const val SKIP_LOW_PCT = 1.0
+        /** Consecutive high windows before one more level of slack is added. */
+        const val HIGH_WINDOWS = 3
+        /** Consecutive low windows before a level is removed. */
+        const val LOW_WINDOWS = 5
+        /** Windows after any level change during which no further change is made (anti-flapping). */
+        const val HOLD_WINDOWS = 10
+        const val MAX_LEVEL = 2
     }
 
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
@@ -38,10 +45,16 @@ class AdaptivePacer(private val vsync: VsyncClock) {
     private var lastSlot = Long.MIN_VALUE
     private var lastPeriod = 0L
 
-    /** Slack added by the skip feedback on top of the jitter estimate. */
-    @Volatile var extraNs = 0L
+    /**
+     * Slack level added by the skip feedback on top of the measured jitter: 0 = none, 1 = half a vsync,
+     * 2 = a full extra vsync. Only raised when the skip rate stays high for [HIGH_WINDOWS] windows.
+     */
+    @Volatile var level = 0
         private set
-    private var quiet = 0
+    val extraNs: Long get() = when (level) { 0 -> 0L; 1 -> lastPeriod / 2; else -> lastPeriod }
+    private var highRun = 0
+    private var lowRun = 0
+    private var hold = 0
 
     /** Diagnostics: the slack D applied to the latest frame. */
     @Volatile var lastDNs = 0L
@@ -61,22 +74,29 @@ class AdaptivePacer(private val vsync: VsyncClock) {
         minX.addLast(x); minT.addLast(nowNs)
         while (minT.first() < nowNs - WINDOW_NS) { minT.removeFirst(); minX.removeFirst() }
         val dev = x - minX.first()
+        // Slack comes from the jitter seen so far: a frame that is worse than everything before it is late.
+        val d = (percentile() + MARGIN_NS + extraNs).coerceAtMost(3 * period)
         devs[devPos] = dev
         devPos = (devPos + 1) % DEV_SAMPLES
         if (devN < DEV_SAMPLES) devN++
-
-        val d = (percentile() + MARGIN_NS + extraNs).coerceAtMost(3 * period)
         lastDNs = d
         val earliest = vsync.slotAtOrAfter(nowNs, 0.0)
-        var slot = maxOf(vsync.slotAtOrAfter(nowNs - dev + d, 0.0), earliest)
+        val targetSlot = vsync.slotAtOrAfter(nowNs - dev + d, 0.0)
+        val late = targetSlot < earliest // the frame missed its own ideal slot: the content gap is our doing
+        var slot = maxOf(targetSlot, earliest)
         var collided = false
+        val previous = lastSlot
         if (lastSlot != Long.MIN_VALUE && slot <= lastSlot) {
             // Same vsync as the previous frame (or earlier): one period after it, unless that is too far behind.
             val pushed = lastSlot + period
             if (pushed - earliest <= d + 2 * period) slot = pushed else { slot = lastSlot; collided = true }
         }
         lastSlot = slot
-        return FramePacer.Decision(slot - period / 2, collided, (slot - earliest).coerceAtLeast(0))
+        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+        // A skip: a vsync went by without a new frame although this one was decoded (late, not an idle source).
+        val skipped = late && previous != Long.MIN_VALUE && (slot - previous) * 2 > cadence * 3
+        return FramePacer.Decision(slot - period / 2, collided, (slot - earliest).coerceAtLeast(0), skipped)
     }
 
     private fun percentile(): Long {
@@ -85,23 +105,27 @@ class AdaptivePacer(private val vsync: VsyncClock) {
         return sorted[((devN * PERCENTILE + 99) / 100 - 1).coerceIn(0, devN - 1)]
     }
 
-    /** Feedback once per stats window; [skipPct] null = no measurement. */
+    /**
+     * Feedback once per stats window from the pacer's own schedule ([FramePacer.Decision.skipped]); [skipPct]
+     * null = no measurement. Conservative: a level is added only after [HIGH_WINDOWS] high windows in a row,
+     * removed after [LOW_WINDOWS] low ones, and never within [HOLD_WINDOWS] of the previous change.
+     */
     fun onSkipWindow(skipPct: Double?) {
         if (skipPct == null) return
-        val p = lastPeriod.takeIf { it > 0 } ?: vsync.periodNs
-        if (skipPct > SKIP_HIGH_PCT) {
-            extraNs = (extraNs + p / 4).coerceAtMost(2 * p)
-            quiet = 0
-        } else if (skipPct < SKIP_LOW_PCT) {
-            if (++quiet >= QUIET_WINDOWS) { extraNs = (extraNs - p / 8).coerceAtLeast(0); quiet = 0 }
-        } else quiet = 0
+        if (hold > 0) hold--
+        if (skipPct > SKIP_HIGH_PCT) { highRun++; lowRun = 0 }
+        else if (skipPct < SKIP_LOW_PCT) { lowRun++; highRun = 0 }
+        else { highRun = 0; lowRun = 0 }
+        if (hold > 0) return
+        if (highRun >= HIGH_WINDOWS && level < MAX_LEVEL) { level++; hold = HOLD_WINDOWS; highRun = 0 }
+        else if (lowRun >= LOW_WINDOWS && level > 0) { level--; hold = HOLD_WINDOWS; lowRun = 0 }
     }
 
     private fun resetState() {
         minT.clear(); minX.clear()
         devN = 0; devPos = 0
         lastSlot = Long.MIN_VALUE
-        extraNs = 0; quiet = 0
+        level = 0; highRun = 0; lowRun = 0; hold = 0
     }
 
     fun reset() { resetState(); lastPeriod = 0 }

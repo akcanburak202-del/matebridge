@@ -30,7 +30,7 @@ class AdaptivePacerTest {
         var seed = 12345L
         fun rnd(): Double { seed = (seed * 6364136223846793005L + 1442695040888963407L); return ((seed ushr 33) % 10_000) / 10_000.0 }
         val clk = clock(periodNs)
-        val p = pacer ?: AdaptivePacer(clk)
+        val p = pacer ?: AdaptivePacer(clk, fiNs)
         val pace = if (pacer == null) p else pacer
         var prevSlot = Long.MIN_VALUE
         var skipped = 0; var intervals = 0; var collisions = 0
@@ -141,7 +141,7 @@ class AdaptivePacerTest {
         v.onVsync(t)
         val pacer = AdaptivePacer(v)
         repeat(50) { k -> pacer.schedule(k * p120 / 1000, 1_000_000_000L + k * p120 + 20 * ms); t += p120; v.onVsync(t) }
-        pacer.onSkipWindow(10.0)
+        repeat(AdaptivePacer.HIGH_WINDOWS) { pacer.onSkipWindow(10.0) }
         assertTrue(pacer.extraNs > 0)
         // Panel goes to 60 Hz: after the clock re-seeds, the pacer drops its stale feedback.
         repeat(VsyncClock.RESEED_AFTER + 1) { t += p60; v.onVsync(t) }
@@ -153,16 +153,75 @@ class AdaptivePacerTest {
     @Test fun feedbackRaisesAndDecaysSlack() {
         val pacer = AdaptivePacer(clock(p120))
         pacer.schedule(0, 100)
+        // Two high windows are not enough (needs HIGH_WINDOWS in a row).
+        repeat(AdaptivePacer.HIGH_WINDOWS - 1) { pacer.onSkipWindow(5.0) }
+        assertEquals(0, pacer.level)
+        pacer.onSkipWindow(1.5) // in between: resets the run
+        repeat(AdaptivePacer.HIGH_WINDOWS - 1) { pacer.onSkipWindow(5.0) }
+        assertEquals(0, pacer.level)
         pacer.onSkipWindow(5.0)
-        assertEquals(p120 / 4, pacer.extraNs)
-        pacer.onSkipWindow(5.0)
-        assertEquals(p120 / 2, pacer.extraNs)
-        repeat(AdaptivePacer.QUIET_WINDOWS) { pacer.onSkipWindow(0.0) }
-        assertEquals(p120 / 2 - p120 / 8, pacer.extraNs)
+        assertEquals(1, pacer.level)
+        // Hold: no further change during HOLD_WINDOWS even when skips stay high.
+        repeat(AdaptivePacer.HOLD_WINDOWS - 1) { pacer.onSkipWindow(50.0) }
+        assertEquals(1, pacer.level)
+        repeat(AdaptivePacer.HIGH_WINDOWS + 1) { pacer.onSkipWindow(50.0) }
+        assertEquals(2, pacer.level)
+        repeat(100) { pacer.onSkipWindow(50.0) }
+        assertEquals(AdaptivePacer.MAX_LEVEL, pacer.level) // capped
         pacer.onSkipWindow(null)
-        assertEquals(p120 / 2 - p120 / 8, pacer.extraNs)
-        repeat(20) { pacer.onSkipWindow(50.0) }
-        assertTrue(pacer.extraNs in 2 * p120 - 8..2 * p120) // capped
+        assertEquals(AdaptivePacer.MAX_LEVEL, pacer.level)
+        // Back down only after a long quiet stretch, one level at a time.
+        repeat(AdaptivePacer.LOW_WINDOWS) { pacer.onSkipWindow(0.0) }
+        assertEquals(1, pacer.level)
+        repeat(AdaptivePacer.HOLD_WINDOWS - 1) { pacer.onSkipWindow(0.0) }
+        assertEquals(1, pacer.level) // held
+        pacer.onSkipWindow(0.0)
+        assertEquals(0, pacer.level)
+    }
+
+    @Test fun decodeJitter3msAt120HzSettlesAtOneVsyncWithoutFlapping() {
+        val pacer = AdaptivePacer(clock(p120), p120)
+        var seed = 99L
+        fun rnd(): Double { seed = seed * 6364136223846793005L + 1442695040888963407L; return ((seed ushr 33) % 10_000) / 10_000.0 }
+        var changes = 0; var lastLevel = 0; var skips = 0; var scheduled = 0; var added = 0.0
+        var windowSkips = 0; var windowN = 0
+        val frames = 120 * 60 // one minute
+        for (k in 0 until frames) {
+            val cap = 1_000_000_000L + k * p120
+            val ready = cap + 9 * ms + (rnd() * 3 * ms).toLong() // decode ~9-12 ms, 3 ms jitter
+            val d = pacer.schedule(cap / 1000, ready)!!
+            scheduled++; windowN++
+            added += d.addedNs
+            if (d.skipped) { skips++; windowSkips++ }
+            if (windowN == 120) {
+                pacer.onSkipWindow(windowSkips * 100.0 / windowN)
+                windowN = 0; windowSkips = 0
+                if (pacer.level != lastLevel) { changes++; lastLevel = pacer.level }
+            }
+        }
+        assertEquals("level changes", 0, changes)
+        assertTrue("skips ${skips * 100.0 / scheduled}", skips * 100.0 / scheduled < 1.0)
+        // D stays within one vsync: measured jitter (3 ms) plus the margin.
+        assertTrue("D ${pacer.lastDNs / ms.toDouble()}", pacer.lastDNs <= p120)
+        assertTrue("added ${added / scheduled / ms}", added / scheduled <= p120)
+    }
+
+    @Test fun idleSourceGapIsNotASkip() {
+        val pacer = AdaptivePacer(clock(p120), p120)
+        pacer.schedule(0, 1_000_000_000L + 20 * ms)
+        // Host sends nothing for 100 ms (static screen): the next frame is on time for its own capture time.
+        val cap = 100 * ms
+        val d = pacer.schedule(cap / 1000, 1_000_000_000L + cap + 20 * ms)!!
+        assertEquals(false, d.skipped)
+    }
+
+    @Test fun lateFrameIsASkip() {
+        val pacer = AdaptivePacer(clock(p120), p120)
+        for (k in 0 until 40) pacer.schedule(k * p120 / 1000, 1_000_000_000L + k * p120 + 20 * ms)
+        // One frame 3 vsyncs late, arriving after its slot and the next one.
+        val k = 40
+        val d = pacer.schedule(k * p120 / 1000, 1_000_000_000L + k * p120 + 20 * ms + 3 * p120)!!
+        assertTrue(d.skipped)
     }
 }
 

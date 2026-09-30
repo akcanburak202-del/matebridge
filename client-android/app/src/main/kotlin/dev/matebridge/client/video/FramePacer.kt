@@ -88,7 +88,7 @@ class FramePacer(
     private val frameIntervalNs: Long,
 ) {
     /** [renderNs] goes to releaseOutputBuffer; [addedNs] is the delay versus the earliest possible vsync. */
-    class Decision(val renderNs: Long, val collided: Boolean, val addedNs: Long)
+    class Decision(val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false)
 
     private var lastVsyncNs = Long.MIN_VALUE
 

@@ -21,6 +21,8 @@ class VideoStats {
         val paceAddAvgUs: Long? = null,
         /** Percent of presentation intervals that skipped a vsync while a frame was ready, or null when unmeasured. */
         val skipPct: Double? = null,
+        /** Diagnostic: skip percentage derived from the frame-rendered callback times (overestimates; see PresentMeter). */
+        val cbSkipPct: Double? = null,
         /** Decode latency per frame (queueInputBuffer to output available): p50/p95/p99 in the window. */
         val decode: IntervalSummary = IntervalSummary.EMPTY,
     )
@@ -65,6 +67,15 @@ class VideoStats {
     /** A frame reached the screen at [nowUs] (client monotonic clock). */
     fun onShown(nowUs: Long) = shownGaps.mark(nowUs)
 
+    private var scheduled = 0
+    private var scheduleSkips = 0
+
+    /**
+     * One frame was scheduled by the adaptive pacer; [skipped] when it left a vsync without a new frame while
+     * decoded (late). This is the skip signal: the render callback's times are not display times.
+     */
+    @Synchronized fun onScheduled(skipped: Boolean) { scheduled++; if (skipped) scheduleSkips++ }
+
     /** Codec-reported shown time of a frame that became ready at [readyNs]; feeds the skip meter too. */
     fun onShownPaced(readyNs: Long?, shownNs: Long, periodNs: Long, cadenceNs: Long) {
         shownGaps.mark(shownNs / 1000)
@@ -105,12 +116,14 @@ class VideoStats {
             if (latencyCount > 0) latencySumUs / latencyCount else null,
             networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset),
             if (paceAddCount > 0) paceAddSumUs / paceAddCount else null,
+            if (scheduled > 0) scheduleSkips * 100.0 / scheduled else meter.snapshot().skipPct,
             meter.snapshot(reset).skipPct, decodeLat.summary(reset))
         if (reset) {
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
             latencySumUs = 0; latencyCount = 0
             paceAddSumUs = 0; paceAddCount = 0
+            scheduled = 0; scheduleSkips = 0
         }
         return s
     }

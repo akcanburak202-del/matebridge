@@ -782,6 +782,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 "hz=${"%.0f".format(java.util.Locale.ROOT, currentHz())} vsync_period_us=${vsync.periodNs / 1000} " +
                 "display_hz=${"%.1f".format(java.util.Locale.ROOT, currentHz())} vsync_ms_p50=${if (vg.count > 0) "%.2f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) else "-"} " +
                 "buffer=${r.bufferFrames} skip_pct=${s.skipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
+                "cb_skip_pct=${s.cbSkipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
                 "pace_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 "vsync_ms=${"%.2f".format(java.util.Locale.ROOT, vsync.periodNs / 1e6)} pace_add_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 StatsFormat.gapFields("net", s.network) + " " + StatsFormat.gapFields("ready", s.ready) + " " +

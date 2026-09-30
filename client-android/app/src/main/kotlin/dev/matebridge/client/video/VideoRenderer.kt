@@ -241,7 +241,7 @@ class VideoRenderer(
             var held: VideoFrame? = null
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
             val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
-            val adaptivePacer = AdaptivePacer(vsync)
+            val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
             adaptive = adaptivePacer
             captureByPts.clear(); readyByPts.clear()
             if (codecReportsShown) {
@@ -355,6 +355,7 @@ class VideoRenderer(
                     continue
                 }
                 stats.onPaceAdd(d.addedNs / 1000)
+                if (useAdaptive) stats.onScheduled(d.skipped)
                 if (pendingIdx >= 0) {
                     if (d.collided) {
                         // Same slot as the waiting older buffer: it would be superseded, so do not render it.
