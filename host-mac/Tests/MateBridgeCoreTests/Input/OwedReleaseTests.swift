@@ -63,7 +63,7 @@ struct OwedReleaseTests {
         var o = OwedRelease()
         o.owe([scrollEvent(.ended), buttonUp(.back), buttonUp(.right), proximityEvent(entering: false), buttonUp(.left),
                tabletEvent(.up)], now: 0, countsAsAttempt: false)
-        let events = o.replay(now: 0, force: true, geometry: nil).events
+        let events = o.replay(now: 0, force: true, geometry: nil)
         #expect(events == [tabletEvent(.up), buttonUp(.left), proximityEvent(entering: false), buttonUp(.right),
                            buttonUp(.back), scrollEvent(.ended)])
         #expect(o.isEmpty)
@@ -74,7 +74,7 @@ struct OwedReleaseTests {
         var o = OwedRelease()
         o.owe([buttonUp(.left, at: DisplayPoint(x: 99_999, y: 99_999)), buttonUp(.right, at: testGeometry.point(x: 5, y: 5))],
               now: 0, countsAsAttempt: false)
-        let events = o.replay(now: 0, force: true, geometry: testGeometry).events
+        let events = o.replay(now: 0, force: true, geometry: testGeometry)
         #expect(events == [buttonUp(.left, at: testGeometry.center), buttonUp(.right, at: testGeometry.point(x: 5, y: 5))])
     }
 
@@ -82,55 +82,118 @@ struct OwedReleaseTests {
     func owed4_spacing() {
         var o = OwedRelease()
         o.owe([buttonUp(.left)], now: 1_000_000, countsAsAttempt: true)
-        #expect(o.replay(now: 1_249_999, force: false, geometry: nil).events.isEmpty)
-        #expect(o.replay(now: 1_250_000, force: false, geometry: nil).events == [buttonUp(.left)])
+        #expect(o.replay(now: 1_249_999, force: false, geometry: nil).isEmpty)
+        #expect(o.replay(now: 1_250_000, force: false, geometry: nil) == [buttonUp(.left)])
 
         var f = OwedRelease()
         f.owe([buttonUp(.left)], now: 1_000_000, countsAsAttempt: true)
-        #expect(f.replay(now: 1_000_001, force: true, geometry: nil).events == [buttonUp(.left)])
+        #expect(f.replay(now: 1_000_001, force: true, geometry: nil) == [buttonUp(.left)])
     }
 
-    @Test("OWED-5 retries are bounded: six replays, each reported failed, then the seventh gives up")
-    func owed5_bounded() {
+    @Test("OWED-5 an owed release is never given up on: it survives far more failed attempts than the cadence steps, and is posted once posting recovers")
+    func owed5_neverGivenUp() {
+        var o = OwedRelease()
+        var t: UInt64 = 0
+        o.owe([buttonUp(.left), tabletEvent(.up)], now: t, countsAsAttempt: true)
+        var replays = 0
+        for _ in 0..<200 {  // far more than the six normal attempts
+            t += OwedRelease.slowIntervalUs
+            let r = o.replay(now: t, force: false, geometry: nil)
+            if !r.isEmpty {
+                replays += 1
+                o.owe(r, now: t, countsAsAttempt: true)  // building the event failed again
+            }
+        }
+        #expect(replays == 200 && o.count == 2)  // still both there, still tried every second
+        t += OwedRelease.slowIntervalUs
+        let last = o.replay(now: t, force: false, geometry: nil)  // creation recovered: not reported failed
+        #expect(last == [tabletEvent(.up), buttonUp(.left)])
+        #expect(o.isEmpty)
+    }
+
+    @Test("OWED-6 the retry cadence: 250 ms for the first six replays, then once a second; the drop is counted once per slot")
+    func owed6_cadence() {
         var o = OwedRelease()
         var t: UInt64 = 0
         o.owe([buttonUp(.left)], now: t, countsAsAttempt: true)
-        var replays = 0
-        for _ in 0..<40 {
-            t += 300_000
-            let r = o.replay(now: t, force: false, geometry: nil)
-            if !r.events.isEmpty {
-                replays += 1
-                o.owe(r.events, now: t, countsAsAttempt: true)
-            } else if r.gaveUp > 0 {
-                break
+        var times: [UInt64] = []
+        for _ in 0..<9 {
+            // Wait for the entry to become due.
+            var r: [MacEvent] = []
+            while r.isEmpty {
+                t += 50_000
+                r = o.replay(now: t, force: false, geometry: nil)
             }
+            times.append(t)
+            o.owe(r, now: t, countsAsAttempt: true)
         }
-        #expect(replays == OwedRelease.maxAttempts)
-        #expect(o.gaveUp == 1 && o.isEmpty)
+        let gaps = zip(times.dropFirst(), times).map { $0 - $1 }
+        #expect(gaps[0..<5].allSatisfy { $0 == OwedRelease.retryIntervalUs })  // replays 1-6
+        #expect(gaps[5...].allSatisfy { $0 == OwedRelease.slowIntervalUs })    // from the sixth failure on
+        #expect(o.slowed == 1)
+        // A different slot crossing later counts separately.
+        o.owe([tabletEvent(.up)], now: t, countsAsAttempt: true)
+        for _ in 0..<OwedRelease.slowAfterAttempts {
+            t += OwedRelease.slowIntervalUs
+            o.owe(o.replay(now: t, force: true, geometry: nil).filter { $0 == tabletEvent(.up) }, now: t, countsAsAttempt: true)
+        }
+        #expect(o.slowed == 2)
     }
 
-    @Test("OWED-6 waiting for a missing permission costs no attempt, however long it takes")
-    func owed6_permissionWaitIsFree() {
+    @Test("OWED-7 waiting for a missing permission costs no attempt, however long it takes")
+    func owed7_permissionWaitIsFree() {
         var o = OwedRelease()
         o.owe([buttonUp(.left), tabletEvent(.up)], now: 0, countsAsAttempt: false)
         for _ in 0..<50 {
             let r = o.replay(now: 0, force: true, geometry: nil)
-            #expect(r.events.count == 2)
-            o.owe(r.events, now: 0, countsAsAttempt: false)  // refused again: the permission is still gone
+            #expect(r.count == 2)
+            o.owe(r, now: 0, countsAsAttempt: false)  // refused again: the permission is still gone
         }
-        #expect(o.gaveUp == 0 && o.count == 2)
+        #expect(o.slowed == 0 && o.count == 2)
+        // ...and the normal cadence applies once the poster is the problem.
+        let r = o.replay(now: 0, force: true, geometry: nil)
+        o.owe(r, now: 10, countsAsAttempt: true)
+        #expect(o.replay(now: 10 + OwedRelease.retryIntervalUs - 1, force: false, geometry: nil).isEmpty)
+        #expect(o.replay(now: 10 + OwedRelease.retryIntervalUs, force: false, geometry: nil).count == 2)
     }
 
-    @Test("OWED-7 a replay that is not reported failed is forgotten")
-    func owed7_successIsForgotten() {
+    @Test("OWED-8 a replay that is not reported failed is forgotten once confirmed; until then it blocks")
+    func owed8_confirmation() {
         var o = OwedRelease()
         o.owe([buttonUp(.left)], now: 0, countsAsAttempt: false)
-        #expect(o.replay(now: 0, force: true, geometry: nil).events.count == 1)
-        #expect(o.isEmpty)
-        #expect(o.replay(now: 10, force: true, geometry: nil).events.isEmpty)
-        // A fresh failure for the same slot after that starts from zero attempts.
+        #expect(o.isBlocking)
+        #expect(o.replay(now: 0, force: true, geometry: nil).count == 1)
+        #expect(o.isEmpty && o.isBlocking)  // handed out, not yet confirmed
+        o.confirmPosted()
+        #expect(!o.isBlocking)
+        #expect(o.replay(now: 10, force: true, geometry: nil).isEmpty)
+        // A failure report after confirmation is a new failure: it starts from zero attempts.
         o.owe([buttonUp(.left)], now: 20, countsAsAttempt: true)
-        #expect(o.count == 1 && o.gaveUp == 0)
+        #expect(o.count == 1 && o.slowed == 0 && o.isBlocking)
+    }
+
+    @Test("OWED-9 an entry leaves the store only by being posted or by a newer closing event for the same slot")
+    func owed9_supersede() {
+        var o = OwedRelease()
+        o.owe([buttonUp(.left, at: DisplayPoint(x: 1, y: 1))], now: 0, countsAsAttempt: true)
+        o.owe([buttonUp(.left, at: DisplayPoint(x: 2, y: 2))], now: 5, countsAsAttempt: true)
+        #expect(o.count == 1 && o.owedEvents == [buttonUp(.left, at: DisplayPoint(x: 2, y: 2))])
+        o.owe([mouseEvent(.down, at: here, clickState: 1), tabletEvent(.down), proximityEvent(entering: true)], now: 9, countsAsAttempt: true)
+        #expect(o.count == 1)  // opening events never touch the store
+        #expect(o.nextRetryAt == 5 + OwedRelease.retryIntervalUs)
+    }
+
+    @Test("OWED-10 a pen leave is never replayed before the pen up it depends on")
+    func owed10_leaveAfterUp() {
+        var o = OwedRelease()
+        o.owe([tabletEvent(.up)], now: 1_000_000, countsAsAttempt: true)   // the up failed and waits for its retry
+        o.owe([proximityEvent(entering: false)], now: 0, countsAsAttempt: false)  // the leave, held back, is due at once
+        #expect(o.owesPenUp)
+        #expect(o.replay(now: 1_100_000, force: false, geometry: nil).isEmpty)  // the up is not due: neither is the leave
+        #expect(o.replay(now: 1_250_000, force: false, geometry: nil) == [tabletEvent(.up), proximityEvent(entering: false)])
+        // A leave on its own (its up was posted) is due at once.
+        var l = OwedRelease()
+        l.owe([proximityEvent(entering: false)], now: 0, countsAsAttempt: false)
+        #expect(l.replay(now: 0, force: false, geometry: nil) == [proximityEvent(entering: false)])
     }
 }

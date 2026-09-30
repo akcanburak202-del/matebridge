@@ -438,6 +438,36 @@ struct PlannerGateTests {
     }
 }
 
+@Suite("PLAN: the shadow state follows what was really posted")
+struct PlannerNotPostedTests {
+    @Test("PLAN-50 opening events that were not posted are forgotten; closing ones are not touched")
+    func plan50_notPosted() {
+        var p = InjectionPlanner()
+        let events = planOnce(&p, [penEnter(), .penDown(tool: .pen, penPt(1, 1, 200)), moveAbs(5, 5), .mouseButton(.right, down: true),
+                                   .scroll(.began, dx: 0, dy: 1)])
+        #expect(p.isPenInRange && p.isPenInContact && p.heldMouseButtons == [.right] && p.isScrollOpen)
+        p.notPosted(events)
+        #expect(!p.isHoldingInput)  // none of it reached the Mac
+
+        // A release that failed was already released in the shadow state: reporting it changes nothing.
+        var q = InjectionPlanner()
+        _ = planOnce(&q, [penEnter(), .penDown(tool: .pen, penPt(1, 1, 200))])
+        let up = planOnce(&q, [.penUp(tool: .pen, penPt(1, 1)), penLeave()])
+        q.notPosted(up)
+        #expect(!q.isHoldingInput)
+    }
+
+    @Test("PLAN-51 after a failed press the machine's later samples of that stroke draw nothing")
+    func plan51_restOfStrokeDropped() {
+        var p = InjectionPlanner()
+        p.notPosted(planOnce(&p, [penEnter(), .penDown(tool: .pen, penPt(1, 1, 200))]))
+        #expect(planOnce(&p, [.penDrag(tool: .pen, penPt(2, 2, 200))]).isEmpty)
+        #expect(planOnce(&p, [.penUp(tool: .pen, penPt(3, 3))]).isEmpty)
+        // The next hover enters again.
+        #expect(planOnce(&p, [.penHover(tool: .pen, penPt(4, 4))]) == [proximityEvent(entering: true), tabletEvent(.hover, x: 4, y: 4)])
+    }
+}
+
 @Suite("PLAN: scroll")
 struct PlannerScrollTests {
     private func scroll(_ phase: MacScroll.Phase, _ dx: Int32 = 0, _ dy: Int32 = 0) -> MacEvent {

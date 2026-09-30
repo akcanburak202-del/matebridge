@@ -7,6 +7,7 @@ import MateBridgeCore
 public protocol MacEventPoster: Sendable {
     /// Posts the events in order and returns the ones that could not be posted (usually none). A closing event that
     /// cannot be built in its rich form is posted in its plainest form first; only if that fails too is it returned.
+    /// Nothing overtakes a failed event: it and every event after it in the batch are returned unposted, in order.
     /// The caller keeps the failed closing events and retries them (see `OwedRelease`).
     func post(_ events: [MacEvent]) -> [MacEvent]
 }
@@ -27,7 +28,7 @@ public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
 
     public func post(_ events: [MacEvent]) -> [MacEvent] {
         var failed: [MacEvent] = []
-        for event in events {
+        for (index, event) in events.enumerated() {
             // A fresh HID-system-state source per event, exactly as the probe did.
             var cg = CGEventFactory.make(event, source: CGEventSource(stateID: .hidSystemState))
             if cg == nil, let plain = event.plainRelease {
@@ -35,13 +36,13 @@ public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
                 cg = CGEventFactory.make(plain, source: CGEventSource(stateID: .hidSystemState))
             }
             guard let cg else {
-                failed.append(event)
+                failed = Array(events[index...])  // e.g. a leave must not be posted while the pen up before it failed
                 failures += 1
                 // Counts only; the first failure and then every 100th.
                 if failures == 1 || failures % 100 == 0 {
                     logger.log(.error, "event_create_failed", sessionID: 0, generation: 0, fields: "count=\(failures)")
                 }
-                continue
+                break
             }
             cg.post(tap: .cghidEventTap)
         }

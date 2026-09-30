@@ -42,6 +42,11 @@ struct PipeDriver {
     var permissionTruth: Bool?
     /// Events the poster cannot build.
     var failing: (MacEvent) -> Bool = { _ in false }
+    /// Closing events the Mac has NOT received (refused or failed), kept by the driver itself, independently of the
+    /// pipeline's own bookkeeping. A press delivered while its release is in here is an ordering violation: the older
+    /// release would be retried later and release the newer press.
+    var undelivered: Set<OwedRelease.Slot> = []
+    private(set) var orderingViolations: [String] = []
 
     init(session: Bool = true) {
         if session { deliver(pipe.sessionStarted(now: now, environment: env)) }
@@ -49,17 +54,41 @@ struct PipeDriver {
 
     private var trusted: Bool { permissionTruth ?? env.canInject }
 
+    /// Notes which releases the Mac has not got: the closing events of a failed batch, except those that close an
+    /// opening from the same batch (that opening never reached the Mac either).
+    private mutating func markUndelivered(_ failed: [MacEvent]) {
+        var neverOpened: Set<OwedRelease.Slot> = []
+        for e in failed {
+            if let slot = OwedRelease.Slot(closing: e) {
+                neverOpened.insert(slot)
+            } else if e.isClosing, let slot = OwedRelease.Slot(e) {
+                if neverOpened.contains(slot) { neverOpened.remove(slot) } else { undelivered.insert(slot) }
+            }
+        }
+    }
+
     mutating func deliver(_ events: [MacEvent]) {
         lastEmitted = events
         // InputController: a batch that closes something gets a fresh permission check; without it nothing is posted.
         if events.contains(where: \.isClosing), !trusted {
+            markUndelivered(events)
             pipe.postFailed(events, now: now, permitted: false)
             return
         }
         var failed: [MacEvent] = []
-        for event in events {
+        for (index, event) in events.enumerated() {
             guard trusted else { continue }
-            if failing(event) { failed.append(event); continue }
+            if failing(event) {
+                // Like the real poster: this event and everything after it in the batch stay unposted, in order.
+                failed = Array(events[index...])
+                markUndelivered(failed)
+                break
+            }
+            if event.isClosing {
+                if let slot = OwedRelease.Slot(event) { undelivered.remove(slot) }
+            } else if let slot = OwedRelease.Slot(closing: event), undelivered.contains(slot) {
+                orderingViolations.append("\(event) delivered while \(slot) is still undelivered")
+            }
             model.apply(event)
         }
         if !failed.isEmpty { pipe.postFailed(failed, now: now, permitted: true) }
@@ -222,10 +251,12 @@ struct InputPipelineTests {
 
         d.env = openEnv  // granted again, the stroke is still going on in the tablet's samples
         let back = d.send(penMsg(.pen, penSample(5, 5, touchFlags, pressure: 500)))
-        #expect(back == [tabletEvent(.up, x: 2, y: 2), proximityEvent(entering: false),
-                         proximityEvent(entering: true), tabletEvent(.hover, x: 5, y: 5)])
+        // The owed release goes out first; the new input of that very call is held back (the replay is not yet
+        // confirmed) and opens with the next one.
+        #expect(back == [tabletEvent(.up, x: 2, y: 2), proximityEvent(entering: false)])
         #expect(!d.model.penContact && d.pipe.owed.isEmpty)
-        #expect(d.send(penMsg(.pen, penSample(6, 6, startFlags, pressure: 500))) == [tabletEvent(.down, x: 6, y: 6, pressure: 500)])
+        #expect(d.send(penMsg(.pen, penSample(6, 6, startFlags, pressure: 500)))
+                == [proximityEvent(entering: true), tabletEvent(.down, x: 6, y: 6, pressure: 500)])
         #expect(d.model.violations.isEmpty)
     }
 
@@ -432,20 +463,23 @@ struct InputPipelineTests {
         #expect(d.pipe.takeReleaseRecords().contains { $0.reason == "owed_replay" && $0.events == 4 })
     }
 
-    @Test("PIPE-21 retries are bounded: six attempts, then the release is given up, counted and recorded")
-    func pipe21_boundedRetries() {
+    @Test("PIPE-21 an owed release is never given up on: it survives far more than six failed attempts, the cadence slows to once a second (logged once per slot), and it is posted when posting recovers")
+    func pipe21_neverGivenUp() {
         var d = PipeDriver()
         d.holdPenRightScroll()
         d.failing = { $0.isClosing }
         d.release(.bye)
         var replays = 0
-        for _ in 0..<30 where !d.pipe.owed.isEmpty {
-            if !d.tick(after: 300 * msec).isEmpty { replays += 1 }
-        }
-        #expect(replays == OwedRelease.maxAttempts)
-        #expect(d.pipe.owed.isEmpty && d.pipe.owed.gaveUp == 4)
-        #expect(d.pipe.takeReleaseRecords().contains { $0.reason == "owed_giveup" && $0.gaveUp == 4 })
-        #expect(d.tick(after: 300 * msec).isEmpty)
+        for _ in 0..<60 { if !d.tick(after: 300 * msec).isEmpty { replays += 1 } }  // 18 seconds of failing
+        #expect(d.pipe.owed.count == 4 && !d.model.isIdle)
+        #expect(replays > OwedRelease.slowAfterAttempts)  // it keeps trying...
+        #expect(replays < 30)  // ...at about once a second after the first six
+        let slow = d.pipe.takeReleaseRecords().filter { $0.reason == "owed_slow" }
+        #expect(slow.map(\.slowed).reduce(0, +) == 4)  // one crossing per slot, logged once
+        d.failing = { _ in false }
+        let recovered = d.tick(after: 2_000 * msec)
+        #expect(recovered.count == 4 && d.model.isIdle && d.pipe.owed.isEmpty)
+        #expect(d.tick(after: 2_000 * msec).isEmpty)
     }
 
     @Test("PIPE-22 a release trigger, a session start and shutdown retry at once, ignoring the retry interval")
@@ -508,7 +542,7 @@ struct InputPipelineTests {
         d.release(.bye)
         #expect(!d.model.isIdle && d.pipe.owed.count == 4)
         for _ in 0..<12 { d.tick(after: 300 * msec) }  // it is tried again and again, each try refused
-        #expect(d.pipe.owed.count == 4 && d.pipe.owed.gaveUp == 0)
+        #expect(d.pipe.owed.count == 4 && d.pipe.owed.slowed == 0)
         d.permissionTruth = nil
         #expect(d.tick(after: 300 * msec).count == 4)
         #expect(d.model.isIdle && d.pipe.owed.isEmpty)
@@ -531,6 +565,237 @@ struct InputPipelineTests {
         let back = pipe.tick(now: now, environment: openEnv)
         model.apply(back)
         #expect(back.count == 2 && model.isIdle && pipe.owed.isEmpty)
+    }
+
+    private func isDown(_ e: MacEvent) -> Bool {
+        switch e {
+        case .mouse(let m): return m.kind == .down
+        case .tabletPoint(let p): return p.kind == .down
+        default: return false
+        }
+    }
+
+    @Test("PIPE-30 a newer press is never overtaken by an older release (button): 0 ms the up fails, 100 ms the new down is not posted, 300 ms the up is retried and releases nothing that is held")
+    func pipe30_buttonOrdering() {
+        var d = PipeDriver()
+        d.send(absMsg(.mouse, 500, 600, .left))  // pressed and posted
+        #expect(d.model.buttons == [.left])
+        let leftUp = testGeometry.point(x: 500, y: 600)
+
+        d.failing = { $0.isClosing }
+        d.send(absMsg(.mouse, 500, 600, []), after: 0)  // t = 0: released; the up cannot be posted
+        #expect(d.pipe.owed.count == 1 && d.model.buttons == [.left])
+
+        d.failing = { _ in false }
+        let at100 = d.send(absMsg(.mouse, 500, 600, .left), after: 100 * msec)  // t = 100 ms: a new press
+        #expect(!at100.contains(where: isDown))  // not posted
+        #expect(d.pipe.planner.counters.droppedOwed >= 1)
+        #expect(d.pipe.machine?.hasHeldInput == true)  // the machine still knows the finger is down
+
+        let at300 = d.send(absMsg(.mouse, 510, 610, .left), after: 200 * msec)  // t = 300 ms: still down; the up is retried
+        #expect(at300 == [mouseEvent(.up, at: leftUp, clickState: 1)])  // nothing but the retry: the move is an opening too
+        #expect(d.model.buttons.isEmpty && d.model.violations.isEmpty)
+
+        // The finger is still down but the press was never posted: no phantom click, no drag of a press that is not there.
+        let at316 = d.send(absMsg(.mouse, 520, 620, .left), after: 16 * msec)
+        #expect(!at316.contains(where: isDown) && d.model.buttons.isEmpty)
+        #expect(d.pipe.planner.heldMouseButtons.isEmpty)
+
+        // Lifted and pressed again: input is open once more.
+        d.send(absMsg(.mouse, 520, 620, []), after: 16 * msec)
+        let again = d.send(absMsg(.mouse, 520, 620, .left), after: 16 * msec)
+        #expect(again.contains(where: isDown) && d.model.buttons == [.left])
+        #expect(d.model.violations.isEmpty && d.orderingViolations.isEmpty)
+    }
+
+    @Test("PIPE-31 the same for the pen: 0 ms the up fails, 100 ms the new stroke's down is not posted, 300 ms the up is retried, the rest of that stroke draws nothing, the next stroke does")
+    func pipe31_penOrdering() {
+        var d = PipeDriver()
+        d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        d.send(penMsg(.pen, penSample(2, 2, startFlags, pressure: 400)))  // stroke down and posted
+        #expect(d.model.penContact)
+
+        d.failing = { $0.isClosing }
+        d.send(penMsg(.pen, penSample(3, 3, hoverFlags)), after: 0)  // t = 0: lifted; the up cannot be posted
+        #expect(d.model.penContact && d.pipe.owed.count == 1)
+
+        d.failing = { _ in false }
+        let at100 = d.send(penMsg(.pen, penSample(4, 4, startFlags, pressure: 500)), after: 100 * msec)  // a new stroke
+        #expect(at100.isEmpty && d.model.penContact)  // its down is not posted; the old contact is still on the Mac
+        #expect(d.pipe.planner.counters.droppedOwed >= 1)
+
+        let at300 = d.send(penMsg(.pen, penSample(5, 5, touchFlags, pressure: 600)), after: 200 * msec)
+        #expect(at300 == [tabletEvent(.up, x: 3, y: 3)])  // the old up, retried; the drag of a stroke that has no down is dropped
+        #expect(!d.model.penContact && d.model.violations.isEmpty)
+
+        // The rest of that stroke draws nothing (it has no down); after the lift a new stroke does.
+        #expect(d.send(penMsg(.pen, penSample(6, 6, touchFlags, pressure: 600)), after: 16 * msec).isEmpty)
+        d.send(penMsg(.pen, penSample(7, 7, hoverFlags)), after: 16 * msec)
+        let next = d.send(penMsg(.pen, penSample(8, 8, startFlags, pressure: 500)), after: 16 * msec)
+        #expect(next == [tabletEvent(.down, x: 8, y: 8, pressure: 500)] && d.model.penContact)
+        #expect(d.model.violations.isEmpty && d.orderingViolations.isEmpty)
+    }
+
+    @Test("PIPE-32 while something is owed, closing events still flow and join the owed set, and every retry keeps the gate closed until the owed set is posted and confirmed")
+    func pipe32_closingFlowsWhileBlocked() {
+        var d = PipeDriver()
+        d.send(relMsg(0, 0, [.left, .right]))
+        #expect(d.model.buttons == [.left, .right])
+        d.failing = { if case .mouse(let m) = $0 { return m.kind == .up && m.button == .left }; return false }
+        d.send(relMsg(0, 0, .right), after: 0)  // left up fails: owed
+        #expect(d.pipe.owed.count == 1)
+
+        // A right release while blocked is not held back...
+        d.failing = { $0.isClosing }
+        let rightUp = d.send(relMsg(0, 0, []), after: 10 * msec)
+        #expect(rightUp.contains { if case .mouse(let m) = $0 { return m.kind == .up && m.button == .right }; return false })
+        // ...and when its post fails too, it joins the owed set.
+        #expect(d.pipe.owed.count == 2)
+
+        // A press while blocked is dropped; it stays dropped through failing retries.
+        for _ in 0..<5 {
+            let events = d.send(relMsg(0, 0, [.right]), after: 300 * msec)
+            #expect(!events.contains(where: isDown))
+            d.send(relMsg(0, 0, []), after: 1 * msec)
+        }
+        #expect(d.pipe.owed.count == 2 && d.model.buttons == [.left, .right])
+
+        // Posting recovers: the owed releases go out, then the gate is open again one call later.
+        d.failing = { _ in false }
+        let replayCall = d.send(relMsg(0, 0, [.left]), after: 2_000 * msec)
+        #expect(replayCall.count == 2 && d.model.buttons.isEmpty)  // the two ups go out; the press of this very call does not
+        #expect(!replayCall.contains(where: isDown))
+        d.send(relMsg(0, 0, []), after: 1 * msec)
+        let open = d.send(relMsg(0, 0, [.left]), after: 1 * msec)
+        #expect(open.contains(where: isDown) && d.model.buttons == [.left])
+        #expect(d.model.violations.isEmpty && d.orderingViolations.isEmpty)
+    }
+
+    @Test("PIPE-33 a pen leave does not overtake an owed pen up: it is held back and goes out right after it")
+    func pipe33_leaveAfterUp() {
+        var d = PipeDriver()
+        d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        d.send(penMsg(.pen, penSample(2, 2, startFlags, pressure: 400)))
+        d.failing = { if case .tabletPoint(let p) = $0 { return p.kind == .up }; return false }
+        d.send(penMsg(.pen, penSample(3, 3, hoverFlags)), after: 0)  // t = 0: lifted; the up cannot be posted
+        #expect(d.pipe.owed.count == 1 && d.model.penContact)
+        d.failing = { _ in false }
+        // t = 100 ms: the pen leaves range. The leave must not reach the Mac before the up.
+        #expect(d.send(penMsg(.pen, penSample(4, 4, [])), after: 100 * msec).isEmpty)
+        #expect(d.model.penContact && d.model.proximity == .pen && d.model.violations.isEmpty)
+        // t = 300 ms: both go out, in order.
+        let out = d.send(penMsg(.pen, penSample(5, 5, [])), after: 200 * msec)
+        #expect(out == [tabletEvent(.up, x: 3, y: 3), proximityEvent(entering: false)])
+        #expect(d.model.isIdle && d.model.violations.isEmpty && d.pipe.owed.isEmpty)
+    }
+
+    @Test("PIPE-34 a failed batch cancels the releases of openings that never reached the Mac: nothing is owed for a stroke that was never posted")
+    func pipe34_cancelledWithItsOpening() {
+        var d = PipeDriver()
+        d.failing = { if case .tabletProximity(_, let entering) = $0 { return entering }; return false }
+        // One message: a stroke starts and is lifted again. The enter cannot be posted, so neither can the rest.
+        let events = d.send(penMsg(.pen, penSample(1, 1, startFlags, pressure: 300), penSample(2, 2, hoverFlags)))
+        #expect(events.count == 3)  // enter, down, up were produced
+        #expect(d.pipe.owed.isEmpty && d.model.isIdle && !d.pipe.planner.isHoldingInput)
+        #expect(d.model.violations.isEmpty && d.orderingViolations.isEmpty)
+        // The next hover enters again.
+        d.failing = { _ in false }
+        #expect(d.send(penMsg(.pen, penSample(3, 3, hoverFlags))) == [proximityEvent(entering: true), tabletEvent(.hover, x: 3, y: 3)])
+    }
+
+    @Test("PIPE-35b pen priority when the pointer's up on its behalf fails: the pen down is not posted after it; the pointer's release is owed and retried")
+    func pipe35b_penPriorityFailure() {
+        var d = PipeDriver()
+        d.send(absMsg(.mouse, 500, 600, .left))
+        #expect(d.model.buttons == [.left])
+        d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        d.failing = { if case .mouse(let m) = $0 { return m.kind == .up }; return false }
+        let touch = d.send(penMsg(.pen, penSample(2, 2, startFlags, pressure: 400)))  // the up on behalf fails first
+        #expect(!touch.isEmpty && !d.model.penContact && d.model.buttons == [.left])
+        #expect(d.pipe.owed.count == 1 && !d.pipe.planner.isPenInContact)
+        d.failing = { _ in false }
+        #expect(d.send(penMsg(.pen, penSample(3, 3, touchFlags, pressure: 400)), after: 5 * msec).isEmpty)  // the stroke's rest draws nothing
+        let retry = d.send(penMsg(.pen, penSample(4, 4, touchFlags, pressure: 400)), after: 300 * msec)
+        #expect(retry.count == 1 && d.model.buttons.isEmpty && !d.model.penContact)
+        #expect(d.model.violations.isEmpty && d.orderingViolations.isEmpty)
+    }
+
+    private final class FakePoster {
+        var failuresLeft: Int
+        var calls = 0
+        var delivered: [MacEvent] = []
+        init(failFirst: Int) { failuresLeft = failFirst }
+
+        func post(_ events: [MacEvent]) -> [MacEvent] {
+            calls += 1
+            if failuresLeft > 0 {
+                failuresLeft -= 1
+                return events.filter { $0.isClosing }
+            }
+            delivered += events
+            return []
+        }
+    }
+
+    /// Holds pen + right button + scroll, then shuts down, posting the shutdown release through the fake poster.
+    private func shutdownThroughFake(_ poster: FakePoster) -> PipeDriver {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        let events = d.pipe.shutdown(now: d.now, environment: openEnv)
+        let failed = poster.post(events)
+        if !failed.isEmpty { d.pipe.postFailed(failed, now: d.now, permitted: true) }
+        return d
+    }
+
+    @Test("PIPE-35 shutdown drains: a release that fails during the final flush is retried at once, a handful of times, until it is posted")
+    func pipe35_shutdownDrains() {
+        let poster = FakePoster(failFirst: 2)  // the final flush fails, and so does the first drain attempt
+        var d = shutdownThroughFake(poster)
+        #expect(d.pipe.owed.count == 4)
+        var pauses = 0
+        let now = d.now
+        let remaining = d.pipe.drainOwed(attempts: 5, now: { now }, environment: { openEnv },
+                                         post: { (poster.post($0), true) }, pause: { pauses += 1 })
+        #expect(remaining == 0 && d.pipe.owed.isEmpty)
+        #expect(poster.calls == 3 && pauses == 1)  // final flush, failed attempt, pause, successful attempt
+        d.model.apply(poster.delivered)
+        #expect(d.model.isIdle && d.model.violations.isEmpty)
+    }
+
+    @Test("PIPE-36 the drain gives up without spinning when the permission is missing, and reports what is still owed")
+    func pipe36_drainWithoutPermission() {
+        let poster = FakePoster(failFirst: 1)
+        var d = shutdownThroughFake(poster)
+        var pauses = 0
+        var post = 0
+        let now = d.now
+        let remaining = d.pipe.drainOwed(attempts: 5, now: { now }, environment: { noPermissionEnv },
+                                         post: { post += 1; return (poster.post($0), true) }, pause: { pauses += 1 })
+        #expect(remaining == 4 && post == 0 && pauses == 0)
+
+        // The permission disappears in the middle of the drain (the poster's fresh check refuses): it stops there.
+        var e = shutdownThroughFake(FakePoster(failFirst: 1))
+        var calls = 0
+        var refused = 0
+        let stopped = e.pipe.drainOwed(attempts: 5, now: { now },
+                                       environment: { calls += 1; return calls == 1 ? openEnv : noPermissionEnv },
+                                       post: { refused += 1; return ($0, false) }, pause: { })
+        #expect(stopped == 4 && refused == 1 && calls == 2)
+    }
+
+    @Test("PIPE-37 a drain that keeps failing stops after its attempts, pauses between them only, and keeps everything owed")
+    func pipe37_drainKeepsFailing() {
+        let poster = FakePoster(failFirst: 1_000)
+        var d = shutdownThroughFake(poster)
+        var pauses = 0
+        let now = d.now
+        let remaining = d.pipe.drainOwed(attempts: 5, now: { now }, environment: { openEnv },
+                                         post: { (poster.post($0), true) }, pause: { pauses += 1 })
+        #expect(remaining == 4)
+        #expect(poster.calls == 1 + 5 && pauses == 4)  // the final flush plus five drain attempts, four pauses
+        // Nothing was given up: a later attempt still posts everything.
+        poster.failuresLeft = 0
+        #expect(d.pipe.drainOwed(attempts: 1, now: { now }, environment: { openEnv }, post: { (poster.post($0), true) }, pause: { }) == 0)
     }
 
     @Test("PIPE-25 zero-delta scroll CHANGED (the client's keepalive) through the whole chain injects nothing")
@@ -631,16 +896,17 @@ private let fuzzGeometries: [DisplayGeometry] = [
     DisplayGeometry(originX: 1920, originY: 0, widthPt: 700, heightPt: 460, scale: 1)!,
 ]
 
-/// Which events the poster cannot build: at random, but never more than three in a row per slot, so a bounded retry
-/// always gets through in the end.
+/// Which events the poster cannot build: closing events, at random, in streaks of up to twelve per slot (far more
+/// than the six normal retries), and not at all once `recovered` is set.
 private final class PosterFaults {
     var rng: InputFuzzRNG
     var streak: [OwedRelease.Slot: Int] = [:]
+    var recovered = false
     init(seed: UInt64) { rng = InputFuzzRNG(seed: seed) }
 
     func fails(_ e: MacEvent) -> Bool {
-        guard e.isClosing, let slot = OwedRelease.Slot(e) else { return false }
-        if Int.random(in: 0..<10, using: &rng) < 3, streak[slot, default: 0] < 3 {
+        guard !recovered, e.isClosing, let slot = OwedRelease.Slot(e) else { return false }
+        if Int.random(in: 0..<10, using: &rng) < 4, streak[slot, default: 0] < 12 {
             streak[slot, default: 0] += 1
             return true
         }
@@ -657,20 +923,25 @@ private func fuzzEnvironment(_ g: inout InputFuzzRNG, flaky: Bool) -> InjectionE
 }
 
 /// One random run. `flaky` toggles the permission and the display at random (otherwise the gate is always open);
-/// `faults` makes the poster fail to build closing events at random and lets the pipeline's view of the permission go
-/// stale. The Mac model sees only what is really delivered (see `PipeDriver`).
-private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = false) -> [String] {
+/// `faults` makes the poster fail to build closing events at random for the first two thirds of the run and then
+/// recover; `stale` also lets the pipeline's view of the permission go stale now and then (macOS then drops an OPENING
+/// event unnoticed, which is harmless but shows as an orphan up in the Mac model). The Mac model sees only what is
+/// really delivered (see `PipeDriver`).
+private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = false, stale: Bool = false) -> [String] {
     var g = InputFuzzRNG(seed: seed)
     var d = PipeDriver()
     let plan = PosterFaults(seed: seed &+ 77)
     if faults { d.failing = { plan.fails($0) } }
     var failures: [String] = []
-    var alwaysOpen = !faults
+    var alwaysOpen = !faults && !stale
 
     func check(_ step: Int, _ label: String, releaseExpected: Bool = false) {
         func fail(_ text: String) { failures.append("seed \(seed) step \(step) \(label): \(text)") }
-        // With faults a lost up can be followed by a new down before the retry: the Mac sees a double down.
-        if !faults && !d.model.violations.isEmpty { fail("violations \(d.model.violations)") }
+        // A release that failed is retried, and nothing new opens meanwhile: the Mac model sees no violation at all
+        // (except, with a stale permission cache, an orphan up for an opening macOS dropped unnoticed).
+        if !stale && !d.model.violations.isEmpty { fail("violations \(d.model.violations)") }
+        // The Mac never receives a press (button, pen contact, proximity, scroll) whose earlier release is still owed.
+        if !d.orderingViolations.isEmpty { fail("ordering \(d.orderingViolations)") }
         // Every positioned event lies on the display that is current now (closing events with no display excepted).
         if let g = d.env.geometry {
             for e in d.lastEmitted {
@@ -678,14 +949,13 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
             }
         }
         if d.pipe.reconciliations != 0 { fail("planner held what the machine did not") }
-        let gaveUp = d.pipe.owed.gaveUp > 0
         // Whatever the Mac holds is known to someone: the planner, or the owed releases.
-        if !d.model.isIdle && !d.pipe.planner.isHoldingInput && d.pipe.owed.isEmpty && !gaveUp {
+        if !d.model.isIdle && !d.pipe.planner.isHoldingInput && d.pipe.owed.isEmpty {
             fail("the Mac holds input nobody remembers")
         }
         // With the permission there and nothing owed, the Mac and the planner agree exactly (not with faults: a stale cache
         // lets macOS drop an opening event unnoticed, which is harmless but leaves the planner ahead of the Mac).
-        if !faults && d.env.canInject && d.pipe.owed.isEmpty && !gaveUp {
+        if !faults && !stale && d.env.canInject && d.pipe.owed.isEmpty {
             let p = d.pipe.planner
             if (d.model.proximity != nil) != p.isPenInRange || d.model.penContact != p.isPenInContact
                 || d.model.buttons != p.heldMouseButtons || d.model.scrollOpen != p.isScrollOpen {
@@ -693,7 +963,7 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
             }
         }
         // The display gone (permission there): everything was released at once.
-        if d.env.canInject && !d.env.isOpen && d.permissionTruth == nil && d.pipe.owed.isEmpty && !gaveUp && !d.model.isIdle {
+        if d.env.canInject && !d.env.isOpen && d.permissionTruth == nil && d.pipe.owed.isEmpty && !d.model.isIdle {
             fail("Mac holds input while the display is gone")
         }
         if alwaysOpen, let m = d.pipe.machine {
@@ -702,7 +972,7 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
                 fail("pen state mismatch")
             }
         }
-        if releaseExpected && (d.pipe.isHoldingInput || (!d.model.isIdle && d.pipe.owed.isEmpty && !gaveUp)) {
+        if releaseExpected && (d.pipe.isHoldingInput || (!d.model.isIdle && d.pipe.owed.isEmpty)) {
             fail("still holding after release")
         }
     }
@@ -710,7 +980,8 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
     for i in 0..<steps {
         if Int.random(in: 0..<4, using: &g) == 0 { d.env = fuzzEnvironment(&g, flaky: flaky) }
         // A stale permission cache: the pipeline is told the permission is there for a step when it is not.
-        d.permissionTruth = faults && d.env.canInject && Int.random(in: 0..<12, using: &g) == 0 ? false : nil
+        d.permissionTruth = stale && d.env.canInject && Int.random(in: 0..<12, using: &g) == 0 ? false : nil
+        if i == steps * 2 / 3 { plan.recovered = true }  // the poster recovers for the last third
         if !d.env.isOpen || d.permissionTruth != nil { alwaysOpen = false }
         let delta = fuzzDelta(&g)
         d.now = delta >= 0 ? d.now &+ UInt64(delta) : d.now - Swift.min(d.now, UInt64(-delta))
@@ -740,16 +1011,16 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
             check(i, "session start", releaseExpected: true)
         }
     }
-    // Quiescence: the permission and the display are back and the poster works. A few retry intervals later nothing
-    // is owed and the Mac is idle, unless a release had to be given up on.
+    // Quiescence: the permission and the display are back and the poster works. Some retry intervals later (the slow
+    // cadence is once a second) nothing is owed and the Mac is idle: nothing is ever given up.
     d.env = openEnv
     d.permissionTruth = nil
     d.failing = { _ in false }
-    for _ in 0..<10 { d.tick(after: 300 * msec) }
+    for _ in 0..<12 { d.tick(after: 1_100 * msec) }
     d.shutdown()
     check(steps, "shutdown", releaseExpected: true)
     if !d.pipe.owed.isEmpty { failures.append("seed \(seed): releases still owed after the quiescence") }
-    if d.pipe.owed.gaveUp == 0 && !d.model.isIdle { failures.append("seed \(seed): the Mac is not idle after the quiescence") }
+    if !d.model.isIdle { failures.append("seed \(seed): the Mac is not idle after the quiescence") }
     return failures
 }
 
@@ -769,10 +1040,17 @@ struct InputPipelineFuzzTests {
         #expect(failures.isEmpty, "\(failures.prefix(5))")
     }
 
-    @Test("PIPE-F3 on top of that the poster fails to build releases and the permission cache goes stale: bounded retries, nothing owed at the end")
+    @Test("PIPE-F3 on top of that the poster fails closing events in long streaks and then recovers: nothing new opens while a release is owed, the owed set ends empty and the Mac idle")
     func pipeF3_faults() {
         var failures: [String] = []
         for seed in 1...600 { failures += runPipeline(seed: UInt64(seed) &+ 20_000, steps: 250, flaky: true, faults: true) }
+        #expect(failures.isEmpty, "\(failures.prefix(5))")
+    }
+
+    @Test("PIPE-F4 and the pipeline's cached permission goes stale now and then: releases refused at the last moment are owed too")
+    func pipeF4_stalePermission() {
+        var failures: [String] = []
+        for seed in 1...600 { failures += runPipeline(seed: UInt64(seed) &+ 30_000, steps: 250, flaky: true, faults: true, stale: true) }
         #expect(failures.isEmpty, "\(failures.prefix(5))")
     }
 }

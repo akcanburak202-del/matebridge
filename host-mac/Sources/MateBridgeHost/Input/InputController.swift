@@ -164,14 +164,34 @@ public final class InputController: @unchecked Sendable {
         }
     }
 
-    /// The host app is quitting: release, stop the timers, ignore everything after. Idempotent.
+    /// Attempts and pause of the shutdown drain: a handful of retries over a few hundred milliseconds at most.
+    static let shutdownDrainAttempts = 5
+    static let shutdownDrainPause: TimeInterval = 0.06
+
+    /// The host app is quitting: release, then retry whatever is still owed a few times right now (a transient
+    /// failure during a normal Quit must not leave input held after the process exits), stop the timers, ignore
+    /// everything after. Idempotent. When the permission is missing nothing can be posted: it does not spin, it logs.
     public func shutdown() {
         queue.sync {
             guard !stopped else { return }
             let now = HostClock.nowUs()
             let events = pipeline.shutdown(now: now, environment: environment())
             flush(events, now: now)
-            log(.info, "input_shutdown", "released=\(events.count) owed=\(pipeline.owed.count)")
+            let owedBeforeDrain = pipeline.owed.count
+            let remaining = pipeline.drainOwed(
+                attempts: Self.shutdownDrainAttempts,
+                now: { HostClock.nowUs() },
+                environment: { [self] in environment() },
+                post: { [self] batch in
+                    let result = post(batch)
+                    eventsPosted += batch.count - result.failed.count
+                    return result
+                },
+                pause: { Thread.sleep(forTimeInterval: Self.shutdownDrainPause) })
+            logRecords()
+            log(remaining == 0 ? .info : .warning, "input_shutdown",
+                "released=\(events.count) owed_before_drain=\(owedBeforeDrain) owed=\(remaining) "
+                    + "permission=\(lastStatus?.accessibilityTrusted == true ? 1 : 0)")
             stopped = true
             endActivity()
             watchdogTimer.cancel()
@@ -181,30 +201,36 @@ public final class InputController: @unchecked Sendable {
 
     // MARK: Queue-confined work
 
-    /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are
-    /// kept and retried), and logs the releases the pipeline did.
-    private func flush(_ events: [MacEvent], now: UInt64) {
-        if !events.isEmpty {
-            var failed: [MacEvent] = []
-            var permitted = true
-            // A batch that releases something is worth a fresh permission check: the 200 ms cache must not let a
-            // release go out after the permission is gone and be forgotten. Nothing can be posted without it.
-            if events.contains(where: \.isClosing), !permission.isTrusted() {
-                trustedCache = (false, HostClock.nowUs())
-                failed = events
-                permitted = false
-            } else {
-                failed = poster.post(events)
-            }
-            eventsPosted += events.count - failed.count
-            if !failed.isEmpty {
-                pipeline.postFailed(failed, now: now, permitted: permitted)
-                let closing = failed.filter(\.isClosing).count
-                log(.warning, "input_post_failed", "events=\(failed.count) closing=\(closing) permitted=\(permitted ? 1 : 0)")
-            }
+    /// Posts one batch through the poster seam. A batch that releases something gets a fresh permission check first:
+    /// the 200 ms cache must not let a release go out after the permission is gone and be forgotten, and nothing can be
+    /// posted without it. Returns what could not be posted and whether the reason was anything but the permission.
+    private func post(_ events: [MacEvent]) -> (failed: [MacEvent], permitted: Bool) {
+        guard !events.isEmpty else { return ([], true) }
+        if events.contains(where: \.isClosing), !permission.isTrusted() {
+            trustedCache = (false, HostClock.nowUs())
+            return (events, false)
         }
+        return (poster.post(events), true)
+    }
+
+    /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are
+    /// owed and retried until they are posted), and logs the releases the pipeline did.
+    private func flush(_ events: [MacEvent], now: UInt64) {
+        let result = post(events)
+        eventsPosted += events.count - result.failed.count
+        if !result.failed.isEmpty {
+            pipeline.postFailed(result.failed, now: now, permitted: result.permitted)
+            let closing = result.failed.filter(\.isClosing).count
+            log(.warning, "input_post_failed",
+                "events=\(result.failed.count) closing=\(closing) permitted=\(result.permitted ? 1 : 0) owed=\(pipeline.owed.count)")
+        }
+        logRecords()
+    }
+
+    /// One `input_release` line per release the pipeline recorded: cause and counts, never coordinates.
+    private func logRecords() {
         for record in pipeline.takeReleaseRecords() {
-            let level: LogLevel = record.cause == .gateLost || record.gaveUp > 0 || record.reason == "owed_replay" ? .warning
+            let level: LogLevel = record.cause == .gateLost || record.slowed > 0 || record.reason == "owed_replay" ? .warning
                 : (record.events > 0 ? .info : .debug)
             log(level, "input_release", record.logFields)
         }
@@ -245,7 +271,12 @@ public final class InputController: @unchecked Sendable {
     private func rearmWatchdog() {
         guard !stopped else { return }
         let now = HostClock.nowUs()
-        guard let due = pipeline.nextDeadline(now: now) else {
+        var next = pipeline.nextDeadline(now: now)
+        // An owed release is retried when it is due, not only at the next poll, while the permission is there.
+        if lastStatus?.accessibilityTrusted == true, let retry = pipeline.nextOwedRetry {
+            next = Swift.min(next ?? retry, retry)
+        }
+        guard let due = next else {
             watchdogTimer.schedule(deadline: .distantFuture)
             return
         }
@@ -286,8 +317,9 @@ public final class InputController: @unchecked Sendable {
         let d = pipeline.planner.counters
         let noPermission = d.droppedNoPermission - loggedDrops.droppedNoPermission
         let noDisplay = d.droppedNoDisplay - loggedDrops.droppedNoDisplay
-        if noPermission > 0 || noDisplay > 0 {
-            log(.warning, "input_dropped", "no_permission=\(noPermission) no_display=\(noDisplay)")
+        let owed = d.droppedOwed - loggedDrops.droppedOwed
+        if noPermission > 0 || noDisplay > 0 || owed > 0 {
+            log(.warning, "input_dropped", "no_permission=\(noPermission) no_display=\(noDisplay) owed=\(owed)")
             loggedDrops = d
         }
     }

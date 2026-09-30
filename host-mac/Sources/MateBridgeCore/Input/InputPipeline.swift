@@ -11,8 +11,16 @@
 /// (display or permission gone while something is held) releases with `.gateLost`.
 ///
 /// A release that could not reach the Mac is not forgotten: closing events produced while the permission is missing,
-/// and closing events the poster reports as failed (`postFailed`), are kept in `owed` and replayed first, before any
-/// new input, when the permission is back, at the next retry, session start and shutdown (see `OwedRelease`).
+/// and closing events the poster reports as failed (`postFailed`), are kept in `owed` until they are posted (they are
+/// never given up on) and replayed first, before any new input, when the permission is back, at the next retry,
+/// session start and shutdown (see `OwedRelease`).
+///
+/// Ordering. While anything is owed, or a replay has been handed out and not yet confirmed, the input gate is closed
+/// for OPENING events exactly as if the permission or the display were missing (`InjectionEnvironment.opensBlocked`):
+/// opens are dropped and counted, closing events still flow and join the owed set, and the machine keeps its own
+/// state, so a finger that is still down does not turn into a phantom press later. Otherwise an older release that is
+/// retried later would overtake, and release, a newer press. Input opens again once the owed set is empty and the last
+/// replay has been confirmed by the next entry point.
 public struct InputPipeline: Sendable {
     public internal(set) var planner: InjectionPlanner
     /// The current session's machine; nil between sessions.
@@ -75,8 +83,9 @@ public struct InputPipeline: Sendable {
         guard machine != nil else { return out }
         out += releaseIfGateLost(now: now, environment: env)
         let actions = machine?.handle(message, now: now) ?? []
-        var produced = planner.plan(actions, environment: env, now: now)
-        produced += reconcile(environment: env)
+        let gated = gating(env)
+        var produced = planner.plan(actions, environment: gated, now: now)
+        produced += reconcile(environment: gated)
         return out + emit(produced, now: now, environment: env)
     }
 
@@ -87,8 +96,9 @@ public struct InputPipeline: Sendable {
         guard machine != nil else { return out }
         out += releaseIfGateLost(now: now, environment: env)
         let actions = machine?.tick(now: now) ?? []
-        var produced = planner.plan(actions, environment: env, now: now)
-        produced += reconcile(environment: env)
+        let gated = gating(env)
+        var produced = planner.plan(actions, environment: gated, now: now)
+        produced += reconcile(environment: gated)
         return out + emit(produced, now: now, environment: env)
     }
 
@@ -97,12 +107,21 @@ public struct InputPipeline: Sendable {
         machine?.nextDeadline(now: now)
     }
 
+    /// When the next retry of an owed release is due, or nil when nothing is owed. Only worth waking for while the
+    /// permission is there: without it a retry is impossible (the host then relies on its 1 s poll).
+    public var nextOwedRetry: UInt64? { owed.nextRetryAt }
+
     /// Releases everything: owed releases first, then the machine's release-all (its actions go through the planner),
     /// then the planner's own safety net for anything still on the Mac. Idempotent; safe with no session, no display
     /// and no permission.
     public mutating func release(_ cause: ReleaseCause, now: UInt64, environment env: InjectionEnvironment) -> [MacEvent] {
+        performRelease(cause, now: now, environment: env, replayingOwed: true)
+    }
+
+    private mutating func performRelease(_ cause: ReleaseCause, now: UInt64, environment env: InjectionEnvironment,
+                                         replayingOwed: Bool) -> [MacEvent] {
         lastReleaseCause = cause
-        var out = replayOwed(now: now, environment: env, force: true)
+        var out = replayingOwed ? replayOwed(now: now, environment: env, force: true) : []
         let actions = machine?.releaseAll(cause) ?? []
         var produced = planner.plan(actions, environment: env, now: now)
         produced += planner.releaseAll(environment: env)
@@ -112,17 +131,70 @@ public struct InputPipeline: Sendable {
     }
 
     /// The poster could not deliver these events (it could not build them, or the permission was gone when it tried).
-    /// Closing events among them are kept and retried; the rest are dropped.
+    /// Closing events among them are kept and retried until they are posted; the opening ones are dropped, and the
+    /// planner's shadow state forgets what they would have opened.
     /// - Parameter permitted: false when the reason was the missing permission (that costs no retry attempt).
     public mutating func postFailed(_ events: [MacEvent], now: UInt64, permitted: Bool) {
-        owed.owe(events, now: now, countsAsAttempt: permitted)
+        let slowedBefore = owed.slowed
+        planner.notPosted(events)
+        // A release whose opening is in the same failed batch closes something that never reached the Mac: it is
+        // cancelled with it instead of being owed. (A release of something posted earlier is owed as usual.)
+        var neverOpened: Set<OwedRelease.Slot> = []
+        var toOwe: [MacEvent] = []
+        for event in events {
+            if let slot = OwedRelease.Slot(closing: event) {
+                neverOpened.insert(slot)
+            } else if event.isClosing, let slot = OwedRelease.Slot(event), neverOpened.contains(slot) {
+                neverOpened.remove(slot)
+            } else {
+                toOwe.append(event)
+            }
+        }
+        owed.owe(toOwe, now: now, countsAsAttempt: permitted)
+        // Logged once per slot when its retries drop to the slow cadence (they never stop).
+        if owed.slowed > slowedBefore { record(ReleaseRecord(reason: "owed_slow", events: [], slowed: owed.slowed - slowedBefore)) }
+    }
+
+    /// Shutdown drain: retries what is still owed right now, ignoring the retry spacing, up to `attempts` times with
+    /// `pause` between them (the caller decides what a pause is: a short sleep on the host, nothing in a test).
+    /// Stops at once, without spinning, when the permission is missing (nothing can be posted then), and as soon as
+    /// nothing is owed. `post` posts a batch through the poster seam and reports what failed. Returns how many
+    /// releases are still owed.
+    public mutating func drainOwed(attempts: Int, now: () -> UInt64, environment: () -> InjectionEnvironment,
+                                   post: ([MacEvent]) -> (failed: [MacEvent], permitted: Bool),
+                                   pause: () -> Void) -> Int {
+        var attempt = 0
+        while attempt < attempts {
+            owed.confirmPosted()
+            if owed.isEmpty { break }
+            let env = environment()
+            guard env.canInject else { break }
+            let t = now()
+            let events = replayOwed(now: t, environment: env, force: true)
+            if events.isEmpty { break }
+            let result = post(events)
+            if !result.failed.isEmpty { postFailed(result.failed, now: t, permitted: result.permitted) }
+            attempt += 1
+            if owed.isEmpty { break }
+            if attempt < attempts { pause() }
+        }
+        owed.confirmPosted()
+        return owed.count
     }
 
     /// Losing the display or the permission while the Mac holds our input releases it right away (the release itself
     /// is not gated), instead of waiting for the client to lift the pen.
     private mutating func releaseIfGateLost(now: UInt64, environment env: InjectionEnvironment) -> [MacEvent] {
         guard !env.isOpen, planner.isHoldingInput else { return [] }
-        return release(.gateLost, now: now, environment: env)
+        // The owed replay of this call (if any) has just been handed out: it must not be replayed or confirmed again.
+        return performRelease(.gateLost, now: now, environment: env, replayingOwed: false)
+    }
+
+    /// The environment the planner sees for OPENING events: closed while anything is owed or unconfirmed.
+    private func gating(_ env: InjectionEnvironment) -> InjectionEnvironment {
+        var g = env
+        g.opensBlocked = owed.isBlocking
+        return g
     }
 
     /// Safety net: the planner can only hold what the machine holds. If it does not, release the leftover.
@@ -132,18 +204,30 @@ public struct InputPipeline: Sendable {
         return planner.releaseAll(environment: env)
     }
 
-    /// Events about to be posted. Without permission macOS drops them, so their closing ones are owed.
+    /// Events about to be posted. Without permission macOS drops them, so their closing ones are owed. A pen leave
+    /// produced while a pen up is still owed is held back into the owed set instead (it goes out right after the up):
+    /// closing events flow, but the leave must not overtake the release it depends on.
     private mutating func emit(_ produced: [MacEvent], now: UInt64, environment env: InjectionEnvironment) -> [MacEvent] {
-        if !env.canInject { owed.owe(produced, now: now, countsAsAttempt: false) }
-        return produced
+        if !env.canInject {
+            owed.owe(produced, now: now, countsAsAttempt: false)
+            return produced
+        }
+        guard owed.owesPenUp else { return produced }
+        var flowing: [MacEvent] = []
+        var held: [MacEvent] = []
+        for event in produced {
+            if case .tabletProximity(_, let entering) = event, !entering { held.append(event) } else { flowing.append(event) }
+        }
+        owed.owe(held, now: now, countsAsAttempt: false)
+        return flowing
     }
 
     /// The owed releases that are due, if the permission is there. They go before anything new.
     private mutating func replayOwed(now: UInt64, environment env: InjectionEnvironment, force: Bool) -> [MacEvent] {
+        owed.confirmPosted()  // the last replay, if nobody reported it failed, was posted
         guard env.canInject, !owed.isEmpty else { return [] }
-        let (events, gaveUp) = owed.replay(now: now, force: force, geometry: env.geometry)
+        let events = owed.replay(now: now, force: force, geometry: env.geometry)
         if !events.isEmpty { record(ReleaseRecord(reason: "owed_replay", events: events)) }
-        if gaveUp > 0 { record(ReleaseRecord(reason: "owed_giveup", events: [], gaveUp: gaveUp)) }
         return events
     }
 

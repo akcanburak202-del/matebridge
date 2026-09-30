@@ -27,6 +27,8 @@ public struct InjectionPlanner: Sendable {
         public var droppedNoDisplay = 0
         /// Continuing or closing actions for something the shadow state never opened (its opening was dropped).
         public var droppedNotHeld = 0
+        /// Opening actions dropped because a release is owed: a newer press must not be overtaken by an older release.
+        public var droppedOwed = 0
         /// Zero-delta `scroll(.changed)` keepalives (never injected).
         public var droppedKeepalive = 0
         public init() {}
@@ -86,6 +88,32 @@ public struct InjectionPlanner: Sendable {
         clicks.reset()
         counters.events += out.count
         return out
+    }
+
+    /// These events were produced but could not be posted. Undo what the OPENING ones would have opened in the shadow
+    /// state, so it keeps following what really is on the Mac (the machine may still believe a pen contact or a
+    /// press exists; the planner then drops the rest of that stroke or press). Closing events are not touched: they
+    /// are owed (`OwedRelease`), and the shadow state has released them already.
+    public mutating func notPosted(_ events: [MacEvent]) {
+        for event in events {
+            switch event {
+            case .tabletProximity(let tool, let entering):
+                if entering, proximity == tool {
+                    proximity = nil
+                    penContact = false
+                }
+            case .tabletPoint(let p):
+                if p.kind == .down { penContact = false }
+            case .mouse(let m):
+                if m.kind == .down { heldButtons[m.button] = nil }
+            case .scroll(let s):
+                if s.phase == .began {
+                    scrollOpen = false
+                    scrollCarryX = 0
+                    scrollCarryY = 0
+                }
+            }
+        }
     }
 
     // MARK: Actions
@@ -236,6 +264,7 @@ public struct InjectionPlanner: Sendable {
     private mutating func openGate(_ env: InjectionEnvironment) -> DisplayGeometry? {
         guard env.canInject else { counters.droppedNoPermission += 1; return nil }
         guard let g = env.geometry else { counters.droppedNoDisplay += 1; return nil }
+        guard !env.opensBlocked else { counters.droppedOwed += 1; return nil }
         return g
     }
 

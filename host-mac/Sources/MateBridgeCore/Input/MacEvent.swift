@@ -106,13 +106,17 @@ public struct InjectionEnvironment: Equatable, Sendable {
     public var canInject: Bool
     /// The virtual display, or nil when there is none (input is ignored, nothing may land on another display).
     public var geometry: DisplayGeometry?
+    /// A release is owed (or a replay is unconfirmed): nothing new may open on the Mac until it is posted, or a newer
+    /// press could be overtaken by the older release. Set by `InputPipeline`, never by the Host.
+    public var opensBlocked: Bool
 
-    public init(canInject: Bool, geometry: DisplayGeometry?) {
+    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false) {
         self.canInject = canInject
         self.geometry = geometry
+        self.opensBlocked = opensBlocked
     }
 
     /// New input may start.
-    public var isOpen: Bool { canInject && geometry != nil }
+    public var isOpen: Bool { canInject && geometry != nil && !opensBlocked }
 }
 
