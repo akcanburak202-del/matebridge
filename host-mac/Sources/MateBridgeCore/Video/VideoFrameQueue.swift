@@ -74,6 +74,21 @@ public final class VideoFrameQueue: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Resyncs the attached consumer (see `BoundedFrameQueue.resync`). A waiting consumer receives `config` at once.
+    /// The caller must force a keyframe from the encoder **after** this returns, which is what guarantees the
+    /// consumer sees the config before that keyframe.
+    public func resync(config: EncodedVideoFrame) {
+        lock.lock()
+        policy.resync(config: config)
+        var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
+        if !finished, let w = waiter, let f = policy.pop() {
+            waiter = nil
+            handoff = (w.cont, f)
+        }
+        lock.unlock()
+        handoff.map { $0.0.resume(returning: $0.1) }
+    }
+
     public var droppedCount: Int { lock.lock(); defer { lock.unlock() }; return policy.droppedCount }
 
     public func finish() {

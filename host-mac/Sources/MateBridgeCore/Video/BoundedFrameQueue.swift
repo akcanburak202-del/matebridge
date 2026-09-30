@@ -28,6 +28,8 @@ public struct BoundedFrameQueue: Sendable {
         if awaitingKeyframe {
             if frame.isKeyframe { awaitingKeyframe = false } else if !frame.isCodecConfig { return 1 }
         }
+        // The same parameter sets queued twice (encoder announcement racing a resync) are redundant.
+        if frame.isCodecConfig, frames.contains(where: { $0.isCodecConfig && $0.data == frame.data }) { return 0 }
         frames.append(frame)
         guard frames.count > capacity else { return 0 }
         // Oldest first: plain delta frame, else oldest non-config keyframe, else oldest overall.
@@ -57,6 +59,14 @@ public struct BoundedFrameQueue: Sendable {
         keyframeNeeded = false
         awaitingKeyframe = true
         if let config { frames.append(config) }
+    }
+
+    /// Keyframe resync for the current consumer (STARTUP / DECODE_ERROR request): stale frames are discarded, the
+    /// queue holds only `config`, and deltas are refused until a keyframe arrives. Whatever keyframe the encoder is
+    /// forced to produce afterwards is therefore queued behind `config`. Calling it again replaces the config
+    /// instead of stacking a second one.
+    public mutating func resync(config: EncodedVideoFrame) {
+        startNewConsumer(config: config)
     }
 
     public mutating func removeAll() {

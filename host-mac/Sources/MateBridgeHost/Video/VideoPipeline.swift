@@ -127,6 +127,21 @@ public final class VideoPipeline: @unchecked Sendable {
 
     public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }
 
+    /// Handles a client `KEYFRAME_REQUEST`. For reasons that imply a rebuilt decoder (`resendsCodecConfig`) the
+    /// current `CODEC_CONFIG` is queued first and the queue is reset to hold only it, and only then is the keyframe
+    /// forced; the keyframe is therefore always pushed behind the config. Returns true if a config was re-sent
+    /// (false when the reason does not need it or no parameter sets exist yet: keyframe only, as before).
+    @discardableResult
+    public func requestKeyframe(reason: KeyframeReason) -> Bool {
+        var resent = false
+        if reason.resendsCodecConfig, let config = box.encoder?.currentCodecConfig() {
+            frames.resync(config: config)
+            resent = true
+        }
+        box.encoder?.requestKeyframe(resubmitNow: true)
+        return resent
+    }
+
     /// Call when a new consumer attaches: the queue is reset to hold only [CODEC_CONFIG], stale delta frames are
     /// refused, and a keyframe is forced (also on a static screen, by re-encoding the last captured buffer). The
     /// consumer therefore sees CODEC_CONFIG, then a keyframe, then frames.

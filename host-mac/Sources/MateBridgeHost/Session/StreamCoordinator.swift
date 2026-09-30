@@ -175,7 +175,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             await onVideoAttached(link)
         case .keyframeRequest(let reason):
             log(.info, "keyframe_request", "reason=\(reason.rawValue)")
-            pipeline?.requestKeyframe()
+            if pipeline?.requestKeyframe(reason: reason) == true {
+                log(.info, "codec_config_resent", "reason=\(reason.rawValue)")
+            }
         case .stats(let stats):
             onStats(stats)
         case .tick:
