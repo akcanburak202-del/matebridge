@@ -207,3 +207,15 @@ Kaynak: MB Input Probe (776b179), MatePad MRDI-W09, HarmonyOS 4.3 / API 31. Ham 
 - **Diken T-029'dan sonra da çıktı (18:49:57, "Temel"):** yeni APK ile 41 vuruşta bir diken (vuruş başından hareket yönünde ≈127 pt). Bu kez **sekme yok**: `bounce_dropped=0`, önceki vuruşla arası 470 ms, en kısa vuruş 5 olay. Mac'e giden olaylar yine temiz (konum sıçraması yok, vuruş başı diğer vuruşlarla aynı desen: 3–4 örnek aynı noktada, sonra yavaş hareket). **Sonuç: sekme dikenin gerekli koşulu değil.** 17:33'teki sekmesiz diken ve bu olay aynı türden; 3/23'e karşı 0/23'lük oynatma sonucu büyük olasılıkla tesadüftü (p≈0,12 idi). T-029 zararsız bir süzgeç olarak kalıyor (8 ms'lik temas zaten istenmeyen bir nokta), ama dikenin çözümü değil; karar 0007'ye not düşüldü.
   - Güncel hipotez (doğrulanmadı): Krita "Temel" yumuşatmada teğeti kendi işlem saatine göre hesaplıyor (`kritarc`: `useTimestampsForBrushSpeed=false`, "Use tablet driver timestamps for brush speed" kapalı). Vuruş başında Krita kısa süre takılırsa kuyrukta biriken olaylar art arda, neredeyse sıfır aralıkla işlenir → teğet patlar → hareket yönünde diken. 360 Hz'lik olay akışı bunu sıradan tabletlere göre daha olası kılar. Sınanacak: (1) sekmesiz diziyi "Temel"de 60+ kez oynatıp taban oranı ölçmek, (2) aynı şeyi "Yok" ile, (3) sürücü zaman damgası ayarı açıkken, (4) host'ta olay hızını düşürerek (ör. 180 Hz).
 - **Arka plan izleyicisi 18:50'de süresi dolduğu için durdu** (2 saatlik sınır): kablo çekilirse `adb reverse` tünelleri kendiliğinden kurulmaz, tablet log'u sürekli kaydedilmiyor (gerekince `logcat -d` ile çekilir). Mac olay kaydedicisi çalışıyor.
+- **Diken ölçümü (19:00–19:25, yapay oynatma, Krita 5.3.4, "Pencil-5 Tilted" 40 px):** 18:00:47'deki kayıtlı vuruş (sekmesiz) 12×5 ızgarada 60 kez oynatıldı; tuvalden çıkan soluk çizgiler ekran görüntüsünden sayıldı (scratch: `batch.sh`, `lines.py`; eşik gri<253, çizgiler çoğunlukla çok soluk).
+
+  | Durum (60 vuruş) | Diken |
+  |---|---|
+  | Temel, tam hız (5 tur) | 7, 8, 9, 8, 3 |
+  | Temel, sekmeli dizi | 8 |
+  | Temel, olayların yarısı (180 Hz) | 15 |
+  | Temel, olayların üçte biri (120 Hz) | 20 |
+  | Temel, olaylar arası en az 2,5 ms | 3 |
+  | **Yok (pürüzsüzleştirme kapalı), 2 tur** | **0, 0** |
+
+  Sonuçlar: (1) diken Krita'nın "Temel" pürüzsüzleştirmesinde oluşuyor, "Yok"ta 120 vuruşta sıfır; (2) sekme etkisiz (T-029 bu sorunun çözümü değil); (3) olay hızını düşürmek kötüleştiriyor; (4) çoğu diken vuruşun **sonundan**, son hareket yönünde tuval kenarına kadar uzanıyor, birkaçı vuruş başından geriye; çoğu soluk (uçta basınç düşük), kullanıcının gördükleri koyu olanlar. Önceki "23'te 3'e karşı 0" sonucu eşik yüzünden soluk dikenleri saymıyordu. Olası mekanizma (Krita kaynak kodundan hatırlanan, doğrulanmadı): `KisToolFreehandHelper::finishStroke` teğeti son iki noktanın zaman farkına bölüyor ve bu fark sıfıra yakınken taşıyor. Sınanacak: "tablet sürücüsü zaman damgaları" ayarı; vuruş sonundaki aynı-konumlu örneklerin etkisi.
