@@ -63,4 +63,5 @@ Kullanıcı (2026-10-01) performans modu istedi (T-049'un Amaç'ı). Protokol `p
   - Performans 144'te `set_frame_rate rate=144` / `display_mode requested_hz=144` loglanıyor mu; istatistikte mod/boyut satırı doğru mu.
   - Toast ("Performans: 120 fps, %75") ve panel düğmesi metni; uygulama yeniden başlayınca seçim korunuyor mu; varsayılan Akıcı.
   - Ctrl+Shift+7 Mac'e hiçbir tuş göndermiyor mu.
+- **Sonradan (cihaz testi):** Huawei video uygulamasına 144 Hz vermiyor; `PERFORMANCE_144` modu tablodan ve döngüden kaldırıldı (3 mod kaldı). Kayıtlı `performance144` değeri `PERFORMANCE` olarak okunur. Protokolde 144 geçerli kalır.
 - **Açık sorular:** `setFixedSize` denenmedi (öneri, zorunlu değil); donanım ölçekleme kalitesi kötüyse orkestratör karar versin.

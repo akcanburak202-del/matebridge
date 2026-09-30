@@ -132,7 +132,7 @@ class SessionMachineTest {
     }
 
     @Test fun initialModeIsUsedAndResentOnEveryConnection() {
-        val mm = SessionMachine(hello, StreamMode.PERFORMANCE_144.toPrefs())
+        val mm = SessionMachine(hello, StreamPrefs(144, 750)) // 144 stays legal on the wire
         for (i in 1..2) {
             val gen = mm.handle(Event.Start(ep), now).filterIsInstance<Action.OpenControl>().single().gen
             mm.handle(Event.ControlOpened(gen), now)
@@ -155,7 +155,7 @@ class SessionMachineTest {
         assertTrue(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs())).isEmpty())
         // streaming state too
         step(Event.Received(gen, cfg(1)))
-        assertEquals(listOf<Any>(StreamPrefs(144, 750)), sends(step(Event.SetPrefs(StreamMode.PERFORMANCE_144.toPrefs()))))
+        assertEquals(listOf<Any>(StreamPrefs(60, 1000)), sends(step(Event.SetPrefs(StreamMode.CLARITY.toPrefs()))))
     }
 
     @Test fun smallerStreamConfigIsAppliedLikeAnyOther() {

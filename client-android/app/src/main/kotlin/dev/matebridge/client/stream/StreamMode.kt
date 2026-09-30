@@ -10,8 +10,7 @@ import dev.matebridge.client.protocol.StreamPrefs
 enum class StreamMode(val id: String, val label: String, val fps: Int, val scalePermille: Int) {
     CLARITY("clarity", "Netlik", 60, 1000),
     SMOOTH("smooth", "Akıcı", 120, 1000),
-    PERFORMANCE("performance", "Performans", 120, 750),
-    PERFORMANCE_144("performance144", "Performans 144", 144, 750);
+    PERFORMANCE("performance", "Performans", 120, 750);
 
     fun toPrefs() = StreamPrefs(fps, scalePermille)
 
@@ -28,7 +27,9 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
         val DEFAULT = SMOOTH
 
         /** Unknown or missing values fall back to [DEFAULT]. */
-        fun parse(id: String?): StreamMode = entries.firstOrNull { it.id == id } ?: DEFAULT
+        fun parse(id: String?): StreamMode =
+            if (id == "performance144") PERFORMANCE // removed mode (panel never gets 144 Hz); keep its users in performance
+            else entries.firstOrNull { it.id == id } ?: DEFAULT
 
         /** Overlay line: the chosen mode and what the host actually encodes, e.g. "Mod Akıcı 120 fps | 2800x1840 @120". */
         fun overlayLine(mode: StreamMode, config: StreamConfig?): String =

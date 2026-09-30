@@ -18,16 +18,15 @@ class StreamModeTest {
         assertEquals(StreamPrefs(60, 1000), StreamMode.CLARITY.toPrefs())
         assertEquals(StreamPrefs(120, 1000), StreamMode.SMOOTH.toPrefs())
         assertEquals(StreamPrefs(120, 750), StreamMode.PERFORMANCE.toPrefs())
-        assertEquals(StreamPrefs(144, 750), StreamMode.PERFORMANCE_144.toPrefs())
         assertEquals(StreamMode.SMOOTH, StreamMode.DEFAULT)
     }
 
     @Test fun cycleVisitsEveryModeAndWraps() {
         var m = StreamMode.CLARITY
         val seen = ArrayList<StreamMode>()
-        repeat(4) { m = m.next(); seen += m }
+        repeat(3) { m = m.next(); seen += m }
         assertEquals(
-            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.PERFORMANCE_144, StreamMode.CLARITY),
+            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.CLARITY),
             seen,
         )
     }
@@ -48,8 +47,10 @@ class StreamModeTest {
     @Test fun settingsPersistTheModeAndDefaultToSmooth() {
         val store = MemStore()
         assertEquals(StreamMode.SMOOTH, Settings(store).streamMode())
-        Settings(store).setStreamMode(StreamMode.PERFORMANCE_144)
-        assertEquals(StreamMode.PERFORMANCE_144, Settings(store).streamMode())
+        Settings(store).setStreamMode(StreamMode.PERFORMANCE)
+        assertEquals(StreamMode.PERFORMANCE, Settings(store).streamMode())
+        store.map["stream_mode"] = "performance144" // removed mode
+        assertEquals(StreamMode.PERFORMANCE, Settings(store).streamMode())
         store.map["stream_mode"] = "garbage"
         assertEquals(StreamMode.SMOOTH, Settings(store).streamMode())
     }
