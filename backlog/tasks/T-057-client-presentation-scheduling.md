@@ -10,6 +10,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/
   - client-android/app/src/main/kotlin/dev/matebridge/client/stream/
   - client-android/app/src/test/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - backlog/tasks/T-057-client-presentation-scheduling.md
 ---
 
