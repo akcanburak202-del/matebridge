@@ -382,6 +382,21 @@ class InputCaptureTest {
         assertEquals(2, lines.size) // the pen is still in range, so the summary continues
     }
 
+    @Test fun theSummaryCarriesTheDuplicateAndBatchCountersAndOneSampleMessagesMatchOneToOne() {
+        tick(0)
+        pen(PenAction.HOVER_ENTER, 10, pt(10, x = 100f))
+        pen(PenAction.HOVER_MOVE, 13, pt(13, x = 110f))
+        pen(PenAction.HOVER_MOVE, 13, pt(13, x = 110f)) // exact duplicate of the last sent sample: not sent
+        pen(PenAction.HOVER_MOVE, 16, pt(16, x = 110f)) // same position, later time: sent and counted
+        tick(1000)
+        val l = lines[0]
+        val samples = Regex("pen_samples=(\\d+)").find(l)!!.groupValues[1]
+        val msgs = Regex("pen_msgs=(\\d+)").find(l)!!.groupValues[1]
+        assertEquals(l, samples, msgs) // single-sample events: one message per sample
+        assertTrue(l, l.contains("dup_exact=1 dup_pos=1 dup_pos_first=1 max_batch=1"))
+        assertEquals(samples.toInt(), penSamples(sink.sent).size) // the counter matches what really reached the sink
+    }
+
     @Test fun lifecycleEventsAreLoggedWithoutAnyCoordinates() {
         startStroke()
         releaseAll(ReleaseAll.FOCUS_LOST, 30)
