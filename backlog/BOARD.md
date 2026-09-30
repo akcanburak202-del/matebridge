@@ -14,6 +14,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
 | [T-043](tasks/T-043-host-pairing-preapproval.md) | Mac — eşleşme onayı tablet ayrılınca kaybolmasın (ön onay), Parsec'ten onaylanabilsin | 4 | mac-host-dev | [T-041] |
+| [T-044](tasks/T-044-client-store-key-on-pairing.md) | Tablet — eşleşme anahtarını PAIRING başında sakla (bağlantı koptuktan sonra onay için) | 4 | android-client-dev | [T-042] |
 
 ## done
 
