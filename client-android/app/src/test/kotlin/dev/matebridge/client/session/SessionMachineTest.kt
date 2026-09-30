@@ -63,6 +63,45 @@ class SessionMachineTest {
         assertTrue(m.inputAllowed)
     }
 
+    @Test fun pairingCodeAndRePairingReachTheUi() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        step(Event.Secured(gen, "044261", rePairing = true))
+        val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", "044261", true)), p.ui())
+        step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
+        // a later session starts without the old code
+        val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen2))
+        val q = step(Event.Received(gen2, ack(HelloAck.PENDING_APPROVAL)))
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false)), q.ui())
+    }
+
+    @Test fun staleSecuredEventIsIgnored() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        step(Event.Secured(gen + 50, "111111", false))
+        val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false)), p.ui())
+    }
+
+    @Test fun missingPairKeyFailsWithoutRetryOrBye() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val r = step(Event.KeyMissing(gen))
+        assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.KEY_MISSING)), r.ui())
+        assertFalse(r.has<Action.Send>())
+        assertEquals(false, r.only<Action.CloseControl>().graceful)
+        assertFalse(step(Event.Tick(0), 60_000_000).has<Action.OpenControl>())
+    }
+
+    @Test fun stopBeforeTheFirstAckSendsNoByeBecauseNothingIsEncryptedYet() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val r = step(Event.Stop)
+        assertFalse(r.has<Action.Send>())
+    }
+
     @Test fun rejectedAndVersionMismatchAreTerminal() {
         for ((status, cause) in listOf(
             HelloAck.REJECTED to SessionUi.Cause.REJECTED,
@@ -126,6 +165,7 @@ class SessionMachineTest {
     @Test fun pingsEvery500ms() {
         val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen))
+        step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL))) // nothing but HELLO goes out before the first ack
         assertTrue(step(Event.Tick(0), 100_000).filterIsInstance<Action.Send>().isEmpty())
         val p = step(Event.Tick(0), 400_000).only<Action.Send>().msg as Ping
         assertEquals(0L, p.seq)
@@ -197,11 +237,11 @@ class SessionMachineTest {
         assertTrue(step(Event.ControlClosed(gen)).isEmpty())
     }
 
-    @Test fun protocolErrorSendsByeAndReconnects() {
+    @Test fun protocolErrorClosesWithoutByeAndReconnects() {
         val gen = connectAccepted()
         val r = step(Event.ProtocolError(gen))
-        assertEquals(Bye(Bye.PROTOCOL_ERROR), r.only<Action.Send>().msg)
-        assertEquals(true, r.only<Action.CloseControl>().graceful)
+        assertFalse(r.has<Action.Send>()) // section 9: no BYE over a channel that failed authentication
+        assertEquals(false, r.only<Action.CloseControl>().graceful)
         assertEquals(SessionUi.Cause.PROTOCOL_ERROR, (r.ui().single() as SessionUi.Disconnected).cause)
     }
 

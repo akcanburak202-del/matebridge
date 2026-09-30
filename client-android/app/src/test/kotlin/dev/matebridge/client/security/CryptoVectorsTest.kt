@@ -1,0 +1,353 @@
+package dev.matebridge.client.security
+
+import dev.matebridge.client.protocol.Codec
+import dev.matebridge.client.protocol.FrameDecoder
+import dev.matebridge.client.protocol.Hello
+import dev.matebridge.client.protocol.HelloAck
+import dev.matebridge.client.protocol.ProtocolException
+import java.io.File
+import java.security.InvalidKeyException
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+
+/** Every value of protocol/fixtures/crypto_vectors.json (PROTOCOL.md section 9), reproduced from the fixed private keys. */
+class CryptoVectorsTest {
+    @Suppress("UNCHECKED_CAST")
+    private val v: Map<String, Any> = MiniJson.parse(File(dir, "crypto_vectors.json").readText()) as Map<String, Any>
+
+    @Suppress("UNCHECKED_CAST")
+    private fun obj(name: String) = v[name] as Map<String, String>
+    private val inputs get() = obj("inputs")
+
+    private fun inp(name: String) = hex(inputs.getValue(name))
+
+    private fun ecdhVector() = hex(v["ecdh"] as String)
+
+    private fun mode(name: String) = obj(name)
+
+    private fun helloPayload() = inp("hello_payload")
+
+    @Test
+    fun ecdhMatchesFromBothSides() {
+        val client = P256.privateFromScalar(inp("client_eph_priv"))
+        val host = P256.privateFromScalar(inp("host_eph_priv"))
+        assertArrayEquals(ecdhVector(), P256.ecdh(client, P256.decodePublic(inp("host_eph_pub"))))
+        assertArrayEquals(ecdhVector(), P256.ecdh(host, P256.decodePublic(inp("client_eph_pub"))))
+    }
+
+    @Test
+    fun publicKeysRoundTripThroughDecodeAndEncode() {
+        for (name in listOf("client_eph_pub", "host_eph_pub")) {
+            val bytes = inp(name)
+            val key = P256.decodePublic(bytes) as java.security.interfaces.ECPublicKey
+            assertArrayEquals(bytes, P256.encodePublic(key))
+        }
+    }
+
+    @Test
+    fun invalidPublicKeysAreRejected() {
+        val good = inp("host_eph_pub")
+        fun bad(b: ByteArray) {
+            try {
+                P256.decodePublic(b); fail("accepted an invalid point")
+            } catch (e: InvalidKeyException) {
+            }
+        }
+        bad(good.copyOf(64)) // short
+        bad(good + byteArrayOf(0)) // long
+        bad(good.copyOf().also { it[0] = 2 }) // compressed prefix
+        bad(good.copyOf().also { it[0] = 0 })
+        bad(good.copyOf().also { it[64] = (it[64] + 1).toByte() }) // off the curve
+        bad(ByteArray(65).also { it[0] = 4 }) // (0, 0) is not on P-256
+        bad(ByteArray(65) { 0xFF.toByte() }.also { it[0] = 4 }) // coordinates >= p
+    }
+
+    @Test
+    fun generatedEphemeralKeysAgree() {
+        val a = P256.generate()
+        val b = P256.generate()
+        assertEquals(65, a.publicBytes.size)
+        assertEquals(4, a.publicBytes[0].toInt())
+        assertArrayEquals(
+            P256.ecdh(a.privateKey, P256.decodePublic(b.publicBytes)),
+            P256.ecdh(b.privateKey, P256.decodePublic(a.publicBytes)),
+        )
+    }
+
+    @Test
+    fun transcriptHashPrkKeysSasAndPairKeyForBothModes() {
+        val ecdh = ecdhVector()
+        val hello = helloPayload()
+        for ((name, ackName, pairKey) in listOf(
+            Triple("paired", "hello_ack_paired_payload", inp("pair_key")),
+            Triple("pairing", "hello_ack_pairing_payload", null),
+        )) {
+            val m = mode(name)
+            val hash = KeySchedule.transcriptHash(hello, inp(ackName))
+            assertArrayEquals("$name transcript_hash", hex(m.getValue("transcript_hash")), hash)
+            val ikm = KeySchedule.ikm(pairKey, ecdh)
+            assertArrayEquals("$name ikm", hex(m.getValue("ikm")), ikm)
+            val prk = KeySchedule.prk(ikm, hash)
+            assertArrayEquals("$name prk", hex(m.getValue("prk")), prk)
+            assertArrayEquals("$name key_control_c2h", hex(m.getValue("key_control_c2h")), KeySchedule.controlC2h(prk))
+            assertArrayEquals("$name key_control_h2c", hex(m.getValue("key_control_h2c")), KeySchedule.controlH2c(prk))
+            val nonce = inp("video_nonce")
+            assertArrayEquals("$name key_video_c2h", hex(m.getValue("key_video_c2h")), KeySchedule.videoC2h(prk, nonce))
+            assertArrayEquals("$name key_video_h2c", hex(m.getValue("key_video_h2c")), KeySchedule.videoH2c(prk, nonce))
+            if (name == "pairing") {
+                assertArrayEquals("sas_bytes", hex(m.getValue("sas_bytes")), KeySchedule.sasBytes(prk))
+                assertEquals("sas", m.getValue("sas"), KeySchedule.sas(prk))
+                assertArrayEquals("new_pair_key", hex(m.getValue("new_pair_key")), KeySchedule.newPairKey(prk))
+            }
+        }
+    }
+
+    @Test
+    fun sasKeepsLeadingZeros() {
+        // the vector's own code starts with a zero ("044261"): the padded 6-digit form is what is compared
+        assertEquals(6, mode("pairing").getValue("sas").length)
+        assertTrue(mode("pairing").getValue("sas").startsWith("0"))
+    }
+
+    @Test
+    fun framesAreReproducedDecryptedAndRejectedWhenTampered() {
+        @Suppress("UNCHECKED_CAST")
+        val frames = v["frames"] as List<Map<String, String>>
+        assertTrue(frames.isNotEmpty())
+        for (f in frames) {
+            val key = hex(f.getValue("key"))
+            val counter = f.getValue("counter").toLong()
+            val type = f.getValue("type").removePrefix("0x").toInt(16)
+            val payload = hex(f.getValue("payload"))
+            val frame = hex(f.getValue("frame"))
+            assertArrayEquals("nonce", hex(f.getValue("nonce")), Records.nonce(counter))
+            assertArrayEquals("seal counter $counter", frame, RecordSealer(key, counter).seal(type, payload))
+            assertArrayEquals(
+                "sealFrame counter $counter", frame,
+                RecordSealer(key, counter).sealFrame(plainFrame(type, payload)),
+            )
+            val plain = RecordOpener(key, counter).open(frame.copyOf(4), frame.copyOfRange(4, frame.size))
+            assertEquals(type, plain[0].toInt() and 0xFF)
+            assertArrayEquals(payload, plain.copyOfRange(1, plain.size))
+            // wrong counter
+            assertRejected { RecordOpener(key, counter + 1).open(frame.copyOf(4), frame.copyOfRange(4, frame.size)) }
+            // every single flipped byte (header = AAD, ciphertext, tag)
+            for (i in frame.indices) {
+                val bad = frame.copyOf().also { it[i] = (it[i].toInt() xor 0x01).toByte() }
+                assertRejected { RecordOpener(key, counter).open(bad.copyOf(4), bad.copyOfRange(4, bad.size)) }
+            }
+            // wrong key
+            assertRejected {
+                RecordOpener(key.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }, counter)
+                    .open(frame.copyOf(4), frame.copyOfRange(4, frame.size))
+            }
+        }
+    }
+
+    @Test
+    fun sealedCounterOrderFollowsCallOrder() {
+        val key = ByteArray(32) { it.toByte() }
+        val s = RecordSealer(key)
+        val o = RecordOpener(key)
+        for (i in 0 until 5) {
+            val rec = s.seal(0x20, byteArrayOf(i.toByte()))
+            val plain = o.open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+            assertEquals(i, plain[1].toInt())
+        }
+        val replay = s.seal(0x20, byteArrayOf(9))
+        o.open(replay.copyOf(4), replay.copyOfRange(4, replay.size))
+        assertRejected { o.open(replay.copyOf(4), replay.copyOfRange(4, replay.size)) } // replayed record
+    }
+
+    @Test
+    fun handshakeReproducesTheVectorsEndToEnd() {
+        val eph = EphemeralKeyPair(P256.privateFromScalar(inp("client_eph_priv")), inp("client_eph_pub"))
+        val nonce = hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf")
+        // Paired: known pair_key for host_id.
+        val ackPayload = inp("hello_ack_paired_payload")
+        val hs = ClientHandshake(eph, nonce)
+        val template = Codec.decodePayload(1, helloPayload()) as Hello
+        val hello = hs.hello(template)
+        assertArrayEquals("HELLO payload", helloPayload(), Codec.encodePayload(hello))
+        val ack = Codec.decodePayload(2, ackPayload) as HelloAck
+        val store = MemStore()
+        store.put(ack.hostId.value, inp("pair_key"))
+        val out = hs.complete(ack, ackPayload, store) as HandshakeOutcome.Secure
+        assertNull(out.session.sas)
+        assertEquals(false, out.session.rePairing)
+        @Suppress("UNCHECKED_CAST")
+        val frames = v["frames"] as List<Map<String, String>>
+        val c2h = frames.first { it.getValue("counter") == "0" && it.getValue("type") == "0x20" }
+        assertArrayEquals(hex(c2h.getValue("frame")), out.session.sealer.seal(0x20, hex(c2h.getValue("payload"))))
+        val h2c = frames.first { it.getValue("counter") == "5" }
+        val opener = out.session.opener
+        // advance the opener to counter 5 with five real records, then the vector record must open
+        val hostSealer = RecordSealer(hex(mode("paired").getValue("key_control_h2c")))
+        repeat(5) {
+            val rec = hostSealer.seal(0x20, ByteArray(12))
+            opener.open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+        }
+        val f = hex(h2c.getValue("frame"))
+        val plain = opener.open(f.copyOf(4), f.copyOfRange(4, f.size))
+        assertEquals(0x16, plain[0].toInt())
+        val video = out.session.secrets.videoKeys(inp("video_nonce"))
+        assertArrayEquals(hex(mode("paired").getValue("key_video_h2c")), video.h2c)
+        assertArrayEquals(hex(mode("paired").getValue("key_video_c2h")), video.c2h)
+        val vframe = frames.first { it.getValue("type") == "0x41" }
+        assertArrayEquals(
+            hex(vframe.getValue("frame")),
+            RecordSealer(video.h2c).seal(0x41, hex(vframe.getValue("payload"))),
+        )
+    }
+
+    @Test
+    fun pairingHandshakeShowsTheVectorCodeAndStoresTheNewKeyOnAccepted() {
+        val eph = EphemeralKeyPair(P256.privateFromScalar(inp("client_eph_priv")), inp("client_eph_pub"))
+        val hs = ClientHandshake(eph, hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))
+        hs.hello(Codec.decodePayload(1, helloPayload()) as Hello)
+        val ackPayload = inp("hello_ack_pairing_payload")
+        val ack = Codec.decodePayload(2, ackPayload) as HelloAck
+        assertEquals(HelloAck.PENDING_APPROVAL, ack.status)
+        val store = MemStore()
+        val sec = (hs.complete(ack, ackPayload, store) as HandshakeOutcome.Secure).session
+        assertEquals(mode("pairing").getValue("sas"), sec.sas)
+        assertEquals(false, sec.rePairing)
+        // The pair key is only stored once the (encrypted) ACCEPTED arrives, and only once.
+        assertNull(store.get(ack.hostId.value))
+        assertEquals(false, sec.onMessage(HelloAck(1, HelloAck.PENDING_APPROVAL, 0, 0, ""), store))
+        assertNull(store.get(ack.hostId.value))
+        assertEquals(true, sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store))
+        assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), store.get(ack.hostId.value))
+        assertEquals(false, sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store))
+        assertEquals(1, store.puts)
+        // control keys of the PAIRING session
+        assertArrayEquals(
+            RecordSealer(hex(mode("pairing").getValue("key_control_c2h"))).seal(0x20, byteArrayOf(1)),
+            sec.sealer.seal(0x20, byteArrayOf(1)),
+        )
+    }
+
+    @Test
+    fun rePairingIsFlaggedWhenAKeyExistsButTheMacAsksForPairing() {
+        val eph = EphemeralKeyPair(P256.privateFromScalar(inp("client_eph_priv")), inp("client_eph_pub"))
+        val hs = ClientHandshake(eph, hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))
+        hs.hello(Codec.decodePayload(1, helloPayload()) as Hello)
+        val ackPayload = inp("hello_ack_pairing_payload")
+        val ack = Codec.decodePayload(2, ackPayload) as HelloAck
+        val store = MemStore().also { it.put(ack.hostId.value, ByteArray(32) { 7 }) }
+        val sec = (hs.complete(ack, ackPayload, store) as HandshakeOutcome.Secure).session
+        assertEquals(true, sec.rePairing)
+        sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store)
+        assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), store.get(ack.hostId.value)) // replaced
+    }
+
+    @Test
+    fun wipedSecretsRefuseToDeriveAnything() {
+        val s = SessionSecrets(ByteArray(32) { 1 }, pairing = true, hostId = ByteArray(16))
+        s.wipe()
+        for (f in listOf<() -> Any>({ s.sas() }, { s.newPairKey() }, { s.videoKeys(ByteArray(16)) })) {
+            try {
+                f(); fail()
+            } catch (e: IllegalStateException) {
+            }
+        }
+    }
+
+    @Test
+    fun frameDecoderStillReadsTheFixtureHelloAckWithKeyFields() {
+        val d = FrameDecoder.control()
+        d.feed(dev.matebridge.client.protocol.FixtureTest.fixture("hello_ack_pending"))
+        val ack = d.next() as HelloAck
+        assertEquals(HelloAck.KEY_PAIRING, ack.keyMode)
+        assertNotNull(ack.hostEphPub)
+    }
+
+    private fun assertRejected(block: () -> Unit) {
+        try {
+            block(); fail("record was accepted")
+        } catch (e: ProtocolException) {
+            assertEquals(ProtocolException.Kind.AUTH_FAILED, e.kind)
+        }
+    }
+
+    companion object {
+        val dir = File(System.getProperty("matebridge.fixtures") ?: "../../protocol/fixtures")
+    }
+}
+
+/** type + payload framed like the plaintext format of PROTOCOL.md section 2 (5-byte header), without needing a Message instance. */
+private fun plainFrame(type: Int, payload: ByteArray): ByteArray =
+    byteArrayOf(type.toByte(), payload.size.toByte(), (payload.size ushr 8).toByte(), (payload.size ushr 16).toByte(), (payload.size ushr 24).toByte()) + payload
+
+fun hex(s: String): ByteArray = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+
+/** In-memory [PairKeyStore] for tests. */
+class MemStore : PairKeyStore {
+    private val map = HashMap<String, ByteArray>()
+    var puts = 0
+    override fun get(hostId: ByteArray) = map[hostId.joinToString("") { "%02x".format(it) }]?.copyOf()
+    override fun put(hostId: ByteArray, key: ByteArray) {
+        puts++
+        map[hostId.joinToString("") { "%02x".format(it) }] = key.copyOf()
+    }
+}
+
+/** Tiny JSON reader for the flat crypto_vectors.json (objects, arrays, strings only). */
+object MiniJson {
+    fun parse(text: String): Any = Parser(text).run { ws(); value().also { ws(); check(pos == text.length) } }
+
+    private class Parser(val t: String) {
+        var pos = 0
+        fun ws() { while (pos < t.length && t[pos].isWhitespace()) pos++ }
+        fun value(): Any {
+            ws()
+            return when (t[pos]) {
+                '{' -> obj()
+                '[' -> arr()
+                '"' -> str()
+                else -> error("unsupported JSON at $pos")
+            }
+        }
+
+        fun str(): String {
+            check(t[pos++] == '"')
+            val sb = StringBuilder()
+            while (t[pos] != '"') {
+                if (t[pos] == '\\') pos++
+                sb.append(t[pos++])
+            }
+            pos++
+            return sb.toString()
+        }
+
+        fun obj(): Map<String, Any> {
+            pos++
+            val m = LinkedHashMap<String, Any>()
+            ws()
+            if (t[pos] == '}') { pos++; return m }
+            while (true) {
+                ws(); val k = str(); ws(); check(t[pos++] == ':')
+                m[k] = value(); ws()
+                if (t[pos] == ',') { pos++; continue }
+                check(t[pos++] == '}'); return m
+            }
+        }
+
+        fun arr(): List<Any> {
+            pos++
+            val l = ArrayList<Any>()
+            ws()
+            if (t[pos] == ']') { pos++; return l }
+            while (true) {
+                l += value(); ws()
+                if (t[pos] == ',') { pos++; continue }
+                check(t[pos++] == ']'); return l
+            }
+        }
+    }
+}

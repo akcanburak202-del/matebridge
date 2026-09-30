@@ -11,7 +11,22 @@ import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.protocol.VideoHello
+import dev.matebridge.client.protocol.Bytes
+import dev.matebridge.client.protocol.Limits
+import dev.matebridge.client.protocol.MsgType
+import dev.matebridge.client.security.ClientHandshake
+import dev.matebridge.client.security.HandshakeOutcome
+import dev.matebridge.client.security.PairKeyStore
+import dev.matebridge.client.security.PlainFrames
+import dev.matebridge.client.security.RecordDecoder
+import dev.matebridge.client.security.RecordOpener
+import dev.matebridge.client.security.RecordSealer
+import dev.matebridge.client.security.SecureSession
+import dev.matebridge.client.security.SessionSecrets
+import java.security.SecureRandom
+import java.util.concurrent.CountDownLatch
 import java.io.IOException
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.Executors
@@ -45,8 +60,13 @@ interface SessionListener {
  *    bounded single-FIFO [SendQueue] (PROTOCOL.md sections 5 and 7).
  * [start]/[stop] and [trySend] may be called from any thread.
  */
-class SessionController(hello: Hello, private val listener: SessionListener) {
+class SessionController(
+    private val hello: Hello,
+    private val pairKeys: PairKeyStore,
+    private val listener: SessionListener,
+) {
     private val machine = SessionMachine(hello)
+    private val random = SecureRandom()
 
     /** Messages from control reader threads; bounded, and only those threads ever block on it. */
     private val events = LinkedBlockingQueue<SessionMachine.Event>(EVENT_QUEUE_CAP)
@@ -166,9 +186,11 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
             is SessionMachine.Event.ControlClosed ->
                 if (e.connectFailed) MbLog.w("connect_fail") else MbLog.w("control_closed")
             is SessionMachine.Event.ProtocolError -> MbLog.e("protocol_error")
+            is SessionMachine.Event.Secured -> MbLog.i("secured", "pairing=${e.code != null} re_pairing=${e.rePairing}") // never the code
+            is SessionMachine.Event.KeyMissing -> MbLog.w("pair_key_missing")
             is SessionMachine.Event.VideoClosed -> MbLog.w("video_closed", "vgen=${e.gen}")
             is SessionMachine.Event.Received -> when (val m = e.msg) {
-                is HelloAck -> MbLog.i("hello_ack", "status=${m.status} video_port=${m.videoPort}")
+                is HelloAck -> MbLog.i("hello_ack", "status=${m.status} key_mode=${m.keyMode} video_port=${m.videoPort}")
                 is StreamConfig -> MbLog.i(
                     "stream_config",
                     "config_id=${m.configId} codec=${m.codec} size=${m.widthPx}x${m.heightPx} fps=${m.fps}",
@@ -187,7 +209,7 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 listener.onSessionStart()
                 control?.abort()
-                control = ControlConn(a.gen, a.endpoint).also { it.startThreads() }
+                control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
             }
             is SessionMachine.Action.Send -> {
                 when (val m = a.msg) {
@@ -195,7 +217,9 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
                     else -> Unit
                 }
-                control?.link?.send(a.msg) // overflow is reported through the link itself
+                val c = control
+                // The machine's HELLO is a template: this connection's nonce and ephemeral key go in here.
+                c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg) // overflow is reported through the link itself
             }
             is SessionMachine.Action.CloseControl -> {
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
@@ -204,7 +228,13 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
             is SessionMachine.Action.OpenVideo -> {
                 MbLog.i("video_open", "vgen=${a.gen} port=${a.endpoint.port} config_id=${a.hello.configId}")
                 video?.abort()
-                video = VideoConn(a.gen, a.endpoint, a.hello).also { it.startThread() }
+                val secrets = control?.secrets
+                if (secrets == null) {
+                    MbLog.w("video_no_keys")
+                    videoClosed.post(SessionMachine.Event.VideoClosed(a.gen))
+                } else {
+                    video = VideoConn(a.gen, a.endpoint, a.hello, secrets).also { it.startThread() }
+                }
             }
             SessionMachine.Action.CloseVideo -> {
                 if (video != null) MbLog.i("video_close")
@@ -226,10 +256,22 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         }
     }
 
-    private inner class ControlConn(val gen: Int, private val endpoint: Endpoint) {
+    private inner class ControlConn(val gen: Int, private val endpoint: Endpoint, template: Hello) {
         private val socket = Socket()
         private val queue = SendQueue()
         private val closedPosted = AtomicBoolean(false)
+        private val handshake = ClientHandshake(random)
+
+        /** This connection's HELLO (fresh nonce and ephemeral key); its payload bytes feed the transcript hash. */
+        val helloMsg: Hello = handshake.hello(template)
+
+        /** Session keys once the first HELLO_ACK was validated; video connections derive their keys from it. */
+        @Volatile var secrets: SessionSecrets? = null
+            private set
+
+        @Volatile private var sealer: RecordSealer? = null
+        private val sealerReady = CountDownLatch(1)
+
         val link = ControlLink(queue, { System.nanoTime() / 1_000_000 }) {
             // Overflow: a message was lost, so the connection must not live on (PINGs would keep it alive).
             abort()
@@ -253,6 +295,8 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         fun abort() {
             queue.abort()
             closeQuietly(socket)
+            secrets?.wipe()
+            sealerReady.countDown() // releases a writer still waiting for keys
         }
 
         /** Same as the overflow handler in [link]: abort and report the connection closed (once). */
@@ -276,15 +320,27 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
             }
             Thread({ writerLoop() }, "mb-ctl-write-$gen").also { it.isDaemon = true; it.start() }
             events.put(SessionMachine.Event.ControlOpened(gen))
-            val decoder = FrameDecoder.control()
-            val buf = ByteArray(FrameDecoder.READ_CHUNK)
             try {
                 val input = socket.getInputStream()
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    decoder.feed(buf, 0, n)
-                    while (true) events.put(SessionMachine.Event.Received(gen, decoder.next() ?: break))
+                // The first HELLO_ACK is the only plaintext host message; it is read byte-exactly so the
+                // encrypted records that may follow immediately are not consumed (PROTOCOL.md section 9).
+                val (ack, ackPayload) = PlainFrames.readHelloAck(input)
+                when (val outcome = handshake.complete(ack, ackPayload, pairKeys)) {
+                    is HandshakeOutcome.Plain -> events.put(SessionMachine.Event.Received(gen, ack)) // terminal; host closes
+                    HandshakeOutcome.KeyMissing -> {
+                        closedPosted.set(true)
+                        events.put(SessionMachine.Event.KeyMissing(gen))
+                        return
+                    }
+                    is HandshakeOutcome.Secure -> {
+                        val sec = outcome.session
+                        secrets = sec.secrets
+                        sealer = sec.sealer
+                        sealerReady.countDown()
+                        if (sec.sas != null) events.put(SessionMachine.Event.Secured(gen, sec.sas, sec.rePairing))
+                        events.put(SessionMachine.Event.Received(gen, ack))
+                        readRecords(input, sec)
+                    }
                 }
             } catch (e: ProtocolException) {
                 closedPosted.set(true) // the machine reacts to ProtocolError instead
@@ -297,12 +353,43 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
             if (closedPosted.compareAndSet(false, true)) events.put(SessionMachine.Event.ControlClosed(gen))
         }
 
+        private fun readRecords(input: InputStream, sec: SecureSession) {
+            val decoder = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, sec.opener)
+            val buf = ByteArray(RecordDecoder.READ_CHUNK)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                decoder.feed(buf, 0, n)
+                while (true) {
+                    val msg = decoder.next() ?: break
+                    try {
+                        // The new pairing key is stored when the Mac's approval arrives, before the UI shows "connected".
+                        if (sec.onMessage(msg, pairKeys)) MbLog.i("pair_key_stored")
+                    } catch (e: Exception) {
+                        MbLog.w("pair_key_store_failed") // the session continues; the next connection pairs again
+                    }
+                    events.put(SessionMachine.Event.Received(gen, msg))
+                }
+            }
+        }
+
         private fun writerLoop() {
             try {
                 val out = socket.getOutputStream()
+                var first = true
                 while (true) {
                     val frame = queue.take() ?: break
-                    out.write(frame)
+                    val wire = if (first) {
+                        // Only HELLO goes out in plaintext, and only first; everything else is sealed in FIFO order.
+                        first = false
+                        if ((frame[0].toInt() and 0xFF) != MsgType.HELLO) throw IOException("first message must be HELLO")
+                        frame
+                    } else {
+                        sealerReady.await()
+                        val s = sealer ?: throw IOException("no keys")
+                        s.sealFrame(frame)
+                    }
+                    out.write(wire)
                     out.flush()
                 }
                 // Graceful close after a drained queue: half-close so the peer sees BYE then EOF.
@@ -314,7 +401,12 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         }
     }
 
-    private inner class VideoConn(val gen: Int, private val endpoint: Endpoint, private val hello: VideoHello) {
+    private inner class VideoConn(
+        val gen: Int,
+        private val endpoint: Endpoint,
+        private val hello: VideoHello,
+        private val secrets: SessionSecrets,
+    ) {
         private val socket = Socket()
         private val closedPosted = AtomicBoolean(false)
 
@@ -328,12 +420,16 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         }
 
         private fun loop() {
-            val decoder = FrameDecoder.video()
-            val buf = ByteArray(FrameDecoder.READ_CHUNK)
+            val buf = ByteArray(RecordDecoder.READ_CHUNK)
             try {
+                // Fresh nonce per video connection; both directions' keys come from it (section 9).
+                val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
+                val keys = secrets.videoKeys(nonce)
+                val decoder = RecordDecoder(Limits.VIDEO_MAX_PAYLOAD, RecordOpener(keys.h2c))
+                keys.c2h.fill(0) // the client sends nothing on the video connection after VIDEO_HELLO
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
-                socket.getOutputStream().apply { write(Codec.encode(hello)); flush() }
+                socket.getOutputStream().apply { write(Codec.encode(hello.copy(videoNonce = Bytes(nonce)))); flush() }
                 val input = socket.getInputStream()
                 while (true) {
                     val n = input.read(buf)
@@ -348,9 +444,11 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
                     }
                 }
             } catch (e: ProtocolException) {
-                // Video protocol errors close only the video connection (PROTOCOL.md section 2).
+                // Video protocol/authentication errors close only the video connection (PROTOCOL.md sections 2, 9).
             } catch (e: IOException) {
                 // fall through
+            } catch (e: IllegalStateException) {
+                // session secrets wiped: the control connection is gone
             }
             closeQuietly(socket)
             if (closedPosted.compareAndSet(false, true)) videoClosed.post(SessionMachine.Event.VideoClosed(gen))

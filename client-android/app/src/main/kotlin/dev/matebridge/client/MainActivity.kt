@@ -18,6 +18,13 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
@@ -36,10 +43,13 @@ import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
+import dev.matebridge.client.protocol.Limits
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ReleaseAll
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
+import dev.matebridge.client.security.AndroidKeystoreWrapper
+import dev.matebridge.client.security.EncryptedPairKeyStore
 import dev.matebridge.client.session.MbLog
 import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.DisplayModeInfo
@@ -193,7 +203,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         findViewById<Button>(R.id.connect_usb).setOnClickListener { selectTransport(Transport.USB) }
         findViewById<Button>(R.id.connect_wifi).setOnClickListener { selectTransport(Transport.WIFI) }
 
-        controller = SessionController(buildHello(), object : SessionListener {
+        val pairKeys = EncryptedPairKeyStore(
+            object : KeyValueStore {
+                val secure = getSharedPreferences("matebridge_pairkeys", Context.MODE_PRIVATE)
+                override fun getString(key: String) = secure.getString(key, null)
+                override fun putString(key: String, value: String) { secure.edit().putString(key, value).commit() }
+            },
+            AndroidKeystoreWrapper(),
+        )
+        controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
 
@@ -823,12 +841,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Idle -> getString(R.string.state_idle)
             SessionUi.Searching -> getString(R.string.state_searching)
             is SessionUi.Connecting -> getString(R.string.state_connecting, state.endpoint.toString())
-            is SessionUi.AwaitingApproval -> getString(R.string.state_awaiting_approval, state.hostName)
+            is SessionUi.AwaitingApproval ->
+                if (state.code != null) pairingText(state) else getString(R.string.state_awaiting_approval, state.hostName)
             is SessionUi.Connected -> getString(R.string.state_connected, state.hostName, state.framesReceived)
             is SessionUi.Disconnected -> getString(
                 R.string.state_disconnected, causeText(state.cause), (state.retryInMs + 999) / 1000,
             )
-            is SessionUi.Failed -> getString(R.string.state_failed, causeText(state.cause))
+            is SessionUi.Failed ->
+                if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
+                else getString(R.string.state_failed, causeText(state.cause))
         }
         if (ConnectMode.showUsbHint(transport, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
             status.text = getString(R.string.usb_missing)
@@ -836,7 +857,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         syncInputActive() // panel visibility decides whether input is captured
     }
 
+    /**
+     * Pairing screen (PROTOCOL.md section 9): the 6-digit code large, to compare with the Mac's. The strings are
+     * literals because the strings resource is outside this task's file list. The code is never logged.
+     */
+    private fun pairingText(state: SessionUi.AwaitingApproval): CharSequence {
+        val b = SpannableStringBuilder()
+        if (state.rePairing) {
+            val warn = "Mac bu tableti tanımıyor, yeniden eşleşiliyor\n\n"
+            b.append(warn)
+            b.setSpan(ForegroundColorSpan(Color.parseColor("#FFB300")), 0, warn.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        b.append("Mac'teki kodla aynı mı?\n")
+        val code = state.code.orEmpty()
+        val shown = if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code
+        val start = b.length
+        b.append(shown)
+        b.setSpan(RelativeSizeSpan(3.5f), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        b.setSpan(StyleSpan(Typeface.BOLD), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        b.append("\nMac'te \"İzin ver\" dediğinde bağlanır.")
+        return b
+    }
+
     private companion object {
+        const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEYFRAME_RETRY_MS = 500L
         const val INPUT_TICK_MS = 25L
         const val POINTER_CAPTURE_RETRY_MS = 500L
@@ -852,6 +896,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
+            SessionUi.Cause.KEY_MISSING -> R.string.cause_protocol_error // shown via KEY_MISSING_TEXT in render()
         },
     )
 
@@ -865,7 +910,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC
         return Hello(
-            protocolVersion = 0,
+            protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),
             screenWidthPx = w,
             screenHeightPx = h,

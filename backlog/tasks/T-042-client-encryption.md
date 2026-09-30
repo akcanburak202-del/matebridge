@@ -1,7 +1,7 @@
 ---
 id: T-042
 title: Tablet — protokol v1 şifreleme (el sıkışma, eşleşme kodu ekranı, AES-GCM kayıtları, Keystore)
-status: todo
+status: review
 phase: 4
 owner: android-client-dev
 depends_on: [T-038]
@@ -45,8 +45,22 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** dalın ucu (`git log -1 task/T-042-client-encryption`), plan commit'i `cbb5c45`.
+- **Dokunulan dosyalar:** `protocol/{Messages,Codec}.kt`; yeni `security/{Crypto,Records,Handshake,PairKeyStore,AndroidKeystoreWrapper}.kt`; `session/{SessionController,SessionMachine,SessionUi}.kt`; `MainActivity.kt`; testler `security/{CryptoVectorsTest,SecureChannelTest}.kt` (yeni), `protocol/{FixtureTest,CodecRulesTest}.kt`, `session/SessionMachineTest.kt` (güncellendi/eklendi); bu kart.
+- **Sonuç:** Gradle yeşil. `crypto_vectors.json`'daki her değer yeniden üretiliyor (ecdh iki yönden, transcript_hash, ikm, prk, iki moddaki 4'er anahtar, sas_bytes, sas, new_pair_key, 4 şifreli kayıt; her bayt bozma, yanlış sayaç, yanlış anahtar, tekrar oynatma reddi). `check.sh` yalnızca `swift test (host-mac)` nedeniyle kırmızı (beklenen: T-041 host v1 kodeği henüz yok); fixture ve crypto-vector kontrolleri yeşil.
 - **Varsayımlar:**
+  - İlk HELLO_ACK bayt-tam okunur (`PlainFrames`), sonrası `RecordDecoder`; hemen ardından gelen şifreli kayıtlar tüketilmez.
+  - Katı doğrulama: NONE yalnızca REJECTED/VERSION_MISMATCH/BUSY ile (PENDING/ACCEPTED + NONE = downgrade = protokol hatası); PAIRED yalnızca ACCEPTED, PAIRING yalnızca PENDING_APPROVAL ile. Host bu matrise uymazsa bağlantı kapanır.
+  - Eski (v0) host'un kısa VERSION_MISMATCH cevabı SHORT_PAYLOAD olarak okunur ("sürüm uyuşmazlığı" yerine "protokol hatası" görünür).
+  - ProtocolError'da BYE gönderilmez; BYE yalnızca ilk ack'ten sonra (PENDING/ACCEPTED/STREAMING) gider. AWAIT_ACK'te PING yok (yalnızca HELLO düz gider); ack gelince canlılık sayacı yenilenir.
+  - Yazıcı: ilk çerçeve HELLO düz, sonrası kuyruk sırasıyla mühürlenir (sayaç = gönderim sırası). Video: her bağlantıda yeni `video_nonce`, anahtarlar kontrol `prk`'sinden; kontrol bağlantısı kapanınca `prk` silinir.
+  - Yeni eşleşme anahtarı, şifreli `HELLO_ACK(ACCEPTED)` okuyucu iş parçacığında çözülünce, UI'ya gitmeden önce yazılır. Yazma hatası oturumu kesmez (loglanır; sonraki bağlantı yeniden eşleşir).
+  - Anahtar deposu: `matebridge_pairkeys` SharedPreferences, Keystore alias `matebridge.pairkeys.v1`, AAD = host_id. Keystore anahtarı kaybolursa anahtar "yok" sayılır.
+  - Strings kaynak dosyası kapsam dışı olduğundan eşleşme ekranı ve KEY_MISSING metinleri `MainActivity` içinde sabit Türkçe metin.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - AndroidKeystoreWrapper JVM'de test edilemez: ilk eşleşmede anahtar yazılıyor, uygulama yeniden başlayınca PAIRED bağlanıyor mu.
+  - Gerçek host ile: yeni cihaz -> "onay bekleniyor" ekranında büyük 6 haneli kod, Mac'tekiyle aynı; İzin ver -> bağlanır; ikinci bağlantı PAIRED (kod yok).
+  - Mac'te "Onaylı cihazları unut" -> tablet yeniden bağlanınca "Mac bu tableti tanımıyor, yeniden eşleşiliyor" uyarısı + kod; tablette anahtar yokken host PAIRED derse "Onaylı cihazları unut" mesajı.
+  - Görüntü ve girdi (kalem basıncı, klavye) şifreli akışta bozulmadan çalışıyor mu; 60 fps'te gecikme/CPU gözle fark edilir artmadı mı.
+  - Ağda bayt bozma: bağlantı BYE'sız kapanıp yeniden bağlanıyor mu.
+- **Açık sorular:** Protokol değişikliği gerekmedi. Eski host'un kısa VERSION_MISMATCH cevabı için Codec'te tolerans istenirse orkestratör karar versin.

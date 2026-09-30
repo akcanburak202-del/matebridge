@@ -31,16 +31,32 @@ class FixtureTest {
         private fun hex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
         private val deviceId = Bytes(hex("0123456789abcdef0123456789abcdef"))
+        private val clientNonce = Bytes(hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))
+        private val clientEphPub = Bytes(
+            hex("043b2e3be924f7393ba036956d4f154be45d37e6c02baecfc991a3c6ae4213629e7ab47261459f5823e7e72769597493bc607eb317d9ef1ca4ddb85f3cc2a35538"),
+        )
+        private val hostId = Bytes(hex("303132333435363738393a3b3c3d3e3f"))
+        private val hostNonce = Bytes(hex("e0e1e2e3e4e5e6e7e8e9eaebecedeeef"))
+        private val hostEphPub = Bytes(
+            hex("04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb"),
+        )
+        private val zeros16 = Bytes(ByteArray(16))
+        private val zeros65 = Bytes(ByteArray(65))
 
         /** Hand-written expected values (from the fixture comments / PROTOCOL.md). */
         val valid: Map<String, Message> = mapOf(
-            "hello" to Hello(0, deviceId, 2800, 1840, 360, 144, 255, "MatePad Pro"),
+            "hello" to Hello(1, deviceId, 2800, 1840, 360, 144, 255, "MatePad Pro", clientNonce, clientEphPub),
             "hello_utf8_name" to Hello(
-                0, Bytes(hex("000102030405060708090a0b0c0d0e0f")), 2800, 1840, 360, 60, 73, "Çizim Tableti ğüşöı",
+                1, Bytes(hex("000102030405060708090a0b0c0d0e0f")), 2800, 1840, 360, 60, 73, "Çizim Tableti ğüşöı",
+                clientNonce, clientEphPub,
             ),
-            "hello_ack" to HelloAck(0, HelloAck.ACCEPTED, 2712847316L, 47001, "Mac mini"),
-            "hello_ack_pending" to HelloAck(0, HelloAck.PENDING_APPROVAL, 0, 0, "Mac mini"),
-            "hello_ack_busy" to HelloAck(0, HelloAck.BUSY, 0, 0, ""),
+            "hello_ack" to HelloAck(
+                1, HelloAck.ACCEPTED, 2712847316L, 47001, "Mac mini", HelloAck.KEY_PAIRED, hostId, hostNonce, hostEphPub,
+            ),
+            "hello_ack_pending" to HelloAck(
+                1, HelloAck.PENDING_APPROVAL, 0, 0, "Mac mini", HelloAck.KEY_PAIRING, hostId, hostNonce, hostEphPub,
+            ),
+            "hello_ack_busy" to HelloAck(1, HelloAck.BUSY, 0, 0, "", HelloAck.KEY_NONE, zeros16, zeros16, zeros65),
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
             "bye" to Bye(Bye.NORMAL),
             "pen_hover_to_contact" to Pen(
@@ -80,7 +96,7 @@ class FixtureTest {
             "pong" to Pong(7, 1127500700000L, 98765432100L),
             "stats" to Stats(1000, 60, 60, 59, 1, 4200, 23000, 6250000),
             "keyframe_request" to KeyframeRequest(KeyframeRequest.DECODE_ERROR),
-            "video_hello" to VideoHello(0, 1, 2712847316L),
+            "video_hello" to VideoHello(1, 1, 2712847316L, Bytes(hex("0f0e0d0c0b0a09080706050403020100"))),
             "video_frame" to VideoFrame(
                 1, 98765000000L, VideoFrame.KEYFRAME, 0, 1, 8, Bytes(hex("0000000126010af0")),
             ),
