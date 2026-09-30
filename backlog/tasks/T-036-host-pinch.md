@@ -1,7 +1,7 @@
 ---
 id: T-036
 title: Mac — PINCH kodeki, yakınlaştırma durum makinesi ve büyütme hareketi enjeksiyonu
-status: todo
+status: in-progress
 phase: 3
 owner: mac-host-dev
 depends_on: [T-032]
@@ -33,7 +33,13 @@ PROTOCOL.md §4 `0x17 PINCH`, §5 (birleştirme), §7 (release-all, watchdog) ve
 
 ## Plan
 
-_(Ajan doldurur.)_
+Sira: kodek -> durum makinesi -> planlayici -> poster/inject-test/log. Her adim testle.
+
+1. **Kodek:** `MessageType.pinch = 0x17`, `PinchPhase` (1...4), `PinchSource` (0 touch, 1 touchpad), `Pinch` (time, scale f32 sonlu, x, y, phase, source, reserved); bilinmeyen phase/source ve kisa payload hata. `Message.pinch`, `SessionMachine.handleCommon` (aktif degilken yok sayilir, aktifken `deliver`). Fixture testleri `validFixtures`'a eklenir.
+2. **Durum makinesi** (`InputStateMachine+Pinch.swift`): `pinchOpen`, `lastPinchAt`, `pinchWatchdogUs = 500 ms` (nextDeadline / reanchor / applyWatchdogs / releaseAll / hasHeldInput). Yeni `InjectAction.pinch(InjectPinchPhase, scale:, center:)`; `InjectPinchPhase` = began, changed, ended, cancelled, forcedEnd(cause). BEGAN: sol dugme sahibi varsa ya da TOUCH kapisi aktifse yok sayilir (acik hareket varsa o da zorla biter, boylece yoksayilan hareketin devami acik olana karismaz); aksi halde acik SCROLL ve PINCH zorla bitirilir, sonra began (TOUCH'ta merkezle). SCROLL BEGAN acik PINCH'i zorla bitirir. BEGAN'siz CHANGED/ENDED yok sayilir. Zorla bitirme nedenleri (`new_pinch`, `new_scroll`, `watchdog`, `release_all`, `ignored_began`) makinede birikir, pipeline bosaltir (log icin). `pinchMessages` sayaci.
+3. **Planlayici:** `MacEvent.magnify(MacMagnify)` (faz began/changed/ended, deger Double, konum, bayraklar). Planner golge durumu `magnifyOpen`; began once (TOUCH ise) `mouse moved` ile imleci merkeze tasir (DisplayGeometry); sifir degerli changed dusurulur (keepalive); deger [-0.5, 1.0]'a sikistirilir; ended/cancelled/forcedEnd hep `ended` uretir ve kapi tarafindan engellenmez; `stampFlags`, `with(flags:)`, `position`, `moved`, `isClosing`, `notPosted`, `releaseAll`, `isHoldingInput` guncellenir. `OwedRelease.Slot.magnifyEnd` (sira 11): basarisiz ended yeniden denenir. `ReleaseRecord.pinchEnds`.
+4. **Host:** `MagnifyGestureEvent.swift` (tek dosya: tip 29, alan 110/132/113, MMF atfi); `CGEventFactory.make` oraya yonlendirir. `InputController`: `.pinch` deliver, `pinch_msgs` oturum sonu logu, `pinch_forced_end cause=...` logu. `InjectTest`: `--pinch in|out` yalnizca eklenir, calistirilmaz.
+5. Testler: kodek, durum makinesi (PINCH-*), planlayici, owed, pipeline, fuzz kapsami (InputFuzzTests + MacInputModel). `./scripts/check.sh`.
 
 ## Handoff
 
