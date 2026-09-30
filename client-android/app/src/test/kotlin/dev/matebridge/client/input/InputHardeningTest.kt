@@ -40,6 +40,12 @@ class InputHardeningTest {
         fun touch(a: TouchAction, t: Long, acting: Int, vararg f: Finger) {
             sink.nowMs = t; cap.onTouch(touchFrame(a, t, acting, *f), t)
         }
+        fun up(kind: ToolKind, device: Int, pid: Int, t: Long, vararg fingers: Finger) {
+            sink.nowMs = t; cap.androidUp(kind, device, pid, t, fingers.toList(), pt(t))
+        }
+        fun cancel(device: Int, penPointer: Boolean, fingerPointer: Boolean, t: Long, vararg fingers: Finger) {
+            sink.nowMs = t; cap.androidCancel(device, penPointer, fingerPointer, t, fingers.toList(), pt(t))
+        }
         fun tick(t: Long) { sink.nowMs = t; sink.tickHost(); cap.tick(t) }
         fun tickTo(from: Long, to: Long) { var t = from; while (t < to) { t += 25; tick(t) } }
         fun releaseAll(reason: Int, t: Long) { sink.nowMs = t; cap.releaseAll(reason, t) }
@@ -115,24 +121,113 @@ class InputHardeningTest {
 
     // ================= fix 1: releases do not depend on the tool type at release time =================
 
-    @Test fun fix1_routingFollowsTheTrackerNotTheReportedToolType() {
-        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.OTHER, followedByPen = false, followedByTouch = true))
-        assertEquals(Route.PEN, ReleaseRouting.routeUp(ToolKind.OTHER, followedByPen = true, followedByTouch = false))
-        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.PEN, followedByPen = false, followedByTouch = true))
-        assertEquals(Route.PEN, ReleaseRouting.routeUp(ToolKind.PEN, followedByPen = false, followedByTouch = false))
-        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.FINGER, followedByPen = false, followedByTouch = false))
-        assertEquals(Route.NONE, ReleaseRouting.routeUp(ToolKind.OTHER, followedByPen = false, followedByTouch = false))
-        assertTrue(ReleaseRouting.cancelReachesPen(penPointerInEvent = true, followedPenPointerInEvent = false))
-        assertTrue(ReleaseRouting.cancelReachesPen(penPointerInEvent = false, followedPenPointerInEvent = true))
-        assertFalse(ReleaseRouting.cancelReachesPen(penPointerInEvent = false, followedPenPointerInEvent = false))
+    @Test fun fix1_routingFollowsTheFollowedDevicePointerPairNotTheReportedToolType() {
+        val touchPair = FakeFollowers(finger = TOUCH_DEVICE to 4)
+        val penPair = FakeFollowers(pen = PEN_DEVICE to 3)
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.OTHER, TOUCH_DEVICE, 4, touchPair))
+        assertEquals(Route.PEN, ReleaseRouting.routeUp(ToolKind.OTHER, PEN_DEVICE, 3, penPair))
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.PEN, TOUCH_DEVICE, 4, touchPair)) // followed pair beats the reported kind
+        // Nobody follows: the reported tool type decides, an OTHER tool is ignored.
+        val nobody = FakeFollowers()
+        assertEquals(Route.PEN, ReleaseRouting.routeUp(ToolKind.PEN, PEN_DEVICE, 0, nobody))
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.FINGER, TOUCH_DEVICE, 0, nobody))
+        assertEquals(Route.NONE, ReleaseRouting.routeUp(ToolKind.OTHER, TOUCH_DEVICE, 0, nobody))
+    }
+
+    @Test fun fix1_theSamePointerIdOnAnotherDeviceIsAnotherPointer() {
+        // Pen contact = (pen device, 0); a pressed finger = (touch device, 0). Both number their pointers from 0.
+        val both = FakeFollowers(pen = PEN_DEVICE to 0, finger = TOUCH_DEVICE to 0)
+        // A pen-tool release with the finger's pointer id ends the pen and not the finger...
+        assertEquals(Route.PEN, ReleaseRouting.routeUp(ToolKind.PEN, PEN_DEVICE, 0, both))
+        // ...and a touchscreen release with the pen contact's pointer id goes to touch, never to the pen.
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.FINGER, TOUCH_DEVICE, 0, both))
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.OTHER, TOUCH_DEVICE, 0, both))
+        val penOnly = FakeFollowers(pen = PEN_DEVICE to 0)
+        assertEquals(Route.TOUCH, ReleaseRouting.routeUp(ToolKind.FINGER, TOUCH_DEVICE, 0, penOnly))
+        assertEquals(Route.NONE, ReleaseRouting.routeUp(ToolKind.OTHER, TOUCH_DEVICE, 0, penOnly)) // a palm reported as PALM
+    }
+
+    @Test fun fix1_cancelsBelongToTheirOwnDeviceOnly() {
+        val both = FakeFollowers(pen = PEN_DEVICE to 0, finger = TOUCH_DEVICE to 0)
+        // touchscreen cancel: not the pen contact, but the finger gesture
+        assertFalse(ReleaseRouting.cancelReachesPen(TOUCH_DEVICE, penPointerInEvent = false, followers = both))
+        assertTrue(ReleaseRouting.cancelReachesTouch(TOUCH_DEVICE, fingerPointerInEvent = false, followers = both))
+        // pen-device cancel: the pen, not the finger press
+        assertTrue(ReleaseRouting.cancelReachesPen(PEN_DEVICE, penPointerInEvent = true, followers = both))
+        assertFalse(ReleaseRouting.cancelReachesTouch(PEN_DEVICE, fingerPointerInEvent = false, followers = both))
+        // a cancel carrying a pen pointer reaches the pen even if nothing was followed
+        assertTrue(ReleaseRouting.cancelReachesPen(PEN_DEVICE, penPointerInEvent = true, followers = FakeFollowers()))
+        assertFalse(ReleaseRouting.cancelReachesPen(TOUCH_DEVICE, penPointerInEvent = false, followers = FakeFollowers()))
+    }
+
+    @Test fun fix1_aPalmReleaseOnTheTouchscreenWithThePenContactsPointerIdDoesNotEndTheStroke() {
+        val r = Rig()
+        r.pen(PenAction.HOVER_ENTER, 0, pt(0))
+        r.pen(PenAction.DOWN, 5, pt(5), pointerId = 0) // pen device, pointer 0
+        assertTrue(r.host.penContact)
+        // The resting palm: touchscreen device, also pointer 0. Its DOWN is gated; its lift must not touch the stroke.
+        r.touch(TouchAction.DOWN, 20, 0, finger(0, 300f, 300f))
+        r.touch(TouchAction.MOVE, 30, -1, finger(0, 302f, 300f))
+        r.up(ToolKind.FINGER, TOUCH_DEVICE, 0, 40, finger(0, 302f, 300f))
+        assertTrue("the stroke is still open on the host", r.host.penContact)
+        assertTrue(r.cap.penInContact)
+        r.pen(PenAction.MOVE, 50, pt(50), pointerId = 0)
+        assertEquals("the rest of the stroke stays contact, not hover", IR or CT, penSamples(r.sink.sent).last().flags)
+        assertTrue(r.host.violations.isEmpty())
+        // The same when the platform calls the palm PALM/UNKNOWN.
+        r.up(ToolKind.OTHER, TOUCH_DEVICE, 0, 60)
+        assertTrue(r.host.penContact)
+        r.up(ToolKind.PEN, PEN_DEVICE, 0, 70)
+        assertFalse(r.host.penContact) // only the pen's own release ends it
+    }
+
+    @Test fun fix1_aTouchscreenCancelDoesNotEndThePenContact() {
+        val r = Rig()
+        r.pen(PenAction.HOVER_ENTER, 0, pt(0))
+        r.pen(PenAction.DOWN, 5, pt(5), pointerId = 0)
+        r.cancel(TOUCH_DEVICE, penPointer = false, fingerPointer = true, t = 20, finger(0, 300f, 300f))
+        assertTrue(r.host.penContact)
+        assertTrue(r.cap.penInContact)
+        r.cancel(PEN_DEVICE, penPointer = true, fingerPointer = false, t = 30)
+        assertFalse(r.host.penContact) // the pen's own cancel ends it
+    }
+
+    @Test fun fix1_aPenDeviceCancelDoesNotEndAFingerPress() {
+        val r = Rig()
+        r.touch(TouchAction.DOWN, 0, 0, finger(0, 300f, 400f))
+        r.tick(60)
+        assertTrue(r.host.touchDown)
+        r.cancel(PEN_DEVICE, penPointer = true, fingerPointer = false, t = 100)
+        assertTrue("a pen cancel with pointer id 0 must not release the finger with pointer id 0", r.host.touchDown)
+        assertTrue(r.cap.fingerPressed)
+        r.cancel(TOUCH_DEVICE, penPointer = false, fingerPointer = true, t = 200, finger(0, 300f, 400f))
+        assertFalse(r.host.touchDown)
+    }
+
+    @Test fun fix1_aGestureIsMatchedByDeviceInsideTheTrackersToo() {
+        val t = touchTracker()
+        t.onFrame(touchFrame(TouchAction.DOWN, 0, 0, finger(0, 300f, 400f), device = TOUCH_DEVICE), 0)
+        t.tick(50)
+        assertTrue(t.follows(TOUCH_DEVICE, 0))
+        assertFalse(t.follows(PEN_DEVICE, 0))
+        // Frames of another device (same pointer id) are not part of this gesture.
+        assertTrue(t.onFrame(touchFrame(TouchAction.UP, 60, 0, finger(0, 10f, 10f), device = PEN_DEVICE), 60).isEmpty())
+        assertTrue(t.onFrame(touchFrame(TouchAction.CANCEL, 70, -1, device = PEN_DEVICE), 70).isEmpty())
+        assertTrue(t.isPressed)
+        assertEquals(listOf(0), ptrs(t.onFrame(touchFrame(TouchAction.UP, 80, 0, finger(0, 300f, 400f), device = TOUCH_DEVICE), 80)).map { it.buttons })
+        val p = penTracker()
+        p.onFrame(penFrame(PenAction.DOWN, pt(0), device = PEN_DEVICE, pointerId = 0), 0)
+        assertTrue(p.followsPointer(PEN_DEVICE, 0))
+        assertFalse(p.followsPointer(TOUCH_DEVICE, 0))
+        assertEquals(PEN_DEVICE, p.contactDeviceId)
     }
 
     @Test fun fix1_aPressedFingerIsReleasedEvenIfTheReleaseNoLongerListsItAsAFinger() {
         val t = touchTracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 4, finger(4, 300f, 400f)), 0)
         t.tick(50)
-        assertTrue(t.follows(4))
-        assertFalse(t.follows(5))
+        assertTrue(t.follows(TOUCH_DEVICE, 4))
+        assertFalse(t.follows(TOUCH_DEVICE, 5))
         // The platform reports the lift as PALM/UNKNOWN: the finger list of the frame is empty.
         val out = t.onFrame(touchFrame(TouchAction.UP, 60, 4), 60)
         assertEquals(listOf(0), ptrs(out).map { it.buttons })
@@ -143,30 +238,36 @@ class InputHardeningTest {
     @Test fun fix1_aPendingFingerAndAScrollAlsoEndWhenTheReleaseIsMisclassified() {
         val a = touchTracker()
         a.onFrame(touchFrame(TouchAction.DOWN, 0, 4, finger(4, 300f, 400f)), 0)
-        assertTrue(a.follows(4))
+        assertTrue(a.follows(TOUCH_DEVICE, 4))
         assertEquals(listOf(Buttons.LEFT, 0), ptrs(a.onFrame(touchFrame(TouchAction.UP, 20, 4), 20)).map { it.buttons })
         val b = touchTracker()
         b.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         b.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
-        assertTrue(b.follows(1) && b.follows(2))
+        assertTrue(b.follows(TOUCH_DEVICE, 1) && b.follows(TOUCH_DEVICE, 2))
         val end = b.onFrame(touchFrame(TouchAction.UP, 40, 2, finger(1, 1000f, 900f)), 40)
         assertEquals(listOf(Scroll.ENDED), scrolls(end).map { it.phase })
     }
 
-    @Test fun fix1_captureExposesTheFollowedPointersAndAMisclassifiedReleaseReachesTheHost() {
+    @Test fun fix1_aReleaseReportedAsPalmOrUnknownStillEndsTheRightPressThroughTheRouting() {
         val r = Rig()
         r.touch(TouchAction.DOWN, 0, 5, finger(5, 300f, 400f))
         r.tick(60)
-        assertTrue(r.cap.followsFingerPointer(5))
-        assertFalse(r.cap.followsFingerPointer(6))
-        r.touch(TouchAction.UP, 80, 5) // no finger listed any more
+        assertTrue(r.cap.followsFinger(TOUCH_DEVICE, 5))
+        assertFalse(r.cap.followsFinger(TOUCH_DEVICE, 6))
+        assertFalse(r.cap.followsFinger(PEN_DEVICE, 5))
+        r.up(ToolKind.OTHER, TOUCH_DEVICE, 5, 80) // no finger listed any more, tool no longer FINGER
         assertFalse(r.host.touchDown)
-        assertFalse(r.cap.followsFingerPointer(5))
+        assertFalse(r.cap.followsFinger(TOUCH_DEVICE, 5))
         r.pen(PenAction.DOWN, 200, pt(200), pointerId = 3)
-        assertTrue(r.cap.followsPenPointer(3))
+        assertTrue(r.cap.followsPen(PEN_DEVICE, 3))
+        assertFalse(r.cap.followsPen(TOUCH_DEVICE, 3))
         assertEquals(3, r.cap.penContactPointerId)
-        assertFalse(r.cap.followsPenPointer(0))
+        assertEquals(PEN_DEVICE, r.cap.penContactDevice)
+        assertFalse(r.cap.followsPen(PEN_DEVICE, 0))
         assertTrue(r.host.penContact)
+        r.up(ToolKind.OTHER, PEN_DEVICE, 3, 220) // the pen release arrives as UNKNOWN
+        assertFalse(r.host.penContact)
+        assertEquals(NO_DEVICE, r.cap.penContactDevice)
     }
 
     @Test fun fix1_aPenReleaseWithADifferentToolTypeStillEndsTheActiveTool() {
@@ -348,8 +449,40 @@ class InputHardeningTest {
         presence.lastSentMs = 1_000
         t.onFrame(touchFrame(TouchAction.DOWN, 1_900, 1, finger(1, 10f, 10f)), 1_900)
         assertTrue(t.isIdle)
-        t.onFrame(touchFrame(TouchAction.DOWN, 2_000, 2, finger(2, 10f, 10f)), 2_000)
+        t.onFrame(touchFrame(TouchAction.DOWN, 2_200, 2, finger(2, 10f, 10f)), 2_200)
         assertFalse(t.isIdle)
+    }
+
+    @Test fun gateMargin_aPressOneSecondAfterTheLastPenMessageIsStillGatedAndOneAt1200msIsSent() {
+        assertEquals(1200L, TouchTracker.GATE_HOLD_MS)
+        assertTrue("the client gate is longer than the host's", TouchTracker.GATE_HOLD_MS * 1000 > HostModel.GATE_HOLD_US)
+        val t = touchTracker()
+        presence.inRange = false
+        presence.lastSentMs = 5_000
+        t.onFrame(touchFrame(TouchAction.DOWN, 6_000, 1, finger(1, 10f, 10f)), 6_000) // exactly the host's 1000 ms
+        assertTrue(t.isIdle)
+        t.onFrame(touchFrame(TouchAction.DOWN, 6_199, 2, finger(2, 10f, 10f)), 6_199)
+        assertTrue(t.isIdle)
+        t.onFrame(touchFrame(TouchAction.DOWN, 6_200, 3, finger(3, 10f, 10f)), 6_200) // 1200 ms
+        assertFalse(t.isIdle)
+        assertEquals(listOf(Buttons.LEFT), ptrs(t.tick(6_240)).map { it.buttons })
+    }
+
+    @Test fun gateMargin_aPressThatOvertakesADelayedPenMessageIsStillAcceptedByTheHost() {
+        val r = Rig()
+        r.pen(PenAction.DOWN, 0, pt(0))
+        r.pen(PenAction.UP, 20, pt(20))
+        r.sink.penDelayMs = 100 // ordinary Wi-Fi jitter: PEN messages travel 100 ms slower than the press below
+        r.pen(PenAction.CANCEL, 60, pt(60)) // flags = 0 is the last PEN message: sent at t = 60, received at 160
+        r.sink.penDelayMs = 0
+        r.touch(TouchAction.DOWN, 1_100, 1, finger(1, 100f, 100f)) // 1040 ms after t = 60: past 1000, inside the 1200 ms margin
+        r.tickTo(1_100, 1_200)
+        assertTrue(r.sink.sent.none { it is PointerAbs })
+        r.touch(TouchAction.UP, 1_210, 1, finger(1, 100f, 100f))
+        r.touch(TouchAction.DOWN, 1_260, 2, finger(2, 100f, 100f)) // 1200 ms after t = 60; the host gate ends at 1160
+        r.tick(1_300)
+        assertTrue("accepted by the client and by the host", r.host.touchDown)
+        assertEquals(0, r.sink.pressesRejected)
     }
 
     @Test fun fix4_penTrackerReportsTheTimeOfItsLastEmittedMessageIncludingRepeatsAndTheSyntheticLeave() {
@@ -382,8 +515,8 @@ class InputHardeningTest {
         assertTrue(r.sink.sent.none { it is PointerAbs })
         assertEquals(0, r.sink.pressesRejected)
         // Once the host gate has expired the same touch is a press.
-        r.touch(TouchAction.DOWN, leaveAt + 1_100, 2, finger(2, 500f, 500f))
-        r.tick(leaveAt + 1_160)
+        r.touch(TouchAction.DOWN, leaveAt + 1_300, 2, finger(2, 500f, 500f))
+        r.tick(leaveAt + 1_360)
         assertTrue(r.host.touchDown)
         assertEquals(0, r.sink.pressesRejected)
     }

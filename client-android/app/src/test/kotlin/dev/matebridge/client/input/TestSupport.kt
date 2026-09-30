@@ -27,6 +27,39 @@ fun finger(id: Int, x: Float, y: Float) = Finger(id, x, y)
 fun touchFrame(action: TouchAction, tMs: Long, actingId: Int, vararg fingers: Finger, device: Int = 2) =
     TouchFrame(action, actingId, fingers.toList(), tMs * 1000, device)
 
+/** The MatePad's real layout: the pen digitizer and the touchscreen are different input devices; both count pointers from 0. */
+const val PEN_DEVICE = 1
+const val TOUCH_DEVICE = 2
+
+/**
+ * What `MotionEventAdapter` does with an `ACTION_UP` / `ACTION_POINTER_UP`, on the MotionEvent-independent layer: the
+ * decision is [ReleaseRouting.routeUp]; the frame handed to the tracker is what the adapter builds. [fingers] is the
+ * finger list of the event (without the acting pointer when the platform no longer calls it a finger).
+ */
+fun InputCapture.androidUp(
+    kind: ToolKind, deviceId: Int, pointerId: Int, nowMs: Long,
+    fingers: List<Finger> = emptyList(), point: PenPoint = pt(nowMs),
+) {
+    when (ReleaseRouting.routeUp(kind, deviceId, pointerId, this)) {
+        Route.PEN -> onPen(PenFrame(PenAction.UP, false, listOf(point), deviceId, pointerId), nowMs)
+        Route.TOUCH -> onTouch(TouchFrame(TouchAction.UP, pointerId, fingers, nowMs * 1000, deviceId), nowMs)
+        Route.NONE -> Unit
+    }
+}
+
+/** What the adapter does with an `ACTION_CANCEL` of device [deviceId]; decisions from [ReleaseRouting]. */
+fun InputCapture.androidCancel(
+    deviceId: Int, penPointerInEvent: Boolean, fingerPointerInEvent: Boolean, nowMs: Long,
+    fingers: List<Finger> = emptyList(), point: PenPoint = pt(nowMs),
+) {
+    if (ReleaseRouting.cancelReachesPen(deviceId, penPointerInEvent, this)) {
+        onPen(PenFrame(PenAction.CANCEL, false, listOf(point), deviceId, penContactPointerId.coerceAtLeast(0)), nowMs)
+    }
+    if (ReleaseRouting.cancelReachesTouch(deviceId, fingerPointerInEvent, this)) {
+        onTouch(TouchFrame(TouchAction.CANCEL, -1, fingers, nowMs * 1000, deviceId), nowMs)
+    }
+}
+
 /** Flattens all pen samples of the given messages. */
 fun penSamples(msgs: List<Message>): List<PenSample> = msgs.filterIsInstance<Pen>().flatMap { it.samples }
 
@@ -50,6 +83,11 @@ fun List<Outgoing>.messages(): List<Message> = map { it.msg }
  * If it and the Swift code disagree, the Swift code and PROTOCOL.md win.
  */
 class HostModel {
+    companion object {
+        /** The host's finger gate: 1 s from the moment a PEN message is RECEIVED (PROTOCOL.md section 7). */
+        const val GATE_HOLD_US = 1_000_000L
+    }
+
     private enum class Owner { PEN, TOUCH }
 
     private var penTool = 0
@@ -90,7 +128,7 @@ class HostModel {
     fun gateActive(nowUs: Long): Boolean {
         if (penActive) return true
         val l = lastPenAtUs ?: return false
-        return (if (nowUs >= l) nowUs - l else 0) < 1_000_000
+        return (if (nowUs >= l) nowUs - l else 0) < GATE_HOLD_US
     }
 
     fun tick(nowUs: Long) {
@@ -212,6 +250,9 @@ class FakeSink : InputSink {
     var closeCalls = 0
     var throwOnSend = false
 
+    /** Extra network delay of PEN messages only: the host receives them this many ms after they were sent. */
+    var penDelayMs = 0L
+
     private var retiredWatchdogFires = 0
     private var retiredRejected = 0
 
@@ -233,7 +274,7 @@ class FakeSink : InputSink {
         }
         sent += msg
         sentAt += nowMs
-        host.handle(msg, nowUs)
+        host.handle(msg, if (msg is Pen) nowUs + penDelayMs * 1000 else nowUs)
         return true
     }
 
@@ -266,3 +307,14 @@ class FakeSink : InputSink {
 
 /** Settable [PenPresence] for tracker tests. */
 class FakePresence(override var inRange: Boolean = false, override var lastSentMs: Long = NEVER_MS) : PenPresence
+
+/** Fixed [PointerFollowers] for pure routing tests. */
+class FakeFollowers(
+    private val pen: Pair<Int, Int>? = null,
+    private val finger: Pair<Int, Int>? = null,
+) : PointerFollowers {
+    override fun followsPen(deviceId: Int, pointerId: Int) = pen == deviceId to pointerId
+    override fun followsFinger(deviceId: Int, pointerId: Int) = finger == deviceId to pointerId
+    override val penContactDevice get() = pen?.first ?: NO_DEVICE
+    override val touchDevice get() = finger?.first ?: NO_DEVICE
+}

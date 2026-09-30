@@ -18,7 +18,8 @@ import dev.matebridge.client.stream.VideoViewport
  *    contact); a DOWN while already in contact first ends the old contact;
  *  - `ACTION_CANCEL` and hover exit produce a `flags = 0` sample; a tool change first sends `flags = 0` for the old tool;
  *  - a release (UP / CANCEL) ends the active tool whatever tool type the frame reports, and the contact remembers
- *    the pointer id that opened it ([followsPointer]) so the adapter can route the release by id;
+ *    the (device, pointer id) pair that opened it ([followsPointer]) so the adapter can route the release by pair
+ *    (pointer ids repeat across devices: the pen and the touchscreen both start at 0);
  *  - [lastSentMs] (time of the last emitted PEN message, repeats and synthetic `flags = 0` included) is the clock of
  *    the host's finger gate; [lastEventMs] (last real Android event) only drives the stale guards below;
  *  - liveness: while in range a sample is repeated every [LIVENESS_MS] (host watchdog is 500 ms);
@@ -50,12 +51,17 @@ class PenTracker(
     /** Uptime ms of the last emitted PEN message: the host's finger-gate clock. */
     override val lastSentMs get() = lastEmitMs
 
-    /** Android pointer id of the contact the host holds, or -1. Releases are routed by this id, not by tool type. */
+    /** Android pointer id of the contact the host holds, or -1. Together with [contactDeviceId] it identifies the contact. */
     var contactPointerId = -1
         private set
 
-    /** True while a pen contact is open on the host and [id] is the pointer that opened it. */
-    fun followsPointer(id: Int) = state == State.CONTACT && contactPointerId == id
+    /** Input device that opened the contact, or [NO_DEVICE]. Pointer ids are only unique within one device. */
+    var contactDeviceId = NO_DEVICE
+        private set
+
+    /** True while a pen contact is open on the host and (device, pointer) is exactly the pair that opened it. */
+    fun followsPointer(deviceId: Int, pointerId: Int) =
+        state == State.CONTACT && contactDeviceId == deviceId && contactPointerId == pointerId
 
     private class S(
         val timeUs: Long, val x: Int, val y: Int, val pressure: Int,
@@ -94,6 +100,7 @@ class PenTracker(
                 for (i in 1 until pts.size) s += sample(pts[i], IN_RANGE or CONTACT)
                 state = State.CONTACT
                 contactPointerId = f.pointerId
+                contactDeviceId = f.deviceId
                 emit(s, nowMs, out)
             }
             PenAction.MOVE -> {
@@ -108,7 +115,7 @@ class PenTracker(
                 for (i in 0 until pts.size - 1) s += sample(pts[i], if (contact) IN_RANGE or CONTACT else IN_RANGE)
                 s += sample(pts.last(), IN_RANGE) // contact ended; the pen may still hover
                 state = State.HOVER
-                contactPointerId = -1
+                clearContactIds()
                 emit(s, nowMs, out)
             }
             PenAction.CANCEL -> leaveAt(pts.last(), nowMs, out)
@@ -120,7 +127,7 @@ class PenTracker(
                 // Samples batched into the exit event are real hover positions: keep them, then close.
                 if (state != State.OUT && pts.size > 1) {
                     state = State.HOVER
-                    contactPointerId = -1
+                    clearContactIds()
                     emit(pts.dropLast(1).map { sample(it, IN_RANGE) }, nowMs, out)
                 }
                 if (state == State.HOVER) pendingExit = PendingExit(pts.last(), nowMs) else leaveAt(pts.last(), nowMs, out)
@@ -179,7 +186,7 @@ class PenTracker(
      */
     fun reset() {
         state = State.OUT
-        contactPointerId = -1
+        clearContactIds()
         pendingExit = null
         last = null
         lastFlags = 0
@@ -253,7 +260,12 @@ class PenTracker(
     private fun toOut() {
         state = State.OUT
         lastTilt = null
+        clearContactIds()
+    }
+
+    private fun clearContactIds() {
         contactPointerId = -1
+        contactDeviceId = NO_DEVICE
     }
 
     private fun leaveAt(p: PenPoint, nowMs: Long, out: MutableList<Outgoing>) {

@@ -310,8 +310,12 @@ class InputCaptureTest {
         tick(1100)
         assertTrue(sink.sent.none { it is PointerAbs })
         touch(TouchAction.UP, 1150, 2, finger(2, 300f, 300f))
-        touch(TouchAction.DOWN, 1300, 3, finger(3, 300f, 300f)) // > 1 s
+        touch(TouchAction.DOWN, 1300, 3, finger(3, 300f, 300f)) // > 1 s but inside the client's 1200 ms gate
         tick(1350)
+        assertTrue(sink.sent.none { it is PointerAbs })
+        touch(TouchAction.UP, 1400, 3, finger(3, 300f, 300f))
+        touch(TouchAction.DOWN, 1500, 4, finger(4, 300f, 300f)) // past the pen message (260) + 1200 ms
+        tick(1550)
         assertTrue(sink.sent.any { it is PointerAbs && it.buttons == 1 })
     }
 

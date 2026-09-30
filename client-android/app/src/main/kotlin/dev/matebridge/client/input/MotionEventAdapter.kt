@@ -10,8 +10,10 @@ import android.view.MotionEvent
  *
  * Presses are classified per pointer by tool type: STYLUS/ERASER go to the pen path, FINGER to the touch path,
  * everything else (mouse, trackpad, unknown, palm) is not started here. Releases are different: `ACTION_UP`,
- * `ACTION_POINTER_UP` and `ACTION_CANCEL` are routed by the pointer id the trackers are following, so a release
- * the platform reports as PALM or UNKNOWN still ends the press it belongs to (PROTOCOL.md section 7). Pen events
+ * `ACTION_POINTER_UP` and `ACTION_CANCEL` are routed by the (device, pointer id) pair the trackers are following
+ * ([ReleaseRouting]; the pen and the touchscreen are separate devices whose pointer ids both start at 0), so a release
+ * the platform reports as PALM or UNKNOWN still ends the press it belongs to and a palm's release never ends a
+ * pen stroke (PROTOCOL.md section 7). Pen events
  * carry the batched historical samples in order (never dropped) followed by the current sample, for every action.
  */
 object MotionEventAdapter {
@@ -55,9 +57,7 @@ object MotionEventAdapter {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val idx = ev.actionIndex
                 val pid = ev.getPointerId(idx)
-                val route = ReleaseRouting.routeUp(
-                    kindOf(ev.getToolType(idx)), capture.followsPenPointer(pid), capture.followsFingerPointer(pid),
-                )
+                val route = ReleaseRouting.routeUp(kindOf(ev.getToolType(idx)), ev.deviceId, pid, capture)
                 when (route) {
                     Route.PEN -> capture.onPen(penFrame(ev, idx, PenAction.UP, offX, offY), nowMs)
                     Route.TOUCH -> capture.onTouch(touchFrame(ev, TouchAction.UP, pid, offX, offY), nowMs)
@@ -70,14 +70,18 @@ object MotionEventAdapter {
                 if (hasFinger) capture.onTouch(touchFrame(ev, TouchAction.MOVE, -1, offX, offY), nowMs)
             }
             MotionEvent.ACTION_CANCEL -> {
-                val followedPen = capture.penContactPointerId
-                val followedIdx = if (followedPen >= 0) ev.findPointerIndex(followedPen) else -1
-                if (ReleaseRouting.cancelReachesPen(penIndex >= 0, followedIdx >= 0)) {
-                    capture.onPen(penFrame(ev, if (penIndex >= 0) penIndex else followedIdx, PenAction.CANCEL, offX, offY), nowMs)
+                // A cancel ends the gesture of ITS device only: pointer ids repeat across the pen and the touchscreen.
+                if (ReleaseRouting.cancelReachesPen(ev.deviceId, penIndex >= 0, capture)) {
+                    val followed = capture.penContactPointerId
+                    val followedIdx = if (followed >= 0) ev.findPointerIndex(followed) else -1
+                    val idx = if (penIndex >= 0) penIndex else if (followedIdx >= 0) followedIdx else 0
+                    capture.onPen(penFrame(ev, idx, PenAction.CANCEL, offX, offY), nowMs)
                     consumed = true
                 }
-                // Cancel ends every pointer of the gesture, whatever tool types they carry now.
-                capture.onTouch(touchFrame(ev, TouchAction.CANCEL, -1, offX, offY), nowMs)
+                if (ReleaseRouting.cancelReachesTouch(ev.deviceId, hasFinger, capture)) {
+                    capture.onTouch(touchFrame(ev, TouchAction.CANCEL, -1, offX, offY), nowMs)
+                    consumed = true
+                }
             }
             else -> return false
         }

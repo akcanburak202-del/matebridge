@@ -26,7 +26,7 @@ class InputCapture(
     private val onEvent: (String, String) -> Unit = { _, _ -> },
     /** Once-per-second counter summary for the `MB/input` log. */
     private val onStatsLine: (String) -> Unit = {},
-) {
+) : PointerFollowers {
     private val counters = InputCounters()
     private val pen = PenTracker(viewport, counters)
     private val touch = TouchTracker(viewport, pen, counters)
@@ -48,13 +48,16 @@ class InputCapture(
     internal val fingerPressed get() = touch.isPressed
     internal val scrollOpen get() = touch.isScrolling
 
-    /** True when the pen tracker holds an open contact opened by pointer [id] (release routing by id, not tool type). */
-    fun followsPenPointer(id: Int) = pen.followsPointer(id)
+    // PointerFollowers: releases are routed by the (device, pointer id) pair, never by pointer id alone.
+    override fun followsPen(deviceId: Int, pointerId: Int) = pen.followsPointer(deviceId, pointerId)
 
-    /** True when the finger tracker holds state for pointer [id]. */
-    fun followsFingerPointer(id: Int) = touch.follows(id)
+    override fun followsFinger(deviceId: Int, pointerId: Int) = touch.follows(deviceId, pointerId)
 
-    /** Pointer id of the open pen contact, or -1. */
+    override val penContactDevice get() = pen.contactDeviceId
+
+    override val touchDevice get() = touch.deviceInUse
+
+    /** Pointer id of the open pen contact, or -1 (with [penContactDevice] it identifies the contact). */
     val penContactPointerId get() = pen.contactPointerId
 
     /** True when events are turned into messages: capture is active (video visible) and not suspended. */

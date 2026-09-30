@@ -55,23 +55,53 @@ enum class ToolKind { PEN, FINGER, OTHER }
 
 enum class Route { PEN, TOUCH, NONE }
 
+/** "No device": the trackers follow nothing. */
+const val NO_DEVICE = Int.MIN_VALUE
+
+/**
+ * What the trackers currently follow. Android pointer ids are unique only within one input device's gesture, and on
+ * the MatePad the pen (`huawei,ts_pen`) and the touchscreen are separate devices that both number their pointers
+ * from 0, so a pointer is always identified by the pair (deviceId, pointerId).
+ */
+interface PointerFollowers {
+    /** The pen tracker holds an open contact opened by exactly this pointer of this device. */
+    fun followsPen(deviceId: Int, pointerId: Int): Boolean
+
+    /** The finger tracker holds state (pending, pressed, scrolling, parked) for exactly this pointer of this device. */
+    fun followsFinger(deviceId: Int, pointerId: Int): Boolean
+
+    /** Device of the open pen contact, or [NO_DEVICE]. */
+    val penContactDevice: Int
+
+    /** Device of the finger gesture (or of the lockout after a scroll) the finger tracker holds, or [NO_DEVICE]. */
+    val touchDevice: Int
+}
+
 /**
  * Where a release (`ACTION_UP` / `ACTION_POINTER_UP` / `ACTION_CANCEL`) goes (PROTOCOL.md section 7: releases do not
- * depend on the tool type at release time). The pointer id the trackers follow wins over whatever the platform
- * reports now, so a release that arrives as PALM or UNKNOWN still reaches the tracker that holds the press.
+ * depend on the tool type at release time, and they belong to the (device, pointer) pair that was pressed).
+ *  - UP / POINTER_UP: the tracker that follows exactly this (device, pointer) wins over whatever tool type the platform
+ *    reports now, so a release reported as PALM or UNKNOWN still ends the right press, and a palm on the touchscreen
+ *    that shares pointer id 0 with the pen contact never ends the stroke. Nobody follows it: the reported tool type
+ *    decides (a pen release ends the pen's active tool, a finger release goes to touch); an OTHER tool is ignored.
+ *  - CANCEL ends only what belongs to the cancelled event's device.
  */
 object ReleaseRouting {
-    fun routeUp(kind: ToolKind, followedByPen: Boolean, followedByTouch: Boolean): Route = when {
-        followedByPen -> Route.PEN
-        followedByTouch -> Route.TOUCH
+    fun routeUp(kind: ToolKind, deviceId: Int, pointerId: Int, followers: PointerFollowers): Route = when {
+        followers.followsPen(deviceId, pointerId) -> Route.PEN
+        followers.followsFinger(deviceId, pointerId) -> Route.TOUCH
         kind == ToolKind.PEN -> Route.PEN
         kind == ToolKind.FINGER -> Route.TOUCH
         else -> Route.NONE
     }
 
-    /** `ACTION_CANCEL` cancels every pointer: the touch tracker always sees it, the pen tracker when a pen pointer is in the event. */
-    fun cancelReachesPen(penPointerInEvent: Boolean, followedPenPointerInEvent: Boolean) =
-        penPointerInEvent || followedPenPointerInEvent
+    /** The pen contact is cancelled by a cancel that carries a pen pointer or comes from the contact's device. */
+    fun cancelReachesPen(deviceId: Int, penPointerInEvent: Boolean, followers: PointerFollowers) =
+        penPointerInEvent || followers.penContactDevice == deviceId
+
+    /** The finger gesture is cancelled by a cancel that carries a finger pointer or comes from the gesture's device. */
+    fun cancelReachesTouch(deviceId: Int, fingerPointerInEvent: Boolean, followers: PointerFollowers) =
+        fingerPointerInEvent || followers.touchDevice == deviceId
 }
 
 /**

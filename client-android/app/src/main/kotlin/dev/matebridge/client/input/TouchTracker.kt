@@ -23,13 +23,15 @@ import kotlin.math.abs
  * - After a scroll ends (finger lift, cancel, pen entering range, release) no new press or scroll starts until
  *   every finger has lifted: the finger that stayed down would otherwise turn into a left click on the next touch.
  * - Palm rejection (decision 0006, PROTOCOL.md section 7): a new press or scroll is refused while the pen is in
- *   range and for [PALM_TAIL_MS] after the last PEN message was sent (the host's clock). Releases are never
+ *   range and for [GATE_HOLD_MS] after the last PEN message was sent (the host's clock, plus a margin). Releases are never
  *   refused. When the pen enters range, a pending or pressed single finger is released and an open (or parked)
  *   scroll is cancelled; those fingers are ignored until they lift.
  * - [disabled] ("Parmak dokunmasını tamamen kapat") refuses every press.
  *
  * Fingers that were refused or abandoned are simply not tracked: their MOVE/UP events are ignored. A release is
- * routed here by pointer id through [follows], whatever tool type the platform reports for it by then.
+ * routed here by (device, pointer id) through [follows], whatever tool type the platform reports for it by then.
+ * Pointer ids repeat across input devices (the pen and the touchscreen both start at 0), so the gesture remembers
+ * the device that started it and frames of any other device are not part of it.
  * Coordinates go through [viewport] only. Not thread-safe: UI thread only.
  */
 class TouchTracker(
@@ -62,6 +64,8 @@ class TouchTracker(
     private var lastScrollMs = 0L
     private var lastMotionMs = 0L
     private var lockout = false
+    private var gestureDevice = NO_DEVICE
+    private var lockoutDevice = NO_DEVICE
 
     val isIdle get() = mode == Mode.IDLE
 
@@ -74,11 +78,18 @@ class TouchTracker(
     /** True while fingers of a finished scroll (or an abandoned palm) keep new touches locked out. */
     val isLockedOut get() = lockout
 
-    /** True when [id] is a pointer this tracker holds state for, so its release must reach [onFrame]. */
-    fun follows(id: Int) = when (mode) {
+    /** True when (device, [id]) is exactly a pointer this tracker holds state for, so its release must reach [onFrame]. */
+    fun follows(deviceId: Int, id: Int) = deviceId == gestureDevice && when (mode) {
         Mode.PENDING, Mode.POINTER -> id == pointerId
         Mode.SCROLL, Mode.PARKED -> id == scrollA || id == scrollB
         Mode.IDLE -> false
+    }
+
+    /** Device of the gesture held, or of the lockout after a scroll, or [NO_DEVICE]. */
+    val deviceInUse get() = when {
+        mode != Mode.IDLE -> gestureDevice
+        lockout -> lockoutDevice
+        else -> NO_DEVICE
     }
 
     fun onFrame(f: TouchFrame, nowMs: Long): List<Outgoing> {
@@ -88,14 +99,18 @@ class TouchTracker(
             TouchAction.MOVE -> f.fingers.size
             TouchAction.CANCEL -> 0
         }
-        if (f.action == TouchAction.DOWN && others == 0) lockout = false // a fresh touch: nothing else is down
-        when (f.action) {
-            TouchAction.DOWN -> down(f, nowMs, out)
-            TouchAction.MOVE -> move(f, nowMs, out)
-            TouchAction.UP -> up(f, nowMs, out)
-            TouchAction.CANCEL -> forceRelease(f.timeUs, out)
+        // A gesture belongs to the device that started it; frames of another device are not part of it.
+        val mine = mode == Mode.IDLE || f.deviceId == gestureDevice
+        if (f.action == TouchAction.DOWN && others == 0 && f.deviceId == lockoutDevice) lockout = false // a fresh touch: nothing else is down
+        if (mine) {
+            when (f.action) {
+                TouchAction.DOWN -> down(f, nowMs, out)
+                TouchAction.MOVE -> move(f, nowMs, out)
+                TouchAction.UP -> up(f, nowMs, out)
+                TouchAction.CANCEL -> forceRelease(f.timeUs, out)
+            }
         }
-        if ((f.action == TouchAction.UP || f.action == TouchAction.CANCEL) && others == 0) lockout = false
+        if ((f.action == TouchAction.UP || f.action == TouchAction.CANCEL) && others == 0 && f.deviceId == lockoutDevice) lockout = false
         return out
     }
 
@@ -132,6 +147,7 @@ class TouchTracker(
     /** Forget everything without sending (host released it, or the connection was lost). */
     fun reset() {
         mode = Mode.IDLE
+        gestureDevice = NO_DEVICE
         pointerId = -1
         scrollA = -1
         scrollB = -1
@@ -156,7 +172,7 @@ class TouchTracker(
 
     private fun down(f: TouchFrame, nowMs: Long, out: MutableList<Outgoing>) {
         val fp = f.fingers.firstOrNull { it.id == f.actingId } ?: return
-        if (disabled || lockout) return
+        if (disabled || (lockout && f.deviceId == lockoutDevice)) return
         if (blocked(nowMs)) {
             counters.palmRejects++
             return
@@ -164,6 +180,7 @@ class TouchTracker(
         when (mode) {
             Mode.IDLE -> {
                 mode = Mode.PENDING
+                gestureDevice = f.deviceId
                 pointerId = fp.id
                 downX = fp.x; downY = fp.y
                 lastX = fp.x; lastY = fp.y
@@ -209,8 +226,7 @@ class TouchTracker(
                 if (mode == Mode.PARKED) {
                     if (blocked(nowMs)) { // a new scroll obeys the gate like a new press
                         counters.palmRejects++
-                        mode = Mode.IDLE
-                        lockout = true
+                        endScroll()
                         return
                     }
                     mode = Mode.SCROLL
@@ -258,10 +274,12 @@ class TouchTracker(
 
     /** The scroll is over; the finger that may still be down must lift before anything new starts. */
     private fun endScroll() {
+        lockout = true
+        lockoutDevice = gestureDevice
         mode = Mode.IDLE
+        gestureDevice = NO_DEVICE
         scrollA = -1
         scrollB = -1
-        lockout = true
     }
 
     /**
@@ -294,15 +312,19 @@ class TouchTracker(
             Mode.SCROLL -> {
                 out += scroll(timeUs, 0f, 0f, Scroll.CANCELLED, mergeable = false)
                 lockout = true
+                lockoutDevice = gestureDevice
             }
-            Mode.PARKED -> lockout = true
+            Mode.PARKED -> {
+                lockout = true
+                lockoutDevice = gestureDevice
+            }
             Mode.PENDING, Mode.IDLE -> Unit // nothing was sent
         }
         reset()
     }
 
-    /** The host's gate: pen in range, or less than [PALM_TAIL_MS] since the last PEN message was sent. */
-    private fun blocked(nowMs: Long) = pen.inRange || nowMs - pen.lastSentMs < PALM_TAIL_MS
+    /** The client's gate: pen in range, or less than [GATE_HOLD_MS] since the last PEN message was sent. */
+    private fun blocked(nowMs: Long) = pen.inRange || nowMs - pen.lastSentMs < GATE_HOLD_MS
 
     private fun ptr(timeUs: Long, x: Float, y: Float, buttons: Int): Outgoing {
         val vp = viewport()
@@ -318,6 +340,14 @@ class TouchTracker(
         const val SCROLL_KEEPALIVE_MS = 200L
         const val SCROLL_IDLE_END_MS = 5_000L
         const val PRESS_STALE_MS = 10_000L
-        const val PALM_TAIL_MS = 1000L
+
+        /**
+         * How long after the last PEN message a new finger press or scroll stays refused. The host holds its own gate
+         * for 1000 ms from the moment it RECEIVES that message, this side counts from when the message was created.
+         * With network jitter a press can overtake the pen message's delay and reach the host inside the host's second,
+         * where it would be refused while this side believes a press is down. The extra 200 ms is that margin
+         * (PROTOCOL.md section 7); heavier queue delay can still lose a tap, which leaves nothing held.
+         */
+        const val GATE_HOLD_MS = 1200L
     }
 }

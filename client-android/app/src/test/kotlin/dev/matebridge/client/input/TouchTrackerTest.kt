@@ -172,8 +172,10 @@ class TouchTrackerTest {
         t.onFrame(touchFrame(TouchAction.DOWN, 1100, 2, finger(2, 10f, 10f)), 1100)
         assertTrue(t.isIdle)
         assertEquals(2L, counters.palmRejects)
-        // ...and accepted afterwards.
-        t.onFrame(touchFrame(TouchAction.DOWN, 1200 + 1, 3, finger(3, 10f, 10f)), 1201)
+        // ...and accepted once the client's gate (host's 1 s plus a 200 ms margin) has passed.
+        t.onFrame(touchFrame(TouchAction.DOWN, 1300, 3, finger(3, 10f, 10f)), 1300)
+        assertTrue(t.isIdle) // 1100 ms after the pen message: past the host's second, still inside the margin
+        t.onFrame(touchFrame(TouchAction.DOWN, 1400, 4, finger(4, 10f, 10f)), 1400)
         assertFalse(t.isIdle)
     }
 
