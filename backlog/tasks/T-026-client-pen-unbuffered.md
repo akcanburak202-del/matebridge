@@ -1,7 +1,7 @@
 ---
 id: T-026
 title: Tablet — kalem örneklerini bekletmeden ilet (unbuffered dispatch), yinelenen örnek sayacı
-status: review
+status: done
 phase: 2
 owner: android-client-dev
 depends_on: [T-024]
@@ -80,3 +80,10 @@ Testler: `PenDedupeTest` (bire bir yinelenen atılır, yalnız gönderilenle kar
   2. **Temizlik geçersiz kılmadan sonra da atlanmaz.** `UnbufferedPenDispatch` artık "platformda istek olabilir" (`inForce`: son başarılı çağrı bir kurmaysa) ile "pencereye yeniden itilmeli" (`stale`: `reapplyOnNextSync` koyar) değerlerini ayrı tutar. `sync(true)` istek yokken ya da geçersiz kılma sonrası kurar; `sync(false)` istek olabiliyorsa her zaman kaldırır (kaldırma pencereye bağlı olmasa da çalışır; başarısızsa yeniden denenir). Yeni testler: `aRequestThatMayBeInForceIsClearedEvenWhenAnInvalidationCameFirst` (tam dizi: `sync(true)`, `reapplyOnNextSync()`, `sync(false)` -> kaldırılır, sonra tekrar kurulur), `afterAnInvalidationTheNextActiveSyncAssertsAgainAndTheClearStillFollows`, `aClearThatCouldNotBeAppliedIsRetriedAndTheRequestIsNotForgotten`. Kasıtlı bozma (geçersiz kılma `inForce`'u siliyor = eski davranış) ilk testi kırdı, geri alındı.
   3. **Karar (kod yok):** işaretçi sınıfındaki olaylar (parmak dahil) bekletmesiz gelir; kabul kriteri ve cihaz listesi buna göre güncellendi (yukarıda).
 
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, high) ilk tur; düzeltme turu (`e298ae7`: istek yaprak görünümde, geçersiz kılma sonrası temizlik) yalnızca orkestratör tarafından okundu. Merge edilen baş: `11dd158`. `./scripts/check.sh` dalda geçti.
+- **Cihazda doğrulandı (USB):** `unbuffered path=source`; `pen_msgs` ≈ `pen_samples` (~360/sn), `max_batch` 1–2. Mac'te ölçüm penceresi (birleştirme kapalı): 6 hızlı dairede ~362 olay/sn, aralık p50 2,8 ms / p95 ~4 ms / en çok 4–7,5 ms, yinelenen konum 0 (öncesi: ~480/sn öbekli, p50 0,3 / p95 13,6 ms, ~%25 yinelenen). Yinelenen konumlar toplu gönderimin yan etkisiymiş; tablet sayaçlarında `dup_exact` 0–3/sn, `dup_pos` çoğunlukla 0–3/sn.
+- Parmak olayları da bekletmesiz geliyor (kabul edildi); kullanıcı iki parmakla kaydırma ve sürüklemenin çalıştığını bildirdi.
+- **Açık:** Wi-Fi'de aralık ölçülmedi (kullanıcının "köşelenme azalmadı" gözlemi Wi-Fi oturumundaydı). Wi-Fi'de öbeklenme sürerse host tarafında zamana yayma ayrı kart olur.
