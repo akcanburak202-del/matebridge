@@ -106,13 +106,19 @@ class VideoRenderer(
      * Once per stats window (called by the activity's stats tick): feeds the adaptive pacer and writes the
      * scheduler's own line (`MB/render ev=present`), see [StatsFormat.presentFields].
      */
+    private var lastRephases = 0L
+
     fun onSkipWindow(skipPct: Double?) {
         adaptive?.onSkipWindow(skipPct)
         val c = counters.snapshot(reset = true)
         val p95 = gauge.p95AndReset()
+        val pacer = adaptive
+        val rephases = pacer?.rephases ?: 0L
+        val rephaseDelta = (rephases - lastRephases).coerceAtLeast(0)
+        lastRephases = rephases
         MbLog.i(
             "present",
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight),
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta),
             "render",
         )
     }
