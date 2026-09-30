@@ -1,7 +1,7 @@
 ---
 id: T-034
 title: Tablet trackpad ve fare — pointer capture, POINTER_REL, dokunarak tık, iki parmak kaydırma/sağ tık
-status: review
+status: done
 phase: 3
 owner: android-client-dev
 depends_on: [T-033]
@@ -63,3 +63,7 @@ Glide Keyboard touchpad'i ve Bluetooth fare ile Mac imlecini kullanmak: PROTOCOL
 - Kaydırma sahipliği `InputCapture.gate`'te: host'ta tek açık kaydırma var. İlk BEGAN eden kaynak (dokunmatik ekran ya da pad) sahip olur; diğerinin fazlı SCROLL mesajları (BEGAN/CHANGED/ENDED/CANCELLED) sahip bitirene kadar atılır. Tekerlek (NONE) her zaman geçer. `forget()` sahipliği sıfırlar. Seçilen yol "basit olan": yeni kaynak sahibi kesmez.
 - Dokunarak tık: ayrılan parmağın son konumu da eşik kontrolüne girer (MOVE'suz DOWN -> uzak UP tık değildir).
 - Testler: `upAtAFarPositionWithoutMoveIsNotATap`, `mouseClickArrivingAsDownThenButtonPressAfterResetIsReported`, iki kaydırma sahipliği testi.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, medium) üç P2 (sıfırlama sonrası fare tıkı, iki kaynağın tek kaydırmayı paylaşması, kalkışta hareketin tık sayılması) → `289c379`'da düzeltildi, orkestratör okudu. `check.sh` merge sonrası geçti. Cihaz testi Faz 3 ortak testinde (pointer capture'ın gerçekten verildiği, fare kaynağı, fiziksel tık, his ayarı, kalem/parmağın etkilenmediği).

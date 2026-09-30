@@ -13,7 +13,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-032](tasks/T-032-host-keyboard.md) | Mac klavye — KEY → macOS keycode, değiştiriciler, otomatik tekrar, Caps Lock, release-all | 3 | mac-host-dev | [T-023] |
-| [T-034](tasks/T-034-client-trackpad-mouse.md) | Tablet trackpad ve fare — pointer capture, POINTER_REL, dokunarak tık, iki parmak kaydırma/sağ tık | 3 | android-client-dev | [T-033] |
 
 ## done
 
@@ -50,3 +49,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-030](tasks/T-030-host-config-with-startup-keyframe.md) | Mac — STARTUP/DECODE_ERROR keyframe isteğinde CODEC_CONFIG'i yeniden gönder (hızlı yeniden bağlanmada siyah ekran) | 2 | mac-host-dev | [T-014] |
 | [T-031](tasks/T-031-host-tablet-device-identity.md) | Mac — kalem yakınlık olayında cihaz kimliği (vendorPointerType, uniqueID); Krita kalemi fare sanıyor | 2 | mac-host-dev | [T-023] |
 | [T-033](tasks/T-033-client-keyboard.md) | Tablet klavye — fiziksel tuşları KEY olarak gönder, Android'e bırakma, sökülünce bırak | 3 | android-client-dev | [T-024] |
+| [T-034](tasks/T-034-client-trackpad-mouse.md) | Tablet trackpad ve fare — pointer capture, POINTER_REL, dokunarak tık, iki parmak kaydırma/sağ tık | 3 | android-client-dev | [T-033] |
