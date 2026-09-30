@@ -35,7 +35,12 @@ PLAN Aşama 2/5: "Kalem gecikmesi … gerekirse tablette yerel imleç/hover nokt
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `overlay/PenInkModel.kt` (saf, JVM testli): sabit boyutlu halka tampon (zaman, x, y, basinc, vurus-baslangici); nokta durumu (hover/temas/silgi); `forEachSegment(now)` son 40 ms penceresi ve 70 ms dogrusal sonumleme; sabitler `PenInkStyle` icinde tek yerde.
+2. `input/PenInkListener.kt`: `InputCapture.onPen` kabul edilen her kare icin agdan once dinleyiciyi cagirir (PenTracker'in dogrulama/bekletmesinden bagimsiz, yani gosterge Mac gidis-donusunu beklemez); `forget()` (release-all/oturum sifirlama/kaynak kaybi) dinleyiciyi temizler. Silgi = silgi ucu VEYA cift dokunusla yerel ayna bayragi (host her DOUBLE_TAP'te degistirir; forget'te sifirlanir).
+3. `overlay/PenOverlayView.kt`: root'un ustune saydam, dokunulmaz View; donanim hizlandirmali Canvas, `postInvalidateOnAnimation` ile vsync; video viewport'una clip (letterbox disinda cizim yok); model koordinatlari zaten root/viewport uzayinda.
+4. `Settings`: `penTrail()` / `penDot()` (varsayilan acik). MainActivity: katman eklenir, baglanti paneline iki dugme, ayarlar modele yansir; viewport degisince katmana verilir.
+5. Testler: model (pencere, sonumleme, vurus kirilmasi, silgi, kapali ayarlar, ring tasmasi), Settings, InputCapture dinleyici/clear/eraser ayna.
+
 
 ## Handoff
 
