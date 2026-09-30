@@ -43,8 +43,10 @@ object StatsFormat {
     fun gapFields(prefix: String, g: IntervalSummary) =
         "${prefix}_p50_us=${g.p50Us} ${prefix}_p95_us=${g.p95Us} ${prefix}_p99_us=${g.p99Us} ${prefix}_over=${g.overThreshold}"
 
-    /** Overlay line for the display mode and jitter buffer. */
-    fun pacingLine(modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null) =
-        String.format(Locale.ROOT, "Mod %.0f Hz | Tampon %d", modeHz, bufferFrames) +
-            (if (paceAddUs != null) String.format(Locale.ROOT, " | +%.1f ms", paceAddUs / 1000.0) else "")
+    /** Overlay line for the display mode and jitter buffer ([bufferFrames] < 0 = adaptive pacing). */
+    fun pacingLine(modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null, skipPct: Double? = null) =
+        String.format(Locale.ROOT, "Mod %.0f Hz | ", modeHz) +
+            (if (bufferFrames < 0) "Uyarlı" else "Tampon $bufferFrames") +
+            (if (paceAddUs != null) String.format(Locale.ROOT, " | +%.1f ms", paceAddUs / 1000.0) else "") +
+            (if (skipPct != null) String.format(Locale.ROOT, " | atlama %%%.1f", skipPct) else "")
 }

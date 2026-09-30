@@ -1,7 +1,7 @@
 ---
 id: T-052
 title: Tablet — uyarlanır kare zamanlaması (en az gecikmeyle takılmasız sunum, 60/120 Hz)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-050]
@@ -56,8 +56,9 @@ Host yakalama zamanı kusursuz düzenli (8,3 ms), varış/çözme çıkışı da
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** dalın son commit'i (SHA orkestratöre raporlandı).
+- **Dokunulan dosyalar:** `video/AdaptivePacer.kt` (yeni), `video/PresentMeter.kt` (yeni), `video/VideoRenderer.kt`, `video/VideoStats.kt`, `stream/StatsFormat.kt`, `MainActivity.kt`, `test/.../video/AdaptivePacerTest.kt` (yeni), bu kart.
+- **Kök neden:** Plan'ın "Kök neden analizi" bölümü. Özet: `FramePacer` tamponu tam sayı vsync kaydırması (`ceil(t+P)=ceil(t)+P`), yani fazı değiştirmiyor; 120 Hz'te kadans/`fi/2` kuralı ölü (özdeşlik eşleme); ayrıca damga (`V-P/2`) 1 tamponda SurfaceFlinger latch ufkunun içinde kalıp muhtemelen "hemen sun" gibi işleniyor (jitter 0 ile 1 ölçümünün birebir aynı olmasıyla tutarlı). İlk madde kod okumasıyla kesin; ufuk/faz maddeleri cihazda doğrulanmadı.
+- **Varsayımlar:** host yakalama zamanı (`captureTimeUs`) düzenli; saat ofseti sabit (yalnızca fark kullanılıyor, 2 sn min penceresi sapmayı karşılar). `OnFrameRenderedListener` zamanı gerçek sunum değil istenen render zamanı olabilir (zamanlı release'te); öyleyse `skip_pct` zamanlama düzenliliğini ölçer, gerçek atlama `dumpsys SurfaceFlinger --latency` ile doğrulanmalı. Varsayılan artık uyarlanır (yüzey yolu): `--ei jitter` yoksa; 0..2 eski sabit tampon; -1 uyarlanır kapalı (=0).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `anim` (120 Hz, performans modu) ile `MB/render` satırında `skip_pct`, `pace_ms`, `vsync_ms`; `pace.sh` ile SF atlama oranı (hedef <%2, `pace_ms` yaklaşık <= 8 ms); aynı ölçüm 60 Hz'de ve dokunma ile 60<->120 geçişinde (yeniden kilit: `extra` sıfırlanır); `--ei jitter 0/1/2/-1` eski davranış; kalemle gecikme hissi. AdaptivePacer sabitleri (p98, 0,5 ms marj, geri besleme eşikleri) ölçüme göre ayarlanabilir. Birim testler simüle jitter ile: naif eşleme >%10 atlama, uyarlanır <%2, ek bekleme <= 1 vsync.
+- **Açık sorular:** (1) GL yolunda uyarlanır mod kapalı (SurfaceTexture render damgalarını yok sayar; presenter kendi vsync hizalamasını yapıyor): kabul ölçütündeki "GL yolunda da" karşılanmadı; istenirse presenter kuyruklamasıyla ayrı kart. (2) Damga fazı (`V-P/2`) Choreographer/SF vsync kaymasına bağlı; ölçümde sistematik 1 vsync sapma görülürse faz parametresi eklenmeli.

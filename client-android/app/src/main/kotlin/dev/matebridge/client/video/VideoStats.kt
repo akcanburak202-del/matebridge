@@ -19,6 +19,8 @@ class VideoStats {
         val shown: IntervalSummary = IntervalSummary.EMPTY,
         /** Average delay the pacer added versus presenting at the earliest vsync, or null when unpaced. */
         val paceAddAvgUs: Long? = null,
+        /** Percent of presentation intervals that skipped a vsync while a frame was ready, or null when unmeasured. */
+        val skipPct: Double? = null,
     )
 
     private var received = 0L
@@ -36,6 +38,7 @@ class VideoStats {
     private val networkGaps = IntervalHistogram()
     private val readyGaps = IntervalHistogram()
     private val shownGaps = IntervalHistogram()
+    private val meter = PresentMeter()
 
     /** Maps a host capture time to the latency now (client clock), or null if unknown. Set by the session layer. */
     @Volatile var latencyOf: ((Long) -> Long?)? = null
@@ -59,8 +62,14 @@ class VideoStats {
     /** A frame reached the screen at [nowUs] (client monotonic clock). */
     fun onShown(nowUs: Long) = shownGaps.mark(nowUs)
 
+    /** Codec-reported shown time of a frame that became ready at [readyNs]; feeds the skip meter too. */
+    fun onShownPaced(readyNs: Long?, shownNs: Long, periodNs: Long, cadenceNs: Long) {
+        shownGaps.mark(shownNs / 1000)
+        meter.onShown(readyNs, shownNs, periodNs, cadenceNs)
+    }
+
     /** Stream restart: gaps must not span it. */
-    fun breakGaps() { networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence() }
+    fun breakGaps() { networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence(); meter.breakSequence() }
     @Synchronized fun onDropped(n: Int) { dropped += n }
     @Synchronized fun onRendered() { rendered++ }
 
@@ -88,7 +97,8 @@ class VideoStats {
             if (decodeCount > 0) decodeSumUs / decodeCount else 0, bytes,
             if (latencyCount > 0) latencySumUs / latencyCount else null,
             networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset),
-            if (paceAddCount > 0) paceAddSumUs / paceAddCount else null)
+            if (paceAddCount > 0) paceAddSumUs / paceAddCount else null,
+            meter.snapshot(reset).skipPct)
         if (reset) {
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
