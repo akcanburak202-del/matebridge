@@ -1,7 +1,7 @@
 ---
 id: T-047
 title: Mac — HEVC kodlayıcı hız ölçümü (2800×1840'ta 120 fps mümkün mü?) ve ayar denemeleri
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-045]
@@ -70,3 +70,7 @@ NOTES 2026-10-01 "120 fps ölçümü": yakalama 120,0 fps, ama VideoToolbox HEVC
 - **Varsayımlar:** tezgâh sentetik içerik kullanıyor (gerçek ekran içeriği bit hızını/hızı değiştirebilir); RealTime=false + LLRC'siz modda bit hızı kontrolü gevşek olabilir (DataRateLimits hâlâ set).
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `MATEBRIDGE_FPS=120` ile canlı: `enc_behind` ≈ 0 ve kodlama ~6 ms mi; keyframe-on-demand ve dropped-frame sonrası kurtarma (LLRC'siz yolda); tablet çözücüsü ~120 fps'i kaldırıyor mu (üretici ölçümü 105–115); ağ bit hızı dalgalanması (burst); 60 fps yolunun değişmediği. Yalnız tezgâh koşturuldu; uygulama/SCK/ağ çalıştırılmadı.
 - **Açık sorular:** RealTime=false çıktı gecikmesi canlıda (yakalamadan tablete) ölçülmeli.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Canlı doğrulandı: `MATEBRIDGE_FPS=120` ile kodlama 120,0 fps, 8,2 ms, `enc_behind=0` (NOTES). 60 fps yolu değişmedi. Tezgâh kodlama birimini kullandığı için canlı oturumla aynı anda çalıştırılmamalı (00:15 ölçümü 73 fps'e düşmüştü).
