@@ -212,6 +212,28 @@ class KeyTrackerTest {
         assertEquals(1, keys().size)
     }
 
+    @Test fun ctrlShift980AreLocalChordsByScanCodeAndNeverSent() {
+        // keyCode is layout dependent and ignored: 9 -> speed down, 0 -> speed up, 8 -> stats
+        val d9 = key(10, code = 16, ctrl = true, shift = true)
+        assertTrue(d9.consumed); assertEquals(LocalAction.SPEED_DOWN, d9.local)
+        assertEquals(LocalAction.SPEED_UP, key(11, code = 7, ctrl = true, shift = true).local)
+        assertEquals(LocalAction.STATS, key(9, code = 15, ctrl = true, shift = true).local)
+        // duplicate DOWNs (with or without modifiers) and UPs stay local
+        assertTrue(key(10, code = 16).consumed)
+        assertEquals(LocalAction.NONE, key(10, code = 16, repeat = 1, ctrl = true, shift = true).local)
+        assertTrue(key(10, code = 16, down = false).consumed)
+        assertTrue(key(11, code = 7, down = false).consumed)
+        assertTrue(key(9, code = 15, down = false).consumed)
+        assertTrue(keys().isEmpty())
+    }
+
+    @Test fun digitsAloneOrWithOnlyCtrlGoToTheMac() {
+        assertEquals(LocalAction.NONE, key(10, code = 16).local)
+        assertEquals(LocalAction.NONE, key(11, code = 7, ctrl = true).local)
+        assertEquals(LocalAction.NONE, key(9, code = 15, shift = true).local)
+        assertEquals(3, keys().size)
+    }
+
     @Test fun ctrlShiftEscIsLocalBackgroundAndEscStaysLocalUntilUp() {
         val d = key(1, code = 111, ctrl = true, shift = true)
         assertTrue(d.consumed); assertEquals(LocalAction.BACKGROUND, d.local)

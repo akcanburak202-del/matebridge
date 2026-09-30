@@ -109,6 +109,10 @@ class KeyTracker {
         private const val SCAN_F1 = 59
         private const val SCAN_F2 = 60
         private const val SCAN_F3 = 61
+        // Number row by physical position (evdev): 8, 9, 0 mirror F3, F1, F2 for keyboards without F keys (T-038).
+        private const val SCAN_8 = 9
+        private const val SCAN_9 = 10
+        private const val SCAN_0 = 11
 
         /** PROTOCOL.md: `scan_code` if known, else `0x10000 + android_key_code`; null when both are 0 (not sent). */
         fun keyId(scanCode: Int, keyCode: Int): Int? = when {
@@ -121,15 +125,15 @@ class KeyTracker {
         fun isStatsToggle(f: KeyFrame) = localChord(f) == LocalAction.STATS
 
         /**
-         * The tablet-only chord this event belongs to, or NONE: Ctrl+Shift+F1 / F2 (pointer speed down / up), F3 (stats),
+         * The tablet-only chord this event belongs to, or NONE: Ctrl+Shift+F1 / F2 (pointer speed down / up), F3 (stats), or 9 / 0 / 8 by scan code,
          * Esc (back to Android). Matched by key code or the Linux scan code, because Esc may arrive as BACK.
          */
         fun localChord(f: KeyFrame): LocalAction {
             if (!f.ctrl || !f.shift) return LocalAction.NONE
             return when {
-                f.keyCode == KEYCODE_F1 || f.scanCode == SCAN_F1 -> LocalAction.SPEED_DOWN
-                f.keyCode == KEYCODE_F2 || f.scanCode == SCAN_F2 -> LocalAction.SPEED_UP
-                f.keyCode == KEYCODE_F3 || f.scanCode == SCAN_F3 -> LocalAction.STATS
+                f.keyCode == KEYCODE_F1 || f.scanCode == SCAN_F1 || f.scanCode == SCAN_9 -> LocalAction.SPEED_DOWN
+                f.keyCode == KEYCODE_F2 || f.scanCode == SCAN_F2 || f.scanCode == SCAN_0 -> LocalAction.SPEED_UP
+                f.keyCode == KEYCODE_F3 || f.scanCode == SCAN_F3 || f.scanCode == SCAN_8 -> LocalAction.STATS
                 f.keyCode == KEYCODE_ESCAPE || (f.scanCode == SCAN_ESC && f.keyCode == KEYCODE_BACK) -> LocalAction.BACKGROUND
                 else -> LocalAction.NONE
             }
