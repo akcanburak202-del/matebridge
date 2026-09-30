@@ -37,7 +37,10 @@ PROTOCOL.md §4 `0x11 KEY` istemci kuralları ve §7 istemci yükümlülükleri.
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `input/KeyTracker.kt` (saf): `KeyFrame` (device, scan, keyCode, down, repeatCount, ctrl, shift, capsOn, timeUs) ve `KeyDecision(consumed, localToggle)`. Tuş kimliği = scan != 0 ? scan : 0x10000+keyCode. Basılı tuşlar (device, kimlik) -> (scan, keyCode) haritasında. BACK düşürülür+tüketilir; repeat>0 ve ikinci DOWN düşürülür+tüketilir; takipte olmayan UP gönderilmez+tüketilir; Ctrl+Shift+F3 DOWN yerel geçiş, gönderilmez. `releaseDevice(device)` UP'ları üretir, `reset()` takibi sıfırlar. `isPhysicalKeyboard(...)` saf yüklem.
+2. `InputCapture.onKey(frame)`: yalnızca `accepting` iken KeyTracker'a gider, mesajlar mevcut `InputOutbox` üzerinden; accepting değilken düz F3/Ctrl+Shift+F3 yerel geçiş, diğerleri Android'e bırakılır. `releaseAll`/`forget` takibi sıfırlar (UP gönderilmez); `onDeviceRemoved` klavye cihazı için UP'ları gönderir (release-all yok). `key_msgs` sayacı (InputCounters + InputOutbox).
+3. `MainActivity.dispatchKeyEvent`: pen jesti bugünkü gibi; fiziksel klavye olayları `capture.onKey`'e, tüketilir; F3 yerel geçişi `toggleStats`.
+4. Testler: `KeyTrackerTest` + `InputCaptureTest` tarzı entegrasyon (host modeli yok, FakeSink).
 
 ## Handoff
 
