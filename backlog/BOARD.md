@@ -21,6 +21,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-027](tasks/T-027-krita-eraser-switch.md) | Çift dokunma Krita'da fırça değiştirmiyor — nedenini bul, karar 0006'yı doğrula ya da değiştir | 2 | orchestrator | [T-023] |
 | [T-028](tasks/T-028-black-screen-on-display-reuse.md) | Hızlı yeniden bağlanmada siyah ekran — sanal ekran yeniden kullanılınca tablet hiç kare çözmüyor | 2 | orchestrator | [T-014, T-015] |
 | [T-029](tasks/T-029-client-pen-contact-confirm.md) | Tablet — tek örneklik kalem temasını iletme (temas doğrulama), Krita'daki "diken"in tetikleyicisi | 2 | android-client-dev | [T-026] |
+| [T-030](tasks/T-030-host-config-with-startup-keyframe.md) | Mac — STARTUP/DECODE_ERROR keyframe isteğinde CODEC_CONFIG'i yeniden gönder (hızlı yeniden bağlanmada siyah ekran) | 2 | mac-host-dev | [T-014] |
 
 ## done
 

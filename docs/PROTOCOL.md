@@ -341,7 +341,7 @@ PONG (PING'i alan taraf hemen cevaplar):
 |---|---|---|
 | reason | u8 | `0` STARTUP, `1` DECODE_ERROR, `2` FRAMES_DROPPED |
 
-Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleştirilebilir.
+Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleştirilebilir. Sebep `STARTUP`, `DECODE_ERROR` ya da bilinmeyen ise host o keyframe'den önce güncel `CODEC_CONFIG`'i **yeniden gönderir** (istemci çözücüsünü yeniden kurmuş ve eski parametre setlerini atmış olabilir); `FRAMES_DROPPED` için göndermez. İstemci akış ortasında gelen, öncekiyle aynı `CODEC_CONFIG`'i kabul eder.
 
 ### 0x40 VIDEO_HELLO (C→H, video bağlantısı)
 

@@ -42,9 +42,13 @@ Tablet, host'un 10 saniyelik sanal ekran bekleme süresi (`display_grace_started
 
 Yeniden bağlanmadan önce 15 sn beklemek (ekran kapanıp yeniden kurulur).
 
+## Kök neden (2026-09-30, log + kod okuması; T-030 ile doğrulanacak)
+
+Yeniden kullanılan ekranda host `[CODEC_CONFIG, keyframe]`'i video bağlantısı açılır açılmaz gönderiyor. Tablet `STREAM_CONFIG`'i UI iş parçacığında daha sonra uyguluyor (`VideoRenderer.reconfigure` → `queue.reset(STARTUP, keepConfig = false)`) ve o ana kadar gelen config'i atıp `KEYFRAME_REQUEST(STARTUP)` gönderiyor. Host yalnızca keyframe gönderiyor (parametre setleri değişmediği için config yeniden üretilmiyor). Tablet config'siz keyframe'leri çözemiyor. Hipotez 1 ve 3'ün birleşimi; hipotez 2 yanlış.
+
 ## Plan
 
-_(Orkestratör doldurur.)_
+1. T-030 (host): STARTUP/DECODE_ERROR isteğinde config'i yeniden gönder. 2. Cihazda 5/5 hızlı yeniden bağlanma. 3. Gerekirse istemci sıralaması için ayrı kart (tablet config'i video bağlantısından önce uygulamalı).
 
 ## Handoff
 
