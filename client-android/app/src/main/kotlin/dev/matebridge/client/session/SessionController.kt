@@ -1,6 +1,7 @@
 package dev.matebridge.client.session
 
 import dev.matebridge.client.protocol.Bye
+import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.FrameDecoder
 import dev.matebridge.client.protocol.Hello
@@ -54,6 +55,9 @@ interface SessionListener {
 
     /** A PONG arrived (engine thread). Times are microseconds; [nowUs] is the client monotonic clock (`nanoTime/1000`). */
     fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
+
+    /** A CLIPBOARD message arrived on an accepted session (engine thread). Its data is private: never log it. */
+    fun onClipboard(msg: Clipboard) {}
 }
 
 /**
@@ -183,6 +187,7 @@ class SessionController(
         logEvent(e)
         val now = nowUs()
         if (e is SessionMachine.Event.Received && e.msg is Pong) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+        if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg)
         val actions = machine.handle(e, now)
         inputAllowed = machine.inputAllowed
         MbLog.sid = machine.currentSessionId

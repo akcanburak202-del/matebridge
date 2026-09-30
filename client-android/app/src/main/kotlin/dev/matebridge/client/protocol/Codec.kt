@@ -174,6 +174,10 @@ object Codec {
                 w.u16(msg.fps); w.u32(msg.bitrateKbps)
                 w.u8(msg.colorPrimaries); w.u8(msg.transfer); w.u8(msg.matrix); w.u8(msg.fullRange)
             }
+            is Clipboard -> {
+                require(msg.data.size <= Clipboard.MAX_DATA_BYTES) { "clipboard data exceeds ${Clipboard.MAX_DATA_BYTES} bytes" }
+                w.u32(msg.seq); w.u8(msg.kind); w.u8(0); w.u16(msg.data.size); w.bytes(msg.data.value)
+            }
             is Bye -> w.u8(msg.reason)
             is StreamPrefs -> { w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(0) }
             is Pen -> {
@@ -280,6 +284,10 @@ object Codec {
                     fps = r.u16(), bitrateKbps = r.u32(),
                     colorPrimaries = r.u8(), transfer = r.u8(), matrix = r.u8(), fullRange = r.u8(),
                 )
+            }
+            MsgType.CLIPBOARD -> {
+                val seq = r.u32(); val kind = r.u8(); r.skip(1); val len = r.u16()
+                Clipboard(seq, kind, Bytes(r.bytes(len)))
             }
             MsgType.BYE -> Bye(r.u8())
             MsgType.STREAM_PREFS -> { val fps = r.u16(); val pm = r.u16(); r.skip(4); StreamPrefs(fps, pm) }
