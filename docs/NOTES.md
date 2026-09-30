@@ -275,3 +275,16 @@ Kurulum: USB, host `MATEBRIDGE_FPS=120` (sanal ekran 120 Hz, SCK 1/240 s), içer
 - **Huawei 120 Hz kuralı bulundu (01:0x, T-048 deneyi):** `FrameRateManager` bizim paket için `strategyCode 60120: min 60, max 120, idle 60`. Dokunma yokken `touchinfo(1,1,3,60)` → **60 Hz**; ekrana dokunma/kaydırma sırasında `touchinfo(1,0,0,120)` → **120 Hz** (`display_hz=120`, `vsync_ms_p50=8.33`). Bu **SurfaceView yolunda da aynı**; TextureView (`render=texture`) fark yaratmadı (`isSurface 1` her iki yolda). Yani panel, kullanıcı tablete dokunurken/çizerken 120 Hz, yalnızca izlerken 60 Hz. 120 fps akışta dokunma sırasında tablet 103–110 fps çözüp gösteriyor (drop 12–20/sn), boşta ~90.
 - Sonuç: TextureView yolu gerekmiyor (T-048 dalı merge edilmedi). 120 fps akış, çizim sırasında ~100–110 fps gösterir; 120 Hz panelde düzensiz (bazı kareler 1, bazıları 2 vsync) ama gecikme ve hareket çözünürlüğü daha iyi. Karar kullanıcının gözüne kalıyor.
 - **Kullanıcı karşılaştırması (01:2x):** tablet ayarı "Orta" (120 Hz'e kadar) da "Dinamik" gibi: dokunma yokken 60 Hz, dokunurken 120 Hz. Kullanıcı: **"120 çizim sırasında daha akıcı"** (60'a göre). Host şimdilik `MATEBRIDGE_FPS=120` ile çalışıyor (elle başlatıldı; yeniden başlatmada 60'a döner). İstek: performans modu (düşük çözünürlük, daha düzgün 120 ya da 144) → protokol `STREAM_PREFS` (`proto/stream-prefs`), T-049/T-050.
+
+## 2026-10-01 — Performans modu cihazda (T-049, T-050)
+
+Host `STREAM_PREFS` ile yeniden yapılandırıyor; içerik: scratch `anim` (120/144 Hz), tablet dokunması `adb shell input swipe` ile.
+
+| Mod | Mac yakalama/kodlama | Tablet çözülen/gösterilen | Gecikme |
+|---|---|---|---|
+| Akıcı (120, 2800×1840) | 120 / 120, 8,6 ms | ~107 | ~18 ms |
+| Performans (120, 2100×1380) | 120 / 120, 5,7 ms | **~120** | **~12 ms** |
+| Performans 144 (144, 2100×1380) | 144 / 144, 6,9 ms | ~140 | ~13–17 ms |
+
+- Tablet ayarı ve panel: **Dinamik**: boşta 60 Hz, dokunurken 120 Hz (144 isteğinde de 120). **Orta**: boşta ve (adb swipe ile) dokunurken 60 Hz — önerilmez. **Yüksek**: boşta 60, dokunurken 120; 144 Hz video uygulamasına hiç verilmiyor. → Performans 144 modu kaldırıldı; önerilen: tablet "Dinamik", mod Performans (çizim/oyun) ya da Akıcı/Netlik (yazı).
+- ScreenCaptureKit, sanal ekran hangi yenileme hızıyla yaratıldıysa o hızda veriyor; yerinde mod değişimi (60→120) yakalamayı hızlandırmıyor. Host yenileme değişiminde ekranı yeniden yaratıyor (`display_recreate reason=refresh_change`) ve her cihazın son tercihini hatırlıyor (`from_stored=true`), böylece yeniden bağlanmada ekran yeniden yaratılmıyor.
