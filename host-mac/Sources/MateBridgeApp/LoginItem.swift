@@ -1,4 +1,5 @@
 import Foundation
+import MateBridgeCore
 import MateBridgeHost
 import ServiceManagement
 
@@ -16,9 +17,13 @@ final class LoginItem {
     private var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
     /// Reads the live status (the user may have changed it in System Settings > Login Items).
-    var isEnabled: Bool {
-        guard isBundled else { return false }
-        return SMAppService.mainApp.status == .enabled
+    var status: LoginItemStatus {
+        guard isBundled else { return .off }
+        switch SMAppService.mainApp.status {
+        case .enabled: return .enabled
+        case .requiresApproval: return .requiresApproval
+        default: return .off
+        }
     }
 
     /// Re-reads the status for the menu: clears a stale problem, shows the approval hint when macOS wants one.
@@ -36,10 +41,11 @@ final class LoginItem {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: Self.firstRunKey) else { return }
         defaults.set(true, forKey: Self.firstRunKey)
-        if !isEnabled { set(true) }
+        if !status.isRequested { set(true) }
     }
 
-    func toggle() { set(!isEnabled) }
+    /// A pending approval counts as requested, so toggling it cancels the registration.
+    func toggle() { set(!status.isRequested) }
 
     private func set(_ on: Bool) {
         problem = nil

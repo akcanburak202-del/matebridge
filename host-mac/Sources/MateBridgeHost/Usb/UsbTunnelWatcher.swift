@@ -37,7 +37,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
                 planner.reset()
                 scheduleTick(after: 0)
             } else {
-                removeTunnels()
+                startRemoval()
                 planner.reset()
                 lastActionFailed = false
                 onStateChange?(nil)
@@ -128,12 +128,33 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     }
 
     /// Only touches adb when its server already answers and a device is known, never starts anything.
-    private func removeTunnels() {
-        guard let adb = locateAdb(), let serial = lastDeviceSerial,
-              LoopbackProbe.isListening(port: Self.adbServerPort) else { return }
-        for port in planner.ports {
+    /// A failed or timed-out removal is retried (bounded, with backoff); a later re-enable cancels the retries.
+    private func startRemoval() {
+        guard let serial = lastDeviceSerial else { return }
+        removalAttempt(serial: serial, removal: TunnelRemoval(ports: planner.ports), gen: generation)
+    }
+
+    private func removalAttempt(serial: String, removal: TunnelRemoval, gen: Int) {
+        guard !enabled, gen == generation else { return }
+        // If the server is gone the tunnels went with it.
+        guard let adb = locateAdb(), LoopbackProbe.isListening(port: Self.adbServerPort) else { return }
+        var removal = removal
+        for port in removal.pending {
             _ = runner.run(adb, ["-s", serial, "reverse", "--remove", "tcp:\(port)"], timeout: Self.adbTimeout)
         }
-        logger.log(.info, "usb_tunnel", sessionID: 0, generation: 0, fields: "state=removed")
+        // Verify against the device's own list rather than trusting exit codes.
+        let list = runner.run(adb, ["-s", serial, "reverse", "--list"], timeout: Self.adbTimeout)
+        let present: Set<UInt16>? = list.succeeded ? AdbOutput.parseReverseList(list.output) : nil
+        switch removal.finishAttempt(stillPresent: present) {
+        case .done:
+            logger.log(.info, "usb_tunnel", sessionID: 0, generation: 0, fields: "state=removed")
+        case .retry(let delay, _):
+            let next = removal
+            queue.asyncAfter(deadline: .now() + delay) { [self] in
+                removalAttempt(serial: serial, removal: next, gen: gen)
+            }
+        case .gaveUp:
+            logger.log(.warning, "usb_tunnel", sessionID: 0, generation: 0, fields: "state=remove_failed")
+        }
     }
 }

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MateBridgeCore
 
 /// Runs a short-lived child process with a hard deadline, so a hung adb or launchctl can never wedge the caller.
 /// Blocking: call it from a background queue, never the main thread.
@@ -9,7 +10,10 @@ struct ProcessRunner: Sendable {
         var status: Int32?
         var output: String
         var timedOut: Bool
-        var succeeded: Bool { status == 0 }
+        /// Output exceeded the capture cap (the pipe was still drained): partial text must not be parsed.
+        var truncated = false
+        /// A truncated result counts as a failed probe.
+        var succeeded: Bool { status == 0 && !truncated }
     }
 
     var environment: [String: String] = [:]
@@ -56,15 +60,17 @@ struct ProcessRunner: Sendable {
         }
         // A grandchild holding the pipe open must not block us: give the reader a moment, then move on.
         if eof.wait(timeout: .now() + 0.5) == .timedOut { pipe.fileHandleForReading.readabilityHandler = nil }
-        return Result(status: timedOut ? nil : process.terminationStatus, output: buffer.string, timedOut: timedOut)
+        return Result(status: timedOut ? nil : process.terminationStatus, output: buffer.string, timedOut: timedOut,
+                      truncated: buffer.truncated)
     }
 }
 
 private final class LockedBuffer: @unchecked Sendable {
     private let lock = NSLock()
-    private var data = Data()
-    func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
-    var string: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
+    private var capture = BoundedCapture()  // 64 KiB cap, stdout and stderr combined (one pipe)
+    func append(_ d: Data) { lock.lock(); capture.append(d); lock.unlock() }
+    var string: String { lock.lock(); defer { lock.unlock() }; return capture.string }
+    var truncated: Bool { lock.lock(); defer { lock.unlock() }; return capture.truncated }
 }
 
 /// Plain TCP connect to loopback with a short deadline: "is something listening there?" without spawning anything.

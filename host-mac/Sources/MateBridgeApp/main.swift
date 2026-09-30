@@ -144,7 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         input.refreshStatus()  // permission may have changed in System Settings
         loginItem.refresh()  // read live: the user may have changed it in System Settings
-        loginItemEntry.state = loginItem.isEnabled ? .on : .off
+        loginItemEntry.state = loginItem.status.isRequested ? .on : .off
+        loginItemEntry.title = loginItem.status.menuTitle
         usbModeEntry.state = usbModeEnabled ? .on : .off
         showLoginProblem()
     }
