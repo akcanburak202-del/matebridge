@@ -1,7 +1,7 @@
 ---
 id: T-041
 title: Mac — protokol v1 şifreleme (el sıkışma, eşleşme kodu, AES-GCM kayıtları, Anahtar Zinciri)
-status: todo
+status: review
 phase: 4
 owner: mac-host-dev
 depends_on: [T-039]
@@ -46,8 +46,26 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** `b17bf3f` (kod + testler; bu Handoff ayrı commit). Dal `task/T-041-host-encryption` = `main` + `proto/crypto` merge.
+- **Dokunulan dosyalar:** `MateBridgeCore/`: `Messages.swift`, `Message.swift`, `ProtocolConstants.swift` (v1), yeni `Crypto/{CryptoTypes,KeySchedule,Records}.swift`, `Session/SessionMachine.swift`, yeni `Session/HostIdentityStore.swift`. `MateBridgeHost/`: yeni `Security/KeychainPairKeyStore.swift`, `Session/SessionServer.swift`. `MateBridgeApp/`: `ApprovalPanel.swift` (büyük kod), `main.swift` (1 satır). Testler: yeni `Tests/.../Crypto/*` (vektörler, makine uçtan uca, gizlilik, host kimliği), güncellenen `FixtureTests`, `CodecTests`, `SessionMachineTests`, `SessionInputWiringTests`.
+- **check.sh:** Swift (host + probe'lar) ve `crypto vectors up to date` / `protocol fixtures up to date` yeşil; 440 Swift testi geçiyor. `gradle (client-android)` kırmızı (435 testten 4'ü): beklenen, T-042 bekliyor (Kotlin fixture testleri yeni HELLO/HELLO_ACK/VIDEO_HELLO alanlarını henüz okumuyor).
+- **Kripto çekirdeği:** `crypto_vectors.json`'daki her değer yeniden üretiliyor (ecdh, transcript, prk, bütün anahtarlar, sas, new_pair_key, 4 kayıt). Bozulmuş kayıt (her bayt), yanlış anahtar, tekrar/sıra bozma, sayaç taşması, uzunluk sınırları (yalnızca 4 baytla), geçersiz/eğri dışı/sıkıştırılmış açık anahtar, `prk` silme, loglarda/`print`te gizlilik test edildi. Mikro ölçüm (yalnız mühürle+aç, `swift test` debug): 200 x 256 KiB kare, binlerce Mbit/s; kare başına tek kayıt, 80 Mbps için sorun yok (gerçek ağ/encoder darboğaz olur).
+- **Varsayımlar / tasarım notları:**
+  - `Hello.wirePayload`: transkript HELLO'nun **telden gelen** baytlarını hashler (yeniden kodlama değil; sona eklenen alanlar/kanonik olmayan UTF-8 hash'i bozmasın). `Hello ==` bu alanı yok sayar.
+  - `Hello.read` sürüm 1 değilse kalan alanları okumaz (yer tutucu döner), makine `VERSION_MISMATCH` (şifresiz, key_mode NONE) gönderir.
+  - PAIRED = onaylı cihaz listesinde **ve** Anahtar Zinciri'nde anahtar var. Yalnız anahtar ya da yalnız kayıt varsa PAIRING (anahtar tek başına güvenilmez).
+  - Kabul iki adımlı: makine `persistPairing` üretir, sunucu Anahtar Zinciri + cihaz listesini yazar, `pairingPersisted(stored:)` ile şifreli ACCEPTED gider; yazım hatasında REJECTED (tablet, host'ta olmayan anahtarı tutmasın).
+  - **Geçersiz `client_eph_pub` kontrolü devralmadan/meşgul kararından ÖNCE** yapılır: çöp anahtarla gelen HELLO yaşayan oturumu düşürmez.
+  - **`video_nonce` tekrarı reddedilir** (oturum başına, en çok 64 bağlantı): yakalanmış bir VIDEO_HELLO tekrarlanırsa aynı anahtar+nonce (counter 0) iki farklı akışı şifrelerdi (GCM nonce yeniden kullanımı). Protokol metni bunu söylemiyor; Kotlin tarafı her bağlantıda taze nonce ürettiği sürece etkisiz.
+  - Video bağlantısında VIDEO_HELLO'dan sonra istemciden gelen her bayt bağlantıyı kapatır (protokolde C->H başka mesaj yok).
+  - `HELLO` ardında düz metin baytı kalırsa protokol hatası (istemci ACK'ten önce şifreli yazamaz).
+  - Kayıt doğrulama/uzunluk hatası: BYE yok, release-all yolu aynı (`recordAuthFailed`), log `ev=record_auth_failed conn=.. counter=N reason=tag|length|counter`. `ev=handshake mode=paired|pairing`.
+  - Anahtar Zinciri: eski dosya tabanlı anahtar zinciri, `SecItemAdd/Update`, hesap = device_id hex; `removeAll` hesapları sayıp tek tek siler. `host_id`: `~/Library/Application Support/MateBridge/host-id` (0600).
+  - Bonjour TXT `v=1`.
+- **Test edilmeyenler / gerçek cihaz ve Mac'te doğrulanacaklar:**
+  - `KeychainPairKeyStore` hiç çalıştırılmadı (testlerde sahte): ilk yazma/okuma, imza kimliği değişince erişim istemi çıkıp çıkmadığı, login item ile açılışta okuma, "Onaylı cihazları unut" sonrası anahtarların gerçekten silinmesi (`security find-generic-password -s dev.matebridge.host.pair`).
+  - `SessionServer` ağ yolu (çerçeveleme geçişi, `VideoLink` kilit altında mühürleme+yazma sırası, send backlog) birim testlenemiyor (Network.framework); yalnızca derlendi. Gerçek Wi-Fi/USB akışı, eşleşme kodu penceresi (büyük kod + "Tabletteki kodla aynı mı?"), yeniden bağlanma, 80 Mbps video performansı orkestratörde.
+  - Kotlin ile bayt bayt uyum T-042 birleşince (vektörler + fixture'lar).
+- **Açık sorular (orkestratör için):**
+  1. **Devralma kimlik doğrulamasızdır:** `device_id` HELLO'da açık gider; LAN'da dinleyen biri aynı `device_id` ile HELLO gönderip yaşayan oturumu `SUPERSEDED` ile düşürebilir (PAIRED modda bile, çünkü devralma anahtar kanıtından önce olur). v0'da da vardı, şifreleme bunu kapatmıyor. Çözüm protokol değişikliği ister: yeni bağlantı ilk geçerli şifreli kaydı (ör. PING) gönderene dek eski oturum bırakılmaz. Bu kartta yapılmadı.
+  2. Aynı şekilde video bağlantısı: `session_id`+`config_id` açıkta; saldırgan taze `video_nonce` ile VIDEO_HELLO gönderip gerçek video bağlantısını değiştirebilir (kendisi görüntüyü çözemez, ama akışı keser). İstemci VIDEO_HELLO'dan sonra ilk kaydı (ya da host'un ilk şifreli karesini) doğrulayamazsa fark etmez. Olası çözüm: VIDEO_HELLO'ya `prk`'den türetilmiş bir etiket.
