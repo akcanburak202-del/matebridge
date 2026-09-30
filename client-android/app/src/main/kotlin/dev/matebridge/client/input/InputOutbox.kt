@@ -4,6 +4,7 @@ import dev.matebridge.client.protocol.Key
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pen
 import dev.matebridge.client.protocol.PenSample
+import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.PointerAbs
 import dev.matebridge.client.protocol.PointerRel
 import dev.matebridge.client.protocol.ReleaseAll
@@ -80,6 +81,7 @@ class InputOutbox(
             when (msg) {
                 is Pen -> counters.penMsgs++
                 is PointerAbs, is Scroll -> counters.touchMsgs++
+                is Pinch -> counters.pinchMsgs++
                 is Key -> counters.keyMsgs++
                 is PointerRel -> counters.relMsgs++
                 else -> counters.otherMsgs++
@@ -107,6 +109,12 @@ class InputOutbox(
             }
             if (a is Scroll && b is Scroll && a.phase == Scroll.CHANGED && b.phase == Scroll.CHANGED) {
                 return Scroll(b.timeUs, a.dx + b.dx, a.dy + b.dy, Scroll.CHANGED)
+            }
+            if (a is Pinch && b is Pinch && a.phase == Pinch.CHANGED && b.phase == Pinch.CHANGED && a.source == b.source) {
+                val scale = ((1.0 + a.scale) * (1.0 + b.scale) - 1.0).toFloat()
+                // The wire range is a hard limit of one message: a product outside it is not merged (held and sent apart).
+                if (scale < Pinch.MIN_SCALE || scale > Pinch.MAX_SCALE) return null
+                return Pinch(b.timeUs, scale, b.x, b.y, Pinch.CHANGED, b.source)
             }
             if (a is PointerRel && b is PointerRel && a.buttons == b.buttons) {
                 // A button change is never merged: only motion with an unchanged button state adds up.

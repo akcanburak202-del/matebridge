@@ -62,9 +62,12 @@ class TouchTrackerTest {
         all += t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0).messages()
         all += t.onFrame(touchFrame(TouchAction.DOWN, 12, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 12).messages()
         assertTrue(all.none { it is PointerAbs })
+        assertTrue("nothing is sent before the first movement is classified", all.isEmpty())
+        all += t.slide(20).messages()
         val sc = all.filterIsInstance<Scroll>()
-        assertEquals(listOf(Scroll.BEGAN), sc.map { it.phase })
+        assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), sc.map { it.phase })
         assertEquals(0f, sc[0].dx, 0f)
+        assertEquals(15f, sc[1].dy, 0.001f) // the movement that decided is not lost
         assertTrue(t.tick(500).none { it.msg is PointerAbs }) // the first finger never becomes a press
     }
 
@@ -74,9 +77,9 @@ class TouchTrackerTest {
         t.tick(50) // DOWN sent
         val out = t.onFrame(touchFrame(TouchAction.DOWN, 100, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 100)
         val msgs = out.messages()
-        assertEquals(2, msgs.size)
+        assertEquals(1, msgs.size)
         assertEquals(0, (msgs[0] as PointerAbs).buttons) // UP first
-        assertEquals(Scroll.BEGAN, (msgs[1] as Scroll).phase)
+        assertEquals(Scroll.BEGAN, (t.slide(120).messages()[0] as Scroll).phase)
     }
 
     @Test fun scrollDeltasAreCentroidMotionInMacPoints() {
@@ -85,11 +88,10 @@ class TouchTrackerTest {
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
         val out = t.onFrame(touchFrame(TouchAction.MOVE, 20, -1, finger(1, 1100f, 1000f), finger(2, 1300f, 1000f)), 20)
         val s = scrolls(out)
-        assertEquals(1, s.size)
-        assertEquals(Scroll.CHANGED, s[0].phase)
-        assertEquals(50f, s[0].dx, 0.001f)
-        assertEquals(50f, s[0].dy, 0.001f)
-        assertTrue(out[0].mergeable)
+        assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), s.map { it.phase })
+        assertEquals(50f, s[1].dx, 0.001f)
+        assertEquals(50f, s[1].dy, 0.001f)
+        assertTrue(out[1].mergeable)
         // No movement, no message.
         assertTrue(t.onFrame(touchFrame(TouchAction.MOVE, 30, -1, finger(1, 1100f, 1000f), finger(2, 1300f, 1000f)), 30).isEmpty())
     }
@@ -98,6 +100,7 @@ class TouchTrackerTest {
         val t = tracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        t.slide(10)
         val end = t.onFrame(touchFrame(TouchAction.UP, 40, 1, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 40)
         assertEquals(listOf(Scroll.ENDED), scrolls(end).map { it.phase })
         assertFalse(end[0].mergeable)
@@ -111,13 +114,15 @@ class TouchTrackerTest {
         val t = tracker()
         t.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        assertTrue(t.tick(100).isEmpty()) // undecided: nothing open, nothing to keep alive
+        t.slide(10)
         assertTrue(t.tick(100).isEmpty())
-        val ka = scrolls(t.tick(5 + TouchTracker.SCROLL_KEEPALIVE_MS))
+        val ka = scrolls(t.tick(10 + TouchTracker.SCROLL_KEEPALIVE_MS))
         assertEquals(1, ka.size)
         assertEquals(Scroll.CHANGED, ka[0].phase)
         assertEquals(0f, ka[0].dx, 0f)
-        assertTrue(t.tick(5 + TouchTracker.SCROLL_KEEPALIVE_MS + 50).isEmpty())
-        assertEquals(1, scrolls(t.tick(5 + 2 * TouchTracker.SCROLL_KEEPALIVE_MS)).size)
+        assertTrue(t.tick(10 + TouchTracker.SCROLL_KEEPALIVE_MS + 50).isEmpty())
+        assertEquals(1, scrolls(t.tick(10 + 2 * TouchTracker.SCROLL_KEEPALIVE_MS)).size)
     }
 
     @Test fun scrollNeedsTheStreamGeometry() {
@@ -133,6 +138,7 @@ class TouchTrackerTest {
         t.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
         val out = t.onFrame(touchFrame(TouchAction.DOWN, 9, 3, finger(1, 1000f, 900f), finger(2, 1200f, 900f), finger(3, 50f, 50f)), 9)
         assertTrue(out.isEmpty())
+        t.onFrame(touchFrame(TouchAction.MOVE, 20, -1, finger(1, 1000f, 930f), finger(2, 1200f, 930f), finger(3, 50f, 50f)), 20)
         assertEquals(listOf(Scroll.ENDED), scrolls(t.onFrame(touchFrame(TouchAction.UP, 30, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f), finger(3, 50f, 50f)), 30)).map { it.phase })
     }
 
@@ -148,6 +154,7 @@ class TouchTrackerTest {
         val b = tracker()
         b.onFrame(touchFrame(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f)), 0)
         b.onFrame(touchFrame(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 5)
+        b.slide(10)
         val c = b.onFrame(touchFrame(TouchAction.CANCEL, 60, -1, finger(1, 1000f, 900f), finger(2, 1200f, 900f)), 60)
         assertEquals(listOf(Scroll.CANCELLED), scrolls(c).map { it.phase })
         assertTrue(b.isIdle)

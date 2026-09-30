@@ -1,10 +1,12 @@
 package dev.matebridge.client.input
 
 import dev.matebridge.client.protocol.Buttons
+import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.PointerAbs
 import dev.matebridge.client.protocol.Scroll
 import dev.matebridge.client.stream.VideoViewport
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * Finger capture (PROTOCOL.md section 4 POINTER_ABS and SCROLL, section 7, decision 0006). Pure Kotlin.
@@ -13,11 +15,17 @@ import kotlin.math.abs
  *   (or until the finger moves more than [SLOP_PX], lifts, or the tick runs) so that a second finger
  *   arriving right after the first starts a scroll without a stray click. Once a DOWN was sent, its UP
  *   is always sent (finger up, cancel, second finger, pen entering range, release, stale guard).
- * - Two fingers: `SCROLL` BEGAN, CHANGED (centroid motion in Mac points via `width_pt/height_pt`),
+ * - Two fingers: nothing is sent when the second finger arrives. The first meaningful movement is classified once
+ *   ([TwoFingerClassifier], T-037) as a scroll or a pinch and stays that way until the fingers lift (or the gesture is
+ *   parked after [SCROLL_IDLE_END_MS]; a parked gesture restarts as the same kind).
+ * - Scroll: `SCROLL` BEGAN, CHANGED (centroid motion in Mac points via `width_pt/height_pt`),
  *   ENDED/CANCELLED. While the fingers rest a CHANGED(0,0) keepalive is sent every [SCROLL_KEEPALIVE_MS] so the
  *   host's 500 ms scroll watchdog does not end the gesture, but only for [SCROLL_IDLE_END_MS] of stillness:
  *   then the scroll is closed with ENDED (the keepalive must not hide a lost finger lift forever) and the
  *   fingers are parked; if the same two fingers move again a new BEGAN starts a new gesture.
+ * - Pinch: `PINCH` BEGAN (centre = midpoint, normalized), CHANGED (`scale = d / d_previous - 1`, clamped), ENDED when a
+ *   finger lifts; same keepalive and idle end as the scroll. Refused while the pen is in range / inside the gate hold,
+ *   like every new press.
  * - A pressed finger from which no event arrives for [PRESS_STALE_MS] is released with `buttons = 0` and
  *   forgotten until a fresh DOWN (last-resort guard, like the pen's).
  * - After a scroll ends (finger lift, cancel, pen entering range, release) no new press or scroll starts until
@@ -39,7 +47,7 @@ class TouchTracker(
     private val pen: PenPresence,
     private val counters: InputCounters = InputCounters(),
 ) {
-    private enum class Mode { IDLE, PENDING, POINTER, SCROLL, PARKED }
+    private enum class Mode { IDLE, PENDING, POINTER, UNDECIDED, SCROLL, PINCH, PARKED }
 
     /** Mac point size of the stream (STREAM_CONFIG.width_pt/height_pt); scrolling is off until known. */
     var widthPt = 0
@@ -64,6 +72,15 @@ class TouchTracker(
     private var lastScrollMs = 0L
     private var lastMotionMs = 0L
     private var lockout = false
+
+    // Two-finger classification baseline and pinch state (pixels).
+    private var baseD = 0f
+    private var baseCx = 0f
+    private var baseCy = 0f
+    private var prevD = 0f
+    private var centerX = 0f
+    private var centerY = 0f
+    private var parkedKind = TwoFingerClassifier.Kind.SCROLL
     private var gestureDevice = NO_DEVICE
     private var lockoutDevice = NO_DEVICE
 
@@ -75,13 +92,16 @@ class TouchTracker(
     /** A SCROLL BEGAN was sent and its ENDED/CANCELLED is owed. */
     val isScrolling get() = mode == Mode.SCROLL
 
+    /** A PINCH BEGAN was sent and its ENDED/CANCELLED is owed. */
+    val isPinching get() = mode == Mode.PINCH
+
     /** True while fingers of a finished scroll (or an abandoned palm) keep new touches locked out. */
     val isLockedOut get() = lockout
 
     /** True when (device, [id]) is exactly a pointer this tracker holds state for, so its release must reach [onFrame]. */
     fun follows(deviceId: Int, id: Int) = deviceId == gestureDevice && when (mode) {
         Mode.PENDING, Mode.POINTER -> id == pointerId
-        Mode.SCROLL, Mode.PARKED -> id == scrollA || id == scrollB
+        Mode.UNDECIDED, Mode.SCROLL, Mode.PINCH, Mode.PARKED -> id == scrollA || id == scrollB
         Mode.IDLE -> false
     }
 
@@ -127,12 +147,22 @@ class TouchTracker(
             Mode.SCROLL -> if (nowMs - lastMotionMs >= SCROLL_IDLE_END_MS) {
                 counters.scrollIdleEnds++
                 out += scroll(nowMs * 1000, 0f, 0f, Scroll.ENDED, mergeable = false)
+                parkedKind = TwoFingerClassifier.Kind.SCROLL
                 mode = Mode.PARKED
             } else if (nowMs - lastScrollMs >= SCROLL_KEEPALIVE_MS) {
                 lastScrollMs = nowMs
                 out += scroll(nowMs * 1000, 0f, 0f, Scroll.CHANGED, mergeable = true)
             }
-            Mode.PARKED, Mode.IDLE -> Unit
+            Mode.PINCH -> if (nowMs - lastMotionMs >= SCROLL_IDLE_END_MS) {
+                counters.scrollIdleEnds++
+                out += pinch(nowMs * 1000, 0f, Pinch.ENDED, mergeable = false)
+                parkedKind = TwoFingerClassifier.Kind.PINCH
+                mode = Mode.PARKED
+            } else if (nowMs - lastScrollMs >= SCROLL_KEEPALIVE_MS) {
+                lastScrollMs = nowMs
+                out += pinch(nowMs * 1000, 0f, Pinch.CHANGED, mergeable = true)
+            }
+            Mode.UNDECIDED, Mode.PARKED, Mode.IDLE -> Unit
         }
         return out
     }
@@ -190,18 +220,22 @@ class TouchTracker(
                 if (fp.id == pointerId || widthPt <= 0 || heightPt <= 0) return
                 val first = f.fingers.firstOrNull { it.id == pointerId }
                 if (mode == Mode.POINTER) out += ptr(f.timeUs, lastX, lastY, 0) // end the press first
-                mode = Mode.SCROLL
+                mode = Mode.UNDECIDED // nothing is sent until the first meaningful movement is classified
                 scrollA = pointerId
                 scrollB = fp.id
                 ax = first?.x ?: lastX
                 ay = first?.y ?: lastY
                 bx = fp.x
                 by = fp.y
-                lastScrollMs = nowMs
+                baseD = hypot(ax - bx, ay - by)
+                baseCx = (ax + bx) / 2f
+                baseCy = (ay + by) / 2f
+                prevD = baseD
+                centerX = baseCx
+                centerY = baseCy
                 lastMotionMs = nowMs
-                out += scroll(f.timeUs, 0f, 0f, Scroll.BEGAN, mergeable = false)
             }
-            Mode.SCROLL, Mode.PARKED -> Unit // a third finger is ignored
+            Mode.UNDECIDED, Mode.SCROLL, Mode.PINCH, Mode.PARKED -> Unit // a third finger is ignored
         }
     }
 
@@ -219,34 +253,76 @@ class TouchTracker(
                 lastX = fp.x; lastY = fp.y
                 out += ptr(f.timeUs, fp.x, fp.y, Buttons.LEFT)
             }
-            Mode.SCROLL, Mode.PARKED -> {
+            Mode.UNDECIDED, Mode.SCROLL, Mode.PINCH, Mode.PARKED -> {
                 val a = f.fingers.firstOrNull { it.id == scrollA } ?: return
                 val b = f.fingers.firstOrNull { it.id == scrollB } ?: return
                 if (a.x == ax && a.y == ay && b.x == bx && b.y == by) return // nothing moved
-                if (mode == Mode.PARKED) {
-                    if (blocked(nowMs)) { // a new scroll obeys the gate like a new press
-                        counters.palmRejects++
-                        endScroll()
-                        return
+                val d = hypot(a.x - b.x, a.y - b.y)
+                val cx = (a.x + b.x) / 2f
+                val cy = (a.y + b.y) / 2f
+                if (viewport().isEmpty) return
+                when (mode) {
+                    Mode.UNDECIDED -> {
+                        val common = hypot(cx - baseCx, cy - baseCy)
+                        val kind = TwoFingerClassifier.classify(baseD, d, common, SLOP_PX, MIN_DIST_PX) ?: return
+                        openTwoFinger(kind, f, a, b, d, cx, cy, nowMs, out)
                     }
-                    mode = Mode.SCROLL
-                    lastScrollMs = nowMs
-                    out += scroll(f.timeUs, 0f, 0f, Scroll.BEGAN, mergeable = false)
+                    Mode.PARKED -> openTwoFinger(parkedKind, f, a, b, d, cx, cy, nowMs, out)
+                    Mode.SCROLL -> scrollStep(f, a, b, nowMs, out)
+                    else -> pinchStep(f, a, b, d, cx, cy, nowMs, out)
                 }
-                lastMotionMs = nowMs
-                val dxPx = (a.x + b.x) / 2f - (ax + bx) / 2f
-                val dyPx = (a.y + b.y) / 2f - (ay + by) / 2f
-                ax = a.x; ay = a.y; bx = b.x; by = b.y
-                if (dxPx == 0f && dyPx == 0f) return
-                val vp = viewport()
-                if (vp.isEmpty) return
-                val dx = dxPx * widthPt / vp.width
-                val dy = dyPx * heightPt / vp.height
-                lastScrollMs = nowMs
-                out += scroll(f.timeUs, dx, dy, Scroll.CHANGED, mergeable = true)
             }
             Mode.IDLE -> Unit
         }
+    }
+
+    /** The classified gesture begins (or a parked one restarts): the gate is checked again like for a new press. */
+    private fun openTwoFinger(
+        kind: TwoFingerClassifier.Kind, f: TouchFrame, a: Finger, b: Finger, d: Float, cx: Float, cy: Float,
+        nowMs: Long, out: MutableList<Outgoing>,
+    ) {
+        if (blocked(nowMs)) {
+            counters.palmRejects++
+            endScroll()
+            return
+        }
+        lastScrollMs = nowMs
+        lastMotionMs = nowMs
+        if (kind == TwoFingerClassifier.Kind.SCROLL) {
+            mode = Mode.SCROLL
+            out += scroll(f.timeUs, 0f, 0f, Scroll.BEGAN, mergeable = false)
+            scrollStep(f, a, b, nowMs, out)
+        } else {
+            mode = Mode.PINCH
+            centerX = cx; centerY = cy
+            out += pinch(f.timeUs, 0f, Pinch.BEGAN, mergeable = false)
+            pinchStep(f, a, b, d, cx, cy, nowMs, out)
+        }
+    }
+
+    private fun scrollStep(f: TouchFrame, a: Finger, b: Finger, nowMs: Long, out: MutableList<Outgoing>) {
+        lastMotionMs = nowMs
+        val dxPx = (a.x + b.x) / 2f - (ax + bx) / 2f
+        val dyPx = (a.y + b.y) / 2f - (ay + by) / 2f
+        ax = a.x; ay = a.y; bx = b.x; by = b.y
+        if (dxPx == 0f && dyPx == 0f) return
+        val vp = viewport()
+        if (vp.isEmpty) return
+        val dx = dxPx * widthPt / vp.width
+        val dy = dyPx * heightPt / vp.height
+        lastScrollMs = nowMs
+        out += scroll(f.timeUs, dx, dy, Scroll.CHANGED, mergeable = true)
+    }
+
+    private fun pinchStep(f: TouchFrame, a: Finger, b: Finger, d: Float, cx: Float, cy: Float, nowMs: Long, out: MutableList<Outgoing>) {
+        lastMotionMs = nowMs
+        ax = a.x; ay = a.y; bx = b.x; by = b.y
+        centerX = cx; centerY = cy
+        val s = TwoFingerClassifier.scale(prevD, d)
+        prevD = d
+        if (s == 0f) return
+        lastScrollMs = nowMs
+        out += pinch(f.timeUs, s, Pinch.CHANGED, mergeable = true)
     }
 
     private fun up(f: TouchFrame, nowMs: Long, out: MutableList<Outgoing>) {
@@ -267,6 +343,11 @@ class TouchTracker(
                 out += scroll(f.timeUs, 0f, 0f, Scroll.ENDED, mergeable = false)
                 endScroll()
             }
+            Mode.PINCH -> if (id == scrollA || id == scrollB) {
+                out += pinch(f.timeUs, 0f, Pinch.ENDED, mergeable = false)
+                endScroll()
+            }
+            Mode.UNDECIDED -> if (id == scrollA || id == scrollB) endScroll() // nothing was sent
             Mode.PARKED -> if (id == scrollA || id == scrollB) endScroll() // already ended on the host
             Mode.IDLE -> Unit
         }
@@ -314,7 +395,12 @@ class TouchTracker(
                 lockout = true
                 lockoutDevice = gestureDevice
             }
-            Mode.PARKED -> {
+            Mode.PINCH -> {
+                out += pinch(timeUs, 0f, Pinch.CANCELLED, mergeable = false)
+                lockout = true
+                lockoutDevice = gestureDevice
+            }
+            Mode.UNDECIDED, Mode.PARKED -> {
                 lockout = true
                 lockoutDevice = gestureDevice
             }
@@ -331,12 +417,20 @@ class TouchTracker(
         return Outgoing(PointerAbs(timeUs, vp.normX(x), vp.normY(y), buttons, PointerAbs.SOURCE_TOUCH))
     }
 
+    private fun pinch(timeUs: Long, scale: Float, phase: Int, mergeable: Boolean): Outgoing {
+        val vp = viewport()
+        return Outgoing(Pinch(timeUs, scale, vp.normX(centerX), vp.normY(centerY), phase, Pinch.SOURCE_TOUCH), mergeable)
+    }
+
     private fun scroll(timeUs: Long, dx: Float, dy: Float, phase: Int, mergeable: Boolean) =
         Outgoing(Scroll(timeUs, dx, dy, phase), mergeable)
 
     companion object {
         const val HOLD_MS = 40L
         const val SLOP_PX = 16f
+
+        /** Floor of the finger distance the pinch threshold is relative to (noise guard for fingers starting very close). */
+        const val MIN_DIST_PX = 140f // TwoFingerClassifier.MIN_DIST_FRAC of the 2800 px panel
         const val SCROLL_KEEPALIVE_MS = 200L
         const val SCROLL_IDLE_END_MS = 5_000L
         const val PRESS_STALE_MS = 10_000L

@@ -29,6 +29,7 @@ object MsgType {
     const val SCROLL = 0x14
     const val PEN_GESTURE = 0x15
     const val RELEASE_ALL = 0x16
+    const val PINCH = 0x17
     const val PING = 0x20
     const val PONG = 0x21
     const val STATS = 0x22
@@ -226,6 +227,29 @@ data class Scroll(
         const val CHANGED = 2
         const val ENDED = 3
         const val CANCELLED = 4
+    }
+}
+
+/** Two-finger pinch (PROTOCOL.md section 4 PINCH). [scale] is relative to the previous PINCH message, clamped to [MIN_SCALE, MAX_SCALE]. */
+data class Pinch(
+    val timeUs: Long,
+    val scale: Float,
+    val x: Int,
+    val y: Int,
+    val phase: Int,
+    val source: Int,
+) : Message {
+    override val type get() = MsgType.PINCH
+
+    companion object {
+        const val BEGAN = 1
+        const val CHANGED = 2
+        const val ENDED = 3
+        const val CANCELLED = 4
+        const val SOURCE_TOUCH = 0
+        const val SOURCE_TOUCHPAD = 1
+        const val MIN_SCALE = -0.5f
+        const val MAX_SCALE = 1.0f
     }
 }
 

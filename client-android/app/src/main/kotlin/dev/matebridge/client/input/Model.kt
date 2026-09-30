@@ -165,6 +165,9 @@ class InputCounters {
     var scrollIdleEnds = 0L
     var keyMsgs = 0L
 
+    /** PINCH messages sent (every phase, keepalives included; T-037). */
+    var pinchMsgs = 0L
+
     /** POINTER_REL messages sent (touchpad and mouse, T-034). */
     var relMsgs = 0L
 
@@ -191,10 +194,10 @@ class InputCounters {
 
     fun any() = penSamples + penMsgs + touchMsgs + otherMsgs + palmRejects + merged + refused +
         tiltHeld + hoverStale + contactStale + exitAbsorbed + invalid + pressStale + scrollIdleEnds +
-        dupExact + dupPos + maxBatch + bounceDropped + keyMsgs + relMsgs + taps + tpScroll > 0
+        dupExact + dupPos + maxBatch + bounceDropped + keyMsgs + relMsgs + taps + tpScroll + pinchMsgs > 0
 
     fun fields(intervalMs: Long) =
-        "interval_ms=$intervalMs pen_samples=$penSamples pen_msgs=$penMsgs touch_msgs=$touchMsgs other_msgs=$otherMsgs rel_msgs=$relMsgs taps=$taps tp_scroll=$tpScroll " +
+        "interval_ms=$intervalMs pen_samples=$penSamples pen_msgs=$penMsgs touch_msgs=$touchMsgs other_msgs=$otherMsgs rel_msgs=$relMsgs taps=$taps tp_scroll=$tpScroll pinch_msgs=$pinchMsgs " +
             "palm_reject=$palmRejects merged=$merged refused=$refused tilt_held=$tiltHeld hover_stale=$hoverStale " +
             "contact_stale=$contactStale exit_absorbed=$exitAbsorbed invalid=$invalid press_stale=$pressStale " +
             "scroll_idle_end=$scrollIdleEnds key_msgs=$keyMsgs dup_exact=$dupExact dup_pos=$dupPos dup_pos_first=$dupPosFirst max_batch=$maxBatch bounce_dropped=$bounceDropped"
@@ -203,7 +206,7 @@ class InputCounters {
         penSamples = 0; penMsgs = 0; touchMsgs = 0; otherMsgs = 0; palmRejects = 0; merged = 0; refused = 0
         tiltHeld = 0; hoverStale = 0; contactStale = 0; exitAbsorbed = 0; invalid = 0; pressStale = 0; scrollIdleEnds = 0
         dupExact = 0; dupPos = 0; dupPosFirst = 0; maxBatch = 0; bounceDropped = 0; keyMsgs = 0
-        relMsgs = 0; taps = 0; tpScroll = 0
+        relMsgs = 0; taps = 0; tpScroll = 0; pinchMsgs = 0
     }
 }
 

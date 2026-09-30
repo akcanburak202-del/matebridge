@@ -1,6 +1,7 @@
 package dev.matebridge.client.input
 
 import dev.matebridge.client.protocol.PenGesture
+import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.ReleaseAll
 import dev.matebridge.client.protocol.Scroll
 import dev.matebridge.client.stream.VideoViewport
@@ -11,13 +12,13 @@ import dev.matebridge.client.stream.VideoViewport
  * message and every lifecycle release enters the one FIFO from the same thread, in the order produced).
  *
  * Stuck-input design, one line per path (each has a named test in InputCaptureTest / *TrackerTest):
- *  - `ACTION_CANCEL`: trackers turn it into `flags = 0` / finger UP / SCROLL CANCELLED;
+ *  - `ACTION_CANCEL`: trackers turn it into `flags = 0` / finger UP / SCROLL / PINCH CANCELLED;
  *  - focus loss, background, device removal, deactivation: [releaseAll] flushes held data, sends the
  *    natural releases, then `RELEASE_ALL`, and (focus/background) suspends input until [resume];
  *  - after a release a stroke in progress resumes as hover only (PenTracker needs a fresh DOWN);
  *  - a pen DOWN is held until confirmed (T-029): the host knows nothing of it, so every release path above just drops it
  *    (no extra release), while the pen counts as in range for the finger gate and the (device, pointer) pair is followed;
- *  - backpressure: only plain hover PEN and SCROLL CHANGED are ever held ([InputOutbox]); a release flushes
+ *  - backpressure: only plain hover PEN, SCROLL CHANGED and PINCH CHANGED are ever held ([InputOutbox]); a release flushes
  *    them first and is never held; a queue overflow means the connection is reset, the model is forgotten
  *    ([onRefused]) and the host releases on disconnect;
  *  - pointer capture (touchpad and mouse, T-034): [onPointerCaptureLost] and every release path send `buttons = 0` for a
@@ -57,6 +58,7 @@ class InputCapture(
     internal val penHostInRange get() = pen.state != PenTracker.State.OUT
     internal val fingerPressed get() = touch.isPressed
     internal val scrollOpen get() = touch.isScrolling
+    internal val pinchOpen get() = touch.isPinching
 
     // PointerFollowers: releases are routed by the (device, pointer id) pair, never by pointer id alone.
     override fun followsPen(deviceId: Int, pointerId: Int) = pen.followsPointer(deviceId, pointerId)
@@ -199,7 +201,7 @@ class InputCapture(
         var queued = false
         try {
             // Inside the try: a failing log hook must not be able to skip the release or the reset below.
-            onEvent("release_all", "reason=$reason contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)}")
+            onEvent("release_all", "reason=$reason contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)} pinch=${flag(pinchOpen)}")
             val outs = ArrayList<Outgoing>(3)
             outs += pen.release(nowMs)
             // Pointer sources go last: buttons = 0 for everything reported pressed sits immediately before RELEASE_ALL
@@ -246,7 +248,7 @@ class InputCapture(
 
     /** A new control connection starts: the host has no state for us, forget ours without sending. */
     fun onSessionReset() {
-        onEvent("session_reset", "contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)}")
+        onEvent("session_reset", "contact=${flag(penInContact)} pressed=${flag(fingerPressed)} scroll=${flag(scrollOpen)} pinch=${flag(pinchOpen)}")
         forget()
     }
 
@@ -255,7 +257,7 @@ class InputCapture(
     }
 
     private fun forget() {
-        scrollOwner = Src.NONE
+        gestureOwner = Src.NONE
         pen.reset()
         touch.reset()
         doubleTap.reset()
@@ -266,25 +268,42 @@ class InputCapture(
 
     private enum class Src { NONE, TOUCH, PAD }
 
-    /** Which tracker owns the host's single open phased SCROLL gesture (PROTOCOL.md section 4). */
-    private var scrollOwner = Src.NONE
+    /** Which tracker owns the host's single open phased gesture (SCROLL or PINCH, PROTOCOL.md section 4), and which kind. */
+    private var gestureOwner = Src.NONE
+    private var gestureKind = 0
+
+    private fun kindOf(m: dev.matebridge.client.protocol.Message) = when {
+        m is Scroll && m.phase != Scroll.NONE -> KIND_SCROLL
+        m is Pinch -> KIND_PINCH
+        else -> 0
+    }
+
+    private fun phaseOf(m: dev.matebridge.client.protocol.Message) = when (m) {
+        is Scroll -> m.phase
+        is Pinch -> m.phase
+        else -> -1
+    }
 
     /**
-     * One open scroll gesture at a time: the host has one. The first source to BEGIN owns it; the other source's phased
-     * SCROLL messages (BEGAN, CHANGED, ENDED, CANCELLED) are dropped until the owner ends. The suppressed tracker thinks
-     * its gesture is open, which is harmless: it sends nothing the host needs, and its ENDED is dropped as well.
-     * Wheel notches (phase NONE) are not phased and always pass.
+     * One open phased gesture at a time, a SCROLL or a PINCH: the host has one. The first source to BEGIN owns it; the
+     * other source's phased messages (BEGAN, CHANGED, ENDED, CANCELLED) and the owner's messages of the other kind are
+     * dropped until the owner ends. The suppressed tracker thinks its gesture is open, which is harmless: it sends
+     * nothing the host needs, and its ENDED is dropped as well. A BEGAN of the owner (either kind) passes: the host
+     * ends its previous gesture first. Wheel notches (SCROLL phase NONE) are not phased and always pass.
      */
     private fun gate(src: Src, outs: List<Outgoing>): List<Outgoing> {
-        if (outs.none { it.msg is Scroll && (it.msg as Scroll).phase != Scroll.NONE }) return outs
+        if (outs.none { kindOf(it.msg) != 0 }) return outs
         val kept = ArrayList<Outgoing>(outs.size)
         for (o in outs) {
             val m = o.msg
-            if (m !is Scroll || m.phase == Scroll.NONE) { kept += o; continue }
-            when (m.phase) {
-                Scroll.BEGAN -> if (scrollOwner == Src.NONE || scrollOwner == src) { scrollOwner = src; kept += o }
-                Scroll.CHANGED -> if (scrollOwner == src) kept += o
-                else -> if (scrollOwner == src) { scrollOwner = Src.NONE; kept += o }
+            val kind = kindOf(m)
+            if (kind == 0) { kept += o; continue }
+            when (phaseOf(m)) {
+                Scroll.BEGAN -> if (gestureOwner == Src.NONE || gestureOwner == src) {
+                    gestureOwner = src; gestureKind = kind; kept += o
+                }
+                Scroll.CHANGED -> if (gestureOwner == src && gestureKind == kind) kept += o
+                else -> if (gestureOwner == src && gestureKind == kind) { gestureOwner = Src.NONE; kept += o }
             }
         }
         return kept
@@ -300,5 +319,7 @@ class InputCapture(
 
     companion object {
         const val STATS_INTERVAL_MS = 1000L
+        private const val KIND_SCROLL = 1
+        private const val KIND_PINCH = 2
     }
 }

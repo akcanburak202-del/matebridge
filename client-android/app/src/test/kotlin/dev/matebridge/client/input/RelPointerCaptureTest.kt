@@ -133,7 +133,8 @@ class RelPointerCaptureTest {
     @Test fun padScrollIsIgnoredWhileTouchscreenOwnsTheHostScrollAndOwnershipIsFreedAfterwards() {
         touch(TouchAction.DOWN, 0, 0, Finger(0, 500f, 500f))
         touch(TouchAction.DOWN, 10, 1, Finger(0, 500f, 500f), Finger(1, 700f, 500f))
-        assertEquals(listOf(Scroll.BEGAN), phases())
+        touch(TouchAction.MOVE, 20, -1, Finger(0, 500f, 540f), Finger(1, 700f, 540f))
+        assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), phases())
         sink.sent.clear()
         openPadScroll() // dropped entirely
         assertTrue(phases().isEmpty())

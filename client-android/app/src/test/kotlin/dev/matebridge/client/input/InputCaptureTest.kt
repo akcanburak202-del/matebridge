@@ -124,6 +124,7 @@ class InputCaptureTest {
     @Test fun focusLossDuringATwoFingerScrollCancelsTheScroll() {
         touch(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f))
         touch(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f))
+        touch(TouchAction.MOVE, 10, -1, finger(1, 1000f, 930f), finger(2, 1200f, 930f))
         assertTrue(sink.host.scrollOpen)
         releaseAll(ReleaseAll.FOCUS_LOST, 20)
         assertEquals(Scroll.CANCELLED, sink.sent.filterIsInstance<Scroll>().last().phase)
@@ -411,9 +412,9 @@ class InputCaptureTest {
         cap.resume()
         cap.onSessionReset()
         assertTrue(events.toString(), events.contains("input_active on=1"))
-        assertTrue(events.toString(), events.contains("release_all reason=2 contact=1 pressed=0 scroll=0"))
+        assertTrue(events.toString(), events.contains("release_all reason=2 contact=1 pressed=0 scroll=0 pinch=0"))
         assertTrue(events.toString(), events.contains("input_resume"))
-        assertTrue(events.toString(), events.contains("session_reset contact=0 pressed=0 scroll=0"))
+        assertTrue(events.toString(), events.contains("session_reset contact=0 pressed=0 scroll=0 pinch=0"))
     }
 
     @Test fun invalidCodecInputIsNeverProduced() {

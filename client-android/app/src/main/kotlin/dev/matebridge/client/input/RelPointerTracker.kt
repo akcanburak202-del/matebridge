@@ -1,6 +1,7 @@
 package dev.matebridge.client.input
 
 import dev.matebridge.client.protocol.Buttons
+import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.PointerRel
 import dev.matebridge.client.protocol.Scroll
 import kotlin.math.hypot
@@ -40,6 +41,8 @@ object PadTuning {
 
     const val SCROLL_KEEPALIVE_MS = 200L
     const val SCROLL_IDLE_END_MS = 5_000L
+    // The two-finger scroll/pinch decision itself (6 percent distance change, slop, noise floor) is in [TwoFingerClassifier];
+    // on the pad the scroll slop is extent * [SLOP_FRAC] and the noise floor extent * [TwoFingerClassifier.MIN_DIST_FRAC].
 }
 
 enum class PadAction { DOWN, MOVE, UP, CANCEL, BUTTON }
@@ -86,7 +89,9 @@ class MouseFrame(
  *  - a short, still touch is a tap: LEFT down+up (one finger) or RIGHT down+up (two fingers);
  *  - a physical click is LEFT, or RIGHT when two fingers rest on the pad at the press; while a button is held the
  *    fastest finger drags;
- *  - two fingers moving together scroll (BEGAN, CHANGED, ENDED; keepalive and idle end as in [TouchTracker]);
+ *  - two fingers moving together scroll (BEGAN, CHANGED, ENDED; keepalive and idle end as in [TouchTracker]), unless the
+ *    first meaningful movement changes their distance instead: then it is a pinch (PINCH, source TOUCHPAD, centre 0),
+ *    decided once per gesture by [TwoFingerClassifier] (T-037);
  *  - going from two fingers to one, or to three, locks cursor motion until every finger has lifted.
  * Mouse: relative motion, full button state, wheel notches as SCROLL NONE.
  *
@@ -153,6 +158,9 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     private var twoX = 0f
     private var twoY = 0f
     private var scroll = ScrollMode.NONE
+    private var pinch = ScrollMode.NONE
+    private var twoD0 = 0f
+    private var prevD = 0f
     private var lastScrollMs = 0L
     private var lastMotionMs = 0L
     private var lastFrameUs = NEVER_US
@@ -162,8 +170,11 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     /** A SCROLL BEGAN was sent for the pad and its ENDED is owed. */
     val isScrolling get() = scroll == ScrollMode.OPEN
 
+    /** A PINCH BEGAN was sent for the pad and its ENDED is owed. */
+    val isPinching get() = pinch == ScrollMode.OPEN
+
     /** True when the tracker holds anything the host may hold (a reported button or an open scroll). */
-    val holdsState get() = reported != 0 || scroll == ScrollMode.OPEN
+    val holdsState get() = reported != 0 || scroll == ScrollMode.OPEN || pinch == ScrollMode.OPEN
 
     fun holdsDevice(deviceId: Int) = deviceId == padDevice || deviceId == mouseDevice
 
@@ -203,14 +214,14 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         // Gesture start / finger count changes.
         if (before == 0 && n > 0) {
             gestureStartMs = nowMs; maxCount = 0; moved = false; clicked = false; locked = false; armed = false
-            accX = 0f; accY = 0f; twoX = 0f; twoY = 0f; scroll = ScrollMode.NONE
+            accX = 0f; accY = 0f; twoX = 0f; twoY = 0f; scroll = ScrollMode.NONE; pinch = ScrollMode.NONE
             downPos.clear()
         }
         for (id in added) downPos[id] = next[id]!!.copyOf()
         if (n > maxCount) maxCount = n
-        if (n == 2 && before < 2) { twoX = 0f; twoY = 0f }
+        if (n == 2 && before < 2) resetTwoBaseline()
         if (n >= 3 || (before >= 2 && n in 1 until before)) {
-            if (scroll != ScrollMode.NONE) endScroll(timeUs, out)
+            if (scroll != ScrollMode.NONE || pinch != ScrollMode.NONE) endScroll(timeUs, out)
             locked = true
         }
         // Includes the departing finger of an UP frame: its final position counts (DOWN, then UP elsewhere, is no tap).
@@ -240,7 +251,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
                         }
                     }
                 }
-                2 -> twoFingerMotion(deltas, base, slop, nowMs, timeUs, out)
+                2 -> twoFingerMotion(deltas, base, slop, extent, nowMs, timeUs, out)
                 else -> Unit
             }
         }
@@ -249,35 +260,72 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         return out
     }
 
-    private fun twoFingerMotion(deltas: Map<Int, FloatArray>, base: Float, slop: Float, nowMs: Long, timeUs: Long, out: MutableList<Outgoing>) {
+    private fun resetTwoBaseline() {
+        twoX = 0f; twoY = 0f
+        val pts = cur.values.toList()
+        twoD0 = if (pts.size == 2) hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]) else 0f
+        prevD = twoD0
+    }
+
+    private fun twoFingerMotion(deltas: Map<Int, FloatArray>, base: Float, slop: Float, extent: Float, nowMs: Long, timeUs: Long, out: MutableList<Outgoing>) {
         val ds = deltas.values.toList()
         if (ds.size < 2) return
         val dx = (ds[0][0] + ds[1][0]) / 2f
         val dy = (ds[0][1] + ds[1][1]) / 2f
+        val pts = cur.values.toList()
+        if (pts.size < 2) return
+        val d = hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1])
+        if (pinch != ScrollMode.NONE) { // a pinch is decided for the whole gesture
+            pinchMotion(d, nowMs, timeUs, out)
+            return
+        }
+        if (scroll == ScrollMode.NONE) {
+            twoX += dx; twoY += dy
+            val kind = TwoFingerClassifier.classify(twoD0, d, hypot(twoX, twoY), slop, extent * TwoFingerClassifier.MIN_DIST_FRAC) ?: return
+            moved = true
+            lastScrollMs = nowMs; lastMotionMs = nowMs
+            if (kind == TwoFingerClassifier.Kind.PINCH) {
+                pinch = ScrollMode.OPEN
+                out += pinchMsg(timeUs, 0f, Pinch.BEGAN, false)
+                pinchStep(d, timeUs, out) // prevD is the baseline distance: the movement so far goes out with the first CHANGED
+            } else {
+                scroll = ScrollMode.OPEN
+                out += scrollMsg(timeUs, 0f, 0f, Scroll.BEGAN, false)
+                out += scrollMsg(timeUs, twoX * base * PadTuning.SCROLL_GAIN, twoY * base * PadTuning.SCROLL_GAIN, Scroll.CHANGED, true)
+            }
+            twoX = 0f; twoY = 0f
+            return
+        }
         if (dx == 0f && dy == 0f) return
         when (scroll) {
-            ScrollMode.NONE -> {
-                twoX += dx; twoY += dy
-                if (hypot(twoX, twoY) > slop) {
-                    scroll = ScrollMode.OPEN
-                    moved = true
-                    lastScrollMs = nowMs; lastMotionMs = nowMs
-                    out += scrollMsg(timeUs, 0f, 0f, Scroll.BEGAN, false)
-                    out += scrollMsg(timeUs, twoX * base * PadTuning.SCROLL_GAIN, twoY * base * PadTuning.SCROLL_GAIN, Scroll.CHANGED, true)
-                    twoX = 0f; twoY = 0f
-                }
-            }
             ScrollMode.PARKED -> {
                 scroll = ScrollMode.OPEN
                 lastScrollMs = nowMs; lastMotionMs = nowMs
                 out += scrollMsg(timeUs, 0f, 0f, Scroll.BEGAN, false)
                 out += scrollMsg(timeUs, dx * base * PadTuning.SCROLL_GAIN, dy * base * PadTuning.SCROLL_GAIN, Scroll.CHANGED, true)
             }
-            ScrollMode.OPEN -> {
+            else -> {
                 lastScrollMs = nowMs; lastMotionMs = nowMs
                 out += scrollMsg(timeUs, dx * base * PadTuning.SCROLL_GAIN, dy * base * PadTuning.SCROLL_GAIN, Scroll.CHANGED, true)
             }
         }
+    }
+
+    private fun pinchMotion(d: Float, nowMs: Long, timeUs: Long, out: MutableList<Outgoing>) {
+        if (d == prevD) return // nothing changed the distance (a slide does not move a pinch)
+        if (pinch == ScrollMode.PARKED) {
+            pinch = ScrollMode.OPEN
+            out += pinchMsg(timeUs, 0f, Pinch.BEGAN, false)
+        }
+        lastMotionMs = nowMs
+        lastScrollMs = nowMs
+        pinchStep(d, timeUs, out)
+    }
+
+    private fun pinchStep(d: Float, timeUs: Long, out: MutableList<Outgoing>) {
+        val s = TwoFingerClassifier.scale(prevD, d)
+        prevD = d
+        if (s != 0f) out += pinchMsg(timeUs, s, Pinch.CHANGED, true)
     }
 
     /** Physical buttons of the pad; a press with two fingers on the pad is a RIGHT click, with one a LEFT click. */
@@ -289,7 +337,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         val mapped = (eff and Buttons.LEFT.inv()) or (if (leftNow) padLeftMapped else 0)
         if (mapped and padMask.inv() != 0) { // a new press
             clicked = true
-            if (scroll != ScrollMode.NONE) endScroll(timeUs, out)
+            if (scroll != ScrollMode.NONE || pinch != ScrollMode.NONE) endScroll(timeUs, out)
         }
         padMask = mapped
         emitButtons(timeUs, out)
@@ -306,14 +354,17 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
             out += Outgoing(PointerRel(timeUs, 0f, 0f, reported or bit))
             out += Outgoing(PointerRel(timeUs, 0f, 0f, reported))
         }
-        scroll = ScrollMode.NONE
+        endScroll(timeUs, out) // a gesture still open (both fingers lifted in one frame) must not stay open on the host
         locked = false; armed = false; maxCount = 0; moved = false; clicked = false
         downPos.clear()
     }
 
     private fun endScroll(timeUs: Long, out: MutableList<Outgoing>) {
         if (scroll == ScrollMode.OPEN) out += scrollMsg(timeUs, 0f, 0f, Scroll.ENDED, false)
+        if (pinch == ScrollMode.OPEN) out += pinchMsg(timeUs, 0f, Pinch.ENDED, false)
         scroll = ScrollMode.NONE
+        pinch = ScrollMode.NONE
+        resetTwoBaseline()
     }
 
     // ---- mouse ----
@@ -343,6 +394,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         val out = ArrayList<Outgoing>(2)
         val timeUs = nowMs * 1000
         if (scroll == ScrollMode.OPEN) out += scrollMsg(timeUs, 0f, 0f, Scroll.ENDED, false)
+        if (pinch == ScrollMode.OPEN) out += pinchMsg(timeUs, 0f, Pinch.ENDED, false)
         if (reported != 0) {
             reported = 0
             out += Outgoing(PointerRel(timeUs, 0f, 0f, 0))
@@ -357,6 +409,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         padMask = 0; mouseMask = 0; reported = 0; padLeftActive = false
         padSync.desync(); mouseSync.desync()
         scroll = ScrollMode.NONE
+        pinch = ScrollMode.NONE
         locked = false; armed = false; moved = false; clicked = false; maxCount = 0
         settling = true
         lastFrameUs = NEVER_US
@@ -365,8 +418,20 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
 
     /** Scroll keepalive (host watchdog, PROTOCOL.md section 7) and idle end, like the finger scroll. */
     fun tick(nowMs: Long): List<Outgoing> {
-        if (scroll != ScrollMode.OPEN) return emptyList()
         val timeUs = nowMs * 1000
+        if (pinch == ScrollMode.OPEN) {
+            if (nowMs - lastMotionMs >= PadTuning.SCROLL_IDLE_END_MS) {
+                counters.scrollIdleEnds++
+                pinch = ScrollMode.PARKED
+                return listOf(pinchMsg(timeUs, 0f, Pinch.ENDED, false))
+            }
+            if (nowMs - lastScrollMs >= PadTuning.SCROLL_KEEPALIVE_MS) {
+                lastScrollMs = nowMs
+                return listOf(pinchMsg(timeUs, 0f, Pinch.CHANGED, true))
+            }
+            return emptyList()
+        }
+        if (scroll != ScrollMode.OPEN) return emptyList()
         if (nowMs - lastMotionMs >= PadTuning.SCROLL_IDLE_END_MS) {
             counters.scrollIdleEnds++
             scroll = ScrollMode.PARKED
@@ -398,6 +463,9 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         val gain = (PadTuning.GAIN_MIN + (PadTuning.GAIN_MAX - PadTuning.GAIN_MIN) * t) * padSpeed
         out += Outgoing(PointerRel(timeUs, bx * gain, by * gain, reported), true)
     }
+
+    private fun pinchMsg(timeUs: Long, scale: Float, phase: Int, mergeable: Boolean) =
+        Outgoing(Pinch(timeUs, scale, 0, 0, phase, Pinch.SOURCE_TOUCHPAD), mergeable)
 
     private fun scrollMsg(timeUs: Long, dx: Float, dy: Float, phase: Int, mergeable: Boolean): Outgoing {
         counters.tpScroll++

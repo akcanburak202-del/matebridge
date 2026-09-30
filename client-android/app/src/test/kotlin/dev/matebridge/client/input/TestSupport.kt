@@ -331,3 +331,10 @@ class FakeFollowers(
     override val penContactDevice get() = pen?.first ?: NO_DEVICE
     override val touchDevice get() = finger?.first ?: NO_DEVICE
 }
+
+/**
+ * After two fingers went down at (1000, 900) and (1200, 900): both slide [dy] px down. Two-finger gestures are classified at
+ * the first meaningful movement (T-037), so this is what opens the scroll (BEGAN, then CHANGED); 30 px is beyond the slop.
+ */
+fun TouchTracker.slide(ms: Long, dy: Float = 30f) =
+    onFrame(touchFrame(TouchAction.MOVE, ms, -1, finger(1, 1000f, 900f + dy), finger(2, 1200f, 900f + dy)), ms)
