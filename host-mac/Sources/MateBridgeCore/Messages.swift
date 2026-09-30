@@ -47,6 +47,16 @@ public enum HelloStatus: UInt8, Sendable {
     case accepted = 0, pendingApproval = 1, rejected = 2, versionMismatch = 3, busy = 4
 }
 
+/// HELLO_ACK.key_mode (PROTOCOL.md 4, 9). An unknown value is a protocol error.
+public enum KeyMode: UInt8, Sendable {
+    /// Terminal answer (VERSION_MISMATCH, BUSY, a first-answer REJECTED) and the second, encrypted HELLO_ACK: no key exchange.
+    case none = 0
+    /// Known device with a pair key: `ikm = pair_key || ecdh`.
+    case paired = 1
+    /// New pairing: `ikm = ecdh`, both sides show the same code.
+    case pairing = 2
+}
+
 public enum Codec: UInt8, Sendable {
     case h264 = 1, hevc = 2
 }
@@ -132,10 +142,24 @@ public struct Hello: Equatable, Sendable {
     public var capabilities: Capabilities
     /// Shown in the approval dialog. Never log it.
     public var deviceName: String
+    /// 16 random bytes per connection (PROTOCOL.md 9).
+    public var clientNonce: [UInt8]
+    /// Ephemeral P-256 public key, uncompressed (`04 || X || Y`, 65 bytes).
+    public var clientEphPub: [UInt8]
+    /// The payload exactly as received. The handshake transcript hashes these bytes, not a re-encoding
+    /// (extra trailing bytes or non-canonical UTF-8 must not change the hash). nil for locally built values.
+    public internal(set) var wirePayload: [UInt8]?
 
     public init(protocolVersion: UInt16 = ProtocolConstants.protocolVersion, deviceID: DeviceID,
                 screenWidthPx: UInt16, screenHeightPx: UInt16, densityDpi: UInt16, maxRefreshHz: UInt16,
-                capabilities: Capabilities, deviceName: String) {
+                capabilities: Capabilities, deviceName: String,
+                clientNonce: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.nonceSize),
+                clientEphPub: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.publicKeySize)) {
+        precondition(clientNonce.count == ProtocolConstants.nonceSize
+                     && clientEphPub.count == ProtocolConstants.publicKeySize)
+        self.clientNonce = clientNonce
+        self.clientEphPub = clientEphPub
+        self.wirePayload = nil
         self.protocolVersion = protocolVersion
         self.deviceID = deviceID
         self.screenWidthPx = screenWidthPx
@@ -155,16 +179,44 @@ public struct Hello: Equatable, Sendable {
         w.u16(maxRefreshHz)
         w.u32(capabilities.rawValue)
         w.str8(deviceName)
+        w.raw(clientNonce)
+        w.raw(clientEphPub)
     }
 
+    /// Reads `protocol_version` first. When it is not the current version nothing else is read (an older HELLO is
+    /// shorter) and the remaining fields are placeholders: the caller answers VERSION_MISMATCH (PROTOCOL.md 3).
     static func read(_ r: inout ByteReader) throws -> Hello {
         let version = try r.u16()
+        guard version == ProtocolConstants.protocolVersion else {
+            return Hello(protocolVersion: version, deviceID: DeviceID(bytes: [UInt8](repeating: 0, count: 16))!,
+                         screenWidthPx: 0, screenHeightPx: 0, densityDpi: 0, maxRefreshHz: 0, capabilities: [],
+                         deviceName: "")
+        }
         guard let id = DeviceID(bytes: try r.raw(ProtocolConstants.deviceIDSize)) else {
             throw ProtocolError.invalidField("device_id")
         }
         return Hello(protocolVersion: version, deviceID: id, screenWidthPx: try r.u16(),
                      screenHeightPx: try r.u16(), densityDpi: try r.u16(), maxRefreshHz: try r.u16(),
-                     capabilities: Capabilities(rawValue: try r.u32()), deviceName: try r.str8())
+                     capabilities: Capabilities(rawValue: try r.u32()), deviceName: try r.str8(),
+                     clientNonce: try r.raw(ProtocolConstants.nonceSize),
+                     clientEphPub: try r.raw(ProtocolConstants.publicKeySize))
+    }
+
+    /// Bytes the transcript hash covers.
+    var transcriptBytes: [UInt8] {
+        if let wirePayload { return wirePayload }
+        var w = ByteWriter()
+        write(&w)
+        return w.bytes
+    }
+
+    // `wirePayload` is bookkeeping, not protocol content.
+    public static func == (a: Hello, b: Hello) -> Bool {
+        a.protocolVersion == b.protocolVersion && a.deviceID == b.deviceID
+            && a.screenWidthPx == b.screenWidthPx && a.screenHeightPx == b.screenHeightPx
+            && a.densityDpi == b.densityDpi && a.maxRefreshHz == b.maxRefreshHz
+            && a.capabilities == b.capabilities && a.deviceName == b.deviceName
+            && a.clientNonce == b.clientNonce && a.clientEphPub == b.clientEphPub
     }
 }
 
@@ -174,9 +226,24 @@ public struct HelloAck: Equatable, Sendable {
     public var sessionID: UInt32
     public var videoPort: UInt16
     public var hostName: String
+    public var keyMode: KeyMode
+    /// The host's persistent random id (zero when `keyMode == .none`).
+    public var hostID: [UInt8]
+    public var hostNonce: [UInt8]
+    /// The host's ephemeral P-256 public key (zero when `keyMode == .none`).
+    public var hostEphPub: [UInt8]
 
     public init(protocolVersion: UInt16 = ProtocolConstants.protocolVersion, status: HelloStatus,
-                sessionID: UInt32, videoPort: UInt16, hostName: String) {
+                sessionID: UInt32, videoPort: UInt16, hostName: String, keyMode: KeyMode = .none,
+                hostID: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.deviceIDSize),
+                hostNonce: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.nonceSize),
+                hostEphPub: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.publicKeySize)) {
+        precondition(hostID.count == ProtocolConstants.deviceIDSize && hostNonce.count == ProtocolConstants.nonceSize
+                     && hostEphPub.count == ProtocolConstants.publicKeySize)
+        self.keyMode = keyMode
+        self.hostID = hostID
+        self.hostNonce = hostNonce
+        self.hostEphPub = hostEphPub
         self.protocolVersion = protocolVersion
         self.status = status
         self.sessionID = sessionID
@@ -191,14 +258,24 @@ public struct HelloAck: Equatable, Sendable {
         w.u32(sessionID)
         w.u16(videoPort)
         w.str8(hostName)
+        w.u8(keyMode.rawValue)
+        w.raw(hostID)
+        w.raw(hostNonce)
+        w.raw(hostEphPub)
     }
 
     static func read(_ r: inout ByteReader) throws -> HelloAck {
         let version = try r.u16()
         guard let status = HelloStatus(rawValue: try r.u8()) else { throw ProtocolError.invalidField("status") }
         try r.skip(1)
-        return HelloAck(protocolVersion: version, status: status, sessionID: try r.u32(),
-                        videoPort: try r.u16(), hostName: try r.str8())
+        let sessionID = try r.u32()
+        let videoPort = try r.u16()
+        let hostName = try r.str8()
+        guard let keyMode = KeyMode(rawValue: try r.u8()) else { throw ProtocolError.invalidField("key_mode") }
+        return HelloAck(protocolVersion: version, status: status, sessionID: sessionID, videoPort: videoPort,
+                        hostName: hostName, keyMode: keyMode, hostID: try r.raw(ProtocolConstants.deviceIDSize),
+                        hostNonce: try r.raw(ProtocolConstants.nonceSize),
+                        hostEphPub: try r.raw(ProtocolConstants.publicKeySize))
     }
 }
 
@@ -605,7 +682,12 @@ public struct VideoHello: Equatable, Sendable {
     public var protocolVersion: UInt16
     public var configID: UInt16
     public var sessionID: UInt32
-    public init(protocolVersion: UInt16 = ProtocolConstants.protocolVersion, configID: UInt16, sessionID: UInt32) {
+    /// Fresh random value per video connection; the connection's keys derive from it (PROTOCOL.md 9).
+    public var videoNonce: [UInt8]
+    public init(protocolVersion: UInt16 = ProtocolConstants.protocolVersion, configID: UInt16, sessionID: UInt32,
+                videoNonce: [UInt8] = [UInt8](repeating: 0, count: ProtocolConstants.nonceSize)) {
+        precondition(videoNonce.count == ProtocolConstants.nonceSize)
+        self.videoNonce = videoNonce
         self.protocolVersion = protocolVersion
         self.configID = configID
         self.sessionID = sessionID

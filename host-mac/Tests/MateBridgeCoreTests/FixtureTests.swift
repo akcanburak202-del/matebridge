@@ -4,6 +4,10 @@ import Testing
 private let deviceA = DeviceID(bytes: Array(Array(repeating: [UInt8](arrayLiteral: 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef), count: 2).joined()))!
 private let deviceB = DeviceID(bytes: Array(0...15))!
 
+/// Public keys of the vector private keys (`crypto_vectors.json` inputs): 65-byte uncompressed points.
+private let clientPub = Hex.bytes("043b2e3be924f7393ba036956d4f154be45d37e6c02baecfc991a3c6ae4213629e7ab47261459f5823e7e72769597493bc607eb317d9ef1ca4ddb85f3cc2a35538")
+private let hostPub = Hex.bytes("04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb")
+
 private func pen(_ dt: UInt32, _ x: UInt16, _ y: UInt16, _ p: UInt16, _ tx: Int16, _ ty: Int16, _ f: PenFlags) -> PenSample {
     PenSample(dtUs: dt, x: x, y: y, pressure: p, tiltX: tx, tiltY: ty, flags: f)
 }
@@ -11,12 +15,18 @@ private func pen(_ dt: UInt32, _ x: UInt16, _ y: UInt16, _ p: UInt16, _ tx: Int1
 /// Hand-written expectations, copied from the comments in each `.hex` file.
 private let validFixtures: [String: Message] = [
     "hello": .hello(Hello(deviceID: deviceA, screenWidthPx: 2800, screenHeightPx: 1840, densityDpi: 360,
-                          maxRefreshHz: 144, capabilities: Capabilities(rawValue: 255), deviceName: "MatePad Pro")),
+                          maxRefreshHz: 144, capabilities: Capabilities(rawValue: 255), deviceName: "MatePad Pro",
+                          clientNonce: Array(0xc0...0xcf), clientEphPub: clientPub)),
     "hello_utf8_name": .hello(Hello(deviceID: deviceB, screenWidthPx: 2800, screenHeightPx: 1840, densityDpi: 360,
                                     maxRefreshHz: 60, capabilities: [.pen, .keyboard, .decodeH264],
-                                    deviceName: "Çizim Tableti ğüşöı")),
-    "hello_ack": .helloAck(HelloAck(status: .accepted, sessionID: 2_712_847_316, videoPort: 47001, hostName: "Mac mini")),
-    "hello_ack_pending": .helloAck(HelloAck(status: .pendingApproval, sessionID: 0, videoPort: 0, hostName: "Mac mini")),
+                                    deviceName: "Çizim Tableti ğüşöı", clientNonce: Array(0xc0...0xcf),
+                                    clientEphPub: clientPub)),
+    "hello_ack": .helloAck(HelloAck(status: .accepted, sessionID: 2_712_847_316, videoPort: 47001, hostName: "Mac mini",
+                                    keyMode: .paired, hostID: Array(0x30...0x3f), hostNonce: Array(0xe0...0xef),
+                                    hostEphPub: hostPub)),
+    "hello_ack_pending": .helloAck(HelloAck(status: .pendingApproval, sessionID: 0, videoPort: 0, hostName: "Mac mini",
+                                            keyMode: .pairing, hostID: Array(0x30...0x3f),
+                                            hostNonce: Array(0xe0...0xef), hostEphPub: hostPub)),
     "hello_ack_busy": .helloAck(HelloAck(status: .busy, sessionID: 0, videoPort: 0, hostName: "")),
     "stream_config": .streamConfig(StreamConfig(configID: 1, codec: .hevc, widthPx: 2800, heightPx: 1840,
                                                 widthPt: 1400, heightPt: 920, fps: 60, bitrateKbps: 50000,
@@ -56,7 +66,8 @@ private let validFixtures: [String: Message] = [
     "stats": .stats(Stats(intervalMs: 1000, framesReceived: 60, framesDecoded: 60, framesRendered: 59,
                           framesDropped: 1, decodeTimeAvgUs: 4200, latencyAvgUs: 23000, bytesReceived: 6_250_000)),
     "keyframe_request": .keyframeRequest(.decodeError),
-    "video_hello": .videoHello(VideoHello(configID: 1, sessionID: 2_712_847_316)),
+    "video_hello": .videoHello(VideoHello(configID: 1, sessionID: 2_712_847_316,
+                                          videoNonce: Array((0...15).reversed()))),
     "video_frame": .videoFrame(VideoFrame(frameSeq: 1, captureTimeUs: 98_765_000_000, flags: .keyframe,
                                           data: [0, 0, 0, 1, 0x26, 0x01, 0x0a, 0xf0])),
     "video_frame_config": .videoFrame(VideoFrame(frameSeq: 0, captureTimeUs: 98_764_990_000, flags: .codecConfig,

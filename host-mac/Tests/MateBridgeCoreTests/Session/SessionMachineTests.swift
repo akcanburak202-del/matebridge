@@ -9,18 +9,21 @@ private let V = ConnectionID(100)
 
 private func device(_ n: UInt8) -> DeviceID { DeviceID(bytes: [UInt8](repeating: n, count: 16))! }
 
-private func hello(_ dev: UInt8 = 1, version: UInt16 = 0, name: String = "Pad") -> Message {
-    .hello(Hello(protocolVersion: version, deviceID: device(dev), screenWidthPx: 2800, screenHeightPx: 1840,
-                 densityDpi: 360, maxRefreshHz: 144, capabilities: [.pen], deviceName: name))
+private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
+
+private func hello(_ dev: UInt8 = 1, version: UInt16 = ProtocolConstants.protocolVersion, name: String = "Pad") -> Message {
+    .hello(TestClient(device: dev, name: name, version: version).hello)
 }
 
 private let sampleConfig = StreamConfig(configID: 1, codec: .h264, widthPx: 2800, heightPx: 1840, widthPt: 1400,
                                         heightPt: 920, fps: 60, bitrateKbps: 40000, colorPrimaries: 1, transfer: 1,
                                         matrix: 1, fullRange: true)
 
+/// Approved devices also have a pair key (PAIRED); an approved device without a key would fall back to PAIRING.
 private func makeMachine(approved: Set<DeviceID> = []) -> SessionMachine {
+    let keys = InMemoryPairKeyStore(keys: Dictionary(uniqueKeysWithValues: approved.map { ($0, pairKey) }))
     var m = SessionMachine(configuration: .init(hostName: "Mac", makeStreamConfig: { _ in sampleConfig },
-                                                makeSessionID: { 77 }), approvedDevices: approved)
+                                                makeSessionID: { 77 }, pairKeys: keys), approvedDevices: approved)
     m.videoPort = 5555
     return m
 }
@@ -37,6 +40,8 @@ private func has(_ actions: [SessionAction], _ pred: (SessionAction) -> Bool) ->
 
 private func isRelease(_ a: SessionAction) -> Bool { if case .releaseInput = a { true } else { false } }
 private func isDeliver(_ a: SessionAction) -> Bool { if case .deliver = a { true } else { false } }
+
+private func nonce(_ n: UInt8) -> [UInt8] { [UInt8](repeating: n, count: 16) }
 
 private func keyDown() -> Message {
     .key(KeyEvent(timeUs: 1, scanCode: 30, androidKeyCode: 29, action: .down, capsLockOn: false))
@@ -93,12 +98,16 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(A, now: 0)
         let first = m.received(A, hello(name: "Tab"), now: 0)
         #expect(ackStatuses(first, to: A) == [.pendingApproval])
-        #expect(has(first) { $0 == .requestApproval(A, deviceID: device(1), deviceName: "Tab") })
+        #expect(has(first) { if case .requestApproval(A, device(1), "Tab", _) = $0 { true } else { false } })
         #expect(m.status == .pending(deviceName: "Tab"))
 
+        // Accepting is two steps: persist the pair key first, ACCEPTED only after it is stored.
         let approved = m.approvalDecided(A, approved: true, now: 2 * sec)
-        #expect(ackStatuses(approved, to: A) == [.accepted])
-        #expect(has(approved) { $0 == .rememberDevice(device(1), name: "Tab") })
+        #expect(ackStatuses(approved, to: A).isEmpty)
+        #expect(has(approved) { if case .persistPairing(A, device(1), "Tab", _) = $0 { true } else { false } })
+        #expect(m.status == .pending(deviceName: "Tab"))
+        let stored = m.pairingPersisted(A, stored: true, now: 2 * sec)
+        #expect(ackStatuses(stored, to: A) == [.accepted])
         #expect(m.approvedDevices.contains(device(1)))
         #expect(m.status == .active(deviceName: "Tab", sessionID: 77))
     }
@@ -134,7 +143,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         let actions = m.approvalDecided(A, approved: true, now: 60 * sec)  // tick has not run yet
         #expect(ackStatuses(actions, to: A) == [.rejected])
         #expect(!m.approvedDevices.contains(device(1)))
-        #expect(!actions.contains { if case .rememberDevice = $0 { true } else { false } })
+        #expect(!actions.contains { if case .persistPairing = $0 { true } else { false } })
         #expect(m.status == .idle)
     }
 
@@ -188,7 +197,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
         _ = m.videoOpened(V, now: 1)
-        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77), now: 1)
+        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 1)
         _ = m.connectionOpened(B, now: 2)
         #expect(has(m.received(B, hello(1), now: 2)) { $0 == .closeVideo(V) })
     }
@@ -257,7 +266,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
         _ = m.videoOpened(V, now: 0)
-        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77), now: 0)
+        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
         let actions = m.protocolError(A)
         #expect(actions.contains(.releaseInput(A, .protocolError)))
         #expect(sent(actions, to: A) == [.bye(.protocolError)])
@@ -284,8 +293,11 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.videoHello(V, VideoHello(protocolVersion: 3, configID: 1, sessionID: 77), now: 0)
             .contains(.closeVideo(V)))
         _ = m.videoOpened(V, now: 0)
-        let ok = m.videoHello(V, VideoHello(configID: 1, sessionID: 77), now: 0)
-        #expect(ok == [.videoAttached(video: V, session: A, sessionID: 77, configID: 1)])
+        let ok = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
+        guard case .videoAttached(V, A, 77, 1, let keys)? = ok.first, ok.count == 1 else {
+            Issue.record("not attached: \(ok)"); return
+        }
+        #expect(keys.h2c.bytes.count == 32 && keys.c2h.bytes.count == 32 && keys.h2c != keys.c2h)
     }
 
     @Test func videoHelloWithoutSessionIsRejected() {
@@ -299,9 +311,9 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         activate(&m, A)
         let V2 = ConnectionID(101)
         _ = m.videoOpened(V, now: 0)
-        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77), now: 0)
+        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
         _ = m.videoOpened(V2, now: 1)
-        let actions = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77), now: 1)
+        let actions = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(2)), now: 1)
         #expect(actions.first == .closeVideo(V))
     }
 
@@ -319,11 +331,13 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(B, now: 1)
         let takeover = m.received(B, hello(), now: 1)  // same device: A is cancelled, B pending
         #expect(takeover.contains(.cancelApproval(A)))
-        #expect(takeover.contains(.requestApproval(B, deviceID: device(1), deviceName: "Pad")))
+        #expect(takeover.contains { if case .requestApproval(B, device(1), "Pad", _) = $0 { true } else { false } })
         #expect(m.approvalDecided(A, approved: true, now: 2).isEmpty)  // stale click for A
+        #expect(m.pairingPersisted(A, stored: true, now: 2).isEmpty)
         #expect(m.status == .pending(deviceName: "Pad"))
         #expect(!m.approvedDevices.contains(device(1)))
-        #expect(ackStatuses(m.approvalDecided(B, approved: true, now: 3), to: B) == [.accepted])
+        _ = m.approvalDecided(B, approved: true, now: 3)
+        #expect(ackStatuses(m.pairingPersisted(B, stored: true, now: 3), to: B) == [.accepted])
     }
 
     @Test func forgetDevicesRequiresApprovalAgain() {
@@ -338,6 +352,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         var all: [SessionAction] = m.connectionOpened(A, now: 0)
         all += m.received(A, hello(name: "SecretName"), now: 0)
         all += m.approvalDecided(A, approved: true, now: 1)
+        all += m.pairingPersisted(A, stored: true, now: 1)
         for case .log(_, _, _, let fields) in all { #expect(!fields.contains("SecretName")) }
     }
 }

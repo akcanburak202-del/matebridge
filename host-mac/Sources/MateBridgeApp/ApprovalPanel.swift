@@ -8,10 +8,10 @@ final class ApprovalPanel: NSObject {
     private let panel: NSPanel
     private var onAnswer: ((Bool) -> Void)?
 
-    init(requestID: UInt64, deviceName: String, onAnswer: @escaping (Bool) -> Void) {
+    init(requestID: UInt64, deviceName: String, code: String, onAnswer: @escaping (Bool) -> Void) {
         self.requestID = requestID
         self.onAnswer = onAnswer
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 150),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
                         styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         panel.title = "MateBridge"
@@ -20,14 +20,19 @@ final class ApprovalPanel: NSObject {
 
         let title = NSTextField(labelWithString: "\(deviceName) bağlanmak istiyor")
         title.font = .boldSystemFont(ofSize: 14)
+        // The pairing code is shown here and on the tablet; the user compares them (PROTOCOL.md 9).
+        let codeLabel = NSTextField(labelWithString: code)
+        codeLabel.font = .monospacedDigitSystemFont(ofSize: 44, weight: .bold)
+        let compare = NSTextField(wrappingLabelWithString: "Tabletteki kodla aynı mı?")
+        compare.font = .systemFont(ofSize: 13, weight: .medium)
         let body = NSTextField(wrappingLabelWithString:
-            "İzin verirsen bu cihaz ekranını görebilir ve bu Mac'i kontrol edebilir.")
+            "Kodlar aynıysa izin ver: bu cihaz ekranını görebilir ve bu Mac'i kontrol edebilir. Farklıysa reddet.")
         let allow = NSButton(title: "İzin ver", target: self, action: #selector(allow))
         allow.keyEquivalent = "\r"
         let reject = NSButton(title: "Reddet", target: self, action: #selector(reject))
         let buttons = NSStackView(views: [reject, allow])
         buttons.spacing = 12
-        let stack = NSStackView(views: [title, body, buttons])
+        let stack = NSStackView(views: [title, codeLabel, compare, body, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
