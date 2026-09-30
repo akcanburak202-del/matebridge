@@ -29,7 +29,12 @@ PROTOCOL `0x07 DISPLAY_RATE` (`proto/display-rate`, `87e36db`) istemci tarafı. 
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Kodek: `DisplayRate(hz)` + `MsgType.DISPLAY_RATE=0x07`, fixture `display_rate` testi.
+2. `stream/DisplayRateDebouncer` (saf): yükseliş hemen, düşüş 500 ms kararlıysa, en çok 4 mesaj/sn (250 ms aralık), ilk değer hemen.
+3. Oturum: `SessionMachine.Event.SetDisplayRate`; ACCEPTED'da PING ve STREAM_PREFS'ten sonra bir kez (değer biliniyorsa), sonra yalnızca değişimde. `SessionController.setDisplayRate` tek-slotlu mailbox.
+4. Panel hızı = vsync periyodundan yuvarlanmış Hz (`VsyncClock.periodNs`); MainActivity 100 ms'lik bir döngüyle debouncer'ı besler (yalnızca akış sırasında).
+5. Sunum: `video/FrameInterval` (saf) etkin kare aralığı = varış aralığı panel periyoduna yakın/uzunsa max(akış aralığı, periyot), aksi halde akış aralığı (host seyreltmeden önceki geçiş). `ArrivalTracker` yakalama zamanlarından ölçer; Pacer'lar ve shown-listener kullanır; MediaCodec yeniden yaratılmaz.
+6. Testler, check.sh, handoff.
 
 ## Handoff
 
