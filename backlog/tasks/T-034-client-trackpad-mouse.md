@@ -40,7 +40,13 @@ Glide Keyboard touchpad'i ve Bluetooth fare ile Mac imlecini kullanmak: PROTOCOL
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `input/RelPointerTracker.kt` (saf Kotlin): touchpad hareket tanıma (`PadFrame`) + fare (`MouseFrame`) tek sınıfta, çünkü host `POINTER_REL`'i **tek kaynak** sayar ve düğme durumu tam/birleşik gitmelidir (touchpad | fare | dokunarak tık). Sabitler `PadTuning` nesnesinde.
+2. Touchpad: parmak başına delta (id bazlı, sayı değişince zıplama yok); tek parmak -> ivmeli `POINTER_REL`, dokunuş eşiği (<=180 ms, az hareket) dolana kadar hareket biriktirilir (tık imleci kaydırmasın); iki parmak -> slop aşılınca `SCROLL` BEGAN/CHANGED, bırakınca ENDED; 2->1 veya >=3 parmakta tüm parmaklar kalkana kadar kilit. Fiziksel tık: 1 parmak LEFT, 2 parmak RIGHT (basış anında eşlenir); basılıyken en hızlı parmak sürükler. Dokunarak tık: 1 parmak LEFT, 2 parmak RIGHT (down+up).
+3. Düğme kuralları (PROTOCOL 7): kapture/odak kaybında `release()` -> bildirilmiş düğmeler için `buttons=0`, açık kaydırma ENDED; sonra yalnızca yeni basış olayı (`pressedButton`) görülünce bildirilir; kaydırma canlılığı tick'te (200 ms CHANGED(0,0), 5 sn ENDED + park).
+4. Fare: `AXIS_RELATIVE_X/Y` -> `POINTER_REL` (gain 1.0), tam düğme durumu, tekerlek -> `SCROLL phase=NONE` (1 çentik = 10 pt).
+5. `InputCapture`: `onPad/onMouse/onPointerCaptureLost`, tick, releaseAll/forget/device removal entegrasyonu. `InputOutbox`: `POINTER_REL` birleştirme (aynı düğme durumu), sayaç `rel_msgs`; `taps`, `tp_scroll` sayaçları.
+6. `MotionEventAdapter`: SOURCE_TOUCHPAD / SOURCE_MOUSE_RELATIVE olaylarını çerçeveye çevirir (touchscreen/stylus yolu değişmez). `MainActivity`: `videoView.requestPointerCapture()` (odak + oturum kabul + pencere odağı), `onPointerCaptureChanged(false)` -> release, captured listener.
+7. Testler: `RelPointerTrackerTest` + `InputCaptureTest`/outbox ek testleri.
 
 ## Handoff
 
