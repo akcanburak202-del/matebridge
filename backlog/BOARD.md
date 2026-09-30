@@ -13,6 +13,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
+| [T-057](tasks/T-057-client-presentation-scheduling.md) | Tablet — sunum zamanlaması düzeltmeleri (yuva başına tek bırakma, son yuvaya gecikme sınırı, faz kalibrasyonu, çözücü doluluğu) | 5 | android-client-dev | [T-052] |
+| [T-058](tasks/T-058-host-display-rate-decimation.md) | Mac — DISPLAY_RATE ile kodlamadan önce seyreltme (60/120), yeniden başlatmasız; BoundedFrameQueue kurtarma düzeltmesi | 5 | mac-host-dev | [T-049] |
+| [T-059](tasks/T-059-client-display-rate.md) | Tablet — panel hızını host'a bildir (DISPLAY_RATE) | 5 | android-client-dev | [T-057] |
 
 ## done
 
