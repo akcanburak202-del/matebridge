@@ -255,7 +255,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
         // Events arrive in window coordinates; the viewport is in root coordinates.
         root.getLocationInWindow(rootLoc)
-        return MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
+        return try {
+            MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
+        } catch (e: RuntimeException) {
+            inputFailed(e, now)
+            true // consumed: never let a capture bug crash the app or leak the event to the views
+        }
+    }
+
+    /** A bug in the input path must not kill the app mid-stroke: log it and release everything on the host. */
+    private fun inputFailed(e: RuntimeException, nowMs: Long) {
+        MbLog.e("input_error", "err=${e.javaClass.simpleName}", "input")
+        try { capture.releaseAll(ReleaseAll.USER, nowMs) } catch (_: RuntimeException) {}
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean =
@@ -279,8 +290,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val inputTicker = object : Runnable {
         override fun run() {
             val now = SystemClock.uptimeMillis()
-            syncInputActive(now)
-            capture.tick(now)
+            try {
+                syncInputActive(now)
+                capture.tick(now)
+            } catch (e: RuntimeException) {
+                inputFailed(e, now)
+            }
             ui.postDelayed(this, INPUT_TICK_MS)
         }
     }
