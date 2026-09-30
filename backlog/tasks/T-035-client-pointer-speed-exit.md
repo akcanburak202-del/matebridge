@@ -1,7 +1,7 @@
 ---
 id: T-035
 title: Tablet — imleç hızı (daha yavaş varsayılan + canlı ayar kısayolu), Android'e dönüş kısayolu
-status: review
+status: done
 phase: 3
 owner: android-client-dev
 depends_on: [T-033, T-034]
@@ -59,3 +59,7 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): klavye, touchpad ve fare çalışı
   - Panele kısayol metni kodla eklendi (addShortcutHint).
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Ctrl+Shift+F1/F2 ile Toast ve hızın canlı değişmesi (touchpad/fare ayrı); Ctrl+Shift+Esc ile uygulama arka plana gidiyor, Mac'te Ctrl/Shift takılı kalmıyor, pointer capture bırakılıyor (Android imleci geri geliyor), geri dönünce devam ediyor; yeni varsayılan hız hissi; Toast immersive modda görünüyor mu; kaydırma hızı eskisiyle aynı mı; Ctrl+Shift+F3 hâlâ çalışıyor mu.
 - **Açık sorular:** Yok.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- Küçük, yerel kısayol + sabit değişikliği; orkestratör okudu, Codex turu yapılmadı. Ajan T-033'teki `KEYCODE_F3 = 134` hatasını buldu (134 = F4; F3 = 133) ve düzeltti. Kaydırma kazancı 1,5'e çıkarıldı (touchpad ölçeği küçüldüğü için kaydırma hızı aynı kalsın diye). Cihaz testi bir sonraki ortak testte.
