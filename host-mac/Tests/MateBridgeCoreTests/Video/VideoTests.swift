@@ -19,21 +19,19 @@ final class BoundedFrameQueueTests: XCTestCase {
     func testOverflowDropsOldestDeltaAndRequestsKeyframe() {
         var q = BoundedFrameQueue()
         q.push(delta(1)); q.push(delta(2))
-        XCTAssertEqual(q.push(delta(3)), 1)
-        XCTAssertEqual(q.count, 2)
-        XCTAssertEqual(q.pop()?.data, [2])
-        XCTAssertEqual(q.pop()?.data, [3])
+        XCTAssertEqual(q.push(delta(3)), 3, "delta 1 dropped, its dependents 2 and 3 purged")
+        XCTAssertTrue(q.isEmpty)
         XCTAssertTrue(q.takeKeyframeRequest())
         XCTAssertFalse(q.takeKeyframeRequest(), "request is consumed once")
-        XCTAssertEqual(q.droppedCount, 1)
+        XCTAssertEqual(q.droppedCount, 3)
     }
 
     /// T-058: after a dropped delta the dependents must not reach the client before the requested keyframe.
     func testDeltasAreRefusedAfterADropUntilKeyframe() {
         var q = BoundedFrameQueue()
-        q.push(delta(1)); q.push(delta(2)); q.push(delta(3))   // delta 1 dropped: chain broken
+        q.push(delta(1)); q.push(delta(2)); q.push(delta(3))   // delta 1 dropped, 2 and 3 purged
         XCTAssertTrue(q.takeKeyframeRequest())
-        XCTAssertEqual(q.pop()?.data, [2]); XCTAssertEqual(q.pop()?.data, [3])
+        XCTAssertTrue(q.isEmpty)
         XCTAssertEqual(q.push(delta(4)), 1, "dependent delta refused")
         XCTAssertEqual(q.push(delta(5)), 1)
         XCTAssertTrue(q.isEmpty)
@@ -45,7 +43,6 @@ final class BoundedFrameQueueTests: XCTestCase {
     func testCodecConfigDoesNotLiftTheRefusal() {
         var q = BoundedFrameQueue()
         q.push(delta(1)); q.push(delta(2)); q.push(delta(3))
-        _ = q.pop(); _ = q.pop()
         q.push(config())
         XCTAssertEqual(q.push(delta(4)), 1)
         q.push(key(5))
@@ -58,8 +55,19 @@ final class BoundedFrameQueueTests: XCTestCase {
         q.push(key(1)); q.push(delta(2))
         q.push(delta(3))
         XCTAssertEqual(q.pop()?.data, [1], "keyframe kept")
-        XCTAssertEqual(q.pop()?.data, [3], "oldest delta dropped")
+        XCTAssertNil(q.pop(), "oldest delta dropped, the dependent delta purged")
         XCTAssertTrue(q.takeKeyframeRequest())
+    }
+
+    func testDroppedDeltaPurgesLaterQueuedDeltasKeepsKeyframeAndConfig() {
+        var q = BoundedFrameQueue(capacity: 4)
+        q.push(config()); q.push(key(1)); q.push(delta(2)); q.push(delta(3))
+        XCTAssertEqual(q.push(delta(4)), 3, "delta 2 dropped, 3 and 4 purged")
+        XCTAssertEqual(q.pop()?.isCodecConfig, true)
+        XCTAssertEqual(q.pop()?.data, [1])
+        XCTAssertNil(q.pop())
+        XCTAssertTrue(q.takeKeyframeRequest())
+        XCTAssertEqual(q.push(delta(5)), 1, "refused until a keyframe")
     }
 
     func testCodecConfigSurvivesAndNewKeyframeSupersedesOldOne() {

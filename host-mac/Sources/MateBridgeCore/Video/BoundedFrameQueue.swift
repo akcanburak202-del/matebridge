@@ -48,6 +48,15 @@ public struct BoundedFrameQueue: Sendable {
             // The chain is broken: ask for a keyframe and refuse later deltas until it arrives (their reference is gone).
             keyframeNeeded = true
             awaitingKeyframe = true
+            // Deltas queued after the dropped one reference it: purge them too. Keyframes and CODEC_CONFIG stay,
+            // and deltas before it (none can exist, it was the oldest) would be kept.
+            var purged = 0
+            var i = idx
+            while i < frames.count {
+                if frames[i].isProtected { i += 1 } else { frames.remove(at: i); purged += 1 }
+            }
+            droppedCount += purged
+            return 1 + purged
         }
         return 1
     }
