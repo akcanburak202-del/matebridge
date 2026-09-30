@@ -1,7 +1,7 @@
 ---
 id: T-032
 title: Mac klavye — KEY → macOS keycode, değiştiriciler, otomatik tekrar, Caps Lock, release-all
-status: review
+status: done
 phase: 3
 owner: mac-host-dev
 depends_on: [T-023]
@@ -84,3 +84,9 @@ Mimari: klavye mevcut boru hattına (InputStateMachine → InjectionPlanner → 
 
 - **Bekleyen borçlu değiştirici up:** `OwedRelease.replay` artık vadesi henüz gelmemiş borçlu değiştirici up'larını da (`pending`) her tekrar oynatılan olayın flags'ine katar; bir değiştirici up'ı yayınlanınca kümeden çıkar. Testler: KFLAG-11 (Cmd+A senaryosu), KFLAG-12 (bekleyen işaretçi up).
 - **Tekrar kapalı:** `Configuration.keyRepeatEnabled`; false iken tekrar hiç kurulmaz (KFLAG-13). Host `InputController.repeatEnabled`: `NSEvent.keyRepeatDelay/Interval` sonsuz/NaN ya da >= 10 s ise kapalı sayılır. macOS'un "Off" değerini burada DOĞRULAYAMADIM (varsayım: Off = çok büyük değer). Mac'te Ayarlar > Klavye > Tuş tekrarı en sona çekilip `defaults read -g KeyRepeat` ve tekrarın durduğu doğrulanmalı.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, high) iki tur. 1. tur: P1 (yeniden denenen değiştirici bırakışının bayat bayrakları), P2 (Caps/bilinmeyen DOWN tekrarı durdurmuyor); ek istek: fare/kalem/kaydırma olaylarına güncel değiştirici bayrakları. 2. tur: P2 (henüz vadesi gelmemiş borçlu değiştiriciler), P2 ("tuş tekrarı kapalı" ayarı). Hepsi `9950d54`'te düzeltildi; son tur orkestratör tarafından okundu, üçüncü Codex turu yapılmadı.
+- ISO klavye türü 41: Mac'te `KBGetLayoutType(41) == ISO` ile doğrulandı (40 ANSI, 42 JIS).
+- Cihaz testi Faz 3 ortak testinde.
