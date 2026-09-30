@@ -162,13 +162,13 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 ### Aşama 4 — Günlük kullanım cilası
 
-- [ ] Mac: menü çubuğu uygulaması, oturum açılışında otomatik başlama.
-- [ ] Tablet uygulaması açılınca kendiliğinden bağlanır, ekran uyumaz.
+- [x] Mac: menü çubuğu uygulaması, oturum açılışında otomatik başlama. (T-039; yeniden başlatmada doğrulanacak)
+- [x] Tablet uygulaması açılınca kendiliğinden bağlanır, ekran uyumaz. USB tünelleri host tarafından kendiliğinden kurulur (T-039).
 - [ ] Mac kilit/uyku/uyanma sonrası toparlanır. Sanal ekran yeniden oluşturulur.
 - [ ] Ayarlar: çözünürlük/ölçek, FPS, bitrate, codec, Ctrl↔Cmd, kalem tuşu eylemi.
 - [ ] Mod seçimi: tablet = ikinci ekran / tablet = ana ekran (monitörsüz) / ekran yansıtma.
 - [ ] Oturum şifrelemesi (eşleşmede paylaşılan anahtar).
-- [ ] Log dosyası (`~/Library/Logs/MateBridge/`) ve menüde "logları aç".
+- [x] Log dosyası (`~/Library/Logs/MateBridge/`) ve menüde "logları aç". (T-039)
 
 **Bitti:** Bir hafta boyunca günlük iş için kullanılıyor, "yeniden başlatmam gerekti" türünden sorun kalmıyor.
 

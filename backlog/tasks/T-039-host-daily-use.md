@@ -1,7 +1,7 @@
 ---
 id: T-039
 title: Mac günlük kullanım — oturum açılışında başlama, menü (durum, loglar), USB tünellerini kendiliğinden kurma
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-020]
@@ -49,3 +49,9 @@ PLAN Aşama 4: Mac tarafında "hiçbir şey yapmadan çalışsın". Bugün host 
 - **Varsayımlar:** Sunucu ayakta mı testi 127.0.0.1:5037 TCP bağlantısı (adb'yi kazara kendiliğinden başlatmamak için); `adb devices` cevap vermezse sunucu "down" sayılıp launchd işi silinip yeniden submit edilir. Kapatınca yalnız tüneller kaldırılır, adb sunucusu ve launchd işi kalır; uygulamadan çıkınca (Quit) tüneller yerinde bırakılır; bu bilinçli (zararsız, asenkron kaldırma çıkışa yetişmez). adb sunucusu `-a` OLMADAN başlatılır (yalnız loopback; `AdbServerLaunch` + test). USB taşıması = kontrol bağlantısının eşi loopback. Oturum açılışı ilk açılışta bir kez `register()` (UserDefaults `loginItemFirstRunDone`), sonra yalnız menü değiştirir. Tek cihaz: birden çok hazır cihazda gerçek (emulator olmayan) ilki seçilir.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbiri çalıştırılmadı (adb/uygulama yok; yalnız saf mantık testli). (1) `SMAppService.mainApp.register()` Apple Development imzalı `build/MateBridge.app` ile: durum `.enabled` mı `.requiresApproval` mı, Sistem Ayarları > Giriş Öğeleri'nde görünüyor mu, yeniden başlatmada açılıyor mu. Uygulama /Applications dışında (build/) ise macOS kaydı reddedebilir ya da onay isteyebilir. (2) Watcher: gerçek adb ile tünellerin 2-4 sn içinde kurulması, kablo çek-tak, `launchctl submit` uygulamanın alt süreci olarak sandbox/TCC sorunu çıkarıyor mu, login item olarak açılınca adb yolu (PATH asgari; ANDROID_HOME/SDK yolu bakılır). (3) Yeni MateBridge menü öğeleri ve "Bağlı: ad (USB)". (4) `usb-mode.sh` ile çakışma: ikisi de aynı launchd etiketini kullanır.
 - **Açık sorular:** Quit'te tünelleri kaldıralım mı (şu an hayır; asenkron kuyrukta yapılır, çıkışa yetişmez). Kapatmada tünel kaldırma hatası: 5 denemeye kadar geri çekilmeyle tekrarlanır, sonunda `state=remove_failed` loglanır (cihazda denenmedi). Yakalanan çıktı 64 KiB ile sınırlı (stdout+stderr tek boru); kesilmiş çıktı başarısız yoklama sayılır.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, medium): üç P2 (tünel kaldırma sonucu, alt süreç çıktısında bellek sınırı, onay bekleyen giriş öğesi) → `9dc42d0`. Orkestratör ek olarak adb `-a` (tüm arayüzlerde dinleme) güvenlik sorununu buldu → `b8ab055`.
+- Mac'te doğrulandı: `login_item enabled=true`, Giriş Öğeleri'nde "MateBridge" (`sfltool dumpbtm`); `usb_tunnel state=up`; `adb reverse --remove-all` sonrası tüneller ~2 sn'de geri geldi (`state=down` → `up`), tablet oturumu kopmadı; adb `127.0.0.1:5037`.
+- Doğrulanmadı: Mac yeniden başlatılınca kendiliğinden açılma, fiziksel kablo çekip takma.
