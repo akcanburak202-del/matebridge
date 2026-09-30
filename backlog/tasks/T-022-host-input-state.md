@@ -50,24 +50,25 @@ Tek dosya ailesi, saf ve tablo güdümlü: `InputStateMachine` (struct, `Sendabl
 
 **Güvenli okuma seçimleri** (PROTOCOL belirsiz olan yerler, Handoff'ta işaretlenecek): (1) release-all sonrası işaretçi kaynaklarının bildirilen düğme durumu korunur, yani bayat `LEFT` mesajı yeni basış sayılmaz; (2) kalem temasında sahip olmayan kaynakların imleç hareketi bastırılır; (3) araç değişiminde temas sürüyorsa yeni araç için kilit kurulur (vuruş ortası yeni vuruş olmaz); (4) temas sürerken gelen ikinci `STROKE_START` = up + down; (5) DOUBLE_TAP silgi modunu çevirir, araç değişimi bir sonraki kalem örneğinde uygulanır.
 
-**İnceleme turu (orkestratör, PROTOCOL b152c0f):** watchdog'lar her mesajdan önce uygulanır ve saat geri giderse yeniden bağlanır; zorla scroll bitişi ayrı `forcedEnd` fazı; taze makine kilitli başlar; işaretçi sahibi varken kalem hover'ı susar; yeni testler (LATCH-0/9/10, OWN-9/10, WD-4..10, FUZZ-5..7, WELL-1). Ayrıntı Handoff'ta.
+**İnceleme turu (orkestratör, PROTOCOL b152c0f):** watchdog'lar her mesajdan önce uygulanır ve saat geri giderse yeniden bağlanır; zorla scroll bitişi ayrı `forcedEnd` fazı; taze makine kilitli başlar; işaretçi sahibi varken kalem hover'ı susar; yeni testler (LATCH-0/9/10, OWN-9/10, WD-4..12, FUZZ-5..7, WELL-1). Ayrıntı Handoff'ta.
 
 Sıra: önce bu plan commit'i, sonra kod + testler, `check.sh`, Handoff.
 
 ## Handoff
 
-- **Commit:** kod başı `082e89b` (dal `task/T-022-host-input-state`; ilk tur `d5cb30d`/`bb527ce`, inceleme turu `47f1060`/`082e89b`). Bunun üstündeki commit'ler yalnızca bu kartı günceller. `./scripts/check.sh`: ALL OK (Core 171 test).
+- **Commit:** kod başı `74b2e35` (dal `task/T-022-host-input-state`; ilk tur `d5cb30d`/`bb527ce`, inceleme turu `47f1060`/`082e89b`, `nextDeadline` düzeltmesi `74b2e35`). Bunun üstündeki commit'ler yalnızca bu kartı günceller. `./scripts/check.sh`: ALL OK (Core 173 test).
 - **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Input/{InjectAction,InputStateMachine,InputStateMachine+Pen,InputStateMachine+Pointer,InputStateMachine+Scroll}.swift`; `host-mac/Tests/MateBridgeCoreTests/Input/{InputTestSupport,PenStateTests,PointerOwnershipTests,SafetyTests,InputFuzzTests,WellFormedClientTests}.swift`; bu kart. Başka dosyaya dokunulmadı; PROTOCOL.md ve fixture'lara dokunulmadı (yalnızca orkestratörün b152c0f netleştirmeleri okundu).
-- **İnceleme turu (7 düzeltme):**
+- **İnceleme turu (7 düzeltme + Codex düzeltmesi):**
   1. `handle(_:now:)` her mesajdan önce süresi dolmuş watchdog'ları uygular (`tick` ile aynı iş) ve o eylemleri mesajınkilerden önce döndürür (WD-8/9/10, FUZZ-6: `tick`+`handle` == `handle`).
   2. Saat geri giderse pen/scroll watchdog zaman damgası `now`'a yeniden bağlanır; en kötü 500 ms geç, asla kapalı değil (WD-5/6). Parmak kapısı değişmedi: geri giden saat kapıyı açık tutar (WD-7). Kalemin watchdog damgası (`penWatchdogAnchor`) kapı damgasından (`lastPenSampleAt`) ayrıldı ki kapı yeniden bağlanmasın.
   3. `InjectScrollPhase.forcedEnd` eklendi: yeni BEGAN, watchdog, release-all -> `.forcedEnd` (Mac'e ENDED, atalet yok, süren ataleti durdur); istemci `CANCELLED` -> `.cancelled`; istemci `ENDED` -> `.ended`.
   4. Taze makine iki kalem aracı için de kilitli başlar (LATCH-0, FUZZ-7).
   5. Bir işaretçi kaynağı sol düğmeyi tutarken kalem hover hareketi Mac'e gitmez (proximity enter/leave gider, kalem teması hâlâ düğmeyi alır): on-behalf up sahibin son konumuna düşer (OWN-9/9b).
   6. Yeni testler: LATCH-9 (silgi aracı, 12 neden), LATCH-10, OWN-10 (PEN-5 sonrası işaretçi basışı), FUZZ-1..4 artık sıfır/geri saat adımlı, FUZZ-5 (`tick` tam `nextDeadline`'da), FUZZ-6, FUZZ-7 (bağımsız kilit oracle'ı), WELL-1 (iyi niyetli istemci, 3 mod x 600 seed).
-  7. Kart: Plan'daki `releaseAll(_:now:)` -> `releaseAll(_:)`; tablo, varsayımlar ve açık sorular güncellendi.
+  7. Codex turu: `nextDeadline(now:)` artık `mutating`; geri giden saati `tick`/`handle` ile aynı tek yardımcıyla (`reanchorWatchdogs`) yeniden bağlar. Böylece geri saati ilk gören çağrı `nextDeadline` olsa bile `tick` döndürdüğü anda çalışır ve gecikme en çok bir periyottur (WD-11 kalem, WD-12 scroll, FUZZ-5 geri saatli sonda).
+  8. Kart: Plan'daki `releaseAll(_:now:)` -> `releaseAll(_:)`; tablo, varsayımlar ve açık sorular güncellendi.
 - **T-023 için API özeti:**
-  - Oturum başına bir `InputStateMachine` (değer tipi, kilitsiz; tek kuyruktan kullanılır; durum oturumlar arası taşınmaz). `handle(_ message, now:)` (watchdog eylemleri + mesaj eylemleri; KEY ve diğerleri kendi eylemi üretmez), `tick(now:)`, `releaseAll(_ cause: ReleaseCause)` (`SessionAction.releaseInput`'un nedeni doğrudan geçer), `nextDeadline(now:)` (bir sonraki watchdog anı; geri giden saatte `now`'dan sayar. **API değişikliği:** ilk turdaki `nextDeadline` özelliği artık `nextDeadline(now:)`). `now` = `HostClock.nowUs()`, mesajın ALINDIĞI an. `handle(.releaseAll/.bye)` da release-all yapar.
+  - Oturum başına bir `InputStateMachine` (değer tipi, kilitsiz; tek kuyruktan kullanılır; durum oturumlar arası taşınmaz). `handle(_ message, now:)` (watchdog eylemleri + mesaj eylemleri; KEY ve diğerleri kendi eylemi üretmez), `tick(now:)`, `releaseAll(_ cause: ReleaseCause)` (`SessionAction.releaseInput`'un nedeni doğrudan geçer), `nextDeadline(now:)` (**mutating**: bir sonraki watchdog anı; geri giden saati `tick`/`handle` gibi önce `now`'a yeniden bağlar, bu yüzden o anda `tick` her zaman çalışır. **API değişikliği:** ilk turdaki `nextDeadline` özelliği `nextDeadline(now:)` oldu ve `var` makine ister). `now` = `HostClock.nowUs()`, mesajın ALINDIĞI an. `handle(.releaseAll/.bye)` da release-all yapar.
   - `InjectAction`: `penProximity(tool, entering)`, `penHover/penDown/penDrag/penUp(tool, PenPoint)`, `mouseMove(MouseMotion, dragging: MouseButton?)`, `mouseButton(MouseButton, down:)`, `scroll(InjectScrollPhase, dx, dy)`, `scrollWheel(dx, dy)`. Liste sırayla uygulanır.
   - Enjektör kuralları: `mouseButton` imlecin O ANKİ konumunda uygulanır (enjektörün son konumu tutması gerekir). `mouseMove.dragging` ilgili `*MouseDragged` tipini seçer (nil = `mouseMoved`). `penUp` basıncı 0'dır. Scroll: `.ended` atalete izin verir, `.cancelled` iptal, `.forcedEnd` Mac'e ENDED olarak gider, atalet üretilmez ve süren atalet durdurulur. Çift tıklama `clickState` enjektörde.
 - **Kural -> test eşlemesi** (test adları kimlikle başlar, `swift test` çıktısında görünür):
@@ -79,8 +80,8 @@ Sıra: önce bu plan commit'i, sonra kod + testler, `check.sh`, Handoff.
   | §4 `CONTACT=1 IN_RANGE=0` -> `flags=0`; `IN_RANGE=0` her araçta etkin aracı kapatır | PEN-9a/b/c, LATCH-6 |
   | §4 `STROKE_START`; aynı örnekte enter+down; temas sürerken `STROKE_START` = up+down | PEN-3, PEN-10, LATCH-3 |
   | §4 kilit (oturum başı + her release-all, araç başına; watchdog kilit kurmaz) | LATCH-0..10, REL-7, FUZZ-3, FUZZ-7 |
-  | §7 kalem watchdog 500 ms, saat geri giderse yeniden bağlama | WD-PEN-1..6, WD-4/5, FUZZ-5 |
-  | §7 scroll watchdog 500 ms, zorla bitirme | WD-SCROLL-1/2, WD-3, WD-6 |
+  | §7 kalem watchdog 500 ms, saat geri giderse yeniden bağlama | WD-PEN-1..6, WD-4/5, WD-11, FUZZ-5 (geri saatli sonda dahil) |
+  | §7 scroll watchdog 500 ms, zorla bitirme | WD-SCROLL-1/2, WD-3, WD-6, WD-12 |
   | §7 mesajdan önce süresi dolmuş watchdog | WD-8/9/10, FUZZ-6 |
   | §7 tek sol düğme sahibi, sahip olmayanın basış/bırakışı etkisiz | OWN-1, OWN-4, OWN-5 |
   | §7 kalem önceliği (önce sahip adına up, sonra kalem down; yeniden basmak gerekir) | OWN-2, OWN-2b, OWN-9 |
@@ -94,14 +95,14 @@ Sıra: önce bu plan commit'i, sonra kod + testler, `check.sh`, Handoff.
   | "Hiçbir basılı durum kalmadı", "her down'un up'ı var", sıfır/geri saat | FUZZ-1, FUZZ-2, FUZZ-3 (bayat tekrar), FUZZ-4 (determinizm) |
   | İyi niyetli istemci: her şeyi bırakır, host release-all'dan habersiz, son release-all yok -> Mac boşta; meşru basış/vuruş yutulmaz | WELL-1 (host / istemci / ikisi release eder) |
 
-  Testlerin hata yakaladığı elle doğrulandı, iki turda 25 mutasyonla (ör. kilit yok, taze makine kilitsiz, sahip olmayan bırakır, release-all bildirilen düğmeleri siler, kalem önceliği up'ı yok, kapı yalnız TOUCH'a değil hepsine, kapıdayken sahibin bırakışı yok sayılır, `handle` watchdog uygulamaz, geri saatte yeniden bağlama yok (çöker), `nextDeadline` geri saati yok sayar, zorla bitirme `.cancelled`/`.ended`, hover bastırma yok, STROKE_START kilidi açmaz, watchdog sahibi bırakmaz). Her biri en az 1 testte kırmızı verdi; sonra geri alındı.
+  Testlerin hata yakaladığı elle doğrulandı, üç turda 26 mutasyonla (ör. kilit yok, taze makine kilitsiz, sahip olmayan bırakır, release-all bildirilen düğmeleri siler, kalem önceliği up'ı yok, kapı yalnız TOUCH'a değil hepsine, kapıdayken sahibin bırakışı yok sayılır, `handle` watchdog uygulamaz, geri saatte yeniden bağlama yok (çöker), `nextDeadline` geri saati yeniden bağlamaz (WD-11/12, FUZZ-5 kırmızı), zorla bitirme `.cancelled`/`.ended`, hover bastırma yok, STROKE_START kilidi açmaz, watchdog sahibi bırakmaz). Her biri en az 1 testte kırmızı verdi; sonra geri alındı.
 - **Varsayımlar.** Kesinleşenler (orkestratör, PROTOCOL b152c0f) ve bu turdakiler ayrı:
   - *Kesinleşti:* (a) işaretçi kaynaklarının bildirdiği düğme durumu release-all'da silinmez (§7 "işaretçi kilidi"); (b) watchdog kilit kurmaz (§4/§7); (c) vuruş ortasında araç değişimi -> yeni araç kilitli (§4); (d) temas sürerken `STROKE_START` = up+down (§4 tablo); (e) `IN_RANGE=0` örneği hangi `tool` ile gelirse gelsin etkin aracı kapatır (§4); (f) imleç hareketi bastırma, kalem hover dahil (§7); (g) zorla scroll bitişi ENDED, ataletsiz (§4 SCROLL); (h) DOUBLE_TAP silgi modu, araç değişimi sonraki PEN örneğinde (§4/0x15); (i) süre host'un tek saatiyle ve mesajın alındığı anla ölçülür, saat geri gidince yeniden bağlanır (§7).
   - *Hâlâ benim seçimim (PROTOCOL sessiz):*
     1. Enter örneği konumu da bildirir: `IN_RANGE 0->1` örneği `[enter, hover]` (ya da `[enter, down]`); bir işaretçi sol düğmeyi tutuyorsa yalnız `[enter]` (hover bastırılır). Tablo yalnız enter'ı sayıyor.
     2. Parmak kapısı sınırı: `< 1 sn` kapalı, tam 1 sn'de açık; kapı TOUCH'ın tüm yeni basışlarına (sağ/orta dahil) uygulanır; watchdog kapanışı ve release-all kapıyı açmaz (kapı son PEN mesajından sayılır).
     3. `handle` watchdog'ları kendisine verilen HER mesaj türünde uygular (STATS/PING dahil), "her girdi mesajı"nın üst kümesi; sonuç zamanlayıcıdan bağımsız kalır (FUZZ-6).
-    4. `nextDeadline` `now` parametresi aldı (saat geri gidince kullanıcının zamanlayıcısı doğru uyansın diye).
+    4. `nextDeadline` `now` parametresi aldı ve `mutating` (saat geri gidince zamanlayıcı doğru uyansın diye; çağıran makineyi `var` tutmalı).
     5. Kapıda olmayan (basışı kabul edilmemiş) parmak imleci taşımaz; sol düğmeyi hiç tutmayan TOUCH mesajı da imleç oynatmaz.
     6. NaN/Inf'i codec reddeder, makine ayrıca süzmez; onay öncesi mesajları SessionMachine eler.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Yalnızca saf birim/fuzz testleri; CGEvent ve gerçek kalem yok. T-023/T-025'te: (1) gerçek kalemde `[enter, hover]` sırası ve imleç yerleşimi; (2) istemcinin 100 ms canlılık tekrarı ile 500 ms watchdog sınırı (sık watchdog görülüyor mu); (3) avuç/kalem önceliği ve 1 sn kapı süresi elde rahat mı; (4) çift dokunma gerçekten tek DOUBLE_TAP mı ve Krita'da silgi ucu geçişi; (5) arka plana alıp dönünce vuruş ortası örneklerin çizim başlatmadığı; (6) `nextDeadline(now:)` ile zamanlayıcının watchdog'u kaçırmaması (T-023 bağlaması); (7) `.forcedEnd` sonrası ataletin gerçekten durması (Faz 3).
