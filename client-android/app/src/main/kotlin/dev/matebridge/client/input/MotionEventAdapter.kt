@@ -2,6 +2,7 @@ package dev.matebridge.client.input
 
 import android.view.InputDevice
 import android.view.MotionEvent
+import dev.matebridge.client.protocol.Buttons
 
 /**
  * Thin Android glue: turns a [MotionEvent] into the MotionEvent-independent frames of [InputCapture].
@@ -23,6 +24,7 @@ object MotionEventAdapter {
      * belongs to pen or finger input, so the caller consumes it.
      */
     fun handle(ev: MotionEvent, offX: Float, offY: Float, nowMs: Long, capture: InputCapture): Boolean {
+        if (isCapturedPointer(ev)) return handleCaptured(ev, nowMs, capture)
         // Only the screen digitizers. The keyboard touchpad and mice report FINGER/MOUSE tools too (source MOUSE
         // or TOUCHPAD in normal mode, NOTES 2026-09-29) and belong to the later trackpad task.
         if (!ev.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) && !ev.isFromSource(InputDevice.SOURCE_STYLUS)) return false
@@ -87,6 +89,69 @@ object MotionEventAdapter {
         }
         return consumed
     }
+
+    /**
+     * Under pointer capture the keyboard touchpad reports source TOUCHPAD and a mouse SOURCE_MOUSE_RELATIVE (NOTES
+     * 2026-09-29). Touchscreen and stylus events are never delivered as captured events and keep their own path above.
+     */
+    fun isCapturedPointer(ev: MotionEvent) =
+        ev.isFromSource(InputDevice.SOURCE_TOUCHPAD) || ev.isFromSource(SOURCE_MOUSE_RELATIVE)
+
+    /** Touchpad and mouse events under pointer capture (T-034). Returns true: a captured event is always consumed. */
+    fun handleCaptured(ev: MotionEvent, nowMs: Long, capture: InputCapture): Boolean {
+        val buttons = mapButtons(ev.buttonState)
+        if (ev.isFromSource(InputDevice.SOURCE_TOUCHPAD) && !ev.isFromSource(SOURCE_MOUSE_RELATIVE)) {
+            val action = when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> PadAction.DOWN
+                MotionEvent.ACTION_MOVE -> PadAction.MOVE
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> PadAction.UP
+                MotionEvent.ACTION_CANCEL -> PadAction.CANCEL
+                MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> PadAction.BUTTON
+                else -> return true
+            }
+            val fingers = ArrayList<Finger>(ev.pointerCount)
+            for (i in 0 until ev.pointerCount) fingers += Finger(ev.getPointerId(i), ev.getX(i), ev.getY(i))
+            val acting = if (action == PadAction.DOWN || action == PadAction.UP) ev.getPointerId(ev.actionIndex) else -1
+            val pressed = if (ev.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) mapButtons(ev.actionButton) else 0
+            val range = ev.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)
+            val extent = if (range != null) range.max - range.min else 0f
+            capture.onPad(PadFrame(action, acting, fingers, ev.eventTime * 1000, ev.deviceId, buttons, pressed, extent), nowMs)
+            return true
+        }
+        var dx = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_X)
+        var dy = ev.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)
+        // Batched samples each carry their own relative motion: never drop any.
+        for (h in 0 until ev.historySize) {
+            dx += ev.getHistoricalAxisValue(MotionEvent.AXIS_RELATIVE_X, h)
+            dy += ev.getHistoricalAxisValue(MotionEvent.AXIS_RELATIVE_Y, h)
+        }
+        val scrolling = ev.actionMasked == MotionEvent.ACTION_SCROLL
+        val pressed = if (ev.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) mapButtons(ev.actionButton) else 0
+        capture.onMouse(
+            MouseFrame(
+                ev.eventTime * 1000, dx, dy, buttons, pressed,
+                if (scrolling) ev.getAxisValue(MotionEvent.AXIS_VSCROLL) else 0f,
+                if (scrolling) ev.getAxisValue(MotionEvent.AXIS_HSCROLL) else 0f,
+                ev.deviceId,
+            ),
+            nowMs,
+        )
+        return true
+    }
+
+    /** `MotionEvent.BUTTON_*` bits to PROTOCOL.md `buttons` bits (LEFT, RIGHT, MIDDLE, BACK, FORWARD). */
+    fun mapButtons(state: Int): Int {
+        var b = 0
+        if (state and MotionEvent.BUTTON_PRIMARY != 0) b = b or Buttons.LEFT
+        if (state and MotionEvent.BUTTON_SECONDARY != 0) b = b or Buttons.RIGHT
+        if (state and MotionEvent.BUTTON_TERTIARY != 0) b = b or Buttons.MIDDLE
+        if (state and MotionEvent.BUTTON_BACK != 0) b = b or Buttons.BACK
+        if (state and MotionEvent.BUTTON_FORWARD != 0) b = b or Buttons.FORWARD
+        return b
+    }
+
+    /** `InputDevice.SOURCE_MOUSE_RELATIVE` is API 26 (minSdk is 29), spelled out to keep the glue independent of lint level. */
+    private const val SOURCE_MOUSE_RELATIVE = InputDevice.SOURCE_MOUSE_RELATIVE
 
     private fun kindOf(tool: Int) = when (tool) {
         MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER -> ToolKind.PEN

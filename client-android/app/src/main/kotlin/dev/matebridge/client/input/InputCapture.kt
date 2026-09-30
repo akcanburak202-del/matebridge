@@ -19,6 +19,8 @@ import dev.matebridge.client.stream.VideoViewport
  *  - backpressure: only plain hover PEN and SCROLL CHANGED are ever held ([InputOutbox]); a release flushes
  *    them first and is never held; a queue overflow means the connection is reset, the model is forgotten
  *    ([onRefused]) and the host releases on disconnect;
+ *  - pointer capture (touchpad and mouse, T-034): [onPointerCaptureLost] and every release path send `buttons = 0` for a
+ *    reported button and end an open pad scroll; a held physical button is reported again only after a new press;
  *  - a new control connection ([onSessionReset]) forgets the model as well.
  */
 class InputCapture(
@@ -34,6 +36,7 @@ class InputCapture(
     private val touch = TouchTracker(viewport, pen, counters)
     private val doubleTap = DoubleTapDetector()
     private val keys = KeyTracker()
+    private val rel = RelPointerTracker(counters)
     private val outbox = InputOutbox(sink, counters) { onRefused() }
 
     private var active = false
@@ -73,6 +76,7 @@ class InputCapture(
     fun setStreamGeometry(widthPt: Int, heightPt: Int) {
         touch.widthPt = widthPt
         touch.heightPt = heightPt
+        rel.widthPt = widthPt
     }
 
     /** "Parmak dokunmasını tamamen kapat". Turning it on releases any finger currently held. */
@@ -104,6 +108,28 @@ class InputCapture(
         if (!accepting) return
         devices += f.deviceId
         dispatch(touch.onFrame(f, nowMs))
+    }
+
+    /** A touchpad event under pointer capture (T-034). The touchscreen and the pen never come through here. */
+    fun onPad(f: PadFrame, nowMs: Long) {
+        if (!accepting) return
+        dispatch(rel.onPad(f, nowMs))
+    }
+
+    /** A mouse event under pointer capture (T-034). */
+    fun onMouse(f: MouseFrame, nowMs: Long) {
+        if (!accepting) return
+        dispatch(rel.onMouse(f, nowMs))
+    }
+
+    /**
+     * Pointer capture was lost (system, focus, or we released it): reported buttons go to 0 and an open pad scroll ends
+     * (PROTOCOL.md section 7). Not a RELEASE_ALL and does not suspend input: pen, finger and keys are not affected.
+     * Works while suspended or inactive too, so nothing reported stays pressed.
+     */
+    fun onPointerCaptureLost(nowMs: Long) {
+        val outs = rel.release(nowMs)
+        if (outs.isNotEmpty()) dispatch(outs)
     }
 
     /**
@@ -139,6 +165,7 @@ class InputCapture(
         if (accepting) {
             if (!dispatch(pen.tick(nowMs))) return finishTick(nowMs)
             if (!dispatch(touch.tick(nowMs))) return finishTick(nowMs)
+            if (!dispatch(rel.tick(nowMs))) return finishTick(nowMs)
             outbox.tick()
         }
         finishTick(nowMs)
@@ -168,6 +195,7 @@ class InputCapture(
             // Pointer sources go last: buttons = 0 for everything reported pressed sits immediately before RELEASE_ALL
             // (PROTOCOL.md section 7, the host's pointer lock would swallow the next press otherwise).
             outs += touch.release(nowMs)
+            outs += rel.release(nowMs)
             doubleTap.reset()
             keys.reset() // the host releases held keys on RELEASE_ALL; a later physical UP must not be sent
             if (reason == ReleaseAll.BACKGROUND || reason == ReleaseAll.FOCUS_LOST) suspended = true
@@ -201,6 +229,8 @@ class InputCapture(
     fun onDeviceRemoved(deviceId: Int, nowMs: Long) {
         // A detached keyboard releases only its own keys; pen and finger state is untouched.
         if (keys.holdsDevice(deviceId)) dispatch(keys.releaseDevice(deviceId, nowMs * 1000))
+        // A detached touchpad or mouse ends its own scroll and buttons only.
+        if (rel.holdsDevice(deviceId)) dispatch(rel.release(nowMs))
         if (devices.remove(deviceId)) releaseAll(ReleaseAll.DEVICE_DETACHED, nowMs)
     }
 
@@ -219,6 +249,7 @@ class InputCapture(
         touch.reset()
         doubleTap.reset()
         keys.reset()
+        rel.reset()
         outbox.dropHeld()
     }
 

@@ -1,7 +1,7 @@
 ---
 id: T-034
 title: Tablet trackpad ve fare — pointer capture, POINTER_REL, dokunarak tık, iki parmak kaydırma/sağ tık
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-033]
@@ -50,8 +50,9 @@ Glide Keyboard touchpad'i ve Bluetooth fare ile Mac imlecini kullanmak: PROTOCOL
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** (aşağıdaki commit; SHA orkestratöre raporda)
+- **Dokunulan dosyalar:** `input/RelPointerTracker.kt` (yeni: touchpad + fare, `PadTuning`), `input/InputCapture.kt`, `input/InputOutbox.kt` (POINTER_REL birleştirme, `rel_msgs`), `input/Model.kt` (sayaçlar `rel_msgs`, `taps`, `tp_scroll`), `input/MotionEventAdapter.kt`, `MainActivity.kt`, testler `RelPointerTrackerTest.kt`, `RelPointerCaptureTest.kt`, bu kart.
+- **Sabitler (`PadTuning`):** TAP_MS 180, SLOP_FRAC 0,02 (pad genişliğinin %2'si, tık ve kaydırma eşiği), SCREEN_SPAN 1,2 (pad genişliği = 1,2 Mac ekran genişliği), ivme GAIN_MIN 0,8 (<=150 pt/s) -> GAIN_MAX 2,6 (>=1800 pt/s) doğrusal, dt sıkıştırma 4..50 ms, SCROLL_GAIN 1,0, MOUSE_GAIN 1,0 (ivmesiz), WHEEL_NOTCH_PT 10, kaydırma canlılık 200 ms / boşta bitiş 5 sn, DEFAULT_EXTENT 1560 (aralık alınamazsa).
+- **Varsayımlar:** (1) Pad x/y birimleri eşyönlü, ölçek yalnız X aralığından. (2) Captured olaylar pencere `dispatchGenericMotionEvent`'ine ve/veya odaktaki görünümün `OnCapturedPointerListener`'ine düşer: ikisi de `routeToCapture`'a bağlı (biri tüketirse diğeri görmez). (3) Touchpad fiziksel tık `BUTTON_PRESS`+`buttonState` ile gelir (NOTES); `actionButton` yeni basışı işaretler. (4) Tekerlek: `AXIS_VSCROLL>0` (yukarı) -> `dy=+10`, `AXIS_HSCROLL>0` -> `dx=-10` (host CGEvent'e olduğu gibi geçirir; yön hostta). (5) Host POINTER_REL'i tek kaynak saydığı için touchpad, fare ve dokunarak-tık tek birleşik düğme durumu üzerinden gider. (6) 2->1 veya >=3 parmakta imleç, tüm parmaklar kalkana kadar kilitli (zıplama yok). (7) Kaydırma/kapture kaybı `ENDED` ile kapanır (CANCELLED değil). Touchscreen/kalem capture dışıdır: Android captured olayları yalnız TOUCHPAD/MOUSE_RELATIVE kaynaklarından üretir; `MotionEventAdapter.handle` ekran/kalem dalı aynen duruyor, yeni dal yalnız `isCapturedPointer` için ve en üstte.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** pointer capture gerçekten alınıyor mu (`hasPointerCapture`, log `release_all`/`stats`), captured olayların hangi yoldan geldiği (Activity mi listener mı) ve `isFromSource` değerleri (TOUCHPAD 0x100008, fare MOUSE_RELATIVE); tek parmak imleç hissi ve ivme; dokunarak tık (tek = sol, iki = sağ, çift tık hostta clickState); fiziksel tık + sürükleme; iki parmak kaydırma yönü (host doğal kaydırma) ve hız; fare + tekerlek; arka plana/odak kaybına geçince düğme/kaydırma bırakılıyor mu, kalem ve parmak çizimi capture açıkken bozulmuyor mu; `MB/input` satırında `rel_msgs`, `taps`, `tp_scroll`.
+- **Açık sorular:** Captured olay kaynağı sadece `TOUCHPAD` ise `SOURCE_MOUSE_RELATIVE` kontrolü gereksiz kalır, zararsız. Mouse captured olayları SOURCE_MOUSE (göreli eksensiz) gelirse işlenmez: cihazda doğrulanmalı. Sol tuş sahipliği (kalem önceliği) hostta.
