@@ -5,7 +5,7 @@
 //
 // Ownership and lifetime for the consumer:
 // - One instance per session; its state is never carried to the next session (PROTOCOL.md section 7). A new machine
-//   starts with both pen latches armed (section 4: "oturum basinda"), so a first contact sample without
+//   starts with both pen latches armed (section 4 latch rule, "at session start"), so a first contact sample without
 //   `STROKE_START` is hover. Every message of the active session goes to `handle(_:now:)`, a timer calls
 //   `tick(now:)` at `nextDeadline(now:)`, and every release-all trigger of PROTOCOL.md section 7 calls
 //   `releaseAll(_:)`, which is idempotent and safe to call at any time.
