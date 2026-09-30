@@ -253,7 +253,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
             }
 
-            override fun onClipboard(msg: Clipboard) { runOnUiThread { if (::clipboard.isInitialized) clipboard.onRemote(msg) } }
+            override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
         }, streamMode)
         capture = InputCapture(
             object : InputSink {
@@ -294,7 +294,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.isFocusableInTouchMode = true
             sv.setOnCapturedPointerListener(capturedPointerListener)
         }
-        clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }) { controller.trySend(it) }
+        clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }, { controller.trySend(it) }, { runOnUiThread(it) })
         addFingerToggle()
         addModeButton()
         addClipboardToggle()
@@ -912,7 +912,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun render(state: SessionUi) {
-        if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis())
+        if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
         if (!started || isDestroyed) return
         lastUi = state
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint

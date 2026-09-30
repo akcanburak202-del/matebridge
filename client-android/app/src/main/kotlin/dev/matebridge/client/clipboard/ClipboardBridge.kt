@@ -6,7 +6,9 @@ import android.content.Context
 import android.os.Build
 import android.widget.Toast
 import dev.matebridge.client.protocol.Clipboard
+import dev.matebridge.client.session.Latest
 import dev.matebridge.client.session.MbLog
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Android glue for [ClipboardSync] (T-055). Main thread only. Reading the clipboard only works while the app has focus
@@ -17,6 +19,7 @@ class ClipboardBridge(
     private val context: Context,
     val sync: ClipboardSync,
     private val send: (Clipboard) -> Boolean,
+    private val postToMain: (Runnable) -> Unit,
 ) {
     private val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     private var listening = false
@@ -51,9 +54,29 @@ class ClipboardBridge(
         }
     }
 
+    private class Pending(val msg: Clipboard, val gen: Int)
+
+    private val pending = Latest<Pending>()
+    private val drainScheduled = AtomicBoolean(false)
+
+    /**
+     * Any thread. Latest-value mailbox: at most one pending write and one scheduled main-thread drain, however fast the
+     * peer sends; a newer message replaces an undelivered older one. [gen] is the control generation it arrived on.
+     */
+    fun postRemote(msg: Clipboard, gen: Int) {
+        pending.post(Pending(msg, gen))
+        if (drainScheduled.compareAndSet(false, true)) postToMain(Runnable { drain() })
+    }
+
+    private fun drain() {
+        drainScheduled.set(false)
+        val p = pending.take() ?: return
+        onRemote(p.msg, p.gen)
+    }
+
     /** Text from the Mac: written with setPrimaryClip (the listener event it causes is suppressed by [ClipboardSync]). */
-    fun onRemote(msg: Clipboard) {
-        val text = sync.onRemote(msg) ?: return
+    private fun onRemote(msg: Clipboard, gen: Int) {
+        val text = sync.onRemote(msg, gen) ?: return
         MbLog.i("clipboard", "dir=in bytes=${msg.data.size}", "clipboard")
         try {
             cm.setPrimaryClip(ClipData.newPlainText("MateBridge", text))

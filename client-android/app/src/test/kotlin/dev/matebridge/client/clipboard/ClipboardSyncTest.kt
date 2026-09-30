@@ -89,4 +89,27 @@ class ClipboardSyncTest {
         assertEquals(Decision.Ignore, s.onLocalClip("while away", false, 1600))
         assertTrue(s.onLocalClip("fresh", false, 2100) is Decision.Send)
     }
+
+    @Test fun dedupStateIsResetPerSession() {
+        val s = sync()
+        assertTrue(s.onLocalClip("A", false, 0) is Decision.Send)
+        s.onSessionAccepted(false, 1500)
+        s.onSessionAccepted(true, 2000)
+        assertTrue(s.onLocalClip("A", false, 2100) is Decision.Send)
+        // echo state too: a text received in the old session does not suppress a fresh copy
+        assertEquals("B", s.onRemote(text("B")))
+        s.onSessionAccepted(false, 2200)
+        s.onSessionAccepted(true, 3000)
+        assertTrue(s.onLocalClip("B", false, 3100) is Decision.Send)
+    }
+
+    @Test fun remoteRespectsAcceptedAndGeneration() {
+        val s = ClipboardSync()
+        assertNull(s.onRemote(text("a"), 1)) // not accepted
+        s.onSessionAccepted(true, 1000, gen = 2)
+        assertNull(s.onRemote(text("a"), 1)) // stale generation
+        assertEquals("a", s.onRemote(text("a"), 2))
+        s.onSessionAccepted(false, 1500, gen = 2)
+        assertNull(s.onRemote(text("a"), 2)) // session ended
+    }
 }

@@ -22,6 +22,7 @@ class ClipboardSync {
     private var baselineMs = 0L
     private var lastText: String? = null
     private var seq = 0L
+    private var sessionGen = 0
 
     /** Sharing on/off (Settings). */
     var enabled = true
@@ -30,8 +31,12 @@ class ClipboardSync {
      * Session accepted or not. On the transition to accepted, anything copied before now counts as "already there" and is
      * never sent ("the existing clipboard is not sent at start", PROTOCOL.md).
      */
-    fun onSessionAccepted(accepted: Boolean, nowMs: Long) {
-        if (accepted && !this.accepted) baselineMs = nowMs
+    fun onSessionAccepted(accepted: Boolean, nowMs: Long, gen: Int = 0) {
+        if (accepted && !this.accepted) {
+            baselineMs = nowMs
+            lastText = null // dedup/echo state is per session: a fresh copy after a reconnect must go out
+            sessionGen = gen
+        }
         this.accepted = accepted
     }
 
@@ -54,8 +59,8 @@ class ClipboardSync {
      * A CLIPBOARD arrived from the host. Returns the text to write to the local clipboard, or null to ignore it (sharing off,
      * EMPTY, unknown kind, empty/oversized data, invalid UTF-8). The returned text is remembered so the change it causes is not sent back.
      */
-    fun onRemote(msg: Clipboard): String? {
-        if (!enabled || msg.kind != Clipboard.KIND_TEXT_UTF8) return null
+    fun onRemote(msg: Clipboard, gen: Int = sessionGen): String? {
+        if (!enabled || !accepted || gen != sessionGen || msg.kind != Clipboard.KIND_TEXT_UTF8) return null
         if (msg.data.size == 0 || msg.data.size > Clipboard.MAX_DATA_BYTES) return null
         val text = decodeStrictUtf8(msg.data.value) ?: return null
         lastText = text

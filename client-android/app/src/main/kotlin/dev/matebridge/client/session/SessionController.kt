@@ -57,7 +57,7 @@ interface SessionListener {
     fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
 
     /** A CLIPBOARD message arrived on an accepted session (engine thread). Its data is private: never log it. */
-    fun onClipboard(msg: Clipboard) {}
+    fun onClipboard(msg: Clipboard, gen: Int) {}
 }
 
 /**
@@ -187,7 +187,7 @@ class SessionController(
         logEvent(e)
         val now = nowUs()
         if (e is SessionMachine.Event.Received && e.msg is Pong) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
-        if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg)
+        if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg, e.gen)
         val actions = machine.handle(e, now)
         inputAllowed = machine.inputAllowed
         MbLog.sid = machine.currentSessionId
