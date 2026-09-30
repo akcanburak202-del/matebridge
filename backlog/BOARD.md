@@ -8,6 +8,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-035](tasks/T-035-client-pointer-speed-exit.md) | Tablet — imleç hızı (daha yavaş varsayılan + canlı ayar kısayolu), Android'e dönüş kısayolu | 3 | android-client-dev | [T-033, T-034] |
+
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
