@@ -13,6 +13,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-025](tasks/T-025-phase2-device-validation.md) | Faz 2 cihaz doğrulaması — Krita test matrisi, kalem gecikmesi, takılı girdi avı | 2 | orchestrator | [T-023, T-024] |
+| [T-026](tasks/T-026-client-pen-unbuffered.md) | Tablet — kalem örneklerini bekletmeden ilet (unbuffered dispatch), yinelenen örnek sayacı | 2 | android-client-dev | [T-024] |
 
 ## done
 
