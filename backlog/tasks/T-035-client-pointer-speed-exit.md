@@ -35,7 +35,15 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): klavye, touchpad ve fare çalışı
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `PadTuning`: SCREEN_SPAN 0,8; GAIN_MIN 0,6; GAIN_MAX 1,8; MOUSE_GAIN 0,6.
+2. `Settings`: `touchpadSpeed()/mouseSpeed()` (+setters, clamp 0,25-3,0, default 1,0, bozuk deger -> 1,0), `adjustSpeed(mouse, factor)`, Turkce etiket bicimleyici.
+3. `RelPointerTracker`: `padSpeed`/`mouseSpeed` carpani yalnizca imlec hareketine (scroll degil); `lastWasMouse` (son kullanilan cihaz).
+4. `KeyTracker`: `KeyDecision.local` (enum LocalAction: STATS, SPEED_DOWN, SPEED_UP, BACKGROUND); T-033 localOnly mekanizmasi Ctrl+Shift+F1/F2/F3/Esc icin genellestirilir. Esc'in BACK kontrolu yerel kontrolden sonraya alinir (Esc BACK koduyla da gelebilir).
+   Not: mevcut `KEYCODE_F3 = 134` hatali (Android'de F3 = 133, 134 = F4); F1=131, F2=132, F3=133 olarak duzeltilir, testler guncellenir (scan kodu 59/60/61 de kabul).
+5. `InputCapture`: hiz carpanlarini tracker'a iletir; `lastPointerIsMouse`.
+6. `MainActivity`: local action isleme (hiz: Settings + Toast; BACKGROUND: moveTaskToBack(true) -> onPause -> RELEASE_ALL(BACKGROUND)); baslangicta ayarlari uygular; panele tek satir kisayol metni.
+7. Testler: Settings siniri/kalicilik, F1/F2/Esc yerel + tekrar eden DOWN yerel, varsayilan sabitler, hiz carpaninin scroll'u etkilememesi.
+
 
 ## Handoff
 
