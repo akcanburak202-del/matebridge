@@ -949,6 +949,16 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = f
             }
         }
         if d.pipe.reconciliations != 0 { fail("planner held what the machine did not") }
+        // The retry timer is scheduled for nextRetryAt: a replay there always attempts something, and a moment at which
+        // a replay just withheld everything is always before it (otherwise the host would spin).
+        if let at = d.pipe.owed.nextRetryAt {
+            var due = d.pipe.owed
+            if due.replay(now: at, force: false, geometry: nil).isEmpty { fail("replay at nextRetryAt attempted nothing") }
+            var now = d.pipe.owed
+            if now.replay(now: d.now, force: false, geometry: nil).isEmpty, at <= d.now {
+                fail("nextRetryAt \(at) is not in the future although replay withheld everything at \(d.now)")
+            }
+        }
         // Whatever the Mac holds is known to someone: the planner, or the owed releases.
         if !d.model.isIdle && !d.pipe.planner.isHoldingInput && d.pipe.owed.isEmpty {
             fail("the Mac holds input nobody remembers")

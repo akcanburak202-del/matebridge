@@ -183,6 +183,38 @@ struct OwedReleaseTests {
         #expect(o.nextRetryAt == 5 + OwedRelease.retryIntervalUs)
     }
 
+    @Test("OWED-11 the next retry time counts only what replay would emit: a leave held behind an owed up is due when the up is, not at once")
+    func owed11_nextRetryFollowsDependency() {
+        // The exact sequence: the up fails at 0 ms (retry at 250 ms); at 100 ms a leave is stored with deadline 0.
+        var o = OwedRelease()
+        o.owe([tabletEvent(.up)], now: 0, countsAsAttempt: true)
+        o.owe([proximityEvent(entering: false)], now: 100_000, countsAsAttempt: false)
+        #expect(o.nextRetryAt == 250_000)  // not 0 (the leave's own deadline) and not 100 ms
+        #expect(o.replay(now: 100_000, force: false, geometry: nil).isEmpty)  // withheld: the time is really in the future
+        #expect(o.replay(now: 249_999, force: false, geometry: nil).isEmpty)
+        #expect(o.replay(now: o.nextRetryAt!, force: false, geometry: nil) == [tabletEvent(.up), proximityEvent(entering: false)])
+
+        // The same in the slow cadence: after six failed replays the up waits a second.
+        var s = OwedRelease()
+        var t: UInt64 = 0
+        s.owe([tabletEvent(.up)], now: t, countsAsAttempt: true)
+        for _ in 0..<OwedRelease.slowAfterAttempts {
+            t += 1_000
+            s.owe(s.replay(now: t, force: true, geometry: nil), now: t, countsAsAttempt: true)
+        }
+        let slowDue = t + OwedRelease.slowIntervalUs
+        s.owe([proximityEvent(entering: false)], now: t + 100_000, countsAsAttempt: false)
+        #expect(s.nextRetryAt == slowDue)
+        #expect(s.replay(now: slowDue - 1, force: false, geometry: nil).isEmpty)
+        #expect(s.replay(now: slowDue, force: false, geometry: nil).count == 2)
+
+        // A leave on its own, and an unrelated button up, keep their own deadlines.
+        var l = OwedRelease()
+        l.owe([proximityEvent(entering: false)], now: 0, countsAsAttempt: false)
+        l.owe([buttonUp(.right)], now: 500, countsAsAttempt: true)
+        #expect(l.nextRetryAt == 0)
+    }
+
     @Test("OWED-10 a pen leave is never replayed before the pen up it depends on")
     func owed10_leaveAfterUp() {
         var o = OwedRelease()

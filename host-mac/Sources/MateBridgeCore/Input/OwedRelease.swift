@@ -86,9 +86,17 @@ public struct OwedRelease: Equatable, Sendable {
     /// yet that it was posted (the next call to `replay` confirms it by the absence of a failure report).
     public var isBlocking: Bool { !entries.isEmpty || !lastReplay.isEmpty }
 
-    /// When the earliest owed entry is due for a replay (0: it is waiting for the permission and is due at once when it
-    /// returns), or nil when nothing is owed.
-    public var nextRetryAt: UInt64? { entries.values.map(\.notBefore).min() }
+    /// When `replay` will next emit something (0: an entry is waiting for the permission and is due at once when it
+    /// returns), or nil when nothing is owed. Only entries `replay` would really emit count: a pen leave is withheld
+    /// while a pen up is owed, so it is due no earlier than that up. A `replay` at this time therefore always attempts
+    /// at least one event, and a time at which `replay` just withheld everything is always before it (the host's retry
+    /// timer must never be scheduled for a moment that is already past).
+    public var nextRetryAt: UInt64? {
+        let upAt = entries[.penUp]?.notBefore
+        return entries.map { slot, entry in
+            slot == .penLeave ? Swift.max(entry.notBefore, upAt ?? 0) : entry.notBefore
+        }.min()
+    }
 
     /// A pen up is owed. A pen leave must not overtake it (the Mac would see the pen leave while it still touches).
     public var owesPenUp: Bool { entries[.penUp] != nil }
