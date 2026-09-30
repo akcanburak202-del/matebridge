@@ -720,6 +720,13 @@ public final class SessionServer: @unchecked Sendable {
                     pendingApproval = nil
                     handlers.approvalCancelled(id.raw)
                 }
+            case .persistOrphanPairing(_, let device, let name, let key):
+                // Same store path as a live approval, minus the ACCEPTED: key first, then the device list.
+                pairKeys.save(key, for: device) { [weak self] saved in
+                    self?.queue.async { [weak self] in
+                        self?.finishOrphanPairing(device: device, name: name, key: key, keySaved: saved)
+                    }
+                }
             case .lookupPairKey(let conn, let device):
                 // Off the session queue: the Keychain may block. The connection sends nothing until it answers
                 // (the machine closes it after 5 s).
@@ -796,6 +803,23 @@ public final class SessionServer: @unchecked Sendable {
             logger.log(.error, "pair_key_save_failed", sessionID: currentSessionID, generation: currentConfigID)
         }
         apply(machine.pairingPersisted(conn, stored: stored, now: nowUs()))
+    }
+
+    /// Session queue: the Keychain save of an orphaned approval finished.
+    private func finishOrphanPairing(device: DeviceID, name: String, key: SecretBytes, keySaved: Bool) {
+        guard keySaved else {
+            logger.log(.error, "pair_key_save_failed", sessionID: currentSessionID, generation: currentConfigID)
+            return
+        }
+        knownDevices[device] = name
+        do { try store.save(knownDevices) } catch {
+            knownDevices[device] = nil
+            pairKeys.remove(device, ifEquals: key)
+            logger.log(.error, "store_save_failed", sessionID: currentSessionID, generation: currentConfigID)
+            return
+        }
+        machine.orphanPairingPersisted(deviceID: device, stored: true)
+        logger.log(.info, "orphan_pairing_stored", sessionID: currentSessionID, generation: currentConfigID)
     }
 
     /// Loopback peer means the tablet came through `adb reverse` (USB mode).

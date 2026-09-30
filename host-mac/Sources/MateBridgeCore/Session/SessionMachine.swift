@@ -48,9 +48,12 @@ public enum SessionAction: Equatable, Sendable {
     case requestApproval(ConnectionID, deviceID: DeviceID, deviceName: String, code: PairingCode)
     case cancelApproval(ConnectionID)
     /// The connection that owns the approval request is gone (tablet left, e.g. switched to another app), but the
-    /// window stays open for `orphanWindowUs`: "Allow" then records a short pre-approval for the device. The request id
-    /// stays valid for `approvalDecided`; `cancelApproval` closes the window at the end.
+    /// window stays open for `orphanWindowUs` with the same code. The request id stays valid for `approvalDecided`
+    /// ("Allow" then yields `persistOrphanPairing`); `cancelApproval` closes the window at the end.
     case approvalOrphaned(ConnectionID)
+    /// "Allow" on an orphaned request: the caller stores that handshake's `key` (Keychain) and the device record and
+    /// reports `orphanPairingPersisted`. There is no ACCEPTED to send; the device's next connection is PAIRED with `key`.
+    case persistOrphanPairing(ConnectionID, deviceID: DeviceID, name: String, key: SecretBytes)
     /// The user accepted a pairing. The caller stores `key` (Keychain) and the device list, then reports the outcome
     /// with `pairingPersisted`; ACCEPTED is sent only after a successful store.
     case persistPairing(ConnectionID, deviceID: DeviceID, name: String, key: SecretBytes)
@@ -81,8 +84,6 @@ public struct SessionMachine: Sendable {
         public var videoHelloTimeoutUs: UInt64 = 5_000_000
         /// How long the approval window stays open after the pending tablet disconnected.
         public var orphanWindowUs: UInt64 = 120_000_000
-        /// How long an "Allow" given to a disconnected request lets that device pair without asking again (once).
-        public var preapprovalUs: UInt64 = 120_000_000
         /// Fills the STREAM_CONFIG sent after ACCEPTED. `configID` must be nonzero.
         public var makeStreamConfig: @Sendable (Hello) -> StreamConfig
         public var makeSessionID: @Sendable () -> UInt32
@@ -160,14 +161,15 @@ public struct SessionMachine: Sendable {
         var schedule: SessionKeySchedule
         var code: PairingCode
         var newPairKey: SecretBytes
-        /// Accepted from a pre-approval: no window was shown, so nothing to keep open if the connection drops.
-        var preapproved = false
     }
 
     /// An approval request whose connection went away; the window is still open.
     private struct Orphan {
         var id: ConnectionID
         var deviceID: DeviceID
+        var deviceName: String
+        /// This handshake's `new_pair_key`, kept in memory only until the user answers or the window expires.
+        var newPairKey: SecretBytes
         var deadline: UInt64
     }
 
@@ -189,8 +191,6 @@ public struct SessionMachine: Sendable {
     private var videoConnections: [ConnectionID: UInt64] = [:]  // opened, awaiting VIDEO_HELLO
     private var videoProofs: [ConnectionID: VideoProof] = [:]  // VIDEO_HELLO valid, awaiting the authenticated PING
     private var orphan: Orphan?
-    /// In-memory only, one use, short-lived: a PAIRING HELLO of such a device is accepted without asking again.
-    private var preapprovals: [DeviceID: UInt64] = [:]
     /// Latest `now` seen, for events that carry none (`connectionClosed`).
     private var clock: UInt64 = 0
 
@@ -225,13 +225,10 @@ public struct SessionMachine: Sendable {
 
     public mutating func forgetApprovedDevices() {
         approvedDevices.removeAll()
-        preapprovals.removeAll()
     }
 
-    /// Test hook: devices with a live pre-approval.
-    func preapprovedForTesting(now: UInt64) -> Set<DeviceID> {
-        Set(preapprovals.filter { now < $0.value }.keys)
-    }
+    /// Test hook: the orphaned request's device, if a window is open.
+    var orphanDeviceForTesting: DeviceID? { orphan?.deviceID }
 
     /// True while the connection waits for the user's answer (the store/persist steps may still be in flight).
     public func isPendingApproval(_ id: ConnectionID) -> Bool {
@@ -313,15 +310,23 @@ public struct SessionMachine: Sendable {
                 .log(.info, ev: "approval_accepted", conn: id, fields: "")]
     }
 
-    /// The user answered the window of a disconnected request. Allow: a one-use pre-approval for that device.
+    /// The user answered the window of a disconnected request. Allow: the handshake's pair key and the approval are
+    /// stored (PAIRED next time, and only the tablet holding that key can complete it). Reject, or an answer after the
+    /// window expired: nothing is stored and the key is dropped.
     private mutating func orphanDecided(_ o: Orphan, approved: Bool, now: UInt64) -> [SessionAction] {
         orphan = nil
         guard approved, now < o.deadline else {
-            preapprovals[o.deviceID] = nil
             return [.cancelApproval(o.id), .log(.info, ev: "approval_rejected", conn: o.id, fields: "disconnected=true")]
         }
-        preapprovals[o.deviceID] = now + configuration.preapprovalUs
-        return [.cancelApproval(o.id), .log(.info, ev: "approval_preapproval_set", conn: o.id, fields: "")]
+        return [.cancelApproval(o.id),
+                .persistOrphanPairing(o.id, deviceID: o.deviceID, name: o.deviceName, key: o.newPairKey),
+                .log(.info, ev: "approval_accepted", conn: o.id, fields: "disconnected=true")]
+    }
+
+    /// The caller finished storing an orphaned approval. On success the device counts as approved (its key is in the
+    /// store), so its next connection takes the PAIRED path through the normal lookup.
+    public mutating func orphanPairingPersisted(deviceID: DeviceID, stored: Bool) {
+        if stored { approvedDevices.insert(deviceID) }
     }
 
     /// The caller finished storing the pair key (`stored`) after `persistPairing`. Only now is ACCEPTED sent;
@@ -416,7 +421,6 @@ public struct SessionMachine: Sendable {
             orphan = nil
             actions += [.cancelApproval(o.id), .log(.info, ev: "approval_orphan_expired", conn: o.id, fields: "")]
         }
-        preapprovals = preapprovals.filter { now < $0.value }
         for id in connections.keys.sorted(by: { $0.raw < $1.raw }) {
             guard let conn = connections[id] else { continue }
             switch conn.phase {
@@ -595,27 +599,13 @@ public struct SessionMachine: Sendable {
                                               Pairing(schedule: schedule, code: code, newPairKey: newKey))
             actions += [.send(id, .helloAck(firstAck)), .startEncryption(id, schedule.control),
                         .log(.info, ev: "handshake", conn: id, fields: "mode=pairing")]
-            if let expiry = preapprovals.removeValue(forKey: hello.deviceID), now < expiry {
-                // The user already allowed this device (while it was away): single use, no window.
-                if case .pending(let h, let d, var p)? = connections[id]?.phase {
-                    p.preapproved = true
-                    connections[id]?.phase = .pending(h, deadline: d, p)
-                }
-                if let o = orphan, o.deviceID == hello.deviceID {
-                    orphan = nil
-                    actions.append(.cancelApproval(o.id))
-                }
-                actions += [.persistPairing(id, deviceID: hello.deviceID, name: hello.deviceName, key: newKey),
-                            .log(.info, ev: "approval_preapproved", conn: id, fields: "")]
-            } else {
-                // A new request replaces a window left open by an earlier one; old pre-approvals are kept.
-                if let o = orphan {
-                    orphan = nil
-                    actions.append(.cancelApproval(o.id))
-                }
-                actions += [.requestApproval(id, deviceID: hello.deviceID, deviceName: hello.deviceName, code: code),
-                            .log(.info, ev: "approval_pending", conn: id, fields: "")]
+            // A new request replaces a window left open by an earlier one (its stored key is dropped).
+            if let o = orphan {
+                orphan = nil
+                actions.append(.cancelApproval(o.id))
             }
+            actions += [.requestApproval(id, deviceID: hello.deviceID, deviceName: hello.deviceName, code: code),
+                        .log(.info, ev: "approval_pending", conn: id, fields: "")]
         }
         return actions
     }
@@ -699,10 +689,11 @@ public struct SessionMachine: Sendable {
             actions.append(.sessionEnded(id))
         case .pending(let hello, _, let pairing):
             pairing.schedule.wipe()
-            if orphaning, !pairing.preapproved {
+            if orphaning {
                 // The tablet left (connection lost or BYE, e.g. the user switched apps): keep the window.
                 if let old = orphan { actions.append(.cancelApproval(old.id)) }
-                orphan = Orphan(id: id, deviceID: hello.deviceID, deadline: clock + configuration.orphanWindowUs)
+                orphan = Orphan(id: id, deviceID: hello.deviceID, deviceName: hello.deviceName,
+                                newPairKey: pairing.newPairKey, deadline: clock + configuration.orphanWindowUs)
                 actions.append(.approvalOrphaned(id))
             } else {
                 actions.append(.cancelApproval(id))
