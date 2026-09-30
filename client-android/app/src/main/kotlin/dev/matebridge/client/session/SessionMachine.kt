@@ -31,6 +31,12 @@ class SessionMachine(private val hello: Hello) {
         data class ControlClosed(val gen: Int, val connectFailed: Boolean = false) : Event
         data class Received(val gen: Int, val msg: Message) : Event
         data class ProtocolError(val gen: Int) : Event
+        /** The first HELLO_ACK was encrypted and valid. [code] is the pairing code (PAIRING only); comes before the ack itself. */
+        data class Secured(val gen: Int, val code: String?, val rePairing: Boolean) : Event
+        /** PAIRED HELLO_ACK but no stored key for this host: re-pairing is required (no retry). */
+        data class KeyMissing(val gen: Int) : Event
+        /** The new pairing key could not be persisted: pairing must not be reported as successful. */
+        data class KeyStoreFailed(val gen: Int) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -60,6 +66,8 @@ class SessionMachine(private val hello: Hello) {
     private var videoRetryAtUs = 0L
 
     private var hostName = ""
+    private var pairingCode: String? = null
+    private var rePairing = false
     private var sessionId = 0L
 
     /** For log correlation only. */
@@ -107,8 +115,22 @@ class SessionMachine(private val hello: Hello) {
                 lose(out, nowUs, if (event.connectFailed) SessionUi.Cause.CONNECT_FAILED else SessionUi.Cause.LOST)
             }
             is Event.ProtocolError -> if (event.gen == controlGen) {
-                out += Action.Send(Bye(Bye.PROTOCOL_ERROR))
-                lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR, graceful = true)
+                // No BYE: the channel is not trusted after a failed record (PROTOCOL.md section 9).
+                lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
+            }
+            is Event.Secured -> if (event.gen == controlGen) {
+                pairingCode = event.code
+                rePairing = event.rePairing
+            }
+            is Event.KeyStoreFailed -> if (event.gen == controlGen) {
+                closeAll(out, graceful = false)
+                phase = Phase.FAILED
+                out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
+            }
+            is Event.KeyMissing -> if (event.gen == controlGen) {
+                closeAll(out, graceful = false)
+                phase = Phase.FAILED
+                out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_MISSING))
             }
             is Event.Received -> if (event.gen == controlGen) onMessage(event.msg, nowUs, out)
             is Event.VideoClosed -> if (event.gen == videoGen) {
@@ -143,6 +165,11 @@ class SessionMachine(private val hello: Hello) {
         if (phase != Phase.AWAIT_ACK && phase != Phase.PENDING) return
         when (ack.status) {
             HelloAck.ACCEPTED -> {
+                lastPongUs = nowUs
+                pairingCode = null
+                // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
+                out += Action.Send(Ping(pingSeq++, nowUs))
+                nextPingUs = nowUs + PING_INTERVAL_US
                 hostName = ack.hostName
                 sessionId = ack.sessionId
                 videoPort = ack.videoPort
@@ -155,7 +182,8 @@ class SessionMachine(private val hello: Hello) {
             HelloAck.PENDING_APPROVAL -> {
                 hostName = ack.hostName
                 phase = Phase.PENDING
-                out += Action.Ui(SessionUi.AwaitingApproval(hostName))
+                lastPongUs = nowUs
+                out += Action.Ui(SessionUi.AwaitingApproval(hostName, pairingCode, rePairing))
             }
             HelloAck.REJECTED, HelloAck.VERSION_MISMATCH -> {
                 closeAll(out, graceful = false)
@@ -189,7 +217,8 @@ class SessionMachine(private val hello: Hello) {
                     lose(out, nowUs, SessionUi.Cause.LOST)
                     return
                 }
-                if (nowUs >= nextPingUs) {
+                // Nothing but HELLO may go out before the first HELLO_ACK: encryption starts with it (section 9).
+                if (phase != Phase.AWAIT_ACK && nowUs >= nextPingUs) {
                     out += Action.Send(Ping(pingSeq++, nowUs))
                     nextPingUs = nowUs + PING_INTERVAL_US
                 }
@@ -236,7 +265,8 @@ class SessionMachine(private val hello: Hello) {
     }
 
     private fun byeAndClose(out: MutableList<Action>) {
-        val open = phase == Phase.AWAIT_ACK || phase == Phase.PENDING || phase == Phase.ACCEPTED || phase == Phase.STREAMING
+        // A BYE is an encrypted record, so it only exists once the first HELLO_ACK arrived (section 9).
+        val open = phase == Phase.PENDING || phase == Phase.ACCEPTED || phase == Phase.STREAMING
         if (open) out += Action.Send(Bye(Bye.NORMAL))
         closeAll(out, graceful = open)
     }
@@ -252,6 +282,8 @@ class SessionMachine(private val hello: Hello) {
         config = null
         sessionId = 0
         videoPort = 0
+        pairingCode = null
+        rePairing = false
     }
 
     companion object {

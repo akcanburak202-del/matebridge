@@ -1,7 +1,7 @@
 package dev.matebridge.client.protocol
 
 /*
- * Message model for docs/PROTOCOL.md v0. Pure Kotlin, no Android dependencies.
+ * Message model for docs/PROTOCOL.md v1. Pure Kotlin, no Android dependencies.
  *
  * Integer mapping (all little-endian on the wire):
  *   u8, u16, i16 -> Int      u32 -> Long (0..4294967295)      u64 -> Long (unsigned bit pattern;
@@ -44,6 +44,9 @@ object Limits {
     const val STR8_MAX_BYTES = 64
     const val PEN_MAX_SAMPLES = 64
     const val DEVICE_ID_BYTES = 16
+    const val NONCE_BYTES = 16
+    const val EPH_PUB_BYTES = 65
+    const val PROTOCOL_VERSION = 1
 }
 
 /** Byte array wrapper with content equality, so messages holding raw bytes compare sensibly. */
@@ -76,6 +79,10 @@ data class Hello(
     val maxRefreshHz: Int,
     val capabilities: Long, // u32
     val deviceName: String, // never log
+    /** Fresh random value per connection (section 9). The session controller fills it; templates may leave the zero default. */
+    val clientNonce: Bytes = Bytes(ByteArray(Limits.NONCE_BYTES)),
+    /** Ephemeral P-256 public key, uncompressed (0x04 || X || Y). */
+    val clientEphPub: Bytes = Bytes(ByteArray(Limits.EPH_PUB_BYTES)),
 ) : Message {
     override val type get() = MsgType.HELLO
 }
@@ -86,10 +93,18 @@ data class HelloAck(
     val sessionId: Long, // u32
     val videoPort: Int,
     val hostName: String,
+    val keyMode: Int = KEY_NONE,
+    val hostId: Bytes = Bytes(ByteArray(Limits.DEVICE_ID_BYTES)),
+    val hostNonce: Bytes = Bytes(ByteArray(Limits.NONCE_BYTES)),
+    val hostEphPub: Bytes = Bytes(ByteArray(Limits.EPH_PUB_BYTES)),
 ) : Message {
     override val type get() = MsgType.HELLO_ACK
 
     companion object {
+        const val KEY_NONE = 0
+        const val KEY_PAIRED = 1
+        const val KEY_PAIRING = 2
+
         const val ACCEPTED = 0
         const val PENDING_APPROVAL = 1
         const val REJECTED = 2
@@ -311,6 +326,8 @@ data class VideoHello(
     val protocolVersion: Int,
     val configId: Int,
     val sessionId: Long, // u32
+    /** Fresh random value per video connection (section 9). The controller fills it; templates may leave the zero default. */
+    val videoNonce: Bytes = Bytes(ByteArray(Limits.NONCE_BYTES)),
 ) : Message {
     override val type get() = MsgType.VIDEO_HELLO
 }
