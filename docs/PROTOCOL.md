@@ -170,16 +170,17 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 | flags | u8 | bit0 `IN_RANGE` (yakınlıkta: hover veya temas), bit1 `CONTACT` (ekrana değiyor), bit2 `BUTTON` (kalem yan tuşu; Aşama 0'da hiç görülmedi, doğrulanmadı), bit3 `STROKE_START` (yalnızca bir temasın ilk örneğinde, yani Android `ACTION_DOWN` örneğinde; `CONTACT` ile birlikte) |
 | reserved | u8 | |
 
-`CONTACT` her zaman `IN_RANGE` ile, `STROKE_START` her zaman `CONTACT` ile birlikte gelir. `CONTACT=1, IN_RANGE=0` gelirse host bunu `flags = 0` sayar.
+`CONTACT` her zaman `IN_RANGE` ile, `STROKE_START` her zaman `CONTACT` ile birlikte gelir. `CONTACT=1, IN_RANGE=0` gelirse host bunu `flags = 0` sayar. İstemci `BUTTON` bitini Android `buttonState`'ten doldurur; host bu biti şimdilik **yok sayar** (karar 0006).
 
 **Eğim yönü:** Mac tarafında `tilt_x`/`tilt_y` doğrudan `NSEvent.tilt` anlamındadır: x −1 sol … +1 sağ, y −1 üst … +1 alt. Android dönüşümü **geçicidir ve cihazda kalibre edilecektir**: `θ = AXIS_TILT` (0 = dik), `φ = AXIS_ORIENTATION` (0 = yukarı, saat yönünde pozitif), `tilt_x = sin θ · sin φ`, `tilt_y = −sin θ · cos φ`. Aşama 0'da temas sırasında eğimin seyrek güncellendiği görüldü. İstemci son bilinen değeri tekrarlar.
 
-**Menzil canlılığı:** Kalem `IN_RANGE` iken istemci en az **100 ms**'de bir PEN mesajı gönderir. Yeni örnek yoksa son örneği güncel zamanla tekrarlar. Tekrarlanan örnek `STROKE_START` **taşımaz** (bayrak yalnızca gerçek `ACTION_DOWN` örneğindedir). Host bunu watchdog için kullanır (§7). Android `HOVER_EXIT` göndermeden kalem kaybolsa bile Mac'te kalem takılı kalmaz.
+**Menzil canlılığı:** Kalem `IN_RANGE` iken istemci yaklaşık **100 ms**'de bir, en geç **150 ms**'de bir PEN mesajı gönderir. Yeni örnek yoksa son örneği güncel zamanla tekrarlar. Tekrarlanan örnek `STROKE_START` **taşımaz** (bayrak yalnızca gerçek `ACTION_DOWN` örneğindedir). Host bunu watchdog için kullanır (§7). Android `HOVER_EXIT` göndermeden kalem kaybolsa bile Mac'te kalem takılı kalmaz.
 
 **İstemci kuralları:**
-- `ACTION_HOVER_EXIT` ve kalemin menzilden çıkması `flags = 0` olan bir örnekle bildirilir.
+- `ACTION_HOVER_EXIT` ve kalemin menzilden çıkması `flags = 0` olan bir örnekle bildirilir. Android her `ACTION_DOWN`'dan hemen önce de `HOVER_EXIT` gönderir; istemci bu yüzden çıkışı en çok **~65 ms** bekletebilir ve arkasından `ACTION_DOWN` gelirse bildirmez (vuruşlar arasında yakınlık açılıp kapanmasın diye). Bekletilen çıkış hiçbir zaman atılmaz: süre dolunca, release-all'da ya da DOWN olmayan ilk olayda gönderilir.
 - `ACTION_CANCEL` de `flags = 0` olan bir örnek olarak gönderilir.
 - Avuç (FINGER tool) örnekleri PEN'e girmez.
+- **Son çare korumaları:** Android hiç olay göndermezse istemci hover'ı **2 sn**, teması **10 sn** sonra `flags = 0` ile kendisi kapatır. Bunlar kilit kurmaz ve host watchdog'unun yerini tutmaz.
 
 **Host durum makinesi:** tek bir fiziksel kalem vardır, bu yüzden aynı anda en çok **bir** araç menzildedir. Host etkin aracı ve onun önceki örneğinin durumunu tutar (oturum başında ve her release-all sonrasında `flags = 0`).
 
@@ -275,6 +276,7 @@ Pointer capture'daki ham iki parmak hareketinden istemcinin ürettiği hassas ka
 
 - Doğal kaydırma yönü, ölçek ve atalet (momentum) host'ta uygulanır. Protokol yalnızca parmak hareketini taşır.
 - Her BEGAN'ın ardından ENDED veya CANCELLED gelmesi zorunludur.
+- **Hareket canlılığı:** hareket açıkken parmaklar durursa istemci en geç **200 ms**'de bir `CHANGED` (`dx = dy = 0`) gönderir; host watchdog'u (§7) bununla beslenir. Host sıfır deltalı `CHANGED` için Mac'e olay enjekte etmez. Parmaklar **5 sn** hiç hareket etmezse istemci hareketi `ENDED` ile kapatır; aynı parmaklar yeniden hareket ederse yeni bir `BEGAN` ile başlar. Böylece canlılık mesajı, kaybolmuş bir parmak kalkışını sonsuza kadar örtemez.
 - Host kuralları: BEGAN olmadan gelen CHANGED/ENDED yok sayılır. Açık bir hareket varken yeni BEGAN gelirse önce eskisi bitirilir.
 - **Zorla bitirme:** host'un kendi bitirdiği hareket (yeni BEGAN, watchdog, release-all; §7) Mac'e **ENDED** olarak gider ve ardından **atalet üretilmez**. İstemciden gelen `CANCELLED` ise Mac'e iptal olarak gider.
 
@@ -299,7 +301,7 @@ Host bu oturumun basılı tuttuğu her şeyi bırakır (§7).
 |---|---|---|
 | reason | u8 | `0` USER, `1` BACKGROUND, `2` FOCUS_LOST, `3` DEVICE_DETACHED |
 
-İstemci bunu şu durumlarda gönderir: uygulama arka plana geçtiğinde, pencere odağı kaybolduğunda, pointer capture kapandığında, bir girdi cihazı ayrıldığında.
+İstemci bunu şu durumlarda gönderir: uygulama arka plana geçtiğinde, pencere odağı kaybolduğunda, pointer capture kapandığında, bir girdi cihazı ayrıldığında, video görünümü gizlendiğinde (ör. bağlantı paneli açıldığında; `reason = USER`).
 
 ### 0x20 PING / 0x21 PONG (iki yön)
 
@@ -427,6 +429,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - **Tek sıralı gönderim:** Bütün girdi mesajları ve `RELEASE_ALL`, olayların üretildiği sırayla **tek bir FIFO**'ya yazılır. Android'de girdi olayları ve yaşam döngüsü çağrıları (`onPause`, odak kaybı) aynı UI iş parçacığında gelir; kuyruğa oradan, o sırayla yazılır. Başka bir iş parçacığı girdi mesajı üretmez.
 - `RELEASE_ALL`'dan sonra istemci, ilgili cihaz/odak geri gelene kadar girdi göndermez. Geri geldiğinde kalem için ilk temas örneği `STROKE_START` taşımıyorsa (vuruşun ortası) temas olarak gönderilmez, yalnızca hover olarak gönderilir.
 - **İşaretçi düğmeleri ve `RELEASE_ALL`:** istemci `RELEASE_ALL` göndermeden **hemen önce**, o anda basılı bildirdiği her işaretçi kaynağı için `buttons = 0` olan bir mesaj gönderir (`POINTER_ABS`'ta son bilinen konumla). Sonrasında bir düğmeyi yalnızca **yeni bir basış olayı** gördüğünde basılı bildirir (parmakta `ACTION_DOWN`, farede `ACTION_BUTTON_PRESS`). Odak geri geldiğinde hâlâ basılı olan düğme ya da süren dokunuş, bırakılıp yeniden basılana kadar bildirilmez. Bu kural olmadan host'taki işaretçi kilidi, release-all'dan sonraki ilk dokunuşu yutardı.
+- **Bırakışlar sınıflandırmaya bağlı değildir:** istemci bir parmağın ya da kalemin bırakışını (`ACTION_UP`, `ACTION_POINTER_UP`, `ACTION_CANCEL`) basışı izlediği işaretçi kimliğine göre eşler; olay anındaki araç tipi (`FINGER`, `PALM`, `UNKNOWN`) bırakışın gönderilmesini engellemez.
+- **Parmak kapısı (istemci tarafı):** istemci de kalem menzildeyken ve gönderdiği **son PEN mesajından** sonraki 1 sn boyunca yeni parmak basışı ve yeni kaydırma başlatmaz (host'taki kapıyla aynı saat: gönderilen mesaj, canlılık tekrarları ve `flags = 0` dahil). Kalem menzile girdiğinde basılı parmak bırakılır (`buttons = 0`) ve açık kaydırma `CANCELLED` ile kapatılır.
+- **Parmak için son çare koruması:** basılı bir parmaktan **10 sn** hiç olay gelmezse istemci onu `buttons = 0` ile kapatır (kaydırma için §4 SCROLL'daki 5 sn kuralı).
+- **`RELEASE_ALL` gönderilemezse** (kuyruk reddi ya da girdi yolunda hata) istemci bağlantıyı kapatır; host kopmada release-all uygular. İstemci kendi durumunu her iki halde de sıfırlar.
 
 ## 8. Fixture'lar
 
