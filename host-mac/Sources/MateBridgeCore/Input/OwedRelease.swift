@@ -163,7 +163,8 @@ public struct OwedRelease: Equatable, Sendable {
     /// They are handed out, not dropped: if posting them fails the caller must `owe` them again (and until it does,
     /// or until the next `replay`, `isBlocking` stays true). `force` ignores the retry spacing (a release trigger, a
     /// session start, shutdown).
-    public mutating func replay(now: UInt64, force: Bool, geometry: DisplayGeometry?) -> [MacEvent] {
+    public mutating func replay(now: UInt64, force: Bool, geometry: DisplayGeometry?,
+                                keyboard: KeyboardSnapshot = KeyboardSnapshot()) -> [MacEvent] {
         confirmPosted()
         var due: [(order: Int, event: MacEvent)] = []
         // A pen leave is only due together with (or after) the pen up that precedes it.
@@ -176,31 +177,45 @@ public struct OwedRelease: Equatable, Sendable {
         }
         due.sort { $0.order < $1.order }
         var events = due.map(\.event)
-        Self.reflowModifierFlags(&events)
+        Self.reflowFlags(&events, keyboard: keyboard)
         return events
     }
 
-    /// The owed modifier ups are replayed in slot order, not in the order they were produced, so the `flags` they were
-    /// produced with describe the wrong state: the last one replayed could still claim a modifier that an earlier
-    /// replay released, and a flagsChanged with such flags would leave that modifier looking held on the Mac. Each
-    /// replayed modifier up gets the flags of what remains held: the modifiers that were held and are not being
-    /// released here, plus the owed ones that come later in this replay. Caps Lock is carried over as it was.
-    static func reflowModifierFlags(_ events: inout [MacEvent]) {
+    /// Replayed releases carry the flags of the keyboard AS IT IS NOW, never the ones they were produced with: they
+    /// are retried later and in slot order, so saved flags can be stale (a modifier released since would be restored
+    /// as held, and nothing would ever clear it). The Mac's modifier state at replay time is what the planner holds
+    /// now plus the modifier ups still owed. A release that is not a modifier up sees all of those (modifier ups come
+    /// last in replay order); each modifier up sees the owed ones that come after it. Caps Lock follows the planner.
+    static func reflowFlags(_ events: inout [MacEvent], keyboard: KeyboardSnapshot) {
         var owed: [ModifierKey] = []
         for event in events {
             if case .key(let k) = event, k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) { owed.append(m) }
         }
-        guard !owed.isEmpty else { return }
         var remaining = Set(owed)
+        let base = keyboard.modifiers
         for index in events.indices {
-            guard case .key(var k) = events[index], k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) else { continue }
-            remaining.remove(m)
-            let heldBefore = Set(ModifierKey.allCases.filter { k.flags.contains($0.side) })
-            let stays = heldBefore.subtracting(owed)
-            var flags = KeyFlags(holding: stays.union(remaining))
-            if k.flags.contains(.capsLock) { flags.insert(.capsLock) }
-            k.flags = flags
-            events[index] = .key(k)
+            var caps: KeyFlags = keyboard.capsLock ? .capsLock : []
+            switch events[index] {
+            case .key(let k) where k.kind == .modifierUp:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { continue }
+                remaining.remove(m)
+                caps.formUnion(KeyFlags(holding: base.union(remaining)))
+            case .tabletProximity, .capsLock:
+                continue
+            default:
+                caps.formUnion(KeyFlags(holding: base.union(remaining)))
+            }
+            events[index] = events[index].with(flags: caps)
         }
+    }
+}
+
+/// The keyboard state the planner holds, handed to `OwedRelease.replay` so replayed releases carry current flags.
+public struct KeyboardSnapshot: Equatable, Sendable {
+    public var modifiers: Set<ModifierKey>
+    public var capsLock: Bool
+    public init(modifiers: Set<ModifierKey> = [], capsLock: Bool = false) {
+        self.modifiers = modifiers
+        self.capsLock = capsLock
     }
 }

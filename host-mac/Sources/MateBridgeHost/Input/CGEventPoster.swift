@@ -81,11 +81,11 @@ enum CGEventFactory {
         case .tabletProximity(let tool, let entering):
             return proximity(tool: tool, entering: entering, source: source)
         case .tabletPoint(let p):
-            return tabletPoint(p, source: source)
+            return flagged(tabletPoint(p, source: source), p.flags)
         case .mouse(let m):
-            return mouse(m, source: source)
+            return flagged(mouse(m, source: source), m.flags)
         case .scroll(let s):
-            return scroll(s, source: source)
+            return flagged(scroll(s, source: source), s.flags)
         case .key(let k):
             return key(k, source: source)
         case .capsLock:
@@ -111,6 +111,13 @@ enum CGEventFactory {
         e.setIntegerValueField(.keyboardEventKeyboardType, value: isoKeyboardType)
         if k.isRepeat { e.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         return e
+    }
+
+    /// Modifiers on pointer, pen and scroll events (Shift+click, Cmd+click, Option-drag, Krita's Ctrl/Shift+pen). Always
+    /// an explicit value, empty included, so the Mac's own keyboard state never leaks in (see `MacKey`).
+    private static func flagged(_ event: CGEvent?, _ flags: KeyFlags) -> CGEvent? {
+        event?.flags = CGEventFlags(rawValue: flags.rawValue)
+        return event
     }
 
     private static func clamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {

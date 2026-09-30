@@ -77,7 +77,11 @@ public struct InjectionPlanner: Sendable {
                               now: UInt64) -> [MacEvent] {
         display = env.geometry
         var out: [MacEvent] = []
-        for action in actions { apply(action, env, now, &out) }
+        for action in actions {
+            let start = out.count
+            apply(action, env, now, &out)
+            stampFlags(&out, from: start)
+        }
         counters.events += out.count
         return out
     }
@@ -95,6 +99,7 @@ public struct InjectionPlanner: Sendable {
             if let cs = heldButtons.removeValue(forKey: button) { emitButtonUp(button, cs, &out) }
         }
         if scrollOpen { closeScroll(.ended, dx: 0, dy: 0, &out) }
+        stampFlags(&out, from: 0)
         // Keys last pressed first, then modifiers (each up carries the flags that remain).
         while let code = heldKeys.popLast() { out.append(.key(MacKey(kind: .keyUp, keyCode: code, flags: currentFlags))) }
         while let m = heldModifiers.popLast() {
@@ -320,6 +325,22 @@ public struct InjectionPlanner: Sendable {
     }
 
     // MARK: Helpers
+
+    /// The one rule for keyboard modifiers on pointer, pen and scroll events: every such event carries the flags
+    /// current when it is emitted (an explicit value, so the Mac's own keyboard state never leaks in). Key events are
+    /// built with their own flags and left alone.
+    private func stampFlags(_ out: inout [MacEvent], from start: Int) {
+        let flags = currentFlags
+        for i in start..<out.count {
+            switch out[i] {
+            case .tabletPoint, .mouse, .scroll: out[i] = out[i].with(flags: flags)
+            case .key, .tabletProximity, .capsLock: break
+            }
+        }
+    }
+
+    /// What the planner holds of the keyboard right now, for flags of replayed releases (`OwedRelease.replay`).
+    public var keyboardSnapshot: KeyboardSnapshot { KeyboardSnapshot(modifiers: Set(heldModifiers), capsLock: capsLockOn) }
 
     /// Modifier flags of everything held right now, plus Caps Lock when the Mac has it on (an explicit `flags` on a
     /// CGEvent replaces the system's, which would otherwise lose the Caps Lock bit and type lowercase).

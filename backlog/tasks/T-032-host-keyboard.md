@@ -72,3 +72,10 @@ Mimari: klavye mevcut boru hattına (InputStateMachine → InjectionPlanner → 
   - Fare/kalem olaylarına değiştirici flags (Cmd+tık) eklenmedi; kapsam dışı sayıldı (MacMouse/MacTabletPoint imzası değişirdi). İstenirse ayrı kart.
   - Bir istemci UP'ı kaybeder ama bağlı kalırsa tuş sonsuza dek tekrarlar (protokol "her DOWN için UP" diyor; release-all/oturum sonu koruyor). Gerekirse tekrar için üst süre (ör. 30 s) eklenebilir.
   - `KeyMap` Android yedek tablosu yalnızca yaygın tuşları kapsar (harf, rakam, ok, F1-F12, keypad, değiştiriciler).
+
+### Review turu 1 (Codex) düzeltmeleri
+
+- **P1 bayat flags:** `OwedRelease.replay(..., keyboard:)` artık planner'ın o anki klavye durumunu (`KeyboardSnapshot`: basılı değiştiriciler + Caps) alır; tekrar oynatılan her bırakmanın flags'i ANLIK durumdan hesaplanır (basılı + hâlâ borçlu değiştirici up'ları), kayıtlı flags kullanılmaz (`reflowFlags`). Test: KFLAG-8 (Cmd up başarısız, Shift başarıyla bırakılır, tekrarda Cmd up flags boş), KFLAG-9, KPIPE-10.
+- **P2 tekrar:** başka herhangi bir kimliğin DOWN'u (Caps ve eşlenmemiş tuş dahil) tekrarı durdurur; tekrar eden tuşun kendi yinelenen DOWN'u durdurmaz. Test: KFLAG-10.
+- **Fare/kalem/kaydırma flags:** `MacMouse`, `MacTabletPoint`, `MacScroll` artık `flags` taşır; planner'da tek kural (`stampFlags`): her olay üretildiği anki klavye flags'ini (Caps dahil) alır, kapatan olaylar da; `releaseAll`'da işaretçi up'ları değiştirici up'lardan önce gelir, yani Shift'i görür. `CGEventFactory` her zaman açık `flags` atar (boş dahil), HID kaynağına güvenmez. Testler: KFLAG-1..7.
+- Bilinen sınır: bir değiştirici up'ı başarısız olup borçluyken üretilen yeni KAPATAN olaylar (ör. Shift up) planner gölge durumu yüzünden borçlu değiştiriciyi flags'te göstermez; borçlu up tekrar oynatılınca durum düzelir, açan olaylar zaten engelli.

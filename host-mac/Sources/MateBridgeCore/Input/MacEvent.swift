@@ -21,9 +21,12 @@ public struct MacTabletPoint: Equatable, Sendable {
     public var tiltY: Double
     /// 1 on down and up (as in the Phase 0 probe), 0 (unset) otherwise.
     public var clickState: Int
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
     public init(kind: Kind, tool: PenTool, position: DisplayPoint, pressure: Double, tiltX: Double, tiltY: Double,
-                clickState: Int) {
+                clickState: Int, flags: KeyFlags = []) {
+        self.flags = flags
         self.kind = kind
         self.tool = tool
         self.position = position
@@ -53,9 +56,12 @@ public struct MacMouse: Equatable, Sendable {
     public var deltaY: Double
     /// Click count on down and up (an up repeats its down's), 0 otherwise.
     public var clickState: Int
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
     public init(kind: Kind, button: MouseButton, position: DisplayPoint, deltaX: Double, deltaY: Double,
-                clickState: Int) {
+                clickState: Int, flags: KeyFlags = []) {
+        self.flags = flags
         self.kind = kind
         self.button = button
         self.position = position
@@ -83,8 +89,11 @@ public struct MacScroll: Equatable, Sendable {
     /// Where the event is located: on the virtual display (the cached cursor if it is still on it, else the center).
     /// A scroll event without a location takes the live cursor, which may be on another display.
     public var position: DisplayPoint
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
-    public init(phase: Phase, dx: Int32, dy: Int32, position: DisplayPoint) {
+    public init(phase: Phase, dx: Int32, dy: Int32, position: DisplayPoint, flags: KeyFlags = []) {
+        self.flags = flags
         self.phase = phase
         self.dx = dx
         self.dy = dy

@@ -45,6 +45,10 @@ extension InputStateMachine {
         }
         let target = configuration.keyMap.resolve(identity: identity)
 
+        // KEY-REPEAT: a DOWN of any other key identity stops the repeat, the Caps key and unmapped keys included (they
+        // are not injected, but the user's hand has moved on). A duplicate DOWN of the repeating key itself does not.
+        if k.action == .down, keyRepeat?.identity != identity { keyRepeat = nil }
+
         // KEY-CAPS: the Caps key itself is not injected; its UP carries the state. Every other event carries the state
         // too, and it is applied before the event so the event already sees it.
         if target == .capsLock {

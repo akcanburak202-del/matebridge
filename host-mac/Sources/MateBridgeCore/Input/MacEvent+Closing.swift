@@ -20,7 +20,18 @@ extension MacEvent {
     public var plainRelease: MacEvent? {
         guard case .tabletPoint(let p) = self, p.kind == .up else { return nil }
         return .mouse(MacMouse(kind: .up, button: .left, position: p.position, deltaX: 0, deltaY: 0,
-                               clickState: p.clickState))
+                               clickState: p.clickState, flags: p.flags))
+    }
+
+    /// The same event with its keyboard flags replaced (pointer, pen and scroll events; others are unchanged).
+    func with(flags: KeyFlags) -> MacEvent {
+        switch self {
+        case .tabletPoint(var e): e.flags = flags; return .tabletPoint(e)
+        case .mouse(var e): e.flags = flags; return .mouse(e)
+        case .scroll(var e): e.flags = flags; return .scroll(e)
+        case .key(var k): k.flags = flags; return .key(k)
+        case .tabletProximity, .capsLock: return self
+        }
     }
 
     /// The position of an event that has one (proximity events have none).

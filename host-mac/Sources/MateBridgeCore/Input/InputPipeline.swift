@@ -235,7 +235,7 @@ public struct InputPipeline: Sendable {
     private mutating func replayOwed(now: UInt64, environment env: InjectionEnvironment, force: Bool) -> [MacEvent] {
         owed.confirmPosted()  // the last replay, if nobody reported it failed, was posted
         guard env.canInject, !owed.isEmpty else { return [] }
-        let events = owed.replay(now: now, force: force, geometry: env.geometry)
+        let events = owed.replay(now: now, force: force, geometry: env.geometry, keyboard: planner.keyboardSnapshot)
         if !events.isEmpty { record(ReleaseRecord(reason: "owed_replay", events: events)) }
         return events
     }
