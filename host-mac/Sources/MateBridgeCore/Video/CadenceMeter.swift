@@ -63,6 +63,9 @@ public struct CadenceWindow: Sendable {
         return sorted[min(sorted.count - 1, max(0, rank - 1))]
     }
 
+    /// Frames that entered the encoder but did not come out in this window (encoder not keeping up); 0 when it did.
+    public var encoderBehind: Int { max(0, encoderIn - encoderOut) }
+
     /// Intervals longer than 1.5x the target.
     public var lateCaptureIntervals: Int {
         captureIntervalsUs.filter { Double($0) > 1.5 * Double(targetIntervalUs) }.count
@@ -94,7 +97,7 @@ public struct CadenceWindow: Sendable {
             + " arr_int_ms_p50_95_99=\(pct(arrivalIntervalsUs)) arr_late=\(lateArrivalIntervals)"
             + " status=\(status.isEmpty ? "none" : status)"
             + " enc_in=\(encoderIn) enc_out=\(encoderOut) enc_fps=\(String(format: "%.1f", encoderOutFps))"
-            + " enc_ms_p50_95=\(Self.ms(Self.percentile(encodeTimesUs, 50)))/\(Self.ms(Self.percentile(encodeTimesUs, 95)))"
+            + " enc_ms_p50_95_99=\(pct(encodeTimesUs)) enc_behind=\(encoderBehind)"
             + " overwritten=\(overwritten) queue_drops=\(queueDrops) sent=\(sent) sent_fps=\(String(format: "%.1f", sentFps))"
     }
 

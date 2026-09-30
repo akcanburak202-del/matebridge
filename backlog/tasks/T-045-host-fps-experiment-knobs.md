@@ -1,7 +1,7 @@
 ---
 id: T-045
 title: Mac — 120 fps deneyi için ayar düğmeleri (MATEBRIDGE_FPS, MATEBRIDGE_BITRATE_KBPS) ve kodlama süresi ölçümü
-status: todo
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-017]
@@ -32,12 +32,12 @@ Faz 5, kullanıcının sorusu (2026-10-01): "USB ile daha akıcı ve daha yükse
 
 ## Plan
 
-_(Ajan doldurur.)_
+Saf `VideoSettings.applyingExperimentKnobs(env)` (parseFps, parseBitrateKbps + mevcut refresh/frame-delay); StreamCoordinator onu çağırır. fps tek kaynaktan (`settings.fps`) SCK aralığına, FramePacer/FrameGate, CadenceMeter ve kodlayıcı ExpectedFrameRate'e akar. `CadenceWindow`: p99 + `enc_behind`. Testler: ExperimentKnobTests.
 
 ## Handoff
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Dokunulan dosyalar:** Core/Video/VideoSettings.swift, Core/Video/CadenceMeter.swift, Host/Session/StreamCoordinator.swift, Tests/MateBridgeCoreTests/Video/ExperimentKnobTests.swift, bu kart
+- **Varsayımlar:** MATEBRIDGE_FPS verilmişse tabletin max_refresh_hz değerini ezer (yoksa eski min(hz,60)). MaxKeyFrameIntervalDuration zaten saniye cinsinden (10 s), DataRateLimits bayt/sn (bit hızına bağlı); fps ile değişmesi gerekmedi. `cadence` satırında `enc_ms_p50_95` yerine `enc_ms_p50_95_99` + `enc_behind` (pencerede giriş-çıkış, >= 0) var. `stream_session` satırına refresh_hz ve bitrate_kbps eklendi.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek 90/120 fps: SCK 1/240 s aralığı, VT donanım kodlayıcının 2800x1840@120 yetişmesi (enc_behind, enc_ms p99), RealTime/ExpectedFrameRate readback, 120 Hz sanal ekran. Uygulama çalıştırılmadı.
 - **Açık sorular:**
