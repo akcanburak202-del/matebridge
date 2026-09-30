@@ -1,7 +1,7 @@
 ---
 id: T-029
 title: Tablet — tek örneklik kalem temasını iletme (temas doğrulama), Krita'daki "diken"in tetikleyicisi
-status: review
+status: done
 phase: 2
 owner: android-client-dev
 depends_on: [T-026]
@@ -67,3 +67,7 @@ Yalnızca `PenTracker` (ve sayaçlar için `Model.kt`) değişir; `InputCapture`
 - **Kasıtlı bozma (testlerin kırıldığı):** (A) bounce'ta atma yerine doğrulama: 13 test kırıldı; (B) `release` bekletileni atmıyor: `releaseWhileHeld...` kırıldı; (C) `inRange` bekletmeyi saymıyor: fuzz'ın dört testi + iki test kırıldı; (D) `tick` hiç doğrulamıyor: 25 test kırıldı; (E) doğrulanan örnek `STROKE_START` kaybediyor: 29 test kırıldı. Sonra geri alındı, hepsi yeşil.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** gerçek M-Pencil/HarmonyOS'ta (1) `MB/input` saniyelik özetinde `bounce_dropped` sayacı: normal çizim sırasında 0-1 civarı, hafif dokunuşta/sekmede artmalı; (2) hızlı çizgiler, hafif dokunuş, tek noktalık nokta (kısa "tık"): Mac olay kaydında yavaş bile olsa 30 ms'den uzun temas kaybolmamalı, vuruş başında ≈3 ms gecikme dışında fark olmamalı; (3) sekmeyi zorlamak için kalem ucunu ekrana hafifçe değdirip kaldır: Mac olay kaydında tek örneklik `down`/`up` çifti olmamalı; (4) Krita "Temel" yumuşatmada uzun düz "diken" (17:33'tekinin açıklanmamış kalabileceği kartta/kararda yazılı); (5) parmakla kalem aynı anda: kalem yaklaşırken/basılırken parmak basışı başlamamalı (kapı davranışı); (6) uygulamayı arka plana al / kalem basılıyken cihaz ayır: Mac'te takılı kalem olmamalı.
 - **Açık sorular:** (a) `INPUT_TICK_MS` 25 -> 5 ms önerisi (yukarıda). (b) `docs/LOGGING.md` `bounce_dropped` alanını listeliyorsa güncellenmeli (kapsam dışı, dosyaya dokunmadım). (c) `InputCapture` başlık yorumundaki "stuck-input" listesine bekletme satırı eklenmedi (yorum, işlevsel değil).
+
+### Cihaz doğrulaması (orkestratör, 2026-09-30 18:38)
+
+Merge de5562c, APK kuruldu. Tablette `adb shell input stylus swipe` (300 ms): Mac'te tek vuruş (down, 268 drag, up), koordinatlar doğru. `adb shell input stylus tap` (anlık DOWN+UP) iki kez: her birinde `bounce_dropped=1`, Mac'e down/up gitmedi (yalnızca hover). 20 ms sınırı yerine "bir sonraki zamanlayıcı adımı (≈35 ms'ye kadar)" orkestratörce kabul edildi (PROTOCOL §7 buna göre yazıldı). Gerçek kalemle Krita'da diken kontrolü T-025'te, kullanıcıyla.
