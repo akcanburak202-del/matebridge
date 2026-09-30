@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # USB mode: forward the tablet's 127.0.0.1:47001/47002 to the Mac's MateBridge listeners via adb reverse.
 # Usage: scripts/usb-mode.sh [on|off|status]   (default: on)
+#
+# NOTE (T-039): the MateBridge host now does this itself ("USB modu" menu item, on by default): it starts the adb
+# server under launchd and re-installs the tunnels every ~2 s, including after the cable is replugged.
+# This script stays for manual use and debugging.
 set -uo pipefail
 
 PORTS=(47001 47002)
@@ -21,7 +25,7 @@ ensure_server() {
   if ! launchctl list dev.matebridge.adb >/dev/null 2>&1; then
     "$ADB" kill-server >/dev/null 2>&1 || true
     # adb 37.0.1 aborts in its mDNS bridge (FQServiceName parsing) on this network; we never need adb mDNS.
-    launchctl submit -l dev.matebridge.adb -- /usr/bin/env ADB_MDNS=0 ADB_MDNS_AUTO_CONNECT=0 "$ADB" -a nodaemon server
+    launchctl submit -l dev.matebridge.adb -- /usr/bin/env ADB_MDNS=0 ADB_MDNS_AUTO_CONNECT=0 "$ADB" nodaemon server  # no -a: loopback only, never expose 5037 to the LAN
     sleep 2
   fi
 }
