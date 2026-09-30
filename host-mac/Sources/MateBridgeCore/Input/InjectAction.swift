@@ -69,15 +69,18 @@ public enum MouseMotion: Equatable, Sendable {
     case relative(dx: Float, dy: Float)
 }
 
-/// Phase of a precise scroll gesture on the Mac side.
+/// Phase of a precise scroll gesture on the Mac side. The injector can tell the three ways a gesture ends apart
+/// (PROTOCOL.md section 4 SCROLL):
+/// - `ended`: the client finished normally; momentum may follow (host setting).
+/// - `cancelled`: the client sent `CANCELLED`; the Mac sees a cancelled gesture.
+/// - `forcedEnd`: the host ended it itself (new `BEGAN` over an open gesture, the 500 ms watchdog, release-all); the
+///   Mac sees a normal `ENDED` but the injector must not generate momentum, and must stop any momentum in progress.
 public enum InjectScrollPhase: Equatable, Sendable {
     case began
     case changed
-    /// The client finished the gesture normally (`SCROLL ENDED`). Momentum may follow.
     case ended
-    /// The gesture stopped without a normal end: client `CANCELLED`, a new `BEGAN` over an open one,
-    /// the 500 ms watchdog, or release-all. The injector must close the gesture and must not add momentum.
     case cancelled
+    case forcedEnd
 }
 
 /// One abstract event for the injector. Execute in list order.
@@ -109,7 +112,7 @@ public enum InjectAction: Equatable, Sendable {
 
     // MARK: Scroll
 
-    /// One step of a precise scroll gesture. `dx`/`dy` are finger movement in Mac points; forced ends carry 0.
+    /// One step of a precise scroll gesture. `dx`/`dy` are finger movement in Mac points; `forcedEnd` carries 0.
     case scroll(InjectScrollPhase, dx: Float, dy: Float)
     /// A single mouse wheel step (`SCROLL phase = NONE`); carries no state.
     case scrollWheel(dx: Float, dy: Float)

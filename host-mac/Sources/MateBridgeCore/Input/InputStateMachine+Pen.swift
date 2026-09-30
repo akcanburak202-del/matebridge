@@ -15,6 +15,7 @@ extension InputStateMachine {
 
     mutating func handlePen(_ batch: PenBatch, now: UInt64) -> [InjectAction] {
         lastPenSampleAt = now
+        penWatchdogAnchor = now
         var out: [InjectAction] = []
         for sample in batch.samples {
             processPenSample(effectiveTool(batch.tool), sample, into: &out)
@@ -73,8 +74,9 @@ extension InputStateMachine {
 
         switch (wasInContact, wantsContact) {
         case (false, false):
-            // PEN-6: in range, not touching: hover move.
-            out.append(.penHover(tool: tool, point))
+            // PEN-6: in range, not touching: hover move. OWN-9: while a pointer source owns the left button the
+            // cursor is that source's, so the hover move does not reach the Mac (proximity still does).
+            if leftOwner == nil { out.append(.penHover(tool: tool, point)) }
         case (false, true):
             // PEN-2: CONTACT 0->1. Pen priority (OWN-2): another owner of the left button is released first.
             takeLeftButtonForPen(into: &out)

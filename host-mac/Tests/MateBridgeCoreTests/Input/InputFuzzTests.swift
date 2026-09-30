@@ -81,11 +81,14 @@ private func randomStep(_ g: inout InputFuzzRNG) -> Step {
     }
 }
 
-private func randomDelay(_ g: inout InputFuzzRNG) -> UInt64 {
+/// A signed clock step in microseconds: mostly small forward steps, but also zero, backwards and long ones.
+private func randomDelta(_ g: inout InputFuzzRNG) -> Int64 {
     switch Int.random(in: 0..<100, using: &g) {
-    case 0..<80: return UInt64.random(in: 1...30, using: &g) * msec
-    case 80..<95: return UInt64.random(in: 100...700, using: &g) * msec
-    default: return UInt64.random(in: 1_000...3_000, using: &g) * msec
+    case 0..<5: return 0
+    case 5..<10: return -Int64.random(in: 1...800, using: &g) * Int64(msec)
+    case 10..<75: return Int64.random(in: 1...30, using: &g) * Int64(msec)
+    case 75..<93: return Int64.random(in: 100...700, using: &g) * Int64(msec)
+    default: return Int64.random(in: 1_000...3_000, using: &g) * Int64(msec)
     }
 }
 
@@ -110,10 +113,10 @@ private func runSequence(seed: UInt64, steps: Int) -> [String] {
     }
 
     for i in 0..<steps {
-        let delay = randomDelay(&g)
+        let delay = randomDelta(&g)
         switch randomStep(&g) {
         case .message(let m):
-            model.apply(d.send(m, after: delay))
+            model.apply(d.send(m, delta: delay))
             var isRelease = false
             switch m {
             case .releaseAll, .bye: isRelease = true
@@ -121,10 +124,10 @@ private func runSequence(seed: UInt64, steps: Int) -> [String] {
             }
             check(i, "message \(m.type)", releaseExpected: isRelease)
         case .tick:
-            model.apply(d.tick(after: delay))
+            model.apply(d.tick(delta: delay))
             check(i, "tick", releaseExpected: false)
         case .release(let cause):
-            d.now += delay
+            d.jump(delay)
             model.apply(d.release(cause))
             check(i, "release \(cause)", releaseExpected: true)
             model.apply(d.release(cause))  // idempotent
@@ -167,11 +170,11 @@ struct InputFuzzTests {
             }
         }
         for _ in 0..<20_000 {
-            let delay = randomDelay(&g)
+            let delay = randomDelta(&g)
             switch randomStep(&g) {
-            case .message(let m): count(d.send(m, after: delay))
-            case .tick: count(d.tick(after: delay))
-            case .release(let cause): d.now += delay; count(d.release(cause))
+            case .message(let m): count(d.send(m, delta: delay))
+            case .tick: count(d.tick(delta: delay))
+            case .release(let cause): d.jump(delay); count(d.release(cause))
             }
         }
         count(d.release(.shutdown))
@@ -191,7 +194,7 @@ struct InputFuzzTests {
             var model = MacInputModel()
             var lastByPointer: [Message] = []
             for _ in 0..<80 {
-                let delay = randomDelay(&g)
+                let delay = randomDelta(&g)
                 switch randomStep(&g) {
                 case .message(let m):
                     if case .pointerRel = m { lastByPointer.removeAll { if case .pointerRel = $0 { true } else { false } }; lastByPointer.append(m) }
@@ -201,10 +204,10 @@ struct InputFuzzTests {
                     }
                     if case .releaseAll = m { lastByPointer.removeAll() }
                     if case .bye = m { lastByPointer.removeAll() }
-                    model.apply(d.send(m, after: delay))
-                case .tick: model.apply(d.tick(after: delay))
+                    model.apply(d.send(m, delta: delay))
+                case .tick: model.apply(d.tick(delta: delay))
                 case .release(let cause):
-                    d.now += delay
+                    d.jump(delay)
                     model.apply(d.release(cause))
                     lastByPointer.removeAll()
                 }
@@ -240,15 +243,113 @@ struct InputFuzzTests {
             var d = Driver()
             var all: [InjectAction] = []
             for _ in 0..<500 {
-                let delay = randomDelay(&g)
+                let delay = randomDelta(&g)
                 switch randomStep(&g) {
-                case .message(let m): all += d.send(m, after: delay)
-                case .tick: all += d.tick(after: delay)
-                case .release(let cause): d.now += delay; all += d.release(cause)
+                case .message(let m): all += d.send(m, delta: delay)
+                case .tick: all += d.tick(delta: delay)
+                case .release(let cause): d.jump(delay); all += d.release(cause)
                 }
             }
             return all
         }
         #expect(run() == run())
+    }
+
+    @Test("FUZZ-5 tick acts exactly at nextDeadline(now:): not 1 us before, and never when it is nil")
+    func fuzz5_nextDeadlineIsExact() {
+        var failures: [String] = []
+        for seed in 1...400 {
+            var g = InputFuzzRNG(seed: UInt64(seed) &* 977)
+            var d = Driver()
+            for step in 0..<150 {
+                let delta = randomDelta(&g)
+                switch randomStep(&g) {
+                case .message(let m): d.send(m, delta: delta)
+                case .tick: d.tick(delta: delta)
+                case .release(let cause): d.jump(delta); d.release(cause)
+                }
+                let m = d.machine
+                if let due = m.nextDeadline(now: d.now) {
+                    if due <= d.now { failures.append("seed \(seed) step \(step): deadline \(due) not after now \(d.now)") }
+                    var early = m
+                    if !early.tick(now: due - 1).isEmpty { failures.append("seed \(seed) step \(step): acts before the deadline") }
+                    var exact = m
+                    if exact.tick(now: due).isEmpty { failures.append("seed \(seed) step \(step): silent at the deadline") }
+                } else {
+                    var far = m
+                    if !far.tick(now: d.now + 3_600_000_000).isEmpty { failures.append("seed \(seed) step \(step): nil deadline but tick acts") }
+                    if m.isPenInRange || m.scrollOpen { failures.append("seed \(seed) step \(step): armed state without a deadline") }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(5).joined(separator: "\n"))")
+    }
+
+    @Test("FUZZ-6 handle() equals tick() followed by the message: the timer's timing never changes the result")
+    func fuzz6_watchdogBeforeMessage() {
+        var failures: [String] = []
+        for seed in 1...300 {
+            var g = InputFuzzRNG(seed: UInt64(seed) &* 4243)
+            var withTick = Driver()
+            var withoutTick = Driver()
+            for step in 0..<150 {
+                let delta = randomDelta(&g)
+                switch randomStep(&g) {
+                case .message(let m):
+                    withTick.jump(delta)
+                    withoutTick.jump(delta)
+                    let a = withTick.machine.tick(now: withTick.now) + withTick.machine.handle(m, now: withTick.now)
+                    let b = withoutTick.machine.handle(m, now: withoutTick.now)
+                    if a != b { failures.append("seed \(seed) step \(step): \(a) vs \(b)") }
+                case .tick:
+                    if withTick.tick(delta: delta) != withoutTick.tick(delta: delta) { failures.append("seed \(seed) step \(step): tick differs") }
+                case .release(let cause):
+                    withTick.jump(delta)
+                    withoutTick.jump(delta)
+                    if withTick.release(cause) != withoutTick.release(cause) { failures.append("seed \(seed) step \(step): release differs") }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(5).joined(separator: "\n"))")
+    }
+
+    @Test("FUZZ-7 latch oracle: from session start and after any release-all, no down or drag for a latched tool before CONTACT=0 or STROKE_START")
+    func fuzz7_latchOracle() {
+        var failures: [String] = []
+        for seed in 1...600 {
+            var g = InputFuzzRNG(seed: UInt64(seed) &* 31337)
+            var d = Driver()
+            var latched: Set<PenTool> = [.pen, .eraser]  // a fresh machine starts latched
+            for _ in 0..<120 {
+                let delta = randomDelta(&g)
+                switch Int.random(in: 0..<10, using: &g) {
+                case 0:
+                    d.jump(delta)
+                    d.release(allReleaseCauses.randomElement(using: &g)!)
+                    latched = [.pen, .eraser]
+                case 1:
+                    d.tick(delta: delta)
+                default:
+                    let tool: PenTool = Int.random(in: 0..<4, using: &g) == 0 ? .eraser : .pen
+                    let candidates: [PenFlags] = [[], .inRange, [.inRange, .contact], [.inRange, .contact, .strokeStart], .contact]
+                    let flags = candidates.randomElement(using: &g)!
+                    let normalized = flags.normalized
+                    let contact = normalized.contains(.contact) && normalized.contains(.inRange)
+                    let start = contact && normalized.contains(.strokeStart)
+                    let wasLatched = latched.contains(tool)
+                    let out = d.send(penMsg(tool, penSample(1, 1, flags, pressure: 50)), delta: delta)
+                    if wasLatched && !start {
+                        for a in out {
+                            switch a {
+                            case .penDown, .penDrag: failures.append("seed \(seed): \(a) while \(tool) latched, flags \(flags)")
+                            default: break
+                            }
+                        }
+                    }
+                    if !contact || start { latched.remove(tool) }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(5).joined(separator: "\n"))")
     }
 }

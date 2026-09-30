@@ -74,6 +74,23 @@ struct Driver {
         return machine.handle(message, now: now)
     }
 
+    /// Moves the clock by a signed amount (never below 0): zero and backwards steps are allowed.
+    mutating func jump(_ delta: Int64) {
+        now = delta >= 0 ? now &+ UInt64(delta) : now - Swift.min(now, UInt64(-delta))
+    }
+
+    @discardableResult
+    mutating func send(_ message: Message, delta: Int64) -> [InjectAction] {
+        jump(delta)
+        return machine.handle(message, now: now)
+    }
+
+    @discardableResult
+    mutating func tick(delta: Int64) -> [InjectAction] {
+        jump(delta)
+        return machine.tick(now: now)
+    }
+
     @discardableResult
     mutating func tick(after: UInt64) -> [InjectAction] {
         now += after
@@ -117,6 +134,7 @@ struct MacInputModel {
             if proximity != tool { fail("hover outside proximity", action) }
             if penContact { fail("hover while touching", action) }
             if p.pressure != 0 { fail("hover with pressure", action) }
+            if buttonsDown.contains(.left) { fail("pen hover while a pointer owns the left button", action) }
         case .penDown(let tool, _):
             if proximity != tool { fail("down outside proximity", action) }
             if leftIsDown { fail("pen down while left button is down", action) }
@@ -147,7 +165,7 @@ struct MacInputModel {
                 scrollOpen = true
             case .changed:
                 if !scrollOpen { fail("scroll changed while closed", action) }
-            case .ended, .cancelled:
+            case .ended, .cancelled, .forcedEnd:
                 if !scrollOpen { fail("scroll end while closed", action) }
                 scrollOpen = false
             }

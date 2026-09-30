@@ -4,10 +4,16 @@
 // no clock of its own). Output: an ordered `[InjectAction]` for the injector (T-023). No CGEvent, no I/O, no logging.
 //
 // Ownership and lifetime for the consumer:
-// - One instance per session. Every message of the active session goes to `handle(_:now:)`, a periodic timer calls
-//   `tick(now:)` (watchdogs), and every release-all trigger of PROTOCOL.md section 7 calls `releaseAll(_:)`.
-//   `releaseAll` is idempotent and safe to call at any time, including on a fresh machine (it then only sets the
-//   pen latch, which a consumer that wants to start "latched" can use).
+// - One instance per session; its state is never carried to the next session (PROTOCOL.md section 7). A new machine
+//   starts with both pen latches armed (section 4: "oturum basinda"), so a first contact sample without
+//   `STROKE_START` is hover. Every message of the active session goes to `handle(_:now:)`, a timer calls
+//   `tick(now:)` at `nextDeadline(now:)`, and every release-all trigger of PROTOCOL.md section 7 calls
+//   `releaseAll(_:)`, which is idempotent and safe to call at any time.
+// - Time: `now` is the host's single monotonic clock at the moment the message was RECEIVED (never the message's own
+//   `*_time_us`). `handle` first applies every overdue watchdog, exactly as `tick(now:)` would, and returns those
+//   actions before the message's own, so the result does not depend on when the timer happened to run. If `now` is
+//   earlier than a stored watchdog timestamp the timestamp is re-anchored to `now`: a backwards clock delays a
+//   watchdog by at most its period and never disables it.
 // - A value type with no locking: mutate it from one queue or actor only (the session queue).
 // - Keyboard (`KEY`) is not handled yet (phase 3). `handle` returns no actions for it. When keys arrive they must join
 //   the same `releaseAll`.
@@ -64,10 +70,14 @@ public struct InputStateMachine: Sendable {
     // `lastPenSampleAt` are non-nil too.
     var activePen: ActivePen?
     var lastPenPoint: PenPoint?
-    /// Host time of the most recent PEN message (any flags). Drives the pen watchdog and the finger gate.
+    /// Host time of the most recent PEN message (any flags). Drives the finger gate only; a backwards clock keeps
+    /// the gate active (the safe direction), so this is never re-anchored.
     var lastPenSampleAt: UInt64?
-    /// Tools whose next `CONTACT` sample must be treated as hover (LATCH-*).
-    var latchedTools: Set<PenTool> = []
+    /// The pen watchdog's own copy of the last PEN time. Re-anchored to `now` when the clock goes backwards.
+    var penWatchdogAnchor: UInt64 = 0
+    /// Tools whose next `CONTACT` sample must be treated as hover (LATCH-*). Both are latched from the start of the
+    /// session and again after every release-all.
+    var latchedTools: Set<PenTool> = [.pen, .eraser]
 
     // Left-button ownership and pointer sources.
     var leftOwner: Source?
@@ -75,6 +85,7 @@ public struct InputStateMachine: Sendable {
 
     // Scroll.
     var scrollOpen = false
+    /// Host time of the last SCROLL BEGAN/CHANGED. Re-anchored to `now` when the clock goes backwards.
     var lastScrollAt: UInt64 = 0
 
     public init(configuration: Configuration = Configuration()) {
@@ -102,65 +113,77 @@ public struct InputStateMachine: Sendable {
         return Self.elapsed(since: last, now: now) < configuration.touchGateHoldUs
     }
 
-    /// The earliest `now` at which `tick(now:)` would produce actions (pen or scroll watchdog), or nil when neither
-    /// is armed. Lets the consumer sleep until then instead of polling.
-    public var nextDeadline: UInt64? {
+    /// The earliest time at which `tick(now:)` (or any `handle`) would produce watchdog actions, given the current
+    /// time `now`, or nil when no watchdog is armed. Lets the consumer sleep until then instead of polling. A
+    /// timestamp that is ahead of `now` (clock went backwards) counts from `now`, matching what the next call does.
+    public func nextDeadline(now: UInt64) -> UInt64? {
         var earliest: UInt64?
-        if activePen != nil {
-            earliest = (lastPenSampleAt ?? 0) &+ configuration.penWatchdogUs
-        }
-        if scrollOpen {
-            let due = lastScrollAt &+ configuration.scrollWatchdogUs
+        func consider(_ anchor: UInt64, _ period: UInt64) {
+            let due = Swift.min(anchor, now) &+ period
             earliest = earliest.map { Swift.min($0, due) } ?? due
         }
+        if activePen != nil { consider(penWatchdogAnchor, configuration.penWatchdogUs) }
+        if scrollOpen { consider(lastScrollAt, configuration.scrollWatchdogUs) }
         return earliest
     }
 
     // MARK: Events
 
-    /// Feed one message of the active, approved session. Messages that are not input (and `KEY`, phase 3) produce
-    /// no actions.
+    /// Feed one message of the active, approved session. First applies every overdue watchdog (WD-*), then the
+    /// message; the returned list is the watchdog actions followed by the message's. Messages that are not pen,
+    /// pointer, scroll or release input (and `KEY`, phase 3) produce no actions of their own.
     public mutating func handle(_ message: Message, now: UInt64) -> [InjectAction] {
+        var out = applyWatchdogs(now: now)
         switch message {
         case .pen(let batch):
-            return handlePen(batch, now: now)
+            out += handlePen(batch, now: now)
         case .pointerRel(let m):
             let motion: MouseMotion? = (m.dx == 0 && m.dy == 0) ? nil : .relative(dx: m.dx, dy: m.dy)
-            return handlePointer(.relative, buttons: m.buttons, motion: motion, now: now)
+            out += handlePointer(.relative, buttons: m.buttons, motion: motion, now: now)
         case .pointerAbs(let m):
-            return handlePointer(m.source == .touch ? .touch : .mouse, buttons: m.buttons,
+            out += handlePointer(m.source == .touch ? .touch : .mouse, buttons: m.buttons,
                                  motion: .absolute(x: m.x, y: m.y), now: now)
         case .scroll(let m):
-            return handleScroll(m, now: now)
+            out += handleScroll(m, now: now)
         case .penGesture(let g):
             handlePenGesture(g)
-            return []
         case .releaseAll(let reason):
-            return releaseAll(.clientRequest(reason))
+            out += releaseAll(.clientRequest(reason))
         case .bye:
-            return releaseAll(.bye)
+            out += releaseAll(.bye)
         case .key, .hello, .helloAck, .streamConfig, .ping, .pong, .stats, .keyframeRequest, .videoHello, .videoFrame:
-            return []
+            break
         }
+        return out
     }
 
-    /// Watchdogs (WD-*). Call periodically (every ~50-100 ms is plenty) and at least whenever a timer fires.
+    /// Watchdogs (WD-*) without a message. Call when the timer at `nextDeadline(now:)` fires.
     public mutating func tick(now: UInt64) -> [InjectAction] {
+        applyWatchdogs(now: now)
+    }
+
+    /// Pen `IN_RANGE` silent for `penWatchdogUs`: up (if touching) + leave. Open scroll silent for
+    /// `scrollWatchdogUs`: forced end. A watchdog close is not a release-all: no latch, eraser mode and the other
+    /// sources untouched (PROTOCOL.md section 7).
+    private mutating func applyWatchdogs(now: UInt64) -> [InjectAction] {
         var out: [InjectAction] = []
         if activePen != nil {
-            let silent = lastPenSampleAt.map { Self.elapsed(since: $0, now: now) } ?? UInt64.max
-            if silent >= configuration.penWatchdogUs { closePen(into: &out) }
+            if penWatchdogAnchor > now { penWatchdogAnchor = now }  // clock went backwards: count from now
+            if now - penWatchdogAnchor >= configuration.penWatchdogUs { closePen(into: &out) }
         }
-        if scrollOpen, Self.elapsed(since: lastScrollAt, now: now) >= configuration.scrollWatchdogUs {
-            scrollOpen = false
-            out.append(.scroll(.cancelled, dx: 0, dy: 0))
+        if scrollOpen {
+            if lastScrollAt > now { lastScrollAt = now }
+            if now - lastScrollAt >= configuration.scrollWatchdogUs {
+                scrollOpen = false
+                out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
+            }
         }
         return out
     }
 
     /// REL-*: release everything held on the Mac, in a fixed order, and arm the latches. Idempotent.
     ///
-    /// Order: left button (pen up, or the owner's up), pen leave, right/middle/back/forward ups, scroll cancel.
+    /// Order: left button (pen up, or the owner's up), pen leave, right/middle/back/forward ups, scroll forced end.
     /// Afterwards: no owner, nothing contributing, no proximity, no open scroll, eraser mode off, both pen tools
     /// latched. The pointer sources' reported button state is kept (see `PointerSourceState.held`), and so is the
     /// time of the last pen sample (the palm is still on the glass after a release).
@@ -184,7 +207,7 @@ public struct InputStateMachine: Sendable {
         for source in pointerStates.keys { pointerStates[source]?.contributing = [] }
         if scrollOpen {
             scrollOpen = false
-            out.append(.scroll(.cancelled, dx: 0, dy: 0))
+            out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
         }
 
         isEraserMode = false

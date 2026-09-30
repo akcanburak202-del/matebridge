@@ -324,6 +324,57 @@ struct LatchTests {
             penEnter(.pen), .penDown(tool: .pen, penPt(2, 2, 100)),
         ])
     }
+    @Test("LATCH-0 a fresh session starts latched: a first CONTACT sample without STROKE_START is hover, for both tools")
+    func latch0_sessionStart() {
+        var d = Driver()
+        #expect(d.send(penMsg(.pen, penSample(1, 1, touchFlags, pressure: 300))) == [
+            penEnter(.pen), .penHover(tool: .pen, penPt(1, 1)),
+        ])
+        var e = Driver()
+        #expect(e.send(penMsg(.eraser, penSample(1, 1, touchFlags, pressure: 300))) == [
+            penEnter(.eraser), .penHover(tool: .eraser, penPt(1, 1)),
+        ])
+        // The first real stroke starts normally, and only the lifted-contact / STROKE_START unlatches.
+        #expect(d.send(penMsg(.pen, penSample(2, 2, startFlags, pressure: 40))) == [.penDown(tool: .pen, penPt(2, 2, 40))])
+    }
+
+    @Test("LATCH-9 the eraser tool is latched by release-all too, and unlatched independently of the pen",
+          arguments: allReleaseCauses)
+    func latch9_eraserAfterRelease(cause: ReleaseCause) {
+        var d = Driver()
+        d.send(penMsg(.eraser, penSample(1, 1, startFlags, pressure: 100)))
+        d.send(penMsg(.eraser, penSample(2, 2, touchFlags, pressure: 200)))
+        d.release(cause)
+        // Stale mid-stroke eraser samples: hover only, with pressure 0.
+        #expect(d.send(penMsg(.eraser, penSample(3, 3, touchFlags, pressure: 250))) == [
+            penEnter(.eraser), .penHover(tool: .eraser, penPt(3, 3)),
+        ])
+        #expect(d.send(penMsg(.eraser, penSample(4, 4, touchFlags, pressure: 250))) == [
+            .penHover(tool: .eraser, penPt(4, 4)),
+        ])
+        // The pen tool stays latched by itself; the eraser unlatches on the lift...
+        #expect(d.send(penMsg(.eraser, penSample(5, 5, hoverFlags))) == [.penHover(tool: .eraser, penPt(5, 5))])
+        #expect(d.send(penMsg(.eraser, penSample(6, 6, touchFlags, pressure: 70))) == [
+            .penDown(tool: .eraser, penPt(6, 6, 70)),
+        ])
+        d.send(penMsg(.eraser, penSample(6, 6, [])))
+        // ...while a stale pen sample is still hover.
+        #expect(d.send(penMsg(.pen, penSample(7, 7, touchFlags, pressure: 90))) == [
+            penEnter(.pen), .penHover(tool: .pen, penPt(7, 7)),
+        ])
+    }
+
+    @Test("LATCH-10 eraser mode does not bypass the latch: a pen sample turned eraser is latched like the eraser")
+    func latch10_eraserModeLatched() {
+        var d = Driver()
+        d.send(penMsg(.pen, penSample(1, 1, startFlags, pressure: 100)))
+        d.send(doubleTap)
+        d.release(.silence)   // also switches the mode off
+        d.send(doubleTap)
+        #expect(d.send(penMsg(.pen, penSample(2, 2, touchFlags, pressure: 100))) == [
+            penEnter(.eraser), .penHover(tool: .eraser, penPt(2, 2)),
+        ])
+    }
 }
 
 @Suite("ERASER: decision 0006 double tap")

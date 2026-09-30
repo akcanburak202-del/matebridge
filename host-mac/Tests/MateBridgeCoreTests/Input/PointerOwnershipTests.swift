@@ -168,6 +168,58 @@ struct OwnershipTests {
         #expect(d.send(relMsg(1, 1, .left)) == [.mouseMove(.relative(dx: 1, dy: 1), dragging: .left)])
         #expect(d.send(relMsg(0, 0, [])) == [.mouseButton(.left, down: false)])
     }
+    @Test("OWN-9 while a pointer source owns the left button the pen's hover moves do not reach the Mac; enter and leave do",
+          arguments: PtrSource.allCases)
+    func own9_hoverSuppressedWhileOwned(source: PtrSource) {
+        var d = Driver()
+        d.send(source.msg(.left))
+        #expect(d.send(penMsg(.pen, penSample(60000, 60000, hoverFlags))) == [penEnter(.pen)])
+        #expect(d.send(penMsg(.pen, penSample(60010, 60010, hoverFlags))).isEmpty)
+        // Pen priority: the on-behalf up comes with no pen hover in between, so it lands at the owner's position.
+        #expect(d.send(penMsg(.pen, penSample(60020, 60020, startFlags, pressure: 100))) == [
+            .mouseButton(.left, down: false), .penDown(tool: .pen, penPt(60020, 60020, 100)),
+        ])
+        // Enter and contact in one sample: enter, on-behalf up, down.
+        var e = Driver()
+        e.send(source.msg(.left))
+        #expect(e.send(penMsg(.pen, penSample(9, 9, startFlags, pressure: 100))) == [
+            penEnter(.pen), .mouseButton(.left, down: false), .penDown(tool: .pen, penPt(9, 9, 100)),
+        ])
+        // Leaving range is still reported while the source owns the button.
+        var f = Driver()
+        f.send(source.msg(.left))
+        f.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        #expect(f.send(penMsg(.pen, penSample(1, 1, []))) == [penLeave(.pen)])
+    }
+
+    @Test("OWN-9b the pen's hover moves resume as soon as the owner releases")
+    func own9b_hoverResumes() {
+        var d = Driver()
+        d.send(absMsg(.mouse, 5, 5, .left))
+        d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        #expect(d.send(penMsg(.pen, penSample(2, 2, hoverFlags))).isEmpty)
+        d.send(absMsg(.mouse, 5, 5, []))
+        #expect(d.send(penMsg(.pen, penSample(3, 3, hoverFlags))) == [.penHover(tool: .pen, penPt(3, 3))])
+    }
+
+    @Test("OWN-10 after the pen lifts but stays in range, mouse and trackpad presses are accepted at once; touch waits for the gate")
+    func own10_pressAfterPenLift() {
+        var d = Driver()
+        d.send(penMsg(.pen, penSample(1, 1, startFlags, pressure: 100)))
+        #expect(d.send(penMsg(.pen, penSample(2, 2, hoverFlags))) == [.penUp(tool: .pen, penPt(2, 2, 0))])
+        #expect(d.machine.isPenInRange)
+        #expect(d.send(relMsg(0, 0, .left)) == [.mouseButton(.left, down: true)])
+        #expect(d.send(relMsg(0, 0, [])) == [.mouseButton(.left, down: false)])
+        #expect(d.send(absMsg(.mouse, 7, 8, .left)) == [moveAbs(7, 8), .mouseButton(.left, down: true)])
+        d.send(absMsg(.mouse, 7, 8, []))
+        // A finger is still gated while the pen is in range, and for 1 s after its last sample.
+        #expect(d.send(absMsg(.touch, 9, 9, .left)).isEmpty)
+        d.send(absMsg(.touch, 9, 9, []))
+        d.send(penMsg(.pen, penSample(2, 2, [])))          // leaves range; last pen sample
+        #expect(d.send(absMsg(.touch, 9, 9, .left), after: 999_999).isEmpty)
+        d.send(absMsg(.touch, 9, 9, []))
+        #expect(d.send(absMsg(.touch, 9, 9, .left), after: 1) == [moveAbs(9, 9), .mouseButton(.left, down: true)])
+    }
 }
 
 @Suite("OR: right, middle, back, forward are the union of all sources")
