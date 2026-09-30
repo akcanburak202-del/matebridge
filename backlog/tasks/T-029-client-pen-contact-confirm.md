@@ -44,7 +44,15 @@ Karar 0007: tablet bir teması ancak **doğrulandıktan sonra** gönderir; doğr
 
 ## Plan
 
-_(Ajan doldurur.)_
+Yalnızca `PenTracker` (ve sayaçlar için `Model.kt`) değişir; `InputCapture` yalnızca bir teşhis alıcısı ekler.
+
+1. **Bekletilen temas (`pending`):** `ACTION_DOWN` artık hemen örnek üretmez. Ham `PenPoint`'ler, DOWN olay zamanı ve DOWN'un dağıtım zamanı (`nowMs`) `Pending` içinde tutulur; örnekler (normX/Y, basınç, eğim) doğrulanınca üretilir, bu yüzden atılan temas `lastTilt`/`last`/`lastFlags`'e dokunmaz. `state` host'un bildiği durumu tutar (OUT/HOVER/CONTACT); bekletilen temas `state`'i değiştirmez.
+2. **Doğrulama:** (a) aynı temastan `MOVE` gelirse bekletilen + gelen örnekler tek `emitReal` ile gider (ilk örnek `STROKE_START`, özgün zamanlar); (b) DOWN'un kendisi birden çok örnek taşıyorsa hemen doğrulanır; (c) `tick`'te `nowMs - downNowMs >= CONFIRM_MS (10)`; (d) UP / hover / ikinci DOWN olayında, olay zamanına göre (`son örnek - DOWN`) ≥ 10 ms ise önce doğrulanır, sonra olay normal işlenir.
+3. **Doğrulanmadan bitiş:** olay zamanına göre < 10 ms'de UP / hover olayı ya da herhangi bir CANCEL gelirse temas atılır (`bounce_dropped++`), sonra olay mevcut kurallarla işlenir: UP -> hover örneği (kalem hâlâ orada), CANCEL -> `flags = 0`, HOVER_EXIT -> ertelenir ya da `flags = 0`. `release`, `reset`, araç değişimi bekletileni sayaçsız atar; fazladan bırakış üretilmez (host bilmiyordu).
+4. **Durum tutarlılığı:** `inRange = state != OUT || pending != null` (parmak kapısı açılmaz); `followsPointer` bekletilen için de (cihaz, işaretçi) eşler; `contactDeviceId/PointerId` DOWN'da atanır, atılınca temizlenir; `lastSentMs` gönderimde güncellenir (bekletmede değişmez); `tick` bekletme sürerken canlılık/bayatlama çalıştırmaz (en çok birkaç on ms sürer, host'a bir şey bildirilmemiştir). DOWN'un yuttuğu `HOVER_EXIT`: temas atılırsa UP -> hover (yutulmuş kalır), CANCEL / hover exit / release -> `flags = 0` gider.
+5. **DOWN, `state == CONTACT` iken** (kaçan UP): eski temasın bitişi (IN_RANGE örneği) hemen gider, yenisi bekletilir.
+6. **Zamanlama seçimi:** `CONFIRM_MS = 10`. Gerçek temasın ikinci örneği ≈2,8 ms'de gelir (olay yolu); ölçülen sekme 8 ms. `INPUT_TICK_MS = 25` (`MainActivity`, kapsam dışı) olduğu için yalnızca zamanlayıcıya kalan hareketsiz-temas yolu en kötü ≈35 ms'de doğrulanır; kartın "20 ms" üst sınırı bu yolda `MainActivity`'de tick'i ≤5 ms yapmadan sağlanamaz (Handoff/Açık sorular).
+7. **Testler:** `PenTrackerTest`'te yeni `PenContactConfirmTest` (tek örnek atılır, DOWN+MOVE, süre dolumu tick/olayla, UP/CANCEL/release/reset/araç değişimi/hover exit, exit erteleme akıbeti, kayıtlı sekme dizisi, sayaç, dt_us/zamanlar); mevcut testler yeni gecikmeye göre güncellenir; `InputFuzzTest` değişmezi `penHostInRange` ile; kasıtlı bozma ile testlerin kırıldığı gösterilir.
 
 ## Handoff
 
