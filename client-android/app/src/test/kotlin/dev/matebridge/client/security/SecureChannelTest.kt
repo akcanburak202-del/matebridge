@@ -76,6 +76,57 @@ class HandshakeMatrixTest {
         assertNull(out.session.sas)
     }
 
+    /** PAIRING handshake; returns the session and the pair key the host derives for the same handshake. */
+    private fun pairingHandshake(store: PairKeyStore): Pair<SecureSession, ByteArray> {
+        val hostKey = P256.generate()
+        val hs = ClientHandshake()
+        val hello = hs.hello(template)
+        val a = ack(HelloAck.PENDING_APPROVAL, HelloAck.KEY_PAIRING, hostKey.publicBytes)
+        val payload = Codec.encodePayload(a)
+        val sess = (hs.complete(a, payload, store) as HandshakeOutcome.Secure).session
+        val ecdh = P256.ecdh(hostKey.privateKey, P256.decodePublic(hello.clientEphPub.value))
+        val prk = KeySchedule.prk(KeySchedule.ikm(null, ecdh), KeySchedule.transcriptHash(Codec.encodePayload(hello), payload))
+        return sess to KeySchedule.newPairKey(prk)
+    }
+
+    @Test
+    fun pairKeyIsStoredRightAfterTheFirstAckAndSurvivesADropBeforeAccepted() {
+        val store = MemStore()
+        val (sess, hostKey) = pairingHandshake(store)
+        assertEquals(0, store.puts) // nothing before the caller commits
+        assertTrue(sess.storePairKey(store))
+        assertEquals(1, store.puts)
+        assertArrayEquals(hostKey, store.get(hostId)) // the key the Mac keeps on approval
+        assertFalse(sess.storePairKey(store)) // idempotent; nothing more to do at ACCEPTED
+        assertEquals(1, store.puts)
+        // Connection dropped before ACCEPTED: the key is still there, and a later PAIRED handshake completes with it.
+        val hs = ClientHandshake()
+        hs.hello(template)
+        val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED)
+        val out = hs.complete(a, Codec.encodePayload(a), store)
+        assertTrue(out is HandshakeOutcome.Secure)
+        assertNull((out as HandshakeOutcome.Secure).session.sas)
+    }
+
+    @Test
+    fun aNewPairingReplacesTheOldKey() {
+        val store = MemStore().also { it.put(hostId, ByteArray(32) { 9 }) }
+        val (sess, hostKey) = pairingHandshake(store)
+        assertTrue(sess.rePairing)
+        sess.storePairKey(store)
+        assertArrayEquals(hostKey, store.get(hostId))
+    }
+
+    @Test
+    fun pairedSessionsNeverWriteTheStore() {
+        val store = MemStore().also { it.put(hostId, ByteArray(32) { 1 }) }
+        val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED)
+        val hs = ClientHandshake(); hs.hello(template)
+        val sess = (hs.complete(a, Codec.encodePayload(a), store) as HandshakeOutcome.Secure).session
+        assertFalse(sess.storePairKey(store))
+        assertEquals(1, store.puts)
+    }
+
     @Test
     fun invalidHostKeyIsAProtocolError() {
         val bad = ByteArray(65).also { it[0] = 4; it[64] = 1 }
@@ -360,7 +411,7 @@ class VideoChannelTest {
     }
 
     @Test
-    fun aFailingKeyStoreSurfacesFromOnMessageSoTheSessionCanFail() {
+    fun aFailingKeyStoreSurfacesFromStorePairKeySoTheSessionCanFail() {
         val eph = EphemeralKeyPair(P256.generate().privateKey, P256.generate().publicBytes)
         val prk = ByteArray(32) { 4 }
         val sec = SecureSession(
@@ -372,7 +423,7 @@ class VideoChannelTest {
             override fun put(hostId: ByteArray, key: ByteArray) { throw java.io.IOException("commit failed") }
         }
         try {
-            sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 1, 1, ""), failing); fail()
+            sec.storePairKey(failing); fail()
         } catch (e: java.io.IOException) {
         }
     }

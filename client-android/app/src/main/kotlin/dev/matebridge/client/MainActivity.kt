@@ -880,6 +880,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         b.setSpan(RelativeSizeSpan(3.5f), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         b.setSpan(StyleSpan(Typeface.BOLD), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         b.append("\nMac'te \"İzin ver\" dediğinde bağlanır.")
+        b.append("\n\nMac'i göremiyorsan: Parsec'te kodu karşılaştırıp İzin ver de, sonra buraya dön.")
         return b
     }
 
