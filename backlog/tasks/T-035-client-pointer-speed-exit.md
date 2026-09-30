@@ -1,7 +1,7 @@
 ---
 id: T-035
 title: Tablet — imleç hızı (daha yavaş varsayılan + canlı ayar kısayolu), Android'e dönüş kısayolu
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-033, T-034]
@@ -47,8 +47,15 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): klavye, touchpad ve fare çalışı
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** dalın son commit'i (`git log task/T-035-client-pointer-speed-exit`).
+- **Dokunulan dosyalar:** input/KeyTracker.kt, InputCapture.kt, RelPointerTracker.kt; session/Settings.kt; MainActivity.kt; testler (KeyTrackerTest, RelPointerTrackerTest, RelPointerCaptureTest, SessionSupportTest); bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - **Hata düzeltmesi:** mevcut `KEYCODE_F3 = 134` yanlıştı (Android: F1=131, F2=132, F3=133, 134=F4). 133'e düzeltildi, F1/F2 eklendi; tuşlar ayrıca Linux scan kodlarıyla (59/60/61) da eşleşir. Testler 134 -> 133 güncellendi.
+  - Kaydırma hızı korunsun diye `SCROLL_GAIN` 1,0 -> 1,5 (SCREEN_SPAN 1,2 -> 0,8 kaydırmayı da yavaşlatacaktı).
+  - Çarpan adımları 0,85 / 1,15; aralık 0,25-3,0; bozuk kayıt değeri 1,0.
+  - "Son kullanılan cihaz" = son kare gelen cihaz (pad ya da fare); hiçbiri yoksa touchpad.
+  - Ctrl+Shift+Esc, Esc'in BACK koduyla (scan 1) gelmesini de tanır; yalnız Esc Mac'e gitmeye devam eder.
+  - Oturum yokken yalnızca F3 yerel; F1/F2/Esc Android'de kalır.
+  - Panele kısayol metni kodla eklendi (addShortcutHint).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ctrl+Shift+F1/F2 ile Toast ve hızın canlı değişmesi (touchpad/fare ayrı); Ctrl+Shift+Esc ile uygulama arka plana gidiyor, Mac'te Ctrl/Shift takılı kalmıyor, pointer capture bırakılıyor (Android imleci geri geliyor), geri dönünce devam ediyor; yeni varsayılan hız hissi; Toast immersive modda görünüyor mu; kaydırma hızı eskisiyle aynı mı; Ctrl+Shift+F3 hâlâ çalışıyor mu.
+- **Açık sorular:** Yok.

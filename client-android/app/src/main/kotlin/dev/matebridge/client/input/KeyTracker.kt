@@ -16,8 +16,14 @@ class KeyFrame(
     val timeUs: Long,
 )
 
-/** What the activity does with the event: [consumed] keeps it from Android; [localToggle] flips the stats overlay. */
-class KeyDecision(val consumed: Boolean, val localToggle: Boolean = false, val out: List<Outgoing> = emptyList())
+/** A Ctrl+Shift+key chord handled on the tablet only (T-033, T-035); never reaches the Mac. */
+enum class LocalAction { NONE, STATS, SPEED_DOWN, SPEED_UP, BACKGROUND }
+
+/** What the activity does with the event: [consumed] keeps it from Android; [local] is a tablet-only chord to perform. */
+class KeyDecision(val consumed: Boolean, val local: LocalAction = LocalAction.NONE, val out: List<Outgoing> = emptyList()) {
+    /** Ctrl+Shift+F3 was pressed: flip the stats overlay. */
+    val localToggle get() = local == LocalAction.STATS
+}
 
 /**
  * Pressed-key bookkeeping for the physical keyboard (PROTOCOL.md section 4 KEY, section 7). Every DOWN that is sent is
@@ -29,7 +35,7 @@ class KeyTracker {
 
     private val held = LinkedHashMap<Pair<Int, Int>, Held>()
 
-    /** Ctrl+Shift+F3 presses handled locally: their duplicate DOWNs and their UP stay local until UP, detach or reset. */
+    /** Local chord presses (Ctrl+Shift+F1/F2/F3/Esc): their duplicate DOWNs and their UP stay local until UP, detach or reset. */
     private val localOnly = HashSet<Pair<Int, Int>>()
     private var lastCaps = false
 
@@ -40,19 +46,21 @@ class KeyTracker {
 
     /** Used while the session accepts input. */
     fun onKey(f: KeyFrame): KeyDecision {
-        if (f.keyCode == KEYCODE_BACK) return KeyDecision(true) // Esc also produces BACK (scan 1): never sent
-        val id = keyId(f.scanCode, f.keyCode) ?: return KeyDecision(true)
+        val id = keyId(f.scanCode, f.keyCode)
+        if (id == null) return KeyDecision(true)
         val k = f.deviceId to id
         if (k in localOnly) {
             if (!f.down) localOnly.remove(k)
             return KeyDecision(true)
         }
-        // A held F3 (DOWN already sent) must still get its UP even if Ctrl+Shift came down meanwhile.
-        if (isStatsToggle(f) && k !in held) {
-            val toggle = f.down && f.repeatCount == 0
-            if (toggle) localOnly += k
-            return KeyDecision(consumed = true, localToggle = toggle)
+        // A held F-key (DOWN already sent) must still get its UP even if Ctrl+Shift came down meanwhile.
+        val chord = localChord(f)
+        if (chord != LocalAction.NONE && k !in held) {
+            val fire = f.down && f.repeatCount == 0
+            if (fire) localOnly += k
+            return KeyDecision(consumed = true, local = if (fire) chord else LocalAction.NONE)
         }
+        if (f.keyCode == KEYCODE_BACK) return KeyDecision(true) // Esc also produces BACK (scan 1): never sent
         lastCaps = f.capsOn
         if (f.down) {
             if (f.repeatCount > 0 || k in held) return KeyDecision(true)
@@ -93,7 +101,14 @@ class KeyTracker {
 
     companion object {
         const val KEYCODE_BACK = 4
-        const val KEYCODE_F3 = 134
+        const val KEYCODE_ESCAPE = 111
+        const val KEYCODE_F1 = 131
+        const val KEYCODE_F2 = 132
+        const val KEYCODE_F3 = 133
+        private const val SCAN_ESC = 1
+        private const val SCAN_F1 = 59
+        private const val SCAN_F2 = 60
+        private const val SCAN_F3 = 61
 
         /** PROTOCOL.md: `scan_code` if known, else `0x10000 + android_key_code`; null when both are 0 (not sent). */
         fun keyId(scanCode: Int, keyCode: Int): Int? = when {
@@ -103,7 +118,22 @@ class KeyTracker {
         }
 
         /** Ctrl+Shift+F3 toggles the stats overlay locally and never reaches the Mac. */
-        fun isStatsToggle(f: KeyFrame) = f.keyCode == KEYCODE_F3 && f.ctrl && f.shift
+        fun isStatsToggle(f: KeyFrame) = localChord(f) == LocalAction.STATS
+
+        /**
+         * The tablet-only chord this event belongs to, or NONE: Ctrl+Shift+F1 / F2 (pointer speed down / up), F3 (stats),
+         * Esc (back to Android). Matched by key code or the Linux scan code, because Esc may arrive as BACK.
+         */
+        fun localChord(f: KeyFrame): LocalAction {
+            if (!f.ctrl || !f.shift) return LocalAction.NONE
+            return when {
+                f.keyCode == KEYCODE_F1 || f.scanCode == SCAN_F1 -> LocalAction.SPEED_DOWN
+                f.keyCode == KEYCODE_F2 || f.scanCode == SCAN_F2 -> LocalAction.SPEED_UP
+                f.keyCode == KEYCODE_F3 || f.scanCode == SCAN_F3 -> LocalAction.STATS
+                f.keyCode == KEYCODE_ESCAPE || (f.scanCode == SCAN_ESC && f.keyCode == KEYCODE_BACK) -> LocalAction.BACKGROUND
+                else -> LocalAction.NONE
+            }
+        }
 
         /**
          * A real typing keyboard: not a virtual device, source has SOURCE_KEYBOARD (0x101), and alphabetic key type

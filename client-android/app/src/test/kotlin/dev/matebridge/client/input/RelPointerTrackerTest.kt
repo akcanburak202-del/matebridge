@@ -11,7 +11,7 @@ import org.junit.Test
 
 /**
  * Touchpad and mouse recognition (T-034). Pad extent 1000 raw units and a 1000 pt stream: one raw unit is
- * 1.2 pt before acceleration (PadTuning.SCREEN_SPAN), the slop is 20 raw units.
+ * 0.8 pt before acceleration (PadTuning.SCREEN_SPAN), the slop is 20 raw units.
  */
 class RelPointerTrackerTest {
     private val counters = InputCounters()
@@ -29,15 +29,15 @@ class RelPointerTrackerTest {
 
     @Test fun singleFingerMovesCursorWithScaleAndAcceleration() {
         pad(PadAction.DOWN, 0, 0, f(0, 100f, 100f))
-        // 50 raw in 8 ms is very fast: full gain. 50 * 1.2 = 60 pt base, times GAIN_MAX.
+        // 50 raw in 8 ms is very fast: full gain. 50 * 0.8 = 40 pt base, times GAIN_MAX.
         val fast = rels(pad(PadAction.MOVE, 8, 0, f(0, 150f, 100f)))
         assertEquals(1, fast.size)
-        assertEquals(60f * PadTuning.GAIN_MAX, fast[0].dx, 0.01f)
+        assertEquals(40f * PadTuning.GAIN_MAX, fast[0].dx, 0.01f)
         assertEquals(0f, fast[0].dy, 0f)
         assertEquals(0, fast[0].buttons)
         // 2 raw in 50 ms is slow: minimum gain.
         val slow = rels(pad(PadAction.MOVE, 58, 0, f(0, 152f, 100f)))
-        assertEquals(2.4f * PadTuning.GAIN_MIN, slow[0].dx, 0.01f)
+        assertEquals(1.6f * PadTuning.GAIN_MIN, slow[0].dx, 0.01f)
     }
 
     @Test fun motionStartsOnlyAfterSlopSoTapsDoNotNudgeTheCursor() {
@@ -224,7 +224,7 @@ class RelPointerTrackerTest {
             t.onMouse(MouseFrame(ms * 1000, dx, dy, buttons, pressed, v, h, MOUSE), ms).messages()
         // BACK was already held when we first looked (no press seen): never reported.
         val m = rels(mouse(1, 3f, -2f, Buttons.BACK))
-        assertEquals(PointerRel(1000, 3f, -2f, 0), m.single())
+        assertEquals(PointerRel(1000, 3f * PadTuning.MOUSE_GAIN, -2f * PadTuning.MOUSE_GAIN, 0), m.single())
         val press = rels(mouse(2, 0f, 0f, Buttons.LEFT or Buttons.BACK, pressed = Buttons.LEFT))
         assertEquals(listOf(Buttons.LEFT), press.map { it.buttons })
         val drag = rels(mouse(3, 4f, 0f, Buttons.LEFT or Buttons.BACK))
@@ -260,6 +260,35 @@ class RelPointerTrackerTest {
         assertEquals(listOf(Buttons.LEFT), press.map { it.buttons })
         val drag = rels(t.onMouse(MouseFrame(3000, 5f, 0f, Buttons.LEFT, deviceId = MOUSE), 3).messages())
         assertEquals(Buttons.LEFT, drag.single().buttons)
+    }
+
+    @Test fun defaultTuningConstants() {
+        assertEquals(0.8f, PadTuning.SCREEN_SPAN, 0f)
+        assertEquals(0.6f, PadTuning.GAIN_MIN, 0f)
+        assertEquals(1.8f, PadTuning.GAIN_MAX, 0f)
+        assertEquals(0.6f, PadTuning.MOUSE_GAIN, 0f)
+    }
+
+    @Test fun speedMultipliersScaleCursorButNotScroll() {
+        pad(PadAction.DOWN, 0, 0, f(0, 100f, 100f))
+        val base = rels(pad(PadAction.MOVE, 8, 0, f(0, 150f, 100f))).single().dx
+        t.padSpeed = 0.5f
+        val half = rels(pad(PadAction.MOVE, 16, 0, f(0, 200f, 100f))).single().dx
+        assertEquals(base * 0.5f, half, 0.01f)
+        t.mouseSpeed = 2f
+        val m = t.onMouse(MouseFrame(1000, 10f, 0f, 0, 0, 0f, 0f, MOUSE), 1).messages()
+        assertEquals(10f * PadTuning.MOUSE_GAIN * 2f, rels(m).single().dx, 0.001f)
+        val w = t.onMouse(MouseFrame(2000, 0f, 0f, 0, 0, 1f, 0f, MOUSE), 2).messages()
+        assertEquals(-0f, scrolls(w).single().dx, 0f) // wheel unaffected by mouseSpeed
+        assertEquals(PadTuning.WHEEL_NOTCH_PT, scrolls(w).single().dy, 0f)
+    }
+
+    @Test fun lastDeviceKindTracksPadAndMouse() {
+        assertFalse(t.lastWasMouse)
+        t.onMouse(MouseFrame(1000, 1f, 0f, 0, 0, 0f, 0f, MOUSE), 1)
+        assertTrue(t.lastWasMouse)
+        pad(PadAction.DOWN, 5, 0, f(0, 100f, 100f))
+        assertFalse(t.lastWasMouse)
     }
 
     private companion object {

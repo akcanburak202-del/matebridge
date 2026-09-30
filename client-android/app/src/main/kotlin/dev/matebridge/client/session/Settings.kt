@@ -44,6 +44,24 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setFingerTouchDisabled(off: Boolean) = store.putString(KEY_FINGER_OFF, if (off) "1" else "0")
 
+    /** Touchpad / mouse cursor speed multiplier (T-035): default 1.0, always within [SpeedRange]. Scrolling is not affected. */
+    fun touchpadSpeed(): Float = readSpeed(KEY_PAD_SPEED)
+
+    fun mouseSpeed(): Float = readSpeed(KEY_MOUSE_SPEED)
+
+    fun setTouchpadSpeed(v: Float) = store.putString(KEY_PAD_SPEED, SpeedRange.clamp(v).toString())
+
+    fun setMouseSpeed(v: Float) = store.putString(KEY_MOUSE_SPEED, SpeedRange.clamp(v).toString())
+
+    /** Multiplies the mouse's or touchpad's speed by [factor], persists it (clamped) and returns the new value. */
+    fun adjustSpeed(mouse: Boolean, factor: Float): Float {
+        val v = SpeedRange.clamp((if (mouse) mouseSpeed() else touchpadSpeed()) * factor)
+        if (mouse) setMouseSpeed(v) else setTouchpadSpeed(v)
+        return v
+    }
+
+    private fun readSpeed(key: String): Float = store.getString(key)?.toFloatOrNull()?.let { SpeedRange.clamp(it) } ?: 1f
+
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
 
     private fun fromHex(s: String): ByteArray? {
@@ -60,8 +78,25 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"
         const val KEY_STATS = "stats_overlay"
+        const val KEY_PAD_SPEED = "touchpad_speed"
+        const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_FINGER_OFF = "finger_touch_disabled"
     }
+}
+
+/** Allowed range of the user speed multipliers (T-035) and the local shortcut steps. */
+object SpeedRange {
+    const val MIN = 0.25f
+    const val MAX = 3.0f
+    const val STEP_DOWN = 0.85f
+    const val STEP_UP = 1.15f
+
+    /** NaN and infinities fall back to 1.0. */
+    fun clamp(v: Float): Float = if (v.isNaN() || v.isInfinite()) 1f else v.coerceIn(MIN, MAX)
+
+    /** Toast text, e.g. "Touchpad hızı: 0,85" (decimal comma). */
+    fun label(mouse: Boolean, v: Float): String =
+        (if (mouse) "Fare" else "Touchpad") + " hızı: " + String.format(java.util.Locale.forLanguageTag("tr"), "%.2f", v)
 }
 
 /** Truncates to at most [maxBytes] UTF-8 bytes without splitting a code point (str8 limit is 64). */

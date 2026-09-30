@@ -111,6 +111,15 @@ class InputCapture(
         dispatch(gate(Src.TOUCH, touch.onFrame(f, nowMs)))
     }
 
+    /** Speed multipliers of the touchpad and mouse cursor (T-035, from [dev.matebridge.client.session.Settings]). */
+    fun setPointerSpeeds(pad: Float, mouse: Float) {
+        rel.padSpeed = pad
+        rel.mouseSpeed = mouse
+    }
+
+    /** The last relative pointer device type that produced an event: the mouse, or (also when none yet) the touchpad. */
+    val lastPointerIsMouse get() = rel.lastWasMouse
+
     /** A touchpad event under pointer capture (T-034). The touchscreen and the pen never come through here. */
     fun onPad(f: PadFrame, nowMs: Long) {
         if (!accepting) return
@@ -153,7 +162,7 @@ class InputCapture(
     fun onKey(f: KeyFrame): KeyDecision {
         if (!accepting) {
             val f3 = f.keyCode == KeyTracker.KEYCODE_F3
-            if (f3 && f.down && f.repeatCount == 0) return KeyDecision(consumed = true, localToggle = true)
+            if (f3 && f.down && f.repeatCount == 0) return KeyDecision(consumed = true, local = LocalAction.STATS)
             return KeyDecision(consumed = f3)
         }
         val d = keys.onKey(f)

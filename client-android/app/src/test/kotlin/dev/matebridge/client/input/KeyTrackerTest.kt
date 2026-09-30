@@ -120,25 +120,25 @@ class KeyTrackerTest {
     }
 
     @Test fun localF3DuplicateDownAndUpStayLocalEvenAfterModifiersRelease() {
-        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
-        val dup = key(61, code = 134) // modifiers already released, DOWN with repeat 0
+        assertTrue(key(61, code = 133, ctrl = true, shift = true).localToggle)
+        val dup = key(61, code = 133) // modifiers already released, DOWN with repeat 0
         assertTrue(dup.consumed); assertFalse(dup.localToggle)
-        assertTrue(key(61, code = 134, down = false).consumed)
+        assertTrue(key(61, code = 133, down = false).consumed)
         assertTrue(keys().isEmpty())
         // after the UP a fresh chord toggles again
-        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
+        assertTrue(key(61, code = 133, ctrl = true, shift = true).localToggle)
     }
 
     @Test fun localF3SuppressionEndsOnDetachAndReset() {
-        key(61, code = 134, ctrl = true, shift = true)
+        key(61, code = 133, ctrl = true, shift = true)
         cap.onDeviceRemoved(kb, 500)
-        key(61, code = 134) // plain F3 now goes to the Mac
+        key(61, code = 133) // plain F3 now goes to the Mac
         assertEquals(1, keys().size)
-        key(61, code = 134, down = false)
+        key(61, code = 133, down = false)
         assertEquals(2, keys().size)
-        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
+        assertTrue(key(61, code = 133, ctrl = true, shift = true).localToggle)
         cap.releaseAll(ReleaseAll.USER, 900)
-        key(61, code = 134) // reset cleared the suppression: plain F3 is sent again
+        key(61, code = 133) // reset cleared the suppression: plain F3 is sent again
         assertEquals(3, keys().size)
     }
 
@@ -149,28 +149,28 @@ class KeyTrackerTest {
 
     @Test fun ctrlShiftF3TogglesLocallyAndIsNotSent() {
         key(29, code = 113) // Ctrl goes to the Mac (accepted)
-        val d = key(61, code = 134, ctrl = true, shift = true)
+        val d = key(61, code = 133, ctrl = true, shift = true)
         assertTrue(d.consumed); assertTrue(d.localToggle)
-        val u = key(61, code = 134, down = false, ctrl = true, shift = true)
+        val u = key(61, code = 133, down = false, ctrl = true, shift = true)
         assertTrue(u.consumed); assertFalse(u.localToggle)
         assertEquals(1, keys().size)
     }
 
     @Test fun plainF3GoesToTheMacAndHeldF3UpSurvivesCtrlShift() {
-        val d = key(61, code = 134)
+        val d = key(61, code = 133)
         assertFalse(d.localToggle)
         assertEquals(1, keys().size)
-        key(61, code = 134, down = false, ctrl = true, shift = true)
+        key(61, code = 133, down = false, ctrl = true, shift = true)
         assertEquals(listOf(Key.DOWN, Key.UP), keys().map { it.action })
     }
 
     @Test fun withoutSessionF3IsLocalAndOtherKeysStayWithAndroid() {
         cap.setActive(false, 50)
         val n = sink.sent.size
-        val f3 = key(61, code = 134)
+        val f3 = key(61, code = 133)
         assertTrue(f3.consumed); assertTrue(f3.localToggle)
-        assertTrue(key(61, code = 134, repeat = 1).consumed)
-        assertFalse(key(61, code = 134, repeat = 1).localToggle)
+        assertTrue(key(61, code = 133, repeat = 1).consumed)
+        assertFalse(key(61, code = 133, repeat = 1).localToggle)
         assertFalse(key(30).consumed)
         assertEquals(n, sink.sent.size)
     }
@@ -193,5 +193,43 @@ class KeyTrackerTest {
         assertFalse(KeyTracker.isPhysicalKeyboard(false, 0x101, 1)) // volume/power keys: non-alphabetic
         assertFalse(KeyTracker.isPhysicalKeyboard(false, 0x1002, 2)) // touch/stylus source
         assertNull(KeyTracker.keyId(0, 0))
+    }
+
+    @Test fun ctrlShiftF1F2AreLocalSpeedChordsAndNeverSent() {
+        val d1 = key(59, code = 131, ctrl = true, shift = true)
+        assertTrue(d1.consumed); assertEquals(LocalAction.SPEED_DOWN, d1.local)
+        val d2 = key(60, code = 132, ctrl = true, shift = true)
+        assertEquals(LocalAction.SPEED_UP, d2.local)
+        // duplicate DOWN (modifiers released) and UPs stay local
+        val dup = key(59, code = 131)
+        assertTrue(dup.consumed); assertEquals(LocalAction.NONE, dup.local)
+        assertEquals(LocalAction.NONE, key(59, code = 131, repeat = 1, ctrl = true, shift = true).local)
+        assertTrue(key(59, code = 131, down = false).consumed)
+        assertTrue(key(60, code = 132, down = false).consumed)
+        assertTrue(keys().isEmpty())
+        // plain F1 goes to the Mac
+        key(59, code = 131)
+        assertEquals(1, keys().size)
+    }
+
+    @Test fun ctrlShiftEscIsLocalBackgroundAndEscStaysLocalUntilUp() {
+        val d = key(1, code = 111, ctrl = true, shift = true)
+        assertTrue(d.consumed); assertEquals(LocalAction.BACKGROUND, d.local)
+        assertTrue(keys().isEmpty())
+        assertEquals(LocalAction.NONE, key(1, code = 111, ctrl = true, shift = true).local) // duplicate DOWN
+        assertTrue(key(1, code = 111, down = false).consumed)
+        assertTrue(keys().isEmpty())
+        // Esc reported as BACK with scan code 1 is recognised too
+        assertEquals(LocalAction.BACKGROUND, key(1, code = 4, ctrl = true, shift = true).local)
+    }
+
+    @Test fun plainEscStillGoesToTheMac() {
+        assertEquals(LocalAction.NONE, key(1, code = 111).local)
+        assertEquals(1, keys().size)
+    }
+
+    @Test fun speedChordsAreLocalNotMacKeysAndScrollUnaffected() {
+        assertEquals(131, KeyTracker.KEYCODE_F1); assertEquals(132, KeyTracker.KEYCODE_F2)
+        assertEquals(133, KeyTracker.KEYCODE_F3)
     }
 }
