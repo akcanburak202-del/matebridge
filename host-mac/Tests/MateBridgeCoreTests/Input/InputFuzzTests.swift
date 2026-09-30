@@ -255,7 +255,7 @@ struct InputFuzzTests {
         #expect(run() == run())
     }
 
-    @Test("FUZZ-5 tick acts exactly at nextDeadline(now:): not 1 us before, and never when it is nil")
+    @Test("FUZZ-5 tick acts exactly at nextDeadline(now:): not 1 us before, never when nil, also right after the clock went backwards")
     func fuzz5_nextDeadlineIsExact() {
         var failures: [String] = []
         for seed in 1...400 {
@@ -268,17 +268,28 @@ struct InputFuzzTests {
                 case .tick: d.tick(delta: delta)
                 case .release(let cause): d.jump(delta); d.release(cause)
                 }
-                let m = d.machine
-                if let due = m.nextDeadline(now: d.now) {
-                    if due <= d.now { failures.append("seed \(seed) step \(step): deadline \(due) not after now \(d.now)") }
-                    var early = m
-                    if !early.tick(now: due - 1).isEmpty { failures.append("seed \(seed) step \(step): acts before the deadline") }
-                    var exact = m
-                    if exact.tick(now: due).isEmpty { failures.append("seed \(seed) step \(step): silent at the deadline") }
-                } else {
-                    var far = m
-                    if !far.tick(now: d.now + 3_600_000_000).isEmpty { failures.append("seed \(seed) step \(step): nil deadline but tick acts") }
-                    if m.isPenInRange || m.scrollOpen { failures.append("seed \(seed) step \(step): armed state without a deadline") }
+                // Probe at the current time, and at a time that is behind every stored timestamp (the first look
+                // at a backwards clock is the nextDeadline call itself, with no handle/tick before it).
+                let behind = d.now - Swift.min(d.now, UInt64.random(in: 1...3_000, using: &g) * msec)
+                for probeNow in [d.now, behind] {
+                    var m = d.machine
+                    if let due = m.nextDeadline(now: probeNow) {
+                        guard due > probeNow else {
+                            failures.append("seed \(seed) step \(step): deadline \(due) not after \(probeNow)")
+                            continue
+                        }
+                        var early = m
+                        if !early.tick(now: due - 1).isEmpty { failures.append("seed \(seed) step \(step): acts before the deadline") }
+                        var exact = m
+                        if exact.tick(now: due).isEmpty { failures.append("seed \(seed) step \(step): silent at the deadline") }
+                        // Never later than one period after the observation (PROTOCOL.md section 7).
+                        let period = Swift.max(m.configuration.penWatchdogUs, m.configuration.scrollWatchdogUs)
+                        if due - probeNow > period { failures.append("seed \(seed) step \(step): deadline more than a period away") }
+                    } else {
+                        var far = m
+                        if !far.tick(now: probeNow + 3_600_000_000).isEmpty { failures.append("seed \(seed) step \(step): nil deadline but tick acts") }
+                        if m.isPenInRange || m.scrollOpen { failures.append("seed \(seed) step \(step): armed state without a deadline") }
+                    }
                 }
             }
         }

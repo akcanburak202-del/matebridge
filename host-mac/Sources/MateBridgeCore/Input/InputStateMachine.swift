@@ -12,8 +12,10 @@
 // - Time: `now` is the host's single monotonic clock at the moment the message was RECEIVED (never the message's own
 //   `*_time_us`). `handle` first applies every overdue watchdog, exactly as `tick(now:)` would, and returns those
 //   actions before the message's own, so the result does not depend on when the timer happened to run. If `now` is
-//   earlier than a stored watchdog timestamp the timestamp is re-anchored to `now`: a backwards clock delays a
-//   watchdog by at most its period and never disables it.
+//   earlier than a stored watchdog timestamp the timestamp is re-anchored to `now`. Every public call that takes
+//   `now` and can see the backwards clock does this first (`handle`, `tick` and `nextDeadline(now:)`, so the last one
+//   mutates), hence a backwards clock delays a watchdog by at most one period after it was first observed, and a
+//   `tick` at the time `nextDeadline(now:)` returned always acts.
 // - A value type with no locking: mutate it from one queue or actor only (the session queue).
 // - Keyboard (`KEY`) is not handled yet (phase 3). `handle` returns no actions for it. When keys arrive they must join
 //   the same `releaseAll`.
@@ -114,16 +116,19 @@ public struct InputStateMachine: Sendable {
     }
 
     /// The earliest time at which `tick(now:)` (or any `handle`) would produce watchdog actions, given the current
-    /// time `now`, or nil when no watchdog is armed. Lets the consumer sleep until then instead of polling. A
-    /// timestamp that is ahead of `now` (clock went backwards) counts from `now`, matching what the next call does.
-    public func nextDeadline(now: UInt64) -> UInt64? {
+    /// time `now`, or nil when no watchdog is armed. Lets the consumer sleep until then instead of polling.
+    ///
+    /// MUTATING: like `tick` and `handle` it first re-anchors a watchdog timestamp that is ahead of `now` (clock went
+    /// backwards) to `now`. That is what makes the answer binding: a `tick` at the returned time always acts, and
+    /// one microsecond earlier never does, even when this call was the first to observe the backwards clock.
+    public mutating func nextDeadline(now: UInt64) -> UInt64? {
+        reanchorWatchdogs(now: now)
         var earliest: UInt64?
-        func consider(_ anchor: UInt64, _ period: UInt64) {
-            let due = Swift.min(anchor, now) &+ period
+        if activePen != nil { earliest = penWatchdogAnchor &+ configuration.penWatchdogUs }
+        if scrollOpen {
+            let due = lastScrollAt &+ configuration.scrollWatchdogUs
             earliest = earliest.map { Swift.min($0, due) } ?? due
         }
-        if activePen != nil { consider(penWatchdogAnchor, configuration.penWatchdogUs) }
-        if scrollOpen { consider(lastScrollAt, configuration.scrollWatchdogUs) }
         return earliest
     }
 
@@ -162,17 +167,21 @@ public struct InputStateMachine: Sendable {
         applyWatchdogs(now: now)
     }
 
+    /// A watchdog timestamp that is ahead of `now` means the clock went backwards: count from `now` instead. The one
+    /// place this happens; `nextDeadline(now:)` and `applyWatchdogs(now:)` both call it first.
+    private mutating func reanchorWatchdogs(now: UInt64) {
+        if activePen != nil, penWatchdogAnchor > now { penWatchdogAnchor = now }
+        if scrollOpen, lastScrollAt > now { lastScrollAt = now }
+    }
+
     /// Pen `IN_RANGE` silent for `penWatchdogUs`: up (if touching) + leave. Open scroll silent for
     /// `scrollWatchdogUs`: forced end. A watchdog close is not a release-all: no latch, eraser mode and the other
     /// sources untouched (PROTOCOL.md section 7).
     private mutating func applyWatchdogs(now: UInt64) -> [InjectAction] {
+        reanchorWatchdogs(now: now)
         var out: [InjectAction] = []
-        if activePen != nil {
-            if penWatchdogAnchor > now { penWatchdogAnchor = now }  // clock went backwards: count from now
-            if now - penWatchdogAnchor >= configuration.penWatchdogUs { closePen(into: &out) }
-        }
+        if activePen != nil, now - penWatchdogAnchor >= configuration.penWatchdogUs { closePen(into: &out) }
         if scrollOpen {
-            if lastScrollAt > now { lastScrollAt = now }
             if now - lastScrollAt >= configuration.scrollWatchdogUs {
                 scrollOpen = false
                 out.append(.scroll(.forcedEnd, dx: 0, dy: 0))

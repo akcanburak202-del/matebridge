@@ -98,20 +98,26 @@ struct WatchdogTests {
     @Test("WD-4 nextDeadline(now:) is the earliest armed watchdog; tick fires exactly there and never 1 us before")
     func wd4_nextDeadline() {
         var d = Driver()
-        #expect(d.machine.nextDeadline(now: d.now) == nil)
+        let idle = d.machine.nextDeadline(now: d.now)
+        #expect(idle == nil)
         d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
         let penDue = d.now + 500_000
-        #expect(d.machine.nextDeadline(now: d.now) == penDue)
+        let armedPen = d.machine.nextDeadline(now: d.now)
+        #expect(armedPen == penDue)
         d.send(scrollMsg(.began), after: 100 * msec)
-        #expect(d.machine.nextDeadline(now: d.now) == penDue)          // pen fires first
+        let both = d.machine.nextDeadline(now: d.now)
+        #expect(both == penDue)                                        // pen fires first
         d.send(penMsg(.pen, penSample(1, 1, []), penSample(1, 1, [])), after: 10 * msec)  // pen leaves
         let scrollDue = d.now - 10 * msec + 500_000
-        #expect(d.machine.nextDeadline(now: d.now) == scrollDue)
+        let scrollOnly = d.machine.nextDeadline(now: d.now)
+        #expect(scrollOnly == scrollDue)
         #expect(d.machine.tick(now: scrollDue - 1).isEmpty)
         #expect(d.machine.tick(now: scrollDue) == [.scroll(.forcedEnd, dx: 0, dy: 0)])
-        #expect(d.machine.nextDeadline(now: scrollDue) == nil)
+        let done = d.machine.nextDeadline(now: scrollDue)
+        #expect(done == nil)
         d.release()
-        #expect(d.machine.nextDeadline(now: d.now) == nil)
+        let released = d.machine.nextDeadline(now: d.now)
+        #expect(released == nil)
     }
 
     @Test("WD-5 a clock that goes backwards re-anchors the pen watchdog to now: at most one period late, never off")
@@ -121,7 +127,8 @@ struct WatchdogTests {
         // The clock is now far behind the stored timestamp. The first look re-anchors to that time...
         #expect(m.tick(now: 1_000_000).isEmpty)
         #expect(m.isPenInContact)
-        #expect(m.nextDeadline(now: 1_000_000) == 1_500_000)
+        let deadline = m.nextDeadline(now: 1_000_000)
+        #expect(deadline == 1_500_000)
         // ...and the watchdog then fires 500 ms after it, exactly.
         #expect(m.tick(now: 1_499_999).isEmpty)
         #expect(m.tick(now: 1_500_000) == [.penUp(tool: .pen, penPt(1, 1, 0)), penLeave(.pen)])
@@ -132,7 +139,8 @@ struct WatchdogTests {
     func wd6_backwardsClockScroll() {
         var m = InputStateMachine()
         _ = m.handle(scrollMsg(.began), now: 9_000_000)
-        #expect(m.nextDeadline(now: 2_000_000) == 2_500_000)  // agrees with what the next call does
+        let deadline = m.nextDeadline(now: 2_000_000)
+        #expect(deadline == 2_500_000)  // agrees with what the next call does
         _ = m.handle(scrollMsg(.changed, 1, 1), now: 2_000_000)  // steps back: re-anchored (and refreshed) at 2 s
         #expect(m.tick(now: 2_499_999).isEmpty)
         #expect(m.tick(now: 2_500_000) == [.scroll(.forcedEnd, dx: 0, dy: 0)])
@@ -195,6 +203,39 @@ struct WatchdogTests {
         #expect(e.send(scrollMsg(.began, 2, 3), after: 501 * msec) == [
             .scroll(.forcedEnd, dx: 0, dy: 0), .scroll(.began, dx: 2, dy: 3),
         ])
+    }
+    @Test("WD-11 the first look at a backwards clock may be nextDeadline itself: a tick at its answer acts (pen)")
+    func wd11_nextDeadlineFirstLookPen() {
+        var m = InputStateMachine()
+        _ = m.handle(penMsg(.pen, penSample(1, 1, startFlags, pressure: 100)), now: 9_000_000)
+        let deadline = m.nextDeadline(now: 2_000_000)           // no handle/tick has seen the jump yet
+        #expect(deadline == 2_500_000)
+        #expect(m.tick(now: 2_499_999).isEmpty)
+        #expect(m.tick(now: 2_500_000) == [.penUp(tool: .pen, penPt(1, 1, 0)), penLeave(.pen)])
+        #expect(!m.hasHeldInput)
+        // The same when only the timer path runs: query, then tick exactly at the answer.
+        var e = InputStateMachine()
+        _ = e.handle(penMsg(.pen, penSample(1, 1, hoverFlags)), now: 9_000_000)
+        let due = e.nextDeadline(now: 2_000_000)
+        #expect(e.tick(now: due!) == [penLeave(.pen)])
+    }
+
+    @Test("WD-12 the first look at a backwards clock may be nextDeadline itself: a tick at its answer acts (scroll)")
+    func wd12_nextDeadlineFirstLookScroll() {
+        var m = InputStateMachine()
+        _ = m.handle(scrollMsg(.began), now: 9_000_000)
+        let deadline = m.nextDeadline(now: 2_000_000)
+        #expect(deadline == 2_500_000)
+        #expect(m.tick(now: 2_499_999).isEmpty)
+        #expect(m.tick(now: 2_500_000) == [.scroll(.forcedEnd, dx: 0, dy: 0)])
+        #expect(!m.hasHeldInput)
+        // Pen and scroll armed together: the earliest of the two, both counted from the observation.
+        var both = InputStateMachine()
+        _ = both.handle(penMsg(.pen, penSample(1, 1, hoverFlags)), now: 9_000_000)
+        _ = both.handle(scrollMsg(.began), now: 9_100_000)
+        let earliest = both.nextDeadline(now: 2_000_000)
+        #expect(earliest == 2_500_000)
+        #expect(both.tick(now: 2_500_000) == [penLeave(.pen), .scroll(.forcedEnd, dx: 0, dy: 0)])
     }
 }
 
