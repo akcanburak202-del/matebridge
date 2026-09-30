@@ -1,7 +1,7 @@
 ---
 id: T-033
 title: Tablet klavye — fiziksel tuşları KEY olarak gönder, Android'e bırakma, sökülünce bırak
-status: review
+status: done
 phase: 3
 owner: android-client-dev
 depends_on: [T-024]
@@ -50,3 +50,7 @@ PROTOCOL.md §4 `0x11 KEY` istemci kuralları ve §7 istemci yükümlülükleri.
 - **Review turu 1 (Codex P2):** aynı tuş kimliği iki klavyede basılıysa DOWN yalnız ilk tutanda, UP yalnız son bırakanda/sökülende gider (cihaz bazlı takip korunur). Yerel tüketilen Ctrl+Shift+F3 basışı UP/sökülme/reset'e kadar izlenir; tekrar DOWN'ları ve UP'u yerel kalır. Testler eklendi.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek Glide Keyboard'da `isVirtual` ve `keyboardType` değerleri (ALPHABETIC değilse hiç KEY gitmez; `MB/input` satırında key_msgs sıfır kalırsa ilk şüpheli); Tab/Esc/Space/Enter Android'e gitmiyor mu; Esc'in BACK'i uygulamadan çıkarmıyor mu; Ctrl+Shift+F3 istatistik katmanı, düz F3 Mac'e; klavye sökülünce basılı tuşun UP'u; arka plana geçince basılı tuşun Mac'te takılmaması. Android'in uygulamaya vermediği sistem kısayolları (Home vb.) gözlenmedi.
 - **Açık sorular:** yok.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, medium) iki P2 buldu (iki klavyede aynı tuş; yerel Ctrl+Shift+F3'ün yinelenen DOWN'u), `b4aee17`'de düzeltildi, orkestratör okudu. `check.sh` merge sonrası geçti. Cihaz testi Faz 3 ortak testinde.
