@@ -17,10 +17,12 @@
 //   mutates), hence a backwards clock delays a watchdog by at most one period after it was first observed, and a
 //   `tick` at the time `nextDeadline(now:)` returned always acts.
 // - A value type with no locking: mutate it from one queue or actor only (the session queue).
-// - Keyboard (`KEY`) is not handled yet (phase 3). `handle` returns no actions for it. When keys arrive they must join
-//   the same `releaseAll`.
+// - Keyboard (`KEY`, `InputStateMachine+Keyboard.swift`): held keys are remembered by identity together with the
+//   keycode or modifier that was injected; the host-side auto-repeat is driven by the same `tick` / `nextDeadline`
+//   as the watchdogs; `releaseAll` releases keys and modifiers with the rest.
 //
 // Rule identifiers (used in tests as name prefixes; see the T-022 handoff table):
+//   KEY-*    section 4 KEY host rules
 //   PEN-*    section 4 PEN table            LATCH-*  section 4 latch rule        WD-*     section 7 watchdogs
 //   OWN-*    section 7 left-button owner    OR-*     section 7 other buttons     GATE-*   section 7 + decision 0006 finger gate
 //   REL-*    section 7 release-all          ERASER-* decision 0006 double tap    SCROLL-* section 4 SCROLL host rules
@@ -34,6 +36,14 @@ public struct InputStateMachine: Sendable {
         /// New TOUCH presses are ignored while the pen is in range and for this long after the last pen sample
         /// (decision 0006).
         public var touchGateHoldUs: UInt64 = 1_000_000
+        /// Key auto-repeat: delay before the first repeat and spacing of the rest (the Host passes the macOS
+        /// settings, `NSEvent.keyRepeatDelay` / `keyRepeatInterval`; these are the macOS defaults).
+        public var keyRepeatDelayUs: UInt64 = 500_000
+        public var keyRepeatIntervalUs: UInt64 = 83_000
+        /// False when macOS has key repeat turned off: no repeat is ever armed.
+        public var keyRepeatEnabled = true
+        /// Key identity to Mac key (decision 0008 default modifier mapping).
+        public var keyMap = KeyMap()
         public init() {}
     }
 
@@ -90,6 +100,14 @@ public struct InputStateMachine: Sendable {
     /// Host time of the last SCROLL BEGAN/CHANGED. Re-anchored to `now` when the clock goes backwards.
     var lastScrollAt: UInt64 = 0
 
+    // Keyboard.
+    /// Keys held, in press order, with what was injected for them (the UP releases the record, never the current
+    /// mapping).
+    var heldKeys: [HeldKey] = []
+    var keyRepeat: KeyRepeat?
+    /// Keyboard statistics for the log: counts only, never which keys.
+    public internal(set) var keyCounters = KeyCounters()
+
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
     }
@@ -99,7 +117,7 @@ public struct InputStateMachine: Sendable {
     /// True while anything is held on the Mac: pen proximity or contact, any button, an open scroll gesture.
     /// After `releaseAll` this is always false.
     public var hasHeldInput: Bool {
-        activePen != nil || leftOwner != nil || !macOtherButtons.isEmpty || scrollOpen
+        activePen != nil || leftOwner != nil || !macOtherButtons.isEmpty || scrollOpen || !heldKeys.isEmpty
     }
 
     /// Pen proximity is currently entered on the Mac.
@@ -129,6 +147,7 @@ public struct InputStateMachine: Sendable {
             let due = lastScrollAt &+ configuration.scrollWatchdogUs
             earliest = earliest.map { Swift.min($0, due) } ?? due
         }
+        if let r = keyRepeat { earliest = earliest.map { Swift.min($0, r.nextAt) } ?? r.nextAt }
         return earliest
     }
 
@@ -136,7 +155,7 @@ public struct InputStateMachine: Sendable {
 
     /// Feed one message of the active, approved session. First applies every overdue watchdog (WD-*), then the
     /// message; the returned list is the watchdog actions followed by the message's. Messages that are not pen,
-    /// pointer, scroll or release input (and `KEY`, phase 3) produce no actions of their own.
+    /// pointer, scroll, key or release input produce no actions of their own.
     public mutating func handle(_ message: Message, now: UInt64) -> [InjectAction] {
         var out = applyWatchdogs(now: now)
         switch message {
@@ -156,7 +175,9 @@ public struct InputStateMachine: Sendable {
             out += releaseAll(.clientRequest(reason))
         case .bye:
             out += releaseAll(.bye)
-        case .key, .hello, .helloAck, .streamConfig, .ping, .pong, .stats, .keyframeRequest, .videoHello, .videoFrame:
+        case .key(let k):
+            out += handleKey(k, now: now)
+        case .hello, .helloAck, .streamConfig, .ping, .pong, .stats, .keyframeRequest, .videoHello, .videoFrame:
             break
         }
         return out
@@ -172,6 +193,10 @@ public struct InputStateMachine: Sendable {
     private mutating func reanchorWatchdogs(now: UInt64) {
         if activePen != nil, penWatchdogAnchor > now { penWatchdogAnchor = now }
         if scrollOpen, lastScrollAt > now { lastScrollAt = now }
+        // A repeat due further ahead than one repeat delay cannot have been scheduled by this clock: count from `now`.
+        if let r = keyRepeat, r.nextAt > now &+ Swift.max(configuration.keyRepeatDelayUs, configuration.keyRepeatIntervalUs) {
+            keyRepeat?.nextAt = now &+ configuration.keyRepeatIntervalUs
+        }
     }
 
     /// Pen `IN_RANGE` silent for `penWatchdogUs`: up (if touching) + leave. Open scroll silent for
@@ -187,12 +212,14 @@ public struct InputStateMachine: Sendable {
                 out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
             }
         }
+        out += repeatKeyIfDue(now: now)
         return out
     }
 
     /// REL-*: release everything held on the Mac, in a fixed order, and arm the latches. Idempotent.
     ///
-    /// Order: left button (pen up, or the owner's up), pen leave, right/middle/back/forward ups, scroll forced end.
+    /// Order: left button (pen up, or the owner's up), pen leave, right/middle/back/forward ups, scroll forced end,
+    /// key ups (last pressed first), modifier ups.
     /// Afterwards: no owner, nothing contributing, no proximity, no open scroll, eraser mode off, both pen tools
     /// latched. The pointer sources' reported button state is kept (see `PointerSourceState.held`), and so is the
     /// time of the last pen sample (the palm is still on the glass after a release).
@@ -218,6 +245,7 @@ public struct InputStateMachine: Sendable {
             scrollOpen = false
             out.append(.scroll(.forcedEnd, dx: 0, dy: 0))
         }
+        out += releaseKeys()
 
         isEraserMode = false
         latchedTools = [.pen, .eraser]

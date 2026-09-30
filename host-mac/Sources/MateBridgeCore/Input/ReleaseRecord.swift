@@ -30,6 +30,7 @@ public struct ReleaseRecord: Equatable, Sendable {
     public var penLeaves = 0
     public var buttonUps = 0
     public var scrollEnds = 0
+    public var keyUps = 0
     /// Owed slots whose retry cadence dropped to the slow one (only for `owed_slow`).
     public var slowed = 0
 
@@ -44,6 +45,7 @@ public struct ReleaseRecord: Equatable, Sendable {
             case .tabletProximity(_, let entering) where !entering: penLeaves += 1
             case .mouse(let m) where m.kind == .up: buttonUps += 1
             case .scroll(let s) where s.phase == .ended || s.phase == .cancelled: scrollEnds += 1
+            case .key(let k) where k.kind == .keyUp || k.kind == .modifierUp: keyUps += 1
             default: break
             }
         }
@@ -52,6 +54,7 @@ public struct ReleaseRecord: Equatable, Sendable {
     /// `key=value` fields for the log line.
     public var logFields: String {
         var f = "cause=\(reason) events=\(events) pen_up=\(penUps) pen_leave=\(penLeaves) buttons=\(buttonUps) scroll=\(scrollEnds)"
+        if keyUps > 0 { f += " keys=\(keyUps)" }
         if slowed > 0 { f += " slowed=\(slowed)" }
         return f
     }

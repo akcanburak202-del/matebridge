@@ -45,6 +45,12 @@ public struct InjectionPlanner: Sendable {
     /// Held mouse buttons and the click count of their down (the matching up repeats it).
     private var heldButtons: [MouseButton: Int] = [:]
     private var scrollOpen = false
+    /// Keys and modifiers posted and not yet released, in press order. The flags of every keyboard event come from
+    /// `heldModifiers`, so a modifier that was dropped at the gate never shows up in a later key's flags.
+    private var heldKeys: [UInt16] = []
+    private var heldModifiers: [ModifierKey] = []
+    /// The Caps Lock state the planner last knew the Mac to have (sampled, or set by a `.capsLock` event it produced).
+    private var capsLockOn = false
     private var scrollCarryX = 0.0
     private var scrollCarryY = 0.0
     private var clicks: ClickCounter
@@ -56,18 +62,26 @@ public struct InjectionPlanner: Sendable {
     }
 
     /// True while anything posted to the Mac has not been released.
-    public var isHoldingInput: Bool { proximity != nil || penContact || !heldButtons.isEmpty || scrollOpen }
+    public var isHoldingInput: Bool {
+        proximity != nil || penContact || !heldButtons.isEmpty || scrollOpen || !heldKeys.isEmpty || !heldModifiers.isEmpty
+    }
     public var isPenInRange: Bool { proximity != nil }
     public var isPenInContact: Bool { penContact }
     public var heldMouseButtons: Set<MouseButton> { Set(heldButtons.keys) }
     public var isScrollOpen: Bool { scrollOpen }
+    public var heldKeyCodes: [UInt16] { heldKeys }
+    public var heldModifierKeys: [ModifierKey] { heldModifiers }
 
     /// PLAN-*: plan one ordered action list. `now` is the host clock at the moment the message was received.
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
                               now: UInt64) -> [MacEvent] {
         display = env.geometry
         var out: [MacEvent] = []
-        for action in actions { apply(action, env, now, &out) }
+        for action in actions {
+            let start = out.count
+            apply(action, env, now, &out)
+            stampFlags(&out, from: start)
+        }
         counters.events += out.count
         return out
     }
@@ -85,6 +99,12 @@ public struct InjectionPlanner: Sendable {
             if let cs = heldButtons.removeValue(forKey: button) { emitButtonUp(button, cs, &out) }
         }
         if scrollOpen { closeScroll(.ended, dx: 0, dy: 0, &out) }
+        stampFlags(&out, from: 0)
+        // Keys last pressed first, then modifiers (each up carries the flags that remain).
+        while let code = heldKeys.popLast() { out.append(.key(MacKey(kind: .keyUp, keyCode: code, flags: currentFlags))) }
+        while let m = heldModifiers.popLast() {
+            out.append(.key(MacKey(kind: .modifierUp, keyCode: m.keyCode, flags: currentFlags)))
+        }
         clicks.reset()
         counters.events += out.count
         return out
@@ -112,6 +132,12 @@ public struct InjectionPlanner: Sendable {
                     scrollCarryX = 0
                     scrollCarryY = 0
                 }
+            case .key(let k):
+                // A repeat does not open anything: its key stays down.
+                if k.kind == .keyDown, !k.isRepeat { heldKeys.removeAll { $0 == k.keyCode } }
+                if k.kind == .modifierDown { heldModifiers.removeAll { $0.keyCode == k.keyCode } }
+            case .capsLock:
+                break
             }
         }
     }
@@ -207,6 +233,46 @@ public struct InjectionPlanner: Sendable {
         case .scroll(let phase, let dx, let dy):
             applyScroll(phase, dx, dy, env, &out)
 
+        case .keyDown(let code, let autorepeat):
+            if autorepeat {
+                // Continues a key that was posted; needs permission and a display, not "new input" checks.
+                guard heldKeys.contains(code) else { counters.droppedNotHeld += 1; return }
+                guard env.canInject else { counters.droppedNoPermission += 1; return }
+                guard env.geometry != nil else { counters.droppedNoDisplay += 1; return }
+                out.append(.key(MacKey(kind: .keyDown, keyCode: code, flags: currentFlags, isRepeat: true)))
+            } else {
+                guard openGate(env) != nil else { return }
+                guard !heldKeys.contains(code) else { counters.droppedNotHeld += 1; return }
+                heldKeys.append(code)
+                out.append(.key(MacKey(kind: .keyDown, keyCode: code, flags: currentFlags)))
+            }
+
+        case .keyUp(let code):
+            // Closing: never gated.
+            guard let index = heldKeys.firstIndex(of: code) else { counters.droppedNotHeld += 1; return }
+            heldKeys.remove(at: index)
+            out.append(.key(MacKey(kind: .keyUp, keyCode: code, flags: currentFlags)))
+
+        case .modifierDown(let m):
+            guard openGate(env) != nil else { return }
+            guard !heldModifiers.contains(m) else { counters.droppedNotHeld += 1; return }
+            heldModifiers.append(m)
+            out.append(.key(MacKey(kind: .modifierDown, keyCode: m.keyCode, flags: currentFlags)))
+
+        case .modifierUp(let m):
+            guard let index = heldModifiers.firstIndex(of: m) else { counters.droppedNotHeld += 1; return }
+            heldModifiers.remove(at: index)
+            out.append(.key(MacKey(kind: .modifierUp, keyCode: m.keyCode, flags: currentFlags)))
+
+        case .setCapsLock(let on):
+            // Compared with the Mac's own state when the Host sampled it; without a sample nothing is known to differ.
+            guard let mac = env.capsLockOn else { return }
+            capsLockOn = mac
+            guard mac != on else { return }
+            guard openGate(env) != nil else { return }
+            capsLockOn = on
+            out.append(.capsLock(on: on))
+
         case .scrollWheel(let dx, let dy):
             guard openGate(env) != nil else { return }
             let px = Self.pixels(Double(dx)), py = Self.pixels(Double(dy))
@@ -259,6 +325,30 @@ public struct InjectionPlanner: Sendable {
     }
 
     // MARK: Helpers
+
+    /// The one rule for keyboard modifiers on pointer, pen and scroll events: every such event carries the flags
+    /// current when it is emitted (an explicit value, so the Mac's own keyboard state never leaks in). Key events are
+    /// built with their own flags and left alone.
+    private func stampFlags(_ out: inout [MacEvent], from start: Int) {
+        let flags = currentFlags
+        for i in start..<out.count {
+            switch out[i] {
+            case .tabletPoint, .mouse, .scroll: out[i] = out[i].with(flags: flags)
+            case .key, .tabletProximity, .capsLock: break
+            }
+        }
+    }
+
+    /// What the planner holds of the keyboard right now, for flags of replayed releases (`OwedRelease.replay`).
+    public var keyboardSnapshot: KeyboardSnapshot { KeyboardSnapshot(modifiers: Set(heldModifiers), capsLock: capsLockOn) }
+
+    /// Modifier flags of everything held right now, plus Caps Lock when the Mac has it on (an explicit `flags` on a
+    /// CGEvent replaces the system's, which would otherwise lose the Caps Lock bit and type lowercase).
+    private var currentFlags: KeyFlags {
+        var flags = KeyFlags(holding: heldModifiers)
+        if capsLockOn { flags.insert(.capsLock) }
+        return flags
+    }
 
     /// nil (and a counted drop) unless new input is allowed.
     private mutating func openGate(_ env: InjectionEnvironment) -> DisplayGeometry? {

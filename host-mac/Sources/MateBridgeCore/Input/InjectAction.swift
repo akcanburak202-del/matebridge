@@ -116,4 +116,15 @@ public enum InjectAction: Equatable, Sendable {
     case scroll(InjectScrollPhase, dx: Float, dy: Float)
     /// A single mouse wheel step (`SCROLL phase = NONE`); carries no state.
     case scrollWheel(dx: Float, dy: Float)
+
+    // MARK: Keyboard (decision 0003: physical keys; the flags of each event are the planner's business)
+
+    /// An ordinary key goes down. `autorepeat` is a host-generated repeat of a key that is already down.
+    case keyDown(keyCode: UInt16, autorepeat: Bool)
+    case keyUp(keyCode: UInt16)
+    /// A modifier goes down or up (`flagsChanged` on the Mac).
+    case modifierDown(ModifierKey)
+    case modifierUp(ModifierKey)
+    /// The client's Caps Lock state, to be made the Mac's. Not a key press: Caps Lock itself is never injected.
+    case setCapsLock(Bool)
 }

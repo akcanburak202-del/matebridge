@@ -10,6 +10,8 @@ extension MacEvent {
         case .tabletPoint(let p): p.kind == .up
         case .mouse(let m): m.kind == .up
         case .scroll(let s): s.phase == .ended || s.phase == .cancelled
+        case .key(let k): k.kind == .keyUp || k.kind == .modifierUp
+        case .capsLock: false
         }
     }
 
@@ -18,13 +20,24 @@ extension MacEvent {
     public var plainRelease: MacEvent? {
         guard case .tabletPoint(let p) = self, p.kind == .up else { return nil }
         return .mouse(MacMouse(kind: .up, button: .left, position: p.position, deltaX: 0, deltaY: 0,
-                               clickState: p.clickState))
+                               clickState: p.clickState, flags: p.flags))
+    }
+
+    /// The same event with its keyboard flags replaced (pointer, pen and scroll events; others are unchanged).
+    func with(flags: KeyFlags) -> MacEvent {
+        switch self {
+        case .tabletPoint(var e): e.flags = flags; return .tabletPoint(e)
+        case .mouse(var e): e.flags = flags; return .mouse(e)
+        case .scroll(var e): e.flags = flags; return .scroll(e)
+        case .key(var k): k.flags = flags; return .key(k)
+        case .tabletProximity, .capsLock: return self
+        }
     }
 
     /// The position of an event that has one (proximity events have none).
     public var position: DisplayPoint? {
         switch self {
-        case .tabletProximity: nil
+        case .tabletProximity, .key, .capsLock: nil
         case .tabletPoint(let p): p.position
         case .mouse(let m): m.position
         case .scroll(let s): s.position
@@ -34,7 +47,7 @@ extension MacEvent {
     /// The same event at another position.
     func moved(to p: DisplayPoint) -> MacEvent {
         switch self {
-        case .tabletProximity: return self
+        case .tabletProximity, .key, .capsLock: return self
         case .tabletPoint(var e):
             e.position = p
             return .tabletPoint(e)

@@ -10,6 +10,15 @@ import MateBridgeCore
 ///     MateBridgeApp --inject-test --tap 2            (touch taps at the display center; 2 = double click)
 ///     MateBridgeApp --inject-test --scroll           (one precise scroll gesture at the display center, finger moving down)
 ///     MateBridgeApp --inject-test --wheel 5          (5 mouse-wheel steps at the display center)
+///     MateBridgeApp --inject-test --keys "cmd+a,tab"  (keyboard combos, see below; goes to the focused app)
+///
+/// `--keys` takes comma-separated combos of `+`-joined names. Modifiers are named by the Mac key they should produce
+/// through the default mapping of decision 0008 (`cmd` is sent as the PC Ctrl key, `opt`/`alt` as PC Alt, `ctrl` as PC
+/// Meta, `shift`); the rest are letters, digits, `enter`, `tab`, `space`, `esc`, `backspace`, `delete`, `left`, `right`,
+/// `up`, `down`, `home`, `end`, `pageup`, `pagedown`, `f1`...`f12`, `grave` (evdev 41), `iso102` (evdev 86) and the
+/// punctuation names `minus`, `equal`, `lbracket`, `rbracket`, `semicolon`, `quote`, `backslash`, `comma`, `period`,
+/// `slash`. Each combo presses its modifiers, then its key, holds it (`--key-hold MS`, default 60; more than the
+/// repeat delay shows auto-repeat), then releases in reverse. `capslock` alone toggles the Mac's Caps Lock.
 ///
 /// Options: `--countdown S` (default 5: time to bring the target window to the virtual display),
 /// `--create-display` (make a virtual display when none exists; conflicts with a running host, which owns the fixed
@@ -24,6 +33,8 @@ public enum InjectTest {
         public var taps = 0
         public var scrollGesture = false
         public var wheelSteps = 0
+        public var keys: String?
+        public var keyHoldMs = 60
         public var repeats = 1
         public var countdown: Double = 5
         public var createDisplay = false
@@ -34,7 +45,7 @@ public enum InjectTest {
 
     public static let usage = """
         usage: MateBridgeApp --inject-test [--fixture NAME]... [--stroke ramp|circle|tilt] [--tap N]
-                             [--scroll] [--wheel N] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
+                             [--scroll] [--wheel N] [--keys COMBOS] [--key-hold MS] [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
         """
 
     /// nil when `--inject-test` is absent. Any argument it does not know, or a stray value, is an error.
@@ -60,6 +71,14 @@ public enum InjectTest {
             case "--wheel":
                 guard let v = value(), let n = Int(v), (1...50).contains(n) else { return fail("--wheel needs 1...50") }
                 o.wheelSteps = n; i += 1
+            case "--keys":
+                guard let v = value(), (try? keyScript(v, holdMs: 60)) != nil else {
+                    return fail("--keys needs combos like \"cmd+a,tab\" made of known key names")
+                }
+                o.keys = v; i += 1
+            case "--key-hold":
+                guard let v = value(), let n = Int(v), (10...10_000).contains(n) else { return fail("--key-hold needs 10...10000 ms") }
+                o.keyHoldMs = n; i += 1
             case "--repeat":
                 guard let v = value(), let n = Int(v), (1...20).contains(n) else { return fail("--repeat needs 1...20") }
                 o.repeats = n; i += 1
@@ -77,7 +96,7 @@ public enum InjectTest {
             }
             i += 1
         }
-        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.wheelSteps == 0 {
+        if o.fixtures.isEmpty && o.stroke == nil && o.taps == 0 && !o.scrollGesture && o.wheelSteps == 0 && o.keys == nil {
             return fail("nothing to inject")
         }
         return .success(o)
@@ -202,6 +221,7 @@ public enum InjectTest {
         }
         if o.scrollGesture { script += scrollScript() }
         if o.wheelSteps > 0 { script += wheelScript(o.wheelSteps) }
+        if let keys = o.keys { script += try keyScript(keys, holdMs: o.keyHoldMs) }
         return script
     }
 
@@ -316,6 +336,59 @@ public enum InjectTest {
         var script = [scroll(.began, dy: 0, delay: 1000)]
         for _ in 0..<40 { script.append(scroll(.changed, dy: 6, delay: 16)) }
         script.append(scroll(.ended, dy: 0, delay: 16))
+        return script
+    }
+
+    private static let modifierScanCodes: [String: UInt16] = ["shift": 42, "cmd": 29, "command": 29, "opt": 56, "alt": 56,
+                                                              "option": 56, "ctrl": 125, "control": 125]
+
+    private static let keyScanCodes: [String: UInt16] = {
+        var t: [String: UInt16] = [
+            "esc": 1, "minus": 12, "equal": 13, "backspace": 14, "tab": 15, "lbracket": 26, "rbracket": 27, "enter": 28,
+            "semicolon": 39, "quote": 40, "grave": 41, "backslash": 43, "comma": 51, "period": 52, "slash": 53,
+            "space": 57, "capslock": 58, "iso102": 86, "home": 102, "up": 103, "pageup": 104, "left": 105,
+            "right": 106, "end": 107, "down": 108, "pagedown": 109, "delete": 111,
+        ]
+        let letters: [(Character, UInt16)] = [
+            ("q", 16), ("w", 17), ("e", 18), ("r", 19), ("t", 20), ("y", 21), ("u", 22), ("i", 23), ("o", 24), ("p", 25),
+            ("a", 30), ("s", 31), ("d", 32), ("f", 33), ("g", 34), ("h", 35), ("j", 36), ("k", 37), ("l", 38),
+            ("z", 44), ("x", 45), ("c", 46), ("v", 47), ("b", 48), ("n", 49), ("m", 50),
+        ]
+        for (c, code) in letters { t[String(c)] = code }
+        for (i, c) in "1234567890".enumerated() { t[String(c)] = UInt16(2 + i) }
+        for i in 1...12 { t["f\(i)"] = i <= 10 ? UInt16(58 + i) : UInt16(76 + i) }
+        return t
+    }()
+
+    /// `--keys`: each combo presses its modifiers, then its key, holds it, then releases in reverse. Messages carry
+    /// scan codes only, as the tablet's do; `lock_state` follows the Caps Lock toggles of the script.
+    private static func keyScript(_ text: String, holdMs: Int) throws -> [Step] {
+        var script: [Step] = []
+        var caps = false
+        var timeUs: UInt64 = 1_000_000
+        func key(_ scan: UInt16, _ action: KeyAction, delay: Int) {
+            timeUs += UInt64(max(delay, 1)) * 1000
+            script.append(Step(delayMs: delay, message: .key(KeyEvent(timeUs: timeUs, scanCode: scan, androidKeyCode: 0,
+                                                                        action: action, capsLockOn: caps))))
+        }
+        for combo in text.split(separator: ",") {
+            let names = combo.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            guard let last = names.last, !last.isEmpty else { throw ScriptError(description: "empty key combo") }
+            var modifiers: [UInt16] = []
+            for name in names.dropLast() {
+                guard let scan = modifierScanCodes[name] else { throw ScriptError(description: "unknown modifier \(name)") }
+                modifiers.append(scan)
+            }
+            guard let scan = keyScanCodes[last] ?? modifierScanCodes[last] else {
+                throw ScriptError(description: "unknown key \(last)")
+            }
+            for m in modifiers { key(m, .down, delay: 30) }
+            key(scan, .down, delay: 30)
+            if scan == 58 { caps.toggle() }  // Caps Lock: the state after the event is what the UP carries
+            key(scan, .up, delay: holdMs)
+            for m in modifiers.reversed() { key(m, .up, delay: 30) }
+            script.append(Step(delayMs: 300, message: nil))
+        }
         return script
     }
 

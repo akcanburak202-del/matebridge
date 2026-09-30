@@ -23,12 +23,25 @@ public protocol MacEventPoster: Sendable {
 public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
     private let logger = SessionLogger(component: "input")
     private var failures = 0
+    private var capsFailures = 0
+    private let capsLock: CapsLockControlling
 
-    public init() {}
+    public init(capsLock: CapsLockControlling = SystemCapsLock()) {
+        self.capsLock = capsLock
+    }
 
     public func post(_ events: [MacEvent]) -> [MacEvent] {
         var failed: [MacEvent] = []
         for (index, event) in events.enumerated() {
+            if case .capsLock(let on) = event {
+                // Not an event: the Mac's lock state is set directly. A refusal loses only this sync (the next key
+                // message retries it), never a release, so it does not stop the batch.
+                if !capsLock.set(on) {
+                    capsFailures += 1
+                    if capsFailures == 1 { logger.log(.warning, "caps_lock_set_failed", sessionID: 0, generation: 0) }
+                }
+                continue
+            }
             // A fresh HID-system-state source per event, exactly as the probe did.
             var cg = CGEventFactory.make(event, source: CGEventSource(stateID: .hidSystemState))
             if cg == nil, let plain = event.plainRelease {
@@ -68,12 +81,43 @@ enum CGEventFactory {
         case .tabletProximity(let tool, let entering):
             return proximity(tool: tool, entering: entering, source: source)
         case .tabletPoint(let p):
-            return tabletPoint(p, source: source)
+            return flagged(tabletPoint(p, source: source), p.flags)
         case .mouse(let m):
-            return mouse(m, source: source)
+            return flagged(mouse(m, source: source), m.flags)
         case .scroll(let s):
-            return scroll(s, source: source)
+            return flagged(scroll(s, source: source), s.flags)
+        case .key(let k):
+            return key(k, source: source)
+        case .capsLock:
+            return nil  // set through `CapsLockControlling`, never built as an event
         }
+    }
+
+    /// The keyboard type the events claim (decision 0008: the tablet's keyboard is ISO, so the Mac's ISO layout rules
+    /// apply to the `kVK_ISO_Section` / `kVK_ANSI_Grave` keys). `kKeyboardISO` in the `kbdtype` numbering of
+    /// `LMGetKbdType()`: 40 is ANSI, 41 is ISO, 42 is JIS. Unverified on macOS 27; the wrong characters on the keys
+    /// left of `1` and right of left Shift would be the symptom (T-032 handoff).
+    static let isoKeyboardType: Int64 = 41
+
+    /// Keyboard event with the complete modifier state in `flags` (an explicit value replaces the system's, so the
+    /// physical keyboard of the Mac never leaks into injected events). Modifiers are `flagsChanged` events.
+    private static func key(_ k: MacKey, source: CGEventSource?) -> CGEvent? {
+        let isDown = k.kind == .keyDown || k.kind == .modifierDown
+        guard let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(k.keyCode), keyDown: isDown) else {
+            return nil
+        }
+        if k.kind == .modifierDown || k.kind == .modifierUp { e.type = .flagsChanged }
+        e.flags = CGEventFlags(rawValue: k.flags.rawValue)
+        e.setIntegerValueField(.keyboardEventKeyboardType, value: isoKeyboardType)
+        if k.isRepeat { e.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
+        return e
+    }
+
+    /// Modifiers on pointer, pen and scroll events (Shift+click, Cmd+click, Option-drag, Krita's Ctrl/Shift+pen). Always
+    /// an explicit value, empty included, so the Mac's own keyboard state never leaks in (see `MacKey`).
+    private static func flagged(_ event: CGEvent?, _ flags: KeyFlags) -> CGEvent? {
+        event?.flags = CGEventFlags(rawValue: flags.rawValue)
+        return event
     }
 
     private static func clamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {

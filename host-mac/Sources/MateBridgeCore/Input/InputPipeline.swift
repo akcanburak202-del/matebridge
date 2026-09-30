@@ -32,12 +32,21 @@ public struct InputPipeline: Sendable {
     /// Closing events the Mac may not have received.
     public internal(set) var owed = OwedRelease()
     private var records: [ReleaseRecord] = []
-    private let machineConfiguration: InputStateMachine.Configuration
+    private var machineConfiguration: InputStateMachine.Configuration
 
     public init(planner: InjectionPlanner.Configuration = .init(), machine: InputStateMachine.Configuration = .init()) {
         self.planner = InjectionPlanner(configuration: planner)
         machineConfiguration = machine
     }
+
+    /// The configuration the NEXT session's machine starts with (the current one keeps its own). The Host refreshes
+    /// the key repeat settings from macOS here before each session.
+    public mutating func setMachineConfiguration(_ configuration: InputStateMachine.Configuration) {
+        machineConfiguration = configuration
+    }
+
+    /// The configuration new sessions start with.
+    public var nextMachineConfiguration: InputStateMachine.Configuration { machineConfiguration }
 
     public var hasSession: Bool { machine != nil }
 
@@ -226,7 +235,7 @@ public struct InputPipeline: Sendable {
     private mutating func replayOwed(now: UInt64, environment env: InjectionEnvironment, force: Bool) -> [MacEvent] {
         owed.confirmPosted()  // the last replay, if nobody reported it failed, was posted
         guard env.canInject, !owed.isEmpty else { return [] }
-        let events = owed.replay(now: now, force: force, geometry: env.geometry)
+        let events = owed.replay(now: now, force: force, geometry: env.geometry, keyboard: planner.keyboardSnapshot)
         if !events.isEmpty { record(ReleaseRecord(reason: "owed_replay", events: events)) }
         return events
     }

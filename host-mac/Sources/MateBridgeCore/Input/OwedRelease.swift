@@ -31,6 +31,8 @@ public struct OwedRelease: Equatable, Sendable {
         case button(MouseButton)
         case penLeave
         case scrollEnd
+        case key(UInt16)
+        case modifier(ModifierKey)
 
         init?(_ event: MacEvent) {
             switch event {
@@ -38,6 +40,10 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletProximity(_, let entering) where !entering: self = .penLeave
             case .mouse(let m) where m.kind == .up: self = .button(m.button)
             case .scroll(let s) where s.phase == .ended || s.phase == .cancelled: self = .scrollEnd
+            case .key(let k) where k.kind == .keyUp: self = .key(k.keyCode)
+            case .key(let k) where k.kind == .modifierUp:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { return nil }
+                self = .modifier(m)
             default: return nil
             }
         }
@@ -49,6 +55,11 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletPoint(let p) where p.kind == .down: self = .penUp
             case .mouse(let m) where m.kind == .down: self = .button(m.button)
             case .scroll(let s) where s.phase == .began: self = .scrollEnd
+            // A repeat is not an opening: its key went down before, and the batch that held that down decides.
+            case .key(let k) where k.kind == .keyDown && !k.isRepeat: self = .key(k.keyCode)
+            case .key(let k) where k.kind == .modifierDown:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { return nil }
+                self = .modifier(m)
             default: return nil
             }
         }
@@ -59,6 +70,8 @@ public struct OwedRelease: Equatable, Sendable {
             case .button(let b): b == .left ? 1 : 3 + Int(b.rawValue)
             case .penLeave: 2
             case .scrollEnd: 10
+            case .key(let code): 20 + Int(code)  // keys before modifiers, by code (any fixed order will do)
+            case .modifier(let m): 400 + Int(m.rawValue)
             }
         }
     }
@@ -150,7 +163,8 @@ public struct OwedRelease: Equatable, Sendable {
     /// They are handed out, not dropped: if posting them fails the caller must `owe` them again (and until it does,
     /// or until the next `replay`, `isBlocking` stays true). `force` ignores the retry spacing (a release trigger, a
     /// session start, shutdown).
-    public mutating func replay(now: UInt64, force: Bool, geometry: DisplayGeometry?) -> [MacEvent] {
+    public mutating func replay(now: UInt64, force: Bool, geometry: DisplayGeometry?,
+                                keyboard: KeyboardSnapshot = KeyboardSnapshot()) -> [MacEvent] {
         confirmPosted()
         var due: [(order: Int, event: MacEvent)] = []
         // A pen leave is only due together with (or after) the pen up that precedes it.
@@ -162,6 +176,50 @@ public struct OwedRelease: Equatable, Sendable {
             due.append((slot.order, entry.event.placed(on: geometry)))
         }
         due.sort { $0.order < $1.order }
-        return due.map(\.event)
+        var events = due.map(\.event)
+        // Modifier ups that are owed but not due yet are still held on the Mac: they count for every replayed flag.
+        let pending = Set(entries.keys.compactMap { slot -> ModifierKey? in
+            if case .modifier(let m) = slot { m } else { nil }
+        })
+        Self.reflowFlags(&events, keyboard: keyboard, pending: pending)
+        return events
+    }
+
+    /// Replayed releases carry the flags of the keyboard AS IT IS NOW, never the ones they were produced with: they
+    /// are retried later and in slot order, so saved flags can be stale (a modifier released since would be restored
+    /// as held, and nothing would ever clear it). The Mac's modifier state at replay time is what the planner holds
+    /// now plus the modifier ups still owed. A release that is not a modifier up sees all of those (modifier ups come
+    /// last in replay order); each modifier up sees the owed ones that come after it. Caps Lock follows the planner.
+    static func reflowFlags(_ events: inout [MacEvent], keyboard: KeyboardSnapshot, pending: Set<ModifierKey> = []) {
+        var owed: [ModifierKey] = []
+        for event in events {
+            if case .key(let k) = event, k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) { owed.append(m) }
+        }
+        var remaining = Set(owed).union(pending)
+        let base = keyboard.modifiers
+        for index in events.indices {
+            var caps: KeyFlags = keyboard.capsLock ? .capsLock : []
+            switch events[index] {
+            case .key(let k) where k.kind == .modifierUp:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { continue }
+                remaining.remove(m)
+                caps.formUnion(KeyFlags(holding: base.union(remaining)))
+            case .tabletProximity, .capsLock:
+                continue
+            default:
+                caps.formUnion(KeyFlags(holding: base.union(remaining)))
+            }
+            events[index] = events[index].with(flags: caps)
+        }
+    }
+}
+
+/// The keyboard state the planner holds, handed to `OwedRelease.replay` so replayed releases carry current flags.
+public struct KeyboardSnapshot: Equatable, Sendable {
+    public var modifiers: Set<ModifierKey>
+    public var capsLock: Bool
+    public init(modifiers: Set<ModifierKey> = [], capsLock: Bool = false) {
+        self.modifiers = modifiers
+        self.capsLock = capsLock
     }
 }

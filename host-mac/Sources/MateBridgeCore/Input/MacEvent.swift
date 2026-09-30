@@ -21,9 +21,12 @@ public struct MacTabletPoint: Equatable, Sendable {
     public var tiltY: Double
     /// 1 on down and up (as in the Phase 0 probe), 0 (unset) otherwise.
     public var clickState: Int
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
     public init(kind: Kind, tool: PenTool, position: DisplayPoint, pressure: Double, tiltX: Double, tiltY: Double,
-                clickState: Int) {
+                clickState: Int, flags: KeyFlags = []) {
+        self.flags = flags
         self.kind = kind
         self.tool = tool
         self.position = position
@@ -53,9 +56,12 @@ public struct MacMouse: Equatable, Sendable {
     public var deltaY: Double
     /// Click count on down and up (an up repeats its down's), 0 otherwise.
     public var clickState: Int
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
     public init(kind: Kind, button: MouseButton, position: DisplayPoint, deltaX: Double, deltaY: Double,
-                clickState: Int) {
+                clickState: Int, flags: KeyFlags = []) {
+        self.flags = flags
         self.kind = kind
         self.button = button
         self.position = position
@@ -83,12 +89,40 @@ public struct MacScroll: Equatable, Sendable {
     /// Where the event is located: on the virtual display (the cached cursor if it is still on it, else the center).
     /// A scroll event without a location takes the live cursor, which may be on another display.
     public var position: DisplayPoint
+    /// Keyboard modifiers (and Caps Lock) held at the moment of the event: Shift+click, Cmd+click, Option-drag.
+    public var flags: KeyFlags
 
-    public init(phase: Phase, dx: Int32, dy: Int32, position: DisplayPoint) {
+    public init(phase: Phase, dx: Int32, dy: Int32, position: DisplayPoint, flags: KeyFlags = []) {
+        self.flags = flags
         self.phase = phase
         self.dx = dx
         self.dy = dy
         self.position = position
+    }
+}
+
+/// A keyboard event. `modifierDown` / `modifierUp` are `flagsChanged` events of `keyCode`; `flags` is the complete
+/// modifier state after the event (for key events: while it happens).
+public struct MacKey: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case keyDown
+        case keyUp
+        case modifierDown
+        case modifierUp
+    }
+
+    public var kind: Kind
+    /// macOS virtual keycode (`kVK_*`).
+    public var keyCode: UInt16
+    public var flags: KeyFlags
+    /// `kCGKeyboardEventAutorepeat`: a host-generated repeat of a held key.
+    public var isRepeat: Bool
+
+    public init(kind: Kind, keyCode: UInt16, flags: KeyFlags, isRepeat: Bool = false) {
+        self.kind = kind
+        self.keyCode = keyCode
+        self.flags = flags
+        self.isRepeat = isRepeat
     }
 }
 
@@ -98,6 +132,9 @@ public enum MacEvent: Equatable, Sendable {
     case tabletPoint(MacTabletPoint)
     case mouse(MacMouse)
     case scroll(MacScroll)
+    case key(MacKey)
+    /// Make the Mac's Caps Lock state this (an absolute state, not a toggle, so posting it twice is harmless).
+    case capsLock(on: Bool)
 }
 
 /// What the Host knows right now. Sampled by the Host before every call; the Core never queries the system.
@@ -109,11 +146,15 @@ public struct InjectionEnvironment: Equatable, Sendable {
     /// A release is owed (or a replay is unconfirmed): nothing new may open on the Mac until it is posted, or a newer
     /// press could be overtaken by the older release. Set by `InputPipeline`, never by the Host.
     public var opensBlocked: Bool
+    /// The Mac's Caps Lock state, sampled by the Host for keyboard messages; nil when not sampled (then no Caps Lock
+    /// event is produced).
+    public var capsLockOn: Bool?
 
-    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false) {
+    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil) {
         self.canInject = canInject
         self.geometry = geometry
         self.opensBlocked = opensBlocked
+        self.capsLockOn = capsLockOn
     }
 
     /// New input may start.

@@ -110,9 +110,13 @@ struct MacInputModel {
     var penContact = false
     var buttonsDown: Set<MouseButton> = []
     var scrollOpen = false
+    var keysDown: Set<UInt16> = []
+    var modifiersDown: Set<ModifierKey> = []
     private(set) var violations: [String] = []
 
-    var isIdle: Bool { proximity == nil && !penContact && buttonsDown.isEmpty && !scrollOpen }
+    var isIdle: Bool {
+        proximity == nil && !penContact && buttonsDown.isEmpty && !scrollOpen && keysDown.isEmpty && modifiersDown.isEmpty
+    }
     var leftIsDown: Bool { penContact || buttonsDown.contains(.left) }
 
     private mutating func fail(_ text: String, _ action: InjectAction) { violations.append("\(text): \(action)") }
@@ -169,8 +173,24 @@ struct MacInputModel {
                 if !scrollOpen { fail("scroll end while closed", action) }
                 scrollOpen = false
             }
-        case .scrollWheel:
+        case .scrollWheel, .setCapsLock:
             break
+        case .keyDown(let code, let autorepeat):
+            if autorepeat {
+                if !keysDown.contains(code) { fail("repeat of a key that is not down", action) }
+            } else {
+                if keysDown.contains(code) { fail("key already down", action) }
+                keysDown.insert(code)
+            }
+        case .keyUp(let code):
+            if !keysDown.contains(code) { fail("key up without down", action) }
+            keysDown.remove(code)
+        case .modifierDown(let m):
+            if modifiersDown.contains(m) { fail("modifier already down", action) }
+            modifiersDown.insert(m)
+        case .modifierUp(let m):
+            if !modifiersDown.contains(m) { fail("modifier up without down", action) }
+            modifiersDown.remove(m)
         }
     }
 }
