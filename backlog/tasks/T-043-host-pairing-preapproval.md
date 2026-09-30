@@ -1,7 +1,7 @@
 ---
 id: T-043
 title: Mac — eşleşme onayı tablet ayrılınca kaybolmasın (ön onay), Parsec'ten onaylanabilsin
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-041]
@@ -69,3 +69,8 @@ Not: `PairKeyService.swift` (Core/Crypto) kartın `files:` listesinde yok ama P2
   2. Sunucu `revocationGeneration` ("forget" ve host kimliği değişimi artırır); her kayıt çağrısı nesli yakalar, tamamlanınca farklıysa sonuç atılır, yazılan anahtar `remove(ifEquals:)` ile silinir, makineye `stored:false` bildirilir (canlı ve orphan onayı için ikisi de). **Testsiz:** `SessionServer` Network gerektirir, yalnız derlendi.
   3. `PairKeyService` tüm bekleyen işleri sınırlar (toplam 16, arama en çok 8; `save`/`remove`/`remove(ifEquals:)`/`lookup` dolunca `false` döner, completion çağrılmaz). `removeAll` (forget) asla reddedilmez; arada başka işlem kuyruğa girmediyse bekleyen `removeAll`'a katılır (birleşir), girdiyse ikinci bir silme kuyruğa girer (sıra korunur). Sunucu: onay cevabında önce `hasCapacity` bakar; doluysa pencere açık kalır ve "Anahtar Zinciri meşgul, tekrar dene." notuyla yeniden gösterilir (`approvalKeychainBusy`); arama dolarsa bağlantı kapanır; temizlik silmeleri reddedilirse anahtar Keychain'de kalır (onaysız, sonraki eşleşmede üzerine yazılır). Testli (PairKeyService: sınırlar, reddetme, birleşme, sıra).
   - Not: yeniden gösterilen pencerede orphan ise "Tablet ayrıldı" satırı yerine yalnız meşgul notu görünür (kozmetik).
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- Tasarım Codex P1'i üzerine değişti: `device_id`'ye bağlı ön onay kaldırıldı; onay, kodu karşılaştırılan el sıkışmanın anahtarına bağlı (PROTOCOL §9). Codex (high) üç tur; son turdaki üç P2 (kalıcılık sürerken yeniden bağlanma → BUSY, unutma ile geç tamamlanma → iptal nesli, sınırlı Anahtar Zinciri işleri) düzeltildi, son tur orkestratör okudu.
+- Cihazda (orkestratör, AX + adb): "Onaylı cihazları unut" → PAIRING (kod iki tarafta 372984) → tablet arka plana (`bye_received`), pencere açık kaldı ("Tablet ayrıldı…") → İzin ver → `approval_accepted disconnected=true`, `orphan_pairing_stored` → uygulama açılınca `mode=paired`, görüntü `dec=10/10`.

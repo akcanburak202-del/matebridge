@@ -1,7 +1,7 @@
 ---
 id: T-044
 title: Tablet — eşleşme anahtarını PAIRING başında sakla (bağlantı koptuktan sonra onay için)
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-042]
@@ -43,3 +43,7 @@ PROTOCOL §9 "Bağlantı koptuktan sonra onay" (T-043 ile birlikte). Kullanıcı
 - **Varsayımlar:** Saklama `Secured` olayından önce, reader thread'inde yapılır; `rePairing` uyarısı ve kod ekranı aynı. Golden `new_pair_key` vektörü ilk ACK sonrası saklanan anahtarla eşleşiyor.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** (1) Mac yeni cihazken bağlan, kod görününce tableti arka plana at (bağlantı kopsun), Mac'te onayla (T-043 ile), geri dön: PAIRED bağlanmalı. (2) Mac'te "unut" sonrası yeniden eşleşmede uyarı + yeni Parsec satırı görünmeli. (3) Normal akış (kodu tabletten görüp onaylama) bozulmamış olmalı.
 - **Açık sorular:** Yok. Not: worktree'de `client-android/local.properties` yoktu; gradle için ANDROID_HOME=~/Library/Android/sdk export edildi.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- Orkestratör okudu (küçük değişiklik), T-043 ile birlikte merge edildi; cihazda yukarıdaki akışta doğrulandı.
