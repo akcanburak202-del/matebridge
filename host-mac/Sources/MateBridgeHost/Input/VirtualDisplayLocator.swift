@@ -15,17 +15,14 @@ extension DisplayProviding {
 
 /// Finds the MateBridge virtual display with PUBLIC CoreGraphics calls only (`VirtualDisplay` stays the one file
 /// that touches the private API). The display is recognized by the vendor and product numbers `VirtualDisplay`
-/// gives its descriptor; `VideoPipeline` does not expose the display ID and is outside T-023's files.
+/// gives its descriptor (`VirtualDisplay.vendorID` / `productID`, one source); `VideoPipeline` does not expose the
+/// display ID and is outside T-023's files.
 ///
 /// Input must never land on another display, so when nothing matches the answer is nil and the injector drops input.
 ///
 /// Called from one queue by `InputController`. The result is cached; a cached display that went away is rescanned
 /// at most every 250 ms so a missing display costs almost nothing per message.
 public final class VirtualDisplayLocator: DisplayProviding, @unchecked Sendable {
-    /// Must equal the descriptor values in `VirtualDisplay.swift` ("MB" and product 1).
-    public static let vendorID: UInt32 = 0x4D42
-    public static let productID: UInt32 = 0x0001
-
     private let lock = NSLock()
     private var cachedID: CGDirectDisplayID?
     private var lastScanNs: UInt64 = 0
@@ -52,20 +49,23 @@ public final class VirtualDisplayLocator: DisplayProviding, @unchecked Sendable 
         return cachedID
     }
 
-    /// `count=N` and, per display, `vVENDOR/mMODEL/WxH` in pixels (hardware numbers only, no names or serials).
+    /// `count=N` and, per display, `vVENDOR/mMODEL/WxH` in pixels plus its active, mirror and main state (hardware
+    /// numbers only, no names or serials). Diagnostics only: gating does not depend on active or mirror state (yet).
     public func describeOnlineDisplays() -> String {
         var ids = [CGDirectDisplayID](repeating: 0, count: 32)
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return "count=unknown" }
         let parts = ids.prefix(Int(count)).map { id in
-            String(format: "v0x%x/m0x%x/%ldx%ld", CGDisplayVendorNumber(id), CGDisplayModelNumber(id),
-                   CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id))
+            String(format: "v0x%x/m0x%x/%ldx%ld/active=%d/mirror=%d/main=%d", CGDisplayVendorNumber(id),
+                   CGDisplayModelNumber(id), CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id),
+                   CGDisplayIsActive(id) != 0 ? 1 : 0, CGDisplayIsInMirrorSet(id) != 0 ? 1 : 0,
+                   CGDisplayIsMain(id) != 0 ? 1 : 0)
         }
         return "count=\(count) displays=" + parts.joined(separator: ",")
     }
 
     private static func isOurs(_ id: CGDirectDisplayID) -> Bool {
-        CGDisplayIsOnline(id) != 0 && CGDisplayVendorNumber(id) == vendorID && CGDisplayModelNumber(id) == productID
+        CGDisplayIsOnline(id) != 0 && CGDisplayVendorNumber(id) == VirtualDisplay.vendorID && CGDisplayModelNumber(id) == VirtualDisplay.productID
     }
 
     /// The newest matching display (largest ID) if a stale one is still listed while its replacement comes up.
