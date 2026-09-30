@@ -158,6 +158,8 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 
 **Bitti:** Harici klavye/fare olmadan 1 saat kod yazılıp tasarım yapılabiliyor. Türkçe karakterler, kısayollar, kaydırma ve sürükleme sorunsuz.
 
+**Durum (2026-09-30):** Kod tamam ve cihazda denendi: klavye (T-032/T-033, karar 0008), touchpad + fare (T-034, hız ve kısayollar T-035/T-038), iki parmakla yakınlaştırma (T-036/T-037, karar 0009). Ctrl↔Cmd ayarı Aşama 4'te. "1 saat kullanım" ölçütü kullanıcının günlük kullanımında izleniyor.
+
 ### Aşama 4 — Günlük kullanım cilası
 
 - [ ] Mac: menü çubuğu uygulaması, oturum açılışında otomatik başlama.

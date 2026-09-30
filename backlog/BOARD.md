@@ -8,12 +8,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 
-## todo
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-038](tasks/T-038-client-shortcuts-no-fkeys.md) | Tablet — F tuşu olmayan klavye için yerel kısayollar (Ctrl+Shift+8/9/0) | 3 | android-client-dev | [T-035] |
-
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -54,3 +48,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-035](tasks/T-035-client-pointer-speed-exit.md) | Tablet — imleç hızı (daha yavaş varsayılan + canlı ayar kısayolu), Android'e dönüş kısayolu | 3 | android-client-dev | [T-033, T-034] |
 | [T-036](tasks/T-036-host-pinch.md) | Mac — PINCH kodeki, yakınlaştırma durum makinesi ve büyütme hareketi enjeksiyonu | 3 | mac-host-dev | [T-032] |
 | [T-037](tasks/T-037-client-pinch.md) | Tablet — iki parmakla yakınlaştırma (dokunmatik ekran ve touchpad) → PINCH | 3 | android-client-dev | [T-034, T-035] |
+| [T-038](tasks/T-038-client-shortcuts-no-fkeys.md) | Tablet — F tuşu olmayan klavye için yerel kısayollar (Ctrl+Shift+8/9/0) | 3 | android-client-dev | [T-035] |
