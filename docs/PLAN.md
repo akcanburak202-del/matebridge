@@ -167,7 +167,7 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 - [ ] Mac kilit/uyku/uyanma sonrası toparlanır. Sanal ekran yeniden oluşturulur.
 - [ ] Ayarlar: çözünürlük/ölçek, FPS, bitrate, codec, Ctrl↔Cmd, kalem tuşu eylemi.
 - [ ] Mod seçimi: tablet = ikinci ekran / tablet = ana ekran (monitörsüz) / ekran yansıtma.
-- [ ] Oturum şifrelemesi (eşleşmede paylaşılan anahtar).
+- [x] Oturum şifrelemesi (eşleşmede paylaşılan anahtar). Protokol v1, karar 0010, T-041/T-042; cihazda doğrulandı.
 - [x] Log dosyası (`~/Library/Logs/MateBridge/`) ve menüde "logları aç". (T-039)
 
 **Bitti:** Bir hafta boyunca günlük iş için kullanılıyor, "yeniden başlatmam gerekti" türünden sorun kalmıyor.

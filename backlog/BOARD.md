@@ -13,8 +13,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-041](tasks/T-041-host-encryption.md) | Mac — protokol v1 şifreleme (el sıkışma, eşleşme kodu, AES-GCM kayıtları, Anahtar Zinciri) | 4 | mac-host-dev | [T-039] |
-| [T-042](tasks/T-042-client-encryption.md) | Tablet — protokol v1 şifreleme (el sıkışma, eşleşme kodu ekranı, AES-GCM kayıtları, Keystore) | 4 | android-client-dev | [T-038] |
 | [T-043](tasks/T-043-host-pairing-preapproval.md) | Mac — eşleşme onayı tablet ayrılınca kaybolmasın (ön onay), Parsec'ten onaylanabilsin | 4 | mac-host-dev | [T-041] |
 
 ## done
@@ -59,3 +57,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-037](tasks/T-037-client-pinch.md) | Tablet — iki parmakla yakınlaştırma (dokunmatik ekran ve touchpad) → PINCH | 3 | android-client-dev | [T-034, T-035] |
 | [T-038](tasks/T-038-client-shortcuts-no-fkeys.md) | Tablet — F tuşu olmayan klavye için yerel kısayollar (Ctrl+Shift+8/9/0) | 3 | android-client-dev | [T-035] |
 | [T-039](tasks/T-039-host-daily-use.md) | Mac günlük kullanım — oturum açılışında başlama, menü (durum, loglar), USB tünellerini kendiliğinden kurma | 4 | mac-host-dev | [T-020] |
+| [T-041](tasks/T-041-host-encryption.md) | Mac — protokol v1 şifreleme (el sıkışma, eşleşme kodu, AES-GCM kayıtları, Anahtar Zinciri) | 4 | mac-host-dev | [T-039] |
+| [T-042](tasks/T-042-client-encryption.md) | Tablet — protokol v1 şifreleme (el sıkışma, eşleşme kodu ekranı, AES-GCM kayıtları, Keystore) | 4 | android-client-dev | [T-038] |

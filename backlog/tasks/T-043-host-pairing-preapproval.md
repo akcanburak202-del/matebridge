@@ -26,6 +26,8 @@ files:
 
 ## Kabul kriterleri
 
+- [ ] **T-041 son Codex turundan (P2):** (a) terk edilen eşleşmenin temizliği (`finishPairing` → `remove(device)`) aynı cihaz için sonradan kaydedilen **daha yeni** anahtarı silmemeli: yalnızca kendi kaydettiği anahtar hâlâ duruyorsa silsin (karşılaştır-ve-sil ya da nesil sayacı). (b) `PairKeyService` bekleyen işleri sınırlı olmalı (ör. en çok 8 bekleyen arama; fazlası → o bağlantı kapanır) ve bağlantısı kapanmış/süresi dolmuş aramalar çalıştırılmadan atlanmalı. İkisi de testli.
+
 - [ ] Yukarıdaki 1–4, saf durum makinesinde testli (zaman sahte saatle): ayrılan bekleyen istek, ön onayla yeniden bağlanma → ACCEPTED, süresi dolmuş ön onay → normal onay, tek kullanım, reddet.
 - [ ] Ön onay yalnızca PAIRING için; PAIRED akışı ve devralma (kanıt) kuralları değişmez.
 - [ ] Onay penceresi durumu güncellenir; "İzin ver" bağlantı yokken de çalışır.

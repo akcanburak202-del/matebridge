@@ -1,7 +1,7 @@
 ---
 id: T-041
 title: Mac — protokol v1 şifreleme (el sıkışma, eşleşme kodu, AES-GCM kayıtları, Anahtar Zinciri)
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-039]
@@ -80,3 +80,8 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
 - **Açık sorular (orkestratör için):**
   1. Eski video bağlantısı yarış durumunda: kanıtlı ama çok eski (1024'ten eski) bir nonce ve yakalanmış PING kaydı tekrarlanabilir; pratikte 1024 yeniden bağlanma bir oturumda gerçekçi değil.
   2. Video PING'inin `seq`/zamanına bakılmıyor (kayıt sayacı 0 olmak zorunda, yani tekrar aynı anahtar/nonce ile zaten nonce kontrolüne takılır).
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, high) dört tur (tek başına, T-042 ile birlikte iki kez). Bulunan P1'ler (video kimliği doğrulanmadan ekleme bütçesinin tükenmesi, video nonce tekrarı ile GCM nonce yeniden kullanımı, oturum kuyruğunda eşzamanlı Anahtar Zinciri) ve P2'ler düzeltildi; protokol ekine (kanıtla devralma, kanıtla video ekleme) göre uygulandı. Son turda kalan iki P2 (terk edilen eşleşme temizliğinin yeni anahtarı silmesi, Anahtar Zinciri işlerinin sınırsız birikmesi) T-043'e taşındı.
+- Cihazda: eşleşme kodu iki tarafta aynı, onay (orkestratör, AX) → anahtar Anahtar Zinciri'nde, şifreli görüntü `dec=9/9`, yeniden bağlanma `mode=paired`, eşzamansız anahtar araması ile de çalışıyor.

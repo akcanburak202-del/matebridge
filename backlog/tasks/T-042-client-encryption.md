@@ -1,7 +1,7 @@
 ---
 id: T-042
 title: Tablet — protokol v1 şifreleme (el sıkışma, eşleşme kodu ekranı, AES-GCM kayıtları, Keystore)
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-038]
@@ -65,3 +65,7 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
   - Ağda bayt bozma: bağlantı BYE'sız kapanıp yeniden bağlanıyor mu.
 - **Tur 1 (amendment 0129117 + Codex):** ACCEPTED (ilk ya da ikinci) gelince makine hemen şifreli PING gönderir; video bağlantısında VIDEO_HELLO'dan sonra video c2h anahtarıyla şifreli PING (`VideoChannel`), PONG beklenmez; `video_nonce` her bağlantıda `SecureRandom` (testli). Eşleşme anahtarı yazımı `commit()` başarısızsa `IOException` -> `KeyStoreFailed` olayı -> `Failed(KEY_STORE_FAILED)` ("Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan"), `pair_key_stored` loglanmaz. `Failed` durumları `hostReached`'i işaretler, USB ipucu terminal hatanın üstüne yazmaz. Cihazda: USB modunda KEY_MISSING mesajı 3 sn sonra da kalıyor mu; takeover (yeniden bağlanma) sonrası yeni oturum 5 sn içinde etkinleşiyor mu.
 - **Açık sorular:** Protokol değişikliği gerekmedi. Eski host'un kısa VERSION_MISMATCH cevabı için Codec'te tolerans istenirse orkestratör karar versin.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, high): iki P2 (anahtar kaydının sessiz başarısızlığı, USB ipucunun hata mesajını ezmesi) düzeltildi; protokol eki (ACCEPTED sonrası PING, video kanıt PING'i, taze video_nonce) uygulandı. T-041 ile birlikte iki birleşik Codex turu. Cihazda eşleşme ve şifreli akış çalışıyor.
