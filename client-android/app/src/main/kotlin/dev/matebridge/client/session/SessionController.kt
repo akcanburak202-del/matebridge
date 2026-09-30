@@ -100,6 +100,9 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         return c.link.send(msg)
     }
 
+    /** True while the control send queue is backed up (input layer holds mergeable hover/scroll samples then). Any thread. */
+    fun isSendCongested(): Boolean = control?.link?.congested() ?: false
+
     private fun ensureEngine() {
         if (!running.compareAndSet(false, true)) return
         engine = Thread({ engineLoop() }, "mb-session").also { it.isDaemon = true; it.start() }

@@ -60,6 +60,12 @@ class SendQueue(private val maxBytes: Int = 256 * 1024, private val maxAgeMs: Lo
     fun isOverflowed(): Boolean = synchronized(lock) { overflowed }
 
     fun size(): Int = synchronized(lock) { items.size }
+
+    /** Bytes currently queued (backpressure signal for the input layer). */
+    fun queuedBytes(): Int = synchronized(lock) { queuedBytes }
+
+    /** Age of the oldest queued frame at [nowMs], 0 when empty (backpressure signal for the input layer). */
+    fun oldestAgeMs(nowMs: Long): Long = synchronized(lock) { items.firstOrNull()?.let { nowMs - it.atMs } ?: 0L }
 }
 
 /**
@@ -80,5 +86,17 @@ class ControlLink(
             if (first) onOverflow()
         }
         return false
+    }
+
+    /**
+     * True while the writer is falling behind: at least [CONGESTED_BYTES] queued or the oldest frame waiting
+     * [CONGESTED_AGE_MS]. The input layer then holds and merges plain hover samples and scroll deltas
+     * (PROTOCOL.md section 5) instead of adding to the backlog; the hard bound (256 KiB / 1 s) stays with [SendQueue].
+     */
+    fun congested(): Boolean = queue.queuedBytes() >= CONGESTED_BYTES || queue.oldestAgeMs(clockMs()) >= CONGESTED_AGE_MS
+
+    companion object {
+        const val CONGESTED_BYTES = 8 * 1024
+        const val CONGESTED_AGE_MS = 50L
     }
 }
