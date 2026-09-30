@@ -32,7 +32,27 @@ NOTES 2026-10-01 "Takılma ölçümü": Mac kareleri kusursuz 8,3 ms aralıkla g
 
 ## Plan
 
-_(Ajan doldurur.)_
+### Kök neden analizi (jitter=1 neden etkisiz)
+
+`FramePacer.schedule`, hedef vsync'i `base = ilk vsync >= şimdi + N*P` ile seçiyor. Bu bir **tam sayı kaydırma**: `ceil(t + P) = ceil(t) + P`. Yani tampon N, karenin varış fazını vsync ızgarasına göre *hiç değiştirmiyor*; iki kare aynı vsync aralığına düşüyorsa (dalgalı çözme süresi) yine düşüyor, sadece hepsi N*P geç. Bu dalgalanmayı emen bir mekanizma yok.
+
+Üstüne üç bozucu etki:
+1. **Kadans mantığı 120 Hz'de ölü:** `fi == P` iken `v = max(base, last + P)`; `v - base` ızgaraya hizalı olduğu için 0 ya da >= P; `> fi/2` kuralı (P/2) her borç durumunu "çok borç" sayıp `v = base`'e geri sarıyor. Sonuç `v == base` (özdeşlik eşlemesi), çakışmada aynı slot.
+2. **Zaman damgası ufkun içinde:** damga `V - P/2` ve `V - now` in [P, 2P) ise damganın şimdiye uzaklığı yalnızca [0,5P, 1,5P). SurfaceFlinger'ın (HarmonyOS/VRR) latch ufku genelde >= 1-2 vsync; ufuktan yakın damga "hemen sun" gibi davranır. Ölçüm bunu doğruluyor: jitter=0 (99/26) ile jitter=1 (98/27) birebir aynı, yalnızca `pace_add` 8,35 ms; jitter=2'de damga 1,5-2,5 P ileri -> damga gerçekten uygulanıyor ve 0 atlama.
+3. Damga fazı (Choreographer app-vsync'i vs SF vsync'i arasındaki sabit kayma) bilinmiyor; `V - P/2` ancak bu kayma < P/2 ise doğru slotu verir.
+Bu (2) ve (3) cihazda doğrulanamaz (bu oturumda tablete dokunulmuyor); (1) kod okumasıyla kesin.
+
+### Çözüm: AdaptivePacer (video/AdaptivePacer.kt)
+
+Host yakalama zamanı kusursuz düzenli (8,3 ms), varış/çözme çıkışı dalgalı. Bu yüzden playout gecikmesi yakalama zaman damgasına göre:
+- `x = hazır_zamanı - captureUs*1000` (saat ofseti sabit, yalnızca fark önemli). Kayan 2 sn pencerede min `m` = en iyi durum hat gecikmesi; `dev = x - m >= 0` = o karenin fazla gecikmesi.
+- `D = p98(son 256 dev) + 0,5 ms + extra`; `extra` = atlama oranına göre geri besleme (skip_pct > %2 -> +P/4, en çok 2P; 5 pencere < %0,5 -> -P/8).
+- hedef = `hazır - dev + D` (yani `capture + m + D`, kare aralığı tam fi); slot = hedefi aşan ilk vsync (en erken şimdiki vsync); kare başına ayrı vsync (`slot >= son + P`); birikme `D + 2P`'yi aşarsa en yeni kazanır (çakışma, eski kare atılır).
+- Damga `slot - P/2` (eski gibi). Panel hızı değişince (P %10+ değişirse) pencere, extra ve son slot sıfırlanır.
+- Ölçüm: `PresentMeter`; `OnFrameRenderedListener` (pts -> hazır zamanı eşlemesi) aralıkları; aralık > 1,5 * kadans ve kare önceki gösterimden önce hazırsa "atlanan". `MB/render`: `skip_pct`, `pace_ms`, `vsync_ms`; overlay'de de.
+- Modlar: `--ei jitter` yok -> uyarlanır (yüzey yolu); 0..2 sabit tampon (eski); -1 -> uyarlanır kapalı (=0). GL yolunda presenter kendi vsync hizalamasını yapıyor ve SurfaceTexture damgaları yok sayar; uyarlanır mod GL'de kapalı kalır (Açık soru).
+- Testler: sahte saat/vsync, dalgalı hazır zamanları; 60/60, 120/120, 60 fps içerik 120 Hz; panel değişimi; PresentMeter; StatsFormat.
+
 
 ## Handoff
 
