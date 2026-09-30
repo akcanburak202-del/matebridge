@@ -8,6 +8,7 @@ depends_on: [T-041]
 decisions: [0010]
 files:
   - host-mac/Sources/MateBridgeCore/Session/
+  - host-mac/Sources/MateBridgeCore/Crypto/PairKeyService.swift
   - host-mac/Sources/MateBridgeHost/Session/
   - host-mac/Sources/MateBridgeApp/
   - host-mac/Tests/MateBridgeCoreTests/
