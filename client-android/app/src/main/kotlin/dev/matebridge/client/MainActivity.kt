@@ -8,22 +8,31 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.hardware.display.DisplayManager
+import android.hardware.input.InputManager
 import android.view.Choreographer
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import dev.matebridge.client.input.DoubleTapDetector
+import dev.matebridge.client.input.InputCapture
+import dev.matebridge.client.input.InputSink
+import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
+import dev.matebridge.client.protocol.Message
+import dev.matebridge.client.protocol.ReleaseAll
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.session.MbLog
@@ -54,7 +63,8 @@ import kotlin.math.roundToInt
  * Session UI plus full-screen video (T-012 + T-013 + T-015). Session logic lives in
  * dev.matebridge.client.session, decoding in dev.matebridge.client.video; this class wires them to views.
  * While connected and streaming the connection panel is hidden and the SurfaceView (fitted to the
- * stream aspect, so the surface is exactly the video area) fills the screen. Input capture comes later.
+ * stream aspect, so the surface is exactly the video area) fills the screen. While the video is shown, pen and
+ * finger events are routed to [InputCapture] (T-024) instead of the views.
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var status: TextView
@@ -70,6 +80,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statsView: TextView
     private val ui = Handler(Looper.getMainLooper())
     private val clock = ClockSync()
+    private lateinit var capture: InputCapture
+    private val rootLoc = IntArray(2)
+    private var inputFaultUntilMs = 0L
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
@@ -182,12 +195,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 renderer?.let { if (it.attached) it.onFrame(frame) }
             }
 
-            override fun onSessionStart() { clock.reset() }
+            override fun onSessionStart() {
+                clock.reset()
+                runOnUiThread { capture.onSessionReset() } // the host holds no input state for a new connection
+            }
 
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
             }
         })
+        capture = InputCapture(
+            object : InputSink {
+                override fun send(msg: Message) = controller.trySend(msg)
+                override fun congested() = controller.isSendCongested()
+                override fun closeConnection() = controller.dropConnection()
+            },
+            { viewport },
+            onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
+        ) { line -> MbLog.i("stats", line, "input") }
+        capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        addFingerToggle()
         applyImmersive()
         render(SessionUi.Searching)
     }
@@ -205,6 +232,111 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyImmersive()
+        if (!::capture.isInitialized) return
+        if (hasFocus) capture.resume() else capture.releaseAll(ReleaseAll.FOCUS_LOST, SystemClock.uptimeMillis())
+    }
+
+    override fun onPause() {
+        // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
+        if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
+        super.onPause()
+    }
+
+    // ---- input capture (T-024) ----
+
+    /** Input is routed to [capture] only while the video is visible and laid out; the connect panel keeps normal touch. */
+    private fun syncInputActive(nowMs: Long = SystemClock.uptimeMillis()): Boolean {
+        val on = started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty
+        capture.setActive(on, nowMs)
+        return on
+    }
+
+    private fun routeToCapture(ev: MotionEvent): Boolean {
+        val now = SystemClock.uptimeMillis()
+        return try {
+            if (!syncInputActive(now)) return false
+            if (now < inputFaultUntilMs) return true // recovering from an input fault: consumed, nothing half-processed
+            if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
+            // Events arrive in window coordinates; the viewport is in root coordinates.
+            root.getLocationInWindow(rootLoc)
+            MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
+        } catch (e: RuntimeException) {
+            inputFailed(e, now)
+            true // consumed: never let a capture bug crash the app or leak the event to the views
+        }
+    }
+
+    /**
+     * A bug in the input path must not kill the app mid-stroke: log it and release everything on the host. A
+     * persistent fault would otherwise repeat this (log plus RELEASE_ALL) at event rate, so input is paused for
+     * [INPUT_FAULT_BACKOFF_MS] after each fault; the model was forgotten by the release, so resuming is consistent.
+     */
+    private fun inputFailed(e: RuntimeException, nowMs: Long) {
+        if (nowMs < inputFaultUntilMs) return
+        inputFaultUntilMs = nowMs + INPUT_FAULT_BACKOFF_MS
+        MbLog.e("input_error", "err=${e.javaClass.simpleName}", "input")
+        try {
+            capture.releaseAll(ReleaseAll.USER, nowMs)
+        } catch (_: RuntimeException) {
+            controller.dropConnection() // last resort: the host releases on disconnect
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean =
+        routeToCapture(ev) || super.dispatchTouchEvent(ev)
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean =
+        routeToCapture(ev) || super.dispatchGenericMotionEvent(ev)
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        // The M-Pencil double tap arrives as keyCode 718 / scanCode 190; it becomes PEN_GESTURE and is never sent as KEY.
+        if (DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode)) {
+            if (ev.action == KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+                syncInputActive()
+                capture.onGestureKeyDown(ev.eventTime)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(ev)
+    }
+
+    private val inputTicker = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            try {
+                syncInputActive(now)
+                if (now >= inputFaultUntilMs) capture.tick(now)
+            } catch (e: RuntimeException) {
+                inputFailed(e, now)
+            }
+            ui.postDelayed(this, INPUT_TICK_MS)
+        }
+    }
+
+    private val inputDeviceListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {}
+        override fun onInputDeviceChanged(deviceId: Int) {}
+        override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()) }
+    }
+
+    /**
+     * "Parmak dokunmasını tamamen kapat" switch (decision 0006), added to the connect panel from code because
+     * the layout/strings resources are outside T-024's file list. The setting is persisted in [Settings].
+     */
+    private fun addFingerToggle() {
+        val p = panel as? LinearLayout ?: return
+        val b = Button(this)
+        fun label() { b.text = "Parmak dokunmasını tamamen kapat: " + if (capture.fingersDisabled) "AÇIK" else "kapalı" }
+        b.setOnClickListener {
+            val off = !capture.fingersDisabled
+            settings.setFingerTouchDisabled(off)
+            capture.setFingersDisabled(off, SystemClock.uptimeMillis())
+            label()
+        }
+        label()
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(b, lp)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -283,6 +415,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun installConfig(config: StreamConfig) {
         if (!started || isDestroyed) return
         streamConfig = config
+        capture.setStreamGeometry(config.widthPt, config.heightPt)
         val r = renderer ?: VideoRenderer(
             config,
             onKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason)) },
@@ -469,6 +602,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         render(SessionUi.Searching)
         ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
+        ui.removeCallbacks(inputTicker)
+        ui.post(inputTicker)
+        (getSystemService(Context.INPUT_SERVICE) as InputManager).registerInputDeviceListener(inputDeviceListener, ui)
         applyTransport()
     }
 
@@ -502,6 +638,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         started = false
         dev.matebridge.client.session.MbLog.i("activity_stop")
         ui.removeCallbacks(ticker)
+        ui.removeCallbacks(inputTicker)
+        (getSystemService(Context.INPUT_SERVICE) as InputManager).unregisterInputDeviceListener(inputDeviceListener)
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
@@ -567,10 +705,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (ConnectMode.showUsbHint(transport, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
             status.text = getString(R.string.usb_missing)
         }
+        syncInputActive() // panel visibility decides whether input is captured
     }
 
     private companion object {
         const val KEYFRAME_RETRY_MS = 500L
+        const val INPUT_TICK_MS = 25L
+        const val INPUT_FAULT_BACKOFF_MS = 1000L
     }
 
     private fun causeText(c: SessionUi.Cause) = getString(

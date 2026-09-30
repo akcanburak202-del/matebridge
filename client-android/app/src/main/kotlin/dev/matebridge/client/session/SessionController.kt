@@ -100,6 +100,19 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         return c.link.send(msg)
     }
 
+    /**
+     * Drops the accepted control connection like a send-queue overflow does: the session reports it closed and
+     * reconnects, and the host releases all input on the disconnect (PROTOCOL.md section 7). Used when a RELEASE_ALL
+     * could not be queued. No-op without an accepted session (the host holds nothing then). Any thread.
+     */
+    fun dropConnection() {
+        if (!inputAllowed) return
+        control?.dropForOverflow()
+    }
+
+    /** True while the control send queue is backed up (input layer holds mergeable hover/scroll samples then). Any thread. */
+    fun isSendCongested(): Boolean = control?.link?.congested() ?: false
+
     private fun ensureEngine() {
         if (!running.compareAndSet(false, true)) return
         engine = Thread({ engineLoop() }, "mb-session").also { it.isDaemon = true; it.start() }
@@ -240,6 +253,12 @@ class SessionController(hello: Hello, private val listener: SessionListener) {
         fun abort() {
             queue.abort()
             closeQuietly(socket)
+        }
+
+        /** Same as the overflow handler in [link]: abort and report the connection closed (once). */
+        fun dropForOverflow() {
+            abort()
+            notifyClosed(connectFailed = false)
         }
 
         private fun notifyClosed(connectFailed: Boolean) {

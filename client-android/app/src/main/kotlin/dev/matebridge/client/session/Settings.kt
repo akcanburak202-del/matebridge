@@ -36,6 +36,14 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setTransport(t: Transport) = store.putString(KEY_TRANSPORT, t.logName)
 
+    /**
+     * "Parmak dokunmasını tamamen kapat" (decision 0006): when on, finger touches are never sent.
+     * Default off, so fingers work unless the user turns them off.
+     */
+    fun fingerTouchDisabled(): Boolean = store.getString(KEY_FINGER_OFF) == "1"
+
+    fun setFingerTouchDisabled(off: Boolean) = store.putString(KEY_FINGER_OFF, if (off) "1" else "0")
+
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
 
     private fun fromHex(s: String): ByteArray? {
@@ -52,6 +60,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"
         const val KEY_STATS = "stats_overlay"
+        const val KEY_FINGER_OFF = "finger_touch_disabled"
     }
 }
 
