@@ -30,7 +30,14 @@ T-058/T-059 cihaz ölçümü (2026-10-01 ~03:30, dal `integ/rate` = main + T-058
 
 ## Plan
 
-_(Ajan doldurur.)_
+Yalnızca `AdaptivePacer` (+ istatistik alanları) değişir; SlotReleaser/VsyncClock dokunulmaz.
+
+1. **Kilit koşulu:** etkin aralık `fi` (intervalProvider) panel periyodu P'nin ±%15'inde ve seyreltme yok (`fi*4 >= P*3`). Değilse kilit bırakılır, eski yol (T-057) aynen çalışır.
+2. **Edinme:** jitter'sız ideal hazır zamanı `T = now - dev` (= capture + b). Pencere `[T+dl, T+dl+j]` (j = p99 dev). Merkezli hedef `sC = T+dl+j/2+P/2`, asgari `sMin = T+dl+d` (d = min(p99+margin+extra, P)). Yuva = `sC`'ye en yakın vsync, ama `sMin`'den önce olamaz ve `earliest`'ten önce olamaz.
+3. **Kilitli ilerleme:** `slot(n) = snap(slot(n-1) + round(Δcapture/P)·P)` (gerçek vsync ızgarasına yuvarlanır). Hata `e = sC - slot`, jitter'sız `T` ile ölçülür, tek geç kare onu bozmaz. Kare yuvasına yetişemezse (`slot < earliest`) o kare atılır (önceki yuvaya çarpıştırılır, `lateDrop`), kilit ilerler.
+4. **Histerezis:** `|e| > P/2` ya da kaçırılan yuva art arda 30 kare sürerse yeniden fazlar (`rephase++`, edinme yolu); tek iyi kare sayacı sıfırlar.
+5. **İstatistik:** `phase_lock=1/0`, `rephase=<pencere>` `ev=present` satırına (StatsFormat.presentFields genişler).
+6. **Testler:** 60/60 ve 120/120 sınır fazında ±1 ms jitter (çift/boş yuva ~0), 60,00 vs 59,95 Hz kayması (seyrek yeniden fazlama), 120↔60 geçişleri, tek geç kare, eski T-057 testleri.
 
 ## Handoff
 
