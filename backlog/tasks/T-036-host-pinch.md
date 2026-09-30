@@ -1,7 +1,7 @@
 ---
 id: T-036
 title: Mac — PINCH kodeki, yakınlaştırma durum makinesi ve büyütme hareketi enjeksiyonu
-status: review
+status: done
 phase: 3
 owner: mac-host-dev
 depends_on: [T-032]
@@ -54,3 +54,8 @@ Sira: kodek -> durum makinesi -> planlayici -> poster/inject-test/log. Her adim 
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Hicbir gercek olay gonderilmedi (`--inject-test --pinch in|out` yalnizca eklendi, calistirilmadi). Gercek Mac'te: tip 29 olayinin `CGEvent(source:)` + `type=` ile kurulup kurulmadigi (nil donerse `event_create_failed` loglanir ve ended owed olur), Krita/Safari/Preview'da yon (`--pinch out` = yakinlas beklenir), BEGAN'da imlec tasindiktan sonra yakinlasma merkezinin dogrulugu, Chromium'da ilk degisimlerin yutulmasi (karar 0009), Cmd basiliyken davranis.
 - **check.sh:** Swift tarafi (host-mac build + 386 test, probes, fixtures) yesil. `gradle (client-android)` tek testte kirmizi: `FixtureTest.everyFixtureFileHasATestCase`, yeni pinch fixture'larinin Kotlin test kaydi olmadigi icin; T-037 kapatir, bu kartin kapsami disi.
 - **Açık sorular:** yok.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, high): kod bulgusu yok; tek P1 "protokol iki taraf birlikte merge edilmeli" → T-037 ile aynı anda merge edildi, `check.sh` ALL OK.
+- Cihaz testi: bir sonraki ortak testte (Krita yakınlaşması, merkez, yön).

@@ -1,7 +1,7 @@
 ---
 id: T-037
 title: Tablet — iki parmakla yakınlaştırma (dokunmatik ekran ve touchpad) → PINCH
-status: review
+status: done
 phase: 3
 owner: android-client-dev
 depends_on: [T-034, T-035]
@@ -52,3 +52,8 @@ PROTOCOL.md §4 `0x17 PINCH` istemci kuralları, §5 birleştirme ve karar 0009.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** iki parmak yakınlaştırmanın (ekran ve touchpad) eşik hissi (%6 / 16 px; gerekirse `TwoFingerClassifier`, `TouchTracker.SLOP_PX`); dokunmatikte kaydırmanın başlangıç gecikmesi (BEGAN ilk ~16 px harekete kadar bekliyor); kalemle çizerken parmak yakınlaştırmanın başlamaması; Mac tarafı T-036 ile uçtan uca (Krita tuval yakınlaştırma). HarmonyOS'un iki parmak hareketini kendi tüketip tüketmediği bilinmiyor.
 - **Swift durumu:** `./scripts/check.sh` Gradle kısımları (client-android, input-probe) geçiyor; `swift test` yalnızca `FixtureTests.everyFixtureFileHasATestCase` ile düşüyor (yeni `pinch*` fixture'ları host'ta yok, T-036 bekleniyor). Başka hata yok.
 - **Açık sorular:** yok.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: Codex (`gpt-6.1-sol`, medium): kod bulgusu yok; tek P1 "T-036 ile birlikte merge et" → aynı anda merge edildi, `check.sh` ALL OK.
+- Not: dokunmatik ekranda iki parmak kaydırmanın BEGAN'ı artık ilk anlamlı harekete (≈16 px) kadar bekliyor (sınıflama için).
