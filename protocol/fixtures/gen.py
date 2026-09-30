@@ -24,6 +24,15 @@ T = {
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
 }
 
+
+# Section 9 (encryption) key material; the same values are the inputs of crypto_vectors.swift.
+CLIENT_NONCE = bytes(range(0xC0, 0xD0))
+CLIENT_EPH_PUB = bytes.fromhex("043b2e3be924f7393ba036956d4f154be45d37e6c02baecfc991a3c6ae4213629e7ab47261459f5823e7e72769597493bc607eb317d9ef1ca4ddb85f3cc2a35538")
+HOST_ID = bytes(range(0x30, 0x40))
+HOST_NONCE = bytes(range(0xE0, 0xF0))
+HOST_EPH_PUB = bytes.fromhex("04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb")
+VIDEO_NONCE = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
+
 FMT = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h", "u32": "<I", "u64": "<Q", "f32": "<f"}
 
 
@@ -88,7 +97,7 @@ DEVICE_ID = bytes.fromhex("0123456789abcdef0123456789abcdef")
 
 FIXTURES = {
     "hello": ("HELLO: tablet introduces itself", frame("HELLO", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("bytes", "device_id", DEVICE_ID, "random per install"),
         field("u16", "screen_width_px", 2800),
         field("u16", "screen_height_px", 1840),
@@ -96,22 +105,32 @@ FIXTURES = {
         field("u16", "max_refresh_hz", 144),
         field("u32", "capabilities", 0x000000FF, "PEN|PEN_HOVER|PEN_TILT|KEYBOARD|TOUCHPAD|TOUCH|H264|HEVC"),
         field("str8", "device_name", "MatePad Pro"),
+        field("bytes", "client_nonce", CLIENT_NONCE),
+        field("bytes", "client_eph_pub", CLIENT_EPH_PUB, "P-256 uncompressed"),
     ])),
     "hello_ack": ("HELLO_ACK: accepted", frame("HELLO_ACK", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("u8", "status", 0, "ACCEPTED"),
         field("u8", "reserved", 0),
         field("u32", "session_id", 0xA1B2C3D4),
         field("u16", "video_port", 47001),
         field("str8", "host_name", "Mac mini"),
+        field("u8", "key_mode", 1, "PAIRED"),
+        field("bytes", "host_id", HOST_ID),
+        field("bytes", "host_nonce", HOST_NONCE),
+        field("bytes", "host_eph_pub", HOST_EPH_PUB, "P-256 uncompressed"),
     ])),
     "hello_ack_pending": ("HELLO_ACK: waiting for approval on the Mac", frame("HELLO_ACK", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("u8", "status", 1, "PENDING_APPROVAL"),
         field("u8", "reserved", 0),
         field("u32", "session_id", 0),
         field("u16", "video_port", 0),
         field("str8", "host_name", "Mac mini"),
+        field("u8", "key_mode", 2, "PAIRING"),
+        field("bytes", "host_id", HOST_ID),
+        field("bytes", "host_nonce", HOST_NONCE),
+        field("bytes", "host_eph_pub", HOST_EPH_PUB, "P-256 uncompressed"),
     ])),
     "stream_config": ("STREAM_CONFIG: HEVC 2800x1840 (1400x920 pt) @60, sRGB full range", frame("STREAM_CONFIG", [
         field("u16", "config_id", 1),
@@ -224,9 +243,10 @@ FIXTURES = {
         field("u8", "reason", 1, "DECODE_ERROR"),
     ])),
     "video_hello": ("VIDEO_HELLO: first message on the video connection", frame("VIDEO_HELLO", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("u16", "config_id", 1),
         field("u32", "session_id", 0xA1B2C3D4),
+        field("bytes", "video_nonce", VIDEO_NONCE),
     ])),
     "video_frame": ("VIDEO_FRAME: HEVC keyframe, single fragment (payload shortened)", frame("VIDEO_FRAME", [
         field("u32", "frame_seq", 1),
@@ -251,7 +271,7 @@ FIXTURES = {
         field("bytes", "data", bytes.fromhex("000000014001"), "Annex-B, VPS NAL start"),
     ])),
     "hello_utf8_name": ("HELLO: multibyte UTF-8 device name, fewer capabilities", frame("HELLO", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("bytes", "device_id", bytes(range(16)), "random per install"),
         field("u16", "screen_width_px", 2800),
         field("u16", "screen_height_px", 1840),
@@ -259,14 +279,20 @@ FIXTURES = {
         field("u16", "max_refresh_hz", 60),
         field("u32", "capabilities", 0x00000049, "PEN|KEYBOARD|H264"),
         field("str8", "device_name", "Çizim Tableti ğüşöı"),
+        field("bytes", "client_nonce", CLIENT_NONCE),
+        field("bytes", "client_eph_pub", CLIENT_EPH_PUB, "P-256 uncompressed"),
     ])),
     "hello_ack_busy": ("HELLO_ACK: another tablet already has the session", frame("HELLO_ACK", [
-        field("u16", "protocol_version", 0),
+        field("u16", "protocol_version", 1),
         field("u8", "status", 4, "BUSY"),
         field("u8", "reserved", 0),
         field("u32", "session_id", 0),
         field("u16", "video_port", 0),
         field("str8", "host_name", ""),
+        field("u8", "key_mode", 0, "NONE"),
+        field("bytes", "host_id", bytes(16)),
+        field("bytes", "host_nonce", bytes(16)),
+        field("bytes", "host_eph_pub", bytes(65)),
     ])),
     "pen_extremes": ("PEN: two samples at the bottom-right corner, full pressure and full tilt", frame("PEN", [
         field("u8", "tool", 0, "PEN"),
