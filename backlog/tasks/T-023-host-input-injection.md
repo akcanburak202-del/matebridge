@@ -1,7 +1,7 @@
 ---
 id: T-023
 title: Mac girdi enjeksiyonu — CGEvent kalem/fare, koordinat dönüşümü, oturuma bağlama
-status: review
+status: done
 phase: 2
 owner: mac-host-dev
 depends_on: [T-022]
@@ -173,3 +173,10 @@ Hedef: `[InjectAction]` (T-022) -> **`[MacEvent]`** (saf değer tipleri, Core, t
   - `VideoPipeline` ekran kimliğini `public var displayID` yaparsa (dosyam dışında) bulucunun vendor/model araması kalkar.
   - Scroll yönü/ölçeği/atalet ve klavye Faz 3'te; `KEY` hâlâ makinede yok.
   - İşaretçi düğmeleri için watchdog yok (T-022'den devir): takılan ama kalp atışı süren bir istemci bir düğmeyi basılı tutabilir. Faz 3.
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: `reviewer` + Codex (`gpt-6.1-sol`, high; üç tur). Merge edilen baş: `7514b6d`. `./scripts/check.sh` dalda ve merge sonrası `main`'de geçti. Son düzeltme (`0c749df`, yeniden deneme zamanı) yalnızca orkestratör tarafından okundu, ayrı bir Codex turundan geçmedi.
+- **Kabul kriteri sapması (kabul edildi):** "Watchdog tick'i oturum kuyruğunda" yerine `InputController` kendi seri kuyruğunu kullanır ve oturum kuyruğundan `queue.sync` ile girilir; sıra korunur, makineye tek kuyruktan dokunulur.
+- **Canlı doğrulanmadı:** Host kabuğu (`CGEventPoster`, `VirtualDisplayLocator`, `InputController`, `main.swift` bağlantısı, `--inject-test`) birim testsiz. Handoff'taki 11 adımlık liste T-025'te yürütülecek.
+- Bilinen sınırlar Handoff'ta: izin yokken bırakılamaz (izin dönünce telafi), SIGKILL/çökme (Faz 4), işaretçi düğmesi watchdog'u yok (Faz 3).
