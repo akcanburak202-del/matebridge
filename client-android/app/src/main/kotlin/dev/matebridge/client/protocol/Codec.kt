@@ -175,6 +175,7 @@ object Codec {
                 w.u8(msg.colorPrimaries); w.u8(msg.transfer); w.u8(msg.matrix); w.u8(msg.fullRange)
             }
             is Bye -> w.u8(msg.reason)
+            is StreamPrefs -> { w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(0) }
             is Pen -> {
                 require(msg.tool == Pen.TOOL_PEN || msg.tool == Pen.TOOL_ERASER) { "invalid tool" }
                 require(msg.samples.size in 1..Limits.PEN_MAX_SAMPLES) { "sample count must be 1..64" }
@@ -281,6 +282,7 @@ object Codec {
                 )
             }
             MsgType.BYE -> Bye(r.u8())
+            MsgType.STREAM_PREFS -> { val fps = r.u16(); val pm = r.u16(); r.skip(4); StreamPrefs(fps, pm) }
             MsgType.PEN -> decodePen(r)
             MsgType.KEY -> {
                 val time = r.u64(); val scan = r.u16(); val code = r.u16()

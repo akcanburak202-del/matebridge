@@ -17,7 +17,7 @@ class KeyFrame(
 )
 
 /** A Ctrl+Shift+key chord handled on the tablet only (T-033, T-035); never reaches the Mac. */
-enum class LocalAction { NONE, STATS, SPEED_DOWN, SPEED_UP, BACKGROUND }
+enum class LocalAction { NONE, STATS, SPEED_DOWN, SPEED_UP, BACKGROUND, STREAM_MODE }
 
 /** What the activity does with the event: [consumed] keeps it from Android; [local] is a tablet-only chord to perform. */
 class KeyDecision(val consumed: Boolean, val local: LocalAction = LocalAction.NONE, val out: List<Outgoing> = emptyList()) {
@@ -35,7 +35,7 @@ class KeyTracker {
 
     private val held = LinkedHashMap<Pair<Int, Int>, Held>()
 
-    /** Local chord presses (Ctrl+Shift+F1/F2/F3/Esc): their duplicate DOWNs and their UP stay local until UP, detach or reset. */
+    /** Local chord presses (Ctrl+Shift+F1/F2/F3/7/Esc): their duplicate DOWNs and their UP stay local until UP, detach or reset. */
     private val localOnly = HashSet<Pair<Int, Int>>()
     private var lastCaps = false
 
@@ -110,6 +110,7 @@ class KeyTracker {
         private const val SCAN_F2 = 60
         private const val SCAN_F3 = 61
         // Number row by physical position (evdev): 8, 9, 0 mirror F3, F1, F2 for keyboards without F keys (T-038).
+        private const val SCAN_7 = 8 // Ctrl+Shift+7 cycles the display mode (T-050)
         private const val SCAN_8 = 9
         private const val SCAN_9 = 10
         private const val SCAN_0 = 11
@@ -134,6 +135,7 @@ class KeyTracker {
                 f.keyCode == KEYCODE_F1 || f.scanCode == SCAN_F1 || f.scanCode == SCAN_9 -> LocalAction.SPEED_DOWN
                 f.keyCode == KEYCODE_F2 || f.scanCode == SCAN_F2 || f.scanCode == SCAN_0 -> LocalAction.SPEED_UP
                 f.keyCode == KEYCODE_F3 || f.scanCode == SCAN_F3 || f.scanCode == SCAN_8 -> LocalAction.STATS
+                f.scanCode == SCAN_7 -> LocalAction.STREAM_MODE
                 f.keyCode == KEYCODE_ESCAPE || (f.scanCode == SCAN_ESC && f.keyCode == KEYCODE_BACK) -> LocalAction.BACKGROUND
                 else -> LocalAction.NONE
             }

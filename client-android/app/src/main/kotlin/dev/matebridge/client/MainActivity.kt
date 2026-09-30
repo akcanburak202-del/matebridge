@@ -57,6 +57,8 @@ import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
+import dev.matebridge.client.stream.StreamMode
+import dev.matebridge.client.stream.VideoLayout
 import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.GlPresenter
 import dev.matebridge.client.video.PresentStats
@@ -89,6 +91,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var endpointField: EditText
     private lateinit var settings: Settings
     private lateinit var controller: SessionController
+    private var streamMode = StreamMode.DEFAULT
+    private var modeButton: Button? = null
     private var discovery: MacDiscovery? = null
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
@@ -219,6 +223,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             },
             AndroidKeystoreWrapper(),
         )
+        streamMode = settings.streamMode()
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
@@ -236,7 +241,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
             }
-        })
+        }, streamMode)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)
@@ -277,6 +282,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.setOnCapturedPointerListener(capturedPointerListener)
         }
         addFingerToggle()
+        addModeButton()
         addShortcutHint()
         applyImmersive()
         render(SessionUi.Searching)
@@ -427,6 +433,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 LocalAction.SPEED_UP -> adjustPointerSpeed(SpeedRange.STEP_UP)
                 // onPause sends RELEASE_ALL(BACKGROUND) (Ctrl/Shift held on the Mac are released) and capture is dropped.
                 LocalAction.BACKGROUND -> moveTaskToBack(true)
+                LocalAction.STREAM_MODE -> cycleStreamMode()
                 LocalAction.NONE -> {}
             }
             if (d.consumed) return true
@@ -473,6 +480,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         p.addView(b, lp)
     }
 
+    /** T-050: connect-panel button that cycles the display mode (click), persisted in [Settings]. */
+    private fun addModeButton() {
+        val p = panel as? LinearLayout ?: return
+        val b = Button(this)
+        b.text = streamMode.buttonText()
+        b.setOnClickListener { cycleStreamMode(toast = false) }
+        modeButton = b
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(b, lp)
+    }
+
+    /** Next display mode: persist, tell the host (STREAM_PREFS), refresh the button; Toast for the shortcut. */
+    private fun cycleStreamMode(toast: Boolean = true) {
+        streamMode = streamMode.next()
+        settings.setStreamMode(streamMode)
+        controller.setStreamMode(streamMode)
+        modeButton?.text = streamMode.buttonText()
+        if (toast) Toast.makeText(this, streamMode.toastText(), Toast.LENGTH_SHORT).show()
+    }
+
     private fun applyPointerSpeeds() = capture.setPointerSpeeds(settings.touchpadSpeed(), settings.mouseSpeed())
 
     private fun adjustPointerSpeed(factor: Float) {
@@ -486,7 +514,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun addShortcutHint() {
         val p = panel as? LinearLayout ?: return
         val t = TextView(this)
-        t.text = "Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · Ctrl+Shift+8: istatistik"
+        t.text = "Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
         val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         lp.topMargin = (8 * resources.displayMetrics.density).toInt()
         p.addView(t, lp)
@@ -683,7 +711,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Fits the SurfaceView to the stream aspect so the surface equals the video area (letterbox = black bands). */
     private fun layoutVideo() {
         val c = streamConfig
-        val vp = if (c == null) VideoViewport(0, 0, 0, 0) else VideoViewport(root.width, root.height, c.widthPx, c.heightPx)
+        val vp = if (c == null) VideoViewport(0, 0, 0, 0) else VideoLayout.aspectSize(c).let { (aw, ah) -> VideoViewport(root.width, root.height, aw, ah) }
         val w = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.width)
         val h = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.height)
         val lp = videoView.layoutParams as FrameLayout.LayoutParams
@@ -721,7 +749,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val ep = currentEndpoint
             val tr = if (ep != null) ConnectMode.transportOf(ep) else transport
-            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) + "\n" + withGl
+            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) + "\n" +
+                StreamMode.overlayLine(streamMode, streamConfig) + "\n" + withGl
         }
         if (gl != null) {
             MbLog.i(

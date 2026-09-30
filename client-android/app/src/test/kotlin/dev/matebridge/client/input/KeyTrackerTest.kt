@@ -227,6 +227,18 @@ class KeyTrackerTest {
         assertTrue(keys().isEmpty())
     }
 
+    @Test fun ctrlShift7IsTheLocalDisplayModeChordAndNeverSent() {
+        val d = key(8, code = 14, ctrl = true, shift = true)
+        assertTrue(d.consumed); assertEquals(LocalAction.STREAM_MODE, d.local)
+        assertEquals(LocalAction.NONE, key(8, code = 14, repeat = 1, ctrl = true, shift = true).local)
+        assertTrue(key(8, code = 14, down = false).consumed)
+        assertTrue(keys().isEmpty())
+        // without both modifiers the 7 is an ordinary Mac key
+        assertEquals(LocalAction.NONE, key(8, code = 14, ctrl = true).local)
+        assertEquals(1, keys().size) // the DOWN went to the Mac
+        assertEquals(LocalAction.NONE, key(8, code = 14, shift = true).local) // already held: duplicate dropped
+    }
+
     @Test fun digitsAloneOrWithOnlyCtrlGoToTheMac() {
         assertEquals(LocalAction.NONE, key(10, code = 16).local)
         assertEquals(LocalAction.NONE, key(11, code = 7, ctrl = true).local)

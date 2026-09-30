@@ -59,6 +59,7 @@ class FixtureTest {
             "hello_ack_busy" to HelloAck(1, HelloAck.BUSY, 0, 0, "", HelloAck.KEY_NONE, zeros16, zeros16, zeros65),
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
             "bye" to Bye(Bye.NORMAL),
+            "stream_prefs" to StreamPrefs(120, 750),
             "pen_hover_to_contact" to Pen(
                 Pen.TOOL_PEN, 1127411618000L,
                 listOf(

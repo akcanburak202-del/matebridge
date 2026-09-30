@@ -7,6 +7,8 @@ import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.StreamConfig
+import dev.matebridge.client.protocol.StreamPrefs
+import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoHello
 import dev.matebridge.client.session.SessionMachine.Action
 import dev.matebridge.client.session.SessionMachine.Event
@@ -108,12 +110,60 @@ class SessionMachineTest {
         val pend = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
         assertFalse(pend.has<Action.Send>())
         val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
-        assertTrue(acc.only<Action.Send>().msg is Ping)
+        assertEquals(listOf(true, false), acc.filterIsInstance<Action.Send>().map { it.msg is Ping })
         // direct ACCEPTED (PAIRED) also proves the key at once
         val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen2))
         val acc2 = step(Event.Received(gen2, ack(HelloAck.ACCEPTED, 6, 7421)))
-        assertTrue(acc2.only<Action.Send>().msg is Ping)
+        assertTrue(acc2.filterIsInstance<Action.Send>().first().msg is Ping)
+    }
+
+    private fun sends(a: List<Action>) = a.filterIsInstance<Action.Send>().map { it.msg }
+
+    @Test fun acceptedSendsStreamPrefsRightAfterTheProofPing() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
+        val s = sends(acc)
+        assertEquals(2, s.size)
+        assertTrue(s[0] is Ping)
+        assertEquals(StreamMode.DEFAULT.toPrefs(), s[1])
+        assertEquals(StreamPrefs(120, 1000), s[1])
+    }
+
+    @Test fun initialModeIsUsedAndResentOnEveryConnection() {
+        val mm = SessionMachine(hello, StreamMode.PERFORMANCE_144.toPrefs())
+        for (i in 1..2) {
+            val gen = mm.handle(Event.Start(ep), now).filterIsInstance<Action.OpenControl>().single().gen
+            mm.handle(Event.ControlOpened(gen), now)
+            val acc = mm.handle(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)), now)
+            assertEquals(StreamPrefs(144, 750), acc.filterIsInstance<Action.Send>().last().msg)
+        }
+    }
+
+    @Test fun setPrefsSendsWhenAcceptedAndRemembersOtherwise() {
+        // not connected: nothing goes out, the value is remembered for the next ACCEPTED
+        assertTrue(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs())).isEmpty())
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        // awaiting approval: still nothing
+        assertTrue(step(Event.SetPrefs(StreamMode.CLARITY.toPrefs())).isEmpty())
+        val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
+        assertEquals(StreamPrefs(60, 1000), sends(acc).last())
+        // accepted: sent at once; the same value again sends nothing
+        assertEquals(listOf<Any>(StreamPrefs(120, 750)), sends(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs()))))
+        assertTrue(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs())).isEmpty())
+        // streaming state too
+        step(Event.Received(gen, cfg(1)))
+        assertEquals(listOf<Any>(StreamPrefs(144, 750)), sends(step(Event.SetPrefs(StreamMode.PERFORMANCE_144.toPrefs()))))
+    }
+
+    @Test fun smallerStreamConfigIsAppliedLikeAnyOther() {
+        val gen = connectAccepted()
+        val small = StreamConfig(2, 2, 2100, 1380, 1400, 920, 120, 20000, 1, 1, 1, 1)
+        val r = step(Event.Received(gen, small))
+        assertEquals(small, r.only<Action.ApplyConfig>().config)
+        assertTrue(r.has<Action.OpenVideo>())
     }
 
     @Test fun keyStoreFailureFailsTheSessionWithoutRetry() {
