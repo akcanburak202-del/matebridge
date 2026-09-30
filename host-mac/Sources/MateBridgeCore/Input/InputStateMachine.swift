@@ -8,6 +8,7 @@
 //   `tick(now:)` (watchdogs), and every release-all trigger of PROTOCOL.md section 7 calls `releaseAll(_:)`.
 //   `releaseAll` is idempotent and safe to call at any time, including on a fresh machine (it then only sets the
 //   pen latch, which a consumer that wants to start "latched" can use).
+// - A value type with no locking: mutate it from one queue or actor only (the session queue).
 // - Keyboard (`KEY`) is not handled yet (phase 3). `handle` returns no actions for it. When keys arrive they must join
 //   the same `releaseAll`.
 //
@@ -99,6 +100,20 @@ public struct InputStateMachine: Sendable {
         if activePen != nil { return true }
         guard let last = lastPenSampleAt else { return false }
         return Self.elapsed(since: last, now: now) < configuration.touchGateHoldUs
+    }
+
+    /// The earliest `now` at which `tick(now:)` would produce actions (pen or scroll watchdog), or nil when neither
+    /// is armed. Lets the consumer sleep until then instead of polling.
+    public var nextDeadline: UInt64? {
+        var earliest: UInt64?
+        if activePen != nil {
+            earliest = (lastPenSampleAt ?? 0) &+ configuration.penWatchdogUs
+        }
+        if scrollOpen {
+            let due = lastScrollAt &+ configuration.scrollWatchdogUs
+            earliest = earliest.map { Swift.min($0, due) } ?? due
+        }
+        return earliest
     }
 
     // MARK: Events

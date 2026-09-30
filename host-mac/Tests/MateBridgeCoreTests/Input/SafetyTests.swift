@@ -95,6 +95,26 @@ struct WatchdogTests {
         ])
     }
 
+    @Test("WD-5 nextDeadline is the earliest armed watchdog and tick fires exactly there")
+    func wd5_nextDeadline() {
+        var d = Driver()
+        #expect(d.machine.nextDeadline == nil)
+        d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
+        let penDue = d.now + 500_000
+        #expect(d.machine.nextDeadline == penDue)
+        d.send(scrollMsg(.began), after: 100 * msec)
+        #expect(d.machine.nextDeadline == penDue)          // pen fires first
+        d.send(penMsg(.pen, penSample(1, 1, []), penSample(1, 1, [])), after: 10 * msec)  // pen leaves
+        #expect(d.machine.nextDeadline == d.now - 10 * msec + 500_000)  // scroll timer
+        let due = d.machine.nextDeadline!
+        d.now = due - 1
+        #expect(d.machine.tick(now: d.now).isEmpty)
+        #expect(d.machine.tick(now: due) == [.scroll(.cancelled, dx: 0, dy: 0)])
+        #expect(d.machine.nextDeadline == nil)
+        d.release()
+        #expect(d.machine.nextDeadline == nil)
+    }
+
     @Test("WD-4 a clock that goes backwards never fires or crashes")
     func wd4_backwardsClock() {
         var m = InputStateMachine()
