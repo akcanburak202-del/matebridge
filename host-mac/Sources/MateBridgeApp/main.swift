@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         handlers.approvalCancelled = { [weak self] id in
             Task { @MainActor in self?.cancelApproval(id) }
         }
+        handlers.approvalOrphaned = { [weak self] id in
+            Task { @MainActor in self?.markApprovalDisconnected(id) }
+        }
         // Video: session events drive the display/encoder/sender (T-014). Input (T-023): the same events drive the
         // injector, every input message goes to it, and every release-all trigger reaches `releaseInput`.
         let coordinator = self.coordinator
@@ -230,6 +233,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         approvalPanel = panel
         panel.show()
         log("approval_shown", "conn=\(request.id)")
+    }
+
+    private func markApprovalDisconnected(_ id: UInt64) {
+        guard let panel = approvalPanel, panel.requestID == id else { return }
+        panel.markDisconnected()
+        log("approval_disconnected", "conn=\(id)")
     }
 
     private func cancelApproval(_ id: UInt64) {

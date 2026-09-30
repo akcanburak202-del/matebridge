@@ -233,6 +233,61 @@ private final class BlockingStore: PairKeyStore, @unchecked Sendable {
         #expect(saved.get() && looked.get() == pairKey)  // the fresh key survived
     }
 
+    @Test func compareAndDeleteKeepsANewerKeyOfTheSameDevice() {
+        let store = InMemoryPairKeyStore()
+        let service = PairKeyService(store: store)
+        let old = SecretBytes([UInt8](repeating: 0x11, count: 32))
+        let newer = SecretBytes([UInt8](repeating: 0x22, count: 32))
+        let done = Atomic<Bool>(false)
+        // An abandoned pairing saved `old`; another pairing of the same device saved `newer` before the cleanup ran.
+        service.save(old, for: device(1)) { _ in }
+        service.save(newer, for: device(1)) { _ in }
+        service.remove(device(1), ifEquals: old) { _ in done.set(true) }
+        let ok = wait { done.get() }
+        #expect(ok)
+        #expect(store.key(for: device(1)) == newer)
+        // The cleanup still removes the key it stored itself.
+        let again = Atomic<Bool>(false)
+        service.remove(device(1), ifEquals: newer) { _ in again.set(true) }
+        let ok2 = wait { again.get() }
+        #expect(ok2)
+        #expect(store.key(for: device(1)) == nil)
+    }
+
+    @Test func lookupsAreBoundedAndTheOverflowIsRefused() {
+        let store = BlockingStore()  // the first lookup blocks inside the store
+        let service = PairKeyService(store: store)
+        let answered = Atomic<Int>(0)
+        var accepted = 0
+        for _ in 0..<(PairKeyService.maxPendingLookups + 4) {
+            if service.lookup(device(1), completion: { _ in answered.set(answered.get() + 1) }) { accepted += 1 }
+        }
+        #expect(accepted == PairKeyService.maxPendingLookups)
+        store.release()
+        let ok = wait { answered.get() == PairKeyService.maxPendingLookups }
+        #expect(ok)
+        // Room again once they drained.
+        let more = service.lookup(device(1)) { _ in }
+        #expect(more)
+    }
+
+    @Test func staleLookupsAreSkippedWithoutTouchingTheStore() {
+        let store = BlockingStore()
+        let service = PairKeyService(store: store)
+        let flag = Atomic<Bool>(true)
+        let answers = Atomic<[String]>([])
+        service.lookup(device(1), completion: { _ in answers.set(answers.get() + ["first"]) })  // blocks in the store
+        service.lookup(device(2), isCurrent: { flag.get() }, completion: { _ in answers.set(answers.get() + ["stale"]) })
+        service.lookup(device(3), isCurrent: { true }, completion: { _ in answers.set(answers.get() + ["live"]) })
+        let started = wait { store.order == ["lookup"] }
+        #expect(started)
+        flag.set(false)  // the second connection closed while it waited
+        store.release()
+        let ok = wait { answers.get() == ["first", "live"] }
+        #expect(ok)
+        #expect(store.order == ["lookup", "lookup"])  // the stale one never reached the store
+    }
+
     @Test func aSaveCompletionMeansTheKeyIsStored() {
         let store = InMemoryPairKeyStore()
         let service = PairKeyService(store: store)

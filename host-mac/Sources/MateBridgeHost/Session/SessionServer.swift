@@ -107,6 +107,8 @@ public final class SessionServer: @unchecked Sendable {
         public var approvalRequested: @Sendable (ApprovalRequest) -> Void = { _ in }
         /// The request with this id is void (connection gone or superseded).
         public var approvalCancelled: @Sendable (_ id: UInt64) -> Void = { _ in }
+        /// The tablet of this request left; keep the window open and say so ("Allow" then pre-approves the device).
+        public var approvalOrphaned: @Sendable (_ id: UInt64) -> Void = { _ in }
         /// Input, STATS and KEYFRAME_REQUEST from the approved session.
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
@@ -142,6 +144,8 @@ public final class SessionServer: @unchecked Sendable {
     private var sealers: [ConnectionID: RecordSealer] = [:]
     private var videoConnections: [ConnectionID: NWConnection] = [:]
     private var pendingApproval: ConnectionID?
+    /// Control connections whose pair-key lookup is in flight; read from the Keychain queue to skip stale jobs.
+    private let liveLookups = LockedSet<ConnectionID>()
     private var tickTimer: DispatchSourceTimer?
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
@@ -607,6 +611,7 @@ public final class SessionServer: @unchecked Sendable {
             videoProofDecoders[id] = nil
             apply(machine.videoClosed(id))
         } else {
+            liveLookups.remove(id)
             guard let c = controlConnections.removeValue(forKey: id) else { return }
             c.cancel()
             inflightBytes[id] = nil
@@ -621,6 +626,7 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     private func closeControl(_ id: ConnectionID) {
+        liveLookups.remove(id)
         guard let c = controlConnections.removeValue(forKey: id) else { return }
         inflightBytes[id] = nil
         inbounds[id] = nil
@@ -707,6 +713,8 @@ public final class SessionServer: @unchecked Sendable {
             case .requestApproval(let id, _, let name, let code):
                 pendingApproval = id
                 handlers.approvalRequested(ApprovalRequest(id: id.raw, deviceName: name, code: code.digits))
+            case .approvalOrphaned(let id):
+                handlers.approvalOrphaned(id.raw)  // pendingApproval stays: the window's answer is still valid
             case .cancelApproval(let id):
                 if pendingApproval == id {
                     pendingApproval = nil
@@ -715,17 +723,30 @@ public final class SessionServer: @unchecked Sendable {
             case .lookupPairKey(let conn, let device):
                 // Off the session queue: the Keychain may block. The connection sends nothing until it answers
                 // (the machine closes it after 5 s).
-                pairKeys.lookup(device) { [weak self] key in
+                let deadline = nowUs() + machine.configuration.lookupTimeoutUs
+                liveLookups.insert(conn)
+                let accepted = pairKeys.lookup(device, isCurrent: { [liveLookups] in
+                    liveLookups.contains(conn) && HostClock.nowUs() < deadline
+                }) { [weak self] key in
                     self?.queue.async { [weak self] in
                         guard let self, !stopped else { return }
+                        liveLookups.remove(conn)
                         apply(machine.pairKeyResolved(conn, key: key, now: nowUs()))
                     }
+                }
+                if !accepted {
+                    // Too many lookups stuck behind the Keychain: drop this connection (it has been sent nothing).
+                    logger.log(.warning, "pair_key_lookup_overloaded", sessionID: currentSessionID,
+                               generation: currentConfigID, fields: "conn=\(conn.raw)")
+                    liveLookups.remove(conn)
+                    closeControl(conn)
+                    apply(machine.connectionClosed(conn))
                 }
             case .persistPairing(let conn, let device, let name, let key):
                 // Key first (Keychain queue), then the device list; ACCEPTED goes out only when both are stored.
                 pairKeys.save(key, for: device) { [weak self] saved in
                     self?.queue.async { [weak self] in
-                        self?.finishPairing(conn, device: device, name: name, keySaved: saved)
+                        self?.finishPairing(conn, device: device, name: name, key: key, keySaved: saved)
                     }
                 }
             case .sessionStarted(let id, let sid, let configID, let hello):
@@ -755,10 +776,11 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Session queue: the Keychain save finished.
-    private func finishPairing(_ conn: ConnectionID, device: DeviceID, name: String, keySaved: Bool) {
+    private func finishPairing(_ conn: ConnectionID, device: DeviceID, name: String, key: SecretBytes, keySaved: Bool) {
         guard machine.isPendingApproval(conn) else {
-            // The connection ended meanwhile (e.g. "forget" ended it): nobody will use this key.
-            if keySaved { pairKeys.remove(device) }
+            // The connection ended meanwhile (e.g. "forget" ended it): nobody will use this key. Compare-and-delete:
+            // a newer key saved for the same device meanwhile must survive.
+            if keySaved { pairKeys.remove(device, ifEquals: key) }
             return
         }
         var stored = keySaved
@@ -767,7 +789,7 @@ public final class SessionServer: @unchecked Sendable {
             do { try store.save(knownDevices) } catch {
                 stored = false
                 knownDevices[device] = nil
-                pairKeys.remove(device)
+                pairKeys.remove(device, ifEquals: key)
                 logger.log(.error, "store_save_failed", sessionID: currentSessionID, generation: currentConfigID)
             }
         } else {
@@ -819,4 +841,13 @@ public final class SessionServer: @unchecked Sendable {
 
 extension VideoLink: VideoTransport {
     public func setReadyHandler(_ handler: (@Sendable () -> Void)?) { onReady = handler }
+}
+
+/// Small lock-protected set, readable from the Keychain queue.
+private final class LockedSet<Element: Hashable & Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: Set<Element> = []
+    func insert(_ e: Element) { lock.withLock { _ = items.insert(e) } }
+    func remove(_ e: Element) { lock.withLock { _ = items.remove(e) } }
+    func contains(_ e: Element) -> Bool { lock.withLock { items.contains(e) } }
 }
