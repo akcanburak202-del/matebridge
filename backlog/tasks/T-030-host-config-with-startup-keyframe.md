@@ -1,7 +1,7 @@
 ---
 id: T-030
 title: Mac — STARTUP/DECODE_ERROR keyframe isteğinde CODEC_CONFIG'i yeniden gönder (hızlı yeniden bağlanmada siyah ekran)
-status: todo
+status: review
 phase: 2
 owner: mac-host-dev
 depends_on: [T-014]
@@ -53,8 +53,9 @@ Yeni ekranda sorun yok, çünkü kodlayıcı yeni ve ilk karesi tabletin reset'i
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** b403cfe (dal `task/T-030-host-config-with-startup-keyframe`; plan commit'i fabe2c9; kart durumu sonraki commit'te)
+- **Dokunulan dosyalar:** `MateBridgeCore/Video/KeyframeResync.swift` (yeni: `KeyframeReason.resendsCodecConfig`), `BoundedFrameQueue.swift` (`resync(config:)`, aynı config'in çift push'unu yutma), `VideoFrameQueue.swift` (`resync(config:)`, bekleyen tüketiciye anında teslim), `MateBridgeHost/Video/VideoPipeline.swift` (`requestKeyframe(reason:)`), `Session/StreamCoordinator.swift` (sebebi iletir, `ev=codec_config_resent reason=<n>` loglar, component `net`), `Tests/MateBridgeCoreTests/Video/KeyframeResyncTests.swift`.
+- **Sıra garantisi:** `VideoPipeline.requestKeyframe(reason:)` önce `frames.resync(config:)` (kuyruk kilit altında sıfırlanır: yalnızca `[config]`, `awaitingKeyframe = true`), sonra `encoder.requestKeyframe(resubmitNow: true)` çağırır. Keyframe ancak `forceKeyframe` bayrağı kurulunca üretilir, bayrak kuyruk sıfırlandıktan sonra kurulur; dolayısıyla o keyframe her zaman config'in arkasından push'lanır. Sıfırlamadan önce kodlanmış eski delta kareler `awaitingKeyframe` ile reddedilir (kabul kriterindeki "arada eski delta gidebilir" ifadesinden daha sıkı: hiç gitmezler). Kuyrukta bekleyen tüketici varsa config hemen ona verilir.
+- **Varsayımlar:** Bilinmeyen sebep DECODE_ERROR gibi (config gönderilir). Parametre seti yoksa yalnızca keyframe isteği (eski davranış), log yok. Sender'ın reddedilen-kare yolundaki parametresiz `requestKeyframe()` değişmedi. Aynı içerikli iki `CODEC_CONFIG` kuyrukta tek kalır; farklı içerikli config'ler (kodlayıcı yeniden ayarı) birbirini silmez.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `HEVCEncoder`/`VideoPipeline`/`StreamCoordinator` yalnızca derlendi (donanım gerektirir). `check.sh` geçti. Cihazda: `am force-stop` + 2 sn + `am start` beş kez; her seferinde host log'unda `keyframe_request reason=0` ardından `codec_config_resent reason=0`, tablet log'unda `output_format` ve `dec>0`. Ayrıca yeni ekranda (display_reused değil) regresyon olmadığı ve akış ortasında FRAMES_DROPPED sonrası config gelmediği.
+- **Açık sorular:** Yok.
