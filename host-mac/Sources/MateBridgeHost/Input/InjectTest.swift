@@ -33,11 +33,11 @@ public enum InjectTest {
                              [--repeat N] [--countdown S] [--create-display] [--fixtures-dir DIR]
         """
 
-    /// nil when `--inject-test` is absent.
+    /// nil when `--inject-test` is absent. Any argument it does not know, or a stray value, is an error.
     public static func parse(_ args: [String]) -> Result<Options, ParseError>? {
         guard args.contains("--inject-test") else { return nil }
         var o = Options()
-        var i = 0
+        var i = 1  // argv[0] is the executable
         func fail(_ text: String) -> Result<Options, ParseError> { .failure(ParseError(message: text + "\n" + usage)) }
         while i < args.count {
             let flag = args[i]
@@ -58,11 +58,14 @@ public enum InjectTest {
             case "--countdown":
                 guard let v = value(), let s = Double(v), (0...60).contains(s) else { return fail("--countdown needs 0...60 seconds") }
                 o.countdown = s; i += 1
+            case "--inject-test": break
             case "--create-display": o.createDisplay = true
             case "--fixtures-dir":
                 guard let v = value() else { return fail("--fixtures-dir needs a directory") }
                 o.fixturesDirectory = v; i += 1
-            default: break
+            default:
+                // A typo must not silently inject something else, or nothing at all: this posts real input.
+                return fail("unknown argument \(flag)")
             }
             i += 1
         }

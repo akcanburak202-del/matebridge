@@ -26,7 +26,7 @@ public final class InputController: @unchecked Sendable {
         public var displayPresent: Bool
     }
 
-    private let queue = DispatchQueue(label: "dev.matebridge.input")
+    private let queue: DispatchQueue
     private let poster: MacEventPoster
     private let permission: AccessibilityChecking
     private let displays: DisplayProviding
@@ -34,8 +34,11 @@ public final class InputController: @unchecked Sendable {
 
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
-    private var watchdogTimer: DispatchSourceTimer?
-    private var pollTimer: DispatchSourceTimer?
+    /// Both timers exist from `init` on, so a message that arrives before `start()` still has its watchdog.
+    private let watchdogTimer: DispatchSourceTimer
+    private let pollTimer: DispatchSourceTimer
+    /// Held while a session is connected so App Nap cannot stretch the 500 ms watchdog timers.
+    private var activity: NSObjectProtocol?
     private var onStatusChange: (@Sendable (Status) -> Void)?
     private var lastStatus: Status?
     private var trustedCache: (value: Bool, at: UInt64)?
@@ -58,27 +61,33 @@ public final class InputController: @unchecked Sendable {
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
+        let queue = DispatchQueue(label: "dev.matebridge.input")
+        self.queue = queue
+        watchdogTimer = DispatchSource.makeTimerSource(queue: queue)
+        pollTimer = DispatchSource.makeTimerSource(queue: queue)
+        watchdogTimer.setEventHandler { [weak self] in self?.watchdogFired() }
+        watchdogTimer.schedule(deadline: .distantFuture)
+        watchdogTimer.resume()
+        pollTimer.setEventHandler { [weak self] in self?.poll() }
+        pollTimer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
+        pollTimer.resume()
+    }
+
+    deinit {
+        watchdogTimer.cancel()
+        pollTimer.cancel()
     }
 
     // MARK: Lifecycle
 
-    /// Starts the 1 s gate poll and reports the first status. `onStatusChange` runs on the input queue; hop to the main
-    /// actor yourself. Call once, before the first session.
+    /// Reports the first status and every change after it. `onStatusChange` runs on the input queue; hop to the main
+    /// actor yourself. Call once. The watchdog and the 1 s gate poll do not wait for it: they run from `init`.
     public func start(onStatusChange: @escaping @Sendable (Status) -> Void) {
         queue.sync {
             guard !started, !stopped else { return }
             started = true
             self.onStatusChange = onStatusChange
-            let watchdog = DispatchSource.makeTimerSource(queue: queue)
-            watchdog.setEventHandler { [weak self] in self?.watchdogFired() }
-            watchdog.schedule(deadline: .distantFuture)
-            watchdog.resume()
-            watchdogTimer = watchdog
-            let poll = DispatchSource.makeTimerSource(queue: queue)
-            poll.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
-            poll.setEventHandler { [weak self] in self?.poll() }
-            poll.resume()
-            pollTimer = poll
+            lastStatus = nil  // a poll that ran before start() must not swallow the first report
             _ = environment()  // reports the first status
         }
     }
@@ -102,6 +111,7 @@ public final class InputController: @unchecked Sendable {
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
+            beginActivity()
             let now = HostClock.nowUs()
             flush(pipeline.sessionStarted(now: now, environment: environment()), now: now)
             log(.info, "input_session_start")
@@ -123,6 +133,7 @@ public final class InputController: @unchecked Sendable {
             loggedDrops = d
             sessionID = 0
             configID = 0
+            endActivity()
             rearmWatchdog()
         }
     }
@@ -162,10 +173,9 @@ public final class InputController: @unchecked Sendable {
             flush(events, now: now)
             log(.info, "input_shutdown", "released=\(events.count) owed=\(pipeline.owed.count)")
             stopped = true
-            watchdogTimer?.cancel()
-            pollTimer?.cancel()
-            watchdogTimer = nil
-            pollTimer = nil
+            endActivity()
+            watchdogTimer.cancel()
+            pollTimer.cancel()
         }
     }
 
@@ -233,14 +243,27 @@ public final class InputController: @unchecked Sendable {
     /// Re-arms the one-shot watchdog timer for `nextDeadline(now:)`. Called after every entry point that can change
     /// the machine, so an armed watchdog always has a timer.
     private func rearmWatchdog() {
-        guard !stopped, let timer = watchdogTimer else { return }
+        guard !stopped else { return }
         let now = HostClock.nowUs()
         guard let due = pipeline.nextDeadline(now: now) else {
-            timer.schedule(deadline: .distantFuture)
+            watchdogTimer.schedule(deadline: .distantFuture)
             return
         }
         let delayUs = due > now ? min(due - now, 3_600_000_000) : 0
-        timer.schedule(deadline: .now() + .microseconds(Int(delayUs)), leeway: .milliseconds(1))
+        watchdogTimer.schedule(deadline: .now() + .microseconds(Int(delayUs)), leeway: .milliseconds(1))
+    }
+
+    /// Keeps App Nap from stretching the watchdog timers while a session is connected. The reason string is shown in
+    /// Activity Monitor's energy tab; it contains nothing about the session.
+    private func beginActivity() {
+        endActivity()
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical],
+                                                         reason: "MateBridge input session")
+    }
+
+    private func endActivity() {
+        if let a = activity { ProcessInfo.processInfo.endActivity(a) }
+        activity = nil
     }
 
     private func watchdogFired() {
