@@ -18,9 +18,10 @@ PLAN Aşama 2 "Bitti" ölçütünü kullanıcıyla doğrulamak.
 ## Kabul kriterleri
 
 - [ ] Krita: basınçla kalınlaşan/incelen fırça, eğim (fırça destekliyorsa), hover imleci, silgi (M-Pencil'de varsa), çift dokunma eylemi.
-  - Basınç ve hover imleci: **çalışıyor** (kullanıcı, 2026-09-30). Eğim: denenmedi. Çift dokunma: Krita'da fırça değişmiyordu → T-027/T-031 ile düzeldi, **çalışıyor** (kullanıcı, 2026-09-30). Eğim değerleri Krita'ya ulaşıyor (tablet günlüğü xTilt/yTilt ≈ 12–29); fırçada etkisi kullanıcıyla denenmedi.
+  - Basınç ve hover imleci: **çalışıyor** (kullanıcı, 2026-09-30). Eğim: denenmedi. Çift dokunma: Krita'da fırça değişmiyordu → T-027/T-031 ile düzeldi, **çalışıyor** (kullanıcı, 2026-09-30). Eğim değerleri Krita'ya ulaşıyor (tablet günlüğü xTilt/yTilt ≈ 12–29); fırçada etkisi: **çalışıyor** (kullanıcı, "Pencil-5 Tilted").
 - [ ] 15 dakikalık serbest çizim: kopuk çizgi yok, takılı kalan tık yok. Arada Wi-Fi kesme / uygulamayı arka plana alma / kablo çekme denemeleri → Mac'te hiçbir düğme basılı kalmaz.
-  - **Denenmedi.** Arka plana alma oturumlar arasında birkaç kez oldu, basılı kalan görülmedi (`released=0`), ama çizim ortasında bilinçli deneme yapılmadı.
+  - Geçenler: kablo çekme, Home, bildirim paneli (ikinci oturum), **force-stop** (2026-09-30 20:47, host `pen_up=1 pen_leave=1`). Kalan: Wi-Fi kesme, 15 dakikalık çizim.
+  - (Eski not) Arka plana alma oturumlar arasında birkaç kez oldu, basılı kalan görülmedi (`released=0`), ama çizim ortasında bilinçli deneme yapılmadı.
 - [ ] Avuç reddi: kalemle çizerken avuç ekrana değince çizgi bozulmaz.
   - **Çalışıyor** (kullanıcı): el yaslıyken ve çizerken kaldırılınca çizgi kesilmedi.
 - [ ] Dokunma: tek dokunuş tık, sürükleme, iki parmak kaydırma.
