@@ -89,6 +89,8 @@ enum CGEventFactory {
         e.setIntegerValueField(.tabletProximityEventDeviceID, value: deviceID)
         e.setIntegerValueField(.tabletProximityEventSystemTabletID, value: systemTabletID)
         e.setIntegerValueField(.tabletProximityEventPointerType, value: pointerType(tool))
+        e.setIntegerValueField(.tabletProximityEventVendorPointerType, value: TabletIdentity.vendorPointerType(tool))
+        e.setIntegerValueField(.tabletProximityEventVendorUniqueID, value: TabletIdentity.vendorUniqueID)
         e.setIntegerValueField(.tabletProximityEventCapabilityMask, value: capabilityMask)
         e.setIntegerValueField(.tabletProximityEventEnterProximity, value: entering ? 1 : 0)
         return e
