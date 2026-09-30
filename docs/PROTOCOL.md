@@ -78,6 +78,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x02 | HELLO_ACK | H→C | kontrol | `hello_ack`, `hello_ack_pending`, `hello_ack_busy` |
 | 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config` |
 | 0x04 | BYE | iki yön | kontrol | `bye` |
+| 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -137,7 +138,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | config_id | u16 | Her yeni ayarda artar (1'den başlar) |
 | codec | u8 | `1` H.264, `2` HEVC |
 | reserved | u8 | |
-| width_px | u16 | Kodlanan görüntü = sanal ekranın piksel boyutu |
+| width_px | u16 | Kodlanan görüntünün piksel boyutu. Varsayılan = sanal ekranın piksel boyutu; `STREAM_PREFS.scale_permille < 1000` ise daha küçük (en-boy oranı korunur, çift sayıya yuvarlanır). İstemci çözülen görüntüyü video yüzeyine ölçekler; koordinatlar normalize olduğu için girdi etkilenmez. |
 | height_px | u16 | |
 | width_pt | u16 | Sanal ekranın Mac nokta boyutu (HiDPI'da piksel/2). İstemci göreli hareket ve kaydırmayı bununla ölçekler. |
 | height_pt | u16 | |
@@ -155,6 +156,21 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | reason | u8 | `0` NORMAL, `1` PROTOCOL_ERROR, `2` REJECTED, `3` TIMEOUT, `4` SHUTTING_DOWN, `5` SUPERSEDED |
 
 Gönderen `BYE`'dan sonra iki bağlantıyı da kapatır. Host, `BYE` aldığında veya gönderdiğinde önce release-all uygular (§7).
+
+### 0x05 STREAM_PREFS (C→H, kontrol)
+
+Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `ACCEPTED`'dan sonra (ve her tercih değişikliğinde) gönderir. Tercih bir istektir; host desteklediği en yakın değeri uygular.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| fps | u16 | İstenen akış kare hızı: `60`, `120`, `144`. Başka değer: host 60 kabul eder. |
+| scale_permille | u16 | Kodlanan görüntünün sanal ekrana oranı, binde: `500`–`1000`. Dışı: host sıkıştırır. |
+| reserved | u32 | |
+
+**Host kuralları:**
+- Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz).
+- Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
+- Tercih oturuma aittir; host saklamaz (istemci her bağlantıda yeniden gönderir). Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
 
 ### 0x10 PEN (C→H)
 
@@ -487,7 +503,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
