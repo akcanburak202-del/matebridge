@@ -1,7 +1,7 @@
 ---
 id: T-052
 title: Tablet — uyarlanır kare zamanlaması (en az gecikmeyle takılmasız sunum, 60/120 Hz)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-050]
@@ -78,3 +78,7 @@ Host yakalama zamanı kusursuz düzenli (8,3 ms), varış/çözme çıkışı da
   - Testler: 120 fps @ 60 Hz 30 sn: ~%40-60 atma, D <= P60 + marj, ortalama gecikme <= 2 vsync, atma atlama sayılmıyor; 120 -> 60 -> 120 geçişinde seviye/D sıfırlanıyor.
   - Cihazda bak: 60 Hz'de (dokunmadan) `pace_ms`, D, Gecikme, `dec_p95`, "Atılan"; keyframe isteği olmamalı; dokunma ile 120 <-> 60 geçişinde toparlanma.
 - **Açık sorular:** (1) GL yolunda uyarlanır mod kapalı (SurfaceTexture render damgalarını yok sayar; presenter kendi vsync hizalamasını yapıyor): kabul ölçütündeki "GL yolunda da" karşılanmadı; istenirse presenter kuyruklamasıyla ayrı kart. (2) Damga fazı (`V-P/2`) Choreographer/SF vsync kaymasına bağlı; ölçümde sistematik 1 vsync sapma görülürse faz parametresi eklenmeli.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Dört cihaz turu (NOTES). Codex turu yapılmadı (video sunumu; girdi/güvenlik dışı). GL yolu uyarlanır değil (açık soru).
