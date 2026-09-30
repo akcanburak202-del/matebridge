@@ -10,6 +10,9 @@ files:
   - host-mac/Sources/MateBridgeHost/Input/
   - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
   - host-mac/Sources/MateBridgeCore/Input/Geometry+Display.swift
+  - host-mac/Sources/MateBridgeCore/Input/   # review round: new files only (the Geometry+Display split, owed-release logic, ReleaseCause log names)
+  - host-mac/Sources/MateBridgeCore/Session/SessionMachine.swift   # review round: one new ReleaseCause case (gate lost) and the switches it needs
+  - host-mac/Sources/MateBridgeHost/VirtualDisplay.swift   # review round: expose the vendor and product numbers as named constants only
   - host-mac/Sources/MateBridgeApp/
   - host-mac/Tests/MateBridgeCoreTests/Input/
 ---
