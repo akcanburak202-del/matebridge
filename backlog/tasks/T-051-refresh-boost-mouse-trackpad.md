@@ -1,7 +1,7 @@
 ---
 id: T-051
 title: Touchpad/fare ile sürüklerken fps ~68–70, kalemle ~120 — Huawei 120 Hz yükseltmesini fare/touchpad için de sağlamak
-status: todo
+status: done
 phase: 5
 owner: orchestrator
 depends_on: [T-049, T-050]
@@ -36,3 +36,7 @@ _(Orkestratör, T-049/T-050 bitince.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+## Sonuç (2026-10-01)
+
+Ölçüldü (NOTES 01:07): Performans modunda ve tablet "Dinamik"ken touchpad/fare sürüklemesinde panel 120 Hz, 105–117 fps; kalemle 120 fps. Sorun, tam boyutlu modda çözücü sınırı ve "Orta" ayarıydı. Kod değişikliği gerekmedi.
