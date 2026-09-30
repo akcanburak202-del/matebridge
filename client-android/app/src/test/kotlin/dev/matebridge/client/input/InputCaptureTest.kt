@@ -42,6 +42,12 @@ class InputCaptureTest {
         cap.onTouch(touchFrame(action, now, acting, *f, device = device), now)
     }
 
+    /** A pen DOWN that the confirmation timer (T-029) sends 10 ms later. */
+    private fun penDown(now: Long, vararg pts: PenPoint, eraser: Boolean = false) {
+        pen(PenAction.DOWN, now, *pts, eraser = eraser)
+        tick(now + PenTracker.CONFIRM_MS)
+    }
+
     private fun tick(t: Long) { sink.nowMs = t; sink.tickHost(); cap.tick(t) }
     private fun releaseAll(reason: Int, t: Long) { sink.nowMs = t; cap.releaseAll(reason, t) }
     private fun setActive(on: Boolean, t: Long) { sink.nowMs = t; cap.setActive(on, t) }
@@ -64,8 +70,10 @@ class InputCaptureTest {
         pen(PenAction.HOVER_MOVE, 3, pt(3))
         pen(PenAction.HOVER_EXIT, 6, pt(6))
         pen(PenAction.DOWN, 7, pt(7))
-        assertTrue(sink.host.penContact)
+        assertFalse("the DOWN is held until it is confirmed (T-029)", sink.host.penContact)
+        assertTrue(cap.penInRange)
         pen(PenAction.MOVE, 12, pt(9), pt(12))
+        assertTrue(sink.host.penContact)
         pen(PenAction.UP, 15, pt(15))
         assertFalse(sink.host.penContact)
         assertTrue(sink.host.penInRange)
@@ -158,7 +166,7 @@ class InputCaptureTest {
         assertEquals(listOf(IR, IR), flags().takeLast(2))
         assertTrue(sink.host.violations.isEmpty())
         pen(PenAction.UP, 46, pt(46))
-        pen(PenAction.DOWN, 100, pt(100))
+        penDown(100, pt(100))
         assertEquals(IR or CT or SS, flags().last())
         assertTrue(sink.host.penContact)
     }
@@ -196,7 +204,7 @@ class InputCaptureTest {
         assertEquals(IR, flags().last())
         assertTrue(sink.host.violations.isEmpty())
         pen(PenAction.UP, 60, pt(60))
-        pen(PenAction.DOWN, 70, pt(70))
+        penDown(70, pt(70))
         assertEquals(IR or CT or SS, flags().last())
     }
 
@@ -353,7 +361,7 @@ class InputCaptureTest {
     }
 
     @Test fun eraserToolIsReportedAsToolOne() {
-        pen(PenAction.DOWN, 0, pt(0), eraser = true)
+        penDown(0, pt(0), eraser = true)
         assertEquals(Pen.TOOL_ERASER, (sink.sent.last() as Pen).tool)
     }
 

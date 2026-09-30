@@ -37,6 +37,11 @@ class InputHardeningTest {
         fun pen(a: PenAction, t: Long, vararg p: PenPoint, eraser: Boolean = false, pointerId: Int = 0) {
             sink.nowMs = t; cap.onPen(penFrame(a, *p, eraser = eraser, pointerId = pointerId), t)
         }
+        /** A pen DOWN that the confirmation timer (T-029) sends 10 ms later. */
+        fun penDown(t: Long, vararg p: PenPoint, pointerId: Int = 0) {
+            pen(PenAction.DOWN, t, *p, pointerId = pointerId)
+            tick(t + PenTracker.CONFIRM_MS)
+        }
         fun touch(a: TouchAction, t: Long, acting: Int, vararg f: Finger) {
             sink.nowMs = t; cap.onTouch(touchFrame(a, t, acting, *f), t)
         }
@@ -163,7 +168,7 @@ class InputHardeningTest {
     @Test fun fix1_aPalmReleaseOnTheTouchscreenWithThePenContactsPointerIdDoesNotEndTheStroke() {
         val r = Rig()
         r.pen(PenAction.HOVER_ENTER, 0, pt(0))
-        r.pen(PenAction.DOWN, 5, pt(5), pointerId = 0) // pen device, pointer 0
+        r.penDown(5, pt(5), pointerId = 0) // pen device, pointer 0
         assertTrue(r.host.penContact)
         // The resting palm: touchscreen device, also pointer 0. Its DOWN is gated; its lift must not touch the stroke.
         r.touch(TouchAction.DOWN, 20, 0, finger(0, 300f, 300f))
@@ -184,7 +189,7 @@ class InputHardeningTest {
     @Test fun fix1_aTouchscreenCancelDoesNotEndThePenContact() {
         val r = Rig()
         r.pen(PenAction.HOVER_ENTER, 0, pt(0))
-        r.pen(PenAction.DOWN, 5, pt(5), pointerId = 0)
+        r.penDown(5, pt(5), pointerId = 0)
         r.cancel(TOUCH_DEVICE, penPointer = false, fingerPointer = true, t = 20, finger(0, 300f, 300f))
         assertTrue(r.host.penContact)
         assertTrue(r.cap.penInContact)
@@ -258,7 +263,7 @@ class InputHardeningTest {
         r.up(ToolKind.OTHER, TOUCH_DEVICE, 5, 80) // no finger listed any more, tool no longer FINGER
         assertFalse(r.host.touchDown)
         assertFalse(r.cap.followsFinger(TOUCH_DEVICE, 5))
-        r.pen(PenAction.DOWN, 200, pt(200), pointerId = 3)
+        r.penDown(200, pt(200), pointerId = 3)
         assertTrue(r.cap.followsPen(PEN_DEVICE, 3))
         assertFalse(r.cap.followsPen(TOUCH_DEVICE, 3))
         assertEquals(3, r.cap.penContactPointerId)
@@ -310,7 +315,7 @@ class InputHardeningTest {
         val cap = InputCapture(sink, { VP }, onEvent = { ev, _ -> if (ev == "release_all") throw IllegalStateException("log failed") })
         cap.setActive(true, 0)
         sink.nowMs = 5
-        cap.onPen(penFrame(PenAction.DOWN, pt(5)), 5)
+        cap.downConfirmed(penFrame(PenAction.DOWN, pt(5)), 5)
         assertTrue(cap.penInContact)
         var thrown = false
         try { cap.releaseAll(ReleaseAll.BACKGROUND, 40) } catch (e: IllegalStateException) { thrown = true }
@@ -650,6 +655,7 @@ class InputHardeningTest {
     @Test fun fix7_aDownWhileAlreadyInContactStillEndsTheOldContactBeforeTheHistoryStartsTheNewStroke() {
         val t = penTracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(3)), 3) // confirmed: the host holds the contact
         val out = t.onFrame(penFrame(PenAction.DOWN, pt(10), pt(13)), 13)
         assertEquals(listOf(IR, IR or CT or SS, IR or CT), flags(out))
     }
@@ -657,6 +663,7 @@ class InputHardeningTest {
     @Test fun fix7_anUpCarryingHistoryKeepsTheContactSamplesThenLifts() {
         val t = penTracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(0)), 0)
+        t.onFrame(penFrame(PenAction.MOVE, pt(1)), 1) // confirmed
         val out = t.onFrame(penFrame(PenAction.UP, pt(3), pt(6), pt(9)), 9)
         assertEquals(listOf(IR or CT, IR or CT, IR), flags(out))
     }

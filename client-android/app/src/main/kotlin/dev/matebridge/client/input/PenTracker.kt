@@ -32,9 +32,21 @@ import dev.matebridge.client.stream.VideoViewport
  *    flags differ, a `STROKE_START` sample, a `flags = 0` sample, a liveness repeat and the synthetic closing samples
  *    never do (they use [emit] directly), so no state change can be lost to it. A same-position sample with a
  *    different time is sent and only counted (`dup_pos`);
+ *  - contact confirmation (T-029, decision 0007): an `ACTION_DOWN` is not sent at once. It is held ([pending]) and
+ *    confirmed by the first of: a second real sample of the same contact (a MOVE, or more than one sample in the DOWN
+ *    itself), or an event or a [tick] at least [CONFIRM_MS] after the DOWN. Confirming sends the held samples with their
+ *    original times, `STROKE_START` on the first. A contact that ends while held (UP, cancel, a hover event, a tool
+ *    change, [release], [reset]) is dropped and never reaches the host (pen tip bounce: one DOWN sample, UP ~8 ms later,
+ *    the real stroke ~20 ms after that); UP, cancel and hover endings are counted as `bounce_dropped`. The host is never
+ *    told about a held contact, so dropping needs no release. While held the pen counts as in range ([inRange], so a
+ *    finger press cannot start) and the contact's (device, pointer) pair is followed. An UP or hover event at least
+ *    [CONFIRM_MS] after the DOWN (by event time) confirms it first, so a short real contact still goes out whole; a
+ *    cancel always drops it. Events are timed by event time, [tick] by the dispatch clock;
  *  - Android dispatches `HOVER_EXIT` right before every `ACTION_DOWN`; an exit that is followed by a DOWN
  *    of the same tool within [EXIT_DEFER_MS] is dropped so a stroke does not flap proximity leave/enter.
- *    A deferred exit is always sent by [tick], [release] or the next non-DOWN frame.
+ *    A deferred exit is always sent by [tick], [release] or the next non-DOWN frame. An exit swallowed by a DOWN whose
+ *    contact is then dropped stays swallowed while the pen is still there (UP: a hover sample follows); otherwise it is
+ *    answered by the `flags = 0` sample of a cancel, [release] or a hover exit.
  *
  * All coordinates are normalized through [viewport] (T-015 `VideoViewport`, the only conversion).
  * Not thread-safe: UI thread only.
@@ -47,7 +59,8 @@ class PenTracker(
 
     var state = State.OUT
         private set
-    override val inRange get() = state != State.OUT
+    /** In hover range or touching, a held (unconfirmed) contact included: the finger gate must not open. */
+    override val inRange get() = state != State.OUT || pending != null
 
     /** Uptime ms of the last real Android pen event (hover exit and cancel included); drives the stale guards. */
     var lastEventMs = NEVER_MS
@@ -64,14 +77,17 @@ class PenTracker(
     var contactDeviceId = NO_DEVICE
         private set
 
-    /** True while a pen contact is open on the host and (device, pointer) is exactly the pair that opened it. */
+    /** True while a pen contact is open on the host (or held, see [pending]) and (device, pointer) is exactly the pair that opened it. */
     fun followsPointer(deviceId: Int, pointerId: Int) =
-        state == State.CONTACT && contactDeviceId == deviceId && contactPointerId == pointerId
+        (state == State.CONTACT || pending != null) && contactDeviceId == deviceId && contactPointerId == pointerId
 
     private class S(
         val timeUs: Long, val x: Int, val y: Int, val pressure: Int,
         val tiltX: Int, val tiltY: Int, val flags: Int,
     )
+
+    /** A DOWN held back until confirmed: raw points (converted on confirmation), DOWN event time and dispatch time. */
+    private class Pending(val points: List<PenPoint>, val downTimeUs: Long, val downNowMs: Long)
 
     private class PendingExit(val point: PenPoint, val atMs: Long)
 
@@ -82,6 +98,10 @@ class PenTracker(
     private var lastEmitMs = NEVER_MS
     private var lastTilt: Pair<Int, Int>? = null
     private var pendingExit: PendingExit? = null
+    private var pending: Pending? = null
+
+    /** True while a DOWN is held back and not yet confirmed (T-029). */
+    val contactHeld get() = pending != null
 
     /** Feeds one pen MotionEvent (see [PenFrame]); [nowMs] is uptime at dispatch. */
     fun onFrame(f: PenFrame, nowMs: Long): List<Outgoing> {
@@ -90,23 +110,26 @@ class PenTracker(
         lastEventMs = nowMs
         // A release ends whichever tool is active, whatever tool type the platform reports for it now (PROTOCOL.md section 4).
         val releaseFrame = f.action == PenAction.UP || f.action == PenAction.CANCEL
-        val newTool = if (releaseFrame && state != State.OUT) tool else if (f.eraser) Pen.TOOL_ERASER else Pen.TOOL_PEN
+        val newTool = if (releaseFrame && (state != State.OUT || pending != null)) tool else if (f.eraser) Pen.TOOL_ERASER else Pen.TOOL_PEN
         settlePendingExit(absorb = f.action == PenAction.DOWN && newTool == tool, nowMs, out)
+        if (newTool != tool) dropPending(count = false) // never sent: nothing to close for it
         if (state != State.OUT && newTool != tool) leaveAtLast(f.points.first().timeUs, nowMs, out)
         tool = newTool
         val pts = f.points
+        if (resolvePending(f, nowMs, out)) return out
         when (f.action) {
             PenAction.DOWN -> {
-                // Android batches only moves, but any history a DOWN carries is kept: STROKE_START rides on the
-                // first (oldest) sample only, the rest of the segment is ordinary contact.
-                val s = ArrayList<S>(pts.size + 1)
-                if (state == State.CONTACT) s += sample(pts.first(), IN_RANGE) // missed UP: end the old contact first
-                s += sample(pts.first(), IN_RANGE or CONTACT or STROKE_START)
-                for (i in 1 until pts.size) s += sample(pts[i], IN_RANGE or CONTACT)
-                state = State.CONTACT
+                // Missed UP: the host still holds the old contact, so end it now (that one is never held back).
+                if (state == State.CONTACT) {
+                    state = State.HOVER
+                    emitReal(listOf(sample(pts.first(), IN_RANGE)), nowMs, out)
+                }
+                // Hold the new contact. Android batches only moves, but any history a DOWN carries is more than one
+                // real sample and confirms it at once: STROKE_START rides on the first (oldest) sample only.
+                pending = Pending(pts, pts.first().timeUs, nowMs)
                 contactPointerId = f.pointerId
                 contactDeviceId = f.deviceId
-                emitReal(s, nowMs, out)
+                if (pts.size > 1) confirmPending(emptyList(), nowMs, out)
             }
             PenAction.MOVE -> {
                 val contact = state == State.CONTACT
@@ -144,6 +167,11 @@ class PenTracker(
     /** Periodic work: deferred exit, liveness repeat, stale guards. Call every ~25 ms. */
     fun tick(nowMs: Long): List<Outgoing> {
         val out = ArrayList<Outgoing>(1)
+        val held = pending
+        if (held != null) {
+            if (nowMs - held.downNowMs >= CONFIRM_MS) confirmPending(emptyList(), nowMs, out)
+            return out // the host knows nothing of a held contact: no liveness repeat and no stale guard for it
+        }
         val pe = pendingExit
         if (pe != null) {
             if (nowMs - pe.atMs >= EXIT_DEFER_MS) {
@@ -179,6 +207,7 @@ class PenTracker(
      */
     fun release(nowMs: Long): List<Outgoing> {
         pendingExit = null
+        dropPending(count = false) // the host was never told about it: no release to send
         if (state == State.OUT) return emptyList()
         val out = ArrayList<Outgoing>(1)
         leaveAtLast(nowMs * 1000, nowMs, out)
@@ -193,9 +222,53 @@ class PenTracker(
         state = State.OUT
         clearContactIds()
         pendingExit = null
+        pending = null
         last = null
         lastFlags = 0
         lastTilt = null
+    }
+
+    // ---- contact confirmation (T-029) ----
+
+    /**
+     * Decides the fate of a held contact when [f] arrives. Returns true when the frame was consumed: a MOVE is the second
+     * real sample, so the contact is confirmed with it. A cancel drops the contact. Any other frame (UP, hover, a second
+     * DOWN) confirms it when at least [CONFIRM_MS] passed since the DOWN by event time and drops it (a bounce) otherwise;
+     * the frame is then handled as usual on top of that state.
+     */
+    private fun resolvePending(f: PenFrame, nowMs: Long, out: MutableList<Outgoing>): Boolean {
+        val p = pending ?: return false
+        when (f.action) {
+            PenAction.MOVE -> {
+                confirmPending(f.points, nowMs, out)
+                return true
+            }
+            PenAction.CANCEL -> dropPending(count = true)
+            else ->
+                if (f.points.last().timeUs - p.downTimeUs >= CONFIRM_MS * 1000) confirmPending(emptyList(), nowMs, out)
+                else dropPending(count = true)
+        }
+        return false
+    }
+
+    /** The held contact becomes real: held samples plus [extra], `STROKE_START` on the very first one. */
+    private fun confirmPending(extra: List<PenPoint>, nowMs: Long, out: MutableList<Outgoing>) {
+        val p = pending ?: return
+        pending = null
+        val pts = p.points + extra
+        val s = ArrayList<S>(pts.size)
+        s += sample(pts.first(), IN_RANGE or CONTACT or STROKE_START)
+        for (i in 1 until pts.size) s += sample(pts[i], IN_RANGE or CONTACT)
+        state = State.CONTACT
+        emitReal(s, nowMs, out)
+    }
+
+    /** Forgets a held contact; nothing was sent for it, so there is nothing to release. */
+    private fun dropPending(count: Boolean) {
+        if (pending == null) return
+        pending = null
+        clearContactIds()
+        if (count) counters.bounceDropped++
     }
 
     // ---- sample construction ----
@@ -340,6 +413,13 @@ class PenTracker(
         const val HOVER_STALE_MS = 2000L
         const val CONTACT_STALE_MS = 10_000L
         const val EXIT_DEFER_MS = 40L
+
+        /**
+         * A contact is confirmed after this long without a second sample (T-029). A real contact's second sample comes
+         * after ~2.8 ms (M-Pencil, 360 Hz) and the measured bounce lasts ~8 ms. The timer is only the fallback for a
+         * pen that then sends nothing more; it is checked by every event and by [tick] (25 ms period in MainActivity).
+         */
+        const val CONFIRM_MS = 10L
 
         private const val IN_RANGE = PenSample.IN_RANGE
         private const val CONTACT = PenSample.CONTACT

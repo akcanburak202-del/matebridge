@@ -45,6 +45,9 @@ class InputCapture(
 
     // Model beliefs about what the host holds, for tests and diagnostics.
     internal val penInContact get() = pen.state == PenTracker.State.CONTACT
+
+    /** The host believes the pen is in range; unlike [penInRange] a held, unconfirmed contact (T-029) does not count. */
+    internal val penHostInRange get() = pen.state != PenTracker.State.OUT
     internal val fingerPressed get() = touch.isPressed
     internal val scrollOpen get() = touch.isScrolling
 
