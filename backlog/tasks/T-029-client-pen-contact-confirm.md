@@ -1,7 +1,7 @@
 ---
 id: T-029
 title: Tablet — tek örneklik kalem temasını iletme (temas doğrulama), Krita'daki "diken"in tetikleyicisi
-status: todo
+status: review
 phase: 2
 owner: android-client-dev
 depends_on: [T-026]
@@ -56,8 +56,12 @@ Yalnızca `PenTracker` (ve sayaçlar için `Model.kt`) değişir; `InputCapture`
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** kod `70a78eb` (plan commit'i `cf95081`; bu Handoff ayrı, sonraki commit). Dal `task/T-029-client-pen-contact-confirm`. `./scripts/check.sh`: ALL OK.
+- **Dokunulan dosyalar:** `client-android/app/src/main/kotlin/dev/matebridge/client/input/` altında `PenTracker.kt` (asıl değişiklik), `Model.kt` (`bounce_dropped` sayacı + özet alanı), `InputCapture.kt` (yalnızca `internal val penHostInRange`, teşhis/test için). Testler: yeni `PenContactConfirmTest.kt` (25 test), `TestSupport.kt` (`downConfirmed` yardımcıları), mevcut `PenTrackerTest`, `PenDedupeTest`, `InputCaptureTest`, `InputHardeningTest`, `InputFuzzTest` yeni gecikmeye göre uyarlandı; fuzz'a açık "sekme" dalı eklendi (DOWN, 1-12 ms sonra UP, aralarında örnek yok) ve değişmez `penHostInRange` ile kontrol ediliyor.
+- **Davranış özeti:** `ACTION_DOWN` bekletilir (`PenTracker.pending`, ham noktalar). Doğrulama: aynı temastan MOVE (bekletilen + gelen tek mesajda, `STROKE_START` ilkte, özgün zamanlar), DOWN'un kendi içinde >1 örnek, `tick`te DOWN'dan beri 10 ms (`nowMs`), ya da UP / hover / ikinci DOWN olayı olay zamanına göre ≥10 ms ise önce doğrulanır. <10 ms'de UP/hover/ikinci DOWN ya da herhangi bir CANCEL: temas hiç gitmez, `bounce_dropped++`; UP -> hover örneği, CANCEL -> `flags = 0`, HOVER_EXIT -> yine ertelenir. `release`/`reset`/araç değişimi sessizce atar (sayaçsız, fazladan bırakış yok; host hover biliyorsa yalnızca onun `flags = 0`'ı gider). `inRange` bekletmede true (parmak kapısı), `followsPointer`/`contactDeviceId`/`contactPointerId` bekletilen için de çalışır, `lastSentMs` gönderimle güncellenir (bekletmede değişmez), `tick` bekletme sürerken canlılık/bayatlama çalıştırmaz. DOWN'un yuttuğu HOVER_EXIT: bekletilen temas UP ile düşerse yutulmuş kalır (hover örneği gider), CANCEL / hover exit / release ile `flags = 0` gider.
+- **Zamanlama seçimi (`CONFIRM_MS = 10`):** kart değeri. Gerçek temasta ikinci örnek ≈2,8 ms'de gelir (olay yolu, gecikme ≈3 ms); ölçülen sekme 8 ms, yani 10 ms sekmeyi kesin atar, en kısa zararsız vuruşun (16-34 ms) çok altında kalır. Zamanlayıcı yalnızca ikinci örnek hiç gelmeyen hareketsiz temas için yedek yol.
+- **Varsayımlar:** (1) Android UP'ı DOWN'dan itibaren olay zamanıyla ölçülüyor (`MotionEvent.eventTime`), yük altında iki olayın birlikte dağıtılması sekmeyi doğrulamaz. (2) Kalem UP'tan sonra menzilde sayılıyor (mevcut kural, değişmedi). (3) CANCEL yaşa bakmadan atar (avuç reddi vb.: çizim görünmesin); kart "UP ya da CANCEL bekletme sürerken" diyor, 10 ms sonrasındaki bekletme yalnızca olay/tick ile bitebildiği için UP için yaş kuralı, CANCEL için koşulsuz atma seçtim.
+- **Kartta karşılanamayan:** "bekletilen temas 20 ms'den uzun bekletilmez" yalnızca **olay** yolunda ve `tick`in ≤10 ms aralıklı çalıştığı durumda sağlanır. `INPUT_TICK_MS = 25` (`MainActivity.kt`, kapsam dışı) olduğundan, hiçbir olay gelmeyen hareketsiz temas en kötü ≈35 ms'de (10 ms + tick gecikmesi) doğrulanır. Gerçek kalemde 360 Hz'de örnek akışı sürdüğü için pratikte bu yol nadir; ama üst sınırı garanti etmek için orkestratör `MainActivity`'de `INPUT_TICK_MS`'i 5 ms yapabilir (tek satır; `tick` ucuz). Bu görevde dokunulmadı.
+- **Kasıtlı bozma (testlerin kırıldığı):** (A) bounce'ta atma yerine doğrulama: 13 test kırıldı; (B) `release` bekletileni atmıyor: `releaseWhileHeld...` kırıldı; (C) `inRange` bekletmeyi saymıyor: fuzz'ın dört testi + iki test kırıldı; (D) `tick` hiç doğrulamıyor: 25 test kırıldı; (E) doğrulanan örnek `STROKE_START` kaybediyor: 29 test kırıldı. Sonra geri alındı, hepsi yeşil.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** gerçek M-Pencil/HarmonyOS'ta (1) `MB/input` saniyelik özetinde `bounce_dropped` sayacı: normal çizim sırasında 0-1 civarı, hafif dokunuşta/sekmede artmalı; (2) hızlı çizgiler, hafif dokunuş, tek noktalık nokta (kısa "tık"): Mac olay kaydında yavaş bile olsa 30 ms'den uzun temas kaybolmamalı, vuruş başında ≈3 ms gecikme dışında fark olmamalı; (3) sekmeyi zorlamak için kalem ucunu ekrana hafifçe değdirip kaldır: Mac olay kaydında tek örneklik `down`/`up` çifti olmamalı; (4) Krita "Temel" yumuşatmada uzun düz "diken" (17:33'tekinin açıklanmamış kalabileceği kartta/kararda yazılı); (5) parmakla kalem aynı anda: kalem yaklaşırken/basılırken parmak basışı başlamamalı (kapı davranışı); (6) uygulamayı arka plana al / kalem basılıyken cihaz ayır: Mac'te takılı kalem olmamalı.
+- **Açık sorular:** (a) `INPUT_TICK_MS` 25 -> 5 ms önerisi (yukarıda). (b) `docs/LOGGING.md` `bounce_dropped` alanını listeliyorsa güncellenmeli (kapsam dışı, dosyaya dokunmadım). (c) `InputCapture` başlık yorumundaki "stuck-input" listesine bekletme satırı eklenmedi (yorum, işlevsel değil).
