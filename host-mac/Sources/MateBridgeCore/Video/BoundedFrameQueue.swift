@@ -29,7 +29,12 @@ public struct BoundedFrameQueue: Sendable {
             if frame.isKeyframe { awaitingKeyframe = false } else if !frame.isCodecConfig { return 1 }
         }
         // The same parameter sets queued twice (encoder announcement racing a resync) are redundant.
-        if frame.isCodecConfig, frames.contains(where: { $0.isCodecConfig && $0.data == frame.data }) { return 0 }
+        if frame.isCodecConfig {
+            if frames.contains(where: { $0.isCodecConfig && $0.data == frame.data }) { return 0 }
+            // Changed parameter sets while only configs wait (after a resync): the newer config replaces them, so
+            // the queue keeps room for the keyframe that follows. Configs queued behind real frames stay as they are.
+            if !frames.isEmpty, frames.allSatisfy(\.isCodecConfig) { frames.removeAll() }
+        }
         frames.append(frame)
         guard frames.count > capacity else { return 0 }
         // Oldest first: plain delta frame, else oldest non-config keyframe, else oldest overall.

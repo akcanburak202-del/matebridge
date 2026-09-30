@@ -75,8 +75,17 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private var isShuttingDown: Bool { shutdownLock.withLock { shuttingDown } }
 
+    /// Coalescing merge: keyframe requests keep the strongest pending requirement (see `KeyframeReason.merged`);
+    /// every other coalesced event is latest-wins.
+    private static func mergeEvents(pending: Event, incoming: Event) -> Event {
+        if case .keyframeRequest(let old) = pending, case .keyframeRequest(let new) = incoming {
+            return .keyframeRequest(KeyframeReason.merged(pending: old, incoming: new))
+        }
+        return incoming
+    }
+
     private func post(_ event: Event, key: Int? = nil, forced: Bool = false) {
-        guard mailbox.post(event, coalesceKey: key, forced: forced) == .overflow else { return }
+        guard mailbox.post(event, coalesceKey: key, forced: forced, merge: Self.mergeEvents) == .overflow else { return }
         logger.log(.error, "event_overflow", sessionID: 0, generation: 0)
         var dropped = mailbox.removeAll()
         dropped.append(event)

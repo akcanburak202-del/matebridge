@@ -101,4 +101,87 @@ final class KeyframeResyncTests: XCTestCase {
         XCTAssertEqual(a?.isCodecConfig, true)
         XCTAssertEqual(b?.data, [3])
     }
+
+    // MARK: Review round 1
+
+    func testPendingConfigRequestIsNotDowngradedByFramesDropped() {
+        XCTAssertEqual(KeyframeReason.merged(pending: .startup, incoming: .framesDropped), .startup)
+        XCTAssertEqual(KeyframeReason.merged(pending: .decodeError, incoming: .framesDropped), .decodeError)
+        XCTAssertEqual(KeyframeReason.merged(pending: KeyframeReason(rawValue: 77), incoming: .framesDropped),
+                       KeyframeReason(rawValue: 77), "unknown reasons count as config-requiring")
+    }
+
+    func testMergeOtherwiseLatestWins() {
+        XCTAssertEqual(KeyframeReason.merged(pending: .framesDropped, incoming: .startup), .startup)
+        XCTAssertEqual(KeyframeReason.merged(pending: .framesDropped, incoming: .framesDropped), .framesDropped)
+        XCTAssertEqual(KeyframeReason.merged(pending: .startup, incoming: .decodeError), .decodeError)
+    }
+
+    func testMailboxMergeKeepsStrongestKeyframeRequest() {
+        let m = BoundedMailbox<KeyframeReason>()
+        let merge: @Sendable (KeyframeReason, KeyframeReason) -> KeyframeReason = {
+            KeyframeReason.merged(pending: $0, incoming: $1)
+        }
+        m.post(.startup, coalesceKey: 3, merge: merge)
+        m.post(.framesDropped, coalesceKey: 3, merge: merge)
+        XCTAssertEqual(m.count, 1)
+        XCTAssertEqual(m.take(), .startup)
+        m.post(.framesDropped, coalesceKey: 3, merge: merge)
+        m.post(.startup, coalesceKey: 3, merge: merge)
+        XCTAssertEqual(m.take(), .startup)
+    }
+
+    func testMailboxWithoutMergeIsStillLatestWins() {
+        let m = BoundedMailbox<Int>()
+        m.post(1, coalesceKey: 1); m.post(2, coalesceKey: 1)
+        XCTAssertEqual(m.take(), 2)
+    }
+
+    func testChangedConfigReplacesOlderConfigWhileOnlyConfigsWait() {
+        var q = BoundedFrameQueue()
+        q.resync(config: config(1))
+        q.push(config(2))                            // encoder announced new parameter sets after the snapshot
+        q.push(key(3))
+        let out = drain(&q)
+        XCTAssertEqual(out.map(\.data), [[2], [3]], "keyframe keeps its slot; only the newer config remains")
+        XCTAssertEqual(q.droppedCount, 0)
+    }
+
+    /// The provider runs under the queue lock: a config pushed concurrently (encoder output) cannot land between
+    /// the snapshot and the reset and be wiped by it.
+    func testSnapshotAndResetAreAtomicWithRespectToPush() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        let pushed = DispatchSemaphore(value: 0)
+        let configA = config(1), configB = config(2)
+        let resent = q.resync(config: {
+            DispatchQueue.global().async { q.push(configB); pushed.signal() }  // encoder announces B
+            Thread.sleep(forTimeInterval: 0.15)      // B's push is now waiting on the queue lock
+            return configA                           // stale snapshot A
+        })
+        XCTAssertTrue(resent)
+        XCTAssertEqual(pushed.wait(timeout: .now() + 2), .success)
+        q.push(key(3))
+        let exp = expectation(description: "drained")
+        Task {
+            let a = await q.next(), b = await q.next()
+            XCTAssertEqual(a?.data, [2], "B survives the reset and replaces A")
+            XCTAssertEqual(b?.data, [3])
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+    }
+
+    func testResyncWithoutConfigLeavesQueueUntouched() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        q.push(delta(1))
+        XCTAssertFalse(q.resync(config: { nil }))
+        q.push(delta(2))                             // still accepted: no awaiting-keyframe state was entered
+        let exp = expectation(description: "drained")
+        Task {
+            let a = await q.next(), b = await q.next()
+            XCTAssertEqual([a?.data, b?.data], [[1], [2]])
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+    }
 }

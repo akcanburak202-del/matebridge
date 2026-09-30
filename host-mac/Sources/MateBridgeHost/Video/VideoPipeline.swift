@@ -133,12 +133,14 @@ public final class VideoPipeline: @unchecked Sendable {
     /// (false when the reason does not need it or no parameter sets exist yet: keyframe only, as before).
     @discardableResult
     public func requestKeyframe(reason: KeyframeReason) -> Bool {
+        let encoder = box.encoder
         var resent = false
-        if reason.resendsCodecConfig, let config = box.encoder?.currentCodecConfig() {
-            frames.resync(config: config)
-            resent = true
+        if reason.resendsCodecConfig {
+            // The snapshot is taken under the queue lock, so an encoder-announced config cannot fall between it
+            // and the reset (lock order: queue -> encoder; the encoder never calls push while holding its lock).
+            resent = frames.resync(config: { encoder?.currentCodecConfig() })
         }
-        box.encoder?.requestKeyframe(resubmitNow: true)
+        encoder?.requestKeyframe(resubmitNow: true)
         return resent
     }
 
@@ -146,8 +148,9 @@ public final class VideoPipeline: @unchecked Sendable {
     /// refused, and a keyframe is forced (also on a static screen, by re-encoding the last captured buffer). The
     /// consumer therefore sees CODEC_CONFIG, then a keyframe, then frames.
     public func prepareForNewConsumer() {
-        frames.startNewConsumer(config: box.encoder?.currentCodecConfig())
-        box.encoder?.requestKeyframe(resubmitNow: true)
+        let encoder = box.encoder
+        frames.startNewConsumer(configProvider: { encoder?.currentCodecConfig() })
+        encoder?.requestKeyframe(resubmitNow: true)
     }
 
     /// Colour tags the encoder session reports (VUI source), for diagnostics.

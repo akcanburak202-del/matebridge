@@ -78,7 +78,18 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// The caller must force a keyframe from the encoder **after** this returns, which is what guarantees the
     /// consumer sees the config before that keyframe.
     public func resync(config: EncodedVideoFrame) {
+        _ = resync(config: { config })
+    }
+
+    /// Same, but the config is read by `provider` **while the queue lock is held**. Encoder output goes through
+    /// `push`, which takes the same lock, so a config the encoder announces cannot slip in between the snapshot and
+    /// the reset: it is either already queued (and visible to the provider) or queued after the reset. `provider`
+    /// must be quick and must not call back into this queue. Returns false, and leaves the queue untouched, when it
+    /// returns nil (no parameter sets exist yet).
+    @discardableResult
+    public func resync(config provider: () -> EncodedVideoFrame?) -> Bool {
         lock.lock()
+        guard let config = provider() else { lock.unlock(); return false }
         policy.resync(config: config)
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
         if !finished, let w = waiter, let f = policy.pop() {
@@ -87,6 +98,15 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
         lock.unlock()
         handoff.map { $0.0.resume(returning: $0.1) }
+        return true
+    }
+
+    /// `startNewConsumer` with the config snapshot taken under the queue lock (see `resync(config:)`). Unlike
+    /// `resync`, the queue is reset even when there is no config yet.
+    public func startNewConsumer(configProvider: () -> EncodedVideoFrame?) {
+        lock.lock()
+        policy.startNewConsumer(config: configProvider())
+        lock.unlock()
     }
 
     public var droppedCount: Int { lock.lock(); defer { lock.unlock() }; return policy.droppedCount }
