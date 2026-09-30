@@ -33,7 +33,13 @@ NOTES 2026-10-01 ~02:20. Tablet paneli dokunma yokken 60 Hz; host 120 fps gönde
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Core codec: `MessageType.displayRate = 0x07`, `DisplayRate { hz: u16, reserved }`, `Message.displayRate`; SessionMachine delivers it like `STREAM_PREFS` (active session only); fixture test entry `display_rate`.
+2. Core policy: `DisplayRateState` (last hz, `effectiveFps(streamFps:)` = `min(streamFps, hz)`, hz 0 or >= stream fps gives stream fps, lower clamp 24; `update` reports change so the log fires only on change).
+3. `FrameGate` gets a mutable target interval. `FramePacer.setTargetFps(_:)`: when target < stream fps the pacer is in decimation mode: the grid is judged on the capture timestamp (same host clock), a frame before the slot is dropped (never held, so no timer flush of an old frame), the grid advances on each pass; slot busy means the usual single pending (newest wins). Raising to the stream fps resets the grid and returns to the existing now-based mode (applied on the next frame). Bypass (keyframe resubmit) unchanged. Encoded frames are never dropped.
+4. `HEVCEncoder.setTargetFps` (under its lock), `CadenceMeter.setTargetFps` + `decimated` counter in the window log; `VideoPipeline.setDisplayRate(hz)` applies to encoder and meter and remembers it for a pipeline restart.
+5. `StreamCoordinator`: `.displayRate(sessionID, hz)` event (coalesced per session key), stored in the active session (reset on session start), applied to the current pipeline and to every newly created one; `ev=display_rate hz=.. effective_fps=..` logged only on change. No STREAM_CONFIG, no restart.
+6. `BoundedFrameQueue.push`: dropping a delta sets `awaitingKeyframe` so deltas are refused until a keyframe/config-then-keyframe arrives.
+7. Tests: codec/fixture, policy, decimation grid (120 to 60 every second frame, jittered, 60 to 120 immediate, no message = unchanged), queue recovery, cadence target.
 
 ## Handoff
 
