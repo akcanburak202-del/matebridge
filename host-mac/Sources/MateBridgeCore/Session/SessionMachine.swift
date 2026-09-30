@@ -17,6 +17,9 @@ public enum ReleaseCause: Equatable, Sendable {
     case timeout
     case superseded
     case shutdown
+    /// Host-internal, never produced by `SessionMachine`: the virtual display or the Accessibility permission went
+    /// away while input was held (T-023), so the input pipeline releases it by itself.
+    case gateLost
 }
 
 public enum LogLevel: String, Sendable { case error = "E", warning = "W", info = "I", debug = "D" }

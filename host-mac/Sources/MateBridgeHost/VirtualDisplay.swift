@@ -35,6 +35,11 @@ final class VirtualDisplay: @unchecked Sendable {
     private let queue = DispatchQueue(label: "matebridge.virtualdisplay")
     let displayID: CGDirectDisplayID
 
+    /// The vendor and product numbers the display is created with. `VirtualDisplayLocator` recognizes the display by
+    /// exactly these numbers (public CoreGraphics calls only), so they live in one place.
+    static let vendorID: UInt32 = 0x4D42  // "MB"
+    static let productID: UInt32 = 0x0001
+
     /// - Parameters:
     ///   - pixelWidth/pixelHeight: backing pixel size (e.g. 2800x1840).
     ///   - hidpi: when true, exposes a 2x mode (pixels/2 points) instead of a 1x mode.
@@ -60,8 +65,8 @@ final class VirtualDisplay: @unchecked Sendable {
         let mmW = Double(pixelWidth) / 264.0 * 25.4
         let mmH = Double(pixelHeight) / 264.0 * 25.4
         descriptor.setValue(NSValue(size: CGSize(width: mmW, height: mmH)), forKey: "sizeInMillimeters")
-        descriptor.setValue(UInt32(0x4D42), forKey: "vendorID")   // "MB"
-        descriptor.setValue(UInt32(0x0001), forKey: "productID")
+        descriptor.setValue(VirtualDisplay.vendorID, forKey: "vendorID")
+        descriptor.setValue(VirtualDisplay.productID, forKey: "productID")
         descriptor.setValue(UInt32(1), forKey: "serialNum")
         descriptor.setValue(queue, forKey: "queue")
 
