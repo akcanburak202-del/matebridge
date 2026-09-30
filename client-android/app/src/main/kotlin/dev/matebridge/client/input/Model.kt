@@ -163,6 +163,7 @@ class InputCounters {
     var invalid = 0L
     var pressStale = 0L
     var scrollIdleEnds = 0L
+    var keyMsgs = 0L
 
     /** Real pen samples identical to the last SENT sample in time, position, pressure, tilt and flags: not sent (T-026). */
     var dupExact = 0L
@@ -181,18 +182,18 @@ class InputCounters {
 
     fun any() = penSamples + penMsgs + touchMsgs + otherMsgs + palmRejects + merged + refused +
         tiltHeld + hoverStale + contactStale + exitAbsorbed + invalid + pressStale + scrollIdleEnds +
-        dupExact + dupPos + maxBatch + bounceDropped > 0
+        dupExact + dupPos + maxBatch + bounceDropped + keyMsgs > 0
 
     fun fields(intervalMs: Long) =
         "interval_ms=$intervalMs pen_samples=$penSamples pen_msgs=$penMsgs touch_msgs=$touchMsgs other_msgs=$otherMsgs " +
             "palm_reject=$palmRejects merged=$merged refused=$refused tilt_held=$tiltHeld hover_stale=$hoverStale " +
             "contact_stale=$contactStale exit_absorbed=$exitAbsorbed invalid=$invalid press_stale=$pressStale " +
-            "scroll_idle_end=$scrollIdleEnds dup_exact=$dupExact dup_pos=$dupPos dup_pos_first=$dupPosFirst max_batch=$maxBatch bounce_dropped=$bounceDropped"
+            "scroll_idle_end=$scrollIdleEnds key_msgs=$keyMsgs dup_exact=$dupExact dup_pos=$dupPos dup_pos_first=$dupPosFirst max_batch=$maxBatch bounce_dropped=$bounceDropped"
 
     fun reset() {
         penSamples = 0; penMsgs = 0; touchMsgs = 0; otherMsgs = 0; palmRejects = 0; merged = 0; refused = 0
         tiltHeld = 0; hoverStale = 0; contactStale = 0; exitAbsorbed = 0; invalid = 0; pressStale = 0; scrollIdleEnds = 0
-        dupExact = 0; dupPos = 0; dupPosFirst = 0; maxBatch = 0; bounceDropped = 0
+        dupExact = 0; dupPos = 0; dupPosFirst = 0; maxBatch = 0; bounceDropped = 0; keyMsgs = 0
     }
 }
 

@@ -1,5 +1,6 @@
 package dev.matebridge.client.input
 
+import dev.matebridge.client.protocol.Key
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pen
 import dev.matebridge.client.protocol.PenSample
@@ -78,6 +79,7 @@ class InputOutbox(
             when (msg) {
                 is Pen -> counters.penMsgs++
                 is PointerAbs, is Scroll -> counters.touchMsgs++
+                is Key -> counters.keyMsgs++
                 else -> counters.otherMsgs++
             }
             return true
