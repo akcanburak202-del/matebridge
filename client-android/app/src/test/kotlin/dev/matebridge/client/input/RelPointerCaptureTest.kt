@@ -79,7 +79,7 @@ class RelPointerCaptureTest {
         assertTrue(sink.sent.isEmpty()) // held
         // A press flushes the merged motion first, then is sent on its own.
         cap.onMouse(MouseFrame(3_000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 8), 3)
-        assertEquals(listOf(PointerRel(2_000, 4f, 6f, 0), PointerRel(3_000, 0f, 0f, Buttons.LEFT)), sink.sent)
+        assertEquals(listOf(PointerRel(2_000, 4f * PadTuning.MOUSE_GAIN, 6f * PadTuning.MOUSE_GAIN, 0), PointerRel(3_000, 0f, 0f, Buttons.LEFT)), sink.sent)
         cap.onMouse(MouseFrame(4_000, 1f, 0f, Buttons.LEFT, deviceId = 8), 4)
         cap.onMouse(MouseFrame(5_000, 0f, 0f, 0, deviceId = 8), 5) // the release flushes the held motion, then goes out
         assertEquals(Buttons.LEFT, (sink.sent[2] as PointerRel).buttons)

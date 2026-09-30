@@ -1,7 +1,7 @@
 ---
 id: T-035
 title: Tablet — imleç hızı (daha yavaş varsayılan + canlı ayar kısayolu), Android'e dönüş kısayolu
-status: todo
+status: review
 phase: 3
 owner: android-client-dev
 depends_on: [T-033, T-034]
@@ -35,12 +35,27 @@ Faz 3 cihaz testi (kullanıcı, 2026-09-30): klavye, touchpad ve fare çalışı
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `PadTuning`: SCREEN_SPAN 0,8; GAIN_MIN 0,6; GAIN_MAX 1,8; MOUSE_GAIN 0,6.
+2. `Settings`: `touchpadSpeed()/mouseSpeed()` (+setters, clamp 0,25-3,0, default 1,0, bozuk deger -> 1,0), `adjustSpeed(mouse, factor)`, Turkce etiket bicimleyici.
+3. `RelPointerTracker`: `padSpeed`/`mouseSpeed` carpani yalnizca imlec hareketine (scroll degil); `lastWasMouse` (son kullanilan cihaz).
+4. `KeyTracker`: `KeyDecision.local` (enum LocalAction: STATS, SPEED_DOWN, SPEED_UP, BACKGROUND); T-033 localOnly mekanizmasi Ctrl+Shift+F1/F2/F3/Esc icin genellestirilir. Esc'in BACK kontrolu yerel kontrolden sonraya alinir (Esc BACK koduyla da gelebilir).
+   Not: mevcut `KEYCODE_F3 = 134` hatali (Android'de F3 = 133, 134 = F4); F1=131, F2=132, F3=133 olarak duzeltilir, testler guncellenir (scan kodu 59/60/61 de kabul).
+5. `InputCapture`: hiz carpanlarini tracker'a iletir; `lastPointerIsMouse`.
+6. `MainActivity`: local action isleme (hiz: Settings + Toast; BACKGROUND: moveTaskToBack(true) -> onPause -> RELEASE_ALL(BACKGROUND)); baslangicta ayarlari uygular; panele tek satir kisayol metni.
+7. Testler: Settings siniri/kalicilik, F1/F2/Esc yerel + tekrar eden DOWN yerel, varsayilan sabitler, hiz carpaninin scroll'u etkilememesi.
+
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** dalın son commit'i (`git log task/T-035-client-pointer-speed-exit`).
+- **Dokunulan dosyalar:** input/KeyTracker.kt, InputCapture.kt, RelPointerTracker.kt; session/Settings.kt; MainActivity.kt; testler (KeyTrackerTest, RelPointerTrackerTest, RelPointerCaptureTest, SessionSupportTest); bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - **Hata düzeltmesi:** mevcut `KEYCODE_F3 = 134` yanlıştı (Android: F1=131, F2=132, F3=133, 134=F4). 133'e düzeltildi, F1/F2 eklendi; tuşlar ayrıca Linux scan kodlarıyla (59/60/61) da eşleşir. Testler 134 -> 133 güncellendi.
+  - Kaydırma hızı korunsun diye `SCROLL_GAIN` 1,0 -> 1,5 (SCREEN_SPAN 1,2 -> 0,8 kaydırmayı da yavaşlatacaktı).
+  - Çarpan adımları 0,85 / 1,15; aralık 0,25-3,0; bozuk kayıt değeri 1,0.
+  - "Son kullanılan cihaz" = son kare gelen cihaz (pad ya da fare); hiçbiri yoksa touchpad.
+  - Ctrl+Shift+Esc, Esc'in BACK koduyla (scan 1) gelmesini de tanır; yalnız Esc Mac'e gitmeye devam eder.
+  - Oturum yokken yalnızca F3 yerel; F1/F2/Esc Android'de kalır.
+  - Panele kısayol metni kodla eklendi (addShortcutHint).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ctrl+Shift+F1/F2 ile Toast ve hızın canlı değişmesi (touchpad/fare ayrı); Ctrl+Shift+Esc ile uygulama arka plana gidiyor, Mac'te Ctrl/Shift takılı kalmıyor, pointer capture bırakılıyor (Android imleci geri geliyor), geri dönünce devam ediyor; yeni varsayılan hız hissi; Toast immersive modda görünüyor mu; kaydırma hızı eskisiyle aynı mı; Ctrl+Shift+F3 hâlâ çalışıyor mu.
+- **Açık sorular:** Yok.

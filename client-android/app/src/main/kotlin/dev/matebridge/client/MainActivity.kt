@@ -29,6 +29,7 @@ import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
 import dev.matebridge.client.input.KeyFrame
 import dev.matebridge.client.input.KeyTracker
+import dev.matebridge.client.input.LocalAction
 import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.input.UnbufferedPenDispatch
 import dev.matebridge.client.protocol.Capabilities
@@ -58,6 +59,7 @@ import dev.matebridge.client.session.SessionController
 import dev.matebridge.client.session.SessionListener
 import dev.matebridge.client.session.SessionUi
 import dev.matebridge.client.session.Settings
+import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.truncateUtf8
 import kotlin.math.max
 import kotlin.math.min
@@ -219,6 +221,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
         capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        applyPointerSpeeds()
         // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
         // sits on a LEAF view, `video` (a fixed child of root, also while the GL view is the one in use): a ViewGroup
         // recomputes its own unbuffered source from its children (ViewGroup.onDescendantUnbufferedRequested, e.g. on
@@ -248,6 +251,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.setOnCapturedPointerListener(capturedPointerListener)
         }
         addFingerToggle()
+        addShortcutHint()
         applyImmersive()
         render(SessionUi.Searching)
     }
@@ -391,7 +395,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     timeUs = ev.eventTime * 1000,
                 ),
             )
-            if (d.localToggle) toggleStats()
+            when (d.local) {
+                LocalAction.STATS -> toggleStats()
+                LocalAction.SPEED_DOWN -> adjustPointerSpeed(SpeedRange.STEP_DOWN)
+                LocalAction.SPEED_UP -> adjustPointerSpeed(SpeedRange.STEP_UP)
+                // onPause sends RELEASE_ALL(BACKGROUND) (Ctrl/Shift held on the Mac are released) and capture is dropped.
+                LocalAction.BACKGROUND -> moveTaskToBack(true)
+                LocalAction.NONE -> {}
+            }
             if (d.consumed) return true
         }
         return super.dispatchKeyEvent(ev)
@@ -434,6 +445,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         lp.topMargin = (8 * resources.displayMetrics.density).toInt()
         p.addView(b, lp)
+    }
+
+    private fun applyPointerSpeeds() = capture.setPointerSpeeds(settings.touchpadSpeed(), settings.mouseSpeed())
+
+    private fun adjustPointerSpeed(factor: Float) {
+        val mouse = capture.lastPointerIsMouse
+        val v = settings.adjustSpeed(mouse, factor)
+        applyPointerSpeeds()
+        Toast.makeText(this, SpeedRange.label(mouse, v), Toast.LENGTH_SHORT).show()
+    }
+
+    /** One-line shortcut list in the connect panel (added from code, like the finger switch). */
+    private fun addShortcutHint() {
+        val p = panel as? LinearLayout ?: return
+        val t = TextView(this)
+        t.text = "Kısayollar: Ctrl+Shift+F3 istatistik, F1/F2 imleç hızı -/+, Esc Android'e dön"
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(t, lp)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {

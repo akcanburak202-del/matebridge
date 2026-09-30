@@ -17,11 +17,11 @@ object PadTuning {
     const val DEFAULT_EXTENT = 1560f
 
     /** One pad width is this many Mac screen widths (before acceleration). */
-    const val SCREEN_SPAN = 1.2f
+    const val SCREEN_SPAN = 0.8f
 
     /** Acceleration: gain grows linearly from [GAIN_MIN] at [SLOW_PT_S] to [GAIN_MAX] at [FAST_PT_S] (base Mac points per second). */
-    const val GAIN_MIN = 0.8f
-    const val GAIN_MAX = 2.6f
+    const val GAIN_MIN = 0.6f
+    const val GAIN_MAX = 1.8f
     const val SLOW_PT_S = 150f
     const val FAST_PT_S = 1800f
 
@@ -30,10 +30,10 @@ object PadTuning {
     const val MAX_DT_MS = 50L
 
     /** Two-finger scroll distance relative to cursor distance (no acceleration; inertia and direction are host work). */
-    const val SCROLL_GAIN = 1.0f
+    const val SCROLL_GAIN = 1.5f // 1.2 / SCREEN_SPAN: the span cut (T-035) must not slow scrolling
 
-    /** Mouse counts to Mac points. Plain 1:1, no acceleration. */
-    const val MOUSE_GAIN = 1.0f
+    /** Mouse counts to Mac points. No acceleration; 0.6 (T-035, 1:1 was too fast). */
+    const val MOUSE_GAIN = 0.6f
 
     /** One wheel notch in Mac points (PROTOCOL.md section 4 SCROLL). */
     const val WHEEL_NOTCH_PT = 10f
@@ -96,6 +96,14 @@ class MouseFrame(
 class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     /** Mac point width of the stream (STREAM_CONFIG); motion and scrolling are off until known. */
     var widthPt = 0
+
+    /** User speed multipliers (Settings, T-035); they scale cursor motion only, never scrolling. */
+    var padSpeed = 1f
+    var mouseSpeed = 1f
+
+    /** True when the mouse was the last device to send a frame; false for the touchpad and before any frame. */
+    var lastWasMouse = false
+        private set
 
     private enum class ScrollMode { NONE, OPEN, PARKED }
 
@@ -164,6 +172,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     fun onPad(f: PadFrame, nowMs: Long): List<Outgoing> {
         val out = ArrayList<Outgoing>(3)
         padDevice = f.deviceId
+        lastWasMouse = false
         if (f.action == PadAction.CANCEL) return release(nowMs)
         val extent = if (f.extent > 0f) f.extent else PadTuning.DEFAULT_EXTENT
         val slop = extent * PadTuning.SLOP_FRAC
@@ -312,10 +321,11 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
     fun onMouse(f: MouseFrame, nowMs: Long): List<Outgoing> {
         val out = ArrayList<Outgoing>(3)
         mouseDevice = f.deviceId
+        lastWasMouse = true
         mouseMask = mouseSync.update(f.buttons, f.pressedButton)
         emitButtons(f.timeUs, out)
         if (f.dx != 0f || f.dy != 0f) {
-            out += Outgoing(PointerRel(f.timeUs, f.dx * PadTuning.MOUSE_GAIN, f.dy * PadTuning.MOUSE_GAIN, reported), true)
+            out += Outgoing(PointerRel(f.timeUs, f.dx * PadTuning.MOUSE_GAIN * mouseSpeed, f.dy * PadTuning.MOUSE_GAIN * mouseSpeed, reported), true)
         }
         if (f.wheelV != 0f || f.wheelH != 0f) {
             out += Outgoing(Scroll(f.timeUs, -f.wheelH * PadTuning.WHEEL_NOTCH_PT, f.wheelV * PadTuning.WHEEL_NOTCH_PT, Scroll.NONE))
@@ -385,7 +395,7 @@ class RelPointerTracker(private val counters: InputCounters = InputCounters()) {
         val by = rawDy * base
         val speed = hypot(bx, by) * 1000f / dtMs
         val t = ((speed - PadTuning.SLOW_PT_S) / (PadTuning.FAST_PT_S - PadTuning.SLOW_PT_S)).coerceIn(0f, 1f)
-        val gain = PadTuning.GAIN_MIN + (PadTuning.GAIN_MAX - PadTuning.GAIN_MIN) * t
+        val gain = (PadTuning.GAIN_MIN + (PadTuning.GAIN_MAX - PadTuning.GAIN_MIN) * t) * padSpeed
         out += Outgoing(PointerRel(timeUs, bx * gain, by * gain, reported), true)
     }
 

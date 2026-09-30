@@ -133,4 +133,31 @@ class SessionSupportTest {
         assertEquals(49, slot.take()!!.gen)
         assertNull(slot.take())
     }
+
+    @Test fun speedMultipliersDefaultClampAndPersist() {
+        val store = MemStore()
+        val st = Settings(store, Random(1))
+        assertEquals(1f, st.touchpadSpeed(), 0f)
+        assertEquals(1f, st.mouseSpeed(), 0f)
+        st.setTouchpadSpeed(10f)
+        assertEquals(SpeedRange.MAX, Settings(store, Random(1)).touchpadSpeed(), 0f)
+        st.setMouseSpeed(0.01f)
+        assertEquals(SpeedRange.MIN, Settings(store, Random(1)).mouseSpeed(), 0f)
+        store.map["touchpad_speed"] = "junk"
+        assertEquals(1f, st.touchpadSpeed(), 0f)
+        store.map["touchpad_speed"] = "99"
+        assertEquals(SpeedRange.MAX, st.touchpadSpeed(), 0f)
+    }
+
+    @Test fun adjustSpeedStepsClampsAndKeepsKindsSeparate() {
+        val st = Settings(MemStore(), Random(1))
+        assertEquals(0.85f, st.adjustSpeed(false, SpeedRange.STEP_DOWN), 0.0001f)
+        assertEquals(1f, st.mouseSpeed(), 0f)
+        repeat(40) { st.adjustSpeed(false, SpeedRange.STEP_DOWN) }
+        assertEquals(SpeedRange.MIN, st.touchpadSpeed(), 0f)
+        repeat(60) { st.adjustSpeed(true, SpeedRange.STEP_UP) }
+        assertEquals(SpeedRange.MAX, st.mouseSpeed(), 0f)
+        assertEquals("Touchpad hızı: 0,85", SpeedRange.label(false, 0.85f))
+        assertEquals("Fare hızı: 1,15", SpeedRange.label(true, 1.15f))
+    }
 }
