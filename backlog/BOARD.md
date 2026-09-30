@@ -8,6 +8,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-038](tasks/T-038-client-shortcuts-no-fkeys.md) | Tablet — F tuşu olmayan klavye için yerel kısayollar (Ctrl+Shift+8/9/0) | 3 | android-client-dev | [T-035] |
+
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
