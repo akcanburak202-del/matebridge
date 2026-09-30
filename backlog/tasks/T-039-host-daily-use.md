@@ -1,0 +1,47 @@
+---
+id: T-039
+title: Mac günlük kullanım — oturum açılışında başlama, menü (durum, loglar), USB tünellerini kendiliğinden kurma
+status: todo
+phase: 4
+owner: mac-host-dev
+depends_on: [T-020]
+decisions: []
+files:
+  - host-mac/Sources/MateBridgeApp/
+  - host-mac/Sources/MateBridgeHost/Session/
+  - host-mac/Sources/MateBridgeHost/Usb/
+  - host-mac/Sources/MateBridgeCore/Usb/
+  - host-mac/Tests/MateBridgeCoreTests/
+  - scripts/usb-mode.sh
+  - scripts/bundle-host.sh
+  - backlog/tasks/T-039-host-daily-use.md
+---
+
+## Amaç
+
+PLAN Aşama 4: Mac tarafında "hiçbir şey yapmadan çalışsın". Bugün host elle açılıyor (`open build/MateBridge.app`), USB modu için `scripts/usb-mode.sh on` elle çalıştırılıyor ve kablo çekilip takılınca tüneller geri gelmiyor (NOTES 2026-09-30). Mac açılışta otomatik oturum açıyor (FileVault kapalı).
+
+## Kabul kriterleri
+
+- [ ] **Oturum açılışında başlama:** menüde "Oturum açılışında başlat" (onay işaretli) → `SMAppService.mainApp.register()/unregister()`; durum menü açılırken okunur; hata olursa menüde tek satır ve log. Varsayılan: **açık** (ilk açılışta bir kez kaydeder; kullanıcı kapatırsa bir daha zorlamaz, tercih `UserDefaults`'ta).
+- [ ] **Menü:** durum satırı bağlı tablet adını ve taşımayı gösterir (ör. "Bağlı: MatePad (USB)" / "Bekleniyor"); "Logları aç" → `~/Library/Logs/MateBridge/` Finder'da; "USB modu" onay öğesi (aşağıda). Mevcut öğeler (izin, onaylı cihazları unut, Quit) kalır.
+- [ ] **USB tünel bekçisi** (`MateBridgeHost/Usb/`, saf karar mantığı `MateBridgeCore/Usb/` ve testli): "USB modu" açıkken host `adb`'yi bulur (`ANDROID_HOME`, `~/Library/Android/sdk/platform-tools/adb`, `PATH`), adb sunucusunun ayakta olduğunu sağlar (bugünkü betikteki launchd yöntemi: `launchctl submit -l dev.matebridge.adb` ile `ADB_MDNS=0 ADB_MDNS_AUTO_CONNECT=0 adb -a nodaemon server`) ve cihaz bağlıyken `adb reverse tcp:47001 tcp:47001` + `tcp:47002` tünellerinin var olduğunu **2 sn'de bir** denetler; yoksa kurar. Kablo çekilip takılınca tüneller en geç birkaç saniyede geri gelir. Yalnızca durum değişimi loglanır (`ev=usb_tunnel state=up|down|no_device|no_adb`), cihaz seri numarası **loglanmaz**. Alt süreçler zaman aşımıyla çalışır (asılı kalan adb host'u kilitlemez), ana iş parçacığında çalışmaz. USB modu kapatılınca tüneller kaldırılır, bekçi durur. Tercih kalıcıdır; varsayılan **açık**.
+- [ ] `scripts/usb-mode.sh` kalır (elle kullanım ve hata ayıklama için); başına "host artık bunu kendisi yapıyor" notu.
+- [ ] `./scripts/check.sh` geçiyor; saf bekçi mantığı (durum → eylem: sunucu yok/cihaz yok/tünel eksik/tamam; geri çekilme) birim testli.
+
+## Kapsam dışı
+
+- Mac uyku/kilit/uyanma sonrası toparlanma (ayrı kart, önce ölçüm). Ayarlar ekranı, şifreleme.
+- Gerçek olay gönderme yok. `adb` komutlarını **çalıştırma** (kullanıcının tableti bağlı; cihaz testi orkestratörde): kodu yaz, test et, çalıştırma.
+
+## Plan
+
+_(Ajan doldurur.)_
+
+## Handoff
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**
