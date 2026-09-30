@@ -102,6 +102,46 @@ class KeyTrackerTest {
         assertEquals(32, (sink.sent.last() as Key).scanCode)
     }
 
+    @Test fun sameKeyOnTwoKeyboardsSendsFirstDownAndLastUpOnly() {
+        key(42, dev = 7); key(42, dev = 9)
+        assertEquals(listOf(Key.DOWN), keys().map { it.action })
+        key(42, dev = 7, down = false)
+        assertEquals(1, keys().size) // the other keyboard still holds Shift
+        key(42, dev = 9, down = false)
+        assertEquals(listOf(Key.DOWN, Key.UP), keys().map { it.action })
+    }
+
+    @Test fun detachKeepsKeyWhileAnotherKeyboardHoldsIt() {
+        key(42, dev = 7); key(42, dev = 9)
+        cap.onDeviceRemoved(7, 500)
+        assertEquals(1, keys().size)
+        cap.onDeviceRemoved(9, 600)
+        assertEquals(listOf(Key.DOWN, Key.UP), keys().map { it.action })
+    }
+
+    @Test fun localF3DuplicateDownAndUpStayLocalEvenAfterModifiersRelease() {
+        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
+        val dup = key(61, code = 134) // modifiers already released, DOWN with repeat 0
+        assertTrue(dup.consumed); assertFalse(dup.localToggle)
+        assertTrue(key(61, code = 134, down = false).consumed)
+        assertTrue(keys().isEmpty())
+        // after the UP a fresh chord toggles again
+        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
+    }
+
+    @Test fun localF3SuppressionEndsOnDetachAndReset() {
+        key(61, code = 134, ctrl = true, shift = true)
+        cap.onDeviceRemoved(kb, 500)
+        key(61, code = 134) // plain F3 now goes to the Mac
+        assertEquals(1, keys().size)
+        key(61, code = 134, down = false)
+        assertEquals(2, keys().size)
+        assertTrue(key(61, code = 134, ctrl = true, shift = true).localToggle)
+        cap.releaseAll(ReleaseAll.USER, 900)
+        key(61, code = 134) // reset cleared the suppression: plain F3 is sent again
+        assertEquals(3, keys().size)
+    }
+
     @Test fun deviceRemovedWithoutKeysSendsNothing() {
         cap.onDeviceRemoved(kb, 500)
         assertTrue(sink.sent.isEmpty())
