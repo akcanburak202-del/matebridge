@@ -4,6 +4,7 @@ public enum Message: Equatable, Sendable {
     case helloAck(HelloAck)
     case streamConfig(StreamConfig)
     case bye(ByeReason)
+    case streamPrefs(StreamPrefs)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -25,6 +26,7 @@ public enum Message: Equatable, Sendable {
         case .helloAck: .helloAck
         case .streamConfig: .streamConfig
         case .bye: .bye
+        case .streamPrefs: .streamPrefs
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -50,6 +52,7 @@ public enum Message: Equatable, Sendable {
         case .helloAck(let m): m.write(&w)
         case .streamConfig(let m): m.write(&w)
         case .bye(let r): w.u8(r.rawValue)
+        case .streamPrefs(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -142,6 +145,7 @@ public enum Message: Equatable, Sendable {
         case .helloAck: return .helloAck(try HelloAck.read(&r))
         case .streamConfig: return .streamConfig(try StreamConfig.read(&r))
         case .bye: return .bye(ByeReason(rawValue: try r.u8()))
+        case .streamPrefs: return .streamPrefs(try StreamPrefs.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))

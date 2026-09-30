@@ -34,6 +34,13 @@ final class VirtualDisplay: @unchecked Sendable {
     private var display: NSObject?
     private let queue = DispatchQueue(label: "matebridge.virtualdisplay")
     let displayID: CGDirectDisplayID
+    private let pixelWidth: Int
+    private let pixelHeight: Int
+    private let hidpi: Bool
+
+    /// Refresh rates registered as modes at creation, so `setRefreshRate` can switch without recreating the display
+    /// (T-049). The requested rate comes first, so it is the default mode.
+    static let supportedRefreshRates: [Double] = [60, 120, 144]
 
     /// The vendor and product numbers the display is created with. `VirtualDisplayLocator` recognizes the display by
     /// exactly these numbers (public CoreGraphics calls only), so they live in one place.
@@ -87,15 +94,17 @@ final class VirtualDisplay: @unchecked Sendable {
             throw VirtualDisplayError.apiUnavailable("initWithWidth:height:refreshRate:")
         }
         let modeImp = unsafeBitCast(class_getMethodImplementation(modeClass, modeSel), to: ModeInitFn.self)
-        func makeMode(_ w: Int, _ h: Int) -> NSObject? {
+        func makeMode(_ w: Int, _ h: Int, _ rate: Double) -> NSObject? {
             guard let a = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() else { return nil }
-            return modeImp(a, modeSel, UInt32(w), UInt32(h), refreshRate)?.takeRetainedValue() as? NSObject
+            return modeImp(a, modeSel, UInt32(w), UInt32(h), rate)?.takeRetainedValue() as? NSObject
         }
+        // One mode per supported refresh rate (same size), the requested rate first.
+        let rates = [refreshRate] + VirtualDisplay.supportedRefreshRates.filter { $0 != refreshRate }
         var modes: [NSObject] = []
-        if hidpi {
-            if let m = makeMode(pixelWidth / 2, pixelHeight / 2) { modes.append(m) }
-        } else if let m = makeMode(pixelWidth, pixelHeight) {
-            modes.append(m)
+        for rate in rates {
+            if let m = makeMode(hidpi ? pixelWidth / 2 : pixelWidth, hidpi ? pixelHeight / 2 : pixelHeight, rate) {
+                modes.append(m)
+            }
         }
 
         let settings = settingsClass.init()
@@ -111,13 +120,27 @@ final class VirtualDisplay: @unchecked Sendable {
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
         self.display = created
         self.displayID = id
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.hidpi = hidpi
         self.requestedRefreshHz = refreshRate
         self.modeSelected = VirtualDisplay.selectMode(id, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi,
                                                       refreshRate: refreshRate)
     }
 
-    /// Refresh rate the display mode was created with.
-    let requestedRefreshHz: Double
+    /// Refresh rate that was last asked for (creation or `setRefreshRate`).
+    private(set) var requestedRefreshHz: Double
+
+    /// Switches to the registered mode closest to `hz` without recreating the display. False when no mode could be
+    /// made current; the caller then recreates the display.
+    @discardableResult
+    func setRefreshRate(_ hz: Double) -> Bool {
+        requestedRefreshHz = hz
+        let ok = VirtualDisplay.selectMode(displayID, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi,
+                                           refreshRate: hz)
+        modeSelected = ok
+        return ok
+    }
 
     /// Current mode as the system reports it, e.g. "2800x1840px 1400x920pt 120Hz" (0 Hz = the system reports none).
     var appliedModeDescription: String {

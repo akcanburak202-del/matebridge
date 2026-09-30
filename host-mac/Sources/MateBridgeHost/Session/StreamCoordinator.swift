@@ -18,6 +18,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
+        case streamPrefs(StreamPrefs)
         case stats(Stats)
         case tick
         case pipelineFailed(id: Int, message: String)
@@ -35,15 +36,22 @@ public final class StreamCoordinator: @unchecked Sendable {
         var sessionID: UInt32
         var configID: UInt16
         var deviceID: DeviceID
+        /// Settings in effect (base + the tablet's latest `STREAM_PREFS`).
         var settings: VideoSettings
+        /// Settings derived from the HELLO and the experiment knobs, before any `STREAM_PREFS`.
+        var base: VideoSettings
     }
 
     /// Menu text for the video/stats line ("" = nothing to show). Called on an arbitrary queue.
     public var onSummary: @Sendable (String) -> Void = { _ in }
+    /// The stream settings of a live session changed (`STREAM_PREFS`): the session layer sends this `STREAM_CONFIG`
+    /// (new `config_id`) and closes the video connection (PROTOCOL.md 3.7). Called on an arbitrary queue, before the
+    /// capture and encoder are rebuilt, so a video connection that reopens early waits in the mailbox.
+    public var onReconfigure: @Sendable (_ sessionID: UInt32, _ config: StreamConfig) -> Void = { _, _ in }
     /// The lifecycle mailbox overflowed: end every session (release input, BYE) so the client reconnects cleanly.
     public var onOverflow: @Sendable () -> Void = {}
 
-    private static let tickKey = 1, statsKey = 2, keyframeKey = 3
+    private static let tickKey = 1, statsKey = 2, keyframeKey = 3, prefsKey = 4
 
     private let logger = SessionLogger(component: "net")
     private let videoLogger = SessionLogger(component: "video")
@@ -64,6 +72,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var pipelineRetried = false
     private var lastStatsText = ""
     private var lastCadenceText = ""
+    private var prefsGate = StreamPrefsGate()
 
     public init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
         lease = DisplayLease(graceUs: graceUs)
@@ -146,6 +155,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         switch message {
         case .keyframeRequest(let reason): post(.keyframeRequest(reason), key: Self.keyframeKey)
         case .stats(let stats): post(.stats(stats), key: Self.statsKey)
+        case .streamPrefs(let prefs): post(.streamPrefs(prefs), key: Self.prefsKey)
         default: break
         }
     }
@@ -186,10 +196,14 @@ public final class StreamCoordinator: @unchecked Sendable {
             if pipeline?.requestKeyframe(reason: reason) == true {
                 log(.info, "codec_config_resent", "reason=\(reason.rawValue)")
             }
+        case .streamPrefs(let prefs):
+            await onStreamPrefs(prefs)
         case .stats(let stats):
             onStats(stats)
         case .tick:
-            await perform(lease.tick(now: HostClock.nowUs()))
+            let now = HostClock.nowUs()
+            await perform(lease.tick(now: now))
+            if let waiting = prefsGate.poll(now: now) { await applyPrefs(waiting) }
             reportCadence()
         case .pipelineFailed(let id, let message):
             await onPipelineFailed(id: id, message: message)
@@ -209,9 +223,40 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
-        session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings)
-        log(.info, "stream_session", "width=\(settings.widthPx) height=\(settings.heightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
+        session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
+                                base: settings)
+        prefsGate = StreamPrefsGate()
+        log(.info, "stream_session", "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
         await perform(lease.sessionStarted(device: device, settings: settings))
+    }
+
+    /// `STREAM_PREFS`: the gate allows one reconfiguration per second; a request that arrives earlier waits for the tick.
+    private func onStreamPrefs(_ prefs: StreamPrefs) async {
+        guard session != nil else { return }
+        let p = prefs.normalized
+        log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille)")
+        if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
+    }
+
+    /// Derives the settings, and if they differ from the running ones: new `config_id`, session layer notified
+    /// (`STREAM_CONFIG` + video close), capture and encoder rebuilt on the same virtual display (its refresh rate is
+    /// switched in place; `VideoPipeline` replaces the display only if that fails).
+    private func applyPrefs(_ prefs: StreamPrefs) async {
+        guard var live = session else { return }
+        let env = ProcessInfo.processInfo.environment
+        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
+        guard wanted != live.settings else { return }
+        let old = live.settings
+        live.settings = wanted
+        live.configID = nextConfigID(after: live.configID)
+        session = live
+        prefsGate.markApplied(now: HostClock.nowUs())
+        log(.info, "stream_reconfigure",
+            "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
+            + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
+            + "bitrate_kbps=\(wanted.bitrateKbps)")
+        onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
+        await perform(lease.reconfigure(settings: wanted))
     }
 
     private func onSessionEnded() async {
@@ -333,15 +378,29 @@ public final class StreamCoordinator: @unchecked Sendable {
                 await createPipeline(settings: s)
             case .reuse:
                 log(.info, "display_reused")
+            case .reconfigure(let s):
+                log(.info, "display_reused", "restart=true fps=\(s.fps) refresh_hz=\(s.displayRefreshHz)")
+                await restartPipeline(settings: s)
             }
         }
     }
 
-    private func createPipeline(settings: VideoSettings) async {
+    /// Capture and encoder with new settings on the same virtual display. Without a running pipeline nothing is
+    /// started here: the next video connection builds one from the session's settings.
+    private func restartPipeline(settings: VideoSettings) async {
+        guard !isShuttingDown else { return }
+        await stopConsumer()
+        guard let old = pipeline else { return }
+        pipeline = nil
+        let display = await old.stopKeepingDisplay()
+        await createPipeline(settings: settings, reusing: display)
+    }
+
+    private func createPipeline(settings: VideoSettings, reusing display: VirtualDisplay? = nil) async {
         guard !isShuttingDown else { return }
         pipelineID += 1
         let id = pipelineID
-        let p = VideoPipeline(settings: settings, onFailure: { [weak self] error in
+        let p = VideoPipeline(settings: settings, reusing: display, onFailure: { [weak self] error in
             self?.post(.pipelineFailed(id: id, message: "\(error)"))
         })
         do {
@@ -352,7 +411,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             }
             pipeline = p
             startDrain()
-            log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx)")
+            log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)")
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: p.cadenceSetup)
             onSummary("")

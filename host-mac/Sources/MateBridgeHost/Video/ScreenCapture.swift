@@ -47,8 +47,9 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             throw ScreenCaptureError.displayNotFound(displayID)
         }
         let cfg = SCStreamConfiguration()
-        cfg.width = settings.widthPx
-        cfg.height = settings.heightPx
+        // SCK scales the display to the encoded size (T-049 performance mode); at scale 1000 this is the display size.
+        cfg.width = settings.encodedWidthPx
+        cfg.height = settings.encodedHeightPx
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2

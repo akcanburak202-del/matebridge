@@ -337,6 +337,41 @@ public struct StreamConfig: Equatable, Sendable {
     }
 }
 
+/// `STREAM_PREFS` (C->H): the user's stream mode request (docs/PROTOCOL.md 0x05). Raw wire values; the host applies
+/// `normalized` (unknown fps -> 60, scale clamped).
+public struct StreamPrefs: Equatable, Sendable {
+    public static let supportedFps: [Int] = [60, 120, 144]
+    public static let scaleRange: ClosedRange<Int> = 500...1000
+
+    public var fps: UInt16
+    public var scalePermille: UInt16
+
+    public init(fps: UInt16, scalePermille: UInt16) {
+        self.fps = fps
+        self.scalePermille = scalePermille
+    }
+
+    /// What the host honours: fps in {60, 120, 144} (anything else is 60) and scale clamped to 500...1000.
+    public var normalized: StreamPrefs {
+        let f = Self.supportedFps.contains(Int(fps)) ? fps : 60
+        let s = min(max(Int(scalePermille), Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
+        return StreamPrefs(fps: f, scalePermille: UInt16(s))
+    }
+
+    func write(_ w: inout ByteWriter) {
+        w.u16(fps)
+        w.u16(scalePermille)
+        w.u32(0)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> StreamPrefs {
+        let fps = try r.u16()
+        let scale = try r.u16()
+        try r.skip(4)
+        return StreamPrefs(fps: fps, scalePermille: scale)
+    }
+}
+
 // MARK: - Input messages
 
 public struct PenSample: Equatable, Sendable {

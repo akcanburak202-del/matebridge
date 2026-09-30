@@ -15,6 +15,9 @@ public struct DisplayLease: Sendable {
         case create(VideoSettings)
         /// Keep the existing display.
         case reuse
+        /// Keep the display (same device and size) but restart capture and encoder with these settings (fps, scale,
+        /// refresh rate changed; T-049).
+        case reconfigure(VideoSettings)
     }
 
     private enum State: Equatable {
@@ -38,8 +41,18 @@ public struct DisplayLease: Sendable {
             return [.create(settings)]
         case .active(let d, let s), .grace(let d, let s, _):
             state = .active(device, settings)
-            return d == device && s == settings ? [.reuse] : [.teardown, .create(settings)]
+            guard d == device, s.sameDisplay(as: settings) else { return [.teardown, .create(settings)] }
+            return s == settings ? [.reuse] : [.reconfigure(settings)]
         }
+    }
+
+    /// A live session changed its stream mode. No display work unless the settings really differ; the display size
+    /// never changes this way (a different size would be replaced).
+    public mutating func reconfigure(settings: VideoSettings) -> [Action] {
+        guard case .active(let d, let s) = state else { return [] }
+        guard s != settings else { return [] }
+        state = .active(d, settings)
+        return s.sameDisplay(as: settings) ? [.reconfigure(settings)] : [.teardown, .create(settings)]
     }
 
     /// The control session ended (or was taken over: a new `sessionStarted` follows).

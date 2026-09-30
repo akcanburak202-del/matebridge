@@ -2,15 +2,18 @@ import Foundation
 
 /// Tunable video parameters and the `STREAM_CONFIG` derived from them.
 public struct VideoSettings: Equatable, Sendable {
+    /// Virtual display size in pixels (the encoded size is `encodedWidthPx` x `encodedHeightPx`).
     public var widthPx: Int
     public var heightPx: Int
+    /// Encoded size as a fraction of the display size, in permille (500...1000; `STREAM_PREFS`, T-049).
+    public var scalePermille: Int = 1000
     /// Logical size in points (HiDPI: half of the pixel size).
     public var widthPt: Int
     public var heightPt: Int
     public var fps: Int
     public var bitrateKbps: Int
     public var codec: Codec
-    /// Refresh rate of the virtual display (60 or 120). Not part of `STREAM_CONFIG`: the stream stays at `fps`.
+    /// Refresh rate of the virtual display (60, 120 or 144). Not part of `STREAM_CONFIG`: the stream stays at `fps`.
     public var displayRefreshHz: Int = 60
     /// VideoToolbox `MaxFrameDelayCount`; nil leaves the encoder default (T-017 experiment knob).
     public var maxFrameDelayCount: Int?
@@ -70,6 +73,11 @@ public struct VideoSettings: Equatable, Sendable {
         return s
     }
 
+    /// Same virtual display size and point size (refresh rate, fps, scale and bitrate may differ).
+    public func sameDisplay(as other: VideoSettings) -> Bool {
+        widthPx == other.widthPx && heightPx == other.heightPx && widthPt == other.widthPt && heightPt == other.heightPt
+    }
+
     public static let colorPrimaries: UInt8 = 1
     public static let transfer: UInt8 = 13
     public static let matrix: UInt8 = 1
@@ -78,7 +86,7 @@ public struct VideoSettings: Equatable, Sendable {
     public func streamConfig(configID: UInt16) -> StreamConfig {
         StreamConfig(
             configID: configID, codec: codec,
-            widthPx: UInt16(clamping: widthPx), heightPx: UInt16(clamping: heightPx),
+            widthPx: UInt16(clamping: encodedWidthPx), heightPx: UInt16(clamping: encodedHeightPx),
             widthPt: UInt16(clamping: widthPt), heightPt: UInt16(clamping: heightPt),
             fps: UInt16(clamping: fps), bitrateKbps: UInt32(clamping: bitrateKbps),
             colorPrimaries: VideoSettings.colorPrimaries, transfer: VideoSettings.transfer,

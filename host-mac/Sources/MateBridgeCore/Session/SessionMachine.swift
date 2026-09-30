@@ -417,6 +417,26 @@ public struct SessionMachine: Sendable {
         return actions
     }
 
+    /// The stream settings of the live session changed (`STREAM_PREFS`, PROTOCOL.md 3.7): send the new `STREAM_CONFIG`
+    /// on the control connection, then close the current video connection; the tablet reopens it with the new
+    /// `config_id`. A video connection that is still proving with the old `config_id` fails its re-check. Nothing
+    /// happens for an unknown session or an unchanged `config_id`.
+    public mutating func reconfigure(sessionID: UInt32, config: StreamConfig) -> [SessionAction] {
+        for (cid, conn) in connections {
+            guard case .active(var s) = conn.phase, s.id == sessionID, s.configID != config.configID else { continue }
+            s.configID = config.configID
+            let old = s.video
+            s.video = nil
+            connections[cid]?.phase = .active(s)
+            var actions: [SessionAction] = [.send(cid, .streamConfig(config))]
+            if let old { actions.append(.closeVideo(old)) }
+            actions.append(.log(.info, ev: "stream_config_changed", conn: cid,
+                                fields: "config_id=\(config.configID) width=\(config.widthPx) height=\(config.heightPx) fps=\(config.fps)"))
+            return actions
+        }
+        return []
+    }
+
     // MARK: Time and shutdown
 
     public mutating func tick(now: UInt64) -> [SessionAction] {
@@ -674,7 +694,7 @@ public struct SessionMachine: Sendable {
             return protocolError(id)
         case .releaseAll(let reason):
             return isActive ? [.releaseInput(id, .clientRequest(reason))] : []
-        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest:
+        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
         case .helloAck, .streamConfig, .pong, .videoHello, .videoFrame:

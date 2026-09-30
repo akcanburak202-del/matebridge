@@ -1,7 +1,7 @@
 ---
 id: T-049
 title: Mac — STREAM_PREFS: fps (60/120/144) ve küçültülmüş kodlama boyutu (performans modu)
-status: todo
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-045, T-047]
@@ -41,8 +41,12 @@ Kullanıcı (2026-10-01): "120 çizim sırasında daha akıcı … daha pürüzs
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** son commit `T-049: STREAM_PREFS on the host ...` (SHA orkestratöre raporda)
+- **Dokunulan dosyalar:** Core: `Messages.swift` (`StreamPrefs`), `Message.swift`, `ProtocolConstants.swift` (0x05), `Video/StreamPrefsPolicy.swift` (yeni: kodlanan boyut, `applying(prefs)`, bit hızı, `nextConfigID`, `StreamPrefsGate`), `Video/VideoSettings.swift` (`scalePermille`, `sameDisplay`), `Video/DisplayLease.swift` (`.reconfigure`), `Session/SessionMachine.swift` (`reconfigure(sessionID:config:)`, STREAM_PREFS teslimi), `Input/InputStateMachine.swift` (exhaustive switch'e `.streamPrefs`). Host: `StreamCoordinator`, `SessionServer` (`reconfigureStream`), `VideoPipeline` (ekranı devralma), `VirtualDisplay`, `ScreenCapture`, `HEVCEncoder`. Testler: `FixtureTests`, `StreamPrefsTests` (yeni), `SessionMachineTests`. **Kart dışı 1 satır:** `MateBridgeApp/main.swift` (`coordinator.onReconfigure` bağlantısı; başka yolu yok).
+- **Davranış:** STREAM_PREFS -> coordinator olayı (coalesced) -> kapı (1/sn, en sonuncusu tick'te) -> `base.applying(prefs)`; ayar değiştiyse yeni `config_id`, `onReconfigure` -> `SessionMachine.reconfigure` (STREAM_CONFIG + video kapat), ardından işlem hattı yeniden kurulur ve **sanal ekran korunur**. Yeniden bağlanmada aynı cihaz/boyut ama farklı ayar -> `lease` `.reconfigure` (ekran yıkılmaz). Başlangıç ayarı (env düğmeleri) oturum başında `base`; prefs `base`'in üzerine biner. Loglar: `stream_prefs`, `stream_reconfigure`, `stream_config_changed`, `display_reused restart=true`.
+- **Sanal ekran yenileme hızı (gerçek cihazda ölçüldü, atılabilir sonda):** ekran 60/120/144 Hz modlarıyla yaratılıyor; `CGDisplaySetDisplayMode` ile **yeniden yaratmadan** 60<->120<->144 geçiş çalıştı (displayID aynı, nokta boyutu 1400x920 aynı, ~0,3 s). **144 Hz modu var** ve seçilebiliyor (`applied: 2800x1840px 1400x920pt 144Hz`). Mod değişmezse `VideoPipeline` eski ekranı bırakıp yenisini yaratır (yedek yol; bekleme eklenmedi, pencere taşınması bu yedekte olabilir).
+- **Bit hızı gerekçesi:** `30 Mbps x fps/60 x scale^2`, 20–80 Mbps. 120/1000 -> 60, 144/1000 -> 72, 120/750 -> 33,75, 60/500 -> 20 (taban). Kare başına bit sabit tutuluyor, piksel sayısı scale^2 ile azalıyor. `MATEBRIDGE_BITRATE_KBPS` yalnızca başlangıç; prefs gelince formül geçerli.
+- **Varsayımlar:** fps 60 için sanal ekran hızı `MATEBRIDGE_REFRESH` ya da 60. Kodlanan boyut: genişlik çift yuvarlanır, yükseklik genişliğe göre çift yuvarlanır (2100x1380, 1400x920). 1380 gibi 16'nın katı olmayan yükseklikte HEVC SPS kırpması (`HEVCSPS.swift` conformance window okuyor mu) doğrulanmadı.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** uçtan uca (tablet STREAM_PREFS gönderir, video yeniden açılır, yeni boyutta çözülür) T-050 ile; 144 fps'te kodlayıcı (`highRate` >= 120 yolu, 144'te ölçülmedi); SCK ölçekleme ve HEVC SPS ara boyutlarda; mod değişiminde Mac pencerelerinin yerinde kalması; reconfigure sırasında video açığı süresi. Uygulama çalıştırılmadı, olay gönderilmedi.
+- **check.sh:** Swift tarafı tamam (488 test). Gradle (client-android) **1 başarısız**: `FixtureTest.everyFixtureFileHasATestCase`, yalnızca `stream_prefs` fixture'ının Kotlin karşılığı yok (T-050'de kapanır). Başka hata yok.
+- **Açık sorular:** `main.swift` (kart `files` dışı) tek satır eklendi; reddedilirse bağlantı başka yerden kurulmalı.

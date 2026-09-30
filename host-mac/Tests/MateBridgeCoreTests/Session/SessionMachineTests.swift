@@ -516,3 +516,57 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         for case .log(_, _, _, let fields) in all { #expect(!fields.contains("SecretName")) }
     }
 }
+
+// MARK: - STREAM_PREFS reconfiguration (T-049)
+
+extension SessionMachineTests {
+    private func config(id: UInt16, width: UInt16 = 2100, height: UInt16 = 1380, fps: UInt16 = 120) -> StreamConfig {
+        var c = sampleConfig
+        c.configID = id
+        c.widthPx = width
+        c.heightPx = height
+        c.fps = fps
+        return c
+    }
+
+    @Test func streamPrefsFromTheActiveSessionIsDelivered() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        let prefs = Message.streamPrefs(StreamPrefs(fps: 120, scalePermille: 750))
+        #expect(m.received(A, prefs, now: 1).contains(.deliver(A, prefs)))
+    }
+
+    @Test func reconfigureSendsConfigThenClosesVideoAndOldConfigIdIsStale() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        attachVideo(&m, V, nonce: 1)
+        let actions = m.reconfigure(sessionID: 77, config: config(id: 2))
+        #expect(actions.first == .send(A, .streamConfig(config(id: 2))))
+        #expect(actions.contains(.closeVideo(V)))
+        // The old config_id no longer attaches; the new one does, without closing anything (video was dropped).
+        _ = m.videoOpened(V2, now: 1)
+        #expect(m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(2)), now: 1)
+            .contains(.closeVideo(V2)))
+        _ = m.videoOpened(V2, now: 2)
+        _ = m.videoHello(V2, VideoHello(configID: 2, sessionID: 77, videoNonce: nonce(3)), now: 2)
+        let proven = m.videoProven(V2, now: 2)
+        #expect(proven.contains { if case .videoAttached(V2, A, 77, 2, _) = $0 { true } else { false } })
+        #expect(!proven.contains(.closeVideo(V)))
+    }
+
+    @Test func reconfigureInvalidatesAProvingVideoConnection() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        _ = m.videoOpened(V, now: 0)
+        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
+        _ = m.reconfigure(sessionID: 77, config: config(id: 2))
+        #expect(m.videoProven(V, now: 1).first == .closeVideo(V))
+    }
+
+    @Test func reconfigureIgnoresUnknownSessionOrSameConfigId() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        #expect(m.reconfigure(sessionID: 99, config: config(id: 2)).isEmpty)
+        #expect(m.reconfigure(sessionID: 77, config: config(id: 1)).isEmpty)
+    }
+}

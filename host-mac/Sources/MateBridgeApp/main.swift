@@ -131,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let server = SessionServer(handlers: handlers, makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
         coordinator.onOverflow = { [server] in server.endSessions() }
+        coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
         server.start()
 
         loginItem.registerOnFirstRun()
