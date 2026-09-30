@@ -149,6 +149,7 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 - [ ] Klavye: tuş down/up, scan code → macOS keycode tablosu, değiştiriciler. Tekrar macOS'a bırakılır.
 - [ ] Türkçe Q, Cmd kısayolları, Ctrl↔Cmd ayarı.
 - [ ] Trackpad: göreli imleç, sol/sağ tık, sürükle-bırak, piksel hassasiyetinde dikey/yatay kaydırma.
+- [ ] Dokunmatik ekranda **iki parmakla yakınlaştırma** (pinch → macOS büyütme hareketi; Krita'da tuval yakınlaştırma). Kullanıcı isteği, 2026-09-30. Protokolde bugün iki parmak için yalnızca `SCROLL` var; yeni bir hareket mesajı ve fixture gerekir (protokol değişikliği, orkestratör).
 - [ ] Uygulama arka plana geçince veya klavye kapağı çıkınca tüm tuşlar bırakılır.
 
 **Bitti:** Harici klavye/fare olmadan 1 saat kod yazılıp tasarım yapılabiliyor. Türkçe karakterler, kısayollar, kaydırma ve sürükleme sorunsuz.
