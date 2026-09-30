@@ -336,6 +336,14 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
+    /// Sends a host-initiated control message (CLIPBOARD) to the active session. Ignored for an ended session.
+    public func sendToSession(sessionID: UInt32, _ message: Message) {
+        queue.async { [self] in
+            guard !stopped else { return }
+            apply(machine.send(sessionID: sessionID, message))
+        }
+    }
+
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
     public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in

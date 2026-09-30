@@ -570,3 +570,22 @@ extension SessionMachineTests {
         #expect(m.reconfigure(sessionID: 77, config: config(id: 1)).isEmpty)
     }
 }
+
+// MARK: - CLIPBOARD (T-054)
+
+extension SessionMachineTests {
+    @Test func clipboardFromTheActiveSessionIsDelivered() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        let clip = Message.clipboard(.text(seq: 1, "x"))
+        #expect(m.received(A, clip, now: 1).contains(.deliver(A, clip)))
+    }
+
+    @Test func hostClipboardGoesToTheActiveSessionOnly() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        let clip = Message.clipboard(.empty(seq: 0))
+        #expect(m.send(sessionID: 77, clip) == [.send(A, clip)])
+        #expect(m.send(sessionID: 78, clip).isEmpty)
+    }
+}

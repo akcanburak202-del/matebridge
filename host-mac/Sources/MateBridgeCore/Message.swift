@@ -5,6 +5,7 @@ public enum Message: Equatable, Sendable {
     case streamConfig(StreamConfig)
     case bye(ByeReason)
     case streamPrefs(StreamPrefs)
+    case clipboard(Clipboard)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -27,6 +28,7 @@ public enum Message: Equatable, Sendable {
         case .streamConfig: .streamConfig
         case .bye: .bye
         case .streamPrefs: .streamPrefs
+        case .clipboard: .clipboard
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -53,6 +55,7 @@ public enum Message: Equatable, Sendable {
         case .streamConfig(let m): m.write(&w)
         case .bye(let r): w.u8(r.rawValue)
         case .streamPrefs(let m): m.write(&w)
+        case .clipboard(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -118,6 +121,8 @@ public enum Message: Equatable, Sendable {
             for (a, b) in zip(m.samples, m.samples.dropFirst()) where b.dtUs < a.dtUs {
                 throw ProtocolError.decreasingSampleTime
             }
+        case .clipboard(let m):
+            guard m.data.count <= ProtocolConstants.clipboardMaxBytes else { throw ProtocolError.invalidField("length") }
         case .videoFrame(let m):
             guard m.fragmentIndex == 0, m.fragmentCount == 1, Int(m.frameSize) == m.data.count else {
                 throw ProtocolError.invalidField("video fragment")
@@ -146,6 +151,7 @@ public enum Message: Equatable, Sendable {
         case .streamConfig: return .streamConfig(try StreamConfig.read(&r))
         case .bye: return .bye(ByeReason(rawValue: try r.u8()))
         case .streamPrefs: return .streamPrefs(try StreamPrefs.read(&r))
+        case .clipboard: return .clipboard(try Clipboard.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))
