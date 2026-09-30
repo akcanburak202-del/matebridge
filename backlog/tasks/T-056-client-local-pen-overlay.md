@@ -1,7 +1,7 @@
 ---
 id: T-056
 title: Tablet — yerel kalem göstergesi (imleç noktası + kısa sönümlenen iz) ile algılanan gecikmeyi azalt
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-052]
@@ -49,3 +49,7 @@ PLAN Aşama 2/5: "Kalem gecikmesi … gerekirse tablette yerel imleç/hover nokt
 - **Varsayimlar:** Katman root'a eklenir, stats metninin altinda / videonun ustunde; koordinatlar `PenFrame` ile ayni root uzayinda, cizim `VideoViewport` dikdortgenine klip edilir. Gosterge `InputCapture.onPen` icinde, `PenTracker` bekletmesinden (T-029 10 ms onay) onceki kareyi gorur: yani nokta/iz aga gitmeyi beklemez. Silgi = `TOOL_TYPE_ERASER` VEYA cift dokunusla yerel ayna bayragi (host her DOUBLE_TAP'te degistirir; release-all/oturum sifirlamada sifirlanir). Ayna, host bir PEN_GESTURE'i yok sayarsa sapabilir. Iz rengi nötr gri (0x8C8C8C) yari saydam; nokta: hover'da halka, temasta dolu, silgide buyuk halka. Sabitler: `PenInkStyle` (pencere 40 ms, sonum 70 ms, alfa 0.55).
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gercek kalemle: (1) hover'da nokta kalemi gecikmesiz izliyor mu; (2) cizerken kisa iz Mac cizgisinin onunde mi, 70 ms'de kayboluyor mu, kalinlik basincla artiyor mu; (3) letterbox bandinda cizim yok, noktalar video ile hizali; (4) cift dokunus sonrasi yalniz halka, iz yok (Krita silgi); (5) panelden "Kalem izi"/"Kalem noktasi" kapat/ac etkisi ve kalicilik; (6) video karesi/pacing (stats) katman yuzunden bozulmuyor; (7) kalem menzilden cikinca/uygulama arka plana gidince nokta kayboluyor. Frame basina <1 ms ciziim sure olculmedi. Sol alt kose gibi yerlerde GL yolunda (`--es render gl`) z-sirasi da kontrol edilmeli.
 - **Açık sorular:** Kalem menzil disina cikar ama HOVER_EXIT gelmezse nokta ekranda kalir (zaman asimi yok; duran kalem hover olayi uretmedigi icin bilerek eklenmedi).
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Kod merge edildi ve tablete kuruldu; kalemle cihaz denemesi kullanıcıyla (sabah). Silgi modu yerel bayrakla tahmin ediliyor (kayabilir); 250 ms örneksiz kalınca nokta gizleniyor.

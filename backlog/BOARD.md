@@ -13,7 +13,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-056](tasks/T-056-client-local-pen-overlay.md) | Tablet — yerel kalem göstergesi (imleç noktası + kısa sönümlenen iz) ile algılanan gecikmeyi azalt | 5 | android-client-dev | [T-052] |
 
 ## done
 
@@ -72,3 +71,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-053](tasks/T-053-host-fast-encoder-60fps.md) | Mac — hızlı kodlayıcı yapılandırması (LLRC'siz, RealTime=false) 60 fps'te de: gecikmeyi düşür | 5 | mac-host-dev | [T-047, T-049] |
 | [T-054](tasks/T-054-host-clipboard.md) | Mac — pano paylaşımı (CLIPBOARD, metin) | 5 | mac-host-dev | [T-041] |
 | [T-055](tasks/T-055-client-clipboard.md) | Tablet — pano paylaşımı (CLIPBOARD, metin) | 5 | android-client-dev | [T-042] |
+| [T-056](tasks/T-056-client-local-pen-overlay.md) | Tablet — yerel kalem göstergesi (imleç noktası + kısa sönümlenen iz) ile algılanan gecikmeyi azalt | 5 | android-client-dev | [T-052] |
