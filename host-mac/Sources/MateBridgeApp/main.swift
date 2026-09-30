@@ -95,8 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // injector, every input message goes to it, and every release-all trigger reaches `releaseInput`.
         let coordinator = self.coordinator
         let input = self.input
-        handlers.sessionStarted = { sid, cid in
-            coordinator.sessionStarted(sessionID: sid, configID: cid)
+        handlers.sessionStarted = { sid, cid, hello in
+            coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello)
             input.sessionStarted(sessionID: sid, configID: cid)
         }
         handlers.sessionEnded = {
@@ -222,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The dialog always shows the latest request: a new one replaces the visible panel immediately.
     private func askApproval(_ request: ApprovalRequest) {
         approvalPanel?.dismiss()
-        let panel = ApprovalPanel(requestID: request.id, deviceName: request.deviceName) { [weak self] approved in
+        let panel = ApprovalPanel(requestID: request.id, deviceName: request.deviceName, code: request.code) { [weak self] approved in
             self?.approvalPanel = nil
             // Bound to this request's id; the server ignores the answer if it is no longer pending.
             self?.server?.resolveApproval(id: request.id, approved: approved)

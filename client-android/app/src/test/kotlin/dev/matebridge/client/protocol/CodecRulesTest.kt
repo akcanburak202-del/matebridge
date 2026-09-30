@@ -164,15 +164,17 @@ class CodecRulesTest {
         }
         // 65 rejected on decode
         val p = Codec.encodePayload(HelloAck(0, 0, 1, 1, "x"))
-        val bad = p.copyOf(p.size - 2) + byteArrayOf(65) + ByteArray(65) { 'a'.code.toByte() }
+        val head = p.copyOf(10) // version, status, reserved, session_id, video_port
+        val tail = p.copyOfRange(p.size - 82, p.size) // key_mode, host_id, host_nonce, host_eph_pub
+        val bad = head + byteArrayOf(65) + ByteArray(65) { 'a'.code.toByte() } + tail
         val dec = FrameDecoder.control(); dec.feed(frame(MsgType.HELLO_ACK, bad))
         expectError(ProtocolException.Kind.INVALID_STRING, dec)
         // invalid UTF-8
-        val bad2 = p.copyOf(p.size - 2) + byteArrayOf(1, 0xFF.toByte())
+        val bad2 = head + byteArrayOf(1, 0xFF.toByte()) + tail
         val dec2 = FrameDecoder.control(); dec2.feed(frame(MsgType.HELLO_ACK, bad2))
         expectError(ProtocolException.Kind.INVALID_STRING, dec2)
         // length byte beyond payload
-        val bad3 = p.copyOf(p.size - 2) + byteArrayOf(10, 'a'.code.toByte())
+        val bad3 = head + byteArrayOf(10, 'a'.code.toByte())
         val dec3 = FrameDecoder.control(); dec3.feed(frame(MsgType.HELLO_ACK, bad3))
         expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec3)
     }

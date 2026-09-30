@@ -274,8 +274,9 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         pen.u32(0); pen.u16(0); pen.u16(0); pen.u16(0); pen.i16(0); pen.i16(0); pen.u8(0xF1); pen.u8(0)
         #expect(try decodeOne(frame(0x10, pen.bytes)) != nil)
         var hello = ByteWriter()
-        hello.u16(0); hello.raw([UInt8](repeating: 1, count: 16)); hello.u16(1); hello.u16(1); hello.u16(1); hello.u16(1)
+        hello.u16(1); hello.raw([UInt8](repeating: 1, count: 16)); hello.u16(1); hello.u16(1); hello.u16(1); hello.u16(1)
         hello.u32(0xFFFF_FF00); hello.u8(0)
+        hello.raw([UInt8](repeating: 2, count: 16)); hello.raw([4] + [UInt8](repeating: 3, count: 64))
         #expect(try decodeOne(frame(0x01, hello.bytes)) != nil)
     }
 

@@ -16,8 +16,7 @@ private let sec: UInt64 = 1_000_000
 private func deviceID(_ n: UInt8) -> DeviceID { DeviceID(bytes: [UInt8](repeating: n, count: 16))! }
 
 private func helloMessage(_ n: UInt8 = 1) -> Message {
-    .hello(Hello(deviceID: deviceID(n), screenWidthPx: 2800, screenHeightPx: 1840, densityDpi: 360, maxRefreshHz: 144,
-                 capabilities: [.pen, .touch], deviceName: "Pad"))
+    .hello(TestClient(device: n).hello)
 }
 
 private let wiringConfig = StreamConfig(configID: 1, codec: .hevc, widthPx: 2800, heightPx: 1840, widthPt: 1400,
@@ -27,7 +26,10 @@ private let wiringConfig = StreamConfig(configID: 1, codec: .hevc, widthPx: 2800
 /// A `SessionMachine` and an `InputPipeline` joined by the same mapping the Host uses.
 private struct WiredSession {
     var session = SessionMachine(configuration: .init(hostName: "Mac", makeStreamConfig: { _ in wiringConfig },
-                                                      makeSessionID: { 42 }), approvedDevices: [deviceID(1)])
+                                                      makeSessionID: { 42 },
+                                                      pairKeys: InMemoryPairKeyStore(keys: [
+                                                          deviceID(1): SecretBytes([UInt8](repeating: 7, count: 32))])),
+                                   approvedDevices: [deviceID(1)])
     var pipe = InputPipeline()
     var model = MacEventModel()
     var now: UInt64 = 10 * sec
@@ -157,6 +159,7 @@ struct SessionInputWiringTests {
         case .takeover:
             w.apply(w.session.connectionOpened(B, now: w.now))
             w.receive(helloMessage(1), on: B)
+            w.receive(.ping(Ping(seq: 1, senderTimeUs: 0)), on: B)  // the proof that activates the takeover
         case .shutdown: w.apply(w.session.shutdown())
         }
         #expect(w.causes.first == trigger.expectedCause, "\(trigger) reached the pipeline as \(String(describing: w.causes.first))")
@@ -179,6 +182,8 @@ struct SessionInputWiringTests {
         w.holdEverything()
         w.apply(w.session.connectionOpened(B, now: w.now))
         w.receive(helloMessage(1), on: B)
+        #expect(w.causes.isEmpty)  // not yet: the new connection has to prove it holds the keys
+        w.receive(.ping(Ping(seq: 1, senderTimeUs: 0)), on: B)
         #expect(w.causes == [.superseded])
         #expect(w.model.isIdle && w.pipe.hasSession)
         // The tablet's old stroke is still going on when the new connection is up.

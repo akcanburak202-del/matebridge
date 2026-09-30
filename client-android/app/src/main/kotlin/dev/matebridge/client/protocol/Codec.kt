@@ -28,6 +28,9 @@ class ProtocolException(val kind: Kind, message: String) : Exception(message) {
 
         /** Decoder fed past its buffer cap without being drained. */
         BUFFER_OVERFLOW,
+
+        /** Invalid public key, inconsistent HELLO_ACK, or an encrypted record that failed authentication (section 9). */
+        AUTH_FAILED,
     }
 }
 
@@ -146,12 +149,22 @@ object Codec {
                 w.u16(msg.densityDpi); w.u16(msg.maxRefreshHz)
                 w.u32(msg.capabilities)
                 w.str8(msg.deviceName)
+                require(msg.clientNonce.size == Limits.NONCE_BYTES) { "client_nonce must be 16 bytes" }
+                require(msg.clientEphPub.size == Limits.EPH_PUB_BYTES) { "client_eph_pub must be 65 bytes" }
+                w.bytes(msg.clientNonce.value)
+                w.bytes(msg.clientEphPub.value)
             }
             is HelloAck -> {
                 requireEnum(msg.status, 0..4, "HELLO_ACK.status")
                 w.u16(msg.protocolVersion); w.u8(msg.status); w.u8(0)
                 w.u32(msg.sessionId); w.u16(msg.videoPort)
                 w.str8(msg.hostName)
+                requireEnum(msg.keyMode, 0..2, "HELLO_ACK.key_mode")
+                require(msg.hostId.size == Limits.DEVICE_ID_BYTES) { "host_id must be 16 bytes" }
+                require(msg.hostNonce.size == Limits.NONCE_BYTES) { "host_nonce must be 16 bytes" }
+                require(msg.hostEphPub.size == Limits.EPH_PUB_BYTES) { "host_eph_pub must be 65 bytes" }
+                w.u8(msg.keyMode)
+                w.bytes(msg.hostId.value); w.bytes(msg.hostNonce.value); w.bytes(msg.hostEphPub.value)
             }
             is StreamConfig -> {
                 requireEnum(msg.codec, 1..2, "STREAM_CONFIG.codec")
@@ -210,7 +223,11 @@ object Codec {
                 w.u32(msg.decodeTimeAvgUs); w.u32(msg.latencyAvgUs); w.u32(msg.bytesReceived)
             }
             is KeyframeRequest -> w.u8(msg.reason)
-            is VideoHello -> { w.u16(msg.protocolVersion); w.u16(msg.configId); w.u32(msg.sessionId) }
+            is VideoHello -> {
+                require(msg.videoNonce.size == Limits.NONCE_BYTES) { "video_nonce must be 16 bytes" }
+                w.u16(msg.protocolVersion); w.u16(msg.configId); w.u32(msg.sessionId)
+                w.bytes(msg.videoNonce.value)
+            }
             is VideoFrame -> {
                 require(msg.fragmentIndex == 0 && msg.fragmentCount == 1 && msg.frameSize == msg.data.size.toLong()) {
                     "VIDEO_FRAME must be a single fragment with frame_size == data length"
@@ -237,11 +254,21 @@ object Codec {
                 densityDpi = r.u16(), maxRefreshHz = r.u16(),
                 capabilities = r.u32(),
                 deviceName = r.str8(),
+                clientNonce = Bytes(r.bytes(Limits.NONCE_BYTES)),
+                clientEphPub = Bytes(r.bytes(Limits.EPH_PUB_BYTES)),
             )
             MsgType.HELLO_ACK -> {
                 val version = r.u16(); val status = r.u8(); r.skip(1)
                 checkEnum(status, 0..4, "HELLO_ACK.status")
-                HelloAck(version, status, r.u32(), r.u16(), r.str8())
+                val sessionId = r.u32(); val videoPort = r.u16(); val hostName = r.str8()
+                val keyMode = r.u8()
+                checkEnum(keyMode, 0..2, "HELLO_ACK.key_mode")
+                HelloAck(
+                    version, status, sessionId, videoPort, hostName, keyMode,
+                    hostId = Bytes(r.bytes(Limits.DEVICE_ID_BYTES)),
+                    hostNonce = Bytes(r.bytes(Limits.NONCE_BYTES)),
+                    hostEphPub = Bytes(r.bytes(Limits.EPH_PUB_BYTES)),
+                )
             }
             MsgType.STREAM_CONFIG -> {
                 val configId = r.u16(); val codec = r.u8(); r.skip(1)
@@ -293,7 +320,7 @@ object Codec {
             MsgType.PONG -> Pong(r.u32(), r.u64(), r.u64())
             MsgType.STATS -> Stats(r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32())
             MsgType.KEYFRAME_REQUEST -> KeyframeRequest(r.u8())
-            MsgType.VIDEO_HELLO -> VideoHello(r.u16(), r.u16(), r.u32())
+            MsgType.VIDEO_HELLO -> VideoHello(r.u16(), r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
             MsgType.VIDEO_FRAME -> {
                 val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(1)
                 val index = r.u16(); val count = r.u16(); r.skip(2)
