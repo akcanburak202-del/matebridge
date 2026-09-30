@@ -36,7 +36,12 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Kodek** (`protocol/`): `Hello` (+`clientNonce`, `clientEphPub`), `HelloAck` (+`keyMode`, `hostId`, `hostNonce`, `hostEphPub`), `VideoHello` (+`videoNonce`); yeni alanlar varsayılanlı (mevcut testler derlenir). Yeni `ProtocolException.Kind.AUTH_FAILED`. Çerçevesiz/şifresiz ilk HELLO_ACK için tam-okuma yardımcısı (`readPlainFrame`).
+2. **Kripto çekirdeği** (`security/`, saf `java.security`/`javax.crypto`): `Crypto` (P-256 geçici anahtar, sıkıştırılmamış kodlama/çözme + eğri üstü doğrulama, ECDH), `Hkdf`, `KeySchedule` (transcript_hash, prk, kontrol/video anahtarları, sas, new_pair_key), `RecordSealer`/`RecordOpener` (AES-256-GCM, nonce=sayaç, AAD=length), `RecordDecoder` (feed/next, sınır başlıkta denetlenir). `ClientHandshake`: HELLO kurar, ilk HELLO_ACK'i doğrular (key_mode/status matrisi, NONE'da PENDING/ACCEPTED = protokol hatası, PAIRED+anahtar yok = KeyMissing) ve anahtarları türetir.
+3. **Saklama** (`security/`): `PairKeyStore` arayüzü, `KeyWrapper` arayüzü (Android Keystore tek sınıfta: `AndroidKeystoreWrapper`), `EncryptedPairKeyStore` (host_id AAD ile). Testte sahte wrapper.
+4. **Oturum** (`session/`): `SessionController` her kontrol bağlantısında yeni `ClientHandshake`; okuyucu iş parçacığı ilk ack'i düz okur, sonra `RecordDecoder`; yazıcı HELLO'yu düz, sonrasını `RecordSealer` ile (FIFO sırasında sayaç). Video: her bağlantıda yeni `video_nonce`, anahtarlar control `prk`'sinden. Doğrulama hatası = BYE'sız kapanış + yeniden bağlanma. `SessionMachine`: `Secured`/`KeyMissing` olayları, AwaitingApproval'a kod + yeniden eşleşme, AWAIT_ACK'te PING yok, ProtocolError'da BYE yok. PENDING sonrası şifreli ACCEPTED gelince anahtar kaydedilir.
+5. **UI** (`MainActivity.kt`): protokol sürümü 1; Keystore'lu saklama bağla; eşleşme kodu büyük yazıyla (SpannableString; res dosyaları kapsam dışı olduğundan metinler kodda), yeniden eşleşme uyarısı, KEY_MISSING mesajı.
+6. **Testler**: `crypto_vectors.json`'daki her değer (ecdh, transcript_hash, prk, tüm anahtarlar, sas, sas_bytes, new_pair_key, frames, bozuk kayıt reddi), fixture testleri (hello/hello_ack*/video_hello), handshake matrisi, RecordDecoder parçalı besleme/sınırlar, store, makine olayları.
 
 ## Handoff
 
