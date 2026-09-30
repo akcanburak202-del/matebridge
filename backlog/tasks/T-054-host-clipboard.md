@@ -34,7 +34,12 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Codek: `MessageType.clipboard` (0x06), `Clipboard` struct (seq, kind raw u8, data) + Message case; 60 000 bayt sınırı encode'da; fixture testleri (`clipboard_text`, `clipboard_empty`) ve geçersiz UTF-8 testi. Tüm exhaustive switch'ler (InputStateMachine, SessionMachine) güncellenir.
+2. Saf mantık `MateBridgeCore/Clipboard/ClipboardSync.swift`: `observe(changeCount:text:isConcealed:)` -> `.none/.send/.tooLarge`, `receive(_:)` -> yazılacak metin?, `didWrite(changeCount:)`, `begin(changeCount:)` (oturum başında taban çizgisi; mevcut pano gönderilmez), `setEnabled`. Yankı önleme: yazmadan sonraki changeCount + son alınan metnin SHA-256 özeti. Testli.
+3. `SessionMachine.send(sessionID:_:)`: aktif oturumun kontrol bağlantısına mesaj gönderen `.send` aksiyonu; `SessionServer.sendToSession` ile dışa açılır. `CLIPBOARD` ACCEPTED sonrası `.deliver`, öncesi yok sayılır.
+4. `MateBridgeHost/Clipboard/ClipboardBridge.swift`: `PasteboardAccess` protokolü (NSPasteboard gerçeklemesi + testte sahte), 0,5 sn zamanlayıcı kendi kuyruğunda; oturum başlar/biter; log yalnızca `ev=clipboard dir= bytes=`.
+5. Uygulama: menüde "Pano paylaşımı" onay öğesi (UserDefaults, varsayılan açık), handler bağlantıları.
+
 
 ## Handoff
 
