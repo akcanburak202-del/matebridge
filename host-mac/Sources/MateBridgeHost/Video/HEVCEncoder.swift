@@ -72,10 +72,11 @@ final class HEVCEncoder: @unchecked Sendable {
         self.output = output
         self.onFailure = onFailure
 
-        let spec: [CFString: Any] = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
-            kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
-        ]
+        // T-047 bench: at 2800x1840 the low-latency rate control + RealTime path tops out at ~100 fps; without both
+        // the hardware encoder reaches 120 fps paced (6 ms p50). Only used for the 120 fps experiment mode.
+        let highRate = settings.fps >= 120
+        var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
+        if !highRate { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(settings.widthPx), height: Int32(settings.heightPx),
@@ -95,7 +96,7 @@ final class HEVCEncoder: @unchecked Sendable {
                 HEVCEncoder.log.error("ev=prop_set_failed key=\(name, privacy: .public) status=\(st)")
             }
         }
-        set("RealTime", kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
+        set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
