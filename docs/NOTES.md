@@ -244,3 +244,4 @@ Kaynak: MB Input Probe (776b179), MatePad MRDI-W09, HarmonyOS 4.3 / API 31. Ham 
 
 - Kullanıcı: klavye (Türkçe karakterler, `"`, `<`, AltGr+Q, Ctrl→Cmd kısayolları, tekrar, Caps Lock), touchpad (tık, dokunarak tık, sağ tık, iki parmak kaydırma, sürükleme), Bluetooth fare ve kalem/parmak **hepsi çalışıyor**. Arka plana alınca basılı kalan tuş yok.
 - Sorunlar: (1) touchpad ve fare ile imleç fazla hızlı/hassas; (2) MateBridge'den Android'e dönülemiyor (önceden klavyedeki Esc Android'e BACK olarak gidiyordu; artık Mac'e gidiyor ve touchpad capture altında). → T-035.
+- **Büyütme denemesi (21:45, macOS 27.0.1, Krita 5.3.4):** scratch `magnify-spike` (tip 29, alan 110 = 8, 132 = faz, 113 = değer; `kCGHIDEventTap`) Krita tuvalinin üstünde began + 25 × changed(0,04) + ended gönderdi: yakınlaştırma %176,3 → %452,0 (beklenen ≈ 1,04^25 × 176 ≈ %470). **Alan tabanlı büyütme macOS 27'de çalışıyor.** → karar 0009, PINCH (protokol `proto/pinch` dalında), T-036/T-037.
