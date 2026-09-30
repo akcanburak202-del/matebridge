@@ -201,7 +201,9 @@ class VsyncClockGridTest {
 
     @Test fun leadDefaultsToHalfPeriodAndIsOverridable() {
         val v = VsyncClock(120f)
-        assertEquals(p120 / 2, v.leadNs())
+        assertEquals((p120 * VsyncClock.FAST_PANEL_LEAD_FRACTION).toLong(), v.leadNs())
+        assertEquals(6_000_000L, v.leadNs(), 10_000.0) // 6.0 ms at 120 Hz
+        assertEquals(p60 / 2, VsyncClock(60f).leadNs()) // 60 Hz keeps P/2
         v.leadOverrideNs = 2_000_000
         assertEquals(2_000_000L, v.leadNs())
         v.leadOverrideNs = 50_000_000

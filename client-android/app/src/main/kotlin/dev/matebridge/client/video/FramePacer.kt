@@ -19,6 +19,14 @@ class VsyncClock(private val initialHz: Float = 60f) {
     companion object {
         const val RESEED_AFTER = 4
         const val RESEED_AFTER_MULTIPLE = 12
+        /**
+         * Default timestamp lead as a fraction of the period on fast panels (period below
+         * [FAST_PANEL_MAX_PERIOD_NS], i.e. 90 Hz and up): 0.72 P = 6.0 ms at 120 Hz, from the T-057 device
+         * sweep (SurfaceFlinger repeat rate: P/2 6.4%, 5 ms 5.5%, 6 ms 0.2-7.1%, 7.5 ms 4.8%). Slower panels
+         * (60 Hz) were not measured and keep P/2.
+         */
+        const val FAST_PANEL_LEAD_FRACTION = 0.72
+        const val FAST_PANEL_MAX_PERIOD_NS = 11_200_000L
     }
 
     /** One consistent view of the grid. [lastNs] is a display-time vsync (-1: none yet). */
@@ -52,7 +60,9 @@ class VsyncClock(private val initialHz: Float = 60f) {
     /** Timestamp lead handed to the codec: render time = slot - lead. */
     fun leadNs(): Long {
         val g = grid
-        return if (leadOverrideNs >= 0) leadOverrideNs.coerceAtMost(g.periodNs) else g.periodNs / 2
+        if (leadOverrideNs >= 0) return leadOverrideNs.coerceAtMost(g.periodNs)
+        val fraction = if (g.periodNs < FAST_PANEL_MAX_PERIOD_NS) FAST_PANEL_LEAD_FRACTION else 0.5
+        return (g.periodNs * fraction).toLong()
     }
 
     /**
