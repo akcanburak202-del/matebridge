@@ -26,6 +26,11 @@ func eventPosition(_ e: MacEvent) -> DisplayPoint? {
 }
 
 /// A pipeline plus a clock, an environment the test changes at will, and an independent model of the Mac.
+///
+/// The model sees only what the Mac RECEIVES, like the real thing: events posted while the Accessibility permission
+/// is there (`env.canInject`, or `permissionTruth` when a test wants the pipeline's cached view to be stale) and that
+/// the poster manages to build (`failing` decides which events it cannot). macOS drops the rest silently. The driver
+/// reports failures back to the pipeline (`postFailed`) the way `InputController` does.
 struct PipeDriver {
     var pipe = InputPipeline()
     var now: UInt64 = 10_000_000
@@ -33,17 +38,38 @@ struct PipeDriver {
     var model = MacEventModel()
     /// What the most recent call produced.
     var lastEmitted: [MacEvent] = []
+    /// The permission as macOS sees it, when it differs from what the pipeline was told (a stale cache).
+    var permissionTruth: Bool?
+    /// Events the poster cannot build.
+    var failing: (MacEvent) -> Bool = { _ in false }
 
     init(session: Bool = true) {
-        if session { model.apply(pipe.sessionStarted(environment: env)) }
+        if session { deliver(pipe.sessionStarted(now: now, environment: env)) }
+    }
+
+    private var trusted: Bool { permissionTruth ?? env.canInject }
+
+    mutating func deliver(_ events: [MacEvent]) {
+        lastEmitted = events
+        // InputController: a batch that closes something gets a fresh permission check; without it nothing is posted.
+        if events.contains(where: \.isClosing), !trusted {
+            pipe.postFailed(events, now: now, permitted: false)
+            return
+        }
+        var failed: [MacEvent] = []
+        for event in events {
+            guard trusted else { continue }
+            if failing(event) { failed.append(event); continue }
+            model.apply(event)
+        }
+        if !failed.isEmpty { pipe.postFailed(failed, now: now, permitted: true) }
     }
 
     @discardableResult
     mutating func send(_ message: Message, after: UInt64 = 1 * msec) -> [MacEvent] {
         now += after
         let events = pipe.handle(message, now: now, environment: env)
-        model.apply(events)
-        lastEmitted = events
+        deliver(events)
         return events
     }
 
@@ -51,40 +77,35 @@ struct PipeDriver {
     mutating func tick(after: UInt64) -> [MacEvent] {
         now += after
         let events = pipe.tick(now: now, environment: env)
-        model.apply(events)
-        lastEmitted = events
+        deliver(events)
         return events
     }
 
     @discardableResult
     mutating func release(_ cause: ReleaseCause) -> [MacEvent] {
         let events = pipe.release(cause, now: now, environment: env)
-        model.apply(events)
-        lastEmitted = events
+        deliver(events)
         return events
     }
 
     @discardableResult
     mutating func endSession() -> [MacEvent] {
         let events = pipe.sessionEnded(now: now, environment: env)
-        model.apply(events)
-        lastEmitted = events
+        deliver(events)
         return events
     }
 
     @discardableResult
     mutating func startSession() -> [MacEvent] {
-        let events = pipe.sessionStarted(environment: env)
-        model.apply(events)
-        lastEmitted = events
+        let events = pipe.sessionStarted(now: now, environment: env)
+        deliver(events)
         return events
     }
 
     @discardableResult
     mutating func shutdown() -> [MacEvent] {
         let events = pipe.shutdown(now: now, environment: env)
-        model.apply(events)
-        lastEmitted = events
+        deliver(events)
         return events
     }
 
@@ -160,22 +181,32 @@ struct InputPipelineTests {
         #expect(d.model.isIdle && d.model.violations.isEmpty && !d.pipe.isHoldingInput)
     }
 
-    @Test("PIPE-5 Accessibility permission missing at release time: the events are still produced and the state cleared")
+    @Test("PIPE-5 Accessibility permission missing at release time: the events are produced but cannot be posted; they are owed and go out first when the permission returns")
     func pipe5_releaseWithoutPermission() {
         var d = PipeDriver()
         d.holdPenRightScroll()
         d.env = noPermissionEnv
         #expect(d.release(.bye).count == 4)  // up, leave, right up, scroll end
-        #expect(d.model.isIdle && d.model.violations.isEmpty && !d.pipe.isHoldingInput)
+        // Honest limit: the Mac never got them. Nothing can be released while the permission is missing.
+        #expect(!d.model.isIdle && d.model.violations.isEmpty)
+        #expect(d.pipe.owed.count == 4 && !d.pipe.isHoldingInput)
+        #expect(d.tick(after: 1 * msec).isEmpty)  // still nothing to do without the permission
+        d.env = openEnv
+        #expect(d.tick(after: 1 * msec).count == 4)
+        #expect(d.model.isIdle && d.model.violations.isEmpty && d.pipe.owed.isEmpty)
 
+        // No permission and no display, then only the permission comes back: released where it was.
         var m = PipeDriver()
         m.holdMouseMiddleScroll()
         m.env = closedEnv
         m.release(.disconnected)
-        #expect(m.model.isIdle && !m.pipe.isHoldingInput)
+        #expect(!m.model.isIdle && m.pipe.owed.count == 3)  // left up, middle up, scroll end
+        m.env = noDisplayEnv
+        m.tick(after: 1 * msec)
+        #expect(m.model.isIdle && m.pipe.owed.isEmpty)
     }
 
-    @Test("PIPE-6 permission revoked mid stroke: the next message releases first, then input is dropped; a stale sample after the grant is a hover")
+    @Test("PIPE-6 permission revoked mid stroke: the gate-loss release is owed, input is dropped, and the owed release goes out before anything new once the permission is back")
     func pipe6_permissionRevokedMidStroke() {
         var d = PipeDriver()
         d.send(penMsg(.pen, penSample(1, 1, hoverFlags)))
@@ -183,14 +214,17 @@ struct InputPipelineTests {
         d.env = noPermissionEnv
         let events = d.send(penMsg(.pen, penSample(3, 3, touchFlags, pressure: 500)))
         #expect(events == [tabletEvent(.up, x: 2, y: 2), proximityEvent(entering: false)])
-        // The machine follows the tablet (the pen hovers again there), but nothing is held on the Mac.
-        #expect(d.model.isIdle && !d.pipe.planner.isHoldingInput)
+        #expect(d.pipe.lastReleaseCause == .gateLost)
+        // The machine follows the tablet (the pen hovers again there); the Mac never received the up and still holds
+        // the contact, which is exactly what is owed.
+        #expect(!d.pipe.planner.isHoldingInput && d.model.penContact && d.pipe.owed.count == 2)
         #expect(d.send(penMsg(.pen, penSample(4, 4, touchFlags, pressure: 500))).isEmpty)
 
         d.env = openEnv  // granted again, the stroke is still going on in the tablet's samples
-        let stale = d.send(penMsg(.pen, penSample(5, 5, touchFlags, pressure: 500)))
-        #expect(stale == [proximityEvent(entering: true), tabletEvent(.hover, x: 5, y: 5)])
-        #expect(!d.model.penContact)
+        let back = d.send(penMsg(.pen, penSample(5, 5, touchFlags, pressure: 500)))
+        #expect(back == [tabletEvent(.up, x: 2, y: 2), proximityEvent(entering: false),
+                         proximityEvent(entering: true), tabletEvent(.hover, x: 5, y: 5)])
+        #expect(!d.model.penContact && d.pipe.owed.isEmpty)
         #expect(d.send(penMsg(.pen, penSample(6, 6, startFlags, pressure: 500))) == [tabletEvent(.down, x: 6, y: 6, pressure: 500)])
         #expect(d.model.violations.isEmpty)
     }
@@ -355,6 +389,142 @@ struct InputPipelineTests {
         #expect(e.model.isIdle && !e.pipe.hasSession)
     }
 
+    @Test("PIPE-19 every release is recorded with its cause and what it released; a gate loss has its own cause")
+    func pipe19_releaseRecords() {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        _ = d.pipe.takeReleaseRecords()
+        d.env = noDisplayEnv
+        d.tick(after: 1 * msec)  // the display went away with the pen down: released by itself
+        let gate = d.pipe.takeReleaseRecords()
+        #expect(d.pipe.lastReleaseCause == .gateLost)
+        #expect(gate.count == 1 && gate[0].cause == .gateLost && gate[0].reason == "gate_lost")
+        #expect(gate[0].events == 4 && gate[0].penUps == 1 && gate[0].penLeaves == 1 && gate[0].buttonUps == 1 && gate[0].scrollEnds == 1)
+        #expect(gate[0].logFields == "cause=gate_lost events=4 pen_up=1 pen_leave=1 buttons=1 scroll=1")
+        #expect(d.pipe.takeReleaseRecords().isEmpty)
+
+        d.env = openEnv
+        var e = PipeDriver()
+        e.holdMouseMiddleScroll()
+        _ = e.pipe.takeReleaseRecords()
+        e.release(.silence)
+        e.release(.silence)  // idempotent: recorded again, with nothing released
+        let records = e.pipe.takeReleaseRecords()
+        #expect(records.map(\.reason) == ["silence", "silence"])
+        #expect(records.map(\.events) == [3, 0])
+        #expect(records[0].buttonUps == 2 && records[0].scrollEnds == 1)
+    }
+
+    @Test("PIPE-20 a closing event the poster could not build is retried, not forgotten: after the retry interval, in order")
+    func pipe20_failedCloseIsRetried() {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        d.failing = { $0.isClosing }  // the poster cannot build any release
+        d.release(.bye)
+        #expect(!d.model.isIdle && d.pipe.owed.count == 4)
+        #expect(d.tick(after: 100 * msec).isEmpty)  // inside the retry interval
+        d.failing = { _ in false }
+        let retry = d.tick(after: 200 * msec)
+        #expect(retry == [tabletEvent(.up, x: 1010, y: 2010), proximityEvent(entering: false),
+                          mouseEvent(.up, .right, at: testGeometry.point(x: 1010, y: 2010), clickState: 1),
+                          scrollEvent(.ended, at: testGeometry.point(x: 1010, y: 2010))])
+        #expect(d.model.isIdle && d.pipe.owed.isEmpty)
+        #expect(d.pipe.takeReleaseRecords().contains { $0.reason == "owed_replay" && $0.events == 4 })
+    }
+
+    @Test("PIPE-21 retries are bounded: six attempts, then the release is given up, counted and recorded")
+    func pipe21_boundedRetries() {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        d.failing = { $0.isClosing }
+        d.release(.bye)
+        var replays = 0
+        for _ in 0..<30 where !d.pipe.owed.isEmpty {
+            if !d.tick(after: 300 * msec).isEmpty { replays += 1 }
+        }
+        #expect(replays == OwedRelease.maxAttempts)
+        #expect(d.pipe.owed.isEmpty && d.pipe.owed.gaveUp == 4)
+        #expect(d.pipe.takeReleaseRecords().contains { $0.reason == "owed_giveup" && $0.gaveUp == 4 })
+        #expect(d.tick(after: 300 * msec).isEmpty)
+    }
+
+    @Test("PIPE-22 a release trigger, a session start and shutdown retry at once, ignoring the retry interval")
+    func pipe22_triggersForceRetry() {
+        for trigger in 0..<3 {
+            var d = PipeDriver()
+            d.holdPenRightScroll()
+            d.failing = { $0.isClosing }
+            d.release(.bye)
+            d.failing = { _ in false }
+            let events: [MacEvent]
+            switch trigger {
+            case 0: events = d.release(.silence)
+            case 1:
+                d.endSession()  // itself a release: retries at once
+                events = d.lastEmitted
+            default: events = d.shutdown()
+            }
+            #expect(events.count == 4, "trigger \(trigger)")
+            #expect(d.model.isIdle && d.pipe.owed.isEmpty, "trigger \(trigger)")
+        }
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        d.failing = { $0.isClosing }
+        d.release(.bye)
+        d.failing = { _ in false }
+        #expect(d.startSession().count == 4)  // a new session starts clean
+        #expect(d.model.isIdle && d.pipe.owed.isEmpty)
+    }
+
+    @Test("PIPE-23 owed releases survive a session end and a shutdown without permission, and go out at the next start or once it is back")
+    func pipe23_owedAcrossSessions() {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        d.env = noPermissionEnv
+        d.release(.silence)
+        d.endSession()
+        d.shutdown()
+        d.release(.shutdown)
+        #expect(d.pipe.owed.count == 4)  // a fixed set of slots: repeated releases do not add up
+        #expect(!d.model.isIdle)
+        d.env = openEnv
+        #expect(d.startSession().count == 4)  // the next session start replays first
+        #expect(d.model.isIdle && d.pipe.owed.isEmpty && d.model.violations.isEmpty)
+
+        var e = PipeDriver()
+        e.holdPenRightScroll()
+        e.env = noPermissionEnv
+        e.release(.silence)
+        e.env = openEnv
+        #expect(e.shutdown().count == 4)  // shutdown replays too
+        #expect(e.model.isIdle && e.pipe.owed.isEmpty)
+    }
+
+    @Test("PIPE-24 a permission cache that is stale at release time does not lose the release: nothing counts as an attempt while the permission is gone")
+    func pipe24_stalePermission() {
+        var d = PipeDriver()
+        d.holdPenRightScroll()
+        d.permissionTruth = false  // revoked a moment ago; the pipeline was still told it was there
+        d.release(.bye)
+        #expect(!d.model.isIdle && d.pipe.owed.count == 4)
+        for _ in 0..<12 { d.tick(after: 300 * msec) }  // it is tried again and again, each try refused
+        #expect(d.pipe.owed.count == 4 && d.pipe.owed.gaveUp == 0)
+        d.permissionTruth = nil
+        #expect(d.tick(after: 300 * msec).count == 4)
+        #expect(d.model.isIdle && d.pipe.owed.isEmpty)
+    }
+
+    @Test("PIPE-25 zero-delta scroll CHANGED (the client's keepalive) through the whole chain injects nothing")
+    func pipe25_keepalive() {
+        var d = PipeDriver()
+        d.send(scrollMsg(.began, 0, 3))
+        for _ in 0..<5 { #expect(d.send(scrollMsg(.changed, 0, 0), after: 200 * msec).isEmpty) }
+        #expect(d.model.scrollOpen && d.model.violations.isEmpty)
+        // The 500 ms watchdog is fed by those messages, so the gesture is still open after 1 s of keepalives.
+        #expect(d.pipe.machine?.hasHeldInput == true)
+        #expect(d.send(scrollMsg(.ended, 0, 0)) == [scrollEvent(.ended, at: testGeometry.center)])
+    }
+
     @Test("PIPE-17 the protocol fixture pen_hover_to_contact turns into enter, hover, down, drag, up on the display")
     func pipe17_fixture() throws {
         var decoder = FrameDecoder(connection: .control)
@@ -442,6 +612,24 @@ private let fuzzGeometries: [DisplayGeometry] = [
     DisplayGeometry(originX: 1920, originY: 0, widthPt: 700, heightPt: 460, scale: 1)!,
 ]
 
+/// Which events the poster cannot build: at random, but never more than three in a row per slot, so a bounded retry
+/// always gets through in the end.
+private final class PosterFaults {
+    var rng: InputFuzzRNG
+    var streak: [OwedRelease.Slot: Int] = [:]
+    init(seed: UInt64) { rng = InputFuzzRNG(seed: seed) }
+
+    func fails(_ e: MacEvent) -> Bool {
+        guard e.isClosing, let slot = OwedRelease.Slot(e) else { return false }
+        if Int.random(in: 0..<10, using: &rng) < 3, streak[slot, default: 0] < 3 {
+            streak[slot, default: 0] += 1
+            return true
+        }
+        streak[slot] = 0
+        return false
+    }
+}
+
 private func fuzzEnvironment(_ g: inout InputFuzzRNG, flaky: Bool) -> InjectionEnvironment {
     guard flaky else { return openEnv }
     let canInject = Int.random(in: 0..<10, using: &g) < 8
@@ -449,16 +637,21 @@ private func fuzzEnvironment(_ g: inout InputFuzzRNG, flaky: Bool) -> InjectionE
     return InjectionEnvironment(canInject: canInject, geometry: geometry)
 }
 
-/// One random run. `flaky` toggles the permission and the display at random; otherwise the gate is always open.
-private func runPipeline(seed: UInt64, steps: Int, flaky: Bool) -> [String] {
+/// One random run. `flaky` toggles the permission and the display at random (otherwise the gate is always open);
+/// `faults` makes the poster fail to build closing events at random and lets the pipeline's view of the permission go
+/// stale. The Mac model sees only what is really delivered (see `PipeDriver`).
+private func runPipeline(seed: UInt64, steps: Int, flaky: Bool, faults: Bool = false) -> [String] {
     var g = InputFuzzRNG(seed: seed)
     var d = PipeDriver()
+    let plan = PosterFaults(seed: seed &+ 77)
+    if faults { d.failing = { plan.fails($0) } }
     var failures: [String] = []
-    var alwaysOpen = true
+    var alwaysOpen = !faults
 
     func check(_ step: Int, _ label: String, releaseExpected: Bool = false) {
         func fail(_ text: String) { failures.append("seed \(seed) step \(step) \(label): \(text)") }
-        if !d.model.violations.isEmpty { fail("violations \(d.model.violations)") }
+        // With faults a lost up can be followed by a new down before the retry: the Mac sees a double down.
+        if !faults && !d.model.violations.isEmpty { fail("violations \(d.model.violations)") }
         // Every positioned event lies on the display that is current now (closing events with no display excepted).
         if let g = d.env.geometry {
             for e in d.lastEmitted {
@@ -466,20 +659,40 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool) -> [String] {
             }
         }
         if d.pipe.reconciliations != 0 { fail("planner held what the machine did not") }
-        if d.pipe.machine?.hasHeldInput != true && !d.model.isIdle { fail("Mac holds input the machine does not") }
-        if !d.env.isOpen && !d.model.isIdle { fail("Mac holds input while the gate is closed") }
+        let gaveUp = d.pipe.owed.gaveUp > 0
+        // Whatever the Mac holds is known to someone: the planner, or the owed releases.
+        if !d.model.isIdle && !d.pipe.planner.isHoldingInput && d.pipe.owed.isEmpty && !gaveUp {
+            fail("the Mac holds input nobody remembers")
+        }
+        // With the permission there and nothing owed, the Mac and the planner agree exactly (not with faults: a stale cache
+        // lets macOS drop an opening event unnoticed, which is harmless but leaves the planner ahead of the Mac).
+        if !faults && d.env.canInject && d.pipe.owed.isEmpty && !gaveUp {
+            let p = d.pipe.planner
+            if (d.model.proximity != nil) != p.isPenInRange || d.model.penContact != p.isPenInContact
+                || d.model.buttons != p.heldMouseButtons || d.model.scrollOpen != p.isScrollOpen {
+                fail("Mac and planner disagree")
+            }
+        }
+        // The display gone (permission there): everything was released at once.
+        if d.env.canInject && !d.env.isOpen && d.permissionTruth == nil && d.pipe.owed.isEmpty && !gaveUp && !d.model.isIdle {
+            fail("Mac holds input while the display is gone")
+        }
         if alwaysOpen, let m = d.pipe.machine {
             if m.hasHeldInput == d.model.isIdle { fail("machine held=\(m.hasHeldInput) model idle=\(d.model.isIdle)") }
             if m.isPenInRange != (d.model.proximity != nil) || m.isPenInContact != d.model.penContact {
                 fail("pen state mismatch")
             }
         }
-        if releaseExpected && (!d.model.isIdle || d.pipe.isHoldingInput) { fail("still holding after release") }
+        if releaseExpected && (d.pipe.isHoldingInput || (!d.model.isIdle && d.pipe.owed.isEmpty && !gaveUp)) {
+            fail("still holding after release")
+        }
     }
 
     for i in 0..<steps {
         if Int.random(in: 0..<4, using: &g) == 0 { d.env = fuzzEnvironment(&g, flaky: flaky) }
-        if !d.env.isOpen { alwaysOpen = false }
+        // A stale permission cache: the pipeline is told the permission is there for a step when it is not.
+        d.permissionTruth = faults && d.env.canInject && Int.random(in: 0..<12, using: &g) == 0 ? false : nil
+        if !d.env.isOpen || d.permissionTruth != nil { alwaysOpen = false }
         let delta = fuzzDelta(&g)
         d.now = delta >= 0 ? d.now &+ UInt64(delta) : d.now - Swift.min(d.now, UInt64(-delta))
         switch Int.random(in: 0..<100, using: &g) {
@@ -499,7 +712,8 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool) -> [String] {
             let cause = allReleaseCauses.randomElement(using: &g)!
             d.release(cause)
             check(i, "release \(cause)", releaseExpected: true)
-            if !d.release(cause).isEmpty { failures.append("seed \(seed) step \(i): second release produced events") }
+            // Idempotent, unless something is still owed (then the trigger retries it).
+            if d.pipe.owed.isEmpty, !d.release(cause).isEmpty { failures.append("seed \(seed) step \(i): second release produced events") }
         default:
             d.endSession()
             check(i, "session end", releaseExpected: true)
@@ -507,8 +721,16 @@ private func runPipeline(seed: UInt64, steps: Int, flaky: Bool) -> [String] {
             check(i, "session start", releaseExpected: true)
         }
     }
+    // Quiescence: the permission and the display are back and the poster works. A few retry intervals later nothing
+    // is owed and the Mac is idle, unless a release had to be given up on.
+    d.env = openEnv
+    d.permissionTruth = nil
+    d.failing = { _ in false }
+    for _ in 0..<10 { d.tick(after: 300 * msec) }
     d.shutdown()
     check(steps, "shutdown", releaseExpected: true)
+    if !d.pipe.owed.isEmpty { failures.append("seed \(seed): releases still owed after the quiescence") }
+    if d.pipe.owed.gaveUp == 0 && !d.model.isIdle { failures.append("seed \(seed): the Mac is not idle after the quiescence") }
     return failures
 }
 
@@ -521,10 +743,17 @@ struct InputPipelineFuzzTests {
         #expect(failures.isEmpty, "\(failures.prefix(5))")
     }
 
-    @Test("PIPE-F2 permission and display come and go: no violations, nothing held while the gate is closed, released at once")
+    @Test("PIPE-F2 permission and display come and go: no violations, every release that was refused is replayed, positions stay on the display")
     func pipeF2_flakyGate() {
         var failures: [String] = []
         for seed in 1...600 { failures += runPipeline(seed: UInt64(seed) &+ 10_000, steps: 250, flaky: true) }
+        #expect(failures.isEmpty, "\(failures.prefix(5))")
+    }
+
+    @Test("PIPE-F3 on top of that the poster fails to build releases and the permission cache goes stale: bounded retries, nothing owed at the end")
+    func pipeF3_faults() {
+        var failures: [String] = []
+        for seed in 1...600 { failures += runPipeline(seed: UInt64(seed) &+ 20_000, steps: 250, flaky: true, faults: true) }
         #expect(failures.isEmpty, "\(failures.prefix(5))")
     }
 }

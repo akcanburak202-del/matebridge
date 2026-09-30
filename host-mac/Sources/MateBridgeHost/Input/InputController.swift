@@ -102,7 +102,8 @@ public final class InputController: @unchecked Sendable {
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
-            post(pipeline.sessionStarted(environment: environment()))
+            let now = HostClock.nowUs()
+            flush(pipeline.sessionStarted(now: now, environment: environment()), now: now)
             log(.info, "input_session_start")
             rearmWatchdog()
         }
@@ -111,8 +112,9 @@ public final class InputController: @unchecked Sendable {
     /// The session is over (`sessionEnded`). Always releases, even if `releaseInput` was somehow not called.
     public func sessionEnded() {
         queue.sync {
-            let events = pipeline.sessionEnded(now: HostClock.nowUs(), environment: environment())
-            post(events)
+            let now = HostClock.nowUs()
+            let events = pipeline.sessionEnded(now: now, environment: environment())
+            flush(events, now: now)
             let d = pipeline.planner.counters
             log(.info, "input_session_end",
                 "messages=\(messages) events=\(eventsPosted) released=\(events.count) "
@@ -136,7 +138,7 @@ public final class InputController: @unchecked Sendable {
             let now = HostClock.nowUs()
             let env = environment()
             messages += 1
-            post(pipeline.handle(message, now: now, environment: env))
+            flush(pipeline.handle(message, now: now, environment: env), now: now)
             rearmWatchdog()
         }
     }
@@ -145,13 +147,8 @@ public final class InputController: @unchecked Sendable {
     /// error, heartbeat silence, takeover or shutdown. Idempotent. Runs even after `shutdown`.
     public func releaseInput(_ cause: ReleaseCause) {
         queue.sync {
-            let events = pipeline.release(cause, now: HostClock.nowUs(), environment: environment())
-            post(events)
-            if events.isEmpty {
-                log(.debug, "input_release", "cause=\(cause.logName) events=0")
-            } else {
-                log(.info, "input_release", "cause=\(cause.logName) events=\(events.count)")
-            }
+            let now = HostClock.nowUs()
+            flush(pipeline.release(cause, now: now, environment: environment()), now: now)
             rearmWatchdog()
         }
     }
@@ -160,9 +157,10 @@ public final class InputController: @unchecked Sendable {
     public func shutdown() {
         queue.sync {
             guard !stopped else { return }
-            let events = pipeline.shutdown(now: HostClock.nowUs(), environment: environment())
-            post(events)
-            log(.info, "input_shutdown", "released=\(events.count)")
+            let now = HostClock.nowUs()
+            let events = pipeline.shutdown(now: now, environment: environment())
+            flush(events, now: now)
+            log(.info, "input_shutdown", "released=\(events.count) owed=\(pipeline.owed.count)")
             stopped = true
             watchdogTimer?.cancel()
             pollTimer?.cancel()
@@ -173,10 +171,33 @@ public final class InputController: @unchecked Sendable {
 
     // MARK: Queue-confined work
 
-    private func post(_ events: [MacEvent]) {
-        guard !events.isEmpty else { return }
-        poster.post(events)
-        eventsPosted += events.count
+    /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are
+    /// kept and retried), and logs the releases the pipeline did.
+    private func flush(_ events: [MacEvent], now: UInt64) {
+        if !events.isEmpty {
+            var failed: [MacEvent] = []
+            var permitted = true
+            // A batch that releases something is worth a fresh permission check: the 200 ms cache must not let a
+            // release go out after the permission is gone and be forgotten. Nothing can be posted without it.
+            if events.contains(where: \.isClosing), !permission.isTrusted() {
+                trustedCache = (false, HostClock.nowUs())
+                failed = events
+                permitted = false
+            } else {
+                failed = poster.post(events)
+            }
+            eventsPosted += events.count - failed.count
+            if !failed.isEmpty {
+                pipeline.postFailed(failed, now: now, permitted: permitted)
+                let closing = failed.filter(\.isClosing).count
+                log(.warning, "input_post_failed", "events=\(failed.count) closing=\(closing) permitted=\(permitted ? 1 : 0)")
+            }
+        }
+        for record in pipeline.takeReleaseRecords() {
+            let level: LogLevel = record.cause == .gateLost || record.gaveUp > 0 || record.reason == "owed_replay" ? .warning
+                : (record.events > 0 ? .info : .debug)
+            log(level, "input_release", record.logFields)
+        }
     }
 
     /// The gate right now; reports a change of permission or display (once per change).
@@ -221,7 +242,8 @@ public final class InputController: @unchecked Sendable {
 
     private func watchdogFired() {
         guard !stopped else { return }
-        post(pipeline.tick(now: HostClock.nowUs(), environment: environment()))
+        let now = HostClock.nowUs()
+        flush(pipeline.tick(now: now, environment: environment()), now: now)
         rearmWatchdog()
     }
 
@@ -229,7 +251,8 @@ public final class InputController: @unchecked Sendable {
     /// the tablet is silent) and log any input that was dropped for lack of one.
     private func poll() {
         guard !stopped else { return }
-        post(pipeline.tick(now: HostClock.nowUs(), environment: environment()))
+        let now = HostClock.nowUs()
+        flush(pipeline.tick(now: now, environment: environment()), now: now)
         rearmWatchdog()
         let d = pipeline.planner.counters
         let noPermission = d.droppedNoPermission - loggedDrops.droppedNoPermission
@@ -242,21 +265,5 @@ public final class InputController: @unchecked Sendable {
 
     private func log(_ level: LogLevel, _ event: String, _ fields: String = "") {
         logger.log(level, event, sessionID: sessionID, generation: configID, fields: fields)
-    }
-}
-
-private extension ReleaseCause {
-    /// Names only: no reason codes beyond the small protocol enum, never content.
-    var logName: String {
-        switch self {
-        case .clientRequest(let r): "client_request_\(r.rawValue)"
-        case .bye: "bye"
-        case .disconnected: "disconnected"
-        case .protocolError: "protocol_error"
-        case .silence: "silence"
-        case .timeout: "timeout"
-        case .superseded: "superseded"
-        case .shutdown: "shutdown"
-        }
     }
 }

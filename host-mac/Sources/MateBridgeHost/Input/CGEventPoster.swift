@@ -5,8 +5,10 @@ import MateBridgeCore
 /// The one place where `MacEvent`s leave the process (T-023). Everything before it is pure and unit-tested in
 /// `MateBridgeCore`; this seam exists so that a fake can stand in for it and nothing is posted.
 public protocol MacEventPoster: Sendable {
-    /// Posts the events in order. Never throws; an event that cannot be built is skipped (and counted by the poster).
-    func post(_ events: [MacEvent])
+    /// Posts the events in order and returns the ones that could not be posted (usually none). A closing event that
+    /// cannot be built in its rich form is posted in its plainest form first; only if that fails too is it returned.
+    /// The caller keeps the failed closing events and retries them (see `OwedRelease`).
+    func post(_ events: [MacEvent]) -> [MacEvent]
 }
 
 /// Posts through `CGEvent` at the HID tap (needs Accessibility permission; without it macOS drops the events
@@ -23,10 +25,17 @@ public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
 
     public init() {}
 
-    public func post(_ events: [MacEvent]) {
+    public func post(_ events: [MacEvent]) -> [MacEvent] {
+        var failed: [MacEvent] = []
         for event in events {
             // A fresh HID-system-state source per event, exactly as the probe did.
-            guard let cg = CGEventFactory.make(event, source: CGEventSource(stateID: .hidSystemState)) else {
+            var cg = CGEventFactory.make(event, source: CGEventSource(stateID: .hidSystemState))
+            if cg == nil, let plain = event.plainRelease {
+                // The tablet up could not be built: a bare left mouse up still releases the button.
+                cg = CGEventFactory.make(plain, source: CGEventSource(stateID: .hidSystemState))
+            }
+            guard let cg else {
+                failed.append(event)
                 failures += 1
                 // Counts only; the first failure and then every 100th.
                 if failures == 1 || failures % 100 == 0 {
@@ -36,6 +45,7 @@ public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
             }
             cg.post(tap: .cghidEventTap)
         }
+        return failed
     }
 }
 

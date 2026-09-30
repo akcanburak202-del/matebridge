@@ -35,18 +35,28 @@ private struct WiredSession {
     /// Release causes that reached the pipeline, in order.
     var causes: [ReleaseCause] = []
 
+    /// What the Mac receives: events posted while the permission is there. Without it macOS drops them, and the
+    /// controller reports the closing ones back as owed.
+    mutating func deliver(_ events: [MacEvent]) {
+        if events.contains(where: \.isClosing), !env.canInject {
+            pipe.postFailed(events, now: now, permitted: false)
+        } else if env.canInject {
+            model.apply(events)
+        }
+    }
+
     mutating func apply(_ actions: [SessionAction]) {
         for action in actions {
             switch action {
             case .releaseInput(_, let cause):
                 causes.append(cause)
-                model.apply(pipe.release(cause, now: now, environment: env))
+                deliver(pipe.release(cause, now: now, environment: env))
             case .deliver(_, let message):
-                model.apply(pipe.handle(message, now: now, environment: env))
+                deliver(pipe.handle(message, now: now, environment: env))
             case .sessionStarted:
-                model.apply(pipe.sessionStarted(environment: env))
+                deliver(pipe.sessionStarted(now: now, environment: env))
             case .sessionEnded:
-                model.apply(pipe.sessionEnded(now: now, environment: env))
+                deliver(pipe.sessionEnded(now: now, environment: env))
             default: break
             }
         }
@@ -150,9 +160,16 @@ struct SessionInputWiringTests {
         case .shutdown: w.apply(w.session.shutdown())
         }
         #expect(w.causes.first == trigger.expectedCause, "\(trigger) reached the pipeline as \(String(describing: w.causes.first))")
-        #expect(w.model.isIdle, "\(trigger) / \(gate): the Mac still holds input")
-        #expect(w.model.violations.isEmpty)
         #expect(!w.pipe.planner.isHoldingInput)
+        if gate == .permissionMissing {
+            // Without the permission nothing can reach the Mac; the release is owed and goes out when it is back.
+            #expect(!w.model.isIdle && w.pipe.owed.count == 4, "\(trigger): owed \(w.pipe.owed.count)")
+            w.env = openEnv
+            w.now += 1_000
+            w.deliver(w.pipe.tick(now: w.now, environment: w.env))
+        }
+        #expect(w.model.isIdle, "\(trigger) / \(gate): the Mac still holds input")
+        #expect(w.model.violations.isEmpty && w.pipe.owed.isEmpty)
     }
 
     @Test("PIPE-S-2 takeover: the new session starts with a fresh machine, so a stale mid-stroke sample is no stroke")

@@ -54,7 +54,7 @@ func moveAbs(_ x: UInt16 = 500, _ y: UInt16 = 600, dragging: MouseButton? = nil)
 let allReleaseCauses: [ReleaseCause] = [
     .clientRequest(.user), .clientRequest(.background), .clientRequest(.focusLost),
     .clientRequest(.deviceDetached), .clientRequest(ReleaseReason(rawValue: 99)),
-    .bye, .disconnected, .protocolError, .silence, .timeout, .superseded, .shutdown,
+    .bye, .disconnected, .protocolError, .silence, .timeout, .superseded, .shutdown, .gateLost,
 ]
 
 /// A machine plus a clock the test advances explicitly.
