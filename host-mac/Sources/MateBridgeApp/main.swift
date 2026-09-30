@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let usbLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let usbWatcher = UsbTunnelWatcher()
     private static let usbModeKey = "usbModeEnabled"
+    private let clipboardEntry = NSMenuItem(title: "Pano paylaşımı", action: #selector(toggleClipboard), keyEquivalent: "")
+    private lazy var clipboard = ClipboardBridge(enabled: clipboardEnabled)
     private var signalSources: [DispatchSourceSignal] = []
     private var approvalPanel: ApprovalPanel?
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
@@ -52,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accessibilitySettingsItem.isHidden = true
         menu.addItem(accessibilitySettingsItem)
         menu.addItem(.separator())
-        for entry in [loginItemEntry, usbModeEntry] {
+        for entry in [loginItemEntry, usbModeEntry, clipboardEntry] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -105,18 +107,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // injector, every input message goes to it, and every release-all trigger reaches `releaseInput`.
         let coordinator = self.coordinator
         let input = self.input
+        let clipboard = self.clipboard
         handlers.sessionStarted = { sid, cid, hello in
             coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello)
             input.sessionStarted(sessionID: sid, configID: cid)
+            clipboard.sessionStarted(sessionID: sid)
         }
         handlers.sessionEnded = {
             coordinator.sessionEnded()
             input.sessionEnded()
+            clipboard.sessionEnded()
         }
         handlers.videoAttached = { coordinator.videoAttached($0) }
         handlers.deliver = { message in
             coordinator.deliver(message)
             input.deliver(message)
+            clipboard.deliver(message)
         }
         handlers.releaseInput = { input.releaseInput($0) }
         coordinator.onSummary = { [weak self] text in
@@ -132,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.server = server
         coordinator.onOverflow = { [server] in server.endSessions() }
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
+        clipboard.send = { [server] sid, message in server.sendToSession(sessionID: sid, message) }
         server.start()
 
         loginItem.registerOnFirstRun()
@@ -146,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.object(forKey: Self.usbModeKey) as? Bool ?? true
     }
 
+    private var clipboardEnabled: Bool {
+        UserDefaults.standard.object(forKey: ClipboardBridge.defaultsKey) as? Bool ?? true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()  // release input (releaseInput), BYE(SHUTTING_DOWN) to peers
         input.shutdown()  // backstop: releases whatever is still held, even if no session was reported
@@ -158,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItemEntry.state = loginItem.status.isRequested ? .on : .off
         loginItemEntry.title = loginItem.status.menuTitle
         usbModeEntry.state = usbModeEnabled ? .on : .off
+        clipboardEntry.state = clipboardEnabled ? .on : .off
         showLoginProblem()
     }
 
@@ -176,6 +188,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.set(on, forKey: Self.usbModeKey)
         usbModeEntry.state = on ? .on : .off
         usbWatcher.setEnabled(on)
+    }
+
+    @objc private func toggleClipboard() {
+        let on = !clipboardEnabled
+        UserDefaults.standard.set(on, forKey: ClipboardBridge.defaultsKey)
+        clipboardEntry.state = on ? .on : .off
+        clipboard.setEnabled(on)
     }
 
     @objc private func openLogs() {

@@ -5,6 +5,8 @@ public enum ProtocolConstants {
     public static let maxVideoPayload = 16_777_216
     public static let maxStringBytes = 64
     public static let deviceIDSize = 16
+    /// Longest CLIPBOARD `data` (docs/PROTOCOL.md 0x06).
+    public static let clipboardMaxBytes = 60_000
     public static let penSampleSize = 16
     public static let penMaxSamples = 64
     public static let penFixedSize = 12
@@ -23,6 +25,7 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case streamConfig = 0x03
     case bye = 0x04
     case streamPrefs = 0x05
+    case clipboard = 0x06
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12

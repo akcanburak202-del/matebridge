@@ -33,6 +33,8 @@ private let validFixtures: [String: Message] = [
                                                 colorPrimaries: 1, transfer: 13, matrix: 1, fullRange: true)),
     "bye": .bye(.normal),
     "stream_prefs": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 750)),
+    "clipboard_text": .clipboard(Clipboard.text(seq: 3, "Merhaba ğüşıöç — kopyala")),
+    "clipboard_empty": .clipboard(Clipboard.empty(seq: 4)),
     "pen_hover_to_contact": .pen(PenBatch(tool: .pen, baseTimeUs: 1_127_411_618_000, samples: [
         pen(0, 22364, 12738, 0, 3000, 2500, .inRange),
         pen(3000, 22380, 12750, 288, 3000, 2500, [.inRange, .contact, .strokeStart]),

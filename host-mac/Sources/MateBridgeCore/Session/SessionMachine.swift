@@ -417,6 +417,15 @@ public struct SessionMachine: Sendable {
         return actions
     }
 
+    /// Sends `message` on the control connection of the active session `sessionID` (host-initiated messages such as
+    /// CLIPBOARD). Nothing happens for an unknown or pending session.
+    public func send(sessionID: UInt32, _ message: Message) -> [SessionAction] {
+        for (cid, conn) in connections {
+            if case .active(let s) = conn.phase, s.id == sessionID { return [.send(cid, message)] }
+        }
+        return []
+    }
+
     /// The stream settings of the live session changed (`STREAM_PREFS`, PROTOCOL.md 3.7): send the new `STREAM_CONFIG`
     /// on the control connection, then close the current video connection; the tablet reopens it with the new
     /// `config_id`. A video connection that is still proving with the old `config_id` fails its re-check. Nothing
@@ -694,7 +703,7 @@ public struct SessionMachine: Sendable {
             return protocolError(id)
         case .releaseAll(let reason):
             return isActive ? [.releaseInput(id, .clientRequest(reason))] : []
-        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs:
+        case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
         case .helloAck, .streamConfig, .pong, .videoHello, .videoFrame:

@@ -372,6 +372,51 @@ public struct StreamPrefs: Equatable, Sendable {
     }
 }
 
+/// `CLIPBOARD` (both directions, docs/PROTOCOL.md 0x06). `kind` stays raw: unknown kinds decode fine and are ignored
+/// by the receiver. The contents are private: never log `data`.
+public struct Clipboard: Equatable, Sendable {
+    public static let kindEmpty: UInt8 = 0
+    public static let kindTextUTF8: UInt8 = 1
+
+    public var seq: UInt32
+    public var kind: UInt8
+    public var data: [UInt8]
+
+    public init(seq: UInt32, kind: UInt8, data: [UInt8]) {
+        self.seq = seq
+        self.kind = kind
+        self.data = data
+    }
+
+    public static func text(seq: UInt32, _ string: String) -> Clipboard {
+        Clipboard(seq: seq, kind: kindTextUTF8, data: Array(string.utf8))
+    }
+
+    public static func empty(seq: UInt32) -> Clipboard { Clipboard(seq: seq, kind: kindEmpty, data: []) }
+
+    /// The text of a `TEXT_UTF8` message; nil for any other kind, invalid UTF-8 or no text.
+    public var validText: String? {
+        guard kind == Self.kindTextUTF8, !data.isEmpty else { return nil }
+        return String(validating: data, as: UTF8.self)
+    }
+
+    func write(_ w: inout ByteWriter) {
+        w.u32(seq)
+        w.u8(kind)
+        w.u8(0)
+        w.u16(UInt16(clamping: data.count))
+        w.raw(data)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> Clipboard {
+        let seq = try r.u32()
+        let kind = try r.u8()
+        try r.skip(1)
+        let length = Int(try r.u16())
+        return Clipboard(seq: seq, kind: kind, data: try r.raw(length))
+    }
+}
+
 // MARK: - Input messages
 
 public struct PenSample: Equatable, Sendable {
