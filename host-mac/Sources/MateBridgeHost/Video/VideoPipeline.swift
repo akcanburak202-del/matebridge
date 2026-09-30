@@ -44,13 +44,19 @@ public final class VideoPipeline: @unchecked Sendable {
     private let onFailure: @Sendable (Error) -> Void
     private let box: EncoderBox
     private var displayInfo = "no display"
+    /// A display handed over by the previous pipeline (T-049): kept instead of creating a new one.
+    private var inherited: VirtualDisplay?
 
     /// - Parameters:
     ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
+    ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its refresh rate
+    ///     already equals `settings.displayRefreshHz`, replaced by a new display otherwise.
     ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
-    public init(settings: VideoSettings = .tabletDefault,
+    init(settings: VideoSettings = .tabletDefault,
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
+                reusing display: VirtualDisplay? = nil,
                 onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+        self.inherited = display
         self.settings = settings
         self.tap = tap
         self.onFailure = onFailure
@@ -81,9 +87,7 @@ public final class VideoPipeline: @unchecked Sendable {
             box.encoder = encoder
             set { $0.encoder = encoder }
 
-            let display = try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx,
-                                             pixelHeight: settings.heightPx, hidpi: true,
-                                             refreshRate: Double(settings.displayRefreshHz))
+            let display = try await obtainDisplay()
             set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
             set { $0.display = display }
             let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us in
@@ -109,6 +113,22 @@ public final class VideoPipeline: @unchecked Sendable {
             await teardown()
             throw error
         }
+    }
+
+    /// The inherited display when it already runs at the wanted refresh rate (capture and encoder restart only);
+    /// otherwise a new display. ScreenCaptureKit keeps delivering at the old rate after an in-place mode switch
+    /// (measured, T-049: 60 fps after 60 -> 120 Hz even for a new SCStream, 126 fps on a display created at 120 Hz),
+    /// so a refresh change needs a new display. The old one must be gone first: a second display with the same
+    /// vendor/product/serial cannot be created while it exists. The short wait lets the system finish removing it.
+    private func obtainDisplay() async throws -> VirtualDisplay {
+        let rate = Double(settings.displayRefreshHz)
+        if let old = lock.withLock({ () -> VirtualDisplay? in defer { inherited = nil }; return inherited }) {
+            if old.requestedRefreshHz == rate { return old }
+            old.invalidate()
+            try await Task.sleep(nanoseconds: 700_000_000)
+        }
+        return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
+                                  hidpi: true, refreshRate: rate)
     }
 
     /// Closes the current cadence window (call about once a second). `sentTotal` is the sender's cumulative
@@ -165,6 +185,13 @@ public final class VideoPipeline: @unchecked Sendable {
         await teardown()
     }
 
+    /// Stops capture, the encoder and the queue like `stop()`, but hands the virtual display over (still alive) for the
+    /// next pipeline. nil when the pipeline was stopped already or never had a display.
+    func stopKeepingDisplay() async -> VirtualDisplay? {
+        guard markStopped() else { return nil }
+        return await teardown(keepingDisplay: true)
+    }
+
     // Synchronous lock helpers (NSLock cannot be used directly in async functions).
     private func beginStart() throws {
         try lock.withLock {
@@ -188,13 +215,16 @@ public final class VideoPipeline: @unchecked Sendable {
         }
     }
 
-    private func teardown() async {
+    @discardableResult
+    private func teardown(keepingDisplay: Bool = false) async -> VirtualDisplay? {
         let (cap, enc, disp) = takeResources()
         await cap?.stop()
         enc?.stop()
         box.encoder = nil
         frames.finish()
+        if keepingDisplay { return disp }
         disp?.invalidate()
+        return nil
     }
 
     /// Unexpected failure: tear down, then tell the owner once.

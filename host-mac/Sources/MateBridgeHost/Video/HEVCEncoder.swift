@@ -79,7 +79,7 @@ final class HEVCEncoder: @unchecked Sendable {
         if !highRate { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
-            allocator: nil, width: Int32(settings.widthPx), height: Int32(settings.heightPx),
+            allocator: nil, width: Int32(settings.encodedWidthPx), height: Int32(settings.encodedHeightPx),
             codecType: kCMVideoCodecType_HEVC, encoderSpecification: spec as CFDictionary,
             imageBufferAttributes: nil, compressedDataAllocator: nil,
             outputCallback: nil, refcon: nil, compressionSessionOut: &s)

@@ -326,6 +326,16 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
+    /// The stream settings of the live session changed (`STREAM_PREFS`, T-049): sends the new `STREAM_CONFIG` and closes
+    /// the video connection so the tablet reopens it with the new `config_id`. Ignored for an ended session.
+    public func reconfigureStream(sessionID: UInt32, config: StreamConfig) {
+        queue.async { [self] in
+            guard !stopped, sessionID == currentSessionID else { return }
+            currentConfigID = config.configID
+            apply(machine.reconfigure(sessionID: sessionID, config: config))
+        }
+    }
+
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
     public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in
