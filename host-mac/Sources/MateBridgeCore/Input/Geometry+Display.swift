@@ -3,13 +3,14 @@
 //
 //   InjectAction --InjectionPlanner--> MacEvent --(Host: CGEventPoster)--> CGEvent.post
 //
-// Sections: DisplayGeometry (the one coordinate conversion, PROTOCOL.md section 1), MacEvent (the seam vocabulary),
-// ClickCounter, InjectionPlanner (the injector's own state) and InputPipeline (session lifecycle and release-all).
+// This file: `DisplayGeometry`, the one coordinate conversion (PROTOCOL.md section 1). Beside it in Core/Input:
+// MacEvent.swift (the seam vocabulary and `InjectionEnvironment`), ClickCounter.swift, InjectionPlanner.swift (the
+// injector's own state), InputPipeline.swift (session lifecycle and release-all), OwedRelease.swift (releases the Mac
+// may not have received), MacEvent+Closing.swift and ReleaseRecord.swift (release log names).
 // Nothing here posts events, checks permissions or looks at the screen; the Host passes an `InjectionEnvironment`.
 //
-// The file is one file because T-023 may add exactly one file under Core/Input (see the card's Open questions).
-//
-// Rule identifiers used as test-name prefixes: GEO-* geometry, CLICK-* click state, PLAN-* planner, PIPE-* pipeline.
+// Rule identifiers used as test-name prefixes: GEO-* geometry, CLICK-* click state, PLAN-* planner, PIPE-* pipeline,
+// MAC-* closing events, OWED-* owed releases.
 
 // MARK: - Display geometry
 
