@@ -232,3 +232,10 @@ Kaynak: MB Input Probe (776b179), MatePad MRDI-W09, HarmonyOS 4.3 / API 31. Ham 
 - **T-025 kontrolleri (20:30):** arka plandan dönüşte ilk parmak dokunuşu tık üretti. Parmakla sekme sürüklerken kalem yaklaşınca parmak işlevini kaybetti ve kalem devraldı (kalem önceliği; zıplama bildirilmedi). Aynı saniyede tablet `pen_samples=81 touch_msgs=92`. Host olay başına log tutmadığı için devralmanın hover'da mı (Android'in parmağı iptal etmesi) yoksa temasta mı (host'un kalem önceliği) olduğu ayırt edilemedi.
 - **Eğim (20:4x):** kullanıcı "Pencil-5 Tilted" ile eğimin çizgiyi değiştirdiğini doğruladı.
 - **Vuruş ortasında force-stop (20:47:33):** kullanıcı çizerken (tablet `pen_samples=361/sn`, temas sürüyor) `am force-stop dev.matebridge.client`. Host: `input_release cause=disconnected events=2 pen_up=1 pen_leave=1`; basılı kalan yok. `input_session_end released=0` sayaç tutarsızlığı yine görüldü (kablo çekmedeki gibi).
+
+## 2026-09-30 — İki parmakla yakınlaştırma: araştırma (Faz 3, kart yok henüz)
+
+- macOS'ta genel bir "yakınlaştırma hareketi" CGEvent API'si yok. Mac Mouse Fix (`Helper/Core/Touch/TouchSimulator.m`) yalnızca alanlarla sahte hareket olayı üretiyor: tip 29 (`NSEventTypeGesture`), alan 110 = 8 (HID zoom), alan 132 = faz (1 başla, 2 sürüyor, 4 bitti, 8 iptal), alan 113 = büyütme farkı; `kCGHIDEventTap`'e gönderiliyor. macOS 27'de alan tabanlı dock kaydırmaları bozulmuş (MMF issue #1876); büyütmenin 27'de çalıştığı doğrulanmadı → önce kısa bir deneme (scratch `magnify-spike`, gerçek olay gönderir, kullanıcıyla birlikte).
+- Qt 5.15 (`qnsview_gestures.mm`): yalnızca "sürüyor" fazı `ZoomNativeGesture` olur; iptal fazının karşılığı yok (Krita'da hareket kapanmaz) → host her zaman "bitti" ile kapatmalı. Yakınlaştırma merkezi olay konumu değil imleç konumu → host başlangıçta imleci iki parmağın ortasına taşımalı. Krita'nın varsayılan profili macOS büyütme hareketini tuval yakınlaştırmaya bağlıyor.
+- Yedek yol: Krita'da fazsız tekerlek olayı yakınlaştırır; Safari/Preview'da Cmd+= / Cmd+-.
+- Olası tel mesajı (protokol değişikliği, orkestratör): `PINCH { phase u8, scale_delta f32 (d_şimdi/d_önceki − 1), center_x u16, center_y u16 }`.
