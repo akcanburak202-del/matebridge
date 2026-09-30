@@ -59,6 +59,23 @@ final class BoundedFrameQueueTests: XCTestCase {
         XCTAssertTrue(q.takeKeyframeRequest())
     }
 
+    func testSurvivingNewerKeyframeSatisfiesRecovery() {
+        var q = BoundedFrameQueue(capacity: 2)
+        q.push(delta(1)); q.push(delta(2))
+        XCTAssertEqual(q.push(key(3)), 2, "delta 1 dropped, delta 2 purged, keyframe 3 survives")
+        XCTAssertFalse(q.takeKeyframeRequest(), "the queued keyframe is the recovery")
+        XCTAssertEqual(q.push(delta(4)), 0, "deltas that reference keyframe 3 are accepted")
+        XCTAssertEqual(q.pop()?.data, [3]); XCTAssertEqual(q.pop()?.data, [4])
+    }
+
+    func testPurgeStopsAtTheNextKeyframeAndKeepsLaterDeltas() {
+        var q = BoundedFrameQueue(capacity: 4)
+        q.push(delta(1)); q.push(delta(2)); q.push(key(3)); q.push(delta(4))
+        XCTAssertEqual(q.push(delta(5)), 2, "delta 1 dropped, delta 2 purged; keyframe 3 and later deltas stay")
+        XCTAssertEqual([q.pop()?.data, q.pop()?.data, q.pop()?.data], [[3], [4], [5]])
+        XCTAssertFalse(q.takeKeyframeRequest())
+    }
+
     func testDroppedDeltaPurgesLaterQueuedDeltasKeepsKeyframeAndConfig() {
         var q = BoundedFrameQueue(capacity: 4)
         q.push(config()); q.push(key(1)); q.push(delta(2)); q.push(delta(3))
