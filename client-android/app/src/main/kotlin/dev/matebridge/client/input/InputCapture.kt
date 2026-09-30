@@ -43,6 +43,12 @@ class InputCapture(
 
     private var active = false
     private var suspended = false
+
+    /** Local pen indicator tap (T-056); display only, never affects what is sent. */
+    var penInk: PenInkListener? = null
+
+    /** Mirror of the host's eraser mode (decision 0006: toggled by every PEN_GESTURE DOUBLE_TAP, reset with the session). */
+    private var eraserModeMirror = false
     private var lastStatsMs = NEVER_MS
     private val devices = HashSet<Int>()
 
@@ -102,6 +108,7 @@ class InputCapture(
     fun onPen(f: PenFrame, nowMs: Long) {
         if (!accepting) return
         devices += f.deviceId
+        penInk?.onPenFrame(f, f.eraser || eraserModeMirror)
         val wasInRange = pen.inRange
         if (!dispatch(pen.onFrame(f, nowMs))) return
         if (!wasInRange && pen.inRange) dispatch(gate(Src.TOUCH, touch.onPenRangeBegan(nowMs)))
@@ -152,6 +159,7 @@ class InputCapture(
         if (!accepting) return
         if (doubleTap.onDown(eventTimeMs)) {
             onEvent("pen_gesture", "gesture=double_tap")
+            eraserModeMirror = !eraserModeMirror
             dispatch(listOf(Outgoing(PenGesture(eventTimeMs * 1000, PenGesture.DOUBLE_TAP))))
         }
     }
@@ -258,6 +266,8 @@ class InputCapture(
 
     private fun forget() {
         gestureOwner = Src.NONE
+        eraserModeMirror = false
+        penInk?.onPenClear()
         pen.reset()
         touch.reset()
         doubleTap.reset()

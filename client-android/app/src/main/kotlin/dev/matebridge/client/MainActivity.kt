@@ -58,6 +58,7 @@ import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StreamMode
+import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.stream.VideoLayout
 import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.GlPresenter
@@ -104,6 +105,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var videoGl: SurfaceView // target of the GL presenter (T-018)
     private lateinit var videoView: SurfaceView // whichever of the two is in use
     private lateinit var panel: View
+    private lateinit var penOverlay: PenOverlayView // T-056
     private lateinit var statsView: TextView
     private val ui = Handler(Looper.getMainLooper())
     private val clock = ClockSync()
@@ -204,6 +206,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (v === videoView) {
                     viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
                     else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+                    if (v === videoView && ::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
                 }
             }
             sv.setOnLongClickListener { toggleStats(); true }
@@ -295,9 +298,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.setOnCapturedPointerListener(capturedPointerListener)
         }
         clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }, { controller.trySend(it) }, { runOnUiThread(it) })
+        // T-056: local pen indicator above the video (below the stats text and the panel), never touchable.
+        penOverlay = PenOverlayView(this)
+        penOverlay.model.trailEnabled = settings.penTrail()
+        penOverlay.model.dotEnabled = settings.penDot()
+        penOverlay.setVideoViewport(viewport)
+        root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        capture.penInk = penOverlay
         addFingerToggle()
         addModeButton()
         addClipboardToggle()
+        addPenToggles()
         addShortcutHint()
         applyImmersive()
         render(SessionUi.Searching)
@@ -510,6 +521,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         lp.topMargin = (8 * resources.displayMetrics.density).toInt()
         p.addView(b, lp)
+    }
+
+    /** T-056: connect-panel switches for the local pen trail and dot, persisted in [Settings] (default on). */
+    private fun addPenToggles() {
+        val p = panel as? LinearLayout ?: return
+        fun add(title: String, get: () -> Boolean, set: (Boolean) -> Unit) {
+            val b = Button(this)
+            fun label() { b.text = title + ": " + if (get()) "açık" else "kapalı" }
+            b.setOnClickListener { set(!get()); label() }
+            label()
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+            p.addView(b, lp)
+        }
+        add("Kalem izi", { penOverlay.model.trailEnabled }) { on ->
+            penOverlay.model.trailEnabled = on
+            settings.setPenTrail(on)
+            penOverlay.onPenClear()
+        }
+        add("Kalem noktası", { penOverlay.model.dotEnabled }) { on ->
+            penOverlay.model.dotEnabled = on
+            settings.setPenDot(on)
+            penOverlay.postInvalidateOnAnimation()
+        }
     }
 
     /** T-050: connect-panel button that cycles the display mode (click), persisted in [Settings]. */

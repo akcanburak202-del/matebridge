@@ -36,6 +36,19 @@ class SessionSupportTest {
         assertEquals(Endpoint("192.168.1.20", 7420), s.lastEndpoint())
     }
 
+    @Test fun penOverlayDefaultsOnAndPersist() {
+        val st = MemStore()
+        val s = Settings(st)
+        assertTrue(s.penTrail())
+        assertTrue(s.penDot())
+        s.setPenTrail(false)
+        s.setPenDot(false)
+        assertFalse(Settings(st).penTrail())
+        assertFalse(Settings(st).penDot())
+        s.setPenTrail(true)
+        assertTrue(Settings(st).penTrail())
+    }
+
     @Test fun endpointParsing() {
         assertEquals(Endpoint("192.168.1.20", 7420), Endpoint.parse(" 192.168.1.20:7420 "))
         assertEquals(Endpoint("mac.local", 1), Endpoint.parse("mac.local:1"))

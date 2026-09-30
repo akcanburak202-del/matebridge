@@ -42,6 +42,15 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setClipboardShare(on: Boolean) = store.putString(KEY_CLIPBOARD, if (on) "1" else "0")
 
+    /** Local pen trail and pen dot (T-056); both default on. */
+    fun penTrail(): Boolean = store.getString(KEY_PEN_TRAIL) != "0"
+
+    fun setPenTrail(on: Boolean) = store.putString(KEY_PEN_TRAIL, if (on) "1" else "0")
+
+    fun penDot(): Boolean = store.getString(KEY_PEN_DOT) != "0"
+
+    fun setPenDot(on: Boolean) = store.putString(KEY_PEN_DOT, if (on) "1" else "0")
+
     /** Last chosen connection mode; Wi-Fi (discovery) by default. */
     fun transport(): Transport = Transport.parse(store.getString(KEY_TRANSPORT))
 
@@ -93,6 +102,8 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"
+        const val KEY_PEN_TRAIL = "pen_trail"
+        const val KEY_PEN_DOT = "pen_dot"
         const val KEY_FINGER_OFF = "finger_touch_disabled"
     }
 }
