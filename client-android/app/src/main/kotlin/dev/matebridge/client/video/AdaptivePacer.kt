@@ -75,7 +75,13 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         while (minT.first() < nowNs - WINDOW_NS) { minT.removeFirst(); minX.removeFirst() }
         val dev = x - minX.first()
         // Slack comes from the jitter seen so far: a frame that is worse than everything before it is late.
-        val d = (percentile() + MARGIN_NS + extraNs).coerceAtMost(3 * period)
+        // Content faster than the panel (e.g. 120 fps on a 60 Hz panel): some frames must be dropped. Never queue
+        // them behind each other (that builds latency and stalls the decoder's output buffers): one vsync of slack
+        // at most, and a frame whose slot is already taken replaces the older one (newest wins).
+        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
+        val surplus = fi * 4 < period * 3
+        val d = if (surplus) (percentile() + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
+        else (percentile() + MARGIN_NS + extraNs).coerceAtMost(3 * period)
         devs[devPos] = dev
         devPos = (devPos + 1) % DEV_SAMPLES
         if (devN < DEV_SAMPLES) devN++
@@ -89,10 +95,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         if (lastSlot != Long.MIN_VALUE && slot <= lastSlot) {
             // Same vsync as the previous frame (or earlier): one period after it, unless that is too far behind.
             val pushed = lastSlot + period
-            if (pushed - earliest <= d + 2 * period) slot = pushed else { slot = lastSlot; collided = true }
+            if (!surplus && pushed - earliest <= d + 2 * period) slot = pushed else { slot = lastSlot; collided = true }
         }
         lastSlot = slot
-        val fi = if (frameIntervalNs > 0) frameIntervalNs else period
         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
         // A skip: a vsync went by without a new frame although this one was decoded (late, not an idle source).
         val skipped = late && previous != Long.MIN_VALUE && (slot - previous) * 2 > cadence * 3

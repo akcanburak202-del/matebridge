@@ -206,6 +206,58 @@ class AdaptivePacerTest {
         assertTrue("added ${added / scheduled / ms}", added / scheduled <= p120)
     }
 
+    @Test fun fasterContentThanPanelDropsInsteadOfQueueing() {
+        // 120 fps stream on a 60 Hz panel (Huawei drops the panel rate when nobody touches it).
+        val clk = clock(p60)
+        val pacer = AdaptivePacer(clk, p120)
+        var seed = 7L
+        fun rnd(): Double { seed = seed * 6364136223846793005L + 1442695040888963407L; return ((seed ushr 33) % 10_000) / 10_000.0 }
+        var collisions = 0; var skips = 0; var maxD = 0L; var latencySum = 0.0; var maxLatency = 0L; val n = 120 * 30
+        var prevSlot = Long.MIN_VALUE
+        for (k in 0 until n) {
+            val cap = 1_000_000_000L + k * p120
+            val ready = cap + 9 * ms + (rnd() * 3 * ms).toLong()
+            val d = pacer.schedule(cap / 1000, ready)!!
+            if (d.collided) collisions++
+            if (d.skipped) skips++
+            maxD = maxOf(maxD, pacer.lastDNs)
+            val slot = d.renderNs + p60 / 2
+            val lat = slot - ready
+            latencySum += lat; maxLatency = maxOf(maxLatency, lat)
+            // Slots never run backwards and never queue more than one period ahead of the earliest vsync.
+            assertTrue(prevSlot == Long.MIN_VALUE || slot >= prevSlot)
+            prevSlot = slot
+            assertTrue("added ${d.addedNs}", d.addedNs <= p60 + AdaptivePacer.MARGIN_NS + 3 * ms)
+        }
+        val dropPct = collisions * 100.0 / n
+        assertTrue("drops $dropPct", dropPct in 40.0..60.0)
+        assertTrue("D ${maxD / ms.toDouble()}", maxD <= p60 + AdaptivePacer.MARGIN_NS)
+        assertTrue("latency ${latencySum / n / ms}", latencySum / n <= 2 * p60)
+        assertTrue("max latency ${maxLatency / ms}", maxLatency <= 3 * p60)
+        assertEquals("intentional drops are not skips", 0, skips)
+    }
+
+    @Test fun panelSwitch120To60AndBackResetsSlack() {
+        val v = VsyncClock(120f).also { it.onVsync(0) }
+        val pacer = AdaptivePacer(v, p120)
+        var k = 0
+        fun run(frames: Int) { repeat(frames) { val cap = 1_000_000_000L + k * p120; pacer.schedule(cap / 1000, cap + 9 * ms + (k % 3) * ms); k++ } }
+        run(200)
+        repeat(AdaptivePacer.HIGH_WINDOWS) { pacer.onSkipWindow(20.0) }
+        assertEquals(1, pacer.level)
+        // Panel drops to 60 Hz (display listener reseeds the clock at once): level and stale jitter data are dropped.
+        v.setNominalHz(60f)
+        run(1)
+        assertEquals(0, pacer.level)
+        run(120)
+        assertTrue("D at 60 Hz ${pacer.lastDNs / ms.toDouble()}", pacer.lastDNs <= p60 + AdaptivePacer.MARGIN_NS)
+        // ...and back to 120 Hz: base D again (jitter ~2 ms + margin), not a leftover of the 60 Hz regime.
+        v.setNominalHz(120f)
+        run(200)
+        assertEquals(0, pacer.level)
+        assertTrue("D at 120 Hz ${pacer.lastDNs / ms.toDouble()}", pacer.lastDNs <= p120)
+    }
+
     @Test fun idleSourceGapIsNotASkip() {
         val pacer = AdaptivePacer(clock(p120), p120)
         pacer.schedule(0, 1_000_000_000L + 20 * ms)
