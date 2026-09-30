@@ -1,7 +1,7 @@
 ---
 id: T-046
 title: Tablet — video yüzeyi için akış fps'inde yenileme iste (setFrameRate) ve gerçek panel hızını ölç
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-045]
@@ -43,3 +43,7 @@ NOTES 2026-10-01 "120 fps ölçümü": tablet paneli durağan ekranda 120 Hz, am
 - **Varsayımlar:** `hz` extra varsayılanı sabit 120 yerine "akış fps'ini izle" (-1) oldu; 60 fps akışta istek 60 (mod 60 seçilir, panel 60'a inebilir; kabul kriteri izin veriyor). Yüzey yolu artık DEFAULT yerine FIXED_SOURCE kullanıyor (eskiden yalnızca GL/`frate`). `setFrameRate` `videoView.holder.surface` üzerinde; GL yolunda bu GL SurfaceView'ıdır (sunum yüzeyi), decoder yüzeyi değil. fps değişiminde mod yeniden seçilir. `vsync_ms_p50` = Choreographer ana-thread callback aralığı medyanı; `display_hz` = Display.getRefreshRate().
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Host `MATEBRIDGE_FPS=120` ile bağlan; logcat `MB/render`: `set_frame_rate rate=120.0 strategy_always=true`, `display_mode requested_hz=120 picked_hz=120`, `stats ... display_hz=... vsync_ms_p50=...` (hedef ~8.33; önceki ölçüm 16.67); yanında `dumpsys SurfaceFlinger --latency`. 60 fps akışta davranış değişmemeli. `--es render surface` ve `gl` ikisi de. Olumsuzsa seçenekler: (a) GL yolunda EGL yüzeyine de setFrameRate, (b) `LayoutParams.preferredRefreshRate` eklemek, (c) küçük sürekli yeniden çizimle paneli 120'de tutmak, (d) HarmonyOS'a özel API (kapsam dışı, belgesiz).
 - **Açık sorular:** Yok.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Cihazda: istek uygulanıyor ama Huawei FrameRateManager video yüzeyini 60 Hz'te tutuyor (NOTES 2026-10-01). İstatistiklerdeki `display_hz`/`vsync_ms_p50` kalıcı yararlı. → T-048.
