@@ -34,6 +34,11 @@ if [ -f protocol/fixtures/gen.py ]; then
   run "protocol fixtures up to date" . python3 protocol/fixtures/gen.py --check
 fi
 
+# Crypto test vectors (PROTOCOL.md section 9) must match the reference generator
+if [ -f protocol/fixtures/crypto_vectors.swift ]; then
+  run "crypto vectors up to date" . bash -c 'swift protocol/fixtures/crypto_vectors.swift | diff -q - protocol/fixtures/crypto_vectors.json >/dev/null'
+fi
+
 # Protocol fixtures must be referenced by docs (cheap consistency guard)
 for fx in protocol/fixtures/*.hex; do
   [ -e "$fx" ] || continue
