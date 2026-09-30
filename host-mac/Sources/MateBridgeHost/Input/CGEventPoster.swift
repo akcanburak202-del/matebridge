@@ -18,17 +18,15 @@ public protocol MacEventPoster: Sendable {
 ///
 /// Confined to one queue by its owner (`InputController`); not thread-safe on its own.
 public final class CGEventPoster: MacEventPoster, @unchecked Sendable {
-    private let source: CGEventSource?
     private let logger = SessionLogger(component: "input")
     private var failures = 0
 
-    public init() {
-        source = CGEventSource(stateID: .hidSystemState)
-    }
+    public init() {}
 
     public func post(_ events: [MacEvent]) {
         for event in events {
-            guard let cg = CGEventFactory.make(event, source: source) else {
+            // A fresh HID-system-state source per event, exactly as the probe did.
+            guard let cg = CGEventFactory.make(event, source: CGEventSource(stateID: .hidSystemState)) else {
                 failures += 1
                 // Counts only; the first failure and then every 100th.
                 if failures == 1 || failures % 100 == 0 {

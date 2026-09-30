@@ -187,6 +187,11 @@ public final class InputController: @unchecked Sendable {
         if status != lastStatus {
             lastStatus = status
             log(.info, "input_gate", "accessibility=\(trusted ? 1 : 0) display=\(geometry != nil ? 1 : 0)")
+            if geometry == nil, sessionID != 0 {
+                // The video pipeline makes the display right after ACCEPTED, so this is normal for a moment. If it
+                // stays, the vendor/product lookup may be wrong: this line says what is online instead.
+                log(.warning, "input_display_missing", displays.describeOnlineDisplays())
+            }
             onStatusChange?(status)
         }
         return InjectionEnvironment(canInject: trusted, geometry: geometry)

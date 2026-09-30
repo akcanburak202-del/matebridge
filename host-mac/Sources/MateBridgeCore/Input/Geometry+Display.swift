@@ -197,8 +197,9 @@ public struct ClickCounter: Sendable {
     public struct Configuration: Equatable, Sendable {
         /// Maximum time between two presses that still count as a multi-click (`NSEvent.doubleClickInterval`).
         public var intervalUs: UInt64 = 500_000
-        /// Maximum distance between two presses, in points.
-        public var distancePt: Double = 5
+        /// Maximum distance between two presses, in points. On the 12.2" virtual display one point is about 0.19 mm,
+        /// so 12 pt is about 2 mm: the scatter of two finger taps meant as one double tap (pens never count clicks).
+        public var distancePt: Double = 12
         public init() {}
     }
 

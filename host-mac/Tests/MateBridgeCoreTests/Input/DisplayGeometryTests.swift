@@ -112,8 +112,8 @@ struct ClickCounterTests {
     func click3_distance() {
         var c = ClickCounter()
         #expect(c.press(.left, at: p, now: 0) == 1)
-        #expect(c.press(.left, at: DisplayPoint(x: 103, y: 104), now: 100_000) == 2)  // 5 pt away
-        #expect(c.press(.left, at: DisplayPoint(x: 103, y: 110.01), now: 200_000) == 1)
+        #expect(c.press(.left, at: DisplayPoint(x: 112, y: 100), now: 100_000) == 2)  // 12 pt away (the default limit)
+        #expect(c.press(.left, at: DisplayPoint(x: 112, y: 112.01), now: 200_000) == 1)
     }
 
     @Test("CLICK-4 another button starts over, and so does the history reset by a release-all")

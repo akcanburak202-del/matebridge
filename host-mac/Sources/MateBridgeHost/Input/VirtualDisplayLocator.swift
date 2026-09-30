@@ -5,6 +5,12 @@ import MateBridgeCore
 /// Where the virtual display is right now, in global coordinates. `nil` means there is none.
 public protocol DisplayProviding: Sendable {
     func geometry() -> DisplayGeometry?
+    /// One line about the displays that are online, for the log when the virtual display cannot be found.
+    func describeOnlineDisplays() -> String
+}
+
+extension DisplayProviding {
+    public func describeOnlineDisplays() -> String { "" }
 }
 
 /// Finds the MateBridge virtual display with PUBLIC CoreGraphics calls only (`VirtualDisplay` stays the one file
@@ -44,6 +50,18 @@ public final class VirtualDisplayLocator: DisplayProviding, @unchecked Sendable 
         lastScanNs = now
         cachedID = Self.scan()
         return cachedID
+    }
+
+    /// `count=N` and, per display, `vVENDOR/mMODEL/WxH` in pixels (hardware numbers only, no names or serials).
+    public func describeOnlineDisplays() -> String {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return "count=unknown" }
+        let parts = ids.prefix(Int(count)).map { id in
+            String(format: "v0x%x/m0x%x/%ldx%ld", CGDisplayVendorNumber(id), CGDisplayModelNumber(id),
+                   CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id))
+        }
+        return "count=\(count) displays=" + parts.joined(separator: ",")
     }
 
     private static func isOurs(_ id: CGDirectDisplayID) -> Bool {
