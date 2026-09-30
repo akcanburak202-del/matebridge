@@ -206,7 +206,7 @@ class CryptoVectorsTest {
     }
 
     @Test
-    fun pairingHandshakeShowsTheVectorCodeAndStoresTheNewKeyOnAccepted() {
+    fun pairingHandshakeShowsTheVectorCodeAndStoresTheNewKeyAtTheFirstAck() {
         val eph = EphemeralKeyPair(P256.privateFromScalar(inp("client_eph_priv")), inp("client_eph_pub"))
         val hs = ClientHandshake(eph, hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))
         hs.hello(Codec.decodePayload(1, helloPayload()) as Hello)
@@ -217,13 +217,11 @@ class CryptoVectorsTest {
         val sec = (hs.complete(ack, ackPayload, store) as HandshakeOutcome.Secure).session
         assertEquals(mode("pairing").getValue("sas"), sec.sas)
         assertEquals(false, sec.rePairing)
-        // The pair key is only stored once the (encrypted) ACCEPTED arrives, and only once.
+        // The pair key is stored right after the first ack (before the Mac's approval), and only once.
         assertNull(store.get(ack.hostId.value))
-        assertEquals(false, sec.onMessage(HelloAck(1, HelloAck.PENDING_APPROVAL, 0, 0, ""), store))
-        assertNull(store.get(ack.hostId.value))
-        assertEquals(true, sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store))
+        assertEquals(true, sec.storePairKey(store))
         assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), store.get(ack.hostId.value))
-        assertEquals(false, sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store))
+        assertEquals(false, sec.storePairKey(store))
         assertEquals(1, store.puts)
         // control keys of the PAIRING session
         assertArrayEquals(
@@ -242,7 +240,7 @@ class CryptoVectorsTest {
         val store = MemStore().also { it.put(ack.hostId.value, ByteArray(32) { 7 }) }
         val sec = (hs.complete(ack, ackPayload, store) as HandshakeOutcome.Secure).session
         assertEquals(true, sec.rePairing)
-        sec.onMessage(HelloAck(1, HelloAck.ACCEPTED, 7, 47002, "Mac"), store)
+        sec.storePairKey(store)
         assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), store.get(ack.hostId.value)) // replaced
     }
 
