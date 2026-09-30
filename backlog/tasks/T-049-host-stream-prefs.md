@@ -33,7 +33,11 @@ Kullanıcı (2026-10-01): "120 çizim sırasında daha akıcı … daha pürüzs
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Core (test edilir):** `StreamPrefs` mesajı (0x05) + fixture testi; `StreamPrefs.normalized` (fps ∈ {60,120,144} aksi 60, scale 500–1000); `VideoSettings.scalePermille`, kodlanan boyut (çift, en-boy korunur), `applying(prefs:)` (fps, sanal ekran yenileme hızı, bit hızı = 30 Mbps × fps/60 × scale², 20–80 Mbps), `nextConfigID`; `StreamPrefsGate` (saniyede en çok bir uygulama, en sonuncusu bekler); `DisplayLease.reconfigure` (aynı cihaz + aynı ekran boyutu → ekranı yıkmadan `.reconfigure`); `SessionMachine.reconfigure(sessionID:config:)` (yeni `config_id`, `STREAM_CONFIG` gönder, video bağlantısını kapat).
+2. **Host:** `StreamCoordinator` STREAM_PREFS olayını (coalesced) işler, kapıdan geçirir, ayarı türetir, `onReconfigure` ile oturum makinesine yeni config bildirir, işlem hattını sanal ekranı koruyarak yeniden kurar (`VideoPipeline` ekranı devralabilir). `VirtualDisplay` 60/120/144 modlarını kaydeder ve modu yıkmadan değiştirir (olmazsa işlem hattı ekranı yeniden yaratır). SCK ve kodlayıcı kodlanan boyutu kullanır.
+3. **Bağlantı:** `SessionServer.reconfigureStream`; `main.swift`'te tek satır bağlama (kart `files` listesinde yok, Açık sorulara yazıldı).
+4. Sanal ekran değiştirme ve 144 Hz için tek seferlik sonda (scratchpad, depoya girmez).
+
 
 ## Handoff
 
