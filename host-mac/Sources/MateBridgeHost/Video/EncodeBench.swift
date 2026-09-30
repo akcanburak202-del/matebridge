@@ -17,13 +17,14 @@ public enum EncodeBench {
         public var p95Ms: Double
         public var p99Ms: Double
         public var mbps: Double
+        public var sizes = FrameSizeStats()
         public var note: String
     }
 
     // MARK: Synthetic frames
 
     /// Full-range 4:2:0, like `ScreenCapture`. Each pool frame differs: a sliding gradient plus text-like glyph cells.
-    static func makeFramePool(width: Int, height: Int, count: Int) -> [CVPixelBuffer] {
+    static func makeFramePool(width: Int, height: Int, count: Int, content: EncodeBenchContent) -> [CVPixelBuffer] {
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]]
         var pool: [CVPixelBuffer] = []
         for f in 0..<count {
@@ -31,14 +32,14 @@ public enum EncodeBench {
             guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                                       attrs as CFDictionary, &pb) == kCVReturnSuccess, let pb else { continue }
             CVPixelBufferLockBaseAddress(pb, [])
-            fill(pb, width: width, height: height, frame: f)
+            fill(pb, width: width, height: height, frame: content == .scroll ? f : 0, patch: content == .patch ? f : nil)
             CVPixelBufferUnlockBaseAddress(pb, [])
             pool.append(pb)
         }
         return pool
     }
 
-    private static func fill(_ pb: CVPixelBuffer, width: Int, height: Int, frame: Int) {
+    private static func fill(_ pb: CVPixelBuffer, width: Int, height: Int, frame: Int, patch: Int?) {
         let shift = frame * 29
         if let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) {
             let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
@@ -61,6 +62,14 @@ public enum EncodeBench {
                 }
             }
         }
+        if let patch, let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) {
+            // A 240x120 region near the top-left changes from frame to frame (pen stroke / caret area).
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+            let p = base.assumingMemoryBound(to: UInt8.self)
+            for y in 100..<220 { for x in 100..<340 {
+                p[y * stride + x] = UInt8(truncatingIfNeeded: ((x * 7 + y * 3 + patch * 41) >> 2) & 0xFF)
+            } }
+        }
         if let base = CVPixelBufferGetBaseAddressOfPlane(pb, 1) {
             let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
             let p = base.assumingMemoryBound(to: UInt8.self)
@@ -80,9 +89,12 @@ public enum EncodeBench {
         let lock = NSLock()
         var durationsUs: [UInt64] = []
         var bytes = 0
+        var frames: [(size: Int, isKey: Bool)] = []
         var outputs = 0
         var failures = 0
-        func record(us: UInt64, bytes b: Int) { lock.lock(); durationsUs.append(us); bytes += b; outputs += 1; lock.unlock() }
+        func record(us: UInt64, bytes b: Int, isKey: Bool) {
+            lock.lock(); durationsUs.append(us); bytes += b; outputs += 1; frames.append((b, isKey)); lock.unlock()
+        }
         func fail() { lock.lock(); failures += 1; lock.unlock() }
     }
 
@@ -163,7 +175,10 @@ public enum EncodeBench {
             } else {
                 slots.wait()
             }
-            let buf = pool[frameIndex % pool.count]
+            // Ping-pong through the pool so consecutive frames always differ by one step (no wrap-around jump).
+            let period = max(1, 2 * (pool.count - 1))
+            let k = frameIndex % period
+            let buf = pool[k < pool.count ? k : period - k]
             let session = sessions[frameIndex % sessions.count]
             frameIndex += 1
             ptsCounter += 1
@@ -173,7 +188,11 @@ public enum EncodeBench {
                 duration: .invalid, frameProperties: nil, infoFlagsOut: nil
             ) { status, _, sb in
                 let us = (DispatchTime.now().uptimeNanoseconds - start) / 1000
-                if status == noErr, let sb { collector.record(us: us, bytes: CMSampleBufferGetTotalSampleSize(sb)) }
+                if status == noErr, let sb {
+                    let atts = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]]
+                    let isKey = (atts?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) != true
+                    collector.record(us: us, bytes: CMSampleBufferGetTotalSampleSize(sb), isKey: isKey)
+                }
                 else { collector.fail() }
                 slots.signal()
             }
@@ -192,7 +211,8 @@ public enum EncodeBench {
             skipped: skipped,
             p50Ms: Double(CadenceWindow.percentile(d, 50)) / 1000, p95Ms: Double(CadenceWindow.percentile(d, 95)) / 1000,
             p99Ms: Double(CadenceWindow.percentile(d, 99)) / 1000,
-            mbps: Double(collector.bytes) * 8 / elapsed / 1e6, note: Array(Set(notes)).sorted().joined(separator: " "))
+            mbps: Double(collector.bytes) * 8 / elapsed / 1e6,
+            sizes: FrameSizeStats(frames: collector.frames), note: Array(Set(notes)).sorted().joined(separator: " "))
     }
 
     /// Human-readable list of HEVC encoders VideoToolbox offers.
@@ -210,16 +230,19 @@ public enum EncodeBench {
     /// Returns the process exit code.
     public static func runAll(_ o: EncodeBenchOptions) -> Int32 {
         let width = 2800, height = 1840
-        print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds)")
+        print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds) content=\(o.content.rawValue)")
         print("encoders: \(encoderList().joined(separator: "; "))")
-        let pool = makeFramePool(width: width, height: height, count: 12)
+        let pool = makeFramePool(width: width, height: height, count: 12, content: o.content)
         guard pool.count == 12 else { print("error: cannot allocate frames"); return 1 }
-        print("config | mode | out fps | submitted | skipped | enc ms p50/p95/p99 | Mbps | notes")
+        print("config | mode | out fps | submitted | skipped | enc ms p50/p95/p99 | Mbps | delta KB p50/p99/max (mean, p99/mean) | key KB max (n) | notes")
         for c in o.configs {
             for pace in [nil, o.fps] as [Int?] {
                 let r = run(c, width: width, height: height, fps: o.fps, seconds: o.seconds, paceFps: pace, pool: pool)
-                print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %@",
-                             r.config, r.mode, r.outFps, r.submitted, r.skipped, r.p50Ms, r.p95Ms, r.p99Ms, r.mbps, r.note))
+                let z = r.sizes
+                print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %.0f/%.0f/%.0f (%.0f, %.2fx) | %.0f (%d) | %@",
+                             r.config, r.mode, r.outFps, r.submitted, r.skipped, r.p50Ms, r.p95Ms, r.p99Ms, r.mbps,
+                             Double(z.deltaP50) / 1000, Double(z.deltaP99) / 1000, Double(z.deltaMax) / 1000,
+                             z.deltaMean / 1000, z.p99ToMean, Double(z.keyMax) / 1000, z.keyCount, r.note))
                 fflush(stdout)
             }
         }
