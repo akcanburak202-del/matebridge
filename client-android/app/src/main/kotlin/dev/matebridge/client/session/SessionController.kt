@@ -9,6 +9,8 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
+import dev.matebridge.client.protocol.StreamPrefs
+import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.protocol.VideoHello
 import dev.matebridge.client.protocol.Bytes
@@ -65,8 +67,9 @@ class SessionController(
     private val hello: Hello,
     private val pairKeys: PairKeyStore,
     private val listener: SessionListener,
+    initialMode: StreamMode = StreamMode.DEFAULT,
 ) {
-    private val machine = SessionMachine(hello)
+    private val machine = SessionMachine(hello, initialMode.toPrefs())
     private val random = SecureRandom()
 
     /** Messages from control reader threads; bounded, and only those threads ever block on it. */
@@ -74,6 +77,7 @@ class SessionController(
 
     /** Commands and close notifications: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine. */
     private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
+    private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
@@ -96,6 +100,13 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         intent.post(SessionMachine.Event.Start(endpoint))
+    }
+
+    /** Non-blocking. Remembers the display mode and sends STREAM_PREFS now when the session is accepted (T-050). */
+    fun setStreamMode(mode: StreamMode) {
+        if (terminated.get()) return
+        ensureEngine()
+        prefsMailbox.post(SessionMachine.Event.SetPrefs(mode.toPrefs()))
     }
 
     /** Non-blocking. */
@@ -145,7 +156,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = intent.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = TICK_MS - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -200,6 +211,7 @@ class SessionController(
                 is Bye -> MbLog.i("bye_recv", "reason=${m.reason}")
                 else -> Unit
             }
+            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille}")
             is SessionMachine.Event.Tick -> Unit
         }
     }
@@ -217,6 +229,7 @@ class SessionController(
                 when (val m = a.msg) {
                     is Hello -> MbLog.i("hello_sent", "proto=${m.protocolVersion}")
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
+                    is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille}")
                     else -> Unit
                 }
                 val c = control

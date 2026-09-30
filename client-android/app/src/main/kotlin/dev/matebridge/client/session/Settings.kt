@@ -31,6 +31,12 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStatsOverlay(on: Boolean) = store.putString(KEY_STATS, if (on) "1" else "0")
 
+    /** Display mode (T-050); default Akıcı. */
+    fun streamMode(): dev.matebridge.client.stream.StreamMode =
+        dev.matebridge.client.stream.StreamMode.parse(store.getString(KEY_STREAM_MODE))
+
+    fun setStreamMode(m: dev.matebridge.client.stream.StreamMode) = store.putString(KEY_STREAM_MODE, m.id)
+
     /** Last chosen connection mode; Wi-Fi (discovery) by default. */
     fun transport(): Transport = Transport.parse(store.getString(KEY_TRANSPORT))
 
@@ -78,6 +84,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"
         const val KEY_STATS = "stats_overlay"
+        const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_FINGER_OFF = "finger_touch_disabled"

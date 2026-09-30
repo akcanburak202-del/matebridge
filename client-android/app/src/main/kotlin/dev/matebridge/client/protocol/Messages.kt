@@ -22,6 +22,7 @@ object MsgType {
     const val HELLO_ACK = 0x02
     const val STREAM_CONFIG = 0x03
     const val BYE = 0x04
+    const val STREAM_PREFS = 0x05
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -133,6 +134,11 @@ data class StreamConfig(
         const val CODEC_H264 = 1
         const val CODEC_HEVC = 2
     }
+}
+
+/** Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144) and encoded size in permille of the display. */
+data class StreamPrefs(val fps: Int, val scalePermille: Int) : Message {
+    override val type get() = MsgType.STREAM_PREFS
 }
 
 data class Bye(val reason: Int) : Message {

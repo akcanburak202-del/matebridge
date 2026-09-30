@@ -7,6 +7,8 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.StreamConfig
+import dev.matebridge.client.protocol.StreamPrefs
+import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoHello
 
 /**
@@ -22,7 +24,7 @@ import dev.matebridge.client.protocol.VideoHello
  * reset on ACCEPTED; BUSY waits at least 3 s). REJECTED and VERSION_MISMATCH do not retry, because
  * retrying would only re-prompt the Mac user or fail again; the user must press connect.
  */
-class SessionMachine(private val hello: Hello) {
+class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs()) {
     sealed interface Event {
         data class Start(val endpoint: Endpoint) : Event
         data object Stop : Event
@@ -37,6 +39,8 @@ class SessionMachine(private val hello: Hello) {
         data class KeyMissing(val gen: Int) : Event
         /** The new pairing key could not be persisted: pairing must not be reported as successful. */
         data class KeyStoreFailed(val gen: Int) : Event
+        /** The user picked a display mode (T-050): remembered for this and later connections, sent now when input is allowed. */
+        data class SetPrefs(val prefs: StreamPrefs) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -75,6 +79,7 @@ class SessionMachine(private val hello: Hello) {
     private var videoPort = 0
     private var config: StreamConfig? = null
 
+    private var prefs = initialPrefs
     private var pingSeq = 0L
     private var nextPingUs = 0L
     private var lastPongUs = 0L
@@ -137,6 +142,12 @@ class SessionMachine(private val hello: Hello) {
                 videoOpen = false
                 if (phase == Phase.STREAMING) videoRetryAtUs = nowUs + VIDEO_RETRY_US
             }
+            is Event.SetPrefs -> {
+                if (event.prefs != prefs) {
+                    prefs = event.prefs
+                    if (inputAllowed) out += Action.Send(prefs)
+                }
+            }
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
         }
         return out
@@ -169,6 +180,7 @@ class SessionMachine(private val hello: Hello) {
                 pairingCode = null
                 // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
                 out += Action.Send(Ping(pingSeq++, nowUs))
+                out += Action.Send(prefs) // T-050: right after the proof PING, never before it
                 nextPingUs = nowUs + PING_INTERVAL_US
                 hostName = ack.hostName
                 sessionId = ack.sessionId
