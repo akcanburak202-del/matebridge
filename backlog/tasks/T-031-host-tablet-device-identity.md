@@ -1,7 +1,7 @@
 ---
 id: T-031
 title: Mac — kalem yakınlık olayında cihaz kimliği (vendorPointerType, uniqueID); Krita kalemi fare sanıyor
-status: todo
+status: review
 phase: 2
 owner: mac-host-dev
 depends_on: [T-023]
@@ -37,12 +37,12 @@ T-027: kalemin çift dokunuşu (karar 0006) Krita'da silgi fırçasına geçirmi
 
 ## Plan
 
-_(Ajan doldurur.)_
+Saf eşleme `MateBridgeCore/Input/TabletIdentity.swift` (PenTool → 0x0802/0x080A, sabit uniqueID 0x4D42_5045_4E = "MBPEN", Qt kuralı testte). `CGEventFactory.proximity` iki yeni alanı yazar (giriş ve çıkış). Birim testi `TabletIdentityTests`.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `git log` (dal task/T-031-host-tablet-device-identity)
+- **Dokunulan dosyalar:** host-mac/Sources/MateBridgeCore/Input/TabletIdentity.swift (yeni), host-mac/Sources/MateBridgeHost/Input/CGEventPoster.swift, host-mac/Tests/MateBridgeCoreTests/Input/TabletIdentityTests.swift (yeni), bu kart
+- **Varsayımlar:** Swift alan adları `.tabletProximityEventVendorPointerType` / `.tabletProximityEventVendorUniqueID` (SDK 33/35, derleniyor). uniqueID sabiti ASCII "MBPEN". Nokta olayları ve mevcut alanlar değişmedi.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** CGEvent alanlarının gerçekten yazıldığı; Krita tablet günlüğünde `Stylus Pen id: <sabit>` ve çift dokunmadan sonra `Stylus Eraser`; fırçanın silgiye geçmesi (gerçek olay gönderilmedi).
+- **Açık sorular:** yok
