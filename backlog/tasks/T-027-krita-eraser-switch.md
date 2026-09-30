@@ -1,7 +1,7 @@
 ---
 id: T-027
 title: Çift dokunma Krita'da fırça değiştirmiyor — nedenini bul, karar 0006'yı doğrula ya da değiştir
-status: in-progress
+status: done
 phase: 2
 owner: orchestrator
 depends_on: [T-023]
@@ -32,10 +32,10 @@ Tuvale gelen olaylar: işaretçi çift dokunmadan önce `Pen`, sonra `Eraser` (d
 ## Yapılacaklar
 
 - [x] Krita'da tablet olay günlüğünü açıp (Log Viewer / tablet olay hata ayıklama) tuvale gelen olayların cihaz, işaretçi türü ve kimliğini oku: tuval gerçekten silgi işaretçisi görüyor mu, `switchInputDevice` neden tetiklenmiyor?
-- [ ] (T-031) Yakınlık olayına `vendorPointerType` (kalem 0x0802, silgi 0x080A) ve sıfırdan farklı bir benzersiz kimlik eklemenin etkisini dene (`--inject-test --fixture pen_eraser` ile, kullanıcı varken).
+- [x] (T-031) Yakınlık olayına `vendorPointerType` (kalem 0x0802, silgi 0x080A) ve sıfırdan farklı bir benzersiz kimlik eklemenin etkisini dene (`--inject-test --fixture pen_eraser` ile, kullanıcı varken).
 - [x] Sonuca göre: host düzeltmesi için kart aç (mac-host-dev) → T-031. ~~**ya da** karar 0006'yı güncelle. Alternatif: çift dokunma eylemi ayarlanabilir olur (silgi ucu / uygulamaya tuş gönder, ör. Krita'da `E`; tuş enjeksiyonu Faz 3'te geliyor).~~ Karar 0006 geçerli kalıyor; T-031 cihazda doğrulanınca karara not düşülecek.
 - [x] Bulguları `docs/NOTES.md`'ye yaz.
-- [ ] T-031 merge edildikten sonra cihazda: çift dokunma → silgi fırçası, tekrar çift dokunma → önceki fırça; Krita kapanıp açılınca hatırlanıyor mu.
+- [x] T-031 merge edildikten sonra cihazda (kullanıcı, 2026-09-30: çalışıyor): çift dokunma → silgi fırçası, tekrar çift dokunma → önceki fırça; Krita kapanıp açılınca hatırlanıyor mu.
 
 ## Plan
 
@@ -43,7 +43,7 @@ Tuvale gelen olaylar: işaretçi çift dokunmadan önce `Pen`, sonra `Eraser` (d
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** 56ee1fa (kök neden, kart), T-031 merge 611c8f7
 - **Dokunulan dosyalar:**
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**

@@ -18,7 +18,7 @@ PLAN Aşama 2 "Bitti" ölçütünü kullanıcıyla doğrulamak.
 ## Kabul kriterleri
 
 - [ ] Krita: basınçla kalınlaşan/incelen fırça, eğim (fırça destekliyorsa), hover imleci, silgi (M-Pencil'de varsa), çift dokunma eylemi.
-  - Basınç ve hover imleci: **çalışıyor** (kullanıcı, 2026-09-30). Eğim: denenmedi. Çift dokunma: Krita'da fırça değişmiyor → T-027.
+  - Basınç ve hover imleci: **çalışıyor** (kullanıcı, 2026-09-30). Eğim: denenmedi. Çift dokunma: Krita'da fırça değişmiyordu → T-027/T-031 ile düzeldi, **çalışıyor** (kullanıcı, 2026-09-30). Eğim değerleri Krita'ya ulaşıyor (tablet günlüğü xTilt/yTilt ≈ 12–29); fırçada etkisi kullanıcıyla denenmedi.
 - [ ] 15 dakikalık serbest çizim: kopuk çizgi yok, takılı kalan tık yok. Arada Wi-Fi kesme / uygulamayı arka plana alma / kablo çekme denemeleri → Mac'te hiçbir düğme basılı kalmaz.
   - **Denenmedi.** Arka plana alma oturumlar arasında birkaç kez oldu, basılı kalan görülmedi (`released=0`), ama çizim ortasında bilinçli deneme yapılmadı.
 - [ ] Avuç reddi: kalemle çizerken avuç ekrana değince çizgi bozulmaz.
@@ -26,7 +26,7 @@ PLAN Aşama 2 "Bitti" ölçütünü kullanıcıyla doğrulamak.
 - [ ] Dokunma: tek dokunuş tık, sürükleme, iki parmak kaydırma.
   - **Çalışıyor** (kullanıcı). İki parmakla yakınlaştırma yok → PLAN Aşama 3'e eklendi.
 - [ ] T-022 incelemesinden gelen kontroller: uygulamayı arka plana alıp döndükten sonraki **ilk** dokunuş tık üretiyor (işaretçi kilidi, PROTOCOL §7); kalem ekranda kıpırdamadan dururken çizgi 100 ms'de bir bölünmüyor (canlılık tekrarı `STROKE_START` taşımıyor); parmakla sürüklerken kalem yaklaşınca imleç iki konum arasında zıplamıyor.
-  - **Denenmedi.**
+  - Arka plandan dönüşte ilk parmak dokunuşu: **tık çalıştı** (kullanıcı). Hareketsiz basılı tutma: geçti (ikinci oturum). Parmakla sekme sürüklerken kalem yaklaşınca: parmak işlevini kaybediyor, kalem devralıyor; iki konum arasında zıplama bildirilmedi. Kalem öncelikli tasarımla (PROTOCOL §7, karar 0006) uyumlu. Kalem yakınlıkta mı yoksa temasta mı devraldığı log'dan ayırt edilemedi (host olay başına log tutmuyor).
 - [ ] Kalem gecikmesi: hover/uç ile imleç arasındaki fark (telefon slow-motion ya da log zaman damgaları); gerekirse tablette yerel imleç noktası kararı.
   - Kısmi: USB'de fiziksel temas → Mac olayı medyan 2 ms (girdi yolu). Uçtan uca (görüntü dahil) ölçülmedi.
 - [ ] Sonuç tablosu `docs/NOTES.md`'de; kullanıcının kullandığı tasarım uygulamaları varsa onlar da.
