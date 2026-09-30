@@ -1,7 +1,7 @@
 ---
 id: T-055
 title: Tablet — pano paylaşımı (CLIPBOARD, metin)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-042]
@@ -47,3 +47,7 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh`: gradle OK; `swift test (host-mac)` FAIL (beklenen: host fixture kapsamı T-054'te, paralel). Cihazda: (1) tablette metin kopyala, Mac'te yapıştır; (2) Mac'te kopyala, tablette yapıştır, yankı/döngü yok; (3) panel düğmesi "Pano paylaşımı: açık/kapalı" kapalıyken iki yön de durur; (4) bağlanmadan önce kopyalanan metin gitmez; (5) HarmonyOS "uygulama panoya erişti" bildirimi çıkabilir; arka plandayken tablet->Mac gitmez (odak gelince denetlenir); (6) logcat'te pano içeriği yok.
 - **Review turu 1 (Codex):** main (T-052) merge edildi, çakışma yok. (1) Gelen yazmalar `ClipboardBridge.postRemote`: `Latest` tek slot + tek bekleyen UI post (sınırsız kuyruk yok). (2) Bekleyen yazma kontrol gen'ini taşır; `ClipboardSync.onRemote(msg, gen)` `accepted` ve gen eşleşmesini ister (gen, `render`'da `MbLog.gen`'den alınır). (3) `lastText` her yeni ACCEPTED'de sıfırlanır; yalnız baseline kuralı kalır. Testler: `ClipboardSyncTest` (2 yeni), `LatestMailboxTest`. check.sh: gradle OK, yalnız `swift test (host-mac)` FAIL (T-054 bu dalda yok).
 - **Açık sorular:** Mac->tablet `setPrimaryClip` HarmonyOS'ta arka plandayken çalışır mı (yazma için beklenen evet) cihazda görülmeli.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Codex bir tur (P1/P2'ler düzeltildi). Cihazda Mac → tablet doğrulandı; tablet → Mac kullanıcıyla denenecek (NOTES).

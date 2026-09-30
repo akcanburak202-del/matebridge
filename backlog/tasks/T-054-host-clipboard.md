@@ -1,7 +1,7 @@
 ---
 id: T-054
 title: Mac — pano paylaşımı (CLIPBOARD, metin)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-041]
@@ -53,3 +53,7 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 **Review turu 1 düzeltmesi (Codex P1 x2):**
 - Anlık görüntü: `ClipboardEngine.poll()` changeCount -> gizli işaretler -> (gizli değilse) metin -> changeCount sırasıyla okur; değiştiyse atılır ve sonraki yoklamada yeniden denenir. Gizliyse metin hiç okunmaz. Testli (sahte pano, okuma ortasında değişim).
 - Gelen mesajlar: `LatestValueSlot` (en çok bir bekleyen yazma, yenisi eskiyi ezer, tek boşaltıcı); GCD'ye mesaj başına iş atılmaz. Giden taraf 0,5 sn yoklamada en çok bir mesaj, zaten sınırlı. `PasteboardAccess` ve mantık Core'a taşındı (`Clipboard/ClipboardEngine.swift`), böylece birim testli; `ClipboardBridge` artık yalnız zamanlayıcı/kuyruk yapıştırıcısı.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Codex bir tur (P1/P2'ler düzeltildi). Cihazda Mac → tablet doğrulandı; tablet → Mac kullanıcıyla denenecek (NOTES).

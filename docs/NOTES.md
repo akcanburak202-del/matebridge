@@ -313,3 +313,9 @@ Performans 120, `anim`. SurfaceFlinger sunum aralıkları (~125 kare) ve `MB/ren
 - Önce (tampon yok): 16,7 ms atlama **%21**. Sabit 2 kare tampon: %2, +16,7 ms.
 - T-052 (çıkış ayrı iş parçacığında, uyarlanır D, doğru atlama ölçümü, histerezis): 120 Hz'te (dokunma) atlama **%1–3**, `pace_ms` 7–16 ms (çoğunlukla ~8–12), çözme p95 ~10–14 ms. 60 Hz'te (boşta, 120 fps akış) D sınırlı, gecikme ~15 ms, kareler bilinçli olarak atılıyor (en yeni kazanır).
 - `KEY_OPERATING_RATE` / `KEY_PRIORITY` HiSilicon çözücüsünde kabul edilmiyor (`unset`). Oluşturma zaman damgaları (`OnFrameRenderedListener`) gerçek gösterim zamanı değil; atlama ölçümü pacer'ın kendi planından.
+
+## 2026-10-01 — Pano paylaşımı cihazda (T-054, T-055) ve kurulum betiği
+
+- Mac → tablet: `pbcopy` ile 34 baytlık Türkçe metin → host `ev=clipboard dir=out bytes=34`, tablette `DistributedPasteboardService Clipboard is written by :dev.matebridge.client`. Tablet → Mac: kullanıcı kopyalaması gerektiği için denenmedi.
+- Codex (medium): 2 P1 (Mac'te gizli içerik yarışı → tutarlı anlık görüntü; gelen pano yazmaları için sınırsız kuyruklar → en-son-değer kutusu) ve 2 P2 (tablette oturum sonrası yazma, yeniden bağlanmada yinelenen filtre) düzeltildi.
+- Kurulum betiği (scratch `install.sh`) kullanıcının tarifiyle: yalnızca `com.android.packageinstaller` `android:id/button1` ("DEVAM ET") ve AppGallery sayfasında yalnızca alt "YÜKLE" (`com.huawei.appmarket:id/hidden_card_install_button_continue`), kimlikle eşleşerek. Denendi: iki dokunuş, kurulum başarılı, fazladan uygulama yok. Kullanıcı yanlışlıkla kurulan uygulamaları sildi.
