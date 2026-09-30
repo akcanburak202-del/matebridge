@@ -38,7 +38,11 @@ PROTOCOL.md v1 (§2, §3, §4 HELLO/HELLO_ACK/VIDEO_HELLO, **§9**) ve karar 001
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Kodek** (`Messages.swift`, `Message.swift`, `ProtocolConstants`): sürüm 1; `Hello` (+`client_nonce`, `client_eph_pub`, telden gelen ham payload = transkript), `HelloAck` (+`KeyMode`, `host_id`, `host_nonce`, `host_eph_pub`), `VideoHello` (+`video_nonce`). `Hello.read` önce sürümü okur; sürüm 1 değilse kalan alanlara bakmadan döner (makine `VERSION_MISMATCH` yanıtlar).
+2. **Kripto çekirdeği** (`MateBridgeCore/Crypto/`, saf, yalnızca CryptoKit): `EphemeralKeyPair` (ECDH, geçersiz anahtar -> hata), `SessionKeySchedule` (HKDF Extract/Expand, kontrol/video anahtarları, `sas`, `new_pair_key`, sıfırlanabilir `prk`), `RecordSealer` / `RecordDecoder` (nonce = sayaç, AAD = uzunluk, taşma + sınır + etiket hataları), `ControlInbound` (düz -> şifreli geçiş), `SecretBytes`/`PairingCode` (loglarda/dump'ta gizli), `PairKeyStore` protokolü + bellek içi sahte, `HostIdentityStore`.
+3. **Oturum makinesi**: HELLO'da sürüm -> meşgul/devralma -> ECDH doğrulama -> PAIRED (onaylı + anahtar var) ya da PAIRING; ilk ACK düz gider, sonra `startEncryption`. Eşleşme kabulü iki adım: `persistPairing` (Anahtar Zinciri + JSON yazılır) -> `pairingPersisted` -> şifreli ACCEPTED. `prk` oturumda tutulur, video anahtarları `video_nonce` ile türetilir (aynı nonce tekrar kullanılırsa video bağlantısı reddedilir: GCM nonce yeniden kullanımını önler), oturum bitince silinir.
+4. **Host**: `Security/KeychainPairKeyStore`, `SessionServer` (bağlantı başına mühürleyici/çözücü, VideoLink kare başına tek kayıt, doğrulama hatası -> BYE'sız kapat + release-all, `forget` anahtarları da siler, TXT `v=1`), onay penceresinde büyük 6 hane kod.
+5. **Testler**: `crypto_vectors.json` her değer + bozulmuş kayıt + bağımsız sayaçlar; fixture testleri; makine testleri (sahte anahtar zinciri, test istemcisi ile uçtan uca); video mikro ölçümü.
 
 ## Handoff
 
