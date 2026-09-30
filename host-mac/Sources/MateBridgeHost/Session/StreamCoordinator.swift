@@ -18,7 +18,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
-        case streamPrefs(StreamPrefs)
+        case streamPrefs(sessionID: UInt32, StreamPrefs)
         case stats(Stats)
         case tick
         case pipelineFailed(id: Int, message: String)
@@ -51,7 +51,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// The lifecycle mailbox overflowed: end every session (release input, BYE) so the client reconnects cleanly.
     public var onOverflow: @Sendable () -> Void = {}
 
-    private static let tickKey = 1, statsKey = 2, keyframeKey = 3, prefsKey = 4
+    private static let tickKey = 1, statsKey = 2, keyframeKey = 3
+    private static func prefsKey(_ sessionID: UInt32) -> Int { (1 << 40) + Int(sessionID) }
 
     private let logger = SessionLogger(component: "net")
     private let videoLogger = SessionLogger(component: "video")
@@ -73,6 +74,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var lastStatsText = ""
     private var lastCadenceText = ""
     private var prefsGate = StreamPrefsGate()
+    /// Session id of the live session as seen by the entry points (any thread); nil between sessions.
+    private let liveSessionLock = NSLock()
+    private var liveSessionID: UInt32?
 
     public init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
         lease = DisplayLease(graceUs: graceUs)
@@ -142,11 +146,15 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello) {
+        liveSessionLock.withLock { liveSessionID = sessionID }
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
                              settings: Self.settings(for: hello)))
     }
 
-    public func sessionEnded() { post(.sessionEnded) }
+    public func sessionEnded() {
+        liveSessionLock.withLock { liveSessionID = nil }
+        post(.sessionEnded)
+    }
 
     public func videoAttached(_ link: VideoLink) { post(.videoAttached(link)) }
 
@@ -155,7 +163,11 @@ public final class StreamCoordinator: @unchecked Sendable {
         switch message {
         case .keyframeRequest(let reason): post(.keyframeRequest(reason), key: Self.keyframeKey)
         case .stats(let stats): post(.stats(stats), key: Self.statsKey)
-        case .streamPrefs(let prefs): post(.streamPrefs(prefs), key: Self.prefsKey)
+        case .streamPrefs(let prefs):
+            // Stamped with the session that is live now (sessionStarted/sessionEnded arrive on the same queue, in
+            // order). The key includes the session id, so prefs of two sessions are never merged.
+            guard let sid = liveSessionLock.withLock({ liveSessionID }) else { return }
+            post(.streamPrefs(sessionID: sid, prefs), key: Self.prefsKey(sid))
         default: break
         }
     }
@@ -196,8 +208,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             if pipeline?.requestKeyframe(reason: reason) == true {
                 log(.info, "codec_config_resent", "reason=\(reason.rawValue)")
             }
-        case .streamPrefs(let prefs):
-            await onStreamPrefs(prefs)
+        case .streamPrefs(let sid, let prefs):
+            await onStreamPrefs(prefs, sessionID: sid)
         case .stats(let stats):
             onStats(stats)
         case .tick:
@@ -231,8 +243,12 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     /// `STREAM_PREFS`: the gate allows one reconfiguration per second; a request that arrives earlier waits for the tick.
-    private func onStreamPrefs(_ prefs: StreamPrefs) async {
-        guard session != nil else { return }
+    private func onStreamPrefs(_ prefs: StreamPrefs, sessionID: UInt32) async {
+        // Prefs of a session that is not the current one (ended, or replaced) are dropped.
+        guard let live = session, live.sessionID == sessionID else {
+            log(.info, "stream_prefs_dropped", "reason=not_current_session")
+            return
+        }
         let p = prefs.normalized
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
@@ -392,6 +408,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let old = pipeline else { return }
         pipeline = nil
+        if old.settings.displayRefreshHz != settings.displayRefreshHz {
+            log(.info, "display_recreate", "reason=refresh_change refresh_hz=\(old.settings.displayRefreshHz)->\(settings.displayRefreshHz)")
+        }
         let display = await old.stopKeepingDisplay()
         await createPipeline(settings: settings, reusing: display)
     }

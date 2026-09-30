@@ -49,8 +49,8 @@ public final class VideoPipeline: @unchecked Sendable {
 
     /// - Parameters:
     ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
-    ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is switched to
-    ///     the refresh rate of `settings` instead of being recreated; if that fails it is replaced by a new one.
+    ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its refresh rate
+    ///     already equals `settings.displayRefreshHz`, replaced by a new display otherwise.
     ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
     init(settings: VideoSettings = .tabletDefault,
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
@@ -87,7 +87,7 @@ public final class VideoPipeline: @unchecked Sendable {
             box.encoder = encoder
             set { $0.encoder = encoder }
 
-            let display = try obtainDisplay()
+            let display = try await obtainDisplay()
             set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
             set { $0.display = display }
             let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us in
@@ -115,13 +115,17 @@ public final class VideoPipeline: @unchecked Sendable {
         }
     }
 
-    /// The inherited display switched to the wanted refresh rate, or a new display when there is none or the mode
-    /// switch failed (the old one is then released first so two displays never coexist).
-    private func obtainDisplay() throws -> VirtualDisplay {
+    /// The inherited display when it already runs at the wanted refresh rate (capture and encoder restart only);
+    /// otherwise a new display. ScreenCaptureKit keeps delivering at the old rate after an in-place mode switch
+    /// (measured, T-049: 60 fps after 60 -> 120 Hz even for a new SCStream, 126 fps on a display created at 120 Hz),
+    /// so a refresh change needs a new display. The old one must be gone first: a second display with the same
+    /// vendor/product/serial cannot be created while it exists. The short wait lets the system finish removing it.
+    private func obtainDisplay() async throws -> VirtualDisplay {
         let rate = Double(settings.displayRefreshHz)
         if let old = lock.withLock({ () -> VirtualDisplay? in defer { inherited = nil }; return inherited }) {
-            if old.setRefreshRate(rate) { return old }
+            if old.requestedRefreshHz == rate { return old }
             old.invalidate()
+            try await Task.sleep(nanoseconds: 700_000_000)
         }
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
                                   hidpi: true, refreshRate: rate)
