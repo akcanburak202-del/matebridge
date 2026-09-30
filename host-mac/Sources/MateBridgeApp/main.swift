@@ -4,14 +4,20 @@ import MateBridgeHost
 import os
 
 DumpVideoCommand.runIfRequested()  // T-011: `--dump-video` CLI mode, exits before the menu bar app starts
+InjectTestCommand.runIfRequested()  // T-023: `--inject-test` CLI mode (posts real input events), same
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var server: SessionServer?
     private let coordinator = StreamCoordinator()
+    private let input = InputController()
     private let videoLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
+    private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
+                                                       action: #selector(openAccessibilitySettings), keyEquivalent: "")
+    private var signalSources: [DispatchSourceSignal] = []
     private var approvalPanel: ApprovalPanel?
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
@@ -19,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "MateBridge"
         let menu = NSMenu()
+        menu.delegate = self
         let title = NSMenuItem(title: "MateBridge", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
@@ -28,6 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoLine.isEnabled = false
         videoLine.isHidden = true
         menu.addItem(videoLine)
+        // Input needs the Accessibility permission: shown (with a way to grant it) until it is granted.
+        accessibilityLine.isEnabled = false
+        accessibilityLine.isHidden = true
+        menu.addItem(accessibilityLine)
+        accessibilitySettingsItem.target = self
+        accessibilitySettingsItem.isHidden = true
+        menu.addItem(accessibilitySettingsItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Onaylı cihazları unut", action: #selector(forgetDevices), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -35,6 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for entry in menu.items where entry.action == #selector(forgetDevices) { entry.target = self }
         item.menu = menu
         statusItem = item
+
+        // A kill or Ctrl-C is an app shutdown too: go through terminate so applicationWillTerminate releases input.
+        for sig in [SIGINT, SIGTERM, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { Task { @MainActor in NSApp.terminate(nil) } }
+            source.resume()
+            signalSources.append(source)
+        }
 
         var handlers = SessionServer.Handlers()
         handlers.stateChanged = { [weak self] state in
@@ -46,17 +69,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handlers.approvalCancelled = { [weak self] id in
             Task { @MainActor in self?.cancelApproval(id) }
         }
-        // Video: session events drive the display/encoder/sender (T-014). Input injection arrives with a later
-        // task; releaseInput is a no-op until then.
+        // Video: session events drive the display/encoder/sender (T-014). Input (T-023): the same events drive the
+        // injector, every input message goes to it, and every release-all trigger reaches `releaseInput`.
         let coordinator = self.coordinator
-        handlers.sessionStarted = { sid, cid in coordinator.sessionStarted(sessionID: sid, configID: cid) }
-        handlers.sessionEnded = { coordinator.sessionEnded() }
+        let input = self.input
+        handlers.sessionStarted = { sid, cid in
+            coordinator.sessionStarted(sessionID: sid, configID: cid)
+            input.sessionStarted(sessionID: sid, configID: cid)
+        }
+        handlers.sessionEnded = {
+            coordinator.sessionEnded()
+            input.sessionEnded()
+        }
         handlers.videoAttached = { coordinator.videoAttached($0) }
-        handlers.deliver = { coordinator.deliver($0) }
+        handlers.deliver = { message in
+            coordinator.deliver(message)
+            input.deliver(message)
+        }
+        handlers.releaseInput = { input.releaseInput($0) }
         coordinator.onSummary = { [weak self] text in
             Task { @MainActor in self?.showVideo(text) }
         }
         coordinator.start()
+        input.start { [weak self] status in
+            Task { @MainActor in self?.showInput(status) }
+        }
+        // Ask for the permission under MateBridge's own identity, once per launch (a no-op when already granted).
+        if !SystemAccessibility().isTrusted() { SystemAccessibility.requestPrompt() }
         let server = SessionServer(handlers: handlers, makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
         coordinator.onOverflow = { [server] in server.endSessions() }
@@ -64,12 +103,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        server?.stop()  // release input, BYE(SHUTTING_DOWN) to peers
+        server?.stop()  // release input (releaseInput), BYE(SHUTTING_DOWN) to peers
+        input.shutdown()  // backstop: releases whatever is still held, even if no session was reported
         coordinator.shutdown()  // stop capture/encoder and remove the virtual display
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        input.refreshStatus()  // permission may have changed in System Settings
     }
 
     @objc private func forgetDevices() {
         server?.forgetApprovedDevices()
+    }
+
+    @objc private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func showInput(_ status: InputController.Status) {
+        accessibilityLine.isHidden = status.accessibilityTrusted
+        accessibilitySettingsItem.isHidden = status.accessibilityTrusted
     }
 
     private func showVideo(_ text: String) {
