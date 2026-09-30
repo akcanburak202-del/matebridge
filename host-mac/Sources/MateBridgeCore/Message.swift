@@ -79,6 +79,7 @@ public enum Message: Equatable, Sendable {
             w.u16(m.protocolVersion)
             w.u16(m.configID)
             w.u32(m.sessionID)
+            w.raw(m.videoNonce)
         case .videoFrame(let m): m.write(&w)
         }
         return w.bytes
@@ -96,6 +97,16 @@ public enum Message: Equatable, Sendable {
     /// Throws instead of producing a frame the peer would reject: payload over the connection limit,
     /// PEN count outside 1...64, or a VIDEO_FRAME that is not a single whole fragment.
     public func encode() throws -> [UInt8] {
+        let payload = try checkedPayload()
+        var w = ByteWriter()
+        w.u8(type.rawValue)
+        w.u32(UInt32(payload.count))
+        w.raw(payload)
+        return w.bytes
+    }
+
+    /// The validated payload shared by the plain frame (`encode`) and the sealed record (`sealed`).
+    func checkedPayload() throws -> [UInt8] {
         switch self {
         case .pen(let m):
             guard (1...ProtocolConstants.penMaxSamples).contains(m.samples.count) else {
@@ -115,11 +126,7 @@ public enum Message: Equatable, Sendable {
         guard payload.count <= limit else {
             throw ProtocolError.payloadTooLarge(length: UInt32(clamping: payload.count), limit: limit)
         }
-        var w = ByteWriter()
-        w.u8(type.rawValue)
-        w.u32(UInt32(payload.count))
-        w.raw(payload)
-        return w.bytes
+        return payload
     }
 
     /// Decodes one payload. Returns nil for an unknown type (skip it, PROTOCOL.md 2).
@@ -128,7 +135,10 @@ public enum Message: Equatable, Sendable {
         guard let type = MessageType(rawValue: rawType) else { return nil }
         var r = ByteReader(payload, type: rawType)
         switch type {
-        case .hello: return .hello(try Hello.read(&r))
+        case .hello:
+            var hello = try Hello.read(&r)
+            hello.wirePayload = payload
+            return .hello(hello)
         case .helloAck: return .helloAck(try HelloAck.read(&r))
         case .streamConfig: return .streamConfig(try StreamConfig.read(&r))
         case .bye: return .bye(ByeReason(rawValue: try r.u8()))
@@ -150,7 +160,8 @@ public enum Message: Equatable, Sendable {
         case .keyframeRequest: return .keyframeRequest(KeyframeReason(rawValue: try r.u8()))
         case .videoHello:
             return .videoHello(VideoHello(protocolVersion: try r.u16(), configID: try r.u16(),
-                                          sessionID: try r.u32()))
+                                          sessionID: try r.u32(),
+                                          videoNonce: try r.raw(ProtocolConstants.nonceSize)))
         case .videoFrame: return .videoFrame(try VideoFrame.read(&r))
         }
     }

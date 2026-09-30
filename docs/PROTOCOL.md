@@ -1,6 +1,6 @@
-# MateBridge protokolü — v0 (taslak)
+# MateBridge protokolü — v1
 
-**Durum:** v0 taslağı, T-007 (2026-09-29). `protocol_version = 0` kararsız sürüm demektir. Aşama 1–2'de gerçek kullanımla değişebilir. Değişiklik bu dosyada ve fixture'larda aynı commit'te yapılır. Kararlı hale gelince sürüm 1 olur. **Sahibi: orkestratör.**
+**Durum:** v1 (2026-09-30): v0'a (T-007) oturum şifrelemesi eklendi (§9, karar 0010). `protocol_version = 1`. v0 istemci/host ile bağlantı kurulmaz (`VERSION_MISMATCH`). Değişiklik bu dosyada ve fixture'larda aynı commit'te yapılır. **Sahibi: orkestratör.**
 
 Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 0 ölçümlerine dayanır (`docs/NOTES.md`, 2026-09-29). Fixture'lar ile bu dosya çelişirse bu dosya geçerlidir.
 
@@ -28,7 +28,7 @@ Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 
 
 USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol değişmez.
 
-**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık):
+**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık). Bu biçim yalnızca şifreleme başlamadan önceki mesajlar içindir (`HELLO`, ilk `HELLO_ACK`, `VIDEO_HELLO`); sonrasında her çerçeve şifreli kayıt biçimindedir (§9):
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -40,7 +40,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **Bilinmeyen enum değerleri:**
-  - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`, `PINCH.phase`, `PINCH.source`.
+  - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `HELLO_ACK.key_mode`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`, `PINCH.phase`, `PINCH.source`.
   - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
   - Tanımsız `capabilities` ve bayrak bitleri yok sayılır.
 - **Protokol hatası:**
@@ -49,24 +49,26 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 
 ## 3. Oturum akışı
 
-1. **Keşif:** Host Bonjour ile `_matebridge._tcp` hizmetini yayınlar (TXT: `v=0`). İstemci Android `NsdManager` ile bulur, ya da IP/port elle girilir.
+1. **Keşif:** Host Bonjour ile `_matebridge._tcp` hizmetini yayınlar (TXT: `v=1`). İstemci Android `NsdManager` ile bulur, ya da IP/port elle girilir.
    - **Varsayılan portlar:** host önce **kontrol 47001**, **video 47002** portlarını dener; doluysa sistemin verdiği portları kullanır (Bonjour ve `HELLO_ACK.video_port` her zaman gerçek portu bildirir). USB modunda (`adb reverse tcp:47001 tcp:47001` ve `tcp:47002 tcp:47002`) istemci `127.0.0.1:47001`'e bağlanır; video bağlantısı da `127.0.0.1:<video_port>` adresine gider.
 2. **HELLO:** İstemci kontrol bağlantısını açar ve ilk mesaj olarak `HELLO` gönderir. Host ilk 5 sn içinde `HELLO` almazsa bağlantıyı kapatır.
 3. **HELLO_ACK:**
-   - `protocol_version` farklıysa `VERSION_MISMATCH`, bağlantı kapanır.
+   - `protocol_version` farklıysa `VERSION_MISMATCH`, bağlantı kapanır. Host sürümü, HELLO'nun geri kalanını okumadan **önce** denetler (eski sürümün HELLO'su kısa olabilir); `VERSION_MISMATCH` cevabı şifresizdir ve `key_mode = NONE` taşır.
    - **Tek oturum:** host aynı anda tek oturum tutar.
      - Başka bir `device_id` ile aktif oturum varsa `BUSY` gönderilir ve bağlantı kapanır.
-     - Aynı `device_id` ile yeni bir `HELLO` gelirse (yeniden bağlanma) eski oturum **devralınır**. Host eski oturumun girdi durumunu release-all ile bırakır, eski bağlantılara `BYE(SUPERSEDED)` gönderip kapatır. Yeni oturumu ancak bundan **sonra** kabul eder. Yarı açık kalmış eski TCP bağlantısı böylece yeni oturumun girdisine karışamaz.
-   - `device_id` daha önce onaylanmışsa `ACCEPTED`.
-   - Yeni cihazsa önce `PENDING_APPROVAL` ve Mac'te "MatePad bağlanmak istiyor → İzin ver" sorulur. Kabul edilirse ikinci bir `HELLO_ACK(ACCEPTED)` gelir. Reddedilirse veya **60 sn** içinde cevap yoksa `HELLO_ACK(REJECTED)` gelir ve bağlantı kapanır.
+     - Aynı `device_id` ile yeni bir `HELLO` gelirse (yeniden bağlanma) eski oturum **devralınır**, ama yalnızca yeni bağlantı eşleşme anahtarına sahip olduğunu kanıtladıktan sonra (`device_id` şifresiz gider; ağdaki biri onunla oturumu düşüremesin): host `HELLO_ACK(ACCEPTED, PAIRED)` gönderir ve yeni bağlantıyı **kanıt bekliyor** durumuna alır. Yeni bağlantıdan **ilk doğrulanmış şifreli kayıt** gelince (istemci ACCEPTED'dan hemen sonra bir PING gönderir) host eski oturumun girdi durumunu release-all ile bırakır, eski bağlantılara `BYE(SUPERSEDED)` gönderip kapatır ve yeni oturumu ancak bundan **sonra** etkinleştirir; o ilk kayıt da etkinleştirmeden sonra işlenir. 5 sn içinde kanıt gelmezse yeni bağlantı kapatılır, eski oturum etkilenmez. Yarı açık kalmış eski TCP bağlantısı böylece yeni oturumun girdisine karışamaz.
+     - Aktif oturum varken aynı `device_id` için **PAIRING** gerekecekse (host anahtarı yok) devralma yapılmaz: `BUSY`.
+   - `device_id` daha önce onaylanmışsa ve bu cihaz için eşleşme anahtarı varsa `ACCEPTED` (`key_mode = PAIRED`).
+   - Yeni cihazsa (ya da eşleşme anahtarı yoksa) önce `PENDING_APPROVAL` (`key_mode = PAIRING`) ve Mac'te "MatePad bağlanmak istiyor → İzin ver" sorulur; onay penceresi ve tablet aynı **6 haneli eşleşme kodunu** gösterir (§9). Kabul edilirse ikinci bir `HELLO_ACK(ACCEPTED)` gelir (şifreli). Reddedilirse veya **60 sn** içinde cevap yoksa `HELLO_ACK(REJECTED)` gelir (şifreli) ve bağlantı kapanır.
+   - İlk `HELLO_ACK`'ten (PENDING ya da ACCEPTED) hemen sonra iki yönde de şifreleme başlar (§9). Terminal cevaplar (REJECTED ilk cevapsa, VERSION_MISMATCH, BUSY) şifresizdir, `key_mode = NONE` taşır ve bağlantı kapanır.
 4. **STREAM_CONFIG:** `ACCEPTED` sonrası host `STREAM_CONFIG` gönderir.
-5. **Video bağlantısı:** İstemci video bağlantısını `video_port`'a açar. İlk mesaj olarak `VIDEO_HELLO(session_id, config_id)` gönderir; `config_id` istemcinin uyguladığı son `STREAM_CONFIG`'dir. Host, `session_id` veya `config_id` güncel değilse video bağlantısını kapatır.
+5. **Video bağlantısı:** İstemci video bağlantısını `video_port`'a açar. İlk mesaj olarak şifresiz `VIDEO_HELLO(session_id, config_id, video_nonce)` gönderir; sonrası bu bağlantının anahtarlarıyla şifrelidir (§9); `config_id` istemcinin uyguladığı son `STREAM_CONFIG`'dir. Host, `session_id` veya `config_id` güncel değilse video bağlantısını kapatır. İstemci VIDEO_HELLO'nun hemen ardından video bağlantısında şifreli bir `PING` gönderir; host bu kayıt doğrulanana kadar o bağlantıya kare göndermez ve varsa eski video bağlantısını **kapatmaz** (anahtarı olmayan biri geçerli `session_id` ile akışı kesemesin). Kanıt 5 sn içinde gelmezse yeni video bağlantısı kapatılır. Video bağlantısındaki PING'e PONG gönderilmez. `video_nonce` her bağlantıda yenidir; host aynı oturumda tekrar eden bir `video_nonce`'u reddeder (bağlantıyı kapatır; aynı anahtar ve nonce ile AES-GCM tekrarını önler).
 6. **Video akışı:** Host `VIDEO_FRAME` akışına başlar: önce `CODEC_CONFIG`, sonra keyframe.
 7. **Ayar değişikliği** (çözünürlük, codec, FPS): Host yeni `config_id` ile `STREAM_CONFIG` gönderir, sonra mevcut video bağlantısını kapatır. İstemci yeni ayarı uygulayıp yeni `config_id` ile video bağlantısını yeniden açar. Böylece bir video bağlantısındaki bütün kareler tek bir ayara aittir ve iki bağlantı arasındaki sıra sorunu oluşmaz.
 
 **Onay öncesi:** `ACCEPTED` gelmeden istemci girdi mesajı **göndermez**. Gelirse host yok sayar ve hiçbir olay enjekte edilmez. `PING/PONG`, `HELLO` alındıktan sonra her durumda (onay beklerken de) geçerlidir ve cevaplanır.
 
-Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). Şifreleme Aşama 4'te gelecek. v0 yalnızca ev ağı içindir.
+Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İlk HELLO_ACK'ten sonraki her şey şifreli ve kimliği doğrulanmıştır (§9).
 
 ## 4. Mesaj tipleri
 
@@ -98,7 +100,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| protocol_version | u16 | v0 için `0` |
+| protocol_version | u16 | `1` |
 | device_id | bytes[16] | Kurulumda üretilen rastgele kimlik. Host eşleşmeyi bununla hatırlar. |
 | screen_width_px | u16 | Tabletin fiziksel ekranı (MatePad: 2800) |
 | screen_height_px | u16 | (MatePad: 1840) |
@@ -106,6 +108,8 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | max_refresh_hz | u16 | Desteklenen en yüksek yenileme (MatePad: 144) |
 | capabilities | u32 | Bit alanı, aşağıda |
 | device_name | str8 | Mac'teki onay penceresinde gösterilir. Loglanmaz. |
+| client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
+| client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
 `capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`.
 
@@ -119,6 +123,12 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | session_id | u32 | ACCEPTED'da rastgele ve sıfırdan farklı. Diğer durumlarda 0. |
 | video_port | u16 | ACCEPTED'da video TCP portu, diğer durumlarda 0 |
 | host_name | str8 | İstemcide gösterilir (boş olabilir) |
+| key_mode | u8 | `0` NONE (terminal cevap, şifreleme yok), `1` PAIRED (eşleşme anahtarıyla), `2` PAIRING (yeni eşleşme; kod karşılaştırılır). Bilinmeyen değer protokol hatası. |
+| host_id | bytes[16] | Host'un kalıcı rastgele kimliği; istemci eşleşme anahtarını bununla saklar. NONE'da sıfır. |
+| host_nonce | bytes[16] | Her bağlantıda yeni rastgele değer. NONE'da sıfır. |
+| host_eph_pub | bytes[65] | Host'un geçici P-256 açık anahtarı. NONE'da sıfır. |
+
+Şifreli gelen ikinci `HELLO_ACK` (PENDING sonrası ACCEPTED ya da REJECTED) aynı alanları taşır ama `key_mode = NONE` ve anahtar alanları sıfırdır; istemci anahtar alanlarına bakmaz.
 
 ### 0x03 STREAM_CONFIG (H→C)
 
@@ -375,9 +385,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| protocol_version | u16 | `0` |
+| protocol_version | u16 | `1` |
 | config_id | u16 | İstemcinin uyguladığı `STREAM_CONFIG.config_id` |
 | session_id | u32 | `HELLO_ACK`'teki değer |
+| video_nonce | bytes[16] | Her video bağlantısında yeni rastgele değer; bu bağlantının anahtarları buradan türetilir (§9) |
 
 ### 0x41 VIDEO_FRAME (H→C, video bağlantısı)
 
@@ -483,3 +494,46 @@ Swift ve Kotlin testleri:
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`
 - Video: `video_hello`, `video_frame`, `video_frame_config`
 - Diğer: `unknown_type`
+- Şifreleme: `crypto_vectors.json` (§9)
+
+## 9. Şifreleme (karar 0010)
+
+Amaç: ev ağında (Wi-Fi) kontrol + girdi (yazılan şifreler dahil) ve görüntü şifreli ve kimliği doğrulanmış gitsin. USB'de de aynı yol kullanılır (tek kod yolu). Yalnızca platform kriptografisi: P-256 ECDH, HKDF-SHA256, AES-256-GCM (Swift CryptoKit; Android `KeyAgreement("ECDH")`, `Mac("HmacSHA256")`, `Cipher("AES/GCM/NoPadding")`).
+
+**El sıkışma** (şifresiz, §3):
+- İstemci her bağlantıda yeni bir geçici P-256 anahtar çifti ve 16 baytlık `client_nonce` üretir, `HELLO`'ya koyar.
+- Host da yeni bir geçici anahtar çifti ve `host_nonce` üretir, ilk `HELLO_ACK`'e `key_mode`, `host_id`, `host_nonce`, `host_eph_pub` ile koyar.
+- `ecdh` = P-256 ECDH paylaşılan sırrı, X koordinatı, 32 bayt. Geçersiz ya da eğri dışı açık anahtar protokol hatasıdır.
+- `transcript_hash` = SHA-256(HELLO payload ‖ ilk HELLO_ACK payload) — çerçeve başlıkları hariç, baytlar teldeki gibi.
+
+**Anahtar türetme** (RFC 5869 HKDF, SHA-256):
+- `ikm` = PAIRED'de `pair_key (32) ‖ ecdh`, PAIRING'de yalnızca `ecdh`.
+- `prk` = HKDF-Extract(salt = `transcript_hash`, ikm).
+- Kontrol bağlantısı: `k_c2h` = Expand(prk, `"MB1 control c2h"`, 32), `k_h2c` = Expand(prk, `"MB1 control h2c"`, 32).
+- Video bağlantısı: `kv_h2c` = Expand(prk, `"MB1 video h2c" ‖ video_nonce`, 32), `kv_c2h` = Expand(prk, `"MB1 video c2h" ‖ video_nonce`, 32). Host `prk`'yi oturum boyunca tutar; oturum bitince siler.
+- PAIRING'de ayrıca: eşleşme kodu `sas` = Expand(prk, `"MB1 sas"`, 4) → u32 little-endian `mod 1 000 000`, 6 hane (baştaki sıfırlarla); yeni eşleşme anahtarı `new_pair_key` = Expand(prk, `"MB1 pair"`, 32).
+- `info` dizeleri ASCII'dir, sonlandırıcı yoktur.
+
+**Şifreli kayıt** (ilk HELLO_ACK'ten sonra kontrol bağlantısında iki yönde, VIDEO_HELLO'dan sonra video bağlantısında iki yönde):
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| length | u32 | `ciphertext` + `tag` uzunluğu = düz metin + 16 |
+| ciphertext | bytes | AES-256-GCM ile şifrelenmiş düz metin: `type (u8) ‖ payload` |
+| tag | bytes[16] | GCM etiketi |
+
+- Nonce (12 bayt) = `00 00 00 00 ‖ sayaç (u64 LE)`. Sayaç her bağlantıda ve her yönde **0'dan** başlar, her kayıtta 1 artar, asla tekrar etmez (2^63'e ulaşırsa bağlantı kapanır).
+- AAD = `length` alanının 4 baytı.
+- En büyük `length` = §2'deki payload sınırı + 17. Sınır başlık okunur okunmaz denetlenir.
+- Etiket doğrulanamazsa ya da `length < 17` ise: protokol hatası; alıcı **BYE göndermeden** bağlantıyı kapatır (şifreli kanala güvenilmez). Kontrol bağlantısında bu, host için release-all tetikleyicisidir (§7, bağlantı kopması).
+- Düz metin çözüldükten sonra `type` ve `payload` §2/§4 kurallarıyla işlenir (bilinmeyen tip atlanır, kısa payload hata).
+
+**Eşleşme** (PAIRING):
+- Host onay penceresinde, tablet "onay bekleniyor" ekranında **aynı `sas`** kodunu gösterir. Kullanıcı kodların aynı olduğunu görerek onaylar (ağdaki bir aracıya karşı koruma).
+- Kabulde host `(device_id → new_pair_key, device_name)` kaydını saklar ve şifreli `HELLO_ACK(ACCEPTED)` gönderir; istemci bu mesajı alınca `(host_id → new_pair_key)` saklar. Bundan sonraki bağlantılar PAIRED'dir. Oturum, el sıkışmada türetilen anahtarlarla devam eder (anahtar değişmez).
+- İstemcide bu `host_id` için anahtar varken host PAIRING isterse (host cihazı unutmuş) istemci kullanıcıya "Mac bu tableti tanımıyor, yeniden eşleşiliyor" uyarısını ve kodu gösterir; kabulde eski anahtarın yerine yenisini yazar.
+- PAIRED'de istemci `host_id` için anahtarı yoksa bağlantıyı kapatır ve yeniden eşleşme gerektiğini gösterir (host menüsünden "Onaylı cihazları unut").
+
+**Saklama:** eşleşme anahtarları gizlidir, **asla loglanmaz**. Host: macOS Anahtar Zinciri (generic password, hizmet `dev.matebridge.host.pair`, hesap = device_id hex). İstemci: Android Keystore'da üretilen dışa aktarılamaz bir AES-GCM anahtarıyla şifrelenip SharedPreferences'ta. `host_id` host'ta bir kez üretilir ve saklanır. "Onaylı cihazları unut" anahtarları da siler.
+
+**Test vektörleri:** `protocol/fixtures/crypto_vectors.json` (`crypto_vectors.swift` ile üretilir; girdi olarak `hello.hex`, `hello_ack.hex`, `hello_ack_pending.hex` payload'larını kullanır). Her iki taraf: sabit özel anahtarlardan `ecdh`, iki moddaki `transcript_hash`, `prk`, bütün anahtarları, `sas` ve `new_pair_key`'i, ve `frames` altındaki şifreli kayıtları bayt bayt üretir; kayıtları çözer; bir baytı bozulmuş kaydı reddeder.

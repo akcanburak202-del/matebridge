@@ -1,5 +1,5 @@
 public enum ProtocolConstants {
-    public static let protocolVersion: UInt16 = 0
+    public static let protocolVersion: UInt16 = 1
     public static let headerSize = 5
     public static let maxControlPayload = 65_536
     public static let maxVideoPayload = 16_777_216
@@ -8,6 +8,13 @@ public enum ProtocolConstants {
     public static let penSampleSize = 16
     public static let penMaxSamples = 64
     public static let penFixedSize = 12
+    /// `client_nonce`, `host_nonce`, `video_nonce`.
+    public static let nonceSize = 16
+    /// Uncompressed P-256 point (`04 || X || Y`).
+    public static let publicKeySize = 65
+    /// AES-GCM tag, and the `type` byte inside every record (PROTOCOL.md 9: max length = payload limit + 17).
+    public static let recordTagSize = 16
+    public static let recordOverhead = 17
 }
 
 public enum MessageType: UInt8, Sendable, CaseIterable {
