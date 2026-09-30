@@ -14,7 +14,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
 | [T-052](tasks/T-052-client-adaptive-pacing.md) | Tablet — uyarlanır kare zamanlaması (en az gecikmeyle takılmasız sunum, 60/120 Hz) | 5 | android-client-dev | [T-050] |
-| [T-053](tasks/T-053-host-fast-encoder-60fps.md) | Mac — hızlı kodlayıcı yapılandırması (LLRC'siz, RealTime=false) 60 fps'te de: gecikmeyi düşür | 5 | mac-host-dev | [T-047, T-049] |
 
 ## done
 
@@ -69,3 +68,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-049](tasks/T-049-host-stream-prefs.md) | Mac — STREAM_PREFS: fps (60/120/144) ve küçültülmüş kodlama boyutu (performans modu) | 5 | mac-host-dev | [T-045, T-047] |
 | [T-050](tasks/T-050-client-stream-modes.md) | Tablet — görüntü modları (Netlik / Akıcı / Performans / Performans 144): seçim, kalıcılık, STREAM_PREFS | 5 | android-client-dev | [T-046] |
 | [T-051](tasks/T-051-refresh-boost-mouse-trackpad.md) | Touchpad/fare ile sürüklerken fps ~68–70, kalemle ~120 — Huawei 120 Hz yükseltmesini fare/touchpad için de sağlamak | 5 | orchestrator | [T-049, T-050] |
+| [T-053](tasks/T-053-host-fast-encoder-60fps.md) | Mac — hızlı kodlayıcı yapılandırması (LLRC'siz, RealTime=false) 60 fps'te de: gecikmeyi düşür | 5 | mac-host-dev | [T-047, T-049] |

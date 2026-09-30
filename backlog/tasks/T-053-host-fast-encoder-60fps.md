@@ -1,7 +1,7 @@
 ---
 id: T-053
 title: Mac — hızlı kodlayıcı yapılandırması (LLRC'siz, RealTime=false) 60 fps'te de: gecikmeyi düşür
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-047, T-049]
@@ -52,3 +52,7 @@ T-047: 2800×1840'ta LLRC'siz + `RealTime=false` yapılandırması kare başına
 - **Varsayımlar:** sentetik içerik; gerçek ekran farklı olabilir. `MATEBRIDGE_ENCODER` 120 fps'te `llrc` verilirse LLRC kullanılır (tavan ~100 fps).
 - **Test edilmeyenler / cihazda doğrulanacaklar:** canlı: 60 fps'te kodlama ~6 ms, `enc_behind`, statik/kalem içerikte kare boyutu sıçramaları ve Wi-Fi'de takılma, keyframe-on-demand/drop sonrası kurtarma (fast yolunda), bit hızı hedefi (DataRateLimits). Uygulama çalıştırılmadı.
 - **Açık sorular:** yok.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Kodlayıcı ayarı; Codex turu yapılmadı (girdi/güvenlik dışı). Canlı: Performans modunda kodlama ~7 ms, `enc_behind=0`. Wi-Fi'de durağan içerikte ara ara 150–190 KB kareler olası; sorun görülürse `MATEBRIDGE_ENCODER=llrc`.
