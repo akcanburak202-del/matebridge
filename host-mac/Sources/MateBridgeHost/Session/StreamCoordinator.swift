@@ -114,11 +114,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Settings of a session from its tablet's HELLO. Pure: nothing is remembered, so a HELLO that never becomes
     /// a session (an unproven reconnect) cannot change the settings of the live one.
     private static func settings(for hello: Hello) -> VideoSettings {
-        var settings = VideoSettings.forTablet(hello)
-        // Experiment knobs (T-017): MATEBRIDGE_REFRESH=60|120 (virtual display Hz), MATEBRIDGE_FRAME_DELAY=0|1.
-        let env = ProcessInfo.processInfo.environment
-        settings.displayRefreshHz = VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"])
-        settings.maxFrameDelayCount = VideoSettings.parseFrameDelay(env["MATEBRIDGE_FRAME_DELAY"])
+        // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
+        // MATEBRIDGE_FRAME_DELAY=0|1.
+        let settings = VideoSettings.forTablet(hello).applyingExperimentKnobs(ProcessInfo.processInfo.environment)
         return settings
     }
 
@@ -212,7 +210,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
         session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings)
-        log(.info, "stream_session", "width=\(settings.widthPx) height=\(settings.heightPx) fps=\(settings.fps) codec=hevc")
+        log(.info, "stream_session", "width=\(settings.widthPx) height=\(settings.heightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
         await perform(lease.sessionStarted(device: device, settings: settings))
     }
 
