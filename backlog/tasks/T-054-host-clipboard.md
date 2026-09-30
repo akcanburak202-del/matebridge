@@ -49,3 +49,7 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek NSPasteboard (changeCount davranışı, `types` ile gizli işaret, `setString` sonrası changeCount), tabletle uçtan uca. `ClipboardBridge` için birim testi yok: `Package.swift` test hedefi yalnız Core'a bağlı (dosya listesi dışı); mantığın tamamı `ClipboardSync`'te testli, sahte pano arayüzü (`PasteboardAccess`) hazır.
 - **check.sh:** Swift tarafı (build + test) geçiyor. Gradle `FixtureTest` başarısız: Kotlin tarafında clipboard fixture'ları henüz yok (T-055 ile kapanır).
 - **Açık sorular:** Yok.
+
+**Review turu 1 düzeltmesi (Codex P1 x2):**
+- Anlık görüntü: `ClipboardEngine.poll()` changeCount -> gizli işaretler -> (gizli değilse) metin -> changeCount sırasıyla okur; değiştiyse atılır ve sonraki yoklamada yeniden denenir. Gizliyse metin hiç okunmaz. Testli (sahte pano, okuma ortasında değişim).
+- Gelen mesajlar: `LatestValueSlot` (en çok bir bekleyen yazma, yenisi eskiyi ezer, tek boşaltıcı); GCD'ye mesaj başına iş atılmaz. Giden taraf 0,5 sn yoklamada en çok bir mesaj, zaten sınırlı. `PasteboardAccess` ve mantık Core'a taşındı (`Clipboard/ClipboardEngine.swift`), böylece birim testli; `ClipboardBridge` artık yalnız zamanlayıcı/kuyruk yapıştırıcısı.

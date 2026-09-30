@@ -2,16 +2,6 @@ import AppKit
 import Foundation
 import MateBridgeCore
 
-/// What the bridge needs from the pasteboard; `NSPasteboard.general` in the app, a fake in tests.
-public protocol PasteboardAccess: Sendable {
-    var changeCount: Int { get }
-    var string: String? { get }
-    /// True when the current content is marked concealed, transient or auto-generated (password managers).
-    var isConcealed: Bool { get }
-    /// Replaces the contents with `text` and returns the new `changeCount`.
-    func write(_ text: String) -> Int
-}
-
 public struct SystemPasteboard: PasteboardAccess {
     public init() {}
 
@@ -36,24 +26,23 @@ public struct SystemPasteboard: PasteboardAccess {
 }
 
 /// Clipboard sharing for the active session (T-054, docs/PROTOCOL.md 0x06). Polls the pasteboard every 0.5 s on its
-/// own queue and feeds `ClipboardSync`; incoming text is written to the pasteboard. Contents are never logged, only
-/// direction and byte count.
+/// own queue (`ClipboardEngine`); incoming text goes through a latest-value slot (at most one pending write, drained
+/// by one task on the queue). Contents are never logged, only direction and byte count.
 public final class ClipboardBridge: @unchecked Sendable {
     public static let defaultsKey = "clipboardSharingEnabled"
     public static let pollInterval: DispatchTimeInterval = .milliseconds(500)
 
     private let queue = DispatchQueue(label: "dev.matebridge.clipboard")
-    private let pasteboard: PasteboardAccess
     private let logger = SessionLogger(component: "clipboard")
     private let sendLock = NSLock()
     private var _send: @Sendable (_ sessionID: UInt32, Message) -> Void = { _, _ in }
-    private var sync: ClipboardSync
+    private var engine: ClipboardEngine
+    private let incoming = LatestValueSlot<Clipboard>()
     private var sessionID: UInt32?
     private var timer: DispatchSourceTimer?
 
     public init(pasteboard: PasteboardAccess = SystemPasteboard(), enabled: Bool) {
-        self.pasteboard = pasteboard
-        self.sync = ClipboardSync(enabled: enabled)
+        self.engine = ClipboardEngine(pasteboard: pasteboard, enabled: enabled)
     }
 
     /// Where outgoing messages go (`SessionServer.sendToSession`); set once the server exists.
@@ -63,14 +52,15 @@ public final class ClipboardBridge: @unchecked Sendable {
     }
 
     public func setEnabled(_ on: Bool) {
-        queue.async { [self] in sync.setEnabled(on, changeCount: pasteboard.changeCount) }
+        queue.async { [self] in engine.setEnabled(on) }
     }
 
     /// The session became active: the current pasteboard is the baseline and is not sent.
     public func sessionStarted(sessionID: UInt32) {
         queue.async { [self] in
             self.sessionID = sessionID
-            sync.begin(changeCount: pasteboard.changeCount)
+            incoming.clear()
+            engine.begin()
             timer?.cancel()
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(deadline: .now() + Self.pollInterval, repeating: Self.pollInterval)
@@ -85,30 +75,32 @@ public final class ClipboardBridge: @unchecked Sendable {
             timer?.cancel()
             timer = nil
             sessionID = nil
-            sync.end()
+            incoming.clear()
+            engine.end()
         }
     }
 
-    /// A message from the active session; anything but CLIPBOARD is ignored.
+    /// A message from the active session; anything but CLIPBOARD is ignored. A newer message replaces a pending one.
     public func deliver(_ message: Message) {
         guard case .clipboard(let clip) = message else { return }
-        queue.async { [self] in
-            guard let text = sync.receive(clip) else { return }
-            sync.didWrite(changeCount: pasteboard.write(text))
-            logger.log(.info, "clipboard", sessionID: sessionID ?? 0, generation: 0,
-                       fields: "dir=in bytes=\(clip.data.count)")
+        if incoming.put(clip) {
+            queue.async { [self] in drainIncoming() }
         }
     }
 
-    /// One poll step; internal so tests can drive it without the timer.
-    func poll() {
+    private func drainIncoming() {
+        while let clip = incoming.take() {
+            guard sessionID != nil, let bytes = engine.applyIncoming(clip) else { continue }
+            logger.log(.info, "clipboard", sessionID: sessionID ?? 0, generation: 0, fields: "dir=in bytes=\(bytes)")
+        }
+    }
+
+    private func poll() {
         guard let sessionID else { return }
-        let count = pasteboard.changeCount
-        // Read the content only when something changed: cheap idle polls and no needless access to private content.
-        guard sync.hasChanged(changeCount: count) else { return }
-        switch sync.observe(changeCount: count, text: pasteboard.string, isConcealed: pasteboard.isConcealed) {
+        switch engine.poll() {
         case .nothing: break
         case .send(let clip):
+            // Outgoing is bounded by construction: one poll per 0.5 s, at most one message each.
             send(sessionID, .clipboard(clip))
             logger.log(.info, "clipboard", sessionID: sessionID, generation: 0, fields: "dir=out bytes=\(clip.data.count)")
         case .tooLarge(let bytes):
