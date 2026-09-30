@@ -34,7 +34,10 @@ PLAN Aşama 5 "pano paylaşımı". Protokol `proto/clipboard` dalında: PROTOCOL
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. Codec: `Clipboard` mesajı (Messages.kt) + Codec encode/decode; fixture testleri.
+2. `clipboard/ClipboardSync.kt` (saf mantık): gönderim kararı (ayar, ACCEPTED, gizli, boş, >60000 bayt, yankı özeti, tekrar), gelen metin doğrulama (UTF-8, kind), seq sayacı.
+3. `clipboard/ClipboardBridge.kt` (Android): ClipboardManager dinleyici, onResume denetimi, setPrimaryClip.
+4. Settings'e `clipboardShare` (varsayılan açık); SessionController gelen mesajı/gönderimi bağlar; MainActivity'de küçük panel düğmesi + yaşam döngüsü kancaları.
 
 ## Handoff
 
