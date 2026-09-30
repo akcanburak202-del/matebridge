@@ -38,7 +38,15 @@ PROTOCOL.md §4 `0x11 KEY` host kuralları ve §7 release-all'ın klavye kısmı
 
 ## Plan
 
-_(Ajan doldurur.)_
+Mimari: klavye mevcut boru hattına (InputStateMachine → InjectionPlanner → OwedRelease/InputPipeline → CGEventPoster) eklenir; yeni zamanlayıcı yok.
+
+1. **Core / `KeyMap.swift`** (saf): tuş kimliği → `KeyTarget` (`.key(vk)`, `.modifier(ModifierKey)`, `.capsLock`). evdev tablosu (ISO: 41 → 0x0A, 86 → 0x32; Insert → Help) + android_key_code yedek tablosu (android kodu → evdev). Değiştirici eşlemesi ayrı `ModifierMapping` (karar 0008 varsayılanı: Ctrl→Cmd, Alt→Option, Meta→Control). `KeyFlags` = CGEventFlags ham bitleri (aggregate + sol/sağ cihaz bitleri).
+2. **Core / `InjectAction`**: `keyDown(keyCode, autorepeat)`, `keyUp`, `modifierDown/Up`, `setCapsLock(on)`. **`MacEvent.key(MacKey)`** (keyDown/keyUp/modifierDown/modifierUp, flags, isRepeat) ve **`.capsLock(on:)`**. `isClosing` = keyUp/modifierUp.
+3. **Core / `InputStateMachine+Keyboard.swift`**: basılı kimlik → enjekte edilen kod kaydı; çift DOWN / basılmamış UP yok sayılır; aynı kodu iki kimlik tutarsa yalnızca ilk DOWN ve son UP üretilir; Caps tuşu enjekte edilmez (UP'ta `setCapsLock(lock_state)`), diğer her KEY olayından önce `setCapsLock(lock_state)`; otomatik tekrar (`nextDeadline`/`tick` düzenine, yapılandırılabilir gecikme/aralık, ileri/geri saat düzeltmesi); `releaseAll` tuş UP'ları + değiştirici UP'ları üretir, tekrarı durdurur; sayaçlar (`key_msgs`, `unknown_keys`, `repeats`).
+4. **Core / `InjectionPlanner`**: gölge durum (basılı tuşlar, basılı değiştiriciler, Caps durumu); flags gölge durumdan hesaplanır (kapı yüzünden düşen bir değiştirici flags'e girmez); açan olaylar `openGate`, kapatanlar (key/modifier up) hiç kapılanmaz; tekrar yalnızca gölgede basılı tuş için; `releaseAll`/`notPosted` genişler. `InjectionEnvironment.capsLockOn: Bool?` (Mac'in durumu; yalnızca KEY mesajlarında örneklenir).
+5. **Core / `OwedRelease`**: `Slot.key(vk)` ve `Slot.modifier(m)` (başarısız up tekrar denenir), `ReleaseRecord` sayaçları (`key_up`).
+6. **Host**: `CGEventFactory` klavye olayı (keyDown/keyUp, flagsChanged, autorepeat alanı, klavye türü ISO); `.capsLock` için `CapsLockSetter` (IOHIDSetModifierLockState, tek tip, hata bir kez loglanır); `InputController` KEY için Caps durumunu örnekler, tekrar ayarlarını `NSEvent.keyRepeatDelay/Interval`'dan alır, sayaçları loglar; `--inject-test --keys "cmd+a"` (yalnızca eklenir, çalıştırılmaz).
+7. **Testler**: eşleme tablosu, durum makinesi (çift down, kayıtlı keycode, sol/sağ değiştirici, tekrar zamanlaması, Caps), planner (kapı, flags), owed, pipeline, fuzz (klavye dahil, hiç tuş basılı kalmaz), `key_*` fixture'ları makine üzerinden.
 
 ## Handoff
 
