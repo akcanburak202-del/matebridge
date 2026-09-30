@@ -53,10 +53,6 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var loop: Task<Void, Never>?
     private var tickTimer: DispatchSourceTimer?
 
-    // Written by the session queue (makeStreamConfig), read by the event loop.
-    private let pendingLock = NSLock()
-    private var pendingHello: (device: DeviceID, settings: VideoSettings)?
-
     // Event-loop state (only touched from `handle`).
     private var lease: DisplayLease
     private var pipeline: VideoPipeline?
@@ -115,15 +111,21 @@ public final class StreamCoordinator: @unchecked Sendable {
         tickTimer = timer
     }
 
-    /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Called by the session
-    /// machine right before it reports `sessionStarted`, so the pair (device, settings) stays consistent.
-    public func streamConfig(for hello: Hello) -> StreamConfig {
+    /// Settings of a session from its tablet's HELLO. Pure: nothing is remembered, so a HELLO that never becomes
+    /// a session (an unproven reconnect) cannot change the settings of the live one.
+    private static func settings(for hello: Hello) -> VideoSettings {
         var settings = VideoSettings.forTablet(hello)
         // Experiment knobs (T-017): MATEBRIDGE_REFRESH=60|120 (virtual display Hz), MATEBRIDGE_FRAME_DELAY=0|1.
         let env = ProcessInfo.processInfo.environment
         settings.displayRefreshHz = VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"])
         settings.maxFrameDelayCount = VideoSettings.parseFrameDelay(env["MATEBRIDGE_FRAME_DELAY"])
-        pendingLock.withLock { pendingHello = (hello.deviceID, settings) }
+        return settings
+    }
+
+    /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Side-effect free (apart from
+    /// a log line); the session machine may call it for a connection that never becomes the session.
+    public func streamConfig(for hello: Hello) -> StreamConfig {
+        let settings = Self.settings(for: hello)
         if settings.widthPx != Int(hello.screenWidthPx) || settings.heightPx != Int(hello.screenHeightPx) {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
                        fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.widthPx)x\(settings.heightPx)")
@@ -131,11 +133,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         return settings.streamConfig(configID: Self.configID)
     }
 
-    public func sessionStarted(sessionID: UInt32, configID: UInt16) {
-        // Read now, on the session queue: makeStreamConfig ran just before this call for the same session.
-        let hello = pendingLock.withLock { pendingHello }
-        post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello?.device,
-                             settings: hello?.settings))
+    /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
+    public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello) {
+        post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
+                             settings: Self.settings(for: hello)))
     }
 
     public func sessionEnded() { post(.sessionEnded) }

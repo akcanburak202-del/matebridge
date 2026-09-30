@@ -414,19 +414,36 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(attached.contains { if case .videoAttached(V, _, _, _, _) = $0 { true } else { false } })
     }
 
-    @Test func manyProvenReconnectsNeverLockOut() {
+    @Test func everyProvenNonceIsRememberedForTheWholeSessionThenTheSessionEnds() {
         var m = makeMachine(approved: [device(1)])
-        m.configuration.recentVideoNonces = 8
+        m.configuration.maxVideoNonces = 8
+        m.configuration.releaseSilenceUs = 1000 * sec; m.configuration.closeSilenceUs = 1000 * sec
         activate(&m, A)
-        for i in 0..<200 {  // a legitimate client reconnecting its video far more often than any budget
-            let attached = attachVideo(&m, ConnectionID(2000 + UInt64(i)), nonce: UInt8(i % 250))
+        for i in 0..<8 {
+            let attached = attachVideo(&m, ConnectionID(2000 + UInt64(i)), nonce: UInt8(i + 1))
             #expect(attached.contains { if case .videoAttached = $0 { true } else { false } }, "attach \(i)")
         }
+        // The first nonce is still refused: nothing was evicted, so a replayed VIDEO_HELLO can never reuse a key.
+        _ = m.videoOpened(ConnectionID(3000), now: 0)
+        #expect(m.videoHello(ConnectionID(3000), VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
+            .contains(.closeVideo(ConnectionID(3000))))
+        // Budget spent: the next legitimate attach ends the session (release-all, BYE, close) instead of reusing keys.
+        let last = ConnectionID(4000)
+        let ended = attachVideo(&m, last, nonce: 100)
+        #expect(!ended.contains { if case .videoAttached = $0 { true } else { false } })
+        #expect(ended.contains(.closeVideo(last)))
+        #expect(ended.contains(.releaseInput(A, .shutdown)) && ended.contains(.send(A, .bye(.shuttingDown))))
+        #expect(ended.contains(.close(A)) && ended.contains(.sessionEnded(A)))
+        #expect(ended.contains(.log(.info, ev: "video_nonce_budget_exhausted", conn: A, fields: "")))
+        #expect(m.status == .idle)
+        // The tablet reconnects with a fresh handshake: a new prk, so the same nonces are fine again.
+        _ = m.connectionOpened(B, now: 1)
+        _ = m.received(B, hello(1), now: 1)
+        #expect(attachVideo(&m, ConnectionID(5000), nonce: 1).contains { if case .videoAttached = $0 { true } else { false } })
     }
 
     @Test func aRepeatedNonceIsRefusedWhileRememberedAndNotBefore() {
         var m = makeMachine(approved: [device(1)])
-        m.configuration.recentVideoNonces = 4
         m.configuration.releaseSilenceUs = 1000 * sec; m.configuration.closeSilenceUs = 1000 * sec
         activate(&m, A)
         attachVideo(&m, V, nonce: 1)

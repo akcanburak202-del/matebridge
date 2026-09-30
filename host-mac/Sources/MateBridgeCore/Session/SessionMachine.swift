@@ -31,6 +31,9 @@ public enum SessionAction: Equatable, Sendable {
     /// Close a control connection (after flushing queued sends).
     case close(ConnectionID)
     case closeVideo(ConnectionID)
+    /// Look up the pair key of a device off the session queue and answer with `pairKeyResolved`. The connection
+    /// sends nothing meanwhile; existing sessions and their release paths never wait for it.
+    case lookupPairKey(ConnectionID, deviceID: DeviceID)
     /// A VIDEO_HELLO checked out: wait (bounded) for the connection's first authenticated record, a PING under `c2h`,
     /// and report it with `videoProven`. Nothing is attached and no frame is sent before that.
     case videoProve(ConnectionID, c2h: SecretBytes)
@@ -47,7 +50,9 @@ public enum SessionAction: Equatable, Sendable {
     /// The user accepted a pairing. The caller stores `key` (Keychain) and the device list, then reports the outcome
     /// with `pairingPersisted`; ACCEPTED is sent only after a successful store.
     case persistPairing(ConnectionID, deviceID: DeviceID, name: String, key: SecretBytes)
-    case sessionStarted(ConnectionID, sessionID: UInt32, configID: UInt16, deviceName: String)
+    /// The session is active. `hello` is the HELLO of *this* connection: per-session settings (display size) are
+    /// derived from it now, never earlier (an unproven reconnect must not influence a live session).
+    case sessionStarted(ConnectionID, sessionID: UInt32, configID: UInt16, hello: Hello)
     case sessionEnded(ConnectionID)
     /// A video connection passed VIDEO_HELLO validation.
     case videoAttached(video: ConnectionID, session: ConnectionID, sessionID: UInt32, configID: UInt16,
@@ -76,14 +81,19 @@ public struct SessionMachine: Sendable {
         /// Persistent `host_id` (HELLO_ACK). Default: random per machine (tests); the app passes `HostIdentityStore`'s.
         public var hostID: [UInt8]
         /// Pair keys: PAIRED needs an approved device *and* a key here.
-        public var pairKeys: PairKeyStore
+        /// nil (the app): pair keys are looked up asynchronously (`lookupPairKey` / `pairKeyResolved`) because the
+        /// Keychain can block. A store here is consulted inline (tests, in-memory stores).
+        public var pairKeys: PairKeyStore?
+        /// A pair-key lookup that takes longer closes that connection; nothing has been sent on it by then.
+        public var lookupTimeoutUs: UInt64 = 5_000_000
         public var makeEphemeral: @Sendable () -> EphemeralKeyPair = { EphemeralKeyPair() }
         public var makeNonce: @Sendable () -> [UInt8] = {
             (0..<ProtocolConstants.nonceSize).map { _ in UInt8.random(in: 0...255) }
         }
-        /// How many recent `video_nonce` values of a session are remembered to refuse repeats. Only proven attaches
-        /// count, so this can never lock a legitimate client out: the oldest entry is forgotten instead.
-        public var recentVideoNonces = 1024
+        /// Every proven `video_nonce` of a session is remembered for the whole session (a repeat would reuse an
+        /// AES-GCM key and nonce). When this many are used up the session is ended so the tablet reconnects with a
+        /// fresh handshake and a fresh `prk`.
+        public var maxVideoNonces = 4096
         /// Time a new control/video connection has to prove it holds the keys (first authenticated record).
         public var proofTimeoutUs: UInt64 = 5_000_000
         /// false: never answer PAIRED (the host identity could not be persisted; PROTOCOL.md 9, host_id).
@@ -93,7 +103,7 @@ public struct SessionMachine: Sendable {
                     makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig,
                     makeSessionID: @escaping @Sendable () -> UInt32 = { UInt32.random(in: 1...UInt32.max) },
                     hostID: [UInt8] = (0..<ProtocolConstants.deviceIDSize).map { _ in UInt8.random(in: 0...255) },
-                    pairKeys: PairKeyStore = InMemoryPairKeyStore()) {
+                    pairKeys: PairKeyStore? = InMemoryPairKeyStore()) {
             precondition(hostID.count == ProtocolConstants.deviceIDSize)
             self.hostName = hostName
             self.makeStreamConfig = makeStreamConfig
@@ -117,19 +127,7 @@ public struct SessionMachine: Sendable {
         /// Holds the session `prk` for video key derivation; wiped when the session ends.
         var schedule: SessionKeySchedule
         /// `video_nonce` values of proven attaches: a repeat must never reuse a GCM key and nonce.
-        var videoNonces = NonceWindow()
-    }
-
-    /// Bounded memory of recent nonces (oldest forgotten first).
-    private struct NonceWindow {
-        private var order: [[UInt8]] = []
-        private var set: Set<[UInt8]> = []
-        func contains(_ n: [UInt8]) -> Bool { set.contains(n) }
-        mutating func insert(_ n: [UInt8], capacity: Int) {
-            guard set.insert(n).inserted else { return }
-            order.append(n)
-            while order.count > max(1, capacity) { set.remove(order.removeFirst()) }
-        }
+        var videoNonces: Set<[UInt8]> = []
     }
 
     /// A same-device reconnect that has been answered ACCEPTED but has not yet shown it holds the keys.
@@ -158,6 +156,7 @@ public struct SessionMachine: Sendable {
 
     private enum Phase {
         case awaitingHello(deadline: UInt64)
+        case lookingUp(Hello, deadline: UInt64)
         case pending(Hello, deadline: UInt64, Pairing)
         case proving(Proving)
         case active(Session)
@@ -183,7 +182,7 @@ public struct SessionMachine: Sendable {
             switch conn.phase {
             case .pending(let hello, _, _): return .pending(deviceName: hello.deviceName)
             case .active(let s): return .active(deviceName: s.deviceName, sessionID: s.id)
-            case .awaitingHello, .proving: continue
+            case .awaitingHello, .proving, .lookingUp: continue
             }
         }
         return .idle
@@ -193,7 +192,7 @@ public struct SessionMachine: Sendable {
     public var awaitingHelloCount: Int {
         connections.values.filter {
             switch $0.phase {
-            case .awaitingHello, .proving: true
+            case .awaitingHello, .proving, .lookingUp: true
             default: false
             }
         }.count
@@ -203,6 +202,11 @@ public struct SessionMachine: Sendable {
     public var pendingVideoCount: Int { videoConnections.count + videoProofs.count }
 
     public mutating func forgetApprovedDevices() { approvedDevices.removeAll() }
+
+    /// True while the connection waits for the user's answer (the store/persist steps may still be in flight).
+    public func isPendingApproval(_ id: ConnectionID) -> Bool {
+        if case .pending? = connections[id]?.phase { true } else { false }
+    }
 
     /// Test hook: the key schedule held for a connection (active session or pending pairing).
     func scheduleForTesting(_ id: ConnectionID) -> SessionKeySchedule? {
@@ -248,6 +252,8 @@ public struct SessionMachine: Sendable {
             return handleHello(id, hello, now: now)
         case .pending:
             return handleCommon(id, message, now: now, isActive: false)
+        case .lookingUp:
+            return protocolError(id)  // a client sends nothing before HELLO_ACK
         case .proving(let proving):
             return prove(id, proving, first: message, now: now)
         case .active:
@@ -337,7 +343,14 @@ public struct SessionMachine: Sendable {
               let keys = s.schedule.videoKeys(nonce: proof.nonce) else {
             return [.closeVideo(id), .log(.warning, ev: "video_hello_rejected", conn: id, fields: "reason=stale")]
         }
-        s.videoNonces.insert(proof.nonce, capacity: configuration.recentVideoNonces)
+        guard s.videoNonces.count < configuration.maxVideoNonces else {
+            // Budget spent: never reuse a key. End the session; the tablet reconnects and gets a fresh prk.
+            var actions: [SessionAction] = [.closeVideo(id)]
+            actions += end(proof.sessionConn, bye: .shuttingDown, cause: .shutdown, close: true,
+                           ev: "video_nonce_budget_exhausted")
+            return actions
+        }
+        s.videoNonces.insert(proof.nonce)
         var actions: [SessionAction] = []
         if let old = s.video, old != id { actions.append(.closeVideo(old)) }
         s.video = id
@@ -358,6 +371,11 @@ public struct SessionMachine: Sendable {
                 if now >= deadline {
                     connections[id] = nil
                     actions += [.close(id), .log(.warning, ev: "hello_timeout", conn: id, fields: "")]
+                }
+            case .lookingUp(_, let deadline):
+                if now >= deadline {
+                    connections[id] = nil
+                    actions += [.close(id), .log(.warning, ev: "pair_key_lookup_timeout", conn: id, fields: "")]
                 }
             case .proving(let p):
                 if now >= p.deadline {
@@ -419,7 +437,7 @@ public struct SessionMachine: Sendable {
     private var slotOwner: ConnectionID? {
         connections.first { entry in
             switch entry.value.phase {
-            case .awaitingHello, .proving: return false
+            case .awaitingHello, .proving, .lookingUp: return false
             default: return true
             }
         }?.key
@@ -431,8 +449,37 @@ public struct SessionMachine: Sendable {
             return [.send(id, ack(.versionMismatch)), .close(id),
                     .log(.warning, ev: "version_mismatch", conn: id, fields: "peer_version=\(hello.protocolVersion)")]
         }
-        let pairKey = configuration.allowPaired && approvedDevices.contains(hello.deviceID)
-            ? configuration.pairKeys.key(for: hello.deviceID) : nil
+        // Another device holding the slot is BUSY whatever the key situation: no lookup needed.
+        if let owner = slotOwner {
+            var ownerDevice: DeviceID?
+            switch connections[owner]?.phase {
+            case .pending(let h, _, _)?: ownerDevice = h.deviceID
+            case .active(let s)?: ownerDevice = s.deviceID
+            default: break
+            }
+            if ownerDevice != hello.deviceID {
+                connections[id] = nil
+                return [.send(id, ack(.busy)), .close(id), .log(.info, ev: "busy", conn: id, fields: "")]
+            }
+        }
+        guard configuration.allowPaired, approvedDevices.contains(hello.deviceID) else {
+            return continueHello(id, hello, now: now, pairKey: nil)
+        }
+        if let store = configuration.pairKeys {
+            return continueHello(id, hello, now: now, pairKey: store.key(for: hello.deviceID))
+        }
+        connections[id]?.phase = .lookingUp(hello, deadline: now + configuration.lookupTimeoutUs)
+        return [.lookupPairKey(id, deviceID: hello.deviceID)]
+    }
+
+    /// The answer to `lookupPairKey`. Ignored unless the connection is still waiting for it.
+    public mutating func pairKeyResolved(_ id: ConnectionID, key: SecretBytes?, now: UInt64) -> [SessionAction] {
+        guard case .lookingUp(let hello, _)? = connections[id]?.phase else { return [] }
+        return continueHello(id, hello, now: now, pairKey: key)
+    }
+
+    private mutating func continueHello(_ id: ConnectionID, _ hello: Hello, now: UInt64,
+                                        pairKey: SecretBytes?) -> [SessionAction] {
         // One session at a time. The same device may reconnect, but only with its pair key (PAIRED): its session is
         // then taken over once the new connection proved key possession (`prove`). Anything else is BUSY, so the
         // device_id (sent in the clear) cannot be used by a bystander to knock a live session off.
@@ -535,7 +582,7 @@ public struct SessionMachine: Sendable {
         connections[id]?.lastReceive = now  // heartbeat baseline starts at ACCEPTED, not at HELLO
         connections[id]?.silenceReleased = false
         return [.send(id, .streamConfig(config)),
-                .sessionStarted(id, sessionID: sessionID, configID: config.configID, deviceName: hello.deviceName),
+                .sessionStarted(id, sessionID: sessionID, configID: config.configID, hello: hello),
                 .log(.info, ev: "session_started", conn: id,
                      fields: "config_id=\(config.configID) video_port=\(videoPort)")]
     }
@@ -583,7 +630,7 @@ public struct SessionMachine: Sendable {
             p.session.schedule.wipe()
             if let bye { actions.append(.send(id, .bye(bye))) }
             if close { actions.append(.close(id)) }
-        case .awaitingHello:
+        case .awaitingHello, .lookingUp:
             if let bye { actions.append(.send(id, .bye(bye))) }
             if close { actions.append(.close(id)) }
         }

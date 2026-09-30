@@ -95,8 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // injector, every input message goes to it, and every release-all trigger reaches `releaseInput`.
         let coordinator = self.coordinator
         let input = self.input
-        handlers.sessionStarted = { sid, cid in
-            coordinator.sessionStarted(sessionID: sid, configID: cid)
+        handlers.sessionStarted = { sid, cid, hello in
+            coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello)
             input.sessionStarted(sessionID: sid, configID: cid)
         }
         handlers.sessionEnded = {

@@ -199,7 +199,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         #expect(second.hostID == [UInt8](repeating: 0, count: 16) && second.hostEphPub == [UInt8](repeating: 0, count: 65))
         #expect(opened[1] == .streamConfig(config))
         #expect(server.machine.status == .active(deviceName: "Tab", sessionID: 77))
-        #expect(server.actions.contains(.sessionStarted(A, sessionID: 77, configID: 1, deviceName: "Tab")))
+        #expect(server.actions.contains { if case .sessionStarted(A, 77, 1, let h) = $0 { h.deviceName == "Tab" } else { false } })
     }
 
     @Test func secondConnectionAfterPairingIsPairedWithTheStoredKey() throws {

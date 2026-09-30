@@ -111,7 +111,7 @@ public final class SessionServer: @unchecked Sendable {
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
         public var releaseInput: @Sendable (ReleaseCause) -> Void = { _ in }
-        public var sessionStarted: @Sendable (_ sessionID: UInt32, _ configID: UInt16) -> Void = { _, _ in }
+        public var sessionStarted: @Sendable (_ sessionID: UInt32, _ configID: UInt16, _ hello: Hello) -> Void = { _, _, _ in }
         public var sessionEnded: @Sendable () -> Void = {}
         public var videoAttached: @Sendable (VideoLink) -> Void = { _ in }
         public init() {}
@@ -123,7 +123,8 @@ public final class SessionServer: @unchecked Sendable {
     private let queueKey = DispatchSpecificKey<Bool>()
     private let handlers: Handlers
     private let store: ApprovedDeviceStore
-    private let pairKeys: PairKeyStore
+    /// Every Keychain access goes through this one serial queue, asynchronously (PairKeyService).
+    private let pairKeys: PairKeyService
     private let identity: HostIdentityStore.Identity
     private let requestedControlPort: UInt16
     private let requestedVideoPort: UInt16
@@ -174,14 +175,14 @@ public final class SessionServer: @unchecked Sendable {
         self.handlers = handlers
         queue.setSpecific(key: queueKey, value: true)
         self.store = store
-        self.pairKeys = pairKeys
+        self.pairKeys = PairKeyService(store: pairKeys)
         self.identity = identity
         self.requestedControlPort = controlPort
         self.requestedVideoPort = videoPort
         let known = store.load()
         self.knownDevices = known
         var configuration = SessionMachine.Configuration(hostName: hostName, makeStreamConfig: makeStreamConfig,
-                                                         hostID: identity.id, pairKeys: pairKeys)
+                                                         hostID: identity.id, pairKeys: nil)
         if case .unpersisted = identity { configuration.allowPaired = false }  // a volatile host_id must not be trusted
         self.machine = SessionMachine(configuration: configuration, approvedDevices: Set(known.keys))
     }
@@ -341,23 +342,20 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
-    /// Clears the approved list and, off the session queue, every pair key.
+    /// Clears the approved list and enqueues deletion of every pair key on the Keychain queue. The delete is
+    /// enqueued NOW, so a pairing saved later (enqueued later) can never be deleted by it.
     private func dropPairing(reason: String) {
         machine.forgetApprovedDevices()
         knownDevices.removeAll()
         try? store.save(knownDevices)
         logger.log(.info, "devices_forgotten", sessionID: currentSessionID, generation: currentConfigID,
                    fields: "reason=\(reason)")
-        let keys = pairKeys
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let failure: String?
-            do { try keys.removeAll(); failure = nil } catch { failure = "\(error)" }
+        pairKeys.removeAll { [weak self] failure in
+            guard let failure else { return }
             self?.queue.async { [weak self] in
                 guard let self else { return }
-                if let failure {
-                    logger.log(.error, "pair_keys_remove_failed", sessionID: currentSessionID,
-                               generation: currentConfigID, fields: "error=\(failure)")
-                }
+                logger.log(.error, "pair_keys_remove_failed", sessionID: currentSessionID,
+                           generation: currentConfigID, fields: "error=\(failure)")
             }
         }
     }
@@ -714,30 +712,27 @@ public final class SessionServer: @unchecked Sendable {
                     pendingApproval = nil
                     handlers.approvalCancelled(id.raw)
                 }
-            case .persistPairing(let conn, let device, let name, let key):
-                // Key first (Keychain), then the device list; ACCEPTED goes out only when both are stored.
-                var stored = true
-                do { try pairKeys.save(key, for: device) } catch {
-                    stored = false
-                    logger.log(.error, "pair_key_save_failed", sessionID: currentSessionID,
-                               generation: currentConfigID, fields: "error=\(error)")
-                }
-                if stored {
-                    knownDevices[device] = name
-                    do { try store.save(knownDevices) } catch {
-                        stored = false
-                        knownDevices[device] = nil
-                        try? pairKeys.remove(device)
-                        logger.log(.error, "store_save_failed", sessionID: currentSessionID,
-                                   generation: currentConfigID)
+            case .lookupPairKey(let conn, let device):
+                // Off the session queue: the Keychain may block. The connection sends nothing until it answers
+                // (the machine closes it after 5 s).
+                pairKeys.lookup(device) { [weak self] key in
+                    self?.queue.async { [weak self] in
+                        guard let self, !stopped else { return }
+                        apply(machine.pairKeyResolved(conn, key: key, now: nowUs()))
                     }
                 }
-                apply(machine.pairingPersisted(conn, stored: stored, now: nowUs()))
-            case .sessionStarted(let id, let sid, let configID, _):
+            case .persistPairing(let conn, let device, let name, let key):
+                // Key first (Keychain queue), then the device list; ACCEPTED goes out only when both are stored.
+                pairKeys.save(key, for: device) { [weak self] saved in
+                    self?.queue.async { [weak self] in
+                        self?.finishPairing(conn, device: device, name: name, keySaved: saved)
+                    }
+                }
+            case .sessionStarted(let id, let sid, let configID, let hello):
                 activeTransport = Self.transport(of: controlConnections[id])
                 currentSessionID = sid
                 currentConfigID = configID
-                handlers.sessionStarted(sid, configID)
+                handlers.sessionStarted(sid, configID, hello)
             case .sessionEnded:
                 currentSessionID = 0
                 currentConfigID = 0
@@ -757,6 +752,28 @@ public final class SessionServer: @unchecked Sendable {
             }
         }
         refreshState()
+    }
+
+    /// Session queue: the Keychain save finished.
+    private func finishPairing(_ conn: ConnectionID, device: DeviceID, name: String, keySaved: Bool) {
+        guard machine.isPendingApproval(conn) else {
+            // The connection ended meanwhile (e.g. "forget" ended it): nobody will use this key.
+            if keySaved { pairKeys.remove(device) }
+            return
+        }
+        var stored = keySaved
+        if keySaved {
+            knownDevices[device] = name
+            do { try store.save(knownDevices) } catch {
+                stored = false
+                knownDevices[device] = nil
+                pairKeys.remove(device)
+                logger.log(.error, "store_save_failed", sessionID: currentSessionID, generation: currentConfigID)
+            }
+        } else {
+            logger.log(.error, "pair_key_save_failed", sessionID: currentSessionID, generation: currentConfigID)
+        }
+        apply(machine.pairingPersisted(conn, stored: stored, now: nowUs()))
     }
 
     /// Loopback peer means the tablet came through `adb reverse` (USB mode).
