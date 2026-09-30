@@ -25,6 +25,14 @@ final class AdbOutputTests: XCTestCase {
         XCTAssertNil(AdbOutput.selectDevice([devices[1]]))
     }
 
+    func testServerLaunchNeverListensOnAllInterfaces() {
+        let cmd = AdbServerLaunch.command(adb: "/sdk/platform-tools/adb")
+        XCTAssertFalse(cmd.contains("-a"))
+        XCTAssertFalse(cmd.contains { $0.hasPrefix("-") && $0.contains("a") && !$0.hasPrefix("--") })
+        XCTAssertEqual(cmd.suffix(3), ["/sdk/platform-tools/adb", "nodaemon", "server"])
+        XCTAssertTrue(cmd.contains("ADB_MDNS=0") && cmd.contains("ADB_MDNS_AUTO_CONNECT=0"))
+    }
+
     func testLocatorOrder() {
         let c = AdbLocator.candidates(androidHome: "/sdk", home: "/Users/u", path: "/usr/bin:/opt/pt")
         XCTAssertEqual(c.prefix(4), ["/sdk/platform-tools/adb", "/Users/u/Library/Android/sdk/platform-tools/adb",

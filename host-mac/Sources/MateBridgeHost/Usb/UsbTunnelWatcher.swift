@@ -108,9 +108,8 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     /// Same method as scripts/usb-mode.sh: adb under launchd, without its mDNS bridge (it aborts on some networks).
     private func startServer(adb: String) -> Bool {
         _ = runner.run("/bin/launchctl", ["remove", Self.launchdLabel], timeout: 3)  // clear a dead or hung job
-        let submit = runner.run("/bin/launchctl", ["submit", "-l", Self.launchdLabel, "--", "/usr/bin/env",
-                                                   "ADB_MDNS=0", "ADB_MDNS_AUTO_CONNECT=0", adb, "-a", "nodaemon", "server"],
-                                timeout: 5)
+        let submit = runner.run("/bin/launchctl", ["submit", "-l", Self.launchdLabel, "--"]
+                                + AdbServerLaunch.command(adb: adb), timeout: 5)
         guard submit.succeeded else { return false }
         for _ in 0..<15 {  // up to ~3 s for the listener
             if LoopbackProbe.isListening(port: Self.adbServerPort) { return true }
