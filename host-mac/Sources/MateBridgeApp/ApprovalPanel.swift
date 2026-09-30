@@ -7,6 +7,7 @@ final class ApprovalPanel: NSObject {
     let requestID: UInt64
     private let panel: NSPanel
     private var onAnswer: ((Bool) -> Void)?
+    private let notice = NSTextField(wrappingLabelWithString: "")
 
     init(requestID: UInt64, deviceName: String, code: String, onAnswer: @escaping (Bool) -> Void) {
         self.requestID = requestID
@@ -30,9 +31,12 @@ final class ApprovalPanel: NSObject {
         let allow = NSButton(title: "İzin ver", target: self, action: #selector(allow))
         allow.keyEquivalent = "\r"
         let reject = NSButton(title: "Reddet", target: self, action: #selector(reject))
+        notice.font = .systemFont(ofSize: 13, weight: .semibold)
+        notice.textColor = .systemOrange
+        notice.isHidden = true
         let buttons = NSStackView(views: [reject, allow])
         buttons.spacing = 12
-        let stack = NSStackView(views: [title, codeLabel, compare, body, buttons])
+        let stack = NSStackView(views: [title, codeLabel, compare, notice, body, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -45,6 +49,18 @@ final class ApprovalPanel: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         panel.center()
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// The tablet left while this request was open (e.g. the user switched to another app). The window stays; "İzin ver"
+    /// now lets the tablet pair the next time it connects.
+    func markDisconnected() {
+        setNotice("Tablet ayrıldı. İzin verirsen tablet yeniden bağlandığında eşleşir.")
+    }
+
+    func setNotice(_ text: String) {
+        notice.stringValue = text
+        notice.isHidden = false
+        if let stack = panel.contentView as? NSStackView { panel.setContentSize(stack.fittingSize) }
     }
 
     /// Closes without answering (request cancelled or replaced).

@@ -161,7 +161,8 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, hello(), now: 0)
         let actions = m.connectionClosed(A)
-        #expect(has(actions) { $0 == .cancelApproval(A) })
+        // T-043: the window stays (marked as disconnected) instead of being cancelled.
+        #expect(has(actions) { $0 == .approvalOrphaned(A) })
         #expect(m.status == .idle)
     }
 
