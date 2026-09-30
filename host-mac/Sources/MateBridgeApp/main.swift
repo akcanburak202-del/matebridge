@@ -17,6 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
     private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
                                                        action: #selector(openAccessibilitySettings), keyEquivalent: "")
+    private let loginItem = LoginItem()
+    private let loginItemEntry = NSMenuItem(title: "Oturum açılışında başlat", action: #selector(toggleLoginItem),
+                                            keyEquivalent: "")
+    private let loginProblemLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let usbModeEntry = NSMenuItem(title: "USB modu", action: #selector(toggleUsbMode), keyEquivalent: "")
+    private let usbLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let usbWatcher = UsbTunnelWatcher()
+    private static let usbModeKey = "usbModeEnabled"
     private var signalSources: [DispatchSourceSignal] = []
     private var approvalPanel: ApprovalPanel?
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
@@ -42,6 +50,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accessibilitySettingsItem.target = self
         accessibilitySettingsItem.isHidden = true
         menu.addItem(accessibilitySettingsItem)
+        menu.addItem(.separator())
+        for entry in [loginItemEntry, usbModeEntry] {
+            entry.target = self
+            menu.addItem(entry)
+        }
+        loginProblemLine.isEnabled = false
+        loginProblemLine.isHidden = true
+        menu.addItem(loginProblemLine)
+        usbLine.isEnabled = false
+        usbLine.isHidden = true
+        menu.addItem(usbLine)
+        let logsEntry = NSMenuItem(title: "Logları aç", action: #selector(openLogs), keyEquivalent: "")
+        logsEntry.target = self
+        menu.addItem(logsEntry)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Onaylı cihazları unut", action: #selector(forgetDevices), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -100,6 +122,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.server = server
         coordinator.onOverflow = { [server] in server.endSessions() }
         server.start()
+
+        loginItem.registerOnFirstRun()
+        // USB mode defaults to on and the choice persists. The guard keeps the `adb reverse` tunnels alive (T-039).
+        usbWatcher.onStateChange = { [weak self] state in
+            Task { @MainActor in self?.showUsb(state) }
+        }
+        usbWatcher.setEnabled(usbModeEnabled)
+    }
+
+    private var usbModeEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.usbModeKey) as? Bool ?? true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -110,6 +143,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         input.refreshStatus()  // permission may have changed in System Settings
+        loginItem.refresh()  // read live: the user may have changed it in System Settings
+        loginItemEntry.state = loginItem.isEnabled ? .on : .off
+        usbModeEntry.state = usbModeEnabled ? .on : .off
+        showLoginProblem()
+    }
+
+    @objc private func toggleLoginItem() {
+        loginItem.toggle()
+        showLoginProblem()
+    }
+
+    private func showLoginProblem() {
+        loginProblemLine.title = loginItem.problem ?? ""
+        loginProblemLine.isHidden = loginItem.problem == nil
+    }
+
+    @objc private func toggleUsbMode() {
+        let on = !usbModeEnabled
+        UserDefaults.standard.set(on, forKey: Self.usbModeKey)
+        usbModeEntry.state = on ? .on : .off
+        usbWatcher.setEnabled(on)
+    }
+
+    @objc private func openLogs() {
+        let dir = RotatingLogFile.defaultDirectory()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(dir)
+    }
+
+    private func showUsb(_ state: UsbTunnelState?) {
+        guard let state else {
+            usbLine.isHidden = true
+            return
+        }
+        switch state {
+        case .up: usbLine.title = "USB: tüneller hazır"
+        case .down: usbLine.title = "USB: tüneller kuruluyor…"
+        case .noDevice: usbLine.title = "USB: tablet bağlı değil"
+        case .noAdb: usbLine.title = "USB: adb bulunamadı"
+        }
+        usbLine.isHidden = false
     }
 
     @objc private func forgetDevices() {
@@ -136,9 +210,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch state {
         case .stopped: statusLine.title = "Durduruldu"
         case .starting: statusLine.title = "Başlatılıyor…"
-        case .listening: statusLine.title = "Dinliyor"
+        case .listening: statusLine.title = "Bekleniyor"
         case .awaitingApproval: statusLine.title = "Onay bekleniyor"
-        case .connected(let name): statusLine.title = "Bağlı: \(name)"
+        case .connected(let name, let transport):
+            statusLine.title = "Bağlı: \(name) (\(transport == .usb ? "USB" : "Ağ"))"
         case .failed(let what): statusLine.title = "Hata: \(what)"
         }
     }

@@ -71,7 +71,7 @@ public enum SessionServerState: Equatable, Sendable {
     case starting
     case listening
     case awaitingApproval(deviceName: String)
-    case connected(deviceName: String)
+    case connected(deviceName: String, transport: SessionTransport)
     case failed(String)
 }
 
@@ -122,6 +122,7 @@ public final class SessionServer: @unchecked Sendable {
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
     private var stopped = false
+    private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
     private var restartScheduled = false
     private var inflightBytes: [ConnectionID: Int] = [:]
@@ -555,7 +556,8 @@ public final class SessionServer: @unchecked Sendable {
                 do { try store.save(knownDevices) } catch {
                     logger.log(.error, "store_save_failed", sessionID: currentSessionID, generation: currentConfigID)
                 }
-            case .sessionStarted(_, let sid, let configID, _):
+            case .sessionStarted(let id, let sid, let configID, _):
+                activeTransport = Self.transport(of: controlConnections[id])
                 currentSessionID = sid
                 currentConfigID = configID
                 handlers.sessionStarted(sid, configID)
@@ -578,6 +580,12 @@ public final class SessionServer: @unchecked Sendable {
         refreshState()
     }
 
+    /// Loopback peer means the tablet came through `adb reverse` (USB mode).
+    private static func transport(of connection: NWConnection?) -> SessionTransport {
+        guard let connection, case .hostPort(let host, _) = connection.endpoint else { return .network }
+        return SessionTransport.classify(peerHost: "\(host)")
+    }
+
     private func refreshState() {
         switch machine.status {
         case .idle:
@@ -586,7 +594,7 @@ public final class SessionServer: @unchecked Sendable {
             default: break
             }
         case .pending(let name): setState(.awaitingApproval(deviceName: name))
-        case .active(let name, _): setState(.connected(deviceName: name))
+        case .active(let name, _): setState(.connected(deviceName: name, transport: activeTransport))
         }
     }
 

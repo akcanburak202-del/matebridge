@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # USB mode: forward the tablet's 127.0.0.1:47001/47002 to the Mac's MateBridge listeners via adb reverse.
 # Usage: scripts/usb-mode.sh [on|off|status]   (default: on)
+#
+# NOTE (T-039): the MateBridge host now does this itself ("USB modu" menu item, on by default): it starts the adb
+# server under launchd and re-installs the tunnels every ~2 s, including after the cable is replugged.
+# This script stays for manual use and debugging.
 set -uo pipefail
 
 PORTS=(47001 47002)

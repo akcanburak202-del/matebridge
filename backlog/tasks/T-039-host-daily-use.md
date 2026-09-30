@@ -1,7 +1,7 @@
 ---
 id: T-039
 title: Mac günlük kullanım — oturum açılışında başlama, menü (durum, loglar), USB tünellerini kendiliğinden kurma
-status: todo
+status: review
 phase: 4
 owner: mac-host-dev
 depends_on: [T-020]
@@ -44,8 +44,8 @@ PLAN Aşama 4: Mac tarafında "hiçbir şey yapmadan çalışsın". Bugün host 
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** son commit (SHA orkestratöre raporda; `git log task/T-039-host-daily-use`)
+- **Dokunulan dosyalar:** Core/Usb/{AdbOutput,UsbTunnelPlanner}.swift, Tests/.../Usb/*, Host/Usb/{ProcessRunner,UsbTunnelWatcher}.swift, Host/Session/{HostLog,SessionServer}.swift (durum `.connected(deviceName:transport:)`), App/{main,LoginItem}.swift, scripts/usb-mode.sh (not), bu kart. `bundle-host.sh` değişmedi.
+- **Varsayımlar:** Sunucu ayakta mı testi 127.0.0.1:5037 TCP bağlantısı (adb'yi kazara kendiliğinden başlatmamak için); `adb devices` cevap vermezse sunucu "down" sayılıp launchd işi silinip yeniden submit edilir. Kapatınca yalnız tüneller kaldırılır, adb sunucusu ve launchd işi kalır; uygulamadan çıkınca tüneller kaldırılmaz (zararsız). USB taşıması = kontrol bağlantısının eşi loopback. Oturum açılışı ilk açılışta bir kez `register()` (UserDefaults `loginItemFirstRunDone`), sonra yalnız menü değiştirir. Tek cihaz: birden çok hazır cihazda gerçek (emulator olmayan) ilki seçilir.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbiri çalıştırılmadı (adb/uygulama yok; yalnız saf mantık testli). (1) `SMAppService.mainApp.register()` Apple Development imzalı `build/MateBridge.app` ile: durum `.enabled` mı `.requiresApproval` mı, Sistem Ayarları > Giriş Öğeleri'nde görünüyor mu, yeniden başlatmada açılıyor mu. Uygulama /Applications dışında (build/) ise macOS kaydı reddedebilir ya da onay isteyebilir. (2) Watcher: gerçek adb ile tünellerin 2-4 sn içinde kurulması, kablo çek-tak, `launchctl submit` uygulamanın alt süreci olarak sandbox/TCC sorunu çıkarıyor mu, login item olarak açılınca adb yolu (PATH asgari; ANDROID_HOME/SDK yolu bakılır). (3) Yeni MateBridge menü öğeleri ve "Bağlı: ad (USB)". (4) `usb-mode.sh` ile çakışma: ikisi de aynı launchd etiketini kullanır.
+- **Açık sorular:** Quit'te tünelleri kaldıralım mı (şu an hayır; asenkron kuyrukta yapılır, çıkışa yetişmez). `adb -a` sunucusu tüm arayüzlerde dinler (betikten devralındı); loopback'e sınırlamak güvenlik açısından daha iyi olabilir ama `-a` kaldırılıp launchd altında denenmedi.
