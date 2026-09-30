@@ -1,7 +1,7 @@
 ---
 id: T-026
 title: Tablet — kalem örneklerini bekletmeden ilet (unbuffered dispatch), yinelenen örnek sayacı
-status: todo
+status: in-progress
 phase: 2
 owner: android-client-dev
 depends_on: [T-024]
@@ -41,7 +41,13 @@ Kök neden tablette: Android kalem örneklerini ekran karesine göre topluyor. H
 
 ## Plan
 
-_(Ajan doldurur.)_
+Küçük değişiklik, üç parça. Protokol ve host değişmez.
+
+1. **Bekletmesiz iletim isteği** (`input/UnbufferedPenDispatch.kt`, saf politika + JVM testi; Android bağlantısı `MainActivity`'de). `Build.VERSION.SDK_INT >= 30` ise `root.requestUnbufferedDispatch(InputDevice.SOURCE_STYLUS)` (kaynak tabanlı: hover genel hareket olaylarıyla geldiği için gerekli; pencerede kalıcıdır). Daha eski API'de yedek: her kalem `ACTION_DOWN`'ında `root.requestUnbufferedDispatch(ev)` (yalnızca o vuruş). Politika: girdi yakalama etkinken (`syncInputActive`, video görünür) iste, etkin değilken `SOURCE_CLASS_NONE` ile kaldır; pencere yeniden bağlanınca (`OnAttachStateChangeListener`) ve odak dönünce yeniden kur; görünüm bağlı değilse uygulanmış sayma, sonra yeniden dene; istek istisna atarsa bir kez logla ve bırak (gruplu iletim sürer). Seçilen yol `MB/input` içine bir kez yazılır (`unbuffered path=source|per_gesture|failed`).
+2. **Yinelenen örnek ayıklama** (`PenTracker`): yalnızca gerçek Android olaylarından gelen örnekler (`onFrame` yolları) son **gönderilen** örnekle karşılaştırılır. Bire bir aynıysa (zaman, x, y, basınç, eğim, bayraklar; bayraklar `!= 0` ve `STROKE_START` yok) gönderilmez ve `dup_exact` artar. `flags = 0`, `STROKE_START`, bayrağı farklı, canlılık tekrarı ve sentetik kapanış örnekleri filtreye hiç girmez (ayrı `emit` yolu). Konum aynı ama zaman farklıysa örnek gönderilir, `dup_pos` artar (`dup_pos_first`: olayın ilk örneği, yani olaylar arası; geri kalanı olay içi, kaynağı ayırmak için). Kaynak kodda aranır; bulunamazsa cihazdaki sayaçlar belirler.
+3. **Sayaçlar**: `InputCounters`'a `dup_exact`, `dup_pos`, `dup_pos_first`, `max_batch` (aralıkta gönderilen en büyük PEN mesajı örnek sayısı); saniyelik `MB/input` özetine eklenir.
+
+Testler: `PenDedupeTest` (bire bir yinelenen atılır, yalnız gönderilenle karşılaştırılır, bayrak farkı/`STROKE_START`/`flags=0`/canlılık tekrarı/DOWN-UP geçişi asla atılmaz, `dup_pos` ve `dup_pos_first`, `max_batch`, toplu olay tek mesajda sırayla, parçalama, reset sonrası), `UnbufferedPenDispatchTest` (API 30+ kaynak yolu, yedek yol, etkin olunca iste / etkin değilken kaldır, yeniden bağlanınca yeniden kur, bağlı değilken yeniden dene, istisna, yol bir kez loglanır). Mevcut `PenTrackerTest` içindeki bire bir aynı iki örneği (`pt(106), pt(106)`) farklı konuma çeviririm (artık atılıyor). Kasıtlı bozma: bayrak karşılaştırması, "son gönderilen yerine son alınan", canlılık yolunun filtreye girmesi.
 
 ## Handoff
 
