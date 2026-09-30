@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 # Message type codes (docs/PROTOCOL.md, "Mesaj tipleri").
 T = {
-    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06,
+    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
@@ -369,6 +369,10 @@ FIXTURES = {
         field("u8", "kind", 0, "EMPTY"),
         field("u8", "reserved", 0),
         field("u16", "length", 0),
+    ])),
+    "display_rate": ("DISPLAY_RATE: tablet panel dropped to 60 Hz (no touch)", frame("DISPLAY_RATE", [
+        field("u16", "hz", 60),
+        field("u16", "reserved", 0),
     ])),
     "unknown_type": ("MUST BE SKIPPED: unknown message type 0x7f with a 3-byte payload", [
         (struct.pack("<B", 0x7F), "header u8 type = 0x7f (unknown)"),
