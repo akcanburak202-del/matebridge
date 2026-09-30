@@ -44,9 +44,14 @@ object StatsFormat {
         "${prefix}_p50_us=${g.p50Us} ${prefix}_p95_us=${g.p95Us} ${prefix}_p99_us=${g.p99Us} ${prefix}_over=${g.overThreshold}"
 
     /** Overlay line for the display mode and jitter buffer ([bufferFrames] < 0 = adaptive pacing). */
-    fun pacingLine(modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null, skipPct: Double? = null) =
+    fun pacingLine(
+        modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null, skipPct: Double? = null,
+        decodeP95Us: Long? = null, paceDUs: Long? = null,
+    ) =
         String.format(Locale.ROOT, "Mod %.0f Hz | ", modeHz) +
             (if (bufferFrames < 0) "Uyarlı" else "Tampon $bufferFrames") +
             (if (paceAddUs != null) String.format(Locale.ROOT, " | +%.1f ms", paceAddUs / 1000.0) else "") +
-            (if (skipPct != null) String.format(Locale.ROOT, " | atlama %%%.1f", skipPct) else "")
+            (if (skipPct != null) String.format(Locale.ROOT, " | atlama %%%.1f", skipPct) else "") +
+            (if (paceDUs != null && paceDUs > 0) String.format(Locale.ROOT, " | D %.1f ms", paceDUs / 1000.0) else "") +
+            (if (decodeP95Us != null) String.format(Locale.ROOT, " | çözme p95 %.1f ms", decodeP95Us / 1000.0) else "")
 }

@@ -63,6 +63,7 @@ import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.GlPresenter
 import dev.matebridge.client.video.PresentStats
 import dev.matebridge.client.video.VideoRenderer
+import dev.matebridge.client.video.OperatingRate
 import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
@@ -117,6 +118,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-016/T-052 smoothness knobs. Launch extras: `--ei jitter N` (unset = adaptive pacing on the surface path;
     // 0|1|2 = fixed jitter buffer in content frames, 0 = render at once as in T-015; -1 = adaptive off = 0) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
     private var bufferFrames = VideoRenderer.BUFFER_ADAPTIVE
+    private var operatingRate = OperatingRate.STREAM_FPS // `--ei oprate 0|-1|-2|N`, see OperatingRate
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
     private val vsyncGaps = IntervalHistogram()
@@ -173,6 +175,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         glMode = intent?.getStringExtra("render") == "gl"
         frameRateOverride = intent?.getIntExtra("frate", -1) ?: -1
         glPresentationTime = intent?.getBooleanExtra("glpts", false) ?: false
+        operatingRate = intent?.getIntExtra("oprate", OperatingRate.STREAM_FPS) ?: OperatingRate.STREAM_FPS
         bufferFrames = when {
             glMode -> 0 // the GL presenter aligns to vsync itself; SurfaceTexture ignores release timestamps
             intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
@@ -609,6 +612,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             bufferFrames = bufferFrames,
             codecReportsShown = !glMode,
         ).also {
+            it.operatingRate = operatingRate
             it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
             renderer = it
         }
@@ -749,7 +753,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
-            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct)) +
+            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs())) +
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val ep = currentEndpoint
@@ -781,7 +785,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 "pace_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 "vsync_ms=${"%.2f".format(java.util.Locale.ROOT, vsync.periodNs / 1e6)} pace_add_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 StatsFormat.gapFields("net", s.network) + " " + StatsFormat.gapFields("ready", s.ready) + " " +
-                StatsFormat.gapFields("shown", s.shown),
+                StatsFormat.gapFields("shown", s.shown) + " " + StatsFormat.gapFields("dec", s.decode) +
+                " pace_d_us=${r.paceDUs()}",
             "render",
         )
     }

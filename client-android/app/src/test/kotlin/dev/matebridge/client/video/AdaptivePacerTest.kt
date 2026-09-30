@@ -210,3 +210,23 @@ class PresentMeterTest {
         assertTrue(line, line.contains("Uyarlı") && line.contains("%1.5"))
     }
 }
+
+class OperatingRateTest {
+    @Test fun policies() {
+        assertEquals(120, OperatingRate.resolve(OperatingRate.STREAM_FPS, 120))
+        assertEquals(Short.MAX_VALUE.toInt(), OperatingRate.resolve(OperatingRate.MAX, 120))
+        assertNull(OperatingRate.resolve(OperatingRate.OFF, 120))
+        assertEquals(90, OperatingRate.resolve(90, 120))
+        assertNull(OperatingRate.resolve(OperatingRate.STREAM_FPS, 0))
+    }
+
+    @Test fun decodeLatencyPercentilesInStats() {
+        val st = VideoStats()
+        for (i in 1..100) { st.onInput(i.toLong(), 0); st.onOutput(i.toLong(), i * 1000L) }
+        val s = st.snapshot(reset = true)
+        assertEquals(100, s.decode.count)
+        assertEquals(50_000L, s.decode.p50Us)
+        assertEquals(95_000L, s.decode.p95Us)
+        assertEquals(0, st.snapshot().decode.count)
+    }
+}

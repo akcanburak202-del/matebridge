@@ -21,6 +21,8 @@ class VideoStats {
         val paceAddAvgUs: Long? = null,
         /** Percent of presentation intervals that skipped a vsync while a frame was ready, or null when unmeasured. */
         val skipPct: Double? = null,
+        /** Decode latency per frame (queueInputBuffer to output available): p50/p95/p99 in the window. */
+        val decode: IntervalSummary = IntervalSummary.EMPTY,
     )
 
     private var received = 0L
@@ -39,6 +41,7 @@ class VideoStats {
     private val readyGaps = IntervalHistogram()
     private val shownGaps = IntervalHistogram()
     private val meter = PresentMeter()
+    private val decodeLat = IntervalHistogram()
 
     /** Maps a host capture time to the latency now (client clock), or null if unknown. Set by the session layer. */
     @Volatile var latencyOf: ((Long) -> Long?)? = null
@@ -85,7 +88,11 @@ class VideoStats {
     @Synchronized fun onOutput(ptsUs: Long, nowUs: Long) {
         decoded++
         readyGaps.mark(nowUs)
-        inputTimes.remove(ptsUs)?.let { decodeSumUs += (nowUs - it).coerceAtLeast(0); decodeCount++ }
+        inputTimes.remove(ptsUs)?.let {
+            val d = (nowUs - it).coerceAtLeast(0)
+            decodeSumUs += d; decodeCount++
+            decodeLat.record(d)
+        }
         captureTimes.remove(ptsUs)?.let { cap ->
             latencyOf?.invoke(cap)?.let { latencySumUs += it; latencyCount++ }
         }
@@ -98,7 +105,7 @@ class VideoStats {
             if (latencyCount > 0) latencySumUs / latencyCount else null,
             networkGaps.summary(reset), readyGaps.summary(reset), shownGaps.summary(reset),
             if (paceAddCount > 0) paceAddSumUs / paceAddCount else null,
-            meter.snapshot(reset).skipPct)
+            meter.snapshot(reset).skipPct, decodeLat.summary(reset))
         if (reset) {
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
