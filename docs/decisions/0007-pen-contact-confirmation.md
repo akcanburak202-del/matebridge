@@ -18,3 +18,4 @@ Seçenek 1, istemcide (T-029). Tel biçimi değişmez; PROTOCOL.md §7 istemci y
 - 10 ms'den kısa ve tek örnekli temaslar Mac'e hiç ulaşmaz (gerçek bir tık 30 ms'den uzundur).
 - Host durumu etkilenmez: gönderilmeyen temasın bırakışı da yoktur.
 - 17:33'teki bir diken bu tetikleyiciyle açıklanmadı; düzeltmeden sonra yeniden görülürse ayrı incelenir.
+- **Güncelleme (2026-09-30 akşam):** düzeltme kurulduktan sonra Krita'da sekmesiz bir diken daha görüldü (NOTES). Sekme, dikenin gerekli koşulu değil; oynatma sonucu (3/23'e 0/23) büyük olasılıkla tesadüftü. Karar yürürlükte kalıyor (tek örneklik temas istenmeyen girdidir, bedeli ≈3 ms), ama gerekçesi "dikeni giderir" değil "sekmeyi süzer" olarak okunmalı. Diken ayrı bir konu olarak açık (T-025).
