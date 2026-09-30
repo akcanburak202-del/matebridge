@@ -254,3 +254,18 @@ Kaynak: MB Input Probe (776b179), MatePad MRDI-W09, HarmonyOS 4.3 / API 31. Ham 
 - Açılışta `host_identity_replaced` (ilk v1 açılışı; eski onaylar silindi) beklendiği gibi.
 - **Bağlantı koptuktan sonra onay cihazda (23:57, T-043/T-044):** menüden "Onaylı cihazları unut" (AX) → tablet PAIRING, iki tarafta aynı kod → tablet Home ile arka plana → Mac penceresi açık kaldı ("Tablet ayrıldı…") → İzin ver → host anahtarı sakladı (`orphan_pairing_stored`) → tablet uygulaması açılınca `mode=paired`, şifreli görüntü akıyor. Kullanıcının akışı: kod görünce Parsec'e geç, Mac'te İzin ver, MateBridge'e dön.
 - Not: `NSPanel` onay penceresi, uygulama öne alınmadan AX'te görünmüyor (`count of windows = 0`); `set frontmost` sonrası okunuyor.
+
+## 2026-10-01 — 120 fps ölçümü (Faz 5, T-045)
+
+Kurulum: USB, host `MATEBRIDGE_FPS=120` (sanal ekran 120 Hz, SCK 1/240 s), içerik: scratch `anim` (CADisplayLink 120 Hz'te kayan kutu; Safari rAF 120 Hz ekranda bile 61 fps'te kalıyor, ölçüm için kullanılamaz). Ölçüm: host `cadence`, tablet `MB/decoder` istatistikleri, `dumpsys SurfaceFlinger --latency` video katmanı.
+
+| | 60 fps (varsayılan, Safari içeriği) | 120 fps (anim) |
+|---|---|---|
+| Mac yakalama | 60,0 | **120,0** (geç 0) |
+| Mac kodlama | 60, 13,5 ms | **~99 fps**, 20 ms, `enc_behind` ≈ 21/sn → **kodlayıcı darboğaz** |
+| Tablet alınan / çözülen / gösterilen | 60 / 60 / 55–60 (drop 0–5) | ~99 / 75–97 / 67–96 (drop 1–32) |
+| Tablet panel vsync (video oynarken) | **16,67 ms (60 Hz)** | **16,67 ms (60 Hz)** |
+
+- Tablet durağan ekranda 120 Hz (8,33 ms) raporluyor, ama video katmanı güncellenirken HarmonyOS paneli 60 Hz'e indiriyor (29 Eylül bulgusuyla aynı). Tablet üreticinin ölçümü: HEVC çözücü 1080p 258 fps, 4K 71 fps → 2800×1840'ta kabaca 105–115 fps.
+- Sonuç: bugün uçtan uca 120 fps **yok**; üç engel: (1) panel video sırasında 60 Hz (denenmemiş: `Surface.setFrameRate(120, FIXED_SOURCE)`), (2) Mac HEVC kodlayıcısı bu çözünürlükte gerçek zamanlı ayarla ~100 fps, (3) tablet çözücüsü sınırda.
+- 60 fps'te gösterim aralıkları çoğunlukla 16,7 ms, arada 33/50 ms (kaçan vsync) → takılmanın kaynağı; kare zamanlaması işi.

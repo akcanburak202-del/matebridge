@@ -13,7 +13,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-045](tasks/T-045-host-fps-experiment-knobs.md) | Mac — 120 fps deneyi için ayar düğmeleri (MATEBRIDGE_FPS, MATEBRIDGE_BITRATE_KBPS) ve kodlama süresi ölçümü | 5 | mac-host-dev | [T-017] |
+| [T-046](tasks/T-046-client-request-120hz.md) | Tablet — video yüzeyi için akış fps'inde yenileme iste (setFrameRate) ve gerçek panel hızını ölç | 5 | android-client-dev | [T-045] |
+| [T-047](tasks/T-047-host-encoder-throughput.md) | Mac — HEVC kodlayıcı hız ölçümü (2800×1840'ta 120 fps mümkün mü?) ve ayar denemeleri | 5 | mac-host-dev | [T-045] |
 
 ## done
 
@@ -61,3 +62,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-042](tasks/T-042-client-encryption.md) | Tablet — protokol v1 şifreleme (el sıkışma, eşleşme kodu ekranı, AES-GCM kayıtları, Keystore) | 4 | android-client-dev | [T-038] |
 | [T-043](tasks/T-043-host-pairing-preapproval.md) | Mac — eşleşme onayı tablet ayrılınca kaybolmasın (ön onay), Parsec'ten onaylanabilsin | 4 | mac-host-dev | [T-041] |
 | [T-044](tasks/T-044-client-store-key-on-pairing.md) | Tablet — eşleşme anahtarını PAIRING başında sakla (bağlantı koptuktan sonra onay için) | 4 | android-client-dev | [T-042] |
+| [T-045](tasks/T-045-host-fps-experiment-knobs.md) | Mac — 120 fps deneyi için ayar düğmeleri (MATEBRIDGE_FPS, MATEBRIDGE_BITRATE_KBPS) ve kodlama süresi ölçümü | 5 | mac-host-dev | [T-017] |

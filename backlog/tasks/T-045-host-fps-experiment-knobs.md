@@ -1,7 +1,7 @@
 ---
 id: T-045
 title: Mac — 120 fps deneyi için ayar düğmeleri (MATEBRIDGE_FPS, MATEBRIDGE_BITRATE_KBPS) ve kodlama süresi ölçümü
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-017]
@@ -41,3 +41,7 @@ Saf `VideoSettings.applyingExperimentKnobs(env)` (parseFps, parseBitrateKbps + m
 - **Varsayımlar:** MATEBRIDGE_FPS verilmişse tabletin max_refresh_hz değerini ezer (yoksa eski min(hz,60)). MaxKeyFrameIntervalDuration zaten saniye cinsinden (10 s), DataRateLimits bayt/sn (bit hızına bağlı); fps ile değişmesi gerekmedi. `cadence` satırında `enc_ms_p50_95` yerine `enc_ms_p50_95_99` + `enc_behind` (pencerede giriş-çıkış, >= 0) var. `stream_session` satırına refresh_hz ve bitrate_kbps eklendi.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek 90/120 fps: SCK 1/240 s aralığı, VT donanım kodlayıcının 2800x1840@120 yetişmesi (enc_behind, enc_ms p99), RealTime/ExpectedFrameRate readback, 120 Hz sanal ekran. Uygulama çalıştırılmadı.
 - **Açık sorular:**
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Deney düğmesi; varsayılan davranış değişmedi, `check.sh` ALL OK. Ölçüm sonuçları NOTES 2026-10-01 "120 fps ölçümü" → T-046, T-047.
