@@ -31,6 +31,8 @@ public struct OwedRelease: Equatable, Sendable {
         case button(MouseButton)
         case penLeave
         case scrollEnd
+        case key(UInt16)
+        case modifier(ModifierKey)
 
         init?(_ event: MacEvent) {
             switch event {
@@ -38,6 +40,10 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletProximity(_, let entering) where !entering: self = .penLeave
             case .mouse(let m) where m.kind == .up: self = .button(m.button)
             case .scroll(let s) where s.phase == .ended || s.phase == .cancelled: self = .scrollEnd
+            case .key(let k) where k.kind == .keyUp: self = .key(k.keyCode)
+            case .key(let k) where k.kind == .modifierUp:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { return nil }
+                self = .modifier(m)
             default: return nil
             }
         }
@@ -49,6 +55,11 @@ public struct OwedRelease: Equatable, Sendable {
             case .tabletPoint(let p) where p.kind == .down: self = .penUp
             case .mouse(let m) where m.kind == .down: self = .button(m.button)
             case .scroll(let s) where s.phase == .began: self = .scrollEnd
+            // A repeat is not an opening: its key went down before, and the batch that held that down decides.
+            case .key(let k) where k.kind == .keyDown && !k.isRepeat: self = .key(k.keyCode)
+            case .key(let k) where k.kind == .modifierDown:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { return nil }
+                self = .modifier(m)
             default: return nil
             }
         }
@@ -59,6 +70,8 @@ public struct OwedRelease: Equatable, Sendable {
             case .button(let b): b == .left ? 1 : 3 + Int(b.rawValue)
             case .penLeave: 2
             case .scrollEnd: 10
+            case .key(let code): 20 + Int(code)  // keys before modifiers, by code (any fixed order will do)
+            case .modifier(let m): 400 + Int(m.rawValue)
             }
         }
     }
@@ -162,6 +175,32 @@ public struct OwedRelease: Equatable, Sendable {
             due.append((slot.order, entry.event.placed(on: geometry)))
         }
         due.sort { $0.order < $1.order }
-        return due.map(\.event)
+        var events = due.map(\.event)
+        Self.reflowModifierFlags(&events)
+        return events
+    }
+
+    /// The owed modifier ups are replayed in slot order, not in the order they were produced, so the `flags` they were
+    /// produced with describe the wrong state: the last one replayed could still claim a modifier that an earlier
+    /// replay released, and a flagsChanged with such flags would leave that modifier looking held on the Mac. Each
+    /// replayed modifier up gets the flags of what remains held: the modifiers that were held and are not being
+    /// released here, plus the owed ones that come later in this replay. Caps Lock is carried over as it was.
+    static func reflowModifierFlags(_ events: inout [MacEvent]) {
+        var owed: [ModifierKey] = []
+        for event in events {
+            if case .key(let k) = event, k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) { owed.append(m) }
+        }
+        guard !owed.isEmpty else { return }
+        var remaining = Set(owed)
+        for index in events.indices {
+            guard case .key(var k) = events[index], k.kind == .modifierUp, let m = ModifierKey(rawValue: k.keyCode) else { continue }
+            remaining.remove(m)
+            let heldBefore = Set(ModifierKey.allCases.filter { k.flags.contains($0.side) })
+            let stays = heldBefore.subtracting(owed)
+            var flags = KeyFlags(holding: stays.union(remaining))
+            if k.flags.contains(.capsLock) { flags.insert(.capsLock) }
+            k.flags = flags
+            events[index] = .key(k)
+        }
     }
 }

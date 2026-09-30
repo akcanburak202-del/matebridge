@@ -18,7 +18,7 @@ import Testing
 /// Where an event is located, if it has a position.
 func eventPosition(_ e: MacEvent) -> DisplayPoint? {
     switch e {
-    case .tabletProximity: nil
+    case .tabletProximity, .key, .capsLock: nil
     case .tabletPoint(let p): p.position
     case .mouse(let m): m.position
     case .scroll(let s): s.position

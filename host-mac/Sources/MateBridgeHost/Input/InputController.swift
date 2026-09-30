@@ -30,6 +30,7 @@ public final class InputController: @unchecked Sendable {
     private let poster: MacEventPoster
     private let permission: AccessibilityChecking
     private let displays: DisplayProviding
+    private let capsLock: CapsLockControlling
     private let logger = SessionLogger(component: "input")
 
     // Everything below is touched only on `queue`.
@@ -54,10 +55,12 @@ public final class InputController: @unchecked Sendable {
     ///   - doubleClickInterval: seconds; the system setting by default.
     public init(poster: MacEventPoster = CGEventPoster(), permission: AccessibilityChecking = SystemAccessibility(),
                 displays: DisplayProviding = VirtualDisplayLocator(),
+                capsLock: CapsLockControlling = SystemCapsLock(),
                 doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) {
         self.poster = poster
         self.permission = permission
         self.displays = displays
+        self.capsLock = capsLock
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
@@ -112,6 +115,11 @@ public final class InputController: @unchecked Sendable {
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
             beginActivity()
+            // The user's key repeat settings as of now (System Settings > Keyboard), for this session's machine.
+            var machine = pipeline.nextMachineConfiguration
+            machine.keyRepeatDelayUs = Self.microseconds(NSEvent.keyRepeatDelay, fallback: machine.keyRepeatDelayUs)
+            machine.keyRepeatIntervalUs = Self.microseconds(NSEvent.keyRepeatInterval, fallback: machine.keyRepeatIntervalUs)
+            pipeline.setMachineConfiguration(machine)
             let now = HostClock.nowUs()
             flush(pipeline.sessionStarted(now: now, environment: environment()), now: now)
             log(.info, "input_session_start")
@@ -123,11 +131,13 @@ public final class InputController: @unchecked Sendable {
     public func sessionEnded() {
         queue.sync {
             let now = HostClock.nowUs()
+            let keys = pipeline.machine?.keyCounters ?? KeyCounters()  // the machine goes away with the session
             let events = pipeline.sessionEnded(now: now, environment: environment())
             flush(events, now: now)
             let d = pipeline.planner.counters
             log(.info, "input_session_end",
                 "messages=\(messages) events=\(eventsPosted) released=\(events.count) "
+                    + "key_msgs=\(keys.messages) unknown_keys=\(keys.unknown) repeats=\(keys.repeats) "
                     + "dropped_no_permission=\(d.droppedNoPermission - loggedDrops.droppedNoPermission) "
                     + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)")
             loggedDrops = d
@@ -147,9 +157,18 @@ public final class InputController: @unchecked Sendable {
         queue.sync {
             guard !stopped else { return }
             let now = HostClock.nowUs()
-            let env = environment()
+            var env = environment()
             messages += 1
+            var unknownBefore = 0
+            if case .key = message {
+                env.capsLockOn = capsLock.isOn()  // sampled for keyboard messages only
+                unknownBefore = pipeline.machine?.keyCounters.unknown ?? 0
+            }
             flush(pipeline.handle(message, now: now, environment: env), now: now)
+            // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
+            if let keys = pipeline.machine?.keyCounters, keys.unknown > unknownBefore {
+                log(.debug, "key_unknown", "identity=\(keys.lastUnknownIdentity.map(String.init) ?? "none")")
+            }
             rearmWatchdog()
         }
     }
@@ -200,6 +219,12 @@ public final class InputController: @unchecked Sendable {
     }
 
     // MARK: Queue-confined work
+
+    /// Seconds to microseconds for a repeat setting; the fallback when the system reports nonsense.
+    private static func microseconds(_ seconds: TimeInterval, fallback: UInt64) -> UInt64 {
+        guard seconds.isFinite, seconds > 0.01, seconds < 10 else { return fallback }
+        return UInt64(seconds * 1_000_000)
+    }
 
     /// Posts one batch through the poster seam. A batch that releases something gets a fresh permission check first:
     /// the 200 ms cache must not let a release go out after the permission is gone and be forgotten, and nothing can be

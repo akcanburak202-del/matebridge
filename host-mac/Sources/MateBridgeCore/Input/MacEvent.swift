@@ -92,12 +92,40 @@ public struct MacScroll: Equatable, Sendable {
     }
 }
 
+/// A keyboard event. `modifierDown` / `modifierUp` are `flagsChanged` events of `keyCode`; `flags` is the complete
+/// modifier state after the event (for key events: while it happens).
+public struct MacKey: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case keyDown
+        case keyUp
+        case modifierDown
+        case modifierUp
+    }
+
+    public var kind: Kind
+    /// macOS virtual keycode (`kVK_*`).
+    public var keyCode: UInt16
+    public var flags: KeyFlags
+    /// `kCGKeyboardEventAutorepeat`: a host-generated repeat of a held key.
+    public var isRepeat: Bool
+
+    public init(kind: Kind, keyCode: UInt16, flags: KeyFlags, isRepeat: Bool = false) {
+        self.kind = kind
+        self.keyCode = keyCode
+        self.flags = flags
+        self.isRepeat = isRepeat
+    }
+}
+
 /// One event for the CGEvent poster, fully resolved: global positions, real units, click counts.
 public enum MacEvent: Equatable, Sendable {
     case tabletProximity(tool: PenTool, entering: Bool)
     case tabletPoint(MacTabletPoint)
     case mouse(MacMouse)
     case scroll(MacScroll)
+    case key(MacKey)
+    /// Make the Mac's Caps Lock state this (an absolute state, not a toggle, so posting it twice is harmless).
+    case capsLock(on: Bool)
 }
 
 /// What the Host knows right now. Sampled by the Host before every call; the Core never queries the system.
@@ -109,11 +137,15 @@ public struct InjectionEnvironment: Equatable, Sendable {
     /// A release is owed (or a replay is unconfirmed): nothing new may open on the Mac until it is posted, or a newer
     /// press could be overtaken by the older release. Set by `InputPipeline`, never by the Host.
     public var opensBlocked: Bool
+    /// The Mac's Caps Lock state, sampled by the Host for keyboard messages; nil when not sampled (then no Caps Lock
+    /// event is produced).
+    public var capsLockOn: Bool?
 
-    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false) {
+    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil) {
         self.canInject = canInject
         self.geometry = geometry
         self.opensBlocked = opensBlocked
+        self.capsLockOn = capsLockOn
     }
 
     /// New input may start.

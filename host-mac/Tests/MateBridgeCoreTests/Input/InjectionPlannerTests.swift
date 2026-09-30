@@ -38,9 +38,11 @@ struct MacEventModel {
     var penContact = false
     var buttons: Set<MouseButton> = []
     var scrollOpen = false
+    var keys: Set<UInt16> = []
+    var modifiers: Set<ModifierKey> = []
     private(set) var violations: [String] = []
 
-    var isIdle: Bool { proximity == nil && !penContact && buttons.isEmpty && !scrollOpen }
+    var isIdle: Bool { proximity == nil && !penContact && buttons.isEmpty && !scrollOpen && keys.isEmpty && modifiers.isEmpty }
 
     private mutating func fail(_ text: String, _ e: MacEvent) { violations.append("\(text): \(e)") }
 
@@ -101,6 +103,33 @@ struct MacEventModel {
                 if !scrollOpen { fail("scroll end while closed", event) }
                 scrollOpen = false
             }
+        case .capsLock:
+            break
+        case .key(let k):
+            switch k.kind {
+            case .keyDown:
+                if k.isRepeat {
+                    if !keys.contains(k.keyCode) { fail("repeat of a key that is not down", event) }
+                } else {
+                    if keys.contains(k.keyCode) { fail("key already down", event) }
+                    keys.insert(k.keyCode)
+                }
+            case .keyUp:
+                if !keys.contains(k.keyCode) { fail("key up without down", event) }
+                keys.remove(k.keyCode)
+            case .modifierDown:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { fail("not a modifier", event); return }
+                if modifiers.contains(m) { fail("modifier already down", event) }
+                modifiers.insert(m)
+            case .modifierUp:
+                guard let m = ModifierKey(rawValue: k.keyCode) else { fail("not a modifier", event); return }
+                if !modifiers.contains(m) { fail("modifier up without down", event) }
+                modifiers.remove(m)
+            }
+            // The flags are exactly the modifiers the Mac holds after the event (Caps Lock aside).
+            var flags = k.flags
+            flags.remove(.capsLock)
+            if flags != KeyFlags(holding: modifiers) { fail("flags do not match the held modifiers", event) }
         }
     }
 }

@@ -10,6 +10,8 @@ extension MacEvent {
         case .tabletPoint(let p): p.kind == .up
         case .mouse(let m): m.kind == .up
         case .scroll(let s): s.phase == .ended || s.phase == .cancelled
+        case .key(let k): k.kind == .keyUp || k.kind == .modifierUp
+        case .capsLock: false
         }
     }
 
@@ -24,7 +26,7 @@ extension MacEvent {
     /// The position of an event that has one (proximity events have none).
     public var position: DisplayPoint? {
         switch self {
-        case .tabletProximity: nil
+        case .tabletProximity, .key, .capsLock: nil
         case .tabletPoint(let p): p.position
         case .mouse(let m): m.position
         case .scroll(let s): s.position
@@ -34,7 +36,7 @@ extension MacEvent {
     /// The same event at another position.
     func moved(to p: DisplayPoint) -> MacEvent {
         switch self {
-        case .tabletProximity: return self
+        case .tabletProximity, .key, .capsLock: return self
         case .tabletPoint(var e):
             e.position = p
             return .tabletPoint(e)

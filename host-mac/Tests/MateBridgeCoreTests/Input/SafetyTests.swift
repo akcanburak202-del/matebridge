@@ -428,11 +428,9 @@ struct ScrollTests {
 
 @Suite("MISC: scope")
 struct ScopeTests {
-    @Test("MISC-1 messages that are not pen, pointer or scroll input produce no actions (keyboard is phase 3)")
+    @Test("MISC-1 messages that are not pen, pointer, scroll or key input produce no actions (keyboard: KEY-* tests)")
     func misc1_ignoredMessages() {
         var d = Driver()
-        let key = Message.key(KeyEvent(timeUs: 0, scanCode: 30, androidKeyCode: 29, action: .down, capsLockOn: false))
-        #expect(d.send(key).isEmpty)
         #expect(d.send(.ping(Ping(seq: 1, senderTimeUs: 0))).isEmpty)
         #expect(d.send(.keyframeRequest(.startup)).isEmpty)
         #expect(!d.machine.hasHeldInput)
