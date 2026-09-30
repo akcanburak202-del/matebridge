@@ -1,0 +1,97 @@
+import Foundation
+
+/// One encoder configuration tried by `--encode-bench` (pure data; the host maps it to VideoToolbox properties).
+public struct EncodeBenchConfig: Equatable, Sendable {
+    public var name: String
+    /// nil = do not set the property.
+    public var realTime: Bool? = true
+    public var maximizePowerEfficiency: Bool? = nil
+    public var lowLatencyRateControl = true
+    public var prioritizeSpeed = true
+    public var expectedFps: Int? = nil   // nil = the bench fps
+    public var main10 = false
+    public var bitrateKbps = 30_000
+    public var sessions = 1
+    /// Frames allowed inside one session at a time.
+    public var inFlight = 3
+    /// Set a DataRateLimits cap of 2x the average (what `HEVCEncoder` does today).
+    public var dataRateLimits = true
+
+    public init(name: String) { self.name = name }
+
+    /// Named catalog. "baseline" mirrors `HEVCEncoder` today.
+    public static let catalog: [EncodeBenchConfig] = {
+        var all: [EncodeBenchConfig] = []
+        func add(_ n: String, _ f: (inout EncodeBenchConfig) -> Void) {
+            var c = EncodeBenchConfig(name: n); f(&c); all.append(c)
+        }
+        add("baseline") { _ in }
+        add("realtime-off") { $0.realTime = false }
+        add("realtime-unset") { $0.realTime = nil }
+        add("power-off") { $0.maximizePowerEfficiency = false }
+        add("no-lowlat") { $0.lowLatencyRateControl = false }
+        add("fps120") { $0.expectedFps = 120 }
+        add("main10") { $0.main10 = true }
+        add("no-prioritize") { $0.prioritizeSpeed = false }
+        add("no-ratelimit") { $0.dataRateLimits = false }
+        add("br20") { $0.bitrateKbps = 20_000 }
+        add("br50") { $0.bitrateKbps = 50_000 }
+        add("dual") { $0.sessions = 2 }
+        add("dual-fps120") { $0.sessions = 2; $0.expectedFps = 120 }
+        add("combo") {
+            $0.realTime = false; $0.maximizePowerEfficiency = false; $0.expectedFps = 120; $0.lowLatencyRateControl = false
+        }
+        add("nolat-fps120") { $0.lowLatencyRateControl = false; $0.expectedFps = 120 }
+        add("nolat-rtoff") { $0.lowLatencyRateControl = false; $0.realTime = false }
+        add("nolat-power-off") { $0.lowLatencyRateControl = false; $0.maximizePowerEfficiency = false }
+        add("nolat-fps120-rtoff") { $0.lowLatencyRateControl = false; $0.expectedFps = 120; $0.realTime = false }
+        add("nolat-fps120-inflight1") { $0.lowLatencyRateControl = false; $0.expectedFps = 120; $0.inFlight = 1 }
+        add("nolat-fps120-inflight6") { $0.lowLatencyRateControl = false; $0.expectedFps = 120; $0.inFlight = 6 }
+        add("nolat-rtoff-inflight2") { $0.lowLatencyRateControl = false; $0.realTime = false; $0.inFlight = 2 }
+        add("baseline-inflight1") { $0.inFlight = 1 }
+        add("baseline-inflight6") { $0.inFlight = 6 }
+        return all
+    }()
+
+    public static func named(_ name: String) -> EncodeBenchConfig? { catalog.first { $0.name == name } }
+}
+
+/// Arguments of `MateBridgeApp --encode-bench [--fps N] [--seconds S] [--config NAME]...`.
+public struct EncodeBenchOptions: Equatable, Sendable {
+    public var fps = 120
+    public var seconds = 5.0
+    public var configs: [EncodeBenchConfig] = []
+
+    public struct ParseError: Error, Equatable, Sendable { public let message: String }
+
+    /// nil when `--encode-bench` is absent. No `--config` means the whole catalog.
+    public static func parse(_ args: [String]) -> Result<EncodeBenchOptions, ParseError>? {
+        guard args.contains("--encode-bench") else { return nil }
+        var o = EncodeBenchOptions()
+        var j = 0
+        while j < args.count {
+            switch args[j] {
+            case "--fps":
+                guard j + 1 < args.count, let v = Int(args[j + 1]), (1...240).contains(v) else {
+                    return .failure(ParseError(message: "--fps needs an integer 1...240"))
+                }
+                o.fps = v; j += 1
+            case "--seconds":
+                guard j + 1 < args.count, let v = Double(args[j + 1]), v > 0, v <= 600 else {
+                    return .failure(ParseError(message: "--seconds needs a number in (0, 600]"))
+                }
+                o.seconds = v; j += 1
+            case "--config":
+                guard j + 1 < args.count else { return .failure(ParseError(message: "--config needs a name")) }
+                guard let c = EncodeBenchConfig.named(args[j + 1]) else {
+                    return .failure(ParseError(message: "unknown config '\(args[j + 1])'"))
+                }
+                o.configs.append(c); j += 1
+            default: break
+            }
+            j += 1
+        }
+        if o.configs.isEmpty { o.configs = EncodeBenchConfig.catalog }
+        return .success(o)
+    }
+}
