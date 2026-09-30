@@ -79,6 +79,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config` |
 | 0x04 | BYE | iki yön | kontrol | `bye` |
 | 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs` |
+| 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -171,6 +172,25 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 - Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz).
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
 - İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
+
+### 0x06 CLIPBOARD (iki yön, kontrol)
+
+Pano paylaşımı (Faz 5): bir taraftaki panoya kopyalanan **metin** diğer tarafın panosuna yazılır.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| seq | u32 | Gönderenin artan sayacı (yankı önleme ve log için) |
+| kind | u8 | `0` EMPTY (pano temizlendi/metin dışı içerik; alıcı bir şey yapmaz), `1` TEXT_UTF8. Diğer değerler: alıcı yok sayar (bilgi amaçlı alan). |
+| reserved | u8 | |
+| length | u16 | `data` uzunluğu, bayt |
+| data | bytes[length] | UTF-8 metin, sonlandırıcı yok. En çok **60 000 bayt** (kontrol payload sınırının altında). Daha uzun metin gönderilmez (gönderen yerelde bir kez uyarır). Geçersiz UTF-8: alıcı yok sayar. |
+
+**Kurallar (iki taraf):**
+- Yalnızca kullanıcı panoya yeni bir şey koyunca gönderilir (Mac: `NSPasteboard.changeCount` değişimi; Android: `OnPrimaryClipChangedListener` ya da uygulama öne gelince değişim denetimi). Açılışta mevcut pano gönderilmez.
+- **Yankı önleme:** alıcı, karşı taraftan gelen metni panoya yazar ve bu yazmanın doğurduğu değişikliği geri göndermez (son alınan metnin özetini tutar; aynı metin geri gönderilmez).
+- Parola yöneticisi gibi "gizli" işaretli içerik (Mac: `org.nspasteboard.ConcealedType` ya da `TransientType`; Android: `ClipDescription.EXTRA_IS_SENSITIVE`) **gönderilmez**.
+- Özellik iki tarafta da ayarla kapatılabilir (varsayılan: açık). Pano içeriği **asla loglanmaz**; yalnızca uzunluk ve yön (`ev=clipboard dir=… bytes=…`).
+- Mesaj yalnızca `ACCEPTED` sonrası (şifreli kanalda, §9) gider.
 
 ### 0x10 PEN (C→H)
 
@@ -503,7 +523,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `clipboard_text`, `clipboard_empty`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
