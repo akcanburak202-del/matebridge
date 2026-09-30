@@ -58,6 +58,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private var flushScheduled = false
 
     let settings: VideoSettings
+    /// Encoder configuration in use (for diagnostics).
+    let profile: EncoderProfile
     private let meter: CadenceMeter?
     /// `VTSessionSetProperty` failures at creation (key: OSStatus), for diagnostics.
     private(set) var propertyFailures: [String] = []
@@ -72,9 +74,14 @@ final class HEVCEncoder: @unchecked Sendable {
         self.output = output
         self.onFailure = onFailure
 
-        // T-047 bench: at 2800x1840 the low-latency rate control + RealTime path tops out at ~100 fps; without both
-        // the hardware encoder reaches 120 fps paced (6 ms p50). Only used for the 120 fps experiment mode.
-        let highRate = settings.fps >= 120
+        // T-047/T-053 bench: at 2800x1840 the low-latency rate control + RealTime path costs ~9-13 ms per frame and
+        // tops out near 100 fps; without both the hardware encoder needs ~6 ms. Frame sizes stay even enough (p99 <=
+        // 4x mean on moving content), so `.fast` is the default at every fps; MATEBRIDGE_ENCODER=llrc|fast overrides.
+        let profile = EncoderProfile.resolve(
+            fps: settings.fps, override: EncoderProfile.parse(ProcessInfo.processInfo.environment["MATEBRIDGE_ENCODER"]),
+            defaultProfile: .fast)
+        self.profile = profile
+        let highRate = profile == .fast
         var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         if !highRate { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
         var s: VTCompressionSession?

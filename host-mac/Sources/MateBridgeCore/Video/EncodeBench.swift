@@ -26,6 +26,9 @@ public struct EncodeBenchConfig: Equatable, Sendable {
             var c = EncodeBenchConfig(name: n); f(&c); all.append(c)
         }
         add("baseline") { _ in }
+        // T-053: the two app profiles at the app's in-flight depth.
+        add("llrc") { $0.inFlight = 2 }
+        add("fast") { $0.lowLatencyRateControl = false; $0.realTime = false; $0.inFlight = 2 }
         add("realtime-off") { $0.realTime = false }
         add("realtime-unset") { $0.realTime = nil }
         add("power-off") { $0.maximizePowerEfficiency = false }
@@ -56,11 +59,16 @@ public struct EncodeBenchConfig: Equatable, Sendable {
     public static func named(_ name: String) -> EncodeBenchConfig? { catalog.first { $0.name == name } }
 }
 
+public enum EncodeBenchContent: String, Equatable, Sendable { case scroll, patch }
+
 /// Arguments of `MateBridgeApp --encode-bench [--fps N] [--seconds S] [--config NAME]...`.
 public struct EncodeBenchOptions: Equatable, Sendable {
     public var fps = 120
     public var seconds = 5.0
     public var configs: [EncodeBenchConfig] = []
+    /// `scroll`: whole frame moves every frame (worst case). `patch`: static screen with a small changing region
+    /// (pen/typing-like, closer to typical use).
+    public var content = EncodeBenchContent.scroll
 
     public struct ParseError: Error, Equatable, Sendable { public let message: String }
 
@@ -81,6 +89,11 @@ public struct EncodeBenchOptions: Equatable, Sendable {
                     return .failure(ParseError(message: "--seconds needs a number in (0, 600]"))
                 }
                 o.seconds = v; j += 1
+            case "--content":
+                guard j + 1 < args.count, let v = EncodeBenchContent(rawValue: args[j + 1]) else {
+                    return .failure(ParseError(message: "--content needs scroll|patch"))
+                }
+                o.content = v; j += 1
             case "--config":
                 guard j + 1 < args.count else { return .failure(ParseError(message: "--config needs a name")) }
                 guard let c = EncodeBenchConfig.named(args[j + 1]) else {
