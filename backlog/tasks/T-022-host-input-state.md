@@ -1,7 +1,7 @@
 ---
 id: T-022
 title: Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli)
-status: todo
+status: in-progress
 phase: 2
 owner: mac-host-dev
 depends_on: [T-014]
@@ -38,7 +38,19 @@ PROTOCOL.md §4 (PEN durum makinesi, POINTER_*, SCROLL, PEN_GESTURE, RELEASE_ALL
 
 ## Plan
 
-_(Ajan doldurur.)_
+Tek dosya ailesi, saf ve tablo güdümlü: `InputStateMachine` (struct, `Sendable`, saat yok; `now` mikrosaniye parametre). Çıktı `InjectAction` listesi; koordinat dönüşümü yok (normalize u16 aynen geçer).
+
+**Dosyalar** (`host-mac/Sources/MateBridgeCore/Input/`): `InjectAction.swift` (çıktı türleri), `InputStateMachine.swift` (durum + genel API: `handle(_:now:)`, `tick(now:)`, `releaseAll(_:now:)`), `InputStateMachine+Pen.swift`, `+Pointer.swift`, `+Scroll.swift`. Testler `host-mac/Tests/MateBridgeCoreTests/Input/`.
+
+**Çıktı sözleşmesi (T-023 tüketir):** `penProximity(tool, entering)`, `penHover/penDown/penDrag/penUp(tool, PenPoint)`; `mouseMove(motion, dragging)` (imleci taşır, önce), `mouseButton(button, down)` (imlecin o anki yerinde), `scroll(phase, dx, dy)`, `scrollWheel(dx, dy)`. `PenPoint` = normalize x/y, basınç u16, ham i16 eğim. Bir mesajdaki hareket her zaman düğme geçişlerinden önce gelir.
+
+**Durum:** kalem (etkin araç, temas, son nokta, araç başına kilit), sol düğme sahibi (`pen/rel/mouse/touch`), kaynak başına bildirilen düğmeler (`held`, release-all'da SİLİNMEZ = işaretçi kilidi) ve Mac'e katkı veren sağ/orta/geri/ileri (`contributing`, OR), açık scroll, silgi modu, son kalem örneği zamanı (parmak kapısı + watchdog), son scroll zamanı.
+
+**Kurallar → test adı eşlemesi** (test adları kural kimliğiyle başlar; Handoff'ta tablo): PEN-1..PEN-10 (§4 tablosu satırları + STROKE_START + CONTACT/IN_RANGE=0), LATCH-*, WD-PEN, WD-SCROLL, OWN-* (§7 sahiplik), OR-*, GATE-* (parmak kapısı), REL-* (release-all her tetikleyici + idempotans), ERASER-* (karar 0006), SCROLL-*, FUZZ-* (seed'li SplitMix64; gölge Mac modeli: "her down'un up'ı var", çift down/up yok, release-all sonrası hiçbir şey basılı değil, makine durumu = modelin durumu).
+
+**Güvenli okuma seçimleri** (PROTOCOL belirsiz olan yerler, Handoff'ta işaretlenecek): (1) release-all sonrası işaretçi kaynaklarının bildirilen düğme durumu korunur, yani bayat `LEFT` mesajı yeni basış sayılmaz; (2) kalem temasında sahip olmayan kaynakların imleç hareketi bastırılır; (3) araç değişiminde temas sürüyorsa yeni araç için kilit kurulur (vuruş ortası yeni vuruş olmaz); (4) temas sürerken gelen ikinci `STROKE_START` = up + down; (5) DOUBLE_TAP silgi modunu çevirir, araç değişimi bir sonraki kalem örneğinde uygulanır.
+
+Sıra: önce bu plan commit'i, sonra kod + testler, `check.sh`, Handoff.
 
 ## Handoff
 
