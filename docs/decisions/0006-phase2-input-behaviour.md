@@ -14,3 +14,4 @@ Faz 2 başlamadan kullanıcıya üç tercih soruldu (T-025).
 ## Sonuçlar
 - Çift dokunma için uygulamaya özel kısayol gerekmez. Tabletin kendi silgi ucu (`TOOL_TYPE_ERASER`) gelirse o da doğrudan silgi olur.
 - Tablette silgi modunu gösteren küçük bir gösterge ileride eklenebilir (Faz 5 kısayol çubuğu).
+- **Güncelleme (2026-09-30, T-022/T-024 incelemesi):** 1 sn'lik süre host'ta son PEN mesajının **alındığı** andan sayılır. İstemci kendi kapısını son gönderdiği PEN mesajından sonra **1,2 sn** tutar; 200 ms'lik pay, ağ gecikmesi değişse de istemcinin gönderdiği basışın host'ta reddedilmemesi içindir (PROTOCOL §7). Çizim sırasında çift dokunmayla araç değişirse o vuruşun kalanı çizilmez (PROTOCOL §4).

@@ -1,7 +1,7 @@
 ---
 id: T-024
 title: Tablet kalem ve dokunma yakalama — PEN toplu örnekler, POINTER_ABS, avuç reddi, RELEASE_ALL
-status: review
+status: done
 phase: 2
 owner: android-client-dev
 depends_on: [T-015]
@@ -113,3 +113,10 @@ Mimari: MotionEvent'ten bağımsız saf çekirdek `input/` altında (JVM testli)
   2. Video üzerinde uzun basmayla istatistik katmanı kaybı (yukarıda 9) için yeni bir hareket lazım mı?
   3. Host (T-022/T-023) için notlar (çoğu artık PROTOCOL.md'de): `SCROLL CHANGED(0,0)` canlılık mesajı ve zorla bırakmada `CANCELLED`; `PEN.BUTTON` yok sayılmalı; kalem ilk hover örneği (`flags=IN_RANGE`, enter) her zaman ayrı bir mesaj olarak gelir (birleştirilmez); `RELEASE_ALL(USER)` video/panel geçişinde de gelebilir.
   4. PROTOCOL §4 "menzil canlılığı" ile bu implementasyon: canlılık tekrarları 25 ms tick'e yuvarlandığından 100-125 ms aralıkla gider (host 500 ms watchdog için yeterli).
+
+## Orkestratör notu (merge, 2026-09-30)
+
+- İnceleme: `reviewer` + Codex (üç tur). Merge edilen baş: `92506ee`. `./scripts/check.sh` dalda ve merge sonrası `main`'de geçti.
+- **Parmak kapısı istemcide 1,2 sn** (kabul kriterindeki 1 sn yerine): host'un 1 sn'lik kapısına karşı 200 ms pay, PROTOCOL §7. Karar 0006'ya not düşüldü.
+- **Kabul edilmeyen bulgu (Codex, son tur):** ikinci bir kalem cihazının bırakışı etkin vuruşu bitirebilir. Tablette tek fiziksel kalem var ve kural "bırakış hiçbir zaman yok sayılmaz" (PROTOCOL §4); cihaz eşleşmesi şartı gerçek bir bırakışı yutma riski getirirdi. Birden çok kalem desteklenirse yeniden ele alınır.
+- Cihazda doğrulanmadı: `MotionEventAdapter` ve `MainActivity` yönlendirmesi yalnızca derlendi. T-025'e devredildi.
