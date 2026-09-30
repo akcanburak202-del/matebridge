@@ -317,6 +317,50 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
     }
 }
 
+@Suite struct TakeoverProofTests {
+    @Test func realClientProvesWithASealedPingAndOnlyThenTakesOver() throws {
+        let store = InMemoryPairKeyStore(keys: [device(1): pairKey])
+        var m = makeMachine(store: store, approved: [device(1)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, TestClient(device: 1).message, now: 0)
+
+        var client = TestClient(device: 1, eph: EphemeralKeyPair())
+        _ = m.connectionOpened(B, now: 1)
+        let hello = m.received(B, client.message, now: 1)
+        guard case .send(B, .helloAck(let ack))? = hello.first else { Issue.record("no ack"); return }
+        #expect(ack.status == .accepted && ack.keyMode == .paired)
+        try client.receiveFirstAck(ack, pairKey: pairKey)
+        var inbound = ControlInbound()  // what SessionServer does with startEncryption
+        for case .startEncryption(B, let keys) in hello { try inbound.enableEncryption(key: keys.c2h) }
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+        #expect(m.scheduleForTesting(A)?.prkBytes != nil)
+
+        // Garbage instead of a sealed record is no proof (the server would close with record_auth_failed).
+        var forged = inbound
+        forged.append([17, 0, 0, 0] + [UInt8](repeating: 1, count: 17))
+        #expect(throws: CryptoError.authenticationFailed) { try forged.nextMessage() }
+
+        inbound.append(try client.seal(.ping(Ping(seq: 1, senderTimeUs: 0))))
+        let first = try #require(try inbound.nextMessage())
+        let proof = m.received(B, first, now: 2)
+        #expect(proof.contains(.releaseInput(A, .superseded)) && proof.contains(.send(A, .bye(.superseded))))
+        #expect(proof.contains { if case .sessionStarted(B, _, _, _) = $0 { true } else { false } })
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+    }
+}
+
+@Suite struct HostIdentityPolicyTests {
+    @Test func allowPairedFalseNeverAnswersPairedEvenWithAKey() throws {
+        let store = InMemoryPairKeyStore(keys: [device(1): pairKey])
+        var m = makeMachine(store: store, approved: [device(1)])
+        m.configuration.allowPaired = false
+        _ = m.connectionOpened(A, now: 0)
+        let actions = m.received(A, TestClient(device: 1).message, now: 0)
+        guard case .send(_, .helloAck(let ack))? = actions.first else { Issue.record("no ack"); return }
+        #expect(ack.keyMode == .pairing && ack.status == .pendingApproval)
+    }
+}
+
 @Suite struct VideoKeyTests {
     private func activeMachine() throws -> (SessionMachine, TestClient) {
         let store = InMemoryPairKeyStore(keys: [device(1): pairKey])
@@ -329,51 +373,47 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         return (m, client)
     }
 
+    private func attach(_ m: inout SessionMachine, _ vid: ConnectionID, _ nonce: [UInt8]) -> (proveKey: SecretBytes?, keys: VideoKeys?) {
+        _ = m.videoOpened(vid, now: 0)
+        var prove: SecretBytes?
+        for case .videoProve(_, let k) in m.videoHello(vid, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce), now: 0) {
+            prove = k
+        }
+        var keys: VideoKeys?
+        if prove != nil { for case .videoAttached(_, _, _, _, let k) in m.videoProven(vid, now: 0) { keys = k } }
+        return (prove, keys)
+    }
+
     @Test func videoKeysDeriveFromThePrkAndTheNonceAndMatchTheClient() throws {
         var (m, client) = try activeMachine()
         let n1 = [UInt8](repeating: 1, count: 16), n2 = [UInt8](repeating: 2, count: 16)
-        _ = m.videoOpened(V, now: 0)
-        let first = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: n1), now: 0)
-        _ = m.videoOpened(V2, now: 0)
-        let second = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: n2), now: 0)
-        func keys(_ a: [SessionAction]) -> VideoKeys? {
-            for case .videoAttached(_, _, _, _, let k) in a { return k }
-            return nil
-        }
-        let k1 = try #require(keys(first)), k2 = try #require(keys(second))
+        let first = attach(&m, V, n1), second = attach(&m, V2, n2)
+        let k1 = try #require(first.keys), k2 = try #require(second.keys)
         #expect(k1 == client.schedule!.videoKeys(nonce: n1))
         #expect(k2 == client.schedule!.videoKeys(nonce: n2))
-        #expect(k1 != k2)
-        #expect(k1.h2c != k1.c2h)
+        // The proof the host waits for is sealed by the client under c2h.
+        #expect(first.proveKey == client.schedule!.videoKeys(nonce: n1)!.c2h)
+        #expect(k1 != k2 && k1.h2c != k1.c2h)
     }
 
     @Test func aReplayedVideoNonceIsRefusedSoAKeyAndNonceNeverEncryptTwoStreams() throws {
         var (m, _) = try activeMachine()
         let n = [UInt8](repeating: 7, count: 16)
-        _ = m.videoOpened(V, now: 0)
-        #expect(m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: n), now: 0).contains {
-            if case .videoAttached = $0 { true } else { false }
-        })
-        _ = m.videoOpened(V2, now: 1)
-        let replay = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: n), now: 1)
-        #expect(replay.contains(.closeVideo(V2)))
-        #expect(!replay.contains { if case .videoAttached = $0 { true } else { false } })
-        // The refused replay did not displace the legitimate connection.
-        #expect(!replay.contains(.closeVideo(V)))
+        #expect(attach(&m, V, n).keys != nil)
+        let replay = attach(&m, V2, n)
+        #expect(replay.proveKey == nil && replay.keys == nil)
     }
 
-    @Test func videoAttachesAreCappedPerSession() throws {
+    @Test func prkIsWipedWhenTheProvingTakeoverIsDiscarded() throws {
         var (m, _) = try activeMachine()
-        m.configuration.maxVideoAttaches = 3
-        var attached = 0
-        for i in 0..<6 {
-            let vid = ConnectionID(200 + UInt64(i))
-            _ = m.videoOpened(vid, now: 0)
-            let actions = m.videoHello(vid, VideoHello(configID: 1, sessionID: 77,
-                                                       videoNonce: [UInt8](repeating: UInt8(i), count: 16)), now: 0)
-            if actions.contains(where: { if case .videoAttached = $0 { true } else { false } }) { attached += 1 }
-        }
-        #expect(attached == 3)
+        m.configuration.releaseSilenceUs = 1000 * sec; m.configuration.closeSilenceUs = 1000 * sec
+        _ = m.connectionOpened(B, now: 1)
+        _ = m.received(B, TestClient(device: 1, eph: EphemeralKeyPair()).message, now: 1)
+        let proving = try #require(m.scheduleForTesting(B))
+        #expect(proving.prkBytes != nil)
+        _ = m.tick(now: 7 * sec)
+        #expect(proving.prkBytes == nil)
+        #expect(m.scheduleForTesting(A)?.prkBytes != nil)  // the live session keeps its keys
     }
 
     @Test func prkIsWipedWhenTheSessionEnds() throws {
@@ -416,6 +456,8 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         let old = try #require(m.scheduleForTesting(A))
         _ = m.connectionOpened(B, now: 1)
         _ = m.received(B, TestClient(device: 1, eph: EphemeralKeyPair()).message, now: 1)
+        #expect(old.prkBytes != nil)  // not before the new connection proved itself
+        _ = m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 2)
         #expect(old.prkBytes == nil)
         #expect(m.scheduleForTesting(B)?.prkBytes != nil)
     }
@@ -433,6 +475,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         _ = server.machine.videoOpened(V, now: 1)
         server.apply(server.machine.videoHello(V, VideoHello(configID: 1, sessionID: 77,
                                                              videoNonce: [UInt8](repeating: 3, count: 16)), now: 1))
+        server.apply(server.machine.videoProven(V, now: 1))
         _ = server.machine.recordAuthFailed(A, counter: 4)
 
         let s = client.schedule!

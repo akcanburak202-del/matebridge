@@ -6,6 +6,7 @@ private let sec: UInt64 = 1_000_000
 private let A = ConnectionID(1)
 private let B = ConnectionID(2)
 private let V = ConnectionID(100)
+private let V2 = ConnectionID(101)
 
 private func device(_ n: UInt8) -> DeviceID { DeviceID(bytes: [UInt8](repeating: n, count: 16))! }
 
@@ -42,6 +43,14 @@ private func isRelease(_ a: SessionAction) -> Bool { if case .releaseInput = a {
 private func isDeliver(_ a: SessionAction) -> Bool { if case .deliver = a { true } else { false } }
 
 private func nonce(_ n: UInt8) -> [UInt8] { [UInt8](repeating: n, count: 16) }
+
+/// VIDEO_HELLO followed by the authenticated PING: returns what `videoProven` did.
+@discardableResult
+private func attachVideo(_ m: inout SessionMachine, _ vid: ConnectionID, nonce n: UInt8, now: UInt64 = 0) -> [SessionAction] {
+    _ = m.videoOpened(vid, now: now)
+    _ = m.videoHello(vid, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(n)), now: now)
+    return m.videoProven(vid, now: now)
+}
 
 private func keyDown() -> Message {
     .key(KeyEvent(timeUs: 1, scanCode: 30, androidKeyCode: 29, action: .down, capsLockOn: false))
@@ -175,31 +184,83 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(ackStatuses(m.received(B, hello(2), now: 1), to: B) == [.busy])
     }
 
-    @Test func sameDeviceTakesOverAndOldSessionIsReleasedFirst() {
+    @Test func sameDeviceTakeoverWaitsForProofThenReleasesTheOldSessionFirst() {
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
         _ = m.connectionOpened(B, now: 5)
-        let actions = m.received(B, hello(1), now: 5)
-        let idxRelease = actions.firstIndex { $0 == .releaseInput(A, .superseded) }
-        let idxBye = actions.firstIndex { $0 == .send(A, .bye(.superseded)) }
-        let idxClose = actions.firstIndex { $0 == .close(A) }
-        let idxAck = actions.firstIndex { if case .send(B, .helloAck) = $0 { true } else { false } }
-        #expect(idxRelease != nil && idxBye != nil && idxClose != nil && idxAck != nil)
-        if let r = idxRelease, let b = idxBye, let c = idxClose, let a = idxAck {
-            #expect(r < b && b < c && c < a)
+        let hello = m.received(B, hello(1), now: 5)
+        // The new connection is answered ACCEPTED (PAIRED) but the old session is untouched.
+        #expect(ackStatuses(hello, to: B) == [.accepted])
+        #expect(!hello.contains { if case .releaseInput = $0 { true } else { false } })
+        #expect(!hello.contains(.close(A)) && !hello.contains(.send(A, .bye(.superseded))))
+        #expect(!hello.contains { if case .sessionStarted = $0 { true } else { false } })
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+        // The first authenticated record proves key possession: release, BYE, close, then activate, then the record.
+        let proof = m.received(B, .ping(Ping(seq: 4, senderTimeUs: 9)), now: 6)
+        let idxRelease = proof.firstIndex { $0 == .releaseInput(A, .superseded) }
+        let idxBye = proof.firstIndex { $0 == .send(A, .bye(.superseded)) }
+        let idxClose = proof.firstIndex { $0 == .close(A) }
+        let idxStart = proof.firstIndex { if case .sessionStarted(B, _, _, _) = $0 { true } else { false } }
+        let idxPong = proof.firstIndex { $0 == .send(B, .pong(Pong(seq: 4, echoTimeUs: 9, responderTimeUs: 6))) }
+        #expect(idxRelease != nil && idxBye != nil && idxClose != nil && idxStart != nil && idxPong != nil)
+        if let r = idxRelease, let b = idxBye, let c = idxClose, let a = idxStart, let p = idxPong {
+            #expect(r < b && b < c && c < a && a < p)
         }
-        #expect(ackStatuses(actions, to: B) == [.accepted])
+        #expect(sent(proof, to: B).contains(.streamConfig(sampleConfig)))
         // Late traffic from the old connection is ignored.
-        #expect(m.received(A, keyDown(), now: 6).isEmpty)
+        #expect(m.received(A, keyDown(), now: 7).isEmpty)
     }
 
-    @Test func takeoverClosesOldVideoConnection() {
+    @Test func unprovenTakeoverNeverDisturbsTheOldSession() {
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
-        _ = m.videoOpened(V, now: 1)
-        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 1)
+        _ = m.connectionOpened(B, now: 5 * sec)
+        _ = m.received(B, hello(1), now: 5 * sec)
+        _ = m.received(A, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 9 * sec)  // the old session stays alive
+        #expect(m.tick(now: 9_999_999).isEmpty)
+        let timeout = m.tick(now: 10 * sec)  // 5 s after HELLO, no proof
+        #expect(timeout.contains(.close(B)))
+        #expect(!timeout.contains { if case .releaseInput = $0 { true } else { false } })
+        #expect(!timeout.contains(.close(A)))
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+        #expect(m.scheduleForTesting(B) == nil)
+    }
+
+    @Test func lostProvingConnectionLeavesTheOldSessionAlone() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        _ = m.connectionOpened(B, now: 1)
+        _ = m.received(B, hello(1), now: 1)
+        let schedule = m.scheduleForTesting(B)
+        let closed = m.connectionClosed(B)
+        #expect(!closed.contains { if case .releaseInput = $0 { true } else { false } })
+        #expect(schedule?.prkBytes == nil)
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+    }
+
+    @Test func takeoverNeedingPairingIsBusy() {
+        // The device is approved but its key is gone: a new HELLO while its session is live must not take over.
+        let store = InMemoryPairKeyStore(keys: [device(1): pairKey])
+        var m = SessionMachine(configuration: .init(hostName: "Mac", makeStreamConfig: { _ in sampleConfig },
+                                                    makeSessionID: { 77 }, pairKeys: store),
+                               approvedDevices: [device(1)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(1), now: 0)
+        try? store.removeAll()
+        _ = m.connectionOpened(B, now: 1)
+        let actions = m.received(B, hello(1), now: 1)
+        #expect(ackStatuses(actions, to: B) == [.busy] && actions.contains(.close(B)))
+        #expect(!actions.contains { if case .startEncryption = $0 { true } else { false } })
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+    }
+
+    @Test func takeoverClosesOldVideoConnectionOnlyAfterProof() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        attachVideo(&m, V, nonce: 1, now: 1)
         _ = m.connectionOpened(B, now: 2)
-        #expect(has(m.received(B, hello(1), now: 2)) { $0 == .closeVideo(V) })
+        #expect(!has(m.received(B, hello(1), now: 2)) { $0 == .closeVideo(V) })
+        #expect(has(m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 3)) { $0 == .closeVideo(V) })
     }
 
     @Test func pingIsAnsweredEvenWhilePending() {
@@ -265,8 +326,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
     @Test func protocolErrorSendsByeReleasesAndClosesVideo() {
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
-        _ = m.videoOpened(V, now: 0)
-        _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
+        attachVideo(&m, V, nonce: 1)
         let actions = m.protocolError(A)
         #expect(actions.contains(.releaseInput(A, .protocolError)))
         #expect(sent(actions, to: A) == [.bye(.protocolError)])
@@ -294,9 +354,12 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
             .contains(.closeVideo(V)))
         _ = m.videoOpened(V, now: 0)
         let ok = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
-        guard case .videoAttached(V, A, 77, 1, let keys)? = ok.first, ok.count == 1 else {
-            Issue.record("not attached: \(ok)"); return
+        guard case .videoProve(V, let c2h)? = ok.first, ok.count == 1 else { Issue.record("no proof: \(ok)"); return }
+        let attached = m.videoProven(V, now: 0)
+        guard case .videoAttached(V, A, 77, 1, let keys)? = attached.first, attached.count == 1 else {
+            Issue.record("not attached: \(attached)"); return
         }
+        #expect(keys.c2h == c2h)
         #expect(keys.h2c.bytes.count == 32 && keys.c2h.bytes.count == 32 && keys.h2c != keys.c2h)
     }
 
@@ -306,15 +369,96 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.videoHello(V, VideoHello(configID: 1, sessionID: 77), now: 0).contains(.closeVideo(V)))
     }
 
-    @Test func videoReconnectReplacesOldVideoConnection() {
+    @Test func provenVideoReplacesTheOldVideoConnectionButAnUnprovenOneDoesNot() {
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
-        let V2 = ConnectionID(101)
+        attachVideo(&m, V, nonce: 1)
+        _ = m.videoOpened(V2, now: 1)
+        let hello = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(2)), now: 1)
+        // Unproven: no attach, nothing closed, nothing consumed.
+        #expect(hello.count == 1 && !hello.contains(.closeVideo(V)))
+        #expect(!hello.contains { if case .videoAttached = $0 { true } else { false } })
+        let proven = m.videoProven(V2, now: 2)
+        #expect(proven.first == .closeVideo(V))
+        #expect(proven.contains { if case .videoAttached(V2, A, _, _, _) = $0 { true } else { false } })
+    }
+
+    @Test func unprovenVideoChangesNothingAndIsClosedAfterFiveSeconds() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        attachVideo(&m, V, nonce: 1)
+        _ = m.videoOpened(V2, now: 10 * sec)
+        _ = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(2)), now: 10 * sec)
+        #expect(m.pendingVideoCount == 1)
+        _ = m.received(A, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 14 * sec)
+        #expect(m.tick(now: 14_999_999).isEmpty)
+        let timeout = m.tick(now: 15 * sec)
+        #expect(timeout.contains(.closeVideo(V2)) && !timeout.contains(.closeVideo(V)))
+        #expect(m.pendingVideoCount == 0)
+        // The late proof finds nothing to attach.
+        #expect(m.videoProven(V2, now: 16 * sec) == [.closeVideo(V2)])
+    }
+
+    @Test func manyUnprovenAttemptsDoNotConsumeAnythingAndNeverLockOutALegitimateClient() {
+        var m = makeMachine(approved: [device(1)])
+        m.configuration.releaseSilenceUs = 1000 * sec; m.configuration.closeSilenceUs = 1000 * sec
+        activate(&m, A)
+        for i in 0..<300 {  // an attacker with a valid session_id but no key
+            let vid = ConnectionID(1000 + UInt64(i))
+            _ = m.videoOpened(vid, now: 0)
+            _ = m.videoHello(vid, VideoHello(configID: 1, sessionID: 77, videoNonce: [UInt8(i % 256), UInt8(i / 256)]
+                + [UInt8](repeating: 9, count: 14)), now: 0)
+            _ = m.tick(now: 5 * sec)  // never proves; times out
+        }
+        let attached = attachVideo(&m, V, nonce: 1, now: 6 * sec)
+        #expect(attached.contains { if case .videoAttached(V, _, _, _, _) = $0 { true } else { false } })
+    }
+
+    @Test func manyProvenReconnectsNeverLockOut() {
+        var m = makeMachine(approved: [device(1)])
+        m.configuration.recentVideoNonces = 8
+        activate(&m, A)
+        for i in 0..<200 {  // a legitimate client reconnecting its video far more often than any budget
+            let attached = attachVideo(&m, ConnectionID(2000 + UInt64(i)), nonce: UInt8(i % 250))
+            #expect(attached.contains { if case .videoAttached = $0 { true } else { false } }, "attach \(i)")
+        }
+    }
+
+    @Test func aRepeatedNonceIsRefusedWhileRememberedAndNotBefore() {
+        var m = makeMachine(approved: [device(1)])
+        m.configuration.recentVideoNonces = 4
+        m.configuration.releaseSilenceUs = 1000 * sec; m.configuration.closeSilenceUs = 1000 * sec
+        activate(&m, A)
+        attachVideo(&m, V, nonce: 1)
+        _ = m.videoOpened(V2, now: 0)
+        let replay = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
+        #expect(replay.contains(.closeVideo(V2)))
+        #expect(!replay.contains { if case .videoProve = $0 { true } else { false } })
+        // An unproven hello with a fresh nonce does not reserve that nonce...
+        _ = m.videoOpened(ConnectionID(300), now: 0)
+        _ = m.videoHello(ConnectionID(300), VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(5)), now: 0)
+        _ = m.tick(now: 6 * sec)
+        // ...so the legitimate owner of that nonce can still use it.
+        #expect(attachVideo(&m, ConnectionID(301), nonce: 5, now: 7 * sec).contains {
+            if case .videoAttached = $0 { true } else { false }
+        })
+        // Two hellos with the same unproven nonce race: only the one that proves wins; the second proof is refused.
+        _ = m.videoOpened(ConnectionID(400), now: 8 * sec)
+        _ = m.videoOpened(ConnectionID(401), now: 8 * sec)
+        _ = m.videoHello(ConnectionID(400), VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(6)), now: 8 * sec)
+        _ = m.videoHello(ConnectionID(401), VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(6)), now: 8 * sec)
+        #expect(m.videoProven(ConnectionID(400), now: 8 * sec).contains { if case .videoAttached = $0 { true } else { false } })
+        #expect(m.videoProven(ConnectionID(401), now: 8 * sec).contains(.closeVideo(ConnectionID(401))))
+    }
+
+    @Test func videoProofIsVoidedWhenTheSessionEndsFirst() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
         _ = m.videoOpened(V, now: 0)
         _ = m.videoHello(V, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(1)), now: 0)
-        _ = m.videoOpened(V2, now: 1)
-        let actions = m.videoHello(V2, VideoHello(configID: 1, sessionID: 77, videoNonce: nonce(2)), now: 1)
-        #expect(actions.first == .closeVideo(V))
+        _ = m.connectionClosed(A)
+        #expect(m.videoProven(V, now: 1) == [.closeVideo(V), .log(.warning, ev: "video_hello_rejected", conn: V,
+                                                                   fields: "reason=stale")])
     }
 
     @Test func videoWithoutHelloTimesOut() {
@@ -324,20 +468,18 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.tick(now: 5 * sec).contains(.closeVideo(V)))
     }
 
-    @Test func staleApprovalCannotApproveTakeoverConnection() {
+    @Test func sameDeviceWhilePairingIsPendingIsBusyAndTheApprovalStaysValid() {
         var m = makeMachine()
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, hello(), now: 0)  // pending
         _ = m.connectionOpened(B, now: 1)
-        let takeover = m.received(B, hello(), now: 1)  // same device: A is cancelled, B pending
-        #expect(takeover.contains(.cancelApproval(A)))
-        #expect(takeover.contains { if case .requestApproval(B, device(1), "Pad", _) = $0 { true } else { false } })
-        #expect(m.approvalDecided(A, approved: true, now: 2).isEmpty)  // stale click for A
-        #expect(m.pairingPersisted(A, stored: true, now: 2).isEmpty)
+        let second = m.received(B, hello(), now: 1)  // same device, but it would need PAIRING: BUSY
+        #expect(ackStatuses(second, to: B) == [.busy])
+        #expect(!second.contains { if case .cancelApproval = $0 { true } else { false } })
+        #expect(m.approvalDecided(B, approved: true, now: 2).isEmpty)  // B never had an approval
         #expect(m.status == .pending(deviceName: "Pad"))
-        #expect(!m.approvedDevices.contains(device(1)))
-        _ = m.approvalDecided(B, approved: true, now: 3)
-        #expect(ackStatuses(m.pairingPersisted(B, stored: true, now: 3), to: B) == [.accepted])
+        _ = m.approvalDecided(A, approved: true, now: 3)
+        #expect(ackStatuses(m.pairingPersisted(A, stored: true, now: 3), to: A) == [.accepted])
     }
 
     @Test func forgetDevicesRequiresApprovalAgain() {

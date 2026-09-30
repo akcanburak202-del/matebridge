@@ -20,6 +20,39 @@ import Testing
         #expect(store.loadOrCreate() == replaced)
     }
 
+    @Test func resolveReportsLoadedCreatedAndUnpersisted() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mb-id2-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = HostIdentityStore(directory: dir)
+        guard case .created(let id) = store.resolve() else { Issue.record("expected created"); return }
+        #expect(store.resolve() == .loaded(id))
+        // A damaged file is a replaced identity: the caller must drop every old approval and key.
+        try Data("garbage".utf8).write(to: store.fileURL)
+        guard case .created(let again) = store.resolve() else { Issue.record("expected created"); return }
+        #expect(again != id)
+        #expect(store.resolve() == .loaded(again))
+        // Persistence failure (the directory path is a regular file): the id works for this run but is flagged.
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("mb-block-\(UUID().uuidString)")
+        try Data("x".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        guard case .unpersisted(let volatile) = HostIdentityStore(directory: blocker).resolve() else {
+            Issue.record("expected unpersisted"); return
+        }
+        #expect(volatile.count == 16)
+    }
+
+    @Test func videoProofDecoderRejectsAnythingBiggerThanAPing() throws {
+        let key = SecretBytes([UInt8](repeating: 3, count: 32))
+        var sealer = RecordSealer(key: key, maxPayload: 65_536)
+        var decoder = RecordDecoder(key: key, connection: .video, maxPayload: 64)
+        decoder.append(try sealer.seal(type: 0x20, payload: [UInt8](repeating: 0, count: 100)))
+        #expect(throws: CryptoError.self) { try decoder.nextMessage() }
+        var ok = RecordDecoder(key: key, connection: .video, maxPayload: 64)
+        var s2 = RecordSealer(key: key, maxPayload: 65_536)
+        ok.append(try Message.ping(Ping(seq: 1, senderTimeUs: 2)).sealed(using: &s2))
+        #expect(try ok.nextMessage() == .ping(Ping(seq: 1, senderTimeUs: 2)))
+    }
+
     @Test func inMemoryPairKeyStoreBehavesLikeTheKeychainContract() throws {
         let store = InMemoryPairKeyStore()
         let a = DeviceID(bytes: [UInt8](repeating: 1, count: 16))!

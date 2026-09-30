@@ -78,9 +78,13 @@ public struct RecordDecoder: Sendable {
     private var failed = false
     private var pendingError: CryptoError?
 
-    public init(key: SecretBytes, connection: FrameDecoder.Connection) {
+    private let payloadLimit: Int
+
+    /// - Parameter maxPayload: tighter limit than the connection's (the video proof accepts one tiny PING).
+    public init(key: SecretBytes, connection: FrameDecoder.Connection, maxPayload: Int? = nil) {
         self.key = SymmetricKey(data: key.bytes)
         self.connection = connection
+        self.payloadLimit = min(maxPayload ?? connection.maxPayload, connection.maxPayload)
     }
 
     init(key: SecretBytes, connection: FrameDecoder.Connection, startingCounter: UInt64) {
@@ -90,7 +94,7 @@ public struct RecordDecoder: Sendable {
 
     public var bufferedCount: Int { buffer.count - start }
 
-    private var maxLength: Int { connection.maxPayload + ProtocolConstants.recordOverhead }
+    private var maxLength: Int { payloadLimit + ProtocolConstants.recordOverhead }
 
     public mutating func append(_ bytes: [UInt8]) {
         guard !failed else { return }

@@ -159,6 +159,7 @@ struct SessionInputWiringTests {
         case .takeover:
             w.apply(w.session.connectionOpened(B, now: w.now))
             w.receive(helloMessage(1), on: B)
+            w.receive(.ping(Ping(seq: 1, senderTimeUs: 0)), on: B)  // the proof that activates the takeover
         case .shutdown: w.apply(w.session.shutdown())
         }
         #expect(w.causes.first == trigger.expectedCause, "\(trigger) reached the pipeline as \(String(describing: w.causes.first))")
@@ -181,6 +182,8 @@ struct SessionInputWiringTests {
         w.holdEverything()
         w.apply(w.session.connectionOpened(B, now: w.now))
         w.receive(helloMessage(1), on: B)
+        #expect(w.causes.isEmpty)  // not yet: the new connection has to prove it holds the keys
+        w.receive(.ping(Ping(seq: 1, senderTimeUs: 0)), on: B)
         #expect(w.causes == [.superseded])
         #expect(w.model.isIdle && w.pipe.hasSession)
         // The tablet's old stroke is still going on when the new connection is up.
