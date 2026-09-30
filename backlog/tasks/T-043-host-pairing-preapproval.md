@@ -40,7 +40,13 @@ files:
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **Makine (`SessionMachine`, saf):** yeni `orphan` (ayrılan bekleyen istek: conn id, device, ad, kod yok, bitiş = ayrılma + 2 dk) ve `preapprovals: [DeviceID: bitiş]`. Bekleyen bağlantı `connectionClosed` ya da `BYE` ile biterse `.cancelApproval` yerine yeni `.approvalOrphaned(conn)` üretilir (pencere kalır). Protokol hatası / kayıt doğrulama hatası / shutdown / 60 sn zaman aşımı eskisi gibi iptal eder.
+2. `approvalDecided(conn)` bağlantı yoksa ama `orphan` o conn ise: "İzin ver" -> `preapprovals[device] = now + 2 dk` (+ log), "Reddet" -> ön onay yok (varsa o cihazınki silinir); ikisinde de `.cancelApproval`. Orphan `tick`te süresi dolunca `.cancelApproval` ile kapanır; her yeni `requestApproval` eski orphan'ı önce iptal eder (eski ön onaya dokunmaz). `forgetApprovedDevices` ön onayları ve orphan'ı da siler.
+3. `continueHello` PAIRING dalı: geçerli ön onay varsa tüketilir (tek kullanım; süresi dolmuşsa silinir ve normal onay), ilk ACK + `persistPairing` üretilir, `requestApproval` yok, log `approval_preapproved`. PAIRED dalı ve devralma kuralı değişmez; ön onay yalnız PAIRING'de tüketilir.
+4. **Sunucu/UI:** `Handlers.approvalOrphaned`, `ApprovalPanel.markDisconnected()` ("Tablet ayrıldı. İzin verirsen tablet yeniden bağlandığında eşleşir."), `main.swift` bağlama.
+5. **P2 (a):** `PairKeyService.remove(_:ifEquals:)` kuyrukta karşılaştır-ve-sil; `finishPairing` kendi kaydettiği anahtarı iletir. **P2 (b):** `PairKeyService.lookup` en çok 8 bekleyen arama (fazlası `false` döner, sunucu o bağlantıyı kapatır) ve `isCurrent` denetimi: bağlantı kapanmış/5 sn dolmuş arama Keychain'e gitmeden atlanır.
+6. **Testler:** sahte saatli makine testleri (ayrılma, ön onayla yeniden bağlanma, süre dolumu, tek kullanım, reddet, değiştirme, PAIRED etkilenmez, forget) + PairKeyService (sınır, bayat atlama, karşılaştır-ve-sil, yeni anahtar korunur).
+Not: `PairKeyService.swift` (Core/Crypto) kartın `files:` listesinde yok ama P2 düzeltmesi onu gerektiriyor; yalnız o dosyaya dokunuldu (Açık sorular).
 
 ## Handoff
 
