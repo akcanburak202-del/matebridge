@@ -14,6 +14,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
 | [T-052](tasks/T-052-client-adaptive-pacing.md) | Tablet — uyarlanır kare zamanlaması (en az gecikmeyle takılmasız sunum, 60/120 Hz) | 5 | android-client-dev | [T-050] |
+| [T-054](tasks/T-054-host-clipboard.md) | Mac — pano paylaşımı (CLIPBOARD, metin) | 5 | mac-host-dev | [T-041] |
+| [T-055](tasks/T-055-client-clipboard.md) | Tablet — pano paylaşımı (CLIPBOARD, metin) | 5 | android-client-dev | [T-042] |
 
 ## done
 
