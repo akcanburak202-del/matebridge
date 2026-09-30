@@ -2,6 +2,7 @@ package dev.matebridge.client.session
 
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
+import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Ping
@@ -129,6 +130,26 @@ class SessionMachineTest {
         assertTrue(s[0] is Ping)
         assertEquals(StreamMode.DEFAULT.toPrefs(), s[1])
         assertEquals(StreamPrefs(120, 1000), s[1])
+    }
+
+    @Test fun displayRateIsSentOnceAfterPrefsWhenKnownThenOnlyOnChange() {
+        // before any connection: remembered, nothing sent
+        assertTrue(step(Event.SetDisplayRate(120)).isEmpty())
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        assertTrue(step(Event.SetDisplayRate(60)).isEmpty()) // not accepted yet
+        val s = sends(step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421))))
+        assertEquals(listOf(Ping::class.java, StreamPrefs::class.java, DisplayRate::class.java), s.map { it.javaClass })
+        assertEquals(DisplayRate(60), s[2])
+        assertTrue(step(Event.SetDisplayRate(60)).isEmpty())
+        assertEquals(listOf<Any>(DisplayRate(120)), sends(step(Event.SetDisplayRate(120))))
+    }
+
+    @Test fun noDisplayRateIsSentWhenNeverMeasured() {
+        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen))
+        val s = sends(step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421))))
+        assertEquals(2, s.size)
     }
 
     @Test fun initialModeIsUsedAndResentOnEveryConnection() {
