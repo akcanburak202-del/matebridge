@@ -27,6 +27,11 @@ import dev.matebridge.client.stream.VideoViewport
  *    (Android did not report the exit, e.g. a fast lift after `ACTION_UP`) and contact with no event for
  *    [CONTACT_STALE_MS] (Android always ends a gesture with UP or CANCEL; this is a last-resort guard)
  *    are closed with a `flags = 0` sample;
+ *  - exact-duplicate filter (T-026): a real Android sample that is identical to the last SENT sample in time, position,
+ *    pressure, tilt and flags is not sent (`dup_exact`). Only samples of real events go through it; a sample whose
+ *    flags differ, a `STROKE_START` sample, a `flags = 0` sample, a liveness repeat and the synthetic closing samples
+ *    never do (they use [emit] directly), so no state change can be lost to it. A same-position sample with a
+ *    different time is sent and only counted (`dup_pos`);
  *  - Android dispatches `HOVER_EXIT` right before every `ACTION_DOWN`; an exit that is followed by a DOWN
  *    of the same tool within [EXIT_DEFER_MS] is dropped so a stroke does not flap proximity leave/enter.
  *    A deferred exit is always sent by [tick], [release] or the next non-DOWN frame.
@@ -101,13 +106,13 @@ class PenTracker(
                 state = State.CONTACT
                 contactPointerId = f.pointerId
                 contactDeviceId = f.deviceId
-                emit(s, nowMs, out)
+                emitReal(s, nowMs, out)
             }
             PenAction.MOVE -> {
                 val contact = state == State.CONTACT
                 val flags = if (contact) IN_RANGE or CONTACT else IN_RANGE
                 if (!contact) state = State.HOVER
-                emit(pts.map { sample(it, flags) }, nowMs, out)
+                emitReal(pts.map { sample(it, flags) }, nowMs, out)
             }
             PenAction.UP -> {
                 val contact = state == State.CONTACT
@@ -116,19 +121,19 @@ class PenTracker(
                 s += sample(pts.last(), IN_RANGE) // contact ended; the pen may still hover
                 state = State.HOVER
                 clearContactIds()
-                emit(s, nowMs, out)
+                emitReal(s, nowMs, out)
             }
             PenAction.CANCEL -> leaveAt(pts.last(), nowMs, out)
             PenAction.HOVER_ENTER, PenAction.HOVER_MOVE -> {
                 state = State.HOVER
-                emit(pts.map { sample(it, IN_RANGE) }, nowMs, out)
+                emitReal(pts.map { sample(it, IN_RANGE) }, nowMs, out)
             }
             PenAction.HOVER_EXIT -> {
                 // Samples batched into the exit event are real hover positions: keep them, then close.
                 if (state != State.OUT && pts.size > 1) {
                     state = State.HOVER
                     clearContactIds()
-                    emit(pts.dropLast(1).map { sample(it, IN_RANGE) }, nowMs, out)
+                    emitReal(pts.dropLast(1).map { sample(it, IN_RANGE) }, nowMs, out)
                 }
                 if (state == State.HOVER) pendingExit = PendingExit(pts.last(), nowMs) else leaveAt(pts.last(), nowMs, out)
             }
@@ -227,12 +232,48 @@ class PenTracker(
         return (Coords.signed(fx) to Coords.signed(fy)).also { lastTilt = it }
     }
 
+    /**
+     * Emits samples that come from real Android events (T-026): drops exact duplicates of the last SENT sample and
+     * counts same-position samples, then sends the rest in order through [emit]. Compares against the last sample
+     * actually sent (a dropped sample is identical to it, so the reference does not move). The synthetic paths
+     * (liveness repeat, closing samples) call [emit] directly and are never filtered.
+     */
+    private fun emitReal(samples: List<S>, nowMs: Long, out: MutableList<Outgoing>) {
+        var prev = last
+        val kept = ArrayList<S>(samples.size)
+        for ((i, s) in samples.withIndex()) {
+            if (prev != null) {
+                if (isExactDuplicate(s, prev)) {
+                    counters.dupExact++
+                    continue
+                }
+                if (s.x == prev.x && s.y == prev.y && s.timeUs != prev.timeUs) {
+                    counters.dupPos++
+                    if (i == 0) counters.dupPosFirst++
+                }
+            }
+            kept += s
+            prev = s
+        }
+        emit(kept, nowMs, out)
+    }
+
+    /**
+     * Only a plain in-range or in-contact sample can be a duplicate: a `flags = 0` sample and a `STROKE_START` sample
+     * carry a state change and are always sent, and a sample whose flags differ from the last sent one is never equal.
+     */
+    private fun isExactDuplicate(a: S, b: S) =
+        a.flags == b.flags && a.flags != 0 && a.flags and STROKE_START == 0 &&
+            a.timeUs == b.timeUs && a.x == b.x && a.y == b.y && a.pressure == b.pressure &&
+            a.tiltX == b.tiltX && a.tiltY == b.tiltY
+
     private fun emit(samples: List<S>, nowMs: Long, out: MutableList<Outgoing>) {
         if (samples.isEmpty()) return
         var i = 0
         while (i < samples.size) {
             val chunk = samples.subList(i, minOf(i + Limits.PEN_MAX_SAMPLES, samples.size))
             val base = chunk[0].timeUs
+            if (chunk.size > counters.maxBatch) counters.maxBatch = chunk.size.toLong()
             // Mergeable only if it repeats an already-sent plain hover state (no transition inside or before).
             val mergeable = lastFlags == IN_RANGE && chunk.all { it.flags == IN_RANGE }
             out += Outgoing(

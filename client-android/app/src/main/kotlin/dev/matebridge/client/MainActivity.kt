@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.hardware.display.DisplayManager
 import android.hardware.input.InputManager
 import android.view.Choreographer
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
@@ -27,6 +28,7 @@ import dev.matebridge.client.input.DoubleTapDetector
 import dev.matebridge.client.input.InputCapture
 import dev.matebridge.client.input.InputSink
 import dev.matebridge.client.input.MotionEventAdapter
+import dev.matebridge.client.input.UnbufferedPenDispatch
 import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
@@ -81,6 +83,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val ui = Handler(Looper.getMainLooper())
     private val clock = ClockSync()
     private lateinit var capture: InputCapture
+    private lateinit var unbufferedPen: UnbufferedPenDispatch
     private val rootLoc = IntArray(2)
     private var inputFaultUntilMs = 0L
 
@@ -214,6 +217,23 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
         capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        // T-026: ask the system not to batch pen samples per display frame while input capture is active.
+        unbufferedPen = UnbufferedPenDispatch(
+            Build.VERSION.SDK_INT,
+            UnbufferedPenDispatch.Backend { on ->
+                if (!root.isAttachedToWindow) return@Backend false // no window yet; sync retries
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // View.requestUnbufferedDispatch(int) is API 30
+                    root.requestUnbufferedDispatch(if (on) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_CLASS_NONE)
+                }
+                true
+            },
+            onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
+        )
+        // A new window (ViewRootImpl) starts without the request: request it again.
+        root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
+            override fun onViewDetachedFromWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
+        })
         addFingerToggle()
         applyImmersive()
         render(SessionUi.Searching)
@@ -233,6 +253,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyImmersive()
         if (!::capture.isInitialized) return
+        if (hasFocus) unbufferedPen.reapplyOnNextSync() // the request is idempotent; re-assert it when the window is back
         if (hasFocus) capture.resume() else capture.releaseAll(ReleaseAll.FOCUS_LOST, SystemClock.uptimeMillis())
     }
 
@@ -248,6 +269,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun syncInputActive(nowMs: Long = SystemClock.uptimeMillis()): Boolean {
         val on = started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty
         capture.setActive(on, nowMs)
+        unbufferedPen.sync(on)
         return on
     }
 
@@ -257,6 +279,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (!syncInputActive(now)) return false
             if (now < inputFaultUntilMs) return true // recovering from an input fault: consumed, nothing half-processed
             if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
+            // Old API only: the per-gesture request has to be repeated on every pen DOWN (the source form covers all).
+            if (unbufferedPen.wantsPerGestureRequest() && ev.actionMasked == MotionEvent.ACTION_DOWN && isPenTool(ev)) {
+                root.requestUnbufferedDispatch(ev)
+            }
             // Events arrive in window coordinates; the viewport is in root coordinates.
             root.getLocationInWindow(rootLoc)
             MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
@@ -264,6 +290,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             inputFailed(e, now)
             true // consumed: never let a capture bug crash the app or leak the event to the views
         }
+    }
+
+    private fun isPenTool(ev: MotionEvent): Boolean {
+        val tool = ev.getToolType(ev.actionIndex)
+        return tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
     }
 
     /**
@@ -636,6 +667,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         started = false
+        unbufferedPen.sync(false) // the ticker is stopped below; do not leave the request behind
         dev.matebridge.client.session.MbLog.i("activity_stop")
         ui.removeCallbacks(ticker)
         ui.removeCallbacks(inputTicker)

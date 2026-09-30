@@ -45,7 +45,7 @@ class PenTrackerTest {
     @Test fun allHistoricalSamplesTravelInOneMessageWithNonDecreasingDt() {
         val t = tracker()
         t.onFrame(penFrame(PenAction.DOWN, pt(90)), 90)
-        val out = t.onFrame(penFrame(PenAction.MOVE, pt(100), pt(103), pt(106), pt(106), pt(109)), 109)
+        val out = t.onFrame(penFrame(PenAction.MOVE, pt(100), pt(103), pt(106), pt(106, x = 1500f), pt(109)), 109)
         assertEquals(1, out.size)
         val pen = out[0].msg as Pen
         assertEquals(100_000L, pen.baseTimeUs)
@@ -230,7 +230,7 @@ class PenTrackerTest {
         val t = tracker()
         t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(1000)), 1000)
         t.tick(1100) // repeat stamped 1_100_000 us
-        val late = t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(1099)), 1101)
+        val late = t.onFrame(penFrame(PenAction.HOVER_MOVE, pt(1099, x = 1500f)), 1101) // moved, so not a duplicate of the repeat
         assertTrue((late[0].msg as Pen).baseTimeUs >= 1_100_000L)
     }
 
