@@ -1,7 +1,7 @@
 ---
 id: T-048
 title: Tablet — TextureView ile gösterim deneyi (Huawei yenileme yöneticisi video yüzeyini 60 Hz'e indiriyor)
-status: todo
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-046]
@@ -41,3 +41,7 @@ _(Ajan doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+## Orkestratör notu (2026-10-01)
+
+- Deney yapıldı, hipotez yanlış: Huawei 60/120 kararı SurfaceView/TextureView'den bağımsız, dokunmaya bağlı (NOTES 2026-10-01). Dal (`e23b126`) **merge edilmedi**; kod gerekirse oradan alınır.
