@@ -1,7 +1,7 @@
 ---
 id: T-105
 title: Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi
-status: todo
+status: in_progress
 phase: 4
 owner: android-client-dev
 depends_on: [T-104]
@@ -49,6 +49,19 @@ Karar 0013: akış sürerken ayarlara bağlantı paneline dönmeden ulaşılır.
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+**Saf mantık (JVM testli):**
+1. `input/KeyTracker.kt`: `LocalAction.SETTINGS`; Ctrl+Shift+6 = evdev scan `7` (fiziksel konum, diğer rakam kısayolları gibi).
+2. `settings/SettingsPanelState.kt` (yeni): açık/kapalı durumu, `open(via, streaming)` / `close(via)` (değişmediyse no-op), `ev=settings_panel open|close via=…` logu; `inputAllowed(base)`; `keyWhileOpen(KeyFrame)` → `CLOSE` (Esc ya da Ctrl+Shift+6, repeat 0), `LOCAL(action)` (diğer Ctrl+Shift kısayolları), `CONSUME` (kapanış tuşunun tekrarları/UP'ı, BACK), `PASS` (Android'e, panelde gezinme). Panel açıkken `capture.onKey` hiç çağrılmaz → Mac'e tuş gitmez.
+3. `settings/SettingsCatalog.kt` (yeni): iki panelin **ortak** kontrol tanımı. `SettingsHost` arayüzü (MainActivity uygular, kalıcılık + uygulama burada bir kez yazılır) ve bölümler Bağlantı / Görüntü / Ses / Girdi / Diğer; öğe tipleri Choice / Toggle / Stepper / Action / Info. "Bağlantıyı kes" ve "Uygulanan: N Mbps" yalnız akış panelinde. Kısayol listesine Ctrl+Shift+6.
+4. `stream/Bitrate.kt` (yeni): seçenekler Otomatik(0)/15/30/60/100 Mbps, etiketler, "Uygulanan" biçimi. `StreamMode.toPrefs(bitrateKbps)`. `Settings.bitrateKbps()` / `setBitrateKbps()` (yalnız geçerli seçenekler, değilse 0).
+5. `session/TransportSwitch` (AutoTransport.kt yanına): yeni seçim mevcut bağlantıya uyuyorsa yeniden bağlanma yok (AUTO her zaman uyar; USB/Wi-Fi yalnız aynı taşıyıcıdaysa).
+6. `SessionMachine`: `SettingsOpen` ACCEPTED/STREAMING'de `Action.OpenSettings`; `SessionController` → `SessionListener.onSettingsOpen()`; `setStreamPrefs(prefs)`; ctor'a başlangıç bit hızı; `stream_prefs_sent` logu bit hızını yazar.
+
+**Android (Views):**
+7. `settings/SettingsViews.kt` (yeni): katalogu bir `LinearLayout`'a çizer (bölüm başlığı, segment düğmeleri, ±, aç/kapa), `refresh()`. Bağlantı paneli ve yan panel aynı sınıfı kullanır.
+8. `layout/activity_main.xml`: bağlantı paneli `ScrollView` içine; XML'deki taşıyıcı/istatistik düğmeleri kalkar (katalogdan gelir). Yan panel: root'un en üstünde tam ekran saydam katman + sağda yarı saydam, kaydırılabilir panel (başlık + Kapat). Video yeniden boyutlanmaz.
+9. `MainActivity`: `SettingsHost` uygulaması; `syncInputActive` panel açıkken kapalı (→ `InputCapture.setActive(false)` = önce `RELEASE_ALL(USER)`, sonra pointer capture bırakılır); açma: kısayol / `SETTINGS_OPEN` (yalnız akış görünürken); kapama: Esc, kısayol, video alanına dokunma (ACTION_UP'ta, yarım jest sızmaz), Kapat, geri, `onPause`, akış bitişi. "Bağlantıyı kes": BYE + otomatik bağlanma durur, "Bağlan" ile devam. HELLO bit9.
+
+**Testler:** KeyTracker Ctrl+Shift+6 eşlemesi; `SettingsPanelState` aç/kapa + tuş kararları; InputCapture ile kapı: açılışta bırakmalar → `RELEASE_ALL(USER)` sırası, açıkken hiçbir şey gitmez, kapanınca eşleşmemiş UP gitmez; bit hızı kalıcılığı; `STREAM_PREFS` kodlaması (bitrate) ve SessionMachine gönderimi; `SETTINGS_OPEN` → `OpenSettings` (yalnız kabul edilmiş oturum); katalog bölüm sırası/öğeleri; TransportSwitch.
 
 ## Handoff
