@@ -1,7 +1,7 @@
 ---
 id: T-064
 title: Yerel kalem izi/noktası varsayılan kapalı
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-056]
@@ -18,9 +18,9 @@ Kullanıcı (2026-10-01 sabah): Krita'da çizim akıcı, yerel kalem izi gereksi
 
 ## Kabul kriterleri
 
-- [ ] `Settings.penTrail()` / `penDot()`: kayıtlı değer yoksa `false` (yalnızca `"1"` açık). Kayıtlı `"0"`/`"1"` aynen.
-- [ ] Test: varsayılan kapalı, açık/kapalı kalıcılığı.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `Settings.penTrail()` / `penDot()`: kayıtlı değer yoksa `false` (yalnızca `"1"` açık). Kayıtlı `"0"`/`"1"` aynen.
+- [x] Test: varsayılan kapalı, açık/kapalı kalıcılığı.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -29,7 +29,7 @@ Kullanıcı (2026-10-01 sabah): Krita'da çizim akıcı, yerel kalem izi gereksi
 ## Handoff
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Dokunulan dosyalar:** Settings.kt, SessionSupportTest.kt, bu kart
+- **Varsayımlar:** Kayıtlı "0" kullanıcılar kapalı kalır; kayıtlı "1" açık; kaydı olmayan (yeni/eski kurulum) artık kapalı.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Temiz kurulumda kalem izi/noktası görünmüyor; bağlantı panelinden açılınca görünüyor.
 - **Açık sorular:**

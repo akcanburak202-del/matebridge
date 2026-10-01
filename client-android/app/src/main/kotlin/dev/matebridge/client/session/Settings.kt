@@ -42,12 +42,12 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setClipboardShare(on: Boolean) = store.putString(KEY_CLIPBOARD, if (on) "1" else "0")
 
-    /** Local pen trail and pen dot (T-056); both default on. */
-    fun penTrail(): Boolean = store.getString(KEY_PEN_TRAIL) != "0"
+    /** Local pen trail and pen dot (T-056); both default off (T-064); only a stored "1" enables. */
+    fun penTrail(): Boolean = store.getString(KEY_PEN_TRAIL) == "1"
 
     fun setPenTrail(on: Boolean) = store.putString(KEY_PEN_TRAIL, if (on) "1" else "0")
 
-    fun penDot(): Boolean = store.getString(KEY_PEN_DOT) != "0"
+    fun penDot(): Boolean = store.getString(KEY_PEN_DOT) == "1"
 
     fun setPenDot(on: Boolean) = store.putString(KEY_PEN_DOT, if (on) "1" else "0")
 
