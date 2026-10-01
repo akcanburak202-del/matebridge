@@ -247,12 +247,75 @@ import Testing
         h.streamer.drainNow()
         let stats = h.box.logs.filter { $0.contains(" stats ") }
         #expect(stats.count == 1)
-        #expect(stats.first?.hasPrefix("I sid=7 stats packets=3 dropped=0 ring_ms_max=30 ") == true)
+        #expect(stats.first?.hasPrefix("I sid=7 stats packets=3 dropped=2 ring_ms_max=30 ") == true)
         #expect(stats.first?.contains("rms_dbfs=-12.0 wire_dropped=2") == true)
         h.streamer.prefs(sessionID: 7, enabled: false)
         h.box.now = 20_000_000
         h.streamer.drainNow()
         #expect(h.box.logs.filter { $0.contains(" stats ") }.count == 1)
+    }
+
+    @Test func prefsBurstCoalescesAndSessionEndIsNotDelayed() {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.started(1)
+        h.streamer.suspendForTesting()  // a stalled streamer queue
+        for k in 0..<10_000 { h.streamer.prefs(sessionID: 7, enabled: k % 2 == 0) }
+        h.streamer.sessionEnded()
+        h.streamer.resumeForTesting()
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1"])  // one pass: the session is gone, nothing restarts
+        #expect(h.sink.summary == ["cfg+1"])
+    }
+
+    @Test func latestPrefsWinsAndOffOnStillRetriesAFailure() {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.backend.emit(.failed(streamID: 1, reason: "ioproc_create", status: -1), for: 1)
+        h.streamer.sync()
+        h.streamer.suspendForTesting()
+        h.streamer.prefs(sessionID: 7, enabled: false)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.resumeForTesting()
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2"])
+    }
+
+    @Test func sessionsCoalescedToTheLatest() {
+        let h = Harness()
+        h.streamer.suspendForTesting()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sessionEnded()
+        h.streamer.sessionStarted(sessionID: 9, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 9, enabled: true)
+        h.streamer.resumeForTesting()
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1"])
+        h.started(1)
+        #expect(h.sink.sent.map(\.0) == [9])
+    }
+
+    @Test func inboxQueuesOnePassUntilTaken() {
+        var inbox = AudioControlInbox()
+        let first = inbox.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        let second = inbox.prefs(sessionID: 7, enabled: false)
+        let third = inbox.prefs(sessionID: 7, enabled: true)
+        #expect(first && !second && !third)
+        let snap = inbox.take()
+        #expect(snap.session?.sessionID == 7)
+        #expect(snap.prefs == .init(sessionID: 7, enabled: true, sawDisable: true))
+        let again = inbox.take()
+        #expect(again.prefs == nil)
+        let requeued = inbox.prefs(sessionID: 7, enabled: true)  // queued again after the pass started
+        let ended = inbox.sessionEnded()
+        #expect(requeued && !ended)
+        let last = inbox.take()
+        #expect(last == .init(session: nil, prefs: nil))
     }
 
     @Test func shutdownStopsSynchronously() {

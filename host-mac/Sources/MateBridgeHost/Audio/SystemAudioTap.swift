@@ -16,9 +16,13 @@ import MateBridgeCore
 /// - Requests coalesce into one desired state (the latest `start`, or nothing after its `stop`); a single reconcile
 ///   pass on one serial queue builds or tears down to match it. `AudioDeviceCreateIOProcIDWithBlock` shows the audio
 ///   capture permission prompt and blocks while it is open, so it never runs on the main thread or on a video/input
-///   path, and any number of start/stop calls meanwhile leave at most one pending pass. The desired state is checked
-///   again right before `AudioDeviceStart`: a capture that is no longer wanted is torn down without ever starting
-///   (the Mac is not muted for a stale request).
+///   path, and any number of start/stop calls meanwhile leave at most one pending pass. Right before
+///   `AudioDeviceStart` the desired state is checked again (a capture no longer wanted is torn down without ever
+///   starting: the Mac is not muted for a stale request), and so is the setup: default output (id and UID), output
+///   alive, tap format, aggregate rate and buffer layout. If any of them changed while the prompt was open, the
+///   half-built capture is torn down and built again (bounded, then `failed`).
+/// - The interruption listeners are installed before the blocking call, so a change during the prompt is not missed:
+///   its notification runs after the build and interrupts the capture if it did start.
 /// - Teardown order: `AudioDeviceStop` -> `AudioDeviceDestroyIOProcID` -> `AudioHardwareDestroyAggregateDevice` ->
 ///   `AudioHardwareDestroyProcessTap`.
 /// - A change of the default output device, the output device or aggregate dying, a sample rate / tap format change,
@@ -31,6 +35,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     public static let tapName = "MateBridge-audio"
     static let aggregateName = "MateBridge-audio-agg"
     static let bufferFrames: UInt32 = 240
+    /// Builds attempted in a row when the setup keeps changing under the permission prompt.
+    static let maxSetupAttempts = 3
 
     private struct Request {
         let streamID: UInt16
@@ -127,7 +133,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             run = nil
             logger.log(.info, "audio_capture_stopped", sessionID: 0, generation: 0, fields: "stream_id=\(r.streamID)")
         }
-        if let want, run == nil { build(want) }
+        if let want, run == nil { build(want, attempt: 1) }
     }
 
     private func isWanted(_ streamID: UInt16) -> Bool {
@@ -136,7 +142,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     // MARK: Build and teardown (queue)
 
-    private func build(_ request: Request) {
+    private func build(_ request: Request, attempt: Int) {
         let streamID = request.streamID
         let r = Run(streamID: streamID, events: request.events)
         run = r
@@ -194,6 +200,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         guard let layout = TapBufferLayout.choose(channelsPerBuffer: Self.inputChannelsPerBuffer(aggregateID)) else {
             return fail("tap_layout", 0)
         }
+        installListeners(r)  // before the blocking call: changes during the prompt reach us afterwards
 
         // The permission prompt appears here and blocks this queue until answered. nil queue: the block runs on the
         // HAL's real-time I/O thread.
@@ -210,10 +217,17 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             logger.log(.info, "audio_capture_cancelled", sessionID: 0, generation: 0, fields: "stream_id=\(streamID)")
             return
         }
+        if let change = Self.changeSinceSetup(r, outputUID: outputUID, layout: layout) {
+            teardown(r)
+            run = nil
+            logger.log(.info, "audio_setup_changed", sessionID: 0, generation: 0,
+                       fields: "stream_id=\(streamID) reason=\(change) attempt=\(attempt)")
+            guard attempt < Self.maxSetupAttempts else { return fail("setup_changed_\(change)", 0) }
+            return build(request, attempt: attempt + 1)
+        }
         status = AudioDeviceStart(aggregateID, procID)
         guard status == noErr else { return fail("device_start", status) }
 
-        installListeners(r)
         logger.log(.info, "audio_capture_started", sessionID: 0, generation: 0,
                    fields: "stream_id=\(streamID) layout=\(layout) buffer_frames=\(Self.bufferFrameSize(aggregateID)) "
                        + "rate=\(Int(r.nominalRate))")
@@ -246,6 +260,27 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         r.events(.interrupted(streamID: r.streamID, reason: reason))
     }
 
+    /// What changed since `build` read it (nil: nothing). Checked right before `AudioDeviceStart`.
+    private static func changeSinceSetup(_ r: Run, outputUID: String, layout: TapBufferLayout) -> String? {
+        guard let output = defaultOutputDevice(), output == r.outputDevice, deviceUID(output) == outputUID else {
+            return "default_output_changed"
+        }
+        guard isAlive(output) else { return "device_dead" }
+        guard let format = tapFormat(r.tapID), isSupported(format), sameFormat(format, r.format) else {
+            return "format_changed"
+        }
+        guard nominalRate(r.aggregateID) == r.nominalRate else { return "format_changed" }
+        guard TapBufferLayout.choose(channelsPerBuffer: inputChannelsPerBuffer(r.aggregateID)) == layout else {
+            return "layout_changed"
+        }
+        return nil
+    }
+
+    private static func sameFormat(_ a: AudioStreamBasicDescription, _ b: AudioStreamBasicDescription) -> Bool {
+        a.mSampleRate == b.mSampleRate && a.mChannelsPerFrame == b.mChannelsPerFrame && a.mFormatFlags == b.mFormatFlags
+            && a.mBitsPerChannel == b.mBitsPerChannel
+    }
+
     // MARK: Listeners (queue)
 
     /// Each handler compares against the state at build time, so a notification that changes nothing does not
@@ -270,9 +305,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         }
         addListener(r, r.tapID, kAudioTapPropertyFormat) { [weak self, weak r] in
             guard let self, let r else { return }
-            let now = Self.tapFormat(r.tapID)
-            guard now?.mSampleRate != r.format.mSampleRate || now?.mChannelsPerFrame != r.format.mChannelsPerFrame
-                || now?.mFormatFlags != r.format.mFormatFlags else { return }
+            if let now = Self.tapFormat(r.tapID), Self.sameFormat(now, r.format) { return }
             interrupt(r, reason: "format_changed")
         }
     }

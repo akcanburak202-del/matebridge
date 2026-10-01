@@ -36,10 +36,71 @@ public enum AudioKnob {
     }
 }
 
+/// Session events and AUDIO_PREFS waiting for the streamer queue, coalesced to the latest desired state so a burst
+/// of AUDIO_PREFS can never queue up blocks in front of a session end or a disable. Guarded by the streamer's lock.
+struct AudioControlInbox: Equatable, Sendable {
+    struct SessionWish: Equatable, Sendable {
+        var generation: UInt64
+        var sessionID: UInt32
+        var clientSupportsAudio: Bool
+    }
+
+    struct PrefsWish: Equatable, Sendable {
+        var sessionID: UInt32
+        var enabled: Bool
+        /// A disable was coalesced away: it is applied before a final enable (an off/on retries a failed capture).
+        var sawDisable: Bool
+    }
+
+    struct Snapshot: Equatable, Sendable {
+        var session: SessionWish?
+        var prefs: PrefsWish?
+    }
+
+    private(set) var session: SessionWish?
+    private(set) var prefs: PrefsWish?
+    private var generation: UInt64 = 0
+    private var reconcileQueued = false
+
+    /// Each mutation returns true when the caller must enqueue the (single) reconcile pass.
+    mutating func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool) -> Bool {
+        generation &+= 1
+        session = SessionWish(generation: generation, sessionID: sessionID, clientSupportsAudio: clientSupportsAudio)
+        prefs = nil
+        return queueReconcile()
+    }
+
+    mutating func sessionEnded() -> Bool {
+        session = nil
+        prefs = nil
+        return queueReconcile()
+    }
+
+    mutating func prefs(sessionID: UInt32, enabled: Bool) -> Bool {
+        let saw = (prefs?.sessionID == sessionID ? prefs?.sawDisable ?? false : false) || !enabled
+        prefs = PrefsWish(sessionID: sessionID, enabled: enabled, sawDisable: saw)
+        return queueReconcile()
+    }
+
+    /// The reconcile pass starts: everything up to now, prefs consumed (the session wish stays as the target).
+    mutating func take() -> Snapshot {
+        reconcileQueued = false
+        defer { prefs = nil }
+        return Snapshot(session: session, prefs: prefs)
+    }
+
+    private mutating func queueReconcile() -> Bool {
+        if reconcileQueued { return false }
+        reconcileQueued = true
+        return true
+    }
+}
+
 /// Host audio streaming (decision 0011): drives `AudioStreamPolicy`, starts and stops the capture backend, and
 /// sends the packets of the running stream as `AUDIO_FRAME` on the control connection.
 ///
-/// All state lives on one serial queue. The sender is a timer on that queue (every `drainInterval`) that reads the
+/// All state lives on one serial queue. Session events and AUDIO_PREFS are coalesced (`AudioControlInbox`): at most
+/// one reconcile pass is pending, and it applies the latest desired state. The sender is a timer on that queue (every `drainInterval`) that reads the
 /// ring (at most `maxPendingPackets` = 100 ms behind; older audio is dropped) and hands frames to the sink. Since
 /// `AUDIO_CONFIG` and `AUDIO_FRAME` leave from the same queue, STARTED always precedes the stream's frames and nothing
 /// of a stream follows its STOPPED. Session end stops the capture immediately (no video grace period).
@@ -87,6 +148,10 @@ public final class AudioStreamer: @unchecked Sendable {
     private let options: Options
     private let log: Log
     private weak var sink: AudioSink?
+    private let inboxLock = NSLock()
+    private var inbox = AudioControlInbox()
+    /// Generation of the session wish the policy runs (queue).
+    private var appliedGeneration: UInt64?
     private var policy: AudioStreamPolicy
     private var stream: Stream?
     private var timer: DispatchSourceTimer?
@@ -114,24 +179,26 @@ public final class AudioStreamer: @unchecked Sendable {
     // MARK: Session events (any thread)
 
     public func sessionStarted(sessionID: UInt32, clientSupportsAudio: Bool) {
-        queue.async { [self] in
-            perform(policy.sessionEnded())
-            logSessionID = sessionID
-            perform(policy.sessionStarted(sessionID: sessionID, clientSupportsAudio: clientSupportsAudio))
-        }
+        update { $0.sessionStarted(sessionID: sessionID, clientSupportsAudio: clientSupportsAudio) }
     }
 
     public func prefs(sessionID: UInt32, enabled: Bool) {
-        queue.async { [self] in perform(policy.prefs(sessionID: sessionID, enabled: enabled)) }
+        update { $0.prefs(sessionID: sessionID, enabled: enabled) }
     }
 
     public func sessionEnded() {
-        queue.async { [self] in perform(policy.sessionEnded()) }
+        update { $0.sessionEnded() }
     }
 
     /// App shutdown: stops everything before returning. The backend's teardown itself runs on its own queue.
     public func shutdown() {
-        queue.sync { perform(policy.sessionEnded()) }
+        _ = inboxLock.withLock { inbox.sessionEnded() }
+        queue.sync { reconcile() }
+    }
+
+    private func update(_ change: (inout AudioControlInbox) -> Bool) {
+        let enqueue = inboxLock.withLock { change(&inbox) }
+        if enqueue { queue.async { [self] in reconcile() } }
     }
 
     // MARK: Test hooks
@@ -142,7 +209,28 @@ public final class AudioStreamer: @unchecked Sendable {
     /// Runs one sender pass (and the stats check) synchronously.
     func drainNow() { queue.sync { tick() } }
 
+    /// Holds the streamer queue (tests: simulate a backlog).
+    func suspendForTesting() { queue.suspend() }
+    func resumeForTesting() { queue.resume() }
+
     // MARK: Internals (queue)
+
+    /// Applies the latest desired state: session change first (end, then start), then the latest prefs.
+    private func reconcile() {
+        let wish = inboxLock.withLock { inbox.take() }
+        if appliedGeneration != wish.session?.generation {
+            perform(policy.sessionEnded())
+            appliedGeneration = wish.session?.generation
+            if let s = wish.session {
+                logSessionID = s.sessionID
+                perform(policy.sessionStarted(sessionID: s.sessionID, clientSupportsAudio: s.clientSupportsAudio))
+            }
+        }
+        if let p = wish.prefs {
+            if p.sawDisable, p.enabled { perform(policy.prefs(sessionID: p.sessionID, enabled: false)) }
+            perform(policy.prefs(sessionID: p.sessionID, enabled: p.enabled))
+        }
+    }
 
     private func handle(_ event: AudioCaptureEvent) {
         switch event {

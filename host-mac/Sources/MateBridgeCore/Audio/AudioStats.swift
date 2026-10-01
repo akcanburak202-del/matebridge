@@ -6,7 +6,7 @@ public struct AudioStatsWindow: Equatable, Sendable {
     public private(set) var packets = 0
     /// Packets dropped before the wire: ring overflow (oldest first) or overwritten while being read.
     public private(set) var dropped = 0
-    /// AUDIO_FRAMEs the session server dropped because the control connection was backed up.
+    /// AUDIO_FRAMEs the session server dropped (outbox full, stale after a stall, or connection backed up).
     public private(set) var wireDropped = 0
     /// Largest backlog seen by the sender, in milliseconds of audio.
     public private(set) var ringMsMax = 0
@@ -46,10 +46,11 @@ public struct AudioStatsWindow: Equatable, Sendable {
         return Double(sorted[min(max(rank, 0), sorted.count - 1)]) / 1000
     }
 
-    /// `packets=… dropped=… ring_ms_max=… callback_ms_p50_95=a/b rms_dbfs=… wire_dropped=…`
+    /// `packets=… dropped=… ring_ms_max=… callback_ms_p50_95=a/b rms_dbfs=… wire_dropped=…`. `dropped` is every
+    /// packet lost on the host (ring and server); `wire_dropped` is the server's share of it.
     public var logFields: String {
         String(format: "packets=%d dropped=%d ring_ms_max=%d callback_ms_p50_95=%.2f/%.2f rms_dbfs=%.1f wire_dropped=%d",
-               packets, dropped, ringMsMax, callbackMs(percentile: 0.5), callbackMs(percentile: 0.95), rmsDbfs,
+               packets, dropped + wireDropped, ringMsMax, callbackMs(percentile: 0.5), callbackMs(percentile: 0.95), rmsDbfs,
                wireDropped)
     }
 }
