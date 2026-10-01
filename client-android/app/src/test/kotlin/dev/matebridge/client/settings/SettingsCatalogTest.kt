@@ -22,6 +22,7 @@ class SettingsCatalogTest {
         override var bitrateKbps = 0L
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
+        override var gameDefaultsActive = false
         override var audioAvailable = true
         val v = HashMap<String, Boolean>()
         var out = AudioOutPref.AUTO
@@ -93,7 +94,7 @@ class SettingsCatalogTest {
     @Test fun modeTransportAndAudioOutChoices() {
         val s = SettingsCatalog.sections(h, inStream = true)
         val mode = choice(s, "stream_mode")
-        assertEquals(listOf("Netlik (60 fps)", "Akıcı (120 fps)", "Performans (120 fps)"), mode.options.map { it.label })
+        assertEquals(listOf("Netlik (60 fps)", "Akıcı (120 fps)", "Performans (120 fps)", "Oyun (120 fps)"), mode.options.map { it.label })
         assertEquals("smooth", mode.selected())
         mode.select("clarity")
         val tr = choice(s, "transport")
@@ -138,5 +139,29 @@ class SettingsCatalogTest {
         val keys = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
         assertFalse("disconnect" in keys)
         assertNull(SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.firstOrNull { it.key == "bitrate_applied" })
+    }
+
+    @Test fun gameModeMarksTheLayeredSettingsOnly() { // T-109
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val bitrate = choice(s, "bitrate")
+        val out = choice(s, "audio_out")
+        val trail = item(s, "pen_trail") as SettingItem.Toggle
+        val dot = item(s, "pen_dot") as SettingItem.Toggle
+        val mode = choice(s, "stream_mode")
+        val stats = item(s, "stats") as SettingItem.Toggle
+        assertEquals("Bit hızı", bitrate.titleText())
+        assertEquals("Ses çıkışı", out.titleText())
+        assertEquals("Kalem izi: kapalı", trail.text())
+        assertEquals("Kalem noktası: kapalı", dot.text())
+        h.gameDefaultsActive = true // the same items follow the host (refresh re-reads them)
+        assertEquals("Bit hızı (oyun modu)", bitrate.titleText())
+        assertEquals("Ses çıkışı (oyun modu)", out.titleText())
+        assertEquals("Kalem izi (oyun modu): kapalı", trail.text())
+        assertEquals("Kalem noktası (oyun modu): kapalı", dot.text())
+        assertEquals("Görüntü modu", mode.titleText())
+        assertEquals("İstatistik katmanı: kapalı", stats.text())
+        h.gameDefaultsActive = false
+        assertEquals("Bit hızı", bitrate.titleText())
+        assertEquals("Kalem izi: kapalı", trail.text())
     }
 }

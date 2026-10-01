@@ -59,6 +59,8 @@ import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.DisplayModeInfo
 import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.FrameRatePolicy
+import dev.matebridge.client.stream.GameJitter
+import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StreamMode
@@ -114,6 +116,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settings: Settings
     private lateinit var controller: SessionController
     private var streamMode = StreamMode.DEFAULT
+    /**
+     * T-109 (decision 0014): bit rate, audio output and pen trail/dot are read and changed only through this, so game
+     * mode's temporary defaults sit over [settings] without ever being stored.
+     */
+    private lateinit var gameSettings: GameModeSettings
+    /** A valid `--es audio_out` launch override is in effect: game mode leaves the audio output alone until the panel changes it. */
+    private var audioOutFromExtra = false
     private lateinit var clipboard: ClipboardBridge // T-055
 
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
@@ -159,6 +168,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-016/T-052 smoothness knobs. Launch extras: `--ei jitter N` (unset = adaptive pacing on the surface path;
     // 0|1|2 = fixed jitter buffer in content frames, 0 = render at once as in T-015; -1 = adaptive off = 0) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
     private var bufferFrames = VideoRenderer.BUFFER_ADAPTIVE
+    /** The launch-time buffer (above) and where a fixed one came from; game mode uses 0 unless fixed (T-109). */
+    private var launchBufferFrames = VideoRenderer.BUFFER_ADAPTIVE
+    private var bufferFixedBy: GameJitter.Source? = null
     private var operatingRate = OperatingRate.STREAM_FPS // `--ei oprate 0|-1|-2|N`, see OperatingRate
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
@@ -300,6 +312,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
             else -> intent.getIntExtra("jitter", 0).coerceIn(0, 2) // -1 (adaptive off) -> 0
         }
+        launchBufferFrames = bufferFrames
+        bufferFixedBy = when {
+            glMode -> GameJitter.Source.GL
+            intent?.hasExtra("jitter") == true -> GameJitter.Source.EXTRA
+            else -> null
+        }
         inflightLimit = intent?.getIntExtra("inflight", 0)?.coerceIn(0, 8) ?: 0
         intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let {
             vsync.leadOverrideNs = it * 1000L
@@ -391,7 +409,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
-        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }, settings.audioOut()) { runOnUiThread { onAudioBecomingNoisy() } }
+        gameSettings = GameModeSettings(settings)
+        audioOutFromExtra = intent?.getStringExtra(AudioOutPref.EXTRA)?.let { AudioOutPref.parse(it) } != null
+        // T-109: stored mode Game starts with the game defaults (layer built before anything reads them).
+        gameSettings.onModeChanged(streamMode)?.let { change ->
+            applyJitter()
+            MbLog.i("game_mode", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
+        }
+        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut) { runOnUiThread { onAudioBecomingNoisy() } }
         val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
             intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
         )
@@ -438,7 +463,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSessionEnd() { audio?.endSession("session_end") }
 
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
-        }, streamMode.toPrefs(settings.bitrateKbps()), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
+        }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -481,8 +506,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }, { controller.trySend(it) }, { runOnUiThread(it) })
         // T-056: local pen indicator above the video (below the stats text and the panel), never touchable.
         penOverlay = PenOverlayView(this)
-        penOverlay.model.trailEnabled = settings.penTrail()
-        penOverlay.model.dotEnabled = settings.penDot()
+        penOverlay.model.trailEnabled = gameSettings.penTrail
+        penOverlay.model.dotEnabled = gameSettings.penDot
         penOverlay.setVideoViewport(viewport)
         root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         capture.penInk = penOverlay
@@ -730,22 +755,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         override val streamMode get() = this@MainActivity.streamMode
         override fun selectStreamMode(m: StreamMode) = setStreamMode(m, toast = false)
-        override val bitrateKbps get() = settings.bitrateKbps()
+        // T-109: bit rate, audio output and pen trail/dot go through gameSettings (stored, or the game layer).
+        override val bitrateKbps get() = gameSettings.bitrateKbps
         override fun selectBitrate(kbps: Long) {
-            settings.setBitrateKbps(kbps)
-            controller.setStreamPrefs(this@MainActivity.streamMode.toPrefs(settings.bitrateKbps()))
+            gameSettings.setBitrateKbps(kbps)
+            controller.setStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
+        override val gameDefaultsActive get() = gameSettings.active
 
         override val audioAvailable get() = audio != null
         override val audioEnabled get() = settings.audioEnabled()
         // No local stop (review L2): the host answers AUDIO_PREFS(0) with STOPPED, so a quick off-on cannot leave a
         // stream that the tablet dropped but the host still sends.
         override fun setAudioEnabled(on: Boolean) = setAudioSetting(on)
-        override val audioOut get() = audio?.outPref ?: settings.audioOut()
+        override val audioOut get() = audio?.outPref ?: gameSettings.audioOut
         // T-101: saves the choice and applies it, which ends a `--es audio_out` launch override (like the display mode).
+        // T-109: in game mode only the layer changes.
         override fun setAudioOut(p: AudioOutPref) {
-            settings.setAudioOut(p)
+            gameSettings.setAudioOut(p)
+            audioOutFromExtra = false
             audio?.setOutPref(p)
         }
 
@@ -762,15 +791,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         override val penTrail get() = penOverlay.model.trailEnabled
         override fun setPenTrail(on: Boolean) { // T-056
-            penOverlay.model.trailEnabled = on
-            settings.setPenTrail(on)
-            penOverlay.onPenClear()
+            gameSettings.setPenTrail(on)
+            applyPenTrail(on)
         }
         override val penDot get() = penOverlay.model.dotEnabled
         override fun setPenDot(on: Boolean) {
-            penOverlay.model.dotEnabled = on
-            settings.setPenDot(on)
-            penOverlay.postInvalidateOnAnimation()
+            gameSettings.setPenDot(on)
+            applyPenDot(on)
         }
 
         override val clipboardShare get() = clipboard.sync.enabled
@@ -841,13 +868,49 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Next display mode (Ctrl+Shift+7) with a Toast. */
     private fun cycleStreamMode() = setStreamMode(streamMode.next(), toast = true)
 
-    /** Display mode (T-050): persist, tell the host (STREAM_PREFS, with the bit rate choice), refresh both panels. */
+    /**
+     * Display mode (T-050): persist, tell the host (STREAM_PREFS, with the bit rate choice), refresh both panels.
+     * Entering or leaving game mode (T-109) first builds or drops the game layer and applies what changed (audio output,
+     * pen trail/dot, jitter buffer); fps, scale and bit rate still go in this one STREAM_PREFS.
+     */
     private fun setStreamMode(m: StreamMode, toast: Boolean) {
         streamMode = m
         settings.setStreamMode(m)
-        controller.setStreamPrefs(m.toPrefs(settings.bitrateKbps()))
+        gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
+        controller.setStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
         if (toast) Toast.makeText(this, m.toastText(), Toast.LENGTH_SHORT).show()
+    }
+
+    /** T-109: the game layer was built or dropped; apply the effective values that differ from what runs now. */
+    private fun applyGameLayer(change: GameModeSettings.Change) {
+        val e = gameSettings.effective()
+        if (!audioOutFromExtra) audio?.setOutPref(e.audioOut) // no-op (no reopen) when unchanged
+        applyPenTrail(e.penTrail)
+        applyPenDot(e.penDot)
+        applyJitter()
+        MbLog.i("game_mode", GameModeSettings.logFields(change, currentJitter(), e))
+    }
+
+    private fun applyPenTrail(on: Boolean) {
+        if (penOverlay.model.trailEnabled == on) return
+        penOverlay.model.trailEnabled = on
+        penOverlay.onPenClear()
+    }
+
+    private fun applyPenDot(on: Boolean) {
+        if (penOverlay.model.dotEnabled == on) return
+        penOverlay.model.dotEnabled = on
+        penOverlay.postInvalidateOnAnimation()
+    }
+
+    /** Jitter buffer for the current mode (decision 0014 §2); a launch value wins. */
+    private fun currentJitter() = GameJitter.choose(launchBufferFrames, bufferFixedBy, gameSettings.active)
+
+    /** Applies [currentJitter]; a running renderer takes it on its next frame. */
+    private fun applyJitter() {
+        bufferFrames = currentJitter().bufferFrames
+        renderer?.bufferFrames = bufferFrames
     }
 
     private fun applyPointerSpeeds() = capture.setPointerSpeeds(settings.touchpadSpeed(), settings.mouseSpeed())
@@ -1003,7 +1066,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val s = if (glMode) glDecoderSurface else video.holder.surface
             if (s != null) r.attachSurface(s)
         }
-        MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${settings.bitrateKbps()}") // T-105
+        MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
         refreshSettings() // "Uygulanan: N Mbps"
     }
 
