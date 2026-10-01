@@ -128,3 +128,25 @@ public struct VideoSocketSettings: Equatable, Sendable {
         "video_socket=\(socket.rawValue) notsent_lowat_kb=\(socket == .bsd ? String(notSentLowatKB) : "na")"
     }
 }
+
+/// `MATEBRIDGE_CONTROL_SOCKET=bsd|nw` (T-111): which TCP stack carries the control connection (input C->H, audio and
+/// control messages H->C). `bsd` (the default) is a kernel BSD socket, like the video connection since T-092; `nw`
+/// is Network.framework (`NWListener`/`NWConnection`) and stays only as an explicit fallback.
+public enum ControlSocketKnob: String, Equatable, Sendable, CaseIterable {
+    case nw
+    case bsd
+
+    /// Case-insensitive; anything else (or nil) is `.bsd`. Only an explicit `nw` selects Network.framework.
+    public static func parse(_ text: String?) -> ControlSocketKnob {
+        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = ControlSocketKnob(rawValue: t)
+        else { return .bsd }
+        return k
+    }
+
+    public static func parse(_ env: [String: String]) -> ControlSocketKnob {
+        parse(env["MATEBRIDGE_CONTROL_SOCKET"])
+    }
+
+    /// For `ev=listening`: `control_socket=bsd` or `control_socket=nw`.
+    public var logFields: String { "control_socket=\(rawValue)" }
+}
