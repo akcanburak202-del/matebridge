@@ -1,7 +1,7 @@
 ---
 id: T-091
 title: Mac — video bağlantısını çekirdek TCP soketine taşı (NWConnection kullanıcı alanı yığını Wi-Fi'de %4 yeniden gönderim) + TCP_NOTSENT_LOWAT
-status: in-progress
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-088]
@@ -97,4 +97,56 @@ alanında sınırsız kuyruk), `bsd`'de "çekirdekte gönderilmemiş bayt ≥ e�
    `onClosed` bir kez; IPv4 (127.0.0.1) bağlantısı da kabul edilir.
 
 ## Handoff
+
+- **Commit:** `0265709` (uygulama), plan `a254b80`; dal `task/T-091-video-bsd-socket`. `./scripts/check.sh` → ALL OK
+  (host-mac 238 test; yeni 22 test). Yeni soket testleri ayrıca 3 kez art arda ve `--sanitize=thread` ile temiz geçti.
+- **Dosyalar:**
+  - yeni `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift`: `BsdTcpListener`, `BsdTcpConnection`, `BsdTcpOptions`
+  - yeni `host-mac/Sources/MateBridgeCore/Session/SocketWriteBuffer.swift` (saf kısmi yazma tamponu)
+  - yeni `host-mac/Sources/MateBridgeCore/Video/SocketVideoTransport.swift` (`SocketVideoGate` + mühürlü `VideoTransport`)
+  - `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift` (`VideoSocketKnob`, `NotSentLowatKnob`, `VideoSocketSettings`)
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift` (`VideoLink` iki tel; `VideoListener`/`VideoConnection` sarmalayıcıları; `acceptVideo`; `ev=listening` alanları)
+  - `host-mac/Sources/MateBridgeHost/Session/TcpSocketProbe.swift` (`bsd` hedefi: fd doğrudan)
+  - yeni testler `host-mac/Tests/MateBridgeCoreTests/Session/SocketWriteBufferTests.swift`, `.../BsdTcpSocketTests.swift`
+  - `main.swift` değişmedi (düğmeler `SessionServer` içinde bir kez okunuyor, `serviceClass` gibi).
+- **Kabul kriterleri durumu:**
+  - Düğme: `MATEBRIDGE_VIDEO_SOCKET` varsayılan `nw`, `bsd`'de `[::]:47002` `IPV6_V6ONLY=0` ile (IPv4 v4-mapped olarak) dinlenir,
+    port planı (tercih → sistem portu, `port_fallback`) aynı. `TCP_NODELAY=1`, `SO_NOSIGPIPE=1`, `SO_KEEPALIVE=0`
+    (bugünkü `NWProtocolTCP.Options` varsayılanı kapalı), `O_NONBLOCK`, `FD_CLOEXEC`; `MATEBRIDGE_SERVICE_CLASS` →
+    `SO_NET_SERVICE_TYPE` (VI/VO/RD, en iyi çaba). Seçenekler testte `getsockopt` ile geri okunup doğrulandı.
+  - Protokol/güvenlik: `receiveVideoBytes`/kanıt/`apply(machine…)` yolu iki tel için ortak ve değişmedi; yalnızca bayt
+    taşıması değişti. `bsd`'de mühürleyici tek kopya (`SocketVideoTransport` içinde; `VideoLink` `nw` için ayrı, `bsd`'de nil —
+    aynı anahtarla iki mühürleyici nonce tekrarı olurdu). Mühürleme + kuyruğa yazma tek kilit altında → sayaç sırası korunur.
+    Sayaç tükenmesi: aynı `video_seal_failed` logu + bağlantı kapatma. Protokol ve fikstür değişmedi.
+  - Eşik: `MATEBRIDGE_NOTSENT_LOWAT_KB` (varsayılan 128, 16…4096). `canSend` = kullanıcı alanında kayıt yok ∧
+    `poll(POLLOUT,0)` (XNU'da `TCP_NOTSENT_LOWAT`'ı uyguluyor; loopback testi: kapı kapanınca çekirdek hâlâ bayt kabul
+    ediyor). Kapı kapalıyken `VideoSender` kare çekmez; kareler 2'lik kuyrukta, en eski delta düşer + anahtar kare istenir
+    (bugünkü `maxInFlight` yolu ile aynı; testte `keyframeNeeded` tetiklendi, `framesRejected=0`).
+  - Kısmi yazma/EAGAIN/EINTR: `SocketWriteBuffer` (FIFO + tek ofset; kayıt karışmaz). Kapanış: iki kaynak iptal, askıdaki
+    yazma kaynağı önce resume, fd iki iptal işleyicisinden sonra tek kez kapanır; `onClosed` bir kez; bekleyen yazmalar
+    `completion(false)`.
+  - `ev=sendq`: `bsd`'de `TcpSocketProbe` bağlantının fd'sini kilit altında doğrudan okur (`source=tcp_info`, `retx_pkts`).
+  - Log: `ev=listening … service_class=… video_socket=nw notsent_lowat_kb=na` / `video_socket=bsd notsent_lowat_kb=128`.
+  - Kontrol bağlantısı (47001) değişmedi. `BsdTcpConnection` video'ya özgü değil (okuma `onBytes`, sıralı yazma +
+    completion, `peerHost` → `SessionTransport.classify`), kontrol için ayrı kartta kullanılabilir.
+- **Varsayımlar / davranış farkları (`bsd`):**
+  - `completion(true)` ve LAT_TRACE `writeDoneUs` = kaydın son baytı çekirdeğe yazıldığında (`nw`'de `.contentProcessed`).
+  - Dinleyici `SO_REUSEADDR` kullanır (TIME_WAIT'teki eski video bağlantıları sabit portu engellemesin). Aynı joker port
+    başka bir süreçte açıksa `bind` `EADDRINUSE` verir → sistem portuna düşülür (testli).
+  - `accept` `EMFILE/ENFILE/ENOBUFS/ENOMEM` → 1 s duraklama + `ev=video_accept_paused`; diğer `accept` hataları →
+    `listenersFailed` (bugünkü dinleyici hatası yolu).
+  - Soket katmanı Core'da: test hedefi yalnızca `MateBridgeCore`'a bağlı ve `Package.swift` kart dışında; donanımdan bağımsız.
+- **Test EDİLMEDİ (gerçek cihaz/ağ gerekir):**
+  - `SessionServer` `bsd` yolu uçtan uca (otomatik test yok; host uygulaması başlatılmadı): `MATEBRIDGE_VIDEO_SOCKET=bsd`
+    ile tablet bağlanmalı, VIDEO_HELLO + kanıt + görüntü, devralma (ikinci video bağlantısı), STREAM_PREFS sonrası yeniden
+    bağlanma, oturum sonu/grace, Wi-Fi ve USB (`adb reverse`, loopback) iki yolda.
+  - `nettop -x`'te video bağlantısının `arch=so` görünmesi ve yeniden gönderim oranı; Wi-Fi fps/gecikme/`sendq` karşılaştırması
+    (`nw` vs `bsd`, eşik 64/128/256 KB).
+  - `MATEBRIDGE_SERVICE_CLASS=video` ile `SO_NET_SERVICE_TYPE`'ın Wi-Fi WMM işaretlemesine gerçekten yansıması.
+
+### Open questions
+
+- Varsayılanı `bsd`'ye çevirmek ve eşik değeri ölçümden sonra orkestratörün kararı.
+- Wi-Fi'de kalem öbeklenmesi için kontrol bağlantısını (47001) da `BsdTcpConnection`'a taşımak ayrı kart olmalı
+  (Bonjour yayını şu an kontrol `NWListener`'ında; taşınırsa `NWListener.Service` yerine `NetService`/`dns_sd` gerekir).
 
