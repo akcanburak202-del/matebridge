@@ -21,6 +21,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-108](tasks/T-108-client-aaudio-underrun-crackle.md) | Tablet — Düşük gecikme (AAudio) seste oyun sırasında cızırtı; güvenli başlangıç tamponu, öğrenilen değeri hatırlama, boşalmada yumuşak geçiş | 5 | android-client-dev | [T-101] |
+| [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
 
 ## done
 

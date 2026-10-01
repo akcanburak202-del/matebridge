@@ -35,3 +35,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0011 | Ses aktarımı: Core Audio process tap, sıkıştırmasız PCM, kontrol bağlantısı | kabul |
 | 0012 | Tablette ses çıkışı için AAudio MMAP (NDK + C++) | kabul |
 | 0013 | Akış sırasında ayarlar paneli: Ctrl+Shift+6 + Mac menüsü, sağ yan panel, bit hızı tabletten | kabul |
+| 0014 | Oyun modu: 120 fps, %66, en düşük gecikme; geçici varsayılanlar | kabul |
