@@ -288,7 +288,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         let p = prefs.normalized
-        log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille)")
+        let userKbps = VideoSettings.clampedUserBitrateKbps(p.bitrateKbps).map(String.init) ?? "default"
+        log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) bitrate_kbps=\(userKbps) "
+            + "requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille) requested_bitrate_kbps=\(prefs.bitrateKbps)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -318,7 +320,8 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// Derives the settings, and if they differ from the running ones: new `config_id`, session layer notified
     /// (`STREAM_CONFIG` + video close), capture and encoder rebuilt; the virtual display is kept unless the
-    /// refresh rate changes (`VideoPipeline` recreates it then, SCK cannot follow an in-place mode switch).
+    /// refresh rate changes (`VideoPipeline` recreates it then, SCK cannot follow an in-place mode switch). A change
+    /// of the bitrate alone (T-106) keeps the refresh rate, so only capture and encoder restart.
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
         let env = ProcessInfo.processInfo.environment
@@ -333,7 +336,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         log(.info, "stream_reconfigure",
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
             + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
-            + "bitrate_kbps=\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource)")
+            + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }

@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let audioTap = SystemAudioTap()
     private lazy var audio = HostAudio.makeStreamer(tap: audioTap)
     private let videoLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// Decision 0013 (T-106): sends `SETTINGS_OPEN`; shown only while the connected tablet supports the panel.
+    private let tabletSettingsEntry = NSMenuItem(title: "Tablette ayarları aç", action: #selector(openTabletSettings),
+                                                 keyEquivalent: "")
     private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
     private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
                                                        action: #selector(openAccessibilitySettings), keyEquivalent: "")
@@ -50,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         videoLine.isEnabled = false
         videoLine.isHidden = true
         menu.addItem(videoLine)
+        tabletSettingsEntry.target = self
+        tabletSettingsEntry.isHidden = true
+        menu.addItem(tabletSettingsEntry)
         // Input needs the Accessibility permission: shown (with a way to grant it) until it is granted.
         accessibilityLine.isEnabled = false
         accessibilityLine.isHidden = true
@@ -126,6 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             clipboard.sessionEnded()
         }
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
+        handlers.settingsPanelAvailable = { [weak self] available in
+            // FIFO onto the main queue: a quick true/false/true never lands out of order.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.tabletSettingsEntry.isHidden = !available } }
+        }
         handlers.videoAttached = { coordinator.videoAttached($0) }
         handlers.deliver = { message in
             coordinator.deliver(message)
@@ -226,6 +236,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .noAdb: usbLine.title = "USB: adb bulunamadı"
         }
         usbLine.isHidden = false
+    }
+
+    /// The server re-checks the session and its capability before sending (the item may be stale by a moment).
+    @objc private func openTabletSettings() {
+        server?.openSettingsPanel()
     }
 
     @objc private func forgetDevices() {

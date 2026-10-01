@@ -21,6 +21,10 @@ public struct VideoSettings: Equatable, Sendable {
     public var bitrateOverrideKbps: Int?
     /// Which knob set `bitrateOverrideKbps` (T-088); nil with an override means `env`.
     public var bitrateOverrideSource: BitrateSource?
+    /// The tablet's chosen bitrate (`STREAM_PREFS.bitrate_kbps`, clamped; decision 0013, T-106). nil = the mode
+    /// default. Always nil while `bitrateOverrideKbps` is set: the user's choice is not in effect then, so a change
+    /// of it alone is no change of the settings.
+    public var userBitrateKbps: Int?
 
     /// Tablet native panel, 2x HiDPI.
     public static let tabletDefault = VideoSettings(

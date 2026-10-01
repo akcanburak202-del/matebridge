@@ -8,6 +8,8 @@ public enum BitrateSource: String, Equatable, Sendable {
     case env
     /// `MATEBRIDGE_WIFI_BITRATE_KBPS` on a Wi-Fi session (T-088).
     case wifiEnv = "wifi_env"
+    /// The tablet's `STREAM_PREFS.bitrate_kbps` (decision 0013, T-106): wins over the mode default, loses to env.
+    case user
 }
 
 extension VideoSettings {
