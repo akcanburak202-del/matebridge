@@ -199,6 +199,37 @@ final class DecimationTests: XCTestCase {
         XCTAssertTrue(gaps.allSatisfy { (14_000...19_500).contains($0) }, "gaps: \(gaps.min()!)...\(gaps.max()!)")
     }
 
+    func testSteadyStreamWithDeliveryLagAndJitterNeverFiresTheHoldTimer() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let lag: Int64 = 6_000
+        let jitter: [Int64] = [0, 1_500, -1_500, 700, -900, 1_200]
+        var sent: [UInt64] = []
+        for i in 0..<600 {
+            let pts = UInt64(1_000_000 + Int64(Double(i) * 1_000_000 / 120))
+            let now = UInt64(Int64(pts) + lag + jitter[i % jitter.count])
+            if case .submit(let f) = p.takePending(nowUs: now, slotFree: true) { sent.append(f) }
+            if case .submit(let f) = p.offer(pts, ptsUs: pts, nowUs: now, slotFree: true) { sent.append(f) }
+        }
+        XCTAssertEqual(p.takeDeferred(), 0)
+        XCTAssertEqual(sent.count, 300)
+        let gaps = zip(sent.dropFirst(), sent).map { Int64($0) - Int64($1) }
+        XCTAssertTrue(gaps.allSatisfy { (14_000...19_500).contains($0) }, "gaps: \(gaps.min()!)...\(gaps.max()!)")
+    }
+
+    func testLoneOffGridFrameWithDeliveryLagIsStillSent() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let lag: UInt64 = 6_000
+        _ = p.offer(0, ptsUs: 0, nowUs: lag, slotFree: true)
+        // burst then idle: second capture 8.3 ms later, delivered with the same lag
+        guard case .hold(let retry) = p.offer(8_333, ptsUs: 8_333, nowUs: 8_333 + lag, slotFree: true) else { return XCTFail() }
+        XCTAssertEqual(retry, 16_666 + lag + 4_166 - (8_333 + lag))
+        if case .retry = p.takePending(nowUs: 8_333 + lag + 5_000, slotFree: true) {} else { XCTFail("not due") }
+        if case .submit(let f) = p.takePending(nowUs: 16_666 + lag + 4_200, slotFree: true) { XCTAssertEqual(f, 8_333) } else { XCTFail() }
+        XCTAssertEqual(p.takeDeferred(), 1)
+    }
+
     func testLoneOffGridFrameIsSentAfterSlotPlusGrace() {
         var p = FramePacer<UInt64>(streamFps: 120)
         p.setTargetFps(60)

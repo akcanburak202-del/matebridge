@@ -107,7 +107,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     }
 
     /// How long past its grid slot a held off-grid frame waits for a grid frame to supersede it: half a source
-    /// interval. Grid frames arrive at the slot within the capture jitter (well under a quarter interval), so half
+    /// interval (on top of the delivery lag, see `offer`). Grid frames arrive at the slot within the capture jitter (well under a quarter interval), so half
     /// an interval means "the stream went quiet", while the added latency stays below one source interval.
     var holdGraceUs: UInt64 { 1_000_000 / UInt64(max(1, streamFps)) / 2 }
 
@@ -135,7 +135,11 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             // reach the encoder even when the content changed once and then stopped.
             guard gate.waitUs(nowUs: ptsUs) == 0 else {
                 let slot = gate.nextSlotUs ?? ptsUs
-                var readyAt = slot + holdGraceUs
+                // `slot` is on the capture-timestamp grid but `readyAt` is compared with arrival time: add this
+                // frame's own delivery lag (arrival - capture) so the next grid frame, which arrives with the same
+                // lag, still beats the timer.
+                let lag = nowUs > ptsUs ? nowUs - ptsUs : 0
+                var readyAt = slot + lag + holdGraceUs
                 var deferred = true
                 if let old = pending {
                     decimatedCount += 1   // superseded by a newer capture
