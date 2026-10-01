@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MateBridge streams the screen to your tablet and receives its pen and keyboard input over the local network.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>MateBridge, Mac'in sesini tabletinizde çalmak için sistem sesini kaydeder.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_matebridge._tcp</string>

@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var server: SessionServer?
     private let coordinator = StreamCoordinator()
     private let input = InputController()
+    /// System audio to the tablet (T-094): the Core Audio tap and the streamer that drives it.
+    private let audioTap = SystemAudioTap()
+    private lazy var audio = HostAudio.makeStreamer(tap: audioTap)
     private let videoLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
     private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
@@ -109,16 +112,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let coordinator = self.coordinator
         let input = self.input
         let clipboard = self.clipboard
+        let audio = self.audio
         handlers.sessionStarted = { sid, cid, hello, transport in
             coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello, transport: transport)
             input.sessionStarted(sessionID: sid, configID: cid)
             clipboard.sessionStarted(sessionID: sid)
+            audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM))
         }
         handlers.sessionEnded = {
+            audio.sessionEnded()  // first: the Mac's own sound comes back at once (no video grace period)
             coordinator.sessionEnded()
             input.sessionEnded()
             clipboard.sessionEnded()
         }
+        handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
         handlers.videoAttached = { coordinator.videoAttached($0) }
         handlers.deliver = { message in
             coordinator.deliver(message)
@@ -140,6 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.onOverflow = { [server] in server.endSessions() }
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
         clipboard.send = { [server] sid, message in server.sendToSession(sessionID: sid, message) }
+        audio.attach(sink: server)
+        audioTap.cleanUpLeakedTaps()
         server.start()
 
         loginItem.registerOnFirstRun()
@@ -160,6 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()  // release input (releaseInput), BYE(SHUTTING_DOWN) to peers
+        audio.shutdown()  // stop streaming; the tap teardown below gives the Mac its sound back
+        audioTap.shutdown()
         input.shutdown()  // backstop: releases whatever is still held, even if no session was reported
         coordinator.shutdown()  // stop capture/encoder and remove the virtual display
     }

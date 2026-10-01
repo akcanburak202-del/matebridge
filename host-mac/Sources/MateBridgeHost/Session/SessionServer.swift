@@ -1,6 +1,7 @@
 import Foundation
 import MateBridgeCore
 import Network
+import Synchronization
 
 /// A validated video connection handed to the video pipeline (PROTOCOL.md section 3.5).
 /// Every frame is one encrypted record under this connection's key (PROTOCOL.md section 9).
@@ -195,6 +196,8 @@ public final class SessionServer: @unchecked Sendable {
                                               _ transport: SessionTransport) -> Void = { _, _, _, _ in }
         public var sessionEnded: @Sendable () -> Void = {}
         public var videoAttached: @Sendable (VideoLink) -> Void = { _ in }
+        /// `AUDIO_PREFS` from the active, encrypted session (decision 0011, T-094).
+        public var audioPrefs: @Sendable (_ sessionID: UInt32, AudioPrefs) -> Void = { _, _ in }
         public init() {}
     }
 
@@ -232,6 +235,10 @@ public final class SessionServer: @unchecked Sendable {
     private var tickTimer: DispatchSourceTimer?
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
+    /// Control connection of the active session (audio goes here).
+    private var activeControl: ConnectionID?
+    /// AUDIO_FRAMEs dropped because the control connection was backed up; read by the audio streamer.
+    private let audioWireDrops = Atomic<Int>(0)
     private var stopped = false
     private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
@@ -245,6 +252,9 @@ public final class SessionServer: @unchecked Sendable {
     private let flushGroup = DispatchGroup()
 
     static let maxInflightBytes = 256 * 1024
+    /// Unsent control bytes above which AUDIO_FRAMEs are dropped (about 120 ms of audio): audio never pushes the
+    /// connection to `maxInflightBytes`, and never queues far behind input-related sends (PROTOCOL.md 5).
+    static let audioBacklogBytes = 24 * 1024
     static let maxUnauthenticated = 4
     static let maxVideoHandshakePayload = 1024
     /// T-088 experiment knobs, read once.
@@ -498,6 +508,29 @@ public final class SessionServer: @unchecked Sendable {
         }
     }
 
+    /// Audio (T-094): `AUDIO_CONFIG` and `AUDIO_FRAME` to the active session's control connection. Ignored for an
+    /// ended session. An `AUDIO_FRAME` is dropped (counted) while more than `audioBacklogBytes` are unsent; an
+    /// `AUDIO_CONFIG` is always sent. Sealing runs on the session queue (a few microseconds per 10 ms packet); the bytes
+    /// go out H->C and never hold up input, which arrives C->H.
+    public func sendAudio(sessionID: UInt32, _ message: Message) {
+        queue.async { [self] in
+            guard !stopped, sessionID != 0, sessionID == currentSessionID, let id = activeControl,
+                  sealers[id] != nil else { return }
+            if case .audioFrame = message, inflightBytes[id, default: 0] > Self.audioBacklogBytes {
+                audioWireDrops.add(1, ordering: .relaxed)
+                return
+            }
+            sendControl(id, message)
+        }
+    }
+
+    /// AUDIO_PREFS handling: the machine has already seen the message (heartbeat). It reaches the audio streamer only
+    /// from the active session's encrypted control connection; anything earlier (pending, proving) is ignored.
+    private func routeAudioPrefs(_ id: ConnectionID, _ prefs: AudioPrefs) {
+        guard id == activeControl, sealers[id] != nil, currentSessionID != 0 else { return }
+        handlers.audioPrefs(currentSessionID, prefs)
+    }
+
     /// Answers the approval request `id`. Ignored unless it is still the pending one.
     public func resolveApproval(id: UInt64, approved: Bool) {
         queue.async { [self] in
@@ -749,6 +782,7 @@ public final class SessionServer: @unchecked Sendable {
                 }
                 apply(machine.received(id, message, now: nowUs()))
                 if inbounds[id] == nil { return false }  // the message ended this connection
+                if case .audioPrefs(let prefs) = message { routeAudioPrefs(id, prefs) }
             }
         } catch let error as CryptoError {
             let counter = inbounds[id]?.recordCounter ?? 0
@@ -1006,10 +1040,12 @@ public final class SessionServer: @unchecked Sendable {
                 }
             case .sessionStarted(let id, let sid, let configID, let hello):
                 activeTransport = Self.transport(of: controlConnections[id])
+                activeControl = id
                 currentSessionID = sid
                 currentConfigID = configID
                 handlers.sessionStarted(sid, configID, hello, activeTransport)
-            case .sessionEnded:
+            case .sessionEnded(let id):
+                if activeControl == id { activeControl = nil }
                 currentSessionID = 0
                 currentConfigID = 0
                 handlers.sessionEnded()
@@ -1135,6 +1171,10 @@ public final class SessionServer: @unchecked Sendable {
         timer.resume()
         tickTimer = timer
     }
+}
+
+extension SessionServer: AudioSink {
+    public func takeAudioWireDrops() -> Int { audioWireDrops.exchange(0, ordering: .relaxed) }
 }
 
 extension VideoLink: VideoTransport {
