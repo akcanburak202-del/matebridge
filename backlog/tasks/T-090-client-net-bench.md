@@ -1,7 +1,7 @@
 ---
 id: T-090
 title: Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için
-status: todo
+status: in_progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-089]
@@ -37,7 +37,11 @@ Mac tarafında basit bir Python gönderici/alıcı çalışacak (orkestratör sc
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+1. **Saf mantık (`bench/NetBench.kt`, yeni, Android'siz):** `NetBenchConfig.parse(getString, has, getInt)`. Kurallar: `net_bench` için `Endpoint.parse`, geçersizse null. `net_bench_s` varsayılan 8, [1, 600] aralığına sıkıştırılır. `net_bench_dir` down|up|both, varsayılan down; bilinmeyen değer down sayılır. `net_bench_streams` [1, 4]. `net_bench_rcvbuf_kb` yalnız >0 ise uygulanır. `Throughput.mbps(bytes, nanos)`. `ThroughputStats` saniyelik örnekleri toplar ve ort/min/max ile log alanlarını verir.
+2. **Çalıştırıcı (`bench/NetBenchRunner.kt`, yalnız java.net):** Her yön için N soket açar (`connect` zaman aşımı 3 s, `rcvbuf` istenirse `connect` öncesinde). Her bağlantıda tek satırlık ASCII başlık yazar: `netbench dir=down|up stream=i secs=S\n`. Mac betiği bununla bağlantıları ayırabilir; okumazsa zararı yoktur. İş parçacıkları: down için 256 KB tamponla okuyup atar, up için 64 KB tampon yazar. Ortak `AtomicLong` sayaçları vardır. Koordinatör her saniye `ev=tick`, sonunda `ev=done` yazar, soketleri kapatır ve `cancel()` destekler. Logger ve UI geri çağrısı lambda olarak verilir.
+3. **`NetBenchActivity` (yeni, dışa açık değil, manifest'te yatay):** Programatik `TextView` kullanır ("Ağ ölçümü… X Mbps"), ekran açık kalır, sonuç ekranda durur. `onDestroy` içinde `cancel` çağrılır.
+4. **MainActivity:** `super.onCreate` sonrası `net_bench` eki varsa ekleri `NetBenchActivity`'ye iletir, `finish()` eder ve döner. Normal oturum kurulmaz. `onDestroy` bu durumda başlatılmamış alanlara dokunmadan çıkar. Ek yoksa davranış değişmez.
+5. **Testler:** `NetBenchTest` ayrıştırma, Mbps ve istatistiği kapsar. Ayrıca kısa süreli bir loopback testi (`ServerSocket`) down/up baytlarını ve başlığı doğrular. Sonra `./scripts/check.sh` çalıştırılır.
 
 ## Handoff
 
