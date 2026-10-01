@@ -1,7 +1,7 @@
 ---
 id: T-088
 title: Mac — Wi-Fi ölçüm altyapısı ve düğmeler (aktarım logu, gönderim kuyruğu ölçümü, Wi-Fi bit hızı, serviceClass)
-status: in_progress
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-086]
@@ -27,12 +27,12 @@ Bu kart **ölçüm** ve **düşük riskli deney düğmeleri** ekler. Varsayılan
 
 ## Kabul kriterleri
 
-- [ ] `session_started` ve `stream_session` log'larına `transport=usb|wifi` eklenir (`SessionTransport.classify` zaten hesaplıyor).
-- [ ] Video bağlantısının çekirdek gönderim kuyruğu ölçülür, saniyede bir `ev=sendq` log satırı yazılır: `sendq_kb_p50_95_max`, `rtt_ms` (varsa `tcp_info`/`TCP_CONNECTION_INFO`: `tcpi_srtt`, `tcpi_snd_sbbytes`, yeniden gönderilen segmentler). Gerekirse Network.framework bağlantısından alttaki soket tanımlayıcısına güvenli erişim kullanılır. Erişilemiyorsa nedeni Handoff'a yazılır, yerine `netstat` örneklemesi önerilir. Yalnız `MATEBRIDGE_LAT_TRACE=1` ya da yeni `MATEBRIDGE_SENDQ_LOG=1` açıkken.
-- [ ] `MATEBRIDGE_WIFI_BITRATE_KBPS=N`: oturum Wi-Fi ise prefs varsayılanı yerine N kullanılır. `MATEBRIDGE_BITRATE_KBPS` verilmişse o kazanır. Log `bitrate_source=wifi_env`.
-- [ ] `MATEBRIDGE_SERVICE_CLASS=video|signaling|off` (varsayılan off = bugünkü). Video dinleyicisi için `NWParameters.serviceClass` `.interactiveVideo`, kontrol için `.responsiveData` (`signaling`'de `.interactiveVoice`). Video ve kontrol için ayrı parametre üretimi gerekiyor.
-- [ ] Saf mantık (bit hızı önceliği, aktarım sınıflaması, sendq istatistiği) testli.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `session_started` ve `stream_session` log'larına `transport=usb|wifi` eklenir (`SessionTransport.classify` zaten hesaplıyor).
+- [x] Video bağlantısının çekirdek gönderim kuyruğu ölçülür, saniyede bir `ev=sendq` log satırı yazılır: `sendq_kb_p50_95_max`, `rtt_ms` (varsa `tcp_info`/`TCP_CONNECTION_INFO`: `tcpi_srtt`, `tcpi_snd_sbbytes`, yeniden gönderilen segmentler). Gerekirse Network.framework bağlantısından alttaki soket tanımlayıcısına güvenli erişim kullanılır. Erişilemiyorsa nedeni Handoff'a yazılır, yerine `netstat` örneklemesi önerilir. Yalnız `MATEBRIDGE_LAT_TRACE=1` ya da yeni `MATEBRIDGE_SENDQ_LOG=1` açıkken.
+- [x] `MATEBRIDGE_WIFI_BITRATE_KBPS=N`: oturum Wi-Fi ise prefs varsayılanı yerine N kullanılır. `MATEBRIDGE_BITRATE_KBPS` verilmişse o kazanır. Log `bitrate_source=wifi_env`.
+- [x] `MATEBRIDGE_SERVICE_CLASS=video|signaling|off` (varsayılan off = bugünkü). Video dinleyicisi için `NWParameters.serviceClass` `.interactiveVideo`, kontrol için `.responsiveData` (`signaling`'de `.interactiveVoice`). Video ve kontrol için ayrı parametre üretimi gerekiyor.
+- [x] Saf mantık (bit hızı önceliği, aktarım sınıflaması, sendq istatistiği) testli.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -68,3 +68,61 @@ süreç fd tablosunda bulunuyor (`proc_pidinfo(PROC_PIDLISTFDS)` + `getsockname/
 
 ## Handoff
 
+
+- **Commit:** `340a147` (uygulama), `5ebf484` (plan). Dal `task/T-088-host-wifi-knobs`, `main` 79c7495 üzerinde.
+- **check.sh:** ALL OK (host-mac 216 XCTest + 508 swift-testing; yeni `TransportKnobsTests` 9, `SendQueueStatsTests` 5).
+- **Dosyalar:**
+  - Yeni (Core): `MateBridgeCore/Session/TransportKnobs.swift` (`SessionTransport.logName`, `TrafficClass`,
+    `ServiceClassKnob`, `SendQueueLogKnob`), `MateBridgeCore/Video/TransportBitrate.swift` (`BitrateSource`,
+    `applyingTransportKnobs`), `MateBridgeCore/Video/SendQueueStats.swift` (`TcpSample`, `SendQueueMeter`, `SendQueueWindow`).
+  - Değişen (Core): `Video/VideoSettings.swift` (`bitrateOverrideSource`), `Video/EncoderKnobs.swift` (`bitrateSource`).
+  - Yeni (Host): `Session/TcpSocketProbe.swift` (`TcpSocketProbe`, `SendQueueSampler`), `Session/SessionTransportBoard.swift`.
+  - Değişen (Host): `Session/SessionServer.swift`, `Session/StreamCoordinator.swift`.
+  - Test: `Tests/MateBridgeCoreTests/Session/TransportKnobsTests.swift`, `Tests/MateBridgeCoreTests/Video/SendQueueStatsTests.swift`.
+- **Log satırları:**
+  - `component=session ev=session_started conn=… config_id=… video_port=… transport=usb|wifi`
+  - `component=net ev=stream_session … bitrate_source=prefs|env|wifi_env codec=… transport=usb|wifi|unknown`
+    (`stream_reconfigure` da `bitrate_source=wifi_env` yazar.)
+  - `component=session ev=listening control_port=… video_port=… service_class=off` (ya da
+    `service_class=signaling video_class=interactiveVideo control_class=interactiveVoice`).
+  - Yalnız `MATEBRIDGE_SENDQ_LOG=1` ya da `MATEBRIDGE_LAT_TRACE=1` ile, saniyede bir (cadence tick'i):
+    `component=video ev=sendq samples=N sendq_kb_p50_95_max=a/b/c rtt_ms=… rttvar_ms=… retx_pkts=… cwnd_kb=… snd_wnd_kb=… source=tcp_info|nw_metadata transport=…`.
+    Hiç örnek alınamazsa bağlantı başına bir kez `ev=sendq_unavailable reason=no_endpoints|unavailable` (warning).
+- **sendq ölçüm yöntemi:** Network.framework fd vermiyor. `TcpSocketProbe` bağlantının yerel/uzak portlarını
+  (`currentPath.localEndpoint`, `endpoint`) alır, süreç fd tablosunda (`proc_pidinfo(PROC_PIDLISTFDS)`) `getsockname`/
+  `getpeername` + `SO_TYPE == SOCK_STREAM` ile eşleşen soketi bulur, `getsockopt(TCP_CONNECTION_INFO)` ile okur
+  (`tcpi_snd_sbbytes`, `tcpi_srtt`, `tcpi_rttvar`, `tcpi_txretransmitpackets`, `tcpi_snd_cwnd`, `tcpi_snd_wnd`).
+  Yalnız okuma: fd asla kapatılmaz/yazılmaz, her okumadan önce iki port yeniden doğrulanır (fd numarası başka sokete
+  geçmişse bırakılır). Bulunamazsa arama 120 örnekte bir tekrarlanır, arada `NWProtocolTCP.Metadata.availableSendBuffer`
+  yedeği kullanılır (`source=nw_metadata`, yalnız kuyruk; macOS 27'de loopback'te `sbbytes` ile aynı değeri verdi).
+  Örnek her kare yazımından **önce** alınır (bu karenin arkasında bekleyeceği birikim), `VideoLink.lock` dışında
+  (NWConnection sorguları bağlantı kuyruğuna gidebilir; o kuyruktaki tamamlama işleyicileri bu kilidi alıyor).
+  Doğrulama: gerçek `TcpSocketProbe` kaynağı + Core dosyalarıyla scratch bir harness (commit edilmedi), loopback
+  NWListener/NWConnection üzerinde: `source=tcp_info sendq_kb…=223.5 rtt_ms=1 cwnd_kb=1231.8` (okumayan alıcı).
+- **Varsayımlar / kararlar:**
+  - **Aktarım taşıma yolu:** `SessionServer` ile `StreamCoordinator` `MateBridgeApp/main.swift`'te yalnız HELLO taşıyan
+    callback'lerle bağlı ve o dosya `files:` listesinde değil. Bu yüzden aktarım süreç içi, kilitli, sınırlı
+    (16 cihaz) bir tabloyla (`SessionTransportBoard.shared`, cihaz kimliği anahtarlı) taşınıyor. Sunucu HELLO gelince
+    (makine `STREAM_CONFIG`'i istemeden önce) ve `.sessionStarted`'da yazar; koordinatör `streamConfig(for:)` ve
+    `sessionStarted`'da okur. Kayıt yoksa `transport=unknown`, Wi-Fi düğmesi uygulanmaz.
+  - "wifi" = loopback olmayan her eş (`SessionTransport.network`); kablolu LAN da `wifi` görünür.
+  - `MATEBRIDGE_WIFI_BITRATE_KBPS` aralığı `MATEBRIDGE_BITRATE_KBPS` ile aynı (5 000–150 000); dışı yok sayılır.
+    Değer `bitrateOverrideKbps` olarak saklandığından sonraki `STREAM_PREFS` ve kayıtlı prefs ile yeniden bağlanmada korunur.
+    `STREAM_CONFIG.bitrate_kbps` de bu değeri taşır (tablet bu alanı kullanmıyor).
+  - `signaling` modu kartta yazıldığı gibi: video `.interactiveVideo`, kontrol `.interactiveVoice` (`NWParameters.ServiceClass.signaling` kullanılmadı).
+    Service class dinleyici parametresine konur; kabul edilen bağlantılar onu devralır.
+  - `session_started` satırı `SessionMachine`'de üretiliyor (eş adresi bilmiyor); `transport=` alanı `SessionServer`
+    `.log` işlenirken, hemen önceki `.sessionStarted` eyleminin hesapladığı `activeTransport`'tan ekleniyor.
+  - Varsayılan davranış değişmedi: düğmeler kapalıyken yalnız log alanları eklendi, sampler oluşturulmuyor, `serviceClass` set edilmiyor.
+- **Test EDİLMEDİ (cihaz/izin gerekli):**
+  - Uygulama yeniden başlatılmadı, `bundle-host.sh` çalıştırılmadı; gerçek oturumda hiçbir log satırı görülmedi.
+  - Wi-Fi'da (`en0`) fd eşleşmesinin bulunduğu (`source=tcp_info`) ve `sendq_kb` değerlerinin anlamlı olduğu; loopback dışında doğrulanmadı.
+  - USB oturumunda `transport=usb` (adb reverse → loopback eş) ve Wi-Fi'da `transport=wifi` görülmesi.
+  - `MATEBRIDGE_SERVICE_CLASS=video|signaling` ile bağlantının kurulduğu ve paketlerin DSCP/WMM işaretini gerçekten
+    taşıdığı (ör. `tcpdump -v` ile TOS alanı); tabletin/AP'nin bunu ödüllendirip ödüllendirmediği.
+  - `MATEBRIDGE_WIFI_BITRATE_KBPS` ile Wi-Fi oturumunda `bitrate_source=wifi_env` ve kodlayıcının gerçek bit hızı.
+- **Açık sorular:**
+  - Daha temiz bağlama: `SessionServer.Handlers.sessionStarted`'a `transport` parametresi eklemek
+    (`MateBridgeApp/main.swift` üç satır) global tabloyu gereksiz kılar. Orkestratör isterse ayrı kartla yapılabilir.
+  - Yedek yol `NWConnection.metadata(definition:)` bağlantı kuyruğuna senkron gidiyor olabilir; örnekleme `VideoSender`
+    Task'ından yapıldığı için kilitlenme yok, ama yalnız fd bulunamazsa ve düğme açıkken çalışıyor.
