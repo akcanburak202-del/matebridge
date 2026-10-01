@@ -1,7 +1,7 @@
 ---
 id: T-112
 title: Tablet testi — InputHandoffTest zaman aşımı testi yük altında ara sıra kırılıyor
-status: todo
+status: in_progress
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -29,6 +29,9 @@ files:
 
 ## Plan
 
-(ajan doldurur)
+1. Kök neden hipotezi: `awaitNext` tek bir `parkNanos` çağrısından sonra kalan süreye bakmadan dönüyor. `parkNanos` sahte uyanmada ya da iş parçacığında kalmış eski bir izinle (stale permit) hemen döner. Test iş parçacığında eski izin kolayca kalabilir: aynı JUnit iş parçacığı başka testlerde `Semaphore`/`CountDownLatch` (AQS) kullanıyor, `offer` de `waiter` değerini kilit dışında okuyup zaten uyanmış tüketiciyi `unpark` edebiliyor. Önce eski kodla, testte `LockSupport.unpark(Thread.currentThread())` yapıp hatayı deterministik olarak yeniden üret.
+2. `FrameQueue.awaitNext`: mutlak bir son tarih (deadline) tut. Kare yoksa ve süre dolmadıysa kalan süreyle yeniden park et. Kesilmiş (interrupted) iş parçacığında döngüde dönüp durmamak için `null` dön, kesme bayrağını koru.
+3. Testler (`InputHandoffTest`): (a) önceden kalmış izinle `awaitNext` tam süre bekler; (b) bekleme sırasında başka iş parçacığından tekrarlanan `unpark` erken dönüş yaptırmaz; (c) kesilmiş iş parçacığı `null` alır ve bayrak korunur. Yalnızca alt sınır, üst sınır yok.
+4. `./scripts/check.sh`, Handoff.
 
 ## Handoff
