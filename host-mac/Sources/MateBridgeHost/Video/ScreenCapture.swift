@@ -21,8 +21,9 @@ public enum ScreenCaptureError: Error, CustomStringConvertible {
 
 /// Captures one display as full-range BT.709 4:2:0 frames (what the encoder wants, no conversion).
 final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    /// pixel buffer, presentation time, host monotonic microseconds of the frame
-    typealias Handler = @Sendable (CVPixelBuffer, CMTime, UInt64) -> Void
+    /// pixel buffer, presentation time, host monotonic microseconds of the frame, and the frame's display time
+    /// (`SCStreamFrameInfo.displayTime`, host clock microseconds; 0 when SCK gave none) used as the latency-trace origin
+    typealias Handler = @Sendable (CVPixelBuffer, CMTime, UInt64, UInt64) -> Void
 
     static let queueDepth = 5
     private let handler: Handler
@@ -87,7 +88,17 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let status = raw.flatMap { SCFrameStatus(rawValue: $0) }
         meter?.recordCapture(status: ScreenCapture.statusName(status), ptsUs: us, arrivalUs: arrivalUs)
         guard status == .complete, let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-        handler(pb, pts, us)
+        let displayUs = (attachments?.first?[.displayTime] as? UInt64).map(ScreenCapture.machTicksToUs) ?? 0
+        handler(pb, pts, us, displayUs)
+    }
+
+    /// Mach absolute time ticks (the unit of `SCStreamFrameInfo.displayTime`) to microseconds on the host clock.
+    static func machTicksToUs(_ ticks: UInt64) -> UInt64 {
+        var tb = mach_timebase_info_data_t()
+        mach_timebase_info(&tb)
+        let ns = ticks.multipliedFullWidth(by: UInt64(tb.numer))
+        let (q, _) = UInt64(tb.denom).dividingFullWidth(ns)
+        return q / 1000
     }
 
     /// Log-friendly name of an SCK frame status ("unknown" when the attachment is missing).

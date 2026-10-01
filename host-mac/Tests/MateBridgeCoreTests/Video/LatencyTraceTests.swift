@@ -22,6 +22,12 @@ final class LatencyTraceTests: XCTestCase {
         XCTAssertEqual(t.capToSentUs, 10_000)
     }
 
+    func testCapToSentIsSumOfStages() {
+        let t = trace()
+        XCTAssertEqual(t.capToSentUs, t.sckLagUs + t.holdUs + t.encUs + t.convUs + t.queueUs + t.writeUs)
+        XCTAssertEqual(t.capToSentUs, t.writeDoneUs - t.captureUs)
+    }
+
     func testBackwardsStageSaturatesAtZero() {
         let t = trace(delivered: 900)  // delivered before capture timestamp
         XCTAssertEqual(t.sckLagUs, 0)
