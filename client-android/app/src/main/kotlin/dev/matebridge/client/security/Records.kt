@@ -5,10 +5,8 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.session.MbLog
 import java.security.GeneralSecurityException
-import java.security.Provider
 import java.security.Security
 import javax.crypto.Cipher
-import javax.crypto.CipherSpi
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -38,77 +36,12 @@ object Records {
     fun newCipher(provider: String?): Cipher =
         if (provider == null) Cipher.getInstance(TRANSFORMATION) else Cipher.getInstance(TRANSFORMATION, provider)
 
-    /** A [Cipher] bound to one SPI instance for its whole life (see [newDirectCipher]). */
-    private class FixedSpiCipher(spi: CipherSpi, provider: Provider) : Cipher(spi, provider, TRANSFORMATION)
-
-    /**
-     * T-077: AES-GCM cipher whose SPI is fixed at construction. Android's `Cipher.init` re-runs provider selection on
-     * every call when the cipher came from `getInstance` (service lookup, a new `CipherSpi` instantiated by reflection and
-     * initialised, then swapped in), a fixed cost per record. The protected `Cipher(spi, provider, transformation)`
-     * constructor is public API and makes `init` go straight to the SPI. The crypto itself is the provider's, unchanged.
-     * Null when [providerName] lacks an exact `AES/GCM/NoPadding` service or the runtime refuses the construction.
-     */
-    fun newDirectCipher(providerName: String): Cipher? = try {
-        val p = Security.getProvider(providerName)
-        val service = p?.getService("Cipher", TRANSFORMATION)
-        val spi = service?.newInstance(null) as? CipherSpi
-        if (p == null || spi == null) null else FixedSpiCipher(spi, p)
-    } catch (e: Exception) {
-        null
-    }
-
-    /** Result of the one-time [directSelfTest] per provider name (null = not run yet). */
-    private val directOk = HashMap<String, Boolean>()
-
-    /**
-     * Known-answer check of [newDirectCipher] against the standard cipher of the same provider: seal with each, open with
-     * the other (two nonces, one with a tampered tag that must fail). Run once per provider per process.
-     */
-    @Synchronized
-    internal fun directSelfTest(providerName: String): Boolean = directOk.getOrPut(providerName) {
-        try {
-            val key = SecretKeySpec(ByteArray(32) { (it * 7 + 1).toByte() }, "AES")
-            val aad = header(40)
-            val plain = ByteArray(23) { (it * 13).toByte() }
-            var ok = true
-            for (counter in longArrayOf(0L, 0x0102030405060708L)) {
-                val direct = newDirectCipher(providerName) ?: return@getOrPut false
-                val std = newCipher(providerName)
-                fun seal(c: Cipher): ByteArray {
-                    c.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(counter)))
-                    c.updateAAD(aad)
-                    return c.doFinal(plain)
-                }
-                fun open(c: Cipher, body: ByteArray): ByteArray? = try {
-                    c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(counter)))
-                    c.updateAAD(aad)
-                    c.doFinal(body)
-                } catch (e: GeneralSecurityException) { null }
-                val a = seal(direct)
-                val b = seal(std)
-                ok = ok && a.contentEquals(b) &&
-                    open(direct, b)?.contentEquals(plain) == true &&
-                    open(std, a)?.contentEquals(plain) == true &&
-                    open(direct, a.copyOf().also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }) == null &&
-                    open(direct, a)?.contentEquals(plain) == true // still usable after a failed tag
-            }
-            ok
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Fast path: the preferred provider when present, otherwise the default; with a fixed SPI ([newDirectCipher]) when
-     * it passes [directSelfTest]. The chosen provider and mode are logged once per process.
-     */
+    /** Fast path: the preferred provider when present, otherwise the default. The chosen provider is logged once per process. */
     fun newCipher(): Cipher {
-        val name = try { newCipher(PREFERRED_PROVIDER).provider.name } catch (e: GeneralSecurityException) { newCipher(null).provider.name }
-        val direct = if (directSelfTest(name)) newDirectCipher(name) else null
-        val c = direct ?: newCipher(name)
+        val c = try { newCipher(PREFERRED_PROVIDER) } catch (e: GeneralSecurityException) { newCipher(null) }
         if (!providerLogged) {
             providerLogged = true
-            try { MbLog.i("crypto_provider", "provider=${c.provider.name} mode=${if (direct != null) "direct" else "standard"}") } catch (_: Throwable) {}
+            try { MbLog.i("crypto_provider", "provider=${c.provider.name}") } catch (_: Throwable) {}
         }
         return c
     }
@@ -120,10 +53,9 @@ object Records {
     @Volatile var stampOpens = false
 
     /**
-     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, in the standard mode and,
-     * where possible, the fixed-SPI mode ([newDirectCipher]), opens 3 KB, 64 KB and 432 KB records repeatedly. Per size:
-     * best total (`<n>k_us`), MB/s, and the p50 of the `init` (+ nonce/spec/AAD) and `doFinal` parts. Random key and
-     * data; nothing sensitive. Returns the log field strings.
+     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, opens 3 KB, 64 KB and
+     * 432 KB records repeatedly. Per size: best total (`<n>k_us`), MB/s, and the p50 of the `init` (+ nonce/spec/AAD) and
+     * `doFinal` parts (T-077). Random key and data; nothing sensitive. Returns the log field strings.
      */
     fun bench(): List<String> {
         val providers = ArrayList<String?>()
@@ -132,50 +64,45 @@ object Records {
         val out = ArrayList<String>()
         val key = SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
         for (name in providers.distinct()) {
-            for (direct in booleanArrayOf(false, true)) {
-                if (direct && name == null) continue
-                val fields = StringBuilder()
-                try {
-                    val cipher = if (direct) newDirectCipher(name!!) ?: continue else newCipher(name)
-                    fields.append("provider=").append(name ?: "default(${cipher.provider.name})")
-                        .append(" mode=").append(if (direct) "direct" else "standard")
-                    for (size in intArrayOf(3 * 1024, 64 * 1024, 432 * 1024)) {
-                        val aad = header(size + MIN_LENGTH)
-                        val enc = newCipher(name)
-                        enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
-                        enc.updateAAD(aad)
-                        val body = enc.doFinal(ByteArray(size + 1))
-                        var dst = ByteArray(0)
-                        val iters = if (size <= 4096) 202 else 12
-                        val initNs = LongArray(iters - 2)
-                        val finalNs = LongArray(iters - 2)
-                        var best = Long.MAX_VALUE
-                        for (i in 0 until iters) {
-                            val t0 = System.nanoTime()
-                            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
-                            cipher.updateAAD(aad)
-                            val t1 = System.nanoTime()
-                            dst = ensureOutput(dst, cipher, body.size)
-                            cipher.doFinal(body, 0, body.size, dst, 0)
-                            val t2 = System.nanoTime()
-                            if (i < 2) continue // warm-up
-                            initNs[i - 2] = t1 - t0; finalNs[i - 2] = t2 - t1
-                            if (t2 - t0 < best) best = t2 - t0
-                        }
-                        initNs.sort(); finalNs.sort()
-                        val k = "${size / 1024}k"
-                        fields.append(" ${k}_us=").append(best / 1000)
-                            .append(" ${k}_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
-                            .append(" ${k}_init_p50_us=").append(initNs[initNs.size / 2] / 1000.0)
-                            .append(" ${k}_final_p50_us=").append(finalNs[finalNs.size / 2] / 1000.0)
+            val fields = StringBuilder()
+            try {
+                val cipher = newCipher(name)
+                fields.append("provider=").append(name ?: "default(${cipher.provider.name})")
+                for (size in intArrayOf(3 * 1024, 64 * 1024, 432 * 1024)) {
+                    val aad = header(size + MIN_LENGTH)
+                    val enc = newCipher(name)
+                    enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
+                    enc.updateAAD(aad)
+                    val body = enc.doFinal(ByteArray(size + 1))
+                    var dst = ByteArray(0)
+                    val iters = if (size <= 4096) 202 else 12
+                    val initNs = LongArray(iters - 2)
+                    val finalNs = LongArray(iters - 2)
+                    var best = Long.MAX_VALUE
+                    for (i in 0 until iters) {
+                        val t0 = System.nanoTime()
+                        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
+                        cipher.updateAAD(aad)
+                        val t1 = System.nanoTime()
+                        dst = ensureOutput(dst, cipher, body.size)
+                        cipher.doFinal(body, 0, body.size, dst, 0)
+                        val t2 = System.nanoTime()
+                        if (i < 2) continue // warm-up
+                        initNs[i - 2] = t1 - t0; finalNs[i - 2] = t2 - t1
+                        if (t2 - t0 < best) best = t2 - t0
                     }
-                } catch (e: Throwable) {
-                    fields.setLength(0)
-                    fields.append("provider=").append(name).append(" mode=").append(if (direct) "direct" else "standard")
-                        .append(" err=").append(e.javaClass.simpleName)
+                    initNs.sort(); finalNs.sort()
+                    val k = "${size / 1024}k"
+                    fields.append(" ${k}_us=").append(best / 1000)
+                        .append(" ${k}_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
+                        .append(" ${k}_init_p50_us=").append(initNs[initNs.size / 2] / 1000.0)
+                        .append(" ${k}_final_p50_us=").append(finalNs[finalNs.size / 2] / 1000.0)
                 }
-                out += fields.toString()
+            } catch (e: Throwable) {
+                fields.setLength(0)
+                fields.append("provider=").append(name).append(" err=").append(e.javaClass.simpleName)
             }
+            out += fields.toString()
         }
         return out
     }
