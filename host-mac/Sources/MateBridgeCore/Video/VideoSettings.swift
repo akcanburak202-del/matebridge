@@ -19,6 +19,8 @@ public struct VideoSettings: Equatable, Sendable {
     public var maxFrameDelayCount: Int?
     /// `MATEBRIDGE_BITRATE_KBPS` (T-086): when set it wins over the stream-mode default of `applying(_:)`.
     public var bitrateOverrideKbps: Int?
+    /// Which knob set `bitrateOverrideKbps` (T-088); nil with an override means `env`.
+    public var bitrateOverrideSource: BitrateSource?
 
     /// Tablet native panel, 2x HiDPI.
     public static let tabletDefault = VideoSettings(
@@ -72,6 +74,7 @@ public struct VideoSettings: Equatable, Sendable {
         if let b = Self.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"]) {
             s.bitrateKbps = b
             s.bitrateOverrideKbps = b
+            s.bitrateOverrideSource = .env
         }
         s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil

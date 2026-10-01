@@ -189,9 +189,13 @@ extension VideoSettings {
         text?.trimmingCharacters(in: .whitespaces).lowercased() == "h264" ? .h264 : .hevc
     }
 
-    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over the mode default) or `prefs` (the
-    /// default for the stream mode, `defaultBitrateKbps`).
-    public var bitrateSource: String { bitrateOverrideKbps != nil ? "env" : "prefs" }
+    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over the mode default), `wifi_env`
+    /// (`MATEBRIDGE_WIFI_BITRATE_KBPS` on a Wi-Fi session, T-088) or `prefs` (the default for the stream mode,
+    /// `defaultBitrateKbps`). An override without a recorded source counts as `env`.
+    public var bitrateSource: String {
+        guard bitrateOverrideKbps != nil else { return BitrateSource.prefs.rawValue }
+        return (bitrateOverrideSource ?? .env).rawValue
+    }
 }
 
 /// When to re-encode the last captured buffer on a static screen (T-086). Pure: the encoder owns one under its lock,
