@@ -256,6 +256,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
+        val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
+            intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
+        )
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
@@ -275,7 +278,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
-        }, streamMode)
+        }, streamMode, quickAck)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)

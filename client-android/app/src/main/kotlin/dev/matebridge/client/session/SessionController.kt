@@ -74,6 +74,7 @@ class SessionController(
     private val pairKeys: PairKeyStore,
     private val listener: SessionListener,
     initialMode: StreamMode = StreamMode.DEFAULT,
+    private val quickAck: Boolean = true, // T-074 experiment switch (--ez quickack false)
 ) {
     private val machine = SessionMachine(hello, initialMode.toPrefs())
     private val random = SecureRandom()
@@ -207,7 +208,7 @@ class SessionController(
     /** Concise session log (docs/LOGGING.md). Never per frame, never names or message text. */
     private fun logEvent(e: SessionMachine.Event) {
         when (e) {
-            is SessionMachine.Event.Start -> MbLog.i("session_start", "host=${e.endpoint.host} port=${e.endpoint.port}")
+            is SessionMachine.Event.Start -> MbLog.i("session_start", "host=${e.endpoint.host} port=${e.endpoint.port} quickack=${if (quickAck) 1 else 0}")
             SessionMachine.Event.Stop -> MbLog.i("session_stop")
             is SessionMachine.Event.ControlOpened -> MbLog.i("connect_ok")
             is SessionMachine.Event.ControlClosed ->
@@ -397,13 +398,16 @@ class SessionController(
         private fun readRecords(input: InputStream, sec: SecureSession) {
             val decoder = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, sec.opener)
             val buf = ByteArray(RecordDecoder.READ_CHUNK)
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                decoder.feed(buf, 0, n)
+            QuickAck.forSocket(socket, quickAck, "control").use { qa ->
                 while (true) {
-                    val msg = decoder.next() ?: break
-                    events.put(SessionMachine.Event.Received(gen, msg))
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    qa.ack.afterRead()
+                    decoder.feed(buf, 0, n)
+                    while (true) {
+                        val msg = decoder.next() ?: break
+                        events.put(SessionMachine.Event.Received(gen, msg))
+                    }
                 }
             }
         }
@@ -456,6 +460,7 @@ class SessionController(
 
         private fun loop() {
             val buf = ByteArray(RecordDecoder.READ_CHUNK)
+            var qa: QuickAck.Handle = QuickAck.Handle(QuickAck(false, {}), null)
             try {
                 // Fresh nonce per video connection; both directions' keys come from it (section 9).
                 val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
@@ -466,8 +471,10 @@ class SessionController(
                 // VIDEO_HELLO in plaintext, then one sealed PING as proof of the key (the host sends no frames before it).
                 socket.getOutputStream().apply { write(channel.opening(hello, nonce, nowUs())); flush() }
                 val input = socket.getInputStream()
+                qa = QuickAck.forSocket(socket, quickAck, "video")
                 while (true) {
                     val n = input.read(buf)
+                    if (n > 0) qa.ack.afterRead()
                     val trace = PaceTrace.active // T-073: receive-path timestamps (null = off)
                     val recvNs = if (trace != null) System.nanoTime() else 0L
                     if (n < 0) break
@@ -488,6 +495,7 @@ class SessionController(
             } catch (e: IllegalStateException) {
                 // session secrets wiped: the control connection is gone
             }
+            qa.close()
             closeQuietly(socket)
             if (closedPosted.compareAndSet(false, true)) videoClosed.post(SessionMachine.Event.VideoClosed(gen))
         }
