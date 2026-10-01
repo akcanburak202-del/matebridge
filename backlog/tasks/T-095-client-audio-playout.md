@@ -82,35 +82,46 @@ Tablet araştırması (orkestratör, 2026-10-01):
 
 ## Handoff
 
-**Commit:** `19961f5` (plan: `30aa794`), branch `task/T-095-client-audio` (T-093'ün `task/T-093-audio-codecs` dalı üstünde).
+**Commit'ler:** plan `30aa794`, uygulama `19961f5`, inceleme düzeltmeleri `f3bd2ff`. Dal `task/T-095-client-audio` (T-093'ün `task/T-093-audio-codecs` dalı üstünde).
 
 **Dosyalar:**
-- Yeni `client/audio/`: `AudioJitterBuffer`, `CubicResampler`, `AudioRamp`, `DriftController`, `PlayoutCore` (saf burst mantığı), `AudioStreamGate` (akış/biçim kuralları), `AvSync` (zaman aritmetiği), `AudioPlayout` (Android: AudioTrack + yazıcı iş parçacığı).
-- `session/SessionMachine.kt` (`initialAudio`, `Event.SetAudio`, ACCEPTED'da DISPLAY_RATE'ten sonra AUDIO_PREFS), `session/SessionController.kt` (`setAudioEnabled`, `onAudio`: AUDIO_CONFIG/FRAME okuyucudan doğrudan, yalnız güncel bağlantı; `onSessionEnd` CloseControl'de), `session/Settings.kt` (`audio_enabled`, varsayılan açık), `MainActivity.kt` (HELLO bit8, "Ses" düğmesi, `--ez audio false`, video gecikmesi → A/V, onStop/oturum sonu/yeni bağlantıda durdurma).
-- Testler: `test/.../audio/` (5 dosya, 32 test) + `test/.../session/AudioPrefsMachineTest.kt` (5 test).
+- Yeni `client/audio/`: `AudioJitterBuffer`, `CubicResampler`, `AudioRamp`, `DriftController`, `PlayoutCore` (saf burst mantığı), `AudioStreamGate` (akış/biçim kuralları + bağlantı nesli), `VideoLatencyFilter` (medyan), `AvSync` (zaman aritmetiği), `AudioPlayout` (Android: AudioTrack + yazıcı iş parçacığı).
+- `session/SessionMachine.kt` (`initialAudio`, `Event.SetAudio`; ACCEPTED'da DISPLAY_RATE'ten sonra ve her SetAudio'da AUDIO_PREFS), `session/SessionController.kt` (`setAudioEnabled`; AUDIO_CONFIG/FRAME okuyucudan doğrudan `onAudio(msg, gen)`; `onConnectionGen(gen)` OpenControl'de, `onSessionEnd` CloseControl'de), `session/Settings.kt` (`audio_enabled`, varsayılan açık), `MainActivity.kt` (HELLO bit8, "Ses" düğmesi, `--ez audio false`, video gecikmesi → A/V, noisy → ayar kapalı).
+- `protocol/Messages.kt`: yalnız `Capabilities.AUDIO_PCM` yorumu (orkestratör izniyle, kart listesinde yok).
+- Testler: `test/.../audio/` (6 dosya) + `test/.../session/AudioPrefsMachineTest.kt`.
 
-**`./scripts/check.sh`: ALL OK.**
+**`./scripts/check.sh`: ALL OK** (`f3bd2ff`).
+
+**İnceleme düzeltmeleri (Codex + reviewer):**
+1. *P1/L1 bayat okuyucu:* `AudioStreamGate` bağlantı nesliyle silahlanır: `beginSession(gen)` (OpenControl) silahlar, `endSession` (CloseControl, onStop) silahsızlandırır. Kontrol kilit içinde yapılır; nesli tutmayan ya da silahsızken gelen AUDIO_CONFIG/FRAME yok sayılır (`audio_config_stale` logu). Ses ayarı kapatılınca silahsızlandırılmaz. Testler: `nothingIsTakenBeforeArmingOrAfterDisarming`, `staleGenerationCannotReplaceTheNewStream`.
+2. *P2 kesilemeyen yazma:* Yazıcının izi `@Volatile current` ile yayımlanır. `stop()` bu ize `pause()+flush()` uygular ve bloke `write` kısa sayıyla döner. `interrupt` ile `close` aynı kilidi paylaşır, böylece `release` tam bir kez çalışır ve kapanmış ize dokunulmaz. Yeni akışın yazıcısı izini açmadan önce eski yazıcının bitişini bekler (`CountDownLatch`, en çok 500 ms; aşılırsa `audio_previous_slow`).
+3. *M1 A/V sıçraması:* `video_ms` son 5 saniyenin medyanı. İlk A/V hedefi PRIMING'de uygulanır: başlamak hedeften erken olacaksa beklenir (en çok 250 ms dolum) ve başlangıç seviyesi A/V tabanı olur. Sonraki A/V yükselişleri pencere başına ≤ 10 ms (PI kayarak yetişir), düşüşler hemen. Yeniden dolum yalnız hedef − taban > 60 ms'de.
+4. *L2 hızlı kapat-aç:* Ses kapatılınca yerelde durdurma yok; host'un STOPPED'ına güvenilir. `SetAudio` kabul edilmiş oturumda değer değişmese de her zaman AUDIO_PREFS gönderir.
+5. *L3:* yeniden dolum eşiği = max(hedef + aralık, hedef + burst + 3 ms sönüş), en çok 250 ms.
+6. *L4:* güvenlik payı yavaş iner, 60 temiz saniyede 1 ms. Alt taşan değere 5 dakikadan önce dönülmez.
+7. *L5:* `play()`'den önce bir burst sessizlik yazılır; ilk saniyenin track underrun'ları tampon büyütmeye yol açmaz.
+8. *L6:* noisy olunca yerel sessize alma, ardından ayar kapanır (kalıcı), AUDIO_PREFS(0) gider, Mac sesi geri gelir ve Toast çıkar. Kullanıcı bağlantı panelinden yeniden açar.
+9. `AUDIO_PCM` yorumu düzeltildi; aşağıdaki test adımı 4 düzeltildi (panel yayın sırasında görünmez).
 
 **Varsayımlar / kararlar:**
-- Seviye = burst okunduktan sonra tamponda kalan. Alt taşma öngörüsü: bir burst sonrası < 3 ms kalacaksa 3 ms sönüş, sonra PRIMING; yeniden başlama eşiği = hedef + son pencere aralığı (≥ 1 paket), 5 ms açılış.
-- Güvenlik payı uyarlamalı: 5 ms başlar, her alt taşmada +5 ms (≤ 40 ms), 10 temiz saniyede −1 ms.
-- PI: Kp 100 ppm/ms, Ki 5 ppm/(ms·s) (200/10 ile simülasyonda paket testere dişi yüzünden sınır döngüsü oluştu). ±200 ppm simülasyonda ortalama oran ±20 ppm içinde, salınım < 300 ppm (duyulmaz).
-- Taşma ve sert yeniden eşitleme (taban > hedef + 120 ms) tampon içinde 3 ms **çapraz geçişle** atlar (sön + atla + aç tek adımda). Hedef − taban > 30 ms (A/V hedefi çok yükseldi) → sönüş + yeniden dolum (alt taşma sayılmaz).
-- `sample_index` sıçraması en çok 100 ms sessizlikle doldurulur (host zaten en çok 100 ms tutar); daha büyük sıçrama zaman ekseni kayması sayılır, çapalar capture zamanını doğru tutar.
-- A/V: `audio_ms` = getTimestamp ile bir sonraki yazılan karenin duyulma anı − okuma başının capture zamanı (ClockSync). `video_ms` = STATS gecikmesi (yakalama→decoder çıkışı) + pacer ekleme + 1 vsync (kompozisyon tahmini, ölçülmüyor). Hedef: ses +5 ms geç, 5 ms ölü bölge; yalnız ses tamponu büyütülür/küçültülür, video asla.
-- Noisy: akış yeni `stream_id` ile yeniden başlayana kadar sessiz (Ses düğmesi kapat/aç ya da yeniden bağlantı).
-- `--ez audio false`: HELLO bit8 yok, AUDIO_PREFS yok, AudioPlayout oluşturulmaz, Ses düğmesi gösterilmez.
+- Seviye = burst okunduktan sonra tamponda kalan. Alt taşma öngörüsü: bir burst sonrası < 3 ms kalacaksa 3 ms sönüş, sonra PRIMING; 5 ms açılış.
+- Güvenlik payı: 5 ms başlar, her alt taşmada +5 ms (≤ 40 ms), yavaş iner (yukarıda).
+- PI: Kp 100 ppm/ms, Ki 5 ppm/(ms·s). ±200 ppm simülasyonda ortalama oran ±20 ppm içinde, salınım < 500 ppm (%0,05, duyulmaz).
+- Taşma ve sert yeniden eşitleme (taban > hedef + 120 ms) tampon içinde 3 ms çapraz geçişle atlar.
+- `sample_index` sıçraması en çok 100 ms sessizlikle doldurulur; daha büyüğü zaman ekseni kayması sayılır, çapalar capture zamanını doğru tutar.
+- A/V: `audio_ms` = getTimestamp ile bir sonraki yazılan karenin duyulma anı − okuma başının capture zamanı (ClockSync). `video_ms` = medyan(STATS gecikmesi + pacer ekleme + 1 vsync). 1 vsync bir kompozisyon tahmini, ölçülmüyor. Hedef: ses +5 ms geç, 5 ms ölü bölge. Video asla geciktirilmez.
+- `--ez audio false`: HELLO'da bit8 yok, AUDIO_PREFS yok, AudioPlayout ve Ses düğmesi yok.
 
-**Test edilmedi (tablet gerekli):** AudioTrack FAST yolu, gerçek burst/gecikme, yönlendirme/dead-object yeniden kurma, noisy, A/V hizası, HarmonyOS davranışı. Host tarafı (T-094) olmadan uçtan uca çalınamaz.
+**Test edilmedi (tablet gerekli):** AudioTrack FAST yolu, gerçek burst/gecikme, `pause()` ile bloke yazmanın kesilmesi, yönlendirme/dead-object yeniden kurma, noisy, A/V hizası, HarmonyOS davranışı. Host tarafı (T-094) olmadan uçtan uca çalınamaz.
 
 **Tablette kontrol (orkestratör):**
-1. Açılış logu: `adb logcat -s MB/audio` → `ev=audio_device native_rate=48000 native_burst=… low_latency_feature=…`; akış başlayınca `ev=audio_track perf_mode=low_latency usage=media` (değilse `usage=game` denendi mi; `perf_mode=none` ise FAST yok → not al).
-2. Mac'te müzik/video çal: ses tablette kesintisiz mi; `ev=stats` satırında `underruns` ve `track_underruns` sabit kalıyor mu, `level_ms_floor` ≈ `target_ms`, `ratio_ppm` küçük (|·| < 200).
-3. Dudak senkronu: video izle, `av_offset_ms` −10…+40 aralığında mı; gözle/klaket testiyle doğrula (`video_ms` tahmini 1 vsync varsayıyor).
-4. Bağlantı panelindeki "Ses" düğmesi: kapat → tablet hemen susar, Mac sesi geri gelmeli (host); aç → yeni `audio_start stream_id=N+1`. Uygulama arka plana → `audio_stop reason=background`, Mac sesi geri gelir.
-5. Kulaklık tak/çıkar (veya BT): `audio_rebuild`/`audio_track reason=routing`, çıkarınca `audio_noisy muted=1` ve hoparlörden ses gelmemeli. Kalem/klavye/video etkilenmemeli; `--ez audio false` ile HELLO'da bit8 olmamalı.
+1. Açılış logu: `adb logcat -s MB/audio` → `ev=audio_device native_rate=48000 native_burst=… low_latency_feature=…`. Akış başlayınca `ev=audio_track perf_mode=low_latency usage=media` görünmeli; görünmüyorsa `usage=game` denendi mi bak, `perf_mode=none` ise FAST yol yok demektir, not al.
+2. Mac'te müzik ya da video çal. Ses kesintisiz mi? `ev=stats` satırında `underruns` ve `track_underruns` sabit kalmalı, `level_ms_floor` ≈ `target_ms`, `ratio_ppm` küçük olmalı. İlk saniyelerde `rebuffers=0` olmalı (A/V hedefi PRIMING'de uygulanıyor).
+3. Dudak senkronu: video izle; `av_offset_ms` −10…+40 aralığında mı? Gözle ya da klaket testiyle doğrula (`video_ms` 1 vsync varsayıyor).
+4. "Ses" düğmesi yalnız bağlantı panelinde var; yayın sırasında panel gizli. Bu yüzden bağlanmadan (ya da bağlantı koptuğunda) düğmeyi "kapalı" yap, sonra bağlan. Logda `audio_prefs_sent enabled=0` görünmeli, ses yalnız Mac'te çalmalı. Panele dönüp "açık" yap ve yeniden bağlan: `audio_start` gelmeli. Uygulamayı arka plana al: `audio_stop reason=background` görünmeli, Mac sesi geri gelmeli.
+5. Kulaklık tak/çıkar (veya BT): `audio_track reason=routing` görünmeli. Çıkarınca `audio_noisy muted=1`, `audio_prefs_sent enabled=0` ve bir Toast gelmeli; hoparlörden ses çıkmamalı, Mac sesi geri gelmeli. Kalem, klavye ve video etkilenmemeli. `--ez audio false` ile HELLO'da bit8 olmamalı ve `audio_device` logu çıkmamalı.
 
 ## Open questions
 
-- `protocol/Messages.kt` içindeki `Capabilities.AUDIO_PCM` yorumu hâlâ "Not sent until playback exists (T-095)" diyor; dosya bu kartın listesinde değil, dokunmadım (orkestratör güncelleyebilir).
 - `video_ms` tahmini ekran hattını 1 vsync sayıyor; cihazda klaket testiyle doğrulanmalı, gerekirse sabit ayarlanır.
+- Noisy sonrası ses ayarı kalıcı olarak kapanıyor (kullanıcı panelden açar). Oturumluk kapatma isteniyorsa ayrı bir bayrak gerekir.
