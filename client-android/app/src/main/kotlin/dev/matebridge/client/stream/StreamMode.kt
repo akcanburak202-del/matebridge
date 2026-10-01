@@ -12,7 +12,8 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
     SMOOTH("smooth", "Akıcı", 120, 1000),
     PERFORMANCE("performance", "Performans", 120, 750);
 
-    fun toPrefs() = StreamPrefs(fps, scalePermille)
+    /** STREAM_PREFS for this mode with the user's bit rate choice (0 = host default, decision 0013). */
+    fun toPrefs(bitrateKbps: Long = Bitrate.AUTO_KBPS) = StreamPrefs(fps, scalePermille, bitrateKbps)
 
     /** The next mode in the cycle (wraps around). */
     fun next(): StreamMode = entries[(ordinal + 1) % entries.size]

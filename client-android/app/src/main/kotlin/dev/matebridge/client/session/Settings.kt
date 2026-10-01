@@ -37,6 +37,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStreamMode(m: dev.matebridge.client.stream.StreamMode) = store.putString(KEY_STREAM_MODE, m.id)
 
+    /** Target bit rate (T-105, decision 0013): one of [dev.matebridge.client.stream.Bitrate.OPTIONS_KBPS]; default 0 = Otomatik. */
+    fun bitrateKbps(): Long = dev.matebridge.client.stream.Bitrate.sanitize(store.getString(KEY_BITRATE)?.toLongOrNull())
+
+    fun setBitrateKbps(kbps: Long) = store.putString(KEY_BITRATE, dev.matebridge.client.stream.Bitrate.sanitize(kbps).toString())
+
     /** Clipboard sharing (T-055); default on. */
     fun clipboardShare(): Boolean = store.getString(KEY_CLIPBOARD) != "0"
 
@@ -129,6 +134,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_TRANSPORT_AUTO_MIGRATED = "transport_auto_migrated"
         const val KEY_STATS = "stats_overlay"
         const val KEY_STREAM_MODE = "stream_mode"
+        const val KEY_BITRATE = "bitrate_kbps"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"

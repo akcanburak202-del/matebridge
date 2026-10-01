@@ -17,7 +17,7 @@ class KeyFrame(
 )
 
 /** A Ctrl+Shift+key chord handled on the tablet only (T-033, T-035); never reaches the Mac. */
-enum class LocalAction { NONE, STATS, SPEED_DOWN, SPEED_UP, BACKGROUND, STREAM_MODE }
+enum class LocalAction { NONE, STATS, SPEED_DOWN, SPEED_UP, BACKGROUND, STREAM_MODE, SETTINGS }
 
 /** What the activity does with the event: [consumed] keeps it from Android; [local] is a tablet-only chord to perform. */
 class KeyDecision(val consumed: Boolean, val local: LocalAction = LocalAction.NONE, val out: List<Outgoing> = emptyList()) {
@@ -110,6 +110,7 @@ class KeyTracker {
         private const val SCAN_F2 = 60
         private const val SCAN_F3 = 61
         // Number row by physical position (evdev): 8, 9, 0 mirror F3, F1, F2 for keyboards without F keys (T-038).
+        private const val SCAN_6 = 7 // Ctrl+Shift+6 opens/closes the in-stream settings panel (T-105, decision 0013)
         private const val SCAN_7 = 8 // Ctrl+Shift+7 cycles the display mode (T-050)
         private const val SCAN_8 = 9
         private const val SCAN_9 = 10
@@ -127,7 +128,7 @@ class KeyTracker {
 
         /**
          * The tablet-only chord this event belongs to, or NONE: Ctrl+Shift+F1 / F2 (pointer speed down / up), F3 (stats), or 9 / 0 / 8 by scan code,
-         * Esc (back to Android). Matched by key code or the Linux scan code, because Esc may arrive as BACK.
+         * 7 (display mode), 6 (settings panel), Esc (back to Android). Matched by key code or the Linux scan code, because Esc may arrive as BACK.
          */
         fun localChord(f: KeyFrame): LocalAction {
             if (!f.ctrl || !f.shift) return LocalAction.NONE
@@ -136,6 +137,7 @@ class KeyTracker {
                 f.keyCode == KEYCODE_F2 || f.scanCode == SCAN_F2 || f.scanCode == SCAN_0 -> LocalAction.SPEED_UP
                 f.keyCode == KEYCODE_F3 || f.scanCode == SCAN_F3 || f.scanCode == SCAN_8 -> LocalAction.STATS
                 f.scanCode == SCAN_7 -> LocalAction.STREAM_MODE
+                f.scanCode == SCAN_6 -> LocalAction.SETTINGS
                 f.keyCode == KEYCODE_ESCAPE || (f.scanCode == SCAN_ESC && f.keyCode == KEYCODE_BACK) -> LocalAction.BACKGROUND
                 else -> LocalAction.NONE
             }

@@ -28,7 +28,6 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -91,6 +90,12 @@ import dev.matebridge.client.session.SessionUi
 import dev.matebridge.client.session.Settings
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.truncateUtf8
+import dev.matebridge.client.session.TransportSwitch
+import dev.matebridge.client.settings.SettingsCatalog
+import dev.matebridge.client.settings.SettingsHost
+import dev.matebridge.client.settings.SettingsPanelState
+import dev.matebridge.client.settings.SettingsSidePanel
+import dev.matebridge.client.settings.SettingsViews
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -100,7 +105,8 @@ import kotlin.math.roundToInt
  * dev.matebridge.client.session, decoding in dev.matebridge.client.video; this class wires them to views.
  * While connected and streaming the connection panel is hidden and the SurfaceView (fitted to the
  * stream aspect, so the surface is exactly the video area) fills the screen. While the video is shown, pen and
- * finger events are routed to [InputCapture] (T-024) instead of the views.
+ * finger events are routed to [InputCapture] (T-024) instead of the views. The settings side panel (T-105) can open over
+ * the running video; while it is open no input is routed to the Mac.
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var status: TextView
@@ -108,8 +114,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settings: Settings
     private lateinit var controller: SessionController
     private var streamMode = StreamMode.DEFAULT
-    private var modeButton: Button? = null
     private lateinit var clipboard: ClipboardBridge // T-055
+
+    // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
+    private val settingsPanel = SettingsPanelState { ev, fields -> MbLog.i(ev, fields) }
+    private lateinit var sidePanel: SettingsSidePanel
+    private var connectSettings: SettingsViews? = null
+    private var sideSettings: SettingsViews? = null
+    /** "Bağlantıyı kes" was used: no automatic (re)connect until "Bağlan", a transport choice or the next onStart. */
+    private var userDisconnected = false
     /** T-095: `--ez audio false` turns audio off entirely (no AUDIO_PCM capability, no AUDIO_PREFS, no playback). */
     private var audioAllowed = true
     private var audio: AudioPlayout? = null
@@ -205,7 +218,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var transportEpoch = 0 // bumped whenever the transport is re-applied; stale migration results are ignored
     private var migrateEpoch = -1
     private var fallbackPending = false
-    private var autoButtons: List<Pair<TransportMode, Button>> = emptyList()
 
     /** Control generation the input layer last reset its model for (T-096); input goes only onto that connection. */
     private var inputGen = -1
@@ -350,7 +362,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sv.setOnLongClickListener { toggleStats(); true }
         }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
-        findViewById<Button>(R.id.toggle_stats).setOnClickListener { toggleStats() }
         endpointField = findViewById(R.id.endpoint)
         val prefs = getSharedPreferences("matebridge", Context.MODE_PRIVATE)
         settings = Settings(object : KeyValueStore {
@@ -363,12 +374,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
         setupManualEntry()
         findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
-        autoButtons = listOf(
-            TransportMode.AUTO to findViewById(R.id.connect_auto),
-            TransportMode.USB to findViewById(R.id.connect_usb),
-            TransportMode.WIFI to findViewById(R.id.connect_wifi),
-        )
-        for ((m, b) in autoButtons) b.setOnClickListener { selectTransport(m) }
 
         val pairKeys = EncryptedPairKeyStore(
             object : KeyValueStore {
@@ -427,7 +432,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onAudio(msg: Message, gen: Int) { audio?.onAudio(msg, gen) } // control reader thread, never blocks
 
             override fun onSessionEnd() { audio?.endSession("session_end") }
-        }, streamMode, quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
+
+            override fun onSettingsOpen() { runOnUiThread { openSettingsPanel(SettingsPanelState.Via.HOST) } } // T-105
+        }, streamMode.toPrefs(settings.bitrateKbps()), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -475,13 +482,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         penOverlay.setVideoViewport(viewport)
         root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         capture.penInk = penOverlay
-        addFingerToggle()
-        addModeButton()
-        addClipboardToggle()
-        addAudioToggle()
-        addAudioOutButton()
-        addPenToggles()
-        addShortcutHint()
+        setupSettingsPanels()
         applyImmersive()
         render(SessionUi.Searching)
     }
@@ -508,14 +509,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onPause() {
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
+        if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
         super.onPause()
     }
 
     // ---- input capture (T-024) ----
 
-    /** Input is routed to [capture] only while the video is visible and laid out; the connect panel keeps normal touch. */
+    /**
+     * Input is routed to [capture] only while the video is visible and laid out and the settings side panel is closed
+     * (T-105); the connect panel and the side panel keep normal touch and keys.
+     */
     private fun syncInputActive(nowMs: Long = SystemClock.uptimeMillis()): Boolean {
-        val on = started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty
+        val on = settingsPanel.inputAllowed(started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty)
         capture.setActive(on, nowMs)
         unbufferedPen.sync(on)
         syncPointerCapture(on, nowMs)
@@ -615,29 +620,182 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         val dev = ev.device
         if (dev != null && KeyTracker.isPhysicalKeyboard(dev.isVirtual, ev.source, dev.keyboardType)) {
-            syncInputActive()
-            val d = capture.onKey(
-                KeyFrame(
-                    deviceId = ev.deviceId, scanCode = ev.scanCode, keyCode = ev.keyCode,
-                    down = ev.action == KeyEvent.ACTION_DOWN, repeatCount = ev.repeatCount,
-                    ctrl = ev.metaState and KeyEvent.META_CTRL_ON != 0,
-                    shift = ev.metaState and KeyEvent.META_SHIFT_ON != 0,
-                    capsOn = ev.metaState and KeyEvent.META_CAPS_LOCK_ON != 0,
-                    timeUs = ev.eventTime * 1000,
-                ),
+            val frame = KeyFrame(
+                deviceId = ev.deviceId, scanCode = ev.scanCode, keyCode = ev.keyCode,
+                down = ev.action == KeyEvent.ACTION_DOWN, repeatCount = ev.repeatCount,
+                ctrl = ev.metaState and KeyEvent.META_CTRL_ON != 0,
+                shift = ev.metaState and KeyEvent.META_SHIFT_ON != 0,
+                capsOn = ev.metaState and KeyEvent.META_CAPS_LOCK_ON != 0,
+                timeUs = ev.eventTime * 1000,
             )
-            when (d.local) {
-                LocalAction.STATS -> toggleStats()
-                LocalAction.SPEED_DOWN -> adjustPointerSpeed(SpeedRange.STEP_DOWN)
-                LocalAction.SPEED_UP -> adjustPointerSpeed(SpeedRange.STEP_UP)
-                // onPause sends RELEASE_ALL(BACKGROUND) (Ctrl/Shift held on the Mac are released) and capture is dropped.
-                LocalAction.BACKGROUND -> moveTaskToBack(true)
-                LocalAction.STREAM_MODE -> cycleStreamMode()
-                LocalAction.NONE -> {}
+            // T-105: while the settings panel is open no key reaches the key tracker (nothing goes to the Mac).
+            if (settingsPanel.isOpen) {
+                when (val r = SettingsPanelState.keyWhileOpen(frame)) {
+                    SettingsPanelState.KeyResult.Close -> closeSettingsPanel(
+                        if (KeyTracker.localChord(frame) == LocalAction.SETTINGS) SettingsPanelState.Via.SHORTCUT else SettingsPanelState.Via.ESC,
+                    )
+                    is SettingsPanelState.KeyResult.Local -> runLocalAction(r.action)
+                    SettingsPanelState.KeyResult.Consume -> Unit
+                    SettingsPanelState.KeyResult.Pass -> return super.dispatchKeyEvent(ev)
+                }
+                return true
             }
+            syncInputActive()
+            val d = capture.onKey(frame)
+            runLocalAction(d.local)
             if (d.consumed) return true
         }
         return super.dispatchKeyEvent(ev)
+    }
+
+    private fun runLocalAction(a: LocalAction) {
+        when (a) {
+            LocalAction.STATS -> toggleStats()
+            LocalAction.SPEED_DOWN -> adjustPointerSpeed(SpeedRange.STEP_DOWN)
+            LocalAction.SPEED_UP -> adjustPointerSpeed(SpeedRange.STEP_UP)
+            // onPause sends RELEASE_ALL(BACKGROUND) (Ctrl/Shift held on the Mac are released) and capture is dropped.
+            LocalAction.BACKGROUND -> moveTaskToBack(true)
+            LocalAction.STREAM_MODE -> cycleStreamMode()
+            LocalAction.SETTINGS -> toggleSettingsPanel()
+            LocalAction.NONE -> {}
+        }
+    }
+
+    // ---- in-stream settings panel (T-105, decision 0013) ----
+
+    /** The stream is on screen (connect panel gone, a stream configured): the only time the side panel may open. */
+    private fun streamVisible() = started && !isDestroyed && panel.visibility == View.GONE && streamConfig != null
+
+    private fun toggleSettingsPanel() {
+        if (settingsPanel.isOpen) closeSettingsPanel(SettingsPanelState.Via.SHORTCUT) else openSettingsPanel(SettingsPanelState.Via.SHORTCUT)
+    }
+
+    /**
+     * Opens the side panel over the video. Input capture is turned off first, so `RELEASE_ALL(USER)` (after the natural
+     * releases of anything held) is queued before the panel shows; pointer capture is released so the panel is touchable.
+     */
+    private fun openSettingsPanel(via: SettingsPanelState.Via) {
+        if (!::sidePanel.isInitialized || !settingsPanel.open(via, streamVisible())) return
+        try {
+            syncInputActive()
+        } catch (e: RuntimeException) {
+            inputFailed(e, SystemClock.uptimeMillis())
+        }
+        sideSettings?.refresh()
+        sidePanel.show()
+    }
+
+    /** Closes the side panel; input capture and pointer capture come back on the next sync (now, unless [resync] is off). */
+    private fun closeSettingsPanel(via: SettingsPanelState.Via, resync: Boolean = true) {
+        if (!::sidePanel.isInitialized || !settingsPanel.close(via)) return
+        sidePanel.hide()
+        if (!resync) return
+        lastCaptureRequestMs = 0L // request pointer capture again at once, not after the retry interval
+        try {
+            syncInputActive()
+        } catch (e: RuntimeException) {
+            inputFailed(e, SystemClock.uptimeMillis())
+        }
+    }
+
+    /** Both panels show the same values: any change (from either panel, a shortcut or the session) refreshes both. */
+    private fun refreshSettings() {
+        connectSettings?.refresh()
+        sideSettings?.refresh()
+    }
+
+    private fun setupSettingsPanels() {
+        connectSettings = SettingsViews(this, findViewById(R.id.panel_settings), SettingsCatalog.sections(settingsHost, inStream = false)) { refreshSettings() }
+        sidePanel = SettingsSidePanel(this) { via -> closeSettingsPanel(via) }
+        sideSettings = SettingsViews(this, sidePanel.content, SettingsCatalog.sections(settingsHost, inStream = true)) { refreshSettings() }
+        root.addView(sidePanel.layer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+    }
+
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (settingsPanel.isOpen) { closeSettingsPanel(SettingsPanelState.Via.BACK); return }
+        super.onBackPressed()
+    }
+
+    /** The one implementation of every setting (persist + apply), used by both panels (T-105). */
+    private val settingsHost = object : SettingsHost {
+        override val transportMode get() = mode
+        override fun selectTransport(m: TransportMode) = this@MainActivity.selectTransport(m)
+        override fun disconnect() = userDisconnect()
+
+        override val streamMode get() = this@MainActivity.streamMode
+        override fun selectStreamMode(m: StreamMode) = setStreamMode(m, toast = false)
+        override val bitrateKbps get() = settings.bitrateKbps()
+        override fun selectBitrate(kbps: Long) {
+            settings.setBitrateKbps(kbps)
+            controller.setStreamPrefs(this@MainActivity.streamMode.toPrefs(settings.bitrateKbps()))
+        }
+        override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
+
+        override val audioAvailable get() = audio != null
+        override val audioEnabled get() = settings.audioEnabled()
+        // No local stop (review L2): the host answers AUDIO_PREFS(0) with STOPPED, so a quick off-on cannot leave a
+        // stream that the tablet dropped but the host still sends.
+        override fun setAudioEnabled(on: Boolean) = setAudioSetting(on)
+        override val audioOut get() = audio?.outPref ?: settings.audioOut()
+        // T-101: saves the choice and applies it, which ends a `--es audio_out` launch override (like the display mode).
+        override fun setAudioOut(p: AudioOutPref) {
+            settings.setAudioOut(p)
+            audio?.setOutPref(p)
+        }
+
+        override val touchpadSpeed get() = settings.touchpadSpeed()
+        override val mouseSpeed get() = settings.mouseSpeed()
+        override fun stepSpeed(mouse: Boolean, factor: Float) {
+            settings.adjustSpeed(mouse, factor)
+            applyPointerSpeeds()
+        }
+        override val fingerTouchDisabled get() = capture.fingersDisabled
+        override fun setFingerTouchDisabled(off: Boolean) { // decision 0006
+            settings.setFingerTouchDisabled(off)
+            capture.setFingersDisabled(off, SystemClock.uptimeMillis())
+        }
+        override val penTrail get() = penOverlay.model.trailEnabled
+        override fun setPenTrail(on: Boolean) { // T-056
+            penOverlay.model.trailEnabled = on
+            settings.setPenTrail(on)
+            penOverlay.onPenClear()
+        }
+        override val penDot get() = penOverlay.model.dotEnabled
+        override fun setPenDot(on: Boolean) {
+            penOverlay.model.dotEnabled = on
+            settings.setPenDot(on)
+            penOverlay.postInvalidateOnAnimation()
+        }
+
+        override val clipboardShare get() = clipboard.sync.enabled
+        override fun setClipboardShare(on: Boolean) { // T-055
+            clipboard.sync.enabled = on
+            settings.setClipboardShare(on)
+        }
+        override val statsOverlay get() = statsOn
+        override fun setStatsOverlay(on: Boolean) { if (on != statsOn) toggleStats() }
+    }
+
+    /**
+     * "Bağlantıyı kes" (T-105): BYE, back to the connect panel, and no automatic reconnect (discovery, USB probe, AUTO
+     * ticker) until the user presses "Bağlan" or picks a connection mode.
+     */
+    private fun userDisconnect() {
+        MbLog.i("user_disconnect")
+        userDisconnected = true
+        closeSettingsPanel(SettingsPanelState.Via.DISCONNECT, resync = false)
+        discovery?.stop()
+        discovery = null
+        ui.removeCallbacks(usbHintCheck)
+        pickGen++
+        picking = false
+        transportEpoch++
+        fallbackPending = false
+        currentEndpoint = null
+        controller.stop() // sends BYE, closes both connections
+        render(SessionUi.Idle)
     }
 
     private val inputTicker = object : Runnable {
@@ -659,91 +817,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun onInputDeviceRemoved(deviceId: Int) { capture.onDeviceRemoved(deviceId, SystemClock.uptimeMillis()) }
     }
 
-    /**
-     * "Parmak dokunmasını tamamen kapat" switch (decision 0006), added to the connect panel from code because
-     * the layout/strings resources are outside T-024's file list. The setting is persisted in [Settings].
-     */
-    private fun addFingerToggle() {
-        val p = panel as? LinearLayout ?: return
-        val b = Button(this)
-        fun label() { b.text = "Parmak dokunmasını tamamen kapat: " + if (capture.fingersDisabled) "AÇIK" else "kapalı" }
-        b.setOnClickListener {
-            val off = !capture.fingersDisabled
-            settings.setFingerTouchDisabled(off)
-            capture.setFingersDisabled(off, SystemClock.uptimeMillis())
-            label()
-        }
-        label()
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(b, lp)
-    }
-
-    /** T-055: connect-panel switch for clipboard sharing, persisted in [Settings] (default on). */
-    private fun addClipboardToggle() {
-        val p = panel as? LinearLayout ?: return
-        val b = Button(this)
-        fun label() { b.text = "Pano paylaşımı: " + if (clipboard.sync.enabled) "açık" else "kapalı" }
-        b.setOnClickListener {
-            clipboard.sync.enabled = !clipboard.sync.enabled
-            settings.setClipboardShare(clipboard.sync.enabled)
-            label()
-        }
-        label()
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(b, lp)
-    }
-
-    /** T-095: connect-panel switch for Mac audio, persisted in [Settings] (default on); absent with `--ez audio false`. */
-    private fun addAudioToggle() {
-        if (!audioAllowed) return
-        val p = panel as? LinearLayout ?: return
-        val b = Button(this)
-        fun label() { b.text = "Ses: " + if (settings.audioEnabled()) "açık" else "kapalı" }
-        b.setOnClickListener {
-            // No local stop (review L2): the host answers AUDIO_PREFS(0) with STOPPED, so a quick off-on cannot
-            // leave a stream that the tablet dropped but the host still sends.
-            setAudioSetting(!settings.audioEnabled())
-        }
-        audioLabel = { label() }
-        label()
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(b, lp)
-    }
-
-    private var audioLabel: (() -> Unit)? = null
-
-    /**
-     * T-101: connect-panel button "Ses çıkışı: Düşük gecikme / Uyumlu" (AAudio MMAP / AudioTrack), persisted in
-     * [Settings] (default Düşük gecikme). The label shows the preference in effect (a `--es audio_out` launch override
-     * included); a tap saves the other choice and applies it, which ends the launch override (like the display mode).
-     */
-    private fun addAudioOutButton() {
-        val a = audio ?: return
-        val p = panel as? LinearLayout ?: return
-        val b = Button(this)
-        fun label() {
-            b.text = "Ses çıkışı: " + if (a.outPref == AudioOutPref.TRACK) "Uyumlu" else "Düşük gecikme"
-        }
-        b.setOnClickListener {
-            val next = if (a.outPref == AudioOutPref.TRACK) AudioOutPref.AUTO else AudioOutPref.TRACK
-            settings.setAudioOut(next)
-            a.setOutPref(next)
-            label()
-        }
-        label()
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(b, lp)
-    }
-
-    /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes the panel button. Main thread. */
+    /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes both settings panels. Main thread. */
     private fun setAudioSetting(on: Boolean) {
         settings.setAudioEnabled(on)
         controller.setAudioEnabled(on)
-        audioLabel?.invoke()
+        refreshSettings()
     }
 
     /**
@@ -756,49 +834,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Toast.makeText(this, "Kulaklık çıkarıldı: ses Mac'e döndü (Ses ayarından yeniden açabilirsin)", Toast.LENGTH_LONG).show()
     }
 
-    /** T-056: connect-panel switches for the local pen trail and dot, persisted in [Settings] (default on). */
-    private fun addPenToggles() {
-        val p = panel as? LinearLayout ?: return
-        fun add(title: String, get: () -> Boolean, set: (Boolean) -> Unit) {
-            val b = Button(this)
-            fun label() { b.text = title + ": " + if (get()) "açık" else "kapalı" }
-            b.setOnClickListener { set(!get()); label() }
-            label()
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-            p.addView(b, lp)
-        }
-        add("Kalem izi", { penOverlay.model.trailEnabled }) { on ->
-            penOverlay.model.trailEnabled = on
-            settings.setPenTrail(on)
-            penOverlay.onPenClear()
-        }
-        add("Kalem noktası", { penOverlay.model.dotEnabled }) { on ->
-            penOverlay.model.dotEnabled = on
-            settings.setPenDot(on)
-            penOverlay.postInvalidateOnAnimation()
-        }
-    }
+    /** Next display mode (Ctrl+Shift+7) with a Toast. */
+    private fun cycleStreamMode() = setStreamMode(streamMode.next(), toast = true)
 
-    /** T-050: connect-panel button that cycles the display mode (click), persisted in [Settings]. */
-    private fun addModeButton() {
-        val p = panel as? LinearLayout ?: return
-        val b = Button(this)
-        b.text = streamMode.buttonText()
-        b.setOnClickListener { cycleStreamMode(toast = false) }
-        modeButton = b
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(b, lp)
-    }
-
-    /** Next display mode: persist, tell the host (STREAM_PREFS), refresh the button; Toast for the shortcut. */
-    private fun cycleStreamMode(toast: Boolean = true) {
-        streamMode = streamMode.next()
-        settings.setStreamMode(streamMode)
-        controller.setStreamMode(streamMode)
-        modeButton?.text = streamMode.buttonText()
-        if (toast) Toast.makeText(this, streamMode.toastText(), Toast.LENGTH_SHORT).show()
+    /** Display mode (T-050): persist, tell the host (STREAM_PREFS, with the bit rate choice), refresh both panels. */
+    private fun setStreamMode(m: StreamMode, toast: Boolean) {
+        streamMode = m
+        settings.setStreamMode(m)
+        controller.setStreamPrefs(m.toPrefs(settings.bitrateKbps()))
+        refreshSettings()
+        if (toast) Toast.makeText(this, m.toastText(), Toast.LENGTH_SHORT).show()
     }
 
     private fun applyPointerSpeeds() = capture.setPointerSpeeds(settings.touchpadSpeed(), settings.mouseSpeed())
@@ -807,17 +852,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val mouse = capture.lastPointerIsMouse
         val v = settings.adjustSpeed(mouse, factor)
         applyPointerSpeeds()
+        refreshSettings()
         Toast.makeText(this, SpeedRange.label(mouse, v), Toast.LENGTH_SHORT).show()
-    }
-
-    /** One-line shortcut list in the connect panel (added from code, like the finger switch). */
-    private fun addShortcutHint() {
-        val p = panel as? LinearLayout ?: return
-        val t = TextView(this)
-        t.text = "Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
-        p.addView(t, lp)
     }
 
     // ---- manual address field (T-078) ----
@@ -864,6 +900,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         statsOn = !statsOn
         settings.setStatsOverlay(statsOn)
         applyStatsVisibility()
+        refreshSettings()
     }
 
     private fun applyStatsVisibility() {
@@ -962,6 +999,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val s = if (glMode) glDecoderSurface else video.holder.surface
             if (s != null) r.attachSurface(s)
         }
+        MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${settings.bitrateKbps()}") // T-105
+        refreshSettings() // "Uygulanan: N Mbps"
     }
 
     /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
@@ -1185,8 +1224,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
+        userDisconnected = false // T-105: a fresh start connects as usual
         mode = modeOverride ?: settings.transportMode()
-        updateTransportButtons()
+        refreshSettings()
         hostReached = false
         hideManualEntry() // T-078: every (re)start begins without an editable field on screen
         render(SessionUi.Searching)
@@ -1242,28 +1282,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         connect(ConnectMode.usbEndpoint)
     }
 
+    /**
+     * A connection-mode choice from either panel. An accepted session that already fits the choice is kept (T-105:
+     * AUTO always fits and its policy moves Wi-Fi to USB later; USB/Wi-Fi only on that transport); otherwise the session
+     * stops and the transport is applied again (T-096).
+     */
     private fun selectTransport(m: TransportMode) {
+        val keep = TransportSwitch.keepsSession(m, lastUi is SessionUi.Connected && currentEndpoint != null, currentEndpoint?.let { ConnectMode.transportOf(it) })
         mode = m
         modeOverride = null // a panel choice ends the launch override
         settings.setTransportMode(m)
-        updateTransportButtons()
+        refreshSettings()
+        MbLog.i("transport_select", "mode=${m.id} keep=${if (keep) 1 else 0}")
+        if (keep) {
+            pickGen++ // a probe started under the old mode reports into nothing (it would leave `picking` set)
+            picking = false
+            return
+        }
+        userDisconnected = false
         currentEndpoint = null
         controller.stop()
         render(SessionUi.Searching)
         applyTransport()
-    }
-
-    private fun updateTransportButtons() {
-        for ((m, b) in autoButtons) {
-            val base = getString(
-                when (m) {
-                    TransportMode.AUTO -> R.string.connect_auto
-                    TransportMode.USB -> R.string.connect_usb
-                    TransportMode.WIFI -> R.string.connect_wifi
-                },
-            )
-            b.text = if (m == mode) "$base (seçili)" else base
-        }
     }
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI
@@ -1342,7 +1382,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun autoStep() {
-        if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending) return
+        if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending || userDisconnected) return
         val now = SystemClock.elapsedRealtime()
         when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now)) {
             AutoUsbPolicy.Step.MIGRATE -> startMigration(now)
@@ -1460,7 +1500,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onDiscovered(ep: Endpoint) {
-        if (!started || manualMode) return
+        if (!started || manualMode || userDisconnected) return
         if (currentEndpoint == null || lastUi is SessionUi.Disconnected) {
             connect(ep)
         }
@@ -1468,6 +1508,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onConnectClicked() {
         val typed = endpointField.text.toString()
+        if (userDisconnected && typed.isBlank()) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
+            userDisconnected = false
+            hideManualEntry()
+            render(SessionUi.Searching)
+            applyTransport()
+            return
+        }
+        userDisconnected = false
         val ep = if (typed.isBlank()) currentEndpoint else Endpoint.parse(typed)
         if (ep == null) {
             Toast.makeText(this, R.string.invalid_endpoint, Toast.LENGTH_SHORT).show()
@@ -1512,8 +1560,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
+        if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
         status.text = when (state) {
-            SessionUi.Idle -> getString(R.string.state_idle)
+            SessionUi.Idle -> if (userDisconnected) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
             SessionUi.Searching -> getString(R.string.state_searching)
             is SessionUi.Connecting -> getString(R.string.state_connecting, state.endpoint.toString())
             is SessionUi.AwaitingApproval ->
@@ -1559,6 +1608,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private companion object {
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
+        const val USER_DISCONNECTED_TEXT = "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun."
         const val KEYFRAME_RETRY_MS = 500L
         const val RATE_POLL_MS = 100L
         const val INPUT_TICK_MS = 25L
@@ -1591,7 +1641,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val hz = windowManager.defaultDisplay.refreshRate.roundToInt()
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or
-            (if (audioAllowed) Capabilities.AUDIO_PCM else 0) // T-095
+            (if (audioAllowed) Capabilities.AUDIO_PCM else 0) or // T-095
+            Capabilities.SETTINGS_PANEL // T-105: handles SETTINGS_OPEN
         return Hello(
             protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),

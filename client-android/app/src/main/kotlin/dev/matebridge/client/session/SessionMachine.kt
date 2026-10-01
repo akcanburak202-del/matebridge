@@ -8,6 +8,7 @@ import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.Pong
+import dev.matebridge.client.protocol.SettingsOpen
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.StreamMode
@@ -96,6 +97,8 @@ class SessionMachine(
         data object CloseRetired : Action
         /** T-096: outcome of one [Event.Migrate]. */
         data class MigrationResult(val endpoint: Endpoint, val ok: Boolean, val reason: String) : Action
+        /** T-105: the host asked for the settings panel (SETTINGS_OPEN on an accepted session); the UI decides. */
+        data object OpenSettings : Action
     }
 
     private enum class Phase { IDLE, CONNECTING, AWAIT_ACK, PENDING, ACCEPTED, STREAMING, WAIT_RETRY, FAILED }
@@ -239,6 +242,8 @@ class SessionMachine(
             is StreamConfig -> onConfig(msg, out)
             is Ping -> out += Action.Send(Pong(msg.seq, msg.senderTimeUs, nowUs))
             is Pong -> lastPongUs = nowUs
+            // PROTOCOL.md 0x08: only an accepted session; whether the stream is visible is the UI's call.
+            SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is Bye -> {
                 if (msg.reason == Bye.REJECTED) {
                     closeAll(out, graceful = false)

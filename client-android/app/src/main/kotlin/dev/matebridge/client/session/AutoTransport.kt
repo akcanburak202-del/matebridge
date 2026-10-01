@@ -16,6 +16,19 @@ enum class TransportMode(val id: String) {
     }
 }
 
+/**
+ * T-105: a connection-mode choice made while a session is accepted (the in-stream settings panel) keeps the session when
+ * it already fits the new choice: AUTO always fits (its own policy moves Wi-Fi to USB, T-096), USB/Wi-Fi only on that
+ * transport. Without an accepted session the transport is always re-applied (the connect panel's behaviour).
+ */
+object TransportSwitch {
+    fun keepsSession(choice: TransportMode, accepted: Boolean, current: Transport?): Boolean = accepted && when (choice) {
+        TransportMode.AUTO -> true
+        TransportMode.USB -> current == Transport.USB
+        TransportMode.WIFI -> current == Transport.WIFI
+    }
+}
+
 /** Result of the short TCP reachability probe of the USB control port (`adb reverse`, PROTOCOL.md section 3.1). */
 enum class ProbeResult(val reason: String) {
     OPEN("usb_open"), REFUSED("usb_refused"), TIMEOUT("usb_timeout"), ERROR("usb_error");
