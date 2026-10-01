@@ -1,7 +1,7 @@
 ---
 id: T-081
 title: Mac — tablet bağlıyken ekran uykusunda görüntü koparsa ekranı uyandır (IOPMAssertionDeclareUserActivity)
-status: todo
+status: in-progress
 phase: 4
 owner: mac-host-dev
 depends_on: [T-040]
@@ -29,7 +29,10 @@ Kullanıcı kararı (2026-10-01): tablette MateBridge açık ve oturum aktifken 
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `MateBridgeCore/Video/DisplayWakePolicy.swift` (saf): `DisplayWakeReason` (`capture_source_lost` = SCStream -3815, `display_create_nil` = sanal ekran `nil`), SCK hata kodu sınıflandırması, `DisplayWakePolicy.displayLost(reason:sessionActive:now:)` → `.skip` / `.wake(log:)`: oturum yoksa ya da neden tanınmıyorsa asla uyandırmaz; en çok 1 uyandırma/s; log yalnızca bölümün ilk uyandırmasında, neden değişince ya da bölüm içinde 10 s'de bir (`wakes=N`). `recovered()` (ekran oluşturuldu) ve `sessionEnded()` bölümü sıfırlar.
+2. `MateBridgeHost/Video/DisplayWaker.swift`: `IOPMAssertionDeclareUserActivity(kIOPMUserActiveLocal)` ince sarmalayıcı; dönen assertion id saklanıp sonraki çağrıya verilir (başlık dosyasının önerisi; ekran uykusu ayarına kadar erteleme, kalıcı assertion değil). `PreventUserIdleDisplaySleep` yok. Hata sınıflandırması (VirtualDisplayError.creationFailed, SCStreamErrorDomain -3815) burada.
+3. `StreamCoordinator`: `pipelineFailed` olayına sınıflandırılmış neden eklenir; `onPipelineFailed` ve `createPipeline` hata yolunda politika sorulur (`session != nil` = kabul edilmiş şifreli oturum; PAIRING onayı bekleyen bağlantı `sessionStarted` üretmez, tablet arka plana geçince BYE → `sessionEnded`). `display_created`'de `recovered()`, `onSessionEnded`/`onShutdown`'da `sessionEnded()`. Yeniden deneme mantığı değişmez. Log: `component=net ev=wake_display reason=… wakes=N`.
+4. Testler: `Tests/MateBridgeCoreTests/Video/DisplayWakePolicyTests.swift`.
 
 ## Handoff
 
