@@ -14,7 +14,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-088](tasks/T-088-host-wifi-knobs.md) | Mac — Wi-Fi ölçüm altyapısı ve düğmeler (aktarım logu, gönderim kuyruğu ölçümü, Wi-Fi bit hızı, serviceClass) | 5 | mac-host-dev | [T-086] |
-| [T-089](tasks/T-089-client-wifi-knobs.md) | Tablet — Wi-Fi ölçüm altyapısı ve düğmeler (RTT istatistiği, aktarım logu, trafik sınıfı, WifiLock düşük gecikme) | 5 | android-client-dev | [T-077] |
 
 ## done
 
@@ -105,3 +104,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
 | [T-086](tasks/T-086-host-encoder-quality-knobs.md) | Mac — kodlayıcı deney düğmeleri (H.264, bit hızı, kalite), boşta kalite tazeleme ve keskinlik ölçümü (T-082/T-085) | 5 | mac-host-dev | [T-082, T-085] |
 | [T-087](tasks/T-087-host-idle-refresh-real-refine.md) | Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç | 5 | mac-host-dev | [T-086] |
+| [T-089](tasks/T-089-client-wifi-knobs.md) | Tablet — Wi-Fi ölçüm altyapısı ve düğmeler (RTT istatistiği, aktarım logu, trafik sınıfı, WifiLock düşük gecikme) | 5 | android-client-dev | [T-077] |

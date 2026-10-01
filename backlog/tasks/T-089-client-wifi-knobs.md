@@ -1,7 +1,7 @@
 ---
 id: T-089
 title: Tablet — Wi-Fi ölçüm altyapısı ve düğmeler (RTT istatistiği, aktarım logu, trafik sınıfı, WifiLock düşük gecikme)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-077]
