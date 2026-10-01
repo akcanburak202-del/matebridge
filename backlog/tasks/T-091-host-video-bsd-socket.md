@@ -1,7 +1,7 @@
 ---
 id: T-091
 title: Mac — video bağlantısını çekirdek TCP soketine taşı (NWConnection kullanıcı alanı yığını Wi-Fi'de %4 yeniden gönderim) + TCP_NOTSENT_LOWAT
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-088]
