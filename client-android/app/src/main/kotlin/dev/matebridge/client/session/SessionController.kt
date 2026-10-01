@@ -1,5 +1,8 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.protocol.AudioConfig
+import dev.matebridge.client.protocol.AudioFrame
+import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.protocol.Codec
@@ -56,11 +59,27 @@ interface SessionListener {
     /** A new control connection is being opened (first start and every automatic reconnect); reset per-session state. */
     fun onSessionStart() {}
 
+    /**
+     * Right after [onSessionStart], with the new control connection's generation (engine thread). T-095: audio is
+     * armed for exactly this generation; [onAudio] carries the generation of the reader that delivered it.
+     */
+    fun onConnectionGen(gen: Int) {}
+
+    /** The control connection was closed (engine thread; before any later [onSessionStart]). T-095: audio stops here. */
+    fun onSessionEnd() {}
+
     /** A PONG arrived (engine thread). Times are microseconds; [nowUs] is the client monotonic clock (`nanoTime/1000`). */
     fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
 
     /** A CLIPBOARD message arrived on an accepted session (engine thread). Its data is private: never log it. */
     fun onClipboard(msg: Clipboard, gen: Int) {}
+
+    /**
+     * AUDIO_CONFIG or AUDIO_FRAME from the reader thread of control connection [gen] (it bypasses the engine queue so
+     * audio never waits behind a tick). A reader can outlive its connection: the receiver must drop messages whose
+     * [gen] is not the one it was armed with ([onConnectionGen]). Must not block. Never log the PCM data.
+     */
+    fun onAudio(msg: Message, gen: Int) {}
 }
 
 /**
@@ -78,8 +97,9 @@ class SessionController(
     private val quickAck: Boolean = true, // T-074 experiment switch (--ez quickack false)
     private val perfHint: PerfHint? = null, // T-079 experiment (--ez perf_hint true): video reader joins the hint session
     private val knobs: WifiKnobs = WifiKnobs(), // T-089 experiment knobs (ping interval, socket traffic class)
+    initialAudio: Boolean? = null, // T-095: AUDIO_PREFS wish; null = audio not supported, AUDIO_PREFS never sent
 ) {
-    private val machine = SessionMachine(hello, initialMode.toPrefs(), knobs.pingIntervalUs)
+    private val machine = SessionMachine(hello, initialMode.toPrefs(), knobs.pingIntervalUs, initialAudio)
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -92,6 +112,7 @@ class SessionController(
     private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
+    private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
     private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
@@ -128,6 +149,13 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         rateMailbox.post(SessionMachine.Event.SetDisplayRate(hz))
+    }
+
+    /** Non-blocking. The audio setting (T-095); sent as AUDIO_PREFS when accepted and on change. */
+    fun setAudioEnabled(on: Boolean) {
+        if (terminated.get()) return
+        ensureEngine()
+        audioMailbox.post(SessionMachine.Event.SetAudio(on))
     }
 
     /** Non-blocking. */
@@ -177,7 +205,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -239,6 +267,7 @@ class SessionController(
             }
             is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille}")
             is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
+            is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
             is SessionMachine.Event.Tick -> Unit
         }
     }
@@ -249,6 +278,7 @@ class SessionController(
                 MbLog.gen = a.gen
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 listener.onSessionStart()
+                listener.onConnectionGen(a.gen)
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
             }
@@ -258,6 +288,7 @@ class SessionController(
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille}")
+                    is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0}")
                     else -> Unit
                 }
                 val c = control
@@ -267,6 +298,7 @@ class SessionController(
             is SessionMachine.Action.CloseControl -> {
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
+                listener.onSessionEnd()
             }
             is SessionMachine.Action.OpenVideo -> {
                 MbLog.i("video_open", "vgen=${a.gen} port=${a.endpoint.port} config_id=${a.hello.configId}")
@@ -418,11 +450,26 @@ class SessionController(
                     decoder.feed(buf, 0, n)
                     while (true) {
                         val msg = decoder.next() ?: break
-                        events.put(SessionMachine.Event.Received(gen, msg))
+                        if (msg is AudioFrame || msg is AudioConfig) deliverAudio(msg) else events.put(SessionMachine.Event.Received(gen, msg))
                     }
                 }
             }
         }
+
+        /** T-095: audio goes from this reader straight to the listener, only while this is the current connection. */
+        private fun deliverAudio(msg: Message) {
+            if (control !== this) return // cheap pre-filter; the receiver re-checks [gen] under its own lock
+            try {
+                listener.onAudio(msg, gen)
+            } catch (e: RuntimeException) {
+                if (!audioErrorLogged) {
+                    audioErrorLogged = true
+                    MbLog.e("audio_deliver_failed", "err=${e.javaClass.simpleName}") // audio never takes the session down
+                }
+            }
+        }
+
+        private var audioErrorLogged = false
 
         private fun writerLoop() {
             try {

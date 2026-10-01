@@ -73,7 +73,7 @@ object Capabilities {
     const val DECODE_H264 = 1 shl 6
     const val DECODE_HEVC = 1 shl 7
 
-    /** Handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo. Not sent until playback exists (T-095). */
+    /** Handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo (T-095; off with `--ez audio false`). */
     const val AUDIO_PCM = 1 shl 8
 }
 
