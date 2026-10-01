@@ -15,6 +15,7 @@ import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.video.PaceTrace
+import dev.matebridge.client.video.PerfHint
 import dev.matebridge.client.protocol.VideoHello
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Limits
@@ -75,6 +76,7 @@ class SessionController(
     private val listener: SessionListener,
     initialMode: StreamMode = StreamMode.DEFAULT,
     private val quickAck: Boolean = true, // T-074 experiment switch (--ez quickack false)
+    private val perfHint: PerfHint? = null, // T-079 experiment (--ez perf_hint true): video reader joins the hint session
 ) {
     private val machine = SessionMachine(hello, initialMode.toPrefs())
     private val random = SecureRandom()
@@ -461,6 +463,9 @@ class SessionController(
         private fun loop() {
             val buf = ByteArray(RecordDecoder.READ_CHUNK)
             var qa: QuickAck.Handle = QuickAck.Handle(QuickAck(false, {}), null)
+            val hint = perfHint
+            val tid = if (hint != null) android.os.Process.myTid() else 0
+            hint?.register(PerfHint.ROLE_NET, tid)
             try {
                 // Fresh nonce per video connection; both directions' keys come from it (section 9).
                 val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
@@ -476,13 +481,14 @@ class SessionController(
                     val n = input.read(buf)
                     if (n > 0) qa.ack.afterRead()
                     val trace = PaceTrace.active // T-073: receive-path timestamps (null = off)
-                    val recvNs = if (trace != null) System.nanoTime() else 0L
+                    val recvNs = if (trace != null || hint != null) System.nanoTime() else 0L
                     if (n < 0) break
                     decoder.feed(buf, 0, n)
                     while (true) {
                         val msg = decoder.next() ?: break
                         if (msg is VideoFrame) {
                             trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
+                            hint?.onRecv(msg.frameSeq, recvNs) // T-079: start of the frame's reported work
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
                             if (hello.configId == currentConfigId) listener.onVideoFrame(msg)
                         }
@@ -494,6 +500,8 @@ class SessionController(
                 // fall through
             } catch (e: IllegalStateException) {
                 // session secrets wiped: the control connection is gone
+            } finally {
+                hint?.unregister(PerfHint.ROLE_NET, tid)
             }
             qa.close()
             closeQuietly(socket)
