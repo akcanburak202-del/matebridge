@@ -1,7 +1,7 @@
 ---
 id: T-076
 title: Tablet — AES-GCM kayıt şifre çözme hızı (432 KB'de ~11 ms, 3 KB'de ~0,8 ms)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-073]
@@ -10,6 +10,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/security/Records.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/protocol/FrameDecoder.kt
   - client-android/app/src/test/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt  # minimal: crypto_bench extra
   - backlog/tasks/T-076-client-decrypt-speed.md
 ---
 
@@ -26,12 +27,14 @@ Kare izi (T-073, 2026-10-01 12:45): `decrypted_ns - recv_ns` 432 KB anahtar kare
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `Records.newCipher()`: önce `AndroidOpenSSL`, yoksa varsayılan; sağlayıcı bir kez `ev=crypto_provider provider=` loglanır.
+2. `RecordOpener.openAt`: başlık/gövdeyi `RecordDecoder` tamponundan kopyasız okur, çıktı yeniden kullanılan tampona yazılır (`doFinal(in,off,len,out,0)`); 4 kopya -> 1.
+3. `Records.runBench()` (`--ez crypto_bench true`, MainActivity'de tek satır + thread): her sağlayıcı için 64/432 KB.
 
 ## Handoff
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Dokunulan dosyalar:** security/Records.kt, MainActivity.kt (3 satır, crypto_bench), bu kart. FrameDecoder.kt ve testler değişmedi.
+- **Varsayımlar:** `AndroidOpenSSL` yoksa varsayılana düşer (JVM testlerinde böyle). Tel biçimi/kripto aynı; fixture ve crypto vector testleri geçti.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** `am start ... --ez crypto_bench true` ile `ev=crypto_provider` ve `ev=crypto_bench` satırlarına bak (sağlayıcı başına 64k/432k us ve MB/s); sonra pace_trace ile 432 KB karede decrypted-recv süresi ~11 ms -> ? karşılaştır.
 - **Açık sorular:**

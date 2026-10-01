@@ -3,7 +3,9 @@ package dev.matebridge.client.security
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
+import dev.matebridge.client.session.MbLog
 import java.security.GeneralSecurityException
+import java.security.Security
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -23,6 +25,73 @@ object Records {
     /** Largest legal `length` for a connection whose payload limit is [maxPayload]. */
     fun maxLength(maxPayload: Int): Long = maxPayload.toLong() + MIN_LENGTH
 
+    /** Provider asked for first; Conscrypt (BoringSSL, ARMv8 crypto extensions) on Android. Falls back to the default. */
+    const val PREFERRED_PROVIDER = "AndroidOpenSSL"
+
+    @Volatile private var providerLogged = false
+
+    /** AES-GCM cipher from [provider] (null = platform default). Throws if the provider is unavailable. */
+    fun newCipher(provider: String?): Cipher =
+        if (provider == null) Cipher.getInstance("AES/GCM/NoPadding") else Cipher.getInstance("AES/GCM/NoPadding", provider)
+
+    /** Fast path: the preferred provider when present, otherwise the default. The chosen provider is logged once per process. */
+    fun newCipher(): Cipher {
+        val c = try { newCipher(PREFERRED_PROVIDER) } catch (e: GeneralSecurityException) { newCipher(null) }
+        if (!providerLogged) {
+            providerLogged = true
+            try { MbLog.i("crypto_provider", "provider=${c.provider.name}") } catch (_: Throwable) {}
+        }
+        return c
+    }
+
+    /**
+     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, opens 64 KB and 432 KB
+     * records repeatedly and logs MB/s. Random key and data; nothing sensitive. Returns the log field strings.
+     */
+    fun bench(): List<String> {
+        val providers = ArrayList<String?>()
+        providers += null
+        for (p in Security.getProviders()) if (p.name != null) providers += p.name
+        val out = ArrayList<String>()
+        val key = SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
+        for (name in providers.distinct()) {
+            val fields = StringBuilder()
+            try {
+                val cipher = newCipher(name)
+                fields.append("provider=").append(name ?: "default(${cipher.provider.name})")
+                for (size in intArrayOf(64 * 1024, 432 * 1024)) {
+                    val aad = header(size + MIN_LENGTH)
+                    val enc = newCipher(name)
+                    enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
+                    enc.updateAAD(aad)
+                    val body = enc.doFinal(ByteArray(size + 1))
+                    val dst = ByteArray(body.size)
+                    var best = Long.MAX_VALUE
+                    val iters = 12
+                    for (i in 0 until iters) {
+                        val t0 = System.nanoTime()
+                        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
+                        cipher.updateAAD(aad)
+                        cipher.doFinal(body, 0, body.size, dst, 0)
+                        val dt = System.nanoTime() - t0
+                        if (i >= 2 && dt < best) best = dt // first iterations warm up
+                    }
+                    fields.append(" ${size / 1024}k_us=").append(best / 1000)
+                        .append(" ${size / 1024}k_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
+                }
+            } catch (e: Throwable) {
+                fields.append("provider=").append(name).append(" err=").append(e.javaClass.simpleName)
+            }
+            out += fields.toString()
+        }
+        return out
+    }
+
+    /** Runs [bench] and logs one `crypto_bench` line per provider. */
+    fun runBench() {
+        for (f in bench()) MbLog.i("crypto_bench", f)
+    }
+
     internal fun nonce(counter: Long): ByteArray {
         val n = ByteArray(12)
         for (i in 0 until 8) n[4 + i] = (counter ushr (8 * i)).toByte()
@@ -36,7 +105,7 @@ object Records {
 /** Seals outgoing records of one connection direction. The counter order is the call order, so callers must call from one writer. */
 class RecordSealer(key: ByteArray, startCounter: Long = 0) {
     private val keySpec = SecretKeySpec(key, "AES")
-    private val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    private val cipher = Records.newCipher()
     private var counter = startCounter
 
     /** Returns the full record (length header, ciphertext, tag). The connection closes before the counter reaches 2^63. */
@@ -62,23 +131,33 @@ class RecordSealer(key: ByteArray, startCounter: Long = 0) {
 /** Opens incoming records of one connection direction. */
 class RecordOpener(key: ByteArray, startCounter: Long = 0) {
     private val keySpec = SecretKeySpec(key, "AES")
-    private val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    private val cipher = Records.newCipher()
     private var counter = startCounter
+    private var scratch = ByteArray(0)
 
     /**
      * [header] is the 4 length bytes (the AAD), [body] is ciphertext plus tag. Returns `type || payload`.
      * Throws [ProtocolException] (AUTH_FAILED) when the tag does not verify or the length is illegal.
      */
     @Synchronized
-    fun open(header: ByteArray, body: ByteArray): ByteArray {
-        if (body.size < Records.MIN_LENGTH) throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record too short")
+    fun open(header: ByteArray, body: ByteArray): ByteArray = openAt(header, 0, body, 0, body.size)
+
+    /**
+     * Same as [open] but reads the 4 AAD bytes at [hOff] of [hdr] and the ciphertext+tag at [bOff]..[bOff]+[bLen] of [src]
+     * in place (no copies). Returns `type || payload` as a fresh array.
+     */
+    @Synchronized
+    fun openAt(hdr: ByteArray, hOff: Int, src: ByteArray, bOff: Int, bLen: Int): ByteArray {
+        if (bLen < Records.MIN_LENGTH) throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record too short")
         if (counter < 0) throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record counter exhausted")
         try {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
-            cipher.updateAAD(header)
-            val plain = cipher.doFinal(body)
+            cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
+            val plainLen = bLen - Records.TAG_BYTES
+            if (scratch.size < plainLen) scratch = ByteArray(maxOf(plainLen, scratch.size * 2))
+            val n = cipher.doFinal(src, bOff, bLen, scratch, 0)
             counter++
-            return plain
+            return scratch.copyOf(n)
         } catch (e: GeneralSecurityException) {
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
         }
@@ -142,10 +221,9 @@ class RecordDecoder(maxPayload: Int, private val opener: RecordOpener) {
                 }
                 val total = Records.HEADER_BYTES + len.toInt()
                 if (end - start < total) return null
-                val header = buf.copyOfRange(start, start + Records.HEADER_BYTES)
-                val body = buf.copyOfRange(start + Records.HEADER_BYTES, start + total)
+                val at = start
                 start += total
-                val plain = opener.open(header, body)
+                val plain = opener.openAt(buf, at, buf, at + Records.HEADER_BYTES, len.toInt())
                 val type = plain[0].toInt() and 0xFF
                 val msg = Codec.decodePayload(type, plain.copyOfRange(1, plain.size))
                 if (msg != null) return msg

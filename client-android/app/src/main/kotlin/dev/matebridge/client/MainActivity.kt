@@ -205,6 +205,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         vsync.keepJitter = intent?.getBooleanExtra("keep_jitter", false) == true
         vsync.recenter = intent?.getBooleanExtra("recenter", false) == true
         paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
+        // T-076: one-shot AES-GCM provider benchmark (adb ... --ez crypto_bench true), off the UI thread.
+        if (intent?.getBooleanExtra("crypto_bench", false) == true) {
+            Thread({ dev.matebridge.client.security.Records.runBench() }, "crypto-bench").start()
+        }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
