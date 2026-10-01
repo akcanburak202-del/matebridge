@@ -66,12 +66,12 @@ Karar 0013: akış sürerken ayarlara bağlantı paneline dönmeden ulaşılır.
 
 ## Handoff
 
-- **Commit:** `2c33b20` (kod + testler), plan `c7ff1a8`; dal `task/T-105-client-settings-side-panel` (main `0a329b5` üstünde).
-- **check.sh:** geçti (`check.sh: ALL OK`; client-android assembleDebug + testDebugUnitTest dahil). Yeni testler: `SettingsPanelGateTest` 10, `SettingsCatalogTest` 8, `BitrateSettingTest` 7, hepsi geçti.
+- **Commit:** `2c33b20` (kod + testler), review düzeltmeleri `6d9cafa`, plan `c7ff1a8`; dal `task/T-105-client-settings-side-panel` (main `0a329b5` üstünde).
+- **check.sh:** geçti (`check.sh: ALL OK`; client-android assembleDebug + testDebugUnitTest dahil). Yeni testler: `SettingsPanelGateTest` 10, `SettingsCatalogTest` 8, `BitrateSettingTest` 7, `MigrationCancelTest` 3, `CoalescedPostTest` 5, hepsi geçti.
 - **Dokunulan dosyalar** (hepsi `client-android/app/src/`):
-  - yeni: `main/.../settings/{SettingsPanelState,SettingsCatalog,SettingsViews}.kt`, `main/.../stream/Bitrate.kt`;
+  - yeni: `main/.../settings/{SettingsPanelState,SettingsCatalog,SettingsViews,CoalescedPost}.kt`, `main/.../stream/Bitrate.kt`;
   - değişen: `MainActivity.kt`, `input/KeyTracker.kt`, `session/{AutoTransport,SessionController,SessionMachine,Settings}.kt`, `stream/StreamMode.kt`, `res/layout/activity_main.xml`, `res/values/strings.xml`;
-  - testler: `test/.../input/SettingsPanelGateTest.kt`, `test/.../settings/SettingsCatalogTest.kt`, `test/.../session/BitrateSettingTest.kt`.
+  - testler: `test/.../input/SettingsPanelGateTest.kt`, `test/.../settings/{SettingsCatalogTest,CoalescedPostTest}.kt`, `test/.../session/{BitrateSettingTest,MigrationCancelTest}.kt`.
 - **Yapı:**
   - `SettingsCatalog` (saf): bölümler Bağlantı / Görüntü / Ses / Girdi / Diğer, öğeler Choice / Toggle / Stepper / Action / Info. `SettingsHost` arayüzünü `MainActivity` **bir kez** uygular (kalıcılık + uygulama). İki panel aynı katalogdan `SettingsViews` ile çizilir; her değişiklik ikisini de yeniler. Yalnız yan panelde: "Bağlantıyı kes", "Uygulanan: N Mbps".
   - Bağlantı paneli artık `ScrollView`; XML'deki Otomatik/USB/Wi-Fi ve istatistik düğmeleri kalktı (katalogdan segment düğmeleri olarak geliyor; seçili olan mavi + kalın).
@@ -81,14 +81,14 @@ Karar 0013: akış sürerken ayarlara bağlantı paneline dönmeden ulaşılır.
   - Panel açıkken fiziksel klavye olayları `KeyTracker`'a hiç gitmez (`SettingsPanelState.keyWhileOpen`): Esc (BACK olarak gelse de) ve Ctrl+Shift+6 kapatır; tekrarları, UP'ları ve her BACK tüketilir; diğer Ctrl+Shift kısayolları çalışır; geri kalanı Android'e (panelde gezinme). Kalem/dokunma/touchpad/fare olayları capture pasif olduğu için view'lara gider.
   - Kapanış tuşlarının UP'ları kapanıştan sonra tracker'a ulaşır ama DOWN'ları gönderilmediği için gönderilmez (testli). Kapanınca pointer capture hemen yeniden istenir.
   - Videoya dokunma kapanışı ACTION_UP'ta yapılır: jestin tamamı katmanda kalır, yarım jest Mac'e sızmaz.
-- **Kapatma yolları:** Esc, Ctrl+Shift+6, video alanına dokunma, Kapat, sistem geri, `onPause` (arka plan), akışın bitmesi (`render`), "Bağlantıyı kes". Log: `ev=settings_panel open|close via=shortcut|host|esc|back|tap_outside|close_button|background|stream_end|disconnect`; akış yokken gelen açma isteği `ev=settings_panel ignored via=host reason=not_streaming`.
-- **SETTINGS_OPEN:** `SessionMachine` yalnız kabul edilmiş oturumda `Action.OpenSettings` üretir → `SessionListener.onSettingsOpen` → UI, akış görünürse açar. HELLO'da bit9 `SETTINGS_PANEL` artık gönderiliyor.
+- **Kapatma yolları:** Esc, Ctrl+Shift+6, video alanına dokunma, Kapat, sistem geri, `onPause` (arka plan), akışın bitmesi (`render`), "Bağlantıyı kes". Log (key=value, docs/LOGGING.md): `ev=settings_panel action=open|close via=shortcut|host|esc|back|tap_outside|close_button|background|stream_end|disconnect`; akış yokken gelen açma isteği `ev=settings_panel action=ignored via=host reason=not_streaming`.
+- **SETTINGS_OPEN:** `SessionMachine` yalnız kabul edilmiş oturumda `Action.OpenSettings` üretir → `SessionListener.onSettingsOpen` → `CoalescedPost` (AtomicBoolean: UI kuyruğunda en çok bir bekleyen runnable, çalışırken temizlenir) → UI, akış görünürse açar. HELLO'da bit9 `SETTINGS_PANEL` artık gönderiliyor.
 - **Bit hızı:** `Settings.bitrateKbps()` (anahtar `bitrate_kbps`; yalnız 0/15000/30000/60000/100000, başka değer 0 = Otomatik). `SessionController` artık `initialPrefs: StreamPrefs` alıyor ve `setStreamMode` yerine `setStreamPrefs(prefs)` var. Mod ya da bit hızı değişince `STREAM_PREFS(fps, scale, bitrate)` hemen gider (aynı değerse gitmez). Log: `stream_prefs_sent ... bitrate_kbps=N`, her STREAM_CONFIG'te `ev=stream_config_bitrate bitrate_kbps=N wanted_kbps=M`.
 - **Bağlantı seçimi:** `TransportSwitch.keepsSession` kabul edilmiş oturumda seçime uyuyorsa bağlantıyı korur (Otomatik her zaman uyar; USB/Wi-Fi yalnız aynı taşıyıcıdaysa). Uymuyorsa eski davranış (stop + applyTransport), panel `stream_end` ile kapanır. Log `ev=transport_select mode=… keep=0|1`.
+  - Review düzeltmesi: AUTO dışı her seçim süren AUTO geçişini iptal eder (`SessionController.cancelMigration()` → `SessionMachine.Event.CancelMigration`: aday kapanır, sonuç `ok=0 reason=cancelled`, geç gelen ACCEPTED yok sayılır). İptal geç kalıp aday yine de terfi ederse `onMigrationResult` sonucu seçili moda göre denetler (`TransportSwitch.onMigrated`): uymuyorsa `ev=transport_migrate_rejected` ve seçili modla yeniden bağlanır. Korunan oturumda bekleyen prob/geçiş sonucu gelmeyeceği için `AutoUsbPolicy` NEUTRAL ile serbest bırakılır.
 - **"Bağlantıyı kes":** BYE (`controller.stop()`), bağlantı paneli, durum "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun.". NSD, USB probu ve AUTO tikçisi durur; "Bağlan" (boş adresle) seçili modu yeniden uygular. Bağlantı seçimi ya da yeni `onStart` da bayrağı temizler.
 - **Varsayımlar:**
   - Ctrl+Shift+6 evdev scan `7` ile eşlenir (rakam satırı, fiziksel konum; diğer rakam kısayolları gibi).
-  - Log satırı kartla birebir: `ev=settings_panel open via=…` (`open`/`close` çıplak kelime, key=value değil).
   - Panel genişliği sabit 460 dp (tablette ~1100+ dp genişlik varsayıldı).
   - Bağlantı panelindeki Otomatik seçeneğinin metni kısaldı ("Otomatik (USB varsa USB, yoksa Wi-Fi)" → "Otomatik").
 - **Test edilmeyenler (cihaz gerekli):** gerçek tablette hiçbir şey denenmedi. Görünüm/yerleşim, HarmonyOS'un Ctrl+Shift+6'yı uygulamaya iletip iletmediği, panel açıkken touchpad imleciyle tıklama, kapanınca pointer capture'ın geri gelmesi, host tarafı `SETTINGS_OPEN` (T-106 gerekli) ve host'un bit hızını uygulaması (T-106) doğrulanmadı.
@@ -101,5 +101,4 @@ Karar 0013: akış sürerken ayarlara bağlantı paneline dönmeden ulaşılır.
 
 ### Open questions
 
-- Bilinen uç durum: AUTO'da Wi-Fi→USB geçişi tam o anda sürerken yan panelden "Yalnız Wi-Fi" seçilirse (oturum korunur), süren geçiş tamamlanabilir ve oturum USB'de kalabilir. Gerçekte çok kısa bir pencere; gerekirse ayrı kart.
-- Card log format (`open|close` as a bare word) is not key=value as in `docs/LOGGING.md`; I kept the card's literal form. The orchestrator can choose `action=open` instead.
+- Yok (Codex review'daki iki P2 ve log biçimi düzeltildi).
