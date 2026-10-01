@@ -30,7 +30,7 @@ AGENTS.md          rules for every coding agent (CLAUDE.md imports it)
 ./scripts/board.sh      # regenerate backlog/BOARD.md
 ```
 
-Requirements: macOS 15+ with Xcode, and Android Studio (for its JDK and SDK). The target hardware is a Mac mini M6 on macOS 27 and a MatePad Pro 12.2 (2025) on HarmonyOS 4.3.
+Requirements: macOS 15+ with Xcode, and Android Studio (for its JDK and SDK). The Android client also needs the NDK and CMake for its AAudio output (decision 0012): `sdkmanager "ndk;30.0.16248370" "cmake;4.1.2"` (the versions pinned in `client-android/app/build.gradle.kts`). The target hardware is a Mac mini M6 on macOS 27 and a MatePad Pro 12.2 (2025) on HarmonyOS 4.3.
 
 ## License
 

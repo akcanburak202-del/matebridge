@@ -6,12 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRouting
-import android.media.AudioTimestamp
-import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -25,26 +20,32 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Mac audio on the tablet (decision 0011): AudioTrack in low-latency mode fed by one writer thread per host stream.
+ * Mac audio on the tablet (decisions 0011, 0012): one writer thread per host stream feeds an [AudioSink] (AAudio
+ * LOW_LATENCY, or AudioTrack in low-latency mode; chosen by [SinkPolicy]).
  *
  *  - Connection generations ([beginSession]/[endSession], see [AudioStreamGate]): only the current control
- *    connection's messages are taken, so a stale reader can neither start an orphan track after teardown nor replace
+ *    connection's messages are taken, so a stale reader can neither start an orphan output after teardown nor replace
  *    the new connection's stream.
  *  - The control reader thread only fills the stream's [AudioJitterBuffer] ([onAudio]); it never blocks on audio.
- *  - The writer thread (THREAD_PRIORITY_URGENT_AUDIO) renders one burst per WRITE_BLOCKING call through
- *    [PlayoutCore], so it runs at the device's audio clock. A new stream's writer waits for the previous writer's
- *    cleanup before it opens its track.
- *  - Stopping pauses and flushes the track from the stopping thread, which interrupts a blocked write; the writer
- *    then releases the track (exactly once).
- *  - The track is rebuilt on ERROR_DEAD_OBJECT and when the output device changes (at most 5 times per 10 s).
+ *  - The writer thread (THREAD_PRIORITY_URGENT_AUDIO) renders one output burst per blocking write through
+ *    [PlayoutCore], so it runs at the device's audio clock. Play position and latency come from the output's
+ *    timestamp the same way for both outputs ([OutputClock]). A new stream's writer waits for the previous writer's
+ *    cleanup before it opens its output.
+ *  - Output choice (decision 0012 point 2): AAudio EXCLUSIVE, else AAudio SHARED on probation
+ *    ([SharedLatencyProbe]), else AudioTrack. AAudio is used only with MMAP (its write timeout must hold).
+ *    `--es audio_out aaudio|track` overrides it ([AudioOutPref]).
+ *  - Stopping sets the stream's flag and interrupts the output (AudioTrack: pause+flush unblocks the write; AAudio:
+ *    the write returns within one burst); the writer then closes the output (exactly once).
+ *  - The output is rebuilt when it dies (AudioTrack ERROR_DEAD_OBJECT, AAudio DISCONNECTED or a stalled write) and
+ *    when the output device changes (at most 5 times per 10 s). Repeated AAudio failures switch to AudioTrack.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
  * Every failure is logged and contained here: audio never takes the session down. Audio content is never logged.
  * [hostMinusClientUs] is the ClockSync offset (null while unknown).
  *
- * The starting AudioTrack buffer is [AudioBufferConfig] bursts (default 1); when [context] is an Activity its launch
- * intent may override it with `--ei audio_buf_bursts N` (read here so the experiment switch stays in this package).
+ * When [context] is an Activity its launch intent may set `--es audio_out aaudio|track` and `--ei audio_buf_bursts N`
+ * ([AudioBufferConfig]); they are read here so the experiment switches stay in this package.
  */
 class AudioPlayout(
     context: Context,
@@ -60,11 +61,12 @@ class AudioPlayout(
     @Volatile private var errorLogged = false
     private val video = VideoLatencyFilter()
 
-    private val burst: Int
+    /** AudioTrack burst (the mixer's period). AAudio streams report their own. */
+    private val trackBurst: Int
     private val nativeRate: Int
-    private val startBursts: Int = AudioBufferConfig.startBursts(
-        (context as? Activity)?.intent?.takeIf { it.hasExtra(AudioBufferConfig.EXTRA) }?.getIntExtra(AudioBufferConfig.EXTRA, 0),
-    )
+    private val bufBurstsRaw: Int? =
+        (context as? Activity)?.intent?.takeIf { it.hasExtra(AudioBufferConfig.EXTRA) }?.getIntExtra(AudioBufferConfig.EXTRA, 0)
+    private val policy: SinkPolicy
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
@@ -81,13 +83,23 @@ class AudioPlayout(
         val am = appContext.getSystemService(AudioManager::class.java)
         nativeRate = am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 0
         val nativeBurst = am?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 0
-        burst = if (nativeBurst in MIN_BURST..MAX_BURST) nativeBurst else DEFAULT_BURST
+        trackBurst = if (nativeBurst in MIN_BURST..MAX_BURST) nativeBurst else DEFAULT_BURST
+
+        val rawOut = (context as? Activity)?.intent?.getStringExtra(AudioOutPref.EXTRA)
+        val pref = AudioOutPref.parse(rawOut) ?: AudioOutPref.AUTO.also {
+            MbLog.w("audio_out_pref_unknown", "using=auto", COMPONENT) // the raw value is not logged
+        }
+        val lib = pref != AudioOutPref.TRACK && AAudioNative.available
+        policy = SinkPolicy(pref, lib)
+
         val pm = appContext.packageManager
         MbLog.i(
             "audio_device",
-            "native_rate=$nativeRate native_burst=$nativeBurst burst=$burst " +
+            "native_rate=$nativeRate native_burst=$nativeBurst burst=$trackBurst " +
                 "low_latency_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_LOW_LATENCY))} " +
-                "pro_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO))} rate=$RATE buf_bursts=$startBursts",
+                "pro_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO))} rate=$RATE " +
+                "buf_bursts=${bufBurstsRaw?.let { AudioBufferConfig.startBursts(it) } ?: "default"} " +
+                "audio_out=${pref.name.lowercase()} aaudio_lib=${b(lib)}",
             COMPONENT,
         )
         try {
@@ -183,46 +195,15 @@ class AudioPlayout(
         }
     }
 
-    /**
-     * One AudioTrack. [interrupt] (any thread) and [close] (the writer) share a lock, so a stop can never touch a
-     * released track, and the release happens exactly once.
-     */
-    private class Track(val track: AudioTrack, val usage: Int, var bufFrames: Int, val preFrames: Long) {
-        @Volatile var deviceId: Int? = null
-        var routing: AudioRouting.OnRoutingChangedListener? = null
-        private val lock = Any()
-        private var closed = false
-
-        val perfName: String get() = when (track.performanceMode) {
-            AudioTrack.PERFORMANCE_MODE_LOW_LATENCY -> "low_latency"
-            AudioTrack.PERFORMANCE_MODE_POWER_SAVING -> "power_saving"
-            else -> "none"
-        }
-
-        /** Unblocks a WRITE_BLOCKING write in progress (it returns a short count) and drops the queued audio. */
-        fun interrupt(): Unit = synchronized(lock) {
-            if (closed) return
-            try { track.pause() } catch (_: RuntimeException) {}
-            try { track.flush() } catch (_: RuntimeException) {}
-        }
-
-        fun close(): Unit = synchronized(lock) {
-            if (closed) return
-            closed = true
-            routing?.let { try { track.removeOnRoutingChangedListener(it) } catch (_: RuntimeException) {} }
-            try { track.pause() } catch (_: RuntimeException) {}
-            try { track.flush() } catch (_: RuntimeException) {}
-            track.release()
-        }
-    }
-
     private inner class Stream(val id: Int, private var previous: Stream?) {
         val core = PlayoutCore()
         @Volatile var rejected = 0L
         @Volatile private var running = true
         @Volatile private var rebuildReason: String? = null
-        /** The track the writer is using, published for [stop]. */
-        @Volatile private var current: Track? = null
+        /** The output the writer is using, published for [stop]. */
+        @Volatile private var current: AudioSink? = null
+        /** Latency probation of a shared AAudio output (writer thread only). */
+        private var probe: SharedLatencyProbe? = null
         private val rebuildTimes = ArrayDeque<Long>()
         val finished = CountDownLatch(1)
 
@@ -242,7 +223,7 @@ class AudioPlayout(
         private fun run() {
             try {
                 try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) } catch (_: RuntimeException) {}
-                // Serialize with the previous stream: its track is released before this one is created.
+                // Serialize with the previous stream: its output is closed before this one is opened.
                 previous?.let { p ->
                     if (!p.finished.await(PREVIOUS_JOIN_MS, TimeUnit.MILLISECONDS)) {
                         MbLog.w("audio_previous_slow", "stream_id=$id previous=${p.id}", COMPONENT)
@@ -250,15 +231,20 @@ class AudioPlayout(
                 }
                 previous = null
                 if (!running) return
-                val t = openTrack("start") ?: return
+                policy.reset() // a new stream tries the whole output chain again
+                val t = openSink("start") ?: return
                 publish(t)
                 loop(t)
             } catch (e: RuntimeException) {
                 MbLog.e("audio_error", "where=writer stream_id=$id err=${e.javaClass.simpleName}", COMPONENT)
+            } catch (e: LinkageError) {
+                // The AAudio library failed mid-stream (T-100 review L1): never let it kill the process; AudioTrack from now on.
+                policy.disableAaudio()
+                MbLog.e("audio_error", "where=writer stream_id=$id err=${e.javaClass.simpleName} aaudio_disabled=1", COMPONENT)
             } catch (_: InterruptedException) {
                 // not interrupted by us; just end
             } finally {
-                try { current?.close() } catch (_: RuntimeException) {}
+                try { current?.close() } catch (_: RuntimeException) {} catch (_: LinkageError) {}
                 current = null
                 core.buffer.reset()
                 running = false
@@ -267,85 +253,54 @@ class AudioPlayout(
         }
 
         /** Publishes [t] for [stop]; a stop that raced the publish is honoured at once. */
-        private fun publish(t: Track?) {
+        private fun publish(t: AudioSink?) {
             current = t
             if (!running) t?.interrupt()
         }
 
-        private fun buildTrack(usage: Int): AudioTrack {
-            val attrs = AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build()
-            val fmt = AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(RATE)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                .build()
-            val minBytes = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-            val bytes = maxOf(minBytes, burst * MAX_BURSTS * BYTES_PER_FRAME)
-            return AudioTrack.Builder()
-                .setAudioAttributes(attrs)
-                .setAudioFormat(fmt)
-                .setBufferSizeInBytes(bytes)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                .build()
-        }
-
-        /** USAGE_MEDIA first; USAGE_GAME only if it gets the FAST path and MEDIA did not. */
-        private fun openTrack(reason: String): Track? {
-            var usage = AudioAttributes.USAGE_MEDIA
-            var at = try {
-                buildTrack(usage)
-            } catch (e: RuntimeException) {
-                MbLog.e("audio_track_failed", "stream_id=$id usage=media err=${e.javaClass.simpleName}", COMPONENT)
-                return null
-            }
-            if (at.performanceMode != AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) {
-                val game = try { buildTrack(AudioAttributes.USAGE_GAME) } catch (_: RuntimeException) { null }
-                if (game != null && game.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) {
-                    at.release()
-                    at = game
-                    usage = AudioAttributes.USAGE_GAME
-                } else {
-                    game?.release()
+        /** Opens the first output the policy allows, falling down the chain; null if not even AudioTrack opens. */
+        private fun openSink(reason: String): AudioSink? {
+            probe = null
+            while (true) {
+                if (!running) return null
+                val choice = policy.next()
+                val sink = try {
+                    when (choice) {
+                        OutChoice.AAUDIO_EXCLUSIVE, OutChoice.AAUDIO_SHARED -> AAudioSink.open(
+                            if (choice == OutChoice.AAUDIO_EXCLUSIVE) AAudioNative.SHARING_EXCLUSIVE else AAudioNative.SHARING_SHARED,
+                            AudioBufferConfig.startBursts(bufBurstsRaw, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS),
+                            MAX_BURSTS,
+                        )
+                        OutChoice.TRACK -> TrackSink.open(
+                            trackBurst,
+                            AudioBufferConfig.startBursts(bufBurstsRaw),
+                            MAX_BURSTS,
+                            mainHandler,
+                        ) { rebuildReason = "routing" }
+                    }
+                } catch (e: SinkOpenException) {
+                    MbLog.w("audio_out_failed", "stream_id=$id requested=${choice.logName} ${e.message}", COMPONENT)
+                    if (choice == OutChoice.TRACK) return null
+                    if (e.aaudioUnusable) policy.disableAaudio() else policy.onOpenFailed(choice)
+                    continue
                 }
-            }
-            if (at.state != AudioTrack.STATE_INITIALIZED) {
-                at.release()
-                MbLog.e("audio_track_failed", "stream_id=$id reason=not_initialized", COMPONENT)
-                return null
-            }
-            val t: Track
-            try {
-                val got = at.setBufferSizeInFrames(startBursts * burst)
-                // One burst of silence before play() (review L5): the mixer's first pull does not count an underrun.
-                val pre = at.write(ShortArray(burst * 2), 0, burst * 2, AudioTrack.WRITE_NON_BLOCKING).coerceAtLeast(0) / 2
-                t = Track(at, usage, if (got > 0) got else at.bufferSizeInFrames, pre.toLong())
-            } catch (e: RuntimeException) {
-                at.release()
-                throw e
-            }
-            try {
-                val l = AudioRouting.OnRoutingChangedListener { router ->
-                    val dev = router.routedDevice?.id ?: return@OnRoutingChangedListener
-                    val prev = t.deviceId
-                    t.deviceId = dev
-                    if (prev != null && prev != dev) rebuildReason = "routing"
+                val verdict = policy.onOpened(choice, sink.exclusive, sink.mmap)
+                if (verdict == SinkPolicy.Verdict.REJECT) {
+                    // Not MMAP (review M1): its write could block without bound. Close it and go down the chain.
+                    MbLog.w("audio_out_rejected", "${sink.logFields()} stream_id=$id requested=${choice.logName} reason=not_mmap", COMPONENT)
+                    sink.close()
+                    continue
                 }
-                t.routing = l
-                at.addOnRoutingChangedListener(l, mainHandler)
-                at.play()
-                if (t.deviceId == null) t.deviceId = at.routedDevice?.id
-            } catch (e: RuntimeException) {
-                t.close()
-                throw e
+                if (verdict == SinkPolicy.Verdict.PROBATION) probe = SharedLatencyProbe(RATE)
+                MbLog.i(
+                    "audio_out",
+                    "${sink.logFields()} stream_id=$id reason=$reason requested=${choice.logName} " +
+                        "probation=${b(verdict == SinkPolicy.Verdict.PROBATION)} pref=${policy.pref.name.lowercase()} " +
+                        "native_rate=$nativeRate rate=$RATE",
+                    COMPONENT,
+                )
+                return sink
             }
-            MbLog.i(
-                "audio_track",
-                "stream_id=$id reason=$reason perf_mode=${t.perfName} usage=${if (usage == AudioAttributes.USAGE_GAME) "game" else "media"} " +
-                    "burst=$burst buf_bursts=$startBursts buf_frames=${t.bufFrames} capacity_frames=${at.bufferCapacityInFrames} native_rate=$nativeRate rate=$RATE",
-                COMPONENT,
-            )
-            return t
         }
 
         private fun mayRebuild(): Boolean {
@@ -356,27 +311,51 @@ class AudioPlayout(
             return true
         }
 
-        /** Hold for the A/V target while priming (PlayoutCore.primingHoldUs), from the timestamp of frame [written]. */
-        private fun primingHold(tsValid: Boolean, written: Long, tsFramePos: Long, tsNano: Long): Long {
+        /** An AAudio output failed while running: counts toward switching to AudioTrack. */
+        private fun aaudioFailed(t: AudioSink, why: String) {
+            if (t !is AAudioSink) return
+            if (policy.onAaudioFailure(SystemClock.elapsedRealtime())) {
+                MbLog.w("audio_out_fallback", "stream_id=$id to=track reason=$why failures=${SinkPolicy.MAX_FAILURES}", COMPONENT)
+            }
+        }
+
+        /** Hold for the A/V target while priming (PlayoutCore.primingHoldUs), from the play position of [clock]. */
+        private fun primingHold(clock: OutputClock): Long {
             val v = video.value() ?: return 0
             val off = hostMinusClientUs() ?: return 0
             val cap = core.buffer.readHeadCaptureUs() ?: return 0
-            if (!tsValid) return if (written < RATE * 3L / 10) 1 else 0 // the track's first timestamp is on its way
-            val la = AvSync.audioLatencyUs(AvSync.presentTimeUs(written, tsFramePos, tsNano, RATE), cap, off)
+            val present = clock.presentTimeUs()
+                ?: return if (clock.written < RATE * 3L / 10) 1 else 0 // the output's first timestamp is on its way
+            val la = AvSync.audioLatencyUs(present, cap, off)
             return v + DriftController.AV_TARGET_US - la
         }
 
-        private fun loop(first: Track) {
+        /** Feeds the shared-output probation; on a verdict logs it, and on a rejection asks for a rebuild. */
+        private fun probation(t: AudioSink, clock: OutputClock, tsOk: Boolean) {
+            val p = probe ?: return
+            val r = p.add(clock.written - t.preFrames, if (tsOk) clock.latencyUs(System.nanoTime()) else null)
+            if (r == SharedLatencyProbe.Result.PENDING) return
+            probe = null
+            MbLog.i(
+                "audio_shared_probe",
+                "stream_id=$id result=${r.name.lowercase()} latency_ms=${p.medianUs?.let { it / 1000 } ?: "-"} " +
+                    "max_ms=${p.maxLatencyMs} samples=${p.samples} ts_fail=${p.failures}",
+                COMPONENT,
+            )
+            if (r == SharedLatencyProbe.Result.REJECT) {
+                policy.onProbationFailed()
+                rebuildReason = REASON_SHARED_LATENCY
+            }
+        }
+
+        private fun loop(first: AudioSink) {
             var t = first
-            val out = ShortArray(burst * 2)
-            val ts = AudioTimestamp()
-            var tsValid = false
-            var tsFramePos = 0L
-            var tsNano = 0L
-            var written = t.preFrames
+            var out = ShortArray(t.burst * 2)
+            val clock = OutputClock(RATE).also { it.reset(t.preFrames) }
+            val tsBuf = LongArray(2)
             var nextTsAt = 0L
-            var nextLogAt = written + RATE
-            var underrunBase: Int? = null // review L5: the first second's track underruns are not acted upon
+            var nextLogAt = clock.written + RATE
+            var xrunBase: Int? = null // T-095 review L5: the first second's output underruns are not acted upon
             var audioSum = 0L
             var audioN = 0
             var avSum = 0L
@@ -388,51 +367,69 @@ class AudioPlayout(
                 if (why != null) {
                     rebuildReason = null
                     if (!mayRebuild()) {
-                        MbLog.e("audio_rebuild_limit", "stream_id=$id reason=$why", COMPONENT)
+                        MbLog.e("audio_rebuild_limit", "stream_id=$id reason=$why api=${t.api}", COMPONENT)
                         return
                     }
                     t.close()
                     publish(null)
-                    t = openTrack(why) ?: return
+                    // A dead or re-routed output may mean a new device: try the whole chain again.
+                    if (why != REASON_SHARED_LATENCY) policy.reset()
+                    t = openSink(why) ?: return
                     publish(t)
-                    written = t.preFrames; nextTsAt = 0; nextLogAt = written + RATE; tsValid = false; underrunBase = null
+                    if (out.size != t.burst * 2) out = ShortArray(t.burst * 2)
+                    clock.reset(t.preFrames)
+                    nextTsAt = 0; nextLogAt = clock.written + RATE; xrunBase = null
                 }
                 val priming = core.state == PlayoutCore.State.PRIMING
-                // Timestamps: every burst while priming (A/V hold), every ~250 ms otherwise (A/V sample).
-                if (priming || written >= nextTsAt) {
-                    if (t.track.getTimestamp(ts)) { tsValid = true; tsFramePos = ts.framePosition; tsNano = ts.nanoTime }
+                val probing = probe != null
+                // Timestamps: every burst while priming (A/V hold) or on probation, every ~250 ms otherwise (A/V sample).
+                if (priming || probing || clock.written >= nextTsAt) {
+                    val tsOk = t.timestamp(tsBuf)
+                    if (tsOk) clock.onTimestamp(tsBuf[0], tsBuf[1])
+                    if (probing) {
+                        probation(t, clock, tsOk)
+                        if (rebuildReason != null) continue
+                    }
                 }
                 if (priming) {
-                    core.primingHoldUs = primingHold(tsValid, written, tsFramePos, tsNano)
-                } else if (written >= nextTsAt) {
+                    core.primingHoldUs = primingHold(clock)
+                } else if (clock.written >= nextTsAt) {
                     // When will frame `written` be heard, and when was the frame at the read head captured?
-                    nextTsAt = written + TS_INTERVAL_FRAMES
+                    nextTsAt = clock.written + TS_INTERVAL_FRAMES
                     val off = hostMinusClientUs()
                     val cap = core.buffer.readHeadCaptureUs()
-                    if (tsValid && off != null && cap != null && core.state == PlayoutCore.State.PLAYING) {
-                        val la = AvSync.audioLatencyUs(AvSync.presentTimeUs(written, tsFramePos, tsNano, RATE), cap, off)
+                    val present = clock.presentTimeUs()
+                    if (present != null && off != null && cap != null && core.state == PlayoutCore.State.PLAYING) {
+                        val la = AvSync.audioLatencyUs(present, cap, off)
                         audioSum += la; audioN++
                         video.value()?.let { avSum += la - it; avN++ }
                     }
                 }
-                core.render(out, burst)
-                val w = t.track.write(out, 0, out.size, AudioTrack.WRITE_BLOCKING)
-                if (w == AudioTrack.ERROR_DEAD_OBJECT) { rebuildReason = "dead_object"; continue }
-                if (w < 0) {
-                    if (running) MbLog.e("audio_write_failed", "stream_id=$id code=$w", COMPONENT)
-                    return
+                core.render(out, t.burst)
+                val w = t.write(out, t.burst)
+                if (w == AudioSink.WRITE_DEAD) {
+                    if (!running) return
+                    aaudioFailed(t, t.deadReason)
+                    rebuildReason = t.deadReason
+                    continue
                 }
-                written += w / 2
-                if (written >= nextLogAt) {
+                if (w < 0) {
+                    if (!running) return
+                    MbLog.e("audio_write_failed", "stream_id=$id api=${t.api} code=${t.lastError}", COMPONENT)
+                    if (t !is AAudioSink) return
+                    aaudioFailed(t, "write_failed")
+                    rebuildReason = "write_failed"
+                    continue
+                }
+                clock.onWrite(w)
+                if (clock.written >= nextLogAt) {
                     nextLogAt += RATE
-                    val tu = t.track.underrunCount
-                    val base = underrunBase
-                    if (base != null && tu > base && t.bufFrames < MAX_BURSTS * burst) {
-                        val r = t.track.setBufferSizeInFrames(t.bufFrames + burst)
-                        if (r > 0) t.bufFrames = r
-                        MbLog.i("audio_buffer_grow", "stream_id=$id buf_frames=${t.bufFrames} track_underruns=$tu", COMPONENT)
+                    val xr = t.xruns()
+                    val base = xrunBase
+                    if (base != null && xr > base && t.grow()) {
+                        MbLog.i("audio_buffer_grow", "stream_id=$id api=${t.api} buf_frames=${t.bufFrames} xruns=$xr", COMPONENT)
                     }
-                    underrunBase = tu
+                    xrunBase = xr
                     if (audioN > 0) lastAudioMs = audioSum / audioN / 1000
                     if (avN > 0) {
                         val av = avSum / avN
@@ -440,20 +437,21 @@ class AudioPlayout(
                         core.drift.onAvOffset(av)
                     }
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
-                    logStats(t, tu, lastAudioMs, lastAvMs)
+                    logStats(t, xr, lastAudioMs, lastAvMs)
                 }
             }
         }
 
-        private fun logStats(t: Track, trackUnderruns: Int, audioMs: Long?, avMs: Long?) {
+        private fun logStats(t: AudioSink, xruns: Int, audioMs: Long?, avMs: Long?) {
             val d = core.drift
             val buf = core.buffer
             MbLog.i(
                 "stats",
-                "stream_id=$id state=${if (core.idle) "idle" else core.state.name.lowercase()} perf_mode=${t.perfName} burst=$burst buf_frames=${t.bufFrames} " +
+                "stream_id=$id state=${if (core.idle) "idle" else core.state.name.lowercase()} api=${t.api} perf_mode=${t.perfName} " +
+                    "burst=${t.burst} buf_frames=${t.bufFrames} " +
                     "level_ms_floor=${if (d.lastFloorFrames >= 0) d.lastFloorFrames / MS else -1} level_ms=${core.lastRemainingFrames / MS} " +
                     "target_ms=${d.targetFrames / MS} safety_ms=${d.safetyFrames / MS} ratio_ppm=${d.ratioPpm.toLong()} " +
-                    "underruns=${d.underruns} track_underruns=$trackUnderruns " +
+                    "underruns=${d.underruns} xruns=$xruns " +
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
                     "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"}",
@@ -466,7 +464,6 @@ class AudioPlayout(
         const val COMPONENT = "audio"
         const val RATE = AudioStreamGate.SAMPLE_RATE
         const val MS = RATE / 1000
-        const val BYTES_PER_FRAME = 4
         const val DEFAULT_BURST = 240
         const val MIN_BURST = 16
         const val MAX_BURST = 4800
@@ -475,6 +472,7 @@ class AudioPlayout(
         const val MAX_REBUILDS = 5
         const val REBUILD_WINDOW_MS = 10_000L
         const val PREVIOUS_JOIN_MS = 500L
+        const val REASON_SHARED_LATENCY = "shared_latency"
 
         fun b(v: Boolean) = if (v) 1 else 0
     }
