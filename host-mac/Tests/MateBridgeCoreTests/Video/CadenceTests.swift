@@ -111,5 +111,6 @@ final class CadenceTargetTests: XCTestCase {
         XCTAssertEqual(w.decimated, 1)
         XCTAssertTrue(w.logFields.contains("target_ms=16.7"))
         XCTAssertTrue(w.logFields.contains("decimated=1"))
+        XCTAssertTrue(w.logFields.contains("deferred=0"))
     }
 }

@@ -158,6 +158,8 @@ final class DecimationTests: XCTestCase {
         var sent: [UInt64] = []
         for i in 0..<count {
             let t = UInt64(Int64(startUs) + Int64(Double(i) * 1_000_000 / fps) + jitter[i % jitter.count])
+            // A hold timer that is due fires before the next capture is offered (a not-yet-due one is a no-op).
+            if case .submit(let f) = p.takePending(nowUs: t, slotFree: true) { sent.append(f) }
             if case .submit(let f) = p.offer(t, ptsUs: t, nowUs: t, slotFree: true) { sent.append(f) }
         }
         return sent
@@ -183,8 +185,8 @@ final class DecimationTests: XCTestCase {
         XCTAssertEqual(sent.count, 120)
         let gaps = zip(sent.dropFirst(), sent).map { $0 - $1 }
         XCTAssertLessThanOrEqual(gaps.max()! - gaps.min()!, 1, "every second capture, equal spacing: \(gaps.prefix(6))")
-        XCTAssertFalse(p.hasPending, "decimated frames are dropped, never held for a timer")
-        XCTAssertEqual(p.takeDecimated(), 120)
+        XCTAssertEqual(p.takeDecimated(), 119, "off-grid frames were superseded by the next grid frame")
+        XCTAssertEqual(p.takeDeferred(), 0, "the hold timer never fires on a steady stream")
         XCTAssertEqual(p.takeOverwritten(), 0)
     }
 
@@ -195,6 +197,79 @@ final class DecimationTests: XCTestCase {
         XCTAssertEqual(sent.count, 300)
         let gaps = zip(sent.dropFirst(), sent).map { Int64($0) - Int64($1) }
         XCTAssertTrue(gaps.allSatisfy { (14_000...19_500).contains($0) }, "gaps: \(gaps.min()!)...\(gaps.max()!)")
+    }
+
+    func testSteadyStreamWithDeliveryLagAndJitterNeverFiresTheHoldTimer() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let lag: Int64 = 6_000
+        let jitter: [Int64] = [0, 1_500, -1_500, 700, -900, 1_200]
+        var sent: [UInt64] = []
+        for i in 0..<600 {
+            let pts = UInt64(1_000_000 + Int64(Double(i) * 1_000_000 / 120))
+            let now = UInt64(Int64(pts) + lag + jitter[i % jitter.count])
+            if case .submit(let f) = p.takePending(nowUs: now, slotFree: true) { sent.append(f) }
+            if case .submit(let f) = p.offer(pts, ptsUs: pts, nowUs: now, slotFree: true) { sent.append(f) }
+        }
+        XCTAssertEqual(p.takeDeferred(), 0)
+        XCTAssertEqual(sent.count, 300)
+        let gaps = zip(sent.dropFirst(), sent).map { Int64($0) - Int64($1) }
+        XCTAssertTrue(gaps.allSatisfy { (14_000...19_500).contains($0) }, "gaps: \(gaps.min()!)...\(gaps.max()!)")
+    }
+
+    func testLoneOffGridFrameWithDeliveryLagIsStillSent() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        let lag: UInt64 = 6_000
+        _ = p.offer(0, ptsUs: 0, nowUs: lag, slotFree: true)
+        // burst then idle: second capture 8.3 ms later, delivered with the same lag
+        guard case .hold(let retry) = p.offer(8_333, ptsUs: 8_333, nowUs: 8_333 + lag, slotFree: true) else { return XCTFail() }
+        XCTAssertEqual(retry, 16_666 + lag + 4_166 - (8_333 + lag))
+        if case .retry = p.takePending(nowUs: 8_333 + lag + 5_000, slotFree: true) {} else { XCTFail("not due") }
+        if case .submit(let f) = p.takePending(nowUs: 16_666 + lag + 4_200, slotFree: true) { XCTAssertEqual(f, 8_333) } else { XCTFail() }
+        XCTAssertEqual(p.takeDeferred(), 1)
+    }
+
+    func testLoneOffGridFrameIsSentAfterSlotPlusGrace() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = p.offer(0, ptsUs: 0, nowUs: 0, slotFree: true)   // grid frame, next slot 16 666
+        guard case .hold(let retry) = p.offer(8_333, ptsUs: 8_333, nowUs: 8_333, slotFree: true) else { return XCTFail() }
+        // slot 16 666 + grace 4 166 = 20 832; arrived at 8 333.
+        XCTAssertEqual(retry, 12_499)
+        if case .retry(let w) = p.takePending(nowUs: 15_000, slotFree: true) { XCTAssertEqual(w, 5_832) } else { XCTFail("not due yet") }
+        if case .submit(let f) = p.takePending(nowUs: 20_900, slotFree: true) { XCTAssertEqual(f, 8_333) } else { XCTFail() }
+        XCTAssertEqual(p.takeDeferred(), 1)
+        XCTAssertEqual(p.takeDecimated(), 0)
+        XCTAssertEqual(p.lastSubmittedPtsUs, 8_333)
+        // The timer-sent frame advanced the grid: the next slot is 33 332, the capture at 25 000 is held again.
+        if case .hold = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true) {} else { XCTFail() }
+        if case .submit = p.offer(33_400, ptsUs: 33_400, nowUs: 33_400, slotFree: true) {} else { XCTFail() }
+    }
+
+    func testTypingBurstLastFrameIsSent() {
+        // A key makes two captures 8.3 ms apart, then the screen is still: the second one must be encoded.
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = p.offer(0, ptsUs: 0, nowUs: 0, slotFree: true)
+        // 8 333 is held; 16 667 passes the grid (slot 16 666) and replaces it...
+        _ = p.offer(8_333, ptsUs: 8_333, nowUs: 8_333, slotFree: true)
+        if case .submit(let f) = p.offer(16_667, ptsUs: 16_667, nowUs: 16_667, slotFree: true) { XCTAssertEqual(f, 16_667) } else { XCTFail() }
+        // ...and a lone off-grid second frame after a long idle is sent by the timer.
+        _ = p.offer(1_000_000, ptsUs: 1_000_000, nowUs: 1_000_000, slotFree: true)
+        _ = p.offer(1_008_333, ptsUs: 1_008_333, nowUs: 1_008_333, slotFree: true)
+        if case .submit(let f) = p.takePending(nowUs: 1_030_000, slotFree: true) { XCTAssertEqual(f, 1_008_333) } else { XCTFail() }
+        XCTAssertNil({ () -> UInt64? in if case .submit(let f) = p.takePending(nowUs: 1_100_000, slotFree: true) { return f }; return nil }())
+    }
+
+    func testStaleTimerDoesNotFlushNewerPendingEarly() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        p.setTargetFps(60)
+        _ = p.offer(0, ptsUs: 0, nowUs: 0, slotFree: true)
+        _ = p.offer(8_333, ptsUs: 8_333, nowUs: 8_333, slotFree: true)
+        _ = p.offer(16_667, ptsUs: 16_667, nowUs: 16_667, slotFree: true)   // grid frame replaces the pending one
+        _ = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true)   // new pending, slot 33 332 + 4 166
+        if case .retry = p.takePending(nowUs: 21_000, slotFree: true) {} else { XCTFail("stale timer must not send it") }
     }
 
     func testRaisingTo120AppliesOnTheNextFrame() {
@@ -238,9 +313,10 @@ final class DecimationTests: XCTestCase {
             XCTAssertNil(retry, "no timer: the slot release submits it")
         } else { XCTFail("expected hold") }
         if case .submit(let f) = p.takePending(nowUs: 17_000, slotFree: true) { XCTAssertEqual(f, 16_700) } else { XCTFail() }
-        // The grid was advanced once: the next capture at 33.4 ms passes, the one at 25 ms does not.
-        if case .drop = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true) {} else { XCTFail("25 ms is off-grid") }
+        // The grid was advanced once: the capture at 25 ms is off-grid (held), the one at 33.4 ms passes and replaces it.
+        if case .hold = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true) {} else { XCTFail("25 ms is off-grid") }
         if case .submit = p.offer(33_400, ptsUs: 33_400, nowUs: 33_400, slotFree: true) {} else { XCTFail("33.4 ms is on-grid") }
+        XCTAssertFalse(p.hasPending)
     }
 
     func testKeyframeBypassStillGoesThroughWhileDecimating() {

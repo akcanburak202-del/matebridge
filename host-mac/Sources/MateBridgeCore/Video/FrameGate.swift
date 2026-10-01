@@ -66,8 +66,11 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     /// Target rate below the stream fps (T-058): captures are picked on the capture-timestamp grid, see `offer`.
     public private(set) var decimating = false
     private var decimatedCount = 0
+    private var deferredCount = 0
     private let baseToleranceUs: UInt64
-    private var pending: (frame: Frame, ptsUs: UInt64)?
+    /// `readyAtUs`: earliest time it may go out (0 = ready). `deferred`: it arrived before its grid slot and is only
+    /// sent by the hold-last-frame timer (T-066), so the gate has not been advanced for it yet.
+    private var pending: (frame: Frame, ptsUs: UInt64, readyAtUs: UInt64, deferred: Bool)?
     public private(set) var lastSubmittedPtsUs: UInt64?
     private var overwrittenCount = 0
 
@@ -90,11 +93,23 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         gate.setFps(target, toleranceUs: decimating ? min(baseToleranceUs, sourceIntervalUs / 4) : baseToleranceUs)
     }
 
-    /// Captures dropped by decimation since the last call (intended, not a loss).
+    /// Captures replaced by a newer capture while waiting for their grid slot (intended, not a loss; T-066: a
+    /// frame before its slot is held, so only a frame superseded by a newer one is counted).
     public mutating func takeDecimated() -> Int {
         defer { decimatedCount = 0 }
         return decimatedCount
     }
+
+    /// Frames sent by the hold-last-frame timer because no grid frame followed them (T-066).
+    public mutating func takeDeferred() -> Int {
+        defer { deferredCount = 0 }
+        return deferredCount
+    }
+
+    /// How long past its grid slot a held off-grid frame waits for a grid frame to supersede it: half a source
+    /// interval (on top of the delivery lag, see `offer`). Grid frames arrive at the slot within the capture jitter (well under a quarter interval), so half
+    /// an interval means "the stream went quiet", while the added latency stays below one source interval.
+    var holdGraceUs: UInt64 { 1_000_000 / UInt64(max(1, streamFps)) / 2 }
 
     public var hasPending: Bool { pending != nil }
 
@@ -115,19 +130,32 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             return .drop
         }
         if decimating, !bypassGate {
-            // The grid is on capture timestamps (one host clock). A frame before its slot is dropped, not held.
+            // The grid is on capture timestamps (one host clock). A frame before its slot is held (newest wins) and
+            // goes out at slot + grace unless a grid frame replaces it first (T-066): the newest capture must
+            // reach the encoder even when the content changed once and then stopped.
             guard gate.waitUs(nowUs: ptsUs) == 0 else {
-                decimatedCount += 1
-                return .drop
+                let slot = gate.nextSlotUs ?? ptsUs
+                // `slot` is on the capture-timestamp grid but `readyAt` is compared with arrival time: add this
+                // frame's own delivery lag (arrival - capture) so the next grid frame, which arrives with the same
+                // lag, still beats the timer.
+                let lag = nowUs > ptsUs ? nowUs - ptsUs : 0
+                var readyAt = slot + lag + holdGraceUs
+                var deferred = true
+                if let old = pending {
+                    decimatedCount += 1   // superseded by a newer capture
+                    if !old.deferred { readyAt = old.readyAtUs; deferred = false }   // already passed the grid
+                }
+                pending = (frame, ptsUs, readyAt, deferred)
+                return .hold(retryAfterUs: slotFree && deferred ? (readyAt > nowUs ? readyAt - nowUs : 0) : nil)
             }
             gate.accept(nowUs: ptsUs)
             if slotFree {
-                if pending != nil { pending = nil; overwrittenCount += 1 }
+                if pending != nil { pending = nil; decimatedCount += 1 }
                 lastSubmittedPtsUs = ptsUs
                 return .submit(frame)
             }
             if pending != nil { overwrittenCount += 1 }
-            pending = (frame, ptsUs)
+            pending = (frame, ptsUs, 0, false)
             return .hold(retryAfterUs: nil)   // the next slot release submits it
         }
         let wait = gate.waitUs(nowUs: nowUs)
@@ -138,7 +166,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             return .submit(frame)
         }
         if pending != nil { overwrittenCount += 1 }
-        pending = (frame, ptsUs)
+        pending = (frame, ptsUs, 0, false)
         return .hold(retryAfterUs: slotFree ? wait : nil)
     }
 
@@ -150,11 +178,16 @@ public struct FramePacer<Frame: Sendable>: Sendable {
             overwrittenCount += 1
             return .none
         }
-        // A decimated frame already passed the grid when it was held: it goes out as soon as a slot is free.
-        let wait = decimating ? 0 : gate.waitUs(nowUs: nowUs)
+        // A decimated frame that passed the grid goes out as soon as a slot is free; one held before its slot waits
+        // for slot + grace (a stale timer must not flush a newer pending frame early) and then advances the grid.
+        let wait: UInt64
+        if decimating { wait = p.readyAtUs > nowUs ? p.readyAtUs - nowUs : 0 } else { wait = gate.waitUs(nowUs: nowUs) }
         if wait > 0 { return .retry(afterUs: wait) }
         pending = nil
-        if decimating { lastSubmittedPtsUs = p.ptsUs } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs) }
+        if decimating {
+            if p.deferred { gate.accept(nowUs: p.ptsUs); deferredCount += 1 }
+            lastSubmittedPtsUs = p.ptsUs
+        } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs) }
         return .submit(p.frame)
     }
 
