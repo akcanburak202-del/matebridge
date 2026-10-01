@@ -437,3 +437,8 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - T-077 (trace8, 60 fps, 90 sn): kuyruk→giriş p50/p95 **1,16/2,72 → 0,90/2,32 ms**; ayrıştırma: uyanma 0,16, giriş tamponu hazır (%100 `inbuf_pre`), kopya 0,11, **`queueInputBuffer` 0,58 / p95 1,97 ms** (codec servisine çağrı). Şifre çözme: uygulama içinde `init` 0,34 ms, `doFinal` 0,16 ms; `crypto_bench` aynı işlemi 0,033 / 0,010 ms ölçüyor → ağ iş parçacığı düşük frekanslı çekirdekte/soğuk önbellekte. Geç varış %0,07, ikili varış 0.
 - Codex (high) P2: Android `Cipher` korumalı kurucusu `specifiedSpi`'yi `engineInit` çağırmadan döndürüyor → "doğrudan SPI" yolu kaldırıldı.
 - T-079 (PerformanceHintManager): HarmonyOS 4.3'te servis var (`supported=1`) ama `createHintSession` oturum vermiyor (`session=0`, hem 8,3 hem 16,7 ms hedefiyle) → platform ADPF ipucu oturumlarını desteklemiyor. Deney anahtarı varsayılan kapalı kalıyor; bu yol kapandı.
+
+## 2026-10-01 ~14:45 — 120 Hz düzensiz içerikte kilit zayıf; sabit oynatma simülasyonu
+
+- 60 Hz (trace6/8): kilit planlanan boşluk %0,02–0,04, 13–16 ms; simülasyon aynı (~%0).
+- 120 Hz Akıcı + çizim (trace7): kilit %2,4 @ 13,1 ms, geç payı p90 +60 ms (yakalamalar düzensiz → `k` yuvarlama/çıkarım kayması). Sabit oynatma: q=0,9 13,3 ms/%1,1; q=0,95 18,1/%0,5; q=0,99 20,4/%0,2. → T-080 (anahtar arkasında, A/B çizimle). Araçlar `tools/pacing/`.
