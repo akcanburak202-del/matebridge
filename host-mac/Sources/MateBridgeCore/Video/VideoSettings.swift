@@ -17,6 +17,8 @@ public struct VideoSettings: Equatable, Sendable {
     public var displayRefreshHz: Int = 60
     /// VideoToolbox `MaxFrameDelayCount`; nil leaves the encoder default (T-017 experiment knob).
     public var maxFrameDelayCount: Int?
+    /// `MATEBRIDGE_BITRATE_KBPS` (T-086): when set it wins over the stream-mode default of `applying(_:)`.
+    public var bitrateOverrideKbps: Int?
 
     /// Tablet native panel, 2x HiDPI.
     public static let tabletDefault = VideoSettings(
@@ -59,14 +61,19 @@ public struct VideoSettings: Equatable, Sendable {
         return v
     }
 
-    /// Applies the experiment knobs (T-017, T-045) from an environment. With no variables set, `self` is unchanged
+    /// Applies the experiment knobs (T-017, T-045, T-086: codec and a bitrate that wins over `STREAM_PREFS`) from an
+    /// environment. With no variables set, `self` is unchanged
     /// apart from `displayRefreshHz`/`maxFrameDelayCount` staying at their defaults. `MATEBRIDGE_FPS` overrides the
     /// tablet-derived fps only when present and valid; `MATEBRIDGE_FPS=120` without `MATEBRIDGE_REFRESH` also puts the
     /// virtual display at 120 Hz.
     public func applyingExperimentKnobs(_ env: [String: String]) -> VideoSettings {
         var s = self
         if env["MATEBRIDGE_FPS"] != nil { s.fps = Self.parseFps(env["MATEBRIDGE_FPS"]) }
-        if let b = Self.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"]) { s.bitrateKbps = b }
+        if let b = Self.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"]) {
+            s.bitrateKbps = b
+            s.bitrateOverrideKbps = b
+        }
+        s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
             ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
         s.maxFrameDelayCount = Self.parseFrameDelay(env["MATEBRIDGE_FRAME_DELAY"])

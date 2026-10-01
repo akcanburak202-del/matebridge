@@ -5,6 +5,7 @@ import os
 
 DumpVideoCommand.runIfRequested()  // T-011: `--dump-video` CLI mode, exits before the menu bar app starts
 EncodeBenchCommand.runIfRequested()  // T-047: `--encode-bench` (synthetic frames, no display/input/network)
+SharpnessBench.runIfRequested()  // T-086: `--sharpness-bench` (synthetic text through the real encoder + decoder)
 InjectTestCommand.runIfRequested()  // T-023: `--inject-test` CLI mode (posts real input events), same
 
 @MainActor

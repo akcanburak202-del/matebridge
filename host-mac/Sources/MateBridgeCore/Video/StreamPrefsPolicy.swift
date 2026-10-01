@@ -27,7 +27,7 @@ extension VideoSettings {
     }
 
     /// The settings a session runs with after the tablet's `STREAM_PREFS`. The display size and point size never
-    /// change. `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps
+    /// change. The bitrate is the mode default unless `bitrateOverrideKbps` (env, T-086) is set. `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps
     /// put the virtual display at the same rate.
     public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60) -> VideoSettings {
         let p = prefs.normalized
@@ -35,7 +35,7 @@ extension VideoSettings {
         s.fps = Int(p.fps)
         s.scalePermille = Int(p.scalePermille)
         s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
-        s.bitrateKbps = Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.scalePermille)
+        s.bitrateKbps = bitrateOverrideKbps ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.scalePermille)
         return s
     }
 }
