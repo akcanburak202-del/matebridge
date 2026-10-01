@@ -1,7 +1,7 @@
 ---
 id: T-067
 title: Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
@@ -9,6 +9,10 @@ decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/AdaptivePacer.kt
   - client-android/app/src/test/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/FramePacer.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/stream/StatsFormat.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - backlog/tasks/T-067-client-lock-recenter.md
 ---
 
@@ -58,3 +62,11 @@ Merge (566bf15) → cihaz, aynı köşe karesi içeriği, 12 × 14 sn: 33 ms+ bo
 - [ ] `e60f0c3`'teki değişiklikler (jitter geçmişini koruma + oran tabanlı yeniden ortalama) `main` (T-068 dahil) üzerine yeniden uygulanır, **iki ayrı anahtarla, varsayılan kapalı**: `--ez keep_jitter true` (reanchor'da `devs`/`dNs`/`baseNs` korunur) ve `--ez recenter true` (oran tabanlı yeniden ortalama). Anahtarsız davranış bugünkü `main` ile aynı.
 - [ ] `ev=display_timing` satırında iki anahtarın değeri; `ev=present` satırında `recenters=` (pencere başına).
 - [ ] `LockRecenterTest` anahtarlar açıkken çalışır; anahtarlar kapalıyken mevcut testler aynen geçer. `./scripts/check.sh` geçiyor.
+
+### Handoff (yeniden uygulama, task/T-067b-switches)
+
+- **Commit:** branch ucundaki T-067 commit'i (SHA orkestratore raporlandi)
+- **Dokunulan dosyalar:** AdaptivePacer.kt, FramePacer.kt (VsyncClock: `keepJitter`, `recenter` alanlari, T-068 `deadlineOverrideNs` gibi), MainActivity.kt (intent extra + display_timing alanlari), StatsFormat.kt, VideoRenderer.kt, LockRecenterTest.kt (yeni; anahtarlar acik). Karttaki `files:` listesine anahtar tesisati icin 4 kod dosyasi eklendi.
+- **Anahtarlar:** `--ez keep_jitter true` (reanchor'da devs/dNs/baseNs korunur), `--ez recenter true` (oran tabanli yeniden ortalama + acquire() jitter tabani/marj). Ikisi de kapaliyken kod yolu main ile ayni.
+- **Log:** `ev=display_timing` -> `keep_jitter=0|1 recenter=0|1`; `ev=present` -> `recenters=N` (pencere basina) yalniz `recenter` aciksa eklenir (kapaliyken satir ayni, mevcut format testi bozulmaz).
+- **Test edilmeyenler:** cihaz A/B olcumu. Mevcut testler degismeden gecti; LockRecenterTest anahtarlar acik.

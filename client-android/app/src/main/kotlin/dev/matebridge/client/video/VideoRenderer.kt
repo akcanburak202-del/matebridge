@@ -107,6 +107,7 @@ class VideoRenderer(
      * scheduler's own line (`MB/render ev=present`), see [StatsFormat.presentFields].
      */
     private var lastRephases = 0L
+    private var lastRecenters = 0L
 
     fun onSkipWindow(skipPct: Double?) {
         adaptive?.onSkipWindow(skipPct)
@@ -116,9 +117,12 @@ class VideoRenderer(
         val rephases = pacer?.rephases ?: 0L
         val rephaseDelta = (rephases - lastRephases).coerceAtLeast(0)
         lastRephases = rephases
+        val recenters = pacer?.recenters ?: 0L
+        val recenterDelta = (recenters - lastRecenters).coerceAtLeast(0)
+        lastRecenters = recenters
         MbLog.i(
             "present",
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs),
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs, if (vsync.recenter) recenterDelta else null),
             "render",
         )
     }
