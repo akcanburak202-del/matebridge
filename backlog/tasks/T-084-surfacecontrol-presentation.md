@@ -1,7 +1,7 @@
 ---
 id: T-084
 title: Deney — SurfaceControl/ASurfaceControl ile doğrudan sunum (HarmonyOS'ta compositor gecikmesi)
-status: todo
+status: done
 phase: 5
 owner: orchestrator
 depends_on: [T-071]
@@ -20,3 +20,7 @@ Bugün MediaCodec çıktısı `releaseOutputBuffer(idx, ts)` ile SurfaceView'a g
 1. Cihazda API kullanılabilirliğini küçük bir deneme APK'sı/anahtarla doğrula (deneme `--es present sc`).
 2. Kazanç ölçümü: hazır→ekran (SF `--latency` gerçek sunum) ve tekrar oranı; çizimde A/B.
 3. Karmaşıklık yüksekse ve kazanç < ~3 ms ise bırak.
+
+## Sonuç (2026-10-01)
+
+Bırakıldı. NDK sembolleri cihazda mevcut, ancak beklenen kazanç 0–1,5 ms (eşik ≥3 ms). Ayrıca NDK, CMake ve JNI ile bir karar kaydı gerektiriyor. Ayrıntılar NOTES 2026-10-01 ~15:10.

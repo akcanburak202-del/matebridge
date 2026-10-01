@@ -473,3 +473,56 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Seçenekler kullanıcıyla konuşuldu: sanal HID sürücüsü + root yardımcı (Karabiner VirtualHIDDevice) **reddedildi (risk)**. Risksiz/düşük riskli alternatifler: Apple Watch otomatik kilit açma; macOS Ekran Paylaşımı yalnız yerel (`VNCOnlyLocalConnections`) + host'un yerel VNC istemcisi olması (doğrulanmadı); Parsec ile açma ya da kilidi kapalı tutma. Ayrıca önerilen risksiz parça: görüntü ekran uykusu yüzünden koparsa host `IOPMAssertionDeclareUserActivity` ile uyandırır, tablet panelde iken dokunma/tuşu "uyan" isteği olarak gönderir.
 - **T-081 cihazda (~14:35):** oturum açıkken `pmset displaysleepnow` → `pipeline_failed` (-3815, `SCStreamErrorDomain`) → `wake_display reason=capture_source_lost wakes=1` → `pipeline_retry` → `display_created` → `video_streaming`, toplam ~1,2 s; `CGSSessionScreenIsLocked=Yes` (kilit devrede, tablette kilit ekranı). Kullanıcı kilidi Parsec ile açar. Huawei Watch Fit Pro Apple'ın otomatik kilit açmasıyla çalışmaz.
 - **DÜZELTME (~14:45, kullanıcı):** T-081 sonrası kullanıcı Mac kilidini **MateBridge'den tablet klavyesiyle açtı**. Yani kilit ekranında sentetik klavye girdisi çalışıyor; ~14:10'daki "Secure Event Input engelliyor" yorumu **yanlıştı** (`CGSSetSecureEventInput: 1` gerçek ama MateBridge'in girdisini durdurmuyor). İlk denemede başarısızlığın olası nedeni: ekran uykusunda tablet "Gelen kare: 0" paneline düştü (panel görünürken girdi yakalama kapalı) ve görüntü `caffeinate` ile dönünce yakalama/odak geri gelmedi (doğrulanmadı). T-081 ile görüntü 1,2 s'de döndüğü için tablet panele düşmüyor.
+
+## 2026-10-01 ~15:10 — Ekran deneyleri araştırması (T-082..T-085, ajanlar + cihaz)
+
+**T-083 — Mac yakalama fazı ↔ tablet vsync (çevrimdışı, 14 iz):**
+- Mac sanal ekranının vsync'i mach zamanına bağlı bir yazılım ızgarası: tüm SCK PTS'leri 8 333 333 ns ızgarasında, faz **0,500 ms mod 8,333 ms** (2,5 saat, birçok host yeniden başlatması). Ekranı yeniden oluşturmak fazı **değiştirmiyor**.
+- Tablet paneli: 8 333 215 ns (120,0017 Hz), yani **14 ppm hızlı**. Mac ile tablet saatleri arasındaki kayma 0–2 ppm.
+- (yakalama − vsync) fazı **+13,95 µs/s** kayıyor: tam tur 120 Hz'te ~10 dk, 60 Hz'te ~20 dk. Kayma tamamen öngörülebilir ve bir oturum içinde çok az değişiyor.
+- Hazır→slot beklemesi, 120 Hz'te ortalama 14,8 ms:
+
+  | bileşen | süre |
+  |---|---|
+  | sabit son an | 6 ms |
+  | kilit payı (p99 sapma + 0,5) | 6,3 ms |
+  | faz kalanı r | beklenen 4,17 ms; ölçümlerde 3,1–5,9 ms |
+
+- Aynı planlanan kaçırma oranında en iyi faz hizalamasının kazancı:
+
+  | panel | kaçırma %1 | kaçırma %0,5 |
+  |---|---|---|
+  | 120 Hz | 1,4 ms | 1,1 ms |
+  | 60 Hz | 5,6 ms | 4,6 ms |
+
+- **Önemli:** dakikalar arayla yapılan A/B ölçümleri farklı r değerinde koştu (3,1–5,9 ms). Önceki gecikme A/B sonuçlarının bir kısmı faz etkisi; yeni A/B'lerde r de raporlanmalı.
+- Mac tarafında faz kontrolü: `minimumFrameInterval`, `queueDepth`, ekranı yeniden oluşturmak ve kodlamayı geciktirmek fazı değiştirmiyor. Kesirli `refreshRate` denenmedi. Gizli `CGVirtualDisplaySettings.refreshDeadline` (Double, varsayılan 0) var, anlamı doğrulanmadı.
+- **Karar:** 120 Hz faz hizalaması yapılmayacak. Kazanç ~1–1,5 ms; bedeli gizli API, 14 ppm kaymaya karşı sürekli kontrol, protokol mesajı ve daha fazla SF kaçırması. İsteğe bağlı, düşük öncelikli iki iş:
+  1. 60 Hz panel + 120 fps içerikte FrameGate'in hangi kaynak kareyi tutacağına tabletin r'ye göre karar vermesi (~3,3 ms).
+  2. `refreshDeadline` denemesi (sanal ekran oluşturur; kullanıcı onayı gerekir).
+
+**T-084 — SurfaceControl ile doğrudan sunum:**
+- Tablet `libandroid.so` gerekli NDK sembollerini içeriyor: `ASurfaceTransaction_setBuffer`, `setDesiredPresentTime`, `setOnComplete`, `ASurfaceTransactionStats_getLatchTime`, `getPresentFenceFd`, `ASurfaceControl_createFromWindow`. Java tarafındaki `Transaction.setBuffer` API 33 gerektiriyor; tablet API 31.
+- Beklenen gecikme kazancı **0–1,5 ms**. `setDesiredPresentTime`, bugünkü `releaseOutputBuffer(ts)` ile aynı SF mekanizması (Android 12 BLAST). 6 ms son anın çoğu SF/HWC ofseti; yeni yol yalnızca codec→BufferQueue sıçramasını kaldırıyor.
+- Yol NDK, CMake ve JNI gerektiriyor. Bunun için karar kaydı lazım; tam entegrasyon ~3–5 ajan-günü.
+- **Karar:** bırakıldı (eşik ≥3 ms). Tek gerçek faydası kare başına gerçek latch/present geri bildirimi; son an ayarı için ileride bir sonda olarak düşünülebilir.
+
+**T-082 — H.264 ve HEVC:**
+- Protokol ve tablet H.264'ü uçtan uca destekliyor; yalnızca host HEVC'ye sabit.
+- Tablet çözücü sınırları (`/vendor/etc/media_codecs.xml`):
+
+  | çözücü | blok/s sınırı (16×16) | performans noktası |
+  |---|---|---|
+  | `OMX.hisi.video.decoder.avc` | 2 073 600 | 4K@60 |
+  | `OMX.hisi.video.decoder.hevc` | 6 144 000 | 4K@60 |
+
+- 2800×1840@120 = 2,415 M MB/s; H.264 için bu seviye 6.0 demek ve resmi sınırın dışında.
+- Ayrıca VVC çözücü (`OMX.hisi.video.decoder.vvc`, 3840×2160) var; Mac VVC kodlayamıyor.
+- Host'a deney düğmesi (`MATEBRIDGE_CODEC`) T-086'da eklenecek, sonra A/B.
+
+**T-085 — bit hızı ve yazı keskinliği:**
+- Akıcı mod gerçekte **60 Mbps** çalışıyor (`StreamPrefsPolicy`: 30 000 × fps/60 × scale², 20–80 sınırı). Performans modu ~34 Mbps.
+- `MATEBRIDGE_BITRATE_KBPS` prefs tarafından eziliyor, yani etkisiz.
+- Durağan ekranda kalite tazeleme yok: hareketin son P karesi ekranda kalıyor.
+- SCK doğrudan 420f full-range yakalıyor; Akıcı modda ölçekleme yok.
+- Düğmeler ve süreç içi keskinlik ölçümü (`--sharpness-bench`, PSNR/SSIM) → T-086.

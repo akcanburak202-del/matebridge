@@ -14,9 +14,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-082](tasks/T-082-h264-vs-hevc-decode.md) | Deney — H.264 ile HEVC karşılaştırması (tablette çözme süresi, kalite, uçtan uca gecikme) | 5 | orchestrator | [T-077] |
-| [T-083](tasks/T-083-capture-vsync-phase.md) | Araştırma — Mac yakalama fazını tablet vsync'ine hizalamak (ortalama ~4 ms bekleme kazancı) | 5 | orchestrator | [T-071] |
-| [T-084](tasks/T-084-surfacecontrol-presentation.md) | Deney — SurfaceControl/ASurfaceControl ile doğrudan sunum (HarmonyOS'ta compositor gecikmesi) | 5 | orchestrator | [T-071] |
 | [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
+| [T-086](tasks/T-086-host-encoder-quality-knobs.md) | Mac — kodlayıcı deney düğmeleri (H.264, bit hızı, kalite), boşta kalite tazeleme ve keskinlik ölçümü (T-082/T-085) | 5 | mac-host-dev | [T-082, T-085] |
 
 ## done
 
@@ -101,3 +100,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-079](tasks/T-079-client-performance-hint.md) | Tablet — PerformanceHintManager deneyi (ağ, çözücü giriş/çıkış iş parçacıkları için kare süresi hedefi) | 5 | android-client-dev | [T-077] |
 | [T-080](tasks/T-080-client-constant-playout-pacer.md) | Tablet — sabit oynatma gecikmeli zamanlayıcı (düzensiz içerikte 120 Hz boşluklarını azalt), anahtar arkasında | 5 | android-client-dev | [T-071, T-077] |
 | [T-081](tasks/T-081-host-wake-on-display-sleep.md) | Mac — tablet bağlıyken ekran uykusunda görüntü koparsa ekranı uyandır (IOPMAssertionDeclareUserActivity) | 4 | mac-host-dev | [T-040] |
+| [T-083](tasks/T-083-capture-vsync-phase.md) | Araştırma — Mac yakalama fazını tablet vsync'ine hizalamak (ortalama ~4 ms bekleme kazancı) | 5 | orchestrator | [T-071] |
+| [T-084](tasks/T-084-surfacecontrol-presentation.md) | Deney — SurfaceControl/ASurfaceControl ile doğrudan sunum (HarmonyOS'ta compositor gecikmesi) | 5 | orchestrator | [T-071] |
