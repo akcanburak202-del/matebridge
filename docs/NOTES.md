@@ -425,3 +425,8 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Hazır→slot p50 **15,8 ms** (önce 42,5): kilit jitter'ı (p99 dev) 33 → 8 ms; varış düzensizliği gidince kendiliğinden düştü. SF 60 sn: 3705 aralığın **%100'ü tek vsync**.
 - p50: alım→çözücü 1,9 ms (şifre çözme 0,62 + kuyruk→giriş 1,16), çözme 8,7 ms → T-077.
 - Tablet `stream_mode=performance` (2100×1380 ölçekli): tam çözünürlük (Akıcı, 2800×1840@120) yeniden denenmeli (dün çözücü sınırı).
+
+## 2026-10-01 ~14:00 — Akıcı mod (2800×1840@120) yeniden denendi; HiWrite katmanı
+
+- Kullanıcı çizdi (trace7): alınan/çözülen/gösterilen ~110/sn, `drop=0`, çözme p50/p95/p99 9,4/12,6/15,1 ms, hazır→slot p50 13,1 ms; planlanan boşluk %2,4 (Performans trace2'de %0,7; 6 % geç kare çözme süresi sıçramalarından). Kullanıcı: **"akıcı mod çok iyi gözüküyor"** → tablet `stream_mode=smooth` kalıyor.
+- Açılıştan sonra üst ortada kalem algılanmıyor → `com.huawei.hiwrite` penceresi `[989,276][1805,558]`, `ty=2032`, dokunulabilir; bağlantı panelindeki `endpointField` tetikliyor → T-078.
