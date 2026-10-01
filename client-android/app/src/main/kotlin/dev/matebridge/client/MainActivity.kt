@@ -120,6 +120,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
     private var paceTrace: dev.matebridge.client.video.PaceTrace? = null // T-069 experiment (--ez pace_trace true), default off
+    /** T-079 experiment (--ez perf_hint true), default off; shared by the video reader and the decoder threads. */
+    private var perfHint: dev.matebridge.client.video.PerfHint? = null
     private var streamConfig: StreamConfig? = null
     private var surfaceValid = false
     private var statsOn = false
@@ -180,6 +182,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val usbHintCheck = Runnable { render(lastUi) }
     private var lastUi: SessionUi = SessionUi.Searching
 
+    /**
+     * T-079: `--ez perf_hint true` puts the video reader and decoder threads in one PerformanceHintManager session
+     * (target = panel period, or `--ei perf_hint_target_us N`). Logs `ev=perf_hint enabled=… supported=…` either way.
+     */
+    private fun setupPerfHint() {
+        val on = intent?.getBooleanExtra("perf_hint", false) == true
+        val backend = dev.matebridge.client.video.AndroidPerfHint.create(this)
+        val hint = dev.matebridge.client.video.PerfHint(backend) { ev, fields -> MbLog.i(ev, fields, "render") }
+        val fixedUs = intent?.getIntExtra("perf_hint_target_us", 0) ?: 0
+        if (on && fixedUs > 0) hint.setFixedTargetNs(fixedUs * 1000L)
+        MbLog.i("perf_hint", "enabled=${if (on) 1 else 0} ${hint.describe()} fixed_target=${if (on && fixedUs > 0) 1 else 0}", "render")
+        perfHint = if (on) hint else null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -212,6 +228,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Thread({ dev.matebridge.client.security.Records.runBench() }, "crypto-bench").start()
         }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
+        setupPerfHint()
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -285,7 +302,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
-        }, streamMode, quickAck)
+        }, streamMode, quickAck, perfHint)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)
@@ -739,6 +756,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             it.maxInFlight = inflightLimit
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
+            it.perfHint = perfHint
             it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
             renderer = it
         }
@@ -773,6 +791,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         choreographerOn = true
         vsync.setNominalHz(currentHz())
         applyDisplayTiming(log = true)
+        perfHint?.setTargetNs(vsync.periodNs.takeIf { it > 0 } ?: streamConfig?.fps?.takeIf { it > 0 }?.let { 1_000_000_000L / it } ?: 0L)
         vsyncGaps.breakSequence()
         vsyncGaps.summary(reset = true)
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
@@ -793,6 +812,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 rateDebouncer.observe(hz, SystemClock.elapsedRealtime())?.let {
                     controller.setDisplayRate(it)
                     MbLog.i("display_rate", "hz=$it", "render")
+                    if (it > 0) perfHint?.setTargetNs(1_000_000_000L / it) // T-079: target = panel period
                 }
             }
             ui.postDelayed(this, RATE_POLL_MS)
@@ -1024,6 +1044,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         presenter?.stop()
         presenter = null
         controller.shutdown()
+        perfHint?.close()
         super.onDestroy()
     }
 

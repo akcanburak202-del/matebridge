@@ -88,6 +88,9 @@ class VideoRenderer(
             dev.matebridge.client.security.Records.stampOpens = v != null // T-077: record open stamps
         }
     @Volatile var paceTraceFile: java.io.File? = null
+
+    /** T-079 experiment: the decoder threads join this hint session; set before the first [attachSurface]. */
+    @Volatile var perfHint: PerfHint? = null
     private var traceWindows = 0
     private val traceWriter by lazy {
         java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "mb-pace-trace").also { it.isDaemon = true } }
@@ -276,6 +279,17 @@ class VideoRenderer(
         try { att.previous?.join() } catch (_: InterruptedException) { return }
         // T-077: the input hand-off is on the frame's critical path; ask the scheduler for prompt wake-ups.
         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) } catch (_: Exception) {}
+        val hint = perfHint
+        val tid = android.os.Process.myTid()
+        hint?.register(PerfHint.ROLE_IN, tid)
+        try {
+            decodeAttempts(att)
+        } finally {
+            hint?.unregister(PerfHint.ROLE_IN, tid)
+        }
+    }
+
+    private fun decodeAttempts(att: Attachment) {
         val policy = RestartPolicy()
         while (att.active) {
             val failure = runCodec(att)
@@ -332,9 +346,12 @@ class VideoRenderer(
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
             // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
             val c = codec
+            val hint = perfHint
             val t = Thread({
                 val outInfo = MediaCodec.BufferInfo()
                 var loggedFormat = false
+                val outTid = android.os.Process.myTid()
+                hint?.register(PerfHint.ROLE_OUT, outTid)
                 try {
                     while (att.active && outRunning.get()) {
                         val untilDeadline = releaser.untilDeadlineNs(System.nanoTime())
@@ -349,6 +366,8 @@ class VideoRenderer(
                     }
                 } catch (e: Exception) {
                     if (outRunning.get()) outError.set(e.javaClass.simpleName)
+                } finally {
+                    hint?.unregister(PerfHint.ROLE_OUT, outTid)
                 }
             }, "mb-decoder-out")
             outThread = t
@@ -390,7 +409,11 @@ class VideoRenderer(
                 if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
-                trace?.onInput(frame.frameSeq, System.nanoTime(), takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
+                if (trace != null || hint != null) {
+                    val doneNs = System.nanoTime()
+                    trace?.onInput(frame.frameSeq, doneNs, takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
+                    if (!frame.isCodecConfig) hint?.onInput(frame.frameSeq, doneNs) // T-079: recv -> queueInputBuffer
+                }
             }
             if (att.active) error = outError.get()
         } catch (e: Exception) {
