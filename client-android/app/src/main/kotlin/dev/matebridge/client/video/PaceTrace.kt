@@ -1,5 +1,7 @@
 package dev.matebridge.client.video
 
+import dev.matebridge.client.security.OpenStamps
+import dev.matebridge.client.security.Records
 import java.io.File
 
 /**
@@ -59,15 +61,23 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
 
         const val HEADER_LINE = "seq,capture_us,ready_ns,now_vsync_last_ns,period_ns,epoch,deadline_ns,dev_ns," +
             "d_ns,jitter_ns,earliest_ns,slot_ns,lock_slot_ns,k,acquire_ns,bad_run,path,late_drop,collided," +
-            "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action"
+            "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action," +
+            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre"
         const val COLS = 24
-        /** CSV columns: the [COLS] presentation columns plus six receive-path columns. */
-        const val CSV_COLS = COLS + 6
-        /** Columns of the receive ring (T-073): seq, capture_us, bytes, recv, decrypted, queued, input, action. */
-        private const val RX_COLS = 8
+        /** Receive-path CSV columns after the presentation ones: six from T-073, seven from T-077. */
+        private const val RX_CSV = 13
+        /** CSV columns: the [COLS] presentation columns plus the receive-path columns. */
+        const val CSV_COLS = COLS + RX_CSV
+        /**
+         * Columns of the receive ring: seq, capture_us, bytes, recv, decrypted, queued, input, action (T-073), then the
+         * record open stamps and the decoder input steps (T-077).
+         */
+        private const val RX_COLS = 15
         private const val R_SEQ = 0; private const val R_CAPTURE = 1; private const val R_BYTES = 2
         private const val R_RECV = 3; private const val R_DEC = 4; private const val R_QUEUED = 5
         private const val R_INPUT = 6; private const val R_ACTION = 7
+        private const val R_OPEN0 = 8; private const val R_INIT = 9; private const val R_FINAL = 10
+        private const val R_TAKEN = 11; private const val R_INBUF = 12; private const val R_COPIED = 13; private const val R_PRE = 14
 
         /** Receive-path fates of a frame ([onRxAction]); [RX_QUEUED] is the normal one. */
         const val RX_RECEIVED = 0 // read and decrypted, not yet offered to the queue
@@ -159,12 +169,25 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         return if (rx[b + R_SEQ] == seq) b else -1
     }
 
-    /** A VIDEO_FRAME record was read from the socket at [recvNs] and decrypted/parsed at [decryptedNs]. Starts the frame's receive row. */
+    /**
+     * A VIDEO_FRAME record was read from the socket at [recvNs] and decrypted/parsed at [decryptedNs]. Starts the frame's
+     * receive row. Called on the thread that opened the record, right after it: the open stamps (T-077) are that
+     * thread's [OpenStamps] when [Records.stampOpens] is on, else zero.
+     */
     fun onRecv(seq: Long, captureUs: Long, bytes: Int, recvNs: Long, decryptedNs: Long) {
+        val st = if (Records.stampOpens) OpenStamps.current() else null
+        onRecv(seq, captureUs, bytes, recvNs, decryptedNs, st?.startNs ?: 0, st?.initNs ?: 0, st?.finalNs ?: 0)
+    }
+
+    fun onRecv(
+        seq: Long, captureUs: Long, bytes: Int, recvNs: Long, decryptedNs: Long, openStartNs: Long, openInitNs: Long, openFinalNs: Long,
+    ) {
         val b = (seq % capacity).toInt() * RX_COLS
         val r = rx
         r[b + R_SEQ] = seq; r[b + R_CAPTURE] = captureUs; r[b + R_BYTES] = bytes.toLong(); r[b + R_RECV] = recvNs
         r[b + R_DEC] = decryptedNs; r[b + R_QUEUED] = 0; r[b + R_INPUT] = 0; r[b + R_ACTION] = RX_RECEIVED.toLong()
+        r[b + R_OPEN0] = openStartNs; r[b + R_INIT] = openInitNs; r[b + R_FINAL] = openFinalNs
+        r[b + R_TAKEN] = 0; r[b + R_INBUF] = 0; r[b + R_COPIED] = 0; r[b + R_PRE] = 0
     }
 
     /** The frame went through [FrameQueue.offer] at [nowNs] with fate [action] (an RX_* code). */
@@ -174,21 +197,28 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         rx[b + R_ACTION] = action.toLong()
     }
 
-    /** The frame was handed to the codec (queueInputBuffer) at [nowNs]. */
-    fun onInput(seq: Long, nowNs: Long) {
+    /**
+     * The frame was handed to the codec (queueInputBuffer) at [nowNs]. T-077 steps before it: taken from the queue at
+     * [takenNs], input buffer index in hand at [inbufNs] ([prefetched] = taken ahead of the frame), data copied at [copiedNs].
+     */
+    fun onInput(seq: Long, nowNs: Long, takenNs: Long = 0, inbufNs: Long = 0, copiedNs: Long = 0, prefetched: Boolean = false) {
         val b = rxBase(seq); if (b < 0) return
-        rx[b + R_INPUT] = nowNs
+        val r = rx
+        r[b + R_INPUT] = nowNs
+        r[b + R_TAKEN] = takenNs; r[b + R_INBUF] = inbufNs; r[b + R_COPIED] = copiedNs; r[b + R_PRE] = if (prefetched) 1 else 0
     }
 
     private fun appendRx(out: Appendable, b: Int, c: Int) {
-        // c = 0..5: recv_ns, decrypted_ns, queued_ns, input_ns, bytes, rx_action
+        // c = 0..12: recv_ns, decrypted_ns, queued_ns, input_ns, bytes, rx_action,
+        //            open_start_ns, open_init_ns, open_final_ns, taken_ns, inbuf_ns, copied_ns, inbuf_pre
         when (c) {
             0 -> out.append(rx[b + R_RECV].toString())
             1 -> out.append(rx[b + R_DEC].toString())
             2 -> out.append(rx[b + R_QUEUED].toString())
             3 -> out.append(rx[b + R_INPUT].toString())
             4 -> out.append(rx[b + R_BYTES].toString())
-            else -> out.append(RX_ACTIONS.getOrElse(rx[b + R_ACTION].toInt()) { "?" })
+            5 -> out.append(RX_ACTIONS.getOrElse(rx[b + R_ACTION].toInt()) { "?" })
+            else -> out.append(rx[b + R_OPEN0 + (c - 6)].toString())
         }
     }
 
@@ -211,7 +241,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                     else -> out.append(v.toString())
                 }
             }
-            for (c in 0..5) { out.append(','); if (rb >= 0) appendRx(out, rb, c) else out.append(if (c == 5) "none" else "0") }
+            for (c in 0 until RX_CSV) { out.append(','); if (rb >= 0) appendRx(out, rb, c) else out.append(if (c == 5) "none" else "0") }
             out.append('\n')
         }
         // Frames that were received but never decoded/presented (dropped, gated, still queued): one row each, the
@@ -224,7 +254,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
             for (c in 2 until COLS) {
                 out.append(if (c == C_PATH) "none" else if (c == C_ACTION) RX_ACTIONS.getOrElse(rx[rb + R_ACTION].toInt()) { "?" } else "0").append(',')
             }
-            for (c in 0..5) { if (c > 0) out.append(','); appendRx(out, rb, c) }
+            for (c in 0 until RX_CSV) { if (c > 0) out.append(','); appendRx(out, rb, c) }
             out.append('\n')
         }
     }
