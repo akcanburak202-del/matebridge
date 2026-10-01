@@ -124,7 +124,7 @@ class PacerTest {
         val d = pacer.schedule(1 * ms)!!
         assertFalse(d.collided)
         assertEquals(period60, d.addedNs) // earliest vsync is period60, V is one period later
-        assertEquals(2 * period60 - period60 / 2, d.renderNs)
+        assertEquals(2 * period60 - VsyncClock.DEFAULT_LEAD_NS, d.renderNs)
     }
 
     @Test fun addedLatencyStaysWithinOneVsyncPlusHalfAFrame() {
