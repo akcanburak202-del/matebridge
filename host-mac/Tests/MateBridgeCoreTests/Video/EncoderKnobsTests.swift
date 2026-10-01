@@ -163,25 +163,35 @@ final class EncoderKnobsTests: XCTestCase {
 
     // MARK: Stamps
 
-    func testRealCapturesKeepTheirStampsWithoutResubmits() {
-        var t = ResubmitStamp.Tracker()
-        XCTAssertEqual(t.real(1_000), 1_000)
-        XCTAssertEqual(t.real(9_333), 9_333)
-        XCTAssertEqual(t.real(9_000), 9_000)   // stale: unchanged, the pacer drops it as before
+    /// The tablet pacer's lateness is `x = ready - capture_time`. A re-submission must get the same x as the real
+    /// frames around it, i.e. the same capture-to-delivery lead (SCK stamps ~6.6 ms ahead of delivery).
+    func testResubmissionKeepsTheRealFramesLead() {
+        let deliveredUs: UInt64 = 1_000_000_000
+        let captureUs = deliveredUs + 6_600
+        let lead = ResubmitStamp.lead(captureUs: captureUs, deliveredUs: deliveredUs)
+        XCTAssertEqual(lead, 6_600)
+        let nowUs = deliveredUs + 300_000   // idle refresh 300 ms later
+        let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: lead, lastStampUs: captureUs)
+        // Same encode + transport delay after submission -> same ready offset -> same x.
+        let pipelineUs: UInt64 = 12_000
+        let xReal = Int64(deliveredUs + pipelineUs) - Int64(captureUs)
+        let xRefresh = Int64(nowUs + pipelineUs) - Int64(stamp)
+        XCTAssertEqual(xRefresh, xReal)
+        XCTAssertEqual(stamp, nowUs + 6_600)
     }
 
-    func testCaptureDeliveredAfterAResubmitGoesRightAfterIt() {
-        var t = ResubmitStamp.Tracker()
-        XCTAssertEqual(t.real(1_000), 1_000)
-        t.resubmitted(50_000)                  // idle refresh stamped "now"
-        // Captured at 49 000 (newer content than 1 000), delivered after the re-submission.
-        XCTAssertEqual(t.real(49_000), 50_001)
-        // A second one in the same window must not collide with the first.
-        XCTAssertEqual(t.real(49_500), 50_002)
-        // Later captures are untouched.
-        XCTAssertEqual(t.real(58_000), 58_000)
-        // A capture older than the last real one stays stale.
-        XCTAssertEqual(t.real(49_700), 49_700)
+    func testResubmissionStampsIncreaseAndHandleNegativeLead() {
+        // Back-to-back refreshes within the same microsecond never repeat a stamp.
+        let a = ResubmitStamp.stamp(nowUs: 5_000, leadUs: 100, lastStampUs: 4_000)
+        let b = ResubmitStamp.stamp(nowUs: 5_000, leadUs: 100, lastStampUs: a)
+        XCTAssertEqual(a, 5_100)
+        XCTAssertEqual(b, 5_101)
+        // A real capture stamped later than now + lead still bounds the stamp from below.
+        XCTAssertEqual(ResubmitStamp.stamp(nowUs: 5_000, leadUs: 0, lastStampUs: 9_000), 9_001)
+        // Stamps behind delivery (negative lead) and no previous stamp.
+        XCTAssertEqual(ResubmitStamp.lead(captureUs: 1_000, deliveredUs: 3_000), -2_000)
+        XCTAssertEqual(ResubmitStamp.stamp(nowUs: 10_000, leadUs: -2_000, lastStampUs: nil), 8_000)
+        XCTAssertEqual(ResubmitStamp.stamp(nowUs: 1_000, leadUs: -2_000, lastStampUs: nil), 0)
     }
 
     // MARK: SPS levels

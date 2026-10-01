@@ -9,7 +9,7 @@ decisions: []
 files:
   - host-mac/Sources/MateBridgeHost/Video/
   - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
-  - host-mac/Sources/MateBridgeHost/main.swift
+  - host-mac/Sources/MateBridgeApp/main.swift
   - host-mac/Sources/MateBridgeCore/Video/
   - host-mac/Tests/
   - backlog/tasks/T-086-host-encoder-quality-knobs.md
@@ -79,11 +79,11 @@ Not: kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` 
 ## Handoff
 
 
-- **Commit:** `811b003` (uygulama), `f33fde7` (plan). Dal `task/T-086-encoder-knobs`, `main` d1ab2bd üzerinde.
+- **Commit:** `811b003` (uygulama), `f33fde7` (plan), inceleme düzeltmeleri: bkz. aşağıdaki *İnceleme düzeltmeleri*. Dal `task/T-086-encoder-knobs`, `main` d1ab2bd üzerinde.
 - **check.sh:** ALL OK (host-mac 194 XCTest + 508 swift-testing; yeni `EncoderKnobsTests` 24 test).
 - **Dosyalar:**
   - Yeni (Core): `MateBridgeCore/Video/EncoderKnobs.swift` (`EncoderKnobs`, `H264Profile`, `IdleRefreshConfig`,
-    `IdleRefreshPolicy`, `ResubmitStamp`, `H264SPS`, `HEVCSPS.generalLevelIdc`, `VideoSettings.parseCodec/bitrateSource`),
+    `IdleRefreshPolicy`, `ResubmitStamp` (yeniden gönderim damgası = now + lead), `H264SPS`, `HEVCSPS.generalLevelIdc`, `VideoSettings.parseCodec/bitrateSource`),
     `ImageQuality.swift` (PSNR, 8×8 SSIM, isteğe bağlı "yalnız detaylı blok" filtresi), `SharpnessBenchOptions.swift`.
   - Değişen (Core): `VideoSettings.swift` (`bitrateOverrideKbps`, codec knob), `StreamPrefsPolicy.swift`
     (`applying` → `override ?? default`), `EncodeBench.swift` (`quality`, 2 varyant, `applyingEnvironment`).
@@ -100,10 +100,11 @@ Not: kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` 
     `ev=idle_refresh frames=K` (ya da `frames=1 mode=key`) **info** seviyesinde (debug `host.log`'a yazılmıyor; bölüm başına tek satır, yalnız knob açıkken).
   - `bitrate_source=prefs`, prefs gelmeden önceki başlangıç değeri (tabletDefault 30 Mbps) için de kullanılıyor.
   - Boşta tazeleme ayrı bir timer'la 1 kare aralığında yoklanıyor (yalnız knob açıkken). Gerçek kare = `encode()`; yeniden gönderimler sayacı kurmaz.
-  - **Varsayılan davranışa küçük bir düzeltme:** yeniden gönderimler (mevcut keyframe resubmit dahil) `now` damgalı;
-    hemen önce yakalanıp sonra teslim edilen gerçek SCK karesi pacer'da "stale" sayılıp **düşürülüyordu** (yeni içerik
-    kaybı). `ResubmitStamp.Tracker` böyle bir kareyi `son damga + 1 µs`'e taşıyor (yalnız gerçekten daha yeni bir
-    yakalamaysa). Yeniden gönderimsiz akışta damgalar değişmez (testli). Sıra/PTS artışı korunur.
+  - Yeniden gönderimler (boşta tazeleme ve mevcut keyframe resubmit) artık `now + lead` damgalı; `lead` = son gerçek
+    yakalamanın `captureTimeUs - deliveredUs` değeri (SCK PTS teslimden ~+6,6 ms ileride). Damga her zaman verilmiş son
+    damgadan büyük (`max(…, son + 1)`). Böylece tablet AdaptivePacer'ında `x = ready - capture` gerçek karelerle aynı
+    (testli). Gerçek karelerin damgalarına dokunulmuyor. Bu, mevcut keyframe resubmit'in damgasını da değiştiriyor
+    (eskiden `now`, ~6,6 ms "geç" görünüyordu).
   - `nolat-rtoff-noprio` ve eski `no-prioritize` artık özelliği açıkça `false` yapıyor (önceden hiç set edilmiyordu; VT varsayılanı da false).
   - `--encode-bench` ayrıca `MATEBRIDGE_BITRATE_KBPS` okur (tüm config'lerin bit hızını ezer); uygulama 120 fps'te 60 Mbps kullandığından ölçümler bununla da alındı.
 - **Bench sonuçları (M6, debug build, 2026-10-01):**
@@ -141,6 +142,18 @@ Not: kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` 
   - Uygulamanın gerçek oturumda knob'larla çalışması (host yeniden başlatılmadı, `bundle-host.sh` çalıştırılmadı).
   - Tablette H.264 akışı: `STREAM_CONFIG codec=1` + SPS/PPS CODEC_CONFIG ile `OMX.hisi.video.decoder.avc`'nin level 6.0 (level_idc=60) akışı açıp açmadığı.
   - Boşta tazeleme karelerinin tablet pacer'ında sorunsuz işlendiği (kabul kriteri 38, cihazda doğrulanmalı); `ev=idle_refresh` satırları ve tablet tarafında kare düşmesi/sıra hatası olmaması.
-  - `ResubmitStamp` düzeltmesinin gerçek SCK zamanlamasıyla etkisi.
-- **Açık sorular:**
-  - Kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` yolu yanlış; `MateBridgeApp/main.swift` kullanıldı (tek satır).
+  - Tablette yazma duraklamalarından sonra pacer p99/kilit payının boşta tazelemeyle bozulmadığı (`now + lead` damgası).
+- **İnceleme düzeltmeleri (orkestratör incelemesi, 2026-10-01):**
+  1. Yeniden gönderim damgası `now` → `now + lead` (yukarıda). Test: `testResubmissionKeepsTheRealFramesLead`,
+     `testResubmissionStampsIncreaseAndHandleNegativeLead`.
+  2. İlk sürümdeki `ResubmitStamp.Tracker` (resubmit'ten sonra teslim edilen gerçek kareyi `son + 1`'e taşıyan kural)
+     **kaldırıldı**. SCK PTS teslimden ileride olduğu için gözlenen zamanlamada hiç tetiklenmiyordu, `now + lead` ile de
+     gereksiz. Handoff'taki "varsayılan davranışta hata düzeltmesi" iddiası **yanlıştı**, geri alındı. Kalan teorik pencere:
+     lead, resubmit ile hemen sonraki gerçek kare arasında (resubmit→teslim aralığından fazla) küçülürse o gerçek kare
+     pacer'da "stale" düşebilir. Gözlenmedi, ölçülmedi.
+  3. Yarış: `resubmitLast()` artık `last`'ı okuma ile pacer'a sunmayı tek kilit altında yapıyor (`offerLocked` + `perform`),
+     bu yüzden eski bir tampon `last`'taki daha yeni kareyi ezemez.
+  4. `files:` listesindeki var olmayan `MateBridgeHost/main.swift` → `host-mac/Sources/MateBridgeApp/main.swift`.
+  - Düzeltmeden sonra tekrar ölçüldü (`IDLE_REFRESH_MS=300`): motion_last 42.52 → n1 43.78, n2 45.56, n3 **46.01** dB
+    (static_end). `KEY=1`: 39.59 dB, 1.38 MB. Önceki tabloyla tutarlı.
+- **Açık sorular:** yok.

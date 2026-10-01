@@ -206,36 +206,22 @@ extension HEVCSPS {
     }
 }
 
-/// Capture timestamp for a real capture when re-submissions of the last buffer (keyframe on a static screen, idle
-/// refresh) are stamped with the current time (T-086).
+/// Capture timestamp of a re-submission of the last buffer (keyframe on a static screen, idle refresh; T-086).
+///
+/// ScreenCaptureKit stamps a frame ahead of its delivery (NOTES 2026-10-01: `pts_vs_deliv` = +6.6 ms). The tablet
+/// pacer measures lateness as `ready - capture_time`, so a re-submission stamped plain "now" would look one lead
+/// late. It is stamped `now + lead` (the lead of the newest real capture) instead, and never at or below a stamp
+/// already handed out, so capture times keep increasing.
 public enum ResubmitStamp {
-    /// A capture taken just before a re-submission but delivered after it carries newer content than the
-    /// re-submitted buffer, yet its timestamp is older, so the pacer would drop it. Such a capture is moved to just
-    /// after `floorUs`. A capture that is not newer than the previous real capture (raw timestamp `lastRealUs`) keeps
-    /// its timestamp (the pacer drops it as stale, as before).
-    /// - Parameter floorUs: the largest stamp handed out so far (re-submissions and adjusted real captures).
-    public static func realCapture(_ captureUs: UInt64, lastRealUs: UInt64?, floorUs: UInt64?) -> UInt64 {
-        guard let f = floorUs, captureUs <= f else { return captureUs }
-        if let l = lastRealUs, captureUs <= l { return captureUs }
-        return f &+ 1
+    /// `captureUs - deliveredUs` (signed) of a real capture.
+    public static func lead(captureUs: UInt64, deliveredUs: UInt64) -> Int64 {
+        Int64(clamping: captureUs) &- Int64(clamping: deliveredUs)
     }
 
-    /// Tracks the inputs of `realCapture` (owned by the encoder, under its lock).
-    public struct Tracker: Sendable {
-        public private(set) var lastRealUs: UInt64?
-        public private(set) var floorUs: UInt64?
-
-        public init() {}
-
-        /// A real capture arrived: returns the stamp it is submitted with.
-        public mutating func real(_ captureUs: UInt64) -> UInt64 {
-            let stamp = ResubmitStamp.realCapture(captureUs, lastRealUs: lastRealUs, floorUs: floorUs)
-            lastRealUs = max(lastRealUs ?? 0, captureUs)
-            floorUs = max(floorUs ?? 0, stamp)
-            return stamp
-        }
-
-        /// A re-submission stamped `nowUs`.
-        public mutating func resubmitted(_ nowUs: UInt64) { floorUs = max(floorUs ?? 0, nowUs) }
+    public static func stamp(nowUs: UInt64, leadUs: Int64, lastStampUs: UInt64?) -> UInt64 {
+        let shifted = Int64(clamping: nowUs).addingReportingOverflow(leadUs)
+        let base = shifted.overflow ? nowUs : UInt64(max(0, shifted.partialValue))
+        guard let last = lastStampUs else { return base }
+        return max(base, last &+ 1)
     }
 }

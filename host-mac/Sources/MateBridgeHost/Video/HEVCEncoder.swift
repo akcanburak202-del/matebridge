@@ -67,8 +67,10 @@ final class HEVCEncoder: @unchecked Sendable {
     private var idleTimer: DispatchSourceTimer?
     private var refreshTimer: DispatchSourceTimer?
     private var idleRefresh: IdleRefreshPolicy
-    /// Capture timestamps handed out to real captures and re-submissions (T-086, see `submit`).
-    private var stamps = ResubmitStamp.Tracker()
+    /// `captureTimeUs - deliveredUs` of the newest real capture (SCK stamps run ahead of delivery, ~+6.6 ms) and the
+    /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
+    private var captureLeadUs: Int64 = 0
+    private var lastStampUs: UInt64?
     private var pacer: FramePacer<Input>
     private var flushScheduled = false
 
@@ -263,17 +265,28 @@ final class HEVCEncoder: @unchecked Sendable {
     func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64,
                 displayTimeUs: UInt64 = 0) {
         meter?.recordEncoderIn()
-        submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs, deliveredUs: HostClock.nowUs(),
-                     displayTimeUs: displayTimeUs), capture: true)
+        let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
+                          deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
+        lock.lock()
+        let work = offerLocked(input, bypassGate: false, capture: true)
+        lock.unlock()
+        perform(work)
     }
 
+    /// Re-encodes the last captured buffer (keyframe on a static screen, idle refresh). Reading `last` and offering
+    /// it happen under one lock, so a newer capture can never be replaced in `last` by an older buffer.
+    /// The stamp keeps the real captures' capture-to-delivery lead (T-086): the tablet pacer judges lateness as
+    /// `ready - capture_time`, and a re-submission stamped plain "now" would look one lead (~6.6 ms) late.
     private func resubmitLast() {
         lock.lock()
         guard !stopped, let l = last else { lock.unlock(); return }
+        let nowUs = HostClock.nowUs()
+        let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
+        let input = Input(buffer: l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
+                          captureTimeUs: stamp, deliveredUs: nowUs)
+        let work = offerLocked(input, bypassGate: true, capture: false)
         lock.unlock()
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        let nowUs = UInt64(max(0, CMTimeGetSeconds(now)) * 1_000_000)
-        submit(Input(buffer: l.buffer, pts: now, captureTimeUs: nowUs, deliveredUs: nowUs), bypassGate: true)
+        perform(work)
     }
 
     /// Idle quality refresh (T-086): re-encodes the last captured buffer once the screen has been static for the
@@ -303,20 +316,27 @@ final class HEVCEncoder: @unchecked Sendable {
         if due { resubmitLast() }
     }
 
-    /// `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
+    /// What `offerLocked` decided, carried out by `perform` after the lock is released.
+    private struct Work {
+        var delay: UInt64?
+        var send: (Input, Bool, VTCompressionSession)?
+    }
+
+    private func perform(_ work: Work) {
+        if let delay = work.delay { armFlush(delay) }
+        if let (frame, key, s) = work.send { send(frame, key: key, session: s) }
+    }
+
+    /// Must hold `lock`. `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
     /// `capture`: a real ScreenCaptureKit frame (false: a re-submission of the last buffer).
-    private func submit(_ arrived: Input, bypassGate: Bool = false, capture: Bool = false) {
-        lock.lock()
-        guard !stopped, let s = session else { lock.unlock(); return }
+    private func offerLocked(_ arrived: Input, bypassGate: Bool, capture: Bool) -> Work {
+        guard !stopped, let s = session else { return Work() }
         var input = arrived
         if capture {
             idleRefresh.captured(nowUs: input.deliveredUs)
-            // T-086: re-submissions are stamped "now", so a capture taken just before one but delivered after it
-            // would look stale to the pacer and be dropped although it carries newer content; it goes right after.
-            input.captureTimeUs = stamps.real(input.captureTimeUs)
-        } else {
-            stamps.resubmitted(input.captureTimeUs)
+            captureLeadUs = ResubmitStamp.lead(captureUs: input.captureTimeUs, deliveredUs: input.deliveredUs)
         }
+        lastStampUs = max(lastStampUs ?? 0, input.captureTimeUs)
         input.slotFreeAtArrival = inFlight < HEVCEncoder.maxInFlight
         last = input
         var toSend: (Input, Bool)?
@@ -329,9 +349,7 @@ final class HEVCEncoder: @unchecked Sendable {
         case .drop: break
         }
         reportOverwrittenLocked()
-        lock.unlock()
-        if let delay { armFlush(delay) }
-        if let (frame, key) = toSend { send(frame, key: key, session: s) }
+        return Work(delay: delay, send: toSend.map { ($0.0, $0.1, s) })
     }
 
     private func reportOverwrittenLocked() {
