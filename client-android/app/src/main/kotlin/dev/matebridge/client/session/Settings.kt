@@ -42,6 +42,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setClipboardShare(on: Boolean) = store.putString(KEY_CLIPBOARD, if (on) "1" else "0")
 
+    /** Mac audio on the tablet (T-095); default on, only a stored "0" disables. */
+    fun audioEnabled(): Boolean = store.getString(KEY_AUDIO) != "0"
+
+    fun setAudioEnabled(on: Boolean) = store.putString(KEY_AUDIO, if (on) "1" else "0")
+
     /** Local pen trail and pen dot (T-056); both default off (T-064); only a stored "1" enables. */
     fun penTrail(): Boolean = store.getString(KEY_PEN_TRAIL) == "1"
 
@@ -102,6 +107,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"
+        const val KEY_AUDIO = "audio_enabled"
         const val KEY_PEN_TRAIL = "pen_trail"
         const val KEY_PEN_DOT = "pen_dot"
         const val KEY_FINGER_OFF = "finger_touch_disabled"

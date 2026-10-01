@@ -41,6 +41,8 @@ import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.LocalAction
 import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.input.UnbufferedPenDispatch
+import dev.matebridge.client.audio.AudioPlayout
+import dev.matebridge.client.audio.AvSync
 import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
@@ -102,6 +104,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var streamMode = StreamMode.DEFAULT
     private var modeButton: Button? = null
     private lateinit var clipboard: ClipboardBridge // T-055
+    /** T-095: `--ez audio false` turns audio off entirely (no AUDIO_PCM capability, no AUDIO_PREFS, no playback). */
+    private var audioAllowed = true
+    private var audio: AudioPlayout? = null
     private var discovery: MacDiscovery? = null
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
@@ -284,6 +289,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setupPerfHint()
         parseWifiKnobs()
+        audioAllowed = intent?.getBooleanExtra("audio", true) != false
+        MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -335,6 +342,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
+        if (audioAllowed) audio = AudioPlayout(this) { clock.offsetUs() }
         val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
             intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
         )
@@ -348,6 +356,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             override fun onSessionStart() {
+                audio?.stop("new_connection")
                 clock.reset()
                 rttStats.reset()
                 runOnUiThread { capture.onSessionReset() } // the host holds no input state for a new connection
@@ -359,7 +368,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
-        }, streamMode, quickAck, perfHint, knobs)
+
+            override fun onAudio(msg: Message) { audio?.onAudio(msg) } // control reader thread, never blocks
+
+            override fun onSessionEnd() { audio?.stop("session_end") }
+        }, streamMode, quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)
@@ -410,6 +423,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         addFingerToggle()
         addModeButton()
         addClipboardToggle()
+        addAudioToggle()
         addPenToggles()
         addShortcutHint()
         applyImmersive()
@@ -617,6 +631,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         b.setOnClickListener {
             clipboard.sync.enabled = !clipboard.sync.enabled
             settings.setClipboardShare(clipboard.sync.enabled)
+            label()
+        }
+        label()
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(b, lp)
+    }
+
+    /** T-095: connect-panel switch for Mac audio, persisted in [Settings] (default on); absent with `--ez audio false`. */
+    private fun addAudioToggle() {
+        if (!audioAllowed) return
+        val p = panel as? LinearLayout ?: return
+        val b = Button(this)
+        fun label() { b.text = "Ses: " + if (settings.audioEnabled()) "açık" else "kapalı" }
+        b.setOnClickListener {
+            val on = !settings.audioEnabled()
+            settings.setAudioEnabled(on)
+            controller.setAudioEnabled(on)
+            if (!on) audio?.stop("setting_off") // the host also stops on AUDIO_PREFS(0); silence at once
             label()
         }
         label()
@@ -838,6 +871,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.detachSurface()
         presenter?.active = false
         streamConfig = null
+        audio?.videoLatencyUs = null // no video: no A/V target
         statsView.text = ""
         releaseRefreshRate()
         setSurfaceFrameRate(false)
@@ -999,6 +1033,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val vg = vsyncGaps.summary(reset = true)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
+        audio?.videoLatencyUs = AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000) // T-095 A/V target
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
             val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs())) +
@@ -1103,6 +1138,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(usbHintCheck)
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
+        audio?.stop("background") // T-095: silence at once; the BYE below makes the host stop capturing
         controller.stop() // sends BYE, closes both connections
         syncWifiLock("background") // started is false: always released here
         super.onStop()
@@ -1115,6 +1151,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         presenter?.stop()
         presenter = null
         controller.shutdown()
+        audio?.shutdown()
         wifiLock?.sync(false, "destroy")
         perfHint?.close()
         super.onDestroy()
@@ -1240,7 +1277,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val h = min(dm.widthPixels, dm.heightPixels)
         val hz = windowManager.defaultDisplay.refreshRate.roundToInt()
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
-            Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC
+            Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or
+            (if (audioAllowed) Capabilities.AUDIO_PCM else 0) // T-095
         return Hello(
             protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),

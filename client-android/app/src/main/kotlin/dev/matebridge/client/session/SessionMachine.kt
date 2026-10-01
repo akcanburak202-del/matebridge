@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.Hello
@@ -29,6 +30,7 @@ class SessionMachine(
     private val hello: Hello,
     initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs(),
     private val pingIntervalUs: Long = PING_INTERVAL_US, // T-089 knob (--ei ping_ms N); the PONG timeout is unchanged
+    initialAudio: Boolean? = null, // T-095: AUDIO_PREFS wish; null = this client does not do audio (nothing is sent)
 ) {
     sealed interface Event {
         data class Start(val endpoint: Endpoint) : Event
@@ -48,6 +50,8 @@ class SessionMachine(
         data class SetPrefs(val prefs: StreamPrefs) : Event
         /** The debounced panel rate (T-059): remembered, sent now when input is allowed and the value changed. */
         data class SetDisplayRate(val hz: Int) : Event
+        /** The user's audio setting (T-095): remembered, sent as AUDIO_PREFS now when input is allowed and it changed. */
+        data class SetAudio(val enabled: Boolean) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -88,6 +92,7 @@ class SessionMachine(
 
     private var prefs = initialPrefs
     private var displayHz = 0 // 0 = not measured yet: nothing is sent
+    private var audio: Boolean? = initialAudio
     private var pingSeq = 0L
     private var nextPingUs = 0L
     private var lastPongUs = 0L
@@ -162,6 +167,13 @@ class SessionMachine(
                     if (inputAllowed && displayHz > 0) out += Action.Send(DisplayRate(displayHz))
                 }
             }
+            is Event.SetAudio -> {
+                // Only a client that does audio (non-null) ever sends AUDIO_PREFS.
+                if (audio != null && event.enabled != audio) {
+                    audio = event.enabled
+                    if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
+                }
+            }
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
         }
         return out
@@ -196,6 +208,7 @@ class SessionMachine(
                 out += Action.Send(Ping(pingSeq++, nowUs))
                 out += Action.Send(prefs) // T-050: right after the proof PING, never before it
                 if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
+                audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
                 nextPingUs = nowUs + pingIntervalUs
                 hostName = ack.hostName
                 sessionId = ack.sessionId
