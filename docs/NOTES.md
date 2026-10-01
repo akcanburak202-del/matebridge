@@ -624,3 +624,27 @@ Ağ:
 
 - **Sonuç:** Wi-Fi tavanının nedeni Network.framework'ün kullanıcı alanı TCP yığını (kayıp → cubic penceresi küçülüyor). Ağ ve tablet değil.
 - → T-091: video bağlantısı BSD soketine ve `TCP_NOTSENT_LOWAT`'a taşınıyor (düğme arkasında, A/B). Wi-Fi'de kalem öbeklenmesi aynı nedenden olabilir (kontrol bağlantısı da `ch`); T-091 ölçümünden sonra ayrı kart.
+
+## 2026-10-01 ~18:35 — T-091 cihazda: BSD video soketi Wi-Fi'yi düzeltti
+
+`brab.py`, Akıcı, kayan metin, 20 s pencere. Mac 18:36'da kendiliğinden kilitlendi (~20 dk boşta); 2. turun çoğu kilit ekranı yüküyle geçti.
+
+| koşul | fps | KB/kare p50 | gönderilen Mbps | tablet gecikme medyanı | RTT p50/p95 | gönderim kuyruğu p95 / maks | yeniden gönderim |
+|---|---|---|---|---|---|---|---|
+| Wi-Fi `nw` | 13 | 256 | 28,6 (tavan) | **372 ms** | 27/31 | 334/387 KB | — |
+| Wi-Fi `bsd` 128 KB | 52 | 46 | 22,9 | **48,8 ms** | 28/50 | 120/943 KB | 0 |
+| Wi-Fi `bsd` 64 KB | 54 | 47 | 23,1 | **38,5 ms** | 26/42 | 90/939 KB | 0 |
+| Wi-Fi `bsd` 256 KB | 54 | 47 | 23,2 | **37,5 ms** | 29/52 | 85/861 KB | 0 |
+| USB `bsd` 128 KB | 55 | 47 | 23,2 | 23,9 ms | 4,7/6,1 | 0 | — |
+| kilit ekranı yükü, Wi-Fi `bsd` 64/256 | 30 | 188–211 | **~60 (tam)** | 52–55 ms | 25/34 | 16–19/83 KB | 0 |
+| kilit ekranı yükü, USB `bsd` | 30 | 220 | 59,7 | 39,7 ms | | | |
+
+- Wi-Fi tavanı kalktı. `bsd` 60 Mbps'i yeniden gönderimsiz taşıyor; gecikme 372 → ~40 ms.
+- `TCP_NOTSENT_LOWAT` 64/128/256 arasındaki fark gürültü düzeyinde; 128 kalıyor. Varsayılan `bsd` → T-092.
+- Wi-Fi'de kalan fark (USB 24 ms ↔ Wi-Fi ~40 ms):
+  - RTT yük altında 25–28 ms (boşta ICMP ~9,5 ms, oynak);
+  - kuyruk patlamaları (maks ~940 KB).
+- Sonraki adaylar:
+  - kontrol bağlantısını (girdi, kalem) da BSD'ye taşımak; Wi-Fi kalem öbeklenmesi için ölç;
+  - Wi-Fi'ye özel bit hızı (`MATEBRIDGE_WIFI_BITRATE_KBPS`);
+  - kullanıcı tarafı: AWDL/AirDrop/Handoff kapatma, modemi DFS olmayan kanala almak.
