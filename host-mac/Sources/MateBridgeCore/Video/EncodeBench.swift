@@ -16,6 +16,8 @@ public struct EncodeBenchConfig: Equatable, Sendable {
     public var inFlight = 3
     /// Set a DataRateLimits cap of 2x the average (what `HEVCEncoder` does today).
     public var dataRateLimits = true
+    /// `kVTCompressionPropertyKey_Quality` instead of `AverageBitRate` (T-086; the DataRateLimits cap stays).
+    public var quality: Double? = nil
 
     public init(name: String) { self.name = name }
 
@@ -46,6 +48,9 @@ public struct EncodeBenchConfig: Equatable, Sendable {
         }
         add("nolat-fps120") { $0.lowLatencyRateControl = false; $0.expectedFps = 120 }
         add("nolat-rtoff") { $0.lowLatencyRateControl = false; $0.realTime = false }
+        // T-086: `.fast` (the app profile) with the quality knobs.
+        add("nolat-rtoff-noprio") { $0.lowLatencyRateControl = false; $0.realTime = false; $0.prioritizeSpeed = false }
+        add("nolat-rtoff-q80") { $0.lowLatencyRateControl = false; $0.realTime = false; $0.quality = 0.8 }
         add("nolat-power-off") { $0.lowLatencyRateControl = false; $0.maximizePowerEfficiency = false }
         add("nolat-fps120-rtoff") { $0.lowLatencyRateControl = false; $0.expectedFps = 120; $0.realTime = false }
         add("nolat-fps120-inflight1") { $0.lowLatencyRateControl = false; $0.expectedFps = 120; $0.inFlight = 1 }
@@ -69,8 +74,24 @@ public struct EncodeBenchOptions: Equatable, Sendable {
     /// `scroll`: whole frame moves every frame (worst case). `patch`: static screen with a small changing region
     /// (pen/typing-like, closer to typical use).
     public var content = EncodeBenchContent.scroll
+    /// `MATEBRIDGE_CODEC` / `MATEBRIDGE_H264_PROFILE` (T-086).
+    public var codec = Codec.hevc
+    public var h264Profile = H264Profile.high
+    /// `MATEBRIDGE_BITRATE_KBPS` (T-086): replaces every config's bitrate when set.
+    public var bitrateOverrideKbps: Int?
 
     public struct ParseError: Error, Equatable, Sendable { public let message: String }
+
+    /// The codec knobs of the app (T-086): `MATEBRIDGE_CODEC`, `MATEBRIDGE_H264_PROFILE`, and
+    /// `MATEBRIDGE_BITRATE_KBPS`, which replaces every config's bitrate.
+    public func applyingEnvironment(_ env: [String: String]) -> EncodeBenchOptions {
+        var o = self
+        o.codec = VideoSettings.parseCodec(env["MATEBRIDGE_CODEC"])
+        o.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
+        o.bitrateOverrideKbps = VideoSettings.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"])
+        if let b = o.bitrateOverrideKbps { for i in o.configs.indices { o.configs[i].bitrateKbps = b } }
+        return o
+    }
 
     /// nil when `--encode-bench` is absent. No `--config` means the whole catalog.
     public static func parse(_ args: [String]) -> Result<EncodeBenchOptions, ParseError>? {

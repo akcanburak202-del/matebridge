@@ -146,7 +146,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// cannot change the settings of the live one.
     private func settings(for hello: Hello) -> (base: VideoSettings, initial: VideoSettings) {
         // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
-        // MATEBRIDGE_FRAME_DELAY=0|1.
+        // MATEBRIDGE_FRAME_DELAY=0|1; T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS.
         let env = ProcessInfo.processInfo.environment
         let base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
         let initial = VideoSettings.initialSettings(
@@ -268,7 +268,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         prefsGate = StreamPrefsGate()
         resetDisplayRate()
         log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
-            + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) codec=hevc")
+            + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) codec=\(settings.codec.logName)")
         await perform(lease.sessionStarted(device: device, settings: settings))
     }
 
@@ -325,7 +325,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         log(.info, "stream_reconfigure",
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
             + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
-            + "bitrate_kbps=\(wanted.bitrateKbps)")
+            + "bitrate_kbps=\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }

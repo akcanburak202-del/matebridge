@@ -4,8 +4,8 @@ import Foundation
 import MateBridgeCore
 import VideoToolbox
 
-/// `MateBridgeApp --encode-bench` (T-047): measures how fast VideoToolbox HEVC can encode 2800x1840 frames under
-/// different session configurations. Synthetic frames only; no display, SCK, input or network is touched.
+/// `MateBridgeApp --encode-bench` (T-047): measures how fast VideoToolbox HEVC (or H.264 with `MATEBRIDGE_CODEC=h264`,
+/// T-086) can encode 2800x1840 frames under different session configurations. Synthetic frames only; no display, SCK, input or network is touched.
 public enum EncodeBench {
     public struct Result: Sendable {
         public var config: String
@@ -18,6 +18,8 @@ public enum EncodeBench {
         public var p99Ms: Double
         public var mbps: Double
         public var sizes = FrameSizeStats()
+        /// Mean encoded bytes per output frame (keyframes included).
+        public var meanBytes = 0.0
         public var note: String
     }
 
@@ -98,13 +100,13 @@ public enum EncodeBench {
         func fail() { lock.lock(); failures += 1; lock.unlock() }
     }
 
-    private static func makeSession(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int,
-                                    notes: inout [String]) -> VTCompressionSession? {
+    private static func makeSession(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int, codec: Codec,
+                                    h264Profile: H264Profile, notes: inout [String]) -> VTCompressionSession? {
         var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         if c.lowLatencyRateControl { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
         var s: VTCompressionSession?
         let st = VTCompressionSessionCreate(
-            allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_HEVC,
+            allocator: nil, width: Int32(width), height: Int32(height), codecType: HEVCEncoder.codecType(codec),
             encoderSpecification: spec as CFDictionary, imageBufferAttributes: nil, compressedDataAllocator: nil,
             outputCallback: nil, refcon: nil, compressionSessionOut: &s)
         guard st == noErr, let s else { notes.append("create=\(st)"); return nil }
@@ -119,17 +121,26 @@ public enum EncodeBench {
         }
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
-            c.main10 ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel)
+            codec == .hevc && c.main10 ? kVTProfileLevel_HEVC_Main10_AutoLevel
+                : HEVCEncoder.profileLevel(codec, h264: h264Profile))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, (c.expectedFps ?? fps) as CFNumber)
-        set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (c.bitrateKbps * 1000) as CFNumber)
+        // As in `HEVCEncoder` (T-086): Quality replaces AverageBitRate; if it is refused, the bitrate is used.
+        var qualityOK = false
+        if let q = c.quality {
+            let r = VTSessionSetProperty(s, key: kVTCompressionPropertyKey_Quality, value: q as CFNumber)
+            qualityOK = r == noErr
+            notes.append(qualityOK ? "quality=\(q)" : "Quality=\(r)")
+        }
+        if !qualityOK {
+            set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (c.bitrateKbps * 1000) as CFNumber)
+        }
         if c.dataRateLimits {
             set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits, [c.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
         }
         set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, HEVCEncoder.keyframeIntervalSeconds as CFNumber)
-        if c.prioritizeSpeed {
-            set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-                kCFBooleanTrue)
-        }
+        // Explicit false when off, like `HEVCEncoder` with MATEBRIDGE_PRIO_SPEED=0 (T-086).
+        set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+            c.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
         VTCompressionSessionPrepareToEncodeFrames(s)
         var raw: UnsafeMutableRawPointer?
         if VTSessionCopyProperty(s, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
@@ -145,12 +156,14 @@ public enum EncodeBench {
     /// `paceFps == nil`: submit as fast as the encoder accepts (bounded in-flight). Otherwise submit at that rate and
     /// skip frames when the session is full (newest wins, as in the app).
     public static func run(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int, seconds: Double,
-                           paceFps: Int?, pool: [CVPixelBuffer]) -> Result {
+                           paceFps: Int?, pool: [CVPixelBuffer], codec: Codec = .hevc,
+                           h264Profile: H264Profile = .high) -> Result {
         let mode = paceFps.map { "paced \($0)" } ?? "max"
         var notes: [String] = []
         var sessions: [VTCompressionSession] = []
         for _ in 0..<c.sessions {
-            guard let s = makeSession(c, width: width, height: height, fps: fps, notes: &notes) else {
+            guard let s = makeSession(c, width: width, height: height, fps: fps, codec: codec, h264Profile: h264Profile,
+                                      notes: &notes) else {
                 return Result(config: c.name, mode: mode, outFps: 0, submitted: 0, skipped: 0, p50Ms: 0, p95Ms: 0,
                               p99Ms: 0, mbps: 0, note: notes.joined(separator: " "))
             }
@@ -212,35 +225,43 @@ public enum EncodeBench {
             p50Ms: Double(CadenceWindow.percentile(d, 50)) / 1000, p95Ms: Double(CadenceWindow.percentile(d, 95)) / 1000,
             p99Ms: Double(CadenceWindow.percentile(d, 99)) / 1000,
             mbps: Double(collector.bytes) * 8 / elapsed / 1e6,
-            sizes: FrameSizeStats(frames: collector.frames), note: Array(Set(notes)).sorted().joined(separator: " "))
+            sizes: FrameSizeStats(frames: collector.frames),
+            meanBytes: collector.outputs > 0 ? Double(collector.bytes) / Double(collector.outputs) : 0,
+            note: Array(Set(notes)).sorted().joined(separator: " "))
     }
 
-    /// Human-readable list of HEVC encoders VideoToolbox offers.
-    public static func encoderList() -> [String] {
+    /// Human-readable list of the HEVC (or H.264) encoders VideoToolbox offers.
+    public static func encoderList(codec: Codec = .hevc) -> [String] {
         var list: CFArray?
         guard VTCopyVideoEncoderList(nil, &list) == noErr, let arr = list as? [[String: Any]] else { return [] }
         return arr.compactMap { e in
-            guard let codec = e[kVTVideoEncoderList_CodecName as String] as? String, codec.contains("H.265") || codec.contains("HEVC") else { return nil }
+            guard let type = e[kVTVideoEncoderList_CodecType as String] as? Int,
+                  type == Int(HEVCEncoder.codecType(codec)) else { return nil }
             let id = e[kVTVideoEncoderList_EncoderID as String] as? String ?? "?"
             let hw = (e[kVTVideoEncoderList_IsHardwareAccelerated as String] as? Bool) == true
             return "\(id) hardware=\(hw)"
         }
     }
 
-    /// Returns the process exit code.
-    public static func runAll(_ o: EncodeBenchOptions) -> Int32 {
+    /// Returns the process exit code. The codec knobs are read from the environment here (T-086).
+    public static func runAll(_ options: EncodeBenchOptions) -> Int32 {
+        let o = options.applyingEnvironment(ProcessInfo.processInfo.environment)
         let width = 2800, height = 1840
-        print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds) content=\(o.content.rawValue)")
-        print("encoders: \(encoderList().joined(separator: "; "))")
+        print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds) content=\(o.content.rawValue) "
+              + "codec=\(o.codec.logName)\(o.codec == .h264 ? " profile=\(o.h264Profile.rawValue)" : "")"
+              + (o.bitrateOverrideKbps.map { " bitrate_kbps=\($0)" } ?? ""))
+        print("encoders: \(encoderList(codec: o.codec).joined(separator: "; "))")
         let pool = makeFramePool(width: width, height: height, count: 12, content: o.content)
         guard pool.count == 12 else { print("error: cannot allocate frames"); return 1 }
-        print("config | mode | out fps | submitted | skipped | enc ms p50/p95/p99 | Mbps | delta KB p50/p99/max (mean, p99/mean) | key KB max (n) | notes")
+        print("config | mode | out fps | submitted | skipped | enc ms p50/p95/p99 | Mbps | KB/frame | delta KB p50/p99/max (mean, p99/mean) | key KB max (n) | notes")
         for c in o.configs {
             for pace in [nil, o.fps] as [Int?] {
-                let r = run(c, width: width, height: height, fps: o.fps, seconds: o.seconds, paceFps: pace, pool: pool)
+                let r = run(c, width: width, height: height, fps: o.fps, seconds: o.seconds, paceFps: pace, pool: pool,
+                            codec: o.codec, h264Profile: o.h264Profile)
                 let z = r.sizes
-                print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %.0f/%.0f/%.0f (%.0f, %.2fx) | %.0f (%d) | %@",
+                print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %.1f | %.0f/%.0f/%.0f (%.0f, %.2fx) | %.0f (%d) | %@",
                              r.config, r.mode, r.outFps, r.submitted, r.skipped, r.p50Ms, r.p95Ms, r.p99Ms, r.mbps,
+                             r.meanBytes / 1000,
                              Double(z.deltaP50) / 1000, Double(z.deltaP99) / 1000, Double(z.deltaMax) / 1000,
                              z.deltaMean / 1000, z.p99ToMean, Double(z.keyMax) / 1000, z.keyCount, r.note))
                 fflush(stdout)

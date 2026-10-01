@@ -19,13 +19,14 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
     }
 }
 
-/// Real-time HEVC encoder: low-latency rate control, no B-frames, keyframes on demand.
+/// Real-time HEVC (or, with `MATEBRIDGE_CODEC=h264`, H.264; T-086) encoder: no B-frames, keyframes on demand.
 /// Output is delivered as Annex-B `EncodedVideoFrame`s; the first output (and any change of
 /// parameter sets) is preceded by a CODEC_CONFIG frame.
 ///
 /// Newest frame wins: at most `maxInFlight` frames are inside VideoToolbox and one more "latest" frame waits in
 /// `pending` (replaced by newer captures, submitted when a slot frees). The last captured buffer is retained so a
-/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames.
+/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer is
+/// re-encoded by the optional idle quality refresh (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086).
 final class HEVCEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
@@ -64,25 +65,48 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastSubmitNs: UInt64 = DispatchTime.now().uptimeNanoseconds
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
+    private var refreshTimer: DispatchSourceTimer?
+    private var idleRefresh: IdleRefreshPolicy
+    /// Capture timestamps handed out to real captures and re-submissions (T-086, see `submit`).
+    private var stamps = ResubmitStamp.Tracker()
     private var pacer: FramePacer<Input>
     private var flushScheduled = false
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
     let profile: EncoderProfile
+    /// Encoder-level experiment knobs (T-086).
+    let knobs: EncoderKnobs
+    /// `kVTCompressionPropertyKey_Quality` was accepted (then `AverageBitRate` is not set).
+    private(set) var qualityApplied = false
+    private let logSink: LogSink
     private let meter: CadenceMeter?
     /// `VTSessionSetProperty` failures at creation (key: OSStatus), for diagnostics.
     private(set) var propertyFailures: [String] = []
     /// Every property the encoder tried to set: "Name=ok" or "Name=<OSStatus>" (T-017: was it applied?).
     private(set) var propertyReport: [String] = []
 
-    init(settings: VideoSettings, meter: CadenceMeter? = nil, output: @escaping Output,
+    /// `(level, event, fields)`; defaults to the host log (`host.log`, component `encoder`).
+    typealias LogSink = @Sendable (LogLevel, String, String) -> Void
+    static let hostLog: LogSink = { level, event, fields in
+        HostLog.log(level, component: "encoder", event: event, fields: fields)
+    }
+
+    /// - Parameters:
+    ///   - knobs: encoder experiment knobs; nil reads them from the process environment (`EncoderKnobs.parse`).
+    ///   - logSink: where `ev=encoder_config` / `ev=idle_refresh` go (the benches print them instead).
+    init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
+         logSink: @escaping LogSink = HEVCEncoder.hostLog, output: @escaping Output,
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
         self.meter = meter
         self.pacer = FramePacer<Input>(streamFps: settings.fps)
         self.output = output
         self.onFailure = onFailure
+        self.logSink = logSink
+        let knobs = knobs ?? EncoderKnobs.parse(ProcessInfo.processInfo.environment)
+        self.knobs = knobs
+        self.idleRefresh = IdleRefreshPolicy(config: knobs.idleRefresh, fps: settings.fps)
 
         // T-047/T-053 bench: at 2800x1840 the low-latency rate control + RealTime path costs ~9-13 ms per frame and
         // tops out near 100 fps; without both the hardware encoder needs ~6 ms. Frame sizes stay even enough (p99 <=
@@ -97,7 +121,7 @@ final class HEVCEncoder: @unchecked Sendable {
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(settings.encodedWidthPx), height: Int32(settings.encodedHeightPx),
-            codecType: kCMVideoCodecType_HEVC, encoderSpecification: spec as CFDictionary,
+            codecType: Self.codecType(settings.codec), encoderSpecification: spec as CFDictionary,
             imageBufferAttributes: nil, compressedDataAllocator: nil,
             outputCallback: nil, refcon: nil, compressionSessionOut: &s)
         guard status == noErr, let s else { throw VideoEncoderError.sessionCreation(status) }
@@ -115,20 +139,35 @@ final class HEVCEncoder: @unchecked Sendable {
         }
         set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
+        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
+            Self.profileLevel(settings.codec, h264: knobs.h264Profile))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
         if let delay = settings.maxFrameDelayCount {
             set("MaxFrameDelayCount", kVTCompressionPropertyKey_MaxFrameDelayCount, delay as CFNumber)
         }
-        set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
-        // Cap bursts (bytes per second) at 2x the average.
+        // T-086: a constant-quality target replaces the average bitrate; if VideoToolbox refuses it, fall back.
+        var qualityOK = false
+        if let q = knobs.quality {
+            let st = VTSessionSetProperty(s, key: kVTCompressionPropertyKey_Quality, value: q as CFNumber)
+            report.append("Quality=\(st == noErr ? "ok" : String(st))")
+            qualityOK = st == noErr
+            if !qualityOK {
+                failures.append("Quality=\(st)")
+                logSink(.warning, "quality_rejected", "status=\(st) fallback=bitrate")
+            }
+        }
+        qualityApplied = qualityOK
+        if !qualityOK {
+            set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
+        }
+        // Cap bursts (bytes per second) at 2x the average (also with Quality: the cap is the safety net).
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
             [settings.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
         // Keyframes are requested on demand (TCP is reliable); the periodic one is only a long safety net (T-075).
         set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
             HEVCEncoder.keyframeIntervalSeconds as CFNumber)
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-            kCFBooleanTrue)
+            knobs.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
         // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range).
         set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
         set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB)
@@ -143,7 +182,39 @@ final class HEVCEncoder: @unchecked Sendable {
         timer.setEventHandler { [weak self] in self?.idleTick() }
         idleTimer = timer
         timer.resume()
+
+        // Idle quality refresh (T-086, off by default): polled once per frame interval.
+        if knobs.idleRefresh.isEnabled {
+            let refresh = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.refresh"))
+            let every = DispatchTimeInterval.microseconds(Int(max(1_000, idleRefresh.intervalUs)))
+            refresh.schedule(deadline: .now() + every, repeating: every, leeway: .microseconds(500))
+            refresh.setEventHandler { [weak self] in self?.idleRefreshTick() }
+            refreshTimer = refresh
+            refresh.resume()
+        }
+
+        logSink(.info, "encoder_config",
+                "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
+                + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
+                + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)")
     }
+
+    static func codecType(_ codec: Codec) -> CMVideoCodecType {
+        codec == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC
+    }
+
+    static func profileLevel(_ codec: Codec, h264: H264Profile) -> CFString {
+        guard codec == .h264 else { return kVTProfileLevel_HEVC_Main_AutoLevel }
+        switch h264 {
+        case .high: return kVTProfileLevel_H264_High_AutoLevel
+        case .main: return kVTProfileLevel_H264_Main_AutoLevel
+        case .cbp: return kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel
+        case .high52: return kVTProfileLevel_H264_High_5_2
+        }
+    }
+
+    /// Profile name for the `ev=encoder_config` line logged with the parameter sets.
+    private var profileLogName: String { settings.codec == .h264 ? knobs.h264Profile.rawValue : "main" }
 
     /// Effective periodic keyframe interval in seconds (0 = on request only).
     static let keyframeIntervalSeconds = KeyframeIntervalPolicy.fromEnvironment()
@@ -193,7 +264,7 @@ final class HEVCEncoder: @unchecked Sendable {
                 displayTimeUs: UInt64 = 0) {
         meter?.recordEncoderIn()
         submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs, deliveredUs: HostClock.nowUs(),
-                     displayTimeUs: displayTimeUs))
+                     displayTimeUs: displayTimeUs), capture: true)
     }
 
     private func resubmitLast() {
@@ -205,6 +276,25 @@ final class HEVCEncoder: @unchecked Sendable {
         submit(Input(buffer: l.buffer, pts: now, captureTimeUs: nowUs, deliveredUs: nowUs), bypassGate: true)
     }
 
+    /// Idle quality refresh (T-086): re-encodes the last captured buffer once the screen has been static for the
+    /// configured delay, so the tablet does not keep the last (motion-time) frame.
+    private func idleRefreshTick() {
+        lock.lock()
+        guard !stopped, last != nil else { lock.unlock(); return }
+        let action = idleRefresh.tick(nowUs: HostClock.nowUs())
+        lock.unlock()
+        switch action {
+        case .none:
+            return
+        case .resubmit(let first):
+            if first { logSink(.info, "idle_refresh", "frames=\(knobs.idleRefresh.count)") }
+            resubmitLast()
+        case .keyframe:
+            logSink(.info, "idle_refresh", "frames=1 mode=key")
+            requestKeyframe(resubmitNow: true)
+        }
+    }
+
     private func idleTick() {
         lock.lock()
         let due = !stopped && forceKeyframe && last != nil
@@ -214,10 +304,19 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     /// `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
-    private func submit(_ arrived: Input, bypassGate: Bool = false) {
+    /// `capture`: a real ScreenCaptureKit frame (false: a re-submission of the last buffer).
+    private func submit(_ arrived: Input, bypassGate: Bool = false, capture: Bool = false) {
         lock.lock()
         guard !stopped, let s = session else { lock.unlock(); return }
         var input = arrived
+        if capture {
+            idleRefresh.captured(nowUs: input.deliveredUs)
+            // T-086: re-submissions are stamped "now", so a capture taken just before one but delivered after it
+            // would look stale to the pacer and be dropped although it carries newer content; it goes right after.
+            input.captureTimeUs = stamps.real(input.captureTimeUs)
+        } else {
+            stamps.resubmitted(input.captureTimeUs)
+        }
         input.slotFreeAtArrival = inFlight < HEVCEncoder.maxInFlight
         last = input
         var toSend: (Input, Bool)?
@@ -383,10 +482,14 @@ final class HEVCEncoder: @unchecked Sendable {
         session = nil
         pacer.clearPending()
         last = nil
+        idleRefresh.reset()
         let timer = idleTimer
         idleTimer = nil
+        let refresh = refreshTimer
+        refreshTimer = nil
         lock.unlock()
         timer?.cancel()
+        refresh?.cancel()
         if let s {
             VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(s)
@@ -404,26 +507,16 @@ final class HEVCEncoder: @unchecked Sendable {
         }()
 
         // Parameter sets are re-announced only when they change (first frame included).
-        var count = 0
-        var lengthSize: Int32 = 4
-        CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-            format, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil,
-            parameterSetCountOut: &count, nalUnitHeaderLengthOut: &lengthSize)
-        var sets: [[UInt8]] = []
-        for i in 0..<count {
-            var ptr: UnsafePointer<UInt8>?
-            var size = 0
-            let st = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-                format, parameterSetIndex: i, parameterSetPointerOut: &ptr, parameterSetSizeOut: &size,
-                parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
-            if st == noErr, let ptr { sets.append(Array(UnsafeBufferPointer(start: ptr, count: size))) }
-        }
+        let (sets, lengthSize) = Self.parameterSets(format, codec: settings.codec)
         let blob = AnnexB.parameterSets(sets)
         lock.lock()
         let changed = !blob.isEmpty && blob != lastParameterSets
         if changed { lastParameterSets = blob }
         lock.unlock()
         if changed {
+            let level = Self.levelIdc(sets, codec: settings.codec).map { String($0) } ?? "unknown"
+            logSink(.info, "encoder_config", "codec=\(settings.codec.logName) profile=\(profileLogName) "
+                    + "level_idc=\(level) sets=\(sets.count)")
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
@@ -434,10 +527,45 @@ final class HEVCEncoder: @unchecked Sendable {
                                           dataPointerOut: &base) == kCMBlockBufferNoErr, let base else { return }
         let raw = Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
                                             count: length))
-        guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: Int(lengthSize)) else { return }
+        guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.trace = trace
         output(frame, encodeTimeUs)
+    }
+
+    /// Parameter sets (HEVC: VPS, SPS, PPS; H.264: SPS, PPS) without start codes, and the NAL length size.
+    static func parameterSets(_ format: CMFormatDescription, codec: Codec) -> ([[UInt8]], Int) {
+        func get(_ i: Int, _ ptr: UnsafeMutablePointer<UnsafePointer<UInt8>?>?, _ size: UnsafeMutablePointer<Int>?,
+                 _ count: UnsafeMutablePointer<Int>?, _ length: UnsafeMutablePointer<Int32>?) -> OSStatus {
+            codec == .h264
+                ? CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    format, parameterSetIndex: i, parameterSetPointerOut: ptr, parameterSetSizeOut: size,
+                    parameterSetCountOut: count, nalUnitHeaderLengthOut: length)
+                : CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                    format, parameterSetIndex: i, parameterSetPointerOut: ptr, parameterSetSizeOut: size,
+                    parameterSetCountOut: count, nalUnitHeaderLengthOut: length)
+        }
+        var count = 0
+        var lengthSize: Int32 = 4
+        _ = get(0, nil, nil, &count, &lengthSize)
+        var sets: [[UInt8]] = []
+        for i in 0..<count {
+            var ptr: UnsafePointer<UInt8>?
+            var size = 0
+            if get(i, &ptr, &size, nil, nil) == noErr, let ptr {
+                sets.append(Array(UnsafeBufferPointer(start: ptr, count: size)))
+            }
+        }
+        return (sets, Int(lengthSize))
+    }
+
+    /// Level from the SPS (H.264 level_idc, HEVC general_level_idc), for the log.
+    static func levelIdc(_ sets: [[UInt8]], codec: Codec) -> UInt8? {
+        for nal in sets {
+            if codec == .h264, let l = H264SPS.levelIdc(nal) { return l }
+            if codec == .hevc, let l = HEVCSPS.generalLevelIdc(sps: nal) { return l }
+        }
+        return nil
     }
 
     /// CODEC_CONFIG for a newly attached consumer (nil before the first frame was encoded).

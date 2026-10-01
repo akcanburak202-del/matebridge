@@ -10,13 +10,13 @@ public enum VideoPipelineError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .screenRecordingDenied: return ScreenCaptureError.permissionDenied.description
-        case .unsupportedCodec: return "only HEVC is implemented"
+        case .unsupportedCodec: return "only HEVC and H.264 are implemented"
         case .alreadyStarted: return "video pipeline was already started (create a new one to restart)"
         }
     }
 }
 
-/// Virtual display -> ScreenCaptureKit -> HEVC -> bounded queue (`frames`).
+/// Virtual display -> ScreenCaptureKit -> HEVC or H.264 (`settings.codec`, T-086) -> bounded queue (`frames`).
 /// Does not touch the network: the session (T-014) consumes `frames` and wraps each frame in a `VIDEO_FRAME`.
 ///
 /// Lifecycle: one `start()` per instance (a second call throws `alreadyStarted`); `stop()` is idempotent. If capture
@@ -77,7 +77,7 @@ public final class VideoPipeline: @unchecked Sendable {
         try beginStart()
 
         do {
-            guard settings.codec == .hevc else { throw VideoPipelineError.unsupportedCodec }
+            guard settings.codec == .hevc || settings.codec == .h264 else { throw VideoPipelineError.unsupportedCodec }
             // Check before creating the display so a denied permission leaves nothing behind.
             guard ScreenCapture.hasPermission else { throw VideoPipelineError.screenRecordingDenied }
 
