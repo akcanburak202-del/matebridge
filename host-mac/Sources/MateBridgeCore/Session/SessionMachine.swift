@@ -706,7 +706,9 @@ public struct SessionMachine: Sendable {
         case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard, .displayRate:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
-        case .helloAck, .streamConfig, .pong, .videoHello, .videoFrame:
+        case .audioPrefs:
+            return []  // decoded, no audio behaviour yet (T-094): ignored, as before when 0x30 was unknown
+        case .helloAck, .streamConfig, .pong, .audioConfig, .audioFrame, .videoHello, .videoFrame:
             return []  // wrong direction or connection: ignored
         }
     }

@@ -21,6 +21,7 @@ T = {
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
+    "AUDIO_PREFS": 0x30, "AUDIO_CONFIG": 0x31, "AUDIO_FRAME": 0x32,
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
 }
 
@@ -373,6 +374,49 @@ FIXTURES = {
     "display_rate": ("DISPLAY_RATE: tablet panel dropped to 60 Hz (no touch)", frame("DISPLAY_RATE", [
         field("u16", "hz", 60),
         field("u16", "reserved", 0),
+    ])),
+    "audio_prefs": ("AUDIO_PREFS: client wants audio", frame("AUDIO_PREFS", [
+        field("u8", "enabled", 1),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+    ])),
+    "audio_config": ("AUDIO_CONFIG: stream 3 started, PCM s16le 48 kHz stereo, 10 ms packets", frame("AUDIO_CONFIG", [
+        field("u16", "stream_id", 3),
+        field("u8", "state", 1, "STARTED"),
+        field("u8", "format", 1, "PCM_S16LE"),
+        field("u32", "sample_rate", 48000),
+        field("u8", "channels", 2),
+        field("u8", "reserved", 0),
+        field("u16", "frames_per_packet", 480),
+    ])),
+    "audio_config_stopped": ("AUDIO_CONFIG: stream 3 stopped", frame("AUDIO_CONFIG", [
+        field("u16", "stream_id", 3),
+        field("u8", "state", 0, "STOPPED"),
+        field("u8", "format", 0),
+        field("u32", "sample_rate", 0),
+        field("u8", "channels", 0),
+        field("u8", "reserved", 0),
+        field("u16", "frames_per_packet", 0),
+    ])),
+    "audio_frame": ("AUDIO_FRAME: 4 stereo frames of s16le PCM (payload shortened)", frame("AUDIO_FRAME", [
+        field("u16", "stream_id", 3),
+        field("u16", "reserved", 0),
+        field("u32", "seq", 7),
+        field("u64", "sample_index", 3360),
+        field("u64", "capture_time_us", 123456789012),
+        field("u16", "frame_count", 4),
+        field("u16", "data_len", 16),
+        field("bytes", "data", struct.pack("<8h", 0, 0, 1000, -1000, 32767, -32768, -1, 1), "L/R pairs"),
+    ])),
+    "invalid_audio_frame_short": ("MUST BE REJECTED (PROTOCOL_ERROR): AUDIO_FRAME payload shorter than 28 + data_len", frame("AUDIO_FRAME", [
+        field("u16", "stream_id", 3),
+        field("u16", "reserved", 0),
+        field("u32", "seq", 8),
+        field("u64", "sample_index", 3364),
+        field("u64", "capture_time_us", 123456799012),
+        field("u16", "frame_count", 4),
+        field("u16", "data_len", 16),
+        field("bytes", "data", bytes(4), "only 4 of 16 bytes"),
     ])),
     "unknown_type": ("MUST BE SKIPPED: unknown message type 0x7f with a 3-byte payload", [
         (struct.pack("<B", 0x7F), "header u8 type = 0x7f (unknown)"),

@@ -17,6 +17,8 @@ public enum ProtocolConstants {
     /// AES-GCM tag, and the `type` byte inside every record (PROTOCOL.md 9: max length = payload limit + 17).
     public static let recordTagSize = 16
     public static let recordOverhead = 17
+    /// Largest AUDIO_FRAME `frame_count` (docs/PROTOCOL.md 0x32).
+    public static let audioMaxFrames = 960
 }
 
 public enum MessageType: UInt8, Sendable, CaseIterable {
@@ -39,6 +41,9 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case pong = 0x21
     case stats = 0x22
     case keyframeRequest = 0x23
+    case audioPrefs = 0x30
+    case audioConfig = 0x31
+    case audioFrame = 0x32
     case videoHello = 0x40
     case videoFrame = 0x41
 }

@@ -19,6 +19,9 @@ public enum Message: Equatable, Sendable {
     case pong(Pong)
     case stats(Stats)
     case keyframeRequest(KeyframeReason)
+    case audioPrefs(AudioPrefs)
+    case audioConfig(AudioConfig)
+    case audioFrame(AudioFrame)
     case videoHello(VideoHello)
     case videoFrame(VideoFrame)
 
@@ -43,6 +46,9 @@ public enum Message: Equatable, Sendable {
         case .pong: .pong
         case .stats: .stats
         case .keyframeRequest: .keyframeRequest
+        case .audioPrefs: .audioPrefs
+        case .audioConfig: .audioConfig
+        case .audioFrame: .audioFrame
         case .videoHello: .videoHello
         case .videoFrame: .videoFrame
         }
@@ -84,6 +90,9 @@ public enum Message: Equatable, Sendable {
             w.u32(m.latencyAvgUs)
             w.u32(m.bytesReceived)
         case .keyframeRequest(let r): w.u8(r.rawValue)
+        case .audioPrefs(let m): m.write(&w)
+        case .audioConfig(let m): m.write(&w)
+        case .audioFrame(let m): m.write(&w)
         case .videoHello(let m):
             w.u16(m.protocolVersion)
             w.u16(m.configID)
@@ -104,7 +113,8 @@ public enum Message: Equatable, Sendable {
 
     /// Complete frame: type byte, u32 LE length, payload.
     /// Throws instead of producing a frame the peer would reject: payload over the connection limit,
-    /// PEN count outside 1...64, or a VIDEO_FRAME that is not a single whole fragment.
+    /// PEN count outside 1...64, AUDIO_FRAME frame_count outside 1...960 or data over 65535 bytes,
+    /// or a VIDEO_FRAME that is not a single whole fragment.
     public func encode() throws -> [UInt8] {
         let payload = try checkedPayload()
         var w = ByteWriter()
@@ -126,6 +136,11 @@ public enum Message: Equatable, Sendable {
             }
         case .clipboard(let m):
             guard m.data.count <= ProtocolConstants.clipboardMaxBytes else { throw ProtocolError.invalidField("length") }
+        case .audioFrame(let m):
+            guard (1...ProtocolConstants.audioMaxFrames).contains(Int(m.frameCount)) else {
+                throw ProtocolError.invalidField("frame_count")
+            }
+            guard m.data.count <= Int(UInt16.max) else { throw ProtocolError.invalidField("data_len") }
         case .videoFrame(let m):
             guard m.fragmentIndex == 0, m.fragmentCount == 1, Int(m.frameSize) == m.data.count else {
                 throw ProtocolError.invalidField("video fragment")
@@ -172,6 +187,9 @@ public enum Message: Equatable, Sendable {
                                 decodeTimeAvgUs: try r.u32(), latencyAvgUs: try r.u32(),
                                 bytesReceived: try r.u32()))
         case .keyframeRequest: return .keyframeRequest(KeyframeReason(rawValue: try r.u8()))
+        case .audioPrefs: return .audioPrefs(try AudioPrefs.read(&r))
+        case .audioConfig: return .audioConfig(try AudioConfig.read(&r))
+        case .audioFrame: return .audioFrame(try AudioFrame.read(&r))
         case .videoHello:
             return .videoHello(VideoHello(protocolVersion: try r.u16(), configID: try r.u16(),
                                           sessionID: try r.u32(),

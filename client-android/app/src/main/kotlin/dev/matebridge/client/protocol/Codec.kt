@@ -229,6 +229,17 @@ object Codec {
                 w.u32(msg.decodeTimeAvgUs); w.u32(msg.latencyAvgUs); w.u32(msg.bytesReceived)
             }
             is KeyframeRequest -> w.u8(msg.reason)
+            is AudioPrefs -> { w.u8(if (msg.enabled) 1 else 0); w.u8(0); w.u16(0) }
+            is AudioConfig -> {
+                w.u16(msg.streamId); w.u8(msg.state); w.u8(msg.format)
+                w.u32(msg.sampleRate); w.u8(msg.channels); w.u8(0); w.u16(msg.framesPerPacket)
+            }
+            is AudioFrame -> {
+                require(msg.frameCount in 1..AudioFrame.MAX_FRAMES) { "frame_count must be 1..${AudioFrame.MAX_FRAMES}" }
+                w.u16(msg.streamId); w.u16(0); w.u32(msg.seq)
+                w.u64(msg.sampleIndex); w.u64(msg.captureTimeUs)
+                w.u16(msg.frameCount); w.u16(msg.data.size); w.bytes(msg.data.value)
+            }
             is VideoHello -> {
                 require(msg.videoNonce.size == Limits.NONCE_BYTES) { "video_nonce must be 16 bytes" }
                 w.u16(msg.protocolVersion); w.u16(msg.configId); w.u32(msg.sessionId)
@@ -332,6 +343,22 @@ object Codec {
             MsgType.PONG -> Pong(r.u32(), r.u64(), r.u64())
             MsgType.STATS -> Stats(r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32())
             MsgType.KEYFRAME_REQUEST -> KeyframeRequest(r.u8())
+            MsgType.AUDIO_PREFS -> { val enabled = r.u8(); r.skip(3); AudioPrefs(enabled == 1) }
+            MsgType.AUDIO_CONFIG -> {
+                val streamId = r.u16(); val state = r.u8(); val format = r.u8()
+                val rate = r.u32(); val channels = r.u8(); r.skip(1); val fpp = r.u16()
+                AudioConfig(streamId, state, format, rate, channels, fpp) // unknown state/format kept, not an error
+            }
+            MsgType.AUDIO_FRAME -> {
+                val streamId = r.u16(); r.skip(2); val seq = r.u32()
+                val sampleIndex = r.u64(); val capture = r.u64()
+                val frameCount = r.u16(); val dataLen = r.u16()
+                if (frameCount < 1 || frameCount > AudioFrame.MAX_FRAMES) {
+                    throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "invalid audio frame_count $frameCount")
+                }
+                // Shorter than fixed part + data_len: SHORT_PAYLOAD from the reader. Trailing bytes are ignored.
+                AudioFrame(streamId, seq, sampleIndex, capture, frameCount, Bytes(r.bytes(dataLen)))
+            }
             MsgType.VIDEO_HELLO -> VideoHello(r.u16(), r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
             MsgType.VIDEO_FRAME -> {
                 val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(1)

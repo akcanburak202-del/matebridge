@@ -37,6 +37,9 @@ object MsgType {
     const val PONG = 0x21
     const val STATS = 0x22
     const val KEYFRAME_REQUEST = 0x23
+    const val AUDIO_PREFS = 0x30
+    const val AUDIO_CONFIG = 0x31
+    const val AUDIO_FRAME = 0x32
     const val VIDEO_HELLO = 0x40
     const val VIDEO_FRAME = 0x41
 }
@@ -69,6 +72,9 @@ object Capabilities {
     const val TOUCH = 1 shl 5
     const val DECODE_H264 = 1 shl 6
     const val DECODE_HEVC = 1 shl 7
+
+    /** Handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo. Not sent until playback exists (T-095). */
+    const val AUDIO_PCM = 1 shl 8
 }
 
 // ---- Session ----
@@ -341,6 +347,54 @@ data class KeyframeRequest(val reason: Int) : Message {
         const val STARTUP = 0
         const val DECODE_ERROR = 1
         const val FRAMES_DROPPED = 2
+    }
+}
+
+// ---- Audio (decision 0011) ----
+
+/** Client audio request (C to H, PROTOCOL.md 0x30). On the wire any value other than 1 decodes as false. */
+data class AudioPrefs(val enabled: Boolean) : Message {
+    override val type get() = MsgType.AUDIO_PREFS
+}
+
+/**
+ * Audio stream start/stop (H to C, PROTOCOL.md 0x31). [state] and [format] stay raw: unknown values decode
+ * fine and the client ignores such a stream (not a protocol error).
+ */
+data class AudioConfig(
+    val streamId: Int,
+    val state: Int,
+    val format: Int,
+    val sampleRate: Long, // u32, Hz
+    val channels: Int,
+    val framesPerPacket: Int, // informational; every AUDIO_FRAME carries its own frame_count
+) : Message {
+    override val type get() = MsgType.AUDIO_CONFIG
+
+    companion object {
+        const val STATE_STOPPED = 0
+        const val STATE_STARTED = 1
+        const val FORMAT_PCM_S16LE = 1
+
+        fun stopped(streamId: Int) = AudioConfig(streamId, STATE_STOPPED, 0, 0, 0, 0)
+    }
+}
+
+/** One PCM packet (H to C, PROTOCOL.md 0x32). data_len on the wire is [data].size. Never log [data]. */
+data class AudioFrame(
+    val streamId: Int,
+    val seq: Long, // u32
+    val sampleIndex: Long, // u64, first frame's index in the stream
+    val captureTimeUs: Long, // u64, host clock shared with VIDEO_FRAME.capture_time_us
+    val frameCount: Int, // 1..960
+    val data: Bytes,
+) : Message {
+    override val type get() = MsgType.AUDIO_FRAME
+
+    companion object {
+        /** stream_id, reserved, seq, sample_index, capture_time_us, frame_count, data_len. */
+        const val FIXED_BYTES = 28
+        const val MAX_FRAMES = 960
     }
 }
 

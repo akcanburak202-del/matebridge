@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-093](tasks/T-093-audio-protocol-codecs.md) | Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM | 5 | mac-host-dev | [] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
