@@ -35,7 +35,7 @@ files:
 
 ## Handoff
 
-- **Commit:** `ef8dbd7` (ilk uygulama) + `{FIX}` (inceleme düzeltmesi: sabit SPI yolu kaldırıldı); plan `091c966`; dal `task/T-077-client-input-path`.
+- **Commit:** `ef8dbd7` (ilk uygulama) + `4f75360` (inceleme düzeltmesi: sabit SPI yolu kaldırıldı); plan `091c966`; dal `task/T-077-client-input-path`.
 - **Dokunulan dosyalar:** `security/Records.kt`, `video/FrameQueue.kt`, `video/PaceTrace.kt`, `video/VideoRenderer.kt`, `video/InputBufferSlot.kt` (yeni), `test/.../video/PaceTraceTest.kt`, `test/.../video/InputHandoffTest.kt` (yeni), `test/.../security/RecordOpenTest.kt` (yeni), bu kart. `FrameDecoder.kt` değişmedi (şifreli bağlantıda kullanılmıyor).
 - **Ne değişti / neden:**
   - *Uyanma:* `FrameQueue.awaitNext(ns)` — `wait/notifyAll` (uyanan iş parçacığı hemen bildirenin tuttuğu monitöre takılabilir) yerine `LockSupport.park/unpark`, `unpark` kilit bırakıldıktan sonra. Kuyruk kuralları (sınır 2, en yeni kazanır, keyframe kapısı, config tekrarı, reset) aynı; `poll()` duruyor (testler).
