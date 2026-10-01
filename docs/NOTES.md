@@ -419,3 +419,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 
 - `TCP_QUICKACK` (T-074) adb tüneli paketlemesini kesin olarak gideriyor (A/B). Anahtar kare aralığı 300 s (T-075, `keyframe_interval_s=300`).
 - `crypto_bench` (T-076): AndroidOpenSSL 432 KB 0,57 ms (776 MB/s), varsayılan zaten AndroidOpenSSL; BC 14 ms. Eski ~11 ms dört kopya + tahsisten. Codex P2 (Conscrypt çıkış tamponu boyutu) düzeltildi.
+
+## 2026-10-01 ~13:40 — Bütçe sonrası (trace6, 60 Hz, `tick`)
+
+- Hazır→slot p50 **15,8 ms** (önce 42,5): kilit jitter'ı (p99 dev) 33 → 8 ms; varış düzensizliği gidince kendiliğinden düştü. SF 60 sn: 3705 aralığın **%100'ü tek vsync**.
+- p50: alım→çözücü 1,9 ms (şifre çözme 0,62 + kuyruk→giriş 1,16), çözme 8,7 ms → T-077.
+- Tablet `stream_mode=performance` (2100×1380 ölçekli): tam çözünürlük (Akıcı, 2800×1840@120) yeniden denenmeli (dün çözücü sınırı).
