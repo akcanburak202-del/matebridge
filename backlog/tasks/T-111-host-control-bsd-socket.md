@@ -11,6 +11,7 @@ files:
   - host-mac/Sources/MateBridgeCore/Session/
   - host-mac/Sources/MateBridgeApp/main.swift
   - host-mac/Tests/
+  - docs/LOGGING.md  # orkestratör ekledi (inceleme düzeltmesi)
   - backlog/tasks/T-111-host-control-bsd-socket.md
 ---
 
@@ -118,15 +119,30 @@ USB/Wi-Fi, kalem, ses, Bonjour keşfi orkestratörde.
 
 ## Handoff
 
-- **Commit:** `65a49e7` (uygulama), plan `dd061e3`; dal `task/T-111-host-control-bsd-socket` (taban `main` 8ff0d4a).
-  `./scripts/check.sh` → ALL OK (host-mac XCTest 266, swift-testing 609; yeni 13 test). Yeni testler + T-091 soket
-  testleri 5 kez art arda ve `--sanitize=thread` ile temiz geçti.
+- **Commit:** `65a49e7` (uygulama), `c0b65a4` (handoff), inceleme düzeltmesi bu kartın son commit'i (aşağıda);
+  plan `dd061e3`; dal `task/T-111-host-control-bsd-socket` (taban `main` 8ff0d4a). `./scripts/check.sh` → ALL OK
+  (yeni 15 test). Yeni testler + T-091 soket testleri art arda ve `--sanitize=thread` ile temiz geçti.
+- **İnceleme düzeltmesi (Codex P2, zarif kapanış):** `finish` artık `SHUT_WR`'dan hemen sonra kapatmıyor. Okunmamış
+  girdiyle `close()` XNU'da bağlantıyı RST ile bitirir; çekirdekte henüz gönderilmemiş çıktı (BYE, ses) atılabilir.
+  Yeni akış: kuyruk yazılır → `shutdown(SHUT_WR)` (FIN) → gelen baytlar okunup atılmaya devam eder → eşin EOF'u
+  (ya da hata) → `cancel`. Hepsi `timeout` (kontrolde 2 sn) ile sınırlı; tablet tarafını kapatmazsa süre sonunda
+  kesilir. Yeniden üretim: `testFinishDeliversByeWhileTabletKeepsSending` (tablet 0,5 ms'de bir yazarken host
+  4 MiB + BYE gönderip kapatıyor, tablet yavaş okuyor). Eski kodda tablet BYE'den sonra temiz EOF yerine RST aldı
+  (`read` = -1). Loopback'te veri kaybı tetiklenemedi ama abortif kapanış her seferinde görüldü. Yeni kodda BYE eksiksiz
+  gelir, ardından temiz EOF. Ek test: `testFinishClosesAtDeadlineWhenPeerKeepsItsSideOpen`. Kapanış sırasında
+  `isWritableForNewRecord` true döner ve yazma kaynağını yeniden kurmaz.
+  - **Video (T-091) yolu:** aynı sorun yok. Video bağlantısı yalnız `cancel()` ile kapanır ve kapanışta teslim edilmesi
+    gereken mesaj yoktur: PROTOCOL.md'ye göre video'da BYE yok, gönderilmemiş kareler zaten atılabilir. Değişiklik
+    gerekmedi.
+  - `docs/LOGGING.md`: "Taşıma ve dinleyici olayları" bölümü eklendi. Kapsadığı olaylar: `listening`
+    (`video_socket`, `notsent_lowat_kb`, `control_socket`), `bonjour_registered`/`bonjour_failed`, `*_accept_paused`,
+    `*_listener_socket_error`, `connection_refused`, `send_backlog reason=write_refused`.
 - **Dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift`: `ControlSocketKnob` (`MATEBRIDGE_CONTROL_SOCKET`,
     yok/boş/geçersiz → `bsd`, yalnız açık `nw` → eski yol; `logFields` `control_socket=bsd|nw`).
-  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift`: `BsdTcpConnection.finish(timeout:completion:)` (zarif
-    kapanış: yeni yazma reddedilir, kuyruk yazılır → `shutdown(SHUT_WR)` → `cancel`; bu sırada okunan bayt atılır;
-    zaman aşımında `cancel`; completion bir kez). Video yolu davranışı değişmedi (yalnız `finishing` bayrağı eklendi).
+  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift`: `BsdTcpConnection.finish(timeout:completion:)`
+    (zarif kapanış: yeni yazma reddedilir, kuyruk yazılır → `shutdown(SHUT_WR)` → eşin EOF'una kadar okunup atılır →
+    `cancel`; zaman aşımında `cancel`; completion bir kez). Video yolu davranışı değişmedi.
   - yeni `host-mac/Sources/MateBridgeCore/Session/BonjourAdvertiser.swift`: dns_sd `DNSServiceRegister` (sistem
     kütüphanesi, yeni bağımlılık değil). Ad 63 bayta UTF-8 sınırında kısaltılır, TXT `v=1`, ad çakışmasında
     mDNSResponder kendisi yeniden adlandırır. `cancel` idempotent, ref sahibin kuyruğunda serbest bırakılır.
@@ -156,8 +172,10 @@ USB/Wi-Fi, kalem, ses, Bonjour keşfi orkestratörde.
 - **Varsayımlar / davranış farkları (`bsd`):**
   - `onBytes` false (makine bağlantıyı kapatmadıysa) → `cancel` → release. NW'de bu durumda alım döngüsü sadece
     duruyordu; burada bağlantı kapanıyor (daha güvenli, "takılı girdi yok").
-  - Zarif kapanış 2 sn içinde bitmezse kesilir; NW'de okumayan eş bağlantıyı süresiz tutabiliyordu. Kapanış
-    sırasında eş EOF/hata verirse kalan kullanıcı alanı baytları atılır.
+  - Zarif kapanış 2 sn içinde bitmezse kesilir: eş okumuyorsa ya da BYE'den sonra kendi tarafını kapatmıyorsa.
+    NW'de okumayan eş bağlantıyı süresiz tutabiliyordu. Kapanış sırasında eş EOF/hata verirse kalan kullanıcı alanı
+    baytları atılır. `stop()` BYE için hâlâ en çok 200 ms bekler (`flushGroup`); completion artık tabletin EOF'unda
+    geldiği için uygulama kapanırken bu bekleme dolabilir. Bu bekleme en iyi çaba, davranış öncekiyle aynı.
   - Bonjour hatası (kayıt anında veya sonradan, ör. mDNSResponder yeniden başlarsa) dinleyiciyi düşürmez, oturumları
     kesmez: `ev=bonjour_failed code=… retry_s=…`, 1…30 sn geri çekilmeyle yeniden kayıt. Başarıda
     `ev=bonjour_registered port=…` (ad loglanmaz). NW'nin bu durumdaki davranışı bilinmiyor.
@@ -175,5 +193,4 @@ USB/Wi-Fi, kalem, ses, Bonjour keşfi orkestratörde.
 
 ### Open questions
 
-- `docs/LOGGING.md`'de `control_socket` / `bonjour_*` olayları belgelenmedi (dosya kart dışında; T-092'deki gibi).
 - Kalem öbeklenmesi bsd'de sürerse: Darwin'in ACK davranışı (`TCP_SENDMOREACKS`) ya da istemci tarafı ölçüm ayrı kart.

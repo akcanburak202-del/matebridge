@@ -342,9 +342,12 @@ final class ControlSocketTests: XCTestCase {
         defer { close(tablet.fd) }
         XCTAssertEqual(try tablet.handshake(), .accepted)
         host.shutdown()
-        XCTAssertTrue(try tablet.readToEnd())
+        XCTAssertTrue(try tablet.readToEnd())  // the host's FIN
         XCTAssertEqual(tablet.received.last, .bye(.shuttingDown))
         XCTAssertEqual(host.releaseCauses, [.shutdown])
+        // The host keeps its side open (reading) until the tablet closes its own, as the client does after BYE.
+        XCTAssertEqual(host.flushCount, 0)
+        shutdown(tablet.fd, SHUT_WR)
         XCTAssertTrue(waitUntil { host.flushCount == 1 })
         host.listener.cancel()
     }
@@ -422,6 +425,7 @@ final class ControlSocketTests: XCTestCase {
         }
         XCTAssertEqual(got.count, expected.count)
         XCTAssertTrue(got == expected, "records out of order or damaged")
+        shutdown(fd, SHUT_WR)  // the tablet saw the BYE and closes its side
         XCTAssertEqual(flushed.wait(timeout: .now() + 5), .success)
         XCTAssertTrue(waitUntil { completions.value == expected.count })
         listener.cancel()
@@ -514,6 +518,11 @@ final class ControlSocketTests: XCTestCase {
             total += n
         }
         XCTAssertEqual(total, big.count, "every queued byte arrives before the FIN")
+        // Our FIN went out, but the host still reads until the tablet closes its side.
+        usleep(50_000)
+        XCTAssertEqual(finished.value, 0)
+        XCTAssertEqual(closed.value, 0)
+        shutdown(fd, SHUT_WR)
         XCTAssertTrue(waitUntil { finished.value == 2 && closed.value == 1 })
         XCTAssertEqual(read.value, 0)
         usleep(50_000)
@@ -523,6 +532,103 @@ final class ControlSocketTests: XCTestCase {
         let late = DispatchSemaphore(value: 0)
         connection.finish(timeout: .seconds(1)) { late.signal() }
         XCTAssertEqual(late.wait(timeout: .now() + 2), .success)
+        listener.cancel()
+    }
+
+    /// The tablet keeps sending (pen, PING) while the host closes, and reads slowly: input the host has not read yet
+    /// when it closes must not turn the close into a reset that drops the BYE still unsent in the kernel. The host
+    /// keeps reading (and discarding) after its FIN until the tablet's end of stream.
+    func testFinishDeliversByeWhileTabletKeepsSending() throws {
+        let queue = DispatchQueue(label: "test.control.finish.inbound")
+        let listener = try BsdTcpListener(port: 0, bind: .loopbackV6, options: Self.controlOptions, queue: queue)
+        let accepted = DispatchSemaphore(value: 0)
+        let closed = DispatchSemaphore(value: 0)
+        let box = Box<BsdTcpConnection>()
+        listener.start { event in
+            guard case .accepted(let c) = event else { return }
+            c.start(queue: queue, onBytes: { _ in true }, onClosed: { closed.signal() })
+            box.value = c
+            accepted.signal()
+        }
+        let fd = Self.connectClient(port: listener.port, receiveBuffer: 4096)
+        defer { close(fd) }
+        XCTAssertEqual(accepted.wait(timeout: .now() + 5), .success)
+        let connection = try XCTUnwrap(box.value)
+
+        // The tablet's input stream: a small write every 0.5 ms (pen samples), on its own thread, until it saw the BYE.
+        let senderDone = DispatchSemaphore(value: 0)
+        let stopSending = Counter()
+        Thread.detachNewThread {
+            let chunk = [UInt8](repeating: 0x77, count: 256)
+            while stopSending.value == 0 {
+                let n = chunk.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+                if n <= 0 { break }
+                usleep(500)
+            }
+            senderDone.signal()
+        }
+        usleep(20_000)  // input is flowing
+
+        // The host's last messages: a backlog the slow reader holds unsent in the kernel, then the BYE marker.
+        let backlog = [UInt8](repeating: 0x42, count: 4 << 20)
+        let bye: [UInt8] = [0x04, 0x01, 0x00, 0x00, 0x00, 0x05]  // stands in for a sealed BYE
+        XCTAssertTrue(connection.write(backlog) { _ in })
+        XCTAssertTrue(connection.write(bye) { _ in })
+        let finished = DispatchSemaphore(value: 0)
+        connection.finish(timeout: .seconds(5)) { finished.signal() }
+
+        var got: [UInt8] = []
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while got.count < backlog.count + bye.count {
+            usleep(100)  // a slow reader
+            let n = buf.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            guard n > 0 else { break }
+            got += buf[..<n]
+        }
+        XCTAssertEqual(got.count, backlog.count + bye.count, "the stream ended early (errno \(errno))")
+        XCTAssertEqual(Array(got.suffix(bye.count)), bye, "BYE lost or damaged")
+
+        // The tablet saw the BYE: it stops sending and closes its side; then the host closes.
+        stopSending.increment()
+        XCTAssertEqual(senderDone.wait(timeout: .now() + 5), .success)
+        shutdown(fd, SHUT_WR)
+        XCTAssertEqual(finished.wait(timeout: .now() + 3), .success)
+        XCTAssertEqual(closed.wait(timeout: .now() + 2), .success)
+        let n = buf.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+        XCTAssertEqual(n, 0, "expected end of stream")
+        listener.cancel()
+    }
+
+    /// A tablet that reads everything but never closes its side: the host closes at the deadline.
+    func testFinishClosesAtDeadlineWhenPeerKeepsItsSideOpen() throws {
+        let queue = DispatchQueue(label: "test.control.finish.linger")
+        let listener = try BsdTcpListener(port: 0, bind: .loopbackV6, options: BsdTcpOptions(), queue: queue)
+        let accepted = DispatchSemaphore(value: 0)
+        let closed = DispatchSemaphore(value: 0)
+        let box = Box<BsdTcpConnection>()
+        listener.start { event in
+            guard case .accepted(let c) = event else { return }
+            c.start(queue: queue, onBytes: { _ in true }, onClosed: { closed.signal() })
+            box.value = c
+            accepted.signal()
+        }
+        let fd = Self.connectClient(port: listener.port)
+        defer { close(fd) }
+        XCTAssertEqual(accepted.wait(timeout: .now() + 5), .success)
+        let connection = try XCTUnwrap(box.value)
+
+        let delivered = DispatchSemaphore(value: 0)
+        XCTAssertTrue(connection.write([7, 7, 7]) { ok in if ok { delivered.signal() } })
+        let finished = DispatchSemaphore(value: 0)
+        let start = Date()
+        connection.finish(timeout: .milliseconds(300)) { finished.signal() }
+        var buf = [UInt8](repeating: 0, count: 16)
+        XCTAssertEqual(buf.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }, 3)
+        XCTAssertEqual(buf.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }, 0, "no FIN")
+        XCTAssertEqual(delivered.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 0.25)
+        XCTAssertEqual(closed.wait(timeout: .now() + 2), .success)
         listener.cancel()
     }
 
