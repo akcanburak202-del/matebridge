@@ -28,7 +28,7 @@ Kullanıcı (2026-10-01 sabah): Krita'da çizim akıcı, yerel kalem izi gereksi
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** b4416ce
 - **Dokunulan dosyalar:** Settings.kt, SessionSupportTest.kt, bu kart
 - **Varsayımlar:** Kayıtlı "0" kullanıcılar kapalı kalır; kayıtlı "1" açık; kaydı olmayan (yeni/eski kurulum) artık kapalı.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Temiz kurulumda kalem izi/noktası görünmüyor; bağlantı panelinden açılınca görünüyor.
