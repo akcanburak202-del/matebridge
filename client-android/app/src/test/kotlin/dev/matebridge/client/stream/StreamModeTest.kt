@@ -18,15 +18,16 @@ class StreamModeTest {
         assertEquals(StreamPrefs(60, 1000), StreamMode.CLARITY.toPrefs())
         assertEquals(StreamPrefs(120, 1000), StreamMode.SMOOTH.toPrefs())
         assertEquals(StreamPrefs(120, 750), StreamMode.PERFORMANCE.toPrefs())
+        assertEquals(StreamPrefs(120, 660), StreamMode.GAME.toPrefs()) // decision 0014
         assertEquals(StreamMode.SMOOTH, StreamMode.DEFAULT)
     }
 
     @Test fun cycleVisitsEveryModeAndWraps() {
         var m = StreamMode.CLARITY
         val seen = ArrayList<StreamMode>()
-        repeat(3) { m = m.next(); seen += m }
+        repeat(4) { m = m.next(); seen += m }
         assertEquals(
-            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.CLARITY),
+            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.GAME, StreamMode.CLARITY),
             seen,
         )
     }
@@ -42,6 +43,7 @@ class StreamModeTest {
         assertEquals("Görüntü modu: Akıcı (120 fps)", StreamMode.SMOOTH.buttonText())
         assertEquals("Performans: 120 fps, %75", StreamMode.PERFORMANCE.toastText())
         assertEquals("Netlik: 60 fps, %100", StreamMode.CLARITY.toastText())
+        assertEquals("Oyun: 120 fps, %66", StreamMode.GAME.toastText())
     }
 
     @Test fun settingsPersistTheModeAndDefaultToSmooth() {
@@ -49,6 +51,8 @@ class StreamModeTest {
         assertEquals(StreamMode.SMOOTH, Settings(store).streamMode())
         Settings(store).setStreamMode(StreamMode.PERFORMANCE)
         assertEquals(StreamMode.PERFORMANCE, Settings(store).streamMode())
+        Settings(store).setStreamMode(StreamMode.GAME) // T-109: game mode can be the stored mode
+        assertEquals(StreamMode.GAME, Settings(store).streamMode())
         store.map["stream_mode"] = "performance144" // removed mode
         assertEquals(StreamMode.PERFORMANCE, Settings(store).streamMode())
         store.map["stream_mode"] = "garbage"

@@ -53,7 +53,8 @@ class SettingsViews(
 
     private fun choice(item: SettingItem.Choice): View {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(text(item.title, 16f, TEXT_COLOR))
+        val title = text(item.titleText(), 16f, TEXT_COLOR)
+        col.addView(title)
         val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         val buttons = item.options.map { o ->
             button(o.label) { item.select(o.id) }.also { row.addView(it, rowParams(top = 0, end = 6)) }
@@ -61,6 +62,7 @@ class SettingsViews(
         val scroller = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
         col.addView(scroller)
         refreshers += {
+            title.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {
                 val on = item.options[i].id == sel

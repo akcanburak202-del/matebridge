@@ -4,6 +4,7 @@ import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
+import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.StreamMode
 import java.util.Locale
 
@@ -28,6 +29,11 @@ interface SettingsHost {
     fun selectBitrate(kbps: Long)
     /** `STREAM_CONFIG.bitrate_kbps` of the running stream, null without one. */
     val appliedBitrateKbps: Long?
+    /**
+     * Game mode's temporary defaults are in effect (decision 0014, T-109): bit rate, audio output, pen trail and pen dot
+     * show and change the session layer, not the stored settings; the panels mark them.
+     */
+    val gameDefaultsActive: Boolean
 
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
@@ -67,8 +73,12 @@ sealed interface SettingItem {
         val title: String,
         val options: List<Option>,
         val selected: () -> String,
+        val marker: () -> String = { "" },
         val select: (String) -> Unit,
-    ) : SettingItem
+    ) : SettingItem {
+        /** The title with its current mark, e.g. "Bit hızı (oyun modu)". */
+        fun titleText() = title + marker()
+    }
 
     class Option(val id: String, val label: String)
 
@@ -80,8 +90,9 @@ sealed interface SettingItem {
         val set: (Boolean) -> Unit,
         val onText: String = "açık",
         val offText: String = "kapalı",
+        val marker: () -> String = { "" },
     ) : SettingItem {
-        fun text() = "$title: " + if (get()) onText else offText
+        fun text() = "$title${marker()}: " + if (get()) onText else offText
     }
 
     /** "title: value" with − and + buttons. */
@@ -112,6 +123,7 @@ object SettingsCatalog {
      * while streaming: "Bağlantıyı kes" and the bit rate the host applied. Ses is left out when audio is unavailable.
      */
     fun sections(h: SettingsHost, inStream: Boolean): List<SettingsSection> {
+        val game = { if (h.gameDefaultsActive) GameModeSettings.MARKER else "" }
         val out = ArrayList<SettingsSection>(5)
         out += SettingsSection(
             "Bağlantı",
@@ -145,6 +157,7 @@ object SettingsCatalog {
                         "bitrate", "Bit hızı",
                         Bitrate.OPTIONS_KBPS.map { SettingItem.Option(it.toString(), Bitrate.label(it)) },
                         { h.bitrateKbps.toString() },
+                        game,
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
@@ -162,6 +175,7 @@ object SettingsCatalog {
                             SettingItem.Option(AudioOutPref.TRACK.id, "Uyumlu"),
                         ),
                         { if (h.audioOut == AudioOutPref.TRACK) AudioOutPref.TRACK.id else AudioOutPref.AUTO.id },
+                        game,
                     ) { id -> h.setAudioOut(if (id == AudioOutPref.TRACK.id) AudioOutPref.TRACK else AudioOutPref.AUTO) },
                 ),
             )
@@ -181,8 +195,8 @@ object SettingsCatalog {
                     "finger_off", "Parmak dokunmasını tamamen kapat", { h.fingerTouchDisabled }, { h.setFingerTouchDisabled(it) },
                     onText = "AÇIK",
                 ),
-                SettingItem.Toggle("pen_trail", "Kalem izi", { h.penTrail }, { h.setPenTrail(it) }),
-                SettingItem.Toggle("pen_dot", "Kalem noktası", { h.penDot }, { h.setPenDot(it) }),
+                SettingItem.Toggle("pen_trail", "Kalem izi", { h.penTrail }, { h.setPenTrail(it) }, marker = game),
+                SettingItem.Toggle("pen_dot", "Kalem noktası", { h.penDot }, { h.setPenDot(it) }, marker = game),
             ),
         )
         out += SettingsSection(

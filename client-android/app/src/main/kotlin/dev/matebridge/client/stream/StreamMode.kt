@@ -10,7 +10,10 @@ import dev.matebridge.client.protocol.StreamPrefs
 enum class StreamMode(val id: String, val label: String, val fps: Int, val scalePermille: Int) {
     CLARITY("clarity", "Netlik", 60, 1000),
     SMOOTH("smooth", "Akıcı", 120, 1000),
-    PERFORMANCE("performance", "Performans", 120, 750);
+    PERFORMANCE("performance", "Performans", 120, 750),
+
+    /** Decision 0014: games; lowest latency (jitter buffer 0) and temporary defaults ([GameModeSettings]). */
+    GAME("game", "Oyun", 120, 660);
 
     /** STREAM_PREFS for this mode with the user's bit rate choice (0 = host default, decision 0013). */
     fun toPrefs(bitrateKbps: Long = Bitrate.AUTO_KBPS) = StreamPrefs(fps, scalePermille, bitrateKbps)
