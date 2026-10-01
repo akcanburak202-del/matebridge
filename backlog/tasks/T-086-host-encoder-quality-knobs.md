@@ -1,7 +1,7 @@
 ---
 id: T-086
 title: Mac — kodlayıcı deney düğmeleri (H.264, bit hızı, kalite), boşta kalite tazeleme ve keskinlik ölçümü (T-082/T-085)
-status: todo
+status: in-progress
 phase: 5
 owner: mac-host-dev
 depends_on: [T-082, T-085]
@@ -47,7 +47,34 @@ Bu kart **deney düğmeleri** ekler. Her düğmenin varsayılanı bugünkü davr
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+1. **Core (saf, testli)** — `MateBridgeCore/Video/EncoderKnobs.swift`:
+   - `VideoSettings.parseCodec` (`h264|hevc`, varsayılan hevc), `H264Profile.parse` (`high|main|cbp|high52`).
+   - `EncoderKnobs.parse(env)`: `prioritizeSpeed` (PRIO_SPEED, varsayılan true), `quality` (0.0...1.0 ya da nil),
+     `h264Profile`, `IdleRefreshConfig` (DELAY ms, COUNT 1...30 varsayılan 3, KEY).
+   - `VideoSettings.bitrateOverrideKbps` (env'den, `applyingExperimentKnobs` doldurur) + `bitrateSource` (`env|prefs`).
+     `applying(prefs)` artık `override ?? defaultBitrateKbps(...)` kullanır → env > prefs. `applyingExperimentKnobs`
+     `codec`'i de `MATEBRIDGE_CODEC`'ten alır → STREAM_CONFIG codec=1.
+   - `IdleRefreshPolicy`: durum makinesi (`captured(nowUs)`, `tick(nowUs) -> .none/.resubmit(first)/.keyframe`):
+     son gerçek yakalamadan N ms sonra K yeniden gönderim, aralarında 1 kare; bölüm başına bir kez; gerçek kare sıfırlar.
+   - `H264SPS.levelIdc/profileIdc` ve `HEVCSPS.generalLevelIdc` (log için).
+   - `ImageQuality.lumaPSNR` ve `ssim8x8` (örtüşmeyen 8×8 pencere, standart C1/C2).
+   - `EncodeBenchConfig`: `quality` alanı + `nolat-rtoff-noprio`, `nolat-rtoff-q80`; `EncodeBenchOptions` env'den codec/profil.
+   - `SharpnessBenchOptions.parse(args)` (`--motion-frames`, `--shift-px`, `--static-ms`, `--fps`).
+2. **Host** — `HEVCEncoder` (ad korunuyor, artık HEVC/H.264): codec türü, H.264 profil, parametre kümeleri
+   (`...GetH264ParameterSetAtIndex`), PRIO_SPEED, QUALITY (reddedilirse log + AverageBitRate yolu), ilk CODEC_CONFIG'te
+   `ev=encoder_config codec profile level_idc`, açılışta `ev=encoder_config bitrate_kbps source prio_speed quality idle_refresh_ms`.
+   Boşta tazeleme: etkinse kare aralığında tıklayan ayrı timer, `encode()` politikaya gerçek kareyi bildirir;
+   `.resubmit` → `resubmitLast()` (kapı atlanır, `reserveSlot` PTS'yi artırır), `.keyframe` → `requestKeyframe(resubmitNow:)`.
+   `VideoPipeline` `.h264`'ü kabul eder. `StreamCoordinator` log'u `codec=\(settings.codec)` + `bitrate_source`.
+3. **Bench** — `EncodeBench` codec/quality'yi uygular, kare başı ortalama bayt ekler. Yeni `SharpnessBench.swift`
+   (MateBridgeHost/Video): CoreText ile uzun metin tuvali → NV12 (BT.709 full), dikey kaydırmayla N hareket karesi
+   gerçek `HEVCEncoder` ile (env düğmeleri aynen), Annex-B → `VTDecompressionSession` ile çözme, `static-ms` beklerken
+   boşta tazeleme kareleri; satır başına `phase=motion_last|static_end|idle_refresh_i psnr_y=… ssim_y=… bytes=…`.
+   `MateBridgeApp/main.swift` bir satır: `SharpnessBench.runIfRequested()`.
+4. Testler (`Tests/MateBridgeCoreTests/Video/EncoderKnobsTests.swift`), `./scripts/check.sh`, bench'ler, Handoff.
+
+Not: kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` mevcut değil; CLI giriş noktası
+`host-mac/Sources/MateBridgeApp/main.swift`. Bunu kastedilen dosya sayıp yalnızca bir satır ekliyorum.
 
 ## Handoff
 
