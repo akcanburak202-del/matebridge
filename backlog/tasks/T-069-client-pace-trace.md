@@ -1,7 +1,7 @@
 ---
 id: T-069
 title: Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-068]

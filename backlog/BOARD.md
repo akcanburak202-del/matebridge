@@ -2,25 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## in-progress
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-062](tasks/T-062-idle-freeze.md) | Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor) | 5 | orchestrator | [T-057, T-058, T-060] |
-
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
-| [T-068](tasks/T-068-client-deadline-knob.md) | Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü | 5 | android-client-dev | [T-065] |
-| [T-069](tasks/T-069-client-pace-trace.md) | Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla | 5 | android-client-dev | [T-068] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
+| [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
 ## todo
 
@@ -28,7 +15,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
 | [T-070](tasks/T-070-host-latency-breakdown.md) | Mac — yakalama→gönderim gecikme dökümü (SCK teslim, kodlama, kuyruk, soket yazımı) ve sıçrama kaynağı | 5 | mac-host-dev | [T-066] |
-| [T-071](tasks/T-071-client-default-deadline-6ms.md) | Tablet — sunum son anı varsayılanı 6 ms (HarmonyOS'un 13,3 ms değeri yerine) | 5 | android-client-dev | [T-068] |
 
 ## done
 
@@ -93,7 +79,11 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-059](tasks/T-059-client-display-rate.md) | Tablet — panel hızını host'a bildir (DISPLAY_RATE) | 5 | android-client-dev | [T-057] |
 | [T-060](tasks/T-060-client-phase-locked-slots.md) | Tablet — akış hızı panel hızına eşitken faz kilitli yuva ataması (histerezis); seyreltmeyle 33 ms boşlukları gider | 5 | android-client-dev | [T-057, T-059] |
 | [T-061](tasks/T-061-client-fixed-lead.md) | Tablet — varsayılan bırakma öncüsü tüm panel hızlarında mutlak 6,0 ms (P − 1 ms ile sınırlı) | 5 | android-client-dev | [T-057, T-060] |
+| [T-062](tasks/T-062-idle-freeze.md) | Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor) | 5 | orchestrator | [T-057, T-058, T-060] |
 | [T-063](tasks/T-063-clipboard-tablet-to-mac.md) | Pano: tablet → Mac çalışmıyor | 5 | android-client-dev | [T-054, T-055] |
 | [T-064](tasks/T-064-pen-overlay-default-off.md) | Yerel kalem izi/noktası varsayılan kapalı | 5 | android-client-dev | [T-056] |
 | [T-065](tasks/T-065-client-newest-frame-always-shown.md) | Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma) | 5 | android-client-dev | [T-057, T-060, T-061] |
 | [T-066](tasks/T-066-host-decimation-hold-last-frame.md) | Mac — seyreltmede ızgaradan erken gelen kare atılmaz, tutulur (son değişiklik her zaman gönderilir) | 5 | mac-host-dev | [T-058] |
+| [T-068](tasks/T-068-client-deadline-knob.md) | Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü | 5 | android-client-dev | [T-065] |
+| [T-069](tasks/T-069-client-pace-trace.md) | Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla | 5 | android-client-dev | [T-068] |
+| [T-071](tasks/T-071-client-default-deadline-6ms.md) | Tablet — sunum son anı varsayılanı 6 ms (HarmonyOS'un 13,3 ms değeri yerine) | 5 | android-client-dev | [T-068] |

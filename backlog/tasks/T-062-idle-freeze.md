@@ -1,7 +1,7 @@
 ---
 id: T-062
 title: Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor)
-status: in-progress
+status: done
 phase: 5
 owner: orchestrator
 depends_on: [T-057, T-058, T-060]
@@ -35,3 +35,7 @@ Teşhis (2026-10-01 öğlen, orkestratör): ortak ilke ihlali — **en yeni kare
 
 - Geri alma (tablet 98b325e, host bdf52f0) donmayı ve imleç takılmasını giderdi → T-057/T-060/T-061 sunum değişiklikleri tek kare/boşta durumunda bozuk; bunlar yeniden ele alınmalı (test: boşta tek tuş, imleç tek adım, `anim` dışında).
 - Kalan nadir sorun: uzun beklemeden sonra ilk tuşun karesi bir sonraki değişikliğe kadar görünmüyor (eski yapılarda da var).
+
+## Sonuç (2026-10-01)
+
+T-065 + T-066 ile çözüldü; kullanıcı doğruladı (harfler hemen görünüyor, imleç takılması yok). Nadir "uzun beklemeden sonraki ilk tuş" da ölçümde (2–4 s bekleme sonrası tek değişiklik 6/6) görülmedi.

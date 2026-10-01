@@ -1,7 +1,7 @@
 ---
 id: T-067
 title: Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez
-status: review
+status: blocked
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
@@ -70,3 +70,7 @@ Merge (566bf15) → cihaz, aynı köşe karesi içeriği, 12 × 14 sn: 33 ms+ bo
 - **Anahtarlar:** `--ez keep_jitter true` (reanchor'da devs/dNs/baseNs korunur), `--ez recenter true` (oran tabanli yeniden ortalama + acquire() jitter tabani/marj). Ikisi de kapaliyken kod yolu main ile ayni.
 - **Log:** `ev=display_timing` -> `keep_jitter=0|1 recenter=0|1`; `ev=present` -> `recenters=N` (pencere basina) yalniz `recenter` aciksa eklenir (kapaliyken satir ayni, mevcut format testi bozulmaz).
 - **Test edilmeyenler:** cihaz A/B olcumu. Mevcut testler degismeden gecti; LockRecenterTest anahtarlar acik.
+
+## Orkestratör notu (2026-10-01 ~12:10): park edildi
+
+Anahtarlar (`keep_jitter`, `recenter`) varsayılan kapalı kalıyor. Kare izi (T-069) gerçek kullanımda kilidin sağlıklı olduğunu gösterdi (120 Hz %0,7 boşluk; 60 Hz planlanan %0,1). 60 Hz'teki asıl konu kilidin ~42 ms gecikmesi (p99 jitter ile merkezleme); ayrı kartta ele alınacak.

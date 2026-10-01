@@ -1,7 +1,7 @@
 ---
 id: T-071
 title: Tablet — sunum son anı varsayılanı 6 ms (HarmonyOS'un 13,3 ms değeri yerine)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-068]

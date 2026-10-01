@@ -1,7 +1,7 @@
 ---
 id: T-068
 title: Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
