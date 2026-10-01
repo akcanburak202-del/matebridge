@@ -267,6 +267,26 @@ class SessionMachineTest {
         assertEquals(1L, (q.only<Action.Send>().msg as Ping).seq)
     }
 
+    @Test fun pingIntervalKnob() { // T-089: --ei ping_ms 100
+        val mm = SessionMachine(hello, pingIntervalUs = 100_000)
+        var t = 0L
+        val gen = mm.handle(Event.Start(ep), t).only<Action.OpenControl>().gen
+        mm.handle(Event.ControlOpened(gen), t)
+        val acc = mm.handle(Event.Received(gen, ack(HelloAck.ACCEPTED, 77, 7421)), t)
+        assertEquals(0L, (acc.filterIsInstance<Action.Send>().first().msg as Ping).seq)
+        t += 50_000
+        assertTrue(mm.handle(Event.Tick(0), t).filterIsInstance<Action.Send>().isEmpty())
+        t += 50_000
+        assertEquals(1L, (mm.handle(Event.Tick(0), t).only<Action.Send>().msg as Ping).seq)
+        t += 100_000
+        assertEquals(2L, (mm.handle(Event.Tick(0), t).only<Action.Send>().msg as Ping).seq)
+        // The PONG timeout does not follow the ping interval: still 3 s.
+        t = 2_900_000 // last PONG-equivalent was the ACCEPTED at t = 0
+        assertFalse(mm.handle(Event.Tick(0), t).has<Action.CloseControl>())
+        t = 3_000_000
+        assertTrue(mm.handle(Event.Tick(0), t).has<Action.CloseControl>())
+    }
+
     @Test fun noPongForThreeSecondsReconnects() {
         val gen = connectAccepted()
         var lost: List<Action> = emptyList()

@@ -183,6 +183,37 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val usbHintCheck = Runnable { render(lastUi) }
     private var lastUi: SessionUi = SessionUi.Searching
 
+    // T-089 Wi-Fi knobs (launch extras), RTT window for the per-second `ev=net` line, low-latency Wi-Fi lock.
+    private var knobs = dev.matebridge.client.session.WifiKnobs()
+    private val rttStats = dev.matebridge.client.session.RttStats()
+    private var wifiLock: dev.matebridge.client.session.WifiLockHolder? = null
+
+    private fun parseWifiKnobs() {
+        val i = intent
+        knobs = if (i == null) dev.matebridge.client.session.WifiKnobs() else dev.matebridge.client.session.WifiKnobs.parse(
+            { i.hasExtra(it) }, { i.getIntExtra(it, 0) }, { i.getBooleanExtra(it, false) },
+        )
+        MbLog.i("wifi_knobs", knobs.logFields())
+        if (knobs.wifiLowLatency) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val lock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "MateBridge:low_latency")
+            lock.setReferenceCounted(false)
+            wifiLock = dev.matebridge.client.session.WifiLockHolder(
+                object : dev.matebridge.client.session.WifiLockHolder.Backend {
+                    override fun acquire() = lock.acquire()
+                    override fun release() { if (lock.isHeld) lock.release() }
+                },
+            ) { fields -> MbLog.i("wifi_lock", "$fields mode=low_latency") }
+        }
+    }
+
+    /** Holds the low-latency Wi-Fi lock only while a Wi-Fi session is connected and the activity is started (T-089). */
+    private fun syncWifiLock(reason: String) {
+        val h = wifiLock ?: return
+        val tr = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: transport
+        h.sync(dev.matebridge.client.session.WifiLockPolicy.shouldHold(knobs.wifiLowLatency, tr, started && !isDestroyed, lastUi), reason)
+    }
+
     /**
      * T-079: `--ez perf_hint true` puts the video reader and decoder threads in one PerformanceHintManager session
      * (target = panel period, or `--ei perf_hint_target_us N`). Logs `ev=perf_hint enabled=… supported=…` either way.
@@ -237,6 +268,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setupPerfHint()
+        parseWifiKnobs()
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -302,15 +334,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onSessionStart() {
                 clock.reset()
+                rttStats.reset()
                 runOnUiThread { capture.onSessionReset() } // the host holds no input state for a new connection
             }
 
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
                 clock.onPong(echoTimeUs, responderTimeUs, nowUs)
+                rttStats.add(nowUs - echoTimeUs) // T-089
             }
 
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
-        }, streamMode, quickAck, perfHint)
+        }, streamMode, quickAck, perfHint, knobs)
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySend(msg)
@@ -988,6 +1022,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 " pace_d_us=${r.paceDUs()}",
             "render",
         )
+        // T-089: RTT of this statistics window (PING -> PONG), with the transport it was measured on.
+        val ep = currentEndpoint
+        MbLog.i(
+            "net",
+            "transport=${(if (ep != null) ConnectMode.transportOf(ep) else transport).logName} " +
+                "${rttStats.snapshot(reset = true).fields()} ping_ms=${knobs.pingMs}",
+        )
     }
 
     override fun onStart() {
@@ -1047,6 +1088,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         controller.stop() // sends BYE, closes both connections
+        syncWifiLock("background") // started is false: always released here
         super.onStop()
     }
 
@@ -1056,6 +1098,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         presenter?.stop()
         presenter = null
         controller.shutdown()
+        wifiLock?.sync(false, "destroy")
         perfHint?.close()
         super.onDestroy()
     }
@@ -1094,8 +1137,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
             if (!was && clipboard.sync.accepted) clipboard.recheck() // T-063: copied while the session was down
         }
-        if (!started || isDestroyed) return
+        if (!started || isDestroyed) {
+            syncWifiLock("stopped")
+            return
+        }
         lastUi = state
+        syncWifiLock(state.javaClass.simpleName.lowercase(java.util.Locale.ROOT))
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null

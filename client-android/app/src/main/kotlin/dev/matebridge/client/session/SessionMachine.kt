@@ -25,7 +25,11 @@ import dev.matebridge.client.protocol.VideoHello
  * reset on ACCEPTED; BUSY waits at least 3 s). REJECTED and VERSION_MISMATCH do not retry, because
  * retrying would only re-prompt the Mac user or fail again; the user must press connect.
  */
-class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs()) {
+class SessionMachine(
+    private val hello: Hello,
+    initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs(),
+    private val pingIntervalUs: Long = PING_INTERVAL_US, // T-089 knob (--ei ping_ms N); the PONG timeout is unchanged
+) {
     sealed interface Event {
         data class Start(val endpoint: Endpoint) : Event
         data object Stop : Event
@@ -117,7 +121,7 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
             is Event.ControlOpened -> if (event.gen == controlGen && phase == Phase.CONNECTING) {
                 phase = Phase.AWAIT_ACK
                 lastPongUs = nowUs
-                nextPingUs = nowUs + PING_INTERVAL_US
+                nextPingUs = nowUs + pingIntervalUs
                 out += Action.Send(hello)
             }
             is Event.ControlClosed -> if (event.gen == controlGen) {
@@ -192,7 +196,7 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
                 out += Action.Send(Ping(pingSeq++, nowUs))
                 out += Action.Send(prefs) // T-050: right after the proof PING, never before it
                 if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
-                nextPingUs = nowUs + PING_INTERVAL_US
+                nextPingUs = nowUs + pingIntervalUs
                 hostName = ack.hostName
                 sessionId = ack.sessionId
                 videoPort = ack.videoPort
@@ -243,7 +247,7 @@ class SessionMachine(private val hello: Hello, initialPrefs: StreamPrefs = Strea
                 // Nothing but HELLO may go out before the first HELLO_ACK: encryption starts with it (section 9).
                 if (phase != Phase.AWAIT_ACK && nowUs >= nextPingUs) {
                     out += Action.Send(Ping(pingSeq++, nowUs))
-                    nextPingUs = nowUs + PING_INTERVAL_US
+                    nextPingUs = nowUs + pingIntervalUs
                 }
                 if (phase == Phase.STREAMING) {
                     if (!videoOpen && nowUs >= videoRetryAtUs) openVideo(out)

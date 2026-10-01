@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- T-089: WifiManager.WifiLock for the wifi_ll experiment knob -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:label="MateBridge"
