@@ -1,7 +1,7 @@
 ---
 id: T-095
 title: Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-093]

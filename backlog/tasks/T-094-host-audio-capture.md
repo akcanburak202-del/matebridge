@@ -1,7 +1,7 @@
 ---
 id: T-094
 title: Mac — sistem sesi yakalama (Core Audio process tap, mutedWhenTapped) ve kontrol bağlantısından AUDIO_FRAME gönderimi
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-093]

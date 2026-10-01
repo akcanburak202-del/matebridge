@@ -9,13 +9,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
-## todo
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-094](tasks/T-094-host-audio-capture.md) | Mac — sistem sesi yakalama (Core Audio process tap, mutedWhenTapped) ve kontrol bağlantısından AUDIO_FRAME gönderimi | 5 | mac-host-dev | [T-093] |
-| [T-095](tasks/T-095-client-audio-playout.md) | Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama) | 5 | android-client-dev | [T-093] |
-
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -111,3 +104,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-091](tasks/T-091-host-video-bsd-socket.md) | Mac — video bağlantısını çekirdek TCP soketine taşı (NWConnection kullanıcı alanı yığını Wi-Fi'de %4 yeniden gönderim) + TCP_NOTSENT_LOWAT | 5 | mac-host-dev | [T-088] |
 | [T-092](tasks/T-092-host-video-bsd-default.md) | Mac — video soketi varsayılanı `bsd` (T-091 ölçümü: Wi-Fi 372 → ~40 ms, yeniden gönderim 0) | 5 | mac-host-dev | [T-091] |
 | [T-093](tasks/T-093-audio-protocol-codecs.md) | Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM | 5 | mac-host-dev | [] |
+| [T-094](tasks/T-094-host-audio-capture.md) | Mac — sistem sesi yakalama (Core Audio process tap, mutedWhenTapped) ve kontrol bağlantısından AUDIO_FRAME gönderimi | 5 | mac-host-dev | [T-093] |
+| [T-095](tasks/T-095-client-audio-playout.md) | Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama) | 5 | android-client-dev | [T-093] |
