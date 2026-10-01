@@ -66,7 +66,13 @@ public struct EncodeBenchConfig: Equatable, Sendable {
 
 public enum EncodeBenchContent: String, Equatable, Sendable { case scroll, patch }
 
-/// Arguments of `MateBridgeApp --encode-bench [--fps N] [--seconds S] [--config NAME]...`.
+/// Colour tags on the bench's synthetic frames (T-113). `none`: untagged (the bench before T-113). `sck`: what
+/// ScreenCaptureKit attaches (BT.709 primaries/transfer/matrix plus an sRGB `CGColorSpace`), which the app's
+/// session (sRGB transfer) does not match, so VideoToolbox colour-converts them unless they are retagged.
+public enum EncodeBenchInputTags: String, Equatable, Sendable { case none, sck }
+
+/// Arguments of `MateBridgeApp --encode-bench [--fps N] [--seconds S] [--content scroll|patch]
+/// [--input-tags none|sck] [--config NAME]...`.
 public struct EncodeBenchOptions: Equatable, Sendable {
     public var fps = 120
     public var seconds = 5.0
@@ -79,6 +85,10 @@ public struct EncodeBenchOptions: Equatable, Sendable {
     public var h264Profile = H264Profile.high
     /// `MATEBRIDGE_BITRATE_KBPS` (T-086): replaces every config's bitrate when set.
     public var bitrateOverrideKbps: Int?
+    /// `--input-tags none|sck` (T-113).
+    public var inputTags = EncodeBenchInputTags.none
+    /// `MATEBRIDGE_INPUT_RETAG` (T-113): retag the frames to the session's colour tags before encoding, as the app does.
+    public var retagInput = true
 
     public struct ParseError: Error, Equatable, Sendable { public let message: String }
 
@@ -89,6 +99,7 @@ public struct EncodeBenchOptions: Equatable, Sendable {
         o.codec = VideoSettings.parseCodec(env["MATEBRIDGE_CODEC"])
         o.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
         o.bitrateOverrideKbps = VideoSettings.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"])
+        o.retagInput = InputRetag.isEnabled(env)
         if let b = o.bitrateOverrideKbps { for i in o.configs.indices { o.configs[i].bitrateKbps = b } }
         return o
     }
@@ -115,6 +126,11 @@ public struct EncodeBenchOptions: Equatable, Sendable {
                     return .failure(ParseError(message: "--content needs scroll|patch"))
                 }
                 o.content = v; j += 1
+            case "--input-tags":
+                guard j + 1 < args.count, let v = EncodeBenchInputTags(rawValue: args[j + 1]) else {
+                    return .failure(ParseError(message: "--input-tags needs none|sck"))
+                }
+                o.inputTags = v; j += 1
             case "--config":
                 guard j + 1 < args.count else { return .failure(ParseError(message: "--config needs a name")) }
                 guard let c = EncodeBenchConfig.named(args[j + 1]) else {

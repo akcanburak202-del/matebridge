@@ -754,3 +754,67 @@ Araştırma (alt ajan; VideoToolbox SDK başlıkları, M6'da çalışma zamanı 
    - T-111 (kontrol bağlantısı BSD soket).
 2. Ölçek: Performans/Oyun modu (%75/%66).
 3. Kodlama süresi farkı (T-113): uygulama logunda `enc_ms` 9,4–9,8 ms. Aynı bayraklarla yalıtılmış bench 6,4 ms. ~3 ms olası kazanç; uygulama durdurulmuşken ölçülmeli.
+
+## 2026-10-02 ~01:20 — T-113: `enc_ms` farkının kökü, VideoToolbox'un renk dönüşümü (−2,7 ms)
+
+Uygulama durduruldu, Mac kilitsizdi, tablet ve adb'ye dokunulmadı. Ölçüm araçları:
+- scratch prob (`t113/probe.swift`): ana ekrandan SCK ile 2800×1840 420f kare yakalıyor, tek değişkenli A/B;
+- `--encode-bench --input-tags sck`;
+- `--dump-video` (gerçek sanal ekran + SCK + `HEVCEncoder`).
+
+**`enc_ms` neyi ölçüyor:** `FrameTrace.encUs = encodedUs − submittedUs`.
+- `submittedUs`: `VTCompressionSessionEncodeFrame` çağrısından hemen önce.
+- `encodedUs`: çıkış callback'inin başı.
+- Slot ve kapı beklemesi (`hold`) dahil değil. VT içinde önceki karenin bitmesini bekleme dahil olurdu, ama etkisi yok (aşağıda).
+
+**Elenen nedenler** (sentetik, HEVC `fast`, 60 tempo, p50):
+
+| Değişken | Sonuç |
+|---|---|
+| `CompleteFrames` var/yok | 6,36 / 6,28 ms |
+| Require/Enable HW | aynı |
+| ExpectedFrameRate 60/120 | aynı |
+| in-flight 1/2 | 6,3 / 6,4 ms |
+| SCK yakalama aynı anda çalışıyor | 6,5 ms |
+
+Uygulama logunda kare hızı 2/s iken `slot_wait=0` ve `enc` yine ~8,8 ms, yani kuyruk değil.
+
+**Kök neden:**
+- SCK (`colorSpaceName = sRGB`) 420f tamponlarına `ColorPrimaries=ITU_R_709_2`, **`TransferFunction=ITU_R_709_2`**, `YCbCrMatrix=ITU_R_709_2` ve sRGB `CGColorSpace` ekliyor.
+- Oturum (STREAM_CONFIG ile tutarlı) `TransferFunction=IEC_sRGB` istiyor.
+- VideoToolbox, etiketi oturumdan farklı her girdiyi kodlamadan önce oturumun renk uzayına **dönüştürüyor**.
+
+Ölçüm (SCK içeriği, 60 tempo, p50):
+
+| Tampon etiketi | Oturum etiketi | Kodlama |
+|---|---|---|
+| SCK | sRGB | 8,45 ms |
+| etiket yok | sRGB | 6,1 ms |
+| SCK, transfer → sRGB | sRGB | 6,1 ms |
+| SCK | etiket yok | 6,1 ms |
+| SCK | hepsi 709 | 6,1 ms |
+
+- Kısmi etiket (yalnız matris) ya da yalnız `CGColorSpace` de dönüşümü tetikliyor: ~+1,4 ms.
+- Etiketler tam eşleşince `CGColorSpace` önemsiz.
+- Dönüşüm pikseli de değiştiriyor: neredeyse kayıpsız kodlamada (`Quality=1.0`) çözülen Y, kaynaktan ortalama **+8 seviye** (en çok 11), CbCr ~1 seviye farklı. Yani tablete giden görüntü Mac'tekinden biraz açık/soluktu (709 → sRGB gamma, zaten sRGB olan piksele uygulanıyor). Etiketler eşleşince fark 0.
+- Kuyruk/throughput etkilenmiyor: `--encode-bench` max modda iki durumda da ~167 fps. Yalnız kare başına gecikme artıyor.
+
+**Düzeltme (T-113):**
+- `HEVCEncoder.encode`, yakalanan tamponun renk etiketlerini oturumunkilere yeniden yazıyor (`CVBufferSetAttachment`, piksel değişmez; `InputRetag`, Core'da birim testli).
+- `MATEBRIDGE_INPUT_RETAG=0` eski davranışı geri getiriyor.
+- Oturum başına bir `ev=input_retag from=ITU_R_709_2/ITU_R_709_2/ITU_R_709_2 to=ITU_R_709_2/IEC_sRGB/ITU_R_709_2` satırı yazılıyor.
+- Bitstream VUI değişmedi: `--dump-video` "primaries=1 transfer=13 matrix=1 → matches STREAM_CONFIG".
+
+**A/B, uygulamanın kodu ile:**
+
+| Ölçüm | RETAG=0 | RETAG=1 |
+|---|---|---|
+| `--encode-bench --config fast --input-tags sck`, paced 60 | 9,3 ms | 6,6 ms |
+| aynı, paced 120 `patch` | 8,7 ms | 6,0 ms |
+| `--dump-video` (gerçek SCK, ~37 fps içerik) | 11,4 ms | 8,4 ms |
+
+Uygulamanın 9,4–9,8 ms'si RETAG=0 bench'iyle örtüşüyor.
+
+**Beklenen kazanç:** kare başına `enc` ve `cap_to_sent` p50 ~2,5–3 ms azalır. Renkler Mac'e daha sadık olur: tablet görüntüsü bir tık koyulaşır, yani doğru değere iner.
+
+**Kalan fark:** düşük kare hızında (2–30 fps) kodlama daha yavaş: 2 fps'te 10,5 ms, 30 fps'te 7,4 ms, 120 fps'te 6,0 ms. Bunun nedeni muhtemelen kodlayıcının güç/frekans durumu. Ucuz bir düğmesi bulunmadı, ayrı kart gerektirmez.

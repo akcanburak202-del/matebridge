@@ -141,7 +141,7 @@ public struct RefreshQPBoost: Sendable {
     }
 }
 
-/// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086.
+/// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086, except `retagInput` (T-113).
 public struct EncoderKnobs: Equatable, Sendable {
     /// `kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality`.
     public var prioritizeSpeed = true
@@ -150,13 +150,17 @@ public struct EncoderKnobs: Equatable, Sendable {
     public var quality: Double?
     public var h264Profile = H264Profile.high
     public var idleRefresh = IdleRefreshConfig()
+    /// Rewrite captured buffers' colour tags to the session's so VideoToolbox does not colour-convert them (T-113,
+    /// `InputRetag`). On by default; `MATEBRIDGE_INPUT_RETAG=0` restores the old conversion for A/B.
+    public var retagInput = true
 
     public init() {}
 
     /// `MATEBRIDGE_PRIO_SPEED=0|1` (anything else: 1), `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset),
-    /// `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*`.
+    /// `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*`, `MATEBRIDGE_INPUT_RETAG=0|1` (anything else: 1).
     public static func parse(_ env: [String: String]) -> EncoderKnobs {
         var k = EncoderKnobs()
+        k.retagInput = InputRetag.isEnabled(env)
         k.prioritizeSpeed = env["MATEBRIDGE_PRIO_SPEED"]?.trimmingCharacters(in: .whitespaces) != "0"
         k.quality = parseQuality(env["MATEBRIDGE_QUALITY"])
         k.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
@@ -179,7 +183,7 @@ public struct EncoderKnobs: Equatable, Sendable {
     /// Fields for the `ev=encoder_config` line logged when the encoder is created.
     public var logFields: String {
         "prio_speed=\(prioritizeSpeed ? 1 : 0) quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
-            + "idle_refresh=\(idleRefresh.logValue)"
+            + "idle_refresh=\(idleRefresh.logValue) input_retag=\(retagInput ? 1 : 0)"
     }
 }
 

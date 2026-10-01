@@ -26,7 +26,8 @@ public enum EncodeBench {
     // MARK: Synthetic frames
 
     /// Full-range 4:2:0, like `ScreenCapture`. Each pool frame differs: a sliding gradient plus text-like glyph cells.
-    static func makeFramePool(width: Int, height: Int, count: Int, content: EncodeBenchContent) -> [CVPixelBuffer] {
+    static func makeFramePool(width: Int, height: Int, count: Int, content: EncodeBenchContent,
+                              tags: EncodeBenchInputTags = .none) -> [CVPixelBuffer] {
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]]
         var pool: [CVPixelBuffer] = []
         for f in 0..<count {
@@ -36,9 +37,22 @@ public enum EncodeBench {
             CVPixelBufferLockBaseAddress(pb, [])
             fill(pb, width: width, height: height, frame: content == .scroll ? f : 0, patch: content == .patch ? f : nil)
             CVPixelBufferUnlockBaseAddress(pb, [])
+            if tags == .sck { tagLikeScreenCaptureKit(pb) }
             pool.append(pb)
         }
         return pool
+    }
+
+    /// The colour attachments ScreenCaptureKit puts on its sRGB 420f buffers (measured on the Mac mini, T-113).
+    private static func tagLikeScreenCaptureKit(_ pb: CVPixelBuffer) {
+        CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2,
+                              .shouldPropagate)
+        CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2,
+                              .shouldPropagate)
+        CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        if let cs = CGColorSpace(name: CGColorSpace.sRGB) {
+            CVBufferSetAttachment(pb, kCVImageBufferCGColorSpaceKey, cs, .shouldPropagate)
+        }
     }
 
     private static func fill(_ pb: CVPixelBuffer, width: Int, height: Int, frame: Int, patch: Int?) {
@@ -141,6 +155,11 @@ public enum EncodeBench {
         // Explicit false when off, like `HEVCEncoder` with MATEBRIDGE_PRIO_SPEED=0 (T-086).
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             c.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
+        // T-113: the app's colour properties, so tagged input (`--input-tags sck`) behaves as in the app. Untagged
+        // frames encode as fast as without them (measured).
+        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, HEVCEncoder.sessionPrimaries)
+        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, HEVCEncoder.sessionTransfer)
+        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, HEVCEncoder.sessionMatrix)
         VTCompressionSessionPrepareToEncodeFrames(s)
         var raw: UnsafeMutableRawPointer?
         if VTSessionCopyProperty(s, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
@@ -157,7 +176,7 @@ public enum EncodeBench {
     /// skip frames when the session is full (newest wins, as in the app).
     public static func run(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int, seconds: Double,
                            paceFps: Int?, pool: [CVPixelBuffer], codec: Codec = .hevc,
-                           h264Profile: H264Profile = .high) -> Result {
+                           h264Profile: H264Profile = .high, retagInput: Bool = false) -> Result {
         let mode = paceFps.map { "paced \($0)" } ?? "max"
         var notes: [String] = []
         var sessions: [VTCompressionSession] = []
@@ -194,6 +213,8 @@ public enum EncodeBench {
             let buf = pool[k < pool.count ? k : period - k]
             let session = sessions[frameIndex % sessions.count]
             frameIndex += 1
+            // As `HEVCEncoder.encode` (T-113): every frame, before the timed submit. Idempotent.
+            if retagInput { _ = HEVCEncoder.retagForSession(buf) }
             ptsCounter += 1
             let start = DispatchTime.now().uptimeNanoseconds
             let st = VTCompressionSessionEncodeFrame(
@@ -249,15 +270,16 @@ public enum EncodeBench {
         let width = 2800, height = 1840
         print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds) content=\(o.content.rawValue) "
               + "codec=\(o.codec.logName)\(o.codec == .h264 ? " profile=\(o.h264Profile.rawValue)" : "")"
-              + (o.bitrateOverrideKbps.map { " bitrate_kbps=\($0)" } ?? ""))
+              + (o.bitrateOverrideKbps.map { " bitrate_kbps=\($0)" } ?? "")
+              + " input_tags=\(o.inputTags.rawValue) input_retag=\(o.retagInput ? 1 : 0)")
         print("encoders: \(encoderList(codec: o.codec).joined(separator: "; "))")
-        let pool = makeFramePool(width: width, height: height, count: 12, content: o.content)
+        let pool = makeFramePool(width: width, height: height, count: 12, content: o.content, tags: o.inputTags)
         guard pool.count == 12 else { print("error: cannot allocate frames"); return 1 }
         print("config | mode | out fps | submitted | skipped | enc ms p50/p95/p99 | Mbps | KB/frame | delta KB p50/p99/max (mean, p99/mean) | key KB max (n) | notes")
         for c in o.configs {
             for pace in [nil, o.fps] as [Int?] {
                 let r = run(c, width: width, height: height, fps: o.fps, seconds: o.seconds, paceFps: pace, pool: pool,
-                            codec: o.codec, h264Profile: o.h264Profile)
+                            codec: o.codec, h264Profile: o.h264Profile, retagInput: o.retagInput)
                 let z = r.sizes
                 print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %.1f | %.0f/%.0f/%.0f (%.0f, %.2fx) | %.0f (%d) | %@",
                              r.config, r.mode, r.outFps, r.submitted, r.skipped, r.p50Ms, r.p95Ms, r.p99Ms, r.mbps,

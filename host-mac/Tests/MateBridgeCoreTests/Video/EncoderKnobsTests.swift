@@ -25,7 +25,8 @@ final class EncoderKnobsTests: XCTestCase {
         XCTAssertNil(k.quality)
         XCTAssertEqual(k.h264Profile, .high)
         XCTAssertFalse(k.idleRefresh.isEnabled)
-        XCTAssertEqual(k.logFields, "prio_speed=1 quality=unset idle_refresh=off")
+        XCTAssertTrue(k.retagInput)
+        XCTAssertEqual(k.logFields, "prio_speed=1 quality=unset idle_refresh=off input_retag=1")
     }
 
     func testEncoderKnobValues() {
@@ -37,7 +38,7 @@ final class EncoderKnobsTests: XCTestCase {
         XCTAssertEqual(k.quality, 0.8)
         XCTAssertEqual(k.h264Profile, .main)
         XCTAssertEqual(k.idleRefresh, IdleRefreshConfig(delayMs: 300, count: 5, keyframe: false))
-        XCTAssertEqual(k.logFields, "prio_speed=0 quality=0.80 idle_refresh=300ms*5")
+        XCTAssertEqual(k.logFields, "prio_speed=0 quality=0.80 idle_refresh=300ms*5 input_retag=1")
         XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_PRIO_SPEED": "1"]).prioritizeSpeed)
         XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_PRIO_SPEED": "no"]).prioritizeSpeed)
     }

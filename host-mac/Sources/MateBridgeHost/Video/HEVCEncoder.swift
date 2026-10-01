@@ -84,6 +84,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private let boostLock = NSLock()
     /// Pool for `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` (T-087). Used only on the refresh timer queue.
     private var refreshPool: CVPixelBufferPool?
+    /// The first input retag was logged (T-113). Guarded by `lock`.
+    private var retagLogged = false
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
@@ -185,10 +187,11 @@ final class HEVCEncoder: @unchecked Sendable {
             HEVCEncoder.keyframeIntervalSeconds as CFNumber)
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             knobs.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
-        // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range).
-        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
-        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB)
-        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+        // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range). Captured buffers are retagged to
+        // these before encoding (T-113, `retagForSession`).
+        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, Self.sessionPrimaries)
+        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, Self.sessionTransfer)
+        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, Self.sessionMatrix)
         propertyFailures = failures
         propertyReport = report
         VTCompressionSessionPrepareToEncodeFrames(s)
@@ -233,6 +236,32 @@ final class HEVCEncoder: @unchecked Sendable {
         case .cbp: return kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel
         case .high52: return kVTProfileLevel_H264_High_5_2
         }
+    }
+
+    // Session colour properties (T-113: one source for the session and the input retag).
+    static var sessionPrimaries: CFString { kCVImageBufferColorPrimaries_ITU_R_709_2 }
+    static var sessionTransfer: CFString { kCVImageBufferTransferFunction_sRGB }
+    static var sessionMatrix: CFString { kCVImageBufferYCbCrMatrix_ITU_R_709_2 }
+    static let sessionColorTags = ColorTags(primaries: sessionPrimaries as String, transfer: sessionTransfer as String,
+                                            matrix: sessionMatrix as String)
+
+    /// T-113: VideoToolbox colour-converts every input whose colour tags differ from the session's (~2.4 ms per
+    /// 2800x1840 frame on the M6, and a gamma shift). ScreenCaptureKit tags its sRGB 4:2:0 buffers with BT.709
+    /// transfer, so they are retagged to the session's tags here (see `InputRetag`). The pixels are not touched.
+    /// Returns the tags that were replaced, nil when the buffer already matched (or carries no colour information).
+    static func retagForSession(_ buffer: CVPixelBuffer) -> ColorTags? {
+        func tag(_ key: CFString) -> String? { CVBufferCopyAttachment(buffer, key, nil) as? String }
+        let current = ColorTags(primaries: tag(kCVImageBufferColorPrimariesKey),
+                                transfer: tag(kCVImageBufferTransferFunctionKey),
+                                matrix: tag(kCVImageBufferYCbCrMatrixKey))
+        let hasColorSpace = CVBufferCopyAttachment(buffer, kCVImageBufferCGColorSpaceKey, nil) != nil
+        guard InputRetag.needsRetag(buffer: current, hasColorSpace: hasColorSpace, session: sessionColorTags) else {
+            return nil
+        }
+        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, sessionPrimaries, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, sessionTransfer, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, sessionMatrix, .shouldPropagate)
+        return current
     }
 
     /// Profile name for the `ev=encoder_config` line logged with the parameter sets.
@@ -285,12 +314,25 @@ final class HEVCEncoder: @unchecked Sendable {
     func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64,
                 displayTimeUs: UInt64 = 0) {
         meter?.recordEncoderIn()
+        // T-113: before the buffer reaches VideoToolbox (and before it becomes `last`, which re-submissions reuse).
+        if knobs.retagInput, let replaced = Self.retagForSession(buffer) { noteRetag(replaced) }
         let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
                           deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
         lock.lock()
         let work = offerLocked(input, bypassGate: false, capture: true)
         lock.unlock()
         perform(work)
+    }
+
+    /// Logs the first retag of this encoder (one line per session: which tags the capture carried).
+    private func noteRetag(_ replaced: ColorTags) {
+        lock.lock()
+        let first = !retagLogged
+        retagLogged = true
+        lock.unlock()
+        if first {
+            logSink(.info, "input_retag", "from=\(replaced.logValue) to=\(Self.sessionColorTags.logValue)")
+        }
     }
 
     /// Re-encodes the last captured buffer (keyframe on a static screen, idle refresh). Reading `last` and offering
