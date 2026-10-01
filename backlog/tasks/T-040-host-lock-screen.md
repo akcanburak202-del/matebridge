@@ -47,3 +47,7 @@ _(Ölçümden sonra doldurulur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+## Ölçüm sonucu (2026-10-01, orkestratör + kullanıcı)
+
+NOTES 2026-10-01 ~14:10. Ekran uykusu → sanal ekran oluşturulamıyor (nil) ve tablet uyandıramıyor; kullanıcı etkinliği bildirimi ekranı uyandırıp akışı geri getiriyor; kilit ekranında Secure Event Input yüzünden sentetik klavye çalışmıyor. Kullanıcı kararı: sanal HID/root bileşen yok. Açık: (a) uyandırma düzeltmesi (risksiz), (b) Apple Watch / yerel Ekran Paylaşımı (VNC) seçenekleri kullanıcıya soruldu.

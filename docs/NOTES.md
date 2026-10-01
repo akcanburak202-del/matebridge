@@ -463,3 +463,11 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 | D | 7 ms | %4,19 | 17,7 ms | %0,41 |
 
 - 7 ms daha iyi değil (iki turda da 6 ms'den kötü). Bölümler arası fark büyük (kullanıcının çizim davranışı). **6 ms kalıyor.** Görüntü akıcılığı çalışması burada durduruldu (kalan paylar: donanım çözme ~9 ms, panel zamanlaması).
+
+## 2026-10-01 ~14:10 — Ekran kilidi ölçümü (T-040), kullanıcı izniyle kilit geçici açıldı
+
+- Kullanıcı Sistem Ayarları'ndan "parola iste: hemen" açtı (`sysadminctl -screenLock status` → immediate). `pmset displaysleepnow`:
+  1. SCStream hata **-3815** ("ekran bulunamadı") → `pipeline_retry` → **`CGVirtualDisplay initWithDescriptor: returned nil`** her ~0,6 s (ekranlar uyurken yeni sanal ekran oluşturulamıyor). Uyku sırasında sistem `1920x1080` yer tutucu ekran gösteriyor (`v0x756e6b6e/m0x76697274`). Tablet donuk kare → "Gelen kare: 0" paneli; panel görünürken tablet girdiyi Mac'e göndermiyor → **tablet Mac'i uyandıramıyor**.
+  2. `caffeinate -u -t 2` (kullanıcı etkinliği) → sanal ekran hemen oluştu, `video_streaming`, tablette **kilit ekranı görünüyor**.
+  3. Kilit ekranında tablet klavye/fare girdisi **çalışmıyor**: `loginwindow` (PID 174) `CGSSetSecureEventInput: 1`; sentetik CGEvent'ler şifre alanına ulaşmıyor (Apple'ın bilinçli kısıtı; Erişilebilirlik izni aşmıyor).
+- Seçenekler kullanıcıyla konuşuldu: sanal HID sürücüsü + root yardımcı (Karabiner VirtualHIDDevice) **reddedildi (risk)**. Risksiz/düşük riskli alternatifler: Apple Watch otomatik kilit açma; macOS Ekran Paylaşımı yalnız yerel (`VNCOnlyLocalConnections`) + host'un yerel VNC istemcisi olması (doğrulanmadı); Parsec ile açma ya da kilidi kapalı tutma. Ayrıca önerilen risksiz parça: görüntü ekran uykusu yüzünden koparsa host `IOPMAssertionDeclareUserActivity` ile uyandırır, tablet panelde iken dokunma/tuşu "uyan" isteği olarak gönderir.
