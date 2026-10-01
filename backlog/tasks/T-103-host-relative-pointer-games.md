@@ -1,7 +1,7 @@
 ---
 id: T-103
 title: Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder
-status: in_progress
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-034]
@@ -59,9 +59,33 @@ Orkestratör teşhisi (kod okuması):
 - canlı imleç ekran dışında → yok sayılır, son konumdan devam;
 - sorgu nil → son bilinen konum;
 - düğme down/up ve sürükleme canlı konumda, çift tıklama sayacı;
-- mutlak hareket `env.cursor`'dan etkilenmez.
+- mutlak hareket konumu `env.cursor`'dan etkilenmez.
 
 **Risk (cihazda doğrulanacak).** Önceki hareket WindowServer'da henüz işlenmeden gelen sonraki mesaj eski konumu okuyabilir: hareket kaybı/ağırlık hissi. Deskflow macOS'ta aynı yöntemi kullanıyor. Kabul edildi, handoff'ta ölçüm önerisiyle not edilecek.
 
 ## Handoff
+
+- **Commit:** `84b8567` (uygulama), plan: `b7f7d5e`. Dal: `task/T-103-host-relative-pointer-games`.
+- **check.sh:** geçti (exit 0; host-mac 591 test / 63 suite, Android gradle, fixture ve crypto kontrolleri).
+- **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Input/MacEvent.swift`: `InjectionEnvironment.cursor` alanı eklendi, `MacMouse.deltaX` dokümanı güncellendi.
+  - `host-mac/Sources/MateBridgeCore/Input/Geometry+Display.swift`: `DisplayGeometry.onDisplay(_:)` eklendi (yarı açık sınır, kırpma).
+  - `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`: `adoptLiveCursor` (plan başında) ve `takeRelativeDelta` (ham delta, kesir taşıyıcı, `releaseAll`'da sıfırlanır) eklendi.
+  - `host-mac/Sources/MateBridgeHost/Input/CursorLocator.swift` (yeni): `CursorLocating` ve `SystemCursor` (`CGEvent(source: nil)?.location`).
+  - `host-mac/Sources/MateBridgeHost/Input/InputController.swift`: yalnızca `.pointerRel` mesajında zamanlanmış sorgu yapılır. İlk çağrı `start()`'ta ısındırılır. `input_session_end` satırına `cursor_queries`, `cursor_query_failed`, `cursor_query_avg_us`, `cursor_query_max_us` alanları eklendi.
+  - `host-mac/Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift` (yeni): REL-1…11 ve GEO-8.
+  - `host-mac/Tests/MateBridgeCoreTests/Input/InjectionPlannerTests.swift`: PLAN-14 yeni sözleşmeye çekildi (kenarda delta artık ham, kırpılmış fark değil).
+- **Sorgu maliyeti:** bu Mac'te (macOS 27) scratch benchmark, 20 000 çağrı. `CGEvent(source: nil).location` için p50 ≈ 0.1 µs, p99 ≈ 0.15 µs. Süreçteki ilk çağrı ≈ 8–14 ms (WindowServer bağlantısı), bu yüzden `start()`'ta ısındırılıyor. Çalışma anındaki değerler `input_session_end` alanlarında görülebilir.
+- **Varsayımlar:**
+  - `CGEvent(source: nil).location`, `CGDisplayBounds` ile aynı global uzayda (sol üst köken, nokta) çalışır.
+  - Canlı örnek önbellekteki konuma her eksende 1 noktadan yakınsa önbellek korunur (nokta-altı kesir için). Bu yüzden oyun ışınlaması 1 noktanın altında kalan farkları düzeltmez; sapma en fazla 1 nokta olur.
+  - Canlı örnek tüm planner çağrısı için `cursor`'a yazılır. Host bunu yalnızca `POINTER_REL` için örneklediğinden mutlak giriş (kalem, `POINTER_ABS`) pratikte değişmez. Planner'a örnek verilirse mutlak hareketin yalnızca *delta*sı canlı konumdan hesaplanır, hedefi aynı kalır (REL-9).
+  - Ekran dışı: canlı imleç başka ekrandaysa yok sayılır. Hareket, sanal ekrandaki son konumdan (yoksa merkezden) devam eder ve imleç tablet ekranına geri döner. Bu T-103 öncesi davranışla aynıdır.
+- **Test edilmedi (cihaz/orkestratör):**
+  1. Witcher 2 (Steam): menüde ve oyunda duvar kalmadı mı, ikinci imleç ya da titreme kayboldu mu?
+  2. Normal masaüstü kullanımı: trackpad'le yavaş ve hızlı hareket. Ağırlık hissi ya da hareket kaybı var mı? Asıl risk şu: önceki `mouseMoved` WindowServer'da işlenmeden sonraki mesaj eski konumu okursa o hareketin konumu kaybolur. Belirti, hızlı harekette imlecin "yavaş" ya da takılgan gelmesidir. Görülürse çözüm adayı: son gönderilen hedefin kısa süre (ör. ≤ 1 frame) öncelikli tutulması.
+  3. Kenarda sürükleme (dragged) ve çift tıklama, ekranın kenarında ve ortasında.
+  4. Mac fizik faresiyle ana monitöre geçip tablet trackpad'ine dokununca imlecin tablet ekranındaki son konuma dönmesi.
+  5. `input_session_end` satırında `cursor_query_avg_us` ve `cursor_query_max_us` değerleri ile `cursor_query_failed=0`.
+- **Açık sorular:** yok. (Kapsam dışı not: `takePixels` scroll taşıyıcısı çok büyük değerlerde Int32 kırpma kalıntısı taşıyabilir. Protokol aralıkları bunu pratikte önlüyor, dokunulmadı.)
 
