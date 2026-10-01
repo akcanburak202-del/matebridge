@@ -5,24 +5,34 @@ import Network
 /// A validated video connection handed to the video pipeline (PROTOCOL.md section 3.5).
 /// Every frame is one encrypted record under this connection's key (PROTOCOL.md section 9).
 ///
-/// Send contract (PROTOCOL.md section 5, newest frame wins): at most `maxInFlight` (2) sends may be
-/// outstanding. `send` returns false and transmits nothing when the limit is reached; the caller must then
-/// drop or replace the frame and request a keyframe. `canSend` and `onReady` expose the same backpressure:
-/// `onReady` fires (on the network queue) whenever an outstanding send completes.
+/// Send contract (PROTOCOL.md section 5, newest frame wins): `send` returns false and transmits nothing while the link
+/// cannot take a frame; the caller must then drop or replace the frame and request a keyframe. `canSend` and
+/// `onReady` expose the same backpressure: `onReady` fires whenever that may have changed.
+/// - `nw` (Network.framework): at most `maxInFlight` (2) sends may be outstanding; `onReady` fires on the network queue
+///   whenever an outstanding send completes.
+/// - `bsd` (kernel socket, T-091): at most one record may still be in user space and the kernel must hold fewer unsent
+///   bytes than `TCP_NOTSENT_LOWAT` (`SocketVideoGate`); `onReady` fires on the socket's write queue.
 /// `cancel()` closes just this connection.
 public final class VideoLink: @unchecked Sendable {
     public static let maxInFlight = 2
 
     public let sessionID: UInt32
     public let configID: UInt16
-    private let connection: NWConnection
+    private let wire: Wire
     private let lock = NSLock()
     private let logger: SessionLogger
+    // `nw` only: the `bsd` transport keeps its own count and sealer. One sealer per connection key, never a copy:
+    // two sealers on one key would reuse nonces.
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
-    private var sealer: RecordSealer
+    private var sealer: RecordSealer?
     /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
     private let sendQueue: SendQueueSampler?
+
+    private enum Wire {
+        case network(NWConnection)
+        case socket(SocketVideoTransport)
+    }
 
     fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection, logger: SessionLogger,
                      sealer: RecordSealer, sampleSendQueue: Bool) {
@@ -31,35 +41,85 @@ public final class VideoLink: @unchecked Sendable {
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
-        self.connection = connection
+        self.wire = .network(connection)
+    }
+
+    fileprivate init(sessionID: UInt32, configID: UInt16, socket: BsdTcpConnection, logger: SessionLogger,
+                     sealer: RecordSealer, sampleSendQueue: Bool) {
+        self.sealer = nil  // the transport owns this connection's sealer
+        self.sendQueue = sampleSendQueue ? SendQueueSampler(socket: socket) : nil
+        self.logger = logger
+        self.sessionID = sessionID
+        self.configID = configID
+        self.wire = .socket(SocketVideoTransport(connection: socket, sealer: sealer))
     }
 
     public var canSend: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return inFlight < Self.maxInFlight
+        switch wire {
+        case .network:
+            lock.lock()
+            defer { lock.unlock() }
+            return inFlight < Self.maxInFlight
+        case .socket(let transport):
+            return transport.canSend
+        }
     }
 
     public var onReady: (@Sendable () -> Void)? {
         get { lock.lock(); defer { lock.unlock() }; return readyHandler }
-        set { lock.lock(); readyHandler = newValue; lock.unlock() }
+        set {
+            lock.lock(); readyHandler = newValue; lock.unlock()
+            if case .socket(let transport) = wire { transport.setReadyHandler(newValue) }
+        }
     }
 
-    /// Encodes and sends one frame. Returns false (nothing sent) while `maxInFlight` sends are outstanding
+    /// Encodes and sends one frame. Returns false (nothing sent) while the link cannot take a frame (see above)
     /// or when the frame is not a valid single-fragment VIDEO_FRAME within the 16 MiB payload limit
     /// (logged). `completion(true)` means written.
     @discardableResult
     public func send(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
+        switch wire {
+        case .network(let connection): return send(frame, over: connection, completion: completion)
+        case .socket(let transport): return send(frame, over: transport, completion: completion)
+        }
+    }
+
+    private func send(_ frame: VideoFrame, over transport: SocketVideoTransport,
+                      completion: @escaping @Sendable (Bool) -> Void) -> Bool {
+        // The backlog this frame will queue behind (T-088); taken before the write, like the `nw` path.
+        if let sendQueue, transport.canSend { sendQueue.sample() }
+        switch transport.sendFrame(frame, completion: completion) {
+        case .sent:
+            return true
+        case .busy:
+            return false
+        case .writeRefused:  // the transport already cancelled the connection; the completion reports false
+            logger.log(.warning, "video_write_refused", sessionID: sessionID, generation: configID)
+            return false
+        case .invalid:
+            logger.log(.warning, "video_frame_refused", sessionID: sessionID, generation: configID,
+                       fields: "reason=invalid_or_oversized")
+            return false
+        case .sealFailed(let error):
+            logger.log(.error, "video_seal_failed", sessionID: sessionID, generation: configID,
+                       fields: "reason=\(error == .counterExhausted ? "counter" : "crypto")")
+            transport.connection.cancel()  // the counter is exhausted: this connection cannot continue
+            return false
+        }
+    }
+
+    private func send(_ frame: VideoFrame, over connection: NWConnection,
+                      completion: @escaping @Sendable (Bool) -> Void) -> Bool {
         let message = Message.videoFrame(frame)
         // The backlog this frame will queue behind (T-088). Outside `lock`: the probe may query the NWConnection,
         // whose queue runs the send completions that take `lock`.
         if let sendQueue, canSend { sendQueue.sample() }
         // Sealing and the write happen under one lock: record counters must reach the wire in counter order.
         lock.lock()
-        guard inFlight < Self.maxInFlight else { lock.unlock(); return false }
+        guard inFlight < Self.maxInFlight, sealer != nil else { lock.unlock(); return false }
         let bytes: [UInt8]
         do {
-            bytes = try message.sealed(using: &sealer)
+            bytes = try message.sealed(using: &sealer!)
         } catch let error as CryptoError {
             lock.unlock()
             logger.log(.error, "video_seal_failed", sessionID: sessionID, generation: configID,
@@ -85,7 +145,12 @@ public final class VideoLink: @unchecked Sendable {
         return true
     }
 
-    public func cancel() { connection.cancel() }
+    public func cancel() {
+        switch wire {
+        case .network(let connection): connection.cancel()
+        case .socket(let transport): transport.connection.cancel()
+        }
+    }
 
     /// Closes the send-queue window (about once a second). nil when sampling is off or there is nothing to report.
     func sendQueueReport() -> SendQueueSampler.Report? { sendQueue?.take() }
@@ -150,13 +215,13 @@ public final class SessionServer: @unchecked Sendable {
     private var knownDevices: [DeviceID: String]
     private var state: SessionServerState = .stopped
     private var controlListener: NWListener?
-    private var videoListener: NWListener?
+    private var videoListener: VideoListener?
     private var nextID: UInt64 = 0
     private var controlConnections: [ConnectionID: NWConnection] = [:]
     /// Inbound decoder and outbound sealer of each control connection. Plain until the first HELLO_ACK went out.
     private var inbounds: [ConnectionID: ControlInbound] = [:]
     private var sealers: [ConnectionID: RecordSealer] = [:]
-    private var videoConnections: [ConnectionID: NWConnection] = [:]
+    private var videoConnections: [ConnectionID: VideoConnection] = [:]
     private var pendingApproval: ConnectionID?
     private var pendingRequest: ApprovalRequest?
     /// Incremented by every "forget" (and identity replacement). A Keychain save that completes under an older value
@@ -185,6 +250,34 @@ public final class SessionServer: @unchecked Sendable {
     /// T-088 experiment knobs, read once.
     static let serviceClass = ServiceClassKnob.parse(ProcessInfo.processInfo.environment)
     static let sampleSendQueue = SendQueueLogKnob.isEnabled(ProcessInfo.processInfo.environment)
+    /// T-091: `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` and `MATEBRIDGE_NOTSENT_LOWAT_KB`, read once.
+    static let videoSocket = VideoSocketSettings.parse(ProcessInfo.processInfo.environment)
+
+    /// The video listener: Network.framework, or a kernel socket with `MATEBRIDGE_VIDEO_SOCKET=bsd` (T-091).
+    private enum VideoListener {
+        case network(NWListener)
+        case socket(BsdTcpListener)
+
+        func cancel() {
+            switch self {
+            case .network(let l): l.cancel()
+            case .socket(let l): l.cancel()
+            }
+        }
+    }
+
+    /// One video connection, on whichever stack its listener uses. Everything above the bytes is shared.
+    private enum VideoConnection {
+        case network(NWConnection)
+        case socket(BsdTcpConnection)
+
+        func cancel() {
+            switch self {
+            case .network(let c): c.cancel()
+            case .socket(let c): c.cancel()
+            }
+        }
+    }
 
     /// - Parameters:
     ///   - controlPort: preferred control port (default 47001, for `adb reverse`); falls back to a system-assigned
@@ -241,6 +334,7 @@ public final class SessionServer: @unchecked Sendable {
     /// Tries the preferred video port, then a system-assigned one (logged).
     private func startVideoListener(plan: ListenerPortPlan) {
         guard !stopped else { return }
+        if Self.videoSocket.socket == .bsd { return startSocketVideoListener(plan: plan) }
         var plan = plan
         guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
         let fixed = plan.lastWasPreferred
@@ -250,7 +344,7 @@ public final class SessionServer: @unchecked Sendable {
                                        on: Self.endpointPort(port))
             video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
             video.stateUpdateHandler = { [weak self, weak video] s in
-                guard let self, let video, video === videoListener else { return }
+                guard let self, let video, case .network(let current)? = videoListener, video === current else { return }
                 if case .failed = s, fixed {
                     logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
                                fields: "listener=video wanted=\(port)")
@@ -260,7 +354,7 @@ public final class SessionServer: @unchecked Sendable {
                 }
                 videoListenerState(s)
             }
-            videoListener = video
+            videoListener = .network(video)
             video.start(queue: queue)
         } catch {
             if fixed {
@@ -271,6 +365,51 @@ public final class SessionServer: @unchecked Sendable {
                 listenersFailed("video_listener_create")
             }
         }
+    }
+
+    /// `MATEBRIDGE_VIDEO_SOCKET=bsd` (T-091): the same port plan on a kernel socket (dual-stack `[::]:port`). Binding is
+    /// synchronous, so the listener is ready (or failed) right here.
+    private func startSocketVideoListener(plan: ListenerPortPlan) {
+        guard !stopped else { return }
+        var plan = plan
+        guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
+        let fixed = plan.lastWasPreferred
+        let nextPlan = plan
+        let options = BsdTcpOptions(notSentLowatBytes: Self.videoSocket.notSentLowatBytes,
+                                    serviceClass: Self.serviceClass.videoClass)
+        let listener: BsdTcpListener
+        do {
+            listener = try BsdTcpListener(port: port, options: options, queue: queue)
+        } catch {
+            if fixed {
+                logFallback("video", port)
+                return startSocketVideoListener(plan: nextPlan)
+            }
+            logger.log(.error, "video_listener_socket_error", sessionID: 0, generation: 0, fields: "error=\(error)")
+            return listenersFailed("video_listener_create")
+        }
+        videoListener = .socket(listener)
+        listener.start { [weak self, weak listener] event in
+            guard let self, let listener, case .socket(let current)? = videoListener, current === listener else {
+                if case .accepted(let c) = event { c.cancel() }  // a cancelled listener's late accept
+                return
+            }
+            switch event {
+            case .accepted(let connection):
+                acceptVideo(connection)
+            case .acceptConfigureFailed(let error):
+                logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
+                           fields: "video=true reason=socket_setup error=\(error)")
+            case .acceptPaused(let errno):
+                logger.log(.warning, "video_accept_paused", sessionID: currentSessionID, generation: currentConfigID,
+                           fields: "errno=\(errno)")
+            case .failed(let errno):
+                logger.log(.error, "video_listener_socket_error", sessionID: 0, generation: 0,
+                           fields: "error=accept:\(errno)")
+                listenersFailed("video_listener_failed")
+            }
+        }
+        videoListenerReady(port: listener.port)
     }
 
     private func logFallback(_ listener: String, _ wanted: UInt16) {
@@ -452,13 +591,19 @@ public final class SessionServer: @unchecked Sendable {
     private func videoListenerState(_ s: NWListener.State) {
         switch s {
         case .ready:
-            guard let port = videoListener?.port?.rawValue else { return fail("video_port_missing") }
-            machine.videoPort = port
-            startControlListener(videoPort: port)
+            guard case .network(let listener)? = videoListener, let port = listener.port?.rawValue else {
+                return fail("video_port_missing")
+            }
+            videoListenerReady(port: port)
         case .failed:
             listenersFailed("video_listener_failed")
         default: break
         }
+    }
+
+    private func videoListenerReady(port: UInt16) {
+        machine.videoPort = port
+        startControlListener(videoPort: port)
     }
 
     private func startControlListener(videoPort: UInt16) {
@@ -486,7 +631,7 @@ public final class SessionServer: @unchecked Sendable {
                     restartAttempts = 0
                     logger.log(.info, "listening", sessionID: 0, generation: 0,
                                fields: "control_port=\(listener.port?.rawValue ?? 0) video_port=\(videoPort) "
-                                   + Self.serviceClass.logFields)
+                                   + Self.serviceClass.logFields + " " + Self.videoSocket.logFields)
                     if case .starting = state { setState(.listening) }
                 case .failed:
                     if fixed {
@@ -538,7 +683,7 @@ public final class SessionServer: @unchecked Sendable {
         }
         connection.start(queue: queue)
         if video {
-            videoConnections[id] = connection
+            videoConnections[id] = .network(connection)
             apply(machine.videoOpened(id, now: nowUs()))
         } else {
             controlConnections[id] = connection
@@ -546,6 +691,29 @@ public final class SessionServer: @unchecked Sendable {
             apply(machine.connectionOpened(id, now: nowUs()))
         }
         receiveLoop(id, connection, video: video)
+    }
+
+    /// A video connection from the kernel-socket listener (T-091). Same bound, ids, machine events and byte handling
+    /// as `accept(_:video:)`; only the transport differs. Reads arrive on `queue`; `onClosed` arrives on `queue` once
+    /// the socket closed for any reason (end of stream, error, or our own `cancel()`), like `.cancelled` above.
+    private func acceptVideo(_ connection: BsdTcpConnection) {
+        guard machine.pendingVideoCount < Self.maxUnauthenticated else {
+            logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "video=true reason=too_many_unauthenticated")
+            connection.cancel()
+            return
+        }
+        nextID += 1
+        let id = ConnectionID(nextID)
+        connection.start(queue: queue, onBytes: { [weak self] bytes in
+            // A connection already removed (closed meanwhile) gets nothing more: it is being cancelled.
+            guard let self, videoConnections[id] != nil else { return false }
+            return receiveVideoBytes(id, bytes)
+        }, onClosed: { [weak self] in
+            self?.transportClosed(id, video: true)
+        })
+        videoConnections[id] = .socket(connection)
+        apply(machine.videoOpened(id, now: nowUs()))
     }
 
     private func receiveLoop(_ id: ConnectionID, _ connection: NWConnection, video: Bool) {
@@ -848,8 +1016,15 @@ public final class SessionServer: @unchecked Sendable {
             case .videoAttached(let vid, _, let sid, let configID, let keys):
                 if let c = videoConnections[vid] {
                     let sealer = RecordSealer(key: keys.h2c, maxPayload: ProtocolConstants.maxVideoPayload)
-                    let link = VideoLink(sessionID: sid, configID: configID, connection: c, logger: logger,
+                    let link: VideoLink
+                    switch c {
+                    case .network(let connection):
+                        link = VideoLink(sessionID: sid, configID: configID, connection: connection, logger: logger,
                                          sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
+                    case .socket(let socket):
+                        link = VideoLink(sessionID: sid, configID: configID, socket: socket, logger: logger,
+                                         sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
+                    }
                     videoLinks[vid] = link
                     handlers.videoAttached(link)
                 }
