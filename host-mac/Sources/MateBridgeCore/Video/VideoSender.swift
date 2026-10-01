@@ -33,6 +33,8 @@ public final class VideoSender: @unchecked Sendable {
     private let frames: VideoFrameQueue
     private let requestKeyframe: @Sendable () -> Void
     private let onEnded: @Sendable (EndReason) -> Void
+    private let trace: (@Sendable (FrameTrace) -> Void)?
+    private let clock: @Sendable () -> UInt64
     private let lock = NSLock()
     private var counters = Counters()
     private var failed = false
@@ -43,9 +45,15 @@ public final class VideoSender: @unchecked Sendable {
     /// - Parameters:
     ///   - requestKeyframe: asks the encoder for a keyframe (after a frame the transport refused).
     ///   - onEnded: the loop finished on its own or was stopped; called once, from the sender's task.
+    ///   - trace: receives the finished `FrameTrace` of every frame whose write completed (T-070), stamped with
+    ///     `clock` (must be the host clock the encoder stamps with). nil: no measuring, no clock reads.
     public init(transport: VideoTransport, frames: VideoFrameQueue,
                 requestKeyframe: @escaping @Sendable () -> Void,
-                onEnded: @escaping @Sendable (EndReason) -> Void = { _ in }) {
+                onEnded: @escaping @Sendable (EndReason) -> Void = { _ in },
+                trace: (@Sendable (FrameTrace) -> Void)? = nil,
+                clock: @escaping @Sendable () -> UInt64 = { 0 }) {
+        self.trace = trace
+        self.clock = clock
         self.transport = transport
         self.frames = frames
         self.requestKeyframe = requestKeyframe
@@ -90,8 +98,16 @@ public final class VideoSender: @unchecked Sendable {
             }
             let frame = encoded.toVideoFrame(seq: seq)
             let size = frame.data.count
-            let accepted = transport.send(frame) { [self] ok in
+            var timing = encoded.trace
+            let measure = trace != nil && !encoded.isCodecConfig
+            if measure { timing.writeStartUs = clock() }
+            let accepted = transport.send(frame) { [self, timing] ok in
                 if !ok { markFailed(); signal.yield() }
+                if ok, measure, let trace {
+                    var done = timing
+                    done.writeDoneUs = clock()
+                    trace(done)
+                }
             }
             record(accepted: accepted, bytes: size, keyframe: encoded.isKeyframe)
             if accepted {

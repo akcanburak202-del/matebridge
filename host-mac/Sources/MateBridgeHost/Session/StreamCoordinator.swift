@@ -359,7 +359,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         let id = consumerID
         let sender = VideoSender(transport: link, frames: pipeline.frames,
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
-                                 onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) })
+                                 onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
+                                 trace: { [weak pipeline] t in pipeline?.recordTrace(t) },
+                                 clock: { HostClock.nowUs() })
         consumer = .sender(id: id, sender, link)
         lastSent = VideoSender.Counters()
         sender.start()
@@ -402,6 +404,11 @@ public final class StreamCoordinator: @unchecked Sendable {
                             fields: w.logFields)
         }
         lastCadenceText = w.menuText
+        let lat = pipeline.latencyWindow()
+        if !lat.isEmpty {
+            videoLogger.log(.info, "latency", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
+                            fields: lat.logFields)
+        }
         publishSummary()
     }
 

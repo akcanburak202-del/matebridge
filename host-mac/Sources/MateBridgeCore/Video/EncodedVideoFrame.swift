@@ -6,6 +6,8 @@ public struct EncodedVideoFrame: Equatable, Sendable {
     public var captureTimeUs: UInt64
     /// Annex-B NAL units.
     public var data: [UInt8]
+    /// Per-stage host timestamps (T-070); not part of the wire format.
+    public var trace = FrameTrace()
 
     public init(flags: VideoFrameFlags, captureTimeUs: UInt64, data: [UInt8]) {
         self.flags = flags
