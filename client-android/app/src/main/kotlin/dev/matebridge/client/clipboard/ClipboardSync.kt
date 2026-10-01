@@ -18,8 +18,16 @@ class ClipboardSync {
         data class Send(val msg: Clipboard) : Decision
     }
 
-    private var accepted = false
-    private var baselineMs = 0L
+    /** T-063 diag: why the last [onLocalClip] decided as it did. */
+    enum class Reason { DISABLED, NOT_ACCEPTED, SENSITIVE, EMPTY, BEFORE_BASELINE, DUPLICATE, TOO_LARGE, SEND }
+
+    /** T-063 diag */
+    var lastReason: Reason = Reason.EMPTY
+        private set
+    var accepted = false // T-063 diag: read by the bridge log
+        private set
+    var baselineMs = 0L // T-063 diag: read by the bridge log
+        private set
     private var lastText: String? = null
     private var seq = 0L
     private var sessionGen = 0
@@ -45,15 +53,21 @@ class ClipboardSync {
      * change listener fired, which is itself proof of a change). [sensitive]: flagged as a password/secret.
      */
     fun onLocalClip(text: String?, sensitive: Boolean, timestampMs: Long): Decision {
-        if (!enabled || !accepted || sensitive || text.isNullOrEmpty()) return Decision.Ignore
-        if (timestampMs in 1..baselineMs) return Decision.Ignore
-        if (text == lastText) return Decision.Ignore // echo of a received text, or already sent
+        if (!enabled) return ignore(Reason.DISABLED)
+        if (!accepted) return ignore(Reason.NOT_ACCEPTED)
+        if (sensitive) return ignore(Reason.SENSITIVE)
+        if (text.isNullOrEmpty()) return ignore(Reason.EMPTY)
+        if (timestampMs in 1..baselineMs) return ignore(Reason.BEFORE_BASELINE)
+        if (text == lastText) return ignore(Reason.DUPLICATE) // echo of a received text, or already sent
         lastText = text
         if (timestampMs > baselineMs) baselineMs = timestampMs
         val bytes = text.toByteArray(Charsets.UTF_8)
-        if (bytes.size > Clipboard.MAX_DATA_BYTES) return Decision.TooLarge
+        if (bytes.size > Clipboard.MAX_DATA_BYTES) { lastReason = Reason.TOO_LARGE; return Decision.TooLarge }
+        lastReason = Reason.SEND
         return Decision.Send(Clipboard(seq++ and 0xFFFF_FFFFL, Clipboard.KIND_TEXT_UTF8, Bytes(bytes)))
     }
+
+    private fun ignore(r: Reason): Decision { lastReason = r; return Decision.Ignore }
 
     /**
      * A CLIPBOARD arrived from the host. Returns the text to write to the local clipboard, or null to ignore it (sharing off,

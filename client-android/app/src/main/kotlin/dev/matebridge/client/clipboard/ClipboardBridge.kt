@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.widget.Toast
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.session.Latest
@@ -26,6 +27,7 @@ class ClipboardBridge(
     private val listener = ClipboardManager.OnPrimaryClipChangedListener { check(fromListener = true) }
 
     fun start() {
+        MbLog.i("clipboard", "diag=focus_start already=$listening", "clipboard") // T-063 diag
         if (listening) return
         listening = true
         cm.addPrimaryClipChangedListener(listener)
@@ -33,15 +35,24 @@ class ClipboardBridge(
     }
 
     fun stop() {
+        MbLog.i("clipboard", "diag=focus_stop was=$listening", "clipboard") // T-063 diag
         if (!listening) return
         listening = false
         cm.removePrimaryClipChangedListener(listener)
     }
 
     private fun check(fromListener: Boolean) {
-        if (!sync.enabled) return
-        val clip = readClip() ?: return
-        when (val d = sync.onLocalClip(clip.text, clip.sensitive, if (fromListener) 0L else clip.timestampMs)) {
+        val clip = readClip()
+        val d = sync.onLocalClip(clip.text, clip.sensitive, if (fromListener) 0L else clip.timestampMs)
+        // T-063 diag: metadata only, never content.
+        MbLog.i(
+            "clipboard",
+            "diag=check src=${if (fromListener) "listener" else "focus"} clip=${clip.status} items=${clip.items} len=${clip.text?.length} " +
+                "sens=${clip.sensitive} ts=${clip.timestampMs} now=${System.currentTimeMillis()} mono=${SystemClock.elapsedRealtime()} " +
+                "baseline=${sync.baselineMs} accepted=${sync.accepted} enabled=${sync.enabled} decision=${sync.lastReason.name.lowercase()}",
+            "clipboard",
+        )
+        when (d) {
             ClipboardSync.Decision.Ignore -> Unit
             ClipboardSync.Decision.TooLarge -> {
                 MbLog.i("clipboard", "dir=out skipped=too_large", "clipboard")
@@ -85,21 +96,24 @@ class ClipboardBridge(
         }
     }
 
-    private class Clip(val text: String?, val sensitive: Boolean, val timestampMs: Long)
+    /** [status]: ok | null_clip | security (T-063 diag). */
+    private class Clip(val text: String?, val sensitive: Boolean, val timestampMs: Long, val status: String = "ok", val items: Int = -1)
 
-    private fun readClip(): Clip? = try {
+    private fun readClip(): Clip = try {
         val clip = cm.primaryClip
-        if (clip == null || clip.itemCount == 0) {
-            null
+        if (clip == null) {
+            Clip(null, false, 0L, "null_clip")
+        } else if (clip.itemCount == 0) {
+            Clip(null, false, 0L, "ok", 0)
         } else {
             val desc = clip.description
             val sensitive = desc.extras?.getBoolean(EXTRA_IS_SENSITIVE, false) ?: false
             val timestamp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) desc.timestamp else 0L
             // Sensitive content is never even converted to a String.
-            Clip(if (sensitive) null else clip.getItemAt(0).coerceToText(context)?.toString(), sensitive, timestamp)
+            Clip(if (sensitive) null else clip.getItemAt(0).coerceToText(context)?.toString(), sensitive, timestamp, "ok", clip.itemCount)
         }
     } catch (e: SecurityException) {
-        null // not focused: Android 10+ hides the clipboard
+        Clip(null, false, 0L, "security") // not focused: Android 10+ hides the clipboard
     }
 
     private companion object {
