@@ -14,6 +14,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
+| [T-087](tasks/T-087-host-idle-refresh-real-refine.md) | Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç | 5 | mac-host-dev | [T-086] |
 
 ## done
 
