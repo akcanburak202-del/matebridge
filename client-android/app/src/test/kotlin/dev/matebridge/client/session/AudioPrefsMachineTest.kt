@@ -59,7 +59,8 @@ class AudioPrefsMachineTest {
         val acc = m.handle(Event.Received(gen, HelloAck(1, HelloAck.ACCEPTED, 5, 7421, "Mac")), now)
         assertEquals(AudioPrefs(true), sends(acc).last())
         assertEquals(listOf<Any>(AudioPrefs(false)), sends(m.handle(Event.SetAudio(false), now)))
-        assertTrue(m.handle(Event.SetAudio(false), now).isEmpty()) // unchanged
+        // unchanged value: still sent (review L2), so a quick off-on always reaches the host
+        assertEquals(listOf<Any>(AudioPrefs(false)), sends(m.handle(Event.SetAudio(false), now)))
         m.handle(Event.Received(gen, StreamConfig(1, 1, 2800, 1840, 1400, 920, 60, 20000, 1, 1, 1, 1)), now)
         assertEquals(listOf<Any>(AudioPrefs(true)), sends(m.handle(Event.SetAudio(true), now))) // streaming too
     }

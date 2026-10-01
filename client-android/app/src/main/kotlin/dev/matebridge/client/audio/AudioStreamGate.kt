@@ -4,8 +4,13 @@ import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
 
 /**
- * Which host audio stream is current (PROTOCOL.md 0x31/0x32). Pure Kotlin. [onConfig] runs on the control reader
- * thread; [reset] may run on any thread, so the id is volatile.
+ * Which host audio stream is current (PROTOCOL.md 0x31/0x32), and for which control connection. Pure Kotlin; the
+ * caller serializes [arm], [disarm] and [onConfig] (AudioPlayout's lock). [accepts] runs unlocked on the reader
+ * thread, so the state it reads is volatile.
+ *
+ * Connection generation: [arm] (a new control connection) and [disarm] (connection closed, background) bound the
+ * window in which messages are taken. A message from another generation, or while disarmed, is ignored: a stale
+ * reader thread can neither start an orphan stream after teardown nor replace the new connection's stream.
  *
  *  - STARTED with a playable format (PCM_S16LE, 48 kHz, 2 channels) and a new stream_id: start it.
  *  - STARTED with anything else: the host's stream is not playable here; the current one stops (not an error).
@@ -23,20 +28,38 @@ class AudioStreamGate {
     @Volatile var currentId = NONE
         private set
 
-    fun onConfig(c: AudioConfig): Action = when (c.state) {
-        AudioConfig.STATE_STOPPED -> if (currentId != NONE) { currentId = NONE; Action.Stop } else Action.None
-        AudioConfig.STATE_STARTED -> when {
-            !isPlayable(c) -> { currentId = NONE; Action.Unsupported }
-            c.streamId == currentId -> Action.None // repeated STARTED of the running stream
-            else -> { currentId = c.streamId; Action.Start(c.streamId) }
-        }
-        else -> Action.None
+    @Volatile var armedGen = NONE
+        private set
+
+    val armed: Boolean get() = armedGen != NONE
+
+    /** A new control connection [gen] starts: only its messages are taken from now on. Any running stream ends. */
+    fun arm(gen: Int) {
+        currentId = NONE
+        armedGen = gen
     }
 
-    fun accepts(f: AudioFrame): Boolean =
-        currentId != NONE && f.streamId == currentId && f.data.size == f.frameCount * CHANNELS * 2
+    /** The connection ended (or the app went to the background): nothing is taken until the next [arm]. */
+    fun disarm() {
+        currentId = NONE
+        armedGen = NONE
+    }
 
-    fun reset() { currentId = NONE }
+    fun onConfig(c: AudioConfig, gen: Int): Action {
+        if (!armed || gen != armedGen) return Action.None
+        return when (c.state) {
+            AudioConfig.STATE_STOPPED -> if (currentId != NONE) { currentId = NONE; Action.Stop } else Action.None
+            AudioConfig.STATE_STARTED -> when {
+                !isPlayable(c) -> { currentId = NONE; Action.Unsupported }
+                c.streamId == currentId -> Action.None // repeated STARTED of the running stream
+                else -> { currentId = c.streamId; Action.Start(c.streamId) }
+            }
+            else -> Action.None
+        }
+    }
+
+    fun accepts(f: AudioFrame, gen: Int): Boolean =
+        gen == armedGen && currentId != NONE && f.streamId == currentId && f.data.size == f.frameCount * CHANNELS * 2
 
     companion object {
         const val NONE = -1

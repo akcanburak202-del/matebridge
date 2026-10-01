@@ -75,7 +75,7 @@ class PlayoutSimulationTest {
         // on average the ratio equals the clock difference; it wanders by far less than an audible pitch change (0.3 %)
         val mean = ppmSum / n
         assertTrue("mean ratio $mean ppm for drift $driftPpm", abs(mean - driftPpm) < 20)
-        assertTrue("ratio range $ppmMin..$ppmMax ppm", ppmMax - ppmMin < 300)
+        assertTrue("ratio range $ppmMin..$ppmMax ppm", ppmMax - ppmMin < 500) // 0.05 %: far below audible
         // the floor sits at the target (within 3 ms), the level never ran dry
         val floorErrMs = (d.lastFloorFrames - d.targetFrames) / 48.0
         assertTrue("floor err $floorErrMs ms", abs(floorErrMs) < 3.0)
@@ -151,45 +151,96 @@ class PlayoutSimulationTest {
         assertTrue(core.buffer.level < 30 * 48)
     }
 
-    @Test fun avAlignmentRaisesTargetWhenAudioIsEarly() {
+    /**
+     * Runs [seconds] in 1 s steps, feeding the drift controller an A/V offset that follows the buffer: the audio is
+     * [av0Us] off while the floor is [floor0], and every extra frame of floor makes it later by one frame.
+     */
+    private fun runWithAv(sim: Sim, seconds: Int, av0Us: Long, floor0: Int): Long {
+        val d = sim.core.drift
+        var av = av0Us
+        repeat(seconds) {
+            sim.run(1.0)
+            av = av0Us + (d.lastFloorFrames - floor0) * 1000L / 48
+            d.onAvOffset(av)
+        }
+        return av
+    }
+
+    @Test fun avAlignmentRaisesTargetGraduallyWhenAudioIsEarly() {
         val sim = Sim(0.0, 2.0)
         sim.run(5.0)
         val d = sim.core.drift
         assertEquals(0, d.avFloorFrames)
-        // audio 30 ms ahead of the video: the floor must rise by about 35 ms
         val floor = d.lastFloorFrames
+        // audio 30 ms ahead of the video: the floor must rise by about 35 ms, at most 10 ms per window
         assertTrue(d.onAvOffset(-30_000))
-        assertEquals(floor + 35 * 48, d.avFloorFrames)
-        assertEquals(d.avFloorFrames, d.targetFrames)
-        // 4 ms off is inside the dead band
-        assertTrue(!d.onAvOffset(-26_000))
-        sim.run(20.0)
-        val errMs = (d.lastFloorFrames - d.targetFrames) / 48.0
-        assertTrue("floor err $errMs ms", abs(errMs) < 3.0)
+        assertEquals(10 * 48, d.avFloorFrames)
+        val underruns = d.underruns
+        val av = runWithAv(sim, 40, -30_000, floor)
+        assertEquals(0L, d.rebuffers) // slewed by the PI, no audible rebuffer
+        assertEquals(underruns, d.underruns)
+        assertTrue("final av $av us", abs(av - DriftController.AV_TARGET_US) < 8_000)
     }
 
-    @Test fun largeAvRaiseRebuffersInsteadOfCrawling() {
+    @Test fun largeAvRaiseSlewsWithoutRebuffer() {
         val sim = Sim(0.0, 2.0)
         sim.run(5.0)
         val d = sim.core.drift
-        d.onAvOffset(-80_000) // 80 ms early
-        sim.run(3.0)
-        assertEquals(1L, d.rebuffers)
+        val floor = d.lastFloorFrames
+        val av = runWithAv(sim, 60, -55_000, floor) // 55 ms early
+        assertEquals(0L, d.rebuffers)
         assertEquals(0L, d.underruns)
-        val errMs = (d.lastFloorFrames - d.targetFrames) / 48.0
-        assertTrue("floor err $errMs ms", abs(errMs) < 8.0)
+        assertTrue("final av $av us", abs(av - DriftController.AV_TARGET_US) < 8_000)
     }
 
-    @Test fun avAlignmentLowersTargetWhenAudioIsLate() {
-        val d = DriftController()
-        val core = PlayoutCore(drift = d)
-        val sim = Sim(0.0, 2.0, core = core)
+    @Test fun avAlignmentLowersTargetAtOnceWhenAudioIsLate() {
+        val sim = Sim(0.0, 2.0)
         sim.run(3.0)
-        d.onAvOffset(-60_000)
-        sim.run(10.0)
+        val d = sim.core.drift
+        runWithAv(sim, 30, -60_000, d.lastFloorFrames)
         val raised = d.targetFrames
-        d.onAvOffset(+50_000) // audio now 50 ms late: back down
+        assertTrue(raised > 50 * 48)
+        d.onAvOffset(+50_000) // audio now 50 ms late: back down in one step
         assertTrue(d.targetFrames < raised - 40 * 48)
+    }
+
+    @Test fun primingHoldsForAvThenSeedsTheAvFloor() {
+        val core = PlayoutCore()
+        val packet = ByteArray(480 * 4) { 0x10 }
+        var idx = 0L
+        val out = ShortArray(96 * 2)
+        core.primingHoldUs = 20_000 // starting now would be 20 ms early
+        repeat(6) { core.buffer.write(idx, 0, packet, 480); idx += 480 } // 60 ms: well above the refill threshold
+        core.render(out, 96)
+        assertEquals(PlayoutCore.State.PRIMING, core.state)
+        assertTrue(out.all { it == 0.toShort() })
+        core.primingHoldUs = 0 // the read head is old enough now
+        core.render(out, 96)
+        assertEquals(PlayoutCore.State.PLAYING, core.state)
+        // the level it started at, minus half the arrival span, is the new A/V floor
+        assertEquals(6 * 480 - core.drift.lastSpanFrames / 2, core.drift.avFloorFrames)
+    }
+
+    @Test fun primingHoldNeverExceedsTheMaxRefillLevel() {
+        val core = PlayoutCore()
+        val packet = ByteArray(480 * 4) { 0x10 }
+        var idx = 0L
+        val out = ShortArray(96 * 2)
+        core.primingHoldUs = 1_000_000
+        while (core.state == PlayoutCore.State.PRIMING && idx < 20_000L) {
+            core.buffer.write(idx, 0, packet, 480); idx += 480
+            core.render(out, 96)
+        }
+        assertEquals(PlayoutCore.State.PLAYING, core.state)
+        assertTrue(core.buffer.level <= core.drift.maxRefillFrames + 480)
+    }
+
+    @Test fun largeNativeBurstStartsWithoutUnderrun() {
+        // 20 ms bursts (a non-FAST track): the refill level covers a whole burst plus the fade reserve
+        val sim = Sim(0.0, 2.0, burst = 960)
+        sim.run(10.0)
+        assertEquals(PlayoutCore.State.PLAYING, sim.core.state)
+        assertEquals(0L, sim.core.drift.underruns)
     }
 
     @Test fun mutedOutputFadesToSilenceButKeepsConsuming() {

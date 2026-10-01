@@ -50,7 +50,7 @@ class SessionMachine(
         data class SetPrefs(val prefs: StreamPrefs) : Event
         /** The debounced panel rate (T-059): remembered, sent now when input is allowed and the value changed. */
         data class SetDisplayRate(val hz: Int) : Event
-        /** The user's audio setting (T-095): remembered, sent as AUDIO_PREFS now when input is allowed and it changed. */
+        /** The user's audio setting (T-095): remembered, and sent as AUDIO_PREFS now when input is allowed. */
         data class SetAudio(val enabled: Boolean) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
@@ -168,8 +168,9 @@ class SessionMachine(
                 }
             }
             is Event.SetAudio -> {
-                // Only a client that does audio (non-null) ever sends AUDIO_PREFS.
-                if (audio != null && event.enabled != audio) {
+                // Only a client that does audio (non-null) ever sends AUDIO_PREFS. Sent even when unchanged (review L2):
+                // the host's state is what matters, and a repeat is harmless.
+                if (audio != null) {
                     audio = event.enabled
                     if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
                 }

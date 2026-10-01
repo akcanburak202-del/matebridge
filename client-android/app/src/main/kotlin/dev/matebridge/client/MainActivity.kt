@@ -342,7 +342,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
-        if (audioAllowed) audio = AudioPlayout(this) { clock.offsetUs() }
+        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }) { runOnUiThread { onAudioBecomingNoisy() } }
         val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
             intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
         )
@@ -356,7 +356,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             override fun onSessionStart() {
-                audio?.stop("new_connection")
                 clock.reset()
                 rttStats.reset()
                 runOnUiThread { capture.onSessionReset() } // the host holds no input state for a new connection
@@ -369,9 +368,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
 
-            override fun onAudio(msg: Message) { audio?.onAudio(msg) } // control reader thread, never blocks
+            // T-095: audio is armed per control connection; stale readers' messages are dropped by generation.
+            override fun onConnectionGen(gen: Int) { audio?.beginSession(gen) }
 
-            override fun onSessionEnd() { audio?.stop("session_end") }
+            override fun onAudio(msg: Message, gen: Int) { audio?.onAudio(msg, gen) } // control reader thread, never blocks
+
+            override fun onSessionEnd() { audio?.endSession("session_end") }
         }, streamMode, quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
@@ -646,16 +648,34 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val b = Button(this)
         fun label() { b.text = "Ses: " + if (settings.audioEnabled()) "açık" else "kapalı" }
         b.setOnClickListener {
-            val on = !settings.audioEnabled()
-            settings.setAudioEnabled(on)
-            controller.setAudioEnabled(on)
-            if (!on) audio?.stop("setting_off") // the host also stops on AUDIO_PREFS(0); silence at once
-            label()
+            // No local stop (review L2): the host answers AUDIO_PREFS(0) with STOPPED, so a quick off-on cannot
+            // leave a stream that the tablet dropped but the host still sends.
+            setAudioSetting(!settings.audioEnabled())
         }
+        audioLabel = { label() }
         label()
         val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         lp.topMargin = (8 * resources.displayMetrics.density).toInt()
         p.addView(b, lp)
+    }
+
+    private var audioLabel: (() -> Unit)? = null
+
+    /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes the panel button. Main thread. */
+    private fun setAudioSetting(on: Boolean) {
+        settings.setAudioEnabled(on)
+        controller.setAudioEnabled(on)
+        audioLabel?.invoke()
+    }
+
+    /**
+     * Headphones went away (review L6): the stream is already muted locally; turning the setting off sends
+     * AUDIO_PREFS(0), so the host stops capturing and the Mac's own output returns instead of both sides being silent.
+     */
+    private fun onAudioBecomingNoisy() {
+        if (isDestroyed || !settings.audioEnabled()) return
+        setAudioSetting(false)
+        Toast.makeText(this, "Kulaklık çıkarıldı: ses Mac'e döndü (Ses ayarından yeniden açabilirsin)", Toast.LENGTH_LONG).show()
     }
 
     /** T-056: connect-panel switches for the local pen trail and dot, persisted in [Settings] (default on). */
@@ -871,7 +891,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.detachSurface()
         presenter?.active = false
         streamConfig = null
-        audio?.videoLatencyUs = null // no video: no A/V target
+        audio?.onVideoLatency(null) // no video: no A/V target
         statsView.text = ""
         releaseRefreshRate()
         setSurfaceFrameRate(false)
@@ -1033,7 +1053,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val vg = vsyncGaps.summary(reset = true)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
-        audio?.videoLatencyUs = AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000) // T-095 A/V target
+        audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
             val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs())) +
@@ -1138,7 +1158,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(usbHintCheck)
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
-        audio?.stop("background") // T-095: silence at once; the BYE below makes the host stop capturing
+        audio?.endSession("background") // T-095: silence at once and take no more audio; the BYE stops the host
         controller.stop() // sends BYE, closes both connections
         syncWifiLock("background") // started is false: always released here
         super.onStop()

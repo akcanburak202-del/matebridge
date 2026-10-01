@@ -59,6 +59,12 @@ interface SessionListener {
     /** A new control connection is being opened (first start and every automatic reconnect); reset per-session state. */
     fun onSessionStart() {}
 
+    /**
+     * Right after [onSessionStart], with the new control connection's generation (engine thread). T-095: audio is
+     * armed for exactly this generation; [onAudio] carries the generation of the reader that delivered it.
+     */
+    fun onConnectionGen(gen: Int) {}
+
     /** The control connection was closed (engine thread; before any later [onSessionStart]). T-095: audio stops here. */
     fun onSessionEnd() {}
 
@@ -69,10 +75,11 @@ interface SessionListener {
     fun onClipboard(msg: Clipboard, gen: Int) {}
 
     /**
-     * AUDIO_CONFIG or AUDIO_FRAME of the current control connection, straight from its reader thread (it bypasses the
-     * engine queue so audio never waits behind a tick). Must not block. Never log the PCM data.
+     * AUDIO_CONFIG or AUDIO_FRAME from the reader thread of control connection [gen] (it bypasses the engine queue so
+     * audio never waits behind a tick). A reader can outlive its connection: the receiver must drop messages whose
+     * [gen] is not the one it was armed with ([onConnectionGen]). Must not block. Never log the PCM data.
      */
-    fun onAudio(msg: Message) {}
+    fun onAudio(msg: Message, gen: Int) {}
 }
 
 /**
@@ -271,6 +278,7 @@ class SessionController(
                 MbLog.gen = a.gen
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 listener.onSessionStart()
+                listener.onConnectionGen(a.gen)
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
             }
@@ -450,9 +458,9 @@ class SessionController(
 
         /** T-095: audio goes from this reader straight to the listener, only while this is the current connection. */
         private fun deliverAudio(msg: Message) {
-            if (control !== this) return
+            if (control !== this) return // cheap pre-filter; the receiver re-checks [gen] under its own lock
             try {
-                listener.onAudio(msg)
+                listener.onAudio(msg, gen)
             } catch (e: RuntimeException) {
                 if (!audioErrorLogged) {
                     audioErrorLogged = true

@@ -8,6 +8,10 @@ package dev.matebridge.client.audio
  * States: PRIMING writes silence and consumes nothing until the level reaches the refill threshold, then fades in
  * (5 ms). PLAYING resamples. When a burst would leave less than the fade-out reserve (3 ms), FADING_OUT plays the
  * reserve with a fade to silence, then PRIMING again (one underrun).
+ *
+ * A/V while priming: [primingHoldUs] > 0 means "starting now would put the audio that much ahead of its A/V target";
+ * playback then waits (up to the buffer's max refill level) and the level it starts at becomes the A/V floor, so the
+ * first A/V target needs no rebuffer later.
  */
 class PlayoutCore(
     val buffer: AudioJitterBuffer = AudioJitterBuffer(),
@@ -27,6 +31,10 @@ class PlayoutCore(
     private val fadeInFrames = FADE_IN_MS * sampleRate / 1000
     private var inBuf = ShortArray(0)
     private var underrunPending = false
+    private var heldThisPriming = false
+
+    /** Set by the writer before each burst while priming (see the class comment); 0 = no hold. */
+    var primingHoldUs = 0L
 
     /** Output goes silent (with a fade) while true; timing and consumption continue. */
     @Volatile var muted = false
@@ -38,10 +46,17 @@ class PlayoutCore(
     /** Renders [frames] output frames into [out] (from frame 0). */
     fun render(out: ShortArray, frames: Int) {
         if (state == State.PRIMING) {
-            if (buffer.level >= drift.refillThresholdFrames()) {
+            val level = buffer.level
+            val filled = level >= drift.refillThresholdFrames(frames, fadeOutFrames)
+            val hold = primingHoldUs > 0 && level < drift.maxRefillFrames
+            if (filled && hold) heldThisPriming = true
+            if (filled && !hold) {
                 state = State.PLAYING
                 ramp.fadeIn(fadeInFrames)
                 drift.onPlaybackStart()
+                // Held for A/V: the floor about to follow (the level minus half the arrival sawtooth) is the A/V floor.
+                if (heldThisPriming) drift.seedAvFloor(level - drift.lastSpanFrames / 2)
+                heldThisPriming = false
             } else {
                 out.fill(0, 0, frames * channels)
                 return
