@@ -13,7 +13,7 @@ import dev.matebridge.client.input.LocalAction
  * the panel can be touched. Keyboard events go to [keyWhileOpen] instead of the key tracker, so no KEY is produced.
  */
 class SettingsPanelState(
-    /** `ev=settings_panel` lines (open|close, via): no key or text data, ever. */
+    /** `ev=settings_panel action=open|close|ignored via=…` lines (docs/LOGGING.md key=value): no key or text data, ever. */
     private val onEvent: (String, String) -> Unit = { _, _ -> },
 ) {
     /** How the panel was opened or closed (the `via=` log field). */
@@ -41,11 +41,11 @@ class SettingsPanelState(
     fun open(via: Via, streaming: Boolean): Boolean {
         if (isOpen) return false
         if (!streaming) {
-            onEvent("settings_panel", "ignored via=${via.logName} reason=not_streaming")
+            onEvent("settings_panel", "action=ignored via=${via.logName} reason=not_streaming")
             return false
         }
         isOpen = true
-        onEvent("settings_panel", "open via=${via.logName}")
+        onEvent("settings_panel", "action=open via=${via.logName}")
         return true
     }
 
@@ -53,7 +53,7 @@ class SettingsPanelState(
     fun close(via: Via): Boolean {
         if (!isOpen) return false
         isOpen = false
-        onEvent("settings_panel", "close via=${via.logName}")
+        onEvent("settings_panel", "action=close via=${via.logName}")
         return true
     }
 

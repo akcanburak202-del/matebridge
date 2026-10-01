@@ -195,6 +195,17 @@ class SessionController(
         migrateMailbox.post(SessionMachine.Event.Migrate(endpoint))
     }
 
+    /**
+     * Non-blocking. T-105: cancels a migration: a request still waiting in the mailbox is replaced (it gets no result),
+     * a running candidate is closed (failed result, reason `cancelled`). A candidate already promoted is not undone: the
+     * caller checks [SessionListener.onMigration] against its current choice.
+     */
+    fun cancelMigration() {
+        if (terminated.get()) return
+        ensureEngine()
+        migrateMailbox.post(SessionMachine.Event.CancelMigration)
+    }
+
     /** Non-blocking. */
     fun stop() {
         intent.post(SessionMachine.Event.Stop)
@@ -333,7 +344,7 @@ class SessionController(
                 is Bye -> MbLog.i("bye_recv", "reason=${m.reason}")
                 else -> Unit
             }
-            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille}")
+            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
             is SessionMachine.Event.Tick -> Unit
@@ -341,6 +352,7 @@ class SessionController(
                 "migrate_request",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",
             )
+            SessionMachine.Event.CancelMigration -> MbLog.i("migrate_cancel_request")
         }
     }
 

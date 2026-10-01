@@ -68,6 +68,11 @@ class SessionMachine(
         data class Tick(val videoFrames: Long) : Event
         /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
         data class Migrate(val endpoint: Endpoint) : Event
+        /**
+         * T-105: the user picked a connection mode the running migration no longer fits: close the candidate (failed
+         * [Action.MigrationResult], reason `cancelled`). No-op without a candidate, also after it was promoted.
+         */
+        data object CancelMigration : Event
     }
 
     sealed interface Action {
@@ -165,6 +170,7 @@ class SessionMachine(
                 }
             }
             is Event.Migrate -> onMigrate(event.endpoint, nowUs, out)
+            Event.CancelMigration -> abortMigration(out, REASON_CANCELLED) // no candidate (none, or promoted): nothing
             is Event.ControlOpened -> if (isCandidate(event.gen)) {
                 out += Action.SendCandidate(hello)
             } else if (event.gen == controlGen && phase == Phase.CONNECTING) {
@@ -492,5 +498,6 @@ class SessionMachine(
         const val REASON_NOT_CONNECTED = "not_connected"
         const val REASON_SAME_ENDPOINT = "same_endpoint"
         const val REASON_SESSION_CLOSED = "session_closed"
+        const val REASON_CANCELLED = "cancelled"
     }
 }

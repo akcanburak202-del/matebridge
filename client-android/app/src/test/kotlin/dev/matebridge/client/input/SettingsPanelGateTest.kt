@@ -105,7 +105,7 @@ class SettingsPanelGateTest {
         assertTrue(before.filterIsInstance<dev.matebridge.client.protocol.Pen>().flatMap { it.samples }.last().flags and PenSample.CONTACT == 0)
         assertEquals(0, before.filterIsInstance<PointerRel>().last().buttons)
         assertFalse(sink.host.penContact)
-        assertEquals(listOf("settings_panel open via=shortcut"), log)
+        assertEquals(listOf("settings_panel action=open via=shortcut"), log)
     }
 
     @Test fun nothingReachesTheHostWhileOpen() {
@@ -154,7 +154,7 @@ class SettingsPanelGateTest {
         key(30, 29, false)
         assertEquals(listOf(Key.DOWN, Key.UP), keys().drop(2).map { it.action })
         assertTrue(hostKeysHeld().isEmpty())
-        assertEquals(listOf("settings_panel open via=shortcut", "settings_panel close via=shortcut"), log)
+        assertEquals(listOf("settings_panel action=open via=shortcut", "settings_panel action=close via=shortcut"), log)
     }
 
     @Test fun escClosesAndItsUpIsNotSent() {
@@ -164,7 +164,7 @@ class SettingsPanelGateTest {
         key(1, 111, true, repeat = 1)
         key(1, 111, false)
         assertTrue(keys().isEmpty())
-        assertEquals("settings_panel close via=esc", log.last())
+        assertEquals("settings_panel action=close via=esc", log.last())
     }
 
     @Test fun escArrivingAsBackAlsoClosesAndBackNeverPasses() {
@@ -212,7 +212,7 @@ class SettingsPanelGateTest {
     @Test fun openIsIgnoredWithoutStreamAndWhenAlreadyOpen() {
         assertFalse(panel.open(Via.HOST, streaming = false))
         assertFalse(panel.isOpen)
-        assertEquals("settings_panel ignored via=host reason=not_streaming", log.single())
+        assertEquals("settings_panel action=ignored via=host reason=not_streaming", log.single())
         assertTrue(panel.open(Via.HOST, streaming = true))
         sync()
         val sent = sink.sent.size
@@ -221,7 +221,7 @@ class SettingsPanelGateTest {
         assertEquals(sent, sink.sent.size)
         assertTrue(panel.close(Via.BACKGROUND))
         assertFalse(panel.close(Via.STREAM_END))
-        assertEquals("settings_panel close via=background", log.last())
+        assertEquals("settings_panel action=close via=background", log.last())
     }
 
     @Test fun toggleOpensAndCloses() {

@@ -22,11 +22,29 @@ enum class TransportMode(val id: String) {
  * transport. Without an accepted session the transport is always re-applied (the connect panel's behaviour).
  */
 object TransportSwitch {
-    fun keepsSession(choice: TransportMode, accepted: Boolean, current: Transport?): Boolean = accepted && when (choice) {
+    fun keepsSession(choice: TransportMode, accepted: Boolean, current: Transport?): Boolean = accepted && fits(choice, current)
+
+    /** Whether a session on [transport] fits the mode: AUTO takes either, USB/Wi-Fi only their own. */
+    fun fits(choice: TransportMode, transport: Transport?): Boolean = when (choice) {
         TransportMode.AUTO -> true
-        TransportMode.USB -> current == Transport.USB
-        TransportMode.WIFI -> current == Transport.WIFI
+        TransportMode.USB -> transport == Transport.USB
+        TransportMode.WIFI -> transport == Transport.WIFI
     }
+
+    /**
+     * A transport choice that a running AUTO migration (Wi-Fi -> USB) may no longer fit cancels it; AUTO itself keeps it.
+     */
+    fun cancelsMigration(choice: TransportMode): Boolean = choice != TransportMode.AUTO
+
+    /** What to do with a migration that succeeded onto [to] while the selected mode is [choice]. */
+    enum class MigrationVerdict { ACCEPT, REJECT_RECONNECT }
+
+    /**
+     * A successful migration that no longer fits the selected mode (the user picked "Yalnız Wi-Fi" while the candidate
+     * was being promoted) is rejected: the session is on the wrong transport and must reconnect under the chosen mode.
+     */
+    fun onMigrated(choice: TransportMode, to: Transport): MigrationVerdict =
+        if (fits(choice, to)) MigrationVerdict.ACCEPT else MigrationVerdict.REJECT_RECONNECT
 }
 
 /** Result of the short TCP reachability probe of the USB control port (`adb reverse`, PROTOCOL.md section 3.1). */

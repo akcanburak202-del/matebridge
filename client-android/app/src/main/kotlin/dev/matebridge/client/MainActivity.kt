@@ -119,6 +119,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
     private val settingsPanel = SettingsPanelState { ev, fields -> MbLog.i(ev, fields) }
     private lateinit var sidePanel: SettingsSidePanel
+    /** SETTINGS_OPEN from the session thread: coalesced, so a flood of them queues one UI runnable, not one each. */
+    private val settingsOpenPost = dev.matebridge.client.settings.CoalescedPost({ ui.post(it) }) {
+        openSettingsPanel(SettingsPanelState.Via.HOST)
+    }
     private var connectSettings: SettingsViews? = null
     private var sideSettings: SettingsViews? = null
     /** "Bağlantıyı kes" was used: no automatic (re)connect until "Bağlan", a transport choice or the next onStart. */
@@ -433,7 +437,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onSessionEnd() { audio?.endSession("session_end") }
 
-            override fun onSettingsOpen() { runOnUiThread { openSettingsPanel(SettingsPanelState.Via.HOST) } } // T-105
+            override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
         }, streamMode.toPrefs(settings.bitrateKbps()), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
@@ -1294,11 +1298,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settings.setTransportMode(m)
         refreshSettings()
         MbLog.i("transport_select", "mode=${m.id} keep=${if (keep) 1 else 0}")
+        // A running AUTO migration (Wi-Fi -> USB) may not fit the new choice: drop its candidate. One that is promoted
+        // anyway is checked against the mode in onMigrationResult().
+        if (TransportSwitch.cancelsMigration(m)) controller.cancelMigration()
         if (keep) {
             pickGen++ // a probe started under the old mode reports into nothing (it would leave `picking` set)
             picking = false
+            // That probe or migration reports no result now; do not leave the policy waiting for one (STUCK_MS).
+            if (autoPolicy.inFlight) autoPolicy.onTryResult(AutoUsbPolicy.Outcome.NEUTRAL, SystemClock.elapsedRealtime())
             return
         }
+        reconnectForMode()
+    }
+
+    /** Stops the session and applies the selected transport again (T-096 logic). */
+    private fun reconnectForMode() {
         userDisconnected = false
         currentEndpoint = null
         controller.stop()
@@ -1393,7 +1407,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onMigrationResult(ep: Endpoint, ok: Boolean, reason: String) {
         autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(ok, reason), SystemClock.elapsedRealtime())
-        if (!ok || !started || isDestroyed || migrateEpoch != transportEpoch) return
+        if (!ok || !started || isDestroyed) return
+        // T-105: the user may have picked a mode this transport does not fit while the candidate was being promoted
+        // (the cancel came too late): the session is on the wrong transport, so reconnect under the chosen mode.
+        if (TransportSwitch.onMigrated(mode, ConnectMode.transportOf(ep)) == TransportSwitch.MigrationVerdict.REJECT_RECONNECT) {
+            MbLog.w("transport_migrate_rejected", "to=${ConnectMode.transportOf(ep).logName} mode=${mode.id}")
+            reconnectForMode()
+            return
+        }
+        if (migrateEpoch != transportEpoch) return
         currentEndpoint = ep
         if (ConnectMode.transportOf(ep) == Transport.USB) {
             // Now on USB: no Wi-Fi discovery; a later drop falls back to Wi-Fi from render().
