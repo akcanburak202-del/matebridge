@@ -1,7 +1,7 @@
 ---
 id: T-112
 title: Tablet testi — InputHandoffTest zaman aşımı testi yük altında ara sıra kırılıyor
-status: in_progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -22,10 +22,10 @@ files:
 
 ## Kabul kriterleri
 
-- [ ] Kök neden bulunur. `awaitNext` sahte uyanmada erken dönüyorsa kalan süreye kadar beklemeye devam eder (üretim kodu düzeltmesi). Değilse test sağlamlaştırılır, nedeni Handoff'ta yazılır.
-- [ ] Sahte uyanmayı zorlayan bir test (örn. bekleyen iş parçacığına `LockSupport.unpark`) erken dönüşü yakalar.
-- [ ] Testin kendisi yükte kırılmaz: zaman sınırları alt sınır olarak kalır, üst sınır konmaz.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] Kök neden bulunur. `awaitNext` sahte uyanmada erken dönüyorsa kalan süreye kadar beklemeye devam eder (üretim kodu düzeltmesi). Değilse test sağlamlaştırılır, nedeni Handoff'ta yazılır.
+- [x] Sahte uyanmayı zorlayan bir test (örn. bekleyen iş parçacığına `LockSupport.unpark`) erken dönüşü yakalar.
+- [x] Testin kendisi yükte kırılmaz: zaman sınırları alt sınır olarak kalır, üst sınır konmaz.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -35,3 +35,12 @@ files:
 4. `./scripts/check.sh`, Handoff.
 
 ## Handoff
+
+- **Commit:** `0cae8d3` (fix + tests; plan `e2b1257`), branch `task/T-112-client-flaky-frame-queue-test`.
+- **Kök neden (üretim hatası):** `awaitNext` tek bir `LockSupport.parkNanos(timeout)` çağrısından sonra kalan süreye bakmadan `take()` sonucunu döndürüyordu. `parkNanos` iş parçacığında kalmış eski bir izinle hemen, sahte uyanmada da erken döner. Testte eski izin şöyle oluşuyor: JUnit sırası `offerWakesAParkedConsumerLongBeforeItsTimeout` → `queueRulesAreUnchangedThroughAwaitNext` → `awaitNextReturnsAQueuedFrameAtOnceAndNullOnTimeout`, hepsi aynı test iş parçacığında. İlk test ana iş parçacığında `CountDownLatch.await()` (AQS) çağırıyor. Yük altında `countDown` ile `await` yarışırsa, ana iş parçacığı park etmeden geçtikten sonra AQS onu `unpark` edebilir ve iş parçacığında bir izin kalır. Aradaki test park etmediği için bu izin 20 ms'lik beklemeyi 0 ms'ye indiriyordu. Üretimde de aynı yol var: `offer`, `waiter` değerini kilit dışında okuyup zaten kare almış tüketiciyi `unpark` edebiliyor. Sonraki `awaitNext` hemen `null` döner. Decoder döngüsü bunu `continue` ile tolere ettiği için zarar yoktu, sadece boş bir tur dönülüyordu.
+- **Düzeltme:** mutlak son tarih eklendi. Kare yoksa kalan süreyle yeniden park ediliyor. Kesilmiş iş parçacığında `parkNanos` bloklamadığı için dönüp durmak yerine `null` dönülüyor, bayrak korunuyor. Decoder iş parçacığı `interrupt` ile durdurulmuyor (`att.active`), davranışı değişmiyor.
+- **Testler (`InputHandoffTest`):** `aStalePermitDoesNotCutTheWaitShort` (önceden `unpark(self)`), `spuriousWakeUpsWhileParkedDoNotCutTheWaitShort` (bekleyen tüketiciye 2 ms'de bir `unpark`, ≥100 ms), `anInterruptedConsumerGetsNullAndKeepsTheFlag`. İlk ikisi eski kodda deterministik olarak kırıldı (`returned after 0 ms`). Eski testin alt sınırı 15 ms'den 20 ms'ye (tam timeout) çıkarıldı. Bu artık matematiksel olarak garanti. Hiçbir testte üst sınır yok.
+- **Doğrulama:** `./scripts/check.sh` ALL OK. `InputHandoffTest` tüm çekirdeklerde `yes` yükü altında 5 kez `--rerun-tasks` ile çalıştırıldı, 0 hata.
+- **Dokunulan dosyalar:** `video/FrameQueue.kt`, `test/.../video/InputHandoffTest.kt`, bu kart.
+- **Tablette kontrol:** davranış değişikliği yalnızca boşta bekleme yolunda. Normal bir yayında görüntü akıcı olmalı, regresyon olmamalı. İsteğe bağlı: boşta (statik ekran) `mb-decoder-in` CPU kullanımı öncekinden yüksek olmamalı.
+- **Test edilmedi:** cihazda çalıştırılmadı.
