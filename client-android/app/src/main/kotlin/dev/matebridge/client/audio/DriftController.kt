@@ -12,8 +12,10 @@ import kotlin.math.abs
  *  - floor below target - 60 ms: [Decision.Rebuffer] (fade out, refill, fade in);
  *  - otherwise a PI step: ratio = 1 + (Kp * err + I) ppm, at most +-0.1 %, +-0.5 % while |err| > 20 ms.
  *
- * Target = max(safety, A/V floor). Safety starts at 5 ms and grows by 5 ms per underrun (40 ms at most). It shrinks
- * slowly, by 1 ms per 60 windows without an underrun: the value that underran is not reached again for 5 minutes. After an underrun, playback restarts once the level reaches
+ * Target = max(safety, A/V floor). Safety starts at 5 ms (or what [resetSafety] sets: T-108, 20 ms or the remembered
+ * value on AAudio, see [SafetyMemory]) and grows by 5 ms per underrun (40 ms at most). It shrinks slowly, by 1 ms per
+ * 60 windows without an underrun, down to its floor: the value that underran is not reached again for 5 minutes.
+ * After an underrun, playback restarts once the level reaches
  * max(target + the last window's span, target + burst + fade-out), so the next floor lands near the target.
  *
  * The A/V floor ([onAvOffset]) falls at once but rises by at most 10 ms per window, so the PI slews instead of
@@ -29,7 +31,8 @@ class DriftController(private val sampleRate: Int = 48_000) {
     private fun ms(v: Int) = v * sampleRate / 1000
 
     private val windowFrames = sampleRate
-    private val safetyMin = ms(SAFETY_MIN_MS)
+    /** Lowest value the slow decay reaches ([resetSafety]). */
+    private var safetyMin = ms(SAFETY_MIN_MS)
     private val safetyMax = ms(SAFETY_MAX_MS)
     private val minSpan = ms(PACKET_MS)
 
@@ -68,6 +71,16 @@ class DriftController(private val sampleRate: Int = 48_000) {
 
     /** Highest refill level: playback starts at this level even if a hold (A/V priming) is still asking to wait. */
     val maxRefillFrames: Int get() = ms(MAX_REFILL_MS)
+
+    /**
+     * T-108: the output changed (or the first one opened): safety starts at [initialMs] and decays no lower than
+     * [floorMs] (both clamped to [SAFETY_MIN_MS]..[SAFETY_MAX_MS]; the start is at least the floor).
+     */
+    fun resetSafety(initialMs: Int, floorMs: Int = SAFETY_MIN_MS) {
+        safetyMin = ms(floorMs.coerceIn(SAFETY_MIN_MS, SAFETY_MAX_MS))
+        safetyFrames = maxOf(ms(initialMs.coerceIn(SAFETY_MIN_MS, SAFETY_MAX_MS)), safetyMin)
+        cleanWindows = 0
+    }
 
     /** Playback (re)started: the next window starts now. */
     fun onPlaybackStart() = startWindow()
