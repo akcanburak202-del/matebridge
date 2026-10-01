@@ -125,7 +125,7 @@ public enum EncodeBench {
         if c.dataRateLimits {
             set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits, [c.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
         }
-        set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 10 as CFNumber)
+        set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, HEVCEncoder.keyframeIntervalSeconds as CFNumber)
         if c.prioritizeSpeed {
             set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
                 kCFBooleanTrue)
