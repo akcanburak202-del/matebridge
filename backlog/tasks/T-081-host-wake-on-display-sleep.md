@@ -1,7 +1,7 @@
 ---
 id: T-081
 title: Mac — tablet bağlıyken ekran uykusunda görüntü koparsa ekranı uyandır (IOPMAssertionDeclareUserActivity)
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-040]

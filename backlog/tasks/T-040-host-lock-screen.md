@@ -1,7 +1,7 @@
 ---
 id: T-040
 title: Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma)
-status: todo
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-039]
@@ -51,3 +51,7 @@ _(Ölçümden sonra doldurulur.)_
 ## Ölçüm sonucu (2026-10-01, orkestratör + kullanıcı)
 
 NOTES 2026-10-01 ~14:10. Ekran uykusu → sanal ekran oluşturulamıyor (nil) ve tablet uyandıramıyor; kullanıcı etkinliği bildirimi ekranı uyandırıp akışı geri getiriyor; kilit ekranında Secure Event Input yüzünden sentetik klavye çalışmıyor. Kullanıcı kararı: sanal HID/root bileşen yok. Açık: (a) uyandırma düzeltmesi (risksiz), (b) Apple Watch / yerel Ekran Paylaşımı (VNC) seçenekleri kullanıcıya soruldu.
+
+## Kapanış (2026-10-01)
+
+Kabul kriterlerinden: uyandırma T-081 ile tamam (tablet oturumu varken); kilit ekranında görüntü var; **kilit ekranında yazma desteklenmiyor** (Secure Event Input; sanal HID kullanıcı kararıyla reddedildi) → kullanıcı kilidi Parsec ile açar. Ekranı uyanık tutma varsayılanı yok; kilitliyken yeni eşleşme onaylanamaz (onay penceresi kilidin arkasında). Açık seçenek (yapılmadı): macOS Ekran Paylaşımı yalnız yerel + host yerel VNC istemcisi.
