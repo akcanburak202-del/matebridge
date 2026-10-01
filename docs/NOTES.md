@@ -400,3 +400,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - **Düzeltme (~11:30 girdisi):** tablet `MB/render` satırındaki `net_p50/p95/p99_us` **gecikme değil, ağdan varış aralığı** (`networkGaps`); 60 fps'te p50 16,6 ms doğal. "Yakalama→varış 16,6 ms" ve "USB'de ~10 ms" yorumları **yanlış**. p99 40 ms = ara sıra 40 ms'lik varış boşluğu (gecikmeli kare). Gerçek gecikme alanı `latency_us` (yakalama damgası → çözücü çıkışı).
 - Host (47620b2, 120 fps, `tick`): `gate_wait`/`slot_wait` ≈ 0 (T-072 kapı toleransı yarım aralık), `enc` p50 6,9 ms, `cap_to_sent` p50 7,2 / p99 ~8 ms, sıçrama yok. **`pts_vs_deliv` = +6,6 ms**: SCK'nın PTS/`displayTime` damgası, karenin geri çağrısından 6,6 ms *ileride* (gelecekteki gösterim anı). Teldeki `capture_time_us` = PTS → tabletin `latency_us` değeri gerçek yakalama→çözme süresini ~6,6 ms **eksik** gösteriyor; pacing'i etkilemez (sabit fark), yalnız raporu.
 - Kaba bütçe (60 Hz, gerçek): host ~7 ms + USB/adb ~4–6 ms + çözme ~10 ms + sunum bekleme (120 Hz'te ~12,6 ms planlı; 60 Hz'te ~42 ms kilit).
+
+## 2026-10-01 ~12:50 — Varış boşluklarının kaynağı (T-073 izi + host CSV, USB, 60 fps, 90 sn)
+
+- Host `write_done − capture` p50 7,2 / p99 8,3 ms (bir kez 27 ms). Tablette kapasitenin üzerinde varış boşluğu 20 kez:
+  - **Periyodik anahtar kare** (her 10,0 s, ~432 KB): alma +15 ms, şifre çözme **~11 ms** (~40 MB/s; 3 KB karede bile 0,8 ms) → T-075 (aralık), T-076 (şifre çözme hızı).
+  - **USB/adb paketlemesi:** host 16,6 ms arayla gönderiyor, tablette bazı dönemlerde `recv` aralığı **40, 0, 40, 0…** (iki kare birlikte). İki uçta `TCP_NODELAY` açık → adbd yerel soketi Nagle + tablet gecikmeli ACK (40 ms) şüphesi → T-074 (`TCP_QUICKACK`).
