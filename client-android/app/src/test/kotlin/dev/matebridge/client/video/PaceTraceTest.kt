@@ -11,7 +11,8 @@ class PaceTraceTest {
         val lines = csv(PaceTrace(4))
         assertEquals(1, lines.size)
         assertEquals(PaceTrace.CSV_COLS, lines[0].split(",").size)
-        assertTrue(lines[0].endsWith(",own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action"))
+        assertTrue(lines[0].contains(",own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action,"))
+        assertTrue(lines[0].endsWith(",rx_action,open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre"))
         assertTrue(lines[0].startsWith("seq,capture_us,ready_ns,"))
         assertTrue(lines[0].contains(",path,late_drop,collided,released_slot_ns,release_ns,render_ns,action"))
     }
@@ -90,7 +91,7 @@ class PaceTraceTest {
         assertEquals(2, lines.size)
         val row = lines[1].split(",")
         assertEquals(PaceTrace.CSV_COLS, row.size)
-        assertEquals(listOf("1000", "1100", "1200", "1300", "1234", "queued"), row.drop(24))
+        assertEquals(listOf("1000", "1100", "1200", "1300", "1234", "queued"), row.drop(24).take(6))
         assertEquals("pending", row[22])
     }
 
@@ -104,7 +105,7 @@ class PaceTraceTest {
         assertEquals(PaceTrace.CSV_COLS, row.size)
         assertEquals("3", row[0]); assertEquals("300", row[1])
         assertEquals("queue_drop", row[22])
-        assertEquals(listOf("10", "20", "30", "0", "50", "queue_drop"), row.drop(24))
+        assertEquals(listOf("10", "20", "30", "0", "50", "queue_drop"), row.drop(24).take(6))
     }
 
     @Test fun frameQueueStampsItsFates() {
@@ -122,5 +123,44 @@ class PaceTraceTest {
         assertEquals("pending_drop", acts["2"])
         assertEquals("pending_drop", acts["3"])
         assertEquals("queue_drop", acts["4"])
+    }
+
+    @Test fun inputStepsAndOpenStampsLandInTheT077Columns() {
+        val t = PaceTrace(8)
+        t.onRecv(9, 900, 3000, 1000, 1500, 1100, 1200, 1400)
+        t.onRxAction(9, 1600, PaceTrace.RX_QUEUED)
+        t.onInput(9, 2000, takenNs = 1700, inbufNs = 1750, copiedNs = 1800, prefetched = true)
+        t.record(9, 900, 9000, null, 0, false, false, 0)
+        val row = csv(t)[1].split(",")
+        assertEquals(PaceTrace.CSV_COLS, row.size)
+        assertEquals(listOf("1000", "1500", "1600", "2000", "3000", "queued"), row.drop(24).take(6))
+        assertEquals(listOf("1100", "1200", "1400", "1700", "1750", "1800", "1"), row.drop(30))
+    }
+
+    @Test fun reusedReceiveSlotStartsWithClearedInputSteps() {
+        val t = PaceTrace(2)
+        t.onRecv(1, 10, 1, 1, 2)
+        t.onInput(1, 5, 3, 4, 4, true)
+        t.onRecv(3, 30, 1, 7, 8) // same slot (3 % 2 == 1)
+        t.onRxAction(3, 9, PaceTrace.RX_GATE_DROP)
+        val row = csv(t).drop(1).single { it.startsWith("3,") }.split(",")
+        assertEquals(PaceTrace.CSV_COLS, row.size)
+        assertEquals(listOf("0", "0", "0", "0", "0", "0", "0"), row.drop(30))
+    }
+
+    @Test fun openStampsComeFromTheRecordOpenerWhenEnabled() {
+        val key = ByteArray(32) { 3 }
+        val rec = dev.matebridge.client.security.RecordSealer(key).seal(0x41, ByteArray(50))
+        val t = PaceTrace(4)
+        try {
+            dev.matebridge.client.security.Records.stampOpens = true
+            dev.matebridge.client.security.RecordOpener(key).open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+            t.onRecv(2, 20, 50, 1, System.nanoTime())
+        } finally {
+            dev.matebridge.client.security.Records.stampOpens = false
+        }
+        val row = csv(t)[1].split(",")
+        val (start, init, fin) = row.drop(30).take(3).map { it.toLong() }
+        assertTrue(start > 0 && init >= start && fin >= init)
     }
 }

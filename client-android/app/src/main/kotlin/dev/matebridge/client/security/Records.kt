@@ -28,11 +28,13 @@ object Records {
     /** Provider asked for first; Conscrypt (BoringSSL, ARMv8 crypto extensions) on Android. Falls back to the default. */
     const val PREFERRED_PROVIDER = "AndroidOpenSSL"
 
+    const val TRANSFORMATION = "AES/GCM/NoPadding"
+
     @Volatile private var providerLogged = false
 
     /** AES-GCM cipher from [provider] (null = platform default). Throws if the provider is unavailable. */
     fun newCipher(provider: String?): Cipher =
-        if (provider == null) Cipher.getInstance("AES/GCM/NoPadding") else Cipher.getInstance("AES/GCM/NoPadding", provider)
+        if (provider == null) Cipher.getInstance(TRANSFORMATION) else Cipher.getInstance(TRANSFORMATION, provider)
 
     /** Fast path: the preferred provider when present, otherwise the default. The chosen provider is logged once per process. */
     fun newCipher(): Cipher {
@@ -45,8 +47,15 @@ object Records {
     }
 
     /**
-     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, opens 64 KB and 432 KB
-     * records repeatedly and logs MB/s. Random key and data; nothing sensitive. Returns the log field strings.
+     * T-077 diagnostics: when true every [RecordOpener] open stamps [OpenStamps.current] of the calling thread (the
+     * video connection thread reads them back right after `next()` for the pace trace). Off = one volatile read.
+     */
+    @Volatile var stampOpens = false
+
+    /**
+     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, opens 3 KB, 64 KB and
+     * 432 KB records repeatedly. Per size: best total (`<n>k_us`), MB/s, and the p50 of the `init` (+ nonce/spec/AAD) and
+     * `doFinal` parts (T-077). Random key and data; nothing sensitive. Returns the log field strings.
      */
     fun bench(): List<String> {
         val providers = ArrayList<String?>()
@@ -59,28 +68,38 @@ object Records {
             try {
                 val cipher = newCipher(name)
                 fields.append("provider=").append(name ?: "default(${cipher.provider.name})")
-                for (size in intArrayOf(64 * 1024, 432 * 1024)) {
+                for (size in intArrayOf(3 * 1024, 64 * 1024, 432 * 1024)) {
                     val aad = header(size + MIN_LENGTH)
                     val enc = newCipher(name)
                     enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
                     enc.updateAAD(aad)
                     val body = enc.doFinal(ByteArray(size + 1))
                     var dst = ByteArray(0)
+                    val iters = if (size <= 4096) 202 else 12
+                    val initNs = LongArray(iters - 2)
+                    val finalNs = LongArray(iters - 2)
                     var best = Long.MAX_VALUE
-                    val iters = 12
                     for (i in 0 until iters) {
                         val t0 = System.nanoTime()
                         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
                         cipher.updateAAD(aad)
+                        val t1 = System.nanoTime()
                         dst = ensureOutput(dst, cipher, body.size)
                         cipher.doFinal(body, 0, body.size, dst, 0)
-                        val dt = System.nanoTime() - t0
-                        if (i >= 2 && dt < best) best = dt // first iterations warm up
+                        val t2 = System.nanoTime()
+                        if (i < 2) continue // warm-up
+                        initNs[i - 2] = t1 - t0; finalNs[i - 2] = t2 - t1
+                        if (t2 - t0 < best) best = t2 - t0
                     }
-                    fields.append(" ${size / 1024}k_us=").append(best / 1000)
-                        .append(" ${size / 1024}k_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
+                    initNs.sort(); finalNs.sort()
+                    val k = "${size / 1024}k"
+                    fields.append(" ${k}_us=").append(best / 1000)
+                        .append(" ${k}_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
+                        .append(" ${k}_init_p50_us=").append(initNs[initNs.size / 2] / 1000.0)
+                        .append(" ${k}_final_p50_us=").append(finalNs[finalNs.size / 2] / 1000.0)
                 }
             } catch (e: Throwable) {
+                fields.setLength(0)
                 fields.append("provider=").append(name).append(" err=").append(e.javaClass.simpleName)
             }
             out += fields.toString()
@@ -158,18 +177,54 @@ class RecordOpener(key: ByteArray, startCounter: Long = 0) {
      */
     @Synchronized
     fun openAt(hdr: ByteArray, hOff: Int, src: ByteArray, bOff: Int, bLen: Int): ByteArray {
+        val n = openPlain(hdr, hOff, src, bOff, bLen) // first: it may replace the scratch buffer
+        return scratch.copyOf(n)
+    }
+
+    /**
+     * Opens in place like [openAt] and leaves `type || payload` in [plain] (valid until the next open on this opener);
+     * returns its length. Callers copy out what they keep.
+     */
+    @Synchronized
+    internal fun openPlain(hdr: ByteArray, hOff: Int, src: ByteArray, bOff: Int, bLen: Int): Int {
         if (bLen < Records.MIN_LENGTH) throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record too short")
         if (counter < 0) throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record counter exhausted")
+        val stamps = if (Records.stampOpens) OpenStamps.current() else null
+        stamps?.startNs = System.nanoTime()
         try {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
             cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
+            stamps?.initNs = System.nanoTime()
             scratch = Records.ensureOutput(scratch, cipher, bLen)
             val n = cipher.doFinal(src, bOff, bLen, scratch, 0)
+            stamps?.finalNs = System.nanoTime()
             counter++
-            return scratch.copyOf(n)
+            return n
         } catch (e: GeneralSecurityException) {
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
         }
+    }
+
+    /** Plaintext of the last [openPlain]. */
+    internal val plain: ByteArray get() = scratch
+}
+
+/**
+ * T-077 diagnostics: when [Records.stampOpens] is on, [RecordOpener] writes the System.nanoTime stamps of the last record
+ * it opened on this thread: start, after `init` + AAD, after `doFinal`. Thread-local, so the control connection never
+ * overwrites the video thread's values.
+ */
+class OpenStamps {
+    var startNs = 0L
+    var initNs = 0L
+    var finalNs = 0L
+
+    companion object {
+        private val local = object : ThreadLocal<OpenStamps>() {
+            override fun initialValue() = OpenStamps()
+        }
+
+        fun current(): OpenStamps = local.get()!!
     }
 }
 
@@ -232,9 +287,10 @@ class RecordDecoder(maxPayload: Int, private val opener: RecordOpener) {
                 if (end - start < total) return null
                 val at = start
                 start += total
-                val plain = opener.openAt(buf, at, buf, at + Records.HEADER_BYTES, len.toInt())
+                val n = opener.openPlain(buf, at, buf, at + Records.HEADER_BYTES, len.toInt())
+                val plain = opener.plain
                 val type = plain[0].toInt() and 0xFF
-                val msg = Codec.decodePayload(type, plain.copyOfRange(1, plain.size))
+                val msg = Codec.decodePayload(type, plain.copyOfRange(1, n))
                 if (msg != null) return msg
                 skippedFrames++
             }

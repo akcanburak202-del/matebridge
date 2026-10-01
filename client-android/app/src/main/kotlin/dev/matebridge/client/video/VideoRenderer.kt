@@ -56,6 +56,8 @@ class VideoRenderer(
         /** Margin added to the presentation deadline when deciding how long an output may be held back (T-057). */
         const val DISPATCH_MARGIN_NS = 1_000_000L
         const val TRACE_DUMP_EVERY = 10
+        /** Park of the input thread per wait for a frame; an offer wakes it at once, so this bounds shutdown latency only. */
+        private const val INPUT_WAIT_NS = 4_000_000L
     }
 
     private val tag = "MB/decoder"
@@ -81,7 +83,10 @@ class VideoRenderer(
 
     /** T-069 experiment: per-frame pace trace, dumped to [paceTraceFile] every [TRACE_DUMP_EVERY] stats windows and by [flushPaceTrace]. */
     @Volatile var paceTrace: PaceTrace? = null
-        set(v) { field = v; queue.trace = v; PaceTrace.active = v } // T-073: the receive path stamps the same trace
+        set(v) {
+            field = v; queue.trace = v; PaceTrace.active = v // T-073: the receive path stamps the same trace
+            dev.matebridge.client.security.Records.stampOpens = v != null // T-077: record open stamps
+        }
     @Volatile var paceTraceFile: java.io.File? = null
     private var traceWindows = 0
     private val traceWriter by lazy {
@@ -269,6 +274,8 @@ class VideoRenderer(
 
     private fun decodeLoop(att: Attachment) {
         try { att.previous?.join() } catch (_: InterruptedException) { return }
+        // T-077: the input hand-off is on the frame's critical path; ask the scheduler for prompt wake-ups.
+        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) } catch (_: Exception) {}
         val policy = RestartPolicy()
         while (att.active) {
             val failure = runCodec(att)
@@ -346,8 +353,15 @@ class VideoRenderer(
             }, "mb-decoder-out")
             outThread = t
             t.start()
+            // T-077: a free input buffer is taken while waiting for the frame, and the queue hands frames over with
+            // park/unpark, so an arriving frame costs only the copy and queueInputBuffer.
+            val inSlot = InputBufferSlot { timeoutUs -> c.dequeueInputBuffer(timeoutUs) }
+            var takenNs = 0L
             while (att.active && outError.get() == null) {
-                val frame = held ?: queue.poll(4)
+                inSlot.prefetch()
+                val fromQueue = if (held == null) queue.awaitNext(INPUT_WAIT_NS) else null
+                if (fromQueue != null && trace != null) takenNs = System.nanoTime()
+                val frame = held ?: fromQueue
                 held = null
                 if (frame == null) continue
                 if (!frame.isCodecConfig && !gauge.canQueue(maxInFlight, System.nanoTime())) {
@@ -357,8 +371,9 @@ class VideoRenderer(
                     java.util.concurrent.locks.LockSupport.parkNanos(1_000_000L)
                     continue
                 }
-                val idx = codec.dequeueInputBuffer(4_000)
+                val idx = inSlot.take(4_000)
                 if (idx < 0) { held = frame; continue }
+                val inbufNs = if (trace != null) System.nanoTime() else 0L
                 val buf = codec.getInputBuffer(idx)!!
                 if (buf.capacity() < frame.data.size) {
                     Log.e(tag, "${SystemClock.elapsedRealtime()} E decoder ev=frame_too_large size=${frame.data.size} cap=${buf.capacity()}")
@@ -369,12 +384,13 @@ class VideoRenderer(
                 }
                 buf.clear()
                 buf.put(frame.data.value)
+                val copiedNs = if (trace != null) System.nanoTime() else 0L
                 val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
-                trace?.onInput(frame.frameSeq, System.nanoTime())
+                trace?.onInput(frame.frameSeq, System.nanoTime(), takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
             }
             if (att.active) error = outError.get()
         } catch (e: Exception) {

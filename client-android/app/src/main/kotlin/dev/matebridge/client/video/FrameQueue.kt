@@ -2,6 +2,7 @@ package dev.matebridge.client.video
 
 import dev.matebridge.client.protocol.KeyframeRequest
 import dev.matebridge.client.protocol.VideoFrame
+import java.util.concurrent.locks.LockSupport
 
 /**
  * Bounded decoder input queue (PROTOCOL.md section 5). Pure Kotlin, thread-safe.
@@ -24,6 +25,9 @@ class FrameQueue(private val stats: VideoStats) {
 
     private val lock = Object()
     private val queue = ArrayDeque<VideoFrame>()
+
+    /** Consumer parked in [awaitNext] (T-077), unparked by [offer] after it releases the lock. */
+    @Volatile private var waiter: Thread? = null
     private var waitingKeyframe = true
     private var lastConfig: VideoFrame? = null
 
@@ -67,8 +71,30 @@ class FrameQueue(private val stats: VideoStats) {
             }
             lock.notifyAll()
         }
+        waiter?.let(LockSupport::unpark) // outside the lock: the woken consumer never blocks on it
         return request
     }
+
+    /**
+     * Next frame for the decoder, parking up to [timeoutNs] (T-077). Same frames as [poll], with a direct hand-off:
+     * [offer] unparks the waiting thread once it has left the lock, instead of `notifyAll` inside it. One consumer
+     * thread at a time. No lost wake-ups: the waiter is published before the queue is re-checked, and an unpark that
+     * comes before the park leaves a permit. Null on timeout (or a spurious/stale wake-up with nothing queued).
+     */
+    fun awaitNext(timeoutNs: Long): VideoFrame? {
+        take()?.let { return it }
+        if (timeoutNs <= 0) return null
+        waiter = Thread.currentThread()
+        try {
+            take()?.let { return it }
+            LockSupport.parkNanos(this, timeoutNs)
+        } finally {
+            waiter = null
+        }
+        return take()
+    }
+
+    private fun take(): VideoFrame? = synchronized(lock) { queue.removeFirstOrNull() }
 
     /** Next frame for the decoder, waiting up to [timeoutMs]. Null on timeout. */
     fun poll(timeoutMs: Long): VideoFrame? = synchronized(lock) {
