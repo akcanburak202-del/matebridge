@@ -76,6 +76,13 @@ class VideoRenderer(
     @Volatile private var adaptive: AdaptivePacer? = null
 
     /**
+     * T-080 experiment: non-null = the adaptive mode schedules with [ConstantPlayoutPacer] (constant playout delay)
+     * instead of the phase lock. Read at each codec start.
+     */
+    @Volatile var cpdConfig: CpdConfig? = null
+    @Volatile private var cpdActive: ConstantPlayoutPacer? = null
+
+    /**
      * Upper bound on frames inside the decoder (queued input minus released/discarded output, held buffers
      * included): 0 = unlimited (the pre-T-057 behavior), else 2..4 for experiments. Read on each frame.
      */
@@ -125,7 +132,7 @@ class VideoRenderer(
 
     /** Stats-window feedback for the adaptive pacer (skip percentage of the window just ended). */
     /** Slack D of the adaptive pacer for the latest frame, in microseconds (0 when not adaptive/unknown). */
-    fun paceDUs(): Long = (adaptive?.lastDNs ?: 0L) / 1000
+    fun paceDUs(): Long = (cpdActive?.lastDNs ?: adaptive?.lastDNs ?: 0L) / 1000
 
     /**
      * Once per stats window (called by the activity's stats tick): feeds the adaptive pacer and writes the
@@ -325,6 +332,10 @@ class VideoRenderer(
             val intervalOf: (Long) -> Long = { period -> FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs) }
             pacer.intervalProvider = intervalOf
             adaptivePacer.intervalProvider = intervalOf
+            val cpd = cpdConfig?.let { cfg ->
+                ConstantPlayoutPacer(vsync, cfg, frameIntervalNs).also { it.probe = probe; it.intervalProvider = intervalOf }
+            }
+            cpdActive = cpd
             arrival.reset()
             adaptive = adaptivePacer
             captureByPts.clear(); readyByPts.clear()
@@ -357,7 +368,7 @@ class VideoRenderer(
                         val untilDeadline = releaser.untilDeadlineNs(System.nanoTime())
                         val waitUs = if (untilDeadline == null) OUTPUT_WAIT_US
                         else (untilDeadline / 1000).coerceIn(0, OUTPUT_WAIT_US)
-                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, waitUs)
+                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, cpd, sink, releaser, waitUs)
                         releaser.flushDue(System.nanoTime())
                         if (changed && !loggedFormat) {
                             loggedFormat = true
@@ -454,7 +465,8 @@ class VideoRenderer(
     }
 
     /**
-     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
+     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay), or
+     * [ConstantPlayoutPacer] when [cpdConfig] is set (T-080);
      * with [bufferFrames] == 0 only the newest is rendered at once and the skipped ones count as dropped
      * (T-015 behavior). Otherwise each frame gets a vsync slot and render timestamp from its pacer and goes to
      * [releaser]: at most one release per slot, at most one replaceable buffer held back across drains until its
@@ -462,7 +474,7 @@ class VideoRenderer(
      */
     private fun drainOutput(
         codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
-        sink: CodecSink, releaser: SlotReleaser, firstWaitUs: Long = 0,
+        cpd: ConstantPlayoutPacer?, sink: CodecSink, releaser: SlotReleaser, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
         val mode = bufferFrames
@@ -489,8 +501,9 @@ class VideoRenderer(
                 val trace = releaser.trace
                 val probe = adaptivePacer.probe
                 probe?.clear()
-                val d = if (useAdaptive) adaptivePacer.schedule(captureUs, readyNs)
-                else pacer.schedule(readyNs)
+                val d = if (!useAdaptive) pacer.schedule(readyNs)
+                else if (cpd != null) cpd.schedule(captureUs, readyNs)
+                else adaptivePacer.schedule(captureUs, readyNs)
                 if (d == null) {
                     trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, null, 0, false, false, 0, PaceTrace.ACTION_NOW)
                     releaser.flushAll()

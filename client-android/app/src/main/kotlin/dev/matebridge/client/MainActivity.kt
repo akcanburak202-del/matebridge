@@ -119,6 +119,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
+    private var cpdConfig: dev.matebridge.client.video.CpdConfig? = null // T-080 (--es pacer cpd), null = phase lock
     private var paceTrace: dev.matebridge.client.video.PaceTrace? = null // T-069 experiment (--ez pace_trace true), default off
     /** T-079 experiment (--ez perf_hint true), default off; shared by the video reader and the decoder threads. */
     private var perfHint: dev.matebridge.client.video.PerfHint? = null
@@ -222,6 +223,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         vsync.keepJitter = intent?.getBooleanExtra("keep_jitter", false) == true
         vsync.recenter = intent?.getBooleanExtra("recenter", false) == true
+        // T-080: --es pacer cpd (constant playout delay) | lock (phase lock, default); cpd_q_permille / cpd_hold_us tune it.
+        cpdConfig = if (intent?.getStringExtra("pacer") == "cpd") {
+            dev.matebridge.client.video.CpdConfig(
+                intent.getIntExtra("cpd_q_permille", dev.matebridge.client.video.CpdConfig.DEFAULT_Q_PERMILLE),
+                intent.getIntExtra("cpd_hold_us", (dev.matebridge.client.video.CpdConfig.DEFAULT_HOLD_NS / 1000).toInt()) * 1000L,
+            )
+        } else null
         paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
         // T-076: one-shot AES-GCM provider benchmark (adb ... --ez crypto_bench true), off the UI thread.
         if (intent?.getBooleanExtra("crypto_bench", false) == true) {
@@ -754,6 +762,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ).also {
             it.operatingRate = operatingRate
             it.maxInFlight = inflightLimit
+            it.cpdConfig = cpdConfig
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
             it.perfHint = perfHint
@@ -840,6 +849,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             MbLog.i(
                 "display_timing",
                 "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} effective_deadline_ns=${vsync.grid().deadlineNs} deadline_override=${vsync.deadlineOverrideNs} keep_jitter=${if (vsync.keepJitter) 1 else 0} recenter=${if (vsync.recenter) 1 else 0} " +
+                    "pacer=${if (cpdConfig != null && bufferFrames == VideoRenderer.BUFFER_ADAPTIVE) "cpd" else "lock"} " +
+                    "cpd_q_permille=${(cpdConfig ?: dev.matebridge.client.video.CpdConfig()).qPermille} " +
+                    "cpd_hold_us=${(cpdConfig ?: dev.matebridge.client.video.CpdConfig()).holdNs / 1000} " +
                     "inflight=${renderer?.maxInFlight ?: inflightLimit}",
                 "render",
             )

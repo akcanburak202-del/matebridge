@@ -17,6 +17,12 @@ class PaceProbe {
         const val PATH_SPARSE = 4
         const val PATH_REPHASE = 5
         const val PATH_RECENTER = 6
+        /**
+         * T-080 constant playout delay ([ConstantPlayoutPacer]). Columns then mean: dev_ns = x - b, d_ns = C - b,
+         * jitter_ns = J (q-quantile, before the hold), acquire_ns = target t = capture + C + L (unsnapped),
+         * lock_slot_ns = C (ready - capture domain), k = window samples, bad_run = 1 when C changed on this frame.
+         */
+        const val PATH_CPD = 7
     }
 
     var path = PATH_NONE
@@ -94,7 +100,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
          * the session code needs no wiring. Null = tracing off (the hot path then costs one volatile read).
          */
         @Volatile var active: PaceTrace? = null
-        private val PATHS = arrayOf("none", "unlocked", "locked", "acquire", "sparse", "rephase", "recenter")
+        private val PATHS = arrayOf("none", "unlocked", "locked", "acquire", "sparse", "rephase", "recenter", "cpd")
         private val ACTIONS = arrayOf("pending", "release", "replace", "move", "discard", "now")
 
         private const val C_SEQ = 0; private const val C_CAPTURE = 1; private const val C_READY = 2
