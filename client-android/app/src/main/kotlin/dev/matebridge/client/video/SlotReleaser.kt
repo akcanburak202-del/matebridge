@@ -28,6 +28,10 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
     private var pendingRenderNs = 0L
     private var pendingDeadlineNs = Long.MAX_VALUE
     private var releasedSlot = Long.MIN_VALUE
+    private var pendingTag = -1L
+
+    /** T-069 experiment: per-frame trace of what happened to each submitted buffer (null = off). */
+    @Volatile var trace: PaceTrace? = null
 
     /** Buffers held back (0 or 1). */
     val held: Int get() = if (pendingIdx >= 0) 1 else 0
@@ -36,7 +40,7 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
      * [deadlineNs]: latest time the buffer may be kept before it must go to the codec so the compositor can
      * still present it on [slotNs] (System.nanoTime domain). [periodNs]: panel period, the step to the next slot.
      */
-    fun submit(idx: Int, slotNs: Long, renderNs: Long, deadlineNs: Long, nowNs: Long, periodNs: Long) {
+    fun submit(idx: Int, slotNs: Long, renderNs: Long, deadlineNs: Long, nowNs: Long, periodNs: Long, tag: Long = -1L) {
         var slot = slotNs
         var render = renderNs
         var deadline = deadlineNs
@@ -44,21 +48,24 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
             counters.onSlotDup()
             val shift = releasedSlot + periodNs - slot
             slot += shift; render += shift; deadline += shift
+            trace?.onMove(tag)
         }
         if (pendingIdx >= 0) {
             if (slot < pendingSlot) { // the pacer never goes backwards; if it did, the pending (later) one stays
                 counters.onSlotDup()
+                trace?.onDiscard(tag, System.nanoTime(), PaceTrace.ACTION_DISCARD)
                 sink.discard(idx)
                 return
             }
             if (pendingSlot == slot) {
                 counters.onSlotDup()
+                trace?.onDiscard(pendingTag, System.nanoTime(), PaceTrace.ACTION_REPLACE)
                 sink.discard(pendingIdx)
             } else {
                 releasePending()
             }
         }
-        pendingIdx = idx; pendingSlot = slot; pendingRenderNs = render; pendingDeadlineNs = deadline
+        pendingIdx = idx; pendingTag = tag; pendingSlot = slot; pendingRenderNs = render; pendingDeadlineNs = deadline
         flushDue(nowNs)
     }
 
@@ -81,6 +88,7 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
     }
 
     private fun releasePending() {
+        trace?.onRelease(pendingTag, pendingSlot, System.nanoTime(), pendingRenderNs)
         sink.release(pendingIdx, pendingRenderNs)
         releasedSlot = pendingSlot
         pendingIdx = -1

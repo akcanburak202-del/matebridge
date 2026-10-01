@@ -117,6 +117,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
+    private var paceTrace: dev.matebridge.client.video.PaceTrace? = null // T-069 experiment (--ez pace_trace true), default off
     private var streamConfig: StreamConfig? = null
     private var surfaceValid = false
     private var statsOn = false
@@ -200,6 +201,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         vsync.keepJitter = intent?.getBooleanExtra("keep_jitter", false) == true
         vsync.recenter = intent?.getBooleanExtra("recenter", false) == true
+        paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
@@ -687,6 +689,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ).also {
             it.operatingRate = operatingRate
             it.maxInFlight = inflightLimit
+            it.paceTrace = paceTrace
+            it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
             it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
             renderer = it
         }
@@ -959,6 +963,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
+        renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         controller.stop() // sends BYE, closes both connections
         super.onStop()

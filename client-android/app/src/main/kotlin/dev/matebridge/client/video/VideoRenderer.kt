@@ -55,6 +55,7 @@ class VideoRenderer(
         private const val OUTPUT_WAIT_US = 5_000L
         /** Margin added to the presentation deadline when deciding how long an output may be held back (T-057). */
         const val DISPATCH_MARGIN_NS = 1_000_000L
+        const val TRACE_DUMP_EVERY = 10
     }
 
     private val tag = "MB/decoder"
@@ -77,6 +78,21 @@ class VideoRenderer(
      * included): 0 = unlimited (the pre-T-057 behavior), else 2..4 for experiments. Read on each frame.
      */
     @Volatile var maxInFlight: Int = 0
+
+    /** T-069 experiment: per-frame pace trace, dumped to [paceTraceFile] every [TRACE_DUMP_EVERY] stats windows and by [flushPaceTrace]. */
+    @Volatile var paceTrace: PaceTrace? = null
+    @Volatile var paceTraceFile: java.io.File? = null
+    private var traceWindows = 0
+    private val traceWriter by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "mb-pace-trace").also { it.isDaemon = true } }
+    }
+
+    /** Writes the trace file on a background thread (no-op when the trace is off). */
+    fun flushPaceTrace() {
+        val t = paceTrace ?: return
+        val f = paceTraceFile ?: return
+        traceWriter.execute { try { t.dumpTo(f) } catch (e: Exception) { Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=pace_trace_write err=${e.javaClass.simpleName}") } }
+    }
 
     private val counters = PresentCounters()
     private val gauge = InFlightGauge()
@@ -111,6 +127,7 @@ class VideoRenderer(
 
     fun onSkipWindow(skipPct: Double?) {
         adaptive?.onSkipWindow(skipPct)
+        if (paceTrace != null && ++traceWindows >= TRACE_DUMP_EVERY) { traceWindows = 0; flushPaceTrace() }
         val c = counters.snapshot(reset = true)
         val p95 = gauge.p95AndReset()
         val pacer = adaptive
@@ -279,6 +296,9 @@ class VideoRenderer(
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
             val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
             val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
+            val trace = paceTrace
+            val probe = if (trace != null) PaceProbe() else null
+            adaptivePacer.probe = probe
             // T-059: the host thins frames to the reported panel rate; follow the measured arrivals, never the codec.
             val intervalOf: (Long) -> Long = { period -> FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs) }
             pacer.intervalProvider = intervalOf
@@ -289,6 +309,7 @@ class VideoRenderer(
             gauge.reset()
             val sink = CodecSink(codec)
             val releaser = SlotReleaser(sink, counters)
+            releaser.trace = trace
             if (codecReportsShown) {
                 codec.setOnFrameRenderedListener(
                     { _, pts, nanoTime ->
@@ -423,9 +444,14 @@ class VideoRenderer(
             }
             if (paced) {
                 if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
-                val d = if (useAdaptive) adaptivePacer.schedule(captureByPts.get(info.presentationTimeUs), readyNs)
+                val captureUs = captureByPts.get(info.presentationTimeUs)
+                val trace = releaser.trace
+                val probe = adaptivePacer.probe
+                probe?.clear()
+                val d = if (useAdaptive) adaptivePacer.schedule(captureUs, readyNs)
                 else pacer.schedule(readyNs)
                 if (d == null) {
+                    trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, null, 0, false, false, 0, PaceTrace.ACTION_NOW)
                     releaser.flushAll()
                     sink.releaseNow(idx)
                     continue
@@ -433,7 +459,8 @@ class VideoRenderer(
                 stats.onPaceAdd(d.addedNs / 1000)
                 if (useAdaptive) stats.onScheduled(d.skipped)
                 if (d.lateDrop) counters.onLateDrop(if (d.ownSlotNs != 0L) (d.ownSlotNs - readyNs) / 1000 else null)
-                releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs)
+                val tag = trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, probe, d.slotNs, d.lateDrop, d.collided, d.ownSlotNs) ?: -1L
+                releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs, tag)
                 continue
             }
             if (prev >= 0) sink.discard(prev)
