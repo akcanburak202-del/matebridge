@@ -69,3 +69,60 @@ public enum SendQueueLogKnob {
         return on("MATEBRIDGE_SENDQ_LOG") || on("MATEBRIDGE_LAT_TRACE")
     }
 }
+
+/// `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` (T-091): which TCP stack carries the video connection. `nw` (the default) is
+/// Network.framework (`NWListener`/`NWConnection`, user-space TCP on Skywalk); `bsd` is a kernel BSD socket
+/// (`BsdTcpListener`/`BsdTcpConnection`) with `TCP_NOTSENT_LOWAT` backpressure.
+public enum VideoSocketKnob: String, Equatable, Sendable, CaseIterable {
+    case nw
+    case bsd
+
+    /// Case-insensitive; anything else (or nil) is `.nw`.
+    public static func parse(_ text: String?) -> VideoSocketKnob {
+        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = VideoSocketKnob(rawValue: t)
+        else { return .nw }
+        return k
+    }
+
+    public static func parse(_ env: [String: String]) -> VideoSocketKnob { parse(env["MATEBRIDGE_VIDEO_SOCKET"]) }
+}
+
+/// `MATEBRIDGE_NOTSENT_LOWAT_KB` (T-091): the `TCP_NOTSENT_LOWAT` of a `bsd` video connection, in KiB. While the
+/// kernel holds at least this many bytes not yet sent, the socket is not writable and no new frame is taken.
+public enum NotSentLowatKnob {
+    public static let defaultKB = 128
+    public static let minKB = 16
+    public static let maxKB = 4096
+
+    /// Whole KiB within `minKB...maxKB`; anything else (or nil) is `defaultKB`.
+    public static func parseKB(_ text: String?) -> Int {
+        guard let t = text?.trimmingCharacters(in: .whitespaces), let kb = Int(t), (minKB...maxKB).contains(kb)
+        else { return defaultKB }
+        return kb
+    }
+
+    public static func parseKB(_ env: [String: String]) -> Int { parseKB(env["MATEBRIDGE_NOTSENT_LOWAT_KB"]) }
+}
+
+/// The video socket choice, read once at start.
+public struct VideoSocketSettings: Equatable, Sendable {
+    public var socket: VideoSocketKnob
+    /// Only used by `bsd`.
+    public var notSentLowatKB: Int
+
+    public init(socket: VideoSocketKnob, notSentLowatKB: Int = NotSentLowatKnob.defaultKB) {
+        self.socket = socket
+        self.notSentLowatKB = notSentLowatKB
+    }
+
+    public static func parse(_ env: [String: String]) -> VideoSocketSettings {
+        VideoSocketSettings(socket: VideoSocketKnob.parse(env), notSentLowatKB: NotSentLowatKnob.parseKB(env))
+    }
+
+    public var notSentLowatBytes: Int { notSentLowatKB * 1024 }
+
+    /// For `ev=listening`: `video_socket=nw notsent_lowat_kb=na` or `video_socket=bsd notsent_lowat_kb=128`.
+    public var logFields: String {
+        "video_socket=\(socket.rawValue) notsent_lowat_kb=\(socket == .bsd ? String(notSentLowatKB) : "na")"
+    }
+}

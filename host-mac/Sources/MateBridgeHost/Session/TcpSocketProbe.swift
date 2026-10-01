@@ -3,7 +3,10 @@ import Foundation
 import MateBridgeCore
 import Network
 
-/// Read-only view of the kernel TCP state behind an `NWConnection` (T-088): send-queue bytes, RTT, retransmits.
+/// Read-only view of the kernel TCP state behind a video connection (T-088): send-queue bytes, RTT, retransmits.
+///
+/// A `BsdTcpConnection` (T-091) owns its descriptor, so it is read directly (`source=tcp_info`, no search). For an
+/// `NWConnection`:
 ///
 /// Network.framework does not expose the socket descriptor. The probe finds it in this process's descriptor table
 /// (`proc_pidinfo(PROC_PIDLISTFDS)`) by matching the connection's local and remote ports with `getsockname` and
@@ -22,7 +25,12 @@ final class TcpSocketProbe {
         case unavailable
     }
 
-    private let connection: NWConnection
+    private enum Target {
+        case network(NWConnection)
+        case socket(BsdTcpConnection)
+    }
+
+    private let target: Target
     private var ports: (local: UInt16, remote: UInt16)?
     private var fd: Int32?
     /// Samples until the next descriptor search. A failed search is retried only every `searchInterval` samples
@@ -30,10 +38,27 @@ final class TcpSocketProbe {
     private var searchCountdown = 0
     private static let searchInterval = 120
 
-    init(connection: NWConnection) { self.connection = connection }
+    init(connection: NWConnection) { target = .network(connection) }
+    init(socket: BsdTcpConnection) { target = .socket(socket) }
 
     /// One sample, or why none could be taken.
     func sample() -> Result<(TcpSample, SendQueueSource), Failure> {
+        switch target {
+        case .network(let connection): return sample(connection)
+        case .socket(let socket):
+            // The connection checks under its lock that the descriptor is still open.
+            guard let info = socket.connectionInfo() else { return .failure(.unavailable) }
+            return .success((Self.tcpSample(info), .tcpInfo))
+        }
+    }
+
+    private static func tcpSample(_ info: tcp_connection_info) -> TcpSample {
+        TcpSample(sendQueueBytes: UInt64(info.tcpi_snd_sbbytes), srttMs: info.tcpi_srtt, rttVarMs: info.tcpi_rttvar,
+                  retransmitPackets: info.tcpi_txretransmitpackets, congestionWindowBytes: info.tcpi_snd_cwnd,
+                  sendWindowBytes: info.tcpi_snd_wnd)
+    }
+
+    private func sample(_ connection: NWConnection) -> Result<(TcpSample, SendQueueSource), Failure> {
         if ports == nil { ports = Self.ports(of: connection) }
         if let ports {
             if let fd, Self.socketPorts(fd).map({ $0 == ports }) != true { self.fd = nil }
@@ -46,10 +71,7 @@ final class TcpSocketProbe {
                 }
             }
             if let fd, let info = Self.connectionInfo(fd) {
-                return .success((TcpSample(
-                    sendQueueBytes: UInt64(info.tcpi_snd_sbbytes), srttMs: info.tcpi_srtt, rttVarMs: info.tcpi_rttvar,
-                    retransmitPackets: info.tcpi_txretransmitpackets, congestionWindowBytes: info.tcpi_snd_cwnd,
-                    sendWindowBytes: info.tcpi_snd_wnd), .tcpInfo))
+                return .success((Self.tcpSample(info), .tcpInfo))
             }
         }
         if let md = connection.metadata(definition: NWProtocolTCP.definition) as? NWProtocolTCP.Metadata {
@@ -134,6 +156,7 @@ final class SendQueueSampler: @unchecked Sendable {
     private var failureReported = false
 
     init(connection: NWConnection) { probe = TcpSocketProbe(connection: connection) }
+    init(socket: BsdTcpConnection) { probe = TcpSocketProbe(socket: socket) }
 
     /// Takes one sample (call right before a frame is written: the queue this frame waits behind).
     func sample() {
