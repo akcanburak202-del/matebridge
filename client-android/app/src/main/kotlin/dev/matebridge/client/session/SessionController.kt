@@ -81,8 +81,8 @@ class SessionController(
 ) {
     private val machine = SessionMachine(hello, initialMode.toPrefs(), knobs.pingIntervalUs)
 
-    /** Engine tick; at most the ping interval so a short `ping_ms` is honoured (default: 100 ms as before). */
-    private val tickMs = minOf(TICK_MS, knobs.pingMs.toLong())
+    /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
+    private val tickMs = engineTickMs(knobs.pingMs)
     private val random = SecureRandom()
 
     /** Messages from control reader threads; bounded, and only those threads ever block on it. */
@@ -528,6 +528,9 @@ class SessionController(
     companion object {
         /** The clock all session/latency times use. */
         fun clockUs() = System.nanoTime() / 1000
+
+        /** T-089: the engine tick for a ping interval: [TICK_MS] unless half the interval is shorter, never below 10 ms. */
+        fun engineTickMs(pingMs: Int): Long = minOf(TICK_MS, maxOf(10L, pingMs / 2L))
 
         private const val TICK_MS = 100L
         private const val GRACEFUL_CLOSE_MS = 1000L

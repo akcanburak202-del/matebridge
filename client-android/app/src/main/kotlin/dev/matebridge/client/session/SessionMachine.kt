@@ -247,7 +247,9 @@ class SessionMachine(
                 // Nothing but HELLO may go out before the first HELLO_ACK: encryption starts with it (section 9).
                 if (phase != Phase.AWAIT_ACK && nowUs >= nextPingUs) {
                     out += Action.Send(Ping(pingSeq++, nowUs))
-                    nextPingUs = nowUs + pingIntervalUs
+                    // Fixed rate (T-089): tick jitter does not stretch the interval; after a stall, no burst of pings.
+                    nextPingUs += pingIntervalUs
+                    if (nextPingUs <= nowUs) nextPingUs = nowUs + pingIntervalUs
                 }
                 if (phase == Phase.STREAMING) {
                     if (!videoOpen && nowUs >= videoRetryAtUs) openVideo(out)

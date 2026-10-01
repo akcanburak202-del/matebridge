@@ -195,9 +195,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         )
         MbLog.i("wifi_knobs", knobs.logFields())
         if (knobs.wifiLowLatency) {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            val lock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "MateBridge:low_latency")
-            lock.setReferenceCounted(false)
+            val lock = try {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "MateBridge:low_latency")
+                    .also { it.setReferenceCounted(false) }
+            } catch (e: RuntimeException) { // includes a null/foreign service (ClassCast / NullPointer)
+                MbLog.w("wifi_lock", "held=0 reason=create err=${e.javaClass.simpleName} mode=low_latency")
+                return
+            }
             wifiLock = dev.matebridge.client.session.WifiLockHolder(
                 object : dev.matebridge.client.session.WifiLockHolder.Backend {
                     override fun acquire() = lock.acquire()
@@ -809,6 +814,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         startVsync()
         presenter?.active = true
         lastStatsMs = SystemClock.elapsedRealtime()
+        rttStats.reset() // T-089: the first ev=net window holds no approval-wait or reconnect samples
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
         if (!r.attached && surfaceValid) {
             // GL path: the decoder surface exists once the GL thread is ready (attached from its callback).
