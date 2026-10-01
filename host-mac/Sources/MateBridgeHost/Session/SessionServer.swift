@@ -125,7 +125,9 @@ public final class SessionServer: @unchecked Sendable {
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
         public var releaseInput: @Sendable (ReleaseCause) -> Void = { _ in }
-        public var sessionStarted: @Sendable (_ sessionID: UInt32, _ configID: UInt16, _ hello: Hello) -> Void = { _, _, _ in }
+        /// `transport`: how the session's control connection arrived (loopback = USB via `adb reverse`, T-088).
+        public var sessionStarted: @Sendable (_ sessionID: UInt32, _ configID: UInt16, _ hello: Hello,
+                                              _ transport: SessionTransport) -> Void = { _, _, _, _ in }
         public var sessionEnded: @Sendable () -> Void = {}
         public var videoAttached: @Sendable (VideoLink) -> Void = { _ in }
         public init() {}
@@ -573,13 +575,9 @@ public final class SessionServer: @unchecked Sendable {
         inbounds[id]!.append(bytes)
         do {
             while let message = try inbounds[id]?.nextMessage() {
-                if case .hello(let hello) = message {
-                    if inbounds[id]?.bufferedPlaintextCount != 0 {
-                        // Bytes behind HELLO would be read as plaintext: a client sends nothing before HELLO_ACK.
-                        throw ProtocolError.invalidField("bytes after HELLO")
-                    }
-                    // Before the machine sees the HELLO: it may ask for the STREAM_CONFIG while handling it (T-088).
-                    SessionTransportBoard.shared.record(Self.transport(of: controlConnections[id]), for: hello.deviceID)
+                if case .hello = message, inbounds[id]?.bufferedPlaintextCount != 0 {
+                    // Bytes behind HELLO would be read as plaintext: a client sends nothing before HELLO_ACK.
+                    throw ProtocolError.invalidField("bytes after HELLO")
                 }
                 apply(machine.received(id, message, now: nowUs()))
                 if inbounds[id] == nil { return false }  // the message ended this connection
@@ -840,10 +838,9 @@ public final class SessionServer: @unchecked Sendable {
                 }
             case .sessionStarted(let id, let sid, let configID, let hello):
                 activeTransport = Self.transport(of: controlConnections[id])
-                SessionTransportBoard.shared.record(activeTransport, for: hello.deviceID)
                 currentSessionID = sid
                 currentConfigID = configID
-                handlers.sessionStarted(sid, configID, hello)
+                handlers.sessionStarted(sid, configID, hello, activeTransport)
             case .sessionEnded:
                 currentSessionID = 0
                 currentConfigID = 0

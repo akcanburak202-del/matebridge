@@ -109,8 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let coordinator = self.coordinator
         let input = self.input
         let clipboard = self.clipboard
-        handlers.sessionStarted = { sid, cid, hello in
-            coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello)
+        handlers.sessionStarted = { sid, cid, hello, transport in
+            coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello, transport: transport)
             input.sessionStarted(sessionID: sid, configID: cid)
             clipboard.sessionStarted(sessionID: sid)
         }
