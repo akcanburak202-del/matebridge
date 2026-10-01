@@ -26,3 +26,8 @@ _(Sonraki oturum.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+## Sabah durumu (2026-10-01)
+
+- Geri alma (tablet 98b325e, host bdf52f0) donmayı ve imleç takılmasını giderdi → T-057/T-060/T-061 sunum değişiklikleri tek kare/boşta durumunda bozuk; bunlar yeniden ele alınmalı (test: boşta tek tuş, imleç tek adım, `anim` dışında).
+- Kalan nadir sorun: uzun beklemeden sonra ilk tuşun karesi bir sonraki değişikliğe kadar görünmüyor (eski yapılarda da var).
