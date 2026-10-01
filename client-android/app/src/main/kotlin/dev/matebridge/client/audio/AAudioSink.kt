@@ -3,9 +3,11 @@ package dev.matebridge.client.audio
 /**
  * AAudio output (decision 0012) through [AAudioNative]. The stream is opened, started, written, timestamped and
  * closed by the writer thread only, so the native side needs no locks. [write] blocks inside AAudio at most
- * [WRITE_TIMEOUT_NS] (normally one burst); a write that times out means the device stopped consuming ("stall") and
- * the stream is rebuilt. [interrupt] does nothing: the writer sees its stop flag within one burst, and no AAudio call
- * is ever made concurrently with a write.
+ * [WRITE_TIMEOUT_NS] (normally one burst; [START_WRITE_TIMEOUT_NS] during the first [START_GRACE_NS], while an MMAP
+ * stream may still be starting, T-100 review L2); a write that times out means the device stopped consuming ("stall")
+ * and the stream is rebuilt. The timeout holds only for MMAP streams, which is why [SinkPolicy] rejects legacy ones.
+ * [interrupt] does nothing: the writer sees its stop flag within one burst, and no AAudio call is ever made
+ * concurrently with a write. A LinkageError from the native library propagates to the writer, which disables AAudio.
  */
 class AAudioSink private constructor(
     private val handle: Long,
@@ -32,13 +34,15 @@ class AAudioSink private constructor(
     override var lastError = 0
         private set
     private var closed = false
+    private val openedNs = System.nanoTime()
 
     override fun logFields(): String =
         "api=$api sharing=${if (exclusive) "exclusive" else "shared"} mmap=$mmap burst=$burst buf=$bufFrames " +
             "capacity=$capacity perf_mode=$perfName"
 
     override fun write(pcm: ShortArray, frames: Int): Int {
-        val r = AAudioNative.write(handle, pcm, frames, WRITE_TIMEOUT_NS)
+        val timeout = if (System.nanoTime() - openedNs < START_GRACE_NS) START_WRITE_TIMEOUT_NS else WRITE_TIMEOUT_NS
+        val r = AAudioNative.write(handle, pcm, frames, timeout)
         if (r == frames) return r
         if (r >= 0) {
             lastError = AAudioNative.ERROR_TIMEOUT
@@ -74,10 +78,23 @@ class AAudioSink private constructor(
 
     companion object {
         const val WRITE_TIMEOUT_NS = 200_000_000L
+        const val START_WRITE_TIMEOUT_NS = 1_000_000_000L
+        const val START_GRACE_NS = 500_000_000L
 
-        /** Opens and starts a LOW_LATENCY stream with [sharing] (AAudioNative.SHARING_*); throws [SinkOpenException]. */
+        /**
+         * Opens and starts a LOW_LATENCY stream with [sharing] (AAudioNative.SHARING_*); throws [SinkOpenException]
+         * (with `aaudioUnusable` when the native library itself failed).
+         */
         fun open(sharing: Int, startBursts: Int, maxBursts: Int): AAudioSink {
-            if (!AAudioNative.available) throw SinkOpenException("err=no_library")
+            if (!AAudioNative.available) throw SinkOpenException("err=no_library", aaudioUnusable = true)
+            return try {
+                openNative(sharing, startBursts, maxBursts)
+            } catch (e: LinkageError) {
+                throw SinkOpenException("err=${e.javaClass.simpleName}", aaudioUnusable = true)
+            }
+        }
+
+        private fun openNative(sharing: Int, startBursts: Int, maxBursts: Int): AAudioSink {
             val info = IntArray(AAudioNative.I_COUNT)
             val h = AAudioNative.open(sharing, startBursts, info)
             if (h == 0L) {

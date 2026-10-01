@@ -32,7 +32,8 @@ import java.util.concurrent.TimeUnit
  *    timestamp the same way for both outputs ([OutputClock]). A new stream's writer waits for the previous writer's
  *    cleanup before it opens its output.
  *  - Output choice (decision 0012 point 2): AAudio EXCLUSIVE, else AAudio SHARED on probation
- *    ([SharedLatencyProbe]), else AudioTrack. `--es audio_out aaudio|track` overrides it ([AudioOutPref]).
+ *    ([SharedLatencyProbe]), else AudioTrack. AAudio is used only with MMAP (its write timeout must hold).
+ *    `--es audio_out aaudio|track` overrides it ([AudioOutPref]).
  *  - Stopping sets the stream's flag and interrupts the output (AudioTrack: pause+flush unblocks the write; AAudio:
  *    the write returns within one burst); the writer then closes the output (exactly once).
  *  - The output is rebuilt when it dies (AudioTrack ERROR_DEAD_OBJECT, AAudio DISCONNECTED or a stalled write) and
@@ -236,10 +237,14 @@ class AudioPlayout(
                 loop(t)
             } catch (e: RuntimeException) {
                 MbLog.e("audio_error", "where=writer stream_id=$id err=${e.javaClass.simpleName}", COMPONENT)
+            } catch (e: LinkageError) {
+                // The AAudio library failed mid-stream (T-100 review L1): never let it kill the process; AudioTrack from now on.
+                policy.disableAaudio()
+                MbLog.e("audio_error", "where=writer stream_id=$id err=${e.javaClass.simpleName} aaudio_disabled=1", COMPONENT)
             } catch (_: InterruptedException) {
                 // not interrupted by us; just end
             } finally {
-                try { current?.close() } catch (_: RuntimeException) {}
+                try { current?.close() } catch (_: RuntimeException) {} catch (_: LinkageError) {}
                 current = null
                 core.buffer.reset()
                 running = false
@@ -276,10 +281,16 @@ class AudioPlayout(
                 } catch (e: SinkOpenException) {
                     MbLog.w("audio_out_failed", "stream_id=$id requested=${choice.logName} ${e.message}", COMPONENT)
                     if (choice == OutChoice.TRACK) return null
-                    policy.onOpenFailed(choice)
+                    if (e.aaudioUnusable) policy.disableAaudio() else policy.onOpenFailed(choice)
                     continue
                 }
                 val verdict = policy.onOpened(choice, sink.exclusive, sink.mmap)
+                if (verdict == SinkPolicy.Verdict.REJECT) {
+                    // Not MMAP (review M1): its write could block without bound. Close it and go down the chain.
+                    MbLog.w("audio_out_rejected", "${sink.logFields()} stream_id=$id requested=${choice.logName} reason=not_mmap", COMPONENT)
+                    sink.close()
+                    continue
+                }
                 if (verdict == SinkPolicy.Verdict.PROBATION) probe = SharedLatencyProbe(RATE)
                 MbLog.i(
                     "audio_out",

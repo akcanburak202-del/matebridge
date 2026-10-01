@@ -56,5 +56,8 @@ interface AudioSink {
     }
 }
 
-/** An output could not be opened; [message] is a short `key=value` reason for the log. */
-class SinkOpenException(message: String) : Exception(message)
+/**
+ * An output could not be opened; [message] is a short `key=value` reason for the log. [aaudioUnusable]: the AAudio
+ * native library itself failed (missing or a LinkageError), so AAudio must not be tried again.
+ */
+class SinkOpenException(message: String, val aaudioUnusable: Boolean = false) : Exception(message)
