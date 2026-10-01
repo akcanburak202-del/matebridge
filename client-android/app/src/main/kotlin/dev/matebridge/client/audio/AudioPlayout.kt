@@ -42,6 +42,8 @@ import java.util.concurrent.TimeUnit
  *    the write returns within one burst); the writer then closes the output (exactly once).
  *  - The output is rebuilt when it dies (AudioTrack ERROR_DEAD_OBJECT, AAudio DISCONNECTED or a stalled write) and
  *    when the output device changes (at most 5 times per 10 s). Repeated AAudio failures switch to AudioTrack.
+ *  - Jitter-buffer safety (T-108, [SafetyMemory]): each output API starts at max(its default, the value remembered
+ *    from earlier sessions); AAudio's default is 20 ms. A rebuild on the same API keeps the learned value.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
@@ -65,6 +67,8 @@ class AudioPlayout(
     private var shut = false
     @Volatile private var errorLogged = false
     private val video = VideoLatencyFilter()
+    /** T-108: learned jitter-buffer safety per output API, kept across sessions. */
+    private val safety = SafetyMemory(SharedPrefsSafetyStore(appContext))
 
     /** AudioTrack burst (the mixer's period). AAudio streams report their own. */
     private val trackBurst: Int
@@ -275,6 +279,7 @@ class AudioPlayout(
                 try { current?.close() } catch (_: RuntimeException) {} catch (_: LinkageError) {}
                 current = null
                 core.buffer.reset()
+                safetyApi?.let { safety.flush(it, core.drift.safetyFrames / MS) }
                 running = false
                 finished.countDown()
             }
@@ -320,15 +325,34 @@ class AudioPlayout(
                     continue
                 }
                 if (verdict == SinkPolicy.Verdict.PROBATION) probe = SharedLatencyProbe(RATE)
+                val init = applySafety(sink.api)
                 MbLog.i(
                     "audio_out",
                     "${sink.logFields()} stream_id=$id reason=$reason requested=${choice.logName} " +
                         "probation=${b(verdict == SinkPolicy.Verdict.PROBATION)} pref=${policy.pref.name.lowercase()} " +
-                        "native_rate=$nativeRate rate=$RATE",
+                        "native_rate=$nativeRate rate=$RATE " +
+                        "safety_init_ms=${init?.ms ?: (core.drift.safetyFrames / MS)} source=${init?.source ?: "kept"} " +
+                        "stored_ms=${init?.storedMs ?: "-"}",
                     COMPONENT,
                 )
                 return sink
             }
+        }
+
+        /** Output API whose safety [core] runs with (writer thread only). */
+        private var safetyApi: String? = null
+
+        /**
+         * T-108: an output of [api] was opened. A different API (or the first output) saves the previous API's value and
+         * starts from [SafetyMemory.initial]; the same API keeps the learned value (returns null).
+         */
+        private fun applySafety(api: String): SafetyMemory.Init? {
+            if (api == safetyApi) return null
+            safetyApi?.let { safety.flush(it, core.drift.safetyFrames / MS) }
+            val init = safety.initial(api)
+            core.drift.resetSafety(init.ms, SafetyMemory.defaultMs(api))
+            safetyApi = api
+            return init
         }
 
         private fun mayRebuild(): Boolean {
@@ -467,6 +491,7 @@ class AudioPlayout(
                     }
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
                     logStats(t, xr, lastAudioMs, lastAvMs)
+                    safety.onSafety(t.api, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
                 }
             }
         }

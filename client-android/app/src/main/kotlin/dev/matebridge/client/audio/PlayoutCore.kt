@@ -6,7 +6,7 @@ package dev.matebridge.client.audio
  * network thread) and [muted] (any thread).
  *
  * States: PRIMING writes silence and consumes nothing until the level reaches the refill threshold, then fades in
- * (5 ms). PLAYING resamples. When a burst would leave less than the fade-out reserve (3 ms), FADING_OUT plays the
+ * (5 ms) from the read head (the resampler is primed with it, T-108). PLAYING resamples. When a burst would leave less than the fade-out reserve (3 ms), FADING_OUT plays the
  * reserve with a fade to silence, then PRIMING again (an underrun or an idle gap, see below).
  *
  * Running dry (T-098): when the buffer runs out, the fade-out and silence happen at once, but whether it was an
@@ -47,6 +47,7 @@ class PlayoutCore(
     private val fadeInFrames = FADE_IN_MS * sampleRate / 1000
     private val idleAfterFrames = IDLE_AFTER_MS * sampleRate / 1000
     private var inBuf = ShortArray(0)
+    private val headFrame = ShortArray(channels)
     private var heldThisPriming = false
 
     private var seenPackets = 0L
@@ -97,6 +98,7 @@ class PlayoutCore(
             if (filled && hold) heldThisPriming = true
             if (filled && !hold) {
                 state = State.PLAYING
+                if (buffer.peek(headFrame, 1) == 1) resampler.prime(headFrame)
                 ramp.fadeIn(fadeInFrames)
                 drift.onPlaybackStart()
                 // Held for A/V: the floor about to follow (the level minus half the arrival sawtooth) is the A/V floor.

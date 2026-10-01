@@ -62,4 +62,29 @@ class DriftControllerTest {
         repeat(20) { d.onUnderrun() }
         assertEquals(40 * 48, d.safetyFrames)
     }
+
+    @Test fun resetSafetySetsStartAndDecayFloor() {
+        val d = DriftController()
+        d.resetSafety(initialMs = 30, floorMs = 20)
+        assertEquals(30 * 48, d.safetyFrames)
+        assertEquals(30 * 48, d.targetFrames)
+        repeat(DriftController.DECAY_WINDOWS) { window(d, 30 * 48) }
+        assertEquals(29 * 48, d.safetyFrames) // the slow decay rule is unchanged
+        repeat(20 * DriftController.DECAY_WINDOWS) { window(d, 30 * 48) }
+        assertEquals(20 * 48, d.safetyFrames) // ...down to the floor only
+        d.onUnderrun()
+        assertEquals(25 * 48, d.safetyFrames) // underruns still add 5 ms
+        repeat(10) { d.onUnderrun() }
+        assertEquals(40 * 48, d.safetyFrames) // capped at 40 ms
+    }
+
+    @Test fun resetSafetyClampsAndNeverStartsBelowTheFloor() {
+        val d = DriftController()
+        d.resetSafety(initialMs = 10, floorMs = 20)
+        assertEquals(20 * 48, d.safetyFrames)
+        d.resetSafety(initialMs = 90, floorMs = 1)
+        assertEquals(DriftController.SAFETY_MAX_MS * 48, d.safetyFrames)
+        repeat(100 * DriftController.DECAY_WINDOWS) { window(d, 480) }
+        assertEquals(DriftController.SAFETY_MIN_MS * 48, d.safetyFrames)
+    }
 }

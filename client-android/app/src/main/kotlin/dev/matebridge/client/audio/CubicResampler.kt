@@ -19,6 +19,16 @@ class CubicResampler(private val channels: Int = 2) {
         frac = 0.0
     }
 
+    /**
+     * T-108: playback (re)starts at [frame] (one interleaved frame, the read head; not consumed). The window is filled
+     * with it, so the first outputs hold that value instead of interpolating from stale frames (audio from before the
+     * hole, or zeros pulled while the fade-out ran out of input) into it: no step under the fade-in.
+     */
+    fun prime(frame: ShortArray) {
+        for (k in 0 until 4) for (c in 0 until channels) w[k * channels + c] = frame[c].toFloat()
+        frac = 0.0
+    }
+
     /** Input frames [process] will pull for [outFrames] at [step] (rounded up; one frame of margin). */
     fun inputNeeded(outFrames: Int, step: Double): Int = floor(frac + outFrames * step).toInt() + 1
 
