@@ -32,7 +32,25 @@ Yani gerçek hatta (SCK tamponu `last` aynı `CVPixelBuffer`/IOSurface nesnesiyl
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+Ön bulgu (koddan): T-086 `--sharpness-bench` de tazelemede **aynı** `CVPixelBuffer` nesnesini veriyor
+(`resubmitLast()` → `last.buffer` = son hareket karesinin tamponu). Yani "bench farklı tampon veriyor" varsayımı
+koddan doğrulanmıyor; fark başka yerde olmalı. İlk deneme: `--motion-frames 240` ile (oturum ısınmış) tazeleme
+kareleri bench'te de **222 bayt**, son hareket karesi zaten ~48 dB. 30 karelik varsayılan, açılış anahtar karesinin
+bit borcuyla hareket karelerini aç bırakıyordu (42 dB); tazeleme kazancı bu ısınma yapıntısıydı.
+
+1. **Kanıt (bench):**
+   - `SharpnessBenchOptions`: `--refresh-buffer same|copy` (varsayılan same = gerçek hat), `--motion-frames` üst
+     sınırı 1200'e. Bench, çıktıya kip ve ısınma bilgisini yazar.
+   - `HEVCEncoder`: tazeleme yolunda isteğe bağlı içerik kopyası (havuzdan IOSurface'lı yeni tampon, düzlem başına
+     memcpy; kopya süresi ölçülür ve loglanır).
+   - Ölçüm matrisi: motion 30 / 240, same / copy → kare baytı + PSNR Handoff'a.
+2. **Neden belirlenince en ucuz düzeltme** (yalnız tazeleme yolu, `IDLE_REFRESH_MS>0` iken):
+   - Kopya işe yarıyorsa: kopya varsayılan olur.
+   - Yaramıyorsa (VT zaten kendi kalite tavanında): tazeleme karelerinde kaliteyi geçici yükselten bir VT yolu
+     denenir (oturum özelliği `MaxAllowedFrameQP` / `Quality` / `PrioritizeEncodingSpeedOverQuality` geçici
+     değiştirilip ilk gerçek yakalamada eski hâline döndürülür). Desteklenmeyen özellik (OSStatus) loglanır, düşülür.
+   - Saf mantık (kip ayrıştırma, "güçlendirme ne zaman açılır/kapanır" durum makinesi) `MateBridgeCore`'da, testli.
+3. Anahtar kare yeniden gönderimi ve düğme kapalı varsayılanlar değişmez. `./scripts/check.sh`, bench'ler, Handoff.
 
 ## Handoff
 
