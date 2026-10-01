@@ -344,3 +344,10 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - HarmonyOS değerleri: `appVsyncOffset=1,0 ms`, `presentationDeadline=13,33 ms`. Varsayılan öncü 0,72·P (120 Hz'te 6 ms), 60 Hz'te P/2. `slot_dups=0`, `late_drops≈0`, `in_codec_p95` 2–3.
 - 6 ms'de turlar arası fark büyük (%0,2–%7,1): Mac ve tablet 120 Hz saatleri arasında yavaş faz kayması olası → kapalı döngü öncü ayarı (±1 ms) ya da host yakalamasını tablet vsync'ine kilitleme (açık soru).
 - 60 Hz boşta (akış 120): 33 ms ve üstü boşluk %2,3–3,1 (değişmedi) → T-058/T-059 seyreltme.
+
+## 2026-10-01 ~04:00 — Ekran hızı geri bildirimi + faz kilidi (T-058, T-059, T-060) ve 60 Hz öncü ayarı
+
+- DISPLAY_RATE çalışıyor: boşta `display_rate hz=60 effective_fps=60`, host `cap_fps=120 enc_fps=60 decimated=60`, yeniden yapılandırma/bağlantı kopması yok; dokununca hemen 120.
+- T-059 tek başına: 60 Hz'te 33 ms boşluk bir turda %2,3, bir sonrakinde **%25,6** (her kare ayrı yuvarlanınca yuva sınırında titreşim). T-060 faz kilidi (`phase_lock=1`, `rephase=0`, `slot_dups≈0`) ile %2–4.
+- Birleşik `main`'de 60 Hz'te tablet kendi sayaçlarında temiz (`shown=60 drop=0`) ama SF'de %12–18 33 ms boşluk → bırakma öncüsü (P/2 = 8,33 ms) yanlış. Öncü taraması 60 Hz: 3 ms %11,7 · **6 ms %2,4 / 3,2 / 4,6** · 12 ms %4,4 · 14,5 ms %3,7; 120 Hz'te 6 ms %0,2. Sonuç: bu cihazda en iyi öncü her iki hızda **sabit ~6 ms** (sabit bir kilitlenme son anı) → T-061.
+- Codex (medium) iki P2 buldu ve düzeltildi: faz kilidinde geç kare kilidi histerezissiz kaydırıyordu (geçmiş yuvaları destekleyen ızgara); host kuyruğunda hayatta kalan yeni keyframe kurtarmayı karşılamıyordu.

@@ -1,7 +1,7 @@
 ---
 id: T-059
 title: Tablet — panel hızını host'a bildir (DISPLAY_RATE)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-057]
@@ -46,3 +46,7 @@ PROTOCOL `0x07 DISPLAY_RATE` (`proto/display-rate`, `87e36db`) istemci tarafı. 
   - GL yolu (`GlPresenter`) dokunulmadi (vsync'e kendisi hizalar).
 - **Test edilmeyenler / cihazda dogrulanacaklar:** hepsi. T-058 ile birlestirip: bosta (60 Hz) `MB/render ev=display_rate hz=60` ve host `cadence` yakalama/kodlama ~60; dokununca `hz=120`, hemen yukselis; dusus ~0,5 sn sonra; SF `--latency` 60 Hz bosta 33 ms bosluk %2-3'ten dusmeli; 120 Hz tekrar orani (~%3) bozulmamali; yeniden baglanmada ACCEPTED sonrasi bir `display_rate_sent`. `vsync.periodNs` panel degisiminde gec guncellenirse (reseed 4-12 ornek) bildirim o kadar gecikir.
 - **Acik sorular:** yok.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Cihazda doğrulandı; faz kilidi (T-060) ile birlikte kullanılmalı (NOTES ~04:00).

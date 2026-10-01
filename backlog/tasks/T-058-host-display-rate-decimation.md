@@ -1,7 +1,7 @@
 ---
 id: T-058
 title: Mac — DISPLAY_RATE ile kodlamadan önce seyreltme (60/120), yeniden başlatmasız; BoundedFrameQueue kurtarma düzeltmesi
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-049]
@@ -50,3 +50,7 @@ NOTES 2026-10-01 ~02:20. Tablet paneli dokunma yokken 60 Hz; host 120 fps gönde
 - **BoundedFrameQueue:** dropping a delta sets `awaitingKeyframe` and also purges the deltas queued after it (they reference the dropped frame); keyframes and CODEC_CONFIG stay. Deltas pushed afterwards are refused until a keyframe arrives (CODEC_CONFIG does not lift it). `push` returns 1 + purged. Tests updated (`testKeyframeSurvivesOverflow`, sender backpressure test in `IntegrationTests.swift`, which now expects a keyframe to resume) and added.
 - **Test edilmeyenler / cihazda dogrulanacaklar:** nothing ran against real capture/encoder. With T-059 on device: hz=60 on a 120 fps stream gives `enc_fps`~60, `decimated`~60/s, `cap_fps`~120 (SCK untouched), even 16.7 ms presentation gaps; touching the screen (hz 120) returns to ~120 at once with no `stream_reconfigure` and no video reconnect; `cap_late` is judged against the new target.
 - **Acik sorular:** `InputStateMachine.swift` was touched only for the exhaustive switch (inside `MateBridgeCore/`). No Kotlin codec (T-059).
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Codex bir tur (kuyruk kurtarma P2 düzeltildi). Cihazda seyreltme doğrulandı (NOTES ~04:00).

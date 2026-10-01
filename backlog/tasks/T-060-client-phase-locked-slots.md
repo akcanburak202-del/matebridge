@@ -1,7 +1,7 @@
 ---
 id: T-060
 title: Tablet — akış hızı panel hızına eşitken faz kilitli yuva ataması (histerezis); seyreltmeyle 33 ms boşlukları gider
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-057, T-059]
@@ -46,3 +46,7 @@ Yalnızca `AdaptivePacer` (+ istatistik alanları) değişir; SlotReleaser/Vsync
 - **Varsayımlar:** Kilit yalnızca `|fi - P| <= %15 P` iken (seyreltme sonrası 60/60, 120/120); `fi` T-059 `intervalProvider`'dan gelir. Kilit fazı: varış penceresi `[ideal, ideal+p99]` yuvanın ortasına (en yakın vsync), ama `ideal + D`'den ve `earliest`'ten önce olmaz. Yeniden fazlama: taze edinme başka bir yuva seçerse (hata > P/2, ya da en kötü jitter/kare yuvayı kaçırır) art arda 30 kare sürerse; `rephase` pencere başına delta. Kilitte gecikme sınırı `earliest + P + min(jitter,P)/2`; aşan ya da yuvasına yetişemeyen kare önceki yuvaya çarpıştırılır (`lateDrop`), kilit ilerler. Kilitli D en çok 1 P. `rephases` panel epoch sıfırlamasında sıfırlanır.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `check.sh` geçti. Cihazda: 60 Hz boşta birkaç `pace-long.sh` turu, 33 ms boşluk oranı (ikinci turda %25'e çıkmamalı), `ev=present` satırında `phase_lock=1`, `rephase` 0 ya da seyrek, `slot_dups`/`late_drops` düşük; 120 Hz'te T-057 sonuçları gerilememeli; 120<->60 geçişinde `phase_lock` yeniden 1 olmalı. Merkezli faz gecikmeyi en kötü ~P/2 artırabilir (`pace_ms`, `d_us`).
 - **Açık sorular:** Merkezli faz 60 Hz'te gecikmeyi artırırsa `centered` yerine `minimum`'a yaslamak tek satırlık ayar.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Codex P2 (geç kare kilidi kaydırıyordu) düzeltildi. Cihazda 60 Hz 33 ms boşluk %2–4 (öncü 6 ms ile; T-061).
