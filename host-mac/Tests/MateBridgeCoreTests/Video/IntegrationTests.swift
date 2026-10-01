@@ -180,6 +180,30 @@ final class VideoSenderTests: XCTestCase {
         await sender.stop()
     }
 
+    func testSenderStampsWriteTimesIntoTrace() async {
+        let transport = FakeTransport()
+        let traces = LockedValue<[FrameTrace]>([])
+        let clockValue = LockedValue<UInt64>(1_000)
+        let frames = VideoFrameQueue(keyframeNeeded: {})
+        let sender = VideoSender(transport: transport, frames: frames, requestKeyframe: {},
+                                 trace: { t in traces.set(traces.get() + [t]) },
+                                 clock: { let v = clockValue.get(); clockValue.set(v + 500); return v })
+        sender.start()
+        var f = delta(1)
+        f.trace.captureUs = 1; f.trace.deliveredUs = 2; f.trace.submittedUs = 3; f.trace.encodedUs = 4; f.trace.enqueuedUs = 5
+        frames.push(key(0))  // first frame: keyframe, also traced (incomplete ones are filtered by the window)
+        frames.push(f)
+        await waitUntil("sent") { transport.sentCount == 2 }
+        transport.complete()
+        transport.complete()
+        await waitUntil("traced") { traces.get().count == 2 }
+        let t = traces.get()[1]
+        XCTAssertEqual(t.deliveredUs, 2)
+        XCTAssertGreaterThan(t.writeStartUs, 0)
+        XCTAssertGreaterThan(t.writeDoneUs, t.writeStartUs)
+        await sender.stop()
+    }
+
     func testTransportFailureEndsSender() async {
         let transport = FakeTransport()
         let ended = LockedValue<VideoSender.EndReason?>(nil)

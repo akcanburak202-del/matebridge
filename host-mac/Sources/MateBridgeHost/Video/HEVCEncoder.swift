@@ -33,6 +33,8 @@ final class HEVCEncoder: @unchecked Sendable {
         var buffer: CVPixelBuffer
         var pts: CMTime
         var captureTimeUs: UInt64
+        /// SCK callback time on the host clock (T-070).
+        var deliveredUs: UInt64
     }
 
     static let maxInFlight = 2
@@ -176,7 +178,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// if the encoder is backed up the frame replaces the single pending one.
     func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64) {
         meter?.recordEncoderIn()
-        submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs))
+        submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs, deliveredUs: HostClock.nowUs()))
     }
 
     private func resubmitLast() {
@@ -184,8 +186,8 @@ final class HEVCEncoder: @unchecked Sendable {
         guard !stopped, let l = last else { lock.unlock(); return }
         lock.unlock()
         let now = CMClockGetTime(CMClockGetHostTimeClock())
-        submit(Input(buffer: l.buffer, pts: now, captureTimeUs: UInt64(max(0, CMTimeGetSeconds(now)) * 1_000_000)),
-               bypassGate: true)
+        let nowUs = UInt64(max(0, CMTimeGetSeconds(now)) * 1_000_000)
+        submit(Input(buffer: l.buffer, pts: now, captureTimeUs: nowUs, deliveredUs: nowUs), bypassGate: true)
     }
 
     private func idleTick() {
@@ -249,14 +251,20 @@ final class HEVCEncoder: @unchecked Sendable {
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
+        var trace = FrameTrace()
+        trace.captureUs = captureTimeUs
+        trace.deliveredUs = frame.deliveredUs
+        trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
             duration: .invalid, frameProperties: props, infoFlagsOut: nil
         ) { [weak self] status, _, sampleBuffer in
             guard let self else { return }
             let elapsedUs = (DispatchTime.now().uptimeNanoseconds - start) / 1000
+            var t = trace
+            t.encodedUs = HostClock.nowUs()
             self.completed(status: status, sampleBuffer: sampleBuffer, captureTimeUs: captureTimeUs,
-                           encodeTimeUs: elapsedUs)
+                           encodeTimeUs: elapsedUs, trace: t)
         }
         if status != noErr {
             HEVCEncoder.log.error("ev=encode_failed status=\(status)")
@@ -265,11 +273,12 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     /// A submitted frame produced output (or none); frees the slot and starts the pending frame, if any.
-    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeTimeUs: UInt64) {
+    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeTimeUs: UInt64,
+                           trace: FrameTrace) {
         let ok = status == noErr && sampleBuffer != nil
         if let sb = sampleBuffer, ok {
             meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
-            handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs)
+            handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
         }
         if ok { lock.lock(); consecutiveFailures = 0; lock.unlock() }
         if !ok {
@@ -359,7 +368,7 @@ final class HEVCEncoder: @unchecked Sendable {
 
     deinit { stop() }
 
-    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64) {
+    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return }
         let isKey: Bool = {
             guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
@@ -399,8 +408,9 @@ final class HEVCEncoder: @unchecked Sendable {
         let raw = Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
                                             count: length))
         guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: Int(lengthSize)) else { return }
-        output(EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB),
-               encodeTimeUs)
+        var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
+        frame.trace = trace
+        output(frame, encodeTimeUs)
     }
 
     /// CODEC_CONFIG for a newly attached consumer (nil before the first frame was encoded).

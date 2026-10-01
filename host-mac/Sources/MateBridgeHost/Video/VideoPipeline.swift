@@ -33,6 +33,9 @@ public final class VideoPipeline: @unchecked Sendable {
     public let frames: VideoFrameQueue
     /// Cadence measurements (T-017): SCK arrival, encoder in/out, overwritten pending frames.
     public let meter: CadenceMeter
+    /// Per-stage capture-to-sent latency (T-070); fed by the sender through `recordTrace`.
+    public let latency = LatencyMeter()
+    private let latencyCsv = LatencyCsv()
 
     private let lock = NSLock()
     private var state = State.idle
@@ -81,6 +84,8 @@ public final class VideoPipeline: @unchecked Sendable {
             let frames = self.frames
             let tap = self.tap
             let encoder = try HEVCEncoder(settings: settings, meter: meter, output: { frame, encodeUs in
+                var frame = frame
+                frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)
                 tap?(frame, encodeUs)
             }, onFailure: { [weak self] error in self?.fail(error) })
@@ -135,6 +140,15 @@ public final class VideoPipeline: @unchecked Sendable {
     /// frame count.
     public func cadenceWindow(sentTotal: Int) -> CadenceWindow {
         meter.take(nowUs: HostClock.nowUs(), queueDropsTotal: frames.droppedCount, sentTotal: sentTotal)
+    }
+
+    /// Closes the current latency window (call with the cadence window, about once a second).
+    public func latencyWindow() -> LatencyWindow { latency.take() }
+
+    /// A frame's write completed (called from the sender): feeds the latency window and the optional CSV.
+    public func recordTrace(_ trace: FrameTrace) {
+        latency.record(trace)
+        latencyCsv?.append(trace)
     }
 
     /// Virtual display mode requested vs. applied, and the encoder's cadence-related properties, for the log.
