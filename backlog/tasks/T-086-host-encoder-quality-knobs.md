@@ -79,7 +79,7 @@ Not: kartın `files:` listesindeki `host-mac/Sources/MateBridgeHost/main.swift` 
 ## Handoff
 
 
-- **Commit:** `811b003` (uygulama), `f33fde7` (plan), inceleme düzeltmeleri: bkz. aşağıdaki *İnceleme düzeltmeleri*. Dal `task/T-086-encoder-knobs`, `main` d1ab2bd üzerinde.
+- **Commit:** `811b003` (uygulama), `f33fde7` (plan), inceleme düzeltmeleri `988e93e`. Dal `task/T-086-encoder-knobs`, `main` d1ab2bd üzerinde.
 - **check.sh:** ALL OK (host-mac 194 XCTest + 508 swift-testing; yeni `EncoderKnobsTests` 24 test).
 - **Dosyalar:**
   - Yeni (Core): `MateBridgeCore/Video/EncoderKnobs.swift` (`EncoderKnobs`, `H264Profile`, `IdleRefreshConfig`,
