@@ -1,7 +1,7 @@
 ---
 id: T-104
 title: Ayarlar paneli protokolü kod çözücüleri (Swift + Kotlin) — STREAM_PREFS.bitrate_kbps, SETTINGS_OPEN (0x08), HELLO bit9
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: []
