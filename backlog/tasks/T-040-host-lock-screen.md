@@ -33,6 +33,7 @@ Hedef: kilit/ekran uykusu açıkken tablet tek başına yeterli olsun: kilit ekr
 - [ ] Ekran uykusu/kilit sırasında yakalama hatası olursa host kalıcı olarak düşmez: mevcut yeniden deneme, kilit açılınca ya da ekran uyanınca akışı geri getirir (tabletin yeniden bağlanması gerekmeden).
 - [ ] Kilit ekranında klavye ve dokunma çalışır (şifre yazılabilir); çalışmıyorsa nedeni ve seçenekler NOTES'a.
 - [ ] Oturum boyunca ekranı uyanık tutmak **varsayılan değil** (kilit güvenliği bozulmasın); istenirse menüde seçenek.
+- [ ] **Güvenlik (kullanıcıyla konuşuldu, 2026-10-01):** kilitliyken yeni eşleşme onaylanamaz (onay penceresi kilidin arkasında; host kilitliyken PAIRING isteğini bekletir ya da reddeder, test edilir); kilit ekranında yazılan karakterler hiçbir seviyede loglanmaz; ekranı uyanık tutma varsayılan kapalı; MateBridge yeni bir izin istemez.
 - [ ] `./scripts/check.sh` geçiyor.
 
 ## Plan
