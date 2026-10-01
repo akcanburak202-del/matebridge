@@ -1,7 +1,7 @@
 ---
 id: T-061
 title: Tablet — varsayılan bırakma öncüsü tüm panel hızlarında mutlak 6,0 ms (P − 1 ms ile sınırlı)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-057, T-060]
@@ -42,3 +42,7 @@ Cihaz taraması (60 Hz boşta, akış 60'a seyreltilmiş, `phase_lock=1`, `slot_
 - **Dokunulan dosyalar:** `video/FramePacer.kt`, `PresentationSchedulingTest.kt`, bu kart.
 - **Cihazda doğrulanacak:** 60 Hz boşta ve 120 Hz'te 33 ms / 16,7 ms oranları yukarıdaki 6 ms sonuçlarıyla uyumlu olmalı; `lead_ms=6.00` `ev=present` satırında.
 - **Açık sorular:** yok.
+
+## Orkestratör notu (merge, 2026-10-01)
+
+- Cihazda: `lead_ms=6.00`, 60 Hz %3–4,3 boşluk, 120 Hz %2,3 tekrar (NOTES).
