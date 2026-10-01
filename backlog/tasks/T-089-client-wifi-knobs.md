@@ -1,7 +1,7 @@
 ---
 id: T-089
 title: Tablet — Wi-Fi ölçüm altyapısı ve düğmeler (RTT istatistiği, aktarım logu, trafik sınıfı, WifiLock düşük gecikme)
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-077]
@@ -33,7 +33,12 @@ Varsayılan davranış değişmez; düğmeler `am start` ek parametreleriyle aç
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+1. **Saf mantık (`session/WifiKnobs.kt`, yeni):** `WifiKnobs` (ping_ms varsayılan 500, [20, 1000] aralığına sıkıştırılır; `tos_ctl`/`tos_video` yalnız 0..255 ise geçerli, yoksa null; `wifi_ll` varsayılan false) — `parse(has, getInt, getBool)` ile Android'siz test edilir; `logFields()`. `RttStats` (iş parçacığı güvenli pencere: `add(rttUs)`, `snapshot(reset)` → n, p50, p95, max; `format()` → `rtt_ms_p50_95_max=a/b/c rtt_n=N`, boşsa `-`). `TrafficClass.apply(requested, set, get)` → log alanları (istek yoksa hiçbir şey yapmaz; hata oturumu öldürmez). `WifiLockPolicy.shouldHold(enabled, transport, started, ui)` (Wi-Fi + açık + aktivite başlatılmış + `Connected`/`AwaitingApproval`/`Connecting`) ve `WifiLockHolder` (sahte arka uçla test edilen idempotent acquire/release, her değişimde `wifi_lock held=…` logu).
+2. **SessionMachine:** kurucuya `pingIntervalUs` (varsayılan `PING_INTERVAL_US` = 500 ms); PONG zaman aşımı aynı (3 s).
+3. **SessionController:** `WifiKnobs` parametresi; motor tik'i `min(100, ping_ms)` (ping çözünürlüğü için, varsayılanda değişmez); kontrol ve video soketlerine `connect` öncesi `setTrafficClass`, bağlantı sonrası `getTrafficClass()` logu (`ev=traffic_class sock=control|video requested=… applied=…`). `session_start` logu: `transport=usb|wifi ping_ms=… tos_ctl=… tos_video=… wifi_ll=…`.
+4. **MainActivity:** ekleri ayrıştır; `onPong`'da RTT örneği `RttStats`'a; oturum başında sıfırla. Saniyelik istatistik tikinde ayrı `MB/session ev=net transport=… rtt_ms_p50_95_max=… rtt_n=… ping_ms=…` satırı. WifiLock: `render()` (her UI durumu), `onStop`, `onDestroy`'da politika ile senkron; arka plan/bağlantı kopması/oturum sonu → bırakılır.
+5. **Manifest:** `WAKE_LOCK` izni.
+6. Testler: `WifiKnobsTest` (ayrıştırma, RTT penceresi, trafik sınıfı, kilit politikası/tutucu), `SessionMachineTest`'e ping aralığı testi. `./scripts/check.sh`.
 
 ## Handoff
 
