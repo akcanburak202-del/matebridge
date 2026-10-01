@@ -15,6 +15,9 @@ import VideoToolbox
 /// like ScreenCaptureKit: nothing is submitted while the content is static, so only the idle refresh (if enabled)
 /// produces more frames. The Annex-B output is decoded in-process with `VTDecompressionSession` and compared with the
 /// source luma (PSNR, 8x8 SSIM). No display, capture, input or network is touched.
+///
+/// Like the real pipeline, the idle refresh re-submits the very `CVPixelBuffer` of the last motion frame
+/// (`--refresh-buffer same`, default) or, to tell the two apart, a content copy (`--refresh-buffer copy`, T-087).
 public enum SharpnessBench {
     static let width = 2800
     static let height = 1840
@@ -283,15 +286,19 @@ public enum SharpnessBench {
     /// Returns the process exit code.
     static func run(_ o: SharpnessBenchOptions) -> Int32 {
         let env = ProcessInfo.processInfo.environment
-        let knobs = EncoderKnobs.parse(env)
+        var knobs = EncoderKnobs.parse(env)
+        if let b = o.refreshBuffer { knobs.idleRefresh.buffer = b }
         let settings = VideoSettings.tabletDefault.applyingExperimentKnobs(env)
             .applying(StreamPrefs(fps: UInt16(clamping: o.fps), scalePermille: 1000))
         let shift = max(2, (o.shiftPx + 1) & ~1)   // even, so the chroma rows move with the luma rows
         let staticMs = o.effectiveStaticMs(idleRefresh: knobs.idleRefresh)
         print("sharpness-bench \(width)x\(height) fps=\(settings.fps) codec=\(settings.codec.logName) "
               + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) \(knobs.logFields) "
-              + "motion_frames=\(o.motionFrames) shift_px=\(shift) static_ms=\(staticMs)")
-        guard let page = makePage(width: width, height: height + o.motionFrames * shift) else {
+              + "motion_frames=\(o.motionFrames) shift_px=\(shift) static_ms=\(staticMs) "
+              + "resume_frames=\(o.resumeFrames) "
+              + "refresh_buffer=\(knobs.idleRefresh.buffer.rawValue)")
+        let frames = o.motionFrames + o.resumeFrames
+        guard let page = makePage(width: width, height: height + frames * shift) else {
             print("error: cannot render the text page")
             return 1
         }
@@ -311,25 +318,28 @@ public enum SharpnessBench {
         }
 
         // Motion: one frame per stream interval, timestamped on the host clock like ScreenCaptureKit.
-        var sourceTop: [UInt64: Int] = [:]
+        var sourceIndex: [UInt64: Int] = [:]   // capture time -> frame index (scroll position index * shift)
         let intervalNs = UInt64(1e9 / Double(settings.fps))
-        var next = DispatchTime.now().uptimeNanoseconds
-        for i in 0..<o.motionFrames {
-            let now = DispatchTime.now().uptimeNanoseconds
-            if next > now { Thread.sleep(forTimeInterval: Double(next - now) / 1e9) }
-            next += intervalNs
-            guard let pb = frame(page, top: i * shift, height: height) else {
-                print("error: cannot allocate a frame")
-                return 1
+        func scroll(_ indices: Range<Int>) -> Bool {
+            var next = DispatchTime.now().uptimeNanoseconds
+            for i in indices {
+                let now = DispatchTime.now().uptimeNanoseconds
+                if next > now { Thread.sleep(forTimeInterval: Double(next - now) / 1e9) }
+                next += intervalNs
+                guard let pb = frame(page, top: i * shift, height: height) else { return false }
+                let pts = CMClockGetTime(CMClockGetHostTimeClock())
+                let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
+                sourceIndex[us] = i
+                encoder.encode(pb, presentationTime: pts, captureTimeUs: us)
             }
-            let pts = CMClockGetTime(CMClockGetHostTimeClock())
-            let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
-            sourceTop[us] = i * shift
-            encoder.encode(pb, presentationTime: pts, captureTimeUs: us)
+            return true
         }
+        guard scroll(0..<o.motionFrames) else { print("error: cannot allocate a frame"); return 1 }
         let lastTop = (o.motionFrames - 1) * shift
         // Static: no new captures (as with ScreenCaptureKit); only the idle refresh may encode more frames.
         Thread.sleep(forTimeInterval: Double(staticMs) / 1000)
+        // Resume (optional): scrolling continues, so a refresh-only setting must not linger.
+        guard scroll(o.motionFrames..<frames) else { print("error: cannot allocate a frame"); return 1 }
         encoder.stop()
         if let f = failed.value { print("error: encoder failed: \(f)") }
 
@@ -337,9 +347,10 @@ public enum SharpnessBench {
         let decoder = Decoder(codec: settings.codec)
         let lastRef = page.lumaWindow(top: lastTop, rows: height)
         var motion: [(psnr: Double, bytes: Int)] = []
+        var resume: [(psnr: Double, bytes: Int)] = []
         var lastMotion: (LumaPlane, Output)?
         var refreshes: [(LumaPlane, Output)] = []
-        var lastPicture: (LumaPlane, Output)?
+        var lastPicture: (LumaPlane, Output)?   // the last one before the resume
         var configs = 0
         for out in outputs.value {
             if out.frame.isCodecConfig {
@@ -348,13 +359,16 @@ public enum SharpnessBench {
                 continue
             }
             guard let pic = decoder.decode(out.frame.data) else { print("error: decode failed"); return 1 }
-            lastPicture = (pic, out)
-            if let top = sourceTop[out.frame.captureTimeUs] {
-                motion.append((ImageQuality.psnr(page.lumaWindow(top: top, rows: height), pic), out.frame.data.count))
-                if top == lastTop { lastMotion = (pic, out) }
+            if let i = sourceIndex[out.frame.captureTimeUs] {
+                let ref = page.lumaWindow(top: i * shift, rows: height)
+                let sample = (ImageQuality.psnr(ref, pic), out.frame.data.count)
+                if i >= o.motionFrames { resume.append(sample); continue }
+                motion.append(sample)
+                if i * shift == lastTop { lastMotion = (pic, out) }
             } else {
                 refreshes.append((pic, out))
             }
+            lastPicture = (pic, out)
         }
 
         // `ssim_text`: only blocks with detail in the source (text, lines), not the flat page background.
@@ -373,6 +387,13 @@ public enum SharpnessBench {
         if let (pic, out) = lastMotion { line("motion_last", pic, out) } else { print("phase=motion_last missing=1") }
         for (n, (pic, out)) in refreshes.enumerated() { line("idle_refresh", pic, out, extra: " n=\(n + 1)") }
         if let (pic, out) = lastPicture { line("static_end", pic, out, extra: " refreshes=\(refreshes.count)") }
+        if o.resumeFrames > 0 {
+            let n = Double(max(1, resume.count))
+            let maxBytes = resume.map(\.bytes).max() ?? 0
+            print(String(format: "phase=resume_mean frames=%d of=%d psnr_y=%.2f bytes=%.0f max_bytes=%d first_bytes=%d",
+                         resume.count, o.resumeFrames, resume.map(\.psnr).reduce(0, +) / n,
+                         Double(resume.map(\.bytes).reduce(0, +)) / n, maxBytes, resume.first?.bytes ?? 0))
+        }
         print("summary codec_configs=\(configs) outputs=\(outputs.value.count - configs)")
         return failed.value == nil ? 0 : 1
     }

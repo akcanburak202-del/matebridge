@@ -29,41 +29,115 @@ extension Codec {
     }
 }
 
+/// What an idle refresh re-submits (T-087): the last captured buffer object itself (`same`, the T-086 behaviour), or
+/// a content copy in a fresh pool buffer (`copy`). Measured: VideoToolbox encodes both identically (T-087 Handoff).
+public enum IdleRefreshBuffer: String, Equatable, Sendable, CaseIterable {
+    case same
+    case copy
+
+    /// `MATEBRIDGE_IDLE_REFRESH_BUFFER`: case-insensitive; anything else (or nil) is `.same`.
+    public static func parse(_ text: String?) -> IdleRefreshBuffer {
+        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let b = IdleRefreshBuffer(rawValue: t)
+        else { return .same }
+        return b
+    }
+}
+
 /// Idle quality refresh (T-086): on a static screen ScreenCaptureKit delivers nothing, so the last (often blurry,
 /// motion-time) P frame stays on the tablet. After `delayMs` without a real capture the last buffer is re-encoded
 /// `count` times (one frame interval apart), or once as a forced keyframe when `keyframe` is set.
+///
+/// T-087: an identical re-submission only adds detail while the encoder's current QP is lower than the QP the last
+/// motion frame got; in a settled session they are equal and VideoToolbox emits all-skip frames. `maxQP` caps the
+/// frame QP (`kVTCompressionPropertyKey_MaxAllowedFrameQP`) for the refresh frames only and lifts the cap before the
+/// next other frame (`RefreshQPBoost`). VideoToolbox honours that mid-stream change only with the low-latency rate
+/// control (`MATEBRIDGE_ENCODER=llrc`); the default `fast` profile accepts the property and ignores it.
 public struct IdleRefreshConfig: Equatable, Sendable {
     public static let defaultCount = 3
     public static let countRange: ClosedRange<Int> = 1...30
     public static let delayRange: ClosedRange<Int> = 1...10_000
+    /// HEVC and H.264 QP range.
+    public static let maxQPRange: ClosedRange<Int> = 1...51
 
     /// 0 = off.
     public var delayMs: Int = 0
     public var count: Int = IdleRefreshConfig.defaultCount
     public var keyframe = false
+    public var buffer = IdleRefreshBuffer.same
+    /// QP cap for the refresh frames (nil: none, the T-086 behaviour).
+    public var maxQP: Int?
 
-    public init(delayMs: Int = 0, count: Int = IdleRefreshConfig.defaultCount, keyframe: Bool = false) {
+    public init(delayMs: Int = 0, count: Int = IdleRefreshConfig.defaultCount, keyframe: Bool = false,
+                buffer: IdleRefreshBuffer = .same, maxQP: Int? = nil) {
         self.delayMs = delayMs
         self.count = count
         self.keyframe = keyframe
+        self.buffer = buffer
+        self.maxQP = maxQP
     }
 
     public var isEnabled: Bool { delayMs > 0 }
 
     /// `MATEBRIDGE_IDLE_REFRESH_MS` (1...10 000, anything else is off), `MATEBRIDGE_IDLE_REFRESH_COUNT` (1...30,
-    /// default 3), `MATEBRIDGE_IDLE_REFRESH_KEY=1` (keyframe variant).
+    /// default 3), `MATEBRIDGE_IDLE_REFRESH_KEY=1` (keyframe variant), `MATEBRIDGE_IDLE_REFRESH_BUFFER=same|copy`,
+    /// `MATEBRIDGE_IDLE_REFRESH_QP` (1...51, anything else is unset).
     public static func parse(_ env: [String: String]) -> IdleRefreshConfig {
         var c = IdleRefreshConfig()
         if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_MS"]), delayRange.contains(v) { c.delayMs = v }
         if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_COUNT"]), countRange.contains(v) { c.count = v }
         c.keyframe = env["MATEBRIDGE_IDLE_REFRESH_KEY"]?.trimmingCharacters(in: .whitespaces) == "1"
+        c.buffer = IdleRefreshBuffer.parse(env["MATEBRIDGE_IDLE_REFRESH_BUFFER"])
+        if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_QP"]), maxQPRange.contains(v) { c.maxQP = v }
         return c
     }
 
-    /// Log value: `off`, `300ms*3` or `300ms*key`.
+    /// Log value: `off`, `300ms*3` or `300ms*key`, plus `+copy` and `+qp12` when those are set.
     public var logValue: String {
         guard isEnabled else { return "off" }
-        return keyframe ? "\(delayMs)ms*key" : "\(delayMs)ms*\(count)"
+        var v = keyframe ? "\(delayMs)ms*key" : "\(delayMs)ms*\(count)"
+        if buffer == .copy { v += "+copy" }
+        if let q = maxQP { v += "+qp\(q)" }
+        return v
+    }
+}
+
+/// When to set and lift the refresh-frame QP cap (T-087). Pure; the encoder owns one only when
+/// `IdleRefreshConfig.maxQP` is set, and asks it before every frame it submits, under one lock together with the
+/// property call, so the last property change always belongs to the last frame decided.
+///
+/// The cap goes on before the first refresh frame and comes off before the next non-refresh frame (a real capture or
+/// a keyframe re-submission), so it never outlives a static stretch by more than that one frame's decision. If
+/// VideoToolbox refuses the cap it is disabled for the session.
+public struct RefreshQPBoost: Sendable {
+    public enum Change: Equatable, Sendable {
+        /// Set `MaxAllowedFrameQP` to this value.
+        case apply(Int)
+        /// Lift the cap again.
+        case restore
+    }
+
+    public let maxQP: Int
+    public private(set) var active = false
+    public private(set) var disabled = false
+
+    public init(maxQP: Int) { self.maxQP = maxQP }
+
+    /// The property change needed before submitting a frame (nil: none).
+    public mutating func before(refresh: Bool) -> Change? {
+        if refresh {
+            guard !active, !disabled else { return nil }
+            active = true
+            return .apply(maxQP)
+        }
+        guard active else { return nil }
+        active = false
+        return .restore
+    }
+
+    /// VideoToolbox refused `.apply`: the cap is not in place and is not tried again.
+    public mutating func applyFailed() {
+        active = false
+        disabled = true
     }
 }
 

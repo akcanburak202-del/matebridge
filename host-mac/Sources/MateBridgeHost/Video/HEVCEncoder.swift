@@ -25,8 +25,9 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
 ///
 /// Newest frame wins: at most `maxInFlight` frames are inside VideoToolbox and one more "latest" frame waits in
 /// `pending` (replaced by newer captures, submitted when a slot frees). The last captured buffer is retained so a
-/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer is
-/// re-encoded by the optional idle quality refresh (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086).
+/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer (or,
+/// with `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy`, a copy of it) is re-encoded by the optional idle quality refresh
+/// (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086), optionally under a QP cap (`MATEBRIDGE_IDLE_REFRESH_QP`, T-087).
 final class HEVCEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
@@ -42,6 +43,8 @@ final class HEVCEncoder: @unchecked Sendable {
         var slotFreeAtArrival = true
         /// Time spent waiting for a free slot, set when the frame claims its slot (`reserveSlot`).
         var slotWaitUs: UInt64 = 0
+        /// An idle quality refresh re-submission (T-087: the refresh QP cap applies to these only).
+        var refresh = false
     }
 
     static let maxInFlight = 2
@@ -73,6 +76,14 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastStampUs: UInt64?
     private var pacer: FramePacer<Input>
     private var flushScheduled = false
+    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Guarded by `boostLock`, which is
+    /// held only around the decision and the property call (never around `VTCompressionSessionEncodeFrame`).
+    private var qpBoost: RefreshQPBoost?
+    /// `qpBoost != nil`, fixed at creation (read without the lock).
+    private let qpBoostEnabled: Bool
+    private let boostLock = NSLock()
+    /// Pool for `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` (T-087). Used only on the refresh timer queue.
+    private var refreshPool: CVPixelBufferPool?
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
@@ -109,6 +120,10 @@ final class HEVCEncoder: @unchecked Sendable {
         let knobs = knobs ?? EncoderKnobs.parse(ProcessInfo.processInfo.environment)
         self.knobs = knobs
         self.idleRefresh = IdleRefreshPolicy(config: knobs.idleRefresh, fps: settings.fps)
+        if knobs.idleRefresh.isEnabled, !knobs.idleRefresh.keyframe, let qp = knobs.idleRefresh.maxQP {
+            self.qpBoost = RefreshQPBoost(maxQP: qp)
+        }
+        self.qpBoostEnabled = qpBoost != nil
 
         // T-047/T-053 bench: at 2800x1840 the low-latency rate control + RealTime path costs ~9-13 ms per frame and
         // tops out near 100 fps; without both the hardware encoder needs ~6 ms. Frame sizes stay even enough (p99 <=
@@ -199,6 +214,11 @@ final class HEVCEncoder: @unchecked Sendable {
                 "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
                 + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
                 + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)")
+        if qpBoostEnabled, profile == .fast {
+            // T-087 bench: the fast profile (no low-latency rate control) accepts a mid-stream MaxAllowedFrameQP
+            // and ignores it, so the refresh frames stay all-skip in a settled session.
+            logSink(.warning, "idle_refresh_qp", "effective=0 reason=fast_profile_ignores_midstream_qp")
+        }
     }
 
     static func codecType(_ codec: Codec) -> CMVideoCodecType {
@@ -277,16 +297,117 @@ final class HEVCEncoder: @unchecked Sendable {
     /// it happen under one lock, so a newer capture can never be replaced in `last` by an older buffer.
     /// The stamp keeps the real captures' capture-to-delivery lead (T-086): the tablet pacer judges lateness as
     /// `ready - capture_time`, and a re-submission stamped plain "now" would look one lead (~6.6 ms) late.
-    private func resubmitLast() {
+    ///
+    /// `refresh`: an idle quality refresh (T-087). With `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` its content is copied
+    /// into a fresh buffer first (outside the lock); if a newer capture replaced `last` meanwhile, the stale copy is
+    /// dropped (that capture re-armed the refresh policy anyway).
+    private func resubmitLast(refresh: Bool = false) {
+        var copy: CVPixelBuffer?
+        var copiedFrom: CVPixelBuffer?
+        if refresh, knobs.idleRefresh.buffer == .copy {
+            lock.lock(); let source = stopped ? nil : last?.buffer; lock.unlock()
+            guard let source else { return }
+            let start = DispatchTime.now().uptimeNanoseconds
+            copy = copyForRefresh(source)
+            let us = (DispatchTime.now().uptimeNanoseconds - start) / 1000
+            logSink(.debug, "idle_refresh_copy", "us=\(us) ok=\(copy != nil ? 1 : 0)")
+            copiedFrom = source
+        }
         lock.lock()
         guard !stopped, let l = last else { lock.unlock(); return }
+        if let copiedFrom, l.buffer !== copiedFrom { lock.unlock(); return }
         let nowUs = HostClock.nowUs()
         let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
-        let input = Input(buffer: l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
+        var input = Input(buffer: copy ?? l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
                           captureTimeUs: stamp, deliveredUs: nowUs)
+        input.refresh = refresh
         let work = offerLocked(input, bypassGate: true, capture: false)
         lock.unlock()
         perform(work)
+    }
+
+    /// Copies a captured frame into a new IOSurface-backed buffer of the same size and format, with its attachments
+    /// (colour tags). Refresh timer queue only (owns `refreshPool`). nil if the copy cannot be made.
+    private func copyForRefresh(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(source), height = CVPixelBufferGetHeight(source)
+        let format = CVPixelBufferGetPixelFormatType(source)
+        if let pool = refreshPool, let attrs = CVPixelBufferPoolGetPixelBufferAttributes(pool) as? [CFString: Any],
+           attrs[kCVPixelBufferWidthKey] as? Int != width || attrs[kCVPixelBufferHeightKey] as? Int != height
+            || (attrs[kCVPixelBufferPixelFormatTypeKey] as? NSNumber)?.uint32Value != format {
+            refreshPool = nil
+        }
+        if refreshPool == nil {
+            let attrs: [CFString: Any] = [
+                kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
+                kCVPixelBufferPixelFormatTypeKey: format,
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
+            ]
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool)
+            refreshPool = pool
+        }
+        guard let pool = refreshPool else { return nil }
+        var made: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let copy = made else {
+            return nil
+        }
+        CVPixelBufferLockBaseAddress(source, .readOnly)
+        CVPixelBufferLockBaseAddress(copy, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(copy, [])
+            CVPixelBufferUnlockBaseAddress(source, .readOnly)
+        }
+        let planes = CVPixelBufferGetPlaneCount(source)
+        guard planes == CVPixelBufferGetPlaneCount(copy), planes > 0 else { return nil }
+        for p in 0..<planes {
+            guard let from = CVPixelBufferGetBaseAddressOfPlane(source, p),
+                  let to = CVPixelBufferGetBaseAddressOfPlane(copy, p) else { return nil }
+            let fromStride = CVPixelBufferGetBytesPerRowOfPlane(source, p)
+            let toStride = CVPixelBufferGetBytesPerRowOfPlane(copy, p)
+            let rows = min(CVPixelBufferGetHeightOfPlane(source, p), CVPixelBufferGetHeightOfPlane(copy, p))
+            if fromStride == toStride {
+                memcpy(to, from, fromStride * rows)
+            } else {
+                let n = min(fromStride, toStride)
+                for r in 0..<rows { memcpy(to + r * toStride, from + r * fromStride, n) }
+            }
+        }
+        CVBufferPropagateAttachments(source, copy)
+        return copy
+    }
+
+    /// `MaxAllowedFrameQP` as the session reports it (diagnostics).
+    private static func readMaxQP(_ session: VTCompressionSession) -> String {
+        var raw: UnsafeMutableRawPointer?
+        let st = VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP, allocator: nil,
+                                       valueOut: &raw)
+        guard st == noErr, let raw else { return "unset(\(st))" }
+        return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
+    }
+
+    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set).
+    private func updateQPBoost(refresh: Bool, session: VTCompressionSession) {
+        boostLock.lock()
+        defer { boostLock.unlock() }
+        guard var boost = qpBoost, let change = boost.before(refresh: refresh) else { return }
+        switch change {
+        case .apply(let qp):
+            let st = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
+                                          value: qp as CFNumber)
+            if st != noErr {
+                boost.applyFailed()
+                logSink(.warning, "idle_refresh_qp", "effective=0 status=\(st)")
+            }
+            logSink(.debug, "idle_refresh_qp", "change=apply qp=\(qp) status=\(st) readback=\(Self.readMaxQP(session))")
+        case .restore:
+            // No cap is set at creation and VideoToolbox refuses NULL here, so "lifted" is the codec maximum
+            // (measured T-087: a cap of 51 behaves exactly like no cap).
+            let st = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
+                                          value: IdleRefreshConfig.maxQPRange.upperBound as CFNumber)
+            if st != noErr { logSink(.warning, "idle_refresh_qp", "restore_failed status=\(st)") }
+            logSink(.debug, "idle_refresh_qp", "change=restore status=\(st) readback=\(Self.readMaxQP(session))")
+        }
+        qpBoost = boost
     }
 
     /// Idle quality refresh (T-086): re-encodes the last captured buffer once the screen has been static for the
@@ -301,7 +422,7 @@ final class HEVCEncoder: @unchecked Sendable {
             return
         case .resubmit(let first):
             if first { logSink(.info, "idle_refresh", "frames=\(knobs.idleRefresh.count)") }
-            resubmitLast()
+            resubmitLast(refresh: true)
         case .keyframe:
             logSink(.info, "idle_refresh", "frames=1 mode=key")
             requestKeyframe(resubmitNow: true)
@@ -397,6 +518,7 @@ final class HEVCEncoder: @unchecked Sendable {
         trace.captureUs = FrameTrace.origin(displayUs: frame.displayTimeUs, ptsUs: captureTimeUs,
                                             deliveredUs: frame.deliveredUs)
         trace.slotWaitUs = frame.slotWaitUs
+        if qpBoostEnabled { updateQPBoost(refresh: frame.refresh, session: session) }
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
