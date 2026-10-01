@@ -14,6 +14,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
+| [T-073](tasks/T-073-client-trace-receive-path.md) | Tablet — kare izine alma yolu zamanları (soketten okundu, şifre çözüldü, kuyruğa girdi, çözücüye verildi) | 5 | android-client-dev | [T-069] |
 
 ## done
 
