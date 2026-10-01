@@ -1,7 +1,7 @@
 ---
 id: T-079
 title: Tablet — PerformanceHintManager deneyi (ağ, çözücü giriş/çıkış iş parçacıkları için kare süresi hedefi)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-077]
