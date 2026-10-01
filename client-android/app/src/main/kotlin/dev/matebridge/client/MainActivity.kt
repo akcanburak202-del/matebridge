@@ -74,6 +74,11 @@ import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
 import dev.matebridge.client.session.Transport
+import dev.matebridge.client.session.TransportMode
+import dev.matebridge.client.session.AutoUsbPolicy
+import dev.matebridge.client.session.CableTracker
+import dev.matebridge.client.session.ProbeResult
+import dev.matebridge.client.session.UsbProbe
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
 import dev.matebridge.client.clipboard.ClipboardBridge
@@ -183,8 +188,26 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var manualMode = false
     private var started = false
     private var benchForwarded = false // T-090: this instance only forwarded to NetBenchActivity
-    private var transport = Transport.WIFI
     private var usbStartMs = 0L
+
+    // T-096 connection mode: AUTO (USB when reachable, else Wi-Fi, moving a Wi-Fi session to USB when it appears), or
+    // one transport only. `--es transport auto|usb|wifi` overrides the stored setting for this activity instance.
+    private var mode = TransportMode.AUTO
+    private var modeOverride: TransportMode? = null
+    private val cable = CableTracker()
+    private val autoPolicy = AutoUsbPolicy()
+    private var cableRegistered = false
+    private var lastWifiEndpoint: Endpoint? = null // in memory: the USB -> Wi-Fi fallback goes straight back to it
+    private var probeExec: java.util.concurrent.ExecutorService? = null
+    private var pickGen = 0 // bumped to invalidate a running USB probe
+    private var picking = false
+    private var transportEpoch = 0 // bumped whenever the transport is re-applied; stale migration results are ignored
+    private var migrateEpoch = -1
+    private var fallbackPending = false
+    private var autoButtons: List<Pair<TransportMode, Button>> = emptyList()
+
+    /** Control generation the input layer last reset its model for (T-096); input goes only onto that connection. */
+    private var inputGen = -1
     private var hostReached = false
     private val usbHintCheck = Runnable { render(lastUi) }
     private var lastUi: SessionUi = SessionUi.Searching
@@ -221,7 +244,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Holds the low-latency Wi-Fi lock only while a Wi-Fi session is connected and the activity is started (T-089). */
     private fun syncWifiLock(reason: String) {
         val h = wifiLock ?: return
-        val tr = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: transport
+        val tr = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI // no endpoint: not connected
         h.sync(dev.matebridge.client.session.WifiLockPolicy.shouldHold(knobs.wifiLowLatency, tr, started && !isDestroyed, lastUi), reason)
     }
 
@@ -291,6 +314,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         parseWifiKnobs()
         audioAllowed = intent?.getBooleanExtra("audio", true) != false
         MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
+        intent?.getStringExtra("transport")?.let { raw -> // T-096: one launch only, the stored setting is not changed
+            modeOverride = TransportMode.parse(raw)
+            MbLog.i("transport_knob", "override=${modeOverride?.id ?: "invalid"}")
+        }
+        // T-096: one probe thread and at most one waiting probe; a newer one replaces a waiting older one (each result is
+        // checked against pickGen anyway, so a dropped probe loses nothing).
+        probeExec = java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, java.util.concurrent.ArrayBlockingQueue(1),
+            { r -> Thread(r, "mb-usb-probe").also { it.isDaemon = true } },
+            java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy(),
+        )
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -322,13 +356,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun getString(key: String) = prefs.getString(key, null)
             override fun putString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
         })
+        settings.migrateTransportToAutoOnce()?.let { old -> MbLog.i("transport_pref_migrated", "from=${TransportMode.parse(old)?.id ?: "other"} to=auto") } // T-096
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
         setupManualEntry()
         findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
-        findViewById<Button>(R.id.connect_usb).setOnClickListener { selectTransport(Transport.USB) }
-        findViewById<Button>(R.id.connect_wifi).setOnClickListener { selectTransport(Transport.WIFI) }
+        autoButtons = listOf(
+            TransportMode.AUTO to findViewById(R.id.connect_auto),
+            TransportMode.USB to findViewById(R.id.connect_usb),
+            TransportMode.WIFI to findViewById(R.id.connect_wifi),
+        )
+        for ((m, b) in autoButtons) b.setOnClickListener { selectTransport(m) }
 
         val pairKeys = EncryptedPairKeyStore(
             object : KeyValueStore {
@@ -358,7 +397,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSessionStart() {
                 clock.reset()
                 rttStats.reset()
-                runOnUiThread { capture.onSessionReset() } // the host holds no input state for a new connection
             }
 
             override fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {
@@ -369,7 +407,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
 
             // T-095: audio is armed per control connection; stale readers' messages are dropped by generation.
-            override fun onConnectionGen(gen: Int) { audio?.beginSession(gen) }
+            override fun onConnectionGen(gen: Int) {
+                audio?.beginSession(gen)
+                // The host holds no input state for a new connection (a takeover released the old one). Model reset and
+                // the new send target change together, so nothing from the old model can reach the new connection.
+                runOnUiThread {
+                    inputGen = gen
+                    capture.onSessionReset()
+                    // T-096: a migration stays Connected; re-arm the clipboard for the new generation (render() accepts it).
+                    if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(false, System.currentTimeMillis(), gen)
+                }
+            }
+
+            override fun onMigration(endpoint: Endpoint, ok: Boolean, reason: String) {
+                runOnUiThread { onMigrationResult(endpoint, ok, reason) }
+            }
 
             override fun onAudio(msg: Message, gen: Int) { audio?.onAudio(msg, gen) } // control reader thread, never blocks
 
@@ -377,9 +429,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }, streamMode, quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
         capture = InputCapture(
             object : InputSink {
-                override fun send(msg: Message) = controller.trySend(msg)
+                override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
                 override fun congested() = controller.isSendCongested()
-                override fun closeConnection() = controller.dropConnection()
+                override fun closeConnection() = controller.dropConnection(inputGen)
             },
             { viewport },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
@@ -1059,9 +1111,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs())) +
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
-            val ep = currentEndpoint
-            val tr = if (ep != null) ConnectMode.transportOf(ep) else transport
-            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) + "\n" +
+            val tr = currentTransport()
+            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
+                (if (mode == TransportMode.AUTO) " (otomatik)" else "") + "\n" +
                 StreamMode.overlayLine(streamMode, streamConfig) + "\n" + withGl
         }
         if (gl != null) {
@@ -1094,10 +1146,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             "render",
         )
         // T-089: RTT of this statistics window (PING -> PONG), with the transport it was measured on.
-        val ep = currentEndpoint
         MbLog.i(
             "net",
-            "transport=${(if (ep != null) ConnectMode.transportOf(ep) else transport).logName} " +
+            "transport=${currentTransport().logName} " +
                 "${rttStats.snapshot(reset = true).fields()} ping_ms=${knobs.pingMs}",
         )
     }
@@ -1108,7 +1159,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         dev.matebridge.client.session.MbLog.i("activity_start")
         currentEndpoint = null
         manualMode = false
-        transport = settings.transport()
+        mode = modeOverride ?: settings.transportMode()
+        updateTransportButtons()
         hostReached = false
         hideManualEntry() // T-078: every (re)start begins without an editable field on screen
         render(SessionUi.Searching)
@@ -1117,33 +1169,230 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(inputTicker)
         ui.post(inputTicker)
         (getSystemService(Context.INPUT_SERVICE) as InputManager).registerInputDeviceListener(inputDeviceListener, ui)
+        registerCableReceiver()
         applyTransport()
+        ui.removeCallbacks(autoTicker)
+        ui.postDelayed(autoTicker, AUTO_TICK_MS)
     }
 
-    /** USB: connect straight to loopback and skip NSD; Wi-Fi: NSD discovery (auto-connect) as before. */
+    /**
+     * USB: connect straight to loopback and skip NSD; Wi-Fi: NSD discovery (auto-connect) as before. AUTO (T-096): a short
+     * TCP probe of the USB port decides (USB when open, else Wi-Fi); [autoTicker] keeps watching afterwards.
+     */
     private fun applyTransport() {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
-        if (ConnectMode.autoDiscover(transport)) {
-            manualMode = false
-            discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
-        } else {
-            manualMode = true
-            usbStartMs = SystemClock.elapsedRealtime()
-            hostReached = false
-            ui.postDelayed(usbHintCheck, ConnectMode.USB_TIMEOUT_MS)
-            connect(ConnectMode.usbEndpoint)
+        pickGen++
+        picking = false
+        transportEpoch++
+        fallbackPending = false
+        when (mode) {
+            TransportMode.WIFI -> { logPick("wifi", "manual"); startWifi() }
+            TransportMode.USB -> { logPick("usb", "manual"); startUsb(hint = true) }
+            TransportMode.AUTO -> probeUsb(initial = true)
         }
     }
 
-    private fun selectTransport(t: Transport) {
-        transport = t
-        settings.setTransport(t)
+    private fun logPick(chosen: String, reason: String) = MbLog.i("transport_pick", "mode=${mode.id} chosen=$chosen reason=$reason")
+
+    /** Wi-Fi: NSD discovery (auto-connect). In AUTO a Wi-Fi endpoint already used in this activity is tried at once too. */
+    private fun startWifi() {
+        manualMode = false
+        discovery?.stop()
+        discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
+        if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it) }
+    }
+
+    /** USB: loopback (`adb reverse`), no NSD. The "USB link missing" hint is for the manual USB mode only. */
+    private fun startUsb(hint: Boolean) {
+        discovery?.stop()
+        discovery = null
+        manualMode = true
+        usbStartMs = SystemClock.elapsedRealtime()
+        hostReached = false
+        ui.removeCallbacks(usbHintCheck)
+        if (hint) ui.postDelayed(usbHintCheck, ConnectMode.USB_TIMEOUT_MS)
+        connect(ConnectMode.usbEndpoint)
+    }
+
+    private fun selectTransport(m: TransportMode) {
+        mode = m
+        modeOverride = null // a panel choice ends the launch override
+        settings.setTransportMode(m)
+        updateTransportButtons()
         currentEndpoint = null
         controller.stop()
         render(SessionUi.Searching)
         applyTransport()
+    }
+
+    private fun updateTransportButtons() {
+        for ((m, b) in autoButtons) {
+            val base = getString(
+                when (m) {
+                    TransportMode.AUTO -> R.string.connect_auto
+                    TransportMode.USB -> R.string.connect_usb
+                    TransportMode.WIFI -> R.string.connect_wifi
+                },
+            )
+            b.text = if (m == mode) "$base (seçili)" else base
+        }
+    }
+
+    private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI
+
+    private fun isOnUsb(): Boolean = currentEndpoint?.let { ConnectMode.transportOf(it) == Transport.USB } == true
+
+    // ---- T-096 automatic transport ----
+
+    /**
+     * TCP connect to the USB control port, closed at once (no HELLO, nothing sent), off the UI thread, <= 500 ms.
+     * [initial]: the AUTO pick at start (USB when open, else Wi-Fi); otherwise a rescan while not connected on Wi-Fi
+     * (switches to USB only when open).
+     */
+    private fun probeUsb(initial: Boolean) {
+        val exec = probeExec ?: return
+        val gen = ++pickGen
+        picking = true
+        autoPolicy.onTryStarted(SystemClock.elapsedRealtime())
+        try {
+            exec.execute {
+                val r = UsbProbe.classify {
+                    java.net.Socket().use { s ->
+                        s.connect(java.net.InetSocketAddress(ConnectMode.USB_HOST, ConnectMode.USB_CONTROL_PORT), UsbProbe.TIMEOUT_MS)
+                    }
+                }
+                runOnUiThread { onProbeResult(gen, r, initial) }
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            picking = false
+            autoPolicy.onTryResult(AutoUsbPolicy.Outcome.SOFT_FAIL, SystemClock.elapsedRealtime())
+            if (initial) { logPick("wifi", ProbeResult.ERROR.reason); startWifi() }
+        }
+    }
+
+    private fun onProbeResult(gen: Int, r: ProbeResult, initial: Boolean) {
+        if (gen != pickGen || !started || isDestroyed || mode != TransportMode.AUTO) return
+        picking = false
+        autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(r), SystemClock.elapsedRealtime())
+        when {
+            r == ProbeResult.OPEN && initial -> {
+                logPick("usb", r.reason)
+                startUsb(hint = false)
+            }
+            initial -> { logPick("wifi", r.reason); startWifi() }
+            r == ProbeResult.OPEN && !isOnUsb() -> {
+                // The rescan started while not connected; the Wi-Fi session may have got further since. Never tear down
+                // an accepted session (migrate it instead) and never interrupt a pairing or a running connect.
+                val action = AutoUsbPolicy.onProbeOpen(lastUi)
+                MbLog.i("transport_probe", "result=${r.reason} action=${action.name.lowercase(java.util.Locale.ROOT)}")
+                when (action) {
+                    AutoUsbPolicy.OpenAction.SWITCH -> {
+                        logPick("usb", r.reason + " trigger=rescan")
+                        startUsb(hint = false)
+                    }
+                    AutoUsbPolicy.OpenAction.MIGRATE -> startMigration(SystemClock.elapsedRealtime())
+                    AutoUsbPolicy.OpenAction.IGNORE -> Unit
+                }
+            }
+            else -> Unit // rescan: stay on Wi-Fi
+        }
+    }
+
+    /** Moves the accepted session to USB via takeover; the result comes back through [onMigrationResult]. */
+    private fun startMigration(nowMs: Long) {
+        autoPolicy.onTryStarted(nowMs)
+        migrateEpoch = transportEpoch
+        controller.migrate(ConnectMode.usbEndpoint) // real handshake: refused locally if no `adb reverse`
+    }
+
+    /** Every [AUTO_TICK_MS] while started in AUTO: the policy decides whether to try USB now. */
+    private val autoTicker = object : Runnable {
+        override fun run() {
+            autoStep()
+            ui.postDelayed(this, AUTO_TICK_MS)
+        }
+    }
+
+    private fun autoStep() {
+        if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending) return
+        val now = SystemClock.elapsedRealtime()
+        when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now)) {
+            AutoUsbPolicy.Step.MIGRATE -> startMigration(now)
+            AutoUsbPolicy.Step.PROBE -> probeUsb(initial = false)
+            AutoUsbPolicy.Step.NONE -> Unit
+        }
+    }
+
+    private fun onMigrationResult(ep: Endpoint, ok: Boolean, reason: String) {
+        autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(ok, reason), SystemClock.elapsedRealtime())
+        if (!ok || !started || isDestroyed || migrateEpoch != transportEpoch) return
+        currentEndpoint = ep
+        if (ConnectMode.transportOf(ep) == Transport.USB) {
+            // Now on USB: no Wi-Fi discovery; a later drop falls back to Wi-Fi from render().
+            discovery?.stop()
+            discovery = null
+            manualMode = true
+            hostReached = true
+            ui.removeCallbacks(usbHintCheck)
+            autoPolicy.onUsbConnected()
+        }
+        logPick(ConnectMode.transportOf(ep).logName, "migrated")
+        syncWifiLock("migrated") // T-089 lock: held on Wi-Fi only
+    }
+
+    /** AUTO on USB and the session dropped: go back to Wi-Fi (last Wi-Fi endpoint at once, plus discovery). */
+    private fun fallBackToWifi() {
+        fallbackPending = false
+        if (!started || isDestroyed || mode != TransportMode.AUTO || !isOnUsb() || lastUi !is SessionUi.Disconnected) return
+        autoPolicy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, SystemClock.elapsedRealtime()) // back off before USB again
+        logPick("wifi", "usb_lost")
+        pickGen++
+        picking = false
+        transportEpoch++
+        ui.removeCallbacks(usbHintCheck)
+        currentEndpoint = null
+        if (lastWifiEndpoint == null) controller.stop() // no Wi-Fi address yet: stop the USB retries, discovery connects
+        startWifi() // with a known Wi-Fi endpoint, its start replaces the USB session at once
+    }
+
+    private val cableReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: android.content.Intent) { onCableIntent(intent) }
+    }
+
+    /** USB_STATE and BATTERY_CHANGED are sticky: registering delivers the current state at once. */
+    private fun registerCableReceiver() {
+        if (cableRegistered) return
+        val f = android.content.IntentFilter().apply {
+            addAction(ACTION_USB_STATE)
+            addAction(android.content.Intent.ACTION_BATTERY_CHANGED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(cableReceiver, f, Context.RECEIVER_NOT_EXPORTED)
+            else registerReceiver(cableReceiver, f)
+            cableRegistered = true
+        } catch (e: RuntimeException) {
+            MbLog.w("usb_cable", "state=unknown src=register_failed err=${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun unregisterCableReceiver() {
+        if (!cableRegistered) return
+        cableRegistered = false
+        try { unregisterReceiver(cableReceiver) } catch (_: IllegalArgumentException) {}
+    }
+
+    private fun onCableIntent(i: android.content.Intent) {
+        val (changed, src) = when (i.action) {
+            ACTION_USB_STATE -> cable.onUsbState(i.getBooleanExtra("connected", false)) to "usb_state"
+            android.content.Intent.ACTION_BATTERY_CHANGED ->
+                cable.onBattery(i.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0)) to "battery"
+            else -> false to ""
+        }
+        if (!changed) return
+        MbLog.i("usb_cable", "state=${cable.state.logName} src=$src")
+        autoPolicy.onCable(cable.state, SystemClock.elapsedRealtime())
     }
 
     override fun onStop() {
@@ -1156,6 +1405,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
+        ui.removeCallbacks(autoTicker)
+        unregisterCableReceiver()
+        pickGen++ // a probe still running reports into nothing
+        picking = false
+        fallbackPending = false
+        transportEpoch++
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         audio?.endSession("background") // T-095: silence at once and take no more audio; the BYE stops the host
@@ -1173,6 +1428,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         controller.shutdown()
         audio?.shutdown()
         wifiLock?.sync(false, "destroy")
+        probeExec?.shutdownNow()
         perfHint?.close()
         super.onDestroy()
     }
@@ -1201,6 +1457,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun connect(ep: Endpoint) {
         currentEndpoint = ep
+        transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
+        if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName}")
         controller.start(ep)
     }
@@ -1218,6 +1476,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         lastUi = state
         syncWifiLock(state.javaClass.simpleName.lowercase(java.util.Locale.ROOT))
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
+        // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
+        if (state is SessionUi.Connected && isOnUsb()) autoPolicy.onUsbConnected()
+        if (!fallbackPending && AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), state)) {
+            fallbackPending = true
+            ui.post { fallBackToWifi() }
+        }
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
@@ -1237,7 +1501,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
                 else getString(R.string.state_failed, causeText(state.cause))
         }
-        if (ConnectMode.showUsbHint(transport, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
+        if (ConnectMode.showUsbHint(mode, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
             status.text = getString(R.string.usb_missing)
         }
         syncInputActive() // panel visibility decides whether input is captured
@@ -1274,6 +1538,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val INPUT_TICK_MS = 25L
         const val POINTER_CAPTURE_RETRY_MS = 500L
         const val INPUT_FAULT_BACKOFF_MS = 1000L
+        const val AUTO_TICK_MS = 500L // T-096; attempts themselves are >= 2 s apart (AutoUsbPolicy)
+        /** `UsbManager.ACTION_USB_STATE` (hidden constant, sticky system broadcast; extra `connected`). */
+        const val ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE"
     }
 
     private fun causeText(c: SessionUi.Cause) = getString(

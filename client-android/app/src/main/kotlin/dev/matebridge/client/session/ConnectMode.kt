@@ -25,9 +25,10 @@ object ConnectMode {
     fun autoDiscover(mode: Transport) = mode == Transport.WIFI
 
     /**
-     * Show "USB link missing" once USB mode has been trying for [USB_TIMEOUT_MS] without reaching the host
-     * (still waiting for the connection, or it dropped/failed) and no session is established.
+     * Show "USB link missing" once the manual USB mode has been trying for [USB_TIMEOUT_MS] without reaching the host
+     * (still waiting for the connection, or it dropped/failed) and no session is established. AUTO falls back to
+     * Wi-Fi instead (T-096), so it never shows the hint.
      */
-    fun showUsbHint(mode: Transport, elapsedMs: Long, hostReached: Boolean) =
-        mode == Transport.USB && !hostReached && elapsedMs >= USB_TIMEOUT_MS
+    fun showUsbHint(mode: TransportMode, elapsedMs: Long, hostReached: Boolean) =
+        mode == TransportMode.USB && !hostReached && elapsedMs >= USB_TIMEOUT_MS
 }
