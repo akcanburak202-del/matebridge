@@ -70,17 +70,19 @@ public enum SendQueueLogKnob {
     }
 }
 
-/// `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` (T-091): which TCP stack carries the video connection. `nw` (the default) is
-/// Network.framework (`NWListener`/`NWConnection`, user-space TCP on Skywalk); `bsd` is a kernel BSD socket
-/// (`BsdTcpListener`/`BsdTcpConnection`) with `TCP_NOTSENT_LOWAT` backpressure.
+/// `MATEBRIDGE_VIDEO_SOCKET=bsd|nw` (T-091, default flipped in T-092): which TCP stack carries the video
+/// connection. `bsd` (the default) is a kernel BSD socket (`BsdTcpListener`/`BsdTcpConnection`) with
+/// `TCP_NOTSENT_LOWAT` backpressure; `nw` is Network.framework (`NWListener`/`NWConnection`, user-space TCP on
+/// Skywalk) and stays only as an explicit fallback. On Wi-Fi `nw` capped at ~28 Mbps with retransmits (372 ms,
+/// 13 fps) while `bsd` ran at 37–49 ms with no retransmits (T-091 device A/B, NOTES 2026-10-01).
 public enum VideoSocketKnob: String, Equatable, Sendable, CaseIterable {
     case nw
     case bsd
 
-    /// Case-insensitive; anything else (or nil) is `.nw`.
+    /// Case-insensitive; anything else (or nil) is `.bsd`. Only an explicit `nw` selects Network.framework.
     public static func parse(_ text: String?) -> VideoSocketKnob {
         guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = VideoSocketKnob(rawValue: t)
-        else { return .nw }
+        else { return .bsd }
         return k
     }
 
@@ -121,7 +123,7 @@ public struct VideoSocketSettings: Equatable, Sendable {
 
     public var notSentLowatBytes: Int { notSentLowatKB * 1024 }
 
-    /// For `ev=listening`: `video_socket=nw notsent_lowat_kb=na` or `video_socket=bsd notsent_lowat_kb=128`.
+    /// For `ev=listening`: `video_socket=bsd notsent_lowat_kb=128` (default) or `video_socket=nw notsent_lowat_kb=na`.
     public var logFields: String {
         "video_socket=\(socket.rawValue) notsent_lowat_kb=\(socket == .bsd ? String(notSentLowatKB) : "na")"
     }
