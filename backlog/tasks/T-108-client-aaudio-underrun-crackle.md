@@ -1,7 +1,7 @@
 ---
 id: T-108
 title: Tablet — Düşük gecikme (AAudio) seste oyun sırasında cızırtı; güvenli başlangıç tamponu, öğrenilen değeri hatırlama, boşalmada yumuşak geçiş
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-101]
@@ -46,6 +46,33 @@ Orkestratör log analizi (tablet `MB/audio ev=stats`, AAudio):
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+**Tık kaynağı (kod incelemesi, kanıt):**
+- AAudio'da geri çağrı yok (karar 0012 eki): yazıcı iş parçacığı her burst'ü `PlayoutCore.render` ile üretip bloklayan `write` ile yazar. Veri yokken (PRIMING) yazılan şey sıfırdır ve oraya her zaman sönümle (gain 0) gelinir. Native tarafta (`mbaudio.cpp`) veri yokken ayrıca bir şey yazılmıyor, xruns=0.
+- Boşalmada sönüm zaten var: `PlayoutCore` PLAYING'de `level < need + fadeOut(3 ms)` olunca `AudioRamp.fadeOut(144)` yapar. Rezerv önceki burst'te garanti: PLAYING devam ettiyse seviye ≥ 144 kare kalmıştı. Sönüm, gerçek veri bitmeden 0'a iner. Yeniden başlarken `fadeIn(5 ms)` var.
+- Yani tık sert bir örnek sıçraması değil. **Boşalmanın kendisi**: 3 ms sönüm, ardından ≥ target+span (~20–40 ms) sessizlik, ardından 5 ms yükseliş. Sürekli seste (kalabalık uğultusu) bu kısa delik "tık/cızırtı" olarak duyuluyor. Çözüm: boşalmayı önlemek (güvenli başlangıç + öğrenilen değer). Sönüm davranışı testle sabitlenir.
+
+**Uygulama (yalnız `audio/` + test):**
+1. `DriftController`:
+   - `resetSafety(initialMs, floorMs)` eklenir. Safety bu değerle başlar.
+   - Yavaş küçülme kuralı aynıdır (60 temiz pencerede 1 ms), alt sınırı `floorMs`. Üst sınır 40 ms.
+   - Varsayılan kurucu davranışı (5 ms) değişmez; mevcut testler aynen geçer.
+2. Yeni `SafetyMemory` (saf Kotlin) ve `SafetyStore` arayüzü:
+   - Varsayılanlar `AAUDIO_DEFAULT_SAFETY_MS = 20` ve `TRACK_DEFAULT_SAFETY_MS = 5` (AudioTrack değişmez).
+   - `initial(api) = max(varsayılan, kayıtlı)`, `source = stored` yalnız kayıtlı değer varsayılandan büyükse; değer [5, 40] aralığına kırpılır.
+   - `onSafety(api, ms, nowMs)` değişince kaydeder, en sık 10 s'de bir. `flush(api, ms)` çıkış kapanırken/değişirken kaydeder.
+   - AAudio'da küçülme alt sınırı 20 ms'dir (güvenli başlangıç). Öğrenilen fazlalık yavaşça 20'ye iner, 20'nin altına inip yeniden boşalma döngüsüne girmez (yorum: *Open questions*).
+3. `SharedPrefsSafetyStore`:
+   - `audio/` içinde, kendi dosyası `matebridge_audio` (anahtarlar `safety_ms_aaudio` / `safety_ms_track`), `apply()` ile.
+   - `Settings.kt` / `MainActivity` dokunulmaz.
+4. `AudioPlayout`:
+   - Her çıkış açılışında api önceki çıkıştan farklıysa (ya da ilk açılışsa) önceki api'nin değeri kaydedilir ve drift safety'si yeni api'nin başlangıcıyla kurulur.
+   - Aynı api'nin yeniden kurulumunda (routing/disconnected) öğrenilen değer korunur.
+   - `audio_out` log satırına `safety_init_ms=… source=default|stored` eklenir. Saniyelik stats'ta değişiklik seyrek kaydedilir, akış sonunda (finally) son değer kaydedilir.
+   - A/V (`av_offset_ms`, `audio_ms`) mantığına dokunulmaz.
+5. Testler:
+   - `SafetyMemoryTest`: varsayılan/kayıtlı başlangıç, kırpma, kayıt+geri okuma, seyrek kayıt.
+   - `DriftControllerTest`: `resetSafety` ve alt sınır.
+   - `UnderrunFadeTest`: `PlayoutCore`'u sabit DC ve sinüsle besleyip paketleri kesmek. Çıkış sönümle 0'a iner, en büyük ardışık örnek farkı ≤ genlik/144 + sinyal eğimi (sert kesimde ~genlik olurdu). Yeniden başlarken de aynı sınır. AAudio (240) ve AudioTrack (960) burst'leriyle.
+6. Native (`mbaudio.cpp`): değişiklik gerekmiyor (yukarıdaki kanıt).
 
 ## Handoff
