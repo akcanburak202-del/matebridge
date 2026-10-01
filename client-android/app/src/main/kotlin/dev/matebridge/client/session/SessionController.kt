@@ -87,6 +87,9 @@ interface SessionListener {
      * [endpoint]; [onSessionEnd], [onSessionStart] and [onConnectionGen] were called for the switch before it.
      */
     fun onMigration(endpoint: Endpoint, ok: Boolean, reason: String) {}
+
+    /** T-105: SETTINGS_OPEN arrived on the accepted session (engine thread); the UI opens the panel if streaming. */
+    fun onSettingsOpen() {}
 }
 
 /**
@@ -100,13 +103,13 @@ class SessionController(
     private val hello: Hello,
     private val pairKeys: PairKeyStore,
     private val listener: SessionListener,
-    initialMode: StreamMode = StreamMode.DEFAULT,
+    initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs(), // display mode + bit rate (T-050, T-105)
     private val quickAck: Boolean = true, // T-074 experiment switch (--ez quickack false)
     private val perfHint: PerfHint? = null, // T-079 experiment (--ez perf_hint true): video reader joins the hint session
     private val knobs: WifiKnobs = WifiKnobs(), // T-089 experiment knobs (ping interval, socket traffic class)
     initialAudio: Boolean? = null, // T-095: AUDIO_PREFS wish; null = audio not supported, AUDIO_PREFS never sent
 ) {
-    private val machine = SessionMachine(hello, initialMode.toPrefs(), knobs.pingIntervalUs, initialAudio)
+    private val machine = SessionMachine(hello, initialPrefs, knobs.pingIntervalUs, initialAudio)
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -158,11 +161,14 @@ class SessionController(
         intent.post(SessionMachine.Event.Start(endpoint))
     }
 
-    /** Non-blocking. Remembers the display mode and sends STREAM_PREFS now when the session is accepted (T-050). */
-    fun setStreamMode(mode: StreamMode) {
+    /**
+     * Non-blocking. Remembers the display mode and bit rate (T-050, T-105) and sends STREAM_PREFS now when the session is
+     * accepted and the value changed.
+     */
+    fun setStreamPrefs(prefs: StreamPrefs) {
         if (terminated.get()) return
         ensureEngine()
-        prefsMailbox.post(SessionMachine.Event.SetPrefs(mode.toPrefs()))
+        prefsMailbox.post(SessionMachine.Event.SetPrefs(prefs))
     }
 
     /** Non-blocking. The (already debounced) panel rate in Hz; sent when accepted and on change (T-059). */
@@ -187,6 +193,17 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         migrateMailbox.post(SessionMachine.Event.Migrate(endpoint))
+    }
+
+    /**
+     * Non-blocking. T-105: cancels a migration: a request still waiting in the mailbox is replaced (it gets no result),
+     * a running candidate is closed (failed result, reason `cancelled`). A candidate already promoted is not undone: the
+     * caller checks [SessionListener.onMigration] against its current choice.
+     */
+    fun cancelMigration() {
+        if (terminated.get()) return
+        ensureEngine()
+        migrateMailbox.post(SessionMachine.Event.CancelMigration)
     }
 
     /** Non-blocking. */
@@ -327,7 +344,7 @@ class SessionController(
                 is Bye -> MbLog.i("bye_recv", "reason=${m.reason}")
                 else -> Unit
             }
-            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille}")
+            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
             is SessionMachine.Event.Tick -> Unit
@@ -335,6 +352,7 @@ class SessionController(
                 "migrate_request",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",
             )
+            SessionMachine.Event.CancelMigration -> MbLog.i("migrate_cancel_request")
         }
     }
 
@@ -353,7 +371,7 @@ class SessionController(
                     is Hello -> MbLog.i("hello_sent", "proto=${m.protocolVersion}")
                     is Bye -> MbLog.i("bye_sent", "reason=${m.reason}")
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
-                    is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille}")
+                    is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille} bitrate_kbps=${m.bitrateKbps}")
                     is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0}")
                     else -> Unit
                 }
@@ -442,6 +460,10 @@ class SessionController(
                 val f = "ok=${if (a.ok) 1 else 0} to=${ConnectMode.transportOf(a.endpoint).logName} reason=${a.reason}"
                 if (a.ok) MbLog.i("transport_migrate", f) else MbLog.w("transport_migrate", f)
                 listener.onMigration(a.endpoint, a.ok, a.reason)
+            }
+            SessionMachine.Action.OpenSettings -> {
+                MbLog.i("settings_open_recv")
+                listener.onSettingsOpen()
             }
         }
     }

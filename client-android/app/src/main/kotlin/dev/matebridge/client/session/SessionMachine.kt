@@ -8,6 +8,7 @@ import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.Pong
+import dev.matebridge.client.protocol.SettingsOpen
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.StreamMode
@@ -67,6 +68,11 @@ class SessionMachine(
         data class Tick(val videoFrames: Long) : Event
         /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
         data class Migrate(val endpoint: Endpoint) : Event
+        /**
+         * T-105: the user picked a connection mode the running migration no longer fits: close the candidate (failed
+         * [Action.MigrationResult], reason `cancelled`). No-op without a candidate, also after it was promoted.
+         */
+        data object CancelMigration : Event
     }
 
     sealed interface Action {
@@ -96,6 +102,8 @@ class SessionMachine(
         data object CloseRetired : Action
         /** T-096: outcome of one [Event.Migrate]. */
         data class MigrationResult(val endpoint: Endpoint, val ok: Boolean, val reason: String) : Action
+        /** T-105: the host asked for the settings panel (SETTINGS_OPEN on an accepted session); the UI decides. */
+        data object OpenSettings : Action
     }
 
     private enum class Phase { IDLE, CONNECTING, AWAIT_ACK, PENDING, ACCEPTED, STREAMING, WAIT_RETRY, FAILED }
@@ -162,6 +170,7 @@ class SessionMachine(
                 }
             }
             is Event.Migrate -> onMigrate(event.endpoint, nowUs, out)
+            Event.CancelMigration -> abortMigration(out, REASON_CANCELLED) // no candidate (none, or promoted): nothing
             is Event.ControlOpened -> if (isCandidate(event.gen)) {
                 out += Action.SendCandidate(hello)
             } else if (event.gen == controlGen && phase == Phase.CONNECTING) {
@@ -239,6 +248,8 @@ class SessionMachine(
             is StreamConfig -> onConfig(msg, out)
             is Ping -> out += Action.Send(Pong(msg.seq, msg.senderTimeUs, nowUs))
             is Pong -> lastPongUs = nowUs
+            // PROTOCOL.md 0x08: only an accepted session; whether the stream is visible is the UI's call.
+            SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is Bye -> {
                 if (msg.reason == Bye.REJECTED) {
                     closeAll(out, graceful = false)
@@ -487,5 +498,6 @@ class SessionMachine(
         const val REASON_NOT_CONNECTED = "not_connected"
         const val REASON_SAME_ENDPOINT = "same_endpoint"
         const val REASON_SESSION_CLOSED = "session_closed"
+        const val REASON_CANCELLED = "cancelled"
     }
 }

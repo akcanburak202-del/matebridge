@@ -17,11 +17,7 @@
     <string name="cause_connect_failed">Mac\'e ulaşılamadı</string>
     <string name="endpoint_hint">IP:port (örn. 192.168.1.20:7420)</string>
     <string name="connect">Bağlan</string>
-    <string name="stats_toggle">İstatistik katmanı aç/kapa</string>
     <string name="invalid_endpoint">Geçersiz adres, IP:port biçiminde girin</string>
-    <string name="connect_auto">Otomatik (USB varsa USB, yoksa Wi-Fi)</string>
-    <string name="connect_usb">Yalnız USB</string>
-    <string name="connect_wifi">Yalnız Wi-Fi</string>
     <string name="usb_missing">USB bağlantısı yok — adb reverse kurulu mu?</string>
     <string name="transport_usb">Bağlantı: USB</string>
     <string name="transport_wifi">Bağlantı: Wi-Fi</string>
