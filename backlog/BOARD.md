@@ -8,6 +8,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
 | [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
+| [T-103](tasks/T-103-host-relative-pointer-games.md) | Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder | 5 | mac-host-dev | [T-034] |
+| [T-105](tasks/T-105-client-settings-side-panel.md) | Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi | 4 | android-client-dev | [T-104] |
+| [T-106](tasks/T-106-host-bitrate-pref-settings-menu.md) | Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN) | 4 | mac-host-dev | [T-104] |
 
 ## blocked
 
@@ -21,9 +24,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-103](tasks/T-103-host-relative-pointer-games.md) | Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder | 5 | mac-host-dev | [T-034] |
-| [T-105](tasks/T-105-client-settings-side-panel.md) | Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi | 4 | android-client-dev | [T-104] |
-| [T-106](tasks/T-106-host-bitrate-pref-settings-menu.md) | Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN) | 4 | mac-host-dev | [T-104] |
 
 ## done
 
