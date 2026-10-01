@@ -98,8 +98,20 @@ alanında sınırsız kuyruk), `bsd`'de "çekirdekte gönderilmemiş bayt ≥ e�
 
 ## Handoff
 
-- **Commit:** `0265709` (uygulama), plan `a254b80`; dal `task/T-091-video-bsd-socket`. `./scripts/check.sh` → ALL OK
-  (host-mac 238 test; yeni 22 test). Yeni soket testleri ayrıca 3 kez art arda ve `--sanitize=thread` ile temiz geçti.
+- **Commit:** `0265709` (uygulama), `7115c92` (inceleme düzeltmeleri), plan `a254b80`; dal `task/T-091-video-bsd-socket`.
+  `./scripts/check.sh` → ALL OK (host-mac 241 test; yeni 25 test). Yeni soket testleri ayrıca 3 kez art arda ve
+  `--sanitize=thread` ile temiz geçti.
+- **İnceleme düzeltmeleri (`7115c92`):**
+  - P2-1: `SocketVideoTransport.sendFrame` kapının tamamını kendisi uygular (kayıt bekliyor mu + `poll`/eşik), **mühürlemeden
+    önce**. Kapalıysa `.busy` → `VideoLink.send` false (VideoSender'ın reddetme/anahtar kare yolu); sayaç harcanmaz. Test:
+    eşik üstünde `canSend` sorulmadan `sendFrame` → `.busy`; sonra okunan akışın tüm kayıtları çözülür (sayaç boşluğu yok).
+  - P2-2: `BsdTcpConnection.write` sınırlı: `BsdTcpOptions.maxPendingRecords` (4) ve `maxPendingBytes` (16 MiB + 64 KiB, en
+    büyük video kaydı sığar). Aşan kayıt bütünüyle reddedilir: `write` false döner, `completion(false)` (asenkron),
+    bağlantı açık kalır. Video tarafı en çok 1 kayıt tuttuğu için sınıra ulaşmaz; yine de mühürlenmiş bir kayıt reddedilirse
+    (kapanmış bağlantı) `SocketVideoTransport` bağlantıyı kapatır (`.writeRefused`, log `video_write_refused`): tablet sayaç
+    boşluğu görmesin. Test: bayt ve kayıt sınırı reddi, kabul edilenler tamamlanır, reddedilenden kabloya bayt gitmez;
+    `SocketWriteBuffer.admits` birim testli.
+  - Dinleyici backlog'u `SOMAXCONN`.
 - **Dosyalar:**
   - yeni `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift`: `BsdTcpListener`, `BsdTcpConnection`, `BsdTcpOptions`
   - yeni `host-mac/Sources/MateBridgeCore/Session/SocketWriteBuffer.swift` (saf kısmi yazma tamponu)
@@ -110,7 +122,8 @@ alanında sınırsız kuyruk), `bsd`'de "çekirdekte gönderilmemiş bayt ≥ e�
   - yeni testler `host-mac/Tests/MateBridgeCoreTests/Session/SocketWriteBufferTests.swift`, `.../BsdTcpSocketTests.swift`
   - `main.swift` değişmedi (düğmeler `SessionServer` içinde bir kez okunuyor, `serviceClass` gibi).
 - **Kabul kriterleri durumu:**
-  - Düğme: `MATEBRIDGE_VIDEO_SOCKET` varsayılan `nw`, `bsd`'de `[::]:47002` `IPV6_V6ONLY=0` ile (IPv4 v4-mapped olarak) dinlenir,
+  - Düğme: `MATEBRIDGE_VIDEO_SOCKET` varsayılan `nw`, `bsd`'de `[::]:47002` `IPV6_V6ONLY=0` ile dinlenir (IPv4 v4-mapped
+    olarak kabul edilmeli; testte yalnız `::ffff:127.0.0.1`'e bağlı aynı yapılandırma denendi, aşağıya bkz.),
     port planı (tercih → sistem portu, `port_fallback`) aynı. `TCP_NODELAY=1`, `SO_NOSIGPIPE=1`, `SO_KEEPALIVE=0`
     (bugünkü `NWProtocolTCP.Options` varsayılanı kapalı), `O_NONBLOCK`, `FD_CLOEXEC`; `MATEBRIDGE_SERVICE_CLASS` →
     `SO_NET_SERVICE_TYPE` (VI/VO/RD, en iyi çaba). Seçenekler testte `getsockopt` ile geri okunup doğrulandı.
@@ -131,8 +144,12 @@ alanında sınırsız kuyruk), `bsd`'de "çekirdekte gönderilmemiş bayt ≥ e�
     completion, `peerHost` → `SessionTransport.classify`), kontrol için ayrı kartta kullanılabilir.
 - **Varsayımlar / davranış farkları (`bsd`):**
   - `completion(true)` ve LAT_TRACE `writeDoneUs` = kaydın son baytı çekirdeğe yazıldığında (`nw`'de `.contentProcessed`).
-  - Dinleyici `SO_REUSEADDR` kullanır (TIME_WAIT'teki eski video bağlantıları sabit portu engellemesin). Aynı joker port
-    başka bir süreçte açıksa `bind` `EADDRINUSE` verir → sistem portuna düşülür (testli).
+  - Dinleyici `SO_REUSEADDR` kullanır (TIME_WAIT'teki eski video bağlantıları sabit portu engellemesin). Testte yalnızca
+    aynı süreçte, aynı belirli adrese (`::1`) ikinci bağlama `EADDRINUSE` verdi → sistem portuna düşüş yolu buna dayanır.
+    Not (`SO_REUSEADDR` + loopback): BSD'de joker `[::]:47002` bağlaması, başka bir sürecin yalnızca `127.0.0.1:47002`'ye
+    (belirli adres) bağlı dinleyicisi varken **başarılı olabilir**; o durumda loopback'e gelen bağlantılar o sürece gider.
+    USB yolu `adb reverse` (tablet tarafında dinler) kullandığı için Mac'te 47002'de başka bir loopback dinleyici
+    beklenmiyor; yine de bir `127.0.0.1` deneme bağlaması eklenmedi.
   - `accept` `EMFILE/ENFILE/ENOBUFS/ENOMEM` → 1 s duraklama + `ev=video_accept_paused`; diğer `accept` hataları →
     `listenersFailed` (bugünkü dinleyici hatası yolu).
   - Soket katmanı Core'da: test hedefi yalnızca `MateBridgeCore`'a bağlı ve `Package.swift` kart dışında; donanımdan bağımsız.
@@ -143,6 +160,10 @@ alanında sınırsız kuyruk), `bsd`'de "çekirdekte gönderilmemiş bayt ≥ e�
   - `nettop -x`'te video bağlantısının `arch=so` görünmesi ve yeniden gönderim oranı; Wi-Fi fps/gecikme/`sendq` karşılaştırması
     (`nw` vs `bsd`, eşik 64/128/256 KB).
   - `MATEBRIDGE_SERVICE_CLASS=video` ile `SO_NET_SERVICE_TYPE`'ın Wi-Fi WMM işaretlemesine gerçekten yansıması.
+  - Üretimdeki `.any` (`[::]`) çift yığın bağlamasına IPv4 ile bağlanma (testler ağ arayüzlerine açılmamak için yalnız
+    `::1` ve `::ffff:127.0.0.1`'e bağlanır). Tabletin Wi-Fi'de IPv4 ile bağlanması bunu doğrular.
+  - Port çakışmasının joker adreste ve **başka bir süreçle** davranışı (eski host örneği 47002'yi tutarken
+    `port_fallback`); test yalnız aynı süreç + `::1` belirli adres.
 
 ### Open questions
 
