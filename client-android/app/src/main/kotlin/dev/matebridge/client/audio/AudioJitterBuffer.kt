@@ -9,8 +9,13 @@ package dev.matebridge.client.audio
  * Positions are absolute frame counts of this buffer (silence fills included), never stream sample indexes; a ring
  * of anchors maps positions to host capture times for A/V alignment.
  *
- *  - A forward jump of `sample_index` (the host dropped audio) is filled with silence: the unread tail fades out,
- *    then silence (at most [maxGapFillFrames]), then the next packet fades in. No click.
+ *  - A short forward jump of `sample_index` (at most [maxGapFillFrames]: the host dropped a packet or two) is filled
+ *    with silence so the timing holds: the unread tail fades out, then silence, then the next packet fades in.
+ *  - A longer jump (the host's audio IO stopped and restarted, or the host dropped a stall's worth of audio) is not
+ *    filled: silence there would only add latency. The stream position restarts at the new index; the unread tail
+ *    (real audio) fades out and the new packet fades in right after it (T-098).
+ *  - [discontinuities] counts packets whose capture time (or index) jumped ahead by at least [jumpUs]: the host
+ *    captured nothing in between, so the source was silent rather than the network late (see [PlayoutCore]).
  *  - Overflow drops the oldest frames with a short crossfade from the old read head into the new one.
  *  - Overlapping or old frames (sample_index behind the expected one) are discarded.
  *
@@ -23,6 +28,7 @@ class AudioJitterBuffer(
     private val fadeFrames: Int = DEFAULT_FADE_FRAMES,
     private val maxGapFillFrames: Int = DEFAULT_MAX_GAP_FILL_FRAMES,
     anchorCapacity: Int = 128,
+    private val jumpUs: Long = DEFAULT_JUMP_US,
 ) {
     private val ring = ShortArray(capacityFrames * channels)
     private var writePos = 0L
@@ -33,6 +39,9 @@ class AudioJitterBuffer(
 
     /** Frames of the next written data that still get the fade-in after a gap. */
     private var fadeInLeft = 0
+
+    /** Capture time the next packet would have if the host captured continuously; null before the first packet. */
+    private var expectCaptureUs: Long? = null
 
     private val anchorPos = LongArray(anchorCapacity)
     private val anchorCap = LongArray(anchorCapacity)
@@ -45,15 +54,22 @@ class AudioJitterBuffer(
     var dropEvents = 0L; private set
     var dropFrames = 0L; private set
     var lateFrames = 0L; private set
+    /** Gaps longer than [maxGapFillFrames], not filled (a subset of [gapEvents]). */
+    var jumpEvents = 0L; private set
+    /** Packets written (at least one new frame). Read by the writer thread every burst. */
+    @get:Synchronized var packets = 0L; private set
+    /** Packets that followed a capture-time or index jump of at least [jumpUs]. */
+    @get:Synchronized var discontinuities = 0L; private set
 
     @get:Synchronized val level: Int get() = (writePos - readPos).toInt()
 
     @get:Synchronized val readPosition: Long get() = readPos
 
     @Synchronized fun reset() {
-        writePos = 0; readPos = 0; nextIndex = -1; fadeInLeft = 0
+        writePos = 0; readPos = 0; nextIndex = -1; fadeInLeft = 0; expectCaptureUs = null
         anchorHead = 0; anchorCount = 0
         gapEvents = 0; gapFrames = 0; dropEvents = 0; dropFrames = 0; lateFrames = 0
+        jumpEvents = 0; packets = 0; discontinuities = 0
     }
 
     /**
@@ -74,16 +90,26 @@ class AudioJitterBuffer(
             index += skip
         }
         val gap = index - nextIndex
+        val cap = captureUs + skip * 1_000_000L / sampleRate
+        var jumped = expectCaptureUs?.let { cap - it >= jumpUs } ?: false
         if (gap > 0) {
             gapEvents++
             gapFrames += gap
             fadeOutTail()
-            appendSilence(minOf(gap, maxGapFillFrames.toLong()).toInt())
+            if (gap <= maxGapFillFrames) {
+                appendSilence(gap.toInt())
+            } else {
+                jumpEvents++
+            }
+            if (gap * 1_000_000L / sampleRate >= jumpUs) jumped = true
             fadeInLeft = fadeFrames
         }
         val n = frames - skip
+        packets++
+        if (jumped) discontinuities++
+        expectCaptureUs = cap + n * 1_000_000L / sampleRate
         makeRoom(n)
-        addAnchor(writePos, captureUs + skip * 1_000_000L / sampleRate)
+        addAnchor(writePos, cap)
         var src = offset + skip * channels * 2
         for (f in 0 until n) {
             val base = ((writePos + f) % capacityFrames).toInt() * channels
@@ -197,7 +223,12 @@ class AudioJitterBuffer(
         const val DEFAULT_CAPACITY_FRAMES = 14_400
         /** 3 ms. */
         const val DEFAULT_FADE_FRAMES = 144
-        /** 100 ms: the host never holds more (PROTOCOL.md section 5); longer jumps are a time-axis shift, not silence. */
-        const val DEFAULT_MAX_GAP_FILL_FRAMES = 4_800
+        /**
+         * 20 ms (two packets): a dropped packet or two keeps its timing. Longer jumps are a time-axis shift (the host
+         * restarted its audio IO, or dropped a stall's worth); filling them would only add latency (T-098).
+         */
+        const val DEFAULT_MAX_GAP_FILL_FRAMES = 960
+        /** A capture-time jump of at least 20 ms means the host captured nothing in between (source silent). */
+        const val DEFAULT_JUMP_US = 20_000L
     }
 }

@@ -55,11 +55,45 @@ class AudioJitterBufferTest {
         assertEquals(10_000.toShort(), left[170])
     }
 
-    @Test fun hugeGapIsCappedToMaxFill() {
-        val b = AudioJitterBuffer(maxGapFillFrames = 4800)
+    @Test fun longJumpIsNotFilledAndRestartsAtTheNewIndex() {
+        val b = AudioJitterBuffer(fadeFrames = 16)
+        b.write(0, 1_000_000, pcm(480, 10_000), 480)
+        b.write(1_000_000, 21_000_000, pcm(480, 10_000), 480) // host IO restarted 20 s later
+        assertEquals(960, b.level) // no silence, no added latency
+        assertEquals(1L, b.gapEvents)
+        assertEquals(1L, b.jumpEvents)
+        assertEquals(1L, b.discontinuities)
+        // continues from the new index
+        b.write(1_000_480, 21_010_000, pcm(480, 10_000), 480)
+        assertEquals(1440, b.level)
+        assertEquals(1L, b.gapEvents)
+        val out = readAll(b)
+        val left = ShortArray(1440) { out[it * 2] }
+        assertTrue(left[479] < 1000) // the old tail fades out
+        assertTrue(left[480] < 1000) // the new packet fades in
+        assertEquals(10_000.toShort(), left[600])
+        assertEquals(21_000_000L, b.captureTimeAt(480))
+    }
+
+    @Test fun shortGapUpToTwoPacketsIsStillFilled() {
+        val b = AudioJitterBuffer()
         b.write(0, 0, pcm(480, 1), 480)
-        b.write(1_000_000, 0, pcm(480, 1), 480)
-        assertEquals(480 + 4800 + 480, b.level)
+        b.write(1440, 30_000, pcm(480, 1), 480) // 960 frames (20 ms) dropped by the host
+        assertEquals(480 + 960 + 480, b.level)
+        assertEquals(0L, b.jumpEvents)
+    }
+
+    @Test fun captureTimeJumpWithContinuousIndexIsADiscontinuity() {
+        val b = AudioJitterBuffer()
+        b.write(0, 1_000_000, pcm(480, 1), 480)
+        b.write(480, 1_010_000, pcm(480, 1), 480) // continuous
+        b.write(960, 1_025_000, pcm(480, 1), 480) // 5 ms late capture: host timing noise, not silence
+        assertEquals(0L, b.discontinuities)
+        b.write(1440, 1_600_000, pcm(480, 1), 480) // the host captured nothing for ~565 ms
+        assertEquals(1L, b.discontinuities)
+        assertEquals(0L, b.gapEvents)
+        assertEquals(4L, b.packets)
+        assertEquals(1920, b.level)
     }
 
     @Test fun overlappingAndOldFramesAreDiscarded() {
