@@ -29,6 +29,9 @@ Kullanıcı onayı (2026-10-01): NDK kurulup ölçüldü, sonra "evet, AAudio MM
    - `scripts/check.sh` bu araç setini gerektirir. `README`/`AGENTS` notu eklenir.
    - Yeni bir üçüncü taraf kütüphane yok; Oboe kullanılmaz.
 
+## Ek (2026-10-01, T-100 incelemesi)
+- Madde 3 netleşti: ayrı yazıcı iş parçacığından zaman aşımlı (200 ms; akışın ilk ~0,5 s'sinde 1 s) bloklayan AAudio `write` kabul edildi. Zaman aşımı yalnızca MMAP akışlarında güvenilir; bu yüzden **MMAP olmayan AAudio akışı hiç kullanılmaz** (`mmap != 1` → AudioTrack).
+
 ## Sonuçlar
 - Ses gecikmesi tahminen ~90–100 ms'ye iner; A/V farkı ~40–50 ms.
 - Proje artık C++ ve NDK araç seti gerektiriyor; yeni bir makinede kurulum adımı var.
