@@ -65,13 +65,14 @@ object Records {
                     enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
                     enc.updateAAD(aad)
                     val body = enc.doFinal(ByteArray(size + 1))
-                    val dst = ByteArray(body.size)
+                    var dst = ByteArray(0)
                     var best = Long.MAX_VALUE
                     val iters = 12
                     for (i in 0 until iters) {
                         val t0 = System.nanoTime()
                         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
                         cipher.updateAAD(aad)
+                        dst = ensureOutput(dst, cipher, body.size)
                         cipher.doFinal(body, 0, body.size, dst, 0)
                         val dt = System.nanoTime() - t0
                         if (i >= 2 && dt < best) best = dt // first iterations warm up
@@ -85,6 +86,15 @@ object Records {
             out += fields.toString()
         }
         return out
+    }
+
+    /**
+     * Output buffer for a decrypt of [inLen] bytes on an initialised [cipher]: at least `getOutputSize(inLen)` and never
+     * smaller than [inLen] (some Conscrypt versions demand room for the tag too). Reuses [cur] when big enough.
+     */
+    internal fun ensureOutput(cur: ByteArray, cipher: Cipher, inLen: Int): ByteArray {
+        val need = maxOf(inLen, cipher.getOutputSize(inLen))
+        return if (cur.size >= need) cur else ByteArray(maxOf(need, cur.size * 2))
     }
 
     /** Runs [bench] and logs one `crypto_bench` line per provider. */
@@ -153,8 +163,7 @@ class RecordOpener(key: ByteArray, startCounter: Long = 0) {
         try {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
             cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
-            val plainLen = bLen - Records.TAG_BYTES
-            if (scratch.size < plainLen) scratch = ByteArray(maxOf(plainLen, scratch.size * 2))
+            scratch = Records.ensureOutput(scratch, cipher, bLen)
             val n = cipher.doFinal(src, bOff, bLen, scratch, 0)
             counter++
             return scratch.copyOf(n)

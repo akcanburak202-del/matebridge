@@ -38,3 +38,5 @@ Kare izi (T-073, 2026-10-01 12:45): `decrypted_ns - recv_ns` 432 KB anahtar kare
 - **Varsayımlar:** `AndroidOpenSSL` yoksa varsayılana düşer (JVM testlerinde böyle). Tel biçimi/kripto aynı; fixture ve crypto vector testleri geçti.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** `am start ... --ez crypto_bench true` ile `ev=crypto_provider` ve `ev=crypto_bench` satırlarına bak (sağlayıcı başına 64k/432k us ve MB/s); sonra pace_trace ile 432 KB karede decrypted-recv süresi ~11 ms -> ? karşılaştır.
 - **Açık sorular:**
+
+- **Review fix (P2):** cikti tamponu max(inLen, getOutputSize) boyutunda (Conscrypt etiket payi ister), doFinal donus degeri duz metin uzunlugu; bench ayni ensureOutput kullanir. Test: RecordOutputSizeTest.
