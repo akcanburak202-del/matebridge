@@ -526,3 +526,19 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Durağan ekranda kalite tazeleme yok: hareketin son P karesi ekranda kalıyor.
 - SCK doğrudan 420f full-range yakalıyor; Akıcı modda ölçekleme yok.
 - Düğmeler ve süreç içi keskinlik ölçümü (`--sharpness-bench`, PSNR/SSIM) → T-086.
+
+## 2026-10-01 ~15:40 — T-086 bench sonuçları (M6, 2800×1840@120, süreç içi)
+
+- **H.264:** Mac kodlayıcısı 120 fps'e yetişmiyor (~24 ms, en fazla ~103 fps). `High_5_2` 120 fps'te her karede hata veriyor. T-082 kapandı.
+- **`--sharpness-bench`** (metin sayfası kaydırılıyor, sonra durağan son kare; luma PSNR):
+
+  | ayar | PSNR | not |
+  |---|---|---|
+  | varsayılan HEVC 60 Mbps | 42,15 dB | |
+  | boşta tazeleme 300 ms ×3 | 45,78 dB | ~0,5 MB patlama |
+  | tek anahtar kare | 40,43 dB | daha kötü |
+  | `QUALITY=0.8` | 45,64 dB | ~1,33× bit hızı |
+  | env 100 Mbps | 51,6 dB | |
+  | `PRIO_SPEED=0` | 52,4 dB | ~25 ms kodlama, kare kaybı, kullanılamaz |
+
+- Bit hızı en büyük kaldıraç. Cihazda ölçülecek: USB'de 80–100 Mbps'in varış düzensizliğine ve gecikmeye etkisi, ayrıca boşta tazelemenin tablet pacer'ında sorunsuz geçip geçmediği.
