@@ -180,7 +180,8 @@ object Codec {
             }
             is Bye -> w.u8(msg.reason)
             is DisplayRate -> { w.u16(msg.hz); w.u16(0) }
-            is StreamPrefs -> { w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(0) }
+            is StreamPrefs -> { w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(msg.bitrateKbps) }
+            is SettingsOpen -> w.u32(0)
             is Pen -> {
                 require(msg.tool == Pen.TOOL_PEN || msg.tool == Pen.TOOL_ERASER) { "invalid tool" }
                 require(msg.samples.size in 1..Limits.PEN_MAX_SAMPLES) { "sample count must be 1..64" }
@@ -303,7 +304,8 @@ object Codec {
             }
             MsgType.BYE -> Bye(r.u8())
             MsgType.DISPLAY_RATE -> { val hz = r.u16(); r.skip(2); DisplayRate(hz) }
-            MsgType.STREAM_PREFS -> { val fps = r.u16(); val pm = r.u16(); r.skip(4); StreamPrefs(fps, pm) }
+            MsgType.STREAM_PREFS -> { val fps = r.u16(); val pm = r.u16(); StreamPrefs(fps, pm, r.u32()) }
+            MsgType.SETTINGS_OPEN -> { r.skip(4); SettingsOpen }
             MsgType.PEN -> decodePen(r)
             MsgType.KEY -> {
                 val time = r.u64(); val scan = r.u16(); val code = r.u16()

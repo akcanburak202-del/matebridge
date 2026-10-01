@@ -708,7 +708,7 @@ public struct SessionMachine: Sendable {
             return isActive ? [.deliver(id, message)] : []
         case .audioPrefs:
             return []  // decoded, no audio behaviour yet (T-094): ignored, as before when 0x30 was unknown
-        case .helloAck, .streamConfig, .pong, .audioConfig, .audioFrame, .videoHello, .videoFrame:
+        case .helloAck, .streamConfig, .settingsOpen, .pong, .audioConfig, .audioFrame, .videoHello, .videoFrame:
             return []  // wrong direction or connection: ignored
         }
     }

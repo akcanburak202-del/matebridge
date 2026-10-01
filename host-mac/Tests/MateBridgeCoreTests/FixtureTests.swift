@@ -32,8 +32,10 @@ private let validFixtures: [String: Message] = [
                                                 widthPt: 1400, heightPt: 920, fps: 60, bitrateKbps: 50000,
                                                 colorPrimaries: 1, transfer: 13, matrix: 1, fullRange: true)),
     "bye": .bye(.normal),
-    "stream_prefs": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 750)),
+    "stream_prefs": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 750, bitrateKbps: 0)),
+    "stream_prefs_bitrate": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: 40000)),
     "display_rate": .displayRate(DisplayRate(hz: 60)),
+    "settings_open": .settingsOpen(SettingsOpen()),
     "clipboard_text": .clipboard(Clipboard.text(seq: 3, "Merhaba ğüşıöç — kopyala")),
     "clipboard_empty": .clipboard(Clipboard.empty(seq: 4)),
     "pen_hover_to_contact": .pen(PenBatch(tool: .pen, baseTimeUs: 1_127_411_618_000, samples: [

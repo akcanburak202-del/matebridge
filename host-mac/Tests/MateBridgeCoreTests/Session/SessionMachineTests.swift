@@ -588,4 +588,21 @@ extension SessionMachineTests {
         #expect(m.send(sessionID: 77, clip) == [.send(A, clip)])
         #expect(m.send(sessionID: 78, clip).isEmpty)
     }
+
+    @Test func settingsOpenFromTheClientIsWrongDirectionAndIgnored() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        let before = m.status
+        #expect(m.received(A, .settingsOpen(SettingsOpen()), now: 1).isEmpty)
+        #expect(m.status == before)
+        // The session is still alive and keeps delivering input.
+        #expect(m.received(A, keyDown(), now: 2) == [.deliver(A, keyDown())])
+    }
+
+    @Test func settingsOpenWhilePendingIsIgnored() {
+        var m = makeMachine()
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(), now: 0)
+        #expect(m.received(A, .settingsOpen(SettingsOpen()), now: 1).isEmpty)
+    }
 }

@@ -90,6 +90,8 @@ public struct Capabilities: OptionSet, Sendable {
     public static let decodeHEVC = Capabilities(rawValue: 1 << 7)
     /// The client handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo.
     public static let audioPCM = Capabilities(rawValue: 1 << 8)
+    /// The client can open its settings panel while streaming and handles `SETTINGS_OPEN` (decision 0013).
+    public static let settingsPanel = Capabilities(rawValue: 1 << 9)
 }
 
 public struct PenFlags: OptionSet, Sendable {
@@ -347,30 +349,47 @@ public struct StreamPrefs: Equatable, Sendable {
 
     public var fps: UInt16
     public var scalePermille: UInt16
+    /// The user's target bitrate (decision 0013); 0 = host default for the mode. Older clients send 0 here (the
+    /// field used to be `reserved`).
+    public var bitrateKbps: UInt32
 
-    public init(fps: UInt16, scalePermille: UInt16) {
+    public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0) {
         self.fps = fps
         self.scalePermille = scalePermille
+        self.bitrateKbps = bitrateKbps
     }
 
     /// What the host honours: fps in {60, 120, 144} (anything else is 60) and scale clamped to 500...1000.
+    /// `bitrateKbps` is carried through unchanged.
     public var normalized: StreamPrefs {
         let f = Self.supportedFps.contains(Int(fps)) ? fps : 60
         let s = min(max(Int(scalePermille), Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
-        return StreamPrefs(fps: f, scalePermille: UInt16(s))
+        return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps)
     }
 
     func write(_ w: inout ByteWriter) {
         w.u16(fps)
         w.u16(scalePermille)
-        w.u32(0)
+        w.u32(bitrateKbps)
     }
 
     static func read(_ r: inout ByteReader) throws -> StreamPrefs {
-        let fps = try r.u16()
-        let scale = try r.u16()
+        StreamPrefs(fps: try r.u16(), scalePermille: try r.u16(), bitrateKbps: try r.u32())
+    }
+}
+
+/// `SETTINGS_OPEN` (H->C, docs/PROTOCOL.md 0x08): asks the tablet to show its settings panel while streaming
+/// (decision 0013). Send only in an ACCEPTED session whose HELLO has `Capabilities.settingsPanel`.
+public struct SettingsOpen: Equatable, Sendable {
+    public init() {}
+
+    func write(_ w: inout ByteWriter) {
+        w.u32(0)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> SettingsOpen {
         try r.skip(4)
-        return StreamPrefs(fps: fps, scalePermille: scale)
+        return SettingsOpen()
     }
 }
 

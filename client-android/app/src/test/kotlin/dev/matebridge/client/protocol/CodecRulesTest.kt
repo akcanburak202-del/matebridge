@@ -95,12 +95,48 @@ class CodecRulesTest {
             MsgType.HELLO, MsgType.HELLO_ACK, MsgType.STREAM_CONFIG, MsgType.BYE, MsgType.PEN, MsgType.KEY,
             MsgType.POINTER_REL, MsgType.POINTER_ABS, MsgType.SCROLL, MsgType.PEN_GESTURE, MsgType.RELEASE_ALL,
             MsgType.PING, MsgType.PONG, MsgType.STATS, MsgType.KEYFRAME_REQUEST, MsgType.VIDEO_HELLO,
-            MsgType.VIDEO_FRAME,
+            MsgType.VIDEO_FRAME, MsgType.STREAM_PREFS, MsgType.DISPLAY_RATE, MsgType.SETTINGS_OPEN,
         )) {
             val dec = FrameDecoder.control()
             dec.feed(frame(type, ByteArray(0)))
             expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
         }
+    }
+
+    @Test
+    fun streamPrefsBitrateFieldIsU32AndTheOldShortFormIsRejected() {
+        val prefs = StreamPrefs(144, 800, 150_000)
+        val p = Codec.encodePayload(prefs)
+        assertEquals(8, p.size)
+        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(9, 9))))
+        // Full u32 range survives the round trip.
+        val max = byteArrayOf(0x78, 0, 0xe8.toByte(), 3, -1, -1, -1, -1)
+        assertEquals(StreamPrefs(120, 1000, 0xFFFFFFFFL), decode(frame(MsgType.STREAM_PREFS, max)))
+        // fps + scale without the bitrate field is a short payload.
+        val dec = FrameDecoder.control()
+        dec.feed(frame(MsgType.STREAM_PREFS, byteArrayOf(0x78, 0, 0xe8.toByte(), 3)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+        // The default sends 0 = host default (behaviour unchanged until T-105).
+        assertEquals(0L, StreamPrefs(60, 1000).bitrateKbps)
+    }
+
+    @Test
+    fun settingsOpenReservedIsIgnoredAndShortIsRejected() {
+        assertEquals(0x08, MsgType.SETTINGS_OPEN)
+        assertEquals(
+            listOf<Byte>(0x08, 4, 0, 0, 0, 0, 0, 0, 0),
+            Codec.encode(SettingsOpen).toList(),
+        )
+        assertEquals(SettingsOpen, decode(frame(MsgType.SETTINGS_OPEN, byteArrayOf(1, 2, 3, 4, 5))))
+        val dec = FrameDecoder.control()
+        dec.feed(frame(MsgType.SETTINGS_OPEN, byteArrayOf(0, 0, 0)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+    }
+
+    @Test
+    fun settingsPanelCapabilityIsBit9() {
+        assertEquals(0x200, Capabilities.SETTINGS_PANEL)
+        assertEquals(0, Capabilities.SETTINGS_PANEL and 0x1ff)
     }
 
     @Test

@@ -331,6 +331,36 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         #expect(throws: ProtocolError.invalidField("video fragment")) { try decodeOne(frame(0x41, w.bytes), .video) }
     }
 
+    @Test func streamPrefsBitrateAndSettingsOpenFollowTheShortAndLongPayloadRules() throws {
+        // STREAM_PREFS: 8 bytes; the old 4-byte prefix (fps + scale) is now short, extra bytes are ignored.
+        let prefs = Message.streamPrefs(StreamPrefs(fps: 144, scalePermille: 800, bitrateKbps: 150_000))
+        #expect(prefs.encodePayload().count == 8)
+        #expect(try decodeOne(frame(0x05, prefs.encodePayload() + [9, 9])) == prefs)
+        #expect(throws: ProtocolError.payloadTooShort(type: 0x05)) { try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3])) }
+        #expect(try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3, 0xff, 0xff, 0xff, 0xff]))
+            == .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: UInt32.max)))
+
+        // SETTINGS_OPEN: reserved u32; a non-zero reserved value is ignored.
+        let open = Message.settingsOpen(SettingsOpen())
+        #expect(open.type == .settingsOpen)
+        #expect(MessageType.settingsOpen.rawValue == 0x08)
+        #expect(try open.encode() == [0x08, 4, 0, 0, 0, 0, 0, 0, 0])
+        #expect(try decodeOne(frame(0x08, [1, 2, 3, 4, 5])) == open)
+        #expect(throws: ProtocolError.payloadTooShort(type: 0x08)) { try decodeOne(frame(0x08, [0, 0, 0])) }
+    }
+
+    @Test func streamPrefsDefaultsToHostBitrateAndNormalizedKeepsTheBitrate() {
+        #expect(StreamPrefs(fps: 60, scalePermille: 1000).bitrateKbps == 0)
+        let n = StreamPrefs(fps: 7, scalePermille: 1, bitrateKbps: 40_000).normalized
+        #expect(n == StreamPrefs(fps: 60, scalePermille: 500, bitrateKbps: 40_000))
+    }
+
+    @Test func settingsPanelCapabilityIsBit9() {
+        #expect(Capabilities.settingsPanel.rawValue == 1 << 9)
+        #expect(Capabilities(rawValue: 0x200).contains(.settingsPanel))
+        #expect(!Capabilities(rawValue: 0x1ff).contains(.settingsPanel))
+    }
+
     @Test func penEncoderRejectsDecreasingTime() {
         let a = PenSample(dtUs: 5, x: 0, y: 0, pressure: 0, tiltX: 0, tiltY: 0, flags: [])
         var b = a

@@ -25,6 +25,7 @@ object MsgType {
     const val STREAM_PREFS = 0x05
     const val CLIPBOARD = 0x06
     const val DISPLAY_RATE = 0x07
+    const val SETTINGS_OPEN = 0x08
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -75,6 +76,9 @@ object Capabilities {
 
     /** Handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo (T-095; off with `--ez audio false`). */
     const val AUDIO_PCM = 1 shl 8
+
+    /** Opens the settings panel while streaming and handles SETTINGS_OPEN (decision 0013). Not sent yet: T-105 turns it on. */
+    const val SETTINGS_PANEL = 1 shl 9
 }
 
 // ---- Session ----
@@ -144,9 +148,17 @@ data class StreamConfig(
     }
 }
 
-/** Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144) and encoded size in permille of the display. */
-data class StreamPrefs(val fps: Int, val scalePermille: Int) : Message {
+/**
+ * Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144), encoded size in permille of the
+ * display, and the user's target [bitrateKbps] (u32, decision 0013; 0 = host default for the mode).
+ */
+data class StreamPrefs(val fps: Int, val scalePermille: Int, val bitrateKbps: Long = 0) : Message {
     override val type get() = MsgType.STREAM_PREFS
+}
+
+/** Host asks the tablet to show its settings panel while streaming (H to C, PROTOCOL.md 0x08, decision 0013). */
+data object SettingsOpen : Message {
+    override val type get() = MsgType.SETTINGS_OPEN
 }
 
 /** Current panel refresh rate of the tablet (C to H, PROTOCOL.md 0x07): [hz] rounded to an integer, 0 = unknown. */
