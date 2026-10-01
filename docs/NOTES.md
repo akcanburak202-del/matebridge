@@ -452,3 +452,14 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 
 - `in_codec_p95` 6–7, `max` 3; `late_drops` A 2 / B 0. Kullanıcı: **"ikincisinde gecikme hissediliyor"** → varsayılan `lock` kalıyor; `cpd` anahtar arkasında (`--es pacer cpd`). Karar: çizimde gecikme > %1'lik çift kare.
 - Not: kilidin planlanan boşluğu (%0,4) SF'deki çiftten (%1,5) düşük → bazı kareler planlanan slotu SF'de kaçırıyor (son an 6 ms sınırda olabilir).
+
+## 2026-10-01 ~13:51–13:54 (cihaz saati) — Son an 6 ms vs 7 ms, dönüşümlü A/B (çizim, 120 Hz)
+
+| bölüm | son an | SF çift | hazır→slot p50 | planlanan boşluk |
+|---|---|---|---|---|
+| A | 6 ms | %0,27 | 12,5 ms | %0,10 |
+| B | 7 ms | %2,95 | 12,3 ms | %0,32 |
+| C | 6 ms | %2,40 | 11,2 ms | %0,29 |
+| D | 7 ms | %4,19 | 17,7 ms | %0,41 |
+
+- 7 ms daha iyi değil (iki turda da 6 ms'den kötü). Bölümler arası fark büyük (kullanıcının çizim davranışı). **6 ms kalıyor.** Görüntü akıcılığı çalışması burada durduruldu (kalan paylar: donanım çözme ~9 ms, panel zamanlaması).
