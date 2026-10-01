@@ -21,11 +21,21 @@ final class EncodeBenchTests: XCTestCase {
     }
 
     func testBadArguments() {
-        for args in [["--fps", "0"], ["--fps", "x"], ["--seconds", "-1"], ["--config", "nope"], ["--config"]] {
+        for args in [["--fps", "0"], ["--fps", "x"], ["--seconds", "-1"], ["--config", "nope"], ["--config"],
+                     ["--input-tags", "p3"], ["--input-tags"]] {
             guard case .failure = EncodeBenchOptions.parse(["--encode-bench"] + args)! else {
                 return XCTFail("\(args) should fail")
             }
         }
+    }
+
+    func testInputTagsAndRetag() throws {
+        let d = try XCTUnwrap(EncodeBenchOptions.parse(["app", "--encode-bench"])).get()
+        XCTAssertEqual(d.inputTags, .none)
+        XCTAssertTrue(d.applyingEnvironment([:]).retagInput)
+        let o = try XCTUnwrap(EncodeBenchOptions.parse(["app", "--encode-bench", "--input-tags", "sck"])).get()
+        XCTAssertEqual(o.inputTags, .sck)
+        XCTAssertFalse(o.applyingEnvironment(["MATEBRIDGE_INPUT_RETAG": "0"]).retagInput)
     }
 
     func testCatalogNamesUniqueAndBaselineMatchesEncoder() {
