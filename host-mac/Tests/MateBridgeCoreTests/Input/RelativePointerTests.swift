@@ -25,17 +25,35 @@ private func mouse(_ events: [MacEvent]) -> MacMouse? {
 
 @Suite("REL: relative pointer from the live cursor (T-103)")
 struct RelativePointerTests {
-    @Test("REL-1 a game warps the cursor back to the center after every move: each move starts there, no wall")
+    @Test("REL-1 a game warps the cursor back to the center: raw deltas throughout, the position never runs into a wall")
     func rel1_warpedCursor() throws {
-        var p = InjectionPlanner()
         let c = testGeometry.center
-        // 100 moves of +30 pt would be 3000 pt: far beyond the right edge for a model of our own.
+        // 100 moves of +30 pt, 8 ms apart, would be 3000 pt: far beyond the right edge for a model of our own.
+        // a) Some samples show our post before the game's warp (game at 60 Hz, messages at 120 Hz): the warp is
+        //    adopted at the next center sample, the position stays within two steps of the center.
+        var p = InjectionPlanner()
+        var last: DisplayPoint?
         for i in 0..<100 {
-            let m = try #require(mouse(p.plan([rel(30, -7)], environment: env(cursor: c), now: UInt64(i) * 1000)))
-            #expect(m.position == DisplayPoint(x: c.x + 30, y: c.y - 7))
+            let sample = i % 2 == 1 ? (last ?? c) : c
+            let m = try #require(mouse(p.plan([rel(30, -7)], environment: env(cursor: sample), now: UInt64(i) * 8_000)))
             #expect(m.deltaX == 30)
             #expect(m.deltaY == -7)
+            #expect(m.position.x <= c.x + 60)
+            last = m.position
         }
+        // b) The game warps back synchronously after every event, so no sample ever shows our post: the center looks
+        //    like lag for up to the lag window, then it is adopted again (accepted trade-off, T-103 handoff).
+        var q = InjectionPlanner()
+        let window = Double(InjectionPlanner.defaultLagWindowUs / 8_000 + 1)
+        var maxX = 0.0
+        for i in 0..<100 {
+            let m = try #require(mouse(q.plan([rel(30, -7)], environment: env(cursor: c), now: UInt64(i) * 8_000)))
+            #expect(m.deltaX == 30)
+            maxX = Swift.max(maxX, m.position.x)
+        }
+        #expect(maxX <= c.x + 30 * window)
+        #expect(maxX < testGeometry.originX + testGeometry.widthPt - 1)  // never clamped at the edge
+        #expect(q.counters.liveCursorAdopted >= 100 / Int(window))
     }
 
     @Test("REL-2 pushing on at the display edge keeps reporting the raw delta while the position stays clamped")
@@ -161,8 +179,9 @@ struct RelativePointerTests {
         events = p.plan([rel(6, -2, dragging: .left)], environment: env(cursor: warped), now: 1_120_000)
         #expect(events == [mouseEvent(.dragged, at: DisplayPoint(x: 806, y: 508), delta: DisplayPoint(x: 6, y: -2))])
         model.apply(events)
-        // The release lands where the cursor really is.
-        events = p.plan([.mouseButton(.left, down: false)], environment: env(cursor: warped), now: 1_140_000)
+        // The release lands where the cursor really is (once the warp target is no longer a recent position of ours:
+        // within the lag window a sample still showing it counts as WindowServer lag, see REL-17).
+        events = p.plan([.mouseButton(.left, down: false)], environment: env(cursor: warped), now: 1_300_000)
         #expect(events == [mouseEvent(.up, at: warped, clickState: 2)])
         model.apply(events)
         #expect(model.violations.isEmpty)
@@ -216,9 +235,10 @@ struct RelativePointerTests {
     func rel11_pipeline() {
         var pipe = InputPipeline()
         _ = pipe.sessionStarted(now: 1_000, environment: openEnv)
+        let first = pipe.handle(relMsg(40, 0), now: 2_000, environment: env(cursor: DisplayPoint(x: 300, y: 300)))
+        #expect(first == [mouseEvent(.moved, at: DisplayPoint(x: 340, y: 300), delta: DisplayPoint(x: 40, y: 0))])
         let c = testGeometry.center
-        var events: [MacEvent] = []
-        for i in 0..<50 { events = pipe.handle(relMsg(40, 0), now: 2_000 + UInt64(i) * 1_000, environment: env(cursor: c)) }
+        let events = pipe.handle(relMsg(40, 0), now: 300_000, environment: env(cursor: c))
         #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: c.x + 40, y: c.y), delta: DisplayPoint(x: 40, y: 0))])
     }
 }
@@ -242,8 +262,8 @@ struct RelativePointerLagTests {
         }
         #expect(p.counters.liveCursorAdopted == 1)  // the starting point only
         // A one-post lag is the planner's own cursor ("current"); older ones match the ring ("lag ignored").
-        #expect(p.counters.liveCursorCurrent == 14)
-        #expect(p.counters.liveCursorLagIgnored == 25)
+        #expect(p.counters.liveCursorCurrent + p.counters.liveCursorLagIgnored == 39)
+        #expect(p.counters.liveCursorLagIgnored > 0)
     }
 
     @Test("REL-13 a warp to a position that is none of our recent posts is adopted, even in the middle of a burst")
@@ -261,36 +281,93 @@ struct RelativePointerLagTests {
         #expect(p.counters.liveCursorAdopted == 2)
     }
 
-    @Test("REL-14 the ring holds only the last 8 relative targets")
+    /// Adopts `start`, then posts `count` moves of +20 pt with no live sample (the Host's query failing), 1 ms apart
+    /// from `t0`: every target stays a recent position. Returns the posted targets.
+    private func burstWithoutSamples(_ p: inout InjectionPlanner, start: DisplayPoint, count: Int,
+                                     t0: UInt64 = 0) throws -> [DisplayPoint] {
+        var posted = [try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: t0))).position]
+        for i in 1..<count {
+            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: nil),
+                                                    now: t0 + UInt64(i) * 1_000))).position)
+        }
+        return posted
+    }
+
+    @Test("REL-14 the ring holds only the last 8 recent positions")
     func rel14_ringBounded() throws {
         var p = InjectionPlanner()
-        var posted: [DisplayPoint] = []
-        for i in 0..<10 {
-            let sample = posted.last ?? DisplayPoint(x: 300, y: 300)
-            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: sample), now: UInt64(i)))).position)
-        }
+        // Ring: the adopted start and 10 targets, bounded to the newest 8 (posted[2] ... posted[9]).
+        let posted = try burstWithoutSamples(&p, start: DisplayPoint(x: 300, y: 300), count: 10)
         var q = p
-        _ = try #require(mouse(q.plan([rel(1, 0)], environment: env(cursor: posted[2]), now: 20)))  // 8th newest
+        _ = try #require(mouse(q.plan([rel(1, 0)], environment: env(cursor: posted[2]), now: 20_000)))  // 8th newest
         #expect(q.counters.liveCursorLagIgnored == p.counters.liveCursorLagIgnored + 1)
-        let m = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: posted[1]), now: 20)))  // 9th newest
+        let m = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: posted[1]), now: 20_000)))  // 9th
         #expect(m.position == DisplayPoint(x: posted[1].x + 1, y: posted[1].y))
     }
 
     @Test("REL-15 release-all clears the ring: an old posted position is then someone else's move")
     func rel15_ringClearedOnRelease() throws {
         var p = InjectionPlanner()
-        var posted: [DisplayPoint] = []
-        for i in 0..<4 {
-            let sample = posted.last ?? DisplayPoint(x: 300, y: 300)
-            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: sample), now: UInt64(i)))).position)
-        }
+        let posted = try burstWithoutSamples(&p, start: DisplayPoint(x: 300, y: 300), count: 4)
         let old = posted[0]
         var before = p
-        let lagged = try #require(mouse(before.plan([rel(1, 0)], environment: env(cursor: old), now: 10)))
+        let lagged = try #require(mouse(before.plan([rel(1, 0)], environment: env(cursor: old), now: 10_000)))
         #expect(lagged.position == DisplayPoint(x: posted[3].x + 1, y: posted[3].y))  // still a lag: model kept
         _ = p.releaseAll(environment: openEnv)
-        let after = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: old), now: 10)))
+        let after = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: old), now: 10_000)))
         #expect(after.position == DisplayPoint(x: old.x + 1, y: old.y))  // adopted
+    }
+
+    @Test("REL-17 a stale recent position never redirects a click: after the lag window the real cursor wins")
+    func rel17_staleEntriesExpire() throws {
+        var p = InjectionPlanner()
+        // Posts 320, 340, 360 from a start of 300, 8 ms apart, while WindowServer still shows the start (so every one
+        // of them stays a recent position); then the moves stop.
+        let start = DisplayPoint(x: 300, y: 300)
+        var last = start
+        for i in 0..<3 {
+            last = try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: UInt64(i) * 8_000)))
+                .position
+        }
+        #expect(last == DisplayPoint(x: 360, y: 300))
+        let at320 = DisplayPoint(x: 320, y: 300)
+        // Within the window a sample at 320 is still WindowServer catching up: the press is at the model's 360.
+        var early = p
+        #expect(early.plan([.mouseButton(.left, down: true)], environment: env(cursor: at320), now: 66_000)
+            == [mouseEvent(.down, at: last, clickState: 1)])
+        // Just past the window (from the newest post), the sample is someone else's move again.
+        var edge = p
+        #expect(edge.plan([.mouseButton(.left, down: true)], environment: env(cursor: at320),
+                          now: 16_000 + InjectionPlanner.defaultLagWindowUs + 1)
+            == [mouseEvent(.down, at: at320, clickState: 1)])
+        // Seconds later the Mac's own mouse moved the cursor to 320 and the user taps: the click lands at 320.
+        #expect(p.plan([.mouseButton(.left, down: true)], environment: env(cursor: at320), now: 3_000_000)
+            == [mouseEvent(.down, at: at320, clickState: 1)])
+    }
+
+    @Test("REL-18 samples that keep showing the adopted start while our first moves are pending lose no step")
+    func rel18_startPositionIsRecent() throws {
+        var p = InjectionPlanner()
+        let start = DisplayPoint(x: 300, y: 300)
+        var xs: [Double] = []
+        for i in 0..<3 {
+            xs.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: UInt64(i) * 8_000)))
+                .position.x)
+        }
+        #expect(xs == [320, 340, 360])
+        #expect(p.counters.liveCursorAdopted == 1)
+        #expect(p.counters.liveCursorLagIgnored == 2)
+    }
+
+    @Test("REL-19 the lag window is configurable")
+    func rel19_configurableWindow() throws {
+        var config = InjectionPlanner.Configuration()
+        config.lagWindowUs = 10_000
+        var p = InjectionPlanner(configuration: config)
+        let start = DisplayPoint(x: 300, y: 300)
+        _ = try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: 0)))
+        let m = try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: 20_000)))
+        #expect(m.position == DisplayPoint(x: 320, y: 300))  // the start is no longer recent: adopted again
     }
 
     @Test("REL-16 the pipeline's session end releases through the planner and so clears the ring")

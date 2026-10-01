@@ -19,8 +19,17 @@
 public struct InjectionPlanner: Sendable {
     public struct Configuration: Equatable, Sendable {
         public var clicks = ClickCounter.Configuration()
+        /// How long a position the planner put the cursor at counts as "WindowServer may not have applied it yet"
+        /// (host clock, µs). A live sample matching such a position is ignored; after the window it is someone
+        /// else's move again. 100 ms covers WindowServer under load (posting is asynchronous) while a stale entry
+        /// cannot redirect a later click for longer than that. It is also how long a game that warps the cursor back
+        /// to the same spot every event can go unnoticed (see `adoptLiveCursor`).
+        public var lagWindowUs: UInt64 = InjectionPlanner.defaultLagWindowUs
         public init() {}
     }
+
+    /// The default `Configuration.lagWindowUs` (T-103).
+    public static let defaultLagWindowUs: UInt64 = 100_000
 
     public struct Counters: Equatable, Sendable {
         /// Events produced.
@@ -69,16 +78,25 @@ public struct InjectionPlanner: Sendable {
     /// Fractions of relative movement not yet reported in the whole-point `deltaX/Y`.
     private var relCarryX = 0.0
     private var relCarryY = 0.0
-    /// The last `recentTargetsLimit` positions posted for relative moves (post-clamp), oldest first. A live sample near
-    /// one of them is our own move that WindowServer has not caught up with, not someone else's.
-    private var recentTargets: [DisplayPoint] = []
+    /// A position the cursor was put at or adopted from, and when (host clock, µs).
+    private struct Recent: Sendable {
+        var point: DisplayPoint
+        var at: UInt64
+    }
+
+    /// The last `recentTargetsLimit` positions of relative moves, oldest first: each posted target (post-clamp) and
+    /// each adopted starting point. A live sample near one of them, within `lagWindowUs`, is our own state that
+    /// WindowServer has not caught up with, not someone else's move.
+    private var recentTargets: [Recent] = []
     static let recentTargetsLimit = 8
+    private let lagWindowUs: UInt64
     private var clicks: ClickCounter
     /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
     private var display: DisplayGeometry?
 
     public init(configuration: Configuration = Configuration()) {
         clicks = ClickCounter(configuration: configuration.clicks)
+        lagWindowUs = configuration.lagWindowUs
     }
 
     /// True while anything posted to the Mac has not been released.
@@ -97,7 +115,7 @@ public struct InjectionPlanner: Sendable {
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
                               now: UInt64) -> [MacEvent] {
         display = env.geometry
-        adoptLiveCursor(env)
+        adoptLiveCursor(env, now: now)
         var out: [MacEvent] = []
         for action in actions {
             let start = out.count
@@ -237,8 +255,7 @@ public struct InjectionPlanner: Sendable {
                 let base = validCursor ?? g.center
                 target = g.moved(base, dx: fx, dy: fy)
                 delta = takeRelativeDelta(fx, fy)
-                if recentTargets.count >= Self.recentTargetsLimit { recentTargets.removeFirst() }
-                recentTargets.append(target)
+                remember(target, now: now)
             }
             // A drag only if that button's down was really posted; otherwise it is a plain move.
             let held = dragging.flatMap { heldButtons[$0] != nil ? $0 : nil }
@@ -479,26 +496,45 @@ public struct InjectionPlanner: Sendable {
         out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: resolved(cursor))))
     }
 
-    /// T-103: the Host's live cursor sample becomes the cached cursor only when someone else moved the cursor:
+    /// T-103: the Host's live cursor sample becomes the cached cursor only when someone else moved the cursor.
+    /// Entries older than `lagWindowUs` are dropped first. Then:
     /// - within a point of the cached cursor on both axes: it is the position we put there (the system may round it;
-    ///   the cached fraction is kept);
-    /// - within a point of one of the last posted relative targets: WindowServer applies posted events asynchronously
-    ///   and has not caught up with our latest moves yet; adopting it would lose those steps, so it is ignored;
+    ///   the cached fraction is kept). WindowServer has caught up, so every older entry is retired (the current
+    ///   position stays, stamped now);
+    /// - within a point of a recent entry: WindowServer applies posted events asynchronously and has not caught up with
+    ///   our latest moves yet; adopting it would lose those steps, so it is ignored. Entries older than the match are
+    ///   retired (WindowServer applies in order);
     /// - on another display: ignored, input never lands there, so relative movement goes on from the last known
     ///   position on the virtual display (the cursor comes back to it, as before T-103);
-    /// - otherwise (a game warp, the Mac's own mouse): adopted.
-    private mutating func adoptLiveCursor(_ env: InjectionEnvironment) {
+    /// - otherwise (a game warp, the Mac's own mouse): adopted, and remembered as an entry itself, so later samples
+    ///   that still show it while our first moves from there are pending do not adopt it again.
+    /// Trade-off: a game that warps the cursor back to the SAME spot after each event looks like lag for up to the
+    /// window; the deltas stay raw, only the posted position runs ahead of the warp until the entry expires or a
+    /// sample shows one of our posts (which retires it).
+    private mutating func adoptLiveCursor(_ env: InjectionEnvironment, now: UInt64) {
+        recentTargets.removeAll { now < $0.at || now - $0.at > lagWindowUs }
         guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
         if let c = cursor, g.contains(c), Self.near(c, live) {
             counters.liveCursorCurrent += 1
+            // Caught up: older entries are retired. The current position stays, stamped now, so a sample that still
+            // shows it while the next move is pending is lag too.
+            recentTargets = [Recent(point: c, at: now)]
             return
         }
-        if recentTargets.contains(where: { Self.near($0, live) }) {
+        if let index = recentTargets.lastIndex(where: { Self.near($0.point, live) }) {
             counters.liveCursorLagIgnored += 1
+            recentTargets.removeFirst(index)
             return
         }
         counters.liveCursorAdopted += 1
         cursor = live
+        remember(live, now: now)
+    }
+
+    /// Adds a recent relative position, dropping the oldest beyond `recentTargetsLimit`.
+    private mutating func remember(_ point: DisplayPoint, now: UInt64) {
+        if recentTargets.count >= Self.recentTargetsLimit { recentTargets.removeFirst() }
+        recentTargets.append(Recent(point: point, at: now))
     }
 
     /// Less than a point apart on both axes.
