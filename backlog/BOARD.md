@@ -2,6 +2,13 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
+| [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -13,9 +20,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
-| [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
+| [T-101](tasks/T-101-client-audio-output-setting.md) | Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi | 5 | android-client-dev | [T-100, T-096] |
 
 ## done
 

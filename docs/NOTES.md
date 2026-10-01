@@ -686,3 +686,19 @@ Her durum 5 s, −40 dBFS 1 kHz ton. Gecikme = `getTimestamp` (yazılan − sunu
 - `dumpsys media.aaudio`: "Exclusive MMAP Endpoints: 1".
 - **Kazanç ~86 ms**, T-097 eşiği 40 ms. Ses ~170–190 ms'den tahminen ~90–100 ms'ye iner.
 - → Karar 0012 (NDK + AAudio istemcide) kullanıcı onayına sunuldu.
+
+## 2026-10-01 ~22:15 — T-096 / T-098 / T-100 cihazda
+
+**T-100 AAudio:**
+- `api=aaudio`, `dumpsys media.aaudio` "Exclusive MMAP Endpoints: 1", burst 240, `buf_frames` 480, seviye tabanı 8–9 ms, `xruns`/`underruns` 0.
+- Kullanıcı: ses temiz, senkron iyi.
+- **Ölçüm hatası:** `audio_ms` ~470 ve `av_offset_ms` ~430 gösteriyor. Oysa seviye 9 ms + çıkış ~13 ms + yakalama/ağ ~15 ms ≈ 35–45 ms olmalı. AAudio zaman damgası `framePosition` ile yazılan kare sayacının başlangıç noktası (start catch-up) uyuşmuyor gibi → T-101. AvSync bu hatayla sesi geciktirmiyor (yalnızca erken sesi geciktiriyor).
+
+**T-096 Otomatik aktarım:**
+- İlk açılışta `transport_pref_migrated from=wifi to=auto`; kablo takılıyken `chosen=usb reason=usb_open`.
+- Kablo çekilince Wi-Fi'ye kendiliğinden geçti.
+- Yeniden takınca HarmonyOS USB modunu "yalnızca şarj"da bıraktığı için adb ve tünel kalkmadı. Kullanıcı "dosya aktarımı"nı seçince otomatik olarak USB'ye geçti.
+- Öneri (tablet ayarı): Geliştirici seçenekleri → "Yalnızca şarj modunda ADB hata ayıklamasına izin ver" ya da "Varsayılan USB yapılandırması = Dosya aktarımı".
+- Kalem ve tuş basılıyken geçiş henüz denenmedi.
+
+**T-098:** `idle_gaps` / `state=idle` yolu çalışıyor. Ses başlangıcında hazırlık süresi kısaldı.
