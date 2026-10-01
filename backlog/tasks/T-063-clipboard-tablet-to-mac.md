@@ -1,7 +1,7 @@
 ---
 id: T-063
 title: Pano: tablet → Mac çalışmıyor
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-054, T-055]
@@ -31,10 +31,10 @@ Kullanıcı (2026-10-01 sabah): tablette kopyalanan metin Mac'e gelmiyor; Mac �
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Commit:** see `git log task/T-063-clipboard-fix` (single T-063 commit)
+- **Dokunulan dosyalar:** ClipboardSync.kt (baseline bir kez), ClipboardBridge.kt (diag kalktı, recheck()), MainActivity.kt (kabulde recheck()), ClipboardSyncTest.kt, bu kart
+- **Varsayımlar:** baseline yalnız ilk kabulde; gönderilen kopya baseline ilerletir (reconnectte tekrar gitmez); lastText oturum başına sıfırlanır; MbLog debug seviyesi yok, diag satırları tamamen silindi
+- **Test edilmeyenler / cihazda doğrulanacaklar:** başka uygulamada kopyala, MateBridge arka planda/oturum kopukken; dön: oturum kurulunca Mac panosuna gelmeli. Açılış öncesi kopya gitmemeli. Mac→tablet metni yankılanmamalı
 - **Açık sorular:**
   - **BLOKE: kök neden doğrulanamadı, uygulanmadı.** AOSP `ClipDescription.getTimestamp()` KDoc'u (android-37 kaynağı, `~/Library/Android/sdk/sources/android-37.0/android/content/ClipDescription.java`; android14-release de aynı): "copied to global clipboard in the **System.currentTimeMillis()** time base" (0 = panoya kopyalanmadı). `setTimestamp` da aynı tabanı söyler. Yani `MainActivity`'deki `System.currentTimeMillis()` taban zamanı zaten doğru saat tabanı; `elapsedRealtime`'a geçirmek asıl hatayı yaratırdı (elapsed << duvar saati, her kopya tabandan "önce" sayılırdı değil, tersi: hepsi geçerdi ama oturum öncesi kopya da gönderilirdi).
   - Kalan hipotezler (hepsi doğrulanmadı; HarmonyOS 4.3'ün `DistributedPasteboardService` katmanı timestamp'i AOSP'den farklı doldurabilir): (1) timestamp elapsedRealtime tabanında HarmonyOS'ta; (2) timestamp farklı/eksik; (3) `check(false)` yalnızca `onWindowFocusChanged(true)` → `start()` ile çağrılıyor, kullanıcı başka uygulamada kopyalayıp MateBridge'e dönerken odak olayı/`primaryClip` okuması başarısız (SecurityException/null) olabilir; (4) `text == lastText` yankı filtresi (örn. Mac'ten gelen metin aynı kalıyor).

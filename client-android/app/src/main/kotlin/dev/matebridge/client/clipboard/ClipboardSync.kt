@@ -26,8 +26,10 @@ class ClipboardSync {
         private set
     var accepted = false // T-063 diag: read by the bridge log
         private set
-    var baselineMs = 0L // T-063 diag: read by the bridge log
+    /** Wall-clock ms ([System.currentTimeMillis] base, same as ClipDescription.getTimestamp()); set once, see [onSessionAccepted]. */
+    var baselineMs = 0L
         private set
+    private var baselineSet = false
     private var lastText: String? = null
     private var seq = 0L
     private var sessionGen = 0
@@ -36,12 +38,14 @@ class ClipboardSync {
     var enabled = true
 
     /**
-     * Session accepted or not. On the transition to accepted, anything copied before now counts as "already there" and is
-     * never sent ("the existing clipboard is not sent at start", PROTOCOL.md).
+     * Session accepted or not. The baseline is set once, at the first acceptance after app start: anything copied before
+     * counts as "already there" and is never sent ("the existing clipboard is not sent at start", PROTOCOL.md). Reconnects
+     * do not move it, so text copied while disconnected is sent after the next acceptance. Sent clips advance it, so
+     * they are not re-sent after a reconnect.
      */
     fun onSessionAccepted(accepted: Boolean, nowMs: Long, gen: Int = 0) {
         if (accepted && !this.accepted) {
-            baselineMs = nowMs
+            if (!baselineSet) { baselineMs = nowMs; baselineSet = true }
             lastText = null // dedup/echo state is per session: a fresh copy after a reconnect must go out
             sessionGen = gen
         }

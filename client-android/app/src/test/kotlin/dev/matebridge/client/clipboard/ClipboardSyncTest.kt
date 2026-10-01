@@ -81,13 +81,25 @@ class ClipboardSyncTest {
         assertNull(s.onRemote(text("a")))
     }
 
-    @Test fun reconnectSetsNewBaseline() {
-        val s = sync()
+    @Test fun copyDuringDisconnectIsSentAfterReconnect() { // T-063
+        val s = sync() // baseline 1000 (first acceptance)
+        assertTrue(s.onLocalClip("sent", false, 1200) is Decision.Send)
         s.onSessionAccepted(false, 1500)
-        assertEquals(Decision.Ignore, s.onLocalClip("while away", false, 1600))
-        s.onSessionAccepted(true, 2000)
-        assertEquals(Decision.Ignore, s.onLocalClip("while away", false, 1600))
-        assertTrue(s.onLocalClip("fresh", false, 2100) is Decision.Send)
+        s.onSessionAccepted(true, 2000) // reconnect: baseline does not move
+        assertEquals(Decision.Ignore, s.onLocalClip("sent", false, 1200)) // already sent in session A
+        assertTrue(s.onLocalClip("while away", false, 1600) is Decision.Send)
+    }
+
+    @Test fun copyBeforeAppStartNeverSent() {
+        val s = ClipboardSync()
+        s.onSessionAccepted(true, 5000)
+        assertEquals(Decision.Ignore, s.onLocalClip("old", false, 4000))
+    }
+
+    @Test fun remoteTextNotEchoedAcrossReconnectCheck() {
+        val s = sync()
+        assertEquals("m", s.onRemote(text("m")))
+        assertEquals(Decision.Ignore, s.onLocalClip("m", false, 2000))
     }
 
     @Test fun dedupStateIsResetPerSession() {
