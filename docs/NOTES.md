@@ -352,3 +352,11 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Birleşik `main`'de 60 Hz'te tablet kendi sayaçlarında temiz (`shown=60 drop=0`) ama SF'de %12–18 33 ms boşluk → bırakma öncüsü (P/2 = 8,33 ms) yanlış. Öncü taraması 60 Hz: 3 ms %11,7 · **6 ms %2,4 / 3,2 / 4,6** · 12 ms %4,4 · 14,5 ms %3,7; 120 Hz'te 6 ms %0,2. Sonuç: bu cihazda en iyi öncü her iki hızda **sabit ~6 ms** (sabit bir kilitlenme son anı) → T-061.
 - Codex (medium) iki P2 buldu ve düzeltildi: faz kilidinde geç kare kilidi histerezissiz kaydırıyordu (geçmiş yuvaları destekleyen ızgara); host kuyruğunda hayatta kalan yeni keyframe kurtarmayı karşılamıyordu.
 - **T-061 (sabit 6 ms öncü) cihazda:** 60 Hz boşta 33 ms boşluk %4,3 / %3,0; 120 Hz tekrar %2,3 (≥25 ms toplam %1,8). Gecenin başına göre: 120 Hz %11,5 → ~%2; 60 Hz %2–25 (faza bağlı) → %3–4, kararlı.
+
+## 2026-10-01 sabah — kullanıcı geri bildirimi (gece işleri sonrası)
+
+- Krita'da çizim akıcı; **yerel kalem izi gereksiz görünüyor** ("herhalde bu özelliği kapatabiliyoruz") → varsayılan kapalı (T-064).
+- Pencere sürükleme daha akıcı.
+- **Pano: tablet → Mac çalışmıyor**, Mac → tablet çalışıyor (T-063).
+- **Yazarken ekran donuyor gibi; imleç hareket edince yazılanlar hemen geliyor; imlecin ilk hareketinde çok takılma** (boşta → hareket geçişi) (T-062). Olası nedenler (doğrulanmadı): (a) host seyreltmesi (T-058): 60 Hz'te ızgaradan önce gelen tek kare **atılıyor, tutulmuyor** → içerik bir kez değişip durursa son kare hiç gönderilmiyor (yazma tek tek değişiklik üretir); (b) tablet `SlotReleaser` (T-057) bekleyen tek çıkışı ancak yeni bir kare gelince bırakıyor olabilir (son an zamanlayıcısı yoksa); (c) uzun boşluktan sonra pacer yeniden çapalama / faz kilidi edinimi ilk kareleri geciktiriyor.
+- Kullanıcı: yeni işlere yeni oturumda geçilecek; saat kayması (Mac ve tablet 120 Hz saatleri) açık konu.
