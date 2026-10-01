@@ -1,7 +1,7 @@
 ---
 id: T-065
 title: Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-057, T-060, T-061]

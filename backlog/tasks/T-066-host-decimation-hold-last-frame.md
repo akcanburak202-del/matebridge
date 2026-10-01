@@ -1,7 +1,7 @@
 ---
 id: T-066
 title: Mac — seyreltmede ızgaradan erken gelen kare atılmaz, tutulur (son değişiklik her zaman gönderilir)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-058]

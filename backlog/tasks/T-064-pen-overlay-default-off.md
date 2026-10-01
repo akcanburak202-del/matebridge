@@ -1,7 +1,7 @@
 ---
 id: T-064
 title: Yerel kalem izi/noktası varsayılan kapalı
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-056]
