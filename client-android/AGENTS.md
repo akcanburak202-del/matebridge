@@ -12,6 +12,7 @@ Huawei MatePad Pro 12.2 (2025), HarmonyOS 4.3 with the Android app runtime, 2800
 - `minSdk 29`, target/compile at the latest stable SDK installed by Android Studio.
 - **Android Views, not Compose.** The UI is tiny and the display is a `SurfaceView`, so fewer dependencies is better.
 - Allowed libraries: AndroidX core/appcompat, kotlinx-coroutines. Anything else needs a decision record.
+- Native code (decision 0012): `app/src/main/cpp/` (CMake), only the thin AAudio output wrapper; audio logic stays in Kotlin. Requires NDK `30.0.16248370` and CMake `4.1.2` (`sdkmanager "ndk;30.0.16248370" "cmake;4.1.2"`), pinned in `app/build.gradle.kts`; `./scripts/check.sh` builds it. ABI: `arm64-v8a` only. No Oboe or other native libraries.
 - Package: `dev.matebridge.client`. Probes use `dev.matebridge.probe.<name>`.
 
 ## Commands

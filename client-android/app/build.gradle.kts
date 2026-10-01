@@ -5,6 +5,8 @@ plugins {
 android {
     namespace = "dev.matebridge.client"
     compileSdk = 37
+    // Decision 0012 / T-100: AAudio output in C++ (src/main/cpp). Install with sdkmanager "ndk;30.0.16248370" "cmake;4.1.2".
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         applicationId = "dev.matebridge.client"
@@ -12,6 +14,22 @@ android {
         targetSdk = 31
         versionCode = 1
         versionName = "0.1"
+        ndk {
+            // The tablet only (MatePad Pro 12.2); no emulator ABIs.
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17", "-Wall", "-Wextra", "-Werror")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.1.2"
+        }
     }
 }
 
