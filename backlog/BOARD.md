@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-090](tasks/T-090-client-net-bench.md) | Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için | 5 | android-client-dev | [T-089] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -112,3 +106,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-087](tasks/T-087-host-idle-refresh-real-refine.md) | Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç | 5 | mac-host-dev | [T-086] |
 | [T-088](tasks/T-088-host-wifi-knobs.md) | Mac — Wi-Fi ölçüm altyapısı ve düğmeler (aktarım logu, gönderim kuyruğu ölçümü, Wi-Fi bit hızı, serviceClass) | 5 | mac-host-dev | [T-086] |
 | [T-089](tasks/T-089-client-wifi-knobs.md) | Tablet — Wi-Fi ölçüm altyapısı ve düğmeler (RTT istatistiği, aktarım logu, trafik sınıfı, WifiLock düşük gecikme) | 5 | android-client-dev | [T-077] |
+| [T-090](tasks/T-090-client-net-bench.md) | Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için | 5 | android-client-dev | [T-089] |

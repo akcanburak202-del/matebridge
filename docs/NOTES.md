@@ -599,3 +599,28 @@ Ağ:
 - `TcpSocketProbe` Wi-Fi bağlantısında `tcp_info` bulamadı (`retx=-1`), `nw_metadata` yedeğine düştü. İncelenecek.
 - Tablette `nc`/`curl` yok → ham kapasite için T-090 ölçüm kipi.
 - Ölçüm tuzağı: `adb shell run-as … sed 's#…">…<#…#'` komutunda tırnaklar uzak kabukta korunmuyor, `>` yönlendirme sayılıyor. Komut tek dize olarak verilmeli. 17:13 ve 17:38 Wi-Fi turları bu yüzden aslında USB'de koştu.
+
+## 2026-10-01 ~18:05 — Wi-Fi tavanının kökü: NWConnection kullanıcı alanı TCP yığını kayıp üretiyor
+
+- Ham ağ kapasitesi (T-090 `net_bench` + `~/.cache/matebridge-tools/netsrv.py`):
+
+  | yön / akış | Mbps |
+  |---|---|
+  | aşağı, 1 akış | 410 |
+  | yukarı, 1 akış | 410 |
+  | aşağı, 4 akış | 448 |
+  | `SO_RCVBUF` 4 MB | 385 (fark yok) |
+  | aralıklı patlama 250 KB/33 ms | ~50, `sendall` p50 0,3 ms (eksiksiz) |
+
+- `TCP_QUICKACK` kapalı (`--ez quickack false`) Wi-Fi'de fark yaratmadı. 15 ve 8 Mbps'te akış toparlanıyor (48–54 fps), ama RTT ~23 ms ve gecikme ~34 ms.
+- Akış sırasında tablet `/proc/net/tcp` rx kuyruğu 0 (uygulama hemen okuyor). Mac `netstat` gönderim kuyruğu 130–360 KB.
+- `nettop -m tcp -x`:
+
+  | bağlantı | `arch` | yeniden gönderim |
+  |---|---|---|
+  | MateBridge video (`NWConnection`) | `ch` (Skywalk kanalı, kullanıcı alanı TCP) | 1,22 MB / 29,3 MB = **%4,2** |
+  | Python BSD soketi, aralıklı patlama | `so` (çekirdek) | **0** |
+  | Python BSD soketi, toplu | `so` | 7 KB / 355 MB |
+
+- **Sonuç:** Wi-Fi tavanının nedeni Network.framework'ün kullanıcı alanı TCP yığını (kayıp → cubic penceresi küçülüyor). Ağ ve tablet değil.
+- → T-091: video bağlantısı BSD soketine ve `TCP_NOTSENT_LOWAT`'a taşınıyor (düğme arkasında, A/B). Wi-Fi'de kalem öbeklenmesi aynı nedenden olabilir (kontrol bağlantısı da `ch`); T-091 ölçümünden sonra ayrı kart.

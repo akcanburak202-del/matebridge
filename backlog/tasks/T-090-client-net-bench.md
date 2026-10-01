@@ -1,7 +1,7 @@
 ---
 id: T-090
 title: Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-089]
