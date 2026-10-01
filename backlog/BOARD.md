@@ -9,6 +9,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-090](tasks/T-090-client-net-bench.md) | Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için | 5 | android-client-dev | [T-089] |
+
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
