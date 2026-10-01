@@ -79,19 +79,28 @@ class FrameQueue(private val stats: VideoStats) {
      * Next frame for the decoder, parking up to [timeoutNs] (T-077). Same frames as [poll], with a direct hand-off:
      * [offer] unparks the waiting thread once it has left the lock, instead of `notifyAll` inside it. One consumer
      * thread at a time. No lost wake-ups: the waiter is published before the queue is re-checked, and an unpark that
-     * comes before the park leaves a permit. Null on timeout (or a spurious/stale wake-up with nothing queued).
+     * comes before the park leaves a permit. Null on timeout, or at once if the thread is interrupted (flag kept).
+     *
+     * T-112: `parkNanos` may return early (spurious wake-up, or a stale permit left on the thread by an AQS lock or by
+     * an [offer] that read [waiter] just before it was cleared), so the wait re-parks for the time left until the
+     * deadline instead of giving up after the first wake-up.
      */
     fun awaitNext(timeoutNs: Long): VideoFrame? {
         take()?.let { return it }
         if (timeoutNs <= 0) return null
-        waiter = Thread.currentThread()
+        val deadline = System.nanoTime() + timeoutNs
+        val self = Thread.currentThread()
+        waiter = self
         try {
-            take()?.let { return it }
-            LockSupport.parkNanos(this, timeoutNs)
+            while (true) {
+                take()?.let { return it }
+                val left = deadline - System.nanoTime()
+                if (left <= 0 || self.isInterrupted) return null // interrupted: parkNanos would not block, never spin
+                LockSupport.parkNanos(this, left)
+            }
         } finally {
             waiter = null
         }
-        return take()
     }
 
     private fun take(): VideoFrame? = synchronized(lock) { queue.removeFirstOrNull() }
