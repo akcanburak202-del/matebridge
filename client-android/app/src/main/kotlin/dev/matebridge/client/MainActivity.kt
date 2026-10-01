@@ -177,6 +177,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var currentEndpoint: Endpoint? = null
     private var manualMode = false
     private var started = false
+    private var benchForwarded = false // T-090: this instance only forwarded to NetBenchActivity
     private var transport = Transport.WIFI
     private var usbStartMs = 0L
     private var hostReached = false
@@ -235,6 +236,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // T-090: `--es net_bench HOST:PORT` runs only the raw TCP throughput bench; no session is set up here.
+        if (intent?.hasExtra(dev.matebridge.client.bench.NetBenchConfig.EXTRA) == true) {
+            benchForwarded = true
+            startActivity(
+                android.content.Intent(this, dev.matebridge.client.bench.NetBenchActivity::class.java).putExtras(intent),
+            )
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         glMode = intent?.getStringExtra("render") == "gl"
         frameRateOverride = intent?.getIntExtra("frate", -1) ?: -1
@@ -1099,6 +1109,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         releaseRenderer()
         presenter?.stop()
