@@ -1,0 +1,37 @@
+---
+id: T-078
+title: Tablet — açılışta ekranın üst ortasında kalem algılanmıyor (Huawei HiWrite katmanı, adres metin kutusu)
+status: todo
+phase: 5
+owner: android-client-dev
+depends_on: []
+decisions: []
+files:
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
+  - client-android/app/src/main/res/layout/activity_main.xml
+  - client-android/app/src/test/
+  - backlog/tasks/T-078-client-hiwrite-overlay.md
+---
+
+## Amaç
+
+Kullanıcı (2026-10-01 ~14:00): Akıcı moda geçip uygulama yeniden başlayınca ekranın üst-orta bölgesinde kalem algılanmadı; bir süre sonra düzeldi. Orkestratör, uygulama açıldıktan ~1,5 sn sonra `dumpsys window windows`: en üstte **`com.huawei.hiwrite`** penceresi, `ty=2032`, `fl=NOT_FOCUSABLE NOT_TOUCH_MODAL` (dokunulabilir), **`mFrame=[989,276][1805,558]`** (816×282 px, üst orta), `isVisible=true`. HiWrite, Huawei'nin kalemle metin alanına el yazısı özelliği; bağlantı panelindeki `endpointField` (`EditText`, manuel adres) açılışta panel görünürken onu tetikliyor, panel `GONE` olduktan sonra katman bir süre kalıp o bölgedeki kalem olaylarını yutuyor.
+
+## Kabul kriterleri
+
+- [ ] Akış başlarken/sürerken hiçbir düzenlenebilir metin alanı odakta ya da görünür değil: `endpointField` varsayılan olarak gizli/devre dışı (ör. "Manuel adres" düğmesiyle açılır), panel gizlenirken `clearFocus()`, IME gizle, alan `GONE` + `isEnabled=false`. Kullanıcı manuel adres girişi hâlâ yapılabilir.
+- [ ] Mümkünse el yazısı katmanını açıkça kapat: API 33+ `View.setAutoHandwritingEnabled(false)` (seviye kontrolü ile), ve Huawei'nin bilinen bir bayrağı/ipucu varsa (araştır, kanıtla) uygula; yoksa yazma.
+- [ ] Akış sırasında HiWrite katmanı çıkarsa bile yakalanabilmesi için: tespit edilemiyorsa *Açık sorular*a yaz (orkestratör `dumpsys` ile doğrular).
+- [ ] Mevcut bağlantı akışları (USB, Wi-Fi, keşif, manuel adres) çalışır. `./scripts/check.sh` geçiyor.
+
+## Plan
+
+_(Ajan doldurur.)_
+
+## Handoff
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**
