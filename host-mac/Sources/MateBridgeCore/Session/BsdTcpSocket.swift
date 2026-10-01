@@ -251,6 +251,9 @@ public final class BsdTcpListener: @unchecked Sendable {
 ///   `maxPendingBytes`): a record beyond either limit is refused whole (`write` returns false, `completion(false)`).
 /// - Closing (`cancel`, end of stream, error): both sources are cancelled and the descriptor is closed exactly once,
 ///   after both cancel handlers ran. `onClosed` runs once, on the owner's queue.
+/// - Graceful close (`finish`, T-111): no new writes; queued records are written, then the write side is shut down
+///   (FIN); reading (and discarding) goes on until the peer's end of stream, then the connection is cancelled. Closing
+///   with unread input would make the kernel reset the connection and drop output it has not sent yet.
 ///
 /// Thread-safe. The lock is never held while calling out.
 public final class BsdTcpConnection: @unchecked Sendable {
@@ -271,6 +274,12 @@ public final class BsdTcpConnection: @unchecked Sendable {
     private var fdClosed = false
     private var cancelled = false
     private var started = false
+    /// `finish` was called: writes are refused, reads are discarded, the write side shuts down once `outbound` is
+    /// empty, and the connection closes at the peer's end of stream (or the deadline).
+    private var finishing = false
+    /// `shutdown(SHUT_WR)` was done (FIN queued after everything written).
+    private var writeShut = false
+    private var finishCompletions: [@Sendable () -> Void] = []
     private var readSource: DispatchSourceRead?
     private var writeSource: DispatchSourceWrite?
     /// The write source is resumed (true) or suspended / not yet activated (false).
@@ -358,11 +367,11 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     /// True when a new record can be queued without building a backlog: nothing of ours is waiting in user space and
     /// the kernel reports the socket writable (with `TCP_NOTSENT_LOWAT`: fewer unsent bytes than the mark). When it
-    /// returns false the writable handler fires once that changes. True after the connection closed, so a writer
-    /// finds out through its write's completion (`false`) instead of waiting.
+    /// returns false the writable handler fires once that changes. True after the connection closed (or started its
+    /// graceful close), so a writer finds out through its write's completion (`false`) instead of waiting.
     public var isWritableForNewRecord: Bool {
         lock.withLock {
-            if cancelled { return true }
+            if cancelled || finishing { return true }
             let writable = outbound.isEmpty && Self.pollWritable(fd)
             if !writable {
                 wantWritable = true
@@ -376,15 +385,15 @@ public final class BsdTcpConnection: @unchecked Sendable {
     /// connection closed first (including when it is already closed) or the record was refused. Called exactly once,
     /// on the write queue, never inside `write`.
     ///
-    /// Returns false when the record was refused and nothing of it was queued: the connection is closed, or queueing
-    /// it would exceed `maxPendingRecords` / `maxPendingBytes` (bounded queue; the connection stays open and the
-    /// caller decides, e.g. drop the frame).
+    /// Returns false when the record was refused and nothing of it was queued: the connection is closed or finishing,
+    /// or queueing it would exceed `maxPendingRecords` / `maxPendingBytes` (bounded queue; the connection stays open
+    /// and the caller decides, e.g. drop the frame).
     @discardableResult
     public func write(_ bytes: [UInt8], completion: @escaping Completion) -> Bool {
         var done: [Completion] = []
         var failure: Int32?
         let accepted: Bool = lock.withLock {
-            guard !cancelled,
+            guard !cancelled, !finishing,
                   outbound.admits(byteCount: bytes.count, maxRecords: maxPendingRecords, maxBytes: maxPendingBytes)
             else { return false }
             outbound.append(bytes, token: completion)
@@ -420,16 +429,54 @@ public final class BsdTcpConnection: @unchecked Sendable {
         }
     }
 
+    /// Graceful close, the kernel-socket counterpart of Network.framework's `.finalMessage` send followed by `cancel`
+    /// (T-111). From now on `write` refuses records and bytes that arrive are read and discarded (`onBytes` is not
+    /// called any more). The records already queued are written, then the write side is shut down: the peer reads
+    /// them, then end of stream. The connection is cancelled when the peer's end of stream arrives (it saw our FIN,
+    /// e.g. after BYE) or on a read error. Reading on until then matters: closing the descriptor with unread input
+    /// makes the kernel reset the connection, which discards output still unsent (the BYE) and turns the peer's end of
+    /// stream into a reset.
+    ///
+    /// `timeout` bounds all of it: a peer that does not read our records or does not close its side is cut off then
+    /// (unwritten records fail). `completion` runs once on the write queue after the connection closed, also when it
+    /// was already closed. A second call adds its completion and keeps the first deadline. Any thread.
+    public func finish(timeout: DispatchTimeInterval, completion: @escaping @Sendable () -> Void) {
+        enum Next { case alreadyClosed, notStarted, linger, alreadyLingering }
+        let next: Next = lock.withLock {
+            guard !cancelled else { return .alreadyClosed }
+            finishCompletions.append(completion)
+            guard !finishing else { return .alreadyLingering }
+            finishing = true
+            // Not started: nothing reads or writes, so close now (a later `start` reports `onClosed`).
+            guard writeSource != nil else { return .notStarted }
+            if outbound.isEmpty { shutdownWriteLocked() }  // otherwise `writeReady` does it once drained
+            return .linger
+        }
+        switch next {
+        case .alreadyClosed:
+            writeQueue.async { completion() }
+        case .notStarted:
+            cancel()
+        case .linger:
+            writeQueue.asyncAfter(deadline: .now() + timeout) { [self] in cancel() }
+        case .alreadyLingering:
+            break
+        }
+    }
+
     /// Closes the connection: unwritten records fail, reading and writing stop, the descriptor closes once both
     /// sources are gone. The peer sees end of stream. Idempotent, any thread.
     public func cancel() {
         var failed: [Completion] = []
         var closed: (DispatchQueue, @Sendable () -> Void)?
         var wake: (@Sendable () -> Void)?
+        var finished: [@Sendable () -> Void] = []
         lock.withLock {
             guard !cancelled else { return }
             cancelled = true
             failed = outbound.removeAll()
+            finished = finishCompletions
+            finishCompletions = []
             wake = wantWritable ? writableHandler : nil
             wantWritable = false
             if let ownerQueue, let closedHandler { closed = (ownerQueue, closedHandler) }
@@ -445,8 +492,23 @@ public final class BsdTcpConnection: @unchecked Sendable {
             }
         }
         complete(failed, false)
+        if !finished.isEmpty { writeQueue.async { [finished] in for f in finished { f() } } }
         if let wake { writeQueue.async { wake() } }
         if let (queue, handler) = closed { queue.async { handler() } }
+    }
+
+    /// Caller holds `lock`. Graceful close, everything written: FIN. The descriptor stays open (and read) until the
+    /// peer's end of stream. The write source is parked: it would fire continuously on a shut-down socket.
+    private func shutdownWriteLocked() {
+        guard !cancelled, !fdClosed else { return }
+        if !writeShut {
+            writeShut = true
+            _ = Darwin.shutdown(fd, SHUT_WR)
+        }
+        if writeArmed, let ws = writeSource {
+            writeArmed = false
+            ws.suspend()
+        }
     }
 
     // MARK: Internals
@@ -486,6 +548,8 @@ public final class BsdTcpConnection: @unchecked Sendable {
                 case .failed(let e): failure = e; return
                 }
             }
+            // Graceful close, everything written: FIN. `readReady` closes at the peer's end of stream.
+            if finishing { shutdownWriteLocked(); return }
             // Nothing of ours is left. The source fired, so the kernel is below the mark: wake a waiting writer.
             if wantWritable {
                 wantWritable = false
@@ -503,12 +567,13 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     private func readReady(_ onBytes: @Sendable ([UInt8]) -> Bool) {
         var buffer = [UInt8](repeating: 0, count: Self.readChunk)
-        let (n, err): (Int, Int32) = lock.withLock {
-            guard !cancelled else { return (-1, EAGAIN) }
+        let (n, err, discard): (Int, Int32, Bool) = lock.withLock {
+            guard !cancelled else { return (-1, EAGAIN, true) }
             let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-            return (n, n < 0 ? errno : 0)
+            return (n, n < 0 ? errno : 0, finishing)
         }
         if n > 0 {
+            if discard { return }  // finishing: read and dropped, so closing later never finds unread input
             if !onBytes(Array(buffer[..<n])) { cancel() }
         } else if n == 0 {
             cancel()  // end of stream
