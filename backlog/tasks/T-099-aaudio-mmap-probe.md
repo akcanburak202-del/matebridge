@@ -1,7 +1,7 @@
 ---
 id: T-099
 title: Sonda — AAudio MMAP tablette var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük (NDK kurulumu dahil)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-095]

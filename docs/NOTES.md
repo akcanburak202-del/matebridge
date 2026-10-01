@@ -672,3 +672,17 @@ Ağ:
 - Sessizliği (host IO yok) alt taşma saymamak.
 - AAudio MMAP denemesi (NDK, karar kaydı gerekir).
 - Tablet tampon boyu (1920 → 960).
+
+## 2026-10-01 ~21:50 — AAudio MMAP sondası (T-099, NDK 30.0.16248370, CMake 4.1.2)
+
+Her durum 5 s, −40 dBFS 1 kHz ton. Gecikme = `getTimestamp` (yazılan − sunulan) / hız − (şimdi − sunum).
+
+| durum | paylaşım | MMAP | burst | tampon | xrun | çıkış gecikmesi p50/p95 |
+|---|---|---|---|---|---|---|
+| a) AAudio LOW_LATENCY + EXCLUSIVE | exclusive | **evet** | 240 (5 ms) | 480 | 0 | **12,95 / 12,99 ms** |
+| b) AAudio LOW_LATENCY + SHARED | shared | evet | 240 | 720 | 1 | 494 ms (zaman damgası tutarsız, ts_fail 114; dikkate alınmadı) |
+| c) AudioTrack (ürün ayarı) | — | — | 960 (20 ms) | 1920 | 0 | **99,1 / 99,7 ms** |
+
+- `dumpsys media.aaudio`: "Exclusive MMAP Endpoints: 1".
+- **Kazanç ~86 ms**, T-097 eşiği 40 ms. Ses ~170–190 ms'den tahminen ~90–100 ms'ye iner.
+- → Karar 0012 (NDK + AAudio istemcide) kullanıcı onayına sunuldu.
