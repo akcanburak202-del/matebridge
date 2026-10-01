@@ -18,6 +18,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.SpannableStringBuilder
@@ -244,6 +246,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
+        setupManualEntry()
         findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
         findViewById<Button>(R.id.connect_usb).setOnClickListener { selectTransport(Transport.USB) }
         findViewById<Button>(R.id.connect_wifi).setOnClickListener { selectTransport(Transport.WIFI) }
@@ -612,6 +615,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         p.addView(t, lp)
     }
 
+    // ---- manual address field (T-078) ----
+
+    /**
+     * The manual address field is hidden and disabled unless the user opens it with "Manuel adres". While an editable
+     * field is focused or visible, Huawei HiWrite (pen handwriting into text fields) adds a touchable system window over
+     * the top centre of the screen that outlives the panel and swallows pen events there once streaming starts.
+     */
+    private fun setupManualEntry() {
+        if (Build.VERSION.SDK_INT >= 33) endpointField.setAutoHandwritingEnabled(false) // no-op below API 33 (tablet: 31)
+        endpointField.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) { onConnectClicked(); true } else false
+        }
+        findViewById<Button>(R.id.endpoint_toggle).setOnClickListener {
+            if (endpointField.visibility == View.VISIBLE) hideManualEntry() else showManualEntry()
+        }
+        hideManualEntry()
+    }
+
+    private fun showManualEntry() {
+        endpointField.isEnabled = true
+        endpointField.visibility = View.VISIBLE
+        endpointField.requestFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .showSoftInput(endpointField, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    /** Idempotent: no focus, no IME, gone and disabled (the typed text is kept for "Bağlan"). */
+    private fun hideManualEntry() {
+        if (endpointField.hasFocus()) endpointField.clearFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(endpointField.windowToken, 0)
+        endpointField.visibility = View.GONE
+        endpointField.isEnabled = false
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_F3 && event.repeatCount == 0) { toggleStats(); return true }
         return super.onKeyDown(keyCode, event)
@@ -928,6 +966,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         manualMode = false
         transport = settings.transport()
         hostReached = false
+        hideManualEntry() // T-078: every (re)start begins without an editable field on screen
         render(SessionUi.Searching)
         ui.removeCallbacks(ticker)
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
@@ -1006,6 +1045,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             manualMode = true
             settings.saveEndpoint(ep)
         }
+        hideManualEntry() // T-078: no focused field once the stream may start
         connect(ep)
     }
 
@@ -1026,6 +1066,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
         if (state !is SessionUi.Connected) releaseRenderer()
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
+        if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
         status.text = when (state) {
             SessionUi.Idle -> getString(R.string.state_idle)
