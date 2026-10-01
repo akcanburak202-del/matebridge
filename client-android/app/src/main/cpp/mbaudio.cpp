@@ -215,6 +215,18 @@ Java_dev_matebridge_client_audio_AAudioNative_counters(JNIEnv* env, jobject, jlo
     return r;
 }
 
+// T-110: output headroom = frames written - frames read (AAudio's own counters), read just before each write by the
+// writer thread. No alloc, lock, log or up-call. getFramesRead is read last, so a read counter that moves in between
+// only makes the value smaller (conservative). INT64_MIN for a null handle.
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_matebridge_client_audio_AAudioNative_headroom(JNIEnv*, jobject, jlong h) {
+    Out* o = fromHandle(h);
+    if (o == nullptr) return INT64_MIN;
+    const int64_t written = AAudioStream_getFramesWritten(o->stream);
+    const int64_t read = AAudioStream_getFramesRead(o->stream);
+    return written - read;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_matebridge_client_audio_AAudioNative_xruns(JNIEnv*, jobject, jlong h) {
     Out* o = fromHandle(h);

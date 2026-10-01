@@ -38,7 +38,7 @@ class AAudioSink private constructor(
 
     override fun logFields(): String =
         "api=$api sharing=${if (exclusive) "exclusive" else "shared"} mmap=$mmap burst=$burst buf=$bufFrames " +
-            "capacity=$capacity perf_mode=$perfName"
+            "capacity=$capacity max_buf=$maxBufFrames perf_mode=$perfName"
 
     override fun write(pcm: ShortArray, frames: Int): Int {
         val timeout = if (System.nanoTime() - openedNs < START_GRACE_NS) START_WRITE_TIMEOUT_NS else WRITE_TIMEOUT_NS
@@ -63,6 +63,11 @@ class AAudioSink private constructor(
     override fun counters(out: LongArray): Boolean = AAudioNative.counters(handle, out) != AAudioNative.ERROR_NULL
 
     override fun xruns(): Int = AAudioNative.xruns(handle).coerceAtLeast(0)
+
+    override fun headroom(): Long = AAudioNative.headroom(handle)
+
+    /** The largest buffer [grow] may reach: min(capacity, max bursts × burst). */
+    val maxFrames: Int get() = maxBufFrames
 
     override fun grow(): Boolean {
         if (bufFrames + burst > maxBufFrames) return false

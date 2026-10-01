@@ -43,6 +43,12 @@ interface AudioSink {
      */
     fun counters(out: LongArray): Boolean = false
 
+    /**
+     * T-110: frames queued in the output and not yet read by the device (written - read), or [HEADROOM_UNKNOWN] if the
+     * output has no such counters (AudioTrack). Writer thread, called before every write: must not allocate or block.
+     */
+    fun headroom(): Long = HEADROOM_UNKNOWN
+
     /** Output underruns since open. */
     fun xruns(): Int
 
@@ -60,6 +66,8 @@ interface AudioSink {
         const val WRITE_DEAD = -1
         /** Any other write error. */
         const val WRITE_FAILED = -2
+        /** [headroom] is not available. */
+        const val HEADROOM_UNKNOWN = Long.MIN_VALUE
     }
 }
 
