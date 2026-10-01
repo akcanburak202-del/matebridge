@@ -198,6 +198,9 @@ public final class SessionServer: @unchecked Sendable {
         public var videoAttached: @Sendable (VideoLink) -> Void = { _ in }
         /// `AUDIO_PREFS` from the active, encrypted session (decision 0011, T-094).
         public var audioPrefs: @Sendable (_ sessionID: UInt32, AudioPrefs) -> Void = { _, _ in }
+        /// Whether `openSettingsPanel()` can reach the tablet now: an ACCEPTED session whose HELLO announced
+        /// `SETTINGS_PANEL` (decision 0013). Called on changes only, in order with `stateChanged`.
+        public var settingsPanelAvailable: @Sendable (Bool) -> Void = { _ in }
         public init() {}
     }
 
@@ -217,6 +220,8 @@ public final class SessionServer: @unchecked Sendable {
     private var machine: SessionMachine
     private var knownDevices: [DeviceID: String]
     private var state: SessionServerState = .stopped
+    /// Last value reported through `handlers.settingsPanelAvailable`.
+    private var settingsPanelAvailable = false
     private var controlListener: NWListener?
     private var videoListener: VideoListener?
     private var nextID: UInt64 = 0
@@ -511,6 +516,15 @@ public final class SessionServer: @unchecked Sendable {
         queue.async { [self] in
             guard !stopped else { return }
             apply(machine.send(sessionID: sessionID, message))
+        }
+    }
+
+    /// Host menu "open settings on the tablet" (decision 0013): sends `SETTINGS_OPEN` to the active session if its
+    /// client announced `SETTINGS_PANEL`; otherwise nothing is sent (`ev=settings_open_skipped`).
+    public func openSettingsPanel() {
+        queue.async { [self] in
+            guard !stopped else { return }
+            apply(machine.openSettingsPanel())
         }
     }
 
@@ -1171,6 +1185,11 @@ public final class SessionServer: @unchecked Sendable {
             }
         case .pending(let name): setState(.awaitingApproval(deviceName: name))
         case .active(let name, _): setState(.connected(deviceName: name, transport: activeTransport))
+        }
+        let settingsAvailable = machine.settingsPanelAvailable
+        if settingsAvailable != settingsPanelAvailable {
+            settingsPanelAvailable = settingsAvailable
+            handlers.settingsPanelAvailable(settingsAvailable)
         }
     }
 

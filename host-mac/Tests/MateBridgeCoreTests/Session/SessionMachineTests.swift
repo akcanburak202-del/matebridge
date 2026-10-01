@@ -606,3 +606,63 @@ extension SessionMachineTests {
         #expect(m.received(A, .settingsOpen(SettingsOpen()), now: 1).isEmpty)
     }
 }
+
+// MARK: - SETTINGS_OPEN from the host menu (T-106, decision 0013)
+
+private func helloWith(_ caps: Capabilities, dev: UInt8 = 1) -> Message {
+    var c = TestClient(device: dev)
+    c.hello.capabilities = caps
+    return c.message
+}
+
+private func isSkip(_ a: SessionAction, _ reason: String) -> Bool {
+    a == .log(.info, ev: "settings_open_skipped", conn: nil, fields: "reason=\(reason)")
+}
+
+extension SessionMachineTests {
+    @Test func settingsOpenIsSentToACapableActiveSession() {
+        var m = makeMachine(approved: [device(1)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, helloWith([.pen, .settingsPanel]), now: 0)
+        #expect(m.settingsPanelAvailable)
+        let actions = m.openSettingsPanel()
+        #expect(sent(actions, to: A) == [.settingsOpen(SettingsOpen())])
+        #expect(actions.contains(.log(.info, ev: "settings_open_sent", conn: A, fields: "")))
+    }
+
+    @Test func settingsOpenIsNotSentWithoutTheCapability() {
+        var m = makeMachine(approved: [device(1)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, helloWith([.pen, .touch, .audioPCM]), now: 0)
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+        #expect(!m.settingsPanelAvailable)
+        let actions = m.openSettingsPanel()
+        #expect(sent(actions, to: A).isEmpty)
+        #expect(actions.count == 1 && isSkip(actions[0], "no_capability"))
+    }
+
+    @Test func settingsOpenIsNotSentWithoutAnActiveSession() {
+        var m = makeMachine()
+        #expect(!m.settingsPanelAvailable)
+        let none = m.openSettingsPanel()
+        #expect(none.count == 1 && isSkip(none[0], "no_session"))
+        // A pending (not yet approved) capable client gets nothing either.
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, helloWith([.settingsPanel]), now: 0)
+        #expect(m.status == .pending(deviceName: "Pad"))
+        #expect(!m.settingsPanelAvailable)
+        let pending = m.openSettingsPanel()
+        #expect(sent(pending, to: A).isEmpty)
+        #expect(pending.count == 1 && isSkip(pending[0], "no_session"))
+    }
+
+    @Test func settingsOpenAvailabilityEndsWithTheSession() {
+        var m = makeMachine(approved: [device(1)])
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, helloWith([.settingsPanel]), now: 0)
+        #expect(m.settingsPanelAvailable)
+        _ = m.connectionClosed(A)
+        #expect(!m.settingsPanelAvailable)
+        #expect(sent(m.openSettingsPanel(), to: A).isEmpty)
+    }
+}

@@ -132,6 +132,8 @@ public struct SessionMachine: Sendable {
         var configID: UInt16
         var deviceID: DeviceID
         var deviceName: String
+        /// `HELLO.capabilities` of this session's connection (`SETTINGS_PANEL` gates `SETTINGS_OPEN`, decision 0013).
+        var capabilities: Capabilities = []
         var video: ConnectionID?
         /// Holds the session `prk` for video key derivation; wiped when the session ends.
         var schedule: SessionKeySchedule
@@ -426,6 +428,31 @@ public struct SessionMachine: Sendable {
         return []
     }
 
+    /// The active session's control connection, if that session's client can open its settings panel (HELLO
+    /// capability bit9 `SETTINGS_PANEL`, decision 0013).
+    private var settingsPanelConnection: ConnectionID? {
+        for (cid, conn) in connections {
+            if case .active(let s) = conn.phase, s.capabilities.contains(.settingsPanel) { return cid }
+        }
+        return nil
+    }
+
+    /// There is an ACCEPTED session whose client handles `SETTINGS_OPEN` (the host menu item is enabled only then).
+    public var settingsPanelAvailable: Bool { settingsPanelConnection != nil }
+
+    /// The host menu's "open settings on the tablet" (decision 0013): `SETTINGS_OPEN` on the active session's control
+    /// connection. Without an active session, or when its client did not announce `SETTINGS_PANEL`, nothing is sent
+    /// (only a log line).
+    public func openSettingsPanel() -> [SessionAction] {
+        if let cid = settingsPanelConnection {
+            return [.send(cid, .settingsOpen(SettingsOpen())),
+                    .log(.info, ev: "settings_open_sent", conn: cid, fields: "")]
+        }
+        let active = connections.values.contains { if case .active = $0.phase { true } else { false } }
+        let reason = active ? "no_capability" : "no_session"
+        return [.log(.info, ev: "settings_open_skipped", conn: nil, fields: "reason=\(reason)")]
+    }
+
     /// The stream settings of the live session changed (`STREAM_PREFS`, PROTOCOL.md 3.7): send the new `STREAM_CONFIG`
     /// on the control connection, then close the current video connection; the tablet reopens it with the new
     /// `config_id`. A video connection that is still proving with the old `config_id` fails its re-check. Nothing
@@ -675,7 +702,7 @@ public struct SessionMachine: Sendable {
     private static func makeSession(_ hello: Hello, sessionID: UInt32, config: StreamConfig,
                              schedule: SessionKeySchedule) -> Session {
         Session(id: sessionID, configID: config.configID, deviceID: hello.deviceID, deviceName: hello.deviceName,
-                schedule: schedule)
+                capabilities: hello.capabilities, schedule: schedule)
     }
 
     /// Makes the connection the active session and returns everything after the ACCEPTED HELLO_ACK

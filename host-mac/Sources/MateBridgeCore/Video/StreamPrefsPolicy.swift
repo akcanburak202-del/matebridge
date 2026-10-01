@@ -26,16 +26,30 @@ extension VideoSettings {
         return min(max(Int(kbps.rounded()), 20_000), 80_000)
     }
 
+    /// Range a non-zero `STREAM_PREFS.bitrate_kbps` is clamped to (PROTOCOL.md 0x05, decision 0013).
+    public static let userBitrateRangeKbps = 5_000...150_000
+
+    /// `STREAM_PREFS.bitrate_kbps` as the host applies it: 0 = the mode default (nil), anything else clamped to
+    /// `userBitrateRangeKbps`.
+    public static func clampedUserBitrateKbps(_ raw: UInt32) -> Int? {
+        guard raw != 0 else { return nil }
+        return min(max(Int(raw), userBitrateRangeKbps.lowerBound), userBitrateRangeKbps.upperBound)
+    }
+
     /// The settings a session runs with after the tablet's `STREAM_PREFS`. The display size and point size never
-    /// change. The bitrate is the mode default unless `bitrateOverrideKbps` (env, T-086) is set. `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps
-    /// put the virtual display at the same rate.
+    /// change. Bitrate priority (decision 0013): `bitrateOverrideKbps` (env, T-086/T-088) > the tablet's
+    /// `bitrate_kbps` (clamped, T-106) > the mode default. A change of the bitrate alone keeps `displayRefreshHz`, so
+    /// the virtual display is kept and only capture and encoder restart. `defaultRefreshHz` is the refresh rate used
+    /// for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps put the virtual display at the same rate.
     public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60) -> VideoSettings {
         let p = prefs.normalized
         var s = self
         s.fps = Int(p.fps)
         s.scalePermille = Int(p.scalePermille)
         s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
-        s.bitrateKbps = bitrateOverrideKbps ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.scalePermille)
+        s.userBitrateKbps = bitrateOverrideKbps == nil ? Self.clampedUserBitrateKbps(p.bitrateKbps) : nil
+        s.bitrateKbps = bitrateOverrideKbps ?? s.userBitrateKbps
+            ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.scalePermille)
         return s
     }
 }

@@ -189,11 +189,14 @@ extension VideoSettings {
         text?.trimmingCharacters(in: .whitespaces).lowercased() == "h264" ? .h264 : .hevc
     }
 
-    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over the mode default), `wifi_env`
-    /// (`MATEBRIDGE_WIFI_BITRATE_KBPS` on a Wi-Fi session, T-088) or `prefs` (the default for the stream mode,
-    /// `defaultBitrateKbps`). An override without a recorded source counts as `env`.
+    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over everything), `wifi_env`
+    /// (`MATEBRIDGE_WIFI_BITRATE_KBPS` on a Wi-Fi session, T-088), `user` (`STREAM_PREFS.bitrate_kbps`, T-106) or
+    /// `prefs` (the default for the stream mode, `defaultBitrateKbps`). An override without a recorded source counts
+    /// as `env`.
     public var bitrateSource: String {
-        guard bitrateOverrideKbps != nil else { return BitrateSource.prefs.rawValue }
+        guard bitrateOverrideKbps != nil else {
+            return (userBitrateKbps != nil ? BitrateSource.user : BitrateSource.prefs).rawValue
+        }
         return (bitrateOverrideSource ?? .env).rawValue
     }
 }
