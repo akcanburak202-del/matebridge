@@ -65,6 +65,15 @@ public struct DisplayGeometry: Equatable, Sendable {
             && p.y >= originY - eps && p.y <= originY + heightPt - 1 / scale + eps
     }
 
+    /// A live cursor position, if it is on this display: inside the half-open bounds `[origin, origin + extent)` (the
+    /// cursor can rest on the last fractional point, which `contains` excludes; a point at `origin + extent` belongs to
+    /// the neighbor), then clamped to the bounds `point(x:y:)` uses. nil for a point on another display or non-finite.
+    public func onDisplay(_ p: DisplayPoint) -> DisplayPoint? {
+        guard p.x.isFinite, p.y.isFinite, p.x >= originX, p.x < originX + widthPt, p.y >= originY,
+              p.y < originY + heightPt else { return nil }
+        return clamped(p)
+    }
+
     /// The same bounds `point(x:y:)` uses. A non-finite value maps to the origin.
     public func clamped(_ p: DisplayPoint) -> DisplayPoint {
         DisplayPoint(x: Self.clamp(p.x, origin: originX, extent: widthPt, scale: scale),

@@ -10,12 +10,39 @@
 ///   closed, whatever the environment says. An event that was never posted is never released, and one that was posted
 ///   is always released, at the last known position when the display is gone.
 /// - The injector owns what the state machine does not: the last injected cursor position (a `mouseButton` applies
-///   there), click counts, scroll remainders. Zero-delta `scroll(.changed)` (the client's keepalive) is never
-///   injected. Scroll momentum is never generated, so none follows a forced end and none is left to stop at release-all.
+///   there), click counts, scroll and relative-move remainders. Zero-delta `scroll(.changed)` (the client's
+///   keepalive) is never injected. Scroll momentum is never generated, so none follows a forced end and none is left
+///   to stop at release-all.
+/// - Relative pointer moves (T-103) start at the LIVE cursor when the Host sampled it (`environment.cursor`) and it is
+///   on the virtual display: games warp the cursor or detach it, and a model of our own drifts into invisible walls.
+///   Their `deltaX/Y` is the client's raw movement (never clamped); the position is still clamped to the display.
 public struct InjectionPlanner: Sendable {
     public struct Configuration: Equatable, Sendable {
         public var clicks = ClickCounter.Configuration()
+        /// How long a position the planner put the cursor at counts as "WindowServer may not have applied it yet"
+        /// (host clock, µs). A live sample matching such a position is ignored; after the window it is someone
+        /// else's move again. 100 ms covers WindowServer under load (posting is asynchronous) while a stale entry
+        /// cannot redirect a later click for longer than that. It is also how long a game that warps the cursor back
+        /// to the same spot every event can go unnoticed (see `adoptLiveCursor`).
+        public var lagWindowUs: UInt64 = InjectionPlanner.defaultLagWindowUs
         public init() {}
+    }
+
+    /// The default `Configuration.lagWindowUs` (T-103).
+    public static let defaultLagWindowUs: UInt64 = 100_000
+
+    /// The highest relative-move message rate the lag ring is sized for (Hz). Trackpads and mice in pointer capture
+    /// report at 60 to 240 Hz; 320 leaves headroom.
+    public static let maxRelativeRateHz: UInt64 = 320
+
+    /// How many recent positions the lag ring holds: every move of one `lagWindowUs` at `maxRelativeRateHz`, plus the
+    /// adopted start (100 ms at 320 Hz: 32 + 1 = 33), never fewer than 8. The age window is the real bound; this cap
+    /// only keeps the ring bounded, and must not evict an entry that is still inside the window at a supported rate.
+    public static func recentTargetsCapacity(lagWindowUs: UInt64) -> Int {
+        let limit: UInt64 = 1_024
+        guard lagWindowUs < UInt64.max / maxRelativeRateHz else { return Int(limit) }
+        let perWindow = (lagWindowUs * maxRelativeRateHz + 999_999) / 1_000_000
+        return Int(Swift.min(Swift.max(perWindow + 1, 8), limit))
     }
 
     public struct Counters: Equatable, Sendable {
@@ -31,6 +58,14 @@ public struct InjectionPlanner: Sendable {
         public var droppedOwed = 0
         /// Zero-delta `scroll(.changed)` and `pinch(.changed)` keepalives (never injected).
         public var droppedKeepalive = 0
+        /// Live cursor samples (T-103) that became the starting point: someone else (a game warp, the Mac's own mouse)
+        /// had moved the cursor.
+        public var liveCursorAdopted = 0
+        /// Live cursor samples within a point of the planner's own cursor (the system had caught up).
+        public var liveCursorCurrent = 0
+        /// Live cursor samples within a point of an OLDER posted relative target: WindowServer had not applied our
+        /// latest moves yet, so the sample was ignored and the planner's own cursor kept.
+        public var liveCursorLagIgnored = 0
         public init() {}
     }
 
@@ -54,12 +89,29 @@ public struct InjectionPlanner: Sendable {
     private var capsLockOn = false
     private var scrollCarryX = 0.0
     private var scrollCarryY = 0.0
+    /// Fractions of relative movement not yet reported in the whole-point `deltaX/Y`.
+    private var relCarryX = 0.0
+    private var relCarryY = 0.0
+    /// A position the cursor was put at or adopted from, and when (host clock, µs).
+    private struct Recent: Sendable {
+        var point: DisplayPoint
+        var at: UInt64
+    }
+
+    /// The recent positions of relative moves (at most `recentTargetsLimit`, none older than `lagWindowUs`), oldest first: each posted target (post-clamp) and
+    /// each adopted starting point. A live sample near one of them, within `lagWindowUs`, is our own state that
+    /// WindowServer has not caught up with, not someone else's move.
+    private var recentTargets: [Recent] = []
+    let recentTargetsLimit: Int
+    private let lagWindowUs: UInt64
     private var clicks: ClickCounter
     /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
     private var display: DisplayGeometry?
 
     public init(configuration: Configuration = Configuration()) {
         clicks = ClickCounter(configuration: configuration.clicks)
+        lagWindowUs = configuration.lagWindowUs
+        recentTargetsLimit = Self.recentTargetsCapacity(lagWindowUs: configuration.lagWindowUs)
     }
 
     /// True while anything posted to the Mac has not been released.
@@ -78,6 +130,7 @@ public struct InjectionPlanner: Sendable {
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
                               now: UInt64) -> [MacEvent] {
         display = env.geometry
+        adoptLiveCursor(env, now: now)
         var out: [MacEvent] = []
         for action in actions {
             let start = out.count
@@ -109,6 +162,9 @@ public struct InjectionPlanner: Sendable {
             out.append(.key(MacKey(kind: .modifierUp, keyCode: m.keyCode, flags: currentFlags)))
         }
         clicks.reset()
+        relCarryX = 0
+        relCarryY = 0
+        recentTargets.removeAll()
         counters.events += out.count
         return out
     }
@@ -208,10 +264,13 @@ public struct InjectionPlanner: Sendable {
                 target = g.point(x: x, y: y)
                 if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
             case .relative(let dx, let dy):
-                // A relative move needs a starting point; before any injected position that is the display center.
+                // Starts at the live cursor (adopted in `plan`), else the last known position, else the display
+                // center. The position is clamped; the delta is the raw movement, so there is no wall at the edge.
+                let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
                 let base = validCursor ?? g.center
-                target = g.moved(base, dx: Double(dx), dy: Double(dy))
-                delta = DisplayPoint(x: target.x - base.x, y: target.y - base.y)
+                target = g.moved(base, dx: fx, dy: fy)
+                delta = takeRelativeDelta(fx, fy)
+                remember(target, now: now)
             }
             // A drag only if that button's down was really posted; otherwise it is a plain move.
             let held = dragging.flatMap { heldButtons[$0] != nil ? $0 : nil }
@@ -450,6 +509,60 @@ public struct InjectionPlanner: Sendable {
         scrollCarryX = 0
         scrollCarryY = 0
         out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: resolved(cursor))))
+    }
+
+    /// T-103: the Host's live cursor sample becomes the cached cursor only when someone else moved the cursor.
+    /// Entries older than `lagWindowUs` are dropped first. Then:
+    /// - within a point of the cached cursor on both axes: it is the position we put there (the system may round it;
+    ///   the cached fraction is kept). WindowServer has caught up, so every older entry is retired (the current
+    ///   position stays, stamped now);
+    /// - within a point of a recent entry: WindowServer applies posted events asynchronously and has not caught up with
+    ///   our latest moves yet; adopting it would lose those steps, so it is ignored. Entries older than the match are
+    ///   retired (WindowServer applies in order);
+    /// - on another display: ignored, input never lands there, so relative movement goes on from the last known
+    ///   position on the virtual display (the cursor comes back to it, as before T-103);
+    /// - otherwise (a game warp, the Mac's own mouse): adopted, and remembered as an entry itself, so later samples
+    ///   that still show it while our first moves from there are pending do not adopt it again.
+    /// Trade-off: a game that warps the cursor back to the SAME spot after each event looks like lag for up to the
+    /// window; the deltas stay raw, only the posted position runs ahead of the warp until the entry expires or a
+    /// sample shows one of our posts (which retires it).
+    private mutating func adoptLiveCursor(_ env: InjectionEnvironment, now: UInt64) {
+        recentTargets.removeAll { now < $0.at || now - $0.at > lagWindowUs }
+        guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
+        if let c = cursor, g.contains(c), Self.near(c, live) {
+            counters.liveCursorCurrent += 1
+            // Caught up: older entries are retired. The current position stays, stamped now, so a sample that still
+            // shows it while the next move is pending is lag too.
+            recentTargets = [Recent(point: c, at: now)]
+            return
+        }
+        if let index = recentTargets.lastIndex(where: { Self.near($0.point, live) }) {
+            counters.liveCursorLagIgnored += 1
+            recentTargets.removeFirst(index)
+            return
+        }
+        counters.liveCursorAdopted += 1
+        cursor = live
+        remember(live, now: now)
+    }
+
+    /// Adds a recent relative position, dropping the oldest beyond `recentTargetsLimit`.
+    private mutating func remember(_ point: DisplayPoint, now: UInt64) {
+        if recentTargets.count >= recentTargetsLimit { recentTargets.removeFirst() }
+        recentTargets.append(Recent(point: point, at: now))
+    }
+
+    /// Less than a point apart on both axes.
+    private static func near(_ a: DisplayPoint, _ b: DisplayPoint) -> Bool { abs(a.x - b.x) < 1 && abs(a.y - b.y) < 1 }
+
+    /// Whole points of a relative move for `deltaX/Y`, truncated toward zero; the remainder (always within (-1, 1))
+    /// is carried to the next move so slow movement is not lost.
+    private mutating func takeRelativeDelta(_ dx: Double, _ dy: Double) -> DisplayPoint {
+        let tx = relCarryX + dx, ty = relCarryY + dy
+        let wx = tx.rounded(.towardZero), wy = ty.rounded(.towardZero)
+        relCarryX = tx - wx
+        relCarryY = ty - wy
+        return DisplayPoint(x: Double(Self.pixels(wx)), y: Double(Self.pixels(wy)))
     }
 
     /// The cached cursor if it is still on the display of this call.
