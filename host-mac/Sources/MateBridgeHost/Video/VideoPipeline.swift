@@ -95,8 +95,8 @@ public final class VideoPipeline: @unchecked Sendable {
             let display = try await obtainDisplay()
             set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
             set { $0.display = display }
-            let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us in
-                encoder?.encode(pb, presentationTime: pts, captureTimeUs: us)
+            let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us, displayUs in
+                encoder?.encode(pb, presentationTime: pts, captureTimeUs: us, displayTimeUs: displayUs)
             }, onStop: { [weak self] error in self?.fail(error) })
             set { $0.capture = cap }
             // ScreenCaptureKit needs about a second to see a new display.

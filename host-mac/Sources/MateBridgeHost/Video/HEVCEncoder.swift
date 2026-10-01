@@ -35,6 +35,8 @@ final class HEVCEncoder: @unchecked Sendable {
         var captureTimeUs: UInt64
         /// SCK callback time on the host clock (T-070).
         var deliveredUs: UInt64
+        /// Trace origin: SCK display time (0 = unknown, the trace falls back to `captureTimeUs`).
+        var displayTimeUs: UInt64 = 0
     }
 
     static let maxInFlight = 2
@@ -176,9 +178,11 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// Encodes one captured frame (full-range 4:2:0, see `ScreenCapture`). Never blocks and never grows a queue:
     /// if the encoder is backed up the frame replaces the single pending one.
-    func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64) {
+    func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64,
+                displayTimeUs: UInt64 = 0) {
         meter?.recordEncoderIn()
-        submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs, deliveredUs: HostClock.nowUs()))
+        submit(Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs, deliveredUs: HostClock.nowUs(),
+                     displayTimeUs: displayTimeUs))
     }
 
     private func resubmitLast() {
@@ -252,7 +256,9 @@ final class HEVCEncoder: @unchecked Sendable {
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
         var trace = FrameTrace()
-        trace.captureUs = captureTimeUs
+        // Origin = the frame's SCK display time when known (not clamped: a display time after the callback shows as
+        // sck_lag 0, which is itself a finding), else the presentation timestamp.
+        trace.captureUs = frame.displayTimeUs != 0 ? frame.displayTimeUs : captureTimeUs
         trace.deliveredUs = frame.deliveredUs
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
