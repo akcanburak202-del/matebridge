@@ -124,8 +124,9 @@ final class HEVCEncoder: @unchecked Sendable {
         // Cap bursts (bytes per second) at 2x the average.
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
             [settings.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
-        // Keyframes are requested on demand; a periodic one bounds recovery time anyway.
-        set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 10 as CFNumber)
+        // Keyframes are requested on demand (TCP is reliable); the periodic one is only a long safety net (T-075).
+        set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
+            HEVCEncoder.keyframeIntervalSeconds as CFNumber)
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             kCFBooleanTrue)
         // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range).
@@ -144,6 +145,9 @@ final class HEVCEncoder: @unchecked Sendable {
         timer.resume()
     }
 
+    /// Effective periodic keyframe interval in seconds (0 = on request only).
+    static let keyframeIntervalSeconds = KeyframeIntervalPolicy.fromEnvironment()
+
     /// Read-back of the cadence-related properties as the session reports them (not just what we asked for).
     func cadenceReadback() -> String {
         lock.lock(); let s = session; lock.unlock()
@@ -156,6 +160,7 @@ final class HEVCEncoder: @unchecked Sendable {
         }
         return "RealTime=\(read(kVTCompressionPropertyKey_RealTime)) "
             + "ExpectedFrameRate=\(read(kVTCompressionPropertyKey_ExpectedFrameRate)) "
+            + "MaxKeyFrameIntervalDuration=\(read(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration)) "
             + "MaxFrameDelayCount=\(read(kVTCompressionPropertyKey_MaxFrameDelayCount)) "
             + "Hardware=\(read(kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder))"
     }
