@@ -1,7 +1,7 @@
 ---
 id: T-078
 title: Tablet — açılışta ekranın üst ortasında kalem algılanmıyor (Huawei HiWrite katmanı, adres metin kutusu)
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -26,7 +26,13 @@ Kullanıcı (2026-10-01 ~14:00): Akıcı moda geçip uygulama yeniden başlayın
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `activity_main.xml`: `endpoint` varsayılan `visibility=gone`, `enabled=false`; "Bağlan"ın altına "Manuel adres" düğmesi (`endpoint_toggle`, metin layout'ta literal — `strings.xml` dosya listesinde değil).
+2. `MainActivity`: `showManualEntry()` (görünür + etkin + odak + IME göster) / `hideManualEntry()` (`clearFocus()`, IME gizle, `GONE`, `isEnabled=false`). Düğme ikisi arasında geçiş yapar.
+3. `hideManualEntry()` çağrı noktaları: akış başlayınca panel `GONE` olurken (`render`), `onStart` (her açılışta gizli başla), `onConnectClicked` (yazılan adresle bağlanınca), IME "Done" → bağlan.
+4. "Bağlan" davranışı değişmez: alan gizliyken de içindeki (önceden doldurulmuş son adres) metni okur.
+5. API 33+: `endpointField.setAutoHandwritingEnabled(false)` (SDK kontrolü ile; cihaz API 31 olduğundan orada etkisiz, belgelenir).
+6. Huawei'ye özel HiWrite bayrağı: kanıtlı bir genel API/ipucu bulunamazsa yazılmaz, *Açık sorular*a not edilir.
+7. Saf mantık yok denecek kadar az (görünürlük geçişi); yeni sınıf dosya listesi dışında kalacağı için JVM testi eklenmez, `check.sh` ile doğrulanır.
 
 ## Handoff
 
