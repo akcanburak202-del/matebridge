@@ -121,9 +121,17 @@ class SessionController(
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
-    private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
     /** T-096: a migration candidate's close has its own slot, so it cannot hide the (lower-gen) current one's close. */
-    private val candidateClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
+    private val controlClosed = ControlCloseSlots()
+
+    /**
+     * T-096: a candidate reads the stored pair key (PAIRED takeover) but never stores one: a migration must not pair.
+     * A PAIRING answer therefore fails the candidate (KeyStoreFailed -> migration aborted) instead of replacing the key.
+     */
+    private val candidateKeys = object : PairKeyStore {
+        override fun get(hostId: ByteArray): ByteArray? = pairKeys.get(hostId)
+        override fun put(hostId: ByteArray, key: ByteArray) = throw IOException("a migration candidate never stores a pair key")
+    }
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
     private val videoFrames = AtomicLong()
@@ -252,7 +260,7 @@ class SessionController(
         try {
             while (true) {
                 var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?:
-                    migrateMailbox.take() ?: controlClosed.take() ?: candidateClosed.take() ?: videoClosed.take()
+                    migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -388,9 +396,8 @@ class SessionController(
             }
             is SessionMachine.Action.OpenCandidate -> {
                 MbLog.i("migrate_start", "cand_gen=${a.gen} host=${a.endpoint.host} port=${a.endpoint.port}")
-                candidate?.abort()
-                // Assigned before its threads start: a refused loopback connect fails at once and must find itself here.
-                val c = ControlConn(a.gen, a.endpoint, hello)
+                candidate?.cancel()
+                val c = ControlConn(a.gen, a.endpoint, hello, ControlCloseSlots.Owner.CANDIDATE, candidateKeys)
                 candidate = c
                 c.startThreads()
             }
@@ -400,7 +407,7 @@ class SessionController(
                 c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg)
             }
             SessionMachine.Action.CloseCandidate -> {
-                candidate?.abort()
+                candidate?.cancel()
                 candidate = null
             }
             SessionMachine.Action.RetireControl -> {
@@ -416,10 +423,11 @@ class SessionController(
                 if (c == null || c.gen != a.gen) {
                     // Cannot happen (the machine promotes only its live candidate); fail safe: the session reconnects.
                     MbLog.e("migrate_no_candidate", "cand_gen=${a.gen}")
-                    c?.abort()
-                    controlClosed.post(SessionMachine.Event.ControlClosed(a.gen))
+                    c?.cancel()
+                    controlClosed.post(SessionMachine.Event.ControlClosed(a.gen), ControlCloseSlots.Owner.CURRENT)
                     return
                 }
+                c.owner = ControlCloseSlots.Owner.CURRENT // from now on its close is the session's close
                 MbLog.gen = a.gen
                 MbLog.i("migrate_switch", "host=${a.endpoint.host} port=${a.endpoint.port} transport=${ConnectMode.transportOf(a.endpoint).logName}")
                 listener.onSessionStart()
@@ -438,7 +446,14 @@ class SessionController(
         }
     }
 
-    private inner class ControlConn(val gen: Int, private val endpoint: Endpoint, template: Hello) {
+    private inner class ControlConn(
+        val gen: Int,
+        private val endpoint: Endpoint,
+        template: Hello,
+        /** T-096: which close slot this connection posts to; changed only by the engine (promotion, cancel). */
+        @Volatile var owner: ControlCloseSlots.Owner = ControlCloseSlots.Owner.CURRENT,
+        private val keys: PairKeyStore = pairKeys,
+    ) {
         private val socket = Socket()
         private val queue = SendQueue()
         private val closedPosted = AtomicBoolean(false)
@@ -481,6 +496,12 @@ class SessionController(
             sealerReady.countDown() // releases a writer still waiting for keys
         }
 
+        /** T-096: abort a candidate the machine gave up on; its close notification is dropped (owner set first). */
+        fun cancel() {
+            owner = ControlCloseSlots.Owner.CANCELLED
+            abort()
+        }
+
         /** Same as the overflow handler in [link]: abort and report the connection closed (once). */
         fun dropForOverflow() {
             abort()
@@ -489,9 +510,7 @@ class SessionController(
 
         private fun notifyClosed(connectFailed: Boolean) {
             if (!closedPosted.compareAndSet(false, true)) return
-            // A stale read of [candidate] only picks the other slot; both hold the latest gen and the machine matches by gen.
-            val box = if (candidate === this) candidateClosed else controlClosed
-            box.post(SessionMachine.Event.ControlClosed(gen, connectFailed))
+            controlClosed.post(SessionMachine.Event.ControlClosed(gen, connectFailed), owner)
         }
 
         private fun readerLoop() {
@@ -512,7 +531,7 @@ class SessionController(
                 // The first HELLO_ACK is the only plaintext host message; it is read byte-exactly so the
                 // encrypted records that may follow immediately are not consumed (PROTOCOL.md section 9).
                 val (ack, ackPayload) = PlainFrames.readHelloAck(input)
-                when (val outcome = handshake.complete(ack, ackPayload, pairKeys)) {
+                when (val outcome = handshake.complete(ack, ackPayload, keys)) {
                     is HandshakeOutcome.Plain -> events.put(SessionMachine.Event.Received(gen, ack)) // terminal; host closes
                     HandshakeOutcome.KeyMissing -> {
                         closedPosted.set(true)
@@ -523,7 +542,7 @@ class SessionController(
                         val sec = outcome.session
                         try {
                             // Stored at the first ack, before the Mac's approval: the connection may drop meanwhile.
-                            if (sec.storePairKey(pairKeys)) MbLog.i("pair_key_stored")
+                            if (sec.storePairKey(keys)) MbLog.i("pair_key_stored")
                         } catch (e: Exception) {
                             // Not persisted: a later PAIRED handshake would have no key. Fail instead of pretending.
                             closedPosted.set(true)

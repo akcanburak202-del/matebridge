@@ -43,14 +43,32 @@ class ConnectModeTest {
         assertEquals(TransportMode.AUTO, s.transportMode())
     }
 
-    @Test fun storedPreT096ChoiceIsKept() {
-        // Before T-096 the panel stored "usb" / "wifi" under the same key: that was a manual choice and stays.
-        for ((stored, want) in listOf("usb" to TransportMode.USB, "wifi" to TransportMode.WIFI, "garbage" to TransportMode.AUTO)) {
-            val s = Settings(object : KeyValueStore {
-                override fun getString(key: String) = if (key == "transport") stored else null
-                override fun putString(key: String, value: String) {}
-            })
-            assertEquals(stored, want, s.transportMode())
+    private fun settingsWith(map: HashMap<String, String>) = Settings(object : KeyValueStore {
+        override fun getString(key: String) = map[key]
+        override fun putString(key: String, value: String) { map[key] = value }
+    })
+
+    @Test fun storedPreT096ChoiceIsMigratedToAutoExactlyOnce() {
+        for (stored in listOf("usb", "wifi")) {
+            val map = hashMapOf("transport" to stored)
+            val s = settingsWith(map)
+            assertEquals(stored, s.migrateTransportToAutoOnce())
+            assertEquals(TransportMode.AUTO, s.transportMode())
+            // afterwards an explicit panel choice is respected, also across restarts
+            s.setTransportMode(TransportMode.WIFI)
+            assertEquals(null, s.migrateTransportToAutoOnce())
+            assertEquals(null, settingsWith(map).migrateTransportToAutoOnce())
+            assertEquals(TransportMode.WIFI, settingsWith(map).transportMode())
         }
+    }
+
+    @Test fun migrationOnAFreshInstallChangesNothingButSetsTheFlag() {
+        val map = HashMap<String, String>()
+        val s = settingsWith(map)
+        assertEquals(null, s.migrateTransportToAutoOnce())
+        assertEquals(TransportMode.AUTO, s.transportMode())
+        s.setTransportMode(TransportMode.USB)
+        assertEquals(null, s.migrateTransportToAutoOnce())
+        assertEquals(TransportMode.USB, s.transportMode())
     }
 }

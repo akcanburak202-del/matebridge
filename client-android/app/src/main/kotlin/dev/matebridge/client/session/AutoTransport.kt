@@ -91,6 +91,9 @@ class AutoUsbPolicy {
 
     enum class Step { NONE, MIGRATE, PROBE }
 
+    /** What to do with an OPEN rescan probe, decided on the session state when the result is consumed. */
+    enum class OpenAction { SWITCH, MIGRATE, IGNORE }
+
     var cable = CableState.UNKNOWN
         private set
     var failures = 0
@@ -177,6 +180,17 @@ class AutoUsbPolicy {
 
         /** Probe outcome: OPEN is NEUTRAL (the session that follows decides), anything else is a cheap local failure. */
         fun outcomeOf(probe: ProbeResult): Outcome = if (probe == ProbeResult.OPEN) Outcome.NEUTRAL else Outcome.SOFT_FAIL
+
+        /**
+         * The probe ran off the UI thread; the Wi-Fi session may have moved on meanwhile. Accepted: move it with a
+         * takeover (never tear it down). Pairing in progress, a connect attempt underway, or a terminal failure: leave
+         * it alone (the next step decides again). Nothing connected: switch to USB.
+         */
+        fun onProbeOpen(ui: SessionUi): OpenAction = when (ui) {
+            is SessionUi.Connected -> OpenAction.MIGRATE
+            SessionUi.Idle, SessionUi.Searching, is SessionUi.Disconnected -> OpenAction.SWITCH
+            is SessionUi.Connecting, is SessionUi.AwaitingApproval, is SessionUi.Failed -> OpenAction.IGNORE
+        }
 
         /** AUTO on USB and the session dropped (cable pulled, host gone, never reached): fall back to Wi-Fi. */
         fun shouldFallBack(mode: TransportMode, onUsb: Boolean, ui: SessionUi): Boolean =

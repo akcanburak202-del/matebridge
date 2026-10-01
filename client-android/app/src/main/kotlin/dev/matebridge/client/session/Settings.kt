@@ -56,13 +56,24 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setPenDot(on: Boolean) = store.putString(KEY_PEN_DOT, if (on) "1" else "0")
 
-    /**
-     * Connection mode (T-096). AUTO when nothing is stored; a stored `usb`/`wifi` was picked by hand in the panel
-     * (before T-096 that was the only way to store one) and is kept.
-     */
+    /** Connection mode (T-096). AUTO when nothing (or nothing valid) is stored. */
     fun transportMode(): TransportMode = TransportMode.fromSetting(store.getString(KEY_TRANSPORT))
 
     fun setTransportMode(m: TransportMode) = store.putString(KEY_TRANSPORT, m.id)
+
+    /**
+     * T-096 one-time migration (orchestrator decision): a `usb`/`wifi` stored before T-096 is reset to AUTO once, because
+     * the user asked for automatic switching and had probably tapped a transport button long ago. The flag is set
+     * either way, so every later panel choice (including `usb`/`wifi`) is respected. Returns the replaced value, or
+     * null when nothing was changed.
+     */
+    fun migrateTransportToAutoOnce(): String? {
+        if (store.getString(KEY_TRANSPORT_AUTO_MIGRATED) == "1") return null
+        val old = store.getString(KEY_TRANSPORT)
+        if (old != null && old != TransportMode.AUTO.id) store.putString(KEY_TRANSPORT, TransportMode.AUTO.id)
+        store.putString(KEY_TRANSPORT_AUTO_MIGRATED, "1")
+        return old?.takeIf { it != TransportMode.AUTO.id }
+    }
 
     /**
      * "Parmak dokunmasını tamamen kapat" (decision 0006): when on, finger touches are never sent.
@@ -105,6 +116,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"
+        const val KEY_TRANSPORT_AUTO_MIGRATED = "transport_auto_migrated"
         const val KEY_STATS = "stats_overlay"
         const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_PAD_SPEED = "touchpad_speed"

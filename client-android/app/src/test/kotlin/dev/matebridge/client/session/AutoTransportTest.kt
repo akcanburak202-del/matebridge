@@ -142,6 +142,36 @@ class AutoTransportTest {
         assertEquals(Outcome.SOFT_FAIL, AutoUsbPolicy.outcomeOf(ProbeResult.TIMEOUT))
     }
 
+    @Test fun openRescanProbeIsJudgedOnTheStateWhenConsumed() {
+        assertEquals(AutoUsbPolicy.OpenAction.MIGRATE, AutoUsbPolicy.onProbeOpen(SessionUi.Connected("m", 0)))
+        assertEquals(AutoUsbPolicy.OpenAction.IGNORE, AutoUsbPolicy.onProbeOpen(SessionUi.AwaitingApproval("m", "123456")))
+        assertEquals(AutoUsbPolicy.OpenAction.IGNORE, AutoUsbPolicy.onProbeOpen(SessionUi.Connecting(Endpoint("10.0.0.5", 47001))))
+        assertEquals(AutoUsbPolicy.OpenAction.IGNORE, AutoUsbPolicy.onProbeOpen(SessionUi.Failed(SessionUi.Cause.REJECTED)))
+        for (ui in listOf(SessionUi.Idle, SessionUi.Searching, SessionUi.Disconnected(SessionUi.Cause.LOST, 1000))) {
+            assertEquals(AutoUsbPolicy.OpenAction.SWITCH, AutoUsbPolicy.onProbeOpen(ui))
+        }
+    }
+
+    @Test fun closeSlotsKeepTheCurrentCloseWhenACandidateCloses() {
+        val slots = ControlCloseSlots()
+        // the current connection (gen 3) and a higher-gen candidate (gen 4) close at the same time
+        slots.post(SessionMachine.Event.ControlClosed(3), ControlCloseSlots.Owner.CURRENT)
+        slots.post(SessionMachine.Event.ControlClosed(4, connectFailed = true), ControlCloseSlots.Owner.CANDIDATE)
+        assertEquals(3, slots.take()?.gen)
+        assertEquals(4, slots.take()?.gen)
+        assertNull(slots.take())
+        // a cancelled (aborted) candidate's close is dropped entirely and cannot replace the current one's
+        slots.post(SessionMachine.Event.ControlClosed(5), ControlCloseSlots.Owner.CURRENT)
+        slots.post(SessionMachine.Event.ControlClosed(6), ControlCloseSlots.Owner.CANCELLED)
+        assertEquals(5, slots.take()?.gen)
+        assertNull(slots.take())
+        // a promoted candidate posts as CURRENT; an older (retired) connection's close cannot replace it
+        slots.post(SessionMachine.Event.ControlClosed(8), ControlCloseSlots.Owner.CURRENT)
+        slots.post(SessionMachine.Event.ControlClosed(7), ControlCloseSlots.Owner.CURRENT)
+        assertEquals(8, slots.take()?.gen)
+        assertNull(slots.take())
+    }
+
     @Test fun fallBackOnlyInAutoOnUsbWhenDisconnected() {
         val lost = SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)
         assertTrue(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, lost))

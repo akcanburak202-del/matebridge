@@ -318,7 +318,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             modeOverride = TransportMode.parse(raw)
             MbLog.i("transport_knob", "override=${modeOverride?.id ?: "invalid"}")
         }
-        probeExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "mb-usb-probe").also { it.isDaemon = true } }
+        // T-096: one probe thread and at most one waiting probe; a newer one replaces a waiting older one (each result is
+        // checked against pickGen anyway, so a dropped probe loses nothing).
+        probeExec = java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, java.util.concurrent.ArrayBlockingQueue(1),
+            { r -> Thread(r, "mb-usb-probe").also { it.isDaemon = true } },
+            java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy(),
+        )
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
@@ -350,6 +356,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun getString(key: String) = prefs.getString(key, null)
             override fun putString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
         })
+        settings.migrateTransportToAutoOnce()?.let { old -> MbLog.i("transport_pref_migrated", "from=${TransportMode.parse(old)?.id ?: "other"} to=auto") } // T-096
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
@@ -1270,14 +1277,34 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         picking = false
         autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(r), SystemClock.elapsedRealtime())
         when {
-            r == ProbeResult.OPEN -> {
-                logPick("usb", r.reason + if (initial) "" else " trigger=rescan")
-                transportEpoch++
+            r == ProbeResult.OPEN && initial -> {
+                logPick("usb", r.reason)
                 startUsb(hint = false)
             }
             initial -> { logPick("wifi", r.reason); startWifi() }
+            r == ProbeResult.OPEN && !isOnUsb() -> {
+                // The rescan started while not connected; the Wi-Fi session may have got further since. Never tear down
+                // an accepted session (migrate it instead) and never interrupt a pairing or a running connect.
+                val action = AutoUsbPolicy.onProbeOpen(lastUi)
+                MbLog.i("transport_probe", "result=${r.reason} action=${action.name.lowercase(java.util.Locale.ROOT)}")
+                when (action) {
+                    AutoUsbPolicy.OpenAction.SWITCH -> {
+                        logPick("usb", r.reason + " trigger=rescan")
+                        startUsb(hint = false)
+                    }
+                    AutoUsbPolicy.OpenAction.MIGRATE -> startMigration(SystemClock.elapsedRealtime())
+                    AutoUsbPolicy.OpenAction.IGNORE -> Unit
+                }
+            }
             else -> Unit // rescan: stay on Wi-Fi
         }
+    }
+
+    /** Moves the accepted session to USB via takeover; the result comes back through [onMigrationResult]. */
+    private fun startMigration(nowMs: Long) {
+        autoPolicy.onTryStarted(nowMs)
+        migrateEpoch = transportEpoch
+        controller.migrate(ConnectMode.usbEndpoint) // real handshake: refused locally if no `adb reverse`
     }
 
     /** Every [AUTO_TICK_MS] while started in AUTO: the policy decides whether to try USB now. */
@@ -1292,11 +1319,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending) return
         val now = SystemClock.elapsedRealtime()
         when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now)) {
-            AutoUsbPolicy.Step.MIGRATE -> {
-                autoPolicy.onTryStarted(now)
-                migrateEpoch = transportEpoch
-                controller.migrate(ConnectMode.usbEndpoint) // real handshake: refused locally if no `adb reverse`
-            }
+            AutoUsbPolicy.Step.MIGRATE -> startMigration(now)
             AutoUsbPolicy.Step.PROBE -> probeUsb(initial = false)
             AutoUsbPolicy.Step.NONE -> Unit
         }
@@ -1434,6 +1457,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun connect(ep: Endpoint) {
         currentEndpoint = ep
+        transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
         if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName}")
         controller.start(ep)
