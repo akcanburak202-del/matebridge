@@ -3,8 +3,9 @@ package dev.matebridge.client.audio
 /**
  * Output buffer size experiment switch (T-098, T-100): `--ei audio_buf_bursts N` sets the starting buffer to N output
  * bursts (1-6) for either output. Without it AudioTrack starts at [DEFAULT_BURSTS] and AAudio at
- * [AAUDIO_DEFAULT_BURSTS] (T-099 probe: 2 × 240 frames, 0 xruns). An output underrun (xrun) still grows it by one
- * burst, up to [MAX_BURSTS].
+ * max([AAUDIO_DEFAULT_BURSTS], the size remembered for its path) (T-099 probe: 2 × 240 frames; T-110 [OutBufMemory]).
+ * The buffer grows by one burst, up to [MAX_BURSTS], on an output underrun (xrun) and, for AAudio, when the measured
+ * headroom runs low ([OutBufGrowth]).
  */
 object AudioBufferConfig {
     const val EXTRA = "audio_buf_bursts"

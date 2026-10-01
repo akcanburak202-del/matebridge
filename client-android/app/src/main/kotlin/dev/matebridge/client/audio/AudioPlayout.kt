@@ -44,6 +44,10 @@ import java.util.concurrent.TimeUnit
  *    when the output device changes (at most 5 times per 10 s). Repeated AAudio failures switch to AudioTrack.
  *  - Jitter-buffer safety (T-108, [SafetyMemory]): each output API starts at max(its default, the value remembered
  *    from earlier sessions); AAudio's default is 20 ms. A rebuild on the same API keeps the learned value.
+ *  - AAudio output buffer (T-110): the headroom (frames written - read) is sampled before every write ([HeadroomMeter]);
+ *    a window with headroom below one burst, an estimated underflow or (where reported) an xrun grows the buffer by one
+ *    burst ([OutBufGrowth]). A grown size is remembered per AAudio path ([OutBufMemory]) and the next output starts
+ *    there; `--ei audio_buf_bursts` overrides the start.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
@@ -69,6 +73,8 @@ class AudioPlayout(
     private val video = VideoLatencyFilter()
     /** T-108: learned jitter-buffer safety per output API, kept across sessions. */
     private val safety = SafetyMemory(SharedPrefsSafetyStore(appContext))
+    /** T-110: learned AAudio output buffer size per path, kept across sessions. */
+    private val outBuf = OutBufMemory(SharedPrefsOutBufStore(appContext))
 
     /** AudioTrack burst (the mixer's period). AAudio streams report their own. */
     private val trackBurst: Int
@@ -232,6 +238,10 @@ class AudioPlayout(
         /** Latency probation of a shared AAudio output (writer thread only). */
         private var probe: SharedLatencyProbe? = null
         private val rebuildTimes = ArrayDeque<Long>()
+        /** T-110: headroom and write timing of the current output (writer thread only). */
+        private val meter = HeadroomMeter()
+        /** [OutBufMemory] path of the current output; null for AudioTrack (not remembered). Writer thread only. */
+        private var outBufPath: String? = null
         val finished = CountDownLatch(1)
 
         fun start() {
@@ -294,14 +304,23 @@ class AudioPlayout(
         /** Opens the first output the policy allows, falling down the chain; null if not even AudioTrack opens. */
         private fun openSink(reason: String): AudioSink? {
             probe = null
+            outBufPath = null
             while (true) {
                 if (!running) return null
                 val choice = policy.next()
+                val path = when (choice) {
+                    OutChoice.AAUDIO_EXCLUSIVE -> OutBufMemory.PATH_EXCLUSIVE
+                    OutChoice.AAUDIO_SHARED -> OutBufMemory.PATH_SHARED
+                    OutChoice.TRACK -> null
+                }
+                val bufInit = path?.let {
+                    outBuf.initial(it, bufBurstsRaw?.let { r -> AudioBufferConfig.startBursts(r) }, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS)
+                }
                 val sink = try {
                     when (choice) {
                         OutChoice.AAUDIO_EXCLUSIVE, OutChoice.AAUDIO_SHARED -> AAudioSink.open(
                             if (choice == OutChoice.AAUDIO_EXCLUSIVE) AAudioNative.SHARING_EXCLUSIVE else AAudioNative.SHARING_SHARED,
-                            AudioBufferConfig.startBursts(bufBurstsRaw, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS),
+                            bufInit?.bursts ?: AudioBufferConfig.AAUDIO_DEFAULT_BURSTS,
                             MAX_BURSTS,
                         )
                         OutChoice.TRACK -> TrackSink.open(
@@ -325,6 +344,7 @@ class AudioPlayout(
                     continue
                 }
                 if (verdict == SinkPolicy.Verdict.PROBATION) probe = SharedLatencyProbe(RATE)
+                outBufPath = if (sink is AAudioSink) path else null
                 val init = applySafety(sink.api)
                 MbLog.i(
                     "audio_out",
@@ -332,7 +352,8 @@ class AudioPlayout(
                         "probation=${b(verdict == SinkPolicy.Verdict.PROBATION)} pref=${policy.pref.name.lowercase()} " +
                         "native_rate=$nativeRate rate=$RATE " +
                         "safety_init_ms=${init?.ms ?: (core.drift.safetyFrames / MS)} source=${init?.source ?: "kept"} " +
-                        "stored_ms=${init?.storedMs ?: "-"}",
+                        "stored_ms=${init?.storedMs ?: "-"} buf_bursts_init=${bufInit?.bursts ?: "-"} " +
+                        "buf_source=${bufInit?.source ?: "-"} buf_stored=${bufInit?.storedBursts ?: "-"}",
                     COMPONENT,
                 )
                 return sink
@@ -415,6 +436,7 @@ class AudioPlayout(
             var lastAvMs: Long? = null
             var lastAudioMs: Long? = null
             rawLogged = 0
+            meter.reset()
             while (running) {
                 val why = rebuildReason
                 if (why != null) {
@@ -433,6 +455,7 @@ class AudioPlayout(
                     clock.reset(t.preFrames)
                     nextTsAt = 0; nextLogAt = clock.written + RATE; xrunBase = null
                     rawLogged = 0
+                    meter.reset()
                 }
                 val priming = core.state == PlayoutCore.State.PRIMING
                 val probing = probe != null
@@ -459,7 +482,9 @@ class AudioPlayout(
                     }
                 }
                 core.render(out, t.burst)
+                meter.onWriteStart(t.headroom(), System.nanoTime())
                 val w = t.write(out, t.burst)
+                meter.onWriteEnd(System.nanoTime())
                 if (w == AudioSink.WRITE_DEAD) {
                     if (!running) return
                     aaudioFailed(t, t.deadReason)
@@ -479,8 +504,21 @@ class AudioPlayout(
                     nextLogAt += RATE
                     val xr = t.xruns()
                     val base = xrunBase
-                    if (base != null && xr > base && t.grow()) {
-                        MbLog.i("audio_buffer_grow", "stream_id=$id api=${t.api} buf_frames=${t.bufFrames} xruns=$xr", COMPONENT)
+                    val win = meter.window()
+                    // AAudio: the limit is checked here (testable); AudioTrack: its own grow() keeps the old limit.
+                    val maxFrames = (t as? AAudioSink)?.maxFrames ?: Int.MAX_VALUE
+                    val grow = OutBufGrowth.decide(win, if (base != null) xr - base else 0, t.burst, t.bufFrames, maxFrames, base != null)
+                    if (grow != null && t.grow()) {
+                        val bursts = (t.bufFrames + t.burst / 2) / t.burst
+                        val saved = outBufPath?.let { outBuf.onGrown(it, bursts) } ?: false
+                        MbLog.i(
+                            "audio_buffer_grow",
+                            "stream_id=$id api=${t.api} buf_frames=${t.bufFrames} bursts=$bursts reason=${grow.logName} " +
+                                "xruns=$xr out_headroom_min_frames=${win.headroomMinFrames ?: "-"} underflow_est=${win.underflowEst} " +
+                                "saved=${b(saved)}",
+                            COMPONENT,
+                        )
+                        nextTsAt = clock.written // re-read the play position now (audio_ms includes the larger buffer)
                     }
                     xrunBase = xr
                     if (audioN > 0) lastAudioMs = audioSum / audioN / 1000
@@ -490,7 +528,7 @@ class AudioPlayout(
                         core.drift.onAvOffset(av)
                     }
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
-                    logStats(t, xr, lastAudioMs, lastAvMs)
+                    logStats(t, xr, win, lastAudioMs, lastAvMs)
                     safety.onSafety(t.api, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
                 }
             }
@@ -531,7 +569,7 @@ class AudioPlayout(
             return true
         }
 
-        private fun logStats(t: AudioSink, xruns: Int, audioMs: Long?, avMs: Long?) {
+        private fun logStats(t: AudioSink, xruns: Int, win: HeadroomMeter.Window, audioMs: Long?, avMs: Long?) {
             val d = core.drift
             val buf = core.buffer
             MbLog.i(
@@ -541,6 +579,9 @@ class AudioPlayout(
                     "level_ms_floor=${if (d.lastFloorFrames >= 0) d.lastFloorFrames / MS else -1} level_ms=${core.lastRemainingFrames / MS} " +
                     "target_ms=${d.targetFrames / MS} safety_ms=${d.safetyFrames / MS} ratio_ppm=${d.ratioPpm.toLong()} " +
                     "underruns=${d.underruns} xruns=$xruns " +
+                    "out_headroom_min_frames=${win.headroomMinFrames ?: "-"} out_headroom_p5_frames=${win.headroomP5Frames ?: "-"} " +
+                    "underflow_est=${if (win.headroomMinFrames != null) win.underflowEst else "-"} " +
+                    "write_gap_ms_max=${ms1(win.gapMaxNs)} write_busy_ms_max=${ms1(win.busyMaxNs)} " +
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
                     "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"}",
@@ -565,5 +606,11 @@ class AudioPlayout(
         const val REASON_PREF = "pref"
 
         fun b(v: Boolean) = if (v) 1 else 0
+
+        /** [ns] as milliseconds with one decimal (logs). */
+        fun ms1(ns: Long): String {
+            val tenths = ns.coerceAtLeast(0) / 100_000
+            return "${tenths / 10}.${tenths % 10}"
+        }
     }
 }
