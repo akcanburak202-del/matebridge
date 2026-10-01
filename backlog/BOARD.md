@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## in-progress
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-062](tasks/T-062-idle-freeze.md) | Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor) | 5 | orchestrator | [T-057, T-058, T-060] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -13,9 +19,10 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-062](tasks/T-062-idle-freeze.md) | Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor) | 5 | orchestrator | [T-057, T-058, T-060] |
 | [T-063](tasks/T-063-clipboard-tablet-to-mac.md) | Pano: tablet → Mac çalışmıyor | 5 | orchestrator | [T-054, T-055] |
 | [T-064](tasks/T-064-pen-overlay-default-off.md) | Yerel kalem izi/noktası varsayılan kapalı | 5 | android-client-dev | [T-056] |
+| [T-065](tasks/T-065-client-newest-frame-always-shown.md) | Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma) | 5 | android-client-dev | [T-057, T-060, T-061] |
+| [T-066](tasks/T-066-host-decimation-hold-last-frame.md) | Mac — seyreltmede ızgaradan erken gelen kare atılmaz, tutulur (son değişiklik her zaman gönderilir) | 5 | mac-host-dev | [T-058] |
 
 ## done
 

@@ -1,7 +1,7 @@
 ---
 id: T-062
 title: Boşta → hareket geçişinde ve yazarken donma (son kare gönderilmiyor/bırakılmıyor)
-status: todo
+status: in-progress
 phase: 5
 owner: orchestrator
 depends_on: [T-057, T-058, T-060]
@@ -17,7 +17,11 @@ Kullanıcı geri bildirimi 2026-10-01 sabah (NOTES "kullanıcı geri bildirimi")
 
 ## Plan
 
-_(Sonraki oturum.)_
+Teşhis (2026-10-01 öğlen, orkestratör): ortak ilke ihlali — **en yeni kare ekrana ulaşmalı; bir kare ancak daha yeni bir kare onun yerini alırsa atılabilir.**
+
+1. **Tablet (asıl suçlu, T-060/T-057):** faz kilidi seyrek karelerde (60 Hz, 100–600 ms aralık) slotu eski kilitten `round(dCapture/P)` ile tahmin ediyor; host 120 Hz ızgarası yüzünden yarım periyot kayınca slot `earliest`'ten önce → `lateDrop` → `SlotReleaser` bırakılmış slota düşen kareyi atıyor; ardıl yok. Simülasyon: 126/300 kare hiç gösterilmedi (60 Hz, 100–600 ms); > 1 s boşlukta yeniden çapalama sayesinde 0. Kilit 30 kare yanlış kalıyor → imleç hareketinin başında takılma. → **T-065**.
+2. **Host (T-058, şu an çalışan `bdf52f0`'da yok):** seyreltmede ızgaradan erken gelen kare tutulmuyor, atılıyor → son değişiklik gönderilmeyebilir. → **T-066**.
+3. Eski yapılarda da olan nadir "uzun beklemeden sonra ilk tuş" ayrı; T-065/T-066 sonrası seyrek güncelleme düzeneğiyle (Mac'te tek kare değişikliği, tablette `screencap` piksel kontrolü) ölçülecek.
 
 ## Handoff
 
