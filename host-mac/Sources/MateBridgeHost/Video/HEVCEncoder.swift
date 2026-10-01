@@ -221,6 +221,8 @@ final class HEVCEncoder: @unchecked Sendable {
         for _ in 0..<n { meter?.recordOverwritten() }
         let d = pacer.takeDecimated()
         for _ in 0..<d { meter?.recordDecimated() }
+        let f = pacer.takeDeferred()
+        for _ in 0..<f { meter?.recordDeferred() }
     }
 
     /// Target send rate `min(stream fps, panel Hz)` (T-058). Only the frame gate changes: the session, the virtual
