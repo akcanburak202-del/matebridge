@@ -9,7 +9,10 @@ package dev.matebridge.client.video
  *  - new slot > pending slot: the pending buffer is released now (nothing can replace it any more), the new one
  *    becomes pending.
  *  - new slot == pending slot: the pending buffer is discarded, the new one replaces it (newest wins).
- *  - new slot <= an already released slot: the new buffer is discarded (the release cannot be undone).
+ *  - new slot <= an already released slot (T-065): the release cannot be undone, but the new buffer is the
+ *    NEWEST frame and must not vanish; it moves to the slot after the released one (slot, render time and deadline
+ *    shift by the same amount) and goes through the normal rules. A decoded frame is only ever discarded by a
+ *    newer frame replacing it.
  *  - a pending buffer whose dispatch deadline has passed is released at once; [flushDue] does that over time.
  *
  * Every same-slot second attempt counts in [PresentCounters.slotDups]. Single-threaded (output thread).
@@ -31,28 +34,31 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
 
     /**
      * [deadlineNs]: latest time the buffer may be kept before it must go to the codec so the compositor can
-     * still present it on [slotNs] (System.nanoTime domain).
+     * still present it on [slotNs] (System.nanoTime domain). [periodNs]: panel period, the step to the next slot.
      */
-    fun submit(idx: Int, slotNs: Long, renderNs: Long, deadlineNs: Long, nowNs: Long) {
-        if (releasedSlot != Long.MIN_VALUE && slotNs <= releasedSlot) {
+    fun submit(idx: Int, slotNs: Long, renderNs: Long, deadlineNs: Long, nowNs: Long, periodNs: Long) {
+        var slot = slotNs
+        var render = renderNs
+        var deadline = deadlineNs
+        if (releasedSlot != Long.MIN_VALUE && slot <= releasedSlot) {
             counters.onSlotDup()
-            sink.discard(idx)
-            return
+            val shift = releasedSlot + periodNs - slot
+            slot += shift; render += shift; deadline += shift
         }
         if (pendingIdx >= 0) {
-            if (slotNs < pendingSlot) { // the pacer never goes backwards; if it did, the pending (later) one stays
+            if (slot < pendingSlot) { // the pacer never goes backwards; if it did, the pending (later) one stays
                 counters.onSlotDup()
                 sink.discard(idx)
                 return
             }
-            if (pendingSlot == slotNs) {
+            if (pendingSlot == slot) {
                 counters.onSlotDup()
                 sink.discard(pendingIdx)
             } else {
                 releasePending()
             }
         }
-        pendingIdx = idx; pendingSlot = slotNs; pendingRenderNs = renderNs; pendingDeadlineNs = deadlineNs
+        pendingIdx = idx; pendingSlot = slot; pendingRenderNs = render; pendingDeadlineNs = deadline
         flushDue(nowNs)
     }
 

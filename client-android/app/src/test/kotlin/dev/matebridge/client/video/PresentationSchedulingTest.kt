@@ -21,9 +21,9 @@ class SlotReleaserTest {
     private val r = SlotReleaser(rec, counters)
 
     @Test fun laterSlotReleasesThePendingOne() {
-        r.submit(1, slotNs = 100, renderNs = 90, deadlineNs = 1000, nowNs = 0)
+        r.submit(1, slotNs = 100, renderNs = 90, deadlineNs = 1000, nowNs = 0, periodNs = 100)
         assertEquals(1, r.held)
-        r.submit(2, 200, 190, 1000, 0)
+        r.submit(2, 200, 190, 1000, 0, periodNs = 100)
         assertEquals(listOf(1 to 90L), rec.released)
         assertEquals(1, r.held) // the new one waits
         r.flushDue(1000)
@@ -32,27 +32,29 @@ class SlotReleaserTest {
     }
 
     @Test fun sameSlotReplacesPendingAndOnlyTheNewestIsReleased() {
-        r.submit(1, 100, 90, 1000, 0)
-        r.submit(2, 100, 90, 1000, 10)
-        r.submit(3, 100, 90, 1000, 20)
+        r.submit(1, 100, 90, 1000, 0, periodNs = 100)
+        r.submit(2, 100, 90, 1000, 10, periodNs = 100)
+        r.submit(3, 100, 90, 1000, 20, periodNs = 100)
         assertEquals(listOf(1, 2), rec.discarded)
         assertEquals(2, counters.snapshot().slotDups)
         r.flushDue(1000)
         assertEquals(listOf(3 to 90L), rec.released)
     }
 
-    @Test fun alreadyReleasedSlotRefusesASecondRelease() {
-        r.submit(1, 100, 90, deadlineNs = 50, nowNs = 60) // deadline passed: released at once
+    @Test fun alreadyReleasedSlotMovesTheNewestFrameToTheNextSlot() {
+        r.submit(1, 100, 90, deadlineNs = 50, nowNs = 60, periodNs = 100) // deadline passed: released at once
         assertEquals(listOf(1 to 90L), rec.released)
-        r.submit(2, 100, 90, 1000, 70) // same slot, cannot undo
-        assertEquals(listOf(2), rec.discarded)
-        assertEquals(1, rec.released.size)
+        r.submit(2, 100, 90, 1000, 70, 100) // same slot, cannot undo: the newest frame goes to slot 200
+        assertTrue(rec.discarded.isEmpty())
         assertEquals(1, counters.snapshot().slotDups)
-        assertEquals(0, r.held)
+        assertEquals(1, r.held)
+        assertEquals(1100L, r.untilDeadlineNs(0)) // deadline shifts with the slot
+        r.flushAll()
+        assertEquals(listOf(1 to 90L, 2 to 190L), rec.released)
     }
 
     @Test fun atMostOneBufferIsHeld() {
-        for (i in 1..10) r.submit(i, i * 100L, i * 100L - 10, 1_000_000, 0)
+        for (i in 1..10) r.submit(i, i * 100L, i * 100L - 10, 1_000_000, 0, periodNs = 100)
         assertEquals(1, r.held)
         assertEquals(9, rec.released.size)
         // Every slot released once, in order.
@@ -60,7 +62,7 @@ class SlotReleaserTest {
     }
 
     @Test fun deadlineBoundsTheHold() {
-        r.submit(1, 100, 90, deadlineNs = 500, nowNs = 0)
+        r.submit(1, 100, 90, deadlineNs = 500, nowNs = 0, periodNs = 100)
         assertEquals(500L, r.untilDeadlineNs(0))
         assertEquals(100L, r.untilDeadlineNs(400))
         r.flushDue(499)
@@ -71,7 +73,7 @@ class SlotReleaserTest {
     }
 
     @Test fun flushAllReleasesNow() {
-        r.submit(1, 100, 90, 1000, 0)
+        r.submit(1, 100, 90, 1000, 0, periodNs = 100)
         r.flushAll()
         assertEquals(1, rec.released.size)
         r.flushAll()
@@ -79,8 +81,8 @@ class SlotReleaserTest {
     }
 
     @Test fun anEarlierSlotThanPendingIsDiscarded() {
-        r.submit(1, 200, 190, 1000, 0)
-        r.submit(2, 100, 90, 1000, 0)
+        r.submit(1, 200, 190, 1000, 0, periodNs = 100)
+        r.submit(2, 100, 90, 1000, 0, periodNs = 100)
         assertEquals(listOf(2), rec.discarded)
         r.flushAll()
         assertEquals(listOf(1 to 190L), rec.released)
