@@ -1,9 +1,10 @@
 package dev.matebridge.client.settings
 
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -59,13 +60,11 @@ class SettingsViews(
         }
         val scroller = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
         col.addView(scroller)
-        val baseTint = buttons.firstOrNull()?.backgroundTintList
         refreshers += {
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {
                 val on = item.options[i].id == sel
-                b.isSelected = on
-                b.backgroundTintList = if (on) ColorStateList.valueOf(SELECTED_COLOR) else baseTint
+                b.isSelected = on // the background's state_selected entry turns it blue (T-107)
                 b.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
             }
         }
@@ -87,7 +86,7 @@ class SettingsViews(
         isAllCaps = false
         minWidth = 0
         minimumWidth = 0
-        setPadding(dp(14), paddingTop, dp(14), paddingBottom)
+        styleSettingsButton(this)
         setOnClickListener {
             action()
             onChanged()
@@ -113,8 +112,36 @@ class SettingsViews(
     private companion object {
         val TEXT_COLOR = Color.WHITE
         val INFO_COLOR = Color.parseColor("#BBBBBB")
-        val SELECTED_COLOR = Color.parseColor("#2E7DFF")
     }
+}
+
+/**
+ * T-107: gives a settings-panel button explicit colors ([SettingsButtonPalette]) instead of the system theme's light
+ * background. Selection is driven by [View.isSelected]; pressing shows a darker/lighter shade.
+ */
+internal fun styleSettingsButton(b: Button) {
+    val density = b.resources.displayMetrics.density
+    fun dp(v: Int) = (v * density).toInt()
+    val bg = StateListDrawable()
+    for ((selected, pressed) in SettingsButtonPalette.stateOrder) {
+        val states = ArrayList<Int>(2)
+        if (pressed) states += android.R.attr.state_pressed
+        if (selected) states += android.R.attr.state_selected
+        bg.addState(
+            states.toIntArray(),
+            GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(SettingsButtonPalette.colorFor(selected, pressed))
+            },
+        )
+    }
+    b.backgroundTintList = null
+    b.background = bg
+    b.stateListAnimator = null // flat: no theme elevation shadow
+    b.setTextColor(SettingsButtonPalette.TEXT)
+    b.minHeight = dp(44)
+    b.minimumHeight = dp(44)
+    b.setPadding(dp(14), dp(8), dp(14), dp(8))
 }
 
 /**
@@ -160,6 +187,7 @@ class SettingsSidePanel(context: Context, private val onCloseRequest: (SettingsP
             Button(context).apply {
                 text = "Kapat"
                 isAllCaps = false
+                styleSettingsButton(this)
                 setOnClickListener { onCloseRequest(SettingsPanelState.Via.CLOSE_BUTTON) }
             },
         )
