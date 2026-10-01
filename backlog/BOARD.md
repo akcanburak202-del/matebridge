@@ -14,6 +14,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 | [T-068](tasks/T-068-client-deadline-knob.md) | Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü | 5 | android-client-dev | [T-065] |
+| [T-069](tasks/T-069-client-pace-trace.md) | Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla | 5 | android-client-dev | [T-068] |
 
 ## blocked
 
@@ -26,7 +27,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-069](tasks/T-069-client-pace-trace.md) | Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla | 5 | android-client-dev | [T-068] |
+| [T-070](tasks/T-070-host-latency-breakdown.md) | Mac — yakalama→gönderim gecikme dökümü (SCK teslim, kodlama, kuyruk, soket yazımı) ve sıçrama kaynağı | 5 | mac-host-dev | [T-066] |
 
 ## done
 
