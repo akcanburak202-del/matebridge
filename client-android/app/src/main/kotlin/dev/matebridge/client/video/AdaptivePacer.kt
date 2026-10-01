@@ -131,6 +131,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     @Volatile var recenters = 0L
         private set
 
+    /** T-069: when set, [schedule] writes the intermediate values of the latest frame into it (output thread). */
+    @Volatile var probe: PaceProbe? = null
+
     /** Diagnostics: the slack D applied to the latest frame. */
     @Volatile var lastDNs = 0L
         private set
@@ -177,11 +180,17 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         lastDNs = d
         // Earliest vsync a frame handed over now can still make (the compositor needs the deadline before it).
         val earliest = grid.slotAtOrAfter(nowNs + grid.deadlineNs, 0.0)
+        probe?.let {
+            it.nowVsyncLastNs = grid.lastNs; it.periodNs = period; it.epoch = grid.epoch; it.deadlineNs = grid.deadlineNs
+            it.devNs = dev; it.dNs = d; it.jitterNs = jitter; it.earliestNs = earliest
+            it.path = PaceProbe.PATH_UNLOCKED
+        }
         if (lockable) {
             return scheduleLocked(grid, nowNs, captureUs, prevCaptureUs, dev, d, jitter, earliest)
         }
         phaseLock = false; lockSlot = Long.MIN_VALUE; badRun = 0
         val targetSlot = grid.slotAtOrAfter(nowNs - dev + d + grid.deadlineNs, 0.0)
+        probe?.let { it.acquireNs = targetSlot }
         val late = targetSlot < earliest // the frame missed its own ideal slot: the content gap is our doing
         // Latency bound on the final slot: at most one vsync after the earliest possible one.
         val limit = earliest + period
@@ -234,6 +243,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             winN = 0; winPos = 0
             phaseLock = true
             lockSlot = slot
+            probe?.let { it.path = if (sparse) PaceProbe.PATH_SPARSE else PaceProbe.PATH_ACQUIRE; it.acquireNs = slot; it.lockSlotNs = slot }
             var collided = false
             val prev = lastSlot
             if (prev != Long.MIN_VALUE && slot <= prev) { slot = prev; collided = true }
@@ -247,11 +257,14 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             // The lock is off when a fresh acquisition would pick another slot: the error to the centered point
             // is above half a period, or the worst-case jitter / this frame would miss the slot. The error is
             // measured on the jitter-free ideal time, so one late frame does not count as drift by itself.
-            if (slot != acquire() || slot > earliest + latencyBound) badRun++ else badRun = 0
+            val acq = acquire()
+            if (slot != acq || slot > earliest + latencyBound) badRun++ else badRun = 0
+            probe?.let { it.path = PaceProbe.PATH_LOCKED; it.k = k; it.acquireNs = acq; it.badRun = badRun }
             if (badRun >= REPHASE_FRAMES) {
                 slot = acquire()
                 badRun = 0
                 rephases++
+                probe?.let { it.path = PaceProbe.PATH_REPHASE }
             }
         }
         phaseLock = true
@@ -269,6 +282,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             if (newFloor >= 0 && fresh <= earliest + period + minOf(maxOf(jitter, newFloor), period) / 2) {
                 floorNs = newFloor
                 winN = 0; winPos = 0; badRun = 0
+                probe?.let { it.path = PaceProbe.PATH_RECENTER; it.acquireNs = fresh; it.lockSlotNs = fresh; it.badRun = 0 }
                 rephases++; recenters++
                 slot = fresh
                 lockSlot = slot
@@ -281,6 +295,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             }
         }
         lockSlot = slot
+        probe?.let { it.lockSlotNs = slot }
         if (late) {
             // Too late for its own slot, or a backlog that would exceed the latency bound: dropped (newest wins, it
             // shares the previous slot), the next frames stay on the lock.
