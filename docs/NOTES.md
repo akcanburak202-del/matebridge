@@ -648,3 +648,27 @@ Ağ:
   - kontrol bağlantısını (girdi, kalem) da BSD'ye taşımak; Wi-Fi kalem öbeklenmesi için ölç;
   - Wi-Fi'ye özel bit hızı (`MATEBRIDGE_WIFI_BITRATE_KBPS`);
   - kullanıcı tarafı: AWDL/AirDrop/Handoff kapatma, modemi DFS olmayan kanala almak.
+
+## 2026-10-01 ~20:50 — Ses aktarımı cihazda (T-093/T-094/T-095, karar 0011)
+
+**Mac:**
+- MateBridge'in "Yalnızca Sistem Sesi Kaydı" izni verildi (`kTCCServiceAudioCapture`, tccd `Create`).
+- İzin, IOProc kurulurken verildiği için ilk akışta paket gelmedi; host yeniden başlatılınca çalıştı. Sessizken paket gelmemesi ise beklenen davranış: Mac ses çalmazken tap IO'su da duruyor.
+- Ses çalarken: 100–101 paket/sn, `callback_ms` 0,06–0,07, `ring_ms_max` 10, `wire_dropped` 0.
+
+**Tablet:**
+- Tek çıkış iş parçacığı var (`AudioOut_D`, MIXER, HAL 960 kare = 20 ms). FastMixer yok, bu yüzden `perf_mode=none`, burst 960.
+- `aaudio.mmap_policy=2` ve `mmap_exclusive_policy=2`: AAudio MMAP yolu muhtemelen var (NDK gerekir).
+
+**Gecikme** (yoklama ve kısa sesler): ses ~170–190 ms, video ~51 ms, yani `av_offset_ms` ~120–140 (ses geç). Seviye tabanı 29 ms. Sessizlik aralarında alt taşma sayılıyor (`underruns` 2–3), bu da hedef tamponu büyütüyor.
+
+**Kullanıcı testi:**
+- Ses tabletten geliyor, Mac sessiz.
+- Kesinti veya cızırtı yok.
+- Dudak senkronunda göze batan bir şey yok.
+- Uygulama arka plana alınınca Mac sesi geri geliyor.
+
+**İyileştirme adayları** (acil değil):
+- Sessizliği (host IO yok) alt taşma saymamak.
+- AAudio MMAP denemesi (NDK, karar kaydı gerekir).
+- Tablet tampon boyu (1920 → 960).
