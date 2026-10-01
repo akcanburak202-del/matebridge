@@ -1,7 +1,7 @@
 ---
 id: T-077
 title: Tablet — alımdan çözücüye verme gecikmesi (kuyruk→giriş p50 1,16 / p95 2,7 ms; küçük kayıtta 0,6 ms şifre çözme)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-076]

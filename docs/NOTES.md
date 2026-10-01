@@ -430,3 +430,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 
 - Kullanıcı çizdi (trace7): alınan/çözülen/gösterilen ~110/sn, `drop=0`, çözme p50/p95/p99 9,4/12,6/15,1 ms, hazır→slot p50 13,1 ms; planlanan boşluk %2,4 (Performans trace2'de %0,7; 6 % geç kare çözme süresi sıçramalarından). Kullanıcı: **"akıcı mod çok iyi gözüküyor"** → tablet `stream_mode=smooth` kalıyor.
 - Açılıştan sonra üst ortada kalem algılanmıyor → `com.huawei.hiwrite` penceresi `[989,276][1805,558]`, `ty=2032`, dokunulabilir; bağlantı panelindeki `endpointField` tetikliyor → T-078.
+
+## 2026-10-01 ~14:30 — T-077 ve T-078 cihazda
+
+- T-078: iki soğuk açılışta (1,5 s / 5,5 s) `com.huawei.hiwrite` penceresi yok (önce üst ortada dokunulabilir 816×282 px katman).
+- T-077 (trace8, 60 fps, 90 sn): kuyruk→giriş p50/p95 **1,16/2,72 → 0,90/2,32 ms**; ayrıştırma: uyanma 0,16, giriş tamponu hazır (%100 `inbuf_pre`), kopya 0,11, **`queueInputBuffer` 0,58 / p95 1,97 ms** (codec servisine çağrı). Şifre çözme: uygulama içinde `init` 0,34 ms, `doFinal` 0,16 ms; `crypto_bench` aynı işlemi 0,033 / 0,010 ms ölçüyor → ağ iş parçacığı düşük frekanslı çekirdekte/soğuk önbellekte. Geç varış %0,07, ikili varış 0.
+- Codex (high) P2: Android `Cipher` korumalı kurucusu `specifiedSpi`'yi `engineInit` çağırmadan döndürüyor → "doğrudan SPI" yolu kaldırıldı.

@@ -1,7 +1,7 @@
 ---
 id: T-078
 title: Tablet — açılışta ekranın üst ortasında kalem algılanmıyor (Huawei HiWrite katmanı, adres metin kutusu)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []
