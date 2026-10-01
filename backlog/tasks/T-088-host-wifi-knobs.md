@@ -1,7 +1,7 @@
 ---
 id: T-088
 title: Mac — Wi-Fi ölçüm altyapısı ve düğmeler (aktarım logu, gönderim kuyruğu ölçümü, Wi-Fi bit hızı, serviceClass)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-086]
