@@ -1,7 +1,7 @@
 ---
 id: T-080
 title: Tablet — sabit oynatma gecikmeli zamanlayıcı (düzensiz içerikte 120 Hz boşluklarını azalt), anahtar arkasında
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-071, T-077]
@@ -64,3 +64,7 @@ Politika (sim.py ile birebir): x = ready − capture; taban b = son 256 karenin 
   4. 60 Hz boşta/yazarken: donma yok (T-065), seyrek kare sonrası görüntü güncel; 120↔60 geçişinde akış sürüyor.
   5. Gecikme: kalem → ekran algısı; `d_us` (C − b) çizim sırasında ~10–20 ms bekleniyor.
 - **Açık sorular:** (a) Boşluk kuralı izde gecikmeyi düşürdü ama 32 örnek eşiği cihazda ölçülmedi. (b) Sürekli 60/60 akışta CPD faz kilidinden daha mı iyi, bilinmiyor (izi yok); varsayılan `lock` kaldı. (c) `ev=present` satırına `pacer` alanı eklemek `StatsFormat.kt` gerektirir (kart dışı); şimdilik yalnız `display_timing`.
+
+## Orkestratör notu (2026-10-01): A/B sonucu
+
+SF: lock %1,54 çift @ 11,2 ms; cpd %0,57 çift @ 17,0 ms. Kullanıcı cpd'de gecikmeyi hissetti → varsayılan `lock`; cpd deney anahtarı olarak kalır.

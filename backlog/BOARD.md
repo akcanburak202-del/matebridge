@@ -14,7 +14,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-040](tasks/T-040-host-lock-screen.md) | Mac — ekran kilidi ve ekran uykusu açıkken çalışma (kilit ekranında görüntü + şifre yazma, girdiyle uyanma) | 4 | mac-host-dev | [T-039] |
-| [T-080](tasks/T-080-client-constant-playout-pacer.md) | Tablet — sabit oynatma gecikmeli zamanlayıcı (düzensiz içerikte 120 Hz boşluklarını azalt), anahtar arkasında | 5 | android-client-dev | [T-071, T-077] |
 
 ## done
 
@@ -96,3 +95,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-077](tasks/T-077-client-input-path-latency.md) | Tablet — alımdan çözücüye verme gecikmesi (kuyruk→giriş p50 1,16 / p95 2,7 ms; küçük kayıtta 0,6 ms şifre çözme) | 5 | android-client-dev | [T-076] |
 | [T-078](tasks/T-078-client-hiwrite-overlay.md) | Tablet — açılışta ekranın üst ortasında kalem algılanmıyor (Huawei HiWrite katmanı, adres metin kutusu) | 5 | android-client-dev | [] |
 | [T-079](tasks/T-079-client-performance-hint.md) | Tablet — PerformanceHintManager deneyi (ağ, çözücü giriş/çıkış iş parçacıkları için kare süresi hedefi) | 5 | android-client-dev | [T-077] |
+| [T-080](tasks/T-080-client-constant-playout-pacer.md) | Tablet — sabit oynatma gecikmeli zamanlayıcı (düzensiz içerikte 120 Hz boşluklarını azalt), anahtar arkasında | 5 | android-client-dev | [T-071, T-077] |

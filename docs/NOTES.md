@@ -442,3 +442,13 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 
 - 60 Hz (trace6/8): kilit planlanan boşluk %0,02–0,04, 13–16 ms; simülasyon aynı (~%0).
 - 120 Hz Akıcı + çizim (trace7): kilit %2,4 @ 13,1 ms, geç payı p90 +60 ms (yakalamalar düzensiz → `k` yuvarlama/çıkarım kayması). Sabit oynatma: q=0,9 13,3 ms/%1,1; q=0,95 18,1/%0,5; q=0,99 20,4/%0,2. → T-080 (anahtar arkasında, A/B çizimle). Araçlar `tools/pacing/`.
+
+## 2026-10-01 ~13:47 (cihaz saati) — Zamanlayıcı A/B çizim sırasında (T-080)
+
+| 120 Hz, kullanıcı çiziyor | SF tek vsync | SF çift | hazır→slot p50 | planlanan boşluk |
+|---|---|---|---|---|
+| A: faz kilidi (`lock`) | %98,06 | %1,54 | 11,2 ms | %0,40 |
+| B: sabit oynatma (`cpd`, q=0,95) | **%99,31** | **%0,57** | 17,0 ms | %0,46 |
+
+- `in_codec_p95` 6–7, `max` 3; `late_drops` A 2 / B 0. Kullanıcı: **"ikincisinde gecikme hissediliyor"** → varsayılan `lock` kalıyor; `cpd` anahtar arkasında (`--es pacer cpd`). Karar: çizimde gecikme > %1'lik çift kare.
+- Not: kilidin planlanan boşluğu (%0,4) SF'deki çiftten (%1,5) düşük → bazı kareler planlanan slotu SF'de kaçırıyor (son an 6 ms sınırda olabilir).
