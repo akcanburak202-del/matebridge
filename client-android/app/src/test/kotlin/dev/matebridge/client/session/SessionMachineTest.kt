@@ -267,6 +267,62 @@ class SessionMachineTest {
         assertEquals(1L, (q.only<Action.Send>().msg as Ping).seq)
     }
 
+    @Test fun pingIntervalKnob() { // T-089: --ei ping_ms 100
+        val mm = SessionMachine(hello, pingIntervalUs = 100_000)
+        var t = 0L
+        val gen = mm.handle(Event.Start(ep), t).only<Action.OpenControl>().gen
+        mm.handle(Event.ControlOpened(gen), t)
+        val acc = mm.handle(Event.Received(gen, ack(HelloAck.ACCEPTED, 77, 7421)), t)
+        assertEquals(0L, (acc.filterIsInstance<Action.Send>().first().msg as Ping).seq)
+        t += 50_000
+        assertTrue(mm.handle(Event.Tick(0), t).filterIsInstance<Action.Send>().isEmpty())
+        t += 50_000
+        assertEquals(1L, (mm.handle(Event.Tick(0), t).only<Action.Send>().msg as Ping).seq)
+        t += 100_000
+        assertEquals(2L, (mm.handle(Event.Tick(0), t).only<Action.Send>().msg as Ping).seq)
+        // The PONG timeout does not follow the ping interval: still 3 s.
+        t = 2_900_000 // last PONG-equivalent was the ACCEPTED at t = 0
+        assertFalse(mm.handle(Event.Tick(0), t).has<Action.CloseControl>())
+        t = 3_000_000
+        assertTrue(mm.handle(Event.Tick(0), t).has<Action.CloseControl>())
+    }
+
+    @Test fun pingIsFixedRateUnderTickJitter() { // T-089 review: a late tick must not stretch the interval
+        val mm = SessionMachine(hello, pingIntervalUs = 100_000)
+        var t = 0L
+        val gen = mm.handle(Event.Start(ep), t).only<Action.OpenControl>().gen
+        mm.handle(Event.ControlOpened(gen), t)
+        mm.handle(Event.Received(gen, ack(HelloAck.ACCEPTED, 77, 7421)), t) // ping 0, next due at 100 ms
+        val pingTimes = mutableListOf<Long>()
+        while (t < 1_000_000) {
+            t += 45_000 // engine tick ~ ping/2, never aligned with the due times
+            mm.handle(Event.Received(gen, Pong(0, 0, 0)), t)
+            if (mm.handle(Event.Tick(0), t).any { it is Action.Send && it.msg is Ping }) pingTimes += t
+        }
+        // Due at 100, 200, ... 1000 ms: one ping per interval, each within one tick of its due time.
+        assertEquals(10, pingTimes.size) // the last tick is at 1035 ms
+        pingTimes.forEachIndexed { i, at -> assertTrue("ping $i at $at", at - (i + 1) * 100_000L in 0 until 45_000) }
+    }
+
+    @Test fun pingAfterStallDoesNotBurst() {
+        val mm = SessionMachine(hello, pingIntervalUs = 100_000)
+        val gen = mm.handle(Event.Start(ep), 0).only<Action.OpenControl>().gen
+        mm.handle(Event.ControlOpened(gen), 0)
+        mm.handle(Event.Received(gen, ack(HelloAck.ACCEPTED, 77, 7421)), 0)
+        mm.handle(Event.Received(gen, Pong(0, 0, 0)), 450_000)
+        assertEquals(1, mm.handle(Event.Tick(0), 450_000).count { it is Action.Send }) // 4 intervals late: one ping
+        assertTrue(mm.handle(Event.Tick(0), 500_000).none { it is Action.Send }) // next due at 550 ms, not caught up
+        assertEquals(1, mm.handle(Event.Tick(0), 550_000).count { it is Action.Send })
+    }
+
+    @Test fun engineTickFollowsShortPingInterval() {
+        assertEquals(100L, SessionController.engineTickMs(500)) // default unchanged
+        assertEquals(100L, SessionController.engineTickMs(1000))
+        assertEquals(50L, SessionController.engineTickMs(100))
+        assertEquals(25L, SessionController.engineTickMs(50))
+        assertEquals(10L, SessionController.engineTickMs(20))
+    }
+
     @Test fun noPongForThreeSecondsReconnects() {
         val gen = connectAccepted()
         var lost: List<Action> = emptyList()

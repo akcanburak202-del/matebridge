@@ -77,8 +77,12 @@ class SessionController(
     initialMode: StreamMode = StreamMode.DEFAULT,
     private val quickAck: Boolean = true, // T-074 experiment switch (--ez quickack false)
     private val perfHint: PerfHint? = null, // T-079 experiment (--ez perf_hint true): video reader joins the hint session
+    private val knobs: WifiKnobs = WifiKnobs(), // T-089 experiment knobs (ping interval, socket traffic class)
 ) {
-    private val machine = SessionMachine(hello, initialMode.toPrefs())
+    private val machine = SessionMachine(hello, initialMode.toPrefs(), knobs.pingIntervalUs)
+
+    /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
+    private val tickMs = engineTickMs(knobs.pingMs)
     private val random = SecureRandom()
 
     /** Messages from control reader threads; bounded, and only those threads ever block on it. */
@@ -176,12 +180,12 @@ class SessionController(
                 var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
-                    val waitMs = TICK_MS - (System.nanoTime() - lastTickNs) / 1_000_000
+                    val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
                     e = events.poll(maxOf(waitMs, 0), TimeUnit.MILLISECONDS)
                 }
                 if (e != null) dispatch(e)
                 // A busy queue must not starve ticks (PONG timeout, retries, pings).
-                if (System.nanoTime() - lastTickNs >= TICK_MS * 1_000_000) {
+                if (System.nanoTime() - lastTickNs >= tickMs * 1_000_000) {
                     lastTickNs = System.nanoTime()
                     dispatch(SessionMachine.Event.Tick(videoFrames.get()))
                 }
@@ -210,7 +214,11 @@ class SessionController(
     /** Concise session log (docs/LOGGING.md). Never per frame, never names or message text. */
     private fun logEvent(e: SessionMachine.Event) {
         when (e) {
-            is SessionMachine.Event.Start -> MbLog.i("session_start", "host=${e.endpoint.host} port=${e.endpoint.port} quickack=${if (quickAck) 1 else 0}")
+            is SessionMachine.Event.Start -> MbLog.i(
+                "session_start",
+                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
+                    "quickack=${if (quickAck) 1 else 0} ${knobs.logFields()}",
+            )
             SessionMachine.Event.Stop -> MbLog.i("session_stop")
             is SessionMachine.Event.ControlOpened -> MbLog.i("connect_ok")
             is SessionMachine.Event.ControlClosed ->
@@ -346,8 +354,10 @@ class SessionController(
 
         private fun readerLoop() {
             try {
+                val tosErr = TrafficClass.trySet(knobs.tosCtl) { socket.trafficClass = it } // T-089, before connect
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
+                knobs.tosCtl?.let { MbLog.i("traffic_class", TrafficClass.logFields("control", it, tosErr) { socket.trafficClass }) }
             } catch (e: IOException) {
                 closeQuietly(socket)
                 notifyClosed(connectFailed = true)
@@ -471,8 +481,10 @@ class SessionController(
                 val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
                 val channel = VideoChannel(secrets.videoKeys(nonce))
                 val decoder = channel.decoder
+                val tosErr = TrafficClass.trySet(knobs.tosVideo) { socket.trafficClass = it } // T-089, before connect
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
+                knobs.tosVideo?.let { MbLog.i("traffic_class", TrafficClass.logFields("video", it, tosErr) { socket.trafficClass }) }
                 // VIDEO_HELLO in plaintext, then one sealed PING as proof of the key (the host sends no frames before it).
                 socket.getOutputStream().apply { write(channel.opening(hello, nonce, nowUs())); flush() }
                 val input = socket.getInputStream()
@@ -516,6 +528,9 @@ class SessionController(
     companion object {
         /** The clock all session/latency times use. */
         fun clockUs() = System.nanoTime() / 1000
+
+        /** T-089: the engine tick for a ping interval: [TICK_MS] unless half the interval is shorter, never below 10 ms. */
+        fun engineTickMs(pingMs: Int): Long = minOf(TICK_MS, maxOf(10L, pingMs / 2L))
 
         private const val TICK_MS = 100L
         private const val GRACEFUL_CLOSE_MS = 1000L
