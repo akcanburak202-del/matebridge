@@ -406,3 +406,16 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Host `write_done − capture` p50 7,2 / p99 8,3 ms (bir kez 27 ms). Tablette kapasitenin üzerinde varış boşluğu 20 kez:
   - **Periyodik anahtar kare** (her 10,0 s, ~432 KB): alma +15 ms, şifre çözme **~11 ms** (~40 MB/s; 3 KB karede bile 0,8 ms) → T-075 (aralık), T-076 (şifre çözme hızı).
   - **USB/adb paketlemesi:** host 16,6 ms arayla gönderiyor, tablette bazı dönemlerde `recv` aralığı **40, 0, 40, 0…** (iki kare birlikte). İki uçta `TCP_NODELAY` açık → adbd yerel soketi Nagle + tablet gecikmeli ACK (40 ms) şüphesi → T-074 (`TCP_QUICKACK`).
+
+## 2026-10-01 ~13:20 — Varış düzensizliği giderildi (T-074, T-075, T-076), cihazda
+
+90 sn, USB, 60 fps köşe karesi, `pace_trace`, `gaps.py` (`~/.cache/matebridge-tools`): sürekli bölümde kapasitenin >12 ms üzerinde geç varış / <1 ms arayla ikili varış / 90 sn'deki anahtar kare:
+
+| | geç varış | ikili varış | anahtar kare | şifre çözme p50/p99 |
+|---|---|---|---|---|
+| önce (trace3) | 20 (%0,35) | 8 | 12 | 0,81 / 1,97 ms |
+| T-074+075+076 (trace4) | **1 (%0,02)** | **0** | 2 | 0,63 / 1,60 ms |
+| aynı, `--ez quickack false` (trace5) | 79 (%1,39) | 90 | 1 | 0,68 / 1,59 ms |
+
+- `TCP_QUICKACK` (T-074) adb tüneli paketlemesini kesin olarak gideriyor (A/B). Anahtar kare aralığı 300 s (T-075, `keyframe_interval_s=300`).
+- `crypto_bench` (T-076): AndroidOpenSSL 432 KB 0,57 ms (776 MB/s), varsayılan zaten AndroidOpenSSL; BC 14 ms. Eski ~11 ms dört kopya + tahsisten. Codex P2 (Conscrypt çıkış tamponu boyutu) düzeltildi.

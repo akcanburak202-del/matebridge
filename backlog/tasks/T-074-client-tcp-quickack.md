@@ -1,7 +1,7 @@
 ---
 id: T-074
 title: Tablet — USB (adb) tünelinde 40 ms paketlemeyi kır: alma soketinde TCP_QUICKACK
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-073]

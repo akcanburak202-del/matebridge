@@ -1,7 +1,7 @@
 ---
 id: T-075
 title: Mac — periyodik anahtar kare aralığı 10 s → isteğe bağlı (uzun güvenlik aralığı)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-072]

@@ -1,7 +1,7 @@
 ---
 id: T-076
 title: Tablet — AES-GCM kayıt şifre çözme hızı (432 KB'de ~11 ms, 3 KB'de ~0,8 ms)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-073]

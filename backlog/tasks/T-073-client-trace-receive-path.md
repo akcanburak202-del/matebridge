@@ -1,7 +1,7 @@
 ---
 id: T-073
 title: Tablet — kare izine alma yolu zamanları (soketten okundu, şifre çözüldü, kuyruğa girdi, çözücüye verildi)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-069]
