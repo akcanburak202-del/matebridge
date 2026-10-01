@@ -205,7 +205,7 @@ class VsyncClockGridTest {
     }
 
     @Test fun appVsyncOffsetShiftsTheGridToDisplayTime() {
-        val v = VsyncClock(120f)
+        val v = VsyncClock(120f).also { it.deadlineOverrideNs = VsyncClock.DEADLINE_DISPLAY }
         v.setDisplayTiming(appVsyncOffsetNs = 2_000_000, presentationDeadlineNs = 1_000_000)
         v.onVsync(10_000_000)
         val g = v.grid()
@@ -219,7 +219,14 @@ class VsyncClockGridTest {
     @Test fun deadlineOverrideReplacesDisplayDeadline() {
         val v = VsyncClock(60f)
         v.setDisplayTiming(0, 13_333_000)
-        assertEquals(13_333_000L, v.grid().deadlineNs) // no override: today's behaviour
+        assertEquals(6_000_000L, v.grid().deadlineNs) // default ignores the reported value
+        v.deadlineOverrideNs = VsyncClock.DEADLINE_DISPLAY
+        v.setDisplayTiming(0, 13_333_000)
+        assertEquals(13_333_000L, v.grid().deadlineNs)
+        v.deadlineOverrideNs = VsyncClock.DEADLINE_DEFAULT
+        VsyncClock(240f).also { it.setDisplayTiming(0, 13_333_000) }.let {
+            assertEquals(it.periodNs - 1_000_000L, it.grid().deadlineNs) // default capped at P - 1 ms
+        }
         v.deadlineOverrideNs = 6_000_000
         v.setDisplayTiming(0, 13_333_000)
         assertEquals(6_000_000L, v.grid().deadlineNs)
@@ -296,7 +303,7 @@ class PacerLatencyBoundTest {
     }
 
     @Test fun presentationDeadlineMovesTheEarliestSlot() {
-        val v = clock(p120)
+        val v = clock(p120).also { it.deadlineOverrideNs = VsyncClock.DEADLINE_DISPLAY }
         v.setDisplayTiming(0, 3 * ms)
         val pacer = AdaptivePacer(v, p120)
         val now = 1_000_000_000L

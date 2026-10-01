@@ -1,7 +1,7 @@
 ---
 id: T-071
 title: Tablet — sunum son anı varsayılanı 6 ms (HarmonyOS'un 13,3 ms değeri yerine)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-068]
@@ -36,12 +36,12 @@ Cihaz A/B (2026-10-01 11:40, kullanıcı kalemle çizdi, panel 120 Hz, aynı otu
 
 ## Plan
 
-_(Ajan doldurur.)_
+`VsyncClock.deadlineOverrideNs` varsayılanı sentinel `DEADLINE_DEFAULT` (-2) olur; etkin son an = min(6 ms, P-1 ms). `DEADLINE_DISPLAY` (-1) cihaz değerini kullanır, N>=0 açık değer (P'ye kırpılır). MainActivity: `deadline_us` yoksa varsayılan, -1 cihaz değeri. Log ve testler güncellenir.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** SHA_PLACEHOLDER
+- **Dokunulan dosyalar:** video/FramePacer.kt (VsyncClock), MainActivity.kt, PresentationSchedulingTest.kt, NewestFrameShownTest.kt, bu kart
+- **Varsayımlar:** Varsayılan = min(6 ms, P-1 ms); `deadline_us` ekstrası yoksa varsayılan, `-1` cihaz değeri, N>=0 açık değer. `ev=display_timing` artık `presentation_deadline_ns` (cihaz), `effective_deadline_ns` ve `deadline_override` (-2 varsayılan, -1 cihaz, >=0 us*1000 ns) loglar; eski `deadline_override_us` alanı kaldırıldı.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ekstrasız başlatmada log `effective_deadline_ns=6000000` (120 Hz) göstermeli; `--ei deadline_us -1` ile 13,33 ms (P'ye kırpılı) görülmeli; SF `--latency` 120 Hz'de ~%99,7 / 8,3 ms. 60 Hz doğrulaması kapsam dışı.
+- **Açık sorular:** yok

@@ -195,9 +195,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vsync.leadOverrideNs = it * 1000L
             glVsync.leadOverrideNs = it * 1000L
         }
-        intent?.getIntExtra("deadline_us", -1)?.takeIf { it >= 0 }?.let {
-            vsync.deadlineOverrideNs = it * 1000L
-            glVsync.deadlineOverrideNs = it * 1000L
+        // T-071: absent = 6 ms default; -1 = the display's reported deadline; N >= 0 = N us.
+        if (intent?.hasExtra("deadline_us") == true) {
+            val us = intent.getIntExtra("deadline_us", -1)
+            val ns = if (us >= 0) us * 1000L else VsyncClock.DEADLINE_DISPLAY
+            vsync.deadlineOverrideNs = ns
+            glVsync.deadlineOverrideNs = ns
         }
         vsync.keepJitter = intent?.getBooleanExtra("keep_jitter", false) == true
         vsync.recenter = intent?.getBooleanExtra("recenter", false) == true
@@ -771,7 +774,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (log) {
             MbLog.i(
                 "display_timing",
-                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} deadline_override_us=${vsync.deadlineOverrideNs / 1000} keep_jitter=${if (vsync.keepJitter) 1 else 0} recenter=${if (vsync.recenter) 1 else 0} " +
+                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} effective_deadline_ns=${vsync.grid().deadlineNs} deadline_override=${vsync.deadlineOverrideNs} keep_jitter=${if (vsync.keepJitter) 1 else 0} recenter=${if (vsync.recenter) 1 else 0} " +
                     "inflight=${renderer?.maxInFlight ?: inflightLimit}",
                 "render",
             )

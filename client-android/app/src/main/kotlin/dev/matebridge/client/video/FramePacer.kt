@@ -27,6 +27,16 @@ class VsyncClock(private val initialHz: Float = 60f) {
         const val DEFAULT_LEAD_NS = 6_000_000L
         /** The lead never exceeds a period minus this. */
         const val LEAD_PERIOD_MARGIN_NS = 1_000_000L
+        /**
+         * Default presentation deadline (T-071): the real latch time is ~6 ms, HarmonyOS reports 13.3 ms. Device A/B
+         * at 120 Hz while drawing: 6 ms gave 99.7% / 0.2% (8.3 / 16.7 ms intervals) vs 91.8% / 6.3% with the reported value.
+         * Capped at a period minus [LEAD_PERIOD_MARGIN_NS].
+         */
+        const val DEFAULT_DEADLINE_NS = 6_000_000L
+        /** [VsyncClock.deadlineOverrideNs] value meaning "use the display's reported deadline". */
+        const val DEADLINE_DISPLAY = -1L
+        /** [VsyncClock.deadlineOverrideNs] value meaning "use [DEFAULT_DEADLINE_NS]". */
+        const val DEADLINE_DEFAULT = -2L
     }
 
     /** One consistent view of the grid. [lastNs] is a display-time vsync (-1: none yet). */
@@ -52,8 +62,8 @@ class VsyncClock(private val initialHz: Float = 60f) {
     /** Release-timestamp lead before the slot; negative = use half a period. Tunable (T-057). */
     @Volatile var leadOverrideNs = -1L
 
-    /** Presentation deadline used instead of the display's own; negative = use the display's (T-068 experiment). */
-    @Volatile var deadlineOverrideNs = -1L
+    /** Presentation deadline: >= 0 explicit (capped at a period), [DEADLINE_DISPLAY] = the display's own, [DEADLINE_DEFAULT] = 6 ms (T-071). */
+    @Volatile var deadlineOverrideNs = DEADLINE_DEFAULT
 
     /** T-067 experiment switches (default off = previous behaviour): keep jitter history over idle gaps; rate-based lock re-centring. */
     @Volatile var keepJitter = false
@@ -86,7 +96,12 @@ class VsyncClock(private val initialHz: Float = 60f) {
         val off = appVsyncOffsetNs.coerceIn(0, g.periodNs)
         val last = if (g.lastNs >= 0) g.lastNs + (appOffsetNs - off) else g.lastNs
         appOffsetNs = off
-        val deadline = if (deadlineOverrideNs >= 0) deadlineOverrideNs else presentationDeadlineNs
+        val o = deadlineOverrideNs
+        val deadline = when {
+            o >= 0 -> o
+            o == DEADLINE_DISPLAY -> presentationDeadlineNs
+            else -> minOf(DEFAULT_DEADLINE_NS, g.periodNs - LEAD_PERIOD_MARGIN_NS)
+        }
         grid = Grid(last, g.periodNs, g.epoch, deadline.coerceIn(0, g.periodNs))
     }
 
