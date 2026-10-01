@@ -64,6 +64,13 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         const val LOCK_TOLERANCE = 0.15
         /** Consecutive frames with slot error above half a period (or a missed slot) before re-phasing. */
         const val REPHASE_FRAMES = 30
+        /**
+         * T-065: the lock only predicts the next slot from the previous one in a continuous stream. A capture gap
+         * above this many panel periods (sparse updates: a keystroke, a cursor blink) is no stream; the lock is
+         * re-acquired from the frame's own ready time. Three periods is above any content interval that is still
+         * lockable (about one period, thinned frames up to two) plus jitter, and below the host idle cadence.
+         */
+        const val LOCK_GAP_PERIODS = 3L
     }
 
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
@@ -195,9 +202,20 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         // the centered phase adds on purpose.
         val latencyBound = period + minOf(jitter, period) / 2
         var slot: Long
-        if (lockSlot == Long.MIN_VALUE || prevCaptureUs == Long.MIN_VALUE) {
+        val sparse = prevCaptureUs != Long.MIN_VALUE && (captureUs - prevCaptureUs) * 1000 > LOCK_GAP_PERIODS * period
+        if (lockSlot == Long.MIN_VALUE || prevCaptureUs == Long.MIN_VALUE || sparse) {
+            // A fresh acquisition is never dropped as late: this frame is the newest one on screen (T-065).
             slot = acquire()
             badRun = 0
+            phaseLock = true
+            lockSlot = slot
+            var collided = false
+            val prev = lastSlot
+            if (prev != Long.MIN_VALUE && slot <= prev) { slot = prev; collided = true }
+            lastSlot = slot
+            return FramePacer.Decision(
+                slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
+            )
         } else {
             val k = Math.round((captureUs - prevCaptureUs) * 1000.0 / period).coerceAtLeast(0)
             slot = grid.gridSlotAtOrAfter(lockSlot + k * period - period / 2) // may lie before the live anchor

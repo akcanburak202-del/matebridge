@@ -1,7 +1,7 @@
 ---
 id: T-065
 title: Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma)
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-057, T-060, T-061]
@@ -37,12 +37,14 @@ T-062 teşhisi (NOTES 2026-10-01 sabah, T-062 kartı). Kullanıcı: yazarken ekr
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `SlotReleaser.submit` yeni `periodNs` parametresi alir: birakilmis slota (<= releasedSlot) dusen kare atilmaz, `releasedSlot + period`'a tasinir (slot, renderNs, deadline ayni miktarda kayar), normal kurallara girer; `slot_dups` yine sayilir.
+2. `AdaptivePacer.scheduleLocked`: onceki yakalamadan bu yana bosluk > 3 panel periyodu (`LOCK_GAP_PERIODS`) ise kilit tahmin yapmaz, `acquire()` ile yeniden edinilir (rephase sayilmaz); edinilen kare asla lateDrop olmaz.
+3. Test: pacer + SlotReleaser uctan uca (`NewestFrameShownTest`).
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. branch task/T-065-client-newest-frame (`T-065: ...`)
+- **Dokunulan dosyalar:** video/SlotReleaser.kt, video/AdaptivePacer.kt, video/VideoRenderer.kt (tek satir: periodNs gecirilir), test/.../NewestFrameShownTest.kt (yeni), PresentationSchedulingTest.kt (SlotReleaserTest guncellendi), bu kart.
+- **Varsayımlar:** Esik 3 panel periyodu: kilitlenebilir icerik araligi ~1 periyot (+ seyreltilmis 2) ve jitter bunun altinda; bosta/seyrek guncelleme > 50 ms (60 Hz) / 25 ms (120 Hz). Tasinan kare `releasedSlot + period`'a gider; slot gecmiste kalabilir (renderNs gecmis = bir sonraki vsync'te hemen sunulur), <= 2 periyot siniri korunur. Mevcut T-057/T-060/T-061 testleri degismeden gecti (yalniz submit cagrilarina periodNs eklendi; asilmis-slot testi yeni davranisa gore guncellendi).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Cihaz yok. Tablette: Mac'te tek tus/tek kare degisikligi (bosta, 60 Hz) sonrasi `screencap` ile son karenin gorundugu; yazarken donma yok, imlec ilk hareketinde takilma yok; STATS'ta `slot_dups` seyrek akista artabilir (tasinan kareler); surekli 60/120 akista pacing metrikleri (skip %, rephases) onceki gibi. GlPresenter yolunda ayri ardilsiz-atma yok (slot/releaser kullanmiyor); degistirilmedi.
+- **Açık sorular:** Kirmizi-once dogrulamasi arac kisiti nedeniyle elle yapilmadi; scratch simulasyonu eski kodda 126/300 kayip gosteriyordu, yeni testler (ayni senaryolar) yesil.

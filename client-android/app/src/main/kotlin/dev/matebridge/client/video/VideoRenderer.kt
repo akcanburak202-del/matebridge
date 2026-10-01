@@ -429,7 +429,7 @@ class VideoRenderer(
                 stats.onPaceAdd(d.addedNs / 1000)
                 if (useAdaptive) stats.onScheduled(d.skipped)
                 if (d.lateDrop) counters.onLateDrop()
-                releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs)
+                releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs)
                 continue
             }
             if (prev >= 0) sink.discard(prev)
