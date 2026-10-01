@@ -157,12 +157,14 @@ final class SocketWriteBufferTests: XCTestCase {
     // MARK: Knobs
 
     func testVideoSocketKnob() {
-        XCTAssertEqual(VideoSocketKnob.parse([:]), .nw, "default stays Network.framework")
+        XCTAssertEqual(VideoSocketKnob.parse([:]), .bsd, "default is the kernel socket (T-092)")
+        XCTAssertEqual(VideoSocketKnob.parse(nil as String?), .bsd)
         XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd"]), .bsd)
         XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": " BSD "]), .bsd)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]), .nw)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "kernel"]), .nw)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": ""]), .nw)
+        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]), .nw, "explicit fallback")
+        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": " NW "]), .nw)
+        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "kernel"]), .bsd, "invalid value is bsd")
+        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": ""]), .bsd)
     }
 
     func testNotSentLowatKnob() {
@@ -177,7 +179,10 @@ final class SocketWriteBufferTests: XCTestCase {
     }
 
     func testVideoSocketSettingsLogFields() {
-        XCTAssertEqual(VideoSocketSettings.parse([:]).logFields, "video_socket=nw notsent_lowat_kb=na")
+        XCTAssertEqual(VideoSocketSettings.parse([:]).logFields, "video_socket=bsd notsent_lowat_kb=128")
+        XCTAssertEqual(VideoSocketSettings.parse([:]).notSentLowatBytes, 131_072)
+        XCTAssertEqual(VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]).logFields,
+                       "video_socket=nw notsent_lowat_kb=na")
         let bsd = VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd", "MATEBRIDGE_NOTSENT_LOWAT_KB": "64"])
         XCTAssertEqual(bsd.logFields, "video_socket=bsd notsent_lowat_kb=64")
         XCTAssertEqual(bsd.notSentLowatBytes, 65_536)

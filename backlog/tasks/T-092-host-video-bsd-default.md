@@ -1,7 +1,7 @@
 ---
 id: T-092
 title: Mac — video soketi varsayılanı `bsd` (T-091 ölçümü: Wi-Fi 372 → ~40 ms, yeniden gönderim 0)
-status: todo
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-091]
@@ -28,11 +28,11 @@ T-091 cihaz A/B (orkestratör, 2026-10-01 ~18:35, Wi-Fi, kayan metin; NOTES ayn�
 
 ## Kabul kriterleri
 
-- [ ] `MATEBRIDGE_VIDEO_SOCKET` yoksa `bsd`. `nw` açıkça verilirse eski yol. Geçersiz değer → `bsd`.
-- [ ] `TCP_NOTSENT_LOWAT` varsayılanı 128 KB kalır.
-- [ ] Testler yeni varsayılana göre güncellenir.
-- [ ] Varsa `docs/LOGGING.md`'de `video_socket` alanı belgelenir.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `MATEBRIDGE_VIDEO_SOCKET` yoksa `bsd`. `nw` açıkça verilirse eski yol. Geçersiz değer → `bsd`.
+- [x] `TCP_NOTSENT_LOWAT` varsayılanı 128 KB kalır.
+- [x] Testler yeni varsayılana göre güncellenir.
+- [ ] (uygun bölüm yok, atlandı — bkz. Handoff) Varsa `docs/LOGGING.md`'de `video_socket` alanı belgelenir.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -40,3 +40,12 @@ Tek satırlık varsayılan değişikliği ve test güncellemesi.
 
 ## Handoff
 
+- **Commit:** `9f10188` (branch `task/T-092-bsd-default`, base `main` 1c798dc).
+- **Dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift`: `VideoSocketKnob.parse` artık nil/boş/geçersiz → `.bsd`; yalnızca açık `nw` (büyük/küçük harf ve boşluk duyarsız) eski Network.framework yolunu seçer. Doc yorumları T-091 ölçümüyle güncellendi. `NotSentLowatKnob.defaultKB` 128 olarak değişmedi.
+  - `host-mac/Tests/MateBridgeCoreTests/Session/SocketWriteBufferTests.swift`: `testVideoSocketKnob` (varsayılan/nil/boş/geçersiz → bsd, `nw`/` NW ` → nw), `testVideoSocketSettingsLogFields` (varsayılan `video_socket=bsd notsent_lowat_kb=128`, 131072 bayt; açık `nw` → `notsent_lowat_kb=na`).
+- **`docs/LOGGING.md`:** dokunulmadı. Dosyada olay/alan başına belge bölümü yok (yalnızca satır formatı, gizlilik, sayaçlar). `video_socket`/`notsent_lowat_kb` için yeni bir bölüm açmak kapsam kararı olduğundan orkestratöre bırakıldı.
+- **`./scripts/check.sh`:** ALL OK.
+- **Varsayımlar:** `SessionServer` zaten `Self.videoSocket.socket == .bsd` ile dallanıyor, Host tarafında değişiklik gerekmedi. `SessionServer.swift:253` yorumu (`nw|bsd`) kapsam dışı ama hâlâ doğru.
+- **Test EDİLMEDİ (cihaz):** host uygulaması başlatılmadı, `bundle-host.sh` çalıştırılmadı. Orkestratör doğrulamalı: env değişkeni olmadan başlatınca `ev=listening ... video_socket=bsd notsent_lowat_kb=128`; Wi-Fi'de gecikme ~40 ms / 50+ fps; USB yolu (24 ms) ve `MATEBRIDGE_VIDEO_SOCKET=nw` geri dönüşü hâlâ çalışıyor; bağlantı kopma/yeniden bağlanma bsd varsayılanıyla temiz.
+- **Açık sorular:** yok.
