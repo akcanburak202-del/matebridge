@@ -408,7 +408,7 @@ FIXTURES = {
         field("u16", "data_len", 16),
         field("bytes", "data", struct.pack("<8h", 0, 0, 1000, -1000, 32767, -32768, -1, 1), "L/R pairs"),
     ])),
-    "invalid_audio_frame_short": ("MUST BE REJECTED (PROTOCOL_ERROR): AUDIO_FRAME payload shorter than 32 + data_len", frame("AUDIO_FRAME", [
+    "invalid_audio_frame_short": ("MUST BE REJECTED (PROTOCOL_ERROR): AUDIO_FRAME payload shorter than 28 + data_len", frame("AUDIO_FRAME", [
         field("u16", "stream_id", 3),
         field("u16", "reserved", 0),
         field("u32", "seq", 8),

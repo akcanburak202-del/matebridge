@@ -22,7 +22,7 @@ Karar 0011 ses mesajlarını ekledi. `docs/PROTOCOL.md` §4 (0x30–0x32, HELLO 
 
 - [x] Swift (`MateBridgeCore`) ve Kotlin (`protocol/`) için `AudioPrefs`, `AudioConfig`, `AudioFrame` tipleri encode/decode. Alan sırası ve tipleri PROTOCOL.md ile birebir aynı.
 - [x] Doğrulama kuralları birebir PROTOCOL.md:
-  - `AUDIO_FRAME` payload'u `32 + data_len`'den kısaysa, `frame_count` 0 ise ya da 960'tan büyükse protokol hatası. Fazla bayt yok sayılır.
+  - `AUDIO_FRAME` payload'u `28 + data_len`'den kısaysa, `frame_count` 0 ise ya da 960'tan büyükse protokol hatası. Fazla bayt yok sayılır.
   - `AUDIO_CONFIG`'te bilinmeyen `state`/`format` decode'da **hata değil** (değer korunur, uygulama yok sayar).
   - `AUDIO_PREFS.enabled` 0/1 dışı → `false`.
 - [x] HELLO `capabilities` bit8 `AUDIO_PCM` sabiti iki tarafta. Kotlin istemci HELLO'da bu biti **henüz göndermez** (çalma T-095'te gelince açılır).
@@ -59,5 +59,5 @@ Karar 0011 ses mesajlarını ekledi. `docs/PROTOCOL.md` §4 (0x30–0x32, HELLO 
 
 ### Açık sorular
 
-1. **PROTOCOL.md / kart hatası, 32 değil 28:** `AUDIO_FRAME` alanları 2+2+4+8+8+2+2 = **28 bayt**. `audio_frame.hex` `length = 44 = 28 + 16`. PROTOCOL.md 0x32 ve kart "payload `32 + data_len`'den kısaysa protokol hatası" diyor. 32 ile geçerli `audio_frame` fixture'ı (44 < 48) reddedilirdi. Kod 28 kullanır (`AudioFrame.fixedSize` / `AudioFrame.FIXED_BYTES`). Orkestratör PROTOCOL.md'deki "32"yi "28" yapmalı. `invalid_audio_frame_short` (length 32 < 28+16) her iki yorumda da reddedilir, fixture değişmez.
+1. **PROTOCOL.md / kart hatası, 32 değil 28:** `AUDIO_FRAME` alanları 2+2+4+8+8+2+2 = **28 bayt**. `audio_frame.hex` `length = 44 = 28 + 16`. PROTOCOL.md 0x32 ve kart "payload `28 + data_len`'den kısaysa protokol hatası" diyor. 32 ile geçerli `audio_frame` fixture'ı (44 < 48) reddedilirdi. Kod 28 kullanır (`AudioFrame.fixedSize` / `AudioFrame.FIXED_BYTES`). Orkestratör PROTOCOL.md'deki "32"yi "28" yapmalı. `invalid_audio_frame_short` (length 32 < 28+16) her iki yorumda da reddedilir, fixture değişmez.
 2. **Kapsam:** kartın `files:` listesindeki `host-mac/Sources/MateBridgeCore/Protocol/` dizini yoktu; Swift protokol codec'i `MateBridgeCore/` kökünde (`Message.swift`, `Messages.swift`, `ProtocolConstants.swift`). Kabul kriterleri bu dosyalara dokunmadan karşılanamıyordu. Yeni tipler listelenen `Protocol/` dizinine kondu; köke yalnızca minimal bağlama eklendi. `Message` enum'una case eklemek iki exhaustive switch'i de kırdı (`Session/SessionMachine.swift`, `Input/InputStateMachine.swift`): ikisine de yalnızca yok sayan case eklendi. Reviewer bu sapmayı onaylamalı.

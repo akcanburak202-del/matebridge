@@ -478,7 +478,7 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 | data_len | u16 | `data` uzunluğu, bayt. PCM_S16LE stereo için `frame_count × 4`. |
 | data | bytes[data_len] | PCM örnekleri |
 
-- Payload `32 + data_len`'den kısaysa ya da `frame_count` 0 veya 960'tan büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`).
+- Payload `28 + data_len`'den kısaysa ya da `frame_count` 0 veya 960'tan büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`).
 - `data_len`, güncel `AUDIO_CONFIG` biçimiyle uyuşmuyorsa (`frame_count × channels × 2`): istemci paketi atar. Protokol hatası değildir.
 - Ses içeriği asla loglanmaz.
 
