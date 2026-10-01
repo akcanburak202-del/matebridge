@@ -1,7 +1,7 @@
 ---
 id: T-070
 title: Mac — yakalama→gönderim gecikme dökümü (SCK teslim, kodlama, kuyruk, soket yazımı) ve sıçrama kaynağı
-status: review
+status: todo
 phase: 5
 owner: mac-host-dev
 depends_on: [T-066]
@@ -38,3 +38,13 @@ Her kare, `EncodedVideoFrame.trace` (`FrameTrace`, 7 x UInt64, tahsissiz) ile a�
 - **Varsayımlar:** SCK zaman damgası ve `HostClock` aynı saat (PROTOCOL 6 zaten bunu varsayar). `delivered` = `HEVCEncoder.encode()` girişi (SCK handler'ından hemen sonra). Tutma-zamanlayıcısıyla yeniden gönderilen karelerde `capture=delivered=now`. `write_done` = NWConnection `contentProcessed` (USB/adb reverse'te tünele devir; tabletin aldığı an değil). Codec config kareleri ölçülmez; anahtar kareler ölçülür. Geriye giden aşama 0'a kırpılır.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek akışta `ev=latency` satırının çıkması ve değerlerin tablet ölçümüyle uyumu; CSV'nin oluşması. Ek yük (kare başına ~4 HostClock okuması) ölçülmedi. Host çalıştırılmadı.
 - **Açık sorular:** yok
+
+## Orkestratör notu (2026-10-01 11:42, cihaz)
+
+`ev=latency` satırı geliyor, ama: (1) `sck_lag` her zaman `0.0/0.0/0.0/0.0` → `capture` zamanı SCK zaman damgası değil, geri çağrı anı alınıyor; (2) `cap_to_sent` p50 0,7–2,3 ms, yani `enc` (6–7,5 ms) dan bile kısa → toplam yanlış bir başlangıç noktasından ölçülüyor. Gözlemler: `hold` p50 bazı pencerelerde 1,1–2,3 ms (120 fps, seyreltme yok — kapı ızgarası erken gelen kareleri bekletiyor olabilir), `queue`+`write` ~0,2 ms, en büyük değerlerde sıçrama yok.
+
+### Düzeltme kabul kriterleri
+
+- [ ] `capture` = SCK karesinin gerçek zaman damgası (`CMSampleBuffer` sunum zamanı / `SCStreamFrameInfo.displayTime`, host saatine çevrilmiş) — tabletin kullandığı `capture_time_us` ile aynı kaynak. `sck_lag` gerçek teslim gecikmesini göstermeli.
+- [ ] `cap_to_sent` = `write_done - capture`; testte aşamaların toplamına eşit olduğu doğrulanır.
+- [ ] `hold` 120 fps'te seyreltme yokken neden > 0: kısa açıklama karta (kapı toleransı / ızgara fazı); davranış değişikliği önerisi varsa *Açık sorular*a.
