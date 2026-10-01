@@ -123,14 +123,20 @@ class PlayoutSimulationTest {
         assertTrue(sawFade)
         assertTrue(prevLast < 0x4040)
         assertEquals(PlayoutCore.State.PRIMING, core.state)
-        assertEquals(1L, core.drift.underruns)
+        assertTrue(core.idle) // provisionally: nothing arrived for 20 ms
+        assertEquals(0L, core.drift.underruns) // not decided before audio arrives again
         assertTrue(out.all { it == 0.toShort() })
-        // packets again: playback restarts once the (raised) target plus span is buffered
+        // the late packets arrive with a continuous capture time (the host kept capturing): a real underrun
         while (core.state == PlayoutCore.State.PRIMING) {
             core.buffer.write(idx, 0, packet, 480); idx += 480
             core.render(out, 96)
         }
-        assertTrue(core.buffer.level + 96 >= core.drift.refillThresholdFrames() - 480)
+        repeat(PlayoutCore.CONFIRM_PACKETS.toInt()) {
+            core.buffer.write(idx, 0, packet, 480); idx += 480
+            core.render(out, 96)
+        }
+        assertEquals(1L, core.drift.underruns)
+        assertEquals(0L, core.idleGaps)
         assertEquals(10 * 48, core.drift.safetyFrames) // 5 ms + 5 ms after one underrun
     }
 

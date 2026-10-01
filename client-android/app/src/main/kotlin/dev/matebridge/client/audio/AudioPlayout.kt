@@ -1,5 +1,6 @@
 package dev.matebridge.client.audio
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -41,6 +42,9 @@ import java.util.concurrent.TimeUnit
  *
  * Every failure is logged and contained here: audio never takes the session down. Audio content is never logged.
  * [hostMinusClientUs] is the ClockSync offset (null while unknown).
+ *
+ * The starting AudioTrack buffer is [AudioBufferConfig] bursts (default 1); when [context] is an Activity its launch
+ * intent may override it with `--ei audio_buf_bursts N` (read here so the experiment switch stays in this package).
  */
 class AudioPlayout(
     context: Context,
@@ -58,6 +62,9 @@ class AudioPlayout(
 
     private val burst: Int
     private val nativeRate: Int
+    private val startBursts: Int = AudioBufferConfig.startBursts(
+        (context as? Activity)?.intent?.takeIf { it.hasExtra(AudioBufferConfig.EXTRA) }?.getIntExtra(AudioBufferConfig.EXTRA, 0),
+    )
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
@@ -80,7 +87,7 @@ class AudioPlayout(
             "audio_device",
             "native_rate=$nativeRate native_burst=$nativeBurst burst=$burst " +
                 "low_latency_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_LOW_LATENCY))} " +
-                "pro_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO))} rate=$RATE",
+                "pro_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO))} rate=$RATE buf_bursts=$startBursts",
             COMPONENT,
         )
         try {
@@ -309,7 +316,7 @@ class AudioPlayout(
             }
             val t: Track
             try {
-                val got = at.setBufferSizeInFrames(START_BURSTS * burst)
+                val got = at.setBufferSizeInFrames(startBursts * burst)
                 // One burst of silence before play() (review L5): the mixer's first pull does not count an underrun.
                 val pre = at.write(ShortArray(burst * 2), 0, burst * 2, AudioTrack.WRITE_NON_BLOCKING).coerceAtLeast(0) / 2
                 t = Track(at, usage, if (got > 0) got else at.bufferSizeInFrames, pre.toLong())
@@ -335,7 +342,7 @@ class AudioPlayout(
             MbLog.i(
                 "audio_track",
                 "stream_id=$id reason=$reason perf_mode=${t.perfName} usage=${if (usage == AudioAttributes.USAGE_GAME) "game" else "media"} " +
-                    "burst=$burst buf_frames=${t.bufFrames} capacity_frames=${at.bufferCapacityInFrames} native_rate=$nativeRate rate=$RATE",
+                    "burst=$burst buf_bursts=$startBursts buf_frames=${t.bufFrames} capacity_frames=${at.bufferCapacityInFrames} native_rate=$nativeRate rate=$RATE",
                 COMPONENT,
             )
             return t
@@ -443,11 +450,11 @@ class AudioPlayout(
             val buf = core.buffer
             MbLog.i(
                 "stats",
-                "stream_id=$id state=${core.state.name.lowercase()} perf_mode=${t.perfName} burst=$burst buf_frames=${t.bufFrames} " +
+                "stream_id=$id state=${if (core.idle) "idle" else core.state.name.lowercase()} perf_mode=${t.perfName} burst=$burst buf_frames=${t.bufFrames} " +
                     "level_ms_floor=${if (d.lastFloorFrames >= 0) d.lastFloorFrames / MS else -1} level_ms=${core.lastRemainingFrames / MS} " +
                     "target_ms=${d.targetFrames / MS} safety_ms=${d.safetyFrames / MS} ratio_ppm=${d.ratioPpm.toLong()} " +
                     "underruns=${d.underruns} track_underruns=$trackUnderruns " +
-                    "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} late_frames=${buf.lateFrames} " +
+                    "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
                     "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"}",
                 COMPONENT,
@@ -463,8 +470,7 @@ class AudioPlayout(
         const val DEFAULT_BURST = 240
         const val MIN_BURST = 16
         const val MAX_BURST = 4800
-        const val START_BURSTS = 2
-        const val MAX_BURSTS = 6
+        const val MAX_BURSTS = AudioBufferConfig.MAX_BURSTS
         const val TS_INTERVAL_FRAMES = RATE / 4L
         const val MAX_REBUILDS = 5
         const val REBUILD_WINDOW_MS = 10_000L
