@@ -19,6 +19,9 @@ class FrameQueue(private val stats: VideoStats) {
         const val MAX_PENDING = 2
     }
 
+    /** T-073 receive-path trace (null = off): stamps the fate of every offered frame. */
+    @Volatile var trace: PaceTrace? = null
+
     private val lock = Object()
     private val queue = ArrayDeque<VideoFrame>()
     private var waitingKeyframe = true
@@ -27,28 +30,38 @@ class FrameQueue(private val stats: VideoStats) {
     /** Returns the KEYFRAME_REQUEST reason to send now, or null. */
     fun offer(frame: VideoFrame): Int? {
         var request: Int? = null
+        val tr = trace
         synchronized(lock) {
+            val nowNs = if (tr != null) System.nanoTime() else 0L
             stats.onReceived(frame.data.size, isConfig = frame.isCodecConfig)
             when {
                 frame.isCodecConfig -> {
                     queue.removeAll { it.isCodecConfig }
+                    tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_CONFIG)
                     queue.addFirst(frame)
                     lastConfig = frame
                 }
                 frame.isKeyframe -> {
-                    dropPending()
+                    dropPending(tr, nowNs)
+                    tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
                     queue.addLast(frame)
                     waitingKeyframe = false
                 }
-                waitingKeyframe -> stats.onDropped(1)
+                waitingKeyframe -> {
+                    stats.onDropped(1)
+                    tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_GATE_DROP)
+                }
                 else -> {
                     queue.addLast(frame)
                     if (pendingCount() > MAX_PENDING) {
                         stats.onDropped(1) // the incoming frame counts among the dropped
                         queue.removeLast()
-                        dropPending()
+                        tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUE_DROP)
+                        dropPending(tr, nowNs)
                         waitingKeyframe = true
                         request = KeyframeRequest.FRAMES_DROPPED
+                    } else {
+                        tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
                     }
                 }
             }
@@ -67,7 +80,7 @@ class FrameQueue(private val stats: VideoStats) {
 
     /** Decoder error: drops pending frames and closes the gate; returns the request reason. */
     fun onDecoderError(): Int = synchronized(lock) {
-        dropPending()
+        dropPending(trace, System.nanoTime())
         waitingKeyframe = true
         KeyframeRequest.DECODE_ERROR
     }
@@ -77,6 +90,7 @@ class FrameQueue(private val stats: VideoStats) {
      * CODEC_CONFIG. Returns [reason] (the request to send).
      */
     fun reset(reason: Int = KeyframeRequest.STARTUP, keepConfig: Boolean = true): Int = synchronized(lock) {
+        trace?.let { t -> val now = System.nanoTime(); for (f in queue) t.onRxAction(f.frameSeq, now, PaceTrace.RX_RESET_DROP) }
         queue.clear()
         stats.breakGaps()
         waitingKeyframe = true
@@ -89,9 +103,10 @@ class FrameQueue(private val stats: VideoStats) {
 
     private fun pendingCount() = queue.count { !it.isCodecConfig }
 
-    private fun dropPending() {
+    private fun dropPending(tr: PaceTrace? = null, nowNs: Long = 0L) {
         val n = pendingCount()
         if (n > 0) {
+            if (tr != null) for (f in queue) if (!f.isCodecConfig) tr.onRxAction(f.frameSeq, nowNs, PaceTrace.RX_PENDING_DROP)
             stats.onDropped(n)
             queue.removeAll { !it.isCodecConfig }
         }

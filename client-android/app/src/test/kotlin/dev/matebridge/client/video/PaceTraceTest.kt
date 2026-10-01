@@ -10,7 +10,8 @@ class PaceTraceTest {
     @Test fun headerHasAllColumns() {
         val lines = csv(PaceTrace(4))
         assertEquals(1, lines.size)
-        assertEquals(PaceTrace.COLS, lines[0].split(",").size)
+        assertEquals(PaceTrace.CSV_COLS, lines[0].split(",").size)
+        assertTrue(lines[0].endsWith(",own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action"))
         assertTrue(lines[0].startsWith("seq,capture_us,ready_ns,"))
         assertTrue(lines[0].contains(",path,late_drop,collided,released_slot_ns,release_ns,render_ns,action"))
     }
@@ -77,5 +78,49 @@ class PaceTraceTest {
         assertTrue(probe.path != PaceProbe.PATH_NONE)
         assertTrue(probe.periodNs > 0)
         assertTrue(probe.earliestNs > 0)
+    }
+
+    @Test fun receiveColumnsJoinThePresentationRowBySeq() {
+        val t = PaceTrace(8)
+        t.onRecv(7, 700, 1234, 1000, 1100)
+        t.onRxAction(7, 1200, PaceTrace.RX_QUEUED)
+        t.onInput(7, 1300)
+        t.record(7, 700, 5000, null, 0, false, false, 0)
+        val lines = csv(t)
+        assertEquals(2, lines.size)
+        val row = lines[1].split(",")
+        assertEquals(PaceTrace.CSV_COLS, row.size)
+        assertEquals(listOf("1000", "1100", "1200", "1300", "1234", "queued"), row.drop(24))
+        assertEquals("pending", row[22])
+    }
+
+    @Test fun droppedFramesGetTheirOwnRowWithTheFateInActionColumn() {
+        val t = PaceTrace(8)
+        t.onRecv(3, 300, 50, 10, 20)
+        t.onRxAction(3, 30, PaceTrace.RX_QUEUE_DROP)
+        val lines = csv(t)
+        assertEquals(2, lines.size)
+        val row = lines[1].split(",")
+        assertEquals(PaceTrace.CSV_COLS, row.size)
+        assertEquals("3", row[0]); assertEquals("300", row[1])
+        assertEquals("queue_drop", row[22])
+        assertEquals(listOf("10", "20", "30", "0", "50", "queue_drop"), row.drop(24))
+    }
+
+    @Test fun frameQueueStampsItsFates() {
+        val t = PaceTrace(16)
+        val q = FrameQueue(VideoStats()).also { it.trace = t }
+        fun f(seq: Long, flags: Int) = dev.matebridge.client.protocol.VideoFrame(
+            seq, seq * 10, flags, 0, 1, 1, dev.matebridge.client.protocol.Bytes(ByteArray(1)))
+        for (s in 1L..5L) t.onRecv(s, s * 10, 1, 0, 0)
+        q.offer(f(1, 0)) // gate closed
+        q.offer(f(2, dev.matebridge.client.protocol.VideoFrame.KEYFRAME))
+        q.offer(f(3, 0))
+        q.offer(f(4, 0)) // third pending: overflow drops 2.. and incoming
+        val acts = csv(t).drop(1).map { it.split(",") }.associate { it[0] to it[29] }
+        assertEquals("gate_drop", acts["1"])
+        assertEquals("pending_drop", acts["2"])
+        assertEquals("pending_drop", acts["3"])
+        assertEquals("queue_drop", acts["4"])
     }
 }

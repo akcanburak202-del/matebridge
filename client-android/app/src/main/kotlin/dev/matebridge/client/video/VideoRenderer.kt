@@ -81,6 +81,7 @@ class VideoRenderer(
 
     /** T-069 experiment: per-frame pace trace, dumped to [paceTraceFile] every [TRACE_DUMP_EVERY] stats windows and by [flushPaceTrace]. */
     @Volatile var paceTrace: PaceTrace? = null
+        set(v) { field = v; queue.trace = v; PaceTrace.active = v } // T-073: the receive path stamps the same trace
     @Volatile var paceTraceFile: java.io.File? = null
     private var traceWindows = 0
     private val traceWriter by lazy {
@@ -373,6 +374,7 @@ class VideoRenderer(
                 if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                trace?.onInput(frame.frameSeq, System.nanoTime())
             }
             if (att.active) error = outError.get()
         } catch (e: Exception) {
