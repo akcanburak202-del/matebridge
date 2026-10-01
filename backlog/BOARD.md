@@ -22,6 +22,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
 | [T-102](tasks/T-102-settings-while-streaming.md) | Taslak — bağlıyken açılabilen ayarlar paneli (akış sürerken, bağlantı paneline dönmeden) | 4 | orchestrator | [T-096, T-101] |
+| [T-103](tasks/T-103-host-relative-pointer-games.md) | Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder | 5 | mac-host-dev | [T-034] |
 
 ## done
 
