@@ -1,7 +1,7 @@
 ---
 id: T-112
 title: Tablet testi — InputHandoffTest zaman aşımı testi yük altında ara sıra kırılıyor
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []

@@ -717,3 +717,40 @@ AAudio (exclusive MMAP), Mac'ten kısa sesler:
 | AAudio (T-101) | ~41 ms | ~0 ms |
 
 Panelde "Ses çıkışı: Düşük gecikme / Uyumlu" seçeneği var. `audio_clock_raw` debug seviyesinde olduğu için info log'unda görünmüyor.
+
+## 2026-10-02 ~00:10 — T-108/T-109 cihazda; oyun modunda sürekli cızırtı
+
+- **T-103:** Witcher 2'de görünmez duvar yok (kullanıcı). Oyun sırasında `input_session_end`: `cursor_adopted=2013 cursor_current=3309 cursor_lag_ignored=1169`, `cursor_query_avg_us≈5`.
+- **Cızırtı, ilk analiz (T-108 öncesi):**
+  - Jitter tamponunun güvenlik payı 5 ms'den başlıyordu; 5 dakikada 6 boşalma oldu.
+  - T-108 sonrası pay 20 ms'den başlıyor. Yine de oyun modunda 3 boşalma oldu (00:27:04, 00:27:24, 00:29:14) ve pay 34 ms'ye çıktı.
+  - Host temiz: `packets=100/s`, `dropped=0`.
+- **Kullanıcı sesi "sürekli cızırtı" olarak tarif etti, tek tık değil.**
+  - Hipotez: AAudio MMAP çıkış arabelleği 480 kare (10 ms), oyun yükünde yazıcı geç kalıyor, HAL `xruns=0` bildiriyor.
+  - Deney: `--ei audio_buf_bursts 4` ile `buf=960` olan sürüm kuruldu. **Kullanıcıyla deneme sabaha kaldı.**
+  - T-110 çıkış payını ölçüyor ve arabelleği uyarlamalı büyütüyor.
+
+## 2026-10-02 ~00:50 — Dilimli (slice) kodlama değerlendirmesi: yapılmayacak
+
+Araştırma (alt ajan; VideoToolbox SDK başlıkları, M6'da çalışma zamanı denemesi, tablet codec XML'leri; repo değişmedi).
+
+**Mac, VideoToolbox:**
+- Belgelenmiş tek dilim anahtarı `kVTCompressionPropertyKey_MaxH264SliceBytes`. Donanım kodlayıcı reddediyor (-12900, H.264 ve HEVC).
+- HEVC dilim/tile anahtarı yok. Çıkış callback'i kare başına bir kez çağrılıyor; kısmi kare çıkışı yok.
+- Özel `NumberOfSlices`:
+  - normal kodlayıcıda 4–8 dilim üretiyor, kodlama süresi aynı (HEVC fast: 1 dilim 6,39 ms, 4 dilim 6,37 ms), callback yine 1;
+  - düşük gecikmeli kodlayıcıda (`rtvc`) oturumu bozuyor (-12910).
+- `NumberOfCores = 1`: M6'da tek kodlama motoru. Şeritlere bölünmüş paralel oturumlar toplam süreyi kısaltmıyor (4 şerit: ilk şerit 3,5 ms, tam kare 7–10 ms) ve boyutu büyütüyor.
+
+**Tablet:**
+- `OMX.hisi.video.decoder.hevc/avc`: yalnızca `adaptive-playback`, `can-swap-width-height`, `support-transcode`.
+- **`partial-frame` yok, `low-latency` yok.** HEVC çözme: 720p 267 fps, 1080p 258 fps; kare başına ~3,7 ms sabit maliyet.
+
+**Sonuç:** dilimli kodlama 0 ms kazandırır. Dilim dilim gönderme ve kısmi kare çözme iki cihazda da mümkün değil. Protokol değişikliği ve özel API riski de getirir. **Yapılmayacak.**
+
+**Daha ucuz hedefler:**
+1. Wi-Fi farkı (~16 ms):
+   - Mac'i Ethernet'e bağlamak;
+   - T-111 (kontrol bağlantısı BSD soket).
+2. Ölçek: Performans/Oyun modu (%75/%66).
+3. Kodlama süresi farkı (T-113): uygulama logunda `enc_ms` 9,4–9,8 ms. Aynı bayraklarla yalıtılmış bench 6,4 ms. ~3 ms olası kazanç; uygulama durdurulmuşken ölçülmeli.
