@@ -1,7 +1,7 @@
 ---
 id: T-107
 title: Tablet — ayar panelinde seçili olmayan seçenekler beyaz kutu, yazı görünmüyor
-status: todo
+status: in_progress
 phase: 4
 owner: android-client-dev
 depends_on: [T-105]
@@ -30,6 +30,8 @@ Teşhis: `SettingsViews.button()` sistem düğme arka planını/tint'ini (Harmon
 
 ## Plan
 
-(ajan doldurur)
+1. `settings/SettingsButtonPalette.kt` (saf Kotlin): normal `#3A3A42`, basılı `#55555F`, seçili `SELECTED_COLOR` `#2E7DFF`, seçili+basılı `#1F5FCC`, metin beyaz; `colorFor(selected, pressed)` + JVM testi.
+2. `SettingsViews.button()` ve yan paneldeki "Kapat": `StateListDrawable` (pressed/selected/default, yuvarlak köşe) arka plan, `backgroundTintList = null`, beyaz metin, `stateListAnimator = null`. Seçim `isSelected` + kalın ile; `baseTint` kaldırılır.
+3. Bağlantı paneli zemini zaten `#000000` (activity_main.xml); kontrast yeterli, layout'a dokunulmaz.
 
 ## Handoff
