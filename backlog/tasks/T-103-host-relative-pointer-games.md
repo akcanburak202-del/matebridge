@@ -1,7 +1,7 @@
 ---
 id: T-103
 title: Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder
-status: todo
+status: in_progress
 phase: 5
 owner: mac-host-dev
 depends_on: [T-034]
@@ -40,7 +40,28 @@ Orkestratör teşhisi (kod okuması):
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+**Gerçek imleç sorgusu (Host).** `MateBridgeHost/Input/CursorLocator.swift` (yeni): `CursorLocating` protokolü ve `SystemCursor`. Bu `CGEvent(source: nil)?.location` okur: global nokta, sol üst köken, `DisplayGeometry` ile aynı uzay. Ön ölçüm bu Mac'te yapıldı (scratch benchmark, 20 000 çağrı). Kararlı durumda p50 ≈ 0.1 µs, p99 ≈ 0.15 µs. İlk çağrı tek seferlik ≈ 8–14 ms sürüyor (WindowServer bağlantısı). Bu yüzden `InputController.start()` sorguyu bir kez ısındırır. `NSEvent.mouseLocation` benzer maliyette ama Cocoa koordinatında olduğu için seçilmedi. Sorgu **yalnızca `POINTER_REL` mesajlarında** yapılır (Caps Lock örneği gibi), kalem/dokunma/kaydırma yolunda yapılmaz. `InputController` sorgu sayısını, başarısız sorguları, ortalama ve azami süreyi (µs) sayar. Bunlar `input_session_end` satırına alan olarak eklenir. Konum asla loglanmaz.
+
+**Core.** `InjectionEnvironment.cursor: DisplayPoint?` alanı: Host'un örneklediği gerçek imleç, örneklenmediyse/sorgu başarısızsa nil. `InjectionPlanner.plan` başında:
+- `DisplayGeometry.onDisplay(_:)` (yeni) gerçek imleç sanal ekranın yarı açık sınır dikdörtgeni içindeyse kırpılmış noktayı döndürür. İçindeyse ve önbellekteki `cursor`'dan her iki eksende de 1 noktadan fazla farklıysa (`cursor` yoksa her durumda) `cursor = live` olur. 1 noktadan yakınsa önbellek korunur: sistem konumu yuvarlasa bile yavaş trackpad hareketinin nokta-altı kesri kaybolmaz.
+- Böylece aynı çağrıdaki göreli hareket **ve** düğme (down/up), tıklama sayacı, sürükleme gerçek imleç konumundan başlar. Hareketten sonra `cursor = target` olur, aynı mesajdaki düğme hareketin hedefinde basılır.
+- Sorgu başarısızsa (`nil`) son bilinen konum kullanılır: önbellek `cursor`, o da yoksa ekran merkezi.
+
+**Ekran dışı davranış.** Gerçek imleç sanal ekranda değilse (kullanıcı Mac faresiyle ana monitöre geçtiyse) canlı örnek **yok sayılır**. Hareket, önbellekteki son konumdan (ya da merkezden) devam eder ve imleç tablet ekranına geri gelir. Bu, T-103 öncesi davranışla aynıdır. Hiçbir olay başka bir ekrana konumlandırılmaz (mevcut ekran sınırı kuralı).
+
+**Ham delta.** Göreli harekette `MacMouse.deltaX/Y` istemcinin ham `dx/dy` değeridir (hız/ivme istemcide uygulanmış hâli), kırpılmaz. Kesir taşıyıcı (`relCarryX/Y`) sıfıra doğru keserek tam sayı üretir, kalan (−1, 1) aralığında taşınır. Taşıyıcı `releaseAll`'da sıfırlanır. Konum yine `g.moved(...)` ile ekrana kırpılır. Mutlak hareket, pinch ve kalem yolu değişmez (delta yine kırpılmış fark). `CGEventPoster` zaten tam sayıya yuvarlıyor, değişiklik gerekmez.
+
+**Testler** (`Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift`, yeni):
+- imleç her olayda merkeze ışınlanıyor → her olay merkez+d, delta d, duvar yok;
+- kenarda ısrarlı hareket → delta sıfır değil, konum kırpık;
+- kesirli delta birikimi (0.4 × n, negatif yön);
+- 1 nokta altı canlı fark → önbellek kesri korunur;
+- canlı imleç ekran dışında → yok sayılır, son konumdan devam;
+- sorgu nil → son bilinen konum;
+- düğme down/up ve sürükleme canlı konumda, çift tıklama sayacı;
+- mutlak hareket `env.cursor`'dan etkilenmez.
+
+**Risk (cihazda doğrulanacak).** Önceki hareket WindowServer'da henüz işlenmeden gelen sonraki mesaj eski konumu okuyabilir: hareket kaybı/ağırlık hissi. Deskflow macOS'ta aynı yöntemi kullanıyor. Kabul edildi, handoff'ta ölçüm önerisiyle not edilecek.
 
 ## Handoff
 
