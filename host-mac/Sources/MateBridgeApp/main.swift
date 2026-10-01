@@ -148,7 +148,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
         clipboard.send = { [server] sid, message in server.sendToSession(sessionID: sid, message) }
         audio.attach(sink: server)
-        audioTap.cleanUpLeakedTaps()
         server.start()
 
         loginItem.registerOnFirstRun()

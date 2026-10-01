@@ -11,22 +11,39 @@ import MateBridgeCore
 ///   read and comes back when it stops or this process dies), private, named `MateBridge-audio`.
 /// - Aggregate: private, main sub-device = the default output device (its clock), the tap with drift compensation,
 ///   tap auto-start; buffer 240 frames (5 ms).
-/// - IOProc on its own high-priority queue; it only converts and packetizes (`AudioPacketizer`: no allocation, no lock).
-/// - Everything else runs on one serial queue. `AudioDeviceCreateIOProcIDWithBlock` shows the audio capture permission
-///   prompt and blocks while it is open, so it never runs on the main thread or on a video/input path; requests queued
-///   meanwhile (a stop) run right after it.
+/// - IOProc block on the HAL's real-time I/O thread (no dispatch queue); it only converts and packetizes
+///   (`AudioPacketizer`: no allocation, no lock).
+/// - Requests coalesce into one desired state (the latest `start`, or nothing after its `stop`); a single reconcile
+///   pass on one serial queue builds or tears down to match it. `AudioDeviceCreateIOProcIDWithBlock` shows the audio
+///   capture permission prompt and blocks while it is open, so it never runs on the main thread or on a video/input
+///   path, and any number of start/stop calls meanwhile leave at most one pending pass. The desired state is checked
+///   again right before `AudioDeviceStart`: a capture that is no longer wanted is torn down without ever starting
+///   (the Mac is not muted for a stale request).
 /// - Teardown order: `AudioDeviceStop` -> `AudioDeviceDestroyIOProcID` -> `AudioHardwareDestroyAggregateDevice` ->
 ///   `AudioHardwareDestroyProcessTap`.
-/// - A change of the default output device, the output device dying, or a wake from sleep is reported as
-///   `interrupted`; the streamer then stops this capture and starts a new stream (tap and aggregate are rebuilt).
+/// - A change of the default output device, the output device or aggregate dying, a sample rate / tap format change,
+///   or a wake from sleep is reported as `interrupted`; the streamer then stops this capture and starts a new stream
+///   (tap and aggregate are rebuilt).
+/// - No launch sweep of leaked taps: our tap is private, so it is visible only to this process and goes away with it.
+///   Sweeping other processes' taps by name would read `kAudioTapPropertyDescription`, whose ownership is undocumented
+///   (a wrong release could crash at launch), for no benefit.
 public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     public static let tapName = "MateBridge-audio"
     static let aggregateName = "MateBridge-audio-agg"
     static let bufferFrames: UInt32 = 240
 
+    private struct Request {
+        let streamID: UInt16
+        let packetizer: AudioPacketizer
+        let events: @Sendable (AudioCaptureEvent) -> Void
+    }
+
     private let queue = DispatchQueue(label: "dev.matebridge.audio.tap", qos: .userInitiated)
-    private let ioQueue = DispatchQueue(label: "dev.matebridge.audio.io", qos: .userInteractive)
     private let logger = SessionLogger(component: "audio")
+    // Guarded by `lock`: what the streamer wants, and whether a reconcile pass is already queued.
+    private let lock = NSLock()
+    private var desired: Request?
+    private var reconcileQueued = false
     // Confined to `queue`.
     private var run: Run?
 
@@ -38,6 +55,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         var aggregateID = AudioObjectID(kAudioObjectUnknown)
         var procID: AudioDeviceIOProcID?
         var outputDevice = AudioObjectID(kAudioObjectUnknown)
+        var format = AudioStreamBasicDescription()
+        var nominalRate: Double = 0
         var listeners: [(object: AudioObjectID, address: AudioObjectPropertyAddress,
                          block: AudioObjectPropertyListenerBlock)] = []
         var interrupted = false
@@ -64,21 +83,19 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     public func start(streamID: UInt16, packetizer: AudioPacketizer,
                       events: @escaping @Sendable (AudioCaptureEvent) -> Void) {
-        queue.async { [self] in build(streamID: streamID, packetizer: packetizer, events: events) }
+        lock.withLock { desired = Request(streamID: streamID, packetizer: packetizer, events: events) }
+        scheduleReconcile()
     }
 
     public func stop(streamID: UInt16) {
-        queue.async { [self] in
-            guard let r = run, r.streamID == streamID else { return }
-            teardown(r)
-            run = nil
-            logger.log(.info, "audio_capture_stopped", sessionID: 0, generation: 0, fields: "stream_id=\(streamID)")
-        }
+        lock.withLock { if desired?.streamID == streamID { desired = nil } }
+        scheduleReconcile()
     }
 
     /// App shutdown: tears the capture down, waiting at most `timeoutMs` (the queue may be stuck in the permission
-    /// prompt; the mute ends with the process anyway).
+    /// prompt; then the capture is never started, and the mute ends with the process anyway).
     public func shutdown(timeoutMs: Int = 500) {
+        lock.withLock { desired = nil }
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
             if let r = run { teardown(r) }
@@ -88,32 +105,46 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         _ = done.wait(timeout: .now() + .milliseconds(timeoutMs))
     }
 
-    /// Launch: destroys taps named `MateBridge-audio` that an earlier run left behind (a public tap outlives a killed
-    /// process). Lists taps only; creates nothing and needs no permission.
-    public func cleanUpLeakedTaps() {
-        queue.async { [self] in
-            guard run == nil else { return }
-            var destroyed = 0
-            for id in Self.tapList() where Self.tapName(id) == Self.tapName {
-                if AudioHardwareDestroyProcessTap(id) == noErr { destroyed += 1 }
-            }
-            if destroyed > 0 {
-                logger.log(.warning, "audio_leaked_taps_removed", sessionID: 0, generation: 0, fields: "count=\(destroyed)")
-            }
+    // MARK: Reconcile (queue)
+
+    /// At most one pass is queued however many requests arrive while the queue is blocked.
+    private func scheduleReconcile() {
+        let enqueue = lock.withLock {
+            if reconcileQueued { return false }
+            reconcileQueued = true
+            return true
         }
+        if enqueue { queue.async { [self] in reconcile() } }
+    }
+
+    private func reconcile() {
+        let want = lock.withLock {
+            reconcileQueued = false
+            return desired
+        }
+        if let r = run, r.streamID != want?.streamID {
+            teardown(r)
+            run = nil
+            logger.log(.info, "audio_capture_stopped", sessionID: 0, generation: 0, fields: "stream_id=\(r.streamID)")
+        }
+        if let want, run == nil { build(want) }
+    }
+
+    private func isWanted(_ streamID: UInt16) -> Bool {
+        lock.withLock { desired?.streamID == streamID }
     }
 
     // MARK: Build and teardown (queue)
 
-    private func build(streamID: UInt16, packetizer: AudioPacketizer,
-                       events: @escaping @Sendable (AudioCaptureEvent) -> Void) {
-        if let old = run { teardown(old) }
-        let r = Run(streamID: streamID, events: events)
+    private func build(_ request: Request) {
+        let streamID = request.streamID
+        let r = Run(streamID: streamID, events: request.events)
         run = r
         func fail(_ reason: String, _ status: OSStatus) {
             teardown(r)
             if run === r { run = nil }
-            events(.failed(streamID: streamID, reason: reason, status: status))
+            lock.withLock { if desired?.streamID == streamID { desired = nil } }  // never rebuilt by a later pass
+            request.events(.failed(streamID: streamID, reason: reason, status: status))
         }
 
         guard let output = Self.defaultOutputDevice() else { return fail("no_output_device", 0) }
@@ -131,11 +162,10 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         r.tapID = tapID
 
         guard let format = Self.tapFormat(tapID) else { return fail("tap_format", 0) }
-        let isFloat32 = format.mFormatFlags & kAudioFormatFlagIsFloat != 0 && format.mBitsPerChannel == 32
-        guard format.mSampleRate == Double(AudioStreamPolicy.sampleRate),
-              format.mChannelsPerFrame == UInt32(AudioStreamPolicy.channels), isFloat32 else {
+        guard Self.isSupported(format) else {
             return fail("tap_format_\(Int(format.mSampleRate))hz_\(format.mChannelsPerFrame)ch", 0)
         }
+        r.format = format
 
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: Self.aggregateName,
@@ -159,25 +189,35 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         if status != noErr {  // not fatal: the device's own buffer size works, just with more latency
             logger.log(.warning, "audio_buffer_size_refused", sessionID: 0, generation: 0, fields: "status=\(status)")
         }
+        r.nominalRate = Self.nominalRate(aggregateID) ?? 0
 
         guard let layout = TapBufferLayout.choose(channelsPerBuffer: Self.inputChannelsPerBuffer(aggregateID)) else {
             return fail("tap_layout", 0)
         }
 
-        // The permission prompt appears here and blocks this queue until answered.
+        // The permission prompt appears here and blocks this queue until answered. nil queue: the block runs on the
+        // HAL's real-time I/O thread.
         var procID: AudioDeviceIOProcID?
-        status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, ioQueue,
-                                                    Self.makeIOBlock(packetizer: packetizer, layout: layout))
+        status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil,
+                                                    Self.makeIOBlock(packetizer: request.packetizer, layout: layout))
         guard status == noErr, let procID else { return fail("ioproc_create", status) }
         r.procID = procID
 
+        // The prompt may have been open for a long time: start (and mute the Mac) only if still wanted.
+        guard isWanted(streamID) else {
+            teardown(r)
+            run = nil
+            logger.log(.info, "audio_capture_cancelled", sessionID: 0, generation: 0, fields: "stream_id=\(streamID)")
+            return
+        }
         status = AudioDeviceStart(aggregateID, procID)
         guard status == noErr else { return fail("device_start", status) }
 
         installListeners(r)
         logger.log(.info, "audio_capture_started", sessionID: 0, generation: 0,
-                   fields: "stream_id=\(streamID) layout=\(layout) buffer_frames=\(Self.bufferFrameSize(aggregateID))")
-        events(.started(streamID: streamID))
+                   fields: "stream_id=\(streamID) layout=\(layout) buffer_frames=\(Self.bufferFrameSize(aggregateID)) "
+                       + "rate=\(Int(r.nominalRate))")
+        request.events(.started(streamID: streamID))
     }
 
     /// Releases everything `r` holds, in the order the HAL requires. Idempotent.
@@ -208,6 +248,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     // MARK: Listeners (queue)
 
+    /// Each handler compares against the state at build time, so a notification that changes nothing does not
+    /// trigger a rebuild (and cannot loop).
     private func installListeners(_ r: Run) {
         let system = AudioObjectID(kAudioObjectSystemObject)
         addListener(r, system, kAudioHardwarePropertyDefaultOutputDevice) { [weak self, weak r] in
@@ -222,6 +264,17 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             guard let self, let r, !Self.isAlive(r.aggregateID) else { return }
             interrupt(r, reason: "aggregate_dead")
         }
+        addListener(r, r.aggregateID, kAudioDevicePropertyNominalSampleRate) { [weak self, weak r] in
+            guard let self, let r, Self.nominalRate(r.aggregateID) != r.nominalRate else { return }
+            interrupt(r, reason: "format_changed")
+        }
+        addListener(r, r.tapID, kAudioTapPropertyFormat) { [weak self, weak r] in
+            guard let self, let r else { return }
+            let now = Self.tapFormat(r.tapID)
+            guard now?.mSampleRate != r.format.mSampleRate || now?.mChannelsPerFrame != r.format.mChannelsPerFrame
+                || now?.mFormatFlags != r.format.mFormatFlags else { return }
+            interrupt(r, reason: "format_changed")
+        }
     }
 
     private func addListener(_ r: Run, _ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
@@ -230,6 +283,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
         if AudioObjectAddPropertyListenerBlock(object, &address, queue, block) == noErr {
             r.listeners.append((object, address, block))
+        } else {
+            logger.log(.warning, "audio_listener_refused", sessionID: 0, generation: 0, fields: "selector=\(selector)")
         }
     }
 
@@ -276,6 +331,12 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     // MARK: Core Audio property helpers
 
+    private static func isSupported(_ format: AudioStreamBasicDescription) -> Bool {
+        let isFloat32 = format.mFormatFlags & kAudioFormatFlagIsFloat != 0 && format.mBitsPerChannel == 32
+        return format.mSampleRate == Double(AudioStreamPolicy.sampleRate)
+            && format.mChannelsPerFrame == UInt32(AudioStreamPolicy.channels) && isFloat32
+    }
+
     private static func address(_ selector: AudioObjectPropertySelector,
                                 _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal)
         -> AudioObjectPropertyAddress {
@@ -303,12 +364,19 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         u32(device, kAudioDevicePropertyBufferFrameSize) ?? 0
     }
 
+    private static func nominalRate(_ device: AudioObjectID) -> Double? {
+        var address = address(kAudioDevicePropertyNominalSampleRate)
+        var value: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr ? value : nil
+    }
+
     private static func deviceUID(_ device: AudioObjectID) -> String? {
         var address = address(kAudioDevicePropertyDeviceUID)
         var value: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
-        return value?.takeRetainedValue() as String?
+        return value?.takeRetainedValue() as String?  // documented: the caller releases the UID string
     }
 
     /// This process's audio object, excluded from the tap (nil when the HAL has none for it yet).
@@ -340,23 +408,5 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return [] }
         let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
         return list.map { Int($0.mNumberChannels) }
-    }
-
-    private static func tapList() -> [AudioObjectID] {
-        var address = address(kAudioHardwarePropertyTapList)
-        var size: UInt32 = 0
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
-        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return [] }
-        return Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
-    }
-
-    private static func tapName(_ tap: AudioObjectID) -> String? {
-        var address = address(kAudioTapPropertyDescription)
-        var value: Unmanaged<CATapDescription>?
-        var size = UInt32(MemoryLayout<Unmanaged<CATapDescription>?>.size)
-        guard AudioObjectGetPropertyData(tap, &address, 0, nil, &size, &value) == noErr else { return nil }
-        return value?.takeRetainedValue().name
     }
 }

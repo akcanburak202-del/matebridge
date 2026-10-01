@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import MateBridgeCore
 
@@ -54,10 +55,16 @@ import Testing
 
     // MARK: Ring
 
-    /// Publishes `count` packets of `frames` frames whose samples all equal the packet's sample index (mod 30000).
-    private static func publish(_ ring: AudioPacketRing, count: Int, startIndex: UInt64 = 0) {
+    /// Tries to publish `count` packets whose samples all equal the packet's attempt index (mod 30000). Returns how
+    /// many the ring refused (slot held by the consumer).
+    @discardableResult
+    private static func publish(_ ring: AudioPacketRing, count: Int, startIndex: UInt64 = 0) -> Int {
+        var refused = 0
         for k in 0..<count {
-            let slot = ring.producerSlot()
+            guard let slot = ring.beginWrite() else {
+                refused += 1
+                continue
+            }
             let index = startIndex + UInt64(k)
             slot.meta.pointee.sampleIndex = index
             slot.meta.pointee.hostTime = 1000 + index
@@ -68,6 +75,7 @@ import Testing
             }
             ring.publish()
         }
+        return refused
     }
 
     @Test func ringReturnsPacketsInOrder() {
@@ -98,7 +106,7 @@ import Testing
 
     @Test func ringSurvivesProducerLappingTheConsumer() {
         let ring = AudioPacketRing(capacity: 16, framesPerPacket: 4)
-        Self.publish(ring, count: 40)  // overwrote every slot more than twice
+        Self.publish(ring, count: 40)  // reused every slot more than twice
         let r = ring.next(maxPending: 10)
         #expect(r.dropped == 30)
         #expect(r.packet?.meta.sampleIndex == 30)
@@ -107,23 +115,61 @@ import Testing
 
     @Test func ringPartialPacketCarriesOnlyItsFrames() {
         let ring = AudioPacketRing(capacity: 4, framesPerPacket: 8)
-        let slot = ring.producerSlot()
+        let slot = ring.beginWrite()!
         slot.meta.pointee.frameCount = 3
         ring.publish()
         #expect(ring.next(maxPending: 2).packet?.data.count == 12)
     }
 
-    /// A real producer thread against a consumer: every returned packet is internally consistent (no torn copies)
-    /// and indices only grow.
-    @Test func ringConcurrentReadsAreNeverTorn() async {
+    /// The producer never writes a slot the consumer holds: it drops that (newest) packet and retries the slot next time.
+    @Test func producerSkipsTheSlotTheConsumerHolds() {
+        let ring = AudioPacketRing(capacity: 4, framesPerPacket: 2)
+        Self.publish(ring, count: 1)  // index 0 in slot 0
+        #expect(ring.claim(0))
+        #expect(Self.publish(ring, count: 3, startIndex: 1) == 0)  // slots 1...3 are free
+        #expect(ring.beginWrite() == nil)  // index 4 would reuse slot 0 while it is being copied
+        #expect(ring.publishedCount == 4)
+        #expect(ring.takeProducerDrops() == 1)
+        #expect(ring.takeProducerDrops() == 0)
+        ring.release()
+        #expect(Self.publish(ring, count: 1, startIndex: 4) == 0)
+        #expect(ring.publishedCount == 5)
+    }
+
+    /// The consumer never copies a slot the producer is (re)filling: that index is old and counted dropped.
+    @Test func consumerGivesUpASlotTheProducerIsReusing() {
+        let ring = AudioPacketRing(capacity: 4, framesPerPacket: 2)
+        Self.publish(ring, count: 4)  // indices 0...3
+        #expect(ring.beginWrite() != nil)  // the producer starts index 4 in slot 0, not yet published
+        #expect(!ring.claim(0))
+        #expect(ring.claim(1))  // slot 1 still holds index 1
+        ring.release()
+        let r = ring.next(maxPending: 3)
+        #expect(r.dropped == 1)  // index 0: maxPending 3 skips it before any claim
+        #expect(r.packet?.meta.sampleIndex == 1)
+    }
+
+    final class Flag: Sendable {
+        let done = Atomic<Bool>(false)
+        let refused = Atomic<Int>(0)
+    }
+
+    /// A real producer thread against a consumer: every returned packet is internally consistent, indices only grow,
+    /// and every attempted packet is accounted for (received, dropped by the consumer, or refused by the producer).
+    @Test func ringConcurrentProducerAndConsumerNeverShareASlot() async {
         let ring = AudioPacketRing(capacity: 16, framesPerPacket: 32)
         let total = 20_000
-        let producer = Thread { Self.publish(ring, count: total) }
+        let flag = Flag()
+        let producer = Thread {
+            flag.refused.store(Self.publish(ring, count: total), ordering: .relaxed)
+            flag.done.store(true, ordering: .releasing)
+        }
         producer.start()
         var lastIndex: Int64 = -1
         var received = 0
         var dropped = 0
         while true {
+            let finished = flag.done.load(ordering: .acquiring)
             let r = ring.next(maxPending: 10)
             dropped += r.dropped
             if let p = r.packet {
@@ -134,12 +180,28 @@ import Testing
                 #expect((0..<(p.data.count / 2)).allSatisfy { le16(p.data, $0) == v })
                 #expect(UInt64(v) == p.meta.sampleIndex % 30000)
                 lastIndex = Int64(p.meta.sampleIndex)
-            } else if ring.publishedCount == UInt64(total) {
-                if ring.next(maxPending: 10).packet == nil { break }
+            } else if finished {
+                break
             }
         }
-        #expect(received + dropped <= total)
+        let refused = flag.refused.load(ordering: .relaxed)
+        #expect(received + dropped + refused == total)
+        #expect(ring.takeProducerDrops() == refused)
         #expect(received > 0)
+    }
+
+    @Test func packetizerDropsThePacketWhoseSlotIsHeld() {
+        let ring = AudioPacketRing(capacity: 2, framesPerPacket: 480)
+        let p = AudioPacketizer(ring: ring)
+        ingest(p, frames: 480, value: 0, hostTime: 0, sampleTime: nil)  // index 0, slot 0
+        #expect(ring.claim(0))
+        ingest(p, frames: 480, value: 0, hostTime: 0, sampleTime: nil)  // slot 1
+        ingest(p, frames: 480, value: 0, hostTime: 0, sampleTime: nil)  // slot 0 held: dropped
+        ring.release()
+        ingest(p, frames: 480, value: 0, hostTime: 0, sampleTime: nil)  // slot 0 again
+        #expect(ring.publishedCount == 3)
+        #expect(ring.takeProducerDrops() == 1)
+        #expect(ring.next(maxPending: 1).packet?.meta.sampleIndex == 1440)  // 960...1439 lost: a gap
     }
 
     // MARK: Packetizer

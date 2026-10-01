@@ -6,6 +6,8 @@
 ///   (the HAL skipped frames), the partial packet is published as is and the index advances by the gap, so the
 ///   client hears silence for exactly the missing time.
 /// - A packet's time is the host time of the callback that delivered its first frame plus that frame's offset.
+/// - If the ring refuses the slot (the consumer is copying it), this packet's frames are counted but not written and
+///   the packet is not published: the newest audio is dropped and the client sees a `sample_index` gap.
 public final class AudioPacketizer: @unchecked Sendable {
     public let ring: AudioPacketRing
 
@@ -30,7 +32,7 @@ public final class AudioPacketizer: @unchecked Sendable {
             if let expected = expectedSampleTime {
                 let gap = (sampleTime - expected).rounded()
                 if gap >= 1, gap < 1e12 {
-                    if fill > 0 { publishCurrent() }
+                    if fill > 0 { finishPacket() }
                     nextSampleIndex &+= UInt64(gap)
                 }
             }
@@ -41,12 +43,14 @@ public final class AudioPacketizer: @unchecked Sendable {
         while offset < frames {
             if fill == 0 { beginPacket(hostTime: hostTime, offset: offset) }
             let n = min(frames - offset, perPacket - fill)
-            let squares = PCMConvert.convertStereo(source, offset: offset, frames: n, into: slotData! + fill * 4)
-            slotMeta!.pointee.sumSquares += squares
+            if let slotData, let slotMeta {
+                slotMeta.pointee.sumSquares += PCMConvert.convertStereo(source, offset: offset, frames: n,
+                                                                       into: slotData + fill * 4)
+            }
             fill += n
             offset += n
             nextSampleIndex &+= UInt64(n)
-            if fill == perPacket { publishCurrent() }
+            if fill == perPacket { finishPacket() }
         }
     }
 
@@ -55,8 +59,9 @@ public final class AudioPacketizer: @unchecked Sendable {
         pendingCallbackMaxTicks = max(pendingCallbackMaxTicks, ticks)
     }
 
+    /// Takes the next slot; without one (the consumer holds it) the packet's frames are skipped.
     private func beginPacket(hostTime: UInt64, offset: Int) {
-        let slot = ring.producerSlot()
+        guard let slot = ring.beginWrite() else { return }
         slotData = slot.data
         slotMeta = slot.meta
         slot.meta.pointee.sampleIndex = nextSampleIndex
@@ -67,11 +72,14 @@ public final class AudioPacketizer: @unchecked Sendable {
         slot.meta.pointee.callbackMaxTicks = 0
     }
 
-    private func publishCurrent() {
-        slotMeta!.pointee.frameCount = UInt32(fill)
-        slotMeta!.pointee.callbackMaxTicks = pendingCallbackMaxTicks
-        pendingCallbackMaxTicks = 0
-        ring.publish()
+    /// Publishes the current packet (if it had a slot) and starts over.
+    private func finishPacket() {
+        if let slotMeta {
+            slotMeta.pointee.frameCount = UInt32(fill)
+            slotMeta.pointee.callbackMaxTicks = pendingCallbackMaxTicks
+            pendingCallbackMaxTicks = 0
+            ring.publish()
+        }
         fill = 0
         slotData = nil
         slotMeta = nil

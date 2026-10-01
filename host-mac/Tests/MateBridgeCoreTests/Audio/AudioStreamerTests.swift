@@ -72,6 +72,7 @@ import Testing
         init(disabled: Bool = false) {
             var options = AudioStreamer.Options()
             options.drainInterval = nil
+            options.retryDelay = .milliseconds(5)
             let box = self.box
             // 1 tick = 1 us keeps the arithmetic readable.
             streamer = AudioStreamer(backend: backend, disabled: disabled,
@@ -195,7 +196,25 @@ import Testing
         h.started(2)
         h.feed(2, packets: 1)
         h.streamer.drainNow()
-        #expect(h.sink.summary == ["cfg+1", "f1#0@0", "f1#1@480", "cfg+2", "f2#0@0"])
+        #expect(h.sink.summary == ["cfg+1", "f1#0@0", "f1#1@480", "cfg-1", "cfg+2", "f2#0@0"])
+    }
+
+    @Test func failedRebuildIsRetriedAfterTheDelay() async throws {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.started(1)
+        h.backend.emit(.interrupted(streamID: 1, reason: "wake"), for: 1)
+        h.streamer.sync()
+        h.backend.emit(.failed(streamID: 2, reason: "aggregate_create", status: -1), for: 2)
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2", "stop 2"])
+        for _ in 0..<200 where h.backend.calls.count < 5 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2", "stop 2", "start 3"])
+        h.started(3)
+        #expect(h.sink.summary == ["cfg+1", "cfg-1", "cfg+3"])
+        #expect(!h.box.logs.contains { $0.contains("audio_unavailable") })
     }
 
     @Test func backlogOverHundredMsDropsOldest() {

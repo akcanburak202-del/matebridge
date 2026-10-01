@@ -51,6 +51,8 @@ public final class AudioStreamer: @unchecked Sendable {
         /// nil: no timer (tests drive `drainNow`).
         public var drainInterval: DispatchTimeInterval? = .milliseconds(5)
         public var statsIntervalUs: UInt64 = 1_000_000
+        /// Overrides the policy's rebuild retry delay (tests). nil: the policy's delay.
+        public var retryDelay: DispatchTimeInterval?
         public init() {}
     }
 
@@ -179,6 +181,12 @@ public final class AudioStreamer: @unchecked Sendable {
                     startTimer()
                 }
                 sink?.sendAudio(sessionID: sessionID, .audioConfig(config))
+            case .scheduleRetry(let token, let delayUs):
+                let delay = options.retryDelay ?? .microseconds(Int(clamping: delayUs))
+                queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    perform(policy.retryDue(token: token))
+                }
             case .log(let level, let ev, let fields):
                 log(level, ev, logSessionID, fields)
             }
@@ -214,6 +222,7 @@ public final class AudioStreamer: @unchecked Sendable {
     private func drain() {
         guard var s = stream, s.live, let sink else { return }
         let ring = s.packetizer.ring
+        stats.addDropped(ring.takeProducerDrops())
         for _ in 0..<(options.maxPendingPackets + 2) {
             let read = ring.next(maxPending: options.maxPendingPackets)
             stats.addDropped(read.dropped)

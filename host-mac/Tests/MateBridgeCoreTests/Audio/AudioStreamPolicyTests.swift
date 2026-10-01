@@ -146,13 +146,64 @@ import Testing
         #expect(nonLog(actions) == [.stopCapture(streamID: 1), .send(sessionID: 7, .stopped(streamID: 1))])
     }
 
-    @Test func interruptionRebuildsAsANewStream() {
+    @Test func interruptionSendsStoppedThenRebuildsAsANewStream() {
         var p = running()
         let actions = p.captureInterrupted(streamID: 1, reason: "default_output_changed")
-        #expect(nonLog(actions) == [.stopCapture(streamID: 1), .startCapture(streamID: 2)])
+        #expect(nonLog(actions) == [.stopCapture(streamID: 1), .send(sessionID: 7, .stopped(streamID: 1)),
+                                    .startCapture(streamID: 2)])
         #expect(logs(actions) == ["audio_rebuild reason=default_output_changed stream_id=1"])
         #expect(nonLog(p.captureStarted(streamID: 2)) == [.send(sessionID: 7, AudioStreamPolicy.startedConfig(streamID: 2))])
         #expect(p.captureInterrupted(streamID: 1, reason: "stale") == [])
+    }
+
+    @Test func interruptionWhileStartingSendsNoStopped() {
+        var p = AudioStreamPolicy(disabled: false)
+        _ = p.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        _ = p.prefs(sessionID: 7, enabled: true)
+        #expect(nonLog(p.captureInterrupted(streamID: 1, reason: "wake")) == [.stopCapture(streamID: 1),
+                                                                             .startCapture(streamID: 2)])
+    }
+
+    @Test func failedRebuildRetriesTwiceASecondApartThenGivesUp() {
+        var p = running()
+        _ = p.captureInterrupted(streamID: 1, reason: "wake")  // starts stream 2
+        let first = p.captureFailed(streamID: 2, reason: "aggregate_create", status: -1)
+        #expect(nonLog(first) == [.stopCapture(streamID: 2), .scheduleRetry(token: 1, delayUs: 1_000_000)])
+        #expect(!logs(first).contains { $0.hasPrefix("audio_unavailable") })
+        #expect(nonLog(p.retryDue(token: 1)) == [.startCapture(streamID: 3)])
+        #expect(nonLog(p.captureFailed(streamID: 3, reason: "aggregate_create", status: -1))
+            == [.stopCapture(streamID: 3), .scheduleRetry(token: 2, delayUs: 1_000_000)])
+        #expect(p.retryDue(token: 1) == [])  // stale timer
+        #expect(nonLog(p.retryDue(token: 2)) == [.startCapture(streamID: 4)])
+        let last = p.captureFailed(streamID: 4, reason: "aggregate_create", status: -1)
+        #expect(nonLog(last) == [.stopCapture(streamID: 4)])
+        #expect(logs(last) == ["audio_unavailable reason=aggregate_create status=-1 stream_id=4"])
+        #expect(nonLog(p.prefs(sessionID: 7, enabled: true)) == [])  // failed for good (until re-enabled)
+    }
+
+    @Test func successfulRebuildResetsRetries() {
+        var p = running()
+        _ = p.captureInterrupted(streamID: 1, reason: "wake")
+        _ = p.captureFailed(streamID: 2, reason: "x", status: 1)
+        _ = p.retryDue(token: 1)
+        _ = p.captureStarted(streamID: 3)
+        // A later failure of a fresh start (not a rebuild) is final at once.
+        _ = p.prefs(sessionID: 7, enabled: false)
+        _ = p.prefs(sessionID: 7, enabled: true)  // stream 4
+        #expect(nonLog(p.captureFailed(streamID: 4, reason: "x", status: 1)) == [.stopCapture(streamID: 4)])
+    }
+
+    @Test func disableOrSessionEndDuringRetryWaitCancelsIt() {
+        var p = running()
+        _ = p.captureInterrupted(streamID: 1, reason: "wake")
+        _ = p.captureFailed(streamID: 2, reason: "x", status: 1)
+        #expect(p.prefs(sessionID: 7, enabled: false) == [])  // STOPPED already went out at the interruption
+        #expect(p.retryDue(token: 1) == [])
+        var q = running()
+        _ = q.captureInterrupted(streamID: 1, reason: "wake")
+        _ = q.captureFailed(streamID: 2, reason: "x", status: 1)
+        #expect(nonLog(q.sessionEnded()) == [])
+        #expect(q.retryDue(token: 1) == [])
     }
 
     @Test func streamIDsSkipZeroOnWrap() {

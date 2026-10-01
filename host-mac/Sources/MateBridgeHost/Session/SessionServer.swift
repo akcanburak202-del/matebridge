@@ -239,6 +239,8 @@ public final class SessionServer: @unchecked Sendable {
     private var activeControl: ConnectionID?
     /// AUDIO_FRAMEs dropped because the control connection was backed up; read by the audio streamer.
     private let audioWireDrops = Atomic<Int>(0)
+    /// AUDIO_FRAMEs handed to `sendAudio` whose block has not run on `queue` yet (bounded by `maxQueuedAudioFrames`).
+    private let queuedAudioFrames = Atomic<Int>(0)
     private var stopped = false
     private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
@@ -252,9 +254,15 @@ public final class SessionServer: @unchecked Sendable {
     private let flushGroup = DispatchGroup()
 
     static let maxInflightBytes = 256 * 1024
-    /// Unsent control bytes above which AUDIO_FRAMEs are dropped (about 120 ms of audio): audio never pushes the
-    /// connection to `maxInflightBytes`, and never queues far behind input-related sends (PROTOCOL.md 5).
-    static let audioBacklogBytes = 24 * 1024
+    /// Sealed size of one 10 ms AUDIO_FRAME: record length (4) + type and tag (17) + fixed part (28) + 1920 PCM bytes.
+    static let sealedAudioFrameBytes = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize
+        + Int(AudioStreamPolicy.framesPerPacket) * Int(AudioStreamPolicy.channels) * 2
+    /// 100 ms of audio (PROTOCOL.md 5), about 19.2 KiB. An AUDIO_FRAME that would take the unsent control bytes above
+    /// this is dropped: audio never pushes the connection to `maxInflightBytes` or queues far behind other sends.
+    static let audioBacklogBytes = 10 * sealedAudioFrameBytes
+    /// AUDIO_FRAMEs waiting for the session queue: 10 = 100 ms. Beyond that the newest is dropped before enqueueing,
+    /// so a busy session queue never collects an unbounded audio backlog.
+    static let maxQueuedAudioFrames = 10
     static let maxUnauthenticated = 4
     static let maxVideoHandshakePayload = 1024
     /// T-088 experiment knobs, read once.
@@ -509,16 +517,31 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Audio (T-094): `AUDIO_CONFIG` and `AUDIO_FRAME` to the active session's control connection. Ignored for an
-    /// ended session. An `AUDIO_FRAME` is dropped (counted) while more than `audioBacklogBytes` are unsent; an
-    /// `AUDIO_CONFIG` is always sent. Sealing runs on the session queue (a few microseconds per 10 ms packet); the bytes
-    /// go out H->C and never hold up input, which arrives C->H.
+    /// ended session. `AUDIO_CONFIG` is always sent. An `AUDIO_FRAME` is dropped (counted in `takeAudioWireDrops`)
+    /// when `maxQueuedAudioFrames` are already waiting for the session queue (checked before enqueueing), or when it
+    /// would take the unsent bytes of the connection above `audioBacklogBytes`. Sealing runs on the session queue (a few
+    /// microseconds per 10 ms packet); the bytes go out H->C and never hold up input, which arrives C->H.
     public func sendAudio(sessionID: UInt32, _ message: Message) {
-        queue.async { [self] in
-            guard !stopped, sessionID != 0, sessionID == currentSessionID, let id = activeControl,
-                  sealers[id] != nil else { return }
-            if case .audioFrame = message, inflightBytes[id, default: 0] > Self.audioBacklogBytes {
+        let isFrame: Bool
+        if case .audioFrame = message { isFrame = true } else { isFrame = false }
+        if isFrame {
+            let queued = queuedAudioFrames.add(1, ordering: .relaxed).newValue
+            guard queued <= Self.maxQueuedAudioFrames else {
+                queuedAudioFrames.subtract(1, ordering: .relaxed)
                 audioWireDrops.add(1, ordering: .relaxed)
                 return
+            }
+        }
+        queue.async { [self] in
+            if isFrame { queuedAudioFrames.subtract(1, ordering: .relaxed) }
+            guard !stopped, sessionID != 0, sessionID == currentSessionID, let id = activeControl,
+                  sealers[id] != nil else { return }
+            if case .audioFrame(let frame) = message {
+                let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
+                guard inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes else {
+                    audioWireDrops.add(1, ordering: .relaxed)
+                    return
+                }
             }
             sendControl(id, message)
         }
