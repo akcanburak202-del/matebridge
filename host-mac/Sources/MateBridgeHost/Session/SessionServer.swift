@@ -21,10 +21,13 @@ public final class VideoLink: @unchecked Sendable {
     private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
     private var sealer: RecordSealer
+    /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
+    private let sendQueue: SendQueueSampler?
 
     fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection, logger: SessionLogger,
-                     sealer: RecordSealer) {
+                     sealer: RecordSealer, sampleSendQueue: Bool) {
         self.sealer = sealer
+        self.sendQueue = sampleSendQueue ? SendQueueSampler(connection: connection) : nil
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
@@ -48,6 +51,9 @@ public final class VideoLink: @unchecked Sendable {
     @discardableResult
     public func send(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
         let message = Message.videoFrame(frame)
+        // The backlog this frame will queue behind (T-088). Outside `lock`: the probe may query the NWConnection,
+        // whose queue runs the send completions that take `lock`.
+        if let sendQueue, canSend { sendQueue.sample() }
         // Sealing and the write happen under one lock: record counters must reach the wire in counter order.
         lock.lock()
         guard inFlight < Self.maxInFlight else { lock.unlock(); return false }
@@ -80,6 +86,9 @@ public final class VideoLink: @unchecked Sendable {
     }
 
     public func cancel() { connection.cancel() }
+
+    /// Closes the send-queue window (about once a second). nil when sampling is off or there is nothing to report.
+    func sendQueueReport() -> SendQueueSampler.Report? { sendQueue?.take() }
 }
 
 public enum SessionServerState: Equatable, Sendable {
@@ -171,6 +180,9 @@ public final class SessionServer: @unchecked Sendable {
     static let maxInflightBytes = 256 * 1024
     static let maxUnauthenticated = 4
     static let maxVideoHandshakePayload = 1024
+    /// T-088 experiment knobs, read once.
+    static let serviceClass = ServiceClassKnob.parse(ProcessInfo.processInfo.environment)
+    static let sampleSendQueue = SendQueueLogKnob.isEnabled(ProcessInfo.processInfo.environment)
 
     /// - Parameters:
     ///   - controlPort: preferred control port (default 47001, for `adb reverse`); falls back to a system-assigned
@@ -232,7 +244,8 @@ public final class SessionServer: @unchecked Sendable {
         let fixed = plan.lastWasPreferred
         let nextPlan = plan
         do {
-            let video = try NWListener(using: Self.tcpParameters(), on: Self.endpointPort(port))
+            let video = try NWListener(using: Self.tcpParameters(serviceClass: Self.serviceClass.videoClass),
+                                       on: Self.endpointPort(port))
             video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
             video.stateUpdateHandler = { [weak self, weak video] s in
                 guard let self, let video, video === videoListener else { return }
@@ -416,10 +429,22 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Listeners
 
-    private static func tcpParameters() -> NWParameters {
+    /// TCP with Nagle off. Accepted connections inherit the listener's parameters, so a service class set here applies
+    /// to every connection of that listener (T-088; nil leaves the default, `.bestEffort`).
+    private static func tcpParameters(serviceClass: TrafficClass?) -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
-        return NWParameters(tls: nil, tcp: tcp)
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        if let serviceClass { parameters.serviceClass = Self.networkServiceClass(serviceClass) }
+        return parameters
+    }
+
+    private static func networkServiceClass(_ c: TrafficClass) -> NWParameters.ServiceClass {
+        switch c {
+        case .interactiveVideo: return .interactiveVideo
+        case .interactiveVoice: return .interactiveVoice
+        case .responsiveData: return .responsiveData
+        }
     }
 
     private func videoListenerState(_ s: NWListener.State) {
@@ -447,7 +472,8 @@ public final class SessionServer: @unchecked Sendable {
         let fixed = plan.lastWasPreferred
         let nextPlan = plan
         do {
-            let listener = try NWListener(using: Self.tcpParameters(), on: Self.endpointPort(port))
+            let listener = try NWListener(using: Self.tcpParameters(serviceClass: Self.serviceClass.controlClass),
+                                          on: Self.endpointPort(port))
             listener.service = NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType,
                                                   domain: nil, txtRecord: NWTXTRecord(["v": "1"]))
             listener.newConnectionHandler = { [weak self] c in self?.accept(c, video: false) }
@@ -457,7 +483,8 @@ public final class SessionServer: @unchecked Sendable {
                 case .ready:
                     restartAttempts = 0
                     logger.log(.info, "listening", sessionID: 0, generation: 0,
-                               fields: "control_port=\(listener.port?.rawValue ?? 0) video_port=\(videoPort)")
+                               fields: "control_port=\(listener.port?.rawValue ?? 0) video_port=\(videoPort) "
+                                   + Self.serviceClass.logFields)
                     if case .starting = state { setState(.listening) }
                 case .failed:
                     if fixed {
@@ -546,9 +573,13 @@ public final class SessionServer: @unchecked Sendable {
         inbounds[id]!.append(bytes)
         do {
             while let message = try inbounds[id]?.nextMessage() {
-                if case .hello = message, inbounds[id]?.bufferedPlaintextCount != 0 {
-                    // Bytes behind HELLO would be read as plaintext: a client sends nothing before HELLO_ACK.
-                    throw ProtocolError.invalidField("bytes after HELLO")
+                if case .hello(let hello) = message {
+                    if inbounds[id]?.bufferedPlaintextCount != 0 {
+                        // Bytes behind HELLO would be read as plaintext: a client sends nothing before HELLO_ACK.
+                        throw ProtocolError.invalidField("bytes after HELLO")
+                    }
+                    // Before the machine sees the HELLO: it may ask for the STREAM_CONFIG while handling it (T-088).
+                    SessionTransportBoard.shared.record(Self.transport(of: controlConnections[id]), for: hello.deviceID)
                 }
                 apply(machine.received(id, message, now: nowUs()))
                 if inbounds[id] == nil { return false }  // the message ended this connection
@@ -809,6 +840,7 @@ public final class SessionServer: @unchecked Sendable {
                 }
             case .sessionStarted(let id, let sid, let configID, let hello):
                 activeTransport = Self.transport(of: controlConnections[id])
+                SessionTransportBoard.shared.record(activeTransport, for: hello.deviceID)
                 currentSessionID = sid
                 currentConfigID = configID
                 handlers.sessionStarted(sid, configID, hello)
@@ -820,14 +852,16 @@ public final class SessionServer: @unchecked Sendable {
                 if let c = videoConnections[vid] {
                     let sealer = RecordSealer(key: keys.h2c, maxPayload: ProtocolConstants.maxVideoPayload)
                     let link = VideoLink(sessionID: sid, configID: configID, connection: c, logger: logger,
-                                         sealer: sealer)
+                                         sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
                     videoLinks[vid] = link
                     handlers.videoAttached(link)
                 }
             case .log(let level, let ev, let conn, let fields):
                 let extra = conn.map { "conn=\($0.raw)" } ?? ""
+                // The machine does not know peer addresses; `.sessionStarted` (just before) set `activeTransport`.
+                let transport = ev == "session_started" ? "transport=\(activeTransport.logName)" : ""
                 logger.log(level, ev, sessionID: currentSessionID, generation: currentConfigID,
-                           fields: [extra, fields].filter { !$0.isEmpty }.joined(separator: " "))
+                           fields: [extra, fields, transport].filter { !$0.isEmpty }.joined(separator: " "))
             }
         }
         refreshState()

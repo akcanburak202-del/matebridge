@@ -15,7 +15,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private enum Event: Sendable {
         case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?,
-                          base: VideoSettings?)
+                          base: VideoSettings?, transport: SessionTransport?)
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
@@ -42,6 +42,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         var settings: VideoSettings
         /// Settings derived from the HELLO and the experiment knobs, before any `STREAM_PREFS`.
         var base: VideoSettings
+        /// USB or Wi-Fi (T-088); nil when the session server recorded none.
+        var transport: SessionTransport?
     }
 
     /// Menu text for the video/stats line ("" = nothing to show). Called on an arbitrary queue.
@@ -144,15 +146,18 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// the device's remembered `STREAM_PREFS` on top, so a reconnect starts in the last chosen mode). Pure apart from
     /// reading the store: nothing is remembered here, so a HELLO that never becomes a session (an unproven reconnect)
     /// cannot change the settings of the live one.
-    private func settings(for hello: Hello) -> (base: VideoSettings, initial: VideoSettings) {
+    private func settings(for hello: Hello) -> (base: VideoSettings, initial: VideoSettings, transport: SessionTransport?) {
         // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
-        // MATEBRIDGE_FRAME_DELAY=0|1; T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS.
+        // MATEBRIDGE_FRAME_DELAY=0|1; T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS;
+        // T-088: MATEBRIDGE_WIFI_BITRATE_KBPS on a Wi-Fi session (the env bitrate still wins).
         let env = ProcessInfo.processInfo.environment
-        let base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
+        let transport = SessionTransportBoard.shared.transport(for: hello.deviceID)
+        var base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
+        if let transport { base = base.applyingTransportKnobs(env, transport: transport) }
         let initial = VideoSettings.initialSettings(
             defaults: base, stored: prefsStore.load(device: hello.deviceID),
             defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
-        return (base, initial)
+        return (base, initial, transport)
     }
 
     /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Side-effect free (apart from
@@ -169,9 +174,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello) {
         liveSessionLock.withLock { liveSessionID = sessionID }
-        let (base, initial) = settings(for: hello)
+        let (base, initial, transport) = settings(for: hello)
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
-                             settings: initial, base: base))
+                             settings: initial, base: base, transport: transport))
     }
 
     public func sessionEnded() {
@@ -223,8 +228,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         switch event {
-        case .sessionStarted(let sid, let cid, let device, let settings, let base):
-            await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings, base: base)
+        case .sessionStarted(let sid, let cid, let device, let settings, let base, let transport):
+            await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings, base: base,
+                                   transport: transport)
         case .sessionEnded:
             await onSessionEnded()
         case .videoAttached(let link):
@@ -256,7 +262,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
-                                  settings: VideoSettings?, base: VideoSettings?) async {
+                                  settings: VideoSettings?, base: VideoSettings?, transport: SessionTransport?) async {
         guard let device, let settings, let base else {
             log(.error, "session_without_config")
             return
@@ -264,11 +270,12 @@ public final class StreamCoordinator: @unchecked Sendable {
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
         session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
-                                base: base)
+                                base: base, transport: transport)
         prefsGate = StreamPrefsGate()
         resetDisplayRate()
         log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
-            + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) codec=\(settings.codec.logName)")
+            + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) codec=\(settings.codec.logName) "
+            + "transport=\(transport?.logName ?? "unknown")")
         await perform(lease.sessionStarted(device: device, settings: settings))
     }
 
@@ -413,7 +420,22 @@ public final class StreamCoordinator: @unchecked Sendable {
             videoLogger.log(.info, "latency", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
                             fields: lat.logFields)
         }
+        reportSendQueue()
         publishSummary()
+    }
+
+    /// T-088: the video connection's kernel send queue, RTT and retransmits of the last second (`ev=sendq`), only
+    /// while `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
+    private func reportSendQueue() {
+        guard case .sender(_, _, let link) = consumer, let report = link.sendQueueReport() else { return }
+        let sid = session?.sessionID ?? 0, gen = session?.configID ?? 0
+        switch report {
+        case .window(let w):
+            videoLogger.log(.info, "sendq", sessionID: sid, generation: gen,
+                            fields: w.logFields + " transport=\(session?.transport?.logName ?? "unknown")")
+        case .unavailable(let reason):
+            videoLogger.log(.warning, "sendq_unavailable", sessionID: sid, generation: gen, fields: "reason=\(reason)")
+        }
     }
 
     private func publishSummary() {
