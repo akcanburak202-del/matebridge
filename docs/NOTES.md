@@ -387,3 +387,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Sapmanın kaynağı (`MB/render` 60 Hz sürekli): yakalama→varış p50 16,6 ms (kodlama 6,8 ms), p95 ~18 ms, bazı saniyelerde p99 **40–44 ms** (USB/adb tüneli ya da host gönderim kuyruğu); çözme p50 10, p95 13 ms. Sonraki adım: host'ta yakalama→gönderim zamanlarını ayrıştırmak; yakalama→varışın kodlama dışındaki ~10 ms'si ve p99 sıçramaları.
 - Ayrıca SF ile planlanan arasında fark olabilir (son an 13,33 ms ile 6 ms; `deadline_us` taraması kullanıcı boştayken yapılmalı).
 - **120 Hz izi (kullanıcı kalemle çizdi, `trace2.csv`, 11 759 kare):** kilit sağlıklı — `locked` 11 584, geç %1,5, `rephase` 6, hazır→slot p50 **17,1 ms**, sürekli bölümde planlanan boşluk %0,7. 11:07 taramasındaki "120 Hz kilit kayması" büyük olasılıkla taramanın yeniden başlatmalarından/kullanıcı içeriğinden (doğrulanmadı, ama gerçek kullanımda görülmüyor). Simülasyon: son an 13,3 ms ile ~18 ms / %0,4; **son an 6 ms ile q=0,98 → ~10,5 ms / %0,7**. Yani gerçek mandal süresi ~6 ms ise çizimde ~7 ms kazanç; SF ile `deadline_us=6000` doğrulaması gerekli (çizim sırasında).
+
+## 2026-10-01 ~12:00 — 6 ms son an varsayılan (T-071), kullanıcı geri bildirimi
+
+- Kurulum (host e9b5d87 + APK): `presentation_deadline_ns=13333333`, `effective_deadline_ns=6000000`.
+- Kullanıcı: çizim akıcı, harfler hemen görünüyor. Safari'de YouTube oynarken imleç hareketsizse fps ~30'a iniyor, imleç oynayınca artıyor → host içerik güdümlü yakalıyor; video 30 fps ise beklenen davranış (önceki gözlem: `cap_fps=30`, `cap_int 33,3 ms` tam). 60 fps videoda da 30 kalıyorsa ayrı sorun.
+- AppGallery kurulum sonrası öneri sayfası (`InstallDistActivity`, `downbtn` indirme düğmeleri) `install.sh` döngüsünü bekletti; hiçbir şeye dokunulmadı, `am start` ile MateBridge öne alındı.
