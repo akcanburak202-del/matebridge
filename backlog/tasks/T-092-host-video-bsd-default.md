@@ -1,7 +1,7 @@
 ---
 id: T-092
 title: Mac — video soketi varsayılanı `bsd` (T-091 ölçümü: Wi-Fi 372 → ~40 ms, yeniden gönderim 0)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-091]
