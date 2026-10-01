@@ -371,3 +371,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Cihaz (host + tablet `main` a35f802, Performans 120, panel 60 boşta): scratch `blinker` + `sparse.py` (Mac'te 40 pt kare renk değiştirir, tablette `screencap` pikseli): ani 5'li dizi (100–600 ms) 12/12, 8 ms arayla iki renk 12/12, 2–4 s bekleme sonrası tek değişiklik 6/6 doğru. Eski yapılarda taban 16/16. Host sürekli akışta `decimated=60 deferred=0`.
 - 60 Hz akıcılık (`anim` 120 Hz, SF `--latency`, 12–14 sn pencereler): ≥25 ms boşluk %2,6 / 2,9 / 5,7 / 7,3 / 7,7; eski yapı (98b325e + bdf52f0) %5,1; gece `main` %2,4–4,6. Gerileme görülmedi; pencereler arası fark `late_drops` (0–4/sn) ile değişiyor → Mac/tablet saat kayması açık konusu. 120 Hz ölçülmedi (dokunma enjeksiyonu Mac'e girdi gönderir; kullanıcı aktif).
 - T-063 (pano tablet → Mac): orkestratörün "saat tabanı" teşhisi yanlıştı (`ClipDescription.getTimestamp()` AOSP'de `currentTimeMillis`). Tanı logu (`MB/clipboard diag=check`, içeriksiz) kuruldu; kullanıcının tek kopya denemesi bekleniyor.
+
+## 2026-10-01 ~11:05 — Mac iki kez ani kapanma (uyku değil)
+
+- `pmset -g log` / `log show`: sistem günlüğü **05:59:29**'da ve **10:29:43**'te kapanma sırası olmadan aniden kesiliyor; açılışlar 07:37 ve 10:56:57. Panik raporu yok (`/Library/Logs/DiagnosticReports`), `PMRD: No sleep wake failure string`, uyku girdisi yok (`sleep 0`, MateBridge `PreventUserIdleSystemSleep` tutuyor). Görünüm: **elektrik kesintisi ya da donanım düzeyinde ani kapanma**; yazılım kaynaklı donma genelde watchdog panik raporu bırakır. `autorestart 0` olduğu için Mac güç dönünce kendiliğinden açılmıyor (2026-09-29'da bilinçli kapatılmıştı).
+- 10:29:43'ten hemen önce son satırlar: `adb` EXC_GUARD uyarıları (zararsız, sık) ve Wi-Fi sayaçları; MateBridge host normal `ev=stats` yazıyordu.
+- Yan etki: `/private/tmp` silindi (scratch araçları). Ölçüm araçları artık `~/.cache/matebridge-tools/` (tick, sweep.py, install.sh).
