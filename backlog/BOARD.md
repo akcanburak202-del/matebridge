@@ -9,6 +9,15 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-082](tasks/T-082-h264-vs-hevc-decode.md) | Deney — H.264 ile HEVC karşılaştırması (tablette çözme süresi, kalite, uçtan uca gecikme) | 5 | orchestrator | [T-077] |
+| [T-083](tasks/T-083-capture-vsync-phase.md) | Araştırma — Mac yakalama fazını tablet vsync'ine hizalamak (ortalama ~4 ms bekleme kazancı) | 5 | orchestrator | [T-071] |
+| [T-084](tasks/T-084-surfacecontrol-presentation.md) | Deney — SurfaceControl/ASurfaceControl ile doğrudan sunum (HarmonyOS'ta compositor gecikmesi) | 5 | orchestrator | [T-071] |
+| [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
+
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
