@@ -1,7 +1,7 @@
 ---
 id: T-093
 title: Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

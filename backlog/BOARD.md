@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-093](tasks/T-093-audio-protocol-codecs.md) | Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM | 5 | mac-host-dev | [] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -116,3 +110,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-090](tasks/T-090-client-net-bench.md) | Tablet — ham ağ hızı ölçüm kipi (`--es net_bench host:port`), Wi-Fi kapasitesini uygulamadan bağımsız ölçmek için | 5 | android-client-dev | [T-089] |
 | [T-091](tasks/T-091-host-video-bsd-socket.md) | Mac — video bağlantısını çekirdek TCP soketine taşı (NWConnection kullanıcı alanı yığını Wi-Fi'de %4 yeniden gönderim) + TCP_NOTSENT_LOWAT | 5 | mac-host-dev | [T-088] |
 | [T-092](tasks/T-092-host-video-bsd-default.md) | Mac — video soketi varsayılanı `bsd` (T-091 ölçümü: Wi-Fi 372 → ~40 ms, yeniden gönderim 0) | 5 | mac-host-dev | [T-091] |
+| [T-093](tasks/T-093-audio-protocol-codecs.md) | Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM | 5 | mac-host-dev | [] |
