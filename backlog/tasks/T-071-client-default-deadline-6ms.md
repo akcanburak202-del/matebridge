@@ -40,7 +40,7 @@ Cihaz A/B (2026-10-01 11:40, kullanıcı kalemle çizdi, panel 120 Hz, aynı otu
 
 ## Handoff
 
-- **Commit:** SHA_PLACEHOLDER
+- **Commit:** a1d3f52
 - **Dokunulan dosyalar:** video/FramePacer.kt (VsyncClock), MainActivity.kt, PresentationSchedulingTest.kt, NewestFrameShownTest.kt, bu kart
 - **Varsayımlar:** Varsayılan = min(6 ms, P-1 ms); `deadline_us` ekstrası yoksa varsayılan, `-1` cihaz değeri, N>=0 açık değer. `ev=display_timing` artık `presentation_deadline_ns` (cihaz), `effective_deadline_ns` ve `deadline_override` (-2 varsayılan, -1 cihaz, >=0 us*1000 ns) loglar; eski `deadline_override_us` alanı kaldırıldı.
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Ekstrasız başlatmada log `effective_deadline_ns=6000000` (120 Hz) göstermeli; `--ei deadline_us -1` ile 13,33 ms (P'ye kırpılı) görülmeli; SF `--latency` 120 Hz'de ~%99,7 / 8,3 ms. 60 Hz doğrulaması kapsam dışı.
