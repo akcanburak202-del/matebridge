@@ -1,7 +1,7 @@
 ---
 id: T-104
 title: Ayarlar paneli protokolü kod çözücüleri (Swift + Kotlin) — STREAM_PREFS.bitrate_kbps, SETTINGS_OPEN (0x08), HELLO bit9
-status: in-progress
+status: review
 phase: 4
 owner: mac-host-dev
 depends_on: []
@@ -26,15 +26,15 @@ Burada yalnızca iki tarafın kod çözücüleri ve fixture testleri yapılır. 
 
 ## Kabul kriterleri
 
-- [ ] Swift ve Kotlin `StreamPrefs` tiplerine `bitrateKbps` (u32, varsayılan 0) eklenir; encode/decode PROTOCOL.md ile birebir. Bugün bu alanı gönderen kod `0` gönderir (davranış değişmez).
-- [ ] `SettingsOpen` mesajı (0x08, `reserved u32`) iki tarafta encode/decode:
+- [x] Swift ve Kotlin `StreamPrefs` tiplerine `bitrateKbps` (u32, varsayılan 0) eklenir; encode/decode PROTOCOL.md ile birebir. Bugün bu alanı gönderen kod `0` gönderir (davranış değişmez).
+- [x] `SettingsOpen` mesajı (0x08, `reserved u32`) iki tarafta encode/decode:
   - Swift'te gönderim için encode API;
   - Kotlin'de decode edilip üst katmana olay olarak iletilir ya da şimdilik yok sayılır (davranış T-105'te).
   - Kısa payload protokol hatası, fazlası yok sayılır (§2).
-- [ ] `Capabilities` bit9 `SETTINGS_PANEL` sabiti iki tarafta. Kotlin istemci bu biti **henüz göndermez** (T-105'te açılır).
-- [ ] Swift `SessionMachine` (ya da eşdeğeri) exhaustive switch'lerde yeni case'i ele alır. Yanlış yönden gelen `SETTINGS_OPEN` yok sayılır.
-- [ ] Fixture testleri: `stream_prefs`, `stream_prefs_bitrate`, `settings_open` iki tarafta kapsanır. "Her fixture'ın testi var" testleri geçer.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `Capabilities` bit9 `SETTINGS_PANEL` sabiti iki tarafta. Kotlin istemci bu biti **henüz göndermez** (T-105'te açılır).
+- [x] Swift `SessionMachine` (ya da eşdeğeri) exhaustive switch'lerde yeni case'i ele alır. Yanlış yönden gelen `SETTINGS_OPEN` yok sayılır.
+- [x] Fixture testleri: `stream_prefs`, `stream_prefs_bitrate`, `settings_open` iki tarafta kapsanır. "Her fixture'ın testi var" testleri geçer.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -62,3 +62,23 @@ Burada yalnızca iki tarafın kod çözücüleri ve fixture testleri yapılır. 
 **Doğrulama:** `./scripts/check.sh`.
 
 ## Handoff
+
+- **Commit:** `2ce01c6` (kod + testler), plan `8b83aa5`; dal `task/T-104-settings-protocol` (orkestratörün `f9e682f` commit'i üstünde).
+- **check.sh:** geçti (host-mac build+test 584 Swift Testing testi + XCTest, probes, client-android assembleDebug+testDebugUnitTest, fixtures `--check`, crypto vectors).
+- **Dokunulan dosyalar:**
+  - Swift: `host-mac/Sources/MateBridgeCore/{ProtocolConstants,Messages,Message}.swift`, `Session/SessionMachine.swift`, `Input/InputStateMachine.swift`; testler `host-mac/Tests/MateBridgeCoreTests/{FixtureTests,CodecTests,Session/SessionMachineTests}.swift`.
+  - Kotlin: `client-android/app/src/main/kotlin/dev/matebridge/client/protocol/{Messages,Codec}.kt`; testler `client-android/app/src/test/kotlin/dev/matebridge/client/protocol/{FixtureTest,CodecRulesTest}.kt`.
+- **API:**
+  - Swift: `StreamPrefs(fps:scalePermille:bitrateKbps: UInt32 = 0)`, `SettingsOpen()`, `Message.settingsOpen(SettingsOpen)`, `MessageType.settingsOpen = 0x08`, `Capabilities.settingsPanel`. Gönderim T-106'da mevcut `SessionMachine.send(sessionID:_:)` yoluyla yapılabilir (`.send(conn, .settingsOpen(SettingsOpen()))`).
+  - Kotlin: `StreamPrefs(fps, scalePermille, bitrateKbps: Long = 0)`, `data object SettingsOpen : Message`, `MsgType.SETTINGS_OPEN`, `Capabilities.SETTINGS_PANEL`.
+- **Varsayımlar:**
+  - Swift `StreamPrefs.normalized` bit hızını **ham haliyle korur** (sıkıştırma 5000–150000 ve uygulama T-106'da). Host `applying(_:)` bit hızını henüz okumuyor, davranış değişmedi.
+  - `StreamPrefs` eşitliği artık bit hızını da içeriyor. Bugün tüm göndericiler `0` yolladığı için gate/coordinator davranışı aynı.
+  - Kotlin istemci `SETTINGS_OPEN`'ı decode ediyor; `session/SessionMachine.onMessage` `else -> Unit` ile yok sayıyor (kart kapsamı dışı dosya, değişmedi; T-105 ele alacak).
+  - Kotlin istemci bit9'u göndermiyor (`MainActivity` capability listesi değişmedi).
+- **Test edilmeyenler:** cihaz ya da gerçek oturum testi yok (gerekmiyor; davranış değişikliği yok).
+- **T-106 için not:** `MateBridgeHost/Session/UserDefaultsStreamPrefsStore.swift` yalnızca `[fps, scale]` saklıyor; bit hızını hatırlamak için T-106'da genişletilmeli. `StreamCoordinator` `stream_prefs` log'u bit hızını yazmıyor.
+
+### Open questions
+
+- Yok.
