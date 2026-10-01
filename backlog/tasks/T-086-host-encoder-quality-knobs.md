@@ -1,7 +1,7 @@
 ---
 id: T-086
 title: Mac — kodlayıcı deney düğmeleri (H.264, bit hızı, kalite), boşta kalite tazeleme ve keskinlik ölçümü (T-082/T-085)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-082, T-085]
