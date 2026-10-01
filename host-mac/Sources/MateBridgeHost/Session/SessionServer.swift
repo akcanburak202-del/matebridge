@@ -93,6 +93,9 @@ public final class VideoLink: @unchecked Sendable {
             return true
         case .busy:
             return false
+        case .writeRefused:  // the transport already cancelled the connection; the completion reports false
+            logger.log(.warning, "video_write_refused", sessionID: sessionID, generation: configID)
+            return false
         case .invalid:
             logger.log(.warning, "video_frame_refused", sessionID: sessionID, generation: configID,
                        fields: "reason=invalid_or_oversized")

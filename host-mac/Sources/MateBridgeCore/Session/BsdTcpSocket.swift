@@ -23,13 +23,25 @@ public struct BsdTcpOptions: Equatable, Sendable {
     public var notSentLowatBytes: Int?
     /// `SO_NET_SERVICE_TYPE` (best effort, like `NWParameters.serviceClass`). nil: unset.
     public var serviceClass: TrafficClass?
+    /// Bound of the user-space write queue (records the kernel has not fully taken yet): a `write` that would exceed
+    /// either limit is refused (`completion(false)`, the connection stays open). The video sender keeps at most one
+    /// record queued, so it never reaches these; they stop a misbehaving caller from queueing without bound.
+    public var maxPendingRecords: Int
+    /// Defaults to one maximum-size video record (16 MiB payload) plus room for record overhead.
+    public var maxPendingBytes: Int
+
+    public static let defaultMaxPendingRecords = 4
+    public static let defaultMaxPendingBytes = ProtocolConstants.maxVideoPayload + 64 * 1024
 
     public init(noDelay: Bool = true, keepAlive: Bool = false, notSentLowatBytes: Int? = nil,
-                serviceClass: TrafficClass? = nil) {
+                serviceClass: TrafficClass? = nil, maxPendingRecords: Int = BsdTcpOptions.defaultMaxPendingRecords,
+                maxPendingBytes: Int = BsdTcpOptions.defaultMaxPendingBytes) {
         self.noDelay = noDelay
         self.keepAlive = keepAlive
         self.notSentLowatBytes = notSentLowatBytes
         self.serviceClass = serviceClass
+        self.maxPendingRecords = maxPendingRecords
+        self.maxPendingBytes = maxPendingBytes
     }
 
     /// The `NET_SERVICE_TYPE_*` value of a traffic class (the same classes `NWParameters.ServiceClass` names).
@@ -100,7 +112,7 @@ public final class BsdTcpListener: @unchecked Sendable {
     private var handler: (@Sendable (Event) -> Void)?
 
     /// Creates, binds and listens. Throws `BsdSocketError` (e.g. `bind` with `EADDRINUSE`); nothing stays open then.
-    public init(port: UInt16, bind address: BindAddress = .any, backlog: Int32 = 16, options: BsdTcpOptions,
+    public init(port: UInt16, bind address: BindAddress = .any, backlog: Int32 = SOMAXCONN, options: BsdTcpOptions,
                 queue: DispatchQueue) throws {
         let fd = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP)
         guard fd >= 0 else { throw BsdSocketError("socket", errno) }
@@ -235,7 +247,8 @@ public final class BsdTcpListener: @unchecked Sendable {
 /// - Writing: `write` queues one record and writes as much as the kernel takes right away; the rest is written from a
 ///   `DispatchSourceWrite` on a private serial queue (armed only while needed). A record is completed (`true`) when
 ///   its last byte was accepted by the kernel, or failed (`false`) when the connection closed first. Completions run
-///   on the private queue, in order, never inside `write`.
+///   on the private queue, in order, never inside `write`. The queue is bounded (`BsdTcpOptions.maxPendingRecords` /
+///   `maxPendingBytes`): a record beyond either limit is refused whole (`write` returns false, `completion(false)`).
 /// - Closing (`cancel`, end of stream, error): both sources are cancelled and the descriptor is closed exactly once,
 ///   after both cancel handlers ran. `onClosed` runs once, on the owner's queue.
 ///
@@ -253,6 +266,8 @@ public final class BsdTcpConnection: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fd: Int32
+    private let maxPendingRecords: Int
+    private let maxPendingBytes: Int
     private var fdClosed = false
     private var cancelled = false
     private var started = false
@@ -290,11 +305,13 @@ public final class BsdTcpConnection: @unchecked Sendable {
             close(fd)
             return .failure(BsdSocketError("adopt", EINVAL))
         }
-        return .success(BsdTcpConnection(fd: fd))
+        return .success(BsdTcpConnection(fd: fd, options: options))
     }
 
-    private init(fd: Int32) {
+    private init(fd: Int32, options: BsdTcpOptions) {
         self.fd = fd
+        maxPendingRecords = options.maxPendingRecords
+        maxPendingBytes = options.maxPendingBytes
         let peer = Self.address(fd, getpeername)
         peerHost = peer?.host
         remotePort = peer?.port
@@ -356,12 +373,20 @@ public final class BsdTcpConnection: @unchecked Sendable {
     }
 
     /// Queues one record. `completion(true)` once all of it was accepted by the kernel, `completion(false)` if the
-    /// connection closed first (including when it is already closed). Called exactly once, on the write queue.
-    public func write(_ bytes: [UInt8], completion: @escaping Completion) {
+    /// connection closed first (including when it is already closed) or the record was refused. Called exactly once,
+    /// on the write queue, never inside `write`.
+    ///
+    /// Returns false when the record was refused and nothing of it was queued: the connection is closed, or queueing
+    /// it would exceed `maxPendingRecords` / `maxPendingBytes` (bounded queue; the connection stays open and the
+    /// caller decides, e.g. drop the frame).
+    @discardableResult
+    public func write(_ bytes: [UInt8], completion: @escaping Completion) -> Bool {
         var done: [Completion] = []
         var failure: Int32?
         let accepted: Bool = lock.withLock {
-            guard !cancelled else { return false }
+            guard !cancelled,
+                  outbound.admits(byteCount: bytes.count, maxRecords: maxPendingRecords, maxBytes: maxPendingBytes)
+            else { return false }
             outbound.append(bytes, token: completion)
             let (outcome, completed) = drainLocked()
             done = completed
@@ -374,10 +399,11 @@ public final class BsdTcpConnection: @unchecked Sendable {
         }
         guard accepted else {
             writeQueue.async { completion(false) }
-            return
+            return false
         }
         complete(done, true)
         if failure != nil { cancel() }
+        return true
     }
 
     /// Bytes queued in user space and not yet handed to the kernel.

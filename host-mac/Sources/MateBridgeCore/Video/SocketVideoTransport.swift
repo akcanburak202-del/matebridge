@@ -21,8 +21,12 @@ public enum SocketVideoGate {
 public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
     public enum SendOutcome: Equatable, Sendable {
         case sent
-        /// A record is still being written: nothing was sent.
+        /// A record is still being written, or the kernel holds at least `TCP_NOTSENT_LOWAT` unsent bytes: nothing was
+        /// sealed or sent (the same gate as `canSend`, enforced here too).
         case busy
+        /// The connection refused the sealed record (closed, or its write queue is full). Its record counter is used up,
+        /// so the stream cannot continue: the connection was cancelled and `completion(false)` follows.
+        case writeRefused
         /// Not a valid single-fragment VIDEO_FRAME within the payload limit: nothing was sent.
         case invalid
         /// The sealer failed (e.g. the record counter is exhausted): nothing was sent, the connection cannot continue.
@@ -64,7 +68,11 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
         let message = Message.videoFrame(frame)
         lock.lock()
         defer { lock.unlock() }
-        guard inFlight < SocketVideoGate.maxRecordsInFlight else { return .busy }
+        // The full gate, before sealing: a refused frame must not use up a record counter. The socket check takes the
+        // connection's lock inside ours (the same order as `write` below).
+        guard inFlight < SocketVideoGate.maxRecordsInFlight,  // skip the socket check while a record is queued
+              SocketVideoGate.canSend(recordsInFlight: inFlight, socketBelowLowat: connection.isWritableForNewRecord)
+        else { return .busy }
         let bytes: [UInt8]
         do {
             bytes = try message.sealed(using: &sealer)
@@ -75,7 +83,7 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
         }
         inFlight += 1
         // Never calls back inside `write`, so holding `lock` here cannot deadlock.
-        connection.write(bytes) { [weak self] ok in
+        let queued = connection.write(bytes) { [weak self] ok in
             guard let self else { return completion(ok) }
             let ready = lock.withLock {
                 inFlight -= 1
@@ -83,6 +91,11 @@ public final class SocketVideoTransport: VideoTransport, @unchecked Sendable {
             }
             completion(ok)
             ready?()
+        }
+        guard queued else {
+            // The sealed record never reaches the wire: the tablet would see a counter gap. End the connection.
+            connection.cancel()
+            return .writeRefused
         }
         return .sent
     }

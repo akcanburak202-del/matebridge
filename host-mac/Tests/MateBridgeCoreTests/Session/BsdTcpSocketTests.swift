@@ -183,20 +183,7 @@ final class BsdTcpSocketTests: XCTestCase {
         XCTAssertEqual(reader.done.wait(timeout: .now() + 5), .success)
         let (bytes, eof) = reader.result
         XCTAssertTrue(eof)
-        var records = RecordDecoder(key: key, connection: .video)
-        var got: [VideoFrame] = []
-        var offset = 0
-        while offset < bytes.count {  // the decoder takes at most one read chunk per append, like the tablet
-            let end = min(bytes.count, offset + FrameDecoder.maxReadChunk)
-            records.append(Array(bytes[offset..<end]))
-            offset = end
-            while let m = try records.nextMessage() {
-                guard case .videoFrame(let f) = m else { return XCTFail("unexpected \(m)") }
-                got.append(f)
-            }
-        }
-        XCTAssertEqual(got, frames, "every record decrypts in counter order, nothing interleaved")
-        XCTAssertEqual(records.bufferedCount, 0)
+        XCTAssertEqual(try decodeFrames(bytes), frames, "every record decrypts in counter order, nothing interleaved")
         XCTAssertEqual(server.closedSignal.wait(timeout: .now() + 5), .success)
 
         // After close: a write fails (asynchronously), canSend lets a writer find out, close is not reported again.
@@ -250,6 +237,75 @@ final class BsdTcpSocketTests: XCTestCase {
         XCTAssertLessThanOrEqual(wakes.value, 3, "the write source is suspended again, not spinning")
         c.cancel()
         _ = reader.done.wait(timeout: .now() + 5)
+        server.listener.cancel()
+    }
+
+    /// `sendFrame` enforces the same gate as `canSend` (review P2-1): above the mark it refuses before sealing, so no
+    /// record counter is used up and the stream stays decodable.
+    func testSendFrameEnforcesTheGateWithoutUsingACounter() throws {
+        let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 16 * 1024))
+        let client = connectClient(port: server.listener.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        let c = try XCTUnwrap(server.waitAccepted())
+        let t = SocketVideoTransport(connection: c, sealer: RecordSealer(key: key,
+                                                                           maxPayload: ProtocolConstants.maxVideoPayload))
+        let done = DispatchSemaphore(value: 0)
+        var sent: [VideoFrame] = []
+        while t.canSend, sent.count < 2000 {
+            let f = frame(UInt32(sent.count), size: 8 * 1024)
+            XCTAssertEqual(t.sendFrame(f) { _ in done.signal() }, .sent)
+            XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+            sent.append(f)
+        }
+        XCTAssertEqual(c.pendingBytes, 0, "the kernel gate is closed, not our own buffer")
+        let refused = LockedResults()
+        XCTAssertEqual(t.sendFrame(frame(9999, size: 8 * 1024)) { ok in refused.add(ok) }, .busy,
+                       "above TCP_NOTSENT_LOWAT nothing is sent, even without asking canSend first")
+        XCTAssertFalse(t.send(frame(9998, size: 100), completion: { ok in refused.add(ok) }))
+
+        let reader = Reader(fd: client)
+        XCTAssertTrue(waitCanSend(t))
+        let last = frame(UInt32(sent.count), size: 500)
+        XCTAssertEqual(t.sendFrame(last) { _ in done.signal() }, .sent)
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success)
+        sent.append(last)
+        c.cancel()
+        XCTAssertEqual(reader.done.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(try decodeFrames(reader.result.bytes), sent, "no counter gap: every record decrypts")
+        XCTAssertEqual(refused.values, [], "a refused frame has no completion")
+        server.listener.cancel()
+    }
+
+    /// The write queue is bounded (review P2-2): a record beyond the byte or record limit is refused whole, its
+    /// completion reports false, and the connection stays usable.
+    func testWriteQueueIsBounded() throws {
+        let server = try Server(options: BsdTcpOptions(maxPendingRecords: 2, maxPendingBytes: 8 * 1024 * 1024))
+        let client = connectClient(port: server.listener.port, receiveBuffer: 16 * 1024)
+        defer { close(client) }
+        let c = try XCTUnwrap(server.waitAccepted())
+        let results = LockedResults()
+        let completions = DispatchSemaphore(value: 0)
+        func write(_ n: Int, _ fill: UInt8) -> Bool {
+            c.write([UInt8](repeating: fill, count: n)) { ok in results.add(ok); completions.signal() }
+        }
+        XCTAssertTrue(write(4 * 1024 * 1024, 1))
+        XCTAssertGreaterThan(c.pendingBytes, 0, "the client is not reading: most of it waits in user space")
+        XCTAssertFalse(write(8 * 1024 * 1024, 2), "byte limit")
+        XCTAssertEqual(completions.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(results.values, [false])
+        XCTAssertTrue(write(1024, 3))
+        XCTAssertFalse(write(1, 4), "record limit")
+        XCTAssertEqual(completions.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(results.values, [false, false])
+
+        let reader = Reader(fd: client)
+        for _ in 0..<2 { XCTAssertEqual(completions.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(results.values, [false, false, true, true], "the accepted records still complete")
+        c.cancel()
+        XCTAssertEqual(reader.done.wait(timeout: .now() + 5), .success)
+        let bytes = reader.result.bytes
+        XCTAssertEqual(bytes.count, 4 * 1024 * 1024 + 1024, "refused records left no bytes on the wire")
+        XCTAssertEqual(Set(bytes), [1, 3])
         server.listener.cancel()
     }
 
@@ -375,6 +431,28 @@ final class BsdTcpSocketTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Decrypts a received video stream like the tablet: one read chunk per append, records in counter order.
+    /// Trailing bytes that do not form a whole record fail the test.
+    private func decodeFrames(_ bytes: [UInt8]) throws -> [VideoFrame] {
+        var records = RecordDecoder(key: key, connection: .video)
+        var got: [VideoFrame] = []
+        var offset = 0
+        while offset < bytes.count {
+            let end = min(bytes.count, offset + FrameDecoder.maxReadChunk)
+            records.append(Array(bytes[offset..<end]))
+            offset = end
+            while let m = try records.nextMessage() {
+                guard case .videoFrame(let f) = m else {
+                    XCTFail("unexpected \(m)")
+                    return got
+                }
+                got.append(f)
+            }
+        }
+        XCTAssertEqual(records.bufferedCount, 0, "no partial record left")
+        return got
+    }
 
     private func blockingWait(_ s: DispatchSemaphore, seconds: Double) -> DispatchTimeoutResult {
         s.wait(timeout: .now() + seconds)

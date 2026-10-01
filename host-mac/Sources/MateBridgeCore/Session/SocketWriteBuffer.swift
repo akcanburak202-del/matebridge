@@ -52,6 +52,11 @@ public struct SocketWriteBuffer<Token> {
     /// Bytes not yet written, over all records.
     public var pendingBytes: Int { records.reduce(0) { $0 + $1.bytes.count } - offset }
 
+    /// Bounded-queue admission: one more record of `byteCount` bytes keeps the buffer within both limits.
+    public func admits(byteCount: Int, maxRecords: Int, maxBytes: Int) -> Bool {
+        records.count < maxRecords && pendingBytes + byteCount <= maxBytes
+    }
+
     public mutating func append(_ bytes: [UInt8], token: Token) {
         records.append((bytes, token))
     }

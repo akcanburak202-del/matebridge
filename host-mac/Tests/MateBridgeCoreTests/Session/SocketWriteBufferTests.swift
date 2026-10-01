@@ -109,6 +109,20 @@ final class SocketWriteBufferTests: XCTestCase {
         }
     }
 
+    func testAdmissionIsBoundedByRecordsAndBytes() {
+        var b = Buffer()
+        XCTAssertTrue(b.admits(byteCount: 10, maxRecords: 2, maxBytes: 10), "exactly at the byte limit")
+        XCTAssertFalse(b.admits(byteCount: 11, maxRecords: 2, maxBytes: 10))
+        b.append([1, 2, 3, 4, 5, 6], token: "a")
+        _ = b.drain(write: Writer([.wrote(2), .wouldBlock]).write)  // 4 bytes of a still pending
+        XCTAssertEqual(b.pendingBytes, 4)
+        XCTAssertTrue(b.admits(byteCount: 6, maxRecords: 2, maxBytes: 10))
+        XCTAssertFalse(b.admits(byteCount: 7, maxRecords: 2, maxBytes: 10), "counts the unwritten tail, not the record")
+        b.append([7], token: "b")
+        XCTAssertFalse(b.admits(byteCount: 1, maxRecords: 2, maxBytes: 10), "record limit")
+        XCTAssertFalse(b.admits(byteCount: 0, maxRecords: 2, maxBytes: 10), "empty records count too")
+    }
+
     func testEmptyRecordCompletesWithoutWrite() {
         var b = Buffer()
         b.append([], token: "a")
