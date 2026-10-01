@@ -310,7 +310,7 @@ struct PlannerMouseTests {
         #expect(events == [mouseEvent(.moved, at: testGeometry.point(x: 500, y: 600))])
     }
 
-    @Test("PLAN-14 relative movement starts at the display center, is clamped to the display and reports its delta")
+    @Test("PLAN-14 relative movement starts at the display center, is clamped to the display and reports its raw delta (T-103)")
     func plan14_relative() {
         var p = InjectionPlanner()
         let first = planOnce(&p, [.mouseMove(.relative(dx: 10, dy: -5), dragging: nil)])
@@ -319,7 +319,9 @@ struct PlannerMouseTests {
         let second = planOnce(&p, [.mouseMove(.relative(dx: -100_000, dy: 100_000), dragging: nil)])
         guard case .mouse(let m) = second[0] else { Issue.record("expected a mouse event"); return }
         #expect(m.position == DisplayPoint(x: 100, y: 50 + 920 - 0.5))
-        #expect(m.deltaX == 100 - (c.x + 10))
+        // The delta is the client's raw movement, never the clamped difference (games read it at the edge too).
+        #expect(m.deltaX == -100_000)
+        #expect(m.deltaY == 100_000)
     }
 
     @Test("PLAN-15 double click: clicks close in time and place count up, and an up repeats its down's count")

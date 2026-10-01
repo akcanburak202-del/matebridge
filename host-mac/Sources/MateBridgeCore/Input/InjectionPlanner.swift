@@ -10,8 +10,12 @@
 ///   closed, whatever the environment says. An event that was never posted is never released, and one that was posted
 ///   is always released, at the last known position when the display is gone.
 /// - The injector owns what the state machine does not: the last injected cursor position (a `mouseButton` applies
-///   there), click counts, scroll remainders. Zero-delta `scroll(.changed)` (the client's keepalive) is never
-///   injected. Scroll momentum is never generated, so none follows a forced end and none is left to stop at release-all.
+///   there), click counts, scroll and relative-move remainders. Zero-delta `scroll(.changed)` (the client's
+///   keepalive) is never injected. Scroll momentum is never generated, so none follows a forced end and none is left
+///   to stop at release-all.
+/// - Relative pointer moves (T-103) start at the LIVE cursor when the Host sampled it (`environment.cursor`) and it is
+///   on the virtual display: games warp the cursor or detach it, and a model of our own drifts into invisible walls.
+///   Their `deltaX/Y` is the client's raw movement (never clamped); the position is still clamped to the display.
 public struct InjectionPlanner: Sendable {
     public struct Configuration: Equatable, Sendable {
         public var clicks = ClickCounter.Configuration()
@@ -54,6 +58,9 @@ public struct InjectionPlanner: Sendable {
     private var capsLockOn = false
     private var scrollCarryX = 0.0
     private var scrollCarryY = 0.0
+    /// Fractions of relative movement not yet reported in the whole-point `deltaX/Y`.
+    private var relCarryX = 0.0
+    private var relCarryY = 0.0
     private var clicks: ClickCounter
     /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
     private var display: DisplayGeometry?
@@ -78,6 +85,7 @@ public struct InjectionPlanner: Sendable {
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,
                               now: UInt64) -> [MacEvent] {
         display = env.geometry
+        adoptLiveCursor(env)
         var out: [MacEvent] = []
         for action in actions {
             let start = out.count
@@ -109,6 +117,8 @@ public struct InjectionPlanner: Sendable {
             out.append(.key(MacKey(kind: .modifierUp, keyCode: m.keyCode, flags: currentFlags)))
         }
         clicks.reset()
+        relCarryX = 0
+        relCarryY = 0
         counters.events += out.count
         return out
     }
@@ -208,10 +218,12 @@ public struct InjectionPlanner: Sendable {
                 target = g.point(x: x, y: y)
                 if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
             case .relative(let dx, let dy):
-                // A relative move needs a starting point; before any injected position that is the display center.
+                // Starts at the live cursor (adopted in `plan`), else the last known position, else the display
+                // center. The position is clamped; the delta is the raw movement, so there is no wall at the edge.
+                let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
                 let base = validCursor ?? g.center
-                target = g.moved(base, dx: Double(dx), dy: Double(dy))
-                delta = DisplayPoint(x: target.x - base.x, y: target.y - base.y)
+                target = g.moved(base, dx: fx, dy: fy)
+                delta = takeRelativeDelta(fx, fy)
             }
             // A drag only if that button's down was really posted; otherwise it is a plain move.
             let held = dragging.flatMap { heldButtons[$0] != nil ? $0 : nil }
@@ -450,6 +462,26 @@ public struct InjectionPlanner: Sendable {
         scrollCarryX = 0
         scrollCarryY = 0
         out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: resolved(cursor))))
+    }
+
+    /// T-103: the Host's live cursor sample becomes the cached cursor when it is on the virtual display and more than a
+    /// point away from it on either axis (the system may round the cursor; a closer sample is the position we put there,
+    /// whose fraction is kept). A sample on another display is ignored: input never lands there, so relative movement
+    /// goes on from the last known position on the virtual display (the cursor comes back to it, as before T-103).
+    private mutating func adoptLiveCursor(_ env: InjectionEnvironment) {
+        guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
+        if let c = cursor, g.contains(c), abs(c.x - live.x) < 1, abs(c.y - live.y) < 1 { return }
+        cursor = live
+    }
+
+    /// Whole points of a relative move for `deltaX/Y`, truncated toward zero; the remainder (always within (-1, 1))
+    /// is carried to the next move so slow movement is not lost.
+    private mutating func takeRelativeDelta(_ dx: Double, _ dy: Double) -> DisplayPoint {
+        let tx = relCarryX + dx, ty = relCarryY + dy
+        let wx = tx.rounded(.towardZero), wy = ty.rounded(.towardZero)
+        relCarryX = tx - wx
+        relCarryY = ty - wy
+        return DisplayPoint(x: Double(Self.pixels(wx)), y: Double(Self.pixels(wy)))
     }
 
     /// The cached cursor if it is still on the display of this call.

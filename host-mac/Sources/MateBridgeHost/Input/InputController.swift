@@ -31,6 +31,7 @@ public final class InputController: @unchecked Sendable {
     private let permission: AccessibilityChecking
     private let displays: DisplayProviding
     private let capsLock: CapsLockControlling
+    private let cursor: CursorLocating
     private let logger = SessionLogger(component: "input")
 
     // Everything below is touched only on `queue`.
@@ -50,17 +51,24 @@ public final class InputController: @unchecked Sendable {
     private var messages = 0
     private var eventsPosted = 0
     private var loggedDrops = InjectionPlanner.Counters()
+    /// Live cursor queries of this session (T-103): count, failures, total and slowest time.
+    private var cursorQueries = 0
+    private var cursorQueryFailures = 0
+    private var cursorQueryTotalNs: UInt64 = 0
+    private var cursorQueryMaxNs: UInt64 = 0
 
     /// - Parameters:
     ///   - doubleClickInterval: seconds; the system setting by default.
     public init(poster: MacEventPoster = CGEventPoster(), permission: AccessibilityChecking = SystemAccessibility(),
                 displays: DisplayProviding = VirtualDisplayLocator(),
                 capsLock: CapsLockControlling = SystemCapsLock(),
+                cursor: CursorLocating = SystemCursor(),
                 doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) {
         self.poster = poster
         self.permission = permission
         self.displays = displays
         self.capsLock = capsLock
+        self.cursor = cursor
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
@@ -92,6 +100,7 @@ public final class InputController: @unchecked Sendable {
             self.onStatusChange = onStatusChange
             lastStatus = nil  // a poll that ran before start() must not swallow the first report
             _ = environment()  // reports the first status
+            _ = cursor.location()  // the first query connects to WindowServer (milliseconds): not on the input path
         }
     }
 
@@ -114,6 +123,10 @@ public final class InputController: @unchecked Sendable {
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
+            cursorQueries = 0
+            cursorQueryFailures = 0
+            cursorQueryTotalNs = 0
+            cursorQueryMaxNs = 0
             beginActivity()
             // The user's key repeat settings as of now (System Settings > Keyboard), for this session's machine.
             var machine = pipeline.nextMachineConfiguration
@@ -142,6 +155,8 @@ public final class InputController: @unchecked Sendable {
                 "messages=\(messages) events=\(eventsPosted) released=\(events.count) "
                     + "key_msgs=\(keys.messages) unknown_keys=\(keys.unknown) repeats=\(keys.repeats) "
                     + "pinch_msgs=\(pinchMessages) "
+                    + "cursor_queries=\(cursorQueries) cursor_query_failed=\(cursorQueryFailures) "
+                    + "cursor_query_avg_us=\(cursorQueryAverageUs) cursor_query_max_us=\(cursorQueryMaxNs / 1_000) "
                     + "dropped_no_permission=\(d.droppedNoPermission - loggedDrops.droppedNoPermission) "
                     + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)")
             loggedDrops = d
@@ -168,6 +183,7 @@ public final class InputController: @unchecked Sendable {
                 env.capsLockOn = capsLock.isOn()  // sampled for keyboard messages only
                 unknownBefore = pipeline.machine?.keyCounters.unknown ?? 0
             }
+            if case .pointerRel = message { env.cursor = liveCursor() }  // relative moves start where the cursor is
             flush(pipeline.handle(message, now: now, environment: env), now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
             if let keys = pipeline.machine?.keyCounters, keys.unknown > unknownBefore {
@@ -223,6 +239,25 @@ public final class InputController: @unchecked Sendable {
     }
 
     // MARK: Queue-confined work
+
+    /// The live cursor for a relative move (T-103), timed. nil when the query fails: the planner then goes on from the
+    /// last known position. Never logged: only counts and times are.
+    private func liveCursor() -> DisplayPoint? {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let location = cursor.location()
+        let elapsed = DispatchTime.now().uptimeNanoseconds &- start
+        cursorQueries += 1
+        cursorQueryTotalNs &+= elapsed
+        cursorQueryMaxNs = max(cursorQueryMaxNs, elapsed)
+        if location == nil { cursorQueryFailures += 1 }
+        return location
+    }
+
+    /// Mean time of this session's live cursor queries, in microseconds with two decimals.
+    private var cursorQueryAverageUs: String {
+        guard cursorQueries > 0 else { return "0" }
+        return String(format: "%.2f", Double(cursorQueryTotalNs) / Double(cursorQueries) / 1_000)
+    }
 
     /// macOS has no explicit "off" value that could be confirmed here; the UI slider's far end and the `KeyRepeat` /
     /// `InitialKeyRepeat` defaults can be set to huge values that mean "off", which `NSEvent.keyRepeatDelay/Interval`

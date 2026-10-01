@@ -51,7 +51,9 @@ public struct MacMouse: Equatable, Sendable {
     /// The button of a down, up or drag; `.left` (ignored) for `moved`.
     public var button: MouseButton
     public var position: DisplayPoint
-    /// Movement since the previous injected position, clamped to the display.
+    /// `mouseEventDeltaX/Y`. Relative (`POINTER_REL`) moves: the client's raw movement in whole points (fractions are
+    /// carried to the next move), never clamped, so a game that reads deltas sees motion at the display edge too.
+    /// Absolute moves: the movement since the previous injected position, clamped to the display.
     public var deltaX: Double
     public var deltaY: Double
     /// Click count on down and up (an up repeats its down's), 0 otherwise.
@@ -174,12 +176,18 @@ public struct InjectionEnvironment: Equatable, Sendable {
     /// The Mac's Caps Lock state, sampled by the Host for keyboard messages; nil when not sampled (then no Caps Lock
     /// event is produced).
     public var capsLockOn: Bool?
+    /// The live cursor position (global points), sampled by the Host for relative pointer messages; nil when not
+    /// sampled or when the query failed (then the planner uses the last known position). Games warp the cursor or
+    /// detach it from the mouse, so a relative move starts where the cursor really is, not where it was last put.
+    public var cursor: DisplayPoint?
 
-    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil) {
+    public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil,
+                cursor: DisplayPoint? = nil) {
         self.canInject = canInject
         self.geometry = geometry
         self.opensBlocked = opensBlocked
         self.capsLockOn = capsLockOn
+        self.cursor = cursor
     }
 
     /// New input may start.
