@@ -1,7 +1,7 @@
 ---
 id: T-111
 title: Mac — kontrol bağlantısını (girdi, ses, kontrol mesajları) çekirdek TCP soketine taşı (T-091'in kontrol karşılığı)
-status: in_progress
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-091, T-092]
@@ -117,3 +117,63 @@ Test edilemeyen: `SessionServer` Host hedefinde (test hedefi yalnız Core'a bağ
 USB/Wi-Fi, kalem, ses, Bonjour keşfi orkestratörde.
 
 ## Handoff
+
+- **Commit:** `65a49e7` (uygulama), plan `dd061e3`; dal `task/T-111-host-control-bsd-socket` (taban `main` 8ff0d4a).
+  `./scripts/check.sh` → ALL OK (host-mac XCTest 266, swift-testing 609; yeni 13 test). Yeni testler + T-091 soket
+  testleri 5 kez art arda ve `--sanitize=thread` ile temiz geçti.
+- **Dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Session/TransportKnobs.swift`: `ControlSocketKnob` (`MATEBRIDGE_CONTROL_SOCKET`,
+    yok/boş/geçersiz → `bsd`, yalnız açık `nw` → eski yol; `logFields` `control_socket=bsd|nw`).
+  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift`: `BsdTcpConnection.finish(timeout:completion:)` (zarif
+    kapanış: yeni yazma reddedilir, kuyruk yazılır → `shutdown(SHUT_WR)` → `cancel`; bu sırada okunan bayt atılır;
+    zaman aşımında `cancel`; completion bir kez). Video yolu davranışı değişmedi (yalnız `finishing` bayrağı eklendi).
+  - yeni `host-mac/Sources/MateBridgeCore/Session/BonjourAdvertiser.swift`: dns_sd `DNSServiceRegister` (sistem
+    kütüphanesi, yeni bağımlılık değil). Ad 63 bayta UTF-8 sınırında kısaltılır, TXT `v=1`, ad çakışmasında
+    mDNSResponder kendisi yeniden adlandırır. `cancel` idempotent, ref sahibin kuyruğunda serbest bırakılır.
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`: `ControlListener`/`ControlConnection` enum'ları
+    (video kalıbı), `startSocketControlListener` (aynı port planı + `port_fallback`), `acceptControl`, Bonjour
+    kaydı/yeniden deneme, `closeControl` → `finish(2 sn)` + `flushGroup`, `sendControlBytes` → `write` (completion
+    `queue`'ya atlar, `inflightBytes`), ses kapısı `kernelAudioBacklog`, `transport(of:)` → `peerHost`,
+    `ev=listening … control_socket=…`.
+  - yeni `host-mac/Tests/MateBridgeCoreTests/Session/ControlSocketTests.swift`.
+  - `main.swift` değişmedi (düğme `SessionServer` içinde bir kez okunuyor, video düğmesi gibi).
+- **Seçilen soket seçenekleri (kontrol):** `TCP_NODELAY=1`; `SO_KEEPALIVE=0` (NW varsayılanı; canlılık protokol
+  heartbeat'i); `SO_NOSIGPIPE`, `O_NONBLOCK`, `FD_CLOEXEC`; `TCP_NOTSENT_LOWAT = audioBacklogBytes − sealedAudioFrameBytes`
+  = 17 721 B (9 mühürlü 10 ms ses paketi) → çekirdekte gönderilmemiş ses ≤ ~100 ms (§5), `write`'ı hiç engellemez
+  (BYE/CLIPBOARD/PONG her zaman gider; testte gösterildi); `SO_SNDBUF`/`SO_RCVBUF` çekirdek varsayılanı (gecikmeyi
+  belirleyen gönderilmemiş bayt eşiği zaten ayarlı; küçük SNDBUF büyük CLIPBOARD'da gereksiz `send_backlog` kapanışı
+  getirirdi); `SO_NET_SERVICE_TYPE` ← `MATEBRIDGE_SERVICE_CLASS` `controlClass`; kullanıcı alanı sınırı
+  `maxInflightBytes` (256 KiB, bugünkü `send_backlog` yolu).
+- **Kabul kriterleri:**
+  - Ortak katman: T-091 `BsdTcpListener`/`BsdTcpConnection`/`SocketWriteBuffer` aynen; kopya yok.
+  - Davranış: çerçeveleme/şifreleme/devralma/HELLO zaman aşımı/BYE `SessionMachine` + `receiveControlBytes` +
+    `apply` üzerinden iki tel için ortak, değişmedi. `accept` sınırı aynı. USB: dual-stack `[::]` dinleyici,
+    `::ffff:127.0.0.1` → `transport=usb` (testli).
+  - Release-all: EOF, yarım kapanma (`SHUT_WR`), RST (`SO_LINGER 0`) ve sahte kayıt yollarının hepsinde
+    `releaseInput` (testli, gerçek `SessionMachine` ile). Host kapanışında BYE(SHUTTING_DOWN) EOF'tan önce ulaşır.
+  - `ev=sendq`/`TcpSocketProbe` kontrol için **eklenmedi** (kart "gerekirse" diyor; ölçüm ihtiyacı doğarsa
+    `SendQueueSampler(socket:)` hazır).
+- **Varsayımlar / davranış farkları (`bsd`):**
+  - `onBytes` false (makine bağlantıyı kapatmadıysa) → `cancel` → release. NW'de bu durumda alım döngüsü sadece
+    duruyordu; burada bağlantı kapanıyor (daha güvenli, "takılı girdi yok").
+  - Zarif kapanış 2 sn içinde bitmezse kesilir; NW'de okumayan eş bağlantıyı süresiz tutabiliyordu. Kapanış
+    sırasında eş EOF/hata verirse kalan kullanıcı alanı baytları atılır.
+  - Bonjour hatası (kayıt anında veya sonradan, ör. mDNSResponder yeniden başlarsa) dinleyiciyi düşürmez, oturumları
+    kesmez: `ev=bonjour_failed code=… retry_s=…`, 1…30 sn geri çekilmeyle yeniden kayıt. Başarıda
+    `ev=bonjour_registered port=…` (ad loglanmaz). NW'nin bu durumdaki davranışı bilinmiyor.
+  - Ses kapısı: `poll(POLLOUT)` her ses paketinde bir sistem çağrısı (100/sn), ihmal edilebilir.
+- **Test EDİLMEDİ (cihaz/izin gerekir; host uygulaması başlatılmadı, çalışan oturuma dokunulmadı):**
+  - `SessionServer` `bsd` kontrol yolu uçtan uca (Host hedefi testten erişilemez; testteki `ControlHost` aynı
+    yönlendirmenin kopyası). `ev=listening … control_socket=bsd` satırı.
+  - Tabletin Bonjour ile Mac'i bulması (`_matebridge._tcp`, ad, TXT `v=1`, port); yalnız yerel (LocalOnly) kayıt +
+    browse testte doğrulandı. `nw` ile aynı adla görünmeli; port 47001 doluysa sistem portu yayınlanmalı.
+  - USB (`adb reverse`, IPv4 loopback) ve Wi-Fi'de bağlanma, onay/eşleme, devralma (ikinci tablet bağlantısı),
+    5 sn HELLO zaman aşımı, kablo/Wi-Fi kopunca release-all (kalem basılıyken), STREAM_PREFS sonrası video yeniden açma.
+  - Wi-Fi'de kalem öbeklenmesinin ve oyun modundaki 25–30 ms ses boşluklarının değişip değişmediği; `nettop -x`'te
+    kontrol bağlantısının `arch=so` görünmesi; ses düşme sayısı (`takeAudioWireDrops`) yük altında.
+  - `MATEBRIDGE_CONTROL_SOCKET=nw` geri dönüşünün cihazda eski gibi çalışması.
+
+### Open questions
+
+- `docs/LOGGING.md`'de `control_socket` / `bonjour_*` olayları belgelenmedi (dosya kart dışında; T-092'deki gibi).
+- Kalem öbeklenmesi bsd'de sürerse: Darwin'in ACK davranışı (`TCP_SENDMOREACKS`) ya da istemci tarafı ölçüm ayrı kart.
