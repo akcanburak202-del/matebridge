@@ -23,7 +23,47 @@ class InputHandoffTest {
         assertNull(q.awaitNext(0))
         val t0 = System.nanoTime()
         assertNull(q.awaitNext(20_000_000L))
-        assertTrue(System.nanoTime() - t0 >= 15_000_000L)
+        assertTrue(System.nanoTime() - t0 >= 20_000_000L) // lower bound only: a loaded machine may wait longer
+    }
+
+    // T-112: a permit left on the thread (e.g. by an AQS lock or a late unpark from offer) made parkNanos return at
+    // once, so awaitNext gave up long before its timeout.
+    @Test fun aStalePermitDoesNotCutTheWaitShort() {
+        val q = FrameQueue(VideoStats())
+        java.util.concurrent.locks.LockSupport.unpark(Thread.currentThread())
+        val t0 = System.nanoTime()
+        assertNull(q.awaitNext(20_000_000L))
+        assertTrue(System.nanoTime() - t0 >= 20_000_000L)
+    }
+
+    @Test fun spuriousWakeUpsWhileParkedDoNotCutTheWaitShort() {
+        val q = FrameQueue(VideoStats())
+        val waiting = CountDownLatch(1)
+        val elapsed = AtomicLong(-1)
+        val consumer = Thread {
+            waiting.countDown()
+            val t0 = System.nanoTime()
+            val f = q.awaitNext(100_000_000L)
+            if (f == null) elapsed.set(System.nanoTime() - t0)
+        }
+        consumer.start()
+        waiting.await()
+        while (consumer.isAlive) { // unparks with no frame queued: every one is a spurious wake-up for the consumer
+            java.util.concurrent.locks.LockSupport.unpark(consumer)
+            Thread.sleep(2)
+        }
+        assertTrue("returned after ${elapsed.get() / 1_000_000} ms", elapsed.get() >= 100_000_000L)
+    }
+
+    @Test fun anInterruptedConsumerGetsNullAndKeepsTheFlag() {
+        val q = FrameQueue(VideoStats())
+        Thread.currentThread().interrupt()
+        try {
+            assertNull(q.awaitNext(20_000_000L))
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally {
+            Thread.interrupted() // never leak the flag into other tests
+        }
     }
 
     @Test fun offerWakesAParkedConsumerLongBeforeItsTimeout() {
