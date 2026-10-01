@@ -1,7 +1,7 @@
 ---
 id: T-067
 title: Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
@@ -37,12 +37,14 @@ Cihaz ölçümü 2026-10-01 ~09:45 (host + tablet `main` 022b3b1, panel 60 Hz, a
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. `reanchor()` (>1 s boşluk): kilit, slot, pencere-minimum deque'si sıfırlanır; `devs`, `dNs`, `baseNs` korunur (saat farkı sabit, boşlukta ppm kayması << 1 ms, sonraki kareler tabanı zaten yeni minimuma çeker; jitter dağılımı içerik boşluğuyla değişmez). Epoch (panel hızı) değişiminde tam sıfırlama kalır: tüm yol yeniden zamanlanıyor, jitter dağılımı önceki hıza ait.
+2. Kilitli karelerde son 60 karelik halka (dev, geç): geç = slot < earliest ya da gecikme sınırı aşımı. Pencere >= 12 kare ve geç >= 3 ise kilit `acquire()` ile yeniden edinilir; jitter tabanı (`floorNs`) penceredeki 3. büyük dev olur, böylece slot daha geç seçilir (bir kez tek kare tekrarı). `acquire()` taban dahil jitter kullandığı için badRun yeni kilidi hemen geri çevirmez. Taban kare başına 5 us azalır (~1 dk). Gecikme sınırını aşacak yeniden ortalama (ör. aynı anda gelen kare yığını) yapılmaz, eskisi gibi düşürülür. `rephases` her ikisini sayar, `recenters` ayrıca nedeni ayırır (StatsFormat'a eklenmedi).
+3. Testler: `LockRecenterTest` (soğuk başlangıç, boşluk sonrası, 100 ppm/5 dk, erken kilit yeniden ortalama).
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** (git log: `T-067: ...`)
+- **Dokunulan dosyalar:** `AdaptivePacer.kt`, `client-android/app/src/test/.../video/LockRecenterTest.kt` (yeni), bu kart.
+- **Varsayımlar:** Simülasyon (60 Hz, 60 fps, ready = cap + 16 ms + jitter 0-4 ms, %1 6-12 ms sıçrama, 6 faz) cihazdaki dakikalarca süren yanlış kilidi birebir üretmiyor; eski kodda yalnız boşluk/soğuk başlangıç sonrası ilk saniyede yanlış kilit görülüyor. Sayılar (eski -> yeni): boşluk sonrası ilk 1 sn geç kare, 6 faz ortalaması %6,4 -> %0,3 (soğuk başlangıç ilk 1 sn: %5,8; en kötü faz 15 ms: eski %31,7 soğuk / %35 boşluk sonrası -> yeni %15 soğuk, %0 boşluk sonrası). Soğuk 60 sn (ilk 2 sn sonrası) geç kare en fazla %0,5 (eski aynı; rephase 0-9). 100 ppm kayma 5 dk: geç kare %0,10-0,19, rephase 9-20 (eski 11-20, ~4/dk, aynı). Yeni testler eski kodda: `gapKeepsJitterHistory` kırmızı (%6,39 vs soğuk %5,83), `earlyLockIsRecentred...` eski kodda 18 geç kare / `recenters` yok.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Gerçek içerik (köşede her vsync renk değiştiren kare, 1 sn+ boşluktan sonra) 3 dk SurfaceFlinger 14 sn pencereleri: 33 ms boşluk oranı ilk pencerelerde belirgin düşük olmalı (önceki %17,5 / 26,2 / 11,5 ...), `ev=present` `late_drops` ve `rephase` sayıları. Gerekirse `recenters` loga eklenebilir (StatsFormat'a eklenmedi).
+- **Açık sorular:** Cihazdaki kademeli (dakikalar süren) iyileşmenin asıl nedeni simülasyonda yeniden üretilemedi; cihaz ölçümü yetersizse ham `dev` dağılımı incelenmeli (taban/saat kayması şüphesi).
