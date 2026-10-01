@@ -995,7 +995,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun render(state: SessionUi) {
-        if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
+        if (::clipboard.isInitialized) {
+            val was = clipboard.sync.accepted
+            clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
+            if (!was && clipboard.sync.accepted) clipboard.recheck() // T-063: copied while the session was down
+        }
         if (!started || isDestroyed) return
         lastUi = state
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint

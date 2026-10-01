@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.os.SystemClock
 import android.widget.Toast
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.session.Latest
@@ -27,15 +26,16 @@ class ClipboardBridge(
     private val listener = ClipboardManager.OnPrimaryClipChangedListener { check(fromListener = true) }
 
     fun start() {
-        MbLog.i("clipboard", "diag=focus_start already=$listening", "clipboard") // T-063 diag
         if (listening) return
         listening = true
         cm.addPrimaryClipChangedListener(listener)
         check(fromListener = false)
     }
 
+    /** The session was just accepted: a clip copied while the app was in the background (no session) goes out now. Only while focused. */
+    fun recheck() { if (listening) check(fromListener = false) }
+
     fun stop() {
-        MbLog.i("clipboard", "diag=focus_stop was=$listening", "clipboard") // T-063 diag
         if (!listening) return
         listening = false
         cm.removePrimaryClipChangedListener(listener)
@@ -44,14 +44,6 @@ class ClipboardBridge(
     private fun check(fromListener: Boolean) {
         val clip = readClip()
         val d = sync.onLocalClip(clip.text, clip.sensitive, if (fromListener) 0L else clip.timestampMs)
-        // T-063 diag: metadata only, never content.
-        MbLog.i(
-            "clipboard",
-            "diag=check src=${if (fromListener) "listener" else "focus"} clip=${clip.status} items=${clip.items} len=${clip.text?.length} " +
-                "sens=${clip.sensitive} ts=${clip.timestampMs} now=${System.currentTimeMillis()} mono=${SystemClock.elapsedRealtime()} " +
-                "baseline=${sync.baselineMs} accepted=${sync.accepted} enabled=${sync.enabled} decision=${sync.lastReason.name.lowercase()}",
-            "clipboard",
-        )
         when (d) {
             ClipboardSync.Decision.Ignore -> Unit
             ClipboardSync.Decision.TooLarge -> {
