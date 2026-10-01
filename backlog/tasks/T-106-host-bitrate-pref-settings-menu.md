@@ -1,7 +1,7 @@
 ---
 id: T-106
 title: Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN)
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-104]

@@ -9,8 +9,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
 | [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
 | [T-103](tasks/T-103-host-relative-pointer-games.md) | Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder | 5 | mac-host-dev | [T-034] |
-| [T-105](tasks/T-105-client-settings-side-panel.md) | Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi | 4 | android-client-dev | [T-104] |
-| [T-106](tasks/T-106-host-bitrate-pref-settings-menu.md) | Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN) | 4 | mac-host-dev | [T-104] |
 
 ## blocked
 
@@ -24,6 +22,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-107](tasks/T-107-client-settings-button-colors.md) | Tablet — ayar panelinde seçili olmayan seçenekler beyaz kutu, yazı görünmüyor | 4 | android-client-dev | [T-105] |
 
 ## done
 
@@ -127,3 +126,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-101](tasks/T-101-client-audio-output-setting.md) | Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi | 5 | android-client-dev | [T-100, T-096] |
 | [T-102](tasks/T-102-settings-while-streaming.md) | Taslak — bağlıyken açılabilen ayarlar paneli (akış sürerken, bağlantı paneline dönmeden) | 4 | orchestrator | [T-096, T-101] |
 | [T-104](tasks/T-104-settings-protocol-codecs.md) | Ayarlar paneli protokolü kod çözücüleri (Swift + Kotlin) — STREAM_PREFS.bitrate_kbps, SETTINGS_OPEN (0x08), HELLO bit9 | 4 | mac-host-dev | [] |
+| [T-105](tasks/T-105-client-settings-side-panel.md) | Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi | 4 | android-client-dev | [T-104] |
+| [T-106](tasks/T-106-host-bitrate-pref-settings-menu.md) | Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN) | 4 | mac-host-dev | [T-104] |

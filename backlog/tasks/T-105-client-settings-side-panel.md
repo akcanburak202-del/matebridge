@@ -1,7 +1,7 @@
 ---
 id: T-105
 title: Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-104]
