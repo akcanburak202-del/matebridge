@@ -88,6 +88,8 @@ public struct Capabilities: OptionSet, Sendable {
     public static let touch = Capabilities(rawValue: 1 << 5)
     public static let decodeH264 = Capabilities(rawValue: 1 << 6)
     public static let decodeHEVC = Capabilities(rawValue: 1 << 7)
+    /// The client handles the audio messages (0x30-0x32) and plays PCM s16le 48 kHz stereo.
+    public static let audioPCM = Capabilities(rawValue: 1 << 8)
 }
 
 public struct PenFlags: OptionSet, Sendable {

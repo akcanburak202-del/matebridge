@@ -70,6 +70,14 @@ private let validFixtures: [String: Message] = [
     "stats": .stats(Stats(intervalMs: 1000, framesReceived: 60, framesDecoded: 60, framesRendered: 59,
                           framesDropped: 1, decodeTimeAvgUs: 4200, latencyAvgUs: 23000, bytesReceived: 6_250_000)),
     "keyframe_request": .keyframeRequest(.decodeError),
+    "audio_prefs": .audioPrefs(AudioPrefs(enabled: true)),
+    "audio_config": .audioConfig(AudioConfig(streamID: 3, state: .started, format: .pcmS16LE, sampleRate: 48000,
+                                             channels: 2, framesPerPacket: 480)),
+    "audio_config_stopped": .audioConfig(.stopped(streamID: 3)),
+    "audio_frame": .audioFrame(AudioFrame(streamID: 3, seq: 7, sampleIndex: 3360, captureTimeUs: 123_456_789_012,
+                                          frameCount: 4,
+                                          data: [0x00, 0x00, 0x00, 0x00, 0xe8, 0x03, 0x18, 0xfc,
+                                                 0xff, 0x7f, 0x00, 0x80, 0xff, 0xff, 0x01, 0x00])),
     "video_hello": .videoHello(VideoHello(configID: 1, sessionID: 2_712_847_316,
                                           videoNonce: Array((0...15).reversed()))),
     "video_frame": .videoFrame(VideoFrame(frameSeq: 1, captureTimeUs: 98_765_000_000, flags: .keyframe,
@@ -81,6 +89,7 @@ private let validFixtures: [String: Message] = [
 private let invalidFixtures: [String: ProtocolError] = [
     "invalid_key_short": .payloadTooShort(type: 0x11),
     "invalid_pen_count_zero": .invalidField("count"),
+    "invalid_audio_frame_short": .payloadTooShort(type: 0x32),
 ]
 
 private let skippedFixtures: Set<String> = ["unknown_type"]

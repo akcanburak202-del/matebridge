@@ -100,6 +100,10 @@ class FixtureTest {
             "pong" to Pong(7, 1127500700000L, 98765432100L),
             "stats" to Stats(1000, 60, 60, 59, 1, 4200, 23000, 6250000),
             "keyframe_request" to KeyframeRequest(KeyframeRequest.DECODE_ERROR),
+            "audio_prefs" to AudioPrefs(true),
+            "audio_config" to AudioConfig(3, AudioConfig.STATE_STARTED, AudioConfig.FORMAT_PCM_S16LE, 48000, 2, 480),
+            "audio_config_stopped" to AudioConfig.stopped(3),
+            "audio_frame" to AudioFrame(3, 7, 3360, 123456789012L, 4, Bytes(hex("00000000e80318fcff7f0080ffff0100"))),
             "video_hello" to VideoHello(1, 1, 2712847316L, Bytes(hex("0f0e0d0c0b0a09080706050403020100"))),
             "video_frame" to VideoFrame(
                 1, 98765000000L, VideoFrame.KEYFRAME, 0, 1, 8, Bytes(hex("0000000126010af0")),
@@ -109,7 +113,7 @@ class FixtureTest {
             ),
         )
 
-        val invalid = setOf("invalid_key_short", "invalid_pen_count_zero")
+        val invalid = setOf("invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short")
         val skipped = setOf("unknown_type")
 
         private fun decoderFor(msg: Message?) =
