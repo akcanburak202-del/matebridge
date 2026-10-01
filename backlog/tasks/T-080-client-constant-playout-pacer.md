@@ -1,7 +1,7 @@
 ---
 id: T-080
 title: Tablet — sabit oynatma gecikmeli zamanlayıcı (düzensiz içerikte 120 Hz boşluklarını azalt), anahtar arkasında
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-071, T-077]
@@ -30,7 +30,12 @@ Politika (sim.py ile birebir): x = ready − capture; taban b = son 256 karenin 
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. **`video/ConstantPlayoutPacer.kt` (yeni, saf):** `CpdConfig(qPermille=950, holdNs=2 ms)`; çekirdek `scheduleOn(grid, captureUs, readyNs, leadNs)` sim.py ile birebir: son 256 karenin x = ready − capture halkası, b = min, J = sıralı (x − b)[min(n−1, n·q/1000)] (tamsayı; sim'in `int(n*q)`'su ile izde aynı), C = b + J, |Cn − C| > hold ise güncelle; t = capture + C + L (L = grid.deadlineNs), slot = ızgarada max(t, ready + L)'den sonraki ilk vsync; slot ≤ önceki ise önceki slot (collided, yenisi kazanır, `lateDrop` hiç yok). Önbellek dizileri ön-ayrılmış (kare başına tahsis yok). Güvenlik: J en çok 100 ms (izde en çok ~55 ms, bağlamaz).
+2. **Epoch değişimi:** her şey sıfırlanır (pencere, C, önceki slot). **> 1 s boşluk:** pencere temizlenir, C korunur; pencere `REFILL_MIN` (32) örneğe dolana kadar C yalnız yükselir (> hold). Gerekçe: pencere sayı tabanlı; seyrek güncellemede dakikalar öncesine uzanır ve x içindeki host/tablet saat farkı yavaşça kayar → taban yeniden ölçülmeli; ama az örnekle yüzdelik kuyruğu görmez, C'yi düşürmek ilk sürekli karelerde boşluk yaratır, yükseltmek güvenli. Boşluk eşiği yapılandırılabilir (test için kapatılabilir).
+3. **İz:** `PaceProbe.PATH_CPD` → `path=cpd`; sütun eşlemesi Handoff'ta.
+4. **Bağlantı:** `VideoRenderer.cpdConfig` (null = `lock`); adaptif modda CPD seçiliyse `AdaptivePacer` yerine çağrılır. `MainActivity`: `--es pacer cpd|lock`, `--ei cpd_q_permille`, `--ei cpd_hold_us`; `ev=display_timing`'e `pacer cpd_q_permille cpd_hold_us`.
+5. **`tools/pacing/sim.py`:** `--hz 120` (periyot süzgeci + süreklilik), `--idle-ms/--refill` (aynı boşluk kuralı), `--q/--L/--hold` tek koşu; varsayılan çıktı değişmez.
+6. **Testler:** iz eşdeğerliği (izi yerinde okur, `../../tools/pacing/`): boşluk kuralı kapalıyken orijinal sim değerleri, açıkken genişletilmiş sim değerleri (±0,2 puan / ±0,5 ms); T-065 seyrek kare senaryoları CPD + SlotReleaser ile (60/120 panel, 60/120 akış, panel geçişi); epoch sıfırlama, boşluk sonrası C korunması, hold, çarpışmada yenisi kazanır.
 
 ## Handoff
 
