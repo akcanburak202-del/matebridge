@@ -1,7 +1,7 @@
 ---
 id: T-102
 title: Taslak — bağlıyken açılabilen ayarlar paneli (akış sürerken, bağlantı paneline dönmeden)
-status: todo
+status: done
 phase: 4
 owner: orchestrator
 depends_on: [T-096, T-101]
@@ -33,6 +33,18 @@ Kullanıcı isteği (2026-10-01): ayarlara yalnızca ilk bağlanma panelinden de
 4. **Host tarafı ayarlar** (PLAN Aşama 4): çözünürlük/ölçek, bit hızı, codec — tabletten mi, Mac menüsünden mi?
 5. Mod seçimi (ikinci ekran / ana ekran / yansıtma) bu panele mi girsin?
 
+## Kararlar (2026-10-01, kullanıcı)
+
+- Açma: klavye kısayolu (Ctrl+Shift+6) ve Mac menü çubuğu.
+- Görünüm: sağ yan panel.
+- Host ayarları (bit hızı) tabletteki panelden.
+- Mod seçimi sonra, ayrı kartta.
+
+Ayrıntılar karar 0013'te.
+
 ## Plan
 
-Kullanıcı kararlarından sonra uygulama kartlarına bölünecek (istemci UI, gerekirse protokol, host menüsü).
+Bölündü:
+- T-104: protokol kod çözücüleri;
+- T-105: tablet yan paneli;
+- T-106: host bit hızı ve menü.

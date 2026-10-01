@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 # Message type codes (docs/PROTOCOL.md, "Mesaj tipleri").
 T = {
-    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07,
+    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
@@ -356,6 +356,14 @@ FIXTURES = {
     "stream_prefs": ("STREAM_PREFS: performance mode, 120 fps at 75 percent size", frame("STREAM_PREFS", [
         field("u16", "fps", 120),
         field("u16", "scale_permille", 750),
+        field("u32", "bitrate_kbps", 0, "host default"),
+    ])),
+    "stream_prefs_bitrate": ("STREAM_PREFS: smooth mode, 120 fps full size, user picked 40 Mbps", frame("STREAM_PREFS", [
+        field("u16", "fps", 120),
+        field("u16", "scale_permille", 1000),
+        field("u32", "bitrate_kbps", 40000),
+    ])),
+    "settings_open": ("SETTINGS_OPEN: Mac menu asks the tablet to show its settings panel", frame("SETTINGS_OPEN", [
         field("u32", "reserved", 0),
     ])),
     "clipboard_text": ("CLIPBOARD: Turkish UTF-8 text copied on one side", frame("CLIPBOARD", [
