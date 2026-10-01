@@ -393,3 +393,4 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Kurulum (host e9b5d87 + APK): `presentation_deadline_ns=13333333`, `effective_deadline_ns=6000000`.
 - Kullanıcı: çizim akıcı, harfler hemen görünüyor. Safari'de YouTube oynarken imleç hareketsizse fps ~30'a iniyor, imleç oynayınca artıyor → host içerik güdümlü yakalıyor; video 30 fps ise beklenen davranış (önceki gözlem: `cap_fps=30`, `cap_int 33,3 ms` tam). 60 fps videoda da 30 kalıyorsa ayrı sorun.
 - AppGallery kurulum sonrası öneri sayfası (`InstallDistActivity`, `downbtn` indirme düğmeleri) `install.sh` döngüsünü bekletti; hiçbir şeye dokunulmadı, `am start` ile MateBridge öne alındı.
+- Kullanıcı (12:15): Mac'in 05:59 ve 10:29 kapanmaları **elektrik kesintisi** kaynaklı. (`autorestart 0` olduğu için elektrik gelince kendiliğinden açılmıyor; değiştirmek kullanıcının kararı.)

@@ -1,7 +1,7 @@
 ---
 id: T-070
 title: Mac — yakalama→gönderim gecikme dökümü (SCK teslim, kodlama, kuyruk, soket yazımı) ve sıçrama kaynağı
-status: todo
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-066]
