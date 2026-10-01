@@ -9,6 +9,13 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
+## todo
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-094](tasks/T-094-host-audio-capture.md) | Mac — sistem sesi yakalama (Core Audio process tap, mutedWhenTapped) ve kontrol bağlantısından AUDIO_FRAME gönderimi | 5 | mac-host-dev | [T-093] |
+| [T-095](tasks/T-095-client-audio-playout.md) | Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama) | 5 | android-client-dev | [T-093] |
+
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
