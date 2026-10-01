@@ -65,31 +65,42 @@ Karar 0012. T-099 sondası `probes/aaudio-probe/` içinde çalışan AAudio kodu
 
 ## Handoff
 
-- **Commit:** `2f080e5` (uygulama), plan `255e3a3`. Dal `task/T-100-aaudio-output`.
-- **`./scripts/check.sh`:** ALL OK (client-android: `assembleDebug` + `libmbaudio.so` arm64-v8a APK içinde, 9 JNI sembolü Kotlin `external` adlarıyla eşleşiyor; yeni testler SinkPolicyTest 14, SharedLatencyProbeTest 9, OutputClockTest 5, AudioBufferConfigTest +1).
+- **Commit:** `2f080e5` (uygulama), `5ea29e4` (inceleme düzeltmeleri M1/L1/L2), plan `255e3a3`. Dal `task/T-100-aaudio-output`.
+- **`./scripts/check.sh`:** ALL OK (client-android: `assembleDebug` + `libmbaudio.so` arm64-v8a APK içinde, 9 JNI sembolü Kotlin `external` adlarıyla eşleşiyor; yeni testler SinkPolicyTest 14 (inceleme sonrası; MMAP olmayan red ve `disableAaudio` dahil), SharedLatencyProbeTest 9, OutputClockTest 5, AudioBufferConfigTest +1).
 - **Dosyalar:**
   - yeni: `cpp/CMakeLists.txt`, `cpp/mbaudio.cpp`, `audio/AAudioNative.kt`, `audio/AudioSink.kt`, `audio/AAudioSink.kt`, `audio/TrackSink.kt`, `audio/SinkPolicy.kt` (+`AudioOutPref`, `OutChoice`), `audio/SharedLatencyProbe.kt`, `audio/OutputClock.kt`, testler `SinkPolicyTest`, `SharedLatencyProbeTest`, `OutputClockTest`;
   - değişen: `audio/AudioPlayout.kt` (yazıcı çıkıştan bağımsız; eski `Track` sınıfı `TrackSink`'e taşındı, davranışı aynı), `audio/AudioBufferConfig.kt` (AAudio varsayılanı 2 burst), `AudioBufferConfigTest.kt`, `app/build.gradle.kts`, `client-android/AGENTS.md`, `README.md`.
   - `session/`, `MainActivity`, `PlayoutCore` ve diğer ses sınıflarına dokunulmadı.
 - **Varsayımlar:**
+  - **İnceleme düzeltmeleri (5ea29e4):**
+    - M1: MMAP olmayan ya da MMAP durumu bilinmeyen (`mmap != 1`) AAudio akışı her tercihte reddedilir, `--es audio_out aaudio` dahil. Akış kapatılır (`ev=audio_out_rejected reason=not_mmap`), sonra AudioTrack açılır. Gerekçe: legacy akışın `write`'ı zaman aşımına uymaz, durdurma takılabilir. Bu yüzden SHARED sınavı artık yalnızca shared + MMAP akışa uygulanır.
+    - L1: `AAudioSink.open` içindeki `LinkageError` → `SinkOpenException(aaudioUnusable)` → `SinkPolicy.disableAaudio()` → AudioTrack. Yazıcıda `LinkageError` yakalanır (süreç ölmez) ve AAudio kapatılır; `finally` içindeki kapatma da yakalar.
+    - L2: Akış açıldıktan sonraki ilk 0,5 s'de `write` zaman aşımı 1 s, sonra 200 ms. Başlangıçtaki yavaş açılış "stall" sayılmaz.
   - Veri yolu: geri çağrı değil, yazıcı iş parçacığı + `AAudioStream_write` (zaman aşımı 200 ms). Gerekçe Plan'da. Karar 0012/3'teki "bloklamayan write" ifadesini, hız denetimini AAudio'nun kendi bekleme döngüsüne bırakan sınırlı süreli yazma olarak yorumladım (bkz. açık sorular).
   - AAudio akışına başka iş parçacığından hiç dokunulmaz; `stop` yalnızca bayrak indirir, yazıcı ≤ 1 burst içinde çıkar ve akışı kapatır. 200 ms içinde tüketmeyen akış "stall" sayılır ve yeniden açılır.
   - Yönlendirme değişimi AAudio'da `DISCONNECTED` olarak gelir (MMAP ve Android 9+ legacy). Ayrı bir yönlendirme dinleyicisi yok. AudioTrack'teki dinleyici aynen korunuyor.
   - SHARED sınavı: 300 ms ısınma + 500 ms ölçüm, medyan ≤ 60 ms kabul; zaman damgaları çoğunlukla başarısızsa ya da 2 s'de karar yoksa red. T-099'da SHARED 494 ms ve tutarsız ölçüldü, bu cihazda reddedilmesi beklenir.
   - Zincir her yeni `stream_id`'de ve her cihaz değişiminde baştan denenir. AAudio arızası (disconnect/stall/yazma hatası) 10 s'de 3 kez → bu `AudioPlayout` ömrü boyunca AudioTrack. Genel yeniden kurulum sınırı (10 s'de 5) aynı.
   - `--ei audio_buf_bursts N` artık iki çıkışa da uygulanır. Yoksa AudioTrack 1, AAudio 2 burst. Büyüme en çok 6 burst (AAudio'da kapasiteyle sınırlı).
-  - Stats satırında `track_underruns=` alanı `xruns=` oldu (iki çıkış için aynı ad). Yeni alan: `api=`. Log grep'leri buna göre güncellenmeli.
+  - **Log değişiklikleri (grep'ler güncellenmeli):**
+    - `ev=audio_track` → `ev=audio_out` (alanlar: `api sharing mmap burst buf capacity perf_mode [usage] stream_id reason requested probation pref native_rate rate`). `buf_frames=` artık `buf=`, `buf_bursts=` ise `audio_device` satırında.
+    - `ev=audio_track_failed` → `ev=audio_out_failed` (`requested=exclusive|shared|track` + neden).
+    - `ev=audio_buffer_grow`: `track_underruns=` → `xruns=`, yeni `api=`. Artık yalnızca tampon gerçekten büyüdüğünde loglanır; eskiden xrun artışında büyüme başarısız olsa da yazılıyordu.
+    - `ev=stats`: `track_underruns=` → `xruns=`, yeni `api=`.
+    - `ev=audio_rebuild_limit` ve `ev=audio_write_failed`: yeni `api=` alanı.
+    - `ev=audio_device`: yeni `audio_out=` ve `aaudio_lib=` alanları; `buf_bursts=` verilmemişse `default`.
+    - Yeni olaylar: `audio_out_rejected`, `audio_out_fallback`, `audio_shared_probe`, `audio_out_pref_unknown`.
 - **Test edilmedi (cihaz gerekiyor):** AAudio yolunun hiçbiri cihazda çalıştırılmadı (adb kullanılmadı).
 - **Tablette kontrol edilecekler** (`adb logcat -s 'MB:*'` → `MB/audio`):
   1. Varsayılan açılış: `ev=audio_out api=aaudio sharing=exclusive mmap=1 burst=240 buf=480 … probation=0`. Ses çalıyor, cızırtı ve tıkırtı yok. Stats'ta `api=aaudio`, `xruns=0` (ya da büyüme sonrası sabit). `audio_ms` T-098'e göre ~85 ms düşük (~90–100 ms), `av_offset_ms` makul.
   2. `--es audio_out track`: `api=track`, davranış T-098 ile aynı (`audio_ms` ~170–190). `--es audio_out aaudio`: exclusive yine seçilmeli.
-  3. Oturum sürerken kulaklık tak/çıkar (ya da BT): `audio_out … reason=disconnected` ve ses devam ediyor. BT'de büyük olasılıkla `audio_shared_probe result=reject` → `api=track`. Oturum düşmemeli.
+  3. Oturum sürerken kulaklık tak/çıkar (ya da BT): `audio_out … reason=disconnected` ve ses devam ediyor. BT'de büyük olasılıkla `audio_out_failed`/`audio_out_rejected reason=not_mmap` → `api=track`. Oturum düşmemeli.
   4. Durdur/arka plana al/oturumu bitir/yeniden bağlan (yeni `stream_id`): her seferinde tek `audio_stop`, sonra yeni `audio_out`. Takılı kalan ses, çökme ya da "audio_previous_slow" olmamalı.
   5. EXCLUSIVE açıkken tablette başka bir uygulamanın sesi (ör. video) hâlâ duyuluyor mu? (karar 0012 sonuçlar). Ayrıca video kod çözme yükü altında `xruns` artıyor mu? Artıyorsa `audio_buffer_grow` görülmeli.
 
 ## Açık sorular
 
-- Karar 0012/3 "bloklamayan `write` ile kendi yazıcı iş parçacığı" diyor. Ben zaman aşımlı (200 ms) `write` kullandım: aynı "yaz, yer yoksa saat modeline göre uyu" döngüsünü AAudio içeride yapıyor, kilitsiz ve tahsissiz. Literal bloklamayan yazma + kendi uyku hesabı istenirse ayrı bir değişiklik olur.
+- ~~Karar 0012/3 ve zaman aşımlı `write`~~: orkestratör kabul etti (MMAP'te zaman aşımlı bloklayan yazma); karar metnini o güncelleyecek.
 - Yazıcı iş parçacığı SCHED_FIFO değil (THREAD_PRIORITY_URGENT_AUDIO). Cihazda xrun görülürse veri geri çağrısı + kilitsiz halka seçeneği (karar 0012/3'ün diğer kolu) yeni bir kart olabilir.
 - `docs/LOGGING.md` bu kartın `files:` listesinde değil. `ev=audio_out`, `audio_out_failed`, `audio_out_fallback`, `audio_shared_probe` olayları ve stats'taki `api=`/`xruns=` (eski `track_underruns=`) gerekiyorsa orkestratör ekleyebilir.
 
