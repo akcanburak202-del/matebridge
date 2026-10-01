@@ -1,7 +1,7 @@
 ---
 id: T-079
 title: Tablet — PerformanceHintManager deneyi (ağ, çözücü giriş/çıkış iş parçacıkları için kare süresi hedefi)
-status: in_progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-077]
@@ -20,10 +20,10 @@ NOTES 2026-10-01 ~14:30: CPU tarafı küçük adımlar uygulama içinde ölçüm
 
 ## Kabul kriterleri
 
-- [ ] `--ez perf_hint true|false` (varsayılan **kapalı**, ölçümden sonra karar), açılışta `ev=perf_hint supported=0|1 session=0|1 target_us=…` logu.
-- [ ] İş parçacığı kimlikleri (`Process.myTid()`) ilgili iş parçacıklarından toplanır; oturum akış başında kurulur, panel hızı değişince `updateTargetWorkDuration`, akış bitince kapanır (sızıntı yok). Gerçek iş süresi: ağ iş parçacığında kayıt alma+çözme+kuyruğa koyma, giriş iş parçacığında kuyruk→`queueInputBuffer`, çıkış iş parçacığında çıktı alma→bırakma; ya da tek bir uçtan uca süre — gerekçelendir.
-- [ ] İz sütunları değişmez; karşılaştırma iz ile yapılır.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `--ez perf_hint true|false` (varsayılan **kapalı**, ölçümden sonra karar), açılışta `ev=perf_hint supported=0|1 session=0|1 target_us=…` logu.
+- [x] İş parçacığı kimlikleri (`Process.myTid()`) ilgili iş parçacıklarından toplanır; oturum akış başında kurulur, panel hızı değişince `updateTargetWorkDuration`, akış bitince kapanır (sızıntı yok). Gerçek iş süresi: ağ iş parçacığında kayıt alma+çözme+kuyruğa koyma, giriş iş parçacığında kuyruk→`queueInputBuffer`, çıkış iş parçacığında çıktı alma→bırakma; ya da tek bir uçtan uca süre — gerekçelendir.
+- [x] İz sütunları değişmez; karşılaştırma iz ile yapılır.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -35,8 +35,27 @@ NOTES 2026-10-01 ~14:30: CPU tarafı küçük adımlar uygulama içinde ölçüm
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `5e01bcb` (uygulama); plan `5817535`; dal `task/T-079-client-perf-hint`.
+- **Dokunulan dosyalar:** `video/PerfHint.kt` (yeni, saf Kotlin koordinatör), `video/AndroidPerfHint.kt` (yeni, `PerformanceHintManager` arka ucu), `video/VideoRenderer.kt` (giriş/çıkış iş parçacığı kaydı + kare başına `onInput`), `session/SessionController.kt` (yapıcıda `perfHint` parametresi; video okuyucu kaydı + `onRecv`), `MainActivity.kt` (bayrak, açılış logu, hedef besleme, `onDestroy`'da kapatma), `test/.../video/PerfHintTest.kt` (yeni, 15 test), bu kart.
+- **Kullanım:**
+  - Kapalı (varsayılan, karşılaştırma tabanı): `adb shell am start -n dev.matebridge.client/.MainActivity --ez pace_trace true`
+  - Açık: `adb shell am start -n dev.matebridge.client/.MainActivity --ez pace_trace true --ez perf_hint true`
+  - Açık + sabit hedef (ör. 2 ms; panel değişimi yok sayılır): `... --ez perf_hint true --ei perf_hint_target_us 2000`
+- **Loglar (`adb logcat -s 'MB/render:*'`):**
+  - Açılışta her zaman: `ev=perf_hint enabled=0|1 supported=0|1 session=0 target_us=… rate_us=… fixed_target=0|1` (`supported` bayrak kapalıyken de ölçülür; `rate_us` = `getPreferredUpdateRateNanos`).
+  - Oturum kurulunca: `ev=perf_hint supported=1 session=1 target_us=… threads=3 cause=threads|target`; kurulamazsa `session=0` (+ istisna olduysa `ev=perf_hint_error op=create err=…`).
+  - Kapanınca: `ev=perf_hint supported=1 session=0 target_us=… threads=n cause=thread_gone|threads|close reports=N`.
+  - Panel hızı değişince: `ev=perf_hint_target target_us=…`.
+- **Gerçek iş süresi kararı:** tek uçtan uca süre, kare başına bir rapor = ağ okuması dönüşü (`recv`, izdeki damga) → `queueInputBuffer` dönüşü; raporlanan değer izdeki `input_ns − recv_ns` ile aynı. Gerekçe planda (madde 2): ADPF döngü başına tek süre modeli; iş parçacığı başına küçük parçalar örnekleri üçe katlar ve hedefin çok altında görünür (saat düşürme sinyali); donanım çözme CPU işi değil. Çıkış iş parçacığı oturumda ama süresi raporlanmıyor. Config kareleri raporlanmaz.
 - **Varsayımlar:**
+  - API 31'de `setThreads` yok: iş parçacığı kümesi değişince (video yeniden bağlanma, codec yeniden başlatma) oturum kapatılıp yeniden kurulur; üç rolden biri eksikse oturum yok. Eski iş parçacığının geç `unregister`'ı yok sayılır (tid eşleşmesi).
+  - Hedef = panel periyodu: akış başında `vsync.periodNs` (yoksa akış fps aralığı), sonra T-059 debouncer'ın bildirdiği hz (`1e9/hz`). 144 Hz'de ~6944 us, 60 Hz'de ~16666 us.
+  - Rapor giriş iş parçacığında `queueInputBuffer`'dan sonra yapılır (o karenin yolunu geciktirmez); kilit altında, istisnalar loglanır, ≤0 veya >1 s değerler atılır.
+  - İz sütunları ve `--ez pace_trace` davranışı değişmedi; `recvNs` artık iz kapalı ama `perf_hint` açıkken de alınır.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  1. Açılış logu: HarmonyOS 4.3'te `supported=1` mi (servis var mı), `rate_us` değeri.
+  2. Akış başlayınca `ev=perf_hint ... session=1 threads=3`; `session=0` ise `createHintSession` reddediyor (deney burada biter; kartın beklediği "temiz atlama").
+  3. Karşılaştırma (aynı koşul: 60 fps, USB, ~90 sn, `pace_trace true`), `perf_hint` kapalı vs açık: `decrypted_ns − recv_ns`, `input_ns − queued_ns` (T-077 ayrıştırması: `taken−queued`, `input−copied`), `open_init_ns − open_start_ns` p50/p95. Etki görülmezse `--ei perf_hint_target_us 2000` (ya da 1000) ile tekrar: panel periyodu hedefi, ~1–3 ms'lik gerçek süreye göre çok geniş olabilir (ADPF "pay var" görüp desteği düşük tutar).
+  4. Panel hızı değişimi (ör. 144→60 Hz) `ev=perf_hint_target` üretir; yüzey arka plana/ön plana gidince `session=0 cause=thread_gone` ardından yeniden `session=1` (sızıntı yok); uygulama kapatılınca `cause=close` ya da `thread_gone`.
+  5. Akış normal: görüntü donmuyor, kalem/klavye çalışıyor; güç/ısı gözle (oturum açık uzun koşu).
+- **Açık sorular:** Panel periyodu hedefi pratikte destek vermeyebilir (gerçek iş hedefin çok altında); ölçüm sonucuna göre varsayılan hedef ya da kapatma kararı orkestratörde. Çıkış iş parçacığı süresinin de rapora katılması gerekirse (pts eşlemesiyle) ayrı adım.
