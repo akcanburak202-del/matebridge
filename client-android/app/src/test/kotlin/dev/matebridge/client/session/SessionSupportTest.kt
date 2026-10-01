@@ -36,17 +36,19 @@ class SessionSupportTest {
         assertEquals(Endpoint("192.168.1.20", 7420), s.lastEndpoint())
     }
 
-    @Test fun penOverlayDefaultsOnAndPersist() {
+    @Test fun penOverlayDefaultsOffAndPersist() {
         val st = MemStore()
         val s = Settings(st)
-        assertTrue(s.penTrail())
-        assertTrue(s.penDot())
+        assertFalse(s.penTrail())
+        assertFalse(s.penDot())
+        s.setPenTrail(true)
+        s.setPenDot(true)
+        assertTrue(Settings(st).penTrail())
+        assertTrue(Settings(st).penDot())
         s.setPenTrail(false)
         s.setPenDot(false)
         assertFalse(Settings(st).penTrail())
         assertFalse(Settings(st).penDot())
-        s.setPenTrail(true)
-        assertTrue(Settings(st).penTrail())
     }
 
     @Test fun endpointParsing() {
