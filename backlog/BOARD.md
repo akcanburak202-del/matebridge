@@ -21,7 +21,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-101](tasks/T-101-client-audio-output-setting.md) | Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi | 5 | android-client-dev | [T-100, T-096] |
 
 ## done
 
@@ -122,3 +121,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-095](tasks/T-095-client-audio-playout.md) | Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama) | 5 | android-client-dev | [T-093] |
 | [T-098](tasks/T-098-client-audio-silence-buffer.md) | Tablet — ses: sessizlik aralarını alt taşma saymamak, ses başlangıcında hızlı çalma, AudioTrack tamponu 1920 → 960 | 5 | android-client-dev | [T-095] |
 | [T-099](tasks/T-099-aaudio-mmap-probe.md) | Sonda — AAudio MMAP tablette var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük (NDK kurulumu dahil) | 5 | android-client-dev | [T-095] |
+| [T-101](tasks/T-101-client-audio-output-setting.md) | Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi | 5 | android-client-dev | [T-100, T-096] |

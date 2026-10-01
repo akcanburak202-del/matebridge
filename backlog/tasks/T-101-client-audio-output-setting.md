@@ -1,7 +1,7 @@
 ---
 id: T-101
 title: Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-100, T-096]

@@ -702,3 +702,18 @@ Her durum 5 s, −40 dBFS 1 kHz ton. Gecikme = `getTimestamp` (yazılan − sunu
 - Kalem ve tuş basılıyken geçiş henüz denenmedi.
 
 **T-098:** `idle_gaps` / `state=idle` yolu çalışıyor. Ses başlangıcında hazırlık süresi kısaldı.
+
+## 2026-10-01 ~22:45 — T-101 cihazda: ses uçtan uca ~41 ms
+
+AAudio (exclusive MMAP), Mac'ten kısa sesler:
+- `audio_ms=41`, `video_ms=40–43`, `av_offset_ms=0`;
+- seviye tabanı 12–14 ms, `underruns`/`xruns` 0.
+
+Önceki 470 ms gösterimi OutputClock eşleme hatasıydı. Artık AAudio'nun kendi `framesWritten`/`framesRead` sayaçları kullanılıyor.
+
+| | ses | A/V farkı |
+|---|---|---|
+| AudioTrack (T-095) | ~170–190 ms | ~130 ms |
+| AAudio (T-101) | ~41 ms | ~0 ms |
+
+Panelde "Ses çıkışı: Düşük gecikme / Uyumlu" seçeneği var. `audio_clock_raw` debug seviyesinde olduğu için info log'unda görünmüyor.
