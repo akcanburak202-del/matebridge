@@ -1,7 +1,7 @@
 ---
 id: T-074
 title: Tablet — USB (adb) tünelinde 40 ms paketlemeyi kır: alma soketinde TCP_QUICKACK
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-073]
@@ -26,12 +26,12 @@ Kare izi (T-073) + host CSV (2026-10-01 12:45, USB modu, 60 fps): host kareleri 
 
 ## Plan
 
-_(Ajan doldurur.)_
+QuickAck.kt: saf sarmalayıcı (setsockopt lambda'sı, hata -> bir kez log + devre dışı) ve ParcelFileDescriptor.fromSocket (dup'lu fd, loop sonunda kapatılır; soket kapanmaz) ile Os.setsockoptInt. Hem video hem kontrol okuma döngüsünde her başarılı read sonrası. Anahtar `--ez quickack false` (varsayılan açık); `session_start ... quickack=0|1`. Yalnızca USB'ye kısıtlanmadı: Wi-Fi'da da zararsız, tek syscall.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Commit:** bkz. git log task/T-074-client-quickack
+- **Dokunulan dosyalar:** session/QuickAck.kt (yeni), session/SessionController.kt, MainActivity.kt, test session/QuickAckTest.kt, bu kart
+- **Varsayımlar:** fromSocket dup'ı aynı soketin seçeneğini ayarlar; kontrol soketinde yalnızca el sıkışma sonrası okumalarda (readRecords) kurulur.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** USB modunda `--ez pace_trace true` ile recv_ns aralıklarında 40/0 desenin kaybolması; logcat'te `quickack=1` ve `quickack_off` satırının çıkmaması; `--ez quickack false` ile eski davranışın dönmesi (A/B).
 - **Açık sorular:**
