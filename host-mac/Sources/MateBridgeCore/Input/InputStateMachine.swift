@@ -195,7 +195,7 @@ public struct InputStateMachine: Sendable {
             out += releaseAll(.bye)
         case .key(let k):
             out += handleKey(k, now: now)
-        case .hello, .helloAck, .streamConfig, .streamPrefs, .clipboard, .displayRate, .ping, .pong, .stats, .keyframeRequest,
+        case .hello, .helloAck, .streamConfig, .streamPrefs, .clipboard, .displayRate, .settingsOpen, .ping, .pong, .stats, .keyframeRequest,
              .audioPrefs, .audioConfig, .audioFrame, .videoHello, .videoFrame:
             break
         }

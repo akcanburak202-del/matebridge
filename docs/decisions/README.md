@@ -28,3 +28,10 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0004 | Android: Views + SurfaceView, Compose yok, GMS yok | kabul |
 | 0005 | Yalnızca test için bağımlılıklar (JUnit 4, kotlin-test, XCTest) kayıt gerektirmez | kabul |
 | 0006 | Faz 2 girdi: çift dokunma = fırça/silgi geçişi (eraser pointer), çizimde parmak kapalı, yan tuş yok | kabul |
+| 0007 | Kalem teması doğrulanmadan gönderilmez | kabul |
+| 0008 | Klavye: varsayılan değiştirici eşlemesi ve ISO düzeni | kabul |
+| 0009 | İki parmakla yakınlaştırma: PINCH mesajı ve belgelenmemiş büyütme olayı | kabul |
+| 0010 | Oturum şifrelemesi: eşleşme anahtarı + geçici ECDH, AES-256-GCM kayıtları | kabul |
+| 0011 | Ses aktarımı: Core Audio process tap, sıkıştırmasız PCM, kontrol bağlantısı | kabul |
+| 0012 | Tablette ses çıkışı için AAudio MMAP (NDK + C++) | kabul |
+| 0013 | Akış sırasında ayarlar paneli: Ctrl+Shift+6 + Mac menüsü, sağ yan panel, bit hızı tabletten | kabul |

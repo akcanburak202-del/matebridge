@@ -78,9 +78,10 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x02 | HELLO_ACK | H→C | kontrol | `hello_ack`, `hello_ack_pending`, `hello_ack_busy` |
 | 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config` |
 | 0x04 | BYE | iki yön | kontrol | `bye` |
-| 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs` |
+| 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs`, `stream_prefs_bitrate` |
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
+| 0x08 | SETTINGS_OPEN | H→C | kontrol | `settings_open` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -117,7 +118,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -170,12 +171,13 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 |---|---|---|
 | fps | u16 | İstenen akış kare hızı: `60`, `120`, `144`. Başka değer: host 60 kabul eder. |
 | scale_permille | u16 | Kodlanan görüntünün sanal ekrana oranı, binde: `500`–`1000`. Dışı: host sıkıştırır. |
-| reserved | u32 | |
+| bitrate_kbps | u32 | Kullanıcının seçtiği hedef bit hızı (karar 0013). `0` = host varsayılanı (moda göre). Sıfırdan farklı değer host'ta `5000`–`150000` aralığına sıkıştırılır. Eski istemciler burada `0` (eski `reserved`) gönderir. |
 
 **Host kuralları:**
-- Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz).
+- Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz), bit hızı (`bitrate_kbps`).
+- **Bit hızı önceliği:** host ortam değişkeni (`MATEBRIDGE_BITRATE_KBPS`, Wi-Fi'de `MATEBRIDGE_WIFI_BITRATE_KBPS`; geliştirici ayarı) > `bitrate_kbps ≠ 0` > modun varsayılanı. Uygulanan değer `STREAM_CONFIG.bitrate_kbps`'te bildirilir.
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
-- İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
+- İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini (bit hızı dahil) hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
 
 ### 0x06 CLIPBOARD (iki yön, kontrol)
 
@@ -207,6 +209,17 @@ Tablet panelinin **o anki** yenileme hızı (Huawei paneli dokunma yokken 60 Hz'
 
 - İstemci: `ACCEPTED`'dan sonra bir kez ve hız değişince gönderir. Yükselişi hemen, düşüşü ~0,5 sn kararlı kaldıktan sonra bildirir; saniyede en çok 4 mesaj.
 - Host: kodlayıcıya giden kare hızını `min(akış fps'i, hz)`'e **seyreltir** (sanal ekran, SCK ve kodlayıcı oturumu değişmez; yakalamalar eşit aralıkla seçilir; kodlanmış kareler atılmaz). `hz` 0 ya da akış fps'inden büyükse akış fps'i. `STREAM_CONFIG` değişmez; istemci sunum zamanlamasını kendi ölçtüğü panel hızına göre yapar.
+
+### 0x08 SETTINGS_OPEN (H→C, kontrol)
+
+Mac menü çubuğundaki "Tablette ayarları aç" komutu (karar 0013). Tablete akış sırasında ayarlar panelini açmasını söyler.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| reserved | u32 | |
+
+- Host yalnızca `ACCEPTED` oturumda ve `HELLO.capabilities` bit9 `SETTINGS_PANEL` varsa gönderir.
+- İstemci: akış görünürse paneli açar (açıksa bir şey yapmaz). Akış yoksa (bağlantı paneli görünür) yok sayar. Panelin açılması istemcide `RELEASE_ALL(USER)` gönderir (§7), panel açıkken girdi gönderilmez.
 
 ### 0x10 PEN (C→H)
 
@@ -364,7 +377,7 @@ Host bu oturumun basılı tuttuğu her şeyi bırakır (§7).
 |---|---|---|
 | reason | u8 | `0` USER, `1` BACKGROUND, `2` FOCUS_LOST, `3` DEVICE_DETACHED |
 
-İstemci bunu şu durumlarda gönderir: uygulama arka plana geçtiğinde, pencere odağı kaybolduğunda, pointer capture kapandığında, bir girdi cihazı ayrıldığında, video görünümü gizlendiğinde (ör. bağlantı paneli açıldığında; `reason = USER`).
+İstemci bunu şu durumlarda gönderir: uygulama arka plana geçtiğinde, pencere odağı kaybolduğunda, pointer capture kapandığında, bir girdi cihazı ayrıldığında, video görünümü gizlendiğinde ya da akış sırasında ayarlar paneli açıldığında (ör. bağlantı paneli açıldığında; `reason = USER`).
 
 ### 0x17 PINCH (C→H)
 
@@ -592,7 +605,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `clipboard_text`, `clipboard_empty`, `display_rate`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`

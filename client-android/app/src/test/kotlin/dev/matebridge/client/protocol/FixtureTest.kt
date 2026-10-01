@@ -59,8 +59,10 @@ class FixtureTest {
             "hello_ack_busy" to HelloAck(1, HelloAck.BUSY, 0, 0, "", HelloAck.KEY_NONE, zeros16, zeros16, zeros65),
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
             "bye" to Bye(Bye.NORMAL),
-            "stream_prefs" to StreamPrefs(120, 750),
+            "stream_prefs" to StreamPrefs(120, 750, 0),
+            "stream_prefs_bitrate" to StreamPrefs(120, 1000, 40000),
             "display_rate" to DisplayRate(60),
+            "settings_open" to SettingsOpen,
             "clipboard_text" to Clipboard(3, Clipboard.KIND_TEXT_UTF8, Bytes("Merhaba ğüşıöç — kopyala".toByteArray())),
             "clipboard_empty" to Clipboard(4, Clipboard.KIND_EMPTY, Bytes(ByteArray(0))),
             "pen_hover_to_contact" to Pen(
