@@ -23,6 +23,7 @@ Mevcut durum:
 ## Kabul kriterleri
 
 - [x] Yeni aktarım seçeneği **`auto`**, yeni kurulumlarda ve mevcut kullanıcı için varsayılan. Mevcut `usb`/`wifi` tercihi elle seçilmiş sayılır ve korunur. Panelde üç seçenek: Otomatik / USB / Wi-Fi.
+  - Orkestratör kararı (inceleme sonrası): mevcut kurulumdaki `usb`/`wifi` bir kez `auto` yapılır (`transport_auto_migrated`); sonraki panel seçimleri korunur.
 - [x] `auto` bağlanma sırası:
   - Önce USB (`127.0.0.1` kontrol portu) denenir, kısa zaman aşımıyla (≤500 ms).
   - Bağlanamazsa Wi-Fi (Bonjour/son bilinen adres).
@@ -72,20 +73,39 @@ Mevcut durum:
 
 ## Handoff
 
-- **Commit:** `83b5065` (uygulama). Plan: `005fe35`. Dal: `task/T-096-auto-transport` (`main` 8f84c09 üstünde).
-- **check.sh:** ALL OK.
+- **Commit:** `83b5065` (uygulama) + `80f5487` (inceleme düzeltmeleri, aşağıda). Plan: `005fe35`. Dal: `task/T-096-auto-transport` (`main` 8f84c09 üstünde).
+- **check.sh:** ALL OK (düzeltmelerden sonra yeniden koşuldu).
+
+**İnceleme düzeltmeleri (`80f5487`, Codex high + reviewer)**
+1. **(Codex P2) Probe sonucu:** yeniden tarama probe'unun OPEN sonucu, sonucun **işlendiği** andaki oturum durumuna göre değerlendirilir (`AutoUsbPolicy.onProbeOpen`, birim testli):
+   - `Connected` → taşıma (takeover); Wi-Fi oturumu artık yıkılmaz.
+   - `AwaitingApproval`, `Connecting`, `Failed` → yok sayılır.
+   - `Idle`, `Searching`, `Disconnected` → USB'ye geçilir.
+   - Log: `MB/session ev=transport_probe result=usb_open action=migrate|switch|ignore`. Açılıştaki ilk seçim değişmedi.
+2. **(Codex P2 + reviewer L2) Kapanma kutusu sahipliği:** `notifyClosed` artık gönderim anında `candidate === this`'e bakmıyor.
+   - Her bağlantının rolü kurulurken sabitlenir (`ControlCloseSlots.Owner`: CURRENT/CANDIDATE) ve yalnız motor değiştirir: terfide CURRENT, iptalde CANCELLED.
+   - İptal edilen adayın kapanma bildirimi atılır. Daha yüksek nesilli bir aday böylece güncel bağlantının kapanmasını ezemez.
+   - `ControlCloseSlots` saf sınıf (`Latest.kt`), `AutoTransportTest.closeSlotsKeepTheCurrentCloseWhenACandidateCloses` ile test edildi.
+3. **(Codex P2) Probe kuyruğu sınırlı:** tek iş parçacığı, kapasitesi 1 olan kuyruk, `DiscardOldestPolicy`. Sonuçlar zaten `pickGen` ile süzülüyor.
+4. **(Reviewer L1)** `connect()` artık `transportEpoch`'u artırır. Yeni bir `connect` öncesinde başlamış bir taşımanın sonucu yok sayılır.
+5. **(Reviewer L3) Aday anahtar yazmaz:** aday bağlantı, eşleşme anahtarını okuyan ama `put`'ta hata atan bir depo kullanır. Aday PAIRING cevabı alırsa anahtar değişmez; `KeyStoreFailed` ile taşıma iptal edilir (`transport_migrate ok=0 reason=key`).
+6. **(Orkestratör kararı) Tek seferlik `auto` geçişi:** `Settings.migrateTransportToAutoOnce()`.
+   - `transport_auto_migrated` bayrağı yoksa kayıtlı `usb`/`wifi` bir kez `auto` yapılır ve bayrak yazılır. Log: `MB/session ev=transport_pref_migrated from=usb|wifi to=auto`.
+   - Sonrasında paneldeki her seçim korunur.
+   - Birim testli: `ConnectModeTest.storedPreT096ChoiceIsMigratedToAutoExactlyOnce`, `migrationOnAFreshInstallChangesNothingButSetsTheFlag`. Bu, kabul maddesindeki "mevcut tercih korunur" ifadesinin yerine geçer.
 
 **Dokunulan dosyalar**
 - `session/AutoTransport.kt` (yeni): `TransportMode`, `UsbProbe`/`ProbeResult`, `CableTracker`, `AutoUsbPolicy`.
 - `session/SessionMachine.kt`: `Event.Migrate`; aday/emekli eylemleri; `MigrationResult`.
 - `session/SessionController.kt`: `migrate()`, `trySendInput(msg, gen)`, `dropConnection(gen)`; aday/emekli bağlantılar; ayrı aday kapanma kutusu; girdi izni eylemlerden sonra açılıyor; PONG yalnız güncel nesilden.
-- `session/Settings.kt`: `transportMode()`/`setTransportMode()`; eski `transport()` kaldırıldı.
+- `session/Settings.kt`: `transportMode()`/`setTransportMode()`/`migrateTransportToAutoOnce()`; eski `transport()` kaldırıldı.
+- `session/Latest.kt`: `ControlCloseSlots` (düzeltme 2).
 - `session/ConnectMode.kt`: `showUsbHint(TransportMode, …)`.
 - `MainActivity.kt`, `res/layout/activity_main.xml` (`connect_auto` düğmesi), `res/values/strings.xml` (`connect_auto`; USB/Wi-Fi düğmeleri "Yalnız USB"/"Yalnız Wi-Fi").
-- Testler: `test/.../session/AutoTransportTest.kt` (yeni, 10 test), `test/.../session/MigrationTest.kt` (yeni, 8 test), `ConnectModeTest.kt` (güncellendi).
+- Testler: `test/.../session/AutoTransportTest.kt` (yeni, 12 test), `test/.../session/MigrationTest.kt` (yeni, 8 test), `ConnectModeTest.kt` (güncellendi; tek seferlik geçiş testleri).
 
 **Davranış**
-- **Mod:** Kayıt yoksa `auto`. Kayıtlı `usb`/`wifi` korunur (kart gereği). **Dikkat:** tablette daha önce "Wi-Fi ile bağlan"a basılmışsa kayıt `wifi`'dir ve Otomatik'e geçmez. Panelden bir kez "Otomatik"e basılmalı ya da `--es transport auto` ile açılmalı.
+- **Mod:** Kayıt yoksa `auto`. Eski kurulumdaki `usb`/`wifi` ilk açılışta bir kez `auto` yapılır (düzeltme 6); sonrasında paneldeki seçim korunur.
   - Panel düğmeleri: "Otomatik (USB varsa USB, yoksa Wi-Fi)", "Yalnız USB", "Yalnız Wi-Fi". Seçili olanın sonunda "(seçili)" yazar.
   - İstatistik katmanında `Bağlantı: USB (otomatik)`.
 - **Açılış (`auto`):** `127.0.0.1:47001`'e 500 ms'lik TCP bağlan-kapat, ayrı iş parçacığında.
@@ -108,11 +128,20 @@ Mevcut durum:
   - Süren bir kalem vuruşu geçişte kesilir: host bırakır, sonraki örnekler STROKE_START'a kadar hover olur. Hiçbir şey basılı kalmaz.
 
 **Varsayımlar / tasarım kararları**
-- Akış sırasındaki yoklama TCP bağlan-kapat değil, gerçek bağlantı denemesi. Yalnız bağlantı yokken (açılış seçimi ve Wi-Fi'de bağlı değilken yeniden tarama) TCP bağlan-kapat kullanılır. Port açıksa bu host'ta HELLO'suz tek bir bağlantı demek, ardından hemen USB'ye geçilir.
+- Akış sırasındaki yoklama TCP bağlan-kapat değil, gerçek bağlantı denemesi. Yalnız bağlantı yokken (açılış seçimi ve Wi-Fi'de bağlı değilken yeniden tarama) TCP bağlan-kapat kullanılır. Port açıksa bu host'ta HELLO'suz tek bir bağlantı demek. Ardından, o anki duruma göre USB'ye geçilir, oturum taşınır ya da hiçbir şey yapılmaz (düzeltme 1).
 - Ucuz (yerel ret) denemeler 15 kez 2 s'de bir, sonra 10 s'de bir (planda belirtilmişti). Kablo değişimi bu sayacı sıfırlar.
 - Clipboard: geçişte `ClipboardSync` yeni nesil için yeniden kuruluyor; UI `Connected` kaldığı için aksi halde yeni bağlantıdan gelen pano mesajları reddedilirdi.
 - `SessionController.dispatch`: girdi izni kapanırken eskisi gibi hemen, açılırken artık eylemlerden **sonra** değişiyor. Normal ACCEPTED'da da kanıt PING'i ve STREAM_PREFS her zaman ilk kayıtlar oluyor.
 - `onPong` yalnız güncel nesilden gelen PONG için çağrılıyor (`MbLog.gen`).
+
+**Birim testi olmayanlar (reviewer L4)**
+- `SessionController` düzeyindeki iş parçacığı davranışının birim testi yok:
+  - `trySendInput`/`dropConnection(gen)` kapıları;
+  - aday/emekli/güncel bağlantı geçişi;
+  - kapanma bildiriminin kutuya yönlendirilmesi (yalnız saf `ControlCloseSlots` testli);
+  - girdi kapısının eylemlerden sonra açılma sırası.
+- Bunlar kod incelemesi ve tablet testiyle doğrulanmalı.
+- Bu dalın `main` ile birleştirilmiş hali tarafımdan derlenmedi; ben yalnız `8f84c09` tabanında `check.sh` koştum.
 
 **Test edilmeyenler (tablet + Mac gerekli; açık bırakılan iki kabul maddesi)**
 - Gerçek kesinti süresi (≤1–2 s hedefi).
@@ -121,7 +150,7 @@ Mevcut durum:
 - `adbd`'nin, host dinlemiyorken bağlantıyı kabul edip hemen kapatıp kapatmadığı (bu durumda açılış seçimi USB der, sonra Wi-Fi'ye düşer).
 
 **Tablette doğrulanacaklar** (`adb logcat -s 'MB/session:*' 'MB/input:*'`, host logu açık)
-1. **Mod ve açılış:** panelde "Otomatik"e bas (ya da `am start -n dev.matebridge.client/.MainActivity --es transport auto`).
+1. **Mod ve açılış:** yeni APK'nın ilk açılışında kayıt `wifi`/`usb` ise `transport_pref_migrated from=… to=auto` satırı bir kez görünmeli; panelde "Otomatik (seçili)" yazmalı. İkinci açılışta bu satır olmamalı.
    - Kablo takılı ve host `adb reverse` kurmuşken: `transport_pick mode=auto chosen=usb reason=usb_open`, akış USB'de.
    - Kablo yokken: `chosen=wifi reason=usb_refused`, akış Wi-Fi'de.
 2. **Wi-Fi → USB:** Wi-Fi'de akarken kablo tak.
@@ -140,5 +169,4 @@ Mevcut durum:
    - Wi-Fi'de akarken ve kablo yokken log gürültüsü olmamalı: `transport_migrate` satırı çıkmamalı (pil `plugged=0` → `disconnected`).
 
 **Açık sorular**
-- Kayıtlı `wifi` tercihi korunuyor (kart gereği). Kullanıcı daha önce panelden Wi-Fi seçtiyse Otomatik'i bir kez elle seçmesi gerekiyor. Tek kullanıcılı projede bir kerelik geçiş isteniyorsa kayıtlı değer görmezden gelinebilir; bu orkestratörün kararı.
 - `ConnectMode.autoDiscover` ve `Transport.parse` artık üretim kodunda kullanılmıyor (testler `autoDiscover`'ı kullanıyor). Kapsam dışı temizlik olarak bırakıldı.
