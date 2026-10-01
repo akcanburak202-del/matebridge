@@ -112,4 +112,15 @@ class ClipboardSyncTest {
         s.onSessionAccepted(false, 1500, gen = 2)
         assertNull(s.onRemote(text("a"), 2)) // session ended
     }
+
+    @Test fun lastReasonExplainsDecision() { // T-063 diag
+        val s = sync()
+        s.onLocalClip("a", false, 500); assertEquals(ClipboardSync.Reason.BEFORE_BASELINE, s.lastReason)
+        s.onLocalClip("a", true, 2000); assertEquals(ClipboardSync.Reason.SENSITIVE, s.lastReason)
+        s.onLocalClip(null, false, 2000); assertEquals(ClipboardSync.Reason.EMPTY, s.lastReason)
+        s.onLocalClip("a", false, 2000); assertEquals(ClipboardSync.Reason.SEND, s.lastReason)
+        s.onLocalClip("a", false, 0); assertEquals(ClipboardSync.Reason.DUPLICATE, s.lastReason)
+        s.enabled = false
+        s.onLocalClip("b", false, 0); assertEquals(ClipboardSync.Reason.DISABLED, s.lastReason)
+    }
 }
