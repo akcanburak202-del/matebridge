@@ -1,7 +1,7 @@
 ---
 id: T-098
 title: Tablet — ses: sessizlik aralarını alt taşma saymamak, ses başlangıcında hızlı çalma, AudioTrack tamponu 1920 → 960
-status: in_progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-095]
@@ -23,20 +23,20 @@ Kullanıcı gecikmeyi göze batan bulmadı. Amaç, düşük riskli kazançlar.
 
 ## Kabul kriterleri
 
-- [ ] **Sessizlik ayrımı.**
+- [x] **Sessizlik ayrımı.**
   - Tampon boşaldığında yeni paket gelmiyorsa ve son paketten beri ≥ ~2 paket süresi (20 ms) geçtiyse durum "kaynak sessiz" (`idle`) sayılır: sönüşle sessizlik yazılır, `underruns` ve güvenlik payı **artmaz**. Ayrı sayaç `idle_gaps`.
   - Gerçek alt taşma (paketler akarken tamponun bitmesi) bugünkü gibi sayılır.
   - Sessizlikten sonra ilk paket: kısa açılışla (≤ 5 ms) **hedef seviye** kadar dolunca hemen çalar. Uzun hazırlık yok; A/V hedefi PRIMING kuralıyla uyumlu kalır.
   - `sample_index` sıçraması (host IO durup yeniden başlayınca) sessizlik olarak işlenir. Eski boşluk sessizlikle doldurulup gecikme biriktirilmez: büyük sıçramada tampon sıfırlanır ve yeni noktadan başlanır.
-- [ ] **Tampon boyu.**
+- [x] **Tampon boyu.**
   - Başlangıç `setBufferSizeInFrames(1 × burst)` (960). Gerçek track alt taşmasında bugünkü gibi bir burst büyür (en çok 6).
   - Deney anahtarı `--ei audio_buf_bursts N` (1–6, varsayılan 1); açılışta log'a yazılır.
-- [ ] Log `MB/audio` stats'a `idle_gaps` eklenir. Diğer alanlar korunur.
-- [ ] Testler:
+- [x] Log `MB/audio` stats'a `idle_gaps` eklenir. Diğer alanlar korunur.
+- [x] Testler:
   - Kesik kesik ses simülasyonu (100 ms ses, 500 ms sessizlik, tekrar): `underruns` ve `safety_ms` artmaz, her ses başlangıcında çalma gecikmesi hedef + açılış süresinden fazla değil.
   - Gerçek ağ kesintisi simülasyonu: `underruns` artar.
   - `sample_index` sıçraması.
-- [ ] `./scripts/check.sh` geçiyor. adb kullanılmaz.
+- [x] `./scripts/check.sh` geçiyor. adb kullanılmaz.
 
 ## Plan
 
@@ -76,3 +76,55 @@ Kullanıcı gecikmeyi göze batan bulmadı. Amaç, düşük riskli kazançlar.
 
 ## Handoff
 
+**Commit'ler:** plan `776425a`, uygulama `dfce55d`. Dal `task/T-098-audio-silence` (`a44ca94` üstünde).
+
+**Dosyalar** (yalnız `client/audio/` ve testleri):
+- `AudioJitterBuffer.kt`:
+  - Sayaçlar: `packets`, `discontinuities`, `jumpEvents`.
+  - ≤ 20 ms boşluk sessizlikle dolar; daha büyük sıçrama dolmaz, yeni noktadan devam eder.
+  - `capture_time_us` sıçraması ≥ 20 ms süreksizlik sayılır.
+- `PlayoutCore.kt`: ertelenmiş tükenme kararı (`idleGaps` / `drift.onUnderrun()`), `idle`, sessizlikten sonra hızlı başlangıç.
+- `AudioPlayout.kt`:
+  - Başlangıç tamponu `AudioBufferConfig` (varsayılan 1 burst).
+  - `audio_device` ve `audio_track` satırlarına `buf_bursts`.
+  - `stats` satırına `jumps` ve `idle_gaps`; sessizken `state=idle`.
+- Yeni: `AudioBufferConfig.kt`.
+- Testler:
+  - Yeni: `SilenceGapSimulationTest.kt` (9 test), `AudioBufferConfigTest.kt`.
+  - Güncellenen: `AudioJitterBufferTest.kt` (büyük sıçrama, küçük boşluk, süreksizlik), `PlayoutSimulationTest.kt` (`stalledProducer…` artık 3 paket sonra karar veriyor).
+
+**`./scripts/check.sh`: ALL OK** (`dfce55d`).
+
+**Varsayımlar / plandan sapmalar:**
+- *Ayrım ölçütü host yakalama zamanı.* Kartın "son paketten beri ≥ 20 ms" kuralı ağ kesintisini de idle sayardı.
+  - Tükenmeden sonra gelen paketlerde `capture_time_us` ya da `sample_index` ≥ 20 ms ileri sıçrarsa → `idle_gaps`.
+  - Sıçrama olmadan 3 paket gelirse → `underruns` (+5 ms güvenlik payı, bugünkü gibi).
+  - 20 ms kuralı yalnız hızlı başlangıcı ve log'daki `state=idle`'ı belirler.
+- *Hızlı başlangıç eşiği.* Plandaki "hedef + burst + 3 ms" tek başına yetmedi: tek 10 ms paketle başlayınca ikinci paket gelmeden tampon bitiyordu (simülasyon). Son kural:
+  - `seviye ≥ hedef + burst + 3 ms` ve `seviye + son paketten beri geçen ≥ hedef + varış aralığı`.
+  - Böylece bir sonraki paket seviyeyi hedefte bulur.
+  - Burst 96'da sesin ilk karesi paketten ~hedef (5 ms) sonra duyulur, test sınırı hedef + 5 ms açılış. Burst 960'ta (bu tablet) en az 1344 kare (~28 ms) gerekir; bu, burst boyunun doğal alt sınırı.
+- *"Tampon sıfırlanır".* Büyük sıçramada okunmamış kuyruk gerçek sestir, atılmaz: sönüşle kalır, yeni paket açılışla hemen arkasına eklenir, sessizlik eklenmez. Okuyucu boşalmışsa bu, sıfırlayıp yeni noktadan başlamakla aynıdır.
+- *Bilinen sınır.* 100 ms'den uzun ağ kesintisinde host eski paketleri atar (`sample_index` ve zaman sıçrar). Bu durum idle sayılır. Güvenlik payı oradaki kaybı zaten önleyemez.
+- *`audio_buf_bursts` okuma yolu.* `MainActivity`'ye (T-096) dokunmamak için değer `AudioPlayout`'a verilen `Context`'in (Activity) intent'inden okunur. Aralık dışı değerler 1–6'ya sıkıştırılır. Track yeniden kurulunca (routing / dead object) yine başlangıç değerine döner (bugünkü gibi).
+- PI penceresi her çalma başlangıcında sıfırlandığı için sessizlik sonundaki boşalma tabanı ve oranı bozmaz.
+
+**Test edilmedi (tablet gerekli):**
+- 1 burst (960) tamponla gerçek track alt taşması ve büyüme.
+- Mac IO durup başlarken `sample_index` sıçrıyor mu, yoksa yarım paket mi oluşuyor? İkisi de simüle edildi.
+- Gerçek gecikme kazancı.
+
+**Tablette kontrol (orkestratör):**
+1. Kur, `am start -S -n dev.matebridge.client/.MainActivity` ile başlat (ek yok). `adb logcat -s MB/audio`:
+   - `ev=audio_device … buf_bursts=1` görünmeli.
+   - Akış başlayınca `ev=audio_track … buf_bursts=1 buf_frames=960` görünmeli. HAL daha büyük verdiyse `buf_frames` onu gösterir; not al.
+2. Mac'te kısa sesleri aralıklı çal (bildirim sesi, 1–2 sn arayla birkaç kez):
+   - `stats` satırında `underruns` 0'da, `safety_ms=5` kalmalı.
+   - `idle_gaps` her sessizlikte 1 artmalı; sessizken `state=idle`.
+   - `jumps` artıyorsa Mac IO yeniden başlarken `sample_index` sıçratıyor demektir (bilgi için not al).
+3. Müzik çal (≥ 30 sn):
+   - `track_underruns` ve `audio_buffer_grow` satırlarına bak. Büyüme olduysa `buf_frames` en çok 5760'a çıkar.
+   - Kesinti ya da cızırtı olmamalı.
+   - `audio_ms` T-095 ölçümüne (~170–190) göre ~20 ms düşmüş olmalı.
+4. Karşılaştırma: `--ei audio_buf_bursts 2` ile yeniden başlat (`-S`). Log'da `buf_bursts=2 buf_frames=1920` olmalı; `audio_ms` farkını not et.
+5. Ağ kesintisi olursa (Wi-Fi'de) `underruns` artmalı, `idle_gaps` artmamalı.
