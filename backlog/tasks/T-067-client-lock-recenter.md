@@ -50,3 +50,5 @@ _(Ajan doldurur.)_
 ## Orkestratör notu (2026-10-01 ~09:55): cihazda geri alındı
 
 Merge (566bf15) → cihaz, aynı köşe karesi içeriği, 12 × 14 sn: 33 ms+ boşluk **%24–41** (önce %1,4–26, kademeli düzelme), `late_drops` toplam 4512 / 170 sn (~26/sn), `rephase` 133. Giriş jitter'ı iki koşuda benzer (`ready_p99` pencere medyanı 25 / 23 ms). Geri alındı (48a9e2b). Şüphe: geç kare tanımı `presentationDeadline` = 13,33 ms kullanıyor (gerçek mandal ~6 ms, T-061) → oran tabanlı yeniden ortalama sürekli tetikleniyor. Önce T-068 (son an deney düğmesi) ölçülecek.
+
+**Düzeltme (~10:05):** geri alınmış yapıyla kontrol ölçümü %80 boşluk verdi — Mac'te kullanıcı 30 fps içerik oynatıyordu (host `cap_fps=30`, ~140 KB/kare). Kullanıcı Mac'i kullanırken alınan SF ölçümleri güvenilir değil; T-067'nin kötü sonucu da karışık olabilir → **sonuçsuz**. Yeniden ölçüm: Mac boştayken, A/B aynı APK'da düğmeyle (T-068 sonrası T-067 `--ez recenter` arkasına), kısa aralıklı dönüşümlü pencerelerle.
