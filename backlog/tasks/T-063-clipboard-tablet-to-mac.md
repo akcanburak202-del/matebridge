@@ -1,7 +1,7 @@
 ---
 id: T-063
 title: Pano: tablet → Mac çalışmıyor
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-054, T-055]
@@ -57,3 +57,7 @@ Kullanıcı başka uygulamada kopyaladı, MateBridge'e döndü:
 - [ ] Testler (`ClipboardSync` saf): açılıştan önce kopya gönderilmez; oturum A → kopukluk sırasında kopya → oturum B kabulü → gönderilir; Mac'ten alınan metin yankılanmaz.
 - [ ] Tanı logu `diag=check` debug seviyesine indirilir ya da kaldırılır (içeriksiz kalır); `focus_*` satırları kalkar.
 - [ ] `./scripts/check.sh` geçiyor.
+
+## Orkestratör notu (2026-10-01 ~11:00)
+
+Cihazda kullanıcı doğruladı: pano iki yönde çalışıyor.

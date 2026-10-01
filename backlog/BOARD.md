@@ -12,7 +12,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
-| [T-063](tasks/T-063-clipboard-tablet-to-mac.md) | Pano: tablet → Mac çalışmıyor | 5 | android-client-dev | [T-054, T-055] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 | [T-068](tasks/T-068-client-deadline-knob.md) | Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü | 5 | android-client-dev | [T-065] |
 
@@ -92,6 +91,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-059](tasks/T-059-client-display-rate.md) | Tablet — panel hızını host'a bildir (DISPLAY_RATE) | 5 | android-client-dev | [T-057] |
 | [T-060](tasks/T-060-client-phase-locked-slots.md) | Tablet — akış hızı panel hızına eşitken faz kilitli yuva ataması (histerezis); seyreltmeyle 33 ms boşlukları gider | 5 | android-client-dev | [T-057, T-059] |
 | [T-061](tasks/T-061-client-fixed-lead.md) | Tablet — varsayılan bırakma öncüsü tüm panel hızlarında mutlak 6,0 ms (P − 1 ms ile sınırlı) | 5 | android-client-dev | [T-057, T-060] |
+| [T-063](tasks/T-063-clipboard-tablet-to-mac.md) | Pano: tablet → Mac çalışmıyor | 5 | android-client-dev | [T-054, T-055] |
 | [T-064](tasks/T-064-pen-overlay-default-off.md) | Yerel kalem izi/noktası varsayılan kapalı | 5 | android-client-dev | [T-056] |
 | [T-065](tasks/T-065-client-newest-frame-always-shown.md) | Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma) | 5 | android-client-dev | [T-057, T-060, T-061] |
 | [T-066](tasks/T-066-host-decimation-hold-last-frame.md) | Mac — seyreltmede ızgaradan erken gelen kare atılmaz, tutulur (son değişiklik her zaman gönderilir) | 5 | mac-host-dev | [T-058] |
