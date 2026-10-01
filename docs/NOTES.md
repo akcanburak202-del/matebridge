@@ -394,3 +394,9 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - Kullanıcı: çizim akıcı, harfler hemen görünüyor. Safari'de YouTube oynarken imleç hareketsizse fps ~30'a iniyor, imleç oynayınca artıyor → host içerik güdümlü yakalıyor; video 30 fps ise beklenen davranış (önceki gözlem: `cap_fps=30`, `cap_int 33,3 ms` tam). 60 fps videoda da 30 kalıyorsa ayrı sorun.
 - AppGallery kurulum sonrası öneri sayfası (`InstallDistActivity`, `downbtn` indirme düğmeleri) `install.sh` döngüsünü bekletti; hiçbir şeye dokunulmadı, `am start` ile MateBridge öne alındı.
 - Kullanıcı (12:15): Mac'in 05:59 ve 10:29 kapanmaları **elektrik kesintisi** kaynaklı. (`autorestart 0` olduğu için elektrik gelince kendiliğinden açılmıyor; değiştirmek kullanıcının kararı.)
+
+## 2026-10-01 ~12:40 — DÜZELTME + host gecikme dökümü (T-072)
+
+- **Düzeltme (~11:30 girdisi):** tablet `MB/render` satırındaki `net_p50/p95/p99_us` **gecikme değil, ağdan varış aralığı** (`networkGaps`); 60 fps'te p50 16,6 ms doğal. "Yakalama→varış 16,6 ms" ve "USB'de ~10 ms" yorumları **yanlış**. p99 40 ms = ara sıra 40 ms'lik varış boşluğu (gecikmeli kare). Gerçek gecikme alanı `latency_us` (yakalama damgası → çözücü çıkışı).
+- Host (47620b2, 120 fps, `tick`): `gate_wait`/`slot_wait` ≈ 0 (T-072 kapı toleransı yarım aralık), `enc` p50 6,9 ms, `cap_to_sent` p50 7,2 / p99 ~8 ms, sıçrama yok. **`pts_vs_deliv` = +6,6 ms**: SCK'nın PTS/`displayTime` damgası, karenin geri çağrısından 6,6 ms *ileride* (gelecekteki gösterim anı). Teldeki `capture_time_us` = PTS → tabletin `latency_us` değeri gerçek yakalama→çözme süresini ~6,6 ms **eksik** gösteriyor; pacing'i etkilemez (sabit fark), yalnız raporu.
+- Kaba bütçe (60 Hz, gerçek): host ~7 ms + USB/adb ~4–6 ms + çözme ~10 ms + sunum bekleme (120 Hz'te ~12,6 ms planlı; 60 Hz'te ~42 ms kilit).

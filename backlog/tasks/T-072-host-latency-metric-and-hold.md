@@ -1,7 +1,7 @@
 ---
 id: T-072
 title: Mac — gecikme ölçümünün başlangıç noktası (yakalama zamanı) ve 120 fps'te kodlayıcı öncesi bekleme
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-070]
