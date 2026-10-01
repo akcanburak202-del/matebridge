@@ -9,13 +9,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 
-## todo
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
-| [T-087](tasks/T-087-host-idle-refresh-real-refine.md) | Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç | 5 | mac-host-dev | [T-086] |
-
 ## done
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -102,4 +95,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-082](tasks/T-082-h264-vs-hevc-decode.md) | Deney — H.264 ile HEVC karşılaştırması (tablette çözme süresi, kalite, uçtan uca gecikme) | 5 | orchestrator | [T-077] |
 | [T-083](tasks/T-083-capture-vsync-phase.md) | Araştırma — Mac yakalama fazını tablet vsync'ine hizalamak (ortalama ~4 ms bekleme kazancı) | 5 | orchestrator | [T-071] |
 | [T-084](tasks/T-084-surfacecontrol-presentation.md) | Deney — SurfaceControl/ASurfaceControl ile doğrudan sunum (HarmonyOS'ta compositor gecikmesi) | 5 | orchestrator | [T-071] |
+| [T-085](tasks/T-085-bitrate-text-sharpness.md) | Deney — bit hızı/kodlayıcı kalite ayarı ile yazı keskinliği (Akıcı mod) | 5 | orchestrator | [] |
 | [T-086](tasks/T-086-host-encoder-quality-knobs.md) | Mac — kodlayıcı deney düğmeleri (H.264, bit hızı, kalite), boşta kalite tazeleme ve keskinlik ölçümü (T-082/T-085) | 5 | mac-host-dev | [T-082, T-085] |
+| [T-087](tasks/T-087-host-idle-refresh-real-refine.md) | Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç | 5 | mac-host-dev | [T-086] |

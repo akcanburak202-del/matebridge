@@ -1,7 +1,7 @@
 ---
 id: T-087
 title: Mac — boşta tazeleme gerçek hatta kalite artırmıyor (222 baytlık atlama kareleri); düzelt ve ölç
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-086]

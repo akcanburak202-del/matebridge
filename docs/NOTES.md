@@ -561,3 +561,19 @@ Kullanıcı Mac'te boştaydı. Panel Dinamik modda (girdi yok) ~60/120 arasında
 - Kullanıcı gecikmeye önem veriyor (T-080), bu yüzden **hareket için 60 Mbps kalıyor**.
 - Durağan yazı keskinliği için boşta tazeleme düşünülmüştü (bench'te 42,5 → 47,6 dB). Ancak gerçek hatta tazeleme kareleri **222 bayt** (atlama karesi) çıkıyor, yani etkisiz → T-087.
 - Tablet ve Mac ekran görüntüleri arasındaki luma PSNR renk yönetimi farkı yüzünden ~33,7 dB'de sabit; bu yöntem keskinlik farkını ayırt edemiyor. Kare boyutu ve bench PSNR kullanılmalı.
+
+## 2026-10-01 ~17:30 — T-087: boşta tazeleme neden etkisiz (düzeltme)
+
+- Aynı tampon nesnesi neden değil. `--refresh-buffer same|copy` iki kipte de aynı baytı ve PSNR'ı veriyor.
+- Gerçek neden: oturum oturduktan sonra son hareket karesi bu bit hızında zaten en düşük QP'de kodlanmış oluyor. Aynı içerik gelince VT 222 baytlık tamamen atlama karesi üretiyor; cihazda görülen tam buydu.
+- **T-086'daki 42,5 → 47,6 dB kazancı bench ısınma yanılgısıydı.** 30 hareket karesinde açılış anahtar karesinin bit borcu ölçümü bozuyordu. Bench varsayılanı artık 240 kare.
+- `fast` profil (≥120 fps) akış ortasındaki her ayar değişikliğini yok sayıyor: max QP, Quality, bit hızı, PrioritizeSpeed, flush, zorunlu anahtar kare. Kare başına `BaseFrameQP` -12900 dönüyor. Aynı ayarlar oturum oluşturulurken verilirse çalışıyor. `llrc` profili akış ortasında max QP değişikliğini uyguluyor (`MATEBRIDGE_IDLE_REFRESH_QP`, 51,1 → 57,4 dB), ama ~10 ms/kare sürdüğü için yalnızca ≤60 fps'te kullanılabilir.
+- Oturmuş durağan metin (bench, 2800×1840@120, 240 kare):
+
+  | ayar | PSNR |
+  |---|---|
+  | 60 Mbps | 48,5 dB |
+  | 80 Mbps | 53,0 dB |
+  | `QUALITY=0.8` | 53,0 dB |
+
+- Karar: varsayılan değişmiyor (gecikme önceliği). T-085 ve T-087 kapandı.
