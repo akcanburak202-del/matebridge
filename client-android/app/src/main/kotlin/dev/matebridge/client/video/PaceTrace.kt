@@ -59,8 +59,31 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
 
         const val HEADER_LINE = "seq,capture_us,ready_ns,now_vsync_last_ns,period_ns,epoch,deadline_ns,dev_ns," +
             "d_ns,jitter_ns,earliest_ns,slot_ns,lock_slot_ns,k,acquire_ns,bad_run,path,late_drop,collided," +
-            "released_slot_ns,release_ns,render_ns,action,own_slot_ns"
+            "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action"
         const val COLS = 24
+        /** CSV columns: the [COLS] presentation columns plus six receive-path columns. */
+        const val CSV_COLS = COLS + 6
+        /** Columns of the receive ring (T-073): seq, capture_us, bytes, recv, decrypted, queued, input, action. */
+        private const val RX_COLS = 8
+        private const val R_SEQ = 0; private const val R_CAPTURE = 1; private const val R_BYTES = 2
+        private const val R_RECV = 3; private const val R_DEC = 4; private const val R_QUEUED = 5
+        private const val R_INPUT = 6; private const val R_ACTION = 7
+
+        /** Receive-path fates of a frame ([onRxAction]); [RX_QUEUED] is the normal one. */
+        const val RX_RECEIVED = 0 // read and decrypted, not yet offered to the queue
+        const val RX_QUEUED = 1
+        const val RX_CONFIG = 2 // codec config, queued
+        const val RX_QUEUE_DROP = 3 // overflow: the incoming frame was refused
+        const val RX_PENDING_DROP = 4 // queued, then flushed by an overflow, keyframe or error
+        const val RX_GATE_DROP = 5 // non-key frame while waiting for a keyframe
+        const val RX_RESET_DROP = 6 // cleared by a queue reset
+        private val RX_ACTIONS = arrayOf("received", "queued", "config", "queue_drop", "pending_drop", "gate_drop", "reset_drop")
+
+        /**
+         * The trace the video connection thread stamps receive times into; set together with the renderer's trace so
+         * the session code needs no wiring. Null = tracing off (the hot path then costs one volatile read).
+         */
+        @Volatile var active: PaceTrace? = null
         private val PATHS = arrayOf("none", "unlocked", "locked", "acquire", "sparse", "rephase", "recenter")
         private val ACTIONS = arrayOf("pending", "release", "replace", "move", "discard", "now")
 
@@ -75,6 +98,9 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
     }
 
     private val data = LongArray(capacity * COLS)
+    // Receive ring (T-073), slot = frameSeq % capacity, valid when R_SEQ matches. Written by the video connection
+    // thread (onRecv), the queue (onRx*) and the decoder input thread (onInput); joined to the rows above by seq.
+    private val rx = LongArray(capacity * RX_COLS).also { for (i in 0 until capacity) it[i * RX_COLS + R_SEQ] = -1 }
     @Volatile private var count = 0L // rows ever recorded
 
     /** Rows currently held (at most [capacity]). */
@@ -128,13 +154,54 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         data[b + C_ACTION] = ACTION_MOVE.toLong()
     }
 
+    private fun rxBase(seq: Long): Int {
+        val b = (seq % capacity).toInt() * RX_COLS
+        return if (rx[b + R_SEQ] == seq) b else -1
+    }
+
+    /** A VIDEO_FRAME record was read from the socket at [recvNs] and decrypted/parsed at [decryptedNs]. Starts the frame's receive row. */
+    fun onRecv(seq: Long, captureUs: Long, bytes: Int, recvNs: Long, decryptedNs: Long) {
+        val b = (seq % capacity).toInt() * RX_COLS
+        val r = rx
+        r[b + R_SEQ] = seq; r[b + R_CAPTURE] = captureUs; r[b + R_BYTES] = bytes.toLong(); r[b + R_RECV] = recvNs
+        r[b + R_DEC] = decryptedNs; r[b + R_QUEUED] = 0; r[b + R_INPUT] = 0; r[b + R_ACTION] = RX_RECEIVED.toLong()
+    }
+
+    /** The frame went through [FrameQueue.offer] at [nowNs] with fate [action] (an RX_* code). */
+    fun onRxAction(seq: Long, nowNs: Long, action: Int) {
+        val b = rxBase(seq); if (b < 0) return
+        if (action == RX_QUEUED || action == RX_CONFIG || rx[b + R_QUEUED] == 0L) rx[b + R_QUEUED] = nowNs
+        rx[b + R_ACTION] = action.toLong()
+    }
+
+    /** The frame was handed to the codec (queueInputBuffer) at [nowNs]. */
+    fun onInput(seq: Long, nowNs: Long) {
+        val b = rxBase(seq); if (b < 0) return
+        rx[b + R_INPUT] = nowNs
+    }
+
+    private fun appendRx(out: Appendable, b: Int, c: Int) {
+        // c = 0..5: recv_ns, decrypted_ns, queued_ns, input_ns, bytes, rx_action
+        when (c) {
+            0 -> out.append(rx[b + R_RECV].toString())
+            1 -> out.append(rx[b + R_DEC].toString())
+            2 -> out.append(rx[b + R_QUEUED].toString())
+            3 -> out.append(rx[b + R_INPUT].toString())
+            4 -> out.append(rx[b + R_BYTES].toString())
+            else -> out.append(RX_ACTIONS.getOrElse(rx[b + R_ACTION].toInt()) { "?" })
+        }
+    }
+
     /** CSV text, oldest row first: header then one line per row. */
     fun writeCsv(out: Appendable) {
         out.append(HEADER_LINE).append('\n')
         val n = count
         val first = maxOf(0L, n - capacity)
+        val used = BooleanArray(capacity)
         for (id in first until n) {
             val b = (id % capacity).toInt() * COLS
+            val rb = rxBase(data[b + C_SEQ])
+            if (rb >= 0) used[rb / RX_COLS] = true
             for (c in 0 until COLS) {
                 if (c > 0) out.append(',')
                 val v = data[b + c]
@@ -144,6 +211,20 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                     else -> out.append(v.toString())
                 }
             }
+            for (c in 0..5) { out.append(','); if (rb >= 0) appendRx(out, rb, c) else out.append(if (c == 5) "none" else "0") }
+            out.append('\n')
+        }
+        // Frames that were received but never decoded/presented (dropped, gated, still queued): one row each, the
+        // action column carries the receive-path fate, presentation columns are zero.
+        for (slot in 0 until capacity) {
+            val rb = slot * RX_COLS
+            val seq = rx[rb + R_SEQ]
+            if (seq < 0 || used[slot]) continue
+            out.append(seq.toString()).append(',').append(rx[rb + R_CAPTURE].toString()).append(',')
+            for (c in 2 until COLS) {
+                out.append(if (c == C_PATH) "none" else if (c == C_ACTION) RX_ACTIONS.getOrElse(rx[rb + R_ACTION].toInt()) { "?" } else "0").append(',')
+            }
+            for (c in 0..5) { if (c > 0) out.append(','); appendRx(out, rb, c) }
             out.append('\n')
         }
     }

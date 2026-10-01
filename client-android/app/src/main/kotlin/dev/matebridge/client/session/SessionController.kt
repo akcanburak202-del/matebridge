@@ -14,6 +14,7 @@ import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoFrame
+import dev.matebridge.client.video.PaceTrace
 import dev.matebridge.client.protocol.VideoHello
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Limits
@@ -467,11 +468,14 @@ class SessionController(
                 val input = socket.getInputStream()
                 while (true) {
                     val n = input.read(buf)
+                    val trace = PaceTrace.active // T-073: receive-path timestamps (null = off)
+                    val recvNs = if (trace != null) System.nanoTime() else 0L
                     if (n < 0) break
                     decoder.feed(buf, 0, n)
                     while (true) {
                         val msg = decoder.next() ?: break
                         if (msg is VideoFrame) {
+                            trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
                             if (hello.configId == currentConfigId) listener.onVideoFrame(msg)
                         }
