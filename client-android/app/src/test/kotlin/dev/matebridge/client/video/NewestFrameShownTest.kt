@@ -16,7 +16,7 @@ class NewestFrameShownTest {
     }
 
     private class Sim(var panelHz: Int, val streamFps: Int, val arrivalNs: Long) {
-        val clk = VsyncClock(panelHz.toFloat()).also { it.onVsync(0); it.setDisplayTiming(0, 13_330_000L) }
+        val clk = VsyncClock(panelHz.toFloat()).also { it.onVsync(0); it.deadlineOverrideNs = VsyncClock.DEADLINE_DISPLAY; it.setDisplayTiming(0, 13_330_000L) }
         val pacer = AdaptivePacer(clk, 1_000_000_000L / streamFps).also {
             it.intervalProvider = { p -> FrameInterval.resolve(1_000_000_000L / streamFps, p, arrivalNs) }
         }
@@ -113,7 +113,7 @@ class NewestFrameShownTest {
     }
 
     @Test fun phaseLockReacquiresAfterASparseGap() {
-        val clk = VsyncClock(60f).also { it.onVsync(0); it.setDisplayTiming(0, 13_330_000L) }
+        val clk = VsyncClock(60f).also { it.onVsync(0); it.deadlineOverrideNs = VsyncClock.DEADLINE_DISPLAY; it.setDisplayTiming(0, 13_330_000L) }
         val p = AdaptivePacer(clk, 16_666_666L)
         var cap = 1_000_000_000L
         var now = cap + 15 * ms
