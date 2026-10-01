@@ -542,3 +542,22 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
   | `PRIO_SPEED=0` | 52,4 dB | ~25 ms kodlama, kare kaybı, kullanılamaz |
 
 - Bit hızı en büyük kaldıraç. Cihazda ölçülecek: USB'de 80–100 Mbps'in varış düzensizliğine ve gecikmeye etkisi, ayrıca boşta tazelemenin tablet pacer'ında sorunsuz geçip geçmediği.
+
+## 2026-10-01 ~15:30 — Cihazda bit hızı A/B (T-085, USB, Akıcı, tam ekran kayan metin)
+
+Araçlar `~/.cache/matebridge-tools`:
+- `scroll`: tam ekran yoğun metin, 120 Hz kayma.
+- `brab.py`: host env ile yeniden başlatma, tablette `pace_trace`, 25 s pencere, 2 tur dönüşümlü.
+
+Kullanıcı Mac'te boştaydı. Panel Dinamik modda (girdi yok) ~60/120 arasında gidip geldi; ~89 fps.
+
+| bit hızı | KB/kare p50/p95 | çözme p50/p95/p99 ms | alım→giriş p50 | tablet gecikme medyanı |
+|---|---|---|---|---|
+| 60 Mbps (bugünkü) | 40/55 | 12,3/15,2/20–27 | 2,3 ms | **22,7 ms** |
+| 80 Mbps | 62/81 | 12,6/15,5/26–29 | 2,6 ms | 25,0 ms |
+| 100 Mbps | 78/107 | 12,9/19–20/**40** | 2,7 ms | 25,7 ms |
+
+- Bit hızı artınca gecikme +2–3 ms artıyor; 100 Mbps'te çözme kuyruğu da uzuyor (p99 40 ms).
+- Kullanıcı gecikmeye önem veriyor (T-080), bu yüzden **hareket için 60 Mbps kalıyor**.
+- Durağan yazı keskinliği için boşta tazeleme düşünülmüştü (bench'te 42,5 → 47,6 dB). Ancak gerçek hatta tazeleme kareleri **222 bayt** (atlama karesi) çıkıyor, yani etkisiz → T-087.
+- Tablet ve Mac ekran görüntüleri arasındaki luma PSNR renk yönetimi farkı yüzünden ~33,7 dB'de sabit; bu yöntem keskinlik farkını ayırt edemiyor. Kare boyutu ve bench PSNR kullanılmalı.
