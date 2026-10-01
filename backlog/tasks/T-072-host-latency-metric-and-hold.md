@@ -1,7 +1,7 @@
 ---
 id: T-072
 title: Mac — gecikme ölçümünün başlangıç noktası (yakalama zamanı) ve 120 fps'te kodlayıcı öncesi bekleme
-status: todo
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: [T-070]
@@ -31,12 +31,20 @@ Kullanıcı: "ekran aktarımını mümkün olduğunca mükemmelleştirelim". İk
 
 ## Plan
 
-_(Ajan doldurur.)_
+1. displayTime dönüşümü probe ile doğrulandı (125/3, CM host saatiyle aynı taban) -> dönüşüm hata değil; SCK damgaları geri çağrıdan ÖNCE değil SONRA çıkıyor. İz başlangıcı = min(display, pts, delivered); ham damgalar işaretli ofsetlerle loglanır.
+2. hold = gate_wait + slot_wait (kare yuva doluyken geldiyse son yuva boşalmasına kadar slot_wait).
+3. Seyreltme yokken kapı toleransı = yarım kaynak aralığı; seyreltmede değişmez. Testler FrameGateTests/LatencyTraceTests.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `git log task/T-072-host-metric-hold` (SHA raporda)
+- **Dokunulan dosyalar:** MateBridgeCore/Video/{LatencyTrace,FrameGate}.swift; MateBridgeHost/Video/{HEVCEncoder,ScreenCapture}.swift; Tests/.../Video/{FrameGateTests,LatencyTraceTests}.swift
+- **Bulgu (ölçüm):** `mach_timebase_info` bu Mac'te 125/3; `ticks*125/3` ns ve `CMClockGetHostTimeClock` aynı taban (probe: fark = okuma aralığı). Dönüşüm doğru, kırpma da neden değil. Cihazdaki `sck_lag=0` ve `cap_to_sent < enc` ancak hem `displayTime` hem PTS geri çağrı anından SONRA (ileride) ise açıklanır. Doğrulama cihazda: yeni `*_vs_deliv` alanları.
+- **Düzeltme:** iz başlangıcı `FrameTrace.origin` = min(displayTime, PTS, delivered); `cap_to_sent` aşamaların toplamından asla kısa değil; `sck_lag` > 0 yalnızca damgalar gerçekten geriden geliyorsa. Tel `capture_time_us` değişmedi (PTS).
+- **Yeni log alanları** (`ev=latency`): `gate_wait_ms_p50_95_99_max`, `slot_wait_ms_p50_95_99_max` (hold = gate + slot; sıra: sck_lag, hold, gate_wait, slot_wait, enc, conv, queue, write, cap_to_sent); işaretli `pts_vs_display_ms_p50_99`, `pts_vs_deliv_ms_p50_99`, `display_vs_deliv_ms_p50_99` (ilk damga - ikinci; pts_vs_deliv > 0 = PTS geri çağrıdan ileride); `no_display=N`. CSV değişmedi.
+- **Bekleme ayrıştırması:** `slot_wait` = kare iki yuva doluyken geldiyse varıştan son yuva boşalmasına kadar; kalan `gate_wait`.
+- **Kapı değişikliği ve gerekçe:** seyreltme yokken `FrameGate` toleransı 2 ms -> yarım kaynak aralığı (120 fps 4,17 ms; 60 fps 8,33 ms). Kapı yalnız ortalama hızı sınırlar; SCK zaten akış fps'inde teslim eder; 2 ms, ±1-2 ms jitter + faz kaymasını karşılamıyordu, kare zamanlayıcıyla bekliyordu. Izgara hâlâ kabul başına tam bir aralık ilerler: uzun vadeli hız <= fps; 3'lü patlamada en çok 2 kare geçer (biri hemen, biri en erken yarım aralık sonra, en yeni kazanır). Seyreltmede tolerans min(2 ms, aralık/4) aynen (testle sabit). Testler: 120 Hz jitter + 3 faz -> held=0; 60 Hz jitter; 3'lü patlama; 240 Hz kaynak <= 120 fps; tolerans tablosu; mach dönüşümü; origin; işaretli ofsetler; hold ayrışması.
+- **Yuva beklemesi (`maxInFlight=2`):** değiştirilmedi, yalnız ölçülür (`slot_wait`). Neden dolu: kodlama 6-7,5 ms > 120 fps aralığının (8,33 ms) yarısı; iki kare uçuştayken üçüncüsü bekler. Karar cihaz verisinden sonra.
+- **Varsayımlar:** `displayTime` `UInt64` mach ticks olarak okunabiliyor (olmazsa `no_display` sayar). Damgaların geri çağrıdan ileride olması hipotez; log kanıtlayacak.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** yeni alanlar gerçek akışta, `pts_vs_deliv` işareti, 120 fps'te `gate_wait` p50 ~ 0, seyreltmesiz akışta kare hızı/sıçrama artmadı (tolerans büyüdü: kareler yarım aralık erken gidebilir). Host çalıştırılmadı.
+- **Açık sorular:** damgalar geri çağrının ilerisindeyse tabletin `capture_time_us` (PTS) tabanlı gecikmesi host gecikmesini PTS - delivered kadar az gösterir. Öneri: tablet ölçümüne bu ofseti ekle ya da telde geri çağrı zamanını kullan (protokol kararı, orkestratör).

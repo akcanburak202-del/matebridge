@@ -6,20 +6,22 @@ import XCTest
 private struct Sim {
     var pacer: FramePacer<UInt64>
     var sent: [UInt64] = []
+    /// Time each frame in `sent` was submitted.
+    var sentAt: [UInt64] = []
     var overwritten = 0
 
     init(fps: Int = 60) { pacer = FramePacer<UInt64>(streamFps: fps) }
 
     mutating func offer(at t: UInt64) {
         switch pacer.offer(t, ptsUs: t, nowUs: t, slotFree: true) {
-        case .submit(let f): sent.append(f)
+        case .submit(let f): sent.append(f); sentAt.append(t)
         case .hold, .drop: break
         }
         overwritten += pacer.takeOverwritten()
     }
 
     mutating func tick(at t: UInt64) {
-        if case .submit(let f) = pacer.takePending(nowUs: t, slotFree: true) { sent.append(f) }
+        if case .submit(let f) = pacer.takePending(nowUs: t, slotFree: true) { sent.append(f); sentAt.append(t) }
         overwritten += pacer.takeOverwritten()
     }
 
@@ -317,6 +319,82 @@ final class DecimationTests: XCTestCase {
         if case .hold = p.offer(25_000, ptsUs: 25_000, nowUs: 25_000, slotFree: true) {} else { XCTFail("25 ms is off-grid") }
         if case .submit = p.offer(33_400, ptsUs: 33_400, nowUs: 33_400, slotFree: true) {} else { XCTFail("33.4 ms is on-grid") }
         XCTAssertFalse(p.hasPending)
+    }
+
+    // MARK: T-072 pass-through tolerance (no decimation)
+
+    /// Offers each arrival at its own time with a free slot; returns how many were submitted at once and the
+    /// number that had to wait for the timer (a frame that was held counts as waited).
+    private func passThroughRun(fps: Int, arrivals: [UInt64]) -> (immediate: Int, held: Int, p: FramePacer<UInt64>) {
+        var p = FramePacer<UInt64>(streamFps: fps)
+        var immediate = 0, held = 0
+        for a in arrivals {
+            switch p.offer(a, ptsUs: a, nowUs: a, slotFree: true) {
+            case .submit: immediate += 1
+            case .hold: held += 1
+            case .drop: break
+            }
+        }
+        return (immediate, held, p)
+    }
+
+    func testSteady120HzWithJitterAndPhaseOffsetNeverWaitsAtTheGate() {
+        let jitter: [Int64] = [0, 1_500, -1_500, 700, -300, 1_200, -900, 400]
+        // The grid anchors on whichever frame comes first; a constant phase offset must not matter.
+        for phase in [0, 3_100, 8_000] as [Int64] {
+            let arrivals = (0..<480).map { UInt64(1_000_000 + phase + Int64($0) * 8_333 + jitter[$0 % jitter.count]) }
+            let r = passThroughRun(fps: 120, arrivals: arrivals)
+            XCTAssertEqual(r.held, 0, "phase \(phase): gate_wait must be 0")
+            XCTAssertEqual(r.immediate, arrivals.count)
+        }
+    }
+
+    func testSteady60HzWithJitterNeverWaitsAtTheGate() {
+        let jitter: [Int64] = [0, 2_500, -3_000, 1_000, -2_000, 3_500]
+        let arrivals = (0..<240).map { UInt64(500_000 + Int64($0) * 16_666 + jitter[$0 % jitter.count]) }
+        let r = passThroughRun(fps: 60, arrivals: arrivals)
+        XCTAssertEqual(r.held, 0)
+    }
+
+    func testBurstOfThreeIsCappedAndKeepsTheAverageAtTheStreamRate() {
+        // 3 frames at the same instant, every 3 intervals (the average source rate equals the stream fps).
+        var sim = Sim(fps: 120)
+        var arrivals: [UInt64] = []
+        for g in 0..<120 { arrivals += Array(repeating: 1_000_000 + UInt64(g) * 25_000, count: 3) }
+        sim.run(arrivals: arrivals, endUs: 4_100_000)
+        // at most 2 of each burst pass, never a third in the same instant
+        XCTAssertLessThanOrEqual(sim.sent.count, 2 * 120)
+        // no more than 2 submissions within any window shorter than the interval (8.33 ms)
+        let times = sim.sentAt
+        for i in 0..<times.count {
+            let inWindow = times.filter { $0 >= times[i] && $0 < times[i] + 8_333 }.count
+            XCTAssertLessThanOrEqual(inWindow, 2)
+        }
+        // long-run average: never above the stream fps (+1 for the edges)
+        let span = Double(times.last! - times.first!) / 1_000_000
+        XCTAssertLessThanOrEqual(Double(times.count - 1) / span, 120.0 * 1.01)
+    }
+
+    func testFastSourceIsStillCappedAtTheStreamFps() {
+        // 240 Hz source into a 120 fps stream: the early allowance cannot be used cumulatively.
+        var sim = Sim(fps: 120)
+        let arrivals = (0..<480).map { UInt64(1_000_000) + UInt64($0) * 4_166 }   // 2 s
+        sim.run(arrivals: arrivals, endUs: 3_100_000)
+        let times = sim.sentAt
+        let span = Double(times.last! - times.first!) / 1_000_000
+        XCTAssertLessThanOrEqual(Double(times.count - 1) / span, 120.0 * 1.02)
+    }
+
+    func testToleranceBySituation() {
+        var p = FramePacer<UInt64>(streamFps: 120)
+        XCTAssertEqual(p.gate.toleranceUs, 4_166, "pass-through: half a source interval")
+        p.setTargetFps(60)
+        XCTAssertEqual(p.gate.toleranceUs, 2_000, "decimating: unchanged (T-058/T-066)")
+        p.setTargetFps(120)
+        XCTAssertEqual(p.gate.toleranceUs, 4_166)
+        var q = FramePacer<UInt64>(streamFps: 60)
+        q.setTargetFps(30)
+        XCTAssertEqual(q.gate.toleranceUs, 2_000)
     }
 
     func testKeyframeBypassStillGoesThroughWhileDecimating() {

@@ -77,8 +77,15 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     public init(streamFps: Int, toleranceUs: UInt64 = FrameGate.defaultToleranceUs) {
         self.streamFps = streamFps
         self.baseToleranceUs = toleranceUs
-        gate = FrameGate(streamFps: streamFps, toleranceUs: toleranceUs)
+        gate = FrameGate(streamFps: streamFps, toleranceUs: max(toleranceUs, Self.passThroughToleranceUs(streamFps)))
     }
+
+    /// Gate tolerance while not decimating (T-072): half a source interval. There the gate only has to cap the
+    /// *average* rate (SCK already delivers at the stream fps), so a frame may use its grid slot up to half an
+    /// interval early instead of waiting for a timer; the grid still advances one interval per accepted frame, so
+    /// the long-run rate stays at or below the stream fps and no more than two frames of a burst pass within one
+    /// interval. 2 ms was far less than the ±1-2 ms delivery jitter plus phase drift needs at 120 fps (8.33 ms).
+    static func passThroughToleranceUs(_ fps: Int) -> UInt64 { 1_000_000 / UInt64(max(1, fps)) / 2 }
 
     /// Sets the target send rate (`min(stream fps, panel Hz)`, T-058). Below the stream fps the pacer decimates:
     /// the gate runs on capture timestamps and a frame that arrives before its slot is dropped, never held, so an
@@ -90,7 +97,8 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         // Decimation judges jittered capture timestamps: stay well below half a source interval, or a frame of the
         // dropped half could pass the gate.
         let sourceIntervalUs = 1_000_000 / UInt64(max(1, streamFps))
-        gate.setFps(target, toleranceUs: decimating ? min(baseToleranceUs, sourceIntervalUs / 4) : baseToleranceUs)
+        gate.setFps(target, toleranceUs: decimating ? min(baseToleranceUs, sourceIntervalUs / 4)
+                                                    : max(baseToleranceUs, Self.passThroughToleranceUs(streamFps)))
     }
 
     /// Captures replaced by a newer capture while waiting for their grid slot (intended, not a loss; T-066: a

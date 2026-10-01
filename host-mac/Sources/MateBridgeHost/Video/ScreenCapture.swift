@@ -96,9 +96,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     static func machTicksToUs(_ ticks: UInt64) -> UInt64 {
         var tb = mach_timebase_info_data_t()
         mach_timebase_info(&tb)
-        let ns = ticks.multipliedFullWidth(by: UInt64(tb.numer))
-        let (q, _) = UInt64(tb.denom).dividingFullWidth(ns)
-        return q / 1000
+        return MachTime.ticksToUs(ticks, numer: tb.numer, denom: tb.denom)
     }
 
     /// Log-friendly name of an SCK frame status ("unknown" when the attachment is missing).

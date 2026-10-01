@@ -37,6 +37,10 @@ final class HEVCEncoder: @unchecked Sendable {
         var deliveredUs: UInt64
         /// Trace origin: SCK display time (0 = unknown, the trace falls back to `captureTimeUs`).
         var displayTimeUs: UInt64 = 0
+        /// Both encoder slots were free when the frame arrived (T-072: splits `hold` into gate and slot wait).
+        var slotFreeAtArrival = true
+        /// Time spent waiting for a free slot, set when the frame claims its slot (`reserveSlot`).
+        var slotWaitUs: UInt64 = 0
     }
 
     static let maxInFlight = 2
@@ -53,6 +57,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private var forceKeyframe = true          // the very first frame is a keyframe
     private var lastParameterSets: [UInt8] = []
     private var inFlight = 0
+    /// Host time of the last slot release (T-072).
+    private var lastSlotFreeUs: UInt64 = 0
     private var last: Input?
     private var lastPTS = CMTime.invalid
     private var lastSubmitNs: UInt64 = DispatchTime.now().uptimeNanoseconds
@@ -203,9 +209,11 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     /// `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
-    private func submit(_ input: Input, bypassGate: Bool = false) {
+    private func submit(_ arrived: Input, bypassGate: Bool = false) {
         lock.lock()
         guard !stopped, let s = session else { lock.unlock(); return }
+        var input = arrived
+        input.slotFreeAtArrival = inFlight < HEVCEncoder.maxInFlight
         last = input
         var toSend: (Input, Bool)?
         var delay: UInt64?
@@ -243,6 +251,9 @@ final class HEVCEncoder: @unchecked Sendable {
     private func reserveSlot(_ input: Input) -> (Input, Bool) {
         inFlight += 1
         var f = input
+        // T-072: a frame that arrived with both slots busy waited for the slot until the last release; the rest of
+        // its hold is gate wait. (Frames that arrived with a free slot never wait for one.)
+        f.slotWaitUs = !f.slotFreeAtArrival && lastSlotFreeUs > f.deliveredUs ? lastSlotFreeUs - f.deliveredUs : 0
         if lastPTS.isValid, f.pts <= lastPTS { f.pts = lastPTS + CMTime(value: 1, timescale: 1000) }
         lastPTS = f.pts
         lastSubmitNs = DispatchTime.now().uptimeNanoseconds
@@ -256,10 +267,14 @@ final class HEVCEncoder: @unchecked Sendable {
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
         var trace = FrameTrace()
-        // Origin = the frame's SCK display time when known (not clamped: a display time after the callback shows as
-        // sck_lag 0, which is itself a finding), else the presentation timestamp.
-        trace.captureUs = frame.displayTimeUs != 0 ? frame.displayTimeUs : captureTimeUs
+        // Origin: the earliest of the SCK stamps and the callback (T-072), so the totals can never be shorter than
+        // the stages; the raw stamps travel along and are logged as signed offsets.
+        trace.ptsUs = captureTimeUs
+        trace.displayUs = frame.displayTimeUs
         trace.deliveredUs = frame.deliveredUs
+        trace.captureUs = FrameTrace.origin(displayUs: frame.displayTimeUs, ptsUs: captureTimeUs,
+                                            deliveredUs: frame.deliveredUs)
+        trace.slotWaitUs = frame.slotWaitUs
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
@@ -311,6 +326,7 @@ final class HEVCEncoder: @unchecked Sendable {
     private func releaseSlotAndDrain() {
         lock.lock()
         inFlight -= 1
+        lastSlotFreeUs = HostClock.nowUs()
         let (next, delay) = takePendingLocked()
         lock.unlock()
         if let delay { armFlush(delay) }
