@@ -1,7 +1,7 @@
 ---
 id: T-113
 title: Mac — uygulamadaki kodlama süresi (enc_ms ~9,5 ms) yalıtılmış bench'ten (~6,4 ms) neden uzun? Ölç, nedeni bul
-status: todo
+status: in-progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -46,6 +46,16 @@ Olası nedenler:
 
 ## Plan
 
-(ajan doldurur, commit eder, sonra uygular)
+1. Ölçüm noktasını koddan çıkar: `enc_ms` = `FrameTrace.encUs` = `submittedUs` (VTCompressionSessionEncodeFrame çağrısından hemen önce) → `encodedUs` (çıkış callback'i). Slot beklemesi (`slot_wait`) ayrı; ama VT içinde önceki karenin bitmesini beklemek (in-flight 2) `enc`'e dahil.
+2. Uygulama logundan ön analiz: `enc_ms` kare hızına göre (2/s'de de ~9 ms ise kuyruk değil).
+3. Uygulama durdurulmuşken scratchpad'de tek değişkenli A/B probu (swiftc, repo dışı):
+   - bench'in `VTCompressionSessionCompleteFrames` çağrısı var/yok;
+   - Require vs Enable donanım kodlayıcı;
+   - içerik: sentetik vs SCK ile yakalanmış gerçek ekran kareleri (aynı biçim, 2800×1840'a ölçekli);
+   - tampon kaynağı: SCK IOSurface vs CVPixelBufferCreate;
+   - in-flight 1 vs 2; tempo 2/60/120 fps;
+   - uygulamanın tam özellik seti vs bench'inki.
+4. Kök neden bulunursa ve ucuz/güvenliyse `HEVCEncoder`'da env düğmesiyle (varsayılan değişikliği ayrıca gerekçeli) düzelt; `EncoderKnobs` (Core) ayrıştırması birim testli. Gerekirse `--encode-bench`'e seçenek ekle.
+5. Bulguları NOTES'a (tarihli) yaz, `./scripts/check.sh`, Handoff.
 
 ## Handoff
