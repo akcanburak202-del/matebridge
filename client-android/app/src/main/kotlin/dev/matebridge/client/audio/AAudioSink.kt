@@ -59,6 +59,9 @@ class AAudioSink private constructor(
 
     override fun timestamp(out: LongArray): Boolean = AAudioNative.timestamp(handle, out) == AAudioNative.OK
 
+    /** The native side zeroes the timestamp fields when getTimestamp fails (no timestamp yet: the read counter is used). */
+    override fun counters(out: LongArray): Boolean = AAudioNative.counters(handle, out) != AAudioNative.ERROR_NULL
+
     override fun xruns(): Int = AAudioNative.xruns(handle).coerceAtLeast(0)
 
     override fun grow(): Boolean {

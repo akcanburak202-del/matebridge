@@ -33,7 +33,11 @@ import java.util.concurrent.TimeUnit
  *    cleanup before it opens its output.
  *  - Output choice (decision 0012 point 2): AAudio EXCLUSIVE, else AAudio SHARED on probation
  *    ([SharedLatencyProbe]), else AudioTrack. AAudio is used only with MMAP (its write timeout must hold).
- *    `--es audio_out aaudio|track` overrides it ([AudioOutPref]).
+ *    The panel's "Ses çıkışı" setting (`storedOutPref`, T-101) picks AUTO or AudioTrack; `--es audio_out
+ *    aaudio|track|auto` overrides it for this launch ([AudioOutPref.resolve]). [setOutPref] applies a panel change: at
+ *    once if a stream is playing (the output is reopened), otherwise with the next stream.
+ *  - AAudio play position (T-101): from AAudio's own counters in AAudio's frame domain ([OutputClock.onDeviceCounters]);
+ *    AudioTrack keeps its timestamp. The raw counters are logged twice per AAudio output (`audio_clock_raw`).
  *  - Stopping sets the stream's flag and interrupts the output (AudioTrack: pause+flush unblocks the write; AAudio:
  *    the write returns within one burst); the writer then closes the output (exactly once).
  *  - The output is rebuilt when it dies (AudioTrack ERROR_DEAD_OBJECT, AAudio DISCONNECTED or a stalled write) and
@@ -50,6 +54,7 @@ import java.util.concurrent.TimeUnit
 class AudioPlayout(
     context: Context,
     private val hostMinusClientUs: () -> Long?,
+    storedOutPref: AudioOutPref = AudioOutPref.AUTO,
     private val onNoisy: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
@@ -86,11 +91,15 @@ class AudioPlayout(
         trackBurst = if (nativeBurst in MIN_BURST..MAX_BURST) nativeBurst else DEFAULT_BURST
 
         val rawOut = (context as? Activity)?.intent?.getStringExtra(AudioOutPref.EXTRA)
-        val pref = AudioOutPref.parse(rawOut) ?: AudioOutPref.AUTO.also {
-            MbLog.w("audio_out_pref_unknown", "using=auto", COMPONENT) // the raw value is not logged
+        val resolved = AudioOutPref.resolve(rawOut, storedOutPref)
+        if (resolved.unknownExtra) {
+            MbLog.w("audio_out_pref_unknown", "using=${resolved.pref.id}", COMPONENT) // the raw value is not logged
         }
+        val pref = resolved.pref
+        // TRACK does not load the native library (as before); a later switch to AUTO lets AAudioSink.open check it.
         val lib = pref != AudioOutPref.TRACK && AAudioNative.available
-        policy = SinkPolicy(pref, lib)
+        policy = SinkPolicy(pref, pref == AudioOutPref.TRACK || lib)
+        MbLog.i("audio_out_pref", "value=${pref.id} source=${resolved.source} stream=0", COMPONENT)
 
         val pm = appContext.packageManager
         MbLog.i(
@@ -126,6 +135,20 @@ class AudioPlayout(
     fun endSession(reason: String): Unit = synchronized(lock) {
         gate.disarm()
         stopStream(reason)
+    }
+
+    /** The output preference in effect (the stored setting, a launch override, or the last panel choice). */
+    val outPref: AudioOutPref get() = policy.pref
+
+    /**
+     * T-101: the panel's "Ses çıkışı" changed to [p] (main thread). The policy takes it at once; a playing stream reopens
+     * its output (not counted toward the rebuild limit), otherwise the next stream uses it.
+     */
+    fun setOutPref(p: AudioOutPref) {
+        if (!policy.setPref(p)) return
+        val s = synchronized(lock) { stream }
+        MbLog.i("audio_out_pref", "value=${p.id} source=panel stream=${b(s != null)}", COMPONENT)
+        s?.requestRebuild(REASON_PREF)
     }
 
     /** Video capture-to-display estimate (AvSync.videoLatencyUs), once per second from the UI; null = no video. */
@@ -210,6 +233,11 @@ class AudioPlayout(
         fun start() {
             MbLog.i("audio_start", "stream_id=$id", COMPONENT)
             Thread({ run() }, "mb-audio-$id").also { it.isDaemon = true; it.start() }
+        }
+
+        /** Any thread: the writer reopens its output before its next burst (T-101 output preference). */
+        fun requestRebuild(reason: String) {
+            if (running) rebuildReason = reason
         }
 
         /** Any thread, non-blocking. */
@@ -352,7 +380,7 @@ class AudioPlayout(
             var t = first
             var out = ShortArray(t.burst * 2)
             val clock = OutputClock(RATE).also { it.reset(t.preFrames) }
-            val tsBuf = LongArray(2)
+            val tsBuf = LongArray(AAudioNative.C_COUNT) // also holds the AAudio counters (T-101)
             var nextTsAt = 0L
             var nextLogAt = clock.written + RATE
             var xrunBase: Int? = null // T-095 review L5: the first second's output underruns are not acted upon
@@ -362,11 +390,12 @@ class AudioPlayout(
             var avN = 0
             var lastAvMs: Long? = null
             var lastAudioMs: Long? = null
+            rawLogged = 0
             while (running) {
                 val why = rebuildReason
                 if (why != null) {
                     rebuildReason = null
-                    if (!mayRebuild()) {
+                    if (why != REASON_PREF && !mayRebuild()) {
                         MbLog.e("audio_rebuild_limit", "stream_id=$id reason=$why api=${t.api}", COMPONENT)
                         return
                     }
@@ -379,13 +408,13 @@ class AudioPlayout(
                     if (out.size != t.burst * 2) out = ShortArray(t.burst * 2)
                     clock.reset(t.preFrames)
                     nextTsAt = 0; nextLogAt = clock.written + RATE; xrunBase = null
+                    rawLogged = 0
                 }
                 val priming = core.state == PlayoutCore.State.PRIMING
                 val probing = probe != null
                 // Timestamps: every burst while priming (A/V hold) or on probation, every ~250 ms otherwise (A/V sample).
                 if (priming || probing || clock.written >= nextTsAt) {
-                    val tsOk = t.timestamp(tsBuf)
-                    if (tsOk) clock.onTimestamp(tsBuf[0], tsBuf[1])
+                    val tsOk = readClock(t, clock, tsBuf)
                     if (probing) {
                         probation(t, clock, tsOk)
                         if (rebuildReason != null) continue
@@ -442,6 +471,41 @@ class AudioPlayout(
             }
         }
 
+        /** `audio_clock_raw` lines logged for the current output (T-101): the first read and one ~1 s in. */
+        private var rawLogged = 0
+
+        /**
+         * Reads the output's play position into [clock]; true if it has one now. AAudio: its own counters in its own
+         * frame domain (T-101); AudioTrack: its timestamp, as before.
+         */
+        private fun readClock(t: AudioSink, clock: OutputClock, buf: LongArray): Boolean {
+            if (!t.counters(buf)) {
+                val ok = t.timestamp(buf)
+                if (ok) clock.onTimestamp(buf[0], buf[1])
+                return ok
+            }
+            val written = buf[AAudioNative.C_WRITTEN]
+            val read = buf[AAudioNative.C_READ]
+            val tsNs = buf[AAudioNative.C_TS_NS]
+            val tsPos = buf[AAudioNative.C_TS_POS]
+            val now = buf[AAudioNative.C_NOW]
+            val hasTs = tsNs != 0L
+            val src = clock.onDeviceCounters(written, read, if (hasTs) tsPos else null, tsNs, now)
+            if (rawLogged == 0 || (rawLogged == 1 && clock.written - t.preFrames >= RATE)) {
+                rawLogged++
+                MbLog.i(
+                    "audio_clock_raw",
+                    "stream_id=$id phase=${if (rawLogged == 1) "first" else "1s"} frames_written=$written frames_read=$read " +
+                        "ts_pos=${if (hasTs) tsPos else "-"} ts_ns=${if (hasTs) tsNs else "-"} now_ns=$now " +
+                        "ts_lag_us=${if (hasTs) clock.timestampLagUs(read, tsPos, tsNs, now) else "-"} " +
+                        "our_written=${clock.written} pre=${t.preFrames} offset=${clock.domainOffset} buf=${t.bufFrames} " +
+                        "source=${src.logName} latency_us=${clock.latencyUs(now)}",
+                    COMPONENT,
+                )
+            }
+            return true
+        }
+
         private fun logStats(t: AudioSink, xruns: Int, audioMs: Long?, avMs: Long?) {
             val d = core.drift
             val buf = core.buffer
@@ -473,6 +537,7 @@ class AudioPlayout(
         const val REBUILD_WINDOW_MS = 10_000L
         const val PREVIOUS_JOIN_MS = 500L
         const val REASON_SHARED_LATENCY = "shared_latency"
+        const val REASON_PREF = "pref"
 
         fun b(v: Boolean) = if (v) 1 else 0
     }

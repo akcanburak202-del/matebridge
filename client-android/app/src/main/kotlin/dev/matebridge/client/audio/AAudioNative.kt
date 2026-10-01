@@ -19,6 +19,7 @@ object AAudioNative {
     const val OK = 0
     const val ERROR_DISCONNECTED = -899
     const val ERROR_TIMEOUT = -885
+    const val ERROR_NULL = -886
     const val PERF_LOW_LATENCY = 12
 
     // Layout of open()'s info array; must match the Info enum in mbaudio.cpp.
@@ -36,6 +37,14 @@ object AAudioNative {
     const val I_PRE = 11
     const val I_COUNT = 12
 
+    // Layout of counters()'s out array; must match mbaudio.cpp.
+    const val C_WRITTEN = 0
+    const val C_READ = 1
+    const val C_TS_POS = 2
+    const val C_TS_NS = 3
+    const val C_NOW = 4
+    const val C_COUNT = 5
+
     /** Opens (not started) and writes one burst of silence; returns the handle, or 0 (see `info[I_ERROR/I_STAGE]`). */
     external fun open(sharing: Int, startBursts: Int, info: IntArray): Long
     external fun start(handle: Long): Int
@@ -43,6 +52,12 @@ object AAudioNative {
     external fun write(handle: Long, data: ShortArray, frames: Int, timeoutNs: Long): Int
     /** CLOCK_MONOTONIC timestamp into `out[0]` (frame position) and `out[1]` (ns); returns an AAudio result. */
     external fun timestamp(handle: Long, out: LongArray): Int
+    /**
+     * T-101: AAudio's own counters and timestamp in one call into `out` (size >= [C_COUNT]): [C_WRITTEN]
+     * (getFramesWritten), [C_READ] (getFramesRead), [C_TS_POS]/[C_TS_NS] (CLOCK_MONOTONIC timestamp, 0 unless the
+     * result is [OK]) and [C_NOW] (CLOCK_MONOTONIC ns, read last). Returns the getTimestamp result.
+     */
+    external fun counters(handle: Long, out: LongArray): Int
     external fun xruns(handle: Long): Int
     external fun bufferSize(handle: Long): Int
     external fun setBufferSize(handle: Long, frames: Int): Int

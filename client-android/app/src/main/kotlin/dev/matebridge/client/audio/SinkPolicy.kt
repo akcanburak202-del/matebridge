@@ -1,6 +1,9 @@
 package dev.matebridge.client.audio
 
-/** The `--es audio_out aaudio|track` experiment switch (T-100); absent = [AUTO]. */
+/**
+ * Audio output preference. The panel's "Ses çıkışı" setting (T-101) is [AUTO] ("Düşük gecikme", the default) or
+ * [TRACK] ("Uyumlu"); the `--es audio_out aaudio|track|auto` launch switch (T-100) overrides it without saving it.
+ */
 enum class AudioOutPref {
     /** Decision 0012 order: AAudio EXCLUSIVE, then AAudio SHARED if its measured latency is reasonable, then AudioTrack. */
     AUTO,
@@ -8,6 +11,14 @@ enum class AudioOutPref {
     AAUDIO,
     /** AudioTrack only (the pre-T-100 path). */
     TRACK;
+
+    /** Stored and logged value (`auto`, `aaudio`, `track`); [parse] reads it back. */
+    val id: String get() = name.lowercase()
+
+    /** The preference in effect, and whether it came from the stored setting or the launch extra. */
+    data class Resolved(val pref: AudioOutPref, val fromExtra: Boolean, val unknownExtra: Boolean) {
+        val source: String get() = if (fromExtra) "extra" else "setting"
+    }
 
     companion object {
         const val EXTRA = "audio_out"
@@ -18,6 +29,16 @@ enum class AudioOutPref {
             "aaudio" -> AAUDIO
             "track", "audiotrack" -> TRACK
             else -> null
+        }
+
+        /**
+         * T-101: a launch extra [extraRaw] (null = absent) overrides the [stored] setting; an unknown extra is ignored
+         * (the caller warns) and the setting is used. The extra is never saved.
+         */
+        fun resolve(extraRaw: String?, stored: AudioOutPref): Resolved {
+            if (extraRaw == null) return Resolved(stored, fromExtra = false, unknownExtra = false)
+            val p = parse(extraRaw) ?: return Resolved(stored, fromExtra = false, unknownExtra = true)
+            return Resolved(p, fromExtra = true, unknownExtra = false)
         }
     }
 }
@@ -44,18 +65,27 @@ enum class OutChoice(val logName: String) {
  *  - [onAaudioFailure]: an AAudio stream failed while running (disconnected, write error, stall). [MAX_FAILURES]
  *    within [WINDOW_MS] disable AAudio for this policy's lifetime: AudioTrack from then on, the session is unaffected.
  *    [disableAaudio] does so at once (the native library is unusable).
+ *  - [setPref] (T-101, the panel's "Ses çıkışı"): a new preference starts the chain from the top and forgets the
+ *    failure count (the user asked again); an unusable library stays disabled.
  */
 class SinkPolicy(
-    val pref: AudioOutPref,
+    pref: AudioOutPref,
     aaudioAvailable: Boolean,
     private val maxFailures: Int = MAX_FAILURES,
     private val windowMs: Long = WINDOW_MS,
 ) {
     enum class Verdict { ACCEPT, PROBATION, REJECT }
 
-    /** AAudio is not used any more (library missing or too many failures). */
-    @get:Synchronized var aaudioDisabled = !aaudioAvailable
+    @get:Synchronized var pref: AudioOutPref = pref
         private set
+    /** The native library is missing or failed: never again in this policy. */
+    private var libraryUnusable = !aaudioAvailable
+    /** Too many AAudio failures: AudioTrack until [setPref]. */
+    private var failedOut = false
+
+    /** AAudio is not used any more (library missing or too many failures). */
+    val aaudioDisabled: Boolean @Synchronized get() = libraryUnusable || failedOut
+
     private var exclusiveOut = false
     private var sharedOut = false
     private val failures = ArrayDeque<Long>()
@@ -105,7 +135,7 @@ class SinkPolicy(
 
     /** AAudio cannot be used at all (e.g. a LinkageError from the native library): AudioTrack from now on. */
     @Synchronized fun disableAaudio() {
-        aaudioDisabled = true
+        libraryUnusable = true
         failures.clear()
     }
 
@@ -115,8 +145,18 @@ class SinkPolicy(
         while (failures.isNotEmpty() && nowMs - failures.first() > windowMs) failures.removeFirst()
         failures.addLast(nowMs)
         if (failures.size < maxFailures) return false
-        aaudioDisabled = true
+        failedOut = true
         failures.clear()
+        return true
+    }
+
+    /** T-101: the user picked [p]; true if it changed (the chain starts again and the failure count is forgotten). */
+    @Synchronized fun setPref(p: AudioOutPref): Boolean {
+        if (p == pref) return false
+        pref = p
+        failedOut = false
+        failures.clear()
+        reset()
         return true
     }
 
