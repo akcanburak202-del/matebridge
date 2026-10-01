@@ -168,6 +168,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         var slot = minOf(maxOf(targetSlot, earliest), limit)
         var collided = false
         var lateDrop = false
+        val ownSlot = slot
         val previous = lastSlot
         if (previous != Long.MIN_VALUE && slot <= previous) {
             // Same vsync as the previous frame (or earlier): the next free one, unless that is beyond the bound.
@@ -181,7 +182,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         val skipped = late && previous != Long.MIN_VALUE && (slot - previous) * 2 > cadence * 3
         return FramePacer.Decision(
             slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), skipped,
-            slotNs = slot, lateDrop = lateDrop,
+            slotNs = slot, lateDrop = lateDrop, ownSlotNs = if (lateDrop) ownSlot else 0,
         )
     }
 
@@ -236,7 +237,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             // Too late for its own slot, or a backlog that would exceed the latency bound: dropped (newest wins, it
             // shares the previous slot), the next frames stay on the lock.
             return FramePacer.Decision(
-                previous - vsync.leadNs(), true, 0, slot < earliest, slotNs = previous, lateDrop = true,
+                previous - vsync.leadNs(), true, 0, slot < earliest, slotNs = previous, lateDrop = true, ownSlotNs = slot,
             )
         }
         var collided = false

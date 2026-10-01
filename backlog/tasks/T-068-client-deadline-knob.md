@@ -1,7 +1,7 @@
 ---
 id: T-068
 title: Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
@@ -26,12 +26,12 @@ HarmonyOS `Display.getPresentationDeadlineNanos()` = **13,33 ms** (60 ve 120 Hz)
 
 ## Plan
 
-_(Ajan doldurur.)_
+`VsyncClock.deadlineOverrideNs` (leadOverrideNs gibi), `setDisplayTiming` icinde uygulanir (Grid.deadlineNs tek kaynak). Gec kararda `Decision.ownSlotNs`; renderer `ownSlot - readyNs` kenar payini `PresentCounters`'a verir (pencere basina p50/min). `ev=present` sonuna alan eklenir.
 
 ## Handoff
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `git log task/T-068-client-deadline-knob`
+- **Dokunulan dosyalar:** MainActivity.kt, video/FramePacer.kt, video/AdaptivePacer.kt, video/SlotReleaser.kt, video/VideoRenderer.kt, stream/StatsFormat.kt, PresentationSchedulingTest.kt
+- **Varsayimlar:** Ekstra verilmezse davranis ayni. Gecersiz kilma 0..periyot araligina kisilir. Kenar payi `ownSlot - readyNs` (us), negatif olabilir; yalniz `lateDrop` kararlarinda olculur. Hem `vsync` hem `glVsync`'e uygulanir.
+- **Test edilmeyenler / cihazda dogrulanacaklar:** `adb shell am start -n <paket>/.MainActivity --ei deadline_us 6000` (diger ekstralarla birlikte). `ev=display_timing` icinde `deadline_override_us=6000`; `ev=present` satirinda `late_margin_p50_us`/`late_margin_min_us` (gec karar yoksa `-`). 4000/6000/8000/13333 taramasi: late_drops ve 33 ms bosluk.
+- **Acik sorular:** Ekstrasiz `deadline_override_us` tamsayi bolmesiyle `0` yazar (lead_override_us ile ayni kalip); gercek deadline `presentation_deadline_ns` alaninda.

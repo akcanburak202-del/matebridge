@@ -194,6 +194,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vsync.leadOverrideNs = it * 1000L
             glVsync.leadOverrideNs = it * 1000L
         }
+        intent?.getIntExtra("deadline_us", -1)?.takeIf { it >= 0 }?.let {
+            vsync.deadlineOverrideNs = it * 1000L
+            glVsync.deadlineOverrideNs = it * 1000L
+        }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
@@ -761,7 +765,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (log) {
             MbLog.i(
                 "display_timing",
-                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} " +
+                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} deadline_override_us=${vsync.deadlineOverrideNs / 1000} " +
                     "inflight=${renderer?.maxInFlight ?: inflightLimit}",
                 "render",
             )

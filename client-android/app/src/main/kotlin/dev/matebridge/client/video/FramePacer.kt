@@ -52,6 +52,9 @@ class VsyncClock(private val initialHz: Float = 60f) {
     /** Release-timestamp lead before the slot; negative = use half a period. Tunable (T-057). */
     @Volatile var leadOverrideNs = -1L
 
+    /** Presentation deadline used instead of the display's own; negative = use the display's (T-068 experiment). */
+    @Volatile var deadlineOverrideNs = -1L
+
     // UI-thread only: run of consecutive gaps that disagree with the current period.
     private var oddRun = 0
     private var oddDeltaNs = 0L
@@ -79,7 +82,8 @@ class VsyncClock(private val initialHz: Float = 60f) {
         val off = appVsyncOffsetNs.coerceIn(0, g.periodNs)
         val last = if (g.lastNs >= 0) g.lastNs + (appOffsetNs - off) else g.lastNs
         appOffsetNs = off
-        grid = Grid(last, g.periodNs, g.epoch, presentationDeadlineNs.coerceIn(0, g.periodNs))
+        val deadline = if (deadlineOverrideNs >= 0) deadlineOverrideNs else presentationDeadlineNs
+        grid = Grid(last, g.periodNs, g.epoch, deadline.coerceIn(0, g.periodNs))
     }
 
     /** Sets the nominal refresh rate (display mode change); keeps the phase. */
@@ -159,6 +163,8 @@ class FramePacer(
     class Decision(
         val renderNs: Long, val collided: Boolean, val addedNs: Long, val skipped: Boolean = false,
         val slotNs: Long = 0, val lateDrop: Boolean = false,
+        /** For a [lateDrop]: the slot this frame would have taken (display time); 0 otherwise. */
+        val ownSlotNs: Long = 0,
     )
 
     private var lastVsyncNs = Long.MIN_VALUE
