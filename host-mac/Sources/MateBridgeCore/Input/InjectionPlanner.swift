@@ -31,6 +31,20 @@ public struct InjectionPlanner: Sendable {
     /// The default `Configuration.lagWindowUs` (T-103).
     public static let defaultLagWindowUs: UInt64 = 100_000
 
+    /// The highest relative-move message rate the lag ring is sized for (Hz). Trackpads and mice in pointer capture
+    /// report at 60 to 240 Hz; 320 leaves headroom.
+    public static let maxRelativeRateHz: UInt64 = 320
+
+    /// How many recent positions the lag ring holds: every move of one `lagWindowUs` at `maxRelativeRateHz`, plus the
+    /// adopted start (100 ms at 320 Hz: 32 + 1 = 33), never fewer than 8. The age window is the real bound; this cap
+    /// only keeps the ring bounded, and must not evict an entry that is still inside the window at a supported rate.
+    public static func recentTargetsCapacity(lagWindowUs: UInt64) -> Int {
+        let limit: UInt64 = 1_024
+        guard lagWindowUs < UInt64.max / maxRelativeRateHz else { return Int(limit) }
+        let perWindow = (lagWindowUs * maxRelativeRateHz + 999_999) / 1_000_000
+        return Int(Swift.min(Swift.max(perWindow + 1, 8), limit))
+    }
+
     public struct Counters: Equatable, Sendable {
         /// Events produced.
         public var events = 0
@@ -84,11 +98,11 @@ public struct InjectionPlanner: Sendable {
         var at: UInt64
     }
 
-    /// The last `recentTargetsLimit` positions of relative moves, oldest first: each posted target (post-clamp) and
+    /// The recent positions of relative moves (at most `recentTargetsLimit`, none older than `lagWindowUs`), oldest first: each posted target (post-clamp) and
     /// each adopted starting point. A live sample near one of them, within `lagWindowUs`, is our own state that
     /// WindowServer has not caught up with, not someone else's move.
     private var recentTargets: [Recent] = []
-    static let recentTargetsLimit = 8
+    let recentTargetsLimit: Int
     private let lagWindowUs: UInt64
     private var clicks: ClickCounter
     /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
@@ -97,6 +111,7 @@ public struct InjectionPlanner: Sendable {
     public init(configuration: Configuration = Configuration()) {
         clicks = ClickCounter(configuration: configuration.clicks)
         lagWindowUs = configuration.lagWindowUs
+        recentTargetsLimit = Self.recentTargetsCapacity(lagWindowUs: configuration.lagWindowUs)
     }
 
     /// True while anything posted to the Mac has not been released.
@@ -533,7 +548,7 @@ public struct InjectionPlanner: Sendable {
 
     /// Adds a recent relative position, dropping the oldest beyond `recentTargetsLimit`.
     private mutating func remember(_ point: DisplayPoint, now: UInt64) {
-        if recentTargets.count >= Self.recentTargetsLimit { recentTargets.removeFirst() }
+        if recentTargets.count >= recentTargetsLimit { recentTargets.removeFirst() }
         recentTargets.append(Recent(point: point, at: now))
     }
 

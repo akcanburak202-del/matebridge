@@ -61,12 +61,12 @@ Orkestratör teşhisi (kod okuması):
 - düğme down/up ve sürükleme canlı konumda, çift tıklama sayacı;
 - mutlak hareket konumu `env.cursor`'dan etkilenmez.
 
-**WindowServer gecikmesi (orkestratör düzeltmesi, ilk incelemeden sonra eklendi).** `CGEventPost` WindowServer'da asenkron uygulanır. 120 Hz trackpad'de canlı örnek çoğu zaman **bizim** henüz uygulanmamış eski bir hedefimiz olur. Bunu benimsemek adım kaybettirir. Çözüm: planner, göreli hareketlerde gönderdiği son 8 hedefi (kırpma sonrası) sınırlı bir halkada tutar. Halka `releaseAll`'da sıfırlanır; oturum başı/sonu da `releaseAll`'dan geçtiği için orada da temizlenir. `plan` başında sınıflandırma şöyle:
+**WindowServer gecikmesi (orkestratör düzeltmesi, ilk incelemeden sonra eklendi).** `CGEventPost` WindowServer'da asenkron uygulanır. 120 Hz trackpad'de canlı örnek çoğu zaman **bizim** henüz uygulanmamış eski bir hedefimiz olur. Bunu benimsemek adım kaybettirir. Çözüm: planner, göreli hareketlerde gönderdiği hedefleri (kırpma sonrası) sınırlı bir halkada tutar (ilk sürümde 8; bkz. aşağıdaki Codex düzeltmeleri). Halka `releaseAll`'da sıfırlanır; oturum başı/sonu da `releaseAll`'dan geçtiği için orada da temizlenir. `plan` başında sınıflandırma şöyle:
 1. örnek önbellek `cursor`'a < 1 pt → **current** (sistem yetişmiş), önbellek kalır;
 2. halkadaki herhangi bir hedefe < 1 pt → **lag_ignored**, önbellek kalır, model devam eder;
 3. hiçbiri değil → **adopted** (oyun ışınlaması / gerçek fare).
 
-Ekran dışı ve başarısız sorgu kuralları aynı kalır. Üç sayaç `InjectionPlanner.Counters` içinde tutulur. Oturum başına fark olarak `input_session_end`'e `cursor_adopted`, `cursor_current`, `cursor_lag_ignored` alanlarıyla yazılır, konum yazılmaz. Ek testler: gecikmeli örneklerle hızlı patlamada adım kaybı yok; halkada olmayan konuma ışınlama benimsenir; halka sınırı 8; halka `releaseAll`'da ve oturum sonunda temizlenir.
+Ekran dışı ve başarısız sorgu kuralları aynı kalır. Üç sayaç `InjectionPlanner.Counters` içinde tutulur. Oturum başına fark olarak `input_session_end`'e `cursor_adopted`, `cursor_current`, `cursor_lag_ignored` alanlarıyla yazılır, konum yazılmaz. Ek testler: gecikmeli örneklerle hızlı patlamada adım kaybı yok; halkada olmayan konuma ışınlama benimsenir; halka sınırlı; halka `releaseAll`'da ve oturum sonunda temizlenir.
 
 **Codex incelemesi (P2 × 2) sonrası.**
 1. *Eski girdiler tıklamayı saptırıyordu.* Her halka girdisi artık gönderim zamanını taşır. Saat, planner'a zaten verilen `now`: Host'ta `HostClock` (monoton host saati), testlerde sahte saat. Bir örnek yalnızca **`lagWindowUs` (varsayılan 100 ms, `InjectionPlanner.defaultLagWindowUs`, `Configuration.lagWindowUs` ile ayarlanır)** içinde gönderilmiş bir girdiyle eşleşirse gecikme sayılır. Süresi geçen girdiler her `plan` başında atılır. Eskiyen girdiler ayrıca şöyle emekliye ayrılır:
@@ -83,17 +83,19 @@ Testler:
 - REL-19: pencere ayarlanabilir.
 - REL-1 iki ışınlama türüyle yeniden yazıldı.
 
+**Codex yeniden incelemesi (P2) sonrası.** Halka, 100 ms pencereden bağımsız olarak 8 girdiyle sınırlıydı. 8 ms aralıkla WindowServer 9+ olay gerideyken başlangıç atılıyor, eski örnek "benimseniyor" ve imleç geri sıçrıyordu. Artık birincil sınır yaş penceresi. Sayı sınırı yalnızca belleği sınırlar ve pencereden türetilir: `InjectionPlanner.recentTargetsCapacity(lagWindowUs:)` = ⌈pencere × `maxRelativeRateHz` (320 Hz)⌉ + 1 (benimsenen başlangıç), en az 8, en çok 1024. 100 ms için değer 33'tür. REL-20 regresyonu: 8 ms'de 12 olay ve 4 ms'de 20 olay geride, adım kaybı ya da geri sıçrama yok. Eski 8 sınırıyla bu test başarısız oluyordu (geçici değişiklikle doğrulandı).
+
 ## Handoff
 
-- **Commit:** `84b8567` (uygulama), `b8436af` (WindowServer gecikme halkası), Codex P2 düzeltmeleri bu handoff güncellemesiyle aynı commit'te (`T-103: time-bound lag ring and remember adopted start`), plan: `b7f7d5e`. Dal: `task/T-103-host-relative-pointer-games`.
-- **check.sh:** geçti (exit 0; host-mac 599 test / 64 suite, Android gradle, fixture ve crypto kontrolleri).
+- **Commit:** `84b8567` (uygulama), `b8436af` (WindowServer gecikme halkası), `ffc7281` (Codex P2: zaman pencereli halka, benimsenen başlangıç), halka kapasitesinin pencereden türetilmesi bu handoff güncellemesiyle aynı commit'te (`T-103: size the lag ring from the window, not a fixed 8`), plan: `b7f7d5e`. Dal: `task/T-103-host-relative-pointer-games`.
+- **check.sh:** geçti (exit 0; host-mac 600 test / 64 suite, Android gradle, fixture ve crypto kontrolleri).
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Input/MacEvent.swift`: `InjectionEnvironment.cursor` alanı eklendi, `MacMouse.deltaX` dokümanı güncellendi.
   - `host-mac/Sources/MateBridgeCore/Input/Geometry+Display.swift`: `DisplayGeometry.onDisplay(_:)` eklendi (yarı açık sınır, kırpma).
-  - `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`: `adoptLiveCursor` (plan başında; current / lag_ignored / adopted ayrımı), son 8 göreli konumun (gönderilen hedefler ve benimsenen başlangıçlar) zaman damgalı halkası `recentTargets` ve `Configuration.lagWindowUs` (varsayılan 100 ms), `takeRelativeDelta` (ham delta, kesir taşıyıcı) eklendi. Halka da taşıyıcı da `releaseAll`'da sıfırlanır. `Counters` içine `liveCursorAdopted`, `liveCursorCurrent`, `liveCursorLagIgnored` eklendi.
+  - `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`: `adoptLiveCursor` (plan başında; current / lag_ignored / adopted ayrımı), göreli konumların (gönderilen hedefler ve benimsenen başlangıçlar) zaman damgalı halkası `recentTargets`, `Configuration.lagWindowUs` (varsayılan 100 ms), pencereden türetilen kapasite `recentTargetsCapacity(lagWindowUs:)` (320 Hz'de bir pencere + 1; 100 ms için 33), `takeRelativeDelta` (ham delta, kesir taşıyıcı) eklendi. Halka da taşıyıcı da `releaseAll`'da sıfırlanır. `Counters` içine `liveCursorAdopted`, `liveCursorCurrent`, `liveCursorLagIgnored` eklendi.
   - `host-mac/Sources/MateBridgeHost/Input/CursorLocator.swift` (yeni): `CursorLocating` ve `SystemCursor` (`CGEvent(source: nil)?.location`).
   - `host-mac/Sources/MateBridgeHost/Input/InputController.swift`: yalnızca `.pointerRel` mesajında zamanlanmış sorgu yapılır. İlk çağrı `start()`'ta ısındırılır. `input_session_end` satırına `cursor_queries`, `cursor_query_failed`, `cursor_query_avg_us`, `cursor_query_max_us` ile oturum başına `cursor_adopted`, `cursor_current`, `cursor_lag_ignored` alanları eklendi.
-  - `host-mac/Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift` (yeni): REL-1…19 ve GEO-8. REL-12: gecikmeli patlamada adım kaybı yok. REL-13: halka dışı ışınlama benimsenir. REL-14: halka sınırı 8. REL-15/16: halka `releaseAll` ve oturum sonunda temizlenir. REL-17: eski girdi pencere sonrası tıklamayı saptırmaz. REL-18: başlangıcı gösteren örnekler adım kaybettirmez. REL-19: pencere ayarı.
+  - `host-mac/Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift` (yeni): REL-1…20 ve GEO-8. REL-12: gecikmeli patlamada adım kaybı yok. REL-13: halka dışı ışınlama benimsenir. REL-14: kapasite türetimi ve sayı sınırı. REL-15/16: halka `releaseAll` ve oturum sonunda temizlenir. REL-17: eski girdi pencere sonrası tıklamayı saptırmaz. REL-18: başlangıcı gösteren örnekler adım kaybettirmez. REL-19: pencere ayarı. REL-20: 12/20 olay gerideki derin gecikme.
   - `host-mac/Tests/MateBridgeCoreTests/Input/InjectionPlannerTests.swift`: PLAN-14 yeni sözleşmeye çekildi (kenarda delta artık ham, kırpılmış fark değil).
 - **Sorgu maliyeti:** bu Mac'te (macOS 27) scratch benchmark, 20 000 çağrı. `CGEvent(source: nil).location` için p50 ≈ 0.1 µs, p99 ≈ 0.15 µs. Süreçteki ilk çağrı ≈ 8–14 ms (WindowServer bağlantısı), bu yüzden `start()`'ta ısındırılıyor. Çalışma anındaki değerler `input_session_end` alanlarında görülebilir.
 - **Varsayımlar:**
@@ -104,7 +106,7 @@ Testler:
   - Gecikme halkası, kabul edilmiş uç durumlar:
     - Oyun imleci her olaydan sonra **aynı** noktaya (ör. merkez) ışınlıyorsa o nokta, benimsendiği an halkaya girer. Hiçbir örnek bizim gönderimimizi göstermezse sonraki ışınlamalar `lagWindowUs` (100 ms ≈ 120 Hz'de 12 mesaj) boyunca gecikme sayılır. Bu sürede gönderilen konum ışınlama noktasının önüne kayar; delta hamdır, kamera etkilenmez. Pencere dolunca nokta yeniden benimsenir. Herhangi bir örnek gönderimimizi gösterirse (oyun 60 Hz, mesajlar 120 Hz) halka emekliye ayrılır ve kayma hemen kesilir. İkisi de REL-1'de test edildi. Witcher'da konumun kayması fark edilirse ilk ayar `lagWindowUs`'yi 20–30 ms'ye indirmek.
     - Benimsenen başlangıç da halkada olduğu için başlangıcı gösteren gecikmeli örnekler artık adım kaybettirmez (REL-18). Önceki "benimseme başına en fazla bir adım" kaybı giderildi.
-    - Dış hareketin hedefi tesadüfen pencere içindeki son 8 konumumuzdan birine < 1 pt yakınsa yok sayılır. Bu en fazla 100 ms sürer, sonra gerçek konum kazanır (REL-17).
+    - Dış hareketin hedefi tesadüfen pencere içindeki son konumlarımızdan birine < 1 pt yakınsa yok sayılır. Bu en fazla 100 ms sürer, sonra gerçek konum kazanır (REL-17).
     - Saat: girdiler `plan(now:)` ile damgalanır, Host'ta `HostClock.nowUs()` (monoton). `now` damgadan küçükse girdi geçersiz sayılıp atılır.
 - **Test edilmedi (cihaz/orkestratör):**
   1. Witcher 2 (Steam): menüde ve oyunda duvar kalmadı mı, ikinci imleç ya da titreme kayboldu mu?

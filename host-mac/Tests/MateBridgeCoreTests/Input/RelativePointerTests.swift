@@ -281,28 +281,51 @@ struct RelativePointerLagTests {
         #expect(p.counters.liveCursorAdopted == 2)
     }
 
-    /// Adopts `start`, then posts `count` moves of +20 pt with no live sample (the Host's query failing), 1 ms apart
+    /// Adopts `start`, then posts `count` moves of +`dx` pt with no live sample (the Host's query failing), 1 ms apart
     /// from `t0`: every target stays a recent position. Returns the posted targets.
     private func burstWithoutSamples(_ p: inout InjectionPlanner, start: DisplayPoint, count: Int,
-                                     t0: UInt64 = 0) throws -> [DisplayPoint] {
-        var posted = [try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: start), now: t0))).position]
+                                     t0: UInt64 = 0, dx: Float = 20) throws -> [DisplayPoint] {
+        var posted = [try #require(mouse(p.plan([rel(dx, 0)], environment: env(cursor: start), now: t0))).position]
         for i in 1..<count {
-            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: nil),
+            posted.append(try #require(mouse(p.plan([rel(dx, 0)], environment: env(cursor: nil),
                                                     now: t0 + UInt64(i) * 1_000))).position)
         }
         return posted
     }
 
-    @Test("REL-14 the ring holds only the last 8 recent positions")
+    @Test("REL-14 the ring is bounded by count too: a full window at the highest supported rate, plus the start")
     func rel14_ringBounded() throws {
+        #expect(InjectionPlanner.recentTargetsCapacity(lagWindowUs: InjectionPlanner.defaultLagWindowUs) == 33)
+        #expect(InjectionPlanner.recentTargetsCapacity(lagWindowUs: 1_000) == 8)
+        #expect(InjectionPlanner.recentTargetsCapacity(lagWindowUs: .max) == 1_024)
         var p = InjectionPlanner()
-        // Ring: the adopted start and 10 targets, bounded to the newest 8 (posted[2] ... posted[9]).
-        let posted = try burstWithoutSamples(&p, start: DisplayPoint(x: 300, y: 300), count: 10)
+        let limit = p.recentTargetsLimit
+        #expect(limit == 33)
+        // Ring: the adopted start and limit + 1 targets 1 ms apart (all inside the window), bounded to the newest limit.
+        let posted = try burstWithoutSamples(&p, start: DisplayPoint(x: 300, y: 100), count: limit + 1, dx: 10)
+        let oldestKept = posted.count - limit
         var q = p
-        _ = try #require(mouse(q.plan([rel(1, 0)], environment: env(cursor: posted[2]), now: 20_000)))  // 8th newest
+        _ = try #require(mouse(q.plan([rel(1, 0)], environment: env(cursor: posted[oldestKept]), now: 50_000)))
         #expect(q.counters.liveCursorLagIgnored == p.counters.liveCursorLagIgnored + 1)
-        let m = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: posted[1]), now: 20_000)))  // 9th
-        #expect(m.position == DisplayPoint(x: posted[1].x + 1, y: posted[1].y))
+        let m = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: posted[oldestKept - 1]), now: 50_000)))
+        #expect(m.position == DisplayPoint(x: posted[oldestKept - 1].x + 1, y: posted[oldestKept - 1].y))
+    }
+
+    @Test("REL-20 WindowServer far behind (12 events at 8 ms, 20 events at 4 ms) loses no step and never jumps back",
+          arguments: [(12, UInt64(8_000)), (20, UInt64(4_000))])
+    func rel20_deepLag(lag: Int, spacingUs: UInt64) throws {
+        var p = InjectionPlanner()
+        let start = DisplayPoint(x: 300, y: 300)
+        var posted: [DisplayPoint] = []
+        for i in 0..<60 {
+            // WindowServer shows the position `lag` posts ago (the start until that many exist): within the window.
+            let sample = posted.count >= lag ? posted[posted.count - lag] : start
+            let m = try #require(mouse(p.plan([rel(10, 0)], environment: env(cursor: sample), now: UInt64(i) * spacingUs)))
+            #expect(m.position == DisplayPoint(x: 300 + 10 * Double(i + 1), y: 300))
+            #expect(m.deltaX == 10)
+            posted.append(m.position)
+        }
+        #expect(p.counters.liveCursorAdopted == 1)  // the start only
     }
 
     @Test("REL-15 release-all clears the ring: an old posted position is then someone else's move")
