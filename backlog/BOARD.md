@@ -21,6 +21,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-102](tasks/T-102-settings-while-streaming.md) | Taslak — bağlıyken açılabilen ayarlar paneli (akış sürerken, bağlantı paneline dönmeden) | 4 | orchestrator | [T-096, T-101] |
 
 ## done
 
