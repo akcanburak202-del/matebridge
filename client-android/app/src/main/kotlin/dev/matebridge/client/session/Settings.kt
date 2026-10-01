@@ -56,10 +56,13 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setPenDot(on: Boolean) = store.putString(KEY_PEN_DOT, if (on) "1" else "0")
 
-    /** Last chosen connection mode; Wi-Fi (discovery) by default. */
-    fun transport(): Transport = Transport.parse(store.getString(KEY_TRANSPORT))
+    /**
+     * Connection mode (T-096). AUTO when nothing is stored; a stored `usb`/`wifi` was picked by hand in the panel
+     * (before T-096 that was the only way to store one) and is kept.
+     */
+    fun transportMode(): TransportMode = TransportMode.fromSetting(store.getString(KEY_TRANSPORT))
 
-    fun setTransport(t: Transport) = store.putString(KEY_TRANSPORT, t.logName)
+    fun setTransportMode(m: TransportMode) = store.putString(KEY_TRANSPORT, m.id)
 
     /**
      * "Parmak dokunmasını tamamen kapat" (decision 0006): when on, finger touches are never sent.

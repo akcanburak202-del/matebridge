@@ -79,6 +79,13 @@
             android:text="Manuel adres" />
 
         <Button
+            android:id="@+id/connect_auto"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/connect_auto" />
+
+        <Button
             android:id="@+id/connect_usb"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

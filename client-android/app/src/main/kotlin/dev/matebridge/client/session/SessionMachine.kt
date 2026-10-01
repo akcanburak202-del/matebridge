@@ -25,6 +25,15 @@ import dev.matebridge.client.protocol.VideoHello
  * Retry policy: lost/closed connections and BUSY retry automatically with backoff (1 s doubling to 5 s,
  * reset on ACCEPTED; BUSY waits at least 3 s). REJECTED and VERSION_MISMATCH do not retry, because
  * retrying would only re-prompt the Mac user or fail again; the user must press connect.
+ *
+ * Migration (T-096): [Event.Migrate] moves an accepted session to another endpoint (Wi-Fi -> USB) make-before-break,
+ * through the host's same-device takeover (PROTOCOL.md section 3.3). A *candidate* control connection is opened next to
+ * the current one and sends its own HELLO. Only when it is ACCEPTED (PAIRED) does it become current: the old video
+ * closes, the old control connection is *retired* (no BYE, no more input routed to it, already queued messages still
+ * drain), and the proof PING goes out first on the new one. The host releases the old session's input and closes it
+ * when that proof arrives, and only then sends the new STREAM_CONFIG; the retired connection is closed on that
+ * STREAM_CONFIG (or after [RETIRE_TIMEOUT_US]). A candidate that fails in any way is closed alone: the current session
+ * is never touched. Every Migrate yields exactly one [Action.MigrationResult].
  */
 class SessionMachine(
     private val hello: Hello,
@@ -56,6 +65,8 @@ class SessionMachine(
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
         data class Tick(val videoFrames: Long) : Event
+        /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
+        data class Migrate(val endpoint: Endpoint) : Event
     }
 
     sealed interface Action {
@@ -68,6 +79,23 @@ class SessionMachine(
         /** A new STREAM_CONFIG was accepted; the video connection is (re)opened right after. */
         data class ApplyConfig(val config: StreamConfig) : Action
         data class Ui(val state: SessionUi) : Action
+        /** T-096: open a candidate control connection beside the current one (its events carry [gen]). */
+        data class OpenCandidate(val gen: Int, val endpoint: Endpoint) : Action
+        /** T-096: send on the candidate connection (only its HELLO). */
+        data class SendCandidate(val msg: Message) : Action
+        /** T-096: abort the candidate connection. */
+        data object CloseCandidate : Action
+        /**
+         * T-096: the current control connection stops being current, without BYE: no input is routed to it any more,
+         * messages already queued still drain. The host closes it on our takeover proof; [CloseRetired] is the fallback.
+         */
+        data object RetireControl : Action
+        /** T-096: the candidate (generation [gen], at [endpoint]) becomes the current control connection. */
+        data class PromoteCandidate(val gen: Int, val endpoint: Endpoint) : Action
+        /** T-096: close the retired connection (graceful: its queue drains first). */
+        data object CloseRetired : Action
+        /** T-096: outcome of one [Event.Migrate]. */
+        data class MigrationResult(val endpoint: Endpoint, val ok: Boolean, val reason: String) : Action
     }
 
     private enum class Phase { IDLE, CONNECTING, AWAIT_ACK, PENDING, ACCEPTED, STREAMING, WAIT_RETRY, FAILED }
@@ -103,6 +131,16 @@ class SessionMachine(
     private var shownFrames = -1L
     private var lastUiUs = 0L
 
+    // T-096 migration: the candidate connection (-1 = none) and the retired one waiting to be closed.
+    private var candGen = -1
+    private var candEndpoint: Endpoint? = null
+    private var candDeadlineUs = 0L
+    private var retiredGen = -1
+    private var retireDeadlineUs = 0L
+
+    /** True while a migration candidate is open. */
+    val migrating: Boolean get() = candGen >= 0
+
     /** True once ACCEPTED was received on the current control connection: input may be sent. */
     val inputAllowed: Boolean get() = phase == Phase.ACCEPTED || phase == Phase.STREAMING
 
@@ -123,16 +161,23 @@ class SessionMachine(
                     out += Action.Ui(SessionUi.Idle)
                 }
             }
-            is Event.ControlOpened -> if (event.gen == controlGen && phase == Phase.CONNECTING) {
+            is Event.Migrate -> onMigrate(event.endpoint, nowUs, out)
+            is Event.ControlOpened -> if (isCandidate(event.gen)) {
+                out += Action.SendCandidate(hello)
+            } else if (event.gen == controlGen && phase == Phase.CONNECTING) {
                 phase = Phase.AWAIT_ACK
                 lastPongUs = nowUs
                 nextPingUs = nowUs + pingIntervalUs
                 out += Action.Send(hello)
             }
-            is Event.ControlClosed -> if (event.gen == controlGen) {
+            is Event.ControlClosed -> if (isCandidate(event.gen)) {
+                abortMigration(out, if (event.connectFailed) REASON_CONNECT_FAILED else REASON_CLOSED)
+            } else if (event.gen == controlGen) {
                 lose(out, nowUs, if (event.connectFailed) SessionUi.Cause.CONNECT_FAILED else SessionUi.Cause.LOST)
             }
-            is Event.ProtocolError -> if (event.gen == controlGen) {
+            is Event.ProtocolError -> if (isCandidate(event.gen)) {
+                abortMigration(out, REASON_PROTOCOL_ERROR)
+            } else if (event.gen == controlGen) {
                 // No BYE: the channel is not trusted after a failed record (PROTOCOL.md section 9).
                 lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
             }
@@ -140,17 +185,25 @@ class SessionMachine(
                 pairingCode = event.code
                 rePairing = event.rePairing
             }
-            is Event.KeyStoreFailed -> if (event.gen == controlGen) {
+            is Event.KeyStoreFailed -> if (isCandidate(event.gen)) {
+                abortMigration(out, REASON_KEY)
+            } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED
                 out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
             }
-            is Event.KeyMissing -> if (event.gen == controlGen) {
+            is Event.KeyMissing -> if (isCandidate(event.gen)) {
+                abortMigration(out, REASON_KEY)
+            } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED
                 out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_MISSING))
             }
-            is Event.Received -> if (event.gen == controlGen) onMessage(event.msg, nowUs, out)
+            is Event.Received -> if (isCandidate(event.gen)) {
+                onCandidateMessage(event.msg, nowUs, out)
+            } else if (event.gen == controlGen) {
+                onMessage(event.msg, nowUs, out)
+            }
             is Event.VideoClosed -> if (event.gen == videoGen) {
                 videoOpen = false
                 if (phase == Phase.STREAMING) videoRetryAtUs = nowUs + VIDEO_RETRY_US
@@ -241,6 +294,8 @@ class SessionMachine(
 
     private fun onConfig(cfg: StreamConfig, out: MutableList<Action>) {
         if (phase != Phase.ACCEPTED && phase != Phase.STREAMING) return
+        // The host sends STREAM_CONFIG only after it superseded (released and closed) the old session: now ours goes too.
+        closeRetired(out)
         if (phase == Phase.STREAMING && config?.configId == cfg.configId) return
         config = cfg
         phase = Phase.STREAMING
@@ -251,6 +306,8 @@ class SessionMachine(
 
     private fun onTick(videoFrames: Long, nowUs: Long, out: MutableList<Action>) {
         frames = videoFrames
+        if (candGen >= 0 && nowUs >= candDeadlineUs) abortMigration(out, REASON_TIMEOUT)
+        if (retiredGen >= 0 && nowUs >= retireDeadlineUs) closeRetired(out)
         when (phase) {
             Phase.WAIT_RETRY -> if (nowUs >= retryAtUs) openControl(out)
             Phase.AWAIT_ACK, Phase.PENDING, Phase.ACCEPTED, Phase.STREAMING -> {
@@ -315,11 +372,17 @@ class SessionMachine(
     }
 
     private fun closeAll(out: MutableList<Action>, graceful: Boolean) {
+        abortMigration(out, REASON_SESSION_CLOSED)
+        closeRetired(out)
         if (controlGen >= 0) {
             out += Action.CloseControl(graceful)
         }
         if (videoGen >= 0) out += Action.CloseVideo
         controlGen = -1
+        resetSessionFields()
+    }
+
+    private fun resetSessionFields() {
         videoGen = -1
         videoOpen = false
         config = null
@@ -327,6 +390,79 @@ class SessionMachine(
         videoPort = 0
         pairingCode = null
         rePairing = false
+    }
+
+    // ---- T-096 migration ----
+
+    private fun isCandidate(gen: Int) = candGen >= 0 && gen == candGen
+
+    private fun onMigrate(target: Endpoint, nowUs: Long, out: MutableList<Action>) {
+        val reason = when {
+            candGen >= 0 -> REASON_IN_PROGRESS
+            !inputAllowed -> REASON_NOT_CONNECTED
+            target == endpoint -> REASON_SAME_ENDPOINT
+            else -> null
+        }
+        if (reason != null) {
+            out += Action.MigrationResult(target, false, reason)
+            return
+        }
+        candGen = ++genCounter
+        candEndpoint = target
+        candDeadlineUs = nowUs + MIGRATE_TIMEOUT_US
+        out += Action.OpenCandidate(candGen, target)
+    }
+
+    private fun onCandidateMessage(msg: Message, nowUs: Long, out: MutableList<Action>) {
+        when {
+            msg is HelloAck && msg.status == HelloAck.ACCEPTED -> promote(msg, nowUs, out)
+            // PENDING_APPROVAL cannot be a takeover (the host answers BUSY then): never pair through a migration.
+            msg is HelloAck -> abortMigration(out, "ack_${msg.status}")
+            msg is Bye -> abortMigration(out, REASON_CLOSED)
+            else -> Unit // nothing else is expected before ACCEPTED
+        }
+    }
+
+    /** Closes the candidate (if any) and reports the failed migration; the current session is not touched. */
+    private fun abortMigration(out: MutableList<Action>, reason: String) {
+        val ep = candEndpoint
+        if (candGen < 0 || ep == null) return
+        out += Action.CloseCandidate
+        out += Action.MigrationResult(ep, false, reason)
+        candGen = -1
+        candEndpoint = null
+    }
+
+    private fun closeRetired(out: MutableList<Action>) {
+        if (retiredGen < 0) return
+        out += Action.CloseRetired
+        retiredGen = -1
+    }
+
+    /**
+     * The candidate was ACCEPTED: it becomes the session. The old control connection is retired without a BYE (a BYE
+     * that reached the host before our proof would end the session the takeover is about to supersede); the host
+     * releases its input and closes it on the proof PING sent first below (PROTOCOL.md sections 3.3 and 7).
+     */
+    private fun promote(ack: HelloAck, nowUs: Long, out: MutableList<Action>) {
+        val gen = candGen
+        val ep = candEndpoint ?: return
+        candGen = -1
+        candEndpoint = null
+        closeRetired(out) // an earlier migration's leftover, if any
+        if (videoGen >= 0) out += Action.CloseVideo // the old session's frames must not reach the new stream's decoder
+        if (controlGen >= 0) {
+            out += Action.RetireControl
+            retiredGen = controlGen
+            retireDeadlineUs = nowUs + RETIRE_TIMEOUT_US
+        }
+        resetSessionFields()
+        controlGen = gen
+        endpoint = ep
+        out += Action.PromoteCandidate(gen, ep)
+        phase = Phase.AWAIT_ACK
+        onAck(ack, nowUs, out) // proof PING first, then STREAM_PREFS / DISPLAY_RATE / AUDIO_PREFS, Ui(Connected)
+        out += Action.MigrationResult(ep, true, REASON_OK)
     }
 
     companion object {
@@ -337,5 +473,19 @@ class SessionMachine(
         const val BUSY_RETRY_US = 3_000_000L
         const val VIDEO_RETRY_US = 500_000L
         const val UI_INTERVAL_US = 250_000L
+        const val MIGRATE_TIMEOUT_US = 3_000_000L
+        const val RETIRE_TIMEOUT_US = 2_000_000L
+
+        // MigrationResult reasons (log values; AutoUsbPolicy maps them to its backoff classes).
+        const val REASON_OK = "ok"
+        const val REASON_CONNECT_FAILED = "connect_failed"
+        const val REASON_CLOSED = "closed"
+        const val REASON_PROTOCOL_ERROR = "protocol_error"
+        const val REASON_KEY = "key"
+        const val REASON_TIMEOUT = "timeout"
+        const val REASON_IN_PROGRESS = "in_progress"
+        const val REASON_NOT_CONNECTED = "not_connected"
+        const val REASON_SAME_ENDPOINT = "same_endpoint"
+        const val REASON_SESSION_CLOSED = "session_closed"
     }
 }

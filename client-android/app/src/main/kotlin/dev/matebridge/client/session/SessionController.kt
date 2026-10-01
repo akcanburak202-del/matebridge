@@ -80,6 +80,13 @@ interface SessionListener {
      * [gen] is not the one it was armed with ([onConnectionGen]). Must not block. Never log the PCM data.
      */
     fun onAudio(msg: Message, gen: Int) {}
+
+    /**
+     * T-096: outcome of [SessionController.migrate] (engine thread), once per request the engine took (a request
+     * replaced in the mailbox by a newer one, or made after shutdown, gets none). On success the session now runs over
+     * [endpoint]; [onSessionEnd], [onSessionStart] and [onConnectionGen] were called for the switch before it.
+     */
+    fun onMigration(endpoint: Endpoint, ok: Boolean, reason: String) {}
 }
 
 /**
@@ -113,7 +120,10 @@ class SessionController(
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
+    private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
     private val controlClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
+    /** T-096: a migration candidate's close has its own slot, so it cannot hide the (lower-gen) current one's close. */
+    private val candidateClosed = LatestGen<SessionMachine.Event.ControlClosed> { it.gen }
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
     private val videoFrames = AtomicLong()
@@ -123,6 +133,9 @@ class SessionController(
     private var engine: Thread? = null
 
     @Volatile private var control: ControlConn? = null
+    /** T-096: migration candidate (handshaking beside [control]) and the retired former control connection. */
+    @Volatile private var candidate: ControlConn? = null
+    @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
     @Volatile private var inputAllowed = false
 
@@ -158,6 +171,16 @@ class SessionController(
         audioMailbox.post(SessionMachine.Event.SetAudio(on))
     }
 
+    /**
+     * Non-blocking. T-096: moves the accepted session to [endpoint] via the host's takeover, make-before-break (see
+     * [SessionMachine]). The result arrives as [SessionListener.onMigration].
+     */
+    fun migrate(endpoint: Endpoint) {
+        if (terminated.get()) return
+        ensureEngine()
+        migrateMailbox.post(SessionMachine.Event.Migrate(endpoint))
+    }
+
     /** Non-blocking. */
     fun stop() {
         intent.post(SessionMachine.Event.Stop)
@@ -182,6 +205,19 @@ class SessionController(
     }
 
     /**
+     * T-096: [trySend] for input, only onto control connection [gen] (the one the input layer last reset its model for,
+     * see [SessionListener.onConnectionGen]). After a migration switch, input produced from the old connection's model
+     * (a mid-stroke contact, a held key) is refused instead of reaching the new session; the refusal makes the input
+     * layer forget that model. The old connection's input is released by the host (takeover / disconnect).
+     */
+    fun trySendInput(msg: Message, gen: Int): Boolean {
+        if (!inputAllowed) return false
+        val c = control ?: return false
+        if (c.gen != gen) return false
+        return c.link.send(msg)
+    }
+
+    /**
      * Drops the accepted control connection like a send-queue overflow does: the session reports it closed and
      * reconnects, and the host releases all input on the disconnect (PROTOCOL.md section 7). Used when a RELEASE_ALL
      * could not be queued. No-op without an accepted session (the host holds nothing then). Any thread.
@@ -189,6 +225,16 @@ class SessionController(
     fun dropConnection() {
         if (!inputAllowed) return
         control?.dropForOverflow()
+    }
+
+    /**
+     * T-096: [dropConnection] only if [gen] is still the current control connection. An older generation's connection
+     * is already closed or retired (closing), so the host releases its input anyway; the new session is not dropped.
+     */
+    fun dropConnection(gen: Int) {
+        if (!inputAllowed) return
+        val c = control ?: return
+        if (c.gen == gen) c.dropForOverflow()
     }
 
     /** True while the control send queue is backed up (input layer holds mergeable hover/scroll samples then). Any thread. */
@@ -205,7 +251,8 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?:
+                    migrateMailbox.take() ?: controlClosed.take() ?: candidateClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -222,6 +269,8 @@ class SessionController(
             // shutting down
         } finally {
             control?.closeGracefully()
+            candidate?.abort()
+            retired?.abort()
             video?.abort()
             timer.schedule({ timer.shutdown() }, GRACEFUL_CLOSE_MS + 200, TimeUnit.MILLISECONDS)
         }
@@ -231,12 +280,17 @@ class SessionController(
         if (e is SessionMachine.Event.Start) videoFrames.set(0)
         logEvent(e)
         val now = nowUs()
-        if (e is SessionMachine.Event.Received && e.msg is Pong) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+        // Only the current connection's PONGs feed the clock (T-096: a retired one may still answer for a moment).
+        if (e is SessionMachine.Event.Received && e.msg is Pong && e.gen == MbLog.gen) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
         if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg, e.gen)
         val actions = machine.handle(e, now)
-        inputAllowed = machine.inputAllowed
+        val allowed = machine.inputAllowed
+        // Input stops before the actions run (as before), but starts only after them: the proof PING and STREAM_PREFS
+        // are queued first (PROTOCOL.md section 3). A migration switch closes the gate while the connections swap.
+        if (!allowed || actions.any { it is SessionMachine.Action.PromoteCandidate }) inputAllowed = false
         MbLog.sid = machine.currentSessionId
         for (a in actions) exec(a)
+        inputAllowed = allowed
     }
 
     /** Concise session log (docs/LOGGING.md). Never per frame, never names or message text. */
@@ -269,6 +323,10 @@ class SessionController(
             is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
             is SessionMachine.Event.Tick -> Unit
+            is SessionMachine.Event.Migrate -> MbLog.i(
+                "migrate_request",
+                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",
+            )
         }
     }
 
@@ -328,6 +386,55 @@ class SessionController(
                 }
                 listener.onUi(a.state)
             }
+            is SessionMachine.Action.OpenCandidate -> {
+                MbLog.i("migrate_start", "cand_gen=${a.gen} host=${a.endpoint.host} port=${a.endpoint.port}")
+                candidate?.abort()
+                // Assigned before its threads start: a refused loopback connect fails at once and must find itself here.
+                val c = ControlConn(a.gen, a.endpoint, hello)
+                candidate = c
+                c.startThreads()
+            }
+            is SessionMachine.Action.SendCandidate -> {
+                val c = candidate
+                if (a.msg is Hello) MbLog.i("hello_sent", "proto=${a.msg.protocolVersion} cand_gen=${c?.gen ?: -1}")
+                c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg)
+            }
+            SessionMachine.Action.CloseCandidate -> {
+                candidate?.abort()
+                candidate = null
+            }
+            SessionMachine.Action.RetireControl -> {
+                // No BYE and no more input; queued messages still drain. The host closes it on our takeover proof.
+                retired?.closeGracefully()
+                retired = control
+                control = null
+                listener.onSessionEnd()
+            }
+            is SessionMachine.Action.PromoteCandidate -> {
+                val c = candidate
+                candidate = null
+                if (c == null || c.gen != a.gen) {
+                    // Cannot happen (the machine promotes only its live candidate); fail safe: the session reconnects.
+                    MbLog.e("migrate_no_candidate", "cand_gen=${a.gen}")
+                    c?.abort()
+                    controlClosed.post(SessionMachine.Event.ControlClosed(a.gen))
+                    return
+                }
+                MbLog.gen = a.gen
+                MbLog.i("migrate_switch", "host=${a.endpoint.host} port=${a.endpoint.port} transport=${ConnectMode.transportOf(a.endpoint).logName}")
+                listener.onSessionStart()
+                listener.onConnectionGen(a.gen)
+                control = c
+            }
+            SessionMachine.Action.CloseRetired -> {
+                retired?.let { MbLog.i("retired_close", "old_gen=${it.gen}") ; it.closeGracefully() }
+                retired = null
+            }
+            is SessionMachine.Action.MigrationResult -> {
+                val f = "ok=${if (a.ok) 1 else 0} to=${ConnectMode.transportOf(a.endpoint).logName} reason=${a.reason}"
+                if (a.ok) MbLog.i("transport_migrate", f) else MbLog.w("transport_migrate", f)
+                listener.onMigration(a.endpoint, a.ok, a.reason)
+            }
         }
     }
 
@@ -381,7 +488,10 @@ class SessionController(
         }
 
         private fun notifyClosed(connectFailed: Boolean) {
-            if (closedPosted.compareAndSet(false, true)) controlClosed.post(SessionMachine.Event.ControlClosed(gen, connectFailed))
+            if (!closedPosted.compareAndSet(false, true)) return
+            // A stale read of [candidate] only picks the other slot; both hold the latest gen and the machine matches by gen.
+            val box = if (candidate === this) candidateClosed else controlClosed
+            box.post(SessionMachine.Event.ControlClosed(gen, connectFailed))
         }
 
         private fun readerLoop() {
