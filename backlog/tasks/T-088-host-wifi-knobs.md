@@ -12,6 +12,7 @@ files:
   - host-mac/Sources/MateBridgeCore/Video/
   - host-mac/Sources/MateBridgeCore/Session/
   - host-mac/Tests/
+  - host-mac/Sources/MateBridgeApp/main.swift
   - backlog/tasks/T-088-host-wifi-knobs.md
 ---
 
@@ -57,11 +58,9 @@ süreç fd tablosunda bulunuyor (`proc_pidinfo(PROC_PIDLISTFDS)` + `getsockname/
      (yalnız kuyruk; `source=nw_metadata`).
    - `VideoLink`: knob açıksa her `send` öncesi örnek alır; `sendQueueWindow()`.
    - `SessionServer`: video ve kontrol için ayrı `tcpParameters(serviceClass:)`; `listening` log'una `service_class=`;
-     `session_started` log'una `transport=`; aktarımı `SessionTransportBoard`'a (cihaz kimliğiyle, sınırlı) yazar
-     (HELLO alınınca ve `sessionStarted`'da).
-   - `Session/SessionTransportBoard.swift`: süreç içi küçük, kilitli tablo. Gerekçe: `StreamCoordinator` ile
-     `SessionServer` `MateBridgeApp/main.swift`'te bağlanıyor ve o dosya kartın `files:` listesinde değil.
-   - `StreamCoordinator`: `settings(for:)` aktarımı tablodan okur, `applyingTransportKnobs` uygular;
+     `session_started` log'una `transport=`; aktarımı `Handlers.sessionStarted` parametresiyle verir.
+     (İlk sürümde `SessionTransportBoard` vardı; orkestratör kararıyla kaldırıldı, `main.swift` `files:`'a eklendi.)
+   - `StreamCoordinator`: `sessionStarted(…, transport:)` → `applyingTransportKnobs` uygular;
      `stream_session` log'una `transport=`; saniyelik tick'te `component=video ev=sendq`.
 3. Testler (`Tests/MateBridgeCoreTests/Session/TransportKnobsTests.swift`, `Video/SendQueueStatsTests.swift`),
    `./scripts/check.sh`, Handoff.
@@ -69,19 +68,22 @@ süreç fd tablosunda bulunuyor (`proc_pidinfo(PROC_PIDLISTFDS)` + `getsockname/
 ## Handoff
 
 
-- **Commit:** `340a147` (uygulama), `5ebf484` (plan). Dal `task/T-088-host-wifi-knobs`, `main` 79c7495 üzerinde.
-- **check.sh:** ALL OK (host-mac 216 XCTest + 508 swift-testing; yeni `TransportKnobsTests` 9, `SendQueueStatsTests` 5).
+- **Commit:** `340a147` (uygulama), `5e93283` (orkestratör kapsam kararı: aktarım `Handlers.sessionStarted` ile,
+  `SessionTransportBoard` silindi), `5ebf484` (plan). Dal `task/T-088-host-wifi-knobs`, `main` 79c7495 üzerinde.
+- **check.sh:** ALL OK, `5e93283` sonrası yeniden çalıştırıldı (host-mac 216 XCTest + 508 swift-testing; yeni `TransportKnobsTests` 9, `SendQueueStatsTests` 5).
 - **Dosyalar:**
   - Yeni (Core): `MateBridgeCore/Session/TransportKnobs.swift` (`SessionTransport.logName`, `TrafficClass`,
     `ServiceClassKnob`, `SendQueueLogKnob`), `MateBridgeCore/Video/TransportBitrate.swift` (`BitrateSource`,
     `applyingTransportKnobs`), `MateBridgeCore/Video/SendQueueStats.swift` (`TcpSample`, `SendQueueMeter`, `SendQueueWindow`).
   - Değişen (Core): `Video/VideoSettings.swift` (`bitrateOverrideSource`), `Video/EncoderKnobs.swift` (`bitrateSource`).
-  - Yeni (Host): `Session/TcpSocketProbe.swift` (`TcpSocketProbe`, `SendQueueSampler`), `Session/SessionTransportBoard.swift`.
-  - Değişen (Host): `Session/SessionServer.swift`, `Session/StreamCoordinator.swift`.
+  - Yeni (Host): `Session/TcpSocketProbe.swift` (`TcpSocketProbe`, `SendQueueSampler`).
+  - Değişen (Host): `Session/SessionServer.swift` (`Handlers.sessionStarted` artık 4. parametre `SessionTransport`),
+    `Session/StreamCoordinator.swift` (`sessionStarted(sessionID:configID:hello:transport:)`).
+  - Değişen (App): `MateBridgeApp/main.swift` (handler kapanışı transport'u koordinatöre geçirir; 2 satır).
   - Test: `Tests/MateBridgeCoreTests/Session/TransportKnobsTests.swift`, `Tests/MateBridgeCoreTests/Video/SendQueueStatsTests.swift`.
 - **Log satırları:**
   - `component=session ev=session_started conn=… config_id=… video_port=… transport=usb|wifi`
-  - `component=net ev=stream_session … bitrate_source=prefs|env|wifi_env codec=… transport=usb|wifi|unknown`
+  - `component=net ev=stream_session … bitrate_source=prefs|env|wifi_env codec=… transport=usb|wifi`
     (`stream_reconfigure` da `bitrate_source=wifi_env` yazar.)
   - `component=session ev=listening control_port=… video_port=… service_class=off` (ya da
     `service_class=signaling video_class=interactiveVideo control_class=interactiveVoice`).
@@ -100,20 +102,28 @@ süreç fd tablosunda bulunuyor (`proc_pidinfo(PROC_PIDLISTFDS)` + `getsockname/
   Doğrulama: gerçek `TcpSocketProbe` kaynağı + Core dosyalarıyla scratch bir harness (commit edilmedi), loopback
   NWListener/NWConnection üzerinde: `source=tcp_info sendq_kb…=223.5 rtt_ms=1 cwnd_kb=1231.8` (okumayan alıcı).
 - **Varsayımlar / kararlar:**
-  - **Aktarım taşıma yolu:** `SessionServer` ile `StreamCoordinator` `MateBridgeApp/main.swift`'te yalnız HELLO taşıyan
-    callback'lerle bağlı ve o dosya `files:` listesinde değil. Bu yüzden aktarım süreç içi, kilitli, sınırlı
-    (16 cihaz) bir tabloyla (`SessionTransportBoard.shared`, cihaz kimliği anahtarlı) taşınıyor. Sunucu HELLO gelince
-    (makine `STREAM_CONFIG`'i istemeden önce) ve `.sessionStarted`'da yazar; koordinatör `streamConfig(for:)` ve
-    `sessionStarted`'da okur. Kayıt yoksa `transport=unknown`, Wi-Fi düğmesi uygulanmaz.
+  - **Aktarım taşıma yolu:** `SessionServer` `.sessionStarted` eyleminde kontrol bağlantısının eşinden aktarımı
+    hesaplar (`SessionTransport.classify`) ve `Handlers.sessionStarted(sid, cid, hello, transport)` ile verir;
+    `main.swift` bunu `StreamCoordinator.sessionStarted(…, transport:)`'a geçirir. Global tablo yok.
+  - **Bilinen küçük tutarsızlık:** oturum makinesi ilk `STREAM_CONFIG`'i yalnız HELLO ile istiyor
+    (`makeStreamConfig(hello)`), aktarım o anda bilinmiyor. Bu yüzden Wi-Fi'da `MATEBRIDGE_WIFI_BITRATE_KBPS` açıkken
+    **ilk** `STREAM_CONFIG.bitrate_kbps` prefs/varsayılan değeri taşır; kodlayıcı ve sonraki (`STREAM_PREFS` sonrası)
+    `STREAM_CONFIG`'ler Wi-Fi değerini taşır. Tablet bu alanı kullanmıyor (yalnız codec/boyut), etkisi yok.
   - "wifi" = loopback olmayan her eş (`SessionTransport.network`); kablolu LAN da `wifi` görünür.
   - `MATEBRIDGE_WIFI_BITRATE_KBPS` aralığı `MATEBRIDGE_BITRATE_KBPS` ile aynı (5 000–150 000); dışı yok sayılır.
     Değer `bitrateOverrideKbps` olarak saklandığından sonraki `STREAM_PREFS` ve kayıtlı prefs ile yeniden bağlanmada korunur.
-    `STREAM_CONFIG.bitrate_kbps` de bu değeri taşır (tablet bu alanı kullanmıyor).
+    Yeniden yapılandırmadaki `STREAM_CONFIG.bitrate_kbps` de bu değeri taşır (ilk config için yukarıya bakın).
   - `signaling` modu kartta yazıldığı gibi: video `.interactiveVideo`, kontrol `.interactiveVoice` (`NWParameters.ServiceClass.signaling` kullanılmadı).
     Service class dinleyici parametresine konur; kabul edilen bağlantılar onu devralır.
   - `session_started` satırı `SessionMachine`'de üretiliyor (eş adresi bilmiyor); `transport=` alanı `SessionServer`
     `.log` işlenirken, hemen önceki `.sessionStarted` eyleminin hesapladığı `activeTransport`'tan ekleniyor.
-  - Varsayılan davranış değişmedi: düğmeler kapalıyken yalnız log alanları eklendi, sampler oluşturulmuyor, `serviceClass` set edilmiyor.
+  - Varsayılan davranış değişmedi: düğmeler kapalıyken yalnız log alanları eklendi, `serviceClass` set edilmiyor.
+  - **Varsayılan yolda prob çalışmıyor (doğrulandı, kod okuması):** `SessionServer.sampleSendQueue` süreç başında bir
+    kez `SendQueueLogKnob.isEnabled` ile okunur (`MATEBRIDGE_SENDQ_LOG=1` ya da `MATEBRIDGE_LAT_TRACE=1`).
+    Kapalıyken `VideoLink.sendQueue` nil'dir; `SendQueueSampler` ve içindeki `TcpSocketProbe` hiç oluşturulmaz.
+    `send()` içindeki tek ek iş `if let sendQueue, …` (nil, `canSend` bile çağrılmaz); `sendQueueReport()` nil döner,
+    `ev=sendq` yazılmaz. fd tablosu taraması, `getsockname/getpeername`, `getsockopt` ve `NWConnection.metadata`
+    çağrıları yalnız `TcpSocketProbe.sample()` içinde.
 - **Test EDİLMEDİ (cihaz/izin gerekli):**
   - Uygulama yeniden başlatılmadı, `bundle-host.sh` çalıştırılmadı; gerçek oturumda hiçbir log satırı görülmedi.
   - Wi-Fi'da (`en0`) fd eşleşmesinin bulunduğu (`source=tcp_info`) ve `sendq_kb` değerlerinin anlamlı olduğu; loopback dışında doğrulanmadı.
@@ -122,7 +132,6 @@ süreç fd tablosunda bulunuyor (`proc_pidinfo(PROC_PIDLISTFDS)` + `getsockname/
     taşıdığı (ör. `tcpdump -v` ile TOS alanı); tabletin/AP'nin bunu ödüllendirip ödüllendirmediği.
   - `MATEBRIDGE_WIFI_BITRATE_KBPS` ile Wi-Fi oturumunda `bitrate_source=wifi_env` ve kodlayıcının gerçek bit hızı.
 - **Açık sorular:**
-  - Daha temiz bağlama: `SessionServer.Handlers.sessionStarted`'a `transport` parametresi eklemek
-    (`MateBridgeApp/main.swift` üç satır) global tabloyu gereksiz kılar. Orkestratör isterse ayrı kartla yapılabilir.
+  - (Kapandı) Global tablo yerine `Handlers.sessionStarted` parametresi: orkestratör kararıyla `5e93283`'te yapıldı.
   - Yedek yol `NWConnection.metadata(definition:)` bağlantı kuyruğuna senkron gidiyor olabilir; örnekleme `VideoSender`
     Task'ından yapıldığı için kilitlenme yok, ama yalnız fd bulunamazsa ve düğme açıkken çalışıyor.
