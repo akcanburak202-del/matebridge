@@ -1,7 +1,7 @@
 ---
 id: T-107
 title: Tablet — ayar panelinde seçili olmayan seçenekler beyaz kutu, yazı görünmüyor
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-105]

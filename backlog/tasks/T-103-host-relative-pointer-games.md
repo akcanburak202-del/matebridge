@@ -1,7 +1,7 @@
 ---
 id: T-103
 title: Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-034]
