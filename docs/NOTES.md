@@ -577,3 +577,25 @@ Kullanıcı Mac'te boştaydı. Panel Dinamik modda (girdi yok) ~60/120 arasında
   | `QUALITY=0.8` | 53,0 dB |
 
 - Karar: varsayılan değişmiyor (gecikme önceliği). T-085 ve T-087 kapandı.
+
+## 2026-10-01 ~17:45 — Wi-Fi ölçümü (T-088/T-089 kuruldu, `brab.py`, tam ekran kayan metin, Akıcı)
+
+Ağ:
+- Mac en1 802.11ax, kanal 52 (5 GHz, 160 MHz, DFS), PHY 1729 Mbps, sinyal -43 dBm, `awdl0` etkin.
+- Tablet Wi-Fi 6, 2161 Mbps, RSSI -36. İkisi de aynı modemde (FiberHGW).
+- Boşta ping Mac→tablet: 5,6 / 9,5 / 21,8 ms (min/ort/maks).
+
+| koşul | fps | gönderilen Mbps | KB/kare p50 | tablet gecikme medyanı | RTT p50 (`ev=net`) | host gönderim kuyruğu p95 |
+|---|---|---|---|---|---|---|
+| USB | 60 | 23 | 47 | **24–25 ms** | 4,6 ms | 0 KB |
+| Wi-Fi | 8–11 | **27–28 (tavan)** | 275 | **350–390 ms** | 28 ms | 300–320 KB (maks 1,1 MB) |
+| Wi-Fi, `WIFI_BITRATE=40000` | 17–50 | 17–27 | 29–218 | 35–370 ms | 25–28 ms | 52 KB → -1 |
+| Wi-Fi, `SERVICE_CLASS=video` + `tos_ctl/video` + `wifi_ll` | 9–10 | 27 | 270 | 350–380 ms | 28 ms | ~320 KB |
+
+- **Wi-Fi'de Mac→tablet kapasitesi ~27 Mbps'te doyuyor**, Akıcı (60 Mbps) ve Performans (~34 Mbps) bunu aşıyor.
+- Host gönderim kuyruğu sınırsız büyüyor. "En yeni kare kazanır" kuralı Wi-Fi'de çalışmıyor; gecikme yüzlerce ms'ye çıkıyor (araştırma bulgusu doğrulandı).
+- Kodlayıcı kare atınca kare başı boyut 275 KB'a çıkıyor.
+- `wifi_ll` gerçekten etkin oldu (`dumpsys wifi` `low_latency_active_time_ms`) ama fark yaratmadı. DSCP/serviceClass da etkisiz.
+- `TcpSocketProbe` Wi-Fi bağlantısında `tcp_info` bulamadı (`retx=-1`), `nw_metadata` yedeğine düştü. İncelenecek.
+- Tablette `nc`/`curl` yok → ham kapasite için T-090 ölçüm kipi.
+- Ölçüm tuzağı: `adb shell run-as … sed 's#…">…<#…#'` komutunda tırnaklar uzak kabukta korunmuyor, `>` yönlendirme sayılıyor. Komut tek dize olarak verilmeli. 17:13 ve 17:38 Wi-Fi turları bu yüzden aslında USB'de koştu.
