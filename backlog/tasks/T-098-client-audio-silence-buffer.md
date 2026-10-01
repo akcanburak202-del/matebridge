@@ -1,7 +1,7 @@
 ---
 id: T-098
 title: Tablet — ses: sessizlik aralarını alt taşma saymamak, ses başlangıcında hızlı çalma, AudioTrack tamponu 1920 → 960
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-095]
