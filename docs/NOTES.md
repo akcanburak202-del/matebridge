@@ -377,3 +377,12 @@ Scratch `pace-long.sh` (SF `--latency`, 18–25 sn birikimli), Performans 120, `
 - `pmset -g log` / `log show`: sistem günlüğü **05:59:29**'da ve **10:29:43**'te kapanma sırası olmadan aniden kesiliyor; açılışlar 07:37 ve 10:56:57. Panik raporu yok (`/Library/Logs/DiagnosticReports`), `PMRD: No sleep wake failure string`, uyku girdisi yok (`sleep 0`, MateBridge `PreventUserIdleSystemSleep` tutuyor). Görünüm: **elektrik kesintisi ya da donanım düzeyinde ani kapanma**; yazılım kaynaklı donma genelde watchdog panik raporu bırakır. `autorestart 0` olduğu için Mac güç dönünce kendiliğinden açılmıyor (2026-09-29'da bilinçli kapatılmıştı).
 - 10:29:43'ten hemen önce son satırlar: `adb` EXC_GUARD uyarıları (zararsız, sık) ve Wi-Fi sayaçları; MateBridge host normal `ev=stats` yazıyordu.
 - Yan etki: `/private/tmp` silindi (scratch araçları). Ölçüm araçları artık `~/.cache/matebridge-tools/` (tick, sweep.py, install.sh).
+
+## 2026-10-01 ~11:30 — Kare başına iz (T-069) ile 60 Hz analizi
+
+- 11:07 taraması (5 ayar × 3 tur) **geçersiz**: kullanıcı aktifti, panel 120 Hz, ~7 Mbps içerik. Yan bulgu: 120 Hz'te kilit her ~30 karede yeniden faz alıyor (`rephase` 36–70 / 20 sn), geç sayılan karelerin payı **+25…+60 ms** (kare kilit slotundan çok önce hazır → "gecikme sınırı aşımı" yolu). Görüntüyü T-065 releaser'ı kurtarıyor. 120 Hz izi henüz alınmadı (dokunma gerekiyor).
+- İz `trace1.csv` (60 Hz, 16 pt köşe karesi, ~3800 kilitli kare), `~/.cache/matebridge-tools/sim.py` ile çevrimdışı:
+  - Bugünkü kilit, sürekli bölümlerde planlanan slotlarda **%0,1 boşluk** ama hazır→slot **p50 42,5 ms** (≈2,5 vsync). Kilitteki jitter = 256 örneğin p99'u (~32 ms; nadir 33 ms sıçramalar), merkezleme `ideal + J/2 + P/2`, son an 13,33 ms → geç ve "çok erken" atmalar.
+  - Sabit oynatma gecikmesi politikası (yakalama + taban + J_q, 2 ms histerezis): q=0,9 → 11 ms / %2,8 boşluk; q=0,95 → 26 ms / %2,0; q=0,99 → 42 ms / %0,6. Yani **60 Hz'te akıcılık ↔ gecikme ödünleşimi girdi sapmasından geliyor**, zamanlama algoritmasından değil.
+- Sapmanın kaynağı (`MB/render` 60 Hz sürekli): yakalama→varış p50 16,6 ms (kodlama 6,8 ms), p95 ~18 ms, bazı saniyelerde p99 **40–44 ms** (USB/adb tüneli ya da host gönderim kuyruğu); çözme p50 10, p95 13 ms. Sonraki adım: host'ta yakalama→gönderim zamanlarını ayrıştırmak; yakalama→varışın kodlama dışındaki ~10 ms'si ve p99 sıçramaları.
+- Ayrıca SF ile planlanan arasında fark olabilir (son an 13,33 ms ile 6 ms; `deadline_us` taraması kullanıcı boştayken yapılmalı).
