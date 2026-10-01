@@ -23,7 +23,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         case displayRate(sessionID: UInt32, hz: UInt16)
         case stats(Stats)
         case tick
-        case pipelineFailed(id: Int, message: String)
+        case pipelineFailed(id: Int, message: String, wake: DisplayWakeReason?)
         case senderEnded(id: Int, VideoSender.EndReason)
         case shutdown(done: @Sendable () -> Void)
     }
@@ -80,6 +80,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Tablet panel rate from `DISPLAY_RATE` (T-058), and the last (hz, effective fps) that was logged.
     private var rateState = DisplayRateState()
     private var lastLoggedRate: (hz: Int, fps: Int)?
+    /// T-081: wakes the displays when the pipeline loses its display to display sleep during a session.
+    private var wakePolicy = DisplayWakePolicy()
+    private let waker = DisplayWaker()
     /// Session id of the live session as seen by the entry points (any thread); nil between sessions.
     private let liveSessionLock = NSLock()
     private var liveSessionID: UInt32?
@@ -242,8 +245,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             await perform(lease.tick(now: now))
             if let waiting = prefsGate.poll(now: now) { await applyPrefs(waiting) }
             reportCadence()
-        case .pipelineFailed(let id, let message):
-            await onPipelineFailed(id: id, message: message)
+        case .pipelineFailed(let id, let message, let wake):
+            await onPipelineFailed(id: id, message: message, wake: wake)
         case .senderEnded(let id, let reason):
             await onSenderEnded(id: id, reason: reason)
         case .shutdown(let done):
@@ -329,6 +332,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionEnded() async {
         session = nil
+        wakePolicy.sessionEnded()
         resetDisplayRate()
         lastSent = VideoSender.Counters()
         lastStatsText = ""
@@ -417,9 +421,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         onSummary([lastStatsText, lastCadenceText].filter { !$0.isEmpty }.joined(separator: " · "))
     }
 
-    private func onPipelineFailed(id: Int, message: String) async {
+    private func onPipelineFailed(id: Int, message: String, wake: DisplayWakeReason?) async {
         guard id == pipelineID, pipeline != nil else { return }
         log(.error, "pipeline_failed", "error=\(message)")
+        wakeDisplayIfNeeded(wake)  // before the retry backoff, so the displays are up when it runs
         await stopConsumer()
         pipeline = nil  // the pipeline already closed its display and queue
         lease.displayLost()
@@ -438,6 +443,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onShutdown() async {
         _ = lease.shutdown()
         session = nil
+        wakePolicy.sessionEnded()
         await destroyPipeline()
         onSummary("")
     }
@@ -480,7 +486,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         pipelineID += 1
         let id = pipelineID
         let p = VideoPipeline(settings: settings, reusing: display, onFailure: { [weak self] error in
-            self?.post(.pipelineFailed(id: id, message: "\(error)"))
+            self?.post(.pipelineFailed(id: id, message: "\(error)", wake: DisplayWaker.reason(for: error)))
         })
         do {
             try await p.start()
@@ -489,6 +495,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                 return
             }
             pipeline = p
+            wakePolicy.recovered()
             if rateState.hz != 0 { applyDisplayRate(streamFps: settings.fps) }
             startDrain()
             log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)")
@@ -498,7 +505,22 @@ public final class StreamCoordinator: @unchecked Sendable {
         } catch {
             log(.error, "display_create_failed", "error=\(error)")
             lease.displayLost()
+            wakeDisplayIfNeeded(DisplayWaker.reason(for: error))
             onSummary("Video başlamadı: \(error)")
+        }
+    }
+
+    /// T-081: the display went away (or could not be created) for a reason display sleep explains. With an accepted
+    /// session, declare user activity (at most once per second) so the next retry finds the displays awake. Retries
+    /// themselves are unchanged (`pipeline_retry`, the client's video reconnects).
+    private func wakeDisplayIfNeeded(_ reason: DisplayWakeReason?) {
+        guard let reason else { return }
+        let decision = wakePolicy.displayLost(reason, sessionActive: session != nil, now: HostClock.nowUs())
+        guard case .wake(let shouldLog, let wakes) = decision else { return }
+        if let failure = waker.declareUserActivity() {
+            log(.warning, "wake_display_failed", "reason=\(reason.rawValue) iokit=\(failure)")
+        } else if shouldLog {
+            log(.info, "wake_display", "reason=\(reason.rawValue) wakes=\(wakes)")
         }
     }
 
