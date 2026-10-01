@@ -36,6 +36,13 @@ interface AudioSink {
     /** Reads the latest CLOCK_MONOTONIC timestamp into `out[0]` (frame position) and `out[1]` (ns); false if none. */
     fun timestamp(out: LongArray): Boolean
 
+    /**
+     * T-101: the output's own counters ([AAudioNative.counters] layout: frames written, frames read, timestamp position
+     * and ns, now) into `out`; `out[C_TS_NS]` is 0 when the timestamp failed. False if the output has no such counters
+     * (AudioTrack: then [timestamp] is used, as before).
+     */
+    fun counters(out: LongArray): Boolean = false
+
     /** Output underruns since open. */
     fun xruns(): Int
 

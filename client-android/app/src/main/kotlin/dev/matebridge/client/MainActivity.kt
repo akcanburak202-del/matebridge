@@ -41,6 +41,7 @@ import dev.matebridge.client.input.KeyTracker
 import dev.matebridge.client.input.LocalAction
 import dev.matebridge.client.input.MotionEventAdapter
 import dev.matebridge.client.input.UnbufferedPenDispatch
+import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.audio.AudioPlayout
 import dev.matebridge.client.audio.AvSync
 import dev.matebridge.client.protocol.Capabilities
@@ -381,7 +382,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
-        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }) { runOnUiThread { onAudioBecomingNoisy() } }
+        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }, settings.audioOut()) { runOnUiThread { onAudioBecomingNoisy() } }
         val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
             intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
         )
@@ -478,6 +479,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         addModeButton()
         addClipboardToggle()
         addAudioToggle()
+        addAudioOutButton()
         addPenToggles()
         addShortcutHint()
         applyImmersive()
@@ -712,6 +714,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var audioLabel: (() -> Unit)? = null
+
+    /**
+     * T-101: connect-panel button "Ses çıkışı: Düşük gecikme / Uyumlu" (AAudio MMAP / AudioTrack), persisted in
+     * [Settings] (default Düşük gecikme). The label shows the preference in effect (a `--es audio_out` launch override
+     * included); a tap saves the other choice and applies it, which ends the launch override (like the display mode).
+     */
+    private fun addAudioOutButton() {
+        val a = audio ?: return
+        val p = panel as? LinearLayout ?: return
+        val b = Button(this)
+        fun label() {
+            b.text = "Ses çıkışı: " + if (a.outPref == AudioOutPref.TRACK) "Uyumlu" else "Düşük gecikme"
+        }
+        b.setOnClickListener {
+            val next = if (a.outPref == AudioOutPref.TRACK) AudioOutPref.AUTO else AudioOutPref.TRACK
+            settings.setAudioOut(next)
+            a.setOutPref(next)
+            label()
+        }
+        label()
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = (8 * resources.displayMetrics.density).toInt()
+        p.addView(b, lp)
+    }
 
     /** Persists the audio setting, tells the host (AUDIO_PREFS) and refreshes the panel button. Main thread. */
     private fun setAudioSetting(on: Boolean) {

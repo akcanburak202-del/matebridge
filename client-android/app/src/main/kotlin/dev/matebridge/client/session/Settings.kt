@@ -47,6 +47,16 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setAudioEnabled(on: Boolean) = store.putString(KEY_AUDIO, if (on) "1" else "0")
 
+    /**
+     * Audio output ("Ses çıkışı", T-101): AUTO ("Düşük gecikme", AAudio MMAP; the default, also for an unknown stored
+     * value) or TRACK ("Uyumlu", AudioTrack). The `--es audio_out` launch extra overrides it and is never stored here.
+     */
+    fun audioOut(): dev.matebridge.client.audio.AudioOutPref =
+        dev.matebridge.client.audio.AudioOutPref.parse(store.getString(KEY_AUDIO_OUT))
+            ?: dev.matebridge.client.audio.AudioOutPref.AUTO
+
+    fun setAudioOut(p: dev.matebridge.client.audio.AudioOutPref) = store.putString(KEY_AUDIO_OUT, p.id)
+
     /** Local pen trail and pen dot (T-056); both default off (T-064); only a stored "1" enables. */
     fun penTrail(): Boolean = store.getString(KEY_PEN_TRAIL) == "1"
 
@@ -123,6 +133,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"
         const val KEY_AUDIO = "audio_enabled"
+        const val KEY_AUDIO_OUT = "audio_out"
         const val KEY_PEN_TRAIL = "pen_trail"
         const val KEY_PEN_DOT = "pen_dot"
         const val KEY_FINGER_OFF = "finger_touch_disabled"

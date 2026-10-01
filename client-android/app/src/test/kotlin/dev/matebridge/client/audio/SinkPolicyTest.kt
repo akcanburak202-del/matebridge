@@ -130,4 +130,66 @@ class SinkPolicyTest {
         assertTrue(p.onAaudioFailure(1))
         assertEquals(track, p.next())
     }
+
+    // ---- T-101: the panel's "Ses çıkışı" ----
+
+    @Test fun setPrefSwitchesBetweenLowLatencyAndCompatible() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true)
+        assertEquals(excl, p.next())
+        assertTrue(p.setPref(AudioOutPref.TRACK))
+        assertEquals(AudioOutPref.TRACK, p.pref)
+        assertEquals(track, p.next())
+        assertFalse(p.setPref(AudioOutPref.TRACK)) // no change, no rebuild
+        assertTrue(p.setPref(AudioOutPref.AUTO))
+        assertEquals(excl, p.next())
+    }
+
+    @Test fun startingAsTrackCanSwitchToAaudioLater() {
+        // AudioPlayout passes aaudioAvailable = true for TRACK (the library is not loaded then): AAUDIO must be possible later.
+        val p = SinkPolicy(AudioOutPref.TRACK, aaudioAvailable = true)
+        assertEquals(track, p.next())
+        p.setPref(AudioOutPref.AUTO)
+        assertEquals(excl, p.next())
+    }
+
+    @Test fun setPrefRestartsTheChainAndForgetsFailuresButNotABrokenLibrary() {
+        val p = SinkPolicy(AudioOutPref.AUTO, true, maxFailures = 2)
+        p.onOpenFailed(excl)
+        p.onAaudioFailure(0)
+        assertTrue(p.onAaudioFailure(1))
+        assertEquals(track, p.next())
+        p.setPref(AudioOutPref.TRACK)
+        p.setPref(AudioOutPref.AUTO) // the user asked for low latency again
+        assertFalse(p.aaudioDisabled)
+        assertEquals(excl, p.next())
+
+        p.disableAaudio()
+        p.setPref(AudioOutPref.TRACK)
+        p.setPref(AudioOutPref.AUTO)
+        assertTrue(p.aaudioDisabled)
+        assertEquals(track, p.next())
+    }
+
+    @Test fun launchExtraOverridesTheStoredSettingWithoutReplacingIt() {
+        val none = AudioOutPref.resolve(null, AudioOutPref.TRACK)
+        assertEquals(AudioOutPref.TRACK, none.pref)
+        assertEquals("setting", none.source)
+        assertFalse(none.unknownExtra)
+
+        val extra = AudioOutPref.resolve("aaudio", AudioOutPref.TRACK)
+        assertEquals(AudioOutPref.AAUDIO, extra.pref)
+        assertEquals("extra", extra.source)
+
+        assertEquals(AudioOutPref.TRACK, AudioOutPref.resolve("track", AudioOutPref.AUTO).pref)
+        assertEquals(AudioOutPref.AUTO, AudioOutPref.resolve("auto", AudioOutPref.TRACK).pref)
+
+        val bad = AudioOutPref.resolve("oboe", AudioOutPref.TRACK)
+        assertEquals(AudioOutPref.TRACK, bad.pref) // unknown extra: the stored setting
+        assertEquals("setting", bad.source)
+        assertTrue(bad.unknownExtra)
+    }
+
+    @Test fun prefIdsRoundTrip() {
+        for (p in AudioOutPref.values()) assertEquals(p, AudioOutPref.parse(p.id))
+    }
 }

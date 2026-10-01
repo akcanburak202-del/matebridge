@@ -193,6 +193,28 @@ Java_dev_matebridge_client_audio_AAudioNative_timestamp(JNIEnv* env, jobject, jl
     return r;
 }
 
+// T-101: AAudio's own counters and timestamp in one call (writer thread only; no alloc, lock, log or up-call).
+// out: [0] getFramesWritten, [1] getFramesRead, [2] timestamp frame position, [3] timestamp ns, [4] now (CLOCK_MONOTONIC
+// ns, read last). Returns the getTimestamp result; [2] and [3] are 0 unless it is AAUDIO_OK.
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_matebridge_client_audio_AAudioNative_counters(JNIEnv* env, jobject, jlong h, jlongArray out) {
+    Out* o = fromHandle(h);
+    if (o == nullptr || out == nullptr || env->GetArrayLength(out) < 5) return AAUDIO_ERROR_NULL;
+    int64_t v[5] = {0, 0, 0, 0, 0};
+    const aaudio_result_t r = AAudioStream_getTimestamp(o->stream, CLOCK_MONOTONIC, &v[2], &v[3]);
+    if (r != AAUDIO_OK) {
+        v[2] = 0;
+        v[3] = 0;
+    }
+    v[1] = AAudioStream_getFramesRead(o->stream);
+    v[0] = AAudioStream_getFramesWritten(o->stream);
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    v[4] = static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
+    env->SetLongArrayRegion(out, 0, 5, reinterpret_cast<const jlong*>(v));
+    return r;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_matebridge_client_audio_AAudioNative_xruns(JNIEnv*, jobject, jlong h) {
     Out* o = fromHandle(h);
