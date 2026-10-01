@@ -89,6 +89,9 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x15 | PEN_GESTURE | C→H | kontrol | `pen_gesture` |
 | 0x16 | RELEASE_ALL | C→H | kontrol | `release_all` |
 | 0x17 | PINCH | C→H | kontrol | `pinch_began`, `pinch`, `pinch_ended` |
+| 0x30 | AUDIO_PREFS | C→H | kontrol | `audio_prefs` |
+| 0x31 | AUDIO_CONFIG | H→C | kontrol | `audio_config`, `audio_config_stopped` |
+| 0x32 | AUDIO_FRAME | H→C | kontrol | `audio_frame`, `invalid_audio_frame_short` |
 | 0x20 | PING | iki yön | kontrol | `ping` |
 | 0x21 | PONG | iki yön | kontrol | `pong` |
 | 0x22 | STATS | C→H | kontrol | `stats` |
@@ -97,7 +100,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x41 | VIDEO_FRAME | H→C | video | `video_frame`, `video_frame_config` |
 | — | (bilinmeyen) | — | — | `unknown_type` |
 
-Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x40–0x4F` video. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
+Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x30–0x3F` ses, `0x40–0x4F` video. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
 
 ### 0x01 HELLO (C→H)
 
@@ -114,7 +117,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`.
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -430,6 +433,55 @@ PONG (PING'i alan taraf hemen cevaplar):
 
 Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleştirilebilir. Sebep `STARTUP`, `DECODE_ERROR` ya da bilinmeyen ise host o keyframe'den önce güncel `CODEC_CONFIG`'i **yeniden gönderir** (istemci çözücüsünü yeniden kurmuş ve eski parametre setlerini atmış olabilir); `FRAMES_DROPPED` için göndermez. İstemci akış ortasında gelen, öncekiyle aynı `CODEC_CONFIG`'i kabul eder.
 
+### 0x30 AUDIO_PREFS (C→H, kontrol)
+
+İstemcinin ses isteği (karar 0011). İstemci `ACCEPTED`'dan sonra ve her değişiklikte gönderir. Varsayılan ses ayarı açıktır.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| enabled | u8 | `1` ses istiyor, `0` istemiyor. Başka değer: `0` sayılır. |
+| reserved | u8 | |
+| reserved2 | u16 | |
+
+**Host kuralları:**
+- Ses yalnızca şu koşulların hepsi tutunca başlar: oturum `ACCEPTED` ve şifreli, `HELLO.capabilities` bit8 `AUDIO_PCM`, son `AUDIO_PREFS.enabled = 1`.
+- Başlarken host yeni `stream_id` ile `AUDIO_CONFIG(STARTED)` gönderir. Yakalama sürerken Mac'in yerel ses çıkışı susar.
+- `enabled = 0`, `BYE`, kontrol bağlantısının kopması ya da oturumun bitmesi: host yakalamayı **hemen** durdurur (video grace süresi beklenmez). Mac'in yerel sesi geri gelir.
+- Bağlantı hâlâ açıksa `AUDIO_CONFIG(STOPPED)` gönderilir.
+- Ses yakalama izni yoksa ya da yakalama başarısız olursa host ses göndermez, oturumu etkilemez ve hatayı bir kez loglar.
+
+### 0x31 AUDIO_CONFIG (H→C, kontrol)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| stream_id | u16 | Her yeni ses akışında artar (1'den başlar). `AUDIO_FRAME` bununla eşleşir. |
+| state | u8 | `0` STOPPED, `1` STARTED |
+| format | u8 | `1` PCM_S16LE (işaretli 16 bit, little-endian, kanallar iç içe) |
+| sample_rate | u32 | Hz (`48000`) |
+| channels | u8 | `2` |
+| reserved | u8 | |
+| frames_per_packet | u16 | Tipik paket boyu, kare (`480` = 10 ms). Bilgi amaçlı; her paket kendi `frame_count`'unu taşır. |
+
+- `STOPPED`'ta diğer alanlar `0` olabilir. İstemci çalmayı durdurur, tamponu boşaltır.
+- Bilinmeyen `state` ya da `format`, veya istemcinin çalamadığı `sample_rate`/`channels`: istemci bu akışı **yok sayar** (çalmaz). Protokol hatası değildir.
+
+### 0x32 AUDIO_FRAME (H→C, kontrol)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| stream_id | u16 | `AUDIO_CONFIG.stream_id`. Güncel akışla eşleşmeyen paket atılır. |
+| reserved | u16 | |
+| seq | u32 | Akışta her pakette 1 artar, 0'dan başlar |
+| sample_index | u64 | Paketin ilk karesinin akıştaki sırası (kare = tüm kanallardan birer örnek). Sıçrama: host o aralığı atmıştır, istemci sessizlikle doldurur. |
+| capture_time_us | u64 | İlk karenin host monoton zamanı, `VIDEO_FRAME.capture_time_us` ile aynı saat (A/V senkronu, §6) |
+| frame_count | u16 | Paketteki kare sayısı, `1`–`960` |
+| data_len | u16 | `data` uzunluğu, bayt. PCM_S16LE stereo için `frame_count × 4`. |
+| data | bytes[data_len] | PCM örnekleri |
+
+- Payload `32 + data_len`'den kısaysa ya da `frame_count` 0 veya 960'tan büyükse **protokol hatasıdır** (fixture `invalid_audio_frame_short`).
+- `data_len`, güncel `AUDIO_CONFIG` biçimiyle uyuşmuyorsa (`frame_count × channels × 2`): istemci paketi atar. Protokol hatası değildir.
+- Ses içeriği asla loglanmaz.
+
 ### 0x40 VIDEO_HELLO (C→H, video bağlantısı)
 
 | Alan | Tip | Açıklama |
@@ -460,6 +512,10 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 **Video:**
 - Host: kodlayıcı çıkışı ile soket arasında en çok **2** kare bekler. Soket yetişemiyorsa eski, keyframe olmayan kareler atılır ve bir sonraki kare keyframe olarak istenir.
 - İstemci: decoder'a verilmeyi bekleyen en çok **2** kare tutulur. Taşarsa en eski kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir. Keyframe gelene kadar gelen keyframe olmayan kareler decoder'a verilmez.
+
+**Ses (karar 0011):**
+- Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
+- İstemci: titreşim tamponu en çok **300 ms**. Taşarsa en eski ses atılır (kısa sönümle).
 
 **Kontrol + girdi (istemci gönderim kuyruğu):**
 - En çok **256 KiB** veya en eski mesaj **1 sn**.
@@ -541,6 +597,7 @@ Swift ve Kotlin testleri:
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`
+- Ses: `audio_prefs`, `audio_config`, `audio_config_stopped`, `audio_frame`, `invalid_audio_frame_short`
 - Video: `video_hello`, `video_frame`, `video_frame_config`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)
