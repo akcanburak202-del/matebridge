@@ -47,10 +47,13 @@ object StatsFormat {
      * Log fields of the presentation scheduler (T-057): second release attempts per slot, frames folded onto the
      * previous slot by the latency bound, p95 frames inside the decoder, timestamp lead, slack D.
      */
-    fun presentFields(slotDups: Long, lateDrops: Long, inCodecP95: Int?, leadNs: Long, dUs: Long, limit: Int, phaseLock: Boolean = false, rephase: Long = 0) =
+    fun presentFields(slotDups: Long, lateDrops: Long, inCodecP95: Int?, leadNs: Long, dUs: Long, limit: Int, phaseLock: Boolean = false, rephase: Long = 0,
+        lateMarginP50Us: Long? = null, lateMarginMinUs: Long? = null,
+    ) =
         "slot_dups=$slotDups late_drops=$lateDrops in_codec_p95=${inCodecP95 ?: "-"} " +
             String.format(Locale.ROOT, "lead_ms=%.2f", leadNs / 1e6) + " d_us=$dUs inflight_limit=$limit " +
-            "phase_lock=${if (phaseLock) 1 else 0} rephase=$rephase"
+            "phase_lock=${if (phaseLock) 1 else 0} rephase=$rephase " +
+            "late_margin_p50_us=${lateMarginP50Us ?: "-"} late_margin_min_us=${lateMarginMinUs ?: "-"}"
 
     /** Overlay line for the display mode and jitter buffer ([bufferFrames] < 0 = adaptive pacing). */
     fun pacingLine(

@@ -118,7 +118,7 @@ class VideoRenderer(
         lastRephases = rephases
         MbLog.i(
             "present",
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta),
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs),
             "render",
         )
     }
@@ -428,7 +428,7 @@ class VideoRenderer(
                 }
                 stats.onPaceAdd(d.addedNs / 1000)
                 if (useAdaptive) stats.onScheduled(d.skipped)
-                if (d.lateDrop) counters.onLateDrop()
+                if (d.lateDrop) counters.onLateDrop(if (d.ownSlotNs != 0L) (d.ownSlotNs - readyNs) / 1000 else null)
                 releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs)
                 continue
             }

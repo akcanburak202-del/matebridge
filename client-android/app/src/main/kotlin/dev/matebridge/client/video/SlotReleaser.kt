@@ -89,20 +89,30 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
 
 /** Counters of the presentation scheduler, one window per STATS second. Thread-safe. */
 class PresentCounters {
-    data class Snapshot(val slotDups: Long, val lateDrops: Long)
+    private companion object { const val MAX_MARGINS = 2048 }
+
+    /** [lateMarginP50Us]/[lateMarginMinUs]: how long before its own slot a late-dropped frame was ready (null: none). */
+    data class Snapshot(
+        val slotDups: Long, val lateDrops: Long, val lateMarginP50Us: Long? = null, val lateMarginMinUs: Long? = null,
+    )
 
     private var slotDups = 0L
     private var lateDrops = 0L
+    private val lateMargins = ArrayList<Long>()
 
     /** A second release attempt for one vsync slot (replaced while pending, or refused after release). */
     @Synchronized fun onSlotDup() { slotDups++ }
 
     /** A frame found no slot within the latency bound and was folded onto the previous slot. */
-    @Synchronized fun onLateDrop() { lateDrops++ }
+    @Synchronized fun onLateDrop(marginUs: Long? = null) {
+        lateDrops++
+        if (marginUs != null && lateMargins.size < MAX_MARGINS) lateMargins.add(marginUs)
+    }
 
     @Synchronized fun snapshot(reset: Boolean = false): Snapshot {
-        val s = Snapshot(slotDups, lateDrops)
-        if (reset) { slotDups = 0; lateDrops = 0 }
+        val sorted = lateMargins.sorted()
+        val s = Snapshot(slotDups, lateDrops, sorted.getOrNull(sorted.size / 2), sorted.firstOrNull())
+        if (reset) { slotDups = 0; lateDrops = 0; lateMargins.clear() }
         return s
     }
 }

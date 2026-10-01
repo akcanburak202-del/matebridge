@@ -137,10 +137,23 @@ class InFlightGaugeTest {
 
     @Test fun presentFieldsFormat() {
         val f = StatsFormat.presentFields(3, 2, 4, 4_166_666, 9_500, 0)
-        assertEquals("slot_dups=3 late_drops=2 in_codec_p95=4 lead_ms=4.17 d_us=9500 inflight_limit=0 phase_lock=0 rephase=0", f)
+        assertEquals("slot_dups=3 late_drops=2 in_codec_p95=4 lead_ms=4.17 d_us=9500 inflight_limit=0 phase_lock=0 rephase=0 late_margin_p50_us=- late_margin_min_us=-", f)
         val g = StatsFormat.presentFields(0, 0, 2, 6_000_000, 100, 0, true, 3)
-        assertTrue(g, g.endsWith("phase_lock=1 rephase=3"))
+        assertTrue(g, g.contains("phase_lock=1 rephase=3"))
         assertTrue(StatsFormat.presentFields(0, 0, null, 0, 0, 3).contains("in_codec_p95=-"))
+        assertTrue(f, f.endsWith("late_margin_p50_us=- late_margin_min_us=-"))
+        val h = StatsFormat.presentFields(1, 1, 1, 0, 0, 0, false, 0, 2_500, -300)
+        assertTrue(h, h.endsWith("late_margin_p50_us=2500 late_margin_min_us=-300"))
+    }
+
+    @Test fun lateMarginSnapshot() {
+        val c = PresentCounters()
+        c.onLateDrop(); c.onLateDrop(3000); c.onLateDrop(1000); c.onLateDrop(2000)
+        val s = c.snapshot(reset = true)
+        assertEquals(4L, s.lateDrops)
+        assertEquals(2000L, s.lateMarginP50Us)
+        assertEquals(1000L, s.lateMarginMinUs)
+        assertNull(c.snapshot().lateMarginP50Us)
     }
 }
 
@@ -201,6 +214,18 @@ class VsyncClockGridTest {
         // Changing the offset keeps the display-time phase consistent with the same callback.
         v.setDisplayTiming(3_000_000, 1_000_000)
         assertEquals(7_000_000L, v.grid().lastNs)
+    }
+
+    @Test fun deadlineOverrideReplacesDisplayDeadline() {
+        val v = VsyncClock(60f)
+        v.setDisplayTiming(0, 13_333_000)
+        assertEquals(13_333_000L, v.grid().deadlineNs) // no override: today's behaviour
+        v.deadlineOverrideNs = 6_000_000
+        v.setDisplayTiming(0, 13_333_000)
+        assertEquals(6_000_000L, v.grid().deadlineNs)
+        v.deadlineOverrideNs = 99_000_000
+        v.setDisplayTiming(0, 13_333_000)
+        assertEquals(v.periodNs, v.grid().deadlineNs) // capped at a period
     }
 
     @Test fun leadDefaultsToSixMsAndIsOverridable() {
