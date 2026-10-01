@@ -56,6 +56,8 @@ public final class InputController: @unchecked Sendable {
     private var cursorQueryFailures = 0
     private var cursorQueryTotalNs: UInt64 = 0
     private var cursorQueryMaxNs: UInt64 = 0
+    /// The planner's counters at session start (the live cursor counters are reported per session).
+    private var sessionStartCounters = InjectionPlanner.Counters()
 
     /// - Parameters:
     ///   - doubleClickInterval: seconds; the system setting by default.
@@ -127,6 +129,7 @@ public final class InputController: @unchecked Sendable {
             cursorQueryFailures = 0
             cursorQueryTotalNs = 0
             cursorQueryMaxNs = 0
+            sessionStartCounters = pipeline.planner.counters
             beginActivity()
             // The user's key repeat settings as of now (System Settings > Keyboard), for this session's machine.
             var machine = pipeline.nextMachineConfiguration
@@ -157,6 +160,9 @@ public final class InputController: @unchecked Sendable {
                     + "pinch_msgs=\(pinchMessages) "
                     + "cursor_queries=\(cursorQueries) cursor_query_failed=\(cursorQueryFailures) "
                     + "cursor_query_avg_us=\(cursorQueryAverageUs) cursor_query_max_us=\(cursorQueryMaxNs / 1_000) "
+                    + "cursor_adopted=\(d.liveCursorAdopted - sessionStartCounters.liveCursorAdopted) "
+                    + "cursor_current=\(d.liveCursorCurrent - sessionStartCounters.liveCursorCurrent) "
+                    + "cursor_lag_ignored=\(d.liveCursorLagIgnored - sessionStartCounters.liveCursorLagIgnored) "
                     + "dropped_no_permission=\(d.droppedNoPermission - loggedDrops.droppedNoPermission) "
                     + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)")
             loggedDrops = d

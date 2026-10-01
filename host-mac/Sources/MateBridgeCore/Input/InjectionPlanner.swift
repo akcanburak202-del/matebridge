@@ -35,6 +35,14 @@ public struct InjectionPlanner: Sendable {
         public var droppedOwed = 0
         /// Zero-delta `scroll(.changed)` and `pinch(.changed)` keepalives (never injected).
         public var droppedKeepalive = 0
+        /// Live cursor samples (T-103) that became the starting point: someone else (a game warp, the Mac's own mouse)
+        /// had moved the cursor.
+        public var liveCursorAdopted = 0
+        /// Live cursor samples within a point of the planner's own cursor (the system had caught up).
+        public var liveCursorCurrent = 0
+        /// Live cursor samples within a point of an OLDER posted relative target: WindowServer had not applied our
+        /// latest moves yet, so the sample was ignored and the planner's own cursor kept.
+        public var liveCursorLagIgnored = 0
         public init() {}
     }
 
@@ -61,6 +69,10 @@ public struct InjectionPlanner: Sendable {
     /// Fractions of relative movement not yet reported in the whole-point `deltaX/Y`.
     private var relCarryX = 0.0
     private var relCarryY = 0.0
+    /// The last `recentTargetsLimit` positions posted for relative moves (post-clamp), oldest first. A live sample near
+    /// one of them is our own move that WindowServer has not caught up with, not someone else's.
+    private var recentTargets: [DisplayPoint] = []
+    static let recentTargetsLimit = 8
     private var clicks: ClickCounter
     /// The geometry of the call in progress (nil: no display). Every cached position is resolved against it.
     private var display: DisplayGeometry?
@@ -119,6 +131,7 @@ public struct InjectionPlanner: Sendable {
         clicks.reset()
         relCarryX = 0
         relCarryY = 0
+        recentTargets.removeAll()
         counters.events += out.count
         return out
     }
@@ -224,6 +237,8 @@ public struct InjectionPlanner: Sendable {
                 let base = validCursor ?? g.center
                 target = g.moved(base, dx: fx, dy: fy)
                 delta = takeRelativeDelta(fx, fy)
+                if recentTargets.count >= Self.recentTargetsLimit { recentTargets.removeFirst() }
+                recentTargets.append(target)
             }
             // A drag only if that button's down was really posted; otherwise it is a plain move.
             let held = dragging.flatMap { heldButtons[$0] != nil ? $0 : nil }
@@ -464,15 +479,30 @@ public struct InjectionPlanner: Sendable {
         out.append(.scroll(MacScroll(phase: phase, dx: dx, dy: dy, position: resolved(cursor))))
     }
 
-    /// T-103: the Host's live cursor sample becomes the cached cursor when it is on the virtual display and more than a
-    /// point away from it on either axis (the system may round the cursor; a closer sample is the position we put there,
-    /// whose fraction is kept). A sample on another display is ignored: input never lands there, so relative movement
-    /// goes on from the last known position on the virtual display (the cursor comes back to it, as before T-103).
+    /// T-103: the Host's live cursor sample becomes the cached cursor only when someone else moved the cursor:
+    /// - within a point of the cached cursor on both axes: it is the position we put there (the system may round it;
+    ///   the cached fraction is kept);
+    /// - within a point of one of the last posted relative targets: WindowServer applies posted events asynchronously
+    ///   and has not caught up with our latest moves yet; adopting it would lose those steps, so it is ignored;
+    /// - on another display: ignored, input never lands there, so relative movement goes on from the last known
+    ///   position on the virtual display (the cursor comes back to it, as before T-103);
+    /// - otherwise (a game warp, the Mac's own mouse): adopted.
     private mutating func adoptLiveCursor(_ env: InjectionEnvironment) {
         guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
-        if let c = cursor, g.contains(c), abs(c.x - live.x) < 1, abs(c.y - live.y) < 1 { return }
+        if let c = cursor, g.contains(c), Self.near(c, live) {
+            counters.liveCursorCurrent += 1
+            return
+        }
+        if recentTargets.contains(where: { Self.near($0, live) }) {
+            counters.liveCursorLagIgnored += 1
+            return
+        }
+        counters.liveCursorAdopted += 1
         cursor = live
     }
+
+    /// Less than a point apart on both axes.
+    private static func near(_ a: DisplayPoint, _ b: DisplayPoint) -> Bool { abs(a.x - b.x) < 1 && abs(a.y - b.y) < 1 }
 
     /// Whole points of a relative move for `deltaX/Y`, truncated toward zero; the remainder (always within (-1, 1))
     /// is carried to the next move so slow movement is not lost.

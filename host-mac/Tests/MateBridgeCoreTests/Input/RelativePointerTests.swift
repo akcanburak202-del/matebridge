@@ -223,6 +223,90 @@ struct RelativePointerTests {
     }
 }
 
+@Suite("REL: WindowServer lag versus someone else moving the cursor (T-103)")
+struct RelativePointerLagTests {
+    @Test("REL-12 a fast burst whose live samples lag one to three posts behind loses no movement")
+    func rel12_lagNoLostSteps() throws {
+        var p = InjectionPlanner()
+        let start = DisplayPoint(x: 300, y: 300)
+        var posted: [DisplayPoint] = []
+        for i in 0..<40 {
+            // WindowServer has applied only the post `lag` steps ago, or the oldest one when fewer exist (the first
+            // sample is the real starting point).
+            let lag = 1 + i % 3
+            let sample = posted.isEmpty ? start : posted[Swift.max(0, posted.count - lag)]
+            let m = try #require(mouse(p.plan([rel(20, 10)], environment: env(cursor: sample), now: UInt64(i) * 8_000)))
+            #expect(m.position == DisplayPoint(x: 300 + 20 * Double(i + 1), y: 300 + 10 * Double(i + 1)))
+            #expect(m.deltaX == 20)
+            posted.append(m.position)
+        }
+        #expect(p.counters.liveCursorAdopted == 1)  // the starting point only
+        // A one-post lag is the planner's own cursor ("current"); older ones match the ring ("lag ignored").
+        #expect(p.counters.liveCursorCurrent == 14)
+        #expect(p.counters.liveCursorLagIgnored == 25)
+    }
+
+    @Test("REL-13 a warp to a position that is none of our recent posts is adopted, even in the middle of a burst")
+    func rel13_warpAdopted() throws {
+        var p = InjectionPlanner()
+        var posted: [DisplayPoint] = []
+        for i in 0..<5 {
+            let sample = posted.last ?? DisplayPoint(x: 300, y: 300)
+            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: sample), now: UInt64(i)))).position)
+        }
+        let warp = DisplayPoint(x: 800, y: 510)
+        let m = try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: warp), now: 10)))
+        #expect(m.position == DisplayPoint(x: 820, y: 510))
+        #expect(m.deltaX == 20)
+        #expect(p.counters.liveCursorAdopted == 2)
+    }
+
+    @Test("REL-14 the ring holds only the last 8 relative targets")
+    func rel14_ringBounded() throws {
+        var p = InjectionPlanner()
+        var posted: [DisplayPoint] = []
+        for i in 0..<10 {
+            let sample = posted.last ?? DisplayPoint(x: 300, y: 300)
+            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: sample), now: UInt64(i)))).position)
+        }
+        var q = p
+        _ = try #require(mouse(q.plan([rel(1, 0)], environment: env(cursor: posted[2]), now: 20)))  // 8th newest
+        #expect(q.counters.liveCursorLagIgnored == p.counters.liveCursorLagIgnored + 1)
+        let m = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: posted[1]), now: 20)))  // 9th newest
+        #expect(m.position == DisplayPoint(x: posted[1].x + 1, y: posted[1].y))
+    }
+
+    @Test("REL-15 release-all clears the ring: an old posted position is then someone else's move")
+    func rel15_ringClearedOnRelease() throws {
+        var p = InjectionPlanner()
+        var posted: [DisplayPoint] = []
+        for i in 0..<4 {
+            let sample = posted.last ?? DisplayPoint(x: 300, y: 300)
+            posted.append(try #require(mouse(p.plan([rel(20, 0)], environment: env(cursor: sample), now: UInt64(i)))).position)
+        }
+        let old = posted[0]
+        var before = p
+        let lagged = try #require(mouse(before.plan([rel(1, 0)], environment: env(cursor: old), now: 10)))
+        #expect(lagged.position == DisplayPoint(x: posted[3].x + 1, y: posted[3].y))  // still a lag: model kept
+        _ = p.releaseAll(environment: openEnv)
+        let after = try #require(mouse(p.plan([rel(1, 0)], environment: env(cursor: old), now: 10)))
+        #expect(after.position == DisplayPoint(x: old.x + 1, y: old.y))  // adopted
+    }
+
+    @Test("REL-16 the pipeline's session end releases through the planner and so clears the ring")
+    func rel16_sessionEndClearsRing() throws {
+        var pipe = InputPipeline()
+        _ = pipe.sessionStarted(now: 1_000, environment: openEnv)
+        let first = pipe.handle(relMsg(20, 0), now: 2_000, environment: env(cursor: DisplayPoint(x: 300, y: 300)))
+        _ = pipe.handle(relMsg(20, 0), now: 3_000, environment: env(cursor: DisplayPoint(x: 320, y: 300)))
+        _ = pipe.sessionEnded(now: 4_000, environment: openEnv)
+        _ = pipe.sessionStarted(now: 5_000, environment: openEnv)
+        let old = try #require(first.first.flatMap(eventPosition))
+        let events = pipe.handle(relMsg(1, 0), now: 6_000, environment: env(cursor: old))
+        #expect(events.first.flatMap(eventPosition) == DisplayPoint(x: old.x + 1, y: old.y))
+    }
+}
+
 @Suite("GEO: live cursor on the display (T-103)")
 struct LiveCursorGeometryTests {
     @Test("GEO-8 onDisplay accepts the half-open bounds, clamps the last fraction and refuses other displays")

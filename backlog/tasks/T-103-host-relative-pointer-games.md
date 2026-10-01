@@ -61,19 +61,24 @@ Orkestratör teşhisi (kod okuması):
 - düğme down/up ve sürükleme canlı konumda, çift tıklama sayacı;
 - mutlak hareket konumu `env.cursor`'dan etkilenmez.
 
-**Risk (cihazda doğrulanacak).** Önceki hareket WindowServer'da henüz işlenmeden gelen sonraki mesaj eski konumu okuyabilir: hareket kaybı/ağırlık hissi. Deskflow macOS'ta aynı yöntemi kullanıyor. Kabul edildi, handoff'ta ölçüm önerisiyle not edilecek.
+**WindowServer gecikmesi (orkestratör düzeltmesi, ilk incelemeden sonra eklendi).** `CGEventPost` WindowServer'da asenkron uygulanır. 120 Hz trackpad'de canlı örnek çoğu zaman **bizim** henüz uygulanmamış eski bir hedefimiz olur. Bunu benimsemek adım kaybettirir. Çözüm: planner, göreli hareketlerde gönderdiği son 8 hedefi (kırpma sonrası) sınırlı bir halkada tutar. Halka `releaseAll`'da sıfırlanır; oturum başı/sonu da `releaseAll`'dan geçtiği için orada da temizlenir. `plan` başında sınıflandırma şöyle:
+1. örnek önbellek `cursor`'a < 1 pt → **current** (sistem yetişmiş), önbellek kalır;
+2. halkadaki herhangi bir hedefe < 1 pt → **lag_ignored**, önbellek kalır, model devam eder;
+3. hiçbiri değil → **adopted** (oyun ışınlaması / gerçek fare).
+
+Ekran dışı ve başarısız sorgu kuralları aynı kalır. Üç sayaç `InjectionPlanner.Counters` içinde tutulur. Oturum başına fark olarak `input_session_end`'e `cursor_adopted`, `cursor_current`, `cursor_lag_ignored` alanlarıyla yazılır, konum yazılmaz. Ek testler: gecikmeli örneklerle hızlı patlamada adım kaybı yok; halkada olmayan konuma ışınlama benimsenir; halka sınırı 8; halka `releaseAll`'da ve oturum sonunda temizlenir.
 
 ## Handoff
 
-- **Commit:** `84b8567` (uygulama), plan: `b7f7d5e`. Dal: `task/T-103-host-relative-pointer-games`.
-- **check.sh:** geçti (exit 0; host-mac 591 test / 63 suite, Android gradle, fixture ve crypto kontrolleri).
+- **Commit:** `84b8567` (uygulama), WindowServer gecikme halkası bu handoff güncellemesiyle aynı commit'te (`T-103: ignore live samples that are our own lagging posts`), plan: `b7f7d5e`. Dal: `task/T-103-host-relative-pointer-games`.
+- **check.sh:** geçti (exit 0; host-mac 596 test / 64 suite, Android gradle, fixture ve crypto kontrolleri).
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Input/MacEvent.swift`: `InjectionEnvironment.cursor` alanı eklendi, `MacMouse.deltaX` dokümanı güncellendi.
   - `host-mac/Sources/MateBridgeCore/Input/Geometry+Display.swift`: `DisplayGeometry.onDisplay(_:)` eklendi (yarı açık sınır, kırpma).
-  - `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`: `adoptLiveCursor` (plan başında) ve `takeRelativeDelta` (ham delta, kesir taşıyıcı, `releaseAll`'da sıfırlanır) eklendi.
+  - `host-mac/Sources/MateBridgeCore/Input/InjectionPlanner.swift`: `adoptLiveCursor` (plan başında; current / lag_ignored / adopted ayrımı), son 8 göreli hedefin halkası `recentTargets`, `takeRelativeDelta` (ham delta, kesir taşıyıcı) eklendi. Halka da taşıyıcı da `releaseAll`'da sıfırlanır. `Counters` içine `liveCursorAdopted`, `liveCursorCurrent`, `liveCursorLagIgnored` eklendi.
   - `host-mac/Sources/MateBridgeHost/Input/CursorLocator.swift` (yeni): `CursorLocating` ve `SystemCursor` (`CGEvent(source: nil)?.location`).
-  - `host-mac/Sources/MateBridgeHost/Input/InputController.swift`: yalnızca `.pointerRel` mesajında zamanlanmış sorgu yapılır. İlk çağrı `start()`'ta ısındırılır. `input_session_end` satırına `cursor_queries`, `cursor_query_failed`, `cursor_query_avg_us`, `cursor_query_max_us` alanları eklendi.
-  - `host-mac/Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift` (yeni): REL-1…11 ve GEO-8.
+  - `host-mac/Sources/MateBridgeHost/Input/InputController.swift`: yalnızca `.pointerRel` mesajında zamanlanmış sorgu yapılır. İlk çağrı `start()`'ta ısındırılır. `input_session_end` satırına `cursor_queries`, `cursor_query_failed`, `cursor_query_avg_us`, `cursor_query_max_us` ile oturum başına `cursor_adopted`, `cursor_current`, `cursor_lag_ignored` alanları eklendi.
+  - `host-mac/Tests/MateBridgeCoreTests/Input/RelativePointerTests.swift` (yeni): REL-1…16 ve GEO-8. REL-12: gecikmeli patlamada adım kaybı yok. REL-13: halka dışı ışınlama benimsenir. REL-14: halka sınırı 8. REL-15/16: halka `releaseAll` ve oturum sonunda temizlenir.
   - `host-mac/Tests/MateBridgeCoreTests/Input/InjectionPlannerTests.swift`: PLAN-14 yeni sözleşmeye çekildi (kenarda delta artık ham, kırpılmış fark değil).
 - **Sorgu maliyeti:** bu Mac'te (macOS 27) scratch benchmark, 20 000 çağrı. `CGEvent(source: nil).location` için p50 ≈ 0.1 µs, p99 ≈ 0.15 µs. Süreçteki ilk çağrı ≈ 8–14 ms (WindowServer bağlantısı), bu yüzden `start()`'ta ısındırılıyor. Çalışma anındaki değerler `input_session_end` alanlarında görülebilir.
 - **Varsayımlar:**
@@ -81,11 +86,15 @@ Orkestratör teşhisi (kod okuması):
   - Canlı örnek önbellekteki konuma her eksende 1 noktadan yakınsa önbellek korunur (nokta-altı kesir için). Bu yüzden oyun ışınlaması 1 noktanın altında kalan farkları düzeltmez; sapma en fazla 1 nokta olur.
   - Canlı örnek tüm planner çağrısı için `cursor`'a yazılır. Host bunu yalnızca `POINTER_REL` için örneklediğinden mutlak giriş (kalem, `POINTER_ABS`) pratikte değişmez. Planner'a örnek verilirse mutlak hareketin yalnızca *delta*sı canlı konumdan hesaplanır, hedefi aynı kalır (REL-9).
   - Ekran dışı: canlı imleç başka ekrandaysa yok sayılır. Hareket, sanal ekrandaki son konumdan (yoksa merkezden) devam eder ve imleç tablet ekranına geri döner. Bu T-103 öncesi davranışla aynıdır.
+  - Gecikme halkası, kabul edilmiş uç durumlar:
+    - Oyun imleci merkeze ışınlarken bizim son gönderdiğimiz hedeflerden biri de merkeze < 1 pt yakınsa (çok küçük hareketler), ışınlama "lag" sayılıp yok sayılır. Model, halkadaki tüm hedefler merkezden 1 pt'den uzaklaşana kadar (en fazla 8 gönderim) kayar. Delta hamdır, dolayısıyla kamera etkilenmez; yalnızca konum kısa süre merkezden kayık olur.
+    - Halka yalnızca gönderilmiş hedefleri tutar, benimsenen başlangıç noktasını tutmaz. Bir benimsemeden hemen sonraki ilk gecikmeli örnek (henüz ilk hareketimiz uygulanmamışken eski başlangıç noktası) yeni bir dış hareket gibi benimsenir. Benimseme başına en fazla bir adımın konumu kaybolabilir.
+    - Dış hareketin hedefi tesadüfen son 8 hedefimizden birine < 1 pt yakınsa yok sayılır; sonraki örnekte düzelir.
 - **Test edilmedi (cihaz/orkestratör):**
   1. Witcher 2 (Steam): menüde ve oyunda duvar kalmadı mı, ikinci imleç ya da titreme kayboldu mu?
-  2. Normal masaüstü kullanımı: trackpad'le yavaş ve hızlı hareket. Ağırlık hissi ya da hareket kaybı var mı? Asıl risk şu: önceki `mouseMoved` WindowServer'da işlenmeden sonraki mesaj eski konumu okursa o hareketin konumu kaybolur. Belirti, hızlı harekette imlecin "yavaş" ya da takılgan gelmesidir. Görülürse çözüm adayı: son gönderilen hedefin kısa süre (ör. ≤ 1 frame) öncelikli tutulması.
+  2. Normal masaüstü kullanımı: trackpad'le yavaş ve hızlı hareket. Ağırlık hissi ya da hareket kaybı var mı? WindowServer gecikmesi halka ile ele alındı. Masaüstünde `cursor_adopted` küçük, `cursor_lag_ignored` ile `cursor_current` büyük çıkmalı. Witcher 2'de `cursor_adopted` yüksek çıkmalı.
   3. Kenarda sürükleme (dragged) ve çift tıklama, ekranın kenarında ve ortasında.
   4. Mac fizik faresiyle ana monitöre geçip tablet trackpad'ine dokununca imlecin tablet ekranındaki son konuma dönmesi.
-  5. `input_session_end` satırında `cursor_query_avg_us` ve `cursor_query_max_us` değerleri ile `cursor_query_failed=0`.
+  5. `input_session_end` satırında `cursor_query_avg_us` ve `cursor_query_max_us` değerleri, `cursor_query_failed=0` ve `cursor_adopted` / `cursor_current` / `cursor_lag_ignored` oranları.
 - **Açık sorular:** yok. (Kapsam dışı not: `takePixels` scroll taşıyıcısı çok büyük değerlerde Int32 kırpma kalıntısı taşıyabilir. Protokol aralıkları bunu pratikte önlüyor, dokunulmadı.)
 
