@@ -1052,3 +1052,9 @@ T-123, T-124, T-125, T-126 done.
 - Liste görünümü: İndirilenler'den 141 KB kopya hemen, çıkarma hemen.
 - Simge görünümü (video önizlemesi tetiklenir): `bytes_out` ~20 MB/s kısa süre, `conn_overflow conns=9 limit=8 hard=12` bir kez, `conn_rejected`/`write_stalled` yok; küçük kopya hemen, çıkarma hemen (kullanıcı). Bağlama 107–163 ms.
 - Not: araştırma ajanının takılan test bağlaması kullanıcının Finder'ını sistem genelinde yavaşlatmıştı (ilgisiz uygulama kopyası); ajan prompt'larına "takılı bağlama bırakma, ≤60 s, çıkışta ayır, arayüz açma" kuralı eklendi.
+
+## 2026-10-02 ~20:40 — Oturum sonu devir
+
+- Bu oturumda bitti: T-128..T-134 (uyku/uyandırma: BYE HOST_SLEEP, doğrudan TCP ile uyandırma), T-130/T-131 (ikon C), T-135..T-139 (tablet dosyaları USB/WebDAV, bağlama ~0,1 s, bağlantı sınırı 8+4). Hepsi main'de, push edildi; worktree'ler temizlendi.
+- Açık / ileride: T-127 (Mac Ethernet ile Wi-Fi yeniden değerlendirme), film modu fikri, USB 3 kablo denemesi (tablet şu an 480 Mbit/s; USB 3 çıkarsa "hızlı aktarım" ayarı mantıklı), Finder'da 5+ büyük video aynı klasörde (webdavfs kendi sınırı).
+- Host build/ içinden çalışıyor, tablet APK güncel (T-139), tablet taşıma modu Otomatik.
