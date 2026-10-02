@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import dev.matebridge.client.audio.AudioArrivalMeter
 import dev.matebridge.client.diag.StallDetector
+import dev.matebridge.client.diag.StallDiag
 import dev.matebridge.client.diag.StallMeter
 import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
@@ -129,6 +130,7 @@ class SessionController(
      */
     private val wifiBinder: (Socket) -> Boolean = { true },
     initialFiles: FilesInfo? = null, // T-135: file server state; null = no file server, FILES_INFO never sent
+    stallDiag: Boolean = false, // T-142: opt-in (--ez stall_diag true): the mb-stall tick thread and its log lines
 ) {
     private val machine = SessionMachine(hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles)
 
@@ -184,7 +186,7 @@ class SessionController(
     @Volatile private var lastControlReadNs = 0L
 
     /** T-120: stall detector tick thread; runs while a control connection exists (started/stopped on the engine thread). */
-    private val stallDetector = StallDetector(object : StallDetector.Readers {
+    private val stallDetector: StallDetector? = StallDiag.create(stallDiag, object : StallDetector.Readers {
         override fun lastControlReadNs(): Long = this@SessionController.lastControlReadNs
         override fun lastVideoReadNs(): Long = this@SessionController.lastVideoReadNs
     })
@@ -343,7 +345,7 @@ class SessionController(
         } catch (ie: InterruptedException) {
             // shutting down
         } finally {
-            stallDetector.stop()
+            stallDetector?.stop()
             control?.closeGracefully()
             candidate?.abort()
             retired?.abort()
@@ -423,7 +425,7 @@ class SessionController(
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello, wake = a.wake).also { it.startThreads() }
-                stallDetector.start()
+                stallDetector?.start()
             }
             is SessionMachine.Action.Send -> {
                 when (val m = a.msg) {
@@ -442,7 +444,7 @@ class SessionController(
             is SessionMachine.Action.CloseControl -> {
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
-                stallDetector.stop()
+                stallDetector?.stop()
                 listener.onSessionEnd()
             }
             is SessionMachine.Action.OpenVideo -> {
@@ -516,7 +518,7 @@ class SessionController(
                 resetArrival()
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control = c
-                stallDetector.start() // normally still running (a retire does not stop it)
+                stallDetector?.start() // normally still running (a retire does not stop it)
             }
             SessionMachine.Action.CloseRetired -> {
                 retired?.let { MbLog.i("retired_close", "old_gen=${it.gen}") ; it.closeGracefully() }
@@ -554,7 +556,7 @@ class SessionController(
         val sinceVideo = if (v == 0L) "-" else AudioArrivalMeter.ms1((readNs - v) / 1000)
         val fields = "gap_ms=${AudioArrivalMeter.ms1(g.gapUs)} owd_ms=${AudioArrivalMeter.ms1(g.owdUs)} per_read=${g.perRead} " +
             "decrypt_ms=${AudioArrivalMeter.ms1(g.decryptUs)} since_video_ms=$sinceVideo suppressed=${g.suppressed} " +
-            "tick_late_ms=${StallMeter.ms1(stallDetector.meter.maxLateUs(readNs - g.gapUs * 1000, readNs, System.nanoTime()))} " +
+            "tick_late_ms=${stallDetector?.let { StallMeter.ms1(it.meter.maxLateUs(readNs - g.gapUs * 1000, readNs, System.nanoTime())) } ?: "-"} " +
             "gc_count=${gcStat("art.gc.gc-count")} gc_time_ms=${gcStat("art.gc.gc-time")} " +
             "gc_blocking_count=${gcStat("art.gc.blocking-gc-count")} gc_blocking_time_ms=${gcStat("art.gc.blocking-gc-time")}"
         Log.d("MB/audio", MbLog.format(SystemClock.elapsedRealtime(), 'D', "audio", MbLog.sid, MbLog.gen, "audio_arrival_gap", fields))
@@ -716,7 +718,7 @@ class SessionController(
                     val n = input.read(buf)
                     val readNs = System.nanoTime() // T-117: arrival, before decryption
                     if (n < 0) break
-                    if (n > 0 && control === this) lastControlReadNs = readNs // T-120: stall lines compare against it
+                    if (stallDetector != null && n > 0 && control === this) lastControlReadNs = readNs // T-120: stall lines compare against it
                     qa.ack.afterRead()
                     decoder.feed(buf, 0, n)
                     var audioPackets = 0

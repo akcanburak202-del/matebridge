@@ -492,6 +492,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
             intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
         )
+        val stallDiag = intent?.getBooleanExtra("stall_diag", false) == true
+        MbLog.i("stall_diag", "enabled=${if (stallDiag) 1 else 0}", "diag") // T-142
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
@@ -544,6 +546,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
+            stallDiag = stallDiag, // T-142
         )
         files = FilesController({ controller.setFilesInfo(it) }) { ui.post { refreshSettings() } }
         capture = InputCapture(
