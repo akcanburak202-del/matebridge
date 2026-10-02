@@ -1,7 +1,7 @@
 ---
 id: T-128
 title: Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri)
-status: todo
+status: in-progress
 phase: 4
 owner: mac-host-dev
 depends_on: [T-081]
@@ -37,7 +37,16 @@ Bu kart host tarafı. Protokol: `docs/PROTOCOL.md` §3 madde 1, TXT `wol` (orkes
 
 ## Plan
 
-(ajan doldurur)
+1. **Saf mantık (Core):**
+   - `MateBridgeCore/Video/SleepWakeGate.swift`: `PowerEvent` (`can_sleep`, `will_sleep`, `will_not_sleep`, `did_wake`) + IOKit mesaj kodu sınıflandırması (`0xE0000270/280/290/300`); `SleepWakeGate` durum makinesi: `power(_:now:)` (uyku → bastır, bekleyen ertelemeyi düşür; uyanma → yeniden aç; log yalnızca durum değişince), `request(_:now:)` (`.suppressed(log:)` uykuda, bölüm başına bir log; `capture_source_lost` → `.deferred(deadline)` sabit `captureLossDeferUs = 1,5 s`; bekleyen erteleme varken `.pending`; `display_create_nil` uyanıkken `.wakeNow`), `due(now:)` (süre dolunca bekleyen nedeni verir), `cancelPending()` (ekran geri geldi / oturum bitti).
+   - `MateBridgeCore/Session/WakeOnLanTxt.swift`: `getifaddrs` girdilerini (ad, `IFF_UP`, AF_LINK adresi / AF_INET) arayüz başına birleştirme, `en<sayı>` + up + IPv4 + geçerli 6 bayt unicast MAC filtresi, `en` numarasına göre kararlı sıra, tekrarları atma, en çok 4, küçük harf `aa:bb:…` virgülle; uygun yoksa `nil`. `sockaddr_dl` bayt ayrıştırması. TXT girdileri `v=1` (+ `wol=`).
+   - `BonjourAdvertiser.updateTXT(_:)` (`DNSServiceUpdateRecord`, birincil TXT).
+2. **Host sarmalayıcılar (`MateBridgeHost`):**
+   - `Session/SystemPower.swift`: `SystemPowerObserver` (`IORegisterForSystemPower`, kendi dispatch kuyruğu; `CanSystemSleep`/`SystemWillSleep`'e olayı işledikten hemen sonra `IOAllowPowerChange`), `DisplaySleepAssertion` (`IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep")`, tut/bırak idempotent).
+   - `Session/NetworkInterfaces.swift`: `getifaddrs` → Core girdileri.
+3. **`StreamCoordinator`:** kapı kilitli kutuda (IOKit kuyruğu + olay döngüsü). `start()` gözlemciyi kurar; güç olayı → `ev=power state=… wall_ms=…` (değişimde), bekleyen erteleme düşerse `ev=wake_display_suppressed reason=system_sleep`. `wakeDisplayIfNeeded` önce kapıya sorar; erteleme için kesin zamanlı bir görev `.deferredWakeDue` olayı postalar; süre dolunca T-081 politikası (oran sınırı) ile uyandırır. `display_created` / oturum sonu / kapanışta bekleyen erteleme iptal. Oturum başlayınca `PreventUserIdleDisplaySleep` alınır, oturum sonu / kapanışta bırakılır (`ev=display_sleep_assertion state=held|released`). `.userInitiated` activity (`InputController`) zaten `sessionEnded`/`shutdown`'da bırakılıyor — doğrulandı, değişiklik yok.
+4. **`SessionServer`:** başlangıçta ve `NWPathMonitor` güncellemesinde `wol` yeniden hesaplanır; değişince `ev=bonjour_txt wol_count=N` loglanır ve TXT güncellenir (bsd: `updateTXT`, başarısızsa yeniden kayıt; nw: `listener.service` yeniden atanır). `stop()` izleyiciyi kapatır.
+5. **Testler:** `Tests/MateBridgeCoreTests/Video/SleepWakeGateTests.swift`, `Tests/MateBridgeCoreTests/Session/WakeOnLanTxtTests.swift` (+ yerel Bonjour TXT güncelleme testi).
 
 ## Handoff
 
