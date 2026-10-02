@@ -9,6 +9,8 @@
 	<string>__EXECUTABLE__</string>
 	<key>CFBundleIdentifier</key>
 	<string>__BUNDLE_ID__</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

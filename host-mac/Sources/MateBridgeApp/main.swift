@@ -41,7 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "MateBridge"
+        item.button?.image = menuBarGlyph()
+        item.button?.imagePosition = .imageOnly
         let menu = NSMenu()
         menu.delegate = self
         let title = NSMenuItem(title: "MateBridge", action: nil, keyEquivalent: "")
@@ -306,6 +307,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                   component: "session", sessionID: 0, generation: 0, event: event, fields: fields)
         logger.info("\(line, privacy: .public)")
     }
+}
+
+/// Menu bar template glyph (T-130, concept C "M line"). Geometry from docs/design/icon-master.svg:
+/// the same path in the full 100x100 box, stroke 10, end dot r 7.5, drawn in one colour as a template
+/// so AppKit tints it for light and dark menu bars.
+func menuBarGlyph() -> NSImage {
+    let side: CGFloat = 18  // points; the 100-unit box maps onto it
+    let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { rect in
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: 16, y: 74))
+        path.curve(to: NSPoint(x: 34, y: 30), controlPoint1: NSPoint(x: 20, y: 46), controlPoint2: NSPoint(x: 26, y: 30))
+        path.curve(to: NSPoint(x: 50, y: 56), controlPoint1: NSPoint(x: 42, y: 30), controlPoint2: NSPoint(x: 44, y: 56))
+        path.curve(to: NSPoint(x: 66, y: 30), controlPoint1: NSPoint(x: 56, y: 56), controlPoint2: NSPoint(x: 58, y: 30))
+        path.curve(to: NSPoint(x: 84, y: 74), controlPoint1: NSPoint(x: 74, y: 30), controlPoint2: NSPoint(x: 80, y: 46))
+        path.lineWidth = 10
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        let dot = NSBezierPath(ovalIn: NSRect(x: 84 - 7.5, y: 74 - 7.5, width: 15, height: 15))
+        let toBox = AffineTransform(scale: rect.width / 100)
+        path.transform(using: toBox)
+        dot.transform(using: toBox)
+        path.lineWidth *= rect.width / 100
+        NSColor.black.setStroke()
+        NSColor.black.setFill()
+        path.stroke()
+        dot.fill()
+        return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = "MateBridge"
+    return image
 }
 
 MainActor.assumeIsolated {
