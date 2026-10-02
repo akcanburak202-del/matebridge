@@ -4,6 +4,8 @@ import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
 import dev.matebridge.client.audio.AudioArrivalMeter
+import dev.matebridge.client.diag.StallDetector
+import dev.matebridge.client.diag.StallMeter
 import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
 import dev.matebridge.client.protocol.AudioPrefs
@@ -163,6 +165,14 @@ class SessionController(
     private val arrivalClock = ClockSync()
     /** T-117: `nanoTime` of the video reader's latest `read()` with data (0 = none yet). */
     @Volatile private var lastVideoReadNs = 0L
+    /** T-120: `nanoTime` of the current control reader's latest `read()` with data (0 = none yet). */
+    @Volatile private var lastControlReadNs = 0L
+
+    /** T-120: stall detector tick thread; runs while a control connection exists (started/stopped on the engine thread). */
+    private val stallDetector = StallDetector(object : StallDetector.Readers {
+        override fun lastControlReadNs(): Long = this@SessionController.lastControlReadNs
+        override fun lastVideoReadNs(): Long = this@SessionController.lastVideoReadNs
+    })
 
     /** config_id of the latest applied STREAM_CONFIG; frames from a video connection of another config are dropped. */
     @Volatile private var currentConfigId = -1
@@ -307,6 +317,7 @@ class SessionController(
         } catch (ie: InterruptedException) {
             // shutting down
         } finally {
+            stallDetector.stop()
             control?.closeGracefully()
             candidate?.abort()
             retired?.abort()
@@ -384,6 +395,7 @@ class SessionController(
                 listener.onConnectionGen(a.gen)
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
+                stallDetector.start()
             }
             is SessionMachine.Action.Send -> {
                 when (val m = a.msg) {
@@ -401,6 +413,7 @@ class SessionController(
             is SessionMachine.Action.CloseControl -> {
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
+                stallDetector.stop()
                 listener.onSessionEnd()
             }
             is SessionMachine.Action.OpenVideo -> {
@@ -471,6 +484,7 @@ class SessionController(
                 resetArrival()
                 listener.onConnectionGen(a.gen)
                 control = c
+                stallDetector.start() // normally still running (a retire does not stop it)
             }
             SessionMachine.Action.CloseRetired -> {
                 retired?.let { MbLog.i("retired_close", "old_gen=${it.gen}") ; it.closeGracefully() }
@@ -490,6 +504,7 @@ class SessionController(
 
     /** T-117: a new session (like the listener's clock in [SessionListener.onSessionStart]). Engine thread. */
     private fun resetArrival() {
+        lastControlReadNs = 0L
         arrivalClock.reset()
         arrival.setOffset(null)
         arrival.reset()
@@ -498,6 +513,8 @@ class SessionController(
     /**
      * T-117: one `debug` line per reported audio arrival gap (rate-limited by the meter). Only on gaps, so its string
      * work stays off the steady path. The time since the last GC is not available; ART's cumulative counters are.
+     * T-120: `tick_late_ms` is the stall detector's largest tick lateness over the gap's window (`-` = not measured):
+     * late too = the tablet process/CPU stalled; on time = the data really arrived late.
      */
     private fun logArrivalGap(readNs: Long) {
         val g = arrival.gap
@@ -505,6 +522,7 @@ class SessionController(
         val sinceVideo = if (v == 0L) "-" else AudioArrivalMeter.ms1((readNs - v) / 1000)
         val fields = "gap_ms=${AudioArrivalMeter.ms1(g.gapUs)} owd_ms=${AudioArrivalMeter.ms1(g.owdUs)} per_read=${g.perRead} " +
             "decrypt_ms=${AudioArrivalMeter.ms1(g.decryptUs)} since_video_ms=$sinceVideo suppressed=${g.suppressed} " +
+            "tick_late_ms=${StallMeter.ms1(stallDetector.meter.maxLateUs(readNs - g.gapUs * 1000, readNs, System.nanoTime()))} " +
             "gc_count=${gcStat("art.gc.gc-count")} gc_time_ms=${gcStat("art.gc.gc-time")} " +
             "gc_blocking_count=${gcStat("art.gc.blocking-gc-count")} gc_blocking_time_ms=${gcStat("art.gc.blocking-gc-time")}"
         Log.d("MB/audio", MbLog.format(SystemClock.elapsedRealtime(), 'D', "audio", MbLog.sid, MbLog.gen, "audio_arrival_gap", fields))
@@ -643,6 +661,7 @@ class SessionController(
                     val n = input.read(buf)
                     val readNs = System.nanoTime() // T-117: arrival, before decryption
                     if (n < 0) break
+                    if (n > 0 && control === this) lastControlReadNs = readNs // T-120: stall lines compare against it
                     qa.ack.afterRead()
                     decoder.feed(buf, 0, n)
                     var audioPackets = 0
