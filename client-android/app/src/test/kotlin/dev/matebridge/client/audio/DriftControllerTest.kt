@@ -22,6 +22,43 @@ class DriftControllerTest {
         assertEquals(d.maxRefillFrames, d.refillThresholdFrames(20_000, 144))
     }
 
+    // T-118: a span inflated by a stall's descent does not raise the refill level beyond two packets.
+    @Test fun refillSpanIsCappedAtTwentyMs() {
+        val d = DriftController()
+        var level = 80 * 48
+        repeat(500) { d.onBurst(level, 96); level -= 5 } // one window falling ~52 ms
+        assertTrue(d.lastSpanFrames > 40 * 48)
+        assertEquals(20 * 48, d.refillSpanFrames)
+        assertEquals(d.targetFrames + 20 * 48, d.refillThresholdFrames(96, 144))
+    }
+
+    // T-118 (b): clean playback brings 40 ms down to the AAudio floor (20 ms) in 100 s, within the ~2 min asked for.
+    @Test fun fortyDecaysToTwentyWithinTwoMinutesOfCleanPlayback() {
+        val d = DriftController()
+        d.resetSafety(initialMs = 40, floorMs = 20)
+        var windows = 0
+        while (d.safetyFrames > 20 * 48) { window(d, d.targetFrames); windows++ }
+        assertEquals(100, windows)
+        assertTrue("$windows s", windows <= 120)
+        repeat(1_000) { window(d, d.targetFrames) }
+        assertEquals(20 * 48, d.safetyFrames) // the floor holds
+    }
+
+    // T-118 (c): one underrun adds 5 ms, which clean playback takes back in 25 s.
+    @Test fun oneUnderrunAddsFiveThenShrinksAgain() {
+        val d = DriftController()
+        d.resetSafety(initialMs = 20, floorMs = 20)
+        repeat(3) { window(d, d.targetFrames) }
+        d.onUnderrun()
+        assertEquals(25 * 48, d.safetyFrames)
+        repeat(DriftController.DECAY_WINDOWS - 1) { window(d, d.targetFrames) }
+        assertEquals(25 * 48, d.safetyFrames) // the clean count restarted at the underrun
+        window(d, d.targetFrames)
+        assertEquals(24 * 48, d.safetyFrames)
+        repeat(4 * DriftController.DECAY_WINDOWS) { window(d, d.targetFrames) }
+        assertEquals(20 * 48, d.safetyFrames)
+    }
+
     @Test fun avFloorRisesAtMostTenMsPerWindowAndFallsAtOnce() {
         val d = DriftController()
         window(d, 480)
@@ -45,12 +82,12 @@ class DriftControllerTest {
         assertEquals(1L, e.rebuffers)
     }
 
-    @Test fun safetyDecaysSlowlyAfterAnUnderrun() {
+    @Test fun safetyDecaysAfterAnUnderrun() {
         val d = DriftController()
         d.onUnderrun()
         assertEquals(480, d.safetyFrames)
         repeat(DriftController.DECAY_WINDOWS - 1) { window(d, 480) }
-        assertEquals(480, d.safetyFrames) // a minute without underrun before the first step down
+        assertEquals(480, d.safetyFrames) // DECAY_WINDOWS clean windows before the first step down
         window(d, 480)
         assertEquals(480 - 48, d.safetyFrames)
         repeat(20 * DriftController.DECAY_WINDOWS) { window(d, 480) }
@@ -69,7 +106,7 @@ class DriftControllerTest {
         assertEquals(30 * 48, d.safetyFrames)
         assertEquals(30 * 48, d.targetFrames)
         repeat(DriftController.DECAY_WINDOWS) { window(d, 30 * 48) }
-        assertEquals(29 * 48, d.safetyFrames) // the slow decay rule is unchanged
+        assertEquals(29 * 48, d.safetyFrames) // the decay rule is the same as without a reset
         repeat(20 * DriftController.DECAY_WINDOWS) { window(d, 30 * 48) }
         assertEquals(20 * 48, d.safetyFrames) // ...down to the floor only
         d.onUnderrun()

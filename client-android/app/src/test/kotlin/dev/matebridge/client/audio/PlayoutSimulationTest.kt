@@ -145,7 +145,11 @@ class PlayoutSimulationTest {
         val packet = ByteArray(480 * 4) { 0x10 }
         var idx = 0L
         val out = ShortArray(96 * 2)
-        // 250 ms buffered at once (e.g. after a stall), then a steady flow
+        // playing, then 250 ms arrive at once (e.g. a stall that did not run dry), then a steady flow. T-118: an excess
+        // present before playback starts is trimmed at the start instead (see UnderrunRefillTest).
+        repeat(4) { core.buffer.write(idx, 0, packet, 480); idx += 480 }
+        core.render(out, 96)
+        assertEquals(PlayoutCore.State.PLAYING, core.state)
         repeat(25) { core.buffer.write(idx, 0, packet, 480); idx += 480 }
         var produced = 0
         repeat(2 * 500) {

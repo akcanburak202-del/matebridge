@@ -20,6 +20,8 @@ interface SafetyStore {
  *    the safe start.
  *  - Saving: [onSafety] (each stats second) stores a changed value at most every [SAVE_INTERVAL_MS]; [flush] (output
  *    closed or switched) stores it at once if changed.
+ *  - T-118: what is remembered (stored or read back) is at most [REMEMBER_MAX_MS]; within a session the controller may
+ *    still go up to [DriftController.SAFETY_MAX_MS]. An older stored 40 starts at 30.
  */
 class SafetyMemory(private val store: SafetyStore) {
     /** Start value for an output: [ms], and whether a stored value raised it above the default. */
@@ -34,22 +36,24 @@ class SafetyMemory(private val store: SafetyStore) {
     @Synchronized fun initial(api: String): Init {
         val def = defaultMs(api)
         val raw = try { store.get(api) } catch (_: RuntimeException) { null }
-        val stored = raw?.coerceIn(DriftController.SAFETY_MIN_MS, DriftController.SAFETY_MAX_MS)
+        val stored = raw?.let(::rememberable)
         lastSaved[api] = stored ?: def // nothing new to save until the value moves
         return if (stored != null && stored > def) Init(stored, true, stored) else Init(def, false, stored)
     }
 
     /** Called about once per second with the current value; stores it if it changed and the last save is old enough. */
     @Synchronized fun onSafety(api: String, ms: Int, nowMs: Long) {
-        if (lastSaved[api] == ms) return
+        val v = rememberable(ms)
+        if (lastSaved[api] == v) return
         if (lastSaveAtMs != Long.MIN_VALUE && nowMs - lastSaveAtMs < SAVE_INTERVAL_MS) return
-        save(api, ms)
+        save(api, v)
         lastSaveAtMs = nowMs
     }
 
     /** The output for [api] is closing or being replaced: stores the value now if it changed. */
     @Synchronized fun flush(api: String, ms: Int) {
-        if (lastSaved[api] != ms) save(api, ms)
+        val v = rememberable(ms)
+        if (lastSaved[api] != v) save(api, v)
     }
 
     private fun save(api: String, ms: Int) {
@@ -62,6 +66,11 @@ class SafetyMemory(private val store: SafetyStore) {
         const val AAUDIO_DEFAULT_MS = 20
         const val TRACK_DEFAULT_MS = DriftController.SAFETY_MIN_MS
         const val SAVE_INTERVAL_MS = 10_000L
+        /** T-118: the most a session start inherits; a learned 35-40 ms is relearned rather than carried over. */
+        const val REMEMBER_MAX_MS = 30
+
+        /** [ms] clamped to what is remembered: [DriftController.SAFETY_MIN_MS]..[REMEMBER_MAX_MS]. */
+        fun rememberable(ms: Int): Int = ms.coerceIn(DriftController.SAFETY_MIN_MS, REMEMBER_MAX_MS)
 
         fun defaultMs(api: String): Int = if (api == "aaudio") AAUDIO_DEFAULT_MS else TRACK_DEFAULT_MS
     }

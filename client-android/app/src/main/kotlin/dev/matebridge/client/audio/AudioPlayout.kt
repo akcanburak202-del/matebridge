@@ -43,7 +43,8 @@ import java.util.concurrent.TimeUnit
  *  - The output is rebuilt when it dies (AudioTrack ERROR_DEAD_OBJECT, AAudio DISCONNECTED or a stalled write) and
  *    when the output device changes (at most 5 times per 10 s). Repeated AAudio failures switch to AudioTrack.
  *  - Jitter-buffer safety (T-108, [SafetyMemory]): each output API starts at max(its default, the value remembered
- *    from earlier sessions); AAudio's default is 20 ms. A rebuild on the same API keeps the learned value.
+ *    from earlier sessions, at most 30 ms since T-118); AAudio's default is 20 ms. A rebuild on the same API keeps the
+ *    learned value. Each API's start is logged once (`safety_start stored= used=`).
  *  - AAudio output buffer (T-110, T-114): starts at 4 bursts (20 ms). The headroom (frames written minus the device's
  *    read position, estimated from the output's timestamp, else its read counter: [HeadroomEstimator]) is sampled
  *    before every write ([HeadroomMeter]);
@@ -377,6 +378,13 @@ class AudioPlayout(
             val init = safety.initial(api)
             core.drift.resetSafety(init.ms, SafetyMemory.defaultMs(api))
             safetyApi = api
+            // T-118: once per output API taken into use: what was stored and what the controller now runs with.
+            MbLog.i(
+                "safety_start",
+                "stream_id=$id api=$api stored=${init.storedMs ?: "-"} used=${core.drift.safetyFrames / MS} " +
+                    "source=${init.source} remember_max=${SafetyMemory.REMEMBER_MAX_MS}",
+                COMPONENT,
+            )
             return init
         }
 
@@ -592,6 +600,7 @@ class AudioPlayout(
                     "write_gap_ms_max=${ms1(win.gapMaxNs)} write_busy_ms_max=${ms1(win.busyMaxNs)} " +
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
+                    "refill_trims=${core.refillTrims} refill_trim_ms=${core.refillTrimFrames / MS} " +
                     "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"} " +
                     arrivalWin.logFields(),
                 COMPONENT,

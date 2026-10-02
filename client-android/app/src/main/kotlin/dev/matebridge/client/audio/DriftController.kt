@@ -13,10 +13,12 @@ import kotlin.math.abs
  *  - otherwise a PI step: ratio = 1 + (Kp * err + I) ppm, at most +-0.1 %, +-0.5 % while |err| > 20 ms.
  *
  * Target = max(safety, A/V floor). Safety starts at 5 ms (or what [resetSafety] sets: T-108, 20 ms or the remembered
- * value on AAudio, see [SafetyMemory]) and grows by 5 ms per underrun (40 ms at most). It shrinks slowly, by 1 ms per
- * 60 windows without an underrun, down to its floor: the value that underran is not reached again for 5 minutes.
+ * value on AAudio, see [SafetyMemory]) and grows by 5 ms per underrun (40 ms at most). T-118: it shrinks by 1 ms per
+ * [DECAY_WINDOWS] (5) windows without an underrun, down to its floor: 40 -> 20 ms in 100 s of clean playback, one
+ * underrun's 5 ms in 25 s (rare stalls cost a short faded gap instead of a permanently larger delay).
  * After an underrun, playback restarts once the level reaches
- * max(target + the last window's span, target + burst + fade-out), so the next floor lands near the target.
+ * max(target + the last window's span (at most [REFILL_SPAN_MAX_MS]), target + burst + fade-out), so the next floor
+ * lands near the target; [PlayoutCore] drops a bunched arrival's excess above that level before it fades in.
  *
  * The A/V floor ([onAvOffset]) falls at once but rises by at most 10 ms per window, so the PI slews instead of
  * rebuffering; the first A/V target is applied while priming ([seedAvFloor]).
@@ -67,7 +69,16 @@ class DriftController(private val sampleRate: Int = 48_000) {
 
     /** Level the buffer must reach before playback (re)starts with bursts of [burstFrames] and a [fadeOutFrames] reserve. */
     fun refillThresholdFrames(burstFrames: Int = 0, fadeOutFrames: Int = 0): Int =
-        minOf(maxOf(targetFrames + lastSpanFrames, targetFrames + burstFrames + fadeOutFrames), maxRefillFrames)
+        minOf(maxOf(targetFrames + refillSpanFrames, targetFrames + burstFrames + fadeOutFrames), maxRefillFrames)
+
+    /**
+     * T-118: the span a refill allows for, [lastSpanFrames] capped at [REFILL_SPAN_MAX_MS]: the window before an
+     * underrun often holds the stall's own descent, which is not the arrival sawtooth the refill has to cover.
+     */
+    val refillSpanFrames: Int get() = minOf(lastSpanFrames, ms(REFILL_SPAN_MAX_MS))
+
+    /** One underrun's safety step, in frames. */
+    val safetyStepFrames: Int get() = ms(SAFETY_STEP_MS)
 
     /** Highest refill level: playback starts at this level even if a hold (A/V priming) is still asking to wait. */
     val maxRefillFrames: Int get() = ms(MAX_REFILL_MS)
@@ -163,10 +174,15 @@ class DriftController(private val sampleRate: Int = 48_000) {
         const val SAFETY_MAX_MS = 40
         const val SAFETY_STEP_MS = 5
         const val SAFETY_DECAY_MS = 1
-        /** Review L4: slow, so the margin does not walk straight back into the underrun it came from. */
-        const val DECAY_WINDOWS = 60
+        /**
+         * T-118 ("balanced", user decision 2026-10-02): 1 ms per 5 clean windows. Was 60 (review L4: never walk back
+         * into the underrun); on USB a learned 35-40 ms cost ~20 ms of delay for one underrun per ~6 minutes.
+         */
+        const val DECAY_WINDOWS = 5
         const val PACKET_MS = 10
         const val MAX_SPAN_MS = 100
+        /** T-118: refills allow for at most two packets of arrival sawtooth. */
+        const val REFILL_SPAN_MAX_MS = 20
         const val MAX_REFILL_MS = 250
         const val RESYNC_ABOVE_MS = 120
         const val REBUFFER_BELOW_MS = 60

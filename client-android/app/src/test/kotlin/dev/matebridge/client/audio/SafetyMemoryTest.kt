@@ -30,9 +30,9 @@ class SafetyMemoryTest {
     }
 
     @Test fun storedValueAboveTheDefaultIsUsed() {
-        val store = MapStore().apply { map["aaudio"] = 33 }
+        val store = MapStore().apply { map["aaudio"] = 27 }
         val init = SafetyMemory(store).initial("aaudio")
-        assertEquals(33, init.ms)
+        assertEquals(27, init.ms)
         assertEquals("stored", init.source)
     }
 
@@ -44,10 +44,10 @@ class SafetyMemoryTest {
         assertEquals(10, init.storedMs)
     }
 
-    @Test fun storedValueIsClampedToTheControllerRange() {
+    @Test fun storedValueIsClampedToTheRememberedRange() {
         val store = MapStore().apply { map["aaudio"] = 500; map["track"] = -3 }
         val m = SafetyMemory(store)
-        assertEquals(DriftController.SAFETY_MAX_MS, m.initial("aaudio").ms)
+        assertEquals(SafetyMemory.REMEMBER_MAX_MS, m.initial("aaudio").ms)
         assertEquals(DriftController.SAFETY_MIN_MS, m.initial("track").ms)
     }
 
@@ -93,8 +93,45 @@ class SafetyMemoryTest {
         m.onSafety("aaudio", 30, nowMs = 11_000)
         assertEquals(2, store.puts)
         assertEquals(30, store.map["aaudio"])
-        m.flush("aaudio", 35) // closing: at once
-        assertEquals(35, store.map["aaudio"])
+        m.flush("aaudio", 28) // closing: at once
+        assertEquals(28, store.map["aaudio"])
+    }
+
+    // T-118 (a): an older stored 40 starts at 30; the session may still learn up to 40, but 30 is what is kept.
+    @Test fun storedFortyStartsAtThirty() {
+        val store = MapStore().apply { map["aaudio"] = 40 }
+        val init = SafetyMemory(store).initial("aaudio")
+        assertEquals(30, SafetyMemory.REMEMBER_MAX_MS)
+        assertEquals(30, init.ms)
+        assertTrue(init.stored)
+        assertEquals(30, init.storedMs)
+        val d = DriftController()
+        d.resetSafety(init.ms, SafetyMemory.defaultMs("aaudio"))
+        assertEquals(30 * 48, d.safetyFrames)
+        repeat(4) { d.onUnderrun() }
+        assertEquals("the in-session ceiling stays 40", DriftController.SAFETY_MAX_MS * 48, d.safetyFrames)
+    }
+
+    @Test fun savedValuesAreCappedAtThirty() {
+        val store = MapStore()
+        val m = SafetyMemory(store)
+        m.initial("aaudio")
+        m.onSafety("aaudio", 40, nowMs = 0)
+        assertEquals(30, store.map["aaudio"])
+        // a session sitting at 35-40 does not rewrite the same 30 every ten seconds
+        m.onSafety("aaudio", 35, nowMs = 20_000)
+        m.onSafety("aaudio", 40, nowMs = 40_000)
+        m.flush("aaudio", 38)
+        assertEquals(1, store.puts)
+        assertEquals(30, SafetyMemory(store).initial("aaudio").ms)
+    }
+
+    @Test fun storedThirtyNeedsNoRewriteWhenTheSessionIsHigher() {
+        val store = MapStore().apply { map["aaudio"] = 40 } // written before T-118
+        val m = SafetyMemory(store)
+        m.initial("aaudio")
+        m.flush("aaudio", 40)
+        assertEquals(0, store.puts) // read back as 30, still 30: nothing to write
     }
 
     @Test fun storeFailuresAreContained() {
