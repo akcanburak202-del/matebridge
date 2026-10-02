@@ -25,7 +25,8 @@ class TokenBucket(
         val now = nanoTime()
         val elapsed = (now - lastNs).coerceAtLeast(0)
         lastNs = now
-        tokens = minOf(burstBytes.toDouble(), tokens + elapsed * rateBytesPerSec / 1e9)
+        // In Double: elapsed (ns) x rate overflows a Long after minutes of idle time (T-137).
+        tokens = minOf(burstBytes.toDouble(), tokens + elapsed.toDouble() * rateBytesPerSec / 1e9)
         tokens -= n
         if (tokens >= 0) 0L else (-tokens * 1e9 / rateBytesPerSec).toLong()
     }

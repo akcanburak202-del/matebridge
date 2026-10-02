@@ -41,7 +41,7 @@ class FilesLogicTest {
     @Test fun propfindXmlWithTurkishNames() {
         val xml = DavXml.multistatus(
             listOf(
-                DavEntry("/MatePad/", "MatePad", true, 0, 0, Pair(1000L, 24L)),
+                DavEntry("/MatePad/", "MatePad", true, 0, 0),
                 DavEntry(
                     "/MatePad/" + DavPath.encodeSegment("Çizim & <ödev>.png"), "Çizim & <ödev>.png", false, 1234,
                     1_790_000_000_000L,
@@ -55,7 +55,8 @@ class FilesLogicTest {
         assertTrue(xml.contains("<D:resourcetype/><D:getcontentlength>1234</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype>"))
         assertTrue(xml.contains("<D:getlastmodified>Mon, 21 Sep 2026 14:13:20 GMT</D:getlastmodified>"))
         assertTrue(xml.contains("<D:creationdate>2026-09-21T14:13:20Z</D:creationdate>"))
-        assertTrue(xml.contains("<D:quota-available-bytes>1000</D:quota-available-bytes><D:quota-used-bytes>24</D:quota-used-bytes>"))
+        // T-137: quota properties make every macOS mount wait 90 s (kernel WEBDAV_STATFS during mount(2)).
+        assertFalse(xml.contains("quota"))
         assertTrue(xml.contains("<D:getetag>&quot;"))
         assertTrue(xml.contains("<D:supportedlock>"))
         assertEquals(2, Regex("<D:status>HTTP/1.1 200 OK</D:status>").findAll(xml).count())
@@ -188,6 +189,22 @@ class FilesLogicTest {
         t += 10_000_000_000 // a long idle time
         assertEquals(0L, b.reserve(10_000))
         assertTrue(b.reserve(1) > 0)
+    }
+
+    @Test fun tokenBucketRefillDoesNotOverflowAfterAVeryLongIdle() {
+        // T-137: elapsed ns x rate overflowed a Long after ~7.7 min idle at 20 MB/s (46 s at 200 MB/s), so the first
+        // byte after a long pause could wait for minutes.
+        var t = 0L
+        val b = TokenBucket(20_000_000, 256 * 1024, nanoTime = { t }, sleepNs = { t += it })
+        assertEquals(0L, b.reserve(256 * 1024))
+        for (idleSec in listOf(47L, 470L, 3600L, 30L * 24 * 3600)) {
+            t += idleSec * 1_000_000_000
+            assertEquals("idle $idleSec s", 0L, b.reserve(64 * 1024))
+            assertEquals("idle $idleSec s", 0L, b.reserve(192 * 1024)) // refilled to exactly the burst
+        }
+        val fast = TokenBucket(200_000_000, 256 * 1024, nanoTime = { t }, sleepNs = { t += it })
+        t += 90L * 1_000_000_000
+        assertEquals(0L, fast.reserve(4096))
     }
 
     @Test fun statsLineOnlyAfterActivityAndAtMostOncePerSecond() {

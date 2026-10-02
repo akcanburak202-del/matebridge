@@ -199,6 +199,21 @@ class DavServerTest {
         assertEquals(404, call("PROPFIND", "/Other/", listOf("Depth" to "0")).status)
     }
 
+    /**
+     * T-137 regression: macOS webdavfs asks for the quota properties before mount(2); when the answer has them, the
+     * kernel's first statfs during mount(2) waits 90 s for the agent. So no response, anywhere, may carry them.
+     */
+    @Test fun noQuotaPropertiesSoMacMountsAtOnce() {
+        val quotaBody = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:propfind xmlns:D=\"DAV:\">\n<D:prop>\n" +
+            "<D:quota-available-bytes/>\n<D:quota-used-bytes/>\n<D:quota/>\n<D:quotaused/>\n</D:prop>\n</D:propfind>\n"
+        for ((target, depth) in listOf("/MatePad/" to "0", "/MatePad/" to "1", "/" to "0", "/" to "1")) {
+            val r = call("PROPFIND", target, listOf("Depth" to depth, "Content-Type" to "text/xml"), quotaBody.toByteArray())
+            assertEquals(207, r.status)
+            assertTrue(r.text.contains("<D:href>"))
+            assertFalse("$target depth $depth", r.text.contains("quota"))
+        }
+    }
+
     @Test fun propfindDepth1ListsTurkishNames() {
         File(root, "Çizimler").mkdir()
         File(root, "ödev ğüş.txt").writeText("merhaba")
@@ -212,7 +227,7 @@ class DavServerTest {
         assertTrue(xml.contains("<D:displayname>ödev ğüş.txt</D:displayname>"))
         assertTrue(xml.contains("<D:getcontentlength>7</D:getcontentlength>"))
         assertFalse(xml.contains(DavHandler.TEMP_PREFIX)) // temporary upload files are hidden
-        assertTrue(xml.contains("quota-available-bytes"))
+        assertFalse(xml.contains("quota")) // T-137
         assertEquals(403, call("PROPFIND", "/MatePad/", listOf("Depth" to "infinity")).status)
         assertEquals(403, call("PROPFIND", "/MatePad/").status) // no Depth means infinity
         assertEquals(404, call("PROPFIND", "/MatePad/nope", listOf("Depth" to "0")).status)
