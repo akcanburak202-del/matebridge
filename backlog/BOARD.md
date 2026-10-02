@@ -12,6 +12,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
 | [T-110](tasks/T-110-client-aaudio-mmap-headroom.md) | Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği | 5 | android-client-dev | [T-108] |
 | [T-114](tasks/T-114-client-aaudio-default-4-bursts.md) | Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor | 5 | android-client-dev | [T-110] |
+| [T-118](tasks/T-118-client-audio-safety-balanced.md) | Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt) | 5 | android-client-dev | [T-117] |
 
 ## blocked
 
@@ -25,7 +26,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-118](tasks/T-118-client-audio-safety-balanced.md) | Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt) | 5 | android-client-dev | [T-117] |
+| [T-119](tasks/T-119-host-audio-tap-create-retry.md) | Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene | 5 | mac-host-dev | [] |
 
 ## done
 
