@@ -245,7 +245,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var cableRegistered = false
     private var lastWifiEndpoint: Endpoint? = null // in memory: the USB -> Wi-Fi fallback goes straight back to it
     private var probeExec: java.util.concurrent.ExecutorService? = null
-    private var pickGen = 0 // bumped to invalidate a running USB probe
+    /** Bumped to invalidate a running USB probe; a bump also closes a probe socket that is connecting (T-133). */
+    private val probeGuard = dev.matebridge.client.session.ProbeGuard()
     private var picking = false
     private var transportEpoch = 0 // bumped whenever the transport is re-applied; stale migration results are ignored
     private var migrateEpoch = -1
@@ -370,7 +371,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             MbLog.i("transport_knob", "override=${modeOverride?.id ?: "invalid"}")
         }
         // T-096: one probe thread and at most one waiting probe; a newer one replaces a waiting older one (each result is
-        // checked against pickGen anyway, so a dropped probe loses nothing).
+        // checked against probeGuard anyway, so a dropped probe loses nothing).
         probeExec = java.util.concurrent.ThreadPoolExecutor(
             1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, java.util.concurrent.ArrayBlockingQueue(1),
             { r -> Thread(r, "mb-usb-probe").also { it.isDaemon = true } },
@@ -842,7 +843,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
-        pickGen++
+        probeGuard.bump()
         picking = false
         transportEpoch++
         fallbackPending = false
@@ -1344,7 +1345,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
-        pickGen++
+        probeGuard.bump()
         picking = false
         transportEpoch++
         fallbackPending = false
@@ -1394,7 +1395,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // anyway is checked against the mode in onMigrationResult().
         if (TransportSwitch.cancelsMigration(m)) controller.cancelMigration()
         if (keep) {
-            pickGen++ // a probe started under the old mode reports into nothing (it would leave `picking` set)
+            probeGuard.bump() // a probe started under the old mode reports into nothing (it would leave `picking` set)
             picking = false
             // That probe or migration reports no result now; do not leave the policy waiting for one (STUCK_MS).
             if (autoPolicy.inFlight) autoPolicy.onTryResult(AutoUsbPolicy.Outcome.NEUTRAL, SystemClock.elapsedRealtime())
@@ -1426,15 +1427,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      */
     private fun probeUsb(initial: Boolean) {
         val exec = probeExec ?: return
-        val gen = ++pickGen
+        val gen = probeGuard.bump()
         picking = true
         autoPolicy.onTryStarted(SystemClock.elapsedRealtime())
         try {
             exec.execute {
-                val r = UsbProbe.classify {
-                    java.net.Socket().use { s ->
-                        s.connect(java.net.InetSocketAddress(ConnectMode.USB_HOST, ConnectMode.USB_CONTROL_PORT), UsbProbe.TIMEOUT_MS)
+                // T-133: re-checked right before the connect (a queued probe must not reach a Mac that said HOST_SLEEP);
+                // a later bump closes this socket while it connects.
+                val s = java.net.Socket()
+                if (!probeGuard.attach(gen, s)) {
+                    try { s.close() } catch (_: java.io.IOException) {}
+                    return@execute // stale: its result would be ignored anyway
+                }
+                val r = try {
+                    UsbProbe.classify {
+                        s.use { it.connect(java.net.InetSocketAddress(ConnectMode.USB_HOST, ConnectMode.USB_CONTROL_PORT), UsbProbe.TIMEOUT_MS) }
                     }
+                } finally {
+                    probeGuard.detach(gen)
                 }
                 runOnUiThread { onProbeResult(gen, r, initial) }
             }
@@ -1446,7 +1456,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onProbeResult(gen: Int, r: ProbeResult, initial: Boolean) {
-        if (gen != pickGen || !started || isDestroyed || mode != TransportMode.AUTO) return
+        if (!probeGuard.isCurrent(gen) || !started || isDestroyed || mode != TransportMode.AUTO) return
         picking = false
         autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(r), SystemClock.elapsedRealtime())
         when {
@@ -1529,7 +1539,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!started || isDestroyed || mode != TransportMode.AUTO || !isOnUsb() || lastUi !is SessionUi.Disconnected) return
         autoPolicy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, SystemClock.elapsedRealtime()) // back off before USB again
         logPick("wifi", "usb_lost")
-        pickGen++
+        probeGuard.bump()
         picking = false
         transportEpoch++
         ui.removeCallbacks(usbHintCheck)
@@ -1591,7 +1601,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wolStep() // started is false: a running wake episode stops (nothing is sent in the background)
         wolRefreshStep(wolRefresh.cancel()) // T-133
         unregisterCableReceiver()
-        pickGen++ // a probe still running reports into nothing
+        probeGuard.bump() // a probe still running reports into nothing
         picking = false
         fallbackPending = false
         transportEpoch++
@@ -1783,7 +1793,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery?.stop()
         discovery = null
         ui.removeCallbacks(usbHintCheck)
-        pickGen++ // a running USB probe reports into nothing
+        probeGuard.bump() // a queued USB probe never connects; one connecting has its socket closed
         picking = false
         fallbackPending = false
         wolRefreshStep(wolRefresh.cancel())
