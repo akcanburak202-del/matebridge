@@ -216,6 +216,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var glGeneration = 0
     private var choreographerOn = false
     private var modeApplied = false
+
+    // T-140 experiment: `--ei rvote 0|1|2|3` (0 off = default, 1 animation path, 2 reflection path, 3 both),
+    // `--ei rvote_min_fps F` (default 70, 0 = always while streaming), `--ei rvote_prio N` (reflection priority).
+    private var rvoteMode = 0
+    private var rvote: dev.matebridge.client.video.RefreshVote? = null
+    private var rvoteDriver: dev.matebridge.client.video.RefreshVoteDriver? = null
+    private var rvotePrio = 0
+    private var foreground = false
     private val vsyncCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             vsync.onVsync(frameTimeNanos)
@@ -271,6 +279,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var knobs = dev.matebridge.client.session.WifiKnobs()
     private val rttStats = dev.matebridge.client.session.RttStats()
     private var wifiLock: dev.matebridge.client.session.WifiLockHolder? = null
+
+    private fun parseRefreshVote() {
+        rvoteMode = (intent?.getIntExtra("rvote", 0) ?: 0).coerceIn(0, 3)
+        if (rvoteMode == 0) return
+        val min = (intent?.getIntExtra("rvote_min_fps", dev.matebridge.client.video.RefreshVote.DEFAULT_MIN_FPS)
+            ?: dev.matebridge.client.video.RefreshVote.DEFAULT_MIN_FPS).coerceAtLeast(0)
+        rvotePrio = intent?.getIntExtra("rvote_prio", 0) ?: 0
+        rvote = dev.matebridge.client.video.RefreshVote(min, { SystemClock.elapsedRealtime() })
+        MbLog.i("rvote_config", "mode=$rvoteMode min_fps=$min", "render")
+    }
+
+    private fun applyVoteChange(c: dev.matebridge.client.video.VoteChange?) {
+        if (c == null) return
+        rvoteDriver?.apply(c.on)
+        MbLog.i("rvote", "state=${if (c.on) "on" else "off"} reason=${c.reason.logName}", "render")
+    }
 
     private fun parseWifiKnobs() {
         val i = intent
@@ -373,6 +397,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         setupPerfHint()
         parseWifiKnobs()
+        parseRefreshVote()
         audioAllowed = intent?.getBooleanExtra("audio", true) != false
         MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
         intent?.getStringExtra("transport")?.let { raw -> // T-096: one launch only, the stored setting is not changed
@@ -389,6 +414,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
+        if (rvoteMode != 0) rvoteDriver = dev.matebridge.client.video.RefreshVoteDriver(this, root, ui, rvoteMode, rvotePrio)
         video = findViewById(R.id.video)
         videoGl = findViewById(R.id.video_gl)
         videoView = if (glMode) videoGl else video
@@ -573,7 +599,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (hasFocus) capture.resume() else capture.releaseAll(ReleaseAll.FOCUS_LOST, SystemClock.uptimeMillis())
     }
 
+    override fun onResume() {
+        super.onResume()
+        foreground = true
+    }
+
     override fun onPause() {
+        foreground = false
+        applyVoteChange(rvote?.stop(dev.matebridge.client.video.VoteReason.BACKGROUND))
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
@@ -1123,6 +1156,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         streamConfig = null
         audio?.onVideoLatency(null) // no video: no A/V target
         statsView.text = ""
+        applyVoteChange(rvote?.stop(dev.matebridge.client.video.VoteReason.SESSION))
         releaseRefreshRate()
         setSurfaceFrameRate(false)
         stopVsync()
@@ -1281,6 +1315,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         lastStatsMs = now
         val s = r.stats.snapshot(reset = true)
         r.onSkipWindow(s.skipPct)
+        rvote?.let { v ->
+            val streaming = foreground && lastUi is SessionUi.Connected
+            applyVoteChange(v.update(streaming, s.received * 1000.0 / interval.coerceAtLeast(1)))
+        }
         val vg = vsyncGaps.summary(reset = true)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
@@ -1642,6 +1680,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         releaseRenderer()
+        rvoteDriver?.release()
         presenter?.stop()
         presenter = null
         controller.shutdown()
