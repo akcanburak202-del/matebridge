@@ -81,6 +81,20 @@ public final class BonjourAdvertiser: @unchecked Sendable {
         }
     }
 
+    /// Replaces the registered TXT record (T-128: `wol` changes with the network interfaces) without withdrawing the
+    /// service. Call on `queue` (dns_sd calls on one reference must not run concurrently with its callbacks). Throws
+    /// the dns_sd error, or `kDNSServiceErr_BadReference` after `cancel()`; the caller then registers again.
+    public func updateTXT(_ txt: [(key: String, value: String)]) throws {
+        let record = Self.txtRecord(txt)
+        let err: DNSServiceErrorType = lock.withLock {
+            guard !cancelled, let ref else { return DNSServiceErrorType(kDNSServiceErr_BadReference) }
+            return record.withUnsafeBytes { bytes in
+                DNSServiceUpdateRecord(ref, nil, 0, UInt16(bytes.count), bytes.baseAddress, 0)
+            }
+        }
+        guard err == kDNSServiceErr_NoError else { throw BonjourError(code: err) }
+    }
+
     private func deliver(_ error: DNSServiceErrorType) {
         guard !lock.withLock({ cancelled }) else { return }
         handler(error == kDNSServiceErr_NoError ? .registered : .failed(code: error))

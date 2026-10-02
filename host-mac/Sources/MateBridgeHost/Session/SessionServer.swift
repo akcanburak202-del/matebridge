@@ -227,6 +227,17 @@ public final class SessionServer: @unchecked Sendable {
     /// Bonjour record of a kernel-socket control listener (`NWListener.service` does this for `nw`).
     private var bonjour: BonjourAdvertiser?
     private var bonjourAttempts = 0
+    /// TXT `wol` (T-128, PROTOCOL.md section 3 item 1): hardware addresses of the up `en*` interfaces with IPv4; nil
+    /// means no key. Recomputed on start, on every network path change and every 60 s; re-published only when it
+    /// changes.
+    private var wolValue: String?
+    private var wolComputed = false
+    private var pathMonitor: NWPathMonitor?
+    /// Session ticks since the last periodic `wol` check. `NWPathMonitor` does not report every change (e.g. a
+    /// secondary interface gaining or losing IPv4 while the default path stays), so the interfaces are also re-read
+    /// every `wolReconcileTicks` ticks (60 s; one `getifaddrs`, re-published only on a change).
+    private var wolTicks = 0
+    static let wolReconcileTicks = 600
     private var videoListener: VideoListener?
     private var nextID: UInt64 = 0
     private var controlConnections: [ConnectionID: ControlConnection] = [:]
@@ -403,8 +414,64 @@ public final class SessionServer: @unchecked Sendable {
             applyIdentity()
             stopped = false
             setState(.starting)
+            refreshWakeOnLan()
+            startPathMonitor()
             startListeners()
             startTicking()
+        }
+    }
+
+    // MARK: TXT wol (T-128)
+
+    /// Network path changes (an interface coming up or going down, an address change) re-read the interfaces; the
+    /// session tick re-reads them every 60 s as well (`wolReconcileTicks`).
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
+            guard let self, !stopped else { return }
+            refreshWakeOnLan()
+        }
+        pathMonitor = monitor
+        monitor.start(queue: queue)
+    }
+
+    /// Recomputes the `wol` value; on a change, logs the count (never the addresses) and re-publishes the TXT record.
+    private func refreshWakeOnLan() {
+        let value = NetworkInterfaces.wakeOnLanValue()
+        guard !wolComputed || value != wolValue else { return }
+        let first = !wolComputed
+        wolComputed = true
+        wolValue = value
+        let count = value.map { $0.split(separator: ",").count } ?? 0
+        logger.log(.info, "bonjour_txt", sessionID: currentSessionID, generation: currentConfigID,
+                   fields: "wol_count=\(count)")
+        if !first { republishTxt() }
+    }
+
+    /// The `nw` control listener's Bonjour service with the current TXT record.
+    private func bonjourService() -> NWListener.Service {
+        NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType, domain: nil,
+                           txtRecord: NWTXTRecord(WakeOnLanTxt.dictionary(wol: wolValue)))
+    }
+
+    /// Puts the current TXT record on the live control listener's Bonjour service. A listener not yet up (or a
+    /// registration waiting for its retry) picks the value up when it registers.
+    private func republishTxt() {
+        switch controlListener {
+        case .network(let listener)?:
+            listener.service = bonjourService()
+        case .socket(let listener)?:
+            guard let bonjour else { return }
+            do {
+                try bonjour.updateTXT(WakeOnLanTxt.entries(wol: wolValue))
+            } catch {
+                logger.log(.warning, "bonjour_txt_update_failed", sessionID: currentSessionID,
+                           generation: currentConfigID, fields: "error=\(error)")
+                startBonjour(for: listener)
+            }
+        case nil:
+            break
         }
     }
 
@@ -544,6 +611,8 @@ public final class SessionServer: @unchecked Sendable {
             apply(machine.shutdown())
             tickTimer?.cancel()
             tickTimer = nil
+            pathMonitor?.cancel()
+            pathMonitor = nil
             cancelListeners()
             setState(.stopped)
         }
@@ -807,8 +876,7 @@ public final class SessionServer: @unchecked Sendable {
         do {
             let listener = try NWListener(using: Self.tcpParameters(serviceClass: Self.serviceClass.controlClass),
                                           on: Self.endpointPort(port))
-            listener.service = NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType,
-                                                  domain: nil, txtRecord: NWTXTRecord(["v": "1"]))
+            listener.service = bonjourService()
             listener.newConnectionHandler = { [weak self] c in self?.accept(c, video: false) }
             listener.stateUpdateHandler = { [weak self, weak listener] s in
                 guard let self, let listener, case .network(let current)? = controlListener, current === listener
@@ -895,8 +963,8 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Registers `_matebridge._tcp` for a kernel-socket control listener: the record `NWListener.service` carries for
-    /// `nw` (host name, TXT `v=1`, the bound port). A failure (also later, e.g. mDNSResponder restarting) is logged and
-    /// retried with backoff (1 s ... 30 s) while this listener lives; sessions are not touched (USB and running
+    /// `nw` (host name, TXT `v=1` plus `wol` (T-128), the bound port). A failure (also later, e.g. mDNSResponder
+    /// restarting) is logged and retried with backoff (1 s ... 30 s) while this listener lives; sessions are not touched (USB and running
     /// sessions do not need discovery).
     private func startBonjour(for listener: BsdTcpListener) {
         guard !stopped, case .socket(let current)? = controlListener, current === listener else { return }
@@ -904,7 +972,8 @@ public final class SessionServer: @unchecked Sendable {
         bonjour = nil
         do {
             bonjour = try BonjourAdvertiser(name: machine.configuration.hostName, type: Self.bonjourType,
-                                            port: listener.port, txt: [("v", "1")], queue: queue) {
+                                            port: listener.port, txt: WakeOnLanTxt.entries(wol: wolValue),
+                                            queue: queue) {
                 [weak self, weak listener] event in
                 guard let self, let listener else { return }
                 switch event {
@@ -1544,6 +1613,11 @@ public final class SessionServer: @unchecked Sendable {
             guard let self else { return }
             apply(machine.tick(now: nowUs()))
             tcpInfoTick()
+            wolTicks += 1
+            if wolTicks >= Self.wolReconcileTicks {
+                wolTicks = 0
+                refreshWakeOnLan()
+            }
         }
         timer.resume()
         tickTimer = timer
