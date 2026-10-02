@@ -96,6 +96,43 @@ class HeadroomMeterTest {
         assertEquals(5 * ms, w.gapMaxNs)
     }
 
+    @Test fun timestampAndCounterHeadroomAreKeptApart() {
+        // T-114: the counter says the 960-frame ring is full; the timestamp-based value dips to 300.
+        val m = HeadroomMeter()
+        m.onWriteStart(1000, 0, counterHeadroom = 960, fromTs = true)
+        m.onWriteStart(300, 5 * ms, counterHeadroom = 960, fromTs = true)
+        val w = m.window()
+        assertEquals(300L, w.headroomMinFrames)
+        assertEquals(960L, w.counterMinFrames)
+        assertEquals(2, w.tsSamples)
+        assertEquals(2, w.knownSamples)
+        assertEquals("ts", w.source)
+        // The window resets them.
+        val empty = m.window()
+        assertNull(empty.counterMinFrames)
+        assertEquals("-", empty.source)
+    }
+
+    @Test fun sourceIsCounterOrMixed() {
+        val m = HeadroomMeter()
+        m.onWriteStart(960, 0) // counter only (no timestamp): counter headroom is the headroom
+        assertEquals("counter", m.window().source)
+        m.onWriteStart(960, 0)
+        m.onWriteStart(1000, 5 * ms, counterHeadroom = 960, fromTs = true)
+        val w = m.window()
+        assertEquals("mixed", w.source)
+        assertEquals(960L, w.counterMinFrames)
+        assertEquals(1, w.tsSamples)
+    }
+
+    @Test fun unknownHeadroomHasNoSource() {
+        val m = HeadroomMeter()
+        m.feed(List(3) { AudioSink.HEADROOM_UNKNOWN })
+        val w = m.window()
+        assertEquals("-", w.source)
+        assertNull(w.counterMinFrames)
+    }
+
     @Test fun overflowKeepsMinAndUnderflow() {
         val m = HeadroomMeter(capacity = 8)
         m.feed(List(20) { 480L } + listOf(-1L))

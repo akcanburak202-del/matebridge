@@ -52,6 +52,22 @@ class OutBufGrowthTest {
         assertEquals(4, grows)
     }
 
+    @Test fun theFourBurstDefaultIsSeenInTheAudioLatency() {
+        // T-114: the AAudio default went from 2 to 4 bursts; audio_ms comes from the device counters, so the newest
+        // frame's output latency is 20 ms instead of 10 ms (+10 ms), with no change in the A/V math.
+        assertEquals(4, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS)
+        fun latencyWith(bursts: Int): Long? {
+            val c = OutputClock()
+            c.reset(240)
+            repeat(100) { c.onWrite(240) }
+            val now = 5_000_000_000L
+            c.onDeviceCounters(deviceWritten = c.written + 1_000, deviceRead = c.written + 1_000 - bursts * 240L, null, 0, now)
+            return c.latencyUs(now)
+        }
+        assertEquals(10_000L, latencyWith(2))
+        assertEquals(20_000L, latencyWith(AudioBufferConfig.AAUDIO_DEFAULT_BURSTS))
+    }
+
     @Test fun aGrownBufferIsSeenInTheAudioLatency() {
         // AAudio play position comes from the device counters, so the extra burst written after a grow raises the
         // latency of the newest frame (and audio_ms) by exactly one burst, without any A/V change.

@@ -58,11 +58,6 @@ object AAudioNative {
      * result is [OK]) and [C_NOW] (CLOCK_MONOTONIC ns, read last). Returns the getTimestamp result.
      */
     external fun counters(handle: Long, out: LongArray): Int
-    /**
-     * T-110: frames written minus frames read (the output's headroom) right now; [Long.MIN_VALUE] for a bad handle.
-     * Writer thread only; does not allocate, lock or log.
-     */
-    external fun headroom(handle: Long): Long
     external fun xruns(handle: Long): Int
     external fun bufferSize(handle: Long): Int
     external fun setBufferSize(handle: Long, frames: Int): Int

@@ -17,8 +17,9 @@ class AudioBufferConfigTest {
         assertEquals(6, AudioBufferConfig.startBursts(Int.MAX_VALUE))
     }
 
-    @Test fun aaudioDefaultIsTwoBurstsAndTheExtraOverridesIt() {
-        assertEquals(2, AudioBufferConfig.startBursts(null, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS))
+    @Test fun aaudioDefaultIsFourBurstsAndTheExtraOverridesIt() {
+        // T-114: 2 bursts (10 ms) crackled in game mode; 4 (20 ms) did not.
+        assertEquals(4, AudioBufferConfig.startBursts(null, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS))
         assertEquals(1, AudioBufferConfig.startBursts(1, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS))
         assertEquals(6, AudioBufferConfig.startBursts(9, AudioBufferConfig.AAUDIO_DEFAULT_BURSTS))
     }

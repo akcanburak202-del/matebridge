@@ -3,9 +3,10 @@ package dev.matebridge.client.audio
 /**
  * T-110: output headroom and write timing per stats window (pure; writer thread only).
  *
- * The writer calls [onWriteStart] just before each blocking write with the output's headroom (frames written - frames
- * read, [AudioSink.headroom]) and [onWriteEnd] when the write returns. A blocking write returns once its last frame is
- * in, so the ring is about full then; it is lowest just before the next write, which is where it is sampled.
+ * The writer calls [onWriteStart] just before each blocking write with the output's headroom ([AudioSink.headroom]:
+ * T-114 from the timestamp where possible, else frames written - frames read) and [onWriteEnd] when the write returns.
+ * A blocking write returns once its last frame is in, so the ring is about full then; it is lowest just before the next
+ * write, which is where it is sampled. The counter headroom is tracked beside it (its minimum only) for comparison.
  *
  * [onWriteStart]/[onWriteEnd] do not allocate (samples go into a preallocated array). [window] (once per stats second)
  * returns the window's figures and starts a new window.
@@ -22,7 +23,21 @@ class HeadroomMeter(capacity: Int = DEFAULT_CAPACITY) {
         val gapMaxNs: Long,
         /** Longest time from a write's return to the next write's start: the writer's own delay. */
         val busyMaxNs: Long,
-    )
+        /** T-114: lowest counter headroom (frames written - frames read); null when none was known. */
+        val counterMinFrames: Long? = null,
+        /** T-114: how many known headroom samples came from the output's timestamp. */
+        val tsSamples: Int = 0,
+        /** T-114: known headroom samples in the window. */
+        val knownSamples: Int = 0,
+    ) {
+        /** T-114: `ts`, `counter` or `mixed` (`-` without headroom), for the logs. */
+        val source: String get() = when {
+            knownSamples == 0 -> "-"
+            tsSamples == knownSamples -> "ts"
+            tsSamples == 0 -> "counter"
+            else -> "mixed"
+        }
+    }
 
     private val samples = IntArray(capacity)
     private val sorted = IntArray(capacity)
@@ -30,20 +45,31 @@ class HeadroomMeter(capacity: Int = DEFAULT_CAPACITY) {
     private var writes = 0
     private var min = Long.MAX_VALUE
     private var known = 0
+    private var tsCount = 0
+    private var counterMin = Long.MAX_VALUE
+    private var counterKnown = 0
     private var underflow = 0
     private var gapMax = 0L
     private var busyMax = 0L
     private var lastStartNs = NONE
     private var lastEndNs = NONE
 
-    /** A write is about to start at [nowNs] with [headroom] frames queued ([AudioSink.HEADROOM_UNKNOWN] if unknown). */
-    fun onWriteStart(headroom: Long, nowNs: Long) {
+    /**
+     * A write is about to start at [nowNs] with [headroom] frames queued ([AudioSink.HEADROOM_UNKNOWN] if unknown).
+     * [counterHeadroom] is the counter headroom (written - read) and [fromTs] says [headroom] came from the timestamp.
+     */
+    fun onWriteStart(headroom: Long, nowNs: Long, counterHeadroom: Long = headroom, fromTs: Boolean = false) {
         writes++
         if (lastStartNs != NONE) gapMax = maxOf(gapMax, nowNs - lastStartNs)
         if (lastEndNs != NONE) busyMax = maxOf(busyMax, nowNs - lastEndNs)
         lastStartNs = nowNs
+        if (counterHeadroom != AudioSink.HEADROOM_UNKNOWN) {
+            counterKnown++
+            if (counterHeadroom < counterMin) counterMin = counterHeadroom
+        }
         if (headroom == AudioSink.HEADROOM_UNKNOWN) return
         known++
+        if (fromTs) tsCount++
         if (headroom < min) min = headroom
         if (headroom <= 0) underflow++
         if (n < samples.size) samples[n++] = headroom.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
@@ -70,6 +96,9 @@ class HeadroomMeter(capacity: Int = DEFAULT_CAPACITY) {
             underflowEst = underflow,
             gapMaxNs = gapMax,
             busyMaxNs = busyMax,
+            counterMinFrames = if (counterKnown > 0) counterMin else null,
+            tsSamples = tsCount,
+            knownSamples = known,
         )
         clearWindow()
         return w
@@ -80,6 +109,9 @@ class HeadroomMeter(capacity: Int = DEFAULT_CAPACITY) {
         writes = 0
         min = Long.MAX_VALUE
         known = 0
+        tsCount = 0
+        counterMin = Long.MAX_VALUE
+        counterKnown = 0
         underflow = 0
         gapMax = 0
         busyMax = 0

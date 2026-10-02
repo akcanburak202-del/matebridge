@@ -44,10 +44,17 @@ interface AudioSink {
     fun counters(out: LongArray): Boolean = false
 
     /**
-     * T-110: frames queued in the output and not yet read by the device (written - read), or [HEADROOM_UNKNOWN] if the
-     * output has no such counters (AudioTrack). Writer thread, called before every write: must not allocate or block.
+     * T-110/T-114: frames queued in the output and not yet read by the device, or [HEADROOM_UNKNOWN] if the output has
+     * no such counters (AudioTrack). AAudio estimates the device's read position from its timestamp where it can
+     * ([HeadroomEstimator]). Writer thread, called before every write: must not allocate or block.
      */
     fun headroom(): Long = HEADROOM_UNKNOWN
+
+    /** T-114: the counter headroom (frames written - frames read) at the last [headroom]; [HEADROOM_UNKNOWN] if none. */
+    val headroomCounter: Long get() = HEADROOM_UNKNOWN
+
+    /** T-114: the last [headroom] came from the output's timestamp (else from its counters). */
+    val headroomFromTs: Boolean get() = false
 
     /** Output underruns since open. */
     fun xruns(): Int
