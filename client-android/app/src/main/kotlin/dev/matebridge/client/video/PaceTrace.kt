@@ -23,6 +23,16 @@ class PaceProbe {
          * lock_slot_ns = C (ready - capture domain), k = window samples, bad_run = 1 when C changed on this frame.
          */
         const val PATH_CPD = 7
+        /**
+         * T-115 lone frames on the phase-lock path, scheduled on the earliest slot without hold and without forming a
+         * lock: after a capture gap ([PATH_EARLY_SPARSE]) or with no previous frame ([PATH_EARLY_FIRST]: session start, idle
+         * re-anchor, panel-rate change). acquire_ns = the slot the hold would have chosen (gain = acquire_ns - slot_ns),
+         * lock_slot_ns = 0. [PATH_SPARSE] then only appears with the A/B switch off (and in older traces).
+         */
+        const val PATH_EARLY_SPARSE = 8
+        const val PATH_EARLY_FIRST = 9
+        /** T-115: a locked frame was late (missed its slot, or beyond the latency bound) while the jitter history was thin; the lock was re-acquired from it. */
+        const val PATH_WARMUP = 10
     }
 
     var path = PATH_NONE
@@ -100,7 +110,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
          * the session code needs no wiring. Null = tracing off (the hot path then costs one volatile read).
          */
         @Volatile var active: PaceTrace? = null
-        private val PATHS = arrayOf("none", "unlocked", "locked", "acquire", "sparse", "rephase", "recenter", "cpd")
+        private val PATHS = arrayOf("none", "unlocked", "locked", "acquire", "sparse", "rephase", "recenter", "cpd", "early_sparse", "early_first", "warmup")
         private val ACTIONS = arrayOf("pending", "release", "replace", "move", "discard", "now")
 
         private const val C_SEQ = 0; private const val C_CAPTURE = 1; private const val C_READY = 2

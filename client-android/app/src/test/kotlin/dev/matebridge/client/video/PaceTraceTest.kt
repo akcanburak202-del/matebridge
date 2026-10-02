@@ -163,4 +163,13 @@ class PaceTraceTest {
         val (start, init, fin) = row.drop(30).take(3).map { it.toLong() }
         assertTrue(start > 0 && init >= start && fin >= init)
     }
+
+    @Test fun t115PathsHaveTheirOwnNames() {
+        val t = PaceTrace(8)
+        val probe = PaceProbe()
+        val paths = listOf(PaceProbe.PATH_EARLY_SPARSE to "early_sparse", PaceProbe.PATH_EARLY_FIRST to "early_first", PaceProbe.PATH_WARMUP to "warmup")
+        for ((i, p) in paths.withIndex()) { probe.path = p.first; t.record(i.toLong(), 10, 20, probe, 30, false, false, 0) }
+        val rows = csv(t).drop(1).map { it.split(",")[16] }
+        assertEquals(paths.map { it.second }, rows)
+    }
 }

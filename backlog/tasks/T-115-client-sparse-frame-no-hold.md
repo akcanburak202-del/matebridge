@@ -54,22 +54,32 @@ Kapsam yalnız kilitlenebilir yol (`lockable`: içerik aralığı ≈ panel peri
 2. **Taze kare → `earliest`:** `scheduleLocked` taze karede `acquire()` çağırmaz. Slot = `earliest`, `addedNs = 0`.
    - Kilit kurulmaz (`lockSlot = MIN`, `phaseLock = false`, `badRun`/T-067 penceresi sıfır).
    - Önceki karenin slotu henüz gelmemişse (`earliest ≤ lastSlot`) eski davranış korunur: aynı slot, yeni kare eskisinin yerine geçer (T-065).
-3. **Kilit 2. ardışık karede kurulur:** taze kareden sonraki sürekli kare, mevcut edinim dalına (`PATH_ACQUIRE`) düşer: merkezli `acquire()`.
-   - Yeni kural: sürekli akıştaki bir edinim önceki karenin slotuna ya da daha erkenine düşerse `lastSlot + P` alır (çakışma/atma yok), kilit de oraya kurulur.
-   - Gerekçe: erken gösterilen 1. kare, 2. karenin merkezli slotunu işgal edebilir. Aynı slotta yer değiştirme ya ilk kareyi atar ya da `SlotReleaser` taşıma zincirine yol açar. Bir sonraki boş slot ikisini de önler; gecikme sınırı içinde kalır (`lastSlot ≤ earliest₂`).
-   - Bilinen bedel: 1. karenin kazandığı vsync, 1. ile 2. kare arasında tek bir boş vsync olarak görünebilir (hareket başında bir kare tekrarı). Sonrası kilitli ve düzgün.
-   - Soğuk 1. kare kendi tutmasından > 1 P geç gelirse kilit bir P geç kurulur. Mevcut 30 karelik yeniden fazlama bunu bir çakışmayla düzeltir; bu, eski kodun aynı durumdaki davranışıdır.
+3. **Kilit 2. ardışık karede kurulur:** taze kareden sonraki sürekli kare, mevcut edinim dalına (`PATH_ACQUIRE`) düşer: merkezli `acquire()`, kod değişmedi.
+   - *Uygulamada değişti (ilk plan: `lastSlot + P`'ye itmek).* Benzetimde itme kötü çıktı. Soğuk 1. kare, 2. karenin merkezli slotunu işgal ettiğinde kilit bir P geç kuruluyor, 30 kare sonra yeniden fazlamada hareketin ortasında bir kare kayboluyordu.
+   - Bu yüzden eski kural kaldı: 2. kare aynı vsync'te tek kareyi değiştirir (T-065, daha yeni kare). Ekrana çıkış anı aynı, kilit merkezde.
+   - Bilinen bedel (soğuk olmayan kare): 1. karenin kazandığı vsync, 1. ile 2. kare arasında tek bir tekrarlanan vsync olarak görünebilir. Sonrası kilitli ve düzgün.
+3b. **Isınma (ek):** 2. karede edinim neredeyse boş jitter geçmişiyle yapılır (taze kareler geçmişe girmiyor). Benzetimde bu, ilk karelerde geç atma zincirlerine yol açtı.
+   - Kural: geçmiş `WARMUP_SAMPLES = 32` örnekten azken, geç kalan kilitli kare kilidi hemen kendi zamanlamasından yeniden edinir (`PATH_WARMUP`).
+   - Slotu kaçırdıysa yeni slot daha geç olur: tek tekrarlanan vsync, atma yok.
+   - Kilit çok geç kurulduysa (gecikme sınırı aşıldıysa) yeni slot daha erkendir. Önceki slota düşerse aynı vsync'te değiştirme olur; bu `lateDrop` sayılır, sonuç geç atmayla aynıdır. 30 karelik zincir oluşmaz.
+   - Toplu teslimde (`readyGap < captureGap/2`) eski sınır kuralı geçerli.
+   - T-067 `recenter` açıkken devre dışı.
 4. **Jitter geçmişi:** taze karelerin `dev` değeri 256 örneklik geçmişe **girmez**.
    - Gerekçe: bu kareler artık tutma almıyor, yani D'ye ihtiyaçları yok. Soğuk-kare sapması (DVFS, boşta çözücü) sürekli akışın jitter'ı değil; geçmişe girince p99'u tavana (1 P) itiyor ve sürekli akışa da gereksiz bir vsync ekliyor.
    - Taban `b` (min penceresi) değişmez: soğuk kare minimumu düşüremez, yalnız üst sınır.
 5. **A/B anahtarı:** `AdaptivePacer.sparseEarly` (varsayılan `true`; `false` = eski davranış). Yalnız iz tekrar karşılaştırması ve olası cihaz A/B'si için; intent bağlantısı kapsam dışı (`MainActivity` listede yok).
    - Iz tekrarı için `internal scheduleOn(grid, …)`. `schedule()` bunu `vsync.grid()` ile çağırır, davranış aynı.
-6. **PaceProbe:** iki yeni yol, `PATH_EARLY_SPARSE = 8` (`early_sparse`) ve `PATH_EARLY_FIRST = 9` (`early_first`). `acquire_ns` sütununa eski tutmanın vereceği slot yazılır, böylece kazanç izde `acquire_ns − slot_ns` olarak okunur. `PATH_SPARSE` eski izler için kalır.
+6. **PaceProbe:** yeni yollar `PATH_EARLY_SPARSE = 8` (`early_sparse`), `PATH_EARLY_FIRST = 9` (`early_first`) ve `PATH_WARMUP = 10` (`warmup`). `acquire_ns` sütununa eski tutmanın vereceği slot yazılır, böylece kazanç izde `acquire_ns − slot_ns` olarak okunur. `PATH_SPARSE` eski izler için kalır.
 7. **Testler (`video/`):**
-   - `SparseFrameNoHoldTest`: (a) 60/120 Hz, 100 ms aralık, soğuk kareler dahil → `addedNs = 0`; (a′) uzun seyrek dönemden sonra sürekli akışta D tavanda değil; (b) seyrek → sürekli 60 fps (60 ve 120 Hz panel, `SlotReleaser` ile) → atma yok, çift slot yok, geçişte en çok bir boşluk; soğuk ilk kare varyantı → `lateDrop` yok, en çok bir çakışma.
+   - `SparseFrameNoHoldTest`:
+     - (a) 60/120 Hz, 100 ms aralık, soğuk kareler dahil → `addedNs = 0`.
+     - (a′) Uzun seyrek dönemden sonra sürekli akışta D tavanda değil.
+     - (b) Seyrek → sürekli (60 ve 120 Hz panel, `SlotReleaser` ile). Titreşimsiz akışta atma ve çift slot yok, geçişte en çok bir tekrar. Titreşimli taramada eskiyle karşılaştırma yapılır.
+     - Soğuk ilk kare varyantı.
+     - Isınma.
    - İz tekrarı (`trace7_120hz_excerpt.csv`, eski/yeni): sürekli bölümde boşluk/atma, seyrek bölümde gecikme.
    - `PaceTraceTest`: yeni yol adları.
-   - Mevcut testler aynen geçmeli.
+   - Mevcut testler: iki testin önkoşulu değişti (bkz. Handoff), diğerleri aynen geçiyor.
 8. `tools/pacing/README.md`: tekrar testinin nasıl çalıştırılacağı.
 
 ## Handoff

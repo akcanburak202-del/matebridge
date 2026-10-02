@@ -287,7 +287,9 @@ class PacerLatencyBoundTest {
             prevSlot = d.slotNs
             if (d.lateDrop) { lateDrops++; assertTrue(d.collided) }
         }
-        assertTrue(lateDrops >= 8)
+        // T-115: frame 0 of a fresh pacer is lone (earliest slot, no lock) and frame 1 acquires the lock (replacing frame 0),
+        // so the late drops start one frame later than before: 7 of the 10.
+        assertTrue("late drops $lateDrops", lateDrops >= 7)
     }
 
     @Test fun surplusContentDropsAreNotLateDrops() {
