@@ -1,7 +1,7 @@
 ---
 id: T-114
 title: Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-110]

@@ -1,7 +1,7 @@
 ---
 id: T-096
 title: Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş)
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-089]

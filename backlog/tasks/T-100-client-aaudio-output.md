@@ -1,7 +1,7 @@
 ---
 id: T-100
 title: Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-098, T-099]

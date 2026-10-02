@@ -2,17 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
-| [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
-| [T-108](tasks/T-108-client-aaudio-underrun-crackle.md) | Tablet — Düşük gecikme (AAudio) seste oyun sırasında cızırtı; güvenli başlangıç tamponu, öğrenilen değeri hatırlama, boşalmada yumuşak geçiş | 5 | android-client-dev | [T-101] |
-| [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
-| [T-110](tasks/T-110-client-aaudio-mmap-headroom.md) | Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği | 5 | android-client-dev | [T-108] |
-| [T-114](tasks/T-114-client-aaudio-default-4-bursts.md) | Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor | 5 | android-client-dev | [T-110] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -24,7 +13,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
-| [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
 
 ## done
 
@@ -123,8 +112,11 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-093](tasks/T-093-audio-protocol-codecs.md) | Ses protokolü kod çözücüleri (Swift + Kotlin): AUDIO_PREFS / AUDIO_CONFIG / AUDIO_FRAME, HELLO bit8 AUDIO_PCM | 5 | mac-host-dev | [] |
 | [T-094](tasks/T-094-host-audio-capture.md) | Mac — sistem sesi yakalama (Core Audio process tap, mutedWhenTapped) ve kontrol bağlantısından AUDIO_FRAME gönderimi | 5 | mac-host-dev | [T-093] |
 | [T-095](tasks/T-095-client-audio-playout.md) | Tablet — ses çalma (AudioTrack düşük gecikme, titreşim tamponu, saat kayması yeniden örnekleme, A/V hizalama) | 5 | android-client-dev | [T-093] |
+| [T-096](tasks/T-096-client-auto-transport.md) | Tablet — "Otomatik" bağlantı modu (USB varsa USB, yoksa Wi-Fi; akış sırasında kablo takılınca/çekilince geçiş) | 4 | android-client-dev | [T-089] |
+| [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
 | [T-098](tasks/T-098-client-audio-silence-buffer.md) | Tablet — ses: sessizlik aralarını alt taşma saymamak, ses başlangıcında hızlı çalma, AudioTrack tamponu 1920 → 960 | 5 | android-client-dev | [T-095] |
 | [T-099](tasks/T-099-aaudio-mmap-probe.md) | Sonda — AAudio MMAP tablette var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük (NDK kurulumu dahil) | 5 | android-client-dev | [T-095] |
+| [T-100](tasks/T-100-client-aaudio-output.md) | Tablet — ses çıkışı AAudio MMAP (NDK/C++), AudioTrack'e otomatik geri dönüş | 5 | android-client-dev | [T-098, T-099] |
 | [T-101](tasks/T-101-client-audio-output-setting.md) | Tablet — panelde "Ses çıkışı" seçeneği (Düşük gecikme / Uyumlu) ve AAudio gecikme ölçümü düzeltmesi | 5 | android-client-dev | [T-100, T-096] |
 | [T-102](tasks/T-102-settings-while-streaming.md) | Taslak — bağlıyken açılabilen ayarlar paneli (akış sürerken, bağlantı paneline dönmeden) | 4 | orchestrator | [T-096, T-101] |
 | [T-103](tasks/T-103-host-relative-pointer-games.md) | Mac — göreli fare (touchpad/fare) oyunlarda görünmez duvara takılıyor; gerçek imleç konumundan başla, ham delta gönder | 5 | mac-host-dev | [T-034] |
@@ -132,9 +124,13 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-105](tasks/T-105-client-settings-side-panel.md) | Tablet — akış sırasında sağ yan ayarlar paneli (Ctrl+Shift+6, SETTINGS_OPEN), bit hızı seçimi | 4 | android-client-dev | [T-104] |
 | [T-106](tasks/T-106-host-bitrate-pref-settings-menu.md) | Mac — STREAM_PREFS.bitrate_kbps uygulaması ve menüde "Tablette ayarları aç" (SETTINGS_OPEN) | 4 | mac-host-dev | [T-104] |
 | [T-107](tasks/T-107-client-settings-button-colors.md) | Tablet — ayar panelinde seçili olmayan seçenekler beyaz kutu, yazı görünmüyor | 4 | android-client-dev | [T-105] |
+| [T-108](tasks/T-108-client-aaudio-underrun-crackle.md) | Tablet — Düşük gecikme (AAudio) seste oyun sırasında cızırtı; güvenli başlangıç tamponu, öğrenilen değeri hatırlama, boşalmada yumuşak geçiş | 5 | android-client-dev | [T-101] |
+| [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
+| [T-110](tasks/T-110-client-aaudio-mmap-headroom.md) | Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği | 5 | android-client-dev | [T-108] |
 | [T-111](tasks/T-111-host-control-bsd-socket.md) | Mac — kontrol bağlantısını (girdi, ses, kontrol mesajları) çekirdek TCP soketine taşı (T-091'in kontrol karşılığı) | 5 | mac-host-dev | [T-091, T-092] |
 | [T-112](tasks/T-112-client-flaky-frame-queue-test.md) | Tablet testi — InputHandoffTest zaman aşımı testi yük altında ara sıra kırılıyor | 5 | android-client-dev | [] |
 | [T-113](tasks/T-113-host-encode-time-gap.md) | Mac — uygulamadaki kodlama süresi (enc_ms ~9,5 ms) yalıtılmış bench'ten (~6,4 ms) neden uzun? Ölç, nedeni bul | 5 | mac-host-dev | [] |
+| [T-114](tasks/T-114-client-aaudio-default-4-bursts.md) | Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor | 5 | android-client-dev | [T-110] |
 | [T-115](tasks/T-115-client-sparse-frame-no-hold.md) | Tablet — seyrek karelerde (boşluktan sonraki ilk kare) kilit tutmasını kaldır; boşta görüntü gecikmesi bir vsync azalsın | 5 | android-client-dev | [] |
 | [T-116](tasks/T-116-host-audio-send-timing.md) | Host — ses gönderim zamanlaması ölçümü (oturum kuyruğu bekleme, yakalama→yazım, yazımlar arası en büyük aralık) | 5 | mac-host-dev | [] |
 | [T-117](tasks/T-117-client-audio-arrival-timing.md) | Tablet — ses paketi varış ölçümü (varış aralığı, tek yön gecikme, okuma başına paket) ve boşlukta video okuyucuyla karşılaştırma | 5 | android-client-dev | [] |

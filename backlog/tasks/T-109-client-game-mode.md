@@ -1,7 +1,7 @@
 ---
 id: T-109
 title: Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-105, T-107]

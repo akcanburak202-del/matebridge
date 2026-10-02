@@ -1,7 +1,7 @@
 ---
 id: T-108
 title: Tablet — Düşük gecikme (AAudio) seste oyun sırasında cızırtı; güvenli başlangıç tamponu, öğrenilen değeri hatırlama, boşalmada yumuşak geçiş
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-101]

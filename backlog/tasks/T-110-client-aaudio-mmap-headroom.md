@@ -1,7 +1,7 @@
 ---
 id: T-110
 title: Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-108]

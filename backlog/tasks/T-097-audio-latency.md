@@ -1,7 +1,7 @@
 ---
 id: T-097
 title: Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir)
-status: todo
+status: done
 phase: 5
 owner: orchestrator
 depends_on: [T-095]
@@ -25,3 +25,5 @@ Kullanıcı farkı göze batan bulmadı; acil değil.
 1. Sessizlik: tampon boşken veri gelmemesini (host IO yok) alt taşmadan ayır; güvenlik payını büyütme. Yeniden başlarken hedef seviyeyle hemen çal.
 2. `buf_frames` 1920 → 960 denemesi.
 3. AAudio MMAP sondası (NDK + karar kaydı): gerçek çıkış gecikmesi ölçümü. Kazanç ≥ 40 ms ise uygulama kartı.
+
+**Orkestratör (2026-10-02):** T-101, T-108, T-114, T-118, T-123 ve T-125 ile karşılandı; kapatıldı.
