@@ -25,6 +25,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-115](tasks/T-115-client-sparse-frame-no-hold.md) | Tablet — seyrek karelerde (boşluktan sonraki ilk kare) kilit tutmasını kaldır; boşta görüntü gecikmesi bir vsync azalsın | 5 | android-client-dev | [] |
+| [T-116](tasks/T-116-host-audio-send-timing.md) | Host — ses gönderim zamanlaması ölçümü (oturum kuyruğu bekleme, yakalama→yazım, yazımlar arası en büyük aralık) | 5 | mac-host-dev | [] |
+| [T-117](tasks/T-117-client-audio-arrival-timing.md) | Tablet — ses paketi varış ölçümü (varış aralığı, tek yön gecikme, okuma başına paket) ve boşlukta video okuyucuyla karşılaştırma | 5 | android-client-dev | [] |
 
 ## done
 
