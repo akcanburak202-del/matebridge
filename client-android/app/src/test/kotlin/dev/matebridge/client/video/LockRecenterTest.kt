@@ -58,8 +58,10 @@ class LockRecenterTest {
 
     @Test fun earlyLockIsRecentredByTheLateFrameRate() {
         // Worst phase: the first frames are lucky, the lock lands just after the ideal time and the real jitter misses it.
+        // T-115: the first frame is lone now and the lock forms on the second one; seed 0 (was 12) gives that frame the
+        // lucky timing (with seed 12 the new acquisition is not early: no late frame in the first second, nothing to re-centre).
         val clk = clock(); val p = AdaptivePacer(clk, clk.grid().periodNs)
-        val sim = Sim(p, clk.grid().periodNs, Lcg(12L), 15 * ms)
+        val sim = Sim(p, clk.grid().periodNs, Lcg(0L), 15 * ms)
         val first = Stat()
         sim.feed(60 * 10) { k, late -> if (k < 60) first.add(late) }
         println("recentre first1s late=${first.late} recenters=${p.recenters}")
