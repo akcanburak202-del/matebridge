@@ -2,6 +2,13 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
+| [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -14,8 +21,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
-| [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
-| [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
+| [T-137](tasks/T-137-files-mount-90s-delay.md) | Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme) | 5 | android-client-dev | [T-135, T-136] |
 
 ## done
 
