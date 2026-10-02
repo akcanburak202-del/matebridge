@@ -166,7 +166,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
         // Credentials go only as the user/password arguments: not in the URL, no UI, nothing saved.
         let openOptions = NSMutableDictionary()
         openOptions["UIOption"] = "NoUI"  // kNAUIOptionKey = kNAUIOptionNoUI
-        openOptions["AllowLoopback"] = true  // kNetFSAllowLoopbackKey: the server is behind localhost
+        openOptions["AllowLoopback"] = true  // kNetFSAllowLoopbackKey: the server is behind 127.0.0.1
         let mountOptions = NSMutableDictionary()
         mountOptions["SoftMount"] = true  // kNetFSSoftMountKey: a vanished tablet fails I/O instead of hanging it
         var requestID: AsyncRequestID?
@@ -200,7 +200,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
         }
     }
 
-    /// Mount points of WebDAV volumes served from `http://localhost:<localPort>/` (thread-safe `getfsstat`).
+    /// Mount points of WebDAV volumes served from `http://127.0.0.1:<localPort>/` (thread-safe `getfsstat`).
     static func mountPoints(localPort: UInt16) -> [String] {
         let count = getfsstat(nil, 0, MNT_NOWAIT)
         guard count > 0 else { return [] }

@@ -33,7 +33,7 @@ public enum TabletFilesAction: Equatable, Sendable {
     case installForward(remotePort: UInt16, generation: UInt64)
     /// `adb forward --remove tcp:<localPort>`.
     case removeForward(localPort: UInt16)
-    /// Detach every WebDAV volume mounted from `http://localhost:<localPort>/` (not forced).
+    /// Detach every WebDAV volume mounted from `http://127.0.0.1:<localPort>/` (not forced).
     case unmount(localPort: UInt16)
     /// Reveal the volume if it is already mounted, else mount it with user `matebridge` / `secret`; report the
     /// result through `mountFinished`.

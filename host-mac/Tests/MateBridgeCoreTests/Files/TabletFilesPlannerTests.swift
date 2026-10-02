@@ -196,8 +196,8 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         #expect(actions == [.mount(localPort: 47011, secret: FilesSecret(token), generation: gen)])
         #expect(p.menu == .mounting)
         #expect(p.openRequested().isEmpty)  // one mount at a time
-        #expect(p.mountFinished(generation: gen, localPort: 47011, path: "/Volumes/localhost")
-            == [.reveal(path: "/Volumes/localhost")])
+        #expect(p.mountFinished(generation: gen, localPort: 47011, path: "/Volumes/MatePad")
+            == [.reveal(path: "/Volumes/MatePad")])
         #expect(p.menu == .ready(lastMountFailed: false))
         // Already mounted: opening again goes through `mount`, which only reveals an existing volume.
         #expect(mountGen(p.openRequested()) != nil)
@@ -224,7 +224,7 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         var p = forwarded()
         let gen = mountGen(p.openRequested())!
         #expect(p.sessionEnded() == [.unmount(localPort: 47010), .removeForward(localPort: 47010)])
-        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/localhost")
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
             == [.unmount(localPort: 47010)])
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: nil).isEmpty)
     }
@@ -234,7 +234,7 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         let gen = mountGen(p.openRequested())!
         _ = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: "new"))
         #expect(p.menu == .ready(lastMountFailed: false))
-        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/localhost")
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
             == [.unmount(localPort: 47010)])
     }
 
@@ -249,18 +249,23 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
 @Suite struct WebDavMountTests {
     @Test func urlHasNoCredentials() {
         let url = WebDavMount.url(localPort: 47010)
-        #expect(url.absoluteString == "http://localhost:47010/")
+        #expect(url.absoluteString == "http://127.0.0.1:47010/MatePad/")
+        #expect(url.host == "127.0.0.1")
+        #expect(url.lastPathComponent == "MatePad")
         #expect(url.user == nil && url.password == nil)
     }
 
     @Test func recognisesOurVolumeOnly() {
-        #expect(WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://localhost:47010/", localPort: 47010))
+        #expect(WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://127.0.0.1:47010/MatePad/", localPort: 47010))
+        #expect(WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://127.0.0.1:47010/MatePad", localPort: 47010))
         #expect(WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://127.0.0.1:47010/", localPort: 47010))
-        #expect(WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://LOCALHOST:47010", localPort: 47010))
-        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://localhost:47011/", localPort: 47010))
-        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://example.com:47010/", localPort: 47010))
-        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "https://localhost:47010/", localPort: 47010))
-        #expect(!WebDavMount.isOurs(fsType: "smbfs", mountedFrom: "http://localhost:47010/", localPort: 47010))
+        #expect(WebDavMount.isOurs(fsType: "webdav",
+                                   mountedFrom: WebDavMount.url(localPort: 47012).absoluteString, localPort: 47012))
+        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://localhost:47010/MatePad/", localPort: 47010))
+        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://127.0.0.1:47011/MatePad/", localPort: 47010))
+        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "http://example.com:47010/MatePad/", localPort: 47010))
+        #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "https://127.0.0.1:47010/MatePad/", localPort: 47010))
+        #expect(!WebDavMount.isOurs(fsType: "smbfs", mountedFrom: "http://127.0.0.1:47010/MatePad/", localPort: 47010))
         #expect(!WebDavMount.isOurs(fsType: "webdav", mountedFrom: "", localPort: 47010))
     }
 }
