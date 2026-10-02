@@ -1,7 +1,7 @@
 ---
 id: T-120
 title: Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır
-status: todo
+status: in_progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-117]
@@ -48,7 +48,26 @@ Bu kart (a)'yı ölçer. Davranışı değiştirmez.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Saf sınıf `diag/StallMeter.kt`** (JVM birim testli, tik yolunda ayırma yok, `synchronized`):
+   - Saatler: tekdüze saat = `System.nanoTime()` (Android'de `CLOCK_MONOTONIC` = uptime; askıda ilerlemez, T-117'nin `readNs`'iyle aynı saat). `minSdk 29`'da `SystemClock.uptimeNanos()` yok (API 35). Gerçek saat = `SystemClock.elapsedRealtimeNanos()` (`CLOCK_BOOTTIME`, askıda ilerler). Fark (`realtime − uptime`) yalnız askıda artar.
+   - `start(nowNs, realtimeNs)`, `stop()`, `nextDeadlineNs()`.
+   - `onTick(nowNs, realtimeNs)`: gecikme = now − beklenen uyanma. Pencereye işlenir (`tick_late_max`, `stalls` > 30 ms, `ticks`). Askı farkı tik başına alınır. Sonraki uyanma beklenen + 5 ms; gecikme 5 ms'yi aştıysa now + 5 ms (kaçan tikler toplanmaz). Gecikme > 50 ms ise `true` döner (saniyede en çok 5; ayrıntı yeniden kullanılan `Stall` nesnesinde, `suppressed` sayacı ile).
+   - Son 256 tikin halkası: (uyanma anı, gecikme). 200 Hz'de ≥ 1,28 s; T-117 boşlukları ≤ 1 s.
+   - `maxLateUs(fromNs, toNs, nowNs)`: [from, to] penceresiyle örtüşen tiklerin en büyük gecikmesi. Bir tikin "durmuş" aralığı [uyanma − gecikme, uyanma]. Henüz uyanmamış ama gecikmiş tik de sayılır (now − beklenen): süreç birlikte uyandıysa okuyucu tik iş parçacığından önce loglayabilir. Dedektör kapalıysa ya da kapsam yoksa `NONE` (`-`).
+   - `takeWindow(out)`: saniyelik pencere. `suspend_ms` = penceredeki fark değişimi.
+2. **`diag/StallDetector.kt`** (Android):
+   - `start()`/`stop()` idempotent. İş parçacığı `mb-stall`, daemon.
+   - Öncelik: `THREAD_PRIORITY_URGENT_AUDIO`; reddedilirse `THREAD_PRIORITY_AUDIO`. Elde edilen değer `ev=stall_detector_start prio=` satırına yazılır.
+   - Döngü: `LockSupport.parkNanos` ile beklenen uyanmaya kadar (erken dönüşte tekrar). Sonra `nanoTime` + `elapsedRealtimeNanos` → `meter.onTick`.
+   - Saniyede bir `I diag ev=stall_stats ticks= tick_late_max_ms= stalls= suspend_ms= cpu_freq_khz=` satırı. `cpu_freq_khz` = `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` en büyüğü. Okunamazsa `-` ve bir daha denenmez. Dosya listesi başlangıçta bir kez çıkarılır.
+   - Donma > 50 ms: `I diag ev=stall dur_ms= suspend_ms= ctl_idle_ms= video_idle_ms= suppressed=`. `*_idle_ms` = tespit anı − kontrol/video okuyucunun son `read()` dönüşü (T-117 alanları).
+   - Dizgi işi yalnız saniyelik satırda ve donma satırında.
+3. **`SessionController`**:
+   - `@Volatile lastControlReadNs` (güncel bağlantı, veri dolu `read()`).
+   - Dedektör `OpenControl`/`PromoteCandidate`'de başlar; `CloseControl`'de ve motor kapanışında durur. Yani yalnız kontrol bağlantısı varken çalışır.
+   - `audio_arrival_gap` satırına `tick_late_ms=` eklenir = `meter.maxLateUs(readNs − gap, readNs, now)`.
+4. **Maliyet tahmini:** 200 uyanma/s × ~10–20 µs (park + iki saat okuması + kısa kilit) ≈ tek çekirdeğin %0,2–0,4'ü. Bir de saniyede bir sysfs okuması ve log satırı. Tik yolunda ayırma yok. Yayın sırasında CPU zaten 60–120 Hz video ile uyanık; ek enerji etkisi küçük beklenir.
+5. Testler: `client-android/app/src/test/kotlin/dev/matebridge/client/diag/StallMeterTest.kt` (sahte saat).
 
 ## Handoff
 
