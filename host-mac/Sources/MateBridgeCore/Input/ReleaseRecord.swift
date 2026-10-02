@@ -12,6 +12,7 @@ extension ReleaseCause {
         case .timeout: "timeout"
         case .superseded: "superseded"
         case .shutdown: "shutdown"
+        case .hostSleep: "host_sleep"
         case .gateLost: "gate_lost"
         }
     }

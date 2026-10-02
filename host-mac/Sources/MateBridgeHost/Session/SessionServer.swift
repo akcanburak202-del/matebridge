@@ -253,6 +253,14 @@ public final class SessionServer: @unchecked Sendable {
     /// Control connections whose pair-key lookup is in flight; read from the Keychain queue to skip stale jobs.
     private let liveLookups = LockedSet<ConnectionID>()
     private var tickTimer: DispatchSourceTimer?
+    /// T-132: system sleep ends every session with BYE(HOST_SLEEP) before the sleep is acknowledged. This is the
+    /// server's own `IORegisterForSystemPower` registration (`StreamCoordinator` has one for its display-wake gate);
+    /// each acknowledges its own notification. Guarded by `powerLock`.
+    private let powerLock = NSLock()
+    private var powerObserver: SystemPowerObserver?
+    /// Session queue: start of the running host-sleep sequence (`HostSleep` budget), nil otherwise. Shortens the
+    /// linger of control connections closed by it, so their close happens before the sleep is acknowledged.
+    private var hostSleepStartUs: UInt64?
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
     /// Control connection of the active session (audio goes here).
@@ -409,6 +417,7 @@ public final class SessionServer: @unchecked Sendable {
     // MARK: Lifecycle
 
     public func start() {
+        startPowerObserver()
         queue.async { [self] in
             guard tickTimer == nil else { return }
             applyIdentity()
@@ -419,6 +428,71 @@ public final class SessionServer: @unchecked Sendable {
             startListeners()
             startTicking()
         }
+    }
+
+    // MARK: System sleep (T-132)
+
+    private func startPowerObserver() {
+        powerLock.withLock {
+            guard powerObserver == nil else { return }
+            let observer = SystemPowerObserver { [weak self] event in self?.onPower(event) }
+            if observer.start() {
+                powerObserver = observer
+            } else {
+                logger.log(.warning, "power_observer_failed", sessionID: 0, generation: 0)
+            }
+        }
+    }
+
+    private func stopPowerObserver() {
+        let observer: SystemPowerObserver? = powerLock.withLock {
+            defer { powerObserver = nil }
+            return powerObserver
+        }
+        observer?.stop()
+    }
+
+    /// Power observer queue, before `IOAllowPowerChange`. On `will_sleep` every session ends with BYE(HOST_SLEEP)
+    /// (release-all, BYE, both connections closed; the audio stops through `sessionEnded`), PROTOCOL.md section 4.
+    /// Waits at most `HostSleep.budgetUs` in total for the session queue and the flush, then returns either way: the
+    /// sleep is never delayed beyond that or vetoed. `can_sleep` does nothing (an idle sleep may still be cancelled).
+    private func onPower(_ event: PowerEvent) {
+        guard HostSleep.endsSessions(event) else { return }
+        let start = nowUs()
+        let ran = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            defer { ran.signal() }
+            guard !stopped else { return }
+            logger.log(.info, "host_sleep", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "control=\(controlConnections.count) video=\(videoConnections.count) wall_ms=\(Self.wallMs())")
+            hostSleepStartUs = start
+            apply(machine.hostSleep())
+            hostSleepStartUs = nil
+        }
+        let ranInTime = ran.wait(timeout: Self.dispatchDeadline(HostSleep.remainingUs(startUs: start, nowUs: nowUs())))
+            == .success
+        // Every closed control connection leaves `flushGroup` once its BYE is out and the socket closed (or its
+        // shortened linger ran out).
+        let flushed = ranInTime
+            && flushGroup.wait(timeout: Self.dispatchDeadline(HostSleep.remainingUs(startUs: start, nowUs: nowUs())))
+            == .success
+        let waitedMs = (nowUs() - start) / 1_000
+        logger.log(ranInTime && flushed ? .info : .warning, "host_sleep_ack", sessionID: 0, generation: 0,
+                   fields: "waited_ms=\(waitedMs) queue=\(ranInTime ? "ran" : "late") flushed=\(flushed)")
+    }
+
+    private static func dispatchDeadline(_ us: UInt64) -> DispatchTime {
+        .now() + .microseconds(Int(min(us, UInt64(Int.max))))
+    }
+
+    private static func wallMs() -> UInt64 { UInt64(max(0, Date().timeIntervalSince1970) * 1_000) }
+
+    /// How long a closed control connection may linger to flush its last records: `controlFlushTimeout`, or what is
+    /// left of the host-sleep budget while a sleep sequence closes it.
+    private var controlLinger: DispatchTimeInterval {
+        guard let start = hostSleepStartUs else { return Self.controlFlushTimeout }
+        let us = HostSleep.lingerUs(startUs: start, nowUs: nowUs())
+        return .microseconds(Int(min(us, UInt64(Int.max))))
     }
 
     // MARK: TXT wol (T-128)
@@ -606,6 +680,8 @@ public final class SessionServer: @unchecked Sendable {
     /// inline and does not wait for the BYE flush (nothing could complete while blocked on the queue).
     public func stop() {
         let onQueue = DispatchQueue.getSpecific(key: queueKey) == true
+        // Before the session queue work: a sleep notification in flight waits for that queue (bounded, see `onPower`).
+        stopPowerObserver()
         let body = { [self] in
             stopped = true
             apply(machine.shutdown())
@@ -1255,7 +1331,7 @@ public final class SessionServer: @unchecked Sendable {
                        flushGroup.leave()
                    })
         case .socket(let c):
-            c.finish(timeout: Self.controlFlushTimeout) { [flushGroup] in flushGroup.leave() }
+            c.finish(timeout: controlLinger) { [flushGroup] in flushGroup.leave() }
         }
     }
 
