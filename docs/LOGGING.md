@@ -135,7 +135,7 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
 
 ## Süreç donma dedektörü (tablet, `MB/diag`, T-120)
 
-Yalnız ölçüm. `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanır.
+Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true` açılış parametresiyle çalışır. Açılışta her zaman bir kez `diag ev=stall_diag enabled=0|1`. Açıkken `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanır. Kapalıyken `stall_*` satırı yazılmaz, ses boşluğu satırında `tick_late_ms=-`.
 
 - `ev=stall_detector_start prio= period_ms=5 cpu_freq_files=`: `prio` iş parçacığının elde ettiği öncelik (-19 URGENT_AUDIO, -16 AUDIO). `cpu_freq_files` okunabilen `scaling_cur_freq` dosya sayısı. Kapanışta `ev=stall_detector_stop`.
 - `ev=stall_stats ticks= tick_late_max_ms= stalls= suspend_ms= cpu_freq_khz=` (saniyede bir):

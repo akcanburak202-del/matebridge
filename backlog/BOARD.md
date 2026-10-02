@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-142](tasks/T-142-stall-detector-opt-in.md) | Ses takılma dedektörünü (mb-stall) açılış parametresine bağla, varsayılan kapalı | 5 | android-client-dev | [T-120, T-141] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
