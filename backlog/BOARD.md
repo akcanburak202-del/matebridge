@@ -25,6 +25,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
+| [T-118](tasks/T-118-client-audio-safety-balanced.md) | Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt) | 5 | android-client-dev | [T-117] |
 
 ## done
 
