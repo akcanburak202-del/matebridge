@@ -1,7 +1,7 @@
 ---
 id: T-122
 title: Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla
-status: in-progress
+status: blocked
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -60,8 +60,40 @@ Bir IDR zaten kodlanmış ya da gönderilmekteyken gelen yeni istek, istemcinin 
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** `aca06d3` (uygulama); plan `08bd8d4`, `672f250`. Branch `task/T-122-host-keyframe-request-coalesce`.
 - **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Video/KeyframeRequestCoalescer.swift` (yeni): birleştirme kuralları + IDR pencere sayaçları.
+  - `host-mac/Sources/MateBridgeCore/Video/VideoFrameQueue.swift`: kilit altında `keyframesPushed` sayacı, `resyncCountingKeyframes(config:)` (eski `resync(config:) -> Bool` buna sarmalayıcı).
+  - `host-mac/Sources/MateBridgeCore/Video/LatencyTrace.swift`: `FrameTrace.isKeyframe`, `FrameTrace.bytes`.
+  - `host-mac/Sources/MateBridgeCore/Video/VideoSender.swift`: bu iki alanı yazım başında doldurur.
+  - `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift`:
+    - `handleKeyframeRequest(reason:) -> Decision`; `requestKeyframe(reason:) -> Bool` artık birleştiriciden geçer.
+    - `requestKeyframe()`, kuyruk taşması ve `prepareForNewConsumer` iç zorlama olarak kaydedilir.
+    - `recordTrace` keyframe yazımlarını bildirir; `takeKeyframeWindow()` eklendi.
+  - `host-mac/Tests/MateBridgeCoreTests/Video/KeyframeRequestCoalescerTests.swift` (yeni, 15 test), `IntegrationTests.swift` (trace alanları).
+  - `docs/LOGGING.md`.
 - **Varsayımlar:**
+  - Pencere 250 ms, pending zaman aşımı 1 s (gerekçe Plan'da).
+  - "Yazıldı" = gönderici trace tamamlanması (transport yazımı işledi, yani çekirdeğe verildi). İstemcinin aldığı an değil.
+  - `StreamCoordinator` her zaman `trace` kapanışı veriyor. Vermezse yazımlar görülmez; birleştirme yalnız pending zaman aşımıyla çalışır.
+  - STARTUP/DECODE_ERROR: yazılmış ya da kuyruktaki IDR yeniden kullanılmaz. Yalnız hâlâ kodlayıcıdaki IDR kullanılır (gerekçe Plan'da).
+- **Davranış şimdiden etkin:** mevcut `StreamCoordinator` `requestKeyframe(reason:)` çağırıyor, o da birleştiriciden geçiyor. Eksik olan yalnız log biçimi (aşağıda).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Fırtına anında host logunda istek başına `action=coalesced`. Saniyede `idr` 1 (en çok 2) olmalı; `sent_kbps` sıçraması ve ses gecikmesi kaybolmalı.
+  - Mid-stream STARTUP sonrası görüntü bozulmadan devam etmeli (config + IDR sırası). Özellikle `idr_forced=0` yolu: IDR kodlayıcıdayken gelen STARTUP.
+  - Yeni bağlantıda (ilk STARTUP) tek IDR gitmeli (`prepareForNewConsumer` IDR'si kodlayıcıdaysa ikinci zorlanmaz).
+  - Wi-Fi'de büyük IDR yazımı > 1 s sürerse pending zaman aşımı sonrası bir istek yeniden zorlar. Beklenen, nadir.
 - **Açık sorular:**
+  1. **Kapsam (engelleyici):** kabul kriterindeki iki log satırı (`ev=keyframe_request … action=` ve `net ev=stats … idr= idr_bytes_max=`) `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`'te üretiliyor. Bu dosya `files:` listesinde yok; listedeki `SessionServer.swift`'te ilgili kod yok. Dosyaya dokunmadım. Önerilen yama (derlendi, uygulanmadı):
+     ```swift
+     // handle(.keyframeRequest): eski iki log satırı yerine
+     if let decision = pipeline?.handleKeyframeRequest(reason: reason) {
+         log(.info, "keyframe_request", "reason=\(reason.rawValue) \(decision.logFields)")
+     } else {
+         log(.info, "keyframe_request", "reason=\(reason.rawValue) action=no_pipeline")
+     }
+     // onStats: log(.info, "stats", fields) satırından hemen önce
+     if let pipeline { fields += " " + pipeline.takeKeyframeWindow().logFields }
+     ```
+     `docs/LOGGING.md` bu yamadan sonraki biçimi anlatıyor. Onay gelirse uygularım.
+  2. Kuyruktaki IDR'yi resync'te tutmak (config öne, IDR + arkası korunur) bir IDR daha kazandırır. Ancak 2 karelik sınırla etkileşiyor (config + IDR + delta = 3 → sonraki itmede delta atılır, iç istek doğar). Config'in kapasiteye sayılmaması gibi ayrı bir karar gerekir.
