@@ -111,7 +111,7 @@ class InputHandoffTest {
 
     @Test fun queueRulesAreUnchangedThroughAwaitNext() {
         val s = VideoStats()
-        val q = FrameQueue(s)
+        val q = FrameQueue(s, maxPending = 2) // overflow rule at the pre-T-121 depth
         q.offer(frame(0)) // gate closed: dropped
         q.offer(frame(1, VideoFrame.CODEC_CONFIG))
         q.offer(frame(2, VideoFrame.KEYFRAME))

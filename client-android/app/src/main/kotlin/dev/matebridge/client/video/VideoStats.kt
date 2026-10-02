@@ -95,6 +95,10 @@ class VideoStats {
         if (captureTimes.size > 64) captureTimes.remove(captureTimes.keys.min())
     }
 
+    /** Decode latency of the latest timed output (us), or -1 before the first; for the T-121 overflow line. */
+    @Volatile var lastDecodeUs = -1L
+        private set
+
     /** Decoder produced an output for [ptsUs]. */
     @Synchronized fun onOutput(ptsUs: Long, nowUs: Long) {
         decoded++
@@ -103,6 +107,7 @@ class VideoStats {
             val d = (nowUs - it).coerceAtLeast(0)
             decodeSumUs += d; decodeCount++
             decodeLat.record(d)
+            lastDecodeUs = d
         }
         captureTimes.remove(ptsUs)?.let { cap ->
             latencyOf?.invoke(cap)?.let { latencySumUs += it; latencyCount++ }

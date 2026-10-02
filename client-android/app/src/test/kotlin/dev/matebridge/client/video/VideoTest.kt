@@ -16,9 +16,10 @@ class FrameQueueTest {
     private val cfg = VideoFrame.CODEC_CONFIG
     private val key = VideoFrame.KEYFRAME
 
+    /** Depth 2 (pre-T-121) keeps these rule tests short; the T-121 depth is covered in FrameQueueBurstTest. */
     private fun newQueue(): Pair<FrameQueue, VideoStats> {
         val s = VideoStats()
-        return FrameQueue(s) to s
+        return FrameQueue(s, maxPending = 2) to s
     }
 
     @Test fun pFramesBeforeKeyframeAreNotDelivered() {
