@@ -996,7 +996,8 @@ T-123, T-124, T-125, T-126 done.
 - Çalışan sürümler: host `build/MateBridge.app` varsayılan ayarlarla (`service_class=signaling`, `tcp_log=auto`); tablet APK 12:49 (T-125).
 - Tablette log kaydı açık: `/data/local/tmp/mb.log*` (8 × 4 MB). `adb exec-out cat` ile alınır; gerekmezse `pkill logcat` ile durdurulur.
 - Kullanıcıyla anlaşılan sıradaki konular (yeni oturumda önce konuşulacak):
-  1. Tablet ses düzeyi: yan tuşlar ve klavye ses tuşları tablet hoparlörünü yerelde ayarlasın, Mac'e gitmesin, sistem göstergesi çıksın. Bugün MateBridge bu tuşları yutuyor.
+  1. ~~Tablet ses düzeyi~~: kullanıcı yan tuşların zaten tablet sesini ayarladığını gördü, klavye kısayolu istenmiyor. Yerine: Mac ses düzeyi tap'e giden sesi etkiliyor mu, müzik çalarken `rms_dbfs` ile doğrula.
+  1b. Kullanıcıya kısayollar anlatıldı: Ctrl+Shift+1–5 Mac'in Cmd+Shift kısayolları (Ctrl → Cmd, karar 0008); tablet yerel kısayolları Ctrl+Shift+6/7/8/9/0/Esc. Bir "kısayollar" yardım ekranı ya da README bölümü düşünülebilir.
   2. Mac uyku/kilit/uyanma sonrası toparlanma (PLAN Aşama 4 açık maddesi). Önce kullanıcıyla 5 dakikalık ölçüm.
   3. Uygulama ikonları (Android + Mac uygulama/menü çubuğu). Önce 2–3 taslak gösterilir, kullanıcı seçer.
   4. Temizlik: `.claude/worktrees` altındaki ~70 birleşmiş ajan kopyası silinecek.
