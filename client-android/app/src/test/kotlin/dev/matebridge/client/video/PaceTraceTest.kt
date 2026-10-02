@@ -110,7 +110,7 @@ class PaceTraceTest {
 
     @Test fun frameQueueStampsItsFates() {
         val t = PaceTrace(16)
-        val q = FrameQueue(VideoStats()).also { it.trace = t }
+        val q = FrameQueue(VideoStats(), maxPending = 2).also { it.trace = t } // overflow fates at the pre-T-121 depth
         fun f(seq: Long, flags: Int) = dev.matebridge.client.protocol.VideoFrame(
             seq, seq * 10, flags, 0, 1, 1, dev.matebridge.client.protocol.Bytes(ByteArray(1)))
         for (s in 1L..5L) t.onRecv(s, s * 10, 1, 0, 0)

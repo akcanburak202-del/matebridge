@@ -1221,7 +1221,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun run() {
             val r = renderer
             if (r != null && r.attached) {
-                if (r.isWaitingKeyframe()) controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP))
+                // T-121: the retry goes through the queue's request limit (no retry right after another request).
+                if (r.takeKeyframeRetry()) controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP))
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastStatsMs >= 1000) statsTick(r, now)
             }
@@ -1259,7 +1260,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.i(
             "stats",
             "interval_ms=$interval recv=${s.received} dec=${s.decoded} shown=${s.rendered} drop=${s.dropped} " +
-                "decode_avg_us=${s.decodeTimeAvgUs} bytes=${s.bytesReceived}",
+                "decode_avg_us=${s.decodeTimeAvgUs} bytes=${s.bytesReceived} ${r.queueStatsFields(reset = true)}",
             "decoder",
         )
         MbLog.i(

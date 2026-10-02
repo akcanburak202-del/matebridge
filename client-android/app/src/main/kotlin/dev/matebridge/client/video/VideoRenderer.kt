@@ -159,7 +159,21 @@ class VideoRenderer(
             "render",
         )
     }
-    private val queue = FrameQueue(stats)
+    private val queue = FrameQueue(stats, FrameQueue.depthForFps(initialConfig.fps))
+
+    init {
+        // T-121: root-cause line for every overflow and a line per keyframe request (both rare: the gate and the
+        // request limit bound them).
+        queue.onOverflow = { o ->
+            Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=queue_overflow pending=${o.pending} limit=${o.limit} " +
+                "in_codec=${gauge.current()} decode_last_us=${stats.lastDecodeUs} since_kf=${o.sinceKeyframe} " +
+                "gaps_us=${if (o.gapsUs.isEmpty()) "-" else o.gapsUs.joinToString(",")} " +
+                "req=${if (o.requested) "sent" else "held"} since_req_ms=${o.sinceRequestMs}")
+        }
+        queue.onRequest = { reason, source ->
+            Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=kf_request reason=$reason src=${source.logName}")
+        }
+    }
 
     private class Attachment(val surface: Surface, val previous: Thread?) {
         @Volatile var active = true
@@ -177,7 +191,24 @@ class VideoRenderer(
     @Volatile var attached = false
         private set
 
+    /**
+     * T-121: true when a periodic keyframe retry is due (gate closed and no request for [FrameQueue.HOLDOFF_MS]);
+     * the caller must then send one, which this counts as sent. Keeps the retry from following an overflow request.
+     */
+    fun takeKeyframeRetry(): Boolean = queue.takeRetry()
+
+    /** True while non-keyframes are refused until a keyframe arrives (pure query). */
     fun isWaitingKeyframe() = queue.isWaitingKeyframe()
+
+    /**
+     * T-121 queue fields for the `MB/decoder ev=stats` line (`kf_req= kf_held= overflows= max_pending= limit=`);
+     * with [reset] a new window starts.
+     */
+    fun queueStatsFields(reset: Boolean = true): String {
+        val q = queue.counters(reset)
+        return "kf_req=${q.kfRequests} kf_held=${q.kfHeld} overflows=${q.overflows} max_pending=${q.maxPending} " +
+            "limit=${queue.maxPending}"
+    }
 
     override fun onFrame(frame: VideoFrame) {
         queue.offer(frame)?.let(onKeyframeRequest)
@@ -201,6 +232,7 @@ class VideoRenderer(
      */
     fun reconfigure(newConfig: StreamConfig) {
         config = newConfig
+        queue.maxPending = FrameQueue.depthForFps(newConfig.fps)
         val surface = current?.surface
         retire(wait = false)
         val reason = queue.reset(KeyframeRequest.STARTUP, keepConfig = false)
