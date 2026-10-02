@@ -818,3 +818,36 @@ Uygulamanın 9,4–9,8 ms'si RETAG=0 bench'iyle örtüşüyor.
 **Beklenen kazanç:** kare başına `enc` ve `cap_to_sent` p50 ~2,5–3 ms azalır. Renkler Mac'e daha sadık olur: tablet görüntüsü bir tık koyulaşır, yani doğru değere iner.
 
 **Kalan fark:** düşük kare hızında (2–30 fps) kodlama daha yavaş: 2 fps'te 10,5 ms, 30 fps'te 7,4 ms, 120 fps'te 6,0 ms. Bunun nedeni muhtemelen kodlayıcının güç/frekans durumu. Ucuz bir düğmesi bulunmadı, ayrı kart gerektirmez.
+
+## 2026-10-02 ~09:20 — Gecikme dökümü: görüntü ve ses (araştırma, kod değişmedi)
+
+Canlı oturum (USB, panel 60 Hz, boşta masaüstü ~10 fps): `latency_us` ~18,9 ms, `video_ms` 51, `audio_ms` 70, `safety_ms` 31–32 (hatırlanan).
+
+**Önceki oturumdan (T-114 sırasında, NOTES'a girmemişti):** oturum başına ~11 ses paketi 25–40 ms geç varıyor; host düzenli gönderiyor (`ring_ms_max=10`, 100 paket/s, `wire_dropped=0`). Her doğrulanmış alt taşma güvenlik payını +5 ms büyütüyor (tavan 40), değer `matebridge_audio` tercihlerinde saklanıyor.
+
+**Görüntü (`video_ms` = `latency_us` + `pace_add` + 1 periyot, `AvSync.kt`):**
+
+| aşama (60 Hz boşta) | ms |
+|---|---|
+| içerik → SCK teslimi | ~4 (tahmin) |
+| SCK teslimi → sokete yazıldı (`cap_to_sent`) | 7,0 (ölçüm; enc 6,6) |
+| USB + alım + şifre çözme | ~2,3 (türetilmiş) |
+| çözme `dec_p50` | 12,8 (ölçüm; düşük fps'te DVFS etkisi, sürekli akışta 8,7–9,4) |
+| çıkış → en erken slot (6 ms son an + vsync bekleme) | ~14 (türetilmiş) |
+| kilit tutması `pace_add` | **16,7** (ölçüm; `d_us=16666`, tavanda) |
+| tarama + OLED | ~9 (tahmin) |
+| **toplam (ekran ortası)** | **~66–70** |
+
+- Seyrek karelerde (yazı, imleç, hareketin ilk karesi) kilit her seferinde yeniden ediniliyor (`minimum = ideal + D`) ve D tavanda (bir periyot), çünkü boşluktan sonraki "soğuk" kareler 256 örneklik jitter geçmişini şişiriyor. Yani boşta her kareye **bilerek bir tam vsync** ekleniyor, akıcılığa katkısı yok.
+- 120 Hz sürekli çizim ~38–40 ms, oyun modu (jitter 0, %66) ~28–32 ms (tahmin).
+- Elenmiş kaldıraçlar tekrar önerilmedi: dilim kodlama, SurfaceControl, faz hizalama, H.264, yüksek bit hızı, son an/lead taraması, RealTime/LLRC, `setFrameRate` ile 120 Hz zorlama.
+
+**Ses:**
+- Host gönderimi düzenli. AUDIO_FRAME, kontrol bağlantısında ortak `dev.matebridge.session` kuyruğundan mühürlenip yazılıyor; aynı kuyruk gelen girdiyi de işliyor (`InputController.deliver` içinde `queue.sync`), bu bekleme ölçülmüyor.
+- Tablet: kontrol okuyucu tek iş parçacığı, QUICKACK kontrol bağlantısında da açık, tablet tarafında Nagle yok.
+- Boşluklar host yazımı ile tablet jitter tamponu arasında oluşuyor. `level_ms_floor` düşüşleri video fps=0 iken de görüldü → yalnız anahtar kare kuyruğu (USB 2.0, 480 Mb/s) açıklamıyor.
+- Güvenlik payı yavaş küçülüyor: yalnız ses çalarken her 60 temiz pencerede −1 ms (40 → 20 ≈ 20 dk sürekli ses). Aralıklı masaüstü sesinde pratikte küçülmüyor → saklanan değer eski kötü oturumdan kalabiliyor.
+- Alt taşmadan sonra yeniden dolum hedefi + son pencere aralığı; canlı logda seviye 75 ms'ye, `audio_ms` 113'e çıktı, PI denetleyici (en çok 5 ms/s) >10 s'de geri getirdi.
+- Taban hesabı, güvenlik 20 ms'de bile: paketleme ~5 + zamanlayıcı ~2,5 + aktarım ~3 + seviye ~25–28 + AAudio tamponu 20 + cihaz ~4 ≈ **58 ms**.
+
+**Ölçülmeyen:** paket başına varış aralığı ve tek yön gecikme (alan var: `capture_time_us` + `ClockSync`, log yok); host oturum kuyruğu gecikmesi.
