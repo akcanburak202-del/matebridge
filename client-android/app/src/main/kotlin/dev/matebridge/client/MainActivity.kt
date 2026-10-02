@@ -442,8 +442,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onClipboard(msg: Clipboard, gen: Int) { if (::clipboard.isInitialized) clipboard.postRemote(msg, gen) }
 
             // T-095: audio is armed per control connection; stale readers' messages are dropped by generation.
-            override fun onConnectionGen(gen: Int) {
-                audio?.beginSession(gen)
+            override fun onConnectionGen(gen: Int, transport: Transport) {
+                audio?.beginSession(gen, transport) // T-123: safety per transport
                 // The host holds no input state for a new connection (a takeover released the old one). Model reset and
                 // the new send target change together, so nothing from the old model can reach the new connection.
                 runOnUiThread {

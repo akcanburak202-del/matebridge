@@ -69,8 +69,9 @@ interface SessionListener {
     /**
      * Right after [onSessionStart], with the new control connection's generation (engine thread). T-095: audio is
      * armed for exactly this generation; [onAudio] carries the generation of the reader that delivered it.
+     * T-123: [transport] is the connection's (its endpoint's) transport; audio safety is remembered per transport.
      */
-    fun onConnectionGen(gen: Int) {}
+    fun onConnectionGen(gen: Int, transport: Transport) {}
 
     /** The control connection was closed (engine thread; before any later [onSessionStart]). T-095: audio stops here. */
     fun onSessionEnd() {}
@@ -392,7 +393,7 @@ class SessionController(
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 listener.onSessionStart()
                 resetArrival()
-                listener.onConnectionGen(a.gen)
+                listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
                 stallDetector.start()
@@ -482,7 +483,7 @@ class SessionController(
                 MbLog.i("migrate_switch", "host=${a.endpoint.host} port=${a.endpoint.port} transport=${ConnectMode.transportOf(a.endpoint).logName}")
                 listener.onSessionStart()
                 resetArrival()
-                listener.onConnectionGen(a.gen)
+                listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control = c
                 stallDetector.start() // normally still running (a retire does not stop it)
             }
