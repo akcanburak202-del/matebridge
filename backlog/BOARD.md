@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-144](tasks/T-144-drawing-mode.md) | "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi | 5 | android-client-dev | [T-143] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
