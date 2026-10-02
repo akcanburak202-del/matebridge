@@ -12,8 +12,6 @@ data class DavEntry(
     val collection: Boolean,
     val length: Long,
     val modifiedMs: Long,
-    /** Free and used bytes of the volume (quota properties, macOS uses them for the free-space display), or null. */
-    val quota: Pair<Long, Long>? = null,
 )
 
 /** XML bodies and header values of the WebDAV server (RFC 4918). Pure Kotlin. */
@@ -26,7 +24,15 @@ object DavXml {
         "<D:supportedlock><D:lockentry><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype>" +
             "</D:lockentry></D:supportedlock>"
 
-    /** One `<D:response>` with every property Finder reads. */
+    /**
+     * One `<D:response>` with every property Finder reads.
+     *
+     * Never the RFC 4331 quota properties (`quota-available-bytes` / `quota-used-bytes`), T-137: when the pre-mount
+     * PROPFIND reports them, macOS webdavfs keeps `WEBDAV_MOUNT_SUPPORTS_STATFS`, and the kernel's first statfs during
+     * `mount(2)` asks webdavfs_agent (`WEBDAV_STATFS`), which does not answer while it is itself inside `mount(2)`: the
+     * kernel waits 9 x 10 s and every mount takes 90 s. Without them the volume reports no sizes
+     * (`VOL_CAP_FMT_NO_VOLUME_SIZES`, as with Apache mod_dav) and mounts in well under a second.
+     */
     fun response(e: DavEntry): String {
         val sb = StringBuilder(640)
         sb.append("<D:response><D:href>").append(escape(e.href)).append("</D:href><D:propstat><D:prop>")
@@ -42,10 +48,6 @@ object DavXml {
         sb.append("<D:creationdate>").append(isoDate(e.modifiedMs)).append("</D:creationdate>")
         sb.append("<D:getetag>").append(escape(etag(e.length, e.modifiedMs))).append("</D:getetag>")
         sb.append(SUPPORTED_LOCK).append("<D:lockdiscovery/>")
-        e.quota?.let { (free, used) ->
-            sb.append("<D:quota-available-bytes>").append(free).append("</D:quota-available-bytes>")
-            sb.append("<D:quota-used-bytes>").append(used).append("</D:quota-used-bytes>")
-        }
         sb.append("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>\n")
         return sb.toString()
     }

@@ -127,7 +127,7 @@ class DavHandler(
         val mtime = root.lastModified()
         val entries = ArrayList<DavEntry>(2)
         entries += DavEntry("/", "MateBridge", true, 0, mtime)
-        if (depth == "1") entries += DavEntry("/$MOUNT/", MOUNT, true, 0, mtime, quota())
+        if (depth == "1") entries += DavEntry("/$MOUNT/", MOUNT, true, 0, mtime)
         ex.bytes(207, DavXml.CONTENT_TYPE, DavXml.multistatus(entries).toByteArray(Charsets.UTF_8))
     }
 
@@ -147,8 +147,7 @@ class DavHandler(
             collection = collection,
             length = if (collection) 0 else f.length(),
             modifiedMs = f.lastModified(),
-            quota = if (collection) quota() else null,
-        )
+        ) // no quota properties: they make every macOS mount wait 90 s (T-137, see DavXml.response)
         val children = if (collection && depth == "1") (f.listFiles() ?: emptyArray()) else emptyArray()
         ex.start(207, listOf("Content-Type" to DavXml.CONTENT_TYPE), null)
         val sink = ex.bodySink()
@@ -174,13 +173,6 @@ class DavHandler(
         w.write(DavXml.MULTISTATUS_CLOSE)
         w.flush()
         ex.finishBody()
-    }
-
-    private fun quota(): Pair<Long, Long> = try {
-        val free = root.usableSpace
-        Pair(free, (root.totalSpace - root.freeSpace).coerceAtLeast(0))
-    } catch (e: SecurityException) {
-        Pair(0L, 0L)
     }
 
     private fun insideCanonical(f: File): Boolean = try {
