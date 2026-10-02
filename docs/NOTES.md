@@ -989,3 +989,15 @@ Wi-Fi, 5 dk; Krita pinch, uygulama değiştirme, Apple Music ön/arka plan.
 - Wi-Fi ses payını ~100 ms'ye çıkarmak (gecikme bedeli).
 
 T-123, T-124, T-125, T-126 done.
+
+## 2026-10-02 ~13:35 — Oturum sonu devir notu
+
+- Durum: T-115..T-126 bitti, main = origin/main. Board'da inceleme bekleyen kart yok; T-127 (Wi-Fi video patlamaları) "ileride".
+- Çalışan sürümler: host `build/MateBridge.app` varsayılan ayarlarla (`service_class=signaling`, `tcp_log=auto`); tablet APK 12:49 (T-125).
+- Tablette log kaydı açık: `/data/local/tmp/mb.log*` (8 × 4 MB). `adb exec-out cat` ile alınır; gerekmezse `pkill logcat` ile durdurulur.
+- Kullanıcıyla anlaşılan sıradaki konular (yeni oturumda önce konuşulacak):
+  1. Tablet ses düzeyi: yan tuşlar ve klavye ses tuşları tablet hoparlörünü yerelde ayarlasın, Mac'e gitmesin, sistem göstergesi çıksın. Bugün MateBridge bu tuşları yutuyor.
+  2. Mac uyku/kilit/uyanma sonrası toparlanma (PLAN Aşama 4 açık maddesi). Önce kullanıcıyla 5 dakikalık ölçüm.
+  3. Uygulama ikonları (Android + Mac uygulama/menü çubuğu). Önce 2–3 taslak gösterilir, kullanıcı seçer.
+  4. Temizlik: `.claude/worktrees` altındaki ~70 birleşmiş ajan kopyası silinecek.
+- Bekleyen: Mac Ethernet denemesi (T-127); film modu fikri (şimdilik değil, 24 fps / 60 Hz takılması çözülemiyor).
