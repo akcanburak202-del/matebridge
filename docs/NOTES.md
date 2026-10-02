@@ -884,3 +884,19 @@ Kullanıcı sorun görmedi.
   - `safety_ms` 35–40 (açılışta saklı 40 ile başladı), `level_ms` ~42;
   - `audio_ms` ~80, `video_ms` ~36 → **`av_offset_ms` ~44** (ses geride);
   - küçülme dakikada −1 ms; tek alt taşma +5 ve 40'a geri.
+
+## 2026-10-02 ~10:40 — T-118 cihazda; Apple Music ile ses+görüntü birlikte geç varıyor
+
+- T-118: açılışta `safety_start stored=30 used=30` (eski 40). Kullanıcı: YouTube'da dudak senkronu iyi, takılma yok.
+- Apple Music sırasında 1–2 dk'da bir küme hâlinde kesinti:
+  - Tabletin aynı anda gördüğü:
+    - `audio_arrival_gap` `gap_ms` 60–253, `owd_ms` 60–247, `per_read` 5–10 (toplu varış);
+    - `MB/render` `net_p99_us` 130–270 ms, `latency_us` 127 ms;
+    - ping RTT p95 143 ms.
+  - Host o anlarda temiz: `write_int_ms_max` ≤ 18, `pending_bytes=0`, video 2–5 Mbps.
+  - Yani iki bağlantı birlikte duruyor.
+  - "Uyumlu" (AudioTrack) modda çok daha kötü duyuldu, çünkü güvenlik payı orada 5 ms'den başlıyor. Aynı donmalar daha çok alt taşma yaptı (13 alt taşma / 17 s).
+- **Wi-Fi'de de aynı sıklıkta** (kullanıcı) → adb USB tüneli değil. Tablet logları Huawei'nin küçük logcat tamponunda kayboldu; `adb logcat -G 16M` ayarlandı.
+- Panel hız değişimi (`display_rate`) ile zaman eşleşmesi yok. Mac birleşik logunda o anlarda Müzik uygulamasının USB/aygıt etkinliği görülmedi.
+- Sıradaki: T-120 tablet donma dedektörü (süreç mi durdu, veri mi geç geldi).
+- **Yan bulgu (T-119'u doğurdu):** APK kurulumu sonrası 0,4 s içinde iki kontrol bağlantısı + devir → `audio_unavailable reason=tap_create status=0` (noErr ama tap nesnesi yok). Ses bütün oturum boyunca Mac hoparlöründe kaldı.
