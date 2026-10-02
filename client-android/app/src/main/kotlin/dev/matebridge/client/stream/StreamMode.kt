@@ -13,7 +13,13 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
     PERFORMANCE("performance", "Performans", 120, 750),
 
     /** Decision 0014: games; lowest latency (jitter buffer 0) and temporary defaults ([GameModeSettings]). */
-    GAME("game", "Oyun", 120, 660);
+    GAME("game", "Oyun 120", 120, 660),
+
+    /** Decision 0016: the same game behaviour at 60 fps and full resolution (keyboard/gamepad games, panel stays 60 Hz). */
+    GAME60("game60", "Oyun 60", 60, 1000);
+
+    /** Either game mode: shares all decision 0014 behaviour (jitter buffer 0, [GameModeSettings] layer). */
+    val isGame: Boolean get() = this == GAME || this == GAME60
 
     /** STREAM_PREFS for this mode with the user's bit rate choice (0 = host default, decision 0013). */
     fun toPrefs(bitrateKbps: Long = Bitrate.AUTO_KBPS) = StreamPrefs(fps, scalePermille, bitrateKbps)

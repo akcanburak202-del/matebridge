@@ -1,7 +1,7 @@
 ---
 id: T-143
 title: "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-109]
@@ -30,14 +30,19 @@ Karar 0016: Panel dokunma olmadan 60 Hz'de kaldığı için klavye ya da gamepad
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `StreamMode`: `GAME` etiketi "Oyun 120"; yeni `GAME60("game60","Oyun 60",60,1000)` en sona; `val isGame` (GAME veya GAME60). Döngü/panel `entries` sırasından geldiği için sıra otomatik doğru.
+2. Değişen oyun-modu kontrolleri (tam liste; kodda `GAME` referansı tarandı):
+   - `GameMode.kt` `GameModeSettings.onModeChanged`: `mode == StreamMode.GAME` -> `mode.isGame` (tek gerçek kontrol; Oyun120<->Oyun60 `null` döner, katman korunur).
+   - Diğer yerler (`MainActivity` açılışta `onModeChanged`, `currentJitter` -> `GameJitter.choose(..., gameSettings.active)`, `SettingsCatalog` işareti `gameDefaultsActive`, `prefs(mode)`) `mode == GAME` kullanmıyor, `gameSettings.active`'e bağlı; kod değişikliği gerekmez. KDoc yorumları güncellenir.
+3. Metinler `label`/`toastText` üzerinden gelir; ayrı sabit yok.
+4. Testler: StreamModeTest, GameModeTest, SettingsCatalogTest güncellenir/eklenir (döngü sırası, parse game60, bilinmeyen id, 120<->60 katman korunur, oyun dışına geçişte düşer, Oyun 60 jitter 0, açılışta kayıtlı game60).
 
 ## Handoff
 
 _(Ajan bitirince doldurur.)_
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Dokunulan dosyalar:** stream/StreamMode.kt, stream/GameMode.kt (main); StreamModeTest, GameModeTest, SettingsCatalogTest (test); bu kart.
+- **Varsayımlar:** Tek gerçek `== GAME` kontrolü GameModeSettings.onModeChanged idi; gerisi `gameSettings.active`'e bağlı, MainActivity değişmedi.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ctrl+Shift+7 döngüsü Netlik>Akıcı>Performans>Oyun 120>Oyun 60>Netlik; Oyun 60 60 fps/%100 ve panelde "(oyun modu)"; Oyun 120<->60 geçişinde geçici ayarlar korunur; kayıtlı mod Oyun 60 ile açılışta katman kurulur.
+- **Açık sorular:** yok

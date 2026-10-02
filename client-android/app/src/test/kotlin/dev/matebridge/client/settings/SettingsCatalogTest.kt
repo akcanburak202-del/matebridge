@@ -98,7 +98,7 @@ class SettingsCatalogTest {
     @Test fun modeTransportAndAudioOutChoices() {
         val s = SettingsCatalog.sections(h, inStream = true)
         val mode = choice(s, "stream_mode")
-        assertEquals(listOf("Netlik (60 fps)", "Akıcı (120 fps)", "Performans (120 fps)", "Oyun (120 fps)"), mode.options.map { it.label })
+        assertEquals(listOf("Netlik (60 fps)", "Akıcı (120 fps)", "Performans (120 fps)", "Oyun 120 (120 fps)", "Oyun 60 (60 fps)"), mode.options.map { it.label })
         assertEquals("smooth", mode.selected())
         mode.select("clarity")
         val tr = choice(s, "transport")

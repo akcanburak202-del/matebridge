@@ -122,6 +122,37 @@ class GameModeTest {
         assertNull(g.onModeChanged(StreamMode.PERFORMANCE))
     }
 
+    @Test fun game120And60ShareTheLayer() {
+        storeUserChoices()
+        val g = GameModeSettings(settings)
+        assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(StreamMode.GAME))
+        g.setPenDot(true)
+        g.setBitrateKbps(30_000)
+        assertNull(g.onModeChanged(StreamMode.GAME60)) // 120 -> 60 is not leaving game mode
+        assertTrue(g.active)
+        assertTrue(g.penDot)
+        assertEquals(StreamPrefs(60, 1000, 30_000), g.prefs(StreamMode.GAME60))
+        assertNull(g.onModeChanged(StreamMode.GAME)) // and back
+        assertTrue(g.penDot)
+        assertEquals(GameModeSettings.Change.EXIT, g.onModeChanged(StreamMode.GAME60.next()))
+        assertFalse(g.active)
+        // entering directly into Oyun 60 builds the layer too
+        val g2 = GameModeSettings(settings)
+        assertEquals(GameModeSettings.Change.ENTER, g2.onModeChanged(StreamMode.GAME60))
+        assertEquals(GameModeSettings.Values(60_000, AudioOutPref.AUTO, penTrail = false, penDot = false), g2.effective())
+        assertEquals(0, GameJitter.choose(VideoRenderer.BUFFER_ADAPTIVE, null, g2.active).bufferFrames)
+        assertEquals(GameModeSettings.Change.EXIT, g2.onModeChanged(StreamMode.CLARITY))
+    }
+
+    @Test fun appStartedWithStoredGame60StartsWithTheDefaults() {
+        storeUserChoices()
+        settings.setStreamMode(StreamMode.GAME60)
+        val s2 = Settings(store)
+        val g = GameModeSettings(s2)
+        assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(s2.streamMode()))
+        assertEquals(StreamPrefs(60, 1000, 60_000), g.prefs(s2.streamMode()))
+    }
+
     @Test fun appStartedWithStoredGameModeStartsWithTheDefaults() {
         storeUserChoices()
         settings.setStreamMode(StreamMode.GAME)
