@@ -135,3 +135,11 @@ Yalnız ölçüm. `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanı
 - `ev=safety_start` satırına `transport=usb|wifi` eklendi. Pay `api/transport` başına saklanır (`aaudio/usb`, `aaudio/wifi`, `track/usb`, `track/wifi`). Eski tek anahtarlı kayıt USB değeri sayılır.
 - Wi-Fi'de taban ve başlangıç 40 ms, en çok 50 ms hatırlanır, oturum içinde en çok 70 ms. USB'de bunlar 20 (Uyumlu'da 5), 30 ve 40 ms.
 - `ev=safety_transport from= to= used= stored= live=0|1`: akış öncekinden farklı bir bağlantı türünde açıldığında. `live=0` akışın yeniden açıldığını gösterir; bugünkü geçiş yolu budur.
+
+## Toplu geç varışta ileri atlama (tablet, `MB/audio`, T-125)
+
+- Ses `ev=stats` satırına `skip_trims=` ve `skip_trim_ms=` eklendi: çalarken seviyedeki fazlalık 3 ms'lik çapraz geçişle kaç kez atıldı, toplam kaç ms atıldı.
+- İki durumda atılır:
+  - alt taşmadan sonraki 2 s'lik pencerede, seviye tabanı hedefin 20 ms'den fazla üstündeyse (pencere başına en çok bir kez);
+  - pencere dışında, taban hedefin 60 ms'den fazla üstünde ~3 s kalırsa.
+- Atlama içeren saniyenin A/V örneği `onAvOffset`'e verilmez.
