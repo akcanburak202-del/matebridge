@@ -50,7 +50,14 @@ Bu kart host tarafı. Protokol: `docs/PROTOCOL.md` §3 madde 1, TXT `wol` (orkes
 
 ## Handoff
 
-- **Commit:** `ae5b81e` (uygulama), plan `380c408`; dal `task/T-128-host-sleep-policy` (taban `main` 8c9c746). `./scripts/check.sh` → ALL OK (host-mac 328 test; yeni `SleepWakeGateTests` 15, `WakeOnLanTxtTests` 12).
+- **Commit:** `ae5b81e` (uygulama), `797af79` (inceleme düzeltmeleri), plan `380c408`; dal `task/T-128-host-sleep-policy` (taban `main` 8c9c746). `./scripts/check.sh` → ALL OK (host-mac 332 test; `SleepWakeGateTests` 19, `WakeOnLanTxtTests` 12).
+- **İnceleme düzeltmeleri (`797af79`, Codex + reviewer):**
+  1. *Uyandırma/uyku yarışı:* kapı kararı (`request`/`due`), T-081 oran sınırı ve `IOPMAssertionDeclareUserActivity` artık aynı `gateLock` altında (`wakeDisplayLocked`); güç işleyicisi `IOAllowPowerChange`'den önce aynı kilidi alıyor. Yani `will_sleep` karar ile çağrı arasına giremez; kilit altında `sleeping` bir kez daha denetlenir. Loglar kilit dışında.
+  2. *Dark wake (WoL):* `SleepWakeGate.sessionStarted()` kapıyı açar ve bekleyeni temizler; `onSessionStarted`'da çağrılır, kapı kapalıydıysa `ev=power state=awake reason=session_started wall_ms=…` loglanır. `will_sleep` geldiğinde zaten canlı olan oturum etkilenmez (kapı yalnızca yeni oturumla açılır). Testli.
+  3. *Bayat erteleme:* `request()` son tarihini `stalePendingUs` (1 s) aşmış bekleyeni bayat sayar, atar ve yeni isteği normal işler. Ayrıca 2. madde oturum başında temizler. Testli.
+  4. *`pipeline_retry` zamanlaması:* bekleyen erteleme varsa yeniden deneme önce son tarihe kadar bekler, uyandırmayı kendisi çalıştırır (olay döngüsü bu sırada meşgul olduğu için `.deferredWakeDue` yeniden denemeden sonra işlenirdi), sonra ekranların açılması için 500 ms (`retryAfterDeferredWakeUs`) bekler. En az 1 s (`pipelineRetryUs`, artık hatadan itibaren ölçülüyor). Eski yorum düzeltildi. Not: önerilen ~200 ms yerine 500 ms seçildi (NOTES'ta ekranın dönüşü ~1,2 s); cihazda kısaltılabilir.
+  5. *Oturum sonu taşmada kaybolmasın:* `.sessionEnded` artık `forced` postalanıyor (oturum başına bir tane, sınırlı) ve taşma temizliğinde `.shutdown` gibi yeniden kuyruğa konuyor. Düşen bir `.sessionStarted` için `onOverflow` oturumu bitirir, o da yeni bir `.sessionEnded` üretir. Host hedefinin test hedefi olmadığı için birim testi yok; mantık `BoundedMailbox`'ın mevcut `forced` davranışına dayanıyor.
+  6. *`wol` uzlaştırma:* `SessionServer`'ın 100 ms'lik tikinde 60 s'de bir (`wolReconcileTicks = 600`) `getifaddrs` yeniden okunur; yalnızca değer değişince yayınlanır. `NWPathMonitor` da duruyor.
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Video/SleepWakeGate.swift` (yeni, saf: `PowerEvent` + IOKit mesaj kodları, erteleme/bastırma durum makinesi)
   - `host-mac/Sources/MateBridgeCore/Session/WakeOnLanTxt.swift` (yeni, saf: `wol` değeri, `sockaddr_dl` ayrıştırma, TXT girdileri)
@@ -74,7 +81,9 @@ Bu kart host tarafı. Protokol: `docs/PROTOCOL.md` §3 madde 1, TXT `wol` (orkes
   - Oturum açıkken kullanıcının ekran uykusu süresi dolunca ekran **kararmamalı** (`pmset -g assertions`'da "MateBridge: tablet session active" / PreventUserIdleDisplaySleep görünmeli); oturum bitince (tablet arka plan/BYE) kaybolmalı ve Mac normal enerji ayarına göre uyumalı.
   - Uyanınca (`did_wake`) yeniden bağlanma ve `ev=power state=did_wake` logu.
   - Bonjour: `dns-sd -B _matebridge._tcp` / `dns-sd -L <ad> _matebridge._tcp` ile TXT'de `v=1 wol=…` görünmeli; Wi-Fi'yi kapatıp açınca `ev=bonjour_txt wol_count=…` ve TXT'nin güncellendiği. `nw` kontrol soketiyle (`MATEBRIDGE_CONTROL_SOCKET=nw`) çalışan bir `NWListener`'da `service` yeniden atanınca TXT'nin güncellendiği doğrulanmadı (varsayılan `bsd` yolu yerel testle doğrulandı).
-  - `NWPathMonitor` ikincil bir arayüzün yalnızca IPv4 alması gibi her değişimde tetiklenmeyebilir; bu durumda TXT bir sonraki path değişiminde ya da yeniden kayıtta güncellenir.
+  - `NWPathMonitor` ikincil bir arayüzün yalnızca IPv4 alması gibi her değişimde tetiklenmeyebilir; bu durumda TXT en geç 60 s içinde periyodik okuma ile güncellenir.
+  - Dark wake: WoL ile uyanan Mac'e tablet bağlanınca `ev=power state=awake reason=session_started` ardından (ekran kapalıysa) `wake_display` ve tam uyanma görülmeli (T-129 ile birlikte).
+  - `pmset displaysleepnow` sırası artık: `pipeline_failed … -3815` → `wake_display_deferred` → ~1,5 s `wake_display` → ~0,5 s sonra `pipeline_retry` → `display_created`.
 - **Açık sorular:**
   - Wake-on-LAN'ın gerçekten çalışması macOS ayarına bağlı ("Ağ erişimi için uyan" / `pmset -g` `womp 1`); bu kart ayarı değiştirmez. Wi-Fi'de magic packet ile uyanma donanım/macOS sürümüne göre desteklenmeyebilir — T-129 cihaz testinde görülecek.
   - Mac kilit ekranındayken (oturum yok) assertion tutulmaz; oturum açılınca tutulur. Kilit ekranında oturum açık ve kullanıcı boşta kalırsa ekran kararmaz — kullanıcı kararıyla tutarlı, ama NOTES'a yazılmalı.
