@@ -21,6 +21,7 @@
 #   MB_BULK_QLOFF=1  put an empty `.ql_disablethumbnails` at the volume root (QuickLook's per-volume switch)
 #   MB_DAV_RATE      server rate cap, B/s (default the device's 20000000)
 #   MB_DAV_MAXCONN   server connection limit (default the app's FilesConfig.MAX_CONNECTIONS)
+#   MB_DAV_OVERFLOW  connections taken beyond that limit when none is idle (default the app's; T-139)
 #   MB_DAV_DIRECT=1  no logging proxy (the server listens on the port itself)
 #
 # Runs the tablet's DavServer on the Mac's JVM (DavRepro.java) on a temporary root, mounts it with the host's NetFS

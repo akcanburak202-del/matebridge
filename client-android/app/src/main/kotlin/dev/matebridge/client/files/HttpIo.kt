@@ -200,12 +200,14 @@ class ChunkedOutputStream(out: OutputStream) : FilterOutputStream(out) {
 
 /**
  * Socket input under the shared rate cap: bytes are booked after they arrive (TCP flow control holds the sender).
+ * [arrived] runs as soon as a read returned bytes, before any rate-cap wait (the connection is busy from then on);
  * [tick] runs after each read (the per-second stats line).
  */
 class ThrottledInputStream(
     src: InputStream,
     private val bucket: TokenBucket,
     private val stats: FilesStats,
+    private val arrived: () -> Unit = {},
     private val tick: () -> Unit = {},
 ) : FilterInputStream(src) {
     override fun read(): Int {
@@ -221,6 +223,7 @@ class ThrottledInputStream(
     }
 
     private fun account(n: Int) {
+        arrived()
         stats.bytesIn(n.toLong())
         val slept = bucket.acquire(n.toLong())
         if (slept > 0) stats.throttled(slept)
@@ -228,12 +231,16 @@ class ThrottledInputStream(
     }
 }
 
-/** Socket output under the shared rate cap: each piece of at most [maxPiece] bytes waits for its budget first. */
+/**
+ * Socket output under the shared rate cap: each piece of at most [maxPiece] bytes waits for its budget first. The
+ * socket write itself (not the budget wait) is bracketed by [watch], the write-stall timeout (T-139).
+ */
 class ThrottledOutputStream(
     dst: OutputStream,
     private val bucket: TokenBucket,
     private val stats: FilesStats,
     private val maxPiece: Int,
+    private val watch: WriteWatchdog.Watch? = null,
     private val tick: () -> Unit = {},
 ) : FilterOutputStream(dst) {
     override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
@@ -245,7 +252,12 @@ class ThrottledOutputStream(
             val n = minOf(left, maxPiece)
             val slept = bucket.acquire(n.toLong())
             if (slept > 0) stats.throttled(slept)
-            out.write(b, o, n)
+            watch?.begin()
+            try {
+                out.write(b, o, n)
+            } finally {
+                watch?.end()
+            }
             stats.bytesOut(n.toLong())
             o += n
             left -= n

@@ -32,8 +32,10 @@ class DavServerTest {
     private var port = 0
 
     // Port 0: never collide with a real server on the preferred port. A high rate keeps the tests fast.
-    private val fastConfig =
-        FilesConfig(preferredPort = 0, rateBytesPerSec = 200_000_000, maxConnections = 2, idleTimeoutMs = 5000, readTimeoutMs = 5000)
+    private val fastConfig = FilesConfig(
+        preferredPort = 0, rateBytesPerSec = 200_000_000, maxConnections = 2, idleTimeoutMs = 5000, readTimeoutMs = 5000,
+        evictIdleMs = 200, overflowConnections = 0,
+    )
 
     @Before fun setUp() {
         root = tmp.newFolder("storage").canonicalFile
@@ -343,10 +345,175 @@ class DavServerTest {
         assertEquals(200, c1.send("GET", "/MatePad/a.txt").status)
         val c2 = RawClient()
         assertEquals(200, c2.send("GET", "/MatePad/a.txt").status)
-        // maxConnections = 2: a third client still gets served (an idle connection is closed for it).
+        // maxConnections = 2, no overflow: a third client still gets served, once the longest idle connection has
+        // waited evictIdleMs (200 ms) it is closed for it.
         val r = call("GET", "/MatePad/a.txt")
         assertEquals(200, r.status)
+        assertEquals(-1, c1.input.read()) // c1 (idle longest) was evicted
+        assertEquals(200, c2.send("GET", "/MatePad/a.txt").status) // c2 was not
         c1.close(); c2.close()
+    }
+
+    // ---- T-139: connection limit ----
+
+    /** Opens a GET of [target] that a background thread reads (and discards) until the socket is closed. */
+    private inner class LongGet(target: String, receiveBuffer: Int = 0, val read: Boolean = true) : AutoCloseable {
+        val socket = Socket().also {
+            if (receiveBuffer > 0) it.receiveBufferSize = receiveBuffer
+            it.connect(java.net.InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port))
+        }
+        val received = java.util.concurrent.atomic.AtomicLong()
+        private val reader = Thread {
+            try {
+                val input = socket.getInputStream()
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    received.addAndGet(n.toLong())
+                }
+            } catch (e: java.io.IOException) {
+            }
+        }.also { it.isDaemon = true }
+
+        init {
+            socket.getOutputStream().write(
+                "GET $target HTTP/1.1\r\nHost: localhost:$port\r\nAuthorization: ${basic()}\r\n\r\n".toByteArray(),
+            )
+            if (read) reader.start()
+        }
+
+        fun awaitBytes(n: Long) {
+            val deadline = System.currentTimeMillis() + 5000
+            while (received.get() < n) {
+                assertTrue("long GET did not start", System.currentTimeMillis() < deadline)
+                Thread.sleep(10)
+            }
+        }
+
+        override fun close() = socket.close()
+    }
+
+    private fun bigSparseFile(name: String, size: Long) =
+        java.io.RandomAccessFile(File(root, name), "rw").use { it.setLength(size) }
+
+    private fun timedMs(block: () -> Unit): Long {
+        val t = System.nanoTime()
+        block()
+        return (System.nanoTime() - t) / 1_000_000
+    }
+
+    @Test fun smallRequestsAreAnsweredWhileFourLongDownloadsRun() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        // The app's limits; 4 MB/s keeps four 256 MB downloads running for the whole test (like webdavfs' whole-file
+        // downloads that a thumbnailer starts, T-138).
+        startServer(FilesConfig(preferredPort = 0, rateBytesPerSec = 4_000_000))
+        File(root, "small.txt").writeText("small")
+        val gets = (1..4).map { bigSparseFile("video$it.mp4", 256L shl 20); LongGet("/MatePad/video$it.mp4") }
+        try {
+            gets.forEach { it.awaitBytes(100_000) }
+            for (i in 5..6) {
+                var status = 0
+                val ms = timedMs { status = call("GET", "/MatePad/small.txt").status }
+                assertEquals(200, status)
+                assertTrue("request $i took $ms ms", ms < 1000)
+            }
+            gets.forEach { assertTrue(it.socket.isConnected && !it.socket.isClosed) }
+        } finally {
+            gets.forEach { it.close() }
+        }
+    }
+
+    @Test fun beyondTheLimitBusyConnectionsGetOverflowSlotsAtOnce() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        startServer(fastConfig.copy(rateBytesPerSec = 4_000_000, maxConnections = 2, overflowConnections = 2))
+        File(root, "small.txt").writeText("small")
+        val gets = (1..2).map { bigSparseFile("video$it.mp4", 256L shl 20); LongGet("/MatePad/video$it.mp4") }
+        try {
+            gets.forEach { it.awaitBytes(100_000) }
+            // Two new connections that stay open: both get overflow slots without any wait.
+            val a = RawClient()
+            val b = RawClient()
+            for (c in listOf(a, b)) {
+                var status = 0
+                val ms = timedMs { status = c.send("GET", "/MatePad/small.txt").status }
+                assertEquals(200, status)
+                assertTrue("overflow request took $ms ms", ms < 1000)
+            }
+            assertTrue(synchronized(logs) { logs.any { it.startsWith("ev=conn_overflow conns=3 limit=2 hard=4") } })
+            a.close(); b.close()
+        } finally {
+            gets.forEach { it.close() }
+        }
+    }
+
+    @Test fun freshConnectionsNeverEvictEachOtherAndTheHardLimitAnswers503() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        // Hard limit 3; eviction would need 5 s of idleness, so none happens here.
+        startServer(fastConfig.copy(maxConnections = 2, overflowConnections = 1, evictIdleMs = 5000, admitWaitMs = 600))
+        File(root, "a.txt").writeText("a")
+        // Two fresh connections that have not sent a request yet (T-138: they counted as idle and were evicted by
+        // the next one, which was then evicted by the one after: a reconnect storm).
+        val fresh = listOf(RawClient(), RawClient())
+        Thread.sleep(300)
+        val third = RawClient()
+        assertEquals(200, third.send("GET", "/MatePad/a.txt").status) // overflow slot
+        // Fourth at the hard limit: nothing is evictable, so after admitWaitMs it gets 503 + Retry-After and is closed.
+        val fourth = RawClient()
+        var r: Response? = null
+        val ms = timedMs { r = fourth.send("GET", "/MatePad/a.txt") }
+        assertEquals(503, r!!.status)
+        assertEquals("1", r!!.header("Retry-After"))
+        assertTrue("503 after $ms ms", ms in 500..2000)
+        assertEquals(-1, fourth.input.read())
+        fourth.close()
+        assertTrue(synchronized(logs) { logs.any { it.startsWith("ev=conn_rejected") } })
+        // The fresh connections were kept and still work.
+        for (c in fresh) assertEquals(200, c.send("GET", "/MatePad/a.txt").status)
+        assertEquals(200, third.send("GET", "/MatePad/a.txt").status)
+        fresh.forEach { it.close() }
+        third.close()
+    }
+
+    @Test fun aResponseNobodyReadsIsClosedAfterTheWriteTimeout() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        startServer(fastConfig.copy(writeTimeoutMs = 500))
+        bigSparseFile("big.bin", 64L shl 20)
+        val start = System.nanoTime()
+        val g = LongGet("/MatePad/big.bin", receiveBuffer = 16 * 1024, read = false) // never reads: the write stalls
+        try {
+            val deadline = System.currentTimeMillis() + 10_000
+            while (synchronized(logs) { logs.none { it.startsWith("ev=write_stalled timeout_ms=500") } }) {
+                assertTrue("no write timeout", System.currentTimeMillis() < deadline)
+                Thread.sleep(20)
+            }
+            assertTrue((System.nanoTime() - start) / 1_000_000 >= 500)
+        } finally {
+            g.close()
+        }
+        // The slot is free again: two new connections are served (limit 2, no overflow).
+        File(root, "a.txt").writeText("a")
+        RawClient().use { a -> RawClient().use { b ->
+            assertEquals(200, a.send("GET", "/MatePad/a.txt").status)
+            assertEquals(200, b.send("GET", "/MatePad/a.txt").status)
+        } }
+    }
+
+    @Test fun waitingOnTheRateCapIsNotAWriteStall() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        // 100 KB/s with 64 KB pieces: each piece waits ~650 ms on the cap, longer than the 300 ms write timeout.
+        startServer(fastConfig.copy(rateBytesPerSec = 100_000, burstBytes = 16 * 1024, writeTimeoutMs = 300))
+        val data = ByteArray(200_000) { (it % 251).toByte() }
+        File(root, "slow.bin").writeBytes(data)
+        val r = call("GET", "/MatePad/slow.bin")
+        assertEquals(200, r.status)
+        assertArrayEquals(data, r.body)
+        assertTrue(synchronized(logs) { logs.none { it.startsWith("ev=write_stalled") } })
     }
 
     @Test fun stopClosesEverything() {

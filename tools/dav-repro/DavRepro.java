@@ -50,8 +50,12 @@ public final class DavRepro {
         int maxConn = System.getenv("MB_DAV_MAXCONN") != null ? Integer.parseInt(System.getenv("MB_DAV_MAXCONN"))
                 : FilesConfig.MAX_CONNECTIONS;
         boolean direct = "1".equals(System.getenv("MB_DAV_DIRECT"));
+        // MB_DAV_OVERFLOW: connections taken beyond the limit when none is idle (T-139; 0 = the old wait, then 503).
+        int overflow = System.getenv("MB_DAV_OVERFLOW") != null ? Integer.parseInt(System.getenv("MB_DAV_OVERFLOW"))
+                : FilesConfig.OVERFLOW_CONNECTIONS;
         FilesConfig cfg = new FilesConfig(rate, 256L * 1024, maxConn, FilesConfig.BUFFER_BYTES,
-                FilesConfig.IDLE_TIMEOUT_MS, FilesConfig.READ_TIMEOUT_MS, direct ? proxyPort : 0);
+                FilesConfig.IDLE_TIMEOUT_MS, FilesConfig.READ_TIMEOUT_MS, direct ? proxyPort : 0,
+                FilesConfig.EVICT_IDLE_MS, overflow, FilesConfig.ADMIT_WAIT_MS, FilesConfig.WRITE_TIMEOUT_MS);
         DavServer server = new DavServer(root, token, secret, cfg, new DavServer.Hooks() {
             @Override public void threadStarted() { }
             @Override public void log(String ev, String fields) {
@@ -63,7 +67,7 @@ public final class DavRepro {
         }, System::currentTimeMillis, null);
         server.start();
         listening.await();
-        out("server", "listening port=" + serverPort[0] + " rate=" + rate + " max_conn=" + maxConn);
+        out("server", "listening port=" + serverPort[0] + " rate=" + rate + " max_conn=" + maxConn + " overflow=" + overflow);
         if (direct) {
             out("proxy", "listening port=" + proxyPort + " (direct: no proxy)");
             Thread.sleep(Long.MAX_VALUE);
