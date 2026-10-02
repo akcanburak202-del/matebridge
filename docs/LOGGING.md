@@ -84,3 +84,21 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
 ## Ses yakalama yeniden denemesi (Mac, `audio`, T-119)
 
 - `ev=audio_retry reason=tap_create|aggregate_create attempt=N delay_ms=… status=… stream_id=…` (info): tap ya da aggregate oluşturulamadı (hata kodu, ya da `noErr` ama nesne yok). En çok 4 deneme yapılır: 100, 250, 500, 1000 ms; her deneme yeni bir `stream_id` alır. Hepsi başarısız olursa bugünkü `audio_unavailable` satırı yazılır.
+
+## Süreç donma dedektörü (tablet, `MB/diag`, T-120)
+
+Yalnız ölçüm. `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanır.
+
+- `ev=stall_detector_start prio= period_ms=5 cpu_freq_files=`: `prio` iş parçacığının elde ettiği öncelik (-19 URGENT_AUDIO, -16 AUDIO). `cpu_freq_files` okunabilen `scaling_cur_freq` dosya sayısı. Kapanışta `ev=stall_detector_stop`.
+- `ev=stall_stats ticks= tick_late_max_ms= stalls= suspend_ms= cpu_freq_khz=` (saniyede bir):
+  - `ticks`: penceredeki tik sayısı (beklenen ~200);
+  - `tick_late_max_ms`: beklenen uyanmaya göre en büyük gecikme;
+  - `stalls`: 30 ms'den geç kalan tik sayısı;
+  - `suspend_ms`: `elapsedRealtime − uptime` artışı (cihazın askıda geçirdiği süre);
+  - `cpu_freq_khz`: çekirdeklerin en yüksek `scaling_cur_freq` değeri; okunamazsa `-`.
+- `ev=stall dur_ms= suspend_ms= ctl_idle_ms= video_idle_ms= suppressed=`: tik 50 ms'den geç kaldığında, saniyede en çok 5 satır.
+  - `*_idle_ms`: okuyucunun son veri dolu `read()` dönüşünden bu yana geçen süre.
+  - `suppressed`: hız sınırına takılıp yazılmayan donma sayısı.
+- Ses `audio_arrival_gap` satırına `tick_late_ms=` eklendi: boşluk penceresindeki tiklerin en büyük gecikmesi.
+  - `gap_ms`'e yakınsa tablet süreci donmuştur;
+  - ~0 ise veri gerçekten geç gelmiştir (ağ yığını ya da Mac).
