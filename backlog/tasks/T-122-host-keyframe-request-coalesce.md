@@ -1,7 +1,7 @@
 ---
 id: T-122
 title: Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla
-status: in_progress
+status: in-progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
