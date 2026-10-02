@@ -80,3 +80,7 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
 - Ses `ev=stats` satırına eklenen alanlar:
   - `refill_trims`: alt taşmadan sonraki toplu varışta, çalma başlamadan eşiğin üstündeki fazla atıldığı başlangıç sayısı;
   - `refill_trim_ms`: atılan toplam süre.
+
+## Ses yakalama yeniden denemesi (Mac, `audio`, T-119)
+
+- `ev=audio_retry reason=tap_create|aggregate_create attempt=N delay_ms=… status=… stream_id=…` (info): tap ya da aggregate oluşturulamadı (hata kodu, ya da `noErr` ama nesne yok). En çok 4 deneme yapılır: 100, 250, 500, 1000 ms; her deneme yeni bir `stream_id` alır. Hepsi başarısız olursa bugünkü `audio_unavailable` satırı yazılır.
