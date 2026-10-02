@@ -1,7 +1,7 @@
 ---
 id: T-129
 title: Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`)
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: []

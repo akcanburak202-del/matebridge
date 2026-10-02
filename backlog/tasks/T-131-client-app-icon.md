@@ -1,7 +1,7 @@
 ---
 id: T-131
 title: Tablet — uygulama ikonu (öneri C "M çizgisi", adaptive icon)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []

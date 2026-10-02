@@ -1,7 +1,7 @@
 ---
 id: T-128
 title: Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri)
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-081]

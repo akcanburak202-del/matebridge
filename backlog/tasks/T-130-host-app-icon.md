@@ -1,7 +1,7 @@
 ---
 id: T-130
 title: Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi")
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

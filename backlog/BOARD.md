@@ -2,15 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-128](tasks/T-128-host-sleep-policy-wol-txt.md) | Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri) | 4 | mac-host-dev | [T-081] |
-| [T-129](tasks/T-129-client-wake-on-lan.md) | Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`) | 4 | android-client-dev | [] |
-| [T-130](tasks/T-130-host-app-icon.md) | Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi") | 5 | mac-host-dev | [] |
-| [T-131](tasks/T-131-client-app-icon.md) | Tablet — uygulama ikonu (öneri C "M çizgisi", adaptive icon) | 5 | android-client-dev | [] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -154,3 +145,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-124](tasks/T-124-host-wifi-service-class-default.md) | Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI) | 5 | mac-host-dev | [] |
 | [T-125](tasks/T-125-client-audio-late-bunch-skip.md) | Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle) | 5 | android-client-dev | [T-118, T-123] |
 | [T-126](tasks/T-126-host-tcp-info-control-video.md) | Host — kontrol (ses) ve video soketlerinin TCP durumunu saniyelik logla (yeniden gönderim, RTO, srtt, gönderilmemiş/onaylanmamış bayt) | 5 | mac-host-dev | [T-124] |
+| [T-128](tasks/T-128-host-sleep-policy-wol-txt.md) | Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri) | 4 | mac-host-dev | [T-081] |
+| [T-129](tasks/T-129-client-wake-on-lan.md) | Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`) | 4 | android-client-dev | [] |
+| [T-130](tasks/T-130-host-app-icon.md) | Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi") | 5 | mac-host-dev | [] |
+| [T-131](tasks/T-131-client-app-icon.md) | Tablet — uygulama ikonu (öneri C "M çizgisi", adaptive icon) | 5 | android-client-dev | [] |
