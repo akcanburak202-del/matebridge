@@ -261,6 +261,9 @@ public final class SessionServer: @unchecked Sendable {
     /// Session queue: start of the running host-sleep sequence (`HostSleep` budget), nil otherwise. Shortens the
     /// linger of control connections closed by it, so their close happens before the sleep is acknowledged.
     private var hostSleepStartUs: UInt64?
+    /// Control connections closed but not finished yet (last records flushing, peer FIN pending), with the cancel that
+    /// cuts them. Any thread: the host-sleep handler cuts them without the session queue (T-132).
+    private let lingering = LingeringConnections()
     private var currentSessionID: UInt32 = 0
     private var currentConfigID: UInt16 = 0
     /// Control connection of the active session (audio goes here).
@@ -453,12 +456,32 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Power observer queue, before `IOAllowPowerChange`. On `will_sleep` every session ends with BYE(HOST_SLEEP)
-    /// (release-all, BYE, both connections closed; the audio stops through `sessionEnded`), PROTOCOL.md section 4.
-    /// Waits at most `HostSleep.budgetUs` in total for the session queue and the flush, then returns either way: the
-    /// sleep is never delayed beyond that or vetoed. `can_sleep` does nothing (an idle sleep may still be cancelled).
+    /// (release-all, BYE, both connections closed), PROTOCOL.md section 4. Waits at most `HostSleep.budgetUs` in
+    /// total, then returns either way: the sleep is never delayed beyond that or vetoed. `can_sleep` does nothing (an
+    /// idle sleep may still be cancelled). Sequence, all against one deadline:
+    /// 1. at once, independent of the session queue: every `HostSleepParticipants` entry (input release-all on the
+    ///    input queue, audio capture teardown on the tap queue); idempotent with the session-end path;
+    /// 2. the session queue ends the sessions (`machine.hostSleep()`); waited for until the cut point, then the
+    ///    control flush (`flushGroup`);
+    /// 3. at the cut point every control connection still lingering (closed earlier, e.g. by a takeover, or closed in
+    ///    step 2 and not done) is cancelled from here, so no connection stays open into the sleep;
+    /// 4. the participants are waited for until the deadline.
     private func onPower(_ event: PowerEvent) {
         guard HostSleep.endsSessions(event) else { return }
         let start = nowUs()
+        let participants = HostSleepParticipants.shared.snapshot()
+        let progress = LockedValue(HostSleepProgress(names: participants.map(\.name)))
+        let participantGroup = DispatchGroup()
+        for p in participants {
+            participantGroup.enter()
+            let once = OnceFlag()
+            p.work {
+                once.run {
+                    progress.update { $0.finished(p.name) }
+                    participantGroup.leave()
+                }
+            }
+        }
         let ran = DispatchSemaphore(value: 0)
         queue.async { [self] in
             defer { ran.signal() }
@@ -469,17 +492,28 @@ public final class SessionServer: @unchecked Sendable {
             apply(machine.hostSleep())
             hostSleepStartUs = nil
         }
-        let ranInTime = ran.wait(timeout: Self.dispatchDeadline(HostSleep.remainingUs(startUs: start, nowUs: nowUs())))
+        let ranInTime = ran.wait(timeout: Self.dispatchDeadline(HostSleep.remainingToCutUs(startUs: start,
+                                                                                           nowUs: nowUs())))
             == .success
         // Every closed control connection leaves `flushGroup` once its BYE is out and the socket closed (or its
         // shortened linger ran out).
         let flushed = ranInTime
-            && flushGroup.wait(timeout: Self.dispatchDeadline(HostSleep.remainingUs(startUs: start, nowUs: nowUs())))
+            && flushGroup.wait(timeout: Self.dispatchDeadline(HostSleep.remainingToCutUs(startUs: start,
+                                                                                           nowUs: nowUs())))
             == .success
+        let cut = lingering.cutAll()
+        let participantsDone = participantGroup.wait(
+            timeout: Self.dispatchDeadline(HostSleep.remainingUs(startUs: start, nowUs: nowUs()))) == .success
         let waitedMs = (nowUs() - start) / 1_000
-        logger.log(ranInTime && flushed ? .info : .warning, "host_sleep_ack", sessionID: 0, generation: 0,
-                   fields: "waited_ms=\(waitedMs) queue=\(ranInTime ? "ran" : "late") flushed=\(flushed)")
+        let state = progress.get()
+        let complete = ranInTime && flushed && participantsDone
+        logger.log(complete ? .info : .warning, "host_sleep_ack", sessionID: 0, generation: 0,
+                   fields: ["waited_ms=\(waitedMs) queue=\(ranInTime ? "ran" : "late") flushed=\(flushed) cut=\(cut)",
+                            state.logFields].filter { !$0.isEmpty }.joined(separator: " "))
     }
+
+    /// Fires the cancel of a control connection whose final send never completed (`nw` path).
+    private static let lingerQueue = DispatchQueue(label: "dev.matebridge.session.linger")
 
     private static func dispatchDeadline(_ us: UInt64) -> DispatchTime {
         .now() + .microseconds(Int(min(us, UInt64(Int.max))))
@@ -1321,17 +1355,33 @@ public final class SessionServer: @unchecked Sendable {
         inflightBytes[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
-        // Queued sends (BYE, REJECTED) are flushed before the FIN, then the socket is cancelled.
+        // Queued sends (BYE, REJECTED) are flushed before the FIN, then the socket is cancelled. Until then the
+        // connection is "lingering": a host sleep cuts it short (T-132), whenever it was closed.
         flushGroup.enter()
+        let once = OnceFlag()
+        let finished: @Sendable () -> Void = { [flushGroup, lingering] in
+            once.run {
+                lingering.remove(id)
+                flushGroup.leave()
+            }
+        }
+        let linger = controlLinger
         switch c {
         case .network(let c):
+            lingering.set(id) { c.cancel() }
             c.send(content: nil, contentContext: .finalMessage, isComplete: true,
-                   completion: .contentProcessed { [flushGroup] _ in
+                   completion: .contentProcessed { _ in
                        c.cancel()
-                       flushGroup.leave()
+                       finished()
                    })
+            // The final send may never complete (peer not reading): cancel after the linger, like the socket path.
+            Self.lingerQueue.asyncAfter(deadline: .now() + linger) {
+                c.cancel()
+                finished()
+            }
         case .socket(let c):
-            c.finish(timeout: controlLinger) { [flushGroup] in flushGroup.leave() }
+            lingering.set(id) { c.cancel() }
+            c.finish(timeout: linger) { finished() }
         }
     }
 
@@ -1715,4 +1765,41 @@ private final class LockedSet<Element: Hashable & Sendable>: @unchecked Sendable
     func insert(_ e: Element) { lock.withLock { _ = items.insert(e) } }
     func remove(_ e: Element) { lock.withLock { _ = items.remove(e) } }
     func contains(_ e: Element) -> Bool { lock.withLock { items.contains(e) } }
+}
+
+/// Runs its body at most once, from any thread.
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func run(_ body: () -> Void) {
+        let first = lock.withLock {
+            defer { done = true }
+            return !done
+        }
+        if first { body() }
+    }
+}
+
+/// A lock-protected value, from any thread.
+private final class LockedValue<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func get() -> Value { lock.withLock { value } }
+    func update(_ body: (inout Value) -> Void) { lock.withLock { body(&value) } }
+}
+
+/// Closed control connections still finishing, each with the cancel that cuts it (T-132). Any thread.
+private final class LingeringConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cuts: [ConnectionID: @Sendable () -> Void] = [:]
+    func set(_ id: ConnectionID, cut: @escaping @Sendable () -> Void) { lock.withLock { cuts[id] = cut } }
+    func remove(_ id: ConnectionID) { lock.withLock { _ = cuts.removeValue(forKey: id) } }
+    /// Cancels every lingering connection (outside the lock; a cancel is idempotent) and returns how many there were.
+    /// Each one leaves the table through its own completion.
+    func cutAll() -> Int {
+        let all = lock.withLock { Array(cuts.values) }
+        for cut in all { cut() }
+        return all.count
+    }
 }

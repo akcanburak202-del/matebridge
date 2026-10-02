@@ -36,4 +36,43 @@ public enum HostSleep {
         let end = deadlineUs(startUs: startUs)
         return nowUs < end ? end - nowUs : 0
     }
+
+    /// When control connections that are still lingering (closed earlier, or closed by the sleep and not yet done)
+    /// are cut: `lingerMarginUs` before the deadline, so the cut happens while the Mac is still awake and the last
+    /// stretch of the budget is left for the other participants (input release, audio teardown) to report.
+    public static func cutDeadlineUs(startUs: UInt64) -> UInt64 {
+        deadlineUs(startUs: startUs) - lingerMarginUs
+    }
+
+    /// Time left until the cut point at `nowUs` (0 once it passed).
+    public static func remainingToCutUs(startUs: UInt64, nowUs: UInt64) -> UInt64 {
+        let cut = cutDeadlineUs(startUs: startUs)
+        return nowUs < cut ? cut - nowUs : 0
+    }
+}
+
+/// Which host-sleep participants (input release, audio teardown) have reported done (T-132). Pure; the session
+/// server keeps one per sleep under a lock and logs it with the sleep acknowledgement.
+public struct HostSleepProgress: Sendable, Equatable {
+    /// Participant names in registration order (stable log order).
+    public let names: [String]
+    public private(set) var done: Set<String> = []
+
+    public init(names: [String]) { self.names = names }
+
+    /// Marks `name` done. Unknown names and repeats are ignored.
+    public mutating func finished(_ name: String) {
+        if names.contains(name) { done.insert(name) }
+    }
+
+    public var isComplete: Bool { names.allSatisfy(done.contains) }
+
+    /// `input=done audio=pending`, in registration order; empty without participants. A name occurring twice is
+    /// listed once.
+    public var logFields: String {
+        var seen: Set<String> = []
+        return names.filter { seen.insert($0).inserted }
+            .map { "\($0)=\(done.contains($0) ? "done" : "pending")" }
+            .joined(separator: " ")
+    }
 }
