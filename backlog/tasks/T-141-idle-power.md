@@ -1,7 +1,7 @@
 ---
 id: T-141
 title: Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-140]
@@ -36,7 +36,42 @@ Aynı koşulda önce ve sonra: durgun ekran 2 dk (istemci CPU, iş parçacığı
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+### Döküm: durgun ekranda (oturum açık, kare yok) periyodik çalışan işler
+
+| # | Ne | Nerede / iş parçacığı | Sıklık (durgun) | Durgunken gerekli mi | Karar |
+|---|----|------------------------|-----------------|----------------------|-------|
+| 1 | `vsyncCallback`: `VsyncClock.onVsync` (her çağrıda yeni `Grid` nesnesi) + `vsyncGaps.mark` | MainActivity, ana | her vsync (60–120/s) + SF'nin uygulama vsync olayı | Hayır | **Uyur** (karesizlik ≥ 300 ms); ilk karede ya da işaretçi girdisinde uyanır |
+| 2 | `GlPresenter.frameCallback` (yalnız `--es render gl`) | mb-gl | her vsync | Hayır | **Uyur** (aynı kapı); uyanınca bekleyen kare hemen çizilir |
+| 3 | `rateTicker` (DISPLAY_RATE yoklaması) | ana | 100 ms | Hayır (period donuk) | vsync ile birlikte **durur**; uyanınca debouncer'ın düşüş adayı sıfırlanır, 5 taze vsync'ten önce rapor yok |
+| 4 | `ticker`: keyframe yeniden deneme + `statsTick` (STATS mesajı, pacer `onSkipWindow`, A/V hedefi, katman, loglar) | ana | 500 ms / 1 s | STATS, pacer, A/V: evet (kart: değişmez). Loglar: hayır | STATS 1 s **kalır**. `decoder ev=stats`, `render ev=stats/present` **10 s pencere**, pencerede 0 kare varsa yazılmaz |
+| 5 | Çözücü giriş döngüsü `awaitNext(4 ms)` | mb-decoder | ~250 uyanma/s | Hayır (yalnız kapanma süresini sınırlar; `offer` anında uyandırır) | ≥ 300 ms kare yoksa **20 ms** beklemeye çıkar (~50/s) |
+| 6 | Çözücü çıkış döngüsü `dequeueOutputBuffer(5 ms)` | mb-decoder-out | ~200 uyanma/s | Hayır (çıkış anında döner; tutulan arabellek son anıyla zaten sınırlı) | ≥ 300 ms çıkış yoksa **20 ms** (~50/s) |
+| 7 | `inputTicker` (`InputCapture.tick`, `syncInputActive`, işaretçi yakalama) | ana | 25 ms | Evet (girdi canlılığı/bekçiler) | Dokunulmadı (kart: girdi) |
+| 8 | `autoTicker` (AUTO USB politikası) | ana | 500 ms | Evet (Wi-Fi→USB geçişi) | Dokunulmadı |
+| 9 | `wolTicker` (WakePlanner, WolRefresh) | ana | 250 ms | Bağlıyken çoğunlukla boş | Dokunulmadı: ucuz, T-129/133/134 zamanlaması; ayrı ölçülmeli |
+| 10 | `mb-session` motor tiki (PING 500 ms, PONG zaman aşımı, yeniden deneme) | mb-session | 100 ms | Evet | Dokunulmadı |
+| 11 | `mb-stall` (StallDetector, T-120) + `diag ev=stall_stats` | mb-stall (URGENT_AUDIO) | 5 ms (200/s) + 1 s log | Yalnız teşhis (ses donmaları) | Dokunulmadı → *Açık sorular* (ayrı kart: açılış parametresine bağlamak) |
+| 12 | Ses: `mb-ctl-read` AUDIO_PCM çözme, `mb-audio`, AAudio | mb-ctl-read, mb-audio | sürekli | Evet | Kart: dokunulmaz. Durgunda görülen GC'nin olası kaynağı (paket başına ayırma) — doğrulanmadı |
+| 13 | `session ev=net` RTT satırı | ana (statsTick) | 1 s | Log | Dokunulmadı (kartta yok) → *Açık sorular* |
+| 14 | `render ev=gl_stats` (yalnız GL deneyi) | ana | 1 s | Log | Dokunulmadı (deney yolu) |
+| 15 | İstatistik katmanı `statsView.text` (açıksa) | ana → RenderThread | 1 s | Metin değişmiyorsa hayır | Metin aynıysa `setText` yok (RenderThread çizimi yok) |
+| 16 | `statsTick` log dizeleri (~20 `String.format`, 3 satır) | ana | 1 s | Hayır | 10 s'de bir, durgunda hiç (ölçülebilir tek tik-başı ayırma) |
+| 17 | PenOverlayView `postInvalidateOnAnimation` | ana/RenderThread | yalnız kalem/iz canlıyken | — | Zaten durgunda sessiz |
+| 18 | `input ev=stats` | ana | 1 s, yalnız girdi varken | — | Zaten durgunda sessiz |
+| 19 | RefreshVote (T-140) | ana | yalnız `--ei rvote` | — | Varsayılan kapalı |
+| 20 | DisplayListener, OnFrameRendered (ana looper) | ana | olay / kare başına | — | Durgunda çalışmaz; listener kayıtlı kalır |
+
+RenderThread ~%5 için kodda durgunda çizim tetikleyen tek aday katman metni (15); başka kaynak bulunmadı, cihazda bakılmalı.
+
+### Uygulama
+
+1. **`video/VsyncIdle.kt` (saf, saat dışarıdan):** `VsyncIdleGate` — `onActivity(now)` (her iş parçacığı; uyurken tam bir kez `true` = uyandırma gönder), `onVsync(now)` (döngü iş parçacığı; `false` = şimdi uyu), `wake(now)` (uyuyorsa uyandırır), `rateReady` (uyanıştan sonra ≥ 5 vsync), `idleLogDue(now)` (≥ 1 s uyuduysa bir kez `idle state=on`). Yarış: uyumaya geçerken etkinlik yeniden okunur (Dekker), kaçan kare olmaz. Ayrıca çözücü bekleme seçimi `IdleWait`.
+   - **Eşik 300 ms (gerekçe):** ≥ 10 fps her akışta kareler arası ≤ 100 ms → akış asla uyumaz (3× pay); macOS imleç yanıp sönmesi (~0,5 s) arasında döngü uyuyabilir; son karenin çözme + yuva süresi (< 60 ms) eşiğin çok altında.
+2. **MainActivity:** vsync döngüsü kapıya bağlanır. Uyurken `vsync.reset()` (faz unutulur, **period korunur** → panel hızı son değeri korur, DISPLAY_RATE gitmez), `vsyncGaps.breakSequence()`, `rateTicker` durur, `DisplayRateDebouncer.onPause()`. Kare (video okuyucu) ya da dokunma/kalem/işaretçi olayı kapıyı uyandırır: Choreographer + `rateTicker` yeniden başlar. **İlk kare:** saatte örnek yokken tüm pacer'lar `null` döner → çıkış hemen bırakılır (bekletme yok, eski fazdan yanlış yuva yok); ilk taze vsync'ten sonra normal zamanlama, faz kilidi > 3 periyot boşlukta zaten yeniden edinilir (T-065).
+3. **GlPresenter:** aynı kapı GL iş parçacığında; uyurken frameCallback yeniden kaydolmaz, `glVsync.reset()`; `onFrameAvailable` uyurken kareyi hemen çizer ve döngüyü başlatır.
+4. **VideoRenderer:** giriş/çıkış bekleme süreleri karesizlikte 4/5 ms → 20 ms (`IdleWait`); kapanma ≤ ~40 ms + codec (JOIN 300 ms içinde). `onSkipWindow` yalnız pacer + iz; `present` satırı ayrı `logPresent()`.
+5. **Loglar:** `VideoStats` her 1 s pencereyi bir log penceresine ekler (toplamlar, ağırlıklı ortalamalar, histogram örnekleri taşınır → 10 s yüzdelikleri kesin). `IntervalHistogram.summaryInto()`. Saf `StatsLogWindow` pencere kapanışını ve "0 kare → yazma" kararını verir. Varsayılan 10 s; `--ez stats_1s true` → 1 s. Pencere `releaseRenderer`/`installConfig`'te kısmi olarak yazılır (oturum sonu verisi kaybolmaz). `render ev=idle state=on since_frame_ms=` (≥ 1 s uyuduktan sonra bir kez), `state=off idle_ms=` (yalnız `on` yazıldıysa).
+6. **Testler (JVM):** kapı (uyuma, uyanma tek sefer, yarış, rateReady, log), uyanıştan sonra ilk karenin pacer'da hemen sunulması + ilk vsync'ten sonra gelecekteki yuva, debouncer `onPause`, `VideoStats` log penceresi 10 s / 1 s, `IntervalHistogram.summaryInto`, `StatsLogWindow`.
 
 ## Handoff
 
