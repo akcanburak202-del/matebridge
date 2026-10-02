@@ -1,7 +1,7 @@
 ---
 id: T-118
 title: Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt)
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: [T-117]
@@ -49,7 +49,23 @@ NOTES 2026-10-02 ~10:10 (T-116/T-117 cihaz ölçümü, USB):
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Hatırlanan tavan (`SafetyMemory`)**: `REMEMBER_MAX_MS = 30`. `initial()` saklı değeri `SAFETY_MIN..30` aralığına kırpar (eski 40 → 30). `onSafety`/`flush` saklamadan önce değeri 30'a kırpar ve karşılaştırmayı kırpılmış değerle yapar; oturum içi 35–40 her 10 s'de bir yazmaya yol açmaz. Oturum içi tavan (`DriftController.SAFETY_MAX_MS = 40`) değişmez.
+2. **Hızlı küçülme (`DriftController`)**: `DECAY_WINDOWS` 60 → **5** (her 5 temiz 1 s pencerede −1 ms). 40 → 20 = 20 adım × 5 s = **100 s** (kabul: ≤ ~2 dk). Bir alt taşmanın +5'i 25 s'de geri alınır. Böylece nadir takılmada (USB'de ~6,5 dk'da bir) pay çoğu zaman tabanda (AAudio 20 ms) kalır; kullanıcının seçtiği "dengeli" denge budur. Daha hızlısı (ör. 3 pencere, 60 s) aynı gecikmeyi kazanmaz, yalnız ardışık takılma riskini artırır. Alt taşma adımı +5 ms kalır.
+3. **Alt taşma sonrası dolum (`PlayoutCore` + `DriftController`)**:
+   - Kök neden: aktarımda tutulan paketler topluca geliyor. Seviye eşiği (`target + lastSpan`) bir sıçramada aşıp ~75 ms'ye çıkıyor. Ayrıca `lastSpan`, takılmanın iniş eğimini içeren pencereden şişmiş olabiliyor.
+   - (a) `refillThresholdFrames` içindeki aralık payı `REFILL_SPAN_MAX_MS = 20` (iki paket) ile sınırlanır. Normal testere ~10–15 ms; tavan bunu etkilemez, yalnız şişmiş pencereyi keser.
+   - (b) **Başlangıçta fazlayı atma**: PRIMING → PLAYING geçişinde seviye eşik + `TRIM_SLACK_MS` (5 ms) üstündeyse, en eski kareler eşiğe kadar atılır (`buffer.consume`). Alt taşma henüz sınıflanmadıysa (`starvePending`), beklenen +5 ms adım bırakılır. Ardından mevcut 5 ms fade-in başlar.
+   - Duyulmazlık gerekçesi: atma, zaten sessiz olan çıkışta (fade-out + sessizlik) ve fade-in'den önce yapılıyor. Duyulan şey, kesintinin süresi değil içeriğinden birkaç on ms eksik olması; tıklama yok, perde değişmiyor.
+   - Atma yapılmayan durumlar: A/V bekletmesiyle (hold) başlangıç, çünkü orada fazla bilinçli ve A/V tabanı olur; sessizlik sonrası hızlı yeniden başlama (`quickRestart`), çünkü yeni sesin başı kesilmesin.
+   - PI sınırları değişmez (≤ %0,5 perde). Taban ilk pencerede hedefe oturur, PI yalnız küçük kalıntıyı düzeltir.
+   - Sayaçlar: `refill_trims`, `refill_trim_ms` ses `ev=stats` satırına eklenir (cihaz doğrulaması için).
+4. **Log**: çıkış açılırken (`applySafety` yeni API ile çağrıldığında) bir kez `ev=safety_start api= stored= used= source=`.
+5. **AudioTrack ("Uyumlu") yolu**: aynı `DriftController`/`PlayoutCore`/`SafetyMemory` kurallarını kullanır; tabanı 5 ms kalır, ayrı ayar yok.
+6. **Testler**:
+   - `SafetyMemoryTest`: (a) saklı 40 → 30; kayıt 30'a kırpılır.
+   - `DriftControllerTest`: (b) 40 → 20 temiz akışta 100 pencere; (c) +5 sonra 25 pencerede geri; eşik aralık tavanı.
+   - Yeni `UnderrunRefillTest`: (d) simülasyonda topluca gelen 80 ms takılma → alt taşma, ≤ 3 s'de taban hedefin ±5 ms'inde, perde ≤ %0,5.
+   - (e) Mevcut testler, yavaş küçülmeye bağlı beklentiler sabit adıyla güncellenir.
 
 ## Handoff
 
