@@ -1,7 +1,7 @@
 ---
 id: T-136
 title: Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç"
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

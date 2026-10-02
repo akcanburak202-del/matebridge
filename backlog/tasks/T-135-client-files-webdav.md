@@ -1,7 +1,7 @@
 ---
 id: T-135
 title: Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []

@@ -1034,3 +1034,10 @@ T-123, T-124, T-125, T-126 done.
 - 15:47:10 `pmset sleepnow` → host `host_sleep_ack waited_ms=43 flushed=true` → tablet `bye_recv reason=6`, `host_sleep transport=usb` → 15:47:15 Sleep; **95 s boyunca hiç karanlık uyanma yok**.
 - 15:48:46 kullanıcı tablet ekranını açtı → `host_sleep_clear reason=foreground` → USB denemesi (tünel yok) → `usb_lost` → Wi-Fi'de saklanan IP'ye `wake_connect attempt=1 result=ok ms=501` → Mac "Wake ... E_RX_IP_PACKET/HID Activity" 15:48:50 → host `power state=awake reason=session_started` + `wake_display` → görüntü ~2 s (kullanıcı). 15:48:54 `transport_migrate ok=1 to=usb`, `wol_refresh result=stored`.
 - Kullanıcıdan: güç düğmesine gerek kalmadı. Magic packet hâlâ gönderiliyor (zararsız, Ethernet'te işe yarayabilir) ama uyandıran doğrudan TCP bağlantısı.
+
+## 2026-10-02 ~17:25–17:35 — Tablet dosyaları (T-135/T-136) cihazda
+
+- Kullanıcı tablette anahtarı açtı, "tüm dosyalara erişim" verdi; Mac menüsünden "Tablet dosyalarını aç" → `/Volumes/MatePad` (`http://127.0.0.1:47010/MatePad/`, `adb forward tcp:47010 tcp:47010`, yalnız USB). İlk bağlamada macOS ağ birimi izni sordu.
+- Sürükle-bırak iki yönde çalıştı. Aktarım tavanı tutuyor: `bytes_out` ~19,8–20,0 MB/s, `throttled_ms` 2,5–3,5 s/s. **Kullanıcı: büyük dosya kopyalarken görüntüde takılma yok.**
+- Sorun: bağlama her seferinde **tam ~90 s** (`mount result=ok ms=90187`, `ms=90120`); tablette 1 istek → 90 s sessizlik → normal trafik. → T-137.
+- Olay: kablo bir ara kullanıcının telefonuna takılıydı; `install-apk.sh` artık HUAWEI olmayan cihaza kurmayı reddediyor (ecf7c9f).

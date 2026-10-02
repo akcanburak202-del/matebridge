@@ -2,13 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
-| [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -158,3 +151,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-132](tasks/T-132-host-bye-host-sleep.md) | Mac — uykuya girerken oturumu BYE(HOST_SLEEP) ile kapat | 4 | mac-host-dev | [T-128] |
 | [T-133](tasks/T-133-client-host-sleep-and-usb-wol.md) | Tablet — BYE(HOST_SLEEP) sonrası "Mac uyku modunda" (otomatik yeniden bağlanma yok); USB'de de `wol` öğren | 4 | android-client-dev | [T-129] |
 | [T-134](tasks/T-134-client-wake-by-direct-connect.md) | Tablet — Mac'i saklanan IP'ye doğrudan TCP bağlanarak uyandır (magic packet işe yaramıyor) | 4 | android-client-dev | [T-133] |
+| [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
+| [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
