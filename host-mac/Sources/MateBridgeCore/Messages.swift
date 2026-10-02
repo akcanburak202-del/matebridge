@@ -94,6 +94,8 @@ public struct Capabilities: OptionSet, Sendable {
     public static let audioPCM = Capabilities(rawValue: 1 << 8)
     /// The client can open its settings panel while streaming and handles `SETTINGS_OPEN` (decision 0013).
     public static let settingsPanel = Capabilities(rawValue: 1 << 9)
+    /// The client can serve its files over WebDAV and sends `FILES_INFO` (decision 0015).
+    public static let files = Capabilities(rawValue: 1 << 10)
 }
 
 public struct PenFlags: OptionSet, Sendable {

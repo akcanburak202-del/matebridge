@@ -16,6 +16,28 @@ final class AdbOutputTests: XCTestCase {
         XCTAssertTrue(AdbOutput.parseReverseList("").isEmpty)
     }
 
+    func testForwardPortSkipsBannersAndRejectsGarbage() {
+        XCTAssertEqual(AdbOutput.parseForwardPort("54321\n"), 54321)
+        XCTAssertEqual(AdbOutput.parseForwardPort("* daemon not running; starting now at tcp:5037\n"
+                                                  + "* daemon started successfully\n53000\n"), 53000)
+        XCTAssertNil(AdbOutput.parseForwardPort(""))
+        XCTAssertNil(AdbOutput.parseForwardPort("0\n"))
+        XCTAssertNil(AdbOutput.parseForwardPort("70000\n"))
+        XCTAssertNil(AdbOutput.parseForwardPort("error: cannot bind listener: Address already in use\n"))
+    }
+
+    func testForwardListFiltersBySerialAndTcp() {
+        let text = "* daemon started successfully\n"
+            + "ABC123 tcp:47010 tcp:47010\n"
+            + "ABC123 tcp:53000 tcp:47012\n"
+            + "OTHER tcp:47011 tcp:47010\n"
+            + "ABC123 localabstract:foo tcp:1\n"
+            + "garbage\n"
+        XCTAssertEqual(AdbOutput.parseForwardList(text, serial: "ABC123"), [47010, 53000])
+        XCTAssertEqual(AdbOutput.parseForwardList(text, serial: "OTHER"), [47011])
+        XCTAssertEqual(AdbOutput.parseForwardList("", serial: "ABC123"), [])
+    }
+
     func testSelectDevicePrefersPhysicalReadyDevice() {
         let devices = [AdbDevice(serial: "emulator-5554", state: "device"),
                        AdbDevice(serial: "OFF", state: "offline"),

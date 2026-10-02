@@ -685,6 +685,18 @@ extension SessionMachineTests {
         _ = m.received(A, hello(), now: 0)
         #expect(m.received(A, .settingsOpen(SettingsOpen()), now: 1).isEmpty)
     }
+
+    @Test func filesInfoIsDeliveredOnlyFromTheActiveSession() {
+        let info = Message.filesInfo(FilesInfo(state: .ready, port: 47010, token: "t"))
+        var pending = makeMachine()
+        _ = pending.connectionOpened(A, now: 0)
+        _ = pending.received(A, hello(), now: 0)
+        #expect(pending.received(A, info, now: 1).isEmpty)
+
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        #expect(m.received(A, info, now: 1) == [.deliver(A, info)])
+    }
 }
 
 // MARK: - SETTINGS_OPEN from the host menu (T-106, decision 0013)

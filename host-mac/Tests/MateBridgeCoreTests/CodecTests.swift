@@ -361,6 +361,33 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         #expect(!Capabilities(rawValue: 0x1ff).contains(.settingsPanel))
     }
 
+    @Test func filesInfoCodecAndCapabilityBit10() throws {
+        #expect(MessageType.filesInfo.rawValue == 0x09)
+        #expect(Capabilities.files.rawValue == 1 << 10)
+        let ready = Message.filesInfo(FilesInfo(state: .ready, port: 47010, token: "ab"))
+        #expect(try ready.encode() == [0x09, 6, 0, 0, 0, 1, 0xa2, 0xb7, 2, 0x61, 0x62])
+        #expect(try decodeOne(frame(0x09, [1, 0xa2, 0xb7, 2, 0x61, 0x62, 9, 9])) == ready)  // extra bytes ignored
+        // Unknown state decodes (no protocol error) and is not READY.
+        guard case .filesInfo(let odd) = try decodeOne(frame(0x09, [7, 1, 0, 1, 0x61])) else {
+            Issue.record("not FILES_INFO")
+            return
+        }
+        #expect(odd.state.rawValue == 7)
+        #expect(!odd.isReady)
+        #expect(!FilesInfo(state: .ready, port: 0, token: "x").isReady)
+        #expect(!FilesInfo(state: .ready, port: 1, token: "").isReady)
+        #expect(throws: ProtocolError.payloadTooShort(type: 0x09)) { try decodeOne(frame(0x09, [1, 0xa2, 0xb7])) }
+    }
+
+    @Test func filesInfoDescriptionNeverShowsTheToken() {
+        let secret = "0123456789abcdef0123456789abcdef"
+        let info = FilesInfo(state: .ready, port: 47010, token: secret)
+        #expect(!String(describing: info).contains(secret))
+        #expect(!String(reflecting: info).contains(secret))
+        #expect(!String(describing: Message.filesInfo(info)).contains(secret))
+        #expect(!String(reflecting: Message.filesInfo(info)).contains(secret))
+    }
+
     @Test func penEncoderRejectsDecreasingTime() {
         let a = PenSample(dtUs: 5, x: 0, y: 0, pressure: 0, tiltX: 0, tiltY: 0, flags: [])
         var b = a

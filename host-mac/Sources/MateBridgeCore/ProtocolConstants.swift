@@ -30,6 +30,7 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case clipboard = 0x06
     case displayRate = 0x07
     case settingsOpen = 0x08
+    case filesInfo = 0x09
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12

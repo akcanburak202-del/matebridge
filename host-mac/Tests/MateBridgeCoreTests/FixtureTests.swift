@@ -37,6 +37,8 @@ private let validFixtures: [String: Message] = [
     "stream_prefs_bitrate": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: 40000)),
     "display_rate": .displayRate(DisplayRate(hz: 60)),
     "settings_open": .settingsOpen(SettingsOpen()),
+    "files_info_ready": .filesInfo(FilesInfo(state: .ready, port: 47010, token: "0123456789abcdef0123456789abcdef")),
+    "files_info_off": .filesInfo(.off),
     "clipboard_text": .clipboard(Clipboard.text(seq: 3, "Merhaba ğüşıöç — kopyala")),
     "clipboard_empty": .clipboard(Clipboard.empty(seq: 4)),
     "pen_hover_to_contact": .pen(PenBatch(tool: .pen, baseTimeUs: 1_127_411_618_000, samples: [

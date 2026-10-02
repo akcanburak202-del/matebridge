@@ -9,7 +9,7 @@ SharpnessBench.runIfRequested()  // T-086: `--sharpness-bench` (synthetic text t
 InjectTestCommand.runIfRequested()  // T-023: `--inject-test` CLI mode (posts real input events), same
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var server: SessionServer?
@@ -22,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Decision 0013 (T-106): sends `SETTINGS_OPEN`; shown only while the connected tablet supports the panel.
     private let tabletSettingsEntry = NSMenuItem(title: "Tablette ayarları aç", action: #selector(openTabletSettings),
                                                  keyEquivalent: "")
+    /// Decision 0015 (T-136): mounts the tablet's WebDAV volume and opens it in Finder (USB sessions only).
+    private let tabletFilesEntry = NSMenuItem(title: "Tablet dosyalarını aç", action: #selector(openTabletFiles),
+                                              keyEquivalent: "")
+    private let tabletFiles = TabletFilesBridge()
+    private var tabletFilesEnabled = false
     private let accessibilityLine = NSMenuItem(title: "Erişilebilirlik izni gerekli", action: nil, keyEquivalent: "")
     private let accessibilitySettingsItem = NSMenuItem(title: "Sistem Ayarları'nı aç…",
                                                        action: #selector(openAccessibilitySettings), keyEquivalent: "")
@@ -57,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tabletSettingsEntry.target = self
         tabletSettingsEntry.isHidden = true
         menu.addItem(tabletSettingsEntry)
+        tabletFilesEntry.target = self
+        tabletFilesEntry.isHidden = true
+        menu.addItem(tabletFilesEntry)
         // Input needs the Accessibility permission: shown (with a way to grant it) until it is granted.
         accessibilityLine.isEnabled = false
         accessibilityLine.isHidden = true
@@ -120,17 +128,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let input = self.input
         let clipboard = self.clipboard
         let audio = self.audio
+        let tabletFiles = self.tabletFiles
+        tabletFiles.onMenuChange = { [weak self] state in
+            // FIFO onto the main queue, like the settings item: states never land out of order.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.showTabletFiles(state) } }
+        }
         handlers.sessionStarted = { sid, cid, hello, transport in
             coordinator.sessionStarted(sessionID: sid, configID: cid, hello: hello, transport: transport)
             input.sessionStarted(sessionID: sid, configID: cid)
             clipboard.sessionStarted(sessionID: sid)
             audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM))
+            tabletFiles.sessionStarted(transport: transport, capabilities: hello.capabilities)
         }
         handlers.sessionEnded = {
             audio.sessionEnded()  // first: the Mac's own sound comes back at once (no video grace period)
             coordinator.sessionEnded()
             input.sessionEnded()
             clipboard.sessionEnded()
+            tabletFiles.sessionEnded()  // unmount the tablet volume, remove the forward
         }
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
         handlers.settingsPanelAvailable = { [weak self] available in
@@ -142,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.deliver(message)
             input.deliver(message)
             clipboard.deliver(message)
+            tabletFiles.deliver(message)
         }
         handlers.releaseInput = { input.releaseInput($0) }
         coordinator.onSummary = { [weak self] text in
@@ -163,7 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         loginItem.registerOnFirstRun()
         // USB mode defaults to on and the choice persists. The guard keeps the `adb reverse` tunnels alive (T-039).
-        usbWatcher.onStateChange = { [weak self] state in
+        usbWatcher.onStateChange = { [weak self, tabletFiles] state in
+            tabletFiles.usbStateChanged(state)
             Task { @MainActor in self?.showUsb(state) }
         }
         usbWatcher.setEnabled(usbModeEnabled)
@@ -179,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         server?.stop()  // release input (releaseInput), BYE(SHUTTING_DOWN) to peers
+        tabletFiles.shutdown()  // unmount the tablet volume and remove the forward (bounded wait)
         audio.shutdown()  // stop streaming; the tap teardown below gives the Mac its sound back
         audioTap.shutdown()
         input.shutdown()  // backstop: releases whatever is still held, even if no session was reported
@@ -187,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         input.refreshStatus()  // permission may have changed in System Settings
+        tabletFiles.menuWillOpen()  // retries a failed forward
         loginItem.refresh()  // read live: the user may have changed it in System Settings
         loginItemEntry.state = loginItem.status.isRequested ? .on : .off
         loginItemEntry.title = loginItem.status.menuTitle
@@ -242,6 +261,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The server re-checks the session and its capability before sending (the item may be stale by a moment).
     @objc private func openTabletSettings() {
         server?.openSettingsPanel()
+    }
+
+    /// The bridge re-checks its state (the item may be stale by a moment); already mounted only opens Finder.
+    @objc private func openTabletFiles() {
+        tabletFiles.open()
+    }
+
+    /// The menu auto-enables items that have an action, so the enabled state goes through `validateMenuItem`.
+    private func showTabletFiles(_ state: TabletFilesMenu) {
+        tabletFilesEntry.isHidden = state == .hidden
+        tabletFilesEnabled = false
+        switch state {
+        case .hidden: break
+        case .enableOnTablet: tabletFilesEntry.title = "Tablet dosyaları: tablette açın (Ayarlar → Tablet dosyaları)"
+        case .usbOnly: tabletFilesEntry.title = "Tablet dosyalarını aç (yalnızca USB ile)"
+        case .preparing: tabletFilesEntry.title = "Tablet dosyalarını aç (hazırlanıyor…)"
+        case .mounting: tabletFilesEntry.title = "Tablet dosyaları bağlanıyor…"
+        case .ready(let lastMountFailed):
+            tabletFilesEntry.title = lastMountFailed ? "Tablet dosyalarını aç (bağlanamadı, tekrar dene)"
+                                                     : "Tablet dosyalarını aç"
+            tabletFilesEnabled = true
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem === tabletFilesEntry ? tabletFilesEnabled : true
     }
 
     @objc private func forgetDevices() {
