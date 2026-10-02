@@ -33,7 +33,12 @@ Host değişikliği yok. Cihaz testi (orkestratör).
 
 ## Plan
 
-(ajan doldurur)
+1. **`WolStore`:** `wol_port` anahtarı; `onResolved(host, port, txt, subnet)` portu host ile birlikte yazar; `port()` saklı yoksa 47001 (`ConnectMode.USB_CONTROL_PORT` = host kontrol portu). `MacDiscovery.onTxt` çözümlemenin portunu da verir (Wi-Fi keşfi ve T-133 USB TXT yenilemesi aynı yol).
+2. **`SessionMachine`:** `Event.Start(endpoint, wakeAttempt = 0)`, `Action.OpenControl(gen, endpoint, wakeAttempt = 0)`. `wakeAttempt > 0` tek seferlik bir uyandırma denemesidir: TCP bağlanamazsa yeniden deneme zamanlayıcısı yok (faz `IDLE`, `Ui(Disconnected(CONNECT_FAILED, 0))`); `ControlOpened` gelince bayrak düşer ve oturum normal akışla sürer (HELLO_ACK, şifreleme, kopunca normal yeniden bağlanma).
+3. **`SessionController`:** `start(endpoint, wakeAttempt)`; uyandırma denemesinin kontrol soketi `wifiBinder` ile Wi-Fi ağına bağlanır (`Network.bindSocket`; Wi-Fi yoksa bağlanmadan `result=error`), bağlantı zaman aşımı 3 s; sonuç `ev=wake_connect attempt=N result=ok|timeout|refused|error ms=…` (adres yok) ve `SessionListener.onWakeConnect(attempt, ok)`.
+4. **Saf `session/WakeConnect.kt` (JVM testli):** bölüm içi doğrudan deneme zamanlaması: bölüm etkin + hedef var + oturum boşta (`canAttempt`: mod USB değil, USB'de değil, AUTO seçimi sürmüyor, mevcut uç nokta yok ya da bizim başarısız denememiz) → deneme N; sonuç gelmeden yeni deneme yok (kayıp sonuç için 3 s + pay sonra sıfırlanır); başarısızlıktan ~2 s sonra sonraki; `ok` ya da keşif bulursa bölümde başka deneme yok; yeni bölüm sayacı 1'den başlatır. `classify(IOException?)` → `ok|timeout|refused|error`. Keşif kararı: bizim denememiz sürerken/başarısızken keşif bulursa ona bağlanılır (SessionMachine `Start` önce eskisini kapatır → tek bağlantı); bölüm bitince başarısız denememiz serbest bırakılır (uç nokta temizlenir, "Mac aranıyor…").
+5. **`MainActivity`:** `wolStep` sonunda `wakeConnectStep()`; `onWakeConnect` → planlayıcı (`ok` → uç nokta benimsenir, `lastWifiEndpoint`); `onDiscovered` keşif kuralı. "Mac uyku modunda"dayken "Bağlan" da `clear` + `applyTransport` + elle uyandırma bölümü (= "Mac'i uyandır"); ikisi de `currentEndpoint = null` yapar (yan bulgu: Wi-Fi modunda eski uç nokta keşfi engelliyordu). `hostSleep.asleep` iken bölüm yok → doğrudan deneme de yok (T-133 kuralı).
+6. Testler: `WakeConnectTest`, `SessionMachineTest` (+wake deneme), `WolTest` (port).
 
 ## Handoff
 
