@@ -1,7 +1,7 @@
 ---
 id: T-113
 title: Mac — uygulamadaki kodlama süresi (enc_ms ~9,5 ms) yalıtılmış bench'ten (~6,4 ms) neden uzun? Ölç, nedeni bul
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-111
 title: Mac — kontrol bağlantısını (girdi, ses, kontrol mesajları) çekirdek TCP soketine taşı (T-091'in kontrol karşılığı)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-091, T-092]
