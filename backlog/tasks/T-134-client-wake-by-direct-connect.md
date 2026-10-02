@@ -19,13 +19,13 @@ Mac uyurken Bonjour keşfi Mac'i bulamaz (uyku vekili yok), bu yüzden şu an uy
 
 ## Kabul kriterleri
 
-- [ ] `WolStore` saklanan host IPv4'ün yanında kontrol **portunu** da saklar (TXT'nin geldiği çözümlemeden; yoksa 47001).
-- [ ] **Uyandırma bölümünde doğrudan bağlantı:** T-129 uyandırma bölümü başladığında (otomatik — ev ağında — ya da elle "Mac'i uyandır"/"Bağlan"), magic packet'lere ek olarak saklanan IP:port'a **normal oturum bağlantısı** (HELLO akışı, mevcut `SessionMachine` yolu) denenir: Wi-Fi ağına bağlı soketle, bağlantı zaman aşımı ~3 s, denemeler arası ~2 s, bölüm süresince (20 s). Bağlantı kurulursa normal oturum akışı (HELLO_ACK, şifreleme) devam eder ve bölüm `connected` ile biter. Keşif (NSD) paralel çalışmaya devam eder; hangisi önce bulursa o kullanılır, ikinci bağlantı açılmaz.
-- [ ] Bu doğrudan deneme yalnızca uyandırma bölümü içinde yapılır; "Mac uyku modunda" (BYE HOST_SLEEP) durumunda, kullanıcı eylemi/ön plana dönüş olmadan **hiç** paket gönderilmez (T-133 kuralı aynen).
-- [ ] Taşıma modu: Wi-Fi ve Otomatik modda (USB yoksa ya da USB kaybolduysa) çalışır. Otomatik modda Mac uyanıp USB tüneli geri gelirse mevcut auto/migrate mantığı USB'ye geçebilir (değişmez).
-- [ ] "Mac uyku modunda" durumunda "Bağlan" düğmesi de aynı yolu başlatır (uyandırma bölümü + doğrudan bağlantı); kullanıcının modu değiştirmesine gerek kalmaz.
-- [ ] Log: `MB/session ev=wake_connect attempt=N result=ok|timeout|refused|error ms=…` (adres yok). Bölüm başı/sonu T-129 logları aynen.
-- [ ] Saf mantık testli (bölüm içinde doğrudan deneme zamanlaması, keşifle yarış — tek bağlantı, host_sleep'te sessizlik). `./scripts/check.sh` geçiyor.
+- [x] `WolStore` saklanan host IPv4'ün yanında kontrol **portunu** da saklar (TXT'nin geldiği çözümlemeden; yoksa 47001).
+- [x] **Uyandırma bölümünde doğrudan bağlantı:** T-129 uyandırma bölümü başladığında (otomatik — ev ağında — ya da elle "Mac'i uyandır"/"Bağlan"), magic packet'lere ek olarak saklanan IP:port'a **normal oturum bağlantısı** (HELLO akışı, mevcut `SessionMachine` yolu) denenir: Wi-Fi ağına bağlı soketle, bağlantı zaman aşımı ~3 s, denemeler arası ~2 s, bölüm süresince (20 s). Bağlantı kurulursa normal oturum akışı (HELLO_ACK, şifreleme) devam eder ve bölüm `connected` ile biter. Keşif (NSD) paralel çalışmaya devam eder; hangisi önce bulursa o kullanılır, ikinci bağlantı açılmaz.
+- [x] Bu doğrudan deneme yalnızca uyandırma bölümü içinde yapılır; "Mac uyku modunda" (BYE HOST_SLEEP) durumunda, kullanıcı eylemi/ön plana dönüş olmadan **hiç** paket gönderilmez (T-133 kuralı aynen).
+- [x] Taşıma modu: Wi-Fi ve Otomatik modda (USB yoksa ya da USB kaybolduysa) çalışır. Otomatik modda Mac uyanıp USB tüneli geri gelirse mevcut auto/migrate mantığı USB'ye geçebilir (değişmez).
+- [x] "Mac uyku modunda" durumunda "Bağlan" düğmesi de aynı yolu başlatır (uyandırma bölümü + doğrudan bağlantı); kullanıcının modu değiştirmesine gerek kalmaz.
+- [x] Log: `MB/session ev=wake_connect attempt=N result=ok|timeout|refused|error ms=…` (adres yok). Bölüm başı/sonu T-129 logları aynen.
+- [x] Saf mantık testli (bölüm içinde doğrudan deneme zamanlaması, keşifle yarış — tek bağlantı, host_sleep'te sessizlik). `./scripts/check.sh` geçiyor.
 
 ## Kapsam dışı
 
