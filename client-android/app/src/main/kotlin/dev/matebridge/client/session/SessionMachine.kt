@@ -3,6 +3,7 @@ package dev.matebridge.client.session
 import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.DisplayRate
+import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message
@@ -41,6 +42,7 @@ class SessionMachine(
     initialPrefs: StreamPrefs = StreamMode.DEFAULT.toPrefs(),
     private val pingIntervalUs: Long = PING_INTERVAL_US, // T-089 knob (--ei ping_ms N); the PONG timeout is unchanged
     initialAudio: Boolean? = null, // T-095: AUDIO_PREFS wish; null = this client does not do audio (nothing is sent)
+    initialFiles: FilesInfo? = null, // T-135: file server state; null = this client has no file server (nothing is sent)
 ) {
     sealed interface Event {
         /**
@@ -67,6 +69,8 @@ class SessionMachine(
         data class SetDisplayRate(val hz: Int) : Event
         /** The user's audio setting (T-095): remembered, and sent as AUDIO_PREFS now when input is allowed. */
         data class SetAudio(val enabled: Boolean) : Event
+        /** T-135: the tablet file server's state: remembered, sent as FILES_INFO now when input is allowed and it changed. */
+        data class SetFiles(val info: FilesInfo) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -137,6 +141,7 @@ class SessionMachine(
     private var prefs = initialPrefs
     private var displayHz = 0 // 0 = not measured yet: nothing is sent
     private var audio: Boolean? = initialAudio
+    private var files: FilesInfo? = initialFiles
     private var pingSeq = 0L
     private var nextPingUs = 0L
     private var lastPongUs = 0L
@@ -256,6 +261,13 @@ class SessionMachine(
                     if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
                 }
             }
+            is Event.SetFiles -> {
+                // Only a client with a file server (non-null) sends FILES_INFO (PROTOCOL.md 0x09): once per session, then on change.
+                if (files != null && event.info != files) {
+                    files = event.info
+                    if (inputAllowed) out += Action.Send(event.info)
+                }
+            }
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
         }
         return out
@@ -295,6 +307,7 @@ class SessionMachine(
                 out += Action.Send(prefs) // T-050: right after the proof PING, never before it
                 if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
                 audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
+                files?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS
                 nextPingUs = nowUs + pingIntervalUs
                 hostName = ack.hostName
                 sessionId = ack.sessionId
@@ -493,7 +506,7 @@ class SessionMachine(
         endpoint = ep
         out += Action.PromoteCandidate(gen, ep)
         phase = Phase.AWAIT_ACK
-        onAck(ack, nowUs, out) // proof PING first, then STREAM_PREFS / DISPLAY_RATE / AUDIO_PREFS, Ui(Connected)
+        onAck(ack, nowUs, out) // proof PING first, then STREAM_PREFS / DISPLAY_RATE / AUDIO_PREFS / FILES_INFO, Ui(Connected)
         out += Action.MigrationResult(ep, true, REASON_OK)
     }
 

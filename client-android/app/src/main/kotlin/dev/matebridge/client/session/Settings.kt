@@ -47,6 +47,11 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setClipboardShare(on: Boolean) = store.putString(KEY_CLIPBOARD, if (on) "1" else "0")
 
+    /** "Tablet dosyalarını Mac'te göster" (T-135, decision 0015); default off, only a stored "1" enables. */
+    fun filesShare(): Boolean = store.getString(KEY_FILES) == "1"
+
+    fun setFilesShare(on: Boolean) = store.putString(KEY_FILES, if (on) "1" else "0")
+
     /** Mac audio on the tablet (T-095); default on, only a stored "0" disables. */
     fun audioEnabled(): Boolean = store.getString(KEY_AUDIO) != "0"
 
@@ -138,6 +143,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"
+        const val KEY_FILES = "files_share"
         const val KEY_AUDIO = "audio_enabled"
         const val KEY_AUDIO_OUT = "audio_out"
         const val KEY_PEN_TRAIL = "pen_trail"

@@ -44,6 +44,9 @@ import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.audio.AudioPlayout
 import dev.matebridge.client.audio.AvSync
 import dev.matebridge.client.protocol.Capabilities
+import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.files.FilesController
+import dev.matebridge.client.files.FilesSwitch
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
@@ -132,6 +135,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** A valid `--es audio_out` launch override is in effect: game mode leaves the audio output alone until the panel changes it. */
     private var audioOutFromExtra = false
     private lateinit var clipboard: ClipboardBridge // T-055
+    /** T-135: the tablet-files WebDAV server (decision 0015); runs only while started, switched on and permitted. */
+    private lateinit var files: FilesController
 
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
     private val settingsPanel = SettingsPanelState { ev, fields -> MbLog.i(ev, fields) }
@@ -494,7 +499,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
         }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
+            initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
         )
+        files = FilesController({ controller.setFilesInfo(it) }) { ui.post { refreshSettings() } }
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -830,6 +837,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             gameSettings.setPenDot(on)
             applyPenDot(on)
         }
+
+        override val filesShare get() = settings.filesShare()
+        override fun setFilesShare(on: Boolean) { // T-135
+            settings.setFilesShare(on)
+            if (on && !files.hasPermission()) files.openPermissionScreen(this@MainActivity) // onStart re-syncs on return
+            files.sync(on, started)
+        }
+        override val filesStatus get() = FilesSwitch.statusText(files.status)
 
         override val clipboardShare get() = clipboard.sync.enabled
         override fun setClipboardShare(on: Boolean) { // T-055
@@ -1327,6 +1342,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_FOREGROUND}") // T-133
         wolRefresh.reset() // T-133: one USB `wol` refresh per start
         mode = modeOverride ?: settings.transportMode()
+        files.sync(settings.filesShare(), foreground = true) // T-135: also picks up a permission granted meanwhile
         refreshSettings()
         hostReached = false
         hideManualEntry() // T-078: every (re)start begins without an editable field on screen
@@ -1616,6 +1632,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         audio?.endSession("background") // T-095: silence at once and take no more audio; the BYE stops the host
+        files.sync(settings.filesShare(), foreground = false) // T-135: no session in the background, so no file server
         controller.stop() // sends BYE, closes both connections
         syncWifiLock("background") // started is false: always released here
         super.onStop()
@@ -1628,6 +1645,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         presenter?.stop()
         presenter = null
         controller.shutdown()
+        if (::files.isInitialized) files.shutdown()
         audio?.shutdown()
         wifiLock?.sync(false, "destroy")
         probeExec?.shutdownNow()
@@ -1944,7 +1962,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val caps = Capabilities.PEN or Capabilities.PEN_HOVER or Capabilities.PEN_TILT or Capabilities.KEYBOARD or
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or
             (if (audioAllowed) Capabilities.AUDIO_PCM else 0) or // T-095
-            Capabilities.SETTINGS_PANEL // T-105: handles SETTINGS_OPEN
+            Capabilities.SETTINGS_PANEL or // T-105: handles SETTINGS_OPEN
+            Capabilities.FILES // T-135: sends FILES_INFO (OFF until the user enables the file server)
         return Hello(
             protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),
