@@ -39,7 +39,7 @@ Cihaz (2026-10-02 ~18:20): bağlama artık 0,17 s (T-137 tamam). Kullanıcı **1
 
 ## Handoff
 
-**Commit:** bkz. dal `task/T-138-files-bulk` (araç + kart; SHA rapor mesajında). Uygulama kodu **değişmedi**.
+**Commit:** `805c3ac` (araç + bulgular), dal `task/T-138-files-bulk` (1d0263c'den). Uygulama kodu **değişmedi**.
 
 **Dosyalar:** `tools/dav-repro/bulk.sh` (yeni), `readers.py` (yeni), `bigmovie.py` (yeni), `threads.py` (yeni), `DavRepro.java` (ortam değişkenleri: `MB_DAV_RATE`, `MB_DAV_MAXCONN`, `MB_DAV_DIRECT`, `MB_DAV_PROXY_RESET`; vekil artık istemci bağlantıyı sıfırlayınca iki ucu da kapatıyor — eskisi yarım kapatıp sunucuyu yazmada asılı bırakıyordu), bu kart.
 
