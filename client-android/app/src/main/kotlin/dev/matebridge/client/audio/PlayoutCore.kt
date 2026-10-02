@@ -25,6 +25,15 @@ package dev.matebridge.client.audio
  * span, i.e. the next packet will find the level at the target. With 10 ms packets and short bursts the first frame
  * of a sound is heard about `target` after its packet arrived.
  *
+ * Bunched refill (T-118): packets held up in transport arrive together, so the level can jump far past the refill
+ * threshold in one step (seen: target 40 ms, start level 75 ms, and the PI needed >10 s to bring it back). When a
+ * priming ends more than [TRIM_SLACK_MS] above the refill threshold, the oldest frames above it are dropped before the
+ * fade-in. The output is silent at that moment, so the drop shortens what follows the gap rather than adding a skip
+ * of its own: no click, no pitch change. A stall longer than [IDLE_AFTER_MS] takes the quick-restart path, and its
+ * bunch (no capture jump, so already confirmed as an underrun) is trimmed too. If the run-dry is not yet classified,
+ * one safety step is kept for the underrun it probably was. No trim after an A/V hold (that level is meant) nor
+ * after a run-dry classified idle (the start of a new sound must not be cut).
+ *
  * A/V while priming: [primingHoldUs] > 0 means "starting now would put the audio that much ahead of its A/V target";
  * playback then waits (up to the buffer's max refill level) and the level it starts at becomes the A/V floor, so the
  * first A/V target needs no rebuffer later.
@@ -46,6 +55,7 @@ class PlayoutCore(
     private val fadeOutFrames = FADE_OUT_MS * sampleRate / 1000
     private val fadeInFrames = FADE_IN_MS * sampleRate / 1000
     private val idleAfterFrames = IDLE_AFTER_MS * sampleRate / 1000
+    private val trimSlackFrames = TRIM_SLACK_MS * sampleRate / 1000
     private var inBuf = ShortArray(0)
     private val headFrame = ShortArray(channels)
     private var heldThisPriming = false
@@ -60,6 +70,14 @@ class PlayoutCore(
     private var starveDiscontinuities = 0L
     /** This priming follows silence: restart at the minimum playable level. */
     private var quickRestart = false
+    /** T-118: this priming follows a run-dry classified idle (the source went silent): no trim at its start. */
+    private var idleRestart = false
+
+    /** T-118: playback starts whose bunched excess was dropped, and the frames dropped. */
+    var refillTrims = 0L
+        private set
+    var refillTrimFrames = 0L
+        private set
 
     /** Times the buffer ran dry because the source went silent (not underruns). */
     var idleGaps = 0L
@@ -97,6 +115,7 @@ class PlayoutCore(
             val hold = primingHoldUs > 0 && level < drift.maxRefillFrames
             if (filled && hold) heldThisPriming = true
             if (filled && !hold) {
+                if (!heldThisPriming && !idleRestart) trimExcess(frames)
                 state = State.PLAYING
                 if (buffer.peek(headFrame, 1) == 1) resampler.prime(headFrame)
                 ramp.fadeIn(fadeInFrames)
@@ -105,6 +124,7 @@ class PlayoutCore(
                 if (heldThisPriming) drift.seedAvFloor(level - drift.lastSpanFrames / 2)
                 heldThisPriming = false
                 quickRestart = false
+                idleRestart = false
                 hasPlayed = true
             } else {
                 out.fill(0, 0, frames * channels)
@@ -149,6 +169,16 @@ class PlayoutCore(
         }
     }
 
+    /** Drops the level's excess above the refill threshold (see the class comment); called just before the fade-in. */
+    private fun trimExcess(frames: Int) {
+        val keep = drift.refillThresholdFrames(frames, fadeOutFrames) + if (starvePending) drift.safetyStepFrames else 0
+        val excess = buffer.level - keep
+        if (excess <= trimSlackFrames) return
+        buffer.consume(excess)
+        refillTrims++
+        refillTrimFrames += excess
+    }
+
     private fun trackArrivals(frames: Int) {
         val p = buffer.packets
         if (p != seenPackets) {
@@ -165,7 +195,10 @@ class PlayoutCore(
         if (buffer.discontinuities != starveDiscontinuities) {
             starvePending = false
             idleGaps++
-            if (state == State.PRIMING) quickRestart = true
+            if (state == State.PRIMING) {
+                quickRestart = true
+                idleRestart = true
+            }
         } else if (buffer.packets - starvePackets >= CONFIRM_PACKETS) {
             starvePending = false
             drift.onUnderrun()
@@ -179,5 +212,7 @@ class PlayoutCore(
         const val IDLE_AFTER_MS = 20
         /** Packets without a capture jump after running dry that confirm a real underrun. */
         const val CONFIRM_PACKETS = 3L
+        /** T-118: a start more than this above the refill threshold drops the excess down to the threshold. */
+        const val TRIM_SLACK_MS = 5
     }
 }
