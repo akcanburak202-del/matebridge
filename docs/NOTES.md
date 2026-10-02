@@ -1017,3 +1017,14 @@ T-123, T-124, T-125, T-126 done.
 - Kullanıcı uygulamadan çıkıp girdi → BYE → yeni oturum (karanlık uyanma penceresinde) → `power state=awake reason=session_started` → `wake_display reason=display_create_nil` → pmset "DarkWake to FullWake ... due to HID Activity" → `display_created` ~0,85 s. **T-128 karanlık uyanma düzeltmesi çalışıyor.** Kilit ekranı, şifre tablet klavyesiyle.
 - Karar: host uykuya girerken `BYE(HOST_SLEEP)` (PROTOCOL BYE reason 6) → T-132; tablet "Mac uyku modunda", otomatik yeniden bağlanma yok, ön plana dönüşte/elle uyandırma + USB'de de `wol` öğrenme → T-133.
 - Not: tablet USB taşımasında Bonjour keşfi çalışmıyor → `wol` hiç saklanmıyordu (test için tablet geçici olarak `transport=wifi`).
+
+## 2026-10-02 ~15:05–15:21 — T-132/T-133 uyku testi ve uyandırma yöntemi deneyi
+
+- **BYE(HOST_SLEEP) çalışıyor:** `host_sleep control=1 video=1` → `bye_sent reason=host_sleep` → `host_sleep_ack waited_ms=28 queue=ran flushed=true cut=0`; ses durdu. Tablet `bye_recv reason=6` → `host_sleep`, ~3,7 dk sessiz. Uyku boyunca 6 dk'da yalnız 1 karanlık uyanma (15:06:51, kaynağı bilinmiyor; önceki testte 2 dk'da 3).
+- **Magic packet (WoL) bu Mac'i Wi-Fi'de uyandırmıyor:** tablet ön plana dönünce `wol_start reason=not_found macs=1 targets=3`, 3 bölümde 174 paket (255.255.255.255, alt ağ yayını, unicast :9) → pmset'te hiç Wake/DarkWake yok. Kullanıcı güç düğmesine bastı.
+- **Deney (tablette `app_process` ile küçük prob, Mac `pmset sleepnow`, 15:16:46 uyku):**
+  - ICMP ping 15:17:17: 5/5 cevap (Wi-Fi çipi uykuda cevaplıyor, RTT 4–62 ms), **uyanma yok**.
+  - **TCP bağlantısı 192.168.1.106:47001 (host'un dinleyen kontrol portu) 15:18:32 → DarkWake 15:18:33 `E_RX_IP_PACKET`, connect 435 ms'de başarılı.**
+  - Sonuç: tablet Mac'i **saklanan IP'ye doğrudan TCP bağlanarak** uyandırabilir; karanlık uyanmada oturum kurulursa T-128 `session_started` yolu Mac'i tam uyandırır (14:44 testinde doğrulandı).
+- Yan bulgu: Mac güç düğmesiyle uyanınca tablet "Mac uyku modunda" durumunda beklediği için bağlanmadı; kullanıcı modu Otomatik'e alınca bağlandı (tasarım gereği; "Bağlan" yeterli olmalı).
+- → T-134: uyandırma = saklanan IP:port'a doğrudan oturum bağlantısı (magic packet de kalır).
