@@ -1002,3 +1002,10 @@ T-123, T-124, T-125, T-126 done.
   3. Uygulama ikonları (Android + Mac uygulama/menü çubuğu). Önce 2–3 taslak gösterilir, kullanıcı seçer.
   4. Temizlik: `.claude/worktrees` altındaki ~70 birleşmiş ajan kopyası silinecek.
 - Bekleyen: Mac Ethernet denemesi (T-127); film modu fikri (şimdilik değil, 24 fps / 60 Hz takılması çözülemiyor).
+
+## 2026-10-02 ~13:45 — Uyku/uyanma ölçümü (kullanıcıyla)
+
+- **Tablet ekranı kapat/aç (~56 s):** tablet `BYE` → host `input_session_end released=0`, `display_grace_started seconds=10` → `display_teardown`. Ekran açılınca `handshake` → `video_streaming` **~170 ms**; kalem/klavye/ses çalışıyor. Grace 10 s'yi aştığı için sanal ekran yeniden oluşturuldu (pencere yerleşimi etkisi kullanıcıya soruldu).
+- **Oturum açıkken `pmset sleepnow`:** ekran kapandı → Mac kilitlendi (kilit "hemen") → SCStream -3815 → T-081 `wake_display reason=capture_source_lost` (`UserIsActive "MateBridge: tablet session lost its display"`) → **sistem uykusu iptal**: pmset log'da yalnızca "Display is turned off/on", Sleep girdisi yok. Görüntü 1,2 s'de döndü, ses `audio_rebuild reason=wake`. Kullanıcı kilidi tablet klavyesiyle açtı. Yani MateBridge kasıtlı uykuyu engelliyor.
+- Mac ayarları: `sleep 0`, `displaysleep 0` (hiç uyumuyor; MateBridge'den bağımsız), `womp 1`; Wi-Fi kartı `Wake On Wireless: Supported`. Tablette `nc` yok (toybox), WoL'u adb'den denemek mümkün değil.
+- **Kullanıcı kararı:** uzun süre kullanılmayınca Mac uyusun (dakikayı kullanıcı macOS'ta kendisi ayarlar); tablet Mac'i Wake-on-LAN ile uyandırsın → T-128 (host: uykuya saygı, oturumda ekran uykusu yok, TXT `wol`), T-129 (tablet: magic packet). PROTOCOL.md §3.1'e TXT `wol` eklendi.
