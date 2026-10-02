@@ -1,7 +1,7 @@
 ---
 id: T-116
 title: Host — ses gönderim zamanlaması ölçümü (oturum kuyruğu bekleme, yakalama→yazım, yazımlar arası en büyük aralık)
-status: todo
+status: in-progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -44,7 +44,14 @@ Bu kart yalnız ölçüm ekler; düzeltme yok. T-117 (tablet varış ölçümü)
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Core `AudioSendTiming`** (`MateBridgeCore/Audio/AudioSendTiming.swift`, birim testli): oturum kuyruğunda yaşayan, kilitsiz değer tipi.
+   - `noteReceived(type:startUs:endUs:)`: kontrol bağlantısında işlenen son mesajın türü ve bitişi, son ses yazımından bu yana en uzun işlenen mesaj (tür + süre).
+   - `recordWrite(...)`: kuyruk beklemesi, yakalama→yazım, `write` çağrı süresi, yazım sonrası bekleyen bayt, yazım bitiş zamanı. Ardışık yazım aralığı > 20 ms ise `Gap` döner; saniyede en çok 5 (`gaps` sayacı hepsini sayar).
+   - Saniyelik pencere: `writes`, `queue_lag_ms_p50_max`, `cap_to_write_ms_p50_max`, `write_int_ms_max`, `write_block_ms_max`, `partial_writes`, `pending_bytes_max`, `gaps` (en yakın sıra yüzdelik). `takeReportIfDue` / `flush` / `reset` (akış sınırında aralık sayılmaz).
+2. **`AudioOutbox.Item.pushedUs`**: `push(..., nowUs:)` (varsayılan 0, mevcut testler değişmez); `sendAudio` damgalar.
+3. **`SessionServer`**: `drainAudio` başında `now` ile kuyruk beklemesi; her ses `AUDIO_FRAME` yazımının (`sendControl`) süresi ve sonrası bekleyen bayt (`bsd`: `pendingBytes`; `nw`: yazımdan önceki `inflightBytes`). `receiveControlBytes` her mesajın türünü ve işleme süresini not eder. Saniyelik `component=audio ev=send` (info) satırı ve hız sınırlı `ev=send_gap` (debug) satırı; `AUDIO_CONFIG` geçince pencere boşaltılır ve sıfırlanır. Davranış değişmez.
+4. **`docs/LOGGING.md`**: `ev=send` ve `ev=send_gap` alanları.
+5. `./scripts/check.sh`, Handoff.
 
 ## Handoff
 
