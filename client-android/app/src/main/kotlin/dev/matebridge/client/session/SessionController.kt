@@ -1,5 +1,9 @@
 package dev.matebridge.client.session
 
+import android.os.Debug
+import android.os.SystemClock
+import android.util.Log
+import dev.matebridge.client.audio.AudioArrivalMeter
 import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
 import dev.matebridge.client.protocol.AudioPrefs
@@ -15,6 +19,7 @@ import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.StreamPrefs
+import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.video.PaceTrace
@@ -149,6 +154,15 @@ class SessionController(
     @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
     @Volatile private var inputAllowed = false
+
+    /**
+     * T-117: audio arrival measurement. The meter is shared with the audio stats line; its clock offset comes from this
+     * controller's own [ClockSync] (fed by the same PONGs as the listener's, reset per session like it).
+     */
+    private val arrival = AudioArrivalMeter.shared
+    private val arrivalClock = ClockSync()
+    /** T-117: `nanoTime` of the video reader's latest `read()` with data (0 = none yet). */
+    @Volatile private var lastVideoReadNs = 0L
 
     /** config_id of the latest applied STREAM_CONFIG; frames from a video connection of another config are dropped. */
     @Volatile private var currentConfigId = -1
@@ -306,7 +320,11 @@ class SessionController(
         logEvent(e)
         val now = nowUs()
         // Only the current connection's PONGs feed the clock (T-096: a retired one may still answer for a moment).
-        if (e is SessionMachine.Event.Received && e.msg is Pong && e.gen == MbLog.gen) listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+        if (e is SessionMachine.Event.Received && e.msg is Pong && e.gen == MbLog.gen) {
+            listener.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+            arrivalClock.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
+            arrival.setOffset(arrivalClock.offsetUs())
+        }
         if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg, e.gen)
         val actions = machine.handle(e, now)
         val allowed = machine.inputAllowed
@@ -362,6 +380,7 @@ class SessionController(
                 MbLog.gen = a.gen
                 MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
                 listener.onSessionStart()
+                resetArrival()
                 listener.onConnectionGen(a.gen)
                 control?.abort()
                 control = ControlConn(a.gen, a.endpoint, hello).also { it.startThreads() }
@@ -449,6 +468,7 @@ class SessionController(
                 MbLog.gen = a.gen
                 MbLog.i("migrate_switch", "host=${a.endpoint.host} port=${a.endpoint.port} transport=${ConnectMode.transportOf(a.endpoint).logName}")
                 listener.onSessionStart()
+                resetArrival()
                 listener.onConnectionGen(a.gen)
                 control = c
             }
@@ -467,6 +487,31 @@ class SessionController(
             }
         }
     }
+
+    /** T-117: a new session (like the listener's clock in [SessionListener.onSessionStart]). Engine thread. */
+    private fun resetArrival() {
+        arrivalClock.reset()
+        arrival.setOffset(null)
+        arrival.reset()
+    }
+
+    /**
+     * T-117: one `debug` line per reported audio arrival gap (rate-limited by the meter). Only on gaps, so its string
+     * work stays off the steady path. The time since the last GC is not available; ART's cumulative counters are.
+     */
+    private fun logArrivalGap(readNs: Long) {
+        val g = arrival.gap
+        val v = lastVideoReadNs
+        val sinceVideo = if (v == 0L) "-" else AudioArrivalMeter.ms1((readNs - v) / 1000)
+        val fields = "gap_ms=${AudioArrivalMeter.ms1(g.gapUs)} owd_ms=${AudioArrivalMeter.ms1(g.owdUs)} per_read=${g.perRead} " +
+            "decrypt_ms=${AudioArrivalMeter.ms1(g.decryptUs)} since_video_ms=$sinceVideo suppressed=${g.suppressed} " +
+            "gc_count=${gcStat("art.gc.gc-count")} gc_time_ms=${gcStat("art.gc.gc-time")} " +
+            "gc_blocking_count=${gcStat("art.gc.blocking-gc-count")} gc_blocking_time_ms=${gcStat("art.gc.blocking-gc-time")}"
+        Log.d("MB/audio", MbLog.format(SystemClock.elapsedRealtime(), 'D', "audio", MbLog.sid, MbLog.gen, "audio_arrival_gap", fields))
+    }
+
+    private fun gcStat(name: String): String =
+        try { Debug.getRuntimeStat(name) ?: "-" } catch (_: RuntimeException) { "-" }
 
     private inner class ControlConn(
         val gen: Int,
@@ -596,13 +641,29 @@ class SessionController(
             QuickAck.forSocket(socket, quickAck, "control").use { qa ->
                 while (true) {
                     val n = input.read(buf)
+                    val readNs = System.nanoTime() // T-117: arrival, before decryption
                     if (n < 0) break
                     qa.ack.afterRead()
                     decoder.feed(buf, 0, n)
+                    var audioPackets = 0
                     while (true) {
+                        val t0 = System.nanoTime()
                         val msg = decoder.next() ?: break
-                        if (msg is AudioFrame || msg is AudioConfig) deliverAudio(msg) else events.put(SessionMachine.Event.Received(gen, msg))
+                        if (msg is AudioFrame || msg is AudioConfig) {
+                            if (control === this) { // only the current connection's audio is measured (as delivered)
+                                if (msg is AudioFrame) {
+                                    arrival.onPacket(readNs, t0, System.nanoTime(), msg.captureTimeUs, msg.frameCount)
+                                    audioPackets++
+                                } else {
+                                    arrival.reset() // a stream starts or stops: a fresh interval chain
+                                }
+                            }
+                            deliverAudio(msg)
+                        } else {
+                            events.put(SessionMachine.Event.Received(gen, msg))
+                        }
                     }
+                    if (audioPackets > 0 && arrival.endRead(audioPackets, System.nanoTime())) logArrivalGap(readNs)
                 }
             }
         }
@@ -689,7 +750,10 @@ class SessionController(
                 qa = QuickAck.forSocket(socket, quickAck, "video")
                 while (true) {
                     val n = input.read(buf)
-                    if (n > 0) qa.ack.afterRead()
+                    if (n > 0) {
+                        lastVideoReadNs = System.nanoTime() // T-117: audio gap lines compare against it
+                        qa.ack.afterRead()
+                    }
                     val trace = PaceTrace.active // T-073: receive-path timestamps (null = off)
                     val recvNs = if (trace != null || hint != null) System.nanoTime() else 0L
                     if (n < 0) break

@@ -232,6 +232,8 @@ class AudioPlayout(
 
     private inner class Stream(val id: Int, private var previous: Stream?) {
         val core = PlayoutCore()
+        /** T-117: the control reader's arrival figures, taken once per stats line (writer thread only). */
+        private val arrivalWin = AudioArrivalMeter.Window()
         @Volatile var rejected = 0L
         @Volatile private var running = true
         @Volatile private var rebuildReason: String? = null
@@ -576,6 +578,7 @@ class AudioPlayout(
         private fun logStats(t: AudioSink, xruns: Int, win: HeadroomMeter.Window, audioMs: Long?, avMs: Long?) {
             val d = core.drift
             val buf = core.buffer
+            AudioArrivalMeter.shared.takeWindow(arrivalWin)
             MbLog.i(
                 "stats",
                 "stream_id=$id state=${if (core.idle) "idle" else core.state.name.lowercase()} api=${t.api} perf_mode=${t.perfName} " +
@@ -589,7 +592,8 @@ class AudioPlayout(
                     "write_gap_ms_max=${ms1(win.gapMaxNs)} write_busy_ms_max=${ms1(win.busyMaxNs)} " +
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
-                    "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"}",
+                    "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"} " +
+                    arrivalWin.logFields(),
                 COMPONENT,
             )
         }
