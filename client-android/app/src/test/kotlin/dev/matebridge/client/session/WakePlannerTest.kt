@@ -147,10 +147,64 @@ class WakePlannerTest {
         val ep = Endpoint("10.0.0.5", 47001)
         assertTrue(WakePlanner.reached(SessionUi.Connected("Mac", 0)))
         assertTrue(WakePlanner.reached(SessionUi.AwaitingApproval("Mac")))
-        assertTrue(WakePlanner.reached(SessionUi.Failed(SessionUi.Cause.BUSY)))
+        assertTrue(WakePlanner.reached(SessionUi.Failed(SessionUi.Cause.REJECTED)))
+        // The host answered, then the session machine retries (SessionMachine.lose): awake.
+        assertTrue(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.BUSY, 5000)))
+        assertTrue(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.HOST_CLOSED, 1000)))
+        assertTrue(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.PROTOCOL_ERROR, 1000)))
+        // No answer: what a sleeping Mac looks like.
+        assertFalse(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 1000)))
+        assertFalse(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)))
         assertFalse(WakePlanner.reached(SessionUi.Searching))
         assertFalse(WakePlanner.reached(SessionUi.Idle))
         assertFalse(WakePlanner.reached(SessionUi.Connecting(ep)))
-        assertFalse(WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 1000)))
+    }
+
+    @Test fun busyHostStopsEpisodeAndStartsNone() {
+        val busy = WakePlanner.reached(SessionUi.Disconnected(SessionUi.Cause.BUSY, 5000))
+        startEpisode()
+        assertEquals(listOf(Step.Stop(WakePlanner.REASON_CONNECTED)), tick(500, reached = busy))
+        for (i in 0 until 100) assertTrue(tick(250, reached = busy).isEmpty())
+        assertFalse(p.active)
+    }
+
+    // ---- home network ----
+
+    private fun tickSkip(advance: Long, skip: String?, counter: IntArray? = null): List<Step> {
+        now += advance
+        return p.update(now, true, false, false, true) { counter?.let { it[0]++ }; skip }
+    }
+
+    @Test fun offHomeNetworkSkipsOnceAndRechecks() {
+        val calls = IntArray(1)
+        tickSkip(0, "other_network", calls)
+        assertEquals(0, calls[0]) // not due yet: not even asked
+        assertEquals(listOf(Step.Skip("other_network")), tickSkip(GRACE_MS, "other_network", calls))
+        assertEquals(1, calls[0])
+        val later = ArrayList<Step>()
+        for (i in 0 until 40) later += tickSkip(250, "other_network", calls) // 10 s
+        assertTrue(later.isEmpty()) // same reason: logged once
+        assertEquals(3, calls[0]) // rechecked every SKIP_RECHECK_MS (5 s)
+        assertFalse(p.active)
+    }
+
+    @Test fun reachingHomeNetworkStartsOnNextRecheck() {
+        tickSkip(0, "other_network")
+        assertEquals(listOf(Step.Skip("other_network")), tickSkip(GRACE_MS, "other_network"))
+        assertTrue(tickSkip(WakePlanner.SKIP_RECHECK_MS - 1, null).isEmpty())
+        assertEquals(listOf(Step.Start(WakePlanner.REASON_AUTO), Step.Send), tickSkip(1, null))
+    }
+
+    @Test fun skipReasonChangeIsLoggedAgain() {
+        tickSkip(0, "no_wifi")
+        assertEquals(listOf(Step.Skip("no_wifi")), tickSkip(GRACE_MS, "no_wifi"))
+        assertEquals(listOf(Step.Skip("other_network")), tickSkip(WakePlanner.SKIP_RECHECK_MS, "other_network"))
+    }
+
+    @Test fun manualIgnoresHomeNetwork() {
+        tickSkip(0, "other_network")
+        tickSkip(GRACE_MS, "other_network")
+        assertEquals(listOf(Step.Start(WakePlanner.REASON_MANUAL), Step.Send), p.manual(now, reached = false, hasWol = true))
+        assertTrue(p.active)
     }
 }

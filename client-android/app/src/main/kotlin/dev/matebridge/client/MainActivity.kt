@@ -83,6 +83,7 @@ import dev.matebridge.client.session.ProbeResult
 import dev.matebridge.client.session.UsbProbe
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
+import dev.matebridge.client.session.HomeNetwork
 import dev.matebridge.client.session.WakePlanner
 import dev.matebridge.client.session.WolSender
 import dev.matebridge.client.session.WolStore
@@ -1697,10 +1698,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // ---- T-129 Wake-on-LAN ----
 
-    /** NSD thread: remembers the host IPv4 and its TXT `wol` addresses (never logged). */
+    /** NSD thread: remembers the host's TXT `wol` addresses, its IPv4 and the home Wi-Fi subnet (none of them logged). */
     private fun onHostTxt(host: String, wol: String?) {
-        if (!wolStore.onResolved(host, wol)) return
-        MbLog.i("wol_stored", "macs=${wolStore.macs().size}")
+        val subnet = HomeNetwork.pick(wolSender.wifiSubnets(), host)
+        if (!wolStore.onResolved(host, wol, subnet)) return
+        MbLog.i("wol_stored", "macs=${wolStore.macs().size} home=${if (wolStore.subnet() != null) 1 else 0}")
         runOnUiThread { refreshWakeButton() }
     }
 
@@ -1736,11 +1738,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val reached = WakePlanner.reached(lastUi)
         val wasActive = wolPlanner.active
         val steps = if (manual) wolPlanner.manual(now, reached, wolStore.hasMacs())
-        else wolPlanner.update(now, foreground, userDisconnected, reached, wolStore.hasMacs())
+        else wolPlanner.update(now, foreground, userDisconnected, reached, wolStore.hasMacs()) {
+            HomeNetwork.skipReason(wolStore.subnet(), wolSender.wifiSubnets()) // automatic wake only on the home Wi-Fi
+        }
         for (step in steps) when (step) {
             is WakePlanner.Step.Start -> wolSender.start(step.reason, wolStore.macs(), wolStore.host())
             WakePlanner.Step.Send -> wolSender.send()
             is WakePlanner.Step.Stop -> wolSender.stop(step.reason)
+            is WakePlanner.Step.Skip -> MbLog.i("wol_skip", "reason=${step.reason}")
         }
         if (wasActive != wolPlanner.active && foreground) applyStatusText(lastUi)
     }

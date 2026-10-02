@@ -108,12 +108,12 @@ class MacDiscovery(
                         if (host != null && !host.contains(':')) {
                             MbLog.i("discovery_resolved", "host=$host port=${info.port}")
                             onTxt?.let { cb ->
-                                val wol = try {
-                                    info.attributes[WolTxt.KEY]?.toString(Charsets.US_ASCII)
+                                // Never let the TXT path stall resolution: onFound() and done() must still run.
+                                try {
+                                    cb(host, info.attributes[WolTxt.KEY]?.toString(Charsets.US_ASCII))
                                 } catch (e: RuntimeException) {
-                                    null
+                                    MbLog.w("discovery_txt_failed", "err=${e.javaClass.simpleName}")
                                 }
-                                cb(host, wol)
                             }
                             onFound(Endpoint(host, info.port))
                         }

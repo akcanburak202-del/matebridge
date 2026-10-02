@@ -111,42 +111,95 @@ class WolTest {
         override fun putString(key: String, value: String) { map[key] = value }
     }
 
+    private val home = Ipv4Subnet.of(ip(192, 168, 1, 0), 24)!!
+    private val other = Ipv4Subnet.of(ip(10, 0, 0, 0), 8)!!
+
     @Test fun storeSavesAndReloads() {
         val kv = MapStore()
         val s = WolStore(kv)
         assertFalse(s.hasMacs())
-        assertTrue(s.onResolved("192.168.1.20", "02:00:00:aa:bb:01"))
+        assertTrue(s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home))
         assertEquals(listOf("02:00:00:aa:bb:01"), s.macs())
         assertEquals("192.168.1.20", s.host())
+        assertEquals(home, s.subnet())
         val again = WolStore(kv)
         assertTrue(again.hasMacs())
         assertEquals(listOf("02:00:00:aa:bb:01"), again.macs())
         assertEquals("192.168.1.20", again.host())
+        assertEquals(home, again.subnet())
     }
 
-    @Test fun missingOrInvalidTxtKeepsStoredMacsButUpdatesHost() {
+    @Test fun missingOrInvalidTxtKeepsEverythingStored() {
         val s = WolStore(MapStore())
-        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01")
-        assertFalse(s.onResolved("192.168.1.21", null))
-        assertFalse(s.onResolved("192.168.1.22", "garbage"))
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home)
+        assertFalse(s.onResolved("10.0.0.21", null, other))
+        assertFalse(s.onResolved("10.0.0.22", "garbage", other))
         assertEquals(listOf("02:00:00:aa:bb:01"), s.macs())
-        assertEquals("192.168.1.22", s.host())
+        assertEquals("192.168.1.20", s.host())
+        assertEquals(home, s.subnet())
     }
 
     @Test fun newValueReplaces() {
         val s = WolStore(MapStore())
-        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01")
-        assertFalse(s.onResolved("192.168.1.20", "02:00:00:aa:bb:01")) // same: no change
-        assertTrue(s.onResolved("192.168.1.20", "02:00:00:aa:bb:02,02:00:00:aa:bb:03"))
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home)
+        assertFalse(s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home)) // same: no change
+        assertTrue(s.onResolved("192.168.1.20", "02:00:00:aa:bb:02,02:00:00:aa:bb:03", home))
         assertEquals(listOf("02:00:00:aa:bb:02", "02:00:00:aa:bb:03"), s.macs())
+    }
+
+    @Test fun hostAndSubnetFollowAValidValue() {
+        val s = WolStore(MapStore())
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home)
+        assertTrue(s.onResolved("10.0.0.5", "02:00:00:aa:bb:01", other)) // moved: same MACs, new home
+        assertEquals("10.0.0.5", s.host())
+        assertEquals(other, s.subnet())
+        assertFalse(s.onResolved("10.0.0.6", "02:00:00:aa:bb:01", null)) // subnet unknown: stored one kept
+        assertEquals("10.0.0.6", s.host())
+        assertEquals(other, s.subnet())
     }
 
     @Test fun nonIpv4HostIsNotStored() {
         val kv = MapStore()
         val s = WolStore(kv)
-        s.onResolved("fe80::1", "02:00:00:aa:bb:01")
+        s.onResolved("fe80::1", "02:00:00:aa:bb:01", home)
         assertNull(s.host())
         kv.map["wol_host"] = "bogus"
+        kv.map["wol_subnet"] = "bogus"
         assertNull(WolStore(kv).host())
+        assertNull(WolStore(kv).subnet())
+    }
+
+    // ---- home network ----
+
+    @Test fun subnetOfClearsHostBitsAndRoundTrips() {
+        val s = Ipv4Subnet.of(ip(192, 168, 1, 37), 24)!!
+        assertEquals("192.168.1.0/24", s.toString())
+        assertEquals(s, Ipv4Subnet.parse("192.168.1.0/24"))
+        assertEquals(s, Ipv4Subnet.parse("192.168.1.99/24"))
+        assertEquals("10.0.0.0/22", Ipv4Subnet.of(ip(10, 0, 3, 200), 22).toString())
+        assertTrue(s.contains(ip(192, 168, 1, 20)))
+        assertFalse(s.contains(ip(192, 168, 2, 20)))
+        assertNull(Ipv4Subnet.of(ip(1, 2, 3, 4), 0))
+        assertNull(Ipv4Subnet.of(ip(1, 2, 3, 4), 33))
+        assertNull(Ipv4Subnet.parse("192.168.1.0"))
+        assertNull(Ipv4Subnet.parse("192.168.1.0/"))
+        assertNull(Ipv4Subnet.parse("192.168.1.0/x"))
+        assertNull(Ipv4Subnet.parse("/24"))
+        assertNull(Ipv4Subnet.parse(null))
+    }
+
+    @Test fun pickPrefersTheSubnetContainingTheHost() {
+        assertEquals(home, HomeNetwork.pick(listOf(other, home), "192.168.1.20"))
+        assertEquals(other, HomeNetwork.pick(listOf(other, home), "172.16.0.1")) // routed: first one
+        assertNull(HomeNetwork.pick(emptyList(), "192.168.1.20"))
+    }
+
+    @Test fun skipReasons() {
+        assertNull(HomeNetwork.skipReason(home, listOf(other, home)))
+        assertEquals(HomeNetwork.SKIP_OTHER_NETWORK, HomeNetwork.skipReason(home, listOf(other)))
+        assertEquals(HomeNetwork.SKIP_NO_WIFI, HomeNetwork.skipReason(home, emptyList()))
+        assertEquals(HomeNetwork.SKIP_HOME_UNKNOWN, HomeNetwork.skipReason(null, listOf(home)))
+        // Same network address with another prefix is another network.
+        assertEquals(HomeNetwork.SKIP_OTHER_NETWORK, HomeNetwork.skipReason(home, listOf(Ipv4Subnet.of(ip(192, 168, 1, 0), 23)!!)))
     }
 }

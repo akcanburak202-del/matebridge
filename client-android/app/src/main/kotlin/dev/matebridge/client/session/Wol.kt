@@ -101,41 +101,106 @@ object WolTargets {
     }
 }
 
+/** An IPv4 subnet (network address + prefix length); used to recognise the home Wi-Fi without logging addresses. */
+data class Ipv4Subnet(val network: Int, val prefix: Int) {
+    fun contains(addr: ByteArray): Boolean = addr.size == 4 && (toInt(addr) and mask(prefix)) == network
+
+    override fun toString(): String =
+        "${network ushr 24}.${(network ushr 16) and 0xFF}.${(network ushr 8) and 0xFF}.${network and 0xFF}/$prefix"
+
+    companion object {
+        /** The subnet [addr]/[prefix] lies in (host bits cleared); null for a bad address or a prefix outside 1..32. */
+        fun of(addr: ByteArray, prefix: Int): Ipv4Subnet? {
+            if (addr.size != 4 || prefix !in 1..32) return null
+            return Ipv4Subnet(toInt(addr) and mask(prefix), prefix)
+        }
+
+        /** "a.b.c.d/p" as written by [toString]; host bits are cleared. */
+        fun parse(s: String?): Ipv4Subnet? {
+            if (s == null) return null
+            val i = s.indexOf('/')
+            if (i <= 0) return null
+            val addr = WolTargets.parseIpv4(s.substring(0, i)) ?: return null
+            val prefix = s.substring(i + 1).takeIf { p -> p.isNotEmpty() && p.length <= 2 && p.all { it in '0'..'9' } }?.toInt() ?: return null
+            return of(addr, prefix)
+        }
+
+        private fun mask(prefix: Int) = if (prefix == 0) 0 else (-1 shl (32 - prefix))
+
+        private fun toInt(b: ByteArray) = ((b[0].toInt() and 0xFF) shl 24) or ((b[1].toInt() and 0xFF) shl 16) or
+            ((b[2].toInt() and 0xFF) shl 8) or (b[3].toInt() and 0xFF)
+    }
+}
+
+/** Automatic wake only on the home network (the Wi-Fi subnet the host was seen on). Manual wake is not restricted. */
+object HomeNetwork {
+    const val SKIP_OTHER_NETWORK = "other_network"
+    const val SKIP_NO_WIFI = "no_wifi"
+    const val SKIP_HOME_UNKNOWN = "home_unknown"
+
+    /** The current Wi-Fi subnet to remember with the host: the one containing [hostIpv4], else the first one. */
+    fun pick(current: List<Ipv4Subnet>, hostIpv4: String?): Ipv4Subnet? {
+        val host = WolTargets.parseIpv4(hostIpv4)
+        return current.firstOrNull { host != null && it.contains(host) } ?: current.firstOrNull()
+    }
+
+    /** Null when an automatic episode may start, else the skip reason for the log. */
+    fun skipReason(stored: Ipv4Subnet?, current: List<Ipv4Subnet>): String? = when {
+        stored == null -> SKIP_HOME_UNKNOWN
+        current.isEmpty() -> SKIP_NO_WIFI
+        stored in current -> null
+        else -> SKIP_OTHER_NETWORK
+    }
+}
+
 /**
- * Persisted wake data (SharedPreferences through [KeyValueStore]): the host's MAC addresses and the last seen host
- * IPv4. Written from the NSD callback thread, read on the main thread.
+ * Persisted wake data (SharedPreferences through [KeyValueStore]): the host's MAC addresses, its IPv4 and the tablet's
+ * Wi-Fi subnet at that time (the home network). Written from the NSD callback thread, read on the main thread.
  */
 class WolStore(private val store: KeyValueStore) {
     private var macs: List<String> = WolTxt.parse(store.getString(KEY_MACS))
     private var host: String? = store.getString(KEY_HOST)?.takeIf { WolTargets.parseIpv4(it) != null }
+    private var subnet: Ipv4Subnet? = Ipv4Subnet.parse(store.getString(KEY_SUBNET))
 
     @Synchronized fun macs(): List<String> = macs
 
     @Synchronized fun host(): String? = host
 
+    @Synchronized fun subnet(): Ipv4Subnet? = subnet
+
     @Synchronized fun hasMacs(): Boolean = macs.isNotEmpty()
 
     /**
-     * A resolved service: [hostIpv4] is always remembered as the last seen host; the MAC list only changes when [txtWol]
-     * holds at least one valid address (a missing or unusable value keeps the stored one: older host, transient state).
-     * Returns true when the MAC list changed.
+     * A resolved service. Only a [txtWol] with at least one valid address stores anything: the MAC list, [hostIpv4] and
+     * the Wi-Fi [wifiSubnet] it was seen on (a null subnet keeps the stored one). A missing or unusable value keeps
+     * everything stored (older host, transient state). Returns true when the MAC list or the home subnet changed.
      */
     @Synchronized
-    fun onResolved(hostIpv4: String, txtWol: String?): Boolean {
+    fun onResolved(hostIpv4: String, txtWol: String?, wifiSubnet: Ipv4Subnet?): Boolean {
+        val parsed = WolTxt.parse(txtWol)
+        if (parsed.isEmpty()) return false
         if (WolTargets.parseIpv4(hostIpv4) != null && hostIpv4 != host) {
             host = hostIpv4
             store.putString(KEY_HOST, hostIpv4)
         }
-        val parsed = WolTxt.parse(txtWol)
-        if (parsed.isEmpty() || parsed == macs) return false
-        macs = parsed
-        store.putString(KEY_MACS, parsed.joinToString(","))
-        return true
+        var changed = false
+        if (wifiSubnet != null && wifiSubnet != subnet) {
+            subnet = wifiSubnet
+            store.putString(KEY_SUBNET, wifiSubnet.toString())
+            changed = true
+        }
+        if (parsed != macs) {
+            macs = parsed
+            store.putString(KEY_MACS, parsed.joinToString(","))
+            changed = true
+        }
+        return changed
     }
 
     private companion object {
         const val KEY_MACS = "wol_macs"
         const val KEY_HOST = "wol_host"
+        const val KEY_SUBNET = "wol_subnet"
     }
 }
 
@@ -146,12 +211,16 @@ class WolStore(private val store: KeyValueStore) {
  * [INTERVAL_MS] for at most [EPISODE_MS]. Reaching the host stops it at once; the background stops it (nothing is ever
  * sent in the background). After a timeout the next automatic episode waits [COOLDOWN_MS]; a manual request ignores
  * the wait (and extends a running episode). Coming back to the foreground or reaching the host clears the wait.
+ * Automatic episodes start only on the home network ([HomeNetwork]); off it a [Step.Skip] is reported once per reason
+ * and the check repeats every [SKIP_RECHECK_MS]. Manual requests are never restricted.
  */
 class WakePlanner {
     sealed interface Step {
         data class Start(val reason: String) : Step
         data object Send : Step
         data class Stop(val reason: String) : Step
+        /** An automatic episode was due but not started (e.g. not on the home network); for the log only. */
+        data class Skip(val reason: String) : Step
     }
 
     var active = false
@@ -161,12 +230,18 @@ class WakePlanner {
     private var notReachedSinceMs = -1L
     private var cooldownUntilMs = Long.MIN_VALUE
     private var wasForeground = false
+    private var skipUntilMs = Long.MIN_VALUE
+    private var lastSkip: String? = null
 
     /**
      * One step of the automatic policy. [userOff]: the user pressed "Bağlantıyı kes" (no automatic reconnect, so no
-     * automatic wake either). [reached]: the host answered (see [reached] for a session state).
+     * automatic wake either). [reached]: the host answered (see [reached] for a session state). [skipReason] is asked
+     * only when an automatic episode is due: null allows it, anything else is the reason it is skipped.
      */
-    fun update(nowMs: Long, foreground: Boolean, userOff: Boolean, reached: Boolean, hasWol: Boolean): List<Step> {
+    fun update(
+        nowMs: Long, foreground: Boolean, userOff: Boolean, reached: Boolean, hasWol: Boolean,
+        skipReason: () -> String? = { null },
+    ): List<Step> {
         if (!foreground || userOff) {
             wasForeground = foreground
             notReachedSinceMs = -1
@@ -175,10 +250,12 @@ class WakePlanner {
         if (!wasForeground) {
             wasForeground = true
             cooldownUntilMs = Long.MIN_VALUE // a fresh start (screen on, app opened) may wake again at once
+            clearSkip()
         }
         if (reached) {
             notReachedSinceMs = -1
             cooldownUntilMs = Long.MIN_VALUE
+            clearSkip()
             return stop(REASON_CONNECTED)
         }
         if (notReachedSinceMs < 0) notReachedSinceMs = nowMs
@@ -193,7 +270,15 @@ class WakePlanner {
             }
             return emptyList()
         }
-        if (!hasWol || nowMs - notReachedSinceMs < GRACE_MS || nowMs < cooldownUntilMs) return emptyList()
+        if (!hasWol || nowMs - notReachedSinceMs < GRACE_MS || nowMs < cooldownUntilMs || nowMs < skipUntilMs) return emptyList()
+        val skip = skipReason()
+        if (skip != null) {
+            skipUntilMs = nowMs + SKIP_RECHECK_MS
+            if (skip == lastSkip) return emptyList()
+            lastSkip = skip
+            return listOf(Step.Skip(skip))
+        }
+        clearSkip()
         return start(nowMs, REASON_AUTO)
     }
 
@@ -216,6 +301,11 @@ class WakePlanner {
         return listOf(Step.Start(reason), Step.Send)
     }
 
+    private fun clearSkip() {
+        skipUntilMs = Long.MIN_VALUE
+        lastSkip = null
+    }
+
     private fun stop(reason: String): List<Step> {
         if (!active) return emptyList()
         active = false
@@ -227,6 +317,7 @@ class WakePlanner {
         const val INTERVAL_MS = 1_000L
         const val EPISODE_MS = 20_000L
         const val COOLDOWN_MS = 30_000L
+        const val SKIP_RECHECK_MS = 5_000L
 
         const val REASON_AUTO = "not_found"
         const val REASON_MANUAL = "manual"
@@ -235,8 +326,21 @@ class WakePlanner {
         const val REASON_BACKGROUND = "background"
         const val REASON_USER = "user"
 
-        /** The host answered: a session (or pairing) is up, or it gave a terminal answer (BUSY, REJECTED, ...). */
-        fun reached(ui: SessionUi): Boolean =
-            ui is SessionUi.Connected || ui is SessionUi.AwaitingApproval || ui is SessionUi.Failed
+        /**
+         * The host answered, so it is awake: a session (or pairing) is up, it gave a terminal answer (REJECTED, ...), or
+         * the connection ended with an answer from it (BUSY, BYE, a protocol error: [SessionUi.Disconnected] with a
+         * retry). A connect that failed or a session that was lost (what a Mac going to sleep looks like) is not reached.
+         */
+        fun reached(ui: SessionUi): Boolean = when (ui) {
+            is SessionUi.Connected, is SessionUi.AwaitingApproval, is SessionUi.Failed -> true
+            is SessionUi.Disconnected -> ui.cause in ANSWERED_CAUSES
+            SessionUi.Idle, SessionUi.Searching, is SessionUi.Connecting -> false
+        }
+
+        private val ANSWERED_CAUSES = setOf(
+            SessionUi.Cause.BUSY, SessionUi.Cause.HOST_CLOSED, SessionUi.Cause.PROTOCOL_ERROR,
+            SessionUi.Cause.REJECTED, SessionUi.Cause.VERSION_MISMATCH, SessionUi.Cause.KEY_MISSING,
+            SessionUi.Cause.KEY_STORE_FAILED,
+        )
     }
 }
