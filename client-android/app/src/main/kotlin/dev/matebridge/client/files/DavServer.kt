@@ -15,10 +15,17 @@ import java.net.SocketTimeoutException
  * The tablet-files WebDAV server (decision 0015, T-135): listens on 127.0.0.1 only (the Mac reaches it through
  * `adb forward`), preferred port [FilesConfig.preferredPort], else one the system picks.
  *
- * Threads: one accept thread plus one per connection, at most [FilesConfig.maxConnections]. At the limit an idle
- * keep-alive connection is closed for the new one; when all are busy the accept thread waits. Idle threads block in
- * `accept()`/`read()` (no timers, no polling). [Hooks.threadStarted] runs first on every thread (Android lowers the
- * priority there). All transfer bytes go through one [TokenBucket].
+ * Threads: one accept thread, one per connection and one write watchdog. Connections (T-139): at
+ * [FilesConfig.maxConnections] a truly idle keep-alive connection is closed for the new one (it completed a request,
+ * has waited [FilesConfig.evictIdleMs] for the next one and has no unread byte; a fresh connection is never evicted, so
+ * new connections cannot evict each other). When none is idle the new connection is taken anyway, up to
+ * [FilesConfig.overflowConnections] more: webdavfs holds one connection per open file for a whole-file download, and
+ * a request that waits behind them makes Finder fail (T-138). At that hard limit the accept thread waits at most
+ * [FilesConfig.admitWaitMs] for a slot, then answers `503` + `Retry-After` and closes (a last resort: webdavfs does not
+ * retry a 503, it turns it into an error). A response write without progress for [FilesConfig.writeTimeoutMs] closes
+ * its connection ([WriteWatchdog]). Idle threads block in `accept()`/`read()`/`wait()` (no polling).
+ * [Hooks.threadStarted] runs first on every thread (Android lowers the priority there). All transfer bytes go through
+ * one [TokenBucket].
  *
  * [stop] closes the listener and every connection: a running upload is aborted and its temporary file deleted, a
  * download ends short. Pure JVM code.
@@ -52,6 +59,9 @@ class DavServer(
     private val stats = FilesStats()
     private val lock = Object()
     private val conns = HashSet<Conn>()
+    private val rejecting = HashSet<Socket>() // guarded by [lock]
+    private var lastOverflowLogNs = 0L // guarded by [lock]
+    private val watchdog = WriteWatchdog(config.writeTimeoutMs.toLong())
     private var acceptRunning = false // guarded by [lock]
     @Volatile private var stopped = false
     @Volatile private var listener: ServerSocket? = null
@@ -66,6 +76,7 @@ class DavServer(
             check(acceptThread == null) { "started twice" }
             acceptRunning = true
             acceptThread = Thread({ acceptLoop() }, "mb-files-accept").also { it.isDaemon = true; it.start() }
+            Thread({ hooks.threadStarted(); watchdog.runLoop() }, "mb-files-watchdog").also { it.isDaemon = true; it.start() }
         }
     }
 
@@ -73,8 +84,10 @@ class DavServer(
     fun stop() {
         stopped = true
         closeQuietly(listener)
+        watchdog.stop()
         synchronized(lock) {
             for (c in conns) closeQuietly(c.socket)
+            for (s in rejecting) closeQuietly(s)
             lock.notifyAll()
         }
     }
@@ -105,8 +118,11 @@ class DavServer(
                     break
                 }
                 val c = Conn(s, handler)
-                if (!admit(c)) { closeQuietly(s); break }
-                Thread(c, "mb-files-conn").also { it.isDaemon = true; it.start() }
+                when (admit(c)) {
+                    Admission.TAKEN -> Thread(c, "mb-files-conn").also { it.isDaemon = true; it.start() }
+                    Admission.FULL -> reject(s)
+                    Admission.STOPPED -> { closeQuietly(s); break }
+                }
             }
         } catch (e: IOException) {
             hooks.log("server_error", "kind=${e.javaClass.simpleName}")
@@ -118,7 +134,10 @@ class DavServer(
                 lock.notifyAll()
                 conns.isEmpty()
             }
-            if (last) pollStats(force = true) // else the last connection thread writes the final summary
+            if (last) {
+                watchdog.stop()
+                pollStats(force = true) // else the last connection thread writes the final summary
+            }
             hooks.onStopped(failed)
         }
     }
@@ -143,28 +162,80 @@ class DavServer(
         return null
     }
 
-    /** Takes [c] into the connection set: frees an idle slot or waits for one. False when the server stopped. */
-    private fun admit(c: Conn): Boolean = synchronized(lock) {
+    private enum class Admission { TAKEN, FULL, STOPPED }
+
+    /**
+     * Takes [c] into the connection set (see the class comment): below the limit at once; at the limit by evicting the
+     * longest truly idle connection, else as overflow up to the hard limit; at the hard limit it waits at most
+     * [FilesConfig.admitWaitMs] for a slot or an idle connection, then gives up ([Admission.FULL]).
+     */
+    private fun admit(c: Conn): Admission = synchronized(lock) {
+        val hard = config.maxConnections + config.overflowConnections.coerceAtLeast(0)
+        val deadline = System.nanoTime() + config.admitWaitMs * 1_000_000L
         while (!stopped && conns.size >= config.maxConnections) {
-            val idle = conns.filter { it.idle }.minByOrNull { it.idleSinceMs }
+            val now = System.nanoTime()
+            val idle = conns.filter { it.evictable(now) }.minByOrNull { it.idleSinceNs }
             if (idle != null) {
                 conns.remove(idle)
                 closeQuietly(idle.socket) // its thread ends on the closed socket
                 break
             }
-            lock.wait(WAIT_MS)
+            if (conns.size < hard) {
+                if (now - lastOverflowLogNs > OVERFLOW_LOG_INTERVAL_NS) {
+                    lastOverflowLogNs = now
+                    hooks.log("conn_overflow", "conns=${conns.size + 1} limit=${config.maxConnections} hard=$hard")
+                }
+                break
+            }
+            val left = (deadline - now) / 1_000_000
+            if (left <= 0) return Admission.FULL
+            lock.wait(minOf(left, ADMIT_POLL_MS))
         }
-        if (stopped) return false
+        if (stopped) return Admission.STOPPED
         conns += c
-        true
+        Admission.TAKEN
+    }
+
+    /**
+     * Answers [s] `503 Service Unavailable` + `Retry-After: 1` on a short-lived thread (reads the request head first and
+     * drains a little of a body, so closing does not reset the answer away), then closes it. At most
+     * [MAX_REJECTING] at a time; beyond that the connection is just closed.
+     */
+    private fun reject(s: Socket) {
+        val count = synchronized(lock) {
+            if (rejecting.size >= MAX_REJECTING || stopped) null else { rejecting += s; conns.size }
+        }
+        if (count == null) { closeQuietly(s); return }
+        hooks.log("conn_rejected", "conns=$count wait_ms=${config.admitWaitMs}")
+        Thread({
+            hooks.threadStarted()
+            try {
+                s.soTimeout = REJECT_IO_MS
+                val input = BufferedInputStream(s.getInputStream())
+                val req = try { HttpIo.readHead(input) } catch (e: IOException) { null }
+                s.getOutputStream().apply { write(REJECT_RESPONSE); flush() }
+                s.shutdownOutput()
+                val body = req?.let { try { BodyInputStream(input, it.bodyLength()) } catch (e: IOException) { null } }
+                body?.drain(REJECT_DRAIN_BYTES)
+                if (body == null || body.complete) while (input.read() >= 0) Unit // until the client closes
+            } catch (e: IOException) {
+                // timeout or the client went away: just close
+            } finally {
+                closeQuietly(s)
+                synchronized(lock) { rejecting -= s }
+            }
+        }, "mb-files-reject").also { it.isDaemon = true; it.start() }
     }
 
     private fun released(c: Conn) {
+        var ended = false
         val last = synchronized(lock) {
             conns.remove(c)
             lock.notifyAll()
-            stopped && !acceptRunning && conns.isEmpty()
+            ended = !acceptRunning && conns.isEmpty()
+            stopped && ended
         }
+        if (ended) watchdog.stop() // the server is over (stopped or failed): no write left to watch
         if (last) pollStats(force = true) // the final summary, once every worker has ended
     }
 
@@ -187,24 +258,41 @@ class DavServer(
     }
 
     private inner class Conn(val socket: Socket, private val handler: DavHandler) : Runnable {
-        @Volatile var idle = true
-        @Volatile var idleSinceMs = nowMs()
+        /** Waiting for a request head with nothing read of it yet. */
+        @Volatile var idle = false
+        @Volatile var idleSinceNs = System.nanoTime()
+        /** At least one request completed: before that the connection is never evicted. */
+        @Volatile var served = false
+        private val watch = watchdog.Watch {
+            hooks.log("write_stalled", "timeout_ms=${config.writeTimeoutMs}")
+            closeQuietly(socket) // unblocks the write; the thread then ends
+        }
+
+        /** Truly idle (see the class comment) at [now]; called under the server lock. */
+        fun evictable(now: Long): Boolean =
+            served && idle && now - idleSinceNs >= config.evictIdleMs * 1_000_000L && unread() == 0
+
+        private fun unread(): Int = try {
+            socket.getInputStream().available()
+        } catch (e: IOException) {
+            0 // closed: nothing to lose
+        }
 
         override fun run() {
             hooks.threadStarted()
             try {
                 socket.tcpNoDelay = true
                 val input = BufferedInputStream(
-                    ThrottledInputStream(socket.getInputStream(), bucket, stats) { pollStats() },
+                    ThrottledInputStream(socket.getInputStream(), bucket, stats, arrived = { idle = false }) { pollStats() },
                     config.bufferBytes,
                 )
                 val output = BufferedOutputStream(
-                    ThrottledOutputStream(socket.getOutputStream(), bucket, stats, config.bufferBytes) { pollStats() },
+                    ThrottledOutputStream(socket.getOutputStream(), bucket, stats, config.bufferBytes, watch) { pollStats() },
                     config.bufferBytes,
                 )
                 while (!stopped) {
-                    idleSinceMs = nowMs()
-                    idle = true
+                    idleSinceNs = System.nanoTime()
+                    idle = input.available() == 0 // a pipelined request already buffered is not idle
                     socket.soTimeout = config.idleTimeoutMs
                     val req = try {
                         HttpIo.readHead(input)
@@ -222,6 +310,7 @@ class DavServer(
                     } finally {
                         pollStats() // at most one line per second; only the stop forces a final one
                     }
+                    served = true
                     if (!keep) break
                 }
             } catch (e: SocketTimeoutException) {
@@ -239,7 +328,14 @@ class DavServer(
 
     private companion object {
         const val BACKLOG = 8
-        const val WAIT_MS = 500L
+        const val ADMIT_POLL_MS = 100L
+        const val OVERFLOW_LOG_INTERVAL_NS = 1_000_000_000L
+        const val MAX_REJECTING = 2
+        const val REJECT_IO_MS = 1_000
+        const val REJECT_DRAIN_BYTES = 64L * 1024
+        val REJECT_RESPONSE =
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .toByteArray(Charsets.US_ASCII)
         const val PREDECESSOR_WAIT_MS = 5_000L
 
         fun closeQuietly(c: java.io.Closeable?) {
