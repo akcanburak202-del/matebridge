@@ -1,7 +1,7 @@
 ---
 id: T-143
 title: "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-109]

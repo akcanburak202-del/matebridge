@@ -1,7 +1,7 @@
 ---
 id: T-142
 title: Ses takılma dedektörünü (mb-stall) açılış parametresine bağla, varsayılan kapalı
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-120, T-141]

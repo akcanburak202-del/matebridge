@@ -1082,3 +1082,17 @@ T-123, T-124, T-125, T-126 done.
 - `idle state=on` ~1,4 s sonra geliyor. Host durgunken ~30 s'de bir kare gönderiyor (döngü kısa uyanıp tekrar uyuyor).
 - Kullanıcı: yazıda duraklama sonrası ilk harf ve kaydırma/sürükleme "gayet iyi", sorun yok. `latency_us` 6–17 ms, `detach_slow` ve `gl_draw_failed` yok. `display_rate` dokunmada 60↔120 doğru geçiyor.
 - Sıradaki aday: `mb-stall` (T-120 teşhisi) açılış parametresine bağlanabilir.
+
+## 2026-10-03 ~00:10 — T-142/T-143 cihazda; Oyun 120 ile Oyun 60 karşılaştırması (Resident Evil 4, dokunmasız)
+
+- T-142: `diag ev=stall_diag enabled=0`, `mb-stall` iş parçacığı yok. Durgun ekranda istemci ~%7–9, toplam ~45–56/800 (başlangıçta ~%20 ve ~70–80).
+- T-143: Oyun 120 → `stream_config 1848x1214 fps=120`; Oyun 60 → `2800x1840 fps=60`, geçişte `game_mode` katmanı korundu (çıkış yok).
+- Tablet her iki modda aynı: panel 60 Hz, 60 fps, istemci ~%95, toplam ~200/800, SoC ~40 °C.
+- **Mac (3'er dk, 5 s örnekleme):**
+
+  | | GPU kullanımı | Oyun CPU | WindowServer | MateBridgeApp |
+  |---|---|---|---|---|
+  | Oyun 120 | %90 | %234 | %20 | %12 |
+  | Oyun 60 | %54 | %158 | %12 | %11 |
+
+- Sonuç: dokunmasız oyunda Oyun 60, Mac GPU'sunu ~%40 rahatlatıyor ve tablette tam çözünürlük veriyor. Host'un yakalamayı 60'a indirmesi gereksiz: MateBridgeApp farkı ~%1 (yakalama ucuz). Asıl maliyet oyunun 120 Hz sanal ekranda 120 çizmesi.
