@@ -28,6 +28,10 @@ import MateBridgeCore
 /// - A change of the default output device, the output device or aggregate dying, a sample rate / tap format change,
 ///   or a wake from sleep is reported as `interrupted`; the streamer then stops this capture and starts a new stream
 ///   (tap and aggregate are rebuilt).
+/// - A capture asked for right after the previous one was torn down (session takeover) can fail to create its tap
+///   (`noErr` without a tap object) or aggregate, although the teardown above finished first on this queue: Core Audio
+///   apparently still removes the old objects. Such failures are reported as `tap_create` / `aggregate_create`, which
+///   `AudioStreamPolicy` retries with a short, growing delay (T-119).
 /// - No launch sweep of leaked taps: our tap is private, so it is visible only to this process and goes away with it.
 ///   Sweeping other processes' taps by name would read `kAudioTapPropertyDescription`, whose ownership is undocumented
 ///   (a wrong release could crash at launch), for no benefit.
@@ -149,12 +153,14 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         func fail(_ reason: String, _ status: OSStatus) {
             teardown(r)
             if run === r { run = nil }
-            lock.withLock { if desired?.streamID == streamID { desired = nil } }  // never rebuilt by a later pass
+            // Never rebuilt by a later pass of this backend. A transient failure (`AudioCaptureFailure.isTransient`) is
+            // retried by the streamer's policy as a new stream, after a delay, on this same queue after this teardown.
+            lock.withLock { if desired?.streamID == streamID { desired = nil } }
             request.events(.failed(streamID: streamID, reason: reason, status: status))
         }
 
-        guard let output = Self.defaultOutputDevice() else { return fail("no_output_device", 0) }
-        guard let outputUID = Self.deviceUID(output) else { return fail("no_output_uid", 0) }
+        guard let output = Self.defaultOutputDevice() else { return fail(AudioCaptureFailure.noOutputDevice, 0) }
+        guard let outputUID = Self.deviceUID(output) else { return fail(AudioCaptureFailure.noOutputUID, 0) }
         r.outputDevice = output
 
         let exclude = Self.ownProcessObject().map { [$0] } ?? []
@@ -164,12 +170,14 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         description.muteBehavior = .mutedWhenTapped
         var tapID = AudioObjectID(kAudioObjectUnknown)
         var status = AudioHardwareCreateProcessTap(description, &tapID)
-        guard status == noErr, tapID != kAudioObjectUnknown else { return fail("tap_create", status) }
+        guard status == noErr, tapID != kAudioObjectUnknown else { return fail(AudioCaptureFailure.tapCreate, status) }
         r.tapID = tapID
 
-        guard let format = Self.tapFormat(tapID) else { return fail("tap_format", 0) }
+        guard let format = Self.tapFormat(tapID) else { return fail(AudioCaptureFailure.tapFormat, 0) }
         guard Self.isSupported(format) else {
-            return fail("tap_format_\(Int(format.mSampleRate))hz_\(format.mChannelsPerFrame)ch", 0)
+            let reason = AudioCaptureFailure.unsupportedFormat(sampleRate: Int(format.mSampleRate),
+                                                               channels: format.mChannelsPerFrame)
+            return fail(reason, 0)
         }
         r.format = format
 
@@ -186,7 +194,9 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         ]
         var aggregateID = AudioObjectID(kAudioObjectUnknown)
         status = AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID)
-        guard status == noErr, aggregateID != kAudioObjectUnknown else { return fail("aggregate_create", status) }
+        guard status == noErr, aggregateID != kAudioObjectUnknown else {
+            return fail(AudioCaptureFailure.aggregateCreate, status)
+        }
         r.aggregateID = aggregateID
 
         var frames = Self.bufferFrames
@@ -198,7 +208,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         r.nominalRate = Self.nominalRate(aggregateID) ?? 0
 
         guard let layout = TapBufferLayout.choose(channelsPerBuffer: Self.inputChannelsPerBuffer(aggregateID)) else {
-            return fail("tap_layout", 0)
+            return fail(AudioCaptureFailure.tapLayout, 0)
         }
         installListeners(r)  // before the blocking call: changes during the prompt reach us afterwards
 
@@ -207,7 +217,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         var procID: AudioDeviceIOProcID?
         status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, nil,
                                                     Self.makeIOBlock(packetizer: request.packetizer, layout: layout))
-        guard status == noErr, let procID else { return fail("ioproc_create", status) }
+        guard status == noErr, let procID else { return fail(AudioCaptureFailure.ioprocCreate, status) }
         r.procID = procID
 
         // The prompt may have been open for a long time: start (and mute the Mac) only if still wanted.
@@ -222,11 +232,11 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             run = nil
             logger.log(.info, "audio_setup_changed", sessionID: 0, generation: 0,
                        fields: "stream_id=\(streamID) reason=\(change) attempt=\(attempt)")
-            guard attempt < Self.maxSetupAttempts else { return fail("setup_changed_\(change)", 0) }
+            guard attempt < Self.maxSetupAttempts else { return fail(AudioCaptureFailure.setupChanged(change), 0) }
             return build(request, attempt: attempt + 1)
         }
         status = AudioDeviceStart(aggregateID, procID)
-        guard status == noErr else { return fail("device_start", status) }
+        guard status == noErr else { return fail(AudioCaptureFailure.deviceStart, status) }
 
         logger.log(.info, "audio_capture_started", sessionID: 0, generation: 0,
                    fields: "stream_id=\(streamID) layout=\(layout) buffer_frames=\(Self.bufferFrameSize(aggregateID)) "

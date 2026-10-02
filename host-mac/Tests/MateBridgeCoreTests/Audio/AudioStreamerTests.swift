@@ -207,7 +207,7 @@ import Testing
         h.started(1)
         h.backend.emit(.interrupted(streamID: 1, reason: "wake"), for: 1)
         h.streamer.sync()
-        h.backend.emit(.failed(streamID: 2, reason: "aggregate_create", status: -1), for: 2)
+        h.backend.emit(.failed(streamID: 2, reason: "no_output_device", status: 0), for: 2)
         h.streamer.sync()
         #expect(h.backend.calls == ["start 1", "stop 1", "start 2", "stop 2"])
         for _ in 0..<200 where h.backend.calls.count < 5 { try await Task.sleep(for: .milliseconds(5)) }
@@ -215,6 +215,43 @@ import Testing
         h.started(3)
         #expect(h.sink.summary == ["cfg+1", "cfg-1", "cfg+3"])
         #expect(!h.box.logs.contains { $0.contains("audio_unavailable") })
+    }
+
+    @Test func transientStartFailureAfterATakeoverIsRetriedAfterTheDelay() async throws {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.started(1)
+        h.streamer.sessionStarted(sessionID: 8, clientSupportsAudio: true)  // takeover
+        h.streamer.prefs(sessionID: 8, enabled: true)
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2"])
+        h.backend.emit(.failed(streamID: 2, reason: "tap_create", status: 0), for: 2)
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2", "stop 2"])
+        for _ in 0..<200 where h.backend.calls.count < 5 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(h.backend.calls == ["start 1", "stop 1", "start 2", "stop 2", "start 3"])
+        h.started(3)
+        #expect(h.sink.sent.map(\.0) == [7, 8])
+        #expect(h.sink.summary == ["cfg+1", "cfg+3"])
+        #expect(h.box.logs.contains("I sid=8 audio_retry reason=tap_create attempt=1 delay_ms=100 status=0 stream_id=2"))
+        #expect(!h.box.logs.contains { $0.contains("audio_unavailable") })
+    }
+
+    @Test func sessionEndWhileATransientRetryWaitsStartsNothing() async throws {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.backend.emit(.failed(streamID: 1, reason: "tap_create", status: 0), for: 1)
+        h.streamer.sync()
+        h.streamer.sessionEnded()
+        h.streamer.sync()
+        try await Task.sleep(for: .milliseconds(50))  // well past the 5 ms test delay
+        h.streamer.sync()
+        #expect(h.backend.calls == ["start 1", "stop 1"])
+        #expect(h.sink.sent.isEmpty)
     }
 
     @Test func backlogOverHundredMsDropsOldest() {

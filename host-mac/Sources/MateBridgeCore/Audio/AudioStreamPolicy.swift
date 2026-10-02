@@ -12,6 +12,10 @@
 ///   running stream and rebuilds the capture as a new stream. A rebuild that fails is retried
 ///   `rebuildRetries` times, `rebuildRetryDelayUs` apart (devices are often briefly unavailable right after a wake)
 ///   before the failure counts.
+/// - A transient start failure (`AudioCaptureFailure.isTransient`: tap or aggregate creation, seen right after the
+///   previous capture was torn down) is retried first, `transientRetryDelaysUs` apart (growing), each as a new stream,
+///   logged `audio_retry`. Only when those run out does the failure follow the rules above. A session end or a disable
+///   while a retry waits cancels it (the timer's token no longer matches).
 public struct AudioStreamPolicy: Equatable, Sendable {
     public enum Action: Equatable, Sendable {
         /// Build tap + aggregate + IOProc for stream `streamID` (the capture's token).
@@ -31,6 +35,8 @@ public struct AudioStreamPolicy: Equatable, Sendable {
     /// Extra attempts after a failed rebuild (decision: 2 tries, 1 s apart).
     public static let rebuildRetries = 2
     public static let rebuildRetryDelayUs: UInt64 = 1_000_000
+    /// Delays before each retry of a transient start failure (T-119): 4 attempts, about 1.85 s in all.
+    public static let transientRetryDelaysUs: [UInt64] = [100_000, 250_000, 500_000, 1_000_000]
 
     private struct Session: Equatable, Sendable {
         var id: UInt32
@@ -55,6 +61,8 @@ public struct AudioStreamPolicy: Equatable, Sendable {
     private var disabledLogged = false
     /// Rebuild attempts left after an interruption; 0 outside a rebuild.
     private var retriesLeft = 0
+    /// Transient start failures retried since the last start, interruption or stop.
+    private var transientRetries = 0
     private var retryToken: UInt32 = 0
 
     /// - Parameter disabled: `MATEBRIDGE_AUDIO=off`: never capture.
@@ -111,6 +119,7 @@ public struct AudioStreamPolicy: Equatable, Sendable {
         guard capture == .starting(streamID), let s = session else { return [] }
         capture = .running(streamID)
         retriesLeft = 0
+        transientRetries = 0
         return [.send(sessionID: s.id, Self.startedConfig(streamID: streamID)),
                 .log(.info, ev: "audio_started", fields: "stream_id=\(streamID)")]
     }
@@ -122,6 +131,20 @@ public struct AudioStreamPolicy: Equatable, Sendable {
         capture = .idle
         var actions: [Action] = [.stopCapture(streamID: streamID)]
         if wasRunning { actions.append(.send(sessionID: s.id, .stopped(streamID: streamID))) }
+        if !wasRunning, AudioCaptureFailure.isTransient(reason),
+           transientRetries < Self.transientRetryDelaysUs.count {
+            // Core Audio is likely still removing the previous capture: try again shortly, as a new stream.
+            let delayUs = Self.transientRetryDelaysUs[transientRetries]
+            transientRetries += 1
+            retryToken &+= 1
+            capture = .waitingRetry(token: retryToken)
+            return actions + [
+                .scheduleRetry(token: retryToken, delayUs: delayUs),
+                .log(.info, ev: "audio_retry",
+                     fields: "reason=\(reason) attempt=\(transientRetries) delay_ms=\(delayUs / 1000) status=\(status) "
+                         + "stream_id=\(streamID)"),
+            ]
+        }
         if !wasRunning, retriesLeft > 0 {
             // A rebuild after an interruption failed: try again shortly before giving up.
             retriesLeft -= 1
@@ -134,6 +157,7 @@ public struct AudioStreamPolicy: Equatable, Sendable {
             ]
         }
         retriesLeft = 0
+        transientRetries = 0
         s.failed = true
         if !s.unavailableLogged {
             s.unavailableLogged = true
@@ -151,6 +175,7 @@ public struct AudioStreamPolicy: Equatable, Sendable {
         let wasRunning = capture == .running(streamID)
         capture = .idle
         retriesLeft = Self.rebuildRetries
+        transientRetries = 0
         var actions: [Action] = [.stopCapture(streamID: streamID)]
         if wasRunning, let s = session { actions.append(.send(sessionID: s.id, .stopped(streamID: streamID))) }
         actions.append(.log(.info, ev: "audio_rebuild", fields: "reason=\(reason) stream_id=\(streamID)"))
@@ -183,6 +208,7 @@ public struct AudioStreamPolicy: Equatable, Sendable {
 
     private mutating func stop(sendStopped: Bool, reason: String) -> [Action] {
         retriesLeft = 0
+        transientRetries = 0
         switch capture {
         case .idle:
             return []
