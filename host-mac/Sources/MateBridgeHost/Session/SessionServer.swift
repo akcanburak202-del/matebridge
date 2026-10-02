@@ -251,6 +251,11 @@ public final class SessionServer: @unchecked Sendable {
     /// Audio waiting for `queue` (newest frames win, at most one drain pass pending). Guarded by `audioLock`.
     private let audioLock = NSLock()
     private var audioOutbox = AudioOutbox()
+    /// AUDIO_FRAME send timing (T-116): `component=audio ev=send` once a second, `ev=send_gap` at debug. Session queue.
+    private var audioTiming = AudioSendTiming()
+    /// Session of the writes in the current `audioTiming` window (its line is logged with it).
+    private var audioTimingSessionID: UInt32 = 0
+    private let audioLogger = SessionLogger(component: "audio")
     private var stopped = false
     private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
@@ -588,7 +593,8 @@ public final class SessionServer: @unchecked Sendable {
     /// Sealing runs on the session queue (a few microseconds per 10 ms packet); the bytes go out H->C and never hold up
     /// input, which arrives C->H.
     public func sendAudio(sessionID: UInt32, _ message: Message) {
-        let (enqueue, dropped) = audioLock.withLock { audioOutbox.push(sessionID: sessionID, message) }
+        let pushedUs = nowUs()
+        let (enqueue, dropped) = audioLock.withLock { audioOutbox.push(sessionID: sessionID, message, nowUs: pushedUs) }
         if dropped > 0 { audioWireDrops.add(dropped, ordering: .relaxed) }
         if enqueue { queue.async { [self] in drainAudio() } }
     }
@@ -598,19 +604,59 @@ public final class SessionServer: @unchecked Sendable {
         let items = audioLock.withLock { audioOutbox.take() }
         let now = nowUs()
         for item in items {
+            if case .audioConfig = item.message { closeAudioTimingWindow() }  // stream boundary, sent or not
             guard !stopped, item.sessionID != 0, item.sessionID == currentSessionID, let id = activeControl,
                   sealers[id] != nil else { continue }
-            if case .audioFrame(let frame) = item.message {
-                let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
-                guard !AudioOutbox.isStale(frame, nowUs: now),
-                      inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes,
-                      !kernelAudioBacklog(id) else {
-                    audioWireDrops.add(1, ordering: .relaxed)
-                    continue
-                }
+            guard case .audioFrame(let frame) = item.message else {
+                sendControl(id, item.message)
+                continue
             }
+            let size = 4 + ProtocolConstants.recordOverhead + AudioFrame.fixedSize + frame.data.count
+            guard !AudioOutbox.isStale(frame, nowUs: now),
+                  inflightBytes[id, default: 0] + size <= Self.audioBacklogBytes,
+                  !kernelAudioBacklog(id) else {
+                audioWireDrops.add(1, ordering: .relaxed)
+                continue
+            }
+            let inflightBefore = inflightBytes[id, default: 0]
+            let writeStart = nowUs()
             sendControl(id, item.message)
+            let writeEnd = nowUs()
+            recordAudioWrite(id, frame: frame, queueLagUs: now > item.pushedUs ? now - item.pushedUs : 0,
+                             inflightBefore: inflightBefore, writeStart: writeStart, writeEnd: writeEnd)
         }
+    }
+
+    /// Session queue: timing of one AUDIO_FRAME write (T-116). Measurement only.
+    private func recordAudioWrite(_ id: ConnectionID, frame: AudioFrame, queueLagUs: UInt64, inflightBefore: Int,
+                                  writeStart: UInt64, writeEnd: UInt64) {
+        // Bytes not yet handed on: `bsd` user-space queue after the write (EAGAIN / partial write); `nw` cannot tell,
+        // there it is what Network.framework had not processed yet when the write was issued.
+        let pending: Int
+        switch controlConnections[id] {
+        case .socket(let socket)?: pending = socket.pendingBytes
+        case .network?: pending = inflightBefore
+        case nil: pending = 0
+        }
+        audioTimingSessionID = currentSessionID
+        let write = AudioSendTiming.Write(
+            queueLagUs: queueLagUs,
+            captureToWriteUs: writeEnd > frame.captureTimeUs ? writeEnd - frame.captureTimeUs : 0,
+            writeCallUs: writeEnd >= writeStart ? writeEnd - writeStart : 0, pendingBytes: pending, endUs: writeEnd)
+        if let gap = audioTiming.recordWrite(write) {
+            audioLogger.log(.debug, "send_gap", sessionID: currentSessionID, generation: 0, fields: gap.logFields)
+        }
+        if let fields = audioTiming.takeReportIfDue(nowUs: writeEnd) {
+            audioLogger.log(.info, "send", sessionID: currentSessionID, generation: 0, fields: fields)
+        }
+    }
+
+    /// Session queue: logs what is left of the `ev=send` window and starts a new interval (AUDIO_CONFIG).
+    private func closeAudioTimingWindow() {
+        if let fields = audioTiming.flush() {
+            audioLogger.log(.info, "send", sessionID: audioTimingSessionID, generation: 0, fields: fields)
+        }
+        audioTiming.resetInterval()
     }
 
     /// `bsd` control connection: the kernel holds at least `controlNotSentLowatBytes` unsent (or our own queue is not
@@ -997,7 +1043,10 @@ public final class SessionServer: @unchecked Sendable {
                     // Bytes behind HELLO would be read as plaintext: a client sends nothing before HELLO_ACK.
                     throw ProtocolError.invalidField("bytes after HELLO")
                 }
-                apply(machine.received(id, message, now: nowUs()))
+                let receivedUs = nowUs()
+                apply(machine.received(id, message, now: receivedUs))
+                // T-116: type only (never content) and handling time, for the audio `ev=send_gap` line.
+                audioTiming.noteReceived(message.type, startUs: receivedUs, endUs: nowUs())
                 if inbounds[id] == nil { return false }  // the message ended this connection
                 if case .audioPrefs(let prefs) = message { routeAudioPrefs(id, prefs) }
             }
