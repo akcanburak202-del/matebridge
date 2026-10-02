@@ -1,7 +1,7 @@
 ---
 id: T-126
 title: Host — kontrol (ses) ve video soketlerinin TCP durumunu saniyelik logla (yeniden gönderim, RTO, srtt, gönderilmemiş/onaylanmamış bayt)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: [T-124]

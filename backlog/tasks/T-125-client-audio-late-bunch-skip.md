@@ -1,7 +1,7 @@
 ---
 id: T-125
 title: Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-118, T-123]

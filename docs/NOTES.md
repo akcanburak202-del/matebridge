@@ -966,3 +966,26 @@ T-120, T-121, T-122 done.
 - 20 dakika, 100 ms aralıklı ping (Mac → AP 192.168.1.1, Mac → tablet 192.168.1.105): 11 660 / 11 838 paket, **kayıp 0**.
 - `signaling` testi sırasında (12:30:37–12:36:05) en çok 18 ms (AP) / 29 ms (tablet). Aynı anda ses `owd` 60–94 ms, 8 alt taşma.
 - Sonuç: kablosuz bağlantı kopmuyor; gecikme TCP akışlarımızın içinde → T-126 (kontrol + video soketlerinin TCP durumunu logla).
+
+## 2026-10-02 ~13:20 — Wi-Fi ses kesintilerinin kökü: videonun kablosuz kuyruğu doldurması (T-123..T-126 cihazda)
+
+Wi-Fi, 5 dk; Krita pinch, uygulama değiştirme, Apple Music ön/arka plan.
+
+**Tablet:**
+- 13 alt taşma, `skip_trims` 12 → T-125 çalışıyor: kesinti sonrası ses hemen yetişiyor (kullanıcı: "daha iyi toparlıyor").
+- T-123: Wi-Fi payı `stored=47`, USB'ye dönünce 20.
+- Kesintiler uygulama değiştirirken (Krita kapatma, Apple Music ön/arka plan) ve pinch sırasında; ikisi de tam ekran değişimi.
+
+**Host `ev=tcp` (T-126):**
+- **Kontrol (ses) soketinde yeniden gönderim yok.**
+- Ama kontrol `srtt` değeri, videonun havadaki verisiyle birlikte 20 → 60–100 ms'ye çıkıyor. Örnek: t=87–92, video `unacked` 78–148 KB, iki soketin `srtt`'si birlikte 49–83 ms.
+- Video `snd_cwnd` 2–13 MB (sınırsız büyüyor), tek seferde 100–450 KB havada.
+- Yani büyük video kareleri (tam ekran değişiminde) kablosuz kuyruğu dolduruyor ve ses, ayrı TCP bağlantısında ve AC_VO sınıfında olsa da arkasında bekliyor. Ping'in temiz kalması, kuyruğun yalnız patlama anlarında dolmasıyla uyumlu.
+
+**Seçenekler** (ölçüme göre karar):
+- Wi-Fi'de daha düşük bit hızı (panelden denenebilir, kod gerekmez);
+- video gönderiminde havadaki veriyi sınırlama / pacing;
+- Mac'i Ethernet'e almak (bir kablosuz atlama azalır; kullanıcı sonra deneyecek);
+- Wi-Fi ses payını ~100 ms'ye çıkarmak (gecikme bedeli).
+
+T-123, T-124, T-125, T-126 done.

@@ -1,7 +1,7 @@
 ---
 id: T-124
 title: Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

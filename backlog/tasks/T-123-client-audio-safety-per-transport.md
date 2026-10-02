@@ -1,7 +1,7 @@
 ---
 id: T-123
 title: Tablet — ses güvenlik payı bağlantı türüne göre (USB / Wi-Fi ayrı hatırlansın, Wi-Fi tabanı yüksek); geçişte pay hemen uyarlansın
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-118]

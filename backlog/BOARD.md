@@ -12,8 +12,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
 | [T-110](tasks/T-110-client-aaudio-mmap-headroom.md) | Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği | 5 | android-client-dev | [T-108] |
 | [T-114](tasks/T-114-client-aaudio-default-4-bursts.md) | Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor | 5 | android-client-dev | [T-110] |
-| [T-123](tasks/T-123-client-audio-safety-per-transport.md) | Tablet — ses güvenlik payı bağlantı türüne göre (USB / Wi-Fi ayrı hatırlansın, Wi-Fi tabanı yüksek); geçişte pay hemen uyarlansın | 5 | android-client-dev | [T-118] |
-| [T-124](tasks/T-124-host-wifi-service-class-default.md) | Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI) | 5 | mac-host-dev | [] |
 
 ## blocked
 
@@ -27,8 +25,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-125](tasks/T-125-client-audio-late-bunch-skip.md) | Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle) | 5 | android-client-dev | [T-118, T-123] |
-| [T-126](tasks/T-126-host-tcp-info-control-video.md) | Host — kontrol (ses) ve video soketlerinin TCP durumunu saniyelik logla (yeniden gönderim, RTO, srtt, gönderilmemiş/onaylanmamış bayt) | 5 | mac-host-dev | [T-124] |
 
 ## done
 
@@ -147,3 +143,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-120](tasks/T-120-client-stall-detector.md) | Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır | 5 | android-client-dev | [T-117] |
 | [T-121](tasks/T-121-client-keyframe-storm.md) | Tablet — kısa kare yığılmasında keyframe fırtınası (MAX_PENDING=2 → bırak-hepsini + KEYFRAME_REQUEST); yığılmayı yut, istekleri sınırla | 5 | android-client-dev | [T-120] |
 | [T-122](tasks/T-122-host-keyframe-request-coalesce.md) | Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla | 5 | mac-host-dev | [] |
+| [T-123](tasks/T-123-client-audio-safety-per-transport.md) | Tablet — ses güvenlik payı bağlantı türüne göre (USB / Wi-Fi ayrı hatırlansın, Wi-Fi tabanı yüksek); geçişte pay hemen uyarlansın | 5 | android-client-dev | [T-118] |
+| [T-124](tasks/T-124-host-wifi-service-class-default.md) | Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI) | 5 | mac-host-dev | [] |
+| [T-125](tasks/T-125-client-audio-late-bunch-skip.md) | Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle) | 5 | android-client-dev | [T-118, T-123] |
+| [T-126](tasks/T-126-host-tcp-info-control-video.md) | Host — kontrol (ses) ve video soketlerinin TCP durumunu saniyelik logla (yeniden gönderim, RTO, srtt, gönderilmemiş/onaylanmamış bayt) | 5 | mac-host-dev | [T-124] |
