@@ -83,6 +83,10 @@ import dev.matebridge.client.session.ProbeResult
 import dev.matebridge.client.session.UsbProbe
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.MacDiscovery
+import dev.matebridge.client.session.HomeNetwork
+import dev.matebridge.client.session.WakePlanner
+import dev.matebridge.client.session.WolSender
+import dev.matebridge.client.session.WolStore
 import dev.matebridge.client.clipboard.ClipboardBridge
 import dev.matebridge.client.clipboard.ClipboardSync
 import dev.matebridge.client.protocol.Clipboard
@@ -140,6 +144,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var audioAllowed = true
     private var audio: AudioPlayout? = null
     private var discovery: MacDiscovery? = null
+    // T-129 Wake-on-LAN: stored host addresses, the episode policy and the UDP sender.
+    private lateinit var wolStore: WolStore
+    private lateinit var wolSender: WolSender
+    private lateinit var wakeButton: Button
+    private val wolPlanner = WakePlanner()
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
     private lateinit var videoGl: SurfaceView // target of the GL presenter (T-018)
@@ -386,16 +395,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
         endpointField = findViewById(R.id.endpoint)
         val prefs = getSharedPreferences("matebridge", Context.MODE_PRIVATE)
-        settings = Settings(object : KeyValueStore {
+        val prefsStore = object : KeyValueStore {
             override fun getString(key: String) = prefs.getString(key, null)
             override fun putString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
-        })
+        }
+        settings = Settings(prefsStore)
+        wolStore = WolStore(prefsStore) // T-129
+        wolSender = WolSender(this)
         settings.migrateTransportToAutoOnce()?.let { old -> MbLog.i("transport_pref_migrated", "from=${TransportMode.parse(old)?.id ?: "other"} to=auto") } // T-096
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
         setupManualEntry()
         findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
+        wakeButton = findViewById(R.id.wake)
+        wakeButton.setOnClickListener { onWakeClicked() }
+        refreshWakeButton()
 
         val pairKeys = EncryptedPairKeyStore(
             object : KeyValueStore {
@@ -1307,6 +1322,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         applyTransport()
         ui.removeCallbacks(autoTicker)
         ui.postDelayed(autoTicker, AUTO_TICK_MS)
+        refreshWakeButton()
+        ui.removeCallbacks(wolTicker)
+        ui.post(wolTicker)
     }
 
     /**
@@ -1334,7 +1352,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun startWifi() {
         manualMode = false
         discovery?.stop()
-        discovery = MacDiscovery(this) { ep -> runOnUiThread { onDiscovered(ep) } }.also { it.start() }
+        discovery = MacDiscovery(this, onTxt = { host, wol -> onHostTxt(host, wol) }) { ep -> runOnUiThread { onDiscovered(ep) } }
+            .also { it.start() }
         if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it) }
     }
 
@@ -1558,6 +1577,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         discovery = null
         ui.removeCallbacks(usbHintCheck)
         ui.removeCallbacks(autoTicker)
+        ui.removeCallbacks(wolTicker)
+        wolStep() // started is false: a running wake episode stops (nothing is sent in the background)
         unregisterCableReceiver()
         pickGen++ // a probe still running reports into nothing
         picking = false
@@ -1582,6 +1603,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wifiLock?.sync(false, "destroy")
         probeExec?.shutdownNow()
         perfHint?.close()
+        if (::wolSender.isInitialized) wolSender.shutdown()
         super.onDestroy()
     }
 
@@ -1635,6 +1657,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         lastUi = state
         syncWifiLock(state.javaClass.simpleName.lowercase(java.util.Locale.ROOT))
+        wolStep() // T-129: reaching the host stops a wake episode at once
         if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
         // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
         if (state is SessionUi.Connected && isOnUsb()) autoPolicy.onUsbConnected()
@@ -1647,6 +1670,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
         if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
+        applyStatusText(state)
+        syncInputActive() // panel visibility decides whether input is captured
+    }
+
+    private fun applyStatusText(state: SessionUi) {
         status.text = when (state) {
             SessionUi.Idle -> if (userDisconnected) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
             SessionUi.Searching -> getString(R.string.state_searching)
@@ -1665,7 +1693,61 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (ConnectMode.showUsbHint(mode, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
             status.text = getString(R.string.usb_missing)
         }
-        syncInputActive() // panel visibility decides whether input is captured
+        if (wolPlanner.active && !WakePlanner.reached(state)) status.text = getString(R.string.wol_waking) // T-129
+    }
+
+    // ---- T-129 Wake-on-LAN ----
+
+    /** NSD thread: remembers the host's TXT `wol` addresses, its IPv4 and the home Wi-Fi subnet (none of them logged). */
+    private fun onHostTxt(host: String, wol: String?) {
+        val subnet = HomeNetwork.pick(wolSender.wifiSubnets(), host)
+        if (!wolStore.onResolved(host, wol, subnet)) return
+        MbLog.i("wol_stored", "macs=${wolStore.macs().size} home=${if (wolStore.subnet() != null) 1 else 0}")
+        runOnUiThread { refreshWakeButton() }
+    }
+
+    private fun refreshWakeButton() {
+        if (!::wakeButton.isInitialized) return
+        wakeButton.visibility = if (wolStore.hasMacs()) View.VISIBLE else View.GONE
+    }
+
+    /** Every [WOL_TICK_MS] while started: the planner decides whether to start, send or stop. */
+    private val wolTicker = object : Runnable {
+        override fun run() {
+            wolStep()
+            ui.postDelayed(this, WOL_TICK_MS)
+        }
+    }
+
+    /** "Mac'i uyandır": after "Bağlantıyı kes" it also connects again the chosen mode's usual way (like "Bağlan"). */
+    private fun onWakeClicked() {
+        MbLog.i("wol_manual", "active=${if (wolPlanner.active) 1 else 0}")
+        if (userDisconnected) {
+            userDisconnected = false
+            hideManualEntry()
+            render(SessionUi.Searching)
+            applyTransport()
+        }
+        wolStep(manual = true)
+    }
+
+    private fun wolStep(manual: Boolean = false) {
+        if (!::wolStore.isInitialized || !::wolSender.isInitialized) return
+        val now = SystemClock.elapsedRealtime()
+        val foreground = started && !isDestroyed
+        val reached = WakePlanner.reached(lastUi)
+        val wasActive = wolPlanner.active
+        val steps = if (manual) wolPlanner.manual(now, reached, wolStore.hasMacs())
+        else wolPlanner.update(now, foreground, userDisconnected, reached, wolStore.hasMacs()) {
+            HomeNetwork.skipReason(wolStore.subnet(), wolSender.wifiSubnets()) // automatic wake only on the home Wi-Fi
+        }
+        for (step in steps) when (step) {
+            is WakePlanner.Step.Start -> wolSender.start(step.reason, wolStore.macs(), wolStore.host())
+            WakePlanner.Step.Send -> wolSender.send()
+            is WakePlanner.Step.Stop -> wolSender.stop(step.reason)
+            is WakePlanner.Step.Skip -> MbLog.i("wol_skip", "reason=${step.reason}")
+        }
+        if (wasActive != wolPlanner.active && foreground) applyStatusText(lastUi)
     }
 
     /**
@@ -1701,6 +1783,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val POINTER_CAPTURE_RETRY_MS = 500L
         const val INPUT_FAULT_BACKOFF_MS = 1000L
         const val AUTO_TICK_MS = 500L // T-096; attempts themselves are >= 2 s apart (AutoUsbPolicy)
+        const val WOL_TICK_MS = 250L // T-129; sends themselves are WakePlanner.INTERVAL_MS apart
         /** `UsbManager.ACTION_USB_STATE` (hidden constant, sticky system broadcast; extra `connected`). */
         const val ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE"
     }

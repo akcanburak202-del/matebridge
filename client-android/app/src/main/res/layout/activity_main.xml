@@ -79,6 +79,15 @@
                 android:layout_marginTop="16dp"
                 android:text="@string/connect" />
 
+            <!-- T-129: shown only when the host's Wake-on-LAN addresses are stored -->
+            <Button
+                android:id="@+id/wake"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/wol_button"
+                android:visibility="gone" />
+
             <Button
                 android:id="@+id/endpoint_toggle"
                 android:layout_width="wrap_content"
