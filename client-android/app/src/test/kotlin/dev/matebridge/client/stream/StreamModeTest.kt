@@ -19,15 +19,17 @@ class StreamModeTest {
         assertEquals(StreamPrefs(120, 1000), StreamMode.SMOOTH.toPrefs())
         assertEquals(StreamPrefs(120, 750), StreamMode.PERFORMANCE.toPrefs())
         assertEquals(StreamPrefs(120, 660), StreamMode.GAME.toPrefs()) // decision 0014
+        assertEquals(StreamPrefs(60, 1000), StreamMode.GAME60.toPrefs()) // decision 0016
+        assertEquals(listOf(StreamMode.GAME, StreamMode.GAME60), StreamMode.entries.filter { it.isGame })
         assertEquals(StreamMode.SMOOTH, StreamMode.DEFAULT)
     }
 
     @Test fun cycleVisitsEveryModeAndWraps() {
         var m = StreamMode.CLARITY
         val seen = ArrayList<StreamMode>()
-        repeat(4) { m = m.next(); seen += m }
+        repeat(6) { m = m.next(); seen += m }
         assertEquals(
-            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.GAME, StreamMode.CLARITY),
+            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.GAME, StreamMode.GAME60, StreamMode.CLARITY, StreamMode.SMOOTH),
             seen,
         )
     }
@@ -35,6 +37,8 @@ class StreamModeTest {
     @Test fun idsAreUniqueAndParseRoundTrips() {
         assertEquals(StreamMode.entries.size, StreamMode.entries.map { it.id }.toSet().size)
         for (m in StreamMode.entries) assertEquals(m, StreamMode.parse(m.id))
+        assertEquals(StreamMode.GAME60, StreamMode.parse("game60"))
+        assertEquals(StreamMode.GAME, StreamMode.parse("game"))
         assertEquals(StreamMode.DEFAULT, StreamMode.parse(null))
         assertEquals(StreamMode.DEFAULT, StreamMode.parse("bogus"))
     }
@@ -43,7 +47,8 @@ class StreamModeTest {
         assertEquals("Görüntü modu: Akıcı (120 fps)", StreamMode.SMOOTH.buttonText())
         assertEquals("Performans: 120 fps, %75", StreamMode.PERFORMANCE.toastText())
         assertEquals("Netlik: 60 fps, %100", StreamMode.CLARITY.toastText())
-        assertEquals("Oyun: 120 fps, %66", StreamMode.GAME.toastText())
+        assertEquals("Oyun 120: 120 fps, %66", StreamMode.GAME.toastText())
+        assertEquals("Oyun 60: 60 fps, %100", StreamMode.GAME60.toastText())
     }
 
     @Test fun settingsPersistTheModeAndDefaultToSmooth() {

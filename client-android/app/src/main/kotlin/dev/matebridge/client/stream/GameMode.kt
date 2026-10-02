@@ -9,7 +9,7 @@ import dev.matebridge.client.video.VideoRenderer
  * Game mode's temporary defaults (decision 0014 §3, T-109): a session layer over the user's stored [Settings] for the
  * bit rate, the audio output and the local pen trail/dot.
  *
- * - Entering [StreamMode.GAME] builds the layer from the game defaults ([defaults]).
+ * - Entering a game mode ([StreamMode.isGame]) builds the layer from the game defaults ([defaults]).
  * - While it is active every read here returns the layer's value and every write changes only the layer; [Settings]
  *   is never written.
  * - Leaving the mode drops the layer, so the stored values are in effect again; the next entry starts from the game
@@ -62,11 +62,11 @@ class GameModeSettings(private val settings: Settings) {
     }
 
     /**
-     * The display mode is now [mode]. Builds the layer on entering [StreamMode.GAME] ([Change.ENTER]), drops it on
+     * The display mode is now [mode]. Builds the layer on entering a game mode ([Change.ENTER]), drops it on
      * leaving ([Change.EXIT]); null when nothing changed (game to game, or between two other modes).
      */
     fun onModeChanged(mode: StreamMode): Change? {
-        val game = mode == StreamMode.GAME
+        val game = mode.isGame
         return when {
             game && layer == null -> { layer = defaults(saved()); Change.ENTER }
             !game && layer != null -> { layer = null; Change.EXIT }

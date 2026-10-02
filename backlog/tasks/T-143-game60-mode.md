@@ -1,7 +1,7 @@
 ---
 id: T-143
 title: "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır
-status: todo
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-109]
@@ -42,7 +42,7 @@ Karar 0016: Panel dokunma olmadan 60 Hz'de kaldığı için klavye ya da gamepad
 _(Ajan bitirince doldurur.)_
 
 - **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Dokunulan dosyalar:** stream/StreamMode.kt, stream/GameMode.kt (main); StreamModeTest, GameModeTest, SettingsCatalogTest (test); bu kart.
+- **Varsayımlar:** Tek gerçek `== GAME` kontrolü GameModeSettings.onModeChanged idi; gerisi `gameSettings.active`'e bağlı, MainActivity değişmedi.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Ctrl+Shift+7 döngüsü Netlik>Akıcı>Performans>Oyun 120>Oyun 60>Netlik; Oyun 60 60 fps/%100 ve panelde "(oyun modu)"; Oyun 120<->60 geçişinde geçici ayarlar korunur; kayıtlı mod Oyun 60 ile açılışta katman kurulur.
+- **Açık sorular:** yok
