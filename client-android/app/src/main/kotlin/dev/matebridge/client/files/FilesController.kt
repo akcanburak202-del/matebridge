@@ -27,6 +27,8 @@ class FilesController(
     private val random = SecureRandom()
     private val lock = Any()
     private var server: DavServer? = null
+    /** The last stopped server: the next one listens only after its workers (a running COPY/DELETE) ended. */
+    private var retired: DavServer? = null
     private var gen = 0
 
     @Volatile var status = FilesStatus.DISABLED
@@ -99,13 +101,15 @@ class FilesController(
             override fun onStopped(failed: Boolean) {
                 synchronized(lock) {
                     if (gen != myGen) return // stopped on purpose: stop() already reported OFF
+                    retired = server
                     server = null
                     publish(FilesInfo.OFF)
                     setStatus(FilesStatus.FAILED)
                 }
                 MbLog.w("server", "state=off port=0 reason=${if (failed) "failed" else "ended"}", COMPONENT)
             }
-        })
+        }, after = retired)
+        retired = null
         server = s
         setStatus(FilesStatus.STARTING)
         s.start()
@@ -115,6 +119,7 @@ class FilesController(
         val s = synchronized(lock) {
             val cur = server ?: return
             server = null
+            retired = cur
             gen++ // late callbacks of the old server are ignored
             publish(FilesInfo.OFF) // queued before the listener closes, so the host learns OFF as early as possible
             cur

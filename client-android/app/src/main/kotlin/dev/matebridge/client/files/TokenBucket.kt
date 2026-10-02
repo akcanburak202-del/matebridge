@@ -43,28 +43,32 @@ class TokenBucket(
 }
 
 /**
- * Per-second summary of the file server (docs/LOGGING.md style key=value): requests, bytes each way, time spent waiting
- * on the rate cap. Never paths or names. [poll] returns a line at most every [intervalMs] and only after activity, so an
- * idle server writes nothing. Thread-safe.
+ * Per-second summary of the file server (docs/LOGGING.md style key=value): requests, bytes each way, bytes copied on the
+ * tablet (server-side COPY), time spent waiting on the rate cap. Never paths or names. [poll] returns a line at most
+ * every [intervalMs] and only after activity, so an idle server writes nothing; `force` is for the final line at stop.
+ * Thread-safe.
  */
 class FilesStats(private val intervalMs: Long = 1000) {
     private var reqs = 0L
     private var bytesOut = 0L
     private var bytesIn = 0L
+    private var bytesCopied = 0L
     private var throttledNs = 0L
     private var lastEmitMs = Long.MIN_VALUE / 2
 
     @Synchronized fun request() { reqs++ }
     @Synchronized fun bytesOut(n: Long) { bytesOut += n }
     @Synchronized fun bytesIn(n: Long) { bytesIn += n }
+    @Synchronized fun bytesCopied(n: Long) { bytesCopied += n }
     @Synchronized fun throttled(ns: Long) { throttledNs += ns }
 
     /** The summary line (fields only) when [intervalMs] passed since the last one and anything happened; else null. */
     @Synchronized fun poll(nowMs: Long, force: Boolean = false): String? {
-        if (reqs == 0L && bytesOut == 0L && bytesIn == 0L && throttledNs == 0L) return null
+        if (reqs == 0L && bytesOut == 0L && bytesIn == 0L && bytesCopied == 0L && throttledNs == 0L) return null
         if (!force && nowMs - lastEmitMs < intervalMs) return null
-        val line = "reqs=$reqs bytes_out=$bytesOut bytes_in=$bytesIn throttled_ms=${throttledNs / 1_000_000}"
-        reqs = 0; bytesOut = 0; bytesIn = 0; throttledNs = 0
+        val line = "reqs=$reqs bytes_out=$bytesOut bytes_in=$bytesIn bytes_copied=$bytesCopied " +
+            "throttled_ms=${throttledNs / 1_000_000}"
+        reqs = 0; bytesOut = 0; bytesIn = 0; bytesCopied = 0; throttledNs = 0
         lastEmitMs = nowMs
         return line
     }

@@ -18,8 +18,10 @@ import java.util.UUID
  * (single Range), PUT (streamed to a temporary file, then moved), DELETE, MKCOL, MOVE, COPY, LOCK/UNLOCK (fake,
  * in-memory locks: macOS mounts read-only without DAV class 2). Every request must authenticate ([DigestAuth]).
  *
- * Pure JVM code over java.io: the connection's streams come in already rate-limited. Never logs paths, names, the
- * token or header values.
+ * Pure JVM code over java.io: the connection's streams come in already rate-limited; server-side COPY (and MOVE's copy
+ * fallback) takes its bytes from the same [bucket]. Long tree operations stop when [cancelled] turns true (server
+ * stop); an incomplete copy is removed. Finder metadata (`._*`, `.DS_Store`) lives in [meta], never on the storage.
+ * Never logs paths, names, the token or header values.
  */
 class DavHandler(
     /** Canonical root directory; nothing outside it is ever served or touched. */
@@ -28,6 +30,10 @@ class DavHandler(
     private val config: FilesConfig,
     private val log: (ev: String, fields: String) -> Unit = { _, _ -> },
     private val nowMs: () -> Long = System::currentTimeMillis,
+    private val bucket: TokenBucket? = null,
+    private val stats: FilesStats? = null,
+    private val cancelled: () -> Boolean = { false },
+    private val meta: MetaStore = MetaStore(),
 ) {
     private val random = SecureRandom()
     private val locks = object : LinkedHashMap<String, String>(16, 0.75f, false) {
@@ -83,6 +89,7 @@ class DavHandler(
         if (all[0] != MOUNT) return ex.empty(404)
         val segs = all.drop(1)
         val res = DavPath.resolve(root, segs) ?: return ex.empty(403)
+        if (!res.isRoot && MetaStore.isMetaName(res.name)) return metaRequest(req, body, ex, segs, res)
         when (req.method) {
             "PROPFIND" -> propfind(req, body, ex, segs, res)
             "GET" -> get(req, ex, res, head = false)
@@ -150,7 +157,7 @@ class DavHandler(
         w.write(DavXml.response(self))
         for (c in children) {
             val name = c.name
-            if (isTempName(name)) continue
+            if (isTempName(name) || MetaStore.isMetaName(name)) continue // metadata is served from [meta] only
             if (DavPath.isSymlink(c) && !insideCanonical(c)) continue // a link leading out of the root is not shown
             val dir = c.isDirectory
             w.write(
@@ -158,6 +165,11 @@ class DavHandler(
                     DavEntry(hrefOf(res.segments + name, dir), name, dir, if (dir) 0 else c.length(), c.lastModified()),
                 ),
             )
+        }
+        if (collection && depth == "1") {
+            for ((name, e) in meta.list(MetaStore.key(res.segments))) {
+                w.write(DavXml.response(DavEntry(hrefOf(res.segments + name, false), name, false, e.data.size.toLong(), e.modifiedMs)))
+            }
         }
         w.write(DavXml.MULTISTATUS_CLOSE)
         w.flush()
@@ -260,7 +272,9 @@ class DavHandler(
         val f = res.file
         if (res.isRoot) return ex.empty(403)
         if (!f.exists() && !DavPath.isSymlink(f)) return ex.empty(404)
-        ex.empty(if (deleteTree(f)) 204 else 500)
+        val ok = deleteTree(f, cancellable = true)
+        if (ok) meta.removeUnder(MetaStore.key(res.segments))
+        ex.empty(if (ok) 204 else 500)
     }
 
     private fun mkcol(req: HttpRequest, ex: Exchange, res: DavPath.Resolved) {
@@ -280,29 +294,93 @@ class DavHandler(
         val dest = DavPath.resolve(root, destSegs) ?: return ex.empty(403)
         val src = res.file
         if (res.isRoot || dest.isRoot) return ex.empty(403)
+        if (MetaStore.isMetaName(dest.name)) return ex.empty(403) // a real file never turns into hidden metadata
         if (!src.exists()) return ex.empty(404)
         val overwrite = req.header("overwrite")?.trim()?.uppercase() != "F"
         val d = dest.file
         val dParent = d.parentFile
         if (dParent == null || !dParent.isDirectory) return ex.empty(409)
-        if (d.path == src.path) return ex.empty(403)
-        if (d.path.startsWith(src.path + "/")) return ex.empty(409) // into itself
+        // Every check that can refuse comes before anything is touched (review P1: an ancestor destination with
+        // Overwrite: T used to delete the source along with it).
+        when (relation(src, d)) {
+            Rel.SAME -> return ex.empty(403)
+            Rel.ANCESTOR, Rel.DESCENDANT -> return ex.empty(409)
+            Rel.ALIAS -> {
+                // The same file under another spelling (case-insensitive storage, NFC/NFD): a rename, never "delete dest".
+                if (!move) return ex.empty(403)
+                return ex.empty(if (src.renameTo(d)) 201 else 500)
+            }
+            Rel.NONE -> Unit
+        }
         val destExisted = d.exists() || DavPath.isSymlink(d)
-        if (destExisted && sameFile(src, d)) {
-            // The same file under another spelling (case-insensitive storage, NFC/NFD): a rename, never "delete dest".
-            if (!move) return ex.empty(403)
-            return ex.empty(if (src.renameTo(d)) 201 else 500)
-        }
+        if (destExisted && !overwrite) return ex.empty(412)
+        val recursive = move || req.header("depth")?.trim() != "0"
+        // An existing destination is only moved aside (a hidden temporary name), and deleted once the operation
+        // succeeded; on failure or cancellation it is put back and the incomplete result removed.
+        var aside: File? = null
         if (destExisted) {
-            if (!overwrite) return ex.empty(412)
-            if (!deleteTree(d)) return ex.empty(500)
+            aside = File(dParent, TEMP_PREFIX + hex(8) + TEMP_SUFFIX)
+            if (!d.renameTo(aside)) return ex.empty(500)
         }
-        val ok = if (move) {
-            src.renameTo(d) || (copyTree(src, d, recursive = true) && deleteTree(src))
-        } else {
-            copyTree(src, d, recursive = req.header("depth")?.trim() != "0")
+        var ok = false
+        var destComplete = false // d holds a full copy of src (MOVE's copy fallback): never removed then
+        try {
+            if (move) {
+                ok = src.renameTo(d)
+                if (!ok) {
+                    destComplete = copyTree(src, d, recursive = true)
+                    ok = destComplete && deleteTree(src, cancellable = false)
+                }
+            } else {
+                ok = copyTree(src, d, recursive)
+            }
+        } finally {
+            if (ok || destComplete) {
+                aside?.let { deleteTree(it, cancellable = false) }
+            } else {
+                if (d.exists() || DavPath.isSymlink(d)) deleteTree(d, cancellable = false)
+                aside?.renameTo(d)
+            }
         }
+        if (ok || destComplete) meta.moveUnder(MetaStore.key(res.segments), MetaStore.key(dest.segments), copy = !move || !ok)
         ex.empty(if (!ok) 500 else if (destExisted) 204 else 201)
+    }
+
+    private enum class Rel { NONE, SAME, ALIAS, ANCESTOR, DESCENDANT }
+
+    /**
+     * How destination [d] relates to source [src]: the same entry, the same file under another spelling, an ancestor
+     * of it (replacing it would delete the source) or a descendant (into itself). Compared by canonical path and, for
+     * spelling-insensitive storage, by file identity along both parent chains.
+     */
+    private fun relation(src: File, d: File): Rel {
+        if (src.path == d.path) return Rel.SAME
+        val s = canonicalPath(src)
+        val t = canonicalPath(d)
+        if (t.startsWith("$s/")) return Rel.DESCENDANT
+        if (s.startsWith("$t/")) return Rel.ANCESTOR
+        val dExists = d.exists()
+        if (dExists && sameFile(src, d)) return Rel.ALIAS
+        if (s == t) return Rel.ALIAS
+        if (dExists) {
+            var p = src.parentFile
+            while (p != null && DavPath.inside(root, p)) {
+                if (sameFile(p, d)) return Rel.ANCESTOR
+                p = p.parentFile
+            }
+        }
+        var q = d.parentFile
+        while (q != null && DavPath.inside(root, q)) {
+            if (q.exists() && sameFile(q, src)) return Rel.DESCENDANT
+            q = q.parentFile
+        }
+        return Rel.NONE
+    }
+
+    private fun canonicalPath(f: File): String = try {
+        f.canonicalPath
+    } catch (e: IOException) {
+        f.absolutePath
     }
 
     private fun sameFile(a: File, b: File): Boolean = try {
@@ -311,21 +389,29 @@ class DavHandler(
         false
     }
 
-    /** Deletes [f] and, for a real directory, everything below it. Symbolic links are removed, never followed. */
-    private fun deleteTree(f: File): Boolean {
+    /**
+     * Deletes [f] and, for a real directory, everything below it. Symbolic links are removed, never followed.
+     * [cancellable]: stops (throws) when the server stops; clean-up deletions are not cancellable.
+     */
+    private fun deleteTree(f: File, cancellable: Boolean): Boolean {
+        if (cancellable) checkCancelled()
         if (f.isDirectory && !DavPath.isSymlink(f)) {
-            for (c in f.listFiles() ?: emptyArray()) if (!deleteTree(c)) return false
+            for (c in f.listFiles() ?: emptyArray()) if (!deleteTree(c, cancellable)) return false
         }
         return f.delete()
     }
 
-    /** Copies [src] to [dst]; symbolic links inside a copied tree are skipped. */
+    /**
+     * Copies [src] to [dst]; symbolic links, upload temporaries and Finder metadata inside a copied tree are skipped.
+     * File bytes go through the shared rate cap; a server stop throws (the caller removes the incomplete copy).
+     */
     private fun copyTree(src: File, dst: File, recursive: Boolean): Boolean {
+        checkCancelled()
         if (src.isDirectory) {
             if (!dst.mkdir()) return false
             if (recursive) {
                 for (c in src.listFiles() ?: emptyArray()) {
-                    if (DavPath.isSymlink(c) || isTempName(c.name)) continue
+                    if (DavPath.isSymlink(c) || isTempName(c.name) || MetaStore.isMetaName(c.name)) continue
                     if (!copyTree(c, File(dst, c.name), true)) return false
                 }
             }
@@ -336,14 +422,24 @@ class DavHandler(
             FileOutputStream(dst).use { output ->
                 val buf = ByteArray(config.bufferBytes)
                 while (true) {
+                    checkCancelled()
                     val n = input.read(buf)
                     if (n < 0) break
+                    bucket?.let { b ->
+                        val slept = b.acquire(n.toLong())
+                        if (slept > 0) stats?.throttled(slept)
+                    }
+                    stats?.bytesCopied(n.toLong())
                     output.write(buf, 0, n)
                 }
             }
         }
         dst.setLastModified(src.lastModified())
         return true
+    }
+
+    private fun checkCancelled() {
+        if (cancelled()) throw Cancelled()
     }
 
     // ---- LOCK ----
@@ -375,6 +471,98 @@ class DavHandler(
     private fun sendLock(ex: Exchange, status: Int, token: String, href: String, depthInfinity: Boolean, timeout: Long) {
         val body = DavXml.lockDiscovery(token, href, depthInfinity, timeout).toByteArray(Charsets.UTF_8)
         ex.bytes(status, DavXml.CONTENT_TYPE, body, listOf("Lock-Token" to "<$token>"))
+    }
+
+    // ---- Finder metadata (`._*`, `.DS_Store`): in memory only ----
+
+    private fun metaRequest(req: HttpRequest, body: BodyInputStream, ex: Exchange, segs: List<String>, res: DavPath.Resolved) {
+        val key = MetaStore.key(res.segments)
+        val parentOk = res.file.parentFile?.isDirectory == true
+        when (req.method) {
+            "PUT" -> {
+                if (!parentOk) return ex.empty(409)
+                val acc = ByteArrayOutputStream()
+                var tooBig = false
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = body.read(buf, 0, buf.size)
+                    if (n < 0) break
+                    if (tooBig) continue // read to the end, keep nothing
+                    acc.write(buf, 0, n)
+                    if (acc.size() > meta.maxEntryBytes) { tooBig = true; acc.reset() }
+                }
+                val existed = meta.contains(key)
+                if (tooBig) meta.remove(key) else meta.put(key, acc.toByteArray(), nowMs())
+                ex.empty(if (existed) 204 else 201)
+            }
+            "GET", "HEAD" -> {
+                val e = meta.get(key) ?: return ex.empty(404)
+                val total = e.data.size.toLong()
+                val common = listOf(
+                    "Content-Type" to "application/octet-stream",
+                    "Last-Modified" to DavXml.httpDate(e.modifiedMs),
+                    "ETag" to DavXml.etag(total, e.modifiedMs),
+                    "Accept-Ranges" to "bytes",
+                )
+                val (status, start, count, extra) = when (val r = ByteRange.parse(req.header("range"), total)) {
+                    ByteRange.Full -> Quad(200, 0L, total, emptyList())
+                    is ByteRange.Part -> Quad(206, r.start, r.length, listOf("Content-Range" to r.contentRange(total)))
+                    ByteRange.Unsatisfiable -> return ex.empty(416, listOf("Content-Range" to "bytes */$total"))
+                }
+                if (req.method == "HEAD") return ex.start(status, common + extra, count, withBody = false)
+                ex.start(status, common + extra, count)
+                val sink = ex.bodySink()
+                sink.write(e.data, start.toInt(), count.toInt())
+                sink.flush()
+            }
+            "PROPFIND" -> {
+                val depth = req.header("depth")?.trim()?.lowercase()
+                if (depth != "0" && depth != "1") return ex.empty(403)
+                readSmallBody(body) ?: return ex.empty(413)
+                val e = meta.get(key) ?: return ex.empty(404)
+                val entry = DavEntry(hrefOf(segs, false), res.name, false, e.data.size.toLong(), e.modifiedMs)
+                ex.bytes(207, DavXml.CONTENT_TYPE, DavXml.multistatus(listOf(entry)).toByteArray(Charsets.UTF_8))
+            }
+            "DELETE" -> ex.empty(if (meta.remove(key)) 204 else 404)
+            "MOVE", "COPY" -> {
+                val destSegs = req.header("destination")?.let { storageSegments(it.trim()) } ?: return ex.empty(403)
+                val dest = DavPath.resolve(root, destSegs) ?: return ex.empty(403)
+                if (dest.isRoot || !MetaStore.isMetaName(dest.name)) return ex.empty(403) // metadata stays metadata
+                val e = meta.get(key) ?: return ex.empty(404)
+                if (dest.file.parentFile?.isDirectory != true) return ex.empty(409)
+                val destKey = MetaStore.key(dest.segments)
+                if (destKey == key) return ex.empty(403)
+                val existed = meta.contains(destKey)
+                if (existed && req.header("overwrite")?.trim()?.uppercase() == "F") return ex.empty(412)
+                meta.put(destKey, e.data, e.modifiedMs)
+                if (req.method == "MOVE") meta.remove(key)
+                ex.empty(if (existed) 204 else 201)
+            }
+            "LOCK" -> {
+                val xml = readSmallBody(body) ?: return ex.empty(413)
+                val timeout = parseTimeout(req.header("timeout"))
+                val depthInfinity = req.header("depth")?.trim() != "0"
+                val href = hrefOf(segs, false)
+                if (xml.isBlank()) {
+                    val token = LOCK_TOKEN.find(req.header("if") ?: "")?.groupValues?.get(1) ?: return ex.empty(400)
+                    return sendLock(ex, 200, token, href, depthInfinity, timeout)
+                }
+                var status = 200
+                if (!meta.contains(key)) {
+                    if (!parentOk) return ex.empty(409)
+                    meta.put(key, ByteArray(0), nowMs())
+                    status = 201
+                }
+                val token = "opaquelocktoken:${UUID.randomUUID()}"
+                synchronized(locks) { locks[token] = href }
+                sendLock(ex, status, token, href, depthInfinity, timeout)
+            }
+            "UNLOCK" -> {
+                req.header("lock-token")?.trim()?.removePrefix("<")?.removeSuffix(">")?.let { synchronized(locks) { locks.remove(it) } }
+                ex.empty(204)
+            }
+            else -> ex.empty(403) // MKCOL etc.: a metadata name is never a collection
+        }
     }
 
     // ---- helpers ----
@@ -464,6 +652,9 @@ class DavHandler(
 
     /** The file changed under a running GET: the connection is dropped (the client sees a short body). */
     private class ConnectionAbort : IOException("short file")
+
+    /** The server is stopping: a long COPY/DELETE ends here (the connection is closed anyway). */
+    private class Cancelled : IOException("server stopping")
 
     companion object {
         const val ALLOW = "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"

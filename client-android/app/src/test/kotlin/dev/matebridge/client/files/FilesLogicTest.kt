@@ -194,13 +194,13 @@ class FilesLogicTest {
         val s = FilesStats()
         assertNull(s.poll(0))
         s.request(); s.bytesOut(2048); s.bytesIn(10); s.throttled(5_000_000)
-        assertEquals("reqs=1 bytes_out=2048 bytes_in=10 throttled_ms=5", s.poll(1000))
+        assertEquals("reqs=1 bytes_out=2048 bytes_in=10 bytes_copied=0 throttled_ms=5", s.poll(1000))
         s.bytesOut(1)
         assertNull(s.poll(1500))
-        assertEquals("reqs=0 bytes_out=1 bytes_in=0 throttled_ms=0", s.poll(2000))
+        assertEquals("reqs=0 bytes_out=1 bytes_in=0 bytes_copied=0 throttled_ms=0", s.poll(2000))
         assertNull(s.poll(5000))
-        s.request()
-        assertEquals("reqs=1 bytes_out=0 bytes_in=0 throttled_ms=0", s.poll(5001, force = true))
+        s.request(); s.bytesCopied(7)
+        assertEquals("reqs=1 bytes_out=0 bytes_in=0 bytes_copied=7 throttled_ms=0", s.poll(5001, force = true))
     }
 
     // ---- HTTP bodies ----
@@ -261,5 +261,33 @@ class FilesLogicTest {
         val a = FilesSwitch.newToken(r)
         assertTrue(a.matches(Regex("[0-9a-f]{32}")))
         assertFalse(a == FilesSwitch.newToken(r))
+    }
+
+    // ---- Finder metadata store ----
+
+    @Test fun metaNames() {
+        assertTrue(MetaStore.isMetaName("._çizim.png"))
+        assertTrue(MetaStore.isMetaName(".DS_Store"))
+        assertFalse(MetaStore.isMetaName(".gizli"))
+        assertFalse(MetaStore.isMetaName("a._b"))
+    }
+
+    @Test fun metaStoreIsBoundedAndLeastRecentlyUsedGoesFirst() {
+        val m = MetaStore(maxEntries = 3, maxEntryBytes = 10, maxTotalBytes = 25)
+        assertTrue(m.put("a/._1", ByteArray(10), 1))
+        assertTrue(m.put("a/._2", ByteArray(10), 2))
+        m.get("a/._1") // touch: ._2 is now the oldest
+        assertTrue(m.put("a/._3", ByteArray(10), 3)) // 30 bytes > 25: ._2 goes
+        assertNull(m.get("a/._2"))
+        assertEquals(setOf("._1", "._3"), m.list("a").map { it.first }.toSet())
+        assertFalse(m.put("a/._1", ByteArray(11), 4)) // too large: not kept, the old one is gone too
+        assertNull(m.get("a/._1"))
+        m.put("a/b/._x", ByteArray(1), 5)
+        assertEquals(listOf("._3"), m.list("a").map { it.first }) // only direct children
+        m.moveUnder("a", "z", copy = false)
+        assertEquals(setOf("._3"), m.list("z").map { it.first }.toSet())
+        assertEquals(listOf("._x"), m.list("z/b").map { it.first })
+        m.removeUnder("z")
+        assertEquals(0, m.size())
     }
 }

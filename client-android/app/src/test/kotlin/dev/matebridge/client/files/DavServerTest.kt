@@ -28,21 +28,30 @@ class DavServerTest {
     private lateinit var root: File
     private lateinit var server: DavServer
     private val logs = ArrayList<String>()
-    private val stopped = CountDownLatch(1)
+    private var stopped = CountDownLatch(1)
     private var port = 0
+
+    // Port 0: never collide with a real server on the preferred port. A high rate keeps the tests fast.
+    private val fastConfig =
+        FilesConfig(preferredPort = 0, rateBytesPerSec = 200_000_000, maxConnections = 2, idleTimeoutMs = 5000, readTimeoutMs = 5000)
 
     @Before fun setUp() {
         root = tmp.newFolder("storage").canonicalFile
+        startServer(fastConfig)
+    }
+
+    /** Starts [server] (replacing the field) and waits until it listens. */
+    private fun startServer(cfg: FilesConfig, after: DavServer? = null, onListening: () -> Unit = {}) {
         val listening = CountDownLatch(1)
-        // Port 0: never collide with a real server on the preferred port. A high rate keeps the tests fast.
-        val cfg = FilesConfig(preferredPort = 0, rateBytesPerSec = 200_000_000, maxConnections = 2, idleTimeoutMs = 5000, readTimeoutMs = 5000)
+        val stoppedLatch = CountDownLatch(1)
+        stopped = stoppedLatch
         server = DavServer(root, token, ByteArray(32) { 7 }, cfg, object : DavServer.Hooks {
             override fun log(ev: String, fields: String) { synchronized(logs) { logs += "ev=$ev $fields" } }
-            override fun onListening(port: Int) { this@DavServerTest.port = port; listening.countDown() }
-            override fun onStopped(failed: Boolean) = stopped.countDown()
-        })
+            override fun onListening(port: Int) { onListening(); this@DavServerTest.port = port; listening.countDown() }
+            override fun onStopped(failed: Boolean) = stoppedLatch.countDown()
+        }, after = after)
         server.start()
-        assertTrue(listening.await(5, TimeUnit.SECONDS))
+        assertTrue(listening.await(10, TimeUnit.SECONDS))
     }
 
     @After fun tearDown() {
@@ -347,7 +356,102 @@ class DavServerTest {
         while (System.currentTimeMillis() < deadline && synchronized(logs) { logs.none { it.startsWith("ev=stats") } }) Thread.sleep(20)
         val all = synchronized(logs) { logs.toList() }
         val stats = all.first { it.startsWith("ev=stats") }
-        assertTrue(stats, stats.matches(Regex("ev=stats reqs=\\d+ bytes_out=\\d+ bytes_in=\\d+ throttled_ms=\\d+")))
+        assertTrue(stats, stats.matches(Regex("ev=stats reqs=\\d+ bytes_out=\\d+ bytes_in=\\d+ bytes_copied=\\d+ throttled_ms=\\d+")))
         assertTrue(all.none { it.contains("gizli") })
+    }
+
+    // ---- review fixes ----
+
+    @Test fun ancestorOrDescendantDestinationNeverDeletesTheSource() {
+        File(root, "a/b").mkdirs()
+        File(root, "a/b/keep.txt").writeText("keep")
+        for (m in listOf("MOVE", "COPY")) {
+            assertEquals(m, 409, call(m, "/MatePad/a/b/", listOf("Destination" to "/MatePad/a", "Overwrite" to "T")).status)
+            assertEquals(m, 409, call(m, "/MatePad/a/b/keep.txt", listOf("Destination" to "/MatePad/a/")).status)
+            assertEquals(m, 409, call(m, "/MatePad/a/", listOf("Destination" to "/MatePad/a/b/c")).status)
+            assertEquals(m, 403, call(m, "/MatePad/a/b/", listOf("Destination" to "/MatePad/a/b")).status)
+        }
+        assertEquals("keep", File(root, "a/b/keep.txt").readText())
+    }
+
+    @Test fun overwritingMoveReplacesTheDestinationOnlyOnSuccess() {
+        File(root, "src").mkdir()
+        File(root, "src/new.txt").writeText("new")
+        File(root, "dst").mkdir()
+        File(root, "dst/old.txt").writeText("old")
+        assertEquals(204, call("MOVE", "/MatePad/src/", listOf("Destination" to "/MatePad/dst/")).status)
+        assertEquals(listOf("new.txt"), File(root, "dst").list()!!.toList())
+        assertFalse(File(root, "src").exists())
+        assertTrue(root.list()!!.none { DavHandler.isTempName(it) }) // the set-aside old destination is gone
+        // A missing source touches nothing.
+        assertEquals(404, call("MOVE", "/MatePad/nope/", listOf("Destination" to "/MatePad/dst/")).status)
+        assertEquals("new", File(root, "dst/new.txt").readText())
+    }
+
+    @Test fun stopCancelsARateLimitedCopyAndTheNextServerWaitsForIt() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        val data = ByteArray(3_000_000) { (it % 199).toByte() }
+        File(root, "big.bin").writeBytes(data)
+        File(root, "target.bin").writeText("previous")
+        // 1 MB/s: the 3 MB server-side copy takes ~3 s unless the cap is bypassed.
+        startServer(fastConfig.copy(rateBytesPerSec = 1_000_000, burstBytes = 64 * 1024))
+        val old = server
+        val copyStatus = arrayOf(0)
+        val t = Thread {
+            copyStatus[0] = try {
+                call("COPY", "/MatePad/big.bin", listOf("Destination" to "/MatePad/target.bin")).status
+            } catch (e: Exception) {
+                -1 // the stop closed the connection
+            }
+        }
+        t.start()
+        Thread.sleep(700)
+        assertTrue("copy finished too fast: the rate cap was bypassed", t.isAlive)
+        old.stop()
+        var oldDoneWhenNewListened = false
+        startServer(fastConfig, after = old) { oldDoneWhenNewListened = old.awaitTermination(0) }
+        assertTrue(oldDoneWhenNewListened) // no overlap with the old worker
+        t.join(5000)
+        assertEquals(-1, copyStatus[0])
+        assertEquals("previous", File(root, "target.bin").readText()) // the old destination is back, nothing partial
+        assertTrue(root.list()!!.none { DavHandler.isTempName(it) })
+        val copied = synchronized(logs) { logs.filter { it.startsWith("ev=stats") }.sumOf { Regex("bytes_copied=(\\d+)").find(it)!!.groupValues[1].toLong() } }
+        assertTrue("copied $copied", copied in 1 until data.size)
+    }
+
+    @Test fun statsAreNotWrittenPerRequest() {
+        File(root, "a.txt").writeText("a")
+        RawClient().use { c -> repeat(10) { assertEquals(200, c.send("GET", "/MatePad/a.txt").status) } }
+        val lines = synchronized(logs) { logs.count { it.startsWith("ev=stats") } }
+        assertTrue("stats lines: $lines", lines <= 1)
+    }
+
+    @Test fun finderMetadataStaysInMemory() {
+        File(root, "Belgeler").mkdir()
+        File(root, ".DS_Store").writeBytes(ByteArray(10)) // one already on the storage: hidden, untouched
+        val apple = ByteArray(4096) { 3 }
+        assertEquals(201, call("PUT", "/MatePad/Belgeler/._rapor.pdf", body = apple).status)
+        assertEquals(201, call("PUT", "/MatePad/Belgeler/.DS_Store", body = ByteArray(6) { 1 }).status)
+        assertEquals(listOf<String>(), File(root, "Belgeler").list()!!.toList()) // nothing on the tablet's storage
+        assertArrayEquals(apple, call("GET", "/MatePad/Belgeler/._rapor.pdf").body)
+        assertEquals(204, call("PUT", "/MatePad/Belgeler/._rapor.pdf", body = apple).status)
+        val list = call("PROPFIND", "/MatePad/Belgeler/", listOf("Depth" to "1")).text
+        assertTrue(list.contains("<D:href>/MatePad/Belgeler/._rapor.pdf</D:href>"))
+        assertTrue(list.contains("<D:getcontentlength>4096</D:getcontentlength>"))
+        assertEquals(207, call("PROPFIND", "/MatePad/Belgeler/.DS_Store", listOf("Depth" to "0")).status)
+        assertFalse(call("PROPFIND", "/MatePad/", listOf("Depth" to "1")).text.contains(".DS_Store"))
+        assertEquals(409, call("PUT", "/MatePad/Yok/._x", body = ByteArray(1)).status)
+        // Renames follow the file; a real file never becomes metadata.
+        assertEquals(201, call("MOVE", "/MatePad/Belgeler/._rapor.pdf", listOf("Destination" to "/MatePad/Belgeler/._son.pdf")).status)
+        assertEquals(404, call("GET", "/MatePad/Belgeler/._rapor.pdf").status)
+        File(root, "Belgeler/son.pdf").writeText("pdf")
+        assertEquals(403, call("MOVE", "/MatePad/Belgeler/son.pdf", listOf("Destination" to "/MatePad/Belgeler/._son2.pdf")).status)
+        // Moving the folder carries its metadata; deleting it drops it.
+        assertEquals(201, call("MOVE", "/MatePad/Belgeler/", listOf("Destination" to "/MatePad/Arsiv/")).status)
+        assertEquals(200, call("GET", "/MatePad/Arsiv/._son.pdf").status)
+        assertEquals(204, call("DELETE", "/MatePad/Arsiv/").status)
+        assertEquals(404, call("GET", "/MatePad/Arsiv/._son.pdf").status)
+        assertEquals(10, File(root, ".DS_Store").length())
     }
 }

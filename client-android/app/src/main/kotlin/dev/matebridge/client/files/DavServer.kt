@@ -30,6 +30,11 @@ class DavServer(
     private val config: FilesConfig = FilesConfig(),
     private val hooks: Hooks = object : Hooks {},
     private val nowMs: () -> Long = System::currentTimeMillis,
+    /**
+     * A stopped predecessor: this server listens only after its threads ended (bounded by [PREDECESSOR_WAIT_MS]), so
+     * an old COPY/DELETE worker never overlaps with the new server.
+     */
+    private val after: DavServer? = null,
 ) {
     interface Hooks {
         /** First thing on every server thread. */
@@ -47,7 +52,7 @@ class DavServer(
     private val stats = FilesStats()
     private val lock = Object()
     private val conns = HashSet<Conn>()
-    private var activeRequests = 0
+    private var acceptRunning = false // guarded by [lock]
     @Volatile private var stopped = false
     @Volatile private var listener: ServerSocket? = null
     private var acceptThread: Thread? = null
@@ -59,6 +64,7 @@ class DavServer(
     fun start() {
         synchronized(lock) {
             check(acceptThread == null) { "started twice" }
+            acceptRunning = true
             acceptThread = Thread({ acceptLoop() }, "mb-files-accept").also { it.isDaemon = true; it.start() }
         }
     }
@@ -77,8 +83,13 @@ class DavServer(
         hooks.threadStarted()
         var failed = false
         try {
+            if (after != null && !after.awaitTermination(PREDECESSOR_WAIT_MS)) hooks.log("predecessor_busy", "wait_ms=$PREDECESSOR_WAIT_MS")
             val canonicalRoot = root.canonicalFile
-            val handler = DavHandler(canonicalRoot, auth, config, { ev, f -> hooks.log(ev, f) }, nowMs)
+            val handler = DavHandler(
+                canonicalRoot, auth, config, { ev, f -> hooks.log(ev, f) }, nowMs,
+                bucket = bucket, stats = stats, cancelled = { stopped },
+            )
+            if (stopped) return
             val ss = bind() ?: run { failed = true; return }
             listener = ss
             if (stopped) { closeQuietly(ss); return }
@@ -102,7 +113,12 @@ class DavServer(
             failed = true
         } finally {
             closeQuietly(listener)
-            stats.poll(nowMs(), force = true)?.let { hooks.log("stats", it) }
+            val last = synchronized(lock) {
+                acceptRunning = false
+                lock.notifyAll()
+                conns.isEmpty()
+            }
+            if (last) pollStats(force = true) // else the last connection thread writes the final summary
             hooks.onStopped(failed)
         }
     }
@@ -143,15 +159,28 @@ class DavServer(
         true
     }
 
-    private fun released(c: Conn) = synchronized(lock) {
-        conns.remove(c)
-        lock.notifyAll()
+    private fun released(c: Conn) {
+        val last = synchronized(lock) {
+            conns.remove(c)
+            lock.notifyAll()
+            stopped && !acceptRunning && conns.isEmpty()
+        }
+        if (last) pollStats(force = true) // the final summary, once every worker has ended
     }
 
-    private fun requestStarted() = synchronized(lock) { activeRequests++ }
-
-    /** Returns true when no request is running any more. */
-    private fun requestEnded(): Boolean = synchronized(lock) { --activeRequests == 0 }
+    /**
+     * Waits up to [timeoutMs] until the accept thread and every connection thread (running COPY/DELETE workers
+     * included) have ended. True when they have. Any thread.
+     */
+    fun awaitTermination(timeoutMs: Long): Boolean = synchronized(lock) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (acceptRunning || conns.isNotEmpty()) {
+            val left = (deadline - System.nanoTime()) / 1_000_000
+            if (left <= 0) return false
+            lock.wait(left)
+        }
+        true
+    }
 
     private fun pollStats(force: Boolean = false) {
         stats.poll(nowMs(), force)?.let { hooks.log("stats", it) }
@@ -188,11 +217,10 @@ class DavServer(
                     idle = false
                     socket.soTimeout = config.readTimeoutMs
                     stats.request()
-                    requestStarted()
                     val keep = try {
                         handler.handle(req, input, output).also { output.flush() }
                     } finally {
-                        if (requestEnded()) pollStats(force = true) else pollStats()
+                        pollStats() // at most one line per second; only the stop forces a final one
                     }
                     if (!keep) break
                 }
@@ -212,6 +240,7 @@ class DavServer(
     private companion object {
         const val BACKLOG = 8
         const val WAIT_MS = 500L
+        const val PREDECESSOR_WAIT_MS = 5_000L
 
         fun closeQuietly(c: java.io.Closeable?) {
             try {
