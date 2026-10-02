@@ -256,6 +256,10 @@ public final class SessionServer: @unchecked Sendable {
     /// Session of the writes in the current `audioTiming` window (its line is logged with it).
     private var audioTimingSessionID: UInt32 = 0
     private let audioLogger = SessionLogger(component: "audio")
+    /// Per-second TCP state of the active session's control and video sockets (T-126, `net ev=tcp`). Session queue.
+    private var tcpInfoSamplers: [ConnectionID: TcpInfoSampler] = [:]
+    private var tcpInfoTicks = 0
+    private let netLogger = SessionLogger(component: "net")
     private var stopped = false
     private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
@@ -281,6 +285,10 @@ public final class SessionServer: @unchecked Sendable {
     /// Wi-Fi); `MATEBRIDGE_SERVICE_CLASS=off` leaves both unset.
     static let serviceClass = ServiceClassKnob.parse(ProcessInfo.processInfo.environment)
     static let sampleSendQueue = SendQueueLogKnob.isEnabled(ProcessInfo.processInfo.environment)
+    /// T-126: `MATEBRIDGE_TCP_LOG=0|1`, default on for Wi-Fi sessions only.
+    static let tcpInfoLog = TcpInfoLogKnob.parse(ProcessInfo.processInfo.environment)
+    /// The 100 ms session tick closes an `ev=tcp` window every this many ticks (1 s).
+    static let tcpInfoTickInterval = 10
     /// T-091: `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` and `MATEBRIDGE_NOTSENT_LOWAT_KB`, read once.
     static let videoSocket = VideoSocketSettings.parse(ProcessInfo.processInfo.environment)
     /// T-111: `MATEBRIDGE_CONTROL_SOCKET=bsd|nw`, read once.
@@ -646,6 +654,7 @@ public final class SessionServer: @unchecked Sendable {
             writeCallUs: writeEnd >= writeStart ? writeEnd - writeStart : 0, pendingBytes: pending, endUs: writeEnd)
         if let gap = audioTiming.recordWrite(write) {
             audioLogger.log(.debug, "send_gap", sessionID: currentSessionID, generation: 0, fields: gap.logFields)
+            logTcpInfo(id, closeWindow: false, trigger: "send_gap")
         }
         if let fields = audioTiming.takeReportIfDue(nowUs: writeEnd) {
             audioLogger.log(.info, "send", sessionID: currentSessionID, generation: 0, fields: fields)
@@ -880,7 +889,8 @@ public final class SessionServer: @unchecked Sendable {
         restartAttempts = 0
         logger.log(.info, "listening", sessionID: 0, generation: 0,
                    fields: "control_port=\(port) video_port=\(videoPort) " + Self.serviceClass.logFields + " "
-                       + Self.videoSocket.logFields + " " + Self.controlSocket.logFields)
+                       + Self.videoSocket.logFields + " " + Self.controlSocket.logFields
+                       + " tcp_log=\(Self.tcpInfoLog.rawValue)")
         if case .starting = state { setState(.listening) }
     }
 
@@ -1138,6 +1148,7 @@ public final class SessionServer: @unchecked Sendable {
             guard let c = videoConnections.removeValue(forKey: id) else { return }
             c.cancel()
             videoLinks[id] = nil
+            tcpInfoSamplers[id] = nil
             videoBuffers[id] = nil
             videoHelloSeen.remove(id)
             videoProofDecoders[id] = nil
@@ -1146,6 +1157,7 @@ public final class SessionServer: @unchecked Sendable {
             liveLookups.remove(id)
             guard let c = controlConnections.removeValue(forKey: id) else { return }
             c.cancel()
+            tcpInfoSamplers[id] = nil
             inflightBytes[id] = nil
             inbounds[id] = nil
             sealers[id] = nil
@@ -1160,6 +1172,7 @@ public final class SessionServer: @unchecked Sendable {
     private func closeControl(_ id: ConnectionID) {
         liveLookups.remove(id)
         guard let c = controlConnections.removeValue(forKey: id) else { return }
+        tcpInfoSamplers[id] = nil
         inflightBytes[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
@@ -1332,9 +1345,11 @@ public final class SessionServer: @unchecked Sendable {
                 activeControl = id
                 currentSessionID = sid
                 currentConfigID = configID
+                startTcpInfoSampling(id, role: .control)
                 handlers.sessionStarted(sid, configID, hello, activeTransport)
             case .sessionEnded(let id):
                 if activeControl == id { activeControl = nil }
+                tcpInfoSamplers[id] = nil
                 currentSessionID = 0
                 currentConfigID = 0
                 handlers.sessionEnded()
@@ -1351,6 +1366,7 @@ public final class SessionServer: @unchecked Sendable {
                                          sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
                     }
                     videoLinks[vid] = link
+                    startTcpInfoSampling(vid, role: .video)
                     handlers.videoAttached(link)
                 }
             case .log(let level, let ev, let conn, let fields):
@@ -1457,6 +1473,65 @@ public final class SessionServer: @unchecked Sendable {
         handlers.stateChanged(new)
     }
 
+    // MARK: TCP state (T-126)
+
+    /// Session queue: starts the per-second `ev=tcp` lines of connection `id` when the knob allows them for the
+    /// active session's transport (set by `.sessionStarted` before either call).
+    private func startTcpInfoSampling(_ id: ConnectionID, role: TcpConnectionRole) {
+        guard Self.tcpInfoLog.isEnabled(transport: activeTransport, sendQueueLog: Self.sampleSendQueue) else { return }
+        switch role {
+        case .control:
+            switch controlConnections[id] {
+            case .network(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .control, connection: c)
+            case .socket(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .control, socket: c)
+            case nil: break
+            }
+        case .video:
+            switch videoConnections[id] {
+            case .network(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .video, connection: c)
+            case .socket(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .video, socket: c)
+            case nil: break
+            }
+        }
+    }
+
+    /// Session queue, every 100 ms tick: one `getsockopt` per sampled socket every `tcpInfoTickInterval` ticks.
+    private func tcpInfoTick() {
+        guard !tcpInfoSamplers.isEmpty else {
+            tcpInfoTicks = 0
+            return
+        }
+        tcpInfoTicks += 1
+        guard tcpInfoTicks >= Self.tcpInfoTickInterval else { return }
+        tcpInfoTicks = 0
+        // Control first, then video; stable order within a role.
+        let ids = tcpInfoSamplers.sorted { a, b in
+            a.value.role == b.value.role ? a.key.raw < b.key.raw : a.value.role == .control
+        }.map(\.key)
+        for id in ids { logTcpInfo(id, closeWindow: true, trigger: nil) }
+    }
+
+    /// Session queue: `I net ev=tcp` (window close) or `D net ev=tcp_snap trigger=…` (between windows) for `id`;
+    /// `W net ev=tcp_unavailable` once per connection when the socket cannot be read.
+    private func logTcpInfo(_ id: ConnectionID, closeWindow: Bool, trigger: String?) {
+        guard let sampler = tcpInfoSamplers[id], let report = sampler.read(closeWindow: closeWindow) else { return }
+        switch report {
+        case .reading(let r):
+            var fields = r.logFields(role: sampler.role, connectionID: id.raw)
+            if closeWindow {
+                fields += " transport=\(activeTransport.logName)"
+                netLogger.log(.info, "tcp", sessionID: currentSessionID, generation: currentConfigID, fields: fields)
+            } else {
+                fields += " trigger=\(trigger ?? "na")"
+                netLogger.log(.debug, "tcp_snap", sessionID: currentSessionID, generation: currentConfigID,
+                              fields: fields)
+            }
+        case .unavailable(let reason):
+            netLogger.log(.warning, "tcp_unavailable", sessionID: currentSessionID, generation: currentConfigID,
+                          fields: "conn=\(sampler.role.rawValue) conn_id=\(id.raw) reason=\(reason)")
+        }
+    }
+
     // MARK: Time
 
     /// Host clock shared with `VIDEO_FRAME.capture_time_us` (PROTOCOL.md section 6).
@@ -1468,6 +1543,7 @@ public final class SessionServer: @unchecked Sendable {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             apply(machine.tick(now: nowUs()))
+            tcpInfoTick()
         }
         timer.resume()
         tickTimer = timer

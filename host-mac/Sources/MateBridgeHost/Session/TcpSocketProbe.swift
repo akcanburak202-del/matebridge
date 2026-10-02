@@ -33,51 +33,69 @@ final class TcpSocketProbe {
     private let target: Target
     private var ports: (local: UInt16, remote: UInt16)?
     private var fd: Int32?
-    /// Samples until the next descriptor search. A failed search is retried only every `searchInterval` samples
-    /// (about once a second at 120 fps), so a missing descriptor never costs a table walk per frame.
+    /// Samples until the next descriptor search. A failed search is retried only every `searchInterval` samples, so a
+    /// missing descriptor never costs a table walk per sample.
     private var searchCountdown = 0
-    private static let searchInterval = 120
+    private let searchInterval: Int
 
-    init(connection: NWConnection) { target = .network(connection) }
-    init(socket: BsdTcpConnection) { target = .socket(socket) }
+    /// `searchInterval`: about once a second at the caller's sampling rate (120 for the per-frame `ev=sendq`).
+    init(connection: NWConnection, searchInterval: Int = 120) {
+        target = .network(connection)
+        self.searchInterval = searchInterval
+    }
+
+    init(socket: BsdTcpConnection) {
+        target = .socket(socket)
+        searchInterval = 0
+    }
 
     /// One sample, or why none could be taken.
     func sample() -> Result<(TcpSample, SendQueueSource), Failure> {
+        switch connectionInfo() {
+        case .success(let info): return .success((Self.tcpSample(info), .tcpInfo))
+        case .failure(let failure):
+            if case .network(let connection) = target,
+               let md = connection.metadata(definition: NWProtocolTCP.definition) as? NWProtocolTCP.Metadata {
+                return .success((TcpSample(sendQueueBytes: UInt64(md.availableSendBuffer)), .nwMetadata))
+            }
+            return .failure(failure)
+        }
+    }
+
+    /// One full `getsockopt(TCP_CONNECTION_INFO)` reading (T-126), without the Network.framework metadata fallback.
+    func connectionInfo() -> Result<tcp_connection_info, Failure> {
         switch target {
-        case .network(let connection): return sample(connection)
+        case .network(let connection):
+            if ports == nil { ports = Self.ports(of: connection) }
+            guard let ports else { return .failure(.noEndpoints) }
+            if let fd, Self.socketPorts(fd).map({ $0 == ports }) != true { self.fd = nil }
+            if fd == nil {
+                if searchCountdown == 0 {
+                    searchCountdown = searchInterval
+                    fd = Self.findDescriptor(local: ports.local, remote: ports.remote)
+                } else {
+                    searchCountdown -= 1
+                }
+            }
+            guard let fd, let info = Self.connectionInfo(fd) else { return .failure(.unavailable) }
+            return .success(info)
         case .socket(let socket):
             // The connection checks under its lock that the descriptor is still open.
             guard let info = socket.connectionInfo() else { return .failure(.unavailable) }
-            return .success((Self.tcpSample(info), .tcpInfo))
+            return .success(info)
         }
+    }
+
+    /// Bytes still queued in user space: known for a kernel socket only.
+    var userPendingBytes: Int? {
+        if case .socket(let socket) = target { return socket.pendingBytes }
+        return nil
     }
 
     private static func tcpSample(_ info: tcp_connection_info) -> TcpSample {
         TcpSample(sendQueueBytes: UInt64(info.tcpi_snd_sbbytes), srttMs: info.tcpi_srtt, rttVarMs: info.tcpi_rttvar,
                   retransmitPackets: info.tcpi_txretransmitpackets, congestionWindowBytes: info.tcpi_snd_cwnd,
                   sendWindowBytes: info.tcpi_snd_wnd)
-    }
-
-    private func sample(_ connection: NWConnection) -> Result<(TcpSample, SendQueueSource), Failure> {
-        if ports == nil { ports = Self.ports(of: connection) }
-        if let ports {
-            if let fd, Self.socketPorts(fd).map({ $0 == ports }) != true { self.fd = nil }
-            if fd == nil {
-                if searchCountdown == 0 {
-                    searchCountdown = Self.searchInterval
-                    fd = Self.findDescriptor(local: ports.local, remote: ports.remote)
-                } else {
-                    searchCountdown -= 1
-                }
-            }
-            if let fd, let info = Self.connectionInfo(fd) {
-                return .success((Self.tcpSample(info), .tcpInfo))
-            }
-        }
-        if let md = connection.metadata(definition: NWProtocolTCP.definition) as? NWProtocolTCP.Metadata {
-            return .success((TcpSample(sendQueueBytes: UInt64(md.availableSendBuffer)), .nwMetadata))
-        }
-        return .failure(ports == nil ? .noEndpoints : .unavailable)
     }
 
     // MARK: Helpers
@@ -186,6 +204,47 @@ final class SendQueueSampler: @unchecked Sendable {
                 return .unavailable(failure.rawValue)
             }
             return nil
+        }
+    }
+}
+
+/// Per-second TCP state of one control or video connection (T-126, `net ev=tcp`): a probe plus a `TcpInfoMeter`.
+/// Separate from the per-frame `SendQueueSampler` (`ev=sendq`); both only read the socket. Not thread-safe: the
+/// session server uses it on its queue only.
+final class TcpInfoSampler {
+    let role: TcpConnectionRole
+    private let probe: TcpSocketProbe
+    private var meter = TcpInfoMeter()
+    private var failureReported = false
+
+    /// A failed descriptor search (`nw` only) is retried every 5 samples, i.e. about every 5 s at 1 Hz.
+    init(role: TcpConnectionRole, connection: NWConnection) {
+        self.role = role
+        probe = TcpSocketProbe(connection: connection, searchInterval: 5)
+    }
+
+    init(role: TcpConnectionRole, socket: BsdTcpConnection) {
+        self.role = role
+        probe = TcpSocketProbe(socket: socket)
+    }
+
+    enum Report {
+        case reading(TcpInfoReport)
+        /// No reading could be taken; reported once per connection.
+        case unavailable(String)
+    }
+
+    /// One reading. `closeWindow`: the per-second line (moves the delta base); otherwise a snapshot between windows.
+    /// nil when the reading failed and that was already reported.
+    func read(closeWindow: Bool) -> Report? {
+        switch probe.connectionInfo() {
+        case .success(let info):
+            let snapshot = TcpConnectionSnapshot(info, userPendingBytes: probe.userPendingBytes)
+            return .reading(closeWindow ? meter.take(snapshot) : meter.peek(snapshot))
+        case .failure(let failure):
+            guard !failureReported else { return nil }
+            failureReported = true
+            return .unavailable(failure.rawValue)
         }
     }
 }
