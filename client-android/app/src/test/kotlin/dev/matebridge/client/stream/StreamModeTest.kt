@@ -5,6 +5,7 @@ import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.Settings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class StreamModeTest {
@@ -17,6 +18,7 @@ class StreamModeTest {
     @Test fun tableMatchesTheCard() {
         assertEquals(StreamPrefs(60, 1000), StreamMode.CLARITY.toPrefs())
         assertEquals(StreamPrefs(120, 1000), StreamMode.SMOOTH.toPrefs())
+        assertEquals(StreamPrefs(120, 900), StreamMode.DRAWING.toPrefs()) // decision 0017
         assertEquals(StreamPrefs(120, 750), StreamMode.PERFORMANCE.toPrefs())
         assertEquals(StreamPrefs(120, 660), StreamMode.GAME.toPrefs()) // decision 0014
         assertEquals(StreamPrefs(60, 1000), StreamMode.GAME60.toPrefs()) // decision 0016
@@ -27,9 +29,9 @@ class StreamModeTest {
     @Test fun cycleVisitsEveryModeAndWraps() {
         var m = StreamMode.CLARITY
         val seen = ArrayList<StreamMode>()
-        repeat(6) { m = m.next(); seen += m }
+        repeat(7) { m = m.next(); seen += m }
         assertEquals(
-            listOf(StreamMode.SMOOTH, StreamMode.PERFORMANCE, StreamMode.GAME, StreamMode.GAME60, StreamMode.CLARITY, StreamMode.SMOOTH),
+            listOf(StreamMode.SMOOTH, StreamMode.DRAWING, StreamMode.PERFORMANCE, StreamMode.GAME, StreamMode.GAME60, StreamMode.CLARITY, StreamMode.SMOOTH),
             seen,
         )
     }
@@ -39,11 +41,38 @@ class StreamModeTest {
         for (m in StreamMode.entries) assertEquals(m, StreamMode.parse(m.id))
         assertEquals(StreamMode.GAME60, StreamMode.parse("game60"))
         assertEquals(StreamMode.GAME, StreamMode.parse("game"))
+        assertEquals(StreamMode.DRAWING, StreamMode.parse("drawing"))
         assertEquals(StreamMode.DEFAULT, StreamMode.parse(null))
         assertEquals(StreamMode.DEFAULT, StreamMode.parse("bogus"))
     }
 
+    @Test fun drawScaleIsClampedAndOnlyAffectsDrawing() {
+        assertEquals(500, StreamMode.clampDrawScale(100))
+        assertEquals(1000, StreamMode.clampDrawScale(5000))
+        assertEquals(850, StreamMode.clampDrawScale(850))
+        assertEquals(StreamPrefs(120, 850, 0), StreamMode.DRAWING.toPrefs(drawScale = 850))
+        assertEquals(StreamPrefs(120, 500, 0), StreamMode.DRAWING.toPrefs(drawScale = 1))
+        assertEquals(StreamPrefs(120, 1000, 0), StreamMode.SMOOTH.toPrefs(drawScale = 850))
+        assertEquals(StreamPrefs(120, 750, 0), StreamMode.PERFORMANCE.toPrefs(drawScale = 850))
+        assertEquals(StreamPrefs(120, 660, 0), StreamMode.GAME.toPrefs(drawScale = 850))
+        assertEquals("Çizim: 120 fps, %85", StreamMode.DRAWING.toastText(850))
+    }
+
+    @Test fun drawingIsNotAGameAndBuildsNoGameLayer() {
+        assertEquals(false, StreamMode.DRAWING.isGame)
+        val g = GameModeSettings(Settings(MemStore()))
+        assertNull(g.onModeChanged(StreamMode.DRAWING))
+        assertEquals(StreamPrefs(120, 850, 0), g.prefs(StreamMode.DRAWING, 850))
+    }
+
+    @Test fun drawingPersistsAndRestores() {
+        val store = MemStore()
+        Settings(store).setStreamMode(StreamMode.DRAWING)
+        assertEquals(StreamMode.DRAWING, Settings(store).streamMode())
+    }
+
     @Test fun texts() {
+        assertEquals("Çizim: 120 fps, %90", StreamMode.DRAWING.toastText())
         assertEquals("Görüntü modu: Akıcı (120 fps)", StreamMode.SMOOTH.buttonText())
         assertEquals("Performans: 120 fps, %75", StreamMode.PERFORMANCE.toastText())
         assertEquals("Netlik: 60 fps, %100", StreamMode.CLARITY.toastText())
