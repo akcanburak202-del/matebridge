@@ -12,9 +12,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-109](tasks/T-109-client-game-mode.md) | Tablet — "Oyun" görüntü modu (120 fps, %66, jitter 0) ve geçici oyun varsayılanları | 5 | android-client-dev | [T-105, T-107] |
 | [T-110](tasks/T-110-client-aaudio-mmap-headroom.md) | Tablet — Düşük gecikme (AAudio MMAP) seste oyun modunda sürekli cızırtı; çıkış payı ölçümü ve uyarlamalı çıkış arabelleği | 5 | android-client-dev | [T-108] |
 | [T-114](tasks/T-114-client-aaudio-default-4-bursts.md) | Tablet — AAudio çıkış arabelleği varsayılanı 4 burst (20 ms); cızırtı deneyle doğrulandı. Çıkış payı ölçümü bu cihazda hep dolu görünüyor | 5 | android-client-dev | [T-110] |
-| [T-118](tasks/T-118-client-audio-safety-balanced.md) | Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt) | 5 | android-client-dev | [T-117] |
-| [T-119](tasks/T-119-host-audio-tap-create-retry.md) | Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene | 5 | mac-host-dev | [] |
-| [T-120](tasks/T-120-client-stall-detector.md) | Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır | 5 | android-client-dev | [T-117] |
 
 ## blocked
 
@@ -28,8 +25,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-097](tasks/T-097-audio-latency.md) | Ses gecikmesi — sessizlik aralarını alt taşma saymamak, tablet tampon boyu, AAudio MMAP denemesi (karar gerekir) | 5 | orchestrator | [T-095] |
-| [T-121](tasks/T-121-client-keyframe-storm.md) | Tablet — kısa kare yığılmasında keyframe fırtınası (MAX_PENDING=2 → bırak-hepsini + KEYFRAME_REQUEST); yığılmayı yut, istekleri sınırla | 5 | android-client-dev | [T-120] |
-| [T-122](tasks/T-122-host-keyframe-request-coalesce.md) | Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla | 5 | mac-host-dev | [] |
 
 ## done
 
@@ -143,3 +138,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-115](tasks/T-115-client-sparse-frame-no-hold.md) | Tablet — seyrek karelerde (boşluktan sonraki ilk kare) kilit tutmasını kaldır; boşta görüntü gecikmesi bir vsync azalsın | 5 | android-client-dev | [] |
 | [T-116](tasks/T-116-host-audio-send-timing.md) | Host — ses gönderim zamanlaması ölçümü (oturum kuyruğu bekleme, yakalama→yazım, yazımlar arası en büyük aralık) | 5 | mac-host-dev | [] |
 | [T-117](tasks/T-117-client-audio-arrival-timing.md) | Tablet — ses paketi varış ölçümü (varış aralığı, tek yön gecikme, okuma başına paket) ve boşlukta video okuyucuyla karşılaştırma | 5 | android-client-dev | [] |
+| [T-118](tasks/T-118-client-audio-safety-balanced.md) | Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt) | 5 | android-client-dev | [T-117] |
+| [T-119](tasks/T-119-host-audio-tap-create-retry.md) | Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene | 5 | mac-host-dev | [] |
+| [T-120](tasks/T-120-client-stall-detector.md) | Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır | 5 | android-client-dev | [T-117] |
+| [T-121](tasks/T-121-client-keyframe-storm.md) | Tablet — kısa kare yığılmasında keyframe fırtınası (MAX_PENDING=2 → bırak-hepsini + KEYFRAME_REQUEST); yığılmayı yut, istekleri sınırla | 5 | android-client-dev | [T-120] |
+| [T-122](tasks/T-122-host-keyframe-request-coalesce.md) | Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla | 5 | mac-host-dev | [] |

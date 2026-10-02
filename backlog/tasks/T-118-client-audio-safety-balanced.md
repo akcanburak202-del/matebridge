@@ -1,7 +1,7 @@
 ---
 id: T-118
 title: Tablet — ses güvenlik payı "dengeli" politika (hızlı küçülme, hatırlanan değer en çok 30 ms, alt taşma sonrası aşırı dolumu kısalt)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-117]

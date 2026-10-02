@@ -916,3 +916,24 @@ Kullanıcı sorun görmedi.
   4. IDR'ler yavaş çözülüyor, yeni taşma oluyor, yeni istek geliyor.
 - Wi-Fi'de de aynı (kullanıcı) → bağlantı türünden bağımsız.
 - Düzeltme kartları: T-121 (tablet: yığılmayı yut, istek sınırı), T-122 (host: istek birleştirme, IDR boyutu ölçümü).
+
+## 2026-10-02 ~11:35 — T-121/T-122 cihazda: keyframe fırtınası bitti
+
+**USB, ~14 dk** (Apple Music, imleç, 120 Hz çizim/kaydırma):
+- `FRAMES_DROPPED` isteği **hiç yok**; `overflows=0`, `max_pending` çoğunlukla 1 (en çok 3).
+- Ses varış boşlukları: > 20 ms 6 kez, > 50 ms **0**, en büyük 32,7 ms.
+- 14 dakikada 1 alt taşma (33 ms boşluk, `tick_late_ms=0.1`). Kullanıcı kesinti duymadı.
+- Önceki USB oturumu: 160–253 ms boşluklar, 6,5 dk'da 13 alt taşma.
+
+**Host:**
+- Açılıştaki istemci isteği `action=coalesced` (yeni tüketici IDR'si zaten zorlanmıştı).
+- Arka plan/ön plan dönüşleri `reason=0 action=config_resent`; görüntü düzgün geri geldi.
+
+**Wi-Fi, ~1–2 dk:**
+- Kullanıcı kesinti duydu: 2 + 3 alt taşma.
+- Fırtına yok: yalnız `src=reset` istekleri, `overflows=0`.
+- Ses boşlukları 41–50 ms, `owd` 39–65 ms, `tick_late_ms` ~0.
+- RTT p50 15–37 ms, p95 en çok 126 ms → saf Wi-Fi titreşimi.
+- Güvenlik payı (USB'den hatırlanan 20–30 ms) Wi-Fi için yetersiz kalıyor.
+
+T-120, T-121, T-122 done.

@@ -1,7 +1,7 @@
 ---
 id: T-120
 title: Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-117]

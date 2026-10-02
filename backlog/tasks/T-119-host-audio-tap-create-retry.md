@@ -1,7 +1,7 @@
 ---
 id: T-119
 title: Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []

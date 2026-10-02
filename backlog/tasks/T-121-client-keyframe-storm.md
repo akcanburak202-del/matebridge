@@ -1,7 +1,7 @@
 ---
 id: T-121
 title: Tablet — kısa kare yığılmasında keyframe fırtınası (MAX_PENDING=2 → bırak-hepsini + KEYFRAME_REQUEST); yığılmayı yut, istekleri sınırla
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-120]
