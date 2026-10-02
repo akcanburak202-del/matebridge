@@ -57,3 +57,19 @@ Yalnız ölçüm; davranışı değiştirmez. Değerler oturum kuyruğunda (`dev
   - `last_rx`: oturum kuyruğunda bu yazımdan önce işlenen son kontrol mesajının türü (`MessageType` adı, ör. `pen`, `key`). `last_rx_ago_ms` bu mesajın işlenmesinin ne kadar önce bittiğini verir.
   - `slow_rx`: önceki ses yazımından bu yana en uzun işlenen kontrol mesajının türü. `slow_rx_ms` işleme süresidir (CGEvent dahil).
   - Yalnız mesaj türü yazılır; tuş, metin ve pano içeriği asla yazılmaz.
+
+## Ses varış zamanlaması (tablet, `MB/audio`, T-117)
+
+Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantısının paketleri ölçülür; yeni bağlantıda ve her `AUDIO_CONFIG`'de sıfırlanır.
+
+- Ses `ev=stats` satırının sonuna eklenen alanlar (1 ondalık ms; veri yoksa `-`):
+  - `arr_int_ms_p50`, `arr_int_ms_max`: ardışık AUDIO_FRAME'lerin `read()` dönüş anları arasındaki aralık (aynı okumadan çıkanlar 0). 1 s'den uzun aralık akış duraklaması sayılır, dahil edilmez.
+  - `owd_ms_p50`, `owd_ms_p95`, `owd_ms_max`: tek yön gecikme = varış (`read()` dönüşü, şifre çözmeden önce) + ClockSync farkı − `capture_time_us` − paket süresi (paketin son karesinin yaşı). Negatif olabilir (fark hatası ±RTT/2).
+  - `per_read_max`: bir `read()`'den çıkan en çok ses paketi.
+  - `decrypt_ms_max`: paketi üreten `RecordDecoder.next()` çağrısı (şifre çözme + çözümleme).
+  - `arr_gaps`: penceredeki > 20 ms aralık sayısı; `arr_n`: penceredeki paket sayısı.
+- `D audio ev=audio_arrival_gap gap_ms= owd_ms= per_read= decrypt_ms= since_video_ms= suppressed= gc_count= gc_time_ms= gc_blocking_count= gc_blocking_time_ms=` (debug, saniyede en çok 5): ardışık iki paket arası > 20 ms.
+  - `suppressed`: önceki satırdan beri hız sınırına takılan boşluk sayısı.
+  - `since_video_ms`: boşluğu bitiren ses okumasının dönüşü − video okuyucunun son veri dolu `read()` dönüşü (negatif: video arada geldi; `-`: video okuması yok). Video fps=0 iken anlamsız büyür.
+  - GC alanları ART kümülatif sayaçlarıdır (`Debug.getRuntimeStat`); iki satır arası fark okunur.
+  - Okuma: owd normal + aralık büyük → host geç yazmış (T-116 `ev=send_gap` ile karşılaştır); owd büyük → aktarım; video akarken `since_video_ms` ≈ `gap_ms` → tablet okuması duraklamış.
