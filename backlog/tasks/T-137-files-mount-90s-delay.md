@@ -30,7 +30,9 @@ Hipotezler (doğrula, tahminle düzeltme yapma): (a) webdavfs/NetAuth ilk 401'de
 
 ## Plan
 
-(ajan doldurur)
+1. `tools/dav-repro/`: `DavRepro.java` (JDK `javac` ile; Mac'te `kotlinc` yok) DavServer'ı derlenmiş debug sınıflarından JVM'de çalıştırır, önüne başlık döküm vekili (proxy) koyar (Authorization yalnız şema, jeton hiç yazılmaz); `mount.swift` host'un aynı NetFS seçenekleriyle (NoUI, AllowLoopback, SoftMount) geçici bir dizine bağlar (MountAtMountDir, /Volumes'a dokunmaz), süreyi + statfs'i yazar, ayırır; `run.sh` hepsini 47811 portunda birleştirir (47010 reddedilir).
+2. Tekrar üret, döküm + `log show` (webdavfs_agent, NetAuthSysAgent, kernel webdav_fs) ile 90 s boşluğun kaynağını bul; sunucu yanıtı değişkenleriyle (chunked/Content-Length, kota yok/0/küçük) deney yap.
+3. Kök nedene göre en küçük düzeltme + regresyon testi; ölçümü Handoff'a yaz.
 
 ## Handoff
 
