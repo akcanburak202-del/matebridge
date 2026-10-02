@@ -1,7 +1,7 @@
 ---
 id: T-132
 title: Mac — uykuya girerken oturumu BYE(HOST_SLEEP) ile kapat
-status: todo
+status: in_progress
 phase: 4
 owner: mac-host-dev
 depends_on: [T-128]
@@ -34,7 +34,14 @@ Cihaz testi (orkestratör). Host'u çalıştırma.
 
 ## Plan
 
-(ajan doldurur)
+1. **Core (saf):**
+   - `ByeReason.hostSleep = 6` (`Messages.swift`); `FixtureTests` geçerli fixture listesine `bye_host_sleep` → `.bye(.hostSleep)`.
+   - `ReleaseCause.hostSleep` (log adı `host_sleep`); test yardımcısı `allReleaseCauses`'a eklenir.
+   - `SessionMachine.hostSleep()`: `shutdown()` ile aynı yol (`endAll`), ama `BYE(HOST_SLEEP)`, neden `.hostSleep`, bağlantı başına `ev=bye_sent reason=host_sleep`. Aktif oturum: release-all → BYE → kapat → video kapat → `sessionEnded`. Kanıt bekleyen / HELLO bekleyen / anahtar arayan bağlantılar: BYE + kapat. PAIRING onayı bekleyen: onay iptal + BYE + kapat. Açık kalmış (orphan) onay penceresi de kapanır; kanıtlanmamış video bağlantıları kapanır.
+   - `Session/HostSleep.swift`: `HostSleep.endsSessions(_:)` (yalnızca `.willSleep`; `can_sleep` iptal edilebilir), `budgetUs = 300 ms`, `lingerUs(startUs:nowUs:)` (kalan bütçe − pay, alt sınır 0), `waitDeadlineUs`.
+2. **Host (`SessionServer`):** kendi `SystemPowerObserver`'ı (ikinci `IORegisterForSystemPower` kaydı; `StreamCoordinator`'ınkine ve `main.swift`'e dokunmadan). İşleyici güç kuyruğunda, `IOAllowPowerChange`'den önce: `willSleep` → oturum kuyruğuna `hostSleep()` işi (bsd kapanış bekleme süresi kalan bütçeye kısaltılır), sonra semafor + `flushGroup` toplamda en çok 300 ms beklenir; bitmese de döner (uyku onaylanır). Log `component=session ev=host_sleep conns=… ` ve `ev=host_sleep_ack waited_ms=… flushed=…`. `start()` gözlemciyi kurar, `stop()` kapatır.
+3. **Sanal ekran:** mevcut grace ile bırakılır (gerekçe Handoff'ta).
+4. **Testler:** `SessionMachineTests` (hostSleep: aktif, kanıt bekleyen, PAIRING bekleyen, orphan, boş) + `HostSleepTests` (olay seçimi, bütçe hesabı) + fixture.
 
 ## Handoff
 
