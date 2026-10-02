@@ -506,6 +506,7 @@ class AudioPlayout(
             var avN = 0
             var lastAvMs: Long? = null
             var lastAudioMs: Long? = null
+            var avSkipSeen = core.skipTrims // T-125
             rawLogged = 0
             meter.reset()
             while (running) {
@@ -598,8 +599,10 @@ class AudioPlayout(
                     if (avN > 0) {
                         val av = avSum / avN
                         lastAvMs = av / 1000
-                        core.drift.onAvOffset(av)
+                        // T-125: a skip this second mixes the levels before and after it; the next sample is clean.
+                        if (core.skipTrims == avSkipSeen) core.drift.onAvOffset(av)
                     }
+                    avSkipSeen = core.skipTrims
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
                     logStats(t, xr, win, lastAudioMs, lastAvMs)
                     if (running) followTransport()
@@ -661,6 +664,7 @@ class AudioPlayout(
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
                     "refill_trims=${core.refillTrims} refill_trim_ms=${core.refillTrimFrames / MS} " +
+                    "skip_trims=${core.skipTrims} skip_trim_ms=${core.skipTrimFrames / MS} " +
                     "av_offset_ms=${avMs ?: "-"} audio_ms=${audioMs ?: "-"} video_ms=${video.value()?.let { it / 1000 } ?: "-"} " +
                     arrivalWin.logFields(),
                 COMPONENT,

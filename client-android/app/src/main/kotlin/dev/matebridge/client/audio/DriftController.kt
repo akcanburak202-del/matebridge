@@ -62,6 +62,8 @@ class DriftController(private val sampleRate: Int = 48_000) {
 
     var underruns = 0L; private set
     var resyncs = 0L; private set
+    /** T-125: completed windows (lets [PlayoutCore] act once per window). */
+    var windows = 0L; private set
     var rebuffers = 0L; private set
 
     private var winMin = Int.MAX_VALUE
@@ -134,6 +136,7 @@ class DriftController(private val sampleRate: Int = 48_000) {
         winFrames += outFrames
         if (winFrames < windowFrames) return Decision.None
         val floor = winMin
+        windows++
         lastFloorFrames = floor
         lastSpanFrames = (winMax - winMin).coerceIn(minSpan, ms(MAX_SPAN_MS))
         startWindow()
@@ -157,6 +160,18 @@ class DriftController(private val sampleRate: Int = 48_000) {
         val limit = if (fast) FAST_LIMIT_PPM else NORMAL_LIMIT_PPM
         ratioPpm = (KP_PPM_PER_MS * errMs + integralPpm).coerceIn(-limit, limit)
         return Decision.None
+    }
+
+    /**
+     * T-125: [PlayoutCore] dropped [frames] of excess above the target. A new window starts (the bunch's peak must not
+     * count as arrival span), the last floor moves down by the drop (as after a [Decision.Resync], so the next A/V
+     * sample pairs with the new level), and the ratio falls back to the integral: the error is about zero now, and a
+     * fast-mode ratio kept for the rest of the window would drain the level below the target.
+     */
+    fun onSkip(frames: Int) {
+        startWindow()
+        if (lastFloorFrames >= 0) lastFloorFrames = maxOf(0, lastFloorFrames - frames)
+        ratioPpm = integralPpm.coerceIn(-NORMAL_LIMIT_PPM, NORMAL_LIMIT_PPM)
     }
 
     private fun decaySafety() {
