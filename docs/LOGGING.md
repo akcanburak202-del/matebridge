@@ -28,7 +28,8 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
-- `ev=listening control_port=… video_port=… service_class=… video_socket=bsd|nw notsent_lowat_kb=<n>|na control_socket=bsd|nw`: dinleyiciler hazır.
+- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd|nw notsent_lowat_kb=<n>|na control_socket=bsd|nw`: dinleyiciler hazır.
+  - `service_class` → `MATEBRIDGE_SERVICE_CLASS` (T-088). Varsayılan T-124'ten beri `signaling`: `video_class=interactiveVideo control_class=interactiveVoice` (Wi-Fi'de video AC_VI, kontrol/ses AC_VO). `off` sınıfları ayarlamaz (T-088 öncesi davranış) ve yalnızca `service_class=off` yazar. Tanınmayan değer varsayılana düşer. USB'de (adb tüneli) etkisizdir.
   - `video_socket` → `MATEBRIDGE_VIDEO_SOCKET` (T-091/T-092).
   - `control_socket` → `MATEBRIDGE_CONTROL_SOCKET` (T-111). İkisinin de varsayılanı `bsd` (çekirdek soketi); `nw` Network.framework geri dönüşü.
 - `ev=bonjour_registered port=…`: `bsd` kontrol dinleyicisinin `_matebridge._tcp` kaydı yapıldı. Ad loglanmaz.
