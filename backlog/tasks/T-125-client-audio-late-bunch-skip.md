@@ -1,7 +1,7 @@
 ---
 id: T-125
 title: Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle)
-status: in-progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-118, T-123]
@@ -30,18 +30,18 @@ Alt taşmada zaten bir boşluk duyuldu. Ardından gelen fazlayı çalmak yerine 
 
 ## Kabul kriterleri
 
-- [ ] Çalma sürerken seviye, alt taşmadan sonraki kısa pencerede (örneğin ilk 2 s; Plan'da gerekçe) `target + eşik` üstüne çıkarsa en eski fazlalık atılır. Örnek eşik: 20 ms.
+- [x] Çalma sürerken seviye, alt taşmadan sonraki kısa pencerede (örneğin ilk 2 s; Plan'da gerekçe) `target + eşik` üstüne çıkarsa en eski fazlalık atılır. Örnek eşik: 20 ms.
   - Atlama tıklama yapmamalı: kısa çapraz geçiş ya da sön/yüksel (≤ 5 ms).
   - Bir alt taşma penceresinde en çok bir atlama.
   - Sayaç: `skip_trims=`, `skip_trim_ms=` (stats satırı).
-- [ ] Alt taşma penceresi dışında, seviye çok yüksekse (örneğin > `target + 60 ms`, 3 s boyunca) yine tek seferlik atlama yapılır. Normal sapma PI ile düzeltilmeye devam eder. Bu, sessizlikten sonra başlayan seslerin başını kesmemelidir (T-118 `idleRestart` kuralına benzer biçimde).
-- [ ] A/V hedefi (AvSync tabanı) atlamayla bozulmaz: hold sonrası bilinçli yüksek seviye atılmaz.
-- [ ] Birim testleri:
+- [x] Alt taşma penceresi dışında, seviye çok yüksekse (örneğin > `target + 60 ms`, 3 s boyunca) yine tek seferlik atlama yapılır. Normal sapma PI ile düzeltilmeye devam eder. Bu, sessizlikten sonra başlayan seslerin başını kesmemelidir (T-118 `idleRestart` kuralına benzer biçimde).
+- [x] A/V hedefi (AvSync tabanı) atlamayla bozulmaz: hold sonrası bilinçli yüksek seviye atılmaz.
+- [x] Birim testleri:
   - (a) alt taşma + 80 ms sonra toplu varış → seviye ≤ 1 s'de hedef ±10 ms;
   - (b) sessizlik sonrası yeni ses başı kesilmez;
   - (c) A/V hold seviyesi korunur;
   - (d) T-118 `UnderrunRefillTest` geçer.
-- [ ] `./scripts/check.sh` geçiyor. Cihaz testi orkestratörde.
+- [x] `./scripts/check.sh` geçiyor. Cihaz testi orkestratörde.
 
 ## Plan
 
@@ -81,8 +81,29 @@ Alt taşmada zaten bir boşluk duyuldu. Ardından gelen fazlayı çalmak yerine 
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** `fa1196a` (uygulama), plan `7ff8d16`; bu handoff ayrı commit. Dal: `task/T-125-audio-late-bunch-skip`.
 - **Dokunulan dosyalar:**
+  - `audio/PlayoutCore.kt`:
+    - alt taşma penceresi: `SKIP_WINDOW_MS` 2000, `SKIP_PROBE_MS` 200, `SKIP_ABOVE_MS` 20;
+    - uzun süre yüksek seviye kuralı: `SUSTAINED_ABOVE_MS` 60, `SUSTAINED_WINDOWS` 3;
+    - `checkSkip`, `skip` ve `skipTrims`/`skipTrimFrames` sayaçları;
+    - kuruma sonradan "idle" sınıflanırsa pencere kapanır.
+  - `audio/DriftController.kt`: `windows` (tamamlanan pencere sayısı) ve `onSkip(frames)`. `onSkip` yeni pencere başlatır, `lastFloorFrames`'i atılan kadar düşürür ve oranı integrale çeker.
+  - `audio/AudioPlayout.kt`: stats satırına `skip_trims=`, `skip_trim_ms=`; atlama olan saniyenin A/V örneği `onAvOffset`'e verilmez.
+  - Yeni test: `LateBunchSkipTest`, 9 test.
 - **Varsayımlar:**
+  - Cihazdaki toplu varış, yakalama hızında gelen birikmiş paketlerdir. Testte 4× hız, 80 ms takılma kullanıldı.
+  - Taban tahmini 200 ms'lik alt pencerenin en düşüğüdür. Wi-Fi'nin 40–50 ms'lik testeresi bunun içinde kalır. Daha seyrek, uzun boşluklar güvenlik payının işidir.
+  - Atlama, okuma başında mevcut 3 ms çapraz geçişle (`skipCrossfade`) yapılır; bu, `Resync` ile aynı mekanizmadır. Bu atma `drops`/`drop_ms` sayaçlarına da yansır.
+  - Plan'daki "anlık seviye ≤ target + 20" sınırı testte gerçekçi testereye göre gevşetildi: düzgün varışta ≤ target + 25, dörtlü (40 ms) varışta ≤ target + 50. Taban ölçütü (±10 ms) değişmedi.
+  - Doğrulama: atlama kapatılınca (a) ve (d) testleri düşüyor. 1 s sonra taban 25–47 ms yüksek; kural 2 testinde 75 ms.
+  - İlk açılışta (oturumun ilk çalması) pencere açılmaz, çünkü o yeni bir sesin başıdır.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  1. Wi-Fi'de alt taşmadan sonra (`underruns` +1) stats satırında `skip_trims` +1 olmalı. `level_ms_floor` 1–2 stats saniyesinde `target_ms` ±10'a dönmeli. `audio_ms` / `av_offset_ms` ~20 s değil ~1 s içinde normale inmeli (önceki gözlem: 187 / 149).
+  2. Kulakla: kesintiden hemen sonra tık, ikinci bir boşluk ya da perde kayması duyulmamalı; atlama ≤ 3 ms çapraz geçiş.
+  3. Sessizlikten sonra başlayan seslerin (bildirim sesi, video başlatma) başı kesilmemeli: `idle_gaps` artarken `skip_trims` artmamalı.
+  4. Kararlı çalmada (USB ve Wi-Fi) `skip_trims` 0 kalmalı; `underruns` artmadan atlama olmamalı.
+  5. A/V: atlamadan sonra `av_offset_ms` hedefe (~5 ms) yaklaşmalı, `target_ms` sıçramamalı.
 - **Açık sorular:**
+  - `docs/LOGGING.md` kartın `files:` listesinde değil. Yeni `skip_trims`/`skip_trim_ms` alanlarını orkestratör ekleyebilir.
+  - Drift'in kendi `Resync` kararından sonra da aynı saniyenin A/V örneği karışık. Bu kartta dokunulmadı (kapsam dışı); gerekirse aynı `avSkipSeen` kuralı uygulanabilir.
