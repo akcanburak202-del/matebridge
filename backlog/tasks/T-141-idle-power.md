@@ -1,7 +1,7 @@
 ---
 id: T-141
 title: Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak
-status: in-progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-140]
@@ -75,10 +75,33 @@ RenderThread ~%5 için kodda durgunda çizim tetikleyen tek aday katman metni (1
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+Durum: review. `./scripts/check.sh`: ALL OK.
 
-- **Commit:**
+- **Commit:** `4cf7c60` (uygulama), plan `372d15c`. Dal: `task/T-141-idle-power`.
 - **Dokunulan dosyalar:**
+  - yeni: `video/VsyncIdle.kt` (`VsyncIdleGate`, `IdleWait`), `stream/StatsLogWindow.kt`
+  - değişen: `MainActivity.kt`, `video/GlPresenter.kt`, `video/VideoRenderer.kt`, `video/VideoStats.kt`, `video/IntervalHistogram.kt` (`summaryInto`), `stream/DisplayRateDebouncer.kt` (`onPause`)
+  - testler: `test/.../video/VsyncIdleTest.kt`, `test/.../stream/StatsLogWindowTest.kt`
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Durgunluk eşiği 300 ms (son *alınan* kareden). Gerekçe Plan'da ve `VsyncIdleGate` belgesinde.
+  - Uyurken `VsyncClock.reset()`: faz unutulur, period korunur. Uyanıştan sonraki ilk kare(ler) ilk Choreographer çağrısına kadar pacer'dan geçmeden hemen bırakılır (`releaseOutputBuffer(idx, true)`). GL yolunda uyurken gelen kare `onFrameAvailable` içinde hemen çizilir.
+  - **Kartta açıkça yazmayan ek:** dokunma/kalem/işaretçi olayı (`dispatchTouchEvent`/`dispatchGenericMotionEvent`) da döngüyü uyandırır. Dokunma paneli 120'ye çıkarır; döngü uyurken bunu ölçemezdik ve ilk hareket ~100 ms boyunca 60 fps'e seyreltilirdi. Olayın kendisi değişmez, girdi yoluna yalnız bir volatile yazma eklenir. Klavye uyandırmaz.
+  - Uyanıştan sonra ilk 5 taze vsync gelmeden DISPLAY_RATE raporu yok. Debouncer'ın bekleyen düşüş adayı uyurken silinir; raporlanan değer korunur. Akış başlangıcındaki davranış değişmedi (ilk değer hemen gider).
+  - Çözücü giriş/çıkış iş parçacıkları ≥ 300 ms kare/çıkış yokken 20 ms bekler (4/5 ms yerine). Kare ya da çıkış gelince anında uyanırlar. Bu yüzden durgunken `detachSurface` en çok ~40 ms daha uzun sürebilir (JOIN 300 ms içinde).
+  - Log penceresi: `decoder ev=stats`, `render ev=stats`, `render ev=present` 10 s'de bir. Toplamlar, ağırlıklı ortalamalar ve histogram örnekleri 1 s pencerelerden aktarılır, yani yüzdelikler 10 s üzerinden kesin. `interval_ms` gerçek pencere uzunluğudur. `hz`, `vsync_period_us`, `buffer`, `pace_d_us`, `clock_offset_us`, `rtt_us`, `lead_ms`, `d_us`, `phase_lock` yazma anındaki değerdir (eskiden de öyleydi). Akış biterken ya da yeniden yapılandırılırken kısmi pencere yazılır (o ana kadar kapanmış saniyeler).
+  - **0 kareli pencere iki modda da yazılmaz.** `--ez stats_1s true` de bu satırları durgunken yazmaz; yalnız pencere 1 s olur.
+  - Yeni satırlar (`MB/render`): açılışta `ev=stats_log window_ms=10000|1000`. Döngü ≥ 1 s uyuduğunda bir kez `ev=idle state=on since_frame_ms=N` yazılır. Ardından uyanınca `ev=idle state=off idle_ms=N`. Daha kısa uyumalar (ör. imleç yanıp sönmesi) log yazmaz.
+  - STATS mesajı, pacer `onSkipWindow`, A/V hedefi, katman yine 1 s. Katman metni değişmediyse `setText` çağrılmaz.
+  - Bilerek açık bırakılanlar (Plan tablosu): `inputTicker` 25 ms (girdi), `autoTicker` 500 ms, `wolTicker` 250 ms, `mb-session` 100 ms, `mb-stall` 5 ms (aşağıda), ses iş parçacıkları, `session ev=net` ve `render ev=gl_stats` 1 s satırları.
+- **Test edilmeyenler / cihazda doğrulanacaklar** (hiçbiri cihazda denenmedi):
+  1. Durgun ekran 2 dk: `adb logcat -s 'MB/render:*'` ile ~1,3 s içinde `ev=idle state=on` gelmeli. Durgunken `decoder/render ev=stats` ve `present` satırı olmamalı. `top -H -p <pid>`: ana iş parçacığı neredeyse 0 olmalı, `mb-decoder` ve `mb-decoder-out` belirgin düşmeli. İstemci toplam CPU önce/sonra karşılaştırılmalı (önce ~%20). `dumpsys SurfaceFlinger`/`gfxinfo` ile uygulamanın vsync aboneliği kalkıyor mu bakılmalı. Kalan yük büyük olasılıkla `mb-stall` (200 uyanma/s) ve ses (`mb-ctl-read`, `mb-audio`, GC). Bunlar ayrı ayrı not edilmeli.
+  2. Durgunluktan sonraki ilk kare: Mac'te tek bir değişiklik (ör. `sparse.py`/blinker, 2–5 s arayla), 12/12 doğru ve gecikmesiz görünmeli. Yazarken ilk tuş hemen gelmeli (T-062/T-065 senaryosu). Log'da `idle state=off idle_ms=` ardından gelen ilk `render ev=stats` penceresinde `skip_pct`/`shown_p95` normal olmalı.
+  3. Panel/DISPLAY_RATE: durgunken `display_rate` satırı gelmemeli, özellikle 0 ya da yanlış 60 olmamalı. Durgunken ekrana dokununca (panel 120'ye çıkar) Mac'te hareket başlayınca `display_rate hz=120` gecikmeden gelmeli. Host `decimated=` 60'ta takılı kalmamalı.
+  4. Hareketli içerik ve oyun (önce/sonra): fps, `skip_pct`, `latency_us`, `shown_p95`, `late_drops`. 10 s satırlarında `interval_ms` ≈ 10000 olmalı, `recv` ≈ 10 × fps. Kullanıcı takılma hissetmemeli. `--ez stats_1s true` ile eski 1 s satırları gelmeli.
+  5. GL yolu (`--es render gl`): durgunluktan sonra ilk kare çiziliyor mu, `gl_draw_failed` yok mu.
+  6. Akış bitince/arka planda `decoder ev=detach_slow` çıkmamalı (çözücü 20 ms bekleme).
 - **Açık sorular:**
+  - `docs/LOGGING.md` (kartın `files:` listesinde yok, orkestratör): `decoder ev=stats`, `render ev=stats/present` artık 10 s pencere (`--ez stats_1s true` → 1 s), 0 kareli pencere yazılmaz. Yeni satırlar: `render ev=stats_log window_ms=`, `render ev=idle state=on since_frame_ms=` / `state=off idle_ms=`. LOGGING.md:72'deki "Her 1 saniyede bir `ev=stats`" cümlesi güncellenmeli.
+  - `mb-stall` (T-120 StallDetector): oturum boyunca URGENT_AUDIO önceliğinde 5 ms'de bir uyanıyor (200/s) ve saniyede bir `diag ev=stall_stats` yazıyor. Durgunda kalan en büyük periyodik uyanma kaynağı büyük olasılıkla bu. Ses teşhisi olduğu ve kart ses tarafına dokunmamayı söylediği için değiştirmedim. Öneri: ayrı kartta açılış parametresine bağlamak (`--ez stall_diag true`), varsayılan kapalı.
+  - Saniyelik diğer satırlar `session ev=net`, `diag ev=stall_stats`, `audio ev=stats`, `render ev=gl_stats` kart kapsamında olmadığı için değişmedi. logd yükü için bunlar da 10 s'ye alınabilir; karar orkestratörün.
+  - Durgunda görülen `HeapTaskDaemon` (~%10) için video tarafında ölçülebilir bir kaynak bulamadım. Durgunken vsync başına `Grid` ayırma ve saniyelik log dizeleri artık yok. Kalan aday ses alma yolu (paket başına çözme/ayırma); bu doğrulanmadı ve kart gereği dokunulmadı. RenderThread (~%5) için kodda tek aday katman metniydi, o da artık değişmiyorsa çizilmiyor.
