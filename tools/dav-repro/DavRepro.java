@@ -43,8 +43,15 @@ public final class DavRepro {
 
         CountDownLatch listening = new CountDownLatch(1);
         int[] serverPort = new int[1];
-        FilesConfig cfg = new FilesConfig(200_000_000L, 256L * 1024, FilesConfig.MAX_CONNECTIONS, FilesConfig.BUFFER_BYTES,
-                FilesConfig.IDLE_TIMEOUT_MS, FilesConfig.READ_TIMEOUT_MS, 0);
+        // MB_DAV_RATE (bytes/s): the rate cap; default 200 MB/s (T-137 mount timing). T-138 uses the device's 20 MB/s.
+        long rate = System.getenv("MB_DAV_RATE") != null ? Long.parseLong(System.getenv("MB_DAV_RATE")) : 200_000_000L;
+        // MB_DAV_MAXCONN: the server's connection limit (default the app's). MB_DAV_DIRECT=1: no proxy, the server
+        // itself listens on <proxy-port> (rules out proxy artefacts; no HTTP dump then).
+        int maxConn = System.getenv("MB_DAV_MAXCONN") != null ? Integer.parseInt(System.getenv("MB_DAV_MAXCONN"))
+                : FilesConfig.MAX_CONNECTIONS;
+        boolean direct = "1".equals(System.getenv("MB_DAV_DIRECT"));
+        FilesConfig cfg = new FilesConfig(rate, 256L * 1024, maxConn, FilesConfig.BUFFER_BYTES,
+                FilesConfig.IDLE_TIMEOUT_MS, FilesConfig.READ_TIMEOUT_MS, direct ? proxyPort : 0);
         DavServer server = new DavServer(root, token, secret, cfg, new DavServer.Hooks() {
             @Override public void threadStarted() { }
             @Override public void log(String ev, String fields) {
@@ -56,7 +63,11 @@ public final class DavRepro {
         }, System::currentTimeMillis, null);
         server.start();
         listening.await();
-        out("server", "listening port=" + serverPort[0]);
+        out("server", "listening port=" + serverPort[0] + " rate=" + rate + " max_conn=" + maxConn);
+        if (direct) {
+            out("proxy", "listening port=" + proxyPort + " (direct: no proxy)");
+            Thread.sleep(Long.MAX_VALUE);
+        }
 
         ServerSocket ss = new ServerSocket();
         ss.setReuseAddress(true);
@@ -70,12 +81,19 @@ public final class DavRepro {
             c.setTcpNoDelay(true);
             s.setTcpNoDelay(true);
             out("c" + n, "open");
-            pump(c, s, "c" + n + " >", token);
-            pump(s, c, "c" + n + " <", token);
+            pump(c, s, c, "c" + n + " >", token);
+            pump(s, c, c, "c" + n + " <", token);
         }
     }
 
-    private static void pump(Socket from, Socket to, String tag, String token) {
+    /**
+     * MB_DAV_PROXY_RESET=stall: when the client resets a connection, close only the client side and leave the server
+     * side open and unread, the way a tunnel that stops reading but never closes would (models an adb forward whose
+     * device end lingers). Default: close both sides, as a plain TCP path does.
+     */
+    private static final boolean STALL = "stall".equals(System.getenv("MB_DAV_PROXY_RESET"));
+
+    private static void pump(Socket from, Socket to, Socket client, String tag, String token) {
         Thread t = new Thread(() -> {
             HeadSniffer sniff = new HeadSniffer(tag, token);
             byte[] buf = new byte[65536];
@@ -90,10 +108,17 @@ public final class DavRepro {
                     o.flush();
                 }
                 out(tag, "eof");
-            } catch (IOException e) {
-                out(tag, "closed " + e.getClass().getSimpleName());
-            } finally {
                 try { to.shutdownOutput(); } catch (IOException ignored) { }
+            } catch (IOException e) {
+                // A reset (webdavfs aborting a download) closes both sides fully, as adb does on the device; a
+                // half-close would leave the server writing into a socket nobody reads (T-138).
+                out(tag, "closed " + e.getClass().getSimpleName() + (STALL ? " (stall: server side left open)" : ""));
+                if (STALL) {
+                    try { client.close(); } catch (IOException ignored) { }
+                    return;
+                }
+                try { from.close(); } catch (IOException ignored) { }
+                try { to.close(); } catch (IOException ignored) { }
             }
         });
         t.setDaemon(true);
