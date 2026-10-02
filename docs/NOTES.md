@@ -960,3 +960,9 @@ T-120, T-121, T-122 done.
 - Toplu varış: alt taşmadan sonra geciken paketler çalma yeniden başladıktan sonra geliyor ve seviye 134 ms'ye çıkıyor (`audio_ms` 187). T-118 kırpması yalnız çalma başlangıcında yapıldığı için devreye girmiyor → T-125.
 - Kullanıcı ayrıca uygulama açılırken / ön plana gelirken tek seferlik kesinti duyuyor. Bu, oturumun yeniden kurulması (arka planda oturum kapanır, tasarım gereği). Ön plana gelişte yumuşak başlangıç ayrı bir konu.
 - Önerilen en etkili adım: Mac'i Ethernet'e bağlamak (bir kablosuz atlamayı kaldırır).
+
+## 2026-10-02 ~13:00 — Wi-Fi: ping temiz, TCP ses gecikiyor
+
+- 20 dakika, 100 ms aralıklı ping (Mac → AP 192.168.1.1, Mac → tablet 192.168.1.105): 11 660 / 11 838 paket, **kayıp 0**.
+- `signaling` testi sırasında (12:30:37–12:36:05) en çok 18 ms (AP) / 29 ms (tablet). Aynı anda ses `owd` 60–94 ms, 8 alt taşma.
+- Sonuç: kablosuz bağlantı kopmuyor; gecikme TCP akışlarımızın içinde → T-126 (kontrol + video soketlerinin TCP durumunu logla).
