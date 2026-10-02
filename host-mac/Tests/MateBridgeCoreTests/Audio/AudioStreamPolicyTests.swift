@@ -137,7 +137,7 @@ import Testing
         // A new session logs again.
         _ = p.sessionStarted(sessionID: 8, clientSupportsAudio: true)
         _ = p.prefs(sessionID: 8, enabled: true)
-        #expect(logs(p.captureFailed(streamID: 3, reason: "tap_create", status: 1)).count == 1)
+        #expect(logs(p.captureFailed(streamID: 3, reason: "ioproc_create", status: 1)).count == 1)
     }
 
     @Test func failureWhileRunningSendsStopped() {
@@ -167,17 +167,17 @@ import Testing
     @Test func failedRebuildRetriesTwiceASecondApartThenGivesUp() {
         var p = running()
         _ = p.captureInterrupted(streamID: 1, reason: "wake")  // starts stream 2
-        let first = p.captureFailed(streamID: 2, reason: "aggregate_create", status: -1)
+        let first = p.captureFailed(streamID: 2, reason: "no_output_device", status: 0)
         #expect(nonLog(first) == [.stopCapture(streamID: 2), .scheduleRetry(token: 1, delayUs: 1_000_000)])
         #expect(!logs(first).contains { $0.hasPrefix("audio_unavailable") })
         #expect(nonLog(p.retryDue(token: 1)) == [.startCapture(streamID: 3)])
-        #expect(nonLog(p.captureFailed(streamID: 3, reason: "aggregate_create", status: -1))
+        #expect(nonLog(p.captureFailed(streamID: 3, reason: "no_output_device", status: 0))
             == [.stopCapture(streamID: 3), .scheduleRetry(token: 2, delayUs: 1_000_000)])
         #expect(p.retryDue(token: 1) == [])  // stale timer
         #expect(nonLog(p.retryDue(token: 2)) == [.startCapture(streamID: 4)])
-        let last = p.captureFailed(streamID: 4, reason: "aggregate_create", status: -1)
+        let last = p.captureFailed(streamID: 4, reason: "no_output_device", status: 0)
         #expect(nonLog(last) == [.stopCapture(streamID: 4)])
-        #expect(logs(last) == ["audio_unavailable reason=aggregate_create status=-1 stream_id=4"])
+        #expect(logs(last) == ["audio_unavailable reason=no_output_device status=0 stream_id=4"])
         #expect(nonLog(p.prefs(sessionID: 7, enabled: true)) == [])  // failed for good (until re-enabled)
     }
 
@@ -204,6 +204,139 @@ import Testing
         _ = q.captureFailed(streamID: 2, reason: "x", status: 1)
         #expect(nonLog(q.sessionEnded()) == [])
         #expect(q.retryDue(token: 1) == [])
+    }
+
+    // MARK: Transient start failures (T-119)
+
+    private func starting(sid: UInt32 = 7) -> AudioStreamPolicy {
+        var p = AudioStreamPolicy(disabled: false)
+        _ = p.sessionStarted(sessionID: sid, clientSupportsAudio: true)
+        _ = p.prefs(sessionID: sid, enabled: true)  // starts stream 1
+        return p
+    }
+
+    @Test func failureClassification() {
+        #expect(AudioCaptureFailure.isTransient(AudioCaptureFailure.tapCreate))
+        #expect(AudioCaptureFailure.isTransient(AudioCaptureFailure.aggregateCreate))
+        let permanent = [AudioCaptureFailure.noOutputDevice, AudioCaptureFailure.noOutputUID, AudioCaptureFailure.tapFormat,
+                         AudioCaptureFailure.unsupportedFormat(sampleRate: 44_100, channels: 2),
+                         AudioCaptureFailure.tapLayout, AudioCaptureFailure.ioprocCreate,
+                         AudioCaptureFailure.deviceStart, AudioCaptureFailure.setupChanged("device_dead")]
+        #expect(permanent.allSatisfy { !AudioCaptureFailure.isTransient($0) })
+        #expect(AudioCaptureFailure.unsupportedFormat(sampleRate: 44_100, channels: 2) == "tap_format_44100hz_2ch")
+        #expect(AudioCaptureFailure.setupChanged("device_dead") == "setup_changed_device_dead")
+    }
+
+    @Test func transientTapCreateIsRetriedAsANewStreamAndSucceeds() {
+        var p = starting()
+        let failed = p.captureFailed(streamID: 1, reason: "tap_create", status: 0)
+        #expect(nonLog(failed) == [.stopCapture(streamID: 1), .scheduleRetry(token: 1, delayUs: 100_000)])
+        #expect(logs(failed) == ["audio_retry reason=tap_create attempt=1 delay_ms=100 status=0 stream_id=1"])
+        #expect(p.runningStreamID == nil)
+        #expect(nonLog(p.prefs(sessionID: 7, enabled: true)) == [])  // waiting: no extra start
+        #expect(nonLog(p.retryDue(token: 1)) == [.startCapture(streamID: 2)])
+        #expect(nonLog(p.captureStarted(streamID: 2)) == [.send(sessionID: 7, AudioStreamPolicy.startedConfig(streamID: 2))])
+        #expect(p.runningStreamID == 2)
+    }
+
+    @Test func transientRetriesGrowThenGiveUpWithTheUsualLine() {
+        var p = starting()
+        var id: UInt16 = 1
+        for (n, delay) in AudioStreamPolicy.transientRetryDelaysUs.enumerated() {
+            let reason = n % 2 == 0 ? "tap_create" : "aggregate_create"
+            let failed = p.captureFailed(streamID: id, reason: reason, status: -10)
+            let token = UInt32(n + 1)
+            #expect(nonLog(failed) == [.stopCapture(streamID: id), .scheduleRetry(token: token, delayUs: delay)])
+            #expect(logs(failed) == ["audio_retry reason=\(reason) attempt=\(n + 1) delay_ms=\(delay / 1000) status=-10 "
+                                        + "stream_id=\(id)"])
+            id += 1
+            #expect(nonLog(p.retryDue(token: token)) == [.startCapture(streamID: id)])
+        }
+        #expect(AudioStreamPolicy.transientRetryDelaysUs == [100_000, 250_000, 500_000, 1_000_000])
+        let last = p.captureFailed(streamID: id, reason: "tap_create", status: 0)
+        #expect(nonLog(last) == [.stopCapture(streamID: id)])
+        #expect(logs(last) == ["audio_unavailable reason=tap_create status=0 stream_id=5"])
+        #expect(nonLog(p.prefs(sessionID: 7, enabled: true)) == [])  // failed for good (until re-enabled)
+        // An explicit off/on starts over with the full retry budget.
+        _ = p.prefs(sessionID: 7, enabled: false)
+        #expect(nonLog(p.prefs(sessionID: 7, enabled: true)) == [.startCapture(streamID: 6)])
+        #expect(nonLog(p.captureFailed(streamID: 6, reason: "tap_create", status: 0))
+            == [.stopCapture(streamID: 6), .scheduleRetry(token: 5, delayUs: 100_000)])
+    }
+
+    @Test func permanentFailureGivesUpAtOnce() {
+        for reason in ["no_output_device", "tap_format_44100hz_2ch", "ioproc_create", "device_start"] {
+            var p = starting()
+            let failed = p.captureFailed(streamID: 1, reason: reason, status: 0)
+            #expect(nonLog(failed) == [.stopCapture(streamID: 1)])
+            #expect(logs(failed) == ["audio_unavailable reason=\(reason) status=0 stream_id=1"])
+        }
+    }
+
+    @Test func failureOfARunningCaptureIsNotRetriedEvenIfTransientByName() {
+        var p = running()
+        let actions = p.captureFailed(streamID: 1, reason: "tap_create", status: 0)
+        #expect(nonLog(actions) == [.stopCapture(streamID: 1), .send(sessionID: 7, .stopped(streamID: 1))])
+    }
+
+    @Test func cancelledRequestIsNotRetried() {
+        // Session end while the retry waits.
+        var a = starting()
+        _ = a.captureFailed(streamID: 1, reason: "tap_create", status: 0)
+        #expect(a.sessionEnded() == [])
+        #expect(a.retryDue(token: 1) == [])
+        // Disable while the retry waits: nothing to stop, no STOPPED (STARTED never went out).
+        var b = starting()
+        _ = b.captureFailed(streamID: 1, reason: "tap_create", status: 0)
+        #expect(b.prefs(sessionID: 7, enabled: false) == [])
+        #expect(b.retryDue(token: 1) == [])
+        // Another takeover while the retry waits: the new session starts afresh, the old timer is stale.
+        var c = starting()
+        _ = c.captureFailed(streamID: 1, reason: "aggregate_create", status: 0)
+        #expect(nonLog(c.sessionStarted(sessionID: 9, clientSupportsAudio: true)) == [])
+        #expect(nonLog(c.prefs(sessionID: 9, enabled: true)) == [.startCapture(streamID: 2)])
+        #expect(c.retryDue(token: 1) == [])
+        #expect(nonLog(c.captureFailed(streamID: 2, reason: "tap_create", status: 0))
+            == [.stopCapture(streamID: 2), .scheduleRetry(token: 2, delayUs: 100_000)])  // fresh budget
+    }
+
+    @Test func successResetsTheTransientBudget() {
+        var p = starting()
+        _ = p.captureFailed(streamID: 1, reason: "tap_create", status: 0)
+        _ = p.retryDue(token: 1)
+        _ = p.captureFailed(streamID: 2, reason: "tap_create", status: 0)  // attempt 2, 250 ms
+        _ = p.retryDue(token: 2)
+        _ = p.captureStarted(streamID: 3)
+        _ = p.prefs(sessionID: 7, enabled: false)
+        _ = p.prefs(sessionID: 7, enabled: true)  // stream 4
+        let again = p.captureFailed(streamID: 4, reason: "tap_create", status: 0)
+        #expect(nonLog(again) == [.stopCapture(streamID: 4), .scheduleRetry(token: 3, delayUs: 100_000)])
+        #expect(logs(again) == ["audio_retry reason=tap_create attempt=1 delay_ms=100 status=0 stream_id=4"])
+    }
+
+    @Test func transientFailureDuringARebuildRetriesFastThenFallsBackToRebuildRetries() {
+        var p = running()
+        _ = p.captureInterrupted(streamID: 1, reason: "wake")  // stream 2
+        var id: UInt16 = 2
+        var token: UInt32 = 0
+        for delay in AudioStreamPolicy.transientRetryDelaysUs {
+            token += 1
+            #expect(nonLog(p.captureFailed(streamID: id, reason: "tap_create", status: 0))
+                == [.stopCapture(streamID: id), .scheduleRetry(token: token, delayUs: delay)])
+            id += 1
+            #expect(nonLog(p.retryDue(token: token)) == [.startCapture(streamID: id)])
+        }
+        for _ in 0..<AudioStreamPolicy.rebuildRetries {
+            token += 1
+            let failed = p.captureFailed(streamID: id, reason: "tap_create", status: 0)
+            #expect(nonLog(failed) == [.stopCapture(streamID: id), .scheduleRetry(token: token, delayUs: 1_000_000)])
+            #expect(logs(failed).allSatisfy { $0.hasPrefix("audio_rebuild_retry") })
+            id += 1
+            #expect(nonLog(p.retryDue(token: token)) == [.startCapture(streamID: id)])
+        }
+        let last = p.captureFailed(streamID: id, reason: "tap_create", status: 0)
+        #expect(nonLog(last) == [.stopCapture(streamID: id)])
+        #expect(logs(last) == ["audio_unavailable reason=tap_create status=0 stream_id=\(id)"])
     }
 
     @Test func streamIDsSkipZeroOnWrap() {
