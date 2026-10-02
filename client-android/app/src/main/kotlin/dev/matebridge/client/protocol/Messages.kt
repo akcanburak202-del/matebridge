@@ -26,6 +26,7 @@ object MsgType {
     const val CLIPBOARD = 0x06
     const val DISPLAY_RATE = 0x07
     const val SETTINGS_OPEN = 0x08
+    const val FILES_INFO = 0x09
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -79,6 +80,9 @@ object Capabilities {
 
     /** Opens the settings panel while streaming and handles SETTINGS_OPEN (decision 0013). Not sent yet: T-105 turns it on. */
     const val SETTINGS_PANEL = 1 shl 9
+
+    /** Can run the tablet-files WebDAV server and sends FILES_INFO (decision 0015, T-135). */
+    const val FILES = 1 shl 10
 }
 
 // ---- Session ----
@@ -159,6 +163,25 @@ data class StreamPrefs(val fps: Int, val scalePermille: Int, val bitrateKbps: Lo
 /** Host asks the tablet to show its settings panel while streaming (H to C, PROTOCOL.md 0x08, decision 0013). */
 data object SettingsOpen : Message {
     override val type get() = MsgType.SETTINGS_OPEN
+}
+
+/**
+ * State of the tablet's WebDAV file server (C to H, PROTOCOL.md 0x09, decision 0015). [port] is the server's TCP port on
+ * the tablet's 127.0.0.1 (0 when OFF); [token] is the HTTP auth password (32 lowercase hex chars, empty when OFF).
+ * Unknown [state] values decode fine and mean OFF. Never log [token]: [toString] leaves it out.
+ */
+data class FilesInfo(val state: Int, val port: Int, val token: String) : Message {
+    override val type get() = MsgType.FILES_INFO
+
+    val ready: Boolean get() = state == STATE_READY
+
+    override fun toString() = "FilesInfo(state=$state, port=$port, token=<${token.length} chars>)"
+
+    companion object {
+        const val STATE_OFF = 0
+        const val STATE_READY = 1
+        val OFF = FilesInfo(STATE_OFF, 0, "")
+    }
 }
 
 /** Current panel refresh rate of the tablet (C to H, PROTOCOL.md 0x07): [hz] rounded to an integer, 0 = unknown. */

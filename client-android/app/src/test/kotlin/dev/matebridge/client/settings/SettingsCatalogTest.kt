@@ -39,6 +39,9 @@ class SettingsCatalogTest {
         override fun setPenTrail(on: Boolean) { calls += "trail $on"; v["trail"] = on }
         override val penDot get() = v["dot"] ?: false
         override fun setPenDot(on: Boolean) { calls += "dot $on"; v["dot"] = on }
+        override val filesShare get() = v["files"] ?: false
+        override fun setFilesShare(on: Boolean) { calls += "files $on"; v["files"] = on }
+        override var filesStatus = "Durum: kapalı"
         override val clipboardShare get() = v["clip"] ?: true
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
         override val statsOverlay get() = v["stats"] ?: false
@@ -52,8 +55,8 @@ class SettingsCatalogTest {
     private fun choice(s: List<SettingsSection>, key: String) = item(s, key) as SettingItem.Choice
 
     @Test fun sectionsInOrder() {
-        assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Diğer"), SettingsCatalog.sections(h, inStream = true).map { it.title })
-        assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Diğer"), SettingsCatalog.sections(h, inStream = false).map { it.title })
+        assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Tablet dosyaları", "Diğer"), SettingsCatalog.sections(h, inStream = true).map { it.title })
+        assertEquals(listOf("Bağlantı", "Görüntü", "Ses", "Girdi", "Tablet dosyaları", "Diğer"), SettingsCatalog.sections(h, inStream = false).map { it.title })
     }
 
     @Test fun bothPanelsHaveTheSameControlsExceptTheStreamOnlyOnes() {
@@ -63,7 +66,8 @@ class SettingsCatalogTest {
         assertEquals(
             listOf(
                 "transport", "disconnect", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
-                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "clipboard", "stats", "shortcuts",
+                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_status",
+                "clipboard", "stats", "shortcuts",
             ),
             side,
         )
@@ -72,7 +76,7 @@ class SettingsCatalogTest {
     @Test fun noAudioSectionWithoutAudio() {
         h.audioAvailable = false
         val s = SettingsCatalog.sections(h, inStream = true)
-        assertEquals(listOf("Bağlantı", "Görüntü", "Girdi", "Diğer"), s.map { it.title })
+        assertEquals(listOf("Bağlantı", "Görüntü", "Girdi", "Tablet dosyaları", "Diğer"), s.map { it.title })
     }
 
     @Test fun bitrateChoices() {
@@ -163,5 +167,17 @@ class SettingsCatalogTest {
         h.gameDefaultsActive = false
         assertEquals("Bit hızı", bitrate.titleText())
         assertEquals("Kalem izi: kapalı", trail.text())
+    }
+
+    @Test fun filesSectionTogglesAndShowsStatus() {
+        val s = SettingsCatalog.sections(h, inStream = true)
+        assertEquals(listOf("files", "files_status"), s.single { it.title == "Tablet dosyaları" }.items.map { it.key })
+        val t = item(s, "files") as SettingItem.Toggle
+        assertEquals("Tablet dosyalarını Mac'te göster: kapalı", t.text())
+        t.set(!t.get())
+        assertEquals(listOf("files true"), h.calls)
+        assertEquals("Tablet dosyalarını Mac'te göster: açık", t.text())
+        h.filesStatus = "Durum: hazır"
+        assertEquals("Durum: hazır", (item(s, "files_status") as SettingItem.Info).text())
     }
 }

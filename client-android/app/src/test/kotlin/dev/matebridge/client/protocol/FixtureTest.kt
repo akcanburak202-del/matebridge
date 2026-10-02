@@ -64,6 +64,8 @@ class FixtureTest {
             "stream_prefs_bitrate" to StreamPrefs(120, 1000, 40000),
             "display_rate" to DisplayRate(60),
             "settings_open" to SettingsOpen,
+            "files_info_ready" to FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef"),
+            "files_info_off" to FilesInfo.OFF,
             "clipboard_text" to Clipboard(3, Clipboard.KIND_TEXT_UTF8, Bytes("Merhaba ğüşıöç — kopyala".toByteArray())),
             "clipboard_empty" to Clipboard(4, Clipboard.KIND_EMPTY, Bytes(ByteArray(0))),
             "pen_hover_to_contact" to Pen(

@@ -20,6 +20,7 @@ import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.DisplayRate
+import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.StreamMode
@@ -127,8 +128,9 @@ class SessionController(
      * there is no Wi-Fi (the attempt then fails without connecting). The default leaves the socket unbound.
      */
     private val wifiBinder: (Socket) -> Boolean = { true },
+    initialFiles: FilesInfo? = null, // T-135: file server state; null = no file server, FILES_INFO never sent
 ) {
-    private val machine = SessionMachine(hello, initialPrefs, knobs.pingIntervalUs, initialAudio)
+    private val machine = SessionMachine(hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles)
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -142,6 +144,7 @@ class SessionController(
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
+    private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
     /** T-096: a migration candidate's close has its own slot, so it cannot hide the (lower-gen) current one's close. */
     private val controlClosed = ControlCloseSlots()
@@ -223,6 +226,13 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         audioMailbox.post(SessionMachine.Event.SetAudio(on))
+    }
+
+    /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
+    fun setFilesInfo(info: FilesInfo) {
+        if (terminated.get()) return
+        ensureEngine()
+        filesMailbox.post(SessionMachine.Event.SetFiles(info))
     }
 
     /**
@@ -317,7 +327,7 @@ class SessionController(
         try {
             while (true) {
                 var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?:
-                    migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                    filesMailbox.take() ?: migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -393,6 +403,7 @@ class SessionController(
             is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.SetFiles -> MbLog.i("files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> Unit
             is SessionMachine.Event.Migrate -> MbLog.i(
                 "migrate_request",
@@ -421,6 +432,7 @@ class SessionController(
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille} bitrate_kbps=${m.bitrateKbps}")
                     is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0}")
+                    is FilesInfo -> MbLog.i("files_info_sent", "state=${m.state} port=${m.port}") // never the token
                     else -> Unit
                 }
                 val c = control

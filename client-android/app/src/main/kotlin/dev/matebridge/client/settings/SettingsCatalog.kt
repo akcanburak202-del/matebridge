@@ -56,6 +56,13 @@ interface SettingsHost {
     val penDot: Boolean
     fun setPenDot(on: Boolean)
 
+    // Tablet dosyaları (T-135)
+    val filesShare: Boolean
+    /** Persists the switch; turning it on without "all files access" opens the system permission screen. */
+    fun setFilesShare(on: Boolean)
+    /** The status line under the switch. */
+    val filesStatus: String
+
     // Diğer
     val clipboardShare: Boolean
     fun setClipboardShare(on: Boolean)
@@ -119,7 +126,7 @@ object SettingsCatalog {
             "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
 
     /**
-     * Sections in order Bağlantı / Görüntü / Ses / Girdi / Diğer. [inStream] (the side panel) adds what only makes sense
+     * Sections in order Bağlantı / Görüntü / Ses / Girdi / Tablet dosyaları / Diğer. [inStream] (the side panel) adds what only makes sense
      * while streaming: "Bağlantıyı kes" and the bit rate the host applied. Ses is left out when audio is unavailable.
      */
     fun sections(h: SettingsHost, inStream: Boolean): List<SettingsSection> {
@@ -197,6 +204,13 @@ object SettingsCatalog {
                 ),
                 SettingItem.Toggle("pen_trail", "Kalem izi", { h.penTrail }, { h.setPenTrail(it) }, marker = game),
                 SettingItem.Toggle("pen_dot", "Kalem noktası", { h.penDot }, { h.setPenDot(it) }, marker = game),
+            ),
+        )
+        out += SettingsSection(
+            "Tablet dosyaları",
+            listOf(
+                SettingItem.Toggle("files", "Tablet dosyalarını Mac'te göster", { h.filesShare }, { h.setFilesShare(it) }),
+                SettingItem.Info("files_status") { h.filesStatus },
             ),
         )
         out += SettingsSection(
