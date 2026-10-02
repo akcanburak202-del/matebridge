@@ -100,6 +100,21 @@ class WolSender(context: Context) {
      */
     fun wifiSubnets(): List<Ipv4Subnet> = findWifi()?.second.orEmpty().mapNotNull { (addr, prefix) -> Ipv4Subnet.of(addr, prefix) }
 
+    /**
+     * T-134: binds a direct wake attempt's TCP socket (not yet connected) to the Wi-Fi network, so it never goes through
+     * `adb reverse` or another network. False without Wi-Fi or when the bind fails. Any thread (the control reader).
+     */
+    fun bindToWifi(socket: java.net.Socket): Boolean {
+        val network = findWifi()?.first ?: return false
+        return try {
+            network.bindSocket(socket)
+            true
+        } catch (e: Exception) {
+            MbLog.w("wake_bind_failed", "err=${e.javaClass.simpleName}")
+            false
+        }
+    }
+
     private fun post(task: () -> Unit): Boolean = try {
         exec.execute(task)
         true

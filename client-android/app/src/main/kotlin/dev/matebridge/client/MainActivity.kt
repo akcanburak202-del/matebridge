@@ -86,6 +86,7 @@ import dev.matebridge.client.session.MacDiscovery
 import dev.matebridge.client.session.HomeNetwork
 import dev.matebridge.client.session.HostSleepGate
 import dev.matebridge.client.session.WolRefresh
+import dev.matebridge.client.session.WakeConnect
 import dev.matebridge.client.session.WakePlanner
 import dev.matebridge.client.session.WolSender
 import dev.matebridge.client.session.WolStore
@@ -156,6 +157,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-133: one TXT-only discovery per start while on USB, so `wol` is learned without Wi-Fi discovery. */
     private val wolRefresh = WolRefresh()
     private var wolRefreshDiscovery: MacDiscovery? = null
+    /** T-134: direct wake attempts (an ordinary session to the stored host IPv4:port) during a wake episode. */
+    private val wakeConnect = WakeConnect()
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
     private lateinit var videoGl: SurfaceView // target of the GL presenter (T-018)
@@ -486,7 +489,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSessionEnd() { audio?.endSession("session_end") }
 
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
-        }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null)
+
+            override fun onWakeConnect(attempt: Int, ok: Boolean) { runOnUiThread { onWakeConnectResult(attempt, ok) } } // T-134
+        }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
+            wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
+        )
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -1362,7 +1369,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun startWifi() {
         manualMode = false
         discovery?.stop()
-        discovery = MacDiscovery(this, onTxt = { host, wol -> onHostTxt(host, wol) }) { ep -> runOnUiThread { onDiscovered(ep) } }
+        discovery = MacDiscovery(this, onTxt = { host, wol, port -> onHostTxt(host, wol, port) }) { ep -> runOnUiThread { onDiscovered(ep) } }
             .also { it.start() }
         if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it) }
     }
@@ -1630,7 +1637,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onDiscovered(ep: Endpoint) {
         if (!started || manualMode || userDisconnected || hostSleep.asleep) return
-        if (currentEndpoint == null || lastUi is SessionUi.Disconnected) {
+        // T-134: discovery wins over a direct wake attempt (it replaces it; the start closes it first, one connection).
+        if (wakeConnect.onDiscovered(currentEndpoint, lastUi is SessionUi.Disconnected)) {
             connect(ep)
         }
     }
@@ -1639,11 +1647,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val typed = endpointField.text.toString()
         val wasAsleep = hostSleep.clear() // T-133: "Bağlan" is a user action; the normal flow (wake included) starts
         if (wasAsleep) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_CONNECT}")
-        if ((userDisconnected || wasAsleep) && typed.isBlank()) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
+        // T-134: while the Mac sleeps, "Bağlan" is "Mac'i uyandır" (wake episode + direct connect) unless an address was
+        // typed into the open manual field; a hidden field's remembered text does not count.
+        val typedNow = typed.isNotBlank() && (!wasAsleep || endpointField.visibility == View.VISIBLE)
+        if ((userDisconnected || wasAsleep) && !typedNow) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
             userDisconnected = false
             hideManualEntry()
-            render(SessionUi.Searching)
-            applyTransport()
+            restartUsualWay()
+            if (wasAsleep) wolStep(manual = true) // T-134: the same path as "Mac'i uyandır"
             return
         }
         userDisconnected = false
@@ -1658,9 +1669,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         hideManualEntry() // T-078: no focused field once the stream may start
         connect(ep)
+        if (wasAsleep) wolStep(manual = true) // T-134: a typed address while the Mac sleeps still gets a wake episode
+    }
+
+    /**
+     * After "Bağlantıyı kes" or "Mac uyku modunda": search/connect the chosen mode's usual way. The old endpoint is
+     * forgotten first (T-134): otherwise a discovered Mac was ignored in Wi-Fi mode (NOTES 2026-10-02 ~15:20).
+     */
+    private fun restartUsualWay() {
+        currentEndpoint = null
+        render(SessionUi.Searching)
+        applyTransport()
     }
 
     private fun connect(ep: Endpoint) {
+        wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
         currentEndpoint = ep
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
         if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
@@ -1728,9 +1751,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // ---- T-129 Wake-on-LAN ----
 
     /** NSD thread: remembers the host's TXT `wol` addresses, its IPv4 and the home Wi-Fi subnet (none of them logged). */
-    private fun onHostTxt(host: String, wol: String?) {
+    private fun onHostTxt(host: String, wol: String?, port: Int) {
         val subnet = HomeNetwork.pick(wolSender.wifiSubnets(), host)
-        if (!wolStore.onResolved(host, wol, subnet)) return
+        if (!wolStore.onResolved(host, wol, subnet, port)) return // T-134: the control port is stored with the host
         MbLog.i("wol_stored", "macs=${wolStore.macs().size} home=${if (wolStore.subnet() != null) 1 else 0}")
         runOnUiThread { refreshWakeButton() }
     }
@@ -1757,8 +1780,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (userDisconnected || wasAsleep) {
             userDisconnected = false
             hideManualEntry()
-            render(SessionUi.Searching)
-            applyTransport()
+            restartUsualWay()
         }
         wolStep(manual = true)
     }
@@ -1780,6 +1802,43 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             is WakePlanner.Step.Skip -> MbLog.i("wol_skip", "reason=${step.reason}")
         }
         if (wasActive != wolPlanner.active && foreground) applyStatusText(lastUi)
+        wakeConnectStep()
+    }
+
+    /**
+     * T-134: inside a wake episode, direct session attempts to the stored host IPv4:port (they dark-wake the Mac where
+     * magic packets do not). Never outside an episode, so never in the background, after "Bağlantıyı kes" or while the
+     * Mac said HOST_SLEEP.
+     */
+    private fun wakeConnectStep() {
+        val now = SystemClock.elapsedRealtime()
+        val episode = wolPlanner.active && started && !isDestroyed && !userDisconnected && !hostSleep.asleep
+        val ui = lastUi
+        val idle = ui is SessionUi.Disconnected || ui == SessionUi.Idle || ui == SessionUi.Searching
+        val transportOk = WakeConnect.transportAllows(mode, isOnUsb(), picking || fallbackPending) && !manualMode
+        when (val step = wakeConnect.update(now, episode, wolStore.wakeEndpoint(), currentEndpoint, transportOk, idle)) {
+            WakeConnect.Step.None -> Unit
+            is WakeConnect.Step.Attempt -> {
+                currentEndpoint = step.endpoint
+                transportEpoch++ // as in connect(): a migration started before this session reports into nothing
+                MbLog.i("transport", "transport=${ConnectMode.transportOf(step.endpoint).logName} via=wake")
+                controller.start(step.endpoint, wakeAttempt = step.n)
+            }
+            WakeConnect.Step.Release -> {
+                // The episode ended and our last attempt failed: no endpoint is chosen any more (discovery may connect).
+                currentEndpoint = null
+                if (started && !isDestroyed && !userDisconnected && !hostSleep.asleep) render(SessionUi.Searching)
+            }
+        }
+    }
+
+    /** T-134: the connect of a direct wake attempt finished (the session machine follows with its own state). */
+    private fun onWakeConnectResult(attempt: Int, ok: Boolean) {
+        val adopted = wakeConnect.onResult(attempt, ok, SystemClock.elapsedRealtime())
+        if (adopted != null && adopted == currentEndpoint) {
+            lastWifiEndpoint = adopted // an ordinary Wi-Fi session from here (AUTO may later move it to USB)
+        }
+        wolStep()
     }
 
     // ---- T-133 host sleep ----
@@ -1808,8 +1867,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 wolRefreshDiscovery?.stop()
                 wolRefreshDiscovery = MacDiscovery(
                     this,
-                    onTxt = { host, wol ->
-                        onHostTxt(host, wol) // stores it (NSD thread), as Wi-Fi discovery does
+                    onTxt = { host, wol, port ->
+                        onHostTxt(host, wol, port) // stores it (NSD thread), as Wi-Fi discovery does
                         runOnUiThread { wolRefreshStep(wolRefresh.onTxt(wol)) }
                     },
                 ) { _ -> }.also { it.start() }

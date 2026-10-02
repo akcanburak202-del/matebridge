@@ -160,28 +160,42 @@ object HomeNetwork {
 class WolStore(private val store: KeyValueStore) {
     private var macs: List<String> = WolTxt.parse(store.getString(KEY_MACS))
     private var host: String? = store.getString(KEY_HOST)?.takeIf { WolTargets.parseIpv4(it) != null }
+    private var port: Int? = store.getString(KEY_PORT)?.toIntOrNull()?.takeIf { it in 1..65535 }
     private var subnet: Ipv4Subnet? = Ipv4Subnet.parse(store.getString(KEY_SUBNET))
 
     @Synchronized fun macs(): List<String> = macs
 
     @Synchronized fun host(): String? = host
 
+    /** T-134: the host's control port from the resolution that carried the TXT; [DEFAULT_PORT] when none is stored. */
+    @Synchronized fun port(): Int = port ?: DEFAULT_PORT
+
+    /** T-134: where a direct wake connect goes (stored IPv4 and control port); null without a stored host. */
+    @Synchronized fun wakeEndpoint(): Endpoint? = host?.let { Endpoint(it, port ?: DEFAULT_PORT) }
+
     @Synchronized fun subnet(): Ipv4Subnet? = subnet
 
     @Synchronized fun hasMacs(): Boolean = macs.isNotEmpty()
 
     /**
-     * A resolved service. Only a [txtWol] with at least one valid address stores anything: the MAC list, [hostIpv4] and
-     * the Wi-Fi [wifiSubnet] it was seen on (a null subnet keeps the stored one). A missing or unusable value keeps
-     * everything stored (older host, transient state). Returns true when the MAC list or the home subnet changed.
+     * A resolved service. Only a [txtWol] with at least one valid address stores anything: the MAC list, [hostIpv4] with
+     * its control [hostPort] (T-134; null or out of range keeps the stored port) and the Wi-Fi [wifiSubnet] it was seen
+     * on (a null subnet keeps the stored one). A missing or unusable value keeps everything stored (older host, transient
+     * state). Returns true when the MAC list or the home subnet changed.
      */
     @Synchronized
-    fun onResolved(hostIpv4: String, txtWol: String?, wifiSubnet: Ipv4Subnet?): Boolean {
+    fun onResolved(hostIpv4: String, txtWol: String?, wifiSubnet: Ipv4Subnet?, hostPort: Int? = null): Boolean {
         val parsed = WolTxt.parse(txtWol)
         if (parsed.isEmpty()) return false
-        if (WolTargets.parseIpv4(hostIpv4) != null && hostIpv4 != host) {
-            host = hostIpv4
-            store.putString(KEY_HOST, hostIpv4)
+        if (WolTargets.parseIpv4(hostIpv4) != null) {
+            if (hostIpv4 != host) {
+                host = hostIpv4
+                store.putString(KEY_HOST, hostIpv4)
+            }
+            if (hostPort != null && hostPort in 1..65535 && hostPort != port) {
+                port = hostPort
+                store.putString(KEY_PORT, hostPort.toString())
+            }
         }
         var changed = false
         if (wifiSubnet != null && wifiSubnet != subnet) {
@@ -197,10 +211,14 @@ class WolStore(private val store: KeyValueStore) {
         return changed
     }
 
-    private companion object {
-        const val KEY_MACS = "wol_macs"
-        const val KEY_HOST = "wol_host"
-        const val KEY_SUBNET = "wol_subnet"
+    companion object {
+        /** The host's control port (PROTOCOL.md section 3.1), used when no resolved port is stored. */
+        const val DEFAULT_PORT = ConnectMode.USB_CONTROL_PORT
+
+        private const val KEY_MACS = "wol_macs"
+        private const val KEY_HOST = "wol_host"
+        private const val KEY_PORT = "wol_port"
+        private const val KEY_SUBNET = "wol_subnet"
     }
 }
 

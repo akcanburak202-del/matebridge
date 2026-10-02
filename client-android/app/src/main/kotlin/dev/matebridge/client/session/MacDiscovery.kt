@@ -15,8 +15,11 @@ import android.os.Looper
 @Suppress("DEPRECATION")
 class MacDiscovery(
     context: Context,
-    /** T-129: the resolved host IPv4 and its TXT `wol` value (null when absent), before [onFound]; NSD thread. */
-    private val onTxt: ((host: String, wol: String?) -> Unit)? = null,
+    /**
+     * T-129: the resolved host IPv4, its TXT `wol` value (null when absent) and (T-134) the resolved control port, before
+     * [onFound]; NSD thread.
+     */
+    private val onTxt: ((host: String, wol: String?, port: Int) -> Unit)? = null,
     private val onFound: (Endpoint) -> Unit,
 ) {
     private val nsd = context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -110,7 +113,7 @@ class MacDiscovery(
                             onTxt?.let { cb ->
                                 // Never let the TXT path stall resolution: onFound() and done() must still run.
                                 try {
-                                    cb(host, info.attributes[WolTxt.KEY]?.toString(Charsets.US_ASCII))
+                                    cb(host, info.attributes[WolTxt.KEY]?.toString(Charsets.US_ASCII), info.port)
                                 } catch (e: RuntimeException) {
                                     MbLog.w("discovery_txt_failed", "err=${e.javaClass.simpleName}")
                                 }
