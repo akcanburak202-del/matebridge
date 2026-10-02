@@ -24,6 +24,9 @@ public struct FrameTrace: Equatable, Sendable {
     public var writeStartUs: UInt64 = 0
     /// The transport reported the write as processed.
     public var writeDoneUs: UInt64 = 0
+    /// Metadata set by the sender (T-122): the frame is a keyframe, and its `VIDEO_FRAME` payload size.
+    public var isKeyframe = false
+    public var bytes = 0
 
     public init() {}
 

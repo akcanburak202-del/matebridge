@@ -46,6 +46,8 @@ public final class VideoPipeline: @unchecked Sendable {
     private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
     private let onFailure: @Sendable (Error) -> Void
     private let box: EncoderBox
+    /// Client keyframe requests are coalesced here (T-122).
+    private let keyframes: KeyframeGate
     private var displayInfo = "no display"
     /// A display handed over by the previous pipeline (T-049): kept instead of creating a new one.
     private var inherited: VirtualDisplay?
@@ -65,9 +67,13 @@ public final class VideoPipeline: @unchecked Sendable {
         self.onFailure = onFailure
         self.meter = CadenceMeter(fps: settings.fps)
         // The queue's keyframe callback needs the encoder, which exists only after start().
-        let box = EncoderBox()
+        let keyframes = KeyframeGate()
+        self.keyframes = keyframes
+        let box = EncoderBox(keyframes: keyframes)
         self.box = box
-        self.frames = VideoFrameQueue(keyframeNeeded: { box.requestKeyframe() })
+        let frames = VideoFrameQueue(keyframeNeeded: { box.requestKeyframe() })
+        self.frames = frames
+        box.frames = frames
     }
 
     /// Fills `STREAM_CONFIG` (pixel/point size, fps, bitrate, colour tags).
@@ -145,8 +151,12 @@ public final class VideoPipeline: @unchecked Sendable {
     /// Closes the current latency window (call with the cadence window, about once a second).
     public func latencyWindow() -> LatencyWindow { latency.take() }
 
-    /// A frame's write completed (called from the sender): feeds the latency window and the optional CSV.
+    /// A frame's write completed (called from the sender): feeds the latency window and the optional CSV, and tells
+    /// the keyframe request coalescer about written keyframes (T-122).
     public func recordTrace(_ trace: FrameTrace) {
+        if trace.isKeyframe {
+            keyframes.update { $0.keyframeWritten(nowUs: trace.writeDoneUs, bytes: trace.bytes) }
+        }
         latency.record(trace)
         latencyCsv?.append(trace)
     }
@@ -169,24 +179,48 @@ public final class VideoPipeline: @unchecked Sendable {
         return fps
     }
 
-    public func requestKeyframe() { box.encoder?.requestKeyframe(resubmitNow: true) }
+    /// Host-side keyframe (the sender's transport refused a frame): always forced, and recorded so that the client's
+    /// requests caused by the same hiccup coalesce with it.
+    public func requestKeyframe() {
+        let pushed = frames.keyframesPushed
+        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
+        box.encoder?.requestKeyframe(resubmitNow: true)
+    }
 
-    /// Handles a client `KEYFRAME_REQUEST`. For reasons that imply a rebuilt decoder (`resendsCodecConfig`) the
-    /// current `CODEC_CONFIG` is queued first and the queue is reset to hold only it, and only then is the keyframe
-    /// forced; the keyframe is therefore always pushed behind the config. Returns true if a config was re-sent
-    /// (false when the reason does not need it or no parameter sets exist yet: keyframe only, as before).
-    @discardableResult
-    public func requestKeyframe(reason: KeyframeReason) -> Bool {
+    /// Handles a client `KEYFRAME_REQUEST` through the coalescer (T-122, `KeyframeRequestCoalescer`).
+    ///
+    /// For reasons that imply a rebuilt decoder (`resendsCodecConfig`) the current `CODEC_CONFIG` is always queued and
+    /// the queue reset to hold only it; a keyframe is then forced unless the pending one is still inside the encoder,
+    /// so the keyframe is always pushed behind the config. `FRAMES_DROPPED` forces a keyframe only when none is on its
+    /// way and none was written within the coalescing window.
+    public func handleKeyframeRequest(reason: KeyframeReason) -> KeyframeRequestCoalescer.Decision {
         let encoder = box.encoder
-        var resent = false
+        let now = HostClock.nowUs()
+        let decision: KeyframeRequestCoalescer.Decision
         if reason.resendsCodecConfig {
             // The snapshot is taken under the queue lock, so an encoder-announced config cannot fall between it
             // and the reset (lock order: queue -> encoder; the encoder never calls push while holding its lock).
-            resent = frames.resync(config: { encoder?.currentCodecConfig() })
+            // The keyframe push count is read under the same lock: a keyframe pushed later is behind the config.
+            let r = frames.resyncCountingKeyframes(config: { encoder?.currentCodecConfig() })
+            decision = keyframes.update {
+                $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+            }
+        } else {
+            let pushed = frames.keyframesPushed
+            decision = keyframes.update { $0.request(reason, nowUs: now, keyframesPushed: pushed) }
         }
-        encoder?.requestKeyframe(resubmitNow: true)
-        return resent
+        if decision.forceKeyframe { encoder?.requestKeyframe(resubmitNow: true) }
+        return decision
     }
+
+    /// `handleKeyframeRequest` for callers that only need to know whether a config was re-sent.
+    @discardableResult
+    public func requestKeyframe(reason: KeyframeReason) -> Bool {
+        handleKeyframeRequest(reason: reason).action == .configResent
+    }
+
+    /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122).
+    public func takeKeyframeWindow() -> KeyframeRequestCoalescer.Window { keyframes.update { $0.takeWindow() } }
 
     /// Call when a new consumer attaches: the queue is reset to hold only [CODEC_CONFIG], stale delta frames are
     /// refused, and a keyframe is forced (also on a static screen, by re-encoding the last captured buffer). The
@@ -194,6 +228,8 @@ public final class VideoPipeline: @unchecked Sendable {
     public func prepareForNewConsumer() {
         let encoder = box.encoder
         frames.startNewConsumer(configProvider: { encoder?.currentCodecConfig() })
+        let pushed = frames.keyframesPushed
+        keyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
         encoder?.requestKeyframe(resubmitNow: true)
     }
 
@@ -268,9 +304,28 @@ public final class VideoPipeline: @unchecked Sendable {
 private final class EncoderBox: @unchecked Sendable {
     private let lock = NSLock()
     private var _encoder: HEVCEncoder?
+    private weak var _frames: VideoFrameQueue?
+    private let keyframes: KeyframeGate
+    init(keyframes: KeyframeGate) { self.keyframes = keyframes }
     var encoder: HEVCEncoder? {
         get { lock.lock(); defer { lock.unlock() }; return _encoder }
         set { lock.lock(); _encoder = newValue; lock.unlock() }
     }
-    func requestKeyframe() { encoder?.requestKeyframe() }
+    var frames: VideoFrameQueue? {
+        get { lock.lock(); defer { lock.unlock() }; return _frames }
+        set { lock.lock(); _frames = newValue; lock.unlock() }
+    }
+    /// The queue dropped a delta (called outside the queue lock): recorded as a host-side keyframe (T-122).
+    func requestKeyframe() {
+        let pushed = frames?.keyframesPushed ?? 0
+        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
+        encoder?.requestKeyframe()
+    }
+}
+
+/// Serialises the keyframe request coalescer (T-122). Never calls out while holding its lock.
+private final class KeyframeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var coalescer = KeyframeRequestCoalescer()
+    func update<T>(_ body: (inout KeyframeRequestCoalescer) -> T) -> T { lock.withLock { body(&coalescer) } }
 }

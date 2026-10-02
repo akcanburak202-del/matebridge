@@ -10,6 +10,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
     private var policy: BoundedFrameQueue
     private var waiter: (token: Token, cont: CheckedContinuation<EncodedVideoFrame?, Never>)?
     private var finished = false
+    private var pushedKeyframes: UInt64 = 0
     private let keyframeNeeded: @Sendable () -> Void
 
     /// - Parameter keyframeNeeded: called (outside the lock) when a dropped delta frame requires a new keyframe.
@@ -21,6 +22,7 @@ public final class VideoFrameQueue: @unchecked Sendable {
     public func push(_ frame: EncodedVideoFrame) {
         lock.lock()
         if finished { lock.unlock(); return }
+        if frame.isKeyframe { pushedKeyframes &+= 1 }
         policy.push(frame)
         let request = policy.takeKeyframeRequest()
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
@@ -88,8 +90,24 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// returns nil (no parameter sets exist yet).
     @discardableResult
     public func resync(config provider: () -> EncodedVideoFrame?) -> Bool {
+        resyncCountingKeyframes(config: provider).configQueued
+    }
+
+    /// Outcome of `resyncCountingKeyframes`.
+    public struct ResyncResult: Equatable, Sendable {
+        /// A config was queued (false: no parameter sets yet, queue untouched).
+        public var configQueued: Bool
+        /// `keyframesPushed` read under the same lock as the reset: every keyframe pushed later is queued behind the
+        /// config (T-122).
+        public var keyframesPushed: UInt64
+    }
+
+    /// `resync(config:)` that also returns the keyframe push count seen atomically with the reset.
+    @discardableResult
+    public func resyncCountingKeyframes(config provider: () -> EncodedVideoFrame?) -> ResyncResult {
         lock.lock()
-        guard let config = provider() else { lock.unlock(); return false }
+        let pushed = pushedKeyframes
+        guard let config = provider() else { lock.unlock(); return ResyncResult(configQueued: false, keyframesPushed: pushed) }
         policy.resync(config: config)
         var handoff: (CheckedContinuation<EncodedVideoFrame?, Never>, EncodedVideoFrame)?
         if !finished, let w = waiter, let f = policy.pop() {
@@ -98,8 +116,12 @@ public final class VideoFrameQueue: @unchecked Sendable {
         }
         lock.unlock()
         handoff.map { $0.0.resume(returning: $0.1) }
-        return true
+        return ResyncResult(configQueued: true, keyframesPushed: pushed)
     }
+
+    /// Keyframes pushed so far (including ones the policy later dropped). A keyframe forced after reading this value
+    /// has reached the queue once the count grows (T-122).
+    public var keyframesPushed: UInt64 { lock.lock(); defer { lock.unlock() }; return pushedKeyframes }
 
     /// `startNewConsumer` with the config snapshot taken under the queue lock (see `resync(config:)`). Unlike
     /// `resync`, the queue is reset even when there is no config yet.
