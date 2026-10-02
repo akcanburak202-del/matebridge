@@ -77,18 +77,18 @@ RenderThread ~%5 için kodda durgunda çizim tetikleyen tek aday katman metni (1
 
 Durum: review. `./scripts/check.sh`: ALL OK.
 
-- **Commit:** `4cf7c60` (uygulama), plan `372d15c`. Dal: `task/T-141-idle-power`.
+- **Commit:** `e86abd5` (Codex inceleme düzeltmeleri P2/P3), `4cf7c60` (uygulama), plan `372d15c`. Dal: `task/T-141-idle-power`.
 - **Dokunulan dosyalar:**
   - yeni: `video/VsyncIdle.kt` (`VsyncIdleGate`, `IdleWait`), `stream/StatsLogWindow.kt`
   - değişen: `MainActivity.kt`, `video/GlPresenter.kt`, `video/VideoRenderer.kt`, `video/VideoStats.kt`, `video/IntervalHistogram.kt` (`summaryInto`), `stream/DisplayRateDebouncer.kt` (`onPause`)
-  - testler: `test/.../video/VsyncIdleTest.kt`, `test/.../stream/StatsLogWindowTest.kt`
+  - testler: `test/.../video/VsyncIdleTest.kt` (P2 dahil: saat önce yeniden başlasa da ilk çıkış anında; üç pacer, GL modeli, tek seferlik alma), `test/.../stream/StatsLogWindowTest.kt` (P3 dahil: 800 ms'lik oturum loglanır, sonraki oturuma sızmaz)
 - **Varsayımlar:**
   - Durgunluk eşiği 300 ms (son *alınan* kareden). Gerekçe Plan'da ve `VsyncIdleGate` belgesinde.
-  - Uyurken `VsyncClock.reset()`: faz unutulur, period korunur. Uyanıştan sonraki ilk kare(ler) ilk Choreographer çağrısına kadar pacer'dan geçmeden hemen bırakılır (`releaseOutputBuffer(idx, true)`). GL yolunda uyurken gelen kare `onFrameAvailable` içinde hemen çizilir.
+  - Uyurken `VsyncClock.reset()`: faz unutulur, period korunur. **İnceleme P2:** ilk karenin hemen sunulması artık saate bağlı değil. Döngü uyurken `FirstOutputBypass` kurulur. Uyanıştan sonraki ilk çözülmüş çıkış, uyanan döngü ondan önce bir vsync vermiş olsa bile pacer'dan geçmeden hemen bırakılır (`releaseOutputBuffer(idx, true)`). Böyle bir vsync, kare kendi uyandırmasını gönderdiğinde ya da işaretçi girdisi döngüyü önceden uyandırdığında gelebilir. GL yolunda uyuyunca ayrı bir bypass kurulur. Döngü uyuyor da olsa, yeniden başlamış da olsa ilk `onFrameAvailable` kareyi hemen çizer. Akış başlarken ya da dururken bypass kaldırılır.
   - **Kartta açıkça yazmayan ek:** dokunma/kalem/işaretçi olayı (`dispatchTouchEvent`/`dispatchGenericMotionEvent`) da döngüyü uyandırır. Dokunma paneli 120'ye çıkarır; döngü uyurken bunu ölçemezdik ve ilk hareket ~100 ms boyunca 60 fps'e seyreltilirdi. Olayın kendisi değişmez, girdi yoluna yalnız bir volatile yazma eklenir. Klavye uyandırmaz.
   - Uyanıştan sonra ilk 5 taze vsync gelmeden DISPLAY_RATE raporu yok. Debouncer'ın bekleyen düşüş adayı uyurken silinir; raporlanan değer korunur. Akış başlangıcındaki davranış değişmedi (ilk değer hemen gider).
   - Çözücü giriş/çıkış iş parçacıkları ≥ 300 ms kare/çıkış yokken 20 ms bekler (4/5 ms yerine). Kare ya da çıkış gelince anında uyanırlar. Bu yüzden durgunken `detachSurface` en çok ~40 ms daha uzun sürebilir (JOIN 300 ms içinde).
-  - Log penceresi: `decoder ev=stats`, `render ev=stats`, `render ev=present` 10 s'de bir. Toplamlar, ağırlıklı ortalamalar ve histogram örnekleri 1 s pencerelerden aktarılır, yani yüzdelikler 10 s üzerinden kesin. `interval_ms` gerçek pencere uzunluğudur. `hz`, `vsync_period_us`, `buffer`, `pace_d_us`, `clock_offset_us`, `rtt_us`, `lead_ms`, `d_us`, `phase_lock` yazma anındaki değerdir (eskiden de öyleydi). Akış biterken ya da yeniden yapılandırılırken kısmi pencere yazılır (o ana kadar kapanmış saniyeler).
+  - Log penceresi: `decoder ev=stats`, `render ev=stats`, `render ev=present` 10 s'de bir. Toplamlar, ağırlıklı ortalamalar ve histogram örnekleri 1 s pencerelerden aktarılır, yani yüzdelikler 10 s üzerinden kesin. `interval_ms` gerçek pencere uzunluğudur. `hz`, `vsync_period_us`, `buffer`, `pace_d_us`, `clock_offset_us`, `rtt_us`, `lead_ms`, `d_us`, `phase_lock` yazma anındaki değerdir (eskiden de öyleydi). **İnceleme P3:** akış biterken ya da yeniden yapılandırılırken bitmemiş saniye log penceresine kapatılır (`VideoStats.closeWindow()`) ve pencere o ana kadar yazılır. Böylece 800 ms'lik bir oturumun da özeti çıkar ve yeniden kullanılan renderer'da sayaçlar sonraki oturuma sızmaz. Bu kısmi saniye için STATS gönderilmez. Sonuç olarak yeni oturumun ilk STATS'ında önceki oturumdan kalan kareler artık yok; eskiden sızıyordu.
   - **0 kareli pencere iki modda da yazılmaz.** `--ez stats_1s true` de bu satırları durgunken yazmaz; yalnız pencere 1 s olur.
   - Yeni satırlar (`MB/render`): açılışta `ev=stats_log window_ms=10000|1000`. Döngü ≥ 1 s uyuduğunda bir kez `ev=idle state=on since_frame_ms=N` yazılır. Ardından uyanınca `ev=idle state=off idle_ms=N`. Daha kısa uyumalar (ör. imleç yanıp sönmesi) log yazmaz.
   - STATS mesajı, pacer `onSkipWindow`, A/V hedefi, katman yine 1 s. Katman metni değişmediyse `setText` çağrılmaz.
@@ -99,6 +99,7 @@ Durum: review. `./scripts/check.sh`: ALL OK.
   3. Panel/DISPLAY_RATE: durgunken `display_rate` satırı gelmemeli, özellikle 0 ya da yanlış 60 olmamalı. Durgunken ekrana dokununca (panel 120'ye çıkar) Mac'te hareket başlayınca `display_rate hz=120` gecikmeden gelmeli. Host `decimated=` 60'ta takılı kalmamalı.
   4. Hareketli içerik ve oyun (önce/sonra): fps, `skip_pct`, `latency_us`, `shown_p95`, `late_drops`. 10 s satırlarında `interval_ms` ≈ 10000 olmalı, `recv` ≈ 10 × fps. Kullanıcı takılma hissetmemeli. `--ez stats_1s true` ile eski 1 s satırları gelmeli.
   5. GL yolu (`--es render gl`): durgunluktan sonra ilk kare çiziliyor mu, `gl_draw_failed` yok mu.
+  7. Kısa oturum (bağlan, ~1 s içinde kes): `decoder ev=stats` satırı `interval_ms` < 1000 ile yazılmalı. Yeniden bağlanınca ilk satırlarda önceki oturumun kareleri olmamalı.
   6. Akış bitince/arka planda `decoder ev=detach_slow` çıkmamalı (çözücü 20 ms bekleme).
 - **Açık sorular:**
   - `docs/LOGGING.md` (kartın `files:` listesinde yok, orkestratör): `decoder ev=stats`, `render ev=stats/present` artık 10 s pencere (`--ez stats_1s true` → 1 s), 0 kareli pencere yazılmaz. Yeni satırlar: `render ev=stats_log window_ms=`, `render ev=idle state=on since_frame_ms=` / `state=off idle_ms=`. LOGGING.md:72'deki "Her 1 saniyede bir `ev=stats`" cümlesi güncellenmeli.
