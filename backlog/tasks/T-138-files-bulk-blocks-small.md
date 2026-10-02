@@ -1,7 +1,7 @@
 ---
 id: T-138
 title: Dosyalar — Finder'ın video önizlemeleri tüm dosyayı indiriyor, küçük kopyalar "hazırlanıyor"da takılıyor
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-137]
