@@ -9,6 +9,7 @@ decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/test/
   - tools/pacing/
   - backlog/tasks/T-121-client-keyframe-storm.md
