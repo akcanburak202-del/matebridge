@@ -1,7 +1,7 @@
 ---
 id: T-134
 title: Tablet — Mac'i saklanan IP'ye doğrudan TCP bağlanarak uyandır (magic packet işe yaramıyor)
-status: todo
+status: review
 phase: 4
 owner: android-client-dev
 depends_on: [T-133]
@@ -42,4 +42,34 @@ Host değişikliği yok. Cihaz testi (orkestratör).
 
 ## Handoff
 
-(ajan doldurur)
+- **Commit:** `f15abe3` (uygulama), plan `4061ad4`; dal `task/T-134-client-wake-connect` (4d4ad92'den). `./scripts/check.sh` → **ALL OK**. Yeni/değişen testler: `WakeConnectTest` 21, `SessionMachineTest` +5 (40), `WolTest` +1 (22).
+- **Dosyalar:**
+  - yeni `session/WakeConnect.kt` — saf planlayıcı (deneme zamanlaması, sahiplik, keşif kararı, `transportAllows`, `classify`/`errName`, `NoWifiException`); yeni `test/.../session/WakeConnectTest.kt`
+  - `session/Wol.kt` — `WolStore`: `wol_port`, `port()` (yoksa 47001), `wakeEndpoint()`, `onResolved(..., hostPort)` (port yalnız geçerli IPv4 host + geçerli `wol` ile yazılır)
+  - `session/MacDiscovery.kt` — `onTxt(host, wol, port)`
+  - `session/SessionMachine.kt` — `Event.Start(endpoint, wakeAttempt)`, `Action.OpenControl(gen, endpoint, wakeAttempt)`; başarısız deneme → faz `IDLE`, `Ui(Disconnected(CONNECT_FAILED, 0))`, zamanlayıcı yok; `ControlOpened` sonrası normal oturum
+  - `session/SessionController.kt` — `start(endpoint, wakeAttempt)`, `wifiBinder` yapıcı parametresi, `connectForWake()` (Wi-Fi'ye bağlı soket, 3 s, `ev=wake_connect`), `SessionListener.onWakeConnect`; `retryInMs=0` olan Disconnected `reconnect` yerine `ev=wake_connect_idle` loglanır
+  - `session/SessionUi.kt` (yalnız yorum), `session/WolSender.kt` (`bindToWifi(Socket)`), `MainActivity.kt`
+  - testler: `SessionMachineTest.kt`, `WolTest.kt`
+- **Davranış / varsayımlar:**
+  - Doğrudan deneme yalnızca `WakePlanner.active` iken (+ ön planda, "Bağlantıyı kes" yok, `hostSleep.asleep` değil). Bölüm hiç başlamazsa (saklı `wol` yok, otomatikte ev ağı dışı, uyku kapısı) deneme de yok. `wol` yoksa host IP de saklanmadığı için zaten hedef yok.
+  - Deneme yalnızca oturum "boşta" iken: uç nokta seçilmemiş (Wi-Fi keşfi arıyor) ya da kendi başarısız denememiz; mod USB değil, oturum USB'de değil, AUTO yoklaması/düşüşü sürmüyor, elle adres yok. **AUTO'da `lastWifiEndpoint` biliniyorsa** (aynı etkinlikte önceden Wi-Fi'de bağlanıldıysa) `startWifi` ona hemen bağlanır; o oturumun kendi yeniden denemeleri de aynı IP:47001'e TCP olduğu için onlara dokunulmadı (doğrudan deneme araya girmez). Aynı şekilde kopmuş (LOST) bir oturumun yeniden denemeleri değişmedi.
+  - Zamanlama: bölüm başında (elle: hemen; otomatik: T-129 2 s sonra) 1. deneme; sonuç gelmeden yeni deneme yok; başarısızlıktan 2 s sonra sonraki (hepsi zaman aşımına giderse ≈ 0, 5, 10, 15, 20 s). Sonuç 5 s içinde gelmezse (ör. başlatma posta kutusunda yenisiyle değişti) beklenmez. Deneme numarası her bölümde 1'den.
+  - `result=ok` → oturum "benimsenir" (sıradan oturum, `lastWifiEndpoint`), bölümde başka deneme yok; bölüm host'a ulaşılınca `wol_stop reason=connected` ile biter. TCP açılıp ACK'ten önce kapanırsa normal yeniden bağlanma.
+  - **Keşifle yarış:** keşif bizim denememiz sürerken ya da başarısızken bulursa ona bağlanılır (`Start` önce eski bağlantıyı kapatır → tek bağlantı; test `discoveryStartReplacesAWakeAttemptWithOneConnection`); sonra o bölümde doğrudan deneme yok. Benimsenmiş oturumda keşif kuralı eskisi gibi (yalnız Disconnected iken).
+  - Bölüm doğrudan deneme başarısızken biterse (zaman aşımı) uç nokta bırakılır, panel "Mac aranıyor…" (keşif bağlanabilir). Uçuşta olan deneme bitene kadar (≤3 s) beklenir; geç başarı benimsenir.
+  - `result`: `SocketTimeoutException` → `timeout`; `ConnectException` + `ECONNREFUSED`/"refused" → `refused`; diğer her şey `error` (+ `err=<SınıfAdı>` ya da Wi-Fi yoksa `err=no_wifi`; mesaj loglanmaz, adres içerir). Wi-Fi yoksa bağlanmadan `error`. Not: mevcut `session_start host=… port=…` ve `connect_start host=…` satırları (önceden de vardı) IP içerir; dokunmadım.
+  - **"Mac uyku modunda" + "Bağlan"** artık "Mac'i uyandır" ile aynı: `clear` + uç nokta unutulur + `applyTransport` + elle bölüm (`wol_start reason=manual`). Elle adres alanı **açık ve dolu** ise o adrese bağlanır (yine elle bölüm başlar); gizli alanın hatırlanan metni sayılmaz.
+  - **Yan bulgu düzeltmesi (NOTES 15:20):** uykudan sonra "Bağlan"/"Mac'i uyandır" `currentEndpoint`'i sıfırlamıyordu; Wi-Fi modunda keşif `currentEndpoint != null && lastUi == Searching` yüzünden bulduğu Mac'i yok sayıyordu (AUTO'da `lastWifiEndpoint` hemen bağlandığı için çalışıyordu). Artık `restartUsualWay()` önce sıfırlar.
+  - Video bağlantısı (oturum benimsendikten sonra) Wi-Fi'ye bağlanmaz — tüm Wi-Fi oturumlarındaki gibi varsayılan ağ (tablette hücresel yok).
+- **Test edilmedi (tablet + Mac gerekli):** gerçek uyandırma, `Network.bindSocket` ile TCP, USB takılıyken Wi-Fi'den çıkış, sonuç sınıflandırmasının HarmonyOS istisna metinleri, panel metinleri.
+- **Tablette kontrol edilecekler** (T-132 host'u ile, `adb logcat -s 'MB:*'`):
+  1. Wi-Fi modunda bağlıyken `pmset sleepnow` → `host_sleep`; 1–2 dk hiç `wake_connect`/`wol_start`/`session_start` yok.
+  2. Tablet ekranını kapat-aç (ev ağı) → ~2 s sonra `wol_start reason=not_found`, hemen ardından `session_start … wake_attempt=1` ve `wake_connect attempt=1 result=ok ms≈400–1000`; Mac `pmset -g log`'da DarkWake → tam uyanma; tablette oturum kurulur, `wol_stop reason=connected`.
+  3. Aynı senaryoyu "Bağlan" ile (ekran açık, panel "Mac uyku modunda") → `host_sleep_clear reason=connect`, `wol_start reason=manual`, `wake_connect attempt=1 result=ok`; mod değiştirmeye gerek kalmamalı. "Mac'i uyandır" ile de aynı (`reason=wake`).
+  4. Mac kapalı/ağ dışında iken elle uyandır → ~20 s boyunca `wake_connect attempt=1..5 result=timeout|error` (aralar ~2 s + 3 s zaman aşımı), sonra `wol_stop reason=timeout`, panel "Mac aranıyor…"; sonraki 30 s'de yeni deneme yok.
+  5. AUTO modunda USB kablosu takılı (`adb reverse` var) iken Mac uyurken: USB yoklaması/düşüşü sonrası Wi-Fi'de `wake_connect … result=ok` (paket Wi-Fi'den çıkmalı); Mac uyanıp USB tüneli gelince mevcut `transport_pick`/`migrate` mantığı USB'ye geçebilir.
+
+## Açık sorular
+
+- AUTO'da `lastWifiEndpoint` biliniyorken oturumun kendi (bağlanmamış, 5 s zaman aşımlı) yeniden denemeleri Mac'i zaten TCP ile uyandırır ama Wi-Fi'ye bağlı soketle değildir; tablette varsayılan ağ Wi-Fi olduğu sürece fark yok. Gerekirse ayrı kart.
