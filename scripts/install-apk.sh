@@ -55,6 +55,9 @@ while kill -0 "$install_pid" 2>/dev/null; do
     echo "install timed out after ${TIMEOUT_S}s" >&2
     break
   fi
+  # Installed already: the AppGallery page then shows "BİTTİ"; tapping it is optional, `am start` below covers it.
+  now_ts="$("$ADB" shell dumpsys package "$PKG" | sed -n 's/.*lastUpdateTime=//p' | head -1)"
+  if [ "$now_ts" != "$before" ]; then break; fi
   read -r x y pkg rid < <(find_button) || true
   if [ -n "${x:-}" ]; then
     echo "tap $pkg $rid at $x,$y"
@@ -65,6 +68,7 @@ while kill -0 "$install_pid" 2>/dev/null; do
   fi
   x=""
 done
+kill "$install_pid" 2>/dev/null || true  # done (or timed out): do not wait on the AppGallery page
 wait "$install_pid" 2>/dev/null || true
 cat "$log"; rm -f "$log"
 
