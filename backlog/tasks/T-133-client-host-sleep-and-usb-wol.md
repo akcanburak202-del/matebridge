@@ -1,7 +1,7 @@
 ---
 id: T-133
 title: Tablet — BYE(HOST_SLEEP) sonrası "Mac uyku modunda" (otomatik yeniden bağlanma yok); USB'de de `wol` öğren
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-129]

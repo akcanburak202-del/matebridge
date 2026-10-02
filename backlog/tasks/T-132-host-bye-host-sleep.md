@@ -1,7 +1,7 @@
 ---
 id: T-132
 title: Mac — uykuya girerken oturumu BYE(HOST_SLEEP) ile kapat
-status: review
+status: done
 phase: 4
 owner: mac-host-dev
 depends_on: [T-128]

@@ -1028,3 +1028,9 @@ T-123, T-124, T-125, T-126 done.
   - Sonuç: tablet Mac'i **saklanan IP'ye doğrudan TCP bağlanarak** uyandırabilir; karanlık uyanmada oturum kurulursa T-128 `session_started` yolu Mac'i tam uyandırır (14:44 testinde doğrulandı).
 - Yan bulgu: Mac güç düğmesiyle uyanınca tablet "Mac uyku modunda" durumunda beklediği için bağlanmadı; kullanıcı modu Otomatik'e alınca bağlandı (tasarım gereği; "Bağlan" yeterli olmalı).
 - → T-134: uyandırma = saklanan IP:port'a doğrudan oturum bağlantısı (magic packet de kalır).
+
+## 2026-10-02 ~15:47 — Uçtan uca uyku/uyandırma doğrulandı (T-132..T-134, Otomatik/USB)
+
+- 15:47:10 `pmset sleepnow` → host `host_sleep_ack waited_ms=43 flushed=true` → tablet `bye_recv reason=6`, `host_sleep transport=usb` → 15:47:15 Sleep; **95 s boyunca hiç karanlık uyanma yok**.
+- 15:48:46 kullanıcı tablet ekranını açtı → `host_sleep_clear reason=foreground` → USB denemesi (tünel yok) → `usb_lost` → Wi-Fi'de saklanan IP'ye `wake_connect attempt=1 result=ok ms=501` → Mac "Wake ... E_RX_IP_PACKET/HID Activity" 15:48:50 → host `power state=awake reason=session_started` + `wake_display` → görüntü ~2 s (kullanıcı). 15:48:54 `transport_migrate ok=1 to=usb`, `wol_refresh result=stored`.
+- Kullanıcıdan: güç düğmesine gerek kalmadı. Magic packet hâlâ gönderiliyor (zararsız, Ethernet'te işe yarayabilir) ama uyandıran doğrudan TCP bağlantısı.

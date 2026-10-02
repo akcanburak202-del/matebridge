@@ -1,7 +1,7 @@
 ---
 id: T-134
 title: Tablet — Mac'i saklanan IP'ye doğrudan TCP bağlanarak uyandır (magic packet işe yaramıyor)
-status: review
+status: done
 phase: 4
 owner: android-client-dev
 depends_on: [T-133]
