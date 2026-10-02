@@ -72,6 +72,51 @@ object UsbProbe {
     }
 }
 
+/**
+ * Probe generations across threads (T-133). The main thread [bump]s to invalidate every earlier probe (a new pick,
+ * a transport change, background, BYE(HOST_SLEEP)); the probe thread [attach]es its socket right before connecting and
+ * must not connect when that fails, so a queued or delayed probe never reaches the Mac (`adb reverse` connects dark-wake
+ * a sleeping Mac). A bump also closes the socket of a probe already connecting, which then fails at once.
+ */
+class ProbeGuard {
+    private var gen = 0
+    private var inFlight: java.io.Closeable? = null
+    private var inFlightGen = -1
+
+    /** Invalidates every earlier probe (closing one that is connecting) and returns the new current generation. */
+    fun bump(): Int {
+        val (newGen, toClose) = synchronized(this) {
+            gen++
+            val c = inFlight
+            inFlight = null
+            inFlightGen = -1
+            gen to c
+        }
+        try { toClose?.close() } catch (_: java.io.IOException) {}
+        return newGen
+    }
+
+    @Synchronized fun isCurrent(g: Int): Boolean = g == gen
+
+    /** Probe thread, right before connecting: false (do not connect) when [g] is no longer current. */
+    @Synchronized
+    fun attach(g: Int, socket: java.io.Closeable): Boolean {
+        if (g != gen) return false
+        inFlight = socket
+        inFlightGen = g
+        return true
+    }
+
+    /** Probe thread, after the connect returned or failed. */
+    @Synchronized
+    fun detach(g: Int) {
+        if (inFlightGen == g) {
+            inFlight = null
+            inFlightGen = -1
+        }
+    }
+}
+
 /** Whether a USB cable is plugged in, as far as the system tells us. */
 enum class CableState(val logName: String) { CONNECTED("connected"), DISCONNECTED("disconnected"), UNKNOWN("unknown") }
 

@@ -374,6 +374,21 @@ class SessionMachineTest {
         assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.REJECTED)), r2.ui())
     }
 
+    @Test fun hostSleepByeFailsWithoutReplyOrRetry() {
+        val gen = connectAccepted()
+        step(Event.Received(gen, cfg(1)))
+        val r = step(Event.Received(gen, Bye(Bye.HOST_SLEEP)))
+        assertFalse(r.has<Action.Send>()) // no BYE back: the Mac is going to sleep
+        assertEquals(false, r.only<Action.CloseControl>().graceful)
+        assertTrue(r.has<Action.CloseVideo>())
+        assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.HOST_SLEEP)), r.ui())
+        assertFalse(m.inputAllowed)
+        // Nothing goes out afterwards: no retry, no PING, however long we wait.
+        for (i in 0 until 40) assertTrue(step(Event.Tick(0), 500_000).isEmpty())
+        // A user action starts a normal session again.
+        assertTrue(step(Event.Start(ep)).has<Action.OpenControl>())
+    }
+
     @Test fun stopSendsByeGracefullyAndClosesVideo() {
         val gen = connectAccepted()
         step(Event.Received(gen, cfg(1)))
