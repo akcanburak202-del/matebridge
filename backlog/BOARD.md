@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-140](tasks/T-140-refresh-vote-experiment.md) | Deney — dokunmadan 120 Hz için "animasyon oyu" (açılış parametresiyle, varsayılan kapalı) | 5 | android-client-dev | [] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
