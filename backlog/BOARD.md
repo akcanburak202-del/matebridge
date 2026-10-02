@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-144](tasks/T-144-drawing-mode.md) | "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi | 5 | android-client-dev | [T-143] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -165,3 +159,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-141](tasks/T-141-idle-power.md) | Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak | 5 | android-client-dev | [T-140] |
 | [T-142](tasks/T-142-stall-detector-opt-in.md) | Ses takılma dedektörünü (mb-stall) açılış parametresine bağla, varsayılan kapalı | 5 | android-client-dev | [T-120, T-141] |
 | [T-143](tasks/T-143-game60-mode.md) | "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır | 5 | android-client-dev | [T-109] |
+| [T-144](tasks/T-144-drawing-mode.md) | "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi | 5 | android-client-dev | [T-143] |

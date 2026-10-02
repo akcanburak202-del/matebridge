@@ -1,6 +1,6 @@
 # 0017 — Çizim modu: kararlı 120 fps, %90
 
-- **Durum:** kabul (ölçek cihaz ölçümüyle kesinleşecek)
+- **Durum:** geri alındı (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -15,3 +15,6 @@ Kalemle çizerken panel 120 Hz'e çıkıyor. Akıcı mod (120 fps, %100) tam ç�
 ## Sonuçlar
 - Kart T-144 (tablet).
 - Performans modu kalır (kullanıcı kararı, 0016 bağlamı). Çizim kararlı çıkarsa Performans'ın gereği ayrıca konuşulur.
+
+## Sonradan (2026-10-03)
+Cihaz ölçümü bağlamdaki varsayımı çürüttü: Akıcı (%100) çizimde de 120 fps'e yetişiyor (NOTES 2026-10-03 ~00:40). Kullanıcı Çizim modunu istemedi. T-144 geri alındı. Mod listesi 0016'daki gibi kalır.
