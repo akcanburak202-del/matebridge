@@ -100,7 +100,11 @@ public final class VideoSender: @unchecked Sendable {
             let size = frame.data.count
             var timing = encoded.trace
             let measure = trace != nil && !encoded.isCodecConfig
-            if measure { timing.writeStartUs = clock() }
+            if measure {
+                timing.writeStartUs = clock()
+                timing.isKeyframe = encoded.isKeyframe
+                timing.bytes = size
+            }
             let accepted = transport.send(frame) { [self, timing] ok in
                 if !ok { markFailed(); signal.yield() }
                 if ok, measure, let trace {

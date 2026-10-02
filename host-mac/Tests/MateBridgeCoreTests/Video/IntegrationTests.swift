@@ -201,6 +201,11 @@ final class VideoSenderTests: XCTestCase {
         XCTAssertEqual(t.deliveredUs, 2)
         XCTAssertGreaterThan(t.writeStartUs, 0)
         XCTAssertGreaterThan(t.writeDoneUs, t.writeStartUs)
+        // T-122: keyframe flag and payload size travel with the trace (keyframe write stats, coalescing).
+        let k = traces.get()[0]
+        XCTAssertTrue(k.isKeyframe)
+        XCTAssertFalse(t.isKeyframe)
+        XCTAssertEqual(k.bytes, transport.sent.first?.data.count)
         await sender.stop()
     }
 

@@ -42,6 +42,19 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 Her 1 saniyede bir `ev=stats` satırı: fps, bitrate, kuyruk derinlikleri, düşürülen kare, girdi olay sayısı. Ekrandaki istatistik katmanı da aynı sayaçlardan beslenir.
 
+## Keyframe isteği birleştirme (Mac, `net`, T-122)
+
+İstemcinin `KEYFRAME_REQUEST`'i yolda ya da yeni yazılmış bir IDR varsa yeni IDR zorlamaz (`KeyframeRequestCoalescer`).
+
+- `ev=keyframe_request reason=<n> action=forced|coalesced|config_resent idr_forced=0|1 since_idr_ms=<n>|-` (info): her istek için bir satır.
+  - `reason`: 0 STARTUP, 1 DECODE_ERROR, 2 FRAMES_DROPPED.
+  - `forced`: yeni IDR zorlandı.
+  - `coalesced`: zorlanmadı, yalnız sayıldı. Sebep: zorlanmış bir IDR henüz yazılmadı (en çok 1 sn) ya da son IDR yazımı 250 ms'den yeni.
+  - `config_resent`: STARTUP / DECODE_ERROR. `CODEC_CONFIG` yeniden kuyruğa kondu. `idr_forced=0` ise zorlanmış IDR hâlâ kodlayıcıdaydı ve config'in arkasından gelir. Önceden yazılmış bir IDR yeniden kurulan çözücüye yaramaz, o yüzden yeni IDR zorlanır.
+  - `since_idr_ms`: son keyframe yazımının (çekirdeğe verilmesinin) bitişinden bu yana; hiç yazılmadıysa `-`.
+  - Eski ayrı `ev=codec_config_resent` satırı yerine `action=config_resent`.
+- `net ev=stats` satırının sonuna: `idr=<n> idr_bytes_max=<n>`: önceki stats satırından bu yana yazımı biten keyframe sayısı ve en büyüğünün `VIDEO_FRAME` yük boyutu (bayt).
+
 ## Ses gönderim zamanlaması (Mac, `audio`, T-116)
 
 Yalnız ölçüm; davranışı değiştirmez. Değerler oturum kuyruğunda (`dev.matebridge.session`) toplanır.
