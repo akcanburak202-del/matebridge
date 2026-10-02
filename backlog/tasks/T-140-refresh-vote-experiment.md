@@ -1,7 +1,7 @@
 ---
 id: T-140
 title: Deney — dokunmadan 120 Hz için "animasyon oyu" (açılış parametresiyle, varsayılan kapalı)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -53,3 +53,10 @@ Durum: review. check.sh: ALL OK.
 - **Varsayımlar:** Yansıma anahtar kimliği `matebridge_rvote`, aralık (120,120,120,priority); öncelik varsayılan 0, `--ei rvote_prio N` ile değişir (kartta yoktu; hwEmui dex'inde öncelik anlamı doğrulanmadı). Bırakma = (0,0,0,prio) aralığı (`FrameRange.isStop()` bunu "dur" sayıyor). Kare hızı = 1 sn pencerede alınan kare (`s.received`). Oy yalnız ön planda ve `SessionUi.Connected` iken açılıyor; `onResume` eklendi (`foreground` bayrağı).
 - **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbiri cihazda denenmedi. Dene: `am start -n dev.matebridge.client/.MainActivity --ei rvote 1` (sonra 2, 3); logcat `MB/render`: `rvote_config`, `rvote state=on reason=fps`, yansımada `rvote_reflect ok=1 ctor=4` ya da `rvote_reflect_failed err=...`; `lcd_fps_scence current_fps` ve AGP `animFps` dokunmasız 120 mi; `--ei rvote_min_fps 0`; düşük fps akışında ~1 sn sonra `state=off`; ana iş parçacığı CPU; kalem/dokunma/hover girdisi etkilenmiyor mu; arka plana alınca `reason=background`. Mod verilmezse `rvote*` logu hiç çıkmamalı.
 - **Açık sorular:** Yok. Hiddenapi BLOCKED olduğundan yansıma muhtemelen reddedilir; bu da deney sonucudur.
+
+### Cihaz sonucu (orkestratör, 2026-10-02 22:30–22:43, USB, oyun modu, dokunmasız): **olumsuz**
+
+- Durgun ekran (rvote 1, kapı 70): oy hiç açılmadı (doğru), panel %100 60 Hz, istemci ~%19–21 CPU (kare yokken).
+- Oyun, kapı 70: akış hep ~60 fps, çünkü panel 60 Hz → `DISPLAY_RATE 60` → host 60'a seyreltiyor. Kapı ≥70'i neredeyse hiç görmedi (tavuk-yumurta). Oy yalnız birkaç saniyelik 70+ anlarında açıldı.
+- Oyun, `rvote_min_fps 0` (oy 60'ar sn kesintisiz açık): **mod 1 (animasyon) ve mod 2 (yansıma, `rvote_reflect ok=1 ctor=4`, hiddenapi reddetmedi) ikisinde de panel 60 Hz.** AGP `animFps -1`, `CheckAnimationTimeOut Before 0, After 0`, "set animation refresh rate configs" hiç gelmedi → oy AGP'ye ulaşmıyor ya da yok sayılıyor. Mod 1 istemciye ~+%20 CPU ekledi.
+- Sonuç: uygulama içinden dokunmasız 120 Hz yolu bulunamadı. Kod varsayılan kapalı kalıyor (parametre verilmezse çalışmıyor); ileride kaldırılabilir.

@@ -1068,3 +1068,10 @@ T-123, T-124, T-125, T-126 done.
 - **Kapalı yollar (dex/native incelemesi, cihazda tetiklenmedi):** sahne API'si (`com.huawei.hwaps.HwApsManagerEx` → `setSceneInfoToAgp`, `TARGET_FPS_120HZ`) hiddenapi engelli ve sunucu tarafı uid 1000 istiyor; AGP ayrıcalıklı çağrıları `ACCESS_SURFACE_FLINGER` ile koruyor (adb shell de geçemez); Oyun Alanı'na ekleme sistem imzası istiyor ve oyun stratejisi de boşta 60. Çözücü başlarken gelen `AGP-3rd: set news video event` 60'a çeken bir yol ("news video scene").
 - **Açık aday (çıkarım, cihazda denenmeli):** uygulama içinde çalışan `android.view.DynamicRefreshRateHelper` (hwEmui.jar), normal kaydırma/animasyonların 120'ye çıkardığı "animasyon oyu"nu (AGP işlem 107) izinsiz gönderiyor. Akış hızlıyken sürekli bir animasyon (görünmez 1×1 View'u geçersiz kılan sonsuz ValueAnimator) boşta 120'yi tutabilir. Olmazsa yansımayla `DynamicRefreshRateHelper.setRefreshRate(...)`. Başarı ölçütü: dokunmasız anda `AGPService ... animFps 120` / `lcd_fps_scence current_fps:120`.
 - Ölçüm araçları scratch'te: `mbmon.sh` (1 Hz panel hızı, sıcaklık, frekans, CPU payları; `/data/local/tmp/mbmon.txt`), `an.py` (pencere özeti, `MB/decoder recv` ve AGP dokunma olaylarıyla).
+
+## 2026-10-02 ~22:45 — T-140 deneyi: animasyon oyu dokunmasız 120 Hz vermiyor
+
+- Kurulum: USB, oyun modu, kullanıcı oyunda dokunmadan (klavye/gamepad). Ölçüm `mbmon.sh` + AGP logları.
+- Animasyon yolu (sonsuz ValueAnimator + 1×1 View) ve yansıma yolu (`DynamicRefreshRateHelper.setRefreshRate`, hiddenapi reddetmedi) 60'ar sn kesintisiz açıkken panel %100 60 Hz. AGP `animFps -1`, animasyon kaydı yok. **Uygulama içinden dokunmasız 120 Hz yolu yok**; kalan yollar root ister (NOTES ~21:30).
+- Yan bulgu: panel 60 Hz iken DISPLAY_RATE geri bildirimi host'u 60 fps'e indiriyor. Oyun modunda dokunmasız oyun fiilen 60 fps. Dokunma, BT fare ve trackpad paneli 120'ye çıkarıyor (T-051), klavye ve gamepad çıkarmıyor.
+- Maliyet: durgun ekranda (kare yok) istemci ~%20 tek çekirdek, toplam ~%70–80/800. Oyunda (60 fps) istemci ~%100, surfaceflinger %15, codec %15, toplam ~%210–240/800. 5 dk oyunda SoC ~37 °C, frekans düşüşü yok.
