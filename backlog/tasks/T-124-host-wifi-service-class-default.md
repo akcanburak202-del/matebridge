@@ -1,7 +1,7 @@
 ---
 id: T-124
 title: Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI)
-status: todo
+status: in-progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -42,7 +42,11 @@ Kullanıcı: "kesinti sanki azaldı". T-088'de servis sınıfının video verimi
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `TransportKnobs.swift`: `ServiceClassKnob.parse` için varsayılan `.signaling` olur (nil, boş ya da tanınmayan değer → `signaling`, diğer düğmelerle aynı kural). Yalnızca açık `off` eski davranışı (sınıf yok) verir; `video` aynen kalır. `logFields` her zaman `service_class=<ad> [service_class_source=env|default]` ile başlar; bunun için `ServiceClassSettings` benzeri bir kaynak bilgisi (`env`/`default`) eklenir ve test edilir.
+2. `SessionServer.swift`: `ev=listening` yeni alanları taşır. BSD kontrol/video bağlantısı kabul edildiğinde `SO_NET_SERVICE_TYPE` gerçekten uygulandı mı kontrol edilir ve loglanır; uygulanamazsa `warning` satırı yazılır.
+3. Testler (`TransportKnobsTests`): varsayılan (`nil`, boş, tanınmayan, boş ortam) → `signaling`; `off` → sınıf yok; log alanları.
+4. `docs/LOGGING.md`: `ev=listening` açıklaması ve yeni uygulama/uyarı satırı.
+5. `./scripts/check.sh`, Handoff, commit.
 
 ## Handoff
 
