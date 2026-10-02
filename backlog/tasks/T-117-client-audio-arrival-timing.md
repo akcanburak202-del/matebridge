@@ -1,7 +1,7 @@
 ---
 id: T-117
 title: Tablet — ses paketi varış ölçümü (varış aralığı, tek yön gecikme, okuma başına paket) ve boşlukta video okuyucuyla karşılaştırma
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-115
 title: Tablet — seyrek karelerde (boşluktan sonraki ilk kare) kilit tutmasını kaldır; boşta görüntü gecikmesi bir vsync azalsın
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: []

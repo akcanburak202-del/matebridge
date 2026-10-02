@@ -851,3 +851,36 @@ Canlı oturum (USB, panel 60 Hz, boşta masaüstü ~10 fps): `latency_us` ~18,9 
 - Taban hesabı, güvenlik 20 ms'de bile: paketleme ~5 + zamanlayıcı ~2,5 + aktarım ~3 + seviye ~25–28 + AAudio tamponu 20 + cihaz ~4 ≈ **58 ms**.
 
 **Ölçülmeyen:** paket başına varış aralığı ve tek yön gecikme (alan var: `capture_time_us` + `ClockSync`, log yok); host oturum kuyruğu gecikmesi.
+
+## 2026-10-02 ~10:10 — T-115/T-116/T-117 cihazda (USB, kullanıcı çizim/kaydırma/yazı + 6,5 dk ses)
+
+Kullanıcı sorun görmedi.
+
+**Görüntü (T-115), saniyelik pencere ortalamaları, eski oturum (1011195598) → yeni (2611693067):**
+
+| durum | `pace_add_ms` | `latency_us` (ms) | skip % | late_drops/s |
+|---|---|---|---|---|
+| 60 Hz boşta | 13,6 → **1,3** | 17,9 → 10,6 | 1,2 → 0,6 | 0,27 → 0,39 |
+| 60 Hz hareket | 6,6 → 9,5 | 24,5 → 18,6 | 4,5 → 2,0 | 4,9 → 2,9 |
+| 120 Hz boşta | 2,9 → 0,6 | 17,7 → 15,5 | 0,4 → 0,2 | 0,15 → 0,03 |
+| 120 Hz hareket | 4,4 → 2,4 | 21,3 → 13,2 | 2,7 → 2,2 | 4,1 → 4,6 |
+
+- `video_ms` boşta 51 → ~36. Akıcılıkta gerileme yok. Oturum açılışındaki ilk 120 Hz saniyelerinde 16–29 late_drop/s görüldü; sonra normale döndü.
+- Yan bulgu: tablet loglarında `sid=` aynı oturumda ~20 sn'de bir `0` ile gerçek değer arasında gidip geliyor (yalnız log etiketi, oturum kopmuyor).
+
+**Ses (T-116 + T-117), 387 s çalma:**
+- Host temiz:
+  - `write_int_ms_max` hiç 20'yi aşmadı (en çok 19,9);
+  - `queue_lag` p50 0,02 / max 0,23 ms;
+  - `partial_writes=0`, `gaps=0`, `send_gap` satırı yok.
+  - `cap_to_write` p50 ~14 ms: 10 ms paketleme + 5 ms zamanlayıcı, beklenen.
+- Tablet varışı:
+  - `arr_int` p50 9,9 ms;
+  - `owd` p50 5,7 / p95 7,5 ms (paket süresi hariç; yakalama→varış ≈ 15,7 ms);
+  - `per_read` 1, `decrypt` < 1 ms (en çok 6,7).
+- 6,5 dakikada **1 alt taşma**. O anda `audio_arrival_gap` `gap_ms=23 owd_ms=31 since_video_ms=20.9`, ardından `gap_ms=27 owd_ms=48 per_read=2`. Host o anda düzenli yazıyordu; paket aktarımda/tablet çekirdeğinde ~40 ms tutuldu, video okuyucu da aynı anda ~21 ms veri almamıştı. Bu, adb USB tüneli ya da tablet çekirdeği demek; ikisini ayırmak için Wi-Fi karşılaştırması gerekir.
+- Diğer `audio_arrival_gap` satırları 20–30 ms, `owd` 14–28 ms; alt taşma yaratmadı.
+- **Asıl maliyet: hatırlanan güvenlik payı.**
+  - `safety_ms` 35–40 (açılışta saklı 40 ile başladı), `level_ms` ~42;
+  - `audio_ms` ~80, `video_ms` ~36 → **`av_offset_ms` ~44** (ses geride);
+  - küçülme dakikada −1 ms; tek alt taşma +5 ve 40'a geri.

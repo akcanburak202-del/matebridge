@@ -1,7 +1,7 @@
 ---
 id: T-116
 title: Host — ses gönderim zamanlaması ölçümü (oturum kuyruğu bekleme, yakalama→yazım, yazımlar arası en büyük aralık)
-status: review
+status: done
 phase: 5
 owner: mac-host-dev
 depends_on: []
