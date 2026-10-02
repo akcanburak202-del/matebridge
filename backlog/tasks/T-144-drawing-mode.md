@@ -1,7 +1,7 @@
 ---
 id: T-144
 title: "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi
-status: todo
+status: doing
 phase: 5
 owner: android-client-dev
 depends_on: [T-143]
@@ -29,7 +29,10 @@ Karar 0017: kalemle çizimde neredeyse tam netlikte kararlı 120 fps veren "Çiz
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `StreamMode`: `DRAWING("drawing","Çizim",120,900)` SMOOTH ile PERFORMANCE arasına; `toPrefs`/`toastText` isteğe bağlı `drawScale: Int?` alır (yalnız DRAWING'de etkili, `clampDrawScale` 500–1000).
+2. `GameModeSettings.prefs(mode, drawScale)` parametreyi iletir (oyun katmanı DRAWING için kurulmaz, `isGame` false).
+3. `MainActivity`: `draw_scale` extra'sı açılışta okunur, bir kez `session ev=draw_scale permille=N` loglanır; tüm `prefs`/`toastText` çağrıları parametreyi geçirir.
+4. Testler: sıra, parse, sıkıştırma, yalnız Çizim etkilenir, oyun katmanı yok; mevcut döngü testi güncellenir.
 
 ## Handoff
 
