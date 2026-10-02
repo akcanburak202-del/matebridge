@@ -58,6 +58,19 @@ public final class StreamCoordinator: @unchecked Sendable {
     public var onOverflow: @Sendable () -> Void = {}
 
     private static let tickKey = 1, statsKey = 2, keyframeKey = 3, deferredWakeKey = 4
+    /// Backoff of the one pipeline rebuild after a failure.
+    private static let pipelineRetryUs: UInt64 = 1_000_000
+    /// After a deferred display wake (T-128), how long the rebuild waits for the displays to power on.
+    private static let retryAfterDeferredWakeUs: UInt64 = 500_000
+
+    private static func wallMs() -> UInt64 { UInt64(max(0, Date().timeIntervalSince1970) * 1_000) }
+
+    /// Sleeps until `deadlineUs` on the host clock (no-op if it has passed).
+    private func sleep(until deadlineUs: UInt64) async {
+        let now = HostClock.nowUs()
+        guard deadlineUs > now else { return }
+        try? await Task.sleep(nanoseconds: (deadlineUs - now) * 1_000)
+    }
     private static func prefsKey(_ sessionID: UInt32) -> Int { (1 << 40) + Int(sessionID) }
     private static func displayRateKey(_ sessionID: UInt32) -> Int { (2 << 40) + Int(sessionID) }
 
@@ -128,6 +141,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             switch e {
             case .videoAttached(let link): link.cancel()
             case .shutdown: mailbox.post(e, forced: true)  // never lose the shutdown request
+            // Never lose a session end either (T-128): it releases the display-sleep assertion and ends the episode.
+            // A dropped start needs nothing: `onOverflow` ends that session, which posts its end.
+            case .sessionEnded: mailbox.post(e, forced: true)
             default: break
             }
         }
@@ -196,7 +212,9 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     public func sessionEnded() {
         liveSessionLock.withLock { liveSessionID = nil }
-        post(.sessionEnded)
+        // Forced (beyond the lifecycle cap, at most one per session): the display-sleep assertion is released here,
+        // so this event must never be dropped by an overflow (T-128).
+        post(.sessionEnded, forced: true)
     }
 
     public func videoAttached(_ link: VideoLink) { post(.videoAttached(link)) }
@@ -298,6 +316,11 @@ public final class StreamCoordinator: @unchecked Sendable {
                                 base: base, transport: transport)
         prefsGate = StreamPrefsGate()
         resetDisplayRate()
+        // T-128: an accepted session means the Mac is running, also after a dark wake (Wake-on-LAN), which never
+        // sends `did_wake`: open the gate so the T-081 wake can bring the displays (and the full wake) back.
+        if gateLock.withLock({ sleepGate.sessionStarted() }) {
+            log(.info, "power", "state=awake reason=session_started wall_ms=\(Self.wallMs())")
+        }
         logDisplaySleep(displaySleep.hold())
         log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
             + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) codec=\(settings.codec.logName) "
@@ -478,7 +501,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onPipelineFailed(id: Int, message: String, wake: DisplayWakeReason?) async {
         guard id == pipelineID, pipeline != nil else { return }
         log(.error, "pipeline_failed", "error=\(message)")
-        wakeDisplayIfNeeded(wake)  // before the retry backoff, so the displays are up when it runs
+        let failedAt = HostClock.nowUs()
+        // Wakes at once, or (capture_source_lost, T-128) defers the wake by `SleepWakeGate.captureLossDeferUs`.
+        wakeDisplayIfNeeded(wake)
         await stopConsumer()
         pipeline = nil  // the pipeline already closed its display and queue
         lease.displayLost()
@@ -487,7 +512,18 @@ public final class StreamCoordinator: @unchecked Sendable {
         // reconnect its video connection, which then gets a sender.
         guard let live = session, !pipelineRetried, !isShuttingDown else { return }
         pipelineRetried = true
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // The retry comes at least `pipelineRetryUs` after the failure. With a deferred wake pending (T-128) it waits
+        // for that wake's deadline, runs the wake itself (this loop is busy until the retry, so `.deferredWakeDue`
+        // would only be handled after it) and then gives the displays `retryAfterDeferredWakeUs` to come up;
+        // otherwise the retry would always land inside the deferral window and find the displays still dark.
+        var retryAt = failedAt + Self.pipelineRetryUs
+        if let deadline = gateLock.withLock({ sleepGate.pendingDeadlineUs }) {
+            await sleep(until: deadline)
+            guard !isShuttingDown else { return }
+            onDeferredWakeDue()
+            retryAt = max(retryAt, deadline + Self.retryAfterDeferredWakeUs)
+        }
+        await sleep(until: retryAt)
         guard !isShuttingDown, pipeline == nil else { return }
         log(.info, "pipeline_retry")
         _ = lease.sessionStarted(device: live.deviceID, settings: live.settings)
@@ -574,10 +610,14 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// waits `SleepWakeGate.captureLossDeferUs` for a sleep notification, since the displays go dark before it.
     private func wakeDisplayIfNeeded(_ reason: DisplayWakeReason?) {
         guard let reason, session != nil else { return }
-        let request = gateLock.withLock { sleepGate.request(reason, now: HostClock.nowUs()) }
+        let now = HostClock.nowUs()
+        let (request, attempt): (SleepWakeGate.Request, WakeAttempt) = gateLock.withLock {
+            let request = sleepGate.request(reason, now: now)
+            return (request, request == .wakeNow ? wakeDisplayLocked(reason, now: now) : .none)
+        }
         switch request {
         case .wakeNow:
-            wakeDisplay(reason)
+            logWake(attempt, reason: reason)
         case .deferred(let deadline):
             log(.info, "wake_display_deferred",
                 "reason=\(reason.rawValue) defer_ms=\(SleepWakeGate.captureLossDeferUs / 1_000)")
@@ -593,10 +633,14 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// the end of the session) came first. Woken early (clock skew): wait for the rest.
     private func onDeferredWakeDue() {
         let now = HostClock.nowUs()
-        let (reason, stillPending) = gateLock.withLock { (sleepGate.due(now: now), sleepGate.pendingDeadlineUs) }
+        let sessionActive = session != nil
+        let (reason, stillPending, attempt) = gateLock.withLock {
+            () -> (DisplayWakeReason?, UInt64?, WakeAttempt) in
+            guard let reason = sleepGate.due(now: now) else { return (nil, sleepGate.pendingDeadlineUs, .none) }
+            return (reason, nil, sessionActive ? wakeDisplayLocked(reason, now: now) : .none)
+        }
         if let reason {
-            guard session != nil else { return }
-            wakeDisplay(reason)
+            logWake(attempt, reason: reason)
         } else if let stillPending {
             scheduleDeferredWake(at: stillPending)
         }
@@ -611,28 +655,44 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
     }
 
-    /// T-081 rate limit, then the user-activity declaration.
-    private func wakeDisplay(_ reason: DisplayWakeReason) {
-        let decision = wakePolicy.displayLost(reason, sessionActive: session != nil, now: HostClock.nowUs())
-        guard case .wake(let shouldLog, let wakes) = decision else { return }
-        if let failure = waker.declareUserActivity() {
-            log(.warning, "wake_display_failed", "reason=\(reason.rawValue) iokit=\(failure)")
-        } else if shouldLog {
-            log(.info, "wake_display", "reason=\(reason.rawValue) wakes=\(wakes)")
+    private enum WakeAttempt {
+        case none
+        case woke(log: Bool, wakes: Int)
+        case failed(String)
+    }
+
+    /// T-081 rate limit, then the user-activity declaration. The caller holds `gateLock` and the gate has just
+    /// approved the wake: the power handler takes the same lock before a sleep is acknowledged
+    /// (`IOAllowPowerChange`), so a `will_sleep` cannot slip in between the decision and the declaration and have its
+    /// sleep cancelled by it (T-128 review). Logging happens after the lock is released (`logWake`).
+    private func wakeDisplayLocked(_ reason: DisplayWakeReason, now: UInt64) -> WakeAttempt {
+        guard !sleepGate.sleeping else { return .none }
+        let decision = wakePolicy.displayLost(reason, sessionActive: session != nil, now: now)
+        guard case .wake(let shouldLog, let wakes) = decision else { return .none }
+        if let failure = waker.declareUserActivity() { return .failed(failure) }
+        return .woke(log: shouldLog, wakes: wakes)
+    }
+
+    private func logWake(_ attempt: WakeAttempt, reason: DisplayWakeReason) {
+        switch attempt {
+        case .none: break
+        case .failed(let failure): log(.warning, "wake_display_failed", "reason=\(reason.rawValue) iokit=\(failure)")
+        case .woke(let shouldLog, let wakes):
+            if shouldLog { log(.info, "wake_display", "reason=\(reason.rawValue) wakes=\(wakes)") }
         }
     }
 
     // MARK: System power (T-128)
 
-    /// Power observer queue. Updates the gate at once (a pending deferred wake is dropped before the sleep is
-    /// acknowledged) and logs the state on change, with the wall clock to line it up with `pmset -g log`.
+    /// Power observer queue, before the sleep is acknowledged. Updates the gate under `gateLock` (waiting for a wake
+    /// declaration in progress, see `wakeDisplayLocked`; a pending deferred wake is dropped) and logs the state on
+    /// change, with the wall clock to line it up with `pmset -g log`.
     private func onPower(_ event: PowerEvent) {
         let outcome = gateLock.withLock { sleepGate.power(event, now: HostClock.nowUs()) }
         let sid = liveSessionLock.withLock { liveSessionID } ?? 0
         if outcome.logState {
-            let wallMs = UInt64(max(0, Date().timeIntervalSince1970) * 1_000)
             logger.log(.info, "power", sessionID: sid, generation: 0,
-                       fields: "state=\(event.rawValue) wall_ms=\(wallMs)")
+                       fields: "state=\(event.rawValue) wall_ms=\(Self.wallMs())")
         }
         if let lost = outcome.suppressedPending {
             logger.log(.info, "wake_display_suppressed", sessionID: sid, generation: 0,

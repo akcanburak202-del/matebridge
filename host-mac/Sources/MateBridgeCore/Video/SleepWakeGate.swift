@@ -43,7 +43,9 @@ public enum PowerEvent: String, Sendable, Equatable {
 ///   happens; the first refused wake of such an episode is logged (`wake_display_suppressed`);
 /// - `capture_source_lost` (the first symptom) waits `captureLossDeferUs` before waking; a sleep notification in that
 ///   window drops it. A further loss while one is pending joins it (it never wakes earlier);
-/// - `display_create_nil` while awake and with nothing pending wakes at once, as in T-081.
+/// - `display_create_nil` while awake and with nothing pending wakes at once, as in T-081;
+/// - an accepted session opens the gate (`sessionStarted()`): a dark wake (Wake-on-LAN) never sends `did_wake`;
+/// - a pending wake more than `stalePendingUs` past its deadline is stale (its `due` call was lost) and is replaced.
 public struct SleepWakeGate: Sendable {
     public enum Request: Equatable, Sendable {
         /// Wake now (subject to the T-081 rate limit).
@@ -66,6 +68,8 @@ public struct SleepWakeGate: Sendable {
 
     /// How long a `capture_source_lost` waits for a sleep notification before waking the displays.
     public static let captureLossDeferUs: UInt64 = 1_500_000
+    /// A pending wake still waiting this long after its deadline is stale (its `due` call was lost).
+    public static let stalePendingUs: UInt64 = 1_000_000
 
     public let deferUs: UInt64
     /// True from a sleep notification until the system is awake again (or the sleep was cancelled).
@@ -110,7 +114,15 @@ public struct SleepWakeGate: Sendable {
             suppressionLogged = true
             return .suppressed(log: log)
         }
-        if pendingReason != nil { return .pending }
+        if pendingReason != nil {
+            // A pending wake whose deadline is long gone lost its `due` call (e.g. the coordinator's mailbox dropped
+            // it on overflow): it would otherwise hold back every later wake. Start over with this loss.
+            if let deadline = pendingDeadlineUs, now > deadline, now - deadline > Self.stalePendingUs {
+                cancelPending()
+            } else {
+                return .pending
+            }
+        }
         switch reason {
         case .captureSourceLost:
             let deadline = now + deferUs
@@ -130,6 +142,20 @@ public struct SleepWakeGate: Sendable {
         pendingReason = nil
         pendingDeadlineUs = nil
         return reason
+    }
+
+    /// A session was accepted: the Mac is evidently running (it answered a tablet), so the gate opens and anything
+    /// pending is dropped. This covers a dark wake (e.g. Wake-on-LAN): `IORegisterForSystemPower` clients are told
+    /// `SystemHasPoweredOn` only on a full wake, so without this the gate would stay closed, the T-081 wake would be
+    /// suppressed and the Mac would never reach a full wake for the tablet. Returns true when the gate was closed
+    /// (the caller logs the change). A session that was already live when `will_sleep` came is not affected.
+    public mutating func sessionStarted() -> Bool {
+        let wasSleeping = sleeping
+        sleeping = false
+        suppressionLogged = false
+        if wasSleeping { lastReported = nil }  // the next notification is logged again
+        cancelPending()
+        return wasSleeping
     }
 
     /// The display came back, or the session ended: nothing to wake for any more.

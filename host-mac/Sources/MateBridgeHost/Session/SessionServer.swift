@@ -228,10 +228,16 @@ public final class SessionServer: @unchecked Sendable {
     private var bonjour: BonjourAdvertiser?
     private var bonjourAttempts = 0
     /// TXT `wol` (T-128, PROTOCOL.md section 3 item 1): hardware addresses of the up `en*` interfaces with IPv4; nil
-    /// means no key. Recomputed on start and on every network path change; re-published only when it changes.
+    /// means no key. Recomputed on start, on every network path change and every 60 s; re-published only when it
+    /// changes.
     private var wolValue: String?
     private var wolComputed = false
     private var pathMonitor: NWPathMonitor?
+    /// Session ticks since the last periodic `wol` check. `NWPathMonitor` does not report every change (e.g. a
+    /// secondary interface gaining or losing IPv4 while the default path stays), so the interfaces are also re-read
+    /// every `wolReconcileTicks` ticks (60 s; one `getifaddrs`, re-published only on a change).
+    private var wolTicks = 0
+    static let wolReconcileTicks = 600
     private var videoListener: VideoListener?
     private var nextID: UInt64 = 0
     private var controlConnections: [ConnectionID: ControlConnection] = [:]
@@ -417,7 +423,8 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: TXT wol (T-128)
 
-    /// Network path changes (an interface coming up or going down, an address change) re-read the interfaces.
+    /// Network path changes (an interface coming up or going down, an address change) re-read the interfaces; the
+    /// session tick re-reads them every 60 s as well (`wolReconcileTicks`).
     private func startPathMonitor() {
         guard pathMonitor == nil else { return }
         let monitor = NWPathMonitor()
@@ -1606,6 +1613,11 @@ public final class SessionServer: @unchecked Sendable {
             guard let self else { return }
             apply(machine.tick(now: nowUs()))
             tcpInfoTick()
+            wolTicks += 1
+            if wolTicks >= Self.wolReconcileTicks {
+                wolTicks = 0
+                refreshWakeOnLan()
+            }
         }
         timer.resume()
         tickTimer = timer
