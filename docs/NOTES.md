@@ -1111,3 +1111,10 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - `media_codecs_performance.xml`'den çıkan "tam çözünürlükte ~110 fps tavan" tahmini (NOTES 10-02 ~21:30, karar 0017 bağlamı) bugünkü yapılandırmada **yanlış**: çözücü 2800×1840'ta da çizimde 120 fps'e yetişiyor (`overflows=0`, `kf_req=0`). Eski ~100–110 fps ölçümü T-052 öncesindendi.
 - %90'ın kazancı küçük: çözme ~1 ms kısa, gecikme ~0,6 ms az, ara sıra düşen kare yok. Bedeli netlik. %95'teki 8 düşüş ve 117 fps, o dakikadaki içerik/çizim farkından olabilir (tek tur).
 - Host kodlama 120 fps, `enc_ms` p50 ~7,2 ms.
+
+## 2026-10-03 ~00:55 — Oturum sonu devir
+
+- Bu oturumda: Faz 0 güç/fps ölçümleri ve Huawei AGP incelemesi; T-140 (dokunmasız 120 Hz deneyi, olumsuz, kod varsayılan kapalı kaldı); T-141 (durgun ekranda vsync döngüleri uyuyor, istatistik logları 10 s); T-142 (`mb-stall` isteğe bağlı); T-143 + karar 0016 (Oyun 120 / Oyun 60); T-144 + karar 0017 (Çizim modu, ölçüldü ve geri alındı).
+- Durgun ekranda tablet toplamı ~70–80 → ~45–56/800. İstemcinin payı ~%20 → ~%7–9.
+- Tabletteki APK güncel (T-144 geri alınmış hâli), mod Akıcı. Ölçüm kayıtları kapalı. Ölçüm araçları scratch'teydi (`mbmon.sh`, `an.py`, `macmon.sh`, `macan.py`); kayboldularsa NOTES'taki tariflerden yeniden yazılır.
+- Açık / ileride: T-127 (Mac Ethernet ile Wi-Fi), USB 3 kablo ile dosya aktarımı.
