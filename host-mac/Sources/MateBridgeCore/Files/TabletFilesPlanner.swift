@@ -28,24 +28,38 @@ public enum TabletFilesMenu: Equatable, Sendable {
 /// Side effects the host performs, in order. `generation` ties an asynchronous result back to the request,
 /// so a result that arrives after its session/server ended is undone instead of applied.
 public enum TabletFilesAction: Equatable, Sendable {
-    /// `adb forward tcp:<local> tcp:<remotePort>` (local: preferred port, else any free one), then report it
-    /// through `forwardFinished`.
+    /// `adb forward --no-rebind tcp:<local> tcp:<remotePort>` (local: preferred port, else any free one), then
+    /// report it through `forwardFinished`. Never replaces a forward someone else owns.
     case installForward(remotePort: UInt16, generation: UInt64)
-    /// `adb forward --remove tcp:<localPort>`.
+    /// `adb forward --remove tcp:<localPort>` of a forward we own; report it through `forwardRemoved`.
     case removeForward(localPort: UInt16)
-    /// Detach every WebDAV volume mounted from `http://127.0.0.1:<localPort>/` (not forced).
+    /// Call `forwardRemovalDue(localPort:)` after `delay` seconds (bounded retry of a failed removal).
+    case retryRemoveForward(localPort: UInt16, delay: TimeInterval)
+    /// Cancel the pending NetFS request of this mount generation (its result is then never reported).
+    case cancelMount(generation: UInt64)
+    /// Detach every WebDAV volume mounted from `http://127.0.0.1:<localPort>/` (not forced): the forward on that
+    /// port is ours and about to go, or the token changed.
     case unmount(localPort: UInt16)
-    /// Reveal the volume if it is already mounted, else mount it with user `matebridge` / `secret`; report the
+    /// Detach the one volume at `path`, if it is still a WebDAV volume from `127.0.0.1:<localPort>` (a stale
+    /// mount that finished after its generation ended).
+    case unmountPath(path: String, localPort: UInt16)
+    /// Reveal `knownPath` if it is still our volume, else mount with user `matebridge` / `secret`; report the
     /// result through `mountFinished`.
-    case mount(localPort: UInt16, secret: FilesSecret, generation: UInt64)
+    case mount(localPort: UInt16, secret: FilesSecret, generation: UInt64, knownPath: String?)
     /// Open the mounted volume in Finder.
     case reveal(path: String)
 }
 
 /// Pure state machine for tablet files on the Mac (T-136, decision 0015, PROTOCOL.md 0x09): when to forward the
-/// tablet's WebDAV port, when to mount and when to tear everything down. Teardown order is always unmount first,
-/// then forward removal, so the WebDAV client never hangs on a dead port while it still has the volume.
+/// tablet's WebDAV port, when to mount and when to tear everything down. Teardown order is always: cancel a
+/// pending mount, unmount, then remove the forward, so the WebDAV client never hangs on a dead port while it
+/// still has the volume. A forward whose removal failed stays owed: retried with backoff, then again at the next
+/// session/USB event and at shutdown.
 public struct TabletFilesPlanner: Sendable {
+    /// Removal attempts per round (first try plus retries) before waiting for the next session/USB event.
+    public static let removalAttempts = 4
+    public static let removalBaseDelay: TimeInterval = 1
+
     private struct Session: Sendable {
         var transport: SessionTransport
         var capable: Bool
@@ -64,7 +78,11 @@ public struct TabletFilesPlanner: Sendable {
     private var usbDeviceLost = false
     private var forward: Forward = .none
     private var mountingGeneration: UInt64?
+    /// Mount point the current forward's mount got (owned by the current generation chain).
+    private var mountedPath: String?
     private var lastMountFailed = false
+    /// Forwards we installed and still have to remove: local port to failed attempts in the current round.
+    private var owedForwards: [UInt16: Int] = [:]
     private var nextGeneration: UInt64 = 1
     private var isShutDown = false
 
@@ -75,7 +93,7 @@ public struct TabletFilesPlanner: Sendable {
     /// An ACCEPTED session started. `capable`: its HELLO has `Capabilities.files`.
     public mutating func sessionStarted(transport: SessionTransport, capable: Bool) -> [TabletFilesAction] {
         guard !isShutDown else { return [] }
-        let out = teardown()
+        let out = teardown() + retryGivenUpRemovals()
         session = Session(transport: transport, capable: capable)
         info = nil
         if transport == .usb { usbDeviceLost = false }  // the session itself came through the cable
@@ -93,15 +111,16 @@ public struct TabletFilesPlanner: Sendable {
         guard let ready, current.transport == .usb, !usbDeviceLost else { return teardown() }
         if let previous, previous.port == ready.port, case .up(let local, _) = forward {
             // Same port, new token: the server restarted, a mount made with the old token is useless.
-            mountingGeneration = nil
+            let out = cancelPendingMount() + [.unmount(localPort: local)]
+            mountedPath = nil
             lastMountFailed = false
-            return [.unmount(localPort: local)]
+            return out
         }
         return teardown() + startForward(remotePort: ready.port)
     }
 
     public mutating func sessionEnded() -> [TabletFilesAction] {
-        let out = teardown()
+        let out = teardown() + retryGivenUpRemovals()
         session = nil
         info = nil
         return out
@@ -117,8 +136,9 @@ public struct TabletFilesPlanner: Sendable {
         }
         guard usbDeviceLost else { return [] }
         usbDeviceLost = false
-        guard session?.transport == .usb, let info, forward == .none else { return [] }
-        return startForward(remotePort: info.port)
+        var out = retryGivenUpRemovals()
+        if session?.transport == .usb, let info, forward == .none { out += startForward(remotePort: info.port) }
+        return out
     }
 
     /// The user opened the menu: retry a failed forward.
@@ -127,9 +147,18 @@ public struct TabletFilesPlanner: Sendable {
         return startForward(remotePort: remote)
     }
 
-    /// App shutdown: tear down and ignore everything afterwards except late results (which are undone).
+    /// App shutdown: tear down, one more try for every owed forward, then ignore everything except late results
+    /// (which are undone).
     public mutating func shutdown() -> [TabletFilesAction] {
-        let out = teardown()
+        var out = teardown()
+        let pendingInTeardown = Set(out.compactMap { action -> UInt16? in
+            if case .removeForward(let port) = action { return port }
+            return nil
+        })
+        for port in owedForwards.keys.sorted() where !pendingInTeardown.contains(port) {
+            owedForwards[port] = 0
+            out.append(.removeForward(localPort: port))
+        }
         session = nil
         info = nil
         isShutDown = true
@@ -138,13 +167,36 @@ public struct TabletFilesPlanner: Sendable {
 
     /// Result of `installForward`; `localPort` nil on failure.
     public mutating func forwardFinished(generation: UInt64, localPort: UInt16?) -> [TabletFilesAction] {
+        // A fresh forward on a port we thought we still owed means that removal did happen after all.
+        if let localPort { owedForwards[localPort] = nil }
         if case .installing(let remote, let gen) = forward, gen == generation {
             forward = localPort.map { .up(localPort: $0, remotePort: remote) } ?? .failed(remotePort: remote)
             return []
         }
-        // Stale: its session or server is gone. Undo it unless the current forward reuses the same local port.
+        // Stale: its session or server is gone. We own it, so remove it (unless it is the current forward).
         guard let localPort else { return [] }
         if case .up(let current, _) = forward, current == localPort { return [] }
+        owedForwards[localPort] = 0
+        return [.removeForward(localPort: localPort)]
+    }
+
+    /// Result of `removeForward`. A failure keeps the forward owed and schedules a bounded retry.
+    public mutating func forwardRemoved(localPort: UInt16, success: Bool) -> [TabletFilesAction] {
+        guard let attempts = owedForwards[localPort] else { return [] }
+        if success {
+            owedForwards[localPort] = nil
+            return []
+        }
+        let failed = attempts + 1
+        owedForwards[localPort] = failed
+        guard !isShutDown, failed < Self.removalAttempts else { return [] }  // given up for this round
+        let delay = Self.removalBaseDelay * Double(1 << (failed - 1))
+        return [.retryRemoveForward(localPort: localPort, delay: delay)]
+    }
+
+    /// A scheduled retry is due.
+    public mutating func forwardRemovalDue(localPort: UInt16) -> [TabletFilesAction] {
+        guard !isShutDown, let attempts = owedForwards[localPort], attempts < Self.removalAttempts else { return [] }
         return [.removeForward(localPort: localPort)]
     }
 
@@ -154,7 +206,7 @@ public struct TabletFilesPlanner: Sendable {
         let gen = takeGeneration()
         mountingGeneration = gen
         lastMountFailed = false
-        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen)]
+        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
     }
 
     /// Result of `mount`; `path` is the mount point on success, nil on failure.
@@ -163,15 +215,16 @@ public struct TabletFilesPlanner: Sendable {
             mountingGeneration = nil
             guard let path else {
                 lastMountFailed = true
+                mountedPath = nil
                 return []
             }
+            mountedPath = path
             return [.reveal(path: path)]
         }
-        // Stale (session ended, token changed, shutdown): a volume that still got mounted is detached again,
-        // unless a current mount of the same URL is in progress.
-        guard path != nil else { return [] }
-        if case .up(let current, _) = forward, current == localPort, mountingGeneration != nil { return [] }
-        return [.unmount(localPort: localPort)]
+        // Stale (session ended, token changed, shutdown): detach only the volume this request created, never
+        // the current one (the port may have been reused).
+        guard let path, path != mountedPath else { return [] }
+        return [.unmountPath(path: path, localPort: localPort)]
     }
 
     // MARK: - State
@@ -190,6 +243,9 @@ public struct TabletFilesPlanner: Sendable {
         return nil
     }
 
+    /// Forwards whose removal is still owed (sorted).
+    public var owedForwardPorts: [UInt16] { owedForwards.keys.sorted() }
+
     // MARK: - Private
 
     private mutating func takeGeneration() -> UInt64 {
@@ -203,12 +259,31 @@ public struct TabletFilesPlanner: Sendable {
         return [.installForward(remotePort: remotePort, generation: gen)]
     }
 
-    /// Unmount, then remove the forward. An in-flight forward or mount becomes stale and is undone when it reports.
+    private mutating func cancelPendingMount() -> [TabletFilesAction] {
+        defer { mountingGeneration = nil }
+        return mountingGeneration.map { [.cancelMount(generation: $0)] } ?? []
+    }
+
+    /// Owed forwards whose retry round ran out get a fresh round.
+    private mutating func retryGivenUpRemovals() -> [TabletFilesAction] {
+        var out: [TabletFilesAction] = []
+        for port in owedForwards.keys.sorted() where owedForwards[port]! >= Self.removalAttempts {
+            owedForwards[port] = 0
+            out.append(.removeForward(localPort: port))
+        }
+        return out
+    }
+
+    /// Cancel a pending mount, unmount, then remove the forward. An in-flight forward or mount becomes stale and is
+    /// undone when it reports.
     private mutating func teardown() -> [TabletFilesAction] {
-        mountingGeneration = nil
+        var out = cancelPendingMount()
+        mountedPath = nil
         lastMountFailed = false
         defer { forward = .none }
-        guard case .up(let local, _) = forward else { return [] }
-        return [.unmount(localPort: local), .removeForward(localPort: local)]
+        guard case .up(let local, _) = forward else { return out }
+        owedForwards[local] = 0
+        out += [.unmount(localPort: local), .removeForward(localPort: local)]
+        return out
     }
 }

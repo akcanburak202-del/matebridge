@@ -52,6 +52,18 @@ public enum AdbOutput {
         return nil
     }
 
+    /// Local TCP ports forwarded for `serial` in `adb forward --list` (lines `<serial> tcp:<local> <remote>`).
+    public static func parseForwardList(_ text: String, serial: String) -> Set<UInt16> {
+        var ports: Set<UInt16> = []
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let parts = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            guard parts.count >= 3, parts[0] == serial, parts[1].hasPrefix("tcp:"),
+                  let port = UInt16(parts[1].dropFirst(4)) else { continue }
+            ports.insert(port)
+        }
+        return ports
+    }
+
     /// The device to tunnel to: the first ready one, physical devices (USB) before emulators.
     public static func selectDevice(_ devices: [AdbDevice]) -> AdbDevice? {
         let ready = devices.filter(\.isReady)

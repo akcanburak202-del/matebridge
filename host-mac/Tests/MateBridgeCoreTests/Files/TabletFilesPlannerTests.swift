@@ -11,7 +11,7 @@ private func installGen(_ actions: [TabletFilesAction]) -> UInt64? {
 }
 
 private func mountGen(_ actions: [TabletFilesAction]) -> UInt64? {
-    for case .mount(_, _, let gen) in actions { return gen }
+    for case .mount(_, _, let gen, _) in actions { return gen }
     return nil
 }
 
@@ -103,7 +103,7 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         #expect(p.filesInfo(restarted) == [.unmount(localPort: 47010)])
         #expect(p.forwardedLocalPort == 47010)
         // The next mount uses the new token.
-        guard case .mount(_, let secret, _)? = p.openRequested().first else {
+        guard case .mount(_, let secret, _, _)? = p.openRequested().first else {
             Issue.record("no mount")
             return
         }
@@ -193,14 +193,18 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         var p = forwarded(local: 47011)
         let actions = p.openRequested()
         let gen = mountGen(actions)!
-        #expect(actions == [.mount(localPort: 47011, secret: FilesSecret(token), generation: gen)])
+        #expect(actions == [.mount(localPort: 47011, secret: FilesSecret(token), generation: gen, knownPath: nil)])
         #expect(p.menu == .mounting)
         #expect(p.openRequested().isEmpty)  // one mount at a time
         #expect(p.mountFinished(generation: gen, localPort: 47011, path: "/Volumes/MatePad")
             == [.reveal(path: "/Volumes/MatePad")])
         #expect(p.menu == .ready(lastMountFailed: false))
-        // Already mounted: opening again goes through `mount`, which only reveals an existing volume.
-        #expect(mountGen(p.openRequested()) != nil)
+        // Already mounted: opening again passes the owned path, which the host only reveals if still mounted.
+        guard case .mount(_, _, _, let known)? = p.openRequested().first else {
+            Issue.record("no mount")
+            return
+        }
+        #expect(known == "/Volumes/MatePad")
     }
 
     @Test func failedMountIsShownAndCanBeRetried() {
@@ -223,19 +227,115 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
     @Test func mountThatFinishesAfterTheSessionEndedIsDetached() {
         var p = forwarded()
         let gen = mountGen(p.openRequested())!
-        #expect(p.sessionEnded() == [.unmount(localPort: 47010), .removeForward(localPort: 47010)])
+        #expect(p.sessionEnded() == [.cancelMount(generation: gen), .unmount(localPort: 47010),
+                                     .removeForward(localPort: 47010)])
+        // If NetFS still reports it (the cancel raced the completion), only that volume is detached.
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
-            == [.unmount(localPort: 47010)])
+            == [.unmountPath(path: "/Volumes/MatePad", localPort: 47010)])
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: nil).isEmpty)
     }
 
     @Test func mountWithAnOldTokenIsDetachedWhenItFinishes() {
         var p = forwarded()
         let gen = mountGen(p.openRequested())!
-        _ = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: "new"))
+        #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: "new"))
+            == [.cancelMount(generation: gen), .unmount(localPort: 47010)])
         #expect(p.menu == .ready(lastMountFailed: false))
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
-            == [.unmount(localPort: 47010)])
+            == [.unmountPath(path: "/Volumes/MatePad", localPort: 47010)])
+    }
+
+    @Test func staleMountNeverDetachesTheCurrentSessionsVolumeOnAReusedPort() {
+        var p = forwarded()
+        let old = mountGen(p.openRequested())!
+        _ = p.sessionEnded()
+        // A new session gets the same local port and mounts.
+        _ = p.sessionStarted(transport: .usb, capable: true)
+        let fwd = installGen(p.filesInfo(ready))!
+        _ = p.forwardFinished(generation: fwd, localPort: 47010)
+        let current = mountGen(p.openRequested())!
+        #expect(p.mountFinished(generation: current, localPort: 47010, path: "/Volumes/MatePad")
+            == [.reveal(path: "/Volumes/MatePad")])
+        // The old request reports late: never a port-wide unmount, never the current path.
+        #expect(p.mountFinished(generation: old, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
+        #expect(p.mountFinished(generation: old, localPort: 47010, path: "/Volumes/MatePad-1")
+            == [.unmountPath(path: "/Volumes/MatePad-1", localPort: 47010)])
+        #expect(p.mountFinished(generation: old, localPort: 47010, path: nil).isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: false))
+    }
+
+    @Test func teardownWithoutAMountInFlightCancelsNothing() {
+        var p = forwarded()
+        #expect(p.sessionEnded() == [.unmount(localPort: 47010), .removeForward(localPort: 47010)])
+    }
+
+    // MARK: Forward removal ownership
+
+    @Test func successfulRemovalClearsOwnership() {
+        var p = forwarded()
+        _ = p.sessionEnded()
+        #expect(p.owedForwardPorts == [47010])
+        #expect(p.forwardRemoved(localPort: 47010, success: true).isEmpty)
+        #expect(p.owedForwardPorts.isEmpty)
+        #expect(p.forwardRemoved(localPort: 47010, success: false).isEmpty)  // not ours any more
+    }
+
+    @Test func failedRemovalRetriesWithBackoffThenWaitsForTheNextEvent() {
+        var p = forwarded()
+        _ = p.sessionEnded()
+        #expect(p.forwardRemoved(localPort: 47010, success: false) == [.retryRemoveForward(localPort: 47010, delay: 1)])
+        #expect(p.forwardRemovalDue(localPort: 47010) == [.removeForward(localPort: 47010)])
+        #expect(p.forwardRemoved(localPort: 47010, success: false) == [.retryRemoveForward(localPort: 47010, delay: 2)])
+        #expect(p.forwardRemovalDue(localPort: 47010) == [.removeForward(localPort: 47010)])
+        #expect(p.forwardRemoved(localPort: 47010, success: false) == [.retryRemoveForward(localPort: 47010, delay: 4)])
+        #expect(p.forwardRemovalDue(localPort: 47010) == [.removeForward(localPort: 47010)])
+        #expect(p.forwardRemoved(localPort: 47010, success: false).isEmpty)  // round over
+        #expect(p.forwardRemovalDue(localPort: 47010).isEmpty)
+        #expect(p.owedForwardPorts == [47010])  // ownership kept
+        // The next session event starts a new round.
+        #expect(p.sessionStarted(transport: .network, capable: true) == [.removeForward(localPort: 47010)])
+        #expect(p.forwardRemoved(localPort: 47010, success: false) == [.retryRemoveForward(localPort: 47010, delay: 1)])
+    }
+
+    @Test func givenUpRemovalIsRetriedWhenUsbComesBackAndAtShutdown() {
+        var p = forwarded()
+        _ = p.usbDevice(present: false)
+        for _ in 0..<TabletFilesPlanner.removalAttempts { _ = p.forwardRemoved(localPort: 47010, success: false) }
+        let back = p.usbDevice(present: true)
+        #expect(back.first == .removeForward(localPort: 47010))
+        #expect(installGen(back) != nil)  // and the session's forward comes back
+        var q = forwarded()
+        _ = q.sessionEnded()
+        _ = q.forwardRemoved(localPort: 47010, success: false)  // a retry is scheduled, still owed
+        #expect(q.shutdown() == [.removeForward(localPort: 47010)])
+        #expect(q.forwardRemoved(localPort: 47010, success: false).isEmpty)  // no retries after shutdown
+        #expect(q.forwardRemovalDue(localPort: 47010).isEmpty)
+    }
+
+    @Test func shutdownTriesTheCurrentAndOwedForwardsOnce() {
+        var p = TabletFilesPlanner()
+        _ = p.sessionStarted(transport: .usb, capable: true)
+        let stale = installGen(p.filesInfo(ready))!
+        _ = p.sessionEnded()
+        #expect(p.forwardFinished(generation: stale, localPort: 47011) == [.removeForward(localPort: 47011)])
+        _ = p.forwardRemoved(localPort: 47011, success: false)
+        _ = p.sessionStarted(transport: .usb, capable: true)
+        let gen = installGen(p.filesInfo(ready))!
+        _ = p.forwardFinished(generation: gen, localPort: 47010)
+        #expect(p.shutdown() == [.unmount(localPort: 47010), .removeForward(localPort: 47010),
+                                 .removeForward(localPort: 47011)])
+    }
+
+    @Test func aNewForwardOnAnOwedPortEndsThatDebt() {
+        var p = forwarded()
+        _ = p.sessionEnded()
+        for _ in 0..<TabletFilesPlanner.removalAttempts { _ = p.forwardRemoved(localPort: 47010, success: false) }
+        _ = p.sessionStarted(transport: .usb, capable: true)  // new round: removal sent again
+        _ = p.forwardRemoved(localPort: 47010, success: false)
+        let gen = installGen(p.filesInfo(ready))!
+        _ = p.forwardFinished(generation: gen, localPort: 47010)  // adb let us bind it: the old one is gone
+        #expect(p.owedForwardPorts.isEmpty)
+        #expect(p.forwardRemovalDue(localPort: 47010).isEmpty)  // the pending retry must not kill the new one
     }
 
     @Test func secretNeverAppearsInActionDescriptions() {
@@ -243,6 +343,32 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         let actions = p.openRequested()
         #expect(!String(describing: actions).contains(token))
         #expect(!String(reflecting: actions).contains(token))
+    }
+}
+
+@Suite struct EpochCoalescerTests {
+    @Test func burstKeepsTheLatestAndSchedulesOneDrain() {
+        var c = EpochCoalescer<Int>()
+        let first = c.offer(1, epoch: 1)
+        let second = c.offer(2, epoch: 1)
+        let third = c.offer(3, epoch: 1)
+        #expect(first && !second && !third)
+        let taken = c.take(epoch: 1)
+        let again = c.take(epoch: 1)
+        #expect(taken == 3 && again == nil)
+        let afterDrain = c.offer(4, epoch: 1)
+        #expect(afterDrain)  // after a drain a new one is needed
+    }
+
+    @Test func valueNeverCrossesASessionBoundary() {
+        var c = EpochCoalescer<Int>()
+        let old = c.offer(1, epoch: 1)
+        let new = c.offer(2, epoch: 2)
+        #expect(old && new)  // a new epoch needs its own drain
+        let oldDrain = c.take(epoch: 1)
+        let newDrain = c.take(epoch: 2)
+        #expect(oldDrain == nil)  // the old drain gets nothing (that session ended)
+        #expect(newDrain == 2)
     }
 }
 
