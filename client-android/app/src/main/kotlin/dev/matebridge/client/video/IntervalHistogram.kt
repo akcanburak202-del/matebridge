@@ -49,6 +49,25 @@ class IntervalHistogram(thresholdUs: Long = 16_700) {
     /** Forgets the previous event (stream restart), so no bogus gap is recorded across it. */
     @Synchronized fun breakSequence() { lastUs = -1 }
 
+    /**
+     * T-141: [summary] with reset, after the window's samples and counts were added to [into] (a longer window, e.g.
+     * the 10 s log window built from 1 s windows), so [into]'s percentiles are exact over its whole span. Lock order is
+     * always this, then [into]; [into] must never feed this one.
+     */
+    @Synchronized fun summaryInto(into: IntervalHistogram): IntervalSummary {
+        val s = summary(reset = false)
+        into.absorb(samples, n, over, total)
+        n = 0; over = 0; total = 0
+        return s
+    }
+
+    @Synchronized private fun absorb(src: LongArray, count: Int, overCount: Int, totalCount: Int) {
+        val k = minOf(count, MAX_SAMPLES - n)
+        if (k > 0) { System.arraycopy(src, 0, samples, n, k); n += k }
+        over += overCount
+        total += totalCount
+    }
+
     /** Summary of the current window; with [reset] a new window starts (the last event time is kept). */
     @Synchronized fun summary(reset: Boolean = false): IntervalSummary {
         val s = if (n == 0) IntervalSummary.EMPTY else {
