@@ -1,7 +1,7 @@
 ---
 id: T-141
 title: Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-140]

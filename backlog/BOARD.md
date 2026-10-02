@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-141](tasks/T-141-idle-power.md) | Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak | 5 | android-client-dev | [T-140] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -162,3 +156,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-138](tasks/T-138-files-bulk-blocks-small.md) | Dosyalar — Finder'ın video önizlemeleri tüm dosyayı indiriyor, küçük kopyalar "hazırlanıyor"da takılıyor | 5 | android-client-dev | [T-137] |
 | [T-139](tasks/T-139-files-connection-limit-fix.md) | Dosyalar — bağlantı sınırı 8, yalnız gerçekten boştaki bağlantıyı düşür, ilerlemeyen yazımı kapat | 5 | android-client-dev | [T-138] |
 | [T-140](tasks/T-140-refresh-vote-experiment.md) | Deney — dokunmadan 120 Hz için "animasyon oyu" (açılış parametresiyle, varsayılan kapalı) | 5 | android-client-dev | [] |
+| [T-141](tasks/T-141-idle-power.md) | Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak | 5 | android-client-dev | [T-140] |
