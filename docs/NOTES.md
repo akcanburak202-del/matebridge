@@ -1046,3 +1046,9 @@ T-123, T-124, T-125, T-126 done.
 
 - Kök neden T-137: PROPFIND'daki quota özellikleri → webdavfs bağlama sırasında `WEBDAV_STATFS` sorusu, agent meşgul → 9×10 s = 90 s zaman aşımı (`webdav_sendmsg: sock_receive() timeout. vnop: 15`). Quota kaldırıldı → bağlama 172 ms (cihazda).
 - Yeni sorun: 141 KB kopya "hazırlanıyor"da kaldı. Tablet dakikalarca ~20 MB/s gönderiyor (~4,4 GB); webdavfs önbelleğinde 2,7 GB dosya; Finder `showIconPreview=1` → video önizlemesi için webdavfs tüm dosyayı indiriyor ve küçük işler arkada bekliyor. → T-138.
+
+## 2026-10-02 ~20:20 — T-139 cihazda doğrulandı (tablet dosyaları)
+
+- Liste görünümü: İndirilenler'den 141 KB kopya hemen, çıkarma hemen.
+- Simge görünümü (video önizlemesi tetiklenir): `bytes_out` ~20 MB/s kısa süre, `conn_overflow conns=9 limit=8 hard=12` bir kez, `conn_rejected`/`write_stalled` yok; küçük kopya hemen, çıkarma hemen (kullanıcı). Bağlama 107–163 ms.
+- Not: araştırma ajanının takılan test bağlaması kullanıcının Finder'ını sistem genelinde yavaşlatmıştı (ilgisiz uygulama kopyası); ajan prompt'larına "takılı bağlama bırakma, ≤60 s, çıkışta ayır, arayüz açma" kuralı eklendi.

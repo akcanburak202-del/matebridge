@@ -1,7 +1,7 @@
 ---
 id: T-137
 title: Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme)
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-135, T-136]

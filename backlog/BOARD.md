@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-137](tasks/T-137-files-mount-90s-delay.md) | Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme) | 5 | android-client-dev | [T-135, T-136] |
-
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -20,7 +14,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
-| [T-139](tasks/T-139-files-connection-limit-fix.md) | Dosyalar — bağlantı sınırı 8, yalnız gerçekten boştaki bağlantıyı düşür, ilerlemeyen yazımı kapat | 5 | android-client-dev | [T-138] |
 
 ## done
 
@@ -159,4 +152,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-134](tasks/T-134-client-wake-by-direct-connect.md) | Tablet — Mac'i saklanan IP'ye doğrudan TCP bağlanarak uyandır (magic packet işe yaramıyor) | 4 | android-client-dev | [T-133] |
 | [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
 | [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
+| [T-137](tasks/T-137-files-mount-90s-delay.md) | Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme) | 5 | android-client-dev | [T-135, T-136] |
 | [T-138](tasks/T-138-files-bulk-blocks-small.md) | Dosyalar — Finder'ın video önizlemeleri tüm dosyayı indiriyor, küçük kopyalar "hazırlanıyor"da takılıyor | 5 | android-client-dev | [T-137] |
+| [T-139](tasks/T-139-files-connection-limit-fix.md) | Dosyalar — bağlantı sınırı 8, yalnız gerçekten boştaki bağlantıyı düşür, ilerlemeyen yazımı kapat | 5 | android-client-dev | [T-138] |

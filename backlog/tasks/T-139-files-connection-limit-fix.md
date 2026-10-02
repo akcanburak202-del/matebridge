@@ -1,7 +1,7 @@
 ---
 id: T-139
 title: Dosyalar — bağlantı sınırı 8, yalnız gerçekten boştaki bağlantıyı düşür, ilerlemeyen yazımı kapat
-status: review
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-138]
