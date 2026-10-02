@@ -947,3 +947,16 @@ T-120, T-121, T-122 done.
 - AppGallery'de başka hiçbir şeye dokunmaz.
 - Kurulumu `lastUpdateTime` ile doğrular, sonra MateBridge'i başlatır.
 - Ekran ayrıştırma cihazda denendi; tam kurulum bir sonraki APK'da denenecek.
+
+## 2026-10-02 ~12:45 — Wi-Fi ses kesintileri: iki kablosuz atlama, servis sınıfı, toplu varış
+
+- Mac de Wi-Fi'de: `en1`, 802.11ax, kanal 52 (5 GHz DFS, 160 MHz), -48 dBm; Ethernet `en0` bağlı değil, `awdl0` etkin. Yani Mac → AP → tablet iki kablosuz atlama.
+- Krita pinch (`off`, 3 dk):
+  - 7 s boyunca 250–340 ms ses boşlukları (değerler ~250 ms'de kümeleniyor), RTT 275–300 ms;
+  - o anda video yalnız 17–70 KB/s → bant genişliği değil, kablosuz duraksama/yeniden gönderim;
+  - 13 alt taşma, pay 70'e çıktı.
+- İkinci test (`off`, 3 dk): Mac'ten 100 ms aralıkla ping (AP ve tablet) temiz, en çok 56/63 ms. Ama uygulama `owd` en çok 80–100 ms, 8 alt taşma → ICMP'ye yansımayan, TCP/kuyruk kaynaklı gecikme.
+- `MATEBRIDGE_SERVICE_CLASS=signaling` (kontrol/ses AC_VO, video AC_VI), 5,5 dk: 8 alt taşma, > 100 ms boşluk yok (en büyük ~75 ms). Kullanıcı: "sanki azaldı" → T-124 (varsayılan yap).
+- Toplu varış: alt taşmadan sonra geciken paketler çalma yeniden başladıktan sonra geliyor ve seviye 134 ms'ye çıkıyor (`audio_ms` 187). T-118 kırpması yalnız çalma başlangıcında yapıldığı için devreye girmiyor → T-125.
+- Kullanıcı ayrıca uygulama açılırken / ön plana gelirken tek seferlik kesinti duyuyor. Bu, oturumun yeniden kurulması (arka planda oturum kapanır, tasarım gereği). Ön plana gelişte yumuşak başlangıç ayrı bir konu.
+- Önerilen en etkili adım: Mac'i Ethernet'e bağlamak (bir kablosuz atlamayı kaldırır).
