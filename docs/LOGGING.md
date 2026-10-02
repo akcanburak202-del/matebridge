@@ -128,3 +128,9 @@ Yalnız ölçüm. `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanı
   - Küçük aralıklar + düşük `in_codec`: ağ yığılması.
   - Yüksek `in_codec` / uzun `decode_last_us`: çözücü yetişmiyor.
 - `I decoder ev=kf_request reason= src=overflow|deferred|retry|reset|error`: gönderilen her KEYFRAME_REQUEST için.
+
+## Ses güvenlik payı bağlantı türüne göre (tablet, `MB/audio`, T-123)
+
+- `ev=safety_start` satırına `transport=usb|wifi` eklendi. Pay `api/transport` başına saklanır (`aaudio/usb`, `aaudio/wifi`, `track/usb`, `track/wifi`). Eski tek anahtarlı kayıt USB değeri sayılır.
+- Wi-Fi'de taban ve başlangıç 40 ms, en çok 50 ms hatırlanır, oturum içinde en çok 70 ms. USB'de bunlar 20 (Uyumlu'da 5), 30 ve 40 ms.
+- `ev=safety_transport from= to= used= stored= live=0|1`: akış öncekinden farklı bir bağlantı türünde açıldığında. `live=0` akışın yeniden açıldığını gösterir; bugünkü geçiş yolu budur.
