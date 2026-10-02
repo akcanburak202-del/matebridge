@@ -7,6 +7,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-142](tasks/T-142-stall-detector-opt-in.md) | Ses takılma dedektörünü (mb-stall) açılış parametresine bağla, varsayılan kapalı | 5 | android-client-dev | [T-120, T-141] |
+| [T-143](tasks/T-143-game60-mode.md) | "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır | 5 | android-client-dev | [T-109] |
 
 ## blocked
 
