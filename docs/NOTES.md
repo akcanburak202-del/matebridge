@@ -937,3 +937,13 @@ Kullanıcı sorun görmedi.
 - Güvenlik payı (USB'den hatırlanan 20–30 ms) Wi-Fi için yetersiz kalıyor.
 
 T-120, T-121, T-122 done.
+
+## 2026-10-02 ~12:05 — Kurulum betiği repoya alındı (`scripts/install-apk.sh`)
+
+- Eski `install.sh` bir oturumun geçici klasöründeydi ve kayboldu. Aynı kurallarla yeniden yazıldı, bu kez repoda.
+- Kurallar: yalnız paket + resource-id ile eşleşir, metinle asla. Yalnız iki düğmeye basılır:
+  - `com.android.packageinstaller` `android:id/button1`;
+  - `com.huawei.appmarket:id/hidden_card_install_button_continue`.
+- AppGallery'de başka hiçbir şeye dokunmaz.
+- Kurulumu `lastUpdateTime` ile doğrular, sonra MateBridge'i başlatır.
+- Ekran ayrıştırma cihazda denendi; tam kurulum bir sonraki APK'da denenecek.
