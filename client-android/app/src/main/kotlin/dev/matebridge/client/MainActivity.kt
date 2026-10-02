@@ -129,6 +129,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settings: Settings
     private lateinit var controller: SessionController
     private var streamMode = StreamMode.DEFAULT
+    private var drawScale: Int? = null // T-144: `--ei draw_scale N`, this launch only; affects Drawing mode alone
     /**
      * T-109 (decision 0014): bit rate, audio output and pen trail/dot are read and changed only through this, so game
      * mode's temporary defaults sit over [settings] without ever being stored.
@@ -412,6 +413,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setupPerfHint()
         parseWifiKnobs()
         parseRefreshVote()
+        if (intent?.hasExtra("draw_scale") == true) {
+            drawScale = StreamMode.clampDrawScale(intent.getIntExtra("draw_scale", StreamMode.DRAWING.scalePermille))
+            MbLog.i("draw_scale", "permille=$drawScale")
+        }
         audioAllowed = intent?.getBooleanExtra("audio", true) != false
         MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
         intent?.getStringExtra("transport")?.let { raw -> // T-096: one launch only, the stored setting is not changed
@@ -543,7 +548,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
-        }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
+        }, gameSettings.prefs(streamMode, drawScale), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
@@ -863,7 +868,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override val bitrateKbps get() = gameSettings.bitrateKbps
         override fun selectBitrate(kbps: Long) {
             gameSettings.setBitrateKbps(kbps)
-            controller.setStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
+            controller.setStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode, drawScale))
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
         override val gameDefaultsActive get() = gameSettings.active
@@ -989,9 +994,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         streamMode = m
         settings.setStreamMode(m)
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
-        controller.setStreamPrefs(gameSettings.prefs(m))
+        controller.setStreamPrefs(gameSettings.prefs(m, drawScale))
         refreshSettings()
-        if (toast) Toast.makeText(this, m.toastText(), Toast.LENGTH_SHORT).show()
+        if (toast) Toast.makeText(this, m.toastText(drawScale), Toast.LENGTH_SHORT).show()
     }
 
     /** T-109: the game layer was built or dropped; apply the effective values that differ from what runs now. */

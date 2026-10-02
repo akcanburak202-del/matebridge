@@ -1,7 +1,7 @@
 ---
 id: T-144
 title: "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi
-status: doing
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-143]
@@ -38,8 +38,8 @@ Karar 0017: kalemle çizimde neredeyse tam netlikte kararlı 120 fps veren "Çiz
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** bkz. `task/T-144-drawing-mode` dalının son commit'i
+- **Dokunulan dosyalar:** StreamMode.kt, GameMode.kt (prefs'e drawScale parametresi), MainActivity.kt, StreamModeTest.kt, SettingsCatalogTest.kt (seçenek listesine Çizim), bu kart.
+- **Varsayımlar:** `draw_scale` yalnız Çizim'in gönderdiği ölçeği değiştirir; panel listesi `StreamMode.entries`'ten otomatik geldiği için Çizim orada kendiliğinden görünür. Kaplama satırı zaten host'un gerçek boyutunu gösterir (config'ten).
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Tablette Çizim'i seç (döngü: Netlik, Akıcı, Çizim, Performans, Oyun 120, Oyun 60; bildirim "Çizim: 120 fps, %90"). `--ei draw_scale 850` ile açıp logda `session ev=draw_scale permille=850` ve STREAM_PREFS scale=850 doğrula; kalemle çizerken shown ~120, skip_pct, çözme p95 < 8,3 ms ölç. Kayıtlı mod drawing iken yeniden açılışta Çizim'le başlamalı.
+- **Açık sorular:** yok.
