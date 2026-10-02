@@ -8,7 +8,7 @@ depends_on: []
 decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/AdaptivePacer.kt
-  - client-android/app/src/main/kotlin/dev/matebridge/client/video/PaceProbe.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/PaceTrace.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/
   - tools/pacing/
   - backlog/tasks/T-115-client-sparse-frame-no-hold.md
