@@ -115,6 +115,8 @@ class GlPresenter(
     private var failed = false
     private var loggedMatrix = false
     private val idle = VsyncIdleGate()
+    /** Review P2: armed when the loop falls asleep; the next frame is drawn on arrival, not on a vsync. GL thread only. */
+    private val firstFrame = FirstOutputBypass()
 
     private val frameCallback = Choreographer.FrameCallback { t -> onVsync(t) }
 
@@ -207,7 +209,8 @@ class GlPresenter(
         st.setOnFrameAvailableListener({
             pending++
             lastAvailNs = System.nanoTime()
-            if (idle.onActivity(lastAvailNs)) wakeLoop() // GL thread: the loop thread itself
+            val wakeAsked = idle.onActivity(lastAvailNs)
+            if (firstFrame.take() || wakeAsked) presentNow() // GL thread: the loop thread itself
         }, handler)
         surfaceTexture = st
         decoderSurface = Surface(st)
@@ -243,14 +246,18 @@ class GlPresenter(
         if (loopRunning || failed || surfaceTexture == null) return
         loopRunning = true
         idle.start(System.nanoTime())
+        firstFrame.disarm()
         presentStats.breakSequence()
         Choreographer.getInstance().postFrameCallback(frameCallback)
     }
 
-    /** T-141, GL thread: a frame arrived while the loop slept. Draw it now (no vsync wait), then run the loop again. */
-    private fun wakeLoop() {
-        if (idle.wake(System.nanoTime()) == null) return
-        if (!active || failed || surfaceTexture == null || loopRunning) return
+    /**
+     * T-141, GL thread: the first frame after an idle sleep. Draw it now (no vsync wait), then make sure the loop runs.
+     * Does not depend on the loop's state: it may already have been restarted ([active] rising) before the frame came.
+     */
+    private fun presentNow() {
+        idle.wake(System.nanoTime())
+        if (!active || failed || surfaceTexture == null) return
         if (pending > 0) {
             try { draw(System.nanoTime()) } catch (e: Exception) {
                 MbLog.e("gl_draw_failed", "err=${e.javaClass.simpleName} egl=0x${Integer.toHexString(EGL14.eglGetError())}", TAG)
@@ -273,8 +280,9 @@ class GlPresenter(
         if (active && !failed && idle.onVsync(System.nanoTime())) {
             Choreographer.getInstance().postFrameCallback(frameCallback)
         } else if (active && !failed) {
-            // T-141: idle, the loop sleeps until the next frame (wakeLoop); the period is kept, the phase forgotten.
+            // T-141: idle, the loop sleeps until the next frame (presentNow); the period is kept, the phase forgotten.
             loopRunning = false
+            firstFrame.arm()
             presentStats.breakSequence()
             vsync.reset()
         } else {

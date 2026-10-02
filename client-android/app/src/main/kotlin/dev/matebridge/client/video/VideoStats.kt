@@ -165,6 +165,12 @@ class VideoStats {
     }
 
     /**
+     * T-141 (review P3): a stream boundary (the stream ends or is reconfigured). The unfinished second is closed into
+     * the log window, so a short tail is logged with its stream and never leaks into the next stream's windows.
+     */
+    fun closeWindow() { snapshot(reset = true) }
+
+    /**
      * T-141: the log window, i.e. every per-second window closed by `snapshot(reset = true)` since the last reset of
      * this one (the window still open is not included). Same fields and meaning as [snapshot], over the longer span.
      */

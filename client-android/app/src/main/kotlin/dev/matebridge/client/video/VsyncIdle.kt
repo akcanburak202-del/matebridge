@@ -117,6 +117,33 @@ class VsyncIdleGate(
 }
 
 /**
+ * T-141 (review P2): the first decoded frame after a vsync-loop sleep is presented at once, whatever happened to the
+ * clock meanwhile. Clearing the clock alone is not enough: the woken loop (a frame or pointer input wakes it) may deliver
+ * a vsync before the frame is decoded, and the frame would then be paced on the fresh grid (one more panel period with
+ * a buffer). Armed by the loop when it falls asleep, taken by the first output. Thread-safe.
+ */
+class FirstOutputBypass {
+    private val armed = AtomicBoolean(false)
+
+    /** The loop fell asleep: the next output goes out at once. */
+    fun arm() = armed.set(true)
+
+    /** Streaming (re)starts: nothing pending. */
+    fun disarm() = armed.set(false)
+
+    val isArmed: Boolean get() = armed.get()
+
+    /** Output thread, per decoded frame: true exactly once after [arm] (present this one now). */
+    fun take(): Boolean = armed.getAndSet(false)
+
+    /**
+     * The presentation decision for one decoded frame: null (release now, as without a vsync sample) when this is the
+     * first output after a sleep, else [schedule]. The pacer does not see a bypassed frame.
+     */
+    inline fun schedule(schedule: () -> FramePacer.Decision?): FramePacer.Decision? = if (take()) null else schedule()
+}
+
+/**
  * T-141: blocking waits of the decoder threads. Their timeouts only bound how fast a thread notices a stop (a frame or
  * an output wakes them at once), so after [idleAfterNs] without one they wait [IDLE_WAIT_NS] instead of the busy value.
  */

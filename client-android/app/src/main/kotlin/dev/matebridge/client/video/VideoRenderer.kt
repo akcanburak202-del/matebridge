@@ -204,6 +204,9 @@ class VideoRenderer(
      */
     fun takeKeyframeRetry(): Boolean = queue.takeRetry()
 
+    /** T-141 (review P2): armed by the activity's vsync loop when it falls asleep; see [FirstOutputBypass]. */
+    val firstOutput = FirstOutputBypass()
+
     /** True while non-keyframes are refused until a keyframe arrives (pure query). */
     fun isWaitingKeyframe() = queue.isWaitingKeyframe()
 
@@ -551,9 +554,12 @@ class VideoRenderer(
                 val trace = releaser.trace
                 val probe = adaptivePacer.probe
                 probe?.clear()
-                val d = if (!useAdaptive) pacer.schedule(readyNs)
-                else if (cpd != null) cpd.schedule(captureUs, readyNs)
-                else adaptivePacer.schedule(captureUs, readyNs)
+                // T-141: the first output after an idle sleep is released at once (null), independent of the clock.
+                val d = firstOutput.schedule {
+                    if (!useAdaptive) pacer.schedule(readyNs)
+                    else if (cpd != null) cpd.schedule(captureUs, readyNs)
+                    else adaptivePacer.schedule(captureUs, readyNs)
+                }
                 if (d == null) {
                     trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, null, 0, false, false, 0, PaceTrace.ACTION_NOW)
                     releaser.flushAll()
@@ -567,6 +573,7 @@ class VideoRenderer(
                 releaser.submit(idx, d.slotNs, d.renderNs, d.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs, tag)
                 continue
             }
+            if (isFrame) firstOutput.take() // unpaced: released at once anyway; the bypass must not linger
             if (prev >= 0) sink.discard(prev)
             prev = idx
         }

@@ -194,6 +194,105 @@ class VsyncIdleTest {
         assertEquals(0L, Math.floorMod(f.slotNs - firstVsync, clk.periodNs))
     }
 
+    /**
+     * Review P2, surface path: the woken loop delivers a vsync BEFORE the first frame is decoded (the activity posts the
+     * wake before feeding the decoder, or pointer input woke it earlier). The clock has a sample again, yet the first
+     * output after the sleep must still go out at once; the next one is paced normally.
+     */
+    @Test fun firstOutputAfterSleepIsImmediateEvenWhenTheClockRestartedFirst() {
+        val period = 8_333_333L
+        val clk = VsyncClock(120f).also { it.setDisplayTiming(0, 13_330_000L) }
+        val gate = VsyncIdleGate()
+        val bypass = FirstOutputBypass()
+        val adaptive = AdaptivePacer(clk, period)
+        val fixed = FramePacer(clk, 1, period)
+        val cpd = ConstantPlayoutPacer(clk, CpdConfig(), period)
+        var vs = 0L
+        gate.start(0)
+        for (k in 0 until 30) { vs += period; clk.onVsync(vs); gate.onActivity(vs); assertTrue(gate.onVsync(vs)) }
+        while (true) { vs += period; clk.onVsync(vs); if (!gate.onVsync(vs)) { bypass.arm(); clk.reset(); break } }
+
+        for (case in 0 until 3) {
+            if (case > 0) bypass.arm() // next sleep
+            // Input (or the frame's own posted wake) restarts the loop, and a vsync comes before the decoded output.
+            val t = vs + (case + 1) * 2_000 * ms
+            gate.onActivity(t)
+            gate.wake(t)
+            clk.onVsync(t + 3 * ms)
+            assertTrue("the clock restarted first", clk.hasSample)
+            val ready = t + 12 * ms
+            // Without the bypass this output would be paced (the clock-only approach would hold it).
+            val unbypassed = when (case) {
+                0 -> AdaptivePacer(clk, period).schedule(ready / 1000 - 20_000, ready)
+                1 -> FramePacer(clk, 1, period).schedule(ready)
+                else -> ConstantPlayoutPacer(clk, CpdConfig(), period).schedule(ready / 1000 - 20_000, ready)
+            }
+            assertNotNull("case $case: paced without the bypass", unbypassed)
+            val first = bypass.schedule {
+                when (case) {
+                    0 -> adaptive.schedule(ready / 1000 - 20_000, ready)
+                    1 -> fixed.schedule(ready)
+                    else -> cpd.schedule(ready / 1000 - 20_000, ready)
+                }
+            }
+            assertNull("case $case: first output after the sleep released at once", first)
+            assertFalse(bypass.isArmed)
+            // The next output is paced on the fresh grid.
+            val ready2 = ready + period
+            val second = bypass.schedule { fixed.schedule(ready2) }
+            assertNotNull(second)
+            assertTrue(second!!.slotNs >= ready2)
+            clk.reset()
+        }
+    }
+
+    @Test fun bypassIsTakenOnceAndDisarmedByAStreamStart() {
+        val b = FirstOutputBypass()
+        val paced = FramePacer.Decision(1, false, 0)
+        assertNotNull("not armed: normal scheduling", b.schedule { paced })
+        b.arm()
+        assertTrue(b.take())
+        assertFalse(b.take())
+        b.arm()
+        b.disarm()
+        assertNotNull(b.schedule { paced })
+        // Taken from another thread exactly once.
+        b.arm()
+        val hits = java.util.concurrent.atomic.AtomicInteger()
+        val ts = List(4) { Thread { repeat(1000) { if (b.take()) hits.incrementAndGet() } } }
+        ts.forEach { it.start() }; ts.forEach { it.join() }
+        assertEquals(1, hits.get())
+    }
+
+    /**
+     * Review P2, GL path model (GlPresenter, one GL thread): on sleep the bypass is armed; the first frame-available
+     * after it presents at once whether the loop is still asleep or already running, then later frames wait for vsync.
+     */
+    @Test fun glFirstFrameAfterSleepIsDrawnOnArrival() {
+        val gate = VsyncIdleGate()
+        val first = FirstOutputBypass()
+        var loopRunning = true
+        var drawnOnArrival = 0
+        fun onFrameAvailable(t: Long) {
+            val wakeAsked = gate.onActivity(t)
+            if (first.take() || wakeAsked) { gate.wake(t); drawnOnArrival++; loopRunning = true }
+        }
+        gate.start(0)
+        assertFalse(gate.onVsync(idle))
+        loopRunning = false; first.arm()
+        onFrameAvailable(idle + 50 * ms)
+        assertEquals(1, drawnOnArrival)
+        assertTrue(loopRunning)
+        onFrameAvailable(idle + 58 * ms) // the loop runs: this one waits for its vsync
+        assertEquals(1, drawnOnArrival)
+        // Asleep again, and the loop got going before the frame (not by a frame): still drawn on arrival.
+        assertFalse(gate.onVsync(idle + 58 * ms + idle))
+        loopRunning = false; first.arm()
+        gate.wake(idle + 58 * ms + idle + ms); loopRunning = true
+        onFrameAvailable(idle + 58 * ms + idle + 5 * ms)
+        assertEquals(2, drawnOnArrival)
+    }
+
     @Test fun debouncerPauseKeepsReportedValueAndRestartsAPendingFall() {
         val d = DisplayRateDebouncer()
         assertEquals(120, d.observe(120, 0))

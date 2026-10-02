@@ -84,6 +84,43 @@ class StatsLogWindowTest {
         assertTrue(StatsLogWindow.hasFrames(st.logSnapshot(reset = true)))
     }
 
+    /**
+     * Review P3: a stream that ends (or is reconfigured) 800 ms into a second. The boundary closes the unfinished second
+     * into the log window, so its frames are logged with their stream and nothing leaks into the next stream.
+     */
+    @Test fun streamBoundaryClosesTheUnfinishedSecond() {
+        val st = VideoStats()
+        val w = StatsLogWindow()
+        w.start(0)
+        // Session A: only 800 ms of frames, no per-second tick ever ran.
+        second(st, 0, n = 48, decUs = 9_000, latUs = 30_000)
+        st.closeWindow() // what MainActivity.flushStatsLog does at the boundary
+        val interval = w.close(800)
+        val a = st.logSnapshot(reset = true)
+        assertEquals(800L, interval)
+        assertTrue(StatsLogWindow.hasFrames(a))
+        assertEquals(48L, a.received)
+        assertEquals(30_000L, a.latencyAvgUs)
+        // Session B on the same (reused) renderer: its first STATS second and its log window hold only its own frames.
+        w.start(5_000)
+        second(st, 5_000_000L, n = 10, decUs = 9_000, latUs = 20_000)
+        val firstStats = st.snapshot(reset = true)
+        assertEquals(10L, firstStats.received)
+        assertEquals(20_000L, firstStats.latencyAvgUs)
+        val b = st.logSnapshot(reset = true)
+        assertEquals(10L, b.received)
+        assertEquals(1L, b.dropped)
+    }
+
+    @Test fun boundaryWithoutFramesLogsNothing() {
+        val st = VideoStats()
+        val w = StatsLogWindow()
+        w.start(0)
+        st.closeWindow()
+        assertEquals(300L, w.close(300))
+        assertFalse(StatsLogWindow.hasFrames(st.logSnapshot(reset = true)))
+    }
+
     @Test fun histogramSummaryIntoMovesTheWindowExactly() {
         val sec = IntervalHistogram(10_000)
         val win = IntervalHistogram(10_000)

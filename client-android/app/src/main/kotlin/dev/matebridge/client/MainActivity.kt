@@ -1206,6 +1206,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         vsyncGaps.breakSequence()
         vsyncGaps.summary(reset = true)
         vsyncIdle.start(System.nanoTime())
+        renderer?.firstOutput?.disarm()
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
         rateDebouncer = DisplayRateDebouncer()
@@ -1237,6 +1238,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * out); with no phase the pacers present the first frame after the pause at once instead of on a stale grid.
      */
     private fun sleepVsync() {
+        renderer?.firstOutput?.arm() // review P2: the first frame after the sleep goes out at once, even if the loop restarts first
         vsync.reset()
         vsyncGaps.breakSequence()
         ui.removeCallbacks(rateTicker)
@@ -1257,6 +1259,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!choreographerOn) return
         choreographerOn = false
         vsyncIdle.stop()
+        renderer?.firstOutput?.disarm()
         ui.removeCallbacks(vsyncWake)
         ui.removeCallbacks(rateTicker)
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
@@ -1418,10 +1421,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         )
     }
 
-    /** T-141: writes the open log window of the current renderer (stream ends or is reconfigured); see [writeStatsLog]. */
+    /**
+     * T-141: a stream boundary (it ends or is reconfigured). The unfinished second is closed into the log window and the
+     * window is written up to now (see [writeStatsLog]), so nothing of this stream is left in the reused renderer's
+     * counters for the next one. No STATS goes out for that partial second.
+     */
     private fun flushStatsLog() {
         val r = renderer ?: return
-        writeStatsLog(r, lastStatsMs)
+        val now = SystemClock.elapsedRealtime()
+        r.stats.closeWindow()
+        vsyncGaps.summaryInto(vsyncGapsLog)
+        writeStatsLog(r, now)
+        lastStatsMs = now
     }
 
     /**
