@@ -13,7 +13,12 @@ import android.os.Looper
  * is retried after a delay while still started. Thin Android wrapper, verified on the device only.
  */
 @Suppress("DEPRECATION")
-class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
+class MacDiscovery(
+    context: Context,
+    /** T-129: the resolved host IPv4 and its TXT `wol` value (null when absent), before [onFound]; NSD thread. */
+    private val onTxt: ((host: String, wol: String?) -> Unit)? = null,
+    private val onFound: (Endpoint) -> Unit,
+) {
     private val nsd = context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val main = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<NsdServiceInfo>()
@@ -102,6 +107,14 @@ class MacDiscovery(context: Context, private val onFound: (Endpoint) -> Unit) {
                         val host = addr.hostAddress
                         if (host != null && !host.contains(':')) {
                             MbLog.i("discovery_resolved", "host=$host port=${info.port}")
+                            onTxt?.let { cb ->
+                                val wol = try {
+                                    info.attributes[WolTxt.KEY]?.toString(Charsets.US_ASCII)
+                                } catch (e: RuntimeException) {
+                                    null
+                                }
+                                cb(host, wol)
+                            }
                             onFound(Endpoint(host, info.port))
                         }
                     }

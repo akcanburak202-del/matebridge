@@ -21,4 +21,6 @@
     <string name="usb_missing">USB bağlantısı yok — adb reverse kurulu mu?</string>
     <string name="transport_usb">Bağlantı: USB</string>
     <string name="transport_wifi">Bağlantı: Wi-Fi</string>
+    <string name="wol_button">Mac\'i uyandır</string>
+    <string name="wol_waking">Mac uyandırılıyor…</string>
 </resources>
