@@ -1,7 +1,7 @@
 ---
 id: T-119
 title: Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene
-status: todo
+status: in_progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -45,7 +45,29 @@ audio_capture_stopped stream_id=3
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+**Yarışın kaynağı.** Bizim tarafta sıra zaten doğru: `SystemAudioTap.reconcile` tek seri kuyrukta önce eski çalışmayı söküyor (`AudioDeviceStop` → `DestroyIOProcID` → `DestroyAggregateDevice` → `DestroyProcessTap`, log `audio_capture_stopped stream_id=3`), sonra yeni çalışmayı kuruyor. `build` içindeki `fail` de `.failed` olayından önce kendi yarım kurulumunu söküyor. Bu çağrılar coreaudiod'a senkron IPC olarak gidiyor. Ama daemon tarafında tap'in ve özel aggregate'in kaldırılması (IO durdurma, mute'un geri alınması) çağrı döndükten sonra da sürüyor gibi görünüyor. Hemen ardından gelen `AudioHardwareCreateProcessTap` `noErr` döndürüp nesne vermiyor. Bu bir hipotez; cihazda doğrulanacak. İstemcinin süreç içinden "söküm bitti" diye bekleyebileceği belgelenmiş bir sinyal yok. Bu yüzden çözüm, kısa ve artan gecikmeyle yeniden denemek.
+
+**Yer: politika (Core).** Yeniden deneme `AudioStreamPolicy` içinde, mevcut `scheduleRetry`/`retryDue` (token) mekanizmasıyla yapılır. Yeni zamanlayıcı ya da kuyruk eklenmez. Backend'in `fail` davranışı değişmez: o istek kalıcı olarak düşer. Her deneme, politikanın verdiği **yeni bir stream_id** ile yeni bir `startCapture` olur. Rebuild yeniden denemesi de bugün böyle çalışıyor. STARTED hiç gönderilmediği için tablete hiçbir şey gitmez. Sıralama: `.failed` gelmeden önce tap kuyruğunda söküm bitmiş olur, ardından `stopCapture(eski)` (no-op) gider. Yeni `start` aynı seri tap kuyruğunda sökümden sonra çalışır.
+
+**Sınıflandırma (Core, `AudioCaptureFailure`):** neden metinleri sabit olarak Core'a taşınır, host bu sabitleri kullanır.
+- Geçici: `tap_create`, `aggregate_create`. Hem hata status'u hem `noErr` + bilinmeyen ID bu sınıfa girer.
+- Kalıcı: `no_output_device`, `no_output_uid`, `tap_format`, `tap_format_<hz>_<ch>` (desteklenmeyen biçim), `tap_layout`, `ioproc_create` (izin), `device_start`, `setup_changed_*`. Bunlar bugünkü gibi hemen `audio_unavailable` verir. İstisna: bir interruption sonrasındaki rebuild'de mevcut 2×1 s rebuild denemesi sürer.
+
+**Politika değişikliği:**
+- `transientRetryDelaysUs = [100, 250, 500, 1000] ms`: en çok 4 ek deneme, toplam yaklaşık 1,85 s.
+- `captureFailed` (yalnızca başlarken, çalışırken değil) geçici bir hata alırsa ve deneme hakkı kalmışsa: `stopCapture` + `scheduleRetry(token, delay)` + `log audio_retry reason= attempt= delay_ms= status= stream_id=`. `failed`/`unavailableLogged` değişmez.
+- Geçici denemeler bitince mevcut akış devam eder: rebuild hakkı varsa `audio_rebuild_retry`, yoksa `audio_unavailable` (bugünkü satır).
+- Sayaç `captureStarted`, `stop` (oturum sonu, disable) ve `captureInterrupted` ile sıfırlanır.
+- İptal: oturum biterse ya da disable gelirse `stop` → `.waitingRetry` iptal olur, zamanlayıcı eşleşme bulamaz (token). Böylece iptal edilen bir istek için deneme yapılmaz.
+
+**Host (`SystemAudioTap`):** neden metinleri için Core sabitleri kullanılır, sınıf yorumu yarışı ve yeniden deneme politikasını anlatacak şekilde güncellenir. Davranış değişmez.
+
+**Testler (Core):**
+- Politika: geçici hata → `audio_retry` → `retryDue` → yeni start → başarı. Gecikme dizisi ve tükenince `audio_unavailable`. Bekleme sırasında disable ya da oturum sonu gelirse deneme yapılmaz. Kalıcı hata hemen vazgeçer. Interruption + geçici hata birleşimi.
+- Streamer: geçici hata gecikmeden sonra yeniden başlar.
+- Mevcut `aggregate_create`/`tap_create` kullanan testler yeni sınıflandırmaya göre güncellenir.
+
+**LOGGING.md** kapsam dışı (dosyalar listesinde yok). Orkestratör `audio_retry` satırını ekleyecek.
 
 ## Handoff
 
