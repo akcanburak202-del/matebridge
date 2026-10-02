@@ -16,9 +16,10 @@ class WakePlannerTest {
 
     private fun tick(
         advance: Long = 0, foreground: Boolean = true, userOff: Boolean = false, reached: Boolean = false, hasWol: Boolean = true,
+        asleep: Boolean = false,
     ): List<Step> {
         now += advance
-        return p.update(now, foreground, userOff, reached, hasWol)
+        return p.update(now, foreground, userOff, reached, hasWol, asleep)
     }
 
     /** Ticks every [stepMs] for [durationMs] (not reached, foreground); returns all steps. */
@@ -109,6 +110,17 @@ class WakePlannerTest {
         assertEquals(listOf(Step.Stop(WakePlanner.REASON_USER)), tick(100, userOff = true))
         for (i in 0 until 200) assertTrue(tick(250, userOff = true).isEmpty())
         assertFalse(p.active)
+    }
+
+    @Test fun hostAsleepStopsAndBlocksAutomaticEpisodes() {
+        startEpisode()
+        assertEquals(listOf(Step.Stop(WakePlanner.REASON_HOST_SLEEP)), tick(100, asleep = true))
+        for (i in 0 until 400) assertTrue(tick(250, asleep = true).isEmpty()) // way past grace and cooldown
+        assertFalse(p.active)
+        // Cleared (user action / foreground): the normal grace applies again.
+        assertTrue(tick(250).isEmpty())
+        assertTrue(tick(GRACE_MS - 1).isEmpty())
+        assertEquals(Step.Start(WakePlanner.REASON_AUTO), tick(1).first())
     }
 
     @Test fun manualStartsDuringCooldown() {

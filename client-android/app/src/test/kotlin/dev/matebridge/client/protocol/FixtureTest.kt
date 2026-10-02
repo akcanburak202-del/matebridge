@@ -59,6 +59,7 @@ class FixtureTest {
             "hello_ack_busy" to HelloAck(1, HelloAck.BUSY, 0, 0, "", HelloAck.KEY_NONE, zeros16, zeros16, zeros65),
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
             "bye" to Bye(Bye.NORMAL),
+            "bye_host_sleep" to Bye(Bye.HOST_SLEEP),
             "stream_prefs" to StreamPrefs(120, 750, 0),
             "stream_prefs_bitrate" to StreamPrefs(120, 1000, 40000),
             "display_rate" to DisplayRate(60),

@@ -23,4 +23,7 @@
     <string name="transport_wifi">Bağlantı: Wi-Fi</string>
     <string name="wol_button">Mac\'i uyandır</string>
     <string name="wol_waking">Mac uyandırılıyor…</string>
+    <string name="cause_host_sleep">Mac uyku modunda</string>
+    <string name="state_host_sleep">Mac uyku modunda.\nUyandırmak için \"Mac\'i uyandır\"a, Mac uyanıksa \"Bağlan\"a dokun.</string>
+    <string name="state_host_sleep_no_wol">Mac uyku modunda.\nMac uyanınca \"Bağlan\"a dokun.</string>
 </resources>

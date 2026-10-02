@@ -251,10 +251,12 @@ class SessionMachine(
             // PROTOCOL.md 0x08: only an accepted session; whether the stream is visible is the UI's call.
             SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is Bye -> {
-                if (msg.reason == Bye.REJECTED) {
+                if (msg.reason == Bye.REJECTED || msg.reason == Bye.HOST_SLEEP) {
+                    // HOST_SLEEP (T-133): every packet to a sleeping Mac dark-wakes it, so no retry timer either.
                     closeAll(out, graceful = false)
                     phase = Phase.FAILED
-                    out += Action.Ui(SessionUi.Failed(SessionUi.Cause.REJECTED))
+                    val cause = if (msg.reason == Bye.REJECTED) SessionUi.Cause.REJECTED else SessionUi.Cause.HOST_SLEEP
+                    out += Action.Ui(SessionUi.Failed(cause))
                 } else {
                     lose(out, nowUs, SessionUi.Cause.HOST_CLOSED)
                 }

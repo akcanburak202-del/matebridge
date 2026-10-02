@@ -187,6 +187,8 @@ data class Bye(val reason: Int) : Message {
         const val TIMEOUT = 3
         const val SHUTTING_DOWN = 4
         const val SUPERSEDED = 5
+        /** The Mac is going to system sleep (PROTOCOL.md 0x04): no automatic reconnect or wake. */
+        const val HOST_SLEEP = 6
     }
 }
 

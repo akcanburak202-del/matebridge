@@ -236,16 +236,24 @@ class WakePlanner {
     /**
      * One step of the automatic policy. [userOff]: the user pressed "Bağlantıyı kes" (no automatic reconnect, so no
      * automatic wake either). [reached]: the host answered (see [reached] for a session state). [skipReason] is asked
-     * only when an automatic episode is due: null allows it, anything else is the reason it is skipped.
+     * only when an automatic episode is due: null allows it, anything else is the reason it is skipped. [hostAsleep]
+     * (T-133): the host said BYE(HOST_SLEEP); nothing automatic is sent until the user acts or the app comes back.
      */
     fun update(
         nowMs: Long, foreground: Boolean, userOff: Boolean, reached: Boolean, hasWol: Boolean,
+        hostAsleep: Boolean = false,
         skipReason: () -> String? = { null },
     ): List<Step> {
-        if (!foreground || userOff) {
+        if (!foreground || userOff || hostAsleep) {
             wasForeground = foreground
             notReachedSinceMs = -1
-            return stop(if (!foreground) REASON_BACKGROUND else REASON_USER)
+            return stop(
+                when {
+                    !foreground -> REASON_BACKGROUND
+                    userOff -> REASON_USER
+                    else -> REASON_HOST_SLEEP
+                },
+            )
         }
         if (!wasForeground) {
             wasForeground = true
@@ -325,6 +333,7 @@ class WakePlanner {
         const val REASON_TIMEOUT = "timeout"
         const val REASON_BACKGROUND = "background"
         const val REASON_USER = "user"
+        const val REASON_HOST_SLEEP = "host_sleep"
 
         /**
          * The host answered, so it is awake: a session (or pairing) is up, it gave a terminal answer (REJECTED, ...), or
