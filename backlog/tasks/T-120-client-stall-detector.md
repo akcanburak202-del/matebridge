@@ -1,7 +1,7 @@
 ---
 id: T-120
 title: Tablet — süreç donma dedektörü (yüksek öncelikli tik iş parçacığı); ses/görüntü varış boşluklarının tabletten mi geldiğini ayır
-status: in_progress
+status: review
 phase: 5
 owner: android-client-dev
 depends_on: [T-117]
@@ -71,8 +71,37 @@ Bu kart (a)'yı ölçer. Davranışı değiştirmez.
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** `15a4ac0` (uygulama), plan `9674af5`. Dal: `task/T-120-client-stall-detector`.
 - **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/diag/StallMeter.kt` (yeni, saf hesap)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/diag/StallDetector.kt` (yeni, `mb-stall` iş parçacığı + loglar)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt` (başlat/durdur, `lastControlReadNs`, `tick_late_ms`)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/diag/StallMeterTest.kt` (14 test, sahte saat)
+- **LOGGING.md için yeni alanlar (orkestratör ekler), bileşen `diag`, etiket `MB/diag`:**
+  - `I diag ev=stall_detector_start prio= period_ms=5 cpu_freq_files=`: `prio` = iş parçacığının elde ettiği öncelik (-19 = URGENT_AUDIO, -16 = AUDIO). `cpu_freq_files` = okunabilir `scaling_cur_freq` dosya sayısı. Kapanışta `ev=stall_detector_stop`.
+  - Saniyede bir `I diag ev=stall_stats ticks= tick_late_max_ms= stalls= suspend_ms= cpu_freq_khz=`:
+    - `ticks`: penceredeki tik sayısı (beklenen ~200);
+    - `tick_late_max_ms`: beklenen uyanmaya göre en büyük gecikme;
+    - `stalls`: > 30 ms gecikmeli tik sayısı;
+    - `suspend_ms`: penceredeki `elapsedRealtime − uptime` artışı (cihaz askıda geçen süre);
+    - `cpu_freq_khz`: tüm çekirdeklerin `scaling_cur_freq` en büyüğü; okunamazsa `-`.
+  - `I diag ev=stall dur_ms= suspend_ms= ctl_idle_ms= video_idle_ms= suppressed=` (tik > 50 ms geç, saniyede en çok 5):
+    - `suspend_ms`: o tik aralığında askı süresi;
+    - `*_idle_ms`: tespit anı − kontrol/video okuyucunun son veri dolu `read()` dönüşü (`-` = henüz yok);
+    - `suppressed`: hız sınırına takılan donma sayısı.
+  - `D audio ev=audio_arrival_gap` satırına `suppressed=`'dan sonra `tick_late_ms=` eklendi: boşluk penceresi [`read` dönüşü − `gap_ms`, `read` dönüşü] ile örtüşen tiklerin en büyük gecikmesi (henüz uyanmamış ama gecikmiş tik dahil). `-` = dedektör çalışmıyor ya da kapsam yok.
+    - ≈ `gap_ms` → tablet süreci/CPU durmuş;
+    - ~0 → veri gerçekten geç gelmiş (ağ yığını ya da Mac).
 - **Varsayımlar:**
+  - Uptime saati olarak `System.nanoTime()` kullanıldı (`CLOCK_MONOTONIC`, Android'de uptime ile aynı; T-117 `readNs` ile aynı saat). `SystemClock.uptimeNanos()` API 35'te geldiği için `minSdk 29`'da yok.
+  - Dedektör kontrol bağlantısı varken çalışır: `OpenControl`/`PromoteCandidate`'de başlar, `CloseControl`'de ve motor kapanışında durur. Yeniden bağlanmada iş parçacığı yeniden kurulur ve istatistikler sıfırlanır. Durdurma, eski iş parçacığını en çok 100 ms bekler (normalde < 1 ms).
+  - Geç tik, kaçırılan tikleri toplu çalıştırmaz: sonraki uyanma, bu uyanmadan 5 ms sonradır.
+  - Maliyet: 200 uyanma/s × ~10–20 µs ≈ tek çekirdeğin %0,2–0,4'ü; tik yolunda ayırma yok. Saniyede bir sysfs okuması ve bir log satırı (ayırır, tik yolunun dışında).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  1. `adb logcat -s 'MB/diag:*'`: `stall_detector_start prio=-19` mu (yoksa -16 / 0)? `cpu_freq_files` > 0 mı?
+  2. `stall_stats`: boşta `ticks` ~195–200, `tick_late_max_ms` birkaç ms, `stalls=0`, `suspend_ms=0.0`, `cpu_freq_khz` sayı mı (SELinux engelliyorsa `-`)?
+  3. Apple Music çalarken küme anlarında: `ev=stall` satırı geliyor mu, `audio_arrival_gap` `tick_late_ms` değeri `gap_ms`'e yakın mı (tablet donmuş) yoksa ~0 mı (veri geç gelmiş)? `suspend_ms` > 0 ise derin uyku/askı.
+  4. Regresyon: ses/görüntü normal, CPU/ısı değişimi yok (`top -H` içinde `mb-stall` ihmal edilebilir olmalı).
+  5. Oturum kapanınca (`session_stop`) `stall_detector_stop` gelmeli ve `stall_stats` satırları durmalı.
 - **Açık sorular:**
+  - Huawei arka plana alınan uygulamayı dondurursa (`ev=stall` + `suspend_ms=0`) bu da görünür olur; ama uygulama ön plandayken de oluyorsa neden ayrı kart.
