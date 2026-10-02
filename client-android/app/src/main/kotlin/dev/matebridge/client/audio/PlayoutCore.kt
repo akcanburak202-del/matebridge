@@ -34,6 +34,17 @@ package dev.matebridge.client.audio
  * one safety step is kept for the underrun it probably was. No trim after an A/V hold (that level is meant) nor
  * after a run-dry classified idle (the start of a new sound must not be cut).
  *
+ * Late bunch (T-125): the held packets may also come at catch-up speed, so a quick restart starts on the first few
+ * and the rest arrive while playing (seen on Wi-Fi: level 85-134 ms against a 45 ms target, the PI needed ~20 s).
+ *  - For [SKIP_WINDOW_MS] after a restart (not the first start, not after an A/V hold, not after a run-dry classified
+ *    idle; closed if the run-dry is classified idle later), the level floor is taken per [SKIP_PROBE_MS]. When one
+ *    is more than [SKIP_ABOVE_MS] above the target, the excess down to the target (one safety step kept while the
+ *    run-dry is unclassified) is dropped with the buffer's 3 ms crossfade. At most one skip per window.
+ *  - Any time: [SUSTAINED_WINDOWS] drift windows in a row whose floor is more than [SUSTAINED_ABOVE_MS] above the
+ *    target drop the excess once. The count starts at each playback start, so the first seconds of a sound (after
+ *    silence or not) are never cut. Smaller deviations stay with the PI.
+ * The target includes the A/V floor, so a skip never drops below it.
+ *
  * A/V while priming: [primingHoldUs] > 0 means "starting now would put the audio that much ahead of its A/V target";
  * playback then waits (up to the buffer's max refill level) and the level it starts at becomes the A/V floor, so the
  * first A/V target needs no rebuffer later.
@@ -79,6 +90,23 @@ class PlayoutCore(
     var refillTrimFrames = 0L
         private set
 
+    /** T-125: skips of excess while playing (late bunch or sustained high level), and the frames dropped. */
+    var skipTrims = 0L
+        private set
+    var skipTrimFrames = 0L
+        private set
+
+    private val skipWindowFrames = SKIP_WINDOW_MS * sampleRate / 1000
+    private val skipProbeFrames = SKIP_PROBE_MS * sampleRate / 1000
+    private val skipAboveFrames = SKIP_ABOVE_MS * sampleRate / 1000
+    private val sustainedAboveFrames = SUSTAINED_ABOVE_MS * sampleRate / 1000
+    /** Output frames left in the post-underrun skip window (0 = closed). */
+    private var skipWindowLeft = 0
+    private var probeMin = Int.MAX_VALUE
+    private var probeFrames = 0
+    private var seenWindows = 0L
+    private var highWindows = 0
+
     /** Times the buffer ran dry because the source went silent (not underruns). */
     var idleGaps = 0L
         private set
@@ -122,6 +150,11 @@ class PlayoutCore(
                 drift.onPlaybackStart()
                 // Held for A/V: the floor about to follow (the level minus half the arrival sawtooth) is the A/V floor.
                 if (heldThisPriming) drift.seedAvFloor(level - drift.lastSpanFrames / 2)
+                skipWindowLeft = if (hasPlayed && !heldThisPriming && !idleRestart) skipWindowFrames else 0
+                probeMin = Int.MAX_VALUE
+                probeFrames = 0
+                seenWindows = drift.windows
+                highWindows = 0
                 heldThisPriming = false
                 quickRestart = false
                 idleRestart = false
@@ -165,8 +198,43 @@ class PlayoutCore(
                 ramp.fadeOut(fadeOutFrames)
                 state = State.FADING_OUT
             }
-            DriftController.Decision.None -> Unit
+            DriftController.Decision.None -> checkSkip(remaining, frames)
         }
+    }
+
+    /** T-125: the post-underrun skip window and the sustained-excess rule (see the class comment). */
+    private fun checkSkip(level: Int, frames: Int) {
+        if (skipWindowLeft > 0) {
+            if (level < probeMin) probeMin = level
+            probeFrames += frames
+            skipWindowLeft -= frames
+            if (probeFrames >= skipProbeFrames) {
+                val excess = probeMin - drift.targetFrames - if (starvePending) drift.safetyStepFrames else 0
+                probeMin = Int.MAX_VALUE
+                probeFrames = 0
+                if (excess > skipAboveFrames) {
+                    skip(excess)
+                    skipWindowLeft = 0
+                }
+            }
+        }
+        val w = drift.windows
+        if (w != seenWindows) {
+            seenWindows = w
+            val excess = drift.lastFloorFrames - drift.targetFrames
+            highWindows = if (excess > sustainedAboveFrames) highWindows + 1 else 0
+            if (highWindows >= SUSTAINED_WINDOWS) {
+                highWindows = 0
+                skip(excess)
+            }
+        }
+    }
+
+    private fun skip(frames: Int) {
+        buffer.skipCrossfade(frames)
+        skipTrims++
+        skipTrimFrames += frames
+        drift.onSkip(frames)
     }
 
     /** Drops the level's excess above the refill threshold (see the class comment); called just before the fade-in. */
@@ -195,6 +263,7 @@ class PlayoutCore(
         if (buffer.discontinuities != starveDiscontinuities) {
             starvePending = false
             idleGaps++
+            skipWindowLeft = 0 // T-125: what follows is a new sound, not a late bunch
             if (state == State.PRIMING) {
                 quickRestart = true
                 idleRestart = true
@@ -214,5 +283,15 @@ class PlayoutCore(
         const val CONFIRM_PACKETS = 3L
         /** T-118: a start more than this above the refill threshold drops the excess down to the threshold. */
         const val TRIM_SLACK_MS = 5
+        /** T-125: after a restart a late bunch is looked for this long (a stall's bunch arrives within ~0.3 s). */
+        const val SKIP_WINDOW_MS = 2_000
+        /** T-125: floor probe inside the skip window (at least four Wi-Fi arrival gaps of 41-50 ms). */
+        const val SKIP_PROBE_MS = 200
+        /** T-125: a probe floor more than this above the target is a late bunch's excess. */
+        const val SKIP_ABOVE_MS = 20
+        /** T-125: outside the window, a floor this far above the target ... */
+        const val SUSTAINED_ABOVE_MS = 60
+        /** ... for this many drift windows (1 s each) in a row is dropped once. */
+        const val SUSTAINED_WINDOWS = 3
     }
 }
