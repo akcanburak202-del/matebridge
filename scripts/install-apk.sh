@@ -19,6 +19,9 @@ TIMEOUT_S="${INSTALL_TIMEOUT_S:-180}"
 
 [ -f "$APK" ] || { echo "APK not found: $APK" >&2; exit 1; }
 "$ADB" get-state >/dev/null 2>&1 || { echo "no device (adb get-state failed)" >&2; exit 1; }
+# Only the HUAWEI tablet: another Android device on the cable (e.g. the user's phone) must never get the APK.
+brand="$("$ADB" shell getprop ro.product.brand | tr -d '\r')"
+[ "$brand" = "HUAWEI" ] || { echo "connected device is not the HUAWEI tablet (brand=$brand); not installing" >&2; exit 1; }
 
 before="$("$ADB" shell dumpsys package "$PKG" | sed -n 's/.*lastUpdateTime=//p' | head -1)"
 log="$(mktemp -t mb-install)"
