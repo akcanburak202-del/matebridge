@@ -158,6 +158,25 @@ class WolTest {
         assertEquals(other, s.subnet())
     }
 
+    @Test fun portIsStoredWithTheHostAndDefaultsTo47001() {
+        val kv = MapStore()
+        val s = WolStore(kv)
+        assertNull(s.wakeEndpoint())
+        assertEquals(47001, s.port())
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home) // no port from the resolution: default
+        assertEquals(Endpoint("192.168.1.20", 47001), s.wakeEndpoint())
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home, 47011)
+        assertEquals(Endpoint("192.168.1.20", 47011), s.wakeEndpoint())
+        assertEquals(Endpoint("192.168.1.20", 47011), WolStore(kv).wakeEndpoint()) // persisted
+        s.onResolved("192.168.1.20", "02:00:00:aa:bb:01", home, 0) // out of range: kept
+        s.onResolved("192.168.1.21", null, home, 47099) // no usable TXT: nothing stored
+        assertEquals(Endpoint("192.168.1.20", 47011), s.wakeEndpoint())
+        s.onResolved("fe80::1", "02:00:00:aa:bb:01", home, 47099) // not an IPv4 host: its port is not stored either
+        assertEquals(Endpoint("192.168.1.20", 47011), s.wakeEndpoint())
+        kv.map["wol_port"] = "99999"
+        assertEquals(47001, WolStore(kv).port())
+    }
+
     @Test fun nonIpv4HostIsNotStored() {
         val kv = MapStore()
         val s = WolStore(kv)

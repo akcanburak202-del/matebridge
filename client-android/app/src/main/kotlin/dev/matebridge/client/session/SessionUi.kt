@@ -12,7 +12,7 @@ sealed interface SessionUi {
     data class AwaitingApproval(val hostName: String, val code: String? = null, val rePairing: Boolean = false) : SessionUi
     data class Connected(val hostName: String, val framesReceived: Long) : SessionUi
 
-    /** "Bağlantı yok"; an automatic retry follows in [retryInMs]. */
+    /** "Bağlantı yok"; an automatic retry follows in [retryInMs] (0: none, a failed T-134 wake attempt). */
     data class Disconnected(val cause: Cause, val retryInMs: Long) : SessionUi
 
     /**
