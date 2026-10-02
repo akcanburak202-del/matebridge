@@ -15,6 +15,12 @@ class DisplayRateDebouncer(private val stableMs: Long = 500, private val minInte
     /** The last value returned by [observe] (0 = none yet). */
     val current: Int get() = reported
 
+    /**
+     * T-141: measuring paused (the vsync loop sleeps while no frame arrives). The reported value is kept; a pending
+     * fall is forgotten, so after the pause it must again stay the measurement for [stableMs] of fresh samples.
+     */
+    fun onPause() { candidate = 0 }
+
     /** Returns the rate to report now, or null. [hz] <= 0 (unknown) is ignored. */
     fun observe(hz: Int, nowMs: Long): Int? {
         if (hz <= 0) return null

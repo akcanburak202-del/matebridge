@@ -66,6 +66,7 @@ import dev.matebridge.client.stream.GameJitter
 import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
+import dev.matebridge.client.stream.StatsLogWindow
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.stream.VideoLayout
@@ -76,6 +77,7 @@ import dev.matebridge.client.video.VideoRenderer
 import dev.matebridge.client.video.OperatingRate
 import dev.matebridge.client.stream.DisplayRateDebouncer
 import dev.matebridge.client.video.VsyncClock
+import dev.matebridge.client.video.VsyncIdleGate
 import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
 import dev.matebridge.client.session.Transport
@@ -189,6 +191,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var surfaceValid = false
     private var statsOn = false
     private var lastStatsMs = 0L
+    /** T-141: log window of the video stats lines (10 s; `--ez stats_1s true` = 1 s). The STATS message stays per second. */
+    private var statsLog = StatsLogWindow()
+    /** Overlay text last set; an unchanged text is not set again (no relayout/redraw once a second while idle). */
+    private var lastOverlayText: String? = null
 
     // T-016/T-052 smoothness knobs. Launch extras: `--ei jitter N` (unset = adaptive pacing on the surface path;
     // 0|1|2 = fixed jitter buffer in content frames, 0 = render at once as in T-015; -1 = adaptive off = 0) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
@@ -200,7 +206,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
     private val vsyncGaps = IntervalHistogram()
+    private val vsyncGapsLog = IntervalHistogram() // T-141: the log window's vsync gaps (fed per second from vsyncGaps)
     private val vsync = VsyncClock()
+    /** T-141: the vsync loop sleeps while no video frame arrives; a frame or pointer input wakes it. */
+    private val vsyncIdle = VsyncIdleGate()
+    private val vsyncWake = Runnable { wakeVsync() }
 
     // T-018: `--es render surface|gl` picks the presentation path; `--ei frate N` sets Surface.setFrameRate(N,
     // FIXED_SOURCE) on either path (0 = off; unset: GL uses `hz`, the surface path keeps the content-fps hint);
@@ -228,7 +238,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun doFrame(frameTimeNanos: Long) {
             vsync.onVsync(frameTimeNanos)
             vsyncGaps.mark(frameTimeNanos / 1000)
-            if (choreographerOn) Choreographer.getInstance().postFrameCallback(this)
+            if (!choreographerOn) return
+            if (vsyncIdle.onVsync(System.nanoTime())) Choreographer.getInstance().postFrameCallback(this) else sleepVsync()
         }
     }
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -356,6 +367,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         glMode = intent?.getStringExtra("render") == "gl"
         frameRateOverride = intent?.getIntExtra("frate", -1) ?: -1
         glPresentationTime = intent?.getBooleanExtra("glpts", false) ?: false
+        // T-141: `--ez stats_1s true` brings back the per-second video stats log lines (diagnostics).
+        statsLog = StatsLogWindow(if (intent?.getBooleanExtra("stats_1s", false) == true) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
+        MbLog.i("stats_log", "window_ms=${statsLog.windowMs}", "render")
         operatingRate = intent?.getIntExtra("oprate", OperatingRate.STREAM_FPS) ?: OperatingRate.STREAM_FPS
         bufferFrames = when {
             glMode -> 0 // the GL presenter aligns to vsync itself; SurfaceTexture ignores release timestamps
@@ -484,7 +498,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onVideoFrame(frame: VideoFrame) {
                 // Never feed the queue while no surface is attached (T-013 handoff).
-                renderer?.let { if (it.attached) it.onFrame(frame) }
+                val r = renderer ?: return
+                if (!r.attached) return
+                // T-141: a frame wakes a sleeping vsync loop (one post per sleep; a volatile write otherwise).
+                if (vsyncIdle.onActivity(System.nanoTime())) ui.post(vsyncWake)
+                r.onFrame(frame)
             }
 
             override fun onSessionStart() {
@@ -703,11 +721,23 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean =
-        routeToCapture(ev) || super.dispatchTouchEvent(ev)
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        noteInputActivity()
+        return routeToCapture(ev) || super.dispatchTouchEvent(ev)
+    }
 
-    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean =
-        routeToCapture(ev) || super.dispatchGenericMotionEvent(ev)
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        noteInputActivity()
+        return routeToCapture(ev) || super.dispatchGenericMotionEvent(ev)
+    }
+
+    /**
+     * T-141: touch, pen and pointer input wake a sleeping vsync loop before the Mac answers with frames, so the panel
+     * rate (a touch raises it to 120 Hz) is measured again by then. Nothing about the event itself changes.
+     */
+    private fun noteInputActivity() {
+        if (vsyncIdle.onActivity(System.nanoTime())) wakeVsync()
+    }
 
     override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
         // The M-Pencil double tap arrives as keyCode 718 / scanCode 190; it becomes PEN_GESTURE and is never sent as KEY.
@@ -1137,7 +1167,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setSurfaceFrameRate(true)
         startVsync()
         presenter?.active = true
+        flushStatsLog() // T-141: a reconfiguration closes the log window of the previous configuration
         lastStatsMs = SystemClock.elapsedRealtime()
+        statsLog.start(lastStatsMs)
         rttStats.reset() // T-089: the first ev=net window holds no approval-wait or reconnect samples
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
         if (!r.attached && surfaceValid) {
@@ -1155,7 +1187,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         presenter?.active = false
         streamConfig = null
         audio?.onVideoLatency(null) // no video: no A/V target
+        flushStatsLog() // T-141: the partial log window of the stream that ends
         statsView.text = ""
+        lastOverlayText = null
         applyVoteChange(rvote?.stop(dev.matebridge.client.video.VoteReason.SESSION))
         releaseRefreshRate()
         setSurfaceFrameRate(false)
@@ -1171,6 +1205,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         perfHint?.setTargetNs(vsync.periodNs.takeIf { it > 0 } ?: streamConfig?.fps?.takeIf { it > 0 }?.let { 1_000_000_000L / it } ?: 0L)
         vsyncGaps.breakSequence()
         vsyncGaps.summary(reset = true)
+        vsyncIdle.start(System.nanoTime())
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
         rateDebouncer = DisplayRateDebouncer()
@@ -1184,7 +1219,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun run() {
             if (!choreographerOn) return
             val period = vsync.periodNs
-            if (period > 0) {
+            if (period > 0 && vsyncIdle.rateReady) { // T-141: right after a wake the clock is re-measured first
                 val hz = Math.round(1e9 / period).toInt()
                 rateDebouncer.observe(hz, SystemClock.elapsedRealtime())?.let {
                     controller.setDisplayRate(it)
@@ -1196,9 +1231,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    /**
+     * T-141, main thread: no frame for [VsyncIdleGate.DEFAULT_IDLE_AFTER_NS]; the vsync callback was not re-registered.
+     * The clock forgets its phase but keeps its period (the panel rate stays at its last value and no DISPLAY_RATE goes
+     * out); with no phase the pacers present the first frame after the pause at once instead of on a stale grid.
+     */
+    private fun sleepVsync() {
+        vsync.reset()
+        vsyncGaps.breakSequence()
+        ui.removeCallbacks(rateTicker)
+        rateDebouncer.onPause()
+    }
+
+    /** T-141, main thread: a frame or input arrived while the vsync loop slept; restart it and the rate poll. */
+    private fun wakeVsync() {
+        if (!choreographerOn) return
+        val woke = vsyncIdle.wake(System.nanoTime()) ?: return
+        Choreographer.getInstance().postFrameCallback(vsyncCallback)
+        ui.removeCallbacks(rateTicker)
+        ui.post(rateTicker)
+        if (woke.idleLogged) MbLog.i("idle", "state=off idle_ms=${woke.sleptNs / 1_000_000}", "render")
+    }
+
     private fun stopVsync() {
         if (!choreographerOn) return
         choreographerOn = false
+        vsyncIdle.stop()
+        ui.removeCallbacks(vsyncWake)
         ui.removeCallbacks(rateTicker)
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(displayListener)
@@ -1299,6 +1358,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Every 500 ms: re-request a keyframe while gated; every 1 s: STATS, overlay and log summary. */
     private val ticker = object : Runnable {
         override fun run() {
+            if (choreographerOn && vsyncIdle.idleLogDue(System.nanoTime())) { // T-141: once per sleep of >= 1 s
+                MbLog.i("idle", "state=on since_frame_ms=${vsyncIdle.sinceActivityNs(System.nanoTime()) / 1_000_000}", "render")
+            }
             val r = renderer
             if (r != null && r.attached) {
                 // T-121: the retry goes through the queue's request limit (no retry right after another request).
@@ -1313,13 +1375,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun statsTick(r: VideoRenderer, now: Long) {
         val interval = now - lastStatsMs
         lastStatsMs = now
-        val s = r.stats.snapshot(reset = true)
+        val s = r.stats.snapshot(reset = true) // T-141: the closed second also joins the log window
         r.onSkipWindow(s.skipPct)
         rvote?.let { v ->
             val streaming = foreground && lastUi is SessionUi.Connected
             applyVoteChange(v.update(streaming, s.received * 1000.0 / interval.coerceAtLeast(1)))
         }
-        val vg = vsyncGaps.summary(reset = true)
+        val vg = vsyncGaps.summaryInto(vsyncGapsLog)
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
@@ -1329,9 +1391,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val tr = currentTransport()
-            statsView.text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
+            val text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
                 (if (mode == TransportMode.AUTO) " (otomatik)" else "") + "\n" +
                 StreamMode.overlayLine(streamMode, streamConfig) + "\n" + withGl
+            if (text != lastOverlayText) { // T-141: an idle overlay does not change; skip the relayout and redraw
+                lastOverlayText = text
+                statsView.text = text
+            }
         }
         if (gl != null) {
             MbLog.i(
@@ -1340,11 +1406,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 "render",
             )
         }
+        if (statsLog.due(now)) {
+            writeStatsLog(r, now)
+            statsLog.start(now)
+        }
+        // T-089: RTT of this statistics window (PING -> PONG), with the transport it was measured on.
+        MbLog.i(
+            "net",
+            "transport=${currentTransport().logName} " +
+                "${rttStats.snapshot(reset = true).fields()} ping_ms=${knobs.pingMs}",
+        )
+    }
+
+    /** T-141: writes the open log window of the current renderer (stream ends or is reconfigured); see [writeStatsLog]. */
+    private fun flushStatsLog() {
+        val r = renderer ?: return
+        writeStatsLog(r, lastStatsMs)
+    }
+
+    /**
+     * T-141: closes the log window at [endMs] (the end of its last per-second window) and writes `MB/render ev=present`,
+     * `MB/decoder ev=stats` and `MB/render ev=stats` for it: same fields as the per-second lines, values over the whole
+     * window, `interval_ms` = its length. A window without any video frame writes nothing (idle screen). Always starts
+     * the counters afresh, also when no window was open.
+     */
+    private fun writeStatsLog(r: VideoRenderer, endMs: Long) {
+        val interval = statsLog.close(endMs)
+        val s = r.stats.logSnapshot(reset = true)
+        val vg = vsyncGapsLog.summary(reset = true)
+        val queueFields = r.queueStatsFields(reset = true)
+        val write = interval >= 0 && StatsLogWindow.hasFrames(s)
+        r.logPresent(write)
+        if (!write) return
+        val lat = s.latencyAvgUs
         val fps = s.rendered * 1000.0 / interval.coerceAtLeast(1)
         MbLog.i(
             "stats",
             "interval_ms=$interval recv=${s.received} dec=${s.decoded} shown=${s.rendered} drop=${s.dropped} " +
-                "decode_avg_us=${s.decodeTimeAvgUs} bytes=${s.bytesReceived} ${r.queueStatsFields(reset = true)}",
+                "decode_avg_us=${s.decodeTimeAvgUs} bytes=${s.bytesReceived} $queueFields",
             "decoder",
         )
         MbLog.i(
@@ -1361,12 +1460,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 StatsFormat.gapFields("shown", s.shown) + " " + StatsFormat.gapFields("dec", s.decode) +
                 " pace_d_us=${r.paceDUs()}",
             "render",
-        )
-        // T-089: RTT of this statistics window (PING -> PONG), with the transport it was measured on.
-        MbLog.i(
-            "net",
-            "transport=${currentTransport().logName} " +
-                "${rttStats.snapshot(reset = true).fields()} ping_ms=${knobs.pingMs}",
         )
     }
 
