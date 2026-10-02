@@ -3,6 +3,7 @@ package dev.matebridge.client.session
 import dev.matebridge.client.session.WakeConnect.Step
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,9 +33,18 @@ class WakeConnectTest {
         return s
     }
 
-    private fun fail(n: Int, advanceMs: Long = 0) {
+    /** Asserts [s] is attempt number [n] (within its episode) to the target; returns its tag. */
+    private fun attempt(n: Int, s: Step): WakeTag {
+        assertTrue("expected attempt $n, got $s", s is Step.Attempt)
+        s as Step.Attempt
+        assertEquals(n, s.n)
+        assertEquals(target, s.endpoint)
+        return s.tag
+    }
+
+    private fun fail(tag: WakeTag? = w.inFlight, advanceMs: Long = 0) {
         now += advanceMs
-        assertNull(w.onResult(n, false, now))
+        assertNull(w.onResult(tag!!, false, now))
         idle = true // the machine reports Disconnected(CONNECT_FAILED, 0)
     }
 
@@ -44,27 +54,27 @@ class WakeConnectTest {
     }
 
     @Test fun firstAttemptAtOnceWhenTheEpisodeStarts() {
-        assertEquals(Step.Attempt(1, target), step())
-        assertEquals(1, w.inFlight)
+        val t = attempt(1, step())
+        assertEquals(t, w.inFlight)
     }
 
     @Test fun noAttemptWithoutTargetOrWithTheWrongTransport() {
         assertEquals(Step.None, step(tgt = null))
         assertEquals(Step.None, step(transportOk = false))
-        assertEquals(Step.Attempt(1, target), step())
+        attempt(1, step())
     }
 
     @Test fun oneAttemptAtATimeThenTwoSecondsAfterAFailure() {
-        assertEquals(Step.Attempt(1, target), step())
+        attempt(1, step())
         // the connect runs (up to its 3 s timeout): no second attempt meanwhile
         for (i in 0 until 11) assertEquals(Step.None, step(advanceMs = 250))
-        fail(1, advanceMs = 250) // failed after 3 s
+        fail(advanceMs = 250) // failed after 3 s
         assertEquals(Step.None, step(advanceMs = 1_000))
         assertEquals(Step.None, step(advanceMs = 750))
-        assertEquals(Step.Attempt(2, target), step(advanceMs = 250)) // 2 s after the failure
-        fail(2, advanceMs = 100) // refused at once
+        attempt(2, step(advanceMs = 250)) // 2 s after the failure
+        fail(advanceMs = 100) // refused at once
         assertEquals(Step.None, step(advanceMs = 1_999))
-        assertEquals(Step.Attempt(3, target), step(advanceMs = 1))
+        attempt(3, step(advanceMs = 1))
     }
 
     @Test fun attemptsCoverTheTwentySecondEpisode() {
@@ -75,15 +85,24 @@ class WakeConnectTest {
         while (t <= WakePlanner.EPISODE_MS) {
             val s = step(advanceMs = 250)
             if (s is Step.Attempt) starts += now - t0
-            if (w.inFlight != 0 && now - t0 - starts.last() >= WakeConnect.CONNECT_TIMEOUT_MS) fail(w.inFlight)
+            if (w.inFlight != null && now - t0 - starts.last() >= WakeConnect.CONNECT_TIMEOUT_MS) fail()
             t += 250
         }
         assertEquals(listOf(250L, 5_250L, 10_250L, 15_250L, 20_250L), starts)
     }
 
+    @Test fun tagsAreUniqueAcrossEpisodes() {
+        val a = attempt(1, step())
+        fail()
+        assertEquals(Step.Release, step(episode = false))
+        val b = attempt(1, step(advanceMs = 30_000)) // a new episode numbers from 1 ...
+        assertNotEquals(a, b) // ... but its identity is new
+        assertNotEquals(a.id, b.id)
+    }
+
     @Test fun connectedAttemptIsAdoptedAndEndsTheAttempts() {
-        assertEquals(Step.Attempt(1, target), step())
-        assertEquals(target, w.onResult(1, true, now))
+        val t = attempt(1, step())
+        assertEquals(target, w.onResult(t, true, now))
         assertNull(w.owned)
         assertTrue(w.settled)
         idle = true // even if the session then drops, no more direct attempts in this episode
@@ -93,53 +112,90 @@ class WakeConnectTest {
         assertEquals(target, current)
     }
 
-    @Test fun staleResultIsIgnored() {
-        assertEquals(Step.Attempt(1, target), step())
-        assertNull(w.onResult(7, true, now))
-        assertEquals(1, w.inFlight)
-        assertNull(w.onResult(0, false, now))
-        assertEquals(1, w.inFlight)
+    @Test fun resultForAnotherAttemptIsIgnored() {
+        val t = attempt(1, step())
+        assertNull(w.onResult(WakeTag(t.id + 5, 1), true, now)) // same number, other identity
+        assertEquals(t, w.inFlight)
+        assertFalse(w.settled)
     }
 
     @Test fun lostResultIsGivenUpAfterTheStaleTime() {
-        assertEquals(Step.Attempt(1, target), step())
+        val t = attempt(1, step())
         idle = true
         assertEquals(Step.None, step(advanceMs = WakeConnect.STALE_MS - 1))
-        assertEquals(Step.Attempt(2, target), step(advanceMs = 1))
+        val t2 = attempt(2, step(advanceMs = 1))
+        // the lost result turning up late is not taken for the new attempt
+        assertNull(w.onResult(t, true, now))
+        assertEquals(t2, w.inFlight)
+        assertFalse(w.settled)
     }
 
     @Test fun episodeEndReleasesOurFailedAttempt() {
-        assertEquals(Step.Attempt(1, target), step())
-        fail(1, advanceMs = 3_000)
+        attempt(1, step())
+        fail(advanceMs = 3_000)
         assertEquals(Step.Release, step(episode = false))
         assertNull(current)
         assertEquals(Step.None, step(episode = false))
     }
 
     @Test fun episodeEndWaitsForTheAttemptInFlight() {
-        assertEquals(Step.Attempt(1, target), step())
+        attempt(1, step())
         assertEquals(Step.None, step(episode = false, advanceMs = 500)) // still connecting: not released
         assertEquals(target, current)
-        fail(1, advanceMs = 1_000)
+        fail(advanceMs = 1_000)
         assertEquals(Step.Release, step(episode = false))
         assertNull(current)
     }
 
     @Test fun lateSuccessAfterTheEpisodeIsAdopted() {
-        assertEquals(Step.Attempt(1, target), step())
+        val t = attempt(1, step())
         assertEquals(Step.None, step(episode = false, advanceMs = 500))
-        assertEquals(target, w.onResult(1, true, now))
+        assertEquals(target, w.onResult(t, true, now))
         assertEquals(Step.None, step(episode = false))
         assertEquals(target, current)
     }
 
     @Test fun newEpisodeNumbersFromOne() {
-        assertEquals(Step.Attempt(1, target), step())
-        fail(1)
-        assertEquals(Step.Attempt(2, target), step(advanceMs = 2_000))
-        fail(2)
+        attempt(1, step())
+        fail()
+        attempt(2, step(advanceMs = 2_000))
+        fail()
         assertEquals(Step.Release, step(episode = false))
-        assertEquals(Step.Attempt(1, target), step(advanceMs = 30_000))
+        attempt(1, step(advanceMs = 30_000))
+    }
+
+    // ---- a result from an ended episode never steers the next one (review P2) ----
+
+    @Test fun lateSuccessFromAnEndedEpisodeDoesNotSettleTheNextOne() {
+        val old = attempt(1, step())
+        assertEquals(Step.None, step(episode = false, advanceMs = 500)) // e.g. background: the episode stops
+        current = null // onStart forgets the endpoint; the controller closed the attempt
+        idle = true
+        assertEquals(Step.None, step(advanceMs = 1_000)) // new episode: waits for the old connect's outcome
+        assertNull(w.onResult(old, true, now)) // its late "connected": not ours (the session is gone), not settling
+        assertFalse(w.settled)
+        val t = attempt(1, step()) // the new episode attempts at once
+        assertEquals(t, w.inFlight)
+        fail()
+        attempt(2, step(advanceMs = 2_000)) // and keeps going
+    }
+
+    @Test fun lateFailureFromAnEndedEpisodeDoesNotDelayTheNextOne() {
+        val old = attempt(1, step())
+        assertEquals(Step.None, step(episode = false, advanceMs = 500))
+        assertEquals(Step.None, step(advanceMs = 500)) // new episode, the old connect still running
+        fail(old) // it fails now: no 2 s gap charged to the new episode
+        attempt(1, step())
+    }
+
+    @Test fun lateSuccessFromAnEndedEpisodeStillAdoptsItsLiveSession() {
+        val old = attempt(1, step())
+        assertEquals(Step.None, step(episode = false, advanceMs = 500))
+        assertEquals(Step.None, step(advanceMs = 500)) // new episode; our attempt still holds the (connecting) session
+        assertEquals(target, w.onResult(old, true, now)) // it connected: an ordinary session now
+        assertFalse(w.settled) // not counted for the new episode ...
+        assertEquals(Step.None, step(advanceMs = 2_000)) // ... yet no attempt replaces that live session
+        assertNull(w.owned)
     }
 
     // ---- race with discovery: whichever finds the Mac first, one connection ----
@@ -155,19 +211,19 @@ class WakeConnectTest {
     }
 
     @Test fun discoveryReplacesAnAttemptInFlightAndStopsTheAttempts() {
-        assertEquals(Step.Attempt(1, target), step())
+        attempt(1, step())
         assertTrue(w.onDiscovered(current, disconnected = false)) // replaces ours (the start closes it first)
         assertNull(w.owned)
         current = Endpoint("192.168.1.107", 47001)
-        fail(1) // the replaced attempt's connect ends with an error
+        fail() // the replaced attempt's connect ends with an error
         for (i in 0 until 40) assertEquals(Step.None, step(advanceMs = 250))
         assertEquals(Step.None, step(episode = false)) // and it is not ours to release
         assertEquals(Endpoint("192.168.1.107", 47001), current)
     }
 
     @Test fun discoveryAfterAFailedAttemptConnects() {
-        assertEquals(Step.Attempt(1, target), step())
-        fail(1)
+        attempt(1, step())
+        fail()
         assertTrue(w.onDiscovered(current, disconnected = true))
         current = target // discovery connects (same address): an ordinary session now
         idle = false
@@ -181,8 +237,8 @@ class WakeConnectTest {
     }
 
     @Test fun takenOverSessionIsNotOurs() {
-        assertEquals(Step.Attempt(1, target), step())
-        fail(1)
+        attempt(1, step())
+        fail()
         current = ConnectMode.usbEndpoint // AUTO switched to USB meanwhile
         assertEquals(Step.None, step(advanceMs = 2_000))
         assertNull(w.owned)
@@ -191,8 +247,8 @@ class WakeConnectTest {
     }
 
     @Test fun ordinaryStartToTheSameAddressIsNotOurs() {
-        assertEquals(Step.Attempt(1, target), step())
-        fail(1)
+        attempt(1, step())
+        fail()
         w.disown() // "Bağlan" restarted the same endpoint the usual way (normal retries)
         assertEquals(Step.None, step(advanceMs = 2_000)) // not free: no attempt replaces it
         assertEquals(Step.None, step(episode = false)) // and the episode end does not release it
@@ -214,7 +270,7 @@ class WakeConnectTest {
         // the user acts ("Bağlan" / "Mac'i uyandır"): a manual episode, and the first attempt at once
         planner.manual(t, reached = false, hasWol = true)
         assertTrue(planner.active)
-        assertEquals(Step.Attempt(1, target), w.update(t, planner.active, target, null, true, true))
+        attempt(1, w.update(t, planner.active, target, null, true, true))
     }
 
     // ---- transport and result classification ----

@@ -21,8 +21,10 @@ class WakeConnect(
 ) {
     sealed interface Step {
         data object None : Step
-        /** Start direct wake attempt [n] of this episode to [endpoint] (`SessionController.start(endpoint, n)`). */
-        data class Attempt(val n: Int, val endpoint: Endpoint) : Step
+        /** Start the direct wake attempt [tag] to [endpoint] (`SessionController.start(endpoint, tag)`). */
+        data class Attempt(val tag: WakeTag, val endpoint: Endpoint) : Step {
+            val n: Int get() = tag.n
+        }
         /** The episode is over and our failed attempt still holds the session: forget its endpoint ("Mac aranıyor…"). */
         data object Release : Step
     }
@@ -33,9 +35,13 @@ class WakeConnect(
     /** Attempts started in the current (or last) episode; the next one is number [attempts] + 1. */
     var attempts = 0
         private set
-    /** The attempt whose connect result is awaited (0 = none). It may outlive its episode by up to a connect timeout. */
-    var inFlight = 0
+    /** The attempt whose connect result is awaited (null = none). It may outlive its episode by up to a connect timeout. */
+    var inFlight: WakeTag? = null
         private set
+    /** Generation of the current (or last) episode, and of the episode [inFlight] was started in. */
+    private var episodeGen = 0
+    private var inFlightEpisodeGen = 0
+    private var nextId = 0
     private var inFlightSinceMs = 0L
     private var nextAtMs = 0L
     /** No more attempts this episode: one connected, or discovery found the Mac first. */
@@ -54,15 +60,15 @@ class WakeConnect(
     fun update(
         nowMs: Long, episodeActive: Boolean, target: Endpoint?, current: Endpoint?, transportOk: Boolean, sessionIdle: Boolean,
     ): Step {
-        if (inFlight != 0 && nowMs - inFlightSinceMs >= staleMs) {
-            inFlight = 0 // its result never came (e.g. the start was superseded before it ran): do not wait forever
-            nextAtMs = nowMs
+        if (inFlight != null && nowMs - inFlightSinceMs >= staleMs) {
+            inFlight = null // its result never came (e.g. the start was superseded before it ran): do not wait forever
+            if (inFlightEpisodeGen == episodeGen) nextAtMs = nowMs
         }
         if (owned != null && current != owned) owned = null // someone else's session now (discovery, USB, a mode change)
         if (!episodeActive) {
             episode = false
             val o = owned
-            if (o != null && inFlight == 0 && sessionIdle) {
+            if (o != null && inFlight == null && sessionIdle) {
                 owned = null
                 return Step.Release
             }
@@ -70,33 +76,39 @@ class WakeConnect(
         }
         if (!episode) {
             episode = true
+            episodeGen++ // results of attempts from an earlier (ended) episode no longer steer this one
             attempts = 0
             settled = false
             nextAtMs = nowMs
         }
-        if (settled || inFlight != 0 || target == null || !transportOk || nowMs < nextAtMs) return Step.None
+        if (settled || inFlight != null || target == null || !transportOk || nowMs < nextAtMs) return Step.None
         val free = current == null || (current == owned && sessionIdle)
         if (!free) return Step.None
         attempts++
-        inFlight = attempts
+        val tag = WakeTag(++nextId, attempts)
+        inFlight = tag
+        inFlightEpisodeGen = episodeGen
         inFlightSinceMs = nowMs
         owned = target
-        return Step.Attempt(attempts, target)
+        return Step.Attempt(tag, target)
     }
 
     /**
-     * The connect of attempt [n] finished. [ok]: connected; the session is now an ordinary one (adopted, no longer
-     * [owned]) and no further attempt runs in this episode. Returns the adopted endpoint, or null (failed, stale result
-     * for another attempt, or the session was taken over meanwhile).
+     * The connect of attempt [tag] finished. [ok]: connected; the session is now an ordinary one (adopted, no longer
+     * [owned]) and, when the attempt belongs to the running episode, no further attempt runs in it. A result of an
+     * attempt from an ended episode never steers a later one (neither settles it nor delays its next attempt); it only
+     * frees the slot and may adopt the session it opened. Returns the adopted endpoint, or null (failed, a result for
+     * another attempt, or the session was taken over meanwhile).
      */
-    fun onResult(n: Int, ok: Boolean, nowMs: Long): Endpoint? {
-        if (n == 0 || n != inFlight) return null
-        inFlight = 0
+    fun onResult(tag: WakeTag, ok: Boolean, nowMs: Long): Endpoint? {
+        if (tag != inFlight) return null
+        inFlight = null
+        val sameEpisode = episode && inFlightEpisodeGen == episodeGen
         if (!ok) {
-            nextAtMs = nowMs + gapMs
+            if (sameEpisode) nextAtMs = nowMs + gapMs
             return null
         }
-        if (episode) settled = true
+        if (sameEpisode) settled = true
         val adopted = owned
         owned = null
         return adopted
@@ -157,3 +169,10 @@ class WakeConnect(
     /** No Wi-Fi network to bind the attempt's socket to: it fails without connecting. */
     class NoWifiException : IOException("no Wi-Fi network")
 }
+
+/**
+ * T-134: identity of one direct wake attempt, carried from [WakeConnect] through [SessionMachine] and [SessionController]
+ * back to [WakeConnect.onResult]. [id] is unique for the planner's lifetime (so a late result can never be taken for a
+ * later attempt); [n] is the attempt's number within its episode (logged as `attempt=N`).
+ */
+data class WakeTag(val id: Int, val n: Int)

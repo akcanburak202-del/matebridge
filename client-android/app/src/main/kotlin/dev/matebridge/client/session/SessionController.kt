@@ -100,10 +100,10 @@ interface SessionListener {
     fun onSettingsOpen() {}
 
     /**
-     * T-134: the TCP connect of direct wake attempt [attempt] finished ([ok]: connected; the session goes on as usual).
+     * T-134: the TCP connect of direct wake attempt [wake] finished ([ok]: connected; the session goes on as usual).
      * Control reader thread, before the machine sees the connection open or fail.
      */
-    fun onWakeConnect(attempt: Int, ok: Boolean) {}
+    fun onWakeConnect(wake: WakeTag, ok: Boolean) {}
 }
 
 /**
@@ -191,14 +191,14 @@ class SessionController(
     @Volatile private var stopAfterDrain = false
 
     /**
-     * Non-blocking. Ignored after [shutdown]. [wakeAttempt] > 0 (T-134): a direct wake attempt (see
+     * Non-blocking. Ignored after [shutdown]. [wake] non-null (T-134): a direct wake attempt (see
      * [SessionMachine.Event.Start]); its control socket is bound to Wi-Fi ([wifiBinder]), connects within
      * [WakeConnect.CONNECT_TIMEOUT_MS] and reports through [SessionListener.onWakeConnect].
      */
-    fun start(endpoint: Endpoint, wakeAttempt: Int = 0) {
+    fun start(endpoint: Endpoint, wake: WakeTag? = null) {
         if (terminated.get()) return
         ensureEngine()
-        intent.post(SessionMachine.Event.Start(endpoint, wakeAttempt))
+        intent.post(SessionMachine.Event.Start(endpoint, wake))
     }
 
     /**
@@ -370,7 +370,7 @@ class SessionController(
                 "session_start",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
                     "quickack=${if (quickAck) 1 else 0} ${knobs.logFields()}" +
-                    if (e.wakeAttempt > 0) " wake_attempt=${e.wakeAttempt}" else "",
+                    (e.wake?.let { " wake_attempt=${it.n}" } ?: ""),
             )
             SessionMachine.Event.Stop -> MbLog.i("session_stop")
             is SessionMachine.Event.ControlOpened -> MbLog.i("connect_ok")
@@ -411,7 +411,7 @@ class SessionController(
                 resetArrival()
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control?.abort()
-                control = ControlConn(a.gen, a.endpoint, hello, wakeAttempt = a.wakeAttempt).also { it.startThreads() }
+                control = ControlConn(a.gen, a.endpoint, hello, wake = a.wake).also { it.startThreads() }
                 stallDetector.start()
             }
             is SessionMachine.Action.Send -> {
@@ -558,8 +558,8 @@ class SessionController(
         /** T-096: which close slot this connection posts to; changed only by the engine (promotion, cancel). */
         @Volatile var owner: ControlCloseSlots.Owner = ControlCloseSlots.Owner.CURRENT,
         private val keys: PairKeyStore = pairKeys,
-        /** T-134: > 0 for a direct wake attempt (Wi-Fi-bound, short connect timeout, `ev=wake_connect`). */
-        private val wakeAttempt: Int = 0,
+        /** T-134: non-null for a direct wake attempt (Wi-Fi-bound, short connect timeout, `ev=wake_connect`). */
+        private val wake: WakeTag? = null,
     ) {
         private val socket = Socket()
         private val queue = SendQueue()
@@ -623,7 +623,7 @@ class SessionController(
         private fun readerLoop() {
             try {
                 val tosErr = TrafficClass.trySet(knobs.tosCtl) { socket.trafficClass = it } // T-089, before connect
-                if (wakeAttempt > 0) connectForWake() else socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
+                if (wake != null) connectForWake(wake) else socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
                 knobs.tosCtl?.let { MbLog.i("traffic_class", TrafficClass.logFields("control", it, tosErr) { socket.trafficClass }) }
             } catch (e: IOException) {
@@ -679,7 +679,7 @@ class SessionController(
          * T-134: the direct wake attempt's connect: bound to the Wi-Fi network (never through `adb reverse` or another
          * network), [WakeConnect.CONNECT_TIMEOUT_MS], one `ev=wake_connect` line (no address) and [SessionListener.onWakeConnect].
          */
-        private fun connectForWake() {
+        private fun connectForWake(wake: WakeTag) {
             val t0 = System.nanoTime()
             var err: IOException? = null
             try {
@@ -691,8 +691,8 @@ class SessionController(
             val ms = (System.nanoTime() - t0) / 1_000_000
             val result = WakeConnect.classify(err)
             val extra = if (err != null && result == WakeConnect.RESULT_ERROR) " err=${WakeConnect.errName(err)}" else ""
-            MbLog.i("wake_connect", "attempt=$wakeAttempt result=$result ms=$ms$extra")
-            listener.onWakeConnect(wakeAttempt, err == null)
+            MbLog.i("wake_connect", "attempt=${wake.n} result=$result ms=$ms$extra")
+            listener.onWakeConnect(wake, err == null)
             if (err != null) throw err
         }
 

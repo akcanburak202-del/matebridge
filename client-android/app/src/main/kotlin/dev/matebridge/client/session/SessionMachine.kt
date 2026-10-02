@@ -44,11 +44,11 @@ class SessionMachine(
 ) {
     sealed interface Event {
         /**
-         * [wakeAttempt] > 0 (T-134): a direct wake attempt (number N of the wake episode). If its TCP connect fails there
-         * is no retry timer (the wake planner paces the attempts): the machine goes idle with
-         * `Ui(Disconnected(CONNECT_FAILED, 0))`. Once the connection opens it is an ordinary session (normal retries).
+         * [wake] non-null (T-134): a direct wake attempt (see [WakeTag]). If its TCP connect fails there is no retry
+         * timer (the wake planner paces the attempts): the machine goes idle with `Ui(Disconnected(CONNECT_FAILED, 0))`.
+         * Once the connection opens it is an ordinary session (normal retries).
          */
-        data class Start(val endpoint: Endpoint, val wakeAttempt: Int = 0) : Event
+        data class Start(val endpoint: Endpoint, val wake: WakeTag? = null) : Event
         data object Stop : Event
         data class ControlOpened(val gen: Int) : Event
         /** Control connection failed to open, hit EOF/IO error, or its send queue overflowed. */
@@ -81,8 +81,8 @@ class SessionMachine(
     }
 
     sealed interface Action {
-        /** [wakeAttempt] > 0 (T-134): a direct wake attempt (Wi-Fi-bound socket, short connect timeout, logged). */
-        data class OpenControl(val gen: Int, val endpoint: Endpoint, val wakeAttempt: Int = 0) : Action
+        /** [wake] non-null (T-134): a direct wake attempt (Wi-Fi-bound socket, short connect timeout, logged). */
+        data class OpenControl(val gen: Int, val endpoint: Endpoint, val wake: WakeTag? = null) : Action
         data class Send(val msg: Message) : Action
         /** [graceful]: flush already queued messages (a final BYE) before closing. */
         data class CloseControl(val graceful: Boolean) : Action
@@ -116,8 +116,8 @@ class SessionMachine(
 
     private var phase = Phase.IDLE
     private var endpoint: Endpoint? = null
-    /** T-134: the wake attempt the current control connection is (0 = none); cleared once it opens. */
-    private var wakeAttempt = 0
+    /** T-134: the wake attempt the current control connection is (null = none); cleared once it opens. */
+    private var wakeAttempt: WakeTag? = null
     private var genCounter = 0
     private var controlGen = -1
     private var videoGen = -1
@@ -168,11 +168,11 @@ class SessionMachine(
                 endpoint = event.endpoint
                 backoffUs = BACKOFF_START_US
                 frames = 0
-                wakeAttempt = maxOf(0, event.wakeAttempt)
+                wakeAttempt = event.wake
                 openControl(out)
             }
             Event.Stop -> {
-                wakeAttempt = 0
+                wakeAttempt = null
                 if (phase != Phase.IDLE) {
                     byeAndClose(out)
                     phase = Phase.IDLE
@@ -184,7 +184,7 @@ class SessionMachine(
             is Event.ControlOpened -> if (isCandidate(event.gen)) {
                 out += Action.SendCandidate(hello)
             } else if (event.gen == controlGen && phase == Phase.CONNECTING) {
-                wakeAttempt = 0 // the host answered the connect: from here an ordinary session (normal retries)
+                wakeAttempt = null // the host answered the connect: from here an ordinary session (normal retries)
                 phase = Phase.AWAIT_ACK
                 lastPongUs = nowUs
                 nextPingUs = nowUs + pingIntervalUs
@@ -193,9 +193,9 @@ class SessionMachine(
             is Event.ControlClosed -> if (isCandidate(event.gen)) {
                 abortMigration(out, if (event.connectFailed) REASON_CONNECT_FAILED else REASON_CLOSED)
             } else if (event.gen == controlGen) {
-                if (wakeAttempt > 0) {
+                if (wakeAttempt != null) {
                     // T-134: a wake attempt that did not connect has no retry timer; the wake planner paces attempts.
-                    wakeAttempt = 0
+                    wakeAttempt = null
                     closeAll(out, graceful = false)
                     phase = Phase.IDLE
                     out += Action.Ui(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 0))

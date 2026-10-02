@@ -16,6 +16,7 @@ import dev.matebridge.client.session.SessionMachine.Event
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -441,8 +442,8 @@ class SessionMachineTest {
     // ---- T-134 direct wake attempts ----
 
     @Test fun wakeAttemptCarriesItsNumberAndDoesNotRetryAFailedConnect() {
-        val open = step(Event.Start(ep, wakeAttempt = 3)).only<Action.OpenControl>()
-        assertEquals(3, open.wakeAttempt)
+        val open = step(Event.Start(ep, WakeTag(7, 3))).only<Action.OpenControl>()
+        assertEquals(WakeTag(7, 3), open.wake)
         val r = step(Event.ControlClosed(open.gen, connectFailed = true))
         assertEquals(listOf<SessionUi>(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 0)), r.ui())
         assertTrue(r.has<Action.CloseControl>())
@@ -450,30 +451,30 @@ class SessionMachineTest {
         for (i in 0 until 20) assertTrue(step(Event.Tick(0), 1_000_000).isEmpty())
         // a stop on the idle machine does nothing; the next attempt is a fresh start
         assertTrue(step(Event.Stop).isEmpty())
-        assertEquals(4, step(Event.Start(ep, wakeAttempt = 4)).only<Action.OpenControl>().wakeAttempt)
+        assertEquals(WakeTag(8, 4), step(Event.Start(ep, WakeTag(8, 4))).only<Action.OpenControl>().wake)
     }
 
     @Test fun wakeAttemptThatConnectsIsAnOrdinarySession() {
-        val open = step(Event.Start(ep, wakeAttempt = 1)).only<Action.OpenControl>()
+        val open = step(Event.Start(ep, WakeTag(1, 1))).only<Action.OpenControl>()
         assertEquals(hello, step(Event.ControlOpened(open.gen)).only<Action.Send>().msg) // HELLO as usual
         val a = step(Event.Received(open.gen, ack(HelloAck.ACCEPTED, 9, 7421)))
         assertEquals(listOf<SessionUi>(SessionUi.Connected("Mac mini", 0)), a.ui())
         // lost later: the normal retry, and the retry is not a wake attempt any more
         val l = step(Event.ControlClosed(open.gen))
         assertEquals(1000L, (l.ui().single() as SessionUi.Disconnected).retryInMs)
-        assertEquals(0, step(Event.Tick(0), 1_000_000).only<Action.OpenControl>().wakeAttempt)
+        assertNull(step(Event.Tick(0), 1_000_000).only<Action.OpenControl>().wake)
     }
 
     @Test fun wakeAttemptClosedBeforeTheAckRetriesNormally() {
-        val open = step(Event.Start(ep, wakeAttempt = 2)).only<Action.OpenControl>()
+        val open = step(Event.Start(ep, WakeTag(2, 2))).only<Action.OpenControl>()
         step(Event.ControlOpened(open.gen))
         val r = step(Event.ControlClosed(open.gen)) // the host answered the connect, then closed (e.g. still waking)
         assertEquals(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000), r.ui().single())
-        assertEquals(0, step(Event.Tick(0), 1_000_000).only<Action.OpenControl>().wakeAttempt)
+        assertNull(step(Event.Tick(0), 1_000_000).only<Action.OpenControl>().wake)
     }
 
     @Test fun discoveryStartReplacesAWakeAttemptWithOneConnection() {
-        val wake = step(Event.Start(ep, wakeAttempt = 1)).only<Action.OpenControl>()
+        val wake = step(Event.Start(ep, WakeTag(1, 1))).only<Action.OpenControl>()
         val found = Endpoint("10.0.0.7", 7420)
         val r = step(Event.Start(found))
         // the attempt's connection is closed before the new one opens: never two at once
@@ -482,7 +483,7 @@ class SessionMachineTest {
         assertTrue(close in 0 until open)
         val o = r.only<Action.OpenControl>()
         assertEquals(found, o.endpoint)
-        assertEquals(0, o.wakeAttempt)
+        assertNull(o.wake)
         // the old attempt's late failure is ignored, and the discovered session retries normally
         assertTrue(step(Event.ControlClosed(wake.gen, connectFailed = true)).isEmpty())
         val f = step(Event.ControlClosed(o.gen, connectFailed = true))
@@ -490,6 +491,6 @@ class SessionMachineTest {
     }
 
     @Test fun ordinaryStartIsNotAWakeAttempt() {
-        assertEquals(0, step(Event.Start(ep)).only<Action.OpenControl>().wakeAttempt)
+        assertNull(step(Event.Start(ep)).only<Action.OpenControl>().wake)
     }
 }

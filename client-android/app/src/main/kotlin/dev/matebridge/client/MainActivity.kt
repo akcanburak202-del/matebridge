@@ -88,6 +88,7 @@ import dev.matebridge.client.session.HostSleepGate
 import dev.matebridge.client.session.WolRefresh
 import dev.matebridge.client.session.WakeConnect
 import dev.matebridge.client.session.WakePlanner
+import dev.matebridge.client.session.WakeTag
 import dev.matebridge.client.session.WolSender
 import dev.matebridge.client.session.WolStore
 import dev.matebridge.client.clipboard.ClipboardBridge
@@ -490,7 +491,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
-            override fun onWakeConnect(attempt: Int, ok: Boolean) { runOnUiThread { onWakeConnectResult(attempt, ok) } } // T-134
+            override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
         }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
         )
@@ -1822,7 +1823,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 currentEndpoint = step.endpoint
                 transportEpoch++ // as in connect(): a migration started before this session reports into nothing
                 MbLog.i("transport", "transport=${ConnectMode.transportOf(step.endpoint).logName} via=wake")
-                controller.start(step.endpoint, wakeAttempt = step.n)
+                controller.start(step.endpoint, step.tag)
             }
             WakeConnect.Step.Release -> {
                 // The episode ended and our last attempt failed: no endpoint is chosen any more (discovery may connect).
@@ -1833,8 +1834,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** T-134: the connect of a direct wake attempt finished (the session machine follows with its own state). */
-    private fun onWakeConnectResult(attempt: Int, ok: Boolean) {
-        val adopted = wakeConnect.onResult(attempt, ok, SystemClock.elapsedRealtime())
+    private fun onWakeConnectResult(wake: WakeTag, ok: Boolean) {
+        val adopted = wakeConnect.onResult(wake, ok, SystemClock.elapsedRealtime())
         if (adopted != null && adopted == currentEndpoint) {
             lastWifiEndpoint = adopted // an ordinary Wi-Fi session from here (AUTO may later move it to USB)
         }
