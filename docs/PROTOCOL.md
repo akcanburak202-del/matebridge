@@ -83,6 +83,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
 | 0x08 | SETTINGS_OPEN | H→C | kontrol | `settings_open` |
+| 0x09 | FILES_INFO | C→H | kontrol | `files_info_ready`, `files_info_off` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -119,7 +120,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -223,6 +224,20 @@ Mac menü çubuğundaki "Tablette ayarları aç" komutu (karar 0013). Tablete ak
 
 - Host yalnızca `ACCEPTED` oturumda ve `HELLO.capabilities` bit9 `SETTINGS_PANEL` varsa gönderir.
 - İstemci: akış görünürse paneli açar (açıksa bir şey yapmaz). Akış yoksa (bağlantı paneli görünür) yok sayar. Panelin açılması istemcide `RELEASE_ALL(USER)` gönderir (§7), panel açıkken girdi gönderilmez.
+
+### 0x09 FILES_INFO (C→H, kontrol)
+
+Tablet dosyalarına Mac'ten erişim (karar 0015). İstemci, tablette çalışan WebDAV sunucusunun durumunu bildirir.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| state | u8 | `0` OFF (sunucu kapalı / izin yok), `1` READY |
+| port | u16 | Sunucunun **tablet** `127.0.0.1` üzerindeki TCP portu (OFF'ta 0) |
+| token | str8 | HTTP kimlik doğrulama parolası (Digest ya da Basic; kullanıcı adı `matebridge`); 32 küçük harf onaltılık karakter, her sunucu başlangıcında yeni (OFF'ta boş). **Loglanmaz.** |
+
+- İstemci yalnızca `ACCEPTED` oturumda, `HELLO.capabilities` bit10 `FILES` ile gönderir: oturum başında bir kez ve durum/port/jeton değişince.
+- Host: READY ve oturum USB ise `adb forward tcp:<yerel> tcp:<port>` kurar, dosya erişimini kullanıcıya sunar; OFF, oturum sonu ya da USB kaybında forward'ı kaldırır ve bağlı birimi ayırır. Wi-Fi oturumunda READY'yi saklar ama erişim sunmaz.
+- Bilinmeyen `state`: protokol hatası değil, OFF sayılır.
 
 ### 0x10 PEN (C→H)
 

@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 
 # Message type codes (docs/PROTOCOL.md, "Mesaj tipleri").
 T = {
-    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08,
+    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
@@ -368,6 +368,16 @@ FIXTURES = {
     ])),
     "settings_open": ("SETTINGS_OPEN: Mac menu asks the tablet to show its settings panel", frame("SETTINGS_OPEN", [
         field("u32", "reserved", 0),
+    ])),
+    "files_info_ready": ("FILES_INFO: tablet WebDAV server ready on 127.0.0.1:47010", frame("FILES_INFO", [
+        field("u8", "state", 1, "READY"),
+        field("u16", "port", 47010),
+        field("str8", "token", "0123456789abcdef0123456789abcdef"),
+    ])),
+    "files_info_off": ("FILES_INFO: tablet file server off", frame("FILES_INFO", [
+        field("u8", "state", 0, "OFF"),
+        field("u16", "port", 0),
+        field("str8", "token", ""),
     ])),
     "clipboard_text": ("CLIPBOARD: Turkish UTF-8 text copied on one side", frame("CLIPBOARD", [
         field("u32", "seq", 3),

@@ -14,6 +14,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
+| [T-135](tasks/T-135-client-files-webdav.md) | Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO | 5 | android-client-dev | [] |
+| [T-136](tasks/T-136-host-files-mount.md) | Mac — FILES_INFO ile adb forward, WebDAV birimini bağla, menü "Tablet dosyalarını aç" | 5 | mac-host-dev | [] |
 
 ## done
 
