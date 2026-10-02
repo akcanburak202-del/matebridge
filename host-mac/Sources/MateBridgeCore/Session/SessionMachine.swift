@@ -18,6 +18,8 @@ public enum ReleaseCause: Equatable, Sendable {
     case timeout
     case superseded
     case shutdown
+    /// The Mac is going to sleep (T-132): the session ends with BYE(HOST_SLEEP).
+    case hostSleep
     /// Host-internal, never produced by `SessionMachine`: the virtual display or the Accessibility permission went
     /// away while input was held (T-023), so the input pipeline releases it by itself.
     case gateLost
@@ -533,13 +535,27 @@ public struct SessionMachine: Sendable {
 
     /// Host app is quitting: release input, tell every peer, close everything.
     public mutating func shutdown() -> [SessionAction] {
+        endAll(bye: .shuttingDown, cause: .shutdown, ev: "shutdown")
+    }
+
+    /// The Mac is going to sleep (`kIOMessageSystemWillSleep`, T-132): like `shutdown()`, but every peer gets
+    /// BYE(HOST_SLEEP) so the tablet neither reconnects nor wakes the Mac by itself; no TCP connection is left open
+    /// to keep dark-waking it. The live session (and one still proving its keys) is released and closed, a pairing
+    /// waiting for approval is cancelled and closed, an approval window left open is closed, unproven video
+    /// connections close. Connections opened later (after a wake) are handled normally.
+    public mutating func hostSleep() -> [SessionAction] {
+        endAll(bye: .hostSleep, cause: .hostSleep, ev: "bye_sent", fields: "reason=host_sleep")
+    }
+
+    private mutating func endAll(bye: ByeReason, cause: ReleaseCause, ev: String,
+                                 fields: String = "") -> [SessionAction] {
         var actions: [SessionAction] = []
         if let o = orphan {
             orphan = nil
             actions.append(.cancelApproval(o.id))
         }
         for id in connections.keys.sorted(by: { $0.raw < $1.raw }) {
-            actions += end(id, bye: .shuttingDown, cause: .shutdown, close: true, ev: "shutdown")
+            actions += end(id, bye: bye, cause: cause, close: true, ev: ev, fields: fields)
         }
         for vid in videoConnections.keys.sorted(by: { $0.raw < $1.raw }) { actions.append(.closeVideo(vid)) }
         for vid in videoProofs.keys.sorted(by: { $0.raw < $1.raw }) { actions.append(.closeVideo(vid)) }

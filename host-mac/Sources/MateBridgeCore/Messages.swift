@@ -17,6 +17,8 @@ public struct ByeReason: OpenCode {
     public static let timeout = ByeReason(rawValue: 3)
     public static let shuttingDown = ByeReason(rawValue: 4)
     public static let superseded = ByeReason(rawValue: 5)
+    /// The Mac is going to sleep (T-132): the client does not reconnect or wake it on its own.
+    public static let hostSleep = ByeReason(rawValue: 6)
 }
 
 public struct ReleaseReason: OpenCode {

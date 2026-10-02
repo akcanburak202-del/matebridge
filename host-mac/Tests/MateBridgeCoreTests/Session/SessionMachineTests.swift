@@ -343,6 +343,86 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         #expect(m.status == .idle)
     }
 
+    // MARK: Host sleep (T-132)
+
+    @Test func hostSleepReleasesSaysByeHostSleepAndClosesInOrder() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        attachVideo(&m, V, nonce: 1)
+        let actions = m.hostSleep()
+        // Protocol order (PROTOCOL.md 7): release first, then BYE, then the closes, then the session end.
+        #expect(actions == [.releaseInput(A, .hostSleep), .send(A, .bye(.hostSleep)), .close(A), .closeVideo(V),
+                            .sessionEnded(A), .log(.info, ev: "bye_sent", conn: A, fields: "reason=host_sleep")])
+        #expect(m.status == .idle)
+        #expect(m.hostSleep().isEmpty)  // nothing left: a second notification does nothing
+    }
+
+    @Test func hostSleepEndsAProvingReconnectToo() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        _ = m.connectionOpened(B, now: 2)
+        _ = m.received(B, hello(1), now: 2)  // same device, PAIRED: proving, the old session still live
+        let actions = m.hostSleep()
+        #expect(sent(actions, to: A).last == .bye(.hostSleep))
+        #expect(sent(actions, to: B) == [.bye(.hostSleep)])
+        #expect(actions.contains(.close(A)) && actions.contains(.close(B)))
+        #expect(actions.contains(.releaseInput(A, .hostSleep)) && actions.contains(.sessionEnded(A)))
+        #expect(m.awaitingHelloCount == 0)
+        // The proof arriving after the sleep finds nothing to take over.
+        #expect(m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 3).isEmpty)
+        #expect(m.status == .idle)
+    }
+
+    @Test func hostSleepCancelsAPendingPairingAndClosesIt() {
+        var m = makeMachine()
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(), now: 0)
+        let actions = m.hostSleep()
+        #expect(actions.contains(.cancelApproval(A)))
+        #expect(!actions.contains(.approvalOrphaned(A)))  // the window does not stay open over the sleep
+        #expect(sent(actions, to: A) == [.bye(.hostSleep)])
+        #expect(actions.contains(.close(A)))
+        #expect(!actions.contains { if case .releaseInput = $0 { true } else { false } })
+        #expect(m.status == .idle)
+        #expect(m.approvalDecided(A, approved: true, now: 1).isEmpty)
+        #expect(!m.approvedDevices.contains(device(1)))
+    }
+
+    @Test func hostSleepClosesAnOrphanedApprovalWindow() {
+        var m = makeMachine()
+        _ = m.connectionOpened(A, now: 0)
+        _ = m.received(A, hello(), now: 0)
+        _ = m.connectionClosed(A)  // tablet left: the window stays open
+        #expect(m.orphanDeviceForTesting == device(1))
+        #expect(m.hostSleep() == [.cancelApproval(A)])
+        #expect(m.orphanDeviceForTesting == nil)
+    }
+
+    @Test func hostSleepClosesUnauthenticatedConnections() {
+        var m = makeMachine(approved: [device(1)])
+        _ = m.connectionOpened(A, now: 0)  // no HELLO yet
+        _ = m.videoOpened(V, now: 0)  // no VIDEO_HELLO yet
+        let actions = m.hostSleep()
+        #expect(actions.contains(.close(A)) && actions.contains(.closeVideo(V)))
+        #expect(m.awaitingHelloCount == 0 && m.pendingVideoCount == 0)
+    }
+
+    @Test func connectionsAfterHostSleepAreAcceptedNormally() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        _ = m.hostSleep()
+        // A dark wake (or the real wake): the tablet reconnects and gets a normal session.
+        _ = m.connectionOpened(B, now: 10 * sec)
+        let actions = m.received(B, hello(1), now: 10 * sec)
+        #expect(ackStatuses(actions, to: B) == [.accepted])
+        #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
+    }
+
+    @Test func hostSleepWithNothingOpenDoesNothing() {
+        var m = makeMachine(approved: [device(1)])
+        #expect(m.hostSleep().isEmpty)
+    }
+
     @Test func videoHelloValidatesSessionAndConfig() {
         var m = makeMachine(approved: [device(1)])
         activate(&m, A)
