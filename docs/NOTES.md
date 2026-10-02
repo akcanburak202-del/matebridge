@@ -1096,3 +1096,18 @@ T-123, T-124, T-125, T-126 done.
   | Oyun 60 | %54 | %158 | %12 | %11 |
 
 - Sonuç: dokunmasız oyunda Oyun 60, Mac GPU'sunu ~%40 rahatlatıyor ve tablette tam çözünürlük veriyor. Host'un yakalamayı 60'a indirmesi gereksiz: MateBridgeApp farkı ~%1 (yakalama ucuz). Asıl maliyet oyunun 120 Hz sanal ekranda 120 çizmesi.
+
+## 2026-10-03 ~00:40 — T-144 ölçek taraması: tam çözünürlük de çizimde 120 fps'e yetişiyor
+
+Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı Krita'da kalemle çiziyor (60'ar sn). Satırlar yalnız ≥100 kare alınan saniyeler (çizimin yoğun anları).
+
+| Ölçek | Boyut | Alınan/gösterilen (medyan) | Düşen kare | Çözme ort. (medyan) | Gecikme (medyan) |
+|---|---|---|---|---|---|
+| %100 | 2800×1840 | 121 / 121 | 2 | 9,3 ms | 10,6 ms |
+| %95 | 2660×1748 | 117,5 / 117 | 8 | 8,6 ms | 11,0 ms |
+| %90 | 2520×1656 | 121 / 121 | 0 | 8,4 ms | 10,0 ms |
+| %85 | 2380×1564 | 121 / 121 | 0 | 8,0 ms | 9,1 ms |
+
+- `media_codecs_performance.xml`'den çıkan "tam çözünürlükte ~110 fps tavan" tahmini (NOTES 10-02 ~21:30, karar 0017 bağlamı) bugünkü yapılandırmada **yanlış**: çözücü 2800×1840'ta da çizimde 120 fps'e yetişiyor (`overflows=0`, `kf_req=0`). Eski ~100–110 fps ölçümü T-052 öncesindendi.
+- %90'ın kazancı küçük: çözme ~1 ms kısa, gecikme ~0,6 ms az, ara sıra düşen kare yok. Bedeli netlik. %95'teki 8 düşüş ve 117 fps, o dakikadaki içerik/çizim farkından olabilir (tek tur).
+- Host kodlama 120 fps, `enc_ms` p50 ~7,2 ms.
