@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T-131: adaptive icon foreground / monochrome glyph (concept C "M line").
+     Master geometry: docs/design/icon-master.svg (glyph box 100x100).
+     The visible 72 dp of the 108 dp canvas equals the 100-unit master tile (offset 18, 0.72 dp/unit);
+     the glyph sits at translate(17 17) scale(0.66) on that tile, so here:
+     translate = 18 + 0.72 * 17 = 30.24, scale = 0.72 * 0.66 = 0.4752.
+     Stroke width and dot radius are in glyph units (the group scale applies to both). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="30.24"
+        android:translateY="30.24"
+        android:scaleX="0.4752"
+        android:scaleY="0.4752">
+        <path
+            android:pathData="M16 74 C20 46, 26 30, 34 30 C42 30, 44 56, 50 56 C56 56, 58 30, 66 30 C74 30, 80 46, 84 74"
+            android:strokeColor="#FF7FE0D0"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <!-- end dot: circle cx=84 cy=74 r=6.75 -->
+        <path
+            android:pathData="M77.25,74 a6.75,6.75 0 1,0 13.5,0 a6.75,6.75 0 1,0 -13.5,0 z"
+            android:fillColor="#FF7FE0D0" />
+    </group>
+</vector>
