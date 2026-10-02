@@ -10,9 +10,6 @@ import dev.matebridge.client.protocol.StreamPrefs
 enum class StreamMode(val id: String, val label: String, val fps: Int, val scalePermille: Int) {
     CLARITY("clarity", "Netlik", 60, 1000),
     SMOOTH("smooth", "Akıcı", 120, 1000),
-
-    /** Decision 0017: stable 120 fps at near-full sharpness for pen drawing (decoder ceiling ~135 fps at 90 percent). */
-    DRAWING("drawing", "Çizim", 120, 900),
     PERFORMANCE("performance", "Performans", 120, 750),
 
     /** Decision 0014: games; lowest latency (jitter buffer 0) and temporary defaults ([GameModeSettings]). */
@@ -25,12 +22,7 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
     val isGame: Boolean get() = this == GAME || this == GAME60
 
     /** STREAM_PREFS for this mode with the user's bit rate choice (0 = host default, decision 0013). */
-    fun toPrefs(bitrateKbps: Long = Bitrate.AUTO_KBPS, drawScale: Int? = null) =
-        StreamPrefs(fps, scaleFor(drawScale), bitrateKbps)
-
-    /** The scale this mode sends: [drawScale] (clamped) replaces the table value for [DRAWING] only (decision 0017). */
-    fun scaleFor(drawScale: Int?): Int =
-        if (this == DRAWING && drawScale != null) clampDrawScale(drawScale) else scalePermille
+    fun toPrefs(bitrateKbps: Long = Bitrate.AUTO_KBPS) = StreamPrefs(fps, scalePermille, bitrateKbps)
 
     /** The next mode in the cycle (wraps around). */
     fun next(): StreamMode = entries[(ordinal + 1) % entries.size]
@@ -39,16 +31,10 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
     fun buttonText() = "Görüntü modu: $label ($fps fps)"
 
     /** Toast text, e.g. "Performans: 120 fps, %75". */
-    fun toastText(drawScale: Int? = null) = "$label: $fps fps, %${scaleFor(drawScale) / 10}"
+    fun toastText() = "$label: $fps fps, %${scalePermille / 10}"
 
     companion object {
         val DEFAULT = SMOOTH
-
-        const val DRAW_SCALE_MIN = 500
-        const val DRAW_SCALE_MAX = 1000
-
-        /** `--ei draw_scale N` (one launch, not stored): out-of-range values are clamped. */
-        fun clampDrawScale(permille: Int): Int = permille.coerceIn(DRAW_SCALE_MIN, DRAW_SCALE_MAX)
 
         /** Unknown or missing values fall back to [DEFAULT]. */
         fun parse(id: String?): StreamMode =

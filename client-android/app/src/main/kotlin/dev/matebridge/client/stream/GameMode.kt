@@ -75,7 +75,7 @@ class GameModeSettings(private val settings: Settings) {
     }
 
     /** The one STREAM_PREFS for [mode]: its fps and scale with the effective bit rate. */
-    fun prefs(mode: StreamMode, drawScale: Int? = null): StreamPrefs = mode.toPrefs(bitrateKbps, drawScale)
+    fun prefs(mode: StreamMode): StreamPrefs = mode.toPrefs(bitrateKbps)
 
     companion object {
         /** Decision 0014: "yüksek bit hızı" when the stored choice is Otomatik. */
