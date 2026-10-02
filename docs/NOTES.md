@@ -900,3 +900,19 @@ Kullanıcı sorun görmedi.
 - Panel hız değişimi (`display_rate`) ile zaman eşleşmesi yok. Mac birleşik logunda o anlarda Müzik uygulamasının USB/aygıt etkinliği görülmedi.
 - Sıradaki: T-120 tablet donma dedektörü (süreç mi durdu, veri mi geç geldi).
 - **Yan bulgu (T-119'u doğurdu):** APK kurulumu sonrası 0,4 s içinde iki kontrol bağlantısı + devir → `audio_unavailable reason=tap_create status=0` (noErr ama tap nesnesi yok). Ses bütün oturum boyunca Mac hoparlöründe kaldı.
+
+## 2026-10-02 ~11:00 — Ses kesintilerinin kökü: keyframe fırtınası (T-120 ile)
+
+- T-120 cihazda: `stall_stats` 200 tik/s, boşta `tick_late_max` < 20 ms.
+- Kullanıcının duyduğu kesinti (USB, imleç hareketi, 120 Hz):
+  - ses `gap_ms` 20–30 × 3, `owd` 13 → 41 ms, `tick_late_ms=0.1` → **tablet donmadı, veri geç geldi**;
+  - hemen önce host 130 ms içinde 4 `keyframe_request` aldı (`reason=2,2,0,2` + `codec_config_resent`);
+  - o saniye `sent_kbps` 38 879 (normal 2–5 Mbps), tablet `bytes` 0,48 → 4,87 MB, `drop=24`, `late_drops=46`.
+- Önceki USB oturumundaki 160 ve 253 ms'lik boşluklar da aynı: 84628078–84628475 arası 4 istek, 84648980–84649638 arası 5 istek.
+- Zincir:
+  1. `FrameQueue.MAX_PENDING=2`: kısa bir yığılmada bekleyenlerin hepsi atılıyor ve keyframe isteniyor.
+  2. Host her istekte yeni IDR zorluyor.
+  3. Büyük IDR'ler bağlantıyı dolduruyor; ses ve video gecikiyor.
+  4. IDR'ler yavaş çözülüyor, yeni taşma oluyor, yeni istek geliyor.
+- Wi-Fi'de de aynı (kullanıcı) → bağlantı türünden bağımsız.
+- Düzeltme kartları: T-121 (tablet: yığılmayı yut, istek sınırı), T-122 (host: istek birleştirme, IDR boyutu ölçümü).
