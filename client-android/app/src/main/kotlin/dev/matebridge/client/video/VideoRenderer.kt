@@ -158,14 +158,6 @@ class VideoRenderer(
             StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs, if (vsync.recenter) recenterDelta else null),
             "render",
         )
-        // T-121 counters (MB/decoder ev=stats is built by the activity, outside this task's files).
-        val q = queue.counters(reset = true)
-        MbLog.i(
-            "queue",
-            "kf_req=${q.kfRequests} kf_held=${q.kfHeld} overflows=${q.overflows} max_pending=${q.maxPending} " +
-                "limit=${queue.maxPending}",
-            "decoder",
-        )
     }
     private val queue = FrameQueue(stats, FrameQueue.depthForFps(initialConfig.fps))
 
@@ -205,11 +197,18 @@ class VideoRenderer(
      */
     fun takeKeyframeRetry(): Boolean = queue.takeRetry()
 
+    /** True while non-keyframes are refused until a keyframe arrives (pure query). */
+    fun isWaitingKeyframe() = queue.isWaitingKeyframe()
+
     /**
-     * Ticker hook (MainActivity sends KEYFRAME_REQUEST(STARTUP) on true). T-121: same as [takeKeyframeRetry], so the
-     * retry goes through the request limit; side effect: a true result counts as a sent request.
+     * T-121 queue fields for the `MB/decoder ev=stats` line (`kf_req= kf_held= overflows= max_pending= limit=`);
+     * with [reset] a new window starts.
      */
-    fun isWaitingKeyframe() = takeKeyframeRetry()
+    fun queueStatsFields(reset: Boolean = true): String {
+        val q = queue.counters(reset)
+        return "kf_req=${q.kfRequests} kf_held=${q.kfHeld} overflows=${q.overflows} max_pending=${q.maxPending} " +
+            "limit=${queue.maxPending}"
+    }
 
     override fun onFrame(frame: VideoFrame) {
         queue.offer(frame)?.let(onKeyframeRequest)
