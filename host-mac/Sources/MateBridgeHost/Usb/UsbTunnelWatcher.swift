@@ -8,12 +8,12 @@ import MateBridgeCore
 /// Logs only state changes (`ev=usb_tunnel state=...`); the device serial is never logged.
 public final class UsbTunnelWatcher: @unchecked Sendable {
     static let launchdLabel = "dev.matebridge.adb"
-    static let adbServerPort: UInt16 = 5037
-    static let adbTimeout: TimeInterval = 4
+    static let adbServerPort = AdbBinary.serverPort
+    static let adbTimeout = AdbBinary.timeout
 
     private let queue = DispatchQueue(label: "dev.matebridge.usb", qos: .utility)
     private let logger = SessionLogger(component: "usb")
-    private let runner = ProcessRunner(environment: ["ADB_MDNS": "0", "ADB_MDNS_AUTO_CONNECT": "0"])
+    private let runner = ProcessRunner(environment: AdbBinary.environment)
 
     // Confined to `queue`.
     private var planner = UsbTunnelPlanner()
@@ -98,12 +98,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
         lastActionFailed = !ok
     }
 
-    private func locateAdb() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        let candidates = AdbLocator.candidates(androidHome: env["ANDROID_HOME"], androidSdkRoot: env["ANDROID_SDK_ROOT"],
-                                               home: NSHomeDirectory(), path: env["PATH"])
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
+    private func locateAdb() -> String? { AdbBinary.locate() }
 
     /// Same method as scripts/usb-mode.sh: adb under launchd, without its mDNS bridge (it aborts on some networks).
     private func startServer(adb: String) -> Bool {

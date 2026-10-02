@@ -42,6 +42,16 @@ public enum AdbOutput {
         return ports
     }
 
+    /// The port printed by `adb forward tcp:0 tcp:N` (adb allocates the local port). adb may print `* daemon ...`
+    /// banners first, so the last line that is only a valid port number wins.
+    public static func parseForwardPort(_ text: String) -> UInt16? {
+        for raw in text.split(whereSeparator: \.isNewline).reversed() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if let port = UInt16(line), port != 0 { return port }
+        }
+        return nil
+    }
+
     /// The device to tunnel to: the first ready one, physical devices (USB) before emulators.
     public static func selectDevice(_ devices: [AdbDevice]) -> AdbDevice? {
         let ready = devices.filter(\.isReady)
