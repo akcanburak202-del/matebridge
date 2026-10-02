@@ -13,7 +13,8 @@ import kotlin.math.abs
  *  - otherwise a PI step: ratio = 1 + (Kp * err + I) ppm, at most +-0.1 %, +-0.5 % while |err| > 20 ms.
  *
  * Target = max(safety, A/V floor). Safety starts at 5 ms (or what [resetSafety] sets: T-108, 20 ms or the remembered
- * value on AAudio, see [SafetyMemory]) and grows by 5 ms per underrun (40 ms at most). T-118: it shrinks by 1 ms per
+ * value on AAudio, see [SafetyMemory]) and grows by 5 ms per underrun (40 ms at most; T-123: the transport's ceiling,
+ * 70 ms on Wi-Fi). [retarget] moves to another transport's rules without a reset. T-118: it shrinks by 1 ms per
  * [DECAY_WINDOWS] (5) windows without an underrun, down to its floor: 40 -> 20 ms in 100 s of clean playback, one
  * underrun's 5 ms in 25 s (rare stalls cost a short faded gap instead of a permanently larger delay).
  * After an underrun, playback restarts once the level reaches
@@ -35,7 +36,8 @@ class DriftController(private val sampleRate: Int = 48_000) {
     private val windowFrames = sampleRate
     /** Lowest value the slow decay reaches ([resetSafety]). */
     private var safetyMin = ms(SAFETY_MIN_MS)
-    private val safetyMax = ms(SAFETY_MAX_MS)
+    /** In-session ceiling of the underrun steps ([resetSafety], [retarget]). */
+    private var safetyMax = ms(SAFETY_MAX_MS)
     private val minSpan = ms(PACKET_MS)
 
     var safetyFrames = safetyMin
@@ -84,13 +86,33 @@ class DriftController(private val sampleRate: Int = 48_000) {
     val maxRefillFrames: Int get() = ms(MAX_REFILL_MS)
 
     /**
-     * T-108: the output changed (or the first one opened): safety starts at [initialMs] and decays no lower than
-     * [floorMs] (both clamped to [SAFETY_MIN_MS]..[SAFETY_MAX_MS]; the start is at least the floor).
+     * T-108: the output changed (or the first one opened): safety starts at [initialMs], decays no lower than
+     * [floorMs] and underruns raise it to at most [maxMs] (T-123: per transport). [maxMs] is clamped to
+     * [SAFETY_MIN_MS]..[SAFETY_CEILING_MS], the others to [SAFETY_MIN_MS]..[maxMs]; the start is at least the floor.
      */
-    fun resetSafety(initialMs: Int, floorMs: Int = SAFETY_MIN_MS) {
-        safetyMin = ms(floorMs.coerceIn(SAFETY_MIN_MS, SAFETY_MAX_MS))
-        safetyFrames = maxOf(ms(initialMs.coerceIn(SAFETY_MIN_MS, SAFETY_MAX_MS)), safetyMin)
+    fun resetSafety(initialMs: Int, floorMs: Int = SAFETY_MIN_MS, maxMs: Int = SAFETY_MAX_MS) {
+        val max = maxMs.coerceIn(SAFETY_MIN_MS, SAFETY_CEILING_MS)
+        safetyMax = ms(max)
+        safetyMin = ms(floorMs.coerceIn(SAFETY_MIN_MS, max))
+        safetyFrames = maxOf(ms(initialMs.coerceIn(SAFETY_MIN_MS, max)), safetyMin)
         cleanWindows = 0
+    }
+
+    /**
+     * T-123: the transport changed under a playing output: the new transport's [floorMs] and [maxMs] apply from now
+     * on. Safety rises to [initialMs] at once if it is lower (the level follows through the PI, no refill gap); a higher
+     * value is kept and shrinks to the new floor by the normal decay (never dropped at once, even above [maxMs]).
+     * Returns true if safety rose.
+     */
+    fun retarget(initialMs: Int, floorMs: Int, maxMs: Int): Boolean {
+        val max = maxMs.coerceIn(SAFETY_MIN_MS, SAFETY_CEILING_MS)
+        safetyMax = ms(max)
+        safetyMin = ms(floorMs.coerceIn(SAFETY_MIN_MS, max))
+        val start = maxOf(ms(initialMs.coerceIn(SAFETY_MIN_MS, max)), safetyMin)
+        if (start <= safetyFrames) return false
+        safetyFrames = start
+        cleanWindows = 0
+        return true
     }
 
     /** Playback (re)started: the next window starts now. */
@@ -99,7 +121,8 @@ class DriftController(private val sampleRate: Int = 48_000) {
     /** An underrun happened (fade-out then silence): more safety. */
     fun onUnderrun() {
         underruns++
-        safetyFrames = minOf(safetyFrames + ms(SAFETY_STEP_MS), safetyMax)
+        // never lower: after a [retarget] the value may sit above the new ceiling until it decays
+        safetyFrames = maxOf(safetyFrames, minOf(safetyFrames + ms(SAFETY_STEP_MS), safetyMax))
         cleanWindows = 0
         startWindow()
     }
@@ -171,7 +194,10 @@ class DriftController(private val sampleRate: Int = 48_000) {
 
     companion object {
         const val SAFETY_MIN_MS = 5
+        /** Default (USB) in-session ceiling; [resetSafety] and [retarget] take the transport's own. */
         const val SAFETY_MAX_MS = 40
+        /** Highest ceiling any transport may set (T-123; Wi-Fi uses 70). */
+        const val SAFETY_CEILING_MS = 100
         const val SAFETY_STEP_MS = 5
         const val SAFETY_DECAY_MS = 1
         /**

@@ -16,6 +16,7 @@ import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.session.MbLog
+import dev.matebridge.client.session.Transport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -45,6 +46,9 @@ import java.util.concurrent.TimeUnit
  *  - Jitter-buffer safety (T-108, [SafetyMemory]): each output API starts at max(its default, the value remembered
  *    from earlier sessions, at most 30 ms since T-118); AAudio's default is 20 ms. A rebuild on the same API keeps the
  *    learned value. Each API's start is logged once (`safety_start stored= used=`).
+ *    T-123: remembered per transport too ([beginSession] carries it; Wi-Fi starts at 40 ms). A stream opened on another
+ *    transport than the previous one logs `safety_transport live=0`; [setTransport] under a playing stream switches its
+ *    safety without reopening the output (`live=1`: a rise at once, a fall through the normal decay).
  *  - AAudio output buffer (T-110, T-114): starts at 4 bursts (20 ms). The headroom (frames written minus the device's
  *    read position, estimated from the output's timestamp, else its read counter: [HeadroomEstimator]) is sampled
  *    before every write ([HeadroomMeter]);
@@ -73,6 +77,10 @@ class AudioPlayout(
     @Volatile private var stream: Stream? = null
     private var shut = false
     @Volatile private var errorLogged = false
+    /** T-123: transport of the armed connection ([beginSession], [setTransport]); new streams take it. */
+    @Volatile private var transport = Transport.USB
+    /** T-123: transport the last stream's safety ran on (writer threads; for `safety_transport live=0`). */
+    @Volatile private var lastSafetyTransport: Transport? = null
     private val video = VideoLatencyFilter()
     /** T-108: learned jitter-buffer safety per output API, kept across sessions. */
     private val safety = SafetyMemory(SharedPrefsSafetyStore(appContext))
@@ -137,11 +145,26 @@ class AudioPlayout(
         }
     }
 
-    /** A new control connection [gen] is being opened (engine thread): only its audio is taken from now on. */
-    fun beginSession(gen: Int): Unit = synchronized(lock) {
+    /**
+     * A new control connection [gen] over [transport] is being opened (engine thread): only its audio is taken from now
+     * on. The old stream is stopped before the transport changes, so it never switches its safety.
+     */
+    fun beginSession(gen: Int, transport: Transport): Unit = synchronized(lock) {
         if (shut) return
         stopStream("new_connection")
+        this.transport = transport
         gate.arm(gen)
+    }
+
+    /**
+     * T-123: the current connection now runs over [t] while its stream keeps playing (any thread). The stream's
+     * writer switches its safety to [t]'s remembered value within a second, without reopening the output. Today a
+     * migration re-arms audio through [beginSession] instead (new stream), so this is the in-stream path only.
+     */
+    fun setTransport(t: Transport): Unit = synchronized(lock) {
+        if (shut) return
+        transport = t
+        stream?.transport = t
     }
 
     /** The connection ended or the app went to the background (any thread, non-blocking): stop, take nothing more. */
@@ -198,7 +221,7 @@ class AudioPlayout(
             is AudioStreamGate.Action.Start -> {
                 val prev = stream
                 prev?.stop("restart")
-                stream = Stream(a.streamId, prev).also { it.start() }
+                stream = Stream(a.streamId, prev, transport).also { it.start() }
             }
             AudioStreamGate.Action.Stop -> stopStream("stopped")
             AudioStreamGate.Action.Unsupported -> {
@@ -231,8 +254,10 @@ class AudioPlayout(
         }
     }
 
-    private inner class Stream(val id: Int, private var previous: Stream?) {
+    private inner class Stream(val id: Int, private var previous: Stream?, initialTransport: Transport) {
         val core = PlayoutCore()
+        /** T-123: the connection's transport; the writer follows a change ([setTransport]). */
+        @Volatile var transport: Transport = initialTransport
         /** T-117: the control reader's arrival figures, taken once per stats line (writer thread only). */
         private val arrivalWin = AudioArrivalMeter.Window()
         @Volatile var rejected = 0L
@@ -294,7 +319,7 @@ class AudioPlayout(
                 try { current?.close() } catch (_: RuntimeException) {} catch (_: LinkageError) {}
                 current = null
                 core.buffer.reset()
-                safetyApi?.let { safety.flush(it, core.drift.safetyFrames / MS) }
+                safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
                 running = false
                 finished.countDown()
             }
@@ -365,27 +390,61 @@ class AudioPlayout(
             }
         }
 
-        /** Output API whose safety [core] runs with (writer thread only). */
+        /** Output API and transport whose safety [core] runs with (writer thread only). */
         private var safetyApi: String? = null
+        private var safetyTransport: Transport = initialTransport
 
         /**
          * T-108: an output of [api] was opened. A different API (or the first output) saves the previous API's value and
-         * starts from [SafetyMemory.initial]; the same API keeps the learned value (returns null).
+         * starts from [SafetyMemory.initial] for the stream's transport; the same API keeps the learned value (returns
+         * null).
          */
         private fun applySafety(api: String): SafetyMemory.Init? {
             if (api == safetyApi) return null
-            safetyApi?.let { safety.flush(it, core.drift.safetyFrames / MS) }
-            val init = safety.initial(api)
-            core.drift.resetSafety(init.ms, SafetyMemory.defaultMs(api))
+            safetyApi?.let { safety.flush(it, safetyTransport, core.drift.safetyFrames / MS) }
+            val tr = transport
+            val init = safety.initial(api, tr)
+            core.drift.resetSafety(init.ms, init.profile.defaultMs, init.profile.sessionMaxMs)
             safetyApi = api
+            safetyTransport = tr
             // T-118: once per output API taken into use: what was stored and what the controller now runs with.
             MbLog.i(
                 "safety_start",
-                "stream_id=$id api=$api stored=${init.storedMs ?: "-"} used=${core.drift.safetyFrames / MS} " +
-                    "source=${init.source} remember_max=${SafetyMemory.REMEMBER_MAX_MS}",
+                "stream_id=$id api=$api transport=${tr.logName} stored=${init.storedMs ?: "-"} " +
+                    "used=${core.drift.safetyFrames / MS} source=${init.source} remember_max=${init.profile.rememberMaxMs}",
                 COMPONENT,
             )
+            // T-123: a new stream on another transport than the last one (a migration or reconnect re-arms audio).
+            val last = lastSafetyTransport
+            if (last != null && last != tr) logTransport(api, last, tr, init, live = false)
+            lastSafetyTransport = tr
             return init
+        }
+
+        /**
+         * T-123: the stream's transport changed under a playing output ([setTransport]): save the old transport's value
+         * and move to the new one's rules without reopening (rise at once, fall by decay). Writer thread only.
+         */
+        private fun followTransport() {
+            val api = safetyApi ?: return
+            val tr = transport
+            if (tr == safetyTransport) return
+            val from = safetyTransport
+            safety.flush(api, from, core.drift.safetyFrames / MS)
+            val init = safety.initial(api, tr)
+            core.drift.retarget(init.ms, init.profile.defaultMs, init.profile.sessionMaxMs)
+            safetyTransport = tr
+            lastSafetyTransport = tr
+            logTransport(api, from, tr, init, live = true)
+        }
+
+        private fun logTransport(api: String, from: Transport, to: Transport, init: SafetyMemory.Init, live: Boolean) {
+            MbLog.i(
+                "safety_transport",
+                "stream_id=$id api=$api from=${from.logName} to=${to.logName} used=${core.drift.safetyFrames / MS} " +
+                    "stored=${init.storedMs ?: "-"} live=${b(live)}",
+                COMPONENT,
+            )
         }
 
         private fun mayRebuild(): Boolean {
@@ -543,7 +602,8 @@ class AudioPlayout(
                     }
                     audioSum = 0; audioN = 0; avSum = 0; avN = 0
                     logStats(t, xr, win, lastAudioMs, lastAvMs)
-                    safety.onSafety(t.api, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
+                    if (running) followTransport()
+                    safety.onSafety(t.api, safetyTransport, core.drift.safetyFrames / MS, SystemClock.elapsedRealtime())
                 }
             }
         }
