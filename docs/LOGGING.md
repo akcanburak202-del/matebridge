@@ -73,3 +73,10 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
   - `since_video_ms`: boşluğu bitiren ses okumasının dönüşü − video okuyucunun son veri dolu `read()` dönüşü (negatif: video arada geldi; `-`: video okuması yok). Video fps=0 iken anlamsız büyür.
   - GC alanları ART kümülatif sayaçlarıdır (`Debug.getRuntimeStat`); iki satır arası fark okunur.
   - Okuma: owd normal + aralık büyük → host geç yazmış (T-116 `ev=send_gap` ile karşılaştır); owd büyük → aktarım; video akarken `since_video_ms` ≈ `gap_ms` → tablet okuması duraklamış.
+
+## Ses güvenlik payı (tablet, `MB/audio`, T-118)
+
+- `ev=safety_start api=aaudio|track stored=<ms|-> used=<ms> source=…`: çıkış açılırken bir kez yazılır. `stored`: saklanan değer. `used`: başlangıç payı; saklanan değer en çok 30 ms (`SafetyMemory.REMEMBER_MAX_MS`) olarak okunur, AAudio'da taban 20 ms.
+- Ses `ev=stats` satırına eklenen alanlar:
+  - `refill_trims`: alt taşmadan sonraki toplu varışta, çalma başlamadan eşiğin üstündeki fazla atıldığı başlangıç sayısı;
+  - `refill_trim_ms`: atılan toplam süre.
