@@ -102,3 +102,16 @@ Yalnız ölçüm. `mb-stall` iş parçacığı oturum boyunca 5 ms'de bir uyanı
 - Ses `audio_arrival_gap` satırına `tick_late_ms=` eklendi: boşluk penceresindeki tiklerin en büyük gecikmesi.
   - `gap_ms`'e yakınsa tablet süreci donmuştur;
   - ~0 ise veri gerçekten geç gelmiştir (ağ yığını ya da Mac).
+
+## Video kuyruğu ve keyframe istekleri (tablet, `MB/decoder`, T-121)
+
+- `ev=stats` satırının sonuna eklenen alanlar (pencere başına sıfırlanır):
+  - `kf_req`: gönderilen istek;
+  - `kf_held`: 500 ms sınırına takılıp bekletilen istek;
+  - `overflows`: kuyruk taşması;
+  - `max_pending`: bekleyen kare tepe değeri;
+  - `limit`: kuyruk sınırı (fps'e göre ~64 ms).
+- `W decoder ev=queue_overflow pending= limit= in_codec= decode_last_us= since_kf= gaps_us= req=sent|held since_req_ms=`: her taşmada yazılır. `gaps_us` son varış aralıklarıdır.
+  - Küçük aralıklar + düşük `in_codec`: ağ yığılması.
+  - Yüksek `in_codec` / uzun `decode_last_us`: çözücü yetişmiyor.
+- `I decoder ev=kf_request reason= src=overflow|deferred|retry|reset|error`: gönderilen her KEYFRAME_REQUEST için.
