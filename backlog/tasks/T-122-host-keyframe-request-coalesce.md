@@ -10,6 +10,7 @@ files:
   - host-mac/Sources/MateBridgeHost/Video/
   - host-mac/Sources/MateBridgeCore/Video/
   - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift
+  - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
   - host-mac/Tests/MateBridgeCoreTests/
   - docs/LOGGING.md
   - backlog/tasks/T-122-host-keyframe-request-coalesce.md
