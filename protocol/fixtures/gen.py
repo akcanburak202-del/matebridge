@@ -151,6 +151,9 @@ FIXTURES = {
     "bye": ("BYE: normal shutdown", frame("BYE", [
         field("u8", "reason", 0, "NORMAL"),
     ])),
+    "bye_host_sleep": ("BYE: host is going to sleep", frame("BYE", [
+        field("u8", "reason", 6, "HOST_SLEEP"),
+    ])),
     "pen_hover_to_contact": ("PEN: hover enter, touch down, stroke, lift", frame("PEN", [
         field("u8", "tool", 0, "PEN"),
         field("u8", "count", 4),

@@ -78,7 +78,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x01 | HELLO | C→H | kontrol | `hello`, `hello_utf8_name` |
 | 0x02 | HELLO_ACK | H→C | kontrol | `hello_ack`, `hello_ack_pending`, `hello_ack_busy` |
 | 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config` |
-| 0x04 | BYE | iki yön | kontrol | `bye` |
+| 0x04 | BYE | iki yön | kontrol | `bye`, `bye_host_sleep` |
 | 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs`, `stream_prefs_bitrate` |
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
@@ -160,9 +160,11 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| reason | u8 | `0` NORMAL, `1` PROTOCOL_ERROR, `2` REJECTED, `3` TIMEOUT, `4` SHUTTING_DOWN, `5` SUPERSEDED |
+| reason | u8 | `0` NORMAL, `1` PROTOCOL_ERROR, `2` REJECTED, `3` TIMEOUT, `4` SHUTTING_DOWN, `5` SUPERSEDED, `6` HOST_SLEEP |
 
 Gönderen `BYE`'dan sonra iki bağlantıyı da kapatır. Host, `BYE` aldığında veya gönderdiğinde önce release-all uygular (§7).
+
+**`HOST_SLEEP` (6):** Mac sistem uykusuna giriyor (host uyku bildirimini aldı). Host, uykuyu onaylamadan önce `BYE(HOST_SLEEP)` gönderir ve iki bağlantıyı kapatır. İstemci bu durumda **kendiliğinden yeniden bağlanmaz ve uyandırma göndermez** (uyuyan Mac'e giden her paket onu karanlık uyanmaya sokar); kullanıcı bir eylem yapana (uygulamayı yeniden ön plana alma, "Bağlan" ya da "Mac'i uyandır") kadar bekler. Eski istemci bu değeri bilinmeyen sebep olarak işler (§2).
 
 ### 0x05 STREAM_PREFS (C→H, kontrol)
 

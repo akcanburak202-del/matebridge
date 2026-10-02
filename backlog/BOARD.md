@@ -2,6 +2,15 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-128](tasks/T-128-host-sleep-policy-wol-txt.md) | Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri) | 4 | mac-host-dev | [T-081] |
+| [T-129](tasks/T-129-client-wake-on-lan.md) | Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`) | 4 | android-client-dev | [] |
+| [T-130](tasks/T-130-host-app-icon.md) | Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi") | 5 | mac-host-dev | [] |
+| [T-131](tasks/T-131-client-app-icon.md) | Tablet — uygulama ikonu (öneri C "M çizgisi", adaptive icon) | 5 | android-client-dev | [] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -14,10 +23,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
-| [T-128](tasks/T-128-host-sleep-policy-wol-txt.md) | Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri) | 4 | mac-host-dev | [T-081] |
-| [T-129](tasks/T-129-client-wake-on-lan.md) | Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`) | 4 | android-client-dev | [] |
-| [T-130](tasks/T-130-host-app-icon.md) | Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi") | 5 | mac-host-dev | [] |
-| [T-131](tasks/T-131-client-app-icon.md) | Tablet — uygulama ikonu (öneri C "M çizgisi", adaptive icon) | 5 | android-client-dev | [] |
+| [T-132](tasks/T-132-host-bye-host-sleep.md) | Mac — uykuya girerken oturumu BYE(HOST_SLEEP) ile kapat | 4 | mac-host-dev | [T-128] |
+| [T-133](tasks/T-133-client-host-sleep-and-usb-wol.md) | Tablet — BYE(HOST_SLEEP) sonrası "Mac uyku modunda" (otomatik yeniden bağlanma yok); USB'de de `wol` öğren | 4 | android-client-dev | [T-129] |
 
 ## done
 
