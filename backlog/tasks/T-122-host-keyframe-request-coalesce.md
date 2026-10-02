@@ -1,7 +1,7 @@
 ---
 id: T-122
 title: Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla
-status: blocked
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -55,13 +55,13 @@ Bir IDR zaten kodlanmış ya da gönderilmekteyken gelen yeni istek, istemcinin 
 
 **Host (`VideoPipeline`):** kilitli bir `KeyframeGate` kutusu birleştiriciyi tutar. `handleKeyframeRequest(reason:) -> KeyframeRequestDecision` (log alanları dahil); `requestKeyframe(reason:) -> Bool` geriye uyumlu sarmalayıcı. `recordTrace` keyframe yazımlarını birleştiriciye bildirir (`FrameTrace`'e `isKeyframe`, `bytes` eklenir; `VideoSender` doldurur). `takeKeyframeWindow()` → `idr= idr_bytes_max=`. `VideoFrameQueue`'ya kilit altında `keyframesPushed` sayacı ve sayacı döndüren resync eklenir.
 
-**Log:** `ev=keyframe_request reason= action=forced|coalesced|config_resent idr_forced=0|1 since_idr_ms=<n>|-`; `net ev=stats` sonuna `idr= idr_bytes_max=`. Bu iki satır `StreamCoordinator.swift`'te üretiliyor (Açık sorular).
+**Log:** `ev=keyframe_request reason= action=forced|coalesced|config_resent idr_forced=0|1 since_idr_ms=<n>|-`; `net ev=stats` sonuna `idr= idr_bytes_max=`. Bu iki satır `StreamCoordinator.swift`'te üretiliyor (orkestratör onayıyla `files:`'a eklendi).
 
 **Testler (sahte saat):** tek istek → IDR; 4 istek / 200 ms → 1 IDR; pencere sonrası → yeni IDR; pending zaman aşımı → yeni IDR; STARTUP → config + (IDR kodlayıcıdaysa zorlama yok, kuyruğa itilmişse zorla); yazım pencere sayaçları; `VideoFrameQueue.keyframesPushed`.
 
 ## Handoff
 
-- **Commit:** `aca06d3` (uygulama); plan `08bd8d4`, `672f250`. Branch `task/T-122-host-keyframe-request-coalesce`.
+- **Commit:** `aca06d3` (uygulama), `8f87e25` (StreamCoordinator log satırları); plan `08bd8d4`, `672f250`. Branch `task/T-122-host-keyframe-request-coalesce`.
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Video/KeyframeRequestCoalescer.swift` (yeni): birleştirme kuralları + IDR pencere sayaçları.
   - `host-mac/Sources/MateBridgeCore/Video/VideoFrameQueue.swift`: kilit altında `keyframesPushed` sayacı, `resyncCountingKeyframes(config:)` (eski `resync(config:) -> Bool` buna sarmalayıcı).
@@ -72,29 +72,20 @@ Bir IDR zaten kodlanmış ya da gönderilmekteyken gelen yeni istek, istemcinin 
     - `requestKeyframe()`, kuyruk taşması ve `prepareForNewConsumer` iç zorlama olarak kaydedilir.
     - `recordTrace` keyframe yazımlarını bildirir; `takeKeyframeWindow()` eklendi.
   - `host-mac/Tests/MateBridgeCoreTests/Video/KeyframeRequestCoalescerTests.swift` (yeni, 15 test), `IntegrationTests.swift` (trace alanları).
+  - `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`: `keyframe_request` satırı `handleKeyframeRequest` kararının alanlarını yazar (ayrı `codec_config_resent` satırı kalktı). `net ev=stats` sonuna `idr= idr_bytes_max=` eklendi.
   - `docs/LOGGING.md`.
+- **check.sh:** geçti (exit 0, `8f87e25` ile).
 - **Varsayımlar:**
   - Pencere 250 ms, pending zaman aşımı 1 s (gerekçe Plan'da).
   - "Yazıldı" = gönderici trace tamamlanması (transport yazımı işledi, yani çekirdeğe verildi). İstemcinin aldığı an değil.
   - `StreamCoordinator` her zaman `trace` kapanışı veriyor. Vermezse yazımlar görülmez; birleştirme yalnız pending zaman aşımıyla çalışır.
   - STARTUP/DECODE_ERROR: yazılmış ya da kuyruktaki IDR yeniden kullanılmaz. Yalnız hâlâ kodlayıcıdaki IDR kullanılır (gerekçe Plan'da).
-- **Davranış şimdiden etkin:** mevcut `StreamCoordinator` `requestKeyframe(reason:)` çağırıyor, o da birleştiriciden geçiyor. Eksik olan yalnız log biçimi (aşağıda).
+- **Not:** `requestKeyframe(reason:) -> Bool` geriye uyumlu sarmalayıcı olarak duruyor, artık çağıranı yok.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
   - Fırtına anında host logunda istek başına `action=coalesced`. Saniyede `idr` 1 (en çok 2) olmalı; `sent_kbps` sıçraması ve ses gecikmesi kaybolmalı.
   - Mid-stream STARTUP sonrası görüntü bozulmadan devam etmeli (config + IDR sırası). Özellikle `idr_forced=0` yolu: IDR kodlayıcıdayken gelen STARTUP.
   - Yeni bağlantıda (ilk STARTUP) tek IDR gitmeli (`prepareForNewConsumer` IDR'si kodlayıcıdaysa ikinci zorlanmaz).
   - Wi-Fi'de büyük IDR yazımı > 1 s sürerse pending zaman aşımı sonrası bir istek yeniden zorlar. Beklenen, nadir.
 - **Açık sorular:**
-  1. **Kapsam (engelleyici):** kabul kriterindeki iki log satırı (`ev=keyframe_request … action=` ve `net ev=stats … idr= idr_bytes_max=`) `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`'te üretiliyor. Bu dosya `files:` listesinde yok; listedeki `SessionServer.swift`'te ilgili kod yok. Dosyaya dokunmadım. Önerilen yama (derlendi, uygulanmadı):
-     ```swift
-     // handle(.keyframeRequest): eski iki log satırı yerine
-     if let decision = pipeline?.handleKeyframeRequest(reason: reason) {
-         log(.info, "keyframe_request", "reason=\(reason.rawValue) \(decision.logFields)")
-     } else {
-         log(.info, "keyframe_request", "reason=\(reason.rawValue) action=no_pipeline")
-     }
-     // onStats: log(.info, "stats", fields) satırından hemen önce
-     if let pipeline { fields += " " + pipeline.takeKeyframeWindow().logFields }
-     ```
-     `docs/LOGGING.md` bu yamadan sonraki biçimi anlatıyor. Onay gelirse uygularım.
+  1. ~~Kapsam: `StreamCoordinator.swift`~~ Çözüldü: orkestratör onayladı (`1dd4ac8`), yama `8f87e25`'te uygulandı.
   2. Kuyruktaki IDR'yi resync'te tutmak (config öne, IDR + arkası korunur) bir IDR daha kazandırır. Ancak 2 karelik sınırla etkileşiyor (config + IDR + delta = 3 → sonraki itmede delta atılır, iç istek doğar). Config'in kapasiteye sayılmaması gibi ayrı bir karar gerekir.
