@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-137](tasks/T-137-files-mount-90s-delay.md) | Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme) | 5 | android-client-dev | [T-135, T-136] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -14,7 +20,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | (İleride) Wi-Fi — büyük video patlamalarının sesi geciktirmesi; bit hızı / gönderim hızı sınırı / Ethernet ile yeniden değerlendir | 5 | orchestrator | [T-126] |
-| [T-137](tasks/T-137-files-mount-90s-delay.md) | Dosyalar — Finder'da bağlama her seferinde tam 90 s sürüyor (kök neden + düzeltme) | 5 | android-client-dev | [T-135, T-136] |
+| [T-138](tasks/T-138-files-bulk-blocks-small.md) | Dosyalar — Finder'ın video önizlemeleri tüm dosyayı indiriyor, küçük kopyalar "hazırlanıyor"da takılıyor | 5 | android-client-dev | [T-137] |
 
 ## done
 

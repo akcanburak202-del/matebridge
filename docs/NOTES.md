@@ -1041,3 +1041,8 @@ T-123, T-124, T-125, T-126 done.
 - Sürükle-bırak iki yönde çalıştı. Aktarım tavanı tutuyor: `bytes_out` ~19,8–20,0 MB/s, `throttled_ms` 2,5–3,5 s/s. **Kullanıcı: büyük dosya kopyalarken görüntüde takılma yok.**
 - Sorun: bağlama her seferinde **tam ~90 s** (`mount result=ok ms=90187`, `ms=90120`); tablette 1 istek → 90 s sessizlik → normal trafik. → T-137.
 - Olay: kablo bir ara kullanıcının telefonuna takılıydı; `install-apk.sh` artık HUAWEI olmayan cihaza kurmayı reddediyor (ecf7c9f).
+
+## 2026-10-02 ~18:20 — T-137 sonrası: bağlama 0,17 s; Finder önizlemeleri tüm videoyu indiriyor
+
+- Kök neden T-137: PROPFIND'daki quota özellikleri → webdavfs bağlama sırasında `WEBDAV_STATFS` sorusu, agent meşgul → 9×10 s = 90 s zaman aşımı (`webdav_sendmsg: sock_receive() timeout. vnop: 15`). Quota kaldırıldı → bağlama 172 ms (cihazda).
+- Yeni sorun: 141 KB kopya "hazırlanıyor"da kaldı. Tablet dakikalarca ~20 MB/s gönderiyor (~4,4 GB); webdavfs önbelleğinde 2,7 GB dosya; Finder `showIconPreview=1` → video önizlemesi için webdavfs tüm dosyayı indiriyor ve küçük işler arkada bekliyor. → T-138.
