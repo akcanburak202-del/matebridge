@@ -6,6 +6,8 @@ package dev.matebridge.client.audio
  *  - `underflow`: a write found the headroom at or below zero ([HeadroomMeter.Window.underflowEst] > 0).
  *  - `headroom`: the headroom fell below one burst (the writer was away from the output for over a burst; the device
  *    plays stale data if it is late once more). Normally the headroom before a write is about the buffer size.
+ *    T-114: on AAudio the headroom comes from the output's timestamp where it can ([HeadroomEstimator]); it may then
+ *    read high by the device's presentation delay, so this rule errs towards not growing.
  *  - `xrun`: the output reported underruns (the pre-T-110 rule, for devices whose HAL reports them; this MMAP HAL
  *    reports none).
  *

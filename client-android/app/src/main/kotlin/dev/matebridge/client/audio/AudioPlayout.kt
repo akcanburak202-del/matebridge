@@ -44,7 +44,9 @@ import java.util.concurrent.TimeUnit
  *    when the output device changes (at most 5 times per 10 s). Repeated AAudio failures switch to AudioTrack.
  *  - Jitter-buffer safety (T-108, [SafetyMemory]): each output API starts at max(its default, the value remembered
  *    from earlier sessions); AAudio's default is 20 ms. A rebuild on the same API keeps the learned value.
- *  - AAudio output buffer (T-110): the headroom (frames written - read) is sampled before every write ([HeadroomMeter]);
+ *  - AAudio output buffer (T-110, T-114): starts at 4 bursts (20 ms). The headroom (frames written minus the device's
+ *    read position, estimated from the output's timestamp, else its read counter: [HeadroomEstimator]) is sampled
+ *    before every write ([HeadroomMeter]);
  *    a window with headroom below one burst, an estimated underflow or (where reported) an xrun grows the buffer by one
  *    burst ([OutBufGrowth]). A grown size is remembered per AAudio path ([OutBufMemory]) and the next output starts
  *    there; `--ei audio_buf_bursts` overrides the start.
@@ -482,7 +484,8 @@ class AudioPlayout(
                     }
                 }
                 core.render(out, t.burst)
-                meter.onWriteStart(t.headroom(), System.nanoTime())
+                val headroom = t.headroom()
+                meter.onWriteStart(headroom, System.nanoTime(), t.headroomCounter, t.headroomFromTs)
                 val w = t.write(out, t.burst)
                 meter.onWriteEnd(System.nanoTime())
                 if (w == AudioSink.WRITE_DEAD) {
@@ -515,6 +518,7 @@ class AudioPlayout(
                             "audio_buffer_grow",
                             "stream_id=$id api=${t.api} buf_frames=${t.bufFrames} bursts=$bursts reason=${grow.logName} " +
                                 "xruns=$xr out_headroom_min_frames=${win.headroomMinFrames ?: "-"} underflow_est=${win.underflowEst} " +
+                                "headroom_source=${win.source} out_headroom_counter_min_frames=${win.counterMinFrames ?: "-"} " +
                                 "saved=${b(saved)}",
                             COMPONENT,
                         )
@@ -581,6 +585,7 @@ class AudioPlayout(
                     "underruns=${d.underruns} xruns=$xruns " +
                     "out_headroom_min_frames=${win.headroomMinFrames ?: "-"} out_headroom_p5_frames=${win.headroomP5Frames ?: "-"} " +
                     "underflow_est=${if (win.headroomMinFrames != null) win.underflowEst else "-"} " +
+                    "headroom_source=${win.source} out_headroom_counter_min_frames=${win.counterMinFrames ?: "-"} " +
                     "write_gap_ms_max=${ms1(win.gapMaxNs)} write_busy_ms_max=${ms1(win.busyMaxNs)} " +
                     "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +

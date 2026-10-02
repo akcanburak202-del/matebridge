@@ -64,7 +64,21 @@ class AAudioSink private constructor(
 
     override fun xruns(): Int = AAudioNative.xruns(handle).coerceAtLeast(0)
 
-    override fun headroom(): Long = AAudioNative.headroom(handle)
+    private val headroomBuf = LongArray(AAudioNative.C_COUNT)
+    private val estimator = HeadroomEstimator()
+
+    /** T-114: from AAudio's counters and timestamp ([HeadroomEstimator]); no allocation. */
+    override fun headroom(): Long {
+        if (AAudioNative.counters(handle, headroomBuf) == AAudioNative.ERROR_NULL) return AudioSink.HEADROOM_UNKNOWN
+        val b = headroomBuf
+        return estimator.estimate(
+            b[AAudioNative.C_WRITTEN], b[AAudioNative.C_READ], b[AAudioNative.C_TS_POS], b[AAudioNative.C_TS_NS], b[AAudioNative.C_NOW],
+        )
+    }
+
+    override val headroomCounter: Long get() = estimator.counterHeadroom
+
+    override val headroomFromTs: Boolean get() = estimator.source == HeadroomEstimator.Source.TIMESTAMP
 
     /** The largest buffer [grow] may reach: min(capacity, max bursts × burst). */
     val maxFrames: Int get() = maxBufFrames
