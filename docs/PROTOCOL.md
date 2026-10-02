@@ -524,7 +524,11 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 
 **Video:**
 - Host: kodlayıcı çıkışı ile soket arasında en çok **2** kare bekler. Soket yetişemiyorsa eski, keyframe olmayan kareler atılır ve bir sonraki kare keyframe olarak istenir.
-- İstemci: decoder'a verilmeyi bekleyen en çok **2** kare tutulur. Taşarsa en eski kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir. Keyframe gelene kadar gelen keyframe olmayan kareler decoder'a verilmez.
+- İstemci: decoder'a verilmeyi bekleyen kareler sınırlıdır. Sınır akışın fps'ine göre ~64 ms'lik karedir: 120 fps'te 8, 60 fps'te 4 (T-121; önceden 2). Kısa ağ yığılmaları böylece atılmadan çözülür; ekranda yine en yeni kare gösterilir.
+  - Taşarsa bekleyen kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir.
+  - Keyframe gelene kadar, gelen keyframe olmayan kareler decoder'a verilmez.
+  - İstemci bir istekten sonra 500 ms içinde yeni `FRAMES_DROPPED` isteği göndermez (T-121). `STARTUP` / `DECODE_ERROR` hemen gider.
+  - Host, yolda olan bir IDR varken gelen `FRAMES_DROPPED` isteklerini birleştirir (T-122). Tel biçimi değişmez.
 
 **Ses (karar 0011):**
 - Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
