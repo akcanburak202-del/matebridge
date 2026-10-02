@@ -6,6 +6,8 @@ public struct AudioOutbox: Sendable {
     public struct Item: Sendable {
         public var sessionID: UInt32
         public var message: Message
+        /// Host clock when `push` was called (T-116 queue lag; 0 when the caller did not stamp it).
+        public var pushedUs: UInt64 = 0
     }
 
     /// 10 packets = 100 ms.
@@ -20,8 +22,9 @@ public struct AudioOutbox: Sendable {
     public init() {}
 
     /// Adds `message`. Returns whether the caller must enqueue a drain pass (at most one is pending) and how many
-    /// frames were dropped to make room (0 or 1).
-    public mutating func push(sessionID: UInt32, _ message: Message) -> (enqueueDrain: Bool, dropped: Int) {
+    /// frames were dropped to make room (0 or 1). `nowUs` stamps the item (`pushedUs`).
+    public mutating func push(sessionID: UInt32, _ message: Message,
+                              nowUs: UInt64 = 0) -> (enqueueDrain: Bool, dropped: Int) {
         var dropped = 0
         if case .audioFrame = message {
             if frames >= Self.maxFrames, let oldest = items.firstIndex(where: { Self.isFrame($0.message) }) {
@@ -31,7 +34,7 @@ public struct AudioOutbox: Sendable {
             }
             frames += 1
         }
-        items.append(Item(sessionID: sessionID, message: message))
+        items.append(Item(sessionID: sessionID, message: message, pushedUs: nowUs))
         let enqueue = !drainQueued
         drainQueued = true
         return (enqueue, dropped)
