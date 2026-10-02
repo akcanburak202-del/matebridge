@@ -1,7 +1,7 @@
 ---
 id: T-117
 title: Tablet — ses paketi varış ölçümü (varış aralığı, tek yön gecikme, okuma başına paket) ve boşlukta video okuyucuyla karşılaştırma
-status: todo
+status: in-progress
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -49,7 +49,15 @@ Bu kart yalnız ölçüm ekler; düzeltme yok. T-116 (host gönderim ölçümü)
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Saf sınıf `audio/AudioArrival.kt` → `AudioArrivalMeter`** (JVM birim testli, ayırmasız kayıt yolu):
+   - Önceden ayrılmış `LongArray` pencereleri (aralık µs, owd µs; kapasite 512, taşarsa yüzdelik örneği atlanır ama max kesin kalır).
+   - `onPacket(readNs, decodeStartNs, decodedNs, captureHostUs, frameCount)`: varış aralığı (aynı okumadaki paketler 0), tek yön gecikme = varış + saat farkı − `capture_time_us` − paket süresi (48 kHz), şifre çözme süresi (`decoder.next()` öncesi/sonrası). > 20 ms aralık bekleyen boşluk olarak işaretlenir. 1 s'den uzun aralık akış duraklaması sayılır, istatistiğe girmez.
+   - `endRead(audioCount)`: okuma başına paket max; bekleyen boşluk varsa hız sınırına (saniyede en çok 5) bakar, `true` = debug satırı yazılsın; ayrıntı yeniden kullanılan `Gap` nesnesinde.
+   - `setOffset(us?)` (volatile), `reset()` (yeni bağlantı / AUDIO_CONFIG), `takeWindow(out)`: p50/p95/max sıralaması önceden ayrılmış çizik dizide, pencereyi sıfırlar. `Window.logFields()` alan dizgisini üretir (`-` = veri yok).
+   - Okuyucu ve yazıcı iş parçacığı arasında `synchronized` (çekişmesiz monitor ayırmaz).
+2. **`SessionController`**: paylaşılan örnek `AudioArrivalMeter.shared`. Kontrol okuyucu `read()` dönüşünde zaman alır, her mesaj için `next()` öncesi/sonrası; `AudioFrame` → `onPacket`, `AudioConfig` → `reset`; iç döngü sonunda `endRead`. Özel `ClockSync` PONG'larla beslenir (MainActivity'deki gibi oturum başında sıfırlanır) ve farkı meter'a yazar. Video okuyucu son varışını `@Volatile` alana yazar. Boşluk satırı `Log.d` + `MbLog.format(..., 'D', "audio", ...)` (`ev=audio_arrival_gap`): `gap_ms owd_ms per_read since_video_ms gc_count gc_time_ms gc_blocking_count` (`Debug.getRuntimeStat`; son GC zamanı API'de yok, kümülatif sayaç verilir).
+3. **`AudioPlayout.logStats`**: `AudioArrivalMeter.shared.takeWindow(...)` alanlarını ses `ev=stats` satırının sonuna ekler: `arr_int_ms_p50 arr_int_ms_max owd_ms_p50 owd_ms_p95 owd_ms_max per_read_max decrypt_ms_max arr_gaps arr_n`.
+4. Testler: `client-android/app/src/test/kotlin/dev/matebridge/client/audio/AudioArrivalMeterTest.kt`.
 
 ## Handoff
 
