@@ -1,7 +1,7 @@
 ---
 id: T-122
 title: Host — art arda gelen KEYFRAME_REQUEST'leri birleştir (bir IDR yoldayken yenisini zorlama); IDR boyutunu logla
-status: todo
+status: in_progress
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -40,7 +40,23 @@ Bir IDR zaten kodlanmış ya da gönderilmekteyken gelen yeni istek, istemcinin 
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+**Core: `KeyframeRequestCoalescer`** (`MateBridgeCore/Video/KeyframeRequestCoalescer.swift`, saf struct, saat dışarıdan µs):
+- Durum: `pending` (zorlanmış ama henüz sokete yazılmamış IDR: zorlama anı + o andaki "kuyruğa itilen keyframe sayısı"), `lastWrittenUs` (yazımı biten son keyframe), pencere sayaçları (`idr`, `idr_bytes_max`), `coalesced` toplamı.
+- `FRAMES_DROPPED`: `pending` yaşı < `pendingTimeoutUs` (1 s) ya da son yazım < `windowUs` (250 ms) önce ise → `coalesced` (yalnız sayılır). Değilse → `forced` (+ `pending`).
+- `STARTUP` / `DECODE_ERROR`: config her zaman yeniden gönderilir (`action=config_resent`). IDR yalnız zorlanmış IDR hâlâ **kodlayıcıdaysa** (kuyruğa itilmemiş) zorlanmaz: o IDR resync'ten sonra, config'in arkasından gelir. Bu, kuyruk kilidi altında resync ile aynı anda okunan `keyframesPushed` sayacının zorlama anındaki değere eşit olmasıyla anlaşılır (yarış güvenli: yanılgı yalnız fazladan IDR yönünde). Kuyruktaki IDR resync ile atılır; yazılmakta/yazılmış IDR config'ten önce gider → yeni IDR zorlanır.
+- `keyframeWritten(nowUs, bytes)`: herhangi bir keyframe'in yazımı bitti → `pending` temizlenir, `lastWrittenUs`, pencere sayaçları.
+- `internalForce` (kuyruk taşması, gönderici reddi, yeni tüketici): her zaman zorlar ama `pending` olarak işaretler, böylece istemcinin arkadan gelen FRAMES_DROPPED'ı birleşir.
+- Kural "asla sonsuza kadar yutma": birleşen her istek ya yoldaki bir IDR ile (en geç `pendingTimeoutUs` içinde, sonra bir sonraki istek yeniden zorlar) ya da son `windowUs` içinde yazılmış bir IDR ile karşılanır. Kodlayıcı zorlama bayrağı bir kare gönderilene kadar kalır, başarısız kodlamada yeniden kurulur.
+
+**250 ms penceresi:** yazım bitişi = çekirdeğe verildi. İstemcinin IDR'yi alması için RTT (USB ~1 ms, Wi-Fi 5–40 ms, sıçramalarla daha fazla) + soket tamponunda kalan bayt (yüzlerce KB'lık IDR, Wi-Fi'de ~100 ms) + IDR çözme (2800×1840, ~15–30 ms) + istemci kuyruğu gerekir. Cihazda fırtına 100–300 ms içinde 4–6 istek; 250 ms bunun çoğunu kapsar, daha uzun pencere gerçekten kaybolmuş bir IDR'nin telafisini geciktirir. T-121 istemci tarafında 500 ms istek sınırı koyuyor; pencere bundan kısa, yani istemcinin sınır sonrası tekrar isteği yeni IDR alır.
+
+**Config + mevcut IDR'nin yeniden gönderilmesi (değerlendirme):** yazılmış bir IDR'nin baytlarını saklayıp config'in arkasından tekrar göndermek yalnız o IDR'den sonra hiç delta kodlanmadıysa geçerli (sonraki deltalar IDR sonrası kareleri referans alır). 60–120 fps'te bu ~8–16 ms'lik bir aralık; pratikte işe yaramaz ve bozuk görüntü riski taşır → yapılmıyor. Kuyrukta bekleyen IDR'yi resync'te tutmak (config'i öne koyarak) mümkün ama 2 karelik kuyruk sınırıyla etkileşiyor (config + IDR + delta = 3; sonraki itme deltayı atar ve yine istek doğurur) → bu kartta yapılmıyor; Açık sorular'a not.
+
+**Host (`VideoPipeline`):** kilitli bir `KeyframeGate` kutusu birleştiriciyi tutar. `handleKeyframeRequest(reason:) -> KeyframeRequestDecision` (log alanları dahil); `requestKeyframe(reason:) -> Bool` geriye uyumlu sarmalayıcı. `recordTrace` keyframe yazımlarını birleştiriciye bildirir (`FrameTrace`'e `isKeyframe`, `bytes` eklenir; `VideoSender` doldurur). `takeKeyframeWindow()` → `idr= idr_bytes_max=`. `VideoFrameQueue`'ya kilit altında `keyframesPushed` sayacı ve sayacı döndüren resync eklenir.
+
+**Log:** `ev=keyframe_request reason= action=forced|coalesced|config_resent idr_forced=0|1 since_idr_ms=<n>|-`; `net ev=stats` sonuna `idr= idr_bytes_max=`. Bu iki satır `StreamCoordinator.swift`'te üretiliyor (Açık sorular).
+
+**Testler (sahte saat):** tek istek → IDR; 4 istek / 200 ms → 1 IDR; pencere sonrası → yeni IDR; pending zaman aşımı → yeni IDR; STARTUP → config + (IDR kodlayıcıdaysa zorlama yok, kuyruğa itilmişse zorla); yazım pencere sayaçları; `VideoFrameQueue.keyframesPushed`.
 
 ## Handoff
 
