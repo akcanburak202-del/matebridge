@@ -2,6 +2,12 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-141](tasks/T-141-idle-power.md) | Durgun ekranda istemciyi uyutmak (vsync döngüleri, boş iş) ve normal kullanımda log azaltmak | 5 | android-client-dev | [T-140] |
+
 ## blocked
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |

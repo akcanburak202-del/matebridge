@@ -69,7 +69,13 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
 
 ## Sayaçlar
 
-Her 1 saniyede bir `ev=stats` satırı: fps, bitrate, kuyruk derinlikleri, düşürülen kare, girdi olay sayısı. Ekrandaki istatistik katmanı da aynı sayaçlardan beslenir.
+`ev=stats` satırı: fps, bitrate, kuyruk derinlikleri, düşürülen kare, girdi olay sayısı. Ekrandaki istatistik katmanı da aynı sayaçlardan beslenir.
+
+İstemci video satırları (T-141): `MB/decoder ev=stats` ile `MB/render ev=stats` ve `ev=present` varsayılanda **10 s** pencereyi özetler. Toplamlar ve yüzdelikler pencere üzerinden kesindir, `interval_ms` gerçek pencere uzunluğudur. `--ez stats_1s true` açılış parametresi 1 s pencereye döndürür.
+- Kare gelmeyen pencere yazılmaz. Akış biterken ya da yeniden yapılandırılırken yarım pencere yazılır.
+- Açılışta `render ev=stats_log window_ms=10000|1000`.
+- Vsync döngüsü ≥ 1 s uyuduğunda `render ev=idle state=on since_frame_ms=<n>`, uyanınca `state=off idle_ms=<n>`.
+- Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`, `render ev=gl_stats`) değişmedi.
 
 ## Keyframe isteği birleştirme (Mac, `net`, T-122)
 
