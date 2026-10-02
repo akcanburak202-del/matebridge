@@ -1,7 +1,7 @@
 ---
 id: T-135
 title: Tablet — dosyalar için WebDAV sunucusu (yalnız localhost, jetonlu, hız tavanlı) + FILES_INFO
-status: todo
+status: in_progress
 phase: 5
 owner: android-client-dev
 depends_on: []
@@ -32,7 +32,18 @@ Wi-Fi üzerinden erişim; cihaz testi (orkestratör).
 
 ## Plan
 
-(ajan doldurur)
+1. **Protokol:** `FilesInfo(state, port, token)` (0x09) `Messages.kt` + `Codec.kt`; `Capabilities.FILES = 1 shl 10`; `FixtureTest`'e `files_info_ready`/`files_info_off`. `toString` jetonu göstermez.
+2. **Oturum:** `SessionMachine` `initialFiles: FilesInfo?` (null = özellik yok, hiç gönderilmez) + `Event.SetFiles`; ACCEPTED'da AUDIO_PREFS'ten sonra bir kez, değişince yeniden. `SessionController.setFilesInfo()` (tek yuvalı posta kutusu, diğerleri gibi); log yalnız `state`/`port`.
+3. **Saf mantık (`client/files/`, JVM testli):**
+   - `DavPath`: istek hedefini `/`'den böl, her parçayı sıkı UTF-8 yüzde-çöz; `.`/`..`/NUL/`/` içeren parça reddi; kökten çözümle; NFC/NFD (Finder NFD gönderebilir) eşleştirme; kanonik yol kök içinde mi (sembolik bağ kaçışı reddi); `href` kodlama; `Destination` ayrıştırma.
+   - `ByteRange`: tek aralık (`a-b`, `a-`, `-n`), 416, çoklu/bozuk → tam yanıt.
+   - `DavXml`: 207 multistatus (Türkçe ad, XML kaçışı), LOCK yanıtı, RFC 1123 / ISO 8601 tarih, içerik türü tablosu.
+   - `DigestAuth`: Digest MD5 `qop=auth` (RFC 2617 vektörü), HMAC'li durumsuz nonce (süre aşımı → `stale=true`), Basic; sabit zamanlı karşılaştırma.
+   - `TokenBucket` (20 MB/s, sabit `FilesConfig`'te), `FilesStats` (saniyelik özet satırı, yalnız etkinlik varken).
+   - `HttpIo`: istek başı ayrıştırma (sınırlı başlık), chunked giriş (Finder PUT'ları chunked gönderir), Content-Length sınırlı giriş, chunked çıkış (büyük PROPFIND belleğe alınmaz), `Expect: 100-continue`.
+4. **Sunucu (`DavServer` + `DavHandler`, yeni bağımlılık yok):** `127.0.0.1`, port 47010 → doluysa 0. Kabul iş parçacığı + bağlantı başına iş parçacığı (en çok 4; dolunca boşta bekleyen keep-alive bağlantısı kapatılır, yoksa kabul bekler). İş parçacıkları `THREAD_PRIORITY_BACKGROUND` (Android tarafından enjekte edilen kanca). 64 KB tampon, tüm aktarım token bucket'tan geçer. Yöntemler kartta yazdığı gibi; PUT geçici dosya + taşıma, hata olursa geçici dosya silinir. Boşta: `accept()`/`read()` bekler, zamanlayıcı yok. Durdurma: dinleyici + tüm bağlantı soketleri kapatılır, yarım PUT'lar silinir. JVM'de gerçek localhost soketiyle uçtan uca test.
+5. **Android yapıştırıcısı (`FilesController`):** `MANAGE_EXTERNAL_STORAGE` (manifest), `Environment.isExternalStorageManager()`; ayar "Tablet dosyalarını Mac'te göster" (varsayılan kapalı, `Settings.filesShare`), açınca izin yoksa `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` (yoksa genel ekran). Sunucu **yalnız etkinlik ön plandayken** (onStart→onStop) çalışır: oturum zaten onStop'ta bitiyor. Her başlatmada yeni jeton; READY yalnız dinleyici hazır olunca, OFF durdurmadan önce gönderilir. Ayarlar panelinde yeni "Tablet dosyaları" bölümü: anahtar + durum satırı.
+6. `./scripts/check.sh`, Handoff, `status: review`.
 
 ## Handoff
 
