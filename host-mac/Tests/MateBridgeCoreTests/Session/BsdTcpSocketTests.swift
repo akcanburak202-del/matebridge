@@ -372,6 +372,25 @@ final class BsdTcpSocketTests: XCTestCase {
         server.listener.cancel()
     }
 
+    /// T-124: the default knob (`signaling`) really sets the voice service type on an accepted control socket and the
+    /// video type on a video socket; `off` leaves the kernel default (best effort).
+    func testDefaultServiceClassIsAppliedToAcceptedSockets() throws {
+        let knob = ServiceClassKnob.parse([:])
+        let cases: [(TrafficClass?, Int32)] = [(knob.controlClass, NET_SERVICE_TYPE_VO),
+                                               (knob.videoClass, NET_SERVICE_TYPE_VI),
+                                               (ServiceClassKnob.off.controlClass, NET_SERVICE_TYPE_BE)]
+        for (serviceClass, expected) in cases {
+            let server = try Server(options: BsdTcpOptions(serviceClass: serviceClass))
+            let client = connectClient(port: server.listener.port)
+            let c = try XCTUnwrap(server.waitAccepted())
+            let fd = try XCTUnwrap(findSocket(localPort: server.listener.port, remotePort: c.remotePort ?? 0))
+            XCTAssertEqual(intOption(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE), expected, "\(String(describing: serviceClass))")
+            c.cancel()
+            server.listener.cancel()
+            close(client)
+        }
+    }
+
     func testPeerCloseFailsPendingWriteAndClosesOnce() throws {
         let server = try Server(options: BsdTcpOptions(notSentLowatBytes: 128 * 1024))
         let client = connectClient(port: server.listener.port, receiveBuffer: 16 * 1024)

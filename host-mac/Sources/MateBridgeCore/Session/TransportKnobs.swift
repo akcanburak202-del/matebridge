@@ -18,19 +18,25 @@ public enum TrafficClass: String, Equatable, Sendable {
     case responsiveData
 }
 
-/// `MATEBRIDGE_SERVICE_CLASS=off|video|signaling` (T-088). `off` (the default) leaves the service class of both
-/// listeners unset, which is the behaviour before T-088.
+/// `MATEBRIDGE_SERVICE_CLASS=off|video|signaling` (T-088, default flipped to `signaling` in T-124). `signaling` (the
+/// default) puts the control connection (input, BYE, AUDIO_FRAME) in Wi-Fi's voice access category and video in the
+/// video one; on Wi-Fi it removed the > 100 ms audio gaps under load (NOTES 2026-10-02). `off` leaves the service
+/// class of both listeners unset, which is the behaviour before T-088. Over USB (adb tunnel, loopback) it has no
+/// effect.
 public enum ServiceClassKnob: String, Equatable, Sendable, CaseIterable {
     case off
     /// Video `.interactiveVideo`, control `.responsiveData`.
     case video
-    /// Video `.interactiveVideo`, control `.interactiveVoice` (the control connection carries input and BYE).
+    /// Video `.interactiveVideo`, control `.interactiveVoice` (the control connection carries input, BYE and audio).
     case signaling
 
-    /// Case-insensitive; anything else (or nil) is `.off`.
+    public static let defaultValue = ServiceClassKnob.signaling
+
+    /// Case-insensitive; anything else (or nil) is `defaultValue` (`.signaling`). Only an explicit `off` leaves the
+    /// classes unset.
     public static func parse(_ text: String?) -> ServiceClassKnob {
         guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = ServiceClassKnob(rawValue: t)
-        else { return .off }
+        else { return defaultValue }
         return k
     }
 

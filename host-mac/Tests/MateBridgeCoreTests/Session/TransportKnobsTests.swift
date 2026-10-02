@@ -81,11 +81,28 @@ final class TransportKnobsTests: XCTestCase {
     // MARK: Service class
 
     func testServiceClassParsing() {
-        for off in [nil, "", "off", "OFF", "voice", "1"] { XCTAssertEqual(ServiceClassKnob.parse(off), .off) }
+        // T-124: the default is `signaling`; anything unknown falls back to it, only an explicit `off` turns it off.
+        XCTAssertEqual(ServiceClassKnob.defaultValue, .signaling)
+        for d in [nil, "", " ", "voice", "1", "bestEffort"] { XCTAssertEqual(ServiceClassKnob.parse(d), .signaling) }
+        for off in ["off", "OFF", " Off "] { XCTAssertEqual(ServiceClassKnob.parse(off), .off) }
         XCTAssertEqual(ServiceClassKnob.parse(" Video "), .video)
-        XCTAssertEqual(ServiceClassKnob.parse("signaling"), .signaling)
-        XCTAssertEqual(ServiceClassKnob.parse([:]), .off)
+        XCTAssertEqual(ServiceClassKnob.parse("SIGNALING"), .signaling)
+        XCTAssertEqual(ServiceClassKnob.parse([:]), .signaling)
+        XCTAssertEqual(ServiceClassKnob.parse(["OTHER": "off"]), .signaling)
+        XCTAssertEqual(ServiceClassKnob.parse(["MATEBRIDGE_SERVICE_CLASS": "off"]), .off)
         XCTAssertEqual(ServiceClassKnob.parse(["MATEBRIDGE_SERVICE_CLASS": "video"]), .video)
+    }
+
+    func testServiceClassDefaultAndOffClasses() {
+        let d = ServiceClassKnob.parse([:])
+        XCTAssertEqual(d.videoClass, .interactiveVideo)
+        XCTAssertEqual(d.controlClass, .interactiveVoice)
+        XCTAssertEqual(d.logFields,
+                       "service_class=signaling video_class=interactiveVideo control_class=interactiveVoice")
+        let off = ServiceClassKnob.parse(["MATEBRIDGE_SERVICE_CLASS": "off"])
+        XCTAssertNil(off.videoClass)
+        XCTAssertNil(off.controlClass)
+        XCTAssertEqual(off.logFields, "service_class=off")
     }
 
     func testServiceClassMapping() {

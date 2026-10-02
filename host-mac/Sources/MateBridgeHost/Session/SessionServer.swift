@@ -277,7 +277,8 @@ public final class SessionServer: @unchecked Sendable {
     static let audioBacklogBytes = 10 * sealedAudioFrameBytes
     static let maxUnauthenticated = 4
     static let maxVideoHandshakePayload = 1024
-    /// T-088 experiment knobs, read once.
+    /// T-088 knobs, read once. The service class defaults to `signaling` since T-124 (control AC_VO, video AC_VI on
+    /// Wi-Fi); `MATEBRIDGE_SERVICE_CLASS=off` leaves both unset.
     static let serviceClass = ServiceClassKnob.parse(ProcessInfo.processInfo.environment)
     static let sampleSendQueue = SendQueueLogKnob.isEnabled(ProcessInfo.processInfo.environment)
     /// T-091: `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` and `MATEBRIDGE_NOTSENT_LOWAT_KB`, read once.
