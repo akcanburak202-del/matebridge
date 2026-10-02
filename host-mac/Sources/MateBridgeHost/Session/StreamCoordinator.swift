@@ -237,9 +237,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         case .videoAttached(let link):
             await onVideoAttached(link)
         case .keyframeRequest(let reason):
-            log(.info, "keyframe_request", "reason=\(reason.rawValue)")
-            if pipeline?.requestKeyframe(reason: reason) == true {
-                log(.info, "codec_config_resent", "reason=\(reason.rawValue)")
+            if let decision = pipeline?.handleKeyframeRequest(reason: reason) {
+                log(.info, "keyframe_request", "reason=\(reason.rawValue) \(decision.logFields)")
+            } else {
+                log(.info, "keyframe_request", "reason=\(reason.rawValue) action=no_pipeline")
             }
         case .streamPrefs(let sid, let prefs):
             await onStreamPrefs(prefs, sessionID: sid)
@@ -402,6 +403,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                              frames, kbps, now.framesRejected, now.sendFailures)
             lastSent = now
         }
+        if let pipeline { fields += " " + pipeline.takeKeyframeWindow().logFields }
         log(.info, "stats", fields)
         lastStatsText = summary.menuText
         publishSummary()
