@@ -1,7 +1,7 @@
 ---
 id: T-119
 title: Host — ses tap'i oluşturulamazsa (oturum devri yarışı) kalıcı vazgeçme; kısa gecikmeyle yeniden dene
-status: in-progress
+status: review
 phase: 5
 owner: mac-host-dev
 depends_on: []
@@ -71,8 +71,26 @@ audio_capture_stopped stream_id=3
 
 ## Handoff
 
-- **Commit:**
+- **Commit:** `17590ea` (uygulama). Plan: `a14fc78`. Bu handoff commit'i ayrı.
 - **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Audio/AudioCaptureFailure.swift` (yeni): neden sabitleri ve `isTransient`.
+  - `host-mac/Sources/MateBridgeCore/Audio/AudioStreamPolicy.swift`: `transientRetryDelaysUs = [100, 250, 500, 1000] ms`, `transientRetries` sayacı, `audio_retry` logu.
+  - `host-mac/Sources/MateBridgeHost/Audio/SystemAudioTap.swift`: yalnızca Core sabitleri ve yorumlar değişti, davranış aynı.
+  - `host-mac/Tests/MateBridgeCoreTests/Audio/AudioStreamPolicyTests.swift`, `AudioStreamerTests.swift`.
+- **Davranış:**
+  - Başlarken gelen `tap_create`/`aggregate_create` hatası (status hatası ya da `noErr` + bilinmeyen ID) `stopCapture` → `scheduleRetry` akışına girer. Her girişte `audio_retry reason= attempt= delay_ms= status= stream_id=` yazılır. Deneme yeni bir stream_id ile `startCapture` olur. STARTED gönderilmediği için tablete bir şey gitmez.
+  - 4 deneme de başarısız olursa iki yol var: interruption sonrası rebuild'deyse mevcut `audio_rebuild_retry` (2×1 s) devam eder; değilse bugünkü `audio_unavailable` satırı yazılır.
+  - Kalıcı hatalar hemen vazgeçer: `no_output_device`, `no_output_uid`, `tap_format*`, `tap_layout`, `ioproc_create`, `device_start`, `setup_changed_*`.
+  - Bekleme sırasında oturum sonu, disable ya da yeni takeover gelirse token eşleşmez ve deneme yapılmaz.
+  - Mevcut `scheduleRetry`/`retryDue` yeniden kullanıldı. Yeni zamanlayıcı ya da kuyruk eklenmedi.
 - **Varsayımlar:**
+  - Yarışın kaynağı (Plan'da anlatıldı) bir hipotez: coreaudiod eski tap/aggregate'i çağrı döndükten sonra da sökmeye devam ediyor. Süreç içi sıralama zaten doğruydu (aynı seri kuyrukta önce söküm, sonra kurulum). Bu yüzden sıralama değiştirilmedi, yalnızca gecikmeli yeniden deneme eklendi.
+  - Toplam yaklaşık 1,85 s'lik pencerenin yarışı kapatmaya yeteceği varsayıldı. Cihazdaki logda arıza, söküm logundan yaklaşık 1,1 s sonra görülmüştü. Bu sürenin tamamı create çağrısında bloklanarak mı geçti, yoksa yeni oturumun AUDIO_PREFS'i mi geç geldi, ayırt edilemedi.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Hızlı yeniden bağlanma ya da takeover (APK kurulumu sonrası çift bağlantı) sonrasında `audio_retry` satırları ve ardından `audio_capture_started` / `audio_started` görülmeli, ses tablete gelmeli.
+  - Mac hoparlörü yeniden deneme penceresi boyunca (en çok yaklaşık 2 s) çalabilir. Tap yokken `.mutedWhenTapped` devrede olmadığı için bu beklenen bir durum.
+  - Gerçek Core Audio ile tekrarlanan create denemelerinde sızıntı (tap ya da aggregate kalması) olmamalı. Kontrol: `audio_capture_stopped` sayısı ile start sayısının tutarlı olması, Audio MIDI Setup'ta artık aggregate kalmaması.
 - **Açık sorular:**
+  - `docs/LOGGING.md` bu kartın `files:` listesinde yok. Orkestratör `audio_retry reason= attempt= delay_ms= status= stream_id=` (info, Mac `audio`) satırını eklemeli.
+  - Tablet tarafının 0,4 s içinde iki kontrol bağlantısı açması ayrı bir konu (kapsam dışı). Ayrı bir kart açılması önerilir.
+  - `tap_format` (biçim okunamadı; desteklenmeyen biçimden farklı) da aynı yarıştan etkilenebilir. Şimdilik kalıcı sayıldı. Cihazda görülürse geçici listesine eklenmesi tek satırlık bir değişiklik.
