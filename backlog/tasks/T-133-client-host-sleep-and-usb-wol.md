@@ -1,7 +1,7 @@
 ---
 id: T-133
 title: Tablet — BYE(HOST_SLEEP) sonrası "Mac uyku modunda" (otomatik yeniden bağlanma yok); USB'de de `wol` öğren
-status: in_progress
+status: review
 phase: 4
 owner: android-client-dev
 depends_on: [T-129]
@@ -17,11 +17,11 @@ Cihaz testi (NOTES 2026-10-02 ~14:45): Mac uyurken tablet oturumu açık sandı,
 
 ## Kabul kriterleri
 
-- [ ] Protokol: `Bye.HOST_SLEEP = 6`; `FixtureTest`'e `bye_host_sleep` eklenir.
-- [ ] `BYE(HOST_SLEEP)` gelince: release-all/kapanış mevcut BYE yoluyla; yeni durum "Mac uyku modunda" (panelde Türkçe metin). Bu durumda **otomatik yeniden bağlanma ve otomatik uyandırma yok** (uyuyan Mac'e giden her paket onu karanlık uyanmaya sokar). "Bağlan" ve "Mac'i uyandır" düğmeleri görünür; basılınca normal akış (uyandırma bölümü + bağlanma).
-- [ ] Uygulama arka plana gidip yeniden ön plana gelince (tablet ekranı kapatıp açma, uygulamaya dönme) uyku durumu temizlenir ve normal akış başlar: Mac bulunamazsa T-129 otomatik uyandırma (ev ağındaysa).
-- [ ] **USB'de `wol` öğrenme:** taşıma USB iken (ya da auto→USB) oturum kurulduktan sonra tek seferlik, sınırlı süreli (ör. 10 s) bir Bonjour keşfi/çözümlemesi çalıştırılır; bulunan TXT `wol` mevcut `WolStore` ile saklanır (Wi-Fi alt ağı da). Wi-Fi kapalıysa sessizce atlanır. Bu keşif bağlantı kararlarını **etkilemez** (yalnız TXT için). Log: `ev=wol_refresh result=stored|none|no_wifi`.
-- [ ] Saf mantık testli (uyku durumu geçişleri: BYE(HOST_SLEEP) → bekle; ön plana dönüş → normal; elle bağlan/uyandır). `./scripts/check.sh` geçiyor — **not:** host tarafı `bye_host_sleep` fixture testi T-132 birleşene kadar kırmızı olabilir; yalnızca o test kırmızıysa kabul.
+- [x] Protokol: `Bye.HOST_SLEEP = 6`; `FixtureTest`'e `bye_host_sleep` eklenir.
+- [x] `BYE(HOST_SLEEP)` gelince: release-all/kapanış mevcut BYE yoluyla; yeni durum "Mac uyku modunda" (panelde Türkçe metin). Bu durumda **otomatik yeniden bağlanma ve otomatik uyandırma yok** (uyuyan Mac'e giden her paket onu karanlık uyanmaya sokar). "Bağlan" ve "Mac'i uyandır" düğmeleri görünür; basılınca normal akış (uyandırma bölümü + bağlanma).
+- [x] Uygulama arka plana gidip yeniden ön plana gelince (tablet ekranı kapatıp açma, uygulamaya dönme) uyku durumu temizlenir ve normal akış başlar: Mac bulunamazsa T-129 otomatik uyandırma (ev ağındaysa).
+- [x] **USB'de `wol` öğrenme:** taşıma USB iken (ya da auto→USB) oturum kurulduktan sonra tek seferlik, sınırlı süreli (ör. 10 s) bir Bonjour keşfi/çözümlemesi çalıştırılır; bulunan TXT `wol` mevcut `WolStore` ile saklanır (Wi-Fi alt ağı da). Wi-Fi kapalıysa sessizce atlanır. Bu keşif bağlantı kararlarını **etkilemez** (yalnız TXT için). Log: `ev=wol_refresh result=stored|none|no_wifi`.
+- [x] Saf mantık testli (uyku durumu geçişleri: BYE(HOST_SLEEP) → bekle; ön plana dönüş → normal; elle bağlan/uyandır). `./scripts/check.sh` geçiyor — **not:** host tarafı `bye_host_sleep` fixture testi T-132 birleşene kadar kırmızı olabilir; yalnızca o test kırmızıysa kabul.
 
 ## Kapsam dışı
 
@@ -40,4 +40,27 @@ Cihaz testi, APK kurulumu (orkestratör).
 
 ## Handoff
 
-(ajan doldurur)
+- **Commit:** `4cc0113` (uygulama), plan `cdf5d01`; dal `task/T-133-client-host-sleep` (56ecb58'den). `./scripts/check.sh`: client-android, problar, fixture/vektör denetimleri OK; **tek kırmızı** host-mac `FixtureTests.everyFixtureFileHasATestCase` (`bye_host_sleep` host'ta henüz kapsanmıyor → T-132). Yeni/değişen testler: `HostSleepGateTest` 3, `WolRefreshTest` 7, `WakePlannerTest` +1 (21), `SessionMachineTest` +1 (35), `FixtureTest` (`bye_host_sleep`).
+- **Dosyalar:**
+  - `protocol/Messages.kt` (`Bye.HOST_SLEEP = 6`), `test/.../protocol/FixtureTest.kt` (`bye_host_sleep`)
+  - `session/SessionUi.kt` (`Cause.HOST_SLEEP`), `session/SessionMachine.kt` (BYE HOST_SLEEP → `Failed(HOST_SLEEP)`, yeniden deneme yok)
+  - yeni `session/HostSleep.kt`: `HostSleepGate`, `WolRefresh` (saf); yeni `test/.../session/HostSleepTest.kt`
+  - `session/Wol.kt`: `WakePlanner.update(..., hostAsleep)` + `REASON_HOST_SLEEP = "host_sleep"`
+  - `MainActivity.kt`: uyku kapısı, USB TXT yenilemesi, metinler; `res/values/strings.xml` (`cause_host_sleep`, `state_host_sleep`, `state_host_sleep_no_wol`)
+- **Varsayımlar / kararlar:**
+  - BYE(HOST_SLEEP) REJECTED BYE ile aynı yoldan gider: iki bağlantı graceful olmadan kapanır, BYE geri gönderilmez, faz `FAILED` (zamanlayıcı yok, PING yok). Girdi bırakma mevcut yol: panel görünür → `syncInputActive` (değişiklik yok).
+  - Uykudayken (`HostSleepGate.asleep`) ayrıca: NSD keşfi durdurulur (mDNS sorgusu da paket sayılır), çalışan USB yoklaması geçersiz kılınır (`pickGen++`), `autoStep`/`onDiscovered` bekler, USB TXT yenilemesi iptal, `WakePlanner` çalışan bölümü `Stop(host_sleep)` ile durdurur ve otomatik bölüm başlatmaz. Log: `ev=host_sleep transport=…`, temizlenince `ev=host_sleep_clear reason=foreground|connect|wake`.
+  - Temizleyen eylemler: `onStart` (ekranı açma / uygulamaya dönme), "Bağlan" (adres alanı boşsa `applyTransport()` — "Bağlantıyı kes" sonrası ile aynı; doluysa elle adres), "Mac'i uyandır" (`applyTransport()` + elle bölüm), bağlantı modu seçimi (`reconnectForMode`). Ön plana dönüşte T-129 kuralları olduğu gibi (2 s, yalnız ev ağında).
+  - Panel metni: `wol` saklıysa "Mac uyku modunda. Uyandırmak için "Mac'i uyandır"a, Mac uyanıksa "Bağlan"a dokun.", değilse "Mac uyku modunda. Mac uyanınca "Bağlan"a dokun." "Mac'i uyandır" düğmesi T-129'daki gibi yalnız `wol` saklıysa görünür.
+  - **USB `wol` öğrenme:** etkinlik başlangıcı başına bir kez, oturum `Connected` ve uç nokta USB olduğunda (AUTO→USB göçü dahil). Wi-Fi yoksa hemen `ev=wol_refresh result=no_wifi`. Varsa `ev=wol_refresh_start duration_ms=10000` + ayrı `MacDiscovery` (`onFound` yok sayılır; bağlantı kararlarını etkilemez); TXT mevcut `onHostTxt` → `WolStore` yolundan saklanır (Wi-Fi alt ağı da). Geçerli `wol` gelince `result=stored` (değer değişmese de), 10 s'de gelmezse `result=none`. Arka plan / uyku iptalinde ek değer `result=cancelled` (kartta yoktu).
+- **Test edilmedi (tablet gerekli):** gerçek BYE(HOST_SLEEP) alımı ve sonrası trafik yokluğu, USB bağlıyken NSD TXT çözümü, metin/düğme görünümü.
+- **Tablette kontrol edilecekler** (T-132 host'u ile):
+  1. Wi-Fi'de bağlıyken `pmset sleepnow` → logcat'te `bye_recv reason=6`, `session_failed cause=HOST_SLEEP`, `host_sleep transport=wifi`; panelde "Mac uyku modunda…"; sonra 1–2 dk boyunca **hiç** `reconnect`, `transport_probe`, `discovery_found`, `wol_start` yok; Mac `pmset -g log` içinde karanlık uyanma göstermemeli.
+  2. Aynı durumda tablet ekranını kapat-aç → `host_sleep_clear reason=foreground`, Mac bulunamayınca ~2 s sonra `wol_start reason=not_found` (ev ağında), Mac uyanıp bağlanır.
+  3. Uyku metni ekrandayken "Mac'i uyandır" → `host_sleep_clear reason=wake`, `wol_start reason=manual`, bağlanma; "Bağlan" → `host_sleep_clear reason=connect` ve normal arama/bağlanma.
+  4. USB (adb reverse) ile bağlan, Wi-Fi açık: ~10 s içinde `wol_refresh_start` ve `wol_refresh result=stored` (ilk kez öğreniliyorsa ayrıca `wol_stored macs=N home=1`); video/girdi bu sırada etkilenmemeli. Wi-Fi kapalıyken `wol_refresh result=no_wifi`.
+  5. USB'de bağlıyken `pmset sleepnow` → `host_sleep transport=usb`; AUTO modunda USB yoklaması ya da Wi-Fi'ye düşüş (`transport_pick … usb_lost`) olmamalı.
+
+## Açık sorular
+
+- Host `everyFixtureFileHasATestCase` T-132 birleşene kadar kırmızı (beklenen).
