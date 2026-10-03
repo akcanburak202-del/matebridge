@@ -188,6 +188,11 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
      * tap is one (it may pair again; the code still needs the local confirmation).
      */
     CONNECT_AFTER_CANCEL("connect_after_cancel", userInitiated = true, automatic = false, clearsGate = true),
+    /**
+     * T-156: "Bağlan" on "Bu Mac'in anahtarı uyuşmuyor": the key-mismatch latch holds every automatic start to that
+     * endpoint until a user start, so this tap is one (like [CONNECT_AFTER_CANCEL]).
+     */
+    CONNECT_AFTER_MISMATCH("connect_after_mismatch", userInitiated = true, automatic = false, clearsGate = true),
     DISCOVERY("discovery", userInitiated = false, automatic = true, clearsGate = false),
     /** The Wi-Fi endpoint remembered in this activity (AUTO). */
     SAVED_WIFI("saved_wifi", userInitiated = false, automatic = true, clearsGate = false),
@@ -203,11 +208,13 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
         /**
          * "Bağlan": a typed address counts only while the manual field is open (a hidden field's remembered text is not
          * a fresh choice, as in T-134's wake rule). [shown]: the state on screen; on `Failed(PAIR_CANCELLED)` the tap
-         * releases T-150's cancel latch ([CONNECT_AFTER_CANCEL]).
+         * releases T-150's cancel latch ([CONNECT_AFTER_CANCEL]); on `Failed(KEY_MISMATCH)` T-156's mismatch latch
+         * ([CONNECT_AFTER_MISMATCH]).
          */
         fun forConnectButton(typed: String, fieldVisible: Boolean, shown: SessionUi): ConnectOrigin = when {
             typed.isNotBlank() && fieldVisible -> TYPED_ADDRESS
             shown is SessionUi.Failed && shown.cause == SessionUi.Cause.PAIR_CANCELLED -> CONNECT_AFTER_CANCEL
+            shown is SessionUi.Failed && shown.cause == SessionUi.Cause.KEY_MISMATCH -> CONNECT_AFTER_MISMATCH
             else -> CONNECT_BUTTON
         }
     }

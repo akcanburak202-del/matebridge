@@ -2105,6 +2105,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 } else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED && forgetFailed) getString(R.string.forget_failed)
                 else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
+                else if (state.cause == SessionUi.Cause.KEY_MISMATCH) getString(R.string.key_mismatch) // T-156
                 else getString(R.string.state_failed, causeText(state.cause))
         }
         // T-151: a trust state replaces its usual text; a pending pick prompt is a banner under the state's text.
@@ -2473,7 +2474,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
-            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED ->
+            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED,
+            SessionUi.Cause.KEY_MISMATCH ->
                 R.string.cause_protocol_error // own texts in applyStatusText() (PAIR_CANCELLED: the trust view)
             SessionUi.Cause.HOST_SLEEP -> R.string.cause_host_sleep
         },

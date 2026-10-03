@@ -276,10 +276,14 @@ class AutoUsbPolicy {
         /**
          * AUTO on USB and the session dropped (cable pulled, host gone, never reached): fall back to Wi-Fi. T-151: also
          * when the USB endpoint answered PAIRING to an automatic connect (a localhost squatter must not park the tablet;
-         * the pick prompt stays as a banner).
+         * the pick prompt stays as a banner). T-156: also on `Failed(KEY_MISMATCH)`: a localhost squatter that knows the
+         * host_id (answers PAIRED, then closes) must not park AUTO on a text that says to forget the real Mac.
          */
         fun shouldFallBack(mode: TransportMode, onUsb: Boolean, ui: SessionUi): Boolean =
-            mode == TransportMode.AUTO && onUsb && (ui is SessionUi.Disconnected || ui is SessionUi.PairingNeedsUser)
+            mode == TransportMode.AUTO && onUsb && (
+                ui is SessionUi.Disconnected || ui is SessionUi.PairingNeedsUser ||
+                    (ui is SessionUi.Failed && ui.cause == SessionUi.Cause.KEY_MISMATCH)
+                )
 
         private val SOFT_REASONS = setOf(
             SessionMachine.REASON_CONNECT_FAILED, SessionMachine.REASON_NOT_CONNECTED,

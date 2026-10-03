@@ -142,7 +142,14 @@ class SessionController(
 
     private val machine = SessionMachine(
         hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
+        recordAuthenticated = { gen -> recordAuthenticated(gen) },
     ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
+
+    /** T-156: whether the reader of control connection [gen] authenticated a host record (engine thread). */
+    private fun recordAuthenticated(gen: Int): Boolean =
+        control.authed(gen) || candidate.authed(gen) || retired.authed(gen)
+
+    private fun ControlConn?.authed(gen: Int) = this != null && this.gen == gen && this.authenticated
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -633,6 +640,10 @@ class SessionController(
         /** This connection's HELLO (fresh nonce and ephemeral key); its payload bytes feed the transcript hash. */
         val helloMsg: Hello = handshake.hello(template)
 
+        /** T-156: a host record decrypted and authenticated on this connection (set before its event is enqueued). */
+        @Volatile var authenticated = false
+            private set
+
         /** Session keys once the first HELLO_ACK was validated; video connections derive their keys from it. */
         @Volatile var secrets: SessionSecrets? = null
             private set
@@ -722,7 +733,8 @@ class SessionController(
                 if (sec != null) readRecords(input, sec)
             } catch (e: ProtocolException) {
                 closedPosted.set(true) // the machine reacts to ProtocolError instead
-                events.put(SessionMachine.Event.ProtocolError(gen)) // ordered after already received messages
+                // ordered after already received messages; T-156: AUTH_FAILED is told apart (key mismatch counter)
+                events.put(SessionMachine.Event.ProtocolError(gen, e.kind == ProtocolException.Kind.AUTH_FAILED))
                 return
             } catch (e: IOException) {
                 // fall through
@@ -766,7 +778,8 @@ class SessionController(
                     var audioPackets = 0
                     while (true) {
                         val t0 = System.nanoTime()
-                        val msg = decoder.next() ?: break
+                        // T-156: flagged before the event is enqueued, also when a later record in the same call throws
+                        val msg = RecordAuth.next(decoder) { if (!authenticated) authenticated = true } ?: break
                         if (msg is AudioFrame || msg is AudioConfig) {
                             if (control === this) { // only the current connection's audio is measured (as delivered)
                                 if (msg is AudioFrame) {
@@ -976,6 +989,24 @@ class SessionController(
         private const val GRACEFUL_CLOSE_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val EVENT_QUEUE_CAP = 1024
+    }
+}
+
+/**
+ * T-156: [RecordDecoder.next] with a hook at the AEAD boundary. [onAuthenticated] runs once a record of this call
+ * authenticated: a returned message, or an unknown type the decoder skipped (it opens before it skips), also when a
+ * later record in the same call throws (the hook runs before the exception leaves). Pure; JVM-tested.
+ */
+object RecordAuth {
+    inline fun next(decoder: RecordDecoder, onAuthenticated: () -> Unit): Message? { // inline: no allocation per record
+        val skippedBefore = decoder.skippedFrames
+        var msg: Message? = null
+        try {
+            msg = decoder.next()
+            return msg
+        } finally {
+            if (msg != null || decoder.skippedFrames != skippedBefore) onAuthenticated()
+        }
     }
 }
 

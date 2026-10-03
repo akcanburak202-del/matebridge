@@ -50,5 +50,11 @@ sealed interface SessionUi {
 
         /** T-150: the user cancelled the code confirmation (or it timed out); no automatic retry until a user start. */
         PAIR_CANCELLED,
+
+        /**
+         * T-156: repeated PAIRED connections ended before any host record authenticated (the Mac's key no longer matches
+         * ours, or an answerer that knows the host_id cannot seal records). Terminal; in AUTO on USB it falls back to Wi-Fi.
+         */
+        KEY_MISMATCH,
     }
 }
