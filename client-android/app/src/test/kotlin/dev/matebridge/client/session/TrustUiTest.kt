@@ -205,6 +205,38 @@ class TrustUiTest {
         assertTrue(g.allowsAuto(ConnectMode.usbEndpoint))
     }
 
+    @Test fun ignoreBringsBackTheOrdinaryScreenAndKeepsTheEndpointSkipped() { // Codex P2: ignore -> render -> buttons
+        val g = PairPick()
+        g.onDiscovered(impostor)
+        g.onUi(SessionUi.Connecting(impostor))
+        val pick = SessionUi.PairingNeedsUser("Mac mini", rePair = false)
+        g.onUi(pick)
+        assertEquals(listOf(TrustButton.PAIR, TrustButton.IGNORE), TrustUiText.screen(pick, g.prompt)!!.buttons)
+        g.ignore()
+        // Even before the new state renders, a dismissed pick shows no (dead) buttons: "Bağlan" is not hidden.
+        assertNull(TrustUiText.screen(pick, g.prompt))
+        for (running in listOf(true, false)) {
+            val next = TrustUiText.afterIgnore(discoveryRunning = running)
+            assertEquals(if (running) SessionUi.Searching else SessionUi.Idle, next)
+            g.onUi(next)
+            assertNull(TrustUiText.screen(next, g.prompt)) // ordinary text, no trust row
+            assertTrue(TrustUiText.screen(next, g.prompt)?.buttons.orEmpty().isEmpty())
+        }
+        assertFalse(g.allowsAuto(impostor)) // still skipped by discovery, wake, the saved endpoint and AUTO
+        assertNull(g.nextAuto())
+        // With the endpoint dropped by the UI, another discovered Mac connects (nothing is chosen any more).
+        assertTrue(WakeConnect().onDiscovered(current = null, disconnected = false))
+        g.onUserStart() // "Bağlan"
+        assertTrue(g.allowsAuto(impostor))
+    }
+
+    @Test fun anUnattributablePickShowsNoButtons() {
+        val g = PairPick()
+        val pick = SessionUi.PairingNeedsUser("m", false)
+        assertFalse(g.onUi(pick)) // no Connecting seen: no endpoint for "Eşleş"
+        assertNull(TrustUiText.screen(pick, g.prompt))
+    }
+
     @Test fun promptGoesWhenTheSessionGetsFurther() {
         for (s in listOf(SessionUi.Connected("m", 0), SessionUi.AwaitingApproval("m", "1", needsLocalConfirm = true), SessionUi.StoredTrust("1", false))) {
             val g = PairPick()
@@ -264,27 +296,76 @@ class TrustUiTest {
 
     @Test fun forgetRunsOnlyAfterTwoConfirmations() {
         var calls = 0
-        val f = ForgetFlow { calls++; true }
-        assertNull(f.confirm()) // nothing open
+        val f = ForgetFlow({ calls++; true })
+        assertNull(f.confirm(0)) // nothing open
         f.open(); f.cancel()
-        assertNull(f.confirm())
-        f.open(); assertNull(f.confirm()); f.cancel()
+        assertNull(f.confirm(0))
+        f.open(); assertNull(f.confirm(0)); f.cancel()
         assertEquals(ForgetFlow.Step.IDLE, f.step)
         assertEquals(0, calls)
         f.open()
-        assertNull(f.confirm())
+        assertNull(f.confirm(0))
         assertEquals(ForgetFlow.Step.ASK_SECOND, f.step)
-        assertEquals(TrustText.FORGET_DONE, f.confirm())
+        assertNull(f.confirm(0)) // queued only: no text yet
         assertEquals(1, calls)
-        assertEquals(ForgetFlow.Step.IDLE, f.step)
-        assertNull(f.confirm())
+        assertEquals(ForgetFlow.Step.WAITING, f.step)
+        assertNull(f.confirm(0))
+        f.open(); f.cancel() // a waiting request is not reopened or dropped by the dialog
+        assertEquals(ForgetFlow.Step.WAITING, f.step)
         assertEquals(1, calls)
     }
 
+    @Test fun forgetIsDoneOnlyWhenTheResultingStateArrives() {
+        val f = ForgetFlow({ true })
+        f.open(); f.confirm(0); f.confirm(0)
+        assertNull(f.onUi(SessionUi.Connected("m", 5), 10)) // not a result
+        assertNull(f.onTick(ForgetFlow.SETTLE_MS - 1))
+        assertEquals(TrustText.FORGET_DONE, f.onUi(SessionUi.Idle, 20)) // a live session ended and the records went
+        assertEquals(ForgetFlow.Step.IDLE, f.step)
+        assertNull(f.onTick(ForgetFlow.SETTLE_MS * 2))
+        assertNull(f.onUi(SessionUi.Idle, 30))
+    }
+
+    @Test fun forgetFailureShowsTheFailureAndTheRowStaysUsable() {
+        var calls = 0
+        val f = ForgetFlow({ calls++; true })
+        f.open(); f.confirm(0); f.confirm(0)
+        assertEquals(TrustText.FORGET_FAILED, f.onUi(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED), 50))
+        assertEquals(ForgetFlow.Step.IDLE, f.step)
+        f.open(); f.confirm(100); f.confirm(100) // retry: the Mac is still forgettable
+        assertEquals(2, calls)
+        assertEquals(ForgetFlow.Step.WAITING, f.step)
+    }
+
+    @Test fun anIdleMachineSucceedsSilentlyButALateFailureStillCounts() {
+        val f = ForgetFlow({ true }, settleMs = 1_000, lateMs = 5_000)
+        f.open(); f.confirm(0); f.confirm(0)
+        assertNull(f.onTick(999))
+        assertEquals(TrustText.FORGET_DONE, f.onTick(1_000)) // no state on success when already idle
+        assertEquals(TrustText.FORGET_FAILED, f.onUi(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED), 3_000))
+        assertNull(f.onUi(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED), 3_100)) // once
+        // after the late window a KEY_STORE_FAILED is someone else's (e.g. a pairing confirm)
+        val g = ForgetFlow({ true }, settleMs = 1_000, lateMs = 5_000)
+        g.open(); g.confirm(0); g.confirm(0); g.onTick(1_000)
+        assertNull(g.onUi(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED), 6_001))
+        // and without any request it is never a forget result
+        assertNull(ForgetFlow({ true }).onUi(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED), 0))
+    }
+
+    @Test fun forgetStoppedBeforeTheResultReportsNothing() {
+        val f = ForgetFlow({ true })
+        f.open(); f.confirm(0); f.confirm(0)
+        f.abandon()
+        assertEquals(ForgetFlow.Step.IDLE, f.step)
+        assertNull(f.onUi(SessionUi.Idle, 10))
+        assertNull(f.onTick(ForgetFlow.SETTLE_MS * 2))
+    }
+
     @Test fun forgetWithoutAKnownMacSaysSo() {
-        val f = ForgetFlow { false }
-        f.open(); f.confirm()
-        assertEquals(TrustText.FORGET_NONE, f.confirm())
+        val f = ForgetFlow({ false })
+        f.open(); f.confirm(0)
+        assertEquals(TrustText.FORGET_NONE, f.confirm(0))
+        assertEquals(ForgetFlow.Step.IDLE, f.step)
     }
 
     // ---- logs: the action only, never a value ----

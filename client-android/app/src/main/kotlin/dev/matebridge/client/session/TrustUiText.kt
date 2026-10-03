@@ -22,6 +22,8 @@ enum class TrustText {
     PAIR_CANCELLED,
     FORGET_DONE,
     FORGET_NONE,
+    /** The removal did not persist (`Failed(KEY_STORE_FAILED)` after a forget): the Mac is still trusted; retry. */
+    FORGET_FAILED,
 }
 
 /** A button of the trust row. [logAction] is the `action=` value of `ev=pair_ui`. */
@@ -89,10 +91,21 @@ object TrustUiText {
 
     /**
      * What the status area shows: the state's own trust view, else the pending pick prompt as a banner (never over a
-     * running stream), else nothing (the state's usual text).
+     * running stream), else nothing (the state's usual text). A pick prompt is shown only while [pending] holds it:
+     * "Eşleş" needs its endpoint, so a dismissed or unattributable `PairingNeedsUser` shows no buttons (and the plain
+     * "Bağlan" stays).
      */
-    fun screen(state: SessionUi, pending: PairPrompt?): TrustView? =
-        view(state) ?: pending?.takeIf { state !is SessionUi.Connected }?.let { pickView(it) }
+    fun screen(state: SessionUi, pending: PairPrompt?): TrustView? = when (state) {
+        is SessionUi.PairingNeedsUser -> pending?.let { pickView(it) }
+        else -> view(state) ?: pending?.takeIf { state !is SessionUi.Connected }?.let { pickView(it) }
+    }
+
+    /**
+     * The state rendered after "Yoksay" (QA-1 T-151 #1): the ordinary screen with "Bağlan" again ("Mac aranıyor…" while
+     * discovery runs, else "Hazır"). The connection-less prompt holds nothing, so the UI forgets its endpoint and
+     * automatic connects go on to other Macs; the ignored one stays asked in [PairPick].
+     */
+    fun afterIgnore(discoveryRunning: Boolean): SessionUi = if (discoveryRunning) SessionUi.Searching else SessionUi.Idle
 
     private fun claimView(hostName: String, rePair: Boolean) = TrustView(
         listOf(TrustLine.Text(if (rePair) TrustText.RE_PAIR_CLAIM else TrustText.NEW_HOST_CLAIM, claimName(hostName))),
@@ -309,29 +322,90 @@ class PromptVisibility {
 
 /**
  * "Bu Mac'i unut" (T-151): two confirmations before [forget] (`SessionController.forgetCurrentHost()`) runs; cancelling
- * at either step changes nothing. [confirm] returns the result text after the second step, null after the first.
+ * at either step changes nothing. [forget] returning true only means the request was queued (T-150): the result comes as
+ * a UI state. `Idle` means done; `Failed(KEY_STORE_FAILED)` means the removal did not persist (the Mac stays trusted and
+ * forgettable, the row stays usable). A machine that was already idle shows no state on success, so a request with no
+ * failure after [settleMs] counts as done ([onTick]); a failure within [lateMs] after that still turns it into
+ * [TrustText.FORGET_FAILED]. Clock-injected; main thread only.
  */
-class ForgetFlow(private val forget: () -> Boolean) {
-    enum class Step { IDLE, ASK_FIRST, ASK_SECOND }
+class ForgetFlow(
+    private val forget: () -> Boolean,
+    private val settleMs: Long = SETTLE_MS,
+    private val lateMs: Long = LATE_MS,
+) {
+    enum class Step { IDLE, ASK_FIRST, ASK_SECOND, WAITING }
 
     var step = Step.IDLE
         private set
+    private var sinceMs = 0L
+    private var lateUntilMs = -1L
 
+    /** Opens the first question (not while a request is still waiting for its result). */
     fun open(): Step {
-        step = Step.ASK_FIRST
+        if (step != Step.WAITING) step = Step.ASK_FIRST
         return step
     }
 
-    fun confirm(): TrustText? = when (step) {
-        Step.IDLE -> null
+    /**
+     * A "yes". After the first question: null (ask the second). After the second: [forget] runs; nothing known to forget
+     * gives [TrustText.FORGET_NONE], a queued request gives null and [step] [Step.WAITING].
+     */
+    fun confirm(nowMs: Long): TrustText? = when (step) {
+        Step.IDLE, Step.WAITING -> null
         Step.ASK_FIRST -> { step = Step.ASK_SECOND; null }
         Step.ASK_SECOND -> {
-            step = Step.IDLE
-            if (forget()) TrustText.FORGET_DONE else TrustText.FORGET_NONE
+            if (forget()) {
+                step = Step.WAITING
+                sinceMs = nowMs
+                lateUntilMs = -1
+                null
+            } else {
+                step = Step.IDLE
+                TrustText.FORGET_NONE
+            }
         }
     }
 
     fun cancel() {
+        if (step != Step.WAITING) step = Step.IDLE
+    }
+
+    /** Every rendered state: the request's result, or null. */
+    fun onUi(state: SessionUi, nowMs: Long): TrustText? {
+        val failed = state is SessionUi.Failed && state.cause == SessionUi.Cause.KEY_STORE_FAILED
+        if (step == Step.WAITING) {
+            if (failed) return resolve(TrustText.FORGET_FAILED)
+            if (state == SessionUi.Idle) return resolve(TrustText.FORGET_DONE)
+            return null
+        }
+        if (failed && lateUntilMs >= 0 && nowMs <= lateUntilMs) {
+            lateUntilMs = -1
+            return TrustText.FORGET_FAILED
+        }
+        return null
+    }
+
+    /** No state came: an idle machine reports success silently. */
+    fun onTick(nowMs: Long): TrustText? {
+        if (step != Step.WAITING || nowMs - sinceMs < settleMs) return null
+        lateUntilMs = nowMs + lateMs
+        return resolve(TrustText.FORGET_DONE)
+    }
+
+    /** The activity stopped before a result: nothing is reported (the next screen shows the real state). */
+    fun abandon() {
+        if (step == Step.WAITING) step = Step.IDLE
+        lateUntilMs = -1
+    }
+
+    private fun resolve(t: TrustText): TrustText {
         step = Step.IDLE
+        return t
+    }
+
+    companion object {
+        /** The engine takes the request within one tick (<= 100 ms); the store commit is quick. */
+        const val SETTLE_MS = 1_500L
+        const val LATE_MS = 10_000L
     }
 }

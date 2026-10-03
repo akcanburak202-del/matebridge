@@ -50,5 +50,6 @@
     <string name="forget_yes_second">Evet, unut</string>
     <string name="forget_no">Vazgeç</string>
     <string name="forget_done">Mac bu tablette unutuldu. Yeniden eşleşmeden önce Mac menüsünden de \'Onaylı cihazları unut\' de; yoksa Mac bu tableti tanıdığını sanır ve bağlantı \"Mac bu tableti tanımıyor\" hatasıyla biter.</string>
+    <string name="forget_failed">Mac unutulamadı: kayıt silinemedi, Mac hâlâ onaylı. Ayarlardan \'Bu Mac\'i unut\'u yeniden dene.</string>
     <string name="forget_none">Bu tablette unutulacak bir Mac yok (önce Mac\'e bağlan).</string>
 </resources>

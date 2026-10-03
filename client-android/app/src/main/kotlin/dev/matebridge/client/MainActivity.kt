@@ -298,9 +298,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // T-151 (decision 0018) trust UI: the pick gate, prompt visibility for T-150's timeout, "Bu Mac'i unut".
     private val pairPick = PairPick()
     private val promptVisibility = PromptVisibility()
-    private val forgetFlow = ForgetFlow { controller.forgetCurrentHost() }
+    private val forgetFlow = ForgetFlow({ controller.forgetCurrentHost() })
     /** "Bu Mac'i unut" succeeded: the idle panel says the Mac must forget this tablet too. Cleared by the next connect. */
     private var forgetNotice = false
+    /** "Bu Mac'i unut" did not persist (`Failed(KEY_STORE_FAILED)` after it): say so instead of the pairing text. */
+    private var forgetFailed = false
+    /** An already idle machine reports a successful forget with no state: decide after [ForgetFlow.SETTLE_MS]. */
+    private val forgetSettle = Runnable { forgetFlow.onTick(SystemClock.elapsedRealtime())?.let { onForgetResult(it) } }
     private lateinit var trustRow: LinearLayout
     private lateinit var connectButton: Button
     private var trustButtons: List<TrustButton> = emptyList()
@@ -1521,6 +1525,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         manualMode = false
         userDisconnected = false // T-105: a fresh start connects as usual
         forgetNotice = false
+        forgetFailed = false
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_FOREGROUND}") // T-133
         wolRefresh.reset() // T-133: one USB `wol` refresh per start
         mode = modeOverride ?: settings.transportMode()
@@ -1806,6 +1811,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onStop() {
         started = false
         promptVisibility.onStop()?.let { controller.setConfirmPromptVisible(it) } // T-151: the 2-min timer pauses
+        ui.removeCallbacks(forgetSettle)
+        forgetFlow.abandon() // T-151: a forget result after this is not reported (the next screen shows the real state)
         unbufferedPen.sync(false) // the ticker is stopped below; do not leave the request behind
         dev.matebridge.client.session.MbLog.i("activity_stop")
         ui.removeCallbacks(ticker)
@@ -1879,6 +1886,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         userDisconnected = false
         val ep = if (typed.isBlank()) currentEndpoint else Endpoint.parse(typed)
+        if (ep == null && typed.isBlank()) { // T-151: nothing chosen (e.g. after "Yoksay"): search the usual way again
+            hideManualEntry()
+            restartUsualWay()
+            return
+        }
         if (ep == null) {
             Toast.makeText(this, R.string.invalid_endpoint, Toast.LENGTH_SHORT).show()
             return
@@ -1914,6 +1926,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
         currentEndpoint = ep
         forgetNotice = false
+        forgetFailed = false
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
         if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName} origin=${origin.logName}")
@@ -1941,6 +1954,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (TrustUiText.hostReached(state)) hostReached = true // terminal errors and prompts must not be replaced by the USB hint
         promptVisibility.onRender(state, started)?.let { controller.setConfirmPromptVisible(it) } // T-151: T-150's timer
         if (pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151: never parked on one answerer's prompt
+        forgetFlow.onUi(state, SystemClock.elapsedRealtime())?.let { onForgetResult(it) } // T-151: the forget's result
         // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
         if (state is SessionUi.Connected && isOnUsb()) autoPolicy.onUsbConnected()
         if (!fallbackPending && AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), state)) {
@@ -1966,14 +1980,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             is SessionUi.Connecting -> getString(R.string.state_connecting, state.endpoint.toString())
             is SessionUi.AwaitingApproval -> getString(R.string.state_awaiting_approval, state.hostName) // code: trust view
             is SessionUi.Connected -> getString(R.string.state_connected, state.hostName, state.framesReceived)
-            is SessionUi.PairingNeedsUser, is SessionUi.StoredTrust -> "" // trust view below
+            is SessionUi.PairingNeedsUser -> getString(R.string.state_idle) // the pick prompt below while it is pending
+            is SessionUi.StoredTrust -> "" // trust view below
             is SessionUi.Disconnected -> getString(
                 R.string.state_disconnected, causeText(state.cause), (state.retryInMs + 999) / 1000,
             )
             is SessionUi.Failed ->
                 if (state.cause == SessionUi.Cause.HOST_SLEEP) {
                     getString(if (wolStore.hasMacs()) R.string.state_host_sleep else R.string.state_host_sleep_no_wol)
-                } else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
+                } else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED && forgetFailed) getString(R.string.forget_failed)
+                else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
                 else getString(R.string.state_failed, causeText(state.cause))
         }
@@ -2164,6 +2180,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         TrustText.PAIR_CANCELLED -> R.string.trust_pair_cancelled
         TrustText.FORGET_DONE -> R.string.forget_done
         TrustText.FORGET_NONE -> R.string.forget_none
+        TrustText.FORGET_FAILED -> R.string.forget_failed
     }
 
     private fun trustButtonRes(b: TrustButton) = when (b) {
@@ -2205,8 +2222,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             TrustButton.CANCEL -> trustCancel()
             TrustButton.PAIR -> onPairClicked()
             TrustButton.IGNORE -> {
-                pairPick.ignore() // its endpoint stays out of automatic connects until a user start
-                applyStatusText(lastUi)
+                // The prompt goes and the ordinary screen (with "Bağlan") comes back. The prompt held no connection, so
+                // its endpoint is dropped here: discovery, wake and AUTO go on to other Macs, and the ignored one stays
+                // out of automatic connects until a user start (PairPick).
+                pairPick.ignore()
+                if (lastUi is SessionUi.PairingNeedsUser) {
+                    currentEndpoint = null
+                    render(TrustUiText.afterIgnore(discovery != null))
+                } else {
+                    applyStatusText(lastUi) // a banner under another state: that state stays
+                }
             }
             TrustButton.REPAIR -> userStartStored(ConnectOrigin.STORED_REPAIR)
             TrustButton.CONNECT -> userStartStored(ConnectOrigin.STORED_CONNECT)
@@ -2278,15 +2303,35 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun onForgetConfirmed() {
         if (isDestroyed) return
         if (forgetFlow.step == ForgetFlow.Step.ASK_SECOND) MbLog.i("pair_ui", TrustUiText.pairUiFields("forget"))
-        when (forgetFlow.confirm()) {
-            null -> if (forgetFlow.step == ForgetFlow.Step.ASK_SECOND) showForgetDialog()
-            TrustText.FORGET_DONE -> {
-                // T-150 already ends a live session (BYE + close) before the records go; then no automatic reconnect
-                // (it would only meet the Mac's stale approval) until the user connects again.
-                forgetNotice = true
-                userDisconnect()
+        when (forgetFlow.confirm(SystemClock.elapsedRealtime())) {
+            null -> when (forgetFlow.step) {
+                ForgetFlow.Step.ASK_SECOND -> showForgetDialog()
+                ForgetFlow.Step.WAITING -> { // queued only (T-150): the result comes as a UI state, see onForgetResult
+                    ui.removeCallbacks(forgetSettle)
+                    ui.postDelayed(forgetSettle, ForgetFlow.SETTLE_MS + 50)
+                }
+                else -> Unit
             }
             else -> Toast.makeText(this, R.string.forget_none, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** The forget's result: done -> like "Bağlantıyı kes" with the done text; failed -> the failure text (retry). */
+    private fun onForgetResult(t: TrustText) {
+        ui.removeCallbacks(forgetSettle)
+        if (t == TrustText.FORGET_FAILED) {
+            forgetNotice = false
+            forgetFailed = true
+            MbLog.w("pair_ui_forget_failed")
+            if (started && !isDestroyed) applyStatusText(lastUi)
+            return
+        }
+        // T-150 already ended a live session (BYE + close) before the records went; now no automatic reconnect (it
+        // would only meet the Mac's stale approval) until the user connects again. Posted: render() may be running.
+        ui.post {
+            if (!started || isDestroyed) return@post
+            forgetNotice = true
+            userDisconnect()
         }
     }
 
