@@ -120,7 +120,13 @@ generation); the overlay must not take input while capture is on (shown only whe
 
 ## Handoff
 
-- **Commit:** `95b3e30` (implementation; plan in `2391ef2`). Branch `task/T-159-client-video-health-gate`.
+- **Commit:** `8856952` (review P2 fix) on top of `95b3e30` (implementation; plan in `2391ef2`). Branch
+  `task/T-159-client-video-health-gate`.
+- **Review fix (Codex --high, P2):** the debug injector was ticked in IDLE/STARTING too, so a zero delay with a slow
+  connect fired it for generation -1. Now `DecoderFault.onTick(VideoHealth)` fires only in HEALTHY with a generation
+  (`healthyMs >= N s`); test `aZeroDelayFaultWaitsForHealthyVideoEvenWhenTheConnectionIsSlow` (all four modes: no fire
+  in IDLE for 5 s, in STARTING for 3 s, or in FAULT; fires on the first HEALTHY tick; dequeue/silent hit that
+  generation, create/configure the next). 25 tests in `VideoHealthTest`; `./scripts/check.sh` ALL OK.
 - **Dokunulan dosyalar:**
   - `client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoHealth.kt` (new: `FaultCause`, `HealthEvent`,
     `DecodeProgress`, `VideoHealth`)
@@ -131,7 +137,7 @@ generation); the overlay must not take input while capture is on (shown only whe
     line in `onCreate`, the `syncInputActive` term, two renderer args in `installConfig`, helpers before `startVsync`,
     two ticker lines, one line in `render()`; FQNs instead of new imports to keep the T-150 merge clean)
   - `client-android/app/src/main/res/values/strings.xml` (4 strings, inserted after `state_connected`, not at the tail)
-  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/VideoHealthTest.kt` (new, 24 tests)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/VideoHealthTest.kt` (new, 25 tests)
   - `client-android/app/src/test/kotlin/dev/matebridge/client/video/FakeDecoderCodec.kt` (test dir, per the orchestrator:
     `produceOutput` mode and one-shot `dequeueOutputFailures`; T-158 tests unchanged and green)
 - **Ne yapıldı / nasıl:**
@@ -178,7 +184,7 @@ generation); the overlay must not take input while capture is on (shown only whe
   5. Static screen for > 1 min (no frames): no `video_health` line, input stays on. "Yeniden dene" button reachable and
      works while the overlay shows; no keyframe request storm in FAULT (`kf_request` lines stop).
 - **Açık sorular:**
-  - `docs/LOGGING.md` is not in `files:`; new lines for the orchestrator to document (all `MB/decoder`):
+  - `docs/LOGGING.md` (orchestrator will document) is not in `files:`; new lines (all `MB/decoder`):
     `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<state> vgen=N`
     (I; W for fault), `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; I for done),
     `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W). `vgen` because `MbLog` already writes `gen=`
