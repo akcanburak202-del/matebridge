@@ -1,7 +1,7 @@
 ---
 id: T-155
 title: Flag a replaced orphan approval request on the Mac
-status: in_progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-152]
@@ -71,8 +71,18 @@ Risks: case arity change breaks every `case .requestApproval` pattern (compile-t
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
+- **Commit:** `c2853004f33b8ccea3ac303a5101ba0af408a0ec` (implementation; plan `9430b52`; this Handoff in the following commit). Branch `task/T-155-host-orphan-approval-guard`.
 - **Dokunulan dosyalar:**
-- **Varsayımlar:**
+  - `host-mac/Sources/MateBridgeCore/Session/SessionMachine.swift`: new `ApprovalReplacement { none, sameDevice, otherDevice }` + `logValue` (`none|same|other`); `.requestApproval(…, code:, replaced:)`; the PAIRING branch of `continueHello` compares the open orphan's `deviceID` with the HELLO's before cancelling it; `approval_pending` now has `fields: "replaced=…"`.
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`: `ApprovalRequest` gets `replaced` and `deviceFingerprint` (`DeviceID.shortHex`). The Keychain-busy re-show reuses the stored request, so the warning survives it.
+  - `host-mac/Sources/MateBridgeApp/main.swift`: passes both into the panel (logs unchanged: `approval_shown conn=` only).
+  - `host-mac/Sources/MateBridgeApp/ApprovalPanel.swift`: an extra label between "Tabletteki kodla aynı mı?" and the existing `notice` line. `otherDevice`: "Bu, önceki istekten FARKLI bir cihaz." + "Cihaz parmak izi: xxxxxxxx" in bold `systemRed`. `sameDevice`: "Kod değişti — tabletteki kodla yeniden karşılaştır." in `secondaryLabelColor` (neutral). `none`: nothing. It is a separate label, so `markDisconnected`/Keychain `setNotice` cannot overwrite it.
+  - Tests: new `host-mac/Tests/MateBridgeCoreTests/Session/ApprovalReplacementTests.swift` (none / other with fingerprint `02020202`, cancel-before-request order, ack `pendingApproval` i.e. not blocked / same / expired or decided orphan → none / no name, code or fingerprint in any log field / logValue). Pattern-only updates (one extra `_`/`.none`) in `SessionCryptoTests.swift`, `PairedProofFirstTests.swift`, `PairingOrphanApprovalTests.swift`, `SessionMachineTests.swift`.
+- **Varsayımlar:** "Warning colour" = `systemRed` bold, which sets it apart from the existing orange `notice`. The fingerprint is `DeviceID.shortHex` (first 4 bytes); it is shown in the panel but not logged by the app. A new orphan replacing an older orphan inside `end(orphaning:)` is not flagged, since a request always cancels the orphan first and so that path does not occur in practice. The orphan flow stays (manifest §5 Q3 is still open).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The panel itself is not shown (no GUI on the Mac in this task). On the device: with an orphan window from the tablet, a HELLO from a second Android device should show the red "FARKLI bir cihaz" text + fingerprint (T-157 step 11). If there is no second device, the XCTests are the evidence.
+  - The same tablet with "Yeniden eşleş" (T-151) inside the orphan window should show the grey "Kod değişti …" line, and the code should match the tablet's new code.
+  - Panel layout: the panel's height should fit the extra line (`fittingSize`); check it visually.
+  - Not run: `./scripts/codex-review.sh` (orchestrator).
 - **Açık sorular:**
+  - `docs/LOGGING.md` (not in `files:`): `approval_pending` now carries `replaced=none|same|other` (none: no window was open; same: replaced the orphaned window of the same `device_id`; other: of a different `device_id`). The orchestrator should add this line to the event table.
