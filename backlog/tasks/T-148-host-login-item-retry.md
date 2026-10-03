@@ -1,7 +1,7 @@
 ---
 id: T-148
 title: Retry login-item registration after a failure
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -49,7 +49,14 @@ Source: external architecture review 2026-10-03 (M06); verification: docs/review
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core policy** `MateBridgeCore/Session/LoginItemPolicy.swift` (pure enum): `Trigger` (`launch`, `userToggle`), `Action` (`none`, `register`, `unregister`), `Outcome` (`succeeded`, `failed(reason:)`, `notBundled`).
+   - `action(for:firstRunDone:status:)` — which SMAppService call to make.
+   - `marksDone(trigger:action:outcome:)` — whether `loginItemFirstRunDone` is written after the attempt.
+   - `problem(after:)` — menu text (existing Turkish strings moved as-is).
+2. **Red commit:** the policy reproduces today's decision unchanged (launch always marks done, a toggle never does); `LoginItem.swift` calls it with identical observable behaviour (the write and the attempt are synchronous in one call). `LoginItemPolicyTests` describe the desired behaviour and fail (first-run failure marks done / no retry on next launch; toggles do not mark done; not bundled persists).
+3. **Fix commit:** launch marks done only on success (or when the status is already requested); `userToggle` + `unregister` always marks done (the user's off wins, even if unregister throws); `userToggle` + `register` marks done only on success (a failed toggle-on is retried on the next launch, which is what the user asked for); `notBundled` never persists. Log events `login_item` / `login_item_failed` and their fields stay unchanged.
+4. Files: only the card's `files:` list; no `main.swift` change (`loginProblemLine` already shows `problem`).
+5. Risk: a `swift run` binary now shows the "only with MateBridge.app" line and logs `login_item_failed reason=not_bundled` on every launch (before: only the first). Accepted: dev-only, and it is the truth.
 
 ## Handoff
 
