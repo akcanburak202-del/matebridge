@@ -1,11 +1,15 @@
 package dev.matebridge.client.video
 
-/** T-159: why the video is not healthy (decision 0019). `stuck` is reported by T-161. */
+/**
+ * T-159: why the video is not healthy (decision 0019). `stuck` is reported by T-161. T-218: `video_lost` is reported by
+ * the session (the video connection ended while streaming), not by the renderer.
+ */
 enum class FaultCause(val logName: String) {
     GIVE_UP("give_up"),
     NO_OUTPUT("no_output"),
     NOT_RUNNING("not_running"),
     STUCK("stuck"),
+    VIDEO_LOST("video_lost"),
 }
 
 /**
@@ -83,6 +87,10 @@ class DecodeProgress {
  *   Within it the steps run in order, each [STEP_GAPS_MS] after the previous one (or after the fault / re-attach),
  *   only while not HEALTHY and a surface is attached: codec restart (+1 s), codec restart (+3 s), session reconnect
  *   (+6 s), then manual ([manual], "Yeniden dene"). Steps never repeat within an episode; [retry] is the user's.
+ * - T-218 video loss: [videoLost] (the session's video connection ended) faults at once with `video_lost`. The decoder
+ *   keeps the last picture and gets no input, so no timer rule would ever fire. [videoFlowing] (a new video connection
+ *   delivered its first frame) then asks for a codec restart. The restart starts a new generation, so input re-opens
+ *   only at a decoded output of video sent after the loss. If the video stays away, the ladder above runs.
  */
 class VideoHealth(
     private val clock: () -> Long,
@@ -171,6 +179,27 @@ class VideoHealth(
 
     /** A fault of the current generation (any cause; T-161 reports `stuck` here through the renderer). */
     fun fault(cause: FaultCause) = fault(cause, clock())
+
+    /**
+     * T-218: the session's video connection ended while streaming. FAULT (`video_lost`) at once; this closes input
+     * through [onChange]. Without a surface (IDLE) there is nothing to close: input is shut already, and the next
+     * generation is STARTING anyway.
+     */
+    fun videoLost() = fault(FaultCause.VIDEO_LOST, clock())
+
+    /**
+     * T-218: a video connection delivered its first frame. After a `video_lost` FAULT this returns
+     * [Action.RESTART_CODEC]: a new generation (queue reset, keyframe request) that is STARTING until its first decoded
+     * output. Otherwise it returns null: a STARTING or HEALTHY generation is fed as usual, and another fault keeps its
+     * own recovery.
+     */
+    fun videoFlowing(): Action? {
+        if (state != State.FAULT || cause != FaultCause.VIDEO_LOST) return null
+        // The resumed generation gets a full step gap before the ladder's next step, which would restart it again.
+        if (!manual) nextStepAtMs = clock() + STEP_GAPS_MS[steps]
+        log('I', "video_recover", "step=resume n=$steps vgen=$generation")
+        return Action.RESTART_CODEC
+    }
 
     /**
      * Every ticker run (500 ms): evaluates the timer rules against [progress] (the renderer's, null without one), ends

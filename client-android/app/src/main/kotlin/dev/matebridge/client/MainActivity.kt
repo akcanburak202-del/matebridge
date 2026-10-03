@@ -490,6 +490,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 r.onFrame(frame)
             }
 
+            // T-218: a known video loss closes input at once (FAULT -> RELEASE_ALL(USER)); the control session goes on.
+            override fun onVideoLost(gen: Int) { runOnUiThread { videoHealth.videoLost() } }
+
+            // T-218: fresh video after a loss: a new decoder generation, input re-opens at its first decoded output.
+            override fun onVideoFlowing(gen: Int) {
+                runOnUiThread { videoHealth.videoFlowing()?.let { runVideoRecovery(it) } }
+            }
+
             override fun onSessionStart() {
                 clock.reset()
                 rttStats.reset()

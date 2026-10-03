@@ -159,7 +159,7 @@ class VideoHealthTest {
             assertEquals(cause, h.cause)
             assertTrue(lines.toString(), "video_health state=fault cause=${cause.logName} from=healthy vgen=7" in lines)
         }
-        assertEquals(listOf("give_up", "no_output", "not_running", "stuck"), FaultCause.values().map { it.logName })
+        assertEquals(listOf("give_up", "no_output", "not_running", "stuck", "video_lost"), FaultCause.values().map { it.logName })
     }
 
     @Test fun eventsOfARetiredGenerationAreIgnored() {
@@ -219,6 +219,104 @@ class VideoHealthTest {
         assertTrue(logs.toString(), "I video_health state=starting cause=- from=healthy vgen=3" in logs)
         health.onEvent(FirstOutput(3))
         assertTrue(health.inputAllowed)
+    }
+
+    // ---- T-218: video connection loss ----
+
+    @Test fun videoLossClosesInputInTheSameCallAndShowsTheOverlay() {
+        healthy(1)
+        val before = changes
+        health.videoLost()
+        assertEquals(State.FAULT, health.state)
+        assertEquals(FaultCause.VIDEO_LOST, health.cause)
+        assertFalse(health.inputAllowed)
+        assertTrue("the activity closes capture (RELEASE_ALL(USER)) on this change", changes > before)
+        assertTrue(health.showOverlay)
+        assertFalse(health.feedAllowed)
+        assertTrue(logs.toString(), "W video_health state=fault cause=video_lost from=healthy vgen=1" in logs)
+        // A second report (another failed reconnect) changes nothing.
+        val again = changes
+        health.videoLost()
+        assertEquals(again, changes)
+    }
+
+    @Test fun aLostVideoKeepsInputClosedAndTheOverlayWhileItStaysAway() {
+        healthy(1)
+        health.videoLost()
+        // The decoder still holds the last picture and may even decode one late frame of the old connection.
+        progress.onOutput(1)
+        health.onEvent(FirstOutput(1))
+        val actions = ArrayList<Action?>()
+        repeat(120) { // 60 s: control PONGs go on (nothing here depends on them), the video never comes back
+            now += 500
+            val a = tick()
+            actions += a
+            when (a) {
+                Action.RESTART_CODEC -> begin(health.generation + 1) // no frames arrive: the new generation stays STARTING
+                Action.RECONNECT -> { health.onEvent(Detached(health.generation)); begin(health.generation + 1) }
+                null -> Unit
+            }
+            assertFalse("input stays closed at ${it * 500} ms", health.inputAllowed)
+            assertTrue("overlay stays up at ${it * 500} ms", health.showOverlay)
+            health.videoLost() // every failed video reconnect reports again
+        }
+        assertEquals(listOf(Action.RESTART_CODEC, Action.RESTART_CODEC, Action.RECONNECT), actions.filterNotNull())
+        assertTrue(health.manual)
+    }
+
+    @Test fun freshVideoAfterALossRestartsTheCodecAndReopensOnlyAtTheNewGenerationsOutput() {
+        healthy(1)
+        health.videoLost()
+        now += 600 // the session reconnects the video after 500 ms
+        assertEquals(Action.RESTART_CODEC, health.videoFlowing())
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume ") })
+        begin(2) // MainActivity: renderer.restartCodec() -> a new generation
+        assertEquals(State.STARTING, health.state)
+        assertFalse(health.inputAllowed)
+        assertTrue(health.feedAllowed)
+        // A late output of the old generation does not count.
+        health.onEvent(FirstOutput(1))
+        assertFalse(health.inputAllowed)
+        // The ladder's next step waits a full gap after the resume, so the resumed generation is not restarted at once.
+        now += 900
+        assertNull(tick())
+        progress.onInput(2, now)
+        assertTrue(progress.onOutput(2))
+        health.onEvent(FirstOutput(2))
+        assertEquals(State.HEALTHY, health.state)
+        assertTrue(health.inputAllowed)
+        assertFalse(health.showOverlay)
+        // A later first frame of yet another connection does nothing while the video is fine.
+        assertNull(health.videoFlowing())
+    }
+
+    @Test fun videoFlowingRestartsOnlyAfterAVideoLossFault() {
+        assertNull(health.videoFlowing()) // no surface
+        begin(1)
+        assertNull(health.videoFlowing()) // STARTING: it is fed already
+        health.onEvent(Fault(1, FaultCause.GIVE_UP))
+        assertNull("a decoder fault keeps its own recovery", health.videoFlowing())
+        begin(2)
+        health.videoLost()
+        assertEquals(State.FAULT, health.state)
+        assertEquals(Action.RESTART_CODEC, health.videoFlowing())
+    }
+
+    @Test fun videoLossWithoutASurfaceDoesNothing() {
+        health.videoLost()
+        assertEquals(State.IDLE, health.state)
+        assertFalse(health.showOverlay)
+        assertEquals(0, changes)
+    }
+
+    @Test fun aStaticDesktopWithALiveVideoConnectionNeverFaults() {
+        healthy(1)
+        // No frames and no video_lost report (the connection is intact; keepalive probes are answered by the kernel).
+        repeat(1200) { now += 500; assertNull(tick()) }
+        assertEquals(State.HEALTHY, health.state)
+        assertTrue(health.inputAllowed)
+        assertFalse(health.showOverlay)
+        assertNull(health.videoFlowing()) // a reconnect without a loss changes nothing
     }
 
     // ---- recovery ladder ----

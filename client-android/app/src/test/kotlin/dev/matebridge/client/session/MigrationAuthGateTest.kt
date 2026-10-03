@@ -316,6 +316,8 @@ class MigrationAuthGateTest {
         assertEquals(listOf(true, false), sent(w).filterIsInstance<Pen>().map { it.samples.single().flags and PenSample.CONTACT != 0 })
         // the new generation carries input
         assertTrue(sendInput(key(Key.DOWN), c.gen))
+        // T-218: the takeover's close of the old video was expected; the promotion reconfigured the video instead
+        assertTrue(actions.none { it is Action.VideoLost })
     }
 
     @Test fun oldSupersededThenCandidateFailsLosesTheSessionInsteadOfHanging() {
@@ -407,7 +409,7 @@ class MigrationAuthGateTest {
         ackOnly(c, mac(key = wrongKey))
         assertTrue(step(Event.Tick(0), 150_000).isEmpty()) // expired: stale, nothing sent or retried on it
         assertTrue(logs.any { it == "I migration_old_stale " })
-        assertTrue(step(Event.VideoClosed(video)).isEmpty())
+        assertTrue(step(Event.VideoClosed(video)).isEmpty()) // T-218: no VideoLost while the proof is pending
         val pings = sent(w).count { it is Ping }
         assertTrue(step(Event.Tick(0), 100_000).isEmpty())
         assertEquals(pings, sent(w).count { it is Ping })
@@ -419,10 +421,14 @@ class MigrationAuthGateTest {
         assertEquals(1, resumed.count { it is Action.OpenVideo })
         assertEquals(pings + 1, sent(w).count { it is Ping })
         assertTrue(sendInput(key(Key.DOWN), w) && sendInput(key(Key.UP), w))
-        // the squatter's record does not authenticate: the candidate fails, the Wi-Fi session stays
+        // the squatter's record does not authenticate: the candidate fails, the Wi-Fi session stays. T-218: its video
+        // closed during the proof, so the picture may be stale: VideoLost now (input closes until fresh decoded video).
         val since = actions.size
         val r = c.records(cfg(2))
-        assertEquals(listOf(Action.CloseCandidate, Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED)), r)
+        assertEquals(
+            listOf(Action.CloseCandidate, Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED), Action.VideoLost(video)),
+            r,
+        )
         assertWifiUntouched(w, since)
         // its heartbeat is the ordinary one again: no PONG for 3 s now loses the session as before T-205
         val lost = step(Event.Tick(0), SessionMachine.PONG_TIMEOUT_US)

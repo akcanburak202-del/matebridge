@@ -173,6 +173,13 @@ class SessionMachine(
         data object OpenSettings : Action
         /** T-150: a CLIPBOARD arrived on the accepted (and locally trusted) control connection [gen]. Never log its data. */
         data class DeliverClipboard(val msg: Clipboard, val gen: Int) : Action
+        /**
+         * T-218: the current video connection [gen] ended unexpectedly while streaming (EOF, IO/protocol error, connect
+         * failure, a keepalive timeout). The picture is stale: the UI closes input at once (video FAULT, then
+         * `RELEASE_ALL(USER)`). The session and [inputAllowed] stay as they are, so the releases still go out. The video
+         * reconnects as before.
+         */
+        data class VideoLost(val gen: Int) : Action
     }
 
     /**
@@ -192,6 +199,8 @@ class SessionMachine(
     private var videoGen = -1
     private var videoOpen = false
     private var videoRetryAtUs = 0L
+    /** T-218: the video closed while a migration proof was pending; reported if the candidate fails and the session stays. */
+    private var videoLostDeferred = false
 
     private var hostName = ""
     private var pairingCode: String? = null
@@ -444,7 +453,13 @@ class SessionMachine(
             }
             is Event.VideoClosed -> if (event.gen == videoGen) {
                 videoOpen = false
-                if (phase == Phase.STREAMING) videoRetryAtUs = nowUs + VIDEO_RETRY_US
+                if (phase == Phase.STREAMING) {
+                    videoRetryAtUs = nowUs + VIDEO_RETRY_US
+                    // T-218: while a migration proof is pending, the host's takeover closes the old video. That is
+                    // expected, and the promotion reconfigures the video. It counts only if the candidate fails and this
+                    // session stays.
+                    if (candAck != null) videoLostDeferred = true else out += Action.VideoLost(event.gen)
+                }
             }
             is Event.SetPrefs -> {
                 if (event.prefs != prefs) {
@@ -999,6 +1014,7 @@ class SessionMachine(
     private fun resetSessionFields() {
         videoGen = -1
         videoOpen = false
+        videoLostDeferred = false
         config = null
         sessionId = 0
         videoPort = 0
@@ -1086,7 +1102,14 @@ class SessionMachine(
     private fun failCandidate(out: MutableList<Action>, nowUs: Long, reason: String) {
         val gone = oldGone || oldStale
         abortMigration(out, reason)
-        if (gone) lose(out, nowUs, SessionUi.Cause.LOST)
+        if (gone) {
+            lose(out, nowUs, SessionUi.Cause.LOST)
+        } else if (videoLostDeferred) {
+            // T-218: the session stays, but its video closed during the proof, so the picture may be stale. This is
+            // reported even if the video was reopened meanwhile; the health ladder restarts the decoder then.
+            videoLostDeferred = false
+            if (phase == Phase.STREAMING && videoGen >= 0) out += Action.VideoLost(videoGen)
+        }
     }
 
     /** Closes the candidate (if any) and reports the failed migration; the current session is not touched. */

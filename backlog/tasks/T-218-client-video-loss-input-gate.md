@@ -1,7 +1,7 @@
 ---
 id: T-218
 title: Gate input on video-only loss (stale picture must not keep input live)
-status: in_progress
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-160]

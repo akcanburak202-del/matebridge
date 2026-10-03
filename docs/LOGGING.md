@@ -202,8 +202,8 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 ## Video sağlığı ve input kapısı (tablet, `MB/decoder`, T-159, karar 0019)
 
-- `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı).
-- `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; `done` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene".
+- `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck|video_lost from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı). `video_lost` (T-218): akış sırasında video bağlantısı koptu, kontrol oturumu sürse bile.
+- `ev=video_recover step=restart|reconnect|manual|retry|resume|done n=N vgen=N` (W; `done` ve `resume` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` (T-218): `video_lost`'tan sonra yeni video bağlantısının ilk karesi geldi. Decoder yeni kuşakla yeniden başlar ve input o kuşağın ilk çözülmüş çıktısında açılır.
 - `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--ez dev true --es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
 
 ## Encoder gönderim sırası (Mac, `encoder`, T-162)
@@ -334,6 +334,11 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 ## Video teslim kapısı (tablet, `MB/session`, T-160)
 
 - `ev=video_gate_open vgen=N config_id=N gated=N` (I): video bağlantısının ilk teslim edilen karesinde bir kez. Kare yalnız açık video bağlantısından gelir, `config_id`'si uygulanan ayara eşittir ve renderer o `StreamConfig` nesnesini kurmuşsa teslim edilir. `gated`: kapının o ana kadar düşürdüğü kare sayısı (geçişte küçük olmalı).
+
+## Video kopuşu ve input (tablet, `MB/session`, T-218)
+
+- `ev=video_lost vgen=N` (W): akış sırasında geçerli video bağlantısı beklenmedik biçimde bitti (EOF, IO/protokol hatası, bağlanamama, keepalive zaman aşımı). Hemen ardından `MB/decoder ev=video_health state=fault cause=video_lost` gelir ve input kapanır. Kontrol oturumu sürer, video 500 ms sonra yeniden bağlanır. Yeniden yapılandırma, oturum kaybı ve göç video bağlantısını kendisi kapatır; bunlar `video_lost` yazmaz. Göç kanıtı beklenirken kopan eski video da yazmaz; aday başarısız olur ve oturum kalırsa yazar.
+- `ev=video_keepalive ok=1 idle_s=3 intvl_s=1 cnt=3` (I) / `ok=0 err=<adım>:<istisna>|nofd` (W): her video bağlantısında bir kez. Video soketinde TCP keepalive açılır. Yarı açık soket, son host segmentinden ~6 sn sonra okuma hatasıyla kapanır (→ `video_lost`). Durağan masaüstünde Mac çekirdeği probları yanıtlar, yanlış alarm olmaz. `ok=0` oturumu etkilemez; yalnız yarı açık soket sınırı yoktur.
 
 ## Tablet dosyalarını Mac'te yeniden bağlama (Mac, `files`, T-206)
 
