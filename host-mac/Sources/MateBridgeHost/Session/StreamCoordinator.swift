@@ -17,7 +17,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private enum Event: Sendable {
         case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?,
-                          base: VideoSettings?, prefs: StreamPrefs?, transport: SessionTransport)
+                          base: VideoSettings?, prefs: StreamPrefs?, reannounce: Bool, transport: SessionTransport)
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
@@ -132,6 +132,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     private let gameDisplayLock = NSLock()
     private var gameDisplay = GameDisplayFallback()
     private var allowsGameDisplay: Bool { gameDisplayLock.withLock { gameDisplay.allowsGameDisplay } }
+    /// T-214 review: the config each tablet was told at HELLO, checked at activation (`AnnouncedStreamConfigs`).
+    private let announcedLock = NSLock()
+    private var announced = AnnouncedStreamConfigs()
 
     /// - Parameter graceUs: keep time of a parked display; nil reads `MATEBRIDGE_DISPLAY_KEEP_S` (default 10 s).
     public convenience init(graceUs: UInt64? = nil) {
@@ -226,15 +229,22 @@ public final class StreamCoordinator: @unchecked Sendable {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
                        fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.nativeWidthPx)x\(settings.nativeHeightPx)")
         }
-        return settings.streamConfig(configID: Self.configID)
+        let config = settings.streamConfig(configID: Self.configID)
+        announcedLock.withLock { announced.record(config, device: hello.deviceID) }
+        return config
     }
 
-    /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
+    /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO. If
+    /// they no longer match the config announced at HELLO (game displays switched off by `game_display_failed`, or
+    /// other stored prefs, in between), the event loop announces a new `config_id` before starting the pipeline.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello, transport: SessionTransport) {
         liveSessionLock.withLock { liveSessionID = sessionID }
         let (base, initial, stored) = settings(for: hello, transport: transport)
+        let reannounce = announcedLock.withLock {
+            announced.activationDiffers(device: hello.deviceID, activation: initial.streamConfig(configID: configID))
+        }
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
-                             settings: initial, base: base, prefs: stored, transport: transport))
+                             settings: initial, base: base, prefs: stored, reannounce: reannounce, transport: transport))
     }
 
     public func sessionEnded() {
@@ -295,9 +305,10 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         switch event {
-        case .sessionStarted(let sid, let cid, let device, let settings, let base, let prefs, let transport):
+        case .sessionStarted(let sid, let cid, let device, let settings, let base, let prefs, let reannounce,
+                             let transport):
             await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings, base: base,
-                                   prefs: prefs, transport: transport)
+                                   prefs: prefs, reannounce: reannounce, transport: transport)
         case .sessionEnded:
             await onSessionEnded()
         case .videoAttached(let link):
@@ -333,15 +344,25 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
                                   settings: VideoSettings?, base: VideoSettings?, prefs: StreamPrefs?,
-                                  transport: SessionTransport) async {
+                                  reannounce: Bool, transport: SessionTransport) async {
         guard let device, let settings, let base else {
             log(.error, "session_without_config")
             return
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
-        session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
+        // T-214 review: the config sent at HELLO no longer matches these settings; announce them under a new
+        // config_id (STREAM_CONFIG + video close) before any pipeline starts, so the tablet never decodes a stream
+        // whose size or point size it was not told.
+        let activeConfigID = reannounce ? nextConfigID(after: configID) : configID
+        session = ActiveSession(sessionID: sessionID, configID: activeConfigID, deviceID: device, settings: settings,
                                 base: base, prefs: prefs, transport: transport)
+        if reannounce {
+            log(.info, "stream_config_reannounced", "config_id=\(configID)->\(activeConfigID) "
+                + "display=\(settings.displayModeText) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx) "
+                + "fps=\(settings.fps)")
+            onReconfigure(sessionID, settings.streamConfig(configID: activeConfigID))
+        }
         prefsGate = StreamPrefsGate()
         resetDisplayRate()
         // T-128: an accepted session means the Mac is running, also after a dark wake (Wake-on-LAN), which never

@@ -229,6 +229,7 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 - `ev=stream_prefs … display=<kip> requested_display=<w>x<h> game_display=none|applied|rejected|disabled`: `display` uygulanacak ekran kipi; `none` istek 0×0, `rejected` boyut kurallara uymadı (0×0 sayıldı, protokol hatası değil), `disabled` bu süreçte daha önce `game_display_failed` oldu.
 - `ev=stream_reconfigure … display=<eski>-><yeni>`: kip değişimi ekranı yeniden kurar (`display_recreate reason=mode_change`).
 - `ev=stream_session … display=<kip>`: oturum başındaki kip (hatırlanan tercih oyun ekranıysa doğrudan oyun boyutu).
+- `ev=stream_config_reannounced config_id=<eski>-><yeni> display=<kip> encoded=<w>x<h> fps=<n>`: HELLO'da gönderilen `STREAM_CONFIG` oturum etkinleştiğinde türetilen ayarla (bit hızı dışında) uyuşmuyor (arada `game_display_failed` oldu ya da önceki oturum başka bir tercih kaydetti); işlem hattı kurulmadan önce yeni `config_id` ile bildirilir, istemci video bağlantısını yeniden açar.
 - `W net ev=game_display_failed applied=<kip> requested=<kip> config_id=<n> encoded=<w>x<h> bitrate_kbps=<n>`: 1x ekran kurulamadı (ekran oluşmadı ya da kip seçilemedi; yakalamanın ekranı bulamaması sayılmaz); tercih ekran yok sayılarak yeniden uygulandı ve yeni `config_id` ile bildirildi. Süreç boyunca bir daha oyun ekranı kurulmaz. Önünde `display_create_failed error=…` vardır.
 - `video ev=cadence_setup display[requested=… mode=<kip> mode_selected=… applied=…]` ve `encoder ev=profile … display=<kip>`: kurulan ekranın kipi.
 

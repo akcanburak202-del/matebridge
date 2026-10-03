@@ -106,6 +106,41 @@ public enum DisplayRecreateGap {
     }
 }
 
+/// The first `STREAM_CONFIG` each tablet was told at HELLO (`streamConfig(for:)`), kept until its session is
+/// activated. The session machine sends that config at HELLO but the session's settings are derived again at
+/// activation (after proof, for a reconnect). In between, the inputs can change: `game_display_failed` may switch game
+/// displays off (T-214), or the previous session may store other prefs (T-049). Comparing both tells the owner to
+/// announce a new `config_id` before the pipeline starts, so the announced config never disagrees with the pipeline.
+public struct AnnouncedStreamConfigs: Sendable {
+    /// At most this many devices are remembered (HELLOs that never become a session must not grow memory).
+    public static let maxDevices = 16
+    private var byDevice: [DeviceID: StreamConfig] = [:]
+
+    public init() {}
+
+    public var count: Int { byDevice.count }
+
+    /// `config` was announced for a HELLO of `device` (replaces an older one of the same device).
+    public mutating func record(_ config: StreamConfig, device: DeviceID) {
+        byDevice[device] = config
+        while byDevice.count > Self.maxDevices, let drop = byDevice.keys.first(where: { $0 != device }) {
+            byDevice.removeValue(forKey: drop)
+        }
+    }
+
+    /// The session of `device` is activated with `activation` (its settings' `STREAM_CONFIG` under the session's
+    /// `config_id`). True when the config announced at HELLO differs in anything but `config_id` and `bitrate_kbps`
+    /// (the tablet does not use the first config's bitrate, and the transport knobs are applied only at activation):
+    /// the owner must announce `activation` under a new `config_id` before starting the pipeline. Consumes the record;
+    /// with none (unknown device) false.
+    public mutating func activationDiffers(device: DeviceID, activation: StreamConfig) -> Bool {
+        guard var announced = byDevice.removeValue(forKey: device) else { return false }
+        announced.configID = activation.configID
+        announced.bitrateKbps = activation.bitrateKbps
+        return announced != activation
+    }
+}
+
 /// One fallback to the native display when a 1x game display cannot be set up (PROTOCOL.md 0x05,
 /// `game_display_failed`). After the first failure no game display is offered again for the rest of the process.
 public struct GameDisplayFallback: Equatable, Sendable {

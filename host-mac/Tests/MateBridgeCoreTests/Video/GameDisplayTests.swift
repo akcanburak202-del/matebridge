@@ -244,6 +244,75 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertFalse(f.allowsGameDisplay)
     }
 
+    // MARK: Announced config vs activation (T-214 review)
+
+    /// A paired reconnect's HELLO is answered while game displays are allowed; before its proof the old session's
+    /// game display fails and switches them off; the activation derives native settings. The game STREAM_CONFIG sent
+    /// at HELLO must not stay in force: activation reports the difference and the native config gets a new config_id.
+    func testFallbackBetweenHelloAndActivationForcesANewConfigID() {
+        let store = InMemoryStreamPrefsStore()
+        store.save(prefs(w: 1848, h: 1214), device: dev)
+        var fallback = GameDisplayFallback()
+        var announced = AnnouncedStreamConfigs()
+
+        // HELLO of the reconnect (StreamCoordinator.streamConfig(for:)).
+        let atHello = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60,
+                                                    allowGameDisplay: fallback.allowsGameDisplay)
+        let helloConfig = atHello.streamConfig(configID: 1)
+        announced.record(helloConfig, device: dev)
+        XCTAssertEqual([helloConfig.widthPx, helloConfig.heightPx, helloConfig.widthPt, helloConfig.heightPt],
+                       [1848, 1214, 1848, 1214])
+
+        // The old session's game display fails before the proof.
+        XCTAssertTrue(fallback.startFailed(settings: atHello, displayFailure: true))
+
+        // Activation (StreamCoordinator.sessionStarted) derives the settings again.
+        let atActivation = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev),
+                                                         defaultRefreshHz: 60, allowGameDisplay: fallback.allowsGameDisplay)
+        XCTAssertTrue(atActivation.displayHiDPI)
+        XCTAssertTrue(announced.activationDiffers(device: dev, activation: atActivation.streamConfig(configID: 1)),
+                      "the announced game config disagrees with the native pipeline")
+        let reannounced = atActivation.streamConfig(configID: nextConfigID(after: 1))
+        XCTAssertEqual(reannounced.configID, 2)
+        XCTAssertEqual([reannounced.widthPt, reannounced.heightPt], [1400, 920])
+        XCTAssertEqual([reannounced.widthPx, reannounced.heightPx], [1848, 1214], "native display, the mode's 660 scale")
+        // Resending the same prefs then changes nothing, and the live settings already match the announced config.
+        XCTAssertEqual(base.applying(prefs(w: 1848, h: 1214), allowGameDisplay: fallback.allowsGameDisplay), atActivation)
+        XCTAssertEqual(announced.count, 0, "the record is consumed")
+    }
+
+    func testActivationMatchingTheHelloConfigNeedsNoNewConfigID() {
+        var announced = AnnouncedStreamConfigs()
+        let game = base.applying(prefs(w: 1848, h: 1214))
+        announced.record(game.streamConfig(configID: 1), device: dev)
+        XCTAssertFalse(announced.activationDiffers(device: dev, activation: game.streamConfig(configID: 1)))
+        XCTAssertFalse(announced.activationDiffers(device: dev, activation: base.streamConfig(configID: 1)),
+                       "consumed: a second activation has nothing to compare")
+        // Only the bitrate differs (the Wi-Fi bitrate knob is applied at activation only): no new config_id.
+        announced.record(game.streamConfig(configID: 1), device: dev)
+        let wifi = game.applyingTransportKnobs(["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000"], transport: .network)
+        XCTAssertNotEqual(wifi.bitrateKbps, game.bitrateKbps)
+        XCTAssertFalse(announced.activationDiffers(device: dev, activation: wifi.streamConfig(configID: 1)))
+        // Other stored prefs in between (T-049): the stream size differs, so a new config_id is needed too.
+        announced.record(base.streamConfig(configID: 1), device: dev)
+        XCTAssertTrue(announced.activationDiffers(
+            device: dev, activation: base.applying(StreamPrefs(fps: 120, scalePermille: 750)).streamConfig(configID: 1)))
+        let other = DeviceID(bytes: [UInt8](repeating: 0xE5, count: 16))!
+        XCTAssertFalse(announced.activationDiffers(device: other, activation: game.streamConfig(configID: 1)),
+                       "no HELLO recorded: unchanged behaviour")
+    }
+
+    func testAnnouncedConfigsAreBounded() {
+        var announced = AnnouncedStreamConfigs()
+        for n in 0..<40 {
+            announced.record(base.streamConfig(configID: 1), device: DeviceID(bytes: [UInt8](repeating: UInt8(n), count: 16))!)
+        }
+        XCTAssertEqual(announced.count, AnnouncedStreamConfigs.maxDevices)
+        let last = DeviceID(bytes: [UInt8](repeating: 39, count: 16))!
+        XCTAssertTrue(announced.activationDiffers(device: last, activation: base.applying(prefs(w: 1848, h: 1214))
+            .streamConfig(configID: 1)), "the newest record is kept")
+    }
+
     func testOutcomeForTheLog() {
         XCTAssertEqual(GameDisplayPolicy.outcome(of: prefs(w: 0, h: 0), nativeW: 2800, nativeH: 1840, allowed: true), .none)
         XCTAssertEqual(GameDisplayPolicy.outcome(of: prefs(w: 1848, h: 1214), nativeW: 2800, nativeH: 1840, allowed: true),
