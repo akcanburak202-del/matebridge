@@ -1,7 +1,7 @@
 ---
 id: T-019
 title: Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi
-status: blocked
+status: done
 phase: 1
 owner: android-client-dev
 depends_on: [T-018]
@@ -51,4 +51,10 @@ Dal `task/T-019-gl-jitter` main'e **birleştirilmedi** (park edildi).
 - 1a23ebc (priming): J0 drawn 43–46/61, underrun 14–18; J1 drawn 52–61, underrun 0–8 (iki pencere 61/0); J2 drawn 49–57. depth_max ≤1. **Kullanıcı J1'de: "takılma daha da arttı gibi"** (ölçüm iyileşse de algı kötüleşti; yarı dolan tampon hareket hızını dalgalandırıyor olabilir).
 - b91f6cc (her çıktıyı yüzeye bırak): soğuk başlangıçta `gl_start_timeout frames_arrived=0` (decoder yüzeyi bağlı ama SurfaceTexture'a kare gelmedi) → otomatik surface'e düştü. Aynı soğuk başlangıç sorunu 1a23ebc öncesinde de bir kez görüldü.
 - Karar: varsayılan yol surface kalır (kullanıcı: "takılma azalmış"). Akıcılık çalışması Mac Ethernet'e bağlanana kadar park. Tekrar ele alındığında: soğuk başlangıç hatası, BufferQueue derinliği (FBO doku halkası), algısal değerlendirme.
+
+## Orkestratör notu (2026-10-03): Kapatıldı: yapılmayacak (karar 0026)
+
+- **GL titreşim tamponu:** GL sunum yolu karar 0026 ile kaldırılıyor (kullanıcı 2026-10-03'te onayladı). Kod T-184'te silinir. `task/T-019-gl-jitter` dalı birleştirilmeyecek.
+- **Wi-Fi düşük gecikme kilidi:** bu kısım T-089 ile karşılandı (`--ez wifi_ll` ayarı, `WifiLockHolder`). Ayar, T-127 onu `bsd` altında yeniden ölçene kadar yalnızca geliştirici ayarı olarak kalır (0026 madde 6, audit K4). 2026-10-01'deki "etkisiz" sonucu `nw` tavanı yüzünden geçersiz.
+- Envanter: `docs/KNOBS.md` satır 4 ve 15. `status: done` yalnızca kartın panoda kalması içindir; iş yapılmadı.
 
