@@ -30,6 +30,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     @Volatile var stopGate: CountDownLatch? = null
     @Volatile var releaseGate: CountDownLatch? = null
     @Volatile var dequeueOutputGate: CountDownLatch? = null
+    /** T-219: while set and closed, `dequeueInputBuffer()` (any codec) blocks until the latch opens. */
+    @Volatile var dequeueInputGate: CountDownLatch? = null
     /** What [DecoderCodec.lowLatencySupport] answers (null = API < 30). */
     @Volatile var lowLatency: Boolean? = true
     @Volatile var inputCapacity = 64 * 1024
@@ -115,6 +117,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         private val ready = ArrayDeque<Long>() // under the factory lock
         private var nextOut = 0
         private val outPts = java.util.concurrent.ConcurrentHashMap<Int, Long>() // output index -> pts
+        /** T-219: pts of every non-empty input queued to this codec, in order (config inputs included). */
+        val inputPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
@@ -133,6 +137,9 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         }
 
         override fun dequeueInputBuffer(timeoutUs: Long): Int {
+            dequeueInputGate?.let { g ->
+                if (g.count > 0) { record("dequeueInput#$serial>"); gate(g); record("dequeueInput#$serial<") }
+            }
             if (throwOnDequeueInput) throw IllegalStateException("fake dequeueInputBuffer failure")
             return nextIndex.also { nextIndex = (nextIndex + 1) % 8 }
         }
@@ -141,7 +148,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
 
         override fun queueInputBuffer(index: Int, offset: Int, size: Int, presentationTimeUs: Long, flags: Int) {
             synchronized(lock) {
-                if (size > 0) queued++
+                if (size > 0) { queued++; inputPts.add(presentationTimeUs) }
                 if (produceOutput && size > 0 && flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0) ready.addLast(presentationTimeUs)
                 lock.notifyAll()
             }

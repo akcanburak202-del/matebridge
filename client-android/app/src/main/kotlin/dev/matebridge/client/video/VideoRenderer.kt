@@ -37,6 +37,10 @@ fun interface VideoFrameSink {
  * through [onHealthEvent] (see [HealthEvent]; a restart after `decode_error` is not a new generation); per-frame decode
  * progress goes to [progress]. [stopFeeding] (also done on give-up) stops taking frames and keyframe retries for the
  * current generation.
+ *
+ * T-219: the queue is consumed by generation, not just by codec: [start] makes the new generation the queue's only
+ * consumer ([FrameQueue.assignConsumer]) before its frames are admitted, and [retire] revokes the old one, so a retired
+ * input loop that wakes late takes nothing and the new generation gets its CODEC_CONFIG and keyframe.
  */
 class VideoRenderer(
     initialConfig: StreamConfig,
@@ -306,6 +310,8 @@ class VideoRenderer(
         val att = CodecGeneration(gen, surface)
         att.thread = Thread({ decodeLoop(att) }, "mb-decoder")
         current = att
+        // T-219: only this generation's input loop takes frames from now on (before any frame of its config is fed).
+        queue.assignConsumer(gen)
         onHealthEvent(HealthEvent.Generation(gen))
         handoff.threadStarted(att) // counted before it runs: the generation is unfinished from now on
         att.thread.start()
@@ -321,7 +327,11 @@ class VideoRenderer(
         val startNs = System.nanoTime()
         // Review 2: bounded (RETIRE_LOCK_WAIT_MS) even while an output bookkeeping section runs; the whole detach stays
         // within JOIN_MS because the join gets only what is left.
-        if (!handoff.retire(att)) {
+        val locked = handoff.retire(att)
+        // T-219: after `active` is false (so the old loop exits instead of spinning): the old input loop takes nothing
+        // more, even if it is already past its `active` check; a parked one is woken and leaves.
+        queue.revokeConsumer(att.gen)
+        if (!locked) {
             env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=retire_lock_slow vgen=${att.gen} " +
                 "wait_ms=${GenerationHandoff.RETIRE_LOCK_WAIT_MS}")
         }
@@ -440,6 +450,7 @@ class VideoRenderer(
                     onHealthEvent(HealthEvent.Fault(att.gen, FaultCause.GIVE_UP))
                 }
                 handoff.retire(att)
+                queue.revokeConsumer(att.gen) // T-219: a dead generation consumes nothing
                 break
             }
             // T-161: back off before the restart; a retire() (detach, new generation) ends the wait at once.
@@ -449,7 +460,9 @@ class VideoRenderer(
             val own = try { handoff.awaitOwnThreads(att, previousWaitMs) } catch (_: InterruptedException) { GenerationHandoff.Result.Retired }
             if (own is GenerationHandoff.Result.Stuck) { reportStuck(att, own); break }
             if (own != GenerationHandoff.Result.Ready) break
-            onKeyframeRequest(queue.reset(KeyframeRequest.DECODE_ERROR))
+            // T-219: only while this generation still owns the queue; a retired one must not drop the next one's frames.
+            val restart = queue.resetIfOwner(att.gen, KeyframeRequest.DECODE_ERROR) ?: break
+            onKeyframeRequest(restart)
         }
     }
 
@@ -538,7 +551,8 @@ class VideoRenderer(
             while (att.active && outError.get() == null) {
                 inSlot.prefetch()
                 // T-141: an offer unparks the wait at once; the timeout only bounds how fast a stop is seen.
-                val fromQueue = if (held == null) queue.awaitNext(IdleWait.waitNs(System.nanoTime() - lastFrameNs, INPUT_WAIT_NS)) else null
+                // T-219: frames of this generation only; once retired it gets null and the loop ends on `active`.
+                val fromQueue = if (held == null) queue.awaitNext(IdleWait.waitNs(System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen) else null
                 if (fromQueue != null) lastFrameNs = System.nanoTime()
                 if (fromQueue != null && trace != null) takenNs = lastFrameNs
                 val frame = held ?: fromQueue
@@ -552,7 +566,7 @@ class VideoRenderer(
                     env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=frame_too_large size=${frame.data.size} cap=${buf.capacity()}")
                     codec.queueInputBuffer(idx, 0, 0, 0, 0) // hand the empty buffer back
                     stats.onDropped(1)
-                    onKeyframeRequest(queue.onDecoderError())
+                    queue.onDecoderErrorIfOwner(att.gen)?.let(onKeyframeRequest) // T-219: not for a retired generation
                     continue
                 }
                 buf.clear()
@@ -740,6 +754,11 @@ class VideoRenderer(
     private fun giveBackIfRetired(st: CodecState, tookBypass: Boolean) {
         if (tookBypass && !st.current) firstOutput.arm()
     }
+
+    /** Tests only (T-219 barrier): runs on the input thread inside the queue wait, right before each park. */
+    internal var inputParkHook: (() -> Unit)?
+        get() = queue.parkHook
+        set(v) { queue.parkHook = v }
 
     /** Tests only: runs inside each output's bookkeeping section (under the shared lock, after the "current" check). */
     @Volatile internal var outputSectionHook: (() -> Unit)? = null
