@@ -1,7 +1,7 @@
 ---
 id: T-152
 title: Activate PAIRED sessions only after the first authenticated record
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-041]
@@ -9,6 +9,7 @@ decisions: []
 files:
   - host-mac/Sources/MateBridgeCore/Session/SessionMachine.swift
   - host-mac/Tests/MateBridgeCoreTests/Session/
+  - host-mac/Tests/MateBridgeCoreTests/Crypto/  # orchestrator approved 2026-10-03: proof-first changes the handshake setup these tests rely on
   - backlog/tasks/T-152-host-paired-proof-first.md
 ---
 
@@ -63,29 +64,31 @@ Source: external architecture review 2026-10-03 (SE2, W3; A1 as a contract hole)
 
 ## Handoff
 
-**Durum: ENGELLİ (status `in-progress`, `review` değil).** Kod ve kapsam içi testler hazır, ama `./scripts/check.sh` kırmızı: kart dışındaki iki test dosyası PAIRED HELLO'dan hemen sonra aktif oturum bekliyor (bkz. *Açık sorular* 1). Kural gereği o dosyalara dokunmadım.
+**Kapsam notu:** `host-mac/Tests/MateBridgeCoreTests/Crypto/` orkestratörün 2026-10-03 onayıyla `files:`'a eklendi; kanıt-önce kuralı bu testlerin dayandığı el sıkışma kurulumunu değiştiriyor. Yalnız test kurulumu değişti, testlerin amacı korundu.
 
-- **Commit:** `07772bc` (kod + Session testleri), plan `1fdac26`. Dal `task/T-152-host-paired-proof-first`.
+- **Commit:** son kod/test commit'i `656618a` (dal `task/T-152-host-paired-proof-first`; plan `1fdac26`, makine + Session testleri `07772bc`, Crypto test kurulumları `656618a`).
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Session/SessionMachine.swift`: `continueHello` PAIRED dalı devralma olsun olmasın `.proving(proofTimeoutUs)`; `start()` artık yalnız `prove()` ve `pairingPersisted` içinden. Devralmasız durumda `ev=paired_proving`, devralmada `ev=takeover_proving` (değişmedi). `prove()` mantığı değişmedi, yalnız doc yorumları.
   - `host-mac/Tests/MateBridgeCoreTests/Session/PairedProofFirstTests.swift` (yeni, 9 test, gerçek şifreli kayıtlı küçük bir tel düzeneğiyle).
   - `Session/SessionMachineTests.swift`: `activate` yardımcısı HELLO'dan sonra kanıt PING'i gönderir; doğrudan HELLO ile aktif oturum bekleyen 6 test kurulumuna tek satır kanıt PING'i eklendi (`approvedDeviceIsAcceptedWithConfig` artık STREAM_CONFIG'i kanıttan sonra bekliyor). Devralma testlerinin gövdeleri aynı; yalnız `takeoverNeedingPairingIsBusy` kurulumuna A'nın kanıtı eklendi.
   - `Session/PairingOrphanApprovalTests.swift`: `afterAnOrphanApprovalTheReconnectIsPairedWithThatKey` HELLO'dan sonra `idle`, kanıt PING'inden sonra `active` bekliyor (kaçınılmaz: davranış değişikliği bu).
   - `Session/ControlSocketTests.swift`: test tableti `handshake()`'te ACCEPTED'dan sonra kanıt PING'i gönderip PONG'u bekliyor (gerçek istemci gibi).
+  - `Crypto/SessionCryptoTests.swift`: canlı oturum isteyen kurulumlara kanıt PING'i (`busyIsPlaintext...`, `invalidPublicKey...`, `realClientProves...`, `VideoKeyTests.activeMachine`). `pairedHandshakeAgrees...` ve `secondConnectionAfterPairing...` artık ilk ACK'ten sonra telin boş olduğunu, STREAM_CONFIG'in (ve PONG'un) kanıt PING'inden sonra şifreli geldiğini doğruluyor. `unauthenticatedBytes...` ve `tamperedRecord...` önce geçerli bir kanıt gönderiyor, sonra bozuk kaydın BYE'sız kapattığını ve input'u bıraktığını doğruluyor (bozuk kayıt artık 1 numaralı kayıt: log `counter=1`).
+  - `Crypto/KeychainAsyncTests.swift`: `pairKeyResolved`'dan sonra A'nın kanıt PING'i (4 test); `theSlotIsRechecks...`'te B, A'nın cevabından önce kanıtlıyor, A yine BUSY alıyor; `anUnprovenTakeover...`'da A'nın HELLO'su `sessionStarted`'ı kanıt PING'inde taşıyor.
 - **Kabul kriterleri (XCTest):**
   - Kayıtsız PAIRED: `sessionStarted`/STREAM_CONFIG yok, `proofTimeoutUs`'te `close` + `proof_timeout`, anahtarlar silinir → `withoutARecordNothingStarts...`.
-  - Geçerli şifreli PING: sıra **STREAM_CONFIG gönderimi → `sessionStarted` → PONG** (kartta "sessionStarted, sonra STREAM_CONFIG" yazıyor; `start()`'ın mevcut sırasını korudum, çünkü devralma ve PAIRING kabulü de aynı yolu kullanıyor ve devralma testleri "değişmeden" geçmeli. İkisi de PONG'dan önce; istemci telde STREAM_CONFIG, PONG görür) → `aValidSealedPing...`.
+  - Geçerli şifreli PING: sıra **STREAM_CONFIG gönderimi → `sessionStarted` → PONG** → `aValidSealedPing...`. **Sapma (orkestratör 2026-10-03 kabul etti):** kart "sessionStarted, sonra STREAM_CONFIG" diyor; `start()`'ın mevcut sırası korundu, çünkü devralma ve PAIRING kabulü aynı yolu kullanıyor. İkisi de PONG'dan önce; istemci telde STREAM_CONFIG, sonra PONG görür.
   - Doğrulanamayan ilk kayıt (bozuk etiket ve başka pair key): kapat, BYE yok, `sessionStarted`/`sessionEnded`/`releaseInput`/`deliver`/STREAM_CONFIG yok → `aRecordThatFailsAuthentication...`, `aRecordUnderAnotherPairKey...`.
   - Sınır: 4 onaylı cihazın 4 kanıtsız PAIRED bağlantısı `awaitingHelloCount == 4` (SessionServer `maxUnauthenticated = 4` 5.'yi reddeder; sabit Host hedefinde, Core testinden erişilemiyor, testte değer yazılı) → `provingConnectionsCountTowardTheUnauthenticatedBound`.
   - Kanıt sırasında B'nin PAIRING HELLO'su: **B pending olur (onay penceresi açılır), A kanıtında `BUSY` + kapanır, B'nin isteği iptal edilmez, A'nın anahtarları silinir** → `aPairingHelloFromAnotherDevice...`.
   - Ek: kanıtsız bağlantı düşerse iz bırakmaz; aynı cihazın iki kanıtsız bağlantısında ilk kanıtlayan başlar, ikincisinin kanıtı normal devralma (SUPERSEDED); canlı oturumdayken log `takeover_proving` olarak kalır.
-- **check.sh:** KIRMIZI. Swift: 700 testten 16'sı düşüyor, hepsi kart dışındaki `Tests/MateBridgeCoreTests/Crypto/` altında (aşağıda). Diğer her şey (Session/, Input/ dahil) yeşil.
+- **check.sh:** `check.sh: ALL OK` (Swift host 700 test + probe'lar, gradle client + probe'lar, fixture'lar, kripto vektörleri).
 - **Varsayımlar:** İstemci değişikliği gerekmiyor: Kotlin `onAck(ACCEPTED)` ilk olarak PING gönderiyor (`SessionMachine.kt` ~:306), sonra STREAM_PREFS. Video bağlantısı STREAM_CONFIG'ten sonra açıldığı için kanıttan önce açılamaz. `SessionServer` eylem güdümlü; `.sessionStarted` zaten devralma yolunda kanıttan sonra geliyordu, Host kodu değişmedi.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
   - Gerçek yeniden bağlanmada video geliyor mu (≈ +1 RTT); `host.log`'da `handshake mode=paired` → `paired_proving` → `session_started` sırası.
   - USB ve Wi-Fi'de bağlantı kurulum süresi (gözle fark edilmemeli).
   - Yanlış anahtarlı tablet (T-156 durumu): host kanıtta BYE'sız kapatıyor; istemcinin bunu nasıl gösterdiği.
 - **Açık sorular:**
-  1. **Kapsam (ENGEL):** Şu iki dosya kart `files:` listesinde değil ama davranış değişikliği yüzünden güncellenmeli: `host-mac/Tests/MateBridgeCoreTests/Crypto/SessionCryptoTests.swift` (11 test: `pairedHandshakeAgrees...`, `unauthenticatedBytesAfterTheHandshake...`, `tamperedRecordCloses...`, `secondConnectionAfterPairing...`, `busyIsPlaintext...`, `invalidPublicKey...`, `realClientProves...`, `prkIsWipedWhenTheProvingTakeoverIsDiscarded`, `takeoverWipesTheOldSessionsPrk`, `videoKeysDerive...`, `aReplayedVideoNonce...`) ve `host-mac/Tests/MateBridgeCoreTests/Crypto/KeychainAsyncTests.swift` (5 test: `aPendingLookupSendsNothing...`, `aLookupThatIsStillPending...`, `otherDeviceIsBusyWithoutALookup`, `theSlotIsRechecksAfterTheLookupReturns`, `anUnprovenTakeoverNeverTouches...`). Hepsi mekanik: canlı oturum kurulumunda PAIRED HELLO / `pairKeyResolved`'dan sonra bir kanıt PING'i. İki istisna: `unauthenticatedBytes...` ve `tamperedRecord...` ilk kaydın bozuk olduğu durumda release-all/`sessionEnded` bekliyor; artık ilk kayıt bozuksa ortada oturum yok (yeni testler bunu sabitliyor), bu yüzden bozuk kayıttan önce geçerli bir kanıt PING'i eklenmeli. `theSlotIsRechecks...`'te B'nin kanıtı A'nın cevabından önce eklenmeli ki A yine BUSY alsın (yoksa ikisi de proving olur ve ilk kanıtlayan kazanır). Öneri: `files:`'a `host-mac/Tests/MateBridgeCoreTests/Crypto/` eklenip aynı dalda devam.
+  1. ~~Kapsam~~: çözüldü, `Crypto/` testleri orkestratör onayıyla eklendi ve güncellendi.
   2. **LOGGING.md:** yeni olay `ev=paired_proving conn=N` (info, alan yok), devralmasız PAIRED bağlantı kanıt bekliyor. `proof_timeout` artık devralmasız bağlantılar için de çıkar.
   3. **PROTOCOL.md §3 adım 3** (orkestratör): "host her PAIRED bağlantıda ilk doğrulanmış kaydı bekler, sonra etkinleştirir ve STREAM_CONFIG gönderir".
