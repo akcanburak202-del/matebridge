@@ -651,25 +651,32 @@ class VideoRenderer(
 
         fun tag(idx: Int, ptsUs: Long) { ptsOf[idx] = ptsUs }
 
-        override fun release(idx: Int, renderNs: Long) {
-            codec.releaseOutputBuffer(idx, renderNs)
-            released(idx)
-        }
+        override fun release(idx: Int, renderNs: Long) = render(idx) { codec.releaseOutputBuffer(idx, renderNs) }
         override fun discard(idx: Int) {
             codec.releaseOutputBuffer(idx, false)
             ptsOf.remove(idx)
             st.ifCurrent { stats.onDiscarded() }
             st.gauge.onDone(System.nanoTime())
         }
-        fun releaseNow(idx: Int) {
-            codec.releaseOutputBuffer(idx, true)
-            released(idx)
-        }
-        private fun released(idx: Int) {
-            val nowNs = System.nanoTime()
+        fun releaseNow(idx: Int) = render(idx) { codec.releaseOutputBuffer(idx, true) }
+
+        /**
+         * A release for rendering ([releaseCall], the codec call, runs outside the shared lock). T-168 review: in
+         * codec-render mode the frame is awaited BEFORE the call, because its frame-rendered callback (main looper) may
+         * run before the call returns; a call that throws takes the registration back.
+         */
+        private inline fun render(idx: Int, releaseCall: () -> Unit) {
             val pts = ptsOf.remove(idx)
             val captureUs = if (pts != null) st.captureByPts.get(pts) else null // own lock, outside the shared one
-            st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000, expectCallback) }
+            val tracked = expectCallback && pts != null && st.ifCurrent { stats.awaitCallback(pts) }
+            try {
+                releaseCall()
+            } catch (e: Exception) {
+                if (tracked && pts != null) st.ifCurrent { stats.cancelCallback(pts) }
+                throw e
+            }
+            val nowNs = System.nanoTime()
+            st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000) }
             st.gauge.onDone(nowNs)
         }
     }

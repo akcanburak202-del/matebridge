@@ -165,21 +165,29 @@ class VideoStats {
 
     /**
      * T-168: a decoded frame went to `releaseOutputBuffer` for rendering at [clientUs] (`System.nanoTime() / 1000`).
-     * Counts as rendered (logged as `released=`); with its [captureUs] it adds a capture -> release sample. With
-     * [expectCallback] (codec-render mode) its frame-rendered callback is awaited ([onRenderCallback]).
+     * Counts as rendered (logged as `released=`); with its [captureUs] it adds a capture -> release sample. In
+     * codec-render mode the frame was registered with [awaitCallback] before the release.
      */
-    @Synchronized fun onReleased(ptsUs: Long?, captureUs: Long?, clientUs: Long, expectCallback: Boolean) {
+    @Synchronized fun onReleased(ptsUs: Long?, captureUs: Long?, clientUs: Long) {
         cur.rendered++
-        if (ptsUs == null) return
-        if (captureUs != null) latencyOf?.invoke(captureUs, clientUs)?.let { capRel.record(it) }
-        if (expectCallback) {
-            awaitingCallback.add(ptsUs)
-            if (awaitingCallback.size > FRAME_MAP_MAX) {
-                val i = awaitingCallback.iterator(); i.next(); i.remove()
-                cur.cbMissing++
-            }
+        if (ptsUs != null && captureUs != null) latencyOf?.invoke(captureUs, clientUs)?.let { capRel.record(it) }
+    }
+
+    /**
+     * T-168 (codec-render mode): [ptsUs] is about to be released for rendering; its frame-rendered callback is awaited
+     * ([onRenderCallback]). Called BEFORE `releaseOutputBuffer`: the callback runs on the main looper and may arrive
+     * before the release call returns. Undone with [cancelCallback] when the release throws.
+     */
+    @Synchronized fun awaitCallback(ptsUs: Long) {
+        awaitingCallback.add(ptsUs)
+        if (awaitingCallback.size > FRAME_MAP_MAX) {
+            val i = awaitingCallback.iterator(); i.next(); i.remove()
+            cur.cbMissing++
         }
     }
+
+    /** T-168: the release registered by [awaitCallback] did not happen; forget [ptsUs] without counting it missing. */
+    @Synchronized fun cancelCallback(ptsUs: Long) { awaitingCallback.remove(ptsUs) }
 
     /** T-168: a decoded frame was handed back unrendered (`releaseOutputBuffer(idx, false)`): dropped and discarded. */
     @Synchronized fun onDiscarded() { cur.dropped++; cur.discarded++ }

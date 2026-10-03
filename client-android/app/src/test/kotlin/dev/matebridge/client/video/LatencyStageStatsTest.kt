@@ -64,10 +64,10 @@ class LatencyStageStatsTest {
 
     @Test fun onlyReleasedFramesFeedCaptureToRelease() {
         val s = stats()
-        s.onReleased(1, 1_000, 21_000, expectCallback = false)
+        s.onReleased(1, 1_000, 21_000)
         s.onDiscarded()
-        s.onReleased(2, 2_000, 24_000, expectCallback = false)
-        s.onReleased(null, null, 25_000, expectCallback = false) // a buffer without a known frame: counted only
+        s.onReleased(2, 2_000, 24_000)
+        s.onReleased(null, null, 25_000) // a buffer without a known frame: counted only
         val snap = s.snapshot()
         assertEquals(3L, snap.rendered)
         assertEquals(1L, snap.discarded)
@@ -79,7 +79,7 @@ class LatencyStageStatsTest {
 
     @Test fun missingRenderCallbacksAreCountedInReleaseOrder() {
         val s = stats()
-        for (p in 1L..3) s.onReleased(p, 0, 10_000 + p, expectCallback = true)
+        for (p in 1L..3) { s.awaitCallback(p); s.onReleased(p, 0, 10_000 + p) }
         s.onRenderCallback(1, 0, 20_000)
         s.onRenderCallback(3, 0, 22_000) // frame 2 was released before 3 but never got its callback
         s.onRenderCallback(2, 0, 23_000) // late and out of order: only a latency sample
@@ -91,12 +91,37 @@ class LatencyStageStatsTest {
 
     @Test fun awaitedCallbacksAreBoundedAndOverflowCountsAsMissing() {
         val s = stats()
-        for (p in 0L until VideoStats.FRAME_MAP_MAX + 6L) s.onReleased(p, 0, 1_000, expectCallback = true)
+        for (p in 0L until VideoStats.FRAME_MAP_MAX + 6L) { s.awaitCallback(p); s.onReleased(p, 0, 1_000) }
         assertEquals(6L, s.snapshot().renderCbMissing)
         // Without codec callbacks (GL path) nothing is awaited.
         val g = stats()
-        for (p in 0L until 100) g.onReleased(p, 0, 1_000, expectCallback = false)
+        for (p in 0L until 100) g.onReleased(p, 0, 1_000)
         assertEquals(0L, g.snapshot().renderCbMissing)
+    }
+
+    /** Review (P2): the main-looper callback may run before `releaseOutputBuffer` returns. */
+    @Test fun aCallbackBeforeTheReleaseReturnsIsNotLaterCountedMissing() {
+        val s = stats()
+        s.awaitCallback(1) // registered before the release call
+        s.onRenderCallback(1, 0, 9_000) // the callback overtakes the release's return
+        s.onReleased(1, 0, 10_000)
+        s.awaitCallback(2); s.onReleased(2, 0, 20_000)
+        s.onRenderCallback(2, 0, 21_000)
+        for (p in 3L..VideoStats.FRAME_MAP_MAX + 2L) { s.awaitCallback(p); s.onReleased(p, 0, 30_000); s.onRenderCallback(p, 0, 31_000) }
+        val snap = s.snapshot()
+        assertEquals(0L, snap.renderCbMissing)
+        assertEquals(VideoStats.FRAME_MAP_MAX + 2, snap.capCb.count)
+    }
+
+    @Test fun aReleaseThatThrowsTakesItsRegistrationBack() {
+        val s = stats()
+        s.awaitCallback(1)
+        s.cancelCallback(1) // releaseOutputBuffer threw: no frame went out
+        s.awaitCallback(2); s.onReleased(2, 0, 1_000)
+        s.onRenderCallback(2, 0, 2_000)
+        val snap = s.snapshot()
+        assertEquals(0L, snap.renderCbMissing)
+        assertEquals(1L, snap.rendered)
     }
 
     @Test fun stagesJoinTheLogWindowExactly() {
@@ -211,5 +236,30 @@ class LatencyStageRendererTest {
         val after = renderer.stats.snapshot()
         assertEquals(1, after.capCb.count)
         assertEquals(snap.rendered - 1, after.renderCbMissing)
+    }
+
+    /**
+     * Review (P2): the codec delivers each frame-rendered callback inside `releaseOutputBuffer` (the main looper ran
+     * before the release returned). Every rendered frame got its callback, so none may count as missing.
+     */
+    @Test fun callbacksDeliveredBeforeTheReleaseReturnsAreNotMissing() {
+        factory.produceOutput = true
+        factory.renderCallbackInRelease = true
+        renderer.stats.latencyOf = { _, _ -> 5_000 }
+        renderer.attachTarget(Any())
+        assertTrue(env.awaitLines("codec_start"))
+        renderer.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
+        renderer.onFrame(frame(1, VideoFrame.KEYFRAME))
+        assertTrue(factory.await { outputsDequeued >= 1 })
+        for (seq in 2L..8) { // one at a time: the frame queue is shallow at 60 fps
+            renderer.onFrame(frame(seq, 0))
+            assertTrue(factory.await { outputsDequeued >= seq.toInt() })
+        }
+        awaitTrue("outputs not released") { renderer.stats.snapshot().let { it.rendered + it.discarded == 8L } }
+
+        val snap = renderer.stats.snapshot()
+        assertTrue(snap.rendered > 0)
+        assertEquals(snap.rendered, snap.capCb.count.toLong())
+        assertEquals(0L, snap.renderCbMissing)
     }
 }
