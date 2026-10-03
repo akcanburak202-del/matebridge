@@ -130,6 +130,14 @@ public struct InputPipeline: Sendable {
         return out + emit(produced, now: now, environment: env)
     }
 
+    /// A record was received on the active session's control connection at `time` (T-163, see
+    /// `InputStateMachine.noteControlActivity(at:)`): call it after that record was handled. True when it ended a stall
+    /// pause of the key repeat, so the caller must re-arm its timer from `nextDeadline(now:)`. False with no session.
+    @discardableResult
+    public mutating func noteControlActivity(at time: UInt64) -> Bool {
+        machine?.noteControlActivity(at: time) ?? false
+    }
+
     /// When the next watchdog is due (see `InputStateMachine.nextDeadline(now:)`, which mutates for the same reason).
     public mutating func nextDeadline(now: UInt64) -> UInt64? {
         machine?.nextDeadline(now: now)

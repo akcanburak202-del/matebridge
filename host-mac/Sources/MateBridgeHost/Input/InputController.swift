@@ -17,6 +17,12 @@ import MateBridgeCore
 /// and hands it to the pipeline, which decides. No display or no permission means input is ignored; releasing what was
 /// already posted is never gated (see `InjectionPlanner`).
 ///
+/// Control activity (T-163). `noteControlActivity(at:)` is the one entry point that does NOT hop with `queue.sync`: it
+/// runs for every record of the active session's control connection, PING included. It stores the time under a lock,
+/// and every queue entry point hands the stored time to the pipeline first, so a delivered message is checked against
+/// the activity from before it (`SessionServer` notes a record after delivering it). Only a note that follows a gap
+/// longer than the repeat stall pause, which may have ended a pause whose repeat has no timer, costs one `queue.async`.
+///
 /// Logging (docs/LOGGING.md): component `input`, counts and state changes only, never coordinates or keys.
 public final class InputController: @unchecked Sendable {
     public struct Status: Equatable, Sendable {
@@ -33,6 +39,11 @@ public final class InputController: @unchecked Sendable {
     private let capsLock: CapsLockControlling
     private let cursor: CursorLocating
     private let logger = SessionLogger(component: "input")
+    /// The most recent control activity (`noteControlActivity(at:)`); written on the session queue, read on `queue`.
+    private let activityLock = NSLock()
+    private var activityTime: UInt64?
+    /// A note after a silence longer than this may end a repeat pause (`InputStateMachine.Configuration`).
+    private let stallPauseUs = InputStateMachine.Configuration().keyRepeatStallPauseUs
 
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
@@ -140,6 +151,12 @@ public final class InputController: @unchecked Sendable {
             pipeline.setMachineConfiguration(machine)
             let now = HostClock.nowUs()
             flush(pipeline.sessionStarted(now: now, environment: environment()), now: now)
+            // Nothing of the previous session's activity carries over. The fresh machine has none until the session
+            // queue notes this session's first record (no information: the repeat does not pause, as before T-163).
+            // A caller that never notes activity (`InjectTest`) therefore keeps today's repeat.
+            activityLock.lock()
+            activityTime = nil
+            activityLock.unlock()
             log(.info, "input_session_start")
             rearmWatchdog()
         }
@@ -190,11 +207,27 @@ public final class InputController: @unchecked Sendable {
                 unknownBefore = pipeline.machine?.keyCounters.unknown ?? 0
             }
             if case .pointerRel = message { env.cursor = liveCursor() }  // relative moves start where the cursor is
+            pushActivity()  // the activity from BEFORE this message (T-163)
             flush(pipeline.handle(message, now: now, environment: env), now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
             if let keys = pipeline.machine?.keyCounters, keys.unknown > unknownBefore {
                 log(.debug, "key_unknown", "identity=\(keys.lastUnknownIdentity.map(String.init) ?? "none")")
             }
+            rearmWatchdog()
+        }
+    }
+
+    /// A record of the active session's control connection was received at `time` (host clock) and handled
+    /// (`SessionServer` `controlActivity`, T-163). Called on the session queue for every record, PING included, so it
+    /// does not hop synchronously: see the class comment.
+    public func noteControlActivity(at time: UInt64) {
+        // nil: the session's first note; its machine had no activity, so nothing was paused. A clock that went
+        // backwards needs nothing either: the machine never sees a pause then.
+        guard let previous = storeActivity(time), time > previous, time - previous > stallPauseUs else { return }
+        // A long silence just ended: a paused repeat (which had no timer) may resume. Rare; never on a steady stream.
+        queue.async { [weak self] in
+            guard let self, !stopped else { return }
+            pushActivity()
             rearmWatchdog()
         }
     }
@@ -377,8 +410,27 @@ public final class InputController: @unchecked Sendable {
         activity = nil
     }
 
+    /// Stores the latest control activity; returns the previous one (nil: none since the session started).
+    private func storeActivity(_ time: UInt64) -> UInt64? {
+        activityLock.lock()
+        defer { activityLock.unlock() }
+        let previous = activityTime
+        activityTime = time
+        return previous
+    }
+
+    /// Hands the latest control activity to the pipeline (queue-confined). Called first by every entry point that runs
+    /// the machine, so the repeat pause is decided on the newest activity the session queue has reported.
+    private func pushActivity() {
+        activityLock.lock()
+        let time = activityTime
+        activityLock.unlock()
+        if let time { pipeline.noteControlActivity(at: time) }
+    }
+
     private func watchdogFired() {
         guard !stopped else { return }
+        pushActivity()
         let now = HostClock.nowUs()
         let events = pipeline.tick(now: now, environment: environment())
         flush(events, now: now)
@@ -391,6 +443,7 @@ public final class InputController: @unchecked Sendable {
     /// the tablet is silent) and log any input that was dropped for lack of one.
     private func poll() {
         guard !stopped else { return }
+        pushActivity()
         let now = HostClock.nowUs()
         flush(pipeline.tick(now: now, environment: environment()), now: now)
         rearmWatchdog()

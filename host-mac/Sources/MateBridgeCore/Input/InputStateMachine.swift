@@ -20,6 +20,11 @@
 // - Keyboard (`KEY`, `InputStateMachine+Keyboard.swift`): held keys are remembered by identity together with the
 //   keycode or modifier that was injected; the host-side auto-repeat is driven by the same `tick` / `nextDeadline`
 //   as the watchdogs; `releaseAll` releases keys and modifiers with the rest.
+// - Control activity (T-163): the consumer calls `noteControlActivity(at:)` for every record received on the active
+//   session's control connection (PING included), AFTER that record was handled, so a record is always handled with
+//   the activity from before it. The repeat pauses while the connection has been silent for longer than
+//   `keyRepeatStallPauseUs` (KEY-REPEAT-STALL); a tick that finds it paused does nothing, so the binding promise of
+//   `nextDeadline(now:)` below holds for every deadline but a repeat that a stall pause overtook.
 //
 // Rule identifiers (used in tests as name prefixes; see the T-022 handoff table):
 //   KEY-*    section 4 KEY host rules
@@ -44,6 +49,9 @@ public struct InputStateMachine: Sendable {
         public var keyRepeatIntervalUs: UInt64 = 83_000
         /// False when macOS has key repeat turned off: no repeat is ever armed.
         public var keyRepeatEnabled = true
+        /// Key auto-repeat pauses (no repeat, no UP, the key stays held) while nothing has been received on the
+        /// session's control connection for MORE than this: the client PINGs every 500 ms, plus a margin (T-163).
+        public var keyRepeatStallPauseUs: UInt64 = 600_000
         /// Key identity to Mac key (decision 0008 default modifier mapping).
         public var keyMap = KeyMap()
         public init() {}
@@ -116,6 +124,9 @@ public struct InputStateMachine: Sendable {
     /// mapping).
     var heldKeys: [HeldKey] = []
     var keyRepeat: KeyRepeat?
+    /// Host time of the most recent record received on the session's control connection, as noted by the consumer
+    /// (`noteControlActivity(at:)`). nil until the first note: no information, so the repeat never pauses.
+    public internal(set) var lastControlActivity: UInt64?
     /// Keyboard statistics for the log: counts only, never which keys.
     public internal(set) var keyCounters = KeyCounters()
 
@@ -162,7 +173,11 @@ public struct InputStateMachine: Sendable {
             let due = lastPinchAt &+ configuration.pinchWatchdogUs
             earliest = earliest.map { Swift.min($0, due) } ?? due
         }
-        if let r = keyRepeat { earliest = earliest.map { Swift.min($0, r.nextAt) } ?? r.nextAt }
+        // KEY-REPEAT-STALL: a paused repeat has no deadline (it would be overdue and spin the timer); the note that ends
+        // the pause tells the consumer to ask again.
+        if let r = keyRepeat, !isKeyRepeatPaused(at: now) {
+            earliest = earliest.map { Swift.min($0, r.nextAt) } ?? r.nextAt
+        }
         return earliest
     }
 
@@ -217,6 +232,7 @@ public struct InputStateMachine: Sendable {
         if let r = keyRepeat, r.nextAt > now &+ Swift.max(configuration.keyRepeatDelayUs, configuration.keyRepeatIntervalUs) {
             keyRepeat?.nextAt = now &+ configuration.keyRepeatIntervalUs
         }
+        if let last = lastControlActivity, last > now { lastControlActivity = now }
     }
 
     /// Pen `IN_RANGE` silent for `penWatchdogUs`: up (if touching) + leave. Open scroll silent for
