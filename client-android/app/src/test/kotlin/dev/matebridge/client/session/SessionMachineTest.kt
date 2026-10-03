@@ -61,10 +61,10 @@ class SessionMachineTest {
         val gen = step(Event.Start(ep, userInitiated = true)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true)), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true, promptGen = gen)), p.ui())
         assertFalse(m.inputAllowed)
         val a = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true)), a.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true, promptGen = gen)), a.ui())
         assertFalse(a.has<Action.Send>())
         assertFalse(m.inputAllowed)
         assertEquals(-1, m.acceptedGen)
@@ -75,13 +75,13 @@ class SessionMachineTest {
         step(Event.ControlOpened(gen))
         step(Event.Secured(gen, "044261", rePairing = true))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", "044261", true, needsLocalConfirm = true)), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", "044261", true, needsLocalConfirm = true, promptGen = gen)), p.ui())
         step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
         // a later session starts without the old code
         val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen2))
         val q = step(Event.Received(gen2, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true)), q.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true, promptGen = gen2)), q.ui())
     }
 
     @Test fun staleSecuredEventIsIgnored() {
@@ -89,7 +89,7 @@ class SessionMachineTest {
         step(Event.ControlOpened(gen))
         step(Event.Secured(gen + 50, "111111", false))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true)), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true, promptGen = gen)), p.ui())
     }
 
     @Test fun missingPairKeyFailsWithoutRetryOrBye() {

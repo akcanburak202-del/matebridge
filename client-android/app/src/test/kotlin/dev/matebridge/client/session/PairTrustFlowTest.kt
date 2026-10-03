@@ -65,7 +65,8 @@ class PairTrustFlowTest {
     private val events = ArrayList<Event>()
     private val actions = ArrayList<Action>()
     private val sent = ArrayList<Message>()
-    private val uis = ArrayList<SessionUi>()
+    private val uis = ArrayList<SessionUi>() // without promptGen (see [plain])
+    private val rawUis = ArrayList<SessionUi>()
     private val audio = ArrayList<Message>()
 
     private fun step(e: Event, advanceUs: Long = 0): List<Action> {
@@ -75,7 +76,10 @@ class PairTrustFlowTest {
         actions += a
         for (x in a) {
             if (x is Action.Send) sent += x.msg
-            if (x is Action.Ui) uis += x.state
+            if (x is Action.Ui) {
+                uis += x.state.plain()
+                rawUis += x.state
+            }
             if (x is Action.CloseControl) conn?.closed = true
         }
         return a
@@ -94,7 +98,21 @@ class PairTrustFlowTest {
     }
 
     private inline fun <reified T : Action> List<Action>.only(): T = filterIsInstance<T>().single()
-    private fun List<Action>.ui() = filterIsInstance<Action.Ui>().map { it.state }
+    private fun List<Action>.ui() = filterIsInstance<Action.Ui>().map { it.state.plain() }
+
+    /** UI states compared without their prompt generation (asserted separately where it matters). */
+    private fun SessionUi.plain(): SessionUi = when (this) {
+        is SessionUi.AwaitingApproval -> copy(promptGen = -1)
+        is SessionUi.StoredTrust -> copy(promptGen = -1)
+        else -> this
+    }
+
+    /** The prompt generation the UI rendered last: what T-151 passes to `confirmTrust` / `cancelTrust`. */
+    private fun shownGen(): Int = when (val u = rawUis.last()) {
+        is SessionUi.AwaitingApproval -> u.promptGen
+        is SessionUi.StoredTrust -> u.promptGen
+        else -> -1
+    }
     private fun List<Action>.sends() = filterIsInstance<Action.Send>().map { it.msg }
 
     private fun trustedOf(host: FakeHost) = f.store.get(host.hostId)
@@ -151,13 +169,22 @@ class PairTrustFlowTest {
 
         /** The host's first write: the plaintext first ack, then [sameWrite] sealed records in the same write. */
         fun first(host: FakeHost, pairing: Boolean, vararg sameWrite: Message): List<Action> {
+            val r = handshake(host, pairing)
+            val out = ArrayList<Action>()
+            for (e in r.events) out += step(e)
+            return afterFirst(r, out, sameWrite)
+        }
+
+        /** The reader's part of [first] only: the handshake and its decision, events not yet delivered to the engine. */
+        fun handshake(host: FakeHost, pairing: Boolean): FirstAck.Result {
             this.host = host
             val (ack, payload) = host.answer(wireHello, pairing)
             val o = hs.complete(ack, payload, trust, userInitiated)
             outcome = o
-            val r = FirstAck.handle(gen, ack, o, trust)
-            val out = ArrayList<Action>()
-            for (e in r.events) out += step(e)
+            return FirstAck.handle(gen, ack, o)
+        }
+
+        fun afterFirst(r: FirstAck.Result, out: MutableList<Action>, sameWrite: Array<out Message>): List<Action> {
             val sec = r.session
             if (r.terminal || sec == null) {
                 closed = true // the reader stops here: [sameWrite] is never decrypted
@@ -287,7 +314,7 @@ class PairTrustFlowTest {
         b.first(squatter, pairing = true, squatter.acceptedRecord())
         ticks(2_000_000)
         assertTrue(sent.none { it is FilesInfo })
-        val confirm = step(Event.TrustConfirmed(m.confirmPromptGen))
+        val confirm = step(Event.TrustConfirmed(shownGen()))
         assertEquals(FilesInfo(FilesInfo.STATE_READY, 8443, token), confirm.sends().single { it is FilesInfo })
     }
 
@@ -345,7 +372,7 @@ class PairTrustFlowTest {
         assertArrayEquals(mac.lastNewKey, pendingOf(mac)!!.key)
         assertEquals(mac.lastSas, pendingOf(mac)!!.sas)
         // after acceptance the start is no longer user-initiated
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         mac.approve()
         c2.records(mac.acceptedRecord())
         assertTrue(m.inputAllowed)
@@ -357,7 +384,7 @@ class PairTrustFlowTest {
     @Test fun localConfirmThenHostAccepted() {
         step(Event.SetDisplayRate(120))
         val c = pairUntilPrompt()
-        val confirm = step(Event.TrustConfirmed(m.confirmPromptGen))
+        val confirm = step(Event.TrustConfirmed(shownGen()))
         assertArrayEquals(mac.lastNewKey, trustedOf(mac)) // promoted
         assertNull(pendingOf(mac))
         assertNotNull(f.store.getMarker(mac.hostId)) // the Mac's acceptance is not seen yet
@@ -387,7 +414,7 @@ class PairTrustFlowTest {
         assertTrue(acc.none { it is Action.ApplyConfig || it is Action.OpenVideo || it is Action.Send })
         ticks(1_000_000)
         assertNothingGatedSent()
-        val confirm = step(Event.TrustConfirmed(m.confirmPromptGen))
+        val confirm = step(Event.TrustConfirmed(shownGen()))
         assertArrayEquals(mac.lastNewKey, trustedOf(mac))
         assertNull(pendingOf(mac))
         assertNull(f.store.getMarker(mac.hostId)) // the host had already accepted: no marker
@@ -420,7 +447,7 @@ class PairTrustFlowTest {
         // back: the automatic reconnect opens no connection and shows the stored code
         assertNull(start(discovered, user = false))
         assertEquals(SessionUi.StoredTrust(code, confirmed = false), uis.last())
-        val confirm = step(Event.TrustConfirmed(m.confirmPromptGen))
+        val confirm = step(Event.TrustConfirmed(shownGen()))
         assertArrayEquals(mac.lastNewKey, trustedOf(mac))
         val open = confirm.only<Action.OpenControl>()
         assertEquals(discovered, open.endpoint) // the endpoint of the blocked start
@@ -451,7 +478,7 @@ class PairTrustFlowTest {
         assertFalse(ticks(30_000_000).any { it is Action.OpenControl }) // no retry loop
         assertArrayEquals(keyK, trustedOf(mac))
         // confirm: the next connection completes PAIRED
-        val c3 = opened(step(Event.TrustConfirmed(m.confirmPromptGen)).only())
+        val c3 = opened(step(Event.TrustConfirmed(shownGen())).only())
         assertEquals(SessionUi.Connected("Mac mini", 0), c3.first(mac, pairing = false).ui().single())
         c3.records(Pong(0, 0, 0))
         assertFalse(events.any { it is Event.ProtocolError })
@@ -478,7 +505,7 @@ class PairTrustFlowTest {
         assertEquals(mac.lastSas, pendingOf(mac)!!.sas)
 
         // only an awaiting-host marker: confirmed before leaving
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         step(Event.Stop)
         c2.closed = true
         assertNull(start(discovered, user = false))
@@ -496,10 +523,10 @@ class PairTrustFlowTest {
 
     @Test fun confirmOnAMarkerOnlyPromptConnectsUserInitiated() {
         pairUntilPrompt()
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         step(Event.Stop)
         assertNull(start(remembered, user = false))
-        val open = step(Event.TrustConfirmed(m.confirmPromptGen)).only<Action.OpenControl>()
+        val open = step(Event.TrustConfirmed(shownGen())).only<Action.OpenControl>()
         assertTrue(open.userInitiated)
         assertEquals(remembered, open.endpoint)
     }
@@ -521,7 +548,7 @@ class PairTrustFlowTest {
         // same for a stale marker
         step(Event.Stop)
         val c3 = pairUntilPrompt()
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         step(Event.Stop)
         c3.closed = true
         f.wallMs += PairTrust.PENDING_MAX_AGE_MS
@@ -545,7 +572,7 @@ class PairTrustFlowTest {
                 mac.approve()
                 c.records(mac.acceptedRecord())
             }
-            val r = step(Event.TrustCancelled(m.confirmPromptGen))
+            val r = step(Event.TrustCancelled(shownGen()))
             assertEquals(Bye(Bye.NORMAL), r.sends().single())
             assertEquals(true, r.only<Action.CloseControl>().graceful)
             assertTrue(r.indexOfFirst { it is Action.Send } < r.indexOfFirst { it is Action.CloseControl })
@@ -566,7 +593,7 @@ class PairTrustFlowTest {
         pairUntilPrompt()
         step(Event.Stop)
         assertNull(start(discovered, user = false))
-        val r = step(Event.TrustCancelled(m.confirmPromptGen))
+        val r = step(Event.TrustCancelled(shownGen()))
         assertTrue(r.none { it is Action.Send || it is Action.CloseControl || it is Action.OpenControl })
         assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED)), r.ui())
         assertNull(pendingOf(mac))
@@ -581,7 +608,7 @@ class PairTrustFlowTest {
         assertNull(trustedOf(mac))
 
         val c2 = pairUntilPrompt()
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         val promoted = mac.lastNewKey
         assertNotNull(f.store.getMarker(mac.hostId))
         c2.records(Bye(Bye.REJECTED))
@@ -667,7 +694,7 @@ class PairTrustFlowTest {
         val pending = mac.lastNewKey
         val before = HashMap(f.kv.m)
         f.kv.failCommits = true
-        val r = step(Event.TrustConfirmed(m.confirmPromptGen))
+        val r = step(Event.TrustConfirmed(shownGen()))
         assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED)), r.ui())
         assertEquals(before, f.kv.m) // old state: trusted K, pending P
         f.kv.failCommits = false
@@ -698,7 +725,7 @@ class PairTrustFlowTest {
         val hs = ClientHandshake()
         val hello = hs.hello(template)
         val (ack, payload) = FakeHost(mac.hostId, "Mac mini").answer(hello, pairing = true)
-        val res = FirstAck.handle(cand.gen, ack, hs.complete(ack, payload, candTrust, userInitiated = false), candTrust)
+        val res = FirstAck.handle(cand.gen, ack, hs.complete(ack, payload, candTrust, userInitiated = false))
         assertTrue(res.terminal)
         val r = res.events.flatMap { step(it) }
         assertEquals(Action.MigrationResult(usb, false, SessionMachine.REASON_KEY), r.only<Action.MigrationResult>())
@@ -713,23 +740,24 @@ class PairTrustFlowTest {
         // pairing + confirm + accepted
         var c = pairUntilPrompt()
         codes += mac.lastSas!!; keys += mac.lastNewKey!!
-        step(Event.TrustConfirmed(m.confirmPromptGen))
+        step(Event.TrustConfirmed(shownGen()))
         mac.approve()
         c.records(mac.acceptedRecord(), cfg(1), clipboard())
-        // cancel
+        // aborted pairing (not user-initiated)
         step(Event.Stop)
+        start(remembered, user = false)!!.first(FakeHost(ByteArray(16) { 0x70 }, "Evil Mac"), pairing = true)
+        // cancel
         c = pairUntilPrompt(); codes += mac.lastSas!!; keys += mac.lastNewKey!!
-        step(Event.TrustCancelled(m.confirmPromptGen))
+        step(Event.TrustCancelled(shownGen()))
         // timeout on a stored prompt
         c = pairUntilPrompt(); codes += mac.lastSas!!; keys += mac.lastNewKey!!
         step(Event.Stop)
         start(discovered, user = false)
         step(Event.ConfirmPromptVisible(true))
         ticks(SessionMachine.CONFIRM_TIMEOUT_US + 1_000_000, 1_000_000)
-        // aborted pairing, then forget
-        start(remembered, user = false)!!.first(FakeHost(ByteArray(16) { 0x70 }, "Evil Mac"), pairing = true)
+        // "Bağlan" (user start: the cancel latch holds automatic ones), then forget
         mac.key = keys[0]
-        start(discovered, user = false)!!.first(mac, pairing = false)
+        start(discovered, user = true)!!.first(mac, pairing = false)
         step(Event.ForgetHost)
 
         val lines = ArrayList<String>()
@@ -749,5 +777,111 @@ class PairTrustFlowTest {
         assertTrue(lines.any { it.contains("pair_stored_prompt confirmed=0") })
         assertTrue(lines.any { it.contains("pairing_needs_user re_pair=0") })
         assertTrue(lines.any { it.contains("pair_forget live=1") })
+    }
+
+    // ---- Codex review (T-150) regressions ----
+
+    @Test fun review1ConfirmAppliesOnlyToTheRenderedPrompt() {
+        val c = pairUntilPrompt()
+        val genA = shownGen()
+        assertTrue(genA >= 0)
+        // the connection drops and the user-initiated retry gets a new code B while the UI may still show A
+        step(Event.ControlClosed(c.gen))
+        val c2 = opened(ticks(1_200_000).only())
+        c2.first(mac, pairing = true)
+        val genB = shownGen()
+        val keyB = mac.lastNewKey
+        assertNotEquals(genA, genB)
+        // a tap rendered for A is ignored (logged without the code): nothing is trusted, B stays pending
+        assertTrue(step(Event.TrustConfirmed(genA)).isEmpty())
+        assertTrue(step(Event.TrustCancelled(genA)).isEmpty())
+        assertNull(trustedOf(mac))
+        assertArrayEquals(keyB, pendingOf(mac)!!.key)
+        assertTrue(machineLogs.contains("W pair_trust_event_stale kind=confirm"))
+        // the tap rendered for B promotes B
+        step(Event.TrustConfirmed(genB))
+        assertArrayEquals(keyB, trustedOf(mac))
+        // the stored prompt carries its own generation too
+        step(Event.Stop)
+        pairUntilPrompt()
+        step(Event.Stop)
+        assertNull(start(discovered, user = false))
+        val stored = rawUis.last() as SessionUi.StoredTrust
+        assertTrue(stored.promptGen >= 0)
+        assertTrue(step(Event.TrustConfirmed(stored.promptGen + 1)).isEmpty())
+        assertTrue(step(Event.TrustConfirmed(stored.promptGen)).any { it is Action.OpenControl })
+    }
+
+    @Test fun review2AStaleReaderNeverReplacesThePendingKeyBehindThePrompt() {
+        // reader A derives, then pauses before the engine sees its events
+        val a = start(discovered, user = true)!!
+        val held = a.handshake(mac, pairing = true)
+        val keyA = mac.lastNewKey!!.copyOf()
+        // A is stopped; connection B pairs and shows its code
+        step(Event.Stop)
+        val b = pairUntilPrompt()
+        val keyB = mac.lastNewKey!!.copyOf()
+        val genB = shownGen()
+        assertArrayEquals(keyB, pendingOf(mac)!!.key)
+        // A resumes: its events reach the engine late and must not write anything
+        val late = held.events.flatMap { step(it) }
+        assertTrue(late.isEmpty())
+        assertArrayEquals(keyB, pendingOf(mac)!!.key)
+        assertNull(trustedOf(mac))
+        // confirming B promotes B, never A
+        step(Event.TrustConfirmed(genB))
+        assertArrayEquals(keyB, trustedOf(mac))
+        assertFalse(keyA.contentEquals(trustedOf(mac)))
+        assertTrue(b.gen != a.gen)
+    }
+
+    @Test fun review2PromotionIsBoundToTheDisplayedRecord() {
+        // live prompt: the pending record is replaced behind it (same code, other key) -> nothing is promoted
+        pairUntilPrompt()
+        val other = ByteArray(32) { 0x5A }
+        f.trust.storePending(mac.hostId, other, mac.lastSas!!)
+        val r = step(Event.TrustConfirmed(shownGen()))
+        assertNull(trustedOf(mac))
+        assertEquals(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED), r.ui().last())
+        assertTrue(machineLogs.any { it.contains("pair_trust_cancelled reason=stale") })
+        // stored prompt: same
+        pairUntilPrompt()
+        step(Event.Stop)
+        assertNull(start(discovered, user = false))
+        f.trust.storePending(mac.hostId, other, mac.lastSas!!)
+        val r2 = step(Event.TrustConfirmed(shownGen()))
+        assertTrue(r2.none { it is Action.OpenControl })
+        assertNull(trustedOf(mac))
+        assertEquals(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED), r2.ui().last())
+    }
+
+    @Test fun review3CancellationLatchHoldsAutomaticStartsUntilTheUser() {
+        f.store.put(mac.hostId, keyK)
+        mac.key = keyK
+        pairUntilPrompt()
+        mac.approve() // the Mac already holds the key the user is about to cancel
+        step(Event.TrustCancelled(shownGen()))
+        // automatic starts (already queued, onStart after a Stop, discovery, USB probe, wake) open nothing
+        for (e in listOf(
+            Event.Start(discovered), Event.Stop, Event.Start(remembered), Event.Start(usb), Event.Start(discovered, WakeTag(2, 1)),
+        )) {
+            val r = step(e)
+            assertTrue(r.none { it is Action.OpenControl })
+            if (e is Event.Start) assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED)), r.ui())
+        }
+        assertTrue(machineLogs.any { it.contains("pair_cancel_latched") })
+        assertFalse(ticks(30_000_000).any { it is Action.OpenControl })
+        // a user start clears it
+        assertTrue(step(Event.Start(discovered, userInitiated = true)).any { it is Action.OpenControl })
+        step(Event.Stop)
+        assertTrue(step(Event.Start(discovered)).any { it is Action.OpenControl })
+        step(Event.Stop)
+        // a timeout latches too; "Bu Mac'i unut" clears it
+        pairUntilPrompt()
+        step(Event.ConfirmPromptVisible(true))
+        ticks(SessionMachine.CONFIRM_TIMEOUT_US + 1_000_000, 1_000_000)
+        assertTrue(step(Event.Start(discovered)).none { it is Action.OpenControl })
+        step(Event.ForgetHost)
+        assertTrue(step(Event.Start(discovered)).any { it is Action.OpenControl })
     }
 }

@@ -50,3 +50,18 @@ class TrustFixture(var wallMs: Long = 1_700_000_000_000L) {
 }
 
 fun hexOf(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+/** What the engine does with a PAIRING session's key (T-150): store it pending, once. False when there is no key. */
+fun SecureSession.storePendingForTest(trust: PairTrust): Boolean {
+    val k = takePendingKey() ?: return false
+    try {
+        trust.storePending(secrets.hostId, k, sas!!)
+    } finally {
+        k.fill(0)
+    }
+    return true
+}
+
+/** Promotes whatever pending record [hostId] has now (store-level tests; the machine passes the displayed one). */
+fun PairTrust.promoteCurrent(hostId: ByteArray, awaitHost: Boolean): Boolean =
+    promote(hostId, awaitHost, store.getPending(hostId)?.fingerprint() ?: ByteArray(32))

@@ -182,9 +182,8 @@ class SessionController(
     @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
     @Volatile private var inputAllowed = false
-    /** T-150: mirrors of the machine (engine thread writes): audio gate, prompt on screen, "Bu Mac'i unut" possible. */
+    /** T-150: mirrors of the machine (engine thread writes): audio gate, "Bu Mac'i unut" possible. */
     @Volatile private var acceptedGen = -1
-    @Volatile private var promptGen = -1
     @Volatile private var forgettable = false
 
     /**
@@ -222,25 +221,22 @@ class SessionController(
     }
 
     /**
-     * Non-blocking. T-150: "Kodlar aynı — Güven" on the confirmation prompt on screen (live or stored). Returns false when
-     * no prompt is shown.
+     * Non-blocking. T-150: "Kodlar aynı — Güven" on the confirmation prompt the UI **rendered**: pass its `promptGen`
+     * ([SessionUi.AwaitingApproval.promptGen] / [SessionUi.StoredTrust.promptGen]). If another prompt (another code) has
+     * replaced it meanwhile, the machine ignores the tap. Returns false for a state without a prompt (gen < 0).
      */
-    fun confirmTrust(): Boolean {
-        if (terminated.get()) return false
-        val gen = promptGen
-        if (gen < 0) return false
+    fun confirmTrust(promptGen: Int): Boolean {
+        if (terminated.get() || promptGen < 0) return false
         ensureEngine()
-        trustMailbox.post(SessionMachine.Event.TrustConfirmed(gen))
+        trustMailbox.post(SessionMachine.Event.TrustConfirmed(promptGen))
         return true
     }
 
-    /** Non-blocking. T-150: "İptal" on the confirmation prompt on screen. Returns false when no prompt is shown. */
-    fun cancelTrust(): Boolean {
-        if (terminated.get()) return false
-        val gen = promptGen
-        if (gen < 0) return false
+    /** Non-blocking. T-150: "İptal" on the rendered prompt [promptGen] (see [confirmTrust]). */
+    fun cancelTrust(promptGen: Int): Boolean {
+        if (terminated.get() || promptGen < 0) return false
         ensureEngine()
-        trustMailbox.post(SessionMachine.Event.TrustCancelled(gen))
+        trustMailbox.post(SessionMachine.Event.TrustCancelled(promptGen))
         return true
     }
 
@@ -433,7 +429,6 @@ class SessionController(
         // T-150: inbound audio follows the machine's accepted (and locally trusted) generation. Set before the actions so
         // the AUDIO_CONFIG answering the AUDIO_PREFS queued below can never arrive ahead of the gate.
         acceptedGen = machine.acceptedGen
-        promptGen = machine.confirmPromptGen
         forgettable = machine.forgettableHost
         MbLog.sid = machine.currentSessionId
         for (a in actions) exec(a)
@@ -695,7 +690,7 @@ class SessionController(
                 val (ack, ackPayload) = PlainFrames.readHelloAck(input)
                 // T-150: the decision (abort a PAIRING the user did not start, refuse a PAIRED derivation over an
                 // unconfirmed pending key, store a new key only as pending) is the pure, tested [FirstAck].
-                val step = FirstAck.handle(gen, ack, handshake.complete(ack, ackPayload, keys, userInitiated), keys)
+                val step = FirstAck.handle(gen, ack, handshake.complete(ack, ackPayload, keys, userInitiated))
                 if (step.terminal) {
                     // Nothing after this ack is read or decrypted; the machine reacts to the event instead of a close.
                     closedPosted.set(true)
@@ -969,7 +964,7 @@ class SessionController(
 object FirstAck {
     class Result(val events: List<SessionMachine.Event>, val session: SecureSession?, val terminal: Boolean)
 
-    fun handle(gen: Int, ack: HelloAck, outcome: HandshakeOutcome, trust: PairTrust): Result = when (outcome) {
+    fun handle(gen: Int, ack: HelloAck, outcome: HandshakeOutcome): Result = when (outcome) {
         // Terminal plaintext answer (REJECTED, BUSY, ...): the host closes; the reader then reports the close.
         is HandshakeOutcome.Plain -> Result(listOf(SessionMachine.Event.Received(gen, ack)), null, terminal = false)
         HandshakeOutcome.KeyMissing -> Result(listOf(SessionMachine.Event.KeyMissing(gen)), null, terminal = true)
@@ -981,22 +976,17 @@ object FirstAck {
             Result(listOf(SessionMachine.Event.PairedWithPending(gen, Bytes(outcome.hostId.copyOf()))), null, terminal = true)
         is HandshakeOutcome.Secure -> {
             val sec = outcome.session
-            try {
-                // PAIRING: stored pending at the first ack, before the Mac's approval (the connection may drop meanwhile);
-                // trusted only after the user confirms the code. PAIRED: nothing to store.
-                sec.storePending(trust)
-                Result(
-                    listOf(
-                        SessionMachine.Event.Secured(gen, sec.sas, sec.rePairing, Bytes(sec.secrets.hostId.copyOf())),
-                        SessionMachine.Event.Received(gen, ack),
-                    ),
-                    sec, terminal = false,
-                )
-            } catch (e: Exception) {
-                // Not persisted: fail instead of pretending (the key itself is never logged).
-                sec.secrets.wipe()
-                Result(listOf(SessionMachine.Event.KeyStoreFailed(gen)), null, terminal = true)
-            }
+            // PAIRING: the new key goes to the engine, which stores it pending (before the Mac's approval: the connection
+            // may drop meanwhile) only if this connection is still current when it handles the event; a stale reader
+            // therefore never writes (review #2). The reader itself writes nothing. PAIRED: no key.
+            val pendingKey = sec.takePendingKey()?.let { Bytes(it) }
+            Result(
+                listOf(
+                    SessionMachine.Event.Secured(gen, sec.sas, sec.rePairing, Bytes(sec.secrets.hostId.copyOf()), pendingKey),
+                    SessionMachine.Event.Received(gen, ack),
+                ),
+                sec, terminal = false,
+            )
         }
     }
 }

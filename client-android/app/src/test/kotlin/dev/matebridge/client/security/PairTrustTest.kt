@@ -38,7 +38,7 @@ class PairTrustTest {
     @Test fun oneUnresolvedPairingAtATimeAndANewOneClearsThatHostsMarker() {
         val f = TrustFixture()
         f.trust.storePending(hostA, keyP, "111111")
-        assertTrue(f.trust.promote(hostA, awaitHost = true))
+        assertTrue(f.trust.promoteCurrent(hostA, awaitHost = true))
         assertTrue(f.trust.hasFreshMarker(hostA))
         f.trust.storePending(hostB, keyQ, "222222")
         f.trust.storePending(hostA, keyQ, "333333")
@@ -55,7 +55,7 @@ class PairTrustTest {
         val before = HashMap(f.kv.m)
         f.kv.failCommits = true
         try {
-            f.trust.promote(hostA, awaitHost = true); fail()
+            f.trust.promoteCurrent(hostA, awaitHost = true); fail()
         } catch (e: java.io.IOException) {
         }
         assertEquals(before, f.kv.m) // old state: trusted K, pending P, no marker
@@ -63,18 +63,33 @@ class PairTrustTest {
         assertArrayEquals(keyP, f.store.getPending(hostA)!!.key)
         f.kv.failCommits = false
         val commits = f.kv.commits
-        assertTrue(f.trust.promote(hostA, awaitHost = true))
+        assertTrue(f.trust.promoteCurrent(hostA, awaitHost = true))
         assertEquals(commits + 1, f.kv.commits) // one commit: trusted + pending + marker
         assertArrayEquals(keyP, f.store.get(hostA))
         assertNull(f.store.getPending(hostA))
         assertEquals(f.wallMs, f.store.getMarker(hostA))
-        assertFalse(f.trust.promote(hostA, awaitHost = true)) // nothing pending any more
+        assertFalse(f.trust.promoteCurrent(hostA, awaitHost = true)) // nothing pending any more
+    }
+
+    @Test fun promotionOnlyAcceptsTheRecordThatWasShown() {
+        val f = TrustFixture()
+        f.store.put(hostA, keyK)
+        f.trust.storePending(hostA, keyP, "123456")
+        val shown = f.store.getPending(hostA)!!.fingerprint()
+        f.trust.storePending(hostA, keyQ, "123456") // replaced behind the prompt: same code, other key
+        val before = HashMap(f.kv.m)
+        assertFalse(f.trust.promote(hostA, awaitHost = true, fingerprint = shown))
+        assertEquals(before, f.kv.m) // nothing written
+        assertArrayEquals(keyK, f.store.get(hostA))
+        assertFalse(f.trust.promote(hostA, awaitHost = true, fingerprint = PendingRecord.fingerprint(keyQ, "654321")))
+        assertTrue(f.trust.promote(hostA, awaitHost = true, fingerprint = PendingRecord.fingerprint(keyQ, "123456")))
+        assertArrayEquals(keyQ, f.store.get(hostA))
     }
 
     @Test fun promotionAfterTheHostAcceptedWritesNoMarker() {
         val f = TrustFixture()
         f.trust.storePending(hostA, keyP, "123456")
-        assertTrue(f.trust.promote(hostA, awaitHost = false))
+        assertTrue(f.trust.promoteCurrent(hostA, awaitHost = false))
         assertNull(f.store.getMarker(hostA))
     }
 
@@ -97,7 +112,7 @@ class PairTrustTest {
     @Test fun staleOrFutureDatedMarkersAreClearedOnRead() {
         val f = TrustFixture()
         f.trust.storePending(hostA, keyP, "123456")
-        f.trust.promote(hostA, awaitHost = true)
+        f.trust.promoteCurrent(hostA, awaitHost = true)
         val p = f.trust.storedPrompt()!!
         assertNull(p.code)
         assertArrayEquals(hostA, p.hostId)
@@ -107,7 +122,7 @@ class PairTrustTest {
         assertArrayEquals(keyP, f.store.get(hostA)) // the confirmed key stays
 
         f.trust.storePending(hostA, keyQ, "654321")
-        f.trust.promote(hostA, awaitHost = true)
+        f.trust.promoteCurrent(hostA, awaitHost = true)
         f.wallMs -= 5
         assertFalse(f.trust.hasFreshMarker(hostA))
         assertNull(f.store.getMarker(hostA))
@@ -116,7 +131,7 @@ class PairTrustTest {
     @Test fun aPendingRecordIsShownBeforeAMarker() {
         val f = TrustFixture()
         f.trust.storePending(hostA, keyP, "111111")
-        f.trust.promote(hostA, awaitHost = true)
+        f.trust.promoteCurrent(hostA, awaitHost = true)
         f.wallMs += 10
         f.trust.storePending(hostB, keyQ, "222222")
         val p = f.trust.storedPrompt()!!
@@ -129,7 +144,7 @@ class PairTrustTest {
         f.store.put(hostA, keyK)
         f.store.put(hostB, keyQ)
         f.trust.storePending(hostA, keyP, "123456")
-        f.trust.promote(hostA, awaitHost = true)
+        f.trust.promoteCurrent(hostA, awaitHost = true)
         f.trust.storePending(hostA, keyQ, "222222")
         f.trust.forget(hostA)
         assertNull(f.store.get(hostA))
@@ -146,7 +161,7 @@ class PairTrustTest {
         assertArrayEquals(keyK, ro.get(hostA))
         assertArrayEquals(keyP, ro.getPending(hostA)!!.key)
         val writes = listOf<() -> Unit>(
-            { ro.putPending(hostA, PendingRecord(keyQ, "000000", 0)) }, { ro.promote(hostA, null) },
+            { ro.putPending(hostA, PendingRecord(keyQ, "000000", 0)) }, { ro.promote(hostA, null, ByteArray(32)) },
             { ro.dropPending(hostA) }, { ro.clearMarker(hostA) }, { ro.remove(hostA) },
         )
         for (w in writes) {

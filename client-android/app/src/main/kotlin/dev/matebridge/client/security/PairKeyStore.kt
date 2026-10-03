@@ -7,7 +7,21 @@ import dev.matebridge.client.session.AtomicKeyValueStore
  * user-initiated connection, promoted to the trusted key only when the user confirms that [sas] matches the Mac's.
  * [key] and [sas] are secrets: never log them.
  */
-class PendingRecord(val key: ByteArray, val sas: String, val createdAtWallMs: Long)
+class PendingRecord(val key: ByteArray, val sas: String, val createdAtWallMs: Long) {
+    /** Identifies exactly this key and code (review #2): a promotion must match the record the user was shown. */
+    fun fingerprint(): ByteArray = fingerprint(key, sas)
+
+    companion object {
+        /** SHA-256("MB1 pending" ‖ key ‖ sas). Not secret-revealing, but still never logged. */
+        fun fingerprint(key: ByteArray, sas: String): ByteArray {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            md.update("MB1 pending".toByteArray(Charsets.US_ASCII))
+            md.update(key)
+            md.update(sas.toByteArray(Charsets.US_ASCII))
+            return md.digest()
+        }
+    }
+}
 
 /**
  * Pairing keys by host_id (PROTOCOL.md section 9, decision 0018). Keys and codes are secrets: never log them.
@@ -39,9 +53,11 @@ interface PairKeyStore {
     /**
      * One atomic commit: the pending key of [hostId] becomes its trusted key, the pending record is removed, and the
      * awaiting-host marker is set to [markerWallMs] (null: removed). Returns false (nothing written) when there is no
-     * readable pending record; throws when the commit did not persist (then nothing changed).
+     * readable pending record or its [PendingRecord.fingerprint] is not [expectedFingerprint] (it is not the record the
+     * user confirmed); throws when the commit did not persist (then nothing changed).
      */
-    fun promote(hostId: ByteArray, markerWallMs: Long?): Boolean = throw UnsupportedOperationException("read-only pair key store")
+    fun promote(hostId: ByteArray, markerWallMs: Long?, expectedFingerprint: ByteArray): Boolean =
+        throw UnsupportedOperationException("read-only pair key store")
 
     fun dropPending(hostId: ByteArray): Unit = throw UnsupportedOperationException("read-only pair key store")
 
@@ -134,9 +150,10 @@ class EncryptedPairKeyStore(private val store: AtomicKeyValueStore, private val 
         }
     }
 
-    override fun promote(hostId: ByteArray, markerWallMs: Long?): Boolean {
+    override fun promote(hostId: ByteArray, markerWallMs: Long?, expectedFingerprint: ByteArray): Boolean {
         val pending = getPending(hostId) ?: return false
         try {
+            if (!java.security.MessageDigest.isEqual(pending.fingerprint(), expectedFingerprint)) return false
             val h = toHex(hostId)
             store.commit(
                 linkedMapOf(
@@ -215,8 +232,11 @@ class PairTrust(
     /** Log sink (`ev`, `fields`); never receives a key, code, host_id or name. */
     private val log: (String, String) -> Unit = { _, _ -> },
 ) {
-    /** An unresolved pairing to show again without a connection: [code] non-null = pending, null = marker only. */
-    class StoredPrompt(val hostId: ByteArray, val code: String?, val atWallMs: Long)
+    /**
+     * An unresolved pairing to show again without a connection: [code] non-null = pending, null = marker only.
+     * [fingerprint] identifies the pending record shown (null for a marker); a confirmation promotes only that record.
+     */
+    class StoredPrompt(val hostId: ByteArray, val code: String?, val atWallMs: Long, val fingerprint: ByteArray? = null)
 
     @Synchronized fun hasTrusted(hostId: ByteArray): Boolean = store.get(hostId)?.also { it.fill(0) } != null
 
@@ -250,8 +270,9 @@ class PairTrust(
         var best: StoredPrompt? = null
         for (h in store.pendingHosts()) {
             val p = freshPending(h) ?: continue
+            val fp = p.fingerprint()
             p.key.fill(0)
-            if (best == null || p.createdAtWallMs > best.atWallMs) best = StoredPrompt(h, p.sas, p.createdAtWallMs)
+            if (best == null || p.createdAtWallMs > best.atWallMs) best = StoredPrompt(h, p.sas, p.createdAtWallMs, fp)
         }
         if (best != null) return best
         for (h in store.markerHosts()) {
@@ -268,13 +289,14 @@ class PairTrust(
 
     /**
      * The user confirmed the code: the pending key of [hostId] becomes trusted in one commit. [awaitHost]: the Mac has not
-     * been seen to accept it yet, so the awaiting-host marker is written. False when there is no fresh pending record.
-     * Throws when the commit did not persist.
+     * been seen to accept it yet, so the awaiting-host marker is written. [fingerprint] is that of the record whose code
+     * was shown ([PendingRecord.fingerprint]); the store compares it inside the promotion. False (nothing written) when
+     * there is no fresh pending record or it is another one. Throws when the commit did not persist.
      */
-    @Synchronized fun promote(hostId: ByteArray, awaitHost: Boolean): Boolean {
+    @Synchronized fun promote(hostId: ByteArray, awaitHost: Boolean, fingerprint: ByteArray): Boolean {
         val p = freshPending(hostId) ?: return false
         p.key.fill(0)
-        return store.promote(hostId, if (awaitHost) wallMs() else null)
+        return store.promote(hostId, if (awaitHost) wallMs() else null, fingerprint)
     }
 
     @Synchronized fun dropPending(hostId: ByteArray) {
