@@ -206,7 +206,9 @@ final class ControlSocketTests: XCTestCase {
             return true
         }
 
-        /// HELLO out, HELLO_ACK (plain) and the sealed messages after it in. Returns the ack status.
+        /// HELLO out, HELLO_ACK (plain) in; on ACCEPTED the proof PING goes out first, as the client sends it (the
+        /// host activates the session only on that first authenticated record, T-152), and its PONG is awaited so
+        /// the session is active on return. Returns the ack status.
         mutating func handshake() throws -> HelloStatus? {
             ControlSocketTests.writeAll(fd, try client.message.encode())
             while true {
@@ -218,7 +220,12 @@ final class ControlSocketTests: XCTestCase {
                         d.append(Array(pending[..<total]))
                         guard case .helloAck(let ack)? = try d.nextMessage() else { return nil }
                         pending.removeFirst(total)
-                        if ack.status == .accepted { try client.receiveFirstAck(ack, pairKey: ControlSocketTests.pairKey) }
+                        if ack.status == .accepted {
+                            try client.receiveFirstAck(ack, pairKey: ControlSocketTests.pairKey)
+                            try send(.ping(Ping(seq: 0, senderTimeUs: 0)))
+                            try openPending()
+                            try read { $0.contains { if case .pong = $0 { true } else { false } } }
+                        }
                         try openPending()
                         return ack.status
                     }
