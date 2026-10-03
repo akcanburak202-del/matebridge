@@ -1471,7 +1471,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             // T-159: no-output / not-running timers, the recovery ladder and the debug fault trigger.
             videoHealth.tick(r?.progress?.snapshot())?.let { runVideoRecovery(it) }
-            decoderFault?.onHealthy(videoHealth.healthyForMs(), videoHealth.generation)
+            decoderFault?.onTick(videoHealth) // fires only after N s HEALTHY
             ui.postDelayed(this, KEYFRAME_RETRY_MS)
         }
     }

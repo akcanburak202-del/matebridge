@@ -5,14 +5,14 @@ import java.nio.ByteBuffer
 /**
  * T-159 debug fault injection (`--es decoder_fault create|configure|dequeue|silent`, `--ei decoder_fault_after_s N`,
  * default 10): a [DecoderCodec.Factory] decorator around the production factory. Armed at launch; it fires once, after
- * the stream has been HEALTHY for [afterS] seconds ([onHealthy]), so input is live when the fault hits (T-164 tests a
+ * the stream has been HEALTHY for [afterS] seconds ([onTick]), so input is live when the fault hits (T-164 tests a
  * fault with Shift held and the pen down):
  * - `dequeue` / `silent`: every codec of the current generation (the running one and its `decode_error` restarts):
  *   `dequeueOutputBuffer` throws, or the codec is drained without rendering (input accepted, no output: T-028).
  * - `create` / `configure`: every codec of the next generation (e.g. a mode change or a surface re-attach) fails there.
  * The generation after the faulted one runs clean, so the video-health recovery can be timed. One fault per launch.
  *
- * [onHealthy] and [onGeneration] run on the UI thread; the codec calls on the decoder threads.
+ * [onTick] and [onGeneration] run on the UI thread; the codec calls on the decoder threads.
  */
 class DecoderFault(
     val mode: Mode,
@@ -41,9 +41,16 @@ class DecoderFault(
     /** It has fired (it never fires again). */
     val fired: Boolean get() = phase != Phase.ARMED
 
-    /** UI thread, each ticker run: the current generation [gen] has been HEALTHY for [healthyMs]. */
-    fun onHealthy(healthyMs: Long, gen: Int) {
-        if (phase != Phase.ARMED || healthyMs < afterS * 1000L) return
+    /** UI thread, each ticker run: fires once [health] has been HEALTHY for [afterS] s (never in IDLE / STARTING / FAULT). */
+    fun onTick(health: VideoHealth) =
+        onHealthy(health.state == VideoHealth.State.HEALTHY, health.healthyForMs(), health.generation)
+
+    /**
+     * [onTick] with the values spelled out: generation [gen] is [healthy] and has been for [healthyMs]. Nothing fires
+     * unless [healthy] and a generation exists, even with a zero delay (review P2: a slow connect must not fire it).
+     */
+    internal fun onHealthy(healthy: Boolean, healthyMs: Long, gen: Int) {
+        if (phase != Phase.ARMED || !healthy || gen < 0 || healthyMs < afterS * 1000L) return
         log("mode=${mode.logName} armed_s=$afterS")
         faultGen = gen
         phase = if (mode == Mode.DEQUEUE || mode == Mode.SILENT) Phase.ACTIVE else Phase.PENDING

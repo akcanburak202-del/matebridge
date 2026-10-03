@@ -358,9 +358,9 @@ class VideoHealthTest {
         val running = f.create("video/hevc")
         val info = DecoderCodec.OutputInfo()
         assertEquals(DecoderCodec.INFO_TRY_AGAIN_LATER, running.dequeueOutputBuffer(info, 0))
-        f.onHealthy(9_999, 1)
+        f.onHealthy(true, 9_999, 1)
         assertFalse(f.fired)
-        f.onHealthy(10_000, 1)
+        f.onHealthy(true, 10_000, 1)
         assertTrue(f.active)
         assertEquals(listOf("mode=dequeue armed_s=10"), lines)
         assertThrows { running.dequeueOutputBuffer(info, 0) }
@@ -368,10 +368,41 @@ class VideoHealthTest {
         f.onGeneration(2) // the recovery's new generation runs clean
         assertFalse(f.active)
         assertEquals(DecoderCodec.INFO_TRY_AGAIN_LATER, f.create("video/hevc").dequeueOutputBuffer(info, 0))
-        f.onHealthy(60_000, 2)
+        f.onHealthy(true, 60_000, 2)
         f.onGeneration(3)
         assertFalse(f.active)
         assertEquals("fires once per launch", 1, lines.size)
+    }
+
+    @Test fun aZeroDelayFaultWaitsForHealthyVideoEvenWhenTheConnectionIsSlow() {
+        for (mode in DecoderFault.Mode.values()) {
+            val lines = ArrayList<String>()
+            val h = VideoHealth({ now })
+            val f = DecoderFault(mode, 0, FakeDecoderFactory()) { lines.add(it) }
+            // Connecting for 5 s: no surface, no generation (IDLE, generation -1); the ticker runs every 500 ms.
+            repeat(10) { now += 500; f.onTick(h) }
+            assertEquals(State.IDLE, h.state)
+            assertFalse("$mode fired before any video", f.fired)
+            // The first generation starts but takes 3 s to its first output (STARTING).
+            h.onEvent(Generation(1)); f.onGeneration(1); h.onEvent(Running(1))
+            repeat(6) { now += 500; f.onTick(h) }
+            assertFalse("$mode fired while STARTING", f.fired)
+            // FAULT is not HEALTHY either.
+            h.onEvent(Fault(1, FaultCause.GIVE_UP))
+            f.onTick(h)
+            assertFalse("$mode fired in FAULT", f.fired)
+            h.onEvent(Generation(2)); f.onGeneration(2); h.onEvent(Running(2))
+            h.onEvent(FirstOutput(2))
+            f.onTick(h) // HEALTHY for 0 ms >= 0 s: fires now, against the healthy generation
+            assertEquals(listOf("mode=${mode.logName} armed_s=0"), lines)
+            if (mode == DecoderFault.Mode.DEQUEUE || mode == DecoderFault.Mode.SILENT) {
+                assertTrue("$mode must hit the running, healthy generation", f.active)
+            } else {
+                assertFalse(f.active) // the healthy generation keeps running ...
+                f.onGeneration(3)
+                assertTrue("$mode must hit the next generation", f.active) // ... the next one fails
+            }
+        }
     }
 
     @Test fun silentFaultDrainsTheCodecWithoutReportingOutput() {
@@ -381,7 +412,7 @@ class VideoHealthTest {
         val info = DecoderCodec.OutputInfo()
         c.queueInputBuffer(c.dequeueInputBuffer(0), 0, 10, 1, 0)
         assertEquals(0, c.dequeueOutputBuffer(info, 0)) // not fired yet: output passes
-        f.onHealthy(0, 1)
+        f.onHealthy(true, 0, 1)
         c.queueInputBuffer(c.dequeueInputBuffer(0), 0, 10, 2, 0)
         assertEquals(DecoderCodec.INFO_TRY_AGAIN_LATER, c.dequeueOutputBuffer(info, 0))
         assertEquals(2, inner.outputsDequeued) // the real codec did decode it ...
@@ -393,7 +424,7 @@ class VideoHealthTest {
             val inner = FakeDecoderFactory()
             val lines = ArrayList<String>()
             val f = DecoderFault(mode, 5, inner) { lines.add(it) }
-            f.onHealthy(5_000, 4)
+            f.onHealthy(true, 5_000, 4)
             assertEquals(listOf("mode=${mode.logName} armed_s=5"), lines)
             assertFalse(f.active) // the running generation keeps going
             f.create("video/hevc").configure(DecoderFormat("video/hevc", 16, 16), Any())
@@ -543,7 +574,7 @@ class VideoHealthTest {
         renderer.attachTarget(Any())
         sendKeyframe()
         assertTrue(events.await { FirstOutput(1) in it })
-        fault.onHealthy(0, 1)
+        fault.onHealthy(true, 0, 1)
         assertTrue(events.await { Fault(1, FaultCause.GIVE_UP) in it })
         assertEquals(4, env.lines("decode_error").size)
         deliver()
