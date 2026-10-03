@@ -1,7 +1,7 @@
 ---
 id: T-163
 title: Pause host key auto-repeat while the control connection is silent
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -73,10 +73,19 @@ Risk: the app's handler wiring lives in `host-mac/Sources/MateBridgeApp/main.swi
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
+- **Commit:** `376c9cb` (implementation + tests; plan in `eed91eb`), branch `task/T-163-host-key-repeat-stall-pause`.
+- **Dokunulan dosyalar:** `Core/Input/InputStateMachine.swift`, `Core/Input/InputStateMachine+Keyboard.swift`, `Core/Input/InputPipeline.swift`, `MateBridgeHost/Input/InputController.swift`, `MateBridgeHost/Session/SessionServer.swift`, new `Tests/MateBridgeCoreTests/Input/KeyRepeatStallTests.swift` (16 tests: STALL-1..7, SPIPE-1..4 incl. a 40-seed fuzz).
+- **Ne yapıldı:**
+  - Core: `Configuration.keyRepeatStallPauseUs = 600_000`; `lastControlActivity` (nil = no information: never pauses, so `InjectTest` and every existing test behave as before); `isKeyRepeatPaused(at:)` (strictly `> 600 ms`); `repeatKeyIfDue` emits nothing while paused (no UP, `heldKeys` untouched); `nextDeadline` leaves a paused repeat out (no overdue deadline); `noteControlActivity(at:) -> Bool` returns true on the paused → active edge and moves the next repeat to `max(nextAt, at + interval)`; `reanchorWatchdogs` re-anchors an activity time ahead of `now`. `handle` never updates activity, so the caller's order (handle, then note) makes a delayed KEY UP see the silence from before it.
+  - Pipeline: `noteControlActivity(at:)` forwards (false without a session).
+  - `InputController.noteControlActivity(at:)`: no `queue.sync`; the time goes into an `NSLock`-protected field. Every queue entry point (`deliver` before `handle`, watchdog timer, 1 s poll) pushes it into the pipeline first. Only a note that follows a gap > 600 ms does one `queue.async { pushActivity(); rearmWatchdog() }` (the paused → active edge). `sessionStarted` clears the stored time (nothing of the previous session carries over).
+  - `SessionServer`: new `Handlers.controlActivity(receivedUs)`, called in `receiveControlBytes` right after `apply(machine.received(...))` and only `if id == activeControl`. **Filter code path:** `activeControl` is set only by `.sessionStarted` and cleared by `.sessionEnded`; pending (approval), unauthenticated (awaiting HELLO / lookup) and takeover/migration candidates (`.proving`) never are `activeControl`, so their records are not counted. A candidate that wins the takeover becomes active in that record's own `apply` (old session ended, fresh machine), so counting it from then on is correct.
+- **Varsayımlar:** `SessionServer.nowUs()` is `HostClock.nowUs()` (same clock as the input queue). The threshold the controller uses for the wake-up edge is the default config value (600 ms), the same as the machine's.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - **The feature is inert in the app until the one-line wiring in `main.swift` lands** (see Açık sorular). Until then `controlActivity` is a no-op, the machine never gets activity and repeat behaves exactly as before.
+  - [device] after wiring: Wi-Fi only, hold Backspace in a scratch text field, toggle tablet Wi-Fi off ~2 s, then on. Expect at most ~7 repeats after the stall begins (today up to ~18); record `repeats=` from `input_session_end`; no stuck key after reconnect; a normal hold (no stall) feels unchanged.
+  - Resume-after-stall is covered only by XCTest (STALL-2, STALL-2b, SPIPE-4): a sub-1.5 s stall is not reproducible by toggling Wi-Fi (the 2 s toggle crosses the 1.5 s heartbeat release).
+  - Not run: no app launch, no real CGEvents, no device.
 - **Açık sorular:**
+  1. **Scope (blocker for the device test):** the handler wiring lives in `host-mac/Sources/MateBridgeApp/main.swift`, which is not in `files:`. It needs one line next to `handlers.releaseInput = ...` (~line 169): `handlers.controlActivity = { input.noteControlActivity(at: $0) }`. I did not touch it. Either the orchestrator adds it on merge or the card's `files:` gets `main.swift`.
+  2. PROTOCOL §4 KEY "Otomatik tekrar" prose (4th stop condition, as a pause rather than a stop: the key stays held and repeat resumes one interval after the next received record) and the 0003 note are for the orchestrator.
