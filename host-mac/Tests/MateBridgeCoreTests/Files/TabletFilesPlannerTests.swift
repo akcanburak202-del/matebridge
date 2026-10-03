@@ -24,6 +24,18 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
     return p
 }
 
+private let newToken = "fedcba9876543210fedcba9876543210"
+
+/// `forwarded()` plus a user mount that succeeded at `/Volumes/MatePad`.
+private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
+    var p = forwarded(local: local)
+    let gen = mountGen(p.openRequested())!
+    #expect(p.mountFinished(generation: gen, localPort: local, path: "/Volumes/MatePad")
+        == [.reveal(path: "/Volumes/MatePad")])
+    #expect(p.remountsAfterRestart)
+    return p
+}
+
 @Suite struct TabletFilesPlannerTests {
     // MARK: Forward
 
@@ -238,9 +250,12 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
     @Test func mountWithAnOldTokenIsDetachedWhenItFinishes() {
         var p = forwarded()
         let gen = mountGen(p.openRequested())!
-        #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: "new"))
-            == [.cancelMount(generation: gen), .unmount(localPort: 47010)])
-        #expect(p.menu == .ready(lastMountFailed: false))
+        let actions = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: "new"))
+        // T-206: the user asked for the volume, so the restart remounts it with the new token.
+        #expect(actions == [.cancelMount(generation: gen), .unmount(localPort: 47010),
+                            .mount(localPort: 47010, secret: FilesSecret("new"), generation: mountGen(actions)!,
+                                   knownPath: nil)])
+        #expect(p.menu == .mounting)
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
             == [.unmountPath(path: "/Volumes/MatePad", localPort: 47010)])
     }
@@ -336,6 +351,166 @@ private func forwarded(local: UInt16 = 47010, info: FilesInfo = ready) -> Tablet
         _ = p.forwardFinished(generation: gen, localPort: 47010)  // adb let us bind it: the old one is gone
         #expect(p.owedForwardPorts.isEmpty)
         #expect(p.forwardRemovalDue(localPort: 47010).isEmpty)  // the pending retry must not kill the new one
+    }
+
+    // MARK: Remount after a server restart (T-206)
+
+    @Test func tokenChangeRemountsAMountedVolumeWithTheNewToken() {
+        var p = mounted()
+        let restarted = FilesInfo(state: .ready, port: 47010, token: newToken)
+        let actions = p.filesInfo(restarted)
+        guard let gen = mountGen(actions) else {
+            Issue.record("no remount")
+            return
+        }
+        #expect(actions == [.unmount(localPort: 47010),
+                            .mount(localPort: 47010, secret: FilesSecret(newToken), generation: gen, knownPath: nil)])
+        #expect(p.menu == .mounting)
+        #expect(p.filesInfo(restarted).isEmpty)  // the same READY again: no second attempt
+    }
+
+    @Test func offThenReadyRemountsOnceTheNewForwardIsUp() {
+        var p = mounted()
+        #expect(p.filesInfo(.off) == [.unmount(localPort: 47010), .removeForward(localPort: 47010)])
+        #expect(p.remountsAfterRestart)
+        let moved = FilesInfo(state: .ready, port: 47020, token: newToken)
+        let install = p.filesInfo(moved)
+        #expect(install == [.installForward(remotePort: 47020, generation: installGen(install)!)])
+        let up = p.forwardFinished(generation: installGen(install)!, localPort: 47011)
+        #expect(up == [.mount(localPort: 47011, secret: FilesSecret(newToken), generation: mountGen(up)!,
+                              knownPath: nil)])
+        #expect(p.forwardFinished(generation: installGen(install)!, localPort: 47011).isEmpty)
+    }
+
+    @Test func portChangeWhileMountedRemountsOnTheNewForward() {
+        var p = mounted()
+        let install = p.filesInfo(FilesInfo(state: .ready, port: 47020, token: newToken))
+        #expect(mountGen(install) == nil)  // not before the forward is up
+        #expect(mountGen(p.forwardFinished(generation: installGen(install)!, localPort: 47010)) != nil)
+    }
+
+    @Test func neverOpenedMeansNoRemount() {
+        var p = forwarded()
+        #expect(!p.remountsAfterRestart)
+        #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)) == [.unmount(localPort: 47010)])
+        _ = p.filesInfo(.off)
+        let install = p.filesInfo(ready)
+        #expect(p.forwardFinished(generation: installGen(install)!, localPort: 47010).isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: false))
+    }
+
+    @Test func ejectedVolumeIsNotRemounted() {
+        var p = mounted()
+        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+        #expect(!p.remountsAfterRestart)
+        #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)) == [.unmount(localPort: 47010)])
+        _ = p.filesInfo(.off)
+        let install = p.filesInfo(ready)
+        #expect(p.forwardFinished(generation: installGen(install)!, localPort: 47010).isEmpty)
+        // Opening again brings the intent back, and with it the remount.
+        let gen = mountGen(p.openRequested())!
+        #expect(p.openRequested().isEmpty)
+        _ = p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad")
+        #expect(mountGen(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken))) != nil)
+    }
+
+    @Test func unmountOfAnotherVolumeKeepsTheIntent() {
+        var p = mounted()
+        #expect(p.volumeUnmounted(path: "/Volumes/MatePad-1").isEmpty)
+        #expect(p.volumeUnmounted(path: "/Volumes/Backup").isEmpty)
+        #expect(p.remountsAfterRestart)
+        // Our own token-change unmount clears the path first, so its notification never counts as an eject.
+        let actions = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken))
+        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+        #expect(p.remountsAfterRestart)
+        #expect(p.mountFinished(generation: mountGen(actions)!, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
+        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)  // now it is the user's eject
+        #expect(!p.remountsAfterRestart)
+    }
+
+    @Test func sessionEndAndShutdownForgetTheIntent() {
+        var ended = mounted()
+        _ = ended.sessionEnded()
+        #expect(!ended.remountsAfterRestart)
+        _ = ended.sessionStarted(transport: .usb, capable: true)
+        let install = ended.filesInfo(ready)
+        #expect(ended.forwardFinished(generation: installGen(install)!, localPort: 47010).isEmpty)
+        #expect(mountGen(ended.openRequested()) != nil)  // a later session needs the user's open
+
+        var restarted = mounted()
+        _ = restarted.sessionStarted(transport: .usb, capable: true)  // a new session without an end
+        #expect(!restarted.remountsAfterRestart)
+
+        var toWifi = mounted()
+        _ = toWifi.sessionStarted(transport: .network, capable: true)
+        #expect(!toWifi.remountsAfterRestart)
+        #expect(toWifi.filesInfo(ready).isEmpty)
+
+        var quitting = mounted()
+        _ = quitting.shutdown()
+        #expect(!quitting.remountsAfterRestart)
+        #expect(quitting.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+    }
+
+    @Test func failedRemountIsNotRetriedUntilTheNextReady() {
+        var p = mounted()
+        let restarted = FilesInfo(state: .ready, port: 47010, token: newToken)
+        let gen = mountGen(p.filesInfo(restarted))!
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: nil).isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: true))
+        #expect(p.filesInfo(restarted).isEmpty)
+        #expect(p.retry().isEmpty)
+        #expect(p.usbDevice(present: true).isEmpty)
+        #expect(p.remountsAfterRestart)  // the user did not eject: the next restart tries once more
+        #expect(mountGen(p.filesInfo(ready)) != nil)
+        #expect(p.openRequested().isEmpty)  // still mounting
+    }
+
+    @Test func automaticRemountIsNotRevealed() {
+        var p = mounted()
+        let gen = mountGen(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)))!
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: false))
+        // The user opening it afterwards reveals the remounted volume.
+        let open = p.openRequested()
+        let userGen = mountGen(open)!
+        #expect(open == [.mount(localPort: 47010, secret: FilesSecret(newToken), generation: userGen,
+                                knownPath: "/Volumes/MatePad")])
+        #expect(p.mountFinished(generation: userGen, localPort: 47010, path: "/Volumes/MatePad")
+            == [.reveal(path: "/Volumes/MatePad")])
+    }
+
+    @Test func remountWaitsForAFailedForwardThenFiresOnce() {
+        var p = mounted()
+        _ = p.filesInfo(.off)
+        let install = p.filesInfo(ready)
+        #expect(p.forwardFinished(generation: installGen(install)!, localPort: nil).isEmpty)
+        let retry = p.retry()
+        #expect(mountGen(p.forwardFinished(generation: installGen(retry)!, localPort: 47010)) != nil)
+        #expect(p.openRequested().isEmpty)
+    }
+
+    @Test func remountOwedAcrossUsbLossFiresWhenTheDeviceReturns() {
+        var p = mounted()
+        _ = p.usbDevice(present: false)
+        #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)).isEmpty)
+        let back = p.usbDevice(present: true)
+        #expect(mountGen(back) == nil)
+        #expect(mountGen(p.forwardFinished(generation: installGen(back)!, localPort: 47010)) != nil)
+    }
+
+    @Test func restartDuringTheUsersMountRemountsWithTheNewToken() {
+        var p = forwarded()
+        let userGen = mountGen(p.openRequested())!
+        let actions = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken))
+        let gen = mountGen(actions)!
+        #expect(actions == [.cancelMount(generation: userGen), .unmount(localPort: 47010),
+                            .mount(localPort: 47010, secret: FilesSecret(newToken), generation: gen, knownPath: nil)])
+        // The user's request reports late: only its own volume is detached, the remount is kept.
+        #expect(p.mountFinished(generation: userGen, localPort: 47010, path: "/Volumes/MatePad-1")
+            == [.unmountPath(path: "/Volumes/MatePad-1", localPort: 47010)])
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: false))
     }
 
     @Test func secretNeverAppearsInActionDescriptions() {

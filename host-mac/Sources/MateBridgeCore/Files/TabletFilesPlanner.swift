@@ -55,6 +55,12 @@ public enum TabletFilesAction: Equatable, Sendable {
 /// pending mount, unmount, then remove the forward, so the WebDAV client never hangs on a dead port while it
 /// still has the volume. A forward whose removal failed stays owed: retried with backoff, then again at the next
 /// session/USB event and at shutdown.
+///
+/// Remount after a server restart (T-206): once the user has asked for the volume, a tablet server restart in the
+/// same session (`FILES_INFO` OFF then READY, or a new token on the same port, e.g. a shared-folder scope change)
+/// mounts it again with the new token as soon as the forward is up. At most one automatic attempt per READY; an
+/// automatic mount is not revealed in Finder. The intent ends with the session, at shutdown and when the user
+/// ejects the volume (`volumeUnmounted`).
 public struct TabletFilesPlanner: Sendable {
     /// Removal attempts per round (first try plus retries) before waiting for the next session/USB event.
     public static let removalAttempts = 4
@@ -78,6 +84,12 @@ public struct TabletFilesPlanner: Sendable {
     private var usbDeviceLost = false
     private var forward: Forward = .none
     private var mountingGeneration: UInt64?
+    /// The pending mount was started by the planner (remount), not by the user: its success is not revealed.
+    private var mountingIsAutomatic = false
+    /// The user asked for the volume in this session and has not ejected it: remount after a server restart.
+    private var keepsMounted = false
+    /// A new READY arrived while `keepsMounted`: one automatic mount is owed once the forward is up.
+    private var autoMountArmed = false
     /// Mount point the current forward's mount got (owned by the current generation chain).
     private var mountedPath: String?
     private var lastMountFailed = false
@@ -96,6 +108,7 @@ public struct TabletFilesPlanner: Sendable {
         let out = teardown() + retryGivenUpRemovals()
         session = Session(transport: transport, capable: capable)
         info = nil
+        forgetMountIntent()  // a new session needs the user's "Tablet dosyalarını aç" again
         if transport == .usb { usbDeviceLost = false }  // the session itself came through the cable
         return out
     }
@@ -108,12 +121,15 @@ public struct TabletFilesPlanner: Sendable {
         guard ready != info else { return [] }
         let previous = info
         info = ready
+        // Every new READY (a server (re)start) owes one remount if the user wants the volume; OFF owes none.
+        autoMountArmed = ready != nil && keepsMounted
         guard let ready, current.transport == .usb, !usbDeviceLost else { return teardown() }
         if let previous, previous.port == ready.port, case .up(let local, _) = forward {
             // Same port, new token: the server restarted, a mount made with the old token is useless.
-            let out = cancelPendingMount() + [.unmount(localPort: local)]
+            var out = cancelPendingMount() + [.unmount(localPort: local)]
             mountedPath = nil
             lastMountFailed = false
+            out += autoMountIfArmed()  // the forward is already up
             return out
         }
         return teardown() + startForward(remotePort: ready.port)
@@ -123,6 +139,7 @@ public struct TabletFilesPlanner: Sendable {
         let out = teardown() + retryGivenUpRemovals()
         session = nil
         info = nil
+        forgetMountIntent()
         return out
     }
 
@@ -161,6 +178,7 @@ public struct TabletFilesPlanner: Sendable {
         }
         session = nil
         info = nil
+        forgetMountIntent()
         isShutDown = true
         return out
     }
@@ -171,7 +189,7 @@ public struct TabletFilesPlanner: Sendable {
         if let localPort { owedForwards[localPort] = nil }
         if case .installing(let remote, let gen) = forward, gen == generation {
             forward = localPort.map { .up(localPort: $0, remotePort: remote) } ?? .failed(remotePort: remote)
-            return []
+            return autoMountIfArmed()  // nothing while it failed: the attempt stays owed for `retry`/USB return
         }
         // Stale: its session or server is gone. We own it, so remove it (unless it is the current forward).
         guard let localPort else { return [] }
@@ -202,24 +220,36 @@ public struct TabletFilesPlanner: Sendable {
 
     /// The user chose "Tablet dosyalarını aç".
     public mutating func openRequested() -> [TabletFilesAction] {
-        guard !isShutDown, case .up(let local, _) = forward, let info, mountingGeneration == nil else { return [] }
-        let gen = takeGeneration()
-        mountingGeneration = gen
-        lastMountFailed = false
-        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
+        guard !isShutDown, case .up = forward, info != nil, mountingGeneration == nil else { return [] }
+        keepsMounted = true
+        autoMountArmed = false  // the user's own mount covers this READY
+        return startMount(automatic: false)
+    }
+
+    /// A volume went away and is no longer mounted (the host checks that, e.g. on
+    /// `NSWorkspace.didUnmountNotification`). If it is the volume this session mounted, the user ejected it: forget
+    /// it and do not mount again by itself until the user opens it. Our own unmounts clear `mountedPath` first, so
+    /// their notifications never match.
+    public mutating func volumeUnmounted(path: String) -> [TabletFilesAction] {
+        guard !isShutDown, let mountedPath, mountedPath == path else { return [] }
+        self.mountedPath = nil
+        forgetMountIntent()
+        return []
     }
 
     /// Result of `mount`; `path` is the mount point on success, nil on failure.
     public mutating func mountFinished(generation: UInt64, localPort: UInt16, path: String?) -> [TabletFilesAction] {
         if let gen = mountingGeneration, gen == generation {
+            let automatic = mountingIsAutomatic
             mountingGeneration = nil
+            mountingIsAutomatic = false
             guard let path else {
-                lastMountFailed = true
+                lastMountFailed = true  // an automatic one is not retried until the next READY or the user
                 mountedPath = nil
                 return []
             }
             mountedPath = path
-            return [.reveal(path: path)]
+            return automatic ? [] : [.reveal(path: path)]
         }
         // Stale (session ended, token changed, shutdown): detach only the volume this request created, never
         // the current one (the port may have been reused).
@@ -246,6 +276,9 @@ public struct TabletFilesPlanner: Sendable {
     /// Forwards whose removal is still owed (sorted).
     public var owedForwardPorts: [UInt16] { owedForwards.keys.sorted() }
 
+    /// The user wants the volume in this session: a server restart remounts it.
+    public var remountsAfterRestart: Bool { keepsMounted }
+
     // MARK: - Private
 
     private mutating func takeGeneration() -> UInt64 {
@@ -260,8 +293,34 @@ public struct TabletFilesPlanner: Sendable {
     }
 
     private mutating func cancelPendingMount() -> [TabletFilesAction] {
-        defer { mountingGeneration = nil }
+        defer {
+            mountingGeneration = nil
+            mountingIsAutomatic = false
+        }
         return mountingGeneration.map { [.cancelMount(generation: $0)] } ?? []
+    }
+
+    /// Mount on the current forward with the current token. Callers check the forward is up and READY is known.
+    private mutating func startMount(automatic: Bool) -> [TabletFilesAction] {
+        guard case .up(let local, _) = forward, let info else { return [] }
+        let gen = takeGeneration()
+        mountingGeneration = gen
+        mountingIsAutomatic = automatic
+        lastMountFailed = false
+        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
+    }
+
+    /// The owed remount of this READY, once the forward is up and nothing else is mounting. Fires at most once.
+    private mutating func autoMountIfArmed() -> [TabletFilesAction] {
+        guard autoMountArmed, keepsMounted, !isShutDown, !usbDeviceLost, session?.transport == .usb,
+              case .up = forward, info != nil, mountingGeneration == nil else { return [] }
+        autoMountArmed = false
+        return startMount(automatic: true)
+    }
+
+    private mutating func forgetMountIntent() {
+        keepsMounted = false
+        autoMountArmed = false
     }
 
     /// Owed forwards whose retry round ran out get a fresh round.
