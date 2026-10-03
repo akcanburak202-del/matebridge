@@ -1,7 +1,7 @@
 ---
 id: T-156
 title: Show "anahtar uyuşmuyor" after repeated PAIRED auth failures
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
@@ -62,7 +62,25 @@ Decision 0018 must be accepted by the user before work starts (this card complet
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `SessionMachine.kt`: `Event.ProtocolError` gets `authFailed: Boolean = false`. A per-endpoint counter
+   (`Map<Endpoint, Int>`) counts a connection that is PAIRED (`!pairingSession`), in `ACCEPTED` (= the PAIRED ack came,
+   the proof PING went out) with no authenticated host record yet (`!sealedSeen`) and no candidate, when it ends with
+   (a) `ProtocolError(authFailed = true)` or (b) `ControlClosed` (not a connect failure). Below the limit it retries as
+   today (`lose`, same cause/backoff); at 3 it ends in `Failed(KEY_MISMATCH)` (close, no BYE, no retry timer).
+   The first authenticated record (where `sealedSeen` flips) resets the current endpoint's count; Stop, a user start and
+   ForgetHost clear all counts. An automatic start to an endpoint at the limit opens nothing and shows
+   `Failed(KEY_MISMATCH)` again (like T-150's cancel latch), so "no OpenControl until a user start" holds. T-150's
+   `PairedWithPending` path and handshake errors (still `AWAIT_ACK`) never reach the counter. Log line
+   `paired_auth_fail count=N how=auth_failed|closed` (no key material).
+2. `SessionController.kt`: one line, the reader passes `e.kind == AUTH_FAILED` into `ProtocolError`.
+3. `SessionUi.kt`: `Cause.KEY_MISMATCH`.
+4. `AutoTransport.kt`: `shouldFallBack` also true for `Failed(KEY_MISMATCH)` on USB in AUTO.
+5. `MainActivity.kt`: `causeText` branch + `applyStatusText` `Failed` text from `strings.xml` (`key_mismatch`).
+6. Tests: new `KeyMismatchTest.kt` (a, b, mix, resets, non-counting cases, per endpoint, latch, PairedWithPending via the
+   real `FirstAck`/trust fixture path if practical, AUTO fallback); existing tests must keep passing.
+
+Risk: existing tests that lose a never-authenticated PAIRED session 3× would now fail terminally; check and adapt only
+if they test something unrelated.
 
 ## Handoff
 
