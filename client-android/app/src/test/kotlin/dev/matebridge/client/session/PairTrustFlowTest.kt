@@ -667,6 +667,34 @@ class PairTrustFlowTest {
         assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.KEY_MISSING)), c2.first(mac, pairing = false).ui())
     }
 
+    @Test fun review4AForgetThatDoesNotPersistIsNeverReportedAsDone() {
+        f.store.put(mac.hostId, keyK)
+        mac.key = keyK
+        start(discovered, user = false)!!.first(mac, pairing = false)
+        assertTrue(m.inputAllowed) // a key may be held
+        val before = HashMap(f.kv.m)
+        f.kv.failCommits = true // the removal's commit fails
+        val r = step(Event.ForgetHost)
+        // the session still ends with BYE + graceful close first (the host releases all input) ...
+        assertEquals(Bye(Bye.NORMAL), (r[0] as Action.Send).msg)
+        assertEquals(Action.CloseControl(graceful = true), r[1])
+        assertFalse(m.inputAllowed)
+        // ... but the forget is not reported as done: KEY_STORE_FAILED, records intact, the Mac stays forgettable
+        assertEquals(listOf<SessionUi>(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED)), r.ui())
+        assertEquals(before, f.kv.m)
+        assertTrue(m.forgettableHost)
+        assertTrue(machineLogs.any { it.contains("pair_forget_failed live=1") })
+        assertFalse(machineLogs.any { it.contains("pair_forget live=") })
+        assertFalse(ticks(10_000_000).any { it is Action.OpenControl }) // no silent reconnect meanwhile
+        // the retry succeeds once the store works again
+        f.kv.failCommits = false
+        val retry = step(Event.ForgetHost)
+        assertEquals(listOf<SessionUi>(SessionUi.Idle), retry.ui())
+        assertNull(trustedOf(mac))
+        assertFalse(m.forgettableHost)
+        assertTrue(machineLogs.any { it.contains("pair_forget live=0") })
+    }
+
     @Test fun forgetTouchesOnlyAnEligibleHost() {
         val other = FakeHost(ByteArray(16) { 0x50 }, "Other Mac")
         f.store.put(other.hostId, ByteArray(32) { 0x55 })
