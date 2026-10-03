@@ -40,7 +40,8 @@ final class LatencyTraceTests: XCTestCase {
         w.record(t)
         XCTAssertTrue(w.isEmpty)
         XCTAssertEqual(w.logFields, "frames=0 " + LatencyWindow.stageNames.map { "\($0)_ms_p50_95_99_max=0.0/0.0/0.0/0.0" }.joined(separator: " ")
-                       + " " + LatencyWindow.offsetNames.map { "\($0)_ms_p50_99=0.0/0.0" }.joined(separator: " ") + " no_display=0")
+                       + " cap_to_sent_pts_ms_p50_95_99_max=0.0/0.0/0.0/0.0"
+                       + " " + LatencyWindow.offsetNames.map { "\($0)_ms_p1_50_99=0.0/0.0/0.0" }.joined(separator: " ") + " no_display=0")
     }
 
     func testPercentilesAndMax() {
@@ -64,7 +65,8 @@ final class LatencyTraceTests: XCTestCase {
         let keys = w.logFields.split(separator: " ").map { $0.split(separator: "=")[0] }
         XCTAssertEqual(keys.map(String.init),
                        ["frames"] + LatencyWindow.stageNames.map { "\($0)_ms_p50_95_99_max" }
-                       + LatencyWindow.offsetNames.map { "\($0)_ms_p50_99" } + ["no_display"])
+                       + ["cap_to_sent_pts_ms_p50_95_99_max"]
+                       + LatencyWindow.offsetNames.map { "\($0)_ms_p1_50_99" } + ["no_display"])
     }
 
     func testSamplesAreBounded() {
@@ -114,7 +116,7 @@ final class LatencyTraceTests: XCTestCase {
         XCTAssertEqual(w.offsetSamples(1), [600, 600])   // pts_vs_deliv
         XCTAssertEqual(w.offsetSamples(2), [200])        // display_vs_deliv
         XCTAssertEqual(w.noDisplay, 1)
-        XCTAssertTrue(w.logFields.contains(" pts_vs_display_ms_p50_99=0.4/0.4 "), w.logFields)
+        XCTAssertTrue(w.logFields.contains(" pts_vs_display_ms_p1_50_99=0.4/0.4/0.4 "), w.logFields)
         XCTAssertTrue(w.logFields.hasSuffix(" no_display=1"), w.logFields)
     }
 
@@ -142,7 +144,69 @@ final class LatencyTraceTests: XCTestCase {
     }
 
     func testCsvLine() {
-        XCTAssertEqual(trace().csvLine, "1000,1300,2300,9000,9200,10000,11000")
-        XCTAssertEqual(FrameTrace.csvHeader.split(separator: ",").count, 7)
+        XCTAssertEqual(trace().csvLine, "1000,1300,2300,9000,9200,10000,11000,0,0,0,0,0,0")
+        XCTAssertEqual(FrameTrace.csvHeader.split(separator: ",").count, 13)
+    }
+
+    /// T-170: today's seven columns stay first and in order; the join columns are appended.
+    func testCsvHeaderKeepsOldColumnsAndAppendsJoinColumns() {
+        XCTAssertEqual(FrameTrace.csvHeader,
+                       "capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us,"
+                       + "pts_us,display_us,frame_seq,config_id,session_id,resubmit")
+        let columns = FrameTrace.csvHeader.split(separator: ",").map(String.init)
+        XCTAssertEqual(Array(columns.prefix(7)),
+                       ["capture_us", "delivered_us", "submitted_us", "encoded_us", "enqueued_us",
+                        "write_start_us", "write_done_us"])
+    }
+
+    func testCsvLineCarriesWireStampAndJoinKeys() {
+        // A real capture: SCK stamps lead the callback, so the origin is the callback, not the wire stamp.
+        let wire = VideoFrame(frameSeq: 41, captureTimeUs: 1_600, flags: [], data: [0])
+        var t = trace(delivered: 1_000)
+        t.ptsUs = wire.captureTimeUs; t.displayUs = 1_200
+        t.captureUs = FrameTrace.origin(displayUs: t.displayUs, ptsUs: t.ptsUs, deliveredUs: t.deliveredUs)
+        t.frameSeq = wire.frameSeq; t.configID = 3; t.sessionID = 7
+        XCTAssertEqual(t.csvLine, "1000,1000,2300,9000,9200,10000,11000,1600,1200,41,3,7,0")
+        let cols = t.csvLine.split(separator: ",")
+        let header = FrameTrace.csvHeader.split(separator: ",")
+        XCTAssertEqual(cols.count, header.count)
+        XCTAssertEqual(UInt64(cols[header.firstIndex(of: "pts_us")!]), wire.captureTimeUs,
+                       "pts_us is the wire capture_time_us (the tablet trace's capture_us)")
+
+        // A re-submission (synthetic stamp, no display time) is flagged.
+        var r = trace(delivered: 20_000)
+        r.ptsUs = 26_600; r.captureUs = FrameTrace.origin(displayUs: 0, ptsUs: r.ptsUs, deliveredUs: r.deliveredUs)
+        r.frameSeq = 42; r.configID = 3; r.sessionID = 7; r.resubmit = true
+        XCTAssertTrue(r.csvLine.hasSuffix(",26600,0,42,3,7,1"), r.csvLine)
+    }
+
+    func testCapToSentPtsIsSignedAndLogged() {
+        var t = trace(writeDone: 11_000)
+        XCTAssertNil(t.capToSentPtsUs, "no wire stamp: no PTS-origin sample")
+        t.ptsUs = 1_600
+        XCTAssertEqual(t.capToSentPtsUs, 9_400)
+        t.ptsUs = 12_000   // wire stamp later than the write: negative, not clamped
+        XCTAssertEqual(t.capToSentPtsUs, -1_000)
+
+        var w = LatencyWindow()
+        w.record(t)
+        w.record(trace())  // no PTS: counted in the stages, no cap_to_sent_pts sample
+        XCTAssertEqual(w.capToSentPtsSamples, [-1_000])
+        XCTAssertTrue(w.logFields.contains(" cap_to_sent_pts_ms_p50_95_99_max=-1.0/-1.0/-1.0/-1.0 "), w.logFields)
+        // The origin-based total stays unsigned and next to it.
+        XCTAssertTrue(w.logFields.contains(" cap_to_sent_ms_p50_95_99_max=10.0/10.0/10.0/10.0 cap_to_sent_pts_"),
+                      w.logFields)
+    }
+
+    func testPtsVsDeliveredLogsP1P50P99WithNegatives() {
+        var w = LatencyWindow()
+        // pts - delivered from -2.0 ms to +7.9 ms in 0.1 ms steps (100 samples).
+        for i in 0..<100 {
+            var t = trace(delivered: 10_000)
+            t.ptsUs = UInt64(Int64(10_000) - 2_000 + Int64(i) * 100)
+            w.record(t)
+        }
+        XCTAssertEqual(w.offsetSamples(1).min(), -2_000)
+        XCTAssertTrue(w.logFields.contains(" pts_vs_deliv_ms_p1_50_99=-2.0/2.9/7.8 "), w.logFields)
     }
 }

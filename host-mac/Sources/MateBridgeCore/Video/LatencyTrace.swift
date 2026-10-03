@@ -27,6 +27,14 @@ public struct FrameTrace: Equatable, Sendable {
     /// Metadata set by the sender (T-122): the frame is a keyframe, and its `VIDEO_FRAME` payload size.
     public var isKeyframe = false
     public var bytes = 0
+    /// Join keys (T-170): the `VIDEO_FRAME.frame_seq` the sender gave this frame, and the session / stream
+    /// configuration it was sent in (stamped by the coordinator, because the pipeline outlives sessions).
+    public var frameSeq: UInt32 = 0
+    public var configID: UInt16 = 0
+    public var sessionID: UInt32 = 0
+    /// An encoder re-submission of the last captured buffer (keyframe on a static screen, idle refresh): its
+    /// `ptsUs` is a synthetic `now + lead` stamp, not a capture time, so analysis drops these rows.
+    public var resubmit = false
 
     public init() {}
 
@@ -56,6 +64,9 @@ public struct FrameTrace: Equatable, Sendable {
     public var writeUs: UInt64 { Self.d(writeDoneUs, writeStartUs) }
     /// Capture timestamp -> write processed.
     public var capToSentUs: UInt64 { Self.d(writeDoneUs, captureUs) }
+    /// Wire stamp (`ptsUs` = `VIDEO_FRAME.capture_time_us`) -> write processed, signed (T-170): the host part of
+    /// the tablet's capture->decode number. nil when either stamp is unknown.
+    public var capToSentPtsUs: Int64? { Self.signed(writeDoneUs, ptsUs) }
 
     /// The trace origin. SCK stamps that lie *after* the callback cannot be a capture time (the device showed
     /// `cap_to_sent` shorter than `enc`: both `displayTime` and the presentation timestamp lead the callback), so
@@ -80,26 +91,34 @@ public struct FrameTrace: Equatable, Sendable {
     /// Display time minus callback time.
     public var displayVsDeliveredUs: Int64? { Self.signed(displayUs, deliveredUs) }
 
+    /// The first seven columns are the T-070 layout; T-170 appends the join columns. `capture_us` stays the trace
+    /// origin; `pts_us` is the wire `capture_time_us` and equals the tablet `pace_trace.csv` `capture_us`.
     public static let csvHeader =
-        "capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us"
+        "capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us,"
+        + "pts_us,display_us,frame_seq,config_id,session_id,resubmit"
 
     public var csvLine: String {
-        "\(captureUs),\(deliveredUs),\(submittedUs),\(encodedUs),\(enqueuedUs),\(writeStartUs),\(writeDoneUs)"
+        "\(captureUs),\(deliveredUs),\(submittedUs),\(encodedUs),\(enqueuedUs),\(writeStartUs),\(writeDoneUs),"
+            + "\(ptsUs),\(displayUs),\(frameSeq),\(configID),\(sessionID),\(resubmit ? 1 : 0)"
     }
 }
 
 /// One measurement window (about one second) of per-stage latencies. `ev=latency` fields:
-/// `frames`, then for each stage `<stage>_ms_p50_95_99_max=p50/p95/p99/max`.
+/// `frames`, then for each stage `<stage>_ms_p50_95_99_max=p50/p95/p99/max`, then the signed
+/// `cap_to_sent_pts_ms_p50_95_99_max`, then each signed offset `<offset>_ms_p1_50_99=p1/p50/p99`, then `no_display`.
 public struct LatencyWindow: Sendable {
     public static let maxSamples = 512
     public static let offsetNames = ["pts_vs_display", "pts_vs_deliv", "display_vs_deliv"]
     public static let stageNames = ["sck_lag", "hold", "gate_wait", "slot_wait", "enc", "conv", "queue", "write", "cap_to_sent"]
+    /// Signed PTS-origin total (T-170), logged right after the stages.
+    public static let capToSentPtsName = "cap_to_sent_pts"
 
     public private(set) var frames = 0
     /// Frames for which SCK gave no display time.
     public private(set) var noDisplay = 0
     private var stages: [[UInt64]]
     private var offsets: [[Int64]] = Array(repeating: [], count: LatencyWindow.offsetNames.count)
+    private var capToSentPts: [Int64] = []
 
     public init() {
         stages = Array(repeating: [], count: Self.stageNames.count)
@@ -121,6 +140,7 @@ public struct LatencyWindow: Sendable {
         stages[6].append(t.queueUs)
         stages[7].append(t.writeUs)
         stages[8].append(t.capToSentUs)
+        if let v = t.capToSentPtsUs { capToSentPts.append(v) }
         for (i, v) in [t.ptsVsDisplayUs, t.ptsVsDeliveredUs, t.displayVsDeliveredUs].enumerated() {
             if let v { offsets[i].append(v) }
         }
@@ -145,6 +165,9 @@ public struct LatencyWindow: Sendable {
     /// Samples of one signed offset (index into `offsetNames`).
     public func offsetSamples(_ i: Int) -> [Int64] { offsets[i] }
 
+    /// Signed `cap_to_sent_pts` samples.
+    public var capToSentPtsSamples: [Int64] { capToSentPts }
+
     /// `key=value` pairs for `component=video ev=latency`. Numbers only.
     public var logFields: String {
         var out = "frames=\(frames)"
@@ -154,9 +177,15 @@ public struct LatencyWindow: Sendable {
                      CadenceWindow.percentile(s, 99), s.max() ?? 0]
             out += " \(name)_ms_p50_95_99_max=" + p.map(Self.ms).joined(separator: "/")
         }
+        let c = capToSentPts
+        out += " \(Self.capToSentPtsName)_ms_p50_95_99_max="
+            + [Self.percentile(c, 50), Self.percentile(c, 95), Self.percentile(c, 99), c.max() ?? 0]
+                .map(Self.ms).joined(separator: "/")
+        // p1 (T-170): decision 0021 option A needs the spread p99 - p1 of `pts_vs_deliv`.
         for (i, name) in Self.offsetNames.enumerated() {
             let s = offsets[i]
-            out += " \(name)_ms_p50_99=" + [Self.percentile(s, 50), Self.percentile(s, 99)].map(Self.ms).joined(separator: "/")
+            out += " \(name)_ms_p1_50_99="
+                + [Self.percentile(s, 1), Self.percentile(s, 50), Self.percentile(s, 99)].map(Self.ms).joined(separator: "/")
         }
         out += " no_display=\(noDisplay)"
         return out

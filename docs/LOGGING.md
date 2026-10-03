@@ -219,3 +219,12 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 - `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=offline`: yenileme hızı değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, 0,7 sn sonra yenisi kurulur (`display_created`). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
 - `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka ekran boyutu, `shutdown` uygulama kapanıyor.
 - `ev=display_created width=… height=… encoded=…`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
+
+## Host gecikme izi ve tablet izi eşleşmesi (Mac, `video`, T-170)
+
+- **Kare başına CSV** (`MATEBRIDGE_LAT_TRACE=1` → `~/Library/Logs/MateBridge/latency.csv`, host saati µs): ilk yedi sütun aynı sırada kalır (`capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us`), sona `pts_us,display_us,frame_seq,config_id,session_id,resubmit` eklenir.
+  - `capture_us` iz başlangıcıdır (`min(display, pts, delivered)`), teldeki damga **değildir**. `pts_us` teldeki `VIDEO_FRAME.capture_time_us` (SCK sunum damgası) değeridir.
+  - Eşleşme: host `pts_us` == tablet `pace_trace.csv` `capture_us`. `frame_seq` gönderilen `VIDEO_FRAME.frame_seq`, `config_id`/`session_id` karenin gönderildiği oturum ve yapılandırmadır (bağlantıdan alınır; işlem hattı oturumlardan uzun yaşar).
+  - `resubmit=1`: son tamponun yeniden gönderimi (durağan ekranda keyframe, boşta tazeleme). `pts_us` yapay `now + lead` damgasıdır; analizde bu satırlar atılır. `display_us=0`: SCK görüntü zamanı vermedi.
+- **`ev=latency`** (saniyede bir): aşamalardan (`…,cap_to_sent`) sonra işaretli `cap_to_sent_pts_ms_p50_95_99_max` gelir (`write_done − pts`, teldeki damgadan ölçülen host payı; negatif olabilir). Ardından işaretli kaymalar artık `_ms_p1_50_99=p1/p50/p99` biçimindedir: `pts_vs_display_ms_p1_50_99`, `pts_vs_deliv_ms_p1_50_99`, `display_vs_deliv_ms_p1_50_99` (eski anahtar `_ms_p50_99` kalktı). Karar 0021 (T-172) için: `pts_vs_deliv` p99 − p1 < 1 ms ise seçenek A.
+- **`net ev=stats`**: tablet sayısı yakalama damgası → decoder çıkışıdır (ekranda görünme değil). Alan `cap_dec_ms=`; eski `latency_ms=` aynı değerle bir sürüm daha yazılır, sonra kalkar. Menü "· yak→çöz N ms" gösterir.

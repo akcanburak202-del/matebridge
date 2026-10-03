@@ -58,6 +58,8 @@ final class HEVCEncoder: @unchecked Sendable {
         var slotWaitUs: UInt64 = 0
         /// An idle quality refresh re-submission (T-087: the refresh QP cap applies to these only).
         var refresh = false
+        /// Any re-submission of the last buffer (synthetic `now + lead` stamp); trace only (T-170).
+        var resubmit = false
 
         var stamp: PTS {
             get { PTS(time: pts) }
@@ -397,6 +399,7 @@ final class HEVCEncoder: @unchecked Sendable {
             var input = Input(buffer: copy ?? l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
                               captureTimeUs: stamp, deliveredUs: nowUs)
             input.refresh = refresh
+            input.resubmit = true
             return input
         }
     }
@@ -546,6 +549,7 @@ final class HEVCEncoder: @unchecked Sendable {
         trace.captureUs = FrameTrace.origin(displayUs: frame.displayTimeUs, ptsUs: captureTimeUs,
                                             deliveredUs: frame.deliveredUs)
         trace.slotWaitUs = frame.slotWaitUs
+        trace.resubmit = frame.resubmit
         if qpBoostEnabled { updateQPBoost(refresh: frame.refresh, session: session) }
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(

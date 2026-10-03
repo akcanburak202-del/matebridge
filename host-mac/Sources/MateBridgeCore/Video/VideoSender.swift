@@ -46,7 +46,8 @@ public final class VideoSender: @unchecked Sendable {
     ///   - requestKeyframe: asks the encoder for a keyframe (after a frame the transport refused).
     ///   - onEnded: the loop finished on its own or was stopped; called once, from the sender's task.
     ///   - trace: receives the finished `FrameTrace` of every frame whose write completed (T-070), stamped with
-    ///     `clock` (must be the host clock the encoder stamps with). nil: no measuring, no clock reads.
+    ///     `clock` (must be the host clock the encoder stamps with) and its `frame_seq`. nil: no measuring, no
+    ///     clock reads.
     public init(transport: VideoTransport, frames: VideoFrameQueue,
                 requestKeyframe: @escaping @Sendable () -> Void,
                 onEnded: @escaping @Sendable (EndReason) -> Void = { _ in },
@@ -102,6 +103,7 @@ public final class VideoSender: @unchecked Sendable {
             let measure = trace != nil && !encoded.isCodecConfig
             if measure {
                 timing.writeStartUs = clock()
+                timing.frameSeq = seq  // the VIDEO_FRAME.frame_seq of this send (T-170 join key)
                 timing.isKeyframe = encoded.isKeyframe
                 timing.bytes = size
             }

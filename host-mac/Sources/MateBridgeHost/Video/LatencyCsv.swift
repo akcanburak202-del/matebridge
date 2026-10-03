@@ -3,6 +3,7 @@ import MateBridgeCore
 
 /// Optional per-frame trace file (T-070), enabled by `MATEBRIDGE_LAT_TRACE=1`:
 /// `~/Library/Logs/MateBridge/latency.csv`, one `FrameTrace` per line (host-clock microseconds, numbers only).
+/// Joins with the tablet `pace_trace.csv` on `pts_us == capture_us` (T-170); drop rows with `resubmit=1`.
 /// Bounded: 8 MiB per file, two files kept (`latency.csv`, `latency.1.csv`); lines are dropped, never queued without
 /// limit, if the disk is slow.
 final class LatencyCsv: Sendable {
