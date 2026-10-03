@@ -1,7 +1,7 @@
 ---
 id: T-146
 title: Log and show the client build commit
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -45,17 +45,17 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 
 ## Kabul kriterleri
 
-- [ ] [JVM] `BuildInfoTest`: `logFields()` has exactly the fields `version= sha= built= sdk= os_build=` in that order; an empty or missing SHA becomes `sha=unknown`.
-- [ ] [build] `./gradlew assembleDebug` succeeds from a copy of `client-android/` without `.git` (SHA `unknown`, `versionCode` 1).
-- [ ] [build] `versionCode` follows the commit count when git is available (`aapt2 dump badging` output quoted in Handoff); `versionName` stays human-readable.
+- [x] [JVM] `BuildInfoTest`: `logFields()` has exactly the fields `version= sha= built= sdk= os_build=` in that order; an empty or missing SHA becomes `sha=unknown`.
+- [x] [build] `./gradlew assembleDebug` succeeds from a copy of `client-android/` without `.git` (SHA `unknown`, `versionCode` 1).
+- [x] [build] `versionCode` follows the commit count when git is available (`aapt2 dump badging` output quoted in Handoff); `versionName` stays human-readable.
 - [ ] [device] `adb logcat -s 'MB/*'` shows exactly one `ev=app_start version= sha= built= sdk= os_build=` line per cold start, and the settings panel "Sürüm" row shows the same SHA. No serial number and no device ID appear in the line.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
 1. `build.gradle.kts`: `buildFeatures { buildConfig = true }`. Git values come from one `ValueSource` (injected `ExecOperations`, `isIgnoreExitValue`, exceptions caught) so a tree without `.git` or without a `git` binary falls back instead of failing. They are wired lazily in `androidComponents.onVariants`: `GIT_SHA` (`git rev-parse --short HEAD`, `-dirty` when `git status --porcelain` is non-empty, else `unknown`), `BUILD_TIME_UTC` (`yyyy-MM-ddTHH:mmZ`), and every output's `versionCode` = `git rev-list --count HEAD` (fallback 1). Nothing runs at configuration time, so the configuration cache stays valid. `versionName` stays `"0.1"`.
 2. `BuildInfo.kt`: pure class over the raw values (`versionName`, `sha`, `builtUtc`); `logFields(sdk, osBuild)` → `version=… sha=… built=… sdk=… os_build=…` (blank → `unknown`, whitespace inside a value → `_` so the key=value line stays parseable); `settingsText()` → `Sürüm: 0.1 (<sha>, <built>)`; `BuildInfo.current` reads `BuildConfig`.
-3. `MainActivity.onCreate`: one `MbLog.i("app_start", BuildInfo.current.logFields(Build.VERSION.SDK_INT, Build.DISPLAY))` right after `super.onCreate`, before the bench redirect, so every cold start logs it once.
+3. `MainActivity.onCreate`: one `MbLog.i("app_start", BuildInfo.current.logFields(Build.VERSION.SDK_INT, Build.DISPLAY))` right after `super.onCreate`, before the bench redirect, guarded by `BuildInfo.claimAppStart()` (process-wide once flag) so an activity recreation does not log it again.
 4. `SettingsCatalog`: `SettingItem.Info("version") { BuildInfo.current.settingsText() }` as the last row of "Diğer".
 5. `BuildInfoTest`: field order, `unknown` fallback, whitespace, settings text.
 6. Verify: `./scripts/check.sh`, `aapt2 dump badging` for `versionCode`, `assembleDebug` from a copy of `client-android/` outside the repo.
@@ -64,10 +64,30 @@ Risk: the new "version" row changes the key list asserted in `SettingsCatalogTes
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `1e16cc2` (implementation), `bcace59` (settings test key list), plan `1acc430`; branch `task/T-146-client-build-identity`. The card update is the last commit on the branch.
 - **Dokunulan dosyalar:**
+  - `client-android/app/build.gradle.kts`: `buildConfig = true`; `BuildIdentity` `ValueSource` (git via `ExecOperations`, `isIgnoreExitValue`, exceptions → fallback); `androidComponents.onVariants` sets `GIT_SHA`, `BUILD_TIME_UTC` and `versionCode` lazily.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/BuildInfo.kt` (new): `logFields(sdk, osBuild)`, `settingsText()`, `current`, `claimAppStart()`.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt`: one line (+comment) after `super.onCreate`.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/settings/SettingsCatalog.kt`: `Info("version")` as the last "Diğer" row, plus its import.
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/BuildInfoTest.kt` (new).
+  - **Outside `files:`:** `client-android/app/src/test/kotlin/dev/matebridge/client/settings/SettingsCatalogTest.kt`, one line: `"version"` appended to the expected key list. Without it check.sh fails, because the test pins every settings key. It is kept in its own commit (`bcace59`) so it can be reviewed or dropped separately.
+- **Doğrulama (Mac):**
+  - `./scripts/check.sh`: ALL OK at `bcace59`.
+  - `aapt2 dump badging` at `bcace59` (`git rev-list --count HEAD` = 880): `package: name='dev.matebridge.client' versionCode='880' versionName='0.1' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'`. `BuildConfig`: `GIT_SHA = "bcace59"`, `BUILD_TIME_UTC = "2026-10-03T16:44Z"`. A dirty tree gave `1acc430-dirty`.
+  - A copy of `client-android/` in the scratchpad (no `.git` above it): `assembleDebug` OK, `versionCode='1'`, `GIT_SHA = "unknown"`. In the same copy, `--configuration-cache assembleDebug` stored the entry and reused it on the second run.
 - **Varsayımlar:**
+  - `versionName` stays `"0.1"`. The SHA and the commit count identify the build.
+  - `built=` is UTC at minute precision (`2026-10-03T16:44Z`). It changes on every build in a new minute, so `BuildConfig` and its users recompile then (small cost).
+  - `os_build` = `Build.DISPLAY`. Whitespace inside any value becomes `_`, and blank becomes `unknown`, so each value stays one key=value token.
+  - "Exactly one per cold start" is enforced per process (`BuildInfo.claimAppStart()`, an atomic once flag). An activity recreation, and the `net_bench` redirect after the line, do not log it again.
+  - The dirty check covers the whole repo (`git status --porcelain`, untracked files included).
+  - **Version downgrade:** daily APKs now have `versionCode` ≈ 880+. A fallback build (`versionCode` 1, no `.git`) or a shallow-clone CI APK with a small count fails with `adb install -r` (`INSTALL_FAILED_VERSION_DOWNGRADE`). If it really has to be installed, use `adb install -r -d`. **Never uninstall to work around it**: uninstalling deletes `matebridge_pairkeys`, which loses the pairing. The first install of this branch over the current APK (`versionCode` 1) is an upgrade, so plain `-r` works.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  1. `adb install -r` the branch APK (an upgrade from 1, no `-d` needed). Check that pairing is still there.
+  2. Cold start (`am force-stop dev.matebridge.client`, then launch). `adb logcat -s 'MB/*'` shows exactly one `I session … ev=app_start version=0.1 sha=<sha> built=<…Z> sdk=<n> os_build=<Build.DISPLAY>` line. Check what `os_build` looks like on HarmonyOS 4.3. No serial, ANDROID_ID or host name.
+  3. Rotate, attach or detach the keyboard, or toggle dark mode. No second `app_start` line until the next cold start.
+  4. Settings panel, both connect and in-stream: the last "Diğer" row reads `Sürüm: 0.1 (<same sha>, <built>)`.
 - **Açık sorular:**
+  - `SettingsCatalogTest.kt` is not in `files:` but had to change (see above). Accept `bcace59` or tell me the alternative.
+  - `docs/LOGGING.md` needs the `I session ev=app_start version= sha= built= sdk= os_build=` line (orchestrator).
