@@ -104,6 +104,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var pipelineRetried = false
     private var lastStatsText = ""
     private var lastCadenceText = ""
+    /// T-187: the hardware-encoder read-back of pipeline `pipelineID`, read once when it started.
+    private var encoderHardware: (pipelineID: Int, check: EncoderHardwareCheck)?
     private var prefsGate = StreamPrefsGate()
     /// Tablet panel rate from `DISPLAY_RATE` (T-058), and the last (hz, effective fps) that was logged.
     private var rateState = DisplayRateState()
@@ -193,7 +195,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// only, so the transport knobs are not applied there (the tablet does not use its `bitrate_kbps`).
     private func settings(for hello: Hello, transport: SessionTransport?) -> (base: VideoSettings, initial: VideoSettings) {
         // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
-        // MATEBRIDGE_FRAME_DELAY=0|1; T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS;
+        // T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS;
         // T-088: MATEBRIDGE_WIFI_BITRATE_KBPS on a Wi-Fi session (the env bitrate still wins).
         let env = ProcessInfo.processInfo.environment
         var base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
@@ -514,7 +516,15 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func publishSummary() {
         guard session != nil, case .sender = consumer else { return }
-        onSummary([lastStatsText, lastCadenceText].filter { !$0.isEmpty }.joined(separator: " · "))
+        onSummary([lastStatsText, lastCadenceText, encoderWarningText ?? ""].filter { !$0.isEmpty }
+            .joined(separator: " · "))
+    }
+
+    /// T-187: menu warning while the current pipeline's encoder is software or unknown; nil otherwise (also with no
+    /// pipeline, so a stopped, parked or replaced pipeline leaves nothing behind).
+    private var encoderWarningText: String? {
+        guard pipeline != nil, let hw = encoderHardware, hw.pipelineID == pipelineID else { return nil }
+        return hw.check.menuText
     }
 
     private func onPipelineFailed(id: Int, message: String, wake: DisplayWakeReason?) async {
@@ -672,7 +682,12 @@ public final class StreamCoordinator: @unchecked Sendable {
             }
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: p.cadenceSetup)
-            onSummary("")
+            // T-187: once per pipeline; the menu keeps a software/unknown warning while this pipeline runs.
+            let hw = p.encoderHardware
+            encoderHardware = (id, hw)
+            videoLogger.log(hw.logLevel, EncoderHardwareCheck.event, sessionID: session?.sessionID ?? 0,
+                            generation: session?.configID ?? 0, fields: hw.logFields)
+            onSummary(encoderWarningText ?? "")
         } catch {
             log(.error, "display_create_failed", "error=\(error)")
             lease.displayLost()

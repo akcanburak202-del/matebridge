@@ -405,3 +405,16 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
     - Değer bir sayı, `0/1` ya da bilinen bir kimliktir. Bilinmeyen metin `other` yazılır.
     - `net_bench*` hiç yazılmaz. Varsayılana eşit verilen değer de listelenir.
   - `is_hw` yoktur (bkz. `ev=codec_start`, T-168). Uç nokta adresi, seri numarası ve cihaz kimliği asla yazılmaz.
+
+## Kodlayıcı donanım denetimi (Mac, `video`, T-187)
+
+Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) ama zorunlu kılmaz (`Require` değil, NOTES T-046). VideoToolbox yazılım kodlayıcıya düşerse gecikme ve CPU artar. Bu satır o durumu görünür kılar.
+
+- `video ev=encoder_hw using_hw=1|0|unknown [status=<OSStatus>]`
+  - Her pipeline oluşturulduğunda tam bir kez yazılır, hemen `ev=cadence_setup`'tan sonra: oturum başında, her `STREAM_PREFS` yeniden başlatmasında, bekletilen ekrana dönüşte ve `pipeline_retry`'da.
+  - Kaynak: oturumun `UsingHardwareAcceleratedVideoEncoder` özelliği (`cadence_setup` içindeki `encoder_read[… Hardware=…]` ile aynı değer).
+  - `I … using_hw=1`: donanım kodlayıcı. Menüde uyarı yok.
+  - `W … using_hw=0`: yazılım kodlayıcı. Menü özet satırına `yazılım kodlayıcı` eklenir.
+  - `W … using_hw=unknown status=<OSStatus>`: özellik okunamadı. `status=` `VTSessionCopyProperty` sonucudur. `0`, çağrının başarılı olduğunu ama boolean değer dönmediğini söyler. Encoder yoksa `-12903` (`kVTInvalidSessionErr`) yazılır. Menüye `kodlayıcı türü bilinmiyor` eklenir.
+- Menü uyarısı o pipeline çalıştığı sürece özet satırında kalır; saniyelik güncelleme onu silmez. Pipeline durunca, bekletilince ya da yenisiyle değişince kalkar.
+- Otomatik geri dönüş ya da yeniden başlatma yoktur; yalnız uyarıdır.
