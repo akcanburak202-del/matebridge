@@ -840,6 +840,8 @@ class SessionController(
     ) {
         private val socket = Socket()
         private val closedPosted = AtomicBoolean(false)
+        /** T-160: frames the gate dropped before this connection's first delivery (-1 once delivering). Reader thread. */
+        private var gated = 0
 
         fun startThread() {
             Thread({ loop() }, "mb-video-$gen").also { it.isDaemon = true; it.start() }
@@ -887,7 +889,12 @@ class SessionController(
                             trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             hint?.onRecv(msg.frameSeq, recvNs) // T-079: start of the frame's reported work
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
-                            videoGate.deliver(gen, hello.configId) { listener.onVideoFrame(msg) } // T-160
+                            // T-160: only the open connection's frames of the renderer-installed config pass
+                            if (videoGate.deliver(gen, hello.configId) { listener.onVideoFrame(msg) }) {
+                                if (gated >= 0) { MbLog.i("video_gate_open", "vgen=$gen config_id=${hello.configId} gated=$gated"); gated = -1 }
+                            } else if (gated >= 0) {
+                                gated++
+                            }
                         }
                     }
                 }

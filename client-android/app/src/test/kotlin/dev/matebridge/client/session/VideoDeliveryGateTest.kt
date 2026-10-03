@@ -22,7 +22,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 
 /**
@@ -67,7 +66,7 @@ class VideoDeliveryGateTest {
 
     // ---- X4: the abort barrier ----
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun aReaderReleasedAfterAbortAndAVideoReconnectDeliversNothing() {
+    @Test fun aReaderReleasedAfterAbortAndAVideoReconnectDeliversNothing() {
         streamConfig(cfg(1), videoGen = 3)
         val atBarrier = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -89,7 +88,7 @@ class VideoDeliveryGateTest {
         assertTrue("the new connection delivers", delivers(4, 1))
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun aReaderReleasedAfterTheSessionChangedDeliversNothing() {
+    @Test fun aReaderReleasedAfterTheSessionChangedDeliversNothing() {
         streamConfig(cfg(1), videoGen = 3)
         val atBarrier = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -109,7 +108,7 @@ class VideoDeliveryGateTest {
         assertEquals(0, delivered.get())
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun bufferedRecordsAfterAbortAreNotDelivered() {
+    @Test fun bufferedRecordsAfterAbortAreNotDelivered() {
         streamConfig(cfg(1), videoGen = 3)
         assertTrue(delivers(3, 1))
         gate.close(3)
@@ -121,7 +120,7 @@ class VideoDeliveryGateTest {
         assertEquals(0, (1..5).count { delivers(3, 1) })
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun abortWaitsForADeliveryInFlight() {
+    @Test fun abortWaitsForADeliveryInFlight() {
         streamConfig(cfg(1), videoGen = 3)
         val inDelivery = CountDownLatch(1)
         val finish = CountDownLatch(1)
@@ -153,7 +152,7 @@ class VideoDeliveryGateTest {
 
     // ---- frames of a config the renderer has not installed ----
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun framesOfAConfigTheRendererHasNotInstalledAreDropped() {
+    @Test fun framesOfAConfigTheRendererHasNotInstalledAreDropped() {
         streamConfig(cfg(1), videoGen = 3)
         assertTrue(delivers(3, 1))
         streamConfig(cfg(2), videoGen = 4, install = false)
@@ -167,7 +166,7 @@ class VideoDeliveryGateTest {
         assertTrue(delivers(5, 2))
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun installingAfterDroppedFramesSendsOneStartupAndNoFramesDroppedStorm() {
+    @Test fun installingAfterDroppedFramesSendsOneStartupAndNoFramesDroppedStorm() {
         val factory = FakeDecoderFactory()
         val env = TestDecoderEnv()
         val kf = CopyOnWriteArrayList<Int>()
@@ -258,7 +257,7 @@ class VideoDeliveryGateTest {
         assertFalse(delivers(v1, 1))
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun aVideoOnlyReconnectWithTheSameConfigStaysDeliverable() {
+    @Test fun aVideoOnlyReconnectWithTheSameConfigStaysDeliverable() {
         val ctl = connectAccepted()
         val v1 = receiveConfig(ctl, cfg(3))
         assertTrue(delivers(v1, 3))
@@ -271,7 +270,7 @@ class VideoDeliveryGateTest {
         assertFalse(delivers(v1, 3))
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun sameConfigIdOneInConsecutiveSessionsDoesNotLeakFrames() {
+    @Test fun sameConfigIdOneInConsecutiveSessionsDoesNotLeakFrames() {
         val ctl1 = connectAccepted()
         val v1 = receiveConfig(ctl1, cfg(1))
         assertTrue(delivers(v1, 1))
@@ -292,7 +291,7 @@ class VideoDeliveryGateTest {
         assertFalse(delivers(v1, 1))
     }
 
-    @Ignore("T-160 red: fails on the configId-only rule") @Test fun configIdIsResetOnCloseControlAndPromotionButNotOnCloseVideo() {
+    @Test fun configIdIsResetOnCloseControlAndPromotionButNotOnCloseVideo() {
         gate.onAction(Action.ApplyConfig(cfg(4)))
         gate.onAction(Action.CloseVideo)
         assertEquals(4, gate.currentConfigId)
