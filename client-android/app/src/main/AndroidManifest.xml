@@ -10,11 +10,16 @@
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- T-154: allowBackup="false" governs API 29/30 (cloud, D2D, adb); on API 31+ it no longer
+         blocks device-to-device transfer, so dataExtractionRules excludes all data there.
+         No fullBackupContent: allowBackup="false" already covers pre-12 devices. -->
     <application
         android:label="MateBridge"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        tools:ignore="DataExtractionRules"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <activity
             android:name=".MainActivity"
