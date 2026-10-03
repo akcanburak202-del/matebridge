@@ -1164,3 +1164,9 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - Tablet çözme süresi 2800×1840'ta p50 ~18–19 ms (`dec_p50_us`), takılma kaynağı değil.
 - 1 karelik tampon (`--ez dev true --ei jitter 1`): `skip_pct` %10 → %8,3, yakalama→bırakma p50 19,2 → 26,3 ms; kullanıcı: "takılma hâlâ var gibi". Tampon panel hızında sıraladığı için tutmaları sabitlemiyor.
 - `gaps.py`'nin "keyframes" sayısı boyut sezgisi (büyük kare); gerçek IDR sayısı host `idr=` alanından okunmalı.
+
+## 2026-10-04 ~01:42–02:00 — T-208 cihazda: oyun modunda zamanlayıcı yoktu; uyarlamalı zamanlayıcıyla düzeldi
+
+- T-208 sonrası (tampon 0, oyun modu): pace trace 20 000 karenin hepsi `queued/path=none`, `phase_lock=0`, `skip_pct` ortanca %10 → oyun modu (0014 §2) zamanlayıcıyı atlıyor; T-208 hiç çalışmadı.
+- T-210 ile `--ez dev true --ei jitter -1` (uyarlamalı, oyun modunda): `phase_lock=1` 333/333 pencere, paths `locked` 19 866/20 000; `skip_pct` ortanca **%0** (p90 %1,7); `shown_p95` 25 → 16,7 ms; `sim.py --holds` 120 Hz cadence 2 exact %88,8 (katı filtreyle 330 aralık); yakalama→bırakma p50 20,6 → 25,6 ms. Kullanıcı gecikme farkı hissetmedi → 0014 §2 değişti, T-211.
+- **Kalan takılma Mac'te:** içerik (SCK pts) aralığı %99,52 tam 16,7 ms; saniyede ~0,55 eksik kare, 47 boşluk 50–100 ms. Host `ev=cadence cap_int p99=33,3`, `status=complete`, `sck_lag=0` → macOS oyun yeni kareyi zamanında vermediği vsync'lerde kare üretmiyor; MateBridge kaynaklı değil. Oyun (Ori, GameHub) ayarlarında en fazla 1400×920 seçilebiliyor (HiDPI sanal ekranın nokta boyutu).

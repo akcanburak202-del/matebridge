@@ -33,6 +33,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-209](tasks/T-209-host-force-unmount-stale-volume.md) | Force-unmount a stale tablet files volume when its token is dead, then remount | 6 | mac-host-dev | [T-206] |
+| [T-211](tasks/T-211-client-game-mode-adaptive-default.md) | Game modes use the adaptive pacer by default (decision 0014 §2 amended) | 6 | android-client-dev | [T-208, T-210] |
 
 ## done
 

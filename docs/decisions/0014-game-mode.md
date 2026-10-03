@@ -1,6 +1,6 @@
 # 0014 — Oyun modu: 120 fps, %66, en düşük gecikme; geçici varsayılanlar
 
-- **Durum:** kabul
+- **Durum:** kabul; §2 2026-10-04'te değişti (oyun modunda uyarlamalı zamanlayıcı)
 - **Tarih:** 2026-10-02
 
 ## Bağlam
@@ -34,3 +34,9 @@ Kullanıcının sözü: "bu ayarlar otomatik oyun modu ile gelsin ama kalıcı o
 - Tekrar düşünülür:
   - jitter 0'da takılma görülürse (o zaman 1 kare tampon);
   - Wi-Fi'de 60 Mbps sorun çıkarırsa (o zaman taşımaya göre varsayılan).
+
+## Değişiklik (2026-10-04): §2 — oyun modunda uyarlamalı zamanlayıcı
+
+"Tekrar düşünülür: jitter 0'da takılma görülürse" koşulu gerçekleşti. Cihaz ölçümü (docs/NOTES.md 2026-10-04, Ori, Oyun 60, dokunmayla panel 120 Hz): tampon 0'da kareler çözülür çözülmez bırakılıyor, 120 Hz panelde 60 fps içerik 1/2/3 vsync tutuluyor, `skip_pct` ortanca %10. Uyarlamalı zamanlayıcı + T-208 tam sayı kilidi (A/B, T-210): `skip_pct` ortanca %0 (p90 %1,7), tutma p95 16,7 ms, yakalama→bırakma p50 +5 ms (20,6 → 25,6). Kullanıcı gecikme farkını hissetmedi ve varsayılan olmasını onayladı.
+
+**Yeni §2:** oyun modlarında istemci video tamponu uyarlamalıdır (`BUFFER_ADAPTIVE`, `AdaptivePacer` + faz kilidi), diğer modlarla aynı. `--ez dev true --ei jitter 0` eski davranışı (tampon 0) A/B için verir. Kart: T-211.
