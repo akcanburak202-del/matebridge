@@ -1,7 +1,7 @@
 ---
 id: T-160
 title: Drop video frames from stale connections and uninstalled configs
-status: in_progress
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-150]
