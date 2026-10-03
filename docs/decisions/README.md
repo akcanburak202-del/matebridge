@@ -50,3 +50,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0026 | Deney ayarları (knob) politikası ve sınıflandırması | kabul |
 | 0027 | Host'ta "Yalnız USB" ağ profili | kabul |
 | 0028 | Tablet dosya paylaşımı: seçilen klasör ve salt okunur seçeneği (0015'i değiştirir) | kabul |
+| 0029 | Oyunlar için düşük çözünürlüklü sanal ekran | önerildi |
