@@ -8,13 +8,9 @@ import dev.matebridge.client.protocol.Limits
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.VideoFrame
-import dev.matebridge.client.session.KeyValueStore
 import java.io.ByteArrayInputStream
 import java.io.EOFException
 import java.util.Random
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,10 +26,10 @@ class HandshakeMatrixTest {
     private fun ack(status: Int, mode: Int, hostPub: ByteArray = P256.generate().publicBytes) =
         HelloAck(1, status, 5, 47002, "Mac", mode, Bytes(hostId), Bytes(ByteArray(16) { 9 }), Bytes(hostPub))
 
-    private fun run(a: HelloAck, store: PairKeyStore = MemStore()): HandshakeOutcome {
+    private fun run(a: HelloAck, store: PairKeyStore = MemStore(), userInitiated: Boolean = true): HandshakeOutcome {
         val hs = ClientHandshake()
         hs.hello(template)
-        return hs.complete(a, Codec.encodePayload(a), store)
+        return hs.complete(a, Codec.encodePayload(a), PairTrust(store), userInitiated)
     }
 
     private fun assertProtocolError(a: HelloAck, store: PairKeyStore = MemStore()) {
@@ -84,48 +80,69 @@ class HandshakeMatrixTest {
         val hello = hs.hello(template)
         val a = ack(HelloAck.PENDING_APPROVAL, HelloAck.KEY_PAIRING, hostKey.publicBytes)
         val payload = Codec.encodePayload(a)
-        val sess = (hs.complete(a, payload, store) as HandshakeOutcome.Secure).session
+        val sess = (hs.complete(a, payload, PairTrust(store), userInitiated = true) as HandshakeOutcome.Secure).session
         val ecdh = P256.ecdh(hostKey.privateKey, P256.decodePublic(hello.clientEphPub.value))
         val prk = KeySchedule.prk(KeySchedule.ikm(null, ecdh), KeySchedule.transcriptHash(Codec.encodePayload(hello), payload))
         return sess to KeySchedule.newPairKey(prk)
     }
 
     @Test
-    fun pairKeyIsStoredRightAfterTheFirstAckAndSurvivesADropBeforeAccepted() {
-        val store = MemStore()
-        val (sess, hostKey) = pairingHandshake(store)
-        assertEquals(0, store.puts) // nothing before the caller commits
-        assertTrue(sess.storePairKey(store))
-        assertEquals(1, store.puts)
-        assertArrayEquals(hostKey, store.get(hostId)) // the key the Mac keeps on approval
-        assertFalse(sess.storePairKey(store)) // idempotent; nothing more to do at ACCEPTED
-        assertEquals(1, store.puts)
-        // Connection dropped before ACCEPTED: the key is still there, and a later PAIRED handshake completes with it.
+    fun pairKeyIsKeptPendingAtTheFirstAckAndAPairedHandshakeNeverUsesItBeforeConfirmation() {
+        val f = TrustFixture()
+        val (sess, hostKey) = pairingHandshake(f.store)
+        assertEquals(0, f.kv.commits) // nothing before the caller commits
+        assertTrue(sess.storePending(f.trust))
+        assertEquals(1, f.kv.commits)
+        assertNull(f.store.get(hostId)) // T-150: not trusted before the local confirmation
+        assertArrayEquals(hostKey, f.store.getPending(hostId)!!.key) // the key the Mac keeps on approval
+        assertFalse(sess.storePending(f.trust)) // idempotent
+        // Connection dropped before ACCEPTED: the pending key survives; a PAIRED answer is NOT derived from it.
         val hs = ClientHandshake()
         hs.hello(template)
         val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED)
-        val out = hs.complete(a, Codec.encodePayload(a), store)
-        assertTrue(out is HandshakeOutcome.Secure)
-        assertNull((out as HandshakeOutcome.Secure).session.sas)
+        val out = hs.complete(a, Codec.encodePayload(a), f.trust, userInitiated = true)
+        assertTrue(out is HandshakeOutcome.PendingUnconfirmed)
+        assertArrayEquals(hostId, (out as HandshakeOutcome.PendingUnconfirmed).hostId)
+        // after the confirmation the PAIRED handshake completes with the promoted key
+        assertTrue(f.trust.promote(hostId, awaitHost = true))
+        val hs2 = ClientHandshake()
+        hs2.hello(template)
+        val out2 = hs2.complete(a, Codec.encodePayload(a), f.trust, userInitiated = false)
+        assertTrue(out2 is HandshakeOutcome.Secure)
+        assertNull((out2 as HandshakeOutcome.Secure).session.sas)
     }
 
     @Test
-    fun aNewPairingReplacesTheOldKey() {
-        val store = MemStore().also { it.put(hostId, ByteArray(32) { 9 }) }
-        val (sess, hostKey) = pairingHandshake(store)
+    fun aNewPairingDoesNotReplaceTheOldKeyBeforeConfirmation() {
+        val f = TrustFixture().also { it.store.put(hostId, ByteArray(32) { 9 }) }
+        val (sess, hostKey) = pairingHandshake(f.store)
         assertTrue(sess.rePairing)
-        sess.storePairKey(store)
-        assertArrayEquals(hostKey, store.get(hostId))
+        sess.storePending(f.trust)
+        assertArrayEquals(ByteArray(32) { 9 }, f.store.get(hostId))
+        assertTrue(f.trust.promote(hostId, awaitHost = false))
+        assertArrayEquals(hostKey, f.store.get(hostId))
     }
 
     @Test
     fun pairedSessionsNeverWriteTheStore() {
-        val store = MemStore().also { it.put(hostId, ByteArray(32) { 1 }) }
+        val f = TrustFixture().also { it.store.put(hostId, ByteArray(32) { 1 }) }
         val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED)
         val hs = ClientHandshake(); hs.hello(template)
-        val sess = (hs.complete(a, Codec.encodePayload(a), store) as HandshakeOutcome.Secure).session
-        assertFalse(sess.storePairKey(store))
-        assertEquals(1, store.puts)
+        val sess = (hs.complete(a, Codec.encodePayload(a), f.trust, userInitiated = true) as HandshakeOutcome.Secure).session
+        assertFalse(sess.storePending(f.trust))
+        assertEquals(1, f.kv.commits)
+    }
+
+    @Test
+    fun aPairingAnswerOnAConnectionTheUserDidNotStartDerivesAndStoresNothing() {
+        val f = TrustFixture()
+        val out = run(ack(HelloAck.PENDING_APPROVAL, HelloAck.KEY_PAIRING), f.store, userInitiated = false)
+        assertEquals(HandshakeOutcome.PairingNeedsUser("Mac", rePair = false), out)
+        f.store.put(hostId, ByteArray(32) { 3 })
+        val again = run(ack(HelloAck.PENDING_APPROVAL, HelloAck.KEY_PAIRING), f.store, userInitiated = false)
+        assertEquals(HandshakeOutcome.PairingNeedsUser("Mac", rePair = true), again)
+        assertArrayEquals(ByteArray(32) { 3 }, f.store.get(hostId))
+        assertTrue(f.store.pendingHosts().isEmpty())
     }
 
     @Test
@@ -143,7 +160,7 @@ class HandshakeMatrixTest {
         val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED, hostKey.publicBytes)
         val payload = Codec.encodePayload(a)
         val storeA = MemStore().also { it.put(hostId, ByteArray(32) { 1 }) }
-        val sess = (hs.complete(a, payload, storeA) as HandshakeOutcome.Secure).session
+        val sess = (hs.complete(a, payload, PairTrust(storeA), userInitiated = false) as HandshakeOutcome.Secure).session
         // Host side with another key for the same host_id: derives a different h2c key.
         val ecdh = P256.ecdh(hostKey.privateKey, P256.decodePublic(hello.clientEphPub.value))
         val prkWrong = KeySchedule.prk(
@@ -300,32 +317,6 @@ class RecordDecoderTest {
 }
 
 class PairKeyStoreTest {
-    private class MapKv : KeyValueStore {
-        val m = HashMap<String, String>()
-        override fun getString(key: String) = m[key]
-        override fun putString(key: String, value: String) { m[key] = value }
-    }
-
-    /** Software AES-GCM stand-in for the Android Keystore wrapper. */
-    private class FakeWrapper(val key: ByteArray = ByteArray(32) { 5 }) : KeyWrapper {
-        override fun wrap(plain: ByteArray, aad: ByteArray): ByteArray {
-            val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-            c.updateAAD(aad)
-            return iv + c.doFinal(plain)
-        }
-
-        override fun unwrap(blob: ByteArray, aad: ByteArray): ByteArray? = try {
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, blob, 0, 12))
-            c.updateAAD(aad)
-            c.doFinal(blob, 12, blob.size - 12)
-        } catch (e: java.security.GeneralSecurityException) {
-            null
-        }
-    }
-
     private val hostA = ByteArray(16) { 1 }
     private val hostB = ByteArray(16) { 2 }
 
@@ -412,20 +403,26 @@ class VideoChannelTest {
     }
 
     @Test
-    fun aFailingKeyStoreSurfacesFromStorePairKeySoTheSessionCanFail() {
-        val eph = EphemeralKeyPair(P256.generate().privateKey, P256.generate().publicBytes)
+    fun aFailingKeyStoreSurfacesFromStorePendingSoTheSessionCanFail() {
         val prk = ByteArray(32) { 4 }
         val sec = SecureSession(
             HelloAck(1, 1, 0, 0, ""), SessionSecrets(prk, true, ByteArray(16)),
             RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), "000000", false,
         )
-        val failing = object : PairKeyStore {
-            override fun get(hostId: ByteArray): ByteArray? = null
-            override fun put(hostId: ByteArray, key: ByteArray) { throw java.io.IOException("commit failed") }
-        }
+        val f = TrustFixture().also { it.kv.failCommits = true }
         try {
-            sec.storePairKey(failing); fail()
+            sec.storePending(f.trust); fail()
         } catch (e: java.io.IOException) {
+        }
+        assertTrue(f.kv.m.isEmpty())
+        // a read-only (migration candidate) store refuses too
+        val sec2 = SecureSession(
+            HelloAck(1, 1, 0, 0, ""), SessionSecrets(ByteArray(32) { 5 }, true, ByteArray(16)),
+            RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), "000000", false,
+        )
+        try {
+            sec2.storePending(PairTrust(ReadOnlyPairKeyStore(TrustFixture().store))); fail()
+        } catch (e: UnsupportedOperationException) {
         }
     }
 }

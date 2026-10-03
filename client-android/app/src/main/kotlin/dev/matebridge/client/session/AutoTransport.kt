@@ -242,7 +242,7 @@ class AutoUsbPolicy {
 
         fun stageOf(ui: SessionUi): Stage = when (ui) {
             is SessionUi.Connected -> Stage.ACCEPTED
-            is SessionUi.AwaitingApproval -> Stage.WAITING_USER
+            is SessionUi.AwaitingApproval, is SessionUi.PairingNeedsUser, is SessionUi.StoredTrust -> Stage.WAITING_USER
             is SessionUi.Failed -> Stage.FAILED
             SessionUi.Idle, SessionUi.Searching, is SessionUi.Connecting, is SessionUi.Disconnected -> Stage.NOT_CONNECTED
         }
@@ -265,7 +265,8 @@ class AutoUsbPolicy {
         fun onProbeOpen(ui: SessionUi): OpenAction = when (ui) {
             is SessionUi.Connected -> OpenAction.MIGRATE
             SessionUi.Idle, SessionUi.Searching, is SessionUi.Disconnected -> OpenAction.SWITCH
-            is SessionUi.Connecting, is SessionUi.AwaitingApproval, is SessionUi.Failed -> OpenAction.IGNORE
+            is SessionUi.Connecting, is SessionUi.AwaitingApproval, is SessionUi.Failed,
+            is SessionUi.PairingNeedsUser, is SessionUi.StoredTrust -> OpenAction.IGNORE
         }
 
         /** AUTO on USB and the session dropped (cable pulled, host gone, never reached): fall back to Wi-Fi. */

@@ -359,7 +359,8 @@ class WakePlanner {
          * retry). A connect that failed or a session that was lost (what a Mac going to sleep looks like) is not reached.
          */
         fun reached(ui: SessionUi): Boolean = when (ui) {
-            is SessionUi.Connected, is SessionUi.AwaitingApproval, is SessionUi.Failed -> true
+            is SessionUi.Connected, is SessionUi.AwaitingApproval, is SessionUi.Failed,
+            is SessionUi.PairingNeedsUser, is SessionUi.StoredTrust -> true
             is SessionUi.Disconnected -> ui.cause in ANSWERED_CAUSES
             SessionUi.Idle, SessionUi.Searching, is SessionUi.Connecting -> false
         }
