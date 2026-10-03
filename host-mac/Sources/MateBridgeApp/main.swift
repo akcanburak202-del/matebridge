@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // T-145: the first host.log line of every launch names the exact build (before `listening`).
+        let build = BuildInfo(infoDictionary: Bundle.main.infoDictionary)
+        HostLog.log(.info, component: "session", event: "app_start",
+                    fields: build.logFields(os: ProcessInfo.processInfo.operatingSystemVersionString))
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = menuBarGlyph()
         item.button?.imagePosition = .imageOnly
@@ -89,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Onaylı cihazları unut", action: #selector(forgetDevices), keyEquivalent: ""))
         menu.addItem(.separator())
+        let versionLine = NSMenuItem(title: build.menuTitle, action: nil, keyEquivalent: "")
+        versionLine.isEnabled = false
+        menu.addItem(versionLine)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for entry in menu.items where entry.action == #selector(forgetDevices) { entry.target = self }
         item.menu = menu

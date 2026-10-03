@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template: scripts/bundle-host.sh fills CFBundleExecutable, CFBundleIdentifier, CFBundleName and CFBundleVersion. -->
+<!-- Template: scripts/bundle-host.sh fills CFBundleExecutable, CFBundleIdentifier, CFBundleName, CFBundleVersion and MBGitCommit. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -23,6 +23,9 @@
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
 	<string>__BUILD__</string>
+	<!-- Short git commit of the build, "-dirty" for an unclean tree, "unknown" without git (T-145). -->
+	<key>MBGitCommit</key>
+	<string>__GIT_COMMIT__</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<!-- Menu bar app: no Dock icon. -->

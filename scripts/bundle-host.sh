@@ -64,8 +64,18 @@ cp "$root/host-mac/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns
 for b in "$bin_dir"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$app/Contents/Resources/"; done
 
 build_number=$(date +%Y%m%d%H%M%S)
+# MBGitCommit (T-145): short HEAD, "-dirty" when the tree has changes, "unknown" without git or a repository.
+git_commit=unknown
+if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git_commit=$(git -C "$root" rev-parse --short HEAD 2>/dev/null) || git_commit=unknown
+  [ -n "$git_commit" ] || git_commit=unknown
+  if [ "$git_commit" != unknown ] && [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+    git_commit="$git_commit-dirty"
+  fi
+fi
+echo "==> build $build_number, commit $git_commit"
 sed -e "s/__EXECUTABLE__/$product/g" -e "s/__BUNDLE_ID__/$bundle_id/g" \
-    -e "s/__NAME__/$name/g" -e "s/__BUILD__/$build_number/g" \
+    -e "s/__NAME__/$name/g" -e "s/__BUILD__/$build_number/g" -e "s/__GIT_COMMIT__/$git_commit/g" \
     "$root/host-mac/Resources/Info.plist" > "$app/Contents/Info.plist"
 plutil -lint -s "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
