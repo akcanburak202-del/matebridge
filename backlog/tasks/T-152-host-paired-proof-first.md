@@ -1,7 +1,7 @@
 ---
 id: T-152
 title: Activate PAIRED sessions only after the first authenticated record
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-041]
@@ -56,7 +56,10 @@ Source: external architecture review 2026-10-03 (SE2, W3; A1 as a contract hole)
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `SessionMachine.continueHello`: PAIRED dalında devralma olsun olmasın bağlantı `.proving` (son tarih `proofTimeoutUs`) durumuna geçer; `start()` artık yalnız `prove()` içinden (ve PAIRING'de `pairingPersisted`'dan) çağrılır. Devralma logu `takeover_proving` aynen kalır; devralmasız durum için `ev=paired_proving` (LOGGING.md için *Açık sorular*).
+2. `prove()` zaten yuva sahibi yokken doğru çalışıyor (supersede bloğu `if let owner` içinde): yalnız doc yorumu güncellenir, mantık değişmez.
+3. Testler (`Tests/MateBridgeCoreTests/Session/`): `SessionMachineTests`'teki `activate` yardımcısı HELLO'dan sonra kanıt PING'i de gönderir (aktif oturum isteyen eski testler aynen kalır); yeni `PairedProofFirstTests.swift`: kayıtsız zaman aşımı, PING ile sıra, doğrulanamayan kayıt, `awaitingHelloCount` sınırı, kanıt sırasında B'nin PAIRING HELLO'su.
+4. Risk: mevcut testlerin bir kısmı PAIRED HELLO'dan hemen sonra aktif oturum bekliyor; bunlar kart kapsamı dışındaki dosyalardaysa (ör. `Tests/.../Crypto/`) durup *Açık sorular*'a yazılır.
 
 ## Handoff
 
