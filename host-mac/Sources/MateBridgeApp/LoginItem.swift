@@ -3,8 +3,8 @@ import MateBridgeCore
 import MateBridgeHost
 import ServiceManagement
 
-/// "Start at login" via `SMAppService.mainApp`. Registered once on first launch (default on); after that the menu
-/// toggle is the only writer, so a user who turns it off is never overridden.
+/// "Start at login" via `SMAppService.mainApp`. Default on: registered at launch until it succeeds once; after that
+/// the menu toggle is the only writer, so a user who turns it off is never overridden (`LoginItemPolicy`, T-148).
 @MainActor
 final class LoginItem {
     private static let firstRunKey = "loginItemFirstRunDone"
@@ -36,33 +36,39 @@ final class LoginItem {
         }
     }
 
-    /// Call once at launch.
-    func registerOnFirstRun() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: Self.firstRunKey) else { return }
-        defaults.set(true, forKey: Self.firstRunKey)
-        if !status.isRequested { set(true) }
-    }
+    /// Call once at launch. `LoginItemPolicy` decides whether to register and when the first run counts as done.
+    func registerOnFirstRun() { run(.launch) }
 
     /// A pending approval counts as requested, so toggling it cancels the registration.
-    func toggle() { set(!status.isRequested) }
+    func toggle() { run(.userToggle) }
 
-    private func set(_ on: Bool) {
-        problem = nil
+    private func run(_ trigger: LoginItemPolicy.Trigger) {
+        let defaults = UserDefaults.standard
+        let action = LoginItemPolicy.action(for: trigger, firstRunDone: defaults.bool(forKey: Self.firstRunKey),
+                                            status: status)
+        let outcome = perform(action)
+        if action != .none { problem = LoginItemPolicy.problem(after: outcome) }
+        if LoginItemPolicy.marksDone(trigger: trigger, action: action, outcome: outcome) {
+            defaults.set(true, forKey: Self.firstRunKey)
+        }
+        if outcome == .succeeded && action != .none { refresh() }
+    }
+
+    private func perform(_ action: LoginItemPolicy.Action) -> LoginItemPolicy.Outcome {
+        if action == .none { return .succeeded }
+        let on = action == .register
         guard isBundled else {
-            problem = "Oturum açılışı yalnız MateBridge.app ile çalışır"
             HostLog.log(.warning, component: "session", event: "login_item_failed", fields: "reason=not_bundled")
-            return
+            return .notBundled
         }
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             HostLog.log(.info, component: "session", event: "login_item", fields: "enabled=\(on)")
+            return .succeeded
         } catch {
-            problem = "Oturum açılışı ayarlanamadı: \(error.localizedDescription)"
             HostLog.log(.warning, component: "session", event: "login_item_failed",
                         fields: "enabled=\(on) code=\((error as NSError).code)")
-            return
+            return .failed(reason: error.localizedDescription)
         }
-        refresh()
     }
 }
