@@ -8,7 +8,7 @@ depends_on: [T-168, T-173]
 decisions: []
 files:
   - docs/NOTES.md
-  - tools/measure/optical/README.md
+  - tools/measure/optical/   # README.md, plus the optional counting script and frame-index CSV
   - docs/decisions/
   - backlog/tasks/T-174-optical-latency-baseline.md
 ---
@@ -23,7 +23,7 @@ Source: external architecture review 2026-10-03 (LM3, B1, D5, H05); verification
 
 **Roles:** the user films and counts (hardware); the orchestrator writes `tools/measure/optical/README.md`, checks the logs from the same minute, computes the table and drafts the budgets decision. Device runs are one at a time (CLAUDE.md). Open question for the user (manifest §5 Q13): a 240 fps phone camera and a tripod, and ≥ 3 sessions per condition on different days.
 
-**Why keyboard for 60 Hz (PF3):** on this tablet pen, touch, mouse and trackpad force the panel to 120 Hz; keyboard and gamepad let it fall to 60 Hz. A pen test is always a 120 Hz test. Confirm the rate in the same minute with `vsync_ms_p50` (≈ 8.3 ms at 120 Hz, ≈ 16.7 ms at 60 Hz) and T-169's `target_hz`.
+**Why keyboard for 60 Hz (PF3):** on this tablet pen, touch, mouse and trackpad force the panel to 120 Hz; keyboard and gamepad let it fall to 60 Hz. A pen test is always a 120 Hz test. Confirm the rate in the same minute with `vsync_ms_p50` (≈ 8.3 ms at 120 Hz, ≈ 16.7 ms at 60 Hz) and T-169's `target_hz` if landed; otherwise `display_mode requested_hz` (T-169 is not a dependency).
 
 **Software-visible estimate to compare against (verify-E B1, USB, 120 Hz, medians, an estimate, not a measurement):** input transit ~2 ms; Mac app + WindowServer + SCK composition ≥ 1 frame (unknown); callback→decode ≈ 17 ms (10.6 + 6.6 lead); ready→slot 13–17 ms; latch/scan-out ~4–8 ms. Total p50 ≈ 45–55 ms before any tail. The review's proposed 45 ms USB p95 budget is therefore likely too tight; set budgets only after this baseline (manifest §5 Q14).
 
@@ -35,6 +35,8 @@ Source: external architecture review 2026-10-03 (LM3, B1, D5, H05); verification
 5. Repeat each condition on ≥ 3 different days. Report p50/p95/max and the count of > 100 ms outliers per condition.
 6. **Residual** = optical − (`cap_cb` (or `cap_rel` when the render callback is off) + 6.6 ms SCK lead (host `pts_vs_deliv`, T-170) + `input_age` p50 (T-171, if available; otherwise state that input transit is inside the residual)). The remainder is Mac app, WindowServer, SCK composition and panel time.
 7. Commit only a frame-index CSV (frame numbers per event) if the orchestrator adds a counting script. **Never commit raw video.**
+
+**Serialize with T-173 (same directory `tools/measure/`).** T-173 is a dependency, so this only matters if it is reopened.
 
 **Not carded, revisit after this card (manifest §4):** an input `seq` + `INPUT_ACK` on the wire, and a local cursor layer (review PK8/A5), only if the residual is unexplained or large.
 

@@ -33,12 +33,12 @@ Source: external architecture review 2026-10-03 (M01, X4, SE3, D3); verification
   - The renderer is the same `VideoRenderer` object for the app's lifetime, with one shared `FrameQueue`, so the generation boundary must be enforced at delivery, not by swapping objects.
 - **Plan hints:**
   - `VideoDeliveryGate` (pure) holds `(videoGen, installedConfigId)` under a small lock. `VideoConn` calls `gate.deliver(gen, configId) { listener.onVideoFrame(msg) }` inside the lock; `abort()` closes the gate for that gen under the same lock. That gives the barrier.
-  - Holding the lock across `onVideoFrame` must never block: `FrameQueue.offer` takes only its own short lock and the `vsyncIdle` post is non-blocking. Document this in the gate.
+  - Holding the lock across `onVideoFrame` must never block: `FrameQueue.offer` takes only its own short lock and the `vsyncIdle` post is non-blocking. Also, `offer` may return a request that `VideoRenderer.onFrame` passes to `onKeyframeRequest` → `controller.trySend` → `SendQueue.send` (`Codec.encode`, and `onOverflow` on the first overflow; `SendQueue.kt:82-89`): confirm that this path takes no lock the engine thread holds while calling `abort()`, or move the request out of the locked section. Document this in the gate.
   - `installedConfigId` is set by the UI after `r.reconfigure(config)` (`MainActivity.kt:1177`). Until then, frames of the new config are dropped instead of entering the old codec. The renderer can expose an "installed config" token so the gate does not depend on MainActivity ordering.
-  - Reset `currentConfigId` to -1 on CloseVideo/CloseControl.
+  - Reset `currentConfigId` to -1 on CloseControl and session loss (`closeAll`/`lose`), **not** on CloseVideo: `onConfig` emits ApplyConfig → CloseVideo → OpenVideo (`SessionMachine.kt:347-349`), so a reset on CloseVideo would wipe the config just applied (`SessionController.kt:466-467`) and no frame of the new reader would ever match; a video-only reconnect (`SessionMachine.kt:371`, same config) would break the same way. Generation safety comes from the gate's `videoGen`.
   - Mirror the audio pre-filter style (`SessionController.kt:749`).
   - Check interaction with T-159: dropping frames before install must not trip the "no output while fed" fault (dropped frames are never queued to the codec).
-- **Serialize with:** `VideoRenderer.kt` and `MainActivity.kt` after T-159 (depends_on); `SessionController.kt` after T-150 (depends_on; chain T-150 → T-156 → T-159 → T-160 → T-197). T-161 follows on `VideoRenderer.kt`.
+- **Serialize with:** `VideoRenderer.kt` and `MainActivity.kt` after T-159 (depends_on); `SessionController.kt` after T-150 (depends_on; chain T-150 → T-156 → T-160 → T-197; T-159 no longer touches the session files). T-161 follows on `VideoRenderer.kt`.
 - No wire change; this implements the intent of PROTOCOL §3 steps 5 and 7. `docs/PROTOCOL.md` is not affected.
 
 ## Kapsam dışı
@@ -53,7 +53,7 @@ Source: external architecture review 2026-10-03 (M01, X4, SE3, D3); verification
 - [ ] [JVM, deterministic, X4] A reader blocked at a barrier just before delivery; then `abort()` and a new gen/config are activated; then the reader is released → zero frames delivered. The same holds for a reader that still has buffered complete records after `abort()`.
 - [ ] [JVM] A frame whose configId ≠ the renderer-installed configId is dropped. Installing config K after K-frames were dropped results in exactly one STARTUP request (the one `reconfigure` already sends) and no FRAMES_DROPPED storm.
 - [ ] [JVM] Same configId 1 in consecutive sessions: frames from session N's connection are dropped once session N+1 is current.
-- [ ] `currentConfigId` is reset to -1 on CloseVideo/CloseControl.
+- [ ] `currentConfigId` is reset to -1 on CloseControl and session loss (`closeAll`/`lose`), **not** on CloseVideo (`onConfig` emits ApplyConfig → CloseVideo → OpenVideo, `SessionMachine.kt:347-349`). Generation safety comes from the gate's `videoGen`. [JVM] The action sequence of a STREAM_CONFIG leaves the new reader deliverable, and so does a video-only reconnect with the same config.
 - [ ] [device] 10× USB↔Wi-Fi migration plus 10× mode change while content moves: each switch recovers on its first keyframe, no `decode_error` in the client log, and `kf_request` lines per switch ≤ 2.
 - [ ] `./scripts/check.sh` geçiyor.
 

@@ -8,7 +8,7 @@ depends_on: []
 decisions: []
 files:
   - docs/NOTES.md
-  - scripts/
+  - scripts/pen-recorder*
   - backlog/tasks/T-180-pen-keyboard-validation-matrix.md
 ---
 
@@ -36,7 +36,7 @@ Source: external architecture review 2026-10-03 (PK2, PK3, PK7, X2, X9, X10, D7,
 1. Record the host and APK commit SHAs (`ev=app_start` from T-145/T-146, or the `git rev-parse --short HEAD` of each build), plus macOS and HarmonyOS builds. Use USB unless a row says Wi-Fi.
 2. Recorders:
    - a scratch Mac `CGEventTap` listener (listen-only, mouse/tablet only: type, time, location, pressure, tilt) and a scratch tablet `getevent` capture, as in T-025;
-   - if a recorder is worth keeping, version it under `scripts/` with a usage header. Otherwise keep it scratch and write its recipe in NOTES.
+   - if a recorder is worth keeping, version it as a new file `scripts/pen-recorder*` (e.g. `scripts/pen-recorder-mac.swift`, `scripts/pen-recorder-tablet.sh`) with a usage header. Only new files under `scripts/`; existing scripts are not edited. Otherwise keep it scratch and write its recipe in NOTES.
    - Never record key characters.
 3. **Tilt:** Krita Tablet Tester. Lean the pen left, right, toward the user and away from the user, in landscape and then in the 180°-flipped landscape. Record the sign of xTilt/yTilt for each lean; it must match the physical lean (PROTOCOL §4 definition, `:262-263`, `:269`). Then run `--inject-test` steps 1c and 3.
 4. **Accuracy:** place targets at the 4 corners and the centre of the Mac virtual display. Do this in a full-size mode (Netlik 60) and in a scaled mode where letterbox bands appear (Performans or Oyun 120). Touch each target with the pen and record the Mac event location vs the target. The error must be < 1 pt. Touches in the letterbox band must not produce events outside the display.

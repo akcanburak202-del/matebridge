@@ -52,13 +52,13 @@ Decision 0026 must be accepted by the user before work starts.
   - effective stream mode, fps, scale, bitrate setting, transport, audio output;
   - pacer (adaptive / buffer N);
   - `sha=` and `built=` from T-146 `BuildInfo`;
-  - the decoder `is_hw=` value logged since T-168 (`ev=codec_start`);
   - `dev=0|1` and `knobs=<non-default keys>|-`.
+  - no `is_hw=`: at `installConfig` the codec restarts asynchronously (`r.reconfigure(config)`, `MainActivity.kt:1176`), so this config's decoder is not known yet. `is_hw` is in `ev=codec_start` since T-168.
   No serial number, no device ID, no endpoint address.
 - **Moving the bench:** main code cannot reference debug-source-set classes. Keep the `"net_bench"` key string in main, gate it on `dev`, and start the bench activity by class name (`Intent().setClassName(packageName, "dev.matebridge.client.bench.NetBenchActivity")`), or use a tiny main/debug pair of objects. Move the `NetBenchActivity` manifest entry to `src/debug/AndroidManifest.xml`.
 - `NetBenchTest` stays under `src/test`. `testDebugUnitTest` compiles against the debug source set; note in Handoff that a release unit-test run would not see the bench.
 - **`VideoTestActivity` `exported="false"`, if feasible.** Risk: `adb shell am start -n …/.debug.VideoTestActivity` is refused for non-exported activities on a non-rooted device, which would break the decoder test harness. If so, keep it exported and write the reason in Handoff.
-- The T-127 matrix rows use `--ei tos_ctl 0xB8 --ez wifi_ll true`. After this card those need `--ez dev true` as well. Write that under *Açık sorular* so the orchestrator updates T-127 if it has not run yet.
+- The T-127 matrix rows use `--ei tos_ctl 0xB8 --ez wifi_ll true`. After this card those need `--ez dev true` as well. T-127 already says so (it adds `--ez dev true` when T-185 is in the build and checks `ev=dev_knobs ignored=-`), so keep the `dev_knobs` line format stable.
 - `docs/LOGGING.md` needs the `ev=profile` and `ev=dev_knobs` lines. LOGGING is not in `files:`; write the text under *Açık sorular* for the orchestrator (T-142 precedent).
 
 **Serialization:** `MainActivity.kt` chain … T-184 → T-185 → T-191 → T-197. `session/WifiKnobs.kt` is not edited here (T-197 owns the next change; audit K4).
@@ -68,7 +68,7 @@ Wire: none.
 ## Kapsam dışı
 
 - Removing knobs (T-183, T-184); changing any default.
-- Host side (T-186); settings reset (T-191).
+- Host side (T-186 `nw` sockets; T-204 host encoder knobs and host `ev=profile`); settings reset (T-191).
 - Making `MainActivity` non-exported (it is the launcher).
 
 ## Kabul kriterleri

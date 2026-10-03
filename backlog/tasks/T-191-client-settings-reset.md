@@ -12,6 +12,9 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/audio/SharedPrefsOutBufStore.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/audio/SharedPrefsSafetyStore.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/audio/OutBufMemory.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/audio/SafetyMemory.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/audio/AudioPlayout.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/settings/SettingsResetTest.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/settings/SettingsCatalogTest.kt
   - backlog/tasks/T-191-client-settings-reset.md
@@ -35,18 +38,22 @@ Source: external architecture review 2026-10-03 (D9); verification: docs/reviews
   
   So the reset removes an explicit key list. It must not clear the whole file.
 - Pairing keys are in the separate `matebridge_pairkeys` file (`MainActivity.kt:474-478`) and are never touched.
-- Learned audio state is in `matebridge_audio`: `out_buf_bursts_<path>` (`SharedPrefsOutBufStore.kt:6-22`) and `safety_ms_<key>` (`SharedPrefsSafetyStore.kt:9-25`). `OutBufMemory` only ratchets up, and an `--ei audio_buf_bursts` experiment override can push it (`audio/AudioBufferConfig.kt:14`, `audio/OutBufMemory.kt:16`; T-110 card :127). Both stores need a `clear()`.
+- Learned audio state is in `matebridge_audio`: `out_buf_bursts_<path>` (`SharedPrefsOutBufStore.kt:6-22`) and `safety_ms_<key>` (`SharedPrefsSafetyStore.kt:9-25`). `OutBufMemory` only ratchets up, and an `--ei audio_buf_bursts` experiment override can push it (`audio/AudioBufferConfig.kt:14`, `audio/OutBufMemory.kt:16`; T-110 card :127).
+- Clearing SharedPreferences alone does not reset learned audio state within the same activity. `OutBufMemory` caches stored values in memory (`OutBufMemory.kt:23`, `:42-48`), and `SafetyMemory` keeps `lastSaved` per key (`SafetyMemory.kt:44`, `:76-79`). `AudioPlayout` owns both memories (`AudioPlayout.kt:86-88`) and is created once per activity (`MainActivity.kt:491`). A live stream calls `SafetyMemory.onSafety` about once per second and `OutBufMemory.onGrown` on growth, so it can store a learned value again after a store-only clear. The next session in the same activity would then still log `buf_source=stored`.
+- The store interfaces `OutBufStore`/`SafetyStore` have test fakes outside `files:` (`OutBufMemoryTest.kt:10`, `:109`; `SafetyMemoryTest.kt:11`, `:139`; `SafetyTransportTest.kt:13`). The SharedPrefs implementations are Android-only, and the project has no Robolectric.
 - The effect is visible in the `audio_out` log line: `source=` / `stored_ms=` for safety and `buf_source=` / `buf_stored=` for the buffer (`AudioPlayout.kt:380-387`; `OutBufMemory.SOURCE_DEFAULT = "default"`, `OutBufMemory.kt:57`).
 
 **Failure scenario (why):** after an `audio_buf_bursts` experiment, or a bad run of underruns, every later session starts with an enlarged audio buffer (more latency). The only fix today is "clear data", which also unpairs the tablet and forces a new approval on the Mac.
 
 **Plan hints:**
 - `KeyValueStore` has no `remove`. T-151 ("Bu Mac'i unut") may already add one; reuse it if so. Otherwise add `remove(key)` as an interface method **with a default body**, or the 9 test fakes under `client-android/app/src/test/` stop compiling, and they are outside `files:`. If a default body is not acceptable, write it under *Açık sorular*.
+- Learned audio state: `AudioPlayout.forgetLearned()` clears both memories' caches and their stores. If a stream is live, the clear is applied at the next stream start (a pending flag), so the running writer cannot store the old value again. Add `clear()` to `OutBufStore`/`SafetyStore` **with a default body** (the fakes above must keep compiling), or add it only to the memories. Test it through the memories with a map store in `SettingsResetTest`; the SharedPrefs implementations are covered by the [device] step.
 - `Settings.resetToDefaults()` removes the user-setting key list (including any keys T-190 adds for the shared folder and read-only, if T-190 merged first). It is pure and JVM-testable with a map-backed store.
-- The panel entry goes in the "Diğer" section of `SettingsCatalog`, with a 2-step confirm (a first tap arms it, a second tap within a few seconds performs it, or a confirm dialog).
+- The panel entry goes in the "Diğer" section of `SettingsCatalog`, with a 2-step confirm: a first tap arms it, a second tap within a few seconds performs it. Keep the arming state in a pure helper so `SettingsCatalogTest` can test it (no dialog: it is not JVM-testable).
 - `MainActivity` applies the defaults live through the existing `SettingsHost` setters (mode, bitrate, transport, audio, input, overlay, clipboard, files), so a live session follows. A 60↔120 mode change may recreate the display once (decision 0016). Cleared audio state takes effect at the next audio stream start; say so in a toast.
 - Log `ev=settings_reset` once, with no values (at most a count of keys removed).
-- **Serialize with T-146 and T-190 (same file `SettingsCatalog.kt`), and with T-190 on `Settings.kt` and `MainActivity.kt`.** In the `MainActivity.kt` chain the order is T-185 → T-191 → T-197.
+- **Serialize with T-146 and T-190 (same file `SettingsCatalog.kt`), with T-190 on `Settings.kt`, `MainActivity.kt`, `SettingsCatalogTest.kt` and `SettingsResetTest.kt`, with T-151 (lists the `test/.../settings/` directory), and with T-185 on `AudioPlayout.kt` (same file; already a dependency).** In the `MainActivity.kt` chain the order is T-185 → T-191 → T-197.
+- `depends_on: [T-185]` only serializes `MainActivity.kt`/`AudioPlayout.kt`. If T-185 is closed as won't-do, drop it from `depends_on`.
 
 ## Kapsam dışı
 
@@ -58,10 +65,11 @@ Source: external architecture review 2026-10-03 (D9); verification: docs/reviews
 
 - [ ] [JVM] `SettingsResetTest`: with every user setting set to a non-default value, `resetToDefaults()` makes every getter return its default.
 - [ ] [JVM] `SettingsResetTest`: `device_id`, `last_endpoint`, `transport_auto_migrated`, the `wol_*` keys and the separate pair-key store (`matebridge_pairkeys`) are untouched, byte for byte.
-- [ ] [JVM] The audio store `clear()` removes every `out_buf_bursts_*` and `safety_ms_*` key, and afterwards `OutBufMemory` starts from `SOURCE_DEFAULT`.
-- [ ] [JVM] `SettingsCatalogTest`: the "Varsayılanlara dön" item exists and needs two steps; one tap alone resets nothing.
-- [ ] Exactly one `ev=settings_reset` line per reset, with no setting values.
-- [ ] [device] Precondition: a session whose `audio_out` line shows `buf_source=stored` (or safety `source=stored`). If the tablet has no learned state yet, start once with a small `--ei audio_buf_bursts 1` until `audio_buffer_grow` is logged, then restart without the extra. Note: the override alone stores nothing; only growth does (`OutBufMemory.onGrown`). Reset, start a session, and the `audio_out` line shows `buf_source=default buf_stored=-` and `stored_ms=-`.
+- [ ] [JVM] `SettingsResetTest` (map-backed stores): the audio clear removes every stored buffer and safety value, and afterwards `OutBufMemory` and `SafetyMemory` start from their defaults (`SOURCE_DEFAULT`, `source=default`).
+- [ ] [JVM] After the clear, the same `OutBufMemory` instance (with a cached value) returns `SOURCE_DEFAULT`.
+- [ ] [JVM] `SettingsCatalogTest`: the "Varsayılanlara dön" item exists and needs two steps; one tap alone resets nothing, and the armed state expires (pure helper, fake clock).
+- [ ] [device] (logcat) Exactly one `ev=settings_reset` line per reset, with no setting values.
+- [ ] [device] Precondition: a session whose `audio_out` line shows `buf_source=stored` (or safety `source=stored`). If the tablet has no learned state yet, start once with a small `--ei audio_buf_bursts 1` until `audio_buffer_grow` is logged, then restart without the extra. Note: the override alone stores nothing; only growth does (`OutBufMemory.onGrown`). Reset (also once while a stream is live), start a session in the same activity, and the `audio_out` line shows `buf_source=default buf_stored=-` and `stored_ms=-`.
 - [ ] [device] After a reset, the tablet reconnects to the Mac with no approval prompt (pairing kept). The panel shows Akıcı, Otomatik bitrate and the AUTO transport.
 - [ ] `./scripts/check.sh` geçiyor.
 

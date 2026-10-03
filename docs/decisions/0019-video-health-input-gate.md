@@ -25,8 +25,10 @@ Durağan ekran meşru olarak kare göndermez. Bu yüzden "N sn kare yok" bekçis
 
   Hata nedenleri:
   - pes etme;
-  - en az 3 yapılandırma dışı kare verildiği hâlde 1500 ms boyunca çıktı yok (T-028 sınıfı);
+  - son çıktıdan bu yana en az 3 yapılandırma dışı kare çözücüye verildi, bunların en eskisi en az 1500 ms önce verildi ve hâlâ çıktı yok (T-028 sınıfı). Süre son çıktıdan değil, bekleyen en eski kareden ölçülür; böylece uzun süre durağan kalan ekranda çizime başlamak yanlış alarm vermez;
   - yüzey bağlandıktan 2 sn sonra çözücü iş parçacığı çalışmıyor, ya da eski kuşağın kapanma beklemesi zaman aşımına uğradı (M03).
+
+  `VideoHealth` bu nedenleri tek bir genel `fault(cause)` girişiyle alır (`give_up|no_output|not_running|stuck`); çözücü bunları tek bir geri çağrıyla bildirir. T-161 yalnızca `stuck` nedenini ekler.
 
 ## Karar
 Önerilen: **(c)**. Hata olunca:
@@ -35,7 +37,7 @@ Durağan ekran meşru olarak kare göndermez. Bu yüzden "N sn kare yok" bekçis
 - "Görüntü durdu" katmanı gösterilir.
 - Kurtarma şu sırayla yürür: 1 sn sonra çözücüyü yeniden başlat → 3 sn sonra yeniden başlat → oturumu yeniden kur → "Yeniden dene" düğmesi.
 
-Yeni bir oturum ya da yapılandırma kuşağında girdi, ilk çözülmüş çıktıdan sonra açılır. Zamanlama çözücü **çıktısına** göre ölçülür (`dequeueOutputBuffer`), `onFrameRendered`'a göre değil. Durağan ekran (kare gelmiyor) hiçbir zaman hata sayılmaz.
+Kuşak, bir `attachSurface`/`reconfigure` çağrısıdır (yeni yapılandırma ya da yeni yüzey). Yeni kuşak ilk çözülmüş çıktısına kadar STARTING durumundadır ve girdi kapalıdır (olağan bırakmalarla). Yeniden bağlanma (yüzey yeniden bağlanır) ve göç (yeni STREAM_CONFIG → `reconfigure`) bu yolla kapsanır; oturumun kare sayacına dayanılmaz. Aynı bağlanma içinde `decode_error` sonrası çözücünün yeniden başlatılması yeni kuşak değildir: girdi açık kalır, yalnızca hata kuralları geçerlidir. Zamanlama çözücü **çıktısına** göre ölçülür (`dequeueOutputBuffer`), `onFrameRendered`'a göre değil. Durağan ekran (kare gelmiyor) hiçbir zaman hata sayılmaz.
 
 **Kullanıcı onayı bekliyor.** Manifest §5'te bu karara özel bir soru yok. Onaylanacaklar:
 1. Görüntü donunca girdinin kendiliğinden kapanması ve tuşların bırakılması.
@@ -46,7 +48,8 @@ Yeni bir oturum ya da yapılandırma kuşağında girdi, ilk çözülmüş çık
 - **Kazanılan:** donmuş ya da siyah görüntüde girdi asla canlı kalmaz. Hata görünür olur ve sınırlı adımlarda kendiliğinden düzelir. Saniyede ~2 IDR döngüsü durur.
 - **Kaybedilen:**
   - Yeniden bağlanmada girdi, ilk kare çözülene kadar kapalı kalır (yaklaşık bir kare süresi).
+  - Her mod değişikliği ve yüzey yeniden bağlanması girdiyi kısa süre kapatır; o anda tutulan tuşlar ve kalem bırakılır.
   - Sunumu kısan panellerde yanlış alarm riski var. Bu yüzden ölçüm çıktıya bağlıdır.
-- **Kapıladığı kartlar:** T-159 (sağlık kapısı) ve T-161 (çözücü kapanışına süre sınırı; "takıldı" hatasını `VideoHealth` üzerinden bildirir). Ön koşul T-158 (`DecoderCodec` arayüzü, karar gerektirmez). Aygıt kanıtı T-164.
+- **Kapıladığı kartlar:** T-159 (sağlık kapısı) ve T-161 (çözücü kapanışına süre sınırı; "takıldı" hatasını `VideoHealth` üzerinden bildirir). Ön koşul T-158 (`DecoderCodec` arayüzü, karar gerektirmez). Aygıt kanıtı T-164. Hata enjeksiyonu (debug) açılışta kurulur ama görüntü N sn HEALTHY kaldıktan sonra tetiklenir; yoksa girdi hiç açılmadan hata oluşur ve tutulan tuş/kalem sınanamaz.
 - **PROTOCOL.md:** değişmez. `RELEASE_ALL.reason = USER` yeniden kullanılır. PROTOCOL §4 nedeni zaten bilgi amaçlı sayıyor. Ayrı bir `VIDEO_FAULT` nedeni gerekmez; istenirse ayrı bir protokol kararı olur.
 - **Tekrar düşünülür:** aygıtta yanlış alarm görülürse (eşikler), ya da host da çözücü sağlığına tepki vermeli denirse (`STATS.framesDecoded`).

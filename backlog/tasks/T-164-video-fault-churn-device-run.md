@@ -20,11 +20,11 @@ Source: external architecture review 2026-10-03 (X3, X6, D3); verification: docs
 ## Bağlam
 
 - **Owner:** the orchestrator runs the procedure (device tests one at a time, never from parallel agents, per CLAUDE.md); the user helps with the physical steps (holding Shift, pen down). No code changes in this card; any failure becomes its own card.
-- **Prerequisites:** T-159 merged (debug extra `--es decoder_fault create|configure|dequeue|silent`, `ev=video_health`), T-161 merged (`ev=decoder_previous_stuck`, bounded hand-off). Record the host and client build IDs (T-145/T-146) in the NOTES entry; if those cards have not landed, record the commit SHAs.
+- **Prerequisites:** T-159 merged (debug extra `--es decoder_fault create|configure|dequeue|silent` with `--ei decoder_fault_after_s N`, `ev=decoder_fault`, `ev=video_health`), T-161 merged (`ev=decoder_previous_stuck`, bounded hand-off). Record the host and client build IDs (T-145/T-146) in the NOTES entry; if those cards have not landed, record the commit SHAs.
 - **Procedure A — fault injection (X3), 5 runs per mode (`create`, `configure`, `dequeue`, `silent`):**
   1. Connect over USB in Akıcı. Open a text editor and Krita on the tablet display.
-  2. Start the app with the extra, e.g. `adb shell am start -n dev.matebridge.client/.MainActivity --es decoder_fault silent`.
-  3. While the fault fires, the user holds Shift on the tablet keyboard and keeps the pen down in Krita.
+  2. Start with `--es decoder_fault <mode> --ei decoder_fault_after_s 15`, e.g. `adb shell am start -n dev.matebridge.client/.MainActivity --es decoder_fault silent --ei decoder_fault_after_s 15`. Connect and wait until the image is HEALTHY (`ev=video_health state=HEALTHY`). A fault armed at launch without the delay would fire before input ever opens.
+  3. The user holds Shift on the tablet keyboard and keeps the pen down in Krita before second 15, so both are held when the fault fires (`dequeue`, `silent`). For `create`/`configure`, trigger the restart with a mode change after second 15 (the fault hits the next codec creation), and measure only recovery: input is already closed by the new generation's STARTING state, so steps 4–5 check that the STARTING close released Shift and the pen.
   4. From the client log, measure the time from the fault (`ev=decoder_fault` / first `ev=video_health state=FAULT`) to `input_active on=0`.
   5. On the Mac: Shift is not stuck (type a lowercase letter), no stroke continues, host log has the `ev=input_release` line and no `input_post_failed` with `owed>0`.
   6. Measure the time from the fault to the first image after recovery (first decoded output, `video_health state=HEALTHY`) and note which recovery step (1 s restart, 3 s restart, reconnect, "Yeniden dene") brought it back.

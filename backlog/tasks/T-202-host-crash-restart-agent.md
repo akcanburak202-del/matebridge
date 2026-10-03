@@ -33,7 +33,7 @@ The crash-restart decision (deferred; drafted after T-147) must be accepted by t
 - T-148 fixes the first-run flag (`LoginItem.swift:42-44`, set before `register()`) and adds the pure `LoginItemPolicy.swift`; this card extends that policy.
 
 **Design (D P-8 draft for the decision):**
-- `SMAppService.agent(plistName:)` with a plist embedded at `Contents/Library/LaunchAgents/<bundle id>.agent.plist`: `BundleProgram` → `Contents/MacOS/<executable>`, `RunAtLoad` true, `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval` ≥ 10 s, `ProcessType Interactive`, `AssociatedBundleIdentifiers` = the app's bundle ID.
+- `SMAppService.agent(plistName:)` with a plist embedded at `Contents/Library/LaunchAgents/<bundle id>.agent.plist`: `Label` (required by launchd), `BundleProgram` → `Contents/MacOS/<executable>`, `RunAtLoad` true, `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval` ≥ 10 s, `ProcessType Interactive`, `AssociatedBundleIdentifiers` = the app's bundle ID.
 - The agent **replaces** the `mainApp` login item: registering both would launch two hosts at login. The policy must migrate (unregister `mainApp` when the agent is registered) and the menu "start at login" toggle must manage the agent.
 - TCC grants (Screen Recording, Accessibility) are keyed to the signed bundle; the agent launches the same signed binary, so they should persist. Verify on the device.
 - The plist source is a template in `host-mac/Resources/LaunchAgent.plist` with the same placeholders as `Info.plist`; `bundle-host.sh` fills it, `plutil -lint`s it and copies it before signing.
@@ -52,12 +52,13 @@ Wire: none.
 
 ## Kabul kriterleri
 
-- [ ] [device] **Failure scenario first (M06 is R-tagged):** on the current build, `kill -SEGV <host pid>` is performed and the outcome recorded in NOTES before any code (host stays down; what the tablet shows; time until a manual relaunch). The T-147 entry may serve if it recorded exactly this.
-- [ ] [XCTest] **Committed red before the fix:** a test reads the `LaunchAgent.plist` template (located via `#filePath`, like `FixtureSupport.swift`), substitutes the placeholders and asserts `KeepAlive.SuccessfulExit == false`, `ThrottleInterval >= 10`, `RunAtLoad == true` and a `BundleProgram` under `Contents/MacOS/`. It fails at HEAD because the file does not exist.
+- [ ] [device] **Failure scenario first (M06 is R-tagged):** on the current build, `kill -SEGV <host pid>` or `kill -9 <host pid>` is performed and the outcome recorded in NOTES before any code (host stays down; what the tablet shows; time until a manual relaunch). The T-147 scenario 3 entry (`kill -9`) counts.
+- [ ] [XCTest] **Committed red before the fix:** a test reads the `LaunchAgent.plist` template (located via `#filePath`, like `FixtureSupport.swift`), substitutes the placeholders and asserts `Label` (non-empty, the bundle ID based label launchd requires), `KeepAlive.SuccessfulExit == false`, `ThrottleInterval >= 10`, `RunAtLoad == true` and a `BundleProgram` under `Contents/MacOS/`. It fails at HEAD because the file does not exist.
 - [ ] [XCTest] `LoginItemPolicy`: agent registration unregisters `mainApp` (never both); toggle off unregisters the agent and stays off across launches; not bundled → nothing registered or persisted; a failed registration is retried as in T-148.
 - [ ] `scripts/bundle-host.sh` embeds the filled plist under `Contents/Library/LaunchAgents/`, lints it, and the bundle still passes `codesign --verify --strict`.
 - [ ] [device] `kill -SEGV` → the host is back within ~10 s and the tablet reconnects without user action; `kill -9` behaves the same.
 - [ ] [device] Quit from the menu does not relaunch; `SIGTERM` does not relaunch.
+- [ ] [device] `open -a MateBridge` while the agent-launched host runs activates it and does not start a second host (a second host would take the fallback ports; there is no single-instance guard today).
 - [ ] [device] Screen Recording and Accessibility grants persist after the switch and after a crash relaunch (video and input work without re-granting).
 - [ ] [device] A forced crash loop (crash at launch via a debug env, if added, or repeated kills) is throttled to at most one launch per `ThrottleInterval`.
 - [ ] `./scripts/check.sh` geçiyor.

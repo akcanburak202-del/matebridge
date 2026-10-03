@@ -39,6 +39,7 @@ Source: external architecture review 2026-10-03 (L03 input side, W4 "Mac input")
 **Plan hints:**
 - Pure aggregate helper in `MateBridgeCore/Input/` (e.g. `InputTiming.swift`, new): fixed-size histogram for deliver µs, sums/max for env and post µs, slow-call warning rate limiter (e.g. at most one line per 10 s). Testable in XCTest; the Host-side wiring is not (only `MateBridgeCoreTests` exists).
 - Timing pattern: `DispatchTime.now().uptimeNanoseconds` around the calls, as `liveCursor()` does (`InputController.swift:251-260`).
+- Definitions: `deliver_us` = the caller-side duration of `input.deliver` (around `queue.sync`, including the wait for the input queue while the watchdog or a poll runs), because session-queue blocking is what this card is about; timing inside `queue.sync` would miss that wait. `env_us`/`post_us` are measured inside, on the input queue.
 - `CGEventPoster.swift` and `VirtualDisplayLocator.swift` may be touched **only** to add timing hooks, not to change behaviour.
 - Also exercise the worst case: a display reconfiguration (mode switch) during input.
 - Follow-up only if the numbers justify it (> ~50 µs per message, or p99 deliver above a few ms): cache geometry until `CGDisplayRegisterReconfigurationCallback`; reuse one `CGEventSource` (changes event provenance, needs a Krita pen check); move `drainAudio` off the session queue. Each would be its own card.

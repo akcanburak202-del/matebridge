@@ -17,7 +17,7 @@ files:
 
 ## Amaç
 
-The daily product path carries about 60 experiment switches: 33 client launch extras, 25 host `MATEBRIDGE_*` environment variables and 4 host CLI modes. Many belong to concluded or negative experiments, and some sit in lifecycle-sensitive code (the GL path, the `nw` sockets, idle refresh). Before any code is removed (T-183 … T-186), this card fixes the classification (keep / debug-only / retire) in one decision and one table, so implementers do not re-argue experiments. It also closes the two parked cards that this classification ends.
+The daily product path carries about 60 experiment switches: 33 client launch extras, 25 host `MATEBRIDGE_*` environment variables and 4 host CLI modes. Many belong to concluded or negative experiments, and some sit in lifecycle-sensitive code (the GL path, the `nw` sockets, idle refresh). Before any code is removed (T-183 … T-186, T-204), this card fixes the classification (keep / debug-only / retire) in one decision and one table, so implementers do not re-argue experiments. It also closes the two parked cards that this classification ends.
 
 Source: external architecture review 2026-10-03 (L02, F3, D8); verification: docs/reviews/2026-10-03/verify-H-hygiene.md (KNOB-0, L02 inventory) and docs/reviews/2026-10-03/verify-F-network.md (T-019 superseded); coverage audit K4 (docs/reviews/2026-10-03/coverage-audit.md).
 Decision 0026 must be accepted by the user before work starts. This card writes the decision down; the user must explicitly confirm retiring the GL presentation path and the Network.framework (`nw`) sockets, both of which were informally "kept as an option".
@@ -29,10 +29,10 @@ Decision 0026 must be accepted by the user before work starts. This card writes 
 - New knobs default to off and name the card that will adopt or retire them. A knob whose experiment has concluded is retired in the closing card or an immediate follow-up.
 - Client debug-only extras are honoured only with `--ez dev true` on the same launch (T-185). The daily APK is the **debug** variant (`scripts/install-apk.sh:15`; no `buildTypes`), so a build-type split is not enough.
 - `MainActivity` is the exported launcher (`client-android/app/src/main/AndroidManifest.xml:19-28`), so any app on the tablet can pass these extras today.
-- Each side logs one `ev=profile` line at session or stream start: the client in T-185, the host in T-186.
+- Each side logs one `ev=profile` line at session or stream start: the client in T-185, the host in T-204.
 - **Retire:** GL presentation (T-018/T-019), `nw` sockets (T-091/T-111), idle refresh (T-086/T-087), perf hint (T-079), refresh vote (T-140), the cpd pacer (T-080), the inflight limit (T-057), oprate (T-052), keep_jitter/recenter (T-067), crypto bench (T-076), `MATEBRIDGE_FRAME_DELAY`, `MATEBRIDGE_PRIO_SPEED`, `MATEBRIDGE_H264_PROFILE`, and `MATEBRIDGE_INPUT_RETAG=0`. T-019 and T-067 close as won't-do.
 - **Not retired (audit K4):** the client Wi-Fi knobs `tos_ctl`, `tos_video` and `wifi_ll` (with `WifiLockHolder` and the `WAKE_LOCK` permission) stay **debug-only until T-127 re-measures them under `bsd`**. Their 2026-10-01 "no effect" result (NOTES.md:588-597) was measured on the `nw` stack while the link was saturated at the ~27–28 Mbps ceiling, so no QoS marking could show an effect. T-124 later showed that host service-class marking does help under `bsd` (NOTES.md:958). The tablet uplink is unmarked by default. After T-127, the orchestrator records keep or retire in `docs/KNOBS.md`. T-197 also adds `ctl_lowat_kb` to `WifiKnobs.kt`.
-- Draft status "önerildi". The orchestrator writes it in the house decision format (`docs/decisions/0017-*.md` is the latest example).
+- Draft status "önerildi". The draft already exists in the house decision format (`docs/decisions/0026-experiment-knobs.md`, commit 3e1c3c7). It lacks the jitter buffer 1–2 open point, the per-row file references and the user's answers; this card adds them.
 
 **Full classified inventory at HEAD (a30c769), verified file:line.**
 
@@ -82,22 +82,22 @@ Abbreviations:
 
 | # | Knob | Where | Card / evidence | Class | Executed by |
 |---|---|---|---|---|---|
-| 24 | `MATEBRIDGE_FPS`, `MATEBRIDGE_BITRATE_KBPS` | VS:77-82 | T-045/T-086 | debug-only (the env bitrate wins over STREAM_PREFS, so it must appear in `ev=profile`) | T-186 (profile) |
-| 25 | `MATEBRIDGE_CODEC`; `MATEBRIDGE_H264_PROFILE` | VS:83; EK:13, :166; `host-mac/Sources/MateBridgeCore/Video/EncodeBench.swift:95-99`; `SharpnessBenchOptions.swift` | T-082/T-086; NOTES.md:538 | CODEC: debug-only. H264_PROFILE: retire | T-186 |
-| 26 | `MATEBRIDGE_REFRESH=60/120` | VS:84-85; `StreamCoordinator.swift:190` | T-017 | debug-only | T-186 (profile) |
-| 27 | `MATEBRIDGE_FRAME_DELAY=0/1` | VS:19, :53-56, :86; HE:164-166 | T-017 (never measured or adopted) | retire | T-186 |
-| 28 | `MATEBRIDGE_ENCODER=llrc/fast` | HE:132-135; `EncoderProfile.swift:10` | T-053/T-087 | debug-only | T-186 (profile) |
-| 29 | `MATEBRIDGE_IDLE_REFRESH_MS`, `_COUNT`, `_KEY`, `_BUFFER`, `_QP` (timer, QP boost, copy pool) | EK:38, :81-90; HE:79-86, :124-128, :430-472 | T-086/T-087; NOTES.md:566-581 (222-byte skip frames, ineffective) | retire (keep `resubmitLast`, the static-keyframe path) | T-186 |
-| 30 | `MATEBRIDGE_PRIO_SPEED=0`; `MATEBRIDGE_QUALITY` | EK:164-165; HE:167-181, :188-189 | T-086; NOTES.md:546-548 | PRIO_SPEED: retire. QUALITY: debug-only | T-186 |
-| 31 | `MATEBRIDGE_KEYFRAME_INTERVAL_S` | `KeyframeIntervalPolicy.swift:20` | T-075 | debug-only | T-186 (profile) |
-| 32 | `MATEBRIDGE_INPUT_RETAG=0` | `InputColorTags.swift:36-38`; EK:153-163 | T-113; NOTES.md:777-806 | retire (`=0` reproduces a known colour/latency bug) | T-186 |
-| 33 | `MATEBRIDGE_WIFI_BITRATE_KBPS` | `TransportBitrate.swift:20-28` | T-088 | debug-only (input to H03; T-178 adds a Wi-Fi default) | T-186 (profile) |
-| 34 | `MATEBRIDGE_SERVICE_CLASS` | TK:21-43 | T-088/T-124 | debug-only | T-186 (profile) |
+| 24 | `MATEBRIDGE_FPS`, `MATEBRIDGE_BITRATE_KBPS` | VS:77-82 | T-045/T-086 | debug-only (the env bitrate wins over STREAM_PREFS, so it must appear in `ev=profile`) | T-204 (profile) |
+| 25 | `MATEBRIDGE_CODEC`; `MATEBRIDGE_H264_PROFILE` | VS:83; EK:13, :166; `host-mac/Sources/MateBridgeCore/Video/EncodeBench.swift:95-99`; `SharpnessBenchOptions.swift` | T-082/T-086; NOTES.md:538 | CODEC: debug-only. H264_PROFILE: retire | T-204 |
+| 26 | `MATEBRIDGE_REFRESH=60/120` | VS:84-85; `StreamCoordinator.swift:190` | T-017 | debug-only | T-204 (profile) |
+| 27 | `MATEBRIDGE_FRAME_DELAY=0/1` | VS:19, :53-56, :86; HE:164-166 | T-017 (never measured or adopted) | retire | T-204 |
+| 28 | `MATEBRIDGE_ENCODER=llrc/fast` | HE:132-135; `EncoderProfile.swift:10` | T-053/T-087 | debug-only | T-204 (profile) |
+| 29 | `MATEBRIDGE_IDLE_REFRESH_MS`, `_COUNT`, `_KEY`, `_BUFFER`, `_QP` (timer, QP boost, copy pool) | EK:38, :81-90; HE:79-86, :124-128, :430-472 | T-086/T-087; NOTES.md:566-581 (222-byte skip frames, ineffective) | retire (keep `resubmitLast`, the static-keyframe path) | T-204 |
+| 30 | `MATEBRIDGE_PRIO_SPEED=0`; `MATEBRIDGE_QUALITY` | EK:164-165; HE:167-181, :188-189 | T-086; NOTES.md:546-548 | PRIO_SPEED: retire. QUALITY: debug-only | T-204 |
+| 31 | `MATEBRIDGE_KEYFRAME_INTERVAL_S` | `KeyframeIntervalPolicy.swift:20` | T-075 | debug-only | T-204 (profile) |
+| 32 | `MATEBRIDGE_INPUT_RETAG=0` | `InputColorTags.swift:36-38`; EK:153-163 | T-113; NOTES.md:777-806 | retire (`=0` reproduces a known colour/latency bug) | T-204 |
+| 33 | `MATEBRIDGE_WIFI_BITRATE_KBPS` | `TransportBitrate.swift:20-28` | T-088 | debug-only (input to H03; T-178 adds a Wi-Fi default) | T-204 (profile) |
+| 34 | `MATEBRIDGE_SERVICE_CLASS` | TK:21-43 | T-088/T-124 | debug-only | T-204 (profile) |
 | 35 | `MATEBRIDGE_VIDEO_SOCKET=nw`, `MATEBRIDGE_CONTROL_SOCKET=nw` | TK:79-95, :138-153; SS:3, :34-38, :112-115, :336-375, :561-600, :955-987, :1125-1205; `TcpSocketProbe.swift` (NWConnection variant) | T-091/T-092/T-111; NOTES.md:620-631 | retire (**user confirmation**). Bonjour must stay on `BonjourAdvertiser` (SS:227, :1075) | T-186 |
-| 36 | `MATEBRIDGE_NOTSENT_LOWAT_KB` | TK:98-112 | T-091 | debug-only (H03 tuning) | T-186 (profile) |
+| 36 | `MATEBRIDGE_NOTSENT_LOWAT_KB` | TK:98-112 | T-091 | debug-only (H03 tuning) | T-204 (profile) |
 | 37 | `MATEBRIDGE_SENDQ_LOG`, `MATEBRIDGE_LAT_TRACE` | TK:71-75; `LatencyCsv.swift:13` | T-070/T-088 | keep (diagnostic) | — |
 | 38 | `MATEBRIDGE_TCP_LOG` | `TcpInfoLog.swift:129-140` | T-126 | keep (diagnostic; default auto = Wi-Fi only) | — |
-| 39 | `MATEBRIDGE_AUDIO=off` | `AudioStreamer.swift:32-35` | T-094 | debug-only | T-186 (profile) |
+| 39 | `MATEBRIDGE_AUDIO=off` | `AudioStreamer.swift:32-35` | T-094 | debug-only | T-204 (profile) |
 
 *Host CLI modes (4) and build-time knobs:*
 
@@ -123,19 +123,19 @@ Abbreviations:
 - T-019 note: its GL jitter-buffer part is retired with the GL path (T-184). Its Wi-Fi low-latency-lock part was superseded by T-089 (the `wifi_ll` knob), which stays debug-only until T-127 re-measures it.
 - T-067 note: keep_jitter/recenter were inconclusive and are retired by T-183.
 
-**Downstream:** T-183, T-184, T-185 and T-186 depend on this card. T-183 and T-186 can start in parallel after it (no shared files).
+**Downstream:** T-183, T-184, T-185, T-186 and T-204 depend on this card. T-183, T-186 and T-204 can start in parallel after it (no shared files). T-186 retires the `nw` sockets; T-204 (split from T-186 on 2026-10-03) retires the host encoder knobs and adds the host `ev=profile`.
 
 Wire: none.
 
 ## Kapsam dışı
 
-- Any code removal (T-183 … T-186).
+- Any code removal (T-183 … T-186, T-204).
 - Re-measuring the Wi-Fi knobs (T-127).
 - Moving the host CLI modes to a separate executable.
 
 ## Kabul kriterleri
 
-- [ ] [doc] `docs/decisions/0026-experiment-knobs.md` is written from the draft above, including the K4 exception and the open point on the jitter buffer 1–2 branch.
+- [ ] [doc] The existing proposed draft `docs/decisions/0026-experiment-knobs.md` (commit 3e1c3c7; it already has the K4 exception) is updated: add the open point on the jitter buffer 1–2 branch and the per-row file references (or a pointer to `docs/KNOBS.md`), record the user's answers (GL, `nw`, jitter), and set the status to accepted.
 - [ ] [doc] The user has accepted 0026 and has explicitly confirmed retiring the GL presentation path and the `nw` sockets. The answer is recorded in the decision.
 - [ ] [doc] `docs/KNOBS.md` (Turkish prose, table as above) covers all 33 client extras (+4 `net_bench` sub-keys), all 25 host env vars and the 4 CLI modes, each with file reference, card, default, class, outcome and executing card. Row counts are checked against a fresh `grep` at the commit.
 - [ ] [doc] T-019 is closed as won't-do with the note that its Wi-Fi-lock part was superseded by T-089 (`wifi_ll`, kept until T-127). T-067 is closed as won't-do. Both use `status: done`, so they stay on the board.

@@ -19,7 +19,7 @@ files:
 
 PROTOCOL.md says the STATS latency is "Yakalama → ekranda gösterim" (capture → on-screen display), but the code measures capture-stamp → decoder output, and the wire `capture_time_us` (SCK PTS) lies ~6.6 ms after the host's real capture origin, so the tablet under-reports. PROTOCOL §4 also names the 1 s client queue as the bound on late input, while the real bound is the host's 5 s silence close. This card records what `capture_time_us` means (decision 0021), using T-170's measured PTS-lead spread, and corrects the latency and late-input prose so nobody compares host and tablet numbers as if they shared an origin.
 
-Decision 0021 must be accepted by the user before work starts (the orchestrator drafts it with the T-170 data; the "decoder output" wording fix applies under either option).
+Steps 3–5 start only after the user accepts 0021 (the orchestrator updates the existing draft with the T-170 data in step 2; the "decoder output" wording fix applies under either option).
 
 Source: external architecture review 2026-10-03 (H05, LM4, M04); verification: docs/reviews/2026-10-03/verify-C-host-video.md (LM4-D), docs/reviews/2026-10-03/verify-E-measurement.md (W4, additional issue 3), docs/reviews/2026-10-03/verify-G-input.md (additional issue 2), docs/reviews/2026-10-03/verify-F-network.md (A-5), docs/reviews/2026-10-03/coverage-audit.md (§4.3 merge, T5).
 
@@ -43,7 +43,7 @@ Source: external architecture review 2026-10-03 (H05, LM4, M04); verification: d
 
 **Procedure (orchestrator):**
 1. Take the `pts_vs_deliv` p1/p50/p99 from T-170's device run (NOTES) and, if available, a Wi-Fi run.
-2. Draft `docs/decisions/0021-capture-timestamp-semantics.md` (Turkish, template in `docs/decisions/README.md`, status *önerildi*), add the README table row, and get user acceptance.
+2. Update the existing 0021 draft (`docs/decisions/0021-capture-timestamp-semantics.md`, Turkish, status *önerildi*; README row at `docs/decisions/README.md:45`) with the T-170 data and the chosen option, set the README row status, and get user acceptance.
 3. Edit PROTOCOL.md (§0x22, §6, §4 "Kabul edilen davranış") and LOGGING.md in one doc commit. Batch with the other phase-6 PROTOCOL prose edits where timing allows (manifest "Serialize-with": T-150/0018, T-152, T-163, T-171 §6 line, T-189, T-196, T-199).
 4. Run `python3 protocol/fixtures/gen.py --check`.
 5. Only if option B: write the fixture and create the two follow-up cards.

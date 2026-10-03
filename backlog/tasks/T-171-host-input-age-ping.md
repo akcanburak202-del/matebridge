@@ -50,7 +50,7 @@ Source: external architecture review 2026-10-03 (M04, LM3, LM8, IN8); verificati
 
 **Order and hot files:**
 - `SessionMachine.swift` chain T-152 → T-155 → **T-171**: T-152 is a dependency; **serialize with T-155 (same file)**.
-- `SessionServer.swift` chain T-163 → **T-171** → T-186 → T-189 → T-196.
+- `SessionServer.swift` chain T-163 → **T-171** → T-186/T-189 → T-196 (T-186 and T-189 in either order).
 - `InputController.swift` chain T-163 → **T-171** → T-175 → T-198 / T-199.
 - Codex review is required (input path), per CLAUDE.md.
 

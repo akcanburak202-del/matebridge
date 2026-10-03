@@ -19,7 +19,7 @@ files:
 
 ## Amaç
 
-**Gated: start only after T-127 shows uplink stall evidence on Wi-Fi: in topology 2 or 3, in at least 2 of 3 runs, host T-171 `ev=input_age` (recorded in the same T-127 or T-179 session) has pen/pointer p99 > 100 ms or `late_250ms` > 0, while the client `MB/input` line shows `merged=` ≈ 0 in the same seconds (the backlog sits in the kernel, not in `SendQueue`), and the T-127 `tos_ctl 0xB8` + `wifi_ll` row did not remove it. Without that evidence this card stays parked.**
+**Gated: start only after a recorded Wi-Fi run that logged, per second, host T-171 `ev=input_age` (pen/pointer p99, `late_250ms`) and the client `MB/input merged=` (`Model.kt:201`) shows uplink stalls. That run is the T-127/T-179 data (input_age and `merged=` recorded by T-127/T-179) if it captured both, or else the knob-off arm of this card's device procedure on the current build (it needs no code). Evidence: in topology 2 or 3, in ≥ 2 of 3 runs, pen/pointer p99 > 100 ms or `late_250ms` > 0, with `merged=` ≈ 0 in the same seconds (the backlog sits in the kernel, not in `SendQueue`), and not removed by the T-127 `tos_ctl 0xB8` + `wifi_ll` row. Without that evidence this card stays parked.**
 
 On a Wi-Fi stall the tablet's input first fills the kernel send buffer of the control socket, where its age is invisible. `SendQueue` stays empty, so `congested()` is false and hover/scroll coalescing never starts; the first relief is the 1 s overflow reconnect. An opt-in `TCP_NOTSENT_LOWAT` on the control socket makes the blocking writer stop early, so the existing app-side bounds see the stall within tens of ms. Default off; it is an experiment knob.
 
@@ -41,6 +41,8 @@ Source: external architecture review 2026-10-03 (IN11, M04); verification: docs/
 - After T-185 the debug knobs move to `DevKnobs.kt` and are honoured only with `--ez dev true` (decision 0026). Put the knob where T-185 left the Wi-Fi knobs; if `WifiKnobs.kt` still exists (audit K4 keeps it until T-127 reports), add it there.
 - Add the knob to `docs/KNOBS.md` and the log field to `docs/LOGGING.md` via *Açık sorular* (orchestrator).
 - Risk: the overflow path (reconnect + host release-all) triggers sooner on a long stall. That is correct by the bounded-queue rule but user-visible, so the default stays off. Never drop a release: this card changes no merge rule (contact pen samples, key/button ups and stroke boundaries stay unmergeable, `InputOutbox.kt:36-56, 103-126`).
+
+**Dependencies:** `depends_on: [T-127, T-171]`. T-171 is added to the manifest §2a value ([T-127]) because the gate and the device procedure read T-171 `ev=input_age` (orchestrator: update the manifest).
 
 **Serialize with** T-185 (`MainActivity.kt`; chain … → T-185 → T-191 → T-197) and T-160 (`SessionController.kt`; chain T-150 → T-156 → T-159 → T-160 → T-197). `WifiKnobs.kt` is touched only by this card (T-183 no longer deletes it).
 

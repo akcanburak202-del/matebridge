@@ -39,7 +39,7 @@ Source: external architecture review 2026-10-03 (D10, X13, M07, SE6); verificati
 1. **Baseline:**
    - Run `scripts/device-smoke.sh` and copy its header into NOTES: host SHA, APK SHA, macOS build, HarmonyOS build (`ro.build.display.id`), transport, mode, resolution, target and real Hz, bitrate, codec;
    - note the content type (work apps, Krita, video) and the planned duration;
-   - confirm that no experiment knob is active (the `ev=profile` lines from T-185/T-186 show defaults).
+   - confirm that no experiment knob is active: the `ev=profile` lines from T-185 (tablet) and T-204 (host) show defaults if those cards have merged; otherwise list both sides' launch extras and `MATEBRIDGE_*` environment.
 2. **Thresholds, agreed before the run.** Proposed, the orchestrator confirms:
    - between hour 1 and hour 8, the linear slope of host RSS and tablet PSS stays below 2 MB/h;
    - thread and FD counts, sampled in the same state (session live, idle desktop), end within baseline +5;
@@ -60,7 +60,7 @@ Source: external architecture review 2026-10-03 (D10, X13, M07, SE6); verificati
    - time to first image;
    - whether windows stayed on the virtual display (T-167 keep time);
    - whether a restart was needed.
-7. **Analysis:** `tools/soak/summarize.py` prints the slopes, the counts and a pass/fail against step 2's thresholds. NOTES gets the summary table, not the raw logs.
+7. **Analysis:** `tools/soak/summarize.py` prints the slopes and counts (T-173 promises trends and slopes, no verdict); the orchestrator compares them with step 2's thresholds in NOTES. NOTES gets the summary table, not the raw logs.
 8. **One week:** daily use with whatever transport and mode the user chooses. Each day add one summary line to NOTES:
    - date;
    - hours used;

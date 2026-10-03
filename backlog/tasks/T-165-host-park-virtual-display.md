@@ -33,6 +33,8 @@ Source: external architecture review 2026-10-03 (H04, A1, F2, D4); verification:
   - Device evidence that the 10 s teardown hurts: NOTES 2026-10-02 13:45 (tablet screen off ~56 s → `display_grace_started seconds=10` → `display_teardown`); window layout disturbance on recreate (NOTES 2026-09-30 line 206).
 - **Plan hints:**
   - `onSessionEnded` calls `pipeline.stopKeepingDisplay()` instead of `startDrain()`, stores the result in a coordinator field (e.g. `parked: VirtualDisplay?`), and the next same-device session calls `createPipeline(settings:, reusing: parked)`.
+  - **Existing `DisplayLease` tests outside `files:`:** `StreamPrefsTests.swift:148-150` (`sessionEnded` then `[.reuse]`) and `BitratePrefsTests.swift:83,98` assert today's results. Same-device return from park keeps returning `[.reuse]`; the coordinator knows the display is parked (its `parked` field) and builds the pipeline with `reusing:`. Those call sites must compile and pass unchanged (mark a new `sessionEnded` return value `@discardableResult` if needed).
+  - `final class DisplayLeaseTests` already exists in `IntegrationTests.swift:39`. Extend that class, or name the new file's class `DisplayParkTests`; do not redeclare it.
   - Keep `perform(lease…)` the single place that creates or removes displays. `onPipelineFailed` with only a parked display: nothing to do (no pipeline). `onShutdown` must invalidate `parked`.
   - If `CGDisplayIsOnline(parked.displayID)` is false (display sleep may take it offline), create a new display instead. Public CG only: `HH/VirtualDisplay.swift` stays the only private-API file.
   - Static-screen guard (T-028 class): the new pipeline needs SCK's first frame before `prepareForNewConsumer` can force a keyframe. That is the same as the reconfigure path, which works on device, but verify it explicitly (acceptance).
@@ -52,7 +54,7 @@ Source: external architecture review 2026-10-03 (H04, A1, F2, D4); verification:
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] `DisplayLease`: `sessionEnded` yields a park action (e.g. `.park`); `tick` past the deadline yields `.teardown` exactly once; same device + `sameDisplay` → create reusing the parked display (new action or flag); refresh mismatch → recreate; different device or size → teardown + create; `shutdown` while parked → teardown; `displayLost` while parked → idle. Existing 10 s default semantics and tests are kept.
+- [ ] [XCTest] `DisplayLease`: `sessionEnded` yields a park action (e.g. `.park`); `tick` past the deadline yields `.teardown` exactly once; same device + `sameDisplay` → `[.reuse]` as today (the coordinator reuses the parked display); refresh mismatch → recreate; different device or size → teardown + create; `shutdown` while parked → teardown; `displayLost` while parked → idle. Existing 10 s default semantics and tests are kept, including `StreamPrefsTests`/`BitratePrefsTests` unchanged.
 - [ ] [XCTest] Pure parse of `MATEBRIDGE_DISPLAY_KEEP_S`: 10…86400 accepted, anything else (missing, empty, non-numeric, out of range) → 10.
 - [ ] Log lines `display_parked keep_s=`, `display_unparked`, `display_teardown reason=keep_expired|device_changed|size_changed|shutdown`, documented in `docs/LOGGING.md`.
 - [ ] While parked there is no SCK stream and no VT session (no `startDrain`; Handoff shows the code path).

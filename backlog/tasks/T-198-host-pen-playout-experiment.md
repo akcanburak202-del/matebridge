@@ -17,7 +17,7 @@ files:
 
 ## Amaç
 
-**Gated: start only after T-179 shows that Wi-Fi pen clustering remains after T-111: in at least one Wi-Fi topology (Mac Ethernet + tablet Wi-Fi, or both on Wi-Fi), in ≥ 2 of 3 runs, the Mac-side inter-event median is < 1.5 ms or p95 > 8 ms (USB reference: median 2.8 ms, p95 ~4 ms), AND the user's Krita verdict with smoothing = None says Wi-Fi curves are still visibly more angular than USB. The user must also still want pen on Wi-Fi (manifest §5 Q9: "acele yok, en sona" / draws over USB); otherwise this card stays parked.**
+**Gated: start only after T-179 has recorded "kümelenme sürüyor → T-198 açılabilir (0024)" (decision rule recorded by T-179). That requires Wi-Fi pen clustering after T-111 in topology 2 (Mac Ethernet + tablet Wi-Fi), or in topology 3 (both on Wi-Fi) only if the user states that Ethernet is not an option (T-179: clustering only in topology 3 means "Mac Ethernet is the advice, not playout"). Clustering means: in ≥ 2 of 3 runs, the Mac-side inter-event median is < 1.5 ms or p95 > 8 ms (USB reference: median 2.8 ms, p95 ~4 ms), AND the user's Krita verdict with smoothing = None says Wi-Fi curves are still visibly more angular than USB. The user must also still want pen on Wi-Fi (manifest §5 Q9: "acele yok, en sona" / draws over USB); otherwise this card stays parked.**
 
 On Wi-Fi the tablet's ~360 Hz pen samples reach the Mac in bunches (pre-T-111: median 0.5–1.1 ms, p95 ~10 ms) and the host posts each batch back to back, ignoring the per-sample `dt_us` it already receives. This experiment lets the host re-space PEN samples by their tablet timestamps with at most 12 ms added latency, only on non-loopback sessions, behind a default-off knob. It is adopted as a default only if a Wi-Fi A/B shows a line-quality gain worth the latency.
 
@@ -41,7 +41,7 @@ Decision 0024 must be accepted by the user before work starts.
 - Never reorder samples; pressure, position and stroke boundaries are bit-exact. No pen-up is ever delayed beyond the budget.
 - CGEvent timestamp rewriting is rejected (0024 option (c)).
 
-**Plan hints:** a `DispatchSourceTimer` on the input queue releases due samples; the session queue never waits for playout (no sleeping inside `queue.sync`). Decide in Plan whether samples are held before the state machine (watchdog anchors move by ≤ 12 ms, harmless against 500 ms) or the produced `MacEvent`s are held after it; document why. Log aggregates only (e.g. in `input_session_end`: `playout_ms=`, `playout_flushes=`, `playout_overruns=`), never coordinates.
+**Plan hints:** a `DispatchSourceTimer` on the input queue releases due samples; the session queue never waits for playout (no sleeping inside `queue.sync`). Decide in Plan whether samples are held before the state machine (watchdog anchors move by ≤ 12 ms, harmless against 500 ms) or the produced `MacEvent`s are held after it; document why. Log aggregates only (e.g. in `input_session_end`: `playout_ms=`, `playout_flushes=`, `playout_overruns=`), never coordinates. Propose the `docs/LOGGING.md` fields under *Açık sorular* (orchestrator).
 
 **Serialize with** T-175 and T-199 (`InputController.swift` chain T-163 → T-171 → T-175 → T-198 / T-199; `InputPipeline.swift` is also edited by T-163 and T-199). `main.swift` is in the chain T-145 → T-167 → T-189 → T-192; this card touches one call there.
 

@@ -49,6 +49,7 @@ To get full defaults on both sides, use T-191 on the tablet as well. Say so in t
 - Stored stream prefs are not applied to a live session; they affect the next connection only. `UserDefaultsStreamPrefsStore` reads `UserDefaults` on every `load` and keeps no cache. So removing the key from the app (a second store instance or `HostSettingsReset`) is enough, and `StreamCoordinator.swift` (which builds its own store at :116) needs no change.
 - Log `ev=settings_reset` once, with no values.
 - **Serialize with T-145 (same file `main.swift`).** The chain is T-145 → T-167 → T-189 → T-192; T-167 and T-189 are already `depends_on`.
+- **Decision-gated dependencies:** T-167 waits on decision 0020 and T-189 on decision 0027 (§5 Q6). If T-167 or T-189 is closed as won't-do, remove it from `depends_on` and drop its key (keep time, network profile) from the reset list and from the menu-state criterion. The card is otherwise independent.
 - `HC/Session/HostSettingsReset.swift` and its test are additions to the manifest's file list, needed because `MateBridgeHost` cannot be unit-tested.
 
 ## Kapsam dışı
@@ -61,10 +62,10 @@ To get full defaults on both sides, use T-191 on the tablet as well. Say so in t
 
 - [ ] [XCTest] `InMemoryStreamPrefsStore.removeAll()` empties the store: every `load` returns nil afterwards.
 - [ ] [XCTest] `HostSettingsReset` on a suite `UserDefaults` removes exactly the given keys and leaves an unrelated key (standing in for `loginItemFirstRunDone`) untouched.
-- [ ] `UserDefaultsStreamPrefsStore.removeAll()` removes the `streamPrefsByDevice` key.
-- [ ] The menu item asks for confirmation. After a reset, "USB modu" and "Pano paylaşımı" show on, the network profile shows "USB + Wi-Fi" and the keep time shows its default.
-- [ ] Exactly one `ev=settings_reset` line, with no values.
-- [ ] [device] With the tablet in Netlik and a stored host entry: reset, then reconnect. The host logs `from_stored=false` for that session, then applies the tablet's STREAM_PREFS. The tablet reconnects with no approval prompt (approvals and Keychain kept), and `approved-devices.json` is unchanged.
+- [ ] [device] `UserDefaultsStreamPrefsStore.removeAll()` removes the key: after the reset, `defaults read dev.matebridge.host streamPrefsByDevice` reports it as missing.
+- [ ] [device] The menu item asks for confirmation. After a reset, "USB modu" and "Pano paylaşımı" show on, the network profile shows "USB + Wi-Fi" (if T-189 merged) and the keep time shows its default (if T-167 merged).
+- [ ] [device] Exactly one `ev=settings_reset` line, with no values.
+- [ ] [device] Precondition: the session before the reset logs `stream_session … from_stored=true`. Netlik (60 fps, scale 1000) can equal the HELLO base and log `false` with or without a reset, so use Akıcı/Performans or a non-default bitrate if Netlik gives `false`. After the reset and a reconnect, the first session logs `from_stored=false`, then the host applies the tablet's STREAM_PREFS. The tablet reconnects with no approval prompt (approvals and Keychain kept), and `approved-devices.json` is unchanged.
 - [ ] `./scripts/check.sh` geçiyor.
 
 ## Plan

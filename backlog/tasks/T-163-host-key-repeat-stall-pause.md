@@ -18,7 +18,7 @@ files:
 
 ## Amaç
 
-The host generates key auto-repeat itself and stops it only on that key's UP, another DOWN, or a release-all. If a Wi-Fi stall starts after a KEY DOWN reached the Mac but before its UP, the Mac keeps repeating until the delayed UP arrives or the 1.5 s heartbeat-silence release-all fires: about 10+ ghost repeats with macOS defaults, so held Backspace deletes text and arrows run away. This card pauses repeat (without generating an UP) while nothing has been received on the control connection for more than 600 ms, and resumes it on the next received record if the key is still held.
+The host generates key auto-repeat itself and stops it only on that key's UP, another DOWN, or a release-all. If a Wi-Fi stall starts after a KEY DOWN reached the Mac but before its UP, the Mac keeps repeating until the delayed UP arrives or the 1.5 s heartbeat-silence release-all fires: up to ~18 ghost repeats with macOS defaults (1.5 s / 83 ms), so held Backspace deletes text and arrows run away. This card pauses repeat (without generating an UP) while nothing has been received on the control connection for more than 600 ms, and resumes it on the next received record if the key is still held.
 
 Source: external architecture review 2026-10-03 (M04 (freshness), X2); verification: docs/reviews/2026-10-03/verify-G-input.md (P-KR, additional issue 1).
 
@@ -33,14 +33,14 @@ Source: external architecture review 2026-10-03 (M04 (freshness), X2); verificat
   - `InputController.deliver` (`InputController.swift:177-199`) sees only input messages (it returns early for PING and other control records) and runs under `queue.sync`. So it cannot tell that the control connection is alive; a separate activity signal from the session layer is needed. Control records are decoded in `SessionServer.swift` (`machine.received(...)`, `:1237`), and delivered at `:1473-1474`.
 - **Plan hints:**
   - Add a `lastControlActivity` input to the Core state machine (or pipeline) and a pure rule: no repeat while `now − lastControlActivity > 600 ms` (PING 500 ms + margin). Do not generate an UP; do not change the held-key set.
-  - Update the timestamp for every decoded control record (PING included) from `SessionServer` via a `noteControlActivity` hook only. Pass it without `queue.sync` re-entry (an atomic, or ride on `deliver`).
+  - Update the timestamp for every decoded control record (PING included) of the connection whose input is delivered (the active session) only, from `SessionServer` via a `noteControlActivity` hook. `SessionServer.swift:1237` decodes records of every connection, including pending or unauthenticated ones and a T-096 migration candidate on USB while the Wi-Fi session is stalled; counting those would keep ghost repeat alive in exactly the stall case. Pass it without `queue.sync` re-entry (an atomic, or ride on `deliver`).
   - **Ordering detail:** watchdogs run before each input message is handled (PROTOCOL §7 "önce kapanış, sonra mesaj"). When the delayed KEY UP itself ends the stall, the pause check must use the activity time from *before* that record, so no repeat fires ahead of the UP.
   - While paused, `nextDeadline` must not keep the timer spinning on an overdue repeat. Re-arm the watchdog on the paused → active edge (e.g. a cheap `queue.async { rearmWatchdog() }` only on that edge).
   - After resume the existing one-per-call rule must still prevent a burst; the next repeat is at least one interval after resume.
   - Core `SessionMachine` already tracks `lastReceive` per connection, but `SessionMachine.swift` is outside `files:` (it is in the T-152 → T-155 → T-171 chain). Do not edit it here.
   - A client-side keepalive for held keys is the alternative; it needs protocol semantics and stays out of scope (the orchestrator mentions it in the 0003 note).
 - **Safety (AGENTS.md):** UP, release-all and heartbeat release must still stop repeat and release the key exactly as today. Never drop a key-up. Keycodes may appear only at `debug` level; never key characters.
-- **Serialize with:** `SessionServer.swift` chain T-163 → T-171 → T-186 → T-189 → T-196 and `InputController.swift` chain T-163 → T-171 → T-175 → T-198 / T-199; this card is the head of both.
+- **Serialize with:** `SessionServer.swift` chain T-163 → T-171 → T-186/T-189 → T-196 (T-186 and T-189 in either order) and `InputController.swift` chain T-163 → T-171 → T-175 → T-198 / T-199; this card is the head of both.
 - **Review:** input-state change, so the orchestrator runs `./scripts/codex-review.sh`.
 
 ## Kapsam dışı
@@ -57,7 +57,8 @@ Source: external architecture review 2026-10-03 (M04 (freshness), X2); verificat
 - [ ] [XCTest] A delayed KEY UP that arrives after a > 600 ms silence produces the key-up and zero repeats before it.
 - [ ] [XCTest] UP, another DOWN, release-all and the heartbeat-silence release still stop repeat and release the key exactly as before; existing keyboard, fuzz and safety tests pass unchanged.
 - [ ] [XCTest] While paused, `nextDeadline` does not return an overdue repeat deadline (no busy timer).
-- [ ] [device] Wi-Fi only: hold Backspace (in a scratch text field) and toggle the tablet's Wi-Fi off for ~2 s, then on. The Mac shows at most ~1 extra repeat after the stall begins, and no key stays stuck after reconnect. Repeat on a normal hold (no stall) feels unchanged.
+- [ ] Only records of the active session's control connection update `lastControlActivity`; records from pending, unauthenticated or migration-candidate connections do not. An XCTest (if the filter is in Core) or the Handoff code path shows the filter.
+- [ ] [device] Wi-Fi only: hold Backspace (in a scratch text field) and toggle the tablet's Wi-Fi off for ~2 s, then on. The Mac shows at most ~7 repeats after the stall begins (≤ 600 ms of repeat at the macOS interval; today up to ~18). Count the deleted characters, and record `repeats=` from `input_session_end`. No key stays stuck after reconnect. Repeat on a normal hold (no stall) feels unchanged. Handoff states that resume-after-stall is covered only by XCTest (a sub-1.5 s stall is not reproducible by toggling Wi-Fi; the 2 s toggle crosses the 1.5 s heartbeat release).
 - [ ] `./scripts/check.sh` geçiyor.
 
 ## Plan

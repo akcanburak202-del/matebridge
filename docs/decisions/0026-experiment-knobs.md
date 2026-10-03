@@ -59,7 +59,8 @@ Ek sorunlar:
   - T-183: istemci deneyleri.
   - T-184: GL yolu.
   - T-185: geliştirici kapısı ve `ev=profile`.
-  - T-186: host deneyleri ve `ev=profile`.
+  - T-186: host `nw` soketleri.
+  - T-204: host kodlayıcı deneyleri ve `ev=profile`.
 - **Mevcut kararlar:** değişmez. 0013, 0014 ve 0016 profilleri aynı kalır.
 - **PROTOCOL.md:** değişmez. LOGGING.md'ye `ev=profile` satırı eklenir.
 - **Tekrar düşünülür:** bir işletim sistemi güncellemesi kaldırılan bir yolu yeniden gerekli kılarsa. Örnek: HarmonyOS GL yüzeyini 120 Hz'e açarsa ya da bir PerformanceHint oturumu verirse.

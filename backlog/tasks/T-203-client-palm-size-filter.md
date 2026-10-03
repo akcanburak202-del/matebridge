@@ -5,7 +5,7 @@ status: todo
 phase: 6
 owner: android-client-dev
 depends_on: [T-181]
-decisions: []
+decisions: [0006]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/input/TouchTracker.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/input/MotionEventAdapter.kt
@@ -16,7 +16,7 @@ files:
 
 ## Amaç
 
-**Gated: start only after T-181 records in docs/NOTES.md that (1) palm-before-pen clicks actually happen in real drawing (at least one host click per drawing session that the user identifies as a palm, or the user reports them, manifest §5 Q16), and (2) the `touchMajor`/`size` distributions separate: there is a threshold X where ≥ 95 % of palm contacts are above X and ≤ 2 % of deliberate single-finger taps and drags are above X. If either fails, this card stays parked. The orchestrator then records the decision 0006 amendment with the chosen X.**
+**Gated: start only after T-181 records in docs/NOTES.md that (1) palm-before-pen clicks actually happen in real drawing (at least one host click per drawing session that the user identifies as a palm, or the user reports them, manifest §5 Q16), and (2) the distributions of each contact's max `size`/`touchMajor` within its first 40 ms (`HOLD_MS`), or until it moves 16 px (`SLOP_PX`), separate (the per-contact early-window statistic recorded by T-181; whole-contact max/median does not count, because a palm that grows after 40 ms looks separable there but not to the filter): there is a threshold X where ≥ 95 % of palm contacts are above X and ≤ 2 % of deliberate single-finger taps and drags are above X. If either fails, this card stays parked. The orchestrator then records the decision 0006 amendment with the chosen X.**
 
 A palm that lands before the pen comes into range and stays more than 40 ms (or moves more than 16 px) is sent to the Mac as a click or drag; the later pen-range release cannot undo it. On this device the palm arrives as an ordinary FINGER contact, so tool type cannot reject it. If T-181 shows contact size separates palm from finger, a size gate on new single-finger presses closes this residual without touching the pen path.
 

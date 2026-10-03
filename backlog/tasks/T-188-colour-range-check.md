@@ -39,7 +39,7 @@ Source: external architecture review 2026-10-03 (PF6, X11, D8); verification: do
    - the tablet with `adb exec-out screencap -p > tab.png`;
    - the Mac virtual display with `screencapture -D <n>` (pick the MateBridge display).
 4. Repeat at the default bitrate and at the maximum panel bitrate (100 Mbps).
-5. Read the patch values from both PNGs (centre of each patch, a 5×5 average):
+5. Read the patch values from both PNGs (centre of each patch, a 5×5 average). The reference values are the page's authored values (0, 16, 235, 255). The Mac `screencapture` PNG is colour-managed too (see the ~33.7 dB note, NOTES.md:562), so it is only a sanity check. Judge the range verdict on the tablet screencap against the authored values:
    - range verdict: 0→0 and 255→255 within ±2; 16 and 235 are not crushed to 0/255;
    - ramp: monotonic with no banding jumps > 2 levels; T-113 predicted "slightly darker = correct";
    - thin coloured text: describe the fringing and readability by eye at 100 % zoom on the tablet (photo optional; no personal content on screen).
@@ -59,7 +59,7 @@ Wire: none.
 
 ## Kabul kriterleri
 
-- [ ] [device] Patch values for 0/16/235/255 from both screenshots at the default and the maximum bitrate, plus the explicit range verdict (correct: 0→0, 255→255 ±2, no crush of 16/235; or the defect described).
+- [ ] [device] Patch values for 0/16/235/255 from both screenshots at the default and the maximum bitrate, plus the explicit range verdict judged on the tablet screencap against the authored values (correct: 0→0, 255→255 ±2, no crush of 16/235; or the defect described).
 - [ ] [device] Grey ramp verdict and the thin coloured text observation at both bitrates.
 - [ ] [doc] docs/NOTES.md has a dated entry with the build IDs (host SHA, APK SHA, macOS and HarmonyOS builds), mode, bitrates, the `ev=output_format` line, the verdicts and the SDR/8-bit/4:2:0 limit paragraph.
 - [ ] [doc] NOTES says whether a follow-up card or T-201 is needed, and why.

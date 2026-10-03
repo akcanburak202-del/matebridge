@@ -15,7 +15,7 @@ files:
 
 ## Amaç
 
-**Gated: start only after T-127 records the 0023 branch "go adaptive" in docs/NOTES.md, i.e. in topology 3 (Mac and tablet both on Wi-Fi) no fixed bitrate row of the matrix (default, 30 Mbps, 15 Mbps) meets all three pre-set budgets (audio underruns ≤ 1 per 5 min, control srtt p95 ≤ 40 ms, client capture→decode p95 ≤ 70 ms) with static text the user still accepts. If T-127 records "fixed profile suffices", this card is closed as won't-do and T-178 is the answer.**
+**Gated: start only after T-127's NOTES entry records decision 0023 branch "go adaptive" (rule recorded by T-127), and the numbers-only topology-3 replay trace recorded by T-127 (per second: `ev=tcp` srtt/sbbytes/retx and the video bytes from `net ev=stats`) has been copied by the orchestrator into this card's *Bağlam*. If T-127 records "fixed profile suffices", close this card as won't-do; T-178 is the answer.**
 
 On Wi-Fi, full-screen changes push 100–450 KB per frame into the air. Control srtt rises from 20 to 60–100 ms and audio underruns, because only kernel *unsent* bytes are bounded and the bitrate is fixed per session. This card writes the decision logic only: a pure, fully unit-tested value type that turns per-frame and per-tick socket observations into "may I write a frame now?" and "what bitrate should the encoder target?". T-196 wires it in. Keeping the logic pure means it can be tuned against recorded T-127 traces without a device.
 
@@ -38,7 +38,7 @@ Decision 0023 must be accepted by the user before work starts (branch (c), step 
 - Constants are `static let` with a comment naming T-127 as their source; T-196 may expose them through its knob only if needed.
 - Pure: no clock reads, no logging, no Dispatch. Time comes in as arguments (µs), like other Core policies (`DisplayLease`, `KeyframeRequestCoalescer`).
 
-**Golden replay.** Record one or more anonymised T-127 `ev=tcp` traces (numbers only: time, srtt, sbbytes, retx, frame bytes) as a Swift literal in `CongestionReplayTrace.swift`. A Swift file avoids a `Package.swift` resource change (the test target declares no resources; `FixtureSupport.swift` reads protocol fixtures via `#filePath`, which would leave an unhandled-file warning for a raw CSV here). The test asserts the bitrate trace against a stored expected sequence.
+**Golden replay.** Use the numbers-only topology-3 trace recorded by T-127 (copied into *Bağlam* before this card starts; raw logs are never committed, and the implementer has no device) as a Swift literal in `CongestionReplayTrace.swift`. `ev=tcp` is a 1 s window (`SessionServer.swift:312`, `tcpInfoTickInterval = 10`) with no per-frame bytes, so the trace has 1 s resolution: per second srtt, sbbytes, retx and video bytes. A Swift file avoids a `Package.swift` resource change (the test target declares no resources; `FixtureSupport.swift` reads protocol fixtures via `#filePath`, which would leave an unhandled-file warning for a raw CSV here). The test asserts the bitrate trace against a stored expected sequence.
 
 **Risks.** Oscillation at constant RTT; reacting to srtt noise at 1 ms resolution on USB-like links (the controller is never used on loopback, T-196 decides that); a floor too low to carry a keyframe.
 
@@ -56,7 +56,7 @@ Wire: none. USB is unaffected (T-196 enables it on `transport=network` only).
 - [ ] [XCTest] The target never goes above the ceiling or below the floor; a constant-RTT trace produces no oscillation (target settles and stays within ±1 step).
 - [ ] [XCTest] Admission: with sbbytes above the budget, admission is refused; below, granted; the budget never drops below one average frame.
 - [ ] [XCTest] A host-side queue drop triggers at most one fast-down per srtt.
-- [ ] [XCTest] The golden replay from T-127 numbers matches the stored expected trace.
+- [ ] [XCTest] The golden replay from the T-127 trace matches the stored expected trace. The replay runs at 1 s resolution; sub-second behaviour is covered by the synthetic tests.
 - [ ] No I/O, clock reads or logging in `CongestionController.swift`.
 - [ ] `./scripts/check.sh` geçiyor.
 

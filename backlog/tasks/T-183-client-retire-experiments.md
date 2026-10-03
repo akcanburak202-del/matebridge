@@ -25,6 +25,7 @@ files:
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/LockRecenterTest.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/AdaptivePacerTest.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/VsyncIdleTest.kt
+  - client-android/app/src/test/kotlin/dev/matebridge/client/security/RecordOpenTest.kt
   - tools/pacing/README.md
   - backlog/tasks/T-183-client-retire-experiments.md
 ---
@@ -69,7 +70,8 @@ Decision 0026 must be accepted by the user before work starts.
   - keep today's default (rate = stream fps, `VideoRenderer.kt:284`) unless you show it is a no-op. Simplify `video/OperatingRate.kt` and the `OperatingRateTest` class inside `AdaptivePacerTest.kt:325-331` accordingly.
 - **inflight limit** (row 6, T-057, measured worse, NOTES.md:342):
   - `MainActivity.kt:223`, `:385`, `:1160`, `:1288`;
-  - the occupancy gate in `VideoRenderer.kt:447-452`. Keep the `inflight=` stats field only if `tools/pacing` or LOGGING needs it; otherwise note it under *Açık sorular*.
+  - the occupancy gate in `VideoRenderer.kt:447-452` and the `maxInFlight` field (`VideoRenderer.kt:89`).
+  - Remove only the `maxInFlight`/`inflightLimit` plumbing and that gate. `InFlightGauge` (`video/SlotReleaser.kt:130ff`: occupancy, `in_codec_p95`) and the `inflight_limit=` field of `StatsFormat.presentFields` stay, with the caller passing a constant 0 (`VideoRenderer.kt:165`). So `PresentationSchedulingTest` (`InFlightGaugeTest` `:92-135`, `presentFieldsFormat` `:138-145`) passes unchanged, and `SlotReleaser.kt` is not edited. Deleting `InFlightGauge.canQueue` is a follow-up; note it under *Açık sorular*.
 - **keep_jitter/recenter** (row 9, T-067 inconclusive, closed by T-182):
   - `MainActivity.kt:397-398`;
   - the `VsyncClock` fields in `video/FramePacer.kt` and the branches in `video/AdaptivePacer.kt`;
@@ -77,7 +79,8 @@ Decision 0026 must be accepted by the user before work starts.
   - `LockRecenterTest`.
 - **crypto bench** (row 12, T-076, concluded):
   - `MainActivity.kt:408-410`;
-  - `security/Records.kt:56-121` (bench only; keep `stampOpens`, which `pace_trace` uses).
+  - `security/Records.kt:56-121` (bench only; keep `stampOpens`, which `pace_trace` uses);
+  - `benchReportsInitAndFinalSplitPerSize` in `client-android/app/src/test/kotlin/dev/matebridge/client/security/RecordOpenTest.kt:58-62`, which calls `Records.bench()`. Only that bench test changes in this file.
 
 **What stays (do not touch):**
 - `VsyncClock` (`video/FramePacer.kt:18`) is on the daily path.
@@ -86,6 +89,8 @@ Decision 0026 must be accepted by the user before work starts.
 - **Out of scope by audit K4:** `session/WifiKnobs.kt`, `tos_ctl`/`tos_video`/`wifi_ll`, `WifiLockHolder` and the `WAKE_LOCK` permission stay as they are until T-127 reports. T-197 later adds a knob to `WifiKnobs.kt`.
 - The GL path (T-184) and the `dev` gate and `net_bench` move (T-185) are separate cards.
 
+**Removed log fields:** `ev=display_timing` (`MainActivity.kt:1282-1288`) carries `keep_jitter=`, `recenter=`, `pacer=`, `cpd_q_permille=`, `cpd_hold_us=` and `inflight=`, all of which go. List every removed `display_timing`/`present` field under *Açık sorular* for the orchestrator's `docs/LOGGING.md` edit.
+
 **Field names:** T-168 renames `shown=` → `released=` and `latency_us` → `cap_dec_*`, keeping aliases for one release. Compare with those names or their aliases. `ev=present`/`stats` fields read by `tools/pacing` must keep their names.
 
 **Implementer check:** confirm the actual file names under `video/` and `session/` before starting; the paths above were checked at a30c769.
@@ -93,6 +98,7 @@ Decision 0026 must be accepted by the user before work starts.
 **Serialization:**
 - `MainActivity.kt` chain: … T-168 → T-169 → T-183 → T-184 → T-185 → T-191. Serialize with T-169 (same file, not a dependency). Earlier chain cards (T-146, T-151, T-153, T-159, T-160) must not be in progress either.
 - `VideoRenderer.kt` chain: T-158 → … → T-168 → T-183 → T-184.
+- `RecordOpenTest.kt`: **serialize with T-150 (same file)**. T-150 lists `client-android/app/src/test/kotlin/dev/matebridge/client/security/`, and T-150 is also an earlier `MainActivity.kt` editor.
 
 Wire: none.
 
@@ -106,9 +112,10 @@ Wire: none.
 ## Kabul kriterleri
 
 - [ ] [JVM] Default-path tests pass unchanged: `PacingTest`, `AdaptivePacerTest` (except the reduced `OperatingRateTest` class), `SparseFrameNoHoldTest`, `PresentationSchedulingTest`, `NewestFrameShownTest`, `PhaseLockTest`, `VsyncIdleTest` (minus the cpd cases).
-- [ ] [JVM] `PerfHintTest`, `RefreshVoteTest`, `ConstantPlayoutPacerTest` and `LockRecenterTest` are deleted together with their code. No main or test source references `PerfHint`, `RefreshVote`, `ConstantPlayoutPacer`, `CpdConfig`, `keepJitter`, `recenter`, `inflightLimit` or the crypto bench (grep in Handoff).
+- [ ] [JVM] `PerfHintTest`, `RefreshVoteTest`, `ConstantPlayoutPacerTest` and `LockRecenterTest` are deleted together with their code, and `RecordOpenTest` loses only its bench test. No main or test source references `PerfHint`, `RefreshVote`, `ConstantPlayoutPacer`, `CpdConfig`, `keepJitter`, `recenter`, `inflightLimit`, `maxInFlight` or the crypto bench (`Records.bench`) (grep in Handoff). Exception: the `PaceTrace.PATHS` names (`video/PaceTrace.kt:113`, which contain "recenter" and "cpd") stay, so the `pace_trace` CSV path codes that `tools/pacing` reads keep their index.
 - [ ] [doc] `tools/pacing/trace7_120hz_excerpt.csv` and `sim.py` are kept. The fields read by `tools/pacing` keep their names (or the T-168 aliases). The README no longer mentions the deleted test.
 - [ ] [doc] `WifiKnobs.kt`, `WifiKnobsTest`, `WifiLockHolder` and the `WAKE_LOCK` permission are untouched (diff shows no change).
+- [ ] [doc] *Açık sorular* lists the removed `ev=display_timing`/`present` fields for the orchestrator's LOGGING.md edit.
 - [ ] [device] Akıcı 120 and Oyun 120 for 2 min each over USB, compared with NOTES 2026-10-03 using T-168's names (`cap_dec_*`, `released=`) or their aliases: comparable latency and released/shown counts, no `detach_slow`, no new error lines. Launching with a removed extra (e.g. `--ez perf_hint true`) has no effect and does not crash.
 - [ ] `./scripts/check.sh` geçiyor.
 

@@ -21,7 +21,7 @@ files:
 
 ## Amaç
 
-**Gated: start only after (1) T-127 has recorded "go adaptive" in docs/NOTES.md (no fixed bitrate row meets all three budgets in topology 3: audio underruns ≤ 1 per 5 min, control srtt p95 ≤ 40 ms, client capture→decode p95 ≤ 70 ms), (2) T-195 is merged, and (3) T-177's device run shows VideoToolbox follows a live bitrate step (per-second bytes follow 60→15→60 Mbps within ≤ 1 s, no video reconnect). If (3) fails, only the admission half of this card is built and the bitrate half becomes an open question.**
+**Gated: start only after (1) T-127's NOTES entry records decision 0023 branch "go adaptive" (rule recorded by T-127), (2) T-195 is merged, and (3) T-177's device run shows VideoToolbox follows a live bitrate step (per-second bytes follow 60→15→60 Mbps within ≤ 1 s, no video reconnect). If (3) fails, only the admission half of this card is built and the bitrate half becomes an open question.**
 
 This card puts T-195's controller on the real Wi-Fi send path behind a default-off knob: the `bsd` video gate also requires the controller's admission (bounding in-flight bytes, not only unsent ones), and the controller's target bitrate is applied live through T-177's setter instead of the restart path. The user gains a Wi-Fi stream that backs off during bursts and recovers sharpness when idle, with USB untouched.
 
@@ -38,13 +38,14 @@ Decision 0023 must be accepted by the user before work starts.
 
 **Plan hints (F F-3):**
 - Knob `MATEBRIDGE_WIFI_ADAPT=1` (parse in `TransportKnobs.swift`), default off; active only on `transport == .network`. Add it to `docs/KNOBS.md` via *Açık sorular* (orchestrator, decision 0026 rules: default off, names this card).
+- **Test seam:** `SocketVideoTransport` holds a concrete `BsdTcpConnection` (`SocketVideoTransport.swift:36`, `:42`), so a "fake socket" needs a seam. Keep the admission decision pure, next to `SocketVideoGate.canSend` (`SocketVideoTransport.swift:9-13`), and inject a TCP-snapshot provider closure; or use loopback `BsdTcpConnection` pairs as `BsdTcpSocketTests` does.
 - Sample sbbytes cheaply: on the write-completion queue or per tick, not inside every `canSend`. Keep `getsockopt` off the hot path if it is expensive.
 - The double wake path (writable handler plus controller tick) must not lose a wake-up: a blocked admission must be re-checked on writable **and** on tick.
 - Optional: write a large record in paced `write()` chunks (records cannot be split; pace the syscalls). Only if T-127/T-195 data says single keyframes are the problem.
 - Mention F A-4 in Plan (non-audio H→C control ignores the low-water mark; low volume, not fixed here).
 - Log `video ev=adapt` once per second while on: `target_kbps`, `sbbytes_p95`, `srtt_ms`, `admits_blocked`. Numbers only.
 
-**Serialize with** T-189 (`SessionServer.swift`, chain T-163 → T-171 → T-186 → T-189 → T-196) and T-187 (`StreamCoordinator.swift`, chain T-165 → T-167 → T-187 → T-196 → T-200). T-200 waits for this card on `StreamCoordinator.swift`. `VideoPipeline.swift` is also edited by T-176/T-177 (T-177 is a dependency). After T-186 the `nw` path in `TcpSocketProbe` may be gone; read the file at start.
+**Serialize with** T-186 and T-189 (`SessionServer.swift`, chain T-163 → T-171 → T-186/T-189 → T-196; T-189 no longer waits for T-186) and T-187 (`StreamCoordinator.swift`, chain T-165 → T-167 → T-187 → T-196 → T-200). T-200 waits for this card on `StreamCoordinator.swift`. `VideoPipeline.swift` is also edited by T-176/T-177 (T-177 is a dependency). After T-186 the `nw` path in `TcpSocketProbe` may be gone; read the file at start.
 
 **PROTOCOL prose (orchestrator, not the implementer):** §0x03 `bitrate_kbps` "Hedef bit hızı" (`docs/PROTOCOL.md:154`) becomes "the ceiling the session was configured with; the host may encode below it under congestion without a new `config_id`". No bytes or fixtures change; `gen.py --check` stays green.
 
@@ -58,10 +59,10 @@ Decision 0023 must be accepted by the user before work starts.
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Knob off: gate behaviour is byte-identical to today (fake socket: same admit/refuse sequence, same records written).
+- [ ] [XCTest] Knob off: gate behaviour is byte-identical to today (pure gate with an injected snapshot provider, or loopback socket pair: same admit/refuse sequence, same records written).
 - [ ] [XCTest] Knob on: admission blocks while the fake sbbytes exceeds the controller budget, and wakes on writable **or** on tick; no lost wake-up in an interleaving test.
 - [ ] [XCTest] Knob parse: absent/invalid → off; on a `.usb` session the controller is never consulted.
-- [ ] `video ev=adapt` once per second while on (fields above, numbers only); entry proposed for `docs/LOGGING.md`.
+- [ ] `video ev=adapt` once per second while on (fields above, numbers only); the `video ev=adapt` entry is added to `docs/LOGGING.md`.
 - [ ] [device] T-127 topology 3, knob on vs off, ≥ 3 runs each: audio underruns and control srtt p95 better than the baseline, client capture→decode p95 equal or better; static-text sharpness unchanged after 5 s idle (bitrate recovered). Results in NOTES with build IDs.
 - [ ] [device] USB session with the knob set: no `ev=adapt` line, behaviour as today.
 - [ ] Codex review (transport change) run and findings resolved.

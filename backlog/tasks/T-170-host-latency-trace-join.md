@@ -12,7 +12,6 @@ files:
   - host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift
   - host-mac/Sources/MateBridgeCore/Video/VideoSender.swift
   - host-mac/Sources/MateBridgeCore/Video/StatsSummary.swift
-  - host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift
   - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
   - host-mac/Tests/MateBridgeCoreTests/Video/
   - docs/LOGGING.md
@@ -39,14 +38,13 @@ Source: external architecture review 2026-10-03 (H05, LM4, LM8, D5); verificatio
 **Plan hints:**
 - Append new CSV columns at the end; keep the existing column order: `pts_us,display_us,frame_seq,config_id,session_id,resubmit`.
 - Record `frame_seq` into the trace where `writeStartUs` is set (`VideoSender.swift:103-106`). `FrameTrace` is a value type that travels inside `EncodedVideoFrame`, so no lookup tables are needed.
-- `session_id`/`config_id` are known in `StreamCoordinator`, which builds the pipeline (`StreamCoordinator.swift:580`). Pass them into `VideoPipeline` for the CSV only. Touch `StreamCoordinator.swift` only at that construction call. If more is needed, stop and write it in *Açık sorular*.
+- Stamp `session_id`/`config_id` in the sender's `trace:` closure at `StreamCoordinator.swift:425-429` (`link.sessionID`/`link.configID`), or pass them to `VideoSender`. Not at pipeline construction (`StreamCoordinator.swift:580`): the pipeline outlives sessions (lease `.reuse` across a reconnect today, reuse after park with T-165), so later sessions would get the wrong `session_id`. Touch `StreamCoordinator.swift` only there; `VideoPipeline.swift` then needs no change and is not in `files:`. If more is needed, stop and write it in *Açık sorular*.
 - Add a signed PTS-origin `cap_to_sent_pts` (= `writeDoneUs − ptsUs`, signed) to `ev=latency`, next to the existing origin-based `cap_to_sent`.
 - `StatsSummary`: comment and menu read "tablet capture→decode"; the `logFields` key `latency_ms` → `cap_dec_ms`, with `latency_ms` kept as an alias for one release.
 
 **Order and hot files:**
-- Serialize with the `HEVCEncoder.swift` chain T-162 → **T-170** → T-176 → T-177 → T-186 → T-187. T-162 is a dependency. T-176 must not be in progress at the same time (same file).
-- `VideoPipeline.swift` is also edited by T-176 and T-177; serialize with them.
-- `StreamCoordinator.swift` chain T-165 → T-167 → T-187 → T-196 → T-200: serialize with T-167 and T-187 (one-line touch here).
+- Serialize with the `HEVCEncoder.swift` chain T-162 → **T-170** → T-176 → T-177 → T-204 → T-187. T-162 is a dependency. T-176 must not be in progress at the same time (same file).
+- `StreamCoordinator.swift` chain T-165 → T-167 → T-187 → T-196 → T-200: serialize with T-167 and T-187 (touch at the `VideoSender` construction only).
 - `HEVCEncoder.swift` may be touched only for trace fields.
 
 **Output for T-172:** the `pts_vs_deliv` p1/p50/p99 summary from a device run is the input for decision 0021 (option A if p99 − p1 < 1 ms).

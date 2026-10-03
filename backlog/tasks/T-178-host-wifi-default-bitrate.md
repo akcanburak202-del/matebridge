@@ -38,11 +38,13 @@ Gated: start only after T-127 has recorded its result in docs/NOTES.md with the 
 - A Wi-Fi mode default must survive later `STREAM_PREFS` with `bitrate_kbps = 0`. That needs stored state in `VideoSettings`, because Swift extensions cannot add stored properties. Add one stored field in `VideoSettings.swift`, for example a transport-derived default cap, or a `transport` value read by `defaultBitrateKbps`. That file is in `files:` for this reason only.
 - Add a `bitrate_source=wifi_default` value (`BitrateSource`, `bitrateSource` in `EncoderKnobs.swift`), so that logs and T-127 re-runs are labelled correctly.
 - Suggested rule: on `.network`, mode default = `min(modeDefault, wifiDefaultKbps)`. A non-zero user value and the env overrides keep their priority. `MATEBRIDGE_WIFI_BITRATE_KBPS` stays an env override above the user, as today.
+- **First-ever connection:** with no stored prefs, `VideoSettings.initialSettings` returns `defaults` (= `base`) unchanged (`StreamPrefsStore.swift:43-47`). `base.bitrateKbps` is the `tabletDefault` 30 000 (`VideoSettings.swift:30-32`), and `applying(_:)` is never called. A rule implemented only in `applying`/`defaultBitrateKbps` would leave that session at the USB default. So `applyingTransportKnobs(.network)` (`TransportBitrate.swift:20-28`; today it returns early unless the Wi-Fi env knob is set) also applies the Wi-Fi cap to `self.bitrateKbps` when there is no override.
+- **Label meaning:** `bitrate_source=wifi_default` means "the Wi-Fi session default rule decided the bitrate" (a `.network` session with no user value and no env override). It is logged even when `wifiDefault ≥ modeDefault` and the cap does not bind, because the log must say which rule was in effect.
 - The Wi-Fi value is the one T-127 recorded. Write it as a named constant whose doc comment cites the NOTES entry.
 - 0023 amends decision 0013 (Wi-Fi default). The orchestrator updates 0013 and PLAN.md:74/:126; implementers do not.
 - Rejected variant: a separate Wi-Fi field in `STREAM_PREFS`. That is a wire change and is rejected in 0023.
 
-**Serialization:** `VideoSettings.swift` and `EncoderKnobs.swift` are also edited by T-186 (retires `MATEBRIDGE_FRAME_DELAY` and others) and T-177 (step knob in `EncoderKnobs.swift`). Serialize with T-177 and T-186 (same files).
+**Serialization:** `VideoSettings.swift` and `EncoderKnobs.swift` are also edited by T-204 (retires `MATEBRIDGE_FRAME_DELAY` and others; the encoder half of the former T-186) and T-177 (step knob in `EncoderKnobs.swift`). Serialize with T-177 and T-204 (same files).
 
 Wire: none. No PROTOCOL.md change.
 
@@ -54,9 +56,10 @@ Wire: none. No PROTOCOL.md change.
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] On `transport: .network` with no user bitrate and no env override, the session bitrate is the Wi-Fi default (`min(modeDefault, wifiDefault)`) for every stream mode (Netlik 60, Akıcı 120, Performans, Oyun 120, Oyun 60), and `bitrateSource == "wifi_default"`.
+- [ ] [XCTest] On `transport: .network` with no user bitrate and no env override, the session bitrate is the Wi-Fi default (`min(modeDefault, wifiDefault)`) for every stream mode (Netlik 60, Akıcı 120, Performans, Oyun 120, Oyun 60), and `bitrateSource == "wifi_default"`, including a mode whose default is already ≤ the Wi-Fi value (the cap does not bind).
 - [ ] [XCTest] The Wi-Fi default survives a later `STREAM_PREFS` with `bitrate_kbps = 0` and a mode change on the same Wi-Fi session.
 - [ ] [XCTest] Priority unchanged (decision 0013): a non-zero user `bitrate_kbps` wins over the Wi-Fi default; `MATEBRIDGE_BITRATE_KBPS` and `MATEBRIDGE_WIFI_BITRATE_KBPS` win over both. The existing `BitratePrefsTests` pass.
+- [ ] [XCTest] First-ever connection: `initialSettings(defaults: base(.network), stored: nil)` yields the Wi-Fi default with `bitrate_source=wifi_default`.
 - [ ] [XCTest] `transport: .usb` and `transport: nil` (first `STREAM_CONFIG`) are unchanged.
 - [ ] [device] Re-run the T-127 topology-3 row (both on Wi-Fi, same workload, ≥3 runs) with the panel on "Otomatik". Record audio underruns, control srtt p95 and client capture→decode p95 against the T-127 budgets in docs/NOTES.md, together with the host and APK commit SHAs. `stream_session` shows `bitrate_source=wifi_default`.
 - [ ] `./scripts/check.sh` geçiyor.

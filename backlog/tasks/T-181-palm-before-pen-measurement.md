@@ -36,7 +36,7 @@ Source: external architecture review 2026-10-03 (PK4, PK5); verification: docs/r
 2. **Size distribution** (input probe, no MateBridge session):
    - 50 deliberate fingertip taps and drags;
    - 50 deliberate palm rests in drawing posture (side of the hand, as when writing).
-   Compute per contact the max and median `size` (and `touchMajor` if added) for finger vs palm. Report the distributions (min/p5/median/p95/max) and the best single threshold with its false-reject and false-accept rates. Do not copy coordinates out of the probe's local JSONL.
+   Compute per contact the max and median `size` (and `touchMajor` if added) for finger vs palm **within the client gate's decision window**: the first 40 ms of the contact (`HOLD_MS`) or until it has moved more than 16 px (`SLOP_PX`), whichever comes first. That is the window in which the existing finger gate, and T-203's filter, decide. Also report the whole-contact max for comparison, because a palm that grows after 40 ms looks separable over the whole contact but not to the filter. Report the distributions (min/p5/median/p95/max) and the best single threshold (on the window statistic) with its false-reject and false-accept rates. The probe's local JSONL has per-sample time and position for the window cut; do not copy coordinates out of it.
 3. **Palm-before-pen count** (MateBridge session over USB, 15 min of normal drawing in Krita):
    - sum the client `palm_reject=` counter;
    - count host left-button down events that are not pen strokes (a scratch Mac `CGEventTap` listener filtered to non-tablet `leftMouseDown`, timestamps only);
@@ -54,7 +54,7 @@ Wire: none.
 
 ## Kabul kriterleri
 
-- [ ] [device] Finger vs palm `size` distributions (and `touchMajor` if added to the probe) from ≥50 contacts each, with the best single threshold and its error rates.
+- [ ] [device] Finger vs palm `size` distributions (and `touchMajor` if added to the probe) from ≥50 contacts each, computed within the first 40 ms or before 16 px of movement (plus the whole-contact max for comparison), with the best single threshold on the window statistic and its error rates.
 - [ ] [device] Count of palm-before-pen clicks during 15 min of real drawing, next to the client `palm_reject` total.
 - [ ] [doc] docs/NOTES.md has a dated entry with build IDs, the numbers above, no coordinates, and an explicit decision for or against T-203.
 - [ ] If the probe was changed: the input-probe build in `./scripts/check.sh` geçiyor.

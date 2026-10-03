@@ -9,6 +9,8 @@ decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoStats.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderCodec.kt   # diagnostic accessor only (is_hw / sw_only)
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderFault.kt   # diagnostic accessor only (delegate it)
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/IntervalHistogram.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/stream/ClockSync.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/stream/StatsFormat.kt
@@ -42,7 +44,7 @@ Source: external architecture review 2026-10-03 (H05, LM2, LM5, LM6, D5, PF7); v
 - Once ~60 stale high keys build up, every new low key is the minimum and is evicted at once. `decode_avg_us` then reads 0 and latency reads "?" until `frame_seq` passes the stale keys. `AvSync.videoLatencyUs` (`MainActivity.kt:1393`) gets null for that time.
 - The renderer's own `captureByPts`/`readyByPts` are already cleared per codec run (`VideoRenderer.kt:383`). `VideoStats`'s maps are not.
 
-**PF7 client part (coverage audit §3):** `MediaCodec.createDecoderByType(mime)` (`VideoRenderer.kt:294`) takes the platform default. Only `name=` is logged (`ev=codec_start`, `:322-323`). minSdk is 29, so `MediaCodecInfo.isHardwareAccelerated` / `isSoftwareOnly` are always available. No warning exists if a software decoder (e.g. `c2.android.hevc.decoder`) is picked. Mirrors T-187 on the host.
+**PF7 client part (coverage audit §3):** `MediaCodec.createDecoderByType(mime)` (`VideoRenderer.kt:294`) takes the platform default. Only `name=` is logged (`ev=codec_start`, `:322-323`). minSdk is 29, so `MediaCodecInfo.isHardwareAccelerated` / `isSoftwareOnly` are always available. No warning exists if a software decoder (e.g. `c2.android.hevc.decoder`) is picked. Mirrors T-187 on the host. After T-158 the renderer reaches the codec only through `DecoderCodec`, whose interface holds only what the renderer already calls, so a read-only diagnostic accessor (e.g. `isHardwareAccelerated`/`isSoftwareOnly`, or the `codecInfo` flags) is added to `DecoderCodec.kt`, the MediaCodec adapter, and T-159's fault-injecting decorator `DecoderFault.kt` (unless it already delegates with `by`). Diagnostic accessor only; no other interface change.
 
 **Plan hints:**
 - `drainOutput` (`VideoRenderer.kt:527-573`) has `readyNs` and `d.slotNs`; ready→slot = `d.slotNs − readyNs`.
@@ -56,6 +58,7 @@ Source: external architecture review 2026-10-03 (H05, LM2, LM5, LM6, D5, PF7); v
 
 **Order and hot files:**
 - Serialize with the `VideoRenderer.kt` chain T-158 → T-159 → T-160 → T-161 → **T-168** → T-183 → T-184. T-161 is a dependency; T-183 must start after this card merges.
+- Serialize with T-158 (same file `DecoderCodec.kt`) and T-159 (same file `DecoderFault.kt`). Both are upstream through T-161 (depends_on), so this only matters if either is reopened.
 - Serialize with the `MainActivity.kt` chain … T-160 → **T-168** → T-169 → T-183 …
 - `MainActivity.kt` may be touched only in `statsTick`, `writeStatsLog` and the `latencyOf` wiring.
 - T-183 (retire experiments) compares stats against NOTES using the new names or their aliases, so keep the aliases for one release.

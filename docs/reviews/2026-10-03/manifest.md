@@ -1336,3 +1336,23 @@ Each card lists **files**, **acceptance** and **plan** hints. Everything else (g
   - W4 "Mac input": take F's impact list (the audio downlink and a false silence release share the session queue). Measure first (T-175).
 - **Baseline test status.** No one has a recorded `check.sh` pass at a30c769 yet; T-147 records one.
 
+
+---
+
+## 8. Post-QA changes (after four QA reviewers checked all cards; this section overrides §2–§6 where they differ)
+
+- **T-186 split:**
+  - T-186 now covers only the `nw` socket retirement. Its depends_on is [T-182, T-171].
+  - The new **T-204** `host-retire-encoder-knobs` covers idle refresh, FRAME_DELAY, PRIO_SPEED, H264_PROFILE and INPUT_RETAG, plus the host `ev=profile` line. It depends on [T-182, T-177, T-145] and on decision 0026.
+  - HEVCEncoder chain: T-162 → T-170 → T-176 → T-177 → T-204 → T-187. T-201 depends on T-204.
+- **T-150 split:** the AUTO-mode USB migration gate moved to the new **T-205** `client-migration-auth-gate`, which depends on [T-150] and decision 0018. T-157 depends on T-154, T-156 and T-205 too.
+- **T-189** no longer depends on T-186. While "Yalnız USB" is on, it forces the `bsd` listeners. The two cards are serialized on `SessionServer.swift`.
+- **T-159** no longer edits `SessionMachine.kt` (VideoHealth's generation rule replaces the frame-counter reset). It is therefore out of the SessionMachine/SessionController chain, which is now T-150 → T-205/T-156 → T-160 → T-197.
+- **depends_on additions:** T-197 +T-171; T-201 +T-204 (replacing T-186); T-202 +T-148.
+- **Gate data:**
+  - T-127 records the explicit "go adaptive" rule for 0023, plus `input_age`, `merged=`, the user's static-text verdict and a replay trace under `tools/wifi-trace/`.
+  - T-179 records the clustering rule that unlocks T-198.
+  - T-181 records the palm/finger size within the first 40 ms or 16 px.
+  - The gated cards T-195 to T-203 read exactly these outputs.
+- **Decisions updated after QA:** 0018 (pending-record expiry, no auto-connect while a pending record exists, forget on a live session, cancel semantics, audio gate), 0019 (fault timer start point, generation definition, generic fault input, delayed debug fault trigger), 0026 (T-204).
+- **QA reports:** `qa-1.md` … `qa-4.md` in this directory.

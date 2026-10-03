@@ -26,6 +26,7 @@ Source: external architecture review 2026-10-03 (M04, D7, IN8); verification: do
 - The host ignores `base_time_us`/`dt_us` and posts each batch back to back (`host-mac/Sources/MateBridgeCore/Input/InputStateMachine+Pen.swift:16-24`, `host-mac/Sources/MateBridgeHost/Input/CGEventPoster.swift`).
 - The line-quality benefit of any playout is unproven. In the Krita spike study (NOTES l.197-222), no timing change helped; only Krita smoothing = None did. That is why every run here uses smoothing = None.
 - User decisions: "kalem Wi-Fi iyileştirmesi en sona", and drawing is done over USB (PLAN Aşama 5). This card only measures.
+- **Dependency on T-127:** this card may run in the same device session as T-127, after T-127's rows are recorded. The dependency only ensures the topology setup and the build SHAs exist.
 
 **Procedure (orchestrator; user holds the pen):**
 1. Builds: record the host and APK commit SHAs from `ev=app_start` (T-145/T-146). If those cards have not landed, use the `git rev-parse --short HEAD` each build was made from. Also record macOS and HarmonyOS builds.
@@ -40,13 +41,16 @@ Source: external architecture review 2026-10-03 (M04, D7, IN8); verification: do
    - Mac receiver: inter-event median, p95, max, and the share of intervals of 0–1 ms;
    - client input stats line: `pen_msgs`, `pen_samples`, `max_batch` (`MB` input counters);
    - host `input_session_end`;
-   - host T-171 `ev=input_age`: pen p50/p95/max and `late_250ms`.
+   - host T-171 `ev=input_age`: pen **and pointer** p50/p95/p99/max, `late_250ms` and `clock_unc_us` p95;
+   - client `MB/input` `merged=` per run. For every second with pen/pointer p99 > 100 ms or `late_250ms` > 0, also note that second's `merged=` (T-197's gate reads them together).
 6. User verdict per topology: Krita line quality with smoothing = None (köşeli / temiz), in their own words.
 7. Write a dated NOTES table in the same shape as l.170-174, add a "T-111 sonrası" row per topology, and state the verdict.
 
-**Decision output:**
-- One of: "kümelenme sürüyor → T-198 açılabilir (0024)" or "kümelenme yok/önemsiz → T-198 park".
-- If clustering persists only in topology 3, say so. Then Mac Ethernet is the advice, not playout.
+**Decision output (rule fixed before the first run):**
+- A topology shows **clustering** when, in ≥ 2 of its 3 runs, the receiver inter-event median is < 1.5 ms or p95 is > 8 ms, **and** the user's Krita verdict (smoothing = None) for that topology says the Wi-Fi curves are still visibly more angular than USB ("köşeli").
+- **"kümelenme sürüyor → T-198 açılabilir (0024)"** only if topology 2 (Mac Ethernet + tablet Wi-Fi) shows clustering, or topology 3 shows it and the user states that Ethernet is not an option for the Mac.
+- **"Ethernet kullan / T-198 park"** if clustering appears only in topology 3 (both devices on Wi-Fi). Mac Ethernet is then the advice, not playout.
+- **"kümelenme yok/önemsiz → T-198 park"** if no Wi-Fi topology shows clustering.
 
 Wire: none. No code changes.
 
@@ -57,10 +61,10 @@ Wire: none. No code changes.
 
 ## Kabul kriterleri
 
-- [ ] [device] For each of the 3 topologies, ≥3 runs: receiver median, p95, max and 0–1 ms share, client `pen_msgs`/`pen_samples`/`max_batch`, host `input_session_end` and T-171 `input_age` pen percentiles, all recorded.
+- [ ] [device] For each of the 3 topologies, ≥3 runs: receiver median, p95, max and 0–1 ms share, client `pen_msgs`/`pen_samples`/`max_batch`/`merged=`, host `input_session_end` and T-171 `input_age` pen and pointer p50/p95/p99/max with `late_250ms`, all recorded.
 - [ ] [device] The user's Krita verdict (smoothing = None) is recorded per topology.
 - [ ] [doc] docs/NOTES.md has a dated entry with the results table, the build IDs (host SHA, APK SHA, macOS and HarmonyOS builds), the topology details (channel/width/DFS, AWDL) and no coordinates.
-- [ ] [doc] NOTES states the decision for T-198 (open or park) with one line of reasoning.
+- [ ] [doc] NOTES states the decision for T-198 by the rule above (open / "Ethernet kullan, park" / park), with one line of reasoning.
 
 ## Plan
 

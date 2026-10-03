@@ -41,14 +41,18 @@ Source: external architecture review 2026-10-03 (H03); verification: docs/review
 - **(a) Drop newest instead:** when a keyframe sits ahead in the queue, keep `IDR, d1`, refuse `d2` and later deltas until the next keyframe, and coalesce the request.
 - **(b) Keep today's drop choice:** coalesce the force through `KeyframeRequestCoalescer` (pending, or written within `windowUs`), with a deferred force when the window expires.
 
+(a) keeps older frames over newer ones, which contradicts the AGENTS.md hard rule "for video frames the newest frame wins, and stale frames are dropped". Choose (a) only with an explicit argument in Handoff (for example: the refused deltas are undecodable anyway). The orchestrator must approve that deviation in review. **Default: (b).**
+
 Either way, one invariant must hold: **the queue is never left in `awaitingKeyframe` with no keyframe pending and no force scheduled.** Otherwise video freezes until the 300 s safety-net keyframe (`KeyframeIntervalPolicy`, T-075) or a client DECODE_ERROR. Document the chosen policy and this argument in the code comment and in Handoff.
 
-**Optional (b) from F A-2, pre-encode skip:** skip submitting new captures while the sink queue has been full (sender blocked) for more than one frame interval, so that newest-frame-wins happens *before* encode. Queue occupancy is available from `VideoFrameQueue`, which avoids touching `VideoSender`/`SocketVideoTransport` (not in `files:`). If the skip needs a signal from those files, stop and write it under *Açık sorular*. The `HEVCEncoder.swift` change is limited to that encode-skip hook.
+**Optional (b) from F A-2, pre-encode skip:** skip submitting new captures while the sink queue has been full (sender blocked) for more than one frame interval, so that newest-frame-wins happens *before* encode. Queue occupancy is available from `VideoFrameQueue`, which avoids touching `VideoSender`/`SocketVideoTransport` (not in `files:`). If the skip needs a signal from those files, stop and write it under *Açık sorular*. The skip decision is made in `VideoPipeline` before `encode()`; `EncoderSubmitOrder.swift` (T-162) is not changed. The `HEVCEncoder.swift` change is limited to the hook that keeps `last` current (below). If the hook needs a change to `EncoderSubmitOrder.swift`, stop and write it under *Açık sorular*.
+
+**Static-screen risk (pre-encode skip):** SCK delivers no captures while the screen is static (`SharpnessBench.swift:15` comment). If the last capture before the content settles is skipped, "the first capture after the queue drains" never comes. `HEVCEncoder`'s `last` then still holds an older buffer, and `resubmitLast`/`idleTick` re-encode stale content. So a skipped capture must still replace the encoder's `last` buffer, or be submitted once the queue drains.
 
 **Ordering and serialization:**
-- This card can land before T-127's measurements, because it fixes a reasoned loop. T-127's `idr=` data then verifies it.
-- Serialize with T-170 (same file: `HEVCEncoder.swift`). The hot-file chain is T-162 → T-170 → T-176 → T-177 → T-186 → T-187.
-- T-162 (dependency) owns the encoder submit queue. Any encode-skip hook must go through T-162's owner queue, not around it.
+- This card can land before T-127's measurements, because it fixes a reasoned loop. Its own device criterion is an A/B against the previous build, so it does not need a T-127 baseline.
+- Serialize with T-170 (same file: `HEVCEncoder.swift`). The hot-file chain is T-162 → T-170 → T-176 → T-177 → T-204 → T-187.
+- T-162 (dependency) owns the encoder submit queue. Any encode-skip hook must respect T-162's owner queue and must not submit around it. The skip decision itself lives in `VideoPipeline` (see above).
 
 **Review:** Codex (`./scripts/codex-review.sh main task/T-176-host-drop-idr-feedback`), for the keyframe/reference-chain logic.
 
@@ -65,9 +69,9 @@ Wire: none. No PROTOCOL.md change.
 - [ ] [XCTest] `[IDR, d1] + d2`: the drop does not produce an immediate `keyframeNeeded` force while a keyframe is queued ahead, pending, or written within `windowUs`. The test checks that the frames popped afterwards form a decodable sequence: no delta whose reference was dropped is ever popped.
 - [ ] [XCTest] Host-side forces (`internalForce`) are coalesced within `windowUs`. A coalesced force is re-issued once the window or `pendingTimeoutUs` expires if the queue still awaits a keyframe. Fake-clock test: nothing is swallowed forever, and `awaitingKeyframe` never outlives `pendingTimeoutUs` without a force.
 - [ ] [XCTest] The existing `KeyframeRequestCoalescerTests`, `KeyframeResyncTests` and `VideoTests` (BoundedFrameQueue) pass unchanged, or every changed expectation is justified in Handoff.
-- [ ] [XCTest] (only if the optional pre-encode skip is built) While the sink queue stays full for more than one frame interval, captures are not submitted. The first capture after the queue drains is submitted. A forced keyframe is never skipped.
+- [ ] [XCTest] (only if the optional pre-encode skip is built) While the sink queue stays full for more than one frame interval, captures are not submitted. The first capture after the queue drains is submitted. A forced keyframe is never skipped. A skipped capture still replaces the encoder's `last` buffer (or is submitted once the queue drains), so a screen that goes static during back-pressure converges to the latest content. Test: push N captures while the queue is full, then stop capturing and drain; the last submitted buffer is capture N.
 - [ ] [doc] The chosen policy and the reference-chain argument are written in the `BoundedFrameQueue` comment and in Handoff.
-- [ ] [device] Wi-Fi, full-screen bursts (T-127 topology 3 workload): host `idr=` per second (`net ev=stats`) is below the T-127 baseline. Client `frames_dropped` and decode errors do not rise. No video freeze longer than 1 s.
+- [ ] [device] A/B in one session on topology 3 (or 2), T-127 workload: the build before T-176 vs this branch, same workload, ≥ 3 runs each. `idr=`/`idr_bytes_max=` per stats window (`net ev=stats`) are lower, client `frames_dropped` and decode errors do not rise, and no freeze is longer than 1 s. If T-127 has already run without T-176, compare against its topology-3 row instead.
 - [ ] [doc] The orchestrator's Codex review findings are answered in Handoff.
 - [ ] `./scripts/check.sh` geçiyor.
 

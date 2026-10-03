@@ -33,7 +33,7 @@ Source: external architecture review 2026-10-03 (X12); verification: docs/review
 **Plan hints:**
 - Put the mismatch logic in a small pure class (`stream/RefreshMismatch.kt`, new) so it is JVM-testable. It takes (target Hz, measured Hz from `vsync_ms_p50`, streaming flag, now) and returns at most one event per episode. Rate limit: one line per episode, plus at most one per 60 s.
 - Compare against the measured cadence (`vsync_ms_p50`), not `Display.refreshRate`. Use a tolerance (e.g. ±10 %). A target of 0 ("leave the mode alone") never mismatches.
-- `MainActivity.kt` may be touched only in the stats log line and the `applyRefreshRate` logging.
+- `MainActivity.kt` may be touched only in `statsTick` (the per-second `RefreshMismatch` feed; the per-second `vsync` p50 is computed there, `MainActivity.kt:1390`), the stats log line, and the `applyRefreshRate` logging. The stats log line is per 10 s window (T-141), too coarse to judge a > 5 s mismatch.
 
 **Order and hot files:** serialize with the `MainActivity.kt` chain … T-168 → **T-169** → T-183 … T-168 is a dependency. T-183 must start after this card merges.
 

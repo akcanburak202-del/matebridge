@@ -29,6 +29,7 @@ Source: external architecture review 2026-10-03 (H03, A6); verification: docs/re
 - `DataRateLimits` is `[2 × average bytes, 1 s]` (`:182-184`). There is no short-window cap, so single frames of 100–450 KB are allowed (F A-3, LM7).
 - With `MATEBRIDGE_QUALITY` accepted (`qualityApplied`), `AverageBitRate` is **not** set at all (`:167-181`). In that mode the setter can change only `DataRateLimits`, and the Handoff must say so.
 - A live-property precedent exists: `MaxAllowedFrameQP` is changed on the running session before a submit (`updateQPBoost`, `:430-453`, T-087).
+- **Caveat:** that precedent is negative. T-087 found that `.fast` silently ignores a mid-stream `MaxAllowedFrameQP` (`HEVCEncoder.swift:220-223`), and `.fast` is the default at every fps. Expect the same risk for `AverageBitRate`: `VTSessionSetProperty` can return `noErr` and still have no effect.
 - Restart path today: `STREAM_PREFS` with a new bitrate → `StreamCoordinator.swift:373-389` (`applyPrefs`: new `config_id`, `STREAM_CONFIG`, video close) → `restartPipeline` (`:555-570`). PROTOCOL §0x05 requires this behaviour for **user** changes. This card does not change that path.
 - Outside this repo, WebRTC's VideoToolbox encoder updates `AverageBitRate`/`DataRateLimits` mid-session, so a live update is plausible. Whether the M6 HEVC hardware encoder with `RealTime=false` (`.fast` profile, `:130-137`, `:159`) reacts quickly is unknown. Measure it; do not assume.
 
@@ -41,9 +42,9 @@ Source: external architecture review 2026-10-03 (H03, A6); verification: docs/re
 - `STREAM_CONFIG.bitrate_kbps` keeps meaning "the configured value". This card sends no new `STREAM_CONFIG`. Any "ceiling" semantics belong to decision 0023 / T-196 (orchestrator prose in §0x03 then).
 
 **Ordering and serialization:**
-- Hot-file chain on `HEVCEncoder.swift`: T-162 → T-170 → T-176 → T-177 → T-186 → T-187. The `depends_on` already covers T-162 and T-176; T-170 comes earlier in the same chain.
+- Hot-file chain on `HEVCEncoder.swift`: T-162 → T-170 → T-176 → T-177 → T-204 → T-187. The `depends_on` already covers T-162 and T-176; T-170 comes earlier in the same chain.
 - `VideoPipeline.swift` is also edited by T-176.
-- `EncoderKnobs.swift` is also edited by T-186 (later) and possibly T-178.
+- `EncoderKnobs.swift` is also edited by T-204 (later; it depends on this card) and possibly T-178.
 
 Wire: none.
 
@@ -59,7 +60,7 @@ Wire: none.
 - [ ] [XCTest] Through the T-162 owner-queue seam with a fake backend: set-bitrate calls are ordered with submits, and none reaches the backend after invalidate. Deterministic, with no sleeps.
 - [ ] [XCTest] Step-knob parser: absent or invalid means off, and the valid form is parsed. Defaults are unchanged.
 - [ ] [doc] `docs/LOGGING.md` lists `video ev=bitrate_set` with its fields.
-- [ ] [device] With the step knob 60→15→60 Mbps on a scrolling page, the per-second bytes in host `net ev=stats` follow each step within ≤1 s. No video reconnect, no `STREAM_CONFIG`, no new `config_id` and no `restartPipeline` appear in the log. The `VTSessionSetProperty` status codes are recorded in Handoff and docs/NOTES.md (orchestrator).
+- [ ] [device] With the step knob 60→15→60 Mbps on a scrolling page, either `sent_kbps=` in host `net ev=stats` (one line per 1 s client STATS interval, `StreamCoordinator.swift:448-451`) follows each step within ≤1 s, **or** the run records that VT ignores the change. In that case also try `MATEBRIDGE_ENCODER=llrc` at 60 fps and record both. A negative result is a valid outcome: it blocks T-196's encoder half and is written in NOTES. In every case, no video reconnect, no `STREAM_CONFIG`, no new `config_id` and no `restartPipeline` appear in the log. The `VTSessionSetProperty` status codes are recorded in Handoff and docs/NOTES.md (orchestrator).
 - [ ] [device] Same check with `MATEBRIDGE_QUALITY` set: record whether frame sizes react (only `DataRateLimits` is set in that mode).
 - [ ] [device] Short-window `DataRateLimits` pair: accepted or refused (status), plus the largest frame size (`idr_bytes_max`/frame p99) with and without it, recorded in NOTES.
 - [ ] `./scripts/check.sh` geçiyor.

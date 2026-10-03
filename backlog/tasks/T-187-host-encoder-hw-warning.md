@@ -4,7 +4,7 @@ title: Warn when VideoToolbox did not select the hardware encoder
 status: todo
 phase: 6
 owner: mac-host-dev
-depends_on: [T-186]
+depends_on: [T-204]
 decisions: []
 files:
   - host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift
@@ -40,7 +40,7 @@ Source: external architecture review 2026-10-03 (PF7, D8); verification: docs/re
 - The client decoder half (`is_hw=` / `sw_only=`) is in T-168, not here.
 
 **Serialization:**
-- `HEVCEncoder.swift` chain: … T-186 → T-187 (dependency).
+- `HEVCEncoder.swift` chain: … T-177 → T-204 → T-187 (T-204 is the dependency; it took over the encoder half of T-186).
 - `StreamCoordinator.swift` chain: T-165 → T-167 → T-187 → T-196 → T-200. Serialize with T-165 and T-167 (same file, not dependencies).
 - `VideoPipeline.swift` is also edited by T-176/T-177 (earlier via the dependency chain).
 
