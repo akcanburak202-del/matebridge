@@ -2,6 +2,7 @@ package dev.matebridge.client.settings
 
 import dev.matebridge.client.BuildInfo
 import dev.matebridge.client.audio.AudioOutPref
+import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
@@ -64,6 +65,12 @@ interface SettingsHost {
     val filesShare: Boolean
     /** Persists the switch; turning it on without "all files access" opens the system permission screen. */
     fun setFilesShare(on: Boolean)
+    /** T-190 (decision 0028): the shared folder; a change restarts a running server with the new root. */
+    val filesRoot: FilesRoot
+    fun selectFilesRoot(r: FilesRoot)
+    /** T-190: read-only sharing; a change restarts a running server. */
+    val filesReadOnly: Boolean
+    fun setFilesReadOnly(on: Boolean)
     /** The status line under the switch. */
     val filesStatus: String
 
@@ -215,6 +222,12 @@ object SettingsCatalog {
             "Tablet dosyaları",
             listOf(
                 SettingItem.Toggle("files", "Tablet dosyalarını Mac'te göster", { h.filesShare }, { h.setFilesShare(it) }),
+                SettingItem.Choice(
+                    "files_root", "Paylaşılan klasör",
+                    FilesRoot.entries.map { SettingItem.Option(it.id, it.label) },
+                    { h.filesRoot.id },
+                ) { id -> h.selectFilesRoot(FilesRoot.parse(id)) },
+                SettingItem.Toggle("files_ro", "Salt okunur", { h.filesReadOnly }, { h.setFilesReadOnly(it) }),
                 SettingItem.Info("files_status") { h.filesStatus },
             ),
         )

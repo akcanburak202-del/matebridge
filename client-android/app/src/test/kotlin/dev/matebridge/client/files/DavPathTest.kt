@@ -82,6 +82,25 @@ class DavPathTest {
         assertNotNull(DavPath.resolve(r, listOf("alias", "x")))
     }
 
+    @Test fun aSubFolderRootDoesNotReachItsSiblingsOrParent() { // T-190: root = storage/MateBridge
+        val storage = tmp.newFolder("storage").canonicalFile
+        val r = File(storage, "MateBridge").also { it.mkdir() }
+        File(storage, "DCIM").mkdir()
+        File(storage, "DCIM/photo.jpg").writeText("x")
+        File(storage, "top.txt").writeText("x")
+        Files.createSymbolicLink(File(r, "kamera").toPath(), File(storage, "DCIM").toPath())
+        Files.createSymbolicLink(File(r, "up").toPath(), storage.toPath())
+        Files.createSymbolicLink(File(r, "rel").toPath(), File("../DCIM").toPath())
+        for (segs in listOf(listOf("kamera"), listOf("kamera", "photo.jpg"), listOf("kamera", "new.jpg"), listOf("up", "top.txt"), listOf("rel", "photo.jpg"))) {
+            assertNull(segs.toString(), DavPath.resolve(r, segs))
+        }
+        // A sibling whose name starts like the root is not "inside" it.
+        val twin = File(storage, "MateBridge2").also { it.mkdir() }
+        Files.createSymbolicLink(File(r, "twin").toPath(), twin.toPath())
+        assertNull(DavPath.resolve(r, listOf("twin", "x")))
+        assertNotNull(DavPath.resolve(r, listOf("new.txt")))
+    }
+
     @Test fun nfdRequestFindsNfcFileAndNewNamesAreNfc() {
         val r = root()
         val nfc = Normalizer.normalize("Öğrenci ödevi.pdf", Normalizer.Form.NFC)
