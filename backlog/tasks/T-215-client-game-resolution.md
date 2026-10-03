@@ -18,6 +18,7 @@ files:
   - client-android/app/src/test/kotlin/dev/matebridge/client/settings/
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
   - docs/KNOBS.md
+  - docs/LOGGING.md
   - backlog/tasks/T-215-client-game-resolution.md
 ---
 
@@ -56,14 +57,14 @@ Karar 0029: tablette kalıcı bir "Oyun çözünürlüğü" ayarı (1400×920 ·
 
 ## Handoff
 
-- **Commit:** `496a0a9` (kod + testler + KNOBS); plan `5875af4`; bu handoff ayrı commit.
-- **Dokunulan dosyalar:** `stream/GameResolution.kt` (yeni), `stream/GameMode.kt`, `stream/StreamMode.kt` (`toastText(display)`, `VideoLayout.surfaceSize`), `session/Settings.kt`, `session/DevKnobs.kt` (`game_display` knob, `StreamProfile.display*`), `settings/SettingsCatalog.kt`, `MainActivity.kt`; testler `stream/GameResolutionTest.kt` (yeni), `stream/GameModeTest.kt`, `settings/SettingsCatalogTest.kt`, `settings/SettingsResetTest.kt`, `session/DevKnobsTest.kt`; `docs/KNOBS.md` (satır 23c).
+- **Commit:** `496a0a9` (kod + testler + KNOBS); plan `5875af4`; ilk handoff `3d76b2d`; `main` birleştirmesi `a1c5501` (656f566 PROTOCOL düzeltmesi); düzeltme (tam geometri `display_applied` + LOGGING) bu handoff güncellemesiyle aynı commit'te (SHA orkestratöre raporda).
+- **Dokunulan dosyalar:** `stream/GameResolution.kt` (yeni), `stream/GameMode.kt`, `stream/StreamMode.kt` (`toastText(display)`, `VideoLayout.surfaceSize`), `session/Settings.kt`, `session/DevKnobs.kt` (`game_display` knob, `StreamProfile.display*`), `settings/SettingsCatalog.kt`, `MainActivity.kt`, `docs/LOGGING.md` (orkestratör onayıyla `files:`'a eklendi); testler `stream/GameResolutionTest.kt` (yeni), `stream/GameModeTest.kt`, `settings/SettingsCatalogTest.kt`, `settings/SettingsResetTest.kt`, `session/DevKnobsTest.kt`; `docs/KNOBS.md` (satır 23c).
 - **Sonuç:** `./scripts/check.sh` → `ALL OK`. JVM: `prefs(GAME)` = (120, 660, bitrate, 1848, 1214) fixture `stream_prefs_game_display` ile bayt bayt aynı; `prefs(GAME60)` = (60, 1000, bitrate, 1848, 1214); oyun dışı modlar ve `gameDisplay=false` 8 bayt (fixture `stream_prefs` dahil). Çözünürlük değişimi yalnız oyun modunda tam bir STREAM_PREFS döndürür (`GameModeSettings.selectGameResolution`); sıfırlama `game_resolution`'ı siler (USER_KEYS 16). `surfaceSize`: üç boyut 2800×1840'ı doldurur (null = MATCH_PARENT), 16:10 / 4:3 letterbox kalır, 3 px fark letterbox.
 - **Varsayımlar:**
   - `GameResolution.id` = `"<w>x<h>"` (kayıtlı değer ve panel seçeneği), etiket `"<w>×<h>"`.
   - Çözünürlük oyun katmanının (0014) parçası değil: oyun modundayken de doğrudan `Settings`'e yazılır; panelde "(oyun modu)" işareti almaz. Oyun dışı modda seçim yalnız saklanır, gönderim yok.
   - `--ei game_display N`: yalnız `N == 0` (ve `--ez dev true`) grubu kapatır; diğer değerler/yanlış tip = ayar geçerli. `ev=dev_knobs`/`knobs=` içinde `game_display:0` görünür.
-  - `ev=profile`: `scale_permille`'den sonra `display=native` ya da `display=<w>x<h> display_applied=0|1` (`STREAM_CONFIG.width_pt == display_width_px`; 0 = eski host/geri düşüş).
+  - `ev=profile`: `scale_permille`'den sonra `display=native` ya da `display=<w>x<h> display_applied=0|1`. Uygulandı = tam geometri (PROTOCOL §0x05, 656f566): `width_px == width_pt == w` ve `height_px == height_pt == h` (`GameResolution.appliedIn`). Test: 1400×920 isteği doğal HiDPI (2800×1840 px / 1400×920 pt) ve 660 ölçekli doğal ekran (1848×1214 px / 1400×920 pt) karşısında `0`.
   - `VideoLayout.surfaceSize` her modda geçerli: doğal ekranda (1400×920 pt) da yüzey artık açık 2800×1840 yerine MATCH_PARENT (aynı boyut). Girdi görünüm dikdörtgeni (`VideoViewport.ofRect`) yerleşimden geldiği için 1848×1214'te tüm panel = 0..65535.
   - Toast (Ctrl+Shift+7) oyun modunda ölçek yerine boyutu gösterir: "Oyun 120: 120 fps, 1848×1214".
 - **Test edilmeyenler / cihazda doğrulanacaklar (T-216):**
@@ -73,4 +74,4 @@ Karar 0029: tablette kalıcı bir "Oyun çözünürlüğü" ayarı (1400×920 ·
   4. Oyun modundan Akıcı'ya dön: `display=native`, `size=2800x1840`, Mac masaüstü HiDPI'ye geri döner. Ctrl+Shift+7 toast'u oyun modlarında boyutu gösterir.
   5. `adb shell am start ... --ez dev true --ei game_display 0` ile Oyun 120: `display=native`, `scale_permille=660`, T-215 öncesi davranış (A/B tabanı). "Varsayılanlara dön" sonrası seçim 1848×1214'e döner.
 - **Açık sorular:**
-  - `docs/LOGGING.md` kartın `files:` listesinde değil; orkestratörün eklemesi gereken satır (istemci `session ev=profile`, satır ~404): `mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] bitrate_kbps=…` — `display_applied` yalnız oyun ekranı istendiğinde yazılır; `1` = host `width_pt == display_width_px` ile uyguladı, `0` = eski host ya da `game_display_failed` geri düşüşü.
+  - Yok. (`docs/LOGGING.md` `ev=profile` satırı eklendi. Not: aynı girdideki "`pacer`: … (Oyun modunda `buffer0`)" ifadesi T-211'den beri eski; bu kartın kapsamı dışında, dokunulmadı.)

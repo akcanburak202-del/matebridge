@@ -1200,7 +1200,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             bufferFrames = bufferFrames,
             displayWidthPx = gameSettings.display(streamMode)?.widthPx ?: 0,
             displayHeightPx = gameSettings.display(streamMode)?.heightPx ?: 0,
-            displayApplied = gameSettings.display(streamMode)?.let { config.widthPt == it.widthPx } ?: false,
+            displayApplied = gameSettings.display(streamMode)?.appliedIn(config) ?: false,
         )
         MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs))
     }

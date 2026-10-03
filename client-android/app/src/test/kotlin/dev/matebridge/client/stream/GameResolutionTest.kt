@@ -8,6 +8,7 @@ import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.Settings
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -138,6 +139,26 @@ class GameResolutionTest {
         val g = GameModeSettings(settings)
         assertEquals("Akıcı: 120 fps, %100", StreamMode.SMOOTH.toastText(g.display(StreamMode.SMOOTH)))
         assertEquals("Oyun 120: 120 fps, 1848×1214", StreamMode.GAME.toastText(g.display(StreamMode.GAME)))
+    }
+
+    // ---- applied check (PROTOCOL §0x05: full geometry) ----
+
+    @Test fun appliedNeedsTheFullGeometry() {
+        for (r in GameResolution.entries) assertTrue(r.id, r.appliedIn(cfg1x(r.widthPx, r.heightPx)))
+        assertFalse(GameResolution.R1848.appliedIn(cfg1x(1400, 920))) // another 1x size
+        assertFalse(GameResolution.R1848.appliedIn(StreamConfig(1, 2, 1848, 1214, 1848, 1215, 120, 1, 1, 1, 1, 1)))
+        assertFalse(GameResolution.R1848.appliedIn(StreamConfig(1, 2, 1848, 1213, 1848, 1214, 120, 1, 1, 1, 1, 1)))
+    }
+
+    @Test fun r1400IsNotAppliedByANativeHiDpiDisplay() {
+        // An old host (or `game_display_failed`) keeps the native HiDPI display: 1400×920 pt, the same as the request.
+        val nativeFull = StreamConfig(1, 2, 2800, 1840, 1400, 920, 120, 60_000, 1, 1, 1, 1)
+        val nativeScaled = StreamConfig(1, 2, 1848, 1214, 1400, 920, 120, 60_000, 1, 1, 1, 1) // Oyun 120 at 660
+        assertEquals(1400, nativeFull.widthPt) // the width_pt-only check would say "applied"
+        assertFalse(GameResolution.R1400.appliedIn(nativeFull))
+        assertFalse(GameResolution.R1400.appliedIn(nativeScaled))
+        assertFalse(GameResolution.R1848.appliedIn(nativeScaled)) // encoded size matches, display does not
+        assertTrue(GameResolution.R1400.appliedIn(cfg1x(1400, 920)))
     }
 
     // ---- layout (VideoLayout.surfaceSize) ----

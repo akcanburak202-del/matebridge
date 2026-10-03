@@ -206,7 +206,7 @@ data class StreamProfile(
     /** T-215: the requested game display (STREAM_PREFS `display_*`); 0×0 = native HiDPI display. */
     val displayWidthPx: Int = 0,
     val displayHeightPx: Int = 0,
-    /** T-215: the host applied the requested game display (`STREAM_CONFIG.width_pt == display_width_px`). */
+    /** T-215: the host applied the requested game display (full geometry, `GameResolution.appliedIn`). */
     val displayApplied: Boolean = false,
 ) {
     fun logFields(sha: String, built: String, knobs: DevKnobs): String =

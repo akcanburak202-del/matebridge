@@ -401,11 +401,13 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
   - `ignored`: `--ez dev true` verilmediği için yok sayılan "yalnızca geliştirici" anahtarları, `docs/KNOBS.md` sırasıyla.
   - Yalnız anahtar adları yazılır, değerler asla (`net_bench` adresi dahil). Biçim T-127 için sabittir.
 - `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme). Oturum normal başlar.
-- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|-`
+- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|-`
   - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
   - Alanların kaynağı:
     - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
     - `mode`, `scale_permille`: tablette seçilen mod.
+    - `display` (T-215, karar 0029): STREAM_PREFS'te istenen oyun ekranı. `native` = grup yok (oyun dışı modlar ya da `--ez dev true --ei game_display 0`); oyun modunda "Oyun çözünürlüğü" ayarı, ör. `1848x1214`.
+    - `display_applied` yalnız oyun ekranı istendiğinde yazılır. `1`: host uyguladı, tam geometriyle (`width_px == width_pt == w` ve `height_px == height_pt == h`, PROTOCOL §0x05). `0`: eski host ya da `game_display_failed` geri düşüşü (doğal HiDPI ekran).
     - `bitrate_setting`: tabletin ayarı (0 = `auto`).
     - `transport`: geçerli bağlantı. `transport_mode`: geçerli bağlantı modu ayarı ya da açılış geçersiz kılması.
     - `audio=1`: ses açık (`--ez audio false` verilmedi ve panel ayarı açık).
