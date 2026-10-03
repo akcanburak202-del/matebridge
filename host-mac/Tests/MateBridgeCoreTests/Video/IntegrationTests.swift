@@ -321,6 +321,44 @@ final class VideoSenderTests: XCTestCase {
         await sender.stop()
     }
 
+    /// T-170: the trace carries the `frame_seq` the frame was sent with; a refused frame consumes none.
+    func testSenderRecordsFrameSeqIntoTrace() async {
+        let transport = FakeTransport()
+        transport.limit = 8
+        let traces = LockedValue<[FrameTrace]>([])
+        let clockValue = LockedValue<UInt64>(1_000)
+        let frames = VideoFrameQueue(keyframeNeeded: {})
+        let sender = VideoSender(transport: transport, frames: frames, requestKeyframe: {},
+                                 trace: { t in traces.set(traces.get() + [t]) },
+                                 clock: { let v = clockValue.get(); clockValue.set(v + 100); return v })
+        // The encoder puts the wire stamp into the trace as `ptsUs`; use it to pair trace and wire frame.
+        func stamped(_ f: EncodedVideoFrame) -> EncodedVideoFrame {
+            var f = f
+            f.trace.ptsUs = f.captureTimeUs
+            return f
+        }
+        sender.start()
+        transport.accept = false
+        frames.push(stamped(key(9)))   // refused: consumes no seq, produces no trace
+        await waitUntil("refused") { sender.currentCounters.framesRejected == 1 }
+        transport.accept = true
+        frames.push(stamped(key(1)))
+        await waitUntil("sent 1") { transport.sentCount == 1 }
+        for n in 2...4 {
+            frames.push(stamped(delta(UInt8(n))))
+            await waitUntil("sent \(n)") { transport.sentCount == n }
+        }
+        for _ in 0..<4 { transport.complete() }
+        await waitUntil("traced") { traces.get().count == 4 }
+        let sent = transport.sent
+        XCTAssertEqual(sent.map(\.frameSeq), [0, 1, 2, 3])
+        let seqByStamp = Dictionary(uniqueKeysWithValues: sent.map { ($0.captureTimeUs, $0.frameSeq) })
+        for t in traces.get() {
+            XCTAssertEqual(t.frameSeq, seqByStamp[t.ptsUs], "trace frame_seq = VIDEO_FRAME.frame_seq (pts \(t.ptsUs))")
+        }
+        await sender.stop()
+    }
+
     func testTransportFailureEndsSender() async {
         let transport = FakeTransport()
         let ended = LockedValue<VideoSender.EndReason?>(nil)
@@ -381,9 +419,11 @@ final class StatsSummaryTests: XCTestCase {
         XCTAssertEqual(s.fps, 58, accuracy: 0.001)
         XCTAssertEqual(s.bitrateKbps, 30_000, accuracy: 0.001)
         XCTAssertEqual(s.latencyMs ?? 0, 35, accuracy: 0.001)
-        XCTAssertEqual(s.menuText, "58 fps · 30.0 Mbit/s · 35 ms")
+        XCTAssertEqual(s.menuText, "58 fps · 30.0 Mbit/s · yak→çöz 35 ms")
         XCTAssertTrue(s.logFields.contains("fps=58.0"))
         XCTAssertTrue(s.logFields.contains("dropped=2"))
+        // T-170: the tablet number is capture->decode; `latency_ms` stays one release as an alias.
+        XCTAssertTrue(s.logFields.hasSuffix(" cap_dec_ms=35.0 latency_ms=35.0"), s.logFields)
     }
 
     func testUnknownLatencyAndZeroInterval() {
@@ -392,7 +432,7 @@ final class StatsSummaryTests: XCTestCase {
         XCTAssertEqual(s.fps, 0)
         XCTAssertNil(s.latencyMs)
         XCTAssertFalse(s.menuText.contains(" ms"))
-        XCTAssertTrue(s.logFields.hasSuffix("latency_ms=unknown"))
+        XCTAssertTrue(s.logFields.hasSuffix(" cap_dec_ms=unknown latency_ms=unknown"), s.logFields)
     }
 }
 

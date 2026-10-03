@@ -438,7 +438,13 @@ public final class StreamCoordinator: @unchecked Sendable {
         let sender = VideoSender(transport: link, frames: pipeline.frames,
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
                                  onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
-                                 trace: { [weak pipeline] t in pipeline?.recordTrace(t) },
+                                 // T-170: join keys from the link, not the pipeline (it outlives sessions).
+                                 trace: { [weak pipeline, sid = link.sessionID, cid = link.configID] t in
+                                     var t = t
+                                     t.sessionID = sid
+                                     t.configID = cid
+                                     pipeline?.recordTrace(t)
+                                 },
                                  clock: { HostClock.nowUs() })
         consumer = .sender(id: id, sender, link)
         lastSent = VideoSender.Counters()
