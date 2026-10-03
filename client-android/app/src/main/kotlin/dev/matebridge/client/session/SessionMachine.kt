@@ -40,8 +40,8 @@ import dev.matebridge.client.protocol.VideoHello
  * video closes, the old control connection is *retired* (no BYE, no more input routed to it, already queued messages
  * still drain), the remembered settings follow the proof PING on the new one, and that first record (normally the new
  * STREAM_CONFIG) is handled as the new session's. The host supersedes the old session (releases its input, BYE(SUPERSEDED),
- * close) on our proof, so that BYE and close may arrive while the proof is pending: they do not end the session, the
- * candidate's outcome decides (if it fails then, the session is lost and reconnects). The retired connection is closed on
+ * close) on our proof, so that BYE and close (or the old heartbeat expiring) may come while the proof is pending: they do
+ * not end the session, the candidate's outcome decides (if it fails then, the session is lost and reconnects). The retired connection is closed on
  * the new STREAM_CONFIG (or after [RETIRE_TIMEOUT_US]). A candidate that fails in any way is closed alone: the current
  * session is never touched while it lives. Every Migrate yields exactly one [Action.MigrationResult].
  *
@@ -792,8 +792,12 @@ class SessionMachine(
             failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_TIMEOUT else REASON_TIMEOUT)
         }
         if (retiredGen >= 0 && nowUs >= retireDeadlineUs) closeRetired(out)
+        // T-205 review: while the proof is pending, the current connection's heartbeat expiring is treated like its close
+        // (the host may have superseded it and its PONG baseline is older than the proof): it is marked gone instead of
+        // losing the session (which would also drop the candidate and its authenticated STREAM_CONFIG).
+        if (candAck != null && nowUs - lastPongUs >= PONG_TIMEOUT_US) oldConnectionGone("pong_timeout")
         // T-205: the host superseded the current connection for our pending proof: no PONG timeout, ping or video retry
-        // on it; the candidate's first record or its deadline (above) decides.
+        // on it; the candidate's first record or its deadline (above) decides (a failure then loses the session).
         if (oldGone) return
         when (phase) {
             Phase.WAIT_RETRY -> if (nowUs >= retryAtUs) openControl(out)
@@ -944,7 +948,7 @@ class SessionMachine(
         log('I', "migration_proof_wait", "cand_gen=$candGen")
     }
 
-    /** T-205: BYE(SUPERSEDED) or a close of the current connection while the candidate's proof is pending. */
+    /** T-205: BYE(SUPERSEDED), a close or a heartbeat expiry of the current connection while the proof is pending. */
     private fun oldConnectionGone(how: String) {
         if (oldGone) return
         oldGone = true

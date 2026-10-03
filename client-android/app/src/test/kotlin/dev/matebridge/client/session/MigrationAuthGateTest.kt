@@ -345,6 +345,56 @@ class MigrationAuthGateTest {
         assertTrue(res.filterIsInstance<Action.Ui>().single().state is SessionUi.Disconnected)
     }
 
+    /**
+     * Codex review (T-205): the Wi-Fi PONG baseline is 2.9 s old when the candidate's proof goes out and the host's takeover
+     * answer takes another 150 ms. The old heartbeat expiring meanwhile must not lose the session (and with it the
+     * candidate's authenticated STREAM_CONFIG): it counts as the old connection gone, and the candidate decides.
+     */
+    @Test fun oldHeartbeatExpiringDuringTheProofDoesNotAbortAValidMigration() {
+        val w = streamingOnWifi() // last PONG baseline: the accept, now
+        assertTrue(sendInput(key(Key.DOWN), w))
+        assertTrue(step(Event.Tick(0), 2_900_000).none { it is Action.Ui }) // no PONG for 2.9 s: not yet a timeout
+        val c = openCandidate()
+        ackOnly(c, mac())
+        val since = actions.size
+        val t = step(Event.Tick(0), 150_000) // 3.05 s since the last PONG
+        assertTrue(t.isEmpty()) // before T-205's fix: lose() here (CloseControl, CloseCandidate, Ui Disconnected)
+        assertTrue(logs.any { it == "I migration_old_gone how=pong_timeout" })
+        assertTrue(m.migrating)
+        assertTrue(m.inputAllowed)
+        assertTrue(sendInput(key(Key.UP), w)) // the release is never refused; it goes to the Wi-Fi generation
+        assertEquals(listOf(Key.DOWN, Key.UP), sent(w).filterIsInstance<Key>().map { it.action })
+        // no more pings or PONG-timeout on the old connection while the candidate's deadline runs
+        val pings = sent(w).count { it is Ping }
+        assertTrue(step(Event.Tick(0), 100_000).isEmpty())
+        assertEquals(pings, sent(w).count { it is Ping })
+        // the takeover's answer arrives: promoted, and the promoted generation is announced before its STREAM_CONFIG
+        // (T-153's FilesSessionGate relies on onConnectionGen preceding ApplyConfig)
+        val r = c.records(cfg(2), Pong(0, 0, 0))
+        val iPromote = r.indexOfFirst { it is Action.PromoteCandidate }
+        assertTrue(iPromote >= 0 && iPromote < r.indexOfFirst { it is Action.ApplyConfig })
+        assertEquals(Action.MigrationResult(usb, true, SessionMachine.REASON_OK), r.filterIsInstance<Action.MigrationResult>().single())
+        assertEquals(1, r.count { it is Action.OpenVideo })
+        assertTrue(actions.drop(since).none { it is Action.CloseControl || it is Action.CloseCandidate })
+        assertTrue(actions.drop(since).filterIsInstance<Action.Ui>().all { it.state is SessionUi.Connected })
+        assertEquals(c.gen, m.acceptedGen)
+        // the new session's heartbeat starts at the promotion: no timeout right after it
+        assertTrue(step(Event.Tick(0), 100_000).none { it is Action.Ui && it.state is SessionUi.Disconnected })
+    }
+
+    @Test fun oldHeartbeatExpiredAndASquatterCandidateReconnects() {
+        streamingOnWifi()
+        step(Event.Tick(0), 2_900_000)
+        val c = openCandidate()
+        ackOnly(c, mac(key = wrongKey))
+        assertTrue(step(Event.Tick(0), 150_000).isEmpty()) // old heartbeat expired: marked gone, no lose yet
+        val r = c.records(cfg(2)) // does not authenticate
+        assertEquals(Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED), r.filterIsInstance<Action.MigrationResult>().single())
+        assertEquals(SessionUi.Disconnected(SessionUi.Cause.LOST, SessionMachine.BACKOFF_START_US / 1000), r.filterIsInstance<Action.Ui>().single().state)
+        assertTrue(r.any { it is Action.CloseControl })
+        assertFalse(m.inputAllowed)
+    }
+
     @Test fun cancelDuringTheProofLeavesTheWifiSession() {
         val w = streamingOnWifi()
         val c = openCandidate()
