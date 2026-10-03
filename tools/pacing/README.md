@@ -14,9 +14,12 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
   Path names in pace traces: `early_sparse` / `early_first` = lone frame on the earliest slot (`acquire_ns` is the slot
   the old hold would have chosen), `warmup` = lock re-acquired on a thin jitter history.
 - `sim.py TRACE --holds` (T-208) — hold distribution of the released frames from a device trace: per panel rate and
-  content cadence n (capture gap = n periods +- 1 ms), the share of frames held exactly n vsyncs (planned
-  `released_slot_ns`, not the compositor's), plus ready->slot p50 and path counts. Device check for 60 fps on 120 Hz:
-  `120 Hz, cadence 2: ... exact >= 98%`, paths mostly `locked`.
+  content cadence n, the share of frames held exactly n vsyncs (planned `released_slot_ns`, not the compositor's),
+  plus ready->slot p50 and path counts. The cadence comes from the original capture sequence (every decoded frame,
+  also replaced/discarded ones: all gaps between two visible frames n periods +- 1 ms), so a dropped frame counts as a
+  hold of 2n, not as a skipped interval. Device check for 60 fps on 120 Hz: `120 Hz, cadence 2: ... exact >= 98%`,
+  paths mostly `locked`. `python3 sim.py --holds-selftest` checks this on a synthetic trace (every 10th frame
+  replaced: `89 intervals, exact 88.8%, holds 2:88.8% 4:11.2%`).
 - T-208 old/new replay of the integer-cadence lock: the JVM test `IntegerCadenceLockTest` (synthetic 60 fps on 120 Hz,
   uniform and two-bucket jitter, panel switches, host drift) and `traceReplayThinnedTo60FpsOldVersusNew` (`trace7` with every
   second capture = 60 fps content with real decode jitter) print old (`integerLock` off) against new
