@@ -1,7 +1,7 @@
 ---
 id: T-205
 title: Promote an AUTO USB migration candidate only after its first authenticated host record
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]
@@ -62,7 +62,17 @@ Decision 0018 must be accepted by the user before work starts ("Taşıma adayı,
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Seçilen şekil: önerilen sıra (önce kanıt, sonra emekliye ayırma + terfi); "geri almalı geçici terfi" değil.
+
+1. `SessionMachine.kt`: adayın şifresiz ACCEPTED'ı artık terfi etmez. Aday *kanıt bekliyor* durumuna geçer, ack'i (host adı, session_id, video portu) saklanır, kanıt PING'i **adayın** üstünden gider (`SendCandidate(Ping)`), `migration_proof_wait` loglanır. Wi-Fi oturumu current kalır: `inputAllowed`/`acceptedGen` değişmez, video kapanmaz, ping'ler sürer.
+2. Adaydan gelen ilk kayıt (okuyucu yalnız çözülüp doğrulanan kaydı `Received` olarak verir) terfiyi tetikler: eski video kapanır, eski kontrol emekliye ayrılır, aday terfi eder, ayarlar (STREAM_PREFS, DISPLAY_RATE, AUDIO_PREFS, FILES_INFO) aynı FIFO'da kanıt PING'inin arkasından gider, `MigrationResult(ok)`, sonra o ilk kayıt yeni oturumun mesajı olarak işlenir (STREAM_CONFIG → video açılır, emekli kapanır). İkinci PING yok.
+3. Kanıt beklenirken eski bağlantıda BYE(SUPERSEDED) ya da kapanma `lose()` çağırmaz: "eski gitti" işaretlenir; o arada eski bağlantıda PONG zaman aşımı, ping ve video yeniden açma durur, karar aday süresine kalır. Aday sonra başarısız olursa (süre, kapanma, iptal) oturum normal `lose()` ile yeniden bağlanır (takılı kalmaz).
+4. Kanıt sırasında hatalar yeni sebeplerle biter: `proof_failed` (bozuk kayıt / ProtocolError), `proof_closed` (kapanma ya da BYE), `proof_timeout` (3 s `MIGRATE_TIMEOUT_US`). Hiçbiri `SOFT_REASONS` içinde değil → HARD_FAIL; `AutoTransport.kt` değişmez.
+5. Adayın `Secured` olayı: anahtar asla saklanmaz (sıfırlanır); host_id oturumunkinden farklıysa aday `key` sebebiyle düşer (aynı Mac, aynı güvenilen anahtar).
+6. `SessionController.kt`: davranış değişmez (kapı terfi anında kapanıp açılır, `SendCandidate` PING'i de mühürler); yorumlar/loglar yeni sıraya göre güncellenir.
+7. Testler: `MigrationTest` yeni sıraya göre yeniden yazılır; yeni `MigrationAuthGateTest` gerçek kriptolu sahte host + denetleyicinin yönlendirme modeliyle: squatter (bozuk kayıt, kapanma, süre), kayıp up olmaması (tuş ve kalem), normal taşıma, PAIRING ack, host_id uyuşmazlığı, eski gittikten sonra aday düşerse yeniden bağlanma.
+
+Riskler: `MigrationCancelTest.cancelWithoutCandidateOrAfterPromotionDoesNothing` eski sırayı kodluyor (ack'te terfi) ve `files:` listesinde yok; kabul kriteri "eski sırayı kodlayan testler yeniden yazılır, Handoff'ta listelenir" dediği için en küçük değişiklikle uyarlanacak ve Handoff'ta belirtilecek.
 
 ## Handoff
 
