@@ -32,6 +32,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
+| [T-207](tasks/T-207-client-clear-usb-asked-after-trust.md) | Clear the "asked to pair" mark on a Mac's endpoints once that Mac is trusted, so AUTO returns to USB | 6 | android-client-dev | [T-151] |
 
 ## done
 
