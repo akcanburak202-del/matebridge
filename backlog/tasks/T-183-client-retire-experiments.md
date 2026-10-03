@@ -1,7 +1,7 @@
 ---
 id: T-183
 title: Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept)
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-182, T-168]
@@ -121,14 +121,65 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Her adımda varsayılan yol aynı kalır: silinen her dal bugün yalnızca bir açılış parametresiyle açılıyordu.
+
+1. **perf hint:** `PerfHint.kt` ve `AndroidPerfHint.kt` silinir. `VideoRenderer` giriş/çıkış thread kancaları, `SessionController` yapıcı parametresi ve okuyucu thread kancası, `MainActivity.setupPerfHint`, `setTargetNs` çağrıları ve `close()` kaldırılır. `PerfHintTest` silinir.
+2. **rvote:** `RefreshVote.kt` silinir. `MainActivity` içindeki `parseRefreshVote`, `applyVoteChange`, driver, `statsTick` oylaması ve yalnızca T-140'ın eklediği `foreground` + `onResume` kaldırılır. `RefreshVoteTest` silinir.
+3. **cpd:** `ConstantPlayoutPacer.kt` silinir. `VideoRenderer.cpdConfig`, `drainOutput` parametresi ve dalı, `paceDUs` içindeki cpd okuması kaldırılır. Ayrıca `CodecState.cpd` alanı gider: T-161 `CodecState`'i `VideoRenderer.kt`'den `CodecGeneration.kt`'ye taşıdı, kart a30c769'a göre yazıldı (bkz. *Implementer check*). `ConstantPlayoutPacerTest` ve `VsyncIdleTest`'teki cpd durumu silinir. README satırı güncellenir.
+4. **oprate:** extra kaldırılır. `OperatingRate.resolve(streamFps)` yalnızca varsayılanı tutar (rate = akış fps). `OperatingRateTest.policies` → `streamFps`.
+5. **inflight:** `maxInFlight`/`inflightLimit` ve `canQueue` kapısı kaldırılır. `presentFields`'e sabit `0` geçer. `SlotReleaser.kt` değişmez.
+6. **keep_jitter/recenter:** `VsyncClock` alanları, `AdaptivePacer` T-067 dalları (pencere, taban, `recenters`) ve `presentFields`'teki `recenters` parametresi kaldırılır. Her biri `false` değerine indirgenir. `LockRecenterTest` silinir.
+7. **crypto bench:** `Records.bench`/`runBench`, extra ve `RecordOpenTest` bench testi kaldırılır.
+8. `display_timing` alanları silinir. `./scripts/check.sh` çalıştırılır, grep yapılır, handoff yazılır.
+
+**Riskler:** `MainActivity` T-169 ile paralel düzenleniyor; çakışmayı azaltmak için yalnızca silme yapılır. `canQueue(0, …)` her zaman `true` döndüğünden kapının silinmesi davranışı değiştirmez.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `0595907` (kod; plan `f87165e`, handoff bunu izleyen commit). Dal `task/T-183-client-retire-experiments`, `main` 090bb68 üzerinde. `./scripts/check.sh`: ALL OK. JVM: 1399 test, 0 hata.
+- **Dokunulan dosyalar** (yollar `client-android/app/src/` altında):
+  - Değişen, `main/kotlin/dev/matebridge/client/` altında: `MainActivity.kt`, `video/VideoRenderer.kt`, `video/AdaptivePacer.kt`, `video/FramePacer.kt`, `video/OperatingRate.kt`, `video/CodecGeneration.kt` (**`files:` dışında**, bkz. Açık sorular 1), `stream/StatsFormat.kt`, `session/SessionController.kt`, `security/Records.kt`.
+  - Silinen kaynaklar: `video/PerfHint.kt`, `video/AndroidPerfHint.kt`, `video/RefreshVote.kt`, `video/ConstantPlayoutPacer.kt`.
+  - Silinen testler: `PerfHintTest`, `RefreshVoteTest`, `ConstantPlayoutPacerTest`, `LockRecenterTest`.
+  - Değişen testler:
+    - `VsyncIdleTest`: yalnızca cpd durumu (3 durum → 2).
+    - `AdaptivePacerTest`: yalnızca `OperatingRateTest.policies` → `streamFps`.
+    - `RecordOpenTest`: yalnızca `benchReportsInitAndFinalSplitPerSize`.
+  - Ayrıca `tools/pacing/README.md` (tek satır).
+- **Grep** (`PerfHint|RefreshVote|ConstantPlayoutPacer|CpdConfig|keepJitter|recenter|inflightLimit|maxInFlight|Records\.bench|runBench`, `client-android/app/src`): yalnızca `video/PaceTrace.kt:21` (`PATH_CPD`'nin KDoc'u) ve `:113` (`PATHS`) kalır. İkisi de kabul edilen istisna; `PaceTrace.kt` değişmedi, CSV yol kodları aynı.
+- **Değişmediği doğrulananlar** (`git diff main` boş): `WifiKnobs.kt`, `session/` testleri (`WifiKnobsTest` dahil), `AndroidManifest.xml` (`WAKE_LOCK`), `SlotReleaser.kt`, `PaceTrace.kt`, `tools/pacing/sim.py`, `trace7_120hz_excerpt.csv`.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - **oprate:** varsayılan aynı kalır. `OperatingRate.resolve(streamFps)` fps > 0 ise onu döndürür, değilse null. Etkisiz olduğu cihazda gösterilmedi.
+  - **inflight:** `InFlightGauge.canQueue(0, …)` her zaman `true` döndürüyordu. Bu yüzden kapının silinmesi davranışı değiştirmez. `onHeld()` artık çağrılmıyor; varsayılanda da çağrılmıyordu.
+  - **recenter/keep_jitter:** `AdaptivePacer`'daki her dal `recenter=false` / `keepJitter=false` haline indirgendi:
+    - `jEff` = `jitter`;
+    - `acquire` içinde `minimum = ideal + d`;
+    - warm-up koşulunda `!recenter` gitti;
+    - `reanchor` her zaman sıfırlar.
+  - **`present` satırı:** `recenters=` yalnızca `--ez recenter true` ile basılıyordu. Satır varsayılanda bayt bayt aynı (`presentFieldsFormat` testi değişmeden geçiyor). `inflight_limit=0` sabit.
+  - **`foreground` + `onResume`:** yalnızca T-140 (5d954bd) eklemişti ve yalnızca rvote okuyordu, birlikte silindi.
+  - **`SessionController`:** yapıcıdan `perfHint` parametresi çıktı (konumsal çağrı `MainActivity`'de güncellendi). Okuyucu thread'deki `try/finally` yalnızca hint içindi; `finally` gitti, `catch`'ler aynı.
+- **Test edilmeyenler / cihazda doğrulanacaklar** (tablete dokunulmadı):
+  1. Akıcı 120 ve Oyun 120, USB üzerinden 2'şer dakika. NOTES 2026-10-03 ile kıyaslanacak (`cap_dec_*`, `released=` ya da alias'ları). Beklenen: benzer gecikme ve released/shown sayıları, `detach_slow` yok, yeni hata satırı yok.
+  2. Kaldırılan extra'larla açılış çökmemeli ve etkisiz kalmalı: `--ez perf_hint true`, `--ei rvote 3`, `--es pacer cpd`, `--ei inflight 3`, `--ez recenter true`, `--ez crypto_bench true`, `--ei oprate -1`.
+  3. `ev=codec_start` hâlâ `requested_rate=<fps>` göstermeli (oprate varsayılanı korunuyor).
+  4. `ev=display_timing` satırı aşağıdaki alanlar olmadan basılmalı; `ev=present` aynı alanlarla (`inflight_limit=0`).
+  5. Arka plan → ön plan ve oturum kapanışı: `onResume` kaldırıldı. Davranış değişikliği beklenmiyor, ama yaşam döngüsü bir kez denenmeli.
 - **Açık sorular:**
+  1. **`files:` dışı düzenleme:** `video/CodecGeneration.kt`'de tek satır silindi (`@Volatile var cpd: ConstantPlayoutPacer? = null`). T-161 `CodecState`'i `VideoRenderer.kt`'den buraya taşımıştı. Kart a30c769'a göre yazılmıştı (*Implementer check*). `ConstantPlayoutPacer` silinince bu alan derlenmez, bu yüzden kartın kapsamı içinde saydım. Orkestratör onaylamazsa cpd silme adımı geri alınmalı.
+  2. **LOGGING.md için kaldırılan alanlar ve olaylar:**
+     - `MB/render ev=display_timing`: `keep_jitter=`, `recenter=`, `pacer=`, `cpd_q_permille=`, `cpd_hold_us=`, `inflight=`. Satır artık `deadline_override=` ile bitiyor.
+     - `MB/render ev=present`: `recenters=` (yalnızca `--ez recenter true` ile basılıyordu). `inflight_limit=` kalıyor, her zaman `0`.
+     - Tamamen kalkan olaylar:
+       - `ev=perf_hint`: **her açılışta varsayılan olarak basılıyordu**, artık yok. Ayrıca `ev=perf_hint_target`, `ev=perf_hint_error`.
+       - `ev=rvote_config`, `ev=rvote`, `ev=rvote_reflect`, `ev=rvote_reflect_failed`.
+       - `ev=crypto_bench`.
+     - `docs/LOGGING.md` bu alanların hiçbirini şu an anmıyor (grep). Gerekirse yalnızca "T-183 ile kaldırıldı" notu eklenir.
+  3. **KNOBS.md:**
+     - 3, 6, 9, 10, 12, 13 ve 16. satırlar "kaldırıldı (T-183, `0595907`)" olarak işaretlenebilir.
+     - 3. satır için not: "`--ei oprate` silindi; varsayılan rate = akış fps korunuyor (`OperatingRate.resolve(streamFps)`)".
+  4. **Takip işleri** (bu kartta değil):
+     - `InFlightGauge.canQueue`, `onHeld` ve `STALL_NS` artık kullanılmıyor (`SlotReleaser.kt`, `PresentationSchedulingTest`'te test ediliyor).
+     - `DecoderEnv.myTid()` (`DecoderCodec.kt:158`; test sahteleri `FakeDecoderCodec.kt:232`, `DecoderTeardownTest.kt:356`) artık çağrılmıyor.
+     - `PaceTrace.PATH_RECENTER`/`PATH_CPD` ve KDoc'u, CSV indeksleri için kalıyor.
+  5. `VsyncIdleTest`'in cpd durumu silindiği için döngü 3 yerine 2 tur dönüyor. Adaptive ve sabit tampon durumları değişmedi.

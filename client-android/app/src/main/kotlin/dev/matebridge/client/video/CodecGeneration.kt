@@ -205,7 +205,6 @@ internal class CodecState(val generation: CodecGeneration, ptsMapMax: Int) {
     val readyByPts = PtsMap(ptsMapMax)
     val arrival = ArrivalTracker()
     @Volatile var adaptive: AdaptivePacer? = null
-    @Volatile var cpd: ConstantPlayoutPacer? = null
     /** Output thread: time of the latest dequeued output (T-141 idle wait). */
     var lastOutputNs = 0L
 }

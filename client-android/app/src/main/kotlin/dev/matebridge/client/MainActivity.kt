@@ -77,7 +77,6 @@ import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.GlPresenter
 import dev.matebridge.client.video.PresentStats
 import dev.matebridge.client.video.VideoRenderer
-import dev.matebridge.client.video.OperatingRate
 import dev.matebridge.client.stream.DisplayRateDebouncer
 import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.video.VsyncIdleGate
@@ -197,10 +196,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
-    private var cpdConfig: dev.matebridge.client.video.CpdConfig? = null // T-080 (--es pacer cpd), null = phase lock
     private var paceTrace: dev.matebridge.client.video.PaceTrace? = null // T-069 experiment (--ez pace_trace true), default off
-    /** T-079 experiment (--ez perf_hint true), default off; shared by the video reader and the decoder threads. */
-    private var perfHint: dev.matebridge.client.video.PerfHint? = null
     /** T-159 (decision 0019): input capture is live only while the video is HEALTHY. UI thread only. */
     private val videoHealth = dev.matebridge.client.video.VideoHealth(
         SystemClock::elapsedRealtime,
@@ -234,7 +230,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** The launch-time buffer (above) and where a fixed one came from; game mode uses 0 unless fixed (T-109). */
     private var launchBufferFrames = VideoRenderer.BUFFER_ADAPTIVE
     private var bufferFixedBy: GameJitter.Source? = null
-    private var operatingRate = OperatingRate.STREAM_FPS // `--ei oprate 0|-1|-2|N`, see OperatingRate
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
     private val vsyncGaps = IntervalHistogram()
@@ -253,20 +248,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var glPresentationTime = false
     private val presentStats = PresentStats()
     private val glVsync = VsyncClock()
-    private var inflightLimit = 0 // T-057: `--ei inflight N` (0 = unlimited)
     private var presenter: GlPresenter? = null
     private var glDecoderSurface: Surface? = null
     private var glGeneration = 0
     private var choreographerOn = false
     private var modeApplied = false
-
-    // T-140 experiment: `--ei rvote 0|1|2|3` (0 off = default, 1 animation path, 2 reflection path, 3 both),
-    // `--ei rvote_min_fps F` (default 70, 0 = always while streaming), `--ei rvote_prio N` (reflection priority).
-    private var rvoteMode = 0
-    private var rvote: dev.matebridge.client.video.RefreshVote? = null
-    private var rvoteDriver: dev.matebridge.client.video.RefreshVoteDriver? = null
-    private var rvotePrio = 0
-    private var foreground = false
     private val vsyncCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             vsync.onVsync(frameTimeNanos)
@@ -338,22 +324,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val rttStats = dev.matebridge.client.session.RttStats()
     private var wifiLock: dev.matebridge.client.session.WifiLockHolder? = null
 
-    private fun parseRefreshVote() {
-        rvoteMode = (intent?.getIntExtra("rvote", 0) ?: 0).coerceIn(0, 3)
-        if (rvoteMode == 0) return
-        val min = (intent?.getIntExtra("rvote_min_fps", dev.matebridge.client.video.RefreshVote.DEFAULT_MIN_FPS)
-            ?: dev.matebridge.client.video.RefreshVote.DEFAULT_MIN_FPS).coerceAtLeast(0)
-        rvotePrio = intent?.getIntExtra("rvote_prio", 0) ?: 0
-        rvote = dev.matebridge.client.video.RefreshVote(min, { SystemClock.elapsedRealtime() })
-        MbLog.i("rvote_config", "mode=$rvoteMode min_fps=$min", "render")
-    }
-
-    private fun applyVoteChange(c: dev.matebridge.client.video.VoteChange?) {
-        if (c == null) return
-        rvoteDriver?.apply(c.on)
-        MbLog.i("rvote", "state=${if (c.on) "on" else "off"} reason=${c.reason.logName}", "render")
-    }
-
     private fun parseWifiKnobs() {
         val i = intent
         knobs = if (i == null) dev.matebridge.client.session.WifiKnobs() else dev.matebridge.client.session.WifiKnobs.parse(
@@ -385,20 +355,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         h.sync(dev.matebridge.client.session.WifiLockPolicy.shouldHold(knobs.wifiLowLatency, tr, started && !isDestroyed, lastUi), reason)
     }
 
-    /**
-     * T-079: `--ez perf_hint true` puts the video reader and decoder threads in one PerformanceHintManager session
-     * (target = panel period, or `--ei perf_hint_target_us N`). Logs `ev=perf_hint enabled=… supported=…` either way.
-     */
-    private fun setupPerfHint() {
-        val on = intent?.getBooleanExtra("perf_hint", false) == true
-        val backend = dev.matebridge.client.video.AndroidPerfHint.create(this)
-        val hint = dev.matebridge.client.video.PerfHint(backend) { ev, fields -> MbLog.i(ev, fields, "render") }
-        val fixedUs = intent?.getIntExtra("perf_hint_target_us", 0) ?: 0
-        if (on && fixedUs > 0) hint.setFixedTargetNs(fixedUs * 1000L)
-        MbLog.i("perf_hint", "enabled=${if (on) 1 else 0} ${hint.describe()} fixed_target=${if (on && fixedUs > 0) 1 else 0}", "render")
-        perfHint = if (on) hint else null
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // T-146: names the build once per process in every client log (no serial, no device id).
@@ -419,7 +375,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-141: `--ez stats_1s true` brings back the per-second video stats log lines (diagnostics).
         statsLog = StatsLogWindow(if (intent?.getBooleanExtra("stats_1s", false) == true) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
         MbLog.i("stats_log", "window_ms=${statsLog.windowMs}", "render")
-        operatingRate = intent?.getIntExtra("oprate", OperatingRate.STREAM_FPS) ?: OperatingRate.STREAM_FPS
         bufferFrames = when {
             glMode -> 0 // the GL presenter aligns to vsync itself; SurfaceTexture ignores release timestamps
             intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
@@ -431,7 +386,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             intent?.hasExtra("jitter") == true -> GameJitter.Source.EXTRA
             else -> null
         }
-        inflightLimit = intent?.getIntExtra("inflight", 0)?.coerceIn(0, 8) ?: 0
         intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let {
             vsync.leadOverrideNs = it * 1000L
             glVsync.leadOverrideNs = it * 1000L
@@ -443,24 +397,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vsync.deadlineOverrideNs = ns
             glVsync.deadlineOverrideNs = ns
         }
-        vsync.keepJitter = intent?.getBooleanExtra("keep_jitter", false) == true
-        vsync.recenter = intent?.getBooleanExtra("recenter", false) == true
-        // T-080: --es pacer cpd (constant playout delay) | lock (phase lock, default); cpd_q_permille / cpd_hold_us tune it.
-        cpdConfig = if (intent?.getStringExtra("pacer") == "cpd") {
-            dev.matebridge.client.video.CpdConfig(
-                intent.getIntExtra("cpd_q_permille", dev.matebridge.client.video.CpdConfig.DEFAULT_Q_PERMILLE),
-                intent.getIntExtra("cpd_hold_us", (dev.matebridge.client.video.CpdConfig.DEFAULT_HOLD_NS / 1000).toInt()) * 1000L,
-            )
-        } else null
         paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
-        // T-076: one-shot AES-GCM provider benchmark (adb ... --ez crypto_bench true), off the UI thread.
-        if (intent?.getBooleanExtra("crypto_bench", false) == true) {
-            Thread({ dev.matebridge.client.security.Records.runBench() }, "crypto-bench").start()
-        }
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
-        setupPerfHint()
         parseWifiKnobs()
-        parseRefreshVote()
         audioAllowed = intent?.getBooleanExtra("audio", true) != false
         MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
         intent?.getStringExtra("transport")?.let { raw -> // T-096: one launch only, the stored setting is not changed
@@ -477,7 +416,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
-        if (rvoteMode != 0) rvoteDriver = dev.matebridge.client.video.RefreshVoteDriver(this, root, ui, rvoteMode, rvotePrio)
         video = findViewById(R.id.video)
         videoGl = findViewById(R.id.video_gl)
         videoView = if (glMode) videoGl else video
@@ -604,7 +542,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
-        }, gameSettings.prefs(streamMode), quickAck, perfHint, knobs, if (audioAllowed) settings.audioEnabled() else null,
+        }, gameSettings.prefs(streamMode), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
@@ -682,14 +620,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (hasFocus) capture.resume() else capture.releaseAll(ReleaseAll.FOCUS_LOST, SystemClock.uptimeMillis())
     }
 
-    override fun onResume() {
-        super.onResume()
-        foreground = true
-    }
-
     override fun onPause() {
-        foreground = false
-        applyVoteChange(rvote?.stop(dev.matebridge.client.video.VoteReason.BACKGROUND))
         // Release before onStop() closes the session, so RELEASE_ALL is queued ahead of BYE (PROTOCOL.md section 7).
         if (::capture.isInitialized) capture.releaseAll(ReleaseAll.BACKGROUND, SystemClock.uptimeMillis())
         if (::sidePanel.isInitialized) closeSettingsPanel(SettingsPanelState.Via.BACKGROUND, resync = false) // T-105; the ticker re-syncs
@@ -1229,12 +1160,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
         ).also {
-            it.operatingRate = operatingRate
-            it.maxInFlight = inflightLimit
-            it.cpdConfig = cpdConfig
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
-            it.perfHint = perfHint
             it.stats.latencyOf = { cap, at -> clock.latencySignedUs(cap, at) } // T-168: signed; `at` on SessionController.clockUs()'s clock
             renderer = it
         }
@@ -1267,7 +1194,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         flushStatsLog() // T-141: the partial log window of the stream that ends
         statsView.text = ""
         lastOverlayText = null
-        applyVoteChange(rvote?.stop(dev.matebridge.client.video.VoteReason.SESSION))
         releaseRefreshRate()
         setSurfaceFrameRate(false)
         stopVsync()
@@ -1350,7 +1276,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         choreographerOn = true
         vsync.setNominalHz(currentHz())
         applyDisplayTiming(log = true)
-        perfHint?.setTargetNs(vsync.periodNs.takeIf { it > 0 } ?: streamConfig?.fps?.takeIf { it > 0 }?.let { 1_000_000_000L / it } ?: 0L)
         vsyncGaps.breakSequence()
         vsyncGaps.summary(reset = true)
         vsyncIdle.start(System.nanoTime())
@@ -1373,7 +1298,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 rateDebouncer.observe(hz, SystemClock.elapsedRealtime())?.let {
                     controller.setDisplayRate(it)
                     MbLog.i("display_rate", "hz=$it", "render")
-                    if (it > 0) perfHint?.setTargetNs(1_000_000_000L / it) // T-079: target = panel period
                 }
             }
             ui.postDelayed(this, RATE_POLL_MS)
@@ -1426,11 +1350,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (log) {
             MbLog.i(
                 "display_timing",
-                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} effective_deadline_ns=${vsync.grid().deadlineNs} deadline_override=${vsync.deadlineOverrideNs} keep_jitter=${if (vsync.keepJitter) 1 else 0} recenter=${if (vsync.recenter) 1 else 0} " +
-                    "pacer=${if (cpdConfig != null && bufferFrames == VideoRenderer.BUFFER_ADAPTIVE) "cpd" else "lock"} " +
-                    "cpd_q_permille=${(cpdConfig ?: dev.matebridge.client.video.CpdConfig()).qPermille} " +
-                    "cpd_hold_us=${(cpdConfig ?: dev.matebridge.client.video.CpdConfig()).holdNs / 1000} " +
-                    "inflight=${renderer?.maxInFlight ?: inflightLimit}",
+                "app_vsync_offset_ns=$off presentation_deadline_ns=$deadline lead_override_us=${vsync.leadOverrideNs / 1000} effective_deadline_ns=${vsync.grid().deadlineNs} deadline_override=${vsync.deadlineOverrideNs}",
                 "render",
             )
         }
@@ -1531,10 +1451,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         lastStatsMs = now
         val s = r.stats.snapshot(reset = true) // T-141: the closed second also joins the log window
         r.onSkipWindow(s.skipPct)
-        rvote?.let { v ->
-            val streaming = foreground && lastUi is SessionUi.Connected
-            applyVoteChange(v.update(streaming, s.received * 1000.0 / interval.coerceAtLeast(1)))
-        }
         val vg = vsyncGaps.summaryInto(vsyncGapsLog)
         refreshMismatch.update( // T-169: one W line per sustained (> 5 s) target vs measured refresh mismatch
             FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0), vg.p50Us.takeIf { vg.count > 0 },
@@ -1966,7 +1882,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         releaseRenderer()
-        rvoteDriver?.release()
         presenter?.stop()
         presenter = null
         controller.shutdown()
@@ -1974,7 +1889,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         audio?.shutdown()
         wifiLock?.sync(false, "destroy")
         probeExec?.shutdownNow()
-        perfHint?.close()
         if (::wolSender.isInitialized) wolSender.shutdown()
         super.onDestroy()
     }

@@ -78,16 +78,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
          */
         const val LOCK_GAP_PERIODS = 3L
         /**
-         * T-067 (behind [VsyncClock.recenter], default off): rate-based re-centring. Over the last [RATIO_WINDOW]
-         * locked frames, [RATIO_LATE] or more late frames (slot already past, or latency bound exceeded)
-         * re-acquire the lock at once, on a jitter floor taken from the window itself, so the new slot is later.
-         */
-        const val RATIO_WINDOW = 60
-        const val RATIO_LATE = 3
-        const val RATIO_MIN_FRAMES = 12
-        /** The jitter floor set by a re-centring fades by this much per frame. */
-        const val FLOOR_DECAY_NS = 5_000L
-        /**
          * T-115: jitter samples below which the p99 hold is not trusted yet: a late locked frame then re-acquires the
          * lock at once instead of waiting for [REPHASE_FRAMES]. With 32 samples the p99 is the maximum.
          */
@@ -112,12 +102,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     private var lockSlot = Long.MIN_VALUE // slot of the previous frame on the phase lock (MIN = not locked)
     private var badRun = 0
     private var lastCaptureUs = Long.MIN_VALUE
-    // T-067: last RATIO_WINDOW locked frames (extra delay and lateness), and the jitter floor from a re-centring.
-    private val winDev = LongArray(RATIO_WINDOW)
-    private val winLate = BooleanArray(RATIO_WINDOW)
-    private var winN = 0
-    private var winPos = 0
-    private var floorNs = 0L
 
     /**
      * Slack level added by the skip feedback on top of the measured jitter: 0 = none, 1 = half a vsync,
@@ -139,10 +123,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
 
     /** T-060 diagnostics: number of re-phasings of an established lock since the last reset (cumulative). */
     @Volatile var rephases = 0L
-        private set
-
-    /** T-067 diagnostics: re-acquisitions caused by the late-frame rate (also counted in [rephases]). */
-    @Volatile var recenters = 0L
         private set
 
     /** T-069: when set, [schedule] writes the intermediate values of the latest frame into it (output thread). */
@@ -245,25 +225,21 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     ): FramePacer.Decision {
         val period = grid.periodNs
         val ideal = nowNs - dev + grid.deadlineNs // jitter-free ready time of this frame, plus the deadline
-        val recenter = vsync.recenter
-        val jEff = if (recenter) maxOf(jitter, minOf(floorNs, period)) else jitter // incl. the re-centring floor
-        fun acquire(j: Long = jEff): Long {
-            val nearest = grid.slotAtOrAfter(ideal + j / 2, 0.0) // centres the arrival window mid-slot
+        fun acquire(): Long {
+            val nearest = grid.slotAtOrAfter(ideal + jitter / 2, 0.0) // centres the arrival window mid-slot
             // slot point below which the worst-case jitter would miss the slot
-            val minimum = ideal + if (recenter) maxOf(d, j + MARGIN_NS) else d
+            val minimum = ideal + d
             return maxOf(nearest, grid.slotAtOrAfter(minimum, 0.0), earliest)
         }
         // Latency bound (T-057) for the final slot: one period after the earliest possible one, plus the half-jitter
         // the centered phase adds on purpose.
-        val latencyBound = period + minOf(jEff, period) / 2
-        if (recenter && floorNs > 0) floorNs = maxOf(0L, floorNs - FLOOR_DECAY_NS)
+        val latencyBound = period + minOf(jitter, period) / 2
         var slot: Long
         val sparse = prevCaptureUs != Long.MIN_VALUE && isGap(captureUs, prevCaptureUs, period)
         if (lone) {
             // T-115: a lone frame gains nothing from a hold (there is no cadence to keep), so it takes the earliest
             // slot. No lock is formed from it: the next continuous frame acquires one from its own timing.
             badRun = 0
-            winN = 0; winPos = 0
             phaseLock = false
             lockSlot = Long.MIN_VALUE
             probe?.let {
@@ -289,7 +265,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             // and losing a frame at the re-phase [REPHASE_FRAMES] later.
             slot = acquire()
             badRun = 0
-            winN = 0; winPos = 0
             phaseLock = true
             lockSlot = slot
             probe?.let { it.path = if (sparse) PaceProbe.PATH_SPARSE else PaceProbe.PATH_ACQUIRE; it.acquireNs = slot; it.lockSlotNs = slot }
@@ -323,7 +298,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         // A burst (frames handed over faster than they were captured) is a backlog, not an off lock: the latency bound
         // drops it as before.
         val burst = readyGapNs < (captureUs - prevCaptureUs) * 1000 / 2
-        if (sparseEarly && !recenter && late && devN < WARMUP_SAMPLES && (missed || !burst)) {
+        if (sparseEarly && late && devN < WARMUP_SAMPLES && (missed || !burst)) {
             // T-115 warm-up: a lock acquired on a thin jitter history (a fresh session, or motion after lone frames
             // whose delay is kept out of the history) is easily off: too tight, or anchored on a frame that came late.
             // Until the history holds [WARMUP_SAMPLES] frames, a late locked frame re-acquires the lock from its own
@@ -331,7 +306,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             //  - missed its slot: the new slot is later (one repeated vsync, nothing dropped);
             //  - beyond the latency bound (lock too late): the new slot is earlier; when that is the previous frame's
             //    slot, this newer frame replaces it (T-065), and the lock is centred from then on.
-            // With T-067 re-centring on, that mechanism handles an off lock instead.
             val own = slot
             val acquired = acquire()
             slot = acquired
@@ -348,30 +322,6 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
                 slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), missed, slotNs = slot,
                 lateDrop = collided, ownSlotNs = if (collided) own else 0,
             )
-        }
-        if (recenter) {
-            winDev[winPos] = dev; winLate[winPos] = late
-            winPos = (winPos + 1) % RATIO_WINDOW
-            if (winN < RATIO_WINDOW) winN++
-            val newFloor = if (late && winN >= RATIO_MIN_FRAMES && lateCount() >= RATIO_LATE) {
-                winDev.copyOf(winN).also { it.sort() }[winN - RATIO_LATE].coerceAtMost(period).let { maxOf(floorNs, it) }
-            } else -1L
-            val fresh = if (newFloor >= 0) acquire(maxOf(jitter, newFloor)) else Long.MIN_VALUE
-            // Not when the later slot would break the latency bound (a burst of frames handed over at once): drop instead.
-            if (newFloor >= 0 && fresh <= earliest + period + minOf(maxOf(jitter, newFloor), period) / 2) {
-                floorNs = newFloor
-                winN = 0; winPos = 0; badRun = 0
-                probe?.let { it.path = PaceProbe.PATH_RECENTER; it.acquireNs = fresh; it.lockSlotNs = fresh; it.badRun = 0 }
-                rephases++; recenters++
-                slot = fresh
-                lockSlot = slot
-                var collided = false
-                if (slot <= previous) { slot = previous; collided = true }
-                lastSlot = slot
-                return FramePacer.Decision(
-                    slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
-                )
-            }
         }
         lockSlot = slot
         probe?.let { it.lockSlotNs = slot }
@@ -418,31 +368,22 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         else if (lowRun >= LOW_WINDOWS && level > 0) { level--; hold = HOLD_WINDOWS; lowRun = 0 }
     }
 
-    private fun lateCount(): Int { var n = 0; for (i in 0 until winN) if (winLate[i]) n++; return n }
-
-    /**
-     * After a long idle gap: measurements restart, the feedback level is kept. With [VsyncClock.keepJitter]
-     * (T-067) the jitter distribution, D and the baseline b are kept too: an idle source does not change the
-     * decoder/queue jitter, and the host/tablet clock offset is constant over seconds.
-     */
+    /** After a long idle gap: measurements restart (jitter distribution, D and the baseline b too), the feedback level is kept. */
     private fun reanchor() {
         minT.clear(); minX.clear()
         lastSlot = Long.MIN_VALUE
         lockSlot = Long.MIN_VALUE; badRun = 0; lastCaptureUs = Long.MIN_VALUE; phaseLock = false
-        winN = 0; winPos = 0
-        if (!vsync.keepJitter) {
-            devN = 0; devPos = 0
-            baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
-        }
+        devN = 0; devPos = 0
+        baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
     }
 
     /** Panel rate (epoch) changed: the whole path is re-timed, so everything measured is dropped, jitter included. */
     private fun resetState() {
         reanchor()
         devN = 0; devPos = 0
-        baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE; floorNs = 0
+        baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
         level = 0; highRun = 0; lowRun = 0; hold = 0
-        rephases = 0; recenters = 0
+        rephases = 0
     }
 
     fun reset() { resetState(); lastPeriod = 0; epoch = -1; lastScheduleNs = Long.MIN_VALUE }

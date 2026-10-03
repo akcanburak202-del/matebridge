@@ -6,7 +6,7 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
 - `sim.py TRACE [--hz 60|120] [--idle-ms 1000 [--refill 32]] [--q Q --L 6 --hold 2]` — replays a trace under a
   constant-playout-delay policy for several jitter quantiles and deadlines (latency p50, planned gaps, dropped, late).
   `--hz 120` selects 120 Hz rows and continuity; `--idle-ms` adds the client's idle rule (T-080); `--q` runs once.
-  Reference for the client's `ConstantPlayoutPacer`: its unit test replays `trace7_120hz_excerpt.csv` and must match.
+  The client's `ConstantPlayoutPacer` (T-080) that mirrored it was retired in T-183 (decision 0026); git history keeps it.
 - T-115 old/new replay of the adaptive pacer (phase lock, lone frames without hold): the JVM test
   `SparseFrameNoHoldTest.traceReplayOldVersusNew` replays `trace7_120hz_excerpt.csv` through `AdaptivePacer` with
   `sparseEarly` off and on and prints lone-frame latency and continuous gaps/drops

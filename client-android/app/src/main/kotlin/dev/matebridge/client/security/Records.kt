@@ -5,7 +5,6 @@ import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.session.MbLog
 import java.security.GeneralSecurityException
-import java.security.Security
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -53,72 +52,12 @@ object Records {
     @Volatile var stampOpens = false
 
     /**
-     * One-shot decrypt micro-benchmark (`--ez crypto_bench true`): for each provider available, opens 3 KB, 64 KB and
-     * 432 KB records repeatedly. Per size: best total (`<n>k_us`), MB/s, and the p50 of the `init` (+ nonce/spec/AAD) and
-     * `doFinal` parts (T-077). Random key and data; nothing sensitive. Returns the log field strings.
-     */
-    fun bench(): List<String> {
-        val providers = ArrayList<String?>()
-        providers += null
-        for (p in Security.getProviders()) if (p.name != null) providers += p.name
-        val out = ArrayList<String>()
-        val key = SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
-        for (name in providers.distinct()) {
-            val fields = StringBuilder()
-            try {
-                val cipher = newCipher(name)
-                fields.append("provider=").append(name ?: "default(${cipher.provider.name})")
-                for (size in intArrayOf(3 * 1024, 64 * 1024, 432 * 1024)) {
-                    val aad = header(size + MIN_LENGTH)
-                    val enc = newCipher(name)
-                    enc.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
-                    enc.updateAAD(aad)
-                    val body = enc.doFinal(ByteArray(size + 1))
-                    var dst = ByteArray(0)
-                    val iters = if (size <= 4096) 202 else 12
-                    val initNs = LongArray(iters - 2)
-                    val finalNs = LongArray(iters - 2)
-                    var best = Long.MAX_VALUE
-                    for (i in 0 until iters) {
-                        val t0 = System.nanoTime()
-                        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BYTES * 8, nonce(0)))
-                        cipher.updateAAD(aad)
-                        val t1 = System.nanoTime()
-                        dst = ensureOutput(dst, cipher, body.size)
-                        cipher.doFinal(body, 0, body.size, dst, 0)
-                        val t2 = System.nanoTime()
-                        if (i < 2) continue // warm-up
-                        initNs[i - 2] = t1 - t0; finalNs[i - 2] = t2 - t1
-                        if (t2 - t0 < best) best = t2 - t0
-                    }
-                    initNs.sort(); finalNs.sort()
-                    val k = "${size / 1024}k"
-                    fields.append(" ${k}_us=").append(best / 1000)
-                        .append(" ${k}_mbps=").append(size.toLong() * 1000L / maxOf(1L, best))
-                        .append(" ${k}_init_p50_us=").append(initNs[initNs.size / 2] / 1000.0)
-                        .append(" ${k}_final_p50_us=").append(finalNs[finalNs.size / 2] / 1000.0)
-                }
-            } catch (e: Throwable) {
-                fields.setLength(0)
-                fields.append("provider=").append(name).append(" err=").append(e.javaClass.simpleName)
-            }
-            out += fields.toString()
-        }
-        return out
-    }
-
-    /**
      * Output buffer for a decrypt of [inLen] bytes on an initialised [cipher]: at least `getOutputSize(inLen)` and never
      * smaller than [inLen] (some Conscrypt versions demand room for the tag too). Reuses [cur] when big enough.
      */
     internal fun ensureOutput(cur: ByteArray, cipher: Cipher, inLen: Int): ByteArray {
         val need = maxOf(inLen, cipher.getOutputSize(inLen))
         return if (cur.size >= need) cur else ByteArray(maxOf(need, cur.size * 2))
-    }
-
-    /** Runs [bench] and logs one `crypto_bench` line per provider. */
-    fun runBench() {
-        for (f in bench()) MbLog.i("crypto_bench", f)
     }
 
     internal fun nonce(counter: Long): ByteArray {

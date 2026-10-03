@@ -65,10 +65,6 @@ class VsyncClock(private val initialHz: Float = 60f) {
     /** Presentation deadline: >= 0 explicit (capped at a period), [DEADLINE_DISPLAY] = the display's own, [DEADLINE_DEFAULT] = 6 ms (T-071). */
     @Volatile var deadlineOverrideNs = DEADLINE_DEFAULT
 
-    /** T-067 experiment switches (default off = previous behaviour): keep jitter history over idle gaps; rate-based lock re-centring. */
-    @Volatile var keepJitter = false
-    @Volatile var recenter = false
-
     // UI-thread only: run of consecutive gaps that disagree with the current period.
     private var oddRun = 0
     private var oddDeltaNs = 0L
