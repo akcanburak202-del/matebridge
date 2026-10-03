@@ -1,7 +1,7 @@
 ---
 id: T-182
 title: Record decision 0026 and the knob inventory; close T-019 and T-067
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []

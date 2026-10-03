@@ -2,12 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## review
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
-
 ## todo
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -221,3 +215,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-146](tasks/T-146-client-build-identity.md) | Log and show the client build commit | 6 | android-client-dev | [] |
 | [T-148](tasks/T-148-host-login-item-retry.md) | Retry login-item registration after a failure | 6 | mac-host-dev | [] |
 | [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |
+| [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
