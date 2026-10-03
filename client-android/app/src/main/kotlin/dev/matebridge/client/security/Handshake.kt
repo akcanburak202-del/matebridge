@@ -27,7 +27,7 @@ class SessionSecrets(prk: ByteArray, val pairing: Boolean, val hostId: ByteArray
     /** Six-digit pairing code (PAIRING only). */
     fun sas(): String = KeySchedule.sas(prkOrThrow())
 
-    /** The key to store for [hostId] after the Mac accepted (PAIRING only). */
+    /** The new pair key of this PAIRING handshake (kept pending until the user confirms the code). */
     fun newPairKey(): ByteArray = KeySchedule.newPairKey(prkOrThrow())
 
     fun videoKeys(videoNonce: ByteArray): VideoKeys {
@@ -59,17 +59,18 @@ class SecureSession(
     private var committed = false
 
     /**
-     * PAIRING only: persists the new key under `host_id` (replacing any old one), once. Call right after the first
-     * HELLO_ACK was validated, not at ACCEPTED: the user may leave for the Mac's approval dialog and the connection may
-     * drop before the approval; the Mac keeps this handshake's key on approval (PROTOCOL.md section 9). Returns true
-     * when a key was stored; throws when it could not be persisted (the session must then fail).
+     * PAIRING only (T-150, decision 0018): keeps the new key and its code as the **pending** record of `host_id`, once.
+     * Call right after the first HELLO_ACK was validated on a user-initiated connection: the user may leave for the
+     * Mac's approval dialog and the connection may drop before the approval (PROTOCOL.md section 9). The key becomes
+     * trusted only through a local confirmation ([PairTrust.promote]); the trusted key is not touched here. Returns true
+     * when a record was stored; throws when it could not be persisted (the session must then fail).
      */
-    fun storePairKey(store: PairKeyStore): Boolean {
+    fun storePending(trust: PairTrust): Boolean {
         if (!secrets.pairing || committed) return false
         committed = true
         val key = secrets.newPairKey()
         try {
-            store.put(secrets.hostId, key)
+            trust.storePending(secrets.hostId, key, sas ?: secrets.sas())
         } finally {
             key.fill(0)
         }
@@ -86,6 +87,19 @@ sealed interface HandshakeOutcome {
 
     /** PAIRED, but this tablet holds no key for that host_id: re-pairing is needed (Mac: "Onaylı cihazları unut"). */
     data object KeyMissing : HandshakeOutcome
+
+    /**
+     * T-150: a PAIRING answer on a connection the user did not start (discovery, saved endpoint, USB/AUTO probe, wake):
+     * nothing was derived or stored, and the connection must close before any record is read. [hostName] is chosen by
+     * the answerer (display only, never logged); [rePair]: a trusted key exists for the answer's host_id.
+     */
+    data class PairingNeedsUser(val hostName: String, val rePair: Boolean) : HandshakeOutcome
+
+    /**
+     * T-150: a PAIRED answer for a host_id with a fresh, unconfirmed pending key. No key was derived (neither from the
+     * pending nor from an older trusted key): the user must confirm the stored code first, then connect again.
+     */
+    class PendingUnconfirmed(val hostId: ByteArray) : HandshakeOutcome
 }
 
 /**
@@ -110,8 +124,12 @@ class ClientHandshake internal constructor(private val eph: EphemeralKeyPair, pr
      * Validates [ack] (decoded from [ackPayload], the exact wire bytes) against the mode/status matrix and derives keys.
      * Any inconsistency (a NONE answer that would leave us unencrypted while pending/accepted, a PAIRED answer that is
      * not ACCEPTED, an invalid host key...) throws [ProtocolException]: the connection closes without BYE.
+     *
+     * T-150: a PAIRING answer on a connection that is not [userInitiated] yields [HandshakeOutcome.PairingNeedsUser], and
+     * a PAIRED answer for a host_id with a fresh pending record yields [HandshakeOutcome.PendingUnconfirmed]; neither
+     * derives a key.
      */
-    fun complete(ack: HelloAck, ackPayload: ByteArray, keys: PairKeyStore): HandshakeOutcome {
+    fun complete(ack: HelloAck, ackPayload: ByteArray, trust: PairTrust, userInitiated: Boolean): HandshakeOutcome {
         val hello = helloPayload ?: throw IllegalStateException("hello() not called")
         when (ack.keyMode) {
             HelloAck.KEY_NONE -> {
@@ -130,7 +148,15 @@ class ClientHandshake internal constructor(private val eph: EphemeralKeyPair, pr
         }
         val pairing = ack.keyMode == HelloAck.KEY_PAIRING
         val hostId = ack.hostId.value.copyOf()
-        val stored = keys.get(hostId)
+        if (pairing && !userInitiated) return HandshakeOutcome.PairingNeedsUser(ack.hostName, trust.hasTrusted(hostId))
+        if (!pairing) {
+            val pending = trust.freshPending(hostId)
+            if (pending != null) {
+                pending.key.fill(0)
+                return HandshakeOutcome.PendingUnconfirmed(hostId)
+            }
+        }
+        val stored = if (pairing) null else trust.trusted(hostId)
         if (!pairing && stored == null) return HandshakeOutcome.KeyMissing
 
         val ecdh = try {
@@ -138,8 +164,8 @@ class ClientHandshake internal constructor(private val eph: EphemeralKeyPair, pr
         } catch (e: InvalidKeyException) {
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "invalid host public key")
         }
-        val rePairing = pairing && stored != null
-        val ikm = KeySchedule.ikm(if (pairing) null else stored, ecdh)
+        val rePairing = pairing && trust.hasTrusted(hostId)
+        val ikm = KeySchedule.ikm(stored, ecdh)
         val prk = KeySchedule.prk(ikm, KeySchedule.transcriptHash(hello, ackPayload))
         ikm.fill(0); ecdh.fill(0); stored?.fill(0)
         val secrets = SessionSecrets(prk, pairing, hostId)
