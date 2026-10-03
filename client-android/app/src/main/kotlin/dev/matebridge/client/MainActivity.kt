@@ -1868,7 +1868,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // typed into the open manual field; a hidden field's remembered text does not count.
         val typedNow = typed.isNotBlank() && (!wasAsleep || endpointField.visibility == View.VISIBLE)
         // T-151: "Bağlan" is a user start for the pick gate; only a typed address in the open field may pair at once.
-        val origin = ConnectOrigin.forConnectButton(typed, endpointField.visibility == View.VISIBLE)
+        val origin = ConnectOrigin.forConnectButton(typed, endpointField.visibility == View.VISIBLE, lastUi)
         if (origin.clearsGate) pairPick.onUserStart()
         if ((userDisconnected || wasAsleep) && !typedNow) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
             userDisconnected = false
@@ -2215,13 +2215,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /**
      * "Kodlar aynı — Güven" (T-150 `confirmTrust`): on a live prompt it trusts the key; on a stored one it promotes the
-     * pending key and the machine connects, user-initiated, to the endpoint of the blocked start. One call site, so the
-     * generation of the rendered prompt can be passed here once [SessionUi] carries it.
+     * pending key and the machine connects, user-initiated, to the endpoint of the blocked start. It applies only to the
+     * prompt on screen ([lastUi] is what was rendered): its generation goes along, a stale one is ignored.
      */
-    private fun trustConfirm(): Boolean = controller.confirmTrust()
+    private fun trustConfirm(): Boolean = controller.confirmTrust(TrustUiText.promptGen(lastUi))
 
-    /** "İptal" (T-150 `cancelTrust`): BYE + close a live pairing, drop the pending key, terminal PAIR_CANCELLED. */
-    private fun trustCancel(): Boolean = controller.cancelTrust()
+    /**
+     * "İptal" (T-150 `cancelTrust`): BYE + close a live pairing, drop the pending key, terminal PAIR_CANCELLED (latched:
+     * no automatic start until a user one), for the prompt on screen only.
+     */
+    private fun trustCancel(): Boolean = controller.cancelTrust(TrustUiText.promptGen(lastUi))
 
     /** "Eşleş": a user start (may pair) to the endpoint that answered PAIRING. */
     private fun onPairClicked() {

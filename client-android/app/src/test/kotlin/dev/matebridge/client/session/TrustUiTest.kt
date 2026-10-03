@@ -109,7 +109,10 @@ class TrustUiTest {
 
     @Test fun onlyTapsThatChoseThisPairingAreUserInitiated() {
         assertEquals(
-            setOf(ConnectOrigin.PAIR, ConnectOrigin.STORED_REPAIR, ConnectOrigin.STORED_CONNECT, ConnectOrigin.TYPED_ADDRESS),
+            setOf(
+                ConnectOrigin.PAIR, ConnectOrigin.STORED_REPAIR, ConnectOrigin.STORED_CONNECT, ConnectOrigin.TYPED_ADDRESS,
+                ConnectOrigin.CONNECT_AFTER_CANCEL,
+            ),
             ConnectOrigin.entries.filter { it.userInitiated }.toSet(),
         )
         for (o in listOf(ConnectOrigin.DISCOVERY, ConnectOrigin.SAVED_WIFI, ConnectOrigin.USB_MODE, ConnectOrigin.AUTO_SWITCH, ConnectOrigin.WAKE)) {
@@ -124,9 +127,28 @@ class TrustUiTest {
     }
 
     @Test fun connectButtonPairsOnlyWithAnAddressTypedIntoTheOpenField() {
-        assertEquals(ConnectOrigin.TYPED_ADDRESS, ConnectOrigin.forConnectButton("10.0.0.5:47001", fieldVisible = true))
-        assertEquals(ConnectOrigin.CONNECT_BUTTON, ConnectOrigin.forConnectButton("10.0.0.5:47001", fieldVisible = false))
-        assertEquals(ConnectOrigin.CONNECT_BUTTON, ConnectOrigin.forConnectButton(" ", fieldVisible = true))
+        val s = SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)
+        assertEquals(ConnectOrigin.TYPED_ADDRESS, ConnectOrigin.forConnectButton("10.0.0.5:47001", fieldVisible = true, s))
+        assertEquals(ConnectOrigin.CONNECT_BUTTON, ConnectOrigin.forConnectButton("10.0.0.5:47001", fieldVisible = false, s))
+        assertEquals(ConnectOrigin.CONNECT_BUTTON, ConnectOrigin.forConnectButton(" ", fieldVisible = true, s))
+        assertEquals(ConnectOrigin.CONNECT_BUTTON, ConnectOrigin.forConnectButton("", false, SessionUi.Failed(SessionUi.Cause.REJECTED)))
+    }
+
+    @Test fun connectAfterACancelReleasesTheLatch() { // T-150 latch: only a user start reconnects after "İptal"
+        val o = ConnectOrigin.forConnectButton("", fieldVisible = false, SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED))
+        assertEquals(ConnectOrigin.CONNECT_AFTER_CANCEL, o)
+        assertTrue(o.userInitiated)
+        assertFalse(o.automatic)
+        assertTrue(o.clearsGate)
+        // a typed address stays a typed address
+        assertEquals(ConnectOrigin.TYPED_ADDRESS, ConnectOrigin.forConnectButton("10.0.0.5:47001", true, SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED)))
+    }
+
+    @Test fun tapsCarryTheGenerationOfTheRenderedPrompt() {
+        assertEquals(7, TrustUiText.promptGen(SessionUi.AwaitingApproval("m", "123456", needsLocalConfirm = true, promptGen = 7)))
+        assertEquals(9, TrustUiText.promptGen(SessionUi.StoredTrust("123456", confirmed = false, promptGen = 9)))
+        assertEquals(-1, TrustUiText.promptGen(SessionUi.PairingNeedsUser("m", false)))
+        assertEquals(-1, TrustUiText.promptGen(SessionUi.Connected("m", 0)))
     }
 
     // ---- the pick gate (QA-1 T-151 #1) ----

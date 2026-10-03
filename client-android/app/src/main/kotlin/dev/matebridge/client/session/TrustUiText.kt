@@ -139,6 +139,16 @@ object TrustUiText {
         SessionUi.Idle, SessionUi.Searching, is SessionUi.Connecting, is SessionUi.Disconnected -> false
     }
 
+    /**
+     * The prompt generation of the rendered confirmation prompt (`confirmTrust`/`cancelTrust` take it, so a tap applies
+     * to exactly the code on screen); -1 when [state] is not one (the controller then does nothing).
+     */
+    fun promptGen(state: SessionUi): Int = when (state) {
+        is SessionUi.AwaitingApproval -> state.promptGen
+        is SessionUi.StoredTrust -> state.promptGen
+        else -> -1
+    }
+
     /** Fields of `ev=pair_ui`: the action only, never a value. */
     fun pairUiFields(action: String): String = "action=$action"
 }
@@ -160,6 +170,11 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
     TYPED_ADDRESS("typed", userInitiated = true, automatic = false, clearsGate = true),
     /** "Bağlan" without a typed address (the current endpoint, or the mode's usual way). */
     CONNECT_BUTTON("connect_button", userInitiated = false, automatic = false, clearsGate = true),
+    /**
+     * "Bağlan" on "Eşleşme iptal edildi": T-150's cancel latch holds every automatic start until a user start, so this
+     * tap is one (it may pair again; the code still needs the local confirmation).
+     */
+    CONNECT_AFTER_CANCEL("connect_after_cancel", userInitiated = true, automatic = false, clearsGate = true),
     DISCOVERY("discovery", userInitiated = false, automatic = true, clearsGate = false),
     /** The Wi-Fi endpoint remembered in this activity (AUTO). */
     SAVED_WIFI("saved_wifi", userInitiated = false, automatic = true, clearsGate = false),
@@ -174,10 +189,14 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
     companion object {
         /**
          * "Bağlan": a typed address counts only while the manual field is open (a hidden field's remembered text is not
-         * a fresh choice, as in T-134's wake rule).
+         * a fresh choice, as in T-134's wake rule). [shown]: the state on screen; on `Failed(PAIR_CANCELLED)` the tap
+         * releases T-150's cancel latch ([CONNECT_AFTER_CANCEL]).
          */
-        fun forConnectButton(typed: String, fieldVisible: Boolean): ConnectOrigin =
-            if (typed.isNotBlank() && fieldVisible) TYPED_ADDRESS else CONNECT_BUTTON
+        fun forConnectButton(typed: String, fieldVisible: Boolean, shown: SessionUi): ConnectOrigin = when {
+            typed.isNotBlank() && fieldVisible -> TYPED_ADDRESS
+            shown is SessionUi.Failed && shown.cause == SessionUi.Cause.PAIR_CANCELLED -> CONNECT_AFTER_CANCEL
+            else -> CONNECT_BUTTON
+        }
     }
 }
 
