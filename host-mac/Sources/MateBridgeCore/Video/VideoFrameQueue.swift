@@ -13,7 +13,9 @@ public final class VideoFrameQueue: @unchecked Sendable {
     private var pushedKeyframes: UInt64 = 0
     private let keyframeNeeded: @Sendable () -> Void
 
-    /// - Parameter keyframeNeeded: called (outside the lock) when a dropped delta frame requires a new keyframe.
+    /// - Parameter keyframeNeeded: called (outside the lock) when a dropped delta frame requires a new keyframe. It
+    ///   only says that one is needed; when to force it is the caller's decision (T-176: `KeyframeRequestCoalescer.hostDrop`
+    ///   with `keyframeState`), and deltas stay refused until a keyframe is pushed.
     public init(capacity: Int = BoundedFrameQueue.defaultCapacity, keyframeNeeded: @escaping @Sendable () -> Void) {
         policy = BoundedFrameQueue(capacity: capacity)
         self.keyframeNeeded = keyframeNeeded
@@ -133,6 +135,13 @@ public final class VideoFrameQueue: @unchecked Sendable {
 
     public var droppedCount: Int { lock.lock(); defer { lock.unlock() }; return policy.droppedCount }
 
+    /// Keyframe-related queue state, read under one lock (T-176: input to `KeyframeRequestCoalescer.hostDrop`).
+    public var keyframeState: KeyframeQueueState {
+        lock.lock(); defer { lock.unlock() }
+        return KeyframeQueueState(awaitingKeyframe: policy.isAwaitingKeyframe, keyframeQueued: policy.hasQueuedKeyframe,
+                                  keyframesPushed: pushedKeyframes)
+    }
+
     public func finish() {
         lock.lock()
         finished = true
@@ -141,5 +150,21 @@ public final class VideoFrameQueue: @unchecked Sendable {
         waiter = nil
         lock.unlock()
         w?.cont.resume(returning: nil)
+    }
+}
+
+/// Snapshot of the queue's keyframe state (`VideoFrameQueue.keyframeState`, T-176).
+public struct KeyframeQueueState: Equatable, Sendable {
+    /// Deltas are refused until a keyframe is pushed.
+    public var awaitingKeyframe: Bool
+    /// A keyframe waits in the queue.
+    public var keyframeQueued: Bool
+    /// Keyframes pushed so far (`VideoFrameQueue.keyframesPushed`).
+    public var keyframesPushed: UInt64
+
+    public init(awaitingKeyframe: Bool, keyframeQueued: Bool, keyframesPushed: UInt64) {
+        self.awaitingKeyframe = awaitingKeyframe
+        self.keyframeQueued = keyframeQueued
+        self.keyframesPushed = keyframesPushed
     }
 }
