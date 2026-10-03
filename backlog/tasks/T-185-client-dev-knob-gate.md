@@ -1,7 +1,7 @@
 ---
 id: T-185
 title: Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-184, T-146]

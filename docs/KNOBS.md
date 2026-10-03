@@ -8,7 +8,7 @@ Kaynak tablo: `docs/reviews/2026-10-03/verify-H-hygiene.md` (L02 envanteri, HEAD
 ## Sınıflar
 
 - **kalır (keep):** günlük özellik ya da gerekli bir tanı aracı. Olduğu gibi kalır.
-- **yalnızca geliştirici (debug-only):** kalır ama işaretlenir.
+- **yalnızca geliştirici (debug-only):** kalır ama işaretlenir. (T-185 uygulandı: `DevKnobs.kt`; yok sayılan anahtarlar `diag ev=dev_knobs ignored=` satırında.)
   - İstemcide yalnızca aynı açılışta `--ez dev true` verilirse dikkate alınır (T-185). Günlük APK debug varyantı (`scripts/install-apk.sh`, `buildTypes` yok), bu yüzden build türüne göre ayırmak yetmez.
   - Host'ta bir kapı yok. Varsayılan dışı değerler `ev=profile` satırında listelenir (T-204).
 - **kaldırılır (retire):** kod silinir. Deney olumsuz ya da etkisiz sonuçlandı veya başka bir çözüm onun yerini aldı. Geri getirmek için git geçmişi kullanılır.
@@ -68,6 +68,7 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 21 | `--ez quickack false` | true | MA:494-496; `…/session/QuickAck.kt:32` | T-074; N:415-420 | yalnızca geliştirici | Varsayılan açık A/B ile kanıtlandı (79'a karşı 1 geç varış); kapatma A/B için kalır | T-185 |
 | 22 | `--ez stall_diag true` | false | MA:497-498; `…/diag/StallDetector.kt` | T-120/T-142; N:1088 | kalır (tanı) | Zaten isteğe bağlı | — |
 | 23 | `--es net_bench host:port` (+ `net_bench_s`, `net_bench_dir`, `net_bench_streams`, `net_bench_rcvbuf_kb`) | yok; alt anahtarlar 8 s (1–600), `down`, 1 (1–4), işletim sistemi varsayılanı (≤ 65 536 KB) | MA:359-366; `…/bench/NetBench.kt:39-59`; `…/bench/NetBenchActivity.kt:33`; `…/bench/*` (322 satır); `AndroidManifest.xml:34-39` | T-090 | yalnızca geliştirici; `src/debug` kaynak setine taşınır | `NWConnection` kök nedenini kanıtladı; nadiren gerekli | T-185 |
+| 23b | `--es decoder_fault create/configure/dequeue/silent`, `--ei decoder_fault_after_s N` | yok; 10 | `client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderFault.kt` | T-159 (bu envanterden sonra eklendi) | yalnızca geliştirici | Hata enjeksiyonu; FLAG_DEBUGGABLE + `dev` kapısı | T-185 |
 
 ## Host ortam değişkenleri (25; T-186 sonrası 23, T-165/T-177 ile +3 okunuyor)
 
@@ -106,7 +107,7 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 ## Açık noktalar
 
 1. **Jitter tamponu 1–2 dalı (0026).** *(Orkestratör: yalnızca geliştirici olarak kalır, 2026-10-03.)* Soru: `--ei jitter 1|2` dalı (ve onunla `FramePacer` sınıfı) da kaldırılsın mı? 2026-10-03 onayı GL ve `nw` içindi; bu dal için ayrı bir cevap kayıtlı değil. Bu yüzden şimdilik **yalnızca geliştirici** kalır: T-183 `FramePacer`'ı silmez, T-185'in `--ei jitter 1` kabul kriteri geçerli. Kullanıcı kaldırmayı seçerse küçük bir izleme kartı `FramePacer`'ı siler ama `VsyncClock`'u (`FramePacer.kt:18`, günlük yol) korur; `jitter 0` Oyun modu üzerinden ulaşılabilir kalır.
-2. **`VideoTestActivity` dışa açık.** *(Karar: T-185'e eklendi, 2026-10-03; adb ile açılabilirlik korunacak.)* `client-android/app/src/debug/AndroidManifest.xml` onu `exported="true"` tanımlıyor ve günlük APK debug varyantı. Bu yüzden tabletteki her uygulama onu (`fps`, `full_range`, `primaries` parametreleriyle) başlatabilir. Uygulama yalnızca uygulamanın kendi dosyasından (`test.h265`) okuyor. T-185'in `dev` kapısı yalnızca `MainActivity`'yi kapsar. Orkestratör karar verir (ör. T-185'e `exported="false"` eklemek).
+2. **`VideoTestActivity` dışa açık.** *Çözüldü (T-185): dışa açık kalır (adb `am start` için) ama `android:permission="android.permission.DUMP"` ile korunur; onu yalnızca adb kabuğu başlatabilir.* `client-android/app/src/debug/AndroidManifest.xml` onu `exported="true"` tanımlıyor ve günlük APK debug varyantı. Bu yüzden tabletteki her uygulama onu (`fps`, `full_range`, `primaries` parametreleriyle) başlatabilir. Uygulama yalnızca uygulamanın kendi dosyasından (`test.h265`) okuyor. T-185'in `dev` kapısı yalnızca `MainActivity`'yi kapsar. Orkestratör karar verir (ör. T-185'e `exported="false"` eklemek).
 
 ## Planlanan ayarlar
 

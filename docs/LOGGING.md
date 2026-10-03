@@ -203,7 +203,7 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 - `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı).
 - `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; `done` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene".
-- `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
+- `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--ez dev true --es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
 
 ## Encoder gönderim sırası (Mac, `encoder`, T-162)
 
@@ -383,3 +383,25 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
 ## Kaldırılan istemci deney olayları (T-183, karar 0026)
 
 Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=render_mode` (GL yolu, T-184), `ev=perf_hint`, `perf_hint_target`, `perf_hint_error`, `rvote_config`, `rvote`, `rvote_reflect`, `rvote_reflect_failed`, `crypto_bench`. `ev=display_timing`'den `keep_jitter= recenter= pacer= cpd_q_permille= cpd_hold_us= inflight=` alanları, `ev=present`'ten `recenters=` çıktı; `present` satırındaki `inflight_limit=` hep 0. Kaldırılan açılış parametreleri (`render`, `frate`, `glpts` — T-184; `perf_hint`, `rvote`, `pacer=cpd`, `inflight`, `recenter`, `keep_jitter`, `crypto_bench`, `oprate`) yok sayılır.
+
+## Geliştirici kapısı ve akış profili (tablet, T-185, karar 0026)
+
+- `I diag ev=dev_knobs dev=0|1 ignored=<anahtar>[,<anahtar>…]|-`: `onCreate`'te bir kez yazılır.
+  - `ignored`: `--ez dev true` verilmediği için yok sayılan "yalnızca geliştirici" anahtarları, `docs/KNOBS.md` sırasıyla.
+  - Yalnız anahtar adları yazılır, değerler asla (`net_bench` adresi dahil). Biçim T-127 için sabittir.
+- `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme). Oturum normal başlar.
+- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|-`
+  - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
+  - Alanların kaynağı:
+    - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
+    - `mode`, `scale_permille`: tablette seçilen mod.
+    - `bitrate_setting`: tabletin ayarı (0 = `auto`).
+    - `transport`: geçerli bağlantı. `transport_mode`: geçerli bağlantı modu ayarı ya da açılış geçersiz kılması.
+    - `audio=1`: ses açık (`--ez audio false` verilmedi ve panel ayarı açık).
+    - `pacer`: geçerli renderer tamponu (Oyun modunda `buffer0`).
+    - `sha=`, `built=`: `ev=app_start` ile aynı kaynak (`BuildInfo`, T-146).
+  - `knobs=`: dikkate alınan açılış ayarları, `docs/KNOBS.md` sırasıyla.
+    - "Yalnızca geliştirici" ayarlar yalnız `dev=1` ile sayılır. "Kalır" sınıfı (`stats_1s`, `pace_trace`, `stall_diag`) her zaman sayılır.
+    - Değer bir sayı, `0/1` ya da bilinen bir kimliktir. Bilinmeyen metin `other` yazılır.
+    - `net_bench*` hiç yazılmaz. Varsayılana eşit verilen değer de listelenir.
+  - `is_hw` yoktur (bkz. `ev=codec_start`, T-168). Uç nokta adresi, seri numarası ve cihaz kimliği asla yazılmaz.
