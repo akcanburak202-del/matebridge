@@ -1,7 +1,7 @@
 ---
 id: T-205
 title: Promote an AUTO USB migration candidate only after its first authenticated host record
-status: in_progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]
@@ -50,15 +50,15 @@ Decision 0018 must be accepted by the user before work starts ("Taşıma adayı,
 
 ## Kabul kriterleri
 
-- [ ] [JVM] An AUTO-mode USB migration candidate that receives a plaintext PAIRED/ACCEPTED ack is **not** promoted until its first host record decrypts and authenticates.
-- [ ] [JVM] **Squatter candidate.** A candidate that knows the real `host_id` and then sends a bad record, closes, or sends nothing within the candidate deadline is aborted. The live Wi-Fi session is untouched: no `lose`, no reconnect, `inputAllowed` stays true on the Wi-Fi generation, video is not closed. The abort reason maps to HARD_FAIL in `AutoUsbPolicy.outcomeOf`.
-- [ ] [JVM] **No lost up event.** A key (and, separately, a pen contact) pressed on the Wi-Fi generation before the candidate opens and released during the proof wait: the up is sent on the Wi-Fi connection, for both a squatter candidate and a real one. A squatter candidate never causes any input on the live session to be refused or dropped.
-- [ ] [JVM] **Normal migration still promotes.** The old video closes once, exactly one new video connection opens after STREAM_CONFIG, and there is no extra `KEYFRAME_REQUEST` beyond today's. A BYE(SUPERSEDED) or a close on the old connection that arrives before the candidate's first record does not end the session. No input from the old generation reaches the new session.
-- [ ] [JVM] A PAIRING ack on a candidate still aborts the migration and touches neither the trusted nor the pending record.
-- [ ] [JVM] `MigrationTest` is rewritten for the new order; the other migration, wake and AUTO tests pass, rewritten only where they encode the old order (list them in Handoff).
+- [x] [JVM] An AUTO-mode USB migration candidate that receives a plaintext PAIRED/ACCEPTED ack is **not** promoted until its first host record decrypts and authenticates.
+- [x] [JVM] **Squatter candidate.** A candidate that knows the real `host_id` and then sends a bad record, closes, or sends nothing within the candidate deadline is aborted. The live Wi-Fi session is untouched: no `lose`, no reconnect, `inputAllowed` stays true on the Wi-Fi generation, video is not closed. The abort reason maps to HARD_FAIL in `AutoUsbPolicy.outcomeOf`.
+- [x] [JVM] **No lost up event.** A key (and, separately, a pen contact) pressed on the Wi-Fi generation before the candidate opens and released during the proof wait: the up is sent on the Wi-Fi connection, for both a squatter candidate and a real one. A squatter candidate never causes any input on the live session to be refused or dropped.
+- [x] [JVM] **Normal migration still promotes.** The old video closes once, exactly one new video connection opens after STREAM_CONFIG, and there is no extra `KEYFRAME_REQUEST` beyond today's. A BYE(SUPERSEDED) or a close on the old connection that arrives before the candidate's first record does not end the session. No input from the old generation reaches the new session.
+- [x] [JVM] A PAIRING ack on a candidate still aborts the migration and touches neither the trusted nor the pending record.
+- [x] [JVM] `MigrationTest` is rewritten for the new order; the other migration, wake and AUTO tests pass, rewritten only where they encode the old order (list them in Handoff).
 - [ ] [device] Covered by T-157 step 7.
 - [ ] The orchestrator ran `./scripts/codex-review.sh` with `--high` and its findings are resolved or recorded.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -76,10 +76,27 @@ Riskler: `MigrationCancelTest.cancelWithoutCandidateOrAfterPromotionDoesNothing`
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `7759458` (uygulama + testler) on `task/T-205-client-migration-auth-gate`; plan `147633c`. Şekil: önerilen sıra (önce kanıt, sonra emekliye ayırma + terfi), "geri almalı geçici terfi" değil.
 - **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionMachine.kt`: adayın şifresiz ACCEPTED'ı yalnız `SendCandidate(Ping)` (kanıt) üretir ve `migration_proof_wait` loglar; adayın ilk `Received` kaydı (okuyucu yalnız çözülüp doğrulanmış kaydı verir) terfi ettirir (`CloseVideo`, `RetireControl`, `PromoteCandidate`, ayarlar, `Ui(Connected)`, `MigrationResult(ok)`, sonra o kayıt yeni oturumun mesajı olarak işlenir: STREAM_CONFIG → `CloseRetired` + `ApplyConfig` + `OpenVideo`). Kanıt beklerken eski bağlantıdaki BYE(SUPERSEDED) ya da kapanma `lose()` yapmaz (`oldGone`, log `migration_old_gone how=bye|closed`); o arada eski bağlantıda ping, PONG zaman aşımı ve video yeniden açma durur. Aday sonra düşerse (`failCandidate`) oturum `lose(LOST)` ile yeniden bağlanır. Yeni sebepler: `proof_failed`, `proof_closed`, `proof_timeout` (hepsi `SOFT_REASONS` dışında → HARD_FAIL; `AutoTransport.kt` değişmedi). Adayın `Secured` olayı anahtarı asla saklamaz (sıfırlar); host_id oturumunkinden farklıysa `key` ile düşer. Terfi logu `migration_proved cand_gen=N`.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt`: yalnız yorumlar (davranış aynı: kapı terfi anında kapanıp açılır, `SendCandidate` PING'i adayın yazarı mühürler).
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/MigrationTest.kt`: yeni sıraya göre yeniden yazıldı (`successfulMigrationProvesThenRetiresAndPromotes`; `retiredConnection…`, `stopAfterPromotion…`, `backToBack…` artık ack + ilk kayıt ile terfi eder).
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/MigrationAuthGateTest.kt` (yeni, 9 test): gerçek kripto (`PairTrustFlowTest.FakeHost`, `ClientHandshake`, `FirstAck`, `RecordDecoder`) + denetleyicinin yönlendirme aynası (`dispatch`/`exec`/`trySendInput`). Squatter: bozuk kayıt / kapanma / süre; kayıp up yok (tuş ve kalem, squatter ve gerçek); gerçek taşıma (BYE+kapanma önce gelir, video bir kez kapanır, tek OpenVideo, KEYFRAME_REQUEST yok, eski nesil girdi yeni oturuma gitmez); eski gittikten sonra aday düşerse yeniden bağlanma; kanıt sırasında iptal; PAIRING ack kayıtlara dokunmaz; başka host_id'li aday.
+  - **`files:` dışında:** `client-android/app/src/test/kotlin/dev/matebridge/client/session/MigrationCancelTest.kt`, `cancelWithoutCandidateOrAfterPromotionDoesNothing` içinde 2 satır (+1 import): terfi artık ack + ilk doğrulanmış kayıt ile. Eski sırayı (ack'te terfi) kodluyordu; kabul kriteri "eski sırayı kodlayan testler yeniden yazılır, Handoff'ta listelenir" dediği için en küçük uyarlama yapıldı. Başka test değişmedi (wake, AUTO, PairTrustFlow olduğu gibi geçiyor).
+  - Bu kart.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Host kanıtta önce eski oturumu sonlandırır (BYE(SUPERSEDED) + kapatma), sonra adaya STREAM_CONFIG, sonra PONG gönderir (`host SessionMachine.swift` `prove()`), yani adayın ilk kaydı normalde STREAM_CONFIG. İlk kayıt başka bir şeyse (ör. PONG) de terfi olur; emekli bağlantı o zaman `RETIRE_TIMEOUT_US` ile kapanır.
+  - Adayın ilk doğrulanmış kaydı BYE ise terfi yok: `proof_closed` (eski gitmişse oturum yeniden bağlanır).
+  - Kanıt beklerken eski bağlantının herhangi bir kapanması (yalnız host devralması değil, ör. Wi-Fi kopması) da `oldGone` sayılır; aday 3 s içinde kanıtlamazsa oturum yeniden bağlanır. Bu arada giden girdi ölü kuyruğa düşer; host bağlantı kopunca her şeyi bırakır (PROTOCOL §7), takılı tuş/kalem kalmaz. Eski bağlantıda ProtocolError ya da başka nedenli BYE eskisi gibi `lose()` (adayı da kapatır).
+  - Kanıt sırasında giriş kapısı açık kalır (kart gereği); eski gittikten sonra yapılan girdi reddedilmez, yalnız host tarafından zaten bırakılmış bir bağlantıya gider.
+  - `MIGRATE_TIMEOUT_US` (3 s) el sıkışma + kanıt toplamını kapsar (taşıma isteğinden itibaren).
+- **Test edilmeyenler / cihazda doğrulanacaklar (T-157 adım 7, orkestratör, tek seferde):**
+  1. AUTO, Wi-Fi'de akış varken USB kablosu tak (adb reverse açık): logda sırayla `migrate_start`, `migration_proof_wait`, (Wi-Fi'de `bye_recv reason=5` ve/veya `migration_old_gone`), `migrate_switch`, `migration_proved`, `transport_migrate ok=1 reason=ok`; görüntü USB'de devam eder, tek `video_open`.
+  2. Taşıma sırasında kalemle çizgi çizip/tuş basılı tutup bırak: Mac'te takılı tuş ya da kalem teması kalmamalı.
+  3. Squatter benzetimi: `adb reverse --remove tcp:47001` ve tablette `127.0.0.1:47001`'i dinleyen bir test uygulaması yoksa yalnız `connect_failed` görülür; varsa (ör. sahte ack gönderen bir probe) `transport_migrate ok=0 reason=proof_*` ve Wi-Fi oturumu kesintisiz sürmeli, AUTO geri çekilmeli (aralık büyür).
+  4. Gerçek bir taşıma sonrası `retired_close` bir kez ve hemen (STREAM_CONFIG ile) görülmeli.
+  - Ayrıca: codex incelemesi (`./scripts/codex-review.sh main task/T-205-client-migration-auth-gate --high`) orkestratörde.
 - **Açık sorular:**
+  - `docs/LOGGING.md` eklemeleri (orkestratör): yeni olaylar `migration_proof_wait cand_gen=N`, `migration_old_gone how=bye|closed`, `migration_proved cand_gen=N`; `transport_migrate reason=` için yeni değerler `proof_failed`, `proof_closed`, `proof_timeout`. Hiçbirinde host_id, anahtar ya da jeton yok.
+  - `MigrationCancelTest.kt` `files:` listesinde değildi; yukarıdaki minimal uyarlama orkestratörün onayına.
+  - PROTOCOL.md §3.3 metni istemcinin terfi sırasını anlatmıyor; tel değişmediği için dokunulmadı.
