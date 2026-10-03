@@ -1,7 +1,7 @@
 ---
 id: T-204
 title: Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile`
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-182, T-177, T-145]
@@ -95,7 +95,14 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core `EncoderKnobs.swift`:** delete `H264Profile`, `IdleRefreshBuffer`, `IdleRefreshConfig`, `RefreshQPBoost`, `IdleRefreshPolicy`; drop `prioritizeSpeed`, `h264Profile`, `idleRefresh`, `retagInput` from `EncoderKnobs` and their env reads. `logFields` keeps `prio_speed=1 … idle_refresh=off input_retag=1` as constants (T-186 precedent: parsers and `LiveBitrateTests`, outside `files:`, stay unchanged). Add the pure `StreamProfileLog` builder (allow-list of the 0026 keep/debug-only host env keys, sanitised values, `sha=` from `BuildInfo`).
+2. **`VideoSettings.swift`:** delete `maxFrameDelayCount`, `parseFrameDelay` and the `MATEBRIDGE_FRAME_DELAY` read. **`VideoDump.swift`:** delete `--frame-delay`.
+3. **`InputColorTags.swift`:** delete `InputRetag.isEnabled`; retag is unconditional.
+4. **Core `EncodeBench.swift`:** delete `h264Profile`/`retagInput` options and their env reads. **Host `EncodeBench.swift`:** constant H.264 High profile, always retag. The bench matrix's `prioritizeSpeed` config field (`no-prioritize`) is a bench config, not the env knob, and stays.
+5. **`SharpnessBenchOptions.swift`/`SharpnessBench.swift`:** delete `--refresh-buffer` and `effectiveStaticMs`; frames not matched to a source are reported as `phase=resubmit`.
+6. **`HEVCEncoder.swift`:** delete the refresh timer, `IdleRefreshPolicy`, QP boost, copy pool, `Input.refresh`, the `idle_refresh_qp` warning and `resubmitLast(refresh:)`. Keep the idle keyframe timer and `resubmitLast()`. Set `PrioritizeEncodingSpeedOverQuality=true`, H.264 `High_AutoLevel` and the input retag as constants. Log `ev=profile` once after `encoder_config`.
+7. **Tests:** delete `IdleRefreshRefineTests.swift` and the removed-key cases; add the `StreamProfileLog` tests.
+- **Risks:** the T-162 owner-queue ordering and the T-177 setter must stay unchanged, so only call sites are removed. `resubmitLast` stays on the idle-keyframe and `requestKeyframe(resubmitNow:)` paths.
 
 ## Handoff
 
