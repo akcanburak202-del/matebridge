@@ -1,7 +1,7 @@
 ---
 id: T-145
 title: Log and show the host build commit
-status: in_progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -44,11 +44,11 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] `BuildInfoTests`: a full Info.plist dictionary gives the right `version`, `build` and `sha`; each missing key becomes `unknown`; `logFields` produces exactly `version=… build=… sha=… os=…`.
+- [x] [XCTest] `BuildInfoTests`: a full Info.plist dictionary gives the right `version`, `build` and `sha`; each missing key becomes `unknown`; `logFields` produces exactly `version=… build=… sha=… os=…`.
 - [ ] [device] (Mac) `bundle-host.sh` writes `MBGitCommit` (short SHA, `-dirty` on a dirty tree, `unknown` without git); `plutil -lint` still passes.
 - [ ] [device] `swift run` (no bundle) logs `ev=app_start … sha=unknown` and does not crash.
 - [ ] [device] A bundled `MateBridge.app` logs exactly one `ev=app_start version= build=<CFBundleVersion> sha=<MBGitCommit> os=` line per launch in `host.log`, before `listening`, and the menu shows the same SHA on a disabled "Sürüm …" line.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -65,8 +65,18 @@ Risks: `swift run` has no bundle Info.plist → every field `unknown` (covered b
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `6ac48ad` (implementation), plan `87f3ef8`; this Handoff is in the branch's last commit. Branch `task/T-145-host-build-identity`. `./scripts/check.sh` → ALL OK (host-mac 342 tests, 8 new `BuildInfoTests`).
+- **Dokunulan dosyalar:** `scripts/bundle-host.sh`, `host-mac/Resources/Info.plist`, `host-mac/Sources/MateBridgeApp/main.swift`, `host-mac/Sources/MateBridgeCore/Session/BuildInfo.swift` (new), `host-mac/Tests/MateBridgeCoreTests/Session/BuildInfoTests.swift` (new), this card.
 - **Varsayımlar:**
+  - Line: `I session sid=0 gen=0 ev=app_start version=0.1 build=<CFBundleVersion> sha=<MBGitCommit> os=<…>`, logged via `HostLog.log` as the first statement of `applicationDidFinishLaunching` (so before `server.start()` and its `listening` line). The CLI modes (`--dump-video` etc.) exit earlier and log no `app_start`.
+  - Whitespace and `=` inside a value become `_` so every field stays one `key=value` token; `operatingSystemVersionString` therefore logs as e.g. `os=Version_27.0_(Build_27A…)`.
+  - A missing key, non-string, empty value or an unfilled `__X__` template placeholder → `unknown`.
+  - The disabled `Sürüm 0.1 (<sha>, <build>)` line sits just above `Quit` (after the last separator), not at the top.
+  - `-dirty` comes from `git status --porcelain` at the repo root, so untracked (non-ignored) files also mark the build dirty. The SHA is the repo's HEAD, also for probes bundled with `--package`.
+  - Bundle script prints `==> build <n>, commit <sha>`.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Done locally (no launch): `bundle-host.sh --out <scratch>` on a clean tree → `MBGitCommit=6ac48ad`, with an untracked file → `6ac48ad-dirty`; `plutil -lint` OK on both.
+  - Not tested: the `unknown` path when git or the repository is missing (sandbox would not allow a git-less run).
+  - Not tested (no app launch allowed): `swift run` logging `sha=unknown` without crashing; a bundled `MateBridge.app` writing exactly one `app_start` line before `listening` in `~/Library/Logs/MateBridge/host.log`; the menu showing the disabled `Sürüm …` line with the same SHA.
 - **Açık sorular:**
+  - `docs/LOGGING.md` needs the new `ev=app_start version= build= sha= os=` line (orchestrator), including the `_` substitution for spaces in `os`.
