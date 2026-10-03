@@ -1,7 +1,7 @@
 ---
 id: T-210
 title: Let the dev jitter knob select the adaptive pacer in game modes (A/B for T-208)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-208, T-185]
