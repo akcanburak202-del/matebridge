@@ -57,8 +57,9 @@ class VideoRenderer(
      */
     private val onHealthEvent: (HealthEvent) -> Unit = {},
     /**
-     * T-160: called at the end of [reconfigure] (caller's thread), once the queue holds nothing of the previous config
-     * and the codec for the new one is starting: frames of [StreamConfig] may be fed from now on.
+     * T-160: called by [reconfigure] (caller's thread) once the queue holds nothing of the previous config and the new
+     * generation is started, and before its KEYFRAME_REQUEST(STARTUP): frames of [StreamConfig] may be fed from now on,
+     * so the host's answer to that request is never dropped.
      */
     private val onConfigInstalled: (StreamConfig) -> Unit = {},
 ) : VideoFrameSink {
@@ -292,11 +293,11 @@ class VideoRenderer(
         val surface = current?.surface
         retire(wait = false)
         val reason = queue.reset(KeyframeRequest.STARTUP, keepConfig = false)
-        if (surface != null) {
-            onKeyframeRequest(reason)
-            start(surface)
-        }
-        onConfigInstalled(newConfig) // T-160: only now may the session deliver this config's frames
+        if (surface != null) start(surface)
+        // T-160: only now may the session deliver this config's frames (the queue holds nothing of the old one and the
+        // new generation is fed). Before the STARTUP request, so the host's answer to it is never gated away.
+        onConfigInstalled(newConfig)
+        if (surface != null) onKeyframeRequest(reason)
     }
 
     private fun start(surface: Any) {

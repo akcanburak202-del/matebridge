@@ -214,6 +214,59 @@ class VideoDeliveryGateTest {
         }
     }
 
+    @Test fun theHostsStartupAnswerArrivingBeforeReconfigureReturnsIsDelivered() {
+        // Codex review P2: the UI thread is preempted right after the STARTUP request; the host's CODEC_CONFIG +
+        // keyframe arrive on the reader before reconfigure() returns. They must pass (recovery on the first keyframe).
+        val factory = FakeDecoderFactory()
+        val env = TestDecoderEnv()
+        val kf = CopyOnWriteArrayList<Int>()
+        val a = cfg(1)
+        val b = cfg(2)
+        lateinit var r: VideoRenderer
+        fun frame(seq: Long, flags: Int) = VideoFrame(seq, seq * 1000, flags, 0, 1, 4, Bytes(byteArrayOf(0, 0, 0, 1)))
+        fun feed(gen: Int, configId: Int, f: VideoFrame) = gate.deliver(gen, configId) { r.onFrame(f) }
+        val answerB = AtomicBoolean(false)
+        val answered = CopyOnWriteArrayList<Boolean>()
+        r = VideoRenderer(a, onKeyframeRequest = { reason ->
+            kf.add(reason)
+            if (answerB.get() && reason == KeyframeRequest.STARTUP) {
+                // The reader thread delivers the host's answer while the UI thread is still inside reconfigure().
+                val reader = Thread {
+                    answered.add(feed(4, 2, frame(300, VideoFrame.CODEC_CONFIG)))
+                    answered.add(feed(4, 2, frame(301, VideoFrame.KEYFRAME)))
+                    answered.add(feed(3, 1, frame(302, 0))) // the old reader's last record: never
+                }
+                reader.start()
+                reader.join(5_000)
+            }
+        }, codecFactory = factory, env = env, onConfigInstalled = gate::install)
+        try {
+            streamConfig(a, videoGen = 3, install = false)
+            r.reconfigure(a)
+            r.attachTarget(Any())
+            assertTrue(factory.awaitEvent("start#1"))
+            assertTrue(feed(3, 1, frame(1, VideoFrame.CODEC_CONFIG)))
+            assertTrue(feed(3, 1, frame(2, VideoFrame.KEYFRAME)))
+            assertTrue(factory.await { queuedInputs >= 2 })
+            kf.clear()
+
+            streamConfig(b, videoGen = 4, install = false)
+            assertFalse(feed(4, 2, frame(100, VideoFrame.KEYFRAME))) // before the UI reconfigures: dropped
+            answerB.set(true)
+            r.reconfigure(b)
+            assertEquals(listOf(true, true, false), answered.toList())
+            assertEquals(listOf(KeyframeRequest.STARTUP), kf.toList())
+            assertTrue(factory.awaitEvent("start#2"))
+            assertTrue(factory.await { queuedInputs >= 4 }) // the answer reached the new codec
+            assertTrue(feed(4, 2, frame(303, 0)))
+            assertTrue(factory.await { queuedInputs >= 5 })
+            assertEquals(listOf(KeyframeRequest.STARTUP), kf.toList())
+            assertTrue(env.lines("kf_request").none { "reason=${KeyframeRequest.FRAMES_DROPPED}" in it })
+        } finally {
+            r.detachSurface()
+        }
+    }
+
     // ---- driven by a real SessionMachine ----
 
     private val hello = Hello(0, Bytes(ByteArray(16) { it.toByte() }), 2800, 1840, 360, 144, 0xFF, "MatePad")
