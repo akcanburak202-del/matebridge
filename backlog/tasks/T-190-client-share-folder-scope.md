@@ -1,7 +1,7 @@
 ---
 id: T-190
 title: Share a chosen folder (optional read-only) instead of all storage
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-153]
@@ -74,7 +74,17 @@ Decision 0028 must be accepted by the user before work starts (it amends decisio
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Decision 0028 (accepted 2026-10-03): default root `MateBridge/` (created if missing), `Download/` and "Tüm depolama" as choices, read-only offered (default off).
+
+1. `files/FilesConfig.kt`: `readOnly: Boolean = false` on `FilesConfig`; new pure `FilesRoot` enum (`matebridge` default, `download`, `all`; unknown stored value → default) and `FilesScope(root, readOnly)` with `directory(storage)`: storage itself only for `all`; otherwise `storage/<folder>`, created when missing, and null when it is not a real directory directly under the storage (file, symlink, mkdir failed) — never a fallback to the whole storage. `logFields()` = `root=<id> ro=0|1`; status text for a missing folder.
+2. `files/DavHandler.kt`: read-only gate after auth and OPTIONS: PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK → 403 before any dispatch (covers the virtual root and the `._*` metadata branch). OPTIONS answers `DAV: 1` and `Allow` with the read methods only; every `405 Allow` uses the same list.
+3. `files/FilesController.kt`: a `scope` provider read at every server start; the factory resolves the directory, logs `ev=scope root= ro=`, and when the folder is missing builds a server that fails at once (OFF + FAILED, status text names the folder problem). `rescope()`: when the scope differs from the running server's, stop (OFF) and start again with the last sync inputs (new token, READY on listen). `statusText`.
+4. `session/Settings.kt`: `files_root` / `files_read_only` keys, `filesRoot()`, `filesReadOnly()`, `filesScope()`.
+5. `settings/SettingsCatalog.kt`: `SettingsHost` gets `filesRoot`/`selectFilesRoot`, `filesReadOnly`/`setFilesReadOnly`; "Tablet dosyaları" = `files`, `files_root` (Choice), `files_ro` (Toggle), `files_status`.
+6. `MainActivity.kt`: only the `SettingsHost` members, the `FilesController` constructor argument and the status text.
+7. Tests: `files/DavScopeTest.kt` (server on a sub-folder root: listing, GET, escapes incl. symlink to a sibling and `Destination` outside, read-only matrix incl. `._*`), `files/FilesScopeTest.kt` (directory rules, lifecycle with a missing folder never publishes READY), `session/FilesScopeSettingsTest.kt`, `SettingsCatalogTest.kt`. T-191 is not merged: no `SettingsResetTest` change.
+
+Risks: `FilesLifecycle.kt` is not in `files:`, so a scope restart goes through `shutdown()` (its log line says `reason=destroy`, preceded by `ev=scope_change`); PROPFIND still advertises `supportedlock` in read-only mode (`DavXml.kt` not in `files:`).
 
 ## Handoff
 
