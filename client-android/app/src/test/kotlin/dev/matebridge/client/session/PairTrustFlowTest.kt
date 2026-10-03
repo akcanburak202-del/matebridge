@@ -987,6 +987,41 @@ class PairTrustFlowTest {
 
     @Test fun t207FreshPairOnWifiReturnsAutoToUsb() = trustOnWifiThenAutoMovesToUsb(knownBefore = false)
 
+    /**
+     * Codex P2 regression: the Wi-Fi video port is blocked (control and heartbeats work, zero video frames). The proven
+     * identity must still reach the UI, so the asked USB endpoint of that Mac is cleared and AUTO can migrate.
+     */
+    @Test fun t207ProvenIdentityNeedsNoVideoFrames() {
+        f.store.put(mac.hostId, keyK)
+        mac.key = keyK
+        val pick = PairPick()
+        var fed = 0
+        start(usb, user = false)!!.first(FakeHost(mac.hostId, "Mac mini"), pairing = true) // asked, claims this Mac
+        fed = feed(pick, fed)
+        assertTrue(pick.isAsked(usb))
+        val c = start(discovered, user = false)!!
+        assertEquals(listOf<SessionUi>(SessionUi.Connected("Mac mini", 0)), c.first(mac, pairing = false).ui()) // plaintext ack
+        ticks(1_000_000) // no video: Tick(0) only; the ticks answer every PING with an authenticated PONG
+        val connected = rawUis.filterIsInstance<SessionUi.Connected>()
+        assertEquals(listOf(null, mac.tag), connected.map { it.hostTag }) // published once, on the first record
+        assertTrue(connected.all { it.framesReceived == 0L })
+        fed = feed(pick, fed)
+        assertEquals(listOf(usb), pick.takeCleared())
+        assertFalse(pick.isAsked(usb))
+        assertEquals(AutoUsbPolicy.Step.MIGRATE, AutoUsbPolicy().next(false, AutoUsbPolicy.stageOf(rawUis.last()), 0, pick.isAsked(usb)))
+        // Later records of the same connection publish nothing more (the identity is shown once per connection).
+        assertTrue(c.records(Pong(9, 0, 0)).ui().isEmpty())
+    }
+
+    @Test fun t207UnconfirmedPairingNeverPublishesTheIdentity() {
+        // decision 0018: a Mac that accepted while the tablet user has not confirmed proves nothing to the UI
+        val c = pairUntilPrompt()
+        mac.approve()
+        c.records(mac.acceptedRecord(), cfg(1))
+        ticks(1_000_000)
+        assertTrue(rawUis.none { it is SessionUi.Connected })
+    }
+
     @Test fun t207ATrustedPairedSessionClearsOnlyItsOwnHostsMarks() {
         f.store.put(mac.hostId, keyK)
         mac.key = keyK
@@ -1004,8 +1039,8 @@ class PairTrustFlowTest {
         fed = feed(pick, fed)
         assertNull((rawUis.last() as SessionUi.Connected).hostTag) // the plaintext ack proves nothing yet
         assertTrue(pick.takeCleared().isEmpty())
-        c.records(cfg(1))
-        step(Event.Tick(3), SessionMachine.UI_INTERVAL_US) // frames: the Connected update after an authenticated record
+        val proven = c.records(cfg(1)) // the first authenticated record publishes the identity at once (no video needed)
+        assertEquals(listOf<SessionUi>(SessionUi.Connected("Mac mini", 0, mac.tag)), proven.ui())
         fed = feed(pick, fed)
         assertEquals(mac.tag, (rawUis.last() as SessionUi.Connected).hostTag)
         assertEquals(listOf(remembered), pick.takeCleared()) // it claimed this Mac: one more automatic try
