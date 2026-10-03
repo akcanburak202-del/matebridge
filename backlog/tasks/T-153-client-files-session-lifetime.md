@@ -1,7 +1,7 @@
 ---
 id: T-153
 title: Run the WebDAV server only during an accepted, trusted USB session
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
@@ -57,7 +57,15 @@ Decision 0018 must be accepted by the user before work starts (the "locally trus
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `files/FilesSwitch.kt`: `shouldRun(enabled, permission, foreground, sessionTrusted, transport)` = all true and `transport == USB`; `idleStatus(...)` gets a new `FilesStatus.NO_USB_SESSION` ("Durum: Mac'e USB ile bağlanınca açılır"), checked after setting/permission/foreground; `stopReason(...)` for the `server state=off reason=` log (`disabled`, `no_permission`, `background`, `no_session`, `wifi`).
+2. `files/FilesLifecycle.kt` (pure, JVM-tested):
+   - `FilesSessionGate`: trust signal per connection generation. `onConnectionGen(gen, transport)` (from `SessionListener.onConnectionGen`, which carries the connection's own transport), `onConfigApplied()` (from `installConfig`, i.e. an authenticated STREAM_CONFIG applied on the current generation), `onUi(connected)`. `trusted` = Connected and config applied on the current gen; a new gen (reconnect or migration) or any non-Connected state drops it. Each call returns whether (trusted, transport) changed, so MainActivity syncs only on change (render() runs every 250 ms).
+   - `FilesLifecycle<S>`: the start/stop logic moved out of `FilesController` over an injected server factory, token source, publisher and log: one server at a time, a new token per start, READY only from `onListening` of the live generation, OFF published under the lock before `stop()`, failed server → FAILED + OFF, retired server handed to the next start.
+3. `files/FilesController.kt`: `sync(enabled, foreground, sessionTrusted, transport)` reads the permission and delegates to `FilesLifecycle`; the factory builds `DavServer` (root, hooks, thread priority, MbLog) as today.
+4. `MainActivity.kt`: one `FilesSessionGate` field and one `syncFiles(foreground)` helper; gate calls in `onConnectionGen` (UI block), `installConfig` and `render()`; the three existing `files.sync` call sites go through the helper.
+5. Tests in `test/.../files/`: `shouldRun` table over all 64 combinations, idle status/reason, gate (Connected without STREAM_CONFIG, stale gen, migration, Wi-Fi), lifecycle with fakes (OFF before stop, new token per start, stale callbacks ignored, failure).
+
+Risks: ordering of UI-thread posts (onConnectionGen, Ui, ApplyConfig all come from the engine thread in order, so FIFO keeps gen and config consistent); T-205 edits SessionMachine/Controller in parallel — not touched here.
 
 ## Handoff
 
