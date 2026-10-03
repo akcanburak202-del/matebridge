@@ -1,7 +1,7 @@
 ---
 id: T-189
 title: Add a "Yalnız USB" network profile
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -113,10 +113,42 @@ Risks: the adb loopback family (verified on device by `lsof` plus a USB session)
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `9fab1f9` (implementation; plan in `0de508e`).
 - **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Session/NetworkProfile.swift` (new: `NetworkProfile`, `NetworkActivity`, `NetworkProfileSwitch`);
+  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift` (`BindAddress` is now `Equatable`, doc only);
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`:
+    - `init(networkProfile:)`, `setNetworkProfile(_:)`, `Handlers.networkProfileChanged`;
+    - bind address per profile;
+    - accept-time refusal `ev=connection_refused reason=profile`;
+    - Bonjour gate in `startBonjour(for:)`;
+    - `profile=` on `ev=listening`;
+    - `ev=network_profile profile=… from=… action=restart|deferred`;
+  - `host-mac/Sources/MateBridgeApp/main.swift`: "Yalnız USB (Wi-Fi kapalı)" toggle, a profile line, and USB modu locked on in the mode;
+  - `host-mac/Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift` (12 tests; on this machine the real-socket test ran instead of skipping).
+  - `UserDefaultsStreamPrefsStore.swift` was not touched (see Plan, step 7).
 - **Varsayımlar:**
+  - T-186 had merged, so `nw` forcing is N/A. The "effective socket kind is bsd" XCTest criterion does not apply because only `bsd` exists.
+  - The Mac's adb server connects the `adb reverse` target over IPv4 127.0.0.1 first, so binding `::ffff:127.0.0.1` alone is enough (`::1` is not bound).
+  - A live session of either transport defers the switch. Idle, or approval-pending, restarts at once and closes half-open connections and the pending approval.
+  - UserDefaults key `networkProfile`, values `all` / `usb_only`; anything else means "USB + Wi-Fi".
+  - `./scripts/check.sh` ALL OK.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The menu: the "Yalnız USB" toggle persists across relaunches. While it is on, "USB modu" shows on and is disabled, and turning the mode off restores the earlier USB modu choice. The profile line text reads correctly.
+  - In USB-only mode, `lsof -iTCP -sTCP:LISTEN -P` shows only `127.0.0.1` (or `[::ffff:127.0.0.1]`) for 47001/47002, with no `*:`.
+  - In USB-only mode, `dns-sd -B _matebridge._tcp` is empty, including after a `wol=` change (for example toggling Wi-Fi).
+  - A USB session works in USB-only mode: video, pen, keyboard, audio and files. **The adb loopback family assumption is the main risk.**
+  - Switching with no session: `ev=network_profile action=restart` followed by a new `ev=listening … profile=`.
+  - Switching with a live USB or Wi-Fi session: `action=deferred`, the menu line "… oturum bitince uygulanacak", the session is not cut, and the switch applies after the session ends.
+  - Back in "USB + Wi-Fi": Bonjour is visible with TXT `wol=`, and a Wi-Fi session connects.
+  - A LAN connect attempt in USB-only mode is refused (the bind refuses it; `reason=profile` is unreachable with a loopback bind, defence in depth).
+  - Codex review (security) is still pending.
 - **Açık sorular:**
+  - `docs/LOGGING.md` (orchestrator):
+    - `ev=listening` gains `profile=all|usb_only`;
+    - `ev=connection_refused` gains `reason=profile` plus a `profile=` field;
+    - new `ev=network_profile profile=all|usb_only from=all|usb_only action=restart|deferred` (component `session`).
+  - `docs/PROTOCOL.md` §3 step 1 (orchestrator): the planned note that Bonjour may be absent in "Yalnız USB" mode.
+  - Decision note for the orchestrator: a live **Wi-Fi** session is deferred, not ended (reason in Plan, step 4: the tablet is the only screen). If ending it is preferred, flip the `.active(.network)` branch in `NetworkProfileSwitch.decide` and its test.
+  - While a switch to USB-only is deferred, the LAN listeners and Bonjour stay up until the session ends. The menu line shows this.
+  - T-192 (settings reset) should also clear the `networkProfile` key.
