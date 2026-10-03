@@ -192,7 +192,9 @@ public final class SessionServer: @unchecked Sendable {
         /// "Allow" could not be stored because the Keychain queue is full: show the request again with the notice
         /// "Anahtar Zinciri meşgul, tekrar dene" (the answer is still open).
         public var approvalKeychainBusy: @Sendable (ApprovalRequest) -> Void = { _ in }
-        /// Input, STATS and KEYFRAME_REQUEST from the approved session.
+        /// Input, STATS and KEYFRAME_REQUEST from the approved session, and a PONG that answers one of the host's own
+        /// PINGs on it (T-171: `SessionMachine` PINGs the active connection every 500 ms; the input controller takes
+        /// the PONG for its diagnostic clock offset, every other consumer ignores it).
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// A record of the ACTIVE session's control connection (PING included) was received at `receivedUs` (host
         /// clock) and has been handled, its `deliver` included (T-163: the key repeat pauses while this is silent).
@@ -415,6 +417,8 @@ public final class SessionServer: @unchecked Sendable {
         var configuration = SessionMachine.Configuration(hostName: hostName, makeStreamConfig: makeStreamConfig,
                                                          hostID: identity.id, pairKeys: nil)
         if case .unpersisted = identity { configuration.allowPaired = false }  // a volatile host_id must not be trusted
+        // T-171: PING the active session every 500 ms; its PONG feeds the input-age clock offset (diagnostics only).
+        configuration.hostPingIntervalUs = SessionMachine.Configuration.defaultHostPingIntervalUs
         self.machine = SessionMachine(configuration: configuration, approvedDevices: Set(known.keys))
     }
 

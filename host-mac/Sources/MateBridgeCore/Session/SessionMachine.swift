@@ -63,7 +63,8 @@ public enum SessionAction: Equatable, Sendable {
     case startEncryption(ConnectionID, ControlKeys)
     /// Release every held key, button and pen contact of this session (idempotent).
     case releaseInput(ConnectionID, ReleaseCause)
-    /// Message from the approved, active session that the host acts on (input, STATS, KEYFRAME_REQUEST).
+    /// Message from the approved, active session that the host acts on (input, STATS, KEYFRAME_REQUEST), and a PONG
+    /// that answers one of the host's own PINGs on that connection (T-171, diagnostic clock offset only).
     case deliver(ConnectionID, Message)
     /// `code` is shown in the approval window only (never logged). `replaced` says whether this request replaced an
     /// approval window left open by a request whose tablet had left (T-155); the panel makes a swap visible.
@@ -130,6 +131,15 @@ public struct SessionMachine: Sendable {
         public var proofTimeoutUs: UInt64 = 5_000_000
         /// false: never answer PAIRED (the host identity could not be persisted; PROTOCOL.md 9, host_id).
         public var allowPaired = true
+        /// T-171: the host PINGs the active session's control connection this often (PROTOCOL.md 6, "Host da aynı
+        /// aralıkla gönderebilir"). Its PONG only feeds the diagnostic clock offset (`InputAgeTracker`). nil: off,
+        /// the default here, so tests that compare whole `tick` results stay exact; the host app sets
+        /// `defaultHostPingIntervalUs`.
+        public var hostPingIntervalUs: UInt64?
+        /// The client's PING interval (PROTOCOL.md 6), used by the host app for its own PINGs.
+        public static let defaultHostPingIntervalUs: UInt64 = 500_000
+        /// PINGs remembered while unanswered; an older one is forgotten (its PONG is then ignored).
+        public var maxOutstandingPings = 4
 
         public init(hostName: String,
                     makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig,
@@ -212,10 +222,25 @@ public struct SessionMachine: Sendable {
         case active(Session)
     }
 
+    /// Host PINGs of an active connection (T-171), diagnostics only.
+    private struct HostPing {
+        struct Sent {
+            var seq: UInt32
+            var sentAt: UInt64
+        }
+        var nextAt: UInt64
+        var nextSeq: UInt32 = 1
+        /// Unanswered, oldest first, bounded by `maxOutstandingPings`.
+        var outstanding: [Sent] = []
+    }
+
     private struct Conn {
         var phase: Phase
         var lastReceive: UInt64
         var silenceReleased = false
+        /// Set when the connection becomes the active session (`start`), never before: no PING while
+        /// `.awaitingHello`, `.lookingUp`, `.pending` or `.proving`.
+        var ping: HostPing?
     }
 
     private var connections: [ConnectionID: Conn] = [:]
@@ -542,10 +567,13 @@ public struct SessionMachine: Sendable {
                 let silent = now >= conn.lastReceive ? now - conn.lastReceive : 0
                 if silent >= configuration.closeSilenceUs {
                     actions += end(id, bye: .timeout, cause: .timeout, close: true, ev: "heartbeat_timeout")
-                } else if silent >= configuration.releaseSilenceUs, !conn.silenceReleased {
-                    connections[id]?.silenceReleased = true
-                    actions += [.releaseInput(id, .silence),
-                                .log(.warning, ev: "heartbeat_silence", conn: id, fields: "")]
+                } else {
+                    if silent >= configuration.releaseSilenceUs, !conn.silenceReleased {
+                        connections[id]?.silenceReleased = true
+                        actions += [.releaseInput(id, .silence),
+                                    .log(.warning, ev: "heartbeat_silence", conn: id, fields: "")]
+                    }
+                    actions += hostPingIfDue(id, now: now)
                 }
             }
         }
@@ -592,6 +620,31 @@ public struct SessionMachine: Sendable {
     }
 
     // MARK: Internals
+
+    /// T-171: the next host PING of the active connection `id`, if due. A late tick sends one PING, never a burst.
+    private mutating func hostPingIfDue(_ id: ConnectionID, now: UInt64) -> [SessionAction] {
+        guard let interval = configuration.hostPingIntervalUs, var ping = connections[id]?.ping,
+              now >= ping.nextAt else { return [] }
+        let seq = ping.nextSeq
+        ping.nextSeq &+= 1
+        ping.outstanding.append(.init(seq: seq, sentAt: now))
+        if ping.outstanding.count > max(1, configuration.maxOutstandingPings) { ping.outstanding.removeFirst() }
+        ping.nextAt = now + interval
+        connections[id]?.ping = ping
+        return [.send(id, .ping(Ping(seq: seq, senderTimeUs: now)))]
+    }
+
+    /// T-171: a PONG on the active connection that answers one of its outstanding host PINGs (same seq, and the echo
+    /// is that PING's time) is handed on for the clock offset; anything else is ignored. PONGs arrive in order, so the
+    /// matched PING and every older one are done.
+    private mutating func hostPong(_ id: ConnectionID, _ pong: Pong) -> [SessionAction] {
+        guard var ping = connections[id]?.ping,
+              let i = ping.outstanding.firstIndex(where: { $0.seq == pong.seq && $0.sentAt == pong.echoTimeUs })
+        else { return [] }
+        ping.outstanding.removeSubrange(...i)
+        connections[id]?.ping = ping
+        return [.deliver(id, .pong(pong))]
+    }
 
     private func ack(_ status: HelloStatus, sessionID: UInt32 = 0, videoPort: UInt16 = 0) -> Message {
         .helloAck(HelloAck(status: status, sessionID: sessionID, videoPort: videoPort,
@@ -769,6 +822,7 @@ public struct SessionMachine: Sendable {
         connections[id]?.phase = .active(Self.makeSession(hello, sessionID: sessionID, config: config, schedule: schedule))
         connections[id]?.lastReceive = now  // heartbeat baseline starts at ACCEPTED, not at HELLO
         connections[id]?.silenceReleased = false
+        connections[id]?.ping = HostPing(nextAt: now)  // the first host PING goes out with the next tick
         return [.send(id, .streamConfig(config)),
                 .sessionStarted(id, sessionID: sessionID, configID: config.configID, hello: hello),
                 .log(.info, ev: "session_started", conn: id,
@@ -793,7 +847,9 @@ public struct SessionMachine: Sendable {
             return isActive ? [.deliver(id, message)] : []
         case .audioPrefs:
             return []  // decoded, no audio behaviour yet (T-094): ignored, as before when 0x30 was unknown
-        case .helloAck, .streamConfig, .settingsOpen, .pong, .audioConfig, .audioFrame, .videoHello, .videoFrame:
+        case .pong(let pong):
+            return isActive ? hostPong(id, pong) : []  // T-171: only answers to the host's own PINGs
+        case .helloAck, .streamConfig, .settingsOpen, .audioConfig, .audioFrame, .videoHello, .videoFrame:
             return []  // wrong direction or connection: ignored
         }
     }
