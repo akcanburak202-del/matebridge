@@ -9,7 +9,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
-| [T-161](tasks/T-161-client-decoder-teardown-bounds.md) | Bound the decoder hand-off, join the output thread, keep per-generation state | 6 | android-client-dev | [T-159, T-160] |
 | [T-164](tasks/T-164-video-fault-churn-device-run.md) | Run decoder fault injection and the surface-churn soak on the tablet | 6 | orchestrator | [T-159, T-161] |
 | [T-166](tasks/T-166-parked-display-measurement.md) | Measure parked-display behaviour across sleep, lock and long outages | 6 | user | [T-165, T-147] |
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
@@ -202,6 +201,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-158](tasks/T-158-client-decoder-backend-seam.md) | Put MediaCodec behind a DecoderCodec interface (no behaviour change) | 6 | android-client-dev | [] |
 | [T-159](tasks/T-159-client-video-health-gate.md) | Gate input on decoder health and show a video-fault overlay | 6 | android-client-dev | [T-158] |
 | [T-160](tasks/T-160-client-video-delivery-gate.md) | Drop video frames from stale connections and uninstalled configs | 6 | android-client-dev | [T-159, T-150] |
+| [T-161](tasks/T-161-client-decoder-teardown-bounds.md) | Bound the decoder hand-off, join the output thread, keep per-generation state | 6 | android-client-dev | [T-159, T-160] |
 | [T-162](tasks/T-162-host-encoder-submit-owner.md) | Serialise HEVCEncoder submits, QP updates and teardown on one owner queue | 6 | mac-host-dev | [] |
 | [T-163](tasks/T-163-host-key-repeat-stall-pause.md) | Pause host key auto-repeat while the control connection is silent | 6 | mac-host-dev | [] |
 | [T-165](tasks/T-165-host-park-virtual-display.md) | Park the virtual display after a session ends (no capture or encode while parked) | 6 | mac-host-dev | [] |

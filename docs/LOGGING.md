@@ -338,3 +338,10 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 
 - Kullanıcı "Tablet dosyalarını aç" ile birimi bağladıysa, tablet sunucusu aynı oturumda yeniden başlayınca (kapsam ya da salt okunur değişikliği, yeni token) Mac birimi Finder penceresi açmadan bir kez kendiliğinden yeniden bağlar.
 - `ev=eject remount=off seen=notification|unmount`: kullanıcı birimi Finder'dan çıkardı; bu oturumda kendiliğinden yeniden bağlama durur ("Tablet dosyalarını aç" yeniden açar). Belirsiz durumda yeniden bağlamamayı seçer. Yol ve token loglanmaz.
+
+## Decoder kapanış sınırları (tablet, `MB/decoder`, T-161, karar 0019)
+
+- `ev=decoder_previous_stuck vgen=N prev_vgen=N waited_ms=N out_straggler=0|1` (W): yeni kuşak (ya da aynı kuşakta yeniden başlatma, `prev_vgen=vgen`) önceki codec'i 2 sn bekledi, bitmedi; codec açılmaz, `video_health cause=stuck`.
+- `ev=output_straggler vgen=N join_ms=500` (W): çıkış thread'i 500 ms'de bitmedi; sonraki kuşak onu da bekler.
+- `ev=retire_lock_slow vgen=N wait_ms=20` (W): emekliye ayırma paylaşılan kilidi 20 ms'de alamadı, yine de emekliye ayırdı. Cihazda 0 olmalı.
+- Decoder yeniden başlatmaları 100 ms / 500 ms / 1 sn aralıklıdır (10 sn'de 3'ten sonra `give_up`).

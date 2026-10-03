@@ -1,7 +1,7 @@
 ---
 id: T-161
 title: Bound the decoder hand-off, join the output thread, keep per-generation state
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-160]
@@ -197,3 +197,5 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
   - The T-159 `not_running` rule (2 s after the generation began) and the 2 s stuck bound fire at about the same time;
     `VideoHealth` may record `cause=not_running` instead of `stuck` for a hung hand-off. Both are FAULT; if T-164 needs
     the exact cause, raise `NOT_RUNNING_MS` slightly or let `stuck` overwrite `not_running` (T-159 territory).
+
+**Orkestratör notu (2026-10-03):** Üçüncü Codex turu (--high) bir P2 bıraktı: decoder `stop()` içinde takılıyken çok hızlı art arda yeniden yapılandırmada, emekliye ayrılan bekleyici thread'ler sinyal alıp çıkana kadar (zamanlama gecikirse) kısa süre üst üste binebilir; "en fazla bir bekleyen thread" geçici olarak aşılabilir. Bekleyiciler sinyalle hemen çıktığı için birikme kalıcı değil. T-164 cihaz koşusunda `mb-decoder` thread sayısı ve RSS ile izlenir; kalıcı artış görülürse tek bir devir işçisiyle birleştirme kartı açılır.
