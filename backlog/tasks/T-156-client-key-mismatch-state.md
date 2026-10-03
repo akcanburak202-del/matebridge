@@ -1,7 +1,7 @@
 ---
 id: T-156
 title: Show "anahtar uyuşmuyor" after repeated PAIRED auth failures
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
@@ -51,14 +51,14 @@ Decision 0018 must be accepted by the user before work starts (this card complet
 
 ## Kabul kriterleri
 
-- [ ] [JVM] (a) Three consecutive first-record `AUTH_FAILED` errors on PAIRED connections → `Failed(KEY_MISMATCH)`; no further `OpenControl` until a user start.
-- [ ] [JVM] (b) Three consecutive PAIRED connections that close without BYE after the proof PING and before any authenticated host record (T-152 host) → `Failed(KEY_MISMATCH)`; a mix of (a) and (b) also counts.
-- [ ] [JVM] A single failure (and two) still retries with today's backoff; a successful authenticated record in between resets the count.
-- [ ] [JVM] Non-auth protocol errors, closes before the proof PING went out, failures on PAIRING connections, failures after a record authenticated, and T-150's pending-confirm path never count toward the limit.
-- [ ] [JVM] The counter is per endpoint; in AUTO, `KEY_MISMATCH` on the USB endpoint makes `shouldFallBack` true (fallback to Wi-Fi), while on Wi-Fi it stays terminal.
-- [ ] [build] The `KEY_MISMATCH` text points to "Bu Mac'i unut" (tablet) and "Onaylı cihazları unut" (Mac) and comes from `strings.xml`.
+- [x] [JVM] (a) Three consecutive first-record `AUTH_FAILED` errors on PAIRED connections → `Failed(KEY_MISMATCH)`; no further `OpenControl` until a user start.
+- [x] [JVM] (b) Three consecutive PAIRED connections that close without BYE after the proof PING and before any authenticated host record (T-152 host) → `Failed(KEY_MISMATCH)`; a mix of (a) and (b) also counts.
+- [x] [JVM] A single failure (and two) still retries with today's backoff; a successful authenticated record in between resets the count.
+- [x] [JVM] Non-auth protocol errors, closes before the proof PING went out, failures on PAIRING connections, failures after a record authenticated, and T-150's pending-confirm path never count toward the limit.
+- [x] [JVM] The counter is per endpoint; in AUTO, `KEY_MISMATCH` on the USB endpoint makes `shouldFallBack` true (fallback to Wi-Fi), while on Wi-Fi it stays terminal.
+- [x] [build] The `KEY_MISMATCH` text points to "Bu Mac'i unut" (tablet) and "Onaylı cihazları unut" (Mac) and comes from `strings.xml`.
 - [ ] [device] Covered by T-157 step 10.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -84,10 +84,41 @@ if they test something unrelated.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `da03df6` (implementation + tests; plan in `2d35060`). Branch `task/T-156-client-key-mismatch-state`.
 - **Dokunulan dosyalar:**
+  - `session/SessionMachine.kt`: `Event.ProtocolError.authFailed`, per-endpoint `authFailures`, `awaitingFirstAuthRecord()`,
+    `pairedAuthFailure()`, `KEY_MISMATCH_LIMIT = 3`, automatic-start latch, resets (auth record / Stop / user start / forget).
+  - `session/SessionController.kt`: one line in the control reader (`ProtocolError(gen, e.kind == AUTH_FAILED)`).
+  - `session/SessionUi.kt`: `Cause.KEY_MISMATCH`.
+  - `session/AutoTransport.kt`: `shouldFallBack` also for `Failed(KEY_MISMATCH)` (AUTO, on USB).
+  - `MainActivity.kt`: `KEY_MISMATCH` text in `applyStatusText`, one branch in `causeText` (nothing else).
+  - `res/values/strings.xml`: `key_mismatch` (card text verbatim).
+  - `test/.../session/KeyMismatchTest.kt` (14 tests, new).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - "After the proof PING, before any authenticated record" = machine phase `ACCEPTED` reached by the first (PAIRED) ack,
+    `!sealedSeen`, `!pairingSession`. Handshake errors (ack validation `AUTH_FAILED`) happen in `AWAIT_ACK` and do not
+    count; T-150's `PairedWithPending` is terminal before any ack is handled, so it can never reach the counter (tested).
+  - Only the card's reset list resets: an authenticated record (current endpoint), Stop, user start, ForgetHost (all
+    endpoints). Non-counting failures in between (connect fail, BUSY, PONG timeout) neither count nor reset.
+  - A PONG timeout during the proof wait (host neither answers nor closes) is not counted (card lists only EOF/IO close).
+  - Latch: an automatic `Start` to an endpoint at the limit emits no `OpenControl` and repeats `Failed(KEY_MISMATCH)`
+    (same pattern as T-150's cancel latch). In AUTO on USB that makes `fallBackToWifi` run again, with its HARD_FAIL backoff.
+    Note `fallBackToWifi` calls `controller.stop()` when no eligible Wi-Fi endpoint is known; per the card a Stop clears
+    the counts, so USB may be tried again later (3 more connections, then fallback again; bounded by AutoUsbPolicy backoff).
+  - A migration candidate open at the moment the current connection fails in its proof window disables the count for that
+    one connection (candidate logic decides); candidate failures themselves never count (T-205 maps them to HARD_FAIL).
+  - Backoff unchanged: a PAIRED ack runs `acceptSession`, which resets backoff to 1 s, so the 1st and 2nd failure each
+    retry after 1 s (today's behaviour); `Failed(KEY_MISMATCH)` arrives about 2 s after the first failure.
+- **Test edilmeyenler / cihazda doğrulanacaklar** (T-157 step 10; nothing was run on the tablet):
+  1. Wrong key against a T-152 host (e.g. Mac "Onaylı cihazları unut" is NOT what to use; instead corrupt/replace the Mac's
+     Keychain pair item or host identity): tablet shows "bağlantı koptu, yeniden bağlanılıyor" twice, then the
+     `key_mismatch` text and stays there (no further `connect_ok` in `adb logcat -s 'MB:*'`).
+  2. Log: `paired_auth_fail count=1|2|3 how=closed` then `session_failed cause=KEY_MISMATCH`; no host_id/name/key in lines.
+  3. "Bağlan" (user start) after the text tries again (3 more), "Bu Mac'i unut" then re-pair works.
+  4. AUTO with cable: a wrong-key USB endpoint falls back to Wi-Fi instead of staying on the text.
+  5. Normal reconnect (right key, Wi-Fi drop/resume, USB plug/unplug, migration) never shows the text.
 - **Açık sorular:**
+  - `docs/LOGGING.md` (orchestrator): new cause value `KEY_MISMATCH` for `session_failed cause=`; new machine lines
+    `paired_auth_fail` (W, `count=N how=auth_failed|closed`) and `key_mismatch_latched` (I, no fields: an automatic start
+    to a mismatched endpoint was refused).
+  - `docs/LOGGING.md`'s `protocol_error` line is unchanged (no kind field added, to keep the controller diff to one line).
