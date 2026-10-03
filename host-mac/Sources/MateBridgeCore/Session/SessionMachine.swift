@@ -143,8 +143,9 @@ public struct SessionMachine: Sendable {
         var videoNonces: Set<[UInt8]> = []
     }
 
-    /// A same-device reconnect that has been answered ACCEPTED but has not yet shown it holds the keys.
-    /// It changes no session state (the old session keeps running) until its first authenticated record.
+    /// A PAIRED connection that has been answered ACCEPTED but has not yet shown it holds the keys: a same-device
+    /// reconnect (takeover) or a fresh connection with no session live. It changes no session state (an old session
+    /// keeps running, no session starts) until its first authenticated record.
     private struct Proving {
         var hello: Hello
         var session: Session
@@ -657,14 +658,18 @@ public struct SessionMachine: Sendable {
                 ackPayload: Message.helloAck(firstAck).encodePayload()) else { return protocolError(id) }
             actions += [.send(id, .helloAck(firstAck)), .startEncryption(id, schedule.control),
                         .log(.info, ev: "handshake", conn: id, fields: "mode=paired")]
+            // Every PAIRED connection proves key possession (its first authenticated record) before anything
+            // happens: no STREAM_CONFIG, no session, no display. `device_id` alone (sent in the clear) must not make
+            // the Mac build a display or hold display sleep. A takeover additionally leaves the old session running
+            // until then.
+            connections[id]?.phase = .proving(Proving(
+                hello: hello,
+                session: Self.makeSession(hello, sessionID: sessionID, config: config, schedule: schedule),
+                config: config, deadline: now + configuration.proofTimeoutUs))
             if takeover {
-                connections[id]?.phase = .proving(Proving(
-                    hello: hello,
-                    session: Self.makeSession(hello, sessionID: sessionID, config: config, schedule: schedule),
-                    config: config, deadline: now + configuration.proofTimeoutUs))
                 actions.append(.log(.info, ev: "takeover_proving", conn: id, fields: ""))
             } else {
-                actions += start(id, hello, now: now, sessionID: sessionID, config: config, schedule: schedule)
+                actions.append(.log(.info, ev: "paired_proving", conn: id, fields: ""))
             }
         } else {
             let firstAck = HelloAck(status: .pendingApproval, sessionID: 0, videoPort: 0,
@@ -691,8 +696,9 @@ public struct SessionMachine: Sendable {
         return actions
     }
 
-    /// The first authenticated record of a reconnect that answered PAIRED while another session was live: now the
-    /// old session is released and closed, and only then the new one becomes active; `first` is processed last.
+    /// The first authenticated record of a PAIRED connection. If a session of the same device is live (takeover), it
+    /// is released and closed now; then the new one becomes active (STREAM_CONFIG, `sessionStarted`) and `first` is
+    /// processed last. If another device took the slot meanwhile, this connection is answered BUSY.
     private mutating func prove(_ id: ConnectionID, _ p: Proving, first: Message, now: UInt64) -> [SessionAction] {
         var actions: [SessionAction] = []
         if let owner = slotOwner {

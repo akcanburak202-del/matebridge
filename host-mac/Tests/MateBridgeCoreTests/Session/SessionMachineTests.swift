@@ -56,10 +56,12 @@ private func keyDown() -> Message {
     .key(KeyEvent(timeUs: 1, scanCode: 30, androidKeyCode: 29, action: .down, capsLockOn: false))
 }
 
-/// Opens a connection and drives it to ACTIVE for a pre-approved device.
+/// Opens a connection and drives it to ACTIVE for a pre-approved device: HELLO (PAIRED, proving), then the first
+/// authenticated record (a PING, as the client sends it) that activates the session (T-152).
 private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 = 1, now: UInt64 = 0) {
     _ = m.connectionOpened(id, now: now)
     _ = m.received(id, hello(dev), now: now)
+    _ = m.received(id, .ping(Ping(seq: 0, senderTimeUs: 0)), now: now)
 }
 
 @Suite struct SessionMachineTests {
@@ -68,12 +70,14 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(A, now: 0)
         let actions = m.received(A, hello(), now: 10)
         let msgs = sent(actions, to: A)
-        guard case .helloAck(let ack) = msgs[0] else { Issue.record("no ack"); return }
+        guard case .helloAck(let ack)? = msgs.first else { Issue.record("no ack"); return }
         #expect(ack.status == .accepted)
         #expect(ack.sessionID == 77)
         #expect(ack.videoPort == 5555)
         #expect(ack.hostName == "Mac")
-        #expect(msgs[1] == .streamConfig(sampleConfig))
+        #expect(msgs.count == 1)  // STREAM_CONFIG waits for the proof (T-152)
+        let proof = m.received(A, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 11)
+        #expect(sent(proof, to: A).first == .streamConfig(sampleConfig))
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
     }
 
@@ -247,6 +251,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
                                approvedDevices: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, hello(1), now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         try? store.removeAll()
         _ = m.connectionOpened(B, now: 1)
         let actions = m.received(B, hello(1), now: 1)
@@ -415,6 +420,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(B, now: 10 * sec)
         let actions = m.received(B, hello(1), now: 10 * sec)
         #expect(ackStatuses(actions, to: B) == [.accepted])
+        _ = m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 10 * sec)  // the proof (T-152)
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
     }
 
@@ -520,6 +526,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         // The tablet reconnects with a fresh handshake: a new prk, so the same nonces are fine again.
         _ = m.connectionOpened(B, now: 1)
         _ = m.received(B, hello(1), now: 1)
+        _ = m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 1)  // the proof (T-152)
         #expect(attachVideo(&m, ConnectionID(5000), nonce: 1).contains { if case .videoAttached = $0 { true } else { false } })
     }
 
@@ -716,6 +723,7 @@ extension SessionMachineTests {
         var m = makeMachine(approved: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, helloWith([.pen, .settingsPanel]), now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // the proof (T-152)
         #expect(m.settingsPanelAvailable)
         let actions = m.openSettingsPanel()
         #expect(sent(actions, to: A) == [.settingsOpen(SettingsOpen())])
@@ -726,6 +734,7 @@ extension SessionMachineTests {
         var m = makeMachine(approved: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, helloWith([.pen, .touch, .audioPCM]), now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // the proof (T-152)
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
         #expect(!m.settingsPanelAvailable)
         let actions = m.openSettingsPanel()
@@ -752,6 +761,7 @@ extension SessionMachineTests {
         var m = makeMachine(approved: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, helloWith([.settingsPanel]), now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // the proof (T-152)
         #expect(m.settingsPanelAvailable)
         _ = m.connectionClosed(A)
         #expect(!m.settingsPanelAvailable)

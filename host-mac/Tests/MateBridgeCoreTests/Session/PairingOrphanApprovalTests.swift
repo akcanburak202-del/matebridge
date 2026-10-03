@@ -127,6 +127,8 @@ private func pairingHandshake(_ m: inout SessionMachine, _ id: ConnectionID, now
         let ack = try #require(firstAck(hello))
         #expect(ack.status == .accepted && ack.keyMode == .paired)
         try again.receiveFirstAck(ack, pairKey: clientKey)  // only the holder of the stored key derives the session
+        #expect(m.status == .idle)  // proving: the session starts on the first authenticated record (T-152)
+        _ = m.received(B, .ping(Ping(seq: 1, senderTimeUs: 0)), now: 40 * sec)
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
     }
 
