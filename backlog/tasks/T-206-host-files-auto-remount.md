@@ -50,35 +50,60 @@ All in `TabletFilesPlanner` (pure); no new action, so the host bridge needs no c
 
 Gap found in the first pass: the planner had no input for a Finder eject. The orchestrator approved adding `TabletFilesBridge.swift` to `files:` on 2026-10-03 for the eject wiring.
 
-5. Eject wiring: the bridge observes `NSWorkspace.didUnmountNotification`. It hops to the bridge queue and calls `planner.volumeUnmounted(path:mountedNow:)` with our mount points on the current forward. It removes the observer at shutdown and in `deinit`. The decision is pure and tested in the planner. An unmount counts as an eject only when the path is the current `mountedPath` and is no longer in `mountedNow`.
+5. Eject wiring: the bridge observes `NSWorkspace.didUnmountNotification` and hands it to `planner.volumeUnmounted(path:mountedNow:)`. It removes the observer at shutdown and in `deinit`.
+6. Codex review (2 × P2):
+   - **Eject handled after a restart:** a restart forgets the volume, keeps it as a replaced volume (at most `rememberedMounts` = 4, cleared per session), and emits `unmount`. The bridge reports what that unmount found through `unmountFinished(localPort:detached:stillMounted:)`. A replaced volume that was already gone counts as the user's eject, and the remount waits for this report.
+   - **Notification flood:** the bridge filters on the posting thread against a snapshot of `planner.watchedPaths`, keeps a bounded queue, and has at most one drain block pending.
 
 ## Handoff
 
-- **Commit:** `6827ec1` (remount) and `15f5a4a` (eject wiring). The plan is in `093aa00`. Branch `task/T-206-host-files-auto-remount`. `./scripts/check.sh` ALL OK (host: 784 tests).
+- **Commit:** final `0e6138a`. History: plan `093aa00`, remount `6827ec1`, eject wiring `15f5a4a`, Codex fixes `ffc7145` and `0e6138a`. Branch `task/T-206-host-files-auto-remount`. `./scripts/check.sh` ALL OK (host: 788 tests).
 - **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Files/TabletFilesPlanner.swift`, `host-mac/Tests/MateBridgeCoreTests/Files/TabletFilesPlannerTests.swift`, `host-mac/Sources/MateBridgeHost/Files/TabletFilesBridge.swift` (orchestrator-approved), this card.
-- **Davranış:**
-  - New private state: `keepsMounted` (user intent), `autoMountArmed` (one attempt owed for the current READY), `mountingIsAutomatic`. New public: `volumeUnmounted(path:mountedNow:) -> Bool`, `remountsAfterRestart`. New internal: `samePath`, which ignores a trailing slash, because a NSWorkspace URL path and a `getfsstat` mount point may differ by one.
-  - Eject detection: the bridge observes `NSWorkspace.didUnmountNotification` (`volumeURLUserInfoKey`) on the posting thread, then `queue.async`. It computes `mountPoints(localPort:)` for the current forward and calls the planner. When the planner accepts the eject, the bridge logs `ev=eject remount=off`, without the path. The observer is removed at the start of `shutdown()` and in `deinit`.
-  - Our own unmounts never count as an eject:
-    - Teardown and a token change clear `mountedPath` before they emit `.unmount`.
-    - A stale `.unmountPath` is never the current path.
-    - A late notification that arrives after the remount has landed on the same mount point is ignored, because that path is in `mountedNow`.
-    - Tested: `lateNotificationOfOurUnmountAfterTheRemountLandedOnTheSamePathIsIgnored`, `notificationsOfTeardownAndStaleUnmountsAreNotEjects`.
-  - Same port + new token, forward up: `[cancelMount?] + unmount + mount(newToken)` in one list. OFF → READY / port change: the mount comes from `forwardFinished` of the current generation. A failed forward keeps the attempt owed until `retry` or USB return installs it.
-  - An automatic mount does not emit `.reveal` (no Finder window on a scope change). A failed one sets `lastMountFailed` and waits for the next READY or the user.
-  - The existing test `mountWithAnOldTokenIsDetachedWhenItFinishes` now expects the remount (the user had opened the volume, so the token change remounts it). The stale-detach part is unchanged.
+- **Davranış (planner):**
+  - State:
+    - `keepsMounted`: the user's intent.
+    - `autoMountArmed`: one attempt owed for the current READY.
+    - `mountingIsAutomatic`.
+    - `replacedMounts`: volumes we asked to unmount whose result is not in yet. Bounded at 4, cleared by session start/end and shutdown.
+  - Public API: `unmountFinished(localPort:detached:stillMounted:)`, `volumeUnmounted(path:mountedNow:) -> Bool`, `watchedPaths`, `remountsAfterRestart`, `normalizedPath`, `rememberedMounts`.
+  - **Same port + new token:**
+    - With a mounted volume, `filesInfo` returns `[cancelMount?, unmount]`. The remount comes from `unmountFinished`, once the result shows the volume was still ours (detached or busy).
+    - With no volume (e.g. the user's mount still in flight), the remount follows the unmount in the same list.
+  - **OFF → READY / port change:** the remount comes from `forwardFinished` or `unmountFinished`, whichever comes last.
+  - **Eject, two paths:**
+    1. *Notification first:* the current `mountedPath` is no longer in `mountedNow` → eject. The decision rests on the current volume being gone, not on which notification arrived. So a late, duplicated or lost notification of our own earlier unmount cannot hide a later eject.
+    2. *Restart first:* our `unmount` does not find the replaced volume (in neither `detached` nor `stillMounted`) → eject. The late notification of that path is then ignored.
+  - **Our own unmounts never count:**
+    - The path is forgotten before `unmount`.
+    - The result marks it as ours, whether detached or busy (busy meaning the unmount failed and the old volume stayed).
+    - A remount on the same mount point is in `mountedNow`.
+  - **Tests (Codex cases and others):**
+    - `ejectSeenOnlyAfterATokenChangeStillPreventsTheRemount`
+    - `ejectSeenOnlyAfterOffStillPreventsTheRemount`
+    - `ourOwnUnmountWithALateNotificationStillRemounts`
+    - `busyOldVolumeIsOursAndItsLaterUnmountIsNotAnEject`
+    - `remountWaitsForTheUnmountResultWhicheverComesFirst`
+    - `replacedVolumesAreBoundedAndForgottenPerSession`
+    - `unmountResultOfAnotherPortResolvesNothing`
+  - An automatic mount does not emit `.reveal`. A failed one sets `lastMountFailed` and waits for the next READY or the user.
+  - The existing test `mountWithAnOldTokenIsDetachedWhenItFinishes` now expects the remount; the stale-detach part is unchanged.
+- **Davranış (bridge):**
+  - The observer filters on the posting thread: the path is normalized, then matched against the `watchedPaths` snapshot (refreshed under the lock after every `apply`). Unrelated volumes queue nothing.
+  - Watched paths are queued in order, duplicates kept, at most 16. Only one drain block is pending, and it computes `mountPoints` once per drain.
+  - `.unmount` now reports `unmountFinished` with the paths it detached or failed to detach, before any other action runs.
+  - Log: `ev=eject remount=off seen=notification|unmount`. No path or token is logged.
 - **Varsayımlar:**
-  - "Intent" starts with `openRequested`, not with a successful mount, so a restart during the user's own mount, or after a failed one, also gets its one automatic attempt.
-  - USB device loss within a session keeps the intent. An attempt that was armed but not yet fired still fires once the device is back. A mount that had already been made is not remounted on USB return alone, because that is not a new READY.
-  - A transport change away from USB is always a new session, so `sessionStarted`/`sessionEnded` cover it.
-  - The old-token `unmount` is synchronous in the bridge (`Darwin.unmount`), so the new mount runs after it.
-- **Test edilmeyenler / cihazda doğrulananlar:** nothing was run on hardware (no app launch, no mount). Device checks still needed:
-  - The [device] criterion: mount "MatePad", change the shared folder, then toggle read-only on the tablet. The volume should come back by itself within a few seconds, with no Finder window popping up.
-  - If the old volume is busy (an open file), the not-forced unmount fails. The remount may then land on a second mount point (`MatePad-1`), or NetFS may return an error. Check what Finder shows.
-  - After a remount, opening "Tablet dosyalarını aç" from the menu reveals the remounted volume (it uses `knownPath`).
-  - **Eject:** mount "MatePad", eject it in Finder, then change the shared folder on the tablet. There must be **no** remount. The log should show `ev=eject remount=off` once.
-  - **Remount with no false eject:** with the volume mounted, change the scope. The volume comes back, and a further scope change remounts it again. This shows that our own unmount's notification was not taken as an eject.
-  - Check that `NSWorkspace.didUnmountNotification` really arrives for a NetFS WebDAV volume, in a menu-bar app with no windows, with `volumeURLUserInfoKey`. This is expected, but it is not verified here.
+  - The intent starts with `openRequested`.
+  - USB device loss within the session keeps the intent.
+  - A transport change away from USB is always a new session.
+  - `Darwin.unmount` is synchronous, and every `unmountFinished` is applied on the bridge queue before the next queued block. So when a notification is handled, the results of all earlier unmounts are already known.
+- **Test edilmeyenler / cihazda doğrulananlar:** nothing was run on hardware (no app launch, no mount). Device checks:
+  - **[device] criterion:** mount "MatePad", change the shared folder, then toggle read-only. The volume comes back by itself within a few seconds, with no Finder window.
+  - **Eject:** mount "MatePad", eject it in Finder, then change the shared folder. There must be **no** remount, and `ev=eject remount=off` appears once.
+  - **Repeated remount:** with the volume mounted, change the scope twice. It comes back both times, so our own unmount was not taken as an eject.
+  - **Busy volume:** with a file open on the volume, change the scope. Check whether the remount lands on `MatePad-1` and what Finder shows.
+  - **Auto-disconnect risk:** if macOS webdavfs unmounts the volume by itself when the tablet server stops, before `FILES_INFO` OFF is processed, our unmount finds nothing. That is taken as the user's eject (`seen=unmount`), so there is no remount. If the device test shows `seen=unmount` without a user eject, this needs revisiting.
+  - Check that `NSWorkspace.didUnmountNotification` arrives for a NetFS WebDAV volume in a windowless menu-bar app, with `volumeURLUserInfoKey`.
 - **Açık sorular:**
-  - **Remaining race (rare):** the user ejects the volume, and before the bridge queue handles the notification, a server restart arrives. The restart clears `mountedPath`, so the eject is not recognized, and that one READY remounts silently. Closing this would need the bridge to report what `.unmount(localPort:)` found (no volume means it was already ejected). That is a new planner event. Not done here.
-  - Host-side `files` events (`forward`, `mount`, `unmount`, and now `eject`) are not listed in `docs/LOGGING.md`. That file is the orchestrator's, and not in `files:`.
+  - Host-side `files` events (`forward`, `mount`, `unmount`, `eject`) are not in `docs/LOGGING.md`, which is not in `files:`.
+  - Only a microscopic race remains: the user's eject and our unmount hitting the same volume at the same moment. It is not handled.
