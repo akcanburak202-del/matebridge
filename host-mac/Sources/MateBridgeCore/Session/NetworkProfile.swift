@@ -50,6 +50,19 @@ public enum NetworkProfile: String, Equatable, Sendable, CaseIterable {
 
     /// Whether the "USB modu" menu toggle may be changed (it is shown on and locked in USB-only mode).
     public var allowsUsbModeToggle: Bool { self == .all }
+
+    /// The `adb reverse` watcher state while a switch may be waiting (`applied` is in force, `requested` is the menu
+    /// choice). The tunnels stay up while EITHER profile needs them: a session preserved by a deferred switch away from
+    /// USB-only keeps its tunnels until the switch takes effect (its video reconnect after a STREAM_PREFS change needs
+    /// them), and a switch into USB-only gets them at once (adding tunnels never hurts a live session).
+    public static func usbWatcherEnabled(stored: Bool, applied: NetworkProfile, requested: NetworkProfile) -> Bool {
+        applied.effectiveUsbMode(stored: stored) || requested.effectiveUsbMode(stored: stored)
+    }
+
+    /// The "USB modu" toggle is locked (shown on) while either the applied or the requested profile is USB-only.
+    public static func usbModeToggleAllowed(applied: NetworkProfile, requested: NetworkProfile) -> Bool {
+        applied.allowsUsbModeToggle && requested.allowsUsbModeToggle
+    }
 }
 
 /// What the server is doing when a profile switch is requested.
@@ -81,5 +94,71 @@ public enum NetworkProfileSwitch: Equatable, Sendable {
         case .idle, .pendingApproval: return .restartNow
         case .active: return .deferred  // USB: never cut; Wi-Fi: see the type comment
         }
+    }
+}
+
+/// The profile switch state of the session server (T-189), pure so the sequencing is unit-tested. The server owns
+/// one, on its queue, and carries out the returned steps.
+///
+/// A restart is two steps: close the old listeners, and only once their descriptors are closed start the new ones (a
+/// listener's descriptor closes asynchronously; binding before that finds the fixed ports 47001/47002 still taken and
+/// falls back to system-assigned ports that `adb reverse` does not forward). Requests arriving while the old listeners
+/// close are coalesced: the restart starts the latest requested profile, once.
+public struct NetworkProfileController: Equatable, Sendable {
+    public enum Step: Equatable, Sendable {
+        /// Nothing to do (unchanged, coalesced into a running restart, or stored for the next listener start).
+        case none
+        /// A live session holds the switch; `applied` stays until it ends (call `evaluate` again then).
+        case deferred
+        /// Close half-open connections and both listeners; call `listenersClosed()` once both descriptors closed.
+        case closeListeners
+        /// Start both listeners (and Bonjour) under this profile.
+        case startListeners(NetworkProfile)
+    }
+
+    /// In force: the listeners (and Bonjour) run under it.
+    public private(set) var applied: NetworkProfile
+    /// The menu choice.
+    public private(set) var requested: NetworkProfile
+    /// The old listeners are closing for a restart.
+    public private(set) var restarting = false
+
+    public init(profile: NetworkProfile) {
+        applied = profile
+        requested = profile
+    }
+
+    /// The requested profile while it waits (deferred, or a restart in progress); nil when it is in force.
+    public var pending: NetworkProfile? { requested != applied ? requested : nil }
+
+    /// The menu asked for `profile`.
+    /// - Parameter listening: listeners are up (false: not started, stopped, or a failure restart is pending).
+    public mutating func request(_ profile: NetworkProfile, activity: NetworkActivity, listening: Bool) -> Step {
+        requested = profile
+        return evaluate(activity: activity, listening: listening)
+    }
+
+    /// Re-decides a waiting switch (after a session ended, or after `request`).
+    public mutating func evaluate(activity: NetworkActivity, listening: Bool) -> Step {
+        if restarting { return .none }  // coalesced: `listenersClosed` starts the latest request
+        guard listening else {
+            applied = requested  // the next listener start uses it
+            return .none
+        }
+        switch NetworkProfileSwitch.decide(current: applied, requested: requested, activity: activity) {
+        case .unchanged: return .none
+        case .deferred: return .deferred
+        case .restartNow:
+            restarting = true
+            return .closeListeners
+        }
+    }
+
+    /// Both old listeners' descriptors are closed: start the latest requested profile.
+    public mutating func listenersClosed() -> Step {
+        guard restarting else { return .none }
+        restarting = false
+        applied = requested
+        return .startListeners(applied)
     }
 }

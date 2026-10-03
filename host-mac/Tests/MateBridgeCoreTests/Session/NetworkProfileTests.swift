@@ -101,7 +101,122 @@ final class NetworkProfileTests: XCTestCase {
                        .deferred)
     }
 
+    // MARK: USB tunnels follow the applied profile (Codex P2 #1)
+
+    /// Stored "USB modu" off, USB-only applied with a live USB session, then the menu turns USB-only off: the switch is
+    /// deferred and the tunnels must stay until it takes effect (a video reconnect needs them).
+    func testTunnelsStayWhileASwitchAwayFromUsbOnlyIsDeferred() {
+        var c = NetworkProfileController(profile: .usbOnly)
+        XCTAssertEqual(c.request(.all, activity: .active(.usb), listening: true), .deferred)
+        XCTAssertEqual(c.applied, .usbOnly)
+        XCTAssertEqual(c.pending, .all)
+        XCTAssertTrue(NetworkProfile.usbWatcherEnabled(stored: false, applied: c.applied, requested: c.requested))
+        XCTAssertFalse(NetworkProfile.usbModeToggleAllowed(applied: c.applied, requested: c.requested))
+        // The session ends: the switch takes effect, only now do the forced tunnels go.
+        XCTAssertEqual(c.evaluate(activity: .idle, listening: true), .closeListeners)
+        XCTAssertEqual(c.listenersClosed(), .startListeners(.all))
+        XCTAssertFalse(NetworkProfile.usbWatcherEnabled(stored: false, applied: c.applied, requested: c.requested))
+        XCTAssertTrue(NetworkProfile.usbModeToggleAllowed(applied: c.applied, requested: c.requested))
+    }
+
+    func testTunnelsComeUpAtOnceWhenEnteringUsbOnly() {
+        XCTAssertTrue(NetworkProfile.usbWatcherEnabled(stored: false, applied: .all, requested: .usbOnly))
+        XCTAssertFalse(NetworkProfile.usbWatcherEnabled(stored: false, applied: .all, requested: .all))
+        XCTAssertTrue(NetworkProfile.usbWatcherEnabled(stored: true, applied: .all, requested: .all))
+        XCTAssertFalse(NetworkProfile.usbModeToggleAllowed(applied: .all, requested: .usbOnly))
+    }
+
+    // MARK: Restart sequencing (Codex P2 #2)
+
+    func testRestartStartsOnlyAfterTheOldListenersClosed() {
+        var c = NetworkProfileController(profile: .all)
+        XCTAssertEqual(c.request(.usbOnly, activity: .idle, listening: true), .closeListeners)
+        XCTAssertTrue(c.restarting)
+        XCTAssertEqual(c.applied, .all, "not applied before the old listeners closed")
+        XCTAssertEqual(c.listenersClosed(), .startListeners(.usbOnly))
+        XCTAssertFalse(c.restarting)
+        XCTAssertEqual(c.applied, .usbOnly)
+        XCTAssertNil(c.pending)
+        XCTAssertEqual(c.listenersClosed(), .none, "a stray close callback starts nothing")
+    }
+
+    /// `.all -> .usbOnly -> .all` while the first restart's sockets are still closing: one close, one start, of the
+    /// latest request; never a second close/start racing the first (which would bind the fixed ports while taken).
+    func testRapidTogglesCoalesceIntoOneRestart() {
+        var c = NetworkProfileController(profile: .all)
+        XCTAssertEqual(c.request(.usbOnly, activity: .idle, listening: true), .closeListeners)
+        // Listeners are nil while closing; the server reports not listening.
+        XCTAssertEqual(c.request(.all, activity: .idle, listening: false), .none)
+        XCTAssertEqual(c.request(.usbOnly, activity: .idle, listening: false), .none)
+        XCTAssertEqual(c.request(.all, activity: .idle, listening: false), .none)
+        XCTAssertTrue(c.restarting)
+        XCTAssertEqual(c.listenersClosed(), .startListeners(.all))
+        XCTAssertEqual(c.applied, .all)
+        XCTAssertNil(c.pending)
+        // A new toggle after the restart finished is a fresh restart.
+        XCTAssertEqual(c.request(.usbOnly, activity: .idle, listening: true), .closeListeners)
+        XCTAssertEqual(c.listenersClosed(), .startListeners(.usbOnly))
+    }
+
+    func testDeferredSwitchAppliesWhenTheSessionEnds() {
+        var c = NetworkProfileController(profile: .all)
+        XCTAssertEqual(c.request(.usbOnly, activity: .active(.network), listening: true), .deferred)
+        XCTAssertEqual(c.evaluate(activity: .active(.network), listening: true), .deferred)
+        XCTAssertEqual(c.pending, .usbOnly)
+        // Toggled back while deferred: nothing waits any more.
+        XCTAssertEqual(c.request(.all, activity: .active(.network), listening: true), .none)
+        XCTAssertNil(c.pending)
+        XCTAssertEqual(c.request(.usbOnly, activity: .active(.network), listening: true), .deferred)
+        XCTAssertEqual(c.evaluate(activity: .idle, listening: true), .closeListeners)
+        XCTAssertEqual(c.listenersClosed(), .startListeners(.usbOnly))
+    }
+
+    /// Not listening (before start, stopped, failure restart pending): stored for the next listener start.
+    func testNotListeningStoresTheProfile() {
+        var c = NetworkProfileController(profile: .all)
+        XCTAssertEqual(c.request(.usbOnly, activity: .idle, listening: false), .none)
+        XCTAssertEqual(c.applied, .usbOnly)
+        XCTAssertFalse(c.restarting)
+    }
+
     // MARK: Real sockets
+
+    /// `cancel(onClosed:)` reports once the descriptor is closed: the same port binds again right then (a profile
+    /// restart must not fall back to a system-assigned port).
+    func testCancelOnClosedFreesThePortForAnImmediateRebind() throws {
+        let queue = DispatchQueue(label: "test.profile.rebind")
+        for round in 0..<20 {
+            let first = try BsdTcpListener(port: 0, bind: .any, options: BsdTcpOptions(), queue: queue)
+            first.start { _ in }
+            let port = first.port
+            let closed = expectation(description: "closed \(round)")
+            let rebound = LockedBox<Result<BsdTcpListener, Error>?>(nil)
+            first.cancel {
+                rebound.set(Result { try BsdTcpListener(port: port, bind: .loopbackV4Mapped,
+                                                        options: BsdTcpOptions(), queue: queue) })
+                closed.fulfill()
+            }
+            wait(for: [closed], timeout: 5)
+            let second = try XCTUnwrap(rebound.get()).get()
+            XCTAssertEqual(second.port, port)
+            second.cancel()
+        }
+    }
+
+    func testCancelOnClosedRunsForUnstartedAndAlreadyCancelledListeners() throws {
+        let queue = DispatchQueue(label: "test.profile.cancel")
+        let unstarted = try BsdTcpListener(port: 0, bind: .loopbackV6, options: BsdTcpOptions(), queue: queue)
+        let a = expectation(description: "unstarted")
+        unstarted.cancel { a.fulfill() }
+        let b = expectation(description: "again")
+        unstarted.cancel { b.fulfill() }
+        let started = try BsdTcpListener(port: 0, bind: .loopbackV6, options: BsdTcpOptions(), queue: queue)
+        started.start { _ in }
+        started.cancel()
+        let c = expectation(description: "started, cancelled before")
+        started.cancel { c.fulfill() }
+        wait(for: [a, b, c], timeout: 5)
+    }
 
     /// The USB-only bind address takes IPv4 loopback (the `adb reverse` target) and refuses a connect to this machine's
     /// own non-loopback address, which an `.any` listener accepts.
@@ -168,4 +283,12 @@ final class NetworkProfileTests: XCTestCase {
         }
         return nil
     }
+}
+
+private final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func get() -> Value { lock.withLock { value } }
+    func set(_ v: Value) { lock.withLock { value = v } }
 }

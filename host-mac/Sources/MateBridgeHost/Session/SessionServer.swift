@@ -175,10 +175,12 @@ public final class SessionServer: @unchecked Sendable {
     private var wolTicks = 0
     static let wolReconcileTicks = 600
     private var videoListener: BsdTcpListener?
-    /// The profile both listeners and Bonjour run under (decision 0027, T-189), and the one requested from the menu.
-    /// They differ only while a live session defers the switch (`NetworkProfileSwitch`).
-    private var networkProfile: NetworkProfile
-    private var requestedNetworkProfile: NetworkProfile
+    /// The profile both listeners and Bonjour run under (decision 0027, T-189: `applied`), the one requested from the
+    /// menu, and the restart sequencing (`NetworkProfileController`).
+    private var profiles: NetworkProfileController
+    private var networkProfile: NetworkProfile { profiles.applied }
+    /// True while the listeners are being started by a profile switch: a port fallback is then logged as an error.
+    private var profileRestartStarting = false
     /// Last value reported through `handlers.networkProfileChanged`.
     private var reportedNetworkProfile: (NetworkProfile, NetworkProfile?)?
     private var nextID: UInt64 = 0
@@ -290,8 +292,7 @@ public final class SessionServer: @unchecked Sendable {
         self.identity = identity
         self.requestedControlPort = controlPort
         self.requestedVideoPort = videoPort
-        self.networkProfile = networkProfile
-        self.requestedNetworkProfile = networkProfile
+        self.profiles = NetworkProfileController(profile: networkProfile)
         let known = store.load()
         self.knownDevices = known
         var configuration = SessionMachine.Configuration(hostName: hostName, makeStreamConfig: makeStreamConfig,
@@ -513,8 +514,11 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     private func logFallback(_ listener: String, _ wanted: UInt16) {
-        logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
-                   fields: "listener=\(listener) wanted=\(wanted)")
+        // After a profile switch the old listeners are closed before the new ones bind, so the fixed port should be
+        // free; if it is not, `adb reverse` (fixed 47001/47002) cannot reach the new port: an error, not a warning.
+        let afterSwitch = profileRestartStarting
+        logger.log(afterSwitch ? .error : .warning, "port_fallback", sessionID: 0, generation: 0,
+                   fields: "listener=\(listener) wanted=\(wanted)" + (afterSwitch ? " after=profile_switch" : ""))
     }
 
     /// Cancels both listeners and retries with exponential backoff (1 s ... 30 s).
@@ -589,8 +593,8 @@ public final class SessionServer: @unchecked Sendable {
     /// `handlers.networkProfileChanged`.
     public func setNetworkProfile(_ profile: NetworkProfile) {
         queue.async { [self] in
-            requestedNetworkProfile = profile
-            applyRequestedNetworkProfile()
+            let from = networkProfile
+            perform(profiles.request(profile, activity: networkActivity, listening: isListening), from: from)
         }
     }
 
@@ -601,38 +605,58 @@ public final class SessionServer: @unchecked Sendable {
         return .idle
     }
 
-    /// Session queue: applies `requestedNetworkProfile` now or leaves it waiting for the live session to end.
-    private func applyRequestedNetworkProfile() {
-        defer { reportNetworkProfile() }
+    /// Session queue: listeners are up (not before `start`, after `stop`, or while a failure restart is pending).
+    private var isListening: Bool {
+        !stopped && tickTimer != nil && (controlListener != nil || videoListener != nil)
+    }
+
+    /// Session queue: re-decides a switch that waited for the live session to end.
+    private func reevaluateNetworkProfile() {
         let from = networkProfile
-        let to = requestedNetworkProfile
-        // Not listening (not started, stopped, or a failure restart pending): the next listener start uses it.
-        guard !stopped, tickTimer != nil, controlListener != nil || videoListener != nil else {
-            networkProfile = to
-            return
-        }
-        switch NetworkProfileSwitch.decide(current: from, requested: to, activity: networkActivity) {
-        case .unchanged:
+        perform(profiles.evaluate(activity: networkActivity, listening: isListening), from: from)
+    }
+
+    /// Session queue: carries out one `NetworkProfileController` step. A restart closes the old listeners first and
+    /// binds the new ones only once both descriptors are closed, so the fixed ports are free again.
+    private func perform(_ step: NetworkProfileController.Step, from: NetworkProfile) {
+        defer { reportNetworkProfile() }
+        switch step {
+        case .none:
             return
         case .deferred:
             logger.log(.info, "network_profile", sessionID: currentSessionID, generation: currentConfigID,
-                       fields: "profile=\(to.logName) from=\(from.logName) action=deferred")
-        case .restartNow:
-            networkProfile = to
+                       fields: "profile=\(profiles.requested.logName) from=\(from.logName) action=deferred")
+        case .closeListeners:
             logger.log(.info, "network_profile", sessionID: currentSessionID, generation: currentConfigID,
-                       fields: "profile=\(to.logName) from=\(from.logName) action=restart")
-            // No session is live (decided above): this closes only half-open connections and a pending approval, so
-            // nothing admitted under the old profile outlives the switch.
+                       fields: "profile=\(profiles.requested.logName) from=\(from.logName) action=restart")
+            // No session is live (decided by the controller): this closes only half-open connections and a pending
+            // approval, so nothing admitted under the old profile outlives the switch.
             apply(machine.shutdown())
-            cancelListeners()
+            let closed = DispatchGroup()
+            for listener in [controlListener, videoListener].compactMap({ $0 }) {
+                closed.enter()
+                listener.cancel { closed.leave() }
+            }
+            bonjour?.cancel()
+            bonjour = nil
+            controlListener = nil
+            videoListener = nil
+            closed.notify(queue: queue) { [self] in
+                let previous = networkProfile
+                perform(profiles.listenersClosed(), from: previous)
+            }
+        case .startListeners:
+            guard !stopped, controlListener == nil, videoListener == nil else { return }
             restartAttempts = 0
+            profileRestartStarting = true
             startListeners()
+            profileRestartStarting = false
         }
     }
 
     /// Session queue: reports the applied and waiting profile when either changed.
     private func reportNetworkProfile() {
-        let pending = requestedNetworkProfile != networkProfile ? requestedNetworkProfile : nil
+        let pending = profiles.pending
         if let last = reportedNetworkProfile, last.0 == networkProfile, last.1 == pending { return }
         reportedNetworkProfile = (networkProfile, pending)
         handlers.networkProfileChanged(networkProfile, pending)
@@ -1412,8 +1436,8 @@ public final class SessionServer: @unchecked Sendable {
         }
         // A profile switch deferred by the live session runs once it ended (T-189); asynchronously, never inside
         // the action loop that ended it. Re-decided there, so a stale enqueue does nothing.
-        if requestedNetworkProfile != networkProfile, currentSessionID == 0, !stopped {
-            queue.async { [self] in applyRequestedNetworkProfile() }
+        if profiles.pending != nil, !profiles.restarting, currentSessionID == 0, !stopped {
+            queue.async { [self] in reevaluateNetworkProfile() }
         }
     }
 

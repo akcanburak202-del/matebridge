@@ -43,6 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                                           keyEquivalent: "")
     /// Shown while "Yalnız USB" is in force or a switch waits for the live session to end.
     private let networkProfileLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// The profile the server's listeners run under (`networkProfileChanged`); differs from the stored choice while a
+    /// switch waits for the live session. The `adb reverse` watcher follows both (`syncUsbMode`).
+    private var appliedProfile: NetworkProfile = .all
     private let clipboardEntry = NSMenuItem(title: "Pano paylaşımı", action: #selector(toggleClipboard), keyEquivalent: "")
     private lazy var clipboard = ClipboardBridge(enabled: clipboardEnabled)
     private var signalSources: [DispatchSourceSignal] = []
@@ -189,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         // Ask for the permission under MateBridge's own identity, once per launch (a no-op when already granted).
         if !SystemAccessibility().isTrusted() { SystemAccessibility.requestPrompt() }
+        appliedProfile = networkProfile
         let server = SessionServer(handlers: handlers, networkProfile: networkProfile,
                                    makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
@@ -204,7 +208,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             tabletFiles.usbStateChanged(state)
             Task { @MainActor in self?.showUsb(state) }
         }
-        usbWatcher.setEnabled(networkProfile.effectiveUsbMode(stored: usbModeEnabled))
+        syncUsbMode()
+    }
+
+    /// The `adb reverse` watcher and the "USB modu" item follow the stored choice, the applied and the requested
+    /// profile together: tunnels are never removed under a session a deferred switch preserves (T-189).
+    private func syncUsbMode() {
+        let on = NetworkProfile.usbWatcherEnabled(stored: usbModeEnabled, applied: appliedProfile,
+                                                  requested: networkProfile)
+        usbModeEntry.state = on ? .on : .off
+        usbWatcher.setEnabled(on)
+    }
+
+    private var usbModeToggleAllowed: Bool {
+        NetworkProfile.usbModeToggleAllowed(applied: appliedProfile, requested: networkProfile)
     }
 
     /// The stored "USB modu" choice. "Yalnız USB" forces the watcher on without changing it (T-189).
@@ -236,7 +253,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         loginItem.refresh()  // read live: the user may have changed it in System Settings
         loginItemEntry.state = loginItem.status.isRequested ? .on : .off
         loginItemEntry.title = loginItem.status.menuTitle
-        usbModeEntry.state = networkProfile.effectiveUsbMode(stored: usbModeEnabled) ? .on : .off
+        usbModeEntry.state = NetworkProfile.usbWatcherEnabled(stored: usbModeEnabled, applied: appliedProfile,
+                                                              requested: networkProfile) ? .on : .off
         usbOnlyEntry.state = networkProfile == .usbOnly ? .on : .off
         clipboardEntry.state = clipboardEnabled ? .on : .off
         showLoginProblem()
@@ -253,11 +271,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func toggleUsbMode() {
-        guard networkProfile.allowsUsbModeToggle else { return }  // locked on in "Yalnız USB"
-        let on = !usbModeEnabled
-        UserDefaults.standard.set(on, forKey: Self.usbModeKey)
-        usbModeEntry.state = on ? .on : .off
-        usbWatcher.setEnabled(on)
+        guard usbModeToggleAllowed else { return }  // locked on in "Yalnız USB"
+        UserDefaults.standard.set(!usbModeEnabled, forKey: Self.usbModeKey)
+        syncUsbMode()
     }
 
     /// "Yalnız USB" on/off: persisted, the `adb reverse` watcher follows at once (forced on in the mode), and the server
@@ -266,13 +282,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let profile: NetworkProfile = networkProfile == .usbOnly ? .all : .usbOnly
         UserDefaults.standard.set(profile.storedValue, forKey: NetworkProfile.defaultsKey)
         usbOnlyEntry.state = profile == .usbOnly ? .on : .off
-        let usb = profile.effectiveUsbMode(stored: usbModeEnabled)
-        usbModeEntry.state = usb ? .on : .off
-        usbWatcher.setEnabled(usb)
+        syncUsbMode()  // on at once when entering; kept until the switch takes effect when leaving
         server?.setNetworkProfile(profile)
     }
 
     private func showNetworkProfile(_ applied: NetworkProfile, _ pending: NetworkProfile?) {
+        appliedProfile = applied
+        syncUsbMode()  // a deferred switch away from "Yalnız USB" releases the forced tunnels only now
         switch (applied, pending) {
         case (_, .usbOnly?): networkProfileLine.title = "Yalnız USB: oturum bitince uygulanacak"
         case (_, .all?): networkProfileLine.title = "USB + Wi-Fi: oturum bitince uygulanacak"
@@ -338,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem === tabletFilesEntry { return tabletFilesEnabled }
-        if menuItem === usbModeEntry { return networkProfile.allowsUsbModeToggle }  // locked on in "Yalnız USB"
+        if menuItem === usbModeEntry { return usbModeToggleAllowed }  // locked on in "Yalnız USB"
         return true
     }
 
