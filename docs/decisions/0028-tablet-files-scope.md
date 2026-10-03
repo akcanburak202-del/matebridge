@@ -1,6 +1,6 @@
 # 0028 — Tablet dosya paylaşımı: seçilen klasör ve salt okunur seçeneği (0015'i değiştirir)
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -29,7 +29,7 @@ Sunucunun ömrü de kullanımdan geniş: uygulama ön plandayken ve ayar açıkk
 - **(c) SAF/DocumentsProvider ile yeniden yazım.** Daha "Android'e uygun", ama büyük iş ve Finder WebDAV akışını değiştirmez. Bu kararın kapsamı dışında.
 
 ## Karar
-Önerilen: **(b)**. 0015 madde 1'in yerini alır. 0015'in geri kalanı aynı kalır:
+Seçilen: **(b)**. 0015 madde 1'in yerini alır. 0015'in geri kalanı aynı kalır:
 - yalnızca USB tüneli;
 - jetonla kimlik doğrulama;
 - `FILES_INFO`;
@@ -37,7 +37,12 @@ Sunucunun ömrü de kullanımdan geniş: uygulama ön plandayken ve ayar açıkk
 
 `MANAGE_EXTERNAL_STORAGE` alt klasöre yol ile erişim için hâlâ gerekli. `FILES_INFO` değişmez.
 
-**Kullanıcı onayı bekliyor.** Kullanıcının cevaplaması gerekenler (manifest §5 soru 7):
+**Kullanıcı 2026-10-03'te onayladı:**
+- Varsayılan kök ayrı bir **MateBridge klasörü** (`/sdcard/MateBridge/`, yoksa oluşturulur); `Download/` değil.
+- "Tüm depolama" seçeneği ayarlarda kalır.
+- Salt okunur kip sunulur.
+
+Sorulanlar (manifest §5 soru 7):
 1. Varsayılan klasör ne olsun: `Download/` mı, ayrı bir "MateBridge" klasörü mü?
 2. "Tüm depolama" seçeneği kalsın mı?
 3. Salt okunur kip sunulsun mu?

@@ -1,6 +1,6 @@
 # 0015 — Tablet dosyaları Mac'te: tablette WebDAV sunucusu, yalnızca USB tüneli üzerinden
 
-- **Durum:** kabul
+- **Durum:** kabul; madde 1'in yerini aldı: 0028 (2026-10-03)
 - **Tarih:** 2026-10-02
 
 ## Bağlam

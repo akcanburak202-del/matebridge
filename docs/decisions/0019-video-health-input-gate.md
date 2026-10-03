@@ -1,6 +1,6 @@
 # 0019 — Girdi yalnızca görüntü sağlıklıyken açık
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -31,7 +31,7 @@ Durağan ekran meşru olarak kare göndermez. Bu yüzden "N sn kare yok" bekçis
   `VideoHealth` bu nedenleri tek bir genel `fault(cause)` girişiyle alır (`give_up|no_output|not_running|stuck`); çözücü bunları tek bir geri çağrıyla bildirir. T-161 yalnızca `stuck` nedenini ekler.
 
 ## Karar
-Önerilen: **(c)**. Hata olunca:
+Seçilen: **(c)**. Hata olunca:
 - Yakalama kapanır. Bu, mevcut `RELEASE_ALL(USER)` dizisini gönderir, yani tel değişmez.
 - Besleme ve keyframe yeniden denemeleri durur.
 - "Görüntü durdu" katmanı gösterilir.
@@ -39,7 +39,7 @@ Durağan ekran meşru olarak kare göndermez. Bu yüzden "N sn kare yok" bekçis
 
 Kuşak, bir `attachSurface`/`reconfigure` çağrısıdır (yeni yapılandırma ya da yeni yüzey). Yeni kuşak ilk çözülmüş çıktısına kadar STARTING durumundadır ve girdi kapalıdır (olağan bırakmalarla). Yeniden bağlanma (yüzey yeniden bağlanır) ve göç (yeni STREAM_CONFIG → `reconfigure`) bu yolla kapsanır; oturumun kare sayacına dayanılmaz. Aynı bağlanma içinde `decode_error` sonrası çözücünün yeniden başlatılması yeni kuşak değildir: girdi açık kalır, yalnızca hata kuralları geçerlidir. Zamanlama çözücü **çıktısına** göre ölçülür (`dequeueOutputBuffer`), `onFrameRendered`'a göre değil. Durağan ekran (kare gelmiyor) hiçbir zaman hata sayılmaz.
 
-**Kullanıcı onayı bekliyor.** Manifest §5'te bu karara özel bir soru yok. Onaylanacaklar:
+**Kullanıcı 2026-10-03'te onayladı** (aşağıdaki üç madde; eşikler T-164 aygıt koşusundan sonra ayarlanabilir). Onaylananlar:
 1. Görüntü donunca girdinin kendiliğinden kapanması ve tuşların bırakılması.
 2. Eşikler: 1500 ms / 3 kare / 2 sn. Bunlar T-164 aygıt koşusundan sonra ayarlanabilir.
 3. Kurtarma sırası.
