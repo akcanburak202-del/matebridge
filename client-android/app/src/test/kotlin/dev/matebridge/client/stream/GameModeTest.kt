@@ -183,7 +183,6 @@ class GameModeTest {
     @Test fun launchJitterWins() {
         assertEquals(GameJitter.Choice(2, GameJitter.Source.EXTRA), GameJitter.choose(2, GameJitter.Source.EXTRA, game = true))
         assertEquals(GameJitter.Choice(1, GameJitter.Source.EXTRA), GameJitter.choose(1, GameJitter.Source.EXTRA, game = false))
-        assertEquals(GameJitter.Choice(0, GameJitter.Source.GL), GameJitter.choose(0, GameJitter.Source.GL, game = true))
     }
 
     @Test fun logLine() {

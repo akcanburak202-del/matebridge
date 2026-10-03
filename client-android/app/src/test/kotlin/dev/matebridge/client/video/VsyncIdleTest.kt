@@ -261,35 +261,6 @@ class VsyncIdleTest {
         assertEquals(1, hits.get())
     }
 
-    /**
-     * Review P2, GL path model (GlPresenter, one GL thread): on sleep the bypass is armed; the first frame-available
-     * after it presents at once whether the loop is still asleep or already running, then later frames wait for vsync.
-     */
-    @Test fun glFirstFrameAfterSleepIsDrawnOnArrival() {
-        val gate = VsyncIdleGate()
-        val first = FirstOutputBypass()
-        var loopRunning = true
-        var drawnOnArrival = 0
-        fun onFrameAvailable(t: Long) {
-            val wakeAsked = gate.onActivity(t)
-            if (first.take() || wakeAsked) { gate.wake(t); drawnOnArrival++; loopRunning = true }
-        }
-        gate.start(0)
-        assertFalse(gate.onVsync(idle))
-        loopRunning = false; first.arm()
-        onFrameAvailable(idle + 50 * ms)
-        assertEquals(1, drawnOnArrival)
-        assertTrue(loopRunning)
-        onFrameAvailable(idle + 58 * ms) // the loop runs: this one waits for its vsync
-        assertEquals(1, drawnOnArrival)
-        // Asleep again, and the loop got going before the frame (not by a frame): still drawn on arrival.
-        assertFalse(gate.onVsync(idle + 58 * ms + idle))
-        loopRunning = false; first.arm()
-        gate.wake(idle + 58 * ms + idle + ms); loopRunning = true
-        onFrameAvailable(idle + 58 * ms + idle + 5 * ms)
-        assertEquals(2, drawnOnArrival)
-    }
-
     @Test fun debouncerPauseKeepsReportedValueAndRestartsAPendingFall() {
         val d = DisplayRateDebouncer()
         assertEquals(120, d.observe(120, 0))

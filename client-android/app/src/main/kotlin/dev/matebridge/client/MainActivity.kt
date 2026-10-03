@@ -74,8 +74,6 @@ import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.stream.VideoLayout
 import dev.matebridge.client.stream.VideoViewport
-import dev.matebridge.client.video.GlPresenter
-import dev.matebridge.client.video.PresentStats
 import dev.matebridge.client.video.VideoRenderer
 import dev.matebridge.client.stream.DisplayRateDebouncer
 import dev.matebridge.client.video.VsyncClock
@@ -181,9 +179,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-134: direct wake attempts (an ordinary session to the stored host IPv4:port) during a wake episode. */
     private val wakeConnect = WakeConnect()
     private lateinit var root: FrameLayout
-    private lateinit var video: SurfaceView // MediaCodec -> SurfaceView path
-    private lateinit var videoGl: SurfaceView // target of the GL presenter (T-018)
-    private lateinit var videoView: SurfaceView // whichever of the two is in use
+    private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
     private lateinit var penOverlay: PenOverlayView // T-056
     private lateinit var statsView: TextView
@@ -240,17 +236,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val vsyncIdle = VsyncIdleGate()
     private val vsyncWake = Runnable { wakeVsync() }
 
-    // T-018: `--es render surface|gl` picks the presentation path; `--ei frate N` sets Surface.setFrameRate(N,
-    // FIXED_SOURCE) on either path (0 = off; unset: GL uses `hz`, the surface path keeps the content-fps hint);
-    // `--ez glpts true` adds eglPresentationTimeANDROID (GL only).
-    private var glMode = false
-    private var frameRateOverride = -1
-    private var glPresentationTime = false
-    private val presentStats = PresentStats()
-    private val glVsync = VsyncClock()
-    private var presenter: GlPresenter? = null
-    private var glDecoderSurface: Surface? = null
-    private var glGeneration = 0
     private var choreographerOn = false
     private var modeApplied = false
     private val vsyncCallback = object : Choreographer.FrameCallback {
@@ -369,33 +354,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        glMode = intent?.getStringExtra("render") == "gl"
-        frameRateOverride = intent?.getIntExtra("frate", -1) ?: -1
-        glPresentationTime = intent?.getBooleanExtra("glpts", false) ?: false
         // T-141: `--ez stats_1s true` brings back the per-second video stats log lines (diagnostics).
         statsLog = StatsLogWindow(if (intent?.getBooleanExtra("stats_1s", false) == true) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
         MbLog.i("stats_log", "window_ms=${statsLog.windowMs}", "render")
         bufferFrames = when {
-            glMode -> 0 // the GL presenter aligns to vsync itself; SurfaceTexture ignores release timestamps
             intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
             else -> intent.getIntExtra("jitter", 0).coerceIn(0, 2) // -1 (adaptive off) -> 0
         }
         launchBufferFrames = bufferFrames
-        bufferFixedBy = when {
-            glMode -> GameJitter.Source.GL
-            intent?.hasExtra("jitter") == true -> GameJitter.Source.EXTRA
-            else -> null
-        }
-        intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let {
-            vsync.leadOverrideNs = it * 1000L
-            glVsync.leadOverrideNs = it * 1000L
-        }
+        bufferFixedBy = if (intent?.hasExtra("jitter") == true) GameJitter.Source.EXTRA else null
+        intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let { vsync.leadOverrideNs = it * 1000L }
         // T-071: absent = 6 ms default; -1 = the display's reported deadline; N >= 0 = N us.
         if (intent?.hasExtra("deadline_us") == true) {
             val us = intent.getIntExtra("deadline_us", -1)
             val ns = if (us >= 0) us * 1000L else VsyncClock.DEADLINE_DISPLAY
             vsync.deadlineOverrideNs = ns
-            glVsync.deadlineOverrideNs = ns
         }
         paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
         targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
@@ -417,25 +390,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         status = findViewById(R.id.status)
         root = findViewById(R.id.root)
         video = findViewById(R.id.video)
-        videoGl = findViewById(R.id.video_gl)
-        videoView = if (glMode) videoGl else video
-        video.visibility = if (glMode) View.GONE else View.VISIBLE
-        videoGl.visibility = if (glMode) View.VISIBLE else View.GONE
-        MbLog.i("render_mode", "mode=${if (glMode) "gl" else "surface"} frate=$frameRateOverride glpts=$glPresentationTime", "render")
         panel = findViewById(R.id.panel)
         statsView = findViewById(R.id.stats)
-        // Both views are wired: the GL path can fall back to the SurfaceView at runtime.
-        for (sv in listOf(video, videoGl)) {
-            sv.holder.addCallback(this)
-            sv.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-                if (v === videoView) {
-                    viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
-                    else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
-                    if (v === videoView && ::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
-                }
-            }
-            sv.setOnLongClickListener { toggleStats(); true }
+        video.holder.addCallback(this)
+        video.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
+            else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+            if (::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
         }
+        video.setOnLongClickListener { toggleStats(); true }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
         endpointField = findViewById(R.id.endpoint)
         val prefs = getSharedPreferences("matebridge", Context.MODE_PRIVATE)
@@ -560,7 +523,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
         applyPointerSpeeds()
         // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
-        // sits on a LEAF view, `video` (a fixed child of root, also while the GL view is the one in use): a ViewGroup
+        // sits on a LEAF view, `video` (a fixed child of root): a ViewGroup
         // recomputes its own unbuffered source from its children (ViewGroup.onDescendantUnbufferedRequested, e.g. on
         // a focus change), so a request stored on `root` itself would be overwritten, while a leaf's request is
         // re-derived by every ancestor.
@@ -582,11 +545,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onViewAttachedToWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
             override fun onViewDetachedFromWindow(v: View) { unbufferedPen.reapplyOnNextSync() }
         })
-        for (sv in listOf(video, videoGl)) {
-            sv.isFocusable = true
-            sv.isFocusableInTouchMode = true
-            sv.setOnCapturedPointerListener(capturedPointerListener)
-        }
+        video.isFocusable = true
+        video.isFocusableInTouchMode = true
+        video.setOnCapturedPointerListener(capturedPointerListener)
         clipboard = ClipboardBridge(this, ClipboardSync().also { it.enabled = settings.clipboardShare() }, { controller.trySend(it) }, { runOnUiThread(it) })
         // T-056: local pen indicator above the video (below the stats text and the panel), never touchable.
         penOverlay = PenOverlayView(this)
@@ -652,7 +613,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      */
     private fun syncPointerCapture(on: Boolean, nowMs: Long) {
         val want = on && hasWindowFocus() && !capture.isSuspended
-        val v = videoView
+        val v = video
         if (want) {
             if (!v.hasPointerCapture() && nowMs - lastCaptureRequestMs >= POINTER_CAPTURE_RETRY_MS) {
                 lastCaptureRequestMs = nowMs
@@ -1090,59 +1051,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     // ---- video surface and renderer ----
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        if (holder !== videoView.holder) return
+        if (holder !== video.holder) return
         surfaceValid = true
-        if (streamConfig != null) setSurfaceFrameRate(true)
-        if (glMode) {
-            val gen = ++glGeneration
-            val p = GlPresenter(
-                { us -> renderer?.stats?.onShown(us) }, presentStats, glVsync, glPresentationTime,
-                onFailed = { why -> runOnUiThread { if (gen == glGeneration) fallBackToSurface(why) } },
-            )
-            presenter = p
-            p.active = streamConfig != null
-            p.start(holder.surface) { s ->
-                runOnUiThread {
-                    if (gen != glGeneration || !surfaceValid) return@runOnUiThread
-                    glDecoderSurface = s
-                    if (streamConfig != null) renderer?.attachSurface(s)
-                }
-            }
-        } else if (streamConfig != null) {
+        if (streamConfig != null) {
+            setSurfaceFrameRate(true)
             renderer?.attachSurface(holder.surface)
         }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
-    /** GL setup or drawing failed: continue on the plain MediaCodec -> SurfaceView path. */
-    private fun fallBackToSurface(why: String) {
-        if (!glMode || isDestroyed) return
-        MbLog.w("gl_fallback", "reason=$why to=surface", "render")
-        renderer?.detachSurface()
-        glGeneration++
-        glDecoderSurface = null
-        presenter?.stop()
-        presenter = null
-        glMode = false
-        renderer?.codecReportsShown = true
-        surfaceValid = false
-        videoGl.visibility = View.GONE
-        video.visibility = View.VISIBLE
-        videoView = video
-        layoutVideo() // the SurfaceView's surfaceCreated then attaches the renderer
-    }
-
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        if (holder !== videoView.holder) return
+        if (holder !== video.holder) return
         surfaceValid = false
         renderer?.detachSurface()
-        if (glMode) {
-            glGeneration++
-            glDecoderSurface = null
-            presenter?.stop() // after the decoder released the Surface it renders to
-            presenter = null
-        }
     }
 
     private fun installConfig(config: StreamConfig) {
@@ -1155,7 +1077,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
             vsync = vsync,
             bufferFrames = bufferFrames,
-            codecReportsShown = !glMode,
+            codecReportsShown = true, // T-184: the only path; the codec's render callback reports shown times
             codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
@@ -1169,17 +1091,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         applyRefreshRate()
         setSurfaceFrameRate(true)
         startVsync()
-        presenter?.active = true
         flushStatsLog() // T-141: a reconfiguration closes the log window of the previous configuration
         lastStatsMs = SystemClock.elapsedRealtime()
         statsLog.start(lastStatsMs)
         rttStats.reset() // T-089: the first ev=net window holds no approval-wait or reconnect samples
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
-        if (!r.attached && surfaceValid) {
-            // GL path: the decoder surface exists once the GL thread is ready (attached from its callback).
-            val s = if (glMode) glDecoderSurface else video.holder.surface
-            if (s != null) r.attachSurface(s)
-        }
+        if (!r.attached && surfaceValid) r.attachSurface(video.holder.surface)
         MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
         if (filesGate.onConfigApplied()) syncFiles() // T-153: the authenticated config makes this session trusted
         refreshSettings() // "Uygulanan: N Mbps"
@@ -1188,7 +1105,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
     private fun releaseRenderer() {
         renderer?.detachSurface()
-        presenter?.active = false
         streamConfig = null
         audio?.onVideoLatency(null) // no video: no A/V target
         flushStatsLog() // T-141: the partial log window of the stream that ends
@@ -1346,7 +1262,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val off = d.appVsyncOffsetNanos
         val deadline = d.presentationDeadlineNanos
         vsync.setDisplayTiming(off, deadline)
-        glVsync.setDisplayTiming(off, deadline)
         if (log) {
             MbLog.i(
                 "display_timing",
@@ -1394,13 +1309,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun setSurfaceFrameRate(on: Boolean) {
         if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
-        // T-046: always an explicit FIXED_SOURCE request at the stream fps (surface and GL paths alike);
-        // `frate` overrides it. On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
-        val rate = FrameRatePolicy.surfaceRate(frameRateOverride, streamConfig?.fps ?: 0).toFloat()
+        // T-046: always an explicit FIXED_SOURCE request at the stream fps (the `frate` override went with the GL path,
+        // T-184). On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
+        val rate = FrameRatePolicy.surfaceRate(-1, streamConfig?.fps ?: 0).toFloat()
         val compat = Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
         if (on && rate <= 0f) return
         try {
-            val sf = videoView.holder.surface
+            val sf = video.holder.surface
             if (Build.VERSION.SDK_INT >= 31) {
                 sf.setFrameRate(if (on) rate else 0f, compat, Surface.CHANGE_FRAME_RATE_ALWAYS)
             } else {
@@ -1418,11 +1333,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val vp = if (c == null) VideoViewport(0, 0, 0, 0) else VideoLayout.aspectSize(c).let { (aw, ah) -> VideoViewport(root.width, root.height, aw, ah) }
         val w = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.width)
         val h = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.height)
-        val lp = videoView.layoutParams as FrameLayout.LayoutParams
+        val lp = video.layoutParams as FrameLayout.LayoutParams
         if (lp.width != w || lp.height != h) {
             lp.width = w
             lp.height = h
-            videoView.layoutParams = lp
+            video.layoutParams = lp
         }
     }
 
@@ -1459,26 +1374,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
-        val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
             val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs()), clock.uncertaintyUs()) +
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
-            val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val tr = currentTransport()
             val text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
                 (if (mode == TransportMode.AUTO) " (otomatik)" else "") + "\n" +
-                StreamMode.overlayLine(streamMode, streamConfig) + "\n" + withGl
+                StreamMode.overlayLine(streamMode, streamConfig) + "\n" + base
             if (text != lastOverlayText) { // T-141: an idle overlay does not change; skip the relayout and redraw
                 lastOverlayText = text
                 statsView.text = text
             }
-        }
-        if (gl != null) {
-            MbLog.i(
-                "gl_stats",
-                gl.fields() + " gl_vsync_period_us=${glVsync.periodNs / 1000} hz=${"%.0f".format(java.util.Locale.ROOT, currentHz())}",
-                "render",
-            )
         }
         if (statsLog.due(now)) {
             writeStatsLog(r, now)
@@ -1882,8 +1788,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (benchForwarded) { super.onDestroy(); return } // T-090: nothing below was initialised
         ui.removeCallbacksAndMessages(null)
         releaseRenderer()
-        presenter?.stop()
-        presenter = null
         controller.shutdown()
         if (::files.isInitialized) files.shutdown()
         audio?.shutdown()
