@@ -28,6 +28,11 @@ fun interface VideoFrameSink {
  * Decoder errors restart the codec on the same surface (queue reset, last CODEC_CONFIG replayed,
  * KEYFRAME_REQUEST(DECODE_ERROR)), at most 3 times per 10 s; after that [onGiveUp] is called.
  * [onKeyframeRequest] and [onGiveUp] are called from arbitrary threads.
+ *
+ * T-159: every [attachSurface] / [reconfigure] / [restartCodec] starts a new generation and reports its lifecycle
+ * through [onHealthEvent] (see [HealthEvent]; a restart after `decode_error` is not a new generation); per-frame decode
+ * progress goes to [progress]. [stopFeeding] (also done on give-up) stops taking frames and keyframe retries for the
+ * current generation.
  */
 class VideoRenderer(
     initialConfig: StreamConfig,
@@ -46,6 +51,11 @@ class VideoRenderer(
     private val codecFactory: DecoderCodec.Factory = MediaCodecDecoder.FACTORY,
     /** T-158: clock, logcat and thread calls of the decoder threads; tests pass a JVM implementation. */
     private val env: DecoderEnv = AndroidDecoderEnv,
+    /**
+     * T-159: generation lifecycle for [VideoHealth]. [HealthEvent.Generation] is called synchronously on the caller's
+     * (UI) thread before the generation's decoder thread starts; the rest come from the decoder threads.
+     */
+    private val onHealthEvent: (HealthEvent) -> Unit = {},
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -182,13 +192,27 @@ class VideoRenderer(
         }
     }
 
-    private class Attachment(val surface: Any, val previous: Thread?) {
+    private class Attachment(val surface: Any, val previous: Thread?, val gen: Int) {
         @Volatile var active = true
         lateinit var thread: Thread
     }
 
     private var current: Attachment? = null // UI thread only
     private var lingering: Thread? = null // last retired decoder thread; the next one waits for it (UI thread only)
+    private var generations = 0 // UI thread only
+
+    /** T-159: the current generation (frames are fed to it) and the one whose feeding was stopped, if any. */
+    @Volatile private var feedGen = 0
+    @Volatile private var feedBlockedGen = -1
+
+    /** T-159: decode progress of the current generation (inputs pending since the last output), read by [VideoHealth]. */
+    val progress = DecodeProgress()
+
+    /** T-159: false after [stopFeeding] or a give-up, until the next generation. */
+    val feeding: Boolean get() = feedBlockedGen != feedGen
+
+    /** T-159: video FAULT: drop incoming frames and keyframe retries until the next generation. Any thread. */
+    fun stopFeeding() { feedBlockedGen = feedGen }
 
     /** Codec description for on-screen diagnostics. */
     @Volatile var codecInfo: String = "-"
@@ -202,7 +226,7 @@ class VideoRenderer(
      * T-121: true when a periodic keyframe retry is due (gate closed and no request for [FrameQueue.HOLDOFF_MS]);
      * the caller must then send one, which this counts as sent. Keeps the retry from following an overflow request.
      */
-    fun takeKeyframeRetry(): Boolean = queue.takeRetry()
+    fun takeKeyframeRetry(): Boolean = feeding && queue.takeRetry()
 
     /** T-141 (review P2): armed by the activity's vsync loop when it falls asleep; see [FirstOutputBypass]. */
     val firstOutput = FirstOutputBypass()
@@ -221,6 +245,7 @@ class VideoRenderer(
     }
 
     override fun onFrame(frame: VideoFrame) {
+        if (!feeding) return // T-159: FAULT; a fed dead decoder overflows and loops keyframe requests
         queue.offer(frame)?.let(onKeyframeRequest)
     }
 
@@ -235,8 +260,21 @@ class VideoRenderer(
     }
 
     fun detachSurface() {
+        val gen = current?.gen
         attached = false
         retire(wait = true)
+        if (gen != null) onHealthEvent(HealthEvent.Detached(gen))
+    }
+
+    /**
+     * T-159 recovery step: a new generation on the attached surface (new codec, stored CODEC_CONFIG replayed,
+     * KEYFRAME_REQUEST(STARTUP)), without blocking. No-op without a surface.
+     */
+    fun restartCodec() {
+        val surface = current?.surface ?: return
+        retire(wait = false)
+        onKeyframeRequest(queue.reset(KeyframeRequest.STARTUP))
+        start(surface)
     }
 
     /**
@@ -256,9 +294,13 @@ class VideoRenderer(
     }
 
     private fun start(surface: Any) {
-        val att = Attachment(surface, lingering)
+        val gen = ++generations
+        progress.begin(gen)
+        feedGen = gen // a new generation is fed again
+        val att = Attachment(surface, lingering, gen)
         att.thread = Thread({ decodeLoop(att) }, "mb-decoder")
         current = att
+        onHealthEvent(HealthEvent.Generation(gen))
         att.thread.start()
     }
 
@@ -325,7 +367,8 @@ class VideoRenderer(
     }
 
     private fun decodeLoop(att: Attachment) {
-        try { att.previous?.join() } catch (_: InterruptedException) { return }
+        try { att.previous?.join() } catch (_: InterruptedException) { onHealthEvent(HealthEvent.Exited(att.gen)); return }
+        onHealthEvent(HealthEvent.Running(att.gen))
         // T-077: the input hand-off is on the frame's critical path; ask the scheduler for prompt wake-ups.
         try { env.setDisplayPriority() } catch (_: Exception) {}
         val hint = perfHint
@@ -335,6 +378,7 @@ class VideoRenderer(
             decodeAttempts(att)
         } finally {
             hint?.unregister(PerfHint.ROLE_IN, tid)
+            onHealthEvent(HealthEvent.Exited(att.gen))
         }
     }
 
@@ -347,7 +391,9 @@ class VideoRenderer(
             if (!policy.allow(env.elapsedRealtimeMs())) {
                 env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=give_up")
                 att.active = false
+                feedBlockedGen = att.gen // T-159: no more frames or keyframe retries for a dead generation
                 onGiveUp("decoder failed repeatedly: $failure")
+                onHealthEvent(HealthEvent.Fault(att.gen, FaultCause.GIVE_UP))
                 break
             }
             onKeyframeRequest(queue.reset(KeyframeRequest.DECODE_ERROR))
@@ -412,7 +458,7 @@ class VideoRenderer(
                         val maxWaitUs = IdleWait.waitNs(now - lastOutputNs, OUTPUT_WAIT_US * 1000) / 1000
                         val waitUs = if (untilDeadline == null) maxWaitUs
                         else (untilDeadline / 1000).coerceIn(0, maxWaitUs)
-                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, cpd, sink, releaser, waitUs)
+                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, cpd, sink, releaser, att.gen, waitUs)
                         releaser.flushDue(System.nanoTime())
                         if (changed && !loggedFormat) {
                             loggedFormat = true
@@ -467,6 +513,7 @@ class VideoRenderer(
                 if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                if (!frame.isCodecConfig) progress.onInput(att.gen, env.elapsedRealtimeMs()) // T-159 no-output rule
                 if (trace != null || hint != null) {
                     val doneNs = System.nanoTime()
                     trace?.onInput(frame.frameSeq, doneNs, takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
@@ -523,7 +570,7 @@ class VideoRenderer(
      */
     private fun drainOutput(
         codec: DecoderCodec, info: DecoderCodec.OutputInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
-        cpd: ConstantPlayoutPacer?, sink: CodecSink, releaser: SlotReleaser, firstWaitUs: Long = 0,
+        cpd: ConstantPlayoutPacer?, sink: CodecSink, releaser: SlotReleaser, gen: Int, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
         val mode = bufferFrames
@@ -542,6 +589,8 @@ class VideoRenderer(
             val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
             val readyNs = System.nanoTime()
             if (isFrame) {
+                // T-159: health is timed on decoder output, not on onFrameRendered (panels may throttle presentation).
+                if (progress.onOutput(gen)) onHealthEvent(HealthEvent.FirstOutput(gen))
                 stats.onOutput(info.presentationTimeUs, nowUs())
                 readyByPts.put(info.presentationTimeUs, readyNs)
             }

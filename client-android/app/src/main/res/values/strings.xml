@@ -6,6 +6,11 @@
     <string name="state_connecting">%1$s adresine bağlanılıyor…</string>
     <string name="state_awaiting_approval">Mac\'te onay bekleniyor (%1$s)</string>
     <string name="state_connected">Bağlı: %1$s\nGelen kare: %2$d</string>
+    <!-- T-159: video-fault overlay (decision 0019) -->
+    <string name="video_fault_title">Görüntü durdu</string>
+    <string name="video_fault_recovering">Kalem ve klavye Mac\'e gönderilmiyor. Görüntü yeniden başlatılıyor…</string>
+    <string name="video_fault_manual">Kalem ve klavye Mac\'e gönderilmiyor. Görüntü kendiliğinden düzelmedi.</string>
+    <string name="video_fault_retry">Yeniden dene</string>
     <string name="state_disconnected">Bağlantı yok (%1$s)\n%2$d sn içinde yeniden denenecek</string>
     <string name="state_failed">Bağlanılamadı (%1$s)</string>
     <string name="cause_lost">bağlantı koptu</string>
