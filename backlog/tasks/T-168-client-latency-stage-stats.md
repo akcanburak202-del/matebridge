@@ -105,11 +105,12 @@ Riskler: paylaşılan kilit altında yalnız bellek içi iş (stats + ClockSync 
 
 ## Handoff
 
-- **Commit:** `58525b3` (kod + testler), `04cf4c8` (LOGGING.md ayrı blok); plan `86915a0`. Dal `task/T-168-client-latency-stage-stats`. `./scripts/check.sh` ALL OK.
+- **Commit:** `58525b3` (kod + testler), `04cf4c8` (LOGGING.md ayrı blok), `2e40a05` (codex inceleme P2 düzeltmesi); plan `86915a0`. Dal `task/T-168-client-latency-stage-stats`. `./scripts/check.sh` ALL OK.
 - **Dokunulan dosyalar:** `VideoStats.kt`, `VideoRenderer.kt`, `DecoderCodec.kt` (yalnız `isHardwareAccelerated`/`isSoftwareOnly`, varsayılan null), `DecoderFault.kt` (açık devretme), `IntervalHistogram.kt` (`IntervalSummary.maxUs`), `ClockSync.kt` (`latencySignedUs`, `uncertaintyUs`), `StatsFormat.kt`, `MainActivity.kt` (yalnız `latencyOf` bağlantısı, `statsTick`, `writeStatsLog`), testler: `video/LatencyStageStatsTest.kt` (yeni), `stream/LatencyStageFormatTest.kt` (yeni), `video/FakeDecoderCodec.kt` (hw bayrakları + `codecs` listesi), `stream/StreamTest.kt` ve `stream/StatsLogWindowTest.kt` (yeni `latencyOf` imzası, "Yak→çöz"), `docs/LOGGING.md`.
 - **Varsayımlar:**
   - `lat_neg` yalnız `cap_dec` (yakalama→çözücü çıkışı) negatif örneklerini sayar; sonraki aşamalar bundan büyük olduğu için çift sayım yok.
   - `cap_dec` atılan kareleri de içerir (çözüm aşaması); `cap_rel`/`cap_cb` yalnız bırakılanları. `discarded=` ayrıca `drop=` içinde de sayılır (STATS `frames_dropped` değişmedi).
+  - Codex P2 (düzeltildi, `2e40a05`): codec-render modunda kare `releaseOutputBuffer`'dan **önce** beklenenlere eklenir (`VideoStats.awaitCallback`), çünkü ana looper'daki geri çağrı, çağrı dönmeden gelebilir. Çağrı hata fırlatırsa kayıt geri alınır (`cancelCallback`, eksik sayılmaz). Codec çağrısı paylaşılan kilidin dışında kalır. Test: `LatencyStageRendererTest.callbacksDeliveredBeforeTheReleaseReturnsAreNotMissing` (sahte codec geri çağrıyı `releaseOutputBuffer` içinde verir) ve iki `VideoStats` birim testi.
   - `render_cb_missing`: geri çağrılar bırakma sırasıyla gelir varsayımı; daha sonra bırakılmış bir karenin geri çağrısı gelince öncekiler "eksik" sayılır; 64 bekleyen sınırı aşılınca en eski eksik sayılır. Codec durunca bekleyenler sayılmadan atılır.
   - Saat tabanı: `readyNs`, bırakma anı ve geri çağrı `nanoTime`'ı `System.nanoTime` (= `SessionController.clockUs()`); `onOutput`'un `nowUs` (elapsedRealtime) yalnız çözme süresi için.
   - Bayat harita düzeltmesi iki katmanlı: ekleme sırasıyla sınır (`keys.min()` yerine en eski) + her codec başında ve `closeWindow()`'da `resetFrames()`.
