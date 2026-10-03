@@ -277,3 +277,27 @@ Yalnız ölçüm; girdinin nasıl ve ne zaman uygulandığını değiştirmez. H
 - `W input ev=input_slow_call stage=env|post|deliver us=<µs>`: bir mesajda bir çağrı 20 ms'yi aştığında (kesin büyük). Mesaj başına en çok bir satır: `env` ya da `post` aştıysa büyük olanı, ikisi de aşmadıysa `deliver` (süre kuyruk beklemesine ya da işlem hattına gitti). Hız sınırı: 10 s'de en çok bir satır, diğerleri yalnız `slow_calls`'ta sayılır. Hız sınırı oturumlar arasında sıfırlanmaz (yeniden bağlanma fırtınası uyarı yağdırmaz).
 - Karar eşiği (kart T-175): mesaj başına > ~50 µs ya da `deliver_us_p99` birkaç ms'nin üstündeyse optimizasyon kartı açılır (geometri önbelleği, tek `CGEventSource`, ses boşaltmayı oturum kuyruğundan almak). Altındaysa gerek yok.
 - Koordinat, tuş, keycode ya da karakter yazılmaz; yalnız aşama adı, süre ve sayı.
+
+## Canlı bit hızı (Mac, `video`, T-177)
+
+Çalışan VideoToolbox oturumunun bit hızı yeniden başlatma olmadan değişir:
+- Yakalama, sanal ekran ve video bağlantısı sürer.
+- Yeni `STREAM_CONFIG`, `config_id` ya da keyframe yoktur. `STREAM_CONFIG.bitrate_kbps` yapılandırılmış değer olarak kalır.
+- Kullanıcı değişikliği (`STREAM_PREFS`) yine yeniden başlatma yolundan geçer.
+
+Log satırı:
+- `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
+  - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
+  - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.
+  - `avg_status`: `AverageBitRate` için `VTSessionSetProperty` sonucu (`0` = kabul). `MATEBRIDGE_QUALITY` kabul edilmişse `skipped` yazılır: o kipte `AverageBitRate` kullanılmıyor, yalnız `DataRateLimits` değişir.
+  - `limits_status`: `DataRateLimits` için sonuç.
+  - `0` yalnız VideoToolbox'ın değeri kabul ettiğini söyler. `.fast` profil kabul edip yok sayabilir (T-087 emsali). Etkisi `net ev=stats` içindeki `sent_kbps=` ile ölçülür.
+
+Tanı ayarları (varsayılan kapalı, karar 0026):
+- `MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s|<n>ms`: 1–16 değer, her biri 5 000…150 000; süre 100 ms…600 s.
+  - İlk değer encoder başladıktan bir periyot sonra verilir. Ardından her periyotta listedeki sıradaki değer canlı ayarlayıcıya gider; liste döngüyle tekrarlanır.
+  - Geçersiz değer ayarı kapatır.
+- `MATEBRIDGE_RATE_WINDOW_MS=<10…999>`: `DataRateLimits`'e 1 s çiftinin yanına kısa bir pencere ekler, aynı 2× patlama payıyla: `[2 × ort. bayt/s × w, w]`.
+  - Oluşturmada ve her canlı değişiklikte uygulanır.
+  - Oluşturmadaki sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
+- Bu ayarlar açıkken `ev=encoder_config` satırına `bitrate_step=<değerler>@<ms>ms` ve `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.

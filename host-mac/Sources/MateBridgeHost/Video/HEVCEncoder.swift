@@ -92,6 +92,9 @@ final class HEVCEncoder: @unchecked Sendable {
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
     private var refreshTimer: DispatchSourceTimer?
+    /// `MATEBRIDGE_BITRATE_STEP` timer (T-177 device check); nil unless the knob is set.
+    private var stepTimer: DispatchSourceTimer?
+    private var stepTick = 0
     private var idleRefresh: IdleRefreshPolicy
     /// `captureTimeUs - deliveredUs` of the newest real capture (SCK stamps run ahead of delivery, ~+6.6 ms) and the
     /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
@@ -125,6 +128,10 @@ final class HEVCEncoder: @unchecked Sendable {
     typealias LogSink = @Sendable (LogLevel, String, String) -> Void
     static let hostLog: LogSink = { level, event, fields in
         HostLog.log(level, component: "encoder", event: event, fields: fields)
+    }
+    /// `video ev=bitrate_set` (T-177; `docs/LOGGING.md`).
+    static let videoLog: LogSink = { level, event, fields in
+        HostLog.log(level, component: "video", event: event, fields: fields)
     }
 
     /// - Parameters:
@@ -167,6 +174,7 @@ final class HEVCEncoder: @unchecked Sendable {
         let backend = Backend(session: s)
         order = EncoderSubmitOrder(
             backend: backend, streamFps: settings.fps, maxInFlight: HEVCEncoder.maxInFlight,
+            initialBitrateKbps: settings.bitrateKbps,
             nowUs: { HostClock.nowUs() },
             pacerCounts: { [meter] overwritten, decimated, deferred in
                 for _ in 0..<overwritten { meter?.recordOverwritten() }
@@ -210,8 +218,9 @@ final class HEVCEncoder: @unchecked Sendable {
             set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
         }
         // Cap bursts (bytes per second) at 2x the average (also with Quality: the cap is the safety net).
+        // `MATEBRIDGE_RATE_WINDOW_MS` adds a shorter window (T-177 diagnostics).
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
-            [settings.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
+            Self.dataRateLimits(kbps: settings.bitrateKbps, shortWindowMs: knobs.rateWindowMs))
         // Keyframes are requested on demand (TCP is reliable); the periodic one is only a long safety net (T-075).
         set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
             HEVCEncoder.keyframeIntervalSeconds as CFNumber)
@@ -243,6 +252,16 @@ final class HEVCEncoder: @unchecked Sendable {
             refresh.resume()
         }
 
+        // T-177 debug step (off by default): drives the live setter on a timer.
+        if let step = knobs.bitrateStep {
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.bitrate_step"))
+            let every = DispatchTimeInterval.milliseconds(step.periodMs)
+            t.schedule(deadline: .now() + every, repeating: every)
+            t.setEventHandler { [weak self] in self?.bitrateStepTick(step) }
+            stepTimer = t
+            t.resume()
+        }
+
         logSink(.info, "encoder_config",
                 "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
                 + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
@@ -252,6 +271,17 @@ final class HEVCEncoder: @unchecked Sendable {
             // and ignores it, so the refresh frames stay all-skip in a settled session.
             logSink(.warning, "idle_refresh_qp", "effective=0 reason=fast_profile_ignores_midstream_qp")
         }
+    }
+
+    /// `DataRateLimits` value: `[bytes, seconds, ...]` (`RateLimitWindows`). The default 1 s pair stays two integers,
+    /// exactly what was set before T-177.
+    static func dataRateLimits(kbps: Int, shortWindowMs: Int?) -> CFArray {
+        var values: [NSNumber] = []
+        for p in RateLimitWindows.pairs(kbps: kbps, shortWindowMs: shortWindowMs) {
+            values.append(NSNumber(value: p.bytes))
+            values.append(p.windowMs == 1000 ? NSNumber(value: 1) : NSNumber(value: Double(p.windowMs) / 1000))
+        }
+        return values as CFArray
     }
 
     static func codecType(_ codec: Codec) -> CMVideoCodecType {
@@ -516,6 +546,38 @@ final class HEVCEncoder: @unchecked Sendable {
         order.setTargetFps(fps)
     }
 
+    /// Changes the live session's target bitrate without restarting anything (T-177): no new `STREAM_CONFIG`, no
+    /// video reconnect, no keyframe. Clamped to `BitrateRequest.defaultRange` and deduplicated; applied on the owner
+    /// queue between two submits, never after `stop`. Whether VideoToolbox honours it (the `.fast` profile may
+    /// accept and ignore it, cf. T-087) is a device measurement. With `MATEBRIDGE_QUALITY` accepted only
+    /// `DataRateLimits` changes (`AverageBitRate` is not in use).
+    @discardableResult
+    func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
+        order.setBitrate(kbps: kbps)
+    }
+
+    /// `MATEBRIDGE_BITRATE_STEP` tick (its own timer queue).
+    private func bitrateStepTick(_ step: BitrateStepKnob) {
+        let kbps = lock.withLock { () -> Int in
+            defer { stepTick += 1 }
+            return step.value(atTick: stepTick)
+        }
+        setTargetBitrate(kbps: kbps)
+    }
+
+    /// Owner queue only (`Backend.setBitrate`, enqueued by `EncoderSubmitOrder.setBitrate`). Logs one line per
+    /// applied change (requests equal to the value in force never get here).
+    private func applyBitrate(kbps: Int, session: VTCompressionSession) {
+        var avg = "skipped"
+        if !qualityApplied {
+            avg = String(VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
+                                              value: (kbps * 1000) as CFNumber))
+        }
+        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                                          value: Self.dataRateLimits(kbps: kbps, shortWindowMs: knobs.rateWindowMs))
+        Self.videoLog(.info, "bitrate_set", "kbps=\(kbps) avg_status=\(avg) limits_status=\(limits)")
+    }
+
     /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
     /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
     final class Backend: CompressionBackend, @unchecked Sendable {
@@ -526,6 +588,11 @@ final class HEVCEncoder: @unchecked Sendable {
         /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
         func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
             encoder?.send(frame, key: keyframe, token: token, session: session)
+        }
+
+        /// After the encoder is gone nothing is set (its `deinit` already stopped the order).
+        func setBitrate(kbps: Int) {
+            encoder?.applyBitrate(kbps: kbps, session: session)
         }
 
         /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
@@ -625,9 +692,12 @@ final class HEVCEncoder: @unchecked Sendable {
         idleTimer = nil
         let refresh = refreshTimer
         refreshTimer = nil
+        let step = stepTimer
+        stepTimer = nil
         lock.unlock()
         timer?.cancel()
         refresh?.cancel()
+        step?.cancel()
         // `order` is nil only if `init` threw before creating it (then there is no session to close).
         if let order { order.stop(completion: completion) } else { completion?() }
     }

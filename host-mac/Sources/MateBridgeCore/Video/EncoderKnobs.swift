@@ -141,6 +141,55 @@ public struct RefreshQPBoost: Sendable {
     }
 }
 
+/// Debug bitrate step for the live-bitrate device check (T-177): `MATEBRIDGE_BITRATE_STEP=60000,15000,60000@5s`.
+/// Every `periodMs` the encoder's live setter is called with the next value (kbps), cycling through the list, starting
+/// one period after the encoder starts. Default off. Closed by T-196 (adopted into the adaptation controller), or
+/// removed after the T-127 Wi-Fi re-measurement if no adaptation card needs it (decision 0026 §2).
+public struct BitrateStepKnob: Equatable, Sendable {
+    public static let periodRangeMs: ClosedRange<Int> = 100...600_000
+    public static let maxValues = 16
+
+    public var valuesKbps: [Int]
+    public var periodMs: Int
+
+    public init(valuesKbps: [Int], periodMs: Int) {
+        self.valuesKbps = valuesKbps
+        self.periodMs = periodMs
+    }
+
+    /// `<kbps>[,<kbps>...]@<n>s|<n>ms`: 1...16 values, each a whole number in the user bitrate range
+    /// (`VideoSettings.userBitrateRangeKbps`), period 100 ms...600 s. Anything else (or nil) is nil: off.
+    public static func parse(_ text: String?) -> BitrateStepKnob? {
+        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), !t.isEmpty else { return nil }
+        let parts = t.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        var values: [Int] = []
+        for item in parts[0].split(separator: ",", omittingEmptySubsequences: false) {
+            guard let v = Int(item.trimmingCharacters(in: .whitespaces)),
+                  VideoSettings.userBitrateRangeKbps.contains(v) else { return nil }
+            values.append(v)
+        }
+        guard (1...maxValues).contains(values.count) else { return nil }
+        let p = parts[1].trimmingCharacters(in: .whitespaces)
+        let ms: Int?
+        if p.hasSuffix("ms") {
+            ms = Int(p.dropLast(2))
+        } else if p.hasSuffix("s") {
+            ms = Int(p.dropLast()).flatMap { $0.multipliedReportingOverflow(by: 1000).overflow ? nil : $0 * 1000 }
+        } else {
+            ms = nil
+        }
+        guard let ms, periodRangeMs.contains(ms) else { return nil }
+        return BitrateStepKnob(valuesKbps: values, periodMs: ms)
+    }
+
+    /// The value for the `n`-th tick (0-based), cycling.
+    public func value(atTick n: Int) -> Int { valuesKbps[((n % valuesKbps.count) + valuesKbps.count) % valuesKbps.count] }
+
+    /// Log value: `60000,15000,60000@5000ms`.
+    public var logValue: String { valuesKbps.map(String.init).joined(separator: ",") + "@\(periodMs)ms" }
+}
+
 /// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086, except `retagInput` (T-113).
 public struct EncoderKnobs: Equatable, Sendable {
     /// `kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality`.
@@ -153,11 +202,19 @@ public struct EncoderKnobs: Equatable, Sendable {
     /// Rewrite captured buffers' colour tags to the session's so VideoToolbox does not colour-convert them (T-113,
     /// `InputRetag`). On by default; `MATEBRIDGE_INPUT_RETAG=0` restores the old conversion for A/B.
     public var retagInput = true
+    /// Debug bitrate step timer (T-177, `MATEBRIDGE_BITRATE_STEP`); nil = off.
+    public var bitrateStep: BitrateStepKnob?
+    /// Short `DataRateLimits` window in ms next to the 1 s pair (T-177 diagnostics, `MATEBRIDGE_RATE_WINDOW_MS`);
+    /// nil = off (only the 1 s pair). Closed by T-196, or removed after T-127 (decision 0026 §2).
+    public var rateWindowMs: Int?
+
+    public static let rateWindowRangeMs: ClosedRange<Int> = 10...999
 
     public init() {}
 
     /// `MATEBRIDGE_PRIO_SPEED=0|1` (anything else: 1), `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset),
-    /// `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*`, `MATEBRIDGE_INPUT_RETAG=0|1` (anything else: 1).
+    /// `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*`, `MATEBRIDGE_INPUT_RETAG=0|1` (anything else: 1),
+    /// `MATEBRIDGE_BITRATE_STEP` (`BitrateStepKnob.parse`), `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off).
     public static func parse(_ env: [String: String]) -> EncoderKnobs {
         var k = EncoderKnobs()
         k.retagInput = InputRetag.isEnabled(env)
@@ -165,6 +222,8 @@ public struct EncoderKnobs: Equatable, Sendable {
         k.quality = parseQuality(env["MATEBRIDGE_QUALITY"])
         k.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
         k.idleRefresh = IdleRefreshConfig.parse(env)
+        k.bitrateStep = BitrateStepKnob.parse(env["MATEBRIDGE_BITRATE_STEP"])
+        if let v = int(env["MATEBRIDGE_RATE_WINDOW_MS"]), rateWindowRangeMs.contains(v) { k.rateWindowMs = v }
         return k
     }
 
@@ -180,10 +239,14 @@ public struct EncoderKnobs: Equatable, Sendable {
         text.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
-    /// Fields for the `ev=encoder_config` line logged when the encoder is created.
+    /// Fields for the `ev=encoder_config` line logged when the encoder is created. The T-177 debug knobs add
+    /// `bitrate_step=` / `rate_window_ms=` only when set, so the default line is unchanged.
     public var logFields: String {
-        "prio_speed=\(prioritizeSpeed ? 1 : 0) quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
+        var f = "prio_speed=\(prioritizeSpeed ? 1 : 0) quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
             + "idle_refresh=\(idleRefresh.logValue) input_retag=\(retagInput ? 1 : 0)"
+        if let s = bitrateStep { f += " bitrate_step=\(s.logValue)" }
+        if let w = rateWindowMs { f += " rate_window_ms=\(w)" }
+        return f
     }
 }
 

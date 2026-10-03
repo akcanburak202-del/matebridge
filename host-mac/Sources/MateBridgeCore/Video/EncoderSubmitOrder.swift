@@ -37,6 +37,71 @@ public protocol CompressionBackend: AnyObject, Sendable {
     /// The last call: completes every outstanding frame (their completions may run during the call) and closes
     /// the session.
     func completeAndInvalidate()
+    /// Changes the target bitrate of the live session (T-177). Arrives in FIFO order with `encode`, never after
+    /// `completeAndInvalidate`. `kbps` is already clamped and deduplicated (`BitrateRequest`).
+    func setBitrate(kbps: Int)
+}
+
+extension CompressionBackend {
+    public func setBitrate(kbps: Int) {}
+}
+
+/// Live bitrate requests for one encoder session (T-177). Pure; `EncoderSubmitOrder` owns one under its lock.
+/// A request is clamped to `range`, dropped when it equals the last applied value (the session starts at the
+/// configured bitrate), and refused once the session is stopped.
+public struct BitrateRequest: Equatable, Sendable {
+    public enum Decision: Equatable, Sendable {
+        /// Set the session to this value (kbps, clamped).
+        case apply(Int)
+        /// Equal to the value in force: nothing to do.
+        case unchanged
+        /// The session is stopped (or stopping): never touch it again.
+        case stopped
+    }
+
+    /// Same bounds as a user `STREAM_PREFS.bitrate_kbps` (decision 0013).
+    public static let defaultRange = VideoSettings.userBitrateRangeKbps
+
+    public let range: ClosedRange<Int>
+    /// The value in force (kbps); the configured bitrate until the first change.
+    public private(set) var currentKbps: Int
+    public private(set) var isStopped = false
+
+    public init(initialKbps: Int, range: ClosedRange<Int> = BitrateRequest.defaultRange) {
+        self.range = range
+        currentKbps = initialKbps
+    }
+
+    public func clamped(_ kbps: Int) -> Int { min(max(kbps, range.lowerBound), range.upperBound) }
+
+    public mutating func request(_ kbps: Int) -> Decision {
+        guard !isStopped else { return .stopped }
+        let v = clamped(kbps)
+        guard v != currentKbps else { return .unchanged }
+        currentKbps = v
+        return .apply(v)
+    }
+
+    public mutating func stop() { isStopped = true }
+}
+
+/// `kVTCompressionPropertyKey_DataRateLimits` pairs for a bitrate (T-177). The default is the cap in use since the
+/// start: `[2 x average bytes per second, 1 s]`. `shortWindowMs` (diagnostics, `MATEBRIDGE_RATE_WINDOW_MS`) adds a
+/// second pair with the same 2x burst factor over a shorter window, `[2 x average bytes per second x w, w]`.
+public enum RateLimitWindows {
+    public struct Pair: Equatable, Sendable {
+        public var bytes: Int
+        /// Window length in milliseconds (1000 = the default 1 s pair).
+        public var windowMs: Int
+        public init(bytes: Int, windowMs: Int) { self.bytes = bytes; self.windowMs = windowMs }
+    }
+
+    public static func pairs(kbps: Int, shortWindowMs: Int?) -> [Pair] {
+        let perSecond = kbps * 1000 / 8 * 2
+        var p = [Pair(bytes: perSecond, windowMs: 1000)]
+        if let w = shortWindowMs, w > 0, w < 1000 { p.append(Pair(bytes: perSecond * w / 1000, windowMs: w)) }
+        return p
+    }
 }
 
 /// Decides which frame goes to the encoder session and in which order (T-162): the `FramePacer` (newest frame wins,
@@ -100,8 +165,14 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var lastReserveUs: UInt64
     private var flushScheduled = false
     private var stats = Stats()
+    /// Live bitrate requests (T-177); stopped together with `stopped`.
+    private var bitrate: BitrateRequest
 
+    /// - Parameter initialBitrateKbps: the bitrate the backend session was created with (`setBitrate` deduplicates
+    ///   against it).
     public init(backend: Backend, streamFps: Int, maxInFlight: Int = 2,
+                initialBitrateKbps: Int = 0,
+                bitrateRange: ClosedRange<Int> = BitrateRequest.defaultRange,
                 nowUs: @escaping @Sendable () -> UInt64,
                 scheduleFlush: @escaping FlushScheduler = EncoderSubmitOrder.defaultFlushScheduler(),
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
@@ -116,6 +187,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         self.log = log
         self.beforeSubmit = beforeSubmit
         pacer = FramePacer<Frame>(streamFps: streamFps)
+        bitrate = BitrateRequest(initialKbps: initialBitrateKbps, range: bitrateRange)
         lastReserveUs = nowUs()
         queue = DispatchQueue(label: queueLabel, qos: .userInteractive)
         queue.setSpecific(key: queueKey, value: 1)
@@ -161,6 +233,23 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         lock.lock(); pacer.setTargetFps(fps); lock.unlock()
     }
 
+    /// Changes the live session's bitrate (T-177) without a restart. Clamped and deduplicated (`BitrateRequest`);
+    /// an `.apply` is enqueued on the owner queue under the lock, like a submit, so it reaches the backend in FIFO
+    /// order with the frames and never after the teardown block. Never blocks on the encoder.
+    @discardableResult
+    public func setBitrate(kbps: Int) -> BitrateRequest.Decision {
+        lock.lock()
+        defer { lock.unlock() }
+        let decision = bitrate.request(kbps)
+        if case .apply(let v) = decision {
+            queue.async { [backend] in backend.setBitrate(kbps: v) }
+        }
+        return decision
+    }
+
+    /// The bitrate in force (kbps): the last applied request, or the initial value.
+    public var currentBitrateKbps: Int { lock.withLock { bitrate.currentKbps } }
+
     /// Releases the slot of `token` (the frame produced output, none, or was refused) and starts the pending frame,
     /// if any. `failed`: the frame broke the reference chain, so the next frame is a keyframe. Idempotent per token:
     /// a second release of the same token (e.g. an encode error and a completion for one frame) is logged at
@@ -204,6 +293,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
             return
         }
         stopped = true
+        bitrate.stop()
         pacer.clearPending()
         last = nil
         // Captures only the backend and the completion (never `self`): reachable from an owner's `deinit`.
