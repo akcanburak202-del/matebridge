@@ -303,13 +303,6 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Read-back of the cadence-related properties as the session reports them (not just what we asked for).
     func cadenceReadback() -> String {
         guard !order.isStopped else { return "session closed" }
-        let s = session
-        func read(_ key: CFString) -> String {
-            var raw: UnsafeMutableRawPointer?
-            let st = VTSessionCopyProperty(s, key: key, allocator: nil, valueOut: &raw)
-            guard st == noErr, let raw else { return "unset(\(st))" }
-            return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
-        }
         return "RealTime=\(read(kVTCompressionPropertyKey_RealTime)) "
             + "ExpectedFrameRate=\(read(kVTCompressionPropertyKey_ExpectedFrameRate)) "
             + "MaxKeyFrameIntervalDuration=\(read(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration)) "
@@ -320,16 +313,36 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Colour properties as the session reports them, for the dump tool.
     func colorReadback() -> String {
         guard !order.isStopped else { return "session closed" }
-        let s = session
-        func read(_ key: CFString) -> String {
-            var raw: UnsafeMutableRawPointer?
-            let st = VTSessionCopyProperty(s, key: key, allocator: nil, valueOut: &raw)
-            guard st == noErr, let raw else { return "unset(\(st))" }
-            return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
-        }
         return "primaries=\(read(kVTCompressionPropertyKey_ColorPrimaries)) "
             + "transfer=\(read(kVTCompressionPropertyKey_TransferFunction)) "
             + "matrix=\(read(kVTCompressionPropertyKey_YCbCrMatrix))"
+    }
+
+    /// `ev=encoder_hw status=` when there is no live session to read (closed, or no encoder in the pipeline).
+    static let noSessionStatus: OSStatus = kVTInvalidSessionErr
+
+    /// T-187: did VideoToolbox pick the hardware encoder? Reads `UsingHardwareAcceleratedVideoEncoder` once; a
+    /// non-`noErr` read or a missing/non-boolean value is `unknown`. A closed session reports `noSessionStatus`.
+    /// The session only enables (does not require) the hardware encoder, so a software fallback is possible.
+    func hardwareCheck() -> EncoderHardwareCheck {
+        guard !order.isStopped else { return .unknown(status: Self.noSessionStatus) }
+        let (status, value) = copyProperty(kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
+        return EncoderHardwareCheck(usingHardware: status == noErr ? value as? Bool : nil, status: status)
+    }
+
+    /// `key` as the session reports it, or `unset(<OSStatus>)` (cadence and colour read-backs).
+    private func read(_ key: CFString) -> String {
+        let (status, value) = copyProperty(key)
+        guard status == noErr, let value else { return "unset(\(status))" }
+        return "\(value)"
+    }
+
+    /// `VTSessionCopyProperty` on the live session: the status and the (retained, now owned) value.
+    private func copyProperty(_ key: CFString) -> (OSStatus, AnyObject?) {
+        var raw: UnsafeMutableRawPointer?
+        let st = VTSessionCopyProperty(session, key: key, allocator: nil, valueOut: &raw)
+        guard let raw else { return (st, nil) }
+        return (st, Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())
     }
 
     /// The next encoded frame will be a keyframe. With `resubmitNow`, the last captured buffer is encoded

@@ -182,6 +182,12 @@ public final class VideoPipeline: @unchecked Sendable {
             + "keyframe_interval_s=\(HEVCEncoder.keyframeIntervalSeconds) sck_min_interval_ms=\(String(format: "%.2f", 500 / Double(max(1, settings.fps)))) sck_queue_depth=\(ScreenCapture.queueDepth)"
     }
 
+    /// T-187: whether the running encoder is the hardware one (`video ev=encoder_hw`); `unknown(kVTInvalidSessionErr)`
+    /// when no encoder runs. Reads the session property on each call: the owner reads it once per pipeline.
+    var encoderHardware: EncoderHardwareCheck {
+        box.encoder?.hardwareCheck() ?? .unknown(status: HEVCEncoder.noSessionStatus)
+    }
+
     /// Applies the tablet panel rate (`DISPLAY_RATE`): the encoder feed is decimated to `min(stream fps, hz)` without
     /// restarting anything. Remembered, so an encoder created later starts at the same rate. Returns the effective fps.
     @discardableResult
