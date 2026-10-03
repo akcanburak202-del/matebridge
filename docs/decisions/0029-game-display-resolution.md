@@ -27,7 +27,7 @@ Bugün sanal ekran her modda HiDPI: 1400×920 **nokta** = 2800×1840 **piksel** 
 2. Seçim nerede: oyun modlarının bir ayarı mı ("Oyun çözünürlüğü"), yoksa ayrı bir görüntü modu mu.
 3. Giriş/çıkışta ekranın yeniden kurulmasının kabulü.
 
-Tel biçimi: büyük olasılıkla değişmez (`STREAM_PREFS` boyutu ve `scale_permille` zaten var; host ekran boyutunu istemcinin istediği boyuttan kurabilir). Kesinleşmeden önce PROTOCOL §0x05 incelenir; gerekirse ayrı protokol kararı.
+Tel biçimi (2026-10-04, T-213): `STREAM_PREFS` sonuna isteğe bağlı `display_width_px`/`display_height_px` grubu (u16, yoksa 0 = doğal HiDPI). Yeni mesaj yok; eski istemci 8 bayt gönderir (doğal ekran), eski host grubu yok sayar ve `scale_permille`'i uygular (bugünkü Oyun 120/60 davranışı). Ayrıntı PROTOCOL §2 ve §0x05.
 
 **Kullanıcı 2026-10-04'te onayladı:**
 1. Üç boyut: 1400×920 · 1848×1214 · 2100×1380; varsayılan 1848×1214.
@@ -36,5 +36,5 @@ Tel biçimi: büyük olasılıkla değişmez (`STREAM_PREFS` boyutu ve `scale_pe
 
 ## Sonuçlar
 
-- Kartlar (kabulden sonra): host ekran kurulumunda HiDPI/boyut seçimi (VirtualDisplay tek dosya kuralı korunur), istemcide ayar ve ölçek, cihaz ölçümü (çözme süresi, gecikme, takılma, Mac GPU).
+- Kartlar: T-213 (protokol + codec + fixture), T-214 (host), T-215 (istemci), T-216 (cihaz ölçümü).
 - 0014 ve 0016 ile ilişkisi: oyun modlarının çözünürlük alanı bu kararla tanımlanır; 0016'daki "yenileme hızı değişince yeniden kurulum" kuralına "HiDPI/boyut değişince" eklenir.

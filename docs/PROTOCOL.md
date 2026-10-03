@@ -39,6 +39,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
+- **İsteğe bağlı sondaki grup:** sona sonradan eklenen alanlar bir grup olarak tanımlanabilir. Payload grubun hiçbir baytını içermiyorsa alıcı belgedeki varsayılanı kullanır; grubun yalnız bir kısmı varsa payload kısadır (protokol hatası). Gönderen, grup varsayılan değerdeyse grubu yazmaz. Şu an tek örnek: `STREAM_PREFS.display_*` (fixture `invalid_stream_prefs_partial`).
 - **Bilinmeyen enum değerleri:**
   - **Durumu belirleyen** alanlarda protokol hatasıdır: `HELLO_ACK.status`, `HELLO_ACK.key_mode`, `STREAM_CONFIG.codec`, `PEN.tool`, `KEY.action`, `POINTER_ABS.source`, `SCROLL.phase`, `PINCH.phase`, `PINCH.source`.
   - **Bilgi amaçlı** alanlarda kabul edilir ve "bilinmeyen" olarak işlenir: `BYE.reason`, `RELEASE_ALL.reason`, `KEYFRAME_REQUEST.reason` (davranış aynı: bırak / kapat / keyframe), `PEN_GESTURE.gesture` (yok sayılır), `STREAM_CONFIG` renk kodları (bilinmeyen kod: sRGB varsayılır).
@@ -78,9 +79,9 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 |---|---|---|---|---|
 | 0x01 | HELLO | C→H | kontrol | `hello`, `hello_utf8_name` |
 | 0x02 | HELLO_ACK | H→C | kontrol | `hello_ack`, `hello_ack_pending`, `hello_ack_busy` |
-| 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config` |
+| 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config`, `stream_config_game_display` |
 | 0x04 | BYE | iki yön | kontrol | `bye`, `bye_host_sleep` |
-| 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs`, `stream_prefs_bitrate` |
+| 0x05 | STREAM_PREFS | C→H | kontrol | `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `invalid_stream_prefs_partial` |
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
 | 0x08 | SETTINGS_OPEN | H→C | kontrol | `settings_open` |
@@ -147,9 +148,9 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | config_id | u16 | Her yeni ayarda artar (1'den başlar) |
 | codec | u8 | `1` H.264, `2` HEVC |
 | reserved | u8 | |
-| width_px | u16 | Kodlanan görüntünün piksel boyutu. Varsayılan = sanal ekranın piksel boyutu; `STREAM_PREFS.scale_permille < 1000` ise daha küçük (en-boy oranı korunur, çift sayıya yuvarlanır). İstemci çözülen görüntüyü video yüzeyine ölçekler; koordinatlar normalize olduğu için girdi etkilenmez. |
+| width_px | u16 | Kodlanan görüntünün piksel boyutu. Varsayılan = sanal ekranın piksel boyutu; `STREAM_PREFS.display_* = 0` iken `scale_permille < 1000` ise daha küçük (oyun ekranında ölçek yok sayılır, kodlanan = ekran boyutu) (en-boy oranı korunur, çift sayıya yuvarlanır). İstemci çözülen görüntüyü video yüzeyine ölçekler; koordinatlar normalize olduğu için girdi etkilenmez. |
 | height_px | u16 | |
-| width_pt | u16 | Sanal ekranın Mac nokta boyutu (HiDPI'da piksel/2). İstemci göreli hareket ve kaydırmayı bununla ölçekler. |
+| width_pt | u16 | Sanal ekranın Mac nokta boyutu (HiDPI'da piksel/2; oyun ekranında, 1x, piksele eşit — karar 0029). İstemci göreli hareket ve kaydırmayı bununla ölçekler. |
 | height_pt | u16 | |
 | fps | u16 | Hedef kare hızı |
 | bitrate_kbps | u32 | Hedef bit hızı |
@@ -177,9 +178,22 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 | fps | u16 | İstenen akış kare hızı: `60`, `120`, `144`. Başka değer: host 60 kabul eder. |
 | scale_permille | u16 | Kodlanan görüntünün sanal ekrana oranı, binde: `500`–`1000`. Dışı: host sıkıştırır. |
 | bitrate_kbps | u32 | Kullanıcının seçtiği hedef bit hızı (karar 0013). `0` = host varsayılanı (moda göre). Sıfırdan farklı değer host'ta `5000`–`150000` aralığına sıkıştırılır. Eski istemciler burada `0` (eski `reserved`) gönderir. |
+| display_width_px | u16 | *İsteğe bağlı grup (yoksa 0).* `0` = doğal ekran (HELLO boyutu, HiDPI 2x, bugünkü gibi). `≠0`: host sanal ekranı **HiDPI olmadan (1x)** bu piksel boyutunda kurar; nokta = piksel (karar 0029, "oyun ekranı"). |
+| display_height_px | u16 | |
+
+- Payload 8 bayt (eski istemci; ekran `0×0`) ya da en az 12 bayttır; 9–11 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`).
+- Gönderen grubu yalnız iki alandan biri sıfırdan farklıysa yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt).
 
 **Host kuralları:**
-- Sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (Mac'teki düzen ve girdi eşlemesi aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz), bit hızı (`bitrate_kbps`).
+- `display_* = 0` iken sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (HELLO boyutu, HiDPI; Mac'teki düzen aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz), bit hızı (`bitrate_kbps`).
+- **Oyun ekranı (karar 0029):** host `(w, h) = display_*`'ı şu koşulların hepsi tutarsa uygular, tutmazsa `0×0` sayar (protokol hatası değil, loglanır):
+  - ikisi de sıfırdan farklı ve çift;
+  - `screen_width_px/2 ≤ w ≤ screen_width_px` ve `screen_height_px/2 ≤ h ≤ screen_height_px` (HELLO boyutu);
+  - en-boy oranı HELLO ekranınınkinden en çok %0,5 farklı (`|w·H − h·W| ≤ 0,005·h·W`).
+- Uygulanınca: sanal ekran `w×h` px, 1x olur; **`scale_permille` yok sayılır** (kodlanan boyut = ekran boyutu); `STREAM_CONFIG`'te `width_px = width_pt = w`, `height_px = height_pt = h`. İstemci `scale_permille`'e modun ölçeğini yazmaya devam eder: grubu tanımayan eski host'ta sonuç bugünkü davranıştır (HiDPI + ölçek). İstemci, isteğin uygulandığını `width_pt == display_width_px` ile anlar (yalnız bilgi).
+- Ekran kipi (piksel boyutu ya da HiDPI) ya da yenileme hızı değişirse host sanal ekranı yeniden kurar (eskisini kaldırıp ~700 ms bekledikten sonra; aynı seri numarasıyla hemen yeniden kurma başarısız olabilir). Pencereler kısa süre yedek ekrana taşınır, imleç yeni sınırlara sıkıştırılır. 1x ekran kurulamazsa host bir kez doğal ekrana döner ve yeni `config_id` ile bildirir (`game_display_failed`).
+- Varsayılan bit hızı oyun ekranında `kodlanan genişlik / HELLO genişliği` oranıyla hesaplanır (1848 → 660 ile aynı).
+- Host'un cihaz başına hatırladığı tercih (T-049) `display_*`'ı da tutar: oyun modunda yeniden bağlanan tablet ekranı doğrudan oyun boyutunda bulur.
 - **Bit hızı önceliği:** host ortam değişkeni (`MATEBRIDGE_BITRATE_KBPS`, Wi-Fi'de `MATEBRIDGE_WIFI_BITRATE_KBPS`; geliştirici ayarı) > `bitrate_kbps ≠ 0` > modun varsayılanı. Uygulanan değer `STREAM_CONFIG.bitrate_kbps`'te bildirilir.
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
 - İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini (bit hızı dahil) hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
@@ -628,7 +642,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `invalid_stream_prefs_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`

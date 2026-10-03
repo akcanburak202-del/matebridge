@@ -22,3 +22,5 @@ Kullanıcı seçimleri (2026-10-02): oyun modunun iki biçimi olsun, adları "Oy
 - Kart T-143 (tablet).
 - Panel 60 Hz iken host'un yakalamayı da 60'a indirmesi ayrı konu: önce Mac'te maliyet ölçülecek.
 - Tekrar düşünülür: Huawei ileride dokunmasız 120 Hz'e izin verirse (T-140 deneyi parametreyle yeniden çalıştırılabilir).
+
+**Not (2026-10-04, karar 0029):** sanal ekran yalnız yenileme hızı değişince değil, ekran kipi (oyun ekranı piksel boyutu ya da HiDPI) değişince de yeniden kurulur; yeniden kurulum her zaman eskisini kaldırıp ~700 ms bekledikten sonra yapılır.
