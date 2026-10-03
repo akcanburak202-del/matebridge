@@ -1,7 +1,7 @@
 ---
 id: T-169
 title: Log target and real refresh separately; warn on a mismatch
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-168]
@@ -53,7 +53,14 @@ Source: external architecture review 2026-10-03 (X12); verification: docs/review
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `stream/RefreshMismatch.kt` (yeni, saf Kotlin):
+   - `RefreshMismatch.statsFields(targetHz, displayHz, vsyncPeriodUs, vsyncP50Us, streamMode)` → `hz=<alias> target_hz= vsync_period_us= display_hz= vsync_ms_p50= stream_mode=` (eski `hz=` en başta kalır, naif `hz=` regex'leri `target_hz=`'e takılmasın).
+   - `RefreshMismatch.update(targetHz, vsyncP50Us, streaming, nowMs): Event?`: ölçülen Hz = 1e6 / p50; ±%10 tolerans; hedef 0, akış yok → bölüm biter. Ölçüm yok (vsync döngüsü uyuyor, `count == 0`) bölümü bitirmez, ama 2 sn'den uzun boşluk bölümü yeniden başlatır. Hedef değişince bölüm yeniden başlar. Bölüm > 5 sn sürünce tek olay; olaylar arası en az 60 sn (bekleyen bölüm sınır dolunca, hâlâ sürüyorsa yazılır).
+   - `Event.fields()` → `target_hz= measured_hz= dur_ms=`.
+2. `MainActivity.kt`: `statsTick` içinde saniyelik vsync özetiyle `refreshMismatch.update(...)` → `MbLog.w("refresh_mismatch", …, "render")`; `writeStatsLog` içinde `hz=…display_hz=…vsync_ms_p50=` parçası `RefreshMismatch.statsFields(...)` ile değişir. `applyRefreshRate` dokunulmaz. Yerel birkaç satır (T-183 paralel çalışıyor; `rvote`'a bağımlılık yok).
+3. Test: `stream/RefreshMismatchTest.kt` (alan biçimi, 5 sn eşiği, kısa uyumsuzluk, hedef 0, akış dışı, ikinci bölüm, hız sınırı).
+4. `docs/LOGGING.md`: ayrı bölüm (T-169).
+- Risk: `vsync_ms_p50` Choreographer aralığıdır, panel Hz'i değil (AGP `final lcd fps` farklı olabilir); kartta belirtildiği gibi en iyi istemci sinyali bu.
 
 ## Handoff
 
