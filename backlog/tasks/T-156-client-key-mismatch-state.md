@@ -84,16 +84,30 @@ if they test something unrelated.
 
 ## Handoff
 
-- **Commit:** `da03df6` (implementation + tests; plan in `2d35060`). Branch `task/T-156-client-key-mismatch-state`.
+- **Commit:** `e604459` (codex --high P2 fixes) on top of `da03df6` (implementation + tests); plan in `2d35060`.
+  Branch `task/T-156-client-key-mismatch-state`.
+- **Codex review (P2 ×3) fixes, `e604459`:**
+  1. "Bağlan" on `Failed(KEY_MISMATCH)` with the address field hidden is now `ConnectOrigin.CONNECT_AFTER_MISMATCH`
+     (user-initiated, like `CONNECT_AFTER_CANCEL`), so it releases the latch. `TrustUiText.kt` is outside `files:`;
+     **approved by the orchestrator** for this fix. Test goes through `ConnectOrigin.forConnectButton(...)` into the machine.
+  2./3. Record authentication is tracked at the reader: `ControlConn.authenticated` (volatile) is set right after the
+     decoder returns a message **or** skipped an authenticated unknown type (`skippedFrames > 0`), before the event is
+     enqueued or audio is delivered. The machine gets `recordAuthenticated: (gen) -> Boolean` (controller looks at
+     control/candidate/retired by gen) and consults it at the moment a failure would count: if set, the failure does not
+     count and the endpoint's count is reset. A tick also resets it (audio-only connections). So a writer-side close that
+     overtakes an authenticated record on the priority mailbox cannot latch, and audio/unknown records reset the count.
 - **Dokunulan dosyalar:**
   - `session/SessionMachine.kt`: `Event.ProtocolError.authFailed`, per-endpoint `authFailures`, `awaitingFirstAuthRecord()`,
     `pairedAuthFailure()`, `KEY_MISMATCH_LIMIT = 3`, automatic-start latch, resets (auth record / Stop / user start / forget).
-  - `session/SessionController.kt`: one line in the control reader (`ProtocolError(gen, e.kind == AUTH_FAILED)`).
+  - `session/SessionController.kt`: control reader passes `AUTH_FAILED` into `ProtocolError`; `ControlConn.authenticated`
+    set in `readRecords`; `recordAuthenticated(gen)` handed to the machine (small, localized).
+  - `session/TrustUiText.kt` (orchestrator-approved): `ConnectOrigin.CONNECT_AFTER_MISMATCH` + `forConnectButton` branch.
+  - `test/.../session/TrustUiTest.kt`: the user-initiated origin set includes `CONNECT_AFTER_MISMATCH`.
   - `session/SessionUi.kt`: `Cause.KEY_MISMATCH`.
   - `session/AutoTransport.kt`: `shouldFallBack` also for `Failed(KEY_MISMATCH)` (AUTO, on USB).
   - `MainActivity.kt`: `KEY_MISMATCH` text in `applyStatusText`, one branch in `causeText` (nothing else).
   - `res/values/strings.xml`: `key_mismatch` (card text verbatim).
-  - `test/.../session/KeyMismatchTest.kt` (14 tests, new).
+  - `test/.../session/KeyMismatchTest.kt` (18 tests, new).
 - **Varsayımlar:**
   - "After the proof PING, before any authenticated record" = machine phase `ACCEPTED` reached by the first (PAIRED) ack,
     `!sealedSeen`, `!pairingSession`. Handshake errors (ack validation `AUTH_FAILED`) happen in `AWAIT_ACK` and do not
@@ -107,6 +121,9 @@ if they test something unrelated.
     the counts, so USB may be tried again later (3 more connections, then fallback again; bounded by AutoUsbPolicy backoff).
   - A migration candidate open at the moment the current connection fails in its proof window disables the count for that
     one connection (candidate logic decides); candidate failures themselves never count (T-205 maps them to HARD_FAIL).
+  - Residual race (accepted): a writer I/O error handled before the reader has even *read* an authenticated record's
+    bytes still counts; the socket is broken at that point, so the record would not have arrived anyway. The premise
+    "skipped unknown type ⇒ authenticated" is covered by the existing `SecureChannelTest`/`FixtureTest` skippedFrames tests.
   - Backoff unchanged: a PAIRED ack runs `acceptSession`, which resets backoff to 1 s, so the 1st and 2nd failure each
     retry after 1 s (today's behaviour); `Failed(KEY_MISMATCH)` arrives about 2 s after the first failure.
 - **Test edilmeyenler / cihazda doğrulanacaklar** (T-157 step 10; nothing was run on the tablet):
@@ -114,11 +131,12 @@ if they test something unrelated.
      Keychain pair item or host identity): tablet shows "bağlantı koptu, yeniden bağlanılıyor" twice, then the
      `key_mismatch` text and stays there (no further `connect_ok` in `adb logcat -s 'MB:*'`).
   2. Log: `paired_auth_fail count=1|2|3 how=closed` then `session_failed cause=KEY_MISMATCH`; no host_id/name/key in lines.
-  3. "Bağlan" (user start) after the text tries again (3 more), "Bu Mac'i unut" then re-pair works.
+  3. "Bağlan" (address field hidden) on the text tries again (log `transport ... origin=connect_after_mismatch`, 3 more
+     attempts), "Bu Mac'i unut" then re-pair works.
   4. AUTO with cable: a wrong-key USB endpoint falls back to Wi-Fi instead of staying on the text.
   5. Normal reconnect (right key, Wi-Fi drop/resume, USB plug/unplug, migration) never shows the text.
 - **Açık sorular:**
   - `docs/LOGGING.md` (orchestrator): new cause value `KEY_MISMATCH` for `session_failed cause=`; new machine lines
     `paired_auth_fail` (W, `count=N how=auth_failed|closed`) and `key_mismatch_latched` (I, no fields: an automatic start
-    to a mismatched endpoint was refused).
+    to a mismatched endpoint was refused); new `transport origin=connect_after_mismatch` value.
   - `docs/LOGGING.md`'s `protocol_error` line is unchanged (no kind field added, to keep the controller diff to one line).
