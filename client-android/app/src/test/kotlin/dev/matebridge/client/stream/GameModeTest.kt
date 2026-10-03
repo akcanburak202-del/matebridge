@@ -140,7 +140,10 @@ class GameModeTest {
         val g2 = GameModeSettings(settings)
         assertEquals(GameModeSettings.Change.ENTER, g2.onModeChanged(StreamMode.GAME60))
         assertEquals(GameModeSettings.Values(60_000, AudioOutPref.AUTO, penTrail = false, penDot = false), g2.effective())
-        assertEquals(0, GameJitter.choose(VideoRenderer.BUFFER_ADAPTIVE, null, g2.active).bufferFrames)
+        assertEquals(
+            GameJitter.Choice(VideoRenderer.BUFFER_ADAPTIVE, GameJitter.Source.MODE),
+            GameJitter.choose(VideoRenderer.BUFFER_ADAPTIVE, null, g2.active),
+        )
         assertEquals(GameModeSettings.Change.EXIT, g2.onModeChanged(StreamMode.CLARITY))
     }
 
@@ -168,16 +171,50 @@ class GameModeTest {
         assertTrue(s2.penTrail())
     }
 
-    @Test fun jitterIsZeroInGameModeAndRestoredOnExit() {
+    @Test fun jitterIsAdaptiveInGameModesFromTheMode() {
+        // Decision 0014 §2 amended 2026-10-04 (T-211): game modes use the adaptive pacer too.
         val adaptive = VideoRenderer.BUFFER_ADAPTIVE
-        assertEquals(GameJitter.Choice(adaptive, GameJitter.Source.MODE), GameJitter.choose(adaptive, null, game = false))
-        assertEquals(GameJitter.Choice(0, GameJitter.Source.MODE), GameJitter.choose(adaptive, null, game = true))
-        // through the layer: enter -> 0, exit -> adaptive again
+        val fromMode = GameJitter.Choice(adaptive, GameJitter.Source.MODE)
+        assertEquals(fromMode, GameJitter.choose(adaptive, null, game = false))
+        assertEquals(fromMode, GameJitter.choose(adaptive, null, game = true))
+        for (mode in listOf(StreamMode.GAME, StreamMode.GAME60)) {
+            val g = GameModeSettings(settings)
+            assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(mode))
+            val c = GameJitter.choose(adaptive, null, g.active)
+            assertEquals(fromMode, c)
+            assertEquals(
+                "action=enter overrides=bitrate,audio,pen jitter=adaptive bitrate_kbps=60000 audio_out=auto",
+                GameModeSettings.logFields(GameModeSettings.Change.ENTER, c, g.effective()),
+            )
+        }
+    }
+
+    @Test fun jitterSurvivesExitAndReentry() {
+        val adaptive = VideoRenderer.BUFFER_ADAPTIVE
+        // no launch value: adaptive throughout, the source stays `mode`
         val g = GameModeSettings(settings)
-        g.onModeChanged(StreamMode.GAME)
-        assertEquals(0, GameJitter.choose(adaptive, null, g.active).bufferFrames)
-        g.onModeChanged(StreamMode.SMOOTH)
-        assertEquals(adaptive, GameJitter.choose(adaptive, null, g.active).bufferFrames)
+        for (mode in listOf(StreamMode.GAME, StreamMode.SMOOTH, StreamMode.GAME60, StreamMode.CLARITY, StreamMode.GAME)) {
+            g.onModeChanged(mode)
+            assertEquals(mode.isGame, g.active)
+            assertEquals(GameJitter.Choice(adaptive, GameJitter.Source.MODE), GameJitter.choose(adaptive, null, g.active))
+        }
+        // `--ez dev true --ei jitter 0`: buffer 0 in and out of game mode, across re-entry
+        val g2 = GameModeSettings(settings)
+        for (mode in listOf(StreamMode.GAME60, StreamMode.SMOOTH, StreamMode.GAME)) {
+            g2.onModeChanged(mode)
+            assertEquals(GameJitter.Choice(0, GameJitter.Source.EXTRA), GameJitter.choose(0, GameJitter.Source.EXTRA, g2.active))
+        }
+    }
+
+    @Test fun launchJitterZeroGivesTheOldGameBuffer() {
+        // T-211 A/B: `--ez dev true --ei jitter 0` -> MainActivity passes (0, EXTRA).
+        val c = GameJitter.choose(0, GameJitter.Source.EXTRA, game = true)
+        assertEquals(GameJitter.Choice(0, GameJitter.Source.EXTRA), c)
+        val e = GameModeSettings.Values(60_000L, AudioOutPref.AUTO, penTrail = false, penDot = false)
+        assertEquals(
+            "action=enter overrides=bitrate,audio,pen jitter=0 jitter_src=extra bitrate_kbps=60000 audio_out=auto",
+            GameModeSettings.logFields(GameModeSettings.Change.ENTER, c, e),
+        )
     }
 
     @Test fun launchAdaptiveJitterWinsInGameMode() {
