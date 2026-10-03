@@ -66,6 +66,19 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setFilesShare(on: Boolean) = store.putString(KEY_FILES, if (on) "1" else "0")
 
+    /** Shared folder (T-190, decision 0028); default the MateBridge folder, also for an unknown stored value. */
+    fun filesRoot(): dev.matebridge.client.files.FilesRoot = dev.matebridge.client.files.FilesRoot.parse(store.getString(KEY_FILES_ROOT))
+
+    fun setFilesRoot(r: dev.matebridge.client.files.FilesRoot) = store.putString(KEY_FILES_ROOT, r.id)
+
+    /** Read-only file sharing (T-190, decision 0028); default off, only a stored "1" enables. */
+    fun filesReadOnly(): Boolean = store.getString(KEY_FILES_RO) == "1"
+
+    fun setFilesReadOnly(on: Boolean) = store.putString(KEY_FILES_RO, if (on) "1" else "0")
+
+    /** The scope the next file server start uses (T-190). */
+    fun filesScope(): dev.matebridge.client.files.FilesScope = dev.matebridge.client.files.FilesScope(filesRoot(), filesReadOnly())
+
     /** Mac audio on the tablet (T-095); default on, only a stored "0" disables. */
     fun audioEnabled(): Boolean = store.getString(KEY_AUDIO) != "0"
 
@@ -158,6 +171,8 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"
         const val KEY_FILES = "files_share"
+        const val KEY_FILES_ROOT = "files_root"
+        const val KEY_FILES_RO = "files_read_only"
         const val KEY_AUDIO = "audio_enabled"
         const val KEY_AUDIO_OUT = "audio_out"
         const val KEY_PEN_TRAIL = "pen_trail"

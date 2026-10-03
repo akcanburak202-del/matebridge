@@ -48,7 +48,7 @@ import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.files.FilesController
 import dev.matebridge.client.files.FilesSessionGate
-import dev.matebridge.client.files.FilesSwitch
+import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
@@ -607,7 +607,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
         )
-        files = FilesController({ controller.setFilesInfo(it) }) { ui.post { refreshSettings() } }
+        files = FilesController({ controller.setFilesInfo(it) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -973,7 +973,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (on && !files.hasPermission()) files.openPermissionScreen(this@MainActivity) // onStart re-syncs on return
             syncFiles()
         }
-        override val filesStatus get() = FilesSwitch.statusText(files.status)
+        override val filesRoot get() = settings.filesRoot()
+        override fun selectFilesRoot(r: FilesRoot) { settings.setFilesRoot(r); files.rescope() } // T-190
+        override val filesReadOnly get() = settings.filesReadOnly()
+        override fun setFilesReadOnly(on: Boolean) { settings.setFilesReadOnly(on); files.rescope() } // T-190
+        override val filesStatus get() = files.statusText
 
         override val clipboardShare get() = clipboard.sync.enabled
         override fun setClipboardShare(on: Boolean) { // T-055
