@@ -225,6 +225,8 @@ public final class TabletFilesBridge: @unchecked Sendable {
             apply(next)
         case .unmountPath(let path, let local):
             if Self.mountPoints(localPort: local).contains(path) { unmount(path) }
+        case .forceUnmount(let path, let local):
+            apply(planner.forceUnmountFinished(path: path, localPort: local, gone: forceUnmount(path, localPort: local)))
         case .mount(let local, let secret, let gen, let knownPath):
             mount(localPort: local, secret: secret, generation: gen, knownPath: knownPath)
         case .reveal(let path):
@@ -323,6 +325,16 @@ public final class TabletFilesBridge: @unchecked Sendable {
             let path = status == 0 ? paths.first : nil  // the path itself is not logged
             logger.log(path != nil ? .info : .warning, "mount", sessionID: 0, generation: 0,
                        fields: path != nil ? "result=ok ms=\(ms)" : "result=error code=\(status) ms=\(ms)")
+            if status == EEXIST {
+                // NetFS already has this URL mounted (T-209): the planner decides whether that volume is a dead
+                // leftover of ours to force out, from our mount points on this port.
+                let next = planner.mountCollided(generation: generation, localPort: localPort,
+                                                 mountedNow: Self.mountPoints(localPort: localPort))
+                let forces = next.filter { if case .forceUnmount = $0 { return true } else { return false } }.count
+                logger.log(.info, "mount_exists", sessionID: 0, generation: 0, fields: "dead_ours=\(forces)")
+                apply(next)
+                return
+            }
             apply(planner.mountFinished(generation: generation, localPort: localPort, path: path))
         }
         if rc != 0 {
@@ -341,6 +353,23 @@ public final class TabletFilesBridge: @unchecked Sendable {
             return true
         }
         logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=error code=\(errno)")
+        return false
+    }
+
+    /// Forced (T-209), only for a dead leftover the planner chose, and only while `path` is still a WebDAV volume
+    /// from `127.0.0.1:<localPort>`. Never shows UI. Returns true when the volume is not mounted any more.
+    private func forceUnmount(_ path: String, localPort: UInt16) -> Bool {
+        let key = TabletFilesPlanner.normalizedPath(path)
+        guard Self.mountPoints(localPort: localPort).contains(where: { TabletFilesPlanner.normalizedPath($0) == key })
+        else {
+            logger.log(.info, "unmount", sessionID: 0, generation: 0, fields: "result=gone force=1")
+            return true
+        }
+        if Darwin.unmount(path, MNT_FORCE) == 0 {
+            logger.log(.info, "unmount", sessionID: 0, generation: 0, fields: "result=ok force=1")
+            return true
+        }
+        logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=error code=\(errno) force=1")
         return false
     }
 

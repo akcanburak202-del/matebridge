@@ -38,6 +38,20 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
     return p
 }
 
+/// The device case of T-209 after a failed first force: a volume busy at session end, a new session with a new token
+/// on the same forward port, the leftover still there and dead.
+private func deadLeftoverWithForward() -> TabletFilesPlanner {
+    var p = mounted()
+    _ = p.sessionEnded()
+    _ = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+    _ = p.sessionStarted(transport: .usb, capable: true)
+    let install = p.filesInfo(restarted)
+    _ = p.forceUnmountFinished(path: volume, localPort: 47010, gone: false)
+    _ = p.forwardFinished(generation: installGen(install)!, localPort: 47010)
+    #expect(p.leftoverPaths == [volume])
+    return p
+}
+
 @Suite struct TabletFilesPlannerTests {
     // MARK: Forward
 
@@ -468,7 +482,10 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
     @Test func busyOldVolumeIsOursAndItsLaterUnmountIsNotAnEject() {
         var p = mounted()
         _ = p.filesInfo(restarted)
-        let gen = mountGen(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]))!
+        // T-209: the busy old volume is dead (new token), so it is forced first; here the force fails too.
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+            == [.forceUnmount(path: volume, localPort: 47010)])
+        let gen = mountGen(p.forceUnmountFinished(path: volume, localPort: 47010, gone: false))!
         _ = p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad-1")
         let old = p.volumeUnmounted(path: volume, mountedNow: ["/Volumes/MatePad-1"])
         #expect(!old)
@@ -609,6 +626,218 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
             == [.unmountPath(path: "/Volumes/MatePad-1", localPort: 47010)])
         #expect(p.mountFinished(generation: gen, localPort: 47010, path: volume).isEmpty)
         #expect(p.menu == .ready(lastMountFailed: false))
+    }
+
+    // MARK: Dead leftovers (T-209)
+
+    @Test func tokenChangeWithABusyVolumeForcesItOnceThenRemounts() {
+        var p = mounted()
+        #expect(p.filesInfo(restarted) == [.unmount(localPort: 47010)])
+        // EBUSY: the old volume stays, but its token is dead, so it is forced once and the remount waits for that.
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume + "/"])
+            == [.forceUnmount(path: volume, localPort: 47010)])
+        #expect(p.leftoverPaths == [volume])
+        #expect(p.watchedPaths.isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: false))
+        let remount = p.forceUnmountFinished(path: volume, localPort: 47010, gone: true)
+        #expect(remount == [.mount(localPort: 47010, secret: FilesSecret(newToken), generation: mountGen(remount)!,
+                                   knownPath: nil)])
+        #expect(p.leftoverPaths.isEmpty)
+        #expect(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true).isEmpty)  // not pending any more
+        #expect(p.mountFinished(generation: mountGen(remount)!, localPort: 47010, path: volume).isEmpty)  // no reveal
+        #expect(p.remountsAfterRestart)
+        // The next restart with a busy volume forces again (a new leftover), never a loop within one READY.
+        #expect(p.filesInfo(ready) == [.unmount(localPort: 47010)])
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+            == [.forceUnmount(path: volume, localPort: 47010)])
+        #expect(mountGen(p.forceUnmountFinished(path: volume, localPort: 47010, gone: false)) != nil)
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+    }
+
+    @Test func busyVolumeLeftAtSessionEndIsForcedOnceTheNextSessionHasANewToken() {
+        // The device case: the tablet app restarts while "MatePad" is open in Finder.
+        var p = mounted()
+        #expect(p.sessionEnded() == [.unmount(localPort: 47010), .removeForward(localPort: 47010)])
+        // Session end says nothing about the token: busy, so it stays, and nothing is forced.
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        #expect(p.leftoverPaths == [volume])
+        #expect(p.watchedPaths.isEmpty)
+        _ = p.forwardRemoved(localPort: 47010, success: true)
+        #expect(p.sessionStarted(transport: .usb, capable: true).isEmpty)
+        let actions = p.filesInfo(restarted)
+        #expect(actions == [.forceUnmount(path: volume, localPort: 47010),
+                            .installForward(remotePort: 47010, generation: installGen(actions)!)])
+        #expect(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true).isEmpty)  // no intent: no mount
+        #expect(p.forwardFinished(generation: installGen(actions)!, localPort: 47010).isEmpty)
+        // The user's open now mounts with the new token and lands on the freed mount point.
+        let open = p.openRequested()
+        #expect(open == [.mount(localPort: 47010, secret: FilesSecret(newToken), generation: mountGen(open)!,
+                                knownPath: nil)])
+        #expect(p.mountFinished(generation: mountGen(open)!, localPort: 47010, path: volume) == [.reveal(path: volume)])
+        #expect(p.leftoverPaths.isEmpty)
+    }
+
+    @Test func remountAfterOffWaitsForThePendingForce() {
+        var p = mounted()
+        _ = p.filesInfo(.off)
+        // OFF: no READY, so the busy volume is not provably dead yet.
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        let actions = p.filesInfo(restarted)
+        #expect(actions == [.forceUnmount(path: volume, localPort: 47010),
+                            .installForward(remotePort: 47010, generation: installGen(actions)!)])
+        #expect(p.forwardFinished(generation: installGen(actions)!, localPort: 47010).isEmpty)  // force pending
+        #expect(mountGen(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true)) != nil)
+    }
+
+    @Test func mountCollidingWithADeadLeftoverForcesItAndRetriesOnce() {
+        var p = mounted()
+        _ = p.sessionEnded()
+        _ = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+        _ = p.sessionStarted(transport: .usb, capable: true)
+        let install = p.filesInfo(restarted)
+        #expect(p.forceUnmountFinished(path: volume, localPort: 47010, gone: false).isEmpty)  // the first force failed
+        #expect(p.leftoverPaths == [volume])
+        _ = p.forwardFinished(generation: installGen(install)!, localPort: 47010)
+        let gen = mountGen(p.openRequested())!
+        // NetFS: EEXIST, the URL is still mounted at our dead volume's path.
+        #expect(p.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume])
+            == [.forceUnmount(path: volume, localPort: 47010)])
+        #expect(p.menu == .mounting)
+        #expect(p.openRequested().isEmpty)
+        let retry = p.forceUnmountFinished(path: volume, localPort: 47010, gone: true)
+        #expect(retry == [.mount(localPort: 47010, secret: FilesSecret(newToken), generation: mountGen(retry)!,
+                                 knownPath: nil)])
+        #expect(p.mountFinished(generation: mountGen(retry)!, localPort: 47010, path: volume) == [.reveal(path: volume)])
+        #expect(p.menu == .ready(lastMountFailed: false))
+    }
+
+    @Test func collisionRetryIsTriedOnlyOnce() {
+        var p = deadLeftoverWithForward()
+        let gen = mountGen(p.openRequested())!
+        #expect(p.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume]).count == 1)
+        let retry = mountGen(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true))!
+        // Something remounted the URL in between: no second force, the failure shows.
+        #expect(p.mountCollided(generation: retry, localPort: 47010, mountedNow: [volume]).isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: true))
+
+        var q = deadLeftoverWithForward()
+        let qGen = mountGen(q.openRequested())!
+        _ = q.mountCollided(generation: qGen, localPort: 47010, mountedNow: [volume])
+        #expect(q.forceUnmountFinished(path: volume, localPort: 47010, gone: false).isEmpty)  // force failed: no retry
+        #expect(q.menu == .ready(lastMountFailed: true))
+        #expect(q.leftoverPaths == [volume])
+    }
+
+    @Test func collisionWithAVolumeThatIsNotOursForcesNothing() {
+        // The user's own "MatePad" (or anything we did not leave behind) is never forced.
+        var p = forwarded()
+        let gen = mountGen(p.openRequested())!
+        #expect(p.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume]).isEmpty)
+        #expect(p.menu == .ready(lastMountFailed: true))
+        // A dead leftover that is not what blocks this URL is not forced by the collision either.
+        var q = deadLeftoverWithForward()
+        let qGen = mountGen(q.openRequested())!
+        #expect(q.mountCollided(generation: qGen, localPort: 47010, mountedNow: ["/Volumes/MatePad-1"]).isEmpty)
+        #expect(q.mountCollided(generation: qGen, localPort: 47010, mountedNow: [volume]).isEmpty)  // stale now
+        #expect(q.menu == .ready(lastMountFailed: true))
+    }
+
+    @Test func liveTokenVolumeIsNeverForced() {
+        // Session end with the same server still running: the volume is alive again with the next forward.
+        var ended = mounted()
+        _ = ended.sessionEnded()
+        #expect(ended.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        _ = ended.sessionStarted(transport: .usb, capable: true)
+        let install = ended.filesInfo(ready)  // same token
+        #expect(install == [.installForward(remotePort: 47010, generation: installGen(install)!)])
+        _ = ended.forwardFinished(generation: installGen(install)!, localPort: 47010)
+        let gen = mountGen(ended.openRequested())!
+        #expect(ended.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume]).isEmpty)
+        #expect(ended.menu == .ready(lastMountFailed: true))
+        // A later new token makes it dead: then it is forced.
+        #expect(ended.filesInfo(restarted).first == .forceUnmount(path: volume, localPort: 47010))
+
+        // OFF and USB loss teardowns: busy volume kept, nothing forced while the token is unknown or the same.
+        var off = mounted()
+        _ = off.filesInfo(.off)
+        #expect(off.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        let back = off.filesInfo(ready)
+        #expect(back == [.installForward(remotePort: 47010, generation: installGen(back)!)])
+        var unplugged = mounted()
+        _ = unplugged.usbDevice(present: false)
+        #expect(unplugged.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        #expect(!unplugged.usbDevice(present: true).contains { if case .forceUnmount = $0 { true } else { false } })
+        var quitting = mounted()
+        _ = quitting.shutdown()
+        #expect(quitting.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        #expect(quitting.leftoverPaths.isEmpty)
+    }
+
+    @Test func forcedUnmountIsNotAnEject() {
+        var p = mounted()
+        _ = p.filesInfo(restarted)
+        _ = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+        let early = p.volumeUnmounted(path: volume, mountedNow: [])  // the force's notification, before its result
+        #expect(!early)
+        #expect(p.remountsAfterRestart)
+        let gen = mountGen(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true))!
+        let beforeRemount = p.volumeUnmounted(path: volume, mountedNow: [])
+        #expect(!beforeRemount)
+        _ = p.mountFinished(generation: gen, localPort: 47010, path: volume)
+        let afterRemount = p.volumeUnmounted(path: volume, mountedNow: [volume])
+        #expect(!afterRemount)
+        #expect(p.remountsAfterRestart)
+    }
+
+    @Test func leftoverIsForgottenWhenItIsGoneOrANewMountTakesItsPath() {
+        var p = mounted()
+        _ = p.sessionEnded()
+        _ = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+        _ = p.sessionStarted(transport: .usb, capable: true)
+        let install = p.filesInfo(ready)
+        _ = p.forwardFinished(generation: installGen(install)!, localPort: 47010)
+        // The next teardown's unmount detached it (the user closed the Finder window): forgotten, never forced.
+        _ = p.filesInfo(.off)
+        #expect(p.unmountFinished(localPort: 47010, detached: [volume], stillMounted: []).isEmpty)
+        #expect(p.leftoverPaths.isEmpty)
+        #expect(p.filesInfo(restarted).allSatisfy { if case .forceUnmount = $0 { false } else { true } })
+
+        // A mount of ours that lands on its mount point means it is gone.
+        var q = mounted()
+        _ = q.sessionEnded()
+        _ = q.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+        _ = q.sessionStarted(transport: .usb, capable: true)
+        let qInstall = q.filesInfo(ready)
+        _ = q.forwardFinished(generation: installGen(qInstall)!, localPort: 47010)
+        let gen = mountGen(q.openRequested())!
+        _ = q.mountFinished(generation: gen, localPort: 47010, path: volume)
+        #expect(q.leftoverPaths.isEmpty)
+    }
+
+    @Test func leftoversAreBounded() {
+        var p = forwarded()
+        var gen = mountGen(p.openRequested())!
+        for i in 0..<6 {
+            _ = p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad-\(i)")
+            _ = p.filesInfo(.off)
+            // `volume` is busy too, but it is not ours: never remembered.
+            _ = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume] + (0...i).map {
+                "/Volumes/MatePad-\($0)"
+            })
+            let install = p.filesInfo(ready)  // same token: nothing forced
+            gen = mountGen(p.forwardFinished(generation: installGen(install)!, localPort: 47010))!  // the remount
+        }
+        #expect(p.leftoverPaths == (2..<6).map { "/Volumes/MatePad-\($0)" })
+    }
+
+    @Test func teardownDropsAPendingCollisionRetry() {
+        var p = deadLeftoverWithForward()
+        let gen = mountGen(p.openRequested())!
+        _ = p.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume])
+        _ = p.sessionEnded()
+        #expect(p.forceUnmountFinished(path: volume, localPort: 47010, gone: true).isEmpty)
+        #expect(p.leftoverPaths.isEmpty)
+        #expect(p.mountCollided(generation: gen, localPort: 47010, mountedNow: [volume]).isEmpty)
     }
 
     @Test func pathsAreComparedWithoutTrailingSlashes() {
