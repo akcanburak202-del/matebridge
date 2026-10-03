@@ -1,6 +1,6 @@
 # 0026 — Deney ayarları (knob) politikası ve sınıflandırması
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -31,7 +31,7 @@ Ek sorunlar:
 - **(c) Envanter, sınıflandırma ve geliştirici kapısı (önerilen).**
 
 ## Karar
-Önerilen: **(c)**.
+Seçilen: **(c)**. Kullanıcı 2026-10-03'te onayladı, GL sunum yolunun ve `nw` soketlerinin kaldırılması dahil.
 
 1. **Envanter.** Her ayar `docs/KNOBS.md`'de listelenir: kartı, varsayılanı, sınıfı (kalır / yalnızca geliştirici / kaldırılır) ve sonucu. Tablo H raporundaki L02 envanteridir.
 2. **Yeni ayar kuralı.** Yeni ayarların varsayılanı kapalıdır ve onları kapatacak kartı adlandırırlar. Deneyi sonuçlanan ayar, kapanış kartında ya da hemen ardından kaldırılır.
@@ -45,7 +45,7 @@ Ek sorunlar:
    T-019 ve T-067 "yapılmayacak" olarak kapanır.
 6. **Kaldırılmayacaklar (audit K4).** İstemcinin Wi-Fi TOS, `wifi_ll` ve WifiLock ayarları, T-127 bunları `bsd` altında yeniden ölçene kadar geliştirici ayarı olarak kalır. 2026-10-01'deki "etkisiz" sonucu `nw` tavanı yüzünden geçersiz.
 
-**Kullanıcı onayı bekliyor.** Kullanıcının cevaplaması gereken (manifest §5 soru 5): GL sunum yolunun ve Network.framework (`nw`) soketlerinin kaldırılmasını onaylıyor musun? İkisi de gayriresmî olarak "seçenek olarak dursun" denmişti.
+**Onaylandı (2026-10-03).** Sorulan (manifest §5 soru 5): GL sunum yolunun ve Network.framework (`nw`) soketlerinin kaldırılmasını onaylıyor musun? İkisi de gayriresmî olarak "seçenek olarak dursun" denmişti.
 
 ## Sonuçlar
 - **Kazanılan:**

@@ -1,7 +1,7 @@
 ---
 id: T-145
 title: Log and show the host build commit
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-154
 title: Exclude app data from device-to-device and cloud transfer
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

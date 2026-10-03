@@ -1,7 +1,7 @@
 ---
 id: T-146
 title: Log and show the client build commit
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

@@ -1,6 +1,6 @@
 # 0010 — Oturum şifrelemesi: eşleşme anahtarı + geçici ECDH, AES-256-GCM kayıtları
 
-- **Durum:** kabul
+- **Durum:** kabul; istemcinin eşleşme davranışı kısmen 0018 ile değişti (2026-10-03)
 - **Tarih:** 2026-09-30
 
 ## Bağlam

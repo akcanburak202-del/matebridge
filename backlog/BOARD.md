@@ -14,16 +14,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
-| [T-145](tasks/T-145-host-build-identity.md) | Log and show the host build commit | 6 | mac-host-dev | [] |
-| [T-146](tasks/T-146-client-build-identity.md) | Log and show the client build commit | 6 | android-client-dev | [] |
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
-| [T-148](tasks/T-148-host-login-item-retry.md) | Retry login-item registration after a failure | 6 | mac-host-dev | [] |
 | [T-149](tasks/T-149-ci-merge-gate.md) | Add a component-split CI merge gate and a safe fixture CLI | 6 | orchestrator | [] |
 | [T-150](tasks/T-150-client-pending-pair-trust.md) | Keep new pair keys pending until local confirmation and pair only on user action | 6 | android-client-dev | [T-042, T-044] |
 | [T-151](tasks/T-151-client-trust-ui.md) | Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut" | 6 | android-client-dev | [T-150] |
 | [T-152](tasks/T-152-host-paired-proof-first.md) | Activate PAIRED sessions only after the first authenticated record | 6 | mac-host-dev | [T-041] |
 | [T-153](tasks/T-153-client-files-session-lifetime.md) | Run the WebDAV server only during an accepted, trusted USB session | 6 | android-client-dev | [T-151] |
-| [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |
 | [T-155](tasks/T-155-host-orphan-approval-guard.md) | Flag a replaced orphan approval request on the Mac | 6 | mac-host-dev | [T-152] |
 | [T-156](tasks/T-156-client-key-mismatch-state.md) | Show "anahtar uyuşmuyor" after repeated PAIRED auth failures | 6 | android-client-dev | [T-151] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
@@ -221,3 +217,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-142](tasks/T-142-stall-detector-opt-in.md) | Ses takılma dedektörünü (mb-stall) açılış parametresine bağla, varsayılan kapalı | 5 | android-client-dev | [T-120, T-141] |
 | [T-143](tasks/T-143-game60-mode.md) | "Oyun 60" modunu ekle, mevcut Oyun modunu "Oyun 120" olarak adlandır | 5 | android-client-dev | [T-109] |
 | [T-144](tasks/T-144-drawing-mode.md) | "Çizim" modunu ekle (120 fps, %90) ve ölçek deneme parametresi | 5 | android-client-dev | [T-143] |
+| [T-145](tasks/T-145-host-build-identity.md) | Log and show the host build commit | 6 | mac-host-dev | [] |
+| [T-146](tasks/T-146-client-build-identity.md) | Log and show the client build commit | 6 | android-client-dev | [] |
+| [T-148](tasks/T-148-host-login-item-retry.md) | Retry login-item registration after a failure | 6 | mac-host-dev | [] |
+| [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |

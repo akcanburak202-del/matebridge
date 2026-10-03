@@ -1,6 +1,6 @@
 # 0018 — Tablet tarafında güven onayı ve yalnızca kullanıcının başlattığı eşleşme
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -41,9 +41,9 @@ Ek bulgu (A2): AUTO modunda USB'ye taşınan aday bağlantı, şifresiz PAIRED/A
   - Taşıma adayı, ancak ilk doğrulanmış host kaydından sonra terfi eder (T-205). Kanıt beklenirken girdi eski bağlantıdan akmaya devam eder, böylece hiçbir bırakma olayı kaybolmaz.
 
 ## Karar
-Önerilen: **(c)**. Tel biçimi değişmez. Mesaj, alan, fixture ve `crypto_vectors.json` aynı kalır. **Kullanıcı onayı bekliyor.**
+Seçilen: **(c)**. Tel biçimi değişmez. Mesaj, alan, fixture ve `crypto_vectors.json` aynı kalır. **Kullanıcı 2026-10-03'te onayladı:** Parsec/onay-sonrası akışı korunur ve her eşleşme tablette bir dokunuşla başlar.
 
-Kullanıcının cevaplaması gerekenler (manifest §5 soru 3):
+Kullanıcıya sorulan ve onaylanan (manifest §5 soru 3):
 1. Parsec/onay-sonrası akışı kalsın mı? Önerilen tasarım onu koruyor: kodu tablette Parsec'e geçmeden önce ya da döndükten sonra onaylarsın.
 2. Her eşleşmenin tablette bir dokunuşla ("Yeni Mac bulundu — Eşleş") başlamasını kabul ediyor musun? Bu, Mac'te "Onaylı cihazları unut" dedikten sonra da geçerli.
 

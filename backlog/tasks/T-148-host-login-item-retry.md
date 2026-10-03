@@ -1,7 +1,7 @@
 ---
 id: T-148
 title: Retry login-item registration after a failure
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

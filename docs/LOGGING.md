@@ -26,6 +26,16 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 - Ekran görüntüsü/kare içeriği loglanmaz.
 - Loglar repoya commit'lenmez (`.gitignore`).
 
+## Build kimliği (her iki taraf, T-145/T-146)
+
+Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığını log'dan okumak için kullanılır.
+
+- Mac (`session`, `host.log`'un ilk satırı, `listening`'den önce): `ev=app_start version=<CFBundleShortVersionString> build=<YYYYMMDDhhmmss> sha=<kısa SHA>[-dirty] os=<macOS sürüm metni>`.
+- Tablet (`MB/session`): `ev=app_start version=<versionName> sha=<kısa SHA>[-dirty] built=<UTC, dakika> sdk=<API> os_build=<Build.DISPLAY>`. Süreç başına bir kez; aktivite yeniden yaratılınca tekrarlanmaz.
+- Değer içindeki boşluk (Mac'te `=` de) `_` olur, böylece her alan tek `key=value` kalır; ör. `os=Version_27.0.1_(Build_26A434)`.
+- Bilinmeyen değer `unknown` (`swift run`, git olmadan derleme). Seri numarası, cihaz kimliği ya da ad yazılmaz.
+- Tablette `versionCode` commit sayısıdır; daha az commit'li bir dalın APK'sı `adb install -r -d` ister (`scripts/install-apk.sh` bunu yapar). Eşleşme anahtarları silineceği için uygulama asla kaldırılmaz.
+
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
 - `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd|nw notsent_lowat_kb=<n>|na control_socket=bsd|nw tcp_log=auto|on|off`: dinleyiciler hazır.
