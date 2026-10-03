@@ -32,7 +32,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
-| [T-213](tasks/T-213-game-display-protocol.md) | STREAM_PREFS optional game display group: codecs and fixture tests (Swift + Kotlin) | 6 | orchestrator | [] |
 | [T-214](tasks/T-214-host-game-display.md) | Host: 1x game display at the requested pixel size (decision 0029) | 6 | mac-host-dev | [T-213] |
 | [T-215](tasks/T-215-client-game-resolution.md) | Client: "Oyun çözünürlüğü" setting and game display prefs (decision 0029) | 6 | android-client-dev | [T-213] |
 | [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
@@ -226,3 +225,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-209](tasks/T-209-host-force-unmount-stale-volume.md) | Force-unmount a stale tablet files volume when its token is dead, then remount | 6 | mac-host-dev | [T-206] |
 | [T-210](tasks/T-210-client-game-mode-adaptive-pacer-ab.md) | Let the dev jitter knob select the adaptive pacer in game modes (A/B for T-208) | 6 | android-client-dev | [T-208, T-185] |
 | [T-211](tasks/T-211-client-game-mode-adaptive-default.md) | Game modes use the adaptive pacer by default (decision 0014 §2 amended) | 6 | android-client-dev | [T-208, T-210] |
+| [T-213](tasks/T-213-game-display-protocol.md) | STREAM_PREFS optional game display group: codecs and fixture tests (Swift + Kotlin) | 6 | orchestrator | [] |

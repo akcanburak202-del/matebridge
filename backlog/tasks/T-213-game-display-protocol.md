@@ -1,7 +1,7 @@
 ---
 id: T-213
 title: STREAM_PREFS optional game display group: codecs and fixture tests (Swift + Kotlin)
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -18,6 +18,8 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/protocol/Messages.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/protocol/Codec.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/protocol/FixtureTest.kt
+  - host-mac/Tests/MateBridgeCoreTests/CodecTests.swift   # orchestrator-approved 2026-10-04 (old 10-byte rule test)
+  - client-android/app/src/test/kotlin/dev/matebridge/client/protocol/CodecRulesTest.kt   # same
   - backlog/tasks/T-213-game-display-protocol.md
 ---
 
@@ -50,3 +52,5 @@ Karar 0029 (oyun ekranı) için tel biçimi: `STREAM_PREFS`'in sonuna isteğe ba
 - **Varsayımlar:** Grup "kalan bayt > 0" ile algılanır; ≥12 baytta fazlası her mesajdaki gibi yok sayılır. `normalized` ekran alanlarını doğrulamadan geçirir (politika T-214). Çağıran kod değişmedi; herkes 0×0 gönderir/alır, tel baytları eski fixture'larla aynı. `StreamPrefsStore` (host, T-049) ekran alanlarını henüz saklamıyor (T-214 işi).
 - **Test edilmeyenler / cihazda doğrulananlar:** Cihaz testi yok (davranış değişmiyor). `./scripts/check.sh` ALL OK, `gen.py --check` yeşil. XCTest/Swift Testing: `streamPrefsOptionalDisplayGroupIsAllOrNothing` + fixture testleri; JVM: `CodecRulesTest.streamPrefsOptionalDisplayGroupIsAllOrNothing` + `FixtureTest`.
 - **Açık sorular:** `CodecTests.swift` ve `CodecRulesTest.kt` kartın `files:` listesinde yoktu ama dokunmak zorunluydu: ikisindeki eski kural testi STREAM_PREFS'e 2 fazla bayt ekleyip (10 bayt) kabul edilmesini bekliyordu; yeni kural (9–11 bayt kısa) bunu reddeder. Test `+ [0,0,0,0,9,9]` (14 bayt, grup 0×0, fazlası yok sayılır) olarak düzeltildi; yeni kenar testleri de bu iki dosyaya eklendi (yardımcı `frame`/`decodeOne` orada). Kotlin `FixtureTest` geçersiz fixture'larda hata türünü denetlemiyor; `SHORT_PAYLOAD` türü `CodecRulesTest`'te ayrıca denetlenir.
+
+**Orkestratör notu:** Plan, kod commit'inden sonra yazıldı (Codex P3); iki test dosyası kapsam dışıydı ve sonradan onaylandı.
