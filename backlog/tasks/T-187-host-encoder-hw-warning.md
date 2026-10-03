@@ -1,7 +1,7 @@
 ---
 id: T-187
 title: Warn when VideoToolbox did not select the hardware encoder
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-204]
