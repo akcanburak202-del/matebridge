@@ -1,7 +1,7 @@
 ---
 id: T-168
 title: Break client latency into stages with percentiles; stop clamping; fix stats maps; log decoder hardware
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-161]
@@ -88,7 +88,20 @@ Source: external architecture review 2026-10-03 (H05, LM2, LM5, LM6, D5, PF7); v
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `ClockSync`: `latencySignedUs(cap, clientUs)` (işaretli, saat `System.nanoTime` µs); `latencyUs` = onun ≥0 kırpılmışı (davranış aynı).
+2. `IntervalHistogram`/`IntervalSummary`: kesin `maxUs` (pencere birleştirmede de korunur); negatif örnek kabul eder.
+3. `VideoStats`:
+   - `latencyOf` → `(captureHostUs, clientUs) -> Long?` işaretli. `onOutput(pts, nowUs, clientUs)`: ham değer `cap_dec` dağılımına, `<0` ise `lat_neg`; ortalama (STATS `latency_avg_us`, A/V girişi) bugünkü gibi kırpılmış örneklerin ortalaması.
+   - Yeni: `onReadySlot(us)`, `onReleased(pts, captureUs, clientUs, expectCallback)` (rendered++ ve `cap_rel`), `onDiscarded()`, `onRenderCallback(pts, captureUs, clientUs)` (`cap_cb`; sıralı bekleyen kümesi → `render_cb_missing`).
+   - Kare haritaları ekleme sırasına göre sınırlı (`keys.min()` yerine en eski çıkar) ve `resetFrames()` ile kod çözücü başlangıcında ve `closeWindow()`'da temizlenir.
+   - Snapshot'a `capDec/readySlot/capRel/capCb`, `latNeg`, `discarded`, `renderCbMissing` (varsayılanlı, sona).
+4. `VideoRenderer`: kod çözücü başında `stats.resetFrames()`; `onOutput`'a `readyNs`; karar varsa `slotNs−readyNs`; `CodecSink` idx→pts tutar, `release/releaseNow`'da `cap_rel`, `discard`'da `discarded`; render geri çağrısı (ana iş parçacığı, paylaşılan kilit yok) `cap_cb`. `codec_start`'a `is_hw= sw_only=`, yazılım çözücüde bir kez `W decoder ev=codec_software`.
+5. `DecoderCodec`: salt okunur `isHardwareAccelerated`/`isSoftwareOnly` (varsayılan null), `MediaCodecDecoder` `codecInfo`'dan; `DecoderFault` açıkça devreder.
+6. `StatsFormat`: `stageFields()` (boşsa `-`), `latencyStageFields()`; bindirmede "Gecikme" → "Yak→çöz", yeni satır `Hazır→slot p50 … | saat ±…`.
+7. `MainActivity` (yalnız `latencyOf` bağlantısı, `statsTick`, `writeStatsLog`): `released=` (+`shown=` takma ad), render satırının sonuna yeni alanlar, `clock_unc_us`.
+8. Testler (JVM): ClockSync işaretli, histogram max, 70 bayat yüksek anahtar + seq 0, atılanlar `cap_rel` dışında, `render_cb_missing`, alan biçimi, bindirme, `codec_software` uyarısı. LOGGING.md ayrı blok.
+
+Riskler: paylaşılan kilit altında yalnız bellek içi iş (stats + ClockSync monitörü, ikisi de yaprak kilit); render geri çağrısı paylaşılan kilidi almaz.
 
 ## Handoff
 
