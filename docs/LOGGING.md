@@ -215,12 +215,22 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran bekletme süresi boyunca tutulur. Süre `MATEBRIDGE_DISPLAY_KEEP_S` (10…86400 sn, aksi halde 10) ve duvar saatiyle sayılır (sürekli saat, Mac uykusunda da ilerler).
 
-- `ev=display_parked keep_s=<n> refresh_hz=<hz>`: oturum bitti, ekran bekletiliyor (eski `display_grace_started`'ın yerine). Bekleme sırasında `cadence`/`latency` satırı çıkmaz.
+- `ev=display_parked keep_s=<n> refresh_hz=<hz> mode=<w>x<h>@2x|@1x`: oturum bitti, ekran bekletiliyor (eski `display_grace_started`'ın yerine). Bekleme sırasında `cadence`/`latency` satırı çıkmaz.
 - `ev=display_park_skipped reason=no_display`: bekletilecek ekran yoktu (işlem hattı tam o anda düşmüştü).
-- `ev=display_unparked parked_ms=<n> refresh_hz=<hz>`: aynı tablet döndü, bekletilen ekranda yeni yakalama ve encoder kurulur. Ekran korunursa ardından `ev=pipeline_started display=reused width=… height=… encoded=…` gelir, `display_created` gelmez.
-- `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=offline`: yenileme hızı değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, 0,7 sn sonra yenisi kurulur (`display_created`). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
-- `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka ekran boyutu, `shutdown` uygulama kapanıyor.
-- `ev=display_created width=… height=… encoded=…`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
+- `ev=display_unparked parked_ms=<n> refresh_hz=<hz>`: aynı tablet döndü, bekletilen ekranda yeni yakalama ve encoder kurulur. Ekran korunursa ardından `ev=pipeline_started display=reused width=… height=… encoded=… mode=…` gelir, `display_created` gelmez.
+- `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=mode_change mode=<eski>-><yeni> refresh_hz=<eski>-><yeni>` / `reason=offline`: yenileme hızı ya da ekran kipi (piksel boyutu, HiDPI; doğal ekran ↔ oyun ekranı, T-214) değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, son kaldırmadan 0,7 sn sonra yenisi kurulur (`display_created`). T-214'ten beri bu bekleme her yeni ekran için geçerlidir (`display_teardown` ve başarısız kurulum sonrası da). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
+- `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka doğal (HELLO) ekran boyutu (oyun ekranına geçiş değil), `shutdown` uygulama kapanıyor.
+- `ev=display_created width=… height=… encoded=… mode=<w>x<h>@2x|@1x`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
+
+## Oyun ekranı (Mac, `net`, T-214, karar 0029)
+
+`STREAM_PREFS.display_*` geçerliyse sanal ekran HiDPI olmadan (1x) o piksel boyutunda kurulur. Kip metni `<w>x<h>@2x` (doğal ekran) ya da `<w>x<h>@1x` (oyun ekranı).
+
+- `ev=stream_prefs … display=<kip> requested_display=<w>x<h> game_display=none|applied|rejected|disabled`: `display` uygulanacak ekran kipi; `none` istek 0×0, `rejected` boyut kurallara uymadı (0×0 sayıldı, protokol hatası değil), `disabled` bu süreçte daha önce `game_display_failed` oldu.
+- `ev=stream_reconfigure … display=<eski>-><yeni>`: kip değişimi ekranı yeniden kurar (`display_recreate reason=mode_change`).
+- `ev=stream_session … display=<kip>`: oturum başındaki kip (hatırlanan tercih oyun ekranıysa doğrudan oyun boyutu).
+- `W net ev=game_display_failed applied=<kip> requested=<kip> config_id=<n> encoded=<w>x<h> bitrate_kbps=<n>`: 1x ekran kurulamadı (ekran oluşmadı ya da kip seçilemedi; yakalamanın ekranı bulamaması sayılmaz); tercih ekran yok sayılarak yeniden uygulandı ve yeni `config_id` ile bildirildi. Süreç boyunca bir daha oyun ekranı kurulmaz. Önünde `display_create_failed error=…` vardır.
+- `video ev=cadence_setup display[requested=… mode=<kip> mode_selected=… applied=…]` ve `encoder ev=profile … display=<kip>`: kurulan ekranın kipi.
 
 ## Tablette eşleşme güveni (tablet, `MB/session`, T-150/T-151, karar 0018)
 
@@ -322,7 +332,7 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 
 ## Akış profili (Mac, `encoder`, T-204)
 
-- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
+- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> display=<w>x<h>@2x|@1x sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
  - Kodlayıcı her oluşturulduğunda bir kez yazılır: her akış başlangıcında ve her yeniden başlatmada (ör. `STREAM_PREFS`). Hemen `ev=encoder_config`'ten sonra gelir.
  - `sha=` `ev=app_start` ile aynı kaynaktan gelir (`BuildInfo`, T-145).
  - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S` (hepsi `MATEBRIDGE_` önekli).

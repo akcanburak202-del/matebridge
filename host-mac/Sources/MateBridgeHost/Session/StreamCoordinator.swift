@@ -17,7 +17,7 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private enum Event: Sendable {
         case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?,
-                          base: VideoSettings?, transport: SessionTransport)
+                          base: VideoSettings?, prefs: StreamPrefs?, transport: SessionTransport)
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason)
@@ -46,6 +46,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         var settings: VideoSettings
         /// Settings derived from the HELLO and the experiment knobs, before any `STREAM_PREFS`.
         var base: VideoSettings
+        /// The `STREAM_PREFS` `settings` were derived from (remembered at start, then the latest applied); nil =
+        /// none (`settings == base`). Re-applied without the game display by `game_display_failed`.
+        var prefs: StreamPrefs?
         /// USB or Wi-Fi (T-088), from the session's control connection.
         var transport: SessionTransport
     }
@@ -124,6 +127,11 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var liveSessionID: UInt32?
 
     private let prefsStore: StreamPrefsStoring
+    /// T-214: after a 1x game display failed to come up, no game display for the rest of the process (PROTOCOL.md
+    /// 0x05, `game_display_failed`). Read by the entry points (any thread) and the event loop.
+    private let gameDisplayLock = NSLock()
+    private var gameDisplay = GameDisplayFallback()
+    private var allowsGameDisplay: Bool { gameDisplayLock.withLock { gameDisplay.allowsGameDisplay } }
 
     /// - Parameter graceUs: keep time of a parked display; nil reads `MATEBRIDGE_DISPLAY_KEEP_S` (default 10 s).
     public convenience init(graceUs: UInt64? = nil) {
@@ -193,26 +201,30 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// cannot change the settings of the live one.
     /// `transport` is nil for `streamConfig(for:)`: the session machine asks for the first `STREAM_CONFIG` with the HELLO
     /// only, so the transport knobs are not applied there (the tablet does not use its `bitrate_kbps`).
-    private func settings(for hello: Hello, transport: SessionTransport?) -> (base: VideoSettings, initial: VideoSettings) {
+    private func settings(for hello: Hello, transport: SessionTransport?)
+        -> (base: VideoSettings, initial: VideoSettings, stored: StreamPrefs?) {
         // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
         // T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS;
         // T-088: MATEBRIDGE_WIFI_BITRATE_KBPS on a Wi-Fi session (the env bitrate still wins).
         let env = ProcessInfo.processInfo.environment
         var base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
         if let transport { base = base.applyingTransportKnobs(env, transport: transport) }
+        let stored = prefsStore.load(device: hello.deviceID)
         let initial = VideoSettings.initialSettings(
-            defaults: base, stored: prefsStore.load(device: hello.deviceID),
-            defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
-        return (base, initial)
+            defaults: base, stored: stored,
+            defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+            allowGameDisplay: allowsGameDisplay)
+        return (base, initial, stored)
     }
 
-    /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the display size. Side-effect free (apart from
-    /// a log line); the session machine may call it for a connection that never becomes the session.
+    /// `SessionServer` `makeStreamConfig`: the tablet's HELLO decides the native display size (a remembered game
+    /// display, decision 0029, replaces the display but not the native size). Side-effect free (apart from a log
+    /// line); the session machine may call it for a connection that never becomes the session.
     public func streamConfig(for hello: Hello) -> StreamConfig {
         let settings = self.settings(for: hello, transport: nil).initial
-        if settings.widthPx != Int(hello.screenWidthPx) || settings.heightPx != Int(hello.screenHeightPx) {
+        if settings.nativeWidthPx != Int(hello.screenWidthPx) || settings.nativeHeightPx != Int(hello.screenHeightPx) {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
-                       fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.widthPx)x\(settings.heightPx)")
+                       fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.nativeWidthPx)x\(settings.nativeHeightPx)")
         }
         return settings.streamConfig(configID: Self.configID)
     }
@@ -220,9 +232,9 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello, transport: SessionTransport) {
         liveSessionLock.withLock { liveSessionID = sessionID }
-        let (base, initial) = settings(for: hello, transport: transport)
+        let (base, initial, stored) = settings(for: hello, transport: transport)
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
-                             settings: initial, base: base, transport: transport))
+                             settings: initial, base: base, prefs: stored, transport: transport))
     }
 
     public func sessionEnded() {
@@ -283,9 +295,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         switch event {
-        case .sessionStarted(let sid, let cid, let device, let settings, let base, let transport):
+        case .sessionStarted(let sid, let cid, let device, let settings, let base, let prefs, let transport):
             await onSessionStarted(sessionID: sid, configID: cid, device: device, settings: settings, base: base,
-                                   transport: transport)
+                                   prefs: prefs, transport: transport)
         case .sessionEnded:
             await onSessionEnded()
         case .videoAttached(let link):
@@ -320,7 +332,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
-                                  settings: VideoSettings?, base: VideoSettings?, transport: SessionTransport) async {
+                                  settings: VideoSettings?, base: VideoSettings?, prefs: StreamPrefs?,
+                                  transport: SessionTransport) async {
         guard let device, let settings, let base else {
             log(.error, "session_without_config")
             return
@@ -328,7 +341,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
         session = ActiveSession(sessionID: sessionID, configID: configID, deviceID: device, settings: settings,
-                                base: base, transport: transport)
+                                base: base, prefs: prefs, transport: transport)
         prefsGate = StreamPrefsGate()
         resetDisplayRate()
         // T-128: an accepted session means the Mac is running, also after a dark wake (Wake-on-LAN), which never
@@ -339,7 +352,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         logDisplaySleep(displaySleep.hold())
         log(.info, "stream_session", "device=\(device.shortHex) from_stored=\(settings != base) "
             + "width=\(settings.encodedWidthPx) height=\(settings.encodedHeightPx) fps=\(settings.fps) refresh_hz=\(settings.displayRefreshHz) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) codec=\(settings.codec.logName) "
-            + "transport=\(transport.logName)")
+            + "transport=\(transport.logName) display=\(settings.displayModeText)")
         await perform(lease.sessionStarted(device: device, settings: settings))
     }
 
@@ -352,8 +365,14 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         let p = prefs.normalized
         let userKbps = VideoSettings.clampedUserBitrateKbps(p.bitrateKbps).map(String.init) ?? "default"
+        let allowed = allowsGameDisplay
+        let display = live.base.applying(p, allowGameDisplay: allowed).displayModeText
+        let game = GameDisplayPolicy.outcome(of: p, nativeW: live.base.nativeWidthPx, nativeH: live.base.nativeHeightPx,
+                                             allowed: allowed)
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) bitrate_kbps=\(userKbps) "
-            + "requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille) requested_bitrate_kbps=\(prefs.bitrateKbps)")
+            + "requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille) requested_bitrate_kbps=\(prefs.bitrateKbps) "
+            + "display=\(display) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
+            + "game_display=\(game.logName)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -383,13 +402,17 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// Derives the settings, and if they differ from the running ones: new `config_id`, session layer notified
     /// (`STREAM_CONFIG` + video close), capture and encoder rebuilt; the virtual display is kept unless the
-    /// refresh rate changes (`VideoPipeline` recreates it then, SCK cannot follow an in-place mode switch). A change
-    /// of the bitrate alone (T-106) keeps the refresh rate, so only capture and encoder restart.
+    /// refresh rate or the display mode changes (native HiDPI <-> 1x game display, decision 0029): `VideoPipeline`
+    /// recreates it then, SCK cannot follow an in-place mode switch. A change of the bitrate alone (T-106) keeps the
+    /// refresh rate and mode, so only capture and encoder restart.
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
         let env = ProcessInfo.processInfo.environment
-        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]))
+        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                        allowGameDisplay: allowsGameDisplay)
         prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
+        live.prefs = prefs
+        session = live
         guard wanted != live.settings else { return }
         let old = live.settings
         live.settings = wanted
@@ -399,7 +422,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         log(.info, "stream_reconfigure",
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
             + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
-            + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource)")
+            + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource) "
+            + "display=\(old.displayModeText)->\(wanted.displayModeText)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }
@@ -432,7 +456,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             parked = nil
             await createPipeline(settings: s.settings, reusing: leftover)
         }
-        guard let pipeline else { link.cancel(); return }
+        // T-214: a failed game display falls back with a new config_id; this link belongs to the old one (the client
+        // reopens the video connection for the new STREAM_CONFIG).
+        guard let pipeline, session?.configID == link.configID else { link.cancel(); return }
         await stopConsumer()
         pipeline.prepareForNewConsumer()
         consumerID += 1
@@ -607,14 +633,27 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let old = pipeline else { return }
         pipeline = nil
-        if old.settings.displayRefreshHz != settings.displayRefreshHz {
-            log(.info, "display_recreate", "reason=refresh_change refresh_hz=\(old.settings.displayRefreshHz)->\(settings.displayRefreshHz)")
-        }
         let display = await old.stopKeepingDisplay()
-        if let display, old.settings.displayRefreshHz == settings.displayRefreshHz, !VideoPipeline.isOnline(display) {
+        logRecreate(display, for: settings)
+        await createPipeline(settings: settings, reusing: display)
+    }
+
+    /// `ev=display_recreate` when the pipeline about to be built for `settings` will not keep `display`
+    /// (`DisplayReuse`, the same decision `VideoPipeline.obtainDisplay` makes).
+    private func logRecreate(_ display: VirtualDisplay?, for settings: VideoSettings) {
+        guard let display else { return }
+        let current = display.mode
+        switch DisplayReuse.decide(current: current, online: VideoPipeline.isOnline(display), wanted: settings.displayMode) {
+        case .reuse:
+            break
+        case .recreate(.modeChange):
+            log(.info, "display_recreate", "reason=mode_change mode=\(current.text)->\(settings.displayModeText) "
+                + "refresh_hz=\(current.refreshHz)->\(settings.displayRefreshHz)")
+        case .recreate(.refreshChange):
+            log(.info, "display_recreate", "reason=refresh_change refresh_hz=\(current.refreshHz)->\(settings.displayRefreshHz)")
+        case .recreate(.offline):
             log(.info, "display_recreate", "reason=offline")
         }
-        await createPipeline(settings: settings, reusing: display)
     }
 
     /// T-165: the session ended. Capture and encoder stop (the encoder's VT session is shut down, T-162); the display
@@ -630,22 +669,18 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         dropParked()  // never two displays
         parked = (display, Self.leaseNowUs())
-        log(.info, "display_parked", "keep_s=\(lease.graceUs / 1_000_000) refresh_hz=\(Int(display.requestedRefreshHz))")
+        log(.info, "display_parked", "keep_s=\(lease.graceUs / 1_000_000) refresh_hz=\(Int(display.requestedRefreshHz)) "
+            + "mode=\(display.mode.text)")
     }
 
     /// T-165: the same tablet is back; a new pipeline on the parked display. `VideoPipeline` replaces the display when
-    /// the refresh rate changed (T-049) or it went offline while parked.
+    /// the refresh rate (T-049) or the display mode (T-214) changed, or it went offline while parked.
     private func unpark(settings: VideoSettings) async {
         guard let p = parked else { return }
         parked = nil
         let parkedUs = Self.leaseNowUs() &- p.sinceUs
         log(.info, "display_unparked", "parked_ms=\(parkedUs / 1_000) refresh_hz=\(settings.displayRefreshHz)")
-        if p.display.requestedRefreshHz != Double(settings.displayRefreshHz) {
-            log(.info, "display_recreate",
-                "reason=refresh_change refresh_hz=\(Int(p.display.requestedRefreshHz))->\(settings.displayRefreshHz)")
-        } else if !VideoPipeline.isOnline(p.display) {
-            log(.info, "display_recreate", "reason=offline")
-        }
+        logRecreate(p.display, for: settings)
         await createPipeline(settings: settings, reusing: p.display)
     }
 
@@ -674,7 +709,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             gateLock.withLock { sleepGate.cancelPending() }
             if rateState.hz != 0 { applyDisplayRate(streamFps: settings.fps) }
             startDrain()
-            let sizes = "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)"
+            let sizes = "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx) "
+                + "mode=\(settings.displayModeText)"
             if p.displayWasReused {
                 log(.info, "pipeline_started", "display=reused \(sizes)")
             } else {
@@ -693,7 +729,33 @@ public final class StreamCoordinator: @unchecked Sendable {
             lease.displayLost()
             wakeDisplayIfNeeded(DisplayWaker.reason(for: error))
             onSummary("Video başlamadı: \(error)")
+            await fallBackFromGameDisplay(failed: settings, error: error)
         }
+    }
+
+    /// T-214 (PROTOCOL.md 0x05): a 1x game display that cannot be set up falls back to the native display once. Game
+    /// displays stay off for the rest of the process (`GameDisplayFallback`); the session's prefs are re-applied
+    /// without the display, announced with a new `config_id` (`STREAM_CONFIG` + video close), and the native display
+    /// is created (after `DisplayRecreateGap`, since the failed start just removed the game display). A failure of the
+    /// native display does not fall back again.
+    private func fallBackFromGameDisplay(failed: VideoSettings, error: Error) async {
+        let displayFailure = VideoPipeline.isDisplayFailure(error)
+        let fallBack = gameDisplayLock.withLock { gameDisplay.startFailed(settings: failed, displayFailure: displayFailure) }
+        guard fallBack, !isShuttingDown, var live = session, !live.settings.displayHiDPI, let prefs = live.prefs else {
+            return
+        }
+        let env = ProcessInfo.processInfo.environment
+        let native = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                        allowGameDisplay: false)
+        let old = live.settings
+        live.settings = native
+        live.configID = nextConfigID(after: live.configID)
+        session = live
+        log(.warning, "game_display_failed", "applied=\(native.displayModeText) requested=\(old.displayModeText) "
+            + "config_id=\(live.configID) encoded=\(native.encodedWidthPx)x\(native.encodedHeightPx) "
+            + "bitrate_kbps=\(native.bitrateKbps)")
+        onReconfigure(live.sessionID, native.streamConfig(configID: live.configID))
+        await perform(lease.sessionStarted(device: live.deviceID, settings: native))
     }
 
     /// T-081: the display went away (or could not be created) for a reason display sleep explains. With an accepted

@@ -232,7 +232,7 @@ final class EncoderKnobsTests: XCTestCase {
     func testProfileWithEmptyEnvironmentListsNoKnobs() {
         let f = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .fast, build: build, env: [:])
         XCTAssertEqual(f, "fps=60 bitrate_kbps=30000 bitrate_source=prefs codec=hevc encoder_profile=fast "
-                       + "scale_permille=1000 refresh_hz=60 sha=65dc662-dirty knobs=-")
+                       + "scale_permille=1000 refresh_hz=60 display=2800x1840@2x sha=65dc662-dirty knobs=-")
         XCTAssertTrue(StreamProfileLog.knobs([:]).isEmpty)
     }
 
