@@ -1,7 +1,7 @@
 ---
 id: T-191
 title: Add "Varsayılanlara dön" (settings + learned audio state; pairing kept)
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-185]
@@ -63,27 +63,50 @@ Source: external architecture review 2026-10-03 (D9); verification: docs/reviews
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Reset also clears T-190's `files_root` (back to the default `matebridge`) and `files_read_only` (back to off). Added by the orchestrator 2026-10-03.
-- [ ] [JVM] `SettingsResetTest`: with every user setting set to a non-default value, `resetToDefaults()` makes every getter return its default.
-- [ ] [JVM] `SettingsResetTest`: `device_id`, `last_endpoint`, `transport_auto_migrated`, the `wol_*` keys and the separate pair-key store (`matebridge_pairkeys`) are untouched, byte for byte.
-- [ ] [JVM] `SettingsResetTest` (map-backed stores): the audio clear removes every stored buffer and safety value, and afterwards `OutBufMemory` and `SafetyMemory` start from their defaults (`SOURCE_DEFAULT`, `source=default`).
-- [ ] [JVM] After the clear, the same `OutBufMemory` instance (with a cached value) returns `SOURCE_DEFAULT`.
-- [ ] [JVM] `SettingsCatalogTest`: the "Varsayılanlara dön" item exists and needs two steps; one tap alone resets nothing, and the armed state expires (pure helper, fake clock).
+- [x] [JVM] Reset also clears T-190's `files_root` (back to the default `matebridge`) and `files_read_only` (back to off). Added by the orchestrator 2026-10-03.
+- [x] [JVM] `SettingsResetTest`: with every user setting set to a non-default value, `resetToDefaults()` makes every getter return its default.
+- [x] [JVM] `SettingsResetTest`: `device_id`, `last_endpoint`, `transport_auto_migrated`, the `wol_*` keys and the separate pair-key store (`matebridge_pairkeys`) are untouched, byte for byte.
+- [x] [JVM] `SettingsResetTest` (map-backed stores): the audio clear removes every stored buffer and safety value, and afterwards `OutBufMemory` and `SafetyMemory` start from their defaults (`SOURCE_DEFAULT`, `source=default`).
+- [x] [JVM] After the clear, the same `OutBufMemory` instance (with a cached value) returns `SOURCE_DEFAULT`.
+- [x] [JVM] `SettingsCatalogTest`: the "Varsayılanlara dön" item exists and needs two steps; one tap alone resets nothing, and the armed state expires (pure helper, fake clock).
 - [ ] [device] (logcat) Exactly one `ev=settings_reset` line per reset, with no setting values.
 - [ ] [device] Precondition: a session whose `audio_out` line shows `buf_source=stored` (or safety `source=stored`). If the tablet has no learned state yet, start once with a small `--ei audio_buf_bursts 1` until `audio_buffer_grow` is logged, then restart without the extra. Note: the override alone stores nothing; only growth does (`OutBufMemory.onGrown`). Reset (also once while a stream is live), start a session in the same activity, and the `audio_out` line shows `buf_source=default buf_stored=-` and `stored_ms=-`.
 - [ ] [device] After a reset, the tablet reconnects to the Mac with no approval prompt (pairing kept). The panel shows Akıcı, Otomatik bitrate and the AUTO transport.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `Settings.kt`: `KeyValueStore.remove(key)` with a default body (throws `UnsupportedOperationException`; the 9 test fakes keep compiling). `Settings.resetToDefaults(): Int` removes only the explicit user-setting key list (13 keys + T-190 `files_root`, `files_read_only`) and returns how many were present. `device_id`, `last_endpoint`, `transport_auto_migrated`, `wol_*` and the pair-key file are never named.
+2. Audio: `OutBufStore.clear()` / `SafetyStore.clear()` with a default body (throws; the fakes keep compiling). `OutBufMemory.clear()` / `SafetyMemory.clear()` drop the in-memory caches (`stored`, `lastSaved`, save timer) and clear the store (false if the store failed). SharedPrefs stores remove their own key prefix (`out_buf_bursts_`, `safety_ms_`) in `matebridge_audio`. `AudioPlayout.forgetLearned()` clears now and sets a pending flag; the next stream's writer (after it has waited for the previous writer) clears again before its first `initial()`, so a live writer's later save cannot survive into the next session.
+3. `SettingsCatalog.kt`: pure `TwoTapConfirm` (fake clock; the first tap arms, a second tap within `WINDOW_MS` confirms, after that it is a new first tap). `SettingsHost` gets `resetConfirm`, `onResetArmed()`, `resetToDefaults()`. "Diğer" gets the `reset_defaults` Action plus a `reset_hint` Info that shows the armed state (`SettingsViews.kt` is not in `files:`, and an Action's title is fixed).
+4. `MainActivity.kt`: SharedPreferences adapter gets `remove`. The reset removes the keys, clears audio learning, then applies the defaults live without writing them back where possible (mode + STREAM_PREFS with the default bit rate, game layer dropped; audio output; audio on/off to the host when it changed; pointer speeds; fingers; pen trail/dot; clipboard; stats; files sync + rescope), transport through `selectTransport(AUTO)` only when it differs. One `ev=settings_reset keys=<n>` line, then a toast. On arming it posts a refresh so the hint goes away when the window expires.
+5. Tests: `SettingsResetTest` (new) and `SettingsCatalogTest` (FakeHost + the two-step item).
+
+Risks: a previous writer that takes longer than `PREVIOUS_JOIN_MS` to finish could still save after the start-time clear (the same limit already exists for the output). The transport reset re-writes `transport=auto` through the existing setter (a default value).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `00318f8` (implementation) on `task/T-191-client-settings-reset`; plan `63be555`; this handoff is the commit after it.
+- **Dokunulan dosyalar:** `session/Settings.kt`, `settings/SettingsCatalog.kt`, `MainActivity.kt`, `audio/OutBufMemory.kt`, `audio/SafetyMemory.kt`, `audio/SharedPrefsOutBufStore.kt`, `audio/SharedPrefsSafetyStore.kt`, `audio/AudioPlayout.kt`, `test/.../settings/SettingsResetTest.kt` (new, 9 tests), `test/.../settings/SettingsCatalogTest.kt` (+4 tests, FakeHost, key list). All are in `files:`.
+- **Ne yapıldı:**
+  - `KeyValueStore.remove(key)` has a default body that **throws** `UnsupportedOperationException`, so the 9 test fakes compile and a store that cannot remove fails loudly instead of leaving values behind. The SharedPreferences adapter in `MainActivity` implements it. `Settings.resetToDefaults(): Int` removes exactly 15 keys: the 13 from the card plus T-190's `files_root` and `files_read_only`. It returns how many were present. Other keys (`device_id`, `last_endpoint`, `transport_auto_migrated`, `wol_*`, any unknown key) are never named.
+  - `OutBufStore.clear()` / `SafetyStore.clear()` also have a throwing default body. `OutBufMemory.clear()` / `SafetyMemory.clear()` drop the caches (`stored`, `lastSaved`, the save timer) and clear the store. They return false if the store failed; the cache is dropped either way. The SharedPrefs stores remove their own prefix in `matebridge_audio` (`out_buf_bursts_*`, `safety_ms_*`, the pre-T-123 `safety_ms_aaudio`/`safety_ms_track` included).
+  - `AudioPlayout.forgetLearned()` clears at once and sets a pending flag. The next stream's writer clears again after it has waited for the previous writer and before its first `initial()`. Each clear logs `ev=audio_learned_clear at=reset|stream_start safety=0|1 buf=0|1`.
+  - Panel, in the "Diğer" section of both panels: `reset_defaults` ("Varsayılanlara dön") plus a `reset_hint` Info line. The line reads "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur.", and while armed "Onaylamak için 5 saniye içinde yeniden dokun.". `TwoTapConfirm` is a pure helper with a 5 s window and a fake clock: the first tap arms, a second tap within the window resets, and any later tap starts over.
+  - `MainActivity.resetSettingsToDefaults()` runs in this order: remove keys → `audio?.forgetLearned()` → one `ev=settings_reset keys=<n>` line (no values) → apply live. The live apply covers: mode and STREAM_PREFS with the default bit rate (a game layer is dropped); audio output; audio on/off to the host only if it changed; pointer speeds; fingers; pen trail/dot; clipboard; stats; files `syncFiles()` + `rescope()` if the scope changed. Then a toast, and last the transport through `selectTransport(AUTO)`, only if it differs.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The live apply mostly does **not** write the default values back, so the keys stay removed. The exception is a transport change, which goes through the existing `selectTransport` and writes `transport=auto` (a default value).
+  - Launch extras: reset follows the panel rule ("a panel choice ends the launch override") for `--es audio_out` and the transport override. Other dev knobs (`audio_buf_bursts`, `stall_diag` and the rest) are untouched, because they are not stored.
+  - The arming tap gets no toast. The hint line under the button shows the state, and a refresh is posted when the window ends. I did not use a dialog, so the flow stays JVM-testable (`SettingsViews.kt` is not in `files:`, and an Action's title is fixed, hence the separate Info line).
+  - If the previous writer takes longer than `PREVIOUS_JOIN_MS` to finish, its final `flush` could still save after the stream-start clear. This is the same limit that already applies to the output itself.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** (nothing installed or run on the tablet)
+  1. `adb logcat -s 'MB:*' | grep settings_reset`: exactly **one** `ev=settings_reset keys=N` line per confirmed reset, with no setting values. A single tap only shows the hint, which goes away by itself after about 5 s.
+  2. Learned audio. Precondition: `audio_out` shows `buf_source=stored` (or safety `source=stored`). If there is no learned state yet, start once with `--ei audio_buf_bursts 1` until `audio_buffer_grow` is logged, then restart without the extra. Reset once while a stream is live: expect `audio_learned_clear at=reset`. Then start a new session in the same activity: expect `audio_learned_clear at=stream_start`, and the `audio_out` line shows `buf_source=default buf_stored=-` and `stored_ms=-`.
+  3. After the reset the tablet reconnects to the Mac with **no** approval prompt (pairing kept). The panel shows Akıcı, Otomatik bitrate, the Otomatik (AUTO) transport, "Paylaşılan klasör: MateBridge" and "Salt okunur: kapalı".
+  4. Live apply while streaming from a non-default state (e.g. Netlik + 60 Mbps + Yalnız USB + stats on): the display goes to 120 fps (the display may be recreated once, decision 0016), the stats overlay disappears, and the transport goes back to AUTO (it may reconnect).
+  5. With file sharing on before the reset: the file server stops (`files_share` default off).
 - **Açık sorular:**
+  - `docs/LOGGING.md` is not in `files:`. Proposed text for the orchestrator:
+    - `settings_reset` (session, I): "Varsayılanlara dön" confirmed. `keys=` is how many stored user settings were removed (0–15). No values are logged.
+    - `audio_learned_clear` (audio, I): the learned safety and output buffer sizes were forgotten. `at=reset` is the panel action; `at=stream_start` is the repeat at the next stream start. `safety=`/`buf=` are 1 if the store was cleared.
+  - `docs/NOTES.md`/KNOBS: no change needed (no new knob).

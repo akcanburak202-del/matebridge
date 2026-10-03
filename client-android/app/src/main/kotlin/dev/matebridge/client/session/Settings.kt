@@ -7,6 +7,14 @@ import java.security.SecureRandom
 interface KeyValueStore {
     fun getString(key: String): String?
     fun putString(key: String, value: String)
+
+    /**
+     * T-191: removes [key] (nothing happens when it is absent). The default body throws so a store that cannot remove
+     * fails loudly instead of leaving a value behind; the SharedPreferences adapter implements it.
+     */
+    fun remove(key: String) {
+        throw UnsupportedOperationException("remove not supported")
+    }
 }
 
 /**
@@ -146,6 +154,21 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         return v
     }
 
+    /**
+     * T-191 "Varsayılanlara dön": removes every user setting ([USER_KEYS]) so each getter returns its default. Only that
+     * explicit list goes: the device id (the host's approval of this tablet), the last endpoint, the T-096 migration
+     * flag and the learned Wake-on-LAN data share this store and stay. Returns how many keys were present.
+     */
+    fun resetToDefaults(): Int {
+        var removed = 0
+        for (k in USER_KEYS) {
+            if (store.getString(k) == null) continue
+            store.remove(k)
+            removed++
+        }
+        return removed
+    }
+
     private fun readSpeed(key: String): Float = store.getString(key)?.toFloatOrNull()?.let { SpeedRange.clamp(it) } ?: 1f
 
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
@@ -160,6 +183,13 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
     }
 
     private companion object {
+        /** T-191: every user setting [resetToDefaults] removes (and nothing else). */
+        val USER_KEYS: List<String> get() = listOf(
+            KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
+            KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
+            KEY_TRANSPORT,
+        )
+
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_ENDPOINT = "last_endpoint"
         const val KEY_TRANSPORT = "transport"

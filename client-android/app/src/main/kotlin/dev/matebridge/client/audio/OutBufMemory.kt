@@ -7,6 +7,11 @@ interface OutBufStore {
 
     /** Stores [bursts] for [path]; must not block the caller for long (the audio writer thread calls it). */
     fun put(path: String, bursts: Int)
+
+    /** T-191: removes every stored value. The default body throws (a store that cannot clear must not look cleared). */
+    fun clear() {
+        throw UnsupportedOperationException("clear not supported")
+    }
 }
 
 /**
@@ -38,6 +43,15 @@ class OutBufMemory(private val store: OutBufStore) {
         stored[path] = b
         try { store.put(path, b) } catch (_: RuntimeException) {}
         return true
+    }
+
+    /**
+     * T-191 "Varsayılanlara dön": forgets every learned size, in memory and in the store, so the next [initial] starts
+     * from the default. False if the store could not be cleared (the cache is dropped either way).
+     */
+    @Synchronized fun clear(): Boolean {
+        stored.clear()
+        return try { store.clear(); true } catch (_: RuntimeException) { false }
     }
 
     private fun read(path: String): Int? {

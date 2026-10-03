@@ -12,6 +12,14 @@ interface SafetyStore {
 
     /** Stores [ms] for [key]; must not block the caller for long (the audio writer thread calls it). */
     fun put(key: String, ms: Int)
+
+    /**
+     * T-191: removes every stored value, the pre-T-123 single-API keys included. The default body throws (a store that
+     * cannot clear must not look cleared).
+     */
+    fun clear() {
+        throw UnsupportedOperationException("clear not supported")
+    }
 }
 
 /**
@@ -69,6 +77,16 @@ class SafetyMemory(private val store: SafetyStore) {
         val k = key(api, transport)
         val v = profile(api, transport).rememberable(ms)
         if (lastSaved[k] != v) save(k, v)
+    }
+
+    /**
+     * T-191 "Varsayılanlara dön": forgets every learned value, in memory and in the store, so the next [initial] starts
+     * from the profile's default. False if the store could not be cleared (the cache is dropped either way).
+     */
+    @Synchronized fun clear(): Boolean {
+        lastSaved.clear()
+        lastSaveAtMs = Long.MIN_VALUE
+        return try { store.clear(); true } catch (_: RuntimeException) { false }
     }
 
     private fun read(k: String): Int? = try { store.get(k) } catch (_: RuntimeException) { null }

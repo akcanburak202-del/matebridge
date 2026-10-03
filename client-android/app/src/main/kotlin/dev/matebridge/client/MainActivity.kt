@@ -117,6 +117,7 @@ import dev.matebridge.client.session.TrustUiText
 import dev.matebridge.client.session.TrustView
 import dev.matebridge.client.settings.SettingsCatalog
 import dev.matebridge.client.settings.SettingsHost
+import dev.matebridge.client.settings.TwoTapConfirm
 import dev.matebridge.client.settings.SettingsPanelState
 import dev.matebridge.client.settings.SettingsSidePanel
 import dev.matebridge.client.settings.SettingsViews
@@ -422,6 +423,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val prefsStore = object : KeyValueStore {
             override fun getString(key: String) = prefs.getString(key, null)
             override fun putString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
+            override fun remove(key: String) { prefs.edit().remove(key).apply() } // T-191
         }
         settings = Settings(prefsStore)
         wolStore = WolStore(prefsStore) // T-129
@@ -899,6 +901,58 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         override val statsOverlay get() = statsOn
         override fun setStatsOverlay(on: Boolean) { if (on != statsOn) toggleStats() }
+
+        override val resetConfirm = TwoTapConfirm({ SystemClock.elapsedRealtime() }) // T-191
+        override fun onResetArmed() {
+            ui.removeCallbacks(resetHintExpiry)
+            ui.postDelayed(resetHintExpiry, TwoTapConfirm.WINDOW_MS + 50)
+        }
+        override fun resetToDefaults() = resetSettingsToDefaults()
+    }
+
+    /** T-191: the armed hint goes back once the confirmation window has passed. */
+    private val resetHintExpiry = Runnable { if (!isDestroyed) refreshSettings() }
+
+    /**
+     * T-191 "Varsayılanlara dön" (confirmed): removes every user setting and the learned audio state, then applies the
+     * defaults to what runs now, mostly without writing them back. Pairing keys (their own file), the device id, the
+     * last endpoint, the T-096 migration flag and the learned wake data are kept. Launch extras stay, except that the
+     * transport and audio output follow the panel rule (a panel choice ends their launch override).
+     */
+    private fun resetSettingsToDefaults() {
+        if (isDestroyed) return
+        ui.removeCallbacks(resetHintExpiry)
+        val audioWas = settings.audioEnabled()
+        val scopeWas = settings.filesScope()
+        val removed = settings.resetToDefaults()
+        audio?.forgetLearned() // takes effect at the next audio stream start
+        MbLog.i("settings_reset", "keys=$removed")
+        // Display: mode (a game layer is dropped and its values re-applied) and STREAM_PREFS with the default bit rate.
+        // A 60<->120 change may recreate the virtual display once (decision 0016).
+        streamMode = settings.streamMode()
+        gameSettings.onModeChanged(streamMode)?.let { change -> applyGameLayer(change) }
+        controller.setStreamPrefs(gameSettings.prefs(streamMode))
+        // Audio: output (ends a launch override, like the panel), and on/off to the host only when it changed.
+        audioOutFromExtra = false
+        audio?.setOutPref(gameSettings.audioOut)
+        if (settings.audioEnabled() != audioWas) controller.setAudioEnabled(settings.audioEnabled())
+        // Input and overlays.
+        applyPointerSpeeds()
+        if (capture.fingersDisabled != settings.fingerTouchDisabled()) {
+            capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        }
+        applyPenTrail(gameSettings.effective().penTrail)
+        applyPenDot(gameSettings.effective().penDot)
+        if (::clipboard.isInitialized) clipboard.sync.enabled = settings.clipboardShare()
+        statsOn = settings.statsOverlay()
+        applyStatsVisibility()
+        // Files: off by default (the server stops); a changed folder or read-only flag restarts a running one.
+        syncFiles()
+        if (settings.filesScope() != scopeWas) files.rescope()
+        refreshSettings()
+        Toast.makeText(this, RESET_DONE_TEXT, Toast.LENGTH_LONG).show()
+        // Transport last: a change to AUTO may reconnect (it goes through the panel's own path and stores "auto").
+        if (mode != settings.transportMode()) selectTransport(settings.transportMode())
     }
 
     /**
@@ -2323,6 +2377,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private companion object {
         /** T-090 bench, in the debug source set only (T-185): main code may not reference the class. */
         const val NET_BENCH_ACTIVITY = "dev.matebridge.client.bench.NetBenchActivity"
+        const val RESET_DONE_TEXT =
+            "Ayarlar varsayılana döndü (eşleşme korundu). Öğrenilen ses ayarları bir sonraki ses akışında sıfırlanır."
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val USER_DISCONNECTED_TEXT = "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun."

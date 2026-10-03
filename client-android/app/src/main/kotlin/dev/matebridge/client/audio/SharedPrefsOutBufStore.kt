@@ -15,9 +15,17 @@ class SharedPrefsOutBufStore(context: Context) : OutBufStore {
         prefs.edit().putInt(key(path), bursts).apply()
     }
 
-    private fun key(path: String) = "out_buf_bursts_$path"
+    /** T-191: removes every `out_buf_bursts_*` key (the safety keys in the same file stay). */
+    override fun clear() {
+        val e = prefs.edit()
+        for (k in prefs.all.keys) if (k.startsWith(PREFIX)) e.remove(k)
+        e.apply()
+    }
+
+    private fun key(path: String) = PREFIX + path
 
     private companion object {
         const val FILE = "matebridge_audio"
+        const val PREFIX = "out_buf_bursts_"
     }
 }
