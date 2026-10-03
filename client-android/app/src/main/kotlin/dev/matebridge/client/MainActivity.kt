@@ -28,6 +28,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -106,6 +107,15 @@ import dev.matebridge.client.session.Settings
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.truncateUtf8
 import dev.matebridge.client.session.TransportSwitch
+import dev.matebridge.client.session.ConnectOrigin
+import dev.matebridge.client.session.ForgetFlow
+import dev.matebridge.client.session.PairPick
+import dev.matebridge.client.session.PromptVisibility
+import dev.matebridge.client.session.TrustButton
+import dev.matebridge.client.session.TrustLine
+import dev.matebridge.client.session.TrustText
+import dev.matebridge.client.session.TrustUiText
+import dev.matebridge.client.session.TrustView
 import dev.matebridge.client.settings.SettingsCatalog
 import dev.matebridge.client.settings.SettingsHost
 import dev.matebridge.client.settings.SettingsPanelState
@@ -302,6 +312,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var inputGen = -1
     private var hostReached = false
     private val usbHintCheck = Runnable { render(lastUi) }
+
+    // T-151 (decision 0018) trust UI: the pick gate, prompt visibility for T-150's timeout, "Bu Mac'i unut".
+    private val pairPick = PairPick()
+    private val promptVisibility = PromptVisibility()
+    private val forgetFlow = ForgetFlow({ controller.forgetCurrentHost() })
+    /** "Bu Mac'i unut" succeeded: the idle panel says the Mac must forget this tablet too. Cleared by the next connect. */
+    private var forgetNotice = false
+    /** "Bu Mac'i unut" did not persist (`Failed(KEY_STORE_FAILED)` after it): say so instead of the pairing text. */
+    private var forgetFailed = false
+    /** An already idle machine reports a successful forget with no state: decide after [ForgetFlow.SETTLE_MS]. */
+    private val forgetSettle = Runnable { forgetFlow.onTick(SystemClock.elapsedRealtime())?.let { onForgetResult(it) } }
+    private lateinit var trustRow: LinearLayout
+    private lateinit var connectButton: Button
+    private var trustButtons: List<TrustButton> = emptyList()
     private var lastUi: SessionUi = SessionUi.Searching
 
     // T-089 Wi-Fi knobs (launch extras), RTT window for the per-second `ev=net` line, low-latency Wi-Fi lock.
@@ -484,7 +508,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
         setupManualEntry()
-        findViewById<Button>(R.id.connect).setOnClickListener { onConnectClicked() }
+        connectButton = findViewById(R.id.connect)
+        connectButton.setOnClickListener { onConnectClicked() }
+        // T-151: the trust buttons sit right under the status text (built here: the layout is outside this task).
+        trustRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
+        findViewById<LinearLayout>(R.id.panel_content).let { it.addView(trustRow, it.indexOfChild(status) + 1) }
         wakeButton = findViewById(R.id.wake)
         wakeButton.setOnClickListener { onWakeClicked() }
         refreshWakeButton()
@@ -885,6 +913,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override val transportMode get() = mode
         override fun selectTransport(m: TransportMode) = this@MainActivity.selectTransport(m)
         override fun disconnect() = userDisconnect()
+        override val forgetHostLabel get() = getString(R.string.forget_host)
+        override fun forgetHost() = onForgetHostClicked()
 
         override val streamMode get() = this@MainActivity.streamMode
         override fun selectStreamMode(m: StreamMode) = setStreamMode(m, toast = false)
@@ -966,6 +996,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         transportEpoch++
         fallbackPending = false
         currentEndpoint = null
+        pairPick.dismiss() // T-151: no pick prompt after the user disconnected (asked endpoints stay asked)
         controller.stop() // sends BYE, closes both connections
         render(SessionUi.Idle)
     }
@@ -1589,6 +1620,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         currentEndpoint = null
         manualMode = false
         userDisconnected = false // T-105: a fresh start connects as usual
+        forgetNotice = false
+        forgetFailed = false
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_FOREGROUND}") // T-133
         wolRefresh.reset() // T-133: one USB `wol` refresh per start
         mode = modeOverride ?: settings.transportMode()
@@ -1625,7 +1658,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         fallbackPending = false
         when (mode) {
             TransportMode.WIFI -> { logPick("wifi", "manual"); startWifi() }
-            TransportMode.USB -> { logPick("usb", "manual"); startUsb(hint = true) }
+            TransportMode.USB -> { logPick("usb", "manual"); startUsb(hint = true, ConnectOrigin.USB_MODE) }
             TransportMode.AUTO -> probeUsb(initial = true)
         }
     }
@@ -1636,13 +1669,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun startWifi() {
         manualMode = false
         discovery?.stop()
+        pairPick.clearSeen() // T-151: the new discovery run reports every service again
         discovery = MacDiscovery(this, onTxt = { host, wol, port -> onHostTxt(host, wol, port) }) { ep -> runOnUiThread { onDiscovered(ep) } }
             .also { it.start() }
-        if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it) }
+        if (mode == TransportMode.AUTO) lastWifiEndpoint?.let { connect(it, ConnectOrigin.SAVED_WIFI) }
     }
 
-    /** USB: loopback (`adb reverse`), no NSD. The "USB link missing" hint is for the manual USB mode only. */
-    private fun startUsb(hint: Boolean) {
+    /**
+     * USB: loopback (`adb reverse`), no NSD. The "USB link missing" hint is for the manual USB mode only. T-151: an
+     * automatic [origin] skips a loopback endpoint that already answered PAIRING; "Bağlan" or "Eşleş" goes there.
+     */
+    private fun startUsb(hint: Boolean, origin: ConnectOrigin) {
         discovery?.stop()
         discovery = null
         manualMode = true
@@ -1650,7 +1687,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         hostReached = false
         ui.removeCallbacks(usbHintCheck)
         if (hint) ui.postDelayed(usbHintCheck, ConnectMode.USB_TIMEOUT_MS)
-        connect(ConnectMode.usbEndpoint)
+        if (!connect(ConnectMode.usbEndpoint, origin)) {
+            currentEndpoint = ConnectMode.usbEndpoint // "Bağlan" reconnects it after a user tap
+            hostReached = true // the pick prompt (or "Hazır"), not the USB hint
+            render(SessionUi.Idle)
+        }
     }
 
     /**
@@ -1733,21 +1774,23 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!probeGuard.isCurrent(gen) || !started || isDestroyed || mode != TransportMode.AUTO) return
         picking = false
         autoPolicy.onTryResult(AutoUsbPolicy.outcomeOf(r), SystemClock.elapsedRealtime())
+        val usbBlocked = pairPick.isAsked(ConnectMode.usbEndpoint) // T-151: it answered PAIRING to an automatic connect
         when {
+            r == ProbeResult.OPEN && initial && usbBlocked -> { logPick("wifi", "usb_asked"); startWifi() }
             r == ProbeResult.OPEN && initial -> {
                 logPick("usb", r.reason)
-                startUsb(hint = false)
+                startUsb(hint = false, ConnectOrigin.AUTO_SWITCH)
             }
             initial -> { logPick("wifi", r.reason); startWifi() }
             r == ProbeResult.OPEN && !isOnUsb() -> {
                 // The rescan started while not connected; the Wi-Fi session may have got further since. Never tear down
                 // an accepted session (migrate it instead) and never interrupt a pairing or a running connect.
-                val action = AutoUsbPolicy.onProbeOpen(lastUi)
+                val action = AutoUsbPolicy.onProbeOpen(lastUi, usbBlocked)
                 MbLog.i("transport_probe", "result=${r.reason} action=${action.name.lowercase(java.util.Locale.ROOT)}")
                 when (action) {
                     AutoUsbPolicy.OpenAction.SWITCH -> {
                         logPick("usb", r.reason + " trigger=rescan")
-                        startUsb(hint = false)
+                        startUsb(hint = false, ConnectOrigin.AUTO_SWITCH)
                     }
                     AutoUsbPolicy.OpenAction.MIGRATE -> startMigration(SystemClock.elapsedRealtime())
                     AutoUsbPolicy.OpenAction.IGNORE -> Unit
@@ -1775,7 +1818,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun autoStep() {
         if (!started || isDestroyed || mode != TransportMode.AUTO || picking || fallbackPending || userDisconnected || hostSleep.asleep) return
         val now = SystemClock.elapsedRealtime()
-        when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now)) {
+        when (autoPolicy.next(isOnUsb(), AutoUsbPolicy.stageOf(lastUi), now, pairPick.isAsked(ConnectMode.usbEndpoint))) {
             AutoUsbPolicy.Step.MIGRATE -> startMigration(now)
             AutoUsbPolicy.Step.PROBE -> probeUsb(initial = false)
             AutoUsbPolicy.Step.NONE -> Unit
@@ -1810,7 +1853,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** AUTO on USB and the session dropped: go back to Wi-Fi (last Wi-Fi endpoint at once, plus discovery). */
     private fun fallBackToWifi() {
         fallbackPending = false
-        if (!started || isDestroyed || mode != TransportMode.AUTO || !isOnUsb() || lastUi !is SessionUi.Disconnected) return
+        if (!started || isDestroyed || !AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), lastUi)) return // T-151: also a pick prompt
         autoPolicy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, SystemClock.elapsedRealtime()) // back off before USB again
         logPick("wifi", "usb_lost")
         probeGuard.bump()
@@ -1818,7 +1861,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         transportEpoch++
         ui.removeCallbacks(usbHintCheck)
         currentEndpoint = null
-        if (lastWifiEndpoint == null) controller.stop() // no Wi-Fi address yet: stop the USB retries, discovery connects
+        // No (eligible) Wi-Fi address yet: stop the USB retries, discovery connects.
+        if (lastWifiEndpoint?.let { pairPick.allowsAuto(it) } != true) controller.stop()
         startWifi() // with a known Wi-Fi endpoint, its start replaces the USB session at once
     }
 
@@ -1862,6 +1906,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onStop() {
         started = false
+        promptVisibility.onStop()?.let { controller.setConfirmPromptVisible(it) } // T-151: the 2-min timer pauses
+        ui.removeCallbacks(forgetSettle)
+        forgetFlow.abandon() // T-151: a forget result after this is not reported (the next screen shows the real state)
         unbufferedPen.sync(false) // the ticker is stopped below; do not leave the request behind
         dev.matebridge.client.session.MbLog.i("activity_stop")
         ui.removeCallbacks(ticker)
@@ -1907,9 +1954,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onDiscovered(ep: Endpoint) {
         if (!started || manualMode || userDisconnected || hostSleep.asleep) return
+        pairPick.onDiscovered(ep) // T-151: remembered, so a pick prompt does not hide it (NSD reports a service once)
+        if (!pairPick.allowsAuto(ep)) return // it answered PAIRING already: only a user start goes there again
         // T-134: discovery wins over a direct wake attempt (it replaces it; the start closes it first, one connection).
-        if (wakeConnect.onDiscovered(currentEndpoint, lastUi is SessionUi.Disconnected)) {
-            connect(ep)
+        // T-151: a pick prompt holds no connection, so another Mac is tried (an impostor must not park the tablet).
+        if (wakeConnect.onDiscovered(currentEndpoint, lastUi is SessionUi.Disconnected, lastUi is SessionUi.PairingNeedsUser)) {
+            connect(ep, ConnectOrigin.DISCOVERY)
         }
     }
 
@@ -1920,6 +1970,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-134: while the Mac sleeps, "Bağlan" is "Mac'i uyandır" (wake episode + direct connect) unless an address was
         // typed into the open manual field; a hidden field's remembered text does not count.
         val typedNow = typed.isNotBlank() && (!wasAsleep || endpointField.visibility == View.VISIBLE)
+        // T-151: "Bağlan" is a user start for the pick gate; only a typed address in the open field may pair at once.
+        val origin = ConnectOrigin.forConnectButton(typed, endpointField.visibility == View.VISIBLE, lastUi)
+        if (origin.clearsGate) pairPick.onUserStart()
         if ((userDisconnected || wasAsleep) && !typedNow) { // T-105: after "Bağlantıyı kes", connect the chosen mode's usual way
             userDisconnected = false
             hideManualEntry()
@@ -1929,6 +1982,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         userDisconnected = false
         val ep = if (typed.isBlank()) currentEndpoint else Endpoint.parse(typed)
+        if (ep == null && typed.isBlank()) { // T-151: nothing chosen (e.g. after "Yoksay"): search the usual way again
+            hideManualEntry()
+            restartUsualWay()
+            return
+        }
         if (ep == null) {
             Toast.makeText(this, R.string.invalid_endpoint, Toast.LENGTH_SHORT).show()
             return
@@ -1938,7 +1996,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             settings.saveEndpoint(ep)
         }
         hideManualEntry() // T-078: no focused field once the stream may start
-        connect(ep)
+        connect(ep, origin)
         if (wasAsleep) wolStep(manual = true) // T-134: a typed address while the Mac sleeps still gets a wake episode
     }
 
@@ -1952,13 +2010,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         applyTransport()
     }
 
-    private fun connect(ep: Endpoint) {
+    /**
+     * Starts a session to [ep]. T-151 (decision 0018): only a [ConnectOrigin.userInitiated] start may pair; an
+     * [ConnectOrigin.automatic] one to an endpoint that already answered PAIRING is skipped (returns false).
+     */
+    private fun connect(ep: Endpoint, origin: ConnectOrigin): Boolean {
+        if (origin.automatic && !pairPick.allowsAuto(ep)) {
+            MbLog.i("pair_auto_skip", "origin=${origin.logName}")
+            return false
+        }
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
         currentEndpoint = ep
+        forgetNotice = false
+        forgetFailed = false
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
         if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
-        MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName}")
-        controller.start(ep)
+        MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName} origin=${origin.logName}")
+        controller.start(ep, userInitiated = origin.userInitiated)
+        return true
     }
 
     private fun render(state: SessionUi) {
@@ -1978,7 +2047,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         wolRefreshStep(wolRefresh.onSession(state is SessionUi.Connected && isOnUsb(), SystemClock.elapsedRealtime()) {
             wolSender.wifiSubnets().isNotEmpty()
         }) // T-133
-        if (state is SessionUi.AwaitingApproval || state is SessionUi.Connected || state is SessionUi.Failed) hostReached = true // terminal errors must not be replaced by the USB hint
+        if (TrustUiText.hostReached(state)) hostReached = true // terminal errors and prompts must not be replaced by the USB hint
+        promptVisibility.onRender(state, started)?.let { controller.setConfirmPromptVisible(it) } // T-151: T-150's timer
+        if (pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151: never parked on one answerer's prompt
+        forgetFlow.onUi(state, SystemClock.elapsedRealtime())?.let { onForgetResult(it) } // T-151: the forget's result
         // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
         if (state is SessionUi.Connected && isOnUsb()) autoPolicy.onUsbConnected()
         if (!fallbackPending && AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), state)) {
@@ -1996,26 +2068,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun applyStatusText(state: SessionUi) {
+        val trust = TrustUiText.screen(state, pairPick.prompt) // T-151
         status.text = when (state) {
-            SessionUi.Idle -> if (userDisconnected) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
+            SessionUi.Idle ->
+                if (forgetNotice) getString(R.string.forget_done)
+                else if (userDisconnected) USER_DISCONNECTED_TEXT else getString(R.string.state_idle)
             SessionUi.Searching -> getString(R.string.state_searching)
             is SessionUi.Connecting -> getString(R.string.state_connecting, state.endpoint.toString())
-            is SessionUi.AwaitingApproval ->
-                if (state.code != null) pairingText(state) else getString(R.string.state_awaiting_approval, state.hostName)
+            is SessionUi.AwaitingApproval -> getString(R.string.state_awaiting_approval, state.hostName) // code: trust view
             is SessionUi.Connected -> getString(R.string.state_connected, state.hostName, state.framesReceived)
-            is SessionUi.PairingNeedsUser -> PAIRING_NEEDS_USER_TEXT // T-150: plain text only; T-151 owns the real UI
-            is SessionUi.StoredTrust -> STORED_TRUST_TEXT
+            is SessionUi.PairingNeedsUser -> getString(R.string.state_idle) // the pick prompt below while it is pending
+            is SessionUi.StoredTrust -> "" // trust view below
             is SessionUi.Disconnected -> getString(
                 R.string.state_disconnected, causeText(state.cause), (state.retryInMs + 999) / 1000,
             )
             is SessionUi.Failed ->
                 if (state.cause == SessionUi.Cause.HOST_SLEEP) {
                     getString(if (wolStore.hasMacs()) R.string.state_host_sleep else R.string.state_host_sleep_no_wol)
-                } else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
+                } else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED && forgetFailed) getString(R.string.forget_failed)
+                else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
-                else if (state.cause == SessionUi.Cause.PAIR_CANCELLED) PAIR_CANCELLED_TEXT
                 else getString(R.string.state_failed, causeText(state.cause))
         }
+        // T-151: a trust state replaces its usual text; a pending pick prompt is a banner under the state's text.
+        if (trust != null) status.text = trustText(trust, if (TrustUiText.view(state) != null) null else status.text)
+        renderTrustButtons(trust?.buttons.orEmpty())
         if (ConnectMode.showUsbHint(mode, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
             status.text = getString(R.string.usb_missing)
         }
@@ -2090,13 +2167,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val ui = lastUi
         val idle = ui is SessionUi.Disconnected || ui == SessionUi.Idle || ui == SessionUi.Searching
         val transportOk = WakeConnect.transportAllows(mode, isOnUsb(), picking || fallbackPending) && !manualMode
-        when (val step = wakeConnect.update(now, episode, wolStore.wakeEndpoint(), currentEndpoint, transportOk, idle)) {
+        val target = wolStore.wakeEndpoint()?.takeIf { pairPick.allowsAuto(it) } // T-151: not to an endpoint that asked to pair
+        when (val step = wakeConnect.update(now, episode, target, currentEndpoint, transportOk, idle)) {
             WakeConnect.Step.None -> Unit
             is WakeConnect.Step.Attempt -> {
                 currentEndpoint = step.endpoint
                 transportEpoch++ // as in connect(): a migration started before this session reports into nothing
                 MbLog.i("transport", "transport=${ConnectMode.transportOf(step.endpoint).logName} via=wake")
-                controller.start(step.endpoint, step.tag)
+                controller.start(step.endpoint, step.tag, userInitiated = ConnectOrigin.WAKE.userInitiated)
             }
             WakeConnect.Step.Release -> {
                 // The episode ended and our last attempt failed: no endpoint is chosen any more (discovery may connect).
@@ -2155,36 +2233,209 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    // ---- T-151 trust UI (decision 0018) ----
+
     /**
-     * Pairing screen (PROTOCOL.md section 9): the 6-digit code large, to compare with the Mac's. The strings are
-     * literals because the strings resource is outside this task's file list. The code is never logged.
+     * The trust text: [TrustUiText] decides what, `strings.xml` says it. [above]: the state's own text when [v] is the
+     * pick prompt shown as a banner under it. The pairing code is shown large and never logged.
      */
-    private fun pairingText(state: SessionUi.AwaitingApproval): CharSequence {
+    private fun trustText(v: TrustView, above: CharSequence?): CharSequence {
         val b = SpannableStringBuilder()
-        if (state.rePairing) {
-            val warn = "Mac bu tableti tanımıyor, yeniden eşleşiliyor\n\n"
-            b.append(warn)
-            b.setSpan(ForegroundColorSpan(Color.parseColor("#FFB300")), 0, warn.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (!above.isNullOrEmpty()) b.append(above).append("\n\n")
+        v.lines.forEachIndexed { i, line ->
+            if (i > 0) b.append(if (line is TrustLine.Code || v.lines[i - 1] is TrustLine.Code) "\n" else "\n\n")
+            val start = b.length
+            when (line) {
+                is TrustLine.Code -> {
+                    val code = line.code
+                    b.append(if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code)
+                    b.setSpan(RelativeSizeSpan(3.5f), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    b.setSpan(StyleSpan(Typeface.BOLD), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                is TrustLine.Text -> {
+                    val arg = line.arg
+                    b.append(if (arg != null) getString(trustRes(line.id), arg) else getString(trustRes(line.id)))
+                    if (line.id == TrustText.KEY_CHANGED) {
+                        b.setSpan(ForegroundColorSpan(Color.parseColor("#FFB300")), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
+            }
         }
-        b.append("Mac'teki kodla aynı mı?\n")
-        val code = state.code.orEmpty()
-        val shown = if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code
-        val start = b.length
-        b.append(shown)
-        b.setSpan(RelativeSizeSpan(3.5f), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        b.setSpan(StyleSpan(Typeface.BOLD), start, b.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        b.append("\nMac'te \"İzin ver\" dediğinde bağlanır.")
-        b.append("\n\nMac'i göremiyorsan: Parsec'te kodu karşılaştırıp İzin ver de, sonra buraya dön.")
         return b
+    }
+
+    private fun trustRes(t: TrustText) = when (t) {
+        TrustText.KEY_CHANGED -> R.string.trust_key_changed
+        TrustText.COMPARE_CODE -> R.string.trust_compare_code
+        TrustText.CONFIRM_HINT -> R.string.trust_confirm_hint
+        TrustText.PARSEC_HINT -> R.string.trust_parsec_hint
+        TrustText.WAIT_MAC_ALLOW -> R.string.trust_wait_mac_allow
+        TrustText.STORED_CODE -> R.string.trust_stored_code
+        TrustText.STORED_CONFIRMED -> R.string.trust_stored_confirmed
+        TrustText.NEW_HOST_CLAIM -> R.string.trust_new_host_claim
+        TrustText.RE_PAIR_CLAIM -> R.string.trust_re_pair_claim
+        TrustText.PAIR_CANCELLED -> R.string.trust_pair_cancelled
+        TrustText.FORGET_DONE -> R.string.forget_done
+        TrustText.FORGET_NONE -> R.string.forget_none
+        TrustText.FORGET_FAILED -> R.string.forget_failed
+    }
+
+    private fun trustButtonRes(b: TrustButton) = when (b) {
+        TrustButton.CONFIRM -> R.string.trust_btn_confirm
+        TrustButton.CANCEL -> R.string.trust_btn_cancel
+        TrustButton.PAIR -> R.string.trust_btn_pair
+        TrustButton.IGNORE -> R.string.trust_btn_ignore
+        TrustButton.REPAIR -> R.string.trust_btn_repair
+        TrustButton.CONNECT -> R.string.trust_btn_connect
+    }
+
+    /** The trust row under the status text; while it has buttons the plain "Bağlan" is hidden (it would not pair). */
+    private fun renderTrustButtons(buttons: List<TrustButton>) {
+        if (buttons != trustButtons) {
+            trustButtons = buttons
+            trustRow.removeAllViews()
+            val gap = (8 * resources.displayMetrics.density).roundToInt()
+            for (b in buttons) {
+                val btn = Button(this).apply {
+                    text = getString(trustButtonRes(b))
+                    setOnClickListener { onTrustButton(b) }
+                }
+                trustRow.addView(
+                    btn,
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        .apply { setMargins(gap, 2 * gap, gap, 0) },
+                )
+            }
+        }
+        trustRow.visibility = if (buttons.isEmpty()) View.GONE else View.VISIBLE
+        connectButton.visibility = if (buttons.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun onTrustButton(b: TrustButton) {
+        if (!started || isDestroyed) return
+        MbLog.i("pair_ui", TrustUiText.pairUiFields(b.logAction)) // the action only: never the code or the Mac name
+        when (b) {
+            TrustButton.CONFIRM -> trustConfirm()
+            TrustButton.CANCEL -> trustCancel()
+            TrustButton.PAIR -> onPairClicked()
+            TrustButton.IGNORE -> {
+                // The prompt goes and the ordinary screen (with "Bağlan") comes back. The prompt held no connection, so
+                // its endpoint is dropped here: discovery, wake and AUTO go on to other Macs, and the ignored one stays
+                // out of automatic connects until a user start (PairPick).
+                pairPick.ignore()
+                if (lastUi is SessionUi.PairingNeedsUser) {
+                    currentEndpoint = null
+                    render(TrustUiText.afterIgnore(discovery != null))
+                } else {
+                    applyStatusText(lastUi) // a banner under another state: that state stays
+                }
+            }
+            TrustButton.REPAIR -> userStartStored(ConnectOrigin.STORED_REPAIR)
+            TrustButton.CONNECT -> userStartStored(ConnectOrigin.STORED_CONNECT)
+        }
+    }
+
+    /**
+     * "Kodlar aynı — Güven" (T-150 `confirmTrust`): on a live prompt it trusts the key; on a stored one it promotes the
+     * pending key and the machine connects, user-initiated, to the endpoint of the blocked start. It applies only to the
+     * prompt on screen ([lastUi] is what was rendered): its generation goes along, a stale one is ignored.
+     */
+    private fun trustConfirm(): Boolean = controller.confirmTrust(TrustUiText.promptGen(lastUi))
+
+    /**
+     * "İptal" (T-150 `cancelTrust`): BYE + close a live pairing, drop the pending key, terminal PAIR_CANCELLED (latched:
+     * no automatic start until a user one), for the prompt on screen only.
+     */
+    private fun trustCancel(): Boolean = controller.cancelTrust(TrustUiText.promptGen(lastUi))
+
+    /** "Eşleş": a user start (may pair) to the endpoint that answered PAIRING. */
+    private fun onPairClicked() {
+        val p = pairPick.pair() ?: return
+        userDisconnected = false
+        if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_CONNECT}")
+        hideManualEntry()
+        if (ConnectMode.transportOf(p.endpoint) == Transport.USB) {
+            startUsb(hint = mode == TransportMode.USB, ConnectOrigin.PAIR) // no Wi-Fi discovery beside a USB pairing
+        } else {
+            connect(p.endpoint, ConnectOrigin.PAIR)
+        }
+    }
+
+    /** "Yeniden eşleş" / "Bağlan" on a stored prompt: a user start to the endpoint whose automatic start was blocked. */
+    private fun userStartStored(origin: ConnectOrigin) {
+        val ep = currentEndpoint
+        if (ep == null) {
+            // Not expected (the stored prompt comes from a start to an endpoint): a confirmed one still connects.
+            if (origin == ConnectOrigin.STORED_CONNECT) trustConfirm()
+            return
+        }
+        userDisconnected = false
+        connect(ep, origin)
+    }
+
+    /** A pick prompt holds no connection: try another discovered Mac at once (never the one that asked to pair). */
+    private fun tryNextAfterPick() {
+        if (!started || isDestroyed || manualMode || userDisconnected || hostSleep.asleep || discovery == null) return
+        if (lastUi !is SessionUi.PairingNeedsUser) return
+        pairPick.nextAuto()?.let { connect(it, ConnectOrigin.DISCOVERY) }
+    }
+
+    /** "Bu Mac'i unut" from either settings panel: two confirmations, then [SessionController.forgetCurrentHost]. */
+    private fun onForgetHostClicked() {
+        forgetFlow.open()
+        showForgetDialog()
+    }
+
+    private fun showForgetDialog() {
+        val first = forgetFlow.step == ForgetFlow.Step.ASK_FIRST
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.forget_host)
+            .setMessage(if (first) R.string.forget_ask_first else R.string.forget_ask_second)
+            .setPositiveButton(if (first) R.string.forget_yes_first else R.string.forget_yes_second) { _, _ -> onForgetConfirmed() }
+            .setNegativeButton(R.string.forget_no) { _, _ -> forgetFlow.cancel() }
+            .setOnCancelListener { forgetFlow.cancel() }
+            .show()
+    }
+
+    private fun onForgetConfirmed() {
+        if (isDestroyed) return
+        if (forgetFlow.step == ForgetFlow.Step.ASK_SECOND) MbLog.i("pair_ui", TrustUiText.pairUiFields("forget"))
+        when (forgetFlow.confirm(SystemClock.elapsedRealtime())) {
+            null -> when (forgetFlow.step) {
+                ForgetFlow.Step.ASK_SECOND -> showForgetDialog()
+                ForgetFlow.Step.WAITING -> { // queued only (T-150): the result comes as a UI state, see onForgetResult
+                    ui.removeCallbacks(forgetSettle)
+                    ui.postDelayed(forgetSettle, ForgetFlow.SETTLE_MS + 50)
+                }
+                else -> Unit
+            }
+            else -> Toast.makeText(this, R.string.forget_none, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** The forget's result: done -> like "Bağlantıyı kes" with the done text; failed -> the failure text (retry). */
+    private fun onForgetResult(t: TrustText) {
+        ui.removeCallbacks(forgetSettle)
+        if (t == TrustText.FORGET_FAILED) {
+            forgetNotice = false
+            forgetFailed = true
+            MbLog.w("pair_ui_forget_failed")
+            if (started && !isDestroyed) applyStatusText(lastUi)
+            return
+        }
+        // T-150 already ended a live session (BYE + close) before the records went; now no automatic reconnect (it
+        // would only meet the Mac's stale approval) until the user connects again. Posted: render() may be running.
+        ui.post {
+            if (!started || isDestroyed) return@post
+            forgetNotice = true
+            userDisconnect()
+        }
     }
 
     private companion object {
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val USER_DISCONNECTED_TEXT = "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun."
-        const val PAIRING_NEEDS_USER_TEXT = "Mac eşleşme istiyor."
-        const val STORED_TRUST_TEXT = "Eşleşme yarım kaldı."
-        const val PAIR_CANCELLED_TEXT = "Eşleşme iptal edildi."
         const val KEYFRAME_RETRY_MS = 500L
         const val RATE_POLL_MS = 100L
         const val INPUT_TICK_MS = 25L
@@ -2206,7 +2457,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
             SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED ->
-                R.string.cause_protocol_error // literal texts in render()
+                R.string.cause_protocol_error // own texts in applyStatusText() (PAIR_CANCELLED: the trust view)
             SessionUi.Cause.HOST_SLEEP -> R.string.cause_host_sleep
         },
     )

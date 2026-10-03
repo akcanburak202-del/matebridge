@@ -1,7 +1,7 @@
 ---
 id: T-151
 title: Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut"
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]
@@ -88,14 +88,46 @@ Decision 0018 must be accepted by the user before work starts (manifest §5 Q3).
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **`C/session/TrustUiText.kt` (new, pure):**
+   - `TrustText` (string ids) / `TrustButton` / `TrustLine` / `TrustView`; `TrustUiText.view(state)` maps `AwaitingApproval(code, rePairing, needsLocalConfirm)`, `PairingNeedsUser` (host name as a sanitised claim), `StoredTrust(confirmed=false|true)` and `Failed(PAIR_CANCELLED)` to texts + buttons; `pickView(prompt)` for the non-blocking banner; `hostReached(state)` (+ `PairingNeedsUser`, `StoredTrust`); `claimName()` (no control/bidi chars, length cap).
+   - `ConnectOrigin` enum + `forConnectButton(typed, fieldVisible)`: only PAIR, STORED_REPAIR/STORED_CONNECT and TYPED_ADDRESS are `userInitiated`; DISCOVERY, SAVED_WIFI, USB_MODE, AUTO_SWITCH, WAKE, CONNECT_BUTTON are not; automatic ones are subject to the pick gate, "Bağlan" clears it.
+   - `PairPick`: last `Connecting` endpoint → the endpoint that answered PAIRING; `asked` set (bounded) that automatic connects skip; `seen` discovered endpoints (bounded) → `nextAuto()` so a parked prompt does not hide the real Mac; `ignore()` / `pair()` / `onUserStart()`; prompt cleared by `Connected`/`AwaitingApproval`/`StoredTrust`.
+   - `PromptVisibility` (post `true`/`false` only on change; `onStop`), `ForgetFlow` (2-step confirm, result text), `pairUiFields(action)` for `ev=pair_ui`.
+2. **`AutoTransport.kt`:** `shouldFallBack` also for `PairingNeedsUser`; `next(..., usbBlocked)` and `onProbeOpen(ui, usbBlocked)` never go to an asked USB endpoint. **`WakeConnect.onDiscovered(..., atPairPrompt)`**: a pairing prompt frees the slot for another endpoint.
+3. **`MainActivity.kt`:** `connect(ep, origin)` (gate + `userInitiated`), all call sites pass their origin; trust button row built in code under the status text; status text from `TrustView` via `strings.xml`; main "Bağlan" hidden while the trust row has buttons; prompt-visibility posts in `render`/`onStop`; Eşleş/Yoksay/Güven/İptal/Yeniden eşleş/Bağlan handlers (`ev=pair_ui action=`); AUTO initial pick and wake target skip an asked endpoint; fallback on `PairingNeedsUser`; "Bu Mac'i unut" via two `AlertDialog`s → `forgetCurrentHost()` → like "Bağlantıyı kes" + forget-done text.
+4. **`SettingsCatalog.kt`:** `forget_host` action in Bağlantı (both panels), label from the host (`strings.xml`).
+5. **`strings.xml`:** all new texts. **Tests:** `TrustUiTextTest`, `PairPickTest` (impostor, origins, visibility, forget), `AutoTransportTest`/`WakeConnectTest`/`SettingsCatalogTest` additions, log-field scan of `pair_ui` lines.
+6. Risks: `MainActivity` overlap with T-159 (kept local); no public "can forget" getter on the controller → the row is always shown and an unknown Mac gives a "nothing to forget" text (Açık sorular).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `26df194` (forget result from the UI state + "Yoksay" fix), on top of `c526a45` (T-150 API adaptation), `5a90aed` (implementation) and plan `a24de76`. Branch `task/T-151-client-trust-ui` merges `task/T-150-client-pending-pair-trust` three times (`7f60ffb` at `f2c24da`, `49eee37` at `61d598b`, `3182217` at `f009834`). `./scripts/check.sh: ALL OK` after the third merge.
+- **Dokunulan dosyalar:** `C/session/TrustUiText.kt` (new: `TrustText`/`TrustButton`/`TrustLine`/`TrustView`, `TrustUiText.view/screen/pickView/claimName/hostReached/pairUiFields`, `ConnectOrigin`, `PairPick`, `PromptVisibility`, `ForgetFlow`), `C/session/AutoTransport.kt` (`next(..., usbBlocked)`, `onProbeOpen(ui, usbBlocked)`, `shouldFallBack` also on `PairingNeedsUser`), `C/session/WakeConnect.kt` (`onDiscovered(..., atPairPrompt)`), `C/settings/SettingsCatalog.kt` (`forget_host` action in Bağlantı, both panels; `SettingsHost.forgetHostLabel`/`forgetHost()`), `C/MainActivity.kt`, `res/values/strings.xml`; tests: new `test/session/TrustUiTest.kt` (22), additions in `AutoTransportTest` (3), `WakeConnectTest` (1), `SettingsCatalogTest` (1 + key list). `SessionUi.kt` and `MacDiscovery.kt` unchanged.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - **T-150 update (61d598b):** "Kodlar aynı — Güven"/"İptal" call `confirmTrust(promptGen)`/`cancelTrust(promptGen)` with `TrustUiText.promptGen(lastUi)`, i.e. the generation of the `AwaitingApproval`/`StoredTrust` on screen (`lastUi` is what was rendered; -1 otherwise). **Cancel latch:** "Bağlan" on `Failed(PAIR_CANCELLED)` is the new origin `CONNECT_AFTER_CANCEL` (user-initiated, clears the gate), so it releases the latch; automatic starts (onStart, discovery, USB probe, wake) stay non-user-initiated and only re-show the cancelled text. "Bağlan" elsewhere without a typed address stays non-user-initiated as the card says (a PAIRING answer then gives the Eşleş prompt). Edge: after İptal and then "Bağlantıyı kes", the first "Bağlan" re-applies the mode's usual (automatic) way and shows "Eşleşme iptal edildi" again; the second tap releases the latch.
+  - **Origins:** every `controller.start` goes through `connect(ep, origin)` (wake: `ConnectOrigin.WAKE`). User-initiated: "Eşleş" (`PAIR`), stored-prompt "Yeniden eşleş"/"Bağlan" (`STORED_REPAIR`/`STORED_CONNECT`, to `currentEndpoint` = the blocked start's endpoint), "Bağlan" with an address in the **open** manual field (`TYPED_ADDRESS`). A hidden field's remembered address counts as plain "Bağlan" (`CONNECT_BUTTON`, not user-initiated), like T-134's wake rule. "Kodlar aynı — Güven" on `StoredTrust` is only `confirmTrust()`: the machine (T-150) promotes and connects, user-initiated, to its blocked endpoint.
+  - **Pick gate:** the endpoint of the latest `Connecting` is the one that answered PAIRING (the machine emits states in order). Asked endpoints are kept per activity instance (landscape-locked, so practically the process), bounded to 16; discovered endpoints are remembered (bounded to 8, cleared per discovery run) so a prompt triggers an immediate automatic try of another discovered Mac (`tryNextAfterPick`), because NSD reports a service only once. Any "Bağlan" tap (typed or not) clears the whole asked set; "Eşleş" clears its own endpoint. "Yoksay" only dismisses. The prompt stays as a banner (text under the state text, Eşleş/Yoksay) until `Connected`/`AwaitingApproval`/`StoredTrust`, "Bağlantıyı kes" or forget. It survives `onStop`/`onStart` (the asked endpoint is not re-contacted, so the user needs it to pair).
+  - **AUTO/USB:** an asked loopback endpoint → initial pick goes Wi-Fi (`transport_pick reason=usb_asked`), no rescan probe/switch/migration; `PairingNeedsUser` on USB in AUTO falls back to Wi-Fi (also stops the USB session when no eligible Wi-Fi endpoint). Manual USB mode with an asked loopback: no connect, `Idle` + banner, "Bağlan" reconnects.
+  - **Buttons:** built in code under the status text (the layout file is outside the card). The plain "Bağlan" is hidden while the trust row has buttons. `AwaitingApproval(needsLocalConfirm = false)` shows the code + "Mac'te İzin ver dediğinde bağlanır" without buttons (T-150 offers no cancel there).
+  - **Forget (T-150 f009834):** two `AlertDialog`s → `forgetCurrentHost()`. `false` → toast "unutulacak Mac yok". `true` only queues the request (`ForgetFlow.Step.WAITING`); the result comes from the rendered state: `Idle` → done (then "Bağlantıyı kes" behaviour, no automatic reconnect, forget-done text); `Failed(KEY_STORE_FAILED)` → "Mac unutulamadı … yeniden dene" text instead of the pairing-key text, the row stays usable (retry works). An already idle machine shows no state on success, so a request with no failure after `ForgetFlow.SETTLE_MS` (1.5 s; the engine takes the trust mailbox within one 100 ms tick) counts as done; a `KEY_STORE_FAILED` within 10 s after that still turns it into the failure text. `onStop` abandons a waiting request (nothing reported). The row is always shown (no public "can forget" getter, see below).
+  - **"Yoksay" (Codex P2):** on a `PairingNeedsUser` screen it renders `TrustUiText.afterIgnore(discovery running)` = `Searching` (or `Idle` with no discovery, e.g. manual USB) and drops `currentEndpoint` (the prompt holds no connection), so the ordinary screen and "Bağlan" come back and discovery/wake/AUTO go on to other Macs; the ignored endpoint stays asked. `TrustUiText.screen` also shows a `PairingNeedsUser` only while `PairPick` holds its prompt, so a dismissed or unattributable one never shows dead buttons. "Bağlan" with no chosen endpoint and nothing typed now searches the usual way again (`restartUsualWay`) instead of the "Geçersiz adres" toast.
+  - Host names are shown sanitised (`claimName`: no control/bidi/format chars, whitespace collapsed, ≤ 40 code points).
+  - New log events (no values): `ev=pair_ui action=confirm|cancel|pair|ignore|repair|connect|forget`, `ev=pair_auto_skip origin=<origin>`; `ev=transport` got `origin=`; `transport_pick reason=usb_asked`.
+- **Test edilmeyenler / cihazda doğrulanacaklar (nothing ran on the tablet; T-150 + T-151 installed together):**
+  1. Paired Mac: silent PAIRED reconnect over USB, Wi-Fi and AUTO (no prompt, `transport ... origin=`, `connect_start user=0`).
+  2. Mac "Onaylı cihazları unut" → tablet shows "Mac yeniden eşleşmek istiyor: kendini "<ad>" …" with Eşleş/Yoksay (Bağlan hidden); Eşleş → code + amber "Bu Mac'in kimliği/anahtarı değişti…" + "Kodlar aynı — Güven"/"İptal"; confirm before and after Mac "İzin ver" (both orders) → stream.
+  3. Fresh tablet (no key): "Yeni Mac bulundu…" → Eşleş → pairing works end to end.
+  4. Parsec flow: see code → Home → "İzin ver" in Parsec → back: stored code with Güven/İptal/Yeniden eşleş, no HELLO before the tap; Güven → connects. Confirm first then leave → back: "Mac'te 'İzin ver' dedikten sonra 'Bağlan'a bas" + Bağlan.
+  5. İptal → "Eşleşme iptal edildi…" text; Home → back: no reconnect (`pair_cancel_latched`), "Bağlan" reconnects (`origin=connect_after_cancel`, `user=1`); Mac-side dialog shows "Tablet ayrıldı" (orphan, T-157).
+  6. "Bu Mac'i unut" from the connect panel and in-stream: two dialogs, cancel at either changes nothing; confirm while streaming ends the stream cleanly (no stuck key/pen), shows the forget-done text; also from the connect panel while idle (done text after ~1.5 s); then Mac "Onaylı cihazları unut" + Bağlan → pick prompt → re-pair. The failure text cannot be provoked on the device without a broken store (JVM-tested only).
+  7. Dialog/button layout at 2800×1840 (three buttons in one row), immersive mode after an AlertDialog.
+  8. `adb logcat -s 'MB:*'` over all of the above: no code, key, token or Mac name.
+  9. Impostor (optional, T-157): a second `_matebridge._tcp` answering PAIRING does not park the tablet (real Mac connects, banner disappears).
+  10. "Yoksay" on a pick prompt: the ordinary "Mac aranıyor…" screen with "Bağlan" comes back; that Mac is not auto-connected again; "Bağlan" → it asks again.
 - **Açık sorular:**
+  - "Bağlan" user-initiated only on `Failed(PAIR_CANCELLED)` or with a typed address: accepted by the orchestrator (2026-10-03).
+  - The idle-machine forget success is inferred from a 1.5 s settle window with no failure (T-150 emits no state then). A distinct "forget done" UI event from the controller would make it exact.
+  - **"Can forget" getter:** `SessionController.forgettable` is private, so "Bu Mac'i unut" is always offered and an unknown Mac ends in a "nothing to forget" toast after both confirmations. A public `canForgetCurrentHost` (controller, outside this card) would let the row hide itself.
+  - **docs/LOGGING.md (orchestrator):** add `pair_ui action=`, `pair_ui_forget_failed`, `pair_auto_skip origin=`, the `origin=` field on `transport`, and `transport_pick reason=usb_asked`.
+  - The settings row label comes through `SettingsHost.forgetHostLabel` (strings.xml) while other catalog titles are still Kotlin literals.
+  - T-157: the orphan approval window on the Mac after the tablet aborts an automatic PAIRING (accepted risk, per card).

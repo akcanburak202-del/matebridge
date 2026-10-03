@@ -172,6 +172,39 @@ class AutoTransportTest {
         assertNull(slots.take())
     }
 
+    @Test fun pickPromptStatesWaitForTheUserAndAreIgnoredByAnOpenProbe() { // T-151
+        val waiting = listOf(
+            SessionUi.AwaitingApproval("m", "123456", needsLocalConfirm = true),
+            SessionUi.StoredTrust("123456", confirmed = false),
+            SessionUi.StoredTrust(null, confirmed = true),
+            SessionUi.PairingNeedsUser("m", rePair = false),
+        )
+        for (ui in waiting) {
+            assertEquals(Stage.WAITING_USER, AutoUsbPolicy.stageOf(ui))
+            assertEquals(AutoUsbPolicy.OpenAction.IGNORE, AutoUsbPolicy.onProbeOpen(ui))
+            assertEquals(Step.NONE, AutoUsbPolicy().next(false, AutoUsbPolicy.stageOf(ui), 0)) // no probe, no migrate
+        }
+    }
+
+    @Test fun anAskedUsbEndpointIsNeverProbedSwitchedToOrMigratedTo() { // T-151
+        val p = AutoUsbPolicy()
+        assertEquals(Step.NONE, p.next(false, Stage.NOT_CONNECTED, 0, usbBlocked = true))
+        assertEquals(Step.NONE, p.next(false, Stage.ACCEPTED, 0, usbBlocked = true))
+        assertEquals(Step.PROBE, p.next(false, Stage.NOT_CONNECTED, 0, usbBlocked = false))
+        for (ui in listOf(SessionUi.Idle, SessionUi.Searching, SessionUi.Disconnected(SessionUi.Cause.LOST, 1000), SessionUi.Connected("m", 0))) {
+            assertEquals(AutoUsbPolicy.OpenAction.IGNORE, AutoUsbPolicy.onProbeOpen(ui, usbBlocked = true))
+        }
+    }
+
+    @Test fun pickPromptOnUsbFallsBackToWifiInAuto() { // T-151: a localhost squatter must not park the tablet
+        val pick = SessionUi.PairingNeedsUser("m", rePair = false)
+        assertTrue(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, pick))
+        assertFalse(AutoUsbPolicy.shouldFallBack(TransportMode.USB, true, pick)) // manual USB: the prompt stays
+        assertFalse(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, false, pick)) // already on Wi-Fi
+        assertFalse(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, SessionUi.StoredTrust("123456", false)))
+        assertFalse(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, SessionUi.AwaitingApproval("m", "123456", needsLocalConfirm = true)))
+    }
+
     @Test fun fallBackOnlyInAutoOnUsbWhenDisconnected() {
         val lost = SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)
         assertTrue(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, lost))
