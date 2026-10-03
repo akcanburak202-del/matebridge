@@ -46,7 +46,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
-| [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |
 
 ## done
 
@@ -216,3 +215,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
 | [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |
+| [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |

@@ -1,7 +1,7 @@
 ---
 id: T-205
 title: Promote an AUTO USB migration candidate only after its first authenticated host record
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]

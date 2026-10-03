@@ -277,3 +277,13 @@ Yalnız ölçüm; girdinin nasıl ve ne zaman uygulandığını değiştirmez. H
 - `W input ev=input_slow_call stage=env|post|deliver us=<µs>`: bir mesajda bir çağrı 20 ms'yi aştığında (kesin büyük). Mesaj başına en çok bir satır: `env` ya da `post` aştıysa büyük olanı, ikisi de aşmadıysa `deliver` (süre kuyruk beklemesine ya da işlem hattına gitti). Hız sınırı: 10 s'de en çok bir satır, diğerleri yalnız `slow_calls`'ta sayılır. Hız sınırı oturumlar arasında sıfırlanmaz (yeniden bağlanma fırtınası uyarı yağdırmaz).
 - Karar eşiği (kart T-175): mesaj başına > ~50 µs ya da `deliver_us_p99` birkaç ms'nin üstündeyse optimizasyon kartı açılır (geometri önbelleği, tek `CGEventSource`, ses boşaltmayı oturum kuyruğundan almak). Altındaysa gerek yok.
 - Koordinat, tuş, keycode ya da karakter yazılmaz; yalnız aşama adı, süre ve sayı.
+
+## USB'ye geçişte kimlik kapısı (tablet, `MB/session`, T-205, karar 0018)
+
+Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sürede Wi-Fi oturumu geçerli kalır ve input oradan akar (hiçbir bırakma kaybolmaz).
+
+- `migration_proof_wait`: aday ACCEPTED aldı, kanıt PING'i gönderildi, ilk doğrulanmış kayıt bekleniyor.
+- `migration_old_gone how=bye|closed`: eski Wi-Fi bağlantısı kapandı ya da BYE(SUPERSEDED) aldı (kesin).
+- `migration_old_stale` / `migration_old_recovered`: bekleme sırasında Wi-Fi heartbeat süresi doldu (geçici) / geçerli bir PONG ile geri geldi.
+- `migration_proved`: adayın ilk kaydı doğrulandı, aday terfi etti.
+- `transport_migrate ok=0 reason=proof_failed|proof_closed|proof_timeout`: aday kanıtlayamadı; Wi-Fi sürer (ya da eski bağlantı da gittiyse yeniden bağlanılır).
