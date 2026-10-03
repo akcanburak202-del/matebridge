@@ -243,7 +243,10 @@ class SessionController(
     /**
      * Non-blocking. T-150 "Bu Mac'i unut": removes the trusted key, pending key and awaiting-host marker of the current
      * Mac (last PAIRED answer, last locally trusted session or the stored prompt shown; never a host_id taken only from
-     * an aborted PAIRING answer). A live session ends first (BYE + close). Returns false when no such Mac is known.
+     * an aborted PAIRING answer). A live session ends first (BYE + close). Returns false when no such Mac is known;
+     * true only means the request was queued (the removal runs on the engine). Success ends in [SessionUi.Idle] (or no
+     * UI change when already idle); a removal that did not persist ends in `Failed(KEY_STORE_FAILED)`, the Mac stays
+     * trusted and forgettable, and the call can be retried.
      */
     fun forgetCurrentHost(): Boolean {
         if (terminated.get() || !forgettable) return false

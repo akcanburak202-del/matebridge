@@ -698,27 +698,36 @@ class SessionMachine(
 
     /** Trust is never revoked on an open connection: a live session ends like Stop (BYE + close) before the records go. */
     private fun onForget(out: MutableList<Action>) {
-        cancelLatched = false // the user dealt with the Mac: automatic connects may run again
         val h = knownHostId
         if (h == null) {
+            cancelLatched = false // the user dealt with the Mac: automatic connects may run again
             log('I', "pair_forget_none", "")
             return
         }
         val live = controlGen >= 0
-        if (phase != Phase.IDLE) {
-            byeAndClose(out)
-            phase = Phase.IDLE
-            out += Action.Ui(SessionUi.Idle)
-        }
+        val wasIdle = phase == Phase.IDLE
+        if (!wasIdle) byeAndClose(out) // BYE + close first in every case: the host releases all input
         wakeAttempt = null
         userInitiated = false
         clearPrompt()
-        try {
+        val removed = try {
             trust?.forget(h)
+            trust != null
         } catch (e: Exception) {
-            log('W', "pair_forget_failed", "")
+            false
         }
+        if (!removed) {
+            // Review: the removal did not persist, so the Mac is still trusted after a restart. Never report success:
+            // keep its identity (the user can retry) and the cancel latch, and show KEY_STORE_FAILED.
+            phase = Phase.FAILED
+            log('W', "pair_forget_failed", "live=${flag(live)}")
+            out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
+            return
+        }
+        phase = Phase.IDLE
+        if (!wasIdle) out += Action.Ui(SessionUi.Idle)
         knownHostId = null
+        cancelLatched = false
         log('I', "pair_forget", "live=${flag(live)}")
     }
 
