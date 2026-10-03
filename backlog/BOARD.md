@@ -12,7 +12,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-164](tasks/T-164-video-fault-churn-device-run.md) | Run decoder fault injection and the surface-churn soak on the tablet | 6 | orchestrator | [T-159, T-161] |
 | [T-166](tasks/T-166-parked-display-measurement.md) | Measure parked-display behaviour across sleep, lock and long outages | 6 | user | [T-165, T-147] |
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
-| [T-169](tasks/T-169-client-refresh-target-log.md) | Log target and real refresh separately; warn on a mismatch | 6 | android-client-dev | [T-168] |
 | [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 | [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
@@ -205,6 +204,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-163](tasks/T-163-host-key-repeat-stall-pause.md) | Pause host key auto-repeat while the control connection is silent | 6 | mac-host-dev | [] |
 | [T-165](tasks/T-165-host-park-virtual-display.md) | Park the virtual display after a session ends (no capture or encode while parked) | 6 | mac-host-dev | [] |
 | [T-168](tasks/T-168-client-latency-stage-stats.md) | Break client latency into stages with percentiles; stop clamping; fix stats maps; log decoder hardware | 6 | android-client-dev | [T-161] |
+| [T-169](tasks/T-169-client-refresh-target-log.md) | Log target and real refresh separately; warn on a mismatch | 6 | android-client-dev | [T-168] |
 | [T-170](tasks/T-170-host-latency-trace-join.md) | Make the host latency CSV joinable with the tablet trace; fix labels | 6 | mac-host-dev | [T-162] |
 | [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |

@@ -1,7 +1,7 @@
 ---
 id: T-169
 title: Log target and real refresh separately; warn on a mismatch
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-168]
