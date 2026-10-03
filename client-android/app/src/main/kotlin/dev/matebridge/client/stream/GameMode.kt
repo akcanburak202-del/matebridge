@@ -95,7 +95,7 @@ class GameModeSettings(private val settings: Settings) {
             penDot = false,
         )
 
-        /** `ev=game_mode` fields, e.g. `action=enter overrides=bitrate,audio,pen jitter=0`. */
+        /** `ev=game_mode` fields, e.g. `action=enter overrides=bitrate,audio,pen jitter=adaptive`. */
         fun logFields(change: Change, jitter: GameJitter.Choice, effective: Values): String =
             "action=${change.action} overrides=$OVERRIDES jitter=${GameJitter.label(jitter.bufferFrames)}" +
                 (if (jitter.source != GameJitter.Source.MODE) " jitter_src=${jitter.source.id}" else "") +
@@ -104,9 +104,10 @@ class GameModeSettings(private val settings: Settings) {
 }
 
 /**
- * The video jitter buffer per display mode (decision 0014 §2): 0 in game mode (each frame goes to the next vsync, no
- * adaptive playout delay), [VideoRenderer.BUFFER_ADAPTIVE] otherwise. A launch value (`--ei jitter`) always wins,
- * including `-1` = [VideoRenderer.BUFFER_ADAPTIVE] (T-210: the adaptive pacer in game mode, an A/B knob).
+ * The video jitter buffer per display mode (decision 0014 §2, amended 2026-10-04, T-211):
+ * [VideoRenderer.BUFFER_ADAPTIVE] in every mode, game modes included (buffer 0 skipped ~10% of vsyncs at 60 fps on
+ * the 120 Hz panel). A launch value (`--ez dev true --ei jitter N`) always wins: `0` gives the old game-mode
+ * behaviour (each frame to the next vsync) for A/B, `-1` = [VideoRenderer.BUFFER_ADAPTIVE] (T-210).
  */
 object GameJitter {
     enum class Source(val id: String) { MODE("mode"), EXTRA("extra") }
@@ -119,7 +120,7 @@ object GameJitter {
      */
     fun choose(launch: Int, fixed: Source?, game: Boolean): Choice = when {
         fixed != null -> Choice(launch, fixed)
-        game -> Choice(0, Source.MODE)
+        game -> Choice(VideoRenderer.BUFFER_ADAPTIVE, Source.MODE)
         else -> Choice(launch, Source.MODE)
     }
 
