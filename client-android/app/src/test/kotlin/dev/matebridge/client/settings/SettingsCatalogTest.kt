@@ -67,7 +67,7 @@ class SettingsCatalogTest {
             listOf(
                 "transport", "disconnect", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_status",
-                "clipboard", "stats", "shortcuts",
+                "clipboard", "stats", "shortcuts", "version",
             ),
             side,
         )
