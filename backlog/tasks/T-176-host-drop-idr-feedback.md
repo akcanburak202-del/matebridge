@@ -1,7 +1,7 @@
 ---
 id: T-176
 title: Stop forced-IDR feedback on host-side queue drops
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-162]
