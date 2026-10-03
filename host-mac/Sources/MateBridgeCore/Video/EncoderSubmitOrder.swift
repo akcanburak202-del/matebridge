@@ -129,6 +129,17 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         public var duplicateReleases = 0
         public var minInFlight = 0
         public var maxInFlight = 0
+        /// Bitrate apply blocks put on the owner queue (T-177).
+        public var bitrateBlocksEnqueued = 0
+        /// Bitrate targets that replaced a not yet applied one in a queued block.
+        public var bitrateCoalesced = 0
+    }
+
+    /// The target of one queued bitrate block; written under `lock` until the block runs or a submit is queued
+    /// behind it.
+    private final class PendingBitrate: @unchecked Sendable {
+        var kbps: Int
+        init(_ kbps: Int) { self.kbps = kbps }
     }
 
     public static func defaultFlushScheduler() -> FlushScheduler {
@@ -167,6 +178,11 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var stats = Stats()
     /// Live bitrate requests (T-177); stopped together with `stopped`.
     private var bitrate: BitrateRequest
+    /// The bitrate block that is the newest block on the owner queue (nothing queued behind it yet): a new target
+    /// replaces its value instead of queueing another block. Cleared when a submit is queued or the block runs.
+    private var openBitrate: PendingBitrate?
+    /// The last value handed to `backend.setBitrate` (or the initial one).
+    private var sentBitrateKbps: Int
 
     /// - Parameter initialBitrateKbps: the bitrate the backend session was created with (`setBitrate` deduplicates
     ///   against it).
@@ -188,6 +204,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         self.beforeSubmit = beforeSubmit
         pacer = FramePacer<Frame>(streamFps: streamFps)
         bitrate = BitrateRequest(initialKbps: initialBitrateKbps, range: bitrateRange)
+        sentBitrateKbps = initialBitrateKbps
         lastReserveUs = nowUs()
         queue = DispatchQueue(label: queueLabel, qos: .userInteractive)
         queue.setSpecific(key: queueKey, value: 1)
@@ -233,21 +250,49 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         lock.lock(); pacer.setTargetFps(fps); lock.unlock()
     }
 
-    /// Changes the live session's bitrate (T-177) without a restart. Clamped and deduplicated (`BitrateRequest`);
-    /// an `.apply` is enqueued on the owner queue under the lock, like a submit, so it reaches the backend in FIFO
-    /// order with the frames and never after the teardown block. Never blocks on the encoder.
+    /// Changes the live session's bitrate (T-177) without a restart. Clamped and deduplicated (`BitrateRequest`).
+    /// Never blocks on the encoder.
+    ///
+    /// **Bounded and ordered.** An `.apply` goes onto the owner queue under the lock, like a submit, so it reaches
+    /// the backend in call order with the frames and never after the teardown block. If the newest block on the
+    /// owner queue is already a bitrate block (no submit queued behind it), the new target replaces that block's
+    /// value instead of queueing another one; superseded targets are dropped. So at most one bitrate block sits
+    /// between two submits (at most `maxInFlight + 1` in all), however fast requests arrive while the queue is
+    /// stalled. When the block runs it skips a value equal to the one last sent (e.g. 60 -> 15 -> 60 coalesced).
     @discardableResult
     public func setBitrate(kbps: Int) -> BitrateRequest.Decision {
         lock.lock()
         defer { lock.unlock() }
         let decision = bitrate.request(kbps)
-        if case .apply(let v) = decision {
-            queue.async { [backend] in backend.setBitrate(kbps: v) }
+        guard case .apply(let v) = decision else { return decision }
+        if let open = openBitrate {
+            open.kbps = v
+            stats.bitrateCoalesced += 1
+        } else {
+            let pending = PendingBitrate(v)
+            openBitrate = pending
+            stats.bitrateBlocksEnqueued += 1
+            // Weak: like the teardown block, a queued block must not keep the order alive.
+            queue.async { [weak self, backend] in
+                guard let v = self?.takeBitrate(pending) else { return }
+                backend.setBitrate(kbps: v)
+            }
         }
         return decision
     }
 
-    /// The bitrate in force (kbps): the last applied request, or the initial value.
+    /// Owner queue: closes `pending` for further coalescing and returns its value, nil when it equals the value
+    /// last sent.
+    private func takeBitrate(_ pending: PendingBitrate) -> Int? {
+        lock.withLock {
+            if openBitrate === pending { openBitrate = nil }
+            guard pending.kbps != sentBitrateKbps else { return nil }
+            sentBitrateKbps = pending.kbps
+            return pending.kbps
+        }
+    }
+
+    /// The newest requested bitrate (kbps), or the initial value.
     public var currentBitrateKbps: Int { lock.withLock { bitrate.currentKbps } }
 
     /// Releases the slot of `token` (the frame produced output, none, or was refused) and starts the pending frame,
@@ -329,6 +374,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// Must hold `lock`. Enqueues the submit on the owner queue while the reservation's lock is held, so the queue
     /// sees submits in reservation order and teardown (enqueued under the same lock) after all of them.
     private func submitLocked(_ s: Submit) {
+        // A later bitrate target must not move ahead of this frame: it gets its own block behind it.
+        openBitrate = nil
         queue.async { [backend, beforeSubmit] in
             beforeSubmit?(s.frame)
             backend.encode(s.frame, keyframe: s.keyframe, token: s.token)

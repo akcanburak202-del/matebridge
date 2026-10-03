@@ -331,13 +331,64 @@ final class EncoderSubmitOrderTests: XCTestCase {
         wait(barrier.reached, "frame 1 at the barrier")
         XCTAssertEqual(order.setBitrate(kbps: 20_000), .apply(20_000))
         order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 2_000) }
+        // Requested after frame 2 was queued: must not be folded into the block ahead of frame 2.
+        XCTAssertEqual(order.setBitrate(kbps: 30_000), .apply(30_000))
         XCTAssertEqual(backend.events, [], "nothing reaches the backend while the owner queue is held")
         barrier.open()
         wait(first, "frame 1 offer")
         drain(order)
         XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .setBitrate(20_000),
-                                        .encode(stamp: 2, key: false, token: 2)])
+                                        .encode(stamp: 2, key: false, token: 2), .setBitrate(30_000)])
+        XCTAssertEqual(order.currentStats.bitrateBlocksEnqueued, 2)
+        XCTAssertEqual(order.currentStats.bitrateCoalesced, 0)
         XCTAssertEqual(backend.offQueueCalls, 0)
+    }
+
+    /// The owner queue is stalled in frame 1's submit while 1 000 alternating targets arrive: they share one queued
+    /// block (bounded), and only the newest target reaches the backend once the queue moves again.
+    func testStalledQueueCoalescesBitrateRequestsIntoOneBlock() {
+        let barrier = SubmitBarrier()
+        let (order, backend) = makeOrder(barrier: barrier)
+        let first = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+            first.signal()
+        }
+        wait(barrier.reached, "frame 1 at the barrier")
+        for i in 0..<1_000 {
+            XCTAssertEqual(order.setBitrate(kbps: i.isMultiple(of: 2) ? 15_000 : 40_000),
+                           .apply(i.isMultiple(of: 2) ? 15_000 : 40_000))
+        }
+        XCTAssertEqual(order.currentStats.bitrateBlocksEnqueued, 1, "at most one queued apply")
+        XCTAssertEqual(order.currentStats.bitrateCoalesced, 999)
+        barrier.open()
+        wait(first, "frame 1 offer")
+        drain(order)
+        XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .setBitrate(40_000)])
+        XCTAssertEqual(backend.offQueueCalls, 0)
+    }
+
+    /// Targets that coalesce back to the value last sent produce no backend call (no redundant property set).
+    func testCoalescedReturnToSentValueIsSkipped() {
+        let barrier = SubmitBarrier()
+        let (order, backend) = makeOrder(barrier: barrier)
+        let first = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+            first.signal()
+        }
+        wait(barrier.reached, "frame 1 at the barrier")
+        XCTAssertEqual(order.setBitrate(kbps: 15_000), .apply(15_000))
+        XCTAssertEqual(order.setBitrate(kbps: 60_000), .apply(60_000))   // back to the initial value
+        barrier.open()
+        wait(first, "frame 1 offer")
+        drain(order)
+        XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1)])
+        // A later change after the block ran gets a new block.
+        XCTAssertEqual(order.setBitrate(kbps: 25_000), .apply(25_000))
+        drain(order)
+        XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .setBitrate(25_000)])
+        XCTAssertEqual(order.currentStats.bitrateBlocksEnqueued, 2)
     }
 
     /// A change requested before `stop()` runs before the invalidate; one requested after it is refused and never

@@ -289,6 +289,7 @@ Log satırı:
 - `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
   - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
   - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.
+  - Kuyruk tıkalıyken gelen istekler birleşir: iki submit arasında en çok bir uygulama bloğu bekler. Yalnız en yeni hedef uygulanır, aradakiler satır üretmez. Son gönderilen değere geri dönen hedef de satır üretmez.
   - `avg_status`: `AverageBitRate` için `VTSessionSetProperty` sonucu (`0` = kabul). `MATEBRIDGE_QUALITY` kabul edilmişse `skipped` yazılır: o kipte `AverageBitRate` kullanılmıyor, yalnız `DataRateLimits` değişir.
   - `limits_status`: `DataRateLimits` için sonuç.
   - `0` yalnız VideoToolbox'ın değeri kabul ettiğini söyler. `.fast` profil kabul edip yok sayabilir (T-087 emsali). Etkisi `net ev=stats` içindeki `sent_kbps=` ile ölçülür.
