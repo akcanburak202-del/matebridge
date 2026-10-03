@@ -1,7 +1,7 @@
 ---
 id: T-165
 title: Park the virtual display after a session ends (no capture or encode while parked)
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -65,7 +65,21 @@ Source: external architecture review 2026-10-03 (H04, A1, F2, D4); verification:
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **`DisplayLease` (Core):** `.grace` state → `.parked`. New `Action.park`. `sessionEnded(now:)` becomes `@discardableResult -> [Action]` and returns `[.park]` only from `.active`, so the old call sites (`StreamPrefsTests`, `BitratePrefsTests`) compile and pass unchanged. `.teardown` keeps no payload (existing tests compare `[.teardown, .create(s)]`). Instead, `lastTeardownReason` (`keepExpired`, `deviceChanged`, `sizeChanged`, `shutdown`; `logName` = snake_case) is set whenever a call returns `.teardown`. T-167 adds `user`. `isParked` is added, and `isInGrace` stays as an alias. Pure parse: `DisplayLease.keepSeconds(_:)` for `MATEBRIDGE_DISPLAY_KEEP_S` (trimmed integer, 10…86400, otherwise 10) and `keepUs(env:)`.
+2. **`VideoPipeline`:** `obtainDisplay` reuses an inherited display only when its refresh matches **and** `CGDisplayIsOnline` is true (public CG). Otherwise it uses the existing invalidate + 700 ms + create path. New `isOnline(_:)` helper and `displayWasReused` flag, so the coordinator can log `display_created` only for a new display.
+3. **`StreamCoordinator`:** new field `parked: (display, sinceUs)?`.
+   - `onSessionEnded` → `perform(lease.sessionEnded(now:))`. `.park` stops the consumer, calls `pipeline.stopKeepingDisplay()`, and stores the display. There is no `startDrain`, so no SCK stream and no VT session (the T-162 teardown awaits `enc.shutdown()`). Log `display_parked keep_s=`. If there is no pipeline or display, it calls `lease.displayLost()`.
+   - `.reuse` / `.reconfigure(s)` with no pipeline but a parked display → **unpark**: `createPipeline(settings:, reusing: parked)`, log `display_unparked parked_ms=` (+ `display_recreate reason=refresh_change|offline` when VideoPipeline has to recreate). `.reuse` takes its settings from `session.settings`.
+   - `.teardown` destroys the pipeline and invalidates `parked`, logging `display_teardown reason=<lease.lastTeardownReason>`.
+   - `onShutdown` runs `perform(lease.shutdown())` (reason=shutdown) and then also drops `parked` defensively.
+   - `onPipelineFailed` is unchanged: with only a parked display, `pipeline == nil` and it returns.
+   - `onVideoAttached` hands any leftover parked display to the rebuild.
+   - `perform` stays the only place that creates or removes displays.
+4. **Clock choice:** the keep time is **wall time**. The lease runs on a continuous clock (`clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)`, which keeps counting during system sleep, same as `mach_continuous_time`) in `sessionEnded` and `tick` only. So after a long system sleep, the parked display is removed on the first tick after wake. Prefs gate and stats stay on `HostClock`.
+5. **Keep-time knob:** `StreamCoordinator()` without `graceUs` reads `MATEBRIDGE_DISPLAY_KEEP_S` (default 10 s, unchanged).
+6. **Input:** unchanged. `main.swift` still calls `input.sessionEnded()` (release-all) on the same session-end hook. Parking only touches video.
+7. **Tests:** extend `DisplayLeaseTests` in `IntegrationTests.swift` (park/teardown-once/reuse/refresh/device/size/shutdown/displayLost/reasons) and add `DisplayLeaseTests.swift` with `DisplayParkTests` (keep parse). Update `docs/LOGGING.md`.
+8. **Risks:** if `CGDisplayIsOnline` is false for a healthy virtual display, every unpark and restart would recreate (device check). Takeover (end and start at once) now rebuilds capture and encode on the same display instead of reusing a running pipeline.
 
 ## Handoff
 
