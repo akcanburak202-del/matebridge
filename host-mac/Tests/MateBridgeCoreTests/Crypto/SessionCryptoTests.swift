@@ -121,12 +121,13 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         // The keys the host hands to its transport equal the ones the client derived on its own.
         let started = server.actions.compactMap { a -> ControlKeys? in if case .startEncryption(_, let k) = a { k } else { nil } }
         #expect(started == [client.schedule!.control])
-        // STREAM_CONFIG follows in the same write burst, as an encrypted record.
-        #expect(try client.open(wire) == [.streamConfig(config)])
-        // Client -> host: PING sealed with c2h is answered with a sealed PONG.
+        // Nothing follows the first ack until the client proved it holds the keys (T-152).
+        #expect(wire.isEmpty)
+        // Client -> host: the proof PING sealed with c2h starts the session: a sealed STREAM_CONFIG, then a sealed PONG.
         server.now = 5 * sec
         server.receive(try client.seal(.ping(Ping(seq: 9, senderTimeUs: 1234))))
-        #expect(try client.open(server.takeWire()) == [.pong(Pong(seq: 9, echoTimeUs: 1234, responderTimeUs: 5 * sec))])
+        #expect(try client.open(server.takeWire()) == [.streamConfig(config),
+                                                       .pong(Pong(seq: 9, echoTimeUs: 1234, responderTimeUs: 5 * sec))])
     }
 
     @Test func unauthenticatedBytesAfterTheHandshakeAreRejectedWithoutBye() throws {
@@ -136,6 +137,8 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         server.receive(try Message.hello(client.hello).encode())
         var wire = server.takeWire()
         try client.receiveFirstAck(try firstAck(&wire), pairKey: pairKey)
+        server.receive(try client.seal(.ping(Ping(seq: 0, senderTimeUs: 0))))  // the proof: session active (T-152)
+        #expect(server.machine.status == .active(deviceName: "Pad", sessionID: 77))
         // A record-shaped blob that was not sealed under the session key (length 17 = empty plaintext + tag).
         let ended = server.receive([17, 0, 0, 0] + [UInt8](repeating: 0x42, count: 17))
         #expect(ended == false)
@@ -152,6 +155,8 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         server.receive(try Message.hello(client.hello).encode())
         var wire = server.takeWire()
         try client.receiveFirstAck(try firstAck(&wire), pairKey: pairKey)
+        server.receive(try client.seal(.ping(Ping(seq: 0, senderTimeUs: 0))))  // the proof: session active (T-152)
+        #expect(server.machine.status == .active(deviceName: "Pad", sessionID: 77))
         var record = try client.seal(.ping(Ping(seq: 1, senderTimeUs: 1)))
         record[record.count - 1] ^= 1
         #expect(server.receive(record) == false)
@@ -162,7 +167,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         let logged = server.actions.compactMap { a -> String? in
             if case .log(_, "record_auth_failed", _, let f) = a { f } else { nil }
         }
-        #expect(logged == ["counter=0"])
+        #expect(logged == ["counter=1"])  // record 0 was the proof
     }
 
     @Test func pairingShowsTheSameCodeOnBothSidesAndStoresTheKeyBeforeAccepting() throws {
@@ -221,7 +226,9 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         let ack = try firstAck(&wire2)
         #expect(ack.status == .accepted && ack.keyMode == .paired)
         try again.receiveFirstAck(ack, pairKey: stored)
-        #expect(try again.open(wire2) == [.streamConfig(config)])
+        #expect(wire2.isEmpty)  // nothing before the proof (T-152)
+        second.receive(try again.seal(.ping(Ping(seq: 1, senderTimeUs: 0))))
+        #expect(try again.open(second.takeWire()).first == .streamConfig(config))
         // The key is bound into the session: a client with another pair key derives different keys.
         var stranger = TestClient(device: 1, eph: again.eph)
         try stranger.receiveFirstAck(ack, pairKey: SecretBytes([UInt8](repeating: 9, count: 32)))
@@ -293,6 +300,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         var m = makeMachine(store: store, approved: [device(1), device(2)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, TestClient(device: 1).message, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         _ = m.connectionOpened(B, now: 1)
         let actions = m.received(B, TestClient(device: 2).message, now: 1)
         guard case .send(B, .helloAck(let ack))? = actions.first else { Issue.record("no ack"); return }
@@ -305,6 +313,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         var m = makeMachine(store: store, approved: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, TestClient(device: 1).message, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
         // Somebody who knows the device_id (it is sent in the clear) sends a HELLO with garbage as public key.
         var bad = TestClient(device: 1).hello
@@ -323,6 +332,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         var m = makeMachine(store: store, approved: [device(1)])
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, TestClient(device: 1).message, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
 
         var client = TestClient(device: 1, eph: EphemeralKeyPair())
         _ = m.connectionOpened(B, now: 1)
@@ -370,6 +380,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         let actions = m.received(A, client.message, now: 0)
         guard case .send(_, .helloAck(let ack))? = actions.first else { throw ProtocolError.invalidField("ack") }
         try client.receiveFirstAck(ack, pairKey: pairKey)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // the proof that activates it (T-152)
         return (m, client)
     }
 

@@ -83,6 +83,7 @@ private final class BlockingStore: PairKeyStore, @unchecked Sendable {
         _ = m.connectionOpened(A, now: 0)
         #expect(lookups(m.received(A, TestClient(device: 1).message, now: 0)) == [A])
         _ = m.pairKeyResolved(A, key: pairKey, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
 
         // B asks; its lookup is pending (the Keychain is stuck). Nothing is sent to B, A is untouched.
@@ -112,6 +113,7 @@ private final class BlockingStore: PairKeyStore, @unchecked Sendable {
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, TestClient(device: 1).message, now: 0)
         _ = m.pairKeyResolved(A, key: pairKey, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         _ = m.connectionOpened(B, now: 1)
         _ = m.received(B, TestClient(device: 1, eph: EphemeralKeyPair()).message, now: 1)
         let shutdown = m.shutdown()
@@ -156,6 +158,7 @@ private final class BlockingStore: PairKeyStore, @unchecked Sendable {
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, TestClient(device: 1).message, now: 0)
         _ = m.pairKeyResolved(A, key: pairKey, now: 0)
+        _ = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // proof: A is the live session (T-152)
         _ = m.connectionOpened(B, now: 1)
         let actions = m.received(B, TestClient(device: 2).message, now: 1)
         #expect(lookups(actions).isEmpty)
@@ -169,7 +172,8 @@ private final class BlockingStore: PairKeyStore, @unchecked Sendable {
         _ = m.received(A, TestClient(device: 1).message, now: 0)  // lookup pending
         _ = m.connectionOpened(B, now: 1)
         _ = m.received(B, TestClient(device: 2).message, now: 1)  // lookup pending too
-        _ = m.pairKeyResolved(B, key: pairKey, now: 2)  // B gets the slot
+        _ = m.pairKeyResolved(B, key: pairKey, now: 2)
+        _ = m.received(B, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 2)  // B proves and gets the slot (T-152)
         let late = m.pairKeyResolved(A, key: pairKey, now: 3)
         #expect(late.contains { if case .send(A, .helloAck(let a)) = $0 { a.status == .busy } else { false } })
         #expect(m.status == .active(deviceName: "Pad", sessionID: 77))
@@ -384,7 +388,8 @@ private final class Atomic<T: Sendable>: @unchecked Sendable {
         a.hello.screenWidthPx = 2800
         _ = m.connectionOpened(A, now: 0)
         _ = m.received(A, a.message, now: 0)
-        let startedA = m.pairKeyResolved(A, key: pairKey, now: 0)
+        _ = m.pairKeyResolved(A, key: pairKey, now: 0)
+        let startedA = m.received(A, .ping(Ping(seq: 0, senderTimeUs: 0)), now: 0)  // A's proof (T-152)
         let helloA = startedA.compactMap { act -> Hello? in if case .sessionStarted(_, _, _, let h) = act { h } else { nil } }
         #expect(helloA.count == 1 && helloA[0].screenWidthPx == 2800)
 
