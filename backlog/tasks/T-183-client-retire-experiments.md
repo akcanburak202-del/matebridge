@@ -1,7 +1,7 @@
 ---
 id: T-183
 title: Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-182, T-168]
@@ -27,6 +27,7 @@ files:
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/VsyncIdleTest.kt
   - client-android/app/src/test/kotlin/dev/matebridge/client/security/RecordOpenTest.kt
   - tools/pacing/README.md
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/CodecGeneration.kt   # one-line cpd field removal; orchestrator-approved 2026-10-03
   - backlog/tasks/T-183-client-retire-experiments.md
 ---
 
