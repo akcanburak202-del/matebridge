@@ -172,6 +172,10 @@ public struct ApprovalRequest: Sendable {
     public let deviceName: String
     /// The six-digit pairing code both screens show; the user compares them. Never log it.
     public let code: String
+    /// Whether this request replaced an approval window left open by an earlier request whose tablet had left (T-155).
+    public let replaced: ApprovalReplacement
+    /// Short device fingerprint (`DeviceID.shortHex`) for the panel; not logged by the panel's caller.
+    public let deviceFingerprint: String
 }
 
 /// TCP control and video listeners plus Bonjour, driving a `SessionMachine`. Each listener runs on Network.framework
@@ -1480,9 +1484,10 @@ public final class SessionServer: @unchecked Sendable {
                 handlers.releaseInput(cause)
             case .deliver(_, let message):
                 handlers.deliver(message)
-            case .requestApproval(let id, _, let name, let code):
+            case .requestApproval(let id, let device, let name, let code, let replaced):
                 pendingApproval = id
-                let request = ApprovalRequest(id: id.raw, deviceName: name, code: code.digits)
+                let request = ApprovalRequest(id: id.raw, deviceName: name, code: code.digits, replaced: replaced,
+                                              deviceFingerprint: device.shortHex)
                 pendingRequest = request
                 handlers.approvalRequested(request)
             case .approvalOrphaned(let id):

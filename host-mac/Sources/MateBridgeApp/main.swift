@@ -333,7 +333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// The dialog always shows the latest request: a new one replaces the visible panel immediately.
     private func askApproval(_ request: ApprovalRequest) {
         approvalPanel?.dismiss()
-        let panel = ApprovalPanel(requestID: request.id, deviceName: request.deviceName, code: request.code) { [weak self] approved in
+        let panel = ApprovalPanel(requestID: request.id, deviceName: request.deviceName, code: request.code,
+                                  replaced: request.replaced,
+                                  fingerprint: request.deviceFingerprint) { [weak self] approved in
             self?.approvalPanel = nil
             // Bound to this request's id; the server ignores the answer if it is no longer pending.
             self?.server?.resolveApproval(id: request.id, approved: approved)

@@ -111,7 +111,7 @@ private func activate(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 
         _ = m.connectionOpened(A, now: 0)
         let first = m.received(A, hello(name: "Tab"), now: 0)
         #expect(ackStatuses(first, to: A) == [.pendingApproval])
-        #expect(has(first) { if case .requestApproval(A, device(1), "Tab", _) = $0 { true } else { false } })
+        #expect(has(first) { if case .requestApproval(A, device(1), "Tab", _, .none) = $0 { true } else { false } })
         #expect(m.status == .pending(deviceName: "Tab"))
 
         // Accepting is two steps: persist the pair key first, ACCEPTED only after it is stored.

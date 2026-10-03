@@ -27,6 +27,25 @@ public enum ReleaseCause: Equatable, Sendable {
 
 public enum LogLevel: String, Sendable { case error = "E", warning = "W", info = "I", debug = "D" }
 
+/// What a new pairing request replaced (T-155). The request is never blocked; the approval panel shows the swap.
+public enum ApprovalReplacement: Equatable, Sendable {
+    /// No approval window was open.
+    case none
+    /// The open (orphaned) window belonged to the same `device_id`: the tablet came back before approval, with a new code.
+    case sameDevice
+    /// The open (orphaned) window belonged to another `device_id`: a different device took the dialog over.
+    case otherDevice
+
+    /// Value of the `replaced=` field of `approval_pending`.
+    public var logValue: String {
+        switch self {
+        case .none: "none"
+        case .sameDevice: "same"
+        case .otherDevice: "other"
+        }
+    }
+}
+
 public enum SessionAction: Equatable, Sendable {
     /// Send on the control connection.
     case send(ConnectionID, Message)
@@ -46,8 +65,10 @@ public enum SessionAction: Equatable, Sendable {
     case releaseInput(ConnectionID, ReleaseCause)
     /// Message from the approved, active session that the host acts on (input, STATS, KEYFRAME_REQUEST).
     case deliver(ConnectionID, Message)
-    /// `code` is shown in the approval window only (never logged).
-    case requestApproval(ConnectionID, deviceID: DeviceID, deviceName: String, code: PairingCode)
+    /// `code` is shown in the approval window only (never logged). `replaced` says whether this request replaced an
+    /// approval window left open by a request whose tablet had left (T-155); the panel makes a swap visible.
+    case requestApproval(ConnectionID, deviceID: DeviceID, deviceName: String, code: PairingCode,
+                         replaced: ApprovalReplacement)
     case cancelApproval(ConnectionID)
     /// The connection that owns the approval request is gone (tablet left, e.g. switched to another app), but the
     /// window stays open for `orphanWindowUs` with the same code. The request id stays valid for `approvalDecided`
@@ -685,13 +706,18 @@ public struct SessionMachine: Sendable {
                                               Pairing(schedule: schedule, code: code, newPairKey: newKey))
             actions += [.send(id, .helloAck(firstAck)), .startEncryption(id, schedule.control),
                         .log(.info, ev: "handshake", conn: id, fields: "mode=pairing")]
-            // A new request replaces a window left open by an earlier one (its stored key is dropped).
+            // A new request replaces a window left open by an earlier one (its stored key is dropped). It is never
+            // blocked (that would let any LAN device lock pairing out), but the swap is reported so the panel can
+            // say whether the same or a different device is asking now (T-155).
+            var replaced = ApprovalReplacement.none
             if let o = orphan {
                 orphan = nil
+                replaced = o.deviceID == hello.deviceID ? .sameDevice : .otherDevice
                 actions.append(.cancelApproval(o.id))
             }
-            actions += [.requestApproval(id, deviceID: hello.deviceID, deviceName: hello.deviceName, code: code),
-                        .log(.info, ev: "approval_pending", conn: id, fields: "")]
+            actions += [.requestApproval(id, deviceID: hello.deviceID, deviceName: hello.deviceName, code: code,
+                                         replaced: replaced),
+                        .log(.info, ev: "approval_pending", conn: id, fields: "replaced=\(replaced.logValue)")]
         }
         return actions
     }

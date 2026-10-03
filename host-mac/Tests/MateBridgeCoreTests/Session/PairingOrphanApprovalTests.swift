@@ -34,7 +34,7 @@ private func connect(_ m: inout SessionMachine, _ id: ConnectionID, dev: UInt8 =
 }
 
 private func requests(_ actions: [SessionAction]) -> [ConnectionID] {
-    actions.compactMap { if case .requestApproval(let id, _, _, _) = $0 { id } else { nil } }
+    actions.compactMap { if case .requestApproval(let id, _, _, _, _) = $0 { id } else { nil } }
 }
 private func cancels(_ actions: [SessionAction]) -> [ConnectionID] {
     actions.compactMap { if case .cancelApproval(let id) = $0 { id } else { nil } }
