@@ -1,7 +1,7 @@
 ---
 id: T-207
 title: Clear the "asked to pair" mark on a Mac's endpoints once that Mac is trusted, so AUTO returns to USB
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
