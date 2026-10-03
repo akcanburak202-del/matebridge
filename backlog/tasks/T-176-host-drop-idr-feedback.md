@@ -1,7 +1,7 @@
 ---
 id: T-176
 title: Stop forced-IDR feedback on host-side queue drops
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-162]
@@ -77,7 +77,21 @@ Wire: none. No PROTOCOL.md change.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Politika: **(b)** (varsayılan). Kuyruğun düşürme seçimi aynı kalır (en eski delta + bağımlıları), yalnızca zorlanan keyframe hız sınırlanır.
+
+1. `BoundedFrameQueue`: `isAwaitingKeyframe` ve `hasQueuedKeyframe` okuyucuları; düşürme kararı değişmez. Yorumda politika ve referans zinciri argümanı (kuyruktaki IDR zinciri onarmaz; d1 düşünce d2 ve sonrası çözülemez, bu yüzden yeni keyframe yine gerekir, ama hemen değil).
+2. `VideoFrameQueue`: kilit altında tek anlık görüntü `keyframeState` (`awaitingKeyframe`, `keyframeQueued`, `keyframesPushed`). Geri çağırma imzası aynı kalır (mevcut testler değişmez).
+3. `KeyframeRequestCoalescer`: `hostDrop(nowUs:queue:)` ve `checkDeferred(nowUs:queue:)` → `HostDecision { forceKeyframe, recheckAtUs }`.
+   - Kuyruk keyframe beklemiyorsa: hiçbir şey.
+   - Zorla, eğer: yolda keyframe yok (encoder içinde bekleyen yok, gönderilmiş-ama-yazılmamış yok, kuyrukta yok) ve son yazım `windowUs`'den eski; ya da erteleme `pendingTimeoutUs`'i aştı (sert sınır).
+   - Aksi halde ertele ve `recheckAtUs` döndür (yazım + `windowUs`, yolda keyframe için kısa yoklama, sert sınır).
+   - Zorladıktan sonra da kuyruk keyframe beklediği sürece izleme sürer (`pendingTimeoutUs` sonra tekrar zorla): kuyruk asla keyframe bekler halde, yolda keyframe ve planlı zorlama olmadan kalmaz.
+   - `reset` ertelemeyi temizler; `internalForce` (reddedilen kare yolu) ve istemci zorlamaları ertelemenin saatini yeniler.
+4. `VideoPipeline` (`EncoderBox`): kuyruk geri çağırması → `hostDrop`; `recheckAtUs` için tek seferlik `asyncAfter` zamanlayıcı → `checkDeferred`; zorlamada `encoder.requestKeyframe()` (sonraki yakalama IDR; durağan ekranda encoder'ın 1 s boşta keyframe'i). Reddedilen kare yolu (`requestKeyframe()`) değişmez (kapsam dışı, VideoSender 500 ms ile sınırlı).
+5. Testler (`Tests/MateBridgeCoreTests/Video/HostDropKeyframeTests.swift`): `[IDR,d1]+d2` anında zorlamaz + çıkan kareler çözülebilir (referans zinciri modeli); sahte saatle erteleme/sert sınır/hiçbir şey yutulmaz; mevcut testler değişmeden geçer.
+6. İsteğe bağlı encode-öncesi atlama: **yapılmıyor** (EncoderSubmitOrder'a `last` güncelleme kancası ya da kuyruk boşalma sinyali gerektirir; risk/kapsam). Handoff'ta not.
+
+Riskler: erteleme sırasında video donar (en çok yazım + 250 ms, sert sınır 1 s); kuyruk anlık görüntüsü ile yazım tamamlanması arasındaki yarış yalnızca fazladan keyframe üretebilir, eksik değil.
 
 ## Handoff
 
