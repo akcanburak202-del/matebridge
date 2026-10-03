@@ -54,7 +54,19 @@ Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yü
 
 ## Handoff
 
-- **Commit:** implementation `b16e45c` (plan `41dd96b`; this handoff is the commit after it). Branch `task/T-209-host-force-unmount-stale-volume`. `./scripts/check.sh` ALL OK (host: 799 tests).
+- **Commit:** Codex fixes `ec3a9fd`, on top of implementation `b16e45c` and plan `41dd96b`; the handoff commits follow. Branch `task/T-209-host-force-unmount-stale-volume`. `./scripts/check.sh` ALL OK (host: 802 tests).
+- **Codex review (--high), two findings, both fixed in `ec3a9fd`:**
+  - **P1, a replacement volume could be forced.** Each mount now records the volume's identity right after it succeeds: `VolumeIdentity`, read from `getfsstat`, with `f_fsid` (assigned per mount), `f_fstypename` and the exact `f_mntfromname`. The identity travels with the replaced volume and the leftover, and goes in the action `forceUnmount(path:localPort:identity:)`.
+    - Right before `MNT_FORCE`, the bridge re-reads the entry at that path and calls the pure Core check `TabletFilesPlanner.identityMatches(expected:current:localPort:)`. It requires an equal identity, type `webdav`, and exactly `http://127.0.0.1:<port>/MatePad/`: no user, query or other path.
+    - On a mismatch there is no force, `ev=unmount result=skipped reason=identity force=1` is logged, and the result is reported as gone, so the leftover is forgotten.
+    - A leftover with no recorded identity is never forced.
+    - Tests: `identityMatchesOnlyTheExactVolumeWeMounted`, `leftoverWithoutAKnownIdentityIsNeverForced`.
+  - **P2, the remount could run before a queued unmount.**
+    - Forces now come after the normal cleanup in the same list (`[unmount, forceUnmount]`, `teardown + forces + installForward`).
+    - The planner counts `unmount(localPort:)` actions until their results come back (`pendingUnmounts`). The automatic remount and the collision retry wait until every queued unmount and force has reported (`resumeAfterCleanup`).
+    - One exception keeps T-206's action lists: the mount may follow, in the same list, the unmount the same step just emitted, because the host reports that unmount before it runs the next action.
+    - Test: `remountWaitsForTheWholeCleanupAfterAUsbReturn` checks the exact list `[unmount(47010), forceUnmount(...)]` and both result orders.
+  - T-206 tests are unchanged and green. In the T-209 tests, `mounted()` now passes an identity.
 - **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Files/TabletFilesPlanner.swift`, `host-mac/Sources/MateBridgeHost/Files/TabletFilesBridge.swift`, `host-mac/Tests/MateBridgeCoreTests/Files/TabletFilesPlannerTests.swift`, `docs/LOGGING.md`, this card.
 - **Davranış (planner):**
   - New action `forceUnmount(path:localPort:)`; new events `forceUnmountFinished(path:localPort:gone:)` and `mountCollided(generation:localPort:mountedNow:)`; new state `leftoverPaths`.
@@ -73,6 +85,8 @@ Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yü
   - A tablet server start always gets a new token, so a different token means the old server and the old volume's credentials are gone.
   - NetFS answers EEXIST in its callback when the same URL is already mounted (device log `ev=mount result=error code=17` matches the callback's format).
   - `unmount(2)` with `MNT_FORCE` works for the user's own NetFS WebDAV volume without root, like the plain `unmount` already used, and does not hang on a dead server.
+  - `f_fsid` of a WebDAV volume is unique per mount while the system runs, so a later volume at the same path gets another one.
+  - A small window remains between the identity check and `unmount(2)`, which takes a path. Another mount would have to land at that exact path within microseconds.
   - Memory only: if the Mac app restarts, it does not know earlier volumes, so it forces nothing (EEXIST stays visible, as today).
 - **Test edilmeyenler / cihazda doğrulananlar:** nothing was run on hardware (no app launch, no mount, no unmount). Device checks:
   - **[device] criterion (cross-session):** mount "MatePad", keep it open in Finder, force-stop and restart the tablet app. Expect `ev=unmount result=error code=16` at session end, then `ev=unmount result=ok force=1` once when the new session's READY arrives, then "Tablet dosyalarını aç" mounts with no EEXIST. See the first open question about the volume "coming back by itself".
@@ -81,6 +95,7 @@ Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yü
   - **User's own volume:** not practical to set up; covered by tests only.
   - Check what Finder does with a window open on a force-unmounted volume (it should close or show the volume as gone, with no dialog).
   - Check that `MNT_FORCE` returns quickly on a dead WebDAV volume.
+  - Check that the fsid read right after the mount is the same one `getfsstat` shows later for that volume, so no `result=skipped reason=identity` appears in the device case above.
 - **Açık sorular:**
   - **Device criterion vs. T-206 scope:** "birim birkaç saniyede yeni token ile geri gelir" after force-stop + start. A force-stop ends the session, and T-206 deliberately clears the remount intent at session end ("a new session still needs the user's 'Tablet dosyalarını aç'", test `sessionEndAndShutdownForgetTheIntent`). So after an app restart the dead volume is forced away within seconds, but it comes back only when the user opens it. That open now works. If the volume should come back by itself across sessions, that needs a new card, because it changes the T-206 intent rule.
   - **Live-token leftover blocks a mount:** USB loss with a busy volume, then USB back with the same server. The volume is alive again, but a user "open" gets EEXIST and fails (it is not adopted). This is the same as before T-209, and it is not forced, as the card requires. Adopting it (passing it as `knownPath`) would fix it, but that is outside this card.
