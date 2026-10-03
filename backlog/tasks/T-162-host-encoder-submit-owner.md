@@ -1,7 +1,7 @@
 ---
 id: T-162
 title: Serialise HEVCEncoder submits, QP updates and teardown on one owner queue
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -67,7 +67,13 @@ Source: external architecture review 2026-10-03 (M02, X5, SE7); verification: do
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Commit 1 (plan):** this section, `status: in-progress`.
+2. **Commit 2 (step 1, no behaviour change):** new Core `EncoderSubmitOrder<Backend: CompressionBackend>` owns the encoder lock state that decides submission: pacer (`FramePacer`), `last`, `forceKeyframe`, `inFlight`, reservation tokens, monotonic stamp (PTS), last slot-free/reserve times, flush scheduling and `stop`. Frames conform to `EncoderSubmitFrame` (generic stamp + `gateUs` + arrival/reserve hooks); `CompressionBackend` has `encode(frame, keyframe:, token:)` and `completeAndInvalidate()`. Step 1 keeps today's ordering exactly: reserve under the lock, unlock, then `backend.encode` on the caller thread; `stop` invalidates on the caller thread. `HEVCEncoder` keeps its public API and adapts VT via a private backend class. Test seam: `beforeSubmit` hook (nil in production). `EncoderSubmitOrderTests` documents today's order; the two barrier tests (PTS inversion, encode after invalidate) are red and committed under `XCTExpectFailure`, failure quoted in the commit message.
+3. **Commit 3 (step 2, the fix):** under the lock, every reserved submit is enqueued `async` on one serial owner queue (FIFO = reservation order); `stop` sets `stopped` and enqueues `completeAndInvalidate` (+ optional completion) under the same lock, capturing only the backend and the completion. Release is idempotent per token (double release: `warning`, count unchanged). `updateQPBoost` moves into the backend's encode (owner queue; `boostLock` goes). `CMBlockBufferCopyDataBytes` when `lengthAtOffset != totalLength`. `HEVCEncoder.shutdown() async` (continuation resumed at the end of the teardown block) for `VideoPipeline.teardown`; sync `stop()` keeps waiting for the teardown (semaphore; not when already on the owner queue) for `SharpnessBench`; `deinit` only enqueues. Barrier tests lose `XCTExpectFailure`; 10 000-op stress test added; mutation check recorded in Handoff.
+4. **Commit 4:** Handoff, `status: review`.
+
+Files: only the `files:` list. `VideoPipeline.swift`: one line (`await enc?.shutdown()`); T-165 is `todo` (no branch/worktree), so it is not in progress.
+Risks: one extra thread hop per frame (measure `ev=latency enc` / `cap_to_sent` on device); a late output after `frames.finish()` cannot happen because teardown awaits the owner queue.
 
 ## Handoff
 
