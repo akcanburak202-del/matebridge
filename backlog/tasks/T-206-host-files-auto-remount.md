@@ -1,7 +1,7 @@
 ---
 id: T-206
 title: Remount the tablet files volume after a server restart if it was mounted
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-190]
@@ -40,7 +40,14 @@ Kaynak: Codex review of T-190 (P2), `FilesController.kt` `rescope()` and `Tablet
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+All in `TabletFilesPlanner` (pure); no new action, so the host bridge needs no change for the remount itself.
+
+1. Intent `keepsMounted`: set by `openRequested` (the user asked for the volume). Cleared by `sessionStarted`, `sessionEnded`, `shutdown`, and a new event `volumeUnmounted(path:)` when the path is the volume this session mounted (user eject). `FILES_INFO` OFF, a token change and USB loss keep it (a transport change away from USB is always a new session, so session start/end cover it).
+2. One automatic attempt per READY: a new READY info (one that differs from the current one, including OFF → READY) arms `autoMountArmed` when `keepsMounted`; OFF disarms it. The armed attempt fires once the forward is up: in `filesInfo` right after the unmount (same port, new token, forward already up) or in `forwardFinished` of the current generation (new forward). Firing disarms it, so a failed automatic mount sets `lastMountFailed` and waits for the next READY or the user.
+3. An automatic mount does not `reveal` (no Finder window popping up on a scope change); a user `openRequested` still does.
+4. Tests (Swift Testing, `TabletFilesPlannerTests.swift`): the five XCTest criteria plus: no reveal on auto mount, `volumeUnmounted` of a path that is not ours keeps the intent, armed attempt survives a failed forward (`retry`) and USB loss until it fires once.
+
+Gap (see Open questions): the planner has no input for a Finder eject today. `volumeUnmounted(path:)` is added and tested, but calling it (e.g. from `NSWorkspace.didUnmountNotification`) is a change in `TabletFilesBridge.swift`, which is outside `files:`.
 
 ## Handoff
 
