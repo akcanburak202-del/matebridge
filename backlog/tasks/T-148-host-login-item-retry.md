@@ -1,7 +1,7 @@
 ---
 id: T-148
 title: Retry login-item registration after a failure
-status: in_progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -42,10 +42,10 @@ Source: external architecture review 2026-10-03 (M06); verification: docs/review
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] First commit: `LoginItemPolicyTests` reproduces today's bug (flag set before registration; after a failed first-run registration the next launch does not retry) and **fails** against the unchanged extracted policy. The commit is recorded in Handoff.
-- [ ] [XCTest] After the fix: first run + success → done, flag set; first run + failure → flag not set, next launch retries, problem shown; user toggled off → flag set, never auto-registered again; user toggled on after a failure → flag set; not bundled → nothing persisted.
+- [x] [XCTest] First commit: `LoginItemPolicyTests` reproduces today's bug (flag set before registration; after a failed first-run registration the next launch does not retry) and **fails** against the unchanged extracted policy. The commit is recorded in Handoff.
+- [x] [XCTest] After the fix: first run + success → done, flag set; first run + failure → flag not set, next launch retries, problem shown; user toggled off → flag set, never auto-registered again; user toggled on after a failure → flag set; not bundled → nothing persisted.
 - [ ] [device] With the login item removed in System Settings → General → Login Items and the flag reset (`defaults delete dev.matebridge.host loginItemFirstRunDone`), the next launch of the bundled app registers it (`ev=login_item enabled=true`), and after logout/login the host starts.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -62,8 +62,17 @@ Source: external architecture review 2026-10-03 (M06); verification: docs/review
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** fix `2010e4c` (on top of red `ce36d1e`, plan `6c8c7d4`), branch `task/T-148-host-login-item-retry`.
+  - **Red commit `ce36d1e`:** `LoginItemPolicy` reproduces today's decision unchanged (launch always marks done, a toggle never does); `swift test --filter LoginItemPolicyTests` → 6 of 9 tests fail (14 issues), among them `failedFirstRunIsRetriedOnTheNextLaunch` (flag set after a failed registration, second launch makes no `register` call). Fix `2010e4c` → 9/9 green.
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Session/LoginItemPolicy.swift` (new), `host-mac/Tests/MateBridgeCoreTests/Session/LoginItemPolicyTests.swift` (new), `host-mac/Sources/MateBridgeApp/LoginItem.swift`, this card. `main.swift` unchanged.
 - **Varsayımlar:**
+  - Launch with the flag unset but the item already `enabled`/`requiresApproval` (e.g. enabled in System Settings) → no `register` call, flag written (as before).
+  - Toggle-off writes the flag even if `unregister()` throws (the user's "off" wins). Toggle-on writes it only on success, so a failed toggle-on is retried at the next launch (what the user asked for).
+  - Not bundled (`swift run`): nothing is persisted, so every unbundled launch now logs `login_item_failed reason=not_bundled` and shows the "yalnız MateBridge.app" line (before: only on the first run of that defaults domain). Dev-only.
+  - Log events and fields unchanged (`login_item enabled=`, `login_item_failed enabled= code=` / `reason=not_bundled`); the error text goes only to the menu, never to the log.
+  - Write order changed: the flag is written after the attempt (both are synchronous in one call on the main actor).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - [device] AC 3: remove the login item in System Settings → General → Login Items, `defaults delete dev.matebridge.host loginItemFirstRunDone`, launch the bundled app → `ev=login_item enabled=true` and the flag is set; after logout/login the host starts. Not run here (no GUI / no real login-item changes allowed for the agent).
+  - A real `SMAppService.register()` failure was not produced; the retry path is covered only by the Core tests. Optional check: with the flag unset, a failing launch should leave `defaults read dev.matebridge.host loginItemFirstRunDone` absent and show the problem line in the menu.
+  - Whether the unbundled binary really uses a different defaults domain than `dev.matebridge.host` was not checked; it no longer matters because nothing is persisted when unbundled.
+- **Açık sorular:** none.
