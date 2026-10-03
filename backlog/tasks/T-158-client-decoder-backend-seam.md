@@ -1,7 +1,7 @@
 ---
 id: T-158
 title: Put MediaCodec behind a DecoderCodec interface (no behaviour change)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -60,7 +60,34 @@ Orchestrator note (2026-10-03): `build.gradle.kts` was added to `files:` so the 
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Chosen seam: **`DecoderCodec` + an injected `DecoderEnv` (clock, log sink, thread tid/priority)**, so the real
+`VideoRenderer` (its own `mb-decoder` / `mb-decoder-out` threads, `decodeLoop` / `decodeAttempts` / `runCodec`) runs
+on the JVM unchanged. Why not the alternatives: extracting the lifecycle into a pure class would move most of `runCodec`
+(pacers, releaser, gauge) and is a much larger diff with more behaviour-change risk, and a new file is outside `files:`;
+`isReturnDefaultValues` would make `Log` silent (the tests must observe `ev=give_up`) and `SystemClock` return 0, so it
+is not needed and `build.gradle.kts` stays untouched.
+
+1. `video/DecoderCodec.kt` (new):
+   - `interface DecoderCodec`: `name`, `lowLatencySupport(mime)` (null = API < 30, i.e. today's `n/a`), `configure(format,
+     surface: Any)`, `start`, `dequeueInputBuffer`, `getInputBuffer`, `queueInputBuffer`, `dequeueOutputBuffer(OutputInfo,
+     timeoutUs)`, `releaseOutputBuffer(idx, renderNs)`, `releaseOutputBuffer(idx, render)`, `setOnFrameRenderedListener`,
+     `inputFormat` / `outputFormat` (read-only `FormatView`: `containsKey`, `getInteger`, `getFloat`), `stop`, `release`;
+     nested `Factory` (`create(mime)`), `OutputInfo` (pts, flags), and the two MediaCodec int constants the renderer uses.
+   - `DecoderFormat`: pure builder (mime, size, ordered integer keys); the adapter turns it into a `MediaFormat`.
+   - `MediaCodecDecoder`: the 1:1 adapter (`createDecoderByType`, `configure(format, surface, null, 0)`, the API-30
+     low-latency feature check, the main-looper `Handler` for the rendered listener, one `BufferInfo` copied into
+     `OutputInfo`).
+   - `DecoderEnv` + `AndroidDecoderEnv`: `SystemClock.elapsedRealtime[Nanos]`, `Log.{i,w,e}`, `Process.myTid`,
+     `Process.setThreadPriority(THREAD_PRIORITY_DISPLAY)`.
+2. `VideoRenderer.kt`: two new trailing constructor parameters with production defaults (`MainActivity` unchanged); all
+   `MediaCodec` / `Build` / `SystemClock` / `Log` / `Process` / `Handler` calls go through them; log line texts unchanged.
+   `attachSurface(Surface)` delegates to `internal attachTarget(Any)` (tests pass a plain object).
+3. Tests (`test/.../video/FakeDecoderCodec.kt`, `DecoderLifecycleTest.kt`): scriptable fake (fail create / configure /
+   start, throw on dequeue, silent = input accepted and no output, block in stop / release / dequeueOutputBuffer on a
+   latch, ordered event log); tests for give-up after 3 restarts, `previous.join` hand-off ordering, silent mode.
+
+Risks: a hidden behaviour change in `createCodec` ordering (format keys, low-latency check before configure) — kept in
+the same order; the `BufferInfo` copy adds two field writes per dequeue (negligible).
 
 ## Handoff
 
