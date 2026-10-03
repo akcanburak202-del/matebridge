@@ -167,6 +167,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             tabletFiles.deliver(message)
         }
         handlers.releaseInput = { input.releaseInput($0) }
+        // T-163: every record of the active session's control connection; pauses key repeat during a stall.
+        handlers.controlActivity = { input.noteControlActivity(at: $0) }
         coordinator.onSummary = { [weak self] text in
             Task { @MainActor in self?.showVideo(text) }
         }

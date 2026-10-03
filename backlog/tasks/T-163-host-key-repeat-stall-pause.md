@@ -14,6 +14,7 @@ files:
   - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift
   - host-mac/Tests/MateBridgeCoreTests/Input/
   - backlog/tasks/T-163-host-key-repeat-stall-pause.md
+  - host-mac/Sources/MateBridgeApp/main.swift  # orchestrator-approved 2026-10-03, wiring only
 ---
 
 ## Amaç
