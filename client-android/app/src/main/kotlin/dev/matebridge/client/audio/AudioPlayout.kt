@@ -1,6 +1,5 @@
 package dev.matebridge.client.audio
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -61,13 +60,16 @@ import java.util.concurrent.TimeUnit
  * Every failure is logged and contained here: audio never takes the session down. Audio content is never logged.
  * [hostMinusClientUs] is the ClockSync offset (null while unknown).
  *
- * When [context] is an Activity its launch intent may set `--es audio_out aaudio|track` and `--ei audio_buf_bursts N`
- * ([AudioBufferConfig]); they are read here so the experiment switches stay in this package.
+ * [launchOutRaw] (`--es audio_out aaudio|track`) and [launchBufBursts] (`--ei audio_buf_bursts N`, [AudioBufferConfig])
+ * are the launch experiment switches. The caller passes them only behind the developer gate (T-185, decision 0026);
+ * null = not given.
  */
 class AudioPlayout(
     context: Context,
     private val hostMinusClientUs: () -> Long?,
     storedOutPref: AudioOutPref = AudioOutPref.AUTO,
+    launchOutRaw: String? = null,
+    launchBufBursts: Int? = null,
     private val onNoisy: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
@@ -90,8 +92,7 @@ class AudioPlayout(
     /** AudioTrack burst (the mixer's period). AAudio streams report their own. */
     private val trackBurst: Int
     private val nativeRate: Int
-    private val bufBurstsRaw: Int? =
-        (context as? Activity)?.intent?.takeIf { it.hasExtra(AudioBufferConfig.EXTRA) }?.getIntExtra(AudioBufferConfig.EXTRA, 0)
+    private val bufBurstsRaw: Int? = launchBufBursts
     private val policy: SinkPolicy
 
     private val noisyReceiver = object : BroadcastReceiver() {
@@ -111,8 +112,7 @@ class AudioPlayout(
         val nativeBurst = am?.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 0
         trackBurst = if (nativeBurst in MIN_BURST..MAX_BURST) nativeBurst else DEFAULT_BURST
 
-        val rawOut = (context as? Activity)?.intent?.getStringExtra(AudioOutPref.EXTRA)
-        val resolved = AudioOutPref.resolve(rawOut, storedOutPref)
+        val resolved = AudioOutPref.resolve(launchOutRaw, storedOutPref)
         if (resolved.unknownExtra) {
             MbLog.w("audio_out_pref_unknown", "using=${resolved.pref.id}", COMPONENT) // the raw value is not logged
         }
