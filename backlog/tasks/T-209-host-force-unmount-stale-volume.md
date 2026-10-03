@@ -1,7 +1,7 @@
 ---
 id: T-209
 title: Force-unmount a stale tablet files volume when its token is dead, then remount
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-206]
@@ -39,7 +39,18 @@ Cihaz 2026-10-04 ~01:10: tablet uygulaması birkaç kez yeniden başlatıldı (h
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yürütür ve sonucu bildirir.
+
+1. **Token takibi:** bağlanan birimin token'ı (`FilesSecret`, yalnız bellekte) `mountedPath` ile birlikte tutulur; `ReplacedMount` da token taşır.
+2. **Oturum sınırını aşan sonuç:** bugün `sessionEnded`/`sessionStarted` `replacedMounts`'u siler, ama teardown'ın `unmount` sonucu ondan sonra gelir. Artık oturum sınırında silinmez, `inSession=false` işaretlenir: eject çıkarımı, izlenen yol ve yeniden bağlama kapısı yalnız `inSession` olanlara bakar (T-206 davranışı aynı). Kapanışta silinir.
+3. **Artık birim (leftover):** `unmountFinished`'ta `stillMounted` içinde olan değiştirilmiş birim (EBUSY) `leftovers`'a geçer (yol, port, token; en çok 4, oturumlar arası, kapanışta silinir). Aynı porttaki sonraki `unmount` sonucunda `detached` ya da hiç bulunmayan artık silinir; bizim yeni bağlamamız aynı yola düşerse de silinir.
+4. **Ölü = token farklı:** bir artık, bilinen READY token'ı onun token'ından farklıysa ölüdür. READY yoksa (OFF, oturum yok) bilinmez → zorla çıkarma yok. Aynı token → canlı → asla zorla çıkarma.
+5. **Hemen zorla çıkarma (bir kez):** ölü ve henüz denenmemiş artık için `forceUnmount(path:localPort:)` aksiyonu; `unmountFinished` (aynı oturumda token değişimi + EBUSY) ve yeni READY (oturumlar arası, cihazdaki durum) anında. Yeniden bağlama (`autoMountIfArmed`) bekleyen zorla çıkarma sonuçlarını bekler. Sonuç: `forceUnmountFinished(path:localPort:gone:)`.
+6. **EEXIST:** köprü NetFS `status == EEXIST`'te `mountCollided(generation:localPort:mountedNow:)` çağırır (`mountedNow`: o porttaki bizim WebDAV birimlerimiz). `mountedNow` içinde ölü artığımız varsa → zorla çıkar + başarılıysa bir kez yeniden bağla (yeniden deneme de EEXIST alırsa hata görünür, döngü yok). Yoksa (kullanıcının kendi "MatePad"i, canlı token'lı birim, bilinmeyen) → zorla çıkarma yok, `lastMountFailed`.
+7. **Eject sayılmaz:** artıklar `watchedPaths`'te yok; zorla çıkarma bildirimi `volumeUnmounted`'da eject sayılmaz.
+8. **Köprü:** `forceUnmount` yalnız yol hâlâ `127.0.0.1:<port>` WebDAV birimiyse `unmount(2)` `MNT_FORCE`; log `ev=unmount result=ok|error|gone force=1`, EEXIST kararı `ev=mount_exists dead_ours=N`. Yol/token loglanmaz.
+9. **Testler** (`TabletFilesPlannerTests.swift`): dört XCTest kriteri + sınır durumları. T-206 testi `busyOldVolumeIsOursAndItsLaterUnmountIsNotAnEject` yeni davranışa (önce zorla çıkarma) göre güncellenir; iddiaları korunur.
+10. `docs/LOGGING.md`: T-209 bölümü.
 
 ## Handoff
 
