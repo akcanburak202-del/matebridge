@@ -1,7 +1,7 @@
 ---
 id: T-211
 title: Game modes use the adaptive pacer by default (decision 0014 §2 amended)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-208, T-210]

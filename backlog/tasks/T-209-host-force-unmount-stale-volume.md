@@ -1,7 +1,7 @@
 ---
 id: T-209
 title: Force-unmount a stale tablet files volume when its token is dead, then remount
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-206]

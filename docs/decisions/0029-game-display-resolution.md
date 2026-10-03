@@ -1,6 +1,6 @@
 # 0029 — Oyunlar için düşük çözünürlüklü sanal ekran
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-04); protokol ayrıntısı T-212 tasarımıyla kesinleşir
 - **Tarih:** 2026-10-04
 
 ## Bağlam
@@ -29,7 +29,10 @@ Bugün sanal ekran her modda HiDPI: 1400×920 **nokta** = 2800×1840 **piksel** 
 
 Tel biçimi: büyük olasılıkla değişmez (`STREAM_PREFS` boyutu ve `scale_permille` zaten var; host ekran boyutunu istemcinin istediği boyuttan kurabilir). Kesinleşmeden önce PROTOCOL §0x05 incelenir; gerekirse ayrı protokol kararı.
 
-**Kullanıcı onayı bekliyor.**
+**Kullanıcı 2026-10-04'te onayladı:**
+1. Üç boyut: 1400×920 · 1848×1214 · 2100×1380; varsayılan 1848×1214.
+2. Seçim oyun modlarının ayarı ("Oyun çözünürlüğü"): Oyun 120 / Oyun 60'a girince uygulanır, diğer modlar tam çözünürlükte (2800×1840 HiDPI) kalır.
+3. Giriş/çıkışta ekranın yeniden kurulması (~1 sn, pencereler bir an kayabilir) ve oyun modunda Mac masaüstünün de düşük çözünürlükte görünmesi kabul.
 
 ## Sonuçlar
 
