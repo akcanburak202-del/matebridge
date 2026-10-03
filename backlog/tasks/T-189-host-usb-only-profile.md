@@ -1,7 +1,7 @@
 ---
 id: T-189
 title: Add a "Yalnız USB" network profile
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -77,7 +77,39 @@ Decision 0027 must be accepted by the user before work starts (manifest §5 Q6: 
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+T-186 merged before this card: the `nw` listeners no longer exist, so there is nothing to force to `bsd` (that XCTest criterion is N/A).
+
+1. **Core `NetworkProfile`** (`MateBridgeCore/Session/NetworkProfile.swift`): `enum NetworkProfile { case all, usbOnly }`, stored as the strings `"all"` / `"usb_only"` under UserDefaults key `networkProfile`. A missing or unknown value parses as `.all`. Per profile it gives:
+   - `bindAddress`: `.any` / `.loopbackV4Mapped`;
+   - `advertisesBonjour`;
+   - `admits(peerHost:)`, built on `SessionTransport.classify`; a nil peer is refused in usb-only mode;
+   - `effectiveUsbMode(stored:)` and `allowsUsbModeToggle`.
+
+   It also has a pure switch decision, `NetworkProfileSwitch.decide(current:requested:activity:)`, where activity is `idle | pendingApproval | active(SessionTransport)`. The result is `unchanged | restartNow | deferred`.
+2. **Bind address = IPv4 loopback only (`::ffff:127.0.0.1`, one dual-stack socket per port, as today).** The Mac adb server opens the `adb reverse` target as a loopback client and tries IPv4 127.0.0.1 first; ::1 is only a fallback when IPv4 fails. `ControlSocketTests.testIPv4LoopbackSessionIsClassifiedUsb` already models this. One listener per port keeps `ListenerPortPlan` and the port fallback unchanged. Two listeners per port would add a second bind that has to share the fallback port, for no gain. Device check: a USB session works with `lsof` showing only `127.0.0.1:47001/47002`.
+3. **SessionServer:**
+   - `init(networkProfile:)`, plus `setNetworkProfile(_:)` (session queue).
+   - Both listeners bind `profile.bindAddress`.
+   - `acceptControl`/`acceptVideo` refuse a non-admitted peer before `start` (`ev=connection_refused reason=profile`).
+   - `startBonjour(for:)` is gated: in usb-only mode it cancels any record and returns, which covers the listener start, the TXT republish and the retry paths.
+   - The `listening` line gets `profile=all|usb_only`.
+   - New handler `networkProfileChanged(applied, pending)` for the menu.
+4. **Switch decision:**
+   - No session (idle, or only unauthenticated or approval-pending connections): restart now. `machine.shutdown()` closes the half-open connections and cancels a pending approval, so a LAN peer cannot keep a pairing alive into usb-only mode. No session exists to cut. Then the listeners are cancelled and restarted with the new profile. If a failure restart is already scheduled, only the profile is set, and the scheduled restart uses it.
+   - **Any live session (USB or Wi-Fi): deferred** until the session ends. The switch is applied automatically when the server becomes session-free, and the menu shows it as pending. A USB session is never cut. A Wi-Fi session is not ended either: on this Mac mini the tablet is the only screen, and the click comes from that screen. Ending the Wi-Fi session at once (with no cable attached) would cut the user's only display while the new mode refuses Wi-Fi reconnects. Deferring keeps the screen until the user leaves the session.
+5. **Menu (`main.swift`):**
+   - A "Yalnız USB" toggle next to "USB modu" persists `networkProfile`.
+   - While it is on, the `adb reverse` watcher is forced on (`effectiveUsbMode`). The "USB modu" item shows on but is disabled; the stored `usbModeEnabled` stays untouched, so turning Yalnız USB off restores the user's own choice.
+   - A status line is shown whenever usb-only mode is active or a switch is pending: "Ağ: yalnız USB (Wi-Fi ve Bonjour kapalı)" or "… oturum bitince uygulanacak". The default mode shows no extra line (unchanged UI).
+6. **Tests (`Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift`):**
+   - parse and round-trip;
+   - `admits` covering loopback forms with `%scope`, LAN v4/v6 and nil;
+   - the switch decision table;
+   - USB modu forcing;
+   - real sockets: the usb-only bind address accepts 127.0.0.1 and refuses a connect to the machine's own non-loopback IPv4. The test skips when no such address exists, or when an `.any` control listener is not reachable on it either.
+7. `UserDefaultsStreamPrefsStore.swift` is not needed: it stores per-device stream prefs, and the profile is an app-level bool-like key next to `usbModeEnabled`.
+
+Risks: the adb loopback family (verified on device by `lsof` plus a USB session), and the user forgetting the mode (mitigated by the menu line).
 
 ## Handoff
 
