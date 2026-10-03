@@ -1,7 +1,7 @@
 ---
 id: T-191
 title: Add "Varsayılanlara dön" (settings + learned audio state; pairing kept)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-185]
@@ -76,7 +76,13 @@ Source: external architecture review 2026-10-03 (D9); verification: docs/reviews
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `Settings.kt`: `KeyValueStore.remove(key)` with a default body (throws `UnsupportedOperationException`; the 9 test fakes keep compiling). `Settings.resetToDefaults(): Int` removes only the explicit user-setting key list (13 keys + T-190 `files_root`, `files_read_only`) and returns how many were present. `device_id`, `last_endpoint`, `transport_auto_migrated`, `wol_*` and the pair-key file are never named.
+2. Audio: `OutBufStore.clear()` / `SafetyStore.clear()` with a default body (throws; the fakes keep compiling). `OutBufMemory.clear()` / `SafetyMemory.clear()` drop the in-memory caches (`stored`, `lastSaved`, save timer) and clear the store (false if the store failed). SharedPrefs stores remove their own key prefix (`out_buf_bursts_`, `safety_ms_`) in `matebridge_audio`. `AudioPlayout.forgetLearned()` clears now and sets a pending flag; the next stream's writer (after it has waited for the previous writer) clears again before its first `initial()`, so a live writer's later save cannot survive into the next session.
+3. `SettingsCatalog.kt`: pure `TwoTapConfirm` (fake clock; the first tap arms, a second tap within `WINDOW_MS` confirms, after that it is a new first tap). `SettingsHost` gets `resetConfirm`, `onResetArmed()`, `resetToDefaults()`. "Diğer" gets the `reset_defaults` Action plus a `reset_hint` Info that shows the armed state (`SettingsViews.kt` is not in `files:`, and an Action's title is fixed).
+4. `MainActivity.kt`: SharedPreferences adapter gets `remove`. The reset removes the keys, clears audio learning, then applies the defaults live without writing them back where possible (mode + STREAM_PREFS with the default bit rate, game layer dropped; audio output; audio on/off to the host when it changed; pointer speeds; fingers; pen trail/dot; clipboard; stats; files sync + rescope), transport through `selectTransport(AUTO)` only when it differs. One `ev=settings_reset keys=<n>` line, then a toast. On arming it posts a refresh so the hint goes away when the window expires.
+5. Tests: `SettingsResetTest` (new) and `SettingsCatalogTest` (FakeHost + the two-step item).
+
+Risks: a previous writer that takes longer than `PREVIOUS_JOIN_MS` to finish could still save after the start-time clear (the same limit already exists for the output). The transport reset re-writes `transport=auto` through the existing setter (a default value).
 
 ## Handoff
 
