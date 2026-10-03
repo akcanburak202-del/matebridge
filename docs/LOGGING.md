@@ -265,6 +265,9 @@ Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi p
 ## Tablet dosya sunucusu (tablet, `MB/files`, T-153)
 
 - `ev=server state=on|off reason=…`: WebDAV sunucusu yalnız uygulama ön plandayken, paylaşım açık, izin verilmiş ve **güvenilen bir USB oturumu** varken çalışır (güvenilen: bağlı ve o bağlantının STREAM_CONFIG'i uygulanmış). `off` nedenleri: `background`, `disabled` (ayar kapalı), `no_permission`, `no_session` (oturum yok ya da yeni bağlantı henüz güvenilmedi), `wifi` (oturum Wi-Fi'de). Her `on` yeni bir token üretir. Token, yol ve dosya adı loglanmaz.
+- `ev=scope root=matebridge|download|all ro=0|1` (T-190, karar 0028): her sunucu başlangıcında sunulan kök sınıfı. Varsayılan `matebridge` (`/sdcard/MateBridge/`).
+- `ev=scope_missing root= ro=` (W): klasör yok ve oluşturulamadı; sunucu kapalı kalır (`state=off reason=failed`), asla tüm depolamaya düşmez.
+- `ev=scope_change root= ro= running=0|1`: klasör ya da salt okunur değişti. `running=1` ise ardından `state=off reason=destroy` ve yeni bir `state=on` gelir (Mac'in kendiliğinden yeniden bağlaması T-206).
 
 ## Girdi teslim zamanlaması (Mac, `input`, T-175)
 

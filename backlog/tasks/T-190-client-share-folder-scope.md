@@ -1,7 +1,7 @@
 ---
 id: T-190
 title: Share a chosen folder (optional read-only) instead of all storage
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-153]
@@ -113,3 +113,5 @@ Risks: `FilesLifecycle.kt` is not in `files:`, so a scope restart goes through `
   - `FilesLifecycle.kt` is not in `files:`, so a scope restart reuses `shutdown()` and its line says `reason=destroy` (preceded by `ev=scope_change`). A small follow-up could add `FilesLifecycle.restart(reason)` to log `reason=scope`.
   - `DavXml.kt` is not in `files:`: in read-only mode PROPFIND still lists `supportedlock` for every entry. macOS decides read-only from the OPTIONS `DAV` class, so this should not matter; if the device test (item 2) shows a read-write mount, drop `supportedlock` in read-only mode there.
   - Codex review (security) is required by the card; not run by this agent.
+
+**Orkestratör notu (2026-10-03):** Codex (--high) tek bulgu verdi: kapsam değişince Mac birimi söküyor ama kendiliğinden yeniden bağlamıyor (`TabletFilesPlanner`). Bu host tarafı işi ve bu kartın `files:` dışında; T-206'ya alındı. Cihazdaki "otomatik yeniden bağlama" maddeleri T-206 ile birlikte doğrulanır; o zamana kadar menüden "Tablet dosyalarını aç" gerekir.
