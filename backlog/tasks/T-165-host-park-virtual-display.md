@@ -1,7 +1,7 @@
 ---
 id: T-165
 title: Park the virtual display after a session ends (no capture or encode while parked)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

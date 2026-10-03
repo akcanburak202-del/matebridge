@@ -91,6 +91,7 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 | 37 | `MATEBRIDGE_SENDQ_LOG`, `MATEBRIDGE_LAT_TRACE` | 0, 0 | TK:69-76; SS:309; `host-mac/Sources/MateBridgeHost/Video/LatencyCsv.swift:13`; `VideoPipeline.swift:38` | T-070/T-088 | kalır (tanı) | H03/H05/M07 izleri için gerekli | — |
 | 38 | `MATEBRIDGE_TCP_LOG` | `auto` (yalnızca Wi-Fi) | `host-mac/Sources/MateBridgeCore/Session/TcpInfoLog.swift:129-145`; SS:311 | T-126 | kalır (tanı) | — | — |
 | 39 | `MATEBRIDGE_AUDIO=off` | açık | `host-mac/Sources/MateBridgeCore/Audio/AudioStreamer.swift:32-35`; `HostAudio.swift:12` | T-094 | yalnızca geliştirici | Yalıtım anahtarı | T-204 (profil) |
+| 40 | `MATEBRIDGE_DISPLAY_KEEP_S` | 10 (10–86 400; geçersiz değer 10) | `host-mac/Sources/MateBridgeCore/Video/DisplayLease.swift` | T-165 (2026-10-03, bu envanterden sonra eklendi) | yalnızca geliştirici | Bekletilen sanal ekranın süresi (duvar saati). Kullanıcıya açılan seçim T-167 (karar 0020) | T-167 (menü) |
 
 ## Host CLI kipleri (4) ve derleme zamanı
 
@@ -102,8 +103,8 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 
 ## Açık noktalar
 
-1. **Jitter tamponu 1–2 dalı (0026).** Soru: `--ei jitter 1|2` dalı (ve onunla `FramePacer` sınıfı) da kaldırılsın mı? 2026-10-03 onayı GL ve `nw` içindi; bu dal için ayrı bir cevap kayıtlı değil. Bu yüzden şimdilik **yalnızca geliştirici** kalır: T-183 `FramePacer`'ı silmez, T-185'in `--ei jitter 1` kabul kriteri geçerli. Kullanıcı kaldırmayı seçerse küçük bir izleme kartı `FramePacer`'ı siler ama `VsyncClock`'u (`FramePacer.kt:18`, günlük yol) korur; `jitter 0` Oyun modu üzerinden ulaşılabilir kalır.
-2. **`VideoTestActivity` dışa açık.** `client-android/app/src/debug/AndroidManifest.xml` onu `exported="true"` tanımlıyor ve günlük APK debug varyantı. Bu yüzden tabletteki her uygulama onu (`fps`, `full_range`, `primaries` parametreleriyle) başlatabilir. Uygulama yalnızca uygulamanın kendi dosyasından (`test.h265`) okuyor. T-185'in `dev` kapısı yalnızca `MainActivity`'yi kapsar. Orkestratör karar verir (ör. T-185'e `exported="false"` eklemek).
+1. **Jitter tamponu 1–2 dalı (0026).** *(Orkestratör: yalnızca geliştirici olarak kalır, 2026-10-03.)* Soru: `--ei jitter 1|2` dalı (ve onunla `FramePacer` sınıfı) da kaldırılsın mı? 2026-10-03 onayı GL ve `nw` içindi; bu dal için ayrı bir cevap kayıtlı değil. Bu yüzden şimdilik **yalnızca geliştirici** kalır: T-183 `FramePacer`'ı silmez, T-185'in `--ei jitter 1` kabul kriteri geçerli. Kullanıcı kaldırmayı seçerse küçük bir izleme kartı `FramePacer`'ı siler ama `VsyncClock`'u (`FramePacer.kt:18`, günlük yol) korur; `jitter 0` Oyun modu üzerinden ulaşılabilir kalır.
+2. **`VideoTestActivity` dışa açık.** *(Karar: T-185'e eklendi, 2026-10-03; adb ile açılabilirlik korunacak.)* `client-android/app/src/debug/AndroidManifest.xml` onu `exported="true"` tanımlıyor ve günlük APK debug varyantı. Bu yüzden tabletteki her uygulama onu (`fps`, `full_range`, `primaries` parametreleriyle) başlatabilir. Uygulama yalnızca uygulamanın kendi dosyasından (`test.h265`) okuyor. T-185'in `dev` kapısı yalnızca `MainActivity`'yi kapsar. Orkestratör karar verir (ör. T-185'e `exported="false"` eklemek).
 
 ## Planlanan ayarlar
 
