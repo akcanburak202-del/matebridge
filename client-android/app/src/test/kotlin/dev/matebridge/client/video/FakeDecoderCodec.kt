@@ -12,7 +12,8 @@ import java.util.concurrent.locks.LockSupport
  * with [awaitEvent] / [await] (monitor waits, no sleeps).
  *
  * Default behaviour is "silent": every input is accepted and no output ever comes (dequeueOutputBuffer waits its
- * timeout and returns try-again-later), the T-028 no-output case.
+ * timeout and returns try-again-later), the T-028 no-output case. T-159: with [produceOutput] each non-empty,
+ * non-config input comes out as one decoded frame (same pts), in order.
  */
 class FakeDecoderFactory : DecoderCodec.Factory {
     /** The next n [create] calls throw `IOException` (like `createDecoderByType`). */
@@ -21,6 +22,10 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     @Volatile var failStart = false
     @Volatile var throwOnDequeueInput = false
     @Volatile var throwOnDequeueOutput = false
+    /** T-159: the next n dequeueOutputBuffer calls (any codec) throw, then it works again. */
+    @Volatile var dequeueOutputFailures = 0
+    /** T-159: each non-empty, non-config input yields one output. */
+    @Volatile var produceOutput = false
     /** While set and closed, `stop()` / `release()` / `dequeueOutputBuffer()` block until the latch opens. */
     @Volatile var stopGate: CountDownLatch? = null
     @Volatile var releaseGate: CountDownLatch? = null
@@ -34,6 +39,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     private var serials = 0
     private var queued = 0
     private var outputPolls = 0
+    private var outputs = 0
 
     val events: List<String> get() = synchronized(lock) { ArrayList(log) }
     val createCalls: Int get() = synchronized(lock) { serials }
@@ -41,6 +47,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     val queuedInputs: Int get() = synchronized(lock) { queued }
     /** dequeueOutputBuffer calls that returned try-again-later. */
     val silentOutputPolls: Int get() = synchronized(lock) { outputPolls }
+    /** T-159: outputs handed out by dequeueOutputBuffer (any codec). */
+    val outputsDequeued: Int get() = synchronized(lock) { outputs }
 
     fun count(event: String) = events.count { it == event }
 
@@ -92,6 +100,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         @Volatile var surface: Any? = null
         @Volatile var renderedListener: ((Long, Long) -> Unit)? = null
         private var nextIndex = 0 // input thread only
+        private val ready = ArrayDeque<Long>() // under the factory lock
+        private var nextOut = 0
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
@@ -115,7 +125,11 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         override fun getInputBuffer(index: Int): ByteBuffer = ByteBuffer.allocate(inputCapacity)
 
         override fun queueInputBuffer(index: Int, offset: Int, size: Int, presentationTimeUs: Long, flags: Int) {
-            synchronized(lock) { if (size > 0) queued++; lock.notifyAll() }
+            synchronized(lock) {
+                if (size > 0) queued++
+                if (produceOutput && size > 0 && flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0) ready.addLast(presentationTimeUs)
+                lock.notifyAll()
+            }
         }
 
         override fun dequeueOutputBuffer(info: DecoderCodec.OutputInfo, timeoutUs: Long): Int {
@@ -123,6 +137,20 @@ class FakeDecoderFactory : DecoderCodec.Factory {
                 if (g.count > 0) { record("dequeueOutput#$serial>"); gate(g); record("dequeueOutput#$serial<") }
             }
             if (throwOnDequeueOutput) throw IllegalStateException("fake dequeueOutputBuffer failure")
+            synchronized(lock) {
+                if (dequeueOutputFailures > 0) {
+                    dequeueOutputFailures--
+                    log.add("dequeueOutputFailure#$serial"); lock.notifyAll()
+                    throw IllegalStateException("fake dequeueOutputBuffer failure")
+                }
+                val pts = ready.removeFirstOrNull()
+                if (pts != null) {
+                    outputs++; lock.notifyAll()
+                    info.presentationTimeUs = pts
+                    info.flags = 0
+                    return nextOut.also { nextOut = (nextOut + 1) % 8 }
+                }
+            }
             if (timeoutUs > 0) LockSupport.parkNanos(timeoutUs * 1000) // a real codec blocks up to the timeout
             synchronized(lock) { outputPolls++; lock.notifyAll() }
             return DecoderCodec.INFO_TRY_AGAIN_LATER

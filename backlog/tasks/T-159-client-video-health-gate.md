@@ -1,7 +1,7 @@
 ---
 id: T-159
 title: Gate input on decoder health and show a video-fault overlay
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-158]
@@ -62,30 +62,134 @@ Decision 0019 must be accepted by the user before work starts.
 
 ## Kabul kriterleri
 
-- [ ] [JVM] `VideoHealthTest` transitions: STARTING → HEALTHY on the first decoded output; HEALTHY → FAULT on give-up, on no output while ≥ 3 non-config inputs have been queued since the last output and the oldest of them was queued ≥ 1500 ms ago, and on the decoder thread not running 2 s after attach; a static screen (no inputs) stays HEALTHY indefinitely; a new generation is STARTING until its first output.
-- [ ] [JVM] Idle 10 s after the last output, then 3 inputs within 30 ms and the first output 20 ms later → stays HEALTHY. 3 inputs and no output with the oldest queued ≥ 1500 ms ago → FAULT(no_output).
-- [ ] [JVM] Generation = one `attachSurface`/`reconfigure` call (new config or new surface). STARTING closes input (`inputAllowed = false`, with the normal releases). A codec restart after `decode_error` inside the same attachment is NOT a new generation: input stays open and only the FAULT rules apply. A test pins both cases.
-- [ ] [JVM] `VideoHealth` takes a generic `fault(cause)` input with causes `give_up|no_output|not_running|stuck` (`stuck` is unused until T-161), wired from a single renderer callback (`onHealthEvent`), so T-161 only calls it.
-- [ ] [JVM] Recovery steps are bounded and ordered with a fake clock: codec restart at 1 s, at 3 s, then session reconnect, then the manual "Yeniden dene" state; no step repeats without bound.
-- [ ] [JVM] In FAULT, keyframe retries stop and the renderer stops feeding its queue (fake clock), so the ~2 IDR/s loop does not happen.
-- [ ] `syncInputActive` includes `videoHealth.inputAllowed`. Entering FAULT calls `capture.setActive(false)`, which sends the existing releases and `RELEASE_ALL(USER)`.
-- [ ] [JVM] After an automatic reconnect (detach → attach) or a USB↔Wi-Fi migration (new STREAM_CONFIG → `reconfigure`), input stays closed until the first decoded output of the new generation, even though the session frame counter is not reset. No `SessionMachine.kt` change.
-- [ ] On FAULT an overlay with a short Turkish explanation and a "Yeniden dene" button is shown (`strings.xml`); it hides when HEALTHY again.
-- [ ] `ev=video_health state= cause=` is logged on every transition; no key characters or text are logged.
-- [ ] Debug extra `--es decoder_fault create|configure|dequeue|silent` (with `--ei decoder_fault_after_s N`, default 10) forces each fault through the `DecoderCodec` seam after the stream has been HEALTHY for N s (`dequeue`/`silent` on the running codec, `create`/`configure` on the next codec creation), and logs `ev=decoder_fault mode= armed_s=` once when it fires; without the extra, behaviour is unchanged.
+- [x] [JVM] `VideoHealthTest` transitions: STARTING → HEALTHY on the first decoded output; HEALTHY → FAULT on give-up, on no output while ≥ 3 non-config inputs have been queued since the last output and the oldest of them was queued ≥ 1500 ms ago, and on the decoder thread not running 2 s after attach; a static screen (no inputs) stays HEALTHY indefinitely; a new generation is STARTING until its first output.
+- [x] [JVM] Idle 10 s after the last output, then 3 inputs within 30 ms and the first output 20 ms later → stays HEALTHY. 3 inputs and no output with the oldest queued ≥ 1500 ms ago → FAULT(no_output).
+- [x] [JVM] Generation = one `attachSurface`/`reconfigure` call (new config or new surface). STARTING closes input (`inputAllowed = false`, with the normal releases). A codec restart after `decode_error` inside the same attachment is NOT a new generation: input stays open and only the FAULT rules apply. A test pins both cases.
+- [x] [JVM] `VideoHealth` takes a generic `fault(cause)` input with causes `give_up|no_output|not_running|stuck` (`stuck` is unused until T-161), wired from a single renderer callback (`onHealthEvent`), so T-161 only calls it.
+- [x] [JVM] Recovery steps are bounded and ordered with a fake clock: codec restart at 1 s, at 3 s, then session reconnect, then the manual "Yeniden dene" state; no step repeats without bound.
+- [x] [JVM] In FAULT, keyframe retries stop and the renderer stops feeding its queue (fake clock), so the ~2 IDR/s loop does not happen.
+- [x] `syncInputActive` includes `videoHealth.inputAllowed`. Entering FAULT calls `capture.setActive(false)`, which sends the existing releases and `RELEASE_ALL(USER)`.
+- [x] [JVM] After an automatic reconnect (detach → attach) or a USB↔Wi-Fi migration (new STREAM_CONFIG → `reconfigure`), input stays closed until the first decoded output of the new generation, even though the session frame counter is not reset. No `SessionMachine.kt` change.
+- [x] On FAULT an overlay with a short Turkish explanation and a "Yeniden dene" button is shown (`strings.xml`); it hides when HEALTHY again.
+- [x] `ev=video_health state= cause=` is logged on every transition; no key characters or text are logged.
+- [x] Debug extra `--es decoder_fault create|configure|dequeue|silent` (with `--ei decoder_fault_after_s N`, default 10) forces each fault through the `DecoderCodec` seam after the stream has been HEALTHY for N s (`dequeue`/`silent` on the running codec, `create`/`configure` on the next codec creation), and logs `ev=decoder_fault mode= armed_s=` once when it fires; without the extra, behaviour is unchanged.
 - [ ] [device] Covered by T-164 (fault → `input_active on=0`, no stuck Shift or pen on the Mac, recovery time).
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `video/VideoHealth.kt` (new, pure Kotlin):
+   - `HealthEvent` (one sealed type; every event carries the renderer generation): `Generation`, `Detached`,
+     `Running`, `Exited`, `FirstOutput`, `Fault(cause)`. `FaultCause` = `give_up|no_output|not_running|stuck`.
+   - `DecodeProgress`: small synchronized counter the decoder threads update per frame (no UI post per frame):
+     non-config inputs queued since the last output and the time of the oldest of them, per generation; `onOutput`
+     says whether it was the generation's first output.
+   - `VideoHealth` (UI thread, injected clock): states `IDLE` (no surface) / `STARTING` / `HEALTHY` / `FAULT`;
+     `inputAllowed` = HEALTHY; `feedAllowed`/`keyframeRetriesAllowed` = not FAULT. `onEvent` ignores events of other
+     generations. `tick(progress)` (the 500 ms ticker) evaluates no_output (≥ 3 pending, oldest ≥ 1500 ms) and
+     not_running (no `Running`, or `Exited`, 2 s after the generation began), in STARTING and HEALTHY. FAULT is left
+     only by a new generation (outputs of the faulted generation are ignored), so input never re-opens before a first
+     decoded output. A codec restart after `decode_error` sends no event, so it is not a new generation.
+   - Recovery ladder (episode starts at the first fault, ends after 10 s continuously HEALTHY): codec restart at +1 s,
+     codec restart at +3 s, session reconnect at +6 s, manual ("Yeniden dene") at +15 s; the step timer runs only while
+     not HEALTHY and a surface is attached; steps only advance, so no step repeats within an episode. `retry()` (button)
+     restarts the codec at once and continues the ladder from step 2.
+   - `ev=video_health state= cause= gen=` on every state change (via a callback; no text logged).
+2. `video/VideoRenderer.kt`: generation counter; `onHealthEvent` constructor parameter (default no-op) called on
+   attach/reconfigure (`Generation`, synchronously on the UI thread), detach, decoder thread start/exit, first output,
+   give-up (`Fault(give_up)`); `DecodeProgress` updates at `queueInputBuffer` and output dequeue; `stopFeeding()` (per
+   generation; also on give-up) makes `onFrame` drop frames and `takeKeyframeRetry()` return false; `restartCodec()`
+   (recovery step: new generation on the same surface, keeps the stored CODEC_CONFIG, STARTUP request).
+3. `video/DecoderFault.kt` (new): debug `--es decoder_fault create|configure|dequeue|silent` decorator around the
+   production `DecoderCodec.Factory`. Armed at launch, fires once after `--ei decoder_fault_after_s N` (default 10) s
+   HEALTHY (`ev=decoder_fault mode= armed_s=`). `dequeue`/`silent` hit every codec of the current generation,
+   `create`/`configure` every codec of the next generation; the generation after that runs clean (so give-up/no_output
+   FAULT is reached and the ladder's restart recovers). `silent` drains the real codec without rendering.
+4. `MainActivity.kt` (localized): `VideoHealth` field; `syncInputActive` adds `videoHealth.inputAllowed`; the renderer's
+   `onHealthEvent` → `runOnUiThread { videoHealth.onEvent }`; transitions → `syncInputActive()` (FAULT/STARTING close
+   capture → existing releases + `RELEASE_ALL(USER)`), `stopFeeding()`, overlay; the ticker calls `tick`, runs the
+   recovery action, gates `takeKeyframeRetry` and drives `DecoderFault`; `onGiveUp` unchanged (log only). Overlay built
+   in code (no layout file in `files:`), text + "Yeniden dene" button from `strings.xml`.
+5. Tests: `VideoHealthTest.kt` (state machine, rules, ladder, generations incl. reconnect/migration, DecodeProgress,
+   DecoderFault, renderer integration with the T-158 fake: give-up → Fault event + feeding stopped, decode_error restart
+   = no new generation, first output). The T-158 fake gets an output-producing mode (test dir, per orchestrator);
+   `DecoderLifecycleTest` assertion on `attached` after give-up stays (attached is still true; health handles it).
+
+Risks: per-frame cost (one uncontended lock per input and output); stale events of a retired generation (filtered by
+generation); the overlay must not take input while capture is on (shown only when input is off).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `8856952` (review P2 fix) on top of `95b3e30` (implementation; plan in `2391ef2`). Branch
+  `task/T-159-client-video-health-gate`.
+- **Review fix (Codex --high, P2):** the debug injector was ticked in IDLE/STARTING too, so a zero delay with a slow
+  connect fired it for generation -1. Now `DecoderFault.onTick(VideoHealth)` fires only in HEALTHY with a generation
+  (`healthyMs >= N s`); test `aZeroDelayFaultWaitsForHealthyVideoEvenWhenTheConnectionIsSlow` (all four modes: no fire
+  in IDLE for 5 s, in STARTING for 3 s, or in FAULT; fires on the first HEALTHY tick; dequeue/silent hit that
+  generation, create/configure the next). 25 tests in `VideoHealthTest`; `./scripts/check.sh` ALL OK.
 - **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoHealth.kt` (new: `FaultCause`, `HealthEvent`,
+    `DecodeProgress`, `VideoHealth`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderFault.kt` (new: debug decorator)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt` (generations, `onHealthEvent`,
+    `progress`, `stopFeeding`/`feeding`, `restartCodec`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt` (localized: fields after `perfHint`, one
+    line in `onCreate`, the `syncInputActive` term, two renderer args in `installConfig`, helpers before `startVsync`,
+    two ticker lines, one line in `render()`; FQNs instead of new imports to keep the T-150 merge clean)
+  - `client-android/app/src/main/res/values/strings.xml` (4 strings, inserted after `state_connected`, not at the tail)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/VideoHealthTest.kt` (new, 25 tests)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/FakeDecoderCodec.kt` (test dir, per the orchestrator:
+    `produceOutput` mode and one-shot `dequeueOutputFailures`; T-158 tests unchanged and green)
+- **Ne yapıldı / nasıl:**
+  - HEALTHY = generation attached + first decoded output (counted at `dequeueOutputBuffer`, before pacing) + no fault.
+    `syncInputActive` has `&& videoHealth.inputAllowed`; every state change calls `syncInputActive()`, so FAULT and
+    STARTING go through `capture.setActive(false)` → existing releases + `RELEASE_ALL(USER)`.
+  - Generation = `start()` in the renderer (`attachSurface`, `reconfigure`, `restartCodec`); `HealthEvent.Generation` is
+    delivered inline on the UI thread before the decoder thread starts (`runOnUiThread` on the UI thread runs at once),
+    the other events are posted from the decoder threads and filtered by generation. A `decode_error` restart sends no
+    event (test `aCodecRestartAfterDecodeErrorIsNotANewGeneration`).
+  - Per-frame data does not post to the UI thread: the decoder threads update `DecodeProgress` (one uncontended lock per
+    input/output); the 500 ms ticker evaluates no_output / not_running from its snapshot. Only the first output posts.
+  - FAULT is left only by a new generation (outputs of the faulted generation are ignored), so input never re-opens
+    before a first decoded output. FAULT → `renderer.stopFeeding()` (per generation; give-up does it itself on the
+    decoder thread): `onFrame` drops frames, `takeKeyframeRetry()` is false; the ticker also checks
+    `videoHealth.keyframeRetriesAllowed`.
+  - Ladder: restart +1 s, restart +3 s, reconnect +6 s (`controller.dropConnection(inputGen)`), manual +15 s; timer runs
+    only while not HEALTHY and a surface is attached (re-armed on re-attach); steps only advance within an episode; an
+    episode ends after 10 s continuously HEALTHY. "Yeniden dene" = restart now, then the ladder from its 2nd step.
+  - Overlay: built in code (layout file not in `files:`), centred dark box over the frozen image, below the stats text;
+    shown when FAULT (or STARTING during recovery) and the connect panel is hidden; touches reach it because capture is
+    off whenever it is shown.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The no_output / not_running / give_up rules also apply in STARTING (so a T-028 black screen at connect gets the
+    overlay and recovery instead of a silent closed input).
+  - Ladder times after the decision's "1 s → 3 s": reconnect at +6 s and manual at +15 s; episode end after 10 s HEALTHY.
+    All are constants in `VideoHealth` (tunable after T-164).
+  - The `--es decoder_fault` extra is honoured only when the APK is debuggable (`FLAG_DEBUGGABLE`), read once per
+    activity (lazy). `dequeue`/`silent` hit every codec of the generation that was HEALTHY for N s (incl. its
+    `decode_error` restarts, so `dequeue` ends in give-up); `create`/`configure` hit every codec of the next generation;
+    the generation after that runs clean, so recovery is measurable. `silent` decodes and releases outputs unrendered.
+  - In `VideoTestActivity` (debug) a give-up now also stops feeding its renderer (no visible change there).
+- **Test edilmeyenler / cihazda doğrulanacaklar (T-164; nothing ran on the tablet):**
+  1. Normal USB connect: image appears; `MB/decoder ev=video_health state=starting` then `state=healthy` within one
+     frame, `MB/input ev=input_active on=1` only after `state=healthy`. Pen/keys work as before.
+  2. Mode change (Netlik ↔ Akıcı) and background/foreground: `state=starting` → `state=healthy` each time, input briefly
+     `on=0` → `on=1`, no overlay.
+  3. `adb shell am start -n dev.matebridge.client/.MainActivity --es decoder_fault silent --ei decoder_fault_after_s 10`,
+     hold Shift and keep the pen down on the Mac after 10 s: `ev=decoder_fault mode=silent armed_s=10`, ~1.5 s later
+     `state=fault cause=no_output`, `input_active on=0`, no stuck Shift/pen on the Mac, overlay "Görüntü durdu" shown,
+     `video_recover step=restart n=1` at +1 s, then `state=healthy`, overlay gone. Measure fault → healthy time.
+  4. Same with `dequeue` (expect 4× `decode_error`, `give_up`, `cause=give_up`) and with `create` / `configure` followed by
+     a mode change (fault hits the new generation).
+  5. Static screen for > 1 min (no frames): no `video_health` line, input stays on. "Yeniden dene" button reachable and
+     works while the overlay shows; no keyframe request storm in FAULT (`kf_request` lines stop).
 - **Açık sorular:**
+  - `docs/LOGGING.md` (orchestrator will document) is not in `files:`; new lines (all `MB/decoder`):
+    `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<state> vgen=N`
+    (I; W for fault), `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; I for done),
+    `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W). `vgen` because `MbLog` already writes `gen=`
+    (control generation).
+  - A STARTING generation whose decoder swallowed only 1–2 inputs (e.g. a single IDR on a static screen) and never
+    outputs stays STARTING (input closed, panel hidden, no overlay) because the decision's no_output rule needs ≥ 3
+    inputs. Safe, but silent; consider a STARTING-only "≥ 1 input, no output for N s" rule after T-164.
+  - The panel still hides on `framesReceived` (unchanged, per card); input safety comes from `VideoHealth`.

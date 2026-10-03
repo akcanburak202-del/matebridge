@@ -187,6 +187,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var paceTrace: dev.matebridge.client.video.PaceTrace? = null // T-069 experiment (--ez pace_trace true), default off
     /** T-079 experiment (--ez perf_hint true), default off; shared by the video reader and the decoder threads. */
     private var perfHint: dev.matebridge.client.video.PerfHint? = null
+    /** T-159 (decision 0019): input capture is live only while the video is HEALTHY. UI thread only. */
+    private val videoHealth = dev.matebridge.client.video.VideoHealth(
+        SystemClock::elapsedRealtime,
+        log = { level, ev, fields -> if (level == 'W') MbLog.w(ev, fields, "decoder") else MbLog.i(ev, fields, "decoder") },
+        onChange = { onVideoHealthChanged() },
+    )
+    private var videoFaultOverlay: View? = null
+    private var videoFaultText: TextView? = null
+    /** T-159 debug `--es decoder_fault create|configure|dequeue|silent` (debuggable builds); one per launch. */
+    private val decoderFault: dev.matebridge.client.video.DecoderFault? by lazy {
+        val mode = dev.matebridge.client.video.DecoderFault.parseMode(intent?.getStringExtra(dev.matebridge.client.video.DecoderFault.EXTRA_MODE))
+        if (mode == null || applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) null
+        else dev.matebridge.client.video.DecoderFault(
+            mode,
+            intent.getIntExtra(dev.matebridge.client.video.DecoderFault.EXTRA_AFTER_S, dev.matebridge.client.video.DecoderFault.DEFAULT_AFTER_S).coerceAtLeast(0),
+            dev.matebridge.client.video.MediaCodecDecoder.FACTORY,
+        ) { fields -> MbLog.w("decoder_fault", fields, "decoder") }
+    }
     private var streamConfig: StreamConfig? = null
     private var surfaceValid = false
     private var statsOn = false
@@ -598,6 +616,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         penOverlay.setVideoViewport(viewport)
         root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         capture.penInk = penOverlay
+        addVideoFaultOverlay() // T-159
         setupSettingsPanels()
         applyImmersive()
         render(SessionUi.Searching)
@@ -643,7 +662,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * (T-105); the connect panel and the side panel keep normal touch and keys.
      */
     private fun syncInputActive(nowMs: Long = SystemClock.uptimeMillis()): Boolean {
-        val on = settingsPanel.inputAllowed(started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty)
+        val on = settingsPanel.inputAllowed(started && !isDestroyed && panel.visibility == View.GONE && !viewport.isEmpty &&
+            videoHealth.inputAllowed) // T-159: never live on a frozen, black or starting image
         capture.setActive(on, nowMs)
         unbufferedPen.sync(on)
         syncPointerCapture(on, nowMs)
@@ -1157,6 +1177,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             vsync = vsync,
             bufferFrames = bufferFrames,
             codecReportsShown = !glMode,
+            codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
+            onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
         ).also {
             it.operatingRate = operatingRate
             it.maxInFlight = inflightLimit
@@ -1199,6 +1221,77 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         releaseRefreshRate()
         setSurfaceFrameRate(false)
         stopVsync()
+    }
+
+    /** T-159: renderer lifecycle, UI thread (a Generation arrives inline, before its decoder thread starts). */
+    private fun onVideoHealthEvent(e: dev.matebridge.client.video.HealthEvent) {
+        if (e is dev.matebridge.client.video.HealthEvent.Generation) decoderFault?.onGeneration(e.gen)
+        videoHealth.onEvent(e)
+    }
+
+    /** T-159: FAULT stops feeding (no ~2 IDR/s loop); FAULT and STARTING close capture (releases + RELEASE_ALL(USER)). */
+    private fun onVideoHealthChanged() {
+        if (!videoHealth.feedAllowed) renderer?.stopFeeding()
+        syncVideoFaultOverlay()
+        if (::capture.isInitialized) syncInputActive()
+    }
+
+    private fun runVideoRecovery(action: dev.matebridge.client.video.VideoHealth.Action) {
+        when (action) {
+            dev.matebridge.client.video.VideoHealth.Action.RESTART_CODEC -> renderer?.restartCodec()
+            // The session reconnects; the surface re-attaches on its STREAM_CONFIG (a new generation).
+            dev.matebridge.client.video.VideoHealth.Action.RECONNECT -> controller.dropConnection(inputGen)
+        }
+    }
+
+    /** T-159: "Görüntü durdu" box with "Yeniden dene", centred over the video, below the stats text and the panels. */
+    private fun addVideoFaultOverlay() {
+        val d = resources.displayMetrics.density
+        val title = TextView(this).apply {
+            setText(R.string.video_fault_title)
+            setTextColor(Color.WHITE)
+            textSize = 22f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = android.view.Gravity.CENTER
+        }
+        val text = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            gravity = android.view.Gravity.CENTER
+            maxWidth = (480 * d).toInt()
+        }
+        val retry = Button(this).apply {
+            setText(R.string.video_fault_retry)
+            setOnClickListener { videoHealth.retry()?.let { runVideoRecovery(it) } }
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(Color.argb(0xCC, 0, 0, 0))
+            val pad = (24 * d).toInt()
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+            val gap = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (12 * d).toInt() }
+            addView(title)
+            addView(text, gap)
+            addView(retry, android.widget.LinearLayout.LayoutParams(gap))
+        }
+        root.addView(box, root.indexOfChild(statsView), FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER,
+        ))
+        videoFaultOverlay = box
+        videoFaultText = text
+    }
+
+    /** T-159: the overlay shows while the video is faulted or recovering and the connect panel is hidden. */
+    private fun syncVideoFaultOverlay() {
+        val o = videoFaultOverlay ?: return
+        val show = videoHealth.showOverlay && panel.visibility == View.GONE
+        if (show) videoFaultText?.setText(if (videoHealth.manual) R.string.video_fault_manual else R.string.video_fault_recovering)
+        val v = if (show) View.VISIBLE else View.GONE
+        if (o.visibility != v) o.visibility = v
     }
 
     /** Vsync tracking runs only while streaming; seeded from the real display rate. */
@@ -1372,10 +1465,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val r = renderer
             if (r != null && r.attached) {
                 // T-121: the retry goes through the queue's request limit (no retry right after another request).
-                if (r.takeKeyframeRetry()) controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP))
+                if (videoHealth.keyframeRetriesAllowed && r.takeKeyframeRetry()) controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP))
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastStatsMs >= 1000) statsTick(r, now)
             }
+            // T-159: no-output / not-running timers, the recovery ladder and the debug fault trigger.
+            videoHealth.tick(r?.progress?.snapshot())?.let { runVideoRecovery(it) }
+            decoderFault?.onTick(videoHealth) // fires only after N s HEALTHY
             ui.postDelayed(this, KEYFRAME_RETRY_MS)
         }
     }
@@ -1886,6 +1982,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val streaming = state is SessionUi.Connected && state.framesReceived > 0 && renderer != null
         if (streaming && panel.visibility != View.GONE) hideManualEntry() // T-078: before the panel goes away
         panel.visibility = if (streaming) View.GONE else View.VISIBLE
+        syncVideoFaultOverlay() // T-159: only over the video, never over the connect panel
         if (!streaming) closeSettingsPanel(SettingsPanelState.Via.STREAM_END, resync = false) // T-105; synced below
         applyStatusText(state)
         syncInputActive() // panel visibility decides whether input is captured
