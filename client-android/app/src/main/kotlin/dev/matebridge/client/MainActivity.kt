@@ -47,6 +47,7 @@ import dev.matebridge.client.audio.AvSync
 import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.files.FilesController
+import dev.matebridge.client.files.FilesSessionGate
 import dev.matebridge.client.files.FilesSwitch
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
@@ -149,6 +150,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var clipboard: ClipboardBridge // T-055
     /** T-135: the tablet-files WebDAV server (decision 0015); runs only while started, switched on and permitted. */
     private lateinit var files: FilesController
+    /** T-153: the server also needs a trusted USB session (authenticated STREAM_CONFIG on the current connection). */
+    private val filesGate = FilesSessionGate()
 
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
     private val settingsPanel = SettingsPanelState { ev, fields -> MbLog.i(ev, fields) }
@@ -584,6 +587,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     capture.onSessionReset()
                     // T-096: a migration stays Connected; re-arm the clipboard for the new generation (render() accepts it).
                     if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(false, System.currentTimeMillis(), gen)
+                    if (filesGate.onConnectionGen(gen, transport)) syncFiles() // T-153: a new connection is untrusted
                 }
             }
 
@@ -967,7 +971,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun setFilesShare(on: Boolean) { // T-135
             settings.setFilesShare(on)
             if (on && !files.hasPermission()) files.openPermissionScreen(this@MainActivity) // onStart re-syncs on return
-            files.sync(on, started)
+            syncFiles()
         }
         override val filesStatus get() = FilesSwitch.statusText(files.status)
 
@@ -1243,6 +1247,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (s != null) r.attachSurface(s)
         }
         MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
+        if (filesGate.onConfigApplied()) syncFiles() // T-153: the authenticated config makes this session trusted
         refreshSettings() // "Uygulanan: N Mbps"
     }
 
@@ -1625,7 +1630,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (hostSleep.clear()) MbLog.i("host_sleep_clear", "reason=${HostSleepGate.REASON_FOREGROUND}") // T-133
         wolRefresh.reset() // T-133: one USB `wol` refresh per start
         mode = modeOverride ?: settings.transportMode()
-        files.sync(settings.filesShare(), foreground = true) // T-135: also picks up a permission granted meanwhile
+        // T-135: also picks up a permission granted meanwhile. T-153: no session yet (the stop ended it): only the idle status
+        files.sync(settings.filesShare(), foreground = true, sessionTrusted = false, transport = null)
         refreshSettings()
         hostReached = false
         hideManualEntry() // T-078: every (re)start begins without an editable field on screen
@@ -1728,6 +1734,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         render(SessionUi.Searching)
         applyTransport()
     }
+
+    /** T-135 / T-153: starts or stops the file server for the setting, [foreground] and the session gate. */
+    private fun syncFiles(foreground: Boolean = started) =
+        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport)
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI
 
@@ -1929,7 +1939,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         audio?.endSession("background") // T-095: silence at once and take no more audio; the BYE stops the host
-        files.sync(settings.filesShare(), foreground = false) // T-135: no session in the background, so no file server
+        syncFiles(foreground = false) // T-135: no session in the background, so no file server
         controller.stop() // sends BYE, closes both connections
         syncWifiLock("background") // started is false: always released here
         super.onStop()
@@ -2036,11 +2046,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             clipboard.sync.onSessionAccepted(state is SessionUi.Connected, System.currentTimeMillis(), MbLog.gen)
             if (!was && clipboard.sync.accepted) clipboard.recheck() // T-063: copied while the session was down
         }
+        val filesChanged = filesGate.onUi(state is SessionUi.Connected) // T-153: also while stopped (trust drops)
         if (!started || isDestroyed) {
             syncWifiLock("stopped")
             return
         }
         lastUi = state
+        if (filesChanged) syncFiles()
         syncWifiLock(state.javaClass.simpleName.lowercase(java.util.Locale.ROOT))
         if (hostSleep.onUi(state)) enterHostSleep() // T-133
         wolStep() // T-129: reaching the host stops a wake episode at once

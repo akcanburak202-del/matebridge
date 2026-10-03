@@ -1,7 +1,7 @@
 ---
 id: T-153
 title: Run the WebDAV server only during an accepted, trusted USB session
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
@@ -49,22 +49,44 @@ Decision 0018 must be accepted by the user before work starts (the "locally trus
 
 ## Kabul kriterleri
 
-- [ ] [JVM] `FilesSwitch.shouldRun` is true only when the app is in the foreground, the setting is on, the permission is granted, the session is trusted (authenticated STREAM_CONFIG applied on the current session), and `transport == USB`; every other combination is false (table test). `Connected` without such a STREAM_CONFIG is not trusted.
-- [ ] [JVM] `FilesLifecycle` (fake server factory and publisher): a session end, a loss of the trusted signal, or a switch to Wi-Fi stops the server; OFF is published before the stop, and the next start publishes a different token.
-- [ ] [JVM] The idle status text distinguishes "not on a trusted USB session" from "app not in the foreground", "setting off" and "no permission".
+- [x] [JVM] `FilesSwitch.shouldRun` is true only when the app is in the foreground, the setting is on, the permission is granted, the session is trusted (authenticated STREAM_CONFIG applied on the current session), and `transport == USB`; every other combination is false (table test). `Connected` without such a STREAM_CONFIG is not trusted.
+- [x] [JVM] `FilesLifecycle` (fake server factory and publisher): a session end, a loss of the trusted signal, or a switch to Wi-Fi stops the server; OFF is published before the stop, and the next start publishes a different token.
+- [x] [JVM] The idle status text distinguishes "not on a trusted USB session" from "app not in the foreground", "setting off" and "no permission".
 - [ ] [device] With sharing on: on Wi-Fi the server never starts (`state=off`, no `state=on`); unplugging USB during a session → `state=off`; replugging → a new token and the Finder mount works.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `files/FilesSwitch.kt`: `shouldRun(enabled, permission, foreground, sessionTrusted, transport)` = all true and `transport == USB`; `idleStatus(...)` gets a new `FilesStatus.NO_USB_SESSION` ("Durum: Mac'e USB ile bağlanınca açılır"), checked after setting/permission/foreground; `stopReason(...)` for the `server state=off reason=` log (`disabled`, `no_permission`, `background`, `no_session`, `wifi`).
+2. `files/FilesLifecycle.kt` (pure, JVM-tested):
+   - `FilesSessionGate`: trust signal per connection generation. `onConnectionGen(gen, transport)` (from `SessionListener.onConnectionGen`, which carries the connection's own transport), `onConfigApplied()` (from `installConfig`, i.e. an authenticated STREAM_CONFIG applied on the current generation), `onUi(connected)`. `trusted` = Connected and config applied on the current gen; a new gen (reconnect or migration) or any non-Connected state drops it. Each call returns whether (trusted, transport) changed, so MainActivity syncs only on change (render() runs every 250 ms).
+   - `FilesLifecycle<S>`: the start/stop logic moved out of `FilesController` over an injected server factory, token source, publisher and log: one server at a time, a new token per start, READY only from `onListening` of the live generation, OFF published under the lock before `stop()`, failed server → FAILED + OFF, retired server handed to the next start.
+3. `files/FilesController.kt`: `sync(enabled, foreground, sessionTrusted, transport)` reads the permission and delegates to `FilesLifecycle`; the factory builds `DavServer` (root, hooks, thread priority, MbLog) as today.
+4. `MainActivity.kt`: one `FilesSessionGate` field and one `syncFiles(foreground)` helper; gate calls in `onConnectionGen` (UI block), `installConfig` and `render()`; the three existing `files.sync` call sites go through the helper.
+5. Tests in `test/.../files/`: `shouldRun` table over all 48 combinations (4 booleans × USB/Wi-Fi/none), idle status/reason, gate (Connected without STREAM_CONFIG, stale gen, migration, Wi-Fi), lifecycle with fakes (OFF before stop, new token per start, stale callbacks ignored, failure).
+
+Risks: ordering of UI-thread posts (onConnectionGen, Ui, ApplyConfig all come from the engine thread in order, so FIFO keeps gen and config consistent); T-205 edits SessionMachine/Controller in parallel — not touched here.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `0559b3a` (implementation; plan: `d92a48e`), branch `task/T-153-client-files-session-lifetime`. `./scripts/check.sh` → ALL OK (FilesLifecycleTest 15/15).
 - **Dokunulan dosyalar:**
+  - `C/files/FilesLifecycle.kt` (new): `FilesSessionGate` (trust per connection generation) and `FilesLifecycle<S>` (start/stop, token per start, OFF-before-stop, stale callbacks ignored, failure → FAILED + OFF; logic moved unchanged from `FilesController`).
+  - `C/files/FilesSwitch.kt`: `shouldRun(enabled, permission, foreground, sessionTrusted, transport)`, `idleStatus(enabled, permission, foreground)`, new `FilesStatus.NO_USB_SESSION` ("Durum: Mac'e USB ile bağlanınca açılır"), `stopReason(...)`.
+  - `C/files/FilesController.kt`: `sync(enabled, foreground, sessionTrusted, transport)` delegates to `FilesLifecycle`; the factory builds `DavServer` as before (root, thread priority, hooks).
+  - `C/MainActivity.kt`: `filesGate` field + `syncFiles()` helper; gate calls in `onConnectionGen` (UI block), `installConfig`, top of `render()` (sync after the started check, only on a gate change); the three existing call sites (setting toggle, onStart, onStop) pass the new inputs.
+  - `test/.../files/FilesLifecycleTest.kt` (new), `test/.../files/FilesLogicTest.kt` (old 3-arg switch test moved into the new file).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Trusted = rendered `Connected` **and** `installConfig` ran on the current connection generation. `installConfig` is reached only via `Action.ApplyConfig`, which the machine emits only in ACCEPTED/STREAMING (after T-150 local trust) for a sealed STREAM_CONFIG. `onConnectionGen`, `onUi` and `onStreamConfig` are all posted from the engine thread in order, so the UI-thread FIFO keeps the config bound to its generation. A migration's promoted candidate is a new generation, so trust drops at the switch and comes back only with that connection's own STREAM_CONFIG.
+  - The transport is the one `SessionListener.onConnectionGen(gen, transport)` reports for the connection itself, not `currentEndpoint` (which `onMigrationResult` may leave stale when `migrateEpoch != transportEpoch`).
+  - onStart passes `sessionTrusted = false, transport = null` explicitly: `onStop` stopped the controller, so no session can be trusted there even if the old session's Idle render has not arrived yet (the following `render(Searching)` clears the gate anyway).
+  - Status order: DISABLED > NO_PERMISSION > PAUSED (background) > NO_USB_SESSION.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** (no tablet used)
+  1. Sharing on, **Wi-Fi** session: `adb logcat -s 'MB/files:*'` shows no `ev=server state=on`; the status line reads "Durum: Mac'e USB ile bağlanınca açılır".
+  2. **USB** session: `ev=server state=on port=…` only after the video starts (STREAM_CONFIG), then `files_info_sent state=1` on the session tag; the Finder mount works.
+  3. Unplug USB during the session → `ev=server state=off port=0 reason=no_session` (or `reason=wifi` if AUTO migrates to Wi-Fi while the session stays up); the status goes back to the USB hint.
+  4. Replug (AUTO Wi-Fi → USB migration or reconnect) → a new `state=on`; the Mac remounts with the new token.
+  5. A connection that stays `Connected` without video never logs `state=on`; toggling the setting off/on during a USB session stops/starts the server; background → `reason=background`.
 - **Açık sorular:**
+  - `docs/LOGGING.md` has no entry for the `files` component's `ev=server state=on|off port= reason=` line. New `reason=` values from this card: `no_session` (no trusted session) and `wifi` (trusted session on Wi-Fi); existing: `disabled`, `no_permission`, `background`, `destroy`, `failed`, `ended`. The orchestrator may add them.
+  - T-205 (migration auth gate, parallel) changes how a migrated connection is accepted; this card relies only on the `onConnectionGen` → `ApplyConfig` ordering on the engine thread, which T-205 should keep.
