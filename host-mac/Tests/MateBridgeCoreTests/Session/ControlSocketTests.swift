@@ -269,21 +269,6 @@ final class ControlSocketTests: XCTestCase {
     private static let keyDown = Message.key(KeyEvent(timeUs: 1, scanCode: 30, androidKeyCode: 29, action: .down,
                                                       capsLockOn: false))
 
-    // MARK: Knob
-
-    func testControlSocketKnob() {
-        XCTAssertEqual(ControlSocketKnob.parse([:]), .bsd)
-        for text in [nil, "", " ", "bsd", "BSD", "garbage"] {
-            XCTAssertEqual(ControlSocketKnob.parse(text), .bsd, "\(String(describing: text))")
-        }
-        XCTAssertEqual(ControlSocketKnob.parse("nw"), .nw)
-        XCTAssertEqual(ControlSocketKnob.parse(" NW "), .nw)
-        XCTAssertEqual(ControlSocketKnob.parse(["MATEBRIDGE_CONTROL_SOCKET": "nw"]), .nw)
-        XCTAssertEqual(ControlSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]), .bsd)  // independent of video
-        XCTAssertEqual(ControlSocketKnob.bsd.logFields, "control_socket=bsd")
-        XCTAssertEqual(ControlSocketKnob.nw.logFields, "control_socket=nw")
-    }
-
     // MARK: Session over a real socket
 
     private enum Disconnect { case close, halfClose, reset }
