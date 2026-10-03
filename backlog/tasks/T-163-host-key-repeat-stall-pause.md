@@ -1,7 +1,7 @@
 ---
 id: T-163
 title: Pause host key auto-repeat while the control connection is silent
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
