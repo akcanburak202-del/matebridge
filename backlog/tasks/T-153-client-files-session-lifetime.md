@@ -1,7 +1,7 @@
 ---
 id: T-153
 title: Run the WebDAV server only during an accepted, trusted USB session
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
