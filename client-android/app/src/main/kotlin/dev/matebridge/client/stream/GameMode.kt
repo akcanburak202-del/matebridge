@@ -105,7 +105,8 @@ class GameModeSettings(private val settings: Settings) {
 
 /**
  * The video jitter buffer per display mode (decision 0014 §2): 0 in game mode (each frame goes to the next vsync, no
- * adaptive playout delay), [VideoRenderer.BUFFER_ADAPTIVE] otherwise. A launch value (`--ei jitter`) always wins.
+ * adaptive playout delay), [VideoRenderer.BUFFER_ADAPTIVE] otherwise. A launch value (`--ei jitter`) always wins,
+ * including `-1` = [VideoRenderer.BUFFER_ADAPTIVE] (T-210: the adaptive pacer in game mode, an A/B knob).
  */
 object GameJitter {
     enum class Source(val id: String) { MODE("mode"), EXTRA("extra") }
