@@ -15,8 +15,6 @@ public struct VideoSettings: Equatable, Sendable {
     public var codec: Codec
     /// Refresh rate of the virtual display (60, 120 or 144). Not part of `STREAM_CONFIG`: the stream stays at `fps`.
     public var displayRefreshHz: Int = 60
-    /// VideoToolbox `MaxFrameDelayCount`; nil leaves the encoder default (T-017 experiment knob).
-    public var maxFrameDelayCount: Int?
     /// `MATEBRIDGE_BITRATE_KBPS` (T-086): when set it wins over the stream-mode default of `applying(_:)`.
     public var bitrateOverrideKbps: Int?
     /// Which knob set `bitrateOverrideKbps` (T-088); nil with an override means `env`.
@@ -49,12 +47,6 @@ public struct VideoSettings: Equatable, Sendable {
         return v
     }
 
-    /// Accepts "0" or "1"; anything else (or nil) leaves the encoder default.
-    public static func parseFrameDelay(_ text: String?) -> Int? {
-        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), v == 0 || v == 1 else { return nil }
-        return v
-    }
-
     /// `MATEBRIDGE_FPS`: "60", "90" or "120"; anything else (or nil) is 60 (T-045).
     public static func parseFps(_ text: String?) -> Int {
         guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), [60, 90, 120].contains(v) else { return 60 }
@@ -68,8 +60,7 @@ public struct VideoSettings: Equatable, Sendable {
     }
 
     /// Applies the experiment knobs (T-017, T-045, T-086: codec and a bitrate that wins over `STREAM_PREFS`) from an
-    /// environment. With no variables set, `self` is unchanged
-    /// apart from `displayRefreshHz`/`maxFrameDelayCount` staying at their defaults. `MATEBRIDGE_FPS` overrides the
+    /// environment. With no variables set, `self` is unchanged apart from `displayRefreshHz` staying at its default. `MATEBRIDGE_FPS` overrides the
     /// tablet-derived fps only when present and valid; `MATEBRIDGE_FPS=120` without `MATEBRIDGE_REFRESH` also puts the
     /// virtual display at 120 Hz.
     public func applyingExperimentKnobs(_ env: [String: String]) -> VideoSettings {
@@ -83,7 +74,6 @@ public struct VideoSettings: Equatable, Sendable {
         s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
             ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
-        s.maxFrameDelayCount = Self.parseFrameDelay(env["MATEBRIDGE_FRAME_DELAY"])
         return s
     }
 

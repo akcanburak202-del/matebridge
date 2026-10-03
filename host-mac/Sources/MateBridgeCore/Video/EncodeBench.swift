@@ -80,26 +80,22 @@ public struct EncodeBenchOptions: Equatable, Sendable {
     /// `scroll`: whole frame moves every frame (worst case). `patch`: static screen with a small changing region
     /// (pen/typing-like, closer to typical use).
     public var content = EncodeBenchContent.scroll
-    /// `MATEBRIDGE_CODEC` / `MATEBRIDGE_H264_PROFILE` (T-086).
+    /// `MATEBRIDGE_CODEC` (T-086). H.264 uses the app's constant High profile.
     public var codec = Codec.hevc
-    public var h264Profile = H264Profile.high
     /// `MATEBRIDGE_BITRATE_KBPS` (T-086): replaces every config's bitrate when set.
     public var bitrateOverrideKbps: Int?
-    /// `--input-tags none|sck` (T-113).
+    /// `--input-tags none|sck` (T-113). Frames are always retagged to the session's colour tags before encoding, as
+    /// the app does (T-204).
     public var inputTags = EncodeBenchInputTags.none
-    /// `MATEBRIDGE_INPUT_RETAG` (T-113): retag the frames to the session's colour tags before encoding, as the app does.
-    public var retagInput = true
 
     public struct ParseError: Error, Equatable, Sendable { public let message: String }
 
-    /// The codec knobs of the app (T-086): `MATEBRIDGE_CODEC`, `MATEBRIDGE_H264_PROFILE`, and
-    /// `MATEBRIDGE_BITRATE_KBPS`, which replaces every config's bitrate.
+    /// The codec knobs of the app (T-086): `MATEBRIDGE_CODEC` and `MATEBRIDGE_BITRATE_KBPS`, which replaces every
+    /// config's bitrate.
     public func applyingEnvironment(_ env: [String: String]) -> EncodeBenchOptions {
         var o = self
         o.codec = VideoSettings.parseCodec(env["MATEBRIDGE_CODEC"])
-        o.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
         o.bitrateOverrideKbps = VideoSettings.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"])
-        o.retagInput = InputRetag.isEnabled(env)
         if let b = o.bitrateOverrideKbps { for i in o.configs.indices { o.configs[i].bitrateKbps = b } }
         return o
     }

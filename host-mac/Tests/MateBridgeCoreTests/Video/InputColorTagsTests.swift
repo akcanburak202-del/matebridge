@@ -7,14 +7,9 @@ final class InputColorTagsTests: XCTestCase {
     /// What ScreenCaptureKit attaches to its 420f buffers when configured for sRGB (measured on the Mac mini).
     private let sck = ColorTags(primaries: "ITU_R_709_2", transfer: "ITU_R_709_2", matrix: "ITU_R_709_2")
 
-    func testKnobDefaultsOnAndOnlyZeroTurnsItOff() {
-        XCTAssertTrue(InputRetag.isEnabled([:]))
-        XCTAssertTrue(InputRetag.isEnabled(["MATEBRIDGE_INPUT_RETAG": "1"]))
-        XCTAssertTrue(InputRetag.isEnabled(["MATEBRIDGE_INPUT_RETAG": "off"]))
-        XCTAssertFalse(InputRetag.isEnabled(["MATEBRIDGE_INPUT_RETAG": "0"]))
-        XCTAssertFalse(InputRetag.isEnabled(["MATEBRIDGE_INPUT_RETAG": " 0 "]))
-        XCTAssertFalse(EncoderKnobs.parse(["MATEBRIDGE_INPUT_RETAG": "0"]).retagInput)
-        XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_INPUT_RETAG": "0"]).logFields.hasSuffix("input_retag=0"))
+    /// T-204: the retag is unconditional; `MATEBRIDGE_INPUT_RETAG=0` no longer turns it off.
+    func testRetiredKnobLeavesRetagOn() {
+        XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_INPUT_RETAG": "0"]).logFields.hasSuffix("input_retag=1"))
     }
 
     func testScreenCaptureKitTagsAreRewritten() {
