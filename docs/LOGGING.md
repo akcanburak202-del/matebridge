@@ -264,7 +264,7 @@ Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi p
 
 ## Tablet dosya sunucusu (tablet, `MB/files`, T-153)
 
-- `ev=server state=on|off reason=…`: WebDAV sunucusu yalnız uygulama ön plandayken, paylaşım açık, izin verilmiş ve **güvenilen bir USB oturumu** varken çalışır (güvenilen: bağlı ve o bağlantının STREAM_CONFIG'i uygulanmış). `off` nedenleri: `background`, `setting_off`, `no_permission`, `no_session` (oturum yok ya da yeni bağlantı henüz güvenilmedi), `wifi` (oturum Wi-Fi'de). Her `on` yeni bir token üretir. Token, yol ve dosya adı loglanmaz.
+- `ev=server state=on|off reason=…`: WebDAV sunucusu yalnız uygulama ön plandayken, paylaşım açık, izin verilmiş ve **güvenilen bir USB oturumu** varken çalışır (güvenilen: bağlı ve o bağlantının STREAM_CONFIG'i uygulanmış). `off` nedenleri: `background`, `disabled` (ayar kapalı), `no_permission`, `no_session` (oturum yok ya da yeni bağlantı henüz güvenilmedi), `wifi` (oturum Wi-Fi'de). Her `on` yeni bir token üretir. Token, yol ve dosya adı loglanmaz.
 
 ## Girdi teslim zamanlaması (Mac, `input`, T-175)
 
