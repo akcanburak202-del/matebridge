@@ -1,7 +1,7 @@
 ---
 id: T-208
 title: Phase-lock 60 fps content on a 120 Hz panel (integer cadence lock)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-168, T-183]
@@ -46,7 +46,15 @@ Kök neden: `AdaptivePacer`'ın faz kilidi (T-060) yalnız içerik aralığı �
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `AdaptivePacer`: kilit koşulu tam sayı kata genişler. `n = round(fi / P)`, kilitlenir ⇔ `n ∈ {1, 2}` ve `|fi − nP| ≤ nP · LOCK_TOLERANCE`. `n = 1` eski koşulun aynısı (aynı kararlar). Kilit mekanizması zaten kare başına `k = round(Δcapture / P)` adımla ilerlediği için `n = 2`'de her kare 2 vsync tutulur, `lockSlot` / `REPHASE` / T-065 / T-115 kuralları aynen kalır.
+2. Yalnız `n = 2` için ölçeklenen üç sınır (`n = 1`'de değerler bugünküyle aynı):
+   - D tavanı: `n = 1` → P (bugünkü). `n = 2` → 1,5 P, yani bu içerik için bugünkü kilitsiz yolun tavanı (gecikme bugünküyle aynı ilke, sabit ek tampon yok).
+   - Gecikme sınırı (geç / birikme): `nP + min(jitter, P) / 2`.
+   - Yalnız kare boşluğu (T-065/T-115): `LOCK_GAP_PERIODS · n · P`. Böylece 120 Hz'de tek kaçan yakalama (33 ms) yalnız kare sayılmaz.
+3. Panel hızı değişimi (epoch): içerik aralığı değişmediyse (60 fps akış, 60↔120) akışın ölçümleri korunur: taban penceresi, titreme geçmişi, D (yeni tavana kırpılır), son yakalama ve son slot. Izgaraya bağlı durum sıfırlanır: kilit, badRun, geri besleme seviyesi, rephases. Böylece geçişte ilk kare taze geçmişle ortalanmış kilidi hemen kurar (ısınma yeniden kilitlemeleri olmaz). İçerik aralığı değiştiyse (120 fps çizim 60 Hz'de inceltiliyor) bugünkü tam sıfırlama aynen kalır.
+4. Karşılaştırma ve replay için A/B anahtarı `integerLock` (varsayılan açık, `sparseEarly` gibi). Renderer'a dokunulmaz (`fi` zaten `intervalProvider` ile geliyor). Kilit altında yeni bir çağrı yok.
+5. Testler (`IntegerCadenceLockTest`, sahte ızgara, LCG, uyku yok): 60 fps ±4 ms / 120 Hz → `PATH_LOCKED`, tutmaların ≥ %99'u tam 2 vsync. 60 Hz'de `integerLock` açık/kapalı kararlar birebir aynı. 120→60→120 geçişinde geçiş başına ≤ 1 düzensiz aralık. Replay: `trace7` her ikinci kare (gerçek titremeli 60 fps / 120 Hz) ve sentetik, eski/yeni hazır→slot ortalaması ≤ +2 ms, tutma dağılımı yazdırılır. `PhaseLockTest.streamAtTwicePeriodIsNotLocked` yeni davranışa çevrilir (eski davranış artık kapalı anahtarla).
+6. `tools/pacing/sim.py --holds`: cihaz pace_trace'inden içerik aralığına göre tutma dağılımı (1/2/3+ vsync), path sayıları, hazır→slot p50. Böylece cihaz kriterleri izden okunur. README ve LOGGING (`phase_lock=1` artık 2:1'de de) güncellenir.
 
 ## Handoff
 
