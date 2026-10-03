@@ -12,6 +12,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/WakeConnect.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/MacDiscovery.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/AutoTransport.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/TrustUiText.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/settings/SettingsCatalog.kt
   - client-android/app/src/main/res/values/strings.xml
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
@@ -21,7 +22,7 @@ files:
 
 ## Amaç
 
-T-150 makes the tablet refuse to trust a Mac until the user confirms the pairing code, and refuses to pair on connections the user did not start. This card gives the user the controls for that: "Kodlar aynı — Güven" and "İptal" on the pairing screen, a clear "Yeni Mac bulundu / Mac yeniden eşleşmek istiyor — Eşleş" prompt when an automatic connection meets a pairing request, a distinct warning when a known Mac's key changed, the stored code again when the user returns from Parsec, and "Bu Mac'i unut" in settings. Normal PAIRED reconnects stay silent.
+T-150 makes the tablet refuse to trust a Mac until the user confirms the pairing code, and refuses to pair on connections the user did not start. This card gives the user the controls for that: "Kodlar aynı — Güven" and "İptal" on the pairing screen, a clear "Yeni Mac bulundu / Mac yeniden eşleşmek istiyor — Eşleş" prompt when an automatic connection meets a pairing request, a distinct warning when a known Mac's key changed, the stored code again when the user returns from Parsec (with no automatic connect until the user acts), a clear text after a cancelled pairing, a way to dismiss or ignore a pairing request so one impostor cannot park the tablet, and "Bu Mac'i unut" in settings (also in-stream, ending the session cleanly first). Normal PAIRED reconnects stay silent.
 
 Source: external architecture review 2026-10-03 (H01, D2); verification: docs/reviews/2026-10-03/verify-A-security.md (WI-2, additional issue A2) and docs/reviews/2026-10-03/verify-A2-adversarial.md (§1).
 Decision 0018 must be accepted by the user before work starts (manifest §5 Q3).
@@ -38,36 +39,51 @@ Decision 0018 must be accepted by the user before work starts (manifest §5 Q3).
   - Connect call sites: `connect(ep)` (`MainActivity.kt:1850-1857`) from the saved Wi-Fi endpoint (:1536), USB (:1548), discovery (:1807) and "Bağlan" (:1836); the wake attempt calls `controller.start` directly (:1990).
   - `AutoUsbPolicy.stageOf` maps `AwaitingApproval` to `WAITING_USER` (`C/session/AutoTransport.kt:245`), and `onProbeOpen` ignores it (:268). T-150 adds compile-only mappings for its new state; this card makes them deliberate and tested.
   - There is no "forget this Mac" on the tablet; recovery from a bad pairing is only the Mac menu's "Onaylı cihazları unut".
-- **What T-150 provides (use, do not re-implement):** `SessionController.start(ep, wake, userInitiated)`, `confirmTrust()`, `cancelTrust()`, `forgetCurrentHost()`; UI states `AwaitingApproval(…, needsLocalConfirm)` (with the live or the stored code) and `PairingNeedsUser(hostName, rePair)`.
-- **Which connects are user-initiated:** only the "Eşleş" action (to the endpoint that answered PAIRING) and "Bağlan" with an address the user typed. Discovery, the saved Wi-Fi endpoint, USB mode, the AUTO probe/switch, the wake connect and "Bağlan" without a typed address (`restartUsualWay`, :1844-1848) are not. Put this mapping in a small pure function so it is tested. Keep auto-connect itself: a PAIRED reconnect stays silent; only a PAIRING answer needs the pick.
+- **What T-150 provides (use, do not re-implement):** `SessionController.start(ep, wake, userInitiated)`, `confirmTrust()`, `cancelTrust()`, `forgetCurrentHost()` (ends a live session with BYE + close before forgetting), the `ConfirmPromptVisible(visible)` entry point (the machine owns the 2-min timeout and counts only visible time); UI states `AwaitingApproval(…, needsLocalConfirm)` (live connection), the connection-less `StoredTrust(code, confirmed)` (fresh pending record or awaiting-host marker; T-150 blocks every non-user-initiated start while it holds), `PairingNeedsUser(hostName, rePair)`, and `Failed(PAIR_CANCELLED)` (terminal after Cancel or timeout).
+- **Which connects are user-initiated:** only the "Eşleş" action (to the endpoint that answered PAIRING), the actions on `StoredTrust` ("Kodlar aynı — Güven" then connect, "Yeniden eşleş", "Bağlan"), and "Bağlan" with an address the user typed. Discovery, the saved Wi-Fi endpoint, USB mode, the AUTO probe/switch, the wake connect and "Bağlan" without a typed address (`restartUsualWay`, :1844-1848) are not. Put this mapping in a small pure function so it is tested. Keep auto-connect itself: a PAIRED reconnect stays silent; only a PAIRING answer needs the pick.
+- **Return to the foreground with an unresolved pairing (decision 0018; T-150 rule).** `onStart` → `applyTransport()` (`MainActivity.kt:1501`) still runs, but T-150 turns its non-user-initiated start into `StoredTrust` without opening a connection. Render it:
+  - `confirmed = false`: the stored code, "Kodlar aynı — Güven", "İptal" and "Yeniden eşleş". Nothing connects until one of them is tapped.
+  - `confirmed = true` (the user confirmed before leaving, the Mac has not been seen to approve): "Mac'te 'İzin ver' dedikten sonra 'Bağlan'a bas" with "Bağlan".
+- **One impostor must not park the tablet (QA-1 T-151 #1).** Today `PairingNeedsUser` never retries (T-150), `WakeConnect.onDiscovered` connects only when `current == null || disconnected` (`C/session/WakeConnect.kt:127-134`), and in AUTO `shouldFallBack` fires only on `Disconnected` (`AutoTransport.kt:272-273`). So the first Bonjour impostor, or a localhost squatter on 47001 at every `onStart` probe, would hold the tablet on "Eşleş" while the real Mac is ignored. Rules:
+  - The prompt for a `PairingNeedsUser` from a non-user-initiated connection has "Eşleş" and "Yoksay". "Yoksay" dismisses it, and the endpoint that answered PAIRING is not auto-connected again in this process (until a user start: "Eşleş", "Bağlan" or a typed address). Showing the prompt also counts that endpoint as asked once: automatic connects never go back to it on their own (each would raise a new dialog on a real Mac).
+  - While that prompt is shown, discovery keeps running and automatic connects to **other** endpoints continue (non-user-initiated). One that answers PAIRED with the trusted key connects silently and replaces the prompt.
+  - In AUTO, `PairingNeedsUser` on the USB endpoint falls back to Wi-Fi like `Disconnected` (`AutoUsbPolicy.shouldFallBack`); the prompt stays as a non-blocking banner.
+- **Prompt visibility.** Post `ConfirmPromptVisible(true)` when a confirm prompt (`AwaitingApproval(needsLocalConfirm = true)` or `StoredTrust`) is rendered while the activity is started, and `false` when it is replaced or on `onStop`. Put the decision in a pure helper so it is tested.
+- **Text and state mapping in a pure helper.** UI log events in `MainActivity` are not JVM-testable, so the state → text/buttons mapping (including the key-changed warning, the stored-code prompt, the Parsec hint and `PAIR_CANCELLED`) lives in a new pure `C/session/TrustUiText.kt` (it returns text identifiers and button sets; `MainActivity` resolves them from `strings.xml` and only renders the result). The prompt-visibility decision and the `hostReached` predicate below can live there too. The MbLog grep test covers its log fields.
+- **USB hint.** `hostReached` is set only for `AwaitingApproval|Connected|Failed` (`MainActivity.kt:1876`), so in USB mode `showUsbHint` (`:1910-1912`) would overwrite the prompt. Include `PairingNeedsUser` and `StoredTrust` in the `hostReached` condition.
 - **Texts (Turkish, `strings.xml`):**
   - Pairing screen buttons: "Kodlar aynı — Güven" and "İptal".
   - Known `host_id` (`rePair`): "Bu Mac'in kimliği/anahtarı değişti. Kodu Mac'teki ile karşılaştırmadan onaylama." (replaces the amber "Mac bu tableti tanımıyor" line).
   - Parsec hint: "Kodu tabletteki ile karşılaştır, Mac'te İzin ver, buraya dönüp 'Kodlar aynı'ya bas."
-  - New-host prompt: the host name is chosen by whoever answered, so show it as a claim (e.g. "Kendini 'X' olarak tanıtan bir Mac eşleşmek istiyor") with "Eşleş".
-  - "Bu Mac'i unut": 2-step confirm; afterwards say that the Mac must also use "Onaylı cihazları unut" before pairing again (otherwise the Mac answers PAIRED and the tablet shows KEY_MISSING).
+  - New-host prompt: the host name is chosen by whoever answered, so show it as a claim (e.g. "Kendini 'X' olarak tanıtan bir Mac eşleşmek istiyor") with "Eşleş" and "Yoksay".
+  - `StoredTrust`: "Yeniden eşleş" next to the two pairing buttons; for `confirmed = true`: "Mac'te 'İzin ver' dedikten sonra 'Bağlan'a bas."
+  - `PAIR_CANCELLED`: "Eşleşme iptal edildi. Mac'teki onay penceresinde 'Reddet' de; 'İzin ver'e bastıysan Mac menüsünden 'Onaylı cihazları unut' de."
+  - "Bu Mac'i unut": 2-step confirm; afterwards say that the Mac must also use "Onaylı cihazları unut" before pairing again (otherwise the Mac answers PAIRED and the tablet shows KEY_MISSING). The row is also reachable in-stream (`SettingsCatalog.sections(h, inStream)`); there T-150's `forgetCurrentHost()` ends the session first.
   - The code is never logged; button taps may log `ev=pair_ui action=confirm|cancel|pair|forget` without values.
 - **Risk:** when the tablet aborts an automatic PAIRING, the Mac has already shown its approval dialog; it stays open as an orphan window ("Tablet ayrıldı…", `ApprovalPanel.markDisconnected`) for 2 min. Accept this and note it for T-157; T-155 makes a replaced request visible.
 - `MacDiscovery.kt` is listed in case the prompt needs the service name; change it only if needed.
-- **Serialize with:** T-146 (same files `MainActivity.kt`, `SettingsCatalog.kt`), T-153 and T-156 (same file `MainActivity.kt`; both depend on this card, chain T-146 → T-150 → T-151 → T-153 → T-159 …), T-191 (`SettingsCatalog.kt`).
+- **Serialize with:** T-146 (same files `MainActivity.kt`, `SettingsCatalog.kt`), T-150 (same files `MainActivity.kt`, `SessionUi.kt`, `AutoTransport.kt`, `WakeConnect.kt`; depends_on), T-153 and T-156 (same file `MainActivity.kt`; both depend on this card, chain T-146 → T-150 → T-151 → T-153 → T-159 …), T-156 also on `SessionUi.kt` and `strings.xml`, T-159 (`strings.xml`), T-190/T-191 (`SettingsCatalog.kt`).
 - No wire change; `docs/PROTOCOL.md` prose for 0018 is done by the orchestrator before T-150. `docs/LOGGING.md` additions go under *Açık sorular*.
 
 ## Kapsam dışı
 
-- Trust state logic, stores and the migration gate (T-150); Mac UI (T-155); `KEY_MISMATCH` (T-156); file-server lifetime (T-153).
+- Trust state logic and stores (T-150); the migration gate (T-205); Mac UI (T-155); `KEY_MISMATCH` (T-156); file-server lifetime (T-153).
 - Persisting the last `host_id` across app restarts for "Bu Mac'i unut" (if the row cannot be offered without it, hide it and note it under *Açık sorular*).
 
 ## Kabul kriterleri
 
 - [ ] [JVM] UI-state mapping: `AwaitingApproval(needsLocalConfirm = true)` renders the code with "Kodlar aynı — Güven" (→ `confirmTrust()`) and "İptal" (→ `cancelTrust()`); `PairingNeedsUser(hostName, rePair)` renders the host name as a claim and "Eşleş"; tapping "Eşleş" calls `start(ep, userInitiated = true)` for the endpoint that answered.
-- [ ] [JVM] Connect origins: only "Eşleş" and "Bağlan" with a typed address are user-initiated; discovery, the saved Wi-Fi endpoint, USB mode, the AUTO probe/switch, the wake connect and "Bağlan" without a typed address are not (pure mapping, tested).
-- [ ] [JVM] WakeConnect / AutoTransport: a discovered service, a saved endpoint or the USB probe never starts pairing on its own; `AwaitingApproval` with a pending local confirm and `PairingNeedsUser` both map to `WAITING_USER` (no probe, no migrate) and are ignored by `onProbeOpen`.
-- [ ] [JVM] "Bu Mac'i unut" calls `forgetCurrentHost()` only after a 2-step confirm; cancelling at either step changes nothing.
-- [ ] A known `host_id` shows "Bu Mac'in kimliği/anahtarı değişti. Kodu Mac'teki ile karşılaştırmadan onaylama."
-- [ ] On return with an unconfirmed pending record, the stored code is shown with the same two buttons.
-- [ ] The Parsec hint text is updated; all new texts are in `strings.xml`.
-- [ ] No code, key or token is logged (existing MbLog grep test extended to the UI log events).
-- [ ] [device] Covered by T-157 (steps 1–5 and 7).
+- [ ] [JVM] Connect origins: only "Eşleş", the `StoredTrust` actions and "Bağlan" with a typed address are user-initiated; discovery, the saved Wi-Fi endpoint, USB mode, the AUTO probe/switch, the wake connect and "Bağlan" without a typed address are not (pure mapping, tested).
+- [ ] [JVM] WakeConnect / AutoTransport: a discovered service, a saved endpoint or the USB probe never starts pairing on its own; `AwaitingApproval` with a pending local confirm, `StoredTrust` and `PairingNeedsUser` map to `WAITING_USER` (no probe, no migrate) and are ignored by `onProbeOpen`.
+- [ ] [JVM] **Impostor cannot park the tablet (QA-1 T-151 #1).** While `PairingNeedsUser` from a non-user-initiated connection is shown, discovery keeps running; another discovered service that answers PAIRED with the trusted key connects silently and replaces the prompt; the endpoint that answered PAIRING is not auto-connected again; "Yoksay" dismisses the prompt and keeps that endpoint out of automatic connects until a user start to it. In AUTO, `PairingNeedsUser` on the USB endpoint makes `shouldFallBack` true (fallback to Wi-Fi), with the prompt kept as a banner.
+- [ ] [JVM] **Return with an unresolved pairing.** `StoredTrust(code, confirmed = false)` renders the stored code with "Kodlar aynı — Güven" (→ `confirmTrust()`, then a user-initiated connect), "İptal" (→ `cancelTrust()`) and "Yeniden eşleş" (→ user-initiated start); `StoredTrust(confirmed = true)` renders the "Bağlan" text and button (→ user-initiated start). No connection is opened before a tap.
+- [ ] [JVM] **Prompt visibility.** Rendering a confirm prompt while started posts `ConfirmPromptVisible(true)`; replacing it, or `onStop`, posts `false` (pure helper, tested).
+- [ ] [JVM] "Bu Mac'i unut" calls `forgetCurrentHost()` only after a 2-step confirm; cancelling at either step changes nothing. Forget while `Connected` (in-stream) ends the session first (T-150), then removes the records; the UI goes to the forget-done text.
+- [ ] [JVM] `TrustUiText`: a known `host_id` (`rePair`) gives "Bu Mac'in kimliği/anahtarı değişti. Kodu Mac'teki ile karşılaştırmadan onaylama."; the stored-code prompt, the Parsec hint, the `PAIR_CANCELLED` text and the new-host claim map as listed above.
+- [ ] [JVM] The `hostReached` predicate (pure) includes `PairingNeedsUser` and `StoredTrust`, so the USB hint never replaces the prompt.
+- [ ] [build] All new texts are in `strings.xml`.
+- [ ] [JVM] No code, key or token is logged (existing MbLog grep test extended to the `TrustUiText` / `pair_ui` log fields).
+- [ ] [device] Covered by T-157 (steps 1–6 and 9).
 - [ ] `./scripts/check.sh` geçiyor.
 
 ## Plan

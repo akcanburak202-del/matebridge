@@ -1356,3 +1356,7 @@ Each card lists **files**, **acceptance** and **plan** hints. Everything else (g
   - The gated cards T-195 to T-203 read exactly these outputs.
 - **Decisions updated after QA:** 0018 (pending-record expiry, no auto-connect while a pending record exists, forget on a live session, cancel semantics, audio gate), 0019 (fault timer start point, generation definition, generic fault input, delayed debug fault trigger), 0026 (T-204).
 - **QA reports:** `qa-1.md` … `qa-4.md` in this directory.
+- **Serialize chains after QA:**
+  - `MainActivity.kt` chain also includes T-150 (after T-146, before T-151).
+  - `SessionServer.swift` and `HA/main.swift` chains include T-155.
+  - The "T-150 migration gate" wording in §3/§6 now means T-205.

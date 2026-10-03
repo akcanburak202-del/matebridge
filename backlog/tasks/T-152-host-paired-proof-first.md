@@ -33,6 +33,8 @@ Source: external architecture review 2026-10-03 (SE2, W3; A1 as a contract hole)
 - **Plan hints:** route both PAIRED cases through `.proving` with `proofTimeoutUs` (5 s, `:109`); the proving-deadline handling in `tick` (:500) closes an unproved connection. Keep the takeover path's behaviour and logs (`takeover_proving`) unchanged; add a distinct log reason for the non-takeover case only if useful (e.g. `paired_proving takeover=0`), listed under *Açık sorular* for `docs/LOGGING.md`.
 - **PROTOCOL.md (orchestrator, before or at merge; prose only):** §3 step 3: "host her PAIRED bağlantıda ilk doğrulanmış kaydı bekler, sonra etkinleştirir ve STREAM_CONFIG gönderir". No message or fixture change.
 - **Interaction with T-150:** none on the wire. A locally untrusted client (T-150) still sends PING, so the host proves and activates as usual.
+- **Interaction with T-156:** after this card a wrong client key is never seen by the client as `AUTH_FAILED` on a host record: the host sends no record before the proof and closes **without BYE** at the bad proof (`recordAuthFailed`, `SessionMachine.swift:275-277`). T-156 counts that case (close after the proof PING, before any authenticated host record).
+- **Known window (documented, not fixed):** `.proving` is not a slot owner (`slotOwner`, `SessionMachine.swift:575-580`). During a non-takeover proof (about 1 RTT) a PAIRING HELLO from another device can take the slot as pending, and the proving tablet is then answered BUSY at the proof (`prove()` :698-708). The window is tiny and the exposure already exists in no-session gaps; the test below pins the outcome.
 - **Serialize with:** T-155 and T-171 (same file `SessionMachine.swift`; chain T-152 → T-155 → T-171). Host PING (T-171) must start only after activation.
 - **Review:** security change: the orchestrator runs `./scripts/codex-review.sh`.
 
@@ -46,6 +48,7 @@ Source: external architecture review 2026-10-03 (SE2, W3; A1 as a contract hole)
 - [ ] [XCTest] Non-takeover PAIRED + a valid encrypted PING: `.sessionStarted`, then STREAM_CONFIG, then the pong for that PING, in that order.
 - [ ] [XCTest] Non-takeover PAIRED + a record that fails authentication: closed, no `.sessionStarted`, no display-related action.
 - [ ] [XCTest] Proving connections count toward the unauthenticated bound (`awaitingHelloCount`, `maxUnauthenticated` = 4).
+- [ ] [XCTest] PAIRING HELLO from device B while device A's non-takeover PAIRED connection is proving: the outcome is pinned by a test and described in Handoff (expected today: B pending, A gets BUSY at its proof).
 - [ ] [XCTest] Existing takeover and orphan tests pass unchanged.
 - [ ] [device] A normal reconnect still shows video (about +1 RTT); `session_started` follows the first record in `host.log`.
 - [ ] The orchestrator ran `./scripts/codex-review.sh` and its findings are resolved or recorded.

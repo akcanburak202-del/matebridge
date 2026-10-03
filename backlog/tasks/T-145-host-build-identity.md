@@ -45,7 +45,7 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 ## Kabul kriterleri
 
 - [ ] [XCTest] `BuildInfoTests`: a full Info.plist dictionary gives the right `version`, `build` and `sha`; each missing key becomes `unknown`; `logFields` produces exactly `version=… build=… sha=… os=…`.
-- [ ] `bundle-host.sh` writes `MBGitCommit` (short SHA, `-dirty` on a dirty tree, `unknown` without git); `plutil -lint` still passes.
+- [ ] [device] (Mac) `bundle-host.sh` writes `MBGitCommit` (short SHA, `-dirty` on a dirty tree, `unknown` without git); `plutil -lint` still passes.
 - [ ] [device] `swift run` (no bundle) logs `ev=app_start … sha=unknown` and does not crash.
 - [ ] [device] A bundled `MateBridge.app` logs exactly one `ev=app_start version= build=<CFBundleVersion> sha=<MBGitCommit> os=` line per launch in `host.log`, before `listening`, and the menu shows the same SHA on a disabled "Sürüm …" line.
 - [ ] `./scripts/check.sh` geçiyor.

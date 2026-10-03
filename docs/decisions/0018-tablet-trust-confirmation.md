@@ -30,11 +30,15 @@ Ek bulgu (A2): AUTO modunda USB'ye taşınan aday bağlantı, şifresiz PAIRED/A
   - Yeni anahtar, kodla birlikte (Keystore ile sarılı, asla loglanmaz) **bekleyen** bir kayıtta tutulur. Güvenilen anahtara dokunulmaz.
   - Kullanıcının tablette "Kodlar aynı — Güven" demesi, bekleyen kaydı tek adımda güvenilen anahtara çevirir. Bu, Parsec'e geçmeden önce ya da dönüşte, saklı kodu gösteren bir istemle olabilir.
   - Tablet oturumu ancak iki koşul birlikteyken kabul edilmiş sayar: host kabul etti (ACCEPTED ya da sonraki bir PAIRED el sıkışması) ve kayıt yerel olarak güvenilir. O zamana kadar yalnızca PING gider. STREAM_PREFS, FILES_INFO ve girdi gitmez, gelen CLIPBOARD uygulanmaz.
-  - İptal ya da REJECTED bekleyen kaydı siler. 2 dakikalık zaman aşımı yalnız onay istemi ön plandayken işler. Kullanıcı Parsec'ten dönünce bekleyen kayıt bulunursa silinmez, saklı kodla birlikte yeniden gösterilir; bu, onay-sonrası akışını korur. PAIRED el sıkışması onaylanmamış bir anahtarı asla kullanmaz: bekleyen kayıt varken gelen PAIRED yanıtında anahtar türetilmez, önce kod onaylatılır, sonra yeniden bağlanılır.
+  - İptal ya da zaman aşımı bekleyen kaydı siler, açık bağlantıyı BYE ile kapatır ve kullanıcı yeniden başlatana kadar kendiliğinden bağlanmaz ("Eşleşme iptal edildi" metni). Mac o sırada "İzin ver" demişse Mac'te "Onaylı cihazları unut" gerekir; metin bunu söyler. Bu yol döngüye girmez, en kötü T-156'nın "anahtar uyuşmuyor" durumunda biter. REJECTED yerel onaydan önce gelirse bekleyen kaydı siler; sonra gelirse onaylanan anahtar kalır (zararsız: Mac bir dahaki sefere PAIRING cevabı verir).
+  - 2 dakikalık zaman aşımını oturum makinesi yürütür. Arayüz onay isteminin görünür olup olmadığını bildirir; süre yalnız istem ön planda görünürken işler.
+  - Bekleyen kayıt yaklaşık 10 dakika (duvar saati) sonra bayatlar: okununca silinir, hiç gösterilmez, PAIRED yanıtında güvenilen anahtar kullanılır. Unutulmuş ya da saldırganın ürettiği bir kayıt böylece gerçek Mac'e sessiz bağlanmayı ele geçiremez.
+  - Kullanıcı Parsec'ten dönünce taze bir bekleyen kayıt (ya da onaylanmış ama Mac'in kabulü henüz görülmemiş bir anahtar) varsa uygulama **kendiliğinden bağlanmaz**: saklı kodu gösterir ve ancak kullanıcı dokununca bağlanır. Kayıt arka planda geçen süre yüzünden silinmez; bu, onay-sonrası akışını korur. Otomatik bir bağlantı Mac'teki onay penceresinin kodunu değiştiremez. PAIRED el sıkışması onaylanmamış bir anahtarı asla kullanmaz: bekleyen kayıt varken gelen PAIRED yanıtında anahtar türetilmez, önce kod onaylatılır, sonra yeniden bağlanılır.
+  - Güven açık bir bağlantıda asla geri alınmaz. Canlı oturumda "Bu Mac'i unut" önce oturumu BYE ile kapatır (Mac basılı her şeyi bırakır), sonra kayıtları siler. Böylece takılı tuş ya da kalem kalmaz.
   - Kapı ses için de geçerli: oturum kabul edilene kadar AUDIO_CONFIG/AUDIO_FRAME işlenmez. Bugün bunlar kabul kontrolü olmadan dinleyiciye ulaşıyor (`SessionController.kt:728-758`), yani sahte bir host ses çalabiliyor.
-  - **Eşleşme her zaman kullanıcıyla başlar.** Keşif, saklı uç ya da USB yoklaması ile açılan bağlantıda PAIRING cevabı gelirse bağlantı kesilir ve "Yeni Mac bulundu / Mac yeniden eşleşmek istiyor — Eşleş" gösterilir. Normal PAIRED yeniden bağlanma sessiz kalır.
+  - **Eşleşme her zaman kullanıcıyla başlar.** Keşif, saklı uç ya da USB yoklaması ile açılan bağlantıda PAIRING cevabı gelirse bağlantı kesilir ve "Yeni Mac bulundu / Mac yeniden eşleşmek istiyor — Eşleş" gösterilir. Normal PAIRED yeniden bağlanma sessiz kalır. İstem "Yoksay" ile kapatılabilir. İstem açıkken keşif sürer: güvenilen Mac'e sessiz bağlanma ve AUTO'da Wi-Fi'ye dönüş devam eder, PAIRING cevabı veren uca kendiliğinden yeniden bağlanılmaz. Tek bir sahte uç tableti bu istemde kilitleyemez.
   - Tablete "Bu Mac'i unut" eklenir.
-  - Taşıma adayı, ancak ilk doğrulanmış host kaydından sonra terfi eder.
+  - Taşıma adayı, ancak ilk doğrulanmış host kaydından sonra terfi eder (T-205). Kanıt beklenirken girdi eski bağlantıdan akmaya devam eder, böylece hiçbir bırakma olayı kaybolmaz.
 
 ## Karar
 Önerilen: **(c)**. Tel biçimi değişmez. Mesaj, alan, fixture ve `crypto_vectors.json` aynı kalır. **Kullanıcı onayı bekliyor.**
@@ -45,8 +49,9 @@ Kullanıcının cevaplaması gerekenler (manifest §5 soru 3):
 
 ## Sonuçlar
 - **Kazanılan:** sahte host ya da yerel uygulama girdi, pano ve dosya jetonu alamaz, saklı anahtarı da ezemez. Karar 0015 madde 3'ün güvencesi geri gelir.
-- **Kaybedilen:** her eşleşmede tablette fazladan bir ya da iki dokunuş. Tablet eşleşmeyi bıraktığında Mac'te onay penceresi bir an görünebilir.
-- **Kapıladığı kartlar:** T-150, T-151, T-153, T-156; aygıt kabulü T-157. T-150 ve T-151 arka arkaya birleştirilir, aralarında APK kurulmaz. T-152 (host önce kanıt ister) karar gerektirmez, ama aynı PROTOCOL §3 değişikliğiyle birlikte yürür.
+- **Kaybedilen:** her eşleşmede tablette fazladan bir ya da iki dokunuş. Parsec'ten dönüşte, eşleşme çözülmemişse bir dokunuş daha ("Kodlar aynı — Güven" ya da "Bağlan"). Tablet eşleşmeyi bıraktığında Mac'te onay penceresi bir an görünebilir.
+- **Kalan açıklar (bilinerek):** HELLO (şifresiz `device_id` ve cihaz adı) PAIRING kesilmeden önce her uca gitmeye devam eder; host tarafındaki etkisini T-152 kaldırır. Normal PAIRED bağlantı şifresiz ack'te ACCEPTED olur, ama tabletin gönderdiği her şey `pair_key` ile mühürlüdür. Mac onayladıktan sonra tablette İptal edilirse Mac'te "Onaylı cihazları unut" gerekir.
+- **Kapıladığı kartlar:** T-150, T-151, T-153, T-156 ve T-205 (T-150'den ayrılan taşıma kapısı); aygıt kabulü T-157. T-150 ve T-151 arka arkaya birleştirilir, aralarında APK kurulmaz. T-152 (host önce kanıt ister) karar gerektirmez, ama aynı PROTOCOL §3 değişikliğiyle birlikte yürür.
 - **Mevcut kararlara etkisi:**
   - 0010 kısmen değişir: yalnızca istemci tarafındaki eşleşme davranışı. Durum notu "kısmen 0018 ile değişti" olur.
   - T-044'ün "ilk ack'te hemen sakla" davranışı kalkar.

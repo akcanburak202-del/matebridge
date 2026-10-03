@@ -30,6 +30,7 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 - **Plan hints:**
   - `build.gradle.kts`: `buildFeatures { buildConfig = true }`; `buildConfigField`s `GIT_SHA` (short SHA, `-dirty` when the tree is dirty), `BUILD_TIME_UTC`. Read git through `providers.exec { commandLine("git", "rev-parse", "--short", "HEAD"); isIgnoreExitValue = true }` so a tree without `.git` builds and falls back to `unknown`; keep it configuration-cache friendly (no eager `exec` at configuration time outside providers).
   - `versionCode` from the commit count (`git rev-list --count HEAD`), falling back to 1. Note: a shallow CI checkout (T-149) gives a small count; T-149 either fetches full history or accepts that the CI APK is not the daily APK.
+  - A fallback build (`versionCode` 1, or a small shallow-clone count) must never be installed over a count-based APK: `adb install -r` fails with `INSTALL_FAILED_VERSION_DOWNGRADE`. If such an install is really needed, use `adb install -r -d`. **Never uninstall to work around it**: uninstalling deletes `matebridge_pairkeys`, i.e. the pairing. Record it in Handoff under *Varsayımlar*.
   - `BuildInfo.kt` (pure, testable): takes the raw values and formats `logFields()` = `version=… sha=… built=… sdk=… os_build=…` (`os_build` = `Build.DISPLAY`, `sdk` = `Build.VERSION.SDK_INT`, both passed in so the JVM test does not need Android).
   - `MainActivity.onCreate`: one `MbLog.i("app_start", BuildInfo.logFields(...))` near the top. Nothing else in `MainActivity.kt` changes.
   - `SettingsCatalog`: a `SettingItem.Info` "Sürüm: 0.x (<sha>, <built>)" row in the last ("Diğer") section.
@@ -45,8 +46,8 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 ## Kabul kriterleri
 
 - [ ] [JVM] `BuildInfoTest`: `logFields()` has exactly the fields `version= sha= built= sdk= os_build=` in that order; an empty or missing SHA becomes `sha=unknown`.
-- [ ] `./gradlew assembleDebug` succeeds from a copy of `client-android/` without `.git` (SHA `unknown`, `versionCode` 1).
-- [ ] `versionCode` follows the commit count when git is available; `versionName` stays human-readable.
+- [ ] [build] `./gradlew assembleDebug` succeeds from a copy of `client-android/` without `.git` (SHA `unknown`, `versionCode` 1).
+- [ ] [build] `versionCode` follows the commit count when git is available (`aapt2 dump badging` output quoted in Handoff); `versionName` stays human-readable.
 - [ ] [device] `adb logcat -s 'MB/*'` shows exactly one `ev=app_start version= sha= built= sdk= os_build=` line per cold start, and the settings panel "Sürüm" row shows the same SHA. No serial number and no device ID appear in the line.
 - [ ] `./scripts/check.sh` geçiyor.
 

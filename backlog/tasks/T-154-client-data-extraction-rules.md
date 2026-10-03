@@ -34,9 +34,9 @@ Source: external architecture review 2026-10-03 (SE1); verification: docs/review
 
 ## Kabul kriterleri
 
-- [ ] `AndroidManifest.xml` sets `android:dataExtractionRules="@xml/data_extraction_rules"` and keeps `android:allowBackup="false"`.
-- [ ] `data_extraction_rules.xml` excludes all shared preferences (`matebridge`, `matebridge_pairkeys`, `matebridge_audio`) from both `<cloud-backup>` and `<device-transfer>`.
-- [ ] `./gradlew assembleDebug` passes, and `aapt2 dump xmltree --file AndroidManifest.xml <app-debug.apk>` shows the `dataExtractionRules` attribute on `<application>` (output quoted in Handoff).
+- [ ] [build] `AndroidManifest.xml` sets `android:dataExtractionRules="@xml/data_extraction_rules"` and keeps `android:allowBackup="false"`.
+- [ ] [build] `data_extraction_rules.xml` excludes all shared preferences (`matebridge`, `matebridge_pairkeys`, `matebridge_audio`) from both `<cloud-backup>` and `<device-transfer>`.
+- [ ] [build] `./gradlew assembleDebug` passes, and `aapt2 dump xmltree --file AndroidManifest.xml <app-debug.apk>` shows the `dataExtractionRules` attribute on `<application>` (output quoted in Handoff).
 - [ ] [device] Not verifiable on the tablet (would need a HarmonyOS Phone Clone transfer to a second device): state "not run" in Handoff.
 - [ ] `./scripts/check.sh` geçiyor.
 
