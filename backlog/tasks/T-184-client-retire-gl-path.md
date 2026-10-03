@@ -1,7 +1,7 @@
 ---
 id: T-184
 title: Retire the GL presentation path
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-183]
@@ -67,7 +67,14 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `video/GlPresenter.kt`, `video/PresentStats.kt`, `PresentStatsTest.kt` silinir.
+2. `MainActivity.kt`: `glMode`, `videoGl`, `videoView` (artık hep `video`), `presenter`, `presentStats`, `glVsync`, `glDecoderSurface`, `glGeneration`, `glPresentationTime`, `frameRateOverride` kaldırılır; `render`/`frate`/`glpts` extra'ları ve `render_mode` satırı okunmaz/yazılmaz (karar 0026: `frate` de GL yolu düğmesi). `setSurfaceFrameRate` `FrameRatePolicy.surfaceRate(-1, fps)` ile bugünkü varsayılanı (akış fps'i) korur. `surfaceCreated/Destroyed` yalnız `video` yolunu tutar; `fallBackToSurface`/`gl_fallback`, `gl_stats` ve katmandaki GL satırları gider; `codecReportsShown = true`. `lead_us`/`deadline_us` yalnız `vsync` (`VsyncClock`) üzerinde kalır.
+3. `stream/GameMode.kt`: `GameJitter.Source.GL` ve belgesi kaldırılır; `GameModeTest`'teki GL satırı silinir.
+4. `activity_main.xml`: `video_gl` silinir.
+5. `VsyncIdleTest`: GlPresenter modelini sınayan `glFirstFrameAfterSleepIsDrawnOnArrival` silinir (yüzey yolunun `FirstOutputBypass` testleri kalır).
+6. `files:` dışındaki eski yorumlar (VideoRenderer, StatsFormat, VsyncIdle, LatencyStageStatsTest) ve LOGGING/KNOBS metni *Açık sorular*a yazılır.
+
+Riskler: yüzey yaşam döngüsü (VideoHealth/VideoDeliveryGate/CodecGeneration) aynı kalmalı; yalnızca GL dalları silinir, yüzey dalının sırası değişmez.
 
 ## Handoff
 
