@@ -1,7 +1,7 @@
 ---
 id: T-149
 title: Add a component-split CI merge gate and a safe fixture CLI
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -52,9 +52,9 @@ Decision 0022 must be accepted by the user before work starts (manifest §5 Q4).
 - [x] `./scripts/check.sh` with no flag behaves exactly as today on the Mac (same steps, same exit code).
 - [x] `check.sh --only host|android|protocol` runs only that component; `--only protocol` on Linux skips the CryptoKit diff with an explicit `SKIP` line; set `JAVA_HOME`/`ANDROID_HOME` are never overridden.
 - [x] `gen.py` writes only with `--write`, exits non-zero on unknown arguments and on no mode, and `--check` is unchanged; `protocol/fixtures/README.md` documents `--write`.
-- [ ] [CI] The macOS job runs `--only host` and `--only protocol`; the Linux job runs `--only android` and `--only protocol`; both pass on the merge commit of this card (run URLs in Handoff).
-- [ ] [CI] A deliberately stale fixture on a throwaway branch fails the job (run URL in Handoff; branch deleted afterwards).
-- [ ] [CI] Each job finishes in under 15 min with warm caches (times in Handoff).
+- [x] [CI] The macOS job runs `--only host` and `--only protocol`; the Linux job runs `--only android` and `--only protocol`; both pass on the merge commit of this card (run URLs in Handoff).
+- [x] [CI] A deliberately stale fixture on a throwaway branch fails the job (run URL in Handoff; branch deleted afterwards).
+- [x] [CI] Each job finishes in under 15 min with warm caches (times in Handoff).
 - [x] [doc] Decision 0022 lists what is NOT covered; `docs/WORKFLOW.md` states the gate mechanics (push `task/*`, advisory week, then required); `docs/PLAN.md:48` points to 0022.
 - [x] `./scripts/check.sh` geçiyor.
 
@@ -122,3 +122,10 @@ Decision 0022 must be accepted by the user before work starts (manifest §5 Q4).
 - **Açık sorular:**
   - There is no Android SDK cache: the NDK (about 1–2 GB) is downloaded on every run. If the Linux job is slow, a follow-up card could add `actions/cache` for `$ANDROID_HOME/ndk/30.0.16248370`.
   - Should the Linux job also skip pure docs pushes? The card asks for the Linux job without a filter, so it was left unfiltered.
+
+### CI kanıtı (orkestratör, 2026-10-03)
+
+- Dal koşusu (`task/T-149-ci-merge-gate`, soğuk önbellek): https://github.com/akcanburak202-del/matebridge/actions/runs/37139068983 — yeşil. linux 3 dk 03 sn, macos 1 dk 52 sn. macOS işi XCTest 342 + Swift Testing 691 testi koştu.
+- Negatif test (`task/T-149-stale-fixture-probe`, `audio_config_stopped.hex` bozuldu): https://github.com/akcanburak202-del/matebridge/actions/runs/37139306111 — iki iş de `stale fixtures: ['audio_config_stopped']` ile kırmızı. Dal silindi.
+- Merge commit'i `16d72b9` (main): https://github.com/akcanburak202-del/matebridge/actions/runs/37139590586 — yeşil. linux 2 dk 57 sn, macos 2 dk 22 sn (15 dk hedefinin çok altında).
+- Danışma haftası 2026-10-10'da biter; sonra main için zorunlu kontrol (ruleset) açılır.
