@@ -113,10 +113,10 @@ Risks: the adb loopback family (verified on device by `lsof` plus a USB session)
 
 ## Handoff
 
-- **Commit:** `9fab1f9` (implementation; plan in `0de508e`).
+- **Commit:** `7cbe255` (Codex P2 fixes) on top of `9fab1f9` (implementation); plan in `0de508e`.
 - **Dokunulan dosyalar:**
-  - `host-mac/Sources/MateBridgeCore/Session/NetworkProfile.swift` (new: `NetworkProfile`, `NetworkActivity`, `NetworkProfileSwitch`);
-  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift` (`BindAddress` is now `Equatable`, doc only);
+  - `host-mac/Sources/MateBridgeCore/Session/NetworkProfile.swift` (new: `NetworkProfile`, `NetworkActivity`, `NetworkProfileSwitch`, `NetworkProfileController`, `usbWatcherEnabled` / `usbModeToggleAllowed`);
+  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift` (`BindAddress` is now `Equatable`; `BsdTcpListener.cancel(onClosed:)` reports once the descriptor is closed);
   - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`:
     - `init(networkProfile:)`, `setNetworkProfile(_:)`, `Handlers.networkProfileChanged`;
     - bind address per profile;
@@ -125,13 +125,21 @@ Risks: the adb loopback family (verified on device by `lsof` plus a USB session)
     - `profile=` on `ev=listening`;
     - `ev=network_profile profile=… from=… action=restart|deferred`;
   - `host-mac/Sources/MateBridgeApp/main.swift`: "Yalnız USB (Wi-Fi kapalı)" toggle, a profile line, and USB modu locked on in the mode;
-  - `host-mac/Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift` (12 tests; on this machine the real-socket test ran instead of skipping).
+  - `host-mac/Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift` (20 tests; on this machine the real-socket test ran instead of skipping).
   - `UserDefaultsStreamPrefsStore.swift` was not touched (see Plan, step 7).
 - **Varsayımlar:**
   - T-186 had merged, so `nw` forcing is N/A. The "effective socket kind is bsd" XCTest criterion does not apply because only `bsd` exists.
   - The Mac's adb server connects the `adb reverse` target over IPv4 127.0.0.1 first, so binding `::ffff:127.0.0.1` alone is enough (`::1` is not bound).
   - A live session of either transport defers the switch. Idle, or approval-pending, restarts at once and closes half-open connections and the pending approval.
   - UserDefaults key `networkProfile`, values `all` / `usb_only`; anything else means "USB + Wi-Fi".
+  - **Codex P2 #1 fix:** the `adb reverse` watcher (and the shown "USB modu" state and its lock) follows the stored USB modu choice OR the applied profile OR the requested profile (`NetworkProfile.usbWatcherEnabled`).
+    - Leaving USB-only keeps the tunnels until the deferred switch actually takes effect (`networkProfileChanged` reports the applied profile).
+    - Entering USB-only brings the tunnels up at once. That is earlier than "applied only", but adding tunnels never harms a live session, and the mode is never left without them.
+  - **Codex P2 #2 fix:** a profile restart is two steps (`NetworkProfileController`).
+    - First the old listeners are cancelled with `cancel(onClosed:)`. The new ones bind only after both descriptors have closed (DispatchGroup notify on the session queue).
+    - Requests arriving meanwhile are coalesced, and the restart starts the latest request once.
+    - A `port_fallback` during a profile restart is logged at **error** level with `after=profile_switch`.
+  - `./scripts/check.sh` ALL OK after the fixes.
   - `./scripts/check.sh` ALL OK.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
   - The menu: the "Yalnız USB" toggle persists across relaunches. While it is on, "USB modu" shows on and is disabled, and turning the mode off restores the earlier USB modu choice. The profile line text reads correctly.
@@ -140,6 +148,8 @@ Risks: the adb loopback family (verified on device by `lsof` plus a USB session)
   - A USB session works in USB-only mode: video, pen, keyboard, audio and files. **The adb loopback family assumption is the main risk.**
   - Switching with no session: `ev=network_profile action=restart` followed by a new `ev=listening … profile=`.
   - Switching with a live USB or Wi-Fi session: `action=deferred`, the menu line "… oturum bitince uygulanacak", the session is not cut, and the switch applies after the session ends.
+  - Codex scenario: with USB modu stored off, turn Yalnız USB on and start a USB session, then turn Yalnız USB off. `adb reverse --list` must still show 47001/47002, and a STREAM_PREFS change (which reconnects video) must not freeze the screen. The tunnels go only after the session ends.
+  - Rapid toggling (Yalnız USB on/off/on with no session): exactly one `listening` line per completed restart, still on 47001/47002, and no `port_fallback`.
   - Back in "USB + Wi-Fi": Bonjour is visible with TXT `wol=`, and a Wi-Fi session connects.
   - A LAN connect attempt in USB-only mode is refused (the bind refuses it; `reason=profile` is unreachable with a loopback bind, defence in depth).
   - Codex review (security) is still pending.
@@ -147,7 +157,8 @@ Risks: the adb loopback family (verified on device by `lsof` plus a USB session)
   - `docs/LOGGING.md` (orchestrator):
     - `ev=listening` gains `profile=all|usb_only`;
     - `ev=connection_refused` gains `reason=profile` plus a `profile=` field;
-    - new `ev=network_profile profile=all|usb_only from=all|usb_only action=restart|deferred` (component `session`).
+    - new `ev=network_profile profile=all|usb_only from=all|usb_only action=restart|deferred` (component `session`);
+    - `ev=port_fallback` gets `after=profile_switch`, at error level, when it happens during a profile restart.
   - `docs/PROTOCOL.md` §3 step 1 (orchestrator): the planned note that Bonjour may be absent in "Yalnız USB" mode.
   - Decision note for the orchestrator: a live **Wi-Fi** session is deferred, not ended (reason in Plan, step 4: the tablet is the only screen). If ending it is preferred, flip the `.active(.network)` branch in `NetworkProfileSwitch.decide` and its test.
   - While a switch to USB-only is deferred, the LAN listeners and Bonjour stay up until the session ends. The menu line shows this.
