@@ -1118,3 +1118,10 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - Durgun ekranda tablet toplamı ~70–80 → ~45–56/800. İstemcinin payı ~%20 → ~%7–9.
 - Tabletteki APK güncel (T-144 geri alınmış hâli), mod Akıcı. Ölçüm kayıtları kapalı. Ölçüm araçları scratch'teydi (`mbmon.sh`, `an.py`, `macmon.sh`, `macan.py`); kayboldularsa NOTES'taki tariflerden yeniden yazılır.
 - Açık / ileride: T-127 (Mac Ethernet ile Wi-Fi), USB 3 kablo ile dosya aktarımı.
+
+## 2026-10-03 — `./scripts/check.sh` kaydı (T-147 temel adımı)
+
+- Commit: `9ae6294` (main). Kod `a30c769` ile aynı; aradaki commit'ler yalnız doküman/kart (dış inceleme doğrulaması).
+- Mac: macOS 27.0.1 (26A434), Apple Swift 6.4.
+- Sonuç: **`check.sh: ALL OK`, çıkış 0.** host-mac `swift build` + `swift test` (XCTest 334, Swift Testing 682 test, 0 hata); probe'lar (pen-sink, vdisplay) derlendi ve testleri geçti; gradle `client-android`, `aaudio-probe`, `input-probe` geçti; protokol fixture'ları ve kripto vektörleri güncel.
+- Bu yalnız derleme/test kaydı. T-147'nin "son sağlam sürüm çifti" için gereken HarmonyOS build ve APK SHA'sı cihaz provasında eklenecek.
