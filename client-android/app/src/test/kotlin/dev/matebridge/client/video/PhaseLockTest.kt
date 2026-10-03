@@ -181,11 +181,25 @@ class PhaseLockTest {
         assertEquals(0L, pacer.rephases)
     }
 
-    @Test fun streamAtTwicePeriodIsNotLocked() {
+    @Test fun streamAtTwicePeriodIsLockedOnlyWithTheIntegerLock() {
+        // T-208: two periods is an integer cadence (IntegerCadenceLockTest); before, and with the A/B switch off, no lock.
         val clk = clock(1_000_000_000L / 120)
         val period = clk.grid().periodNs
-        val pacer = AdaptivePacer(clk, period * 2)
+        val pacer = AdaptivePacer(clk, period * 2).also { it.integerLock = false }
         run(clk, pacer, 300, period * 2)
+        assertFalse(pacer.phaseLock)
+        val clk2 = clock(1_000_000_000L / 120)
+        val locked = AdaptivePacer(clk2, period * 2)
+        val r = run(clk2, locked, 300, period * 2)
+        assertTrue(locked.phaseLock)
+        for (i in 1 until r.slots.size) assertEquals("slot $i", 2 * period, r.slots[i] - r.slots[i - 1])
+    }
+
+    @Test fun streamAtThreePeriodsIsNotLocked() {
+        val clk = clock(1_000_000_000L / 120)
+        val period = clk.grid().periodNs
+        val pacer = AdaptivePacer(clk, period * 3)
+        run(clk, pacer, 300, period * 3)
         assertFalse(pacer.phaseLock)
     }
 }

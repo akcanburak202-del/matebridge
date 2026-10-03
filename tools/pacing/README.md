@@ -13,5 +13,14 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
   (`cd client-android && ./gradlew testDebugUnitTest --tests '*SparseFrameNoHoldTest*' -i | grep trace7`).
   Path names in pace traces: `early_sparse` / `early_first` = lone frame on the earliest slot (`acquire_ns` is the slot
   the old hold would have chosen), `warmup` = lock re-acquired on a thin jitter history.
+- `sim.py TRACE --holds` (T-208) — hold distribution of the released frames from a device trace: per panel rate and
+  content cadence n (capture gap = n periods +- 1 ms), the share of frames held exactly n vsyncs (planned
+  `released_slot_ns`, not the compositor's), plus ready->slot p50 and path counts. Device check for 60 fps on 120 Hz:
+  `120 Hz, cadence 2: ... exact >= 98%`, paths mostly `locked`.
+- T-208 old/new replay of the integer-cadence lock: the JVM test `IntegerCadenceLockTest` (synthetic 60 fps on 120 Hz,
+  uniform and two-bucket jitter, panel switches, host drift) and `traceReplayThinnedTo60FpsOldVersusNew` (`trace7` with every
+  second capture = 60 fps content with real decode jitter) print old (`integerLock` off) against new
+  (`cd client-android && ./gradlew testDebugUnitTest --tests '*IntegerCadenceLockTest*' -i | grep -E 'holds|trace7'`).
+  In a trace a locked frame that missed its lattice slot and was shown on the next vsync has `slot_ns > lock_slot_ns`.
 - `gaps.py TRACE` — receive-path arrival gaps vs capture gaps (late, bunched), decrypt time.
 - `trace7_120hz_excerpt.csv` — 3000 frames from a 120 Hz drawing session (timing columns only, no content).

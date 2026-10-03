@@ -2,11 +2,34 @@ import argparse, csv, statistics as st
 # Constant-playout-delay replay of a pace trace. Reference for the client's ConstantPlayoutPacer (T-080).
 # Default: the 60 Hz table. --hz 120: 120 Hz rows and continuity. --idle-ms/--refill: the client's idle rule
 # (window cleared after a ready gap > idle-ms, C kept, C may only rise until the window holds `refill` samples).
-# --q/--L/--hold: one run instead of the table.
+# --q/--L/--hold: one run instead of the table. --holds (T-208): hold distribution of a trace's released frames.
 ap=argparse.ArgumentParser(); ap.add_argument('trace'); ap.add_argument('--hz',type=int,default=60)
 ap.add_argument('--idle-ms',type=float,default=None); ap.add_argument('--refill',type=int,default=32)
 ap.add_argument('--q',type=float); ap.add_argument('--L',type=float,default=6.0); ap.add_argument('--hold',type=float,default=2.0)
+ap.add_argument('--holds',action='store_true',help='T-208: hold distribution of the released frames instead of the replay')
 a=ap.parse_args()
+if a.holds:
+    # Planned hold of each released frame (released_slot_ns distance to the previous released frame, in vsyncs),
+    # per panel rate and content cadence n = capture gap / period (n*P +- 1 ms, n in 1..3). Exact = held n vsyncs.
+    from collections import Counter
+    t=[x for x in csv.DictReader(open(a.trace)) if x['action'] in ('release','move') and x['released_slot_ns'] not in ('','0')]
+    groups={}; paths=Counter(); lat={}
+    for x in t:
+        hz=round(1e9/int(x['period_ns'])); paths[(hz,x['path'])]+=1
+        lat.setdefault(hz,[]).append((int(x['released_slot_ns'])-int(x['ready_ns']))/1e6)
+    for prev,x in zip(t,t[1:]):
+        P=int(x['period_ns'])
+        if P!=int(prev['period_ns']): continue
+        dc=(int(x['capture_us'])-int(prev['capture_us']))*1000; n=round(dc/P)
+        if n<1 or n>3 or abs(dc-n*P)>1_000_000: continue
+        hold=round((int(x['released_slot_ns'])-int(prev['released_slot_ns']))/P)
+        groups.setdefault((round(1e9/P),n),Counter())[hold]+=1
+    for (hz,n),c in sorted(groups.items()):
+        tot=sum(c.values()); ex=c[n]
+        print(f'{hz} Hz, cadence {n}: {tot} intervals, exact {100*ex/tot:.1f}%, holds '+' '.join(f'{h}:{100*v/tot:.1f}%' for h,v in sorted(c.items())))
+    for hz in sorted(lat):
+        print(f'{hz} Hz: ready->slot p50 {st.median(lat[hz]):.1f} ms, paths '+' '.join(f'{p}={v}' for (h,p),v in sorted(paths.items()) if h==hz))
+    raise SystemExit
 pfx,step={60:('1666',16_666_667),120:('833',8_333_333)}[a.hz]
 rows=[x for x in csv.DictReader(open(a.trace)) if x['period_ns'].startswith(pfx)]
 I=int
