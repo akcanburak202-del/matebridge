@@ -55,10 +55,26 @@ public enum TabletFilesAction: Equatable, Sendable {
 /// pending mount, unmount, then remove the forward, so the WebDAV client never hangs on a dead port while it
 /// still has the volume. A forward whose removal failed stays owed: retried with backoff, then again at the next
 /// session/USB event and at shutdown.
+///
+/// Remount after a server restart (T-206): once the user has asked for the volume, a tablet server restart in the
+/// same session (`FILES_INFO` OFF then READY, or a new token on the same port, e.g. a shared-folder scope change)
+/// mounts it again with the new token as soon as the forward is up. At most one automatic attempt per READY; an
+/// automatic mount is not revealed in Finder. The intent ends with the session, at shutdown and when the user
+/// ejects the volume: seen either as an unmount notification of the current volume (`volumeUnmounted`), or, when a
+/// restart got there first, as our own unmount finding the volume already gone (`unmountFinished`).
 public struct TabletFilesPlanner: Sendable {
     /// Removal attempts per round (first try plus retries) before waiting for the next session/USB event.
     public static let removalAttempts = 4
     public static let removalBaseDelay: TimeInterval = 1
+    /// Replaced volumes whose unmount result is still awaited (oldest dropped first).
+    public static let rememberedMounts = 4
+
+    /// A volume of ours that a restart or teardown forgot and asked the host to unmount; resolved by
+    /// `unmountFinished` for its port.
+    private struct ReplacedMount: Sendable {
+        let path: String
+        let localPort: UInt16
+    }
 
     private struct Session: Sendable {
         var transport: SessionTransport
@@ -78,8 +94,16 @@ public struct TabletFilesPlanner: Sendable {
     private var usbDeviceLost = false
     private var forward: Forward = .none
     private var mountingGeneration: UInt64?
+    /// The pending mount was started by the planner (remount), not by the user: its success is not revealed.
+    private var mountingIsAutomatic = false
+    /// The user asked for the volume in this session and has not ejected it: remount after a server restart.
+    private var keepsMounted = false
+    /// A new READY arrived while `keepsMounted`: one automatic mount is owed once the forward is up.
+    private var autoMountArmed = false
     /// Mount point the current forward's mount got (owned by the current generation chain).
     private var mountedPath: String?
+    /// Volumes we asked to unmount and whose result has not come back (bounded, cleared per session).
+    private var replacedMounts: [ReplacedMount] = []
     private var lastMountFailed = false
     /// Forwards we installed and still have to remove: local port to failed attempts in the current round.
     private var owedForwards: [UInt16: Int] = [:]
@@ -96,6 +120,8 @@ public struct TabletFilesPlanner: Sendable {
         let out = teardown() + retryGivenUpRemovals()
         session = Session(transport: transport, capable: capable)
         info = nil
+        forgetMountIntent()  // a new session needs the user's "Tablet dosyalarını aç" again
+        replacedMounts = []
         if transport == .usb { usbDeviceLost = false }  // the session itself came through the cable
         return out
     }
@@ -108,12 +134,17 @@ public struct TabletFilesPlanner: Sendable {
         guard ready != info else { return [] }
         let previous = info
         info = ready
+        // Every new READY (a server (re)start) owes one remount if the user wants the volume; OFF owes none.
+        autoMountArmed = ready != nil && keepsMounted
         guard let ready, current.transport == .usb, !usbDeviceLost else { return teardown() }
         if let previous, previous.port == ready.port, case .up(let local, _) = forward {
             // Same port, new token: the server restarted, a mount made with the old token is useless.
-            let out = cancelPendingMount() + [.unmount(localPort: local)]
-            mountedPath = nil
+            var out = cancelPendingMount() + [.unmount(localPort: local)]
+            replaceMountedVolume(localPort: local)
             lastMountFailed = false
+            // The forward is already up. With a mounted volume the remount waits for `unmountFinished`, which tells
+            // whether the user had ejected it first.
+            out += autoMountIfArmed()
             return out
         }
         return teardown() + startForward(remotePort: ready.port)
@@ -123,6 +154,8 @@ public struct TabletFilesPlanner: Sendable {
         let out = teardown() + retryGivenUpRemovals()
         session = nil
         info = nil
+        forgetMountIntent()
+        replacedMounts = []
         return out
     }
 
@@ -161,6 +194,8 @@ public struct TabletFilesPlanner: Sendable {
         }
         session = nil
         info = nil
+        forgetMountIntent()
+        replacedMounts = []
         isShutDown = true
         return out
     }
@@ -171,7 +206,7 @@ public struct TabletFilesPlanner: Sendable {
         if let localPort { owedForwards[localPort] = nil }
         if case .installing(let remote, let gen) = forward, gen == generation {
             forward = localPort.map { .up(localPort: $0, remotePort: remote) } ?? .failed(remotePort: remote)
-            return []
+            return autoMountIfArmed()  // nothing while it failed: the attempt stays owed for `retry`/USB return
         }
         // Stale: its session or server is gone. We own it, so remove it (unless it is the current forward).
         guard let localPort else { return [] }
@@ -202,24 +237,68 @@ public struct TabletFilesPlanner: Sendable {
 
     /// The user chose "Tablet dosyalarını aç".
     public mutating func openRequested() -> [TabletFilesAction] {
-        guard !isShutDown, case .up(let local, _) = forward, let info, mountingGeneration == nil else { return [] }
-        let gen = takeGeneration()
-        mountingGeneration = gen
-        lastMountFailed = false
-        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
+        guard !isShutDown, case .up = forward, info != nil, mountingGeneration == nil else { return [] }
+        keepsMounted = true
+        autoMountArmed = false  // the user's own mount covers this READY
+        return startMount(automatic: false)
+    }
+
+    /// A volume was unmounted (`NSWorkspace.didUnmountNotification`, delivered late and in any order relative to our
+    /// own actions). `mountedNow`: our mount points on the current forward at the time of handling.
+    ///
+    /// It counts as the user's eject only when it is the volume this session mounted and that path is not mounted
+    /// any more. Our own unmounts never count: teardown and a token change forget `mountedPath` before they unmount,
+    /// a stale `unmountPath` is never the current path, and a remount that already landed on the same mount point is
+    /// still in `mountedNow`. On an eject: forget the volume and do not mount again by itself until the user opens
+    /// it. Returns true when it was taken as an eject.
+    ///
+    /// The decision rests on the current volume being gone at handling time, not on which notification arrived, so
+    /// a notification of our own earlier unmount that is late, duplicated or never delivered cannot hide a later
+    /// eject. An eject whose notification comes after a restart already forgot the volume is caught by
+    /// `unmountFinished` instead.
+    @discardableResult
+    public mutating func volumeUnmounted(path: String, mountedNow: [String]) -> Bool {
+        guard !isShutDown, let mountedPath, Self.samePath(mountedPath, path),
+              !mountedNow.contains(where: { Self.samePath($0, path) }) else { return false }
+        self.mountedPath = nil
+        forgetMountIntent()
+        return true
+    }
+
+    /// Result of `unmount(localPort:)`: the volumes of ours on that port that the host detached (`detached`) and the
+    /// ones it found but could not detach (`stillMounted`, e.g. busy). Must be reported for every `unmount`, before
+    /// the host handles anything else.
+    ///
+    /// A replaced volume in neither list was already gone before our unmount ran: the user ejected it (its
+    /// notification is still on the way, or the restart was handled first), so the remount intent ends. Otherwise
+    /// the owed remount of this READY may now go ahead. Returns the remount, if any.
+    public mutating func unmountFinished(localPort: UInt16, detached: [String],
+                                         stillMounted: [String]) -> [TabletFilesAction] {
+        guard !isShutDown else { return [] }
+        var ejected = false
+        replacedMounts.removeAll { replaced in
+            guard replaced.localPort == localPort else { return false }
+            let ours = (detached + stillMounted).contains { Self.samePath($0, replaced.path) }
+            if !ours { ejected = true }
+            return true
+        }
+        if ejected { forgetMountIntent() }
+        return autoMountIfArmed()
     }
 
     /// Result of `mount`; `path` is the mount point on success, nil on failure.
     public mutating func mountFinished(generation: UInt64, localPort: UInt16, path: String?) -> [TabletFilesAction] {
         if let gen = mountingGeneration, gen == generation {
+            let automatic = mountingIsAutomatic
             mountingGeneration = nil
+            mountingIsAutomatic = false
             guard let path else {
-                lastMountFailed = true
+                lastMountFailed = true  // an automatic one is not retried until the next READY or the user
                 mountedPath = nil
                 return []
             }
             mountedPath = path
-            return [.reveal(path: path)]
+            return automatic ? [] : [.reveal(path: path)]
         }
         // Stale (session ended, token changed, shutdown): detach only the volume this request created, never
         // the current one (the port may have been reused).
@@ -246,6 +325,15 @@ public struct TabletFilesPlanner: Sendable {
     /// Forwards whose removal is still owed (sorted).
     public var owedForwardPorts: [UInt16] { owedForwards.keys.sorted() }
 
+    /// The user wants the volume in this session: a server restart remounts it.
+    public var remountsAfterRestart: Bool { keepsMounted }
+
+    /// Normalized paths whose unmount notification can matter (the current volume and replaced ones awaiting their
+    /// unmount result). The host drops every other notification before it reaches the planner.
+    public var watchedPaths: Set<String> {
+        Set(([mountedPath].compactMap { $0 } + replacedMounts.map(\.path)).map(Self.normalizedPath))
+    }
+
     // MARK: - Private
 
     private mutating func takeGeneration() -> UInt64 {
@@ -260,8 +348,57 @@ public struct TabletFilesPlanner: Sendable {
     }
 
     private mutating func cancelPendingMount() -> [TabletFilesAction] {
-        defer { mountingGeneration = nil }
+        defer {
+            mountingGeneration = nil
+            mountingIsAutomatic = false
+        }
         return mountingGeneration.map { [.cancelMount(generation: $0)] } ?? []
+    }
+
+    /// Mount on the current forward with the current token. Callers check the forward is up and READY is known.
+    private mutating func startMount(automatic: Bool) -> [TabletFilesAction] {
+        guard case .up(let local, _) = forward, let info else { return [] }
+        let gen = takeGeneration()
+        mountingGeneration = gen
+        mountingIsAutomatic = automatic
+        lastMountFailed = false
+        return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
+    }
+
+    /// The owed remount of this READY, once the forward is up, nothing else is mounting and every replaced volume's
+    /// unmount result is in (it may show the user had ejected it). Fires at most once.
+    private mutating func autoMountIfArmed() -> [TabletFilesAction] {
+        guard autoMountArmed, keepsMounted, !isShutDown, !usbDeviceLost, session?.transport == .usb,
+              case .up = forward, info != nil, mountingGeneration == nil, replacedMounts.isEmpty else { return [] }
+        autoMountArmed = false
+        return startMount(automatic: true)
+    }
+
+    /// Forget the current volume because we are about to emit `unmount(localPort:)` for it, and remember it until
+    /// `unmountFinished` reports what the unmount found.
+    private mutating func replaceMountedVolume(localPort: UInt16) {
+        guard let path = mountedPath else { return }
+        mountedPath = nil
+        replacedMounts.removeAll { Self.samePath($0.path, path) }
+        replacedMounts.append(ReplacedMount(path: path, localPort: localPort))
+        if replacedMounts.count > Self.rememberedMounts {
+            replacedMounts.removeFirst(replacedMounts.count - Self.rememberedMounts)
+        }
+    }
+
+    /// A path without trailing slashes: mount points from `getfsstat` and volume URLs from NSWorkspace may differ
+    /// by one.
+    public static func normalizedPath(_ path: String) -> String {
+        var t = Substring(path)
+        while t.count > 1, t.hasSuffix("/") { t = t.dropLast() }
+        return String(t)
+    }
+
+    static func samePath(_ a: String, _ b: String) -> Bool { normalizedPath(a) == normalizedPath(b) }
+
+    private mutating func forgetMountIntent() {
+        keepsMounted = false
+        autoMountArmed = false
     }
 
     /// Owed forwards whose retry round ran out get a fresh round.
@@ -278,10 +415,13 @@ public struct TabletFilesPlanner: Sendable {
     /// undone when it reports.
     private mutating func teardown() -> [TabletFilesAction] {
         var out = cancelPendingMount()
-        mountedPath = nil
         lastMountFailed = false
         defer { forward = .none }
-        guard case .up(let local, _) = forward else { return out }
+        guard case .up(let local, _) = forward else {
+            mountedPath = nil  // a mount only exists on an up forward
+            return out
+        }
+        replaceMountedVolume(localPort: local)
         owedForwards[local] = 0
         out += [.unmount(localPort: local), .removeForward(localPort: local)]
         return out
