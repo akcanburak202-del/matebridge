@@ -91,8 +91,9 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
 
 ## Handoff
 
-- **Commit:** `ac952c6` (Codex --high review P2 fixes, after merging `main` in `abc66da`, no conflicts) on top of
-  `ae8c260` (fix), branch `task/T-161-client-decoder-teardown-bounds`. Red step: `e57f689` (both tests
+- **Commit:** `1365cff` (second Codex review: bounded UI retire) on top of `ac952c6` (first Codex review P2 fixes,
+  after merging `main` in `abc66da`, no conflicts) and `ae8c260` (fix), branch
+  `task/T-161-client-decoder-teardown-bounds`. Red step: `e57f689` (both tests
   `@Ignore`d, HEAD failure output quoted in the commit message: (a) `no stuck fault within 3 s (waited 3005 ms):
   [Generation(gen=1), Running(gen=1), Generation(gen=2)]`; (b) `codec 2 created while generation 1's output thread was
   alive`, and in an earlier variant `the straggler consumed generation 2's first-output bypass`). Plan: `1cc9d25`.
@@ -115,6 +116,24 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
     a healthy gen 3 → feeding stays on; output held *inside* the post-check section (FirstOutput callback) → a retire
     from another thread waits for it (not done after 300 ms), and the bypass armed after the retire stays armed.
     `GenerationHandoffTest`: `awaitOwnThreads`. All rerun 6× green; `./scripts/check.sh`: ALL OK.
+- **İkinci review düzeltmesi (`1365cff`):**
+  - `GenerationHandoff.retire` tries the generation's `sharedLock` (now a `ReentrantLock`) for at most
+    `RETIRE_LOCK_WAIT_MS` = 20 ms. If that fails, it retires anyway, returns false and the renderer logs
+    `ev=retire_lock_slow`. `detachSurface` joins only for what is left of `JOIN_MS`, so the whole detach stays ≤ 300 ms.
+  - Nothing calls out under a lock any more: `onHealthEvent(FirstOutput)` runs after the output section, and
+    `give_up`/`stuck` are published after `feedLock` (`blockFeedingIfCurrent` only checks and sets the flag). A stale
+    generation's late event is dropped by `VideoHealth`'s generation check. `onFrameRendered` (main thread) uses a
+    plain `current` check, not the lock.
+  - If a retire missed the lock and lands inside an output section, the retired codec gives back a first-output bypass
+    it took (`giveBackIfRetired` re-arms it), so the next generation keeps it.
+  - Tests:
+    - Blocked FirstOutput callback: `reconfigure` and `detachSurface` each take < `JOIN_MS`, with no `retire_lock_slow`
+      and no `detach_slow`.
+    - Output held inside its section (`outputSectionHook`, internal, tests only): `reconfigure` < `JOIN_MS` and logs
+      `retire_lock_slow`. The bypass armed afterwards survives; this test fails with the give-back disabled.
+    - `GenerationHandoffTest.retireWaitsForTheSharedLockOnlyBriefly`.
+    - The earlier test where the retire waited for the section is replaced by these.
+  - All rerun 6× green; `./scripts/check.sh`: ALL OK.
 - **Dokunulan dosyalar:**
   - `video/CodecGeneration.kt` (new, pure): `CodecGeneration` (gen, surface, thread, `active`, live-thread count,
     `outputStraggler`), `HandoffTimer` (clock + bounded `Condition` wait; tests fake it), `GenerationHandoff`
@@ -141,8 +160,9 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
   `decode_error` stamps 1000/1100/1600/2600, then `give_up`. Detach during a 60 s backoff: returns < `JOIN_MS`, no
   `detach_slow`, no restart. Teardown/handoff/lifecycle/health tests rerun 6× green; `./scripts/check.sh`: ALL OK.
 - **Varsayımlar:**
-  - (review) A retire on the UI thread may now wait for one output's bookkeeping in progress (pure Kotlin, no codec
-    call, µs). In production the `FirstOutput` callback inside it only posts to the UI thread.
+  - (review 2) A retire on the UI thread waits at most 20 ms for an output's bookkeeping in progress. That bookkeeping
+    is in-memory only: no codec call and no callback. If the wait times out, linearization is lost for that one
+    output: it may count once more in the shared stats, and its bypass is given back.
   - (review) `ev=present` slot/late-drop counters cover the window since the running codec started: a codec restart
     within a 10 s window drops the earlier codec's counts (as the gauge p95 already did).
   - "Generation finished" = every thread it started exited (decoder thread + each codec's output thread). Within one
@@ -163,7 +183,7 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
      (`adb shell ps -T -p <pid> | grep -c mb-decoder`) and RSS back to baseline afterwards.
   3. `--es decoder_fault dequeue --ei decoder_fault_after_s 10`: `decode_error` lines spaced ~100 ms / 500 ms / 1 s
      apart (log timestamps), then `give_up` and `video_health state=fault cause=give_up`; recovery as in T-159.
-  4. Count `detach_slow`, `decoder_previous_stuck`, `output_straggler` over the whole run (expected 0 on a healthy
+  4. Count `detach_slow`, `decoder_previous_stuck`, `output_straggler`, `retire_lock_slow` over the whole run (expected 0 on a healthy
      HAL; any non-zero is the M03 evidence T-164 asks for).
 - **Açık sorular:**
   - `docs/LOGGING.md` (orchestrator; all `MB/decoder`):
@@ -172,6 +192,8 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
     `PREVIOUS_WAIT_MS` (2 s) for the previous one and opens no codec (video FAULT `stuck`);
     `ev=output_straggler vgen=N join_ms=500` (W): a stopping codec's output thread did not exit within 500 ms; the next
     generation waits for it.
+    `ev=retire_lock_slow vgen=N wait_ms=20` (W): a retire (UI thread) did not get the generation's bookkeeping lock
+    within 20 ms and retired it anyway (expected 0 on the device).
   - The T-159 `not_running` rule (2 s after the generation began) and the 2 s stuck bound fire at about the same time;
     `VideoHealth` may record `cause=not_running` instead of `stuck` for a hung hand-off. Both are FAULT; if T-164 needs
     the exact cause, raise `NOT_RUNNING_MS` slightly or let `stuck` overwrite `not_running` (T-159 territory).
