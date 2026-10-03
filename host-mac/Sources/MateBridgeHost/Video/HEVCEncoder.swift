@@ -28,10 +28,23 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
 /// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer (or,
 /// with `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy`, a copy of it) is re-encoded by the optional idle quality refresh
 /// (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086), optionally under a QP cap (`MATEBRIDGE_IDLE_REFRESH_QP`, T-087).
+///
+/// **Single submit owner (T-162).** Every `VTCompressionSessionEncodeFrame`, the per-frame `MaxAllowedFrameQP` update
+/// and the final `CompleteFrames`/`Invalidate` run on one serial owner queue (`EncoderSubmitOrder`), enqueued in slot
+/// reservation order. So PTS reach VideoToolbox strictly increasing and no frame is submitted after invalidate. All
+/// other threads (ScreenCaptureKit, timers, VideoToolbox's output callback, the coordinator) only take the lock and
+/// enqueue; nothing waits on the owner queue with `sync`.
 final class HEVCEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
-    private struct Input: @unchecked Sendable {
+    /// CMTime ordered with `CMTimeCompare` (the `EncoderSubmitOrder` stamp).
+    struct PTS: Comparable, @unchecked Sendable {
+        var time: CMTime
+        static func < (a: PTS, b: PTS) -> Bool { CMTimeCompare(a.time, b.time) < 0 }
+        static func == (a: PTS, b: PTS) -> Bool { CMTimeCompare(a.time, b.time) == 0 }
+    }
+
+    struct Input: EncoderSubmitFrame, @unchecked Sendable {
         var buffer: CVPixelBuffer
         var pts: CMTime
         var captureTimeUs: UInt64
@@ -45,6 +58,19 @@ final class HEVCEncoder: @unchecked Sendable {
         var slotWaitUs: UInt64 = 0
         /// An idle quality refresh re-submission (T-087: the refresh QP cap applies to these only).
         var refresh = false
+
+        var stamp: PTS {
+            get { PTS(time: pts) }
+            set { pts = newValue.time }
+        }
+        static func stamp(after previous: PTS) -> PTS { PTS(time: previous.time + CMTime(value: 1, timescale: 1000)) }
+        var gateUs: UInt64 { captureTimeUs }
+        mutating func arrived(slotFree: Bool) { slotFreeAtArrival = slotFree }
+        /// T-072: a frame that arrived with both slots busy waited for the slot until the last release; the rest of
+        /// its hold is gate wait. (Frames that arrived with a free slot never wait for one.)
+        mutating func reserved(lastSlotFreeUs: UInt64) {
+            slotWaitUs = !slotFreeAtArrival && lastSlotFreeUs > deliveredUs ? lastSlotFreeUs - deliveredUs : 0
+        }
     }
 
     static let maxInFlight = 2
@@ -54,18 +80,13 @@ final class HEVCEncoder: @unchecked Sendable {
 
     private let output: Output
     private let onFailure: @Sendable (Error) -> Void
+    /// Submission order, slots, keyframe flag, pacer and teardown (T-162). Its lock is taken before `lock`, never
+    /// after: `build` closures passed to `order.offer` may take `lock`; nothing calls `order` while holding `lock`.
+    private var order: EncoderSubmitOrder<Backend>!
+    private let session: VTCompressionSession
     private let lock = NSLock()
     // All mutable state below is guarded by `lock`.
-    private var session: VTCompressionSession?
-    private var stopped = false
-    private var forceKeyframe = true          // the very first frame is a keyframe
     private var lastParameterSets: [UInt8] = []
-    private var inFlight = 0
-    /// Host time of the last slot release (T-072).
-    private var lastSlotFreeUs: UInt64 = 0
-    private var last: Input?
-    private var lastPTS = CMTime.invalid
-    private var lastSubmitNs: UInt64 = DispatchTime.now().uptimeNanoseconds
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
     private var refreshTimer: DispatchSourceTimer?
@@ -74,14 +95,11 @@ final class HEVCEncoder: @unchecked Sendable {
     /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
     private var captureLeadUs: Int64 = 0
     private var lastStampUs: UInt64?
-    private var pacer: FramePacer<Input>
-    private var flushScheduled = false
-    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Guarded by `boostLock`, which is
-    /// held only around the decision and the property call (never around `VTCompressionSessionEncodeFrame`).
+    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Owner queue only: decided and
+    /// applied in the same submit block as the frame it belongs to (`send`), so needs no lock.
     private var qpBoost: RefreshQPBoost?
     /// `qpBoost != nil`, fixed at creation (read without the lock).
     private let qpBoostEnabled: Bool
-    private let boostLock = NSLock()
     /// Pool for `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` (T-087). Used only on the refresh timer queue.
     private var refreshPool: CVPixelBufferPool?
     /// The first input retag was logged (T-113). Guarded by `lock`.
@@ -115,7 +133,6 @@ final class HEVCEncoder: @unchecked Sendable {
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
         self.meter = meter
-        self.pacer = FramePacer<Input>(streamFps: settings.fps)
         self.output = output
         self.onFailure = onFailure
         self.logSink = logSink
@@ -145,6 +162,17 @@ final class HEVCEncoder: @unchecked Sendable {
             outputCallback: nil, refcon: nil, compressionSessionOut: &s)
         guard status == noErr, let s else { throw VideoEncoderError.sessionCreation(status) }
         session = s
+        let backend = Backend(session: s)
+        order = EncoderSubmitOrder(
+            backend: backend, streamFps: settings.fps, maxInFlight: HEVCEncoder.maxInFlight,
+            nowUs: { HostClock.nowUs() },
+            pacerCounts: { [meter] overwritten, decimated, deferred in
+                for _ in 0..<overwritten { meter?.recordOverwritten() }
+                for _ in 0..<decimated { meter?.recordDecimated() }
+                for _ in 0..<deferred { meter?.recordDeferred() }
+            },
+            log: logSink)
+        backend.encoder = self
 
         var failures: [String] = []
         var report: [String] = []
@@ -272,8 +300,8 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// Read-back of the cadence-related properties as the session reports them (not just what we asked for).
     func cadenceReadback() -> String {
-        lock.lock(); let s = session; lock.unlock()
-        guard let s else { return "session closed" }
+        guard !order.isStopped else { return "session closed" }
+        let s = session
         func read(_ key: CFString) -> String {
             var raw: UnsafeMutableRawPointer?
             let st = VTSessionCopyProperty(s, key: key, allocator: nil, valueOut: &raw)
@@ -289,8 +317,8 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// Colour properties as the session reports them, for the dump tool.
     func colorReadback() -> String {
-        lock.lock(); let s = session; lock.unlock()
-        guard let s else { return "session closed" }
+        guard !order.isStopped else { return "session closed" }
+        let s = session
         func read(_ key: CFString) -> String {
             var raw: UnsafeMutableRawPointer?
             let st = VTSessionCopyProperty(s, key: key, allocator: nil, valueOut: &raw)
@@ -305,7 +333,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// The next encoded frame will be a keyframe. With `resubmitNow`, the last captured buffer is encoded
     /// immediately (needed on a static screen, where no new capture may ever arrive).
     func requestKeyframe(resubmitNow: Bool = false) {
-        lock.lock(); forceKeyframe = true; lock.unlock()
+        order.requestKeyframe()
         if resubmitNow { resubmitLast() }
     }
 
@@ -318,10 +346,14 @@ final class HEVCEncoder: @unchecked Sendable {
         if knobs.retagInput, let replaced = Self.retagForSession(buffer) { noteRetag(replaced) }
         let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
                           deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
-        lock.lock()
-        let work = offerLocked(input, bypassGate: false, capture: true)
-        lock.unlock()
-        perform(work)
+        order.offer(bypassGate: false) { _ in
+            lock.lock()
+            idleRefresh.captured(nowUs: input.deliveredUs)
+            captureLeadUs = ResubmitStamp.lead(captureUs: input.captureTimeUs, deliveredUs: input.deliveredUs)
+            lastStampUs = max(lastStampUs ?? 0, input.captureTimeUs)
+            lock.unlock()
+            return input
+        }
     }
 
     /// Logs the first retag of this encoder (one line per session: which tags the capture carried).
@@ -347,25 +379,26 @@ final class HEVCEncoder: @unchecked Sendable {
         var copy: CVPixelBuffer?
         var copiedFrom: CVPixelBuffer?
         if refresh, knobs.idleRefresh.buffer == .copy {
-            lock.lock(); let source = stopped ? nil : last?.buffer; lock.unlock()
-            guard let source else { return }
+            guard let source = order.lastOffered?.buffer else { return }
             let start = DispatchTime.now().uptimeNanoseconds
             copy = copyForRefresh(source)
             let us = (DispatchTime.now().uptimeNanoseconds - start) / 1000
             logSink(.debug, "idle_refresh_copy", "us=\(us) ok=\(copy != nil ? 1 : 0)")
             copiedFrom = source
         }
-        lock.lock()
-        guard !stopped, let l = last else { lock.unlock(); return }
-        if let copiedFrom, l.buffer !== copiedFrom { lock.unlock(); return }
-        let nowUs = HostClock.nowUs()
-        let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
-        var input = Input(buffer: copy ?? l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
-                          captureTimeUs: stamp, deliveredUs: nowUs)
-        input.refresh = refresh
-        let work = offerLocked(input, bypassGate: true, capture: false)
-        lock.unlock()
-        perform(work)
+        order.offer(bypassGate: true) { last in
+            guard let l = last else { return nil }
+            if let copiedFrom, l.buffer !== copiedFrom { return nil }
+            let nowUs = HostClock.nowUs()
+            lock.lock()
+            let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
+            lastStampUs = max(lastStampUs ?? 0, stamp)
+            lock.unlock()
+            var input = Input(buffer: copy ?? l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
+                              captureTimeUs: stamp, deliveredUs: nowUs)
+            input.refresh = refresh
+            return input
+        }
     }
 
     /// Copies a captured frame into a new IOSurface-backed buffer of the same size and format, with its attachments
@@ -427,10 +460,9 @@ final class HEVCEncoder: @unchecked Sendable {
         return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
     }
 
-    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set).
+    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set). Owner
+    /// queue only, in the submit block of the frame it applies to (T-162).
     private func updateQPBoost(refresh: Bool, session: VTCompressionSession) {
-        boostLock.lock()
-        defer { boostLock.unlock() }
         guard var boost = qpBoost, let change = boost.before(refresh: refresh) else { return }
         switch change {
         case .apply(let qp):
@@ -455,8 +487,8 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Idle quality refresh (T-086): re-encodes the last captured buffer once the screen has been static for the
     /// configured delay, so the tablet does not keep the last (motion-time) frame.
     private func idleRefreshTick() {
+        guard order.lastOffered != nil else { return }
         lock.lock()
-        guard !stopped, last != nil else { lock.unlock(); return }
         let action = idleRefresh.tick(nowUs: HostClock.nowUs())
         lock.unlock()
         switch action {
@@ -472,82 +504,36 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     private func idleTick() {
-        lock.lock()
-        let due = !stopped && forceKeyframe && last != nil
-            && DispatchTime.now().uptimeNanoseconds - lastSubmitNs >= HEVCEncoder.idleKeyframeNs
-        lock.unlock()
-        if due { resubmitLast() }
-    }
-
-    /// What `offerLocked` decided, carried out by `perform` after the lock is released.
-    private struct Work {
-        var delay: UInt64?
-        var send: (Input, Bool, VTCompressionSession)?
-    }
-
-    private func perform(_ work: Work) {
-        if let delay = work.delay { armFlush(delay) }
-        if let (frame, key, s) = work.send { send(frame, key: key, session: s) }
-    }
-
-    /// Must hold `lock`. `bypassGate`: keyframe re-submissions must not wait for the send-rate gate.
-    /// `capture`: a real ScreenCaptureKit frame (false: a re-submission of the last buffer).
-    private func offerLocked(_ arrived: Input, bypassGate: Bool, capture: Bool) -> Work {
-        guard !stopped, let s = session else { return Work() }
-        var input = arrived
-        if capture {
-            idleRefresh.captured(nowUs: input.deliveredUs)
-            captureLeadUs = ResubmitStamp.lead(captureUs: input.captureTimeUs, deliveredUs: input.deliveredUs)
-        }
-        lastStampUs = max(lastStampUs ?? 0, input.captureTimeUs)
-        input.slotFreeAtArrival = inFlight < HEVCEncoder.maxInFlight
-        last = input
-        var toSend: (Input, Bool)?
-        var delay: UInt64?
-        // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
-        switch pacer.offer(input, ptsUs: input.captureTimeUs, nowUs: HostClock.nowUs(),
-                           slotFree: inFlight < HEVCEncoder.maxInFlight, bypassGate: bypassGate) {
-        case .submit(let f): toSend = reserveSlot(f)
-        case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
-        case .drop: break
-        }
-        reportOverwrittenLocked()
-        return Work(delay: delay, send: toSend.map { ($0.0, $0.1, s) })
-    }
-
-    private func reportOverwrittenLocked() {
-        let n = pacer.takeOverwritten()
-        for _ in 0..<n { meter?.recordOverwritten() }
-        let d = pacer.takeDecimated()
-        for _ in 0..<d { meter?.recordDecimated() }
-        let f = pacer.takeDeferred()
-        for _ in 0..<f { meter?.recordDeferred() }
+        if order.keyframeDue(idleUs: HEVCEncoder.idleKeyframeNs / 1000) { resubmitLast() }
     }
 
     /// Target send rate `min(stream fps, panel Hz)` (T-058). Only the frame gate changes: the session, the virtual
     /// display and capture keep running and already encoded frames are never dropped.
     func setTargetFps(_ fps: Int) {
-        lock.lock()
-        pacer.setTargetFps(fps)
-        lock.unlock()
+        order.setTargetFps(fps)
     }
 
-    /// Must hold `lock`. Claims an in-flight slot, consumes the keyframe flag and makes the PTS increase.
-    private func reserveSlot(_ input: Input) -> (Input, Bool) {
-        inFlight += 1
-        var f = input
-        // T-072: a frame that arrived with both slots busy waited for the slot until the last release; the rest of
-        // its hold is gate wait. (Frames that arrived with a free slot never wait for one.)
-        f.slotWaitUs = !f.slotFreeAtArrival && lastSlotFreeUs > f.deliveredUs ? lastSlotFreeUs - f.deliveredUs : 0
-        if lastPTS.isValid, f.pts <= lastPTS { f.pts = lastPTS + CMTime(value: 1, timescale: 1000) }
-        lastPTS = f.pts
-        lastSubmitNs = DispatchTime.now().uptimeNanoseconds
-        let key = forceKeyframe
-        forceKeyframe = false
-        return (f, key)
+    /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
+    /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
+    final class Backend: CompressionBackend, @unchecked Sendable {
+        let session: VTCompressionSession
+        weak var encoder: HEVCEncoder?
+        init(session: VTCompressionSession) { self.session = session }
+
+        /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
+        func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
+            encoder?.send(frame, key: keyframe, token: token, session: session)
+        }
+
+        /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
+        func completeAndInvalidate() {
+            VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+            VTCompressionSessionInvalidate(session)
+        }
     }
 
-    private func send(_ frame: Input, key: Bool, session: VTCompressionSession) {
+    /// Owner queue only (`Backend.encode`).
+    private func send(_ frame: Input, key: Bool, token: EncoderSubmitToken, session: VTCompressionSession) {
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
@@ -565,23 +551,23 @@ final class HEVCEncoder: @unchecked Sendable {
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
             duration: .invalid, frameProperties: props, infoFlagsOut: nil
-        ) { [weak self] status, _, sampleBuffer in
+        ) { [weak self, trace] status, _, sampleBuffer in
             guard let self else { return }
             let elapsedUs = (DispatchTime.now().uptimeNanoseconds - start) / 1000
             var t = trace
             t.encodedUs = HostClock.nowUs()
-            self.completed(status: status, sampleBuffer: sampleBuffer, captureTimeUs: captureTimeUs,
+            self.completed(status: status, sampleBuffer: sampleBuffer, token: token, captureTimeUs: captureTimeUs,
                            encodeTimeUs: elapsedUs, trace: t)
         }
         if status != noErr {
             HEVCEncoder.log.error("ev=encode_failed status=\(status)")
-            slotFailed(VideoEncoderError.encode(status))
+            slotFailed(token, VideoEncoderError.encode(status))
         }
     }
 
     /// A submitted frame produced output (or none); frees the slot and starts the pending frame, if any.
-    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeTimeUs: UInt64,
-                           trace: FrameTrace) {
+    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, token: EncoderSubmitToken,
+                           captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
         let ok = status == noErr && sampleBuffer != nil
         if let sb = sampleBuffer, ok {
             meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
@@ -591,79 +577,45 @@ final class HEVCEncoder: @unchecked Sendable {
         if !ok {
             // A frame the encoder dropped or failed breaks the reference chain: recover with a keyframe.
             HEVCEncoder.log.error("ev=encode_no_output status=\(status)")
-            slotFailed(VideoEncoderError.encode(status))
+            slotFailed(token, VideoEncoderError.encode(status))
         } else {
-            releaseSlotAndDrain()
+            order.release(token, failed: false)
         }
     }
 
-    private func slotFailed(_ error: Error) {
+    private func slotFailed(_ token: EncoderSubmitToken, _ error: Error) {
         lock.lock()
-        forceKeyframe = true
         consecutiveFailures += 1
         let trip = consecutiveFailures == HEVCEncoder.failureLimit
         lock.unlock()
         // For a failed EncodeFrame call the slot was never consumed by a callback; for no-output the callback is
-        // the release point. Either way exactly one release per reservation happens here.
-        releaseSlotAndDrain()
+        // the release point. Release is idempotent per token (T-162): should VideoToolbox report both for one frame,
+        // the second release is logged and ignored.
+        order.release(token, failed: true)
         if trip { onFailure(VideoEncoderError.repeatedFailures(HEVCEncoder.failureLimit)) }
     }
 
-    private func releaseSlotAndDrain() {
-        lock.lock()
-        inFlight -= 1
-        lastSlotFreeUs = HostClock.nowUs()
-        let (next, delay) = takePendingLocked()
-        lock.unlock()
-        if let delay { armFlush(delay) }
-        if let (f, k, s) = next { send(f, key: k, session: s) }
-    }
-
-    /// Must hold `lock`. Claims the pending frame if a slot is free and the gate is open (judged by the current time,
-    /// not the frame's capture time); otherwise returns the delay after which a flush should retry.
-    private func takePendingLocked() -> ((Input, Bool, VTCompressionSession)?, UInt64?) {
-        guard !stopped, let s = session else { return (nil, nil) }
-        defer { reportOverwrittenLocked() }
-        switch pacer.takePending(nowUs: HostClock.nowUs(), slotFree: inFlight < HEVCEncoder.maxInFlight) {
-        case .submit(let f):
-            let (frame, key) = reserveSlot(f)
-            return ((frame, key, s), nil)
-        case .retry(let wait): return (nil, scheduleFlushLocked(afterUs: wait))
-        case .none: return (nil, nil)
-        }
-    }
-
-    /// Must hold `lock`. Returns the delay to arm, or nil if a flush is already scheduled.
-    private func scheduleFlushLocked(afterUs: UInt64) -> UInt64? {
-        if flushScheduled { return nil }
-        flushScheduled = true
-        return afterUs
-    }
-
-    private func armFlush(_ delayUs: UInt64) {
-        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .microseconds(Int(delayUs))) { [weak self] in
-            self?.flushPending()
-        }
-    }
-
-    private func flushPending() {
-        lock.lock()
-        flushScheduled = false
-        let (next, delay) = takePendingLocked()
-        lock.unlock()
-        if let delay { armFlush(delay) }
-        if let (f, k, s) = next { send(f, key: k, session: s) }
-    }
-
-    /// Flushes pending frames and tears the session down. Idempotent.
+    /// Flushes the frames already inside the encoder and tears the session down, then returns. For synchronous
+    /// callers (benches): it blocks until the owner queue has run the teardown. Idempotent. From Swift concurrency use
+    /// `shutdown()`, which does not block a cooperative thread.
     func stop() {
+        let done = DispatchSemaphore(value: 0)
+        beginStop { done.signal() }
+        // On the owner queue the teardown block is queued behind the caller: waiting would deadlock.
+        if order?.isOnOwnerQueue == false { done.wait() }
+    }
+
+    /// `stop()` for async callers: resumes once the owner queue has completed and invalidated the session.
+    func shutdown() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            beginStop { c.resume() }
+        }
+    }
+
+    /// Cancels the timers and enqueues the teardown on the owner queue (never waits). `completion` runs on the owner
+    /// queue after `CompleteFrames`/`Invalidate`.
+    private func beginStop(completion: (@Sendable () -> Void)?) {
         lock.lock()
-        if stopped { lock.unlock(); return }
-        stopped = true
-        let s = session
-        session = nil
-        pacer.clearPending()
-        last = nil
         idleRefresh.reset()
         let timer = idleTimer
         idleTimer = nil
@@ -672,13 +624,12 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.unlock()
         timer?.cancel()
         refresh?.cancel()
-        if let s {
-            VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid)
-            VTCompressionSessionInvalidate(s)
-        }
+        // `order` is nil only if `init` threw before creating it (then there is no session to close).
+        if let order { order.stop(completion: completion) } else { completion?() }
     }
 
-    deinit { stop() }
+    /// Only enqueues the teardown: no wait, and the teardown block captures the backend, never `self`.
+    deinit { beginStop(completion: nil) }
 
     private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return }
@@ -702,17 +653,32 @@ final class HEVCEncoder: @unchecked Sendable {
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
-        guard let block = CMSampleBufferGetDataBuffer(sb) else { return }
-        var length = 0
-        var base: UnsafeMutablePointer<CChar>?
-        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length,
-                                          dataPointerOut: &base) == kCMBlockBufferNoErr, let base else { return }
-        let raw = Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
-                                            count: length))
+        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return }
         guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.trace = trace
         output(frame, encodeTimeUs)
+    }
+
+    /// All bytes of a block buffer. The data pointer is valid for `lengthAtOffset` bytes only: a block buffer made of
+    /// several segments (`lengthAtOffset != totalLength`) is copied with `CMBlockBufferCopyDataBytes` (T-162).
+    static func bytes(of block: CMBlockBuffer) -> [UInt8]? {
+        var lengthAtOffset = 0
+        var total = 0
+        var base: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset,
+                                          totalLengthOut: &total, dataPointerOut: &base) == kCMBlockBufferNoErr
+        else { return nil }
+        if total == 0 { return [] }
+        if lengthAtOffset == total, let base {
+            return Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
+                                             count: total))
+        }
+        var bytes = [UInt8](repeating: 0, count: total)
+        let st = bytes.withUnsafeMutableBytes { dst in
+            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total, destination: dst.baseAddress!)
+        }
+        return st == kCMBlockBufferNoErr ? bytes : nil
     }
 
     /// Parameter sets (HEVC: VPS, SPS, PPS; H.264: SPS, PPS) without start codes, and the NAL length size.
