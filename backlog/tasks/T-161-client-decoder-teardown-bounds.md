@@ -1,7 +1,7 @@
 ---
 id: T-161
 title: Bound the decoder hand-off, join the output thread, keep per-generation state
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-160]
@@ -61,7 +61,33 @@ Decision 0019 must be accepted by the user before work starts.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Kırmızı commit** (`test/.../video/DecoderTeardownTest.kt`, T-158 fake): (a) eski kuşak `stop()` içinde asılı →
+   yeni kuşak ≤ 2 s içinde `Fault(stuck)` bildirmeli (HEAD: sınırsız `join()`, olay gelmez; kapı `finally`'de açılır);
+   (b) `dequeueOutputBuffer` içinde kalan çıktı iş parçacığı (500 ms join'i aşan straggler) yeni kuşağın
+   `firstOutput` atlamasını tüketmemeli ve yeni kuşak codec'i straggler çıkmadan açmamalı. İkisi `@Ignore` ile, HEAD'deki
+   başarısız çıktı commit mesajında.
+2. **`CodecGeneration.kt` (yeni, saf):**
+   - `CodecGeneration` (kuşak: gen, surface, thread, `active`, canlı iş parçacığı sayısı, `outputStraggler`).
+   - `GenerationHandoff` (renderer başına bir tane, kendi kilidi): `threadStarted/threadExited/retire`;
+     `acquire(gen, 2000)` → `Ready | Retired | Stuck(prev)`. Tek "owner" referansı (codec tutabilecek son kuşak); bir
+     kuşak ancak owner'ın hem girdi hem çıktı iş parçacıkları çıktıysa owner olur. `retire()` bekleyeni hemen uyandırır,
+     emekliye ayrılan bekleyen codec açmadan çıkar → zincir büyümez, bekleyen en çok bir. `pause(gen, ms)`: geri çekilme
+     beklemesi, `retire()` ile uyanır. Saat/bekleme `HandoffTimer` ile enjekte edilir (testte sahte saat).
+   - `CodecState` (codec örneği başına): `lastOutputNs`, gauge, PTS haritaları, `ArrivalTracker`, pacer referansları,
+     `running`; `current = running && generation.active`. `formatChanged` yerel değişken olur.
+3. **`RestartPolicy.kt`:** 3/10 s kuralı aynen; `delayMs` = pencere içindeki yeniden başlatma sırasına göre 100 / 500 /
+   1000 ms.
+4. **`VideoRenderer.kt`:** `lingering`/`previous.join()` yerine `handoff.acquire`; `Stuck` → `ev=decoder_previous_stuck`,
+   besleme durur, `onHealthEvent(Fault(stuck))`, codec açılmaz. Çıktı iş parçacığı kuşağın canlı sayısına girer; 500 ms
+   join aşılırsa `outputStraggler` + `ev=output_straggler`. Paylaşılan `stats`/`counters`/`firstOutput`/`progress`
+   yalnızca `CodecState.current` iken güncellenir (straggler tamponu muhasebesiz geri verir). `live: CodecState?`
+   (UI'nin okuduğu gauge/pacer) yalnızca kendi kaydı ise temizlenir. `decodeAttempts` yeniden başlatmadan önce
+   `handoff.pause(delay)`; `detachSurface` `JOIN_MS` sınırını korur.
+5. Testler: kırmızı testlerin `@Ignore`'u kaldırılır; tekrar eden attach'te tek bekleyen, geri çekilme gecikmeleri (sahte
+   saat), geri çekilme sırasında `detachSurface` ≤ `JOIN_MS`, `GenerationHandoff`/`RestartPolicy` saf testleri.
+
+Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangisinin önce yazıldığı fark etmez). Geri
+çekilme sırasında kuyruk dolarsa FRAMES_DROPPED istekleri hold-off ile sınırlı kalır.
 
 ## Handoff
 
