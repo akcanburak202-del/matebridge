@@ -340,6 +340,16 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 - Kullanıcı "Tablet dosyalarını aç" ile birimi bağladıysa, tablet sunucusu aynı oturumda yeniden başlayınca (kapsam ya da salt okunur değişikliği, yeni token) Mac birimi Finder penceresi açmadan bir kez kendiliğinden yeniden bağlar.
 - `ev=eject remount=off seen=notification|unmount`: kullanıcı birimi Finder'dan çıkardı; bu oturumda kendiliğinden yeniden bağlama durur ("Tablet dosyalarını aç" yeniden açar). Belirsiz durumda yeniden bağlamamayı seçer. Yol ve token loglanmaz.
 
+## Ölü tablet birimini zorla çıkarma (Mac, `files`, T-209)
+
+- Çıkarılamayan (meşgul, ör. Finder'da açık) bizim "MatePad" birimimiz, bağlandığı token ile bellekte tutulur. Farklı token'lı bir READY gelince birim ölüdür ve bir kez zorla çıkarılır. Aynı token'lı (canlı) birim, bilinmeyen birim ve kullanıcının kendi "MatePad"i asla zorla çıkarılmaz. Zorla çıkarma kullanıcının "Çıkar"ı sayılmaz (`ev=eject` yazılmaz).
+- `ev=unmount result=ok|gone|error code=N force=1` (I/W): zorla çıkarma (`unmount(2)` `MNT_FORCE`). `gone`: birim zaten yoktu. Normal çıkarma satırında `force` alanı yoktur (`code=16` EBUSY).
+- `ev=unmount result=skipped reason=identity force=1` (W): o yoldaki birim, bizim bağladığımız birim değil (`fsid`, tür ya da kaynak URL farklı; ör. kullanıcı aynı yola başka bir birim bağladı). Zorla çıkarılmaz, hatırlanan birim unutulur.
+- `ev=mount already=0 reason=identity` (W): "Tablet dosyalarını aç" bilinen yolda bir birim buldu ama bizim bağladığımız birim değil (başka `fsid`). Sahiplenilmez, kaydı unutulur, yeniden bağlanır (sonucu sonraki `ev=mount` satırında).
+- Bir yeniden bağlama, sıradaki tüm çıkarma ve zorla çıkarma sonuçları gelene kadar bekler.
+- `ev=mount_exists dead_ours=N` (I): bağlama `ev=mount result=error code=17` (EEXIST) aldı. `N>0`: engelleyen birim bizim ölü birimimiz, zorla çıkarılıp bağlama bir kez yeniden denenir. `0`: dokunulmaz, menüde hata görünür.
+- Yol ve token loglanmaz.
+
 ## Decoder kapanış sınırları (tablet, `MB/decoder`, T-161, karar 0019)
 
 - `ev=decoder_previous_stuck vgen=N prev_vgen=N waited_ms=N out_straggler=0|1` (W): yeni kuşak (ya da aynı kuşakta yeniden başlatma, `prev_vgen=vgen`) önceki codec'i 2 sn bekledi, bitmedi; codec açılmaz, `video_health cause=stuck`.

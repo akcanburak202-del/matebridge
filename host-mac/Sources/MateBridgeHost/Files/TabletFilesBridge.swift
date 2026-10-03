@@ -225,6 +225,9 @@ public final class TabletFilesBridge: @unchecked Sendable {
             apply(next)
         case .unmountPath(let path, let local):
             if Self.mountPoints(localPort: local).contains(path) { unmount(path) }
+        case .forceUnmount(let path, let local, let identity):
+            let gone = forceUnmount(path, localPort: local, expected: identity)
+            apply(planner.forceUnmountFinished(path: path, localPort: local, gone: gone))
         case .mount(let local, let secret, let gen, let knownPath):
             mount(localPort: local, secret: secret, generation: gen, knownPath: knownPath)
         case .reveal(let path):
@@ -298,11 +301,16 @@ public final class TabletFilesBridge: @unchecked Sendable {
     // MARK: Mount
 
     private func mount(localPort: UInt16, secret: FilesSecret, generation: UInt64, knownPath: String?) {
-        // Only a volume this session mounted itself is reused; anything else on the port is not adopted.
-        if let knownPath, Self.mountPoints(localPort: localPort).contains(knownPath) {
-            logger.log(.info, "mount", sessionID: 0, generation: 0, fields: "result=ok already=1")
-            apply(planner.mountFinished(generation: generation, localPort: localPort, path: knownPath))
-            return
+        // Only a volume this session mounted itself is reused, and only while it is still that exact volume (the
+        // planner compares its identity, T-209); anything else on the port is not adopted.
+        if let knownPath, let known = Self.mountEntries(localPort: localPort).first(where: { $0.path == knownPath }) {
+            if let next = planner.mountReused(generation: generation, localPort: localPort, path: knownPath,
+                                              identity: known.identity) {
+                logger.log(.info, "mount", sessionID: 0, generation: 0, fields: "result=ok already=1")
+                apply(next)
+                return
+            }
+            logger.log(.warning, "mount", sessionID: 0, generation: 0, fields: "already=0 reason=identity")
         }
         // Credentials go only as the user/password arguments: not in the URL, no UI, nothing saved.
         let openOptions = NSMutableDictionary()
@@ -323,7 +331,19 @@ public final class TabletFilesBridge: @unchecked Sendable {
             let path = status == 0 ? paths.first : nil  // the path itself is not logged
             logger.log(path != nil ? .info : .warning, "mount", sessionID: 0, generation: 0,
                        fields: path != nil ? "result=ok ms=\(ms)" : "result=error code=\(status) ms=\(ms)")
-            apply(planner.mountFinished(generation: generation, localPort: localPort, path: path))
+            if status == EEXIST {
+                // NetFS already has this URL mounted (T-209): the planner decides whether that volume is a dead
+                // leftover of ours to force out, from our mount points on this port.
+                let next = planner.mountCollided(generation: generation, localPort: localPort,
+                                                 mountedNow: Self.mountPoints(localPort: localPort))
+                let forces = next.filter { if case .forceUnmount = $0 { return true } else { return false } }.count
+                logger.log(.info, "mount_exists", sessionID: 0, generation: 0, fields: "dead_ours=\(forces)")
+                apply(next)
+                return
+            }
+            // Identity of the new volume, read right away: the only volume a later force may hit at this path.
+            let identity = path.flatMap { Self.identity(at: $0, localPort: localPort) }
+            apply(planner.mountFinished(generation: generation, localPort: localPort, path: path, identity: identity))
         }
         if rc != 0 {
             logger.log(.warning, "mount", sessionID: 0, generation: 0, fields: "result=error code=\(rc) stage=start")
@@ -344,8 +364,39 @@ public final class TabletFilesBridge: @unchecked Sendable {
         return false
     }
 
+    /// Forced (T-209), only for a dead leftover the planner chose, and only while the volume at `path` is still
+    /// exactly the one we mounted there (`TabletFilesPlanner.identityMatches`, checked right before the call). A
+    /// different volume at that path (someone else's, even from the same port) is never forced: it is reported as
+    /// gone, so the planner forgets the leftover. Never shows UI. Returns true when our volume is not mounted any more.
+    private func forceUnmount(_ path: String, localPort: UInt16, expected: VolumeIdentity) -> Bool {
+        guard let current = Self.identity(at: path, localPort: localPort) else {
+            logger.log(.info, "unmount", sessionID: 0, generation: 0, fields: "result=gone force=1")
+            return true
+        }
+        guard TabletFilesPlanner.identityMatches(expected: expected, current: current, localPort: localPort) else {
+            logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=skipped reason=identity force=1")
+            return true
+        }
+        if Darwin.unmount(path, MNT_FORCE) == 0 {
+            logger.log(.info, "unmount", sessionID: 0, generation: 0, fields: "result=ok force=1")
+            return true
+        }
+        logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=error code=\(errno) force=1")
+        return false
+    }
+
     /// Mount points of WebDAV volumes served from `http://127.0.0.1:<localPort>/` (thread-safe `getfsstat`).
-    static func mountPoints(localPort: UInt16) -> [String] {
+    static func mountPoints(localPort: UInt16) -> [String] { mountEntries(localPort: localPort).map(\.path) }
+
+    /// Identity of our WebDAV volume (served from `127.0.0.1:<localPort>`) mounted at `path`, if there is one.
+    static func identity(at path: String, localPort: UInt16) -> VolumeIdentity? {
+        let key = TabletFilesPlanner.normalizedPath(path)
+        return mountEntries(localPort: localPort).first { TabletFilesPlanner.normalizedPath($0.path) == key }?.identity
+    }
+
+    /// Mount table entries of WebDAV volumes served from `http://127.0.0.1:<localPort>/` (`getfsstat` with
+    /// `MNT_NOWAIT`, so a dead server cannot block it).
+    static func mountEntries(localPort: UInt16) -> [(path: String, identity: VolumeIdentity)] {
         let count = getfsstat(nil, 0, MNT_NOWAIT)
         guard count > 0 else { return [] }
         let capacity = Int(count) + 4
@@ -355,12 +406,14 @@ public final class TabletFilesBridge: @unchecked Sendable {
                                                       count: MemoryLayout<statfs>.stride * capacity)
         let got = getfsstat(buf, Int32(MemoryLayout<statfs>.stride * capacity), MNT_NOWAIT)
         guard got > 0 else { return [] }
-        return UnsafeBufferPointer(start: buf, count: min(Int(got), capacity)).compactMap { entry -> String? in
+        return UnsafeBufferPointer(start: buf, count: min(Int(got), capacity)).compactMap { entry in
             var e = entry
             let type = withUnsafeBytes(of: &e.f_fstypename) { cString($0) }
             let from = withUnsafeBytes(of: &e.f_mntfromname) { cString($0) }
             let on = withUnsafeBytes(of: &e.f_mntonname) { cString($0) }
-            return WebDavMount.isOurs(fsType: type, mountedFrom: from, localPort: localPort) ? on : nil
+            guard WebDavMount.isOurs(fsType: type, mountedFrom: from, localPort: localPort) else { return nil }
+            let fsid = UInt64(UInt32(bitPattern: e.f_fsid.val.0)) << 32 | UInt64(UInt32(bitPattern: e.f_fsid.val.1))
+            return (path: on, identity: VolumeIdentity(fsid: fsid, fsType: type, mountedFrom: from))
         }
     }
 

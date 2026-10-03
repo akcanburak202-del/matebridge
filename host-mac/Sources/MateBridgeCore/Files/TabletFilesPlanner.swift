@@ -9,6 +9,24 @@ public struct FilesSecret: Equatable, Sendable, CustomStringConvertible, CustomD
     public var debugDescription: String { description }
 }
 
+/// Which mounted volume a mount point is (T-209): from the mount table entry (`statfs`) at the time we mounted it,
+/// and again right before a forced unmount. `fsid` is assigned per mount, so a volume someone mounted later at the
+/// same path, even from the same URL, has another one. Holds no credentials (our URL never carries them).
+public struct VolumeIdentity: Equatable, Hashable, Sendable {
+    /// `f_fsid`, both words.
+    public let fsid: UInt64
+    /// `f_fstypename`.
+    public let fsType: String
+    /// `f_mntfromname`, exactly as the mount table shows it.
+    public let mountedFrom: String
+
+    public init(fsid: UInt64, fsType: String, mountedFrom: String) {
+        self.fsid = fsid
+        self.fsType = fsType
+        self.mountedFrom = mountedFrom
+    }
+}
+
 /// What the "Tablet dosyalarını aç" menu item shows (decision 0015).
 public enum TabletFilesMenu: Equatable, Sendable {
     /// No session, or the tablet does not share files (no `FILES` capability, no `FILES_INFO`).
@@ -43,8 +61,12 @@ public enum TabletFilesAction: Equatable, Sendable {
     /// Detach the one volume at `path`, if it is still a WebDAV volume from `127.0.0.1:<localPort>` (a stale
     /// mount that finished after its generation ended).
     case unmountPath(path: String, localPort: UInt16)
+    /// Force-detach (`MNT_FORCE`) the one volume at `path`, only if the volume there now is still exactly `identity`
+    /// (`TabletFilesPlanner.identityMatches`): a leftover of ours whose token is dead (T-209). Any other volume, or
+    /// none, is left alone and reported as gone. Report through `forceUnmountFinished`.
+    case forceUnmount(path: String, localPort: UInt16, identity: VolumeIdentity)
     /// Reveal `knownPath` if it is still our volume, else mount with user `matebridge` / `secret`; report the
-    /// result through `mountFinished`.
+    /// result through `mountFinished`, or through `mountCollided` when NetFS answers EEXIST.
     case mount(localPort: UInt16, secret: FilesSecret, generation: UInt64, knownPath: String?)
     /// Open the mounted volume in Finder.
     case reveal(path: String)
@@ -62,6 +84,15 @@ public enum TabletFilesAction: Equatable, Sendable {
 /// automatic mount is not revealed in Finder. The intent ends with the session, at shutdown and when the user
 /// ejects the volume: seen either as an unmount notification of the current volume (`volumeUnmounted`), or, when a
 /// restart got there first, as our own unmount finding the volume already gone (`unmountFinished`).
+///
+/// Dead leftovers (T-209): a volume of ours that our unmount could not detach (busy, e.g. open in Finder) is
+/// remembered with the token it was mounted with, across sessions. Once a READY with a different token is known,
+/// that volume is dead (its server is gone) and blocks the next mount of the same URL with EEXIST, so it is
+/// force-unmounted: once as soon as it is known dead, and once more when a mount collides with it (then the mount
+/// is retried once). A volume whose token is still the current one, an unknown volume and the user's own "MatePad"
+/// are never forced: the host forces only while the volume at that path still has the exact identity it had right
+/// after our mount (`identityMatches`). Any remount waits until the whole cleanup (every queued unmount and force)
+/// has reported. A forced unmount is ours, never the user's eject.
 public struct TabletFilesPlanner: Sendable {
     /// Removal attempts per round (first try plus retries) before waiting for the next session/USB event.
     public static let removalAttempts = 4
@@ -70,10 +101,48 @@ public struct TabletFilesPlanner: Sendable {
     public static let rememberedMounts = 4
 
     /// A volume of ours that a restart or teardown forgot and asked the host to unmount; resolved by
-    /// `unmountFinished` for its port.
+    /// `unmountFinished` for its port. `inSession`: replaced in the current session (only then can its result
+    /// mean the user's eject, and only then does the remount wait for it).
     private struct ReplacedMount: Sendable {
         let path: String
         let localPort: UInt16
+        let origin: MountOrigin
+        var inSession = true
+    }
+
+    /// What we know about how one of our volumes was mounted: the token, and the volume's identity right after the
+    /// mount. Either missing means the volume can never be forced.
+    private struct MountOrigin: Sendable {
+        var token: FilesSecret?
+        var identity: VolumeIdentity?
+    }
+
+    /// A volume of ours that our unmount could not detach. `forced`: the one force attempt for being known dead was
+    /// made.
+    private struct Leftover: Sendable {
+        let path: String
+        let localPort: UInt16
+        let origin: MountOrigin
+        var forced = false
+
+        var ref: VolumeRef { VolumeRef(path: path, localPort: localPort) }
+    }
+
+    /// A mount point on a forward port, compared without trailing slashes.
+    private struct VolumeRef: Hashable, Sendable {
+        let path: String
+        let localPort: UInt16
+
+        init(path: String, localPort: UInt16) {
+            self.path = TabletFilesPlanner.normalizedPath(path)
+            self.localPort = localPort
+        }
+    }
+
+    /// A mount that collided with a dead leftover (EEXIST): retried once when every force is in and succeeded.
+    private struct CollisionRetry: Sendable {
+        let automatic: Bool
+        var forceFailed = false
     }
 
     private struct Session: Sendable {
@@ -100,10 +169,25 @@ public struct TabletFilesPlanner: Sendable {
     private var keepsMounted = false
     /// A new READY arrived while `keepsMounted`: one automatic mount is owed once the forward is up.
     private var autoMountArmed = false
+    /// Token the pending mount was started with.
+    private var mountingToken: FilesSecret?
+    /// The pending mount is the one retry after a collision: another EEXIST fails it.
+    private var mountingIsCollisionRetry = false
     /// Mount point the current forward's mount got (owned by the current generation chain).
     private var mountedPath: String?
-    /// Volumes we asked to unmount and whose result has not come back (bounded, cleared per session).
+    /// Token and identity of the volume at `mountedPath`.
+    private var mountedOrigin = MountOrigin()
+    /// `unmount(localPort:)` actions whose result has not come back, by port. A remount waits for all of them, so a
+    /// volume it creates is never detached by a cleanup that was still queued ahead of it.
+    private var pendingUnmounts: [UInt16: Int] = [:]
+    /// Volumes we asked to unmount and whose result has not come back (bounded; they leave the session at its end,
+    /// because a teardown's result arrives after it).
     private var replacedMounts: [ReplacedMount] = []
+    /// Busy volumes of ours that stayed mounted (bounded, across sessions, cleared at shutdown).
+    private var leftovers: [Leftover] = []
+    /// `forceUnmount` actions whose result has not come back.
+    private var pendingForces: Set<VolumeRef> = []
+    private var collisionRetry: CollisionRetry?
     private var lastMountFailed = false
     /// Forwards we installed and still have to remove: local port to failed attempts in the current round.
     private var owedForwards: [UInt16: Int] = [:]
@@ -121,7 +205,7 @@ public struct TabletFilesPlanner: Sendable {
         session = Session(transport: transport, capable: capable)
         info = nil
         forgetMountIntent()  // a new session needs the user's "Tablet dosyalarını aç" again
-        replacedMounts = []
+        leaveSessionForReplacedMounts()
         if transport == .usb { usbDeviceLost = false }  // the session itself came through the cable
         return out
     }
@@ -136,18 +220,22 @@ public struct TabletFilesPlanner: Sendable {
         info = ready
         // Every new READY (a server (re)start) owes one remount if the user wants the volume; OFF owes none.
         autoMountArmed = ready != nil && keepsMounted
-        guard let ready, current.transport == .usb, !usbDeviceLost else { return teardown() }
+        // A new token makes every leftover mounted with another one dead: it is forced out after the normal cleanup
+        // in the same list, and any remount waits for both results.
+        guard let ready, current.transport == .usb, !usbDeviceLost else { return teardown() + forceDeadLeftovers() }
         if let previous, previous.port == ready.port, case .up(let local, _) = forward {
             // Same port, new token: the server restarted, a mount made with the old token is useless.
-            var out = cancelPendingMount() + [.unmount(localPort: local)]
+            var out = cancelPendingMount() + [unmountAction(localPort: local)]
             replaceMountedVolume(localPort: local)
             lastMountFailed = false
+            out += forceDeadLeftovers()
             // The forward is already up. With a mounted volume the remount waits for `unmountFinished`, which tells
-            // whether the user had ejected it first.
-            out += autoMountIfArmed()
+            // whether the user had ejected it first. Without one (and nothing forced) it may follow the unmount in
+            // this list: the host reports that unmount before it runs the next action.
+            out += autoMountIfArmed(afterUnmountInThisList: local)
             return out
         }
-        return teardown() + startForward(remotePort: ready.port)
+        return teardown() + forceDeadLeftovers() + startForward(remotePort: ready.port)
     }
 
     public mutating func sessionEnded() -> [TabletFilesAction] {
@@ -155,7 +243,7 @@ public struct TabletFilesPlanner: Sendable {
         session = nil
         info = nil
         forgetMountIntent()
-        replacedMounts = []
+        leaveSessionForReplacedMounts()
         return out
     }
 
@@ -196,6 +284,9 @@ public struct TabletFilesPlanner: Sendable {
         info = nil
         forgetMountIntent()
         replacedMounts = []
+        leftovers = []
+        pendingForces = []
+        pendingUnmounts = [:]
         isShutDown = true
         return out
     }
@@ -237,7 +328,9 @@ public struct TabletFilesPlanner: Sendable {
 
     /// The user chose "Tablet dosyalarını aç".
     public mutating func openRequested() -> [TabletFilesAction] {
-        guard !isShutDown, case .up = forward, info != nil, mountingGeneration == nil else { return [] }
+        guard !isShutDown, case .up = forward, info != nil, mountingGeneration == nil, collisionRetry == nil else {
+            return []
+        }
         keepsMounted = true
         autoMountArmed = false  // the user's own mount covers this READY
         return startMount(automatic: false)
@@ -269,35 +362,109 @@ public struct TabletFilesPlanner: Sendable {
     /// ones it found but could not detach (`stillMounted`, e.g. busy). Must be reported for every `unmount`, before
     /// the host handles anything else.
     ///
-    /// A replaced volume in neither list was already gone before our unmount ran: the user ejected it (its
-    /// notification is still on the way, or the restart was handled first), so the remount intent ends. Otherwise
-    /// the owed remount of this READY may now go ahead. Returns the remount, if any.
+    /// A replaced volume of this session in neither list was already gone before our unmount ran: the user ejected
+    /// it (its notification is still on the way, or the restart was handled first), so the remount intent ends.
+    /// A replaced volume in `stillMounted` (busy) becomes a leftover, force-unmounted once its token is known dead
+    /// (T-209). A leftover on this port that the unmount detached or did not find is gone. Then the owed remount of
+    /// this READY may go ahead, once every queued unmount and force has reported. Returns a force unmount and/or the
+    /// remount, if any.
     public mutating func unmountFinished(localPort: UInt16, detached: [String],
                                          stillMounted: [String]) -> [TabletFilesAction] {
         guard !isShutDown else { return [] }
+        if let n = pendingUnmounts[localPort] { pendingUnmounts[localPort] = n > 1 ? n - 1 : nil }
+        let busy = Set(stillMounted.map { VolumeRef(path: $0, localPort: localPort) })
+        leftovers.removeAll { $0.localPort == localPort && !busy.contains($0.ref) }
         var ejected = false
-        replacedMounts.removeAll { replaced in
-            guard replaced.localPort == localPort else { return false }
-            let ours = (detached + stillMounted).contains { Self.samePath($0, replaced.path) }
-            if !ours { ejected = true }
-            return true
+        let resolved = replacedMounts.filter { $0.localPort == localPort }
+        replacedMounts.removeAll { $0.localPort == localPort }
+        for replaced in resolved {
+            if busy.contains(VolumeRef(path: replaced.path, localPort: localPort)) {
+                remember(Leftover(path: replaced.path, localPort: localPort, origin: replaced.origin))
+            } else if replaced.inSession, !detached.contains(where: { Self.samePath($0, replaced.path) }) {
+                ejected = true
+            }
         }
         if ejected { forgetMountIntent() }
-        return autoMountIfArmed()
+        let forces = forceDeadLeftovers()
+        return forces + resumeAfterCleanup()
     }
 
-    /// Result of `mount`; `path` is the mount point on success, nil on failure.
-    public mutating func mountFinished(generation: UInt64, localPort: UInt16, path: String?) -> [TabletFilesAction] {
+    /// Result of `forceUnmount`. `gone`: the volume is not mounted any more (detached, or already absent), or the
+    /// volume at that path is not the one we left (then it is forgotten, never forced). A force that left our volume
+    /// mounted keeps the leftover: no further automatic force, but a colliding mount tries once more.
+    public mutating func forceUnmountFinished(path: String, localPort: UInt16, gone: Bool) -> [TabletFilesAction] {
+        guard !isShutDown else { return [] }
+        let ref = VolumeRef(path: path, localPort: localPort)
+        guard pendingForces.remove(ref) != nil else { return [] }
+        if gone {
+            leftovers.removeAll { $0.ref == ref }
+        } else {
+            collisionRetry?.forceFailed = true
+        }
+        return resumeAfterCleanup()
+    }
+
+    /// The pending mount failed with EEXIST: NetFS already has this URL mounted. `mountedNow`: our mount points on
+    /// `localPort` (WebDAV from `127.0.0.1:<localPort>`) at that time. When one of them is a leftover of ours whose
+    /// token is dead, force it out and retry the mount once. Anything else (a live-token volume, the user's own
+    /// "MatePad", an unknown volume) is left alone and the failure shows in the menu.
+    public mutating func mountCollided(generation: UInt64, localPort: UInt16,
+                                       mountedNow: [String]) -> [TabletFilesAction] {
+        guard !isShutDown, let gen = mountingGeneration, gen == generation else { return [] }
+        let automatic = mountingIsAutomatic
+        let wasRetry = mountingIsCollisionRetry
+        _ = cancelPendingMount()  // the request is over; nothing to cancel on the host
+        mountedPath = nil
+        mountedOrigin = MountOrigin()
+        let blocking = Set(mountedNow.map { VolumeRef(path: $0, localPort: localPort) })
+        let dead = leftovers.indices.filter { isDead(leftovers[$0]) && blocking.contains(leftovers[$0].ref) }
+        guard !wasRetry, !dead.isEmpty else {
+            lastMountFailed = true
+            return []
+        }
+        collisionRetry = CollisionRetry(automatic: automatic)
+        var out: [TabletFilesAction] = []
+        for i in dead { out += force(at: i) }
+        return out
+    }
+
+    /// The host, executing `mount` with a `knownPath`, found a volume of ours (WebDAV from `127.0.0.1:<localPort>`)
+    /// at that path with `identity` (nil: unreadable). Returns what to do when it is our volume and is reused: it
+    /// must be the current request's `mountedPath`, and if we hold an identity for it, exactly that one. The
+    /// identity we hold is kept: a reuse never records a new one. Returns nil when it is not provably the volume we
+    /// mounted (e.g. ejected, then someone else mounted the same URL at that path): our record of the path is
+    /// forgotten and the host mounts afresh (or reports why it cannot). A stale request returns no actions.
+    public mutating func mountReused(generation: UInt64, localPort: UInt16, path: String,
+                                     identity: VolumeIdentity?) -> [TabletFilesAction]? {
+        guard !isShutDown, let gen = mountingGeneration, gen == generation else { return [] }
+        guard let mountedPath, Self.samePath(mountedPath, path),
+              mountedOrigin.identity == nil || mountedOrigin.identity == identity else {
+            self.mountedPath = nil
+            mountedOrigin = MountOrigin()
+            return nil
+        }
+        return mountFinished(generation: generation, localPort: localPort, path: mountedPath,
+                             identity: mountedOrigin.identity)
+    }
+
+    /// Result of `mount`; `path` is the mount point on success, nil on failure. `identity`: the mount table entry of
+    /// `path` right after a mount we just made (nil if the host could not read it: then that volume is never
+    /// forced). A reused volume goes through `mountReused` instead.
+    public mutating func mountFinished(generation: UInt64, localPort: UInt16, path: String?,
+                                       identity: VolumeIdentity? = nil) -> [TabletFilesAction] {
         if let gen = mountingGeneration, gen == generation {
             let automatic = mountingIsAutomatic
-            mountingGeneration = nil
-            mountingIsAutomatic = false
+            let token = mountingToken
+            _ = cancelPendingMount()  // the request is over; nothing to cancel on the host
             guard let path else {
                 lastMountFailed = true  // an automatic one is not retried until the next READY or the user
                 mountedPath = nil
+                mountedOrigin = MountOrigin()
                 return []
             }
             mountedPath = path
+            mountedOrigin = MountOrigin(token: token, identity: identity)
+            leftovers.removeAll { Self.samePath($0.path, path) }  // our new volume took that mount point
             return automatic ? [] : [.reveal(path: path)]
         }
         // Stale (session ended, token changed, shutdown): detach only the volume this request created, never
@@ -313,7 +480,8 @@ public struct TabletFilesPlanner: Sendable {
         guard session.transport == .usb else { return .usbOnly }
         guard info != nil else { return .enableOnTablet }
         guard case .up = forward, !usbDeviceLost else { return .preparing }
-        return mountingGeneration != nil ? .mounting : .ready(lastMountFailed: lastMountFailed)
+        let mounting = mountingGeneration != nil || collisionRetry != nil
+        return mounting ? .mounting : .ready(lastMountFailed: lastMountFailed)
     }
 
     /// Local port of the installed forward, if any.
@@ -331,8 +499,12 @@ public struct TabletFilesPlanner: Sendable {
     /// Normalized paths whose unmount notification can matter (the current volume and replaced ones awaiting their
     /// unmount result). The host drops every other notification before it reaches the planner.
     public var watchedPaths: Set<String> {
-        Set(([mountedPath].compactMap { $0 } + replacedMounts.map(\.path)).map(Self.normalizedPath))
+        let replaced = replacedMounts.filter(\.inSession).map(\.path)
+        return Set(([mountedPath].compactMap { $0 } + replaced).map(Self.normalizedPath))
     }
+
+    /// Normalized mount points of busy volumes of ours that stayed mounted (T-209), oldest first. Never logged.
+    public var leftoverPaths: [String] { leftovers.map(\.ref.path) }
 
     // MARK: - Private
 
@@ -351,6 +523,9 @@ public struct TabletFilesPlanner: Sendable {
         defer {
             mountingGeneration = nil
             mountingIsAutomatic = false
+            mountingIsCollisionRetry = false
+            mountingToken = nil
+            collisionRetry = nil  // its forces still report; only the retry is dropped
         }
         return mountingGeneration.map { [.cancelMount(generation: $0)] } ?? []
     }
@@ -361,29 +536,112 @@ public struct TabletFilesPlanner: Sendable {
         let gen = takeGeneration()
         mountingGeneration = gen
         mountingIsAutomatic = automatic
+        mountingIsCollisionRetry = false
+        mountingToken = FilesSecret(info.token)
         lastMountFailed = false
         return [.mount(localPort: local, secret: FilesSecret(info.token), generation: gen, knownPath: mountedPath)]
     }
 
-    /// The owed remount of this READY, once the forward is up, nothing else is mounting and every replaced volume's
-    /// unmount result is in (it may show the user had ejected it). Fires at most once.
-    private mutating func autoMountIfArmed() -> [TabletFilesAction] {
+    /// The owed remount of this READY, once the forward is up, nothing else is mounting, every replaced volume's
+    /// unmount result is in (it may show the user had ejected it) and the whole cleanup has reported: every queued
+    /// `unmount` and `forceUnmount`. Fires at most once.
+    ///
+    /// `afterUnmountInThisList`: the caller has just put an `unmount` of that port into the list this mount joins.
+    /// The host reports that unmount before it runs the next action, so it may come first in the same list; any
+    /// other pending cleanup still holds the mount back.
+    private mutating func autoMountIfArmed(afterUnmountInThisList port: UInt16? = nil) -> [TabletFilesAction] {
+        let cleanupPending = pendingUnmounts.contains { $0.key != port || $0.value > 1 }
         guard autoMountArmed, keepsMounted, !isShutDown, !usbDeviceLost, session?.transport == .usb,
-              case .up = forward, info != nil, mountingGeneration == nil, replacedMounts.isEmpty else { return [] }
+              case .up = forward, info != nil, mountingGeneration == nil, collisionRetry == nil, pendingForces.isEmpty,
+              !cleanupPending, !replacedMounts.contains(where: \.inSession) else { return [] }
         autoMountArmed = false
         return startMount(automatic: true)
+    }
+
+    /// After a cleanup result: once every queued unmount and force has reported, the collision retry (or else the
+    /// owed remount) may go ahead.
+    private mutating func resumeAfterCleanup() -> [TabletFilesAction] {
+        guard pendingForces.isEmpty, pendingUnmounts.isEmpty else { return [] }
+        guard let retry = collisionRetry else { return autoMountIfArmed() }
+        collisionRetry = nil
+        guard !retry.forceFailed else {
+            lastMountFailed = true
+            return []
+        }
+        let out = startMount(automatic: retry.automatic)
+        if !out.isEmpty { mountingIsCollisionRetry = true }
+        return out
+    }
+
+    /// `unmount(localPort:)`, counted until its result comes back.
+    private mutating func unmountAction(localPort: UInt16) -> TabletFilesAction {
+        pendingUnmounts[localPort, default: 0] += 1
+        return .unmount(localPort: localPort)
     }
 
     /// Forget the current volume because we are about to emit `unmount(localPort:)` for it, and remember it until
     /// `unmountFinished` reports what the unmount found.
     private mutating func replaceMountedVolume(localPort: UInt16) {
         guard let path = mountedPath else { return }
+        let origin = mountedOrigin
         mountedPath = nil
+        mountedOrigin = MountOrigin()
         replacedMounts.removeAll { Self.samePath($0.path, path) }
-        replacedMounts.append(ReplacedMount(path: path, localPort: localPort))
+        replacedMounts.append(ReplacedMount(path: path, localPort: localPort, origin: origin))
         if replacedMounts.count > Self.rememberedMounts {
             replacedMounts.removeFirst(replacedMounts.count - Self.rememberedMounts)
         }
+    }
+
+    /// At a session boundary, replaced volumes still await their unmount result (a teardown's result comes after
+    /// the boundary), but they no longer say anything about the user's eject and no longer hold back a remount.
+    private mutating func leaveSessionForReplacedMounts() {
+        for i in replacedMounts.indices { replacedMounts[i].inSession = false }
+    }
+
+    private mutating func remember(_ leftover: Leftover) {
+        leftovers.removeAll { $0.ref.path == leftover.ref.path }
+        leftovers.append(leftover)
+        if leftovers.count > Self.rememberedMounts { leftovers.removeFirst(leftovers.count - Self.rememberedMounts) }
+    }
+
+    /// Dead: mounted with a token other than the current READY's (that server is gone). No READY known (OFF, no
+    /// session), no token or no identity known: not provably dead (or not provably ours). Never the volume we
+    /// currently own.
+    private func isDead(_ leftover: Leftover) -> Bool {
+        guard let info, let token = leftover.origin.token, token.value != info.token,
+              leftover.origin.identity != nil else { return false }
+        if let mountedPath, Self.samePath(mountedPath, leftover.path) { return false }
+        return true
+    }
+
+    /// The one automatic force for every leftover that is known dead now and has not had it.
+    private mutating func forceDeadLeftovers() -> [TabletFilesAction] {
+        var out: [TabletFilesAction] = []
+        for i in leftovers.indices where !leftovers[i].forced && isDead(leftovers[i]) { out += force(at: i) }
+        return out
+    }
+
+    /// Marks the leftover forced and emits its force, unless one is already pending. Callers checked `isDead`.
+    private mutating func force(at i: Int) -> [TabletFilesAction] {
+        leftovers[i].forced = true
+        guard let identity = leftovers[i].origin.identity, pendingForces.insert(leftovers[i].ref).inserted else {
+            return []
+        }
+        return [.forceUnmount(path: leftovers[i].path, localPort: leftovers[i].localPort, identity: identity)]
+    }
+
+    /// Whether the volume now at a leftover's mount point (`current`, nil: none of ours on that port) is exactly the
+    /// one we mounted there (`expected`), so that forcing it can only hit our own dead volume: same `fsid` (assigned
+    /// per mount), WebDAV, and mounted from exactly our URL on `localPort` (`http://127.0.0.1:<port>/MatePad/`).
+    /// Anything else, including someone else's volume later mounted at that path from the same port, is not forced.
+    public static func identityMatches(expected: VolumeIdentity, current: VolumeIdentity?, localPort: UInt16) -> Bool {
+        guard let current, current == expected, expected.fsType == "webdav",
+              let c = URLComponents(string: expected.mountedFrom),
+              c.scheme?.lowercased() == "http", c.host == WebDavMount.host, c.port == Int(localPort),
+              c.user == nil, c.password == nil, c.query == nil, c.fragment == nil,
+              normalizedPath(c.path) == normalizedPath(WebDavMount.volumePath) else { return false }
+        return true
     }
 
     /// A path without trailing slashes: mount points from `getfsstat` and volume URLs from NSWorkspace may differ
@@ -419,11 +677,12 @@ public struct TabletFilesPlanner: Sendable {
         defer { forward = .none }
         guard case .up(let local, _) = forward else {
             mountedPath = nil  // a mount only exists on an up forward
+            mountedOrigin = MountOrigin()
             return out
         }
         replaceMountedVolume(localPort: local)
         owedForwards[local] = 0
-        out += [.unmount(localPort: local), .removeForward(localPort: local)]
+        out += [unmountAction(localPort: local), .removeForward(localPort: local)]
         return out
     }
 }
