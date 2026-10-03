@@ -333,3 +333,8 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 ## Video teslim kapısı (tablet, `MB/session`, T-160)
 
 - `ev=video_gate_open vgen=N config_id=N gated=N` (I): video bağlantısının ilk teslim edilen karesinde bir kez. Kare yalnız açık video bağlantısından gelir, `config_id`'si uygulanan ayara eşittir ve renderer o `StreamConfig` nesnesini kurmuşsa teslim edilir. `gated`: kapının o ana kadar düşürdüğü kare sayısı (geçişte küçük olmalı).
+
+## Tablet dosyalarını Mac'te yeniden bağlama (Mac, `files`, T-206)
+
+- Kullanıcı "Tablet dosyalarını aç" ile birimi bağladıysa, tablet sunucusu aynı oturumda yeniden başlayınca (kapsam ya da salt okunur değişikliği, yeni token) Mac birimi Finder penceresi açmadan bir kez kendiliğinden yeniden bağlar.
+- `ev=eject remount=off seen=notification|unmount`: kullanıcı birimi Finder'dan çıkardı; bu oturumda kendiliğinden yeniden bağlama durur ("Tablet dosyalarını aç" yeniden açar). Belirsiz durumda yeniden bağlamamayı seçer. Yol ve token loglanmaz.

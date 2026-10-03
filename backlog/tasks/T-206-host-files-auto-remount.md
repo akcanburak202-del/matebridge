@@ -1,7 +1,7 @@
 ---
 id: T-206
 title: Remount the tablet files volume after a server restart if it was mounted
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-190]

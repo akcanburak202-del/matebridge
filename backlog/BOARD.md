@@ -40,7 +40,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
-| [T-206](tasks/T-206-host-files-auto-remount.md) | Remount the tablet files volume after a server restart if it was mounted | 6 | mac-host-dev | [T-190] |
 
 ## done
 
@@ -217,3 +216,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
 | [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
 | [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |
+| [T-206](tasks/T-206-host-files-auto-remount.md) | Remount the tablet files volume after a server restart if it was mounted | 6 | mac-host-dev | [T-190] |
