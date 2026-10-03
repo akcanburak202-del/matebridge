@@ -57,7 +57,7 @@ import dev.matebridge.client.protocol.VideoHello
  * (the first record fails AEAD, or a T-152 host closes without BYE) counts against its endpoint. Below
  * [KEY_MISMATCH_LIMIT] it retries as before; at the limit it ends in terminal `Failed(KEY_MISMATCH)`, and an automatic
  * start to that endpoint opens nothing until a user start, a Stop or a forget clears the counts. An authenticated record
- * resets its endpoint's count.
+ * resets its endpoint's count; so does one the reader authenticated whose event has not arrived ([recordAuthenticated]).
  */
 class SessionMachine(
     private val hello: Hello,
@@ -67,6 +67,12 @@ class SessionMachine(
     initialFiles: FilesInfo? = null, // T-135: file server state; null = this client has no file server (nothing is sent)
     /** T-150: pending/trusted pair keys; null = no store (a pairing can then not be confirmed: KEY_STORE_FAILED). */
     private val trust: PairTrust? = null,
+    /**
+     * T-156: whether the reader of control connection `gen` has authenticated at least one host record (any type: also
+     * audio, which bypasses the machine, and unknown types the decoder skips). Set by the reader *before* it enqueues the
+     * record, read at the moment a failure would count, so a close that overtakes the record's event cannot count.
+     */
+    private val recordAuthenticated: (Int) -> Boolean = { false },
     /** T-150: log sink (level, ev, fields) for the trust lines; never given a code, key, host_id or host name. */
     private val log: (Char, String, String) -> Unit = { _, _, _ -> },
 ) {
@@ -352,7 +358,7 @@ class SessionMachine(
                     closeAll(out, graceful = false)
                     phase = Phase.IDLE
                     out += Action.Ui(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 0))
-                } else if (!event.connectFailed && awaitingFirstAuthRecord()) {
+                } else if (!event.connectFailed && unauthenticatedPairedEnd()) {
                     pairedAuthFailure(out, nowUs, "closed", SessionUi.Cause.LOST) // T-156 (b): a T-152 host on a wrong key
                 } else {
                     lose(out, nowUs, if (event.connectFailed) SessionUi.Cause.CONNECT_FAILED else SessionUi.Cause.LOST)
@@ -363,7 +369,7 @@ class SessionMachine(
                 failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_FAILED else REASON_PROTOCOL_ERROR)
             } else if (event.gen == controlGen) {
                 // No BYE: the channel is not trusted after a failed record (PROTOCOL.md section 9).
-                if (event.authFailed && awaitingFirstAuthRecord()) {
+                if (unauthenticatedPairedEnd() && event.authFailed) {
                     pairedAuthFailure(out, nowUs, "auth_failed", SessionUi.Cause.PROTOCOL_ERROR) // T-156 (a)
                 } else {
                     lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
@@ -819,6 +825,10 @@ class SessionMachine(
 
     private fun onTick(videoFrames: Long, nowUs: Long, out: MutableList<Action>) {
         frames = videoFrames
+        // T-156: a record authenticated by the reader (e.g. audio only) resets the count even if no event reaches onMessage.
+        if (!sealedSeen && controlGen >= 0 && authFailures.isNotEmpty() && recordAuthenticated(controlGen)) {
+            endpoint?.let { authFailures.remove(it) }
+        }
         // T-150: the confirmation prompt times out after CONFIRM_TIMEOUT_US of visible time (background never counts).
         if (promptGen >= 0 && promptVisible) {
             promptVisibleUs += nowUs - promptLastUs
@@ -891,12 +901,20 @@ class SessionMachine(
     }
 
     /**
-     * T-156: the current connection is PAIRED, its proof PING went out (the PAIRED ack moved it to ACCEPTED) and no host
-     * record has authenticated on it yet. PAIRING sessions, T-150's pending-confirm path (closed before any ack is
-     * handled) and handshake errors (still AWAIT_ACK) never match.
+     * T-156: the current connection, now ending, is PAIRED, its proof PING went out (the PAIRED ack moved it to ACCEPTED)
+     * and no host record has authenticated on it. PAIRING sessions, T-150's pending-confirm path (closed before any ack
+     * is handled) and handshake errors (still AWAIT_ACK) never match. A record the reader authenticated but the machine
+     * has not seen (still queued behind this event, audio, an unknown type) does not match and resets the count.
      */
-    private fun awaitingFirstAuthRecord(): Boolean =
-        phase == Phase.ACCEPTED && !pairingSession && !sealedSeen && candGen < 0 && endpoint != null
+    private fun unauthenticatedPairedEnd(): Boolean {
+        if (phase != Phase.ACCEPTED || pairingSession || sealedSeen || candGen >= 0) return false
+        val ep = endpoint ?: return false
+        if (recordAuthenticated(controlGen)) {
+            authFailures.remove(ep)
+            return false
+        }
+        return true
+    }
 
     /**
      * T-156: one more PAIRED connection on [endpoint] ended before any authenticated host record ([how]: `auth_failed`

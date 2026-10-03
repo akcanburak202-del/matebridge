@@ -142,7 +142,14 @@ class SessionController(
 
     private val machine = SessionMachine(
         hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
+        recordAuthenticated = { gen -> recordAuthenticated(gen) },
     ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
+
+    /** T-156: whether the reader of control connection [gen] authenticated a host record (engine thread). */
+    private fun recordAuthenticated(gen: Int): Boolean =
+        control.authed(gen) || candidate.authed(gen) || retired.authed(gen)
+
+    private fun ControlConn?.authed(gen: Int) = this != null && this.gen == gen && this.authenticated
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -627,6 +634,10 @@ class SessionController(
         /** This connection's HELLO (fresh nonce and ephemeral key); its payload bytes feed the transcript hash. */
         val helloMsg: Hello = handshake.hello(template)
 
+        /** T-156: a host record decrypted and authenticated on this connection (set before its event is enqueued). */
+        @Volatile var authenticated = false
+            private set
+
         /** Session keys once the first HELLO_ACK was validated; video connections derive their keys from it. */
         @Volatile var secrets: SessionSecrets? = null
             private set
@@ -761,7 +772,10 @@ class SessionController(
                     var audioPackets = 0
                     while (true) {
                         val t0 = System.nanoTime()
-                        val msg = decoder.next() ?: break
+                        val msg = decoder.next()
+                        // T-156: a returned message or a skipped unknown type both passed the AEAD check
+                        if (!authenticated && (msg != null || decoder.skippedFrames > 0)) authenticated = true
+                        if (msg == null) break
                         if (msg is AudioFrame || msg is AudioConfig) {
                             if (control === this) { // only the current connection's audio is measured (as delivered)
                                 if (msg is AudioFrame) {

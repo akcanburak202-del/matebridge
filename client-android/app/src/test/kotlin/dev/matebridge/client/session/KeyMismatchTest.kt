@@ -25,7 +25,9 @@ class KeyMismatchTest {
     private val usb = ConnectMode.usbEndpoint
     private val hostId = ByteArray(16) { (0x40 + it).toByte() }
     private val logs = ArrayList<String>()
-    private var m = SessionMachine(hello) { level, ev, fields -> logs += "$level $ev $fields" }
+    /** Generations whose reader authenticated a host record (the controller's `ControlConn.authenticated`). */
+    private val authed = HashSet<Int>()
+    private var m = SessionMachine(hello, recordAuthenticated = { it in authed }) { level, ev, fields -> logs += "$level $ev $fields" }
     private var now = 1_000_000L
     private val mismatch = SessionUi.Failed(SessionUi.Cause.KEY_MISMATCH)
 
@@ -116,6 +118,80 @@ class KeyMismatchTest {
         val gen = genOf(step(Event.Start(wifi, userInitiated = true)))
         pairedAck(gen)
         assertEquals(listOf<SessionUi>(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)), closeNoBye(gen).ui())
+    }
+
+    @Test fun connectTapOnTheMismatchTextIsAUserStart() { // review P2-1: through the real UI-origin mapping
+        reachMismatch(wifi)
+        // before the fix, "Bağlan" with the address field hidden was CONNECT_BUTTON (not user-initiated): refused
+        assertFalse(step(Event.Start(wifi, userInitiated = ConnectOrigin.CONNECT_BUTTON.userInitiated)).has<Action.OpenControl>())
+        val origin = ConnectOrigin.forConnectButton("", fieldVisible = false, shown = mismatch)
+        assertEquals(ConnectOrigin.CONNECT_AFTER_MISMATCH, origin)
+        assertTrue(origin.userInitiated)
+        assertFalse(origin.automatic)
+        assertTrue(origin.clearsGate)
+        val gen = genOf(step(Event.Start(wifi, userInitiated = origin.userInitiated)))
+        pairedAck(gen)
+        assertEquals(listOf<SessionUi>(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)), closeNoBye(gen).ui()) // count cleared
+        // a typed address stays a typed address
+        assertEquals(ConnectOrigin.TYPED_ADDRESS, ConnectOrigin.forConnectButton("10.0.0.5:47001", true, mismatch))
+    }
+
+    @Test fun aCloseThatOvertakesAnAuthenticatedRecordDoesNotCount() { // review P2-2: writer close on the priority mailbox
+        var gen = genOf(step(Event.Start(wifi)))
+        repeat(2) {
+            pairedAck(gen)
+            closeNoBye(gen)
+            gen = retry()
+        }
+        pairedAck(gen)
+        authed += gen // the reader authenticated STREAM_CONFIG and enqueued it ...
+        val r = closeNoBye(gen) // ... but the writer's I/O error close is handled first
+        assertEquals(listOf<SessionUi>(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)), r.ui())
+        assertFalse(step(Event.Received(gen, cfg())).has<Action.ApplyConfig>()) // now stale
+        // the authenticated record reset the count: two more failures only retry, the third ends it
+        gen = retry()
+        pairedAck(gen)
+        assertTrue(closeNoBye(gen).ui().single() is SessionUi.Disconnected)
+        gen = retry()
+        pairedAck(gen)
+        assertTrue(authFail(gen).ui().single() is SessionUi.Disconnected)
+        gen = retry()
+        pairedAck(gen)
+        assertEquals(listOf<SessionUi>(mismatch), closeNoBye(gen).ui())
+    }
+
+    @Test fun authenticatedAudioOrUnknownRecordsResetTheCount() { // review P2-3: they never reach onMessage
+        var gen = genOf(step(Event.Start(wifi)))
+        repeat(2) {
+            pairedAck(gen)
+            authFail(gen)
+            gen = retry()
+        }
+        pairedAck(gen)
+        authed += gen // AUDIO_CONFIG / an unknown type authenticated; the machine sees no Received
+        step(Event.Tick(0), 100_000) // the reset does not wait for the connection to end
+        assertTrue(authFail(gen).ui().single() is SessionUi.Disconnected) // a later bad record is not a key mismatch
+        repeat(2) {
+            gen = retry()
+            pairedAck(gen)
+            assertTrue(closeNoBye(gen).ui().single() is SessionUi.Disconnected)
+        }
+        gen = retry()
+        pairedAck(gen)
+        assertEquals(listOf<SessionUi>(mismatch), closeNoBye(gen).ui())
+    }
+
+    @Test fun anAuthenticatedRecordOfAnotherGenerationDoesNotReset() {
+        var gen = genOf(step(Event.Start(wifi)))
+        pairedAck(gen)
+        authed += gen + 100 // e.g. a candidate's or an old connection's reader
+        closeNoBye(gen)
+        repeat(2) {
+            gen = retry()
+            pairedAck(gen)
+            val r = closeNoBye(gen)
+            if (it == 1) assertEquals(listOf<SessionUi>(mismatch), r.ui())
+        }
     }
 
     @Test fun stopAndForgetClearTheCount() {
@@ -229,7 +305,7 @@ class KeyMismatchTest {
         // with a fresh pending record it shows the stored code instead, never KEY_MISMATCH
         val f = TrustFixture()
         f.trust.storePending(hostId, ByteArray(32) { 1 }, "123456")
-        m = SessionMachine(hello, trust = f.trust) { level, ev, fields -> logs += "$level $ev $fields" }
+        m = SessionMachine(hello, trust = f.trust, recordAuthenticated = { it in authed }) { level, ev, fields -> logs += "$level $ev $fields" }
         gen = genOf(step(Event.Start(wifi, userInitiated = true)))
         repeat(3) {
             step(Event.ControlOpened(gen))

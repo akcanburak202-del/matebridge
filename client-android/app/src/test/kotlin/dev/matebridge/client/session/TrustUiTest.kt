@@ -111,7 +111,7 @@ class TrustUiTest {
         assertEquals(
             setOf(
                 ConnectOrigin.PAIR, ConnectOrigin.STORED_REPAIR, ConnectOrigin.STORED_CONNECT, ConnectOrigin.TYPED_ADDRESS,
-                ConnectOrigin.CONNECT_AFTER_CANCEL,
+                ConnectOrigin.CONNECT_AFTER_CANCEL, ConnectOrigin.CONNECT_AFTER_MISMATCH,
             ),
             ConnectOrigin.entries.filter { it.userInitiated }.toSet(),
         )
