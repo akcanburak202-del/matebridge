@@ -1,7 +1,7 @@
 ---
 id: T-175
 title: Time host input delivery, environment lookups and CGEventPost per message
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-171]
@@ -54,13 +54,13 @@ Source: external architecture review 2026-10-03 (L03 input side, W4 "Mac input")
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Deterministic scenario, committed red before the helper is implemented: a synthetic session of N messages with ~30 µs environment and ~20 µs post each, plus one 25 ms post, yields the expected `deliver_us_avg/p99/max`, `env_us_avg/max`, `post_us_avg/max` and exactly one slow-call warning (threshold 20 ms); a second slow call inside the rate-limit window yields no second warning.
-- [ ] [XCTest] The aggregate is fixed-size (no growth with message count) and resets per session.
-- [ ] `input_session_end` gains `deliver_us_avg= deliver_us_p99= deliver_us_max= env_us_avg= env_us_max= post_us_avg= post_us_max=`, and a rate-limited `W input ev=input_slow_call stage=env|post|deliver us=` line appears when one call exceeds 20 ms. No coordinates, keys or characters in either.
-- [ ] Timing adds no behaviour change: same events posted in the same order (existing input tests stay green).
-- [ ] [doc] `docs/LOGGING.md` documents the new fields and the warning line.
+- [x] [XCTest] Deterministic scenario, committed red before the helper is implemented: a synthetic session of N messages with ~30 µs environment and ~20 µs post each, plus one 25 ms post, yields the expected `deliver_us_avg/p99/max`, `env_us_avg/max`, `post_us_avg/max` and exactly one slow-call warning (threshold 20 ms); a second slow call inside the rate-limit window yields no second warning.
+- [x] [XCTest] The aggregate is fixed-size (no growth with message count) and resets per session.
+- [x] `input_session_end` gains `deliver_us_avg= deliver_us_p99= deliver_us_max= env_us_avg= env_us_max= post_us_avg= post_us_max=`, and a rate-limited `W input ev=input_slow_call stage=env|post|deliver us=` line appears when one call exceeds 20 ms. No coordinates, keys or characters in either.
+- [x] Timing adds no behaviour change: same events posted in the same order (existing input tests stay green).
+- [x] [doc] `docs/LOGGING.md` documents the new fields and the warning line.
 - [ ] [device] 10 min of mixed pen, keyboard and trackpad use plus one mode switch during input: the `input_session_end` numbers are recorded in NOTES with build IDs, with a one-line verdict "optimise / not needed" against the > 50 µs/message or p99 > few-ms threshold.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -75,10 +75,24 @@ Source: external architecture review 2026-10-03 (L03 input side, W4 "Mac input")
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `082ea7b` plan, `fdb5a01` kırmızı senaryo (iskelet API, 6 testin hepsi kırmızı), `cb36f4b` uygulama + bağlama + LOGGING, ardından bu handoff commit'i. Dal: `task/T-175-host-input-delivery-timing`.
 - **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Input/InputDeliveryTiming.swift` (yeni): saf toplayıcı. `deliver` için T-171'in `AgeHistogram`'ı (µs), env/post için doygun toplam + max (ns), 20 ms eşik, 10 s hız sınırı, `slow_calls` sayacı.
+  - `host-mac/Tests/MateBridgeCoreTests/Input/InputDeliveryTimingTests.swift` (yeni): 6 test (R-tag senaryosu, boş oturum, aşama seçimi + eşik sınırı, sabit boyut + oturum sıfırlama, hız sınırı sıfırlamadan sağ çıkar, uç değerler).
+  - `host-mac/Sources/MateBridgeHost/Input/InputController.swift`: `deliver` ölçümü (`queue.sync` çevresi + içeride env/caps ve post), `flush` artık post süresini döndürür (`@discardableResult`, diğer çağıranlar değişmedi), `timingLock` + `timing`, `sessionStarted` sıfırlar, `sessionEnded` alanları ekler, `W input ev=input_slow_call`.
+  - `docs/LOGGING.md`: ayrı "Girdi teslim zamanlaması (Mac, `input`, T-175)" bölümü (T-171 bölümünden hemen sonra).
+  - `CGEventPoster.swift` ve `VirtualDisplayLocator.swift`'e **dokunulmadı** (denetleyici düzeyindeki ölçüm yeterli).
 - **Varsayımlar:**
+  - `env_us` = `environment()` + KEY için `capsLock.isOn()`. Canlı imleç (`liveCursor`) hariç, kendi `cursor_query_*` alanları var. Kapı değişiminde yazılan `input_gate`/`input_displays` log satırlarının maliyeti de `env`'e girer (mod değişiminde bu gerçek maliyettir).
+  - `post_us` = `flush` içindeki `post(events)`: kapanış olayı varsa taze izin kontrolü + `poster.post`. `postFailed`, `logRecords` ve log satırları hariç. Olay üretmeyen mesajda ~0.
+  - Ölçülen mesajlar: `deliver`'ın girdi dalındaki her şey (PEN, POINTER_REL/ABS, SCROLL, PINCH, PEN_GESTURE, KEY, RELEASE_ALL, BYE). PONG ve diğerleri ölçülmez. `stopped` sonrası mesaj kaydedilmez.
+  - Kartın listelediği alanlara ek olarak `slow_calls=<n>` eklendi (hız sınırıyla bastırılanlar dahil sayım). Gerekmiyorsa kaldırmak tek satır.
+  - Hız sınırı zamanı `reset()`'te korunur: yeniden bağlanma fırtınasında oturum başına bir uyarı yağmaz. Oturum toplamları ise her oturumda sıfırdan.
+  - Eşik "kesin büyük" (tam 20 000 µs yavaş sayılmaz). Bir mesajda env ve post ikisi de aşarsa büyüğü adlandırılır, yine tek satır.
+  - Davranış: olaylar aynı sırada ve aynı içerikle, aynı anda gönderilir. Tek fark `DispatchTime.now()` çağrıları ve `queue.sync` sonrası kısa bir kilit + nadir log satırı (oturum kuyruğunda, girdi kuyruğunun dışında). `InputController` Host hedefinde olduğu için birim testi yok. "Davranış değişmedi" kanıtı kod incelemesi + yeşil kalan 763 test.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - [device] 10 dk karışık kalem + klavye + trackpad, girdi sırasında bir mod değişimi (çözünürlük/ölçek). `input_session_end` satırındaki `deliver_us_* env_us_* post_us_* slow_calls` değerleri build kimliğiyle NOTES'a, tek satır karar: > ~50 µs/mesaj ya da `deliver_us_p99` birkaç ms üstü → optimizasyon kartı, değilse "gerek yok".
+  - Mod değişiminde `ev=input_slow_call stage=env` görülüp görülmediği (en olası yavaş an: `CGDisplayCopyDisplayMode` / yeniden tarama).
+  - Gerçek CGEvent gönderilmedi, uygulama başlatılmadı, GUI açılmadı.
 - **Açık sorular:**
+  - Post süresinin `CGEventSource` kurma ile `post` arasında bölünmesi istenirse `CGEventPoster`'a ince bir zaman kancası gerekir. Kart buna izin veriyor ama kabul kriterleri gerektirmiyor. Cihaz sayıları `post_us` yüksek çıkarsa izleyen kartta yapılabilir.
