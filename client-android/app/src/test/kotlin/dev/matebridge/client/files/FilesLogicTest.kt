@@ -263,15 +263,7 @@ class FilesLogicTest {
 
     // ---- Switch ----
 
-    @Test fun serverRunsOnlyWhenEnabledPermittedAndForeground() {
-        assertTrue(FilesSwitch.shouldRun(enabled = true, permission = true, foreground = true))
-        assertFalse(FilesSwitch.shouldRun(enabled = false, permission = true, foreground = true))
-        assertFalse(FilesSwitch.shouldRun(enabled = true, permission = false, foreground = true))
-        assertFalse(FilesSwitch.shouldRun(enabled = true, permission = true, foreground = false))
-        assertEquals(FilesStatus.DISABLED, FilesSwitch.idleStatus(enabled = false, permission = false))
-        assertEquals(FilesStatus.NO_PERMISSION, FilesSwitch.idleStatus(enabled = true, permission = false))
-        assertEquals(FilesStatus.PAUSED, FilesSwitch.idleStatus(enabled = true, permission = true))
-    }
+    // shouldRun / idleStatus tables: FilesLifecycleTest (T-153).
 
     @Test fun tokenIs32LowercaseHexAndFresh() {
         val r = Random(1)
