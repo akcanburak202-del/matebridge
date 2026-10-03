@@ -1155,3 +1155,12 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
   - Orkestratör notu: bu Claude oturumunun kabuğunda System Events erişilebilirliği pencereleri göremiyor (`count of windows = 0`); onay paneli `screencapture -x` ile okunup CGEvent tıklamasıyla onaylandı (kodlar kullanıcıyla karşılaştırıldıktan sonra).
 - **Dosyalar (5. adım, T-153/T-190/T-206):** "Tablet dosyalarını aç" `mount result=ok`; `scope root=matebridge`. Salt okunur aç/kapa → `scope_change … running=1` → yeni token → Mac `unmount` + `mount result=ok ms=52` kendiliğinden. Kullanıcı: çalışıyor.
 - Denenmeyenler: Finder'dan çıkar + kapsam değiştir (T-206 eject), Yalnız USB modu (T-189), anahtar uyuşmazlığı (T-156), decoder hata enjeksiyonu (T-164, artık `--ez dev true` ister), Wi-Fi takılmasında tuş tekrarı (T-163).
+
+## 2026-10-04 ~00:40–00:57 — Oyun takılması ölçümü (Ori, GameHub, USB, Oyun 60)
+
+- Kurulum: host `MATEBRIDGE_LAT_TRACE=1`, tablet `--ez pace_trace true --ez stats_1s true`; ~3 dk oyun, panel çoğunlukla 120 Hz (dokunma/trackpad; `hz=120` %84).
+- Host temiz: yakalama aralığı (pts) %97,8 tam 16,7 ms; encode ~7 ms; yazma p99 0,36 ms; `sendq` 0; IDR 0. Tablet varış boşlukları temiz (`gaps.py`: > 12 ms geç %0,1). `latency.csv` geri çağrı zamanları ±4 ms titriyor (12,5/20,8 ms kovaları) ama pts düzenli.
+- **Tablette gösterim düzensiz:** 120 Hz panelde 60 fps içerik; tutma 1 vsync %14, 2 vsync %74, 3 vsync %10; hepsi `path=unlocked`. `skip_pct` ortanca %10 (p90 %18,5). Neden: `AdaptivePacer` faz kilidi yalnız içerik ≈ 1 periyotken kuruluyor → T-208.
+- Tablet çözme süresi 2800×1840'ta p50 ~18–19 ms (`dec_p50_us`), takılma kaynağı değil.
+- 1 karelik tampon (`--ez dev true --ei jitter 1`): `skip_pct` %10 → %8,3, yakalama→bırakma p50 19,2 → 26,3 ms; kullanıcı: "takılma hâlâ var gibi". Tampon panel hızında sıraladığı için tutmaları sabitlemiyor.
+- `gaps.py`'nin "keyframes" sayısı boyut sezgisi (büyük kare); gerçek IDR sayısı host `idr=` alanından okunmalı.
