@@ -1,7 +1,7 @@
 ---
 id: T-182
 title: Record decision 0026 and the knob inventory; close T-019 and T-067
-status: todo
+status: review
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -135,22 +135,36 @@ Wire: none.
 
 ## Kabul kriterleri
 
-- [ ] [doc] The existing proposed draft `docs/decisions/0026-experiment-knobs.md` (commit 3e1c3c7; it already has the K4 exception) is updated: add the open point on the jitter buffer 1–2 branch and the per-row file references (or a pointer to `docs/KNOBS.md`), record the user's answers (GL, `nw`, jitter), and set the status to accepted.
-- [ ] [doc] The user has accepted 0026 and has explicitly confirmed retiring the GL presentation path and the `nw` sockets. The answer is recorded in the decision.
-- [ ] [doc] `docs/KNOBS.md` (Turkish prose, table as above) covers all 33 client extras (+4 `net_bench` sub-keys), all 25 host env vars and the 4 CLI modes, each with file reference, card, default, class, outcome and executing card. Row counts are checked against a fresh `grep` at the commit.
-- [ ] [doc] T-019 is closed as won't-do with the note that its Wi-Fi-lock part was superseded by T-089 (`wifi_ll`, kept until T-127). T-067 is closed as won't-do. Both use `status: done`, so they stay on the board.
-- [ ] [doc] `./scripts/board.sh` is re-run and `backlog/BOARD.md` is committed.
+- [x] [doc] The existing proposed draft `docs/decisions/0026-experiment-knobs.md` (commit 3e1c3c7; it already has the K4 exception) is updated: add the open point on the jitter buffer 1–2 branch and the per-row file references (or a pointer to `docs/KNOBS.md`), record the user's answers (GL, `nw`, jitter), and set the status to accepted.
+- [x] [doc] The user has accepted 0026 and has explicitly confirmed retiring the GL presentation path and the `nw` sockets. The answer is recorded in the decision.
+- [x] [doc] `docs/KNOBS.md` (Turkish prose, table as above) covers all 33 client extras (+4 `net_bench` sub-keys), all 25 host env vars and the 4 CLI modes, each with file reference, card, default, class, outcome and executing card. Row counts are checked against a fresh `grep` at the commit.
+- [x] [doc] T-019 is closed as won't-do with the note that its Wi-Fi-lock part was superseded by T-089 (`wifi_ll`, kept until T-127). T-067 is closed as won't-do. Both use `status: done`, so they stay on the board.
+- [x] [doc] `./scripts/board.sh` is re-run and `backlog/BOARD.md` is committed.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. Envanteri HEAD'de (`ef264dd`) yeniden doğrula: istemci `getXxxExtra("…")` + `EXTRA` sabitleri (`MainActivity`, `WifiKnobs`, `AudioPlayout`/`SinkPolicy`/`AudioBufferConfig`, `bench/NetBench.kt`), host `"MATEBRIDGE_*"` dizgileri ve `main.swift` CLI kipleri. Satır numaralarını a30c769'dan HEAD'e güncelle; varsayılanları koddan oku.
+2. `docs/KNOBS.md` yaz (Türkçe): sınıf tanımları, üç tablo (istemci 33 + 4 `net_bench` alt anahtarı, host 25 env, 4 CLI + derleme zamanı), her satırda dosya:satır, kart/kanıt, varsayılan, sınıf, sonuç, uygulayan kart; sayım komutları ve sonuçları; jitter 1–2 açık noktası; planlanan ayarlar; kapsam dışı okunan anahtarlar.
+3. `docs/decisions/0026-experiment-knobs.md`: jitter 1–2 açık noktasını, `docs/KNOBS.md` işaretçisini ve kullanıcı cevaplarını (GL, `nw` onaylı; jitter) ekle. Durum satırı zaten "kabul (2026-10-03)", değişmez.
+4. T-019 ve T-067: `status: done` + tarihli orkestratör notu "Kapatıldı: yapılmayacak (karar 0026)".
+5. `./scripts/board.sh` çalıştır, `backlog/BOARD.md`'yi commit'le; `./scripts/check.sh`; Handoff.
+
+Riskler: kod değişikliği yok. Satır numaraları T-183…T-204 birleştikçe kayar; tablo HEAD SHA'sını belirtir.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `742b6c8` (envanter, 0026, T-019/T-067 kapanışı, BOARD), plan `2dc998b`, Handoff bu dalın son commit'i. Dal `task/T-182-experiment-knob-inventory`, taban `main` `ef264dd`.
+- **Dokunulan dosyalar:** `docs/KNOBS.md` (yeni), `docs/decisions/0026-experiment-knobs.md`, `backlog/tasks/T-019-gl-jitter-wifilock.md`, `backlog/tasks/T-067-client-lock-recenter.md`, `backlog/tasks/T-182-experiment-knob-inventory.md`, `backlog/BOARD.md` (`./scripts/board.sh`). Kod değişikliği yok.
+- **Doğrulama:**
+  - Sayımlar `ef264dd`'de grep ile çıkarıldı: istemci 33 anahtar (`MainActivity` 26, `connected` USB yayını hariç; `WifiKnobs` 4; `EXTRA` sabitleri 3) + 4 `net_bench` alt anahtarı; host 25 farklı `"MATEBRIDGE_*"`; 4 CLI kipi. Kartın tablosuyla birebir aynı küme.
+  - Dosya:satır referansları a30c769'dan HEAD'e güncellendi (MainActivity ~+2 satır kaydı; SessionServer'da Bonjour :228/:1084; NOTES referansları düzeltildi: lead N:352-354, perf hint N:439, H.264 N:532, PRIO_SPEED N:542, boşta tazeleme N:562-579, `nw` N:620-643, retag N:758-805, rvote N:1072-1078).
+  - Varsayılanlar koddan okundu.
+  - `./scripts/check.sh` geçti (ALL OK).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Jitter 1–2 dalı için kullanıcının ayrı bir cevabı bana iletilmedi. 0026 madde 7 ve KNOBS.md bu yüzden onu **yalnızca geliştirici** olarak kaydediyor: T-183 `FramePacer`'ı silmez; T-185'in `--ei jitter 1` kriteri buna dayanıyor. Kullanıcı kaldırmayı seçerse 0026 madde 7 ve KNOBS satır 1 güncellenir, küçük bir izleme kartı açılır.
+  - Kart durumu `review` (orkestratör birleştirince `done` yapar).
+  - 0026 durum satırına dokunulmadı (zaten "kabul (2026-10-03)").
+- **Test edilmeyenler / cihazda doğrulanacaklar:** yok (yalnızca belge).
 - **Açık sorular:**
+  1. Jitter 1–2: kaldırılsın mı? (yukarıdaki varsayım)
+  2. **`VideoTestActivity` dışa açık.** `client-android/app/src/debug/AndroidManifest.xml` onu `exported="true"` tanımlıyor. Günlük APK debug varyantı olduğu için bu etkinlik her uygulamaya açık. 0026'nın 33 anahtarına girmiyor, T-185'in `dev` kapısı da onu kapsamıyor. KNOBS.md *Açık noktalar* 2'ye yazıldı. Öneri: T-185'e ya da ayrı bir küçük karta `exported="false"` eklemek.

@@ -1,7 +1,7 @@
 ---
 id: T-067
 title: Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez
-status: blocked
+status: done
 phase: 5
 owner: android-client-dev
 depends_on: [T-065]
@@ -74,3 +74,7 @@ Merge (566bf15) → cihaz, aynı köşe karesi içeriği, 12 × 14 sn: 33 ms+ bo
 ## Orkestratör notu (2026-10-01 ~12:10): park edildi
 
 Anahtarlar (`keep_jitter`, `recenter`) varsayılan kapalı kalıyor. Kare izi (T-069) gerçek kullanımda kilidin sağlıklı olduğunu gösterdi (120 Hz %0,7 boşluk; 60 Hz planlanan %0,1). 60 Hz'teki asıl konu kilidin ~42 ms gecikmesi (p99 jitter ile merkezleme); ayrı kartta ele alınacak.
+
+## Orkestratör notu (2026-10-03): Kapatıldı: yapılmayacak (karar 0026)
+
+`keep_jitter` ve `recenter` anahtarları sonuçsuz kaldı: tek ölçüm karışıktı, sonra kart park edildi. Karar 0026 ikisini de kaldırıyor. Kod T-183'te silinir (`VsyncClock` alanları, `AdaptivePacer` dalları, `LockRecenterTest`). Envanter: `docs/KNOBS.md` satır 9. `status: done` yalnızca kartın panoda kalması içindir; iş yapılmadı.
