@@ -31,14 +31,19 @@ import dev.matebridge.client.protocol.VideoHello
  * reset on ACCEPTED; BUSY waits at least 3 s). REJECTED and VERSION_MISMATCH do not retry, because
  * retrying would only re-prompt the Mac user or fail again; the user must press connect.
  *
- * Migration (T-096): [Event.Migrate] moves an accepted session to another endpoint (Wi-Fi -> USB) make-before-break,
- * through the host's same-device takeover (PROTOCOL.md section 3.3). A *candidate* control connection is opened next to
- * the current one and sends its own HELLO. Only when it is ACCEPTED (PAIRED) does it become current: the old video
- * closes, the old control connection is *retired* (no BYE, no more input routed to it, already queued messages still
- * drain), and the proof PING goes out first on the new one. The host releases the old session's input and closes it
- * when that proof arrives, and only then sends the new STREAM_CONFIG; the retired connection is closed on that
- * STREAM_CONFIG (or after [RETIRE_TIMEOUT_US]). A candidate that fails in any way is closed alone: the current session
- * is never touched. Every Migrate yields exactly one [Action.MigrationResult].
+ * Migration (T-096, T-205): [Event.Migrate] moves an accepted session to another endpoint (Wi-Fi -> USB)
+ * make-before-break, through the host's same-device takeover (PROTOCOL.md section 3.3). A *candidate* control connection
+ * is opened next to the current one and sends its own HELLO. Its plaintext ACCEPTED (PAIRED) ack proves nothing (any app
+ * holding the loopback port can send one with the real host_id), so the candidate then sends the proof PING **on itself**
+ * and waits (`migration_proof_wait`) while the current session stays current and keeps carrying input. Only the
+ * candidate's first host record that decrypts and authenticates (the reader delivers nothing else) promotes it: the old
+ * video closes, the old control connection is *retired* (no BYE, no more input routed to it, already queued messages
+ * still drain), the remembered settings follow the proof PING on the new one, and that first record (normally the new
+ * STREAM_CONFIG) is handled as the new session's. The host supersedes the old session (releases its input, BYE(SUPERSEDED),
+ * close) on our proof, so that BYE and close may arrive while the proof is pending: they do not end the session, the
+ * candidate's outcome decides (if it fails then, the session is lost and reconnects). The retired connection is closed on
+ * the new STREAM_CONFIG (or after [RETIRE_TIMEOUT_US]). A candidate that fails in any way is closed alone: the current
+ * session is never touched while it lives. Every Migrate yields exactly one [Action.MigrationResult].
  *
  * Local trust (T-150, decision 0018): a session is accepted only when the host accepted it **and** its key is locally
  * trusted. A PAIRED first ack derives with the trusted key, so it is both at once. A PAIRING session keeps its new key
@@ -135,7 +140,7 @@ class SessionMachine(
         data class Ui(val state: SessionUi) : Action
         /** T-096: open a candidate control connection beside the current one (its events carry [gen]). */
         data class OpenCandidate(val gen: Int, val endpoint: Endpoint) : Action
-        /** T-096: send on the candidate connection (only its HELLO). */
+        /** T-096: send on the candidate connection (its HELLO, then T-205's proof PING). */
         data class SendCandidate(val msg: Message) : Action
         /** T-096: abort the candidate connection. */
         data object CloseCandidate : Action
@@ -202,6 +207,15 @@ class SessionMachine(
     private var candGen = -1
     private var candEndpoint: Endpoint? = null
     private var candDeadlineUs = 0L
+    /** T-205: the candidate's plaintext ACCEPTED ack (non-null = its proof PING went out; waiting for its first record). */
+    private var candAck: HelloAck? = null
+    /** T-205: host_id of the candidate's handshake (from its Secured event); must be the current session's. */
+    private var candHostId: ByteArray? = null
+    /**
+     * T-205: while the proof is pending, the host already superseded (BYE(SUPERSEDED)) or closed the current connection.
+     * Nothing is sent or retried on it any more; the candidate's outcome decides (a failure then loses the session).
+     */
+    private var oldGone = false
     private var retiredGen = -1
     private var retireDeadlineUs = 0L
 
@@ -287,7 +301,7 @@ class SessionMachine(
                 }
             }
             is Event.Migrate -> onMigrate(event.endpoint, nowUs, out)
-            Event.CancelMigration -> abortMigration(out, REASON_CANCELLED) // no candidate (none, or promoted): nothing
+            Event.CancelMigration -> failCandidate(out, nowUs, REASON_CANCELLED) // no candidate (none, or promoted): nothing
             is Event.ControlOpened -> if (isCandidate(event.gen)) {
                 out += Action.SendCandidate(hello)
             } else if (event.gen == controlGen && phase == Phase.CONNECTING) {
@@ -298,9 +312,16 @@ class SessionMachine(
                 out += Action.Send(hello)
             }
             is Event.ControlClosed -> if (isCandidate(event.gen)) {
-                abortMigration(out, if (event.connectFailed) REASON_CONNECT_FAILED else REASON_CLOSED)
+                val reason = when {
+                    candAck != null -> REASON_PROOF_CLOSED
+                    event.connectFailed -> REASON_CONNECT_FAILED
+                    else -> REASON_CLOSED
+                }
+                failCandidate(out, nowUs, reason)
             } else if (event.gen == controlGen) {
-                if (wakeAttempt != null) {
+                if (candAck != null) {
+                    oldConnectionGone("closed") // T-205: the host's takeover may close it before the candidate's record
+                } else if (wakeAttempt != null) {
                     // T-134: a wake attempt that did not connect has no retry timer; the wake planner paces attempts.
                     wakeAttempt = null
                     closeAll(out, graceful = false)
@@ -311,7 +332,8 @@ class SessionMachine(
                 }
             }
             is Event.ProtocolError -> if (isCandidate(event.gen)) {
-                abortMigration(out, REASON_PROTOCOL_ERROR)
+                // T-205: after the proof PING this is the candidate's first record failing to authenticate (a squatter).
+                failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_FAILED else REASON_PROTOCOL_ERROR)
             } else if (event.gen == controlGen) {
                 // No BYE: the channel is not trusted after a failed record (PROTOCOL.md section 9).
                 lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
@@ -320,9 +342,10 @@ class SessionMachine(
                 onSecured(event, out)
             } else {
                 event.pendingKey?.value?.fill(0) // a stale reader (stopped or superseded connection) never writes
+                if (isCandidate(event.gen)) onCandidateSecured(event, nowUs, out) // T-205: never stores or pends a key
             }
             is Event.PairingNeedsUser -> if (isCandidate(event.gen)) {
-                abortMigration(out, REASON_KEY) // a migration never pairs
+                failCandidate(out, nowUs, REASON_KEY) // a migration never pairs
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED // no retry: each one would raise a new approval dialog on the Mac
@@ -330,7 +353,7 @@ class SessionMachine(
                 out += Action.Ui(SessionUi.PairingNeedsUser(event.hostName, event.rePair))
             }
             is Event.PairedWithPending -> if (isCandidate(event.gen)) {
-                abortMigration(out, REASON_KEY)
+                failCandidate(out, nowUs, REASON_KEY)
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 val pending = try { trust?.freshPending(event.hostId.value) } catch (e: Exception) { null }
@@ -361,14 +384,14 @@ class SessionMachine(
             }
             Event.ForgetHost -> onForget(out)
             is Event.KeyStoreFailed -> if (isCandidate(event.gen)) {
-                abortMigration(out, REASON_KEY)
+                failCandidate(out, nowUs, REASON_KEY)
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED
                 out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
             }
             is Event.KeyMissing -> if (isCandidate(event.gen)) {
-                abortMigration(out, REASON_KEY)
+                failCandidate(out, nowUs, REASON_KEY)
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED
@@ -431,6 +454,10 @@ class SessionMachine(
             SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is Clipboard -> if (inputAllowed) out += Action.DeliverClipboard(msg, controlGen) // T-150: never before local trust
             is Bye -> {
+                if (msg.reason == Bye.SUPERSEDED && candAck != null) {
+                    oldConnectionGone("bye") // T-205: the host took over for our candidate's proof; it decides now
+                    return
+                }
                 if (msg.reason == Bye.REJECTED) onPairingRejected()
                 if (msg.reason == Bye.REJECTED || msg.reason == Bye.HOST_SLEEP) {
                     // HOST_SLEEP (T-133): every packet to a sleeping Mac dark-wakes it, so no retry timer either.
@@ -503,12 +530,15 @@ class SessionMachine(
         videoPort = ack.videoPort
     }
 
-    /** Host accepted and locally trusted: the session opens (proof PING first, then the remembered settings). */
-    private fun acceptSession(nowUs: Long, out: MutableList<Action>) {
+    /**
+     * Host accepted and locally trusted: the session opens (proof PING first, then the remembered settings). [proofSent]
+     * (T-205 promotion): the proof PING already went out on this connection, so the settings follow it directly.
+     */
+    private fun acceptSession(nowUs: Long, out: MutableList<Action>, proofSent: Boolean = false) {
         lastPongUs = nowUs
         pairingCode = null
         // First authenticated record: the host activates/keeps this connection only after it (PROTOCOL.md section 3).
-        out += Action.Send(Ping(pingSeq++, nowUs))
+        if (!proofSent) out += Action.Send(Ping(pingSeq++, nowUs))
         out += Action.Send(prefs) // T-050: right after the proof PING, never before it
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
         audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
@@ -758,8 +788,13 @@ class SessionMachine(
                 return
             }
         }
-        if (candGen >= 0 && nowUs >= candDeadlineUs) abortMigration(out, REASON_TIMEOUT)
+        if (candGen >= 0 && nowUs >= candDeadlineUs) {
+            failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_TIMEOUT else REASON_TIMEOUT)
+        }
         if (retiredGen >= 0 && nowUs >= retireDeadlineUs) closeRetired(out)
+        // T-205: the host superseded the current connection for our pending proof: no PONG timeout, ping or video retry
+        // on it; the candidate's first record or its deadline (above) decides.
+        if (oldGone) return
         when (phase) {
             Phase.WAIT_RETRY -> if (nowUs >= retryAtUs) openControl(out)
             Phase.AWAIT_ACK, Phase.PENDING, Phase.HOST_ACCEPTED_UNTRUSTED, Phase.ACCEPTED, Phase.STREAMING -> {
@@ -873,14 +908,57 @@ class SessionMachine(
         out += Action.OpenCandidate(candGen, target)
     }
 
+    /** T-205: the candidate's handshake (PAIRED, read-only store): its key is never kept; it must be the same Mac. */
+    private fun onCandidateSecured(event: Event.Secured, nowUs: Long, out: MutableList<Action>) {
+        val id = event.hostId?.value
+        val current = sessionHostId
+        if (event.code != null || (id != null && current != null && !id.contentEquals(current))) {
+            failCandidate(out, nowUs, REASON_KEY)
+            return
+        }
+        candHostId = id?.copyOf()
+    }
+
     private fun onCandidateMessage(msg: Message, nowUs: Long, out: MutableList<Action>) {
+        if (candAck != null) {
+            // T-205: the reader delivers a record only after it decrypted and authenticated it: the host holds our key.
+            if (msg is Bye) failCandidate(out, nowUs, REASON_PROOF_CLOSED) else promote(msg, nowUs, out)
+            return
+        }
         when {
-            msg is HelloAck && msg.status == HelloAck.ACCEPTED -> promote(msg, nowUs, out)
+            msg is HelloAck && msg.status == HelloAck.ACCEPTED -> startProof(msg, nowUs, out)
             // PENDING_APPROVAL cannot be a takeover (the host answers BUSY then): never pair through a migration.
-            msg is HelloAck -> abortMigration(out, "ack_${msg.status}")
-            msg is Bye -> abortMigration(out, REASON_CLOSED)
+            msg is HelloAck -> failCandidate(out, nowUs, "ack_${msg.status}")
+            msg is Bye -> failCandidate(out, nowUs, REASON_CLOSED)
             else -> Unit // nothing else is expected before ACCEPTED
         }
+    }
+
+    /**
+     * T-205: the candidate's plaintext ACCEPTED proves nothing yet. The proof PING (its first sealed record) goes out on
+     * the candidate; the current session stays current, input keeps flowing on it, its video stays open.
+     */
+    private fun startProof(ack: HelloAck, nowUs: Long, out: MutableList<Action>) {
+        candAck = ack
+        out += Action.SendCandidate(Ping(pingSeq++, nowUs))
+        log('I', "migration_proof_wait", "cand_gen=$candGen")
+    }
+
+    /** T-205: BYE(SUPERSEDED) or a close of the current connection while the candidate's proof is pending. */
+    private fun oldConnectionGone(how: String) {
+        if (oldGone) return
+        oldGone = true
+        log('I', "migration_old_gone", "how=$how")
+    }
+
+    /**
+     * A candidate failure: the candidate is closed and reported ([abortMigration]). If the host already superseded the
+     * current connection for its proof ([oldGone]), the session has no live connection left: it is lost and reconnects.
+     */
+    private fun failCandidate(out: MutableList<Action>, nowUs: Long, reason: String) {
+        val gone = oldGone
+        abortMigration(out, reason)
+        if (gone) lose(out, nowUs, SessionUi.Cause.LOST)
     }
 
     /** Closes the candidate (if any) and reports the failed migration; the current session is not touched. */
@@ -889,8 +967,15 @@ class SessionMachine(
         if (candGen < 0 || ep == null) return
         out += Action.CloseCandidate
         out += Action.MigrationResult(ep, false, reason)
+        clearCandidate()
+    }
+
+    private fun clearCandidate() {
         candGen = -1
         candEndpoint = null
+        candAck = null
+        candHostId = null
+        oldGone = false
     }
 
     private fun closeRetired(out: MutableList<Action>) {
@@ -900,15 +985,17 @@ class SessionMachine(
     }
 
     /**
-     * The candidate was ACCEPTED: it becomes the session. The old control connection is retired without a BYE (a BYE
-     * that reached the host before our proof would end the session the takeover is about to supersede); the host
-     * releases its input and closes it on the proof PING sent first below (PROTOCOL.md sections 3.3 and 7).
+     * T-205: the candidate's first authenticated host record [first] arrived: it becomes the session. The old control
+     * connection is retired without a BYE (a BYE that reached the host before our proof would end the session the
+     * takeover supersedes); the host releases its input and closes it on the proof (PROTOCOL.md sections 3.3 and 7).
+     * The settings follow the proof PING already queued on the candidate; then [first] is the new session's message.
      */
-    private fun promote(ack: HelloAck, nowUs: Long, out: MutableList<Action>) {
+    private fun promote(first: Message, nowUs: Long, out: MutableList<Action>) {
         val gen = candGen
         val ep = candEndpoint ?: return
-        candGen = -1
-        candEndpoint = null
+        val ack = candAck ?: return
+        val hostId = candHostId ?: sessionHostId // same Mac (PAIRED takeover with the same trusted key)
+        clearCandidate()
         closeRetired(out) // an earlier migration's leftover, if any
         if (videoGen >= 0) out += Action.CloseVideo // the old session's frames must not reach the new stream's decoder
         if (controlGen >= 0) {
@@ -916,15 +1003,17 @@ class SessionMachine(
             retiredGen = controlGen
             retireDeadlineUs = nowUs + RETIRE_TIMEOUT_US
         }
-        val hostId = sessionHostId // same Mac (PAIRED takeover with the same trusted key)
         resetSessionFields()
         sessionHostId = hostId
         controlGen = gen
         endpoint = ep
         out += Action.PromoteCandidate(gen, ep)
-        phase = Phase.AWAIT_ACK
-        onAck(ack, nowUs, out) // proof PING first, then STREAM_PREFS / DISPLAY_RATE / AUDIO_PREFS / FILES_INFO, Ui(Connected)
+        log('I', "migration_proved", "cand_gen=$gen")
+        locallyTrusted = true // the candidate inherits the replaced session's trust (same host_id, same trusted key)
+        takeAck(ack)
+        acceptSession(nowUs, out, proofSent = true) // STREAM_PREFS / DISPLAY_RATE / AUDIO_PREFS / FILES_INFO, Ui(Connected)
         out += Action.MigrationResult(ep, true, REASON_OK)
+        onMessage(first, nowUs, out) // normally the new STREAM_CONFIG: closes the retired connection, opens video
     }
 
     companion object {
@@ -952,6 +1041,12 @@ class SessionMachine(
         const val REASON_SAME_ENDPOINT = "same_endpoint"
         const val REASON_SESSION_CLOSED = "session_closed"
         const val REASON_CANCELLED = "cancelled"
+        /** T-205: after the proof PING, the candidate's first record did not authenticate (a squatter). HARD_FAIL. */
+        const val REASON_PROOF_FAILED = "proof_failed"
+        /** T-205: after the proof PING, the candidate closed (or said BYE) before an authenticated record. HARD_FAIL. */
+        const val REASON_PROOF_CLOSED = "proof_closed"
+        /** T-205: after the proof PING, no authenticated record before the candidate deadline. HARD_FAIL. */
+        const val REASON_PROOF_TIMEOUT = "proof_timeout"
 
         /** T-150 `pair_trust_cancelled reason=` (with [REASON_TIMEOUT]). */
         const val REASON_USER = "user"

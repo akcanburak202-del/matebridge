@@ -6,6 +6,7 @@ import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.DisplayRate
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
+import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Ping
 import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.StreamConfig
@@ -17,7 +18,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-096: moving an accepted session to another endpoint via the host's takeover (PROTOCOL.md section 3.3). */
+/**
+ * T-096: moving an accepted session to another endpoint via the host's takeover (PROTOCOL.md section 3.3). T-205 order:
+ * the candidate's plaintext ACCEPTED only sends the proof PING; its first authenticated record retires and promotes.
+ */
 class MigrationTest {
     private val hello = Hello(0, Bytes(ByteArray(16) { it.toByte() }), 2800, 1840, 360, 144, 0xFF, "MatePad")
     private val wifi = Endpoint("10.0.0.5", 47001)
@@ -54,15 +58,37 @@ class MigrationTest {
         return open.gen
     }
 
-    @Test fun successfulMigrationRetiresThenPromotesThenProvesFirst() {
+    /** T-205: the candidate's plaintext ACCEPTED (proof PING goes out on it), then its first authenticated record. */
+    private fun proved(cand: Int, session: Long = 78, first: Message = Pong(0, 0, 0)): List<Action> {
+        val a = step(Event.Received(cand, ack(HelloAck.ACCEPTED, session, 47002)))
+        assertTrue(a.any { it is Action.SendCandidate && it.msg is Ping })
+        return step(Event.Received(cand, first))
+    }
+
+    @Test fun successfulMigrationProvesThenRetiresAndPromotes() {
         val old = streamingOnWifi()
         val cand = candidateOpen()
         assertTrue(m.migrating)
         assertTrue(m.inputAllowed) // the Wi-Fi session keeps working while the candidate handshakes
 
-        val r = step(Event.Received(cand, ack(HelloAck.ACCEPTED, 78, 47002)))
+        // T-205: the plaintext ACCEPTED only sends the proof PING on the candidate; nothing else changes.
+        val a = step(Event.Received(cand, ack(HelloAck.ACCEPTED, 78, 47002)))
+        assertEquals(1, a.size)
+        assertTrue((a.single() as Action.SendCandidate).msg is Ping)
+        assertTrue(m.inputAllowed)
+        assertEquals(old, m.acceptedGen)
+        assertTrue(m.migrating)
+        assertEquals(77L, m.currentSessionId)
+
+        // The host supersedes the old session on that proof: its BYE(SUPERSEDED) and close may come first; harmless.
+        assertTrue(step(Event.Received(old, Bye(Bye.SUPERSEDED))).isEmpty())
+        assertTrue(step(Event.ControlClosed(old)).isEmpty())
+        assertTrue(m.inputAllowed)
+
+        // The candidate's first authenticated record (the host's STREAM_CONFIG) promotes it.
+        val r = step(Event.Received(cand, cfg(1)))
         // Order: old video closed, old control retired (never a BYE, never a hard close), then the candidate is promoted,
-        // then the proof PING goes out first, then the display/audio settings, then the UI stays Connected.
+        // then the settings (behind the proof PING already queued on it), Ui Connected, the result, the new config.
         val iVideo = r.indexOf(Action.CloseVideo)
         val iRetire = r.indexOf(Action.RetireControl)
         val iPromote = r.indexOfFirst { it is Action.PromoteCandidate }
@@ -70,27 +96,28 @@ class MigrationTest {
         assertTrue(iVideo in 0 until iPromote && iRetire in 0 until iPromote)
         assertTrue(sends.first().index > iPromote)
         assertEquals(
-            listOf(Ping::class.java, StreamPrefs::class.java, DisplayRate::class.java, AudioPrefs::class.java),
+            listOf(StreamPrefs::class.java, DisplayRate::class.java, AudioPrefs::class.java), // no second PING
             sends.map { (it.value as Action.Send).msg.javaClass },
         )
-        assertFalse(sends.any { (it.value as Action.Send).msg is Bye })
         assertFalse(r.has<Action.CloseControl>())
+        assertEquals(1, r.count { it == Action.CloseVideo }) // the old video closes once
         assertEquals(Action.PromoteCandidate(cand, usb), r[iPromote])
-        assertEquals(Action.MigrationResult(usb, true, SessionMachine.REASON_OK), r.last())
+        val iResult = r.indexOf(Action.MigrationResult(usb, true, SessionMachine.REASON_OK))
+        assertTrue(iResult > sends.last().index)
         assertEquals(listOf<SessionUi>(SessionUi.Connected("Mac mini", 0)), r.filterIsInstance<Action.Ui>().map { it.state })
+        // the STREAM_CONFIG (sent by the host only after it superseded the old one) closes the retired connection, and
+        // exactly one video connection opens, on the USB endpoint
+        assertTrue(r.indexOf(Action.CloseRetired) in iResult until r.indexOfFirst { it is Action.ApplyConfig })
+        assertEquals(1, r.count { it is Action.ApplyConfig })
+        assertEquals(Endpoint(usb.host, 47002), r.only<Action.OpenVideo>().endpoint)
         assertTrue(m.inputAllowed)
         assertFalse(m.migrating)
+        assertEquals(cand, m.acceptedGen)
         assertEquals(78L, m.currentSessionId)
 
         // The old connection's late events are ignored.
         assertTrue(step(Event.ControlClosed(old)).isEmpty())
         assertTrue(step(Event.Received(old, Bye(Bye.SUPERSEDED))).isEmpty())
-
-        // The new session's STREAM_CONFIG (sent by the host only after it superseded the old one) closes the retired one,
-        // and video opens on the USB endpoint.
-        val c = step(Event.Received(cand, cfg(1)))
-        assertTrue(c.indexOf(Action.CloseRetired) in 0 until c.indexOfFirst { it is Action.ApplyConfig })
-        assertEquals(Endpoint(usb.host, 47002), c.only<Action.OpenVideo>().endpoint)
         // the generation is the session now: its loss reconnects to USB
         val lost = step(Event.ControlClosed(cand))
         assertTrue(lost.filterIsInstance<Action.Ui>().single().state is SessionUi.Disconnected)
@@ -100,7 +127,7 @@ class MigrationTest {
     @Test fun retiredConnectionIsClosedAfterTimeoutWithoutStreamConfig() {
         streamingOnWifi()
         val cand = candidateOpen()
-        step(Event.Received(cand, ack(HelloAck.ACCEPTED, 78, 47002)))
+        assertTrue(proved(cand).has<Action.PromoteCandidate>()) // first record a PONG: no STREAM_CONFIG yet
         assertFalse(step(Event.Tick(0), SessionMachine.RETIRE_TIMEOUT_US - 1).has<Action.CloseRetired>())
         assertTrue(step(Event.Tick(0), 1).has<Action.CloseRetired>())
         assertFalse(step(Event.Tick(0), 1_000_000).has<Action.CloseRetired>()) // once
@@ -204,7 +231,7 @@ class MigrationTest {
     @Test fun stopAfterPromotionClosesRetiredAndCurrent() {
         streamingOnWifi()
         val cand = candidateOpen()
-        step(Event.Received(cand, ack(HelloAck.ACCEPTED, 78, 47002)))
+        proved(cand)
         val r = step(Event.Stop)
         assertTrue(r.has<Action.CloseRetired>())
         assertEquals(true, r.only<Action.CloseControl>().graceful) // BYE on the new (current) session
@@ -214,11 +241,11 @@ class MigrationTest {
     @Test fun backToBackMigrationsCloseTheEarlierRetiredFirst() {
         streamingOnWifi()
         val c1 = candidateOpen()
-        step(Event.Received(c1, ack(HelloAck.ACCEPTED, 78, 47002)))
+        proved(c1)
         // now on USB; migrate back to Wi-Fi before the first retired connection was closed
         val o2 = step(Event.Migrate(wifi)).only<Action.OpenCandidate>()
         step(Event.ControlOpened(o2.gen))
-        val r = step(Event.Received(o2.gen, ack(HelloAck.ACCEPTED, 79, 47002)))
+        val r = proved(o2.gen, 79)
         val iClose = r.indexOf(Action.CloseRetired)
         val iRetire = r.indexOf(Action.RetireControl)
         assertTrue(iClose in 0 until iRetire)

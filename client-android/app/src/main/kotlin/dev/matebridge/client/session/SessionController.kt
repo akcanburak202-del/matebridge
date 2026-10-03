@@ -298,7 +298,8 @@ class SessionController(
 
     /**
      * Non-blocking. T-096: moves the accepted session to [endpoint] via the host's takeover, make-before-break (see
-     * [SessionMachine]). The result arrives as [SessionListener.onMigration].
+     * [SessionMachine]). T-205: the switch happens only after the candidate's first authenticated host record; until
+     * then the current connection stays current and carries input. The result arrives as [SessionListener.onMigration].
      */
     fun migrate(endpoint: Endpoint) {
         if (terminated.get()) return
@@ -344,7 +345,8 @@ class SessionController(
      * T-096: [trySend] for input, only onto control connection [gen] (the one the input layer last reset its model for,
      * see [SessionListener.onConnectionGen]). After a migration switch, input produced from the old connection's model
      * (a mid-stroke contact, a held key) is refused instead of reaching the new session; the refusal makes the input
-     * layer forget that model. The old connection's input is released by the host (takeover / disconnect).
+     * layer forget that model. The old connection's input is released by the host (takeover / disconnect). T-205: while
+     * a candidate's proof is pending, [gen] of the current connection is still accepted (the switch has not happened).
      */
     fun trySendInput(msg: Message, gen: Int): Boolean {
         if (!inputAllowed) return false
@@ -428,6 +430,8 @@ class SessionController(
         val allowed = machine.inputAllowed
         // Input stops before the actions run (as before), but starts only after them: the proof PING and STREAM_PREFS
         // are queued first (PROTOCOL.md section 3). A migration switch closes the gate while the connections swap.
+        // T-205: that switch comes only with the candidate's first authenticated record; while its proof is pending the
+        // gate stays open on the current generation, so a release (key up, pen up) made meanwhile is never refused.
         if (!allowed || actions.any { it is SessionMachine.Action.PromoteCandidate }) inputAllowed = false
         // T-150: inbound audio follows the machine's accepted (and locally trusted) generation. Set before the actions so
         // the AUDIO_CONFIG answering the AUDIO_PREFS queued below can never arrive ahead of the gate.
@@ -524,6 +528,7 @@ class SessionController(
             is SessionMachine.Action.SendCandidate -> {
                 val c = candidate
                 if (a.msg is Hello) MbLog.i("hello_sent", "proto=${a.msg.protocolVersion} cand_gen=${c?.gen ?: -1}")
+                // T-205: the proof PING is sealed by the candidate's writer (its keys are set before its ack is posted).
                 c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg)
             }
             SessionMachine.Action.CloseCandidate -> {

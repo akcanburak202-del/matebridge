@@ -3,6 +3,7 @@ package dev.matebridge.client.session
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
+import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.session.SessionMachine.Action
 import dev.matebridge.client.session.SessionMachine.Event
@@ -51,7 +52,8 @@ class MigrationCancelTest {
     @Test fun cancelWithoutCandidateOrAfterPromotionDoesNothing() {
         assertTrue(step(Event.CancelMigration).isEmpty())
         val (_, cand) = streamingOnWifiWithCandidate()
-        assertTrue(step(Event.Received(cand, ack())).any { it is Action.PromoteCandidate })
+        step(Event.Received(cand, ack())) // T-205: the plaintext ack only sends the proof PING
+        assertTrue(step(Event.Received(cand, Pong(0, 0, 0))).any { it is Action.PromoteCandidate }) // first authenticated record
         assertTrue(step(Event.CancelMigration).isEmpty()) // too late: the UI rejects the result instead
     }
 
