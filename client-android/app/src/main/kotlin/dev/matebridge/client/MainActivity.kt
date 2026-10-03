@@ -354,6 +354,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // T-146: names the build once per process in every client log (no serial, no device id).
+        if (BuildInfo.claimAppStart()) MbLog.i("app_start", BuildInfo.current.logFields(Build.VERSION.SDK_INT, Build.DISPLAY))
         // T-090: `--es net_bench HOST:PORT` runs only the raw TCP throughput bench; no session is set up here.
         if (intent?.hasExtra(dev.matebridge.client.bench.NetBenchConfig.EXTRA) == true) {
             benchForwarded = true
