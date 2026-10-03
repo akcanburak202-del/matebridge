@@ -36,7 +36,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
 | [T-217](tasks/T-217-client-decoder-latency-knobs-ab.md) | A/B HiSilicon decoder low-latency keys and operating rate (dev knob) | 6 | android-client-dev | [T-185, T-219] |
 | [T-218](tasks/T-218-client-video-loss-input-gate.md) | Gate input on video-only loss (stale picture must not keep input live) | 6 | android-client-dev | [T-159, T-160] |
-| [T-219](tasks/T-219-client-decoder-queue-generation-ownership.md) | Decoder input queue: a retired generation must not consume the next generation's frames | 6 | android-client-dev | [T-161] |
 | [T-220](tasks/T-220-client-presentation-metric-and-game120-cadence.md) | One presentation metric across pacers; infer 60 fps cadence in Oyun 120 | 6 | android-client-dev | [T-208, T-211] |
 
 ## done
@@ -230,3 +229,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-211](tasks/T-211-client-game-mode-adaptive-default.md) | Game modes use the adaptive pacer by default (decision 0014 §2 amended) | 6 | android-client-dev | [T-208, T-210] |
 | [T-213](tasks/T-213-game-display-protocol.md) | STREAM_PREFS optional game display group: codecs and fixture tests (Swift + Kotlin) | 6 | orchestrator | [] |
 | [T-215](tasks/T-215-client-game-resolution.md) | Client: "Oyun çözünürlüğü" setting and game display prefs (decision 0029) | 6 | android-client-dev | [T-213] |
+| [T-219](tasks/T-219-client-decoder-queue-generation-ownership.md) | Decoder input queue: a retired generation must not consume the next generation's frames | 6 | android-client-dev | [T-161] |

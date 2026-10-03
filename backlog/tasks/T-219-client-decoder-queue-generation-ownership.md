@@ -1,7 +1,7 @@
 ---
 id: T-219
 title: Decoder input queue: a retired generation must not consume the next generation's frames
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-161]
