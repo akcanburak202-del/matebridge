@@ -37,7 +37,11 @@ Cihaz oturumu 2026-10-04 (docs/NOTES.md, 4. adım): Mac'te "Onaylı cihazları u
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Kimlik etiketi (dosya listesi dışı, minimal):** `SessionUi.kt` içine opak `HostTag` (16 bayt host_id, içerik eşitliği, `toString()` değer göstermez, sıfır kimlik = null). `SessionUi.PairingNeedsUser` ve `SessionUi.Connected` birer `hostTag: HostTag? = null` alanı alır. `SessionMachine.Event.PairingNeedsUser` ack'in host_id'sini taşır (`FirstAck`, `SessionController.kt`, tek satır: `ack.hostId`). Makine `Connected`'a etiketi yalnızca oturumun host'u **doğrulanmışken** koyar (ilk mühürlü kayıt görüldü: PAIRED'de güvenilen anahtarla türetilmiş kayıt, eşleşmede yerel "Güven" + host'un mühürlü ACCEPTED'ı). Düz (şifresiz) ilk ack'teki `Connected` etiketsiz kalır.
+2. **`PairPick` (TrustUiText.kt):** `asked` artık uç nokta → PAIRING cevabının iddia ettiği `HostTag`. Etiketli bir `Connected` (oturum başına bir kez, etiket değişince) o etiketle işaretlenmiş uç noktaların işaretini kaldırır; başka/bilinmeyen etiketliler işaretli kalır (0018). Kaldırılanlar `takeCleared()` ile alınır.
+3. **`AutoTransport.kt`:** `AutoUsbPolicy.onUsbUnblocked(now)` (sayaçlar sıfır, hemen denenebilir); `fallbackReason(ui)`: `PairingNeedsUser` → `usb_asked`, diğerleri `usb_lost`.
+4. **`MainActivity.kt`:** `render` → temizlenen uç noktalar `ev=pair_asked_cleared count= usb=` (adres/isim yok); USB temizlendiyse AUTO'da `onUsbUnblocked` + hemen `autoStep`. `fallBackToWifi` nedeni `fallbackReason`'dan.
+5. **Testler:** `PairTrustFlowTest` (gerçek kripto: USB ve Wi-Fi PAIRING → Wi-Fi'de eşleş + güven → `Connected` etiketli; aynı etiket → USB işareti kalkar, policy MIGRATE; sahte/başka host_id işaretli kalır), `TrustUiTest` (PairPick), `AutoTransportTest` (`usb_asked`, `onUsbUnblocked`).
 
 ## Handoff
 
