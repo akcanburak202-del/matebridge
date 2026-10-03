@@ -134,6 +134,10 @@ public final class SessionServer: @unchecked Sendable {
         /// Whether `openSettingsPanel()` can reach the tablet now: an ACCEPTED session whose HELLO announced
         /// `SETTINGS_PANEL` (decision 0013). Called on changes only, in order with `stateChanged`.
         public var settingsPanelAvailable: @Sendable (Bool) -> Void = { _ in }
+        /// The network profile in force and the one waiting for the live session to end (nil: none waits), T-189.
+        /// Called on every change, after `start()` and after `setNetworkProfile`.
+        public var networkProfileChanged: @Sendable (_ applied: NetworkProfile, _ pending: NetworkProfile?) -> Void
+            = { _, _ in }
         public init() {}
     }
 
@@ -171,6 +175,12 @@ public final class SessionServer: @unchecked Sendable {
     private var wolTicks = 0
     static let wolReconcileTicks = 600
     private var videoListener: BsdTcpListener?
+    /// The profile both listeners and Bonjour run under (decision 0027, T-189), and the one requested from the menu.
+    /// They differ only while a live session defers the switch (`NetworkProfileSwitch`).
+    private var networkProfile: NetworkProfile
+    private var requestedNetworkProfile: NetworkProfile
+    /// Last value reported through `handlers.networkProfileChanged`.
+    private var reportedNetworkProfile: (NetworkProfile, NetworkProfile?)?
     private var nextID: UInt64 = 0
     private var controlConnections: [ConnectionID: BsdTcpConnection] = [:]
     /// Inbound decoder and outbound sealer of each control connection. Plain until the first HELLO_ACK went out.
@@ -265,12 +275,13 @@ public final class SessionServer: @unchecked Sendable {
     ///   - controlPort: preferred control port (default 47001, for `adb reverse`); falls back to a system-assigned
     ///     port when taken. 0 means system-assigned only.
     ///   - videoPort: same for the video listener (default 47002).
+    ///   - networkProfile: listening surface at start ("USB + Wi-Fi" or "Yalnız USB", T-189).
     ///   - makeStreamConfig: placeholder until the video pipeline (T-011) supplies the real configuration.
     public init(handlers: Handlers, store: ApprovedDeviceStore = ApprovedDeviceStore(directory: ApprovedDeviceStore.defaultDirectory()),
                 pairKeys: PairKeyStore = KeychainPairKeyStore(),
                 identity: HostIdentityStore.Identity = HostIdentityStore(directory: ApprovedDeviceStore.defaultDirectory()).resolve(),
                 hostName: String = Host.current().localizedName ?? "Mac", controlPort: UInt16 = DefaultPorts.control,
-                videoPort: UInt16 = DefaultPorts.video,
+                videoPort: UInt16 = DefaultPorts.video, networkProfile: NetworkProfile = .all,
                 makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig = SessionServer.defaultStreamConfig) {
         self.handlers = handlers
         queue.setSpecific(key: queueKey, value: true)
@@ -279,6 +290,8 @@ public final class SessionServer: @unchecked Sendable {
         self.identity = identity
         self.requestedControlPort = controlPort
         self.requestedVideoPort = videoPort
+        self.networkProfile = networkProfile
+        self.requestedNetworkProfile = networkProfile
         let known = store.load()
         self.knownDevices = known
         var configuration = SessionMachine.Configuration(hostName: hostName, makeStreamConfig: makeStreamConfig,
@@ -310,6 +323,7 @@ public final class SessionServer: @unchecked Sendable {
             startPathMonitor()
             startListeners()
             startTicking()
+            reportNetworkProfile()
         }
     }
 
@@ -453,7 +467,8 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Tries the preferred video port, then a system-assigned one (logged), on a kernel socket (dual-stack
-    /// `[::]:port`, T-091). Binding is synchronous, so the listener is ready (or failed) right here.
+    /// `[::]:port`, T-091; IPv4 loopback only in the "Yalnız USB" profile, T-189). Binding is synchronous, so the
+    /// listener is ready (or failed) right here.
     private func startVideoListener(plan: ListenerPortPlan) {
         guard !stopped else { return }
         var plan = plan
@@ -464,7 +479,7 @@ public final class SessionServer: @unchecked Sendable {
                                     serviceClass: Self.serviceClass.videoClass)
         let listener: BsdTcpListener
         do {
-            listener = try BsdTcpListener(port: port, options: options, queue: queue)
+            listener = try BsdTcpListener(port: port, bind: networkProfile.bindAddress, options: options, queue: queue)
         } catch {
             if fixed {
                 logFallback("video", port)
@@ -566,6 +581,61 @@ public final class SessionServer: @unchecked Sendable {
             logger.log(.warning, "sessions_ended_by_host", sessionID: currentSessionID, generation: currentConfigID)
             apply(machine.shutdown())
         }
+    }
+
+    /// Menu "Yalnız USB" (decision 0027, T-189): switches the listening surface. With no live session both listeners
+    /// restart at once under the new profile (half-open connections and a pending approval are closed first); a live
+    /// session (USB or Wi-Fi) is never cut: the switch waits until it ends (`NetworkProfileSwitch`). Reported through
+    /// `handlers.networkProfileChanged`.
+    public func setNetworkProfile(_ profile: NetworkProfile) {
+        queue.async { [self] in
+            requestedNetworkProfile = profile
+            applyRequestedNetworkProfile()
+        }
+    }
+
+    /// Session queue: what the server is doing, for the profile switch decision.
+    private var networkActivity: NetworkActivity {
+        if currentSessionID != 0 { return .active(activeTransport) }
+        if case .pending = machine.status { return .pendingApproval }
+        return .idle
+    }
+
+    /// Session queue: applies `requestedNetworkProfile` now or leaves it waiting for the live session to end.
+    private func applyRequestedNetworkProfile() {
+        defer { reportNetworkProfile() }
+        let from = networkProfile
+        let to = requestedNetworkProfile
+        // Not listening (not started, stopped, or a failure restart pending): the next listener start uses it.
+        guard !stopped, tickTimer != nil, controlListener != nil || videoListener != nil else {
+            networkProfile = to
+            return
+        }
+        switch NetworkProfileSwitch.decide(current: from, requested: to, activity: networkActivity) {
+        case .unchanged:
+            return
+        case .deferred:
+            logger.log(.info, "network_profile", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "profile=\(to.logName) from=\(from.logName) action=deferred")
+        case .restartNow:
+            networkProfile = to
+            logger.log(.info, "network_profile", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "profile=\(to.logName) from=\(from.logName) action=restart")
+            // No session is live (decided above): this closes only half-open connections and a pending approval, so
+            // nothing admitted under the old profile outlives the switch.
+            apply(machine.shutdown())
+            cancelListeners()
+            restartAttempts = 0
+            startListeners()
+        }
+    }
+
+    /// Session queue: reports the applied and waiting profile when either changed.
+    private func reportNetworkProfile() {
+        let pending = requestedNetworkProfile != networkProfile ? requestedNetworkProfile : nil
+        if let last = reportedNetworkProfile, last.0 == networkProfile, last.1 == pending { return }
+        reportedNetworkProfile = (networkProfile, pending)
+        handlers.networkProfileChanged(networkProfile, pending)
     }
 
     /// The stream settings of the live session changed (`STREAM_PREFS`, T-049): sends the new `STREAM_CONFIG` and closes
@@ -762,7 +832,8 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Tries the preferred control port, then a system-assigned one (logged), on a kernel socket (dual-stack
-    /// `[::]:port`, T-111), plus a Bonjour record for the bound port. Binding is synchronous, so the listener is ready
+    /// `[::]:port`, T-111; IPv4 loopback only in the "Yalnız USB" profile, T-189), plus a Bonjour record for the bound
+    /// port (not in "Yalnız USB"). Binding is synchronous, so the listener is ready
     /// (or failed) right here.
     private func startControlListener(videoPort: UInt16, plan: ListenerPortPlan) {
         guard !stopped else { return }
@@ -772,7 +843,8 @@ public final class SessionServer: @unchecked Sendable {
         let nextPlan = plan
         let listener: BsdTcpListener
         do {
-            listener = try BsdTcpListener(port: port, options: Self.controlSocketOptions, queue: queue)
+            listener = try BsdTcpListener(port: port, bind: networkProfile.bindAddress,
+                                          options: Self.controlSocketOptions, queue: queue)
         } catch {
             if fixed {
                 logFallback("control", port)
@@ -812,7 +884,7 @@ public final class SessionServer: @unchecked Sendable {
         logger.log(.info, "listening", sessionID: 0, generation: 0,
                    fields: "control_port=\(port) video_port=\(videoPort) " + Self.serviceClass.logFields + " "
                        + Self.videoSocket.logFields + " control_socket=bsd"  // socket fields constant since T-186
-                       + " tcp_log=\(Self.tcpInfoLog.rawValue)")
+                       + " tcp_log=\(Self.tcpInfoLog.rawValue) profile=\(networkProfile.logName)")
         if case .starting = state { setState(.listening) }
     }
 
@@ -820,10 +892,13 @@ public final class SessionServer: @unchecked Sendable {
     /// name, TXT `v=1` plus `wol` (T-128), the bound port). A failure (also later, e.g. mDNSResponder restarting) is
     /// logged and retried with backoff (1 s ... 30 s) while this listener lives; sessions are not touched (USB and
     /// running sessions do not need discovery).
+    /// The only place a record is created, so the profile gate here also covers the TXT republish and the retry: in
+    /// "Yalnız USB" nothing is advertised (T-189).
     private func startBonjour(for listener: BsdTcpListener) {
         guard !stopped, let current = controlListener, current === listener else { return }
         bonjour?.cancel()
         bonjour = nil
+        guard networkProfile.advertisesBonjour else { return }
         do {
             bonjour = try BonjourAdvertiser(name: machine.configuration.hostName, type: Self.bonjourType,
                                             port: listener.port, txt: WakeOnLanTxt.entries(wol: wolValue),
@@ -866,10 +941,23 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Connections
 
+    /// The network profile admits the peer (T-189); otherwise the connection is closed before it is started (logged,
+    /// never the address).
+    private func admitted(_ connection: BsdTcpConnection, video: Bool) -> Bool {
+        guard networkProfile.admits(peerHost: connection.peerHost) else {
+            logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "video=\(video) reason=profile profile=\(networkProfile.logName)")
+            connection.cancel()
+            return false
+        }
+        return true
+    }
+
     /// A video connection from the video listener (T-091). Bounded: refused while too many have not yet authenticated
     /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
     /// of stream, error, or our own `cancel()`).
     private func acceptVideo(_ connection: BsdTcpConnection) {
+        guard admitted(connection, video: true) else { return }
         guard machine.pendingVideoCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
                        fields: "video=true reason=too_many_unauthenticated")
@@ -894,6 +982,7 @@ public final class SessionServer: @unchecked Sendable {
     /// reason (end of stream, half close, error, our own `cancel()`): `transportClosed` then tells the machine, which
     /// releases all input (PROTOCOL.md 7).
     private func acceptControl(_ connection: BsdTcpConnection) {
+        guard admitted(connection, video: false) else { return }
         guard machine.awaitingHelloCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
                        fields: "video=false reason=too_many_unauthenticated")
@@ -1320,6 +1409,11 @@ public final class SessionServer: @unchecked Sendable {
         if settingsAvailable != settingsPanelAvailable {
             settingsPanelAvailable = settingsAvailable
             handlers.settingsPanelAvailable(settingsAvailable)
+        }
+        // A profile switch deferred by the live session runs once it ended (T-189); asynchronously, never inside
+        // the action loop that ended it. Re-decided there, so a stale enqueue does nothing.
+        if requestedNetworkProfile != networkProfile, currentSessionID == 0, !stopped {
+            queue.async { [self] in applyRequestedNetworkProfile() }
         }
     }
 

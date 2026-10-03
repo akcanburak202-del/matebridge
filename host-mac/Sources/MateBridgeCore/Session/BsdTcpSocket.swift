@@ -85,8 +85,9 @@ public final class BsdTcpListener: @unchecked Sendable {
         case failed(errno: Int32)
     }
 
-    /// Where to bind. `.any` is production; the loopback cases keep tests off the network interfaces.
-    public enum BindAddress: Sendable {
+    /// Where to bind. `.any` is the default ("USB + Wi-Fi"); `.loopbackV4Mapped` is the "Yalnız USB" profile
+    /// (`NetworkProfile.bindAddress`, T-189); the loopback cases also keep tests off the network interfaces.
+    public enum BindAddress: Equatable, Sendable {
         /// `::`, dual-stack.
         case any
         /// `::1` (IPv6 loopback only).
