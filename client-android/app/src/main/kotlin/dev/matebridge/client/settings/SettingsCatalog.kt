@@ -1,5 +1,6 @@
 package dev.matebridge.client.settings
 
+import dev.matebridge.client.BuildInfo
 import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
@@ -219,6 +220,7 @@ object SettingsCatalog {
                 SettingItem.Toggle("clipboard", "Pano paylaşımı", { h.clipboardShare }, { h.setClipboardShare(it) }),
                 SettingItem.Toggle("stats", "İstatistik katmanı", { h.statsOverlay }, { h.setStatsOverlay(it) }),
                 SettingItem.Info("shortcuts") { SHORTCUTS },
+                SettingItem.Info("version") { BuildInfo.current.settingsText() }, // T-146
             ),
         )
         return out
