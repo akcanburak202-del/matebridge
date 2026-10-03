@@ -1,7 +1,7 @@
 ---
 id: T-207
 title: Clear the "asked to pair" mark on a Mac's endpoints once that Mac is trusted, so AUTO returns to USB
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]
@@ -30,9 +30,9 @@ Cihaz oturumu 2026-10-04 (docs/NOTES.md, 4. adım): Mac'te "Onaylı cihazları u
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Senaryo: USB ve Wi-Fi uç noktaları PAIRING ister → kullanıcı Wi-Fi'de eşleşir ve güvenir → AUTO, kablo takılıyken USB'ye geçer (USB yoklaması ve geçişi yeniden denenir), kullanıcı eylemi gerekmez.
-- [ ] [JVM] Güvenilmeyen/başka `host_id`'li bir uç noktanın işareti güven onayıyla temizlenmez (0018 kilitlenme güvencesi).
-- [ ] [JVM] PAIRING isteyen USB için seçilen neden `usb_lost` değil `usb_asked` olarak loglanır.
+- [x] [JVM] Senaryo: USB ve Wi-Fi uç noktaları PAIRING ister → kullanıcı Wi-Fi'de eşleşir ve güvenir → AUTO, kablo takılıyken USB'ye geçer (USB yoklaması ve geçişi yeniden denenir), kullanıcı eylemi gerekmez.
+- [x] [JVM] Güvenilmeyen/başka `host_id`'li bir uç noktanın işareti güven onayıyla temizlenmez (0018 kilitlenme güvencesi).
+- [x] [JVM] PAIRING isteyen USB için seçilen neden `usb_lost` değil `usb_asked` olarak loglanır.
 - [ ] [device] "Onaylı cihazları unut" → Wi-Fi'de yeniden eşleş → birkaç saniye içinde `transport_migrate ok=1 to=usb`.
 
 ## Plan
@@ -45,10 +45,22 @@ Cihaz oturumu 2026-10-04 (docs/NOTES.md, 4. adım): Mac'te "Onaylı cihazları u
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `c764866` (uygulama + testler), plan `bfe0706`; bu Handoff ayrı commit. `./scripts/check.sh: ALL OK`.
 - **Dokunulan dosyalar:**
+  - Kartta: `C/MainActivity.kt` (`onAskedCleared`: `ev=pair_asked_cleared` + AUTO'da USB hemen yeniden; `fallBackToWifi` nedeni `AutoUsbPolicy.fallbackReason`), `C/session/AutoTransport.kt` (`onUsbUnblocked`, `fallbackReason`, `REASON_USB_ASKED/LOST`), `C/session/TrustUiText.kt` (`PairPick`: `asked` uç nokta → iddia edilen `HostTag`; kanıtlı `Connected` ile temizleme, `takeCleared()`; `TrustUiText.askedClearedFields`), testler `AutoTransportTest` (+2), `TrustUiTest` (+4), `PairTrustFlowTest` (+3, 3 beklenti `hostTag` ile güncellendi).
+  - **Kart dışı (minimal, neden: UI katmanında host_id yoktu; 0018 ayrımı ve "başka host_id'li işaret kalır" kriteri ancak kimlikle yapılabilir):** `C/session/SessionUi.kt` (opak `HostTag`; `PairingNeedsUser.hostTag`, `Connected.hostTag`, ikisi de varsayılan `null`), `C/session/SessionMachine.kt` (`Event.PairingNeedsUser.hostId`; `provenHostTag()` → `Connected`), `C/session/SessionController.kt` (`FirstAck`: PAIRING cevabının `ack.hostId`'si olaya; tek ifade). `Handshake.kt`, protokol, host dokunulmadı.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
+  - **"Mac'e güvenildi" kanıtı:** `Connected.hostTag` yalnızca oturum yerel olarak güvenilir **ve** bu bağlantıda mühürlü bir host kaydı görülmüşken dolu: eşleşmede yerel "Güven" + Mac'in mühürlü ACCEPTED'ı (`where=live` iki sıra da), PAIRED'de güvenilen anahtarla türetilmiş ilk kayıttan sonra (şifresiz ilk ack'teki `Connected` etiketsiz; ilk kare güncellemesiyle etiket gelir). Yani kartın iki kanıtı da (güven onayı, güvenilen anahtarla PAIRED oturum) sayılıyor, ama yalnızca Mac kendini doğruladıktan sonra.
+  - **Hangi işaret kalkar:** PAIRING cevabında **iddia edilen** host_id'si kanıtlanan host_id ile aynı olan uç noktalar (USB tüneli, keşfedilen/hatırlanan Wi-Fi adresi). Başka ya da bilinmeyen (sıfır) host_id'li olanlar işaretli kalır. Temizleme oturum başına bir kez (kare güncellemeleri tekrar temizlemez; arada `Connected` dışı bir durum gerekir).
+  - **0018 kalan risk (bilerek):** iddia doğrulanmamış; gerçek Mac'in host_id'sini kopyalayan bir uç, kanıtlı her oturumda bir otomatik deneme daha alır. AUTO'da bu bir taşıma adayıdır: eşleşemez (T-150, salt okunur depo), istem açamaz (aday PAIRING → `migration ... reason=key`, UI yok), HARD_FAIL geri çekilmesiyle sınırlı; Wi-Fi oturumu bozulmaz (T-205). Tableti istemde kilitleyemez.
+  - **AUTO:** USB temizlenince `onUsbUnblocked` geri çekilmeyi sıfırlar ve `autoStep` hemen (post) çalışır: oturum kabul edildiyse MIGRATE, bağlı değilse PROBE (alışıldığı gibi; uçuşta deneme ya da kablo takılı değilse hiçbir şey).
+  - Yeni log: `ev=pair_asked_cleared count=<n> usb=0|1` (adres, host_id, isim yok); `transport_pick reason=usb_asked` artık AUTO'nun USB'deki PAIRING cevabından sonraki Wi-Fi'ye dönüşünde de (önce yalnız ilk seçimde). `KEY_MISMATCH` dönüşü `usb_lost` kalır.
+- **Test edilmeyenler / cihazda doğrulanacaklar (tablete hiçbir şey kurulmadı):**
+  1. AUTO, kablo takılı, eşleşmiş tablet: Mac menüsünden "Onaylı cihazları unut" → tablette `pairing_needs_user re_pair=1` (USB) → `transport_pick mode=auto chosen=wifi reason=usb_asked` (artık `usb_lost` değil) → Wi-Fi'de Eşleş → Mac'te İzin ver → tablette Güven → `pair_trust_confirmed` → `pair_asked_cleared count=1 usb=1` → birkaç saniye içinde `migration_proved` + `transport_migrate ok=1 to=usb` ("Bağlantıyı kes"/"Bağlan" gerekmeden). Aynısı ters sırayla (önce Güven, sonra İzin ver).
+  2. Normal sessiz yeniden bağlanma (PAIRED) değişmedi: `pair_asked_cleared` görünmez (işaretli uç yokken log yok), akış/USB geçişi eskisi gibi.
+  3. `adb logcat -s 'MB:*'`: kod, anahtar, jeton, host_id ya da Mac adı yok (yeni satır yalnız `count=`/`usb=`).
+  4. (İsteğe bağlı, T-157) 127.0.0.1:47001'de başka host_id'li bir sahte uç: Wi-Fi'de güvenden sonra USB işaretli kalır, AUTO Wi-Fi'de kalır, istem açılmaz.
 - **Açık sorular:**
+  - **docs/LOGGING.md (orkestratör):** `pair_asked_cleared count= usb=` ekle; `transport_pick reason=usb_asked` artık AUTO'daki USB→Wi-Fi dönüşünde de kullanılıyor.
+  - Kart dışı üç dosya (yukarıda, nedeniyle) — `files:` listesine eklenmesi orkestratörün onayına.
+  - İsteğe bağlı sertleştirme (yapılmadı, kapsam dışı): taşıma adayı USB'de PAIRING cevabı verirse (`reason=key`) uç noktayı yeniden işaretlemek; o zaman host_id'yi kopyalayan bir sahte uç kanıtlı oturum başına tam bir deneme alır, geri çekilmeli tekrarlar da kalkar.
