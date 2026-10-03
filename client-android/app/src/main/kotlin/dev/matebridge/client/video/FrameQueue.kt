@@ -20,6 +20,12 @@ import java.util.concurrent.locks.LockSupport
  * keyframe arrived in between (that is what breaks the IDR -> overflow -> request chain). A suppressed request is
  * held and goes out on the first frame offered after the hold-off while the gate is still closed. STARTUP
  * ([reset]) and DECODE_ERROR ([onDecoderError]) always go out at once and restart the hold-off.
+ *
+ * T-219 consumer ownership: frames go only to the consumer generation that owns the queue ([assignConsumer]). A
+ * retired generation ([revokeConsumer], or a newer owner) takes nothing: its [awaitNext] returns null at once and the
+ * frames stay queued for the owner, so a decoder thread that outlives its generation can never consume (or, through
+ * [resetIfOwner] / [onDecoderErrorIfOwner], drop) the next generation's startup frames. [ANY_CONSUMER] skips the check
+ * (single-consumer users and tests).
  */
 class FrameQueue(
     private val stats: VideoStats,
@@ -38,6 +44,10 @@ class FrameQueue(
         const val HOLDOFF_MS = 500L
         /** Arrival gaps kept for the overflow diagnostic. */
         const val GAP_HISTORY = 8
+        /** T-219: consumer id that takes frames regardless of the owner. Generation ids are > 0. */
+        const val ANY_CONSUMER = -1
+        /** T-219: no consumer owns the queue (frames wait, bounded as always). */
+        const val NO_CONSUMER = 0
 
         /** Queue depth for a stream of [fps]: [BURST_MS] worth of frames, clamped to [MIN_PENDING]..[MAX_PENDING]. */
         fun depthForFps(fps: Int): Int {
@@ -84,6 +94,12 @@ class FrameQueue(
 
     /** Consumer parked in [awaitNext] (T-077), unparked by [offer] after it releases the lock. */
     @Volatile private var waiter: Thread? = null
+
+    /** T-219: generation whose consumer may take frames; written under [lock], volatile for the early exit. */
+    @Volatile private var owner = NO_CONSUMER
+
+    /** Tests only (T-219 barrier): runs in [awaitNext] on the consumer's thread right before each park. */
+    @Volatile internal var parkHook: (() -> Unit)? = null
     private var waitingKeyframe = true
     private var lastConfig: VideoFrame? = null
 
@@ -186,25 +202,50 @@ class FrameQueue(
      * an [offer] that read [waiter] just before it was cleared), so the wait re-parks for the time left until the
      * deadline instead of giving up after the first wake-up.
      */
-    fun awaitNext(timeoutNs: Long): VideoFrame? {
-        take()?.let { return it }
-        if (timeoutNs <= 0) return null
+    fun awaitNext(timeoutNs: Long, consumer: Int = ANY_CONSUMER): VideoFrame? {
+        take(consumer)?.let { return it }
+        if (timeoutNs <= 0 || !owns(consumer)) return null
         val deadline = System.nanoTime() + timeoutNs
         val self = Thread.currentThread()
         waiter = self
         try {
             while (true) {
-                take()?.let { return it }
+                take(consumer)?.let { return it }
+                // T-219: retired while waiting: leave at once and leave the frames to the owner.
+                if (!owns(consumer)) return null
                 val left = deadline - System.nanoTime()
                 if (left <= 0 || self.isInterrupted) return null // interrupted: parkNanos would not block, never spin
+                parkHook?.invoke()
                 LockSupport.parkNanos(this, left)
             }
         } finally {
-            waiter = null
+            if (waiter === self) waiter = null // never clear another consumer's registration
         }
     }
 
-    private fun take(): VideoFrame? = synchronized(lock) { queue.removeFirstOrNull() }
+    /** T-219: the ownership check and the removal are one step under [lock], so a revoked consumer takes nothing. */
+    private fun take(consumer: Int): VideoFrame? = synchronized(lock) {
+        if (owns(consumer)) queue.removeFirstOrNull() else null
+    }
+
+    private fun owns(consumer: Int) = consumer == ANY_CONSUMER || consumer == owner
+
+    /**
+     * T-219: [gen] (> 0) owns the queue from now on; any other consumer takes nothing. Call before [gen]'s consumer
+     * starts and before frames of its configuration are admitted. A consumer parked in [awaitNext] is woken (outside the
+     * lock) so a revoked one leaves at once.
+     */
+    fun assignConsumer(gen: Int) {
+        require(gen > 0) { "consumer generation must be > 0" }
+        synchronized(lock) { owner = gen }
+        waiter?.let(LockSupport::unpark)
+    }
+
+    /** T-219: [gen] is retired: if it still owns the queue, nobody does until the next [assignConsumer]. */
+    fun revokeConsumer(gen: Int) {
+        synchronized(lock) { if (owner == gen) owner = NO_CONSUMER }
+        waiter?.let(LockSupport::unpark)
+    }
 
     /** Next frame for the decoder, waiting up to [timeoutMs]. Null on timeout. */
     fun poll(timeoutMs: Long): VideoFrame? = synchronized(lock) {
@@ -215,8 +256,15 @@ class FrameQueue(
     fun pending(): Int = synchronized(lock) { queue.size }
 
     /** Decoder error: drops pending frames and closes the gate; returns the request reason (always sent). */
-    fun onDecoderError(): Int {
+    fun onDecoderError(): Int = onDecoderErrorIfOwner(ANY_CONSUMER)!!
+
+    /**
+     * T-219: [onDecoderError] from [consumer]'s decoder thread: only while it owns the queue. A retired consumer changes
+     * nothing and produces no request (null): the frames belong to the next generation.
+     */
+    fun onDecoderErrorIfOwner(consumer: Int): Int? {
         synchronized(lock) {
+            if (!owns(consumer)) return null
             val now = clockNs()
             dropPending(trace, now)
             waitingKeyframe = true
@@ -231,8 +279,16 @@ class FrameQueue(
      * Restart (surface came back, codec recreated): clears frames, closes the gate, replays the last
      * CODEC_CONFIG. Returns [reason] (the request to send; always sent, restarts the hold-off).
      */
-    fun reset(reason: Int = KeyframeRequest.STARTUP, keepConfig: Boolean = true): Int {
+    fun reset(reason: Int = KeyframeRequest.STARTUP, keepConfig: Boolean = true): Int =
+        resetIfOwner(ANY_CONSUMER, reason, keepConfig)!!
+
+    /**
+     * T-219: [reset] from [consumer]'s decoder thread (codec restart after a decode error): only while it owns the
+     * queue. A retired consumer changes nothing and produces no request (null).
+     */
+    fun resetIfOwner(consumer: Int, reason: Int, keepConfig: Boolean = true): Int? {
         synchronized(lock) {
+            if (!owns(consumer)) return null
             val now = clockNs()
             trace?.let { t -> for (f in queue) t.onRxAction(f.frameSeq, now, PaceTrace.RX_RESET_DROP) }
             queue.clear()
