@@ -11,7 +11,8 @@ import dev.matebridge.client.session.MbLog
 
 /**
  * Experiment-only raw TCP throughput screen (T-090). Reached only through MainActivity's `--es net_bench HOST:PORT`
- * extra; no MateBridge session, no input is sent. The result stays on screen until the user leaves.
+ * extra together with `--ez dev true` (T-185); no MateBridge session, no input is sent. The result stays on screen
+ * until the user leaves. Debug source set only (T-185): MainActivity starts it by class name.
  */
 class NetBenchActivity : Activity() {
     private lateinit var text: TextView

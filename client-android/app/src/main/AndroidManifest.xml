@@ -31,11 +31,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- T-090: raw TCP throughput bench, started only by MainActivity's net_bench extra -->
-        <activity
-            android:name=".bench.NetBenchActivity"
-            android:exported="false"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|navigation" />
+        <!-- T-185: the T-090 NetBenchActivity is declared in src/debug/AndroidManifest.xml (debug source set only). -->
     </application>
 </manifest>

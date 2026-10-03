@@ -201,13 +201,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     )
     private var videoFaultOverlay: View? = null
     private var videoFaultText: TextView? = null
-    /** T-159 debug `--es decoder_fault create|configure|dequeue|silent` (debuggable builds); one per launch. */
+    /**
+     * T-159 debug `--es decoder_fault create|configure|dequeue|silent` (debuggable builds); one per launch.
+     * T-185: like every debug-only extra it also needs `--ez dev true` ([devKnobs], parsed in onCreate before first use).
+     */
     private val decoderFault: dev.matebridge.client.video.DecoderFault? by lazy {
-        val mode = dev.matebridge.client.video.DecoderFault.parseMode(intent?.getStringExtra(dev.matebridge.client.video.DecoderFault.EXTRA_MODE))
+        val mode = dev.matebridge.client.video.DecoderFault.parseMode(devKnobs.decoderFault)
         if (mode == null || applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) null
         else dev.matebridge.client.video.DecoderFault(
             mode,
-            intent.getIntExtra(dev.matebridge.client.video.DecoderFault.EXTRA_AFTER_S, dev.matebridge.client.video.DecoderFault.DEFAULT_AFTER_S).coerceAtLeast(0),
+            (devKnobs.decoderFaultAfterS ?: dev.matebridge.client.video.DecoderFault.DEFAULT_AFTER_S).coerceAtLeast(0),
             dev.matebridge.client.video.MediaCodecDecoder.FACTORY,
         ) { fields -> MbLog.w("decoder_fault", fields, "decoder") }
     }
@@ -309,11 +312,25 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val rttStats = dev.matebridge.client.session.RttStats()
     private var wifiLock: dev.matebridge.client.session.WifiLockHolder? = null
 
-    private fun parseWifiKnobs() {
+    /** T-185 (decision 0026): launch extras behind the developer gate; parsed once in onCreate, read nowhere else. */
+    private var devKnobs = dev.matebridge.client.session.DevKnobs()
+
+    private fun parseDevKnobs() {
         val i = intent
-        knobs = if (i == null) dev.matebridge.client.session.WifiKnobs() else dev.matebridge.client.session.WifiKnobs.parse(
-            { i.hasExtra(it) }, { i.getIntExtra(it, 0) }, { i.getBooleanExtra(it, false) },
+        devKnobs = dev.matebridge.client.session.DevKnobs.parse(
+            if (i == null) dev.matebridge.client.session.LaunchExtras.NONE
+            else object : dev.matebridge.client.session.LaunchExtras {
+                override fun has(key: String) = i.hasExtra(key)
+                override fun int(key: String, default: Int) = i.getIntExtra(key, default)
+                override fun bool(key: String, default: Boolean) = i.getBooleanExtra(key, default)
+                override fun string(key: String): String? = i.getStringExtra(key)
+            },
         )
+        MbLog.i("dev_knobs", devKnobs.logFields(), "diag") // keys only, never values
+    }
+
+    private fun parseWifiKnobs() {
+        knobs = devKnobs.wifi
         MbLog.i("wifi_knobs", knobs.logFields())
         if (knobs.wifiLowLatency) {
             val lock = try {
@@ -344,38 +361,38 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         // T-146: names the build once per process in every client log (no serial, no device id).
         if (BuildInfo.claimAppStart()) MbLog.i("app_start", BuildInfo.current.logFields(Build.VERSION.SDK_INT, Build.DISPLAY))
-        // T-090: `--es net_bench HOST:PORT` runs only the raw TCP throughput bench; no session is set up here.
-        if (intent?.hasExtra(dev.matebridge.client.bench.NetBenchConfig.EXTRA) == true) {
-            benchForwarded = true
-            startActivity(
-                android.content.Intent(this, dev.matebridge.client.bench.NetBenchActivity::class.java).putExtras(intent),
-            )
-            finish()
-            return
+        // T-185: debug-only extras count only with `--ez dev true` on the same launch; ignored keys are logged.
+        parseDevKnobs()
+        // T-090: `--es net_bench HOST:PORT` runs only the raw TCP throughput bench; no session is set up here. The bench
+        // lives in the debug source set (T-185), so it is started by class name.
+        if (devKnobs.netBench) {
+            try {
+                startActivity(android.content.Intent().setClassName(packageName, NET_BENCH_ACTIVITY).putExtras(intent))
+                benchForwarded = true
+                finish()
+                return
+            } catch (e: android.content.ActivityNotFoundException) {
+                MbLog.w("net_bench", "err=not_in_build", "diag") // a build without the debug source set
+            }
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // T-141: `--ez stats_1s true` brings back the per-second video stats log lines (diagnostics).
-        statsLog = StatsLogWindow(if (intent?.getBooleanExtra("stats_1s", false) == true) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
+        statsLog = StatsLogWindow(if (devKnobs.stats1s) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
         MbLog.i("stats_log", "window_ms=${statsLog.windowMs}", "render")
-        bufferFrames = when {
-            intent?.hasExtra("jitter") != true -> VideoRenderer.BUFFER_ADAPTIVE
-            else -> intent.getIntExtra("jitter", 0).coerceIn(0, 2) // -1 (adaptive off) -> 0
-        }
+        bufferFrames = devKnobs.jitter ?: VideoRenderer.BUFFER_ADAPTIVE
         launchBufferFrames = bufferFrames
-        bufferFixedBy = if (intent?.hasExtra("jitter") == true) GameJitter.Source.EXTRA else null
-        intent?.getIntExtra("lead_us", -1)?.takeIf { it >= 0 }?.let { vsync.leadOverrideNs = it * 1000L }
+        bufferFixedBy = if (devKnobs.jitter != null) GameJitter.Source.EXTRA else null
+        devKnobs.leadUs?.let { vsync.leadOverrideNs = it * 1000L }
         // T-071: absent = 6 ms default; -1 = the display's reported deadline; N >= 0 = N us.
-        if (intent?.hasExtra("deadline_us") == true) {
-            val us = intent.getIntExtra("deadline_us", -1)
-            val ns = if (us >= 0) us * 1000L else VsyncClock.DEADLINE_DISPLAY
-            vsync.deadlineOverrideNs = ns
+        devKnobs.deadlineUs?.let { us ->
+            vsync.deadlineOverrideNs = if (us >= 0) us * 1000L else VsyncClock.DEADLINE_DISPLAY
         }
-        paceTrace = if (intent?.getBooleanExtra("pace_trace", false) == true) dev.matebridge.client.video.PaceTrace() else null
-        targetHz = intent?.getIntExtra("hz", FrameRatePolicy.HZ_FOLLOW_STREAM) ?: FrameRatePolicy.HZ_FOLLOW_STREAM
+        paceTrace = if (devKnobs.paceTrace) dev.matebridge.client.video.PaceTrace() else null
+        targetHz = devKnobs.hz ?: FrameRatePolicy.HZ_FOLLOW_STREAM
         parseWifiKnobs()
-        audioAllowed = intent?.getBooleanExtra("audio", true) != false
+        audioAllowed = devKnobs.audio
         MbLog.i("audio_knob", "enabled=${if (audioAllowed) 1 else 0}", "audio")
-        intent?.getStringExtra("transport")?.let { raw -> // T-096: one launch only, the stored setting is not changed
+        devKnobs.transport?.let { raw -> // T-096: one launch only, the stored setting is not changed
             modeOverride = TransportMode.parse(raw)
             MbLog.i("transport_knob", "override=${modeOverride?.id ?: "invalid"}")
         }
@@ -443,17 +460,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         )
         streamMode = settings.streamMode()
         gameSettings = GameModeSettings(settings)
-        audioOutFromExtra = intent?.getStringExtra(AudioOutPref.EXTRA)?.let { AudioOutPref.parse(it) } != null
+        audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109: stored mode Game starts with the game defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
             applyJitter()
             MbLog.i("game_mode", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
         }
-        if (audioAllowed) audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut) { runOnUiThread { onAudioBecomingNoisy() } }
-        val quickAck = dev.matebridge.client.session.QuickAck.parseExtra(
-            intent?.hasExtra("quickack") == true, intent?.getBooleanExtra("quickack", true) ?: true,
-        )
-        val stallDiag = intent?.getBooleanExtra("stall_diag", false) == true
+        if (audioAllowed) {
+            audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts) {
+                runOnUiThread { onAudioBecomingNoisy() }
+            }
+        }
+        val quickAck = devKnobs.quickAck
+        val stallDiag = devKnobs.stallDiag
         MbLog.i("stall_diag", "enabled=${if (stallDiag) 1 else 0}", "diag") // T-142
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
@@ -1098,8 +1117,29 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
         if (!r.attached && surfaceValid) r.attachSurface(video.holder.surface)
         MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
+        logProfile(config)
         if (filesGate.onConfigApplied()) syncFiles() // T-153: the authenticated config makes this session trusted
         refreshSettings() // "Uygulanan: N Mbps"
+    }
+
+    /** T-185 (decision 0026 §4): one `ev=profile` line per installed config; no address, serial or device id. */
+    private fun logProfile(config: StreamConfig) {
+        val audioOut = if (audioOutFromExtra) AudioOutPref.parse(devKnobs.audioOut) ?: gameSettings.audioOut else gameSettings.audioOut
+        val profile = dev.matebridge.client.session.StreamProfile(
+            mode = streamMode.id,
+            fps = config.fps,
+            widthPx = config.widthPx,
+            heightPx = config.heightPx,
+            scalePermille = streamMode.scalePermille,
+            bitrateKbps = config.bitrateKbps,
+            bitrateSettingKbps = gameSettings.bitrateKbps,
+            transport = currentEndpoint?.let { ConnectMode.transportOf(it).logName } ?: "-",
+            transportMode = mode.id,
+            audioOn = audioAllowed && settings.audioEnabled(),
+            audioOut = audioOut.id,
+            bufferFrames = bufferFrames,
+        )
+        MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs))
     }
 
     /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
@@ -2281,6 +2321,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private companion object {
+        /** T-090 bench, in the debug source set only (T-185): main code may not reference the class. */
+        const val NET_BENCH_ACTIVITY = "dev.matebridge.client.bench.NetBenchActivity"
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val USER_DISCONNECTED_TEXT = "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun."
