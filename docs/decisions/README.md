@@ -36,3 +36,17 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0012 | Tablette ses çıkışı için AAudio MMAP (NDK + C++) | kabul |
 | 0013 | Akış sırasında ayarlar paneli: Ctrl+Shift+6 + Mac menüsü, sağ yan panel, bit hızı tabletten | kabul |
 | 0014 | Oyun modu: 120 fps, %66, en düşük gecikme; geçici varsayılanlar | kabul |
+| 0015 | Tablet dosyaları Mac'te: tablette WebDAV sunucusu, yalnızca USB tüneli üzerinden | kabul |
+| 0016 | Oyun modunun iki biçimi: Oyun 120 ve Oyun 60 | kabul |
+| 0017 | Çizim modu: kararlı 120 fps, %90 | geri alındı (2026-10-03) |
+| 0018 | Tablet tarafında güven onayı ve yalnızca kullanıcının başlattığı eşleşme | önerildi |
+| 0019 | Girdi yalnızca görüntü sağlıklıyken açık | önerildi |
+| 0020 | Sanal ekranın ömrü oturumdan ayrılır (bekletilen ekran) | önerildi |
+| 0021 | `capture_time_us`'in anlamı ve gecikme sayıları | önerildi |
+| 0022 | Birleştirme kapısı olarak GitHub Actions CI | önerildi |
+| 0023 | Wi-Fi tıkanıklığı TCP üzerinde çözülür: önce sabit Wi-Fi profili, gerekirse uçuştaki bayt bütçesi ve canlı bit hızı | önerildi |
+| 0024 | Wi-Fi'de kalem örneklerini zamana yayma (deneysel, sınırlı) | önerildi |
+| 0025 | Ağ tıkanmasından sonra bayat girdi politikası | önerildi |
+| 0026 | Deney ayarları (knob) politikası ve sınıflandırması | önerildi |
+| 0027 | Host'ta "Yalnız USB" ağ profili | önerildi |
+| 0028 | Tablet dosya paylaşımı: seçilen klasör ve salt okunur seçeneği (0015'i değiştirir) | önerildi |
