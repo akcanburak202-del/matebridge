@@ -1,7 +1,7 @@
 ---
 id: T-211
 title: Game modes use the adaptive pacer by default (decision 0014 §2 amended)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-208, T-210]
@@ -35,7 +35,10 @@ Karar 0014 §2 2026-10-04'te değişti (kullanıcı onayı): oyun modlarında vi
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `GameJitter.choose`: `game -> Choice(VideoRenderer.BUFFER_ADAPTIVE, Source.MODE)`; sabit açılış değeri (`fixed != null`) önce gelir, değişmez. KDoc 0014 §2 (2026-10-04) olarak güncellenir. `MainActivity` değişmez: `currentJitter()` → `bufferFrames` → hem renderer hem `ev=profile pacer=` aynı değeri okur.
+2. `GameModeTest`: oyun girişinde (Oyun 120, Oyun 60) `BUFFER_ADAPTIVE` + `mode`; `jitter 0` (EXTRA) oyunda 0 ve `jitter_src=extra`; çıkış/yeniden giriş tamponu taşır; log satırı `jitter=adaptive` (jitter_src yok).
+3. `docs/KNOBS.md` satır 1 varsayılan sütunu: "Oyun modları da uyarlamalı (0014 §2, 2026-10-04)"; `--ei jitter 0` oyunda eski tampon 0 A/B'si.
+4. `./scripts/check.sh`, handoff, `status: review`.
 
 ## Handoff
 
