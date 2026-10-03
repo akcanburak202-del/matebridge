@@ -1,7 +1,7 @@
 ---
 id: T-168
 title: Break client latency into stages with percentiles; stop clamping; fix stats maps; log decoder hardware
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-161]
@@ -88,14 +88,41 @@ Source: external architecture review 2026-10-03 (H05, LM2, LM5, LM6, D5, PF7); v
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `ClockSync`: `latencySignedUs(cap, clientUs)` (işaretli, saat `System.nanoTime` µs); `latencyUs` = onun ≥0 kırpılmışı (davranış aynı).
+2. `IntervalHistogram`/`IntervalSummary`: kesin `maxUs` (pencere birleştirmede de korunur); negatif örnek kabul eder.
+3. `VideoStats`:
+   - `latencyOf` → `(captureHostUs, clientUs) -> Long?` işaretli. `onOutput(pts, nowUs, clientUs)`: ham değer `cap_dec` dağılımına, `<0` ise `lat_neg`; ortalama (STATS `latency_avg_us`, A/V girişi) bugünkü gibi kırpılmış örneklerin ortalaması.
+   - Yeni: `onReadySlot(us)`, `onReleased(pts, captureUs, clientUs, expectCallback)` (rendered++ ve `cap_rel`), `onDiscarded()`, `onRenderCallback(pts, captureUs, clientUs)` (`cap_cb`; sıralı bekleyen kümesi → `render_cb_missing`).
+   - Kare haritaları ekleme sırasına göre sınırlı (`keys.min()` yerine en eski çıkar) ve `resetFrames()` ile kod çözücü başlangıcında ve `closeWindow()`'da temizlenir.
+   - Snapshot'a `capDec/readySlot/capRel/capCb`, `latNeg`, `discarded`, `renderCbMissing` (varsayılanlı, sona).
+4. `VideoRenderer`: kod çözücü başında `stats.resetFrames()`; `onOutput`'a `readyNs`; karar varsa `slotNs−readyNs`; `CodecSink` idx→pts tutar, `release/releaseNow`'da `cap_rel`, `discard`'da `discarded`; render geri çağrısı (ana iş parçacığı, paylaşılan kilit yok) `cap_cb`. `codec_start`'a `is_hw= sw_only=`, yazılım çözücüde bir kez `W decoder ev=codec_software`.
+5. `DecoderCodec`: salt okunur `isHardwareAccelerated`/`isSoftwareOnly` (varsayılan null), `MediaCodecDecoder` `codecInfo`'dan; `DecoderFault` açıkça devreder.
+6. `StatsFormat`: `stageFields()` (boşsa `-`), `latencyStageFields()`; bindirmede "Gecikme" → "Yak→çöz", yeni satır `Hazır→slot p50 … | saat ±…`.
+7. `MainActivity` (yalnız `latencyOf` bağlantısı, `statsTick`, `writeStatsLog`): `released=` (+`shown=` takma ad), render satırının sonuna yeni alanlar, `clock_unc_us`.
+8. Testler (JVM): ClockSync işaretli, histogram max, 70 bayat yüksek anahtar + seq 0, atılanlar `cap_rel` dışında, `render_cb_missing`, alan biçimi, bindirme, `codec_software` uyarısı. LOGGING.md ayrı blok.
+
+Riskler: paylaşılan kilit altında yalnız bellek içi iş (stats + ClockSync monitörü, ikisi de yaprak kilit); render geri çağrısı paylaşılan kilidi almaz.
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `58525b3` (kod + testler), `04cf4c8` (LOGGING.md ayrı blok), `2e40a05` (codex inceleme P2 düzeltmesi); plan `86915a0`. Dal `task/T-168-client-latency-stage-stats`. `./scripts/check.sh` ALL OK.
+- **Dokunulan dosyalar:** `VideoStats.kt`, `VideoRenderer.kt`, `DecoderCodec.kt` (yalnız `isHardwareAccelerated`/`isSoftwareOnly`, varsayılan null), `DecoderFault.kt` (açık devretme), `IntervalHistogram.kt` (`IntervalSummary.maxUs`), `ClockSync.kt` (`latencySignedUs`, `uncertaintyUs`), `StatsFormat.kt`, `MainActivity.kt` (yalnız `latencyOf` bağlantısı, `statsTick`, `writeStatsLog`), testler: `video/LatencyStageStatsTest.kt` (yeni), `stream/LatencyStageFormatTest.kt` (yeni), `video/FakeDecoderCodec.kt` (hw bayrakları + `codecs` listesi), `stream/StreamTest.kt` ve `stream/StatsLogWindowTest.kt` (yeni `latencyOf` imzası, "Yak→çöz"), `docs/LOGGING.md`.
 - **Varsayımlar:**
+  - `lat_neg` yalnız `cap_dec` (yakalama→çözücü çıkışı) negatif örneklerini sayar; sonraki aşamalar bundan büyük olduğu için çift sayım yok.
+  - `cap_dec` atılan kareleri de içerir (çözüm aşaması); `cap_rel`/`cap_cb` yalnız bırakılanları. `discarded=` ayrıca `drop=` içinde de sayılır (STATS `frames_dropped` değişmedi).
+  - Codex P2 (düzeltildi, `2e40a05`): codec-render modunda kare `releaseOutputBuffer`'dan **önce** beklenenlere eklenir (`VideoStats.awaitCallback`), çünkü ana looper'daki geri çağrı, çağrı dönmeden gelebilir. Çağrı hata fırlatırsa kayıt geri alınır (`cancelCallback`, eksik sayılmaz). Codec çağrısı paylaşılan kilidin dışında kalır. Test: `LatencyStageRendererTest.callbacksDeliveredBeforeTheReleaseReturnsAreNotMissing` (sahte codec geri çağrıyı `releaseOutputBuffer` içinde verir) ve iki `VideoStats` birim testi.
+  - `render_cb_missing`: geri çağrılar bırakma sırasıyla gelir varsayımı; daha sonra bırakılmış bir karenin geri çağrısı gelince öncekiler "eksik" sayılır; 64 bekleyen sınırı aşılınca en eski eksik sayılır. Codec durunca bekleyenler sayılmadan atılır.
+  - Saat tabanı: `readyNs`, bırakma anı ve geri çağrı `nanoTime`'ı `System.nanoTime` (= `SessionController.clockUs()`); `onOutput`'un `nowUs` (elapsedRealtime) yalnız çözme süresi için.
+  - Bayat harita düzeltmesi iki katmanlı: ekleme sırasıyla sınır (`keys.min()` yerine en eski) + her codec başında ve `closeWindow()`'da `resetFrames()`.
+  - Paylaşılan kilit altında yalnız bellek içi iş eklendi (VideoStats ve ClockSync monitörleri yaprak kilit). Render geri çağrısı paylaşılan kilidi almaz; VideoStats monitörünü alır (kart ipucu: `@Synchronized` kalsın).
+  - STATS `latency_avg_us` ve A/V girişi: kırpılmış örneklerin ortalaması, örnek anı artık `readyNs` (eskiden birkaç µs sonra `clockUs()`); sayısal fark ihmal edilebilir.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - USB, 120 Hz, çizim sırasında `adb logcat -s 'MB:*'`: `MB/render ev=stats` sonunda `cap_dec_* ready_slot_* cap_rel_* cap_cb_* render_cb_missing= discarded= lat_neg= clock_unc_us=` var; `ready_slot_p50_us` ≈ 13 000–17 000 (NOTES trace2/trace7 ile tutarlı); `lat_neg=0`; `clock_unc_us` ≈ 2 300; sıra `cap_dec ≤ cap_rel ≤ cap_cb` (p50).
+  - `latency_us=` hâlâ yazılıyor ve eski değere yakın (~11 ms); `MB/decoder ev=stats` `released=` ve `shown=` aynı değer.
+  - `I decoder ev=codec_start ... is_hw=1 sw_only=0 accepted ...`; `codec_software` uyarısı yok.
+  - `render_cb_missing` HarmonyOS'ta ~0 mı (çok büyükse codec geri çağrıları seyrek; NOTES'a düşülmeli).
+  - Bindirme: "Yak→çöz N ms" ve `Hazır→slot p50 N ms | saat ±N ms` satırı görünüyor, taşma/kesilme yok. GL yolunda `cap_cb_*`/`render_cb_missing` `-`.
+  - A/V senkron davranışı değişmemeli (ses gecikmesi aynı).
 - **Açık sorular:**
+  - Mac menüsü "yak→çöz" etiketi T-170'te; bu kart host'a dokunmadı.
+  - `IntervalSummary.maxUs` sona varsayılanlı eklendi; diğer çağıranlar etkilenmedi.

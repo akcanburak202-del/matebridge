@@ -345,3 +345,24 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 - `ev=output_straggler vgen=N join_ms=500` (W): çıkış thread'i 500 ms'de bitmedi; sonraki kuşak onu da bekler.
 - `ev=retire_lock_slow vgen=N wait_ms=20` (W): emekliye ayırma paylaşılan kilidi 20 ms'de alamadı, yine de emekliye ayırdı. Cihazda 0 olmalı.
 - Decoder yeniden başlatmaları 100 ms / 500 ms / 1 sn aralıklıdır (10 sn'de 3'ten sonra `give_up`).
+
+## Tablet gecikme aşamaları (tablet, `MB/render`/`MB/decoder`, T-168, karar 0021)
+
+Tüm aşamalar host'un yakalama damgasından (`VIDEO_FRAME.capture_time_us`, SCK PTS) tablet saatine ölçülür (`ClockSync` ofseti). Hiçbiri "ekranda görünme" değildir. Ayrıca SCK PTS'nin geri çağrıya göre ~6,6 ms ileride olması (karar 0021) bu sayılarda **yoktur**; analizde host'un `pts_vs_deliv` değeri eklenir. Değerler işaretlidir (kırpma yok), log penceresi başına (10 sn) p50/p95/p99/max verilir; örnek yoksa `-`.
+
+- **`MB/render ev=stats`** satırının sonuna eklenenler:
+  - `cap_dec_p50_us= cap_dec_p95_us= cap_dec_p99_us= cap_dec_max_us=`: yakalama damgası → decoder çıkışı. Pacing, `releaseOutputBuffer`, SurfaceFlinger ve panel dahil değil. Sonradan atılan kareler de sayılır.
+  - `ready_slot_p50_us= ready_slot_p95_us= ready_slot_p99_us=`: decoder çıkışı hazır → pacer'ın seçtiği vsync slotu (yalnız pacing modlarında; 120 Hz'te ~13–17 ms beklenir).
+  - `cap_rel_p50_us= … cap_rel_max_us=`: yakalama damgası → `releaseOutputBuffer` (yalnız gösterilmek üzere bırakılan kareler; atılanlar hariç).
+  - `cap_cb_p50_us= … cap_cb_max_us=`: yakalama damgası → codec'in frame-rendered geri çağrısı (yalnız codec-render modunda; GL yolunda `-`).
+  - `render_cb_missing=`: bırakıldığı hâlde geri çağrısı hiç gelmeyen kare (sonraki karenin geri çağrısı önce geldi ya da 64 bekleyen sınırı aşıldı). GL yolunda `-`. Codec durunca bekleyenler sayılmadan atılır.
+  - `discarded=`: çözülüp gösterilmeden geri verilen kare (aynı slotta yenisiyle değiştirilen ya da en yeni olmayan). `drop=` içinde de sayılır.
+  - `lat_neg=`: sıfırın altındaki `cap_dec` örnek sayısı (saat ofseti hatası gecikmeden büyük). USB'de 0 olmalı.
+  - `clock_unc_us=`: saat belirsizliği = en iyi RTT / 2 (USB ~2,3 ms, yüklü Wi-Fi'da ~12–14 ms; Wi-Fi yükünde sapma eksik gösterme yönünde). PONG yoksa `-`.
+- **Kullanımdan kalkan takma adlar** (bir sürüm daha yazılır, sonra kalkar):
+  - `latency_us=` (`MB/render ev=stats`): eski değer, yani kırpılmış (≥ 0) yakalama→decoder çıkışı örneklerinin ortalaması. Yerine `cap_dec_*`.
+  - `shown=` (`MB/decoder ev=stats`): `released=` ile aynı değer, yani `releaseOutputBuffer` çağrı sayısı (ekranda gösterim değil).
+- STATS `latency_avg_us` (tel) ve A/V eşleme girdisi değişmedi: kırpılmış yakalama→decoder çıkışı ortalaması. Yalnız u32'ye yazılırken kırpılır.
+- Bindirme: "Gecikme" → "Yak→çöz" (aynı ortalama). Yeni satır: `Hazır→slot p50 N ms | saat ±N ms`.
+- **`I decoder ev=codec_start`**: `requested_rate=` ile `accepted` arasına `is_hw=0|1|? sw_only=0|1|?` eklendi (`MediaCodecInfo.isHardwareAccelerated` / `isSoftwareOnly`; `?` = okunamadı).
+- **`W decoder ev=codec_software name= mime= is_hw= sw_only=`**: codec başlangıcı başına bir kez, seçilen decoder donanım değilse ya da yalnız yazılımsa (ör. `c2.android.hevc.decoder`). Cihazda görülmemeli.

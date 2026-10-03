@@ -33,6 +33,18 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     /** What [DecoderCodec.lowLatencySupport] answers (null = API < 30). */
     @Volatile var lowLatency: Boolean? = true
     @Volatile var inputCapacity = 64 * 1024
+    /** T-168: what [DecoderCodec.isHardwareAccelerated] / [DecoderCodec.isSoftwareOnly] answer (null = unknown). */
+    @Volatile var hardware: Boolean? = true
+    @Volatile var softwareOnly: Boolean? = false
+
+    /**
+     * T-168 review: a render release (`releaseOutputBuffer(idx, ns)` / `(idx, true)`) calls the frame-rendered listener
+     * before it returns, as if the main looper ran the callback while the output thread was descheduled.
+     */
+    @Volatile var renderCallbackInRelease = false
+
+    /** T-168: every codec created, in order (a test drives a codec's frame-rendered listener through it). */
+    val codecs = java.util.concurrent.CopyOnWriteArrayList<Codec>()
 
     private val lock = Object()
     private val log = ArrayList<String>()
@@ -81,7 +93,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
             log.add("create#$serial"); lock.notifyAll()
         }
         if (fail) throw java.io.IOException("fake create failure")
-        return Codec(serial, mime)
+        return Codec(serial, mime).also { codecs.add(it) }
     }
 
     private fun gate(latch: CountDownLatch?) {
@@ -102,9 +114,12 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         private var nextIndex = 0 // input thread only
         private val ready = ArrayDeque<Long>() // under the factory lock
         private var nextOut = 0
+        private val outPts = java.util.concurrent.ConcurrentHashMap<Int, Long>() // output index -> pts
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
+        override val isHardwareAccelerated: Boolean? get() = hardware
+        override val isSoftwareOnly: Boolean? get() = softwareOnly
 
         override fun configure(format: DecoderFormat, surface: Any) {
             record("configure#$serial")
@@ -148,6 +163,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
                     outputs++; lock.notifyAll()
                     info.presentationTimeUs = pts
                     info.flags = 0
+                    outPts[nextOut] = pts
                     return nextOut.also { nextOut = (nextOut + 1) % 8 }
                 }
             }
@@ -156,8 +172,16 @@ class FakeDecoderFactory : DecoderCodec.Factory {
             return DecoderCodec.INFO_TRY_AGAIN_LATER
         }
 
-        override fun releaseOutputBuffer(index: Int, renderTimestampNs: Long) = record("releaseOutput#$serial")
-        override fun releaseOutputBuffer(index: Int, render: Boolean) = record("releaseOutput#$serial")
+        override fun releaseOutputBuffer(index: Int, renderTimestampNs: Long) { record("releaseOutput#$serial"); rendered(index) }
+        override fun releaseOutputBuffer(index: Int, render: Boolean) {
+            record("releaseOutput#$serial")
+            if (render) rendered(index)
+        }
+
+        private fun rendered(index: Int) {
+            val pts = outPts.remove(index) ?: return
+            if (renderCallbackInRelease) renderedListener?.invoke(pts, System.nanoTime())
+        }
 
         override fun setOnFrameRenderedListener(listener: (presentationTimeUs: Long, nanoTime: Long) -> Unit) {
             renderedListener = listener

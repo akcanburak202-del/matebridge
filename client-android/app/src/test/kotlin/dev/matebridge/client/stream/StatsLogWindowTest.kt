@@ -13,7 +13,7 @@ class StatsLogWindowTest {
 
     /** One second of a 60 fps stream: [n] frames, 16.7 ms apart, decode [decUs] each, latency [latUs]. */
     private fun second(st: VideoStats, startUs: Long, n: Int, decUs: Long, latUs: Long, bytes: Int = 1000) {
-        st.latencyOf = { latUs }
+        st.latencyOf = { _, _ -> latUs }
         for (k in 0 until n) {
             val t = startUs + k * 16_667L
             val pts = startUs + k

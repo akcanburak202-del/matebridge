@@ -25,9 +25,18 @@ class ClockSync(private val windowSize: Int = 8) {
 
     @Synchronized fun bestRttUs(): Long? = samples.minOfOrNull { it.rttUs }
 
-    /** Capture-to-display latency; [displayUs] is client time. Null when the offset is unknown. */
-    fun latencyUs(captureHostUs: Long, displayUs: Long): Long? {
+    /**
+     * T-168: signed time from a host capture stamp to the client event at [clientUs] (same monotonic clock as the PONG
+     * times). Negative when the offset estimate is off by more than the real latency; null when the offset is unknown.
+     */
+    fun latencySignedUs(captureHostUs: Long, clientUs: Long): Long? {
         val off = offsetUs() ?: return null
-        return (displayUs - (captureHostUs - off)).coerceAtLeast(0)
+        return clientUs - (captureHostUs - off)
     }
+
+    /** [latencySignedUs] clamped at 0 (for u32 fields such as STATS `latency_avg_us`). */
+    fun latencyUs(captureHostUs: Long, clientUs: Long): Long? = latencySignedUs(captureHostUs, clientUs)?.coerceAtLeast(0)
+
+    /** T-168: uncertainty of the offset (best RTT / 2), or null before the first sample. */
+    fun uncertaintyUs(): Long? = bestRttUs()?.let { it / 2 }
 }
