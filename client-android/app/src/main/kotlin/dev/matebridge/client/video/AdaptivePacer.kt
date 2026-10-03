@@ -37,6 +37,19 @@ package dev.matebridge.client.video
  *    jitter, and it would push the p99 to its one-period cap). The next continuous frame acquires the lock as usual
  *    (replacing the lone frame when both fall on one vsync). Until the history holds [WARMUP_SAMPLES] frames, a late
  *    locked frame re-acquires the lock at once (see [scheduleLocked]).
+ *  - Integer cadence (T-208): the lock also applies when the content interval is about n panel periods for an integer
+ *    n up to [MAX_LOCK_MULTIPLE] (60 fps content on a 120 Hz panel: n = 2). The lattice already steps by
+ *    k = round(dCapture/P) per frame, so every frame is held n vsyncs on one phase instead of 1 or 3 by per-frame
+ *    rounding. With n = 1 every rule and value is the T-060 one; with n = 2 three limits scale: D is capped at
+ *    1.5 periods (the unlocked cap this content had before, so no extra buffering), the latency bound is n periods
+ *    plus the half-jitter, and a lone-frame gap is [LOCK_GAP_PERIODS] content intervals.
+ *  - A panel-rate change (epoch) re-times everything, except when the content interval stays the same and is locked
+ *    on both grids, n = 2 on one of them (a 60 fps stream while the panel goes 60 <-> 120): the stream's own
+ *    measurements (baseline, jitter history, last capture and slot) are kept and only the grid state (lock, slack
+ *    level, D) starts over, so the first frame on the new grid re-acquires a centred lock with a full history (one
+ *    irregular interval at most, no warm-up re-locks).
+ *  - A locked frame at n = 2 that missed its lattice slot is shown on the next free vsync instead of being folded onto
+ *    the previous slot (see [scheduleLocked]); n = 1 keeps the T-060 drop rule.
  *
  * Decoder/output thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
@@ -82,10 +95,17 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
          * lock at once instead of waiting for [REPHASE_FRAMES]. With 32 samples the p99 is the maximum.
          */
         const val WARMUP_SAMPLES = 32
+        /** T-208: largest integer multiple of the panel period a content interval may be to get the phase lock. */
+        const val MAX_LOCK_MULTIPLE = 2L
+        /** T-208: a panel-rate change keeps the stream's measurements when the content interval moved less than this fraction. */
+        const val SAME_INTERVAL_FRACTION = 0.05
     }
 
     /** T-115: lone frames go to the earliest slot without hold (true), or acquire the lock like before (false, A/B). */
     @Volatile var sparseEarly = true
+
+    /** T-208: phase lock on integer cadences n <= [MAX_LOCK_MULTIPLE] (true), or only at one period like before (false, A/B). */
+    @Volatile var integerLock = true
 
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
     private val minT = ArrayDeque<Long>()
@@ -102,6 +122,8 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     private var lockSlot = Long.MIN_VALUE // slot of the previous frame on the phase lock (MIN = not locked)
     private var badRun = 0
     private var lastCaptureUs = Long.MIN_VALUE
+    private var lastFi = 0L // content interval of the previous frame
+    private var lastN = 0L // its lock multiple (0 = not lockable)
 
     /**
      * Slack level added by the skip feedback on top of the measured jitter: 0 = none, 1 = half a vsync,
@@ -141,12 +163,21 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     /** [schedule] on a given grid snapshot (also used to replay recorded traces). */
     internal fun scheduleOn(grid: VsyncClock.Grid, captureUs: Long, nowNs: Long): FramePacer.Decision {
         val period = grid.periodNs
+        val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
+        val n = lockMultiple(fi, period) // T-208: content interval = n panel periods (0 = no lock)
+        val idle = lastScheduleNs != Long.MIN_VALUE && nowNs - lastScheduleNs > IDLE_REANCHOR_NS
         if (epoch != grid.epoch) {
-            resetState() // panel rate really changed (60 <-> 120): everything measured against the old grid is stale
+            // Panel rate really changed (60 <-> 120): everything measured against the old grid is stale, unless the
+            // stream itself runs on unchanged at an integer cadence on both grids (T-208: 60 fps while the panel goes
+            // 60 <-> 120): then only the grid state starts over. 1:1 streams (and the A/B switch off) reset as before.
+            val sameStream = epoch >= 0 && lastScheduleNs != Long.MIN_VALUE && !idle && lastN > 0 && n > 0 &&
+                maxOf(lastN, n) > 1 && Math.abs(fi - lastFi) <= lastFi * SAME_INTERVAL_FRACTION
+            if (sameStream) regrid() else resetState()
             epoch = grid.epoch
-        } else if (lastScheduleNs != Long.MIN_VALUE && nowNs - lastScheduleNs > IDLE_REANCHOR_NS) {
+        } else if (idle) {
             reanchor()
         }
+        lastFi = fi; lastN = n
         val readyGapNs = if (lastScheduleNs == Long.MIN_VALUE) Long.MAX_VALUE else nowNs - lastScheduleNs
         lastScheduleNs = nowNs
         lastPeriod = period
@@ -164,17 +195,16 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         // Content faster than the panel (e.g. 120 fps on a 60 Hz panel): some frames must be dropped. Never queue
         // them behind each other (that builds latency and stalls the decoder's output buffers): one vsync of slack
         // at most, and a frame whose slot is already taken replaces the older one (newest wins).
-        val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
         val surplus = fi * 4 < period * 3
-        val lockable = Math.abs(fi - period) <= period * LOCK_TOLERANCE
+        val lockable = n > 0
         val jitter = percentile()
         val dTarget = if (surplus) (jitter + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
-        else if (lockable) (jitter + MARGIN_NS + extraNs).coerceAtMost(period)
+        else if (n == 1L) (jitter + MARGIN_NS + extraNs).coerceAtMost(period)
         else (jitter + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)
         val d = if (dNs == Long.MIN_VALUE) dTarget else slew(dNs, dTarget, D_SLEW_UP_NS, D_SLEW_DOWN_NS)
         dNs = d
         // T-115: a lone frame (no predecessor in the stream) is no stream jitter: its delay stays out of the history.
-        val lone = sparseEarly && lockable && (prevCaptureUs == Long.MIN_VALUE || isGap(captureUs, prevCaptureUs, period))
+        val lone = sparseEarly && lockable && (prevCaptureUs == Long.MIN_VALUE || isGap(captureUs, prevCaptureUs, n * period))
         if (!lone) {
             devs[devPos] = dev
             devPos = (devPos + 1) % DEV_SAMPLES
@@ -189,7 +219,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             it.path = PaceProbe.PATH_UNLOCKED
         }
         if (lockable) {
-            return scheduleLocked(grid, nowNs, captureUs, prevCaptureUs, dev, d, jitter, earliest, lone, readyGapNs)
+            return scheduleLocked(grid, nowNs, captureUs, prevCaptureUs, dev, d, jitter, earliest, lone, readyGapNs, n)
         }
         phaseLock = false; lockSlot = Long.MIN_VALUE; badRun = 0
         val targetSlot = grid.slotAtOrAfter(nowNs - dev + d + grid.deadlineNs, 0.0)
@@ -218,10 +248,13 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         )
     }
 
-    /** Slot assignment on the phase lock (see class doc). [dev] is this frame's extra delay, [jitter] the p99. */
+    /**
+     * Slot assignment on the phase lock (see class doc). [dev] is this frame's extra delay, [jitter] the p99, [n] the
+     * content interval in panel periods (T-208).
+     */
     private fun scheduleLocked(
         grid: VsyncClock.Grid, nowNs: Long, captureUs: Long, prevCaptureUs: Long, dev: Long, d: Long, jitter: Long,
-        earliest: Long, lone: Boolean, readyGapNs: Long,
+        earliest: Long, lone: Boolean, readyGapNs: Long, n: Long,
     ): FramePacer.Decision {
         val period = grid.periodNs
         val ideal = nowNs - dev + grid.deadlineNs // jitter-free ready time of this frame, plus the deadline
@@ -232,10 +265,10 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             return maxOf(nearest, grid.slotAtOrAfter(minimum, 0.0), earliest)
         }
         // Latency bound (T-057) for the final slot: one period after the earliest possible one, plus the half-jitter
-        // the centered phase adds on purpose.
-        val latencyBound = period + minOf(jitter, period) / 2
+        // the centered phase adds on purpose. T-208: n periods at an integer cadence n (D may then exceed a period).
+        val latencyBound = n * period + minOf(jitter, period) / 2
         var slot: Long
-        val sparse = prevCaptureUs != Long.MIN_VALUE && isGap(captureUs, prevCaptureUs, period)
+        val sparse = prevCaptureUs != Long.MIN_VALUE && isGap(captureUs, prevCaptureUs, n * period)
         if (lone) {
             // T-115: a lone frame gains nothing from a hold (there is no cadence to keep), so it takes the earliest
             // slot. No lock is formed from it: the next continuous frame acquires one from its own timing.
@@ -325,6 +358,18 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         }
         lockSlot = slot
         probe?.let { it.lockSlotNs = slot }
+        if (n > 1 && missed && previous != Long.MIN_VALUE && earliest > previous) {
+            // T-208: at an integer cadence a frame that missed its lattice slot is shown on the earliest vsync after
+            // the previous frame's (that one is held longer), not folded onto the previous slot; the lock stays on the
+            // lattice (slot_ns > lock_slot_ns in the trace). One late frame costs one uneven pair of holds, and a
+            // pipeline that got slower keeps an even n-vsync cadence until the re-phase instead of a drop run. When the
+            // next frame is on time again and lands on the same vsync, it replaces this one (newest wins).
+            lastSlot = earliest
+            val cadence = n * period
+            return FramePacer.Decision(
+                earliest - vsync.leadNs(), false, 0, (earliest - previous) * 2 > cadence * 3, slotNs = earliest,
+            )
+        }
         if (late) {
             // Too late for its own slot, or a backlog that would exceed the latency bound: dropped (newest wins, it
             // shares the previous slot), the next frames stay on the lock.
@@ -340,8 +385,20 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         )
     }
 
-    private fun isGap(captureUs: Long, prevCaptureUs: Long, period: Long) =
-        (captureUs - prevCaptureUs) * 1000 > LOCK_GAP_PERIODS * period
+    /** [intervalNs]: the lockable content interval (n periods); a gap is above [LOCK_GAP_PERIODS] of them. */
+    private fun isGap(captureUs: Long, prevCaptureUs: Long, intervalNs: Long) =
+        (captureUs - prevCaptureUs) * 1000 > LOCK_GAP_PERIODS * intervalNs
+
+    /**
+     * T-208: n when the content interval [fi] is within [LOCK_TOLERANCE] of n panel periods, 1 <= n <= [MAX_LOCK_MULTIPLE]
+     * (only n = 1 with [integerLock] off); 0 = no lock. For n = 1 this is exactly the T-060 condition.
+     */
+    private fun lockMultiple(fi: Long, period: Long): Long {
+        if (period <= 0) return 0
+        val n = Math.round(fi.toDouble() / period)
+        val max = if (integerLock) MAX_LOCK_MULTIPLE else 1L
+        return if (n in 1..max && Math.abs(fi - n * period) <= n * period * LOCK_TOLERANCE) n else 0
+    }
 
     private fun slew(cur: Long, target: Long, up: Long, down: Long) =
         if (target > cur) minOf(target, cur + up) else maxOf(target, cur - down)
@@ -377,6 +434,18 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
     }
 
+    /**
+     * T-208: panel rate changed under an unchanged, continuous stream. The stream's measurements (baseline window,
+     * jitter history, last capture time, last slot) stay valid; what belongs to the old grid starts over: the lock,
+     * the slack level (it is counted in periods) and D (re-derived from the kept history on the next frame).
+     */
+    private fun regrid() {
+        lockSlot = Long.MIN_VALUE; badRun = 0; phaseLock = false
+        dNs = Long.MIN_VALUE
+        level = 0; highRun = 0; lowRun = 0; hold = 0
+        rephases = 0
+    }
+
     /** Panel rate (epoch) changed: the whole path is re-timed, so everything measured is dropped, jitter included. */
     private fun resetState() {
         reanchor()
@@ -386,5 +455,5 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         rephases = 0
     }
 
-    fun reset() { resetState(); lastPeriod = 0; epoch = -1; lastScheduleNs = Long.MIN_VALUE }
+    fun reset() { resetState(); lastPeriod = 0; epoch = -1; lastScheduleNs = Long.MIN_VALUE; lastFi = 0; lastN = 0 }
 }

@@ -96,6 +96,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
 - Kare gelmeyen pencere yazılmaz. Akış biterken ya da yeniden yapılandırılırken yarım pencere yazılır.
 - Açılışta `render ev=stats_log window_ms=10000|1000`.
 - Vsync döngüsü ≥ 1 s uyuduğunda `render ev=idle state=on since_frame_ms=<n>`, uyanınca `state=off idle_ms=<n>`.
+- `render ev=present ... phase_lock=0|1 rephase=<n>`: `phase_lock=1` faz kilidi açık. T-208'den beri içerik aralığı panel periyodunun tam katı olduğunda da (n ≤ 2; 120 Hz panelde 60 fps) kilitli; kilitliyken her kare n vsync tutulur. Pace trace'te bu kareler `path=locked`, `k=2`. Kilitli slotunu kaçırıp bir sonraki vsync'te gösterilen kare `slot_ns > lock_slot_ns` olur (düşürülmez). Tutma dağılımı: `tools/pacing/sim.py TRACE --holds`.
 - Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`) değişmedi.
 
 ## Keyframe isteği birleştirme (Mac, `net`, T-122)
