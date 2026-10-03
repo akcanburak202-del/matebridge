@@ -1,7 +1,7 @@
 ---
 id: T-162
 title: Serialise HEVCEncoder submits, QP updates and teardown on one owner queue
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -54,16 +54,16 @@ Source: external architecture review 2026-10-03 (M02, X5, SE7); verification: do
 
 ## Kabul kriterleri
 
-- [ ] [XCTest, step 1, red at HEAD] Against the extracted step-1 logic (today's ordering) with a fake backend, the barrier test below shows an `encode` after `invalidate` and a PTS inversion. Step 1 is its own commit with no behaviour change; the failing test is committed red (or `XCTExpectFailure`/skipped with the failure quoted in the commit message) before the ordering changes. Handoff names the commit.
-- [ ] [XCTest] A barrier between reserve and submit plus a concurrent `stop()` → zero `encode` calls after `invalidate`. Deterministic: barrier-driven, no sleeps.
-- [ ] [XCTest] A 10 000-iteration stress run (capture offers, `bypassGate` resubmits, flush-timer takes, slot releases, `stop()`) → strictly increasing backend PTS, exactly one release per reservation, and `0 ≤ inFlight ≤ maxInFlight` throughout.
-- [ ] [XCTest] Mutation check: a deliberately broken variant (submit after unlock on the caller thread) fails the barrier test. Recorded in Handoff, not committed as production code.
-- [ ] The `inFlight` release is idempotent per reservation token; a double release logs at `warning` and does not change the count.
-- [ ] `updateQPBoost` runs in the same submit block as the frame it applies to.
-- [ ] `CMBlockBuffer`: when `lengthAtOffset != totalLength`, the bytes are copied with `CMBlockBufferCopyDataBytes`.
-- [ ] Teardown `CompleteFrames`/`Invalidate` runs on the owner queue, enqueued with `async` only, never on a Swift cooperative thread and never via `sync`. The teardown block captures only the session/backend and locals, never `self` (it is reached from `deinit`).
+- [x] [XCTest, step 1, red at HEAD] Against the extracted step-1 logic (today's ordering) with a fake backend, the barrier test below shows an `encode` after `invalidate` and a PTS inversion. Step 1 is its own commit with no behaviour change; the failing test is committed red (or `XCTExpectFailure`/skipped with the failure quoted in the commit message) before the ordering changes. Handoff names the commit.
+- [x] [XCTest] A barrier between reserve and submit plus a concurrent `stop()` → zero `encode` calls after `invalidate`. Deterministic: barrier-driven, no sleeps.
+- [x] [XCTest] A 10 000-iteration stress run (capture offers, `bypassGate` resubmits, flush-timer takes, slot releases, `stop()`) → strictly increasing backend PTS, exactly one release per reservation, and `0 ≤ inFlight ≤ maxInFlight` throughout.
+- [x] [XCTest] Mutation check: a deliberately broken variant (submit after unlock on the caller thread) fails the barrier test. Recorded in Handoff, not committed as production code.
+- [x] The `inFlight` release is idempotent per reservation token; a double release logs at `warning` and does not change the count.
+- [x] `updateQPBoost` runs in the same submit block as the frame it applies to.
+- [x] `CMBlockBuffer`: when `lengthAtOffset != totalLength`, the bytes are copied with `CMBlockBufferCopyDataBytes`.
+- [x] Teardown `CompleteFrames`/`Invalidate` runs on the owner queue, enqueued with `async` only, never on a Swift cooperative thread and never via `sync`. The teardown block captures only the session/backend and locals, never `self` (it is reached from `deinit`).
 - [ ] [device] Mac + tablet, 10 min at 120 fps with 20 STREAM_PREFS changes and 10 video reconnects: `ev=encode_failed` count = 0; `ev=latency` `enc` and `cap_to_sent` p50 within ±0.3 ms of a baseline run on the previous build (same day, same mode); p99 not grown. Both build IDs recorded in docs/NOTES.md by the orchestrator.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -77,10 +77,45 @@ Risks: one extra thread hop per frame (measure `ev=latency enc` / `cap_to_sent` 
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** branch `task/T-162-host-encoder-submit-owner`.
+  - `4d07331` plan.
+  - `0c218d3` **step 1** (Core extraction, no behaviour change). The two barrier tests are red there under `XCTExpectFailure`, and the failures are quoted in the commit message: `[2, 1] != [1, 2]` (PTS inversion) and `events: [invalidate, encode(stamp: 1)]` (encode after invalidate).
+  - `641a418` **step 2** (owner queue, idempotent release, QP in the submit block, CMBlockBuffer copy, `shutdown()`).
+  - `b17e828` test hardening: off-owner-queue backend calls are counted; the barrier tests drain the owner queue before asserting.
+  - The Handoff commit comes last.
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift` (new), `host-mac/Tests/MateBridgeCoreTests/Video/EncoderSubmitOrderTests.swift` (new), `host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift`, `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift` (one line: `await enc?.shutdown()`; T-165 was `todo` with no branch or worktree), this card.
+- **Invariant (single submit owner):** every `VTCompressionSessionEncodeFrame`, the T-087 `MaxAllowedFrameQP` update and the final `CompleteFrames`/`Invalidate` run on one serial queue (`matebridge.encoder.submit`, QoS userInteractive), owned by `EncoderSubmitOrder`.
+  - Submits are enqueued `async` while the lock that reserved their slot is held, so FIFO order equals reservation order.
+  - `stop` sets `stopped` and enqueues the teardown under the same lock, so the teardown runs after every reserved submit and no submit comes after it.
+  - Nothing calls `sync` on that queue. Capture, timers, VideoToolbox callbacks and the coordinator only take the lock and enqueue.
+  - The teardown block captures only the backend and the completion, never `self`. `HEVCEncoder.Backend` holds the encoder `weak`.
+  - The invariant is written in the class docs of both `EncoderSubmitOrder` and `HEVCEncoder`.
+- **Acceptance (XCTest):**
+  - Barrier tests: `testBarrierKeepsReservationOrderAtBackend` and `testBarrierStopNeverEncodesAfterInvalidate`. They are driven by the `beforeSubmit` hook and semaphores; there are no sleeps.
+  - Stress test: `testStressKeepsOrderAndSlotAccounting` runs 10 000 `concurrentPerform` operations: capture offers, `bypassGate` resubmits, `flushPending`, keyframe requests, completions on another queue, refused submits (every 13th), duplicate releases (every 5th completion) and `stop()`. It checks four things:
+    - backend stamps are strictly increasing;
+    - no encode happens after invalidate;
+    - reservations == releases, and duplicates == duplicates sent;
+    - `stats.minInFlight >= 0`, `stats.maxInFlight <= 2`, and live samples stay in range.
+  - Idempotent release: `testDoubleReleaseIsIgnoredAndLogged` checks `ev=slot_double_release` at `warning`, with the count unchanged.
+  - Stability: 60 × 11 tests in a row were green.
+- **Mutation check (not committed, file reverted with `git checkout`):**
+  - Mutant 1, "submit after unlock on the caller thread" (pending submits collected under the lock and run on the caller after `unlock`): both barrier tests fail, `[2, 1]`, `offQueueCalls 2 != 0` and `events: [invalidate, encode(1)]`, and the stress test fails with `stamps went backwards 2..10` and `off queue 143..188`. Three runs out of three failed.
+  - Mutant 2, teardown on the caller thread: both barrier tests and the stress test fail. Two runs out of two failed.
+  - Note: before the hardening commit, mutant 1 left the stop-barrier test green by scheduling, because the events were read before the queue had run the held frame. `b17e828` fixes that.
 - **Varsayımlar:**
+  - Sync `HEVCEncoder.stop()` is kept, and it waits for the teardown with a semaphore (`SharpnessBench` reads the outputs right after `stop()` and is not in `files:`). It does not wait when called on the owner queue. It must never be called from a VideoToolbox callback or from Swift concurrency, which use `shutdown()`.
+  - `deinit` only enqueues.
+  - `VideoPipeline.teardown` awaits `shutdown()` before `frames.finish()`, so the late outputs from `CompleteFrames` still reach the old queue, as before.
+  - The CMTime stamp bump (`+1/1000 s`) and the T-072 slot-wait formula are unchanged; they moved into `Input.stamp(after:)` and `Input.reserved(lastSlotFreeUs:)`.
+  - The idle keyframe timer now measures on HostClock µs (`lastReserveUs`) instead of `DispatchTime` ns, with the same 1 s threshold.
+  - `boostLock` is gone because `qpBoost` is confined to the owner queue.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The card's [device] criterion: 10 min at 120 fps with 20 STREAM_PREFS changes and 10 video reconnects. Check that the `ev=encode_failed` count is 0, that `ev=latency` `enc`/`cap_to_sent` p50 is within ±0.3 ms of the previous build, and that p99 has not grown (the extra thread hop per frame).
+  - Teardown and reconnect: `stopKeepingDisplay` now waits for `CompleteFrames` on the owner queue (no cooperative thread is blocked). Check that STREAM_PREFS changes do not slow the restart.
+  - No `ev=slot_double_release` should appear in normal use. If it appears, VideoToolbox sent both an error and a callback for one frame.
+  - The multi-segment `CMBlockBuffer` copy path cannot be exercised on device (VT normally returns a contiguous buffer).
+  - `sharpness-bench` (sync `stop()` path) was not run.
 - **Açık sorular:**
+  - New log event `ev=slot_double_release token=<n>` (component `encoder`, `W`). `docs/LOGGING.md` is not in `files:`; the orchestrator can add it.
+  - The T-177 live bitrate setter must go through `EncoderSubmitOrder`'s owner queue. One option is a `perform(onOwnerQueue:)` helper or a backend method. This card did not add one, to stay in scope.
