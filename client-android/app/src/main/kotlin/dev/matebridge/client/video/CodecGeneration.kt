@@ -25,11 +25,12 @@ class CodecGeneration(val gen: Int, val surface: Any) {
 
     /**
      * Review P2-3: guards "is this codec still current?" together with the shared-state updates that depend on it
-     * (stats, first-output bypass, decode progress). [GenerationHandoff.retire] and [CodecState.stop] take it, so an
-     * output that passed the check finishes its bookkeeping before the retire returns, and none starts after. Held only
-     * for bookkeeping, never across a codec call.
+     * (stats, first-output bypass, decode progress). Held only for in-memory bookkeeping: never across a codec call or
+     * a callback. [CodecState.stop] takes it; [GenerationHandoff.retire] tries it for at most
+     * [GenerationHandoff.RETIRE_LOCK_WAIT_MS] (UI thread), so an output that passed the check normally finishes its
+     * bookkeeping before the retire returns, and none starts after.
      */
-    internal val sharedLock = Any()
+    internal val sharedLock = ReentrantLock()
 }
 
 /** T-161: clock and bounded wait of [GenerationHandoff]; tests pass a fake clock. */
@@ -65,6 +66,14 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
         class Stuck(val previous: CodecGeneration, val waitedMs: Long) : Result()
     }
 
+    companion object {
+        /**
+         * Review 2: longest wait of [retire] (UI thread) for an output bookkeeping section in progress; far below
+         * `VideoRenderer.JOIN_MS`. On timeout the generation is retired anyway and [retire] returns false.
+         */
+        const val RETIRE_LOCK_WAIT_MS = 20L
+    }
+
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private var owner: CodecGeneration? = null
@@ -84,13 +93,25 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
 
     /**
      * [g] must stop: its waits ([acquire], [pause], [awaitOwnThreads]) return at once. Any thread. Waits for an output
-     * bookkeeping section of [g] in progress (see [CodecGeneration.sharedLock]).
+     * bookkeeping section of [g] in progress (see [CodecGeneration.sharedLock]), but at most [RETIRE_LOCK_WAIT_MS]:
+     * false means that wait timed out and [g] was retired without it (the section then sees the change late; see
+     * `VideoRenderer.drainOutput`).
      */
-    fun retire(g: CodecGeneration) = synchronized(g.sharedLock) {
-        lock.withLock {
-            g.active = false
-            changed.signalAll()
+    fun retire(g: CodecGeneration): Boolean {
+        val locked = try {
+            g.sharedLock.tryLock(RETIRE_LOCK_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt(); false
         }
+        try {
+            lock.withLock {
+                g.active = false
+                changed.signalAll()
+            }
+        } finally {
+            if (locked) g.sharedLock.unlock()
+        }
+        return locked
     }
 
     fun isFinished(g: CodecGeneration): Boolean = lock.withLock { g.liveThreads <= 0 }
@@ -165,13 +186,13 @@ internal class CodecState(val generation: CodecGeneration, ptsMapMax: Int) {
     val current: Boolean get() = running && generation.active
 
     /** The codec's run ended (decoder thread); waits for an output bookkeeping section in progress. */
-    fun stop() = synchronized(generation.sharedLock) { running = false }
+    fun stop() = generation.sharedLock.withLock { running = false }
 
     /**
      * Runs [block] (shared-state bookkeeping, no codec calls) only while the codec is current, atomically with that
      * check: a retire or [stop] waits for it. Returns false when the codec is no longer current.
      */
-    inline fun ifCurrent(block: () -> Unit): Boolean = synchronized(generation.sharedLock) {
+    inline fun ifCurrent(block: () -> Unit): Boolean = generation.sharedLock.withLock {
         if (!current) false else { block(); true }
     }
 

@@ -233,12 +233,13 @@ class VideoRenderer(
 
     /**
      * Review P2-2: a decoder thread's fault for [gen]: stops feeding and runs [publish] (fault callbacks) atomically,
-     * only if [gen] is still the fed generation. False (nothing changed, nothing published) for a stale generation.
+     * only if [gen] is still the fed generation. False (nothing changed) for a stale generation. Review 2: the lock
+     * covers only the check and the flag; the caller publishes its fault after it (a fault that loses the race to a
+     * new generation is dropped by [VideoHealth]'s generation check).
      */
-    private inline fun blockFeedingIfCurrent(gen: Int, publish: () -> Unit): Boolean = synchronized(feedLock) {
-        if (gen != feedGen) return@synchronized false
+    private fun blockFeedingIfCurrent(gen: Int): Boolean = synchronized(feedLock) {
+        if (gen != feedGen) return false
         feedBlocked = true
-        publish()
         true
     }
 
@@ -341,9 +342,16 @@ class VideoRenderer(
     private fun retire(wait: Boolean) {
         val att = current ?: return
         current = null
-        handoff.retire(att)
+        val startNs = System.nanoTime()
+        // Review 2: bounded (RETIRE_LOCK_WAIT_MS) even while an output bookkeeping section runs; the whole detach stays
+        // within JOIN_MS because the join gets only what is left.
+        if (!handoff.retire(att)) {
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=retire_lock_slow vgen=${att.gen} " +
+                "wait_ms=${GenerationHandoff.RETIRE_LOCK_WAIT_MS}")
+        }
         if (wait) {
-            att.thread.join(JOIN_MS)
+            val leftMs = JOIN_MS - java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+            att.thread.join(leftMs.coerceAtLeast(1))
             if (att.thread.isAlive) env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=detach_slow")
         }
     }
@@ -435,7 +443,7 @@ class VideoRenderer(
         env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=decoder_previous_stuck vgen=${att.gen} " +
             "prev_vgen=${prev.gen} waited_ms=${stuck.waitedMs} out_straggler=${if (prev.outputStraggler) 1 else 0}")
         // Nothing consumes this generation's frames.
-        blockFeedingIfCurrent(att.gen) { onHealthEvent(HealthEvent.Fault(att.gen, FaultCause.STUCK)) }
+        if (blockFeedingIfCurrent(att.gen)) onHealthEvent(HealthEvent.Fault(att.gen, FaultCause.STUCK))
     }
 
     private fun decodeAttempts(att: CodecGeneration) {
@@ -447,7 +455,7 @@ class VideoRenderer(
             if (!policy.allow(env.elapsedRealtimeMs())) {
                 env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=give_up")
                 // T-159: no more frames or keyframe retries for a dead generation (review P2-2: if still the fed one).
-                blockFeedingIfCurrent(att.gen) {
+                if (blockFeedingIfCurrent(att.gen)) {
                     onGiveUp("decoder failed repeatedly: $failure")
                     onHealthEvent(HealthEvent.Fault(att.gen, FaultCause.GIVE_UP))
                 }
@@ -498,7 +506,9 @@ class VideoRenderer(
             releaser.trace = trace
             if (codecReportsShown) {
                 codec.setOnFrameRenderedListener { pts, nanoTime -> // on the main looper (adapter)
-                    st.ifCurrent { // T-161: a late callback of a stopped codec must not count
+                    // T-161: a late callback of a stopped codec must not count. Main thread: a plain check, never the
+                    // shared lock (review 2: the UI thread must not wait on output bookkeeping).
+                    if (st.current) {
                         val period = vsync.periodNs
                         val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
                         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
@@ -669,14 +679,17 @@ class VideoRenderer(
             val readyNs = System.nanoTime()
             var d: FramePacer.Decision? = null
             var tag = -1L
+            var firstOfGeneration = false
             // Review P2-3: the shared bookkeeping of this output (decode progress, stats, first-output bypass, pacing,
-            // trace) runs atomically with the "still current?" check; a retire waits for it, so an output of a retired
-            // codec never touches the next generation's state. Codec calls stay outside.
+            // trace) runs atomically with the "still current?" check; a retire waits for it (bounded), so an output of a
+            // retired codec never touches the next generation's state. Review 2: in-memory work only; codec calls and
+            // callbacks ([onHealthEvent]) run after the lock is released.
             val current = st.ifCurrent {
+                outputSectionHook?.invoke()
                 st.lastOutputNs = readyNs
                 if (isFrame) {
                     // T-159: health is timed on decoder output, not on onFrameRendered (panels may throttle presentation).
-                    if (progress.onOutput(gen)) onHealthEvent(HealthEvent.FirstOutput(gen))
+                    firstOfGeneration = progress.onOutput(gen)
                     stats.onOutput(info.presentationTimeUs, nowUs())
                     st.readyByPts.put(info.presentationTimeUs, readyNs)
                 }
@@ -686,11 +699,12 @@ class VideoRenderer(
                     val probe = adaptivePacer.probe
                     probe?.clear()
                     // T-141: the first output after an idle sleep is released at once (null), independent of the clock.
-                    val decision = firstOutput.schedule {
-                        if (!useAdaptive) pacer.schedule(readyNs)
-                        else if (cpd != null) cpd.schedule(captureUs, readyNs)
-                        else adaptivePacer.schedule(captureUs, readyNs)
-                    }
+                    val tookBypass = firstOutput.take()
+                    val decision = if (tookBypass) null
+                    else if (!useAdaptive) pacer.schedule(readyNs)
+                    else if (cpd != null) cpd.schedule(captureUs, readyNs)
+                    else adaptivePacer.schedule(captureUs, readyNs)
+                    giveBackIfRetired(st, tookBypass)
                     if (decision == null) {
                         trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, null, 0, false, false, 0, PaceTrace.ACTION_NOW)
                     } else {
@@ -701,9 +715,10 @@ class VideoRenderer(
                     }
                     d = decision
                 } else if (isFrame) {
-                    firstOutput.take() // unpaced: released at once anyway; the bypass must not linger
+                    giveBackIfRetired(st, firstOutput.take()) // unpaced: released at once anyway; must not linger
                 }
             }
+            if (firstOfGeneration) onHealthEvent(HealthEvent.FirstOutput(gen)) // stale gens are dropped by VideoHealth
             if (!current) {
                 // T-161: the codec was stopped while this thread sat in dequeue (a straggler) or before its bookkeeping:
                 // hand the buffers back without touching stats, the first-output bypass or decode progress, which
@@ -730,6 +745,17 @@ class VideoRenderer(
         if (prev >= 0) sink.releaseNow(prev)
         return formatChanged
     }
+
+    /**
+     * Review 2: a retire that timed out on the shared lock ([GenerationHandoff.retire] false) can land inside an output
+     * section; a bypass taken there may have been armed for the next generation, so a retired codec hands it back.
+     */
+    private fun giveBackIfRetired(st: CodecState, tookBypass: Boolean) {
+        if (tookBypass && !st.current) firstOutput.arm()
+    }
+
+    /** Tests only: runs inside each output's bookkeeping section (under the shared lock, after the "current" check). */
+    @Volatile internal var outputSectionHook: (() -> Unit)? = null
 
     private fun logOutputFormat(codec: DecoderCodec) {
         val f = codec.outputFormat

@@ -276,38 +276,73 @@ class DecoderTeardownTest {
     }
 
     /**
-     * Review P2-3: the output thread is held *inside* its bookkeeping section (after the "still current?" check, in the
-     * FirstOutput callback, before stats and the first-output bypass). A retire must wait for that section, so the
-     * bypass the UI arms after the retire stays for the next generation.
+     * Review 2: a health callback that blocks (here the FirstOutput one) must not hold up the UI thread: it runs outside
+     * the shared lock, so reconfigure and detach stay within [VideoRenderer.JOIN_MS] while it is blocked.
      */
-    @Test fun aRetireWaitsForAnOutputSectionInProgressSoTheOldOutputCannotTakeTheNextBypass() {
+    @Test fun aBlockedFirstOutputCallbackNeverDelaysReconfigureOrDetach() {
         factory.produceOutput = true
-        val inSection = CountDownLatch(1)
+        val inCallback = CountDownLatch(1)
         val release = CountDownLatch(1)
         val r = make(onHealth = { e ->
             health.add(e)
-            if (e == HealthEvent.FirstOutput(1)) { inSection.countDown(); release.await(10, TimeUnit.SECONDS) }
+            if (e == HealthEvent.FirstOutput(1)) { inCallback.countDown(); release.await(10, TimeUnit.SECONDS) }
         })
         r.attachTarget(Any())
         assertTrue(env.awaitLines("codec_start"))
-        val retired = CountDownLatch(1)
-        val ui = Thread { r.reconfigure(config); retired.countDown() }
+        try {
+            r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
+            r.onFrame(frame(1, VideoFrame.KEYFRAME))
+            assertTrue("no FirstOutput callback", inCallback.await(5, TimeUnit.SECONDS))
+
+            var startNs = System.nanoTime()
+            r.reconfigure(config)
+            val reconfigureMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+            startNs = System.nanoTime()
+            r.detachSurface()
+            val detachMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+
+            assertTrue("reconfigure took $reconfigureMs ms", reconfigureMs < VideoRenderer.JOIN_MS)
+            assertTrue("detach took $detachMs ms", detachMs < VideoRenderer.JOIN_MS)
+            assertEquals(0, env.lines("detach_slow").size)
+            assertEquals("the callback ran outside the shared lock", 0, env.lines("retire_lock_slow").size)
+        } finally {
+            release.countDown()
+        }
+        assertNotNull(health.await { it == HealthEvent.Exited(1) })
+    }
+
+    /**
+     * Review P2-3 / review 2: the output thread is held *inside* its bookkeeping section (under the shared lock, after
+     * the "still current?" check, before the first-output bypass). The UI's retire gives up on the lock after
+     * [GenerationHandoff.RETIRE_LOCK_WAIT_MS] (`retire_lock_slow`), so reconfigure stays within [VideoRenderer.JOIN_MS];
+     * the UI then arms the bypass for generation 2, and the old output, resuming, must not keep it.
+     */
+    @Test fun anOutputHeldInsideItsSectionCannotDelayTheRetireNorKeepTheNextGenerationsBypass() {
+        factory.produceOutput = true
+        val inSection = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val r = make()
+        r.outputSectionHook = {
+            if (inSection.count > 0) { inSection.countDown(); release.await(10, TimeUnit.SECONDS) }
+        }
+        r.attachTarget(Any())
+        assertTrue(env.awaitLines("codec_start"))
         try {
             r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
             r.onFrame(frame(1, VideoFrame.KEYFRAME))
             assertTrue("no output section", inSection.await(5, TimeUnit.SECONDS))
-            ui.start()
-            assertFalse("the retire did not wait for the output section in progress",
-                retired.await(300, TimeUnit.MILLISECONDS))
+
+            val startNs = System.nanoTime()
+            r.reconfigure(config)
+            val tookMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+            assertTrue("reconfigure took $tookMs ms", tookMs < VideoRenderer.JOIN_MS)
+            assertTrue(env.lines("retire_lock_slow").single().contains("ev=retire_lock_slow vgen=1 wait_ms=20"))
+            r.firstOutput.arm() // the UI arms the bypass after the retire, for generation 2
         } finally {
-            release.countDown()
+            release.countDown() // generation 1's output resumes inside its section and meets the armed bypass
         }
-        assertTrue("retire never returned", retired.await(5, TimeUnit.SECONDS))
-        ui.join(5_000)
-        r.firstOutput.arm() // the UI arms the bypass after the retire, for generation 2
         assertTrue("generation 2 never started", factory.awaitEvent("start#2")) // generation 1 fully finished
-        assertTrue("generation 1's output took generation 2's bypass", r.firstOutput.isArmed)
-        assertEquals("generation 1's output counted once, while current", 1L, r.stats.snapshot().decoded)
+        assertTrue("generation 1's output kept generation 2's bypass", r.firstOutput.isArmed)
     }
 
     private fun frame(seq: Long, flags: Int) = VideoFrame(seq, seq * 1000, flags, 0, 1, 3, Bytes(byteArrayOf(0, 0, 1)))

@@ -103,6 +103,28 @@ class GenerationHandoffTest {
         assertEquals(GenerationHandoff.Result.Retired, h.awaitOwnThreads(g, 300))
     }
 
+    @Test fun retireWaitsForTheSharedLockOnlyBriefly() {
+        val h = GenerationHandoff()
+        val g = generation(h, 1)
+        assertTrue("free lock", h.retire(g))
+
+        val g2 = generation(h, 2)
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = Thread { g2.sharedLock.lock(); try { held.countDown(); release.await(10, TimeUnit.SECONDS) } finally { g2.sharedLock.unlock() } }
+        holder.start()
+        try {
+            assertTrue(held.await(5, TimeUnit.SECONDS))
+            val startNs = System.nanoTime()
+            assertFalse("the lock was held", h.retire(g2))
+            val tookMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+            assertTrue("took $tookMs ms", tookMs < VideoRenderer.JOIN_MS)
+            assertFalse("retired anyway", g2.active)
+        } finally {
+            release.countDown(); holder.join(5_000)
+        }
+    }
+
     @Test fun pauseWaitsItsFullLengthUnlessRetired() {
         val timer = FakeTimer()
         val h = GenerationHandoff(timer)
