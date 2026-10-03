@@ -160,7 +160,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
         }
         let mountedNow = planner.forwardedLocalPort.map { Self.mountPoints(localPort: $0) } ?? []
         for path in paths where planner.volumeUnmounted(path: path, mountedNow: mountedNow) {
-            logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off")
+            logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off seen=notification")
         }
         apply([])  // publishes the new watched paths
     }
@@ -217,7 +217,12 @@ public final class TabletFilesBridge: @unchecked Sendable {
             for path in Self.mountPoints(localPort: local) {
                 if unmount(path) { detached.append(path) } else { stillMounted.append(path) }
             }
-            apply(planner.unmountFinished(localPort: local, detached: detached, stillMounted: stillMounted))
+            let wanted = planner.remountsAfterRestart
+            let next = planner.unmountFinished(localPort: local, detached: detached, stillMounted: stillMounted)
+            if wanted, !planner.remountsAfterRestart {
+                logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off seen=unmount")
+            }
+            apply(next)
         case .unmountPath(let path, let local):
             if Self.mountPoints(localPort: local).contains(path) { unmount(path) }
         case .mount(let local, let secret, let gen, let knownPath):
