@@ -38,10 +38,9 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
-- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd|nw notsent_lowat_kb=<n>|na control_socket=bsd|nw tcp_log=auto|on|off`: dinleyiciler hazır.
+- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off`: dinleyiciler hazır.
   - `service_class` → `MATEBRIDGE_SERVICE_CLASS` (T-088). Varsayılan T-124'ten beri `signaling`: `video_class=interactiveVideo control_class=interactiveVoice` (Wi-Fi'de video AC_VI, kontrol/ses AC_VO). `off` sınıfları ayarlamaz (T-088 öncesi davranış) ve yalnızca `service_class=off` yazar. Tanınmayan değer varsayılana düşer. USB'de (adb tüneli) etkisizdir.
-  - `video_socket` → `MATEBRIDGE_VIDEO_SOCKET` (T-091/T-092).
-  - `control_socket` → `MATEBRIDGE_CONTROL_SOCKET` (T-111). İkisinin de varsayılanı `bsd` (çekirdek soketi); `nw` Network.framework geri dönüşü.
+  - `video_socket` ve `control_socket` T-186'dan beri hep `bsd` (çekirdek soketi). Network.framework (`nw`) soketleri kaldırıldı (karar 0026); `MATEBRIDGE_VIDEO_SOCKET`/`MATEBRIDGE_CONTROL_SOCKET` artık okunmaz. Alanlar log ayrıştırıcıları kırılmasın diye sabit olarak kalır.
   - `tcp_log` → `MATEBRIDGE_TCP_LOG` (T-126), bkz. aşağıda "Kontrol ve video soketlerinin TCP durumu".
 - `ev=bonjour_registered port=…`: `bsd` kontrol dinleyicisinin `_matebridge._tcp` kaydı yapıldı. Ad loglanmaz.
 - `ev=bonjour_failed code=<dns_sd hata kodu> retry_s=<n>`: kayıt başarısız ya da sonradan koptu; 1…30 sn geri çekilmeyle yeniden denenir. Oturumlar etkilenmez.
@@ -239,3 +238,42 @@ Hiçbir alanda eşleşme kodu, anahtar, token, `host_id` ya da Mac adı yazılma
   - `resubmit=1`: son tamponun yeniden gönderimi (durağan ekranda keyframe, boşta tazeleme). `pts_us` yapay `now + lead` damgasıdır; analizde bu satırlar atılır. `display_us=0`: SCK görüntü zamanı vermedi.
 - **`ev=latency`** (saniyede bir): aşamalardan (`…,cap_to_sent`) sonra işaretli `cap_to_sent_pts_ms_p50_95_99_max` gelir (`write_done − pts`, teldeki damgadan ölçülen host payı; negatif olabilir). Ardından işaretli kaymalar artık `_ms_p1_50_99=p1/p50/p99` biçimindedir: `pts_vs_display_ms_p1_50_99`, `pts_vs_deliv_ms_p1_50_99`, `display_vs_deliv_ms_p1_50_99` (eski anahtar `_ms_p50_99` kalktı). Karar 0021 (T-172) için: `pts_vs_deliv` p99 − p1 < 1 ms ise seçenek A.
 - **`net ev=stats`**: tablet sayısı yakalama damgası → decoder çıkışıdır (ekranda görünme değil). Alan `cap_dec_ms=`; eski `latency_ms=` aynı değerle bir sürüm daha yazılır, sonra kalkar. Menü "· yak→çöz N ms" gösterir.
+
+## Girdi yaşı (Mac, `input`, T-171)
+
+Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi politikası T-199, karar 0025).
+
+- Host, etkin oturumun kontrol bağlantısına (ACCEPTED ve kanıt sonrası etkinleşmiş) 500 ms'de bir PING gönderir. Kanıt beklerken (`proving`), onay beklerken (`pending`) ve HELLO öncesi göndermez. Kontrol akışına 500 ms'de ~30 bayt ekler; Wi-Fi'de sesin arkasında kuyruklanabilir. Bu zararsızdır ama PONG RTT'sini şişirir; aşağıdaki en düşük RTT penceresi bunu eler.
+- Yalnız bu PING'lere ait PONG (aynı `seq`, aynı `echo_time_us`, aynı bağlantı) saat farkı örneği olur. Tanımsız `seq`, başka bağlantı ya da yanlış echo yok sayılır. Kayıt yazılmaz.
+- Saat farkı: `rtt = alış − echo`, `offset = responder − (echo + rtt/2)` (tablet − Mac). Son 8 örnekten en düşük RTT'li olan kullanılır (tabletin `ClockSync`'i ile aynı kural).
+- Yaş, girdinin teslim anında (`InputController.deliver`, Mac saati) ölçülür:
+  - PEN örneği: `alış − (base_time_us + dt_us − offset)`, her örnek için ayrı.
+  - KEY / POINTER_REL / POINTER_ABS / SCROLL / PINCH: `alış − (time_us − offset)`.
+  - Negatif yaş kırpılmaz; dağılımda kalır ve `neg` ile sayılır.
+- Belirsizlik: ±(en iyi RTT / 2 + 1 ms). Tabletin olay saati (`MotionEvent.eventTime`) 1 ms çözünürlüklüdür, USB'de 1–3 ms'lik değerler bu tabandadır. Yaşlar tanı amaçlıdır; davranış bunlara bakmaz.
+- `I input ev=input_age interval_ms=<n> pen_n=<n> [pen_p50_us= pen_p95_us= pen_p99_us= pen_max_us=] pointer_n=… key_n=… scroll_n=… late_250ms=<n> neg=<n> no_offset=<n> offset_rtt_us=<n>|none clock_unc_us=<n>|none`: girdi akarken yaklaşık saniyede bir.
+  - Pencere ilk girdiyle açılır, ≥ 1 s olunca bir sonraki girdide ya da 1 s'lik yoklamada yazılır. Girdi yoksa satır yoktur. Oturum biterken yarım pencere de yazılır.
+  - Sınıflar: `pen` (PEN örneği başına), `pointer` (REL + ABS), `key`, `scroll` (SCROLL + PINCH). PEN_GESTURE ve kontrol mesajları sayılmaz.
+  - Bir sınıfta örnek yoksa yalnız `<sınıf>_n=0` yazılır. Yüzdelikler sabit boyutlu log-doğrusal histogramdan gelir (≤ %6,25 hata, kova üst sınırı, kesin `max` ile kırpılır). `max` kesindir.
+  - `late_250ms`: yaşı 250 ms'yi aşan girdi. `neg`: negatif yaş. `no_offset`: ilk PONG'dan önce gelen, yaşı hesaplanamayan girdi (dağılıma girmez).
+  - `offset_rtt_us`: kullanılan örneğin RTT'si. `clock_unc_us` = onun yarısı. Örnek yoksa `none`.
+- `input_session_end` satırının sonuna oturum toplamları eklenir, alan adları `age_` önekiyle aynıdır: `age_pen_n= …`, `age_late_250ms= age_neg= age_no_offset= age_offset_rtt_us= age_clock_unc_us=`, ayrıca `age_pongs=<n>` (kabul edilen saat örneği sayısı).
+- Tuş, karakter, keycode ya da koordinat hiçbir satıra yazılmaz; yalnız sayı ve süre.
+
+## Tablet dosya sunucusu (tablet, `MB/files`, T-153)
+
+- `ev=server state=on|off reason=…`: WebDAV sunucusu yalnız uygulama ön plandayken, paylaşım açık, izin verilmiş ve **güvenilen bir USB oturumu** varken çalışır (güvenilen: bağlı ve o bağlantının STREAM_CONFIG'i uygulanmış). `off` nedenleri: `background`, `setting_off`, `no_permission`, `no_session` (oturum yok ya da yeni bağlantı henüz güvenilmedi), `wifi` (oturum Wi-Fi'de). Her `on` yeni bir token üretir. Token, yol ve dosya adı loglanmaz.
+
+## Girdi teslim zamanlaması (Mac, `input`, T-175)
+
+Yalnız ölçüm; girdinin nasıl ve ne zaman uygulandığını değiştirmez. Her girdi mesajı (PEN, POINTER_REL/ABS, SCROLL, PINCH, PEN_GESTURE, KEY, RELEASE_ALL, BYE) için üç süre tutulur. PONG ve diğer mesajlar ölçülmez.
+
+- `deliver`: `InputController.deliver`'ın çağıran taraftaki süresi, `queue.sync` atlamasının çevresinde. Girdi kuyruğunu bekleme (bekçi zamanlayıcısı, 1 s yoklama) dahildir. Oturum kuyruğu (kontrol okuması, PONG, 100 ms tik, ses boşaltma) bu süre boyunca bekler.
+- `env`: girdi kuyruğunda ortam sorguları: `environment()` (Accessibility önbelleği, sanal ekran geometrisi: `CGDisplayIsOnline`/`VendorNumber`/`ModelNumber`/`Bounds`/`CopyDisplayMode`), KEY için ayrıca Caps Lock durumu. Canlı imleç sorgusu dahil değildir (kendi `cursor_query_*` alanları var). Kapı değişiminde yazılan `input_gate`/`input_displays` satırlarının maliyeti de buna girer.
+- `post`: mesajın olaylarını gönderme: bırakma öncesi taze izin kontrolü + `CGEventPoster.post` (olay başına `CGEventSource`, `CGEvent` kurma, `post`). Olay yoksa ~0.
+- `input_session_end` satırına, `dropped_no_display=` ile `age_` alanları arasına eklenir: `deliver_us_avg=<µs.2> deliver_us_p99=<µs> deliver_us_max=<µs> env_us_avg=<µs.2> env_us_max=<µs> post_us_avg=<µs.2> post_us_max=<µs> slow_calls=<n>`.
+  - Ortalamalar iki ondalıklı µs. `deliver_us_p99` sabit boyutlu log-doğrusal histogramdan gelir (T-171 ile aynı, ≤ %6,25 yukarı, kesin `max` ile kırpılır). `max` değerleri tam µs. Mesaj yoksa hepsi `0`.
+  - `slow_calls`: bir çağrısı 20 ms'yi aşan mesaj sayısı (aşağıdaki uyarı yazılsa da yazılmasa da).
+- `W input ev=input_slow_call stage=env|post|deliver us=<µs>`: bir mesajda bir çağrı 20 ms'yi aştığında (kesin büyük). Mesaj başına en çok bir satır: `env` ya da `post` aştıysa büyük olanı, ikisi de aşmadıysa `deliver` (süre kuyruk beklemesine ya da işlem hattına gitti). Hız sınırı: 10 s'de en çok bir satır, diğerleri yalnız `slow_calls`'ta sayılır. Hız sınırı oturumlar arasında sıfırlanmaz (yeniden bağlanma fırtınası uyarı yağdırmaz).
+- Karar eşiği (kart T-175): mesaj başına > ~50 µs ya da `deliver_us_p99` birkaç ms'nin üstündeyse optimizasyon kartı açılır (geometri önbelleği, tek `CGEventSource`, ses boşaltmayı oturum kuyruğundan almak). Altındaysa gerek yok.
+- Koordinat, tuş, keycode ya da karakter yazılmaz; yalnız aşama adı, süre ve sayı.

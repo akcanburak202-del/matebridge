@@ -74,7 +74,7 @@ public final class VideoPipeline: @unchecked Sendable {
         self.keyframes = keyframes
         let box = EncoderBox(keyframes: keyframes)
         self.box = box
-        let frames = VideoFrameQueue(keyframeNeeded: { box.requestKeyframe() })
+        let frames = VideoFrameQueue(keyframeNeeded: { box.queueDropped() })
         self.frames = frames
         box.frames = frames
     }
@@ -328,11 +328,49 @@ private final class EncoderBox: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _frames }
         set { lock.lock(); _frames = newValue; lock.unlock() }
     }
-    /// The queue dropped a delta (called outside the queue lock): recorded as a host-side keyframe (T-122).
-    func requestKeyframe() {
-        let pushed = frames?.keyframesPushed ?? 0
-        keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
-        encoder?.requestKeyframe()
+    /// Earliest pending re-check of a deferred host-side keyframe (guarded by `lock`).
+    private var nextCheckUs: UInt64?
+
+    /// The queue dropped a delta and awaits a keyframe (called outside the queue lock). T-176: forced at once only
+    /// when none is on its way and none was written within the coalescing window; otherwise deferred and re-checked
+    /// (`KeyframeRequestCoalescer.hostDrop`). Captures keep arriving here (one just overflowed the queue), so the
+    /// next one becomes the keyframe.
+    func queueDropped() {
+        decide(resubmitNow: false) { $0.hostDrop(nowUs: $1, queue: $2) }
+    }
+
+    /// Timer: re-checks a deferred host-side keyframe. The screen may have gone static meanwhile, so a keyframe
+    /// forced here re-encodes the last captured buffer at once instead of waiting for a capture.
+    private func recheck(scheduledAtUs: UInt64) {
+        lock.withLock { if nextCheckUs == scheduledAtUs { nextCheckUs = nil } }
+        decide(resubmitNow: true) { $0.checkDeferred(nowUs: $1, queue: $2) }
+    }
+
+    private func decide(resubmitNow: Bool,
+                        _ body: (inout KeyframeRequestCoalescer, UInt64, KeyframeQueueState)
+                            -> KeyframeRequestCoalescer.HostDecision) {
+        // Nothing to watch once the pipeline has torn its encoder down.
+        guard let frames, let encoder else { return }
+        let now = HostClock.nowUs()
+        // Queue state read under the gate lock (lock order gate -> queue: the queue never calls out while holding
+        // its lock, and nothing takes the gate lock while holding the queue lock).
+        let d = keyframes.update { body(&$0, now, frames.keyframeState) }
+        if d.forceKeyframe { encoder.requestKeyframe(resubmitNow: resubmitNow) }
+        if let at = d.recheckAtUs { schedule(at: at, nowUs: now) }
+    }
+
+    /// One-shot re-check at `at` (host clock, µs), unless an earlier one is already scheduled (that one reschedules).
+    private func schedule(at: UInt64, nowUs: UInt64) {
+        let arm: Bool = lock.withLock {
+            if let n = nextCheckUs, n <= at { return false }
+            nextCheckUs = at
+            return true
+        }
+        guard arm else { return }
+        let delayUs = Int(min(at > nowUs ? at - nowUs : 0, UInt64(Int32.max)))
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .microseconds(delayUs)) {
+            [weak self] in self?.recheck(scheduledAtUs: at)
+        }
     }
 }
 

@@ -156,17 +156,6 @@ final class SocketWriteBufferTests: XCTestCase {
 
     // MARK: Knobs
 
-    func testVideoSocketKnob() {
-        XCTAssertEqual(VideoSocketKnob.parse([:]), .bsd, "default is the kernel socket (T-092)")
-        XCTAssertEqual(VideoSocketKnob.parse(nil as String?), .bsd)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd"]), .bsd)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": " BSD "]), .bsd)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]), .nw, "explicit fallback")
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": " NW "]), .nw)
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": "kernel"]), .bsd, "invalid value is bsd")
-        XCTAssertEqual(VideoSocketKnob.parse(["MATEBRIDGE_VIDEO_SOCKET": ""]), .bsd)
-    }
-
     func testNotSentLowatKnob() {
         XCTAssertEqual(NotSentLowatKnob.parseKB([:]), 128)
         XCTAssertEqual(NotSentLowatKnob.parseKB(["MATEBRIDGE_NOTSENT_LOWAT_KB": "64"]), 64)
@@ -181,8 +170,9 @@ final class SocketWriteBufferTests: XCTestCase {
     func testVideoSocketSettingsLogFields() {
         XCTAssertEqual(VideoSocketSettings.parse([:]).logFields, "video_socket=bsd notsent_lowat_kb=128")
         XCTAssertEqual(VideoSocketSettings.parse([:]).notSentLowatBytes, 131_072)
+        // T-186: the retired `nw` stack's knob is no longer read; the video socket is always `bsd`.
         XCTAssertEqual(VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]).logFields,
-                       "video_socket=nw notsent_lowat_kb=na")
+                       "video_socket=bsd notsent_lowat_kb=128")
         let bsd = VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd", "MATEBRIDGE_NOTSENT_LOWAT_KB": "64"])
         XCTAssertEqual(bsd.logFields, "video_socket=bsd notsent_lowat_kb=64")
         XCTAssertEqual(bsd.notSentLowatBytes, 65_536)

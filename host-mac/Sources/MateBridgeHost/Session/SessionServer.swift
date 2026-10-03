@@ -1,6 +1,8 @@
 import Foundation
 import MateBridgeCore
-import Network
+// Only the path monitor that re-reads the TXT `wol` value (T-128). The Network.framework socket stack (`nw`) was
+// retired in T-186 (decision 0026): every listener and connection here is a kernel BSD socket.
+import class Network.NWPathMonitor
 import Synchronization
 
 /// A validated video connection handed to the video pipeline (PROTOCOL.md section 3.5).
@@ -8,69 +10,37 @@ import Synchronization
 ///
 /// Send contract (PROTOCOL.md section 5, newest frame wins): `send` returns false and transmits nothing while the link
 /// cannot take a frame; the caller must then drop or replace the frame and request a keyframe. `canSend` and
-/// `onReady` expose the same backpressure: `onReady` fires whenever that may have changed.
-/// - `nw` (Network.framework): at most `maxInFlight` (2) sends may be outstanding; `onReady` fires on the network queue
-///   whenever an outstanding send completes.
-/// - `bsd` (kernel socket, T-091): at most one record may still be in user space and the kernel must hold fewer unsent
-///   bytes than `TCP_NOTSENT_LOWAT` (`SocketVideoGate`); `onReady` fires on the socket's write queue.
+/// `onReady` expose the same backpressure: `onReady` fires whenever that may have changed. On the kernel socket
+/// (T-091) at most one record may still be in user space and the kernel must hold fewer unsent bytes than
+/// `TCP_NOTSENT_LOWAT` (`SocketVideoGate`); `onReady` fires on the socket's write queue.
 /// `cancel()` closes just this connection.
 public final class VideoLink: @unchecked Sendable {
-    public static let maxInFlight = 2
-
     public let sessionID: UInt32
     public let configID: UInt16
-    private let wire: Wire
+    /// Owns this connection's sealer: one sealer per connection key, never a copy (two would reuse nonces).
+    private let transport: SocketVideoTransport
     private let lock = NSLock()
     private let logger: SessionLogger
-    // `nw` only: the `bsd` transport keeps its own count and sealer. One sealer per connection key, never a copy:
-    // two sealers on one key would reuse nonces.
-    private var inFlight = 0
     private var readyHandler: (@Sendable () -> Void)?
-    private var sealer: RecordSealer?
     /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
     private let sendQueue: SendQueueSampler?
 
-    private enum Wire {
-        case network(NWConnection)
-        case socket(SocketVideoTransport)
-    }
-
-    fileprivate init(sessionID: UInt32, configID: UInt16, connection: NWConnection, logger: SessionLogger,
-                     sealer: RecordSealer, sampleSendQueue: Bool) {
-        self.sealer = sealer
-        self.sendQueue = sampleSendQueue ? SendQueueSampler(connection: connection) : nil
-        self.logger = logger
-        self.sessionID = sessionID
-        self.configID = configID
-        self.wire = .network(connection)
-    }
-
     fileprivate init(sessionID: UInt32, configID: UInt16, socket: BsdTcpConnection, logger: SessionLogger,
                      sealer: RecordSealer, sampleSendQueue: Bool) {
-        self.sealer = nil  // the transport owns this connection's sealer
         self.sendQueue = sampleSendQueue ? SendQueueSampler(socket: socket) : nil
         self.logger = logger
         self.sessionID = sessionID
         self.configID = configID
-        self.wire = .socket(SocketVideoTransport(connection: socket, sealer: sealer))
+        self.transport = SocketVideoTransport(connection: socket, sealer: sealer)
     }
 
-    public var canSend: Bool {
-        switch wire {
-        case .network:
-            lock.lock()
-            defer { lock.unlock() }
-            return inFlight < Self.maxInFlight
-        case .socket(let transport):
-            return transport.canSend
-        }
-    }
+    public var canSend: Bool { transport.canSend }
 
     public var onReady: (@Sendable () -> Void)? {
         get { lock.lock(); defer { lock.unlock() }; return readyHandler }
         set {
             lock.lock(); readyHandler = newValue; lock.unlock()
-            if case .socket(let transport) = wire { transport.setReadyHandler(newValue) }
+            transport.setReadyHandler(newValue)
         }
     }
 
@@ -79,15 +49,7 @@ public final class VideoLink: @unchecked Sendable {
     /// (logged). `completion(true)` means written.
     @discardableResult
     public func send(_ frame: VideoFrame, completion: @escaping @Sendable (Bool) -> Void = { _ in }) -> Bool {
-        switch wire {
-        case .network(let connection): return send(frame, over: connection, completion: completion)
-        case .socket(let transport): return send(frame, over: transport, completion: completion)
-        }
-    }
-
-    private func send(_ frame: VideoFrame, over transport: SocketVideoTransport,
-                      completion: @escaping @Sendable (Bool) -> Void) -> Bool {
-        // The backlog this frame will queue behind (T-088); taken before the write, like the `nw` path.
+        // The backlog this frame will queue behind (T-088); taken before the write.
         if let sendQueue, transport.canSend { sendQueue.sample() }
         switch transport.sendFrame(frame, completion: completion) {
         case .sent:
@@ -109,49 +71,7 @@ public final class VideoLink: @unchecked Sendable {
         }
     }
 
-    private func send(_ frame: VideoFrame, over connection: NWConnection,
-                      completion: @escaping @Sendable (Bool) -> Void) -> Bool {
-        let message = Message.videoFrame(frame)
-        // The backlog this frame will queue behind (T-088). Outside `lock`: the probe may query the NWConnection,
-        // whose queue runs the send completions that take `lock`.
-        if let sendQueue, canSend { sendQueue.sample() }
-        // Sealing and the write happen under one lock: record counters must reach the wire in counter order.
-        lock.lock()
-        guard inFlight < Self.maxInFlight, sealer != nil else { lock.unlock(); return false }
-        let bytes: [UInt8]
-        do {
-            bytes = try message.sealed(using: &sealer!)
-        } catch let error as CryptoError {
-            lock.unlock()
-            logger.log(.error, "video_seal_failed", sessionID: sessionID, generation: configID,
-                       fields: "reason=\(error == .counterExhausted ? "counter" : "crypto")")
-            connection.cancel()  // the counter is exhausted: this connection cannot continue
-            return false
-        } catch {
-            lock.unlock()
-            logger.log(.warning, "video_frame_refused", sessionID: sessionID, generation: configID,
-                       fields: "reason=invalid_or_oversized")
-            return false
-        }
-        inFlight += 1
-        connection.send(content: Data(bytes), completion: .contentProcessed { [self] error in
-            lock.lock()
-            inFlight -= 1
-            let ready = readyHandler
-            lock.unlock()
-            completion(error == nil)
-            ready?()
-        })
-        lock.unlock()
-        return true
-    }
-
-    public func cancel() {
-        switch wire {
-        case .network(let connection): connection.cancel()
-        case .socket(let transport): transport.connection.cancel()
-        }
-    }
+    public func cancel() { transport.connection.cancel() }
 
     /// Closes the send-queue window (about once a second). nil when sampling is off or there is nothing to report.
     func sendQueueReport() -> SendQueueSampler.Report? { sendQueue?.take() }
@@ -178,8 +98,9 @@ public struct ApprovalRequest: Sendable {
     public let deviceFingerprint: String
 }
 
-/// TCP control and video listeners plus Bonjour, driving a `SessionMachine`. Each listener runs on Network.framework
-/// or on a kernel socket (`MATEBRIDGE_VIDEO_SOCKET`, T-091; `MATEBRIDGE_CONTROL_SOCKET`, T-111; both default `bsd`).
+/// TCP control and video listeners plus Bonjour, driving a `SessionMachine`. Both listeners are kernel BSD sockets
+/// (`BsdTcpListener`, T-091/T-111); the Network.framework alternative was retired in T-186 (decision 0026), and the
+/// control listener's Bonjour record goes through `BonjourAdvertiser` only.
 /// All state is confined to `queue`; handlers are invoked on that queue (hop to the main actor yourself).
 public final class SessionServer: @unchecked Sendable {
     public struct Handlers: Sendable {
@@ -192,7 +113,9 @@ public final class SessionServer: @unchecked Sendable {
         /// "Allow" could not be stored because the Keychain queue is full: show the request again with the notice
         /// "Anahtar Zinciri meşgul, tekrar dene" (the answer is still open).
         public var approvalKeychainBusy: @Sendable (ApprovalRequest) -> Void = { _ in }
-        /// Input, STATS and KEYFRAME_REQUEST from the approved session.
+        /// Input, STATS and KEYFRAME_REQUEST from the approved session, and a PONG that answers one of the host's own
+        /// PINGs on it (T-171: `SessionMachine` PINGs the active connection every 500 ms; the input controller takes
+        /// the PONG for its diagnostic clock offset, every other consumer ignores it).
         public var deliver: @Sendable (Message) -> Void = { _ in }
         /// A record of the ACTIVE session's control connection (PING included) was received at `receivedUs` (host
         /// clock) and has been handled, its `deliver` included (T-163: the key repeat pauses while this is silent).
@@ -232,8 +155,8 @@ public final class SessionServer: @unchecked Sendable {
     private var state: SessionServerState = .stopped
     /// Last value reported through `handlers.settingsPanelAvailable`.
     private var settingsPanelAvailable = false
-    private var controlListener: ControlListener?
-    /// Bonjour record of a kernel-socket control listener (`NWListener.service` does this for `nw`).
+    private var controlListener: BsdTcpListener?
+    /// Bonjour record of the control listener.
     private var bonjour: BonjourAdvertiser?
     private var bonjourAttempts = 0
     /// TXT `wol` (T-128, PROTOCOL.md section 3 item 1): hardware addresses of the up `en*` interfaces with IPv4; nil
@@ -247,13 +170,13 @@ public final class SessionServer: @unchecked Sendable {
     /// every `wolReconcileTicks` ticks (60 s; one `getifaddrs`, re-published only on a change).
     private var wolTicks = 0
     static let wolReconcileTicks = 600
-    private var videoListener: VideoListener?
+    private var videoListener: BsdTcpListener?
     private var nextID: UInt64 = 0
-    private var controlConnections: [ConnectionID: ControlConnection] = [:]
+    private var controlConnections: [ConnectionID: BsdTcpConnection] = [:]
     /// Inbound decoder and outbound sealer of each control connection. Plain until the first HELLO_ACK went out.
     private var inbounds: [ConnectionID: ControlInbound] = [:]
     private var sealers: [ConnectionID: RecordSealer] = [:]
-    private var videoConnections: [ConnectionID: VideoConnection] = [:]
+    private var videoConnections: [ConnectionID: BsdTcpConnection] = [:]
     private var pendingApproval: ConnectionID?
     private var pendingRequest: ApprovalRequest?
     /// Incremented by every "forget" (and identity replacement). A Keychain save that completes under an older value
@@ -320,77 +243,23 @@ public final class SessionServer: @unchecked Sendable {
     static let tcpInfoLog = TcpInfoLogKnob.parse(ProcessInfo.processInfo.environment)
     /// The 100 ms session tick closes an `ev=tcp` window every this many ticks (1 s).
     static let tcpInfoTickInterval = 10
-    /// T-091: `MATEBRIDGE_VIDEO_SOCKET=nw|bsd` and `MATEBRIDGE_NOTSENT_LOWAT_KB`, read once.
+    /// T-091: `MATEBRIDGE_NOTSENT_LOWAT_KB` of the video socket, read once.
     static let videoSocket = VideoSocketSettings.parse(ProcessInfo.processInfo.environment)
-    /// T-111: `MATEBRIDGE_CONTROL_SOCKET=bsd|nw`, read once.
-    static let controlSocket = ControlSocketKnob.parse(ProcessInfo.processInfo.environment)
-    /// `TCP_NOTSENT_LOWAT` of a `bsd` control connection: 9 sealed audio packets. An AUDIO_FRAME is dropped while the
+    /// `TCP_NOTSENT_LOWAT` of a control connection: 9 sealed audio packets. An AUDIO_FRAME is dropped while the
     /// kernel holds this many unsent bytes, so at most this plus the one packet written after the check, i.e.
     /// `audioBacklogBytes` (100 ms of audio, PROTOCOL.md 5), waits unsent in the kernel. It never blocks a write:
     /// BYE, CLIPBOARD and every other message are always queued.
     static let controlNotSentLowatBytes = audioBacklogBytes - sealedAudioFrameBytes
-    /// Kernel-socket control connections: Nagle and keepalive off like `tcpParameters` (liveness is the protocol's
-    /// heartbeat), kernel-default buffer sizes, the audio low-water mark above. The user-space queue is bounded by
+    /// Control connections: Nagle and keepalive off (liveness is the protocol's heartbeat), kernel-default buffer
+    /// sizes, the audio low-water mark above. The user-space queue is bounded by
     /// `maxInflightBytes` here (`sendControlBytes`), so the connection's own bound never binds first.
     static let controlSocketOptions = BsdTcpOptions(noDelay: true, keepAlive: false,
                                                     notSentLowatBytes: controlNotSentLowatBytes,
                                                     serviceClass: serviceClass.controlClass,
                                                     maxPendingRecords: maxInflightBytes,
                                                     maxPendingBytes: maxInflightBytes)
-    /// How long a closing `bsd` control connection may take to write its last messages (BYE) before it is cut.
+    /// How long a closing control connection may take to write its last messages (BYE) before it is cut.
     static let controlFlushTimeout: DispatchTimeInterval = .seconds(2)
-
-    /// The control listener: kernel socket (default) or Network.framework with `MATEBRIDGE_CONTROL_SOCKET=nw`.
-    private enum ControlListener {
-        case network(NWListener)
-        case socket(BsdTcpListener)
-
-        func cancel() {
-            switch self {
-            case .network(let l): l.cancel()
-            case .socket(let l): l.cancel()
-            }
-        }
-    }
-
-    /// One control connection, on whichever stack its listener uses. Everything above the bytes is shared.
-    private enum ControlConnection {
-        case network(NWConnection)
-        case socket(BsdTcpConnection)
-
-        func cancel() {
-            switch self {
-            case .network(let c): c.cancel()
-            case .socket(let c): c.cancel()
-            }
-        }
-    }
-
-    /// The video listener: Network.framework, or a kernel socket with `MATEBRIDGE_VIDEO_SOCKET=bsd` (T-091).
-    private enum VideoListener {
-        case network(NWListener)
-        case socket(BsdTcpListener)
-
-        func cancel() {
-            switch self {
-            case .network(let l): l.cancel()
-            case .socket(let l): l.cancel()
-            }
-        }
-    }
-
-    /// One video connection, on whichever stack its listener uses. Everything above the bytes is shared.
-    private enum VideoConnection {
-        case network(NWConnection)
-        case socket(BsdTcpConnection)
-
-        func cancel() {
-            switch self {
-            case .network(let c): c.cancel()
-            case .socket(let c): c.cancel()
-            }
-        }
-    }
 
     /// - Parameters:
     ///   - controlPort: preferred control port (default 47001, for `adb reverse`); falls back to a system-assigned
@@ -415,6 +284,8 @@ public final class SessionServer: @unchecked Sendable {
         var configuration = SessionMachine.Configuration(hostName: hostName, makeStreamConfig: makeStreamConfig,
                                                          hostID: identity.id, pairKeys: nil)
         if case .unpersisted = identity { configuration.allowPaired = false }  // a volatile host_id must not be trusted
+        // T-171: PING the active session every 500 ms; its PONG feeds the input-age clock offset (diagnostics only).
+        configuration.hostPingIntervalUs = SessionMachine.Configuration.defaultHostPingIntervalUs
         self.machine = SessionMachine(configuration: configuration, approvedDevices: Set(known.keys))
     }
 
@@ -521,9 +392,6 @@ public final class SessionServer: @unchecked Sendable {
                             state.logFields].filter { !$0.isEmpty }.joined(separator: " "))
     }
 
-    /// Fires the cancel of a control connection whose final send never completed (`nw` path).
-    private static let lingerQueue = DispatchQueue(label: "dev.matebridge.session.linger")
-
     private static func dispatchDeadline(_ us: UInt64) -> DispatchTime {
         .now() + .microseconds(Int(min(us, UInt64(Int.max))))
     }
@@ -566,29 +434,16 @@ public final class SessionServer: @unchecked Sendable {
         if !first { republishTxt() }
     }
 
-    /// The `nw` control listener's Bonjour service with the current TXT record.
-    private func bonjourService() -> NWListener.Service {
-        NWListener.Service(name: machine.configuration.hostName, type: Self.bonjourType, domain: nil,
-                           txtRecord: NWTXTRecord(WakeOnLanTxt.dictionary(wol: wolValue)))
-    }
-
-    /// Puts the current TXT record on the live control listener's Bonjour service. A listener not yet up (or a
+    /// Puts the current TXT record on the live control listener's Bonjour registration. A listener not yet up (or a
     /// registration waiting for its retry) picks the value up when it registers.
     private func republishTxt() {
-        switch controlListener {
-        case .network(let listener)?:
-            listener.service = bonjourService()
-        case .socket(let listener)?:
-            guard let bonjour else { return }
-            do {
-                try bonjour.updateTXT(WakeOnLanTxt.entries(wol: wolValue))
-            } catch {
-                logger.log(.warning, "bonjour_txt_update_failed", sessionID: currentSessionID,
-                           generation: currentConfigID, fields: "error=\(error)")
-                startBonjour(for: listener)
-            }
-        case nil:
-            break
+        guard let listener = controlListener, let bonjour else { return }
+        do {
+            try bonjour.updateTXT(WakeOnLanTxt.entries(wol: wolValue))
+        } catch {
+            logger.log(.warning, "bonjour_txt_update_failed", sessionID: currentSessionID,
+                       generation: currentConfigID, fields: "error=\(error)")
+            startBonjour(for: listener)
         }
     }
 
@@ -597,45 +452,9 @@ public final class SessionServer: @unchecked Sendable {
         startVideoListener(plan: ListenerPortPlan(preferred: requestedVideoPort))
     }
 
-    /// Tries the preferred video port, then a system-assigned one (logged).
+    /// Tries the preferred video port, then a system-assigned one (logged), on a kernel socket (dual-stack
+    /// `[::]:port`, T-091). Binding is synchronous, so the listener is ready (or failed) right here.
     private func startVideoListener(plan: ListenerPortPlan) {
-        guard !stopped else { return }
-        if Self.videoSocket.socket == .bsd { return startSocketVideoListener(plan: plan) }
-        var plan = plan
-        guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
-        let fixed = plan.lastWasPreferred
-        let nextPlan = plan
-        do {
-            let video = try NWListener(using: Self.tcpParameters(serviceClass: Self.serviceClass.videoClass),
-                                       on: Self.endpointPort(port))
-            video.newConnectionHandler = { [weak self] c in self?.accept(c, video: true) }
-            video.stateUpdateHandler = { [weak self, weak video] s in
-                guard let self, let video, case .network(let current)? = videoListener, video === current else { return }
-                if case .failed = s, fixed {
-                    logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
-                               fields: "listener=video wanted=\(port)")
-                    video.cancel()
-                    videoListener = nil
-                    return startVideoListener(plan: nextPlan)
-                }
-                videoListenerState(s)
-            }
-            videoListener = .network(video)
-            video.start(queue: queue)
-        } catch {
-            if fixed {
-                logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
-                           fields: "listener=video wanted=\(port)")
-                startVideoListener(plan: nextPlan)
-            } else {
-                listenersFailed("video_listener_create")
-            }
-        }
-    }
-
-    /// `MATEBRIDGE_VIDEO_SOCKET=bsd` (T-091): the same port plan on a kernel socket (dual-stack `[::]:port`). Binding is
-    /// synchronous, so the listener is ready (or failed) right here.
-    private func startSocketVideoListener(plan: ListenerPortPlan) {
         guard !stopped else { return }
         var plan = plan
         guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
@@ -649,14 +468,14 @@ public final class SessionServer: @unchecked Sendable {
         } catch {
             if fixed {
                 logFallback("video", port)
-                return startSocketVideoListener(plan: nextPlan)
+                return startVideoListener(plan: nextPlan)
             }
             logger.log(.error, "video_listener_socket_error", sessionID: 0, generation: 0, fields: "error=\(error)")
             return listenersFailed("video_listener_create")
         }
-        videoListener = .socket(listener)
+        videoListener = listener
         listener.start { [weak self, weak listener] event in
-            guard let self, let listener, case .socket(let current)? = videoListener, current === listener else {
+            guard let self, let listener, let current = videoListener, current === listener else {
                 if case .accepted(let c) = event { c.cancel() }  // a cancelled listener's late accept
                 return
             }
@@ -681,10 +500,6 @@ public final class SessionServer: @unchecked Sendable {
     private func logFallback(_ listener: String, _ wanted: UInt16) {
         logger.log(.warning, "port_fallback", sessionID: 0, generation: 0,
                    fields: "listener=\(listener) wanted=\(wanted)")
-    }
-
-    private static func endpointPort(_ port: UInt16) -> NWEndpoint.Port {
-        port == 0 ? .any : (NWEndpoint.Port(rawValue: port) ?? .any)
     }
 
     /// Cancels both listeners and retries with exponential backoff (1 s ... 30 s).
@@ -815,26 +630,19 @@ public final class SessionServer: @unchecked Sendable {
                 audioWireDrops.add(1, ordering: .relaxed)
                 continue
             }
-            let inflightBefore = inflightBytes[id, default: 0]
             let writeStart = nowUs()
             sendControl(id, item.message)
             let writeEnd = nowUs()
             recordAudioWrite(id, frame: frame, queueLagUs: now > item.pushedUs ? now - item.pushedUs : 0,
-                             inflightBefore: inflightBefore, writeStart: writeStart, writeEnd: writeEnd)
+                             writeStart: writeStart, writeEnd: writeEnd)
         }
     }
 
     /// Session queue: timing of one AUDIO_FRAME write (T-116). Measurement only.
-    private func recordAudioWrite(_ id: ConnectionID, frame: AudioFrame, queueLagUs: UInt64, inflightBefore: Int,
-                                  writeStart: UInt64, writeEnd: UInt64) {
-        // Bytes not yet handed on: `bsd` user-space queue after the write (EAGAIN / partial write); `nw` cannot tell,
-        // there it is what Network.framework had not processed yet when the write was issued.
-        let pending: Int
-        switch controlConnections[id] {
-        case .socket(let socket)?: pending = socket.pendingBytes
-        case .network?: pending = inflightBefore
-        case nil: pending = 0
-        }
+    private func recordAudioWrite(_ id: ConnectionID, frame: AudioFrame, queueLagUs: UInt64, writeStart: UInt64,
+                                  writeEnd: UInt64) {
+        // Bytes not yet handed on: the user-space queue after the write (EAGAIN / partial write).
+        let pending = controlConnections[id]?.pendingBytes ?? 0
         audioTimingSessionID = currentSessionID
         let write = AudioSendTiming.Write(
             queueLagUs: queueLagUs,
@@ -857,10 +665,10 @@ public final class SessionServer: @unchecked Sendable {
         audioTiming.resetInterval()
     }
 
-    /// `bsd` control connection: the kernel holds at least `controlNotSentLowatBytes` unsent (or our own queue is not
-    /// empty). `nw` cannot tell; there `inflightBytes` is the only gate, as before T-111.
+    /// The control connection's kernel holds at least `controlNotSentLowatBytes` unsent (or our own queue is not
+    /// empty).
     private func kernelAudioBacklog(_ id: ConnectionID) -> Bool {
-        guard case .socket(let socket)? = controlConnections[id] else { return false }
+        guard let socket = controlConnections[id] else { return false }
         return !socket.isWritableForNewRecord
     }
 
@@ -943,37 +751,6 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Listeners
 
-    /// TCP with Nagle off. Accepted connections inherit the listener's parameters, so a service class set here applies
-    /// to every connection of that listener (T-088; nil leaves the default, `.bestEffort`).
-    private static func tcpParameters(serviceClass: TrafficClass?) -> NWParameters {
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        let parameters = NWParameters(tls: nil, tcp: tcp)
-        if let serviceClass { parameters.serviceClass = Self.networkServiceClass(serviceClass) }
-        return parameters
-    }
-
-    private static func networkServiceClass(_ c: TrafficClass) -> NWParameters.ServiceClass {
-        switch c {
-        case .interactiveVideo: return .interactiveVideo
-        case .interactiveVoice: return .interactiveVoice
-        case .responsiveData: return .responsiveData
-        }
-    }
-
-    private func videoListenerState(_ s: NWListener.State) {
-        switch s {
-        case .ready:
-            guard case .network(let listener)? = videoListener, let port = listener.port?.rawValue else {
-                return fail("video_port_missing")
-            }
-            videoListenerReady(port: port)
-        case .failed:
-            listenersFailed("video_listener_failed")
-        default: break
-        }
-    }
-
     private func videoListenerReady(port: UInt16) {
         machine.videoPort = port
         startControlListener(videoPort: port)
@@ -984,52 +761,10 @@ public final class SessionServer: @unchecked Sendable {
         startControlListener(videoPort: videoPort, plan: ListenerPortPlan(preferred: requestedControlPort))
     }
 
-    /// Tries the preferred control port, then a system-assigned one (logged).
+    /// Tries the preferred control port, then a system-assigned one (logged), on a kernel socket (dual-stack
+    /// `[::]:port`, T-111), plus a Bonjour record for the bound port. Binding is synchronous, so the listener is ready
+    /// (or failed) right here.
     private func startControlListener(videoPort: UInt16, plan: ListenerPortPlan) {
-        guard !stopped else { return }
-        if Self.controlSocket == .bsd { return startSocketControlListener(videoPort: videoPort, plan: plan) }
-        var plan = plan
-        guard let port = plan.nextPort() else { return listenersFailed("control_listener_create") }
-        let fixed = plan.lastWasPreferred
-        let nextPlan = plan
-        do {
-            let listener = try NWListener(using: Self.tcpParameters(serviceClass: Self.serviceClass.controlClass),
-                                          on: Self.endpointPort(port))
-            listener.service = bonjourService()
-            listener.newConnectionHandler = { [weak self] c in self?.accept(c, video: false) }
-            listener.stateUpdateHandler = { [weak self, weak listener] s in
-                guard let self, let listener, case .network(let current)? = controlListener, current === listener
-                else { return }
-                switch s {
-                case .ready:
-                    controlListenerReady(port: listener.port?.rawValue ?? 0, videoPort: videoPort)
-                case .failed:
-                    if fixed {
-                        logFallback("control", port)
-                        listener.cancel()
-                        controlListener = nil
-                        startControlListener(videoPort: videoPort, plan: nextPlan)
-                    } else {
-                        listenersFailed("control_listener_failed")
-                    }
-                default: break
-                }
-            }
-            controlListener = .network(listener)
-            listener.start(queue: queue)
-        } catch {
-            if fixed {
-                logFallback("control", port)
-                startControlListener(videoPort: videoPort, plan: nextPlan)
-            } else {
-                listenersFailed("control_listener_create")
-            }
-        }
-    }
-
-    /// `MATEBRIDGE_CONTROL_SOCKET=bsd` (T-111): the same port plan on a kernel socket (dual-stack `[::]:port`), plus a
-    /// Bonjour record for the bound port. Binding is synchronous, so the listener is ready (or failed) right here.
-    private func startSocketControlListener(videoPort: UInt16, plan: ListenerPortPlan) {
         guard !stopped else { return }
         var plan = plan
         guard let port = plan.nextPort() else { return listenersFailed("control_listener_create") }
@@ -1041,14 +776,14 @@ public final class SessionServer: @unchecked Sendable {
         } catch {
             if fixed {
                 logFallback("control", port)
-                return startSocketControlListener(videoPort: videoPort, plan: nextPlan)
+                return startControlListener(videoPort: videoPort, plan: nextPlan)
             }
             logger.log(.error, "control_listener_socket_error", sessionID: 0, generation: 0, fields: "error=\(error)")
             return listenersFailed("control_listener_create")
         }
-        controlListener = .socket(listener)
+        controlListener = listener
         listener.start { [weak self, weak listener] event in
-            guard let self, let listener, case .socket(let current)? = controlListener, current === listener else {
+            guard let self, let listener, let current = controlListener, current === listener else {
                 if case .accepted(let c) = event { c.cancel() }  // a cancelled listener's late accept
                 return
             }
@@ -1076,17 +811,17 @@ public final class SessionServer: @unchecked Sendable {
         restartAttempts = 0
         logger.log(.info, "listening", sessionID: 0, generation: 0,
                    fields: "control_port=\(port) video_port=\(videoPort) " + Self.serviceClass.logFields + " "
-                       + Self.videoSocket.logFields + " " + Self.controlSocket.logFields
+                       + Self.videoSocket.logFields + " control_socket=bsd"  // socket fields constant since T-186
                        + " tcp_log=\(Self.tcpInfoLog.rawValue)")
         if case .starting = state { setState(.listening) }
     }
 
-    /// Registers `_matebridge._tcp` for a kernel-socket control listener: the record `NWListener.service` carries for
-    /// `nw` (host name, TXT `v=1` plus `wol` (T-128), the bound port). A failure (also later, e.g. mDNSResponder
-    /// restarting) is logged and retried with backoff (1 s ... 30 s) while this listener lives; sessions are not touched (USB and running
-    /// sessions do not need discovery).
+    /// Registers `_matebridge._tcp` for the control listener through `BonjourAdvertiser`, the only Bonjour path (host
+    /// name, TXT `v=1` plus `wol` (T-128), the bound port). A failure (also later, e.g. mDNSResponder restarting) is
+    /// logged and retried with backoff (1 s ... 30 s) while this listener lives; sessions are not touched (USB and
+    /// running sessions do not need discovery).
     private func startBonjour(for listener: BsdTcpListener) {
-        guard !stopped, case .socket(let current)? = controlListener, current === listener else { return }
+        guard !stopped, let current = controlListener, current === listener else { return }
         bonjour?.cancel()
         bonjour = nil
         do {
@@ -1131,38 +866,9 @@ public final class SessionServer: @unchecked Sendable {
 
     // MARK: Connections
 
-    private func accept(_ connection: NWConnection, video: Bool) {
-        // Bounded: refuse new connections while too many have not yet authenticated (HELLO / VIDEO_HELLO).
-        let unauthenticated = video ? machine.pendingVideoCount : machine.awaitingHelloCount
-        guard unauthenticated < Self.maxUnauthenticated else {
-            logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
-                       fields: "video=\(video) reason=too_many_unauthenticated")
-            connection.cancel()
-            return
-        }
-        nextID += 1
-        let id = ConnectionID(nextID)
-        connection.stateUpdateHandler = { [weak self] s in
-            switch s {
-            case .failed, .cancelled: self?.transportClosed(id, video: video)
-            default: break
-            }
-        }
-        connection.start(queue: queue)
-        if video {
-            videoConnections[id] = .network(connection)
-            apply(machine.videoOpened(id, now: nowUs()))
-        } else {
-            controlConnections[id] = .network(connection)
-            inbounds[id] = ControlInbound()
-            apply(machine.connectionOpened(id, now: nowUs()))
-        }
-        receiveLoop(id, connection, video: video)
-    }
-
-    /// A video connection from the kernel-socket listener (T-091). Same bound, ids, machine events and byte handling
-    /// as `accept(_:video:)`; only the transport differs. Reads arrive on `queue`; `onClosed` arrives on `queue` once
-    /// the socket closed for any reason (end of stream, error, or our own `cancel()`), like `.cancelled` above.
+    /// A video connection from the video listener (T-091). Bounded: refused while too many have not yet authenticated
+    /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
+    /// of stream, error, or our own `cancel()`).
     private func acceptVideo(_ connection: BsdTcpConnection) {
         guard machine.pendingVideoCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
@@ -1179,14 +885,14 @@ public final class SessionServer: @unchecked Sendable {
         }, onClosed: { [weak self] in
             self?.transportClosed(id, video: true)
         })
-        videoConnections[id] = .socket(connection)
+        videoConnections[id] = connection
         apply(machine.videoOpened(id, now: nowUs()))
     }
 
-    /// A control connection from the kernel-socket listener (T-111). Same bound, ids, machine events and byte handling
-    /// as `accept(_:video:)`; only the transport differs. Reads arrive on `queue`. `onClosed` arrives on `queue` once
-    /// the socket closed for any reason (end of stream, half close, error, our own `cancel()`): `transportClosed` then
-    /// tells the machine, which releases all input (PROTOCOL.md 7).
+    /// A control connection from the control listener (T-111). Bounded: refused while too many have not yet
+    /// authenticated (HELLO). Reads arrive on `queue`. `onClosed` arrives on `queue` once the socket closed for any
+    /// reason (end of stream, half close, error, our own `cancel()`): `transportClosed` then tells the machine, which
+    /// releases all input (PROTOCOL.md 7).
     private func acceptControl(_ connection: BsdTcpConnection) {
         guard machine.awaitingHelloCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
@@ -1200,35 +906,15 @@ public final class SessionServer: @unchecked Sendable {
             // Not in the table: closing (its last messages are being flushed) or gone. Nothing more is read from it.
             guard let self, controlConnections[id] != nil else { return true }
             if receiveControlBytes(id, bytes) { return true }
-            // The machine closed it (BYE queued): let the graceful close finish. Otherwise `nw` would just stop
-            // reading; here the socket is cancelled, so `onClosed` releases input.
+            // The machine closed it (BYE queued): let the graceful close finish. Otherwise the socket is cancelled,
+            // so `onClosed` releases input.
             return controlConnections[id] == nil
         }, onClosed: { [weak self] in
             self?.transportClosed(id, video: false)
         })
-        controlConnections[id] = .socket(connection)
+        controlConnections[id] = connection
         inbounds[id] = ControlInbound()
         apply(machine.connectionOpened(id, now: nowUs()))
-    }
-
-    private func receiveLoop(_ id: ConnectionID, _ connection: NWConnection, video: Bool) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: FrameDecoder.maxReadChunk) {
-            [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            if let data, !data.isEmpty {
-                if video {
-                    guard receiveVideoBytes(id, [UInt8](data)) else { return }
-                } else {
-                    guard receiveControlBytes(id, [UInt8](data)) else { return }
-                }
-            }
-            let stillOpen = video ? videoConnections[id] != nil : controlConnections[id] != nil
-            if isComplete || error != nil || !stillOpen {
-                transportClosed(id, video: video)
-            } else {
-                receiveLoop(id, connection, video: video)
-            }
-        }
     }
 
     /// Control connection input: plain frames until the handshake answer went out, encrypted records afterwards.
@@ -1377,24 +1063,8 @@ public final class SessionServer: @unchecked Sendable {
                 flushGroup.leave()
             }
         }
-        let linger = controlLinger
-        switch c {
-        case .network(let c):
-            lingering.set(id) { c.cancel() }
-            c.send(content: nil, contentContext: .finalMessage, isComplete: true,
-                   completion: .contentProcessed { _ in
-                       c.cancel()
-                       finished()
-                   })
-            // The final send may never complete (peer not reading): cancel after the linger, like the socket path.
-            Self.lingerQueue.asyncAfter(deadline: .now() + linger) {
-                c.cancel()
-                finished()
-            }
-        case .socket(let c):
-            lingering.set(id) { c.cancel() }
-            c.finish(timeout: linger) { finished() }
-        }
+        lingering.set(id) { c.cancel() }
+        c.finish(timeout: controlLinger) { finished() }
     }
 
     /// Encodes plain before the handshake answer, as a sealed record after it.
@@ -1427,26 +1097,18 @@ public final class SessionServer: @unchecked Sendable {
             return
         }
         inflightBytes[id] = pending
-        switch c {
-        case .network(let c):
-            c.send(content: Data(bytes), completion: .contentProcessed { [weak self] _ in
+        // The completion (record handed to the kernel) runs on the socket's write queue: account on `queue`.
+        let count = bytes.count
+        let queued = c.write(bytes) { [weak self] _ in
+            self?.queue.async { [weak self] in
                 guard let self, let n = inflightBytes[id] else { return }
-                inflightBytes[id] = max(0, n - bytes.count)
-            })
-        case .socket(let c):
-            // The completion (record handed to the kernel) runs on the socket's write queue: account on `queue`.
-            let count = bytes.count
-            let queued = c.write(bytes) { [weak self] _ in
-                self?.queue.async { [weak self] in
-                    guard let self, let n = inflightBytes[id] else { return }
-                    inflightBytes[id] = max(0, n - count)
-                }
+                inflightBytes[id] = max(0, n - count)
             }
-            if !queued {  // closed meanwhile (onClosed is on its way) or over the bound: input is released either way
-                logger.log(.warning, "send_backlog", sessionID: currentSessionID, generation: currentConfigID,
-                           fields: "reason=write_refused")
-                transportClosed(id, video: false)
-            }
+        }
+        if !queued {  // closed meanwhile (onClosed is on its way) or over the bound: input is released either way
+            logger.log(.warning, "send_backlog", sessionID: currentSessionID, generation: currentConfigID,
+                       fields: "reason=write_refused")
+            transportClosed(id, video: false)
         }
     }
 
@@ -1562,17 +1224,10 @@ public final class SessionServer: @unchecked Sendable {
                 currentConfigID = 0
                 handlers.sessionEnded()
             case .videoAttached(let vid, _, let sid, let configID, let keys):
-                if let c = videoConnections[vid] {
+                if let socket = videoConnections[vid] {
                     let sealer = RecordSealer(key: keys.h2c, maxPayload: ProtocolConstants.maxVideoPayload)
-                    let link: VideoLink
-                    switch c {
-                    case .network(let connection):
-                        link = VideoLink(sessionID: sid, configID: configID, connection: connection, logger: logger,
+                    let link = VideoLink(sessionID: sid, configID: configID, socket: socket, logger: logger,
                                          sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
-                    case .socket(let socket):
-                        link = VideoLink(sessionID: sid, configID: configID, socket: socket, logger: logger,
-                                         sealer: sealer, sampleSendQueue: Self.sampleSendQueue)
-                    }
                     videoLinks[vid] = link
                     startTcpInfoSampling(vid, role: .video)
                     handlers.videoAttached(link)
@@ -1646,16 +1301,9 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Loopback peer means the tablet came through `adb reverse` (USB mode).
-    private static func transport(of connection: ControlConnection?) -> SessionTransport {
-        switch connection {
-        case .network(let c)?:
-            guard case .hostPort(let host, _) = c.endpoint else { return .network }
-            return SessionTransport.classify(peerHost: "\(host)")
-        case .socket(let c)?:
-            return SessionTransport.classify(peerHost: c.peerHost)
-        case nil:
-            return .network
-        }
+    private static func transport(of connection: BsdTcpConnection?) -> SessionTransport {
+        guard let connection else { return .network }
+        return SessionTransport.classify(peerHost: connection.peerHost)
     }
 
     private func refreshState() {
@@ -1687,20 +1335,9 @@ public final class SessionServer: @unchecked Sendable {
     /// active session's transport (set by `.sessionStarted` before either call).
     private func startTcpInfoSampling(_ id: ConnectionID, role: TcpConnectionRole) {
         guard Self.tcpInfoLog.isEnabled(transport: activeTransport, sendQueueLog: Self.sampleSendQueue) else { return }
-        switch role {
-        case .control:
-            switch controlConnections[id] {
-            case .network(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .control, connection: c)
-            case .socket(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .control, socket: c)
-            case nil: break
-            }
-        case .video:
-            switch videoConnections[id] {
-            case .network(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .video, connection: c)
-            case .socket(let c)?: tcpInfoSamplers[id] = TcpInfoSampler(role: .video, socket: c)
-            case nil: break
-            }
-        }
+        let connection = role == .control ? controlConnections[id] : videoConnections[id]
+        guard let connection else { return }
+        tcpInfoSamplers[id] = TcpInfoSampler(role: role, socket: connection)
     }
 
     /// Session queue, every 100 ms tick: one `getsockopt` per sampled socket every `tcpInfoTickInterval` ticks.

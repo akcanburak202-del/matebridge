@@ -565,7 +565,7 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 
 ## 6. Heartbeat ve saat farkı
 
-- İstemci her **500 ms**'de bir `PING` gönderir. Host da aynı aralıkla gönderebilir.
+- İstemci her **500 ms**'de bir `PING` gönderir. Host da aynı aralıkla gönderebilir. Host, etkinleşmiş (ACCEPTED + ilk doğrulanmış kayıt) kontrol bağlantısına 500 ms'de bir PING gönderir; PONG'u yalnız kendi tanı amaçlı saat farkı tahmini için kullanır (girdi yaşı, T-171). Hiçbir davranış buna bağlı değildir.
 - Host kontrol bağlantısından **1.500 ms** boyunca hiçbir mesaj almazsa **release-all** uygular (bağlantıyı kapatmaz). **5.000 ms** olursa bağlantıyı kapatır. Onay beklenirken (PENDING) 5 sn kuralı uygulanmaz, 60 sn onay süresi geçerlidir.
 - İstemci **3.000 ms** boyunca `PONG` alamazsa bağlantıyı kapatıp yeniden bağlanır (§3.3 devralma).
 - Saat farkı tahmini (istemci):

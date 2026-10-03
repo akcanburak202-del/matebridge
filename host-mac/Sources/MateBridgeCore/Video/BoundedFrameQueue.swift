@@ -5,6 +5,18 @@
 /// afterwards are refused until a keyframe has been pushed.
 /// Dropping a keyframe never needs a request: it can only happen when a newer keyframe (or
 /// config) is already queued or arriving.
+///
+/// **Drop policy and the reference chain (T-176).** The queue keeps "newest frame wins": it drops the oldest delta,
+/// never refuses the newest one. Take `[IDR, d1]` plus `d2`: `d1` is dropped and `d2` purged, `IDR` stays. The queued
+/// `IDR` does not repair the chain: every delta the encoder produces after `d2` references `d1` through `d2`, so all of
+/// them are undecodable and a new keyframe is needed eventually. Deltas are therefore refused until that keyframe has
+/// been pushed (`isAwaitingKeyframe`), and what is popped stays decodable: `IDR`, then the next keyframe.
+/// What changes is *when* that keyframe is forced: `takeKeyframeRequest` only says one is needed. The pipeline lets
+/// `KeyframeRequestCoalescer.hostDrop` decide, which defers the force while a keyframe is still on its way (in the
+/// encoder, queued here: `hasQueuedKeyframe`, or being written) or was written within its window. Forcing at once
+/// put another IDR (hundreds of KB) on a link that was already backed up: more drops, more IDRs (positive feedback).
+/// The coalescer keeps watching while the queue awaits a keyframe, so this state never outlives its pending timeout
+/// without a force.
 public struct BoundedFrameQueue: Sendable {
     public static let defaultCapacity = 2
 
@@ -21,6 +33,10 @@ public struct BoundedFrameQueue: Sendable {
 
     public var count: Int { frames.count }
     public var isEmpty: Bool { frames.isEmpty }
+    /// Delta frames are refused until a keyframe is pushed (after a chain-breaking drop, a new consumer or a resync).
+    public var isAwaitingKeyframe: Bool { awaitingKeyframe }
+    /// A keyframe waits in the queue (it is about to be written).
+    public var hasQueuedKeyframe: Bool { frames.contains(where: \.isKeyframe) }
 
     /// Adds a frame; returns how many frames were dropped to make room (0 or 1).
     @discardableResult

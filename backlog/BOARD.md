@@ -8,7 +8,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
-| [T-153](tasks/T-153-client-files-session-lifetime.md) | Run the WebDAV server only during an accepted, trusted USB session | 6 | android-client-dev | [T-151] |
 | [T-156](tasks/T-156-client-key-mismatch-state.md) | Show "anahtar uyuşmuyor" after repeated PAIRED auth failures | 6 | android-client-dev | [T-151] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
 | [T-160](tasks/T-160-client-video-delivery-gate.md) | Drop video frames from stale connections and uninstalled configs | 6 | android-client-dev | [T-159, T-150] |
@@ -18,12 +17,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
 | [T-168](tasks/T-168-client-latency-stage-stats.md) | Break client latency into stages with percentiles; stop clamping; fix stats maps; log decoder hardware | 6 | android-client-dev | [T-161] |
 | [T-169](tasks/T-169-client-refresh-target-log.md) | Log target and real refresh separately; warn on a mismatch | 6 | android-client-dev | [T-168] |
-| [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
 | [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 | [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
-| [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
-| [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |
 | [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
@@ -32,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-183](tasks/T-183-client-retire-experiments.md) | Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept) | 6 | android-client-dev | [T-182, T-168] |
 | [T-184](tasks/T-184-client-retire-gl-path.md) | Retire the GL presentation path | 6 | android-client-dev | [T-183] |
 | [T-185](tasks/T-185-client-dev-knob-gate.md) | Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug | 6 | android-client-dev | [T-184, T-146] |
-| [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |
 | [T-187](tasks/T-187-host-encoder-hw-warning.md) | Warn when VideoToolbox did not select the hardware encoder | 6 | mac-host-dev | [T-204] |
 | [T-188](tasks/T-188-colour-range-check.md) | Check stream colour, range and chroma fidelity with test patterns | 6 | user | [] |
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
@@ -207,6 +202,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-150](tasks/T-150-client-pending-pair-trust.md) | Keep new pair keys pending until local confirmation and pair only on user action | 6 | android-client-dev | [T-042, T-044] |
 | [T-151](tasks/T-151-client-trust-ui.md) | Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut" | 6 | android-client-dev | [T-150] |
 | [T-152](tasks/T-152-host-paired-proof-first.md) | Activate PAIRED sessions only after the first authenticated record | 6 | mac-host-dev | [T-041] |
+| [T-153](tasks/T-153-client-files-session-lifetime.md) | Run the WebDAV server only during an accepted, trusted USB session | 6 | android-client-dev | [T-151] |
 | [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |
 | [T-155](tasks/T-155-host-orphan-approval-guard.md) | Flag a replaced orphan approval request on the Mac | 6 | mac-host-dev | [T-152] |
 | [T-158](tasks/T-158-client-decoder-backend-seam.md) | Put MediaCodec behind a DecoderCodec interface (no behaviour change) | 6 | android-client-dev | [] |
@@ -215,4 +211,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-163](tasks/T-163-host-key-repeat-stall-pause.md) | Pause host key auto-repeat while the control connection is silent | 6 | mac-host-dev | [] |
 | [T-165](tasks/T-165-host-park-virtual-display.md) | Park the virtual display after a session ends (no capture or encode while parked) | 6 | mac-host-dev | [] |
 | [T-170](tasks/T-170-host-latency-trace-join.md) | Make the host latency CSV joinable with the tablet trace; fix labels | 6 | mac-host-dev | [T-162] |
+| [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
+| [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
+| [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
+| [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |

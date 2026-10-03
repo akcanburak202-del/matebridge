@@ -25,6 +25,18 @@ import MateBridgeCore
 /// `queue.async` wake-up happens only after a gap longer than the repeat stall pause, or when a re-arm left a paused
 /// repeat without a timer while newer activity is (or becomes) waiting; at most one is ever outstanding.
 ///
+/// Input age (T-171, diagnostics only). `SessionMachine` hands over the PONGs that answer the host's own PINGs; they
+/// feed the clock offset of an `InputAgeTracker` on the queue. Every delivered input message is recorded with the
+/// `now` its delivery takes, after it was handled: the age never changes what is injected. `ev=input_age` is logged
+/// about once a second while input flows (from `deliver`, and from the 1 s poll for the end of a burst); the session
+/// totals go into `input_session_end`.
+///
+/// Delivery timing (T-175, diagnostics only). `deliver` times its own `queue.sync` hop from the caller's side (the
+/// time the session queue is blocked, the wait for the input queue included), and inside it the environment lookups
+/// and the posting of the message's events. The times go into an `InputDeliveryTiming` under `timingLock` after the
+/// hop; session totals go into `input_session_end`, and a rate-limited `ev=input_slow_call` warns about one call over
+/// 20 ms. Timing never changes what is posted, or when.
+///
 /// Logging (docs/LOGGING.md): component `input`, counts and state changes only, never coordinates or keys.
 public final class InputController: @unchecked Sendable {
     public struct Status: Equatable, Sendable {
@@ -46,6 +58,10 @@ public final class InputController: @unchecked Sendable {
     private let activityLock = NSLock()
     private var activityMailbox = ControlActivityMailbox(
         stallGapUs: InputStateMachine.Configuration().keyRepeatStallPauseUs)
+    /// Delivery timing (T-175): recorded on the session queue after the hop, reset and read on `queue`, only under
+    /// `timingLock`. The lock is never held while waiting for `queue`.
+    private let timingLock = NSLock()
+    private var timing = InputDeliveryTiming()
 
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
@@ -71,6 +87,8 @@ public final class InputController: @unchecked Sendable {
     private var cursorQueryMaxNs: UInt64 = 0
     /// The planner's counters at session start (the live cursor counters are reported per session).
     private var sessionStartCounters = InjectionPlanner.Counters()
+    /// Input age at delivery (T-171): clock offset from PONG, per-class distributions.
+    private var ages = InputAgeTracker()
 
     /// - Parameters:
     ///   - doubleClickInterval: seconds; the system setting by default.
@@ -143,6 +161,10 @@ public final class InputController: @unchecked Sendable {
             cursorQueryTotalNs = 0
             cursorQueryMaxNs = 0
             sessionStartCounters = pipeline.planner.counters
+            ages.reset()  // the offset and ages belong to this session's connection
+            timingLock.lock()
+            timing.reset()  // T-175: this session's delivery times only
+            timingLock.unlock()
             beginActivity()
             // The user's key repeat settings as of now (System Settings > Keyboard), for this session's machine.
             var machine = pipeline.nextMachineConfiguration
@@ -172,7 +194,11 @@ public final class InputController: @unchecked Sendable {
             let pinchMessages = pipeline.machine?.pinchMessages ?? 0
             let events = pipeline.sessionEnded(now: now, environment: environment())
             flush(events, now: now)
+            logInputAge(now: now, force: true)  // the window of the last burst
             let d = pipeline.planner.counters
+            timingLock.lock()
+            let timingFields = timing.sessionFields
+            timingLock.unlock()
             log(.info, "input_session_end",
                 "messages=\(messages) events=\(eventsPosted) released=\(events.count) "
                     + "key_msgs=\(keys.messages) unknown_keys=\(keys.unknown) repeats=\(keys.repeats) "
@@ -183,7 +209,8 @@ public final class InputController: @unchecked Sendable {
                     + "cursor_current=\(d.liveCursorCurrent - sessionStartCounters.liveCursorCurrent) "
                     + "cursor_lag_ignored=\(d.liveCursorLagIgnored - sessionStartCounters.liveCursorLagIgnored) "
                     + "dropped_no_permission=\(d.droppedNoPermission - loggedDrops.droppedNoPermission) "
-                    + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)")
+                    + "dropped_no_display=\(d.droppedNoDisplay - loggedDrops.droppedNoDisplay)"
+                    + timingFields + ages.sessionFields)
             loggedDrops = d
             sessionID = 0
             configID = 0
@@ -192,31 +219,67 @@ public final class InputController: @unchecked Sendable {
         }
     }
 
-    /// One message from the approved session (`SessionServer` `deliver`). Non-input messages are ignored here.
+    /// One message from the approved session (`SessionServer` `deliver`). A PONG (answer to a host PING, T-171) only
+    /// feeds the input-age clock offset; other non-input messages are ignored here.
     public func deliver(_ message: Message) {
         switch message {
         case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .releaseAll, .bye, .key: break
+        case .pong(let pong):
+            let receivedUs = HostClock.nowUs()  // before the hop: queue time is not round-trip time
+            queue.sync {
+                guard !stopped else { return }
+                ages.clockSample(pong, receivedUs: receivedUs)
+            }
+            return
         default: return
         }
-        queue.sync {
-            guard !stopped else { return }
+        // T-175: the caller-side time includes the wait for the queue (watchdog, poll), which blocks the session queue.
+        let deliverStart = DispatchTime.now().uptimeNanoseconds
+        let inner: DeliveryTimes? = queue.sync {
+            guard !stopped else { return nil }
             let now = HostClock.nowUs()
+            let envStart = DispatchTime.now().uptimeNanoseconds
             var env = environment()
+            var envNs = DispatchTime.now().uptimeNanoseconds &- envStart
             messages += 1
             var unknownBefore = 0
             if case .key = message {
+                let capsStart = DispatchTime.now().uptimeNanoseconds
                 env.capsLockOn = capsLock.isOn()  // sampled for keyboard messages only
+                envNs &+= DispatchTime.now().uptimeNanoseconds &- capsStart
                 unknownBefore = pipeline.machine?.keyCounters.unknown ?? 0
             }
             if case .pointerRel = message { env.cursor = liveCursor() }  // relative moves start where the cursor is
             pushActivity()  // the activity from BEFORE this message (T-163)
-            flush(pipeline.handle(message, now: now, environment: env), now: now)
+            let postNs = flush(pipeline.handle(message, now: now, environment: env), now: now)
+            ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
+            logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
             if let keys = pipeline.machine?.keyCounters, keys.unknown > unknownBefore {
                 log(.debug, "key_unknown", "identity=\(keys.lastUnknownIdentity.map(String.init) ?? "none")")
             }
             rearmWatchdog()
+            return DeliveryTimes(envNs: envNs, postNs: postNs, sessionID: sessionID, configID: configID)
         }
+        let deliverNs = DispatchTime.now().uptimeNanoseconds &- deliverStart
+        guard let inner else { return }
+        timingLock.lock()
+        let slow = timing.record(deliverNs: deliverNs, envNs: inner.envNs, postNs: inner.postNs,
+                                 nowUs: HostClock.nowUs())
+        timingLock.unlock()
+        if let slow {
+            // Stage and time only. Logged after the hop, with the session the message belonged to.
+            logger.log(.warning, "input_slow_call", sessionID: inner.sessionID, generation: inner.configID,
+                       fields: "stage=\(slow.stage.rawValue) us=\(slow.us)")
+        }
+    }
+
+    /// What `deliver` measured on the queue (T-175), and the session it belonged to, for the record after the hop.
+    private struct DeliveryTimes {
+        var envNs: UInt64
+        var postNs: UInt64
+        var sessionID: UInt32
+        var configID: UInt16
     }
 
     /// A record of the active session's control connection was received at `time` (host clock) and handled
@@ -337,9 +400,13 @@ public final class InputController: @unchecked Sendable {
     }
 
     /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are
-    /// owed and retried until they are posted), and logs the releases the pipeline did.
-    private func flush(_ events: [MacEvent], now: UInt64) {
+    /// owed and retried until they are posted), and logs the releases the pipeline did. Returns how long the post
+    /// itself took, in nanoseconds (T-175, diagnostics only).
+    @discardableResult
+    private func flush(_ events: [MacEvent], now: UInt64) -> UInt64 {
+        let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
+        let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
         eventsPosted += events.count - result.failed.count
         if !result.failed.isEmpty {
             pipeline.postFailed(result.failed, now: now, permitted: result.permitted)
@@ -348,6 +415,7 @@ public final class InputController: @unchecked Sendable {
                 "events=\(result.failed.count) closing=\(closing) permitted=\(result.permitted ? 1 : 0) owed=\(pipeline.owed.count)")
         }
         logRecords()
+        return postNs
     }
 
     /// One `input_release` line per release the pipeline recorded: cause and counts, never coordinates.
@@ -458,6 +526,7 @@ public final class InputController: @unchecked Sendable {
         let now = HostClock.nowUs()
         flush(pipeline.tick(now: now, environment: environment()), now: now)
         rearmWatchdog()
+        logInputAge(now: now)
         let d = pipeline.planner.counters
         let noPermission = d.droppedNoPermission - loggedDrops.droppedNoPermission
         let noDisplay = d.droppedNoDisplay - loggedDrops.droppedNoDisplay
@@ -466,6 +535,11 @@ public final class InputController: @unchecked Sendable {
             log(.warning, "input_dropped", "no_permission=\(noPermission) no_display=\(noDisplay) owed=\(owed)")
             loggedDrops = d
         }
+    }
+
+    /// `ev=input_age` when the open window is a second old (`force`: any open window). Counts and times only.
+    private func logInputAge(now: UInt64, force: Bool = false) {
+        if let fields = ages.takeReport(now: now, force: force) { log(.info, "input_age", fields) }
     }
 
     private func log(_ level: LogLevel, _ event: String, _ fields: String = "") {
