@@ -17,6 +17,8 @@ class SettingsCatalogTest {
         override var transportMode = TransportMode.AUTO
         override fun selectTransport(m: TransportMode) { calls += "transport ${m.id}"; transportMode = m }
         override fun disconnect() { calls += "disconnect" }
+        override val forgetHostLabel = "Bu Mac'i unut"
+        override fun forgetHost() { calls += "forget" }
         override var streamMode = StreamMode.SMOOTH
         override fun selectStreamMode(m: StreamMode) { calls += "mode ${m.id}"; streamMode = m }
         override var bitrateKbps = 0L
@@ -65,7 +67,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_status",
                 "clipboard", "stats", "shortcuts", "version",
             ),
@@ -137,6 +139,17 @@ class SettingsCatalogTest {
         val text = (item(SettingsCatalog.sections(h, inStream = false), "shortcuts") as SettingItem.Info).text()
         assertTrue(text.contains("Ctrl+Shift+6: ayarlar paneli"))
         assertTrue(text.contains("Ctrl+Shift+7"))
+    }
+
+    @Test fun forgetHostIsInBothPanels() { // T-151: also in-stream (the controller ends the session first)
+        for (inStream in listOf(false, true)) {
+            val s = SettingsCatalog.sections(h, inStream)
+            val a = item(s, "forget_host") as SettingItem.Action
+            assertEquals("Bu Mac'i unut", a.title)
+            assertTrue(a in s.single { it.title == "Bağlantı" }.items)
+            a.run()
+        }
+        assertEquals(listOf("forget", "forget"), h.calls) // only opens the host's two-step confirmation
     }
 
     @Test fun connectPanelHasNoDisconnect() {

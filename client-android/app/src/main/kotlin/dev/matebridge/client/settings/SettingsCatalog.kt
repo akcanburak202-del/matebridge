@@ -21,6 +21,9 @@ interface SettingsHost {
     fun selectTransport(m: TransportMode)
     /** "Bağlantıyı kes": BYE, back to the connect panel, no automatic reconnect until the user connects again. */
     fun disconnect()
+    /** T-151 "Bu Mac'i unut" (label from `strings.xml`): opens the two-step confirmation; the host does the rest. */
+    val forgetHostLabel: String
+    fun forgetHost()
 
     // Görüntü
     val streamMode: StreamMode
@@ -148,6 +151,7 @@ object SettingsCatalog {
                     ) { id -> TransportMode.parse(id)?.let { h.selectTransport(it) } },
                 )
                 if (inStream) add(SettingItem.Action("disconnect", "Bağlantıyı kes") { h.disconnect() })
+                add(SettingItem.Action("forget_host", h.forgetHostLabel) { h.forgetHost() }) // T-151, both panels
             },
         )
         out += SettingsSection(

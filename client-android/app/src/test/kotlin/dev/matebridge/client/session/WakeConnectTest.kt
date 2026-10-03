@@ -236,6 +236,12 @@ class WakeConnectTest {
         assertTrue(w.onDiscovered(current, disconnected = true))
     }
 
+    @Test fun aPickPromptFreesTheSlotForAnotherDiscoveredMac() { // T-151: one impostor cannot park the tablet
+        current = Endpoint("192.168.1.66", 47001) // answered PAIRING to an automatic connect: no connection any more
+        assertFalse(w.onDiscovered(current, disconnected = false, atPairPrompt = false))
+        assertTrue(w.onDiscovered(current, disconnected = false, atPairPrompt = true))
+    }
+
     @Test fun takenOverSessionIsNotOurs() {
         attempt(1, step())
         fail()

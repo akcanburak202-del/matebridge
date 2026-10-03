@@ -26,4 +26,29 @@
     <string name="cause_host_sleep">Mac uyku modunda</string>
     <string name="state_host_sleep">Mac uyku modunda.\nUyandırmak için \"Mac\'i uyandır\"a, Mac uyanıksa \"Bağlan\"a dokun.</string>
     <string name="state_host_sleep_no_wol">Mac uyku modunda.\nMac uyanınca \"Bağlan\"a dokun.</string>
+    <!-- T-151 pairing / trust UI (decision 0018). Never put the code or the Mac name in a log. -->
+    <string name="trust_key_changed">Bu Mac\'in kimliği/anahtarı değişti. Kodu Mac\'teki ile karşılaştırmadan onaylama.</string>
+    <string name="trust_compare_code">Mac\'teki kodla aynı mı?</string>
+    <string name="trust_confirm_hint">Kodlar aynıysa \"Kodlar aynı — Güven\"e bas ve Mac\'te \"İzin ver\" de.</string>
+    <string name="trust_parsec_hint">Mac\'i Parsec\'ten görüyorsan: Kodu tabletteki ile karşılaştır, Mac\'te İzin ver, buraya dönüp \'Kodlar aynı\'ya bas.</string>
+    <string name="trust_wait_mac_allow">Kodlar onaylandı. Mac\'te \"İzin ver\" dediğinde bağlanır.</string>
+    <string name="trust_stored_code">Yarım kalmış bir eşleşme var. Mac\'teki kodla aynı mı?</string>
+    <string name="trust_stored_confirmed">Mac\'te \'İzin ver\' dedikten sonra \'Bağlan\'a bas.</string>
+    <string name="trust_new_host_claim">Yeni Mac bulundu: kendini \"%1$s\" olarak tanıtan bir Mac eşleşmek istiyor.</string>
+    <string name="trust_re_pair_claim">Mac yeniden eşleşmek istiyor: kendini \"%1$s\" olarak tanıtan Mac bu tableti tanımıyor.</string>
+    <string name="trust_pair_cancelled">Eşleşme iptal edildi. Mac\'teki onay penceresinde \'Reddet\' de; \'İzin ver\'e bastıysan Mac menüsünden \'Onaylı cihazları unut\' de.</string>
+    <string name="trust_btn_confirm">Kodlar aynı — Güven</string>
+    <string name="trust_btn_cancel">İptal</string>
+    <string name="trust_btn_pair">Eşleş</string>
+    <string name="trust_btn_ignore">Yoksay</string>
+    <string name="trust_btn_repair">Yeniden eşleş</string>
+    <string name="trust_btn_connect">Bağlan</string>
+    <string name="forget_host">Bu Mac\'i unut</string>
+    <string name="forget_ask_first">Bu tablet, bağlandığı Mac\'in eşleşme anahtarını silecek. Açık bağlantı önce kapanır.</string>
+    <string name="forget_ask_second">Emin misin? Yeniden bağlanmak için Mac\'le baştan eşleşmen gerekecek.</string>
+    <string name="forget_yes_first">Unut</string>
+    <string name="forget_yes_second">Evet, unut</string>
+    <string name="forget_no">Vazgeç</string>
+    <string name="forget_done">Mac bu tablette unutuldu. Yeniden eşleşmeden önce Mac menüsünden de \'Onaylı cihazları unut\' de; yoksa Mac bu tableti tanıdığını sanır ve bağlantı \"Mac bu tableti tanımıyor\" hatasıyla biter.</string>
+    <string name="forget_none">Bu tablette unutulacak bir Mac yok (önce Mac\'e bağlan).</string>
 </resources>

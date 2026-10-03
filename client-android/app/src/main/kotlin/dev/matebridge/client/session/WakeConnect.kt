@@ -123,14 +123,17 @@ class WakeConnect(
      * Discovery found the Mac at some endpoint. Returns whether to connect to it: always when our wake attempt holds the
      * session (the new start closes it first, so there is one connection), otherwise as before: when nothing is chosen
      * yet or the session waits to retry ([disconnected]). In an episode no further direct attempt runs after this.
+     * [atPairPrompt] (T-151): the session stopped at a "Yeni Mac bulundu — Eşleş" prompt (an automatic connect met a
+     * PAIRING answer); it holds no connection, so another discovered endpoint is tried (the caller skips the one that
+     * answered PAIRING, [PairPick]). One impostor must not park the tablet.
      */
-    fun onDiscovered(current: Endpoint?, disconnected: Boolean): Boolean {
+    fun onDiscovered(current: Endpoint?, disconnected: Boolean, atPairPrompt: Boolean = false): Boolean {
         if (episode) settled = true
         if (owned != null && current == owned) {
             owned = null
             return true
         }
-        return current == null || disconnected
+        return current == null || disconnected || atPairPrompt
     }
 
     companion object {

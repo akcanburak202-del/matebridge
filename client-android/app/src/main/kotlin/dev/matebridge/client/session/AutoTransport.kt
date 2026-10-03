@@ -189,9 +189,12 @@ class AutoUsbPolicy {
         if (state == CableState.CONNECTED) nextTryAtMs = minOf(nextTryAtMs, nowMs) // a fresh plug: try at once
     }
 
-    /** The next AUTO step; [onUsb]: the current endpoint is the USB loopback one. */
-    fun next(onUsb: Boolean, stage: Stage, nowMs: Long): Step {
-        if (onUsb || cable == CableState.DISCONNECTED) return Step.NONE
+    /**
+     * The next AUTO step; [onUsb]: the current endpoint is the USB loopback one. [usbBlocked] (T-151): the USB endpoint
+     * answered PAIRING to an automatic connect ([PairPick]); nothing automatic goes there again (no probe, no migration).
+     */
+    fun next(onUsb: Boolean, stage: Stage, nowMs: Long, usbBlocked: Boolean = false): Step {
+        if (onUsb || usbBlocked || cable == CableState.DISCONNECTED) return Step.NONE
         if (inFlight && nowMs - inFlightSinceMs < STUCK_MS) return Step.NONE
         if (nowMs < nextTryAtMs) return Step.NONE
         return when (stage) {
@@ -260,18 +263,23 @@ class AutoUsbPolicy {
         /**
          * The probe ran off the UI thread; the Wi-Fi session may have moved on meanwhile. Accepted: move it with a
          * takeover (never tear it down). Pairing in progress, a connect attempt underway, or a terminal failure: leave
-         * it alone (the next step decides again). Nothing connected: switch to USB.
+         * it alone (the next step decides again). Nothing connected: switch to USB. [usbBlocked] (T-151): the USB
+         * endpoint already answered PAIRING to an automatic connect: never switch or migrate to it on our own.
          */
-        fun onProbeOpen(ui: SessionUi): OpenAction = when (ui) {
+        fun onProbeOpen(ui: SessionUi, usbBlocked: Boolean = false): OpenAction = if (usbBlocked) OpenAction.IGNORE else when (ui) {
             is SessionUi.Connected -> OpenAction.MIGRATE
             SessionUi.Idle, SessionUi.Searching, is SessionUi.Disconnected -> OpenAction.SWITCH
             is SessionUi.Connecting, is SessionUi.AwaitingApproval, is SessionUi.Failed,
             is SessionUi.PairingNeedsUser, is SessionUi.StoredTrust -> OpenAction.IGNORE
         }
 
-        /** AUTO on USB and the session dropped (cable pulled, host gone, never reached): fall back to Wi-Fi. */
+        /**
+         * AUTO on USB and the session dropped (cable pulled, host gone, never reached): fall back to Wi-Fi. T-151: also
+         * when the USB endpoint answered PAIRING to an automatic connect (a localhost squatter must not park the tablet;
+         * the pick prompt stays as a banner).
+         */
         fun shouldFallBack(mode: TransportMode, onUsb: Boolean, ui: SessionUi): Boolean =
-            mode == TransportMode.AUTO && onUsb && ui is SessionUi.Disconnected
+            mode == TransportMode.AUTO && onUsb && (ui is SessionUi.Disconnected || ui is SessionUi.PairingNeedsUser)
 
         private val SOFT_REASONS = setOf(
             SessionMachine.REASON_CONNECT_FAILED, SessionMachine.REASON_NOT_CONNECTED,
