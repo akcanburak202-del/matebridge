@@ -1,4 +1,5 @@
 import AppKit
+import MateBridgeCore
 
 /// Non-modal approval window. Unlike `NSAlert.runModal`, it can be closed or replaced at any time
 /// from ordinary main-actor code, so a stale dialog can never swallow the click meant for a newer request.
@@ -9,7 +10,10 @@ final class ApprovalPanel: NSObject {
     private var onAnswer: ((Bool) -> Void)?
     private let notice = NSTextField(wrappingLabelWithString: "")
 
-    init(requestID: UInt64, deviceName: String, code: String, onAnswer: @escaping (Bool) -> Void) {
+    /// `replaced` and `fingerprint` (T-155): a request that replaced an open window says so, so a returning user does
+    /// not click "İzin ver" out of habit for a different device.
+    init(requestID: UInt64, deviceName: String, code: String, replaced: ApprovalReplacement, fingerprint: String,
+         onAnswer: @escaping (Bool) -> Void) {
         self.requestID = requestID
         self.onAnswer = onAnswer
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
@@ -36,7 +40,25 @@ final class ApprovalPanel: NSObject {
         notice.isHidden = true
         let buttons = NSStackView(views: [reject, allow])
         buttons.spacing = 12
-        let stack = NSStackView(views: [title, codeLabel, compare, notice, body, buttons])
+        // Separate from `notice`, so a later "tablet left" / Keychain notice never hides the replacement warning.
+        var views: [NSView] = [title, codeLabel, compare]
+        switch replaced {
+        case .none:
+            break
+        case .otherDevice:
+            let warning = NSTextField(wrappingLabelWithString:
+                "Bu, önceki istekten FARKLI bir cihaz.\nCihaz parmak izi: \(fingerprint)")
+            warning.font = .systemFont(ofSize: 13, weight: .bold)
+            warning.textColor = .systemRed
+            views.append(warning)
+        case .sameDevice:
+            let info = NSTextField(wrappingLabelWithString: "Kod değişti — tabletteki kodla yeniden karşılaştır.")
+            info.font = .systemFont(ofSize: 13)
+            info.textColor = .secondaryLabelColor
+            views.append(info)
+        }
+        views += [notice, body, buttons]
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12

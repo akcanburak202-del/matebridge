@@ -183,7 +183,7 @@ private let pairKey = SecretBytes([UInt8](repeating: 0x5a, count: 32))
         #expect(wire.isEmpty)  // nothing else until the user decides
         // The approval window gets the same code the tablet computed.
         let shown = server.actions.compactMap { a -> PairingCode? in
-            if case .requestApproval(_, _, _, let c) = a { c } else { nil }
+            if case .requestApproval(_, _, _, let c, _) = a { c } else { nil }
         }
         #expect(shown.count == 1 && shown[0].digits == client.schedule!.pairingCode!.digits)
         #expect(shown[0].digits.count == 6 && shown[0].digits.allSatisfy(\.isNumber))

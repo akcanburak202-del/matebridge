@@ -1,7 +1,7 @@
 ---
 id: T-155
 title: Flag a replaced orphan approval request on the Mac
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-152]
@@ -59,14 +59,31 @@ Source: external architecture review 2026-10-03 (M05, approval surface); verific
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core (`SessionMachine.swift`):** new `public enum ApprovalReplacement { none, sameDevice, otherDevice }` with `logValue` (`none|same|other`). `.requestApproval` gets a fifth associated value `replaced:`. In `continueHello`'s PAIRING branch the open orphan (if any) is compared with `hello.deviceID` before it is cancelled; the request is emitted unchanged otherwise (no block, no delay). `approval_pending` gets `fields: "replaced=…"` (no name, no code).
+2. **Tests:** new `Session/ApprovalReplacementTests.swift` (orphan A + B → `otherDevice`, `.cancelApproval(A)` before the request, B's `shortHex` available via `deviceID`; orphan A + A → `sameDevice`; no orphan → `none`; log fields). Pattern updates only in `SessionCryptoTests.swift` and existing `Session/` tests that match the 4-ary case.
+3. **Host (`SessionServer.swift`):** `ApprovalRequest` gets `replaced: ApprovalReplacement` and `deviceFingerprint: String` (`DeviceID.shortHex`); filled from the action. Keychain-busy re-show keeps them (same stored request).
+4. **App (`main.swift`, `ApprovalPanel.swift`):** panel init takes `replaced` + `fingerprint`; a separate label (so `setNotice` for disconnected/keychain does not overwrite it): `otherDevice` → "Bu, önceki istekten FARKLI bir cihaz" + "Cihaz parmak izi: xxxxxxxx" in `systemRed` (warning colour); `sameDevice` → neutral "Kod değişti — tabletteki kodla yeniden karşılaştır" (`secondaryLabelColor`); `none` → hidden.
+5. `./scripts/check.sh`, commit, Handoff.
+
+Risks: case arity change breaks every `case .requestApproval` pattern (compile-time, all in `files:`). The fingerprint is not a secret but is not logged by the app either (only `replaced=`).
 
 ## Handoff
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
+- **Commit:** `c2853004f33b8ccea3ac303a5101ba0af408a0ec` (implementation; plan `9430b52`); Codex review fix `ce1d37cc12ac46515a7fa67ba563c652ff4f4d12`; Handoff updates in the commits that follow. Branch `task/T-155-host-orphan-approval-guard`.
+- **Codex review (--high) P2, fixed in `ce1d37c`:** when B, after taking over the window, left and came back with its own `device_id`, the request became `sameDevice` and the red warning turned into the neutral notice. Now `Pairing.replaced` is carried into the orphan as `Orphan.otherDeviceSeen`. Once set, every later replacement in the same window (B→B, or the real tablet returning, B→A) yields `otherDevice` until the user decides or the window expires; after that a new request is `none` again. New tests: `theDifferentDeviceFlagIsStickyAcrossItsOwnReconnects` (A→B→B→B, through both close and BYE), `theRealTabletReturningAfterATakeoverIsStillFlaggedAsDifferent`, `theSameDeviceRepeatedlyStaysSame` (A→A→A stays `sameDevice`), `theStickyFlagEndsWithTheDecisionOrTheWindow`. The request is still never blocked.
 - **Dokunulan dosyalar:**
-- **Varsayımlar:**
+  - `host-mac/Sources/MateBridgeCore/Session/SessionMachine.swift`: new `ApprovalReplacement { none, sameDevice, otherDevice }` + `logValue` (`none|same|other`); `.requestApproval(…, code:, replaced:)`; the PAIRING branch of `continueHello` compares the open orphan's `deviceID` with the HELLO's before cancelling it; `approval_pending` now has `fields: "replaced=…"`.
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`: `ApprovalRequest` gets `replaced` and `deviceFingerprint` (`DeviceID.shortHex`). The Keychain-busy re-show reuses the stored request, so the warning survives it.
+  - `host-mac/Sources/MateBridgeApp/main.swift`: passes both into the panel (logs unchanged: `approval_shown conn=` only).
+  - `host-mac/Sources/MateBridgeApp/ApprovalPanel.swift`: an extra label between "Tabletteki kodla aynı mı?" and the existing `notice` line. `otherDevice`: "Bu, önceki istekten FARKLI bir cihaz." + "Cihaz parmak izi: xxxxxxxx" in bold `systemRed`. `sameDevice`: "Kod değişti — tabletteki kodla yeniden karşılaştır." in `secondaryLabelColor` (neutral). `none`: nothing. It is a separate label, so `markDisconnected`/Keychain `setNotice` cannot overwrite it.
+  - Tests: new `host-mac/Tests/MateBridgeCoreTests/Session/ApprovalReplacementTests.swift` (none / other with fingerprint `02020202`, cancel-before-request order, ack `pendingApproval` i.e. not blocked / same / expired or decided orphan → none / no name, code or fingerprint in any log field / logValue). Pattern-only updates (one extra `_`/`.none`) in `SessionCryptoTests.swift`, `PairedProofFirstTests.swift`, `PairingOrphanApprovalTests.swift`, `SessionMachineTests.swift`.
+- **Varsayımlar:** "Warning colour" = `systemRed` bold, which sets it apart from the existing orange `notice`. The fingerprint is `DeviceID.shortHex` (first 4 bytes); it is shown in the panel but not logged by the app. A new orphan replacing an older orphan inside `end(orphaning:)` is not flagged, since a request always cancels the orphan first and so that path does not occur in practice. The orphan flow stays (manifest §5 Q3 is still open).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The panel itself is not shown (no GUI on the Mac in this task). On the device: with an orphan window from the tablet, a HELLO from a second Android device should show the red "FARKLI bir cihaz" text + fingerprint (T-157 step 11). If there is no second device, the XCTests are the evidence.
+  - The same tablet with "Yeniden eşleş" (T-151) inside the orphan window should show the grey "Kod değişti …" line, and the code should match the tablet's new code.
+  - Panel layout: the panel's height should fit the extra line (`fittingSize`); check it visually.
+  - Not run: `./scripts/codex-review.sh` (orchestrator).
 - **Açık sorular:**
+  - `docs/LOGGING.md` (not in `files:`): `approval_pending` now carries `replaced=none|same|other` (none: no window was open; same: replaced the orphaned window of the same `device_id`; other: of a different `device_id`). The orchestrator should add this line to the event table.

@@ -223,7 +223,7 @@ private struct Wire {
         _ = m.connectionOpened(B, now: 1)
         let pairing = m.received(B, hello(2), now: 1)
         #expect(ackStatuses(pairing, to: B) == [.pendingApproval])
-        #expect(pairing.contains { if case .requestApproval(B, device(2), _, _) = $0 { true } else { false } })
+        #expect(pairing.contains { if case .requestApproval(B, device(2), _, _, _) = $0 { true } else { false } })
         #expect(m.status == .pending(deviceName: "Pad"))
 
         let proof = m.received(A, ping(1), now: 2)
