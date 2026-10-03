@@ -343,6 +343,8 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 
 - Çıkarılamayan (meşgul, ör. Finder'da açık) bizim "MatePad" birimimiz, bağlandığı token ile bellekte tutulur. Farklı token'lı bir READY gelince birim ölüdür ve bir kez zorla çıkarılır. Aynı token'lı (canlı) birim, bilinmeyen birim ve kullanıcının kendi "MatePad"i asla zorla çıkarılmaz. Zorla çıkarma kullanıcının "Çıkar"ı sayılmaz (`ev=eject` yazılmaz).
 - `ev=unmount result=ok|gone|error code=N force=1` (I/W): zorla çıkarma (`unmount(2)` `MNT_FORCE`). `gone`: birim zaten yoktu. Normal çıkarma satırında `force` alanı yoktur (`code=16` EBUSY).
+- `ev=unmount result=skipped reason=identity force=1` (W): o yoldaki birim, bizim bağladığımız birim değil (`fsid`, tür ya da kaynak URL farklı; ör. kullanıcı aynı yola başka bir birim bağladı). Zorla çıkarılmaz, hatırlanan birim unutulur.
+- Bir yeniden bağlama, sıradaki tüm çıkarma ve zorla çıkarma sonuçları gelene kadar bekler.
 - `ev=mount_exists dead_ours=N` (I): bağlama `ev=mount result=error code=17` (EEXIST) aldı. `N>0`: engelleyen birim bizim ölü birimimiz, zorla çıkarılıp bağlama bir kez yeniden denenir. `0`: dokunulmaz, menüde hata görünür.
 - Yol ve token loglanmaz.
 
