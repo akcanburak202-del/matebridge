@@ -105,6 +105,64 @@ private func ackStatus(_ actions: [SessionAction]) -> HelloStatus? {
         #expect(pendingLog(actions) == "replaced=same")
     }
 
+    /// Codex review: a different device must not clear the warning by leaving and coming back with its own id.
+    @Test func theDifferentDeviceFlagIsStickyAcrossItsOwnReconnects() throws {
+        let C = ConnectionID(3)
+        let D = ConnectionID(4)
+        var m = makeMachine()
+        _ = connect(&m, A, dev: 1, now: 0)
+        _ = m.connectionClosed(A)  // tablet A's window is orphaned
+        #expect(try #require(requests(connect(&m, B, dev: 2, now: 10 * sec)).first).replaced == .otherDevice)
+        _ = m.connectionClosed(B)  // B leaves: the window is orphaned again, now owned by B
+        let again = connect(&m, C, dev: 2, now: 20 * sec)  // B comes back with its own, unchanged id
+        #expect(ackStatus(again) == .pendingApproval)
+        let request = try #require(requests(again).first)
+        #expect(request.replaced == .otherDevice && request.deviceID == device(2))
+        #expect(pendingLog(again) == "replaced=other")
+        // And once more through BYE: still flagged.
+        _ = m.received(C, .bye(.normal), now: 25 * sec)
+        #expect(try #require(requests(connect(&m, D, dev: 2, now: 30 * sec)).first).replaced == .otherDevice)
+    }
+
+    @Test func theRealTabletReturningAfterATakeoverIsStillFlaggedAsDifferent() throws {
+        var m = makeMachine()
+        _ = connect(&m, A, dev: 1, now: 0)
+        _ = m.connectionClosed(A)
+        _ = connect(&m, B, dev: 2, now: 10 * sec)
+        _ = m.connectionClosed(B)
+        let back = connect(&m, ConnectionID(3), dev: 1, now: 20 * sec)
+        #expect(try #require(requests(back).first).replaced == .otherDevice)
+    }
+
+    @Test func theSameDeviceRepeatedlyStaysSame() throws {
+        var m = makeMachine()
+        _ = connect(&m, A, dev: 1, now: 0)
+        _ = m.connectionClosed(A)
+        #expect(try #require(requests(connect(&m, B, dev: 1, now: 10 * sec)).first).replaced == .sameDevice)
+        _ = m.connectionClosed(B)
+        let third = connect(&m, ConnectionID(3), dev: 1, now: 20 * sec)
+        #expect(try #require(requests(third).first).replaced == .sameDevice)
+        #expect(pendingLog(third) == "replaced=same")
+    }
+
+    @Test func theStickyFlagEndsWithTheDecisionOrTheWindow() throws {
+        var m = makeMachine()
+        _ = connect(&m, A, dev: 1, now: 0)
+        _ = m.connectionClosed(A)
+        _ = connect(&m, B, dev: 2, now: 10 * sec)
+        _ = m.connectionClosed(B)
+        _ = m.approvalDecided(B, approved: false, now: 15 * sec)  // Reddet
+        #expect(try #require(requests(connect(&m, ConnectionID(3), dev: 2, now: 20 * sec)).first).replaced == .none)
+
+        var n = makeMachine()
+        _ = connect(&n, A, dev: 1, now: 0)
+        _ = n.connectionClosed(A)
+        _ = connect(&n, B, dev: 2, now: 10 * sec)
+        _ = n.connectionClosed(B)
+        _ = n.tick(now: 10 * sec + 120 * sec)  // B's window expired
+        #expect(try #require(requests(connect(&n, ConnectionID(3), dev: 2, now: 200 * sec)).first).replaced == .none)
+    }
+
     @Test func anExpiredOrphanNoLongerCountsAsReplaced() throws {
         var m = makeMachine()
         _ = connect(&m, A, dev: 1, now: 0)

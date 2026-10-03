@@ -187,6 +187,9 @@ public struct SessionMachine: Sendable {
         var schedule: SessionKeySchedule
         var code: PairingCode
         var newPairKey: SecretBytes
+        /// How this request replaced an open window (T-155). `otherDevice` is sticky for the window: it is carried
+        /// into the orphan and through every later replacement until the user decides or the window expires.
+        var replaced: ApprovalReplacement
     }
 
     /// An approval request whose connection went away; the window is still open.
@@ -197,6 +200,8 @@ public struct SessionMachine: Sendable {
         /// This handshake's `new_pair_key`, kept in memory only until the user answers or the window expires.
         var newPairKey: SecretBytes
         var deadline: UInt64
+        /// The window was taken over by a different `device_id` at some point (T-155, sticky until decided/expired).
+        var otherDeviceSeen: Bool
     }
 
     private enum Phase {
@@ -702,19 +707,23 @@ public struct SessionMachine: Sendable {
                   let code = schedule.pairingCode, let newKey = schedule.newPairKey else {
                 return protocolError(id)
             }
-            connections[id]?.phase = .pending(hello, deadline: now + configuration.approvalTimeoutUs,
-                                              Pairing(schedule: schedule, code: code, newPairKey: newKey))
-            actions += [.send(id, .helloAck(firstAck)), .startEncryption(id, schedule.control),
-                        .log(.info, ev: "handshake", conn: id, fields: "mode=pairing")]
             // A new request replaces a window left open by an earlier one (its stored key is dropped). It is never
             // blocked (that would let any LAN device lock pairing out), but the swap is reported so the panel can
-            // say whether the same or a different device is asking now (T-155).
+            // say whether the same or a different device is asking now (T-155). Once a different device took the
+            // window over, it stays `otherDevice` for that window: that device leaving and coming back with its own
+            // id must not turn the warning into the neutral "code changed" notice.
             var replaced = ApprovalReplacement.none
-            if let o = orphan {
+            let replacedOrphan = orphan
+            if let o = replacedOrphan {
                 orphan = nil
-                replaced = o.deviceID == hello.deviceID ? .sameDevice : .otherDevice
-                actions.append(.cancelApproval(o.id))
+                replaced = o.otherDeviceSeen || o.deviceID != hello.deviceID ? .otherDevice : .sameDevice
             }
+            connections[id]?.phase = .pending(hello, deadline: now + configuration.approvalTimeoutUs,
+                                              Pairing(schedule: schedule, code: code, newPairKey: newKey,
+                                                      replaced: replaced))
+            actions += [.send(id, .helloAck(firstAck)), .startEncryption(id, schedule.control),
+                        .log(.info, ev: "handshake", conn: id, fields: "mode=pairing")]
+            if let o = replacedOrphan { actions.append(.cancelApproval(o.id)) }
             actions += [.requestApproval(id, deviceID: hello.deviceID, deviceName: hello.deviceName, code: code,
                                          replaced: replaced),
                         .log(.info, ev: "approval_pending", conn: id, fields: "replaced=\(replaced.logValue)")]
@@ -809,7 +818,8 @@ public struct SessionMachine: Sendable {
                 // The tablet left (connection lost or BYE, e.g. the user switched apps): keep the window.
                 if let old = orphan { actions.append(.cancelApproval(old.id)) }
                 orphan = Orphan(id: id, deviceID: hello.deviceID, deviceName: hello.deviceName,
-                                newPairKey: pairing.newPairKey, deadline: clock + configuration.orphanWindowUs)
+                                newPairKey: pairing.newPairKey, deadline: clock + configuration.orphanWindowUs,
+                                otherDeviceSeen: pairing.replaced == .otherDevice)
                 actions.append(.approvalOrphaned(id))
             } else {
                 actions.append(.cancelApproval(id))
