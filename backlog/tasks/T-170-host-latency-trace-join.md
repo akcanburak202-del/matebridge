@@ -1,7 +1,7 @@
 ---
 id: T-170
 title: Make the host latency CSV joinable with the tablet trace; fix labels
-status: in_progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-162]
@@ -58,13 +58,13 @@ Source: external architecture review 2026-10-03 (H05, LM4, LM8, D5); verificatio
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] `FrameTrace.csvHeader` keeps today's columns in order and appends `pts_us,display_us,frame_seq,config_id,session_id,resubmit`. A test checks the header and one line, including a resubmitted frame (`resubmit=1`) and `pts_us` equal to the wire `capture_time_us`.
-- [ ] [XCTest] `VideoSender` records `frame_seq` into the trace equal to the `VIDEO_FRAME.frame_seq` it sends (fake transport).
-- [ ] [XCTest] `ev=latency` adds a signed `cap_to_sent_pts` stage and logs `pts_vs_deliv` as p1/p50/p99 (negative values allowed).
-- [ ] [XCTest] `StatsSummary`: the comment and `menuText` read "tablet capture→decode" (e.g. "· yak→çöz N ms"); `logFields` writes `cap_dec_ms=` and keeps `latency_ms=` as an alias.
-- [ ] [doc] `docs/LOGGING.md` documents the new CSV columns, `cap_to_sent_pts`, the `pts_vs_deliv` p1 and the `cap_dec_ms` rename.
+- [x] [XCTest] `FrameTrace.csvHeader` keeps today's columns in order and appends `pts_us,display_us,frame_seq,config_id,session_id,resubmit`. A test checks the header and one line, including a resubmitted frame (`resubmit=1`) and `pts_us` equal to the wire `capture_time_us`.
+- [x] [XCTest] `VideoSender` records `frame_seq` into the trace equal to the `VIDEO_FRAME.frame_seq` it sends (fake transport).
+- [x] [XCTest] `ev=latency` adds a signed `cap_to_sent_pts` stage and logs `pts_vs_deliv` as p1/p50/p99 (negative values allowed).
+- [x] [XCTest] `StatsSummary`: the comment and `menuText` read "tablet capture→decode" (e.g. "· yak→çöz N ms"); `logFields` writes `cap_dec_ms=` and keeps `latency_ms=` as an alias.
+- [x] [doc] `docs/LOGGING.md` documents the new CSV columns, `cap_to_sent_pts`, the `pts_vs_deliv` p1 and the `cap_dec_ms` rename.
 - [ ] [device] A 60 s USB run with `MATEBRIDGE_LAT_TRACE=1` on the host and `--ez pace_trace true` on the client joins on `pts_us == capture_us` for ≥ 99 % of frames (resubmits excluded). The `pts_vs_deliv` p1/p50/p99 values are recorded in NOTES for T-172.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -80,10 +80,17 @@ Risks: `ev=latency` offset keys change name (`_p50_99` → `_p1_50_99`); analysi
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** ec80138 (implementation; plan 25bef40; this handoff in the following commit)
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Video/LatencyTrace.swift`, `host-mac/Sources/MateBridgeCore/Video/VideoSender.swift`, `host-mac/Sources/MateBridgeCore/Video/StatsSummary.swift`, `host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift` (trace fields only: `Input.resubmit` set in `resubmitLast`, copied into the trace in `send`), `host-mac/Sources/MateBridgeHost/Video/LatencyCsv.swift` (comment only), `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift` (only the `trace:` closure at the `VideoSender` construction), `host-mac/Tests/MateBridgeCoreTests/Video/LatencyTraceTests.swift`, `host-mac/Tests/MateBridgeCoreTests/Video/IntegrationTests.swift`, `docs/LOGGING.md` (new separate block at the end), this card.
 - **Varsayımlar:**
+  - `session_id`/`config_id` come from the `VideoLink` captured when the sender is created (`link.sessionID`/`link.configID`), so a reused pipeline never stamps an old session. `VideoPipeline.swift` unchanged.
+  - `resubmit=1` marks every `resubmitLast` path (static-screen keyframe, idle keyframe, idle refresh), i.e. every frame with a synthetic stamp.
+  - The signed offsets' log keys were renamed `_ms_p50_99` → `_ms_p1_50_99` (self-describing format); no script in the repo reads the old key. `cap_to_sent_pts` skips frames whose PTS is unknown (0).
+  - Menu text is Turkish like the rest of the menu: "· yak→çöz N ms". `ev=stats` writes `cap_dec_ms=` then `latency_ms=` with the same value.
+  - Wire format unchanged; `docs/PROTOCOL.md` not touched.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - [device] 60 s USB run, `MATEBRIDGE_LAT_TRACE=1` on the host and `--ez pace_trace true` on the client: join host `pts_us` with tablet `capture_us` on ≥ 99 % of frames (drop `resubmit=1`); also check `frame_seq` matches the tablet `seq` for joined rows and `session_id`/`config_id` match `host.log` after a reconnect / park-unpark.
+  - Record `pts_vs_deliv_ms_p1_50_99` (p1/p50/p99) and `cap_to_sent_pts` from `ev=latency` in NOTES for T-172 (decision 0021, option A if p99 − p1 < 1 ms).
+  - Menu shows "yak→çöz N ms" (not checked visually; no GUI opened).
 - **Açık sorular:**
+  - `latency_ms` alias removal needs a follow-up card in the next release.
