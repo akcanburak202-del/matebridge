@@ -59,6 +59,12 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStreamMode(m: dev.matebridge.client.stream.StreamMode) = store.putString(KEY_STREAM_MODE, m.id)
 
+    /** "Oyun çözünürlüğü" (T-215, decision 0029); default 1848×1214, also for an unknown stored value. */
+    fun gameResolution(): dev.matebridge.client.stream.GameResolution =
+        dev.matebridge.client.stream.GameResolution.parse(store.getString(KEY_GAME_RESOLUTION))
+
+    fun setGameResolution(r: dev.matebridge.client.stream.GameResolution) = store.putString(KEY_GAME_RESOLUTION, r.id)
+
     /** Target bit rate (T-105, decision 0013): one of [dev.matebridge.client.stream.Bitrate.OPTIONS_KBPS]; default 0 = Otomatik. */
     fun bitrateKbps(): Long = dev.matebridge.client.stream.Bitrate.sanitize(store.getString(KEY_BITRATE)?.toLongOrNull())
 
@@ -187,7 +193,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         val USER_KEYS: List<String> get() = listOf(
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
-            KEY_TRANSPORT,
+            KEY_TRANSPORT, KEY_GAME_RESOLUTION,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -197,6 +203,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_STATS = "stats_overlay"
         const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_BITRATE = "bitrate_kbps"
+        const val KEY_GAME_RESOLUTION = "game_resolution"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"

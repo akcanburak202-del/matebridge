@@ -16,9 +16,13 @@ import dev.matebridge.client.video.VideoRenderer
  *   defaults again.
  * - Opening the app with the stored mode Game builds the layer at once (the caller calls [onModeChanged] at start).
  *
+ * The game display size ("Oyun çözünürlüğü", decision 0029, T-215) is a persistent setting outside the layer: game
+ * modes ask for it in STREAM_PREFS `display_*`, other modes (and [gameDisplay] false, `--ei game_display 0`) for the
+ * native display (0×0, today's bytes).
+ *
  * The caller applies the effective values (STREAM_PREFS, audio, pen overlay). Main thread only. Pure Kotlin.
  */
-class GameModeSettings(private val settings: Settings) {
+class GameModeSettings(private val settings: Settings, private val gameDisplay: Boolean = true) {
     /** The four layered values, either stored or from the layer. */
     data class Values(val bitrateKbps: Long, val audioOut: AudioOutPref, val penTrail: Boolean, val penDot: Boolean)
 
@@ -74,8 +78,26 @@ class GameModeSettings(private val settings: Settings) {
         }
     }
 
-    /** The one STREAM_PREFS for [mode]: its fps and scale with the effective bit rate. */
-    fun prefs(mode: StreamMode): StreamPrefs = mode.toPrefs(bitrateKbps)
+    /** The game display [mode] asks for: the stored "Oyun çözünürlüğü" in a game mode, null (native display) otherwise. */
+    fun display(mode: StreamMode): GameResolution? = if (mode.isGame && gameDisplay) settings.gameResolution() else null
+
+    /**
+     * The one STREAM_PREFS for [mode]: its fps and scale with the effective bit rate, plus the game display size in a
+     * game mode. The scale stays the mode's (660/1000) so a host without the `display_*` group keeps today's behaviour.
+     */
+    fun prefs(mode: StreamMode): StreamPrefs {
+        val d = display(mode) ?: return mode.toPrefs(bitrateKbps)
+        return StreamPrefs(mode.fps, mode.scalePermille, bitrateKbps, d.widthPx, d.heightPx)
+    }
+
+    /**
+     * Stores the "Oyun çözünürlüğü" choice; returns the complete STREAM_PREFS to send when it changes what [mode] asks
+     * for (a game mode with the game display on), else null (nothing to send; the next game-mode entry uses it).
+     */
+    fun selectGameResolution(r: GameResolution, mode: StreamMode): StreamPrefs? {
+        settings.setGameResolution(r)
+        return if (display(mode) != null) prefs(mode) else null
+    }
 
     companion object {
         /** Decision 0014: "yüksek bit hızı" when the stored choice is Otomatik. */

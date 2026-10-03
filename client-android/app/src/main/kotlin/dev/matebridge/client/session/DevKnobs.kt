@@ -64,6 +64,11 @@ data class DevKnobs(
     val decoderFault: String? = null,
     /** `--ei decoder_fault_after_s N`; null = absent. */
     val decoderFaultAfterS: Int? = null,
+    /**
+     * `--ei game_display 0` (T-215, decision 0029): game modes send STREAM_PREFS without the `display_*` group (0×0,
+     * the native HiDPI display) for A/B; any other value or absent = the "Oyun çözünürlüğü" setting applies.
+     */
+    val gameDisplay: Boolean = true,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -113,6 +118,7 @@ data class DevKnobs(
             Spec("net_bench_rcvbuf_kb", Kind.INT, debugOnly = true, inProfile = false),
             Spec("decoder_fault", Kind.STRING, debugOnly = true, ids = setOf("create", "configure", "dequeue", "silent")),
             Spec("decoder_fault_after_s", Kind.INT, debugOnly = true),
+            Spec("game_display", Kind.INT, debugOnly = true),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -148,6 +154,7 @@ data class DevKnobs(
                 netBench = x.has("net_bench"),
                 decoderFault = x.string("decoder_fault"),
                 decoderFaultAfterS = if (x.has("decoder_fault_after_s")) x.int("decoder_fault_after_s", 0) else null,
+                gameDisplay = !(x.has("game_display") && x.int("game_display", 1) == 0),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),
@@ -196,14 +203,25 @@ data class StreamProfile(
     val audioOut: String,
     /** Renderer buffer: negative = adaptive pacer, else the fixed jitter buffer in frames. */
     val bufferFrames: Int,
+    /** T-215: the requested game display (STREAM_PREFS `display_*`); 0×0 = native HiDPI display. */
+    val displayWidthPx: Int = 0,
+    val displayHeightPx: Int = 0,
+    /** T-215: the host applied the requested game display (`STREAM_CONFIG.width_pt == display_width_px`). */
+    val displayApplied: Boolean = false,
 ) {
     fun logFields(sha: String, built: String, knobs: DevKnobs): String =
-        "mode=${id(mode)} fps=$fps size=${widthPx}x$heightPx scale_permille=$scalePermille bitrate_kbps=$bitrateKbps " +
+        "mode=${id(mode)} fps=$fps size=${widthPx}x$heightPx scale_permille=$scalePermille ${displayFields()} " +
+            "bitrate_kbps=$bitrateKbps " +
             "bitrate_setting=${if (bitrateSettingKbps <= 0) "auto" else bitrateSettingKbps.toString()} " +
             "transport=${id(transport)} transport_mode=${id(transportMode)} audio=${if (audioOn) 1 else 0} " +
             "audio_out=${id(audioOut)} pacer=${if (bufferFrames < 0) "adaptive" else "buffer$bufferFrames"} " +
             "sha=${token(sha)} built=${token(built)} dev=${if (knobs.dev) 1 else 0} " +
             "knobs=${knobs.knobs.joinToString(";").ifEmpty { "-" }}"
+
+    /** `display=native`, or `display=<w>x<h> display_applied=0|1` when a game display was requested (T-215). */
+    private fun displayFields(): String =
+        if (displayWidthPx <= 0 && displayHeightPx <= 0) "display=native"
+        else "display=${displayWidthPx}x$displayHeightPx display_applied=${if (displayApplied) 1 else 0}"
 
     private companion object {
         private val ID = Regex("[a-z0-9_]{1,16}")

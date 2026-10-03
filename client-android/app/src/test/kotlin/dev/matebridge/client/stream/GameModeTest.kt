@@ -42,7 +42,7 @@ class GameModeTest {
         assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(StreamMode.GAME))
         assertTrue(g.active)
         assertEquals(GameModeSettings.Values(60_000, AudioOutPref.AUTO, penTrail = false, penDot = false), g.effective())
-        assertEquals(StreamPrefs(120, 660, 60_000), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 660, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
         assertTrue(store.writes.isEmpty())
     }
 
@@ -51,7 +51,7 @@ class GameModeTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
         assertEquals(30_000L, g.bitrateKbps)
-        assertEquals(StreamPrefs(120, 660, 30_000), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 660, 30_000, 1848, 1214), g.prefs(StreamMode.GAME))
         storeUserChoices(bitrateKbps = 100_000)
         val g2 = GameModeSettings(settings)
         g2.onModeChanged(StreamMode.GAME)
@@ -68,7 +68,7 @@ class GameModeTest {
         g.setPenTrail(true)
         g.setPenDot(true)
         assertEquals(GameModeSettings.Values(15_000, AudioOutPref.TRACK, penTrail = true, penDot = true), g.effective())
-        assertEquals(StreamPrefs(120, 660, 15_000), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 660, 15_000, 1848, 1214), g.prefs(StreamMode.GAME))
         g.setBitrateKbps(12_345) // not an option: Otomatik, still only in the layer
         assertEquals(Bitrate.AUTO_KBPS, g.bitrateKbps)
         assertTrue(store.writes.isEmpty())
@@ -131,7 +131,7 @@ class GameModeTest {
         assertNull(g.onModeChanged(StreamMode.GAME60)) // 120 -> 60 is not leaving game mode
         assertTrue(g.active)
         assertTrue(g.penDot)
-        assertEquals(StreamPrefs(60, 1000, 30_000), g.prefs(StreamMode.GAME60))
+        assertEquals(StreamPrefs(60, 1000, 30_000, 1848, 1214), g.prefs(StreamMode.GAME60))
         assertNull(g.onModeChanged(StreamMode.GAME)) // and back
         assertTrue(g.penDot)
         assertEquals(GameModeSettings.Change.EXIT, g.onModeChanged(StreamMode.GAME60.next()))
@@ -153,7 +153,7 @@ class GameModeTest {
         val s2 = Settings(store)
         val g = GameModeSettings(s2)
         assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(s2.streamMode()))
-        assertEquals(StreamPrefs(60, 1000, 60_000), g.prefs(s2.streamMode()))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(s2.streamMode()))
     }
 
     @Test fun appStartedWithStoredGameModeStartsWithTheDefaults() {
@@ -165,7 +165,7 @@ class GameModeTest {
         val g = GameModeSettings(s2)
         assertEquals(GameModeSettings.Change.ENTER, g.onModeChanged(s2.streamMode()))
         assertEquals(GameModeSettings.Values(60_000, AudioOutPref.AUTO, penTrail = false, penDot = false), g.effective())
-        assertEquals(StreamPrefs(120, 660, 60_000), g.prefs(s2.streamMode()))
+        assertEquals(StreamPrefs(120, 660, 60_000, 1848, 1214), g.prefs(s2.streamMode()))
         assertTrue(store.writes.isEmpty())
         assertEquals(AudioOutPref.TRACK, s2.audioOut())
         assertTrue(s2.penTrail())

@@ -66,6 +66,7 @@ import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.stream.GameJitter
 import dev.matebridge.client.stream.GameModeSettings
+import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StatsLogWindow
@@ -461,7 +462,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         streamMode = settings.streamMode()
-        gameSettings = GameModeSettings(settings)
+        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay) // T-215: `--ei game_display 0` = native display
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109: stored mode Game starts with the game defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
@@ -837,6 +838,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         override val streamMode get() = this@MainActivity.streamMode
         override fun selectStreamMode(m: StreamMode) = setStreamMode(m, toast = false)
+        // T-215 (decision 0029): stored; one complete STREAM_PREFS only while a game mode is on.
+        override val gameResolution get() = settings.gameResolution()
+        override fun selectGameResolution(r: GameResolution) {
+            gameSettings.selectGameResolution(r, this@MainActivity.streamMode)?.let { controller.setStreamPrefs(it) }
+        }
         // T-109: bit rate, audio output and pen trail/dot go through gameSettings (stored, or the game layer).
         override val bitrateKbps get() = gameSettings.bitrateKbps
         override fun selectBitrate(kbps: Long) {
@@ -1026,7 +1032,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
         controller.setStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
-        if (toast) Toast.makeText(this, m.toastText(), Toast.LENGTH_SHORT).show()
+        if (toast) Toast.makeText(this, m.toastText(gameSettings.display(m)), Toast.LENGTH_SHORT).show()
     }
 
     /** T-109: the game layer was built or dropped; apply the effective values that differ from what runs now. */
@@ -1192,6 +1198,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             audioOn = audioAllowed && settings.audioEnabled(),
             audioOut = audioOut.id,
             bufferFrames = bufferFrames,
+            displayWidthPx = gameSettings.display(streamMode)?.widthPx ?: 0,
+            displayHeightPx = gameSettings.display(streamMode)?.heightPx ?: 0,
+            displayApplied = gameSettings.display(streamMode)?.let { config.widthPt == it.widthPx } ?: false,
         )
         MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs))
     }
@@ -1421,12 +1430,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    /** Fits the SurfaceView to the stream aspect so the surface equals the video area (letterbox = black bands). */
+    /**
+     * Fits the SurfaceView to the stream aspect so the surface equals the video area (letterbox = black bands). Within
+     * 2 px of the root it fills the root (T-215: the 1848×1214 game display is not exactly the panel's shape).
+     */
     private fun layoutVideo() {
-        val c = streamConfig
-        val vp = if (c == null) VideoViewport(0, 0, 0, 0) else VideoLayout.aspectSize(c).let { (aw, ah) -> VideoViewport(root.width, root.height, aw, ah) }
-        val w = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.width)
-        val h = if (vp.isEmpty) FrameLayout.LayoutParams.MATCH_PARENT else Math.round(vp.height)
+        val size = VideoLayout.surfaceSize(root.width, root.height, streamConfig)
+        val w = size?.first ?: FrameLayout.LayoutParams.MATCH_PARENT
+        val h = size?.second ?: FrameLayout.LayoutParams.MATCH_PARENT
         val lp = video.layoutParams as FrameLayout.LayoutParams
         if (lp.width != w || lp.height != h) {
             lp.width = w
