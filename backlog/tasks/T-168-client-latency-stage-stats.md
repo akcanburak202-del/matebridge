@@ -1,7 +1,7 @@
 ---
 id: T-168
 title: Break client latency into stages with percentiles; stop clamping; fix stats maps; log decoder hardware
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-161]
