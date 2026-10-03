@@ -1,7 +1,7 @@
 ---
 id: T-218
 title: Gate input on video-only loss (stale picture must not keep input live)
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-160]
@@ -30,9 +30,9 @@ gpt-6-astra değerlendirmesi (docs/reviews/2026-10-04/astra-assessment.md, P1 #1
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Sağlıklı oturumda VideoClosed → aynı tick'te input kapalı + bırakmalar; yeni video bağlantısının ilk çözülmüş çıktısına kadar kapalı.
-- [ ] [JVM] Video yeniden bağlanamazken kontrol PONG'ları sürse bile input kapalı kalır; "Görüntü durdu" katmanı gösterilir.
-- [ ] [JVM] Durağan masaüstü (kare yok, video soketi sağlam) yanlış alarm vermez.
+- [x] [JVM] Sağlıklı oturumda VideoClosed → aynı tick'te input kapalı + bırakmalar; yeni video bağlantısının ilk çözülmüş çıktısına kadar kapalı.
+- [x] [JVM] Video yeniden bağlanamazken kontrol PONG'ları sürse bile input kapalı kalır; "Görüntü durdu" katmanı gösterilir.
+- [x] [JVM] Durağan masaüstü (kare yok, video soketi sağlam) yanlış alarm vermez.
 - [ ] [device] Akış sırasında video bağlantısını kes (ör. host'ta video soketini kapat / tablette video portunu engelle): tablette katman, Mac'te takılı girdi yok, video dönünce input açılır.
 
 ## Plan
@@ -55,10 +55,34 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Bu Handoff ayrı bir commit'te. Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
 - **Dokunulan dosyalar:**
+  - `session/SessionMachine.kt`: `Action.VideoLost(gen)`, `videoLostDeferred` (T-205 kanıt beklemesi).
+  - `session/SessionController.kt`:
+    - `SessionListener.onVideoLost` / `onVideoFlowing`, `exec(VideoLost)` + `ev=video_lost`.
+    - `VideoConn`: `video_gate_open` noktasında `onVideoFlowing`, connect sonrası `VideoKeepalive.forSocket`.
+    - Dosya sonunda yeni `object VideoKeepalive`.
+  - `video/VideoHealth.kt`: `FaultCause.VIDEO_LOST`, `videoLost()`, `videoFlowing()`.
+  - `MainActivity.kt`: iki listener override'ı (UI thread'e geçer).
+  - Testler:
+    - yeni: `session/VideoLossGateTest.kt` (makine + VideoHealth + gerçek `InputCapture`/`FakeSink` host modeli), `session/VideoKeepaliveTest.kt`;
+    - güncellenen: `video/VideoHealthTest.kt` (+6 test, neden listesi), `session/MigrationAuthGateTest.kt` (aday başarısız olup Wi-Fi oturumu kalırsa artık `VideoLost` beklenir; promosyonda yok).
+  - `docs/LOGGING.md`.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
+  - `VideoClosed` yalnız beklenmeyen kopuşta gelir: `abort()` `closedPosted`'ı kurduğu için yeniden yapılandırma, oturum kaybı ve göç onu üretmez (mevcut kod).
+  - Makinenin `inputAllowed`'ı bilerek değişmedi. Kapı `VideoHealth` → `syncInputActive` → `capture.setActive(false)`, yani `RELEASE_ALL(USER)`. Kontrol bağlantısı açık olduğu için bırakmalar gider; tel değişmez.
+  - Video dönünce `videoFlowing` → `restartCodec()`: kuyruk sıfırlanır, `KEYFRAME_REQUEST(STARTUP)` gider. Eski bağlantının kodek içindeki kareleri yeni kuşağın ilk çıktısı sayılamaz.
+  - Video hiç dönmezse mevcut 0019 merdiveni işler: +1/+3 sn decoder, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` merdivenin sonraki adımını bir tam aralık öteler.
+  - Keepalive sabitleri (3 s / 1 s × 3) Linux `tcp.h` numaralarıyla, QuickAck'teki gibi kopyalanmış fd üzerinden ayarlanır. HarmonyOS 4.3 Linux çekirdeği varsayıldı. Başarısızlık yalnız `ev=video_keepalive ok=0` yazar.
+- **Test edilmeyenler / cihazda doğrulanacaklar** (orkestratör, tek tek):
+  1. Akışta tablette `adb logcat -s 'MB:*'` içinde her video bağlantısında `ev=video_keepalive ok=1 idle_s=3 intvl_s=1 cnt=3` görülmeli; `ok=0` olmamalı (setsockopt HarmonyOS'ta çalışıyor mu).
+  2. Wi-Fi akışında host'ta yalnız video soketini kapat (ör. video portuna giden bağlantıyı `pfctl` ile kes ya da host'ta video bağlantısını zorla kapat), kontrol açık kalsın. Bu sırada bir tuşu basılı tut ve kalemle çiz. Beklenen: `W video_lost` + `video_health state=fault cause=video_lost`, "Görüntü durdu" katmanı, Mac'te takılı tuş/kalem yok (`RELEASE_ALL reason=USER`).
+  3. Video dönünce: `video_gate_open` → `video_recover step=resume` → `state=starting` → ilk çıktıda `state=healthy`; input tekrar açılır.
+  4. Durağan masaüstü (Mac'te hiçbir şey değişmesin) ≥ 2 dk: `video_lost` / `fault` yok, input açık. Keepalive probları ACK'lenmeli.
+  5. Yarı açık soket (isteğe bağlı): video akışı sırasında Mac tarafında video akışının paketlerini sessizce düşür (`pfctl block drop` yalnız video portu, RST yok). ~6 sn içinde `video_lost` beklenir. Kontrol de etkilenirse bunun yerine oturum kaybı (PONG 3 sn) görülür; bu da doğru.
+  6. USB↔Wi-Fi göçünde (T-205) "Görüntü durdu" katmanı yanıp sönmemeli (kanıt beklenirken eski video kopuşu sayılmıyor).
 - **Açık sorular:**
+  - Host video hattı canlı ama takılı (encoder/SCK asılı, soket açık): Mac çekirdeği keepalive'ı ACK'ler, tablet bunu ayırt edemez. Bu kart kapsamında değil (astra P2 #4 / host liveness). İstenirse protokol değiştirmeden bir aktif prob yapılabilir: sessizlikte seyrek `KEYFRAME_REQUEST` gönderilir, host `resubmitNow` ile yanıt verir. Ama bu durağan ekranda periyodik IDR (bant/pil) demek. Ürün kararı gerekir, uygulanmadı.
+  - USB (`adb reverse`, 127.0.0.1): keepalive probları tabletteki adbd'ye gider. Yarı açık bir USB video soketini keepalive yakalamaz. Tünel düşünce adbd yerel soketi kapatır, bu bilinen kopuş yoluna (`video_lost`) girer.
+  - Host video soketi `SO_KEEPALIVE` kapalı; host yarı açık tablet soketini kendi tarafında fark etmez. Kapsam dışı (host-mac).
+  - Kabul kriteri [device] doğrulanmadı (tablet yok); yukarıdaki 2–6.
