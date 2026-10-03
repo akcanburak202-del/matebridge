@@ -35,12 +35,22 @@ private final class FakeBackend: CompressionBackend, @unchecked Sendable {
         events.compactMap { if case .encode(let s, _, _) = $0 { return s } else { return nil } }
     }
 
+    /// Stamps whose submit is refused synchronously (like a failed `VTCompressionSessionEncodeFrame`).
+    var refuse: Set<Int> {
+        get { lock.withLock { _refuse } }
+        set { lock.withLock { _refuse = newValue } }
+    }
+    private var _refuse: Set<Int> = []
+
     func encode(_ frame: FakeFrame, keyframe: Bool, token: EncoderSubmitToken) {
         noteQueue()
-        lock.withLock {
+        let refused = lock.withLock { () -> Bool in
             _events.append(.encode(stamp: frame.stamp, key: keyframe, token: token.id))
+            if _refuse.contains(frame.stamp) { return true }
             outstanding.append(token)
+            return false
         }
+        if refused { order?.release(token, failed: true) }
     }
 
     /// Completes the oldest outstanding frame (the encoder's output callback); returns its token.
@@ -166,6 +176,34 @@ final class EncoderSubmitOrderTests: XCTestCase {
         XCTAssertEqual(backend.events.last, .encode(stamp: 2, key: true, token: 2))
     }
 
+    /// A submit the backend refuses synchronously (on the owner queue) frees its slot once, forces a keyframe, and the
+    /// pending frame goes out next.
+    func testRefusedSubmitReleasesSlotOnceAndForcesKeyframe() {
+        let clock = ManualClock()
+        let barrier = SubmitBarrier()   // holds the owner queue until the setup below is complete
+        let (order, backend) = makeOrder(clock: clock, barrier: barrier)
+        backend.refuse = [2]
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+        wait(barrier.reached, "frame 1 at the barrier")
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 2_000) }
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 3, gateUs: 3_000) }   // both slots busy: pending
+        clock.advance(40_000)   // past the send-rate gate, so the release submits the pending frame
+        barrier.open()
+        drain(order)
+        drain(order)   // the refusal's release enqueued frame 3 behind the first drain
+        XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .encode(stamp: 2, key: false, token: 2),
+                                        .encode(stamp: 3, key: true, token: 3)])
+        XCTAssertEqual(order.currentInFlight, 2)
+        let stats = order.currentStats
+        XCTAssertEqual(stats.reservations, 3)
+        XCTAssertEqual(stats.releases, 1)
+        XCTAssertEqual(stats.duplicateReleases, 0)
+        backend.completeOldest()
+        backend.completeOldest()
+        XCTAssertEqual(order.currentInFlight, 0)
+        XCTAssertEqual(order.currentStats.releases, 3)
+    }
+
     func testBuildSeesLastOfferedFrame() {
         let (order, _) = makeOrder()
         order.offer(bypassGate: true) { _ in FakeFrame(stamp: 7, gateUs: 1_000) }
@@ -262,7 +300,8 @@ final class EncoderSubmitOrderTests: XCTestCase {
     /// 10 000 concurrent operations (capture offers, gate-bypassing re-submissions, flush-timer takes, keyframe
     /// requests, completions on a separate callback queue with refused submits and duplicate releases, `stop()`):
     /// the backend sees strictly increasing stamps and nothing after invalidate, every reservation is released
-    /// exactly once, and `0 <= inFlight <= maxInFlight` throughout.
+    /// exactly once, duplicate releases are ignored, and `0 <= inFlight <= maxInFlight` throughout. Asserts only
+    /// interleaving-independent invariants (no progress counts), so it cannot fail on a slow or loaded runner.
     func testStressKeepsOrderAndSlotAccounting() {
         let backend = StressBackend()
         let order = EncoderSubmitOrder<StressBackend>(
@@ -308,16 +347,15 @@ final class EncoderSubmitOrderTests: XCTestCase {
 
         let stats = order.currentStats
         let report = backend.report
-        XCTAssertGreaterThan(stats.reservations, 20, "the run must exercise the encoder")
+        // Only invariants that hold for every interleaving: how many frames get through before `stop()` depends on
+        // scheduling (the counted paths are covered by the controlled single-thread tests above).
         XCTAssertEqual(report.outOfOrder, 0, "backend stamps went backwards")
         XCTAssertEqual(report.afterInvalidate, 0, "encode after invalidate")
         XCTAssertEqual(report.invalidates, 1)
         XCTAssertEqual(report.offQueueCalls, 0, "backend called off the owner queue")
         XCTAssertEqual(report.encoded, stats.reservations, "every reservation reached the backend")
         XCTAssertEqual(stats.releases, stats.reservations, "exactly one release per reservation")
-        XCTAssertEqual(stats.duplicateReleases, report.duplicatesSent)
-        XCTAssertGreaterThan(report.duplicatesSent, 0)
-        XCTAssertGreaterThan(report.refused, 0)
+        XCTAssertEqual(stats.duplicateReleases, report.duplicatesSent, "every duplicate release was ignored")
         XCTAssertEqual(order.currentInFlight, 0)
         XCTAssertGreaterThanOrEqual(stats.minInFlight, 0)
         XCTAssertLessThanOrEqual(stats.maxInFlight, order.maxInFlight)

@@ -82,7 +82,8 @@ Risks: one extra thread hop per frame (measure `ev=latency enc` / `cap_to_sent` 
   - `0c218d3` **step 1** (Core extraction, no behaviour change). The two barrier tests are red there under `XCTExpectFailure`, and the failures are quoted in the commit message: `[2, 1] != [1, 2]` (PTS inversion) and `events: [invalidate, encode(stamp: 1)]` (encode after invalidate).
   - `641a418` **step 2** (owner queue, idempotent release, QP in the submit block, CMBlockBuffer copy, `shutdown()`).
   - `b17e828` test hardening: off-owner-queue backend calls are counted; the barrier tests drain the owner queue before asserting.
-  - The Handoff commit comes last.
+  - `4326516` Handoff, status review.
+  - Codex review fix (P2, tests only): the stress test no longer asserts progress counts, and a controlled test covers the refused-submit path. That commit and its Handoff update come last.
 - **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift` (new), `host-mac/Tests/MateBridgeCoreTests/Video/EncoderSubmitOrderTests.swift` (new), `host-mac/Sources/MateBridgeHost/Video/HEVCEncoder.swift`, `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift` (one line: `await enc?.shutdown()`; T-165 was `todo` with no branch or worktree), this card.
 - **Invariant (single submit owner):** every `VTCompressionSessionEncodeFrame`, the T-087 `MaxAllowedFrameQP` update and the final `CompleteFrames`/`Invalidate` run on one serial queue (`matebridge.encoder.submit`, QoS userInteractive), owned by `EncoderSubmitOrder`.
   - Submits are enqueued `async` while the lock that reserved their slot is held, so FIFO order equals reservation order.
@@ -92,13 +93,16 @@ Risks: one extra thread hop per frame (measure `ev=latency enc` / `cap_to_sent` 
   - The invariant is written in the class docs of both `EncoderSubmitOrder` and `HEVCEncoder`.
 - **Acceptance (XCTest):**
   - Barrier tests: `testBarrierKeepsReservationOrderAtBackend` and `testBarrierStopNeverEncodesAfterInvalidate`. They are driven by the `beforeSubmit` hook and semaphores; there are no sleeps.
-  - Stress test: `testStressKeepsOrderAndSlotAccounting` runs 10 000 `concurrentPerform` operations: capture offers, `bypassGate` resubmits, `flushPending`, keyframe requests, completions on another queue, refused submits (every 13th), duplicate releases (every 5th completion) and `stop()`. It checks four things:
+  - Stress test: `testStressKeepsOrderAndSlotAccounting` runs 10 000 `concurrentPerform` operations: capture offers, `bypassGate` resubmits, `flushPending`, keyframe requests, completions on another queue, refused submits (every 13th), duplicate releases (every 5th completion) and `stop()`. It asserts only invariants that hold for every interleaving:
     - backend stamps are strictly increasing;
-    - no encode happens after invalidate;
-    - reservations == releases, and duplicates == duplicates sent;
+    - no encode happens after invalidate, and no backend call is made off the owner queue;
+    - every reservation reached the backend and was released exactly once (reservations == releases), and every duplicate release was ignored (duplicates == duplicates sent);
     - `stats.minInFlight >= 0`, `stats.maxInFlight <= 2`, and live samples stay in range.
+  - Codex P2 fix: the stress test used to assert progress counts too (`reservations > 20`, `refused > 0`, `duplicatesSent > 0`). Those could fail on a delayed runner when `stop()` ran before the backend made progress. They are gone. The counted paths now have controlled single-thread tests:
+    - `testRefusedSubmitReleasesSlotOnceAndForcesKeyframe`: the barrier holds the owner queue during setup; a refused submit releases its slot exactly once, forces a keyframe, and the pending frame goes out next.
+    - `testDoubleReleaseIsIgnoredAndLogged` (see below).
   - Idempotent release: `testDoubleReleaseIsIgnoredAndLogged` checks `ev=slot_double_release` at `warning`, with the count unchanged.
-  - Stability: 60 × 11 tests in a row were green.
+  - Stability after the fix: 12 tests × 60 runs in a row were green, plus 25 runs under 16 busy `yes` processes. `./scripts/check.sh` passes (ALL OK).
 - **Mutation check (not committed, file reverted with `git checkout`):**
   - Mutant 1, "submit after unlock on the caller thread" (pending submits collected under the lock and run on the caller after `unlock`): both barrier tests fail, `[2, 1]`, `offQueueCalls 2 != 0` and `events: [invalidate, encode(1)]`, and the stress test fails with `stamps went backwards 2..10` and `off queue 143..188`. Three runs out of three failed.
   - Mutant 2, teardown on the caller thread: both barrier tests and the stress test fail. Two runs out of two failed.
@@ -117,5 +121,5 @@ Risks: one extra thread hop per frame (measure `ev=latency enc` / `cap_to_sent` 
   - The multi-segment `CMBlockBuffer` copy path cannot be exercised on device (VT normally returns a contiguous buffer).
   - `sharpness-bench` (sync `stop()` path) was not run.
 - **Açık sorular:**
-  - New log event `ev=slot_double_release token=<n>` (component `encoder`, `W`). `docs/LOGGING.md` is not in `files:`; the orchestrator can add it.
+  - New log event `ev=slot_double_release token=<n>` (component `encoder`, `W`). `docs/LOGGING.md` is not in `files:`; the orchestrator said it will add it.
   - The T-177 live bitrate setter must go through `EncoderSubmitOrder`'s owner queue. One option is a `perform(onOwnerQueue:)` helper or a backend method. This card did not add one, to stay in scope.
