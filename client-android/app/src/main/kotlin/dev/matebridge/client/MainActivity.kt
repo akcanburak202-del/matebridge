@@ -1454,7 +1454,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val vg = vsyncGaps.summaryInto(vsyncGapsLog)
         refreshMismatch.update( // T-169: one W line per sustained (> 5 s) target vs measured refresh mismatch
             FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0), vg.p50Us.takeIf { vg.count > 0 },
-            foreground && lastUi is SessionUi.Connected, now,
+            started && lastUi is SessionUi.Connected, now,
         )?.let { MbLog.w("refresh_mismatch", it.fields() + " stream_mode=${streamMode.id}", "render") }
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
