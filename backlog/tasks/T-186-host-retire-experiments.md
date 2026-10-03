@@ -72,7 +72,15 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **`TransportKnobs.swift`:** `VideoSocketKnob` ve `ControlSocketKnob` tipleri silinir (`MATEBRIDGE_VIDEO_SOCKET`/`MATEBRIDGE_CONTROL_SOCKET` artık okunmaz). `VideoSocketSettings` yalnız `notSentLowatKB` taşır; `logFields` sabit `video_socket=bsd notsent_lowat_kb=<n>` verir. `ServiceClassKnob`, `NotSentLowatKnob`, `SendQueueLogKnob` aynen kalır.
+2. **`listening` satırı:** alanlar **sabit olarak kalır** (`video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd`), böylece log ayrıştırıcıları ve NOTES karşılaştırmaları kırılmaz. LOGGING metni *Açık sorular*'da.
+3. **`SessionServer.swift`:** `nw` yolu tamamen gider: `VideoLink`'in `NWConnection` init/send dalı ve `maxInFlight`/`inFlight`/`sealer` alanları, `ControlListener`/`ControlConnection`/`VideoListener`/`VideoConnection` enum'ları (doğrudan `BsdTcpListener`/`BsdTcpConnection`), `bonjourService()`, `nw` video/kontrol dinleyicileri, `tcpParameters`/`networkServiceClass`/`endpointPort`/`videoListenerState`, `accept(_:video:)`/`receiveLoop`, `closeControl`/`sendControlBytes`/`transport(of:)`/`startTcpInfoSampling`/`recordAudioWrite`/`kernelAudioBacklog` içindeki `.network` dalları ve yalnız `nw` için olan `lingerQueue`. Bonjour tek yol olarak `BonjourAdvertiser` (`startBonjour(for:)`) kalır; TXT `wol=` güncellemesi `republishTxt()` → `bonjour.updateTXT` ile aynen sürer. T-152/T-155/T-163/T-171 davranışı değişmez.
+4. **`NWPathMonitor` (T-128):** `wol` yeniden hesaplaması Network.framework'ün `NWPathMonitor`'ünü kullanıyor; bu bir soket değil. `import Network` yerine kapsamlı `import class Network.NWPathMonitor` kullanılır: dosyada `NWListener`/`NWConnection` derleme zamanında görünmez olur, `wol` tetikleyicisi korunur. (Handoff'ta not edilir.)
+5. **`TcpSocketProbe.swift`:** yalnız `BsdTcpConnection`; `NWConnection` init'leri, port/descriptor arama, `nw_metadata` geri dönüşü ve `noEndpoints` gider. `import Network` kalkar.
+6. **Testler:** `testVideoSocketKnob` ve `testControlSocketKnob` tipleriyle birlikte silinir. `testVideoSocketSettingsLogFields` içindeki tek `nw` beklentisi "eski env değeri yok sayılır" olarak değişir (kart "yalnız iki fonksiyon" diyor; bu satır `nw` çıktısını doğruladığı için değişmek zorunda, Handoff'ta not edilir).
+7. `./scripts/check.sh`, Handoff, `status: review`.
+
+**Riskler:** `bsd` yolu zaten varsayılan; davranış değişmemeli. Kapsamlı import'un `NWPath` closure parametresini derlemesi doğrulanacak.
 
 ## Handoff
 
