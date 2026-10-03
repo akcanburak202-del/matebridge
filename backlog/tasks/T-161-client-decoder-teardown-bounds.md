@@ -1,7 +1,7 @@
 ---
 id: T-161
 title: Bound the decoder hand-off, join the output thread, keep per-generation state
-status: in_progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-159, T-160]
@@ -51,13 +51,13 @@ Decision 0019 must be accepted by the user before work starts.
 
 ## Kabul kriterleri
 
-- [ ] [JVM, first commit, red at HEAD] With the T-158 fake codec: (a) a previous generation that never exits makes the next attach wait forever (the test asserts a bounded wait and fails; it must not hang the suite, so it uses a timeout and releases its latch in `finally`); (b) a straggler output thread changes the next generation's gauge or `firstOutput`. Both are committed failing (or `@Ignore`d with the failing output quoted in the commit message) before the fix; Handoff names the commit.
-- [ ] [JVM] A hung previous generation → wait ≤ 2 s, `ev=decoder_previous_stuck`, `fault(stuck)` reported via `onHealthEvent`, and no new codec created. Repeated attaches while stuck keep at most one waiting thread.
-- [ ] [JVM] A generation is finished only when both input and output threads have exited; a straggler output thread is included in the next wait and cannot change the next generation's gauge, `firstOutput`, `lastOutputNs` or PTS maps.
-- [ ] [JVM] `decodeAttempts` waits 100 ms / 500 ms / 1 s between restarts (fake clock); the 3-per-10 s give-up rule still holds. A `retire()` during a backoff wait wakes it at once, so `detachSurface` stays ≤ `JOIN_MS` during a backoff.
-- [ ] `detachSurface` on the UI thread still blocks for at most `JOIN_MS` (300 ms).
+- [x] [JVM, first commit, red at HEAD] With the T-158 fake codec: (a) a previous generation that never exits makes the next attach wait forever (the test asserts a bounded wait and fails; it must not hang the suite, so it uses a timeout and releases its latch in `finally`); (b) a straggler output thread changes the next generation's gauge or `firstOutput`. Both are committed failing (or `@Ignore`d with the failing output quoted in the commit message) before the fix; Handoff names the commit.
+- [x] [JVM] A hung previous generation → wait ≤ 2 s, `ev=decoder_previous_stuck`, `fault(stuck)` reported via `onHealthEvent`, and no new codec created. Repeated attaches while stuck keep at most one waiting thread.
+- [x] [JVM] A generation is finished only when both input and output threads have exited; a straggler output thread is included in the next wait and cannot change the next generation's gauge, `firstOutput`, `lastOutputNs` or PTS maps.
+- [x] [JVM] `decodeAttempts` waits 100 ms / 500 ms / 1 s between restarts (fake clock); the 3-per-10 s give-up rule still holds. A `retire()` during a backoff wait wakes it at once, so `detachSurface` stays ≤ `JOIN_MS` during a backoff.
+- [x] `detachSurface` on the UI thread still blocks for at most `JOIN_MS` (300 ms).
 - [ ] [device] Covered by T-164 (thread count, codec instances and RSS back to baseline after churn; `detach_slow` and `decoder_previous_stuck` counts reported).
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -91,10 +91,62 @@ Riskler: `not_running` (2 s) ile `stuck` (2 s) yarışır; ikisi de FAULT (hangi
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `ae8c260` (fix) on branch `task/T-161-client-decoder-teardown-bounds`. Red step: `e57f689` (both tests
+  `@Ignore`d, HEAD failure output quoted in the commit message: (a) `no stuck fault within 3 s (waited 3005 ms):
+  [Generation(gen=1), Running(gen=1), Generation(gen=2)]`; (b) `codec 2 created while generation 1's output thread was
+  alive`, and in an earlier variant `the straggler consumed generation 2's first-output bypass`). Plan: `1cc9d25`.
 - **Dokunulan dosyalar:**
+  - `video/CodecGeneration.kt` (new, pure): `CodecGeneration` (gen, surface, thread, `active`, live-thread count,
+    `outputStraggler`), `HandoffTimer` (clock + bounded `Condition` wait; tests fake it), `GenerationHandoff`
+    (`acquire` → `Ready | Retired | Stuck(previous, waitedMs)`, `retire`, `pause`, `threadStarted/threadExited`),
+    `CodecState` (per codec instance: gauge, PTS maps, `ArrivalTracker`, pacers, `lastOutputNs`, `running`, `current`),
+    `PtsMap` (the former `BoundedMap`).
+  - `video/RestartPolicy.kt`: `delayMs()` 100 / 500 / 1000 ms by position in the window; `allow` unchanged.
+  - `video/VideoRenderer.kt`: `previous.join()` / `lingering` replaced by `handoff.acquire(att, PREVIOUS_WAIT_MS=2000)`;
+    `Stuck` → `ev=decoder_previous_stuck`, feeding stopped, `onHealthEvent(Fault(gen, STUCK))`, no codec. Output
+    thread counted in the generation; 500 ms join timeout → `outputStraggler` + `ev=output_straggler`. Renderer-wide
+    `gauge`, `adaptive`, `cpdActive`, PTS maps, `arrival`, `formatChanged`, `lastOutputNs` removed: per-codec
+    `CodecState` (`formatChanged` is now a local); `live` (read by `logPresent`/`paceDUs`/overflow line) cleared only by
+    its own run. `stats`/`counters`/`firstOutput`/`progress`/`onFrameRendered` stats are touched only while the codec
+    is current; a straggler hands its buffers back without bookkeeping. `decodeAttempts` backs off via
+    `handoff.pause` (woken by `retire()`). New constructor params with defaults (`handoffTimer`, `previousWaitMs`,
+    `restartDelaysMs`) for tests; `MainActivity` / `VideoTestActivity` unchanged.
+  - Tests: `DecoderTeardownTest.kt` (new, 5 renderer tests), `GenerationHandoffTest.kt` (new, 5 pure tests),
+    `DecoderLifecycleTest.kt` (one stale comment).
+- **Testler:** (a) hung `stop()` → `Fault(2, STUCK)` ≤ 2 s + margin, `waited_ms` in [2000, 3000], one codec, gen 2
+  never `Running`, not fed. (b) straggler output thread: no `create#2` until it left `dequeueOutputBuffer`, bypass still
+  armed, its frame counted nowhere (`decoded=0`, no `FirstOutput`), gen 2's own first output then takes the bypass.
+  5 attaches while stuck: gens 2–5 exit without a codec or fault, exactly one waiting thread, only gen 6 reports
+  `stuck`; after the hung codec finishes, `restartCodec()` opens codec 2. Fake clock: waits `[100, 500, 1000]`,
+  `decode_error` stamps 1000/1100/1600/2600, then `give_up`. Detach during a 60 s backoff: returns < `JOIN_MS`, no
+  `detach_slow`, no restart. Teardown/handoff/lifecycle/health tests rerun 6× green; `./scripts/check.sh`: ALL OK.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - "Generation finished" = every thread it started exited (decoder thread + each codec's output thread). Within one
+    generation a `decode_error` restart does not wait for a straggler of the previous codec (backoff covers it); its
+    `CodecState` is separate, so the straggler cannot touch the new codec's state.
+  - A generation that timed out (`Stuck`) or was retired while waiting never becomes the owner; the owner (last
+    generation that may hold a codec) is the single "last stuck" reference, so the next generation (e.g. the
+    decision-0019 restart step) waits for the hung one again, one waiter at a time.
+  - Backoff order: pause first, then `queue.reset(DECODE_ERROR)` + request right before the new codec (as before), so
+    the host's keyframe answers the codec that will decode it. During a 1 s pause the queue may overflow; its
+    FRAMES_DROPPED requests stay under the existing 500 ms hold-off.
+  - Late `onFrameRendered` callbacks of a stopped codec and the gauge p95 window across a codec restart are dropped.
+- **Test edilmeyenler / cihazda doğrulanacaklar (T-164; nothing ran on the tablet):**
+  1. Normal USB connect: image appears, `MB/decoder ev=codec_start` then `video_health state=healthy`; no
+     `decoder_previous_stuck`, no `output_straggler`.
+  2. 20× mode change (Netlik ↔ Akıcı ↔ Oyun 60) and 10× background/foreground while content moves: image back each
+     time, one `codec_stop` + `codec_start` pair per change, no `detach_slow`, no `decoder_previous_stuck`; thread count
+     (`adb shell ps -T -p <pid> | grep -c mb-decoder`) and RSS back to baseline afterwards.
+  3. `--es decoder_fault dequeue --ei decoder_fault_after_s 10`: `decode_error` lines spaced ~100 ms / 500 ms / 1 s
+     apart (log timestamps), then `give_up` and `video_health state=fault cause=give_up`; recovery as in T-159.
+  4. Count `detach_slow`, `decoder_previous_stuck`, `output_straggler` over the whole run (expected 0 on a healthy
+     HAL; any non-zero is the M03 evidence T-164 asks for).
 - **Açık sorular:**
+  - `docs/LOGGING.md` (orchestrator; all `MB/decoder`):
+    `ev=decoder_previous_stuck vgen=N prev_vgen=N waited_ms=N out_straggler=0|1` (W): a new generation waited
+    `PREVIOUS_WAIT_MS` (2 s) for the previous one and opens no codec (video FAULT `stuck`);
+    `ev=output_straggler vgen=N join_ms=500` (W): a stopping codec's output thread did not exit within 500 ms; the next
+    generation waits for it.
+  - The T-159 `not_running` rule (2 s after the generation began) and the 2 s stuck bound fire at about the same time;
+    `VideoHealth` may record `cause=not_running` instead of `stuck` for a hung hand-off. Both are FAULT; if T-164 needs
+    the exact cause, raise `NOT_RUNNING_MS` slightly or let `stuck` overwrite `not_running` (T-159 territory).
