@@ -181,6 +181,29 @@ class KeyMismatchTest {
         assertEquals(listOf<SessionUi>(mismatch), closeNoBye(gen).ui())
     }
 
+    @Test fun aPriorityCloseBeforeTheQueuedAckStillResetsOnAuthentication() { // review 2 P2-2: pre-T-152 host
+        var gen = genOf(step(Event.Start(wifi)))
+        repeat(2) {
+            pairedAck(gen)
+            authFail(gen)
+            gen = retry()
+        }
+        step(Event.ControlOpened(gen))
+        step(Event.Secured(gen, null, false, Bytes(hostId.copyOf())))
+        authed += gen // the reader authenticated a record while its plaintext ack is still queued (machine in AWAIT_ACK)
+        assertTrue(closeNoBye(gen).ui().single() is SessionUi.Disconnected) // a writer close overtakes the ack
+        assertTrue(step(Event.Received(gen, ack(HelloAck.ACCEPTED))).isEmpty()) // stale now
+        // the two old failures are gone: two more only retry, the third ends it
+        repeat(2) {
+            gen = retry()
+            pairedAck(gen)
+            assertTrue(closeNoBye(gen).ui().single() is SessionUi.Disconnected)
+        }
+        gen = retry()
+        pairedAck(gen)
+        assertEquals(listOf<SessionUi>(mismatch), closeNoBye(gen).ui())
+    }
+
     @Test fun anAuthenticatedRecordOfAnotherGenerationDoesNotReset() {
         var gen = genOf(step(Event.Start(wifi)))
         pairedAck(gen)

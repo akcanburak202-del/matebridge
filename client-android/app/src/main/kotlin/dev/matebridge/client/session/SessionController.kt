@@ -772,10 +772,8 @@ class SessionController(
                     var audioPackets = 0
                     while (true) {
                         val t0 = System.nanoTime()
-                        val msg = decoder.next()
-                        // T-156: a returned message or a skipped unknown type both passed the AEAD check
-                        if (!authenticated && (msg != null || decoder.skippedFrames > 0)) authenticated = true
-                        if (msg == null) break
+                        // T-156: flagged before the event is enqueued, also when a later record in the same call throws
+                        val msg = RecordAuth.next(decoder) { if (!authenticated) authenticated = true } ?: break
                         if (msg is AudioFrame || msg is AudioConfig) {
                             if (control === this) { // only the current connection's audio is measured (as delivered)
                                 if (msg is AudioFrame) {
@@ -976,6 +974,24 @@ class SessionController(
         private const val GRACEFUL_CLOSE_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val EVENT_QUEUE_CAP = 1024
+    }
+}
+
+/**
+ * T-156: [RecordDecoder.next] with a hook at the AEAD boundary. [onAuthenticated] runs once a record of this call
+ * authenticated: a returned message, or an unknown type the decoder skipped (it opens before it skips), also when a
+ * later record in the same call throws (the hook runs before the exception leaves). Pure; JVM-tested.
+ */
+object RecordAuth {
+    inline fun next(decoder: RecordDecoder, onAuthenticated: () -> Unit): Message? { // inline: no allocation per record
+        val skippedBefore = decoder.skippedFrames
+        var msg: Message? = null
+        try {
+            msg = decoder.next()
+            return msg
+        } finally {
+            if (msg != null || decoder.skippedFrames != skippedBefore) onAuthenticated()
+        }
     }
 }
 

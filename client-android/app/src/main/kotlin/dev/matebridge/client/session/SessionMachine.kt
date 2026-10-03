@@ -907,13 +907,14 @@ class SessionMachine(
      * has not seen (still queued behind this event, audio, an unknown type) does not match and resets the count.
      */
     private fun unauthenticatedPairedEnd(): Boolean {
-        if (phase != Phase.ACCEPTED || pairingSession || sealedSeen || candGen >= 0) return false
         val ep = endpoint ?: return false
-        if (recordAuthenticated(controlGen)) {
+        // Authentication always resets, in any phase (review: the reader may authenticate while the plaintext ack is
+        // still queued behind a priority close); only counting needs the phase guard below.
+        if (controlGen >= 0 && recordAuthenticated(controlGen)) {
             authFailures.remove(ep)
             return false
         }
-        return true
+        return phase == Phase.ACCEPTED && !pairingSession && !sealedSeen && candGen < 0
     }
 
     /**
