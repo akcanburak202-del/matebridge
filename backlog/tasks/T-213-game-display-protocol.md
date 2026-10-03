@@ -39,14 +39,14 @@ Karar 0029 (oyun ekranı) için tel biçimi: `STREAM_PREFS`'in sonuna isteğe ba
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. Swift `StreamPrefs`: `displayWidthPx`/`displayHeightPx` (varsayılan 0); `read` kalan bayt > 0 ise iki u16 okur (1–3 bayt → `payloadTooShort(0x05)`, mevcut `ByteReader.remaining` yeterli, `ByteIO.swift` değişmedi); `write` ikisinden biri ≠0 ise yazar; `normalized` geçirir.
+2. Kotlin `StreamPrefs` aynı alanlar (`Int`, varsayılan 0); `Codec` encode/decode aynı kural (`r.remaining()`).
+3. Üç fixture iki fixture testine; kural testleri (8/12/9–11/fazla bayt, tek alan ≠0 → 12 bayt).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
-- **Açık sorular:**
+- **Commit:** `6ada02d` (kod + testler) — dal `task/T-213-game-display-codecs` (`task/T-213-game-display-protocol` üstünde).
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Messages.swift`, `host-mac/Tests/MateBridgeCoreTests/FixtureTests.swift`, `host-mac/Tests/MateBridgeCoreTests/CodecTests.swift` (*listede yok*, aşağıya bak), `client-android/.../protocol/Messages.kt`, `Codec.kt`, `client-android/.../test/.../protocol/FixtureTest.kt`, `client-android/.../test/.../protocol/CodecRulesTest.kt` (*listede yok*), bu kart. PROTOCOL.md, gen.py, .hex dokunulmadı.
+- **Varsayımlar:** Grup "kalan bayt > 0" ile algılanır; ≥12 baytta fazlası her mesajdaki gibi yok sayılır. `normalized` ekran alanlarını doğrulamadan geçirir (politika T-214). Çağıran kod değişmedi; herkes 0×0 gönderir/alır, tel baytları eski fixture'larla aynı. `StreamPrefsStore` (host, T-049) ekran alanlarını henüz saklamıyor (T-214 işi).
+- **Test edilmeyenler / cihazda doğrulananlar:** Cihaz testi yok (davranış değişmiyor). `./scripts/check.sh` ALL OK, `gen.py --check` yeşil. XCTest/Swift Testing: `streamPrefsOptionalDisplayGroupIsAllOrNothing` + fixture testleri; JVM: `CodecRulesTest.streamPrefsOptionalDisplayGroupIsAllOrNothing` + `FixtureTest`.
+- **Açık sorular:** `CodecTests.swift` ve `CodecRulesTest.kt` kartın `files:` listesinde yoktu ama dokunmak zorunluydu: ikisindeki eski kural testi STREAM_PREFS'e 2 fazla bayt ekleyip (10 bayt) kabul edilmesini bekliyordu; yeni kural (9–11 bayt kısa) bunu reddeder. Test `+ [0,0,0,0,9,9]` (14 bayt, grup 0×0, fazlası yok sayılır) olarak düzeltildi; yeni kenar testleri de bu iki dosyaya eklendi (yardımcı `frame`/`decodeOne` orada). Kotlin `FixtureTest` geçersiz fixture'larda hata türünü denetlemiyor; `SHORT_PAYLOAD` türü `CodecRulesTest`'te ayrıca denetlenir.
