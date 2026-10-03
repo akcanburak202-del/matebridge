@@ -411,7 +411,7 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
     - `bitrate_setting`: tabletin ayarı (0 = `auto`).
     - `transport`: geçerli bağlantı. `transport_mode`: geçerli bağlantı modu ayarı ya da açılış geçersiz kılması.
     - `audio=1`: ses açık (`--ez audio false` verilmedi ve panel ayarı açık).
-    - `pacer`: geçerli renderer tamponu (Oyun modunda `buffer0`).
+    - `pacer`: geçerli renderer tamponu (T-211'den beri Oyun modlarında da `adaptive`; `--ez dev true --ei jitter 0` ile `buffer0`).
     - `sha=`, `built=`: `ev=app_start` ile aynı kaynak (`BuildInfo`, T-146).
   - `knobs=`: dikkate alınan açılış ayarları, `docs/KNOBS.md` sırasıyla.
     - "Yalnızca geliştirici" ayarlar yalnız `dev=1` ile sayılır. "Kalır" sınıfı (`stats_1s`, `pace_trace`, `stall_diag`) her zaman sayılır.

@@ -1,7 +1,7 @@
 ---
 id: T-215
 title: Client: "Oyun çözünürlüğü" setting and game display prefs (decision 0029)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-213]
