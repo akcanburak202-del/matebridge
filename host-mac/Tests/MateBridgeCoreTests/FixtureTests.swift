@@ -31,10 +31,16 @@ private let validFixtures: [String: Message] = [
     "stream_config": .streamConfig(StreamConfig(configID: 1, codec: .hevc, widthPx: 2800, heightPx: 1840,
                                                 widthPt: 1400, heightPt: 920, fps: 60, bitrateKbps: 50000,
                                                 colorPrimaries: 1, transfer: 13, matrix: 1, fullRange: true)),
+    "stream_config_game_display": .streamConfig(StreamConfig(configID: 2, codec: .hevc, widthPx: 1848, heightPx: 1214,
+                                                             widthPt: 1848, heightPt: 1214, fps: 120,
+                                                             bitrateKbps: 60000, colorPrimaries: 1, transfer: 13,
+                                                             matrix: 1, fullRange: true)),
     "bye": .bye(.normal),
     "bye_host_sleep": .bye(.hostSleep),
     "stream_prefs": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 750, bitrateKbps: 0)),
     "stream_prefs_bitrate": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: 40000)),
+    "stream_prefs_game_display": .streamPrefs(StreamPrefs(fps: 120, scalePermille: 660, bitrateKbps: 60000,
+                                                          displayWidthPx: 1848, displayHeightPx: 1214)),
     "display_rate": .displayRate(DisplayRate(hz: 60)),
     "settings_open": .settingsOpen(SettingsOpen()),
     "files_info_ready": .filesInfo(FilesInfo(state: .ready, port: 47010, token: "0123456789abcdef0123456789abcdef")),
@@ -93,6 +99,7 @@ private let validFixtures: [String: Message] = [
 
 private let invalidFixtures: [String: ProtocolError] = [
     "invalid_key_short": .payloadTooShort(type: 0x11),
+    "invalid_stream_prefs_partial": .payloadTooShort(type: 0x05),
     "invalid_pen_count_zero": .invalidField("count"),
     "invalid_audio_frame_short": .payloadTooShort(type: 0x32),
 ]

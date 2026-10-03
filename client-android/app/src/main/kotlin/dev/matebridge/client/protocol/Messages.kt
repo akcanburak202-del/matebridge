@@ -155,8 +155,17 @@ data class StreamConfig(
 /**
  * Client display-mode request (C to H, PROTOCOL.md 0x05): stream [fps] (60/120/144), encoded size in permille of the
  * display, and the user's target [bitrateKbps] (u32, decision 0013; 0 = host default for the mode).
+ * [displayWidthPx]/[displayHeightPx] are the optional trailing group (decision 0029, "game display"): the requested 1x
+ * virtual display size in pixels; 0x0 = the native display. Absent on the wire = 0x0; encoded only when either is
+ * non-zero (PROTOCOL.md 2, optional trailing group).
  */
-data class StreamPrefs(val fps: Int, val scalePermille: Int, val bitrateKbps: Long = 0) : Message {
+data class StreamPrefs(
+    val fps: Int,
+    val scalePermille: Int,
+    val bitrateKbps: Long = 0,
+    val displayWidthPx: Int = 0,
+    val displayHeightPx: Int = 0,
+) : Message {
     override val type get() = MsgType.STREAM_PREFS
 }
 

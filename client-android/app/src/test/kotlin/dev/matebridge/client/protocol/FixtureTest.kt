@@ -58,10 +58,14 @@ class FixtureTest {
             ),
             "hello_ack_busy" to HelloAck(1, HelloAck.BUSY, 0, 0, "", HelloAck.KEY_NONE, zeros16, zeros16, zeros65),
             "stream_config" to StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1),
+            "stream_config_game_display" to StreamConfig(
+                2, StreamConfig.CODEC_HEVC, 1848, 1214, 1848, 1214, 120, 60000, 1, 13, 1, 1,
+            ),
             "bye" to Bye(Bye.NORMAL),
             "bye_host_sleep" to Bye(Bye.HOST_SLEEP),
             "stream_prefs" to StreamPrefs(120, 750, 0),
             "stream_prefs_bitrate" to StreamPrefs(120, 1000, 40000),
+            "stream_prefs_game_display" to StreamPrefs(120, 660, 60000, 1848, 1214),
             "display_rate" to DisplayRate(60),
             "settings_open" to SettingsOpen,
             "files_info_ready" to FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef"),
@@ -118,7 +122,9 @@ class FixtureTest {
             ),
         )
 
-        val invalid = setOf("invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short")
+        val invalid = setOf(
+            "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
+        )
         val skipped = setOf("unknown_type")
 
         private fun decoderFor(msg: Message?) =

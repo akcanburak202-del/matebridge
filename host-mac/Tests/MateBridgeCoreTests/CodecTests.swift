@@ -335,7 +335,8 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         // STREAM_PREFS: 8 bytes; the old 4-byte prefix (fps + scale) is now short, extra bytes are ignored.
         let prefs = Message.streamPrefs(StreamPrefs(fps: 144, scalePermille: 800, bitrateKbps: 150_000))
         #expect(prefs.encodePayload().count == 8)
-        #expect(try decodeOne(frame(0x05, prefs.encodePayload() + [9, 9])) == prefs)
+        // Extra bytes after the (here 0x0) optional display group are ignored; 9-11 bytes are short (see below).
+        #expect(try decodeOne(frame(0x05, prefs.encodePayload() + [0, 0, 0, 0, 9, 9])) == prefs)
         #expect(throws: ProtocolError.payloadTooShort(type: 0x05)) { try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3])) }
         #expect(try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3, 0xff, 0xff, 0xff, 0xff]))
             == .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: UInt32.max)))
@@ -353,6 +354,33 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         #expect(StreamPrefs(fps: 60, scalePermille: 1000).bitrateKbps == 0)
         let n = StreamPrefs(fps: 7, scalePermille: 1, bitrateKbps: 40_000).normalized
         #expect(n == StreamPrefs(fps: 60, scalePermille: 500, bitrateKbps: 40_000))
+    }
+
+    @Test func streamPrefsOptionalDisplayGroupIsAllOrNothing() throws {
+        // Decision 0029 / PROTOCOL.md 2: 8 bytes -> 0x0, >= 12 -> values (extra ignored), 9-11 -> short payload.
+        let base = Message.streamPrefs(StreamPrefs(fps: 120, scalePermille: 660, bitrateKbps: 60_000))
+        #expect(base.encodePayload().count == 8)
+        #expect(try decodeOne(frame(0x05, base.encodePayload())) == base)
+        let gamePrefs = StreamPrefs(fps: 120, scalePermille: 660, bitrateKbps: 60_000,
+                                    displayWidthPx: 1848, displayHeightPx: 1214)
+        let game = Message.streamPrefs(gamePrefs)
+        let p = game.encodePayload()
+        #expect(p.count == 12)
+        #expect(try decodeOne(frame(0x05, p)) == game)
+        #expect(try decodeOne(frame(0x05, p + [7, 7, 7])) == game)
+        // Either non-zero field writes the whole group.
+        #expect(Message.streamPrefs(StreamPrefs(fps: 120, scalePermille: 660, displayWidthPx: 1848))
+            .encodePayload().count == 12)
+        #expect(Message.streamPrefs(StreamPrefs(fps: 120, scalePermille: 660, displayHeightPx: 1214))
+            .encodePayload().count == 12)
+        for n in 9...11 {
+            #expect(throws: ProtocolError.payloadTooShort(type: 0x05)) { try decodeOne(frame(0x05, Array(p[0..<n]))) }
+        }
+        // normalized carries the group through unchanged (validation is host policy, T-214).
+        #expect(StreamPrefs(fps: 7, scalePermille: 1, displayWidthPx: 3, displayHeightPx: 5).normalized
+            == StreamPrefs(fps: 60, scalePermille: 500, displayWidthPx: 3, displayHeightPx: 5))
+        #expect(StreamPrefs(fps: 60, scalePermille: 1000).displayWidthPx == 0)
+        #expect(StreamPrefs(fps: 60, scalePermille: 1000).displayHeightPx == 0)
     }
 
     @Test func settingsPanelCapabilityIsBit9() {

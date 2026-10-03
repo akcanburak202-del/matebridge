@@ -108,7 +108,8 @@ class CodecRulesTest {
         val prefs = StreamPrefs(144, 800, 150_000)
         val p = Codec.encodePayload(prefs)
         assertEquals(8, p.size)
-        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(9, 9))))
+        // Extra bytes after the (here 0x0) optional display group are ignored; 9-11 bytes are short (see below).
+        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 0, 0, 9, 9))))
         // Full u32 range survives the round trip.
         val max = byteArrayOf(0x78, 0, 0xe8.toByte(), 3, -1, -1, -1, -1)
         assertEquals(StreamPrefs(120, 1000, 0xFFFFFFFFL), decode(frame(MsgType.STREAM_PREFS, max)))
@@ -118,6 +119,29 @@ class CodecRulesTest {
         expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
         // The default sends 0 = host default (behaviour unchanged until T-105).
         assertEquals(0L, StreamPrefs(60, 1000).bitrateKbps)
+    }
+
+    @Test
+    fun streamPrefsOptionalDisplayGroupIsAllOrNothing() {
+        // Decision 0029 / PROTOCOL.md 2: 8 bytes -> 0x0, >= 12 -> values (extra ignored), 9-11 -> short payload.
+        val base = Codec.encodePayload(StreamPrefs(120, 660, 60_000))
+        assertEquals(8, base.size)
+        assertEquals(StreamPrefs(120, 660, 60_000, 0, 0), decode(frame(MsgType.STREAM_PREFS, base)))
+        val game = StreamPrefs(120, 660, 60_000, 1848, 1214)
+        val p = Codec.encodePayload(game)
+        assertEquals(12, p.size)
+        assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p)))
+        assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(7, 7, 7))))
+        // Either non-zero field writes the whole group.
+        assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 0)).size)
+        assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 0, 1214)).size)
+        for (n in 9..11) {
+            val dec = FrameDecoder.control()
+            dec.feed(frame(MsgType.STREAM_PREFS, p.copyOf(n)))
+            expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+        }
+        assertEquals(0, StreamPrefs(60, 1000).displayWidthPx)
+        assertEquals(0, StreamPrefs(60, 1000).displayHeightPx)
     }
 
     @Test

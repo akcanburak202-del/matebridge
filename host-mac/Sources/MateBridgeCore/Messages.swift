@@ -356,29 +356,48 @@ public struct StreamPrefs: Equatable, Sendable {
     /// The user's target bitrate (decision 0013); 0 = host default for the mode. Older clients send 0 here (the
     /// field used to be `reserved`).
     public var bitrateKbps: UInt32
+    /// Optional trailing group (decision 0029, "game display"): the requested 1x virtual display size in pixels.
+    /// 0x0 = the native display (HELLO size, HiDPI). Absent on the wire = 0x0; written only when either is non-zero.
+    public var displayWidthPx: UInt16
+    public var displayHeightPx: UInt16
 
-    public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0) {
+    public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0,
+                displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0) {
         self.fps = fps
         self.scalePermille = scalePermille
         self.bitrateKbps = bitrateKbps
+        self.displayWidthPx = displayWidthPx
+        self.displayHeightPx = displayHeightPx
     }
 
     /// What the host honours: fps in {60, 120, 144} (anything else is 60) and scale clamped to 500...1000.
-    /// `bitrateKbps` is carried through unchanged.
+    /// `bitrateKbps` and `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is
+    /// validated by the host's policy, not here).
     public var normalized: StreamPrefs {
         let f = Self.supportedFps.contains(Int(fps)) ? fps : 60
         let s = min(max(Int(scalePermille), Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
-        return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps)
+        return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps,
+                           displayWidthPx: displayWidthPx, displayHeightPx: displayHeightPx)
     }
 
     func write(_ w: inout ByteWriter) {
         w.u16(fps)
         w.u16(scalePermille)
         w.u32(bitrateKbps)
+        if displayWidthPx != 0 || displayHeightPx != 0 {
+            w.u16(displayWidthPx)
+            w.u16(displayHeightPx)
+        }
     }
 
     static func read(_ r: inout ByteReader) throws -> StreamPrefs {
-        StreamPrefs(fps: try r.u16(), scalePermille: try r.u16(), bitrateKbps: try r.u32())
+        var prefs = StreamPrefs(fps: try r.u16(), scalePermille: try r.u16(), bitrateKbps: try r.u32())
+        // Optional trailing group (PROTOCOL.md 2): absent -> 0x0; partially present -> payload too short.
+        if r.remaining > 0 {
+            prefs.displayWidthPx = try r.u16()
+            prefs.displayHeightPx = try r.u16()
+        }
+        return prefs
     }
 }
 
