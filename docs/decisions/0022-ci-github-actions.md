@@ -32,7 +32,15 @@ Kurallar:
 - Yerel `check.sh` teslimden önceki asıl kapı olarak kalır.
 - `gen.py` yalnızca açık bir `--write` ile yazar ve bilinmeyen argümanda hata verir.
 
-**CI'ın kapsamadığı yollar:** SCK, VideoToolbox, `CGVirtualDisplay`, MediaCodec, AAudio, TCC ve CGEvent gönderimi. Bunlar aygıt testlerinde kalır.
+**CI'ın kapsamadığı yollar** (yeşil CI bunları doğrulamaz; aygıt testlerinde kalır):
+- ScreenCaptureKit ile yakalama ve VideoToolbox ile kodlama;
+- `CGVirtualDisplay` (sanal ekran);
+- MediaCodec ile çözme ve AAudio ile ses çalma;
+- TCC izinleri (Ekran Kaydı, Erişilebilirlik) ve CGEvent gönderimi (kalem, klavye, fare);
+- probe'lar (`probes/*`; yalnızca yerel `check.sh` derler);
+- cihaz üstü ve instrumentation testleri, emülatör.
+
+Uygulama (T-149): `.github/workflows/check.yml`. `changes` işi yalnızca git ile yol filtresi uygular. macOS işi `host-mac/**`, `protocol/**`, `.github/workflows/**`, `scripts/check.sh` ya da `docs/PROTOCOL.md` değişince çalışır. Linux işi her push'ta çalışır. CryptoKit vektör farkı yalnızca macOS'ta çalışır; Linux `--only protocol` bunu açık bir `SKIP (needs macOS)` satırıyla atlar.
 
 **Kullanıcı 2026-10-03'te onayladı:** ilk hafta yalnız bilgi, sonra zorunlu. Sorulan (manifest §5 soru 4): GitHub Actions kullanılsın mı? Depo public olduğu için makine dakikaları ücretsiz. İlk hafta yalnızca bilgi versin, sonra zorunlu olsun mu?
 

@@ -6,9 +6,11 @@ if they ever disagree, the document wins and this script is the bug.
 Every fixture is a complete frame (5-byte header + payload), one field per line,
 with the field name and value in a trailing comment. Tests strip comments and whitespace.
 
-Usage: python3 protocol/fixtures/gen.py            # rewrite fixtures
+Usage: python3 protocol/fixtures/gen.py --write    # rewrite fixtures
        python3 protocol/fixtures/gen.py --check    # exit 1 if any fixture is stale
+Exactly one mode is required; anything else exits 2 without touching a file.
 """
+import argparse
 import struct
 import sys
 from pathlib import Path
@@ -457,8 +459,19 @@ FIXTURES = {
 }
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Reference encoder for the protocol golden vectors (protocol/fixtures/*.hex).",
+        allow_abbrev=False,
+    )
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="exit 1 if any fixture is stale or unknown; write nothing")
+    mode.add_argument("--write", action="store_true", help="rewrite every fixture from the reference encoder")
+    return parser.parse_args(argv)
+
+
 def main():
-    check = "--check" in sys.argv
+    check = parse_args().check
     stale = []
     for name, (title, lines) in FIXTURES.items():
         text = render(title, lines)

@@ -25,7 +25,7 @@ Alt ajan tanımları `.claude/agents/` altında: `mac-host-dev`, `android-client
 
 1. Her görevin bir görev kartı olur: amaç, dokunulabilecek dosyalar, "bitti" ölçütü, nasıl test edileceği.
 2. Bir modülü aynı anda yalnızca bir ajan değiştirir.
-3. Birleştirme koşulları: derleme geçer, orkestratör inceler, kritik parçalarda Codex de inceler.
+3. Birleştirme koşulları: derleme geçer, orkestratör inceler, kritik parçalarda Codex de inceler. CI (karar 0022, `.github/workflows/check.yml`) de bu koşullara girer. Orkestratör birleştirmeden önce `task/*` dalını push'lar (ya da PR açar) ve yalnızca CI yeşilse birleştirir. CI ilk hafta (2026-10-10'a kadar) yalnızca bilgi verir, sonra zorunludur. Yerel `./scripts/check.sh` teslimden önceki asıl kapı olarak kalır. CI donanım yollarını kapsamaz; liste 0022'de.
 4. Her adımın sonunda kullanıcıya 3–5 maddelik "tablette şunu dene" listesi verilir.
 5. Ajan sayısı sabit bir sınırla değil, **bağımsız iş akışı sayısıyla** belirlenir (bkz. "Paralellik" bölümü).
 6. `main` dalı her zaman derlenebilir durumda kalır. Commit'ler küçük ve anlamlıdır.
