@@ -60,7 +60,19 @@ Decision 0022 must be accepted by the user before work starts (manifest §5 Q4).
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **`protocol/fixtures/gen.py`:** `argparse` (`allow_abbrev=False`) with a required, mutually exclusive `--check` / `--write` group. No mode, unknown arguments or abbreviations exit 2 without writing; `--help` exits 0 without writing. The `--check` path (silent on success, `stale fixtures: …` + exit 1) and the fixture table stay untouched. Proof: `--write` leaves `git status` clean and the fixture checksums identical. Update the docstring and `protocol/fixtures/README.md` to `--write`.
+2. **`scripts/check.sh`:** parse `--only host|android|protocol` (repeatable, comma list, `--only=x` accepted; unknown component or argument exits 2). The component set is a plain string, not an array, because macOS `/bin/bash` 3.2 treats an empty array as unbound under `set -u`. No flag runs exactly today's steps in today's order with today's output. Under `--only`, probes are skipped. The CryptoKit vector diff runs only on Darwin and prints `SKIP (needs macOS)` elsewhere. The `JAVA_HOME`/`ANDROID_HOME` fallbacks stay guarded by "unset only".
+3. **`.github/workflows/check.yml`:** triggers are push to `main` and `task/**`, plus `workflow_dispatch`, with `permissions: contents: read`. Concurrency cancels superseded runs on `task/**`, never on `main`. There are three jobs:
+   - `changes` (ubuntu): a git-only path filter, because third-party filter actions are not allowed. On `main` it diffs `before..sha`, on `task/**` it diffs `merge-base(origin/main)..HEAD`. If the base is unknown (new branch, force push, dispatch), it runs everything.
+   - `macos` (`macos-latest`, only when `host-mac/**`, `protocol/**`, `scripts/check.sh`, `.github/workflows/**` or `docs/PROTOCOL.md` changed): SwiftPM `.build` cache keyed on the toolchain version and `Package.*`, then `--only host` and `--only protocol` as separate steps.
+   - `linux` (ubuntu, always): `fetch-depth: 0` so the T-146 versionCode is real, `actions/setup-java` Temurin 21 with `cache: gradle`, and `sdkmanager` installs `platforms;android-37.0`, `build-tools;36.0.0`, `ndk;30.0.16248370` and `cmake;4.1.2` (the same set as the owner's SDK). Then it runs `--only android` and `--only protocol`.
+   - Every job has `timeout-minutes: 30`.
+4. **Docs:**
+   - 0022: add an explicit "CI'ın kapsamadığı" list (SCK, VT, `CGVirtualDisplay`, MediaCodec, AAudio, TCC, CGEvent posting, probes, device/instrumentation).
+   - `docs/WORKFLOW.md`: one rule on the gate mechanics (push `task/*`, merge on green, advisory for the first week, then required).
+   - `docs/PLAN.md:48`: drop "CI" from the deferred list and point to 0022.
+5. **Verify:** run `check.sh` (all) and each `--only`, plus argument-error cases. Check gen.py modes and that the fixtures are byte-identical. Parse the YAML (Ruby Psych) and run actionlint if it can be fetched into the scratchpad without a global install.
+- **Risks:** the hosted Xcode/SDK may differ from macOS 27, and timing tests may flake. Both only show up on a real run, and the advisory week covers them. A skipped `macos` job counts as success for a required check, which is intended for pure Android/docs pushes.
 
 ## Handoff
 
