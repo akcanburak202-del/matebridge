@@ -38,9 +38,18 @@ public enum LoginItemPolicy {
         }
     }
 
-    /// Whether `loginItemFirstRunDone` is written after the attempt.
+    /// Whether `loginItemFirstRunDone` is written after the attempt. It is written only once the default-on
+    /// registration is in effect, or when the user chose explicitly; until then every launch retries.
+    /// - Not bundled: nothing is persisted (a `swift run` binary cannot register).
+    /// - Launch: only after a successful registration, or when the item is already requested (`.none`).
+    /// - Toggle off: always, even if `unregister` threw. The user's choice wins and is never overridden.
+    /// - Toggle on: only on success. A failed toggle-on is retried on the next launch, which is what the user asked for.
     public static func marksDone(trigger: Trigger, action: Action, outcome: Outcome) -> Bool {
-        trigger == .launch
+        if outcome == .notBundled { return false }
+        switch (trigger, action) {
+        case (.userToggle, .unregister): return true
+        default: return outcome == .succeeded
+        }
     }
 
     /// The one-line problem for the menu after an attempt, nil when fine.
