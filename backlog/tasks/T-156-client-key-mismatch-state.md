@@ -1,7 +1,7 @@
 ---
 id: T-156
 title: Show "anahtar uyuşmuyor" after repeated PAIRED auth failures
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-151]

@@ -231,6 +231,7 @@ Hiçbir alanda eşleşme kodu, anahtar, token, `host_id` ya da Mac adı yazılma
 - Unut: `pair_forget live=0|1`, `pair_forget_none`, `pair_forget_failed live=0|1`, arayüzde `pair_ui_forget_failed`.
 - Arayüz: `pair_ui action=<eylem>` (yalnız eylem adı, değer yok).
 - Alanlar: `session_start` ve `connect_start`'ta `user=0|1`; `transport`'ta `origin=`; `transport_pick reason=usb_asked`. `secured` artık PAIRED bağlantılarda da yazılır.
+- Anahtar uyuşmazlığı (T-156): `paired_auth_fail count=N how=auth_failed|closed` (W; PAIRED bağlantı kanıttan sonra, hiçbir host kaydı doğrulanmadan bitti), 3'te `session_failed cause=KEY_MISMATCH` ve `key_mismatch_latched` (otomatik bağlanma durur; "Bağlan" `origin=connect_after_mismatch` ile yeniden dener). Herhangi bir doğrulanmış kayıt sayacı sıfırlar.
 
 ## Host gecikme izi ve tablet izi eşleşmesi (Mac, `video`, T-170)
 
