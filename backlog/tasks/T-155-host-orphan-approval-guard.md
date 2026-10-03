@@ -1,7 +1,7 @@
 ---
 id: T-155
 title: Flag a replaced orphan approval request on the Mac
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-152]
@@ -59,7 +59,13 @@ Source: external architecture review 2026-10-03 (M05, approval surface); verific
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core (`SessionMachine.swift`):** new `public enum ApprovalReplacement { none, sameDevice, otherDevice }` with `logValue` (`none|same|other`). `.requestApproval` gets a fifth associated value `replaced:`. In `continueHello`'s PAIRING branch the open orphan (if any) is compared with `hello.deviceID` before it is cancelled; the request is emitted unchanged otherwise (no block, no delay). `approval_pending` gets `fields: "replaced=…"` (no name, no code).
+2. **Tests:** new `Session/ApprovalReplacementTests.swift` (orphan A + B → `otherDevice`, `.cancelApproval(A)` before the request, B's `shortHex` available via `deviceID`; orphan A + A → `sameDevice`; no orphan → `none`; log fields). Pattern updates only in `SessionCryptoTests.swift` and existing `Session/` tests that match the 4-ary case.
+3. **Host (`SessionServer.swift`):** `ApprovalRequest` gets `replaced: ApprovalReplacement` and `deviceFingerprint: String` (`DeviceID.shortHex`); filled from the action. Keychain-busy re-show keeps them (same stored request).
+4. **App (`main.swift`, `ApprovalPanel.swift`):** panel init takes `replaced` + `fingerprint`; a separate label (so `setNotice` for disconnected/keychain does not overwrite it): `otherDevice` → "Bu, önceki istekten FARKLI bir cihaz" + "Cihaz parmak izi: xxxxxxxx" in `systemRed` (warning colour); `sameDevice` → neutral "Kod değişti — tabletteki kodla yeniden karşılaştır" (`secondaryLabelColor`); `none` → hidden.
+5. `./scripts/check.sh`, commit, Handoff.
+
+Risks: case arity change breaks every `case .requestApproval` pattern (compile-time, all in `files:`). The fingerprint is not a secret but is not logged by the app either (only `replaced=`).
 
 ## Handoff
 
