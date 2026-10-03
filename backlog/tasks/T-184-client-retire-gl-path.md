@@ -1,7 +1,7 @@
 ---
 id: T-184
 title: Retire the GL presentation path
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-183]
@@ -78,10 +78,25 @@ Riskler: yüzey yaşam döngüsü (VideoHealth/VideoDeliveryGate/CodecGeneration
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `3b39fe2` (kod; plan `13a3de3`, handoff bu commit'ten sonraki `T-184: handoff`). Branch `task/T-184-client-retire-gl-path`. `./scripts/check.sh`: ALL OK.
+- **Dokunulan dosyalar:** yalnız `files:` listesi.
+  - Silindi: `video/GlPresenter.kt`, `video/PresentStats.kt`, `test/.../video/PresentStatsTest.kt`.
+  - `MainActivity.kt`: `glMode`, `videoGl`, `videoView` (artık hep `video`), `presenter`, `presentStats`, `glVsync`, `glDecoderSurface`, `glGeneration`, `glPresentationTime`, `frameRateOverride`, `fallBackToSurface`/`gl_fallback`, `gl_stats` ve katmandaki GL satırları kaldırıldı. `render`/`frate`/`glpts` extra'ları artık okunmuyor; `render ev=render_mode` satırı da kalktı (bütün alanları sabit olmuştu). `codecReportsShown = true`. `lead_us`/`deadline_us` yalnız `vsync` üzerinde. Yüzey dalının sırası aynı: `surfaceCreated` → (config varsa) `setSurfaceFrameRate(true)` + `attachSurface`; `surfaceDestroyed` → `detachSurface`; `installConfig` → `attachSurface(video.holder.surface)`.
+  - `stream/GameMode.kt`: `GameJitter.Source.GL` ve belgesi kaldırıldı. `GameModeTest`: GL satırı silindi.
+  - `activity_main.xml`: `video_gl` silindi.
+  - `VsyncIdleTest`: `glFirstFrameAfterSleepIsDrawnOnArrival` (GlPresenter'ın kare-gelince-çiz modeli) silindi; yüzey yolunun `FirstOutputBypass` testleri duruyor.
+- **Grep (kabul):** `grep -rnE 'GlPresenter|glMode|videoGl|video_gl|PresentStats|gl_fallback|gl_stats' client-android/app/src` → boş.
 - **Varsayımlar:**
+  - Karar 0026 `frate`'i GL yolunun düğmesi sayıyor; kaldırıldı. `setSurfaceFrameRate` `FrameRatePolicy.surfaceRate(-1, fps)` ile bugünkü varsayılanı (akış fps'inde FIXED_SOURCE) aynen koruyor. `FrameRatePolicy.kt` `files:` dışında olduğu için imzasına dokunulmadı.
+  - Gecikme aşaması satırında `cap_cb_*`/`render_cb_missing` artık her zaman sayı basar (`-` yalnız GL'deydi); `StatsFormat.latencyStageFields(..., codecCallbacks=false)` dalı ve testi duruyor, `files:` dışı.
+  - VideoHealth, VideoDeliveryGate, CodecGeneration/sharedLock kodu değişmedi (`VideoRenderer.kt` açılmadı).
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  1. 20× arka plan/ön plan ve 10× mod değişimi (Netlik 60 ↔ Akıcı 120 ↔ Oyun 60): siyah ekran yok, `gl_*` satırı yok, `detach_slow` yok.
+  2. `adb shell am start ... --es render gl` (ve `--ei frate 30`, `--ez glpts true`) normal açılışla aynı davranmalı: video SurfaceView'de, `render_mode`/`gl_*` satırı yok, `set_frame_rate rate=<akış fps>`.
+  3. `--ei lead_us 3000` ve `--ei deadline_us 4000` (ayrıca `deadline_us -1`) `render ev=display_timing` içinde `lead_override_us`/`effective_deadline_ns`/`deadline_override` değerlerini değiştirmeli.
+  4. İstatistik katmanı (uzun basış) açılıp kapanıyor, kalem/trackpad yakalama ve pointer capture eskisi gibi çalışıyor (tek görünüm artık `video`).
+  5. Oyun moduna giriş/çıkışta `game_mode` satırında `jitter_src` yalnız `--ei jitter` verilince görünür.
 - **Açık sorular:**
+  - `docs/LOGGING.md:99`: ``(`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`, `render ev=gl_stats`)`` → ``(`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`)``; ayrıca kaldırılan istemci olayları listesine `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=render_mode` (T-184) eklenmeli.
+  - `docs/KNOBS.md:51` (satır 4): durum sütunu "kaldırıldı (T-184)" olarak işaretlenmeli (T-183 satırlarıyla aynı biçimde).
+  - `files:` dışında GL'den söz eden eski yorumlar (kod değil, davranış etkisi yok): `video/VideoRenderer.kt:52` ve `:99` (`codecReportsShown` belgesi, "GL -> SurfaceView fallback"), `stream/StatsFormat.kt:63` ("[codecCallbacks] false (GL path)"), `video/VsyncIdle.kt:6` ve `:9` ("the GL presenter's", "GL frame-available"), `test/.../video/LatencyStageStatsTest.kt:96` ve `stream/LatencyStageFormatTest.kt:55-57` (`gl` değişken adı). Ayrıca `VideoRenderer.codecReportsShown` ve `StatsFormat.latencyStageFields(codecCallbacks)` parametresi artık hep `true`; `FrameRatePolicy.surfaceRate(frateExtra, …)`'nın `frateExtra` parametresi artık hep -1. Bir sonraki `VideoRenderer`/`StatsFormat`/`FrameRatePolicy` kartında sadeleştirilebilir.
