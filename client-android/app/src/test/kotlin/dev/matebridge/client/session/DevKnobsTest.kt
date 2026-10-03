@@ -95,9 +95,24 @@ class DevKnobsTest {
         assertEquals("dev=1 ignored=-", k.logFields())
     }
 
-    @Test fun jitterIsClampedAndAdaptiveOffMeansZero() {
-        assertEquals(0, parse("dev" to true, "jitter" to -1).jitter)
+    @Test fun jitterIsClampedButMinusOneSelectsAdaptive() {
+        assertEquals(DevKnobs.JITTER_ADAPTIVE, parse("dev" to true, "jitter" to -1).jitter)
+        assertEquals(dev.matebridge.client.video.VideoRenderer.BUFFER_ADAPTIVE, DevKnobs.JITTER_ADAPTIVE)
+        assertEquals(0, parse("dev" to true, "jitter" to -2).jitter)
+        assertEquals(2, parse("dev" to true, "jitter" to 3).jitter)
         assertEquals(2, parse("dev" to true, "jitter" to 9).jitter)
+        for (v in 0..2) assertEquals(v, parse("dev" to true, "jitter" to v).jitter)
+    }
+
+    @Test fun adaptiveJitterWithoutDevIsIgnored() {
+        val k = parse("jitter" to -1)
+        assertNull(k.jitter)
+        assertEquals("dev=0 ignored=jitter", k.logFields())
+        assertEquals(emptyList<String>(), k.knobs)
+    }
+
+    @Test fun adaptiveJitterIsListedInKnobs() {
+        assertEquals(listOf("jitter:-1"), parse("dev" to true, "jitter" to -1).knobs)
     }
 
     @Test fun negativeLeadIsIgnoredAndDeadlineKeepsMinusOne() {

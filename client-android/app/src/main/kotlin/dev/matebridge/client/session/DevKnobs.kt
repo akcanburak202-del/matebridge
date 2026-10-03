@@ -35,7 +35,10 @@ data class DevKnobs(
     val ignored: List<String> = emptyList(),
     /** Honoured, profile-relevant knobs as `key:value` ([SPECS] order); the `ev=profile` `knobs=` field. */
     val knobs: List<String> = emptyList(),
-    /** `--ei jitter N`: fixed jitter buffer 0..2; null = adaptive pacer. */
+    /**
+     * `--ei jitter N`: fixed jitter buffer 0..2, or [JITTER_ADAPTIVE] (T-210: the adaptive pacer even in game modes);
+     * null = not given (the mode decides).
+     */
     val jitter: Int? = null,
     /** `--ei hz N`: null = follow the stream. */
     val hz: Int? = null,
@@ -117,6 +120,12 @@ data class DevKnobs(
 
         val DEBUG_ONLY_KEYS: Set<String> = SPECS.filter { it.debugOnly }.map { it.key }.toSet()
 
+        /** `--ei jitter -1`: the adaptive pacer (equals `VideoRenderer.BUFFER_ADAPTIVE`; T-210, A/B in game modes). */
+        const val JITTER_ADAPTIVE = -1
+
+        /** T-210: -1 is kept (adaptive); anything else is clamped to the fixed buffer range 0..2 as before. */
+        fun jitter(v: Int): Int = if (v == JITTER_ADAPTIVE) v else v.coerceIn(0, 2)
+
         fun parse(raw: LaunchExtras): DevKnobs {
             val dev = raw.bool(EXTRA_DEV, false)
             val ignored = if (dev) emptyList() else SPECS.filter { it.debugOnly && raw.has(it.key) }.map { it.key }
@@ -126,7 +135,7 @@ data class DevKnobs(
                 dev = dev,
                 ignored = ignored,
                 knobs = knobs,
-                jitter = if (x.has("jitter")) x.int("jitter", 0).coerceIn(0, 2) else null, // -1 (adaptive off) -> 0
+                jitter = if (x.has("jitter")) jitter(x.int("jitter", 0)) else null,
                 hz = if (x.has("hz")) x.int("hz", -1) else null,
                 leadUs = if (x.has("lead_us")) x.int("lead_us", -1).takeIf { it >= 0 } else null,
                 deadlineUs = if (x.has("deadline_us")) x.int("deadline_us", -1) else null,

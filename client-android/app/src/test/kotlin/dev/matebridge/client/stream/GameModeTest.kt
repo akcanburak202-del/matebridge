@@ -180,6 +180,19 @@ class GameModeTest {
         assertEquals(adaptive, GameJitter.choose(adaptive, null, g.active).bufferFrames)
     }
 
+    @Test fun launchAdaptiveJitterWinsInGameMode() {
+        // T-210: `--ez dev true --ei jitter -1` -> MainActivity passes (BUFFER_ADAPTIVE, EXTRA).
+        val adaptive = VideoRenderer.BUFFER_ADAPTIVE
+        val c = GameJitter.choose(adaptive, GameJitter.Source.EXTRA, game = true)
+        assertEquals(GameJitter.Choice(adaptive, GameJitter.Source.EXTRA), c)
+        assertEquals("adaptive", GameJitter.label(c.bufferFrames))
+        val e = GameModeSettings.Values(60_000L, AudioOutPref.AUTO, penTrail = false, penDot = false)
+        assertEquals(
+            "action=enter overrides=bitrate,audio,pen jitter=adaptive jitter_src=extra bitrate_kbps=60000 audio_out=auto",
+            GameModeSettings.logFields(GameModeSettings.Change.ENTER, c, e),
+        )
+    }
+
     @Test fun launchJitterWins() {
         assertEquals(GameJitter.Choice(2, GameJitter.Source.EXTRA), GameJitter.choose(2, GameJitter.Source.EXTRA, game = true))
         assertEquals(GameJitter.Choice(1, GameJitter.Source.EXTRA), GameJitter.choose(1, GameJitter.Source.EXTRA, game = false))
