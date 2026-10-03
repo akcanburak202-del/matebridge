@@ -1,7 +1,7 @@
 ---
 id: T-177
 title: Add a live encoder bitrate setter (no restart) and verify VT honours it
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-162, T-176]
@@ -67,7 +67,30 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core, `EncoderSubmitOrder.swift`:**
+   - Saf `BitrateRequest` değer tipi: `[floor, ceiling]` (varsayılan `userBitrateRangeKbps` 5 000…150 000) aralığına kırpar, son uygulanan değere eşit isteği eler (başlangıç değeri yapılandırılmış bit hızı), `stop()` sonrası her isteği reddeder. Kararlar: `.apply(kbps)` / `.unchanged` / `.stopped`.
+   - Saf `RateLimitWindows`: `DataRateLimits` çiftleri. Varsayılan bugünkü `[2 × ort. bayt/s, 1 s]`; isteğe bağlı kısa pencere `[2 × ort. bayt/s × w, w]` eklenir.
+   - `CompressionBackend`'e `setBitrate(kbps:)` gereksinimi; varsayılan uygulaması boş.
+   - `EncoderSubmitOrder.setBitrate(kbps:)`: kilit altında `BitrateRequest`'e sorar. `.apply` ise bloğu kilit tutulurken sahip kuyruğuna ekler. Böylece submit'lerle FIFO sırasında kalır, `stop`'un teardown bloğundan sonra hiçbir set çağrısı backend'e ulaşmaz.
+2. **Core, `EncoderKnobs.swift`:**
+   - `BitrateStepKnob` (`MATEBRIDGE_BITRATE_STEP=60000,15000,60000@5s`): yoksa ya da geçersizse kapalı; değerler döngüyle uygulanır.
+   - `MATEBRIDGE_RATE_WINDOW_MS` (kısa `DataRateLimits` penceresi, tanı amaçlı): 10…1000, aksi halde kapalı.
+   - İkisi de `EncoderKnobs`'a eklenir, varsayılan kapalı. Doc yorumu kapanış kartını (T-196 ya da T-127 sonrası kaldırma) adlandırır. `logFields` yalnız ayar açıkken alan ekler, böylece varsayılan satır değişmez.
+3. **Host, `HEVCEncoder.swift`:**
+   - `setTargetBitrate(kbps:)` → `order.setBitrate`.
+   - `Backend.setBitrate` sahip kuyruğunda: `qualityApplied` değilse `AverageBitRate`, her durumda `DataRateLimits`. Ardından `video ev=bitrate_set kbps= avg_status=<st>|skipped limits_status=<st>`.
+   - Oluşturmada `DataRateLimits` aynı `RateLimitWindows`'tan gelir (varsayılan baytları değişmez).
+   - Adım ayarı açıksa bir `DispatchSourceTimer` `setTargetBitrate` çağırır; `beginStop`'ta iptal edilir.
+4. **Host, `VideoPipeline.swift`:** `setTargetBitrate(kbps:)` iletici (T-178/T-196 için yapı taşı). STREAM_CONFIG ya da restart yolu yok.
+5. **Testler (`Tests/.../Video/`):**
+   - `BitrateRequest`: kırpma, eleme, stop sonrası reddetme.
+   - Sahte backend ile sıra: set çağrıları submit'lerle sıralı, invalidate sonrası hiçbiri yok (bariyerle, sleep yok).
+   - Adım ayarı ve pencere ayrıştırıcısı; varsayılanlar değişmez.
+6. **`docs/LOGGING.md`:** ayrı bir "Canlı bit hızı" bölümü.
+
+**Riskler:**
+- `.fast` profil (RealTime=false, LLRC yok) `AverageBitRate` değişimini `noErr` ile kabul edip yok sayabilir (T-087 emsali). Bu cihazda ölçülür.
+- `CompressionBackend`'e gereksinim eklemek diğer uygulayıcıları etkiler. Varsayılan uygulama bunu önler.
 
 ## Handoff
 
