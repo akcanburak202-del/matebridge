@@ -43,7 +43,7 @@ Kısıtlar:
 
 Varsayılan bekletme süresi T-166 ölçümünden sonra seçilir. Ölçüm şunlara bakar: bekletilen ekran ekran uykusunu ve sistem uykusunu atlatıyor mu, pencere yerleşimi korunuyor mu, Parsec ekranı görebiliyor mu?
 
-Süre duvar saati olarak düşünülüyorsa sürekli saat (`mach_continuous_time`) kullanılır. `HostClock` uykuda ilerlemez (D ek 5). **Kullanıcı onayı bekliyor.**
+Süre duvar saati olarak düşünülüyorsa sürekli saat (`mach_continuous_time`) kullanılır. `HostClock` uykuda ilerlemez (D ek 5). **Kullanıcı onayı bekliyor.** Kullanıcı cevabı (2026-10-03, soru 1): uzak erişim Parsec; Parsec ulaşamazsa son çare Mac'e HDMI kablosuyla monitör bağlamak. FileVault kapalı. Varsayılan süre (soru 2) T-166'dan sonra sorulur.
 
 Kullanıcının cevaplaması gerekenler (manifest §5):
 1. **Varsayılan bekletme süresi (soru 2):** 10 sn, 5 dk, 30 dk ya da "Quit'e kadar"? Cevap T-166'dan sonra verilir.

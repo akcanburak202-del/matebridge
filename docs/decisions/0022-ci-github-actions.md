@@ -1,6 +1,6 @@
 # 0022 — Birleştirme kapısı olarak GitHub Actions CI
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -21,7 +21,7 @@ Depo **public** (docs/WORKFLOW.md:54). GitHub'ın barındırdığı macOS ve Lin
 - **(c) Mac mini'de kendi kendine barındırılan runner.** Gerçek donanıma en yakın seçenek. Ama günlük kullanılan makinede dış kod çalıştırır; public depoda bu güvenlik riski demek. Bakım da gerektirir.
 
 ## Karar
-Önerilen: **(b)**. `main` ve `task/*` dallarına her push'ta iki iş çalışır:
+Seçilen: **(b)**. `main` ve `task/*` dallarına her push'ta iki iş çalışır:
 - **macOS:** `check.sh --only host` ve `--only protocol`. Bu, `swift build` + `swift test`, kripto vektör farkı ve fixture denetimini kapsar.
 - **Linux:** `check.sh --only android` ve `--only protocol`. Android tarafı `assembleDebug testDebugUnitTest` çalıştırır; JDK, SDK, NDK ve CMake sdkmanager ile kurulur.
 
@@ -34,7 +34,7 @@ Kurallar:
 
 **CI'ın kapsamadığı yollar:** SCK, VideoToolbox, `CGVirtualDisplay`, MediaCodec, AAudio, TCC ve CGEvent gönderimi. Bunlar aygıt testlerinde kalır.
 
-**Kullanıcı onayı bekliyor.** Kullanıcının cevaplaması gereken (manifest §5 soru 4): GitHub Actions kullanılsın mı? Depo public olduğu için makine dakikaları ücretsiz. İlk hafta yalnızca bilgi versin, sonra zorunlu olsun mu?
+**Kullanıcı 2026-10-03'te onayladı:** ilk hafta yalnız bilgi, sonra zorunlu. Sorulan (manifest §5 soru 4): GitHub Actions kullanılsın mı? Depo public olduğu için makine dakikaları ücretsiz. İlk hafta yalnızca bilgi versin, sonra zorunlu olsun mu?
 
 ## Sonuçlar
 - **Kazanılan:**

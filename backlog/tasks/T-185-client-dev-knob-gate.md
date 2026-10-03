@@ -73,6 +73,7 @@ Wire: none.
 
 ## Kabul kriterleri
 
+- [ ] [manifest] Other apps can no longer launch `VideoTestActivity` (`client-android/app/src/debug/AndroidManifest.xml`; T-182 finding, `docs/KNOBS.md` *Açık noktalar* 2: the daily APK is the debug variant, so today any app can start it with `fps`/`full_range`/`primaries`). If it is still launched over adb, keep it exported but guard it with a permission only the shell holds (e.g. `android:permission="android.permission.DUMP"`) and confirm `adb shell am start -n …/.VideoTestActivity` still works; otherwise set `exported="false"`. Note: a non-exported activity cannot be started from `adb shell am start` either. Added by the orchestrator 2026-10-03.
 - [ ] [JVM] `DevKnobsTest`: without `dev` every debug-only key keeps its default and is listed in `ignored`; with `dev=true` all are applied; keep-class keys (`stats_1s`, `pace_trace`, `stall_diag`) apply either way; absent extras give an empty ignore list.
 - [ ] [JVM] The `ev=profile` field builder produces the documented fields and never contains an endpoint address, serial number or device ID.
 - [ ] [JVM] `NetBenchTest` still passes after the move to `src/debug`.

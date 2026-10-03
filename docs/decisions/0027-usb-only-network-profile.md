@@ -1,6 +1,6 @@
 # 0027 — Host'ta "Yalnız USB" ağ profili
 
-- **Durum:** önerildi
+- **Durum:** kabul (2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -27,7 +27,7 @@ Günlük kullanım çoğunlukla USB (`adb reverse`). USB oturumları zaten loopb
   - Wi-Fi yedek yolu ve uyandırma akışları (T-133/T-134) çalışmaz. İstemci mevcut USB ipucunu gösterir.
 
 ## Karar
-Önerilen: **(c)**. Varsayılan "USB + Wi-Fi" olarak kalır. Mod menüden açılır ve kapanır. Değişince, canlı oturum yokken dinleyiciler temiz biçimde yeniden başlar. Tel değişmez. **Kullanıcı onayı bekliyor.**
+Seçilen: **(c)**. Varsayılan "USB + Wi-Fi" olarak kalır. Mod menüden açılır ve kapanır. Değişince, canlı oturum yokken dinleyiciler temiz biçimde yeniden başlar. Tel değişmez. **Kullanıcı 2026-10-03'te onayladı** (düşük öncelik, T-186'dan sonra).
 
 Kullanıcının cevaplaması gereken (manifest §5 soru 6): "Yalnız USB" modu ister misin? Varsayılan USB + Wi-Fi kalır.
 

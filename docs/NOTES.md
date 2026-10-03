@@ -1125,3 +1125,10 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - Mac: macOS 27.0.1 (26A434), Apple Swift 6.4.
 - Sonuç: **`check.sh: ALL OK`, çıkış 0.** host-mac `swift build` + `swift test` (XCTest 334, Swift Testing 682 test, 0 hata); probe'lar (pen-sink, vdisplay) derlendi ve testleri geçti; gradle `client-android`, `aaudio-probe`, `input-probe` geçti; protokol fixture'ları ve kripto vektörleri güncel.
 - Bu yalnız derleme/test kaydı. T-147'nin "son sağlam sürüm çifti" için gereken HarmonyOS build ve APK SHA'sı cihaz provasında eklenecek.
+
+## 2026-10-03 — Kullanıcı cevapları: uzak erişim, FileVault, Wi-Fi rolü (T-147, 0020, 0023)
+
+- **Uzak erişim:** tablet boşken Mac'e Parsec ile ulaşılır. Parsec de ulaşamazsa son çare Mac'e HDMI kablosuyla monitör bağlamak. SSH ve Ekran Paylaşımı kullanılmıyor.
+- **FileVault:** kapalı. Yeniden başlatma sonrası açılış ekranı yerel klavye istemez; otomatik giriş durumu T-147 provasında kontrol edilecek.
+- **Wi-Fi:** yedek yol kalır, asıl yol USB. Wi-Fi işleri (T-127, T-178, T-195–T-198) düşük öncelikte; 0024 (Wi-Fi'de kalem) park.
+- **0021 / 0025:** ilke olarak kabul; seçenek ve eşik T-170 / T-171 verisiyle seçilip kullanıcıya gösterilecek.

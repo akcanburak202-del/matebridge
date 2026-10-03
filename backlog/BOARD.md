@@ -2,13 +2,6 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
-## blocked
-
-| ID | Başlık | Aşama | Sahip | Bağımlılık |
-|---|---|---|---|---|
-| [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
-| [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
-
 ## todo
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -47,7 +40,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
 | [T-181](tasks/T-181-palm-before-pen-measurement.md) | Measure palm-before-pen clicks and the touchMajor distribution | 6 | orchestrator | [] |
-| [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
 | [T-183](tasks/T-183-client-retire-experiments.md) | Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept) | 6 | android-client-dev | [T-182, T-168] |
 | [T-184](tasks/T-184-client-retire-gl-path.md) | Retire the GL presentation path | 6 | android-client-dev | [T-183] |
 | [T-185](tasks/T-185-client-dev-knob-gate.md) | Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug | 6 | android-client-dev | [T-184, T-146] |
@@ -94,6 +86,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-016](tasks/T-016-video-smoothness.md) | Görüntü akıcılığı — kare zamanlaması, 120 Hz, titreşim ölçümü | 1 | android-client-dev | [T-015] |
 | [T-017](tasks/T-017-host-frame-cadence.md) | Mac kare temposu — yakalama aralığı ölçümü, sanal ekran yenileme hızı, kayıp karelerin kaynağı | 1 | mac-host-dev | [T-014] |
 | [T-018](tasks/T-018-client-gl-presentation.md) | Tablette sunum kontrolü — GL yolu (SurfaceTexture), vsync'e hizalı çizim, 120 Hz denemesi | 1 | android-client-dev | [T-016, T-017] |
+| [T-019](tasks/T-019-gl-jitter-wifilock.md) | Akıcılık — GL yolunda titreşim tamponu ve Wi-Fi düşük gecikme kilidi | 1 | android-client-dev | [T-018] |
 | [T-020](tasks/T-020-host-fixed-ports-usb.md) | Mac — sabit varsayılan portlar ve USB modu betiği | 1 | mac-host-dev | [T-014] |
 | [T-021](tasks/T-021-client-usb-connect.md) | Android — "USB ile bağlan" seçeneği | 1 | android-client-dev | [T-015] |
 | [T-022](tasks/T-022-host-input-state.md) | Mac girdi durum makinesi — kalem, işaretçi, dokunma, release-all (saf, testli) | 2 | mac-host-dev | [T-014] |
@@ -141,6 +134,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-064](tasks/T-064-pen-overlay-default-off.md) | Yerel kalem izi/noktası varsayılan kapalı | 5 | android-client-dev | [T-056] |
 | [T-065](tasks/T-065-client-newest-frame-always-shown.md) | Tablet — en yeni kare her zaman gösterilir (seyrek karelerde faz kilidi kareyi atıyor; yazarken donma) | 5 | android-client-dev | [T-057, T-060, T-061] |
 | [T-066](tasks/T-066-host-decimation-hold-last-frame.md) | Mac — seyreltmede ızgaradan erken gelen kare atılmaz, tutulur (son değişiklik her zaman gönderilir) | 5 | mac-host-dev | [T-058] |
+| [T-067](tasks/T-067-client-lock-recenter.md) | Tablet — faz kilidi geç kare oranına göre yeniden ortalanır; boşta kalınca jitter geçmişi silinmez | 5 | android-client-dev | [T-065] |
 | [T-068](tasks/T-068-client-deadline-knob.md) | Tablet — sunum son anı (presentationDeadline) için deney düğmesi ve geç kare kenar payı ölçümü | 5 | android-client-dev | [T-065] |
 | [T-069](tasks/T-069-client-pace-trace.md) | Tablet — kare başına sunum izi (pace trace) dosyaya, deney anahtarıyla | 5 | android-client-dev | [T-068] |
 | [T-070](tasks/T-070-host-latency-breakdown.md) | Mac — yakalama→gönderim gecikme dökümü (SCK teslim, kodlama, kuyruk, soket yazımı) ve sıçrama kaynağı | 5 | mac-host-dev | [T-066] |
@@ -221,3 +215,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-146](tasks/T-146-client-build-identity.md) | Log and show the client build commit | 6 | android-client-dev | [] |
 | [T-148](tasks/T-148-host-login-item-retry.md) | Retry login-item registration after a failure | 6 | mac-host-dev | [] |
 | [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |
+| [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
