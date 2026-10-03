@@ -45,7 +45,7 @@ Ev ağında MatePad'i açınca Mac mini'nin ekranı tabletin OLED ekranında **t
 - **Kalem basıncı ve eğimi çekirdek özellik.** V2.1'de M6'daydı, burada Aşama 2'de.
 - **Sanal ekran çekirdek özellik.** Tablet tam çözünürlüğünde, Mac'e ayrı bir ekran olarak bağlanır. Netlik için şart. Dummy plug gerekmez.
 
-**Atılan / ertelenen:** ADR'ler, 16 maddelik varsayım kaydı, ajan kuralları, CI, benchmark altyapısı, `PEN_DISPLAY`, interaction-aware scheduling, tile/adaptive motor, internet erişimi, installer, imzalama/notarization.
+**Atılan / ertelenen:** ADR'ler, 16 maddelik varsayım kaydı, ajan kuralları, benchmark altyapısı, `PEN_DISPLAY`, interaction-aware scheduling, tile/adaptive motor, internet erişimi, installer, imzalama/notarization. (CI artık var: bkz. karar 0022.)
 
 ## 4. Mimari
 

@@ -1,0 +1,112 @@
+# Merge gate (decision 0022, T-149): scripts/check.sh split by component on GitHub-hosted runners.
+# Not covered here (device tests only): ScreenCaptureKit, VideoToolbox, CGVirtualDisplay, MediaCodec, AAudio, TCC,
+# CGEvent posting, probes. Only first-party actions (actions/checkout, actions/setup-java, actions/cache).
+name: check
+
+on:
+  push:
+    branches: [main, "task/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  # Superseded task-branch runs are cancelled; every main commit keeps its own record.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  changes:
+    # Git-only path filter for the macOS job (third-party filter actions are not allowed by 0022).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mac: ${{ steps.filter.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # main: what this push added. task/**: everything the branch would merge. Unknown base: run everything.
+          mac=true
+          if [ "$EVENT" = push ]; then
+            if [ "$GITHUB_REF" = refs/heads/main ]; then
+              base=$BEFORE
+            else
+              base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+            fi
+            if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+              changed=$(git diff --name-only "$base" HEAD)
+              echo "changed files since ${base}:"
+              echo "$changed"
+              if grep -qE '^(host-mac/|protocol/|\.github/workflows/|scripts/check\.sh$|docs/PROTOCOL\.md$)' <<<"$changed"; then
+                mac=true
+              else
+                mac=false
+              fi
+            else
+              echo "no usable base commit ('${base}'); running every job"
+            fi
+          fi
+          echo "mac=$mac"
+          echo "mac=$mac" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: changes
+    if: needs.changes.outputs.mac == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Toolchain
+        id: toolchain
+        run: |
+          sw_vers
+          xcode-select -p
+          swift --version
+          echo "key=$(swift --version 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: host-mac/.build
+          key: swiftpm-${{ runner.os }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('host-mac/Package.swift', 'host-mac/Package.resolved') }}
+      - name: check.sh --only host
+        run: ./scripts/check.sh --only host
+      - name: check.sh --only protocol
+        if: ${{ !cancelled() }}
+        run: ./scripts/check.sh --only protocol
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # T-146: versionCode is the commit count; a shallow clone would build versionCode 1.
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            client-android/*.gradle.kts
+            client-android/app/*.gradle.kts
+            client-android/gradle.properties
+            client-android/gradle/wrapper/gradle-wrapper.properties
+      - name: Android SDK packages
+        run: |
+          # The runner image ships the SDK (ANDROID_HOME) and sdkmanager; install what client-android/app pins.
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "platforms;android-37.0" "build-tools;36.0.0" "ndk;30.0.16248370" "cmake;4.1.2" > /dev/null
+          "$sdkmanager" --list_installed
+      - name: check.sh --only android
+        run: ./scripts/check.sh --only android
+      - name: check.sh --only protocol
+        if: ${{ !cancelled() }}
+        run: ./scripts/check.sh --only protocol
