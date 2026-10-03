@@ -38,10 +38,9 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
-- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd|nw notsent_lowat_kb=<n>|na control_socket=bsd|nw tcp_log=auto|on|off`: dinleyiciler hazır.
+- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off`: dinleyiciler hazır.
   - `service_class` → `MATEBRIDGE_SERVICE_CLASS` (T-088). Varsayılan T-124'ten beri `signaling`: `video_class=interactiveVideo control_class=interactiveVoice` (Wi-Fi'de video AC_VI, kontrol/ses AC_VO). `off` sınıfları ayarlamaz (T-088 öncesi davranış) ve yalnızca `service_class=off` yazar. Tanınmayan değer varsayılana düşer. USB'de (adb tüneli) etkisizdir.
-  - `video_socket` → `MATEBRIDGE_VIDEO_SOCKET` (T-091/T-092).
-  - `control_socket` → `MATEBRIDGE_CONTROL_SOCKET` (T-111). İkisinin de varsayılanı `bsd` (çekirdek soketi); `nw` Network.framework geri dönüşü.
+  - `video_socket` ve `control_socket` T-186'dan beri hep `bsd` (çekirdek soketi). Network.framework (`nw`) soketleri kaldırıldı (karar 0026); `MATEBRIDGE_VIDEO_SOCKET`/`MATEBRIDGE_CONTROL_SOCKET` artık okunmaz. Alanlar log ayrıştırıcıları kırılmasın diye sabit olarak kalır.
   - `tcp_log` → `MATEBRIDGE_TCP_LOG` (T-126), bkz. aşağıda "Kontrol ve video soketlerinin TCP durumu".
 - `ev=bonjour_registered port=…`: `bsd` kontrol dinleyicisinin `_matebridge._tcp` kaydı yapıldı. Ad loglanmaz.
 - `ev=bonjour_failed code=<dns_sd hata kodu> retry_s=<n>`: kayıt başarısız ya da sonradan koptu; 1…30 sn geri çekilmeyle yeniden denenir. Oturumlar etkilenmez.

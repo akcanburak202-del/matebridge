@@ -69,7 +69,7 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 22 | `--ez stall_diag true` | false | MA:497-498; `…/diag/StallDetector.kt` | T-120/T-142; N:1088 | kalır (tanı) | Zaten isteğe bağlı | — |
 | 23 | `--es net_bench host:port` (+ `net_bench_s`, `net_bench_dir`, `net_bench_streams`, `net_bench_rcvbuf_kb`) | yok; alt anahtarlar 8 s (1–600), `down`, 1 (1–4), işletim sistemi varsayılanı (≤ 65 536 KB) | MA:359-366; `…/bench/NetBench.kt:39-59`; `…/bench/NetBenchActivity.kt:33`; `…/bench/*` (322 satır); `AndroidManifest.xml:34-39` | T-090 | yalnızca geliştirici; `src/debug` kaynak setine taşınır | `NWConnection` kök nedenini kanıtladı; nadiren gerekli | T-185 |
 
-## Host ortam değişkenleri (25)
+## Host ortam değişkenleri (25; T-186 sonrası 23 okunuyor)
 
 Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, varsayılan dışı değeri `ev=profile` satırında görünür (T-204).
 
@@ -86,7 +86,7 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 | 32 | `MATEBRIDGE_INPUT_RETAG=0` | 1 (açık) | `host-mac/Sources/MateBridgeCore/Video/InputColorTags.swift:36-38`; EK:153-163; HE:318; Core `EncodeBench.swift:102` | T-113; N:758-805 | kaldırılır (retag her zaman açık) | Düzeltme kanıtlandı (−2,7 ms, doğru renk); `=0` bilinen bir renk/gecikme hatasını geri getirir | T-204 |
 | 33 | `MATEBRIDGE_WIFI_BITRATE_KBPS` | yok | `host-mac/Sources/MateBridgeCore/Video/TransportBitrate.swift:20-28` | T-088 | yalnızca geliştirici | Bugün tek Wi-Fi bit hızı sınırı; H03 girdisi. T-178 Wi-Fi varsayılanı ekler | T-204 (profil) |
 | 34 | `MATEBRIDGE_SERVICE_CLASS` | `signaling` | TK:21-43 | T-088/T-124; N:958-959 | yalnızca geliştirici | `signaling` varsayılan olarak benimsendi | T-204 (profil) |
-| 35 | `MATEBRIDGE_VIDEO_SOCKET=nw`, `MATEBRIDGE_CONTROL_SOCKET=nw` | `bsd`, `bsd` | TK:79-95, :138-153; SS:3, :34-38, :112-115, :336-375, :561-600, :955-987, :1125-1205; `host-mac/Sources/MateBridgeHost/Session/TcpSocketProbe.swift` (NWConnection varyantı) | T-091/T-092/T-111; N:620-643 | kaldırılır (**kullanıcı onayladı, 2026-10-03**) | `NWConnection`'ın kullanıcı alanı TCP'si Wi-Fi'de ~27 Mbps tavan ve yeniden iletimler. Bonjour `BonjourAdvertiser`'da kalmalı (SS:228, :1084) | T-186 |
+| 35 | `MATEBRIDGE_VIDEO_SOCKET=nw`, `MATEBRIDGE_CONTROL_SOCKET=nw` | `bsd`, `bsd` | TK:79-95, :138-153; SS:3, :34-38, :112-115, :336-375, :561-600, :955-987, :1125-1205; `host-mac/Sources/MateBridgeHost/Session/TcpSocketProbe.swift` (NWConnection varyantı) | T-091/T-092/T-111; N:620-643 | **kaldırıldı (T-186, 2026-10-03)** | `NWConnection`'ın kullanıcı alanı TCP'si Wi-Fi'de ~27 Mbps tavan ve yeniden iletimler. Bonjour `BonjourAdvertiser`'da kalmalı (SS:228, :1084) | T-186 |
 | 36 | `MATEBRIDGE_NOTSENT_LOWAT_KB` | 128 (16–4096) | TK:98-112 | T-091; N:643 | yalnızca geliştirici | H03 ayarı; 64/128/256 farkı gürültü düzeyinde | T-204 (profil) |
 | 37 | `MATEBRIDGE_SENDQ_LOG`, `MATEBRIDGE_LAT_TRACE` | 0, 0 | TK:69-76; SS:309; `host-mac/Sources/MateBridgeHost/Video/LatencyCsv.swift:13`; `VideoPipeline.swift:38` | T-070/T-088 | kalır (tanı) | H03/H05/M07 izleri için gerekli | — |
 | 38 | `MATEBRIDGE_TCP_LOG` | `auto` (yalnızca Wi-Fi) | `host-mac/Sources/MateBridgeCore/Session/TcpInfoLog.swift:129-145`; SS:311 | T-126 | kalır (tanı) | — | — |

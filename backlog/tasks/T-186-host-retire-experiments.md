@@ -1,7 +1,7 @@
 ---
 id: T-186
 title: Retire the host Network.framework (`nw`) socket stack
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-182, T-171]

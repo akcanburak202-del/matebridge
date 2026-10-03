@@ -28,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-183](tasks/T-183-client-retire-experiments.md) | Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept) | 6 | android-client-dev | [T-182, T-168] |
 | [T-184](tasks/T-184-client-retire-gl-path.md) | Retire the GL presentation path | 6 | android-client-dev | [T-183] |
 | [T-185](tasks/T-185-client-dev-knob-gate.md) | Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug | 6 | android-client-dev | [T-184, T-146] |
-| [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |
 | [T-187](tasks/T-187-host-encoder-hw-warning.md) | Warn when VideoToolbox did not select the hardware encoder | 6 | mac-host-dev | [T-204] |
 | [T-188](tasks/T-188-colour-range-check.md) | Check stream colour, range and chroma fidelity with test patterns | 6 | user | [] |
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
@@ -216,3 +215,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
+| [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |
