@@ -1,7 +1,7 @@
 ---
 id: T-154
 title: Exclude app data from device-to-device and cloud transfer
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -34,22 +34,31 @@ Source: external architecture review 2026-10-03 (SE1); verification: docs/review
 
 ## Kabul kriterleri
 
-- [ ] [build] `AndroidManifest.xml` sets `android:dataExtractionRules="@xml/data_extraction_rules"` and keeps `android:allowBackup="false"`.
-- [ ] [build] `data_extraction_rules.xml` excludes all shared preferences (`matebridge`, `matebridge_pairkeys`, `matebridge_audio`) from both `<cloud-backup>` and `<device-transfer>`.
-- [ ] [build] `./gradlew assembleDebug` passes, and `aapt2 dump xmltree --file AndroidManifest.xml <app-debug.apk>` shows the `dataExtractionRules` attribute on `<application>` (output quoted in Handoff).
+- [x] [build] `AndroidManifest.xml` sets `android:dataExtractionRules="@xml/data_extraction_rules"` and keeps `android:allowBackup="false"`.
+- [x] [build] `data_extraction_rules.xml` excludes all shared preferences (`matebridge`, `matebridge_pairkeys`, `matebridge_audio`) from both `<cloud-backup>` and `<device-transfer>`.
+- [x] [build] `./gradlew assembleDebug` passes, and `aapt2 dump xmltree --file AndroidManifest.xml <app-debug.apk>` shows the `dataExtractionRules` attribute on `<application>` (output quoted in Handoff).
 - [ ] [device] Not verifiable on the tablet (would need a HarmonyOS Phone Clone transfer to a second device): state "not run" in Handoff.
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `client-android/app/src/main/res/xml/data_extraction_rules.xml` oluştur: `<cloud-backup>` ve `<device-transfer>` bölümlerinin her ikisinde `sharedpref`, `database`, `file` ve `root` domain'lerini `path="."` ile hariç tut (tüm mevcut ve gelecekteki tercih dosyaları: `matebridge`, `matebridge_pairkeys`, `matebridge_audio`; cache zaten yedeklenmez).
+2. `AndroidManifest.xml` `<application>`: `android:dataExtractionRules="@xml/data_extraction_rules"` ekle, `android:allowBackup="false"` kalsın (API 29/30 için). Lint `fullBackupContent` isterse ikinci kural dosyası yerine yorumlu `tools:ignore` kullan.
+3. `./gradlew assembleDebug` + `aapt2 dump xmltree` ile APK manifestinde özniteliği doğrula; `./scripts/check.sh`.
+- Risk: yok denecek kadar düşük; çalışma zamanı davranışı değişmez. HarmonyOS Phone Clone'un AOSP D2D kurallarına uyup uymadığı bilinmiyor (cihazda doğrulanamaz).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+- **Commit:** `c04e39c` (implementation; plan commit `6480173`), branch `task/T-154-client-data-extraction-rules`.
+- **Dokunulan dosyalar:** `client-android/app/src/main/AndroidManifest.xml`, `client-android/app/src/main/res/xml/data_extraction_rules.xml` (new), this card.
+- **Değişiklik:** `data_extraction_rules.xml` excludes `root`, `file`, `database` and `sharedpref` (`path="."`) in both `<cloud-backup>` and `<device-transfer>`, which covers `matebridge`, `matebridge_pairkeys`, `matebridge_audio` and any future prefs/files. The manifest adds `android:dataExtractionRules="@xml/data_extraction_rules"`, keeps `android:allowBackup="false"`, and suppresses lint `DataExtractionRules` (the warning that asks for `fullBackupContent` because minSdk 29 < 31) with an explanatory comment, as the card suggests. No second rules file.
+- **Doğrulama:** `./gradlew assembleDebug` OK; `./scripts/check.sh` → `check.sh: ALL OK`. `aapt2 dump xmltree --file AndroidManifest.xml app-debug.apk` (build-tools 36.0.0), `<application>` excerpt:
+  ```
+  E: application (line=16)
+    A: http://schemas.android.com/apk/res/android:allowBackup(0x01010280)=false
+    A: http://schemas.android.com/apk/res/android:dataExtractionRules(0x0101063e)=@0x7f060000
+  ```
+  `res/xml/data_extraction_rules.xml` in the APK shows the four `exclude` entries under both `cloud-backup` and `device-transfer`.
+- **Varsayımlar:** Excluding every domain (not only `sharedpref`) is acceptable per the card's plan hints; the app has nothing it wants to migrate. `cacheDir` (`pace_trace.csv`) is never backed up anyway.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** [device] **not run.** It would need a HarmonyOS Phone Clone transfer to a second device, and whether Phone Clone honours AOSP `dataExtractionRules` is unknown (manifest §5 Q17). Only a smoke check is useful on the tablet: install over the existing app and confirm it launches, the stored settings, `device_id` and pairing survive (`allowBackup`/rules do not affect local data), and it reconnects to the Mac as before.
+- **Açık sorular:** `./gradlew lintDebug` (not part of check.sh) still fails on two pre-existing errors that this card does not touch: `ExpiredTargetSdkVersion` (`app/build.gradle.kts:14`, `targetSdk = 31`) and `WrongConstant` (`MainActivity.kt:575`, InputDevice source class). This card adds no lint findings.
