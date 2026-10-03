@@ -301,12 +301,16 @@ public final class TabletFilesBridge: @unchecked Sendable {
     // MARK: Mount
 
     private func mount(localPort: UInt16, secret: FilesSecret, generation: UInt64, knownPath: String?) {
-        // Only a volume this session mounted itself is reused; anything else on the port is not adopted.
+        // Only a volume this session mounted itself is reused, and only while it is still that exact volume (the
+        // planner compares its identity, T-209); anything else on the port is not adopted.
         if let knownPath, let known = Self.mountEntries(localPort: localPort).first(where: { $0.path == knownPath }) {
-            logger.log(.info, "mount", sessionID: 0, generation: 0, fields: "result=ok already=1")
-            apply(planner.mountFinished(generation: generation, localPort: localPort, path: knownPath,
-                                        identity: known.identity))
-            return
+            if let next = planner.mountReused(generation: generation, localPort: localPort, path: knownPath,
+                                              identity: known.identity) {
+                logger.log(.info, "mount", sessionID: 0, generation: 0, fields: "result=ok already=1")
+                apply(next)
+                return
+            }
+            logger.log(.warning, "mount", sessionID: 0, generation: 0, fields: "already=0 reason=identity")
         }
         // Credentials go only as the user/password arguments: not in the URL, no UI, nothing saved.
         let openOptions = NSMutableDictionary()

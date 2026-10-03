@@ -428,8 +428,28 @@ public struct TabletFilesPlanner: Sendable {
         return out
     }
 
+    /// The host, executing `mount` with a `knownPath`, found a volume of ours (WebDAV from `127.0.0.1:<localPort>`)
+    /// at that path with `identity` (nil: unreadable). Returns what to do when it is our volume and is reused: it
+    /// must be the current request's `mountedPath`, and if we hold an identity for it, exactly that one. The
+    /// identity we hold is kept: a reuse never records a new one. Returns nil when it is not provably the volume we
+    /// mounted (e.g. ejected, then someone else mounted the same URL at that path): our record of the path is
+    /// forgotten and the host mounts afresh (or reports why it cannot). A stale request returns no actions.
+    public mutating func mountReused(generation: UInt64, localPort: UInt16, path: String,
+                                     identity: VolumeIdentity?) -> [TabletFilesAction]? {
+        guard !isShutDown, let gen = mountingGeneration, gen == generation else { return [] }
+        guard let mountedPath, Self.samePath(mountedPath, path),
+              mountedOrigin.identity == nil || mountedOrigin.identity == identity else {
+            self.mountedPath = nil
+            mountedOrigin = MountOrigin()
+            return nil
+        }
+        return mountFinished(generation: generation, localPort: localPort, path: mountedPath,
+                             identity: mountedOrigin.identity)
+    }
+
     /// Result of `mount`; `path` is the mount point on success, nil on failure. `identity`: the mount table entry of
-    /// `path` right after the mount (nil if the host could not read it: then that volume is never forced).
+    /// `path` right after a mount we just made (nil if the host could not read it: then that volume is never
+    /// forced). A reused volume goes through `mountReused` instead.
     public mutating func mountFinished(generation: UInt64, localPort: UInt16, path: String?,
                                        identity: VolumeIdentity? = nil) -> [TabletFilesAction] {
         if let gen = mountingGeneration, gen == generation {

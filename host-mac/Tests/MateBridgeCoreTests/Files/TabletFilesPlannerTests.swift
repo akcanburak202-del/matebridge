@@ -901,6 +901,68 @@ private func deadLeftoverWithForward() -> TabletFilesPlanner {
         #expect(TabletFilesPlanner.identityMatches(expected: noSlash, current: noSlash, localPort: 47010))
     }
 
+    @Test func reopeningAReplacedVolumeNeverAdoptsItAndNeverForcesIt() {
+        // Codex P2 (second pass): our volume was ejected, another client mounted the same URL at the same path, and
+        // the user reopens before the eject notification arrives.
+        let replacement = VolumeIdentity(fsid: 0x0000_002a_0000_0077, fsType: "webdav",
+                                         mountedFrom: ourVolume.mountedFrom)
+        var p = mounted()
+        let open = p.openRequested()
+        let gen = mountGen(open)!
+        #expect(open == [.mount(localPort: 47010, secret: FilesSecret(token), generation: gen, knownPath: volume)])
+        // The host finds a volume at the known path, but it is not the one we mounted: not adopted.
+        #expect(p.mountReused(generation: gen, localPort: 47010, path: volume, identity: replacement) == nil)
+        #expect(p.watchedPaths.isEmpty)  // our record of that path is gone
+        #expect(p.menu == .mounting)  // the host mounts afresh
+        // Afresh, NetFS lands elsewhere; a later eject notification of the old path is not ours any more.
+        _ = p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad-1", identity: ourVolume)
+        let late = p.volumeUnmounted(path: volume, mountedNow: [volume, "/Volumes/MatePad-1"])
+        #expect(!late)
+        // Token change with both busy: only our own new volume can be forced, never the replacement.
+        #expect(p.filesInfo(restarted) == [.unmount(localPort: 47010)])
+        let next = p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume, "/Volumes/MatePad-1"])
+        #expect(next == [.forceUnmount(path: "/Volumes/MatePad-1", localPort: 47010, identity: ourVolume)])
+        #expect(p.leftoverPaths == ["/Volumes/MatePad-1"])
+
+        // The same, but the fresh mount collides with the replacement (EEXIST): nothing is forced, ever.
+        var q = mounted()
+        let qGen = mountGen(q.openRequested())!
+        #expect(q.mountReused(generation: qGen, localPort: 47010, path: volume, identity: replacement) == nil)
+        #expect(q.mountCollided(generation: qGen, localPort: 47010, mountedNow: [volume]).isEmpty)
+        #expect(q.menu == .ready(lastMountFailed: true))
+        let restart = q.filesInfo(restarted)  // no current volume: the T-206 remount follows the unmount
+        #expect(restart.first == .unmount(localPort: 47010) && mountGen(restart) != nil)
+        #expect(q.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume]).isEmpty)
+        #expect(q.leftoverPaths.isEmpty)
+    }
+
+    @Test func reopeningOurOwnVolumeKeepsTheIdentityWeRecorded() {
+        var p = mounted()
+        let gen = mountGen(p.openRequested())!
+        #expect(p.mountReused(generation: gen, localPort: 47010, path: volume + "/", identity: ourVolume)
+            == [.reveal(path: volume)])
+        _ = p.filesInfo(restarted)
+        #expect(p.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+            == [.forceUnmount(path: volume, localPort: 47010, identity: ourVolume)])
+
+        // No identity recorded at mount time: reused by path as before, but it stays unforceable.
+        var q = forwarded()
+        let first = mountGen(q.openRequested())!
+        _ = q.mountFinished(generation: first, localPort: 47010, path: volume)
+        let again = mountGen(q.openRequested())!
+        #expect(q.mountReused(generation: again, localPort: 47010, path: volume, identity: ourVolume)
+            == [.reveal(path: volume)])
+        _ = q.filesInfo(restarted)
+        let next = q.unmountFinished(localPort: 47010, detached: [], stillMounted: [volume])
+        #expect(!next.contains { if case .forceUnmount = $0 { true } else { false } })
+
+        // A stale request reuses nothing and mounts nothing.
+        var r = mounted()
+        let stale = mountGen(r.openRequested())!
+        _ = r.sessionEnded()
+        #expect(r.mountReused(generation: stale, localPort: 47010, path: volume, identity: ourVolume) == [])
+    }
+
     @Test func teardownDropsAPendingCollisionRetry() {
         var p = deadLeftoverWithForward()
         let gen = mountGen(p.openRequested())!
