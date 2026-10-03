@@ -96,7 +96,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
 - Kare gelmeyen pencere yazılmaz. Akış biterken ya da yeniden yapılandırılırken yarım pencere yazılır.
 - Açılışta `render ev=stats_log window_ms=10000|1000`.
 - Vsync döngüsü ≥ 1 s uyuduğunda `render ev=idle state=on since_frame_ms=<n>`, uyanınca `state=off idle_ms=<n>`.
-- Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`, `render ev=gl_stats`) değişmedi.
+- Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`) değişmedi.
 
 ## Keyframe isteği birleştirme (Mac, `net`, T-122)
 
@@ -382,4 +382,4 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
 
 ## Kaldırılan istemci deney olayları (T-183, karar 0026)
 
-Artık yazılmaz: `ev=perf_hint`, `perf_hint_target`, `perf_hint_error`, `rvote_config`, `rvote`, `rvote_reflect`, `rvote_reflect_failed`, `crypto_bench`. `ev=display_timing`'den `keep_jitter= recenter= pacer= cpd_q_permille= cpd_hold_us= inflight=` alanları, `ev=present`'ten `recenters=` çıktı; `present` satırındaki `inflight_limit=` hep 0. Kaldırılan açılış parametreleri (`perf_hint`, `rvote`, `pacer=cpd`, `inflight`, `recenter`, `keep_jitter`, `crypto_bench`, `oprate`) yok sayılır.
+Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=render_mode` (GL yolu, T-184), `ev=perf_hint`, `perf_hint_target`, `perf_hint_error`, `rvote_config`, `rvote`, `rvote_reflect`, `rvote_reflect_failed`, `crypto_bench`. `ev=display_timing`'den `keep_jitter= recenter= pacer= cpd_q_permille= cpd_hold_us= inflight=` alanları, `ev=present`'ten `recenters=` çıktı; `present` satırındaki `inflight_limit=` hep 0. Kaldırılan açılış parametreleri (`render`, `frate`, `glpts` — T-184; `perf_hint`, `rvote`, `pacer=cpd`, `inflight`, `recenter`, `keep_jitter`, `crypto_bench`, `oprate`) yok sayılır.

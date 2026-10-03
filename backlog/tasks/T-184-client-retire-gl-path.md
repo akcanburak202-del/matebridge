@@ -1,7 +1,7 @@
 ---
 id: T-184
 title: Retire the GL presentation path
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-183]
