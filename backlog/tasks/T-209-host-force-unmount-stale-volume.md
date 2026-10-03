@@ -1,7 +1,7 @@
 ---
 id: T-209
 title: Force-unmount a stale tablet files volume when its token is dead, then remount
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-206]
@@ -31,10 +31,10 @@ Cihaz 2026-10-04 ~01:10: tablet uygulaması birkaç kez yeniden başlatıldı (h
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Token değişti + çıkarma EBUSY → bir kez zorla çıkarma → başarılıysa yeni token ile bağlama (yeniden bağlama niyeti varsa) ya da kullanıcı açtığında bağlama başarılı.
-- [ ] [XCTest] Bağlama EEXIST ve yol bizim ölü birimimiz → zorla çıkar + bir kez yeniden dene; yol bizim değilse zorla çıkarma yok, hata görünür.
-- [ ] [XCTest] Geçerli token'lı birimde zorla çıkarma asla yok (oturum sonu teardown'da EBUSY → normal yeniden deneme, bugünkü gibi).
-- [ ] [XCTest] Zorla çıkarma kullanıcı "Çıkar"ı (T-206 eject) sayılmaz.
+- [x] [XCTest] Token değişti + çıkarma EBUSY → bir kez zorla çıkarma → başarılıysa yeni token ile bağlama (yeniden bağlama niyeti varsa) ya da kullanıcı açtığında bağlama başarılı. _(`tokenChangeWithABusyVolumeForcesItOnceThenRemounts`, `busyVolumeLeftAtSessionEndIsForcedOnceTheNextSessionHasANewToken`, `remountAfterOffWaitsForThePendingForce`)_
+- [x] [XCTest] Bağlama EEXIST ve yol bizim ölü birimimiz → zorla çıkar + bir kez yeniden dene; yol bizim değilse zorla çıkarma yok, hata görünür. _(`mountCollidingWithADeadLeftoverForcesItAndRetriesOnce`, `collisionRetryIsTriedOnlyOnce`, `collisionWithAVolumeThatIsNotOursForcesNothing`)_
+- [x] [XCTest] Geçerli token'lı birimde zorla çıkarma asla yok (oturum sonu teardown'da EBUSY → normal yeniden deneme, bugünkü gibi). _(`liveTokenVolumeIsNeverForced`)_
+- [x] [XCTest] Zorla çıkarma kullanıcı "Çıkar"ı (T-206 eject) sayılmaz. _(`forcedUnmountIsNotAnEject`)_
 - [ ] [device] MatePad Finder'da açıkken tablet uygulamasını yeniden başlat (force-stop + start): birim birkaç saniyede yeni token ile geri gelir; "Tablet dosyalarını aç" çalışır; `ev=unmount … force=1` bir kez.
 
 ## Plan
@@ -54,10 +54,33 @@ Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yü
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** implementation `b16e45c` (plan `41dd96b`; this handoff is the commit after it). Branch `task/T-209-host-force-unmount-stale-volume`. `./scripts/check.sh` ALL OK (host: 799 tests).
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Files/TabletFilesPlanner.swift`, `host-mac/Sources/MateBridgeHost/Files/TabletFilesBridge.swift`, `host-mac/Tests/MateBridgeCoreTests/Files/TabletFilesPlannerTests.swift`, `docs/LOGGING.md`, this card.
+- **Davranış (planner):**
+  - New action `forceUnmount(path:localPort:)`; new events `forceUnmountFinished(path:localPort:gone:)` and `mountCollided(generation:localPort:mountedNow:)`; new state `leftoverPaths`.
+  - The token a volume was mounted with is kept (in memory, `FilesSecret`) with `mountedPath` and each replaced volume.
+  - `replacedMounts` are no longer dropped at session start/end: they are marked `inSession=false`, so the teardown's unmount result (which arrives after the boundary) is still seen. Eject inference, `watchedPaths` and the remount gate use only `inSession` ones, so T-206 behaves as before.
+  - A replaced volume reported in `stillMounted` becomes a leftover (at most 4, across sessions, cleared at shutdown). Dropped when a later unmount on its port detaches it or does not find it, or when our new mount lands on its path.
+  - Dead = mounted with a token other than the current READY's. No READY (OFF, no session) → not provably dead. The current `mountedPath` is never dead.
+  - Each dead leftover gets one automatic force, as soon as it is known dead: in `unmountFinished` (same-session token change) or in `filesInfo` (the next READY, e.g. the next session in the device case). An owed remount waits for pending force results.
+  - EEXIST: if a dead leftover of ours is among `mountedNow` → force it (again, even if the automatic force failed) and, if every force succeeded, retry the mount once (same automatic/user flag). The retry that hits EEXIST again, a failed force, or a volume that is not a dead leftover of ours → no force, `lastMountFailed`. While the force/retry is pending the menu shows `mounting`.
+  - Leftovers are not in `watchedPaths`, so a forced unmount's notification never reaches `volumeUnmounted`. Even if it did, it is not `mountedPath`, so it is not an eject.
+- **Davranış (bridge):**
+  - `forceUnmount`: only if the path is still a WebDAV volume from `127.0.0.1:<port>` (`getfsstat`), `Darwin.unmount(path, MNT_FORCE)`; reports `gone` (detached or absent).
+  - NetFS callback `status == EEXIST` → `mountCollided` with `mountPoints(localPort:)`, instead of `mountFinished`.
+  - Logs: `ev=unmount result=ok|gone|error code=N force=1`, `ev=mount_exists dead_ours=N`. No path or token.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
+  - A tablet server start always gets a new token, so a different token means the old server and the old volume's credentials are gone.
+  - NetFS answers EEXIST in its callback when the same URL is already mounted (device log `ev=mount result=error code=17` matches the callback's format).
+  - `unmount(2)` with `MNT_FORCE` works for the user's own NetFS WebDAV volume without root, like the plain `unmount` already used, and does not hang on a dead server.
+  - Memory only: if the Mac app restarts, it does not know earlier volumes, so it forces nothing (EEXIST stays visible, as today).
+- **Test edilmeyenler / cihazda doğrulananlar:** nothing was run on hardware (no app launch, no mount, no unmount). Device checks:
+  - **[device] criterion (cross-session):** mount "MatePad", keep it open in Finder, force-stop and restart the tablet app. Expect `ev=unmount result=error code=16` at session end, then `ev=unmount result=ok force=1` once when the new session's READY arrives, then "Tablet dosyalarını aç" mounts with no EEXIST. See the first open question about the volume "coming back by itself".
+  - **Same session:** with "MatePad" open in Finder, change the shared folder on the tablet (token change without a session change). Expect `code=16`, then `force=1` once, then the volume comes back by itself (T-206 remount), with no Finder window.
+  - **No force on a live volume:** with "MatePad" open in Finder, unplug and replug USB (same server, same token). There must be no `force=1`.
+  - **User's own volume:** not practical to set up; covered by tests only.
+  - Check what Finder does with a window open on a force-unmounted volume (it should close or show the volume as gone, with no dialog).
+  - Check that `MNT_FORCE` returns quickly on a dead WebDAV volume.
 - **Açık sorular:**
+  - **Device criterion vs. T-206 scope:** "birim birkaç saniyede yeni token ile geri gelir" after force-stop + start. A force-stop ends the session, and T-206 deliberately clears the remount intent at session end ("a new session still needs the user's 'Tablet dosyalarını aç'", test `sessionEndAndShutdownForgetTheIntent`). So after an app restart the dead volume is forced away within seconds, but it comes back only when the user opens it. That open now works. If the volume should come back by itself across sessions, that needs a new card, because it changes the T-206 intent rule.
+  - **Live-token leftover blocks a mount:** USB loss with a busy volume, then USB back with the same server. The volume is alive again, but a user "open" gets EEXIST and fails (it is not adopted). This is the same as before T-209, and it is not forced, as the card requires. Adopting it (passing it as `knownPath`) would fix it, but that is outside this card.
