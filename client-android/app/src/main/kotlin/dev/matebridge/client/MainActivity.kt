@@ -69,6 +69,7 @@ import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StatsLogWindow
+import dev.matebridge.client.stream.RefreshMismatch
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
 import dev.matebridge.client.stream.VideoLayout
@@ -238,6 +239,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var appliedModeHz = 0
     private val vsyncGaps = IntervalHistogram()
     private val vsyncGapsLog = IntervalHistogram() // T-141: the log window's vsync gaps (fed per second from vsyncGaps)
+    private val refreshMismatch = RefreshMismatch() // T-169: target vs measured refresh, fed per second
     private val vsync = VsyncClock()
     /** T-141: the vsync loop sleeps while no video frame arrives; a frame or pointer input wakes it. */
     private val vsyncIdle = VsyncIdleGate()
@@ -1534,6 +1536,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             applyVoteChange(v.update(streaming, s.received * 1000.0 / interval.coerceAtLeast(1)))
         }
         val vg = vsyncGaps.summaryInto(vsyncGapsLog)
+        refreshMismatch.update( // T-169: one W line per sustained (> 5 s) target vs measured refresh mismatch
+            FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0), vg.p50Us.takeIf { vg.count > 0 },
+            foreground && lastUi is SessionUi.Connected, now,
+        )?.let { MbLog.w("refresh_mismatch", it.fields() + " stream_mode=${streamMode.id}", "render") }
         val lat = s.latencyAvgUs
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
@@ -1611,8 +1617,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             "stats",
             "fps=${"%.1f".format(java.util.Locale.ROOT, fps)} latency_us=${lat ?: -1} " +
                 "clock_offset_us=${clock.offsetUs() ?: 0} rtt_us=${clock.bestRttUs() ?: -1} " +
-                "hz=${"%.0f".format(java.util.Locale.ROOT, currentHz())} vsync_period_us=${vsync.periodNs / 1000} " +
-                "display_hz=${"%.1f".format(java.util.Locale.ROOT, currentHz())} vsync_ms_p50=${if (vg.count > 0) "%.2f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) else "-"} " +
+                // T-169: hz= is the deprecated alias of display_hz= (one release); target_hz= is the requested mode.
+                RefreshMismatch.statsFields(
+                    FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0), currentHz(), vsync.periodNs / 1000,
+                    vg.p50Us.takeIf { vg.count > 0 }, streamMode.id,
+                ) + " " +
                 "buffer=${r.bufferFrames} skip_pct=${s.skipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
                 "cb_skip_pct=${s.cbSkipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
                 "pace_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
