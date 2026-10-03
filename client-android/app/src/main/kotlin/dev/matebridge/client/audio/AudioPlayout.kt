@@ -88,6 +88,11 @@ class AudioPlayout(
     private val safety = SafetyMemory(SharedPrefsSafetyStore(appContext))
     /** T-110: learned AAudio output buffer size per path, kept across sessions. */
     private val outBuf = OutBufMemory(SharedPrefsOutBufStore(appContext))
+    /**
+     * T-191: a [forgetLearned] the next stream must apply again before its first output opens: a writer that was live
+     * at the reset may store a learned value afterwards (each stats second, on growth, at its final flush).
+     */
+    private val forgetPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** AudioTrack burst (the mixer's period). AAudio streams report their own. */
     private val trackBurst: Int
@@ -185,6 +190,22 @@ class AudioPlayout(
         val s = synchronized(lock) { stream }
         MbLog.i("audio_out_pref", "value=${p.id} source=panel stream=${b(s != null)}", COMPONENT)
         s?.requestRebuild(REASON_PREF)
+    }
+
+    /**
+     * T-191 "Varsayılanlara dön" (main thread, non-blocking): forgets the learned safety and output buffer sizes now, and
+     * once more when the next stream starts (after the previous writer has finished), so a live stream cannot carry
+     * its learned values into the next session. A playing stream keeps its current values until it ends.
+     */
+    fun forgetLearned() {
+        forgetPending.set(true)
+        clearLearned("reset")
+    }
+
+    private fun clearLearned(at: String) {
+        val safetyOk = safety.clear()
+        val bufOk = outBuf.clear()
+        MbLog.i("audio_learned_clear", "at=$at safety=${b(safetyOk)} buf=${b(bufOk)}", COMPONENT)
     }
 
     /** Video capture-to-display estimate (AvSync.videoLatencyUs), once per second from the UI; null = no video. */
@@ -303,6 +324,7 @@ class AudioPlayout(
                 }
                 previous = null
                 if (!running) return
+                if (forgetPending.getAndSet(false)) clearLearned("stream_start") // T-191, before the first initial()
                 policy.reset() // a new stream tries the whole output chain again
                 val t = openSink("start") ?: return
                 publish(t)

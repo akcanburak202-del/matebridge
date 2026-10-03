@@ -53,6 +53,10 @@ class SettingsCatalogTest {
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
         override val statsOverlay get() = v["stats"] ?: false
         override fun setStatsOverlay(on: Boolean) { calls += "stats $on"; v["stats"] = on }
+        var clock = 1_000L
+        override val resetConfirm = TwoTapConfirm({ clock })
+        override fun onResetArmed() { calls += "reset_armed" }
+        override fun resetToDefaults() { calls += "reset" }
     }
 
     private val h = FakeHost()
@@ -74,7 +78,7 @@ class SettingsCatalogTest {
             listOf(
                 "transport", "disconnect", "forget_host", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
-                "clipboard", "stats", "shortcuts", "version",
+                "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
             side,
         )
@@ -197,6 +201,68 @@ class SettingsCatalogTest {
         assertEquals("Tablet dosyalarını Mac'te göster: açık", t.text())
         h.filesStatus = "Durum: hazır"
         assertEquals("Durum: hazır", (item(s, "files_status") as SettingItem.Info).text())
+    }
+
+    @Test fun resetDefaultsIsInDigerInBothPanelsAndNeedsTwoTaps() { // T-191
+        for (inStream in listOf(false, true)) {
+            val s = SettingsCatalog.sections(h, inStream)
+            val diger = s.single { it.title == "Diğer" }.items
+            val a = item(s, "reset_defaults") as SettingItem.Action
+            assertTrue(a in diger)
+            assertEquals("Varsayılanlara dön", a.title)
+            assertTrue(item(s, "reset_hint") in diger)
+        }
+    }
+
+    @Test fun oneTapAloneResetsNothingASecondTapInTheWindowDoes() { // T-191
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val a = item(s, "reset_defaults") as SettingItem.Action
+        val hint = item(s, "reset_hint") as SettingItem.Info
+        assertEquals(SettingsCatalog.RESET_IDLE, hint.text())
+        a.run()
+        assertEquals(listOf("reset_armed"), h.calls) // armed only
+        assertEquals(SettingsCatalog.RESET_ARMED, hint.text())
+        h.clock += TwoTapConfirm.WINDOW_MS - 1
+        a.run()
+        assertEquals(listOf("reset_armed", "reset"), h.calls)
+        assertEquals(SettingsCatalog.RESET_IDLE, hint.text()) // disarmed by the reset
+        a.run() // a third tap starts over
+        assertEquals(listOf("reset_armed", "reset", "reset_armed"), h.calls)
+    }
+
+    @Test fun theArmedStateExpires() { // T-191
+        val s = SettingsCatalog.sections(h, inStream = false)
+        val a = item(s, "reset_defaults") as SettingItem.Action
+        val hint = item(s, "reset_hint") as SettingItem.Info
+        a.run()
+        h.clock += TwoTapConfirm.WINDOW_MS // the window has passed
+        assertEquals(SettingsCatalog.RESET_IDLE, hint.text())
+        a.run() // only arms again
+        assertEquals(listOf("reset_armed", "reset_armed"), h.calls)
+        h.clock += 10
+        a.run()
+        assertEquals("reset", h.calls.last())
+    }
+
+    @Test fun twoTapConfirmWithAFakeClock() { // T-191
+        var now = 0L
+        val c = TwoTapConfirm({ now }, windowMs = 3_000)
+        assertFalse(c.armed)
+        assertFalse(c.tap())
+        assertTrue(c.armed)
+        now = 2_999
+        assertTrue(c.tap())
+        assertFalse(c.armed)
+        assertFalse(c.tap()) // re-armed at 2_999
+        now = 5_999 // exactly the window later: expired
+        assertFalse(c.armed)
+        assertFalse(c.tap()) // re-armed at 5_999
+        c.cancel()
+        assertFalse(c.armed)
+        assertFalse(c.tap())
+        now = 5_998 // a clock that went backwards never confirms
+        assertFalse(c.armed)
+        assertFalse(c.tap())
     }
 
     @Test fun filesFolderChoiceAndReadOnly() { // T-190, decision 0028

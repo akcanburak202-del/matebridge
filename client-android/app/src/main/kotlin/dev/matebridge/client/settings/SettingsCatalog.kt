@@ -79,6 +79,48 @@ interface SettingsHost {
     fun setClipboardShare(on: Boolean)
     val statsOverlay: Boolean
     fun setStatsOverlay(on: Boolean)
+
+    /** T-191 "Varsayılanlara dön": the two-tap arming state, one for both panels. */
+    val resetConfirm: TwoTapConfirm
+    /** The first tap armed [resetConfirm]; the host refreshes the panels once the window has passed. */
+    fun onResetArmed()
+    /**
+     * The confirmed reset: every user setting back to its default and the learned audio state cleared; pairing, the
+     * device id and the learned wake data stay. Applies the defaults to a live session.
+     */
+    fun resetToDefaults()
+}
+
+/**
+ * T-191: a two-step confirmation without a dialog (a dialog is not JVM-testable). The first [tap] only arms it; a second
+ * tap within [windowMs] confirms and disarms; a tap after the window is a new first tap. [now] is a monotonic clock in
+ * milliseconds. Main thread only.
+ */
+class TwoTapConfirm(private val now: () -> Long, private val windowMs: Long = WINDOW_MS) {
+    private var armedAt: Long? = null
+
+    /** True while a tap would confirm. */
+    val armed: Boolean get() = armedAt?.let { within(it, now()) } ?: false
+
+    /** True when this tap confirms; false when it (re)armed. */
+    fun tap(): Boolean {
+        val t = now()
+        val a = armedAt
+        if (a != null && within(a, t)) {
+            armedAt = null
+            return true
+        }
+        armedAt = t
+        return false
+    }
+
+    fun cancel() { armedAt = null }
+
+    private fun within(armedAtMs: Long, t: Long) = t - armedAtMs in 0 until windowMs
+
+    companion object {
+        const val WINDOW_MS = 5_000L
+    }
 }
 
 /** One control. Labels are read through lambdas so a refresh shows the current values. */
@@ -135,6 +177,10 @@ object SettingsCatalog {
     const val SHORTCUTS =
         "Kısayollar: Ctrl+Shift+6: ayarlar paneli · Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · " +
             "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
+
+    const val RESET_TITLE = "Varsayılanlara dön"
+    const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
+    val RESET_ARMED = "Onaylamak için ${TwoTapConfirm.WINDOW_MS / 1000} saniye içinde yeniden dokun."
 
     /**
      * Sections in order Bağlantı / Görüntü / Ses / Girdi / Tablet dosyaları / Diğer. [inStream] (the side panel) adds what only makes sense
@@ -236,6 +282,11 @@ object SettingsCatalog {
             listOf(
                 SettingItem.Toggle("clipboard", "Pano paylaşımı", { h.clipboardShare }, { h.setClipboardShare(it) }),
                 SettingItem.Toggle("stats", "İstatistik katmanı", { h.statsOverlay }, { h.setStatsOverlay(it) }),
+                // T-191: two taps; the hint under it shows whether the next tap resets.
+                SettingItem.Action("reset_defaults", RESET_TITLE) {
+                    if (h.resetConfirm.tap()) h.resetToDefaults() else h.onResetArmed()
+                },
+                SettingItem.Info("reset_hint") { if (h.resetConfirm.armed) RESET_ARMED else RESET_IDLE },
                 SettingItem.Info("shortcuts") { SHORTCUTS },
                 SettingItem.Info("version") { BuildInfo.current.settingsText() }, // T-146
             ),

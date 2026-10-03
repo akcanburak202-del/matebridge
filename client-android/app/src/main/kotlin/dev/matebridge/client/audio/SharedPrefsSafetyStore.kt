@@ -18,9 +18,17 @@ class SharedPrefsSafetyStore(context: Context) : SafetyStore {
         prefs.edit().putInt(prefKey(key), ms).apply()
     }
 
-    private fun prefKey(key: String) = "safety_ms_" + key.replace('/', '_')
+    /** T-191: removes every `safety_ms_*` key, the pre-T-123 ones included (the buffer keys in the same file stay). */
+    override fun clear() {
+        val e = prefs.edit()
+        for (k in prefs.all.keys) if (k.startsWith(PREFIX)) e.remove(k)
+        e.apply()
+    }
+
+    private fun prefKey(key: String) = PREFIX + key.replace('/', '_')
 
     private companion object {
         const val FILE = "matebridge_audio"
+        const val PREFIX = "safety_ms_"
     }
 }
