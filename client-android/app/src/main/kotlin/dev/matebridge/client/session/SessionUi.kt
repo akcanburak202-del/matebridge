@@ -23,9 +23,10 @@ sealed interface SessionUi {
     /**
      * T-150: an endpoint the user did not pick answered with PAIRING ("Yeni Mac bulundu" / [rePair]: "Mac yeniden
      * eşleşmek istiyor"). The connection was closed before anything was stored; no automatic retry. Pairing starts only
-     * from a user action. [hostName] comes from the answerer: display only, never logged.
+     * from a user action. [hostName] comes from the answerer: display only, never logged. [hostTag] (T-207): the host_id
+     * the answer claimed (unauthenticated), so the UI can drop its "asked" mark once that Mac is trusted.
      */
-    data class PairingNeedsUser(val hostName: String, val rePair: Boolean) : SessionUi
+    data class PairingNeedsUser(val hostName: String, val rePair: Boolean, val hostTag: HostTag? = null) : SessionUi
 
     /**
      * T-150: an unresolved pairing was found and no connection was opened (automatic connects wait for the user).
@@ -34,7 +35,11 @@ sealed interface SessionUi {
      * [promptGen]: pass it to `confirmTrust`/`cancelTrust` (see [AwaitingApproval.promptGen]).
      */
     data class StoredTrust(val code: String?, val confirmed: Boolean, val promptGen: Int = -1) : SessionUi
-    data class Connected(val hostName: String, val framesReceived: Long) : SessionUi
+    /**
+     * [hostTag] (T-207): the session's host_id, set only once the host authenticated itself on this connection (a sealed
+     * record: PAIRED with our trusted key, or a locally confirmed pairing the Mac accepted); null before that.
+     */
+    data class Connected(val hostName: String, val framesReceived: Long, val hostTag: HostTag? = null) : SessionUi
 
     /** "Bağlantı yok"; an automatic retry follows in [retryInMs] (0: none, a failed T-134 wake attempt). */
     data class Disconnected(val cause: Cause, val retryInMs: Long) : SessionUi
@@ -56,5 +61,19 @@ sealed interface SessionUi {
          * ours, or an answerer that knows the host_id cannot seal records). Terminal; in AUTO on USB it falls back to Wi-Fi.
          */
         KEY_MISMATCH,
+    }
+}
+
+/**
+ * T-207: an opaque host identity (the 16-byte host_id) for equality checks in the UI layer. It never prints its value
+ * ([toString]), so a logged UI state cannot leak it. An empty or all-zero id is no identity ([of] gives null).
+ */
+class HostTag private constructor(private val id: ByteArray) {
+    override fun equals(other: Any?) = other is HostTag && id.contentEquals(other.id)
+    override fun hashCode() = id.contentHashCode()
+    override fun toString() = "HostTag"
+
+    companion object {
+        fun of(id: ByteArray?): HostTag? = id?.takeIf { b -> b.any { it != 0.toByte() } }?.let { HostTag(it.copyOf()) }
     }
 }

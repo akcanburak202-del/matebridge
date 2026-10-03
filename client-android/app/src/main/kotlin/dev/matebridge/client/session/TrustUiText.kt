@@ -3,8 +3,8 @@ package dev.matebridge.client.session
 /**
  * T-151 (decision 0018): the pure side of the pairing/trust UI. MainActivity resolves [TrustText] ids from `strings.xml`
  * and only renders the result, so everything that decides what the user sees and which connects may pair is here and
- * JVM-tested. Nothing here logs; [pairUiFields] is the only log text it makes, and it never carries a value (no code,
- * key, token or Mac name).
+ * JVM-tested. Nothing here logs; [pairUiFields] and [askedClearedFields] are the only log texts it makes, and they never
+ * carry a value (no code, key, token, host_id, address or Mac name).
  */
 enum class TrustText {
     /** Amber warning above the code when the tablet already had a key for this host_id. */
@@ -164,6 +164,13 @@ object TrustUiText {
 
     /** Fields of `ev=pair_ui`: the action only, never a value. */
     fun pairUiFields(action: String): String = "action=$action"
+
+    /**
+     * Fields of `ev=pair_asked_cleared` (T-207): how many asked endpoints the trusted Mac made eligible again and whether
+     * the USB loopback one is among them; never an address, host_id or name.
+     */
+    fun askedClearedFields(cleared: List<Endpoint>): String =
+        "count=${cleared.size} usb=${if (ConnectMode.usbEndpoint in cleared) 1 else 0}"
 }
 
 /**
@@ -229,36 +236,72 @@ enum class ConnectOrigin(val logName: String, val userInitiated: Boolean, val au
  * address). Other endpoints stay eligible: discovered ones are remembered ([nextAuto]) because NSD reports a service
  * once, so the real Mac found while the impostor was being tried is not lost. The prompt stays as a banner until a
  * session gets further (Connected, a pairing, a stored prompt), "Yoksay" or "Eşleş".
+ *
+ * T-207: each asked endpoint keeps the host_id its PAIRING answer claimed ([SessionUi.PairingNeedsUser.hostTag]). Once a
+ * session proves that this Mac trusts the tablet (a `Connected` whose [SessionUi.Connected.hostTag] is set: PAIRED with
+ * our trusted key, or a locally confirmed pairing the Mac accepted), the endpoints that claimed that same host_id are
+ * eligible again (e.g. the USB tunnel that asked while the Mac had forgotten the tablet), once per session. Endpoints
+ * with another or no claimed host_id stay asked (decision 0018: an impostor is neither re-tried nor able to park us).
+ * The claim itself is unauthenticated: an endpoint that copies the trusted Mac's host_id gets one more automatic try
+ * per such session, which cannot pair (T-150) and cannot raise a prompt as a migration candidate.
  */
 class PairPick(private val maxAsked: Int = MAX_ASKED, private val maxSeen: Int = MAX_SEEN) {
-    private val asked = LinkedHashSet<Endpoint>()
+    /** Asked endpoint -> the host_id its PAIRING answer claimed (null: unknown). Insertion order = age. */
+    private val asked = LinkedHashMap<Endpoint, HostTag?>()
     private val seen = LinkedHashSet<Endpoint>()
     private var lastConnecting: Endpoint? = null
+    /** T-207: the proven host of the current `Connected` run whose marks were already cleared (null: none / not connected). */
+    private var provenHost: HostTag? = null
+    private val cleared = ArrayList<Endpoint>()
 
     var prompt: PairPrompt? = null
         private set
 
     /** Every rendered state. Returns true when a new pick prompt was raised. */
     fun onUi(state: SessionUi): Boolean {
+        if (state !is SessionUi.Connected) provenHost = null
         when (state) {
             is SessionUi.Connecting -> lastConnecting = state.endpoint
             is SessionUi.PairingNeedsUser -> {
                 val ep = lastConnecting ?: return false
-                ask(ep)
+                ask(ep, state.hostTag)
                 prompt = PairPrompt(ep, state.hostName, state.rePair)
                 return true
             }
-            is SessionUi.Connected, is SessionUi.AwaitingApproval, is SessionUi.StoredTrust -> prompt = null
+            is SessionUi.Connected -> {
+                prompt = null
+                val host = state.hostTag
+                if (host != null && host != provenHost) {
+                    provenHost = host
+                    trusted(host)
+                }
+            }
+            is SessionUi.AwaitingApproval, is SessionUi.StoredTrust -> prompt = null
             else -> Unit
         }
         return false
     }
 
-    private fun ask(ep: Endpoint) {
+    private fun ask(ep: Endpoint, claimed: HostTag?) {
         asked.remove(ep)
-        asked.add(ep)
-        while (asked.size > maxAsked) asked.remove(asked.first())
+        asked[ep] = claimed
+        while (asked.size > maxAsked) asked.remove(asked.keys.first())
     }
+
+    /** T-207: [host] is proven trusted: the endpoints whose PAIRING answer claimed it are eligible again. */
+    private fun trusted(host: HostTag) {
+        val it = asked.entries.iterator()
+        while (it.hasNext()) {
+            val e = it.next()
+            if (e.value == host) {
+                cleared += e.key
+                it.remove()
+            }
+        }
+    }
+
+    /** T-207: the endpoints made eligible again since the last call (for the log line and the AUTO retry). */
+    fun takeCleared(): List<Endpoint> = cleared.toList().also { cleared.clear() }
 
     /** Whether an automatic connect may go to [ep]. */
     fun allowsAuto(ep: Endpoint): Boolean = ep !in asked

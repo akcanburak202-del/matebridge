@@ -205,6 +205,34 @@ class AutoTransportTest {
         assertFalse(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, SessionUi.AwaitingApproval("m", "123456", needsLocalConfirm = true)))
     }
 
+    @Test fun fallbackReasonNamesAPairingAnswer() { // T-207: not the misleading usb_lost
+        assertEquals("usb_asked", AutoUsbPolicy.fallbackReason(SessionUi.PairingNeedsUser("m", rePair = true)))
+        assertEquals("usb_lost", AutoUsbPolicy.fallbackReason(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)))
+        assertEquals("usb_lost", AutoUsbPolicy.fallbackReason(SessionUi.Failed(SessionUi.Cause.KEY_MISMATCH)))
+    }
+
+    @Test fun anUnblockedUsbEndpointIsTriedAtOnceDespiteTheFallbackBackoff() { // T-207
+        val p = AutoUsbPolicy()
+        p.onCable(CableState.CONNECTED, 0)
+        p.onTryStarted(0)
+        p.onTryResult(Outcome.HARD_FAIL, 0) // fallBackToWifi after the PAIRING answer
+        p.onTryResult(Outcome.HARD_FAIL, 0)
+        p.onTryResult(Outcome.HARD_FAIL, 0) // a few of them: 16 s backoff
+        assertEquals(Step.NONE, p.next(false, Stage.ACCEPTED, 1_000, usbBlocked = false))
+        p.onUsbUnblocked(1_000)
+        assertEquals(0, p.failures)
+        assertEquals(Step.MIGRATE, p.next(false, Stage.ACCEPTED, 1_000))
+        assertEquals(Step.PROBE, p.next(false, Stage.NOT_CONNECTED, 1_000))
+        // never while one is in flight, nor with the cable known unplugged
+        p.onTryStarted(1_000)
+        p.onUsbUnblocked(1_500)
+        assertEquals(Step.NONE, p.next(false, Stage.ACCEPTED, 1_500))
+        p.onCable(CableState.DISCONNECTED, 2_000)
+        p.onTryResult(Outcome.NEUTRAL, 2_000)
+        p.onUsbUnblocked(5_000)
+        assertEquals(Step.NONE, p.next(false, Stage.ACCEPTED, 5_000))
+    }
+
     @Test fun fallBackOnlyInAutoOnUsbWhenDisconnected() {
         val lost = SessionUi.Disconnected(SessionUi.Cause.LOST, 1000)
         assertTrue(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, lost))

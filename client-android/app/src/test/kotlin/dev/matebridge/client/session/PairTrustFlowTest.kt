@@ -120,6 +120,8 @@ class PairTrustFlowTest {
 
     /** The host side, with real crypto: answers one HELLO and seals its records. */
     class FakeHost(val hostId: ByteArray, val name: String) {
+        /** T-207: the identity the UI sees for this host. */
+        val tag: HostTag get() = HostTag.of(hostId)!!
         /** The pair key this Mac keeps for the tablet ("İzin ver"); PAIRED answers derive with it. */
         var key: ByteArray? = null
         var lastNewKey: ByteArray? = null
@@ -303,7 +305,7 @@ class PairTrustFlowTest {
         // (a) reached through the AUTO probe / USB mode: not user-initiated
         val a = start(usb, user = false)!!
         val r = a.first(squatter, pairing = true, squatter.acceptedRecord())
-        assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("MatePad Files", rePair = false)), r.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("MatePad Files", rePair = false, squatter.tag)), r.ui())
         assertTrue(r.any { it is Action.CloseControl })
         assertTrue(f.kv.m.isEmpty()) // nothing stored
         ticks(30_000_000)
@@ -324,7 +326,7 @@ class PairTrustFlowTest {
             sent.clear()
             val c = start(ep, user = false)!!
             val r = c.first(fake, pairing = true, fake.acceptedRecord(), clipboard())
-            assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("Totally a Mac", rePair = false)), r.ui())
+            assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("Totally a Mac", rePair = false, fake.tag)), r.ui())
             assertTrue(events.none { it is Event.Received && it.gen == c.gen }) // the sealed records are never processed
             assertTrue(events.none { it is Event.Secured && it.gen == c.gen })
             assertEquals(listOf<Message>(template), sent) // nothing but HELLO
@@ -336,10 +338,10 @@ class PairTrustFlowTest {
         val impostor = FakeHost(mac.hostId, "Mac mini")
         val c = start(discovered, user = false)!!
         val r = c.first(impostor, pairing = true, impostor.acceptedRecord())
-        assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("Mac mini", rePair = true)), r.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.PairingNeedsUser("Mac mini", rePair = true, mac.tag)), r.ui())
         assertEquals(stored, f.kv.m)
         assertArrayEquals(keyK, trustedOf(mac))
-        // the real Mac still connects silently with K
+        // the real Mac still connects silently with K (T-207: no host tag on the plaintext ack, only after a record)
         mac.key = keyK
         val ok = start(discovered, user = false)!!
         assertEquals(SessionUi.Connected("Mac mini", 0), ok.first(mac, pairing = false).ui().single())
@@ -911,5 +913,104 @@ class PairTrustFlowTest {
         assertTrue(step(Event.Start(discovered)).none { it is Action.OpenControl })
         step(Event.ForgetHost)
         assertTrue(step(Event.Start(discovered)).any { it is Action.OpenControl })
+    }
+
+    // ---- T-207: the "asked" mark once the Mac is trusted again ----
+
+    /** Feeds the UI states rendered since [from] to the activity's pick gate, in order; returns the new index. */
+    private fun feed(pick: PairPick, from: Int): Int {
+        for (s in rawUis.subList(from, rawUis.size)) pick.onUi(s)
+        return rawUis.size
+    }
+
+    /**
+     * Device session 2026-10-04: the Mac forgot the tablet ("Onaylı cihazları unut"), so in AUTO both the USB tunnel and
+     * the Wi-Fi address answered PAIRING. The user pairs over Wi-Fi and trusts: the USB mark goes, AUTO migrates to USB
+     * with no user action. An endpoint that claimed another host_id keeps its mark (decision 0018).
+     */
+    private fun trustOnWifiThenAutoMovesToUsb(knownBefore: Boolean) {
+        if (knownBefore) f.store.put(mac.hostId, keyK)
+        val pick = PairPick()
+        val policy = AutoUsbPolicy()
+        policy.onCable(CableState.CONNECTED, 0)
+        var fed = 0
+        // AUTO initial pick: the USB port is open, an automatic connect; the Mac answers PAIRING.
+        start(usb, user = false)!!.first(mac, pairing = true)
+        fed = feed(pick, fed)
+        val usbPick = rawUis.last()
+        assertEquals(SessionUi.PairingNeedsUser("Mac mini", knownBefore, mac.tag), usbPick)
+        assertTrue(pick.isAsked(usb))
+        assertTrue(AutoUsbPolicy.shouldFallBack(TransportMode.AUTO, true, usbPick))
+        assertEquals("usb_asked", AutoUsbPolicy.fallbackReason(usbPick))
+        policy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, 0) // fallBackToWifi
+        // Wi-Fi: an impostor (same name, another host_id) is tried first, then the real Mac; both answer PAIRING.
+        val impostor = FakeHost(ByteArray(16) { 0x77 }, "Mac mini")
+        start(remembered, user = false)!!.first(impostor, pairing = true)
+        start(discovered, user = false)!!.first(mac, pairing = true)
+        fed = feed(pick, fed)
+        assertTrue(pick.isAsked(remembered))
+        assertEquals(AutoUsbPolicy.Step.NONE, policy.next(false, AutoUsbPolicy.stageOf(rawUis.last()), 10_000, pick.isAsked(usb)))
+        // "Eşleş" on the real Mac's prompt: user start, the Mac says "İzin ver", the user "Kodlar aynı — Güven".
+        val c = pairUntilPrompt(pick.pair()!!.endpoint)
+        mac.approve()
+        c.records(mac.acceptedRecord(), cfg(1))
+        step(Event.TrustConfirmed(shownGen()))
+        assertTrue(m.inputAllowed)
+        fed = feed(pick, fed)
+        assertEquals(mac.tag, (rawUis.last { it is SessionUi.Connected } as SessionUi.Connected).hostTag)
+        val cleared = pick.takeCleared()
+        assertEquals(listOf(usb), cleared)
+        assertEquals("count=1 usb=1", TrustUiText.askedClearedFields(cleared))
+        assertFalse(pick.isAsked(usb))
+        assertTrue(pick.isAsked(remembered)) // another host_id: still out of automatic connects
+        // MainActivity.onAskedCleared: AUTO tries USB at once (the accepted Wi-Fi session migrates).
+        policy.onUsbUnblocked(10_000)
+        assertEquals(AutoUsbPolicy.Step.MIGRATE, policy.next(false, AutoUsbPolicy.stageOf(rawUis.last()), 10_000, pick.isAsked(usb)))
+        // The migration candidate to the USB tunnel (read-only store, not user-initiated) answers PAIRED with the new key.
+        val cand = step(Event.Migrate(usb)).only<Action.OpenCandidate>()
+        step(Event.ControlOpened(cand.gen))
+        val candTrust = PairTrust(ReadOnlyPairKeyStore(f.store), { f.wallMs })
+        val hs = ClientHandshake()
+        val (ack, payload) = mac.answer(hs.hello(template), pairing = false)
+        val res = FirstAck.handle(cand.gen, ack, hs.complete(ack, payload, candTrust, userInitiated = false))
+        assertFalse(res.terminal)
+        res.events.forEach { step(it) }
+        val d = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, res.session!!.opener)
+        d.feed(mac.seal(cfg(2), Pong(0, 0, 0)))
+        val out = ArrayList<Action>()
+        while (true) out += step(Event.Received(cand.gen, d.next() ?: break))
+        assertEquals(Action.MigrationResult(usb, true, SessionMachine.REASON_OK), out.only<Action.MigrationResult>())
+        assertTrue(m.inputAllowed)
+    }
+
+    @Test fun t207RePairOnWifiReturnsAutoToUsb() = trustOnWifiThenAutoMovesToUsb(knownBefore = true)
+
+    @Test fun t207FreshPairOnWifiReturnsAutoToUsb() = trustOnWifiThenAutoMovesToUsb(knownBefore = false)
+
+    @Test fun t207ATrustedPairedSessionClearsOnlyItsOwnHostsMarks() {
+        f.store.put(mac.hostId, keyK)
+        mac.key = keyK
+        val pick = PairPick()
+        var fed = 0
+        // A localhost squatter with another host_id on the USB port, and one copying the Mac's host_id on another address.
+        val squatter = FakeHost(ByteArray(16) { 0x66 }, "Mac mini")
+        start(usb, user = false)!!.first(squatter, pairing = true)
+        start(remembered, user = false)!!.first(FakeHost(mac.hostId, "Mac mini"), pairing = true)
+        fed = feed(pick, fed)
+        assertTrue(pick.isAsked(usb) && pick.isAsked(remembered))
+        // The real Mac reconnects silently (PAIRED with the trusted key).
+        val c = start(discovered, user = false)!!
+        c.first(mac, pairing = false)
+        fed = feed(pick, fed)
+        assertNull((rawUis.last() as SessionUi.Connected).hostTag) // the plaintext ack proves nothing yet
+        assertTrue(pick.takeCleared().isEmpty())
+        c.records(cfg(1))
+        step(Event.Tick(3), SessionMachine.UI_INTERVAL_US) // frames: the Connected update after an authenticated record
+        fed = feed(pick, fed)
+        assertEquals(mac.tag, (rawUis.last() as SessionUi.Connected).hostTag)
+        assertEquals(listOf(remembered), pick.takeCleared()) // it claimed this Mac: one more automatic try
+        assertTrue(pick.isAsked(usb)) // another host_id: the trust clears nothing for it
+        assertEquals(AutoUsbPolicy.Step.NONE, AutoUsbPolicy().next(false, AutoUsbPolicy.Stage.ACCEPTED, 0, pick.isAsked(usb)))
+        assertTrue(machineLogs.none { it.contains(hexOf(mac.hostId)) || it.contains(hexOf(squatter.hostId)) })
     }
 }
