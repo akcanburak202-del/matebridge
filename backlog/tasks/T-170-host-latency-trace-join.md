@@ -1,7 +1,7 @@
 ---
 id: T-170
 title: Make the host latency CSV joinable with the tablet trace; fix labels
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-162]
@@ -68,7 +68,15 @@ Source: external architecture review 2026-10-03 (H05, LM4, LM8, D5); verificatio
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `LatencyTrace.swift`: `FrameTrace` gets `frameSeq: UInt32`, `configID: UInt16`, `sessionID: UInt32`, `resubmit: Bool`. `csvHeader`/`csvLine` keep today's 7 columns and append `pts_us,display_us,frame_seq,config_id,session_id,resubmit` (`resubmit` 0/1). New signed `capToSentPtsUs` (`writeDoneUs - ptsUs`, nil if PTS unknown).
+2. `LatencyWindow`: new signed series `cap_to_sent_pts` logged as `cap_to_sent_pts_ms_p50_95_99_max` (signed, after `cap_to_sent`); the offsets (`pts_vs_display`, `pts_vs_deliv`, `display_vs_deliv`) are logged as `_ms_p1_50_99` (p1 added). Field order: stages, `cap_to_sent_pts`, offsets, `no_display`.
+3. `HEVCEncoder.swift` (trace fields only): `Input.resubmit` set in `resubmitLast`, copied into `trace.resubmit` in `send`.
+4. `VideoSender.swift`: `timing.frameSeq = seq` where `writeStartUs` is set.
+5. `StreamCoordinator.swift`: only the `trace:` closure at `VideoSender` construction stamps `link.sessionID`/`link.configID`.
+6. `StatsSummary.swift`: comment "tablet capture→decode", menu "· yak→çöz N ms", `logFields` writes `cap_dec_ms=` plus alias `latency_ms=` (same value) for one release.
+7. Tests in `Tests/MateBridgeCoreTests/Video/` (LatencyTraceTests, IntegrationTests: sender frame_seq + StatsSummary). `docs/LOGGING.md`: new separate block at the end.
+
+Risks: `ev=latency` offset keys change name (`_p50_99` → `_p1_50_99`); analysis scripts that grep the old key must be updated (noted in LOGGING). No wire change.
 
 ## Handoff
 
