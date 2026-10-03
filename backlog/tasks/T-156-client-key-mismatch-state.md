@@ -84,7 +84,8 @@ if they test something unrelated.
 
 ## Handoff
 
-- **Commit:** `e604459` (codex --high P2 fixes) on top of `da03df6` (implementation + tests); plan in `2d35060`.
+- **Commit:** `86d52c9` (2nd codex --high pass), `e604459` (1st codex pass), `da03df6` (implementation + tests);
+  plan in `2d35060`.
   Branch `task/T-156-client-key-mismatch-state`.
 - **Codex review (P2 ×3) fixes, `e604459`:**
   1. "Bağlan" on `Failed(KEY_MISMATCH)` with the address field hidden is now `ConnectOrigin.CONNECT_AFTER_MISMATCH`
@@ -96,18 +97,26 @@ if they test something unrelated.
      control/candidate/retired by gen) and consults it at the moment a failure would count: if set, the failure does not
      count and the endpoint's count is reset. A tick also resets it (audio-only connections). So a writer-side close that
      overtakes an authenticated record on the priority mailbox cannot latch, and audio/unknown records reset the count.
+- **Codex 2nd pass (P2 ×2) fixes, `86d52c9`:**
+  1. The reader's hook moved to the AEAD boundary: `RecordAuth.next(decoder, onAuthenticated)` (pure, inline, in
+     `SessionController.kt`) runs the hook in a `finally` when the call returned a message or the decoder's
+     `skippedFrames` grew, so an authenticated unknown record followed by a corrupt one in the same call (which throws)
+     still sets the flag before `ProtocolError` is enqueued. No change to `security/Records.kt` (outside `files:`).
+     Test: `RecordAuthTest` with real sealer/opener.
+  2. `unauthenticatedPairedEnd()` resets on reader authentication first, in any phase; only counting keeps the
+     `ACCEPTED`/PAIRED/no-sealed/no-candidate guard. Test: close in `AWAIT_ACK` overtaking the queued plaintext ack.
 - **Dokunulan dosyalar:**
   - `session/SessionMachine.kt`: `Event.ProtocolError.authFailed`, per-endpoint `authFailures`, `awaitingFirstAuthRecord()`,
     `pairedAuthFailure()`, `KEY_MISMATCH_LIMIT = 3`, automatic-start latch, resets (auth record / Stop / user start / forget).
   - `session/SessionController.kt`: control reader passes `AUTH_FAILED` into `ProtocolError`; `ControlConn.authenticated`
-    set in `readRecords`; `recordAuthenticated(gen)` handed to the machine (small, localized).
+    set in `readRecords` through the new top-level `RecordAuth` helper; `recordAuthenticated(gen)` handed to the machine (small, localized).
   - `session/TrustUiText.kt` (orchestrator-approved): `ConnectOrigin.CONNECT_AFTER_MISMATCH` + `forConnectButton` branch.
   - `test/.../session/TrustUiTest.kt`: the user-initiated origin set includes `CONNECT_AFTER_MISMATCH`.
   - `session/SessionUi.kt`: `Cause.KEY_MISMATCH`.
   - `session/AutoTransport.kt`: `shouldFallBack` also for `Failed(KEY_MISMATCH)` (AUTO, on USB).
   - `MainActivity.kt`: `KEY_MISMATCH` text in `applyStatusText`, one branch in `causeText` (nothing else).
   - `res/values/strings.xml`: `key_mismatch` (card text verbatim).
-  - `test/.../session/KeyMismatchTest.kt` (18 tests, new).
+  - `test/.../session/KeyMismatchTest.kt` (19 tests, new), `test/.../session/RecordAuthTest.kt` (3 tests, new).
 - **Varsayımlar:**
   - "After the proof PING, before any authenticated record" = machine phase `ACCEPTED` reached by the first (PAIRED) ack,
     `!sealedSeen`, `!pairingSession`. Handshake errors (ack validation `AUTH_FAILED`) happen in `AWAIT_ACK` and do not
