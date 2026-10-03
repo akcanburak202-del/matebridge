@@ -203,8 +203,8 @@ class SessionController(
         override fun lastVideoReadNs(): Long = this@SessionController.lastVideoReadNs
     })
 
-    /** config_id of the latest applied STREAM_CONFIG; frames from a video connection of another config are dropped. */
-    @Volatile private var currentConfigId = -1
+    /** T-160: which video connection may deliver frames, and for which applied and renderer-installed config. */
+    private val videoGate = VideoDeliveryGate()
     @Volatile private var stopAfterDrain = false
 
     /**
@@ -378,6 +378,12 @@ class SessionController(
     /** True while the control send queue is backed up (input layer holds mergeable hover/scroll samples then). Any thread. */
     fun isSendCongested(): Boolean = control?.link?.congested() ?: false
 
+    /**
+     * T-160: the renderer has installed [config] (the object [SessionListener.onStreamConfig] carried) and reset its
+     * queue for it; frames of that config are delivered from now on. Any thread (the renderer calls it on the UI thread).
+     */
+    fun videoConfigInstalled(config: StreamConfig) = videoGate.install(config)
+
     private fun ensureEngine() {
         if (!running.compareAndSet(false, true)) return
         engine = Thread({ engineLoop() }, "mb-session").also { it.isDaemon = true; it.start() }
@@ -456,6 +462,7 @@ class SessionController(
     }
 
     private fun exec(a: SessionMachine.Action) {
+        videoGate.onAction(a) // T-160: before the action runs (a CloseVideo/OpenVideo switch is atomic for the readers)
         when (a) {
             is SessionMachine.Action.OpenControl -> {
                 MbLog.gen = a.gen
@@ -504,7 +511,6 @@ class SessionController(
                 video = null
             }
             is SessionMachine.Action.ApplyConfig -> {
-                currentConfigId = a.config.configId
                 listener.onStreamConfig(a.config)
             }
             is SessionMachine.Action.Ui -> {
@@ -839,8 +845,10 @@ class SessionController(
             Thread({ loop() }, "mb-video-$gen").also { it.isDaemon = true; it.start() }
         }
 
+        /** T-160: once this returns, this connection delivers no more frames (an in-flight delivery has finished). */
         fun abort() {
             closedPosted.set(true)
+            videoGate.close(gen)
             closeQuietly(socket)
         }
 
@@ -879,7 +887,7 @@ class SessionController(
                             trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             hint?.onRecv(msg.frameSeq, recvNs) // T-079: start of the frame's reported work
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
-                            if (hello.configId == currentConfigId) listener.onVideoFrame(msg)
+                            videoGate.deliver(gen, hello.configId) { listener.onVideoFrame(msg) } // T-160
                         }
                     }
                 }

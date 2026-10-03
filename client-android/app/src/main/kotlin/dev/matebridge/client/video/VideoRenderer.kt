@@ -56,6 +56,11 @@ class VideoRenderer(
      * (UI) thread before the generation's decoder thread starts; the rest come from the decoder threads.
      */
     private val onHealthEvent: (HealthEvent) -> Unit = {},
+    /**
+     * T-160: called at the end of [reconfigure] (caller's thread), once the queue holds nothing of the previous config
+     * and the codec for the new one is starting: frames of [StreamConfig] may be fed from now on.
+     */
+    private val onConfigInstalled: (StreamConfig) -> Unit = {},
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -291,6 +296,7 @@ class VideoRenderer(
             onKeyframeRequest(reason)
             start(surface)
         }
+        onConfigInstalled(newConfig) // T-160: only now may the session deliver this config's frames
     }
 
     private fun start(surface: Any) {
