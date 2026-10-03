@@ -1,7 +1,7 @@
 ---
 id: T-183
 title: Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-182, T-168]
@@ -121,7 +121,18 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Her adımda varsayılan yol aynı kalır: silinen her dal bugün yalnızca bir açılış parametresiyle açılıyordu.
+
+1. **perf hint:** `PerfHint.kt` ve `AndroidPerfHint.kt` silinir. `VideoRenderer` giriş/çıkış thread kancaları, `SessionController` yapıcı parametresi ve okuyucu thread kancası, `MainActivity.setupPerfHint`, `setTargetNs` çağrıları ve `close()` kaldırılır. `PerfHintTest` silinir.
+2. **rvote:** `RefreshVote.kt` silinir. `MainActivity` içindeki `parseRefreshVote`, `applyVoteChange`, driver, `statsTick` oylaması ve yalnızca T-140'ın eklediği `foreground` + `onResume` kaldırılır. `RefreshVoteTest` silinir.
+3. **cpd:** `ConstantPlayoutPacer.kt` silinir. `VideoRenderer.cpdConfig`, `drainOutput` parametresi ve dalı, `paceDUs` içindeki cpd okuması kaldırılır. Ayrıca `CodecState.cpd` alanı gider: T-161 `CodecState`'i `VideoRenderer.kt`'den `CodecGeneration.kt`'ye taşıdı, kart a30c769'a göre yazıldı (bkz. *Implementer check*). `ConstantPlayoutPacerTest` ve `VsyncIdleTest`'teki cpd durumu silinir. README satırı güncellenir.
+4. **oprate:** extra kaldırılır. `OperatingRate.resolve(streamFps)` yalnızca varsayılanı tutar (rate = akış fps). `OperatingRateTest.policies` → `streamFps`.
+5. **inflight:** `maxInFlight`/`inflightLimit` ve `canQueue` kapısı kaldırılır. `presentFields`'e sabit `0` geçer. `SlotReleaser.kt` değişmez.
+6. **keep_jitter/recenter:** `VsyncClock` alanları, `AdaptivePacer` T-067 dalları (pencere, taban, `recenters`) ve `presentFields`'teki `recenters` parametresi kaldırılır. Her biri `false` değerine indirgenir. `LockRecenterTest` silinir.
+7. **crypto bench:** `Records.bench`/`runBench`, extra ve `RecordOpenTest` bench testi kaldırılır.
+8. `display_timing` alanları silinir. `./scripts/check.sh` çalıştırılır, grep yapılır, handoff yazılır.
+
+**Riskler:** `MainActivity` T-169 ile paralel düzenleniyor; çakışmayı azaltmak için yalnızca silme yapılır. `canQueue(0, …)` her zaman `true` döndüğünden kapının silinmesi davranışı değiştirmez.
 
 ## Handoff
 
