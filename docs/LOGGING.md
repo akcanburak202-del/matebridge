@@ -208,3 +208,24 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 - Encoder'a her kare tek bir seri sahip kuyruğundan gider; rezervasyon sırası = VideoToolbox çağrı sırası, `stop` sonrası encode yok.
 - `ev=slot_double_release` (W): aynı rezervasyon ikinci kez bırakıldı; sayaç değişmez. Normal kullanımda hiç görülmemeli; görülürse hata.
+
+## Girdi yaşı (Mac, `input`, T-171)
+
+Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi politikası T-199, karar 0025).
+
+- Host, etkin oturumun kontrol bağlantısına (ACCEPTED ve kanıt sonrası etkinleşmiş) 500 ms'de bir PING gönderir. Kanıt beklerken (`proving`), onay beklerken (`pending`) ve HELLO öncesi göndermez. Kontrol akışına 500 ms'de ~30 bayt ekler; Wi-Fi'de sesin arkasında kuyruklanabilir. Bu zararsızdır ama PONG RTT'sini şişirir; aşağıdaki en düşük RTT penceresi bunu eler.
+- Yalnız bu PING'lere ait PONG (aynı `seq`, aynı `echo_time_us`, aynı bağlantı) saat farkı örneği olur. Tanımsız `seq`, başka bağlantı ya da yanlış echo yok sayılır. Kayıt yazılmaz.
+- Saat farkı: `rtt = alış − echo`, `offset = responder − (echo + rtt/2)` (tablet − Mac). Son 8 örnekten en düşük RTT'li olan kullanılır (tabletin `ClockSync`'i ile aynı kural).
+- Yaş, girdinin teslim anında (`InputController.deliver`, Mac saati) ölçülür:
+  - PEN örneği: `alış − (base_time_us + dt_us − offset)`, her örnek için ayrı.
+  - KEY / POINTER_REL / POINTER_ABS / SCROLL / PINCH: `alış − (time_us − offset)`.
+  - Negatif yaş kırpılmaz; dağılımda kalır ve `neg` ile sayılır.
+- Belirsizlik: ±(en iyi RTT / 2 + 1 ms). Tabletin olay saati (`MotionEvent.eventTime`) 1 ms çözünürlüklüdür, USB'de 1–3 ms'lik değerler bu tabandadır. Yaşlar tanı amaçlıdır; davranış bunlara bakmaz.
+- `I input ev=input_age interval_ms=<n> pen_n=<n> [pen_p50_us= pen_p95_us= pen_p99_us= pen_max_us=] pointer_n=… key_n=… scroll_n=… late_250ms=<n> neg=<n> no_offset=<n> offset_rtt_us=<n>|none clock_unc_us=<n>|none`: girdi akarken yaklaşık saniyede bir.
+  - Pencere ilk girdiyle açılır, ≥ 1 s olunca bir sonraki girdide ya da 1 s'lik yoklamada yazılır. Girdi yoksa satır yoktur. Oturum biterken yarım pencere de yazılır.
+  - Sınıflar: `pen` (PEN örneği başına), `pointer` (REL + ABS), `key`, `scroll` (SCROLL + PINCH). PEN_GESTURE ve kontrol mesajları sayılmaz.
+  - Bir sınıfta örnek yoksa yalnız `<sınıf>_n=0` yazılır. Yüzdelikler sabit boyutlu log-doğrusal histogramdan gelir (≤ %6,25 hata, kova üst sınırı, kesin `max` ile kırpılır). `max` kesindir.
+  - `late_250ms`: yaşı 250 ms'yi aşan girdi. `neg`: negatif yaş. `no_offset`: ilk PONG'dan önce gelen, yaşı hesaplanamayan girdi (dağılıma girmez).
+  - `offset_rtt_us`: kullanılan örneğin RTT'si. `clock_unc_us` = onun yarısı. Örnek yoksa `none`.
+- `input_session_end` satırının sonuna oturum toplamları eklenir, alan adları `age_` önekiyle aynıdır: `age_pen_n= …`, `age_late_250ms= age_neg= age_no_offset= age_offset_rtt_us= age_clock_unc_us=`, ayrıca `age_pongs=<n>` (kabul edilen saat örneği sayısı).
+- Tuş, karakter, keycode ya da koordinat hiçbir satıra yazılmaz; yalnız sayı ve süre.
