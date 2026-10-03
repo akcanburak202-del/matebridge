@@ -401,8 +401,11 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
 
     @Test func ejectedVolumeIsNotRemounted() {
         var p = mounted()
-        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+        let eject1 = p.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: [])
+        #expect(eject1)
         #expect(!p.remountsAfterRestart)
+        let eject2 = p.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: [])
+        #expect(!eject2)  // a duplicate notification
         #expect(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)) == [.unmount(localPort: 47010)])
         _ = p.filesInfo(.off)
         let install = p.filesInfo(ready)
@@ -416,16 +419,53 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
 
     @Test func unmountOfAnotherVolumeKeepsTheIntent() {
         var p = mounted()
-        #expect(p.volumeUnmounted(path: "/Volumes/MatePad-1").isEmpty)
-        #expect(p.volumeUnmounted(path: "/Volumes/Backup").isEmpty)
+        let eject3 = p.volumeUnmounted(path: "/Volumes/MatePad-1", mountedNow: ["/Volumes/MatePad"])
+        #expect(!eject3)
+        let eject4 = p.volumeUnmounted(path: "/Volumes/Backup", mountedNow: ["/Volumes/MatePad"])
+        #expect(!eject4)
         #expect(p.remountsAfterRestart)
         // Our own token-change unmount clears the path first, so its notification never counts as an eject.
         let actions = p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken))
-        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+        let eject5 = p.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: [])
+        #expect(!eject5)
         #expect(p.remountsAfterRestart)
         #expect(p.mountFinished(generation: mountGen(actions)!, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
-        #expect(p.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)  // now it is the user's eject
+        let eject6 = p.volumeUnmounted(path: "/Volumes/MatePad/", mountedNow: [])
+        #expect(eject6)  // now it is the user's eject
         #expect(!p.remountsAfterRestart)
+    }
+
+    @Test func lateNotificationOfOurUnmountAfterTheRemountLandedOnTheSamePathIsIgnored() {
+        var p = mounted()
+        let gen = mountGen(p.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)))!
+        // The remount finishes on the same mount point before the old volume's notification is handled.
+        #expect(p.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad").isEmpty)
+        let eject7 = p.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: ["/Volumes/MatePad"])
+        #expect(!eject7)
+        #expect(p.remountsAfterRestart)
+    }
+
+    @Test func notificationsOfTeardownAndStaleUnmountsAreNotEjects() {
+        var off = mounted()
+        _ = off.filesInfo(.off)  // our unmount
+        let eject8 = off.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: [])
+        #expect(!eject8)
+        #expect(off.remountsAfterRestart)
+
+        var stale = mounted()
+        let gen = mountGen(stale.filesInfo(FilesInfo(state: .ready, port: 47010, token: newToken)))!
+        _ = stale.mountFinished(generation: gen, localPort: 47010, path: "/Volumes/MatePad-1")
+        // The old, busy volume goes later (our retry or the user): it is not the current volume.
+        let eject9 = stale.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: ["/Volumes/MatePad-1"])
+        #expect(!eject9)
+        #expect(stale.remountsAfterRestart)
+    }
+
+    @Test func samePathIgnoresTrailingSlashes() {
+        #expect(TabletFilesPlanner.samePath("/Volumes/MatePad", "/Volumes/MatePad/"))
+        #expect(TabletFilesPlanner.samePath("/Volumes/MatePad//", "/Volumes/MatePad"))
+        #expect(!TabletFilesPlanner.samePath("/Volumes/MatePad", "/Volumes/MatePad-1"))
+        #expect(TabletFilesPlanner.samePath("/", "/"))
     }
 
     @Test func sessionEndAndShutdownForgetTheIntent() {
@@ -449,7 +489,8 @@ private func mounted(local: UInt16 = 47010) -> TabletFilesPlanner {
         var quitting = mounted()
         _ = quitting.shutdown()
         #expect(!quitting.remountsAfterRestart)
-        #expect(quitting.volumeUnmounted(path: "/Volumes/MatePad").isEmpty)
+        let eject10 = quitting.volumeUnmounted(path: "/Volumes/MatePad", mountedNow: [])
+        #expect(!eject10)
     }
 
     @Test func failedRemountIsNotRetriedUntilTheNextReady() {

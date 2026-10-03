@@ -226,15 +226,21 @@ public struct TabletFilesPlanner: Sendable {
         return startMount(automatic: false)
     }
 
-    /// A volume went away and is no longer mounted (the host checks that, e.g. on
-    /// `NSWorkspace.didUnmountNotification`). If it is the volume this session mounted, the user ejected it: forget
-    /// it and do not mount again by itself until the user opens it. Our own unmounts clear `mountedPath` first, so
-    /// their notifications never match.
-    public mutating func volumeUnmounted(path: String) -> [TabletFilesAction] {
-        guard !isShutDown, let mountedPath, mountedPath == path else { return [] }
+    /// A volume was unmounted (`NSWorkspace.didUnmountNotification`, delivered late and in any order relative to our
+    /// own actions). `mountedNow`: our mount points on the current forward at the time of handling.
+    ///
+    /// It counts as the user's eject only when it is the volume this session mounted and that path is not mounted
+    /// any more. Our own unmounts never count: teardown and a token change forget `mountedPath` before they unmount,
+    /// a stale `unmountPath` is never the current path, and a remount that already landed on the same mount point is
+    /// still in `mountedNow`. On an eject: forget the volume and do not mount again by itself until the user opens
+    /// it. Returns true when it was taken as an eject.
+    @discardableResult
+    public mutating func volumeUnmounted(path: String, mountedNow: [String]) -> Bool {
+        guard !isShutDown, let mountedPath, Self.samePath(mountedPath, path),
+              !mountedNow.contains(where: { Self.samePath($0, path) }) else { return false }
         self.mountedPath = nil
         forgetMountIntent()
-        return []
+        return true
     }
 
     /// Result of `mount`; `path` is the mount point on success, nil on failure.
@@ -316,6 +322,16 @@ public struct TabletFilesPlanner: Sendable {
               case .up = forward, info != nil, mountingGeneration == nil else { return [] }
         autoMountArmed = false
         return startMount(automatic: true)
+    }
+
+    /// Mount points from `getfsstat` and volume URLs from NSWorkspace may differ by a trailing slash.
+    static func samePath(_ a: String, _ b: String) -> Bool {
+        func trimmed(_ s: String) -> Substring {
+            var t = Substring(s)
+            while t.count > 1, t.hasSuffix("/") { t = t.dropLast() }
+            return t
+        }
+        return trimmed(a) == trimmed(b)
     }
 
     private mutating func forgetMountIntent() {

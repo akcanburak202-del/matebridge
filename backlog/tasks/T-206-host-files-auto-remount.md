@@ -9,6 +9,7 @@ decisions: [0028]
 files:
   - host-mac/Sources/MateBridgeCore/Files/TabletFilesPlanner.swift
   - host-mac/Tests/MateBridgeCoreTests/Files/TabletFilesPlannerTests.swift
+  - host-mac/Sources/MateBridgeHost/Files/TabletFilesBridge.swift  # orchestrator-approved 2026-10-03, eject wiring
   - backlog/tasks/T-206-host-files-auto-remount.md
 ---
 

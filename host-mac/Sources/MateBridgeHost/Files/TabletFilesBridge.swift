@@ -24,6 +24,8 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private var infoSlot = EpochCoalescer<FilesInfo>()
     private var retryQueued = false
     private var openQueued = false
+    /// `NSWorkspace.didUnmountNotification` observer (T-206): a Finder eject ends the remount intent.
+    private var unmountObserver: NSObjectProtocol?
 
     // Confined to `queue`.
     private var planner = TabletFilesPlanner()
@@ -36,7 +38,17 @@ public final class TabletFilesBridge: @unchecked Sendable {
     /// Called on the bridge queue whenever the menu state changes. Set before the first event.
     public var onMenuChange: (@Sendable (TabletFilesMenu) -> Void)?
 
-    public init() {}
+    public init() {
+        let observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnmountNotification, object: nil, queue: nil
+        ) { [weak self] note in
+            guard let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else { return }
+            self?.volumeUnmounted(path: url.path(percentEncoded: false))
+        }
+        lock.withLock { unmountObserver = observer }
+    }
+
+    deinit { removeUnmountObserver() }
 
     // MARK: - Events (any thread; handled in order on the bridge queue)
 
@@ -97,6 +109,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     /// App shutdown: cancel a pending mount, unmount and remove forwards, waiting at most `timeout` seconds.
     public func shutdown(timeout: TimeInterval = 3) {
+        removeUnmountObserver()
         lock.withLock { epoch += 1 }
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
@@ -106,6 +119,27 @@ public final class TabletFilesBridge: @unchecked Sendable {
         if done.wait(timeout: .now() + timeout) == .timedOut {
             logger.log(.warning, "shutdown_timeout", sessionID: 0, generation: 0)
         }
+    }
+
+    /// Any volume was unmounted (posting thread). The planner decides on the bridge queue whether it was the user
+    /// ejecting our volume. Our own unmounts never count (see `TabletFilesPlanner.volumeUnmounted`): the mount
+    /// points still on the current forward are passed in, so a remount that already landed on the same path is
+    /// not mistaken for an eject. The path is never logged.
+    private func volumeUnmounted(path: String) {
+        queue.async { [self] in
+            let mountedNow = planner.forwardedLocalPort.map { Self.mountPoints(localPort: $0) } ?? []
+            if planner.volumeUnmounted(path: path, mountedNow: mountedNow) {
+                logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off")
+            }
+        }
+    }
+
+    private func removeUnmountObserver() {
+        guard let observer = lock.withLock({ () -> NSObjectProtocol? in
+            defer { unmountObserver = nil }
+            return unmountObserver
+        }) else { return }
+        NSWorkspace.shared.notificationCenter.removeObserver(observer)
     }
 
     /// Sets the flag and returns true unless it was already set (one queued block per kind).
