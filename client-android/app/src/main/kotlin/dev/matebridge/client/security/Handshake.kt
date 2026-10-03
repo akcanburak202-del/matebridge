@@ -59,22 +59,15 @@ class SecureSession(
     private var committed = false
 
     /**
-     * PAIRING only (T-150, decision 0018): keeps the new key and its code as the **pending** record of `host_id`, once.
-     * Call right after the first HELLO_ACK was validated on a user-initiated connection: the user may leave for the
-     * Mac's approval dialog and the connection may drop before the approval (PROTOCOL.md section 9). The key becomes
-     * trusted only through a local confirmation ([PairTrust.promote]); the trusted key is not touched here. Returns true
-     * when a record was stored; throws when it could not be persisted (the session must then fail).
+     * PAIRING only (T-150, decision 0018): the new key, once (null afterwards and in PAIRED mode). The control reader
+     * does **not** store it: it hands it to the session engine, which stores it as the **pending** record of `host_id`
+     * only while this connection is still the current one (a stale reader must never write). The key becomes trusted
+     * only through a local confirmation ([PairTrust.promote]). The caller zeroes the returned copy.
      */
-    fun storePending(trust: PairTrust): Boolean {
-        if (!secrets.pairing || committed) return false
+    fun takePendingKey(): ByteArray? {
+        if (!secrets.pairing || committed) return null
         committed = true
-        val key = secrets.newPairKey()
-        try {
-            trust.storePending(secrets.hostId, key, sas ?: secrets.sas())
-        } finally {
-            key.fill(0)
-        }
-        return true
+        return secrets.newPairKey()
     }
 }
 

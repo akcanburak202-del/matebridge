@@ -219,15 +219,15 @@ class CryptoVectorsTest {
         assertEquals(false, sec.rePairing)
         // T-150: the new key is kept pending at the first ack (before the Mac's approval), once; it is not trusted.
         assertNull(f.store.get(ack.hostId.value))
-        assertEquals(true, sec.storePending(f.trust))
+        assertEquals(true, sec.storePendingForTest(f.trust))
         assertNull(f.store.get(ack.hostId.value)) // not replaced (nor created) before the local confirmation
         val pending = f.store.getPending(ack.hostId.value)!!
         assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), pending.key)
         assertEquals(mode("pairing").getValue("sas"), pending.sas)
-        assertEquals(false, sec.storePending(f.trust))
+        assertEquals(false, sec.storePendingForTest(f.trust))
         assertEquals(1, f.kv.commits)
         // only the confirmation makes it the trusted key
-        assertTrue(f.trust.promote(ack.hostId.value, awaitHost = false))
+        assertTrue(f.trust.promoteCurrent(ack.hostId.value, awaitHost = false))
         assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), f.store.get(ack.hostId.value))
         // control keys of the PAIRING session
         assertArrayEquals(
@@ -246,7 +246,7 @@ class CryptoVectorsTest {
         val f = TrustFixture().also { it.store.put(ack.hostId.value, ByteArray(32) { 7 }) }
         val sec = (hs.complete(ack, ackPayload, f.trust, userInitiated = true) as HandshakeOutcome.Secure).session
         assertEquals(true, sec.rePairing)
-        sec.storePending(f.trust)
+        sec.storePendingForTest(f.trust)
         assertArrayEquals(ByteArray(32) { 7 }, f.store.get(ack.hostId.value)) // not replaced before confirmation
         assertArrayEquals(hex(mode("pairing").getValue("new_pair_key")), f.store.getPending(ack.hostId.value)!!.key)
     }

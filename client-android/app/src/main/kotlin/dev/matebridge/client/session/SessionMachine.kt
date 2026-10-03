@@ -73,10 +73,18 @@ class SessionMachine(
         data class Received(val gen: Int, val msg: Message) : Event
         data class ProtocolError(val gen: Int) : Event
         /**
-         * The first HELLO_ACK was encrypted and valid. [code] is the pairing code (PAIRING only; its key is now stored
-         * pending); [hostId] the ack's host_id (T-150). Comes before the ack itself.
+         * The first HELLO_ACK was encrypted and valid. [code] is the pairing code (PAIRING only); [hostId] the ack's
+         * host_id (T-150). [pendingKey] (PAIRING only): the new key, stored pending by the machine only while [gen] is the
+         * current connection, so a stale reader never writes (review #2); zeroed after use, never logged. Comes before
+         * the ack itself.
          */
-        data class Secured(val gen: Int, val code: String?, val rePairing: Boolean, val hostId: Bytes? = null) : Event
+        data class Secured(
+            val gen: Int,
+            val code: String?,
+            val rePairing: Boolean,
+            val hostId: Bytes? = null,
+            val pendingKey: Bytes? = null,
+        ) : Event
         /** T-150: PAIRING answer on a connection the user did not start; the reader closed it, nothing was stored. */
         data class PairingNeedsUser(val gen: Int, val hostName: String, val rePair: Boolean) : Event
         /** T-150: PAIRED answer while [hostId] has a fresh unconfirmed pending key; nothing was derived, the reader closed it. */
@@ -215,6 +223,15 @@ class SessionMachine(
     private var promptGen = -1
     private var promptHostId: ByteArray? = null
     private var promptCode: String? = null
+    /** Fingerprint of the pending record whose code the prompt shows; a confirmation promotes only that record. */
+    private var promptFingerprint: ByteArray? = null
+    /** Fingerprint of the pending record this connection stored. */
+    private var sessionPendingFp: ByteArray? = null
+    /**
+     * Review #3: set by a cancel/timeout; an automatic start does nothing (`Failed(PAIR_CANCELLED)` again) until a
+     * user-initiated start or a forget clears it, so a cancelled key the Mac already approved cannot loop.
+     */
+    private var cancelLatched = false
     private var promptVisible = false
     private var promptVisibleUs = 0L
     private var promptLastUs = 0L
@@ -240,6 +257,16 @@ class SessionMachine(
             is Event.Start -> {
                 if (phase != Phase.IDLE) byeAndClose(out)
                 clearPrompt()
+                if (event.userInitiated) {
+                    cancelLatched = false
+                } else if (cancelLatched) {
+                    wakeAttempt = null
+                    userInitiated = false
+                    phase = Phase.FAILED
+                    log('I', "pair_cancel_latched", "")
+                    out += Action.Ui(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED))
+                    return out
+                }
                 endpoint = event.endpoint
                 backoffUs = BACKOFF_START_US
                 frames = 0
@@ -290,15 +317,9 @@ class SessionMachine(
                 lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
             }
             is Event.Secured -> if (event.gen == controlGen) {
-                pairingCode = event.code
-                rePairing = event.rePairing
-                sessionHostId = event.hostId?.value?.copyOf()
-                if (event.code != null) {
-                    pairingSession = true
-                    log('I', "pair_pending_stored", "re_pair=${flag(event.rePairing)}")
-                } else if (sessionHostId != null) {
-                    knownHostId = sessionHostId // PAIRED: derived with our trusted key for this host_id
-                }
+                onSecured(event, out)
+            } else {
+                event.pendingKey?.value?.fill(0) // a stale reader (stopped or superseded connection) never writes
             }
             is Event.PairingNeedsUser -> if (isCandidate(event.gen)) {
                 abortMigration(out, REASON_KEY) // a migration never pairs
@@ -316,8 +337,11 @@ class SessionMachine(
                 if (pending == null) {
                     lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR) // gone meanwhile: the next attempt derives normally
                 } else {
+                    val fp = pending.fingerprint()
                     pending.key.fill(0)
-                    showStoredPrompt(PairTrust.StoredPrompt(event.hostId.value.copyOf(), pending.sas, pending.createdAtWallMs), nowUs, out)
+                    showStoredPrompt(
+                        PairTrust.StoredPrompt(event.hostId.value.copyOf(), pending.sas, pending.createdAtWallMs, fp), nowUs, out,
+                    )
                 }
             }
             is Event.TrustConfirmed -> if (promptGen >= 0 && event.gen == promptGen) {
@@ -441,7 +465,9 @@ class SessionMachine(
                     } else {
                         phase = Phase.HOST_ACCEPTED_UNTRUSTED // only PING goes out until the user confirms
                         lastPongUs = nowUs
-                        out += Action.Ui(SessionUi.AwaitingApproval(hostName, pairingCode, rePairing, needsLocalConfirm = true))
+                        out += Action.Ui(
+                            SessionUi.AwaitingApproval(hostName, pairingCode, rePairing, needsLocalConfirm = true, promptGen = promptGen),
+                        )
                     }
                 }
                 else -> Unit // a repeated ACCEPTED changes nothing
@@ -452,8 +478,10 @@ class SessionMachine(
                 pairingSession = true
                 locallyTrusted = false
                 lastPongUs = nowUs
-                showPrompt(controlGen, sessionHostId, pairingCode, nowUs)
-                out += Action.Ui(SessionUi.AwaitingApproval(hostName, pairingCode, rePairing, needsLocalConfirm = true))
+                showPrompt(controlGen, sessionHostId, pairingCode, sessionPendingFp, nowUs)
+                out += Action.Ui(
+                    SessionUi.AwaitingApproval(hostName, pairingCode, rePairing, needsLocalConfirm = true, promptGen = promptGen),
+                )
             }
             HelloAck.REJECTED, HelloAck.VERSION_MISMATCH -> {
                 if (ack.status == HelloAck.REJECTED) onPairingRejected()
@@ -511,10 +539,49 @@ class SessionMachine(
         null // an unreadable store blocks nothing; the handshake still decides per host_id
     }
 
-    private fun showPrompt(gen: Int, hostId: ByteArray?, code: String?, nowUs: Long) {
+    /** PAIRING Secured on the current connection: store the new key pending (engine thread, gen-checked: review #2). */
+    private fun onSecured(event: Event.Secured, out: MutableList<Action>) {
+        pairingCode = event.code
+        rePairing = event.rePairing
+        sessionHostId = event.hostId?.value?.copyOf()
+        if (event.code == null) {
+            event.pendingKey?.value?.fill(0)
+            if (sessionHostId != null) knownHostId = sessionHostId // PAIRED: derived with our trusted key for this host_id
+            return
+        }
+        pairingSession = true
+        val key = event.pendingKey?.value ?: return // no key handed over (tests of the UI path only): nothing stored
+        val hostId = sessionHostId
+        val stored = try {
+            // Only a user-initiated start pairs (the handshake already aborts otherwise; this is the second lock).
+            if (userInitiated && hostId != null && trust != null) {
+                trust.storePending(hostId, key, event.code)
+                sessionPendingFp = dev.matebridge.client.security.PendingRecord.fingerprint(key, event.code)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            false
+        } finally {
+            key.fill(0)
+        }
+        if (!stored) {
+            // Not persisted (or not allowed): fail instead of pretending; the key is never logged.
+            log('W', "pair_key_store_failed", "")
+            closeAll(out, graceful = false)
+            phase = Phase.FAILED
+            out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
+            return
+        }
+        log('I', "pair_pending_stored", "re_pair=${flag(event.rePairing)}")
+    }
+
+    private fun showPrompt(gen: Int, hostId: ByteArray?, code: String?, fingerprint: ByteArray?, nowUs: Long) {
         promptGen = gen
         promptHostId = hostId
         promptCode = code
+        promptFingerprint = fingerprint
         promptVisibleUs = 0
         promptLastUs = nowUs
     }
@@ -523,6 +590,7 @@ class SessionMachine(
         promptGen = -1
         promptHostId = null
         promptCode = null
+        promptFingerprint = null
         promptVisibleUs = 0
     }
 
@@ -531,9 +599,9 @@ class SessionMachine(
         wakeAttempt = null
         phase = Phase.STORED_PROMPT
         knownHostId = sp.hostId
-        showPrompt(++genCounter, sp.hostId, sp.code, nowUs)
+        showPrompt(++genCounter, sp.hostId, sp.code, sp.fingerprint, nowUs)
         log('I', "pair_stored_prompt", "confirmed=${flag(sp.code == null)}")
-        out += Action.Ui(SessionUi.StoredTrust(sp.code, confirmed = sp.code == null))
+        out += Action.Ui(SessionUi.StoredTrust(sp.code, confirmed = sp.code == null, promptGen = promptGen))
     }
 
     private fun onTrustConfirmed(nowUs: Long, out: MutableList<Action>) {
@@ -565,21 +633,25 @@ class SessionMachine(
         }
     }
 
-    /** Promotes the pending key of [hostId]; on failure the session fails with KEY_STORE_FAILED (nothing half-written). */
+    /**
+     * Promotes the pending key of [hostId], only if it is still the record whose code the prompt shows (review #2).
+     * A commit failure fails the session with KEY_STORE_FAILED (nothing half-written); a different or missing record
+     * ends it like a cancel (`reason=stale`): the user never confirmed that key.
+     */
     private fun promote(hostId: ByteArray?, awaitHost: Boolean, out: MutableList<Action>): Boolean {
+        val fp = promptFingerprint
         val ok = try {
-            hostId != null && trust != null && trust.promote(hostId, awaitHost)
+            hostId != null && fp != null && trust != null && trust.promote(hostId, awaitHost, fp)
         } catch (e: Exception) {
-            false
-        }
-        if (!ok) {
             log('W', "pair_trust_confirm_failed", "")
             byeAndClose(out)
             phase = Phase.FAILED
             userInitiated = false
             clearPrompt()
             out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_STORE_FAILED))
+            return false
         }
+        if (!ok) cancelPrompt(REASON_STALE, out)
         return ok
     }
 
@@ -598,6 +670,7 @@ class SessionMachine(
         }
         phase = Phase.FAILED
         userInitiated = false
+        cancelLatched = true
         clearPrompt()
         log('I', "pair_trust_cancelled", "reason=$reason")
         out += Action.Ui(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED))
@@ -625,6 +698,7 @@ class SessionMachine(
 
     /** Trust is never revoked on an open connection: a live session ends like Stop (BYE + close) before the records go. */
     private fun onForget(out: MutableList<Action>) {
+        cancelLatched = false // the user dealt with the Mac: automatic connects may run again
         val h = knownHostId
         if (h == null) {
             log('I', "pair_forget_none", "")
@@ -764,6 +838,7 @@ class SessionMachine(
         pairingSession = false
         locallyTrusted = false
         sessionHostId = null
+        sessionPendingFp = null
         sealedSeen = false
         bufferedConfig = null
     }
@@ -871,6 +946,8 @@ class SessionMachine(
 
         /** T-150 `pair_trust_cancelled reason=` (with [REASON_TIMEOUT]). */
         const val REASON_USER = "user"
+        /** Review #2: the confirmed prompt's pending record was replaced or is gone; nothing was promoted. */
+        const val REASON_STALE = "stale"
 
         /** T-150: whether audio read on control connection [gen] may be delivered, given the machine's [acceptedGen]. */
         fun deliversAudio(acceptedGen: Int, gen: Int): Boolean = acceptedGen >= 0 && acceptedGen == gen

@@ -91,11 +91,11 @@ class HandshakeMatrixTest {
         val f = TrustFixture()
         val (sess, hostKey) = pairingHandshake(f.store)
         assertEquals(0, f.kv.commits) // nothing before the caller commits
-        assertTrue(sess.storePending(f.trust))
+        assertTrue(sess.storePendingForTest(f.trust))
         assertEquals(1, f.kv.commits)
         assertNull(f.store.get(hostId)) // T-150: not trusted before the local confirmation
         assertArrayEquals(hostKey, f.store.getPending(hostId)!!.key) // the key the Mac keeps on approval
-        assertFalse(sess.storePending(f.trust)) // idempotent
+        assertFalse(sess.storePendingForTest(f.trust)) // idempotent
         // Connection dropped before ACCEPTED: the pending key survives; a PAIRED answer is NOT derived from it.
         val hs = ClientHandshake()
         hs.hello(template)
@@ -104,7 +104,7 @@ class HandshakeMatrixTest {
         assertTrue(out is HandshakeOutcome.PendingUnconfirmed)
         assertArrayEquals(hostId, (out as HandshakeOutcome.PendingUnconfirmed).hostId)
         // after the confirmation the PAIRED handshake completes with the promoted key
-        assertTrue(f.trust.promote(hostId, awaitHost = true))
+        assertTrue(f.trust.promoteCurrent(hostId, awaitHost = true))
         val hs2 = ClientHandshake()
         hs2.hello(template)
         val out2 = hs2.complete(a, Codec.encodePayload(a), f.trust, userInitiated = false)
@@ -117,9 +117,9 @@ class HandshakeMatrixTest {
         val f = TrustFixture().also { it.store.put(hostId, ByteArray(32) { 9 }) }
         val (sess, hostKey) = pairingHandshake(f.store)
         assertTrue(sess.rePairing)
-        sess.storePending(f.trust)
+        sess.storePendingForTest(f.trust)
         assertArrayEquals(ByteArray(32) { 9 }, f.store.get(hostId))
-        assertTrue(f.trust.promote(hostId, awaitHost = false))
+        assertTrue(f.trust.promoteCurrent(hostId, awaitHost = false))
         assertArrayEquals(hostKey, f.store.get(hostId))
     }
 
@@ -129,7 +129,7 @@ class HandshakeMatrixTest {
         val a = ack(HelloAck.ACCEPTED, HelloAck.KEY_PAIRED)
         val hs = ClientHandshake(); hs.hello(template)
         val sess = (hs.complete(a, Codec.encodePayload(a), f.trust, userInitiated = true) as HandshakeOutcome.Secure).session
-        assertFalse(sess.storePending(f.trust))
+        assertFalse(sess.storePendingForTest(f.trust))
         assertEquals(1, f.kv.commits)
     }
 
@@ -403,25 +403,30 @@ class VideoChannelTest {
     }
 
     @Test
-    fun aFailingKeyStoreSurfacesFromStorePendingSoTheSessionCanFail() {
+    fun aPairingSessionHandsItsNewKeyOverOnceAndAPairedOneNever() {
+        // T-150 review #2: the reader writes nothing; it hands the key to the engine exactly once.
         val prk = ByteArray(32) { 4 }
         val sec = SecureSession(
             HelloAck(1, 1, 0, 0, ""), SessionSecrets(prk, true, ByteArray(16)),
             RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), "000000", false,
         )
+        assertArrayEquals(KeySchedule.newPairKey(prk), sec.takePendingKey())
+        assertNull(sec.takePendingKey())
+        val paired = SecureSession(
+            HelloAck(1, 0, 0, 0, ""), SessionSecrets(ByteArray(32) { 5 }, false, ByteArray(16)),
+            RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), null, false,
+        )
+        assertNull(paired.takePendingKey())
+        // a failing commit surfaces from the store (the machine then fails the session: PairTrustFlowTest)
         val f = TrustFixture().also { it.kv.failCommits = true }
         try {
-            sec.storePending(f.trust); fail()
+            f.trust.storePending(ByteArray(16), ByteArray(32), "000000"); fail()
         } catch (e: java.io.IOException) {
         }
         assertTrue(f.kv.m.isEmpty())
         // a read-only (migration candidate) store refuses too
-        val sec2 = SecureSession(
-            HelloAck(1, 1, 0, 0, ""), SessionSecrets(ByteArray(32) { 5 }, true, ByteArray(16)),
-            RecordSealer(ByteArray(32)), RecordOpener(ByteArray(32)), "000000", false,
-        )
         try {
-            sec2.storePending(PairTrust(ReadOnlyPairKeyStore(TrustFixture().store))); fail()
+            PairTrust(ReadOnlyPairKeyStore(TrustFixture().store)).storePending(ByteArray(16), ByteArray(32), "000000"); fail()
         } catch (e: UnsupportedOperationException) {
         }
     }
