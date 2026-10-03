@@ -1,7 +1,7 @@
 import XCTest
 @testable import MateBridgeCore
 
-/// T-086: codec, bitrate precedence, encoder knobs, idle refresh, quality metrics, bench options.
+/// T-086: codec, bitrate precedence, encoder knobs, quality metrics, bench options. T-204: `ev=profile`.
 final class EncoderKnobsTests: XCTestCase {
     // MARK: Parsing
 
@@ -11,36 +11,31 @@ final class EncoderKnobsTests: XCTestCase {
         for other in [nil, "", "hevc", "HEVC", "avc", "vp9"] { XCTAssertEqual(VideoSettings.parseCodec(other), .hevc) }
     }
 
-    func testParseH264Profile() {
-        XCTAssertEqual(H264Profile.parse("main"), .main)
-        XCTAssertEqual(H264Profile.parse("CBP"), .cbp)
-        XCTAssertEqual(H264Profile.parse("high52"), .high52)
-        for other in [nil, "", "high", "baseline", "x"] { XCTAssertEqual(H264Profile.parse(other), .high) }
-    }
-
     func testEncoderKnobDefaultsAreTodaysBehaviour() {
         let k = EncoderKnobs.parse([:])
         XCTAssertEqual(k, EncoderKnobs())
-        XCTAssertTrue(k.prioritizeSpeed)
         XCTAssertNil(k.quality)
-        XCTAssertEqual(k.h264Profile, .high)
-        XCTAssertFalse(k.idleRefresh.isEnabled)
-        XCTAssertTrue(k.retagInput)
         XCTAssertEqual(k.logFields, "prio_speed=1 quality=unset idle_refresh=off input_retag=1")
     }
 
     func testEncoderKnobValues() {
-        let k = EncoderKnobs.parse([
-            "MATEBRIDGE_PRIO_SPEED": "0", "MATEBRIDGE_QUALITY": "0.8", "MATEBRIDGE_H264_PROFILE": "main",
-            "MATEBRIDGE_IDLE_REFRESH_MS": "300", "MATEBRIDGE_IDLE_REFRESH_COUNT": "5",
-        ])
-        XCTAssertFalse(k.prioritizeSpeed)
+        let k = EncoderKnobs.parse(["MATEBRIDGE_QUALITY": "0.8"])
         XCTAssertEqual(k.quality, 0.8)
-        XCTAssertEqual(k.h264Profile, .main)
-        XCTAssertEqual(k.idleRefresh, IdleRefreshConfig(delayMs: 300, count: 5, keyframe: false))
-        XCTAssertEqual(k.logFields, "prio_speed=0 quality=0.80 idle_refresh=300ms*5 input_retag=1")
-        XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_PRIO_SPEED": "1"]).prioritizeSpeed)
-        XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_PRIO_SPEED": "no"]).prioritizeSpeed)
+        XCTAssertEqual(k.logFields, "prio_speed=1 quality=0.80 idle_refresh=off input_retag=1")
+    }
+
+    /// T-204: the retired knobs are not read any more; the `encoder_config` fields they fed are constants.
+    func testRetiredKnobsAreIgnored() {
+        let retired = [
+            "MATEBRIDGE_PRIO_SPEED": "0", "MATEBRIDGE_H264_PROFILE": "cbp", "MATEBRIDGE_INPUT_RETAG": "0",
+            "MATEBRIDGE_IDLE_REFRESH_MS": "300", "MATEBRIDGE_IDLE_REFRESH_COUNT": "5", "MATEBRIDGE_IDLE_REFRESH_KEY": "1",
+            "MATEBRIDGE_IDLE_REFRESH_BUFFER": "copy", "MATEBRIDGE_IDLE_REFRESH_QP": "10", "MATEBRIDGE_FRAME_DELAY": "1",
+        ]
+        XCTAssertEqual(EncoderKnobs.parse(retired), EncoderKnobs())
+        XCTAssertEqual(EncoderKnobs.parse(retired).logFields, "prio_speed=1 quality=unset idle_refresh=off input_retag=1")
+        let base = VideoSettings.tabletDefault
+        XCTAssertEqual(base.applyingExperimentKnobs(retired), base.applyingExperimentKnobs([:]))
+        XCTAssertEqual(StreamProfileLog.knobsField(retired), "-")
     }
 
     func testParseQuality() {
@@ -48,18 +43,6 @@ final class EncoderKnobsTests: XCTestCase {
         XCTAssertEqual(EncoderKnobs.parseQuality("1.0"), 1)
         XCTAssertEqual(EncoderKnobs.parseQuality(" 0.55 "), 0.55)
         for bad in [nil, "", "-0.1", "1.01", "nan", "inf", "x"] { XCTAssertNil(EncoderKnobs.parseQuality(bad), "\(bad ?? "nil")") }
-    }
-
-    func testIdleRefreshConfigParse() {
-        XCTAssertEqual(IdleRefreshConfig.parse([:]), IdleRefreshConfig())
-        XCTAssertEqual(IdleRefreshConfig.parse(["MATEBRIDGE_IDLE_REFRESH_MS": "0"]).delayMs, 0)
-        XCTAssertEqual(IdleRefreshConfig.parse(["MATEBRIDGE_IDLE_REFRESH_MS": "10001"]).delayMs, 0)
-        XCTAssertEqual(IdleRefreshConfig.parse(["MATEBRIDGE_IDLE_REFRESH_MS": "abc"]).delayMs, 0)
-        let c = IdleRefreshConfig.parse(["MATEBRIDGE_IDLE_REFRESH_MS": "250", "MATEBRIDGE_IDLE_REFRESH_COUNT": "99",
-                                         "MATEBRIDGE_IDLE_REFRESH_KEY": "1"])
-        XCTAssertEqual(c, IdleRefreshConfig(delayMs: 250, count: 3, keyframe: true))
-        XCTAssertEqual(c.logValue, "250ms*key")
-        XCTAssertEqual(IdleRefreshConfig().logValue, "off")
     }
 
     // MARK: Settings
@@ -99,67 +82,6 @@ final class EncoderKnobsTests: XCTestCase {
         let bad = VideoSettings.tabletDefault.applyingExperimentKnobs(["MATEBRIDGE_BITRATE_KBPS": "200000"])
         XCTAssertEqual(bad.applying(prefs).bitrateKbps, 60_000)
         XCTAssertEqual(bad.bitrateSource, "prefs")
-    }
-
-    // MARK: Idle refresh
-
-    private let ms: UInt64 = 1_000
-
-    func testIdleRefreshOffDoesNothing() {
-        var p = IdleRefreshPolicy(config: IdleRefreshConfig(), fps: 120)
-        p.captured(nowUs: 0)
-        for t in stride(from: UInt64(0), to: 5_000 * ms, by: 8_000) { XCTAssertEqual(p.tick(nowUs: t), .none) }
-    }
-
-    func testIdleRefreshNothingBeforeFirstCapture() {
-        var p = IdleRefreshPolicy(config: IdleRefreshConfig(delayMs: 100), fps: 120)
-        XCTAssertEqual(p.tick(nowUs: 10_000 * ms), .none)
-    }
-
-    func testIdleRefreshResubmitsCountTimesOnePerFrameThenStops() {
-        var p = IdleRefreshPolicy(config: IdleRefreshConfig(delayMs: 300, count: 3), fps: 120)
-        XCTAssertEqual(p.intervalUs, 8_333)
-        let start: UInt64 = 1_000_000 * ms
-        p.captured(nowUs: start)
-        XCTAssertEqual(p.tick(nowUs: start + 299 * ms), .none)
-        XCTAssertEqual(p.tick(nowUs: start + 300 * ms), .resubmit(first: true))
-        // Not before one frame interval.
-        XCTAssertEqual(p.tick(nowUs: start + 300 * ms + 8_000), .none)
-        XCTAssertEqual(p.tick(nowUs: start + 300 * ms + 8_333), .resubmit(first: false))
-        XCTAssertEqual(p.tick(nowUs: start + 300 * ms + 16_666), .resubmit(first: false))
-        // Done for this static stretch, however long it lasts.
-        for t in stride(from: start + 320 * ms, to: start + 10_000 * ms, by: 8_000) {
-            XCTAssertEqual(p.tick(nowUs: t), .none)
-        }
-        // A new capture re-arms it.
-        p.captured(nowUs: start + 10_000 * ms)
-        XCTAssertEqual(p.tick(nowUs: start + 10_300 * ms), .resubmit(first: true))
-    }
-
-    func testIdleRefreshCaptureCancelsRemainingResubmits() {
-        var p = IdleRefreshPolicy(config: IdleRefreshConfig(delayMs: 100, count: 5), fps: 60)
-        p.captured(nowUs: 0)
-        XCTAssertEqual(p.tick(nowUs: 100 * ms), .resubmit(first: true))
-        p.captured(nowUs: 110 * ms)
-        XCTAssertEqual(p.tick(nowUs: 130 * ms), .none)
-        XCTAssertEqual(p.tick(nowUs: 209 * ms), .none)
-        XCTAssertEqual(p.tick(nowUs: 210 * ms), .resubmit(first: true))
-    }
-
-    func testIdleRefreshCountOneAndKeyframeMode() {
-        var one = IdleRefreshPolicy(config: IdleRefreshConfig(delayMs: 50, count: 1), fps: 120)
-        one.captured(nowUs: 0)
-        XCTAssertEqual(one.tick(nowUs: 50 * ms), .resubmit(first: true))
-        XCTAssertEqual(one.tick(nowUs: 100 * ms), .none)
-
-        var key = IdleRefreshPolicy(config: IdleRefreshConfig(delayMs: 50, count: 3, keyframe: true), fps: 120)
-        key.captured(nowUs: 0)
-        XCTAssertEqual(key.tick(nowUs: 49 * ms), .none)
-        XCTAssertEqual(key.tick(nowUs: 50 * ms), .keyframe)
-        XCTAssertEqual(key.tick(nowUs: 60 * ms), .none)
-        XCTAssertEqual(key.tick(nowUs: 5_000 * ms), .none)
-        key.reset()
-        XCTAssertEqual(key.tick(nowUs: 6_000 * ms), .none)
     }
 
     // MARK: Stamps
@@ -278,7 +200,8 @@ final class EncoderKnobsTests: XCTestCase {
         let h = o.applyingEnvironment(["MATEBRIDGE_CODEC": "h264", "MATEBRIDGE_H264_PROFILE": "cbp",
                                        "MATEBRIDGE_BITRATE_KBPS": "60000"])
         XCTAssertEqual(h.codec, .h264)
-        XCTAssertEqual(h.h264Profile, .cbp)
+        // T-204: `MATEBRIDGE_H264_PROFILE` is not read any more (constant High profile).
+        XCTAssertEqual(h, o.applyingEnvironment(["MATEBRIDGE_CODEC": "h264", "MATEBRIDGE_BITRATE_KBPS": "60000"]))
         XCTAssertEqual(h.configs.map(\.bitrateKbps), [60_000])
     }
 
@@ -294,16 +217,86 @@ final class EncoderKnobsTests: XCTestCase {
                 return XCTFail("\(bad) should fail")
             }
         }
+        // T-087 option kept: resume frames.
+        XCTAssertEqual(try XCTUnwrap(SharpnessBenchOptions.parse(["--sharpness-bench", "--resume-frames", "120"]))
+            .get().resumeFrames, 120)
+        // T-204: `--refresh-buffer` is gone; like any unknown argument it no longer changes the options.
+        XCTAssertEqual(try XCTUnwrap(SharpnessBenchOptions.parse(["--sharpness-bench", "--refresh-buffer", "copy"]))
+            .get(), SharpnessBenchOptions())
     }
 
-    func testSharpnessBenchStaticWaitCoversIdleRefresh() {
-        var o = SharpnessBenchOptions()
-        o.staticMs = 100
-        XCTAssertEqual(o.effectiveStaticMs(idleRefresh: IdleRefreshConfig()), 100)
-        // 300 ms + 3 frames at 120 fps (25 ms) + 250 ms.
-        XCTAssertEqual(o.effectiveStaticMs(idleRefresh: IdleRefreshConfig(delayMs: 300, count: 3)), 575)
-        XCTAssertEqual(o.effectiveStaticMs(idleRefresh: IdleRefreshConfig(delayMs: 300, keyframe: true)), 559)
-        o.staticMs = 2_000
-        XCTAssertEqual(o.effectiveStaticMs(idleRefresh: IdleRefreshConfig(delayMs: 300)), 2_000)
+    // MARK: Profile line (T-204)
+
+    private let build = BuildInfo(version: "0.1", build: "20261003121314", sha: "65dc662-dirty")
+
+    func testProfileWithEmptyEnvironmentListsNoKnobs() {
+        let f = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .fast, build: build, env: [:])
+        XCTAssertEqual(f, "fps=60 bitrate_kbps=30000 bitrate_source=prefs codec=hevc encoder_profile=fast "
+                       + "scale_permille=1000 refresh_hz=60 sha=65dc662-dirty knobs=-")
+        XCTAssertTrue(StreamProfileLog.knobs([:]).isEmpty)
+    }
+
+    func testProfileListsSetKnobsWithValues() {
+        let env = ["MATEBRIDGE_BITRATE_KBPS": "40000"]
+        let s = VideoSettings.tabletDefault.applyingExperimentKnobs(env)
+        let f = StreamProfileLog.fields(settings: s, encoderProfile: .fast, build: build, env: env)
+        XCTAssertTrue(f.contains(" bitrate_kbps=40000 bitrate_source=env "), f)
+        XCTAssertTrue(f.hasSuffix(" knobs=MATEBRIDGE_BITRATE_KBPS:40000"), f)
+        // Allow-list order, not dictionary order; the T-177 step value keeps its commas.
+        let many = ["MATEBRIDGE_AUDIO": "off", "MATEBRIDGE_FPS": "120", "MATEBRIDGE_BITRATE_STEP": "60000,15000@5s",
+                    "MATEBRIDGE_ENCODER": "llrc"]
+        XCTAssertEqual(StreamProfileLog.knobsField(many),
+                       "MATEBRIDGE_FPS:120;MATEBRIDGE_ENCODER:llrc;MATEBRIDGE_BITRATE_STEP:60000,15000@5s;MATEBRIDGE_AUDIO:off")
+    }
+
+    func testProfileIgnoresRetiredAndUnknownKeys() {
+        let env = ["MATEBRIDGE_IDLE_REFRESH_MS": "300", "MATEBRIDGE_INPUT_RETAG": "0", "MATEBRIDGE_PRIO_SPEED": "0",
+                   "MATEBRIDGE_H264_PROFILE": "main", "MATEBRIDGE_FRAME_DELAY": "1", "MATEBRIDGE_VIDEO_SOCKET": "nw",
+                   "MATEBRIDGE_CONTROL_SOCKET": "nw", "MATEBRIDGE_SIGN_IDENTITY": "someone", "HOME": "/Users/x",
+                   "MATEBRIDGE_CODEC": "h264"]
+        XCTAssertEqual(StreamProfileLog.knobsField(env), "MATEBRIDGE_CODEC:h264")
+        let f = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .fast, build: build, env: env)
+        XCTAssertFalse(f.contains("IDLE_REFRESH"), f)
+        XCTAssertFalse(f.contains("/Users"), f)
+    }
+
+    func testProfileValuesStayOneToken() {
+        XCTAssertEqual(StreamProfileLog.knobsField(["MATEBRIDGE_SERVICE_CLASS": " a b=c;d\te "]),
+                       "MATEBRIDGE_SERVICE_CLASS:a_b_c_d_e")
+        XCTAssertEqual(StreamProfileLog.knobsField(["MATEBRIDGE_TCP_LOG": "  "]), "MATEBRIDGE_TCP_LOG:_")
+        let long = String(repeating: "9", count: 200)
+        XCTAssertEqual(StreamProfileLog.knobs(["MATEBRIDGE_FPS": long]).first?.value.count,
+                       StreamProfileLog.maxValueLength)
+        let f = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .llrc, build: build,
+                                        env: ["MATEBRIDGE_SERVICE_CLASS": "x y"])
+        for token in f.split(separator: " ") { XCTAssertEqual(token.filter { $0 == "=" }.count, 1, String(token)) }
+    }
+
+    func testProfileShaComesFromBuildInfo() {
+        let f = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .fast, build: build, env: [:])
+        XCTAssertTrue(f.contains(" sha=65dc662-dirty "), f)
+        // The same `sha=` token as `ev=app_start` (T-145).
+        XCTAssertTrue(build.logFields(os: "x").contains(" sha=65dc662-dirty "))
+        let unknown = StreamProfileLog.fields(settings: .tabletDefault, encoderProfile: .fast,
+                                              build: BuildInfo(infoDictionary: nil), env: [:])
+        XCTAssertTrue(unknown.contains(" sha=unknown "), unknown)
+    }
+
+    func testProfileAllowListIsTheKeptHostKnobs() {
+        let list = StreamProfileLog.knobAllowList
+        XCTAssertEqual(Set(list).count, list.count)
+        XCTAssertTrue(list.allSatisfy { $0.hasPrefix("MATEBRIDGE_") })
+        for kept in ["MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_CODEC", "MATEBRIDGE_REFRESH",
+                     "MATEBRIDGE_ENCODER", "MATEBRIDGE_QUALITY", "MATEBRIDGE_KEYFRAME_INTERVAL_S",
+                     "MATEBRIDGE_WIFI_BITRATE_KBPS", "MATEBRIDGE_SERVICE_CLASS", "MATEBRIDGE_NOTSENT_LOWAT_KB",
+                     "MATEBRIDGE_AUDIO", "MATEBRIDGE_SENDQ_LOG", "MATEBRIDGE_LAT_TRACE", "MATEBRIDGE_TCP_LOG",
+                     "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_BITRATE_STEP", "MATEBRIDGE_RATE_WINDOW_MS"] {
+            XCTAssertTrue(list.contains(kept), kept)
+        }
+        for gone in ["MATEBRIDGE_IDLE_REFRESH_MS", "MATEBRIDGE_FRAME_DELAY", "MATEBRIDGE_PRIO_SPEED",
+                     "MATEBRIDGE_H264_PROFILE", "MATEBRIDGE_INPUT_RETAG", "MATEBRIDGE_VIDEO_SOCKET",
+                     "MATEBRIDGE_CONTROL_SOCKET"] {
+            XCTAssertFalse(list.contains(gone), gone)
+        }
     }
 }

@@ -25,11 +25,10 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
 ///
 /// Newest frame wins: at most `maxInFlight` frames are inside VideoToolbox and one more "latest" frame waits in
 /// `pending` (replaced by newer captures, submitted when a slot frees). The last captured buffer is retained so a
-/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer (or,
-/// with `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy`, a copy of it) is re-encoded by the optional idle quality refresh
-/// (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086), optionally under a QP cap (`MATEBRIDGE_IDLE_REFRESH_QP`, T-087).
+/// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames (`resubmitLast`). The
+/// idle quality refresh that re-encoded it on a timer (T-086/T-087) was retired by T-204 (decision 0026).
 ///
-/// **Single submit owner (T-162).** Every `VTCompressionSessionEncodeFrame`, the per-frame `MaxAllowedFrameQP` update
+/// **Single submit owner (T-162).** Every `VTCompressionSessionEncodeFrame`, every live bitrate change (T-177)
 /// and the final `CompleteFrames`/`Invalidate` run on one serial owner queue (`EncoderSubmitOrder`), enqueued in slot
 /// reservation order. So PTS reach VideoToolbox strictly increasing and no frame is submitted after invalidate. All
 /// other threads (ScreenCaptureKit, timers, VideoToolbox's output callback, the coordinator) only take the lock and
@@ -56,8 +55,6 @@ final class HEVCEncoder: @unchecked Sendable {
         var slotFreeAtArrival = true
         /// Time spent waiting for a free slot, set when the frame claims its slot (`reserveSlot`).
         var slotWaitUs: UInt64 = 0
-        /// An idle quality refresh re-submission (T-087: the refresh QP cap applies to these only).
-        var refresh = false
         /// Any re-submission of the last buffer (synthetic `now + lead` stamp); trace only (T-170).
         var resubmit = false
 
@@ -91,19 +88,13 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastParameterSets: [UInt8] = []
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
-    private var refreshTimer: DispatchSourceTimer?
-    private var idleRefresh: IdleRefreshPolicy
+    /// `MATEBRIDGE_BITRATE_STEP` timer (T-177 device check); nil unless the knob is set.
+    private var stepTimer: DispatchSourceTimer?
+    private var stepTick = 0
     /// `captureTimeUs - deliveredUs` of the newest real capture (SCK stamps run ahead of delivery, ~+6.6 ms) and the
     /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
     private var captureLeadUs: Int64 = 0
     private var lastStampUs: UInt64?
-    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Owner queue only: decided and
-    /// applied in the same submit block as the frame it belongs to (`send`), so needs no lock.
-    private var qpBoost: RefreshQPBoost?
-    /// `qpBoost != nil`, fixed at creation (read without the lock).
-    private let qpBoostEnabled: Bool
-    /// Pool for `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` (T-087). Used only on the refresh timer queue.
-    private var refreshPool: CVPixelBufferPool?
     /// The first input retag was logged (T-113). Guarded by `lock`.
     private var retagLogged = false
 
@@ -126,10 +117,14 @@ final class HEVCEncoder: @unchecked Sendable {
     static let hostLog: LogSink = { level, event, fields in
         HostLog.log(level, component: "encoder", event: event, fields: fields)
     }
+    /// `video ev=bitrate_set` (T-177; `docs/LOGGING.md`).
+    static let videoLog: LogSink = { level, event, fields in
+        HostLog.log(level, component: "video", event: event, fields: fields)
+    }
 
     /// - Parameters:
     ///   - knobs: encoder experiment knobs; nil reads them from the process environment (`EncoderKnobs.parse`).
-    ///   - logSink: where `ev=encoder_config` / `ev=idle_refresh` go (the benches print them instead).
+    ///   - logSink: where `ev=encoder_config` / `ev=profile` go (the benches print them instead).
     init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
          logSink: @escaping LogSink = HEVCEncoder.hostLog, output: @escaping Output,
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
@@ -138,19 +133,15 @@ final class HEVCEncoder: @unchecked Sendable {
         self.output = output
         self.onFailure = onFailure
         self.logSink = logSink
-        let knobs = knobs ?? EncoderKnobs.parse(ProcessInfo.processInfo.environment)
+        let env = ProcessInfo.processInfo.environment
+        let knobs = knobs ?? EncoderKnobs.parse(env)
         self.knobs = knobs
-        self.idleRefresh = IdleRefreshPolicy(config: knobs.idleRefresh, fps: settings.fps)
-        if knobs.idleRefresh.isEnabled, !knobs.idleRefresh.keyframe, let qp = knobs.idleRefresh.maxQP {
-            self.qpBoost = RefreshQPBoost(maxQP: qp)
-        }
-        self.qpBoostEnabled = qpBoost != nil
 
         // T-047/T-053 bench: at 2800x1840 the low-latency rate control + RealTime path costs ~9-13 ms per frame and
         // tops out near 100 fps; without both the hardware encoder needs ~6 ms. Frame sizes stay even enough (p99 <=
         // 4x mean on moving content), so `.fast` is the default at every fps; MATEBRIDGE_ENCODER=llrc|fast overrides.
         let profile = EncoderProfile.resolve(
-            fps: settings.fps, override: EncoderProfile.parse(ProcessInfo.processInfo.environment["MATEBRIDGE_ENCODER"]),
+            fps: settings.fps, override: EncoderProfile.parse(env["MATEBRIDGE_ENCODER"]),
             defaultProfile: .fast)
         self.profile = profile
         let highRate = profile == .fast
@@ -167,6 +158,7 @@ final class HEVCEncoder: @unchecked Sendable {
         let backend = Backend(session: s)
         order = EncoderSubmitOrder(
             backend: backend, streamFps: settings.fps, maxInFlight: HEVCEncoder.maxInFlight,
+            initialBitrateKbps: settings.bitrateKbps,
             nowUs: { HostClock.nowUs() },
             pacerCounts: { [meter] overwritten, decimated, deferred in
                 for _ in 0..<overwritten { meter?.recordOverwritten() }
@@ -188,12 +180,8 @@ final class HEVCEncoder: @unchecked Sendable {
         }
         set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
-            Self.profileLevel(settings.codec, h264: knobs.h264Profile))
+        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
-        if let delay = settings.maxFrameDelayCount {
-            set("MaxFrameDelayCount", kVTCompressionPropertyKey_MaxFrameDelayCount, delay as CFNumber)
-        }
         // T-086: a constant-quality target replaces the average bitrate; if VideoToolbox refuses it, fall back.
         var qualityOK = false
         if let q = knobs.quality {
@@ -210,13 +198,15 @@ final class HEVCEncoder: @unchecked Sendable {
             set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
         }
         // Cap bursts (bytes per second) at 2x the average (also with Quality: the cap is the safety net).
+        // `MATEBRIDGE_RATE_WINDOW_MS` adds a shorter window (T-177 diagnostics).
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
-            [settings.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
+            Self.dataRateLimits(kbps: settings.bitrateKbps, shortWindowMs: knobs.rateWindowMs))
         // Keyframes are requested on demand (TCP is reliable); the periodic one is only a long safety net (T-075).
         set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
             HEVCEncoder.keyframeIntervalSeconds as CFNumber)
+        // Always on (T-204 retired `MATEBRIDGE_PRIO_SPEED=0`: ~25 ms per frame without it, T-086).
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-            knobs.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
+            kCFBooleanTrue)
         // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range). Captured buffers are retagged to
         // these before encoding (T-113, `retagForSession`).
         set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, Self.sessionPrimaries)
@@ -233,40 +223,50 @@ final class HEVCEncoder: @unchecked Sendable {
         idleTimer = timer
         timer.resume()
 
-        // Idle quality refresh (T-086, off by default): polled once per frame interval.
-        if knobs.idleRefresh.isEnabled {
-            let refresh = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.refresh"))
-            let every = DispatchTimeInterval.microseconds(Int(max(1_000, idleRefresh.intervalUs)))
-            refresh.schedule(deadline: .now() + every, repeating: every, leeway: .microseconds(500))
-            refresh.setEventHandler { [weak self] in self?.idleRefreshTick() }
-            refreshTimer = refresh
-            refresh.resume()
+        // T-177 debug step (off by default): drives the live setter on a timer.
+        if let step = knobs.bitrateStep {
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.bitrate_step"))
+            let every = DispatchTimeInterval.milliseconds(step.periodMs)
+            t.schedule(deadline: .now() + every, repeating: every)
+            t.setEventHandler { [weak self] in self?.bitrateStepTick(step) }
+            stepTimer = t
+            t.resume()
         }
 
         logSink(.info, "encoder_config",
                 "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
                 + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
                 + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)")
-        if qpBoostEnabled, profile == .fast {
-            // T-087 bench: the fast profile (no low-latency rate control) accepts a mid-stream MaxAllowedFrameQP
-            // and ignores it, so the refresh frames stay all-skip in a settled session.
-            logSink(.warning, "idle_refresh_qp", "effective=0 reason=fast_profile_ignores_midstream_qp")
+        // T-204 (decision 0026 §4): one line per stream start naming the configuration this log came from.
+        logSink(.info, "profile", StreamProfileLog.fields(settings: settings, encoderProfile: profile,
+                                                          build: Self.buildInfo, env: env))
+    }
+
+    /// The running build (T-145), for `ev=profile`'s `sha=`: the same source as `ev=app_start`.
+    private static let buildInfo = BuildInfo(infoDictionary: Bundle.main.infoDictionary)
+
+    /// `DataRateLimits` value: `[bytes, seconds, ...]` (`RateLimitWindows`). The default 1 s pair stays two integers,
+    /// exactly what was set before T-177.
+    static func dataRateLimits(kbps: Int, shortWindowMs: Int?) -> CFArray {
+        var values: [NSNumber] = []
+        for p in RateLimitWindows.pairs(kbps: kbps, shortWindowMs: shortWindowMs) {
+            values.append(NSNumber(value: p.bytes))
+            values.append(p.windowMs == 1000 ? NSNumber(value: 1) : NSNumber(value: Double(p.windowMs) / 1000))
         }
+        return values as CFArray
     }
 
     static func codecType(_ codec: Codec) -> CMVideoCodecType {
         codec == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC
     }
 
-    static func profileLevel(_ codec: Codec, h264: H264Profile) -> CFString {
-        guard codec == .h264 else { return kVTProfileLevel_HEVC_Main_AutoLevel }
-        switch h264 {
-        case .high: return kVTProfileLevel_H264_High_AutoLevel
-        case .main: return kVTProfileLevel_H264_Main_AutoLevel
-        case .cbp: return kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel
-        case .high52: return kVTProfileLevel_H264_High_5_2
-        }
+    /// HEVC Main, or H.264 High (constant since T-204 retired `MATEBRIDGE_H264_PROFILE`), level chosen by the encoder.
+    static func profileLevel(_ codec: Codec) -> CFString {
+        codec == .h264 ? kVTProfileLevel_H264_High_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
     }
+
+    /// Profile name logged for H.264 (`profile=high`).
+    static let h264ProfileLogName = "high"
 
     // Session colour properties (T-113: one source for the session and the input retag).
     static var sessionPrimaries: CFString { kCVImageBufferColorPrimaries_ITU_R_709_2 }
@@ -295,7 +295,7 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     /// Profile name for the `ev=encoder_config` line logged with the parameter sets.
-    private var profileLogName: String { settings.codec == .h264 ? knobs.h264Profile.rawValue : "main" }
+    private var profileLogName: String { settings.codec == .h264 ? Self.h264ProfileLogName : "main" }
 
     /// Effective periodic keyframe interval in seconds (0 = on request only).
     static let keyframeIntervalSeconds = KeyframeIntervalPolicy.fromEnvironment()
@@ -345,12 +345,12 @@ final class HEVCEncoder: @unchecked Sendable {
                 displayTimeUs: UInt64 = 0) {
         meter?.recordEncoderIn()
         // T-113: before the buffer reaches VideoToolbox (and before it becomes `last`, which re-submissions reuse).
-        if knobs.retagInput, let replaced = Self.retagForSession(buffer) { noteRetag(replaced) }
+        // Unconditional since T-204.
+        if let replaced = Self.retagForSession(buffer) { noteRetag(replaced) }
         let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
                           deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
         order.offer(bypassGate: false) { _ in
             lock.lock()
-            idleRefresh.captured(nowUs: input.deliveredUs)
             captureLeadUs = ResubmitStamp.lead(captureUs: input.captureTimeUs, deliveredUs: input.deliveredUs)
             lastStampUs = max(lastStampUs ?? 0, input.captureTimeUs)
             lock.unlock()
@@ -369,140 +369,23 @@ final class HEVCEncoder: @unchecked Sendable {
         }
     }
 
-    /// Re-encodes the last captured buffer (keyframe on a static screen, idle refresh). Reading `last` and offering
-    /// it happen under one lock, so a newer capture can never be replaced in `last` by an older buffer.
+    /// Re-encodes the last captured buffer (keyframe on a static screen: the idle keyframe timer and
+    /// `requestKeyframe(resubmitNow:)`). Reading `last` and offering it happen under one lock, so a newer capture can
+    /// never be replaced in `last` by an older buffer.
     /// The stamp keeps the real captures' capture-to-delivery lead (T-086): the tablet pacer judges lateness as
     /// `ready - capture_time`, and a re-submission stamped plain "now" would look one lead (~6.6 ms) late.
-    ///
-    /// `refresh`: an idle quality refresh (T-087). With `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` its content is copied
-    /// into a fresh buffer first (outside the lock); if a newer capture replaced `last` meanwhile, the stale copy is
-    /// dropped (that capture re-armed the refresh policy anyway).
-    private func resubmitLast(refresh: Bool = false) {
-        var copy: CVPixelBuffer?
-        var copiedFrom: CVPixelBuffer?
-        if refresh, knobs.idleRefresh.buffer == .copy {
-            guard let source = order.lastOffered?.buffer else { return }
-            let start = DispatchTime.now().uptimeNanoseconds
-            copy = copyForRefresh(source)
-            let us = (DispatchTime.now().uptimeNanoseconds - start) / 1000
-            logSink(.debug, "idle_refresh_copy", "us=\(us) ok=\(copy != nil ? 1 : 0)")
-            copiedFrom = source
-        }
+    private func resubmitLast() {
         order.offer(bypassGate: true) { last in
             guard let l = last else { return nil }
-            if let copiedFrom, l.buffer !== copiedFrom { return nil }
             let nowUs = HostClock.nowUs()
             lock.lock()
             let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
             lastStampUs = max(lastStampUs ?? 0, stamp)
             lock.unlock()
-            var input = Input(buffer: copy ?? l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
+            var input = Input(buffer: l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
                               captureTimeUs: stamp, deliveredUs: nowUs)
-            input.refresh = refresh
             input.resubmit = true
             return input
-        }
-    }
-
-    /// Copies a captured frame into a new IOSurface-backed buffer of the same size and format, with its attachments
-    /// (colour tags). Refresh timer queue only (owns `refreshPool`). nil if the copy cannot be made.
-    private func copyForRefresh(_ source: CVPixelBuffer) -> CVPixelBuffer? {
-        let width = CVPixelBufferGetWidth(source), height = CVPixelBufferGetHeight(source)
-        let format = CVPixelBufferGetPixelFormatType(source)
-        if let pool = refreshPool, let attrs = CVPixelBufferPoolGetPixelBufferAttributes(pool) as? [CFString: Any],
-           attrs[kCVPixelBufferWidthKey] as? Int != width || attrs[kCVPixelBufferHeightKey] as? Int != height
-            || (attrs[kCVPixelBufferPixelFormatTypeKey] as? NSNumber)?.uint32Value != format {
-            refreshPool = nil
-        }
-        if refreshPool == nil {
-            let attrs: [CFString: Any] = [
-                kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
-                kCVPixelBufferPixelFormatTypeKey: format,
-                kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
-            ]
-            var pool: CVPixelBufferPool?
-            CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool)
-            refreshPool = pool
-        }
-        guard let pool = refreshPool else { return nil }
-        var made: CVPixelBuffer?
-        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let copy = made else {
-            return nil
-        }
-        CVPixelBufferLockBaseAddress(source, .readOnly)
-        CVPixelBufferLockBaseAddress(copy, [])
-        defer {
-            CVPixelBufferUnlockBaseAddress(copy, [])
-            CVPixelBufferUnlockBaseAddress(source, .readOnly)
-        }
-        let planes = CVPixelBufferGetPlaneCount(source)
-        guard planes == CVPixelBufferGetPlaneCount(copy), planes > 0 else { return nil }
-        for p in 0..<planes {
-            guard let from = CVPixelBufferGetBaseAddressOfPlane(source, p),
-                  let to = CVPixelBufferGetBaseAddressOfPlane(copy, p) else { return nil }
-            let fromStride = CVPixelBufferGetBytesPerRowOfPlane(source, p)
-            let toStride = CVPixelBufferGetBytesPerRowOfPlane(copy, p)
-            let rows = min(CVPixelBufferGetHeightOfPlane(source, p), CVPixelBufferGetHeightOfPlane(copy, p))
-            if fromStride == toStride {
-                memcpy(to, from, fromStride * rows)
-            } else {
-                let n = min(fromStride, toStride)
-                for r in 0..<rows { memcpy(to + r * toStride, from + r * fromStride, n) }
-            }
-        }
-        CVBufferPropagateAttachments(source, copy)
-        return copy
-    }
-
-    /// `MaxAllowedFrameQP` as the session reports it (diagnostics).
-    private static func readMaxQP(_ session: VTCompressionSession) -> String {
-        var raw: UnsafeMutableRawPointer?
-        let st = VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP, allocator: nil,
-                                       valueOut: &raw)
-        guard st == noErr, let raw else { return "unset(\(st))" }
-        return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
-    }
-
-    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set). Owner
-    /// queue only, in the submit block of the frame it applies to (T-162).
-    private func updateQPBoost(refresh: Bool, session: VTCompressionSession) {
-        guard var boost = qpBoost, let change = boost.before(refresh: refresh) else { return }
-        switch change {
-        case .apply(let qp):
-            let st = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
-                                          value: qp as CFNumber)
-            if st != noErr {
-                boost.applyFailed()
-                logSink(.warning, "idle_refresh_qp", "effective=0 status=\(st)")
-            }
-            logSink(.debug, "idle_refresh_qp", "change=apply qp=\(qp) status=\(st) readback=\(Self.readMaxQP(session))")
-        case .restore:
-            // No cap is set at creation and VideoToolbox refuses NULL here, so "lifted" is the codec maximum
-            // (measured T-087: a cap of 51 behaves exactly like no cap).
-            let st = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP,
-                                          value: IdleRefreshConfig.maxQPRange.upperBound as CFNumber)
-            if st != noErr { logSink(.warning, "idle_refresh_qp", "restore_failed status=\(st)") }
-            logSink(.debug, "idle_refresh_qp", "change=restore status=\(st) readback=\(Self.readMaxQP(session))")
-        }
-        qpBoost = boost
-    }
-
-    /// Idle quality refresh (T-086): re-encodes the last captured buffer once the screen has been static for the
-    /// configured delay, so the tablet does not keep the last (motion-time) frame.
-    private func idleRefreshTick() {
-        guard order.lastOffered != nil else { return }
-        lock.lock()
-        let action = idleRefresh.tick(nowUs: HostClock.nowUs())
-        lock.unlock()
-        switch action {
-        case .none:
-            return
-        case .resubmit(let first):
-            if first { logSink(.info, "idle_refresh", "frames=\(knobs.idleRefresh.count)") }
-            resubmitLast(refresh: true)
-        case .keyframe:
-            logSink(.info, "idle_refresh", "frames=1 mode=key")
-            requestKeyframe(resubmitNow: true)
         }
     }
 
@@ -516,6 +399,38 @@ final class HEVCEncoder: @unchecked Sendable {
         order.setTargetFps(fps)
     }
 
+    /// Changes the live session's target bitrate without restarting anything (T-177): no new `STREAM_CONFIG`, no
+    /// video reconnect, no keyframe. Clamped to `BitrateRequest.defaultRange` and deduplicated; applied on the owner
+    /// queue between two submits, never after `stop`. Whether VideoToolbox honours it (the `.fast` profile may
+    /// accept and ignore it, cf. T-087) is a device measurement. With `MATEBRIDGE_QUALITY` accepted only
+    /// `DataRateLimits` changes (`AverageBitRate` is not in use).
+    @discardableResult
+    func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
+        order.setBitrate(kbps: kbps)
+    }
+
+    /// `MATEBRIDGE_BITRATE_STEP` tick (its own timer queue).
+    private func bitrateStepTick(_ step: BitrateStepKnob) {
+        let kbps = lock.withLock { () -> Int in
+            defer { stepTick += 1 }
+            return step.value(atTick: stepTick)
+        }
+        setTargetBitrate(kbps: kbps)
+    }
+
+    /// Owner queue only (`Backend.setBitrate`, enqueued by `EncoderSubmitOrder.setBitrate`). Logs one line per
+    /// applied change (requests equal to the value in force never get here).
+    private func applyBitrate(kbps: Int, session: VTCompressionSession) {
+        var avg = "skipped"
+        if !qualityApplied {
+            avg = String(VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
+                                              value: (kbps * 1000) as CFNumber))
+        }
+        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                                          value: Self.dataRateLimits(kbps: kbps, shortWindowMs: knobs.rateWindowMs))
+        Self.videoLog(.info, "bitrate_set", "kbps=\(kbps) avg_status=\(avg) limits_status=\(limits)")
+    }
+
     /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
     /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
     final class Backend: CompressionBackend, @unchecked Sendable {
@@ -526,6 +441,11 @@ final class HEVCEncoder: @unchecked Sendable {
         /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
         func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
             encoder?.send(frame, key: keyframe, token: token, session: session)
+        }
+
+        /// After the encoder is gone nothing is set (its `deinit` already stopped the order).
+        func setBitrate(kbps: Int) {
+            encoder?.applyBitrate(kbps: kbps, session: session)
         }
 
         /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
@@ -550,7 +470,6 @@ final class HEVCEncoder: @unchecked Sendable {
                                             deliveredUs: frame.deliveredUs)
         trace.slotWaitUs = frame.slotWaitUs
         trace.resubmit = frame.resubmit
-        if qpBoostEnabled { updateQPBoost(refresh: frame.refresh, session: session) }
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
@@ -620,14 +539,13 @@ final class HEVCEncoder: @unchecked Sendable {
     /// queue after `CompleteFrames`/`Invalidate`.
     private func beginStop(completion: (@Sendable () -> Void)?) {
         lock.lock()
-        idleRefresh.reset()
         let timer = idleTimer
         idleTimer = nil
-        let refresh = refreshTimer
-        refreshTimer = nil
+        let step = stepTimer
+        stepTimer = nil
         lock.unlock()
         timer?.cancel()
-        refresh?.cancel()
+        step?.cancel()
         // `order` is nil only if `init` threw before creating it (then there is no session to close).
         if let order { order.stop(completion: completion) } else { completion?() }
     }

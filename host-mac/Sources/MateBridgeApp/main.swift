@@ -38,6 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let usbLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let usbWatcher = UsbTunnelWatcher()
     private static let usbModeKey = "usbModeEnabled"
+    /// Decision 0027 (T-189): "Yalnız USB" closes the LAN surface (loopback-only listeners, no Bonjour). Default off.
+    private let usbOnlyEntry = NSMenuItem(title: "Yalnız USB (Wi-Fi kapalı)", action: #selector(toggleUsbOnly),
+                                          keyEquivalent: "")
+    /// Shown while "Yalnız USB" is in force or a switch waits for the live session to end.
+    private let networkProfileLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// The profile the server's listeners run under (`networkProfileChanged`); differs from the stored choice while a
+    /// switch waits for the live session. The `adb reverse` watcher follows both (`syncUsbMode`).
+    private var appliedProfile: NetworkProfile = .all
     private let clipboardEntry = NSMenuItem(title: "Pano paylaşımı", action: #selector(toggleClipboard), keyEquivalent: "")
     private lazy var clipboard = ClipboardBridge(enabled: clipboardEnabled)
     private var signalSources: [DispatchSourceSignal] = []
@@ -63,6 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         videoLine.isEnabled = false
         videoLine.isHidden = true
         menu.addItem(videoLine)
+        networkProfileLine.isEnabled = false
+        networkProfileLine.isHidden = true
+        menu.addItem(networkProfileLine)
         tabletSettingsEntry.target = self
         tabletSettingsEntry.isHidden = true
         menu.addItem(tabletSettingsEntry)
@@ -77,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         accessibilitySettingsItem.isHidden = true
         menu.addItem(accessibilitySettingsItem)
         menu.addItem(.separator())
-        for entry in [loginItemEntry, usbModeEntry, clipboardEntry] {
+        for entry in [loginItemEntry, usbModeEntry, usbOnlyEntry, clipboardEntry] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -155,6 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             tabletFiles.sessionEnded()  // unmount the tablet volume, remove the forward
         }
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
+        handlers.networkProfileChanged = { [weak self] applied, pending in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.showNetworkProfile(applied, pending) } }
+        }
         handlers.settingsPanelAvailable = { [weak self] available in
             // FIFO onto the main queue: a quick true/false/true never lands out of order.
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.tabletSettingsEntry.isHidden = !available } }
@@ -178,7 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         // Ask for the permission under MateBridge's own identity, once per launch (a no-op when already granted).
         if !SystemAccessibility().isTrusted() { SystemAccessibility.requestPrompt() }
-        let server = SessionServer(handlers: handlers, makeStreamConfig: { coordinator.streamConfig(for: $0) })
+        appliedProfile = networkProfile
+        let server = SessionServer(handlers: handlers, networkProfile: networkProfile,
+                                   makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
         coordinator.onOverflow = { [server] in server.endSessions() }
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
@@ -192,11 +208,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             tabletFiles.usbStateChanged(state)
             Task { @MainActor in self?.showUsb(state) }
         }
-        usbWatcher.setEnabled(usbModeEnabled)
+        syncUsbMode()
     }
 
+    /// The `adb reverse` watcher and the "USB modu" item follow the stored choice, the applied and the requested
+    /// profile together: tunnels are never removed under a session a deferred switch preserves (T-189).
+    private func syncUsbMode() {
+        let on = NetworkProfile.usbWatcherEnabled(stored: usbModeEnabled, applied: appliedProfile,
+                                                  requested: networkProfile)
+        usbModeEntry.state = on ? .on : .off
+        usbWatcher.setEnabled(on)
+    }
+
+    private var usbModeToggleAllowed: Bool {
+        NetworkProfile.usbModeToggleAllowed(applied: appliedProfile, requested: networkProfile)
+    }
+
+    /// The stored "USB modu" choice. "Yalnız USB" forces the watcher on without changing it (T-189).
     private var usbModeEnabled: Bool {
         UserDefaults.standard.object(forKey: Self.usbModeKey) as? Bool ?? true
+    }
+
+    /// The stored "Yalnız USB" preference (missing or unknown: "USB + Wi-Fi").
+    private var networkProfile: NetworkProfile {
+        NetworkProfile(storedValue: UserDefaults.standard.object(forKey: NetworkProfile.defaultsKey))
     }
 
     private var clipboardEnabled: Bool {
@@ -218,7 +253,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         loginItem.refresh()  // read live: the user may have changed it in System Settings
         loginItemEntry.state = loginItem.status.isRequested ? .on : .off
         loginItemEntry.title = loginItem.status.menuTitle
-        usbModeEntry.state = usbModeEnabled ? .on : .off
+        usbModeEntry.state = NetworkProfile.usbWatcherEnabled(stored: usbModeEnabled, applied: appliedProfile,
+                                                              requested: networkProfile) ? .on : .off
+        usbOnlyEntry.state = networkProfile == .usbOnly ? .on : .off
         clipboardEntry.state = clipboardEnabled ? .on : .off
         showLoginProblem()
     }
@@ -234,10 +271,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func toggleUsbMode() {
-        let on = !usbModeEnabled
-        UserDefaults.standard.set(on, forKey: Self.usbModeKey)
-        usbModeEntry.state = on ? .on : .off
-        usbWatcher.setEnabled(on)
+        guard usbModeToggleAllowed else { return }  // locked on in "Yalnız USB"
+        UserDefaults.standard.set(!usbModeEnabled, forKey: Self.usbModeKey)
+        syncUsbMode()
+    }
+
+    /// "Yalnız USB" on/off: persisted, the `adb reverse` watcher follows at once (forced on in the mode), and the server
+    /// switches its listeners now or after the live session (`networkProfileChanged` updates the menu line).
+    @objc private func toggleUsbOnly() {
+        let profile: NetworkProfile = networkProfile == .usbOnly ? .all : .usbOnly
+        UserDefaults.standard.set(profile.storedValue, forKey: NetworkProfile.defaultsKey)
+        usbOnlyEntry.state = profile == .usbOnly ? .on : .off
+        syncUsbMode()  // on at once when entering; kept until the switch takes effect when leaving
+        server?.setNetworkProfile(profile)
+    }
+
+    private func showNetworkProfile(_ applied: NetworkProfile, _ pending: NetworkProfile?) {
+        appliedProfile = applied
+        syncUsbMode()  // a deferred switch away from "Yalnız USB" releases the forced tunnels only now
+        switch (applied, pending) {
+        case (_, .usbOnly?): networkProfileLine.title = "Yalnız USB: oturum bitince uygulanacak"
+        case (_, .all?): networkProfileLine.title = "USB + Wi-Fi: oturum bitince uygulanacak"
+        case (.usbOnly, nil): networkProfileLine.title = "Ağ: yalnız USB (Wi-Fi ve Bonjour kapalı)"
+        case (.all, nil): networkProfileLine.title = ""
+        }
+        networkProfileLine.isHidden = networkProfileLine.title.isEmpty
     }
 
     @objc private func toggleClipboard() {
@@ -295,7 +353,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem === tabletFilesEntry ? tabletFilesEnabled : true
+        if menuItem === tabletFilesEntry { return tabletFilesEnabled }
+        if menuItem === usbModeEntry { return usbModeToggleAllowed }  // locked on in "Yalnız USB"
+        return true
     }
 
     @objc private func forgetDevices() {

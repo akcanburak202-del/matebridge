@@ -32,12 +32,9 @@ public struct ColorTags: Equatable, Sendable {
 ///
 /// A buffer with no colour information at all is left alone (VideoToolbox does not convert it). One that carries
 /// only some tags, or only a `CGColorSpace`, is converted by VideoToolbox (measured), so it is rewritten too.
+///
+/// The rewrite is unconditional since T-204 (decision 0026 retired its A/B switch).
 public enum InputRetag {
-    /// `MATEBRIDGE_INPUT_RETAG=0` turns the rewrite off (the pre-T-113 behaviour, for A/B); anything else is on.
-    public static func isEnabled(_ env: [String: String]) -> Bool {
-        env["MATEBRIDGE_INPUT_RETAG"]?.trimmingCharacters(in: .whitespaces) != "0"
-    }
-
     /// True when the buffer carries colour information (`buffer` tags or a `CGColorSpace` attachment) that differs
     /// from the session's tags.
     public static func needsRetag(buffer: ColorTags, hasColorSpace: Bool, session: ColorTags) -> Bool {

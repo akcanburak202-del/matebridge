@@ -1,7 +1,7 @@
 ---
 id: T-189
 title: Add a "Yalnız USB" network profile
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -77,14 +77,89 @@ Decision 0027 must be accepted by the user before work starts (manifest §5 Q6: 
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+T-186 merged before this card: the `nw` listeners no longer exist, so there is nothing to force to `bsd` (that XCTest criterion is N/A).
+
+1. **Core `NetworkProfile`** (`MateBridgeCore/Session/NetworkProfile.swift`): `enum NetworkProfile { case all, usbOnly }`, stored as the strings `"all"` / `"usb_only"` under UserDefaults key `networkProfile`. A missing or unknown value parses as `.all`. Per profile it gives:
+   - `bindAddress`: `.any` / `.loopbackV4Mapped`;
+   - `advertisesBonjour`;
+   - `admits(peerHost:)`, built on `SessionTransport.classify`; a nil peer is refused in usb-only mode;
+   - `effectiveUsbMode(stored:)` and `allowsUsbModeToggle`.
+
+   It also has a pure switch decision, `NetworkProfileSwitch.decide(current:requested:activity:)`, where activity is `idle | pendingApproval | active(SessionTransport)`. The result is `unchanged | restartNow | deferred`.
+2. **Bind address = IPv4 loopback only (`::ffff:127.0.0.1`, one dual-stack socket per port, as today).** The Mac adb server opens the `adb reverse` target as a loopback client and tries IPv4 127.0.0.1 first; ::1 is only a fallback when IPv4 fails. `ControlSocketTests.testIPv4LoopbackSessionIsClassifiedUsb` already models this. One listener per port keeps `ListenerPortPlan` and the port fallback unchanged. Two listeners per port would add a second bind that has to share the fallback port, for no gain. Device check: a USB session works with `lsof` showing only `127.0.0.1:47001/47002`.
+3. **SessionServer:**
+   - `init(networkProfile:)`, plus `setNetworkProfile(_:)` (session queue).
+   - Both listeners bind `profile.bindAddress`.
+   - `acceptControl`/`acceptVideo` refuse a non-admitted peer before `start` (`ev=connection_refused reason=profile`).
+   - `startBonjour(for:)` is gated: in usb-only mode it cancels any record and returns, which covers the listener start, the TXT republish and the retry paths.
+   - The `listening` line gets `profile=all|usb_only`.
+   - New handler `networkProfileChanged(applied, pending)` for the menu.
+4. **Switch decision:**
+   - No session (idle, or only unauthenticated or approval-pending connections): restart now. `machine.shutdown()` closes the half-open connections and cancels a pending approval, so a LAN peer cannot keep a pairing alive into usb-only mode. No session exists to cut. Then the listeners are cancelled and restarted with the new profile. If a failure restart is already scheduled, only the profile is set, and the scheduled restart uses it.
+   - **Any live session (USB or Wi-Fi): deferred** until the session ends. The switch is applied automatically when the server becomes session-free, and the menu shows it as pending. A USB session is never cut. A Wi-Fi session is not ended either: on this Mac mini the tablet is the only screen, and the click comes from that screen. Ending the Wi-Fi session at once (with no cable attached) would cut the user's only display while the new mode refuses Wi-Fi reconnects. Deferring keeps the screen until the user leaves the session.
+5. **Menu (`main.swift`):**
+   - A "Yalnız USB" toggle next to "USB modu" persists `networkProfile`.
+   - While it is on, the `adb reverse` watcher is forced on (`effectiveUsbMode`). The "USB modu" item shows on but is disabled; the stored `usbModeEnabled` stays untouched, so turning Yalnız USB off restores the user's own choice.
+   - A status line is shown whenever usb-only mode is active or a switch is pending: "Ağ: yalnız USB (Wi-Fi ve Bonjour kapalı)" or "… oturum bitince uygulanacak". The default mode shows no extra line (unchanged UI).
+6. **Tests (`Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift`):**
+   - parse and round-trip;
+   - `admits` covering loopback forms with `%scope`, LAN v4/v6 and nil;
+   - the switch decision table;
+   - USB modu forcing;
+   - real sockets: the usb-only bind address accepts 127.0.0.1 and refuses a connect to the machine's own non-loopback IPv4. The test skips when no such address exists, or when an `.any` control listener is not reachable on it either.
+7. `UserDefaultsStreamPrefsStore.swift` is not needed: it stores per-device stream prefs, and the profile is an app-level bool-like key next to `usbModeEnabled`.
+
+Risks: the adb loopback family (verified on device by `lsof` plus a USB session), and the user forgetting the mode (mitigated by the menu line).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `7cbe255` (Codex P2 fixes) on top of `9fab1f9` (implementation); plan in `0de508e`.
 - **Dokunulan dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Session/NetworkProfile.swift` (new: `NetworkProfile`, `NetworkActivity`, `NetworkProfileSwitch`, `NetworkProfileController`, `usbWatcherEnabled` / `usbModeToggleAllowed`);
+  - `host-mac/Sources/MateBridgeCore/Session/BsdTcpSocket.swift` (`BindAddress` is now `Equatable`; `BsdTcpListener.cancel(onClosed:)` reports once the descriptor is closed);
+  - `host-mac/Sources/MateBridgeHost/Session/SessionServer.swift`:
+    - `init(networkProfile:)`, `setNetworkProfile(_:)`, `Handlers.networkProfileChanged`;
+    - bind address per profile;
+    - accept-time refusal `ev=connection_refused reason=profile`;
+    - Bonjour gate in `startBonjour(for:)`;
+    - `profile=` on `ev=listening`;
+    - `ev=network_profile profile=… from=… action=restart|deferred`;
+  - `host-mac/Sources/MateBridgeApp/main.swift`: "Yalnız USB (Wi-Fi kapalı)" toggle, a profile line, and USB modu locked on in the mode;
+  - `host-mac/Tests/MateBridgeCoreTests/Session/NetworkProfileTests.swift` (20 tests; on this machine the real-socket test ran instead of skipping).
+  - `UserDefaultsStreamPrefsStore.swift` was not touched (see Plan, step 7).
 - **Varsayımlar:**
+  - T-186 had merged, so `nw` forcing is N/A. The "effective socket kind is bsd" XCTest criterion does not apply because only `bsd` exists.
+  - The Mac's adb server connects the `adb reverse` target over IPv4 127.0.0.1 first, so binding `::ffff:127.0.0.1` alone is enough (`::1` is not bound).
+  - A live session of either transport defers the switch. Idle, or approval-pending, restarts at once and closes half-open connections and the pending approval.
+  - UserDefaults key `networkProfile`, values `all` / `usb_only`; anything else means "USB + Wi-Fi".
+  - **Codex P2 #1 fix:** the `adb reverse` watcher (and the shown "USB modu" state and its lock) follows the stored USB modu choice OR the applied profile OR the requested profile (`NetworkProfile.usbWatcherEnabled`).
+    - Leaving USB-only keeps the tunnels until the deferred switch actually takes effect (`networkProfileChanged` reports the applied profile).
+    - Entering USB-only brings the tunnels up at once. That is earlier than "applied only", but adding tunnels never harms a live session, and the mode is never left without them.
+  - **Codex P2 #2 fix:** a profile restart is two steps (`NetworkProfileController`).
+    - First the old listeners are cancelled with `cancel(onClosed:)`. The new ones bind only after both descriptors have closed (DispatchGroup notify on the session queue).
+    - Requests arriving meanwhile are coalesced, and the restart starts the latest request once.
+    - A `port_fallback` during a profile restart is logged at **error** level with `after=profile_switch`.
+  - `./scripts/check.sh` ALL OK after the fixes.
+  - `./scripts/check.sh` ALL OK.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - The menu: the "Yalnız USB" toggle persists across relaunches. While it is on, "USB modu" shows on and is disabled, and turning the mode off restores the earlier USB modu choice. The profile line text reads correctly.
+  - In USB-only mode, `lsof -iTCP -sTCP:LISTEN -P` shows only `127.0.0.1` (or `[::ffff:127.0.0.1]`) for 47001/47002, with no `*:`.
+  - In USB-only mode, `dns-sd -B _matebridge._tcp` is empty, including after a `wol=` change (for example toggling Wi-Fi).
+  - A USB session works in USB-only mode: video, pen, keyboard, audio and files. **The adb loopback family assumption is the main risk.**
+  - Switching with no session: `ev=network_profile action=restart` followed by a new `ev=listening … profile=`.
+  - Switching with a live USB or Wi-Fi session: `action=deferred`, the menu line "… oturum bitince uygulanacak", the session is not cut, and the switch applies after the session ends.
+  - Codex scenario: with USB modu stored off, turn Yalnız USB on and start a USB session, then turn Yalnız USB off. `adb reverse --list` must still show 47001/47002, and a STREAM_PREFS change (which reconnects video) must not freeze the screen. The tunnels go only after the session ends.
+  - Rapid toggling (Yalnız USB on/off/on with no session): exactly one `listening` line per completed restart, still on 47001/47002, and no `port_fallback`.
+  - Back in "USB + Wi-Fi": Bonjour is visible with TXT `wol=`, and a Wi-Fi session connects.
+  - A LAN connect attempt in USB-only mode is refused (the bind refuses it; `reason=profile` is unreachable with a loopback bind, defence in depth).
+  - Codex review (security) is still pending.
 - **Açık sorular:**
+  - `docs/LOGGING.md` (orchestrator):
+    - `ev=listening` gains `profile=all|usb_only`;
+    - `ev=connection_refused` gains `reason=profile` plus a `profile=` field;
+    - new `ev=network_profile profile=all|usb_only from=all|usb_only action=restart|deferred` (component `session`);
+    - `ev=port_fallback` gets `after=profile_switch`, at error level, when it happens during a profile restart.
+  - `docs/PROTOCOL.md` §3 step 1 (orchestrator): the planned note that Bonjour may be absent in "Yalnız USB" mode.
+  - Decision note for the orchestrator: a live **Wi-Fi** session is deferred, not ended (reason in Plan, step 4: the tablet is the only screen). If ending it is preferred, flip the `.active(.network)` branch in `NetworkProfileSwitch.decide` and its test.
+  - While a switch to USB-only is deferred, the LAN listeners and Bonjour stay up until the session ends. The menu line shows this.
+  - T-192 (settings reset) should also clear the `networkProfile` key.

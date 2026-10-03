@@ -60,6 +60,7 @@ To get full defaults on both sides, use T-191 on the tablet as well. Say so in t
 
 ## Kabul kriterleri
 
+- [ ] [XCTest] Reset also clears the `networkProfile` UserDefaults key (T-189 "Yalnız USB"), back to "USB + Wi-Fi"; if a live session exists, the profile change follows T-189's deferred-switch rule. Added by the orchestrator 2026-10-03.
 - [ ] [XCTest] `InMemoryStreamPrefsStore.removeAll()` empties the store: every `load` returns nil afterwards.
 - [ ] [XCTest] `HostSettingsReset` on a suite `UserDefaults` removes exactly the given keys and leaves an unrelated key (standing in for `loginItemFirstRunDone`) untouched.
 - [ ] [device] `UserDefaultsStreamPrefsStore.removeAll()` removes the key: after the reset, `defaults read dev.matebridge.host streamPrefsByDevice` reports it as missing.

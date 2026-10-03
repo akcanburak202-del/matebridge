@@ -20,7 +20,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 | [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
-| [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |
 | [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
@@ -30,7 +29,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-185](tasks/T-185-client-dev-knob-gate.md) | Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug | 6 | android-client-dev | [T-184, T-146] |
 | [T-187](tasks/T-187-host-encoder-hw-warning.md) | Warn when VideoToolbox did not select the hardware encoder | 6 | mac-host-dev | [T-204] |
 | [T-188](tasks/T-188-colour-range-check.md) | Check stream colour, range and chroma fidelity with test patterns | 6 | user | [] |
-| [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
 | [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
 | [T-192](tasks/T-192-host-settings-reset.md) | Add "Ayarları sıfırla" to the menu (approvals kept) | 6 | mac-host-dev | [T-167, T-189] |
@@ -45,7 +43,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
-| [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
 
 ## done
 
@@ -213,6 +210,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
+| [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
 | [T-186](tasks/T-186-host-retire-experiments.md) | Retire the host Network.framework (`nw`) socket stack | 6 | mac-host-dev | [T-182, T-171] |
+| [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
+| [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
 | [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |

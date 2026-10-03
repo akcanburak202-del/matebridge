@@ -38,7 +38,7 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
-- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off`: dinleyiciler hazır.
+- `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off profile=all|usb_only`: dinleyiciler hazır. `profile=usb_only` ise iki dinleyici de yalnız `127.0.0.1`'e bağlıdır ve Bonjour yayını yoktur (T-189, karar 0027).
   - `service_class` → `MATEBRIDGE_SERVICE_CLASS` (T-088). Varsayılan T-124'ten beri `signaling`: `video_class=interactiveVideo control_class=interactiveVoice` (Wi-Fi'de video AC_VI, kontrol/ses AC_VO). `off` sınıfları ayarlamaz (T-088 öncesi davranış) ve yalnızca `service_class=off` yazar. Tanınmayan değer varsayılana düşer. USB'de (adb tüneli) etkisizdir.
   - `video_socket` ve `control_socket` T-186'dan beri hep `bsd` (çekirdek soketi). Network.framework (`nw`) soketleri kaldırıldı (karar 0026); `MATEBRIDGE_VIDEO_SOCKET`/`MATEBRIDGE_CONTROL_SOCKET` artık okunmaz. Alanlar log ayrıştırıcıları kırılmasın diye sabit olarak kalır.
   - `tcp_log` → `MATEBRIDGE_TCP_LOG` (T-126), bkz. aşağıda "Kontrol ve video soketlerinin TCP durumu".
@@ -46,7 +46,9 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - `ev=bonjour_failed code=<dns_sd hata kodu> retry_s=<n>`: kayıt başarısız ya da sonradan koptu; 1…30 sn geri çekilmeyle yeniden denenir. Oturumlar etkilenmez.
 - `ev=control_accept_paused errno=…` / `ev=video_accept_paused errno=…`: tanımlayıcı/tampon tükendi, kabul 1 sn duraklar.
 - `ev=control_listener_socket_error error=…` / `ev=video_listener_socket_error error=…`: dinleme soketi açılamadı ya da bozuldu. Dinleyiciler yeniden başlatılır.
-- `ev=connection_refused video=true|false reason=too_many_unauthenticated|socket_setup`: bağlantı reddedildi.
+- `ev=connection_refused video=true|false reason=too_many_unauthenticated|socket_setup|profile [profile=usb_only]`: bağlantı reddedildi. `reason=profile`: "Yalnız USB" modunda loopback olmayan eş.
+- `ev=network_profile profile=all|usb_only from=… action=restart|deferred` (T-189): mod değişti. `restart`: canlı oturum yokken dinleyiciler kapanıp (kapanış beklenir) yeniden açıldı; `deferred`: oturum bitince uygulanacak.
+- `ev=port_fallback … after=profile_switch` (E): mod değişiminden sonraki yeniden başlatmada sabit port (47001/47002) alınamadı. USB (adb reverse) sabit portlara gittiği için hatadır.
 - `ev=send_backlog [reason=write_refused]`: kontrol bağlantısı yazılamıyor (eş okumuyor ya da bağlantı kapandı). Bağlantı kapatılır ve girdi bırakılır.
 
 ## Eşleşmiş bağlantıda kanıt (Mac, `session`, T-041/T-152)
@@ -287,3 +289,39 @@ Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sü
 - `migration_old_stale` / `migration_old_recovered`: bekleme sırasında Wi-Fi heartbeat süresi doldu (geçici) / geçerli bir PONG ile geri geldi.
 - `migration_proved`: adayın ilk kaydı doğrulandı, aday terfi etti.
 - `transport_migrate ok=0 reason=proof_failed|proof_closed|proof_timeout`: aday kanıtlayamadı; Wi-Fi sürer (ya da eski bağlantı da gittiyse yeniden bağlanılır).
+
+## Canlı bit hızı (Mac, `video`, T-177)
+
+Çalışan VideoToolbox oturumunun bit hızı yeniden başlatma olmadan değişir:
+- Yakalama, sanal ekran ve video bağlantısı sürer.
+- Yeni `STREAM_CONFIG`, `config_id` ya da keyframe yoktur. `STREAM_CONFIG.bitrate_kbps` yapılandırılmış değer olarak kalır.
+- Kullanıcı değişikliği (`STREAM_PREFS`) yine yeniden başlatma yolundan geçer.
+
+Log satırı:
+- `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
+  - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
+  - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.
+  - Kuyruk tıkalıyken gelen istekler birleşir: iki submit arasında en çok bir uygulama bloğu bekler. Yalnız en yeni hedef uygulanır, aradakiler satır üretmez. Son gönderilen değere geri dönen hedef de satır üretmez.
+  - `avg_status`: `AverageBitRate` için `VTSessionSetProperty` sonucu (`0` = kabul). `MATEBRIDGE_QUALITY` kabul edilmişse `skipped` yazılır: o kipte `AverageBitRate` kullanılmıyor, yalnız `DataRateLimits` değişir.
+  - `limits_status`: `DataRateLimits` için sonuç.
+  - `0` yalnız VideoToolbox'ın değeri kabul ettiğini söyler. `.fast` profil kabul edip yok sayabilir (T-087 emsali). Etkisi `net ev=stats` içindeki `sent_kbps=` ile ölçülür.
+
+Tanı ayarları (varsayılan kapalı, karar 0026):
+- `MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s|<n>ms`: 1–16 değer, her biri 5 000…150 000; süre 100 ms…600 s.
+  - İlk değer encoder başladıktan bir periyot sonra verilir. Ardından her periyotta listedeki sıradaki değer canlı ayarlayıcıya gider; liste döngüyle tekrarlanır.
+  - Geçersiz değer ayarı kapatır.
+- `MATEBRIDGE_RATE_WINDOW_MS=<10…999>`: `DataRateLimits`'e 1 s çiftinin yanına kısa bir pencere ekler, aynı 2× patlama payıyla: `[2 × ort. bayt/s × w, w]`.
+  - Oluşturmada ve her canlı değişiklikte uygulanır.
+  - Oluşturmadaki sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
+- Bu ayarlar açıkken `ev=encoder_config` satırına `bitrate_step=<değerler>@<ms>ms` ve `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.
+
+## Akış profili (Mac, `encoder`, T-204)
+
+- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
+ - Kodlayıcı her oluşturulduğunda bir kez yazılır: her akış başlangıcında ve her yeniden başlatmada (ör. `STREAM_PREFS`). Hemen `ev=encoder_config`'ten sonra gelir.
+ - `sha=` `ev=app_start` ile aynı kaynaktan gelir (`BuildInfo`, T-145).
+ - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S` (hepsi `MATEBRIDGE_` önekli).
+ - Değer ham yazılır: boşluk, `=` ve `;` `_` olur, en çok 64 karakter. Varsayılana eşit ya da geçersiz değer de listelenir; etkin değerler önceki alanlardadır.
+ - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
+- `ev=encoder_config` satırındaki `prio_speed=1 idle_refresh=off input_retag=1` T-204'ten beri sabittir (ayarları kaldırıldı). Log ayrıştırıcıları kırılmasın diye kalır.
+- `ev=idle_refresh`, `ev=idle_refresh_copy` ve `ev=idle_refresh_qp` artık çıkmaz.

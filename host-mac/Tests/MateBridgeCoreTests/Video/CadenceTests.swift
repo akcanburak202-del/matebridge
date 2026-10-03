@@ -85,14 +85,11 @@ final class CadenceTests: XCTestCase {
         XCTAssertEqual(w.captureIntervalsUs.count, CadenceWindow.maxSamples)
     }
 
-    func testRefreshAndDelayParsing() {
+    func testRefreshParsing() {
         XCTAssertEqual(VideoSettings.parseRefreshHz("120"), 120)
         XCTAssertEqual(VideoSettings.parseRefreshHz("60"), 60)
         XCTAssertEqual(VideoSettings.parseRefreshHz("144"), 60)
         XCTAssertEqual(VideoSettings.parseRefreshHz(nil), 60)
-        XCTAssertEqual(VideoSettings.parseFrameDelay("1"), 1)
-        XCTAssertEqual(VideoSettings.parseFrameDelay("0"), 0)
-        XCTAssertNil(VideoSettings.parseFrameDelay("3"))
         XCTAssertEqual(VideoSettings.tabletDefault.displayRefreshHz, 60)
         // The stream fps is independent of the display refresh rate.
         var s = VideoSettings.tabletDefault

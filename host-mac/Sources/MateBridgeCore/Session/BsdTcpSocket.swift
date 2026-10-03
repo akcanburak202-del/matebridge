@@ -85,8 +85,9 @@ public final class BsdTcpListener: @unchecked Sendable {
         case failed(errno: Int32)
     }
 
-    /// Where to bind. `.any` is production; the loopback cases keep tests off the network interfaces.
-    public enum BindAddress: Sendable {
+    /// Where to bind. `.any` is the default ("USB + Wi-Fi"); `.loopbackV4Mapped` is the "Yalnız USB" profile
+    /// (`NetworkProfile.bindAddress`, T-189); the loopback cases also keep tests off the network interfaces.
+    public enum BindAddress: Equatable, Sendable {
         /// `::`, dual-stack.
         case any
         /// `::1` (IPv6 loopback only).
@@ -110,6 +111,8 @@ public final class BsdTcpListener: @unchecked Sendable {
     private var cancelled = false
     private var fdClosed = false
     private var handler: (@Sendable (Event) -> Void)?
+    /// `cancel(onClosed:)` callbacks waiting for the listening descriptor to close.
+    private var closeWaiters: [@Sendable () -> Void] = []
 
     /// Creates, binds and listens. Throws `BsdSocketError` (e.g. `bind` with `EADDRINUSE`); nothing stays open then.
     public init(port: UInt16, bind address: BindAddress = .any, backlog: Int32 = SOMAXCONN, options: BsdTcpOptions,
@@ -164,11 +167,14 @@ public final class BsdTcpListener: @unchecked Sendable {
             let s = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
             s.setEventHandler { [self] in acceptReady() }
             s.setCancelHandler { [self] in
-                lock.withLock {
+                let waiters: [@Sendable () -> Void] = lock.withLock {
                     if !fdClosed { close(fd); fdClosed = true }
                     self.handler = nil
                     source = nil
+                    defer { closeWaiters = [] }
+                    return closeWaiters
                 }
+                for w in waiters { w() }
             }
             source = s
             s.activate()
@@ -176,17 +182,26 @@ public final class BsdTcpListener: @unchecked Sendable {
     }
 
     /// Stops listening and closes the socket (once the source is gone). Idempotent, any thread.
-    public func cancel() {
-        lock.withLock {
-            guard !cancelled else { return }
+    ///
+    /// A started listener closes its descriptor later, on `queue`, so its port stays bound for a moment after this
+    /// returns. `onClosed` runs on `queue` once the descriptor is closed (the port is free to bind again), also when
+    /// the listener was already cancelled or closed before (T-189: a profile restart rebinds the same port).
+    public func cancel(onClosed: (@Sendable () -> Void)? = nil) {
+        let runNow: Bool = lock.withLock {
+            if let onClosed, !fdClosed { closeWaiters.append(onClosed) }
+            let alreadyClosed = fdClosed
+            guard !cancelled else { return alreadyClosed }
             cancelled = true
             guard let source else {
                 if !fdClosed { close(fd); fdClosed = true }
-                return
+                closeWaiters = []
+                return true
             }
             source.cancel()
             if suspended { suspended = false; source.resume() }  // a suspended source never runs its cancel handler
+            return false
         }
+        if runNow, let onClosed { queue.async(execute: onClosed) }
     }
 
     private func acceptReady() {

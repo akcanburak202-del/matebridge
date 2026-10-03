@@ -6,18 +6,16 @@ import Foundation
 import MateBridgeCore
 import VideoToolbox
 
-/// `MateBridgeApp --sharpness-bench` (T-086): how sharp text stays through the real encoder, during motion, when the
-/// screen stops, and after the idle quality refresh.
+/// `MateBridgeApp --sharpness-bench` (T-086): how sharp text stays through the real encoder, during motion and when
+/// the screen stops.
 ///
 /// A 2800x1840 synthetic text page (CoreText: several sizes, grey and coloured text, hairlines) scrolls for
 /// `--motion-frames` frames at the stream fps and then stops. Frames go through `HEVCEncoder` itself, with the app's
-/// environment knobs (`MATEBRIDGE_CODEC`, `_BITRATE_KBPS`, `_PRIO_SPEED`, `_QUALITY`, `_IDLE_REFRESH_*`, `_ENCODER`),
-/// like ScreenCaptureKit: nothing is submitted while the content is static, so only the idle refresh (if enabled)
-/// produces more frames. The Annex-B output is decoded in-process with `VTDecompressionSession` and compared with the
-/// source luma (PSNR, 8x8 SSIM). No display, capture, input or network is touched.
-///
-/// Like the real pipeline, the idle refresh re-submits the very `CVPixelBuffer` of the last motion frame
-/// (`--refresh-buffer same`, default) or, to tell the two apart, a content copy (`--refresh-buffer copy`, T-087).
+/// environment knobs (`MATEBRIDGE_CODEC`, `_BITRATE_KBPS`, `_QUALITY`, `_ENCODER`), like ScreenCaptureKit: nothing is
+/// submitted while the content is static. Any output not made from a scrolled frame is a re-submission of the last
+/// buffer by the encoder itself (`phase=resubmit`, e.g. the idle keyframe). The Annex-B output is decoded in-process
+/// with `VTDecompressionSession` and compared with the source luma (PSNR, 8x8 SSIM). No display, capture, input or
+/// network is touched. T-204 removed the idle quality refresh and `--refresh-buffer`.
 public enum SharpnessBench {
     static let width = 2800
     static let height = 1840
@@ -286,17 +284,15 @@ public enum SharpnessBench {
     /// Returns the process exit code.
     static func run(_ o: SharpnessBenchOptions) -> Int32 {
         let env = ProcessInfo.processInfo.environment
-        var knobs = EncoderKnobs.parse(env)
-        if let b = o.refreshBuffer { knobs.idleRefresh.buffer = b }
+        let knobs = EncoderKnobs.parse(env)
         let settings = VideoSettings.tabletDefault.applyingExperimentKnobs(env)
             .applying(StreamPrefs(fps: UInt16(clamping: o.fps), scalePermille: 1000))
         let shift = max(2, (o.shiftPx + 1) & ~1)   // even, so the chroma rows move with the luma rows
-        let staticMs = o.effectiveStaticMs(idleRefresh: knobs.idleRefresh)
+        let staticMs = o.staticMs
         print("sharpness-bench \(width)x\(height) fps=\(settings.fps) codec=\(settings.codec.logName) "
               + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) \(knobs.logFields) "
               + "motion_frames=\(o.motionFrames) shift_px=\(shift) static_ms=\(staticMs) "
-              + "resume_frames=\(o.resumeFrames) "
-              + "refresh_buffer=\(knobs.idleRefresh.buffer.rawValue)")
+              + "resume_frames=\(o.resumeFrames)")
         let frames = o.motionFrames + o.resumeFrames
         guard let page = makePage(width: width, height: height + frames * shift) else {
             print("error: cannot render the text page")
@@ -336,9 +332,9 @@ public enum SharpnessBench {
         }
         guard scroll(0..<o.motionFrames) else { print("error: cannot allocate a frame"); return 1 }
         let lastTop = (o.motionFrames - 1) * shift
-        // Static: no new captures (as with ScreenCaptureKit); only the idle refresh may encode more frames.
+        // Static: no new captures (as with ScreenCaptureKit); only an encoder re-submission may encode more frames.
         Thread.sleep(forTimeInterval: Double(staticMs) / 1000)
-        // Resume (optional): scrolling continues, so a refresh-only setting must not linger.
+        // Resume (optional): scrolling continues after the static stretch.
         guard scroll(o.motionFrames..<frames) else { print("error: cannot allocate a frame"); return 1 }
         encoder.stop()
         if let f = failed.value { print("error: encoder failed: \(f)") }
@@ -349,7 +345,7 @@ public enum SharpnessBench {
         var motion: [(psnr: Double, bytes: Int)] = []
         var resume: [(psnr: Double, bytes: Int)] = []
         var lastMotion: (LumaPlane, Output)?
-        var refreshes: [(LumaPlane, Output)] = []
+        var resubmits: [(LumaPlane, Output)] = []
         var lastPicture: (LumaPlane, Output)?   // the last one before the resume
         var configs = 0
         for out in outputs.value {
@@ -366,7 +362,7 @@ public enum SharpnessBench {
                 motion.append(sample)
                 if i * shift == lastTop { lastMotion = (pic, out) }
             } else {
-                refreshes.append((pic, out))
+                resubmits.append((pic, out))
             }
             lastPicture = (pic, out)
         }
@@ -385,8 +381,8 @@ public enum SharpnessBench {
                          motion.count, o.motionFrames, mean, bytes))
         }
         if let (pic, out) = lastMotion { line("motion_last", pic, out) } else { print("phase=motion_last missing=1") }
-        for (n, (pic, out)) in refreshes.enumerated() { line("idle_refresh", pic, out, extra: " n=\(n + 1)") }
-        if let (pic, out) = lastPicture { line("static_end", pic, out, extra: " refreshes=\(refreshes.count)") }
+        for (n, (pic, out)) in resubmits.enumerated() { line("resubmit", pic, out, extra: " n=\(n + 1)") }
+        if let (pic, out) = lastPicture { line("static_end", pic, out, extra: " resubmits=\(resubmits.count)") }
         if o.resumeFrames > 0 {
             let n = Double(max(1, resume.count))
             let maxBytes = resume.map(\.bytes).max() ?? 0

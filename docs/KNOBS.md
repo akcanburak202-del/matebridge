@@ -69,21 +69,21 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 22 | `--ez stall_diag true` | false | MA:497-498; `…/diag/StallDetector.kt` | T-120/T-142; N:1088 | kalır (tanı) | Zaten isteğe bağlı | — |
 | 23 | `--es net_bench host:port` (+ `net_bench_s`, `net_bench_dir`, `net_bench_streams`, `net_bench_rcvbuf_kb`) | yok; alt anahtarlar 8 s (1–600), `down`, 1 (1–4), işletim sistemi varsayılanı (≤ 65 536 KB) | MA:359-366; `…/bench/NetBench.kt:39-59`; `…/bench/NetBenchActivity.kt:33`; `…/bench/*` (322 satır); `AndroidManifest.xml:34-39` | T-090 | yalnızca geliştirici; `src/debug` kaynak setine taşınır | `NWConnection` kök nedenini kanıtladı; nadiren gerekli | T-185 |
 
-## Host ortam değişkenleri (25; T-186 sonrası 23 okunuyor)
+## Host ortam değişkenleri (25; T-186 sonrası 23, T-165/T-177 ile +3 okunuyor)
 
 Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, varsayılan dışı değeri `ev=profile` satırında görünür (T-204).
 
 | # | Ayar | Varsayılan | Nerede (ef264dd) | Kart / kanıt | Sınıf | Sonuç | Uygulayan |
 |---|---|---|---|---|---|---|---|
 | 24 | `MATEBRIDGE_FPS`, `MATEBRIDGE_BITRATE_KBPS` | tabletten türetilen fps (geçersiz değer 60); mod varsayılanı / STREAM_PREFS (5 000–150 000) | VS:59-69, :77-82; Core `EncodeBench.swift:101` | T-045/T-086 | yalnızca geliştirici | Env bit hızı STREAM_PREFS'i ezer (VS:20); `ev=profile`'da görünmezse sonuçlar yanlış etiketlenir | T-204 (profil) |
-| 25 | `MATEBRIDGE_CODEC`; `MATEBRIDGE_H264_PROFILE` | `hevc`; `high` | VS:83; EK:3-20, :166, :192-194; `host-mac/Sources/MateBridgeCore/Video/EncodeBench.swift:95-100`; `SharpnessBenchOptions.swift` | T-082/T-086; N:532 | CODEC: yalnızca geliştirici. H264_PROFILE: kaldırılır | M6'da H.264 2800×1840@120'ye yetişmiyor (~24 ms); codec uyumluluk hata ayıklaması için kalır | T-204 |
+| 25 | `MATEBRIDGE_CODEC`; `MATEBRIDGE_H264_PROFILE` | `hevc`; `high` | VS:83; EK:3-20, :166, :192-194; `host-mac/Sources/MateBridgeCore/Video/EncodeBench.swift:95-100`; `SharpnessBenchOptions.swift` | T-082/T-086; N:532 | CODEC: yalnızca geliştirici. H264_PROFILE: **kaldırıldı (T-204)** | M6'da H.264 2800×1840@120'ye yetişmiyor (~24 ms); codec uyumluluk hata ayıklaması için kalır | T-204 |
 | 26 | `MATEBRIDGE_REFRESH=60/120` | fps 120 ise 120, değilse 60 | VS:47-50, :84-85; `StreamCoordinator.swift:190`, :376 | T-017 | yalnızca geliştirici | Varsayılan fps'ten türetilir | T-204 (profil) |
-| 27 | `MATEBRIDGE_FRAME_DELAY=0/1` | yok (kodlayıcı varsayılanı) | VS:19, :53-56, :86; HE:164-166; yorum `StreamCoordinator.swift:182-184` | T-017 (hiç ölçülmedi, benimsenmedi) | kaldırılır | Ölü deney | T-204 |
+| 27 | `MATEBRIDGE_FRAME_DELAY=0/1` | yok (kodlayıcı varsayılanı) | VS:19, :53-56, :86; HE:164-166; yorum `StreamCoordinator.swift:182-184` | T-017 (hiç ölçülmedi, benimsenmedi) | **kaldırıldı (T-204, 2026-10-03)** | Ölü deney | T-204 |
 | 28 | `MATEBRIDGE_ENCODER=llrc/fast` | `fast` (her fps'te) | HE:130-136; `host-mac/Sources/MateBridgeCore/Video/EncoderProfile.swift:10-11` | T-053/T-087 | yalnızca geliştirici | `llrc` yalnızca ≤ 60 fps'te anlamlı (~10 ms/kare) | T-204 (profil) |
-| 29 | `MATEBRIDGE_IDLE_REFRESH_MS`, `_COUNT`, `_KEY`, `_BUFFER`, `_QP` (zamanlayıcı, QP artırma, kopya havuzu) | 0 = kapalı; 3; 0; `same`; yok | EK:34-95; HE:29-30, :71-86, :124-128, :207-212, :220, :343-349, :434-472, :563, :667-671 | T-086/T-087; N:562-579 | kaldırılır | Gerçek hatta 222 baytlık atlama kareleri; `fast` profil akış ortası QP'yi yok sayıyor; bench kazancı ısınma yanılgısıydı. Açıkken kodlayıcıya üçüncü bir çağıran (zamanlayıcı) ekler (M02). `resubmitLast` (durağan anahtar kare yolu) kalır | T-204 |
-| 30 | `MATEBRIDGE_PRIO_SPEED=0`; `MATEBRIDGE_QUALITY` | 1 (hız öncelikli); yok (AverageBitRate) | EK:164-165; HE:169-189 | T-086; N:542 | PRIO_SPEED: kaldırılır. QUALITY: yalnızca geliştirici | PRIO_SPEED=0 ~25 ms kodlama, kullanılamaz. QUALITY olası bir metin netliği profili | T-204 |
+| 29 | `MATEBRIDGE_IDLE_REFRESH_MS`, `_COUNT`, `_KEY`, `_BUFFER`, `_QP` (zamanlayıcı, QP artırma, kopya havuzu) | 0 = kapalı; 3; 0; `same`; yok | EK:34-95; HE:29-30, :71-86, :124-128, :207-212, :220, :343-349, :434-472, :563, :667-671 | T-086/T-087; N:562-579 | **kaldırıldı (T-204, 2026-10-03)** | Gerçek hatta 222 baytlık atlama kareleri; `fast` profil akış ortası QP'yi yok sayıyor; bench kazancı ısınma yanılgısıydı. Açıkken kodlayıcıya üçüncü bir çağıran (zamanlayıcı) ekler (M02). `resubmitLast` (durağan anahtar kare yolu) kalır | T-204 |
+| 30 | `MATEBRIDGE_PRIO_SPEED=0`; `MATEBRIDGE_QUALITY` | 1 (hız öncelikli); yok (AverageBitRate) | EK:164-165; HE:169-189 | T-086; N:542 | PRIO_SPEED: **kaldırıldı (T-204)**. QUALITY: yalnızca geliştirici | PRIO_SPEED=0 ~25 ms kodlama, kullanılamaz. QUALITY olası bir metin netliği profili | T-204 |
 | 31 | `MATEBRIDGE_KEYFRAME_INTERVAL_S` | 300 (en çok 3600) | `host-mac/Sources/MateBridgeCore/Video/KeyframeIntervalPolicy.swift:10-20`; HE:271 | T-075; N:420 | yalnızca geliştirici | 300 s benimsendi | T-204 (profil) |
-| 32 | `MATEBRIDGE_INPUT_RETAG=0` | 1 (açık) | `host-mac/Sources/MateBridgeCore/Video/InputColorTags.swift:36-38`; EK:153-163; HE:318; Core `EncodeBench.swift:102` | T-113; N:758-805 | kaldırılır (retag her zaman açık) | Düzeltme kanıtlandı (−2,7 ms, doğru renk); `=0` bilinen bir renk/gecikme hatasını geri getirir | T-204 |
+| 32 | `MATEBRIDGE_INPUT_RETAG=0` | 1 (açık) | `host-mac/Sources/MateBridgeCore/Video/InputColorTags.swift:36-38`; EK:153-163; HE:318; Core `EncodeBench.swift:102` | T-113; N:758-805 | **kaldırıldı (T-204; retag her zaman açık)** | Düzeltme kanıtlandı (−2,7 ms, doğru renk); `=0` bilinen bir renk/gecikme hatasını geri getirir | T-204 |
 | 33 | `MATEBRIDGE_WIFI_BITRATE_KBPS` | yok | `host-mac/Sources/MateBridgeCore/Video/TransportBitrate.swift:20-28` | T-088 | yalnızca geliştirici | Bugün tek Wi-Fi bit hızı sınırı; H03 girdisi. T-178 Wi-Fi varsayılanı ekler | T-204 (profil) |
 | 34 | `MATEBRIDGE_SERVICE_CLASS` | `signaling` | TK:21-43 | T-088/T-124; N:958-959 | yalnızca geliştirici | `signaling` varsayılan olarak benimsendi | T-204 (profil) |
 | 35 | `MATEBRIDGE_VIDEO_SOCKET=nw`, `MATEBRIDGE_CONTROL_SOCKET=nw` | `bsd`, `bsd` | TK:79-95, :138-153; SS:3, :34-38, :112-115, :336-375, :561-600, :955-987, :1125-1205; `host-mac/Sources/MateBridgeHost/Session/TcpSocketProbe.swift` (NWConnection varyantı) | T-091/T-092/T-111; N:620-643 | **kaldırıldı (T-186, 2026-10-03)** | `NWConnection`'ın kullanıcı alanı TCP'si Wi-Fi'de ~27 Mbps tavan ve yeniden iletimler. Bonjour `BonjourAdvertiser`'da kalmalı (SS:228, :1084) | T-186 |
@@ -92,6 +92,8 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 | 38 | `MATEBRIDGE_TCP_LOG` | `auto` (yalnızca Wi-Fi) | `host-mac/Sources/MateBridgeCore/Session/TcpInfoLog.swift:129-145`; SS:311 | T-126 | kalır (tanı) | — | — |
 | 39 | `MATEBRIDGE_AUDIO=off` | açık | `host-mac/Sources/MateBridgeCore/Audio/AudioStreamer.swift:32-35`; `HostAudio.swift:12` | T-094 | yalnızca geliştirici | Yalıtım anahtarı | T-204 (profil) |
 | 40 | `MATEBRIDGE_DISPLAY_KEEP_S` | 10 (10–86 400; geçersiz değer 10) | `host-mac/Sources/MateBridgeCore/Video/DisplayLease.swift` | T-165 (2026-10-03, bu envanterden sonra eklendi) | yalnızca geliştirici | Bekletilen sanal ekranın süresi (duvar saati). Kullanıcıya açılan seçim T-167 (karar 0020) | T-167 (menü) |
+| 41 | `MATEBRIDGE_BITRATE_STEP=<kbps,…>@<n>s` | kapalı | `host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift` (`BitrateStepKnob`); `EncoderSubmitOrder.swift` | T-177 (2026-10-03) | yalnızca geliştirici | Canlı bit hızı setter'ını cihazda sınamak için zamanlayıcıyla adım | T-196 ya da T-127 sonrası kaldırılır |
+| 42 | `MATEBRIDGE_RATE_WINDOW_MS` | kapalı (10–999) | `EncoderKnobs.swift`; `HEVCEncoder.swift` | T-177 (2026-10-03) | yalnızca geliştirici | Kısa `DataRateLimits` penceresi (tanı). 100 ms tek bir 100–450 KB kareyi sınırlamaz; cihazda 33 ve 100 denenir | T-127 sonrası karar |
 
 ## Host CLI kipleri (4) ve derleme zamanı
 
@@ -109,7 +111,6 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 ## Planlanan ayarlar
 
 Geldiklerinde buraya satır eklenir; hepsinin varsayılanı kapalı:
-- T-177: bit hızı adım ayarı.
 - T-196: `MATEBRIDGE_WIFI_ADAPT`.
 - T-197: `ctl_lowat_kb` (`WifiKnobs.kt`'ye).
 - T-198: `MATEBRIDGE_PEN_PLAYOUT_MS`.
