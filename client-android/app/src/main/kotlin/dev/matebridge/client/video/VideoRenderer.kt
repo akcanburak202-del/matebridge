@@ -1,11 +1,6 @@
 package dev.matebridge.client.video
 
-import android.media.MediaCodec
-import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.os.Build
-import android.os.SystemClock
-import android.util.Log
 import android.view.Surface
 import dev.matebridge.client.protocol.KeyframeRequest
 import dev.matebridge.client.protocol.StreamConfig
@@ -19,8 +14,9 @@ fun interface VideoFrameSink {
 }
 
 /**
- * MediaCodec decoder bound to a Surface. One decoder thread per attachment; all MediaCodec calls
- * happen on it. Frames go through [FrameQueue] (bounded, newest wins, keyframe gated).
+ * MediaCodec decoder bound to a Surface, through the [DecoderCodec] seam (T-158). One decoder thread per attachment;
+ * all codec calls happen on it (outputs on its companion `mb-decoder-out` thread). Frames go through [FrameQueue]
+ * (bounded, newest wins, keyframe gated).
  *
  * Lifecycle: [attachSurface] when the SurfaceView surface exists, [detachSurface] when it is
  * destroyed or the activity stops. Each attachment has its own token; a new attachment's thread
@@ -46,6 +42,10 @@ class VideoRenderer(
     bufferFrames: Int = 1,
     /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
     codecReportsShown: Boolean = true,
+    /** T-158: creates the decoder; tests pass a fake. */
+    private val codecFactory: DecoderCodec.Factory = MediaCodecDecoder.FACTORY,
+    /** T-158: clock, logcat and thread calls of the decoder threads; tests pass a JVM implementation. */
+    private val env: DecoderEnv = AndroidDecoderEnv,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -107,7 +107,7 @@ class VideoRenderer(
     fun flushPaceTrace() {
         val t = paceTrace ?: return
         val f = paceTraceFile ?: return
-        traceWriter.execute { try { t.dumpTo(f) } catch (e: Exception) { Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=pace_trace_write err=${e.javaClass.simpleName}") } }
+        traceWriter.execute { try { t.dumpTo(f) } catch (e: Exception) { env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=pace_trace_write err=${e.javaClass.simpleName}") } }
     }
 
     private val counters = PresentCounters()
@@ -172,17 +172,17 @@ class VideoRenderer(
         // T-121: root-cause line for every overflow and a line per keyframe request (both rare: the gate and the
         // request limit bound them).
         queue.onOverflow = { o ->
-            Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=queue_overflow pending=${o.pending} limit=${o.limit} " +
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=queue_overflow pending=${o.pending} limit=${o.limit} " +
                 "in_codec=${gauge.current()} decode_last_us=${stats.lastDecodeUs} since_kf=${o.sinceKeyframe} " +
                 "gaps_us=${if (o.gapsUs.isEmpty()) "-" else o.gapsUs.joinToString(",")} " +
                 "req=${if (o.requested) "sent" else "held"} since_req_ms=${o.sinceRequestMs}")
         }
         queue.onRequest = { reason, source ->
-            Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=kf_request reason=$reason src=${source.logName}")
+            env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=kf_request reason=$reason src=${source.logName}")
         }
     }
 
-    private class Attachment(val surface: Surface, val previous: Thread?) {
+    private class Attachment(val surface: Any, val previous: Thread?) {
         @Volatile var active = true
         lateinit var thread: Thread
     }
@@ -224,7 +224,10 @@ class VideoRenderer(
         queue.offer(frame)?.let(onKeyframeRequest)
     }
 
-    fun attachSurface(surface: Surface) {
+    fun attachSurface(surface: Surface) = attachTarget(surface)
+
+    /** [attachSurface] with the output surface as an opaque handle (T-158: JVM tests pass a plain object). */
+    internal fun attachTarget(surface: Any) {
         retire(wait = false)
         attached = true
         onKeyframeRequest(queue.reset())
@@ -252,7 +255,7 @@ class VideoRenderer(
         }
     }
 
-    private fun start(surface: Surface) {
+    private fun start(surface: Any) {
         val att = Attachment(surface, lingering)
         att.thread = Thread({ decodeLoop(att) }, "mb-decoder")
         current = att
@@ -267,17 +270,17 @@ class VideoRenderer(
         lingering = att.thread
         if (wait) {
             att.thread.join(JOIN_MS)
-            if (att.thread.isAlive) Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=detach_slow")
+            if (att.thread.isAlive) env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=detach_slow")
         }
     }
 
     private fun mime(config: StreamConfig) = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC
     else MediaFormat.MIMETYPE_VIDEO_HEVC
 
-    private fun createCodec(surface: Surface): MediaCodec {
+    private fun createCodec(surface: Any): DecoderCodec {
         val config = this.config
         val mime = mime(config)
-        val format = MediaFormat.createVideoFormat(mime, config.widthPx, config.heightPx)
+        val format = DecoderFormat(mime, config.widthPx, config.heightPx)
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
@@ -288,21 +291,18 @@ class VideoRenderer(
         format.setInteger(MediaFormat.KEY_COLOR_RANGE, ColorMapping.range(config.fullRange))
         if (config.colorPrimaries != 1) {
             // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged.
-            Log.w(tag, "${SystemClock.elapsedRealtime()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
         }
 
-        val codec = MediaCodec.createDecoderByType(mime)
+        val codec = codecFactory.create(mime)
         var lowLatency = "n/a"
-        if (Build.VERSION.SDK_INT >= 30) {
-            val supported = try {
-                codec.codecInfo.getCapabilitiesForType(mime)
-                    .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
-            } catch (e: Exception) { false }
+        val supported = codec.lowLatencySupport(mime) // null: API < 30
+        if (supported != null) {
             if (supported) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             lowLatency = if (supported) "on" else "unsupported"
         }
         try {
-            codec.configure(format, surface, null, 0)
+            codec.configure(format, surface)
             codec.start()
         } catch (e: Exception) {
             try { codec.release() } catch (_: Exception) {}
@@ -319,7 +319,7 @@ class VideoRenderer(
             "priority=${key(MediaFormat.KEY_PRIORITY)} operating_rate=${key(MediaFormat.KEY_OPERATING_RATE)} " +
                 "low_latency_fmt=${key(MediaFormat.KEY_LOW_LATENCY)}"
         } catch (e: Exception) { "input_format=unavailable" }
-        Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=codec_start name=${codec.name} mime=$mime " +
+        env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=codec_start name=${codec.name} mime=$mime " +
             "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency requested_rate=${rate ?: "none"} accepted $accepted")
         return codec
     }
@@ -327,9 +327,9 @@ class VideoRenderer(
     private fun decodeLoop(att: Attachment) {
         try { att.previous?.join() } catch (_: InterruptedException) { return }
         // T-077: the input hand-off is on the frame's critical path; ask the scheduler for prompt wake-ups.
-        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) } catch (_: Exception) {}
+        try { env.setDisplayPriority() } catch (_: Exception) {}
         val hint = perfHint
-        val tid = android.os.Process.myTid()
+        val tid = env.myTid()
         hint?.register(PerfHint.ROLE_IN, tid)
         try {
             decodeAttempts(att)
@@ -343,9 +343,9 @@ class VideoRenderer(
         while (att.active) {
             val failure = runCodec(att)
             if (!att.active) break
-            Log.e(tag, "${SystemClock.elapsedRealtime()} E decoder ev=decode_error err=$failure")
-            if (!policy.allow(SystemClock.elapsedRealtime())) {
-                Log.e(tag, "${SystemClock.elapsedRealtime()} E decoder ev=give_up")
+            env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=decode_error err=$failure")
+            if (!policy.allow(env.elapsedRealtimeMs())) {
+                env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=give_up")
                 att.active = false
                 onGiveUp("decoder failed repeatedly: $failure")
                 break
@@ -356,7 +356,7 @@ class VideoRenderer(
 
     /** Runs one codec instance until detach or error. Returns the error name, or null on detach. */
     private fun runCodec(att: Attachment): String? {
-        var codec: MediaCodec? = null
+        var codec: DecoderCodec? = null
         var error: String? = null
         var outThread: Thread? = null
         val outRunning = java.util.concurrent.atomic.AtomicBoolean(true)
@@ -386,24 +386,21 @@ class VideoRenderer(
             val releaser = SlotReleaser(sink, counters)
             releaser.trace = trace
             if (codecReportsShown) {
-                codec.setOnFrameRenderedListener(
-                    { _, pts, nanoTime ->
-                        val period = vsync.periodNs
-                        val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
-                        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
-                        stats.onShownPaced(readyByPts.get(pts), nanoTime, period, cadence)
-                    },
-                    android.os.Handler(android.os.Looper.getMainLooper()),
-                )
+                codec.setOnFrameRenderedListener { pts, nanoTime -> // on the main looper (adapter)
+                    val period = vsync.periodNs
+                    val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
+                    val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+                    stats.onShownPaced(readyByPts.get(pts), nanoTime, period, cadence)
+                }
             }
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
             // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
             val c = codec
             val hint = perfHint
             val t = Thread({
-                val outInfo = MediaCodec.BufferInfo()
+                val outInfo = DecoderCodec.OutputInfo()
                 var loggedFormat = false
-                val outTid = android.os.Process.myTid()
+                val outTid = env.myTid()
                 hint?.register(PerfHint.ROLE_OUT, outTid)
                 lastOutputNs = System.nanoTime()
                 try {
@@ -456,7 +453,7 @@ class VideoRenderer(
                 val inbufNs = if (trace != null) System.nanoTime() else 0L
                 val buf = codec.getInputBuffer(idx)!!
                 if (buf.capacity() < frame.data.size) {
-                    Log.e(tag, "${SystemClock.elapsedRealtime()} E decoder ev=frame_too_large size=${frame.data.size} cap=${buf.capacity()}")
+                    env.log('E', tag, "${env.elapsedRealtimeMs()} E decoder ev=frame_too_large size=${frame.data.size} cap=${buf.capacity()}")
                     codec.queueInputBuffer(idx, 0, 0, 0, 0) // hand the empty buffer back
                     stats.onDropped(1)
                     onKeyframeRequest(queue.onDecoderError())
@@ -465,7 +462,7 @@ class VideoRenderer(
                 buf.clear()
                 buf.put(frame.data.value)
                 val copiedNs = if (trace != null) System.nanoTime() else 0L
-                val flags = if (frame.isCodecConfig) MediaCodec.BUFFER_FLAG_CODEC_CONFIG else 0
+                val flags = if (frame.isCodecConfig) DecoderCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 if (!frame.isCodecConfig) { captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
@@ -485,7 +482,7 @@ class VideoRenderer(
             adaptive = null
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
-            Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=codec_stop")
+            env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=codec_stop")
         }
         return error
     }
@@ -495,7 +492,7 @@ class VideoRenderer(
     private var lastOutputNs = 0L
 
     /** Output-buffer release with bookkeeping (stats, decoder occupancy). Output thread only. */
-    private inner class CodecSink(private val codec: MediaCodec) : SlotReleaser.Sink {
+    private inner class CodecSink(private val codec: DecoderCodec) : SlotReleaser.Sink {
         override fun release(idx: Int, renderNs: Long) {
             codec.releaseOutputBuffer(idx, renderNs)
             stats.onRendered(); gauge.onDone(System.nanoTime())
@@ -525,7 +522,7 @@ class VideoRenderer(
      * dispatch deadline (T-057). Returns true once an output-format change has been seen (one-time logging).
      */
     private fun drainOutput(
-        codec: MediaCodec, info: MediaCodec.BufferInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
+        codec: DecoderCodec, info: DecoderCodec.OutputInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
         cpd: ConstantPlayoutPacer?, sink: CodecSink, releaser: SlotReleaser, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
@@ -538,11 +535,11 @@ class VideoRenderer(
         formatChanged = false
         while (true) {
             val idx = codec.dequeueOutputBuffer(info, waitUs)
-            if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) { formatChanged = true; continue }
+            if (idx == DecoderCodec.INFO_OUTPUT_FORMAT_CHANGED) { formatChanged = true; continue }
             if (idx < 0) break
             waitUs = 0
             lastOutputNs = System.nanoTime()
-            val isFrame = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
+            val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
             val readyNs = System.nanoTime()
             if (isFrame) {
                 stats.onOutput(info.presentationTimeUs, nowUs())
@@ -581,15 +578,15 @@ class VideoRenderer(
         return formatChanged
     }
 
-    private fun logOutputFormat(codec: MediaCodec) {
+    private fun logOutputFormat(codec: DecoderCodec) {
         val f = codec.outputFormat
         fun key(k: String) = if (f.containsKey(k)) f.getInteger(k).toString() else "unset"
-        Log.i(tag, "${SystemClock.elapsedRealtime()} I decoder ev=output_format " +
+        env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=output_format " +
             "range=${key(MediaFormat.KEY_COLOR_RANGE)} standard=${key(MediaFormat.KEY_COLOR_STANDARD)} " +
             "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)} " +
             "size=${key(MediaFormat.KEY_WIDTH)}x${key(MediaFormat.KEY_HEIGHT)} " +
             "crop=${key("crop-left")},${key("crop-top")},${key("crop-right")},${key("crop-bottom")}")
     }
 
-    private fun nowUs() = SystemClock.elapsedRealtimeNanos() / 1000
+    private fun nowUs() = env.elapsedRealtimeNanos() / 1000
 }
