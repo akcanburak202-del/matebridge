@@ -95,7 +95,8 @@ Riskler: kilit altında teslim → kilit yalnızca bu kapıya ait, motor/UI onu 
 
 ## Handoff
 
-- **Commit:** `6586453` (fix; dal `task/T-160-client-video-delivery-gate`). Kırmızı adım: `0b615d3` — kapı bugünkü
+- **Commit:** `ae388ae` (Codex P2 düzeltmesi; öncesinde `main` birleştirildi) ve `6586453` (asıl düzeltme; dal
+  `task/T-160-client-video-delivery-gate`). Kırmızı adım: `0b615d3` — kapı bugünkü
   configId-only kuralla çıkarıldı, 9 senaryo `@Ignore` ile, başarısız çıktı commit mesajında alıntılı (bariyer
   senaryosu `aReaderReleasedAfterAbortAndAVideoReconnectDeliversNothing`: `expected:<0> but was:<1>`). Plan: `c506fe5`.
 - **Dokunulan dosyalar:**
@@ -105,10 +106,14 @@ Riskler: kilit altında teslim → kilit yalnızca bu kapıya ait, motor/UI onu 
   - `session/SessionController.kt`: `currentConfigId` alanı kapıya taşındı; `exec` başında `videoGate.onAction(a)`;
     `VideoConn.abort()` → `videoGate.close(gen)`; okuyucu `videoGate.deliver(...)`; `fun videoConfigInstalled(config)`;
     bağlantı başına tek `ev=video_gate_open` satırı.
-  - `video/VideoRenderer.kt`: kurucu parametresi `onConfigInstalled: (StreamConfig) -> Unit = {}`, `reconfigure` sonunda
-    (kuyruk sıfırlandıktan, yeni codec kuşağı başladıktan sonra) çağrılır.
+  - `video/VideoRenderer.kt`: kurucu parametresi `onConfigInstalled: (StreamConfig) -> Unit = {}`; `reconfigure` onu
+    kuyruk sıfırlandıktan ve yeni kuşak başladıktan sonra, **STARTUP isteğinden önce** çağırır (Codex P2: istekten sonra
+    kurulsaydı, UI iş parçacığı istekten hemen sonra bekletildiğinde host'un CODEC_CONFIG + keyframe cevabı kapıda
+    düşer, toparlanma ikinci isteğe kalırdı). Eski config/oturum kareleri yine geçemez (configId/uygulanan nesne).
   - `MainActivity.kt`: tek satır, `onConfigInstalled = { c -> controller.videoConfigInstalled(c) }`.
-  - `test/.../session/VideoDeliveryGateTest.kt` (11 test).
+  - `test/.../session/VideoDeliveryGateTest.kt` (12 test; `theHostsStartupAnswerArrivingBeforeReconfigureReturnsIsDelivered`
+    host cevabını STARTUP isteği ile `reconfigure()` dönüşü arasında bir okuyucu iş parçacığından teslim eder; P2
+    düzeltmesinden önce `expected:<[true, true, false]> but was:<[false, false, false]>` ile kırmızıydı).
 - **Varsayımlar:**
   - "Kurulu config" kimliği nesne kimliğidir (`===`): `onStreamConfig`'in taşıdığı `StreamConfig` nesnesi UI'dan aynen
     geri gelir; her STREAM_CONFIG ayrı çözülür, bu yüzden ardışık oturumların `config_id=1`'i karışmaz. Eşit ama farklı
