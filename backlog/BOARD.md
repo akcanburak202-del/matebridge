@@ -11,7 +11,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-150](tasks/T-150-client-pending-pair-trust.md) | Keep new pair keys pending until local confirmation and pair only on user action | 6 | android-client-dev | [T-042, T-044] |
 | [T-151](tasks/T-151-client-trust-ui.md) | Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut" | 6 | android-client-dev | [T-150] |
 | [T-153](tasks/T-153-client-files-session-lifetime.md) | Run the WebDAV server only during an accepted, trusted USB session | 6 | android-client-dev | [T-151] |
-| [T-155](tasks/T-155-host-orphan-approval-guard.md) | Flag a replaced orphan approval request on the Mac | 6 | mac-host-dev | [T-152] |
 | [T-156](tasks/T-156-client-key-mismatch-state.md) | Show "anahtar uyuşmuyor" after repeated PAIRED auth failures | 6 | android-client-dev | [T-151] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
 | [T-160](tasks/T-160-client-video-delivery-gate.md) | Drop video frames from stale connections and uninstalled configs | 6 | android-client-dev | [T-159, T-150] |
@@ -211,6 +210,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-149](tasks/T-149-ci-merge-gate.md) | Add a component-split CI merge gate and a safe fixture CLI | 6 | orchestrator | [] |
 | [T-152](tasks/T-152-host-paired-proof-first.md) | Activate PAIRED sessions only after the first authenticated record | 6 | mac-host-dev | [T-041] |
 | [T-154](tasks/T-154-client-data-extraction-rules.md) | Exclude app data from device-to-device and cloud transfer | 6 | android-client-dev | [] |
+| [T-155](tasks/T-155-host-orphan-approval-guard.md) | Flag a replaced orphan approval request on the Mac | 6 | mac-host-dev | [T-152] |
 | [T-158](tasks/T-158-client-decoder-backend-seam.md) | Put MediaCodec behind a DecoderCodec interface (no behaviour change) | 6 | android-client-dev | [] |
 | [T-159](tasks/T-159-client-video-health-gate.md) | Gate input on decoder health and show a video-fault overlay | 6 | android-client-dev | [T-158] |
 | [T-162](tasks/T-162-host-encoder-submit-owner.md) | Serialise HEVCEncoder submits, QP updates and teardown on one owner queue | 6 | mac-host-dev | [] |

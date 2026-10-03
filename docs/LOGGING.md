@@ -56,6 +56,10 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - `ev=takeover_proving conn=…`: aynı, ama aynı cihazın canlı bir oturumu devralınacak.
 - `ev=proof_timeout conn=…` (W): 5 sn içinde doğrulanmış kayıt gelmedi, bağlantı BYE'sız kapatıldı. T-152'den beri devralma olmayan bağlantılarda da çıkar; sık görülüyorsa tablet yanlış anahtar kullanıyor olabilir (T-156).
 
+## Onay penceresi (Mac, `session`, T-043/T-155)
+
+- `ev=approval_pending replaced=none|same|other`: yeni bir eşleşme isteği Mac'te onay penceresi açtı. `same`: açık bir öksüz pencerenin yerini aynı cihazın yeni isteği aldı (kod değişti). `other`: farklı bir cihaz aldı; pencerede kırmızı "FARKLI bir cihaz" uyarısı ve cihaz parmak izi görünür. `other` bayrağı o pencere için kullanıcı karar verene ya da süre dolana kadar kalır. Ad, kod ve parmak izi loglanmaz.
+
 ## Kontrol ve video soketlerinin TCP durumu (Mac, `net`, T-126)
 
 Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantısı (ses buradan gider) ve bağlı video bağlantısı oturum kuyruğunda saniyede bir okunur. Her biri için soket başına saniyede bir `getsockopt(TCP_CONNECTION_INFO)` yapılır.

@@ -1,7 +1,7 @@
 ---
 id: T-155
 title: Flag a replaced orphan approval request on the Mac
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-152]
