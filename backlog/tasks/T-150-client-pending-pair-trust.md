@@ -1,7 +1,7 @@
 ---
 id: T-150
 title: Keep new pair keys pending until local confirmation and pair only on user action
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-042, T-044]
@@ -116,7 +116,15 @@ All JVM criteria use a scripted fake host: a test harness that plays the host si
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Store (`Settings.kt`, `PairKeyStore.kt`).** New `AtomicKeyValueStore : KeyValueStore` (`keys()`, multi-key `commit(changes)`), required only by `EncryptedPairKeyStore`; `KeyValueStore` itself and its other implementers stay untouched. `PairKeyStore` gains pending/marker/promote/remove methods with default bodies (reads → none, writes → `UnsupportedOperationException`). `EncryptedPairKeyStore` implements them: `pairpend.<hex>` = wrap(key‖sas‖createdAtWallMs, aad = hostId‖"pending"), `pairwait.<hex>` = createdAtWallMs; `promote` = one commit (trusted written, pending removed, marker written/cleared). At most one pending record (a new one replaces any other and clears that host's marker). `ReadOnlyPairKeyStore` (reads delegate, writes throw) replaces the controller's private candidate store.
+2. **`PairTrust` (pure, `PairKeyStore.kt`).** Wall clock injected; `PENDING_MAX_AGE` = 10 min; stale (too old or future-dated) pending/marker records are dropped on read (`pair_pending_expired`). API: `freshPending`, `hasTrusted`, `storedPrompt()` (newest fresh pending, else newest fresh marker), `storePending`, `promote`, `dropPending`, `clearMarker`, `forget`.
+3. **Handshake (`Handshake.kt`).** `complete(ack, payload, trust, userInitiated)`: PAIRING on a non-user-initiated connection → `PairingNeedsUser(hostName, rePair)` before any key derivation; PAIRED for a host_id with a fresh pending record → `PendingUnconfirmed(hostId)` (no derivation). `storePairKey` → `storePending(trust)`.
+4. **Reader decision (`SessionController.kt`).** Pure `FirstAck.handle(gen, ack, outcome, trust)` maps the outcome to machine events (aborts, `storePending`, `Secured` with host_id for every secure session); the reader only executes it. `userInitiated` flows `start` → `Event.Start` → `Action.OpenControl` → `ControlConn`. Audio is delivered only for `machine.acceptedGen`; inbound CLIPBOARD goes through a machine action. New entry points `confirmTrust`, `cancelTrust`, `forgetCurrentHost(): Boolean`, `setConfirmPromptVisible`. Event log lines move into a pure `eventLogLine` so the secrets test can see them.
+5. **Machine (`SessionMachine.kt`).** New phases `HOST_ACCEPTED_UNTRUSTED` and `STORED_PROMPT`; `inputAllowed` only when host-accepted **and** locally trusted. Events `TrustConfirmed/TrustCancelled(gen)`, `ConfirmPromptVisible`, `ForgetHost`, `PairingNeedsUser`, `PairedWithPending`. Non-user start with a fresh pending/marker → `StoredTrust` without a connection; confirm on it promotes then connects (user-initiated) to the remembered endpoint. Buffered STREAM_CONFIG. 2-min visible-time timeout on Tick. REJECTED before/after confirm, forget (BYE + close first), `PAIR_CANCELLED` terminal. Injected log sink (no SAS/key/host_id/name).
+6. **UI types + compile-only mappings** (`SessionUi.kt`, `AutoTransport.kt`, `Wol.kt`, `MainActivity.kt`): `AwaitingApproval.needsLocalConfirm`, `PairingNeedsUser`, `StoredTrust`, `Cause.PAIR_CANCELLED`; plain text, `WAITING_USER`/`IGNORE`, `reached = true`; pair-key object implements `AtomicKeyValueStore`.
+7. **Tests.** Fake host with real crypto (`test/session/PairTrustFlowTest.kt` + helpers in `test/security/`), the acceptance criteria one by one; rewrite old-contract tests (`CryptoVectorsTest`, `SecureChannelTest`, PENDING→ACCEPTED machine tests).
+
+Riskler: `SessionController` stays without its own JVM test (decisions extracted instead); `SharedPreferences.commit()` failure leaves memory new / disk old (both whole states).
 
 ## Handoff
 
