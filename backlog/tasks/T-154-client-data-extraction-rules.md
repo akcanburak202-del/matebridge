@@ -1,7 +1,7 @@
 ---
 id: T-154
 title: Exclude app data from device-to-device and cloud transfer
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -42,7 +42,10 @@ Source: external architecture review 2026-10-03 (SE1); verification: docs/review
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `client-android/app/src/main/res/xml/data_extraction_rules.xml` oluştur: `<cloud-backup>` ve `<device-transfer>` bölümlerinin her ikisinde `sharedpref`, `database`, `file` ve `root` domain'lerini `path="."` ile hariç tut (tüm mevcut ve gelecekteki tercih dosyaları: `matebridge`, `matebridge_pairkeys`, `matebridge_audio`; cache zaten yedeklenmez).
+2. `AndroidManifest.xml` `<application>`: `android:dataExtractionRules="@xml/data_extraction_rules"` ekle, `android:allowBackup="false"` kalsın (API 29/30 için). Lint `fullBackupContent` isterse ikinci kural dosyası yerine yorumlu `tools:ignore` kullan.
+3. `./gradlew assembleDebug` + `aapt2 dump xmltree` ile APK manifestinde özniteliği doğrula; `./scripts/check.sh`.
+- Risk: yok denecek kadar düşük; çalışma zamanı davranışı değişmez. HarmonyOS Phone Clone'un AOSP D2D kurallarına uyup uymadığı bilinmiyor (cihazda doğrulanamaz).
 
 ## Handoff
 
