@@ -287,3 +287,28 @@ Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sü
 - `migration_old_stale` / `migration_old_recovered`: bekleme sırasında Wi-Fi heartbeat süresi doldu (geçici) / geçerli bir PONG ile geri geldi.
 - `migration_proved`: adayın ilk kaydı doğrulandı, aday terfi etti.
 - `transport_migrate ok=0 reason=proof_failed|proof_closed|proof_timeout`: aday kanıtlayamadı; Wi-Fi sürer (ya da eski bağlantı da gittiyse yeniden bağlanılır).
+
+## Canlı bit hızı (Mac, `video`, T-177)
+
+Çalışan VideoToolbox oturumunun bit hızı yeniden başlatma olmadan değişir:
+- Yakalama, sanal ekran ve video bağlantısı sürer.
+- Yeni `STREAM_CONFIG`, `config_id` ya da keyframe yoktur. `STREAM_CONFIG.bitrate_kbps` yapılandırılmış değer olarak kalır.
+- Kullanıcı değişikliği (`STREAM_PREFS`) yine yeniden başlatma yolundan geçer.
+
+Log satırı:
+- `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
+  - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
+  - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.
+  - Kuyruk tıkalıyken gelen istekler birleşir: iki submit arasında en çok bir uygulama bloğu bekler. Yalnız en yeni hedef uygulanır, aradakiler satır üretmez. Son gönderilen değere geri dönen hedef de satır üretmez.
+  - `avg_status`: `AverageBitRate` için `VTSessionSetProperty` sonucu (`0` = kabul). `MATEBRIDGE_QUALITY` kabul edilmişse `skipped` yazılır: o kipte `AverageBitRate` kullanılmıyor, yalnız `DataRateLimits` değişir.
+  - `limits_status`: `DataRateLimits` için sonuç.
+  - `0` yalnız VideoToolbox'ın değeri kabul ettiğini söyler. `.fast` profil kabul edip yok sayabilir (T-087 emsali). Etkisi `net ev=stats` içindeki `sent_kbps=` ile ölçülür.
+
+Tanı ayarları (varsayılan kapalı, karar 0026):
+- `MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s|<n>ms`: 1–16 değer, her biri 5 000…150 000; süre 100 ms…600 s.
+  - İlk değer encoder başladıktan bir periyot sonra verilir. Ardından her periyotta listedeki sıradaki değer canlı ayarlayıcıya gider; liste döngüyle tekrarlanır.
+  - Geçersiz değer ayarı kapatır.
+- `MATEBRIDGE_RATE_WINDOW_MS=<10…999>`: `DataRateLimits`'e 1 s çiftinin yanına kısa bir pencere ekler, aynı 2× patlama payıyla: `[2 × ort. bayt/s × w, w]`.
+  - Oluşturmada ve her canlı değişiklikte uygulanır.
+  - Oluşturmadaki sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
+- Bu ayarlar açıkken `ev=encoder_config` satırına `bitrate_step=<değerler>@<ms>ms` ve `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.

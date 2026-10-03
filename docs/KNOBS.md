@@ -69,7 +69,7 @@ Sayıma girmeyen okumalar (açılış parametresi değil ya da başka giriş nok
 | 22 | `--ez stall_diag true` | false | MA:497-498; `…/diag/StallDetector.kt` | T-120/T-142; N:1088 | kalır (tanı) | Zaten isteğe bağlı | — |
 | 23 | `--es net_bench host:port` (+ `net_bench_s`, `net_bench_dir`, `net_bench_streams`, `net_bench_rcvbuf_kb`) | yok; alt anahtarlar 8 s (1–600), `down`, 1 (1–4), işletim sistemi varsayılanı (≤ 65 536 KB) | MA:359-366; `…/bench/NetBench.kt:39-59`; `…/bench/NetBenchActivity.kt:33`; `…/bench/*` (322 satır); `AndroidManifest.xml:34-39` | T-090 | yalnızca geliştirici; `src/debug` kaynak setine taşınır | `NWConnection` kök nedenini kanıtladı; nadiren gerekli | T-185 |
 
-## Host ortam değişkenleri (25; T-186 sonrası 23 okunuyor)
+## Host ortam değişkenleri (25; T-186 sonrası 23, T-165/T-177 ile +3 okunuyor)
 
 Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, varsayılan dışı değeri `ev=profile` satırında görünür (T-204).
 
@@ -92,6 +92,8 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 | 38 | `MATEBRIDGE_TCP_LOG` | `auto` (yalnızca Wi-Fi) | `host-mac/Sources/MateBridgeCore/Session/TcpInfoLog.swift:129-145`; SS:311 | T-126 | kalır (tanı) | — | — |
 | 39 | `MATEBRIDGE_AUDIO=off` | açık | `host-mac/Sources/MateBridgeCore/Audio/AudioStreamer.swift:32-35`; `HostAudio.swift:12` | T-094 | yalnızca geliştirici | Yalıtım anahtarı | T-204 (profil) |
 | 40 | `MATEBRIDGE_DISPLAY_KEEP_S` | 10 (10–86 400; geçersiz değer 10) | `host-mac/Sources/MateBridgeCore/Video/DisplayLease.swift` | T-165 (2026-10-03, bu envanterden sonra eklendi) | yalnızca geliştirici | Bekletilen sanal ekranın süresi (duvar saati). Kullanıcıya açılan seçim T-167 (karar 0020) | T-167 (menü) |
+| 41 | `MATEBRIDGE_BITRATE_STEP=<kbps,…>@<n>s` | kapalı | `host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift` (`BitrateStepKnob`); `EncoderSubmitOrder.swift` | T-177 (2026-10-03) | yalnızca geliştirici | Canlı bit hızı setter'ını cihazda sınamak için zamanlayıcıyla adım | T-196 ya da T-127 sonrası kaldırılır |
+| 42 | `MATEBRIDGE_RATE_WINDOW_MS` | kapalı (10–999) | `EncoderKnobs.swift`; `HEVCEncoder.swift` | T-177 (2026-10-03) | yalnızca geliştirici | Kısa `DataRateLimits` penceresi (tanı). 100 ms tek bir 100–450 KB kareyi sınırlamaz; cihazda 33 ve 100 denenir | T-127 sonrası karar |
 
 ## Host CLI kipleri (4) ve derleme zamanı
 
@@ -109,7 +111,6 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 ## Planlanan ayarlar
 
 Geldiklerinde buraya satır eklenir; hepsinin varsayılanı kapalı:
-- T-177: bit hızı adım ayarı.
 - T-196: `MATEBRIDGE_WIFI_ADAPT`.
 - T-197: `ctl_lowat_kb` (`WifiKnobs.kt`'ye).
 - T-198: `MATEBRIDGE_PEN_PLAYOUT_MS`.
