@@ -4,6 +4,8 @@
 //   KEY-SHARED     two identities that map to the same Mac key: one down (the first), one up (the last)
 //   KEY-CAPS       Caps Lock is never injected; every KEY event but the Caps DOWN carries the state to apply
 //   KEY-REPEAT     the last pressed non-modifier key repeats; any other DOWN, its own UP and release-all stop it
+//   KEY-REPEAT-STALL  no repeat while the control connection has been silent for more than `keyRepeatStallPauseUs`;
+//                  the key stays held (no UP), and the repeat resumes one interval after the next activity (T-163)
 //   KEY-RELEASE    release-all: key ups (last pressed first), then modifier ups
 
 /// What was injected for a held key.
@@ -96,13 +98,52 @@ extension InputStateMachine {
 
     /// KEY-REPEAT: one repeat of the repeating key if it is due. At most one per call; when the timer ran late the
     /// next one is a whole interval after `now`, so a stall never produces a burst.
+    /// Nothing while the repeat is paused by a stalled control connection (KEY-REPEAT-STALL).
     mutating func repeatKeyIfDue(now: UInt64) -> [InjectAction] {
-        guard let r = keyRepeat, now >= r.nextAt else { return [] }
+        guard let r = keyRepeat, now >= r.nextAt, !isKeyRepeatPaused(at: now) else { return [] }
         let interval = Swift.max(configuration.keyRepeatIntervalUs, 1)
         let next = r.nextAt &+ interval
         keyRepeat?.nextAt = next > now ? next : now &+ interval
         keyCounters.repeats += 1
         return [.keyDown(keyCode: r.keyCode, autorepeat: true)]
+    }
+
+    /// KEY-REPEAT-STALL: true while a repeat is armed and nothing has been received on the control connection for
+    /// more than `keyRepeatStallPauseUs` before `now`. Never true before the first `noteControlActivity(at:)`.
+    public func isKeyRepeatPaused(at now: UInt64) -> Bool {
+        guard keyRepeat != nil, let last = lastControlActivity else { return false }
+        return Self.elapsed(since: last, now: now) > configuration.keyRepeatStallPauseUs
+    }
+
+    /// KEY-REPEAT-STALL: ONE record was received on the active session's control connection at `time` (host clock),
+    /// and every earlier one was noted before it. A gap of more than `keyRepeatStallPauseUs` since the previous note
+    /// ends a pause. A consumer that coalesces notes must not use this with only the newest time (the gap between two
+    /// hand-offs is not a receive gap): it uses `noteControlActivity(_:)` with a `ControlActivityMailbox` hand-off.
+    @discardableResult
+    public mutating func noteControlActivity(at time: UInt64) -> Bool {
+        var resumedAt: UInt64?
+        if let last = lastControlActivity, Self.elapsed(since: last, now: time) > configuration.keyRepeatStallPauseUs {
+            resumedAt = time
+        }
+        return noteControlActivity(ControlActivityHandoff(latest: time, resumedAt: resumedAt))
+    }
+
+    /// KEY-REPEAT-STALL: the records received since the last hand-off, coalesced (`ControlActivityMailbox`): the newest
+    /// receive time, and the newest record that followed a real receive gap longer than the stall pause, if any.
+    /// Call it BEFORE handling a message (it holds only records that were already handled): `handle` then checks the
+    /// pause against the activity from before the message, so a delayed KEY UP that ends a stall is never preceded by
+    /// a repeat. Changes no held key and emits nothing.
+    ///
+    /// Returns true when a gap ended a pause of an armed repeat: the next repeat is then at least one interval after
+    /// the record that ended the gap (no burst), and the consumer must ask `nextDeadline(now:)` again (a paused repeat
+    /// had none).
+    @discardableResult
+    public mutating func noteControlActivity(_ handoff: ControlActivityHandoff) -> Bool {
+        lastControlActivity = handoff.latest
+        guard let resumedAt = handoff.resumedAt, let r = keyRepeat else { return false }
+        let earliest = resumedAt &+ Swift.max(configuration.keyRepeatIntervalUs, 1)
+        if r.nextAt < earliest { keyRepeat?.nextAt = earliest }
+        return true
     }
 
     /// KEY-RELEASE: everything held, last pressed first, ordinary keys before modifiers. Stops the repeat.

@@ -190,6 +190,11 @@ public final class SessionServer: @unchecked Sendable {
         public var approvalKeychainBusy: @Sendable (ApprovalRequest) -> Void = { _ in }
         /// Input, STATS and KEYFRAME_REQUEST from the approved session.
         public var deliver: @Sendable (Message) -> Void = { _ in }
+        /// A record of the ACTIVE session's control connection (PING included) was received at `receivedUs` (host
+        /// clock) and has been handled, its `deliver` included (T-163: the key repeat pauses while this is silent).
+        /// Never called for pending, unauthenticated or takeover-candidate connections, which are not the active one.
+        /// Runs for every record: keep it cheap and never hop synchronously.
+        public var controlActivity: @Sendable (_ receivedUs: UInt64) -> Void = { _ in }
         /// Release every held key, button and pen contact. Idempotent; must be safe to call any time.
         public var releaseInput: @Sendable (ReleaseCause) -> Void = { _ in }
         /// `transport`: how the session's control connection arrived (loopback = USB via `adb reverse`, T-088).
@@ -1235,6 +1240,9 @@ public final class SessionServer: @unchecked Sendable {
                 }
                 let receivedUs = nowUs()
                 apply(machine.received(id, message, now: receivedUs))
+                // T-163: after the record was handled (a delayed KEY UP is checked against the silence before it), and
+                // only for the active session: a pending or takeover candidate must not keep a stalled repeat alive.
+                if id == activeControl { handlers.controlActivity(receivedUs) }
                 // T-116: type only (never content) and handling time, for the audio `ev=send_gap` line.
                 audioTiming.noteReceived(message.type, startUs: receivedUs, endUs: nowUs())
                 if inbounds[id] == nil { return false }  // the message ended this connection
