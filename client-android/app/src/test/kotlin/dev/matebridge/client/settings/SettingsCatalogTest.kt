@@ -1,6 +1,7 @@
 package dev.matebridge.client.settings
 
 import dev.matebridge.client.audio.AudioOutPref
+import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.StreamMode
@@ -43,6 +44,10 @@ class SettingsCatalogTest {
         override fun setPenDot(on: Boolean) { calls += "dot $on"; v["dot"] = on }
         override val filesShare get() = v["files"] ?: false
         override fun setFilesShare(on: Boolean) { calls += "files $on"; v["files"] = on }
+        override var filesRoot = FilesRoot.DEFAULT
+        override fun selectFilesRoot(r: FilesRoot) { calls += "files_root ${r.id}"; filesRoot = r }
+        override val filesReadOnly get() = v["files_ro"] ?: false
+        override fun setFilesReadOnly(on: Boolean) { calls += "files_ro $on"; v["files_ro"] = on }
         override var filesStatus = "Durum: kapalı"
         override val clipboardShare get() = v["clip"] ?: true
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
@@ -68,7 +73,7 @@ class SettingsCatalogTest {
         assertEquals(
             listOf(
                 "transport", "disconnect", "forget_host", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
-                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_status",
+                "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "shortcuts", "version",
             ),
             side,
@@ -184,7 +189,7 @@ class SettingsCatalogTest {
 
     @Test fun filesSectionTogglesAndShowsStatus() {
         val s = SettingsCatalog.sections(h, inStream = true)
-        assertEquals(listOf("files", "files_status"), s.single { it.title == "Tablet dosyaları" }.items.map { it.key })
+        assertEquals(listOf("files", "files_root", "files_ro", "files_status"), s.single { it.title == "Tablet dosyaları" }.items.map { it.key })
         val t = item(s, "files") as SettingItem.Toggle
         assertEquals("Tablet dosyalarını Mac'te göster: kapalı", t.text())
         t.set(!t.get())
@@ -192,5 +197,23 @@ class SettingsCatalogTest {
         assertEquals("Tablet dosyalarını Mac'te göster: açık", t.text())
         h.filesStatus = "Durum: hazır"
         assertEquals("Durum: hazır", (item(s, "files_status") as SettingItem.Info).text())
+    }
+
+    @Test fun filesFolderChoiceAndReadOnly() { // T-190, decision 0028
+        val s = SettingsCatalog.sections(h, inStream = false)
+        val root = choice(s, "files_root")
+        assertEquals("Paylaşılan klasör", root.title)
+        assertEquals(listOf("matebridge", "download", "all"), root.options.map { it.id })
+        assertEquals(listOf("MateBridge", "Download", "Tüm depolama"), root.options.map { it.label })
+        assertEquals("matebridge", root.selected()) // the default
+        root.select("all")
+        assertEquals("all", root.selected())
+        root.select("bogus") // not an option: the narrow default, never the whole storage
+        assertEquals("matebridge", root.selected())
+        val ro = item(s, "files_ro") as SettingItem.Toggle
+        assertEquals("Salt okunur: kapalı", ro.text())
+        ro.set(!ro.get())
+        assertEquals("Salt okunur: açık", ro.text())
+        assertEquals(listOf("files_root all", "files_root matebridge", "files_ro true"), h.calls)
     }
 }

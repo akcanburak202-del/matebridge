@@ -48,7 +48,7 @@ import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.files.FilesController
 import dev.matebridge.client.files.FilesSessionGate
-import dev.matebridge.client.files.FilesSwitch
+import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
@@ -607,7 +607,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
         )
-        files = FilesController({ controller.setFilesInfo(it) }) { ui.post { refreshSettings() } }
+        files = FilesController({ controller.setFilesInfo(it) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -973,7 +973,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (on && !files.hasPermission()) files.openPermissionScreen(this@MainActivity) // onStart re-syncs on return
             syncFiles()
         }
-        override val filesStatus get() = FilesSwitch.statusText(files.status)
+        override val filesRoot get() = settings.filesRoot()
+        override fun selectFilesRoot(r: FilesRoot) { settings.setFilesRoot(r); files.rescope() } // T-190
+        override val filesReadOnly get() = settings.filesReadOnly()
+        override fun setFilesReadOnly(on: Boolean) { settings.setFilesReadOnly(on); files.rescope() } // T-190
+        override val filesStatus get() = files.statusText
 
         override val clipboardShare get() = clipboard.sync.enabled
         override fun setClipboardShare(on: Boolean) { // T-055
@@ -2101,6 +2105,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 } else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED && forgetFailed) getString(R.string.forget_failed)
                 else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
+                else if (state.cause == SessionUi.Cause.KEY_MISMATCH) getString(R.string.key_mismatch) // T-156
                 else getString(R.string.state_failed, causeText(state.cause))
         }
         // T-151: a trust state replaces its usual text; a pending pick prompt is a banner under the state's text.
@@ -2469,7 +2474,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
-            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED ->
+            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED,
+            SessionUi.Cause.KEY_MISMATCH ->
                 R.string.cause_protocol_error // own texts in applyStatusText() (PAIR_CANCELLED: the trust view)
             SessionUi.Cause.HOST_SLEEP -> R.string.cause_host_sleep
         },

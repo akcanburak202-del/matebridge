@@ -63,6 +63,7 @@ Source: external architecture review 2026-10-03 (D9); verification: docs/reviews
 
 ## Kabul kriterleri
 
+- [ ] [JVM] Reset also clears T-190's `files_root` (back to the default `matebridge`) and `files_read_only` (back to off). Added by the orchestrator 2026-10-03.
 - [ ] [JVM] `SettingsResetTest`: with every user setting set to a non-default value, `resetToDefaults()` makes every getter return its default.
 - [ ] [JVM] `SettingsResetTest`: `device_id`, `last_endpoint`, `transport_auto_migrated`, the `wol_*` keys and the separate pair-key store (`matebridge_pairkeys`) are untouched, byte for byte.
 - [ ] [JVM] `SettingsResetTest` (map-backed stores): the audio clear removes every stored buffer and safety value, and afterwards `OutBufMemory` and `SafetyMemory` start from their defaults (`SOURCE_DEFAULT`, `source=default`).

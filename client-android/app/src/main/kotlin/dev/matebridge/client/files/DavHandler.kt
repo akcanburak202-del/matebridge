@@ -17,6 +17,8 @@ import java.util.UUID
  * One WebDAV request (RFC 4918 subset Finder needs, decision 0015, T-135): OPTIONS, PROPFIND (Depth 0/1), GET/HEAD
  * (single Range), PUT (streamed to a temporary file, then moved), DELETE, MKCOL, MOVE, COPY, LOCK/UNLOCK (fake,
  * in-memory locks: macOS mounts read-only without DAV class 2). Every request must authenticate ([DigestAuth]).
+ * With [FilesConfig.readOnly] (T-190) every write method is refused with 403 before dispatch, and OPTIONS advertises
+ * class 1 only, so macOS mounts the volume read-only.
  *
  * Pure JVM code over java.io: the connection's streams come in already rate-limited; server-side COPY (and MOVE's copy
  * fallback) takes its bytes from the same [bucket]. Long tree operations stop when [cancelled] turns true (server
@@ -36,6 +38,8 @@ class DavHandler(
     private val meta: MetaStore = MetaStore(),
 ) {
     private val random = SecureRandom()
+    /** The `Allow` list of OPTIONS and every 405: the read methods only in read-only mode (T-190). */
+    private val allow = if (config.readOnly) ALLOW_READ_ONLY else ALLOW
     private val locks = object : LinkedHashMap<String, String>(16, 0.75f, false) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > MAX_LOCKS
     }
@@ -83,7 +87,12 @@ class DavHandler(
             return
         }
         val all = DavPath.parseTarget(req.target) ?: return ex.empty(400)
-        if (req.method == "OPTIONS") return ex.empty(200, listOf("DAV" to "1, 2", "MS-Author-Via" to "DAV", "Allow" to ALLOW))
+        if (req.method == "OPTIONS") {
+            // Read-only (T-190): no class 2, so webdavfs mounts read-only instead of failing every write in Finder.
+            return ex.empty(200, listOf("DAV" to if (config.readOnly) "1" else "1, 2", "MS-Author-Via" to "DAV", "Allow" to allow))
+        }
+        // T-190: before any path handling, so the virtual root, the storage and the `._*` metadata branch are all covered.
+        if (config.readOnly && req.method in WRITE_METHODS) return ex.empty(403)
         if (all.isEmpty()) return virtualRoot(req, body, ex)
         // The storage lives under /MatePad/ so Finder names the volume "MatePad" (orchestrator decision); nothing else exists.
         if (all[0] != MOUNT) return ex.empty(404)
@@ -104,7 +113,7 @@ class DavHandler(
                 req.header("lock-token")?.trim()?.removePrefix("<")?.removeSuffix(">")?.let { synchronized(locks) { locks.remove(it) } }
                 ex.empty(204)
             }
-            else -> ex.empty(405, listOf("Allow" to ALLOW))
+            else -> ex.empty(405, listOf("Allow" to allow))
         }
     }
 
@@ -186,7 +195,7 @@ class DavHandler(
     private fun get(req: HttpRequest, ex: Exchange, res: DavPath.Resolved, head: Boolean) {
         val f = res.file
         if (!f.exists()) return ex.empty(404)
-        if (f.isDirectory) return ex.empty(405, listOf("Allow" to ALLOW))
+        if (f.isDirectory) return ex.empty(405, listOf("Allow" to allow))
         if (!f.canRead()) return ex.empty(403)
         val total = f.length()
         val mtime = f.lastModified()
@@ -230,7 +239,7 @@ class DavHandler(
 
     private fun put(req: HttpRequest, body: BodyInputStream, ex: Exchange, res: DavPath.Resolved) {
         val target = res.file
-        if (res.isRoot || target.isDirectory) return ex.empty(405, listOf("Allow" to ALLOW))
+        if (res.isRoot || target.isDirectory) return ex.empty(405, listOf("Allow" to allow))
         val parent = target.parentFile
         if (parent == null || !parent.isDirectory) return ex.empty(409)
         val expected = (req.header("x-expected-entity-length") ?: req.header("content-length"))?.trim()?.toLongOrNull()
@@ -272,7 +281,7 @@ class DavHandler(
     private fun mkcol(req: HttpRequest, ex: Exchange, res: DavPath.Resolved) {
         if (req.bodyLength() != 0L) return ex.empty(415)
         val f = res.file
-        if (res.isRoot || f.exists() || DavPath.isSymlink(f)) return ex.empty(405, listOf("Allow" to ALLOW))
+        if (res.isRoot || f.exists() || DavPath.isSymlink(f)) return ex.empty(405, listOf("Allow" to allow))
         val parent = f.parentFile
         if (parent == null || !parent.isDirectory) return ex.empty(409)
         ex.empty(if (f.mkdir()) 201 else 500)
@@ -650,6 +659,10 @@ class DavHandler(
 
     companion object {
         const val ALLOW = "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"
+        /** T-190: what a read-only server allows. */
+        const val ALLOW_READ_ONLY = "OPTIONS, PROPFIND, GET, HEAD"
+        /** T-190: refused with 403 in read-only mode. */
+        val WRITE_METHODS = setOf("PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK")
         /** First path segment of the storage (`/MatePad/...`); the host mounts `http://localhost:<port>/MatePad/`. */
         const val MOUNT = "MatePad"
         const val TEMP_PREFIX = ".mbput-"
