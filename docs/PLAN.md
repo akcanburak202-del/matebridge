@@ -182,6 +182,22 @@ Her aşamanın sonunda **çalışan** bir şey olur. "Bitti" kontrol listesi ge�
 - Ses aktarımı, pano paylaşımı
 - Kısayol çubuğu (tasarım uygulamaları için ekranda tuşlar: geri al, fırça boyutu vb.)
 
+### Aşama 6 — Güvenilirlik ve ölçüm (dış inceleme, 2026-10-03)
+
+Kaynak: dış mimari inceleme (main @ a30c769) ve kodla doğrulanması, `docs/reviews/2026-10-03/README.md`. Kartlar T-145…T-203 ve yeniden kapsamlanan T-127. Kararlar 0018–0028 (hepsi **önerildi**, kullanıcı onayı bekliyor). Sıra, yeni kod ya da taşıma katmanından önce şudur:
+
+1. **Güvenli taban:** build kimliği, kurtarma runbook'u, login item yeniden deneme, CI (T-145…T-149).
+2. **Eşleşmede güven sınırı:** tablette onay bekleyen/güvenilen anahtar ayrımı, eşleşme yalnız kullanıcı başlatınca (T-150…T-157, karar 0018).
+3. **Donuk görüntüde input'u durdurma:** video sağlığı, nesil sınırı, decoder/encoder sahipliği (T-158…T-164, karar 0019).
+4. **Sanal ekranı bağlantıdan ayırma** (T-165…T-167, karar 0020).
+5. **Ölçümü ürünün parçası yapma:** aşama süreleri, input yaşı, optik ölçüm (T-168…T-175, karar 0021).
+6. **Wi-Fi:** üç topolojide taban ölçüm, sonra kontrollü akış (T-127, T-176…T-178, karar 0023).
+7. **Kalem doğrulaması** (T-179…T-181). 8. **Profiller ve deney ayarlarının sadeleşmesi** (T-182…T-188, karar 0026). 9. **Ağ/dosya kapsamı, kurulum, README** (T-189…T-193, kararlar 0027/0028). 10. **8 saat + 1 hafta dayanıklılık** (T-194).
+
+Ölçüme bağlı kartlar (T-195…T-203) yalnız kartta yazan ölçüm sonucu gelirse başlar.
+
+**Bitti:** H01–H05 için doğrulama, M01–M04 için yarış/tazelik testleri, kurulum-kurtarma runbook'u ve en az bir haftalık kullanım kanıtı var. Ancak ondan sonra tablet "tek ana ekran" olarak kabul edilir.
+
 ## 7. Repo yapısı ve çalışma şekli
 
 - Repo yapısı: `README.md` → *Layout*.
