@@ -260,3 +260,17 @@ Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi p
   - `offset_rtt_us`: kullanılan örneğin RTT'si. `clock_unc_us` = onun yarısı. Örnek yoksa `none`.
 - `input_session_end` satırının sonuna oturum toplamları eklenir, alan adları `age_` önekiyle aynıdır: `age_pen_n= …`, `age_late_250ms= age_neg= age_no_offset= age_offset_rtt_us= age_clock_unc_us=`, ayrıca `age_pongs=<n>` (kabul edilen saat örneği sayısı).
 - Tuş, karakter, keycode ya da koordinat hiçbir satıra yazılmaz; yalnız sayı ve süre.
+
+## Girdi teslim zamanlaması (Mac, `input`, T-175)
+
+Yalnız ölçüm; girdinin nasıl ve ne zaman uygulandığını değiştirmez. Her girdi mesajı (PEN, POINTER_REL/ABS, SCROLL, PINCH, PEN_GESTURE, KEY, RELEASE_ALL, BYE) için üç süre tutulur. PONG ve diğer mesajlar ölçülmez.
+
+- `deliver`: `InputController.deliver`'ın çağıran taraftaki süresi, `queue.sync` atlamasının çevresinde. Girdi kuyruğunu bekleme (bekçi zamanlayıcısı, 1 s yoklama) dahildir. Oturum kuyruğu (kontrol okuması, PONG, 100 ms tik, ses boşaltma) bu süre boyunca bekler.
+- `env`: girdi kuyruğunda ortam sorguları: `environment()` (Accessibility önbelleği, sanal ekran geometrisi: `CGDisplayIsOnline`/`VendorNumber`/`ModelNumber`/`Bounds`/`CopyDisplayMode`), KEY için ayrıca Caps Lock durumu. Canlı imleç sorgusu dahil değildir (kendi `cursor_query_*` alanları var). Kapı değişiminde yazılan `input_gate`/`input_displays` satırlarının maliyeti de buna girer.
+- `post`: mesajın olaylarını gönderme: bırakma öncesi taze izin kontrolü + `CGEventPoster.post` (olay başına `CGEventSource`, `CGEvent` kurma, `post`). Olay yoksa ~0.
+- `input_session_end` satırına, `dropped_no_display=` ile `age_` alanları arasına eklenir: `deliver_us_avg=<µs.2> deliver_us_p99=<µs> deliver_us_max=<µs> env_us_avg=<µs.2> env_us_max=<µs> post_us_avg=<µs.2> post_us_max=<µs> slow_calls=<n>`.
+  - Ortalamalar iki ondalıklı µs. `deliver_us_p99` sabit boyutlu log-doğrusal histogramdan gelir (T-171 ile aynı, ≤ %6,25 yukarı, kesin `max` ile kırpılır). `max` değerleri tam µs. Mesaj yoksa hepsi `0`.
+  - `slow_calls`: bir çağrısı 20 ms'yi aşan mesaj sayısı (aşağıdaki uyarı yazılsa da yazılmasa da).
+- `W input ev=input_slow_call stage=env|post|deliver us=<µs>`: bir mesajda bir çağrı 20 ms'yi aştığında (kesin büyük). Mesaj başına en çok bir satır: `env` ya da `post` aştıysa büyük olanı, ikisi de aşmadıysa `deliver` (süre kuyruk beklemesine ya da işlem hattına gitti). Hız sınırı: 10 s'de en çok bir satır, diğerleri yalnız `slow_calls`'ta sayılır. Hız sınırı oturumlar arasında sıfırlanmaz (yeniden bağlanma fırtınası uyarı yağdırmaz).
+- Karar eşiği (kart T-175): mesaj başına > ~50 µs ya da `deliver_us_p99` birkaç ms'nin üstündeyse optimizasyon kartı açılır (geometri önbelleği, tek `CGEventSource`, ses boşaltmayı oturum kuyruğundan almak). Altındaysa gerek yok.
+- Koordinat, tuş, keycode ya da karakter yazılmaz; yalnız aşama adı, süre ve sayı.
