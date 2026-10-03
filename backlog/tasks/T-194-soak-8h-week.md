@@ -3,7 +3,7 @@ id: T-194
 title: Run the 8 h soak, then one week of real use, with resource trends
 status: todo
 phase: 6
-owner: user + orchestrator
+owner: user            # orchestrator prepares the procedure and analyses results
 depends_on: [T-173, T-157, T-164, T-167, T-193]
 decisions: []
 files:
