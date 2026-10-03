@@ -1,7 +1,7 @@
 ---
 id: T-210
 title: Let the dev jitter knob select the adaptive pacer in game modes (A/B for T-208)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-208, T-185]
@@ -39,7 +39,11 @@ Cihaz 2026-10-04 ~01:47 (T-208 sonrası oyun ölçümü): oyun modlarında (kara
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `DevKnobs.parse`: `jitter` değeri `-1` (`BUFFER_ADAPTIVE`) ise olduğu gibi kalır; diğer değerler bugünkü gibi `coerceIn(0, 2)` (`-2` → 0, `3` → 2). Kapı (`dev`) değişmez: `dev` yoksa `jitter` null + `ignored=jitter`.
+2. `MainActivity` değişmez: `bufferFrames = devKnobs.jitter ?: BUFFER_ADAPTIVE`, `bufferFixedBy = EXTRA` (jitter null değilse) zaten `-1`'i `GameJitter.choose` içinde `Choice(-1, EXTRA)` olarak taşır → `jitter=adaptive jitter_src=extra`, `pacer=adaptive`.
+3. `GameMode.kt`: yalnız KDoc (davranış aynı).
+4. Testler: `DevKnobsTest` (-1 korunur, -2/3 sınırlanır, 0..2 aynı, dev'siz yok sayılır); `GameModeTest` (oyun modunda `choose(-1, EXTRA, game=true)` → adaptive/extra ve log satırı).
+5. `docs/KNOBS.md` satır 1.
 
 ## Handoff
 
