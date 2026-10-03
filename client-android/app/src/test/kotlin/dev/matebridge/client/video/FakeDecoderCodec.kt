@@ -33,6 +33,12 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     /** What [DecoderCodec.lowLatencySupport] answers (null = API < 30). */
     @Volatile var lowLatency: Boolean? = true
     @Volatile var inputCapacity = 64 * 1024
+    /** T-168: what [DecoderCodec.isHardwareAccelerated] / [DecoderCodec.isSoftwareOnly] answer (null = unknown). */
+    @Volatile var hardware: Boolean? = true
+    @Volatile var softwareOnly: Boolean? = false
+
+    /** T-168: every codec created, in order (a test drives a codec's frame-rendered listener through it). */
+    val codecs = java.util.concurrent.CopyOnWriteArrayList<Codec>()
 
     private val lock = Object()
     private val log = ArrayList<String>()
@@ -81,7 +87,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
             log.add("create#$serial"); lock.notifyAll()
         }
         if (fail) throw java.io.IOException("fake create failure")
-        return Codec(serial, mime)
+        return Codec(serial, mime).also { codecs.add(it) }
     }
 
     private fun gate(latch: CountDownLatch?) {
@@ -105,6 +111,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
+        override val isHardwareAccelerated: Boolean? get() = hardware
+        override val isSoftwareOnly: Boolean? get() = softwareOnly
 
         override fun configure(format: DecoderFormat, surface: Any) {
             record("configure#$serial")

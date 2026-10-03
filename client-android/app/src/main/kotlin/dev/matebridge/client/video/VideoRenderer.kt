@@ -401,10 +401,21 @@ class VideoRenderer(
             "priority=${key(MediaFormat.KEY_PRIORITY)} operating_rate=${key(MediaFormat.KEY_OPERATING_RATE)} " +
                 "low_latency_fmt=${key(MediaFormat.KEY_LOW_LATENCY)}"
         } catch (e: Exception) { "input_format=unavailable" }
+        // T-168 (PF7): createDecoderByType takes the platform default; say whether it is a hardware decoder.
+        val hw = flag(codec.isHardwareAccelerated)
+        val swOnly = flag(codec.isSoftwareOnly)
         env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=codec_start name=${codec.name} mime=$mime " +
-            "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency requested_rate=${rate ?: "none"} accepted $accepted")
+            "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency requested_rate=${rate ?: "none"} " +
+            "is_hw=$hw sw_only=$swOnly accepted $accepted")
+        if (codec.isHardwareAccelerated == false || codec.isSoftwareOnly == true) {
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=codec_software name=${codec.name} mime=$mime " +
+                "is_hw=$hw sw_only=$swOnly")
+        }
         return codec
     }
+
+    /** `1` / `0`, or `?` when unknown. */
+    private fun flag(b: Boolean?) = when (b) { null -> "?"; true -> "1"; false -> "0" }
 
     private fun decodeLoop(att: CodecGeneration) {
         try {
@@ -481,6 +492,9 @@ class VideoRenderer(
         val st = CodecState(att, PTS_MAP_MAX) // T-161: this codec's own state; `running` replaces outRunning
         val outError = java.util.concurrent.atomic.AtomicReference<String?>(null)
         try {
+            // T-168: frame_seq restarts per video connection; no per-frame entry of an earlier codec may pair with ours.
+            // Decoder thread, before this codec's first input (the previous codec's threads no longer touch stats).
+            stats.resetFrames()
             codec = createCodec(att.surface)
             var held: VideoFrame? = null
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
@@ -501,10 +515,11 @@ class VideoRenderer(
             st.adaptive = adaptivePacer
             live = st
             val gauge = st.gauge
-            val sink = CodecSink(codec, st)
+            val reportsShown = codecReportsShown
+            val sink = CodecSink(codec, st, expectCallback = reportsShown)
             val releaser = SlotReleaser(sink, st.counters)
             releaser.trace = trace
-            if (codecReportsShown) {
+            if (reportsShown) {
                 codec.setOnFrameRenderedListener { pts, nanoTime -> // on the main looper (adapter)
                     // T-161: a late callback of a stopped codec must not count. Main thread: a plain check, never the
                     // shared lock (review 2: the UI thread must not wait on output bookkeeping).
@@ -513,6 +528,7 @@ class VideoRenderer(
                         val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
                         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
                         stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
+                        stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000) // T-168 cap_cb
                     }
                 }
             }
@@ -624,23 +640,37 @@ class VideoRenderer(
 
     /**
      * Output-buffer release with bookkeeping (stats, this codec's occupancy). Output thread only. T-161: the shared
-     * [stats] count only while [st] is current.
+     * [stats] count only while [st] is current. T-168: knows which frame each held buffer carries ([tag]), so a release
+     * adds a capture -> release sample and a discard does not; [expectCallback] in codec-render mode.
      */
-    private inner class CodecSink(private val codec: DecoderCodec, private val st: CodecState) : SlotReleaser.Sink {
+    private inner class CodecSink(
+        private val codec: DecoderCodec, private val st: CodecState, private val expectCallback: Boolean,
+    ) : SlotReleaser.Sink {
+        /** Output buffer index -> pts (frame_seq) of the frame in it; bounded by the codec's output buffers. */
+        private val ptsOf = HashMap<Int, Long>()
+
+        fun tag(idx: Int, ptsUs: Long) { ptsOf[idx] = ptsUs }
+
         override fun release(idx: Int, renderNs: Long) {
             codec.releaseOutputBuffer(idx, renderNs)
-            st.ifCurrent { stats.onRendered() }
-            st.gauge.onDone(System.nanoTime())
+            released(idx)
         }
         override fun discard(idx: Int) {
             codec.releaseOutputBuffer(idx, false)
-            st.ifCurrent { stats.onDropped(1) }
+            ptsOf.remove(idx)
+            st.ifCurrent { stats.onDiscarded() }
             st.gauge.onDone(System.nanoTime())
         }
         fun releaseNow(idx: Int) {
             codec.releaseOutputBuffer(idx, true)
-            st.ifCurrent { stats.onRendered() }
-            st.gauge.onDone(System.nanoTime())
+            released(idx)
+        }
+        private fun released(idx: Int) {
+            val nowNs = System.nanoTime()
+            val pts = ptsOf.remove(idx)
+            val captureUs = if (pts != null) st.captureByPts.get(pts) else null // own lock, outside the shared one
+            st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000, expectCallback) }
+            st.gauge.onDone(nowNs)
         }
     }
 
@@ -690,7 +720,7 @@ class VideoRenderer(
                 if (isFrame) {
                     // T-159: health is timed on decoder output, not on onFrameRendered (panels may throttle presentation).
                     firstOfGeneration = progress.onOutput(gen)
-                    stats.onOutput(info.presentationTimeUs, nowUs())
+                    stats.onOutput(info.presentationTimeUs, nowUs(), readyNs / 1000)
                     st.readyByPts.put(info.presentationTimeUs, readyNs)
                 }
                 if (paced && isFrame) {
@@ -709,6 +739,7 @@ class VideoRenderer(
                         trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, null, 0, false, false, 0, PaceTrace.ACTION_NOW)
                     } else {
                         stats.onPaceAdd(decision.addedNs / 1000)
+                        if (decision.slotNs != 0L) stats.onReadySlot((decision.slotNs - readyNs) / 1000) // T-168 ready_slot
                         if (useAdaptive) stats.onScheduled(decision.skipped)
                         if (decision.lateDrop) st.counters.onLateDrop(if (decision.ownSlotNs != 0L) (decision.ownSlotNs - readyNs) / 1000 else null)
                         tag = trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, probe, decision.slotNs, decision.lateDrop, decision.collided, decision.ownSlotNs) ?: -1L
@@ -728,6 +759,7 @@ class VideoRenderer(
                 return formatChanged
             }
             waitUs = 0
+            if (isFrame) sink.tag(idx, info.presentationTimeUs) // T-168: which frame a later release/discard is
             if (paced) {
                 if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
                 val decision = d

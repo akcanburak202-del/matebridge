@@ -1233,7 +1233,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
             it.perfHint = perfHint
-            it.stats.latencyOf = { cap -> clock.latencyUs(cap, SessionController.clockUs()) }
+            it.stats.latencyOf = { cap, at -> clock.latencySignedUs(cap, at) } // T-168: signed; `at` on SessionController.clockUs()'s clock
             renderer = it
         }
         layoutVideo()
@@ -1539,7 +1539,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
         val gl = if (glMode) presentStats.snapshot(reset = true) else null
         if (statsOn) {
-            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs())) +
+            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs()), clock.uncertaintyUs()) +
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val withGl = if (gl == null) base else base + "\n" + gl.fields().replace(" gl_", "\ngl_")
             val tr = currentTransport()
@@ -1602,7 +1602,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val fps = s.rendered * 1000.0 / interval.coerceAtLeast(1)
         MbLog.i(
             "stats",
-            "interval_ms=$interval recv=${s.received} dec=${s.decoded} shown=${s.rendered} drop=${s.dropped} " +
+            // T-168: released= counts releaseOutputBuffer calls; shown= is its deprecated alias (one release).
+            "interval_ms=$interval recv=${s.received} dec=${s.decoded} released=${s.rendered} shown=${s.rendered} drop=${s.dropped} " +
                 "decode_avg_us=${s.decodeTimeAvgUs} bytes=${s.bytesReceived} $queueFields",
             "decoder",
         )
@@ -1618,7 +1619,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 "vsync_ms=${"%.2f".format(java.util.Locale.ROOT, vsync.periodNs / 1e6)} pace_add_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 StatsFormat.gapFields("net", s.network) + " " + StatsFormat.gapFields("ready", s.ready) + " " +
                 StatsFormat.gapFields("shown", s.shown) + " " + StatsFormat.gapFields("dec", s.decode) +
-                " pace_d_us=${r.paceDUs()}",
+                " pace_d_us=${r.paceDUs()} " +
+                // T-168: latency stages from the capture stamp; latency_us= above is the deprecated alias (clamped mean).
+                StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()),
             "render",
         )
     }

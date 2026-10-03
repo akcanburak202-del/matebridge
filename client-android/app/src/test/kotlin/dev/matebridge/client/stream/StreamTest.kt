@@ -117,7 +117,7 @@ class StatsFormatTest {
 
     @Test fun unknownLatencyIsZeroOnTheWireAndQuestionMarkOnScreen() {
         assertEquals(0L, StatsFormat.toMessage(snap, 1000, null).latencyAvgUs)
-        assertTrue(StatsFormat.overlay(snap, 1000, null).contains("Gecikme ?"))
+        assertTrue(StatsFormat.overlay(snap, 1000, null).contains("Yak→çöz ?"))
     }
 
     @Test fun overlayShowsRatesAndClampsU32() {
@@ -132,7 +132,7 @@ class StatsFormatTest {
 
     @Test fun videoStatsAveragesLatencyThroughHook() {
         val s = VideoStats()
-        s.latencyOf = { cap -> cap * 2 }
+        s.latencyOf = { cap, _ -> cap * 2 }
         s.onInput(1, 100, 10)
         s.onInput(2, 200, 30)
         s.onOutput(1, 400)

@@ -43,6 +43,13 @@ interface DecoderCodec {
     /** Component name (diagnostics). */
     val name: String
 
+    /**
+     * T-168 diagnostics only: `MediaCodecInfo.isHardwareAccelerated` / `isSoftwareOnly` of the component (API 29+), null
+     * when unknown. Read once per codec start for the `ev=codec_start` line.
+     */
+    val isHardwareAccelerated: Boolean? get() = null
+    val isSoftwareOnly: Boolean? get() = null
+
     /** Whether `FEATURE_LowLatency` is supported for [mime]; null when the platform has no such feature (API < 30). */
     fun lowLatencySupport(mime: String): Boolean?
 
@@ -84,6 +91,8 @@ class MediaCodecDecoder private constructor(private val codec: MediaCodec) : Dec
     private val bufferInfo = MediaCodec.BufferInfo()
 
     override val name: String get() = codec.name
+    override val isHardwareAccelerated: Boolean? get() = try { codec.codecInfo.isHardwareAccelerated } catch (e: Exception) { null }
+    override val isSoftwareOnly: Boolean? get() = try { codec.codecInfo.isSoftwareOnly } catch (e: Exception) { null }
 
     override fun lowLatencySupport(mime: String): Boolean? {
         if (Build.VERSION.SDK_INT < 30) return null

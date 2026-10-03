@@ -72,6 +72,8 @@ class DecoderFault(
 
     private inner class Codec(private val c: DecoderCodec) : DecoderCodec {
         override val name: String get() = c.name
+        override val isHardwareAccelerated: Boolean? get() = c.isHardwareAccelerated // T-168 diagnostics
+        override val isSoftwareOnly: Boolean? get() = c.isSoftwareOnly
         override fun lowLatencySupport(mime: String) = c.lowLatencySupport(mime)
 
         override fun configure(format: DecoderFormat, surface: Any) {
