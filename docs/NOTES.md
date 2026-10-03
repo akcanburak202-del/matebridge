@@ -1132,3 +1132,12 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - **FileVault:** kapalı. Yeniden başlatma sonrası açılış ekranı yerel klavye istemez; otomatik giriş durumu T-147 provasında kontrol edilecek.
 - **Wi-Fi:** yedek yol kalır, asıl yol USB. Wi-Fi işleri (T-127, T-178, T-195–T-198) düşük öncelikte; 0024 (Wi-Fi'de kalem) park.
 - **0021 / 0025:** ilke olarak kabul; seçenek ve eşik T-170 / T-171 verisiyle seçilip kullanıcıya gösterilecek.
+
+## 2026-10-03 akşam — Aşama 6 kod kartları: oturum sonu devir
+
+- Dış inceleme doğrulaması main'e alındı (`9ae6294`). Kararlar: 0018, 0019, 0022, 0026, 0027, 0028 kabul; 0021, 0025 ilke olarak kabul (veriyle); 0023 düşük öncelik, 0024 park (Wi-Fi yedek yol); 0020 bekletme süresi T-166'dan sonra sorulacak.
+- Bu oturumda merge edilen kartlar (hepsi `check.sh` ALL OK, çoğu Codex --high incelemesinden geçti, bulunan sorunlar merge'den önce düzeltildi): T-145, 146, 148, 149 (CI), 150, 151, 152, 153, 154, 155, 156, 158, 159, 160, 161, 162, 163, 165, 168, 169, 170, 171, 175, 176, 177, 182, 183, 184, 185, 186, 187, 189, 190, 191, 204, 205 ve yeni kart T-206 (T-190 Codex bulgusundan).
+- CI: GitHub Actions her push'ta macOS + Linux; ilk hafta yalnız bilgi (2026-10-10'a kadar), sonra zorunlu.
+- Bir kez main kısa süre kırıldı (T-169/T-183 birleşimi, `foreground` alanı); `ee9eb15` ile düzeltildi, CI yakaladı.
+- **Hiçbiri cihazda denenmedi.** Sıradaki iş cihaz oturumu: T-157 (eşleşme kabulü), T-164 (video arıza/churn), T-166 (bekletilen ekran ölçümü), T-147 (kurtarma provası), T-173 (ölçüm kiti). Kartların Handoff'larındaki cihaz maddeleri bunlara toplanır.
+- Bilinen açıklar: T-161 hızlı art arda yeniden yapılandırmada bekleyici thread'lerin geçici üst üste binmesi (T-164'te thread sayısıyla izlenecek); T-206 Finder çıkarma bildirimi WebDAV için gerçekten geliyor mu (cihazda doğrulanacak); T-189 adb'nin IPv4 loopback'e bağlanması (Yalnız USB modunda doğrulanacak).
