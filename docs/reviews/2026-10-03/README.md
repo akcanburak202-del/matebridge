@@ -66,6 +66,7 @@ Rapordaki **15 bulgunun hiçbiri yanlış çıkmadı.** Bazılarının etkisi ra
 | `VideoStats` kare haritalarının hiç temizlenmemesi; yeniden bağlanmalardan sonra örnekler düşebilir | Düşük–Orta | T-168 |
 | `CMBlockBuffer`'ın bitişik olduğu varsayılarak okunması | Düşük | T-162 |
 | Ses writer nesillerinin üst üste binebilmesi | Düşük | izleniyor (T-164, T-194) |
+| Ses mesajlarının (AUDIO_CONFIG/AUDIO_FRAME) oturum kabulünden önce de işlenmesi; sahte host ses çalabiliyor | Düşük (H01 ile) | T-150 |
 | `gen.py`'nin `--check` olmadan her çağrıda fixture'ları yeniden yazması | Düşük | T-149 |
 
 ## Raporda düzeltilmesi gerekenler

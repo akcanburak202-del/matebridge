@@ -30,7 +30,8 @@ Ek bulgu (A2): AUTO modunda USB'ye taşınan aday bağlantı, şifresiz PAIRED/A
   - Yeni anahtar, kodla birlikte (Keystore ile sarılı, asla loglanmaz) **bekleyen** bir kayıtta tutulur. Güvenilen anahtara dokunulmaz.
   - Kullanıcının tablette "Kodlar aynı — Güven" demesi, bekleyen kaydı tek adımda güvenilen anahtara çevirir. Bu, Parsec'e geçmeden önce ya da dönüşte, saklı kodu gösteren bir istemle olabilir.
   - Tablet oturumu ancak iki koşul birlikteyken kabul edilmiş sayar: host kabul etti (ACCEPTED ya da sonraki bir PAIRED el sıkışması) ve kayıt yerel olarak güvenilir. O zamana kadar yalnızca PING gider. STREAM_PREFS, FILES_INFO ve girdi gitmez, gelen CLIPBOARD uygulanmaz.
-  - İptal, zaman aşımı (2 dk) ya da REJECTED bekleyen kaydı siler. PAIRED el sıkışması onaylanmamış bir anahtarı asla kullanmaz.
+  - İptal ya da REJECTED bekleyen kaydı siler. 2 dakikalık zaman aşımı yalnız onay istemi ön plandayken işler. Kullanıcı Parsec'ten dönünce bekleyen kayıt bulunursa silinmez, saklı kodla birlikte yeniden gösterilir; bu, onay-sonrası akışını korur. PAIRED el sıkışması onaylanmamış bir anahtarı asla kullanmaz: bekleyen kayıt varken gelen PAIRED yanıtında anahtar türetilmez, önce kod onaylatılır, sonra yeniden bağlanılır.
+  - Kapı ses için de geçerli: oturum kabul edilene kadar AUDIO_CONFIG/AUDIO_FRAME işlenmez. Bugün bunlar kabul kontrolü olmadan dinleyiciye ulaşıyor (`SessionController.kt:728-758`), yani sahte bir host ses çalabiliyor.
   - **Eşleşme her zaman kullanıcıyla başlar.** Keşif, saklı uç ya da USB yoklaması ile açılan bağlantıda PAIRING cevabı gelirse bağlantı kesilir ve "Yeni Mac bulundu / Mac yeniden eşleşmek istiyor — Eşleş" gösterilir. Normal PAIRED yeniden bağlanma sessiz kalır.
   - Tablete "Bu Mac'i unut" eklenir.
   - Taşıma adayı, ancak ilk doğrulanmış host kaydından sonra terfi eder.

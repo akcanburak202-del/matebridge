@@ -1,0 +1,73 @@
+---
+id: T-149
+title: Add a component-split CI merge gate and a safe fixture CLI
+status: todo
+phase: 6
+owner: orchestrator
+depends_on: []
+decisions: [0022]
+files:
+  - .github/workflows/check.yml
+  - scripts/check.sh
+  - protocol/fixtures/gen.py
+  - protocol/fixtures/README.md
+  - docs/WORKFLOW.md
+  - docs/PLAN.md
+  - docs/decisions/0022-ci-github-actions.md
+  - backlog/tasks/T-149-ci-merge-gate.md
+---
+
+## Amaç
+
+The only merge gate today is a manual `./scripts/check.sh` on the owner's Mac, and nothing records that it ran for a given merge. In an agent-driven repo that makes "tests pass" unverifiable. This card adds GitHub Actions jobs that run the existing checks split by component on every push, so each commit shows a visible pass/fail, and makes the golden-fixture generator safe so it can never rewrite fixtures by accident. Hardware behaviour stays out of CI and is said so explicitly.
+
+Source: external architecture review 2026-10-03 (M07, P4); verification: docs/reviews/2026-10-03/verify-H-hygiene.md (CI-1, additional issues 1 and 2, P4, M07).
+Decision 0022 must be accepted by the user before work starts (manifest §5 Q4).
+
+## Bağlam
+
+- **Evidence (HEAD a30c769):**
+  - `.github/` does not exist; there is no `androidTest` tree. CI was deferred on purpose (T-001 l.20, `docs/PLAN.md:48` "atılan / ertelenen") and never carded.
+  - `scripts/check.sh` is monolithic and Mac-shaped: it builds every SwiftPM package incl. probes (:16-20), every Gradle project incl. probes (:26-30), falls back to the Android Studio JBR and `~/Library/Android/sdk` only when `JAVA_HOME`/`ANDROID_HOME` are unset (:23-25), runs the CryptoKit vector script (:38-40) and greps fixture stems in `docs/PROTOCOL.md` (:42-47). On a GitHub Ubuntu image (Swift preinstalled) it would try `swift build` of `host-mac` (AppKit) and the CryptoKit script, and fail.
+  - `protocol/fixtures/gen.py:460-476`: `check = "--check" in sys.argv`; every other invocation (`--help`, a typo) **rewrites** all 48 fixtures. The verifier triggered this by accident (output was byte-identical, `git status` clean). `protocol/fixtures/README.md:5` documents the bare `python3 protocol/fixtures/gen.py` as the regenerate command.
+  - Host tests are Core-only (`host-mac/Package.swift:18`, one test target); Keychain is faked, Bonjour tests self-skip without mDNSResponder, `CGVirtualDisplay` is resolved at runtime (`host-mac/Sources/MateBridgeHost/VirtualDisplay.swift:47-56`), so `swift build`/`swift test` should work on a hosted macOS runner. Android needs AGP 9.4.1, Gradle 9.8.0, compileSdk 37, NDK 30.0.16248370 and CMake 4.1.2 (`client-android/app/build.gradle.kts:7-9`), installed with the runner's `sdkmanager`.
+  - The repo is public (`docs/WORKFLOW.md:54`), so hosted macOS minutes are free; path filters still keep the macOS job off pure Android/docs pushes.
+- **Plan hints:**
+  - `check.sh --only host|android|protocol` (repeatable or comma list); no flag = all, exactly today's behaviour on the Mac. `host` = `host-mac` build+test; `android` = `client-android` `assembleDebug testDebugUnitTest`; `protocol` = `gen.py --check`, the fixture-stem grep and, **on Darwin only**, the CryptoKit vector diff (print an explicit `SKIP (needs macOS)` elsewhere). Probes run only in the default (all) mode, never under `--only`. Keep the existing "respect `JAVA_HOME`/`ANDROID_HOME` when set" guard.
+  - `gen.py`: `argparse` with `--check` and `--write` (mutually exclusive, one required); unknown arguments exit non-zero; `--check` output and exit codes unchanged. Update `protocol/fixtures/README.md:5` to `--write`.
+  - Workflow: jobs `macos` (`--only host`, `--only protocol`; path filter `host-mac/**`, `protocol/**`, `scripts/check.sh`, `.github/workflows/**`, `docs/PROTOCOL.md`) and `linux` (`--only android`, `--only protocol`). Triggers: push to `main` and `task/**`, plus `workflow_dispatch`. Only first-party `actions/checkout`, `actions/setup-java`, `actions/cache` (Gradle and SwiftPM caches). JDK 21.
+  - **Merge-gate mechanics:** today only `main` is pushed, so CI on `main` alone is post-merge. To gate, the orchestrator pushes `task/*` before merging (or opens a PR) and merges only on green. `docs/WORKFLOW.md` gets one line saying this and that CI is advisory for the first week, then required.
+  - T-146 derives `versionCode` from the commit count; use `fetch-depth: 0` in the Linux checkout or note that CI APKs are not daily APKs.
+  - `docs/PLAN.md:48`: drop "CI" from the "Atılan / ertelenen" list and point to 0022 (that line only; T-193 refreshes the rest of PLAN).
+- **Risks:** timing-sensitive tests (e.g. the 5 s bound in `KeychainAsyncTests`, socket deadlines) may flake on shared runners, hence the advisory week; the hosted macOS image may lag the Mac mini's macOS 27 SDK. If `host-mac` cannot build there, record it and the decision's "revisit" clause applies.
+- **Not covered by CI (state in 0022 and WORKFLOW):** ScreenCaptureKit, VideoToolbox, `CGVirtualDisplay`, MediaCodec, AAudio, TCC, CGEvent posting, probes.
+- No wire change. `gen.py` is orchestrator-owned; only its CLI changes, never the fixture content.
+
+## Kapsam dışı
+
+- Device or instrumentation tests, emulators, release signing, building probes in CI, a self-hosted runner.
+
+## Kabul kriterleri
+
+- [ ] `./scripts/check.sh` with no flag behaves exactly as today on the Mac (same steps, same exit code).
+- [ ] `check.sh --only host|android|protocol` runs only that component; `--only protocol` on Linux skips the CryptoKit diff with an explicit `SKIP` line; set `JAVA_HOME`/`ANDROID_HOME` are never overridden.
+- [ ] `gen.py` writes only with `--write`, exits non-zero on unknown arguments and on no mode, and `--check` is unchanged; `protocol/fixtures/README.md` documents `--write`.
+- [ ] [CI] The macOS job runs `--only host` and `--only protocol`; the Linux job runs `--only android` and `--only protocol`; both pass on the merge commit of this card (run URLs in Handoff).
+- [ ] [CI] A deliberately stale fixture on a throwaway branch fails the job (run URL in Handoff; branch deleted afterwards).
+- [ ] [CI] Each job finishes in under 15 min with warm caches (times in Handoff).
+- [ ] [doc] Decision 0022 lists what is NOT covered; `docs/WORKFLOW.md` states the gate mechanics (push `task/*`, advisory week, then required); `docs/PLAN.md:48` points to 0022.
+- [ ] `./scripts/check.sh` geçiyor.
+
+## Plan
+
+_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+
+## Handoff
+
+_(Ajan bitirince doldurur.)_
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**
