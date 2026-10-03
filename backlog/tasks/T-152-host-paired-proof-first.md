@@ -1,7 +1,7 @@
 ---
 id: T-152
 title: Activate PAIRED sessions only after the first authenticated record
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-041]

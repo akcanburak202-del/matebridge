@@ -50,6 +50,12 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - `ev=connection_refused video=true|false reason=too_many_unauthenticated|socket_setup`: bağlantı reddedildi.
 - `ev=send_backlog [reason=write_refused]`: kontrol bağlantısı yazılamıyor (eş okumuyor ya da bağlantı kapandı). Bağlantı kapatılır ve girdi bırakılır.
 
+## Eşleşmiş bağlantıda kanıt (Mac, `session`, T-041/T-152)
+
+- `ev=paired_proving conn=…`: PAIRED bağlantı ACCEPTED aldı, oturum ilk doğrulanmış kaydı bekliyor (devralma olmadan). Beklenen sıra: `handshake mode=paired` → `paired_proving` → `session_started`.
+- `ev=takeover_proving conn=…`: aynı, ama aynı cihazın canlı bir oturumu devralınacak.
+- `ev=proof_timeout conn=…` (W): 5 sn içinde doğrulanmış kayıt gelmedi, bağlantı BYE'sız kapatıldı. T-152'den beri devralma olmayan bağlantılarda da çıkar; sık görülüyorsa tablet yanlış anahtar kullanıyor olabilir (T-156).
+
 ## Kontrol ve video soketlerinin TCP durumu (Mac, `net`, T-126)
 
 Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantısı (ses buradan gider) ve bağlı video bağlantısı oturum kuyruğunda saniyede bir okunur. Her biri için soket başına saniyede bir `getsockopt(TCP_CONNECTION_INFO)` yapılır.
