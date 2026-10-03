@@ -56,7 +56,7 @@ Rapordaki **15 bulgunun hiçbiri yanlış çıkmadı.** Bazılarının etkisi ra
 |---|---|---|
 | Tabletin keşfettiği her host'a kendiliğinden bağlanması, seçim ekranı olmaması | Yüksek (H01 ile) | T-150, T-151 |
 | `127.0.0.1:47001`'i dinleyen yerel uygulamanın WebDAV token'ını alabilmesi | Yüksek (H01 ile) | T-150, T-153 |
-| USB'ye geçişin doğrulanmamış ACCEPTED ile terfi etmesi | Düşük (DoS) | T-150 |
+| USB'ye geçişin doğrulanmamış ACCEPTED ile terfi etmesi | Düşük (DoS) | T-205 |
 | Mac'in, PAIRED bağlantıyı anahtar kanıtından önce etkinleştirmesi. Sanal ekran oluşturuluyor, ekranlar uyanıyor, uyku engelleniyor. | Düşük–Orta (yalnız kaynak/DoS) | T-152 |
 | `allowBackup=false`, targetSdk 31'de cihazdan cihaza aktarımı kapatmıyor | Düşük | T-154 |
 | Aynı host_id'li sahte host sonrası sonsuz PROTOCOL_ERROR döngüsü | Orta | T-156 |
@@ -83,7 +83,7 @@ Rapordaki **15 bulgunun hiçbiri yanlış çıkmadı.** Bazılarının etkisi ra
 
 ## Plan
 
-PLAN.md'ye **Aşama 6 — Güvenilirlik ve ölçüm** eklendi. Kartlar T-145…T-203 ve yeniden kapsamlanan T-127, raporun önerdiği sırayla dizildi: güvenli taban → güven sınırı → video sağlığı → sanal ekran → ölçüm → Wi-Fi → kalem → profiller → kapsam ve kurulum → dayanıklılık. Ölçüme bağlı kartlar en sonda ve her biri hangi ölçümü beklediğini söylüyor. Sıralama, aynı dosyaya dokunan kartlar ve izlenebilirlik tablosu için bkz. `manifest.md` §2 ve §6.
+PLAN.md'ye **Aşama 6 — Güvenilirlik ve ölçüm** eklendi. Kartlar T-145…T-205 ve yeniden kapsamlanan T-127, raporun önerdiği sırayla dizildi: güvenli taban → güven sınırı → video sağlığı → sanal ekran → ölçüm → Wi-Fi → kalem → profiller → kapsam ve kurulum → dayanıklılık. Ölçüme bağlı kartlar en sonda ve her biri hangi ölçümü beklediğini söylüyor. Sıralama, aynı dosyaya dokunan kartlar ve izlenebilirlik tablosu için bkz. `manifest.md` §2 ve §6.
 
 Karar taslakları 0018–0028 `docs/decisions/` altında. Hepsi **önerildi** durumunda, kullanıcı onayı bekliyor. Kart çıkarılmayan öneriler ve gerekçeleri `manifest.md` §4'te.
 
@@ -104,3 +104,18 @@ Hiçbir kart protokol baytlarını koşulsuz değiştirmiyor. Yalnız iki kart, 
 | `verify-H-hygiene.md` | Test/CI, dokümanlar, build kimliği, deney ayarları envanteri |
 | `coverage-audit.md` | Kapsam denetimi, çelişkiler ve çözümleri |
 | `manifest.md` | Kart ve karar listesi, sıralama, izlenebilirlik, açık sorular |
+
+## Kart denetimi (QA)
+
+Kartlar yazıldıktan sonra dört ayrı denetçi hepsini kodla, kararlarla ve AGENTS.md kurallarıyla karşılaştırdı (`qa-1.md` … `qa-4.md`). 4 engelleyici, ~60 düzeltilmesi gereken ve ~60 küçük bulgu çıktı. Hepsi kartlara işlendi, hiçbiri reddedilmedi.
+
+Önemli olanlar:
+- **T-160:** önerilen sıfırlama, her STREAM_CONFIG'te videoyu tamamen durdururdu. Düzeltildi.
+- **T-156:** T-152 sonrası "anahtar uyuşmuyor" sayacı hiç tetiklenmezdi. Düzeltildi.
+- **T-150 / karar 0018:** Parsec'ten erken dönüş, süresi dolmayan bekleyen kayıt, oturum sırasında "Bu Mac'i unut" ve onaydan sonra İptal durumları tanımlandı.
+- **T-159 / karar 0019:** hatalı arıza algılama düzeltildi. Uzun süre boşta kalan ekranda çizime başlamak artık arıza sayılmıyor.
+- **Bölünen iki kart:**
+  - T-150'den USB geçiş kapısı ayrıldı → **T-205**.
+  - T-186'dan encoder deney ayarları ayrıldı → **T-204**.
+
+Değişikliklerin listesi `manifest.md` §8'de.
