@@ -314,3 +314,14 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
   - Oluşturmada ve her canlı değişiklikte uygulanır.
   - Oluşturmadaki sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
 - Bu ayarlar açıkken `ev=encoder_config` satırına `bitrate_step=<değerler>@<ms>ms` ve `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.
+
+## Akış profili (Mac, `encoder`, T-204)
+
+- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
+ - Kodlayıcı her oluşturulduğunda bir kez yazılır: her akış başlangıcında ve her yeniden başlatmada (ör. `STREAM_PREFS`). Hemen `ev=encoder_config`'ten sonra gelir.
+ - `sha=` `ev=app_start` ile aynı kaynaktan gelir (`BuildInfo`, T-145).
+ - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S` (hepsi `MATEBRIDGE_` önekli).
+ - Değer ham yazılır: boşluk, `=` ve `;` `_` olur, en çok 64 karakter. Varsayılana eşit ya da geçersiz değer de listelenir; etkin değerler önceki alanlardadır.
+ - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
+- `ev=encoder_config` satırındaki `prio_speed=1 idle_refresh=off input_retag=1` T-204'ten beri sabittir (ayarları kaldırıldı). Log ayrıştırıcıları kırılmasın diye kalır.
+- `ev=idle_refresh`, `ev=idle_refresh_copy` ve `ev=idle_refresh_qp` artık çıkmaz.

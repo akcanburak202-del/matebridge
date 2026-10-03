@@ -1,7 +1,7 @@
 ---
 id: T-204
 title: Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile`
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-182, T-177, T-145]
