@@ -9,7 +9,7 @@ Kaynak: 2026-10-04 oyun ölçümü (docs/NOTES.md), kullanıcı isteği ("oyunla
 
 Bugün sanal ekran her modda HiDPI: 1400×920 **nokta** = 2800×1840 **piksel** (`VirtualDisplay.swift`, hiDPI=1). Sonuçları:
 - Oyun en fazla 1400×920'yi görüyor ve çoğu zaman o çözünürlükte çiziyor (Ori ayarlarında en yüksek 1400×920). macOS bu görüntüyü 2800×1840'a büyütüp birleştiriyor.
-- Yakalama, encoder, USB ve tablet çözücüsü her karede tam 2800×1840 ile çalışıyor. Tablette çözme p50 ~18 ms; Oyun 120'nin %66 ölçeği (`scale_permille`) yalnız encode boyutunu küçültüyor, ekran 2800×1840 kalıyor.
+- Oyun 60'ta yakalama, encoder, USB ve tablet çözücüsü her karede tam 2800×1840 ile çalışıyor; tablette çözme p50 ~18 ms. Oyun 120'nin %66 ölçeğinde SCK zaten 1848×1214 veriyor (yakalama/encode/çözme küçük), ama ekran 2800×1840 HiDPI kalıyor. **Düzeltme (2026-10-04, astra değerlendirmesi):** önceki metin Oyun 120'de yalnız encode'un küçüldüğünü söylüyordu; yanlış. 1x oyun ekranının Oyun 120'deki farkı birleştirme/ölçekleme ve oyunun görebildiği kiplerdir; çözme kazancı yalnız Oyun 60'ta beklenir. Ayrıca 1400×920 seçen bir oyun 1848×1214'e geçerse kendi çizim yükü artabilir. T-216 aynı kodlanan boyutu farklı ekran topolojisiyle de karşılaştırmalı.
 - Ekran çözünürlüğü ve yenileme hızı değişince macOS sanal ekranı yeniden kurmak zorunda (0016, T-049); pencereler kısa süre yedek ekrana taşınıp geri gelir, bazı uygulamalar (Krita) paneli yeniden çizmez.
 
 ## Seçenekler
