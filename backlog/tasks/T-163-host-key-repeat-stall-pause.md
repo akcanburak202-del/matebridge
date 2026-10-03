@@ -1,7 +1,7 @@
 ---
 id: T-163
 title: Pause host key auto-repeat while the control connection is silent
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -63,7 +63,13 @@ Source: external architecture review 2026-10-03 (M04 (freshness), X2); verificat
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core (`InputStateMachine`, `+Keyboard`)**: `Configuration.keyRepeatStallPauseUs = 600_000`; `lastControlActivity: UInt64?` (nil = no information yet: never paused, so every existing test behaves as today). Pure rule `isKeyRepeatPaused(at:)`: repeat armed, activity known and `now − lastControlActivity > 600 ms`. `repeatKeyIfDue` emits nothing while paused (no UP, held-key set untouched); `nextDeadline` leaves the repeat out while paused (no overdue deadline, no busy timer). `noteControlActivity(at:) -> Bool`: true on the paused → active edge, and then the next repeat moves to `max(nextAt, at + interval)` (no burst). `reanchorWatchdogs` re-anchors an activity time ahead of `now` (backwards clock). `handle` never updates activity itself: the caller notes it AFTER the record, so a delayed KEY UP is checked against the activity from before it.
+2. **`InputPipeline`**: forwards `noteControlActivity(at:)` to the current machine (false without a session).
+3. **`InputController`**: `noteControlActivity(at:)` callable from the session queue without `queue.sync`: stores the time under an `NSLock`; only when the gap to the previous stored time exceeds the pause threshold it does one `queue.async` that pushes the time into the pipeline and re-arms the watchdog. Every queue entry point (`deliver` before `handle`, watchdog, poll) first pushes the stored time; `sessionStarted` counts as activity.
+4. **`SessionServer`**: new `Handlers.controlActivity(receivedUs)`, called in `receiveControlBytes` after `machine.received(...)` was applied, only when `id == activeControl` (pending, unauthenticated, proving/takeover candidates are never `activeControl`).
+5. **Tests** (`Tests/MateBridgeCoreTests/Input/KeyRepeatStallTests.swift`): pause, resume without burst, delayed UP with zero repeats, UP / other DOWN / release-all / heartbeat release while paused, `nextDeadline` while paused, pipeline forwarding.
+
+Risk: the app's handler wiring lives in `host-mac/Sources/MateBridgeApp/main.swift`, which is not in `files:` (see Açık sorular).
 
 ## Handoff
 
