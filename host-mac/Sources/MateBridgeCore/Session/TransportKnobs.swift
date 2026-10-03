@@ -76,25 +76,6 @@ public enum SendQueueLogKnob {
     }
 }
 
-/// `MATEBRIDGE_VIDEO_SOCKET=bsd|nw` (T-091, default flipped in T-092): which TCP stack carries the video
-/// connection. `bsd` (the default) is a kernel BSD socket (`BsdTcpListener`/`BsdTcpConnection`) with
-/// `TCP_NOTSENT_LOWAT` backpressure; `nw` is Network.framework (`NWListener`/`NWConnection`, user-space TCP on
-/// Skywalk) and stays only as an explicit fallback. On Wi-Fi `nw` capped at ~28 Mbps with retransmits (372 ms,
-/// 13 fps) while `bsd` ran at 37–49 ms with no retransmits (T-091 device A/B, NOTES 2026-10-01).
-public enum VideoSocketKnob: String, Equatable, Sendable, CaseIterable {
-    case nw
-    case bsd
-
-    /// Case-insensitive; anything else (or nil) is `.bsd`. Only an explicit `nw` selects Network.framework.
-    public static func parse(_ text: String?) -> VideoSocketKnob {
-        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = VideoSocketKnob(rawValue: t)
-        else { return .bsd }
-        return k
-    }
-
-    public static func parse(_ env: [String: String]) -> VideoSocketKnob { parse(env["MATEBRIDGE_VIDEO_SOCKET"]) }
-}
-
 /// `MATEBRIDGE_NOTSENT_LOWAT_KB` (T-091): the `TCP_NOTSENT_LOWAT` of a `bsd` video connection, in KiB. While the
 /// kernel holds at least this many bytes not yet sent, the socket is not writable and no new frame is taken.
 public enum NotSentLowatKnob {
@@ -112,47 +93,23 @@ public enum NotSentLowatKnob {
     public static func parseKB(_ env: [String: String]) -> Int { parseKB(env["MATEBRIDGE_NOTSENT_LOWAT_KB"]) }
 }
 
-/// The video socket choice, read once at start.
+/// The video socket settings, read once at start. The video and control connections are always kernel BSD sockets
+/// (`BsdTcpListener`/`BsdTcpConnection`): the Network.framework (`nw`) stack and its `MATEBRIDGE_VIDEO_SOCKET` /
+/// `MATEBRIDGE_CONTROL_SOCKET` knobs were retired in T-186 (decision 0026; `nw` capped at ~27 Mbps with retransmits
+/// on Wi-Fi, T-091). Those variables are no longer read.
 public struct VideoSocketSettings: Equatable, Sendable {
-    public var socket: VideoSocketKnob
-    /// Only used by `bsd`.
     public var notSentLowatKB: Int
 
-    public init(socket: VideoSocketKnob, notSentLowatKB: Int = NotSentLowatKnob.defaultKB) {
-        self.socket = socket
+    public init(notSentLowatKB: Int = NotSentLowatKnob.defaultKB) {
         self.notSentLowatKB = notSentLowatKB
     }
 
     public static func parse(_ env: [String: String]) -> VideoSocketSettings {
-        VideoSocketSettings(socket: VideoSocketKnob.parse(env), notSentLowatKB: NotSentLowatKnob.parseKB(env))
+        VideoSocketSettings(notSentLowatKB: NotSentLowatKnob.parseKB(env))
     }
 
     public var notSentLowatBytes: Int { notSentLowatKB * 1024 }
 
-    /// For `ev=listening`: `video_socket=bsd notsent_lowat_kb=128` (default) or `video_socket=nw notsent_lowat_kb=na`.
-    public var logFields: String {
-        "video_socket=\(socket.rawValue) notsent_lowat_kb=\(socket == .bsd ? String(notSentLowatKB) : "na")"
-    }
-}
-
-/// `MATEBRIDGE_CONTROL_SOCKET=bsd|nw` (T-111): which TCP stack carries the control connection (input C->H, audio and
-/// control messages H->C). `bsd` (the default) is a kernel BSD socket, like the video connection since T-092; `nw`
-/// is Network.framework (`NWListener`/`NWConnection`) and stays only as an explicit fallback.
-public enum ControlSocketKnob: String, Equatable, Sendable, CaseIterable {
-    case nw
-    case bsd
-
-    /// Case-insensitive; anything else (or nil) is `.bsd`. Only an explicit `nw` selects Network.framework.
-    public static func parse(_ text: String?) -> ControlSocketKnob {
-        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let k = ControlSocketKnob(rawValue: t)
-        else { return .bsd }
-        return k
-    }
-
-    public static func parse(_ env: [String: String]) -> ControlSocketKnob {
-        parse(env["MATEBRIDGE_CONTROL_SOCKET"])
-    }
-
-    /// For `ev=listening`: `control_socket=bsd` or `control_socket=nw`.
-    public var logFields: String { "control_socket=\(rawValue)" }
+    /// For `ev=listening`: `video_socket=bsd notsent_lowat_kb=128` (default). `video_socket` is constant since T-186.
+    public var logFields: String { "video_socket=bsd notsent_lowat_kb=\(notSentLowatKB)" }
 }
