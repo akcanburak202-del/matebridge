@@ -1,7 +1,7 @@
 ---
 id: T-146
 title: Log and show the client build commit
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -53,7 +53,14 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `build.gradle.kts`: `buildFeatures { buildConfig = true }`. Git values come from one `ValueSource` (injected `ExecOperations`, `isIgnoreExitValue`, exceptions caught) so a tree without `.git` or without a `git` binary falls back instead of failing. They are wired lazily in `androidComponents.onVariants`: `GIT_SHA` (`git rev-parse --short HEAD`, `-dirty` when `git status --porcelain` is non-empty, else `unknown`), `BUILD_TIME_UTC` (`yyyy-MM-ddTHH:mmZ`), and every output's `versionCode` = `git rev-list --count HEAD` (fallback 1). Nothing runs at configuration time, so the configuration cache stays valid. `versionName` stays `"0.1"`.
+2. `BuildInfo.kt`: pure class over the raw values (`versionName`, `sha`, `builtUtc`); `logFields(sdk, osBuild)` → `version=… sha=… built=… sdk=… os_build=…` (blank → `unknown`, whitespace inside a value → `_` so the key=value line stays parseable); `settingsText()` → `Sürüm: 0.1 (<sha>, <built>)`; `BuildInfo.current` reads `BuildConfig`.
+3. `MainActivity.onCreate`: one `MbLog.i("app_start", BuildInfo.current.logFields(Build.VERSION.SDK_INT, Build.DISPLAY))` right after `super.onCreate`, before the bench redirect, so every cold start logs it once.
+4. `SettingsCatalog`: `SettingItem.Info("version") { BuildInfo.current.settingsText() }` as the last row of "Diğer".
+5. `BuildInfoTest`: field order, `unknown` fallback, whitespace, settings text.
+6. Verify: `./scripts/check.sh`, `aapt2 dump badging` for `versionCode`, `assembleDebug` from a copy of `client-android/` outside the repo.
+
+Risk: the new "version" row changes the key list asserted in `SettingsCatalogTest.kt`, which is not in `files:` (see *Açık sorular*).
 
 ## Handoff
 
