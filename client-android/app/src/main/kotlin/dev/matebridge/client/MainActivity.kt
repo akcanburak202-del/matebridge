@@ -1221,6 +1221,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             codecReportsShown = !glMode,
             codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
+            onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
         ).also {
             it.operatingRate = operatingRate
             it.maxInFlight = inflightLimit
