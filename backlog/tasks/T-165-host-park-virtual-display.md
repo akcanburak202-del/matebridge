@@ -1,7 +1,7 @@
 ---
 id: T-165
 title: Park the virtual display after a session ends (no capture or encode while parked)
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -83,10 +83,31 @@ Source: external architecture review 2026-10-03 (H04, A1, F2, D4); verification:
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `7ce042f` (implementation; plan `9030e19`, branch `task/T-165-host-park-virtual-display`). `./scripts/check.sh` ALL OK: `DisplayLeaseTests` has 15 tests, `DisplayParkTests` 3, and `StreamPrefsTests`/`BitratePrefsTests` pass unchanged.
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Video/DisplayLease.swift`, `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`, `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift`, `host-mac/Tests/MateBridgeCoreTests/Video/DisplayLeaseTests.swift` (new, `DisplayParkTests`), `host-mac/Tests/MateBridgeCoreTests/Video/IntegrationTests.swift` (extends `DisplayLeaseTests`), `docs/LOGGING.md`, this card.
+- **Kod yolu (parked = no SCK, no VT):**
+  1. `onSessionEnded` → `stopConsumer()` → `perform(lease.sessionEnded(now:))` → `[.park]` → `park()`.
+  2. `park()`: `pipeline = nil`; `VideoPipeline.stopKeepingDisplay()` → `teardown(keepingDisplay: true)`, which runs `await cap?.stop()` (SCStream stops), then `await enc?.shutdown()` (VT session closes, T-162), then `frames.finish()`, and returns only the `VirtualDisplay`.
+  3. The display is stored in `parked`. `startDrain()` is not called (the old `startDrain()` + `display_grace_started` were removed). While parked, `reportCadence` sees `pipeline == nil` and does nothing.
+  4. Return: `.reuse`/`.reconfigure` with `parked != nil` → `unpark()` → `createPipeline(settings:, reusing:)`.
+  5. Teardown: `.teardown` → `destroyPipeline()` + `dropParked()` (`invalidate`). `perform` is still the only place that parks, unparks or removes.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - **Keep time is wall time.** The lease clock is `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` (`mach_continuous_time`), used only in `sessionEnded`/`tick`. After a system sleep longer than the keep time, the display is removed on the first tick after wake (`display_teardown reason=keep_expired`).
+  - **`.teardown` carries no payload, so existing tests stay unchanged.** The reason is in `DisplayLease.lastTeardownReason`, which `perform` reads right after the lease call. T-167 adds `user` to `TeardownReason`.
+  - **`.reuse` from park uses `session.settings`.** The lease guarantees it equals the parked settings.
+  - **Parking does not touch input.** `main.swift` already calls `input.sessionEnded()` (release-all) on the same session-end hook, and that is unchanged. No input path was changed.
+  - **`CGDisplayIsOnline` is also checked in `VideoPipeline.obtainDisplay`, so it affects the live mode-change path too.** An offline display is no longer reused; it goes through invalidate + 700 ms + create, logged `display_recreate reason=offline`.
+  - **Log change:** a pipeline that keeps its display (mode change, return from park) now logs `pipeline_started display=reused` instead of `display_created`. `display_created` now means only a new display. Documented in LOGGING.md.
+  - **The 10 s default is unchanged.** `StreamCoordinator()` reads `MATEBRIDGE_DISPLAY_KEEP_S`, and an explicit `graceUs:` still wins.
+- **Test edilmeyenler / cihazda doğrulanacaklar (T-166 / orkestratör):** the app was not run and no virtual display was created (by instruction).
+  1. Tablet screen off → `display_parked keep_s=10`. MateBridgeApp CPU/GPU at idle in Activity Monitor, and no `cadence`/`latency` lines.
+  2. Reconnect within 10 s, 5/5 on a static screen: image within 1 s; `display_unparked` → `pipeline_started display=reused`, no `display_created`. T-028 guard: the first SCK frame arrives and `prepareForNewConsumer` sends the keyframe.
+  3. Wait more than 10 s → `display_teardown reason=keep_expired` exactly once.
+  4. While parked, change Akıcı (120 Hz) → Netlik (60 Hz), then reconnect → one `display_recreate reason=refresh_change` + `display_created`.
+  5. Different tablet or size → `display_teardown reason=device_changed|size_changed`. Quit while parked → `display_teardown reason=shutdown`, and the display disappears.
+  6. `CGDisplayIsOnline` is true for a healthy virtual display. If not, every unpark and mode change would log `display_recreate reason=offline` (the risk).
+  7. Takeover (`sessionEnded` + `sessionStarted` back to back) now parks and unparks: check how long the video gap is.
+  8. Display sleep and system sleep while parked (T-166).
 - **Açık sorular:**
+  - **`docs/KNOBS.md` (decision 0026):** the new `MATEBRIDGE_DISPLAY_KEEP_S` knob needs a row there. That file is outside `files:`, so the orchestrator or T-167 should add it.
+  - **Recreating with no wait on device/size change:** `.teardown` + `.create` (device/size change) creates the new display right after `invalidate`, with no 700 ms wait. This was already true before (pre-existing, not changed); with the same vendor/product/serial, creation may return nil. Candidate for D add. 4.
