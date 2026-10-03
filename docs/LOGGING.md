@@ -366,3 +366,16 @@ Tüm aşamalar host'un yakalama damgasından (`VIDEO_FRAME.capture_time_us`, SCK
 - Bindirme: "Gecikme" → "Yak→çöz" (aynı ortalama). Yeni satır: `Hazır→slot p50 N ms | saat ±N ms`.
 - **`I decoder ev=codec_start`**: `requested_rate=` ile `accepted` arasına `is_hw=0|1|? sw_only=0|1|?` eklendi (`MediaCodecInfo.isHardwareAccelerated` / `isSoftwareOnly`; `?` = okunamadı).
 - **`W decoder ev=codec_software name= mime= is_hw= sw_only=`**: codec başlangıcı başına bir kez, seçilen decoder donanım değilse ya da yalnız yazılımsa (ör. `c2.android.hevc.decoder`). Cihazda görülmemeli.
+
+## Hedef ve gerçek yenileme hızı (tablet, `MB/render`, T-169)
+
+Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem, dokunma ve trackpad paneli 120 Hz'e çıkarır, yalnız klavye girdisinde panel 60 Hz'e düşebilir. Bu yüzden her ölçüm penceresi istenen ve ölçülen hızı ayrı yazar.
+
+- **`MB/render ev=stats`** satırındaki yenileme alanları (sıra: `hz= target_hz= vsync_period_us= display_hz= vsync_ms_p50= stream_mode=`):
+  - `target_hz=`: istenen panel hızı, `FrameRatePolicy.modeTargetHz` (`hz` açılış parametresi ya da akış fps'i). `0` = mod değiştirilmez.
+  - `display_hz=`: `Display.refreshRate` (1 ondalık). Yalnız vekil bir değerdir. AGP'nin `final lcd fps` değeri farklı olabilir (NOTES, verify-E X12).
+  - `vsync_ms_p50=`: pencere boyunca ölçülen Choreographer vsync aralığının medyanı (ms, 2 ondalık; örnek yoksa `-`). Gerçek hıza en yakın istemci sinyali budur: 120 Hz ≈ 8.33, 60 Hz ≈ 16.67.
+  - `stream_mode=`: kullanıcının seçtiği mod kimliği (`clarity|smooth|performance|game|game60`).
+  - **Kullanımdan kalkan takma ad:** `hz=`, `display_hz=` ile aynı değerdir (tam sayıya yuvarlanır). Bir sürüm daha yazılır, sonra kalkar. Satırın başında kalır, böylece basit `hz=` aramaları `target_hz=`'e takılmaz.
+- **`W render ev=refresh_mismatch target_hz=<n> measured_hz=<n.n> dur_ms=<n> stream_mode=<id>`**: akış sürerken saniyelik vsync medyanından hesaplanan hız (`1e6 / p50_us`) hedeften ±%10'dan fazla saptı ve bu durum 5 sn'den uzun sürdü. Her sapma dönemi için bir satır yazılır, iki satır arasında en az 60 sn olur. Dönem 60 sn sınırı içinde başladıysa satır, sınır dolduğunda sapma hâlâ sürüyorsa yazılır. `dur_ms`, satır yazılana kadar geçen süredir. `target_hz=0`, akışsız zaman ve ölçümsüz saniyeler (vsync döngüsü uykuda) satır üretmez. Ölçümsüz boşluk 3 sn'yi geçerse ya da hedef değişirse dönem yeniden başlar.
+- Ölçüm notu: "60 Hz" ölçümü için içerik yalnız klavyeyle sürülmelidir. Kalem, dokunma ve trackpad paneli 120 Hz'e çıkarır (PF3).
