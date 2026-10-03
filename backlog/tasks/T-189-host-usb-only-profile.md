@@ -1,7 +1,7 @@
 ---
 id: T-189
 title: Add a "Yalnız USB" network profile
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
