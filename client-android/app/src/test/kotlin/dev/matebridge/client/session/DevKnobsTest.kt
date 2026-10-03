@@ -23,7 +23,7 @@ class DevKnobsTest {
         "tos_video" to 0x88, "wifi_ll" to true, "audio" to false, "transport" to "wifi", "audio_out" to "track",
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
-        "decoder_fault_after_s" to 15,
+        "decoder_fault_after_s" to 15, "game_display" to 0,
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -41,6 +41,7 @@ class DevKnobsTest {
         assertFalse(k.netBench)
         assertNull(k.decoderFault)
         assertNull(k.decoderFaultAfterS)
+        assertTrue(k.gameDisplay)
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -92,6 +93,7 @@ class DevKnobsTest {
         assertTrue(k.netBench)
         assertEquals("dequeue", k.decoderFault)
         assertEquals(15, k.decoderFaultAfterS)
+        assertFalse(k.gameDisplay)
         assertEquals("dev=1 ignored=-", k.logFields())
     }
 
@@ -145,7 +147,7 @@ class DevKnobsTest {
             listOf(
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
-                "decoder_fault:dequeue", "decoder_fault_after_s:15", "stats_1s:1",
+                "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -175,7 +177,7 @@ class DevKnobsTest {
     @Test fun profileHasTheDocumentedFieldsInOrder() {
         val line = profile().logFields("abc1234", "2026-10-03T12:34Z", parse())
         assertEquals(
-            "mode=smooth fps=120 size=2800x1840 scale_permille=1000 bitrate_kbps=60000 bitrate_setting=auto " +
+            "mode=smooth fps=120 size=2800x1840 scale_permille=1000 display=native bitrate_kbps=60000 bitrate_setting=auto " +
                 "transport=usb transport_mode=auto audio=1 audio_out=auto pacer=adaptive " +
                 "sha=abc1234 built=2026-10-03T12:34Z dev=0 knobs=-",
             line,
@@ -190,6 +192,30 @@ class DevKnobsTest {
         assertTrue(line, line.contains(" pacer=buffer1 "))
         assertTrue(line, line.contains(" sha=abc1234-dirty built=unknown dev=1 "))
         assertTrue(line, line.endsWith(" knobs=jitter:1;pace_trace:1"))
+    }
+
+    @Test fun gameDisplayKnob() {
+        // T-215: only `0` turns the game display off, and only with `--ez dev true`.
+        assertTrue(parse().gameDisplay)
+        val ignored = parse("game_display" to 0)
+        assertTrue(ignored.gameDisplay)
+        assertEquals("dev=0 ignored=game_display", ignored.logFields())
+        val off = parse("dev" to true, "game_display" to 0)
+        assertFalse(off.gameDisplay)
+        assertEquals(listOf("game_display:0"), off.knobs)
+        assertTrue(parse("dev" to true, "game_display" to 1).gameDisplay)
+        assertTrue(parse("dev" to true, "game_display" to "0").gameDisplay) // wrong type reads as the default
+    }
+
+    @Test fun profileShowsTheGameDisplay() {
+        val base = profile(mode = "game")
+        val asked = base.copy(displayWidthPx = 1848, displayHeightPx = 1214, displayApplied = true).logFields("abc1234", "unknown", parse())
+        assertTrue(asked, asked.contains(" scale_permille=1000 display=1848x1214 display_applied=1 bitrate_kbps="))
+        val old = base.copy(displayWidthPx = 1400, displayHeightPx = 920).logFields("abc1234", "unknown", parse())
+        assertTrue(old, old.contains(" display=1400x920 display_applied=0 "))
+        val native = base.logFields("abc1234", "unknown", parse())
+        assertTrue(native, native.contains(" display=native bitrate_kbps="))
+        assertFalse(native, native.contains("display_applied"))
     }
 
     @Test fun profileNeverContainsAnEndpointSerialOrDeviceId() {

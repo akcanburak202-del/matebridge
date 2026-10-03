@@ -30,8 +30,12 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
     /** Connect-panel button text, e.g. "Görüntü modu: Akıcı (120 fps)". */
     fun buttonText() = "Görüntü modu: $label ($fps fps)"
 
-    /** Toast text, e.g. "Performans: 120 fps, %75". */
-    fun toastText() = "$label: $fps fps, %${scalePermille / 10}"
+    /**
+     * Toast text, e.g. "Performans: 120 fps, %75"; with a game display (T-215) its size instead of the scale, e.g.
+     * "Oyun 120: 120 fps, 1848×1214".
+     */
+    fun toastText(display: GameResolution? = null) =
+        "$label: $fps fps, " + (display?.label ?: "%${scalePermille / 10}")
 
     companion object {
         val DEFAULT = SMOOTH
@@ -53,6 +57,25 @@ enum class StreamMode(val id: String, val label: String, val fps: Int, val scale
  * same rectangle in every mode and normalized coordinates never shift.
  */
 object VideoLayout {
+    /** T-215: a fitted rectangle within this many pixels of the root on both axes fills the root instead. */
+    const val FILL_TOLERANCE_PX = 2
+
     fun aspectSize(c: StreamConfig): Pair<Int, Int> =
         if (c.widthPt > 0 && c.heightPt > 0) c.widthPt to c.heightPt else c.widthPx to c.heightPx
+
+    /**
+     * The SurfaceView size in a [rootW]×[rootH] root: the picture fitted to its aspect ([aspectSize]), or null = fill the
+     * root (MATCH_PARENT) when there is no config or root yet, or when the fitted rectangle is within
+     * [FILL_TOLERANCE_PX] of the root on both axes. The game display 1848×1214 (decision 0029) is not exactly 35:23 and
+     * would otherwise leave a 1 px band (2800×1839); a really different aspect still letterboxes.
+     */
+    fun surfaceSize(rootW: Int, rootH: Int, c: StreamConfig?): Pair<Int, Int>? {
+        if (c == null) return null
+        val (aw, ah) = aspectSize(c)
+        val vp = VideoViewport(rootW, rootH, aw, ah)
+        if (vp.isEmpty) return null
+        val w = Math.round(vp.width)
+        val h = Math.round(vp.height)
+        return if (rootW - w <= FILL_TOLERANCE_PX && rootH - h <= FILL_TOLERANCE_PX) null else w to h
+    }
 }

@@ -4,6 +4,7 @@ import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
+import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.StreamMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +23,8 @@ class SettingsCatalogTest {
         override fun forgetHost() { calls += "forget" }
         override var streamMode = StreamMode.SMOOTH
         override fun selectStreamMode(m: StreamMode) { calls += "mode ${m.id}"; streamMode = m }
+        override var gameResolution = GameResolution.DEFAULT
+        override fun selectGameResolution(r: GameResolution) { calls += "game_resolution ${r.id}"; gameResolution = r }
         override var bitrateKbps = 0L
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
@@ -76,7 +79,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "bitrate", "bitrate_applied", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "game_resolution", "bitrate", "bitrate_applied", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -122,6 +125,26 @@ class SettingsCatalogTest {
         h.out = AudioOutPref.AAUDIO // a launch override shows as "Düşük gecikme"
         assertEquals("auto", out.selected())
         assertEquals(listOf("mode clarity", "transport usb", "audio_out track"), h.calls)
+    }
+
+    @Test fun gameResolutionChoice() {
+        for (inStream in listOf(true, false)) {
+            val s = SettingsCatalog.sections(h, inStream)
+            val keys = s.single { it.title == "Görüntü" }.items.map { it.key }
+            assertEquals(keys.indexOf("stream_mode") + 1, keys.indexOf("game_resolution")) // right after the mode
+        }
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "game_resolution")
+        assertEquals("Oyun çözünürlüğü", c.titleText())
+        assertEquals(listOf("1400×920", "1848×1214", "2100×1380"), c.options.map { it.label })
+        assertEquals(listOf("1400x920", "1848x1214", "2100x1380"), c.options.map { it.id })
+        assertEquals("1848x1214", c.selected())
+        c.select("1400x920")
+        assertEquals("1400x920", c.selected())
+        c.select("bogus") // unknown: the default
+        assertEquals(listOf("game_resolution 1400x920", "game_resolution 1848x1214"), h.calls)
+        h.gameDefaultsActive = true // a persistent setting: never marked as part of the game layer
+        assertEquals("Oyun çözünürlüğü", c.titleText())
     }
 
     @Test fun togglesSteppersAndActions() {

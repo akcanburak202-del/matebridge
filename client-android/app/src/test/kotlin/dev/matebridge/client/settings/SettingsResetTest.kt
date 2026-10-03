@@ -12,6 +12,7 @@ import dev.matebridge.client.session.KeyValueStore
 import dev.matebridge.client.session.Settings
 import dev.matebridge.client.session.Transport
 import dev.matebridge.client.session.TransportMode
+import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.StreamMode
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -47,12 +48,13 @@ class SettingsResetTest {
     private fun snapshot(s: Settings): List<Any> = listOf(
         s.statsOverlay(), s.streamMode(), s.bitrateKbps(), s.touchpadSpeed(), s.mouseSpeed(), s.clipboardShare(),
         s.filesShare(), s.filesRoot(), s.filesReadOnly(), s.audioEnabled(), s.audioOut(), s.penTrail(), s.penDot(),
-        s.fingerTouchDisabled(), s.transportMode(),
+        s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(),
     )
 
     private fun setEverythingNonDefault(s: Settings) {
         s.setStatsOverlay(true)
         s.setStreamMode(StreamMode.CLARITY)
+        s.setGameResolution(GameResolution.R1400) // T-215
         s.setBitrateKbps(60_000)
         s.setTouchpadSpeed(2f)
         s.setMouseSpeed(0.5f)
@@ -75,7 +77,7 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(15, s.resetToDefaults())
+        assertEquals(16, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())
@@ -94,6 +96,7 @@ class SettingsResetTest {
         assertFalse(s.penDot())
         assertFalse(s.fingerTouchDisabled())
         assertEquals(TransportMode.AUTO, s.transportMode())
+        assertEquals(GameResolution.R1848, s.gameResolution()) // T-215: 1848×1214
     }
 
     @Test fun identityEndpointMigrationWakeDataAndPairKeysAreKeptByteForByte() {

@@ -7,6 +7,7 @@ import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
 import dev.matebridge.client.stream.GameModeSettings
+import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.StreamMode
 import java.util.Locale
 
@@ -29,6 +30,10 @@ interface SettingsHost {
     // Görüntü
     val streamMode: StreamMode
     fun selectStreamMode(m: StreamMode)
+    /** "Oyun çözünürlüğü" (decision 0029, T-215): the stored game display size; applies only in the game modes. */
+    val gameResolution: GameResolution
+    /** Persists the choice; a STREAM_PREFS goes to the host only while a game mode is on. */
+    fun selectGameResolution(r: GameResolution)
     /** The user's bit rate choice, one of [Bitrate.OPTIONS_KBPS] (0 = Otomatik). */
     val bitrateKbps: Long
     fun selectBitrate(kbps: Long)
@@ -178,6 +183,9 @@ object SettingsCatalog {
         "Kısayollar: Ctrl+Shift+6: ayarlar paneli · Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · " +
             "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
 
+    /** T-215: only the game modes use it (the others run the native 2800×1840 HiDPI display). */
+    const val GAME_RESOLUTION_TITLE = "Oyun çözünürlüğü"
+
     const val RESET_TITLE = "Varsayılanlara dön"
     const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
     val RESET_ARMED = "Onaylamak için ${TwoTapConfirm.WINDOW_MS / 1000} saniye içinde yeniden dokun."
@@ -216,6 +224,13 @@ object SettingsCatalog {
                         StreamMode.entries.map { SettingItem.Option(it.id, "${it.label} (${it.fps} fps)") },
                         { h.streamMode.id },
                     ) { id -> h.selectStreamMode(StreamMode.parse(id)) },
+                )
+                add(
+                    SettingItem.Choice(
+                        "game_resolution", GAME_RESOLUTION_TITLE,
+                        GameResolution.entries.map { SettingItem.Option(it.id, it.label) },
+                        { h.gameResolution.id },
+                    ) { id -> h.selectGameResolution(GameResolution.parse(id)) },
                 )
                 add(
                     SettingItem.Choice(
