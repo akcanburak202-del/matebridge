@@ -1,24 +1,5 @@
 import Foundation
 
-/// H.264 profile for `MATEBRIDGE_CODEC=h264` (T-086). The host maps it to a VideoToolbox `ProfileLevel` constant.
-public enum H264Profile: String, Equatable, Sendable, CaseIterable {
-    /// High, level chosen by the encoder.
-    case high
-    case main
-    /// Constrained Baseline.
-    case cbp
-    /// High at fixed level 5.2.
-    case high52
-
-    /// `MATEBRIDGE_H264_PROFILE`: case-insensitive; anything else (or nil) is `.high`.
-    public static func parse(_ text: String?) -> H264Profile {
-        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let p = H264Profile(rawValue: t) else {
-            return .high
-        }
-        return p
-    }
-}
-
 extension Codec {
     /// Name used in logs (`codec=h264|hevc`).
     public var logName: String {
@@ -26,118 +7,6 @@ extension Codec {
         case .h264: return "h264"
         case .hevc: return "hevc"
         }
-    }
-}
-
-/// What an idle refresh re-submits (T-087): the last captured buffer object itself (`same`, the T-086 behaviour), or
-/// a content copy in a fresh pool buffer (`copy`). Measured: VideoToolbox encodes both identically (T-087 Handoff).
-public enum IdleRefreshBuffer: String, Equatable, Sendable, CaseIterable {
-    case same
-    case copy
-
-    /// `MATEBRIDGE_IDLE_REFRESH_BUFFER`: case-insensitive; anything else (or nil) is `.same`.
-    public static func parse(_ text: String?) -> IdleRefreshBuffer {
-        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), let b = IdleRefreshBuffer(rawValue: t)
-        else { return .same }
-        return b
-    }
-}
-
-/// Idle quality refresh (T-086): on a static screen ScreenCaptureKit delivers nothing, so the last (often blurry,
-/// motion-time) P frame stays on the tablet. After `delayMs` without a real capture the last buffer is re-encoded
-/// `count` times (one frame interval apart), or once as a forced keyframe when `keyframe` is set.
-///
-/// T-087: an identical re-submission only adds detail while the encoder's current QP is lower than the QP the last
-/// motion frame got; in a settled session they are equal and VideoToolbox emits all-skip frames. `maxQP` caps the
-/// frame QP (`kVTCompressionPropertyKey_MaxAllowedFrameQP`) for the refresh frames only and lifts the cap before the
-/// next other frame (`RefreshQPBoost`). VideoToolbox honours that mid-stream change only with the low-latency rate
-/// control (`MATEBRIDGE_ENCODER=llrc`); the default `fast` profile accepts the property and ignores it.
-public struct IdleRefreshConfig: Equatable, Sendable {
-    public static let defaultCount = 3
-    public static let countRange: ClosedRange<Int> = 1...30
-    public static let delayRange: ClosedRange<Int> = 1...10_000
-    /// HEVC and H.264 QP range.
-    public static let maxQPRange: ClosedRange<Int> = 1...51
-
-    /// 0 = off.
-    public var delayMs: Int = 0
-    public var count: Int = IdleRefreshConfig.defaultCount
-    public var keyframe = false
-    public var buffer = IdleRefreshBuffer.same
-    /// QP cap for the refresh frames (nil: none, the T-086 behaviour).
-    public var maxQP: Int?
-
-    public init(delayMs: Int = 0, count: Int = IdleRefreshConfig.defaultCount, keyframe: Bool = false,
-                buffer: IdleRefreshBuffer = .same, maxQP: Int? = nil) {
-        self.delayMs = delayMs
-        self.count = count
-        self.keyframe = keyframe
-        self.buffer = buffer
-        self.maxQP = maxQP
-    }
-
-    public var isEnabled: Bool { delayMs > 0 }
-
-    /// `MATEBRIDGE_IDLE_REFRESH_MS` (1...10 000, anything else is off), `MATEBRIDGE_IDLE_REFRESH_COUNT` (1...30,
-    /// default 3), `MATEBRIDGE_IDLE_REFRESH_KEY=1` (keyframe variant), `MATEBRIDGE_IDLE_REFRESH_BUFFER=same|copy`,
-    /// `MATEBRIDGE_IDLE_REFRESH_QP` (1...51, anything else is unset).
-    public static func parse(_ env: [String: String]) -> IdleRefreshConfig {
-        var c = IdleRefreshConfig()
-        if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_MS"]), delayRange.contains(v) { c.delayMs = v }
-        if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_COUNT"]), countRange.contains(v) { c.count = v }
-        c.keyframe = env["MATEBRIDGE_IDLE_REFRESH_KEY"]?.trimmingCharacters(in: .whitespaces) == "1"
-        c.buffer = IdleRefreshBuffer.parse(env["MATEBRIDGE_IDLE_REFRESH_BUFFER"])
-        if let v = EncoderKnobs.int(env["MATEBRIDGE_IDLE_REFRESH_QP"]), maxQPRange.contains(v) { c.maxQP = v }
-        return c
-    }
-
-    /// Log value: `off`, `300ms*3` or `300ms*key`, plus `+copy` and `+qp12` when those are set.
-    public var logValue: String {
-        guard isEnabled else { return "off" }
-        var v = keyframe ? "\(delayMs)ms*key" : "\(delayMs)ms*\(count)"
-        if buffer == .copy { v += "+copy" }
-        if let q = maxQP { v += "+qp\(q)" }
-        return v
-    }
-}
-
-/// When to set and lift the refresh-frame QP cap (T-087). Pure; the encoder owns one only when
-/// `IdleRefreshConfig.maxQP` is set, and asks it before every frame it submits, under one lock together with the
-/// property call, so the last property change always belongs to the last frame decided.
-///
-/// The cap goes on before the first refresh frame and comes off before the next non-refresh frame (a real capture or
-/// a keyframe re-submission), so it never outlives a static stretch by more than that one frame's decision. If
-/// VideoToolbox refuses the cap it is disabled for the session.
-public struct RefreshQPBoost: Sendable {
-    public enum Change: Equatable, Sendable {
-        /// Set `MaxAllowedFrameQP` to this value.
-        case apply(Int)
-        /// Lift the cap again.
-        case restore
-    }
-
-    public let maxQP: Int
-    public private(set) var active = false
-    public private(set) var disabled = false
-
-    public init(maxQP: Int) { self.maxQP = maxQP }
-
-    /// The property change needed before submitting a frame (nil: none).
-    public mutating func before(refresh: Bool) -> Change? {
-        if refresh {
-            guard !active, !disabled else { return nil }
-            active = true
-            return .apply(maxQP)
-        }
-        guard active else { return nil }
-        active = false
-        return .restore
-    }
-
-    /// VideoToolbox refused `.apply`: the cap is not in place and is not tried again.
-    public mutating func applyFailed() {
-        active = false
-        disabled = true
     }
 }
 
@@ -190,18 +59,15 @@ public struct BitrateStepKnob: Equatable, Sendable {
     public var logValue: String { valuesKbps.map(String.init).joined(separator: ",") + "@\(periodMs)ms" }
 }
 
-/// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086, except `retagInput` (T-113).
+/// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086.
+///
+/// T-204 (decision 0026) retired `MATEBRIDGE_PRIO_SPEED`, `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*` and
+/// `MATEBRIDGE_INPUT_RETAG`: speed priority, the H.264 High profile and the input retag are now constants in the
+/// encoder, and the idle quality refresh is gone.
 public struct EncoderKnobs: Equatable, Sendable {
-    /// `kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality`.
-    public var prioritizeSpeed = true
     /// `kVTCompressionPropertyKey_Quality` (0...1). When set, `AverageBitRate` is not set (the `DataRateLimits`
     /// cap stays).
     public var quality: Double?
-    public var h264Profile = H264Profile.high
-    public var idleRefresh = IdleRefreshConfig()
-    /// Rewrite captured buffers' colour tags to the session's so VideoToolbox does not colour-convert them (T-113,
-    /// `InputRetag`). On by default; `MATEBRIDGE_INPUT_RETAG=0` restores the old conversion for A/B.
-    public var retagInput = true
     /// Debug bitrate step timer (T-177, `MATEBRIDGE_BITRATE_STEP`); nil = off.
     public var bitrateStep: BitrateStepKnob?
     /// Short `DataRateLimits` window in ms next to the 1 s pair (T-177 diagnostics, `MATEBRIDGE_RATE_WINDOW_MS`);
@@ -212,16 +78,11 @@ public struct EncoderKnobs: Equatable, Sendable {
 
     public init() {}
 
-    /// `MATEBRIDGE_PRIO_SPEED=0|1` (anything else: 1), `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset),
-    /// `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*`, `MATEBRIDGE_INPUT_RETAG=0|1` (anything else: 1),
-    /// `MATEBRIDGE_BITRATE_STEP` (`BitrateStepKnob.parse`), `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off).
+    /// `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset), `MATEBRIDGE_BITRATE_STEP` (`BitrateStepKnob.parse`),
+    /// `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off).
     public static func parse(_ env: [String: String]) -> EncoderKnobs {
         var k = EncoderKnobs()
-        k.retagInput = InputRetag.isEnabled(env)
-        k.prioritizeSpeed = env["MATEBRIDGE_PRIO_SPEED"]?.trimmingCharacters(in: .whitespaces) != "0"
         k.quality = parseQuality(env["MATEBRIDGE_QUALITY"])
-        k.h264Profile = H264Profile.parse(env["MATEBRIDGE_H264_PROFILE"])
-        k.idleRefresh = IdleRefreshConfig.parse(env)
         k.bitrateStep = BitrateStepKnob.parse(env["MATEBRIDGE_BITRATE_STEP"])
         if let v = int(env["MATEBRIDGE_RATE_WINDOW_MS"]), rateWindowRangeMs.contains(v) { k.rateWindowMs = v }
         return k
@@ -239,14 +100,64 @@ public struct EncoderKnobs: Equatable, Sendable {
         text.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
-    /// Fields for the `ev=encoder_config` line logged when the encoder is created. The T-177 debug knobs add
+    /// Fields for the `ev=encoder_config` line logged when the encoder is created. `prio_speed=1`,
+    /// `idle_refresh=off` and `input_retag=1` are constants since T-204 (their knobs were retired), kept so the line
+    /// and its parsers stay unchanged (like `video_socket=bsd` after T-186). The T-177 debug knobs add
     /// `bitrate_step=` / `rate_window_ms=` only when set, so the default line is unchanged.
     public var logFields: String {
-        var f = "prio_speed=\(prioritizeSpeed ? 1 : 0) quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
-            + "idle_refresh=\(idleRefresh.logValue) input_retag=\(retagInput ? 1 : 0)"
+        var f = "prio_speed=1 quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
+            + "idle_refresh=off input_retag=1"
         if let s = bitrateStep { f += " bitrate_step=\(s.logValue)" }
         if let w = rateWindowMs { f += " rate_window_ms=\(w)" }
         return f
+    }
+}
+
+/// The `ev=profile` line (T-204, decision 0026 §4): one line per stream start that names the configuration a log
+/// came from. Pure; the encoder logs it right after `ev=encoder_config`.
+///
+/// `knobs=` lists the host environment knobs that are set, as `NAME:value` joined by `;` (`-` when none). Only the
+/// knobs 0026 keeps (keep / debug-only) are considered: a retired key (`MATEBRIDGE_IDLE_REFRESH_MS`, ...) or any other
+/// variable is never listed. The socket knobs are left out: `ev=listening` reports the sockets.
+public enum StreamProfileLog {
+    /// Host env knobs classed keep or debug-only in decision 0026 (`docs/KNOBS.md` rows 24, 25, 26, 28, 30, 31,
+    /// 33, 34, 36-42), in log order.
+    public static let knobAllowList: [String] = [
+        "MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_WIFI_BITRATE_KBPS", "MATEBRIDGE_CODEC",
+        "MATEBRIDGE_REFRESH", "MATEBRIDGE_ENCODER", "MATEBRIDGE_QUALITY", "MATEBRIDGE_KEYFRAME_INTERVAL_S",
+        "MATEBRIDGE_BITRATE_STEP", "MATEBRIDGE_RATE_WINDOW_MS", "MATEBRIDGE_SERVICE_CLASS",
+        "MATEBRIDGE_NOTSENT_LOWAT_KB", "MATEBRIDGE_SENDQ_LOG", "MATEBRIDGE_LAT_TRACE", "MATEBRIDGE_TCP_LOG",
+        "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S",
+    ]
+    /// A logged knob value is cut to this many characters.
+    public static let maxValueLength = 64
+
+    /// The allow-listed knobs present in `env`, with their raw values made log-safe (`value(_:)`).
+    public static func knobs(_ env: [String: String]) -> [(name: String, value: String)] {
+        knobAllowList.compactMap { name in env[name].map { (name, value($0)) } }
+    }
+
+    /// `knobs=` value: `MATEBRIDGE_FPS:120;MATEBRIDGE_BITRATE_KBPS:40000`, or `-`.
+    public static func knobsField(_ env: [String: String]) -> String {
+        let k = knobs(env)
+        return k.isEmpty ? "-" : k.map { "\($0.name):\($0.value)" }.joined(separator: ";")
+    }
+
+    /// `fps=… bitrate_kbps=… bitrate_source=… codec=… encoder_profile=… scale_permille=… refresh_hz=… sha=… knobs=…`.
+    public static func fields(settings: VideoSettings, encoderProfile: EncoderProfile, build: BuildInfo,
+                              env: [String: String]) -> String {
+        "fps=\(settings.fps) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) "
+            + "codec=\(settings.codec.logName) encoder_profile=\(encoderProfile.rawValue) "
+            + "scale_permille=\(settings.scalePermille) refresh_hz=\(settings.displayRefreshHz) "
+            + "sha=\(value(build.sha)) knobs=\(knobsField(env))"
+    }
+
+    /// One log token: trimmed, cut to `maxValueLength` characters, whitespace and the separators `=` and `;` become
+    /// `_`. An empty value is logged as `_`.
+    static func value(_ raw: String) -> String {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return "_" }
+        return String(t.prefix(maxValueLength).map { $0.isWhitespace || $0 == "=" || $0 == ";" ? "_" : $0 })
     }
 }
 
@@ -265,65 +176,6 @@ extension VideoSettings {
             return (userBitrateKbps != nil ? BitrateSource.user : BitrateSource.prefs).rawValue
         }
         return (bitrateOverrideSource ?? .env).rawValue
-    }
-}
-
-/// When to re-encode the last captured buffer on a static screen (T-086). Pure: the encoder owns one under its lock,
-/// tells it about every real capture and polls it from a timer.
-///
-/// One static stretch ("episode") gets at most one refresh: `count` resubmits one frame interval apart starting
-/// `delayMs` after the last real capture (or one keyframe). A new real capture cancels any remaining resubmits and
-/// re-arms the policy. Resubmits are not captures: they never re-arm it.
-public struct IdleRefreshPolicy: Sendable {
-    public enum Action: Equatable, Sendable {
-        case none
-        /// Re-encode the last captured buffer. `first`: the episode starts now (log it once).
-        case resubmit(first: Bool)
-        /// Force one keyframe from the last captured buffer (`MATEBRIDGE_IDLE_REFRESH_KEY=1`).
-        case keyframe
-    }
-
-    public let config: IdleRefreshConfig
-    public let intervalUs: UInt64
-    private var lastCaptureUs: UInt64?
-    private var armed = false
-    private var remaining = 0
-    private var nextDueUs: UInt64 = 0
-
-    public init(config: IdleRefreshConfig, fps: Int) {
-        self.config = config
-        intervalUs = 1_000_000 / UInt64(max(1, fps))
-    }
-
-    /// A real capture was handed to the encoder.
-    public mutating func captured(nowUs: UInt64) {
-        lastCaptureUs = nowUs
-        armed = true
-        remaining = 0
-    }
-
-    /// Call from a timer (at least once per frame interval while enabled).
-    public mutating func tick(nowUs: UInt64) -> Action {
-        guard config.isEnabled, let last = lastCaptureUs else { return .none }
-        if remaining > 0 {
-            guard nowUs >= nextDueUs else { return .none }
-            remaining -= 1
-            nextDueUs = nowUs &+ intervalUs
-            return .resubmit(first: false)
-        }
-        guard armed, nowUs >= last &+ UInt64(config.delayMs) * 1000 else { return .none }
-        armed = false
-        if config.keyframe { return .keyframe }
-        remaining = max(1, config.count) - 1
-        nextDueUs = nowUs &+ intervalUs
-        return .resubmit(first: true)
-    }
-
-    /// Forget everything (encoder stopped).
-    public mutating func reset() {
-        lastCaptureUs = nil
-        armed = false
-        remaining = 0
     }
 }
 
@@ -354,7 +206,7 @@ extension HEVCSPS {
     }
 }
 
-/// Capture timestamp of a re-submission of the last buffer (keyframe on a static screen, idle refresh; T-086).
+/// Capture timestamp of a re-submission of the last buffer (keyframe on a static screen; T-086).
 ///
 /// ScreenCaptureKit stamps a frame ahead of its delivery (NOTES 2026-10-01: `pts_vs_deliv` = +6.6 ms). The tablet
 /// pacer measures lateness as `ready - capture_time`, so a re-submission stamped plain "now" would look one lead

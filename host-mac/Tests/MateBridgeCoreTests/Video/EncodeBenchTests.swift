@@ -29,13 +29,13 @@ final class EncodeBenchTests: XCTestCase {
         }
     }
 
-    func testInputTagsAndRetag() throws {
+    func testInputTags() throws {
         let d = try XCTUnwrap(EncodeBenchOptions.parse(["app", "--encode-bench"])).get()
         XCTAssertEqual(d.inputTags, .none)
-        XCTAssertTrue(d.applyingEnvironment([:]).retagInput)
         let o = try XCTUnwrap(EncodeBenchOptions.parse(["app", "--encode-bench", "--input-tags", "sck"])).get()
         XCTAssertEqual(o.inputTags, .sck)
-        XCTAssertFalse(o.applyingEnvironment(["MATEBRIDGE_INPUT_RETAG": "0"]).retagInput)
+        // T-204: `MATEBRIDGE_INPUT_RETAG` is not read any more (the bench always retags, as the app does).
+        XCTAssertEqual(o.applyingEnvironment(["MATEBRIDGE_INPUT_RETAG": "0"]), o.applyingEnvironment([:]))
     }
 
     func testCatalogNamesUniqueAndBaselineMatchesEncoder() {

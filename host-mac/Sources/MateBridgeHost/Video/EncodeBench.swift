@@ -115,7 +115,7 @@ public enum EncodeBench {
     }
 
     private static func makeSession(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int, codec: Codec,
-                                    h264Profile: H264Profile, notes: inout [String]) -> VTCompressionSession? {
+                                    notes: inout [String]) -> VTCompressionSession? {
         var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         if c.lowLatencyRateControl { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
         var s: VTCompressionSession?
@@ -136,7 +136,7 @@ public enum EncodeBench {
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
             codec == .hevc && c.main10 ? kVTProfileLevel_HEVC_Main10_AutoLevel
-                : HEVCEncoder.profileLevel(codec, h264: h264Profile))
+                : HEVCEncoder.profileLevel(codec))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, (c.expectedFps ?? fps) as CFNumber)
         // As in `HEVCEncoder` (T-086): Quality replaces AverageBitRate; if it is refused, the bitrate is used.
         var qualityOK = false
@@ -152,7 +152,7 @@ public enum EncodeBench {
             set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits, [c.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
         }
         set("MaxKeyFrameIntervalDuration", kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, HEVCEncoder.keyframeIntervalSeconds as CFNumber)
-        // Explicit false when off, like `HEVCEncoder` with MATEBRIDGE_PRIO_SPEED=0 (T-086).
+        // Explicit false when off (bench configs such as `no-prioritize`); the app always sets true (T-204).
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             c.prioritizeSpeed ? kCFBooleanTrue : kCFBooleanFalse)
         // T-113: the app's colour properties, so tagged input (`--input-tags sck`) behaves as in the app. Untagged
@@ -175,14 +175,12 @@ public enum EncodeBench {
     /// `paceFps == nil`: submit as fast as the encoder accepts (bounded in-flight). Otherwise submit at that rate and
     /// skip frames when the session is full (newest wins, as in the app).
     public static func run(_ c: EncodeBenchConfig, width: Int, height: Int, fps: Int, seconds: Double,
-                           paceFps: Int?, pool: [CVPixelBuffer], codec: Codec = .hevc,
-                           h264Profile: H264Profile = .high, retagInput: Bool = false) -> Result {
+                           paceFps: Int?, pool: [CVPixelBuffer], codec: Codec = .hevc) -> Result {
         let mode = paceFps.map { "paced \($0)" } ?? "max"
         var notes: [String] = []
         var sessions: [VTCompressionSession] = []
         for _ in 0..<c.sessions {
-            guard let s = makeSession(c, width: width, height: height, fps: fps, codec: codec, h264Profile: h264Profile,
-                                      notes: &notes) else {
+            guard let s = makeSession(c, width: width, height: height, fps: fps, codec: codec, notes: &notes) else {
                 return Result(config: c.name, mode: mode, outFps: 0, submitted: 0, skipped: 0, p50Ms: 0, p95Ms: 0,
                               p99Ms: 0, mbps: 0, note: notes.joined(separator: " "))
             }
@@ -213,8 +211,9 @@ public enum EncodeBench {
             let buf = pool[k < pool.count ? k : period - k]
             let session = sessions[frameIndex % sessions.count]
             frameIndex += 1
-            // As `HEVCEncoder.encode` (T-113): every frame, before the timed submit. Idempotent.
-            if retagInput { _ = HEVCEncoder.retagForSession(buf) }
+            // As `HEVCEncoder.encode` (T-113, unconditional since T-204): every frame, before the timed submit.
+            // Idempotent; untagged frames (`--input-tags none`) are left alone.
+            _ = HEVCEncoder.retagForSession(buf)
             ptsCounter += 1
             let start = DispatchTime.now().uptimeNanoseconds
             let st = VTCompressionSessionEncodeFrame(
@@ -269,9 +268,9 @@ public enum EncodeBench {
         let o = options.applyingEnvironment(ProcessInfo.processInfo.environment)
         let width = 2800, height = 1840
         print("encode-bench \(width)x\(height) fps=\(o.fps) seconds=\(o.seconds) content=\(o.content.rawValue) "
-              + "codec=\(o.codec.logName)\(o.codec == .h264 ? " profile=\(o.h264Profile.rawValue)" : "")"
+              + "codec=\(o.codec.logName)\(o.codec == .h264 ? " profile=\(HEVCEncoder.h264ProfileLogName)" : "")"
               + (o.bitrateOverrideKbps.map { " bitrate_kbps=\($0)" } ?? "")
-              + " input_tags=\(o.inputTags.rawValue) input_retag=\(o.retagInput ? 1 : 0)")
+              + " input_tags=\(o.inputTags.rawValue) input_retag=1")
         print("encoders: \(encoderList(codec: o.codec).joined(separator: "; "))")
         let pool = makeFramePool(width: width, height: height, count: 12, content: o.content, tags: o.inputTags)
         guard pool.count == 12 else { print("error: cannot allocate frames"); return 1 }
@@ -279,7 +278,7 @@ public enum EncodeBench {
         for c in o.configs {
             for pace in [nil, o.fps] as [Int?] {
                 let r = run(c, width: width, height: height, fps: o.fps, seconds: o.seconds, paceFps: pace, pool: pool,
-                            codec: o.codec, h264Profile: o.h264Profile, retagInput: o.retagInput)
+                            codec: o.codec)
                 let z = r.sizes
                 print(String(format: "%@ | %@ | %.1f | %d | %d | %.1f/%.1f/%.1f | %.1f | %.1f | %.0f/%.0f/%.0f (%.0f, %.2fx) | %.0f (%d) | %@",
                              r.config, r.mode, r.outFps, r.submitted, r.skipped, r.p50Ms, r.p95Ms, r.p99Ms, r.mbps,

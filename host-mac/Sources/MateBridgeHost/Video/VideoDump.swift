@@ -1,7 +1,7 @@
 import Foundation
 import MateBridgeCore
 
-/// `MateBridgeApp --dump-video <file> --seconds N [--fps F] [--bitrate-kbps K] [--refresh 60|120] [--frame-delay 0|1]`: runs the video
+/// `MateBridgeApp --dump-video <file> --seconds N [--fps F] [--bitrate-kbps K] [--refresh 60|120]`: runs the video
 /// pipeline (creates the virtual display), writes the Annex-B HEVC stream to `<file>` and prints stats.
 public enum VideoDump {
     public struct Options: Sendable {
@@ -11,7 +11,6 @@ public enum VideoDump {
         public var bitrateKbps: Int?
         /// Virtual display refresh rate (default 60); the stream stays at `fps`.
         public var refreshHz: Int = 60
-        public var frameDelay: Int?
     }
 
     public struct ParseError: Error, Sendable { public let message: String }
@@ -36,9 +35,6 @@ public enum VideoDump {
             case "--refresh":
                 guard j + 1 < args.count, args[j + 1] == "60" || args[j + 1] == "120" else { return .failure(ParseError(message: "--refresh needs 60 or 120")) }
                 o.refreshHz = Int(args[j + 1])!; j += 1
-            case "--frame-delay":
-                guard j + 1 < args.count, args[j + 1] == "0" || args[j + 1] == "1" else { return .failure(ParseError(message: "--frame-delay needs 0 or 1")) }
-                o.frameDelay = Int(args[j + 1])!; j += 1
             default: break
             }
             j += 1
@@ -52,7 +48,6 @@ public enum VideoDump {
         if let f = o.fps { settings.fps = f }
         if let b = o.bitrateKbps { settings.bitrateKbps = b }
         settings.displayRefreshHz = o.refreshHz
-        settings.maxFrameDelayCount = o.frameDelay
 
         let path = (o.path as NSString).expandingTildeInPath
         guard FileManager.default.createFile(atPath: path, contents: nil),
