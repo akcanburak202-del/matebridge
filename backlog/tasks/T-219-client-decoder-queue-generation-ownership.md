@@ -1,7 +1,7 @@
 ---
 id: T-219
 title: Decoder input queue: a retired generation must not consume the next generation's frames
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-161]
@@ -32,7 +32,28 @@ gpt-6-astra değerlendirmesi (P1 #2): yeniden yapılandırma eski kuşağı emek
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Kırmızı commit** (`test/.../video/DecoderQueueOwnershipTest.kt`, T-158 sahtesi): sahte codec'e
+   `dequeueInputGate` (giriş tamponu alımı kapıda bekler, `dequeueInput#n>`/`<` olayları) ve codec başına
+   gönderilen girişlerin pts listesi eklenir. Senaryo: kuşak 1'in giriş döngüsü `att.active` denetimini geçmiş,
+   `prefetch` içinde kapıda bekliyor → `reconfigure` (kuşak 2, `acquire`'da bekler) → yeni CODEC_CONFIG + keyframe
+   → kapı açılır. Beklenen: codec 1 yeni karelerin hiçbirini almaz, codec 2 ikisini sırayla alır. HEAD'de başarısız;
+   `@Ignore` ile, başarısız çıktı commit mesajında.
+2. **`FrameQueue.kt` — tüketici kuşak sahipliği:** kilit altında `owner` (0 = yok). `assignConsumer(gen)` /
+   `revokeConsumer(gen)` (yalnız sahipse) — ikisi de kilitten sonra bekleyeni `unpark` eder. `awaitNext(timeoutNs,
+   consumer)`: kare yalnız `consumer == owner` iken kilit altında alınır; sahip olmayan tüketici kare almadan hemen
+   `null` döner (kare kuyrukta yeni kuşağa kalır). `ANY_CONSUMER` (varsayılan) sahiplik denetimi yapmaz (tek
+   tüketicili kullanımlar/testler). Karar yolundan çağrılan `resetIfOwner(consumer, reason)` ve
+   `onDecoderErrorIfOwner(consumer)`: sahip değilse hiçbir şeyi değiştirmez, istek üretmez (`null`) — emekliye ayrılan
+   kuşak yeni kuşağın karelerini silemez. `waiter` yalnız kendi kaydıysa temizlenir. Sınır, en yeni kare, kapı ve
+   istek limiti aynen.
+3. **`VideoRenderer.kt`:** `retire()` önce `handoff.retire` (active=false), sonra `queue.revokeConsumer(gen)` (park
+   etmiş eski tüketici hemen uyanır ve çıkar). `start()` iş parçacığı başlamadan `queue.assignConsumer(gen)` (yani
+   `onConfigInstalled`'dan önce). Giriş döngüsü `awaitNext(..., att.gen)`; `frame_too_large` ve `decode_error`
+   sonrası sıfırlama `...IfOwner(att.gen)` ile (sahip değilse döngüden çıkar). Kilit altında dışarı çağrı yok.
+4. **Testler (yeşil):** kırmızı testin `@Ignore`'u kalkar; ek olarak eski tüketicinin `awaitNext` içinde park
+   halinde tutulduğu ikinci bariyer varyantı (`FrameQueue` iç test kancası, park öncesi); saf `FrameQueue`
+   sahiplik testleri (sahipsiz tüketici boş döner ve kare kalır; sahipsiz aralıkta kuyruk sınırlı; `IfOwner`
+   no-op; revoke park eden tüketiciyi uyandırır). T-158–T-161, T-168, T-208 testleri yeşil kalır.
 
 ## Handoff
 
