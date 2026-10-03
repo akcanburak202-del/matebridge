@@ -1,7 +1,7 @@
 ---
 id: T-185
 title: Gate debug extras behind `dev`; add `ev=profile`; move NetBench to debug
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-184, T-146]
@@ -85,7 +85,24 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `session/DevKnobs.kt` (pure): `LaunchExtras` interface (has/int/bool/string) and `DevKnobs.parse(extras)`.
+   - `dev` = `--ez dev true`. A gated view hides every debug-only key unless `dev`; all effective values are read through it,
+     so without `dev` they keep their defaults. `ignored` = debug-only keys present without `dev` (canonical order, keys only).
+   - Debug-only: `jitter hz lead_us deadline_us ping_ms tos_ctl tos_video wifi_ll audio transport audio_out audio_buf_bursts
+     quickack net_bench` (+ `net_bench_*` sub-keys) and also `decoder_fault`/`decoder_fault_after_s` (T-159, added after the
+     0026 inventory; same exposure). Keep: `stats_1s pace_trace stall_diag`. `WifiKnobs.parse` is called with the gated view.
+   - `StreamProfile.fields(...)` (pure) builds the `ev=profile` fields from enumerated values only; string knob values are
+     canonicalised to known ids or `other`, so no endpoint/serial/device id can appear.
+2. `MainActivity`: parse once in `onCreate`, log `diag ev=dev_knobs dev=0|1 ignored=<keys>|-`, replace every direct
+   extra read with `DevKnobs` fields, start the bench by class name only when `dev`; log `ev=profile` in `installConfig`.
+3. `AudioPlayout`: take `audio_out`/`audio_buf_bursts` from constructor parameters (gated by the caller) instead of the
+   Activity intent.
+4. Move `bench/*.kt` to `src/debug/kotlin/.../bench/`; move the `NetBenchActivity` manifest entry to the debug manifest.
+5. Debug manifest: `VideoTestActivity` stays exported (adb `am start` must keep working) but gets
+   `android:permission="android.permission.DUMP"`, which the shell holds and third-party apps cannot obtain.
+6. Tests: `DevKnobsTest` (gate, ignore list, keep keys, profile fields/privacy); `NetBenchTest` unchanged under `src/test`.
+7. Risks: the gate changes T-127/T-159/T-161 launch commands (they need `--ez dev true`); LOGGING/KNOBS text goes to
+   *Açık sorular*.
 
 ## Handoff
 
