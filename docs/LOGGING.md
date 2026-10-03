@@ -193,3 +193,9 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
   - alt taşmadan sonraki 2 s'lik pencerede, seviye tabanı hedefin 20 ms'den fazla üstündeyse (pencere başına en çok bir kez);
   - pencere dışında, taban hedefin 60 ms'den fazla üstünde ~3 s kalırsa.
 - Atlama içeren saniyenin A/V örneği `onAvOffset`'e verilmez.
+
+## Video sağlığı ve input kapısı (tablet, `MB/decoder`, T-159, karar 0019)
+
+- `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı).
+- `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; `done` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene".
+- `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.

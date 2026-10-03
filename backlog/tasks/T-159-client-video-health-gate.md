@@ -1,7 +1,7 @@
 ---
 id: T-159
 title: Gate input on decoder health and show a video-fault overlay
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-158]
