@@ -54,7 +54,13 @@ Karar mantığı `TabletFilesPlanner`'da (saf, test edilir); köprü yalnız yü
 
 ## Handoff
 
-- **Commit:** Codex fixes `ec3a9fd`, on top of implementation `b16e45c` and plan `41dd96b`; the handoff commits follow. Branch `task/T-209-host-force-unmount-stale-volume`. `./scripts/check.sh` ALL OK (host: 802 tests).
+- **Commit:** second Codex fix `745ea8a`, first Codex fixes `ec3a9fd`, implementation `b16e45c`, plan `41dd96b`; the handoff commits follow. Branch `task/T-209-host-force-unmount-stale-volume`. `./scripts/check.sh` ALL OK (host: 804 tests).
+- **Codex review, second pass (--high), one P2, fixed in `745ea8a`: reuse adopted a replacement volume.**
+  - The reuse decision moved into the planner: `mountReused(generation:localPort:path:identity:) -> [TabletFilesAction]?`. The bridge calls it when `mount` finds a volume of ours at `knownPath`.
+  - It is adopted only if it is the current request's `mountedPath` and, when we hold an identity for it, exactly that identity. A reuse keeps the identity we recorded and never records a new one. An identity is recorded only at the completion of a mount we made ourselves.
+  - A mismatch returns nil: our record of the path is forgotten (`mountedPath` and origin cleared), and the bridge logs `ev=mount already=0 reason=identity` and mounts afresh. The fresh mount may land elsewhere, or collide (EEXIST) and fail visibly, never forced.
+  - A stale request reuses and mounts nothing.
+  - Tests: `reopeningAReplacedVolumeNeverAdoptsItAndNeverForcesIt` (replacement → reopen → token change: no force of the replacement), `reopeningOurOwnVolumeKeepsTheIdentityWeRecorded`.
 - **Codex review (--high), two findings, both fixed in `ec3a9fd`:**
   - **P1, a replacement volume could be forced.** Each mount now records the volume's identity right after it succeeds: `VolumeIdentity`, read from `getfsstat`, with `f_fsid` (assigned per mount), `f_fstypename` and the exact `f_mntfromname`. The identity travels with the replaced volume and the leftover, and goes in the action `forceUnmount(path:localPort:identity:)`.
     - Right before `MNT_FORCE`, the bridge re-reads the entry at that path and calls the pure Core check `TabletFilesPlanner.identityMatches(expected:current:localPort:)`. It requires an equal identity, type `webdav`, and exactly `http://127.0.0.1:<port>/MatePad/`: no user, query or other path.
