@@ -1,7 +1,7 @@
 ---
 id: T-175
 title: Time host input delivery, environment lookups and CGEventPost per message
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-171]
@@ -64,7 +64,14 @@ Source: external architecture review 2026-10-03 (L03 input side, W4 "Mac input")
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Saf toplayıcı** `MateBridgeCore/Input/InputDeliveryTiming.swift` (yeni): mesaj başına `deliverNs/envNs/postNs` alır. `deliver` için T-171'in sabit boyutlu `AgeHistogram`'ı (µs, p99), env ve post için toplam + max (ns). Eşik 20 ms (kesin büyük). Bir mesajda en çok bir uyarı: `post` ya da `env` eşiği aştıysa büyük olanı, yoksa `deliver` (bekleme ya da diğer iş). Hız sınırı: 10 s'de en çok bir satır. Bastırılanlar `slow_calls=` ile oturum sonunda sayılır. `reset()` oturum toplamlarını sıfırlar, hız sınırının zamanını korur (yeniden bağlanma fırtınası uyarı yağdırmasın).
+2. **Kırmızı senaryo önce**: `Tests/MateBridgeCoreTests/Input/InputDeliveryTimingTests.swift` + boş gövdeli API iskeleti (derlenir, testler kırmızı). Ayrı commit.
+3. **Uygulama**, sonra testler yeşil.
+4. **Bağlama** (`InputController.swift`): `deliver`'da `queue.sync` dışında (çağıran tarafı, oturum kuyruğu) `deliver_us`. İçeride `env_us` = `environment()` + KEY için `capsLock.isOn()` (canlı imleç hariç; kendi alanları var). `post_us` = `flush` içindeki `post(events)` (izin kontrolü + `poster.post`). Toplayıcı ayrı bir `NSLock` altında (kayıt `queue.sync` sonrası oturum kuyruğunda olur). Uyarı satırı oturum/yapılandırma kimliğini blok içinden alır. `sessionStarted` sıfırlar, `sessionEnded` alanları `input_session_end`'e ekler. PONG ve girdi dışı mesajlar ölçülmez.
+5. `CGEventPoster.swift` / `VirtualDisplayLocator.swift`'e dokunulmaz: denetleyici düzeyinde ölçüm kabul kriterlerini karşılar, davranış riski sıfır.
+6. `docs/LOGGING.md`: ayrı "Girdi teslim zamanlaması (T-175)" bölümü.
+
+**Riskler:** zaman ölçümü (`DispatchTime.now()` ~25 ns) dışında davranış değişmez. Olay sırası ve içeriği aynı. Kilit sırası: `timingLock` hiçbir zaman `queue` beklenirken tutulmaz, kilitlenme olmaz.
 
 ## Handoff
 
