@@ -199,3 +199,8 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 - `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı).
 - `ev=video_recover step=restart|reconnect|manual|retry|done n=N vgen=N` (W; `done` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene".
 - `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
+
+## Encoder gönderim sırası (Mac, `encoder`, T-162)
+
+- Encoder'a her kare tek bir seri sahip kuyruğundan gider; rezervasyon sırası = VideoToolbox çağrı sırası, `stop` sonrası encode yok.
+- `ev=slot_double_release` (W): aynı rezervasyon ikinci kez bırakıldı; sayaç değişmez. Normal kullanımda hiç görülmemeli; görülürse hata.

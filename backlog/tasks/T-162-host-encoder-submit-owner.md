@@ -1,7 +1,7 @@
 ---
 id: T-162
 title: Serialise HEVCEncoder submits, QP updates and teardown on one owner queue
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
