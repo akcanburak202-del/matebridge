@@ -28,6 +28,12 @@ public enum VideoEncoderError: Error, CustomStringConvertible {
 /// keyframe can be produced on a static screen, where ScreenCaptureKit delivers no new frames. The same buffer (or,
 /// with `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy`, a copy of it) is re-encoded by the optional idle quality refresh
 /// (`MATEBRIDGE_IDLE_REFRESH_MS`, T-086), optionally under a QP cap (`MATEBRIDGE_IDLE_REFRESH_QP`, T-087).
+///
+/// **Single submit owner (T-162).** Every `VTCompressionSessionEncodeFrame`, the per-frame `MaxAllowedFrameQP` update
+/// and the final `CompleteFrames`/`Invalidate` run on one serial owner queue (`EncoderSubmitOrder`), enqueued in slot
+/// reservation order. So PTS reach VideoToolbox strictly increasing and no frame is submitted after invalidate. All
+/// other threads (ScreenCaptureKit, timers, VideoToolbox's output callback, the coordinator) only take the lock and
+/// enqueue; nothing waits on the owner queue with `sync`.
 final class HEVCEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
@@ -89,12 +95,11 @@ final class HEVCEncoder: @unchecked Sendable {
     /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
     private var captureLeadUs: Int64 = 0
     private var lastStampUs: UInt64?
-    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Guarded by `boostLock`, which is
-    /// held only around the decision and the property call (never around `VTCompressionSessionEncodeFrame`).
+    /// Refresh-frame QP cap (T-087); nil unless `MATEBRIDGE_IDLE_REFRESH_QP` is set. Owner queue only: decided and
+    /// applied in the same submit block as the frame it belongs to (`send`), so needs no lock.
     private var qpBoost: RefreshQPBoost?
     /// `qpBoost != nil`, fixed at creation (read without the lock).
     private let qpBoostEnabled: Bool
-    private let boostLock = NSLock()
     /// Pool for `MATEBRIDGE_IDLE_REFRESH_BUFFER=copy` (T-087). Used only on the refresh timer queue.
     private var refreshPool: CVPixelBufferPool?
     /// The first input retag was logged (T-113). Guarded by `lock`.
@@ -455,10 +460,9 @@ final class HEVCEncoder: @unchecked Sendable {
         return "\(Unmanaged<AnyObject>.fromOpaque(raw).takeRetainedValue())"
     }
 
-    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set).
+    /// T-087: sets or lifts the refresh-frame QP cap before a frame is submitted (only when the knob is set). Owner
+    /// queue only, in the submit block of the frame it applies to (T-162).
     private func updateQPBoost(refresh: Bool, session: VTCompressionSession) {
-        boostLock.lock()
-        defer { boostLock.unlock() }
         guard var boost = qpBoost, let change = boost.before(refresh: refresh) else { return }
         switch change {
         case .apply(let qp):
@@ -509,23 +513,26 @@ final class HEVCEncoder: @unchecked Sendable {
         order.setTargetFps(fps)
     }
 
-    /// `CompressionBackend` over the VideoToolbox session. Holds the encoder weakly (the encoder owns the order,
-    /// which owns this backend).
+    /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
+    /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
     final class Backend: CompressionBackend, @unchecked Sendable {
         let session: VTCompressionSession
         weak var encoder: HEVCEncoder?
         init(session: VTCompressionSession) { self.session = session }
 
+        /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
         func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
             encoder?.send(frame, key: keyframe, token: token, session: session)
         }
 
+        /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
         func completeAndInvalidate() {
             VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(session)
         }
     }
 
+    /// Owner queue only (`Backend.encode`).
     private func send(_ frame: Input, key: Bool, token: EncoderSubmitToken, session: VTCompressionSession) {
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
@@ -544,7 +551,7 @@ final class HEVCEncoder: @unchecked Sendable {
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
             duration: .invalid, frameProperties: props, infoFlagsOut: nil
-        ) { [weak self] status, _, sampleBuffer in
+        ) { [weak self, trace] status, _, sampleBuffer in
             guard let self else { return }
             let elapsedUs = (DispatchTime.now().uptimeNanoseconds - start) / 1000
             var t = trace
@@ -582,13 +589,32 @@ final class HEVCEncoder: @unchecked Sendable {
         let trip = consecutiveFailures == HEVCEncoder.failureLimit
         lock.unlock()
         // For a failed EncodeFrame call the slot was never consumed by a callback; for no-output the callback is
-        // the release point. Either way exactly one release per reservation happens here.
+        // the release point. Release is idempotent per token (T-162): should VideoToolbox report both for one frame,
+        // the second release is logged and ignored.
         order.release(token, failed: true)
         if trip { onFailure(VideoEncoderError.repeatedFailures(HEVCEncoder.failureLimit)) }
     }
 
-    /// Flushes pending frames and tears the session down. Idempotent.
+    /// Flushes the frames already inside the encoder and tears the session down, then returns. For synchronous
+    /// callers (benches): it blocks until the owner queue has run the teardown. Idempotent. From Swift concurrency use
+    /// `shutdown()`, which does not block a cooperative thread.
     func stop() {
+        let done = DispatchSemaphore(value: 0)
+        beginStop { done.signal() }
+        // On the owner queue the teardown block is queued behind the caller: waiting would deadlock.
+        if order?.isOnOwnerQueue == false { done.wait() }
+    }
+
+    /// `stop()` for async callers: resumes once the owner queue has completed and invalidated the session.
+    func shutdown() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            beginStop { c.resume() }
+        }
+    }
+
+    /// Cancels the timers and enqueues the teardown on the owner queue (never waits). `completion` runs on the owner
+    /// queue after `CompleteFrames`/`Invalidate`.
+    private func beginStop(completion: (@Sendable () -> Void)?) {
         lock.lock()
         idleRefresh.reset()
         let timer = idleTimer
@@ -598,10 +624,12 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.unlock()
         timer?.cancel()
         refresh?.cancel()
-        order.stop()
+        // `order` is nil only if `init` threw before creating it (then there is no session to close).
+        if let order { order.stop(completion: completion) } else { completion?() }
     }
 
-    deinit { stop() }
+    /// Only enqueues the teardown: no wait, and the teardown block captures the backend, never `self`.
+    deinit { beginStop(completion: nil) }
 
     private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return }
@@ -625,17 +653,32 @@ final class HEVCEncoder: @unchecked Sendable {
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
-        guard let block = CMSampleBufferGetDataBuffer(sb) else { return }
-        var length = 0
-        var base: UnsafeMutablePointer<CChar>?
-        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length,
-                                          dataPointerOut: &base) == kCMBlockBufferNoErr, let base else { return }
-        let raw = Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
-                                            count: length))
+        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return }
         guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.trace = trace
         output(frame, encodeTimeUs)
+    }
+
+    /// All bytes of a block buffer. The data pointer is valid for `lengthAtOffset` bytes only: a block buffer made of
+    /// several segments (`lengthAtOffset != totalLength`) is copied with `CMBlockBufferCopyDataBytes` (T-162).
+    static func bytes(of block: CMBlockBuffer) -> [UInt8]? {
+        var lengthAtOffset = 0
+        var total = 0
+        var base: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset,
+                                          totalLengthOut: &total, dataPointerOut: &base) == kCMBlockBufferNoErr
+        else { return nil }
+        if total == 0 { return [] }
+        if lengthAtOffset == total, let base {
+            return Array(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self),
+                                             count: total))
+        }
+        var bytes = [UInt8](repeating: 0, count: total)
+        let st = bytes.withUnsafeMutableBytes { dst in
+            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total, destination: dst.baseAddress!)
+        }
+        return st == kCMBlockBufferNoErr ? bytes : nil
     }
 
     /// Parameter sets (HEVC: VPS, SPS, PPS; H.264: SPS, PPS) without start codes, and the NAL length size.

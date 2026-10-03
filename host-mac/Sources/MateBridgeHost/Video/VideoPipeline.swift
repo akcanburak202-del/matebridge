@@ -279,7 +279,7 @@ public final class VideoPipeline: @unchecked Sendable {
     private func teardown(keepingDisplay: Bool = false) async -> VirtualDisplay? {
         let (cap, enc, disp) = takeResources()
         await cap?.stop()
-        enc?.stop()
+        await enc?.shutdown()
         box.encoder = nil
         frames.finish()
         if keepingDisplay { return disp }

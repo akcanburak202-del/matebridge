@@ -27,11 +27,12 @@ public struct EncoderSubmitToken: Hashable, Sendable, CustomStringConvertible {
     public var description: String { "\(id)" }
 }
 
-/// The encoder session behind `EncoderSubmitOrder` (VideoToolbox in `HEVCEncoder`, a fake in tests).
+/// The encoder session behind `EncoderSubmitOrder` (VideoToolbox in `HEVCEncoder`, a fake in tests). Both calls
+/// arrive only on the order's owner queue, one at a time.
 public protocol CompressionBackend: AnyObject, Sendable {
     associatedtype Frame: EncoderSubmitFrame
-    /// Submits one frame that holds the slot `token`. The backend releases the token exactly once
-    /// (`EncoderSubmitOrder.release`): from its completion, or right away when the submit is refused.
+    /// Submits one frame that holds the slot `token`. The backend releases the token (`EncoderSubmitOrder.release`)
+    /// from its completion, or right away when the submit is refused.
     func encode(_ frame: Frame, keyframe: Bool, token: EncoderSubmitToken)
     /// The last call: completes every outstanding frame (their completions may run during the call) and closes
     /// the session.
@@ -41,6 +42,13 @@ public protocol CompressionBackend: AnyObject, Sendable {
 /// Decides which frame goes to the encoder session and in which order (T-162): the `FramePacer` (newest frame wins,
 /// one pending frame), `maxInFlight` slots, the keyframe flag, strictly increasing stamps, the flush timer and
 /// teardown. All state is guarded by one lock.
+///
+/// **Single submit owner.** Every `backend.encode` and the final `backend.completeAndInvalidate` run on one serial
+/// owner queue, and each block is enqueued (`async`) while the lock that reserved its slot is still held. FIFO order
+/// therefore equals reservation order: stamps reach the backend strictly increasing, and the teardown block, enqueued
+/// under the same lock that sets `stopped`, runs after every submit and before none. Nothing waits on the owner queue
+/// with `sync`. Callers on any thread (capture, timers, the backend's completion thread) only take the lock and
+/// enqueue, so `offer` never blocks on the encoder.
 public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked Sendable {
     public typealias Frame = Backend.Frame
     /// `(afterUs, fire)`: call `fire` once after `afterUs` microseconds.
@@ -71,8 +79,11 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private let scheduleFlush: FlushScheduler
     private let pacerCounts: PacerCounts
     private let log: LogSink
-    /// Test seam: runs right before `backend.encode`, on the thread that calls it.
+    /// Test seam: runs right before `backend.encode`, on the owner queue.
     private let beforeSubmit: (@Sendable (Frame) -> Void)?
+    /// The single submit owner.
+    private let queue: DispatchQueue
+    private let queueKey = DispatchSpecificKey<UInt8>()
 
     private let lock = NSLock()
     // Guarded by `lock`.
@@ -82,6 +93,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private var forceKeyframe = true          // the very first frame is a keyframe
     private var inFlight = 0
     private var nextToken: UInt64 = 0
+    /// Reserved and not yet released (release is idempotent per token).
+    private var outstanding = Set<UInt64>()
     private var lastStamp: Frame.Stamp?
     private var lastSlotFreeUs: UInt64 = 0
     private var lastReserveUs: UInt64
@@ -93,6 +106,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                 scheduleFlush: @escaping FlushScheduler = EncoderSubmitOrder.defaultFlushScheduler(),
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
                 log: @escaping LogSink = { _, _, _ in },
+                queueLabel: String = "matebridge.encoder.submit",
                 beforeSubmit: (@Sendable (Frame) -> Void)? = nil) {
         self.backend = backend
         self.maxInFlight = maxInFlight
@@ -103,9 +117,11 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         self.beforeSubmit = beforeSubmit
         pacer = FramePacer<Frame>(streamFps: streamFps)
         lastReserveUs = nowUs()
+        queue = DispatchQueue(label: queueLabel, qos: .userInteractive)
+        queue.setSpecific(key: queueKey, value: 1)
     }
 
-    private struct Submit {
+    private struct Submit: Sendable {
         var frame: Frame
         var keyframe: Bool
         var token: EncoderSubmitToken
@@ -115,24 +131,24 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
 
     /// Offers a frame. `build` runs under the lock with the last offered frame and returns the frame to offer (nil:
     /// nothing), so a re-submission of `last` can never replace a newer capture. `build` must not call back into
-    /// this object. `bypassGate`: keyframe re-submissions do not wait for the send-rate slot.
+    /// this object. `bypassGate`: keyframe re-submissions do not wait for the send-rate slot. Never blocks on the
+    /// encoder.
     public func offer(bypassGate: Bool, build: (_ last: Frame?) -> Frame?) {
         lock.lock()
         guard !stopped, var frame = build(last) else { lock.unlock(); return }
         let slotFree = inFlight < maxInFlight
         frame.arrived(slotFree: slotFree)
         last = frame
-        var submit: Submit?
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
         switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate) {
-        case .submit(let f): submit = reserveLocked(f)
+        case .submit(let f): submitLocked(reserveLocked(f))
         case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
         case .drop: break
         }
         reportPacerLocked()
         lock.unlock()
-        perform(submit: submit, delay: delay)
+        if let delay { armFlush(delay) }
     }
 
     /// The next submitted frame will be a keyframe.
@@ -146,38 +162,56 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     }
 
     /// Releases the slot of `token` (the frame produced output, none, or was refused) and starts the pending frame,
-    /// if any. `failed`: the frame broke the reference chain, so the next frame is a keyframe.
+    /// if any. `failed`: the frame broke the reference chain, so the next frame is a keyframe. Idempotent per token:
+    /// a second release of the same token (e.g. an encode error and a completion for one frame) is logged at
+    /// `warning` and changes nothing.
     public func release(_ token: EncoderSubmitToken, failed: Bool) {
         lock.lock()
+        guard outstanding.remove(token.id) != nil else {
+            stats.duplicateReleases += 1
+            lock.unlock()
+            log(.warning, "slot_double_release", "token=\(token.id)")
+            return
+        }
         if failed { forceKeyframe = true }
         inFlight -= 1
         stats.releases += 1
         noteInFlightLocked()
         lastSlotFreeUs = nowUs()
-        let (submit, delay) = takePendingLocked()
+        let delay = takePendingLocked()
         lock.unlock()
-        perform(submit: submit, delay: delay)
+        if let delay { armFlush(delay) }
     }
 
-    /// Flush timer: claims the pending frame if a slot is free and the gate is open.
+    /// Flush timer: submits the pending frame if a slot is free and the gate is open.
     public func flushPending() {
         lock.lock()
         flushScheduled = false
-        let (submit, delay) = takePendingLocked()
+        let delay = takePendingLocked()
         lock.unlock()
-        perform(submit: submit, delay: delay)
+        if let delay { armFlush(delay) }
     }
 
-    /// Stops accepting frames and tears the backend down. Idempotent. `completion` runs once the backend is closed.
+    /// Stops accepting frames and tears the backend down on the owner queue, after every frame already reserved.
+    /// Never blocks; safe from `deinit` and from any thread. Idempotent. `completion` runs on the owner queue once
+    /// the backend is closed (also for a repeated call).
     public func stop(completion: (@Sendable () -> Void)? = nil) {
         lock.lock()
-        if stopped { lock.unlock(); completion?(); return }
+        if stopped {
+            lock.unlock()
+            // FIFO: the teardown block was enqueued earlier, so this runs after it.
+            if let completion { queue.async(execute: completion) }
+            return
+        }
         stopped = true
         pacer.clearPending()
         last = nil
+        // Captures only the backend and the completion (never `self`): reachable from an owner's `deinit`.
+        queue.async { [backend] in
+            backend.completeAndInvalidate()
+            completion?()
+        }
         lock.unlock()
-        backend.completeAndInvalidate()
-        completion?()
     }
 
     // MARK: - Readers
@@ -187,6 +221,11 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     public var lastOffered: Frame? { lock.withLock { stopped ? nil : last } }
     public var currentInFlight: Int { lock.withLock { inFlight } }
     public var currentStats: Stats { lock.withLock { stats } }
+    /// The caller runs on the owner queue (waiting for teardown there would deadlock).
+    public var isOnOwnerQueue: Bool { DispatchQueue.getSpecific(key: queueKey) != nil }
+
+    /// Runs `body` on the owner queue after everything enqueued so far (tests and diagnostics; never waits).
+    public func afterQueued(_ body: @escaping @Sendable () -> Void) { queue.async(execute: body) }
 
     /// A keyframe is requested, a frame to re-encode exists and nothing was submitted for `idleUs`.
     public func keyframeDue(idleUs: UInt64) -> Bool {
@@ -197,10 +236,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
 
     // MARK: - Internals
 
-    /// Carries out a decision after the lock is released.
-    private func perform(submit: Submit?, delay: UInt64?) {
-        if let delay { armFlush(delay) }
-        if let s = submit {
+    /// Must hold `lock`. Enqueues the submit on the owner queue while the reservation's lock is held, so the queue
+    /// sees submits in reservation order and teardown (enqueued under the same lock) after all of them.
+    private func submitLocked(_ s: Submit) {
+        queue.async { [backend, beforeSubmit] in
             beforeSubmit?(s.frame)
             backend.encode(s.frame, keyframe: s.keyframe, token: s.token)
         }
@@ -212,6 +251,7 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         stats.reservations += 1
         noteInFlightLocked()
         nextToken += 1
+        outstanding.insert(nextToken)
         var f = input
         f.reserved(lastSlotFreeUs: lastSlotFreeUs)
         if let l = lastStamp, f.stamp <= l { f.stamp = Frame.stamp(after: l) }
@@ -222,15 +262,15 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         return Submit(frame: f, keyframe: key, token: EncoderSubmitToken(id: nextToken))
     }
 
-    /// Must hold `lock`. Claims the pending frame if a slot is free and the gate is open (judged by the current time,
-    /// not the frame's capture time); otherwise returns the delay after which a flush should retry.
-    private func takePendingLocked() -> (Submit?, UInt64?) {
-        guard !stopped else { return (nil, nil) }
+    /// Must hold `lock`. Submits the pending frame if a slot is free and the gate is open (judged by the current
+    /// time, not the frame's capture time); otherwise returns the delay after which a flush should retry.
+    private func takePendingLocked() -> UInt64? {
+        guard !stopped else { return nil }
         defer { reportPacerLocked() }
         switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight) {
-        case .submit(let f): return (reserveLocked(f), nil)
-        case .retry(let wait): return (nil, scheduleFlushLocked(afterUs: wait))
-        case .none: return (nil, nil)
+        case .submit(let f): submitLocked(reserveLocked(f)); return nil
+        case .retry(let wait): return scheduleFlushLocked(afterUs: wait)
+        case .none: return nil
         }
     }
 
