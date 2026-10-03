@@ -68,8 +68,8 @@ class DecoderLifecycleTest {
         try {
             renderer.reconfigure(config) // retires the first thread without waiting; the new one waits for it
             assertTrue("first codec never stopped", factory.awaitEvent("stop#1>"))
-            // previous.join() has no timeout: while the old thread hangs in stop(), longer than both JOIN_MS and the
-            // 500 ms output-thread join, the new thread creates nothing.
+            // While the old thread hangs in stop(), longer than both JOIN_MS and the 500 ms output-thread join (but
+            // shorter than T-161's PREVIOUS_WAIT_MS hand-off bound), the new thread creates nothing.
             assertFalse("second codec created while the first was stopping",
                 factory.awaitEvent("create#2", timeoutMs = 700))
         } finally {
