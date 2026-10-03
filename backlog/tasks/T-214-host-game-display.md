@@ -1,7 +1,7 @@
 ---
 id: T-214
 title: Host: 1x game display at the requested pixel size (decision 0029)
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-213]
@@ -49,7 +49,14 @@ Karar 0029: `STREAM_PREFS.display_*` geçerliyse host sanal ekranı HiDPI olmada
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. Core `VideoSettings`: `replacedNative` (1x oyun ekranının yerine geçtiği doğal HiDPI boyutu; nil = doğal ekran) → `displayHiDPI`, `nativeWidthPx/HeightPx` (HiDPI'da ekranın kendisi; böylece mevcut testlerdeki "widthPx değişti" doğal boyut değişimi sayılır), `sameDisplay` HiDPI'yı da karşılaştırır, `sameNative(as:)`, `displayModeText`, `displayMode`.
+2. `GameDisplayPolicy.swift` (yeni): `accepts(w:h:nativeW:nativeH:)`; `DisplayMode` + `DisplayReuse.decide` (yalnız piksel+HiDPI+yenileme+çevrimiçi eşleşirse yeniden kullan; neden mode_change/refresh_change/offline); `DisplayRecreateGap` (son kaldırmadan 700 ms); `GameDisplayFallback` (1x hata → tek doğal geri düşüş, süreç boyunca oyun ekranı kapalı).
+3. `applying(_:defaultRefreshHz:allowGameDisplay:)`: geçerli ekran → 1x w×h, pt = px, ölçek 1000; aksi hâlde doğal + prefs ölçeği; varsayılan bit hızı etkin ölçekle. `initialSettings` aynı bayrağı geçirir.
+4. `DisplayLease`: kimlik = cihaz + doğal boyut; kip/yenileme farkı `.reconfigure`.
+5. `StreamPrefsStorageCodec`: ekran 0×0 ise 3, değilse 5 değer yazar; 2/3/5 okur. `StreamProfileLog` `display=`.
+6. Host: `VirtualDisplay` piksel/HiDPI/yenileme saklar, `physicalPixelWidth/Height`, kaldırma zamanını kaydeder; `VideoPipeline.obtainDisplay` Core kararını kullanır, her yeni ekrandan önce kaldırma boşluğunu (700 ms) bekler, `hidpi: settings.displayHiDPI`; 1x'te `modeSelected == false` → `gameDisplayUnavailable`.
+7. `StreamCoordinator`: loglar (`display_recreate reason=mode_change mode=A->B`, `stream_prefs display=/requested_display=`, `stream_reconfigure display=`, `display_parked mode=`), `streamConfig(for:)` doğal boyutu karşılaştırır, `createPipeline` hata → `game_display_failed` geri düşüşü (yeni `config_id`).
+8. Testler (Core), LOGGING.md, `./scripts/check.sh`.
 
 ## Handoff
 
