@@ -103,18 +103,6 @@ class VideoRenderer(
     @Volatile var bufferFrames: Int = bufferFrames.coerceIn(BUFFER_ADAPTIVE, 2)
         set(v) { field = v.coerceIn(BUFFER_ADAPTIVE, 2) }
 
-    /**
-     * T-080 experiment: non-null = the adaptive mode schedules with [ConstantPlayoutPacer] (constant playout delay)
-     * instead of the phase lock. Read at each codec start.
-     */
-    @Volatile var cpdConfig: CpdConfig? = null
-
-    /**
-     * Upper bound on frames inside the decoder (queued input minus released/discarded output, held buffers
-     * included): 0 = unlimited (the pre-T-057 behavior), else 2..4 for experiments. Read on each frame.
-     */
-    @Volatile var maxInFlight: Int = 0
-
     /** T-069 experiment: per-frame pace trace, dumped to [paceTraceFile] every [TRACE_DUMP_EVERY] stats windows and by [flushPaceTrace]. */
     @Volatile var paceTrace: PaceTrace? = null
         set(v) {
@@ -122,9 +110,6 @@ class VideoRenderer(
             dev.matebridge.client.security.Records.stampOpens = v != null // T-077: record open stamps
         }
     @Volatile var paceTraceFile: java.io.File? = null
-
-    /** T-079 experiment: the decoder threads join this hint session; set before the first [attachSurface]. */
-    @Volatile var perfHint: PerfHint? = null
     private var traceWindows = 0
     private val traceWriter by lazy {
         java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "mb-pace-trace").also { it.isDaemon = true } }
@@ -143,17 +128,10 @@ class VideoRenderer(
      */
     @Volatile private var live: CodecState? = null
 
-    /** KEY_OPERATING_RATE policy, see [OperatingRate]; read at each codec start. */
-    @Volatile var operatingRate: Int = OperatingRate.STREAM_FPS
-
     /** Slack D of the adaptive pacer for the latest frame, in microseconds (0 when not adaptive/unknown). */
-    fun paceDUs(): Long {
-        val st = live
-        return (st?.cpd?.lastDNs ?: st?.adaptive?.lastDNs ?: 0L) / 1000
-    }
+    fun paceDUs(): Long = (live?.adaptive?.lastDNs ?: 0L) / 1000
 
     private var lastRephases = 0L
-    private var lastRecenters = 0L
 
     /**
      * Once per stats second (called by the activity's stats tick): feeds the adaptive pacer the skip percentage of the
@@ -178,13 +156,11 @@ class VideoRenderer(
         val rephases = pacer?.rephases ?: 0L
         val rephaseDelta = (rephases - lastRephases).coerceAtLeast(0)
         lastRephases = rephases
-        val recenters = pacer?.recenters ?: 0L
-        val recenterDelta = (recenters - lastRecenters).coerceAtLeast(0)
-        lastRecenters = recenters
         if (!write) return
         MbLog.i(
             "present",
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), maxInFlight, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs, if (vsync.recenter) recenterDelta else null),
+            // T-183: the inflight limit is retired; `inflight_limit=` stays in the line with a constant 0.
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), 0, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs),
             "render",
         )
     }
@@ -366,7 +342,7 @@ class VideoRenderer(
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-        val rate = OperatingRate.resolve(operatingRate, config.fps)
+        val rate = OperatingRate.resolve(config.fps)
         if (rate != null) format.setInteger(MediaFormat.KEY_OPERATING_RATE, rate)
         ColorMapping.standard(config.matrix)?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
         ColorMapping.transfer(config.transfer)?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
@@ -429,14 +405,7 @@ class VideoRenderer(
             onHealthEvent(HealthEvent.Running(att.gen))
             // T-077: the input hand-off is on the frame's critical path; ask the scheduler for prompt wake-ups.
             try { env.setDisplayPriority() } catch (_: Exception) {}
-            val hint = perfHint
-            val tid = env.myTid()
-            hint?.register(PerfHint.ROLE_IN, tid)
-            try {
-                decodeAttempts(att)
-            } finally {
-                hint?.unregister(PerfHint.ROLE_IN, tid)
-            }
+            decodeAttempts(att)
         } finally {
             onHealthEvent(HealthEvent.Exited(att.gen))
             handoff.threadExited(att)
@@ -508,10 +477,6 @@ class VideoRenderer(
             val intervalOf: (Long) -> Long = { period -> FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs) }
             pacer.intervalProvider = intervalOf
             adaptivePacer.intervalProvider = intervalOf
-            val cpd = cpdConfig?.let { cfg ->
-                ConstantPlayoutPacer(vsync, cfg, frameIntervalNs).also { it.probe = probe; it.intervalProvider = intervalOf }
-            }
-            st.cpd = cpd
             st.adaptive = adaptivePacer
             live = st
             val gauge = st.gauge
@@ -535,12 +500,9 @@ class VideoRenderer(
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
             // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
             val c = codec
-            val hint = perfHint
             val t = Thread({
                 val outInfo = DecoderCodec.OutputInfo()
                 var loggedFormat = false
-                val outTid = env.myTid()
-                hint?.register(PerfHint.ROLE_OUT, outTid)
                 st.lastOutputNs = System.nanoTime()
                 try {
                     while (st.current) {
@@ -551,7 +513,7 @@ class VideoRenderer(
                         val maxWaitUs = IdleWait.waitNs(now - st.lastOutputNs, OUTPUT_WAIT_US * 1000) / 1000
                         val waitUs = if (untilDeadline == null) maxWaitUs
                         else (untilDeadline / 1000).coerceIn(0, maxWaitUs)
-                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, cpd, sink, releaser, st, waitUs)
+                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, st, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())
                         if (changed && !loggedFormat) {
@@ -562,7 +524,6 @@ class VideoRenderer(
                 } catch (e: Exception) {
                     if (st.running) outError.set(e.javaClass.simpleName)
                 } finally {
-                    hint?.unregister(PerfHint.ROLE_OUT, outTid)
                     handoff.threadExited(att) // T-161: the generation is finished only when this thread is gone too
                 }
             }, "mb-decoder-out")
@@ -583,13 +544,6 @@ class VideoRenderer(
                 val frame = held ?: fromQueue
                 held = null
                 if (frame == null) continue
-                if (!frame.isCodecConfig && !gauge.canQueue(maxInFlight, System.nanoTime())) {
-                    // Decoder occupancy limit (experiment): keep the frame, try again shortly.
-                    if (held == null) gauge.onHeld()
-                    held = frame
-                    java.util.concurrent.locks.LockSupport.parkNanos(1_000_000L)
-                    continue
-                }
                 val idx = inSlot.take(4_000)
                 if (idx < 0) { held = frame; continue }
                 val inbufNs = if (trace != null) System.nanoTime() else 0L
@@ -610,11 +564,7 @@ class VideoRenderer(
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
                 if (!frame.isCodecConfig) progress.onInput(att.gen, env.elapsedRealtimeMs()) // T-159 no-output rule
-                if (trace != null || hint != null) {
-                    val doneNs = System.nanoTime()
-                    trace?.onInput(frame.frameSeq, doneNs, takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
-                    if (!frame.isCodecConfig) hint?.onInput(frame.frameSeq, doneNs) // T-079: recv -> queueInputBuffer
-                }
+                trace?.onInput(frame.frameSeq, System.nanoTime(), takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
             }
             if (att.active) error = outError.get()
         } catch (e: Exception) {
@@ -688,8 +638,7 @@ class VideoRenderer(
     }
 
     /**
-     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay), or
-     * [ConstantPlayoutPacer] when [cpdConfig] is set (T-080);
+     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
      * with [bufferFrames] == 0 only the newest is rendered at once and the skipped ones count as dropped
      * (T-015 behavior). Otherwise each frame gets a vsync slot and render timestamp from its pacer and goes to
      * [releaser]: at most one release per slot, at most one replaceable buffer held back across drains until its
@@ -697,7 +646,7 @@ class VideoRenderer(
      */
     private fun drainOutput(
         codec: DecoderCodec, info: DecoderCodec.OutputInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
-        cpd: ConstantPlayoutPacer?, sink: CodecSink, releaser: SlotReleaser, st: CodecState, firstWaitUs: Long = 0,
+        sink: CodecSink, releaser: SlotReleaser, st: CodecState, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
         val mode = bufferFrames
@@ -739,7 +688,6 @@ class VideoRenderer(
                     val tookBypass = firstOutput.take()
                     val decision = if (tookBypass) null
                     else if (!useAdaptive) pacer.schedule(readyNs)
-                    else if (cpd != null) cpd.schedule(captureUs, readyNs)
                     else adaptivePacer.schedule(captureUs, readyNs)
                     giveBackIfRetired(st, tookBypass)
                     if (decision == null) {

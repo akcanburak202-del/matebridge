@@ -206,13 +206,12 @@ class VsyncIdleTest {
         val bypass = FirstOutputBypass()
         val adaptive = AdaptivePacer(clk, period)
         val fixed = FramePacer(clk, 1, period)
-        val cpd = ConstantPlayoutPacer(clk, CpdConfig(), period)
         var vs = 0L
         gate.start(0)
         for (k in 0 until 30) { vs += period; clk.onVsync(vs); gate.onActivity(vs); assertTrue(gate.onVsync(vs)) }
         while (true) { vs += period; clk.onVsync(vs); if (!gate.onVsync(vs)) { bypass.arm(); clk.reset(); break } }
 
-        for (case in 0 until 3) {
+        for (case in 0 until 2) {
             if (case > 0) bypass.arm() // next sleep
             // Input (or the frame's own posted wake) restarts the loop, and a vsync comes before the decoded output.
             val t = vs + (case + 1) * 2_000 * ms
@@ -224,15 +223,13 @@ class VsyncIdleTest {
             // Without the bypass this output would be paced (the clock-only approach would hold it).
             val unbypassed = when (case) {
                 0 -> AdaptivePacer(clk, period).schedule(ready / 1000 - 20_000, ready)
-                1 -> FramePacer(clk, 1, period).schedule(ready)
-                else -> ConstantPlayoutPacer(clk, CpdConfig(), period).schedule(ready / 1000 - 20_000, ready)
+                else -> FramePacer(clk, 1, period).schedule(ready)
             }
             assertNotNull("case $case: paced without the bypass", unbypassed)
             val first = bypass.schedule {
                 when (case) {
                     0 -> adaptive.schedule(ready / 1000 - 20_000, ready)
-                    1 -> fixed.schedule(ready)
-                    else -> cpd.schedule(ready / 1000 - 20_000, ready)
+                    else -> fixed.schedule(ready)
                 }
             }
             assertNull("case $case: first output after the sleep released at once", first)

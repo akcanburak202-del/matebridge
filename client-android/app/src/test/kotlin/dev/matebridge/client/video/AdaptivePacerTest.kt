@@ -323,12 +323,10 @@ class PresentMeterTest {
 }
 
 class OperatingRateTest {
-    @Test fun policies() {
-        assertEquals(120, OperatingRate.resolve(OperatingRate.STREAM_FPS, 120))
-        assertEquals(Short.MAX_VALUE.toInt(), OperatingRate.resolve(OperatingRate.MAX, 120))
-        assertNull(OperatingRate.resolve(OperatingRate.OFF, 120))
-        assertEquals(90, OperatingRate.resolve(90, 120))
-        assertNull(OperatingRate.resolve(OperatingRate.STREAM_FPS, 0))
+    @Test fun streamFps() {
+        assertEquals(120, OperatingRate.resolve(120))
+        assertEquals(60, OperatingRate.resolve(60))
+        assertNull(OperatingRate.resolve(0))
     }
 
     @Test fun decodeLatencyPercentilesInStats() {
