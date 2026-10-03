@@ -325,3 +325,7 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
  - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
 - `ev=encoder_config` satırındaki `prio_speed=1 idle_refresh=off input_retag=1` T-204'ten beri sabittir (ayarları kaldırıldı). Log ayrıştırıcıları kırılmasın diye kalır.
 - `ev=idle_refresh`, `ev=idle_refresh_copy` ve `ev=idle_refresh_qp` artık çıkmaz.
+
+## Video teslim kapısı (tablet, `MB/session`, T-160)
+
+- `ev=video_gate_open vgen=N config_id=N gated=N` (I): video bağlantısının ilk teslim edilen karesinde bir kez. Kare yalnız açık video bağlantısından gelir, `config_id`'si uygulanan ayara eşittir ve renderer o `StreamConfig` nesnesini kurmuşsa teslim edilir. `gated`: kapının o ana kadar düşürdüğü kare sayısı (geçişte küçük olmalı).
