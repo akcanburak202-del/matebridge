@@ -1,7 +1,7 @@
 ---
 id: T-191
 title: Add "Varsayılanlara dön" (settings + learned audio state; pairing kept)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-185]

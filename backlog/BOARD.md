@@ -20,7 +20,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
 | [T-181](tasks/T-181-palm-before-pen-measurement.md) | Measure palm-before-pen clicks and the touchMajor distribution | 6 | orchestrator | [] |
 | [T-188](tasks/T-188-colour-range-check.md) | Check stream colour, range and chroma fidelity with test patterns | 6 | user | [] |
-| [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
 | [T-192](tasks/T-192-host-settings-reset.md) | Add "Ayarları sıfırla" to the menu (approvals kept) | 6 | mac-host-dev | [T-167, T-189] |
 | [T-193](tasks/T-193-readme-plan-refresh.md) | Rewrite the README to the current state; refresh PLAN status; record the version pair | 6 | orchestrator | [T-145, T-146, T-147] |
 | [T-194](tasks/T-194-soak-8h-week.md) | Run the 8 h soak, then one week of real use, with resource trends | 6 | user | [T-173, T-157, T-164, T-167, T-193] |
@@ -214,6 +213,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-187](tasks/T-187-host-encoder-hw-warning.md) | Warn when VideoToolbox did not select the hardware encoder | 6 | mac-host-dev | [T-204] |
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
+| [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
 | [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
 | [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |
 | [T-206](tasks/T-206-host-files-auto-remount.md) | Remount the tablet files volume after a server restart if it was mounted | 6 | mac-host-dev | [T-190] |

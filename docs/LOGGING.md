@@ -418,3 +418,8 @@ Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) a
   - `W … using_hw=unknown status=<OSStatus>`: özellik okunamadı. `status=` `VTSessionCopyProperty` sonucudur. `0`, çağrının başarılı olduğunu ama boolean değer dönmediğini söyler. Encoder yoksa `-12903` (`kVTInvalidSessionErr`) yazılır. Menüye `kodlayıcı türü bilinmiyor` eklenir.
 - Menü uyarısı o pipeline çalıştığı sürece özet satırında kalır; saniyelik güncelleme onu silmez. Pipeline durunca, bekletilince ya da yenisiyle değişince kalkar.
 - Otomatik geri dönüş ya da yeniden başlatma yoktur; yalnız uyarıdır.
+
+## Tablette ayar sıfırlama (tablet, T-191)
+
+- `ev=settings_reset keys=<n>`: "Varsayılanlara dön" ikinci dokunuşla onaylandı; `n` silinen ayar anahtarı sayısı. Değer yazılmaz. Eşleşme kayıtları, `device_id`, son uç nokta ve `wol_*` korunur.
+- `ev=audio_learned_clear at=reset|stream_start`: öğrenilmiş ses tamponu/güvenlik payı sıfırlandı (sıfırlamada ve sonraki ilk ses akışı başında).
