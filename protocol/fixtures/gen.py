@@ -150,6 +150,21 @@ FIXTURES = {
         field("u8", "matrix", 1, "BT.709"),
         field("u8", "full_range", 1),
     ])),
+    "stream_config_game_display": ("STREAM_CONFIG: game display 1848x1214 px at 1x (pt = px) @120 (decision 0029)", frame("STREAM_CONFIG", [
+        field("u16", "config_id", 2),
+        field("u8", "codec", 2, "HEVC"),
+        field("u8", "reserved", 0),
+        field("u16", "width_px", 1848),
+        field("u16", "height_px", 1214),
+        field("u16", "width_pt", 1848),
+        field("u16", "height_pt", 1214),
+        field("u16", "fps", 120),
+        field("u32", "bitrate_kbps", 60000),
+        field("u8", "color_primaries", 1, "BT.709"),
+        field("u8", "transfer", 13, "sRGB / IEC 61966-2-1"),
+        field("u8", "matrix", 1, "BT.709"),
+        field("u8", "full_range", 1),
+    ])),
     "bye": ("BYE: normal shutdown", frame("BYE", [
         field("u8", "reason", 0, "NORMAL"),
     ])),
@@ -368,6 +383,13 @@ FIXTURES = {
         field("u16", "scale_permille", 1000),
         field("u32", "bitrate_kbps", 40000),
     ])),
+    "stream_prefs_game_display": ("STREAM_PREFS: Oyun 120 with the optional game display group, 1848x1214 px at 1x (decision 0029)", frame("STREAM_PREFS", [
+        field("u16", "fps", 120),
+        field("u16", "scale_permille", 660, "ignored by a new host while display_* is set; old hosts use it"),
+        field("u32", "bitrate_kbps", 60000),
+        field("u16", "display_width_px", 1848),
+        field("u16", "display_height_px", 1214),
+    ])),
     "settings_open": ("SETTINGS_OPEN: Mac menu asks the tablet to show its settings panel", frame("SETTINGS_OPEN", [
         field("u32", "reserved", 0),
     ])),
@@ -451,6 +473,12 @@ FIXTURES = {
         field("u8", "count", 0, "invalid"),
         field("u16", "reserved", 0),
         field("u64", "base_time_us", 0),
+    ])),
+    "invalid_stream_prefs_partial": ("MUST BE REJECTED (PROTOCOL_ERROR): STREAM_PREFS with only part of the optional display group (10 bytes)", frame("STREAM_PREFS", [
+        field("u16", "fps", 120),
+        field("u16", "scale_permille", 660),
+        field("u32", "bitrate_kbps", 60000),
+        field("u16", "display_width_px", 1848, "display_height_px missing"),
     ])),
     "invalid_key_short": ("MUST BE REJECTED (PROTOCOL_ERROR): KEY payload shorter than 16 bytes", frame("KEY", [
         field("u64", "time_us", 0),
