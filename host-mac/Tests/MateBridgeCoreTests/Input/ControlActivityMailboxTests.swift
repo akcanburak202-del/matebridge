@@ -12,12 +12,16 @@ private func macDefaults() -> InputStateMachine.Configuration {
     return c
 }
 
-/// The Host's input side, 1 ms at a time: notes land in the mailbox; the timer (at `nextDeadline`) and the 1 s poll
-/// hand the mailbox off to the machine before ticking it; a gap wake-up runs at once.
+/// The Host's input side, 1 ms at a time, with a real one-shot timer: it is armed only where `InputController` re-arms
+/// it (after every entry point), at `nextDeadline`, and the re-arm tells the mailbox whether the repeat is parked. The
+/// timer and the 1 s poll hand the mailbox off before ticking; a requested wake-up runs when asked (`InputController`
+/// queues it: there it runs right after the current entry point, which is the same here because notes only come
+/// between entry points).
 private struct MailboxHost {
     var d: Driver
     var mailbox: ControlActivityMailbox
     var nextPoll: UInt64
+    var timerAt: UInt64?
     var lastNote: UInt64?
     var repeatTimes: [UInt64] = []
     var wakes = 0
@@ -30,26 +34,40 @@ private struct MailboxHost {
         nextPoll = d.now + 1_000 * msec
     }
 
-    /// A record of the active session at the current time, after it was handled.
-    mutating func note() {
-        if mailbox.note(d.now) {
-            wakes += 1
-            if let h = mailbox.takeForWake() { d.machine.noteControlActivity(h) }
-        }
-        lastNote = d.now
+    /// `InputController.rearmWatchdog`.
+    mutating func rearm() {
+        timerAt = d.machine.nextDeadline(now: d.now)
+        if mailbox.setRepeatParked(d.machine.isKeyRepeatPaused(at: d.now)) { wake() }
+    }
+
+    mutating func wake() {
+        wakes += 1
+        if let h = mailbox.takeForWake() { d.machine.noteControlActivity(h) }
+        rearm()
+    }
+
+    /// A record of the active session received at `time` (default: now), noted after it was handled.
+    mutating func note(receivedAt time: UInt64? = nil) {
+        let t = time ?? d.now
+        if mailbox.note(t) { wake() }
+        lastNote = t
     }
 
     mutating func handOff() {
         if let h = mailbox.take() { d.machine.noteControlActivity(h) }
     }
 
-    /// A delivered message: hand-off first, then the message, then its own note.
+    /// A delivered message received now: hand-off first, then the message; handling takes `processing`, then the
+    /// re-arm, then the session queue notes the record's receive time.
     @discardableResult
-    mutating func deliver(_ message: Message) -> [InjectAction] {
+    mutating func deliver(_ message: Message, processing: UInt64 = 0) -> [InjectAction] {
+        let receivedAt = d.now
         handOff()
         let out = d.machine.handle(message, now: d.now)
         record(out)
-        note()
+        d.now += processing
+        rearm()
+        note(receivedAt: receivedAt)
         return out
     }
 
@@ -68,12 +86,13 @@ private struct MailboxHost {
         while d.now < end {
             d.now += 1 * msec
             if let every = noteEvery, d.now % every == 0 { note() }
-            let timerDue = d.machine.nextDeadline(now: d.now).map { d.now >= $0 } ?? false
+            let timerDue = timerAt.map { d.now >= $0 } ?? false
             let pollDue = d.now >= nextPoll
             if pollDue { nextPoll += 1_000 * msec }
             if timerDue || pollDue {
                 handOff()
                 record(d.machine.tick(now: d.now))
+                rearm()
             }
         }
     }
@@ -194,5 +213,49 @@ struct ControlActivityMailboxTests {
         #expect(!resumed)
         #expect(d.machine.lastControlActivity == d.now)
         #expect(d.machine.nextDeadline(now: d.now) == nil)
+    }
+
+    @Test("MBOX-7 a record just under the pause, handled while the threshold passes, does not leave the timer disarmed")
+    func mbox7_processingStraddlesThreshold() {
+        var h = MailboxHost(configuration: macDefaults())
+        h.note()  // activity at T0
+        let t0 = h.d.now
+        h.nextPoll = t0 + 500 * msec
+        h.run(for: 599 * msec, noteEvery: nil)  // the poll at +500 hands off T0 and re-arms (nothing armed yet)
+        // KEY DOWN received at +599 (599 ms gap: no stall), its handling ends at +604: the re-arm sees the activity
+        // from before it (604 ms old), finds the new repeat paused and leaves it without a timer.
+        h.deliver(keyDown(Scan.a), processing: 5 * msec)
+        #expect(h.wakes == 1)  // the record's own note (599 ms gap) wakes the parked repeat
+        #expect(h.timerAt == t0 + 1_099 * msec)
+        h.run(for: 96 * msec, noteEvery: nil)
+        h.note()  // PING at +700
+        h.run(for: 450 * msec, noteEvery: nil)  // to +1150
+        #expect(h.repeatTimes == [t0 + 1_099 * msec])  // on time, not at the +1500 poll
+        #expect(h.staleRepeats.isEmpty)
+    }
+
+    @Test("MBOX-8 parked repeat: a waiting note wakes once; no wake without a note or while one is outstanding")
+    func mbox8_parkedWakes() {
+        var m = ControlActivityMailbox(stallGapUs: 600 * msec)
+        _ = m.note(0)
+        _ = m.take()
+        let parkedNothingWaiting = m.setRepeatParked(true)
+        #expect(!parkedNothingWaiting)
+        let noteWhileParked = m.note(100 * msec)  // no gap, but the repeat has no timer
+        #expect(noteWhileParked)
+        let second = m.note(200 * msec)
+        #expect(!second)  // one wake-up outstanding at most
+        #expect(m.takeForWake() == ControlActivityHandoff(latest: 200 * msec, resumedAt: nil))
+        let unparked = m.setRepeatParked(false)
+        #expect(!unparked)
+        let notParked = m.note(300 * msec)
+        #expect(!notParked)
+        // Parked while a note is waiting (a note landed between a hand-off and the re-arm): wake at once.
+        let parkedWithWaiting = m.setRepeatParked(true)
+        #expect(parkedWithWaiting)
+        let blocked = m.setRepeatParked(true)
+        #expect(!blocked)
+        m.reset()
+        #expect(!m.repeatParked && !m.hasUntaken)
     }
 }

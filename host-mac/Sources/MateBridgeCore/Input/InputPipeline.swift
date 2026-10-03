@@ -145,6 +145,11 @@ public struct InputPipeline: Sendable {
         machine?.noteControlActivity(handoff) ?? false
     }
 
+    /// True while the current session's key repeat is armed but paused by a silent control connection (T-163).
+    public func isKeyRepeatPaused(at now: UInt64) -> Bool {
+        machine?.isKeyRepeatPaused(at: now) ?? false
+    }
+
     /// When the next watchdog is due (see `InputStateMachine.nextDeadline(now:)`, which mutates for the same reason).
     public mutating func nextDeadline(now: UInt64) -> UInt64? {
         machine?.nextDeadline(now: now)
@@ -302,8 +307,15 @@ public struct ControlActivityHandoff: Equatable, Sendable {
 /// records that arrived on time never look like a stall however rarely the input queue takes them, and a real gap is
 /// never lost however many notes follow it before the next hand-off.
 ///
-/// Wake-ups are bounded: `note` asks for one only on a gap and only while none is outstanding; the outstanding one is
-/// cleared by `takeForWake()`, the wake-up's own hand-off, so at most one is ever queued.
+/// Wake-ups. The input queue disarms its repeat timer whenever the machine looks paused when it re-arms
+/// (`setRepeatParked`). That can be a REAL stall, or only the input queue's view lagging the session queue: a record
+/// arriving just under the stall pause after the previous one, handled while the threshold passes, is re-armed with the
+/// activity from before it and is noted only afterwards. So a wake-up is asked for on a gap AND on any note while the
+/// repeat is parked, and also when the repeat gets parked while a note is waiting to be taken. The machine itself only
+/// resumes (and moves the next repeat) on a real gap; a wake-up without one just lets the timer see the newest time.
+///
+/// Wake-ups are bounded: at most one is outstanding (`wakePending`); only `takeForWake()`, the wake-up's own hand-off,
+/// clears it, so at most one is ever queued however long the input queue is blocked.
 public struct ControlActivityMailbox: Sendable {
     /// A gap longer than this between two notes is a stall (`InputStateMachine.Configuration.keyRepeatStallPauseUs`).
     public let stallGapUs: UInt64
@@ -312,31 +324,46 @@ public struct ControlActivityMailbox: Sendable {
     public private(set) var resumedAt: UInt64?
     /// A wake-up was requested and has not run yet.
     public private(set) var wakePending = false
+    /// The input queue's last re-arm found an armed repeat paused, so its timer is not waiting for it.
+    public private(set) var repeatParked = false
+    /// Something was noted since the last hand-off.
+    public private(set) var hasUntaken = false
 
     public init(stallGapUs: UInt64) {
         self.stallGapUs = stallGapUs
     }
 
     /// One record of the active session at `time`, after it was handled. Returns true when the caller must schedule a
-    /// wake-up of the input queue (a gap may have ended a pause whose repeat has no timer); false otherwise, including
-    /// while a wake-up is already outstanding (it will take this gap too). A clock that went backwards is no gap.
+    /// wake-up of the input queue: after a gap (it may have ended a pause whose repeat has no timer) or while the
+    /// repeat is parked; false otherwise, including while a wake-up is already outstanding (it takes this note too).
+    /// A clock that went backwards is no gap.
     public mutating func note(_ time: UInt64) -> Bool {
         defer { latest = time }
-        guard let previous = latest, time > previous, time - previous > stallGapUs else { return false }
-        resumedAt = time
-        guard !wakePending else { return false }
-        wakePending = true
-        return true
+        hasUntaken = true
+        var gap = false
+        if let previous = latest, time > previous, time - previous > stallGapUs {
+            resumedAt = time
+            gap = true
+        }
+        return requestWake(if: gap || repeatParked)
+    }
+
+    /// The input queue re-armed its timer; `parked` is whether an armed repeat was paused then (no timer for it).
+    /// Returns true when the caller must schedule a wake-up: the repeat got parked while a newer note is waiting.
+    public mutating func setRepeatParked(_ parked: Bool) -> Bool {
+        repeatParked = parked
+        return requestWake(if: parked && hasUntaken)
     }
 
     /// The activity for the machine (nil when nothing was noted since the session started). Clears the gap.
     public mutating func take() -> ControlActivityHandoff? {
+        hasUntaken = false
         guard let latest else { return nil }
         defer { resumedAt = nil }
         return ControlActivityHandoff(latest: latest, resumedAt: resumedAt)
     }
 
-    /// The scheduled wake-up's hand-off: also clears the outstanding wake-up, so the next gap may ask for a new one.
+    /// The scheduled wake-up's hand-off: also clears the outstanding wake-up, so a later note may ask for a new one.
     public mutating func takeForWake() -> ControlActivityHandoff? {
         wakePending = false
         return take()
@@ -347,5 +374,13 @@ public struct ControlActivityMailbox: Sendable {
     public mutating func reset() {
         latest = nil
         resumedAt = nil
+        repeatParked = false
+        hasUntaken = false
+    }
+
+    private mutating func requestWake(if needed: Bool) -> Bool {
+        guard needed, !wakePending else { return false }
+        wakePending = true
+        return true
     }
 }

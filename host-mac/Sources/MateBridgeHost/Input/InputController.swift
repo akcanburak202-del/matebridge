@@ -21,9 +21,9 @@ import MateBridgeCore
 /// runs for every record of the active session's control connection, PING included. It notes the time in a
 /// `ControlActivityMailbox` under a lock, and every queue entry point hands the mailbox's coalesced activity to the
 /// pipeline first, so a delivered message is checked against the activity from before it (`SessionServer` notes a
-/// record after delivering it). The mailbox measures gaps between consecutive records, not between hand-offs. Only a
-/// gap longer than the repeat stall pause, which may have ended a pause whose repeat has no timer, costs a
-/// `queue.async` wake-up, and at most one is ever outstanding.
+/// record after delivering it). The mailbox measures gaps between consecutive records, not between hand-offs. A
+/// `queue.async` wake-up happens only after a gap longer than the repeat stall pause, or when a re-arm left a paused
+/// repeat without a timer while newer activity is (or becomes) waiting; at most one is ever outstanding.
 ///
 /// Logging (docs/LOGGING.md): component `input`, counts and state changes only, never coordinates or keys.
 public final class InputController: @unchecked Sendable {
@@ -226,9 +226,13 @@ public final class InputController: @unchecked Sendable {
         activityLock.lock()
         let wake = activityMailbox.note(time)
         activityLock.unlock()
-        guard wake else { return }
-        // A long silence just ended: a paused repeat (which had no timer) may resume. Rare, never on a steady stream,
-        // and bounded: the mailbox asks again only after this closure has taken its hand-off.
+        if wake { scheduleActivityWake() }
+    }
+
+    /// The mailbox asked for a wake-up: a gap ended (a paused repeat, which had no timer, may resume), or the repeat
+    /// timer was left disarmed while newer activity is waiting. Rare, never on a steady stream, and bounded: the
+    /// mailbox asks again only after this closure has taken its hand-off.
+    private func scheduleActivityWake() {
         queue.async { [weak self] in
             guard let self else { return }
             activityLock.lock()
@@ -397,6 +401,13 @@ public final class InputController: @unchecked Sendable {
         if lastStatus?.accessibilityTrusted == true, let retry = pipeline.nextOwedRetry {
             next = Swift.min(next ?? retry, retry)
         }
+        // T-163: a repeat paused right now has no deadline. Tell the mailbox, so that activity it holds (or gets next)
+        // wakes the queue and re-arms, instead of waiting for the next poll.
+        let parked = pipeline.isKeyRepeatPaused(at: now)
+        activityLock.lock()
+        let wake = activityMailbox.setRepeatParked(parked)
+        activityLock.unlock()
+        if wake { scheduleActivityWake() }
         guard let due = next else {
             watchdogTimer.schedule(deadline: .distantFuture)
             return
