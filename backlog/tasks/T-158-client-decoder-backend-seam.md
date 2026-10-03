@@ -1,7 +1,7 @@
 ---
 id: T-158
 title: Put MediaCodec behind a DecoderCodec interface (no behaviour change)
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -50,13 +50,13 @@ Orchestrator note (2026-10-03): `build.gradle.kts` was added to `files:` so the 
 
 ## Kabul kriterleri
 
-- [ ] [JVM] `DecoderCodec` interface plus a `MediaCodec` adapter exist; `VideoRenderer` no longer references `MediaCodec` instance methods except through the adapter (a `grep` in Handoff shows it).
-- [ ] [JVM] With `FakeDecoderCodec`, a test drives `runCodec`/`decodeAttempts` through 4 failing creates and observes today's behaviour: 3 restarts, then `ev=give_up` and exactly one `onGiveUp` call, `attached` still true.
-- [ ] [JVM] With the fake, a test documents today's hand-off ordering: a new attachment's decoder thread does not start a codec until the previous decoder thread exits (`previous.join` with no timeout). The test uses latches and finishes; it must not hang the suite (release the latch in `finally`).
-- [ ] [JVM] A fake in "silent" mode (input accepted, no output ever) runs without `decode_error`, which documents the T-028 no-output case the review missed.
-- [ ] No behaviour change: existing video tests pass unchanged; log lines (`codec_start`, `codec_stop`, `decode_error`, `give_up`, `detach_slow`) keep their fields.
+- [x] [JVM] `DecoderCodec` interface plus a `MediaCodec` adapter exist; `VideoRenderer` no longer references `MediaCodec` instance methods except through the adapter (a `grep` in Handoff shows it).
+- [x] [JVM] With `FakeDecoderCodec`, a test drives `runCodec`/`decodeAttempts` through 4 failing creates and observes today's behaviour: 3 restarts, then `ev=give_up` and exactly one `onGiveUp` call, `attached` still true.
+- [x] [JVM] With the fake, a test documents today's hand-off ordering: a new attachment's decoder thread does not start a codec until the previous decoder thread exits (`previous.join` with no timeout). The test uses latches and finishes; it must not hang the suite (release the latch in `finally`).
+- [x] [JVM] A fake in "silent" mode (input accepted, no output ever) runs without `decode_error`, which documents the T-028 no-output case the review missed.
+- [x] No behaviour change: existing video tests pass unchanged; log lines (`codec_start`, `codec_stop`, `decode_error`, `give_up`, `detach_slow`) keep their fields.
 - [ ] [device] Smoke on the tablet: connect over USB, 10 mode changes (Netlik ↔ Akıcı ↔ Oyun 60), background/foreground twice. Image after each change, no `decode_error`, `codec_start` line unchanged (same `name=`, `low_latency=`).
-- [ ] `./scripts/check.sh` geçiyor.
+- [x] `./scripts/check.sh` geçiyor.
 
 ## Plan
 
@@ -91,10 +91,47 @@ the same order; the `BufferInfo` copy adds two field writes per dequeue (negligi
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `915354b` (implementation; plan in `42cfbdf`). Branch `task/T-158-client-decoder-backend-seam`.
 - **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderCodec.kt` (new: `DecoderCodec`, `DecoderFormat`,
+    `MediaCodecDecoder` adapter, `DecoderEnv`, `AndroidDecoderEnv`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt`
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/FakeDecoderCodec.kt` (new: `FakeDecoderFactory`,
+    `TestDecoderEnv`)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/video/DecoderLifecycleTest.kt` (new, 4 tests)
+  - `build.gradle.kts` not touched (no `isReturnDefaultValues` needed). `MainActivity` unchanged.
+- **grep (acceptance 1):** `grep -n "MediaCodec\|android\." VideoRenderer.kt` shows only `import android.media.MediaFormat`
+  (compile-time `KEY_*` / `MIMETYPE_*` constants, inlined), `import android.view.Surface` (public `attachSurface`
+  signature), the class KDoc, and the default `codecFactory = MediaCodecDecoder.FACTORY`. No `MediaCodec` instance call,
+  no `SystemClock` / `Log` / `Build` / `Process` / `Handler` left in the file.
+- **Tests (`DecoderLifecycleTest`, real `mb-decoder` / `mb-decoder-out` threads, monitor/latch waits only):**
+  - 4 failing creates → 4 `decode_error err=IOException`, 3 `KEYFRAME_REQUEST(DECODE_ERROR)`, one `give_up`, one
+    `onGiveUp`, 4 `codec_stop`, `attached == true`.
+  - Hand-off: old thread blocked in `stop()` → no `create#2` for 700 ms (> `JOIN_MS` and the 500 ms out-thread join);
+    after the gate opens the exact order is `create#1 configure#1 start#1 stop#1 release#1 create#2 …`. Gates are opened
+    in `finally` and in `@After`.
+  - Silent codec: 31 inputs accepted, output thread polls try-again-later ≥ 20 more times → no `decode_error`, no
+    `give_up`, one codec.
+  - `codec_start` line fields (`name= mime= size= low_latency= requested_rate= accepted priority= operating_rate=
+    low_latency_fmt=`) and `codecInfo` text.
+  - Ran 6× with `--rerun`, all green (~0.9 s per run). `./scripts/check.sh`: ALL OK.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
-- **Açık sorular:**
+  - `MediaFormat.createVideoFormat` now runs inside the adapter's `configure` (after `createDecoderByType` instead of
+    before); it has no side effects. Integer keys are applied in the same order, `KEY_LOW_LATENCY` last as before.
+  - The adapter keeps one `MediaCodec.BufferInfo` per codec and copies `presentationTimeUs` / `flags` into
+    `DecoderCodec.OutputInfo` after each `dequeueOutputBuffer` (only the output thread calls it, as before).
+  - The rendered-frame listener's main-looper `Handler` is created in the adapter, still once per codec start.
+  - `DecoderCodec.INFO_TRY_AGAIN_LATER` is exposed in addition to the two constants the renderer uses, for the fake only.
+  - The fake's `dequeueOutputBuffer` parks for its timeout (stands in for a real blocking dequeue); that is not a test
+    sleep.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** nothing ran on the tablet. Orchestrator smoke (acceptance [device]):
+  1. USB connect; first image appears; `adb logcat -s 'MB:*'` → `MB/decoder ev=codec_start` has the same `name=` (the
+     HiSilicon HEVC decoder) and `low_latency=` value as on `main`, and `accepted priority=… operating_rate=…
+     low_latency_fmt=…` unchanged.
+  2. 10 mode changes (Netlik ↔ Akıcı ↔ Oyun 60): image after each, one `codec_stop` + `codec_start` pair per change, no
+     `decode_error`, no `detach_slow`.
+  3. Background / foreground twice: image comes back each time, no `decode_error`.
+  4. Pacing unchanged: `MB/render ev=present` and `ev=stats` lines look as before (shown-time stats still populated, i.e.
+     the frame-rendered listener still fires on the SurfaceView path).
+- **Açık sorular:** none. Note for T-159/T-161: `FakeDecoderFactory` has no "produces output" mode yet (the frozen-image
+  test will need one: return an output index + `OutputInfo` per queued input); add it there.
