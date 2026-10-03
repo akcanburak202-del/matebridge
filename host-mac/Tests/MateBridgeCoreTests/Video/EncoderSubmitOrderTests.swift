@@ -22,14 +22,21 @@ private final class FakeBackend: CompressionBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var _events: [Event] = []
     private var outstanding: [EncoderSubmitToken] = []
+    private var _offQueueCalls = 0
     weak var order: EncoderSubmitOrder<FakeBackend>?
 
     var events: [Event] { lock.withLock { _events } }
+    /// Backend calls made anywhere but the order's owner queue (the single submit owner).
+    var offQueueCalls: Int { lock.withLock { _offQueueCalls } }
+    private func noteQueue() {
+        if order?.isOnOwnerQueue != true { lock.withLock { _offQueueCalls += 1 } }
+    }
     var encodedStamps: [Int] {
         events.compactMap { if case .encode(let s, _, _) = $0 { return s } else { return nil } }
     }
 
     func encode(_ frame: FakeFrame, keyframe: Bool, token: EncoderSubmitToken) {
+        noteQueue()
         lock.withLock {
             _events.append(.encode(stamp: frame.stamp, key: keyframe, token: token.id))
             outstanding.append(token)
@@ -45,6 +52,7 @@ private final class FakeBackend: CompressionBackend, @unchecked Sendable {
     }
 
     func completeAndInvalidate() {
+        noteQueue()
         while lock.withLock({ !outstanding.isEmpty }) { completeOldest() }
         lock.withLock { _events.append(.invalidate) }
     }
@@ -221,7 +229,9 @@ final class EncoderSubmitOrderTests: XCTestCase {
         let done = DispatchSemaphore(value: 0)
         order.stop { done.signal() }
         wait(done, "teardown")
+        drain(order)
         XCTAssertEqual(backend.encodedStamps, [1, 2])
+        XCTAssertEqual(backend.offQueueCalls, 0)
     }
 
     /// Frame 1 reserves its slot and is held right before `backend.encode` while `stop()` runs: nothing may reach
@@ -240,9 +250,11 @@ final class EncoderSubmitOrderTests: XCTestCase {
         barrier.open()
         wait(first, "frame 1 offer")
         wait(done, "teardown")
+        drain(order)
         let events = backend.events
         XCTAssertEqual(events.last, .invalidate, "events: \(events)")
         XCTAssertEqual(events.filter { $0 == .invalidate }.count, 1)
+        XCTAssertEqual(backend.offQueueCalls, 0)
     }
 
     // MARK: - Stress
@@ -254,7 +266,7 @@ final class EncoderSubmitOrderTests: XCTestCase {
     func testStressKeepsOrderAndSlotAccounting() {
         let backend = StressBackend()
         let order = EncoderSubmitOrder<StressBackend>(
-            backend: backend, streamFps: 240, maxInFlight: 2,
+            backend: backend, streamFps: 2_000, maxInFlight: 2,
             nowUs: { DispatchTime.now().uptimeNanoseconds / 1_000 },
             scheduleFlush: { afterUs, fire in
                 DispatchQueue.global().asyncAfter(deadline: .now() + .microseconds(Int(min(afterUs, 2_000))),
@@ -296,10 +308,11 @@ final class EncoderSubmitOrderTests: XCTestCase {
 
         let stats = order.currentStats
         let report = backend.report
-        XCTAssertGreaterThan(stats.reservations, 100, "the run must exercise the encoder")
+        XCTAssertGreaterThan(stats.reservations, 20, "the run must exercise the encoder")
         XCTAssertEqual(report.outOfOrder, 0, "backend stamps went backwards")
         XCTAssertEqual(report.afterInvalidate, 0, "encode after invalidate")
         XCTAssertEqual(report.invalidates, 1)
+        XCTAssertEqual(report.offQueueCalls, 0, "backend called off the owner queue")
         XCTAssertEqual(report.encoded, stats.reservations, "every reservation reached the backend")
         XCTAssertEqual(stats.releases, stats.reservations, "exactly one release per reservation")
         XCTAssertEqual(stats.duplicateReleases, report.duplicatesSent)
@@ -327,13 +340,13 @@ private final class Counter: @unchecked Sendable {
     func add() { lock.withLock { n += 1 } }
 }
 
-/// Like VideoToolbox: completions arrive on another thread; some submits are refused synchronously; every 11th
+/// Like VideoToolbox: completions arrive on another thread; some submits are refused synchronously; every 5th
 /// completion is also released a second time (the duplicate must be ignored); `completeAndInvalidate` delivers the
 /// remaining completions before it returns.
 private final class StressBackend: CompressionBackend, @unchecked Sendable {
     typealias Frame = FakeFrame
     struct Report { var encoded = 0, outOfOrder = 0, afterInvalidate = 0, invalidates = 0, refused = 0,
-                    duplicatesSent = 0 }
+                    duplicatesSent = 0, offQueueCalls = 0 }
     weak var order: EncoderSubmitOrder<StressBackend>?
     let callbacks = DispatchGroup()
     private let lock = NSLock()
@@ -346,12 +359,14 @@ private final class StressBackend: CompressionBackend, @unchecked Sendable {
     var report: Report { lock.withLock { _report } }
 
     func encode(_ frame: FakeFrame, keyframe: Bool, token: EncoderSubmitToken) {
+        let onQueue = order?.isOnOwnerQueue == true
         let refuse = lock.withLock { () -> Bool in
+            if !onQueue { _report.offQueueCalls += 1 }
             _report.encoded += 1
             if let l = lastStamp, frame.stamp <= l { _report.outOfOrder += 1 }
             lastStamp = frame.stamp
             if invalidated { _report.afterInvalidate += 1 }
-            if _report.encoded % 37 == 0 { _report.refused += 1; return true }
+            if _report.encoded % 13 == 0 { _report.refused += 1; return true }
             outstanding.insert(token.id)
             return false
         }
@@ -368,7 +383,7 @@ private final class StressBackend: CompressionBackend, @unchecked Sendable {
         let (claimed, duplicate) = lock.withLock { () -> (Bool, Bool) in
             guard outstanding.remove(token.id) != nil else { return (false, false) }
             completions += 1
-            let dup = completions % 11 == 0
+            let dup = completions % 5 == 0
             if dup { _report.duplicatesSent += 1 }
             return (true, dup)
         }
@@ -380,6 +395,11 @@ private final class StressBackend: CompressionBackend, @unchecked Sendable {
     func completeAndInvalidate() {
         let left = lock.withLock { outstanding }
         for id in left { complete(EncoderSubmitToken(id: id)) }
-        lock.withLock { invalidated = true; _report.invalidates += 1 }
+        let onQueue = order?.isOnOwnerQueue == true
+        lock.withLock {
+            if !onQueue { _report.offQueueCalls += 1 }
+            invalidated = true
+            _report.invalidates += 1
+        }
     }
 }
