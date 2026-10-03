@@ -30,13 +30,17 @@ class DecoderTeardownTest {
     private fun make(
         timer: HandoffTimer = HandoffTimer.SYSTEM,
         delaysMs: LongArray = RestartPolicy.DELAYS_MS,
+        previousWaitMs: Long = VideoRenderer.PREVIOUS_WAIT_MS,
+        decoderEnv: DecoderEnv = env,
+        onHealth: (HealthEvent) -> Unit = health::add,
     ) = VideoRenderer(
         config,
         onKeyframeRequest = {},
         codecFactory = factory,
-        env = env,
-        onHealthEvent = health::add,
+        env = decoderEnv,
+        onHealthEvent = onHealth,
         handoffTimer = timer,
+        previousWaitMs = previousWaitMs,
         restartDelaysMs = delaysMs,
     ).also { renderers.add(it) }
 
@@ -189,7 +193,138 @@ class DecoderTeardownTest {
         assertEquals("no restart after the detach", 1, factory.createCalls)
     }
 
+    /** Review P2-1: a codec restart inside one generation must not start while the old output thread is alive. */
+    @Test fun aRestartInsideAGenerationWaitsForItsStragglerAndFaultsStuckInsteadOfOpeningACodec() {
+        val r = make(previousWaitMs = 300, delaysMs = longArrayOf(0))
+        r.attachTarget(Any())
+        assertTrue(env.awaitLines("codec_start"))
+        val gate = CountDownLatch(1)
+        factory.dequeueOutputGate = gate
+        try {
+            assertTrue("output thread not parked", factory.awaitEvent("dequeueOutput#1>"))
+            factory.throwOnDequeueInput = true // the input side fails while the output side hangs in dequeue
+            r.onFrame(frame(0, VideoFrame.CODEC_CONFIG)) // uses the held input buffer; the next dequeue throws
+            assertNotNull("no stuck fault", health.await { it == HealthEvent.Fault(1, FaultCause.STUCK) })
+            assertEquals(1, env.lines("decode_error").size)
+            assertTrue(env.lines("output_straggler").single().contains("ev=output_straggler vgen=1 "))
+            val line = env.lines("decoder_previous_stuck").single()
+            assertTrue(line, line.contains("ev=decoder_previous_stuck vgen=1 prev_vgen=1 waited_ms="))
+            assertTrue(line, line.endsWith(" out_straggler=1"))
+            assertEquals("no second codec while the first one's output thread lives", 1, factory.createCalls)
+            assertNotNull(health.await { it == HealthEvent.Exited(1) })
+            assertFalse(r.feeding)
+        } finally {
+            factory.throwOnDequeueInput = false
+            gate.countDown()
+        }
+        // Once the straggler is gone, the recovery step opens a codec again.
+        r.restartCodec()
+        assertTrue("no codec after the straggler left", factory.awaitEvent("start#2"))
+        assertNotNull(health.await { it == HealthEvent.Running(2) })
+    }
+
+    /**
+     * Review P2-2: generation 2's stuck report is delayed (hook in its log line) until generation 3 has started and
+     * faulted. The stale report must neither re-open feeding for generation 3 nor publish a fault.
+     */
+    @Test fun aStaleStuckReportNeverUnblocksTheNextGenerationsFeeding() {
+        val hooked = HookedEnv(env, "ev=decoder_previous_stuck vgen=2 ")
+        val r = make(previousWaitMs = 1_000, decoderEnv = hooked)
+        val stopGate = CountDownLatch(1)
+        factory.stopGate = stopGate
+        try {
+            r.attachTarget(Any())
+            assertTrue(env.awaitLines("codec_start"))
+            r.reconfigure(config) // generation 2: stuck behind the hung generation 1
+            try {
+                assertTrue("generation 2 never reported stuck", hooked.entered.await(5, TimeUnit.SECONDS))
+                r.reconfigure(config) // generation 3 is fed
+                assertTrue(r.feeding)
+                r.stopFeeding() // generation 3 faults (VideoHealth)
+            } finally {
+                hooked.release.countDown()
+            }
+            assertNotNull(health.await { it == HealthEvent.Exited(2) })
+            assertFalse("a stale stuck report re-opened feeding", r.feeding)
+            assertTrue(health.all.none { it is HealthEvent.Fault && it.gen == 2 })
+        } finally {
+            stopGate.countDown()
+        }
+    }
+
+    /** Review P2-2, other direction: a stale stuck report must not block a healthy next generation. */
+    @Test fun aStaleStuckReportDoesNotBlockAHealthyNextGeneration() {
+        val hooked = HookedEnv(env, "ev=decoder_previous_stuck vgen=2 ")
+        val r = make(previousWaitMs = 1_000, decoderEnv = hooked)
+        val stopGate = CountDownLatch(1)
+        factory.stopGate = stopGate
+        try {
+            r.attachTarget(Any())
+            assertTrue(env.awaitLines("codec_start"))
+            r.reconfigure(config)
+            assertTrue("generation 2 never reported stuck", hooked.entered.await(5, TimeUnit.SECONDS))
+            r.reconfigure(config) // generation 3
+            stopGate.countDown() // generation 1 finishes; generation 3 runs
+            assertNotNull(health.await { it == HealthEvent.Running(3) })
+        } finally {
+            stopGate.countDown()
+            hooked.release.countDown()
+        }
+        assertNotNull(health.await { it == HealthEvent.Exited(2) })
+        assertTrue("a stale stuck report blocked the healthy generation", r.feeding)
+        assertTrue("a stale generation published a fault: ${health.all}", health.all.none { it is HealthEvent.Fault })
+    }
+
+    /**
+     * Review P2-3: the output thread is held *inside* its bookkeeping section (after the "still current?" check, in the
+     * FirstOutput callback, before stats and the first-output bypass). A retire must wait for that section, so the
+     * bypass the UI arms after the retire stays for the next generation.
+     */
+    @Test fun aRetireWaitsForAnOutputSectionInProgressSoTheOldOutputCannotTakeTheNextBypass() {
+        factory.produceOutput = true
+        val inSection = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val r = make(onHealth = { e ->
+            health.add(e)
+            if (e == HealthEvent.FirstOutput(1)) { inSection.countDown(); release.await(10, TimeUnit.SECONDS) }
+        })
+        r.attachTarget(Any())
+        assertTrue(env.awaitLines("codec_start"))
+        val retired = CountDownLatch(1)
+        val ui = Thread { r.reconfigure(config); retired.countDown() }
+        try {
+            r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
+            r.onFrame(frame(1, VideoFrame.KEYFRAME))
+            assertTrue("no output section", inSection.await(5, TimeUnit.SECONDS))
+            ui.start()
+            assertFalse("the retire did not wait for the output section in progress",
+                retired.await(300, TimeUnit.MILLISECONDS))
+        } finally {
+            release.countDown()
+        }
+        assertTrue("retire never returned", retired.await(5, TimeUnit.SECONDS))
+        ui.join(5_000)
+        r.firstOutput.arm() // the UI arms the bypass after the retire, for generation 2
+        assertTrue("generation 2 never started", factory.awaitEvent("start#2")) // generation 1 fully finished
+        assertTrue("generation 1's output took generation 2's bypass", r.firstOutput.isArmed)
+        assertEquals("generation 1's output counted once, while current", 1L, r.stats.snapshot().decoded)
+    }
+
     private fun frame(seq: Long, flags: Int) = VideoFrame(seq, seq * 1000, flags, 0, 1, 3, Bytes(byteArrayOf(0, 0, 1)))
+
+    /** [DecoderEnv] that holds the logging thread on the first line containing [match] until [release] opens. */
+    class HookedEnv(private val inner: TestDecoderEnv, private val match: String) : DecoderEnv {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        override fun elapsedRealtimeMs() = inner.elapsedRealtimeMs()
+        override fun elapsedRealtimeNanos() = inner.elapsedRealtimeNanos()
+        override fun myTid() = inner.myTid()
+        override fun setDisplayPriority() = inner.setDisplayPriority()
+        override fun log(level: Char, tag: String, line: String) {
+            inner.log(level, tag, line)
+            if (match in line && entered.count > 0) { entered.countDown(); release.await(10, TimeUnit.SECONDS) }
+        }
+    }
 
     /** Health events in arrival order, with a monitor wait (no sleeps). */
     class HealthEvents {

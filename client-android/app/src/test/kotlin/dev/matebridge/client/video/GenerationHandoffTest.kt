@@ -88,6 +88,21 @@ class GenerationHandoffTest {
         }
     }
 
+    @Test fun awaitOwnThreadsWaitsOnlyForTheGenerationsOtherThreads() {
+        val timer = FakeTimer()
+        val h = GenerationHandoff(timer)
+        val g = generation(h, 1, threads = 2) // the calling decoder thread + a straggler output thread
+        val r = h.acquire(g, 2_000)
+        assertEquals(GenerationHandoff.Result.Ready, r)
+        val stuck = h.awaitOwnThreads(g, 300)
+        assertSame(g, (stuck as GenerationHandoff.Result.Stuck).previous)
+        assertEquals(300L, stuck.waitedMs)
+        h.threadExited(g) // the straggler left
+        assertEquals(GenerationHandoff.Result.Ready, h.awaitOwnThreads(g, 300))
+        h.retire(g)
+        assertEquals(GenerationHandoff.Result.Retired, h.awaitOwnThreads(g, 300))
+    }
+
     @Test fun pauseWaitsItsFullLengthUnlessRetired() {
         val timer = FakeTimer()
         val h = GenerationHandoff(timer)

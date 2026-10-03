@@ -22,6 +22,14 @@ class CodecGeneration(val gen: Int, val surface: Any) {
 
     /** Threads of this generation that have not exited yet; guarded by the [GenerationHandoff] lock. */
     internal var liveThreads = 0
+
+    /**
+     * Review P2-3: guards "is this codec still current?" together with the shared-state updates that depend on it
+     * (stats, first-output bypass, decode progress). [GenerationHandoff.retire] and [CodecState.stop] take it, so an
+     * output that passed the check finishes its bookkeeping before the retire returns, and none starts after. Held only
+     * for bookkeeping, never across a codec call.
+     */
+    internal val sharedLock = Any()
 }
 
 /** T-161: clock and bounded wait of [GenerationHandoff]; tests pass a fake clock. */
@@ -74,10 +82,15 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
         changed.signalAll()
     }
 
-    /** [g] must stop: its waits ([acquire], [pause]) return at once. Any thread. */
-    fun retire(g: CodecGeneration) = lock.withLock {
-        g.active = false
-        changed.signalAll()
+    /**
+     * [g] must stop: its waits ([acquire], [pause], [awaitOwnThreads]) return at once. Any thread. Waits for an output
+     * bookkeeping section of [g] in progress (see [CodecGeneration.sharedLock]).
+     */
+    fun retire(g: CodecGeneration) = synchronized(g.sharedLock) {
+        lock.withLock {
+            g.active = false
+            changed.signalAll()
+        }
     }
 
     fun isFinished(g: CodecGeneration): Boolean = lock.withLock { g.liveThreads <= 0 }
@@ -107,6 +120,26 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
         }
     }
 
+    /**
+     * Review P2-1: on [g]'s decoder thread between two codecs of the same generation: waits until [g]'s other threads
+     * (an output thread that outlived its codec) have exited, at most [timeoutMs]. [Result.Stuck] names [g] itself:
+     * no further codec may be created, so at most one straggler exists at a time.
+     */
+    fun awaitOwnThreads(g: CodecGeneration, timeoutMs: Long): Result = lock.withLock {
+        val startMs = timer.nowMs()
+        var result: Result? = null
+        while (result == null) {
+            val elapsed = timer.nowMs() - startMs
+            result = when {
+                !g.active -> Result.Retired
+                g.liveThreads <= 1 -> Result.Ready // only the calling decoder thread
+                elapsed >= timeoutMs -> Result.Stuck(g, elapsed)
+                else -> { timer.await(changed, timeoutMs - elapsed); null }
+            }
+        }
+        result
+    }
+
     /** Restart backoff on [g]'s decoder thread: waits [ms] unless [g] is retired first. Returns [g]'s `active`. */
     fun pause(g: CodecGeneration, ms: Long): Boolean = lock.withLock {
         val startMs = timer.nowMs()
@@ -131,7 +164,20 @@ internal class CodecState(val generation: CodecGeneration, ptsMapMax: Int) {
     /** The codec is the live one: its run has not ended and its generation is not retired. */
     val current: Boolean get() = running && generation.active
 
+    /** The codec's run ended (decoder thread); waits for an output bookkeeping section in progress. */
+    fun stop() = synchronized(generation.sharedLock) { running = false }
+
+    /**
+     * Runs [block] (shared-state bookkeeping, no codec calls) only while the codec is current, atomically with that
+     * check: a retire or [stop] waits for it. Returns false when the codec is no longer current.
+     */
+    inline fun ifCurrent(block: () -> Unit): Boolean = synchronized(generation.sharedLock) {
+        if (!current) false else { block(); true }
+    }
+
     val gauge = InFlightGauge()
+    /** Review P2-3: presentation counters of this codec ([VideoRenderer.logPresent] reads the live codec's). */
+    val counters = PresentCounters()
     /** frameSeq (codec pts) -> host capture time (us). */
     val captureByPts = PtsMap(ptsMapMax)
     /** frameSeq (codec pts) -> time the decoded frame became ready (ns, System.nanoTime). */
