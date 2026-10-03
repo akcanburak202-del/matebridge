@@ -1,7 +1,7 @@
 ---
 id: T-171
 title: Measure input age at injection through host PING (diagnostics only)
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-152, T-163]
@@ -88,10 +88,37 @@ Risks: existing session tests compare exact `tick` output (adjust within `Tests/
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `dd6c281` (implementation, tests, LOGGING), plan in `4081a53`, branch `task/T-171-host-input-age-ping`.
+- **Dokunulan dosyalar:** new `Core/Input/InputAge.swift`, `Core/Session/SessionMachine.swift`, `MateBridgeHost/Input/InputController.swift`, `MateBridgeHost/Session/SessionServer.swift`, new `Tests/MateBridgeCoreTests/Input/InputAgeTests.swift` (EST-1..6, AGE-1..4, HIST-1..3, REP-1..3), new `Tests/MateBridgeCoreTests/Session/HostPingTests.swift` (PING-1..7, PONG-1..4), `docs/LOGGING.md` (new section "Girdi yaşı"). `main.swift` was not touched.
+- **Ne yapıldı:**
+  - Core `InputAge.swift`:
+    - `ClockOffsetEstimator`: ring of 8. `rtt = recv − echo`, `offset = responder − (echo + rtt/2)` (client − host). The min-RTT sample wins, and `rtt < 0` is ignored.
+    - `AgeHistogram`: 449 buckets per sign, 16 sub-buckets per power of two, ≤ 6.25 % error, overflow above 2^31 µs, a mirror set for negatives and an exact `max`. Allocated once; recording and `reset` never allocate.
+    - `InputAgeTracker`: classes pen (per sample) / pointer (REL+ABS) / key / scroll (SCROLL+PINCH). It counts `late_250ms`, `neg` and `no_offset`, keeps a 1 s window (`takeReport`) and session totals (`sessionFields`, `age_` prefix plus `age_pongs`).
+    - All client-supplied arithmetic wraps, so hostile values never trap (EST-6).
+  - `SessionMachine`:
+    - `Configuration.hostPingIntervalUs` (nil in Core), `defaultHostPingIntervalUs = 500_000`, `maxOutstandingPings = 4`.
+    - `start()` arms the per-connection PING state, so it only exists after ACCEPTED and activation (T-152 proof / pairing persisted).
+    - The `.active` branch of `tick` sends `PING(seq, now)` when due: the first tick after activation, then every 500 ms, at most one per tick, none in the tick that ends the session.
+    - On the active connection, a PONG with an outstanding seq **and** the matching echo becomes `.deliver(id, .pong)` and clears that PING and every older one. Any other PONG (unknown seq, wrong echo, another or a pending connection) is ignored, as before.
+  - `SessionServer` sets the interval to 500 ms. Routing reuses `.deliver` → `handlers.deliver` → `input.deliver`; the coordinator, clipboard and files consumers ignore PONG.
+  - `InputController`:
+    - `deliver(.pong)` takes the time before the queue hop and feeds the estimator.
+    - Input messages are recorded with the `now` that `deliver` already takes, **after** `pipeline.handle`. The age is never read by the input path.
+    - `ev=input_age` is written from `deliver` and from the 1 s poll. At session end the half window is written and the totals are appended to `input_session_end`.
+    - `sessionStarted` resets the tracker.
 - **Varsayımlar:**
+  - The PING default is **off** in Core `SessionMachine.Configuration` and on in `SessionServer`. With it on in Core, five existing tests that compare whole `tick` results would break, one of them outside `files:` (`Tests/.../Crypto/KeychainAsyncTests.swift`). HostPingTests turn it on explicitly; PING-3 pins the default.
+  - The card says "XCTest"; the project's tests use Swift Testing, so the new tests do too.
+  - Age is measured at delivery on the input queue (queue wait included), not at the session-queue decode.
+  - PEN_GESTURE is not aged (not in the card's class list).
+  - The window for `ev=input_age` opens with the first sample, including `no_offset` samples, so input before the first PONG is visible as `no_offset`.
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - No device test. Not run: the app, a real tablet, CGEvent posting.
+  - That the client answers a host PING with a PONG on its `nanoTime/1000` clock (from code reading only, client `SessionMachine.kt:280`). On the device, look for `input_age` lines with `offset_rtt_us` ≠ `none`, and `age_pongs` > 0 in `input_session_end`.
+  - USB pen drawing: pen p50 a few ms, `late_250ms=0`, `neg` ≈ 0. A large `neg` would mean the time bases differ (eventTime vs nanoTime) or the offset is wrong.
+  - Wi-Fi: the same 60 s workload. Record p50/p95/p99/max per class plus `offset_rtt_us` in NOTES with build IDs.
+  - Check that the host PING does not disturb the client: no change in heartbeat, the video/audio path or client logs.
 - **Açık sorular:**
+  - PROTOCOL §6, one sentence for the orchestrator: "Host, kabul edilip etkinleşmiş (ACCEPTED + ilk doğrulanmış kayıt) kontrol bağlantısına 500 ms'de bir PING gönderir; PONG'u yalnız kendi tanı amaçlı saat farkı tahmini için kullanır (girdi yaşı, T-171), davranış buna bağlı değildir."
+  - Codex review (`./scripts/codex-review.sh main task/T-171-host-input-age-ping`) is required by the card and has not been run (orchestrator).
