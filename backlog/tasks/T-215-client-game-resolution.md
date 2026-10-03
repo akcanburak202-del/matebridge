@@ -1,7 +1,7 @@
 ---
 id: T-215
 title: Client: "Oyun çözünürlüğü" setting and game display prefs (decision 0029)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-213]
@@ -45,7 +45,14 @@ Karar 0029: tablette kalıcı bir "Oyun çözünürlüğü" ayarı (1400×920 ·
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `stream/GameResolution.kt`: enum `R1400(1400×920)`, `R1848(1848×1214)`, `R2100(2100×1380)`; `id` = `"<w>x<h>"`, `label` = `"<w>×<h>"`; `DEFAULT = R1848`; `parse()` bilinmeyende varsayılan.
+2. `Settings.kt`: `KEY_GAME_RESOLUTION = "game_resolution"`, `gameResolution()/setGameResolution()`, `USER_KEYS`'e ekle.
+3. `DevKnobs.kt`: debug-only `Spec("game_display", INT)`; `gameDisplay: Boolean` (yalnız `dev` ile ve değer 0 → false). `StreamProfile`'a `display` alanı: `display=<w>x<h>|native` (`scale_permille`'den sonra) ve istenmişse `display_applied=0|1` (`width_pt == display_width_px`).
+4. `GameMode.kt`: `GameModeSettings(settings, gameDisplay = true)`; `display(mode): GameResolution?` (oyun modu ve `gameDisplay` iken ayar, yoksa null); `prefs(mode)` oyun modunda `StreamPrefs(fps, scale, bitrate, w, h)`, diğerlerinde `mode.toPrefs(bitrate)` (bugünkü baytlar); `selectGameResolution(r, mode): StreamPrefs?` saklar, yalnız oyun modunda (ve `gameDisplay`) gönderilecek tam prefs döner.
+5. `StreamMode.kt`: `toastText(display: GameResolution? = null)` oyun boyutunu gösterir; `VideoLayout.surfaceSize(rootW, rootH, config): Pair<Int,Int>?` — null = MATCH_PARENT (config yok/boş kök, ya da sığdırılan dikdörtgen kökten iki eksende ≤ 2 px farklı).
+6. `SettingsCatalog.kt`: `SettingsHost.gameResolution/selectGameResolution`; "Görüntü"de `stream_mode`'dan sonra Choice `game_resolution` "Oyun çözünürlüğü".
+7. `MainActivity.kt`: `GameModeSettings(settings, devKnobs.gameDisplay)`; settingsHost uygulaması; toast ve `ev=profile` alanı; `layoutVideo()` `surfaceSize` kullanır.
+8. JVM testleri (GameModeTest, StreamModeTest, SettingsCatalogTest, SettingsResetTest, DevKnobsTest, yeni GameResolutionTest), `docs/KNOBS.md` satırı. `docs/LOGGING.md` listede yok → `display=` alanı Açık sorular'a.
 
 ## Handoff
 
