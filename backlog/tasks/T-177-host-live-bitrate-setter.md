@@ -94,7 +94,15 @@ Wire: none.
 
 ## Handoff
 
-- **Commit:** `6594e1a` (uygulama), plan `a6af709`. Dal `task/T-177-host-live-bitrate-setter`. Bu Handoff ayrı bir commit'te.
+- **Commit:** `6594e1a` (uygulama), `893b34c` (Codex P2 düzeltmesi: birleştirme), plan `a6af709`. Dal `task/T-177-host-live-bitrate-setter`. Bu Handoff ayrı bir commit'te.
+- **Codex P2 düzeltmesi (`893b34c`):** bekleyen bit hızı güncellemeleri artık sınırlı.
+  - Sahip kuyruğundaki en yeni blok henüz çalışmamış bir bit hızı bloğuysa (arkasında submit yoksa), yeni hedef o bloğun değerini değiştirir. Aradaki hedefler düşer.
+  - Böylece iki submit arasında en çok bir blok bekler; toplamda en çok `maxInFlight + 1`.
+  - Submit'ten sonra gelen hedef, o karenin önüne geçmez: arkasına kendi bloğunu alır.
+  - Blok çalışırken son gönderilen değere eşit hedef atlanır (60→15→60 birleşirse VT çağrısı ve log satırı yok).
+  - Teardown sırası değişmedi; invalidate sonrası hiçbir şey VT'ye ulaşmaz. Bloklar order'ı zayıf tutar.
+  - `Stats.bitrateBlocksEnqueued` / `bitrateCoalesced` sayaçları eklendi.
+  - Yeni testler: tıkalı kuyrukta 1 000 dönüşümlü istek → 1 blok, 999 birleştirme, yalnız son değer uygulanır. Gönderilen değere dönen hedef atlanır. Submit sonrası istek kendi bloğunu alır.
 - **Dokunulan dosyalar:**
   - `host-mac/Sources/MateBridgeCore/Video/EncoderSubmitOrder.swift`:
     - `BitrateRequest` (kırpma 5 000…150 000 = `VideoSettings.userBitrateRangeKbps`, eleme, stop sonrası `.stopped`).
@@ -108,7 +116,7 @@ Wire: none.
     - `dataRateLimits(kbps:shortWindowMs:)`: oluşturmada da kullanılır. Varsayılan değer `[Int, 1]` olarak kalır, T-177 öncesiyle aynı.
   - `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift`: `setTargetBitrate(kbps:)` iletici. Henüz hiçbir çağıran yok (T-178/T-196 bağlayacak).
   - `host-mac/Tests/MateBridgeCoreTests/Video/LiveBitrateTests.swift` (yeni, 12 test).
-  - `host-mac/Tests/MateBridgeCoreTests/Video/EncoderSubmitOrderTests.swift`: sahte backend `setBitrate`'i kaydediyor, 3 yeni sıra testi (bariyerle, sleep yok).
+  - `host-mac/Tests/MateBridgeCoreTests/Video/EncoderSubmitOrderTests.swift`: sahte backend `setBitrate`'i kaydediyor, 5 yeni sıra/birleştirme testi (bariyerle, sleep yok).
   - `docs/LOGGING.md`: yeni "Canlı bit hızı (Mac, `video`, T-177)" bölümü, dosyanın sonunda ayrı blok.
 - **Varsayımlar:**
   - Kısa pencere çifti `[2 × ort. bayt/s × w, w]`, yani 1 s çiftiyle aynı 2× pay. 60 Mbps'te 100 ms → 1,5 MB.
@@ -133,7 +141,7 @@ Wire: none.
   5. Durdurma, yeniden kurma ve bekletmeden dönüşte adım zamanlayıcısının iptal edildiği (eski encoder'dan `bitrate_set` gelmemeli). Kodla güvenceli (`beginStop` + sahip kuyruğu), ama log'da da görülmeli.
 - **Açık sorular:**
   - **KNOBS.md satırları** (dosya kapsamım dışında; orkestratör ekler, "Planlanan ayarlar"daki T-177 maddesinin yerine):
-    - `| 41 | \`MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s\|<n>ms\` | yok (kapalı) | EK:144-191, :225; HE:256-263, :550-579, :700; \`EncoderSubmitOrder.swift:52-86\`, :236-251 | T-177 | yalnızca geliştirici | Canlı bit hızı cihaz denetimi; zamanlayıcıyla canlı ayarlayıcıyı adımlar (döngüsel) | T-196 (benimser) ya da T-127 sonrası kaldırılır |`
+    - `| 41 | \`MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s\|<n>ms\` | yok (kapalı) | EK:144-191, :225; HE:256-263, :550-579, :700; \`EncoderSubmitOrder.swift:52-86\`, :252-296 | T-177 | yalnızca geliştirici | Canlı bit hızı cihaz denetimi; zamanlayıcıyla canlı ayarlayıcıyı adımlar (döngüsel) | T-196 (benimser) ya da T-127 sonrası kaldırılır |`
     - `| 42 | \`MATEBRIDGE_RATE_WINDOW_MS\` | yok (yalnız 1 s çifti) | EK:207-209, :226; HE:220-223, :276-285; \`EncoderSubmitOrder.swift:88-105\` | T-177 (F A-3) | yalnızca geliştirici | Kısa \`DataRateLimits\` penceresi tanısı; varsayılan değişmez | T-196 ya da T-127 sonrası kaldırılır |`
     - Not: satır numaraları 40'tan devam ediyor. Host CLI tablosunda da bir "40" var; orkestratör numaralamayı kendi düzenine göre ayarlamalı.
   - Bu kart `STREAM_CONFIG.bitrate_kbps` anlamını değiştirmiyor. Canlı değişiklik sonrası istemcinin gördüğü değer "yapılandırılmış" olarak kalır. Tavan semantiği 0023 / T-196'ya ait.
