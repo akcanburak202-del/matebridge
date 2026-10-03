@@ -1,7 +1,7 @@
 ---
 id: T-208
 title: Phase-lock 60 fps content on a 120 Hz panel (integer cadence lock)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-168, T-183]
