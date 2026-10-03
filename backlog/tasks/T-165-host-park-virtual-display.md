@@ -1,0 +1,76 @@
+---
+id: T-165
+title: Park the virtual display after a session ends (no capture or encode while parked)
+status: todo
+phase: 6
+owner: mac-host-dev
+depends_on: []
+decisions: []
+files:
+  - host-mac/Sources/MateBridgeCore/Video/DisplayLease.swift
+  - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
+  - host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift
+  - host-mac/Tests/MateBridgeCoreTests/Video/DisplayLeaseTests.swift
+  - host-mac/Tests/MateBridgeCoreTests/Video/IntegrationTests.swift
+  - docs/LOGGING.md
+  - backlog/tasks/T-165-host-park-virtual-display.md
+---
+
+## Amaç
+
+When a session ends, the host keeps capture (ScreenCaptureKit) and the encoder (VideoToolbox) running for the whole 10 s grace, draining frames into nothing, and then removes the virtual display. This card "parks" the display instead: on session end, capture and encode stop at once and only the `VirtualDisplay` object stays alive for the keep window; when the same device returns, a fresh pipeline is built on the parked display. Idle cost during the keep window drops to about zero, which makes a longer keep time cheap (the policy itself is decision 0020 and T-167; the default stays 10 s here).
+
+Source: external architecture review 2026-10-03 (H04, A1, F2, D4); verification: docs/reviews/2026-10-03/verify-D-display.md (P-2).
+
+## Bağlam
+
+- **Evidence (HEAD a30c769; `HH/` = `host-mac/Sources/MateBridgeHost/`, `HC/` = `host-mac/Sources/MateBridgeCore/`):**
+  - `HC/Video/DisplayLease.swift:9`: `defaultGraceUs = 10_000_000`. `sessionEnded(now:)` (`:59-61`) only changes state to `.grace`; `tick` (`:63-67`) returns `.teardown` at the deadline; `displayLost()` (`:70`) and `shutdown()` (`:72-75`). Actions today: `.teardown`, `.create`, `.reuse`, `.reconfigure`.
+  - `HH/Session/StreamCoordinator.swift:392-407` `onSessionEnded`: releases the display-sleep assertion (`:396`), resets the display rate (`:397`), stops the consumer, calls `lease.sessionEnded`, then `startDrain()` (`:403-405`; drain task at `:720-724`) and logs `display_grace_started`. The 1 s tick (`:290-292`) drives `lease.tick`.
+  - `resetDisplayRate()` at session end also undoes panel-rate decimation, so moving content is encoded at full stream fps for up to 10 s (T-014 handoff, `backlog/tasks/T-014-host-integration.md:51`, already named this waste).
+  - The hand-over already exists: `VideoPipeline.stopKeepingDisplay()` (`HH/Video/VideoPipeline.swift:250`) and `init(reusing:)` from T-049; `restartPipeline` (`StreamCoordinator.swift:564-574`) uses it and was device-tested.
+  - `obtainDisplay` (`VideoPipeline.swift:134-143`) recreates on a refresh mismatch: invalidate, sleep 700 ms, create.
+  - Device evidence that the 10 s teardown hurts: NOTES 2026-10-02 13:45 (tablet screen off ~56 s → `display_grace_started seconds=10` → `display_teardown`); window layout disturbance on recreate (NOTES 2026-09-30 line 206).
+- **Plan hints:**
+  - `onSessionEnded` calls `pipeline.stopKeepingDisplay()` instead of `startDrain()`, stores the result in a coordinator field (e.g. `parked: VirtualDisplay?`), and the next same-device session calls `createPipeline(settings:, reusing: parked)`.
+  - Keep `perform(lease…)` the single place that creates or removes displays. `onPipelineFailed` with only a parked display: nothing to do (no pipeline). `onShutdown` must invalidate `parked`.
+  - If `CGDisplayIsOnline(parked.displayID)` is false (display sleep may take it offline), create a new display instead. Public CG only: `HH/VirtualDisplay.swift` stays the only private-API file.
+  - Static-screen guard (T-028 class): the new pipeline needs SCK's first frame before `prepareForNewConsumer` can force a keyframe. That is the same as the reconfigure path, which works on device, but verify it explicitly (acceptance).
+  - Keep-time knob: `MATEBRIDGE_DISPLAY_KEEP_S`, parsed by a pure Core function (10…86400, otherwise 10). T-167 later adds the menu preference; the env knob keeps winning.
+  - Clock: `HostClock` is mach absolute time (`HH/Session/HostClock.swift:8-10`) and does not advance in system sleep. Fine for 10 s; if the keep time is meant as wall time, use a continuous clock (`mach_continuous_time`) (verify-D additional issue 5). State the choice in *Plan*.
+  - Low-severity notes, **not** fixed here: `VirtualDisplay.selectMode` blocks a cooperative thread with `Thread.sleep(0.1)` up to 20 times (`HH/VirtualDisplay.swift:134-146`, D add. 3); the recreate path has no fallback if creation fails (`VideoPipeline.swift:136-142`, D add. 4).
+  - The display-sleep assertion stays released while parked (D add. 6); T-166 measures what that does.
+- **Serialize with:** `StreamCoordinator.swift` chain T-165 → T-167 → T-187 → T-196 → T-200; this card is the head. `VideoPipeline.swift` is also in T-162's `files:` (conditional) and later in T-176/T-177/T-187/T-200: do not run in parallel with a card that is editing it.
+- No wire change; `docs/PROTOCOL.md` is not affected. The client is unchanged.
+
+## Kapsam dışı
+
+- The menu preference and "Sanal ekranı şimdi kaldır" (T-167).
+- Changing the 10 s default (decision 0020, after T-166).
+- Keeping the display on capture/encoder failure (T-200, gated on T-166).
+- Fixing D add. 3 / add. 4; any client change.
+
+## Kabul kriterleri
+
+- [ ] [XCTest] `DisplayLease`: `sessionEnded` yields a park action (e.g. `.park`); `tick` past the deadline yields `.teardown` exactly once; same device + `sameDisplay` → create reusing the parked display (new action or flag); refresh mismatch → recreate; different device or size → teardown + create; `shutdown` while parked → teardown; `displayLost` while parked → idle. Existing 10 s default semantics and tests are kept.
+- [ ] [XCTest] Pure parse of `MATEBRIDGE_DISPLAY_KEEP_S`: 10…86400 accepted, anything else (missing, empty, non-numeric, out of range) → 10.
+- [ ] Log lines `display_parked keep_s=`, `display_unparked`, `display_teardown reason=keep_expired|device_changed|size_changed|shutdown`, documented in `docs/LOGGING.md`.
+- [ ] While parked there is no SCK stream and no VT session (no `startDrain`; Handoff shows the code path).
+- [ ] [device] Tablet screen off → host log `display_parked`; MateBridgeApp CPU and GPU in Activity Monitor drop to idle while parked.
+- [ ] [device] Reconnect within the window shows an image within 1 s, also on a static screen, 5/5 (T-028 regression guard), with `display_unparked` and no `display_created`.
+- [ ] [device] Akıcı (120 Hz) → Netlik (60 Hz) chosen on the tablet while parked (disconnected) recreates the display exactly once on reconnect (`display_recreate reason=refresh_change`).
+- [ ] `./scripts/check.sh` geçiyor.
+
+## Plan
+
+_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+
+## Handoff
+
+_(Ajan bitirince doldurur.)_
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**

@@ -1,0 +1,75 @@
+---
+id: T-163
+title: Pause host key auto-repeat while the control connection is silent
+status: todo
+phase: 6
+owner: mac-host-dev
+depends_on: []
+decisions: []
+files:
+  - host-mac/Sources/MateBridgeCore/Input/InputStateMachine+Keyboard.swift
+  - host-mac/Sources/MateBridgeCore/Input/InputStateMachine.swift
+  - host-mac/Sources/MateBridgeCore/Input/InputPipeline.swift
+  - host-mac/Sources/MateBridgeHost/Input/InputController.swift
+  - host-mac/Sources/MateBridgeHost/Session/SessionServer.swift
+  - host-mac/Tests/MateBridgeCoreTests/Input/
+  - backlog/tasks/T-163-host-key-repeat-stall-pause.md
+---
+
+## Amaç
+
+The host generates key auto-repeat itself and stops it only on that key's UP, another DOWN, or a release-all. If a Wi-Fi stall starts after a KEY DOWN reached the Mac but before its UP, the Mac keeps repeating until the delayed UP arrives or the 1.5 s heartbeat-silence release-all fires: about 10+ ghost repeats with macOS defaults, so held Backspace deletes text and arrows run away. This card pauses repeat (without generating an UP) while nothing has been received on the control connection for more than 600 ms, and resumes it on the next received record if the key is still held.
+
+Source: external architecture review 2026-10-03 (M04 (freshness), X2); verification: docs/reviews/2026-10-03/verify-G-input.md (P-KR, additional issue 1).
+
+## Bağlam
+
+- **Decision and protocol prose:** this amends decision 0003 (keyboard, physical keycodes) with a new repeat stop condition. The orchestrator adds a 4th host stop condition to `docs/PROTOCOL.md` §4 KEY ("Otomatik tekrar", today: UP of that key, another DOWN, release-all) and a note to `docs/decisions/0003-keyboard-physical-keycodes.md`. Implementers do not edit either file. Wire: prose only; no bytes or fixtures change.
+- **Evidence (HEAD a30c769; `Core/` = `host-mac/Sources/MateBridgeCore/`):**
+  - Repeat is armed on DOWN (`Core/Input/InputStateMachine+Keyboard.swift:83-85`), stopped on that key's UP (`:89`), on any other DOWN (`:76`) and on release-all (`releaseKeys`, `:108-110`).
+  - `repeatKeyIfDue` (`:99-106`) emits at most one repeat per call and schedules the next a whole interval after `now`, so a late timer never bursts. It runs from `applyWatchdogs` (`Core/Input/InputStateMachine.swift:236`); `nextDeadline` includes `keyRepeat.nextAt` (`:165`); `reanchorWatchdogs` handles a backwards clock (`:216-219`).
+  - Defaults: delay 500 ms, interval 83 ms (`InputStateMachine.swift:43-44`); the host passes the user's macOS values (`MateBridgeHost/Input/InputController.swift:134-139`).
+  - PROTOCOL §6: the client PINGs every 500 ms; the host applies release-all after 1500 ms of control silence (`Core/Session/SessionMachine.swift:84`, `releaseSilenceUs`) and closes at 5000 ms. PROTOCOL §7 watchdogs cover pen/scroll/pinch only, not keys.
+  - `InputController.deliver` (`InputController.swift:177-199`) sees only input messages (it returns early for PING and other control records) and runs under `queue.sync`. So it cannot tell that the control connection is alive; a separate activity signal from the session layer is needed. Control records are decoded in `SessionServer.swift` (`machine.received(...)`, `:1237`), and delivered at `:1473-1474`.
+- **Plan hints:**
+  - Add a `lastControlActivity` input to the Core state machine (or pipeline) and a pure rule: no repeat while `now − lastControlActivity > 600 ms` (PING 500 ms + margin). Do not generate an UP; do not change the held-key set.
+  - Update the timestamp for every decoded control record (PING included) from `SessionServer` via a `noteControlActivity` hook only. Pass it without `queue.sync` re-entry (an atomic, or ride on `deliver`).
+  - **Ordering detail:** watchdogs run before each input message is handled (PROTOCOL §7 "önce kapanış, sonra mesaj"). When the delayed KEY UP itself ends the stall, the pause check must use the activity time from *before* that record, so no repeat fires ahead of the UP.
+  - While paused, `nextDeadline` must not keep the timer spinning on an overdue repeat. Re-arm the watchdog on the paused → active edge (e.g. a cheap `queue.async { rearmWatchdog() }` only on that edge).
+  - After resume the existing one-per-call rule must still prevent a burst; the next repeat is at least one interval after resume.
+  - Core `SessionMachine` already tracks `lastReceive` per connection, but `SessionMachine.swift` is outside `files:` (it is in the T-152 → T-155 → T-171 chain). Do not edit it here.
+  - A client-side keepalive for held keys is the alternative; it needs protocol semantics and stays out of scope (the orchestrator mentions it in the 0003 note).
+- **Safety (AGENTS.md):** UP, release-all and heartbeat release must still stop repeat and release the key exactly as today. Never drop a key-up. Keycodes may appear only at `debug` level; never key characters.
+- **Serialize with:** `SessionServer.swift` chain T-163 → T-171 → T-186 → T-189 → T-196 and `InputController.swift` chain T-163 → T-171 → T-175 → T-198 / T-199; this card is the head of both.
+- **Review:** input-state change, so the orchestrator runs `./scripts/codex-review.sh`.
+
+## Kapsam dışı
+
+- Client keepalives for held keys (protocol semantics).
+- Stale-input policy for clicks, keys and pen after stalls (decision 0025, T-199).
+- Changing the 1.5 s / 5 s heartbeat thresholds.
+- PROTOCOL.md and decision 0003 text (orchestrator).
+
+## Kabul kriterleri
+
+- [ ] [XCTest, fake clock] With a key held and repeat armed, no repeat is emitted while `now − lastControlActivity > 600 ms`.
+- [ ] [XCTest] Repeat resumes after new activity if the key is still held; the first repeat after resume comes at least one interval later (no burst).
+- [ ] [XCTest] A delayed KEY UP that arrives after a > 600 ms silence produces the key-up and zero repeats before it.
+- [ ] [XCTest] UP, another DOWN, release-all and the heartbeat-silence release still stop repeat and release the key exactly as before; existing keyboard, fuzz and safety tests pass unchanged.
+- [ ] [XCTest] While paused, `nextDeadline` does not return an overdue repeat deadline (no busy timer).
+- [ ] [device] Wi-Fi only: hold Backspace (in a scratch text field) and toggle the tablet's Wi-Fi off for ~2 s, then on. The Mac shows at most ~1 extra repeat after the stall begins, and no key stays stuck after reconnect. Repeat on a normal hold (no stall) feels unchanged.
+- [ ] `./scripts/check.sh` geçiyor.
+
+## Plan
+
+_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+
+## Handoff
+
+_(Ajan bitirince doldurur.)_
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**

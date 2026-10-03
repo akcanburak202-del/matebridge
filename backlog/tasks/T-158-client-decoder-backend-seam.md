@@ -1,0 +1,73 @@
+---
+id: T-158
+title: Put MediaCodec behind a DecoderCodec interface (no behaviour change)
+status: todo
+phase: 6
+owner: android-client-dev
+depends_on: []
+decisions: []
+files:
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderCodec.kt
+  - client-android/app/src/test/kotlin/dev/matebridge/client/video/FakeDecoderCodec.kt
+  - client-android/app/src/test/kotlin/dev/matebridge/client/video/
+  - client-android/app/build.gradle.kts   # only testOptions (e.g. unitTests.isReturnDefaultValues), if the chosen seam needs it
+  - backlog/tasks/T-158-client-decoder-backend-seam.md
+---
+
+## Amaç
+
+`VideoRenderer` calls `MediaCodec` directly, so no JVM test can inject a create/configure failure, a hung `stop()`, or a codec that runs but never produces output. The H02 (frozen image with live input) and M03 (unbounded decoder hand-off) fixes in T-159 and T-161 each need such a test, and M03 is an R-tagged finding that must start with a deterministic failing test. This card adds a small `DecoderCodec` seam with a fake and changes no behaviour. When it is done, the as-is decoder lifecycle is documented by tests and the later fixes can be test-driven.
+
+Source: external architecture review 2026-10-03 (M07 (seam), X3, X6); verification: docs/reviews/2026-10-03/verify-H-hygiene.md (TESTSEAM-1, client half; additional issue 5) and docs/reviews/2026-10-03/verify-B-client-video.md (X3 correction).
+
+## Bağlam
+
+- **Evidence (HEAD a30c769):**
+  - `MediaCodec.createDecoderByType(mime)` is called at `video/VideoRenderer.kt:294`, and `configure(format, surface, null, 0)` plus `start()` at `:305-306`. `createCodec` spans `:277-325`. The input thread uses `dequeueInputBuffer` (via `InputBufferSlot`, `:435`), `getInputBuffer` and `queueInputBuffer` (`:454-472`). The output side uses `dequeueOutputBuffer`, `releaseOutputBuffer(idx, renderNs | Boolean)` (`CodecSink`, `:497-508`), `outputFormat` and `setOnFrameRenderedListener`. Teardown is `codec.stop()` / `codec.release()` in `runCodec.finally` (`:482-489`).
+  - Diagnostics also read `codec.name`, `codec.codecInfo` (low-latency feature check, `:296-302`) and `codec.inputFormat` (`:310-320`).
+  - The only video JVM tests today cover `FrameQueue`/`RestartPolicy` and pacing (`app/src/test/.../video/VideoTest.kt` and friends). There is no `androidTest` tree.
+- **Why a seam first:** the coverage audit (§3 p11, §4.3) asks that the M01/M02/M03 deterministic tests have their seams ready up front rather than discovered mid-task. The audit folded H TESTSEAM-1's `DecoderBackend.kt` and B P3's `DecoderCodec` into this one card; the name is `DecoderCodec`.
+- **Plan hints:**
+  - Keep the interface minimal: create (factory), configure, start, dequeueIn, input buffer access, queueIn, dequeueOut, releaseOut (render timestamp and boolean variants), stop, release, plus the read-only diagnostics the renderer logs (name, low-latency support, input/output format keys). Add nothing the renderer does not already call.
+  - The `configure(format, surface…)` surface argument stays an opaque handle in the interface, so the fake never needs an Android `Surface`. `MediaFormat` construction may stay in the adapter if that keeps the JVM fake free of Android classes; check how existing JVM tests avoid `android.*` (the unit-test `android.jar` stubs throw).
+  - The production adapter wraps `MediaCodec` 1:1. `VideoRenderer` gets a constructor parameter (or internal factory property) defaulting to the adapter, so `MainActivity` does not change.
+  - The fake is scriptable: fail on create/configure/start, throw on dequeue, return "try again later" forever (silent: input accepted, no output), and block inside `stop()`/`release()`/`dequeueOutputBuffer` until a test latch opens.
+  - Threads: the fake must work with the real `mb-decoder` / `mb-decoder-out` threads; tests use latches, not sleeps.
+  - **Risk: `VideoRenderer` is not JVM-loadable today.** No JVM test constructs it. It imports `android.util.Log`, `android.os.SystemClock`, `android.os.Process`, `android.os.Build` and `android.view.Surface` (`VideoRenderer.kt:3-9`), and `runCodec` also builds a `MediaCodec.BufferInfo` (`:403`) and a main-looper `Handler` for the rendered listener (`:396`). In addition, `app/build.gradle.kts` does not set `unitTests.isReturnDefaultValues`, so stubbed calls such as `Log.w`/`SystemClock.elapsedRealtime()` throw in unit tests. Robolectric or a mocking library is not allowed without a decision (decision 0005 allows only JUnit/kotlin-test). So the seam must also make the lifecycle path runnable on the JVM: inject a monotonic clock and a log sink alongside `DecoderCodec`, or extract the generation lifecycle (`decodeLoop` / `decodeAttempts` / the `runCodec` skeleton) into a pure class the renderer delegates to. Choose one in *Plan* and justify it; changing `build.gradle.kts` is outside `files:` (write it under *Açık sorular* if you think it is needed).
+- **What the tests document (as-is, no fix):** give-up after 3 restarts within 10 s (`RestartPolicy.kt:4`, `VideoRenderer.kt:341-355`) calls `onGiveUp` and leaves `attached == true`; `decodeLoop` waits on `att.previous?.join()` with no timeout (`:328`); `runCodec.finally` joins the output thread for at most 500 ms, then stops and releases the codec anyway (`:484-487`). These tests are expected to change in T-159/T-161, which is fine.
+- **Serialize with:** `VideoRenderer.kt` chain T-158 → T-159 → T-160 → T-161 → T-168 → T-183 → T-184. This card is the head; T-159 depends on it.
+- No wire change; `docs/PROTOCOL.md` is not affected.
+
+Orchestrator note (2026-10-03): `build.gradle.kts` was added to `files:` so the implementer may set `testOptions.unitTests.isReturnDefaultValues = true` if needed. Prefer the cleaner option if it fits: an injected clock/log sink, or moving the lifecycle logic into a pure class. Decision 0005 still rules out Robolectric and mocking libraries.
+
+## Kapsam dışı
+
+- Any behaviour change: health state, give-up handling, join timeouts, restart backoff (T-159, T-161).
+- The debug `--es decoder_fault` extra (T-159).
+- GL presenter (`GlPresenter.kt`), pacers, `FrameQueue`.
+- Host-side encoder seam (T-162).
+
+## Kabul kriterleri
+
+- [ ] [JVM] `DecoderCodec` interface plus a `MediaCodec` adapter exist; `VideoRenderer` no longer references `MediaCodec` instance methods except through the adapter (a `grep` in Handoff shows it).
+- [ ] [JVM] With `FakeDecoderCodec`, a test drives `runCodec`/`decodeAttempts` through 4 failing creates and observes today's behaviour: 3 restarts, then `ev=give_up` and exactly one `onGiveUp` call, `attached` still true.
+- [ ] [JVM] With the fake, a test documents today's hand-off ordering: a new attachment's decoder thread does not start a codec until the previous decoder thread exits (`previous.join` with no timeout). The test uses latches and finishes; it must not hang the suite (release the latch in `finally`).
+- [ ] [JVM] A fake in "silent" mode (input accepted, no output ever) runs without `decode_error`, which documents the T-028 no-output case the review missed.
+- [ ] No behaviour change: existing video tests pass unchanged; log lines (`codec_start`, `codec_stop`, `decode_error`, `give_up`, `detach_slow`) keep their fields.
+- [ ] [device] Smoke on the tablet: connect over USB, 10 mode changes (Netlik ↔ Akıcı ↔ Oyun 60), background/foreground twice. Image after each change, no `decode_error`, `codec_start` line unchanged (same `name=`, `low_latency=`).
+- [ ] `./scripts/check.sh` geçiyor.
+
+## Plan
+
+_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+
+## Handoff
+
+_(Ajan bitirince doldurur.)_
+
+- **Commit:**
+- **Dokunulan dosyalar:**
+- **Varsayımlar:**
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+- **Açık sorular:**
