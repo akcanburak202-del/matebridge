@@ -3,7 +3,9 @@ import MateBridgeCore
 
 /// Glue between the session (T-010) and the video pipeline (T-011):
 /// ACCEPTED -> virtual display + capture + HEVC -> video link, `KEYFRAME_REQUEST` -> encoder, `STATS` -> menu/log,
-/// and the 10 s display grace period after a disconnect (`DisplayLease`).
+/// and the parked virtual display after a disconnect (`DisplayLease`, T-165): when a session ends, capture and encoder
+/// stop at once and only the display is kept for the keep time (default 10 s, `MATEBRIDGE_DISPLAY_KEEP_S`); the same
+/// tablet coming back gets a new pipeline on the parked display.
 ///
 /// All events go through one bounded, ordered mailbox and are handled one at a time, so `sessionStarted`,
 /// `videoAttached` and `sessionEnded` can never overtake each other even though display creation is asynchronous.
@@ -65,6 +67,11 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private static func wallMs() -> UInt64 { UInt64(max(0, Date().timeIntervalSince1970) * 1_000) }
 
+    /// Clock of the display lease (T-165): continuous, so it keeps counting while the Mac sleeps and the keep time is
+    /// wall time (`HostClock` is mach absolute time and stops in sleep). `CLOCK_MONOTONIC_RAW` is
+    /// `mach_continuous_time` on Darwin.
+    private static func leaseNowUs() -> UInt64 { clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1_000 }
+
     /// Sleeps until `deadlineUs` on the host clock (no-op if it has passed).
     private func sleep(until deadlineUs: UInt64) async {
         let now = HostClock.nowUs()
@@ -86,6 +93,10 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var lease: DisplayLease
     private var pipeline: VideoPipeline?
     private var pipelineID = 0
+    /// T-165: the virtual display kept after a session end, with no capture or encoder; `sinceUs` on the lease clock.
+    /// Never set together with `pipeline`. Set and used by `perform` (park, unpark, teardown); `onVideoAttached` and
+    /// `onShutdown` only clear a leftover one (rebuild on it, or invalidate).
+    private var parked: (display: VirtualDisplay, sinceUs: UInt64)?
     private var consumer = Consumer.none
     private var consumerID = 0
     private var session: ActiveSession?
@@ -112,8 +123,10 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private let prefsStore: StreamPrefsStoring
 
-    public convenience init(graceUs: UInt64 = DisplayLease.defaultGraceUs) {
-        self.init(graceUs: graceUs, prefsStore: UserDefaultsStreamPrefsStore())
+    /// - Parameter graceUs: keep time of a parked display; nil reads `MATEBRIDGE_DISPLAY_KEEP_S` (default 10 s).
+    public convenience init(graceUs: UInt64? = nil) {
+        self.init(graceUs: graceUs ?? DisplayLease.keepUs(env: ProcessInfo.processInfo.environment),
+                  prefsStore: UserDefaultsStreamPrefsStore())
     }
 
     init(graceUs: UInt64, prefsStore: StreamPrefsStoring) {
@@ -289,7 +302,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             onStats(stats)
         case .tick:
             let now = HostClock.nowUs()
-            await perform(lease.tick(now: now))
+            await perform(lease.tick(now: Self.leaseNowUs()))
             if let waiting = prefsGate.poll(now: now) { await applyPrefs(waiting) }
             reportCadence()
         case .pipelineFailed(let id, let message, let wake):
@@ -399,11 +412,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         lastStatsText = ""
         lastCadenceText = ""
         await stopConsumer()
-        lease.sessionEnded(now: HostClock.nowUs())
-        if pipeline != nil {
-            startDrain()
-            log(.info, "display_grace_started", "seconds=\(lease.graceUs / 1_000_000)")
-        }
+        // T-165: park, no drain. Capture and encoder stop now; only the display waits for this tablet.
+        await perform(lease.sessionEnded(now: Self.leaseNowUs()))
         onSummary("")
     }
 
@@ -415,7 +425,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         if pipeline == nil {  // earlier creation failed or the pipeline died: try again
             _ = lease.sessionStarted(device: s.deviceID, settings: s.settings)
-            await createPipeline(settings: s.settings)
+            // Normally nothing is parked during a session (unparked at session start); never strand one.
+            let leftover = parked?.display
+            parked = nil
+            await createPipeline(settings: s.settings, reusing: leftover)
         }
         guard let pipeline else { link.cancel(); return }
         await stopConsumer()
@@ -531,12 +544,13 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     private func onShutdown() async {
-        _ = lease.shutdown()
         session = nil
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
+        await perform(lease.shutdown())  // display_teardown reason=shutdown, also for a parked display
         await destroyPipeline()
+        dropParked()
         onSummary("")
     }
 
@@ -546,15 +560,26 @@ public final class StreamCoordinator: @unchecked Sendable {
         for action in actions {
             switch action {
             case .teardown:
-                log(.info, "display_teardown")
+                log(.info, "display_teardown", "reason=\(lease.lastTeardownReason?.logName ?? "unknown")")
                 await destroyPipeline()
+                dropParked()
             case .create(let s):
                 await createPipeline(settings: s)
             case .reuse:
-                log(.info, "display_reused")
+                if parked != nil, let s = session?.settings {
+                    await unpark(settings: s)
+                } else {
+                    log(.info, "display_reused")
+                }
             case .reconfigure(let s):
-                log(.info, "display_reused", "restart=true fps=\(s.fps) refresh_hz=\(s.displayRefreshHz)")
-                await restartPipeline(settings: s)
+                if parked != nil {
+                    await unpark(settings: s)
+                } else {
+                    log(.info, "display_reused", "restart=true fps=\(s.fps) refresh_hz=\(s.displayRefreshHz)")
+                    await restartPipeline(settings: s)
+                }
+            case .park:
+                await park()
             }
         }
     }
@@ -570,7 +595,49 @@ public final class StreamCoordinator: @unchecked Sendable {
             log(.info, "display_recreate", "reason=refresh_change refresh_hz=\(old.settings.displayRefreshHz)->\(settings.displayRefreshHz)")
         }
         let display = await old.stopKeepingDisplay()
+        if let display, old.settings.displayRefreshHz == settings.displayRefreshHz, !VideoPipeline.isOnline(display) {
+            log(.info, "display_recreate", "reason=offline")
+        }
         await createPipeline(settings: settings, reusing: display)
+    }
+
+    /// T-165: the session ended. Capture and encoder stop (the encoder's VT session is shut down, T-162); the display
+    /// stays, without a drain. With no pipeline or no display there is nothing to keep.
+    private func park() async {
+        await stopConsumer()
+        guard let p = pipeline else { lease.displayLost(); return }
+        pipeline = nil
+        guard let display = await p.stopKeepingDisplay() else {
+            lease.displayLost()
+            log(.info, "display_park_skipped", "reason=no_display")
+            return
+        }
+        dropParked()  // never two displays
+        parked = (display, Self.leaseNowUs())
+        log(.info, "display_parked", "keep_s=\(lease.graceUs / 1_000_000) refresh_hz=\(Int(display.requestedRefreshHz))")
+    }
+
+    /// T-165: the same tablet is back; a new pipeline on the parked display. `VideoPipeline` replaces the display when
+    /// the refresh rate changed (T-049) or it went offline while parked.
+    private func unpark(settings: VideoSettings) async {
+        guard let p = parked else { return }
+        parked = nil
+        let parkedUs = Self.leaseNowUs() &- p.sinceUs
+        log(.info, "display_unparked", "parked_ms=\(parkedUs / 1_000) refresh_hz=\(settings.displayRefreshHz)")
+        if p.display.requestedRefreshHz != Double(settings.displayRefreshHz) {
+            log(.info, "display_recreate",
+                "reason=refresh_change refresh_hz=\(Int(p.display.requestedRefreshHz))->\(settings.displayRefreshHz)")
+        } else if !VideoPipeline.isOnline(p.display) {
+            log(.info, "display_recreate", "reason=offline")
+        }
+        await createPipeline(settings: settings, reusing: p.display)
+    }
+
+    /// Removes the parked display, if any (keep time over, other device or size, shutdown).
+    private func dropParked() {
+        guard let p = parked else { return }
+        parked = nil
+        p.display.invalidate()
     }
 
     private func createPipeline(settings: VideoSettings, reusing display: VirtualDisplay? = nil) async {
@@ -591,7 +658,12 @@ public final class StreamCoordinator: @unchecked Sendable {
             gateLock.withLock { sleepGate.cancelPending() }
             if rateState.hz != 0 { applyDisplayRate(streamFps: settings.fps) }
             startDrain()
-            log(.info, "display_created", "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)")
+            let sizes = "width=\(settings.widthPx) height=\(settings.heightPx) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx)"
+            if p.displayWasReused {
+                log(.info, "pipeline_started", "display=reused \(sizes)")
+            } else {
+                log(.info, "display_created", sizes)
+            }
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: p.cadenceSetup)
             onSummary("")

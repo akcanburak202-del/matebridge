@@ -49,13 +49,16 @@ public final class VideoPipeline: @unchecked Sendable {
     /// Client keyframe requests are coalesced here (T-122).
     private let keyframes: KeyframeGate
     private var displayInfo = "no display"
-    /// A display handed over by the previous pipeline (T-049): kept instead of creating a new one.
+    /// A display handed over by the previous pipeline (T-049) or parked by the owner (T-165): kept instead of
+    /// creating a new one.
     private var inherited: VirtualDisplay?
+    private var reusedDisplay = false
 
     /// - Parameters:
     ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
     ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its refresh rate
-    ///     already equals `settings.displayRefreshHz`, replaced by a new display otherwise.
+    ///     already equals `settings.displayRefreshHz` and it is still online (`isOnline`), replaced by a new display
+    ///     otherwise.
     ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
     init(settings: VideoSettings = .tabletDefault,
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
@@ -126,21 +129,31 @@ public final class VideoPipeline: @unchecked Sendable {
         }
     }
 
-    /// The inherited display when it already runs at the wanted refresh rate (capture and encoder restart only);
-    /// otherwise a new display. ScreenCaptureKit keeps delivering at the old rate after an in-place mode switch
+    /// The inherited display when it already runs at the wanted refresh rate and is still online (capture and encoder
+    /// restart only); otherwise a new display. A display parked for a while may have gone offline (display sleep,
+    /// T-165), and capture on an offline display only fails. ScreenCaptureKit keeps delivering at the old rate after an in-place mode switch
     /// (measured, T-049: 60 fps after 60 -> 120 Hz even for a new SCStream, 126 fps on a display created at 120 Hz),
     /// so a refresh change needs a new display. The old one must be gone first: a second display with the same
     /// vendor/product/serial cannot be created while it exists. The short wait lets the system finish removing it.
     private func obtainDisplay() async throws -> VirtualDisplay {
         let rate = Double(settings.displayRefreshHz)
         if let old = lock.withLock({ () -> VirtualDisplay? in defer { inherited = nil }; return inherited }) {
-            if old.requestedRefreshHz == rate { return old }
+            if old.requestedRefreshHz == rate && Self.isOnline(old) {
+                set { $0.reusedDisplay = true }
+                return old
+            }
             old.invalidate()
             try await Task.sleep(nanoseconds: 700_000_000)
         }
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
                                   hidpi: true, refreshRate: rate)
     }
+
+    /// The virtual display is still known to the window server (public CoreGraphics, `CGDisplayIsOnline`).
+    static func isOnline(_ display: VirtualDisplay) -> Bool { CGDisplayIsOnline(display.displayID) != 0 }
+
+    /// After `start()`: true when the pipeline kept the display it was handed (`reusing:`), false when it created one.
+    var displayWasReused: Bool { lock.withLock { reusedDisplay } }
 
     /// Closes the current cadence window (call about once a second). `sentTotal` is the sender's cumulative
     /// frame count.

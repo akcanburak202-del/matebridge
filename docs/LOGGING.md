@@ -208,3 +208,14 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 - Encoder'a her kare tek bir seri sahip kuyruğundan gider; rezervasyon sırası = VideoToolbox çağrı sırası, `stop` sonrası encode yok.
 - `ev=slot_double_release` (W): aynı rezervasyon ikinci kez bırakıldı; sayaç değişmez. Normal kullanımda hiç görülmemeli; görülürse hata.
+
+## Bekletilen sanal ekran (Mac, `net`, T-165)
+
+Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran bekletme süresi boyunca tutulur. Süre `MATEBRIDGE_DISPLAY_KEEP_S` (10…86400 sn, aksi halde 10) ve duvar saatiyle sayılır (sürekli saat, Mac uykusunda da ilerler).
+
+- `ev=display_parked keep_s=<n> refresh_hz=<hz>`: oturum bitti, ekran bekletiliyor (eski `display_grace_started`'ın yerine). Bekleme sırasında `cadence`/`latency` satırı çıkmaz.
+- `ev=display_park_skipped reason=no_display`: bekletilecek ekran yoktu (işlem hattı tam o anda düşmüştü).
+- `ev=display_unparked parked_ms=<n> refresh_hz=<hz>`: aynı tablet döndü, bekletilen ekranda yeni yakalama ve encoder kurulur. Ekran korunursa ardından `ev=pipeline_started display=reused width=… height=… encoded=…` gelir, `display_created` gelmez.
+- `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=offline`: yenileme hızı değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, 0,7 sn sonra yenisi kurulur (`display_created`). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
+- `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka ekran boyutu, `shutdown` uygulama kapanıyor.
+- `ev=display_created width=… height=… encoded=…`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
