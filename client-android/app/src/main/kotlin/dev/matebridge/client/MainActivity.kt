@@ -1793,12 +1793,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         syncWifiLock("migrated") // T-089 lock: held on Wi-Fi only
     }
 
+    /**
+     * T-207: a proven session showed that the Mac behind these asked endpoints trusts the tablet ([PairPick]). In AUTO,
+     * when the USB loopback endpoint is among them, USB is tried again at once (probe or migration, as usual).
+     */
+    private fun onAskedCleared(cleared: List<Endpoint>) {
+        MbLog.i("pair_asked_cleared", TrustUiText.askedClearedFields(cleared))
+        if (mode == TransportMode.AUTO && ConnectMode.usbEndpoint in cleared && !isOnUsb()) {
+            autoPolicy.onUsbUnblocked(SystemClock.elapsedRealtime())
+            ui.post { autoStep() } // posted: render() must not start a migration itself
+        }
+    }
+
     /** AUTO on USB and the session dropped: go back to Wi-Fi (last Wi-Fi endpoint at once, plus discovery). */
     private fun fallBackToWifi() {
         fallbackPending = false
         if (!started || isDestroyed || !AutoUsbPolicy.shouldFallBack(mode, isOnUsb(), lastUi)) return // T-151: also a pick prompt
         autoPolicy.onTryResult(AutoUsbPolicy.Outcome.HARD_FAIL, SystemClock.elapsedRealtime()) // back off before USB again
-        logPick("wifi", "usb_lost")
+        logPick("wifi", AutoUsbPolicy.fallbackReason(lastUi)) // T-207: usb_asked for a PAIRING answer, else usb_lost
         probeGuard.bump()
         picking = false
         transportEpoch++
@@ -1991,6 +2003,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (TrustUiText.hostReached(state)) hostReached = true // terminal errors and prompts must not be replaced by the USB hint
         promptVisibility.onRender(state, started)?.let { controller.setConfirmPromptVisible(it) } // T-151: T-150's timer
         if (pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151: never parked on one answerer's prompt
+        pairPick.takeCleared().takeIf { it.isNotEmpty() }?.let { onAskedCleared(it) } // T-207: that Mac now trusts us
         forgetFlow.onUi(state, SystemClock.elapsedRealtime())?.let { onForgetResult(it) } // T-151: the forget's result
         // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
         if (state is SessionUi.Connected && isOnUsb()) autoPolicy.onUsbConnected()

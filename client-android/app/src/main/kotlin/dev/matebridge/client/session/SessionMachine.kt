@@ -104,7 +104,8 @@ class SessionMachine(
             val pendingKey: Bytes? = null,
         ) : Event
         /** T-150: PAIRING answer on a connection the user did not start; the reader closed it, nothing was stored. */
-        data class PairingNeedsUser(val gen: Int, val hostName: String, val rePair: Boolean) : Event
+        /** [hostId] (T-207): the host_id the answer claimed (unauthenticated); only for the UI's "asked" mark. */
+        data class PairingNeedsUser(val gen: Int, val hostName: String, val rePair: Boolean, val hostId: Bytes? = null) : Event
         /** T-150: PAIRED answer while [hostId] has a fresh unconfirmed pending key; nothing was derived, the reader closed it. */
         data class PairedWithPending(val gen: Int, val hostId: Bytes) : Event
         /** T-150: the user confirmed the code of prompt [gen] ([confirmPromptGen]). */
@@ -247,6 +248,8 @@ class SessionMachine(
     private var locallyTrusted = false
     private var sessionHostId: ByteArray? = null
     private var sealedSeen = false
+    /** T-207: a `Connected` with the proven host identity was emitted for this connection. */
+    private var hostTagShown = false
     private var bufferedConfig: StreamConfig? = null
     /** host_id that "Bu Mac'i unut" may remove: last PAIRED ack, last locally trusted session, or the stored prompt. */
     private var knownHostId: ByteArray? = null
@@ -387,7 +390,7 @@ class SessionMachine(
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED // no retry: each one would raise a new approval dialog on the Mac
                 log('I', "pairing_needs_user", "re_pair=${flag(event.rePair)}")
-                out += Action.Ui(SessionUi.PairingNeedsUser(event.hostName, event.rePair))
+                out += Action.Ui(SessionUi.PairingNeedsUser(event.hostName, event.rePair, HostTag.of(event.hostId?.value)))
             }
             is Event.PairedWithPending -> if (isCandidate(event.gen)) {
                 failCandidate(out, nowUs, REASON_KEY)
@@ -516,6 +519,26 @@ class SessionMachine(
             }
             else -> Unit // input/video types are not expected on this connection; ignore
         }
+        publishProvenHost(nowUs, out)
+    }
+
+    /**
+     * T-207: the first authenticated host record of an accepted, locally trusted session publishes its host identity at
+     * once (a `Connected` update), independent of video: a PAIRED session's first `Connected` comes from the plaintext ack
+     * and carries none, and frame updates may never come (video port blocked while control and PONGs work).
+     */
+    private fun publishProvenHost(nowUs: Long, out: MutableList<Action>) {
+        if (hostTagShown || (phase != Phase.ACCEPTED && phase != Phase.STREAMING) || provenHostTag() == null) return
+        out += connectedUi()
+        shownFrames = frames
+        lastUiUs = nowUs
+    }
+
+    /** `Connected` with the proven host identity when there is one (T-207); remembers that it was shown. */
+    private fun connectedUi(): Action.Ui {
+        val tag = provenHostTag()
+        if (tag != null) hostTagShown = true
+        return Action.Ui(SessionUi.Connected(hostName, frames, tag))
     }
 
     private fun onAck(ack: HelloAck, nowUs: Long, out: MutableList<Action>) {
@@ -594,7 +617,7 @@ class SessionMachine(
         clearPrompt()
         sessionHostId?.let { knownHostId = it }
         phase = Phase.ACCEPTED
-        out += Action.Ui(SessionUi.Connected(hostName, frames))
+        out += connectedUi()
         shownFrames = frames
         lastUiUs = nowUs
         // T-150: a STREAM_CONFIG that arrived while waiting for the local confirmation opens video now.
@@ -603,6 +626,13 @@ class SessionMachine(
             onConfig(it, out)
         }
     }
+
+    /**
+     * T-207: the session's host identity for the UI, only once a sealed record authenticated the host on this connection
+     * and the session is locally trusted (PAIRED: derived with our trusted key; pairing: the Mac's sealed ACCEPTED after
+     * the local confirmation). The plaintext first ack of a PAIRED answer proves nothing yet: null until a record.
+     */
+    private fun provenHostTag(): HostTag? = if (sealedSeen && locallyTrusted) HostTag.of(sessionHostId) else null
 
     // ---- T-150 local trust ----
 
@@ -872,7 +902,7 @@ class SessionMachine(
                     if (frames != shownFrames && nowUs - lastUiUs >= UI_INTERVAL_US) {
                         shownFrames = frames
                         lastUiUs = nowUs
-                        out += Action.Ui(SessionUi.Connected(hostName, frames))
+                        out += connectedUi()
                     }
                 }
             }
@@ -979,6 +1009,7 @@ class SessionMachine(
         sessionHostId = null
         sessionPendingFp = null
         sealedSeen = false
+        hostTagShown = false
         bufferedConfig = null
     }
 

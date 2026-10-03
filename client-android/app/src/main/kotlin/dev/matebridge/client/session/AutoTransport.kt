@@ -233,6 +233,16 @@ class AutoUsbPolicy {
         softFailures = 0
     }
 
+    /**
+     * T-207: the USB endpoint had answered PAIRING ([PairPick]) and its Mac is now proven to trust the tablet: the
+     * fallback's backoff no longer applies, so the next step may try USB at once (not while one is in flight).
+     */
+    fun onUsbUnblocked(nowMs: Long) {
+        failures = 0
+        softFailures = 0
+        nextTryAtMs = minOf(nextTryAtMs, nowMs)
+    }
+
     companion object {
         const val MIN_INTERVAL_MS = 2_000L
         const val SLOW_INTERVAL_MS = 10_000L
@@ -284,6 +294,15 @@ class AutoUsbPolicy {
                 ui is SessionUi.Disconnected || ui is SessionUi.PairingNeedsUser ||
                     (ui is SessionUi.Failed && ui.cause == SessionUi.Cause.KEY_MISMATCH)
                 )
+
+        /**
+         * T-207: the `transport_pick` reason of a [shouldFallBack] fallback: `usb_asked` when the USB endpoint answered
+         * PAIRING (it is now skipped until its Mac is trusted or the user starts), `usb_lost` otherwise.
+         */
+        fun fallbackReason(ui: SessionUi): String = if (ui is SessionUi.PairingNeedsUser) REASON_USB_ASKED else REASON_USB_LOST
+
+        const val REASON_USB_ASKED = "usb_asked"
+        const val REASON_USB_LOST = "usb_lost"
 
         private val SOFT_REASONS = setOf(
             SessionMachine.REASON_CONNECT_FAILED, SessionMachine.REASON_NOT_CONNECTED,

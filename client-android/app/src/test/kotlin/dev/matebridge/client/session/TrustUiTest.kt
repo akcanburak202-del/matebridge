@@ -387,6 +387,78 @@ class TrustUiTest {
         }
     }
 
+    // ---- T-207: the asked mark after the Mac is trusted ----
+
+    private val usb = ConnectMode.usbEndpoint
+    private val macId = HostTag.of(ByteArray(16) { (0x40 + it).toByte() })!!
+    private val otherId = HostTag.of(ByteArray(16) { 0x77 })!!
+
+    private fun PairPick.asked(ep: Endpoint, claimed: HostTag?) {
+        onUi(SessionUi.Connecting(ep))
+        assertTrue(onUi(SessionUi.PairingNeedsUser("Mac mini", rePair = true, claimed)))
+    }
+
+    @Test fun aProvenSessionClearsOnlyTheEndpointsThatClaimedThatMac() {
+        val g = PairPick()
+        g.asked(usb, macId) // AUTO: the USB tunnel asked while the Mac had forgotten the tablet
+        g.asked(impostor, otherId) // another host_id
+        g.asked(Endpoint("192.168.1.7", 47001), null) // no identity known
+        g.asked(realMac, macId) // the Wi-Fi prompt the user pairs on
+        assertEquals(realMac, g.pair()!!.endpoint)
+        g.onUi(SessionUi.Connecting(realMac))
+        g.onUi(SessionUi.AwaitingApproval("Mac mini", "123456", rePairing = true, needsLocalConfirm = true))
+        assertTrue(g.takeCleared().isEmpty()) // a code on screen proves nothing
+        g.onUi(SessionUi.Connected("Mac mini", 0)) // plaintext PAIRED ack: not proven yet
+        assertTrue(g.takeCleared().isEmpty())
+        assertTrue(g.isAsked(usb))
+        g.onUi(SessionUi.Connected("Mac mini", 0, macId)) // proven: trusted key / locally confirmed and accepted
+        assertEquals(listOf(usb), g.takeCleared())
+        assertTrue(g.takeCleared().isEmpty()) // taken once
+        assertTrue(g.allowsAuto(usb))
+        assertFalse(g.allowsAuto(impostor)) // decision 0018: another Mac stays out of automatic connects
+        assertFalse(g.allowsAuto(Endpoint("192.168.1.7", 47001)))
+        assertEquals("count=1 usb=1", TrustUiText.askedClearedFields(listOf(usb)))
+        assertEquals("count=2 usb=0", TrustUiText.askedClearedFields(listOf(realMac, impostor)))
+    }
+
+    @Test fun clearingRunsOncePerProvenSession() {
+        val g = PairPick()
+        g.asked(usb, macId)
+        g.onUi(SessionUi.Connected("Mac mini", 0, macId))
+        assertEquals(listOf(usb), g.takeCleared())
+        // Frame updates of the same session clear nothing more.
+        g.onUi(SessionUi.Connected("Mac mini", 5, macId))
+        g.onUi(SessionUi.Connected("Mac mini", 9, macId))
+        assertTrue(g.takeCleared().isEmpty())
+        // It asks again (e.g. an impostor copying the host_id, after the session dropped): marked again, and only the
+        // next proven session clears it (bounded: one automatic try per session that the Mac proves).
+        g.onUi(SessionUi.Disconnected(SessionUi.Cause.LOST, 1000))
+        g.asked(usb, macId)
+        assertTrue(g.isAsked(usb))
+        g.onUi(SessionUi.Searching)
+        assertTrue(g.takeCleared().isEmpty())
+        g.onUi(SessionUi.Connected("Mac mini", 0, macId))
+        assertEquals(listOf(usb), g.takeCleared())
+    }
+
+    @Test fun anotherMacsSessionDoesNotClearTheMark() {
+        val g = PairPick()
+        g.asked(usb, macId)
+        g.onUi(SessionUi.Connected("Other", 0, otherId))
+        assertTrue(g.isAsked(usb))
+        assertTrue(g.takeCleared().isEmpty())
+        assertEquals("HostTag", macId.toString()) // a logged UI state never carries the host_id
+        assertNull(HostTag.of(ByteArray(16)))
+        assertNull(HostTag.of(null))
+    }
+
+    @Test fun askedClearedLogCarriesNoValue() {
+        val main = sources().getValue("MainActivity.kt")
+        val lines = main.lines().filter { it.contains("\"pair_asked_cleared\"") }
+        assertEquals(1, lines.size)
+        assertTrue(lines.single(), lines.single().contains("TrustUiText.askedClearedFields("))
+    }
+
     private fun sources(): Map<String, String> {
         val roots = listOf(File("src/main/kotlin/dev/matebridge/client"), File("app/src/main/kotlin/dev/matebridge/client"))
         val root = roots.first { it.isDirectory }

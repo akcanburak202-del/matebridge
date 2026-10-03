@@ -1015,8 +1015,11 @@ object FirstAck {
         is HandshakeOutcome.Plain -> Result(listOf(SessionMachine.Event.Received(gen, ack)), null, terminal = false)
         HandshakeOutcome.KeyMissing -> Result(listOf(SessionMachine.Event.KeyMissing(gen)), null, terminal = true)
         // A PAIRING answer the user did not ask for: nothing stored, no code shown, no record read.
-        is HandshakeOutcome.PairingNeedsUser ->
-            Result(listOf(SessionMachine.Event.PairingNeedsUser(gen, outcome.hostName, outcome.rePair)), null, terminal = true)
+        // T-207: the claimed host_id goes along (UI "asked" mark only; it is never trusted or logged).
+        is HandshakeOutcome.PairingNeedsUser -> Result(
+            listOf(SessionMachine.Event.PairingNeedsUser(gen, outcome.hostName, outcome.rePair, Bytes(ack.hostId.value.copyOf()))),
+            null, terminal = true,
+        )
         // PAIRED over an unconfirmed pending key: nothing derived; the machine shows the stored code instead.
         is HandshakeOutcome.PendingUnconfirmed ->
             Result(listOf(SessionMachine.Event.PairedWithPending(gen, Bytes(outcome.hostId.copyOf()))), null, terminal = true)
