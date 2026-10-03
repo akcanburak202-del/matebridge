@@ -359,7 +359,7 @@ class MigrationAuthGateTest {
         val since = actions.size
         val t = step(Event.Tick(0), 150_000) // 3.05 s since the last PONG
         assertTrue(t.isEmpty()) // before T-205's fix: lose() here (CloseControl, CloseCandidate, Ui Disconnected)
-        assertTrue(logs.any { it == "I migration_old_gone how=pong_timeout" })
+        assertTrue(logs.any { it == "I migration_old_stale " })
         assertTrue(m.migrating)
         assertTrue(m.inputAllowed)
         assertTrue(sendInput(key(Key.UP), w)) // the release is never refused; it goes to the Wi-Fi generation
@@ -393,6 +393,53 @@ class MigrationAuthGateTest {
         assertEquals(SessionUi.Disconnected(SessionUi.Cause.LOST, SessionMachine.BACKOFF_START_US / 1000), r.filterIsInstance<Action.Ui>().single().state)
         assertTrue(r.any { it is Action.CloseControl })
         assertFalse(m.inputAllowed)
+    }
+
+    /**
+     * Codex review 2 (T-205): the heartbeat expiry is provisional. The Wi-Fi heartbeat expires during the proof wait, then
+     * a valid Wi-Fi PONG arrives before the (squatter) candidate fails: Wi-Fi pings and video retries resume, and the
+     * candidate's failure keeps the healthy Wi-Fi session instead of losing it.
+     */
+    @Test fun wifiRecoveringBeforeTheCandidateFailsKeepsTheWifiSession() {
+        val w = streamingOnWifi()
+        step(Event.Tick(0), 2_900_000)
+        val c = openCandidate()
+        ackOnly(c, mac(key = wrongKey))
+        assertTrue(step(Event.Tick(0), 150_000).isEmpty()) // expired: stale, nothing sent or retried on it
+        assertTrue(logs.any { it == "I migration_old_stale " })
+        assertTrue(step(Event.VideoClosed(video)).isEmpty())
+        val pings = sent(w).count { it is Ping }
+        assertTrue(step(Event.Tick(0), 100_000).isEmpty())
+        assertEquals(pings, sent(w).count { it is Ping })
+        // a valid PONG on Wi-Fi: recovered
+        assertTrue(wifiConn.records(Pong(0, 0, 0)).isEmpty())
+        assertTrue(logs.any { it == "I migration_old_recovered " })
+        val resumed = step(Event.Tick(0), SessionMachine.VIDEO_RETRY_US) // pings and the video retry resume on Wi-Fi
+        assertTrue(resumed.any { it is Action.Send && it.msg is Ping })
+        assertEquals(1, resumed.count { it is Action.OpenVideo })
+        assertEquals(pings + 1, sent(w).count { it is Ping })
+        assertTrue(sendInput(key(Key.DOWN), w) && sendInput(key(Key.UP), w))
+        // the squatter's record does not authenticate: the candidate fails, the Wi-Fi session stays
+        val since = actions.size
+        val r = c.records(cfg(2))
+        assertEquals(listOf(Action.CloseCandidate, Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED)), r)
+        assertWifiUntouched(w, since)
+        // its heartbeat is the ordinary one again: no PONG for 3 s now loses the session as before T-205
+        val lost = step(Event.Tick(0), SessionMachine.PONG_TIMEOUT_US)
+        assertTrue(lost.filterIsInstance<Action.Ui>().single().state is SessionUi.Disconnected)
+    }
+
+    @Test fun aCloseAfterTheHeartbeatExpiredStaysFinal() {
+        val w = streamingOnWifi()
+        step(Event.Tick(0), 2_900_000)
+        val c = openCandidate()
+        ackOnly(c, mac(key = wrongKey))
+        step(Event.Tick(0), 150_000) // stale
+        assertTrue(step(Event.ControlClosed(w)).isEmpty()) // confirmed gone
+        assertTrue(logs.any { it == "I migration_old_gone how=closed" })
+        val r = step(Event.ControlClosed(c.gen))
+        assertEquals(SessionMachine.REASON_PROOF_CLOSED, r.filterIsInstance<Action.MigrationResult>().single().reason)
+        assertTrue(r.filterIsInstance<Action.Ui>().single().state is SessionUi.Disconnected) // reconnects
     }
 
     @Test fun cancelDuringTheProofLeavesTheWifiSession() {

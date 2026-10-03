@@ -216,6 +216,11 @@ class SessionMachine(
      * Nothing is sent or retried on it any more; the candidate's outcome decides (a failure then loses the session).
      */
     private var oldGone = false
+    /**
+     * T-205 review: while the proof is pending, the current connection's heartbeat expired (provisional: a valid PONG on
+     * it clears this). Treated like [oldGone] until then: nothing sent or retried on it, a candidate failure loses.
+     */
+    private var oldStale = false
     private var retiredGen = -1
     private var retireDeadlineUs = 0L
 
@@ -449,7 +454,14 @@ class SessionMachine(
             is HelloAck -> onAck(msg, nowUs, out)
             is StreamConfig -> onConfig(msg, out)
             is Ping -> out += Action.Send(Pong(msg.seq, msg.senderTimeUs, nowUs))
-            is Pong -> lastPongUs = nowUs
+            is Pong -> {
+                lastPongUs = nowUs
+                if (oldStale && !oldGone) {
+                    // T-205: the current connection answered again: a later candidate failure keeps it, pings resume.
+                    oldStale = false
+                    log('I', "migration_old_recovered", "")
+                }
+            }
             // PROTOCOL.md 0x08: only an accepted session; whether the stream is visible is the UI's call.
             SettingsOpen -> if (inputAllowed) out += Action.OpenSettings
             is Clipboard -> if (inputAllowed) out += Action.DeliverClipboard(msg, controlGen) // T-150: never before local trust
@@ -792,13 +804,17 @@ class SessionMachine(
             failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_TIMEOUT else REASON_TIMEOUT)
         }
         if (retiredGen >= 0 && nowUs >= retireDeadlineUs) closeRetired(out)
-        // T-205 review: while the proof is pending, the current connection's heartbeat expiring is treated like its close
-        // (the host may have superseded it and its PONG baseline is older than the proof): it is marked gone instead of
-        // losing the session (which would also drop the candidate and its authenticated STREAM_CONFIG).
-        if (candAck != null && nowUs - lastPongUs >= PONG_TIMEOUT_US) oldConnectionGone("pong_timeout")
-        // T-205: the host superseded the current connection for our pending proof: no PONG timeout, ping or video retry
-        // on it; the candidate's first record or its deadline (above) decides (a failure then loses the session).
-        if (oldGone) return
+        // T-205 review: while the proof is pending, the current connection's heartbeat expiring does not lose the session
+        // (that would also drop the candidate and its authenticated STREAM_CONFIG; the host may have superseded the old
+        // connection and its PONG baseline is older than the proof). It is marked *stale*: provisional, unlike a close or
+        // BYE(SUPERSEDED) ([oldGone]); a later valid PONG on it clears the mark ([onMessage]).
+        if (candAck != null && !oldGone && !oldStale && nowUs - lastPongUs >= PONG_TIMEOUT_US) {
+            oldStale = true
+            log('I', "migration_old_stale", "")
+        }
+        // T-205: the current connection is gone or stale for our pending proof: no PONG timeout, ping or video retry on
+        // it; the candidate's first record or its deadline (above) decides (a failure then loses the session).
+        if (oldGone || oldStale) return
         when (phase) {
             Phase.WAIT_RETRY -> if (nowUs >= retryAtUs) openControl(out)
             Phase.AWAIT_ACK, Phase.PENDING, Phase.HOST_ACCEPTED_UNTRUSTED, Phase.ACCEPTED, Phase.STREAMING -> {
@@ -948,19 +964,21 @@ class SessionMachine(
         log('I', "migration_proof_wait", "cand_gen=$candGen")
     }
 
-    /** T-205: BYE(SUPERSEDED), a close or a heartbeat expiry of the current connection while the proof is pending. */
+    /** T-205: BYE(SUPERSEDED) or a close of the current connection while the proof is pending (final, unlike [oldStale]). */
     private fun oldConnectionGone(how: String) {
         if (oldGone) return
         oldGone = true
+        oldStale = false
         log('I', "migration_old_gone", "how=$how")
     }
 
     /**
      * A candidate failure: the candidate is closed and reported ([abortMigration]). If the host already superseded the
-     * current connection for its proof ([oldGone]), the session has no live connection left: it is lost and reconnects.
+     * current connection for its proof ([oldGone]), or its heartbeat expired and never recovered ([oldStale]), the session
+     * has no live connection left: it is lost and reconnects. A recovered one (a PONG cleared [oldStale]) is kept.
      */
     private fun failCandidate(out: MutableList<Action>, nowUs: Long, reason: String) {
-        val gone = oldGone
+        val gone = oldGone || oldStale
         abortMigration(out, reason)
         if (gone) lose(out, nowUs, SessionUi.Cause.LOST)
     }
@@ -980,6 +998,7 @@ class SessionMachine(
         candAck = null
         candHostId = null
         oldGone = false
+        oldStale = false
     }
 
     private fun closeRetired(out: MutableList<Action>) {
