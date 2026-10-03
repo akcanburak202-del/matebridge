@@ -35,7 +35,9 @@ import dev.matebridge.client.protocol.MsgType
 import dev.matebridge.client.security.ClientHandshake
 import dev.matebridge.client.security.HandshakeOutcome
 import dev.matebridge.client.security.PairKeyStore
+import dev.matebridge.client.security.PairTrust
 import dev.matebridge.client.security.PlainFrames
+import dev.matebridge.client.security.ReadOnlyPairKeyStore
 import dev.matebridge.client.security.RecordDecoder
 import dev.matebridge.client.security.RecordOpener
 import dev.matebridge.client.security.RecordSealer
@@ -81,7 +83,10 @@ interface SessionListener {
     /** A PONG arrived (engine thread). Times are microseconds; [nowUs] is the client monotonic clock (`nanoTime/1000`). */
     fun onPong(echoTimeUs: Long, responderTimeUs: Long, nowUs: Long) {}
 
-    /** A CLIPBOARD message arrived on an accepted session (engine thread). Its data is private: never log it. */
+    /**
+     * A CLIPBOARD message arrived on an accepted, locally trusted session (engine thread; T-150: decided by the machine).
+     * Its data is private: never log it.
+     */
     fun onClipboard(msg: Clipboard, gen: Int) {}
 
     /**
@@ -132,7 +137,12 @@ class SessionController(
     initialFiles: FilesInfo? = null, // T-135: file server state; null = no file server, FILES_INFO never sent
     stallDiag: Boolean = false, // T-142: opt-in (--ez stall_diag true): the mb-stall tick thread and its log lines
 ) {
-    private val machine = SessionMachine(hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles)
+    /** T-150: trusted/pending pair keys with the wall-clock rules of decision 0018. */
+    private val trust = PairTrust(pairKeys, log = { ev, fields -> MbLog.i(ev, fields) })
+
+    private val machine = SessionMachine(
+        hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
+    ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
 
     /** Engine tick; at most half the ping interval (>= 10 ms) so a short `ping_ms` is honoured (default: 100 ms as before). */
     private val tickMs = engineTickMs(knobs.pingMs)
@@ -148,17 +158,16 @@ class SessionController(
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
     private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
+    private val trustMailbox = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
+    private val promptVisibleMailbox = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
     /** T-096: a migration candidate's close has its own slot, so it cannot hide the (lower-gen) current one's close. */
     private val controlClosed = ControlCloseSlots()
 
     /**
-     * T-096: a candidate reads the stored pair key (PAIRED takeover) but never stores one: a migration must not pair.
-     * A PAIRING answer therefore fails the candidate (KeyStoreFailed -> migration aborted) instead of replacing the key.
+     * T-096 / T-150: a candidate reads the stored pair keys (PAIRED takeover) but never stores one: a migration must not
+     * pair. Its HELLO is never user-initiated, so a PAIRING answer aborts it (PairingNeedsUser -> migration aborted).
      */
-    private val candidateKeys = object : PairKeyStore {
-        override fun get(hostId: ByteArray): ByteArray? = pairKeys.get(hostId)
-        override fun put(hostId: ByteArray, key: ByteArray) = throw IOException("a migration candidate never stores a pair key")
-    }
+    private val candidateTrust = PairTrust(ReadOnlyPairKeyStore(pairKeys), log = { ev, fields -> MbLog.i(ev, fields) })
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
 
     private val videoFrames = AtomicLong()
@@ -173,6 +182,9 @@ class SessionController(
     @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
     @Volatile private var inputAllowed = false
+    /** T-150: mirrors of the machine (engine thread writes): audio gate, "Bu Mac'i unut" possible. */
+    @Volatile private var acceptedGen = -1
+    @Volatile private var forgettable = false
 
     /**
      * T-117: audio arrival measurement. The meter is shared with the audio stats line; its clock offset comes from this
@@ -199,11 +211,58 @@ class SessionController(
      * Non-blocking. Ignored after [shutdown]. [wake] non-null (T-134): a direct wake attempt (see
      * [SessionMachine.Event.Start]); its control socket is bound to Wi-Fi ([wifiBinder]), connects within
      * [WakeConnect.CONNECT_TIMEOUT_MS] and reports through [SessionListener.onWakeConnect].
+     * [userInitiated] (T-150): only a start the user made (a tap) may pair; any other start aborts at a PAIRING answer
+     * ([SessionUi.PairingNeedsUser]) and opens no connection while a pairing is unresolved ([SessionUi.StoredTrust]).
      */
-    fun start(endpoint: Endpoint, wake: WakeTag? = null) {
+    fun start(endpoint: Endpoint, wake: WakeTag? = null, userInitiated: Boolean = false) {
         if (terminated.get()) return
         ensureEngine()
-        intent.post(SessionMachine.Event.Start(endpoint, wake))
+        intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated))
+    }
+
+    /**
+     * Non-blocking. T-150: "Kodlar aynı — Güven" on the confirmation prompt the UI **rendered**: pass its `promptGen`
+     * ([SessionUi.AwaitingApproval.promptGen] / [SessionUi.StoredTrust.promptGen]). If another prompt (another code) has
+     * replaced it meanwhile, the machine ignores the tap. Returns false for a state without a prompt (gen < 0).
+     */
+    fun confirmTrust(promptGen: Int): Boolean {
+        if (terminated.get() || promptGen < 0) return false
+        ensureEngine()
+        trustMailbox.post(SessionMachine.Event.TrustConfirmed(promptGen))
+        return true
+    }
+
+    /** Non-blocking. T-150: "İptal" on the rendered prompt [promptGen] (see [confirmTrust]). */
+    fun cancelTrust(promptGen: Int): Boolean {
+        if (terminated.get() || promptGen < 0) return false
+        ensureEngine()
+        trustMailbox.post(SessionMachine.Event.TrustCancelled(promptGen))
+        return true
+    }
+
+    /**
+     * Non-blocking. T-150 "Bu Mac'i unut": removes the trusted key, pending key and awaiting-host marker of the current
+     * Mac (last PAIRED answer, last locally trusted session or the stored prompt shown; never a host_id taken only from
+     * an aborted PAIRING answer). A live session ends first (BYE + close). Returns false when no such Mac is known;
+     * true only means the request was queued (the removal runs on the engine). Success ends in [SessionUi.Idle] (or no
+     * UI change when already idle); a removal that did not persist ends in `Failed(KEY_STORE_FAILED)`, the Mac stays
+     * trusted and forgettable, and the call can be retried.
+     */
+    fun forgetCurrentHost(): Boolean {
+        if (terminated.get() || !forgettable) return false
+        ensureEngine()
+        trustMailbox.post(SessionMachine.Event.ForgetHost)
+        return true
+    }
+
+    /**
+     * Non-blocking. T-150: the UI reports whether a confirmation prompt is visible in the foreground (post false in
+     * `onStop`); only visible time counts toward the 2-minute confirmation timeout.
+     */
+    fun setConfirmPromptVisible(visible: Boolean) {
+        if (terminated.get()) return
+        ensureEngine()
+        promptVisibleMailbox.post(SessionMachine.Event.ConfirmPromptVisible(visible))
     }
 
     /**
@@ -328,8 +387,9 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = intent.take() ?: prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?:
-                    filesMailbox.take() ?: migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: promptVisibleMailbox.take() ?:
+                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: filesMailbox.take() ?:
+                    migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -364,54 +424,30 @@ class SessionController(
             arrivalClock.onPong(e.msg.echoTimeUs, e.msg.responderTimeUs, now)
             arrival.setOffset(arrivalClock.offsetUs())
         }
-        if (e is SessionMachine.Event.Received && e.msg is Clipboard && inputAllowed && e.gen == MbLog.gen) listener.onClipboard(e.msg, e.gen)
         val actions = machine.handle(e, now)
         val allowed = machine.inputAllowed
         // Input stops before the actions run (as before), but starts only after them: the proof PING and STREAM_PREFS
         // are queued first (PROTOCOL.md section 3). A migration switch closes the gate while the connections swap.
         if (!allowed || actions.any { it is SessionMachine.Action.PromoteCandidate }) inputAllowed = false
+        // T-150: inbound audio follows the machine's accepted (and locally trusted) generation. Set before the actions so
+        // the AUDIO_CONFIG answering the AUDIO_PREFS queued below can never arrive ahead of the gate.
+        acceptedGen = machine.acceptedGen
+        forgettable = machine.forgettableHost
         MbLog.sid = machine.currentSessionId
         for (a in actions) exec(a)
         inputAllowed = allowed
     }
 
-    /** Concise session log (docs/LOGGING.md). Never per frame, never names or message text. */
+    /** Concise session log (docs/LOGGING.md). Never per frame, never names, codes or message text. */
     private fun logEvent(e: SessionMachine.Event) {
-        when (e) {
-            is SessionMachine.Event.Start -> MbLog.i(
-                "session_start",
-                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
-                    "quickack=${if (quickAck) 1 else 0} ${knobs.logFields()}" +
-                    (e.wake?.let { " wake_attempt=${it.n}" } ?: ""),
-            )
-            SessionMachine.Event.Stop -> MbLog.i("session_stop")
-            is SessionMachine.Event.ControlOpened -> MbLog.i("connect_ok")
-            is SessionMachine.Event.ControlClosed ->
-                if (e.connectFailed) MbLog.w("connect_fail") else MbLog.w("control_closed")
-            is SessionMachine.Event.ProtocolError -> MbLog.e("protocol_error")
-            is SessionMachine.Event.Secured -> MbLog.i("secured", "pairing=${e.code != null} re_pairing=${e.rePairing}") // never the code
-            is SessionMachine.Event.KeyMissing -> MbLog.w("pair_key_missing")
-            is SessionMachine.Event.KeyStoreFailed -> MbLog.w("pair_key_store_failed")
-            is SessionMachine.Event.VideoClosed -> MbLog.w("video_closed", "vgen=${e.gen}")
-            is SessionMachine.Event.Received -> when (val m = e.msg) {
-                is HelloAck -> MbLog.i("hello_ack", "status=${m.status} key_mode=${m.keyMode} video_port=${m.videoPort}")
-                is StreamConfig -> MbLog.i(
-                    "stream_config",
-                    "config_id=${m.configId} codec=${m.codec} size=${m.widthPx}x${m.heightPx} fps=${m.fps}",
-                )
-                is Bye -> MbLog.i("bye_recv", "reason=${m.reason}")
-                else -> Unit
-            }
-            is SessionMachine.Event.SetPrefs -> MbLog.i("stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
-            is SessionMachine.Event.SetDisplayRate -> MbLog.i("display_rate_set", "hz=${e.hz}")
-            is SessionMachine.Event.SetAudio -> MbLog.i("audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
-            is SessionMachine.Event.SetFiles -> MbLog.i("files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
-            is SessionMachine.Event.Tick -> Unit
-            is SessionMachine.Event.Migrate -> MbLog.i(
-                "migrate_request",
-                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",
-            )
-            SessionMachine.Event.CancelMigration -> MbLog.i("migrate_cancel_request")
+        eventLogLine(e, "quickack=${if (quickAck) 1 else 0} ${knobs.logFields()}")?.let { emit(it) }
+    }
+
+    private fun emit(line: LogLine) {
+        when (line.level) {
+            'E' -> MbLog.e(line.ev, line.fields)
+            'W' -> MbLog.w(line.ev, line.fields)
+            else -> MbLog.i(line.ev, line.fields)
         }
     }
 
@@ -419,12 +455,12 @@ class SessionController(
         when (a) {
             is SessionMachine.Action.OpenControl -> {
                 MbLog.gen = a.gen
-                MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port}")
+                MbLog.i("connect_start", "host=${a.endpoint.host} port=${a.endpoint.port} user=${if (a.userInitiated) 1 else 0}")
                 listener.onSessionStart()
                 resetArrival()
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control?.abort()
-                control = ControlConn(a.gen, a.endpoint, hello, wake = a.wake).also { it.startThreads() }
+                control = ControlConn(a.gen, a.endpoint, hello, wake = a.wake, userInitiated = a.userInitiated).also { it.startThreads() }
                 stallDetector?.start()
             }
             is SessionMachine.Action.Send -> {
@@ -481,7 +517,7 @@ class SessionController(
             is SessionMachine.Action.OpenCandidate -> {
                 MbLog.i("migrate_start", "cand_gen=${a.gen} host=${a.endpoint.host} port=${a.endpoint.port}")
                 candidate?.cancel()
-                val c = ControlConn(a.gen, a.endpoint, hello, ControlCloseSlots.Owner.CANDIDATE, candidateKeys)
+                val c = ControlConn(a.gen, a.endpoint, hello, ControlCloseSlots.Owner.CANDIDATE, candidateTrust)
                 candidate = c
                 c.startThreads()
             }
@@ -533,6 +569,7 @@ class SessionController(
                 MbLog.i("settings_open_recv")
                 listener.onSettingsOpen()
             }
+            is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
         }
     }
 
@@ -571,9 +608,11 @@ class SessionController(
         template: Hello,
         /** T-096: which close slot this connection posts to; changed only by the engine (promotion, cancel). */
         @Volatile var owner: ControlCloseSlots.Owner = ControlCloseSlots.Owner.CURRENT,
-        private val keys: PairKeyStore = pairKeys,
+        private val keys: PairTrust = trust,
         /** T-134: non-null for a direct wake attempt (Wi-Fi-bound, short connect timeout, `ev=wake_connect`). */
         private val wake: WakeTag? = null,
+        /** T-150: the user made this start: a PAIRING answer may be stored pending (never for a candidate). */
+        private val userInitiated: Boolean = false,
     ) {
         private val socket = Socket()
         private val queue = SendQueue()
@@ -652,32 +691,24 @@ class SessionController(
                 // The first HELLO_ACK is the only plaintext host message; it is read byte-exactly so the
                 // encrypted records that may follow immediately are not consumed (PROTOCOL.md section 9).
                 val (ack, ackPayload) = PlainFrames.readHelloAck(input)
-                when (val outcome = handshake.complete(ack, ackPayload, keys)) {
-                    is HandshakeOutcome.Plain -> events.put(SessionMachine.Event.Received(gen, ack)) // terminal; host closes
-                    HandshakeOutcome.KeyMissing -> {
-                        closedPosted.set(true)
-                        events.put(SessionMachine.Event.KeyMissing(gen))
-                        return
-                    }
-                    is HandshakeOutcome.Secure -> {
-                        val sec = outcome.session
-                        try {
-                            // Stored at the first ack, before the Mac's approval: the connection may drop meanwhile.
-                            if (sec.storePairKey(keys)) MbLog.i("pair_key_stored")
-                        } catch (e: Exception) {
-                            // Not persisted: a later PAIRED handshake would have no key. Fail instead of pretending.
-                            closedPosted.set(true)
-                            events.put(SessionMachine.Event.KeyStoreFailed(gen)) // the key itself is never logged
-                            return
-                        }
-                        secrets = sec.secrets
-                        sealer = sec.sealer
-                        sealerReady.countDown()
-                        if (sec.sas != null) events.put(SessionMachine.Event.Secured(gen, sec.sas, sec.rePairing))
-                        events.put(SessionMachine.Event.Received(gen, ack))
-                        readRecords(input, sec)
-                    }
+                // T-150: the decision (abort a PAIRING the user did not start, refuse a PAIRED derivation over an
+                // unconfirmed pending key, store a new key only as pending) is the pure, tested [FirstAck].
+                val step = FirstAck.handle(gen, ack, handshake.complete(ack, ackPayload, keys, userInitiated))
+                if (step.terminal) {
+                    // Nothing after this ack is read or decrypted; the machine reacts to the event instead of a close.
+                    closedPosted.set(true)
+                    abort()
+                    step.events.forEach { events.put(it) }
+                    return
                 }
+                val sec = step.session
+                if (sec != null) {
+                    secrets = sec.secrets
+                    sealer = sec.sealer
+                    sealerReady.countDown()
+                }
+                step.events.forEach { events.put(it) }
+                if (sec != null) readRecords(input, sec)
             } catch (e: ProtocolException) {
                 closedPosted.set(true) // the machine reacts to ProtocolError instead
                 events.put(SessionMachine.Event.ProtocolError(gen)) // ordered after already received messages
@@ -744,9 +775,12 @@ class SessionController(
             }
         }
 
-        /** T-095: audio goes from this reader straight to the listener, only while this is the current connection. */
+        /**
+         * T-095: audio goes from this reader straight to the listener, only while this is the current connection and
+         * (T-150) the machine accepted it with a locally trusted key.
+         */
         private fun deliverAudio(msg: Message) {
-            if (control !== this) return // cheap pre-filter; the receiver re-checks [gen] under its own lock
+            if (control !== this || !SessionMachine.deliversAudio(acceptedGen, gen)) return // the receiver re-checks [gen]
             try {
                 listener.onAudio(msg, gen)
             } catch (e: RuntimeException) {
@@ -863,9 +897,57 @@ class SessionController(
         try { s.close() } catch (_: IOException) {}
     }
 
+    /** One runtime log line (docs/LOGGING.md); [fields] never hold a code, key, token, host_id or name. */
+    data class LogLine(val level: Char, val ev: String, val fields: String = "")
+
     companion object {
         /** The clock all session/latency times use. */
         fun clockUs() = System.nanoTime() / 1000
+
+        /**
+         * The log line for machine event [e] (null: none). Pure, so tests can check that no secret ever reaches a log.
+         * [startExtra] holds the controller's knob fields for `session_start`.
+         */
+        fun eventLogLine(e: SessionMachine.Event, startExtra: String): LogLine? = when (e) {
+            is SessionMachine.Event.Start -> LogLine(
+                'I', "session_start",
+                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
+                    "user=${if (e.userInitiated) 1 else 0} $startExtra" + (e.wake?.let { " wake_attempt=${it.n}" } ?: ""),
+            )
+            SessionMachine.Event.Stop -> LogLine('I', "session_stop")
+            is SessionMachine.Event.ControlOpened -> LogLine('I', "connect_ok")
+            is SessionMachine.Event.ControlClosed -> if (e.connectFailed) LogLine('W', "connect_fail") else LogLine('W', "control_closed")
+            is SessionMachine.Event.ProtocolError -> LogLine('E', "protocol_error")
+            // never the code or the host_id
+            is SessionMachine.Event.Secured -> LogLine('I', "secured", "pairing=${e.code != null} re_pairing=${e.rePairing}")
+            is SessionMachine.Event.KeyMissing -> LogLine('W', "pair_key_missing")
+            is SessionMachine.Event.KeyStoreFailed -> LogLine('W', "pair_key_store_failed")
+            is SessionMachine.Event.PairedWithPending -> LogLine('I', "pair_paired_with_pending")
+            is SessionMachine.Event.ConfirmPromptVisible -> LogLine('I', "pair_prompt_visible", "visible=${if (e.visible) 1 else 0}")
+            // logged by the machine with their outcome
+            is SessionMachine.Event.PairingNeedsUser, is SessionMachine.Event.TrustConfirmed,
+            is SessionMachine.Event.TrustCancelled, SessionMachine.Event.ForgetHost -> null
+            is SessionMachine.Event.VideoClosed -> LogLine('W', "video_closed", "vgen=${e.gen}")
+            is SessionMachine.Event.Received -> when (val m = e.msg) {
+                is HelloAck -> LogLine('I', "hello_ack", "status=${m.status} key_mode=${m.keyMode} video_port=${m.videoPort}")
+                is StreamConfig -> LogLine(
+                    'I', "stream_config",
+                    "config_id=${m.configId} codec=${m.codec} size=${m.widthPx}x${m.heightPx} fps=${m.fps}",
+                )
+                is Bye -> LogLine('I', "bye_recv", "reason=${m.reason}")
+                else -> null
+            }
+            is SessionMachine.Event.SetPrefs -> LogLine('I', "stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
+            is SessionMachine.Event.SetDisplayRate -> LogLine('I', "display_rate_set", "hz=${e.hz}")
+            is SessionMachine.Event.SetAudio -> LogLine('I', "audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
+            is SessionMachine.Event.Tick -> null
+            is SessionMachine.Event.Migrate -> LogLine(
+                'I', "migrate_request",
+                "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",
+            )
+            SessionMachine.Event.CancelMigration -> LogLine('I', "migrate_cancel_request")
+        }
 
         /** T-089: the engine tick for a ping interval: [TICK_MS] unless half the interval is shorter, never below 10 ms. */
         fun engineTickMs(pingMs: Int): Long = minOf(TICK_MS, maxOf(10L, pingMs / 2L))
@@ -874,5 +956,40 @@ class SessionController(
         private const val GRACEFUL_CLOSE_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val EVENT_QUEUE_CAP = 1024
+    }
+}
+
+/**
+ * T-150: what the control reader does with the handshake outcome of the first HELLO_ACK. Pure (JVM-tested); the reader
+ * only executes it: post [Result.events] in order, then read sealed records with [Result.session] when it is non-null.
+ * [Result.terminal]: the connection ends here; the reader closes it, reads and decrypts nothing more, and posts no close.
+ */
+object FirstAck {
+    class Result(val events: List<SessionMachine.Event>, val session: SecureSession?, val terminal: Boolean)
+
+    fun handle(gen: Int, ack: HelloAck, outcome: HandshakeOutcome): Result = when (outcome) {
+        // Terminal plaintext answer (REJECTED, BUSY, ...): the host closes; the reader then reports the close.
+        is HandshakeOutcome.Plain -> Result(listOf(SessionMachine.Event.Received(gen, ack)), null, terminal = false)
+        HandshakeOutcome.KeyMissing -> Result(listOf(SessionMachine.Event.KeyMissing(gen)), null, terminal = true)
+        // A PAIRING answer the user did not ask for: nothing stored, no code shown, no record read.
+        is HandshakeOutcome.PairingNeedsUser ->
+            Result(listOf(SessionMachine.Event.PairingNeedsUser(gen, outcome.hostName, outcome.rePair)), null, terminal = true)
+        // PAIRED over an unconfirmed pending key: nothing derived; the machine shows the stored code instead.
+        is HandshakeOutcome.PendingUnconfirmed ->
+            Result(listOf(SessionMachine.Event.PairedWithPending(gen, Bytes(outcome.hostId.copyOf()))), null, terminal = true)
+        is HandshakeOutcome.Secure -> {
+            val sec = outcome.session
+            // PAIRING: the new key goes to the engine, which stores it pending (before the Mac's approval: the connection
+            // may drop meanwhile) only if this connection is still current when it handles the event; a stale reader
+            // therefore never writes (review #2). The reader itself writes nothing. PAIRED: no key.
+            val pendingKey = sec.takePendingKey()?.let { Bytes(it) }
+            Result(
+                listOf(
+                    SessionMachine.Event.Secured(gen, sec.sas, sec.rePairing, Bytes(sec.secrets.hostId.copyOf()), pendingKey),
+                    SessionMachine.Event.Received(gen, ack),
+                ),
+                sec, terminal = false,
+            )
+        }
     }
 }

@@ -113,6 +113,9 @@ class MigrationTest {
             { g: Int -> Event.ProtocolError(g) } to SessionMachine.REASON_PROTOCOL_ERROR,
             { g: Int -> Event.KeyMissing(g) } to SessionMachine.REASON_KEY,
             { g: Int -> Event.KeyStoreFailed(g) } to SessionMachine.REASON_KEY,
+            // T-150: a candidate never pairs and never derives over an unconfirmed pending key
+            { g: Int -> Event.PairingNeedsUser(g, "Mac", false) } to SessionMachine.REASON_KEY,
+            { g: Int -> Event.PairedWithPending(g, Bytes(ByteArray(16))) } to SessionMachine.REASON_KEY,
             { g: Int -> Event.Received(g, ack(HelloAck.BUSY)) } to "ack_${HelloAck.BUSY}",
             { g: Int -> Event.Received(g, ack(HelloAck.PENDING_APPROVAL)) } to "ack_${HelloAck.PENDING_APPROVAL}",
             { g: Int -> Event.Received(g, ack(HelloAck.REJECTED)) } to "ack_${HelloAck.REJECTED}",
@@ -155,7 +158,12 @@ class MigrationTest {
         step(Event.ControlOpened(gen))
         step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
         assertEquals(SessionMachine.REASON_NOT_CONNECTED, step(Event.Migrate(usb)).only<Action.MigrationResult>().reason)
+        // T-150: host-accepted but not locally confirmed is not connected either
         step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 47002)))
+        assertEquals(SessionMachine.REASON_NOT_CONNECTED, step(Event.Migrate(usb)).only<Action.MigrationResult>().reason)
+        val gen2 = step(Event.Start(wifi)).only<Action.OpenControl>().gen
+        step(Event.ControlOpened(gen2))
+        step(Event.Received(gen2, ack(HelloAck.ACCEPTED, 5, 47002)))
         assertEquals(SessionMachine.REASON_SAME_ENDPOINT, step(Event.Migrate(wifi)).only<Action.MigrationResult>().reason)
         val first = step(Event.Migrate(usb))
         assertTrue(first.has<Action.OpenCandidate>())

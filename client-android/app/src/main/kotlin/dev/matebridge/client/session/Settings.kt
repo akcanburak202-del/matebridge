@@ -9,6 +9,20 @@ interface KeyValueStore {
     fun putString(key: String, value: String)
 }
 
+/**
+ * T-150: a [KeyValueStore] that can list its keys and apply several writes and removals in one atomic commit. Only the
+ * pair-key store needs it (promoting a pending pairing key must never leave a half-written state).
+ */
+interface AtomicKeyValueStore : KeyValueStore {
+    fun keys(): Set<String>
+
+    /**
+     * Applies every entry of [changes] (a non-null value is written, null removes the key) in one commit: either all of
+     * them hold afterwards or none. Throws [java.io.IOException] when the commit did not persist.
+     */
+    fun commit(changes: Map<String, String?>)
+}
+
 /** Persistent settings: the random per-install device id and the last manually entered endpoint. */
 class Settings(private val store: KeyValueStore, private val random: java.util.Random = SecureRandom()) {
     /** 16 random bytes generated on first use, then stable (PROTOCOL.md HELLO.device_id). */

@@ -490,12 +490,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         refreshWakeButton()
 
         val pairKeys = EncryptedPairKeyStore(
-            object : KeyValueStore {
+            object : dev.matebridge.client.session.AtomicKeyValueStore {
                 val secure = getSharedPreferences("matebridge_pairkeys", Context.MODE_PRIVATE)
                 override fun getString(key: String) = secure.getString(key, null)
                 override fun putString(key: String, value: String) {
                     // A pairing key that did not persist must not count as paired.
                     if (!secure.edit().putString(key, value).commit()) throw java.io.IOException("prefs commit failed")
+                }
+                override fun keys(): Set<String> = secure.all.keys.toSet()
+                override fun commit(changes: Map<String, String?>) {
+                    // T-150: one Editor, one commit: a promotion never leaves a half-written trusted/pending pair.
+                    val e = secure.edit()
+                    for ((k, v) in changes) if (v == null) e.remove(k) else e.putString(k, v)
+                    if (!e.commit()) throw java.io.IOException("prefs commit failed")
                 }
             },
             AndroidKeystoreWrapper(),
@@ -1996,6 +2003,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             is SessionUi.AwaitingApproval ->
                 if (state.code != null) pairingText(state) else getString(R.string.state_awaiting_approval, state.hostName)
             is SessionUi.Connected -> getString(R.string.state_connected, state.hostName, state.framesReceived)
+            is SessionUi.PairingNeedsUser -> PAIRING_NEEDS_USER_TEXT // T-150: plain text only; T-151 owns the real UI
+            is SessionUi.StoredTrust -> STORED_TRUST_TEXT
             is SessionUi.Disconnected -> getString(
                 R.string.state_disconnected, causeText(state.cause), (state.retryInMs + 999) / 1000,
             )
@@ -2004,6 +2013,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     getString(if (wolStore.hasMacs()) R.string.state_host_sleep else R.string.state_host_sleep_no_wol)
                 } else if (state.cause == SessionUi.Cause.KEY_MISSING) KEY_MISSING_TEXT
                 else if (state.cause == SessionUi.Cause.KEY_STORE_FAILED) KEY_STORE_FAILED_TEXT
+                else if (state.cause == SessionUi.Cause.PAIR_CANCELLED) PAIR_CANCELLED_TEXT
                 else getString(R.string.state_failed, causeText(state.cause))
         }
         if (ConnectMode.showUsbHint(mode, SystemClock.elapsedRealtime() - usbStartMs, hostReached)) {
@@ -2172,6 +2182,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val KEY_STORE_FAILED_TEXT = "Eşleşme anahtarı kaydedilemedi — Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val KEY_MISSING_TEXT = "Mac bu tableti tanımıyor. Mac'te 'Onaylı cihazları unut' deyip yeniden bağlan."
         const val USER_DISCONNECTED_TEXT = "Bağlantı kesildi. Yeniden bağlanmak için Bağlan'a dokun."
+        const val PAIRING_NEEDS_USER_TEXT = "Mac eşleşme istiyor."
+        const val STORED_TRUST_TEXT = "Eşleşme yarım kaldı."
+        const val PAIR_CANCELLED_TEXT = "Eşleşme iptal edildi."
         const val KEYFRAME_RETRY_MS = 500L
         const val RATE_POLL_MS = 100L
         const val INPUT_TICK_MS = 25L
@@ -2192,7 +2205,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
-            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED -> R.string.cause_protocol_error // literal texts in render()
+            SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED ->
+                R.string.cause_protocol_error // literal texts in render()
             SessionUi.Cause.HOST_SLEEP -> R.string.cause_host_sleep
         },
     )

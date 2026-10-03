@@ -56,15 +56,18 @@ class SessionMachineTest {
         assertFalse(m.inputAllowed)
     }
 
-    @Test fun pendingThenAccepted() {
-        val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
+    @Test fun pendingThenAcceptedStillWaitsForTheLocalConfirmation() {
+        // T-150: the Mac's ACCEPTED alone does not open a PAIRING session (full flows: PairTrustFlowTest).
+        val gen = step(Event.Start(ep, userInitiated = true)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini")), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true, promptGen = gen)), p.ui())
         assertFalse(m.inputAllowed)
         val a = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
-        assertEquals(listOf<SessionUi>(SessionUi.Connected("Mac mini", 0)), a.ui())
-        assertTrue(m.inputAllowed)
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", needsLocalConfirm = true, promptGen = gen)), a.ui())
+        assertFalse(a.has<Action.Send>())
+        assertFalse(m.inputAllowed)
+        assertEquals(-1, m.acceptedGen)
     }
 
     @Test fun pairingCodeAndRePairingReachTheUi() {
@@ -72,13 +75,13 @@ class SessionMachineTest {
         step(Event.ControlOpened(gen))
         step(Event.Secured(gen, "044261", rePairing = true))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", "044261", true)), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", "044261", true, needsLocalConfirm = true, promptGen = gen)), p.ui())
         step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
         // a later session starts without the old code
         val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen2))
         val q = step(Event.Received(gen2, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false)), q.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true, promptGen = gen2)), q.ui())
     }
 
     @Test fun staleSecuredEventIsIgnored() {
@@ -86,7 +89,7 @@ class SessionMachineTest {
         step(Event.ControlOpened(gen))
         step(Event.Secured(gen + 50, "111111", false))
         val p = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
-        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false)), p.ui())
+        assertEquals(listOf<SessionUi>(SessionUi.AwaitingApproval("Mac mini", null, false, needsLocalConfirm = true, promptGen = gen)), p.ui())
     }
 
     @Test fun missingPairKeyFailsWithoutRetryOrBye() {
@@ -111,9 +114,10 @@ class SessionMachineTest {
         step(Event.ControlOpened(gen))
         val pend = step(Event.Received(gen, ack(HelloAck.PENDING_APPROVAL)))
         assertFalse(pend.has<Action.Send>())
-        val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
-        assertEquals(listOf(true, false), acc.filterIsInstance<Action.Send>().map { it.msg is Ping })
-        // direct ACCEPTED (PAIRED) also proves the key at once
+        // T-150: a PAIRING session's ACCEPTED sends nothing before the local confirmation (PairTrustFlowTest covers
+        // the order after it: proof PING, STREAM_PREFS, ...)
+        assertFalse(step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421))).has<Action.Send>())
+        // direct ACCEPTED (PAIRED) proves the key at once
         val gen2 = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen2))
         val acc2 = step(Event.Received(gen2, ack(HelloAck.ACCEPTED, 6, 7421)))
