@@ -138,6 +138,13 @@ public struct InputPipeline: Sendable {
         machine?.noteControlActivity(at: time) ?? false
     }
 
+    /// The coalesced activity of a `ControlActivityMailbox` (T-163, see `InputStateMachine.noteControlActivity(_:)`):
+    /// hand it over before running the machine. Same result as `noteControlActivity(at:)`.
+    @discardableResult
+    public mutating func noteControlActivity(_ handoff: ControlActivityHandoff) -> Bool {
+        machine?.noteControlActivity(handoff) ?? false
+    }
+
     /// When the next watchdog is due (see `InputStateMachine.nextDeadline(now:)`, which mutates for the same reason).
     public mutating func nextDeadline(now: UInt64) -> UInt64? {
         machine?.nextDeadline(now: now)
@@ -271,5 +278,74 @@ public struct InputPipeline: Sendable {
     private mutating func record(_ r: ReleaseRecord) {
         if records.count >= 64 { records.removeFirst() }
         records.append(r)
+    }
+}
+
+// MARK: - Control activity mailbox (T-163)
+
+/// What a `ControlActivityMailbox` hands to the machine: the newest receive time, and the newest record that followed
+/// a receive gap longer than the stall pause (nil when there was none since the last hand-off).
+public struct ControlActivityHandoff: Equatable, Sendable {
+    public var latest: UInt64
+    public var resumedAt: UInt64?
+    public init(latest: UInt64, resumedAt: UInt64?) {
+        self.latest = latest
+        self.resumedAt = resumedAt
+    }
+}
+
+/// KEY-REPEAT-STALL activity between the session queue (which notes every record of the active control connection)
+/// and the input queue (which takes it before running the machine). A value type with no locking: the Host keeps it
+/// under a lock, since it is written and read from two queues.
+///
+/// Coalescing keeps the real receive gaps: the gap is measured between CONSECUTIVE notes, never between hand-offs, so
+/// records that arrived on time never look like a stall however rarely the input queue takes them, and a real gap is
+/// never lost however many notes follow it before the next hand-off.
+///
+/// Wake-ups are bounded: `note` asks for one only on a gap and only while none is outstanding; the outstanding one is
+/// cleared by `takeForWake()`, the wake-up's own hand-off, so at most one is ever queued.
+public struct ControlActivityMailbox: Sendable {
+    /// A gap longer than this between two notes is a stall (`InputStateMachine.Configuration.keyRepeatStallPauseUs`).
+    public let stallGapUs: UInt64
+    public private(set) var latest: UInt64?
+    /// The newest note that followed a gap, not yet handed off.
+    public private(set) var resumedAt: UInt64?
+    /// A wake-up was requested and has not run yet.
+    public private(set) var wakePending = false
+
+    public init(stallGapUs: UInt64) {
+        self.stallGapUs = stallGapUs
+    }
+
+    /// One record of the active session at `time`, after it was handled. Returns true when the caller must schedule a
+    /// wake-up of the input queue (a gap may have ended a pause whose repeat has no timer); false otherwise, including
+    /// while a wake-up is already outstanding (it will take this gap too). A clock that went backwards is no gap.
+    public mutating func note(_ time: UInt64) -> Bool {
+        defer { latest = time }
+        guard let previous = latest, time > previous, time - previous > stallGapUs else { return false }
+        resumedAt = time
+        guard !wakePending else { return false }
+        wakePending = true
+        return true
+    }
+
+    /// The activity for the machine (nil when nothing was noted since the session started). Clears the gap.
+    public mutating func take() -> ControlActivityHandoff? {
+        guard let latest else { return nil }
+        defer { resumedAt = nil }
+        return ControlActivityHandoff(latest: latest, resumedAt: resumedAt)
+    }
+
+    /// The scheduled wake-up's hand-off: also clears the outstanding wake-up, so the next gap may ask for a new one.
+    public mutating func takeForWake() -> ControlActivityHandoff? {
+        wakePending = false
+        return take()
+    }
+
+    /// A new session: nothing of the previous one's activity carries over. An outstanding wake-up stays outstanding
+    /// (its closure is still queued and will clear it).
+    public mutating func reset() {
+        latest = nil
+        resumedAt = nil
     }
 }

@@ -115,21 +115,35 @@ extension InputStateMachine {
         return Self.elapsed(since: last, now: now) > configuration.keyRepeatStallPauseUs
     }
 
-    /// KEY-REPEAT-STALL: a record was received on the active session's control connection at `time` (host clock).
-    /// Call it AFTER that record was handled: `handle` checks the pause against the activity from before the record,
-    /// so a delayed KEY UP that ends a stall is never preceded by a repeat. Changes no held key and emits nothing.
-    ///
-    /// Returns true when this note ended a pause of an armed repeat: the next repeat is then at least one interval
-    /// after `time` (no burst), and the consumer must ask `nextDeadline(now:)` again (a paused repeat had none).
+    /// KEY-REPEAT-STALL: ONE record was received on the active session's control connection at `time` (host clock),
+    /// and every earlier one was noted before it. A gap of more than `keyRepeatStallPauseUs` since the previous note
+    /// ends a pause. A consumer that coalesces notes must not use this with only the newest time (the gap between two
+    /// hand-offs is not a receive gap): it uses `noteControlActivity(_:)` with a `ControlActivityMailbox` hand-off.
     @discardableResult
     public mutating func noteControlActivity(at time: UInt64) -> Bool {
-        let resumed = isKeyRepeatPaused(at: time)
-        lastControlActivity = time
-        if resumed, let r = keyRepeat {
-            let earliest = time &+ Swift.max(configuration.keyRepeatIntervalUs, 1)
-            if r.nextAt < earliest { keyRepeat?.nextAt = earliest }
+        var resumedAt: UInt64?
+        if let last = lastControlActivity, Self.elapsed(since: last, now: time) > configuration.keyRepeatStallPauseUs {
+            resumedAt = time
         }
-        return resumed
+        return noteControlActivity(ControlActivityHandoff(latest: time, resumedAt: resumedAt))
+    }
+
+    /// KEY-REPEAT-STALL: the records received since the last hand-off, coalesced (`ControlActivityMailbox`): the newest
+    /// receive time, and the newest record that followed a real receive gap longer than the stall pause, if any.
+    /// Call it BEFORE handling a message (it holds only records that were already handled): `handle` then checks the
+    /// pause against the activity from before the message, so a delayed KEY UP that ends a stall is never preceded by
+    /// a repeat. Changes no held key and emits nothing.
+    ///
+    /// Returns true when a gap ended a pause of an armed repeat: the next repeat is then at least one interval after
+    /// the record that ended the gap (no burst), and the consumer must ask `nextDeadline(now:)` again (a paused repeat
+    /// had none).
+    @discardableResult
+    public mutating func noteControlActivity(_ handoff: ControlActivityHandoff) -> Bool {
+        lastControlActivity = handoff.latest
+        guard let resumedAt = handoff.resumedAt, let r = keyRepeat else { return false }
+        let earliest = resumedAt &+ Swift.max(configuration.keyRepeatIntervalUs, 1)
+        if r.nextAt < earliest { keyRepeat?.nextAt = earliest }
+        return true
     }
 
     /// KEY-RELEASE: everything held, last pressed first, ordinary keys before modifiers. Stops the repeat.

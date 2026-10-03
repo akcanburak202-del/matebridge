@@ -20,9 +20,10 @@
 // - Keyboard (`KEY`, `InputStateMachine+Keyboard.swift`): held keys are remembered by identity together with the
 //   keycode or modifier that was injected; the host-side auto-repeat is driven by the same `tick` / `nextDeadline`
 //   as the watchdogs; `releaseAll` releases keys and modifiers with the rest.
-// - Control activity (T-163): the consumer calls `noteControlActivity(at:)` for every record received on the active
-//   session's control connection (PING included), AFTER that record was handled, so a record is always handled with
-//   the activity from before it. The repeat pauses while the connection has been silent for longer than
+// - Control activity (T-163): the consumer reports every record received on the active session's control connection
+//   (PING included) AFTER that record was handled, so a record is always handled with the activity from before it:
+//   one by one with `noteControlActivity(at:)`, or coalesced through a `ControlActivityMailbox` hand-off with
+//   `noteControlActivity(_:)` (the Host). The repeat pauses while the connection has been silent for longer than
 //   `keyRepeatStallPauseUs` (KEY-REPEAT-STALL); a tick that finds it paused does nothing, so the binding promise of
 //   `nextDeadline(now:)` below holds for every deadline but a repeat that a stall pause overtook.
 //

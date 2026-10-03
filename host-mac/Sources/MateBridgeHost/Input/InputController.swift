@@ -18,10 +18,12 @@ import MateBridgeCore
 /// already posted is never gated (see `InjectionPlanner`).
 ///
 /// Control activity (T-163). `noteControlActivity(at:)` is the one entry point that does NOT hop with `queue.sync`: it
-/// runs for every record of the active session's control connection, PING included. It stores the time under a lock,
-/// and every queue entry point hands the stored time to the pipeline first, so a delivered message is checked against
-/// the activity from before it (`SessionServer` notes a record after delivering it). Only a note that follows a gap
-/// longer than the repeat stall pause, which may have ended a pause whose repeat has no timer, costs one `queue.async`.
+/// runs for every record of the active session's control connection, PING included. It notes the time in a
+/// `ControlActivityMailbox` under a lock, and every queue entry point hands the mailbox's coalesced activity to the
+/// pipeline first, so a delivered message is checked against the activity from before it (`SessionServer` notes a
+/// record after delivering it). The mailbox measures gaps between consecutive records, not between hand-offs. Only a
+/// gap longer than the repeat stall pause, which may have ended a pause whose repeat has no timer, costs a
+/// `queue.async` wake-up, and at most one is ever outstanding.
 ///
 /// Logging (docs/LOGGING.md): component `input`, counts and state changes only, never coordinates or keys.
 public final class InputController: @unchecked Sendable {
@@ -39,11 +41,11 @@ public final class InputController: @unchecked Sendable {
     private let capsLock: CapsLockControlling
     private let cursor: CursorLocating
     private let logger = SessionLogger(component: "input")
-    /// The most recent control activity (`noteControlActivity(at:)`); written on the session queue, read on `queue`.
+    /// Control activity (`noteControlActivity(at:)`): written on the session queue, taken on `queue`, only under
+    /// `activityLock`. Its gap is the machine's stall pause (`InputStateMachine.Configuration`).
     private let activityLock = NSLock()
-    private var activityTime: UInt64?
-    /// A note after a silence longer than this may end a repeat pause (`InputStateMachine.Configuration`).
-    private let stallPauseUs = InputStateMachine.Configuration().keyRepeatStallPauseUs
+    private var activityMailbox = ControlActivityMailbox(
+        stallGapUs: InputStateMachine.Configuration().keyRepeatStallPauseUs)
 
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
@@ -155,7 +157,7 @@ public final class InputController: @unchecked Sendable {
             // queue notes this session's first record (no information: the repeat does not pause, as before T-163).
             // A caller that never notes activity (`InjectTest`) therefore keeps today's repeat.
             activityLock.lock()
-            activityTime = nil
+            activityMailbox.reset()
             activityLock.unlock()
             log(.info, "input_session_start")
             rearmWatchdog()
@@ -221,13 +223,19 @@ public final class InputController: @unchecked Sendable {
     /// (`SessionServer` `controlActivity`, T-163). Called on the session queue for every record, PING included, so it
     /// does not hop synchronously: see the class comment.
     public func noteControlActivity(at time: UInt64) {
-        // nil: the session's first note; its machine had no activity, so nothing was paused. A clock that went
-        // backwards needs nothing either: the machine never sees a pause then.
-        guard let previous = storeActivity(time), time > previous, time - previous > stallPauseUs else { return }
-        // A long silence just ended: a paused repeat (which had no timer) may resume. Rare; never on a steady stream.
+        activityLock.lock()
+        let wake = activityMailbox.note(time)
+        activityLock.unlock()
+        guard wake else { return }
+        // A long silence just ended: a paused repeat (which had no timer) may resume. Rare, never on a steady stream,
+        // and bounded: the mailbox asks again only after this closure has taken its hand-off.
         queue.async { [weak self] in
-            guard let self, !stopped else { return }
-            pushActivity()
+            guard let self else { return }
+            activityLock.lock()
+            let handoff = activityMailbox.takeForWake()
+            activityLock.unlock()
+            guard !stopped else { return }
+            if let handoff { pipeline.noteControlActivity(handoff) }
             rearmWatchdog()
         }
     }
@@ -410,22 +418,14 @@ public final class InputController: @unchecked Sendable {
         activity = nil
     }
 
-    /// Stores the latest control activity; returns the previous one (nil: none since the session started).
-    private func storeActivity(_ time: UInt64) -> UInt64? {
-        activityLock.lock()
-        defer { activityLock.unlock() }
-        let previous = activityTime
-        activityTime = time
-        return previous
-    }
-
-    /// Hands the latest control activity to the pipeline (queue-confined). Called first by every entry point that runs
-    /// the machine, so the repeat pause is decided on the newest activity the session queue has reported.
+    /// Hands the control activity noted since the last hand-off to the pipeline (queue-confined). Called first by
+    /// every entry point that runs the machine, so the repeat pause is decided on the newest activity the session
+    /// queue has reported, with every real receive gap in it.
     private func pushActivity() {
         activityLock.lock()
-        let time = activityTime
+        let handoff = activityMailbox.take()
         activityLock.unlock()
-        if let time { pipeline.noteControlActivity(at: time) }
+        if let handoff { pipeline.noteControlActivity(handoff) }
     }
 
     private func watchdogFired() {
