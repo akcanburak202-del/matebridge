@@ -219,3 +219,14 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 - `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=offline`: yenileme hızı değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, 0,7 sn sonra yenisi kurulur (`display_created`). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
 - `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka ekran boyutu, `shutdown` uygulama kapanıyor.
 - `ev=display_created width=… height=… encoded=…`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
+
+## Tablette eşleşme güveni (tablet, `MB/session`, T-150/T-151, karar 0018)
+
+Hiçbir alanda eşleşme kodu, anahtar, token, `host_id` ya da Mac adı yazılmaz. `pair_key_stored` kaldırıldı.
+
+- Bekleyen kayıt: `pair_pending_stored re_pair=0|1`, `pair_pending_expired kind=pending|marker`, `pair_pending_drop_failed`, `pair_marker_clear_failed`, `pair_key_store_failed`.
+- Onay: `pair_trust_confirmed where=live|stored host_accepted=0|1`, `pair_trust_confirm_failed`, `pair_trust_cancelled reason=user|timeout|stale`, `pair_trust_event_stale kind=confirm|cancel` (ekranda gösterilmeyen bir isteme dokunuldu, yok sayıldı), `pair_prompt_visible visible=0|1`, `pair_stored_prompt confirmed=0|1`, `pair_paired_with_pending`, `pair_rejected confirmed=0|1`.
+- Kullanıcıyla başlama: `pairing_needs_user re_pair=0|1` (kullanıcının başlatmadığı bağlantıya PAIRING cevabı geldi; hiçbir şey saklanmadı), `pair_auto_skip origin=` (eşleşme isteyen adres kendiliğinden bağlanmada atlandı), `pair_cancel_latched` (İptal/zaman aşımından sonra otomatik başlatma engellendi).
+- Unut: `pair_forget live=0|1`, `pair_forget_none`, `pair_forget_failed live=0|1`, arayüzde `pair_ui_forget_failed`.
+- Arayüz: `pair_ui action=<eylem>` (yalnız eylem adı, değer yok).
+- Alanlar: `session_start` ve `connect_start`'ta `user=0|1`; `transport`'ta `origin=`; `transport_pick reason=usb_asked`. `secured` artık PAIRED bağlantılarda da yazılır.

@@ -1,7 +1,7 @@
 ---
 id: T-151
 title: Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut"
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]

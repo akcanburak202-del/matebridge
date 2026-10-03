@@ -1,7 +1,7 @@
 ---
 id: T-150
 title: Keep new pair keys pending until local confirmation and pair only on user action
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-042, T-044]
