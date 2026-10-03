@@ -1,7 +1,7 @@
 ---
 id: T-182
 title: Record decision 0026 and the knob inventory; close T-019 and T-067
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -143,7 +143,13 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. Envanteri HEAD'de (`ef264dd`) yeniden doğrula: istemci `getXxxExtra("…")` + `EXTRA` sabitleri (`MainActivity`, `WifiKnobs`, `AudioPlayout`/`SinkPolicy`/`AudioBufferConfig`, `bench/NetBench.kt`), host `"MATEBRIDGE_*"` dizgileri ve `main.swift` CLI kipleri. Satır numaralarını a30c769'dan HEAD'e güncelle; varsayılanları koddan oku.
+2. `docs/KNOBS.md` yaz (Türkçe): sınıf tanımları, üç tablo (istemci 33 + 4 `net_bench` alt anahtarı, host 25 env, 4 CLI + derleme zamanı), her satırda dosya:satır, kart/kanıt, varsayılan, sınıf, sonuç, uygulayan kart; sayım komutları ve sonuçları; jitter 1–2 açık noktası; planlanan ayarlar; kapsam dışı okunan anahtarlar.
+3. `docs/decisions/0026-experiment-knobs.md`: jitter 1–2 açık noktasını, `docs/KNOBS.md` işaretçisini ve kullanıcı cevaplarını (GL, `nw` onaylı; jitter) ekle. Durum satırı zaten "kabul (2026-10-03)", değişmez.
+4. T-019 ve T-067: `status: done` + tarihli orkestratör notu "Kapatıldı: yapılmayacak (karar 0026)".
+5. `./scripts/board.sh` çalıştır, `backlog/BOARD.md`'yi commit'le; `./scripts/check.sh`; Handoff.
+
+Riskler: kod değişikliği yok. Satır numaraları T-183…T-204 birleştikçe kayar; tablo HEAD SHA'sını belirtir.
 
 ## Handoff
 
