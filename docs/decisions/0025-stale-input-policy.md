@@ -1,6 +1,6 @@
 # 0025 — Ağ tıkanmasından sonra bayat girdi politikası
 
-- **Durum:** önerildi
+- **Durum:** ilke olarak kabul (2026-10-03); T_stale T-171 verisiyle
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -29,7 +29,7 @@ Tuş tekrarı ayrı bir konu ve T-163'te çözülüyor: bağlantı sessizken hos
 
 En büyük risk, saat farkı hatası yüzünden meşru girdinin düşmesi. Bu yüzden politika belirsizlikte kapalıdır ve fuzz testleri geçmeye devam etmelidir.
 
-**Kullanıcı onayı bekliyor.** Kullanıcının cevaplaması gereken (manifest §5 soru 10): uzun bir Wi-Fi tıkanmasından sonra ~300 ms'den eski basmaların yok sayılmasını kabul ediyor musun? Bırakmalar her zaman uygulanır.
+**Kullanıcı 2026-10-03'te ilke olarak onayladı:** (c) seçeneği; kesin T_stale T-171 verisinden seçilir ve T-199 kodlanmadan önce sonuç kullanıcıya gösterilir. Sorulan (manifest §5 soru 10): uzun bir Wi-Fi tıkanmasından sonra ~300 ms'den eski basmaların yok sayılmasını kabul ediyor musun? Bırakmalar her zaman uygulanır.
 
 ## Sonuçlar
 - **Kazanılan:** tıkanmadan sonra saniyeler önceki tıklama, tuş ve vuruşlar Mac'te oynatılmaz. Girdi asla takılı kalmaz, çünkü bırakmalar korunur.

@@ -1,6 +1,6 @@
 # 0024 — Wi-Fi'de kalem örneklerini zamana yayma (deneysel, sınırlı)
 
-- **Durum:** önerildi
+- **Durum:** önerildi; park (Wi-Fi yedek yol, çizim USB ile; 2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam

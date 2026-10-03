@@ -1,6 +1,6 @@
 # 0021 — `capture_time_us`'in anlamı ve gecikme sayıları
 
-- **Durum:** önerildi
+- **Durum:** ilke olarak kabul (2026-10-03); A/B seçimi T-170 verisiyle
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -36,7 +36,7 @@ Seçenekten bağımsız olarak hemen yapılacak metin düzeltmeleri:
 - §4 geç girdi sınırı "host 5 sn sessizlik kapanışı" olarak düzeltilir.
 - LOGGING.md'ye iki not eklenir: `latency_us` SCK kaymasını içermez; macOS `unacked_bytes` aslında bir `sbbytes` tahminidir.
 
-**Kullanıcı onayı bekliyor.** A/B seçimi veriye bağlı ve orkestratör önerir. Kullanıcıya sorulanlar:
+**Kullanıcı 2026-10-03'te ilke olarak onayladı:** A/B, T-170 verisiyle seçilir ve sonuç kullanıcıya gösterilir; gecikme bütçeleri optik ölçümden (T-174) sonra konur. A/B seçimi veriye bağlı ve orkestratör önerir. Kullanıcıya sorulanlar:
 1. Seçeneğin T-170 verisine göre seçilmesini ve o zamana kadar yalnızca metnin düzeltilmesini kabul ediyor musun?
 2. **Gecikme bütçeleri (manifest §5 soru 14):** bütçelerin incelemenin önerdiği 45/70 ms ile şimdi değil, optik ölçümden (T-174) sonra belirlenmesine katılıyor musun? Bütçe kararı ertelendi ve henüz numarası yok.
 

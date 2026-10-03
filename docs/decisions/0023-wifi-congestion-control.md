@@ -1,6 +1,6 @@
 # 0023 — Wi-Fi tıkanıklığı TCP üzerinde çözülür: önce sabit Wi-Fi profili, gerekirse uçuştaki bayt bütçesi ve canlı bit hızı
 
-- **Durum:** önerildi
+- **Durum:** önerildi; düşük öncelik (Wi-Fi yedek yol, 2026-10-03)
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -44,7 +44,7 @@ Bütçeler ölçümden **önce** yazılır. Öneri:
 - kontrol srtt p95 ≤ 40 ms;
 - Wi-Fi'de yakalama→çözme p95 ≤ 70 ms.
 
-**Kullanıcı onayı bekliyor.** Kullanıcının cevaplaması gerekenler (manifest §5 soru 8):
+**Kullanıcı onayı bekliyor.** Kullanıcı cevabı (2026-10-03): **Wi-Fi yedek yol kalır**, asıl yol USB. Bu yüzden H03 işi (T-127, T-178, T-195, T-196) düşük öncelikte; karar, T-127 ölçümü yapılınca yeniden sunulur. Kullanıcının cevaplaması gerekenler (manifest §5 soru 8):
 1. Wi-Fi asıl yol mu olacak, yoksa yedek mi kalacak? Bu, H03 işinin önceliğini belirler.
 2. Mac'i Ethernet'e bağlayıp ölçüm yapabilir misin?
 
