@@ -1,7 +1,7 @@
 ---
 id: T-145
 title: Log and show the host build commit
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -52,7 +52,14 @@ Source: external architecture review 2026-10-03 (L01, D1, M07); verification: do
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `host-mac/Resources/Info.plist`: add `MBGitCommit` = `__GIT_COMMIT__` placeholder (template comment updated).
+2. `scripts/bundle-host.sh`: compute `git_commit` from the repo root: `git rev-parse --short HEAD`, `-dirty` suffix when `git status --porcelain` is non-empty, `unknown` when git is missing, the tree is not a repo, or the command fails. Substitute it with `sed`; `plutil -lint` stays.
+3. `MateBridgeCore/Session/BuildInfo.swift` (pure): `BuildInfo(infoDictionary: [String: Any]?)` with `version` (`CFBundleShortVersionString`), `build` (`CFBundleVersion`), `sha` (`MBGitCommit`). Missing key, non-string, empty or an unfilled `__X__` placeholder → `unknown`. `logFields(os:)` → `version=… build=… sha=… os=…`; whitespace inside a value becomes `_` so the line stays `key=value` parseable (`operatingSystemVersionString` contains spaces). `menuTitle` → `Sürüm <version> (<sha>, <build>)`.
+4. `MateBridgeApp/main.swift`: at the top of `applicationDidFinishLaunching` (before `server.start()`), build `BuildInfo(infoDictionary: Bundle.main.infoDictionary)`, log `ev=app_start` once via `HostLog.log(.info, component: "session", …)`, and add a disabled `menuTitle` item to the menu.
+5. `Tests/MateBridgeCoreTests/Session/BuildInfoTests.swift`: full dictionary, each missing key, nil dictionary, placeholder/empty values, exact `logFields` output, whitespace sanitising, `menuTitle`.
+6. `./scripts/check.sh`; a local `bundle-host.sh` run only to inspect the generated Info.plist (no app launch).
+
+Risks: `swift run` has no bundle Info.plist → every field `unknown` (covered by the nil/empty dictionary test). Serialize with T-167/T-189/T-192 on `main.swift`: keep the diff small.
 
 ## Handoff
 
