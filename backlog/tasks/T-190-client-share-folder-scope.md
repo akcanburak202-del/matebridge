@@ -1,7 +1,7 @@
 ---
 id: T-190
 title: Share a chosen folder (optional read-only) instead of all storage
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-153]
@@ -88,10 +88,28 @@ Risks: `FilesLifecycle.kt` is not in `files:`, so a scope restart goes through `
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
+- **Commit:** `241c172` (implementation; plan: `ad969ea`), branch `task/T-190-client-share-folder-scope`. `./scripts/check.sh` → ALL OK (DavScopeTest 5/5, FilesScopeTest 8/8, FilesScopeSettingsTest 4/4, SettingsCatalogTest 12/12, DavPathTest +1, DavServerTest 25/25 unchanged).
 - **Dokunulan dosyalar:**
+  - `C/files/FilesConfig.kt`: `FilesConfig.readOnly`; new `FilesRoot` (`matebridge` default, `download`, `all`; unknown id → default) and `FilesScope(root, readOnly)` with `directory(storage)` (storage only for `all`; else `storage/<folder>`, created with `mkdir` when missing; null for a file, a symlink, a failed mkdir, or a canonical path that is not exactly `storage/<folder>`), `logFields()`, `missingFolderText()`.
+  - `C/files/DavHandler.kt`: read-only gate right after auth/parse and OPTIONS: PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK → 403 before any path handling (virtual root, `/MatePad/`, `._*`/`.DS_Store` metadata branch). OPTIONS → `DAV: 1` and `Allow: OPTIONS, PROPFIND, GET, HEAD` in read-only; every `405 Allow` uses the same list.
+  - `C/files/FilesController.kt`: constructor takes a `scope` provider, read at every start; the factory serves `scope.directory(storage)` with `FilesConfig(readOnly=…)`, or (no folder) a server whose start fails at once → OFF + FAILED, never the whole storage. `statusText` (missing folder named), `rescope()` (scope differs from the running server's → `shutdown()` (OFF, stop) then the last `sync` inputs again → new token, READY on listen).
+  - `C/session/Settings.kt`: keys `files_root`, `files_read_only`; `filesRoot()`, `filesReadOnly()`, `filesScope()` + setters.
+  - `C/settings/SettingsCatalog.kt`: `SettingsHost.filesRoot/selectFilesRoot/filesReadOnly/setFilesReadOnly`; "Tablet dosyaları" = `files`, `files_root` (Choice "Paylaşılan klasör": MateBridge / Download / Tüm depolama), `files_ro` (Toggle "Salt okunur"), `files_status`.
+  - `C/MainActivity.kt`: only the `FilesController` constructor argument, the four new `SettingsHost` members and `filesStatus = files.statusText` (the `FilesSwitch` import became `FilesRoot`).
+  - Tests: `files/DavScopeTest.kt` (new), `files/FilesScopeTest.kt` (new), `files/DavPathTest.kt` (+sub-folder root test), `session/FilesScopeSettingsTest.kt` (new), `settings/SettingsCatalogTest.kt`.
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Read-only defaults to **off** (decision 0028 says it is offered, not that it is the default). The folder default is `MateBridge/` per the decision; `Download/` is the third choice, matching the log classes in the card.
+  - An unknown stored root id falls back to `matebridge` (the narrow choice), never `all`.
+  - A folder that is a symlink is refused even when it points inside the storage (the check is "real directory, canonical == storage/<folder>").
+  - T-191 is not merged (status `todo`), so `Settings.resetToDefaults()` / `SettingsResetTest` do not exist yet; T-191 must add `files_root` and `files_read_only` to its reset.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** (none of this ran on the tablet)
+  1. Default (sharing on, folder MateBridge, read-only off), trusted USB session: `/sdcard/MateBridge/` is created if missing; the Finder mount "MatePad" shows only its contents; copying a file onto it lands in `/sdcard/MateBridge/`. Log: `MB/files ev=scope root=matebridge ro=0`, then `server state=on`.
+  2. Turn "Salt okunur" on while mounted: `ev=scope_change root=matebridge ro=1 running=1`, `server state=off … reason=destroy`, new `state=on`; the Mac remounts (T-136). Finder shows the volume read-only (no "new folder", lock badge); copying onto it fails with a permission error and nothing appears on the tablet. Check that macOS really mounts read-only with `DAV: 1` (PROPFIND still advertises `supportedlock`, see below).
+  3. Choose "Tüm depolama": after the automatic remount the whole storage is visible (`root=all`). Choose "Download": only `/sdcard/Download/`.
+  4. Folder cannot be made (e.g. put a file named `MateBridge` in `/sdcard` via adb): status line "Durum: \"MateBridge\" klasörü açılamadı; paylaşım kapalı", `W … ev=scope_missing root=matebridge ro=0`, `server state=off … reason=failed`, no READY, no mount.
+  5. `adb logcat -s 'MB:*'` during 1–4: no path or file name in any `MB/files` line.
 - **Açık sorular:**
+  - **LOGGING.md (orchestrator):** add under "Tablet dosya sunucusu": `ev=scope root=matebridge|download|all ro=0|1` (each server start: the served class), `W ev=scope_missing root= ro=` (the folder is missing and could not be created; the server stays off, `state=off reason=failed` follows, never the whole storage), `ev=scope_change root= ro= running=0|1` (folder or read-only changed; with `running=1` it is followed by `server state=off reason=destroy` and a new `state=on`). Separately, the existing doc says `reason=setting_off` but the code (T-153) logs `reason=disabled`.
+  - `FilesLifecycle.kt` is not in `files:`, so a scope restart reuses `shutdown()` and its line says `reason=destroy` (preceded by `ev=scope_change`). A small follow-up could add `FilesLifecycle.restart(reason)` to log `reason=scope`.
+  - `DavXml.kt` is not in `files:`: in read-only mode PROPFIND still lists `supportedlock` for every entry. macOS decides read-only from the OPTIONS `DAV` class, so this should not matter; if the device test (item 2) shows a read-write mount, drop `supportedlock` in read-only mode there.
+  - Codex review (security) is required by the card; not run by this agent.
