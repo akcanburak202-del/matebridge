@@ -1,7 +1,7 @@
 ---
 id: T-151
 title: Add pairing confirm/cancel, the new-host pick prompt and "Bu Mac'i unut"
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-150]
@@ -88,7 +88,16 @@ Decision 0018 must be accepted by the user before work starts (manifest §5 Q3).
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **`C/session/TrustUiText.kt` (new, pure):**
+   - `TrustText` (string ids) / `TrustButton` / `TrustLine` / `TrustView`; `TrustUiText.view(state)` maps `AwaitingApproval(code, rePairing, needsLocalConfirm)`, `PairingNeedsUser` (host name as a sanitised claim), `StoredTrust(confirmed=false|true)` and `Failed(PAIR_CANCELLED)` to texts + buttons; `pickView(prompt)` for the non-blocking banner; `hostReached(state)` (+ `PairingNeedsUser`, `StoredTrust`); `claimName()` (no control/bidi chars, length cap).
+   - `ConnectOrigin` enum + `forConnectButton(typed, fieldVisible)`: only PAIR, STORED_REPAIR/STORED_CONNECT and TYPED_ADDRESS are `userInitiated`; DISCOVERY, SAVED_WIFI, USB_MODE, AUTO_SWITCH, WAKE, CONNECT_BUTTON are not; automatic ones are subject to the pick gate, "Bağlan" clears it.
+   - `PairPick`: last `Connecting` endpoint → the endpoint that answered PAIRING; `asked` set (bounded) that automatic connects skip; `seen` discovered endpoints (bounded) → `nextAuto()` so a parked prompt does not hide the real Mac; `ignore()` / `pair()` / `onUserStart()`; prompt cleared by `Connected`/`AwaitingApproval`/`StoredTrust`.
+   - `PromptVisibility` (post `true`/`false` only on change; `onStop`), `ForgetFlow` (2-step confirm, result text), `pairUiFields(action)` for `ev=pair_ui`.
+2. **`AutoTransport.kt`:** `shouldFallBack` also for `PairingNeedsUser`; `next(..., usbBlocked)` and `onProbeOpen(ui, usbBlocked)` never go to an asked USB endpoint. **`WakeConnect.onDiscovered(..., atPairPrompt)`**: a pairing prompt frees the slot for another endpoint.
+3. **`MainActivity.kt`:** `connect(ep, origin)` (gate + `userInitiated`), all call sites pass their origin; trust button row built in code under the status text; status text from `TrustView` via `strings.xml`; main "Bağlan" hidden while the trust row has buttons; prompt-visibility posts in `render`/`onStop`; Eşleş/Yoksay/Güven/İptal/Yeniden eşleş/Bağlan handlers (`ev=pair_ui action=`); AUTO initial pick and wake target skip an asked endpoint; fallback on `PairingNeedsUser`; "Bu Mac'i unut" via two `AlertDialog`s → `forgetCurrentHost()` → like "Bağlantıyı kes" + forget-done text.
+4. **`SettingsCatalog.kt`:** `forget_host` action in Bağlantı (both panels), label from the host (`strings.xml`).
+5. **`strings.xml`:** all new texts. **Tests:** `TrustUiTextTest`, `PairPickTest` (impostor, origins, visibility, forget), `AutoTransportTest`/`WakeConnectTest`/`SettingsCatalogTest` additions, log-field scan of `pair_ui` lines.
+6. Risks: `MainActivity` overlap with T-159 (kept local); no public "can forget" getter on the controller → the row is always shown and an unknown Mac gives a "nothing to forget" text (Açık sorular).
 
 ## Handoff
 
