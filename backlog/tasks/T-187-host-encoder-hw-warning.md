@@ -1,7 +1,7 @@
 ---
 id: T-187
 title: Warn when VideoToolbox did not select the hardware encoder
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-204]
@@ -62,7 +62,13 @@ Wire: none.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. **Core** `EncoderHardwareCheck.swift`: `enum EncoderHardwareCheck { hardware, software, unknown(status: Int32) }`, `init(usingHardware: Bool?, status: Int32)`, `logLevel` (info / warning / warning), `logFields` (`using_hw=1|0|unknown status=<n>`), `menuText` (`nil` / `yazılım kodlayıcı` / `kodlayıcı türü bilinmiyor`), `event = "encoder_hw"`.
+2. **XCTest** `Tests/MateBridgeCoreTests/Video/EncoderHardwareCheckTests.swift`: the three mappings + `status=0` (noErr but missing value).
+3. **HEVCEncoder**: shared `copyProperty(_:)` helper behind both `read(_:)` helpers; new `hardwareCheck() -> EncoderHardwareCheck` (reads `UsingHardwareAcceleratedVideoEncoder`, `as? Bool`; closed session → `unknown(kVTInvalidSessionErr)`). Encoder spec unchanged (Enable, not Require).
+4. **VideoPipeline**: `encoderHardware: EncoderHardwareCheck?` (nil without encoder).
+5. **StreamCoordinator**: in `createPipeline` after `cadence_setup`, read once, log `video ev=encoder_hw`, remember `(pipelineID, check)`. `publishSummary` appends the menu text while the current pipeline (`pipeline != nil`, same id) is software/unknown; `createPipeline`'s `onSummary("")` becomes `onSummary(warning ?? "")`. Drop the stale `MATEBRIDGE_FRAME_DELAY` comment (T-204).
+6. **LOGGING.md**: new separate section `Kodlayıcı donanım denetimi (Mac, video, T-187)`.
+- Risk: the property is read on the event loop (one `VTSessionCopyProperty`, cheap, already done by `cadence_setup`).
 
 ## Handoff
 
