@@ -1,7 +1,7 @@
 ---
 id: T-158
 title: Put MediaCodec behind a DecoderCodec interface (no behaviour change)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
