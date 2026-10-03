@@ -26,6 +26,16 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private var openQueued = false
     /// `NSWorkspace.didUnmountNotification` observer (T-206): a Finder eject ends the remount intent.
     private var unmountObserver: NSObjectProtocol?
+    /// Snapshot of `TabletFilesPlanner.watchedPaths` (normalized), refreshed after every planner step, so the
+    /// posting thread drops every unrelated unmount without touching the bridge queue.
+    private var watchedPaths: Set<String> = []
+    /// Watched paths unmounted but not yet handed to the planner: in order, duplicates kept (two notifications for
+    /// one path can mean our unmount and then the user's eject), bounded.
+    private var unmountedPaths: [String] = []
+    /// One drain block at most is queued for `unmountedPaths`.
+    private var unmountDrainQueued = false
+    /// Far above what can matter: the planner watches at most `rememberedMounts + 1` paths.
+    private static let maxPendingUnmounts = 16
 
     // Confined to `queue`.
     private var planner = TabletFilesPlanner()
@@ -121,17 +131,38 @@ public final class TabletFilesBridge: @unchecked Sendable {
         }
     }
 
-    /// Any volume was unmounted (posting thread). The planner decides on the bridge queue whether it was the user
-    /// ejecting our volume. Our own unmounts never count (see `TabletFilesPlanner.volumeUnmounted`): the mount
-    /// points still on the current forward are passed in, so a remount that already landed on the same path is
-    /// not mistaken for an eject. The path is never logged.
+    /// Any volume was unmounted (posting thread). Only a path the planner watches is queued, and at most one drain
+    /// block is pending, so unrelated volumes (disk images, other shares) never reach the bridge queue. The path is
+    /// never logged.
     private func volumeUnmounted(path: String) {
-        queue.async { [self] in
-            let mountedNow = planner.forwardedLocalPort.map { Self.mountPoints(localPort: $0) } ?? []
-            if planner.volumeUnmounted(path: path, mountedNow: mountedNow) {
-                logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off")
-            }
+        let key = TabletFilesPlanner.normalizedPath(path)
+        let scheduleDrain: Bool = lock.withLock {
+            guard watchedPaths.contains(key), unmountedPaths.count < Self.maxPendingUnmounts else { return false }
+            unmountedPaths.append(key)
+            guard !unmountDrainQueued else { return false }
+            unmountDrainQueued = true
+            return true
         }
+        guard scheduleDrain else { return }
+        queue.async { [self] in drainUnmountedPaths() }
+    }
+
+    /// On `queue`. The planner decides whether each unmount was the user ejecting our volume (see
+    /// `TabletFilesPlanner.volumeUnmounted`); our own mount points on the current forward are passed in, so a
+    /// remount that already landed on the same path is not mistaken for an eject.
+    private func drainUnmountedPaths() {
+        let paths = lock.withLock { () -> [String] in
+            defer {
+                unmountedPaths = []
+                unmountDrainQueued = false
+            }
+            return unmountedPaths
+        }
+        let mountedNow = planner.forwardedLocalPort.map { Self.mountPoints(localPort: $0) } ?? []
+        for path in paths where planner.volumeUnmounted(path: path, mountedNow: mountedNow) {
+            logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off")
+        }
+        apply([])  // publishes the new watched paths
     }
 
     private func removeUnmountObserver() {
@@ -155,6 +186,8 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     private func apply(_ actions: [TabletFilesAction]) {
         for action in actions { execute(action) }
+        let watched = planner.watchedPaths
+        lock.withLock { watchedPaths = watched }
         let menu = planner.menu
         if menu != lastMenu {
             lastMenu = menu
@@ -178,7 +211,13 @@ public final class TabletFilesBridge: @unchecked Sendable {
                 logger.log(.info, "mount", sessionID: 0, generation: 0, fields: "result=cancelled code=\(rc)")
             }
         case .unmount(let local):
-            for path in Self.mountPoints(localPort: local) { unmount(path) }
+            // Reported before anything else runs: a replaced volume that is already gone was ejected by the user.
+            var detached: [String] = []
+            var stillMounted: [String] = []
+            for path in Self.mountPoints(localPort: local) {
+                if unmount(path) { detached.append(path) } else { stillMounted.append(path) }
+            }
+            apply(planner.unmountFinished(localPort: local, detached: detached, stillMounted: stillMounted))
         case .unmountPath(let path, let local):
             if Self.mountPoints(localPort: local).contains(path) { unmount(path) }
         case .mount(let local, let secret, let gen, let knownPath):
@@ -290,12 +329,14 @@ public final class TabletFilesBridge: @unchecked Sendable {
     }
 
     /// Not forced: a volume with open files stays and the failure is logged.
-    private func unmount(_ path: String) {
+    @discardableResult
+    private func unmount(_ path: String) -> Bool {
         if Darwin.unmount(path, 0) == 0 {
             logger.log(.info, "unmount", sessionID: 0, generation: 0, fields: "result=ok")
-        } else {
-            logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=error code=\(errno)")
+            return true
         }
+        logger.log(.warning, "unmount", sessionID: 0, generation: 0, fields: "result=error code=\(errno)")
+        return false
     }
 
     /// Mount points of WebDAV volumes served from `http://127.0.0.1:<localPort>/` (thread-safe `getfsstat`).
