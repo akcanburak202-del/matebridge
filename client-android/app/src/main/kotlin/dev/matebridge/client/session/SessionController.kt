@@ -716,7 +716,8 @@ class SessionController(
                 if (sec != null) readRecords(input, sec)
             } catch (e: ProtocolException) {
                 closedPosted.set(true) // the machine reacts to ProtocolError instead
-                events.put(SessionMachine.Event.ProtocolError(gen)) // ordered after already received messages
+                // ordered after already received messages; T-156: AUTH_FAILED is told apart (key mismatch counter)
+                events.put(SessionMachine.Event.ProtocolError(gen, e.kind == ProtocolException.Kind.AUTH_FAILED))
                 return
             } catch (e: IOException) {
                 // fall through

@@ -52,6 +52,12 @@ import dev.matebridge.client.protocol.VideoHello
  * audio through [acceptedGen]) is delivered. A start the user did not make ([Event.Start.userInitiated] false) opens no
  * connection while an unresolved pairing exists: it shows [SessionUi.StoredTrust] instead. The confirmation prompt times
  * out after [CONFIRM_TIMEOUT_US] of *visible* time ([Event.ConfirmPromptVisible]).
+ *
+ * Key mismatch (T-156): a PAIRED connection that ends after its proof PING and before any host record authenticated
+ * (the first record fails AEAD, or a T-152 host closes without BYE) counts against its endpoint. Below
+ * [KEY_MISMATCH_LIMIT] it retries as before; at the limit it ends in terminal `Failed(KEY_MISMATCH)`, and an automatic
+ * start to that endpoint opens nothing until a user start, a Stop or a forget clears the counts. An authenticated record
+ * resets its endpoint's count.
  */
 class SessionMachine(
     private val hello: Hello,
@@ -76,7 +82,8 @@ class SessionMachine(
         /** Control connection failed to open, hit EOF/IO error, or its send queue overflowed. */
         data class ControlClosed(val gen: Int, val connectFailed: Boolean = false) : Event
         data class Received(val gen: Int, val msg: Message) : Event
-        data class ProtocolError(val gen: Int) : Event
+        /** [authFailed] (T-156): the reader's error was `ProtocolException.Kind.AUTH_FAILED` (a record did not authenticate). */
+        data class ProtocolError(val gen: Int, val authFailed: Boolean = false) : Event
         /**
          * The first HELLO_ACK was encrypted and valid. [code] is the pairing code (PAIRING only); [hostId] the ack's
          * host_id (T-150). [pendingKey] (PAIRING only): the new key, stored pending by the machine only while [gen] is the
@@ -255,6 +262,9 @@ class SessionMachine(
     private var promptVisibleUs = 0L
     private var promptLastUs = 0L
 
+    /** T-156: consecutive PAIRED connections per endpoint that ended before any host record authenticated. */
+    private val authFailures = HashMap<Endpoint, Int>()
+
     /**
      * True once the current control connection is accepted by the host **and** locally trusted (T-150): input may be
      * sent and inbound clipboard/settings/audio delivered.
@@ -278,12 +288,21 @@ class SessionMachine(
                 clearPrompt()
                 if (event.userInitiated) {
                     cancelLatched = false
+                    authFailures.clear() // T-156: the user tries again
                 } else if (cancelLatched) {
                     wakeAttempt = null
                     userInitiated = false
                     phase = Phase.FAILED
                     log('I', "pair_cancel_latched", "")
                     out += Action.Ui(SessionUi.Failed(SessionUi.Cause.PAIR_CANCELLED))
+                    return out
+                } else if ((authFailures[event.endpoint] ?: 0) >= KEY_MISMATCH_LIMIT) {
+                    // T-156: no automatic connect to an endpoint whose key did not match; only the user starts it again.
+                    wakeAttempt = null
+                    userInitiated = false
+                    phase = Phase.FAILED
+                    log('I', "key_mismatch_latched", "")
+                    out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_MISMATCH))
                     return out
                 }
                 endpoint = event.endpoint
@@ -298,6 +317,7 @@ class SessionMachine(
             Event.Stop -> {
                 wakeAttempt = null
                 userInitiated = false
+                authFailures.clear() // T-156
                 clearPrompt()
                 if (phase != Phase.IDLE) {
                     byeAndClose(out)
@@ -332,6 +352,8 @@ class SessionMachine(
                     closeAll(out, graceful = false)
                     phase = Phase.IDLE
                     out += Action.Ui(SessionUi.Disconnected(SessionUi.Cause.CONNECT_FAILED, 0))
+                } else if (!event.connectFailed && awaitingFirstAuthRecord()) {
+                    pairedAuthFailure(out, nowUs, "closed", SessionUi.Cause.LOST) // T-156 (b): a T-152 host on a wrong key
                 } else {
                     lose(out, nowUs, if (event.connectFailed) SessionUi.Cause.CONNECT_FAILED else SessionUi.Cause.LOST)
                 }
@@ -341,7 +363,11 @@ class SessionMachine(
                 failCandidate(out, nowUs, if (candAck != null) REASON_PROOF_FAILED else REASON_PROTOCOL_ERROR)
             } else if (event.gen == controlGen) {
                 // No BYE: the channel is not trusted after a failed record (PROTOCOL.md section 9).
-                lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
+                if (event.authFailed && awaitingFirstAuthRecord()) {
+                    pairedAuthFailure(out, nowUs, "auth_failed", SessionUi.Cause.PROTOCOL_ERROR) // T-156 (a)
+                } else {
+                    lose(out, nowUs, SessionUi.Cause.PROTOCOL_ERROR)
+                }
             }
             is Event.Secured -> if (event.gen == controlGen) {
                 onSecured(event, out)
@@ -449,6 +475,7 @@ class SessionMachine(
         if (!sealedSeen && !(msg is HelloAck && phase == Phase.AWAIT_ACK)) {
             sealedSeen = true
             if (!pairingSession) sessionHostId?.let { clearMarkerOf(it) }
+            endpoint?.let { authFailures.remove(it) } // T-156: the host holds our key on this endpoint
         }
         when (msg) {
             is HelloAck -> onAck(msg, nowUs, out)
@@ -740,6 +767,7 @@ class SessionMachine(
 
     /** Trust is never revoked on an open connection: a live session ends like Stop (BYE + close) before the records go. */
     private fun onForget(out: MutableList<Action>) {
+        authFailures.clear() // T-156: the user acted on the mismatch; automatic connects may run again
         val h = knownHostId
         if (h == null) {
             cancelLatched = false // the user dealt with the Mac: automatic connects may run again
@@ -860,6 +888,34 @@ class SessionMachine(
             Endpoint(ep.host, videoPort),
             VideoHello(hello.protocolVersion, cfg.configId, sessionId),
         )
+    }
+
+    /**
+     * T-156: the current connection is PAIRED, its proof PING went out (the PAIRED ack moved it to ACCEPTED) and no host
+     * record has authenticated on it yet. PAIRING sessions, T-150's pending-confirm path (closed before any ack is
+     * handled) and handshake errors (still AWAIT_ACK) never match.
+     */
+    private fun awaitingFirstAuthRecord(): Boolean =
+        phase == Phase.ACCEPTED && !pairingSession && !sealedSeen && candGen < 0 && endpoint != null
+
+    /**
+     * T-156: one more PAIRED connection on [endpoint] ended before any authenticated host record ([how]: `auth_failed`
+     * or `closed`). Below [KEY_MISMATCH_LIMIT] it is lost as before ([cause], normal backoff); at the limit the session
+     * ends in terminal `Failed(KEY_MISMATCH)`: no BYE (nothing from the host authenticated), no retry timer.
+     */
+    private fun pairedAuthFailure(out: MutableList<Action>, nowUs: Long, how: String, cause: SessionUi.Cause) {
+        val ep = endpoint ?: return lose(out, nowUs, cause)
+        val n = (authFailures[ep] ?: 0) + 1
+        authFailures[ep] = n
+        log('W', "paired_auth_fail", "count=$n how=$how")
+        if (n < KEY_MISMATCH_LIMIT) {
+            lose(out, nowUs, cause)
+            return
+        }
+        closeAll(out, graceful = false)
+        phase = Phase.FAILED
+        userInitiated = false
+        out += Action.Ui(SessionUi.Failed(SessionUi.Cause.KEY_MISMATCH))
     }
 
     /** Closes both connections (BYE already queued by the caller when graceful) and schedules a retry. */
@@ -1051,6 +1107,8 @@ class SessionMachine(
         const val RETIRE_TIMEOUT_US = 2_000_000L
         /** T-150: the local code confirmation is cancelled after this much *visible* prompt time. */
         const val CONFIRM_TIMEOUT_US = 120_000_000L
+        /** T-156: consecutive PAIRED connections without an authenticated host record before `Failed(KEY_MISMATCH)`. */
+        const val KEY_MISMATCH_LIMIT = 3
 
         // MigrationResult reasons (log values; AutoUsbPolicy maps them to its backoff classes).
         const val REASON_OK = "ok"
