@@ -1,7 +1,7 @@
 ---
 id: T-159
 title: Gate input on decoder health and show a video-fault overlay
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-158]
@@ -78,7 +78,45 @@ Decision 0019 must be accepted by the user before work starts.
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. `video/VideoHealth.kt` (new, pure Kotlin):
+   - `HealthEvent` (one sealed type; every event carries the renderer generation): `Generation`, `Detached`,
+     `Running`, `Exited`, `FirstOutput`, `Fault(cause)`. `FaultCause` = `give_up|no_output|not_running|stuck`.
+   - `DecodeProgress`: small synchronized counter the decoder threads update per frame (no UI post per frame):
+     non-config inputs queued since the last output and the time of the oldest of them, per generation; `onOutput`
+     says whether it was the generation's first output.
+   - `VideoHealth` (UI thread, injected clock): states `IDLE` (no surface) / `STARTING` / `HEALTHY` / `FAULT`;
+     `inputAllowed` = HEALTHY; `feedAllowed`/`keyframeRetriesAllowed` = not FAULT. `onEvent` ignores events of other
+     generations. `tick(progress)` (the 500 ms ticker) evaluates no_output (≥ 3 pending, oldest ≥ 1500 ms) and
+     not_running (no `Running`, or `Exited`, 2 s after the generation began), in STARTING and HEALTHY. FAULT is left
+     only by a new generation (outputs of the faulted generation are ignored), so input never re-opens before a first
+     decoded output. A codec restart after `decode_error` sends no event, so it is not a new generation.
+   - Recovery ladder (episode starts at the first fault, ends after 10 s continuously HEALTHY): codec restart at +1 s,
+     codec restart at +3 s, session reconnect at +6 s, manual ("Yeniden dene") at +15 s; the step timer runs only while
+     not HEALTHY and a surface is attached; steps only advance, so no step repeats within an episode. `retry()` (button)
+     restarts the codec at once and continues the ladder from step 2.
+   - `ev=video_health state= cause= gen=` on every state change (via a callback; no text logged).
+2. `video/VideoRenderer.kt`: generation counter; `onHealthEvent` constructor parameter (default no-op) called on
+   attach/reconfigure (`Generation`, synchronously on the UI thread), detach, decoder thread start/exit, first output,
+   give-up (`Fault(give_up)`); `DecodeProgress` updates at `queueInputBuffer` and output dequeue; `stopFeeding()` (per
+   generation; also on give-up) makes `onFrame` drop frames and `takeKeyframeRetry()` return false; `restartCodec()`
+   (recovery step: new generation on the same surface, keeps the stored CODEC_CONFIG, STARTUP request).
+3. `video/DecoderFault.kt` (new): debug `--es decoder_fault create|configure|dequeue|silent` decorator around the
+   production `DecoderCodec.Factory`. Armed at launch, fires once after `--ei decoder_fault_after_s N` (default 10) s
+   HEALTHY (`ev=decoder_fault mode= armed_s=`). `dequeue`/`silent` hit every codec of the current generation,
+   `create`/`configure` every codec of the next generation; the generation after that runs clean (so give-up/no_output
+   FAULT is reached and the ladder's restart recovers). `silent` drains the real codec without rendering.
+4. `MainActivity.kt` (localized): `VideoHealth` field; `syncInputActive` adds `videoHealth.inputAllowed`; the renderer's
+   `onHealthEvent` → `runOnUiThread { videoHealth.onEvent }`; transitions → `syncInputActive()` (FAULT/STARTING close
+   capture → existing releases + `RELEASE_ALL(USER)`), `stopFeeding()`, overlay; the ticker calls `tick`, runs the
+   recovery action, gates `takeKeyframeRetry` and drives `DecoderFault`; `onGiveUp` unchanged (log only). Overlay built
+   in code (no layout file in `files:`), text + "Yeniden dene" button from `strings.xml`.
+5. Tests: `VideoHealthTest.kt` (state machine, rules, ladder, generations incl. reconnect/migration, DecodeProgress,
+   DecoderFault, renderer integration with the T-158 fake: give-up → Fault event + feeding stopped, decode_error restart
+   = no new generation, first output). The T-158 fake gets an output-producing mode (test dir, per orchestrator);
+   `DecoderLifecycleTest` assertion on `attached` after give-up stays (attached is still true; health handles it).
+
+Risks: per-frame cost (one uncontended lock per input and output); stale events of a retired generation (filtered by
+generation); the overlay must not take input while capture is on (shown only when input is off).
 
 ## Handoff
 
