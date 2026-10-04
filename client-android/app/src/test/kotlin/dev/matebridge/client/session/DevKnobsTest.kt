@@ -43,7 +43,7 @@ class DevKnobsTest {
         assertNull(k.decoderFault)
         assertNull(k.decoderFaultAfterS)
         assertTrue(k.gameDisplay)
-        assertEquals(DecoderLatencyKnobs.DEFAULT, k.decoderLatency)
+        assertEquals(DecoderLatencyKnobs.STANDARD, k.decoderLatency) // T-222: oprate=max
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -212,9 +212,9 @@ class DevKnobsTest {
     }
 
     @Test fun decoderLatencyKnobsNeedDev() {
-        // T-217: without `--ez dev true` the keys are ignored (names only) and the format stays today's.
-        val ignored = parse("dec_lowlat" to "all", "dec_oprate" to "max")
-        assertEquals(DecoderLatencyKnobs.DEFAULT, ignored.decoderLatency)
+        // T-217: without `--ez dev true` the keys are ignored (names only); T-222: the default is `off`, `max`.
+        val ignored = parse("dec_lowlat" to "all", "dec_oprate" to "fps")
+        assertEquals(DecoderLatencyKnobs.STANDARD, ignored.decoderLatency)
         assertEquals("dev=0 ignored=dec_lowlat,dec_oprate", ignored.logFields())
         assertEquals(emptyList<String>(), ignored.knobs)
         assertEquals("dev=0 ignored=dec_lowlat", parse("dec_lowlat" to "hisi").logFields())
@@ -223,7 +223,8 @@ class DevKnobsTest {
         assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.HISI), on.decoderLatency)
         assertEquals(listOf("dec_lowlat:hisi"), on.knobs)
         val odd = parse("dev" to true, "dec_lowlat" to "turbo", "dec_oprate" to 1)
-        assertEquals(DecoderLatencyKnobs.DEFAULT, odd.decoderLatency) // unknown or wrong type = default
+        assertEquals(DecoderLatencyKnobs.STANDARD, odd.decoderLatency) // unknown or wrong type = default
+        assertEquals(DecoderLatencyKnobs.DEFAULT, parse("dev" to true, "dec_oprate" to "fps").decoderLatency) // pre-T-222
         assertEquals(listOf("dec_lowlat:other", "dec_oprate:other"), odd.knobs)
     }
 

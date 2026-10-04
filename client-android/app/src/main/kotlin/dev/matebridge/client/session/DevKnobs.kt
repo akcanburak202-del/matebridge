@@ -71,10 +71,10 @@ data class DevKnobs(
      */
     val gameDisplay: Boolean = true,
     /**
-     * `--es dec_lowlat off|hisi|vdec|all`, `--es dec_oprate fps|max` (T-217, A/B; closed by T-217's device result):
-     * decoder latency keys for `VideoRenderer`. Absent or unknown = [DecoderLatencyKnobs.DEFAULT] (today's format).
+     * `--es dec_lowlat off|hisi|vdec|all`, `--es dec_oprate fps|max` (T-217): decoder latency keys for `VideoRenderer`.
+     * Absent or unknown = [DecoderLatencyKnobs.STANDARD] (`off`, `max`; T-222). `dec_oprate fps` = the pre-T-222 rate.
      */
-    val decoderLatency: DecoderLatencyKnobs = DecoderLatencyKnobs.DEFAULT,
+    val decoderLatency: DecoderLatencyKnobs = DecoderLatencyKnobs.STANDARD,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */

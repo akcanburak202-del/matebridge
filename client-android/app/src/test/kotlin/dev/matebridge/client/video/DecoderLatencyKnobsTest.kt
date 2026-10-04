@@ -12,7 +12,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-217: the decoder format of [VideoRenderer.createCodec] with and without the decoder latency knobs. */
+/**
+ * T-217: the decoder format of [VideoRenderer.createCodec] with and without the decoder latency knobs. T-222: the app
+ * default ([DecoderLatencyKnobs.STANDARD]) is `oprate=max`; [DecoderLatencyKnobs.DEFAULT] is the pre-T-217 fallback.
+ */
 class DecoderLatencyKnobsTest {
     private val config = StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1)
     private val factory = FakeDecoderFactory()
@@ -37,7 +40,7 @@ class DecoderLatencyKnobsTest {
     private fun keys(codec: FakeDecoderFactory.Codec): List<Pair<String, Int>> =
         codec.format!!.integers.map { it.key to it.value }
 
-    /** Literal key names on purpose: this is the pre-T-217 format, byte for byte. */
+    /** Literal key names on purpose: this is the pre-T-217 format (`dec_oprate=fps`, the fallback), byte for byte. */
     private val todayHevc60 = listOf(
         "priority" to 0,
         "max-input-size" to 2800 * 1840 * 3 / 2,
@@ -49,6 +52,9 @@ class DecoderLatencyKnobsTest {
         "low-latency" to 1,
     )
 
+    /** T-222: the app default, the pre-T-217 format with the operating rate replaced in place by 32767. */
+    private val standardHevc60 = todayHevc60.map { if (it.first == "operating-rate") it.first to 32767 else it }
+
     private val allFour = listOf(
         "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req" to 1,
         "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy" to -1,
@@ -56,17 +62,59 @@ class DecoderLatencyKnobsTest {
         "low-latency" to 1,
     )
 
-    // --- default: today's format ---
+    // --- T-222 default: oprate=max ---
 
-    @Test fun withoutTheKnobTheFormatIsTodays() {
-        start()
+    /** The T-217 "default unchanged" lock, repinned by T-222: without the knob the operating rate is 32767. */
+    @Test fun withoutTheKnobTheOperatingRateIsMax() {
+        start(tuning = DecoderLatencyKnobs.STANDARD)
+        assertTrue(env.awaitLines("codec_start"))
+        assertEquals(1, factory.createCalls)
+        assertEquals(standardHevc60, keys(factory.codecs.single()))
+        val line = env.lines("codec_start").single()
+        assertTrue(line, line.contains(" requested_rate=32767 "))
+        assertTrue(line, line.contains(" lowlat=off oprate=max accepted "))
+    }
+
+    @Test fun withoutTheKnobAndWithoutFpsTheOperatingRateIsStillMax() {
+        factory.lowLatency = false
+        start(config.copy(fps = 0), DecoderLatencyKnobs.STANDARD)
+        assertTrue(env.awaitLines("codec_start"))
+        assertEquals(
+            listOf("priority" to 0, "max-input-size" to 2800 * 1840 * 3 / 2, "operating-rate" to 32767,
+                "color-standard" to 1, "color-transfer" to 3, "color-range" to 1),
+            keys(factory.codecs.single()),
+        )
+    }
+
+    @Test fun aFailingDefaultFallsBackOnceToTheStreamFpsFormat() {
+        factory.failStarts = 1
+        start(tuning = DecoderLatencyKnobs.STANDARD)
+        assertTrue(env.awaitLines("codec_start"))
+        assertEquals(2, factory.createCalls)
+        assertEquals(standardHevc60, factory.configureFormats[0].map { it.key to it.value })
+        assertEquals(todayHevc60, keys(factory.codecs[1]))
+        val w = env.lines("dec_lowlat_rejected").single()
+        assertTrue(w, w.contains(" W decoder ev=dec_lowlat_rejected lowlat=off oprate=max keys=operating-rate " +
+            "err=IllegalStateException"))
+        val line = env.lines("codec_start").single()
+        assertTrue(line, line.contains(" requested_rate=60 "))
+        assertTrue(line, line.contains(" lowlat=off oprate=rejected accepted "))
+        assertEquals(0, env.lines("decode_error").size)
+    }
+
+    // --- dec_oprate=fps: the pre-T-222 format ---
+
+    @Test fun fpsGivesThePreT222Format() {
+        start(tuning = DecoderLatencyKnobs.parse(null, "fps"))
         assertTrue(env.awaitLines("codec_start"))
         assertEquals(1, factory.createCalls)
         assertEquals(todayHevc60, keys(factory.codecs.single()))
-        assertTrue(env.lines("codec_start").single().contains(" lowlat=off oprate=fps accepted "))
+        val line = env.lines("codec_start").single()
+        assertTrue(line, line.contains(" requested_rate=60 "))
+        assertTrue(line, line.contains(" lowlat=off oprate=fps accepted "))
     }
 
-    @Test fun withoutTheKnobAndWithoutLowLatencyFeatureTheFormatIsTodays() {
+    @Test fun fpsWithoutLowLatencyFeatureGivesThePreT222Format() {
         factory.lowLatency = false
         start(config.copy(fps = 0))
         assertTrue(env.awaitLines("codec_start"))
@@ -83,7 +131,7 @@ class DecoderLatencyKnobsTest {
         assertEquals(todayHevc60, keys(factory.codecs.single()))
     }
 
-    @Test fun withoutTheKnobAConfigureFailureIsNotRetried() {
+    @Test fun fpsAConfigureFailureIsNotRetried() {
         factory.failConfigure = true
         start()
         assertTrue(env.awaitLines("decode_error"))
@@ -98,9 +146,9 @@ class DecoderLatencyKnobsTest {
         start(tuning = DecoderLatencyKnobs(LowLat.ALL))
         assertTrue(env.awaitLines("codec_start"))
         // `low-latency` was already set (feature supported): it keeps its place and value.
-        assertEquals(todayHevc60 + allFour.dropLast(1), keys(factory.codecs.single()))
+        assertEquals(standardHevc60 + allFour.dropLast(1), keys(factory.codecs.single()))
         assertEquals(allFour.toSet(), keys(factory.codecs.single()).filter { it in allFour }.toSet())
-        assertTrue(env.lines("codec_start").single().contains(" lowlat=all oprate=fps accepted "))
+        assertTrue(env.lines("codec_start").single().contains(" lowlat=all oprate=max accepted "))
     }
 
     @Test fun vdecSetsLowLatencyEvenWithoutTheFeature() {
@@ -115,13 +163,13 @@ class DecoderLatencyKnobsTest {
     @Test fun hisiSetsOnlyTheVendorPair() {
         start(tuning = DecoderLatencyKnobs(LowLat.HISI))
         assertTrue(env.awaitLines("codec_start"))
-        assertEquals(todayHevc60 + listOf(HISI_REQ to 1, HISI_RDY to -1), keys(factory.codecs.single()))
+        assertEquals(standardHevc60 + listOf(HISI_REQ to 1, HISI_RDY to -1), keys(factory.codecs.single()))
     }
 
     @Test fun operatingRateMaxReplacesTheStreamFpsInPlace() {
-        start(tuning = DecoderLatencyKnobs(opRate = OpRate.MAX))
+        start(tuning = DecoderLatencyKnobs(LowLat.OFF, OpRate.MAX))
         assertTrue(env.awaitLines("codec_start"))
-        assertEquals(todayHevc60.map { if (it.first == "operating-rate") it.first to 32767 else it }, keys(factory.codecs.single()))
+        assertEquals(standardHevc60, keys(factory.codecs.single()))
         val line = env.lines("codec_start").single()
         assertTrue(line, line.contains(" requested_rate=32767 "))
         assertTrue(line, line.contains(" lowlat=off oprate=max accepted "))
@@ -149,7 +197,7 @@ class DecoderLatencyKnobsTest {
 
     @Test fun aRejectedLowLatKeepsTheDefaultOprateFieldAsFps() {
         factory.rejectKeys = setOf("vdec-lowlatency")
-        start(tuning = DecoderLatencyKnobs(LowLat.VDEC))
+        start(tuning = DecoderLatencyKnobs(LowLat.VDEC, OpRate.FPS))
         assertTrue(env.awaitLines("codec_start"))
         assertTrue(env.lines("codec_start").single().contains(" lowlat=rejected oprate=fps accepted "))
     }
@@ -181,7 +229,7 @@ class DecoderLatencyKnobsTest {
 
     /**
      * The launch-extras chain MainActivity uses (`DevKnobs.parse` → `decoderLatency` → `VideoRenderer(decoderTuning=)`):
-     * with `dev` the keys reach the codec, without it the format stays today's.
+     * with `dev` the keys reach the codec, without it the format is the T-222 default (`oprate=max`).
      */
     @Test fun launchExtrasReachTheCodecOnlyWithDev() {
         class Extras(private val m: Map<String, Any>) : dev.matebridge.client.session.LaunchExtras {
@@ -194,15 +242,15 @@ class DecoderLatencyKnobsTest {
             Extras(mapOf("dev" to true, "dec_lowlat" to "hisi", "dec_oprate" to "max")))
         start(tuning = withDev.decoderLatency)
         assertTrue(env.awaitLines("codec_start"))
-        assertEquals(
-            todayHevc60.map { if (it.first == "operating-rate") it.first to 32767 else it } +
-                listOf(HISI_REQ to 1, HISI_RDY to -1),
-            keys(factory.codecs.single()),
-        )
+        assertEquals(standardHevc60 + listOf(HISI_REQ to 1, HISI_RDY to -1), keys(factory.codecs.single()))
         assertTrue(env.lines("codec_start").single().contains(" lowlat=hisi oprate=max accepted "))
 
-        val noDev = dev.matebridge.client.session.DevKnobs.parse(Extras(mapOf("dec_lowlat" to "hisi", "dec_oprate" to "max")))
-        assertEquals(DecoderLatencyKnobs.DEFAULT, noDev.decoderLatency)
+        val noDev = dev.matebridge.client.session.DevKnobs.parse(Extras(mapOf("dec_lowlat" to "hisi", "dec_oprate" to "fps")))
+        assertEquals(DecoderLatencyKnobs.STANDARD, noDev.decoderLatency)
+        val none = dev.matebridge.client.session.DevKnobs.parse(Extras(emptyMap()))
+        assertEquals(DecoderLatencyKnobs.STANDARD, none.decoderLatency)
+        val oldRate = dev.matebridge.client.session.DevKnobs.parse(Extras(mapOf("dev" to true, "dec_oprate" to "fps")))
+        assertEquals(DecoderLatencyKnobs.DEFAULT, oldRate.decoderLatency)
     }
 
     // --- vendor parameters ---
@@ -226,11 +274,14 @@ class DecoderLatencyKnobsTest {
     // --- pure ---
 
     @Test fun parseTakesKnownIdsAndKeepsTheDefaultOtherwise() {
-        assertEquals(DecoderLatencyKnobs.DEFAULT, DecoderLatencyKnobs.parse(null, null))
+        assertEquals(DecoderLatencyKnobs.STANDARD, DecoderLatencyKnobs.parse(null, null))
+        assertEquals(DecoderLatencyKnobs(LowLat.OFF, OpRate.MAX), DecoderLatencyKnobs.STANDARD)
         assertEquals(DecoderLatencyKnobs(LowLat.ALL, OpRate.MAX), DecoderLatencyKnobs.parse(" ALL ", "max"))
-        assertEquals(DecoderLatencyKnobs(LowLat.HISI), DecoderLatencyKnobs.parse("hisi", "bogus"))
-        assertEquals(DecoderLatencyKnobs.DEFAULT, DecoderLatencyKnobs.parse("10.0.0.1", ""))
+        assertEquals(DecoderLatencyKnobs(LowLat.HISI, OpRate.MAX), DecoderLatencyKnobs.parse("hisi", "bogus"))
+        assertEquals(DecoderLatencyKnobs.STANDARD, DecoderLatencyKnobs.parse("10.0.0.1", ""))
+        assertEquals(DecoderLatencyKnobs(LowLat.OFF, OpRate.FPS), DecoderLatencyKnobs.parse(null, " FPS "))
         assertTrue(DecoderLatencyKnobs.parse("off", "fps").isDefault)
+        assertFalse(DecoderLatencyKnobs.STANDARD.isDefault) // a failing default still falls back once
     }
 
     @Test fun defaultAddsNothingAndKeepsTheStreamFpsRate() {
@@ -240,6 +291,11 @@ class DecoderLatencyKnobsTest {
         assertEquals(OperatingRate.resolve(60), d.operatingRate(60))
         assertNull(d.operatingRate(0))
         assertEquals(32767, DecoderLatencyKnobs(opRate = OpRate.MAX).operatingRate(0))
+        val s = DecoderLatencyKnobs.STANDARD
+        assertEquals(emptyList<Pair<String, Int>>(), s.extraKeys)
+        assertEquals(listOf("operating-rate"), s.changedKeys())
+        assertEquals(32767, s.operatingRate(60))
+        assertEquals(32767, s.operatingRate(0))
     }
 
     @Test fun vendorParamsFieldsHandleEmptyAndLongLists() {
