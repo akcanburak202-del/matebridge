@@ -31,6 +31,10 @@ Alt ajan tanımları `.claude/agents/` altında: `mac-host-dev`, `android-client
 6. `main` dalı her zaman derlenebilir durumda kalır. Commit'ler küçük ve anlamlıdır.
 7. Tablet USB ile bağlıyken APK kurulumu, logcat ve ekran görüntüsü (`adb exec-out screencap`) ile doğrulama orkestratör tarafından yapılabilir.
 
+## Ölçüm
+
+Cihazda bir performans sayısı kaydedilmeden önce, oturum akarken `scripts/device-smoke.sh --content "<ekranda ne var>" --run K --runs N` çalıştırılır (T-173). Komut salt okunurdur: hiçbir şey kurmaz, ayar değiştirmez, uygulamaları başlatmaz ya da durdurmaz. Önce build kimliğini ve kurulumu basar, sonra 60 sn'lik yalnız sayısal istatistik penceresinin p50/p95 değerlerini verir. Çıktının başındaki sonuç başlığı sayıyla birlikte NOTES'a kopyalanır. Başlıkta host ve APK commit'i, macOS ve HarmonyOS build'i, codec, taşıma, çözünürlük, hedef ve gerçek Hz, bit hızı, içerik, süre ve tur bulunur. Kural: başlığı olmayan sayı NOTES'a girmez. Bir iddia için aynı koşulda en az 3 tur gerekir ve tek tur değil, tüm turların yayılımı verilir. Yalnız yoğun saniyeleri seçmek yoktur; seçildiyse başlıkta yazılır ve filtresiz değer de verilir. Araçlar ve tarifler `tools/measure/README.md`'de, uzun süreli ölçüm `tools/soak/`'ta.
+
 ## Paralellik
 
 Yerel kaynak (32 GB RAM) darboğaz değil: modeller bulutta çalışır, yerelde sadece derleme ve araç süreçleri çalışır. Gerçek sınırlar şunlar:

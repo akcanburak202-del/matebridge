@@ -1,0 +1,19 @@
+--------- beginning of main
+  1791100000.100  4321  4321 I MB/session: 5000000 I session sid=0 gen=0 ev=app_start version=0.1 sha=588332f built=2026-10-04T10:00Z sdk=31 os_build=MRDI-W09_4.3.0.145
+  1791100001.000  4321  4400 I MB/session: 5001000 I session sid=77 gen=1 ev=stream_config config_id=3 codec=1 size=2800x1840 fps=120
+  1791100001.010  4321  4400 I MB/session: 5001010 I session sid=77 gen=1 ev=profile mode=daily fps=120 size=2800x1840 scale_permille=1000 display=native bitrate_kbps=60000 bitrate_setting=auto transport=usb transport_mode=auto audio=1 audio_out=auto pacer=adaptive sha=588332f built=2026-10-04T10:00Z dev=0 knobs=-
+  1791100001.200  4321  4500 I MB/decoder: 5001200 I decoder ev=codec_start name=OMX.hisi.video.decoder.hevc mime=video/hevc size=2800x1840 low_latency=0 requested_rate=32767 is_hw=1 sw_only=0 lowlat=off oprate=max accepted priority=0 operating_rate=32767
+  1791100001.300  4321  4600 I MB/clip: 5001300 I clip sid=77 gen=1 ev=clipboard_set text=hello-secret-words
+  1791100001.400  4321  4600 D MB/kbd: 5001400 D kbd sid=77 gen=1 ev=key keycode=29 char=a
+  1791100001.500  4321  4400 I MB/session: 5001500 I session sid=77 gen=1 ev=migrate_request host=192.168.1.20 port=47001 transport=wifi
+  1791100001.600  1000  1000 I Settings: ro.serialno=ABC123XYZ user typed hello
+  1791100001.700  1200  1300 I AGPService: FrameRateManager strategyCode 60120 JudgeFinalLcdFps sceneinfo(0,-2,0,0) final lcd fps: 120
+  1791100001.800  1200  1300 I AGPService: onTouchEvent down com.example.private
+  1791100011.000  4321  4700 I MB/decoder: 5011000 I decoder sid=77 gen=1 ev=stats interval_ms=10000 recv=1200 dec=1200 released=1190 shown=1190 drop=2 decode_avg_us=9300 bytes=40000000 kf_req=0 kf_held=0 overflows=0 max_pending=2 limit=8
+  1791100011.001  4321  4700 I MB/render: 5011001 I render sid=77 gen=1 ev=stats fps=119.0 latency_us=10600 clock_offset_us=123 rtt_us=4600 hz=120 target_hz=120 vsync_period_us=8333 display_hz=120.0 vsync_ms_p50=8.33 stream_mode=daily buffer=-1 skip_pct=1.0 cb_skip_pct=2.0 title=Secret_Doc.txt dec_p50_us=9000 net_p95_us=9500 cap_dec_p50_us=10500 cap_dec_p95_us=14000 ready_slot_p50_us=13000 cap_rel_p50_us=24000 cap_cb_p50_us=36000 clock_unc_us=2300 lat_neg=0
+  1791100021.000  4321  4700 I MB/decoder: 5021000 I decoder sid=77 gen=1 ev=stats interval_ms=10000 recv=1000 dec=1000 released=1000 shown=1000 drop=0 decode_avg_us=9100 bytes=30000000 kf_req=1 kf_held=0 overflows=0 max_pending=2 limit=8
+  1791100021.001  4321  4700 I MB/render: 5021001 I render sid=77 gen=1 ev=stats fps=100.0 latency_us=11000 hz=120 target_hz=120 vsync_period_us=8333 display_hz=120.0 vsync_ms_p50=8.34 stream_mode=daily skip_pct=3.0 cb_skip_pct=- dec_p50_us=9200 net_p95_us=9900 cap_dec_p50_us=11000 cap_dec_p95_us=15000 ready_slot_p50_us=13500 cap_rel_p50_us=25000 cap_cb_p50_us=- clock_unc_us=2400 lat_neg=1
+  1791100031.000  4321  4700 I MB/decoder: 5031000 I decoder sid=77 gen=1 ev=stats interval_ms=5000 recv=300 dec=300 released=300 shown=300 drop=1 decode_avg_us=9500 bytes=9000000 kf_req=0 kf_held=0 overflows=0 max_pending=2 limit=8
+  1791100031.001  4321  4700 I MB/render: 5031001 I render sid=77 gen=1 ev=stats fps=60.0 latency_us=12000 hz=60 target_hz=120 vsync_period_us=16666 display_hz=60.0 vsync_ms_p50=16.67 stream_mode=daily skip_pct=5.0 cb_skip_pct=4.0 dec_p50_us=9400 net_p95_us=10100 cap_dec_p50_us=11500 cap_dec_p95_us=16000 ready_slot_p50_us=14000 cap_rel_p50_us=26000 cap_cb_p50_us=38000 clock_unc_us=2500 lat_neg=0
+  1791100031.500  4321  4800 I MB/input: 5031500 I input sid=77 gen=1 ev=release_all reason=background contact=1 pressed=0 scroll=0 pinch=0
+  1791100031.600  4321  4500 E MB/decoder: 5031600 E decoder ev=give_up

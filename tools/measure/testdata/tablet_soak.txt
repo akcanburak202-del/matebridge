@@ -1,0 +1,20 @@
+# mbmon v1 mode=soak interval=60 clk_tck=100 ncpu=8 panel_src=node start_ep=1791100000
+ep=1791100000 up=5000.00 pid=4321 pss_kb=70000 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791100600 up=5600.00 pid=4321 pss_kb=70341 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791101200 up=6200.00 pid=4321 pss_kb=70682 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791101800 up=6800.00 pid=4321 pss_kb=71024 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791102400 up=7400.00 pid=4321 pss_kb=71365 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791103000 up=8000.00 pid=4321 pss_kb=71706 codec_res=4 fds=210 threads=17 thr_Binder=10 thr_mb-ctl-read=2 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791103600 up=8600.00 pid=4321 pss_kb=72048 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791104200 up=9200.00 pid=4321 pss_kb=72389 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791104800 up=9800.00 pid=4321 pss_kb=72730 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791105400 up=10400.00 pid=4321 pss_kb=73072 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791106000 up=11000.00 pid=4321 pss_kb=73413 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791106600 up=11600.00 pid=4321 pss_kb=73754 codec_res=4 fds=210 threads=18 thr_Binder=10 thr_mb-ctl-read=3 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791107200 up=12200.00 pid=4321 pss_kb=74096 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791107800 up=12800.00 pid=4321 pss_kb=74437 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791108400 up=13400.00 pid=4321 pss_kb=74778 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791109000 up=14000.00 pid=4321 pss_kb=75120 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791109600 up=14600.00 pid=4321 pss_kb=75461 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791110200 up=15200.00 pid=4321 pss_kb=75802 codec_res=4 fds=210 threads=19 thr_Binder=10 thr_mb-ctl-read=4 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1
+ep=1791110800 up=15800.00 pid=4321 pss_kb=76144 codec_res=4 fds=210 threads=20 thr_Binder=10 thr_mb-ctl-read=5 thr_mb-video=2 thr_mb-audio=1 thr_mb-decoder-out=1 thr_RenderThread=1

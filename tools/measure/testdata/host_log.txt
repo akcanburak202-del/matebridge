@@ -1,0 +1,16 @@
+4000000 I session sid=0 gen=0 ev=app_start version=0.1 build=20261004124857 sha=588332f os=Version_27.0.1_(Build_26A434)
+4000100 I encoder sid=0 gen=0 ev=profile fps=120 bitrate_kbps=60000 bitrate_source=prefs codec=hevc encoder_profile=fast scale_permille=1000 refresh_hz=120 display=2800x1840@2x sha=588332f knobs=-
+4000200 I session sid=77 gen=1 ev=session_started conn=6 config_id=3 video_port=47002 transport=usb
+4000300 I video sid=77 gen=1 ev=encoder_hw using_hw=1
+4000400 I clipboard sid=77 gen=1 ev=clipboard_recv text=my-password-123
+4000500 D kbd sid=77 gen=1 ev=key keycode=12 down=1
+4000600 I files sid=77 gen=1 ev=dav_request path=/Users/someone/Secret.pdf bytes=100
+4001000 I video sid=77 gen=1 ev=latency frames=120 sck_lag_ms_p50_95_99_max=0.0/0.0/0.1/0.2 enc_ms_p50_95_99_max=7.0/8.0/9.0/9.5 write_ms_p50_95_99_max=0.2/0.3/0.4/0.5 cap_to_sent_ms_p50_95_99_max=7.5/8.5/9.5/10.0 pts_vs_deliv_ms_p1_50_99=6.0/6.6/7.0 no_display=0
+4001001 I net sid=77 gen=1 ev=stats fps=120.0 kbps=50000 decode_ms=9.1 dropped=0 cap_dec_ms=10.5 latency_ms=10.5 sent_frames=120 sent_kbps=50000 rejected=0 send_failures=0 idr=1 idr_bytes_max=300000 host=192.168.1.20
+4001002 I video sid=77 gen=1 ev=cadence target_ms=8.3 cap=120 cap_fps=120.0 status=complete=120,idle=0 enc_fps=120.0 enc_behind=0 queue_drops=0 sent=120 sent_fps=120.0
+4002000 I video sid=77 gen=1 ev=latency frames=118 enc_ms_p50_95_99_max=7.2/8.2/9.2/9.8 write_ms_p50_95_99_max=0.2/0.35/0.4/0.6 cap_to_sent_ms_p50_95_99_max=7.7/8.7/9.7/10.2 pts_vs_deliv_ms_p1_50_99=6.1/6.7/7.1 no_display=0
+4002001 I net sid=77 gen=1 ev=stats fps=118.0 kbps=48000 decode_ms=9.3 dropped=2 cap_dec_ms=11.0 latency_ms=11.0 sent_frames=118 sent_kbps=48000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0
+4002002 I video sid=77 gen=1 ev=cadence target_ms=8.3 cap=118 cap_fps=118.0 enc_fps=118.0 enc_behind=1 queue_drops=1 sent=118 sent_fps=118.0
+4003000 I video sid=77 gen=1 ev=latency frames=119 enc_ms_p50_95_99_max=7.4/8.4/9.4/9.9 write_ms_p50_95_99_max=0.3/0.4/0.5/0.7 cap_to_sent_ms_p50_95_99_max=7.9/8.9/9.9/10.4 pts_vs_deliv_ms_p1_50_99=6.2/6.8/7.2 no_display=0
+4003001 I net sid=77 gen=1 ev=stats fps=119.0 kbps=49000 decode_ms=9.2 dropped=0 cap_dec_ms=10.8 latency_ms=10.8 sent_frames=119 sent_kbps=49000 rejected=0 send_failures=0 idr=0 idr_bytes_max=0
+4003500 I video sid=77 gen=1 ev=pipeline_retry
