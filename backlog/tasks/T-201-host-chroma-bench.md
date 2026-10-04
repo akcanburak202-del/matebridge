@@ -1,7 +1,7 @@
 ---
 id: T-201
 title: Add an RGB-referenced chroma metric and test patterns to SharpnessBench
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-188, T-204]
@@ -68,3 +68,5 @@ _(Ajan bitirince doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+**Kapatıldı (2026-10-04):** T-188 cihazda renk sıkıştırması kaynaklı bir hata bulmadı (ince renkli yazı 11 pt'de okunaklı, 30/100 Mbps aynı). RGB referanslı metrik gerekmiyor.

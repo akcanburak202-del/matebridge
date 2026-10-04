@@ -1,7 +1,7 @@
 ---
 id: T-203
 title: Contact-size palm filter
-status: todo
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-181]
@@ -70,3 +70,5 @@ _(Ajan bitirince doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+**Kapatıldı (2026-10-04, kullanıcı kararı):** T-181 kapandı; avuç problemi Çizim modunun yalnız-hareket politikasıyla (T-223) çözüldü. Temas boyutu filtresi gerekmiyor.

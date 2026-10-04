@@ -21,7 +21,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
-| [T-181](tasks/T-181-palm-before-pen-measurement.md) | Measure palm-before-pen clicks and the touchMajor distribution | 6 | orchestrator | [] |
 | [T-192](tasks/T-192-host-settings-reset.md) | Add "Ayarları sıfırla" to the menu (approvals kept) | 6 | mac-host-dev | [T-167, T-189] |
 | [T-193](tasks/T-193-readme-plan-refresh.md) | Rewrite the README to the current state; refresh PLAN status; record the version pair | 6 | orchestrator | [T-145, T-146, T-147] |
 | [T-194](tasks/T-194-soak-8h-week.md) | Run the 8 h soak, then one week of real use, with resource trends | 6 | user | [T-173, T-157, T-164, T-167, T-193] |
@@ -31,10 +30,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-198](tasks/T-198-host-pen-playout-experiment.md) | Experimental bounded pen playout on Wi-Fi (knob, default off) | 6 | mac-host-dev | [T-179, T-171] |
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
-| [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
-| [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
+| [T-226](tasks/T-226-hdr-feasibility-research.md) | Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code | 6 | orchestrator | [T-188] |
 
 ## done
 
@@ -210,6 +207,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |
+| [T-181](tasks/T-181-palm-before-pen-measurement.md) | Measure palm-before-pen clicks and the touchMajor distribution | 6 | orchestrator | [] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
 | [T-183](tasks/T-183-client-retire-experiments.md) | Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept) | 6 | android-client-dev | [T-182, T-168] |
 | [T-184](tasks/T-184-client-retire-gl-path.md) | Retire the GL presentation path | 6 | android-client-dev | [T-183] |
@@ -220,6 +218,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
 | [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
+| [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
+| [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |
 | [T-205](tasks/T-205-client-migration-auth-gate.md) | Promote an AUTO USB migration candidate only after its first authenticated host record | 6 | android-client-dev | [T-150] |
 | [T-206](tasks/T-206-host-files-auto-remount.md) | Remount the tablet files volume after a server restart if it was mounted | 6 | mac-host-dev | [T-190] |
@@ -231,6 +231,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-213](tasks/T-213-game-display-protocol.md) | STREAM_PREFS optional game display group: codecs and fixture tests (Swift + Kotlin) | 6 | orchestrator | [] |
 | [T-214](tasks/T-214-host-game-display.md) | Host: 1x game display at the requested pixel size (decision 0029) | 6 | mac-host-dev | [T-213] |
 | [T-215](tasks/T-215-client-game-resolution.md) | Client: "Oyun çözünürlüğü" setting and game display prefs (decision 0029) | 6 | android-client-dev | [T-213] |
+| [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
 | [T-217](tasks/T-217-client-decoder-latency-knobs-ab.md) | A/B HiSilicon decoder low-latency keys and operating rate (dev knob) | 6 | android-client-dev | [T-185, T-219] |
 | [T-218](tasks/T-218-client-video-loss-input-gate.md) | Gate input on video-only loss (stale picture must not keep input live) | 6 | android-client-dev | [T-159, T-160] |
 | [T-219](tasks/T-219-client-decoder-queue-generation-ownership.md) | Decoder input queue: a retired generation must not consume the next generation's frames | 6 | android-client-dev | [T-161] |

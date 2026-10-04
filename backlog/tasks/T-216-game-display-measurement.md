@@ -1,7 +1,7 @@
 ---
 id: T-216
 title: Device measurement: game display sizes vs native (decision 0029)
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-214, T-215]
@@ -36,3 +36,5 @@ _(Ajan bitirince doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulananlar:**
 - **Açık sorular:**
+
+**Kapatıldı (2026-10-04, kullanıcı kararı):** tam tablo yapılmadı. Eldeki kanıt yeterli sayıldı: 0029 oyun ekranı cihazda çalışıyor (oturum 2, kullanıcı: oyunlar daha iyi görünüyor); RE4 1848 vs 2240 ölçümü (NOTES 2026-10-04 ~14:20–14:40) varsayılan 1848×1214'ü destekliyor; kullanıcı fark hissetmedi. Oyun içinde çözünürlük değişince oyunda yeniden seçmek gerekiyor (not edildi).

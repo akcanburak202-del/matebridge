@@ -1,7 +1,7 @@
 ---
 id: T-181
 title: Measure palm-before-pen clicks and the touchMajor distribution
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -72,3 +72,5 @@ _(Ajan bitirince doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+**Kapatıldı (2026-10-04, kullanıcı kararı):** ölçülmedi, gereksiz hâle geldi. Karar 0030/T-223 ile Çizim modunda tek parmak/avuç hiçbir şey göndermiyor (`FingerPolicy.GESTURES_ONLY`), yani kalemden önce konan avucun tıklaması çizim sırasında oluşamıyor. Günlük modda sorun görülürse yeniden açılır.
