@@ -1,7 +1,7 @@
 ---
 id: T-227
 title: Client — when the stored Mac address stops answering, rediscover the host via Bonjour (Mac moved from Wi-Fi to Ethernet)
-status: in-progress
+status: blocked
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -47,10 +47,30 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+**Durum: `blocked` — saf mantık bitti ve testli, ama bağlantı `MainActivity.kt` içinde olmalı ve o dosya kartın `files:` listesinde yok (Açık sorular 1).** Keşif nesnesi (`discovery`), `onDiscovered()`, `currentEndpoint`, `render()` ve ticker'lar MainActivity'de; session paketinden bunlara erişmenin temiz bir yolu yok.
 
-- **Commit:**
+- **Commit:** `9d97235` (plan), `4e4cae2` (uygulama). Dal: `task/T-227-endpoint-rediscovery`.
 - **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/EndpointRediscovery.kt` (yeni, saf politika)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/MacDiscovery.kt` (`restart()`)
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/EndpointRediscoveryTest.kt` (21 test)
+  - `docs/LOGGING.md` (`endpoint_rediscover*` olayları)
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
+  - Kök neden: NSD bir hizmeti keşif başına bir kez bildiriyor; yalnızca adres değişince yeni `onServiceFound` gelmiyor. Bu yüzden düzeltme kayıtlı adres art arda düşünce **keşfi yeniden başlatmak** (`MacDiscovery.restart()`). Yeni adres gelince var olan `onDiscovered()` kuralı (Disconnected iken bağlan) zaten bağlanıyordu. `EndpointRediscovery` buna şunları ekliyor: Connecting(eski adres) sırasında gelen sonucu kaybetmemek, kimlik denetimi, yabancı adresi atlamak.
+  - Eşik: 2 düşüş ya da ilk düşüşten 4 sn sonra; sonra 8/16/30 sn aralık. Adres kaybolunca connect 5 sn zaman aşımına kadar asılı kalabilir, bu yüzden zaman eşiği önemli. Beklenen toplam süre ≈ 4 sn + NSD çözümü (~1 sn) + bağlantı, yani ≤ ~10 sn.
+  - Kimlik = son doğrulanmış oturumun `HostTag`'i (host_id, `Connected.hostTag`). Bu süreçte henüz kimlik görülmemişse ilk aday kabul edilir. Eşleşmemiş Mac (`PairingNeedsUser`) ve adayda kalıcı `Failed` da `foreign` sayılır.
+  - "Kaydı güncelle": `connect()` zaten `lastWifiEndpoint`'i günceller. Uyandırma adresi (`wolStore`) `onHostTxt` ile her çözümlemede zaten güncelleniyor (değişiklik yok). `settings.saveEndpoint` (elle yazılan adres) değiştirilmiyor; elle yazılmış adreste (`manualMode`) yeniden keşif kapalı.
+  - Uyandırma yolu değişmiyor: `WakeConnect` dokunulmadı, kayıtlı adres denemeleri sürüyor. Yeniden keşif yalnızca yanına NSD yeniden başlatması ekliyor.
+- **Test edilmeyenler / cihazda doğrulananlar:** Cihazda hiçbir şey denenmedi; MainActivity bağlantısı olmadan cihazda davranış değişmez. `./scripts/check.sh` geçti (4e4cae2). Bağlantı yapıldıktan sonra tablette denenecekler:
+  1. Wi-Fi modunda Mac'e bağlan, sonra Mac'te Ethernet'i tak ve Wi-Fi'yi kapat. Uygulama yeniden açılmadan ≤ ~10 sn içinde yeniden bağlanmalı. Log: `endpoint_rediscover reason=…`, ardından `endpoint_rediscover_found old=*.107 new=*.106`, ardından `endpoint_rediscover_result result=accepted`.
+  2. Mac uyurken (kayıtlı IP'ye doğrudan TCP ile uyandırma) davranış aynı kalmalı: `wake_connect` satırları sürmeli, yeniden keşif yalnızca `endpoint_rediscover` satırı eklemeli.
+  3. Mac kapalıyken (bulunamıyor) geri çekilme sürmeli; `restart=` aralıkları 8/16/30 sn olmalı, yığılma olmamalı.
+  4. Bağlıyken hiç `endpoint_rediscover` satırı çıkmamalı.
 - **Açık sorular:**
+  1. **Kartın `files:` listesine `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt` eklenmeli.** Gereken bağlantı (~30 satır):
+     - alan: `private val rediscovery = EndpointRediscovery()`.
+     - `render(state)` içinde, `lastUi = state`'ten sonra: `val v = rediscovery.onUi(state, currentEndpoint, SystemClock.elapsedRealtime())`; `EndpointRediscovery.resultFields(v)?.let { MbLog.i("endpoint_rediscover_result", it) }`; `v` `Foreign`/`Unreachable` ise `ui.post { if (uygun) connect(v.old, ConnectOrigin.DISCOVERY) }` (render içinde doğrudan start yok, var olan desen).
+     - `wolTicker` (250 ms) içinde: `val ok = started && !isDestroyed && discovery != null && !manualMode && !isOnUsb() && !userDisconnected && !hostSleep.asleep`; `if (rediscovery.shouldRestart(now, ok)) { MbLog.i("endpoint_rediscover", "reason=${rediscovery.restartReason()} failures=${rediscovery.failures} restart=${rediscovery.restarts}"); pairPick.clearSeen(); discovery?.restart() }`.
+     - `onDiscovered(ep)` içinde, `pairPick.allowsAuto` denetiminden sonra: `val pick = rediscovery.onDiscovered(ep, currentEndpoint, lastUi)`; `SKIP` ise `endpoint_rediscover_skip` logla ve dön; `wakeConnect.onDiscovered(...)` her durumda çağrılır (yan etkisi var); `pick == CONNECT || wake` ise `connect(ep, ConnectOrigin.DISCOVERY)`; `CONNECT` ise önce `endpoint_rediscover_found old=… new=…` logla.
+     - `applyTransport()`, `onStop()` ve "Bağlantıyı kes" içinde: `rediscovery.reset()`.
+  2. (Kapsam dışı, not) `onHostTxt` her çözümlemede `wolStore` uyandırma adresini kimlik denetimi olmadan güncelliyor (var olan davranış). Başka bir Mac'in çözümlemesi uyandırma hedefini değiştirebilir. T-227 bunu değiştirmiyor.
