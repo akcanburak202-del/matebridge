@@ -1,7 +1,7 @@
 ---
 id: T-225
 title: Client — base the presentation metric (skip_pct) on frame-rendered callbacks; the latch model miscounts ~20% of game frames and pins the pacer at its cap
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-220, T-222]
