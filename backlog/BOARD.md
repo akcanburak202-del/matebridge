@@ -33,6 +33,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
+| [T-222](tasks/T-222-client-operating-rate-max-default.md) | Decoder operating rate "max" by default (device A/B result of T-217) | 6 | android-client-dev | [T-217] |
 
 ## done
 
@@ -230,3 +231,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-218](tasks/T-218-client-video-loss-input-gate.md) | Gate input on video-only loss (stale picture must not keep input live) | 6 | android-client-dev | [T-159, T-160] |
 | [T-219](tasks/T-219-client-decoder-queue-generation-ownership.md) | Decoder input queue: a retired generation must not consume the next generation's frames | 6 | android-client-dev | [T-161] |
 | [T-220](tasks/T-220-client-presentation-metric-and-game120-cadence.md) | One presentation metric across pacers; infer 60 fps cadence in Oyun 120 | 6 | android-client-dev | [T-208, T-211] |
+| [T-221](tasks/T-221-hotfix-input-viewport.md) | Hotfix — input viewport stays empty after T-215's MATCH_PARENT layout | 6 | orchestrator | [T-215] |

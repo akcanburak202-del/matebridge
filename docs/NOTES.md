@@ -1186,3 +1186,24 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 3. **Decoder A/B (T-217):** Oyun 60 tam boyut, `--ez dev true --es dec_lowlat all --es dec_oprate max` ile ve onsuz birer tur; çözme süresi ve his.
 4. **Mod değişimi (T-219/T-220):** Netlik ↔ Akıcı ↔ Oyun 60 ↔ Oyun 120 arası 10 geçiş, her seferinde görüntü ve takılı girdi yok.
 5. **Dosyalar (T-209):** MatePad Finder'da açıkken tablet uygulamasını yeniden başlat → menüden aç çalışmalı.
+
+## 2026-10-04 ~10:50–11:50 — Cihaz oturumu 2: oyun ekranı, input hotfix, decoder operating rate
+
+- **Kurulum `cea1809`:** oyun ekranı (0029) ilk denemede çalıştı: `display_recreate reason=mode_change 2800x1840@2x->1848x1214@1x` ~0,8 s, `mode_selected=true applied=1848x1214px 1848x1214pt 60Hz`; tablet `display=1848x1214 display_applied=1`; yeniden bağlanmada bekletilen oyun ekranı yeniden kullanıldı. Ori çözünürlük listesinde 1848×1214 görünüyor ve otomatik seçili.
+- **Acil hata (T-221):** yeni sürümde input hiç açılmadı (T-215 `MATCH_PARENT` → config gelince yeniden yerleşim yok → input viewport boş). `updateViewport()` ile düzeltildi; kullanıcı doğruladı.
+- 1x oyun ekranında masaüstü öğeleri **küçülür** (daha çok nokta), 1400×920 seçeneği normal moddaki boyutu verir; oyuna etkisi yok.
+- **Ori (GameHub) 1848×1214 Oyun 60:** Mac GPU p50 %49; içerik 1,27 eksik kare/sn; GameHub HUD'u takılma anlarında FPS düşüşü gösteriyor (oyun kaynaklı). Çözme 1848×1214@60'ta da 17,5 ms (çözünürlük gecikmeyi düşürmedi → DVFS).
+- **T-220 ölçütü cihazda:** model `skip_pct` %19 iken gerçek geri çağrı `cb_skip_pct` %3,4 → bırakma anı modeli SurfaceFlinger'la uyuşmuyor; ölçüt geri çağrıya bağlanmalı (takip). Zamanlayıcı D tamponu sürekli üst sınırda (12,5 ms = 1,5 periyot).
+- **T-217 A/B:** `dec_lowlat vdec` reddedildi; `hisi` ve `dec_oprate max` kabul. Kazanç `max`'tan:
+
+  | | Çözme p50 | Yakalama→bırakma | Yakalama→gösterim | `cb_skip_pct` p90 | eksik kare/sn |
+  |---|---|---|---|---|---|
+  | Ori varsayılan | 17,5 | 28,1 | 60,0 | 15 | 1,27 |
+  | Ori hisi+max | 13,9 | 22,5 | 53,6 | 16 | — |
+  | Ori max | 14,1 | 23,5 | 54,7 | — | — |
+  | RE4 varsayılan (panel 60) | 18,0 | 26,2 | 65,5 | 24,5 | 0,59 |
+  | RE4 max | 13,4 | 23,1 | 62,7 | 1,7 | 0,01 |
+  | Çizim 120 varsayılan | 9,0 | 14,5 | 38,0 | 6,2 | — |
+  | Çizim 120 max | 9,0 | 16,4 | 39,9 | 1,7 | — |
+
+  RE4'te "eksik karelerin" çoğu yavaş çözmede tablet kuyruğunun düşürdüğü karelermiş; `max` ile kayboldu. Kullanıcı: "takılmalar azaldı, seyrek de olsa var". → T-222 (varsayılan `max`).

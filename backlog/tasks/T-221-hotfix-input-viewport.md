@@ -1,7 +1,7 @@
 ---
 id: T-221
 title: Hotfix — input viewport stays empty after T-215's MATCH_PARENT layout
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-215]
@@ -24,7 +24,7 @@ Acil düzeltme olduğu için orkestratör yaptı (kullanıcı tabletle Mac'i kon
 ## Kabul kriterleri
 
 - [x] [device] Kurulumdan sonra `video_health healthy` → `input_active on=1` (10:54:44); kullanıcı doğrulaması aşağıda.
-- [ ] [device] Kullanıcı: klavye, kalem, trackpad çalışıyor (Oyun 60, 1848×1214).
+- [x] [device] Kullanıcı: klavye, kalem, trackpad çalışıyor (Oyun 60, 1848×1214), 2026-10-04 ~10:56.
 
 ## Handoff
 
