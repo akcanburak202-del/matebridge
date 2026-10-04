@@ -78,16 +78,18 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         const val HEADER_LINE = "seq,capture_us,ready_ns,now_vsync_last_ns,period_ns,epoch,deadline_ns,dev_ns," +
             "d_ns,jitter_ns,earliest_ns,slot_ns,lock_slot_ns,k,acquire_ns,bad_run,path,late_drop,collided," +
             "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action," +
-            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns"
+            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns,cb_ns,cb_period_ns"
         const val COLS = 24
+        /** T-225: rows [onCallback] searches back for the frame (a callback comes a few frames after its release). */
+        const val CB_LOOKBACK = 64L
         /** Receive-path CSV columns after the presentation ones: six from T-073, seven from T-077. */
         private const val RX_CSV = 13
         /**
          * CSV columns: the [COLS] presentation columns, the receive-path columns, then T-220's `latch_slot_ns` and
-         * `latch_period_ns` (the vsync the client's presentation metric attributed the release to and its panel period,
-         * [HoldMeter.releasedSlot]; 0 = not released).
+         * `latch_period_ns` (the vsync the release-time latch model attributed the release to and its panel period,
+         * [HoldMeter.releasedSlot]; 0 = not released), then T-225's `cb_ns` and `cb_period_ns`.
          */
-        const val CSV_COLS = COLS + RX_CSV + 2
+        const val CSV_COLS = COLS + RX_CSV + 4
         /**
          * Columns of the receive ring: seq, capture_us, bytes, recv, decrypted, queued, input, action (T-073), then the
          * record open stamps and the decoder input steps (T-077).
@@ -130,6 +132,10 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
     private val data = LongArray(capacity * COLS)
     /** T-220: release-time vsync and period of each row ([onLatch]), two per row, same index as [data]'s rows. */
     private val latch = LongArray(capacity * 2)
+    /** T-225: `nanoTime` of each row's frame-rendered callback ([onCallback]), 0 = none (yet); same index as [data]'s rows. */
+    private val cb = LongArray(capacity)
+    /** T-225 review: the panel period the callback was judged with (the one current at its delivery), per row. */
+    private val cbPeriod = LongArray(capacity)
     // Receive ring (T-073), slot = frameSeq % capacity, valid when R_SEQ matches. Written by the video connection
     // thread (onRecv), the queue (onRx*) and the decoder input thread (onInput); joined to the rows above by seq.
     private val rx = LongArray(capacity * RX_COLS).also { for (i in 0 until capacity) it[i * RX_COLS + R_SEQ] = -1 }
@@ -161,6 +167,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         d[b + C_RSLOT] = 0; d[b + C_RELNS] = 0; d[b + C_RENDER] = 0
         d[b + C_ACTION] = action.toLong(); d[b + C_OWN] = ownSlotNs
         latch[(id % capacity).toInt() * 2] = 0; latch[(id % capacity).toInt() * 2 + 1] = 0
+        cb[(id % capacity).toInt()] = 0; cbPeriod[(id % capacity).toInt()] = 0
         count = id + 1
         return id
     }
@@ -195,6 +202,22 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         if (base(id) < 0) return
         val i = (id % capacity).toInt() * 2
         latch[i] = slotNs; latch[i + 1] = periodNs
+    }
+
+    /**
+     * T-225: the codec's frame-rendered callback for frame [seq] came with [cbNs] (its own `nanoTime`, the time the
+     * presentation metric `skip_pct` uses; `sim.py --holds` prefers it) and [periodNs] the panel period the metric used for it. Main looper; looks back over the last
+     * [CB_LOOKBACK] rows (a callback follows its release by a few frames), so a frame that is no longer there is ignored.
+     */
+    fun onCallback(seq: Long, cbNs: Long, periodNs: Long = 0) {
+        val n = count
+        var id = n - 1
+        val stop = maxOf(n - CB_LOOKBACK, n - capacity, 0L)
+        while (id >= stop) {
+            val r = (id % capacity).toInt()
+            if (data[r * COLS + C_SEQ] == seq) { cb[r] = cbNs; cbPeriod[r] = periodNs; return }
+            id--
+        }
     }
 
     private fun rxBase(seq: Long): Int {
@@ -277,6 +300,8 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
             for (c in 0 until RX_CSV) { out.append(','); if (rb >= 0) appendRx(out, rb, c) else out.append(if (c == 5) "none" else "0") }
             val li = (id % capacity).toInt() * 2 // T-220
             out.append(',').append(latch[li].toString()).append(',').append(latch[li + 1].toString())
+            out.append(',').append(cb[(id % capacity).toInt()].toString()) // T-225
+            out.append(',').append(cbPeriod[(id % capacity).toInt()].toString())
             out.append('\n')
         }
         // Frames that were received but never decoded/presented (dropped, gated, still queued): one row each, the
@@ -290,7 +315,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                 out.append(if (c == C_PATH) "none" else if (c == C_ACTION) RX_ACTIONS.getOrElse(rx[rb + R_ACTION].toInt()) { "?" } else "0").append(',')
             }
             for (c in 0 until RX_CSV) { if (c > 0) out.append(','); appendRx(out, rb, c) }
-            out.append(",0,0\n") // T-220 latch_slot_ns, latch_period_ns: never released
+            out.append(",0,0,0,0\n") // T-220 latch_slot_ns, latch_period_ns, T-225 cb_ns, cb_period_ns: never released
 
         }
     }

@@ -126,10 +126,10 @@ class PresentationMetricTest {
         t.onDiscard(id2, 19_000, PaceTrace.ACTION_REPLACE)
         val lines = StringBuilder().also { t.writeCsv(it) }.toString().trim().split("\n")
         val h = lines[0].split(",")
-        assertEquals(listOf("latch_slot_ns", "latch_period_ns"), h.takeLast(2))
+        assertEquals(listOf("latch_slot_ns", "latch_period_ns", "cb_ns", "cb_period_ns"), h.takeLast(4))
         assertEquals(PaceTrace.CSV_COLS, h.size)
-        assertEquals(listOf("13333333", "8333333"), lines[1].split(",").takeLast(2))
-        assertEquals(listOf("0", "0"), lines[2].split(",").takeLast(2))
+        assertEquals(listOf("13333333", "8333333", "0", "0"), lines[1].split(",").takeLast(4))
+        assertEquals(listOf("0", "0", "0", "0"), lines[2].split(",").takeLast(4))
         assertEquals(PaceTrace.CSV_COLS, lines[2].split(",").size)
     }
 
@@ -155,9 +155,9 @@ class PresentationMetricTest {
         val log = st.logSnapshot(reset = true)
         assertEquals(one, log)
         val w = st.holdWindow(reset = true)
-        assertEquals(VideoStats.HoldCounts(4, 1, 1), w)
-        assertEquals("hold_n=4 hold_short_pct=25.0 hold_long_pct=25.0", w.logFields())
-        assertEquals("hold_n=0 hold_short_pct=- hold_long_pct=-", st.holdWindow().logFields())
+        assertEquals(VideoStats.HoldCounts(4, 1, 1, latchJudged = 4, latchLong = 1), w) // no callbacks: the latch model counts
+        assertEquals("hold_n=4 hold_short_pct=25.0 hold_long_pct=25.0 hold_src=latch latch_skip_pct=25.0", w.logFields())
+        assertEquals("hold_n=0 hold_short_pct=- hold_long_pct=- hold_src=latch latch_skip_pct=-", st.holdWindow().logFields())
     }
 
     @Test fun simSelfTestVector() {

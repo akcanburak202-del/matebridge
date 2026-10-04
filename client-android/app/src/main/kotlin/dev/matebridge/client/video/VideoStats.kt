@@ -10,9 +10,13 @@ package dev.matebridge.client.video
  * after the callback.
  *
  * T-220: `skip_pct` ([Snapshot.skipPct]) is one presentation metric for every pacer ([HoldMeter]): the hold of each
- * released frame against its content cadence, from the vsync it was released for. Before, it came from the adaptive
- * pacer's own decisions in that mode and from the frame-rendered callback otherwise, so buffer 0 and adaptive did not
- * compare.
+ * frame against its content cadence. Before, it came from the adaptive pacer's own decisions in that mode and from the
+ * frame-rendered callback otherwise, so buffer 0 and adaptive did not compare.
+ *
+ * T-225: the hold is measured on the frame-rendered callback times ([onRenderCallback]), the best view of what was shown.
+ * The release-time "latch" model of T-220 (the vsync a frame was handed to the codec for) miscounted ~20% of the frames a
+ * pacer held until just before the compositor's deadline (the codec call returns within 1 ms of the cut), so it is a
+ * diagnostic only ([Snapshot.latchSkipPct]) and the fallback where the codec reports no callbacks.
  */
 class VideoStats {
     companion object {
@@ -41,13 +45,17 @@ class VideoStats {
         /** Average delay the pacer added versus presenting at the earliest vsync, or null when unpaced. */
         val paceAddAvgUs: Long? = null,
         /**
-         * T-220: percent of judged presentation intervals held longer than the content cadence ([holdLong] of
-         * [holdJudged], [HoldMeter]), the same calculation for every pacer; null when none was judged. Only a caller
-         * that never reports a presentation slot ([onReleased] without one: tests, legacy) gets the old definition: the
+         * T-220/T-225: percent of judged presentation intervals held longer than the content cadence ([holdLong] of
+         * [holdJudged], [HoldMeter]), the same calculation for every pacer; null when none was judged. Fed by the
+         * frame-rendered callback times; where no callback was ever reported, by the release-time latch model. Only a
+         * caller that never reports either ([onReleased] without a slot: tests, legacy) gets the old definition: the
          * adaptive pacer's own skips, else the callback meter.
          */
         val skipPct: Double? = null,
-        /** Diagnostic: skip percentage derived from the frame-rendered callback times (overestimates; see PresentMeter). */
+        /**
+         * Diagnostic: skip percentage of the callback gap meter ([PresentMeter]: intervals longer than the cadence by
+         * more than half a period). `skip_pct` counts holds against the content runs instead and judges fewer intervals.
+         */
         val cbSkipPct: Double? = null,
         /** Decode latency per frame (queueInputBuffer to output available): p50/p95/p99 in the window. */
         val decode: IntervalSummary = IntervalSummary.EMPTY,
@@ -65,7 +73,7 @@ class VideoStats {
         val discarded: Long = 0,
         /** T-168: released frames whose frame-rendered callback never came (a later frame's callback came first). */
         val renderCbMissing: Long = 0,
-        /** T-220: presentation intervals judged by [HoldMeter] (continuous content, one panel rate). */
+        /** T-220: presentation intervals judged by [HoldMeter] (continuous content, one panel rate); source: see [skipPct]. */
         val holdJudged: Long = 0,
         /** T-220: judged intervals held shorter than the content cadence (a 1-vsync hold of 60 fps on 120 Hz). */
         val holdShort: Long = 0,
@@ -73,17 +81,34 @@ class VideoStats {
         val holdLong: Long = 0,
         /** T-220 diagnostic: the adaptive pacer's own skip decisions ([FramePacer.Decision.skipped]), or null. */
         val schedSkipPct: Double? = null,
+        /**
+         * T-225 diagnostic: the T-220 latch model's long-hold percentage ([HoldMeter] fed with the vsync each frame was
+         * released for, [onReleased]); null when none was judged. It reads high when releases return within about a
+         * millisecond of the compositor deadline; compare with [skipPct].
+         */
+        val latchSkipPct: Double? = null,
     )
 
     /** T-220: [HoldMeter] counts of one `render ev=present` window ([holdWindow]). */
-    data class HoldCounts(val judged: Long, val short: Long, val long: Long) {
+    data class HoldCounts(
+        val judged: Long, val short: Long, val long: Long,
+        /** T-225: the latch model's judged and long counts over the same window (diagnostic). */
+        val latchJudged: Long = 0, val latchLong: Long = 0,
+        /** T-225: true when the counts come from frame-rendered callbacks, false for the latch fallback. */
+        val fromCallbacks: Boolean = false,
+    ) {
         val shortPct: Double? get() = if (judged > 0) short * 100.0 / judged else null
         val longPct: Double? get() = if (judged > 0) long * 100.0 / judged else null
+        val latchLongPct: Double? get() = if (latchJudged > 0) latchLong * 100.0 / latchJudged else null
 
-        /** `hold_n=<judged> hold_short_pct=<%.1f|-> hold_long_pct=<%.1f|->` (docs/LOGGING.md). */
+        /**
+         * `hold_n=<judged> hold_short_pct=<%.1f|-> hold_long_pct=<%.1f|-> hold_src=cb|latch latch_skip_pct=<%.1f|->`
+         * (docs/LOGGING.md).
+         */
         fun logFields(): String {
             fun pct(v: Double?) = v?.let { String.format(java.util.Locale.ROOT, "%.1f", it) } ?: "-"
-            return "hold_n=$judged hold_short_pct=${pct(shortPct)} hold_long_pct=${pct(longPct)}"
+            return "hold_n=$judged hold_short_pct=${pct(shortPct)} hold_long_pct=${pct(longPct)} " +
+                "hold_src=${if (fromCallbacks) "cb" else "latch"} latch_skip_pct=${pct(latchLongPct)}"
         }
     }
 
@@ -100,10 +125,13 @@ class VideoStats {
         /** [PresentMeter] counts (log window only; the live window reads the meter itself). */
         var meterIntervals = 0L; var meterSkipped = 0L
         var latNeg = 0L; var discarded = 0L; var cbMissing = 0L
+        /** T-225: [HoldMeter] counts from the frame-rendered callbacks, and (latch*) from the release-time model. */
         var holdJudged = 0L; var holdShort = 0L; var holdLong = 0L
+        var latchJudged = 0L; var latchShort = 0L; var latchLong = 0L
 
         fun add(o: Sums) {
             holdJudged += o.holdJudged; holdShort += o.holdShort; holdLong += o.holdLong
+            latchJudged += o.latchJudged; latchShort += o.latchShort; latchLong += o.latchLong
             received += o.received; decoded += o.decoded; rendered += o.rendered; dropped += o.dropped; bytes += o.bytes
             decodeSumUs += o.decodeSumUs; decodeCount += o.decodeCount
             latencySumUs += o.latencySumUs; latencyCount += o.latencyCount
@@ -115,6 +143,7 @@ class VideoStats {
 
         fun clear() {
             holdJudged = 0; holdShort = 0; holdLong = 0
+            latchJudged = 0; latchShort = 0; latchLong = 0
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
             latencySumUs = 0; latencyCount = 0
@@ -127,11 +156,16 @@ class VideoStats {
 
     private val cur = Sums()
     private val log = Sums()
-    /** T-220: the presentation metric; under this object's lock. */
+    /** T-225: the presentation metric on frame-rendered callback times; under this object's lock. */
     private val holds = HoldMeter()
-    /** T-220: true once a presentation slot was reported; from then on `skip_pct` is [holds] only. */
+    /** T-220: the release-time latch model, diagnostic (and the fallback without callbacks); under this object's lock. */
+    private val latchHolds = HoldMeter()
+    /** T-220: true once a release slot was reported (no callback needed). */
     private var presentationReported = false
+    /** T-225: true once a callback with a presentation time was reported; from then on `skip_pct` is [holds] only. */
+    private var callbacksReported = false
     private var winJudged = 0L; private var winShort = 0L; private var winLong = 0L
+    private var winLatchJudged = 0L; private var winLatchShort = 0L; private var winLatchLong = 0L
     /**
      * pts (frame_seq) -> time. T-168: bounded in insertion order, not by the smallest key: frame_seq restarts at 0 on
      * every video connection, and stale high keys (frames lost in a teardown) must not evict the new stream's low ones.
@@ -199,7 +233,7 @@ class VideoStats {
     /** Stream restart: gaps must not span it. */
     fun breakGaps() {
         networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence(); meter.breakSequence()
-        synchronized(this) { holds.reset() } // T-220: no presentation interval or content run spans it either
+        synchronized(this) { holds.reset(); latchHolds.reset() } // T-220: no presentation interval or content run spans it either
     }
     @Synchronized fun onDropped(n: Int) { cur.dropped += n }
     @Synchronized fun onRendered() { cur.rendered++ }
@@ -209,25 +243,32 @@ class VideoStats {
      * Counts as rendered (logged as `released=`); with its [captureUs] it adds a capture -> release sample. In
      * codec-render mode the frame was registered with [awaitCallback] before the release.
      *
-     * T-220: [slotNs] is the vsync it was released for ([HoldMeter.latchSlot], 0 = unknown) on a panel of [periodNs];
-     * it feeds the presentation metric ([HoldMeter]).
+     * T-220: [slotNs] is the vsync it was released for ([HoldMeter.latchSlot], 0 = unknown) on a panel of [periodNs].
+     * T-225: it feeds the latch model only, the diagnostic and the fallback of `skip_pct` ([latchHolds]).
      */
     @Synchronized fun onReleased(ptsUs: Long?, captureUs: Long?, clientUs: Long, slotNs: Long = 0, periodNs: Long = 0) {
         cur.rendered++
         if (ptsUs != null && captureUs != null) latencyOf?.invoke(captureUs, clientUs)?.let { capRel.record(it) }
-        if (slotNs == 0L || periodNs <= 0 || captureUs == null) { holds.breakSequence(); return }
+        if (slotNs == 0L || periodNs <= 0 || captureUs == null) { latchHolds.breakSequence(); return }
         presentationReported = true
-        when (holds.onPresented(captureUs, slotNs, periodNs)) {
-            HoldMeter.SHORT -> { cur.holdJudged++; cur.holdShort++; winJudged++; winShort++ }
-            HoldMeter.EXACT -> { cur.holdJudged++; winJudged++ }
-            HoldMeter.LONG -> { cur.holdJudged++; cur.holdLong++; winJudged++; winLong++ }
+        when (latchHolds.onPresented(captureUs, slotNs, periodNs)) {
+            HoldMeter.SHORT -> { cur.latchJudged++; cur.latchShort++; winLatchJudged++; winLatchShort++ }
+            HoldMeter.EXACT -> { cur.latchJudged++; winLatchJudged++ }
+            HoldMeter.LONG -> { cur.latchJudged++; cur.latchLong++; winLatchJudged++; winLatchLong++ }
         }
     }
 
-    /** T-220: [HoldMeter] counts since the last reset of this window (the `render ev=present` line). */
+    /**
+     * T-220/T-225: [HoldMeter] counts since the last reset of this window (the `render ev=present` line): from the
+     * frame-rendered callbacks, or from the latch model while no callback was ever reported; the latch counts ride along.
+     */
     @Synchronized fun holdWindow(reset: Boolean = true): HoldCounts {
-        val h = HoldCounts(winJudged, winShort, winLong)
-        if (reset) { winJudged = 0; winShort = 0; winLong = 0 }
+        val h = if (callbacksReported) HoldCounts(winJudged, winShort, winLong, winLatchJudged, winLatchLong, true)
+        else HoldCounts(winLatchJudged, winLatchShort, winLatchLong, winLatchJudged, winLatchLong, false)
+        if (reset) {
+            winJudged = 0; winShort = 0; winLong = 0
+            winLatchJudged = 0; winLatchShort = 0; winLatchLong = 0
+        }
         return h
     }
 
@@ -257,9 +298,15 @@ class VideoStats {
      * T-168: the codec's frame-rendered callback for [ptsUs] at [clientUs] (its `nanoTime / 1000`). Callbacks come in
      * release order, so frames released before [ptsUs] that are still awaited never got one ([Snapshot.renderCbMissing]).
      * A callback for a frame not awaited (after a [resetFrames]) only adds its latency sample.
+     *
+     * T-225: with [shownNs] (the callback's own `nanoTime`, ns) and the panel [periodNs] the callback feeds the
+     * presentation metric ([HoldMeter]): only frames that really got a callback count, at the time the codec reported.
+     * A frame released but never reported (SurfaceFlinger dropped it) lengthens its predecessor's hold. [captureUs] null
+     * (unknown frame) breaks the shown sequence. Shares the lock the callback already took (main looper), no new one.
      */
-    @Synchronized fun onRenderCallback(ptsUs: Long, captureUs: Long?, clientUs: Long) {
+    @Synchronized fun onRenderCallback(ptsUs: Long, captureUs: Long?, clientUs: Long, shownNs: Long = 0, periodNs: Long = 0) {
         if (captureUs != null) latencyOf?.invoke(captureUs, clientUs)?.let { capCb.record(it) }
+        if (shownNs != 0L && periodNs > 0) feedCallback(if (shownNs == Long.MAX_VALUE) null else captureUs, shownNs, periodNs)
         if (!awaitingCallback.contains(ptsUs)) return
         val i = awaitingCallback.iterator()
         while (i.hasNext()) {
@@ -270,13 +317,23 @@ class VideoStats {
         }
     }
 
+    private fun feedCallback(captureUs: Long?, shownNs: Long, periodNs: Long) {
+        if (captureUs == null) { holds.breakSequence(); return }
+        callbacksReported = true
+        when (holds.onPresented(captureUs, shownNs, periodNs)) {
+            HoldMeter.SHORT -> { cur.holdJudged++; cur.holdShort++; winJudged++; winShort++ }
+            HoldMeter.EXACT -> { cur.holdJudged++; winJudged++ }
+            HoldMeter.LONG -> { cur.holdJudged++; cur.holdLong++; winJudged++; winLong++ }
+        }
+    }
+
     /**
      * T-168: a codec start or stream boundary. The per-frame maps are keyed by frame_seq, which restarts per video
      * connection; entries of the previous codec or stream are dropped (counts and windows are kept).
      */
     @Synchronized fun resetFrames() {
         inputTimes.clear(); captureTimes.clear(); awaitingCallback.clear()
-        holds.reset()
+        holds.reset(); latchHolds.reset()
     }
 
     /** Frame handed to the decoder. Bounded: the oldest entries are evicted ([FRAME_MAP_MAX]). */
@@ -303,7 +360,8 @@ class VideoStats {
             lastDecodeUs = d
         }
         captureTimes.remove(ptsUs)?.let { cap ->
-            holds.onDecoded(cap) // T-220: the content sequence every released frame is judged against
+            holds.onDecoded(cap) // T-220: the content sequence every shown frame is judged against
+            latchHolds.onDecoded(cap)
             latencyOf?.invoke(cap, clientUs)?.let { raw ->
                 capDec.record(raw)
                 if (raw < 0) cur.latNeg++
@@ -331,7 +389,7 @@ class VideoStats {
             if (reset) decodeLat.summaryInto(decodeLatLog) else decodeLat.summary(),
             stage(capDec, capDecLog, reset), stage(readySlot, readySlotLog, reset),
             stage(capRel, capRelLog, reset), stage(capCb, capCbLog, reset),
-            c.latNeg, c.discarded, c.cbMissing, c.holdJudged, c.holdShort, c.holdLong, schedPctOf(c))
+            c.latNeg, c.discarded, c.cbMissing, holdJudgedOf(c), holdShortOf(c), holdLongOf(c), schedPctOf(c), latchPctOf(c))
         if (reset) {
             c.meterIntervals = m.intervals.toLong(); c.meterSkipped = m.skipped.toLong()
             log.add(c)
@@ -364,24 +422,35 @@ class VideoStats {
             skipPctOf(l, meterPct),
             meterPct, decodeLatLog.summary(reset),
             capDecLog.summary(reset), readySlotLog.summary(reset), capRelLog.summary(reset), capCbLog.summary(reset),
-            l.latNeg, l.discarded, l.cbMissing, l.holdJudged, l.holdShort, l.holdLong, schedPctOf(l))
+            l.latNeg, l.discarded, l.cbMissing, holdJudgedOf(l), holdShortOf(l), holdLongOf(l), schedPctOf(l), latchPctOf(l))
         if (reset) l.clear()
         return s
     }
 
-    /** T-220: see [Snapshot.skipPct]; [meterPct] is the callback meter's share (legacy fallback only). */
+    /** T-225: the source of the hold counts ([Snapshot.skipPct]): callbacks once any was reported, else the latch model. */
+    private fun holdJudgedOf(s: Sums) = if (callbacksReported) s.holdJudged else s.latchJudged
+    private fun holdShortOf(s: Sums) = if (callbacksReported) s.holdShort else s.latchShort
+    private fun holdLongOf(s: Sums) = if (callbacksReported) s.holdLong else s.latchLong
+
+    /** T-220/T-225: see [Snapshot.skipPct]; [meterPct] is the callback gap meter's share (legacy fallback only). */
     private fun skipPctOf(s: Sums, meterPct: Double?): Double? =
-        if (presentationReported) (if (s.holdJudged > 0) s.holdLong * 100.0 / s.holdJudged else null)
-        else schedPctOf(s) ?: meterPct
+        if (callbacksReported || presentationReported) {
+            val j = holdJudgedOf(s)
+            if (j > 0) holdLongOf(s) * 100.0 / j else null
+        } else schedPctOf(s) ?: meterPct
+
+    private fun latchPctOf(s: Sums): Double? = if (s.latchJudged > 0) s.latchLong * 100.0 / s.latchJudged else null
 
     private fun schedPctOf(s: Sums): Double? = if (s.scheduled > 0) s.scheduleSkips * 100.0 / s.scheduled else null
 }
 
 /**
- * T-220: the presentation metric, one calculation for every pacer (adaptive, fixed buffer, buffer 0). Each frame
- * released for rendering is reported with the vsync it was released for ([releasedSlot]: the slot the pacer asked for,
- * or the earliest vsync a buffer queued when the release call returned can still make); its hold is the distance to
- * the next shown frame's vsync, in panel periods, compared with the content cadence n:
+ * T-220: the presentation metric, one calculation for every pacer (adaptive, fixed buffer, buffer 0). Each shown frame
+ * is reported with a time on the panel's vsync lattice; its hold is the distance to the next shown frame's time, in
+ * panel periods, compared with the content cadence n. T-225: [VideoStats] feeds one instance with the frame-rendered
+ * callback times (the metric) and another with the vsync each frame was released for ([releasedSlot], the T-220
+ * latch model: the slot the pacer asked for, or the earliest vsync a buffer queued when the release call returned can
+ * still make; diagnostic and fallback). The rules:
  *  - content runs: decoded frames whose capture gaps all stay within [RUN_TOLERANCE_NS] of the run's first gap are one
  *    continuous run ([onDecoded], decode order = capture order). Two shown frames are judged only when the later one's
  *    run reaches back to the earlier one (no source gap, no irregular capture in between), the panel rate is the same,
@@ -391,8 +460,8 @@ class VideoStats {
  *  - two releases for the same vsync: the newer replaces the older one, which was never shown. So an interval is judged
  *    only once the next release lands on a later vsync (one frame later).
  * `tools/pacing/sim.py --holds` implements the same rules on a pace trace. The vsync is the one the frame was handed
- * over for; SurfaceFlinger's actual latch is not observed (`cb_skip_pct` and `dumpsys SurfaceFlinger --latency` are
- * the cross-checks). Not thread-safe: [VideoStats] calls it under its own lock.
+ * over for; SurfaceFlinger's actual latch is not observed there, the callback instance sees its report instead
+ * (`dumpsys SurfaceFlinger --latency` is the cross-check). Not thread-safe: [VideoStats] calls it under its own lock.
  */
 class HoldMeter {
     companion object {

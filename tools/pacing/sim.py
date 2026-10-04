@@ -2,18 +2,22 @@ import argparse, csv, statistics as st
 # Constant-playout-delay replay of a pace trace. Reference for the client's ConstantPlayoutPacer (T-080).
 # Default: the 60 Hz table. --hz 120: 120 Hz rows and continuity. --idle-ms/--refill: the client's idle rule
 # (window cleared after a ready gap > idle-ms, C kept, C may only rise until the window holds `refill` samples).
-# --q/--L/--hold: one run instead of the table. --holds (T-208, T-220): the client's presentation metric (hold of each
-# released frame against its content cadence, the `skip_pct` rules) on a trace; --holds-selftest checks it on a
-# synthetic trace (the same vector as the JVM test PresentationMetricTest.simSelfTestVector).
+# --q/--L/--hold: one run instead of the table. --holds (T-208, T-220, T-225): the client's presentation metric (hold of
+# each shown frame against its content cadence, the `skip_pct` rules) on a trace: from the frame-rendered callback times
+# (`cb_ns` column, T-225) when the trace has them, else from the vsync each frame was released for (T-220's latch model;
+# --latch forces it); --holds-selftest checks it on synthetic traces (the first vector is the one of the JVM test
+# PresentationMetricTest.simSelfTestVector).
 ap=argparse.ArgumentParser(); ap.add_argument('trace',nargs='?'); ap.add_argument('--hz',type=int,default=60)
 ap.add_argument('--idle-ms',type=float,default=None); ap.add_argument('--refill',type=int,default=32)
 ap.add_argument('--q',type=float); ap.add_argument('--L',type=float,default=6.0); ap.add_argument('--hold',type=float,default=2.0)
 ap.add_argument('--holds',action='store_true',help='T-208/T-220: presentation metric of the released frames instead of the replay')
 ap.add_argument('--holds-selftest',action='store_true',help='T-220: check --holds on a synthetic trace')
+ap.add_argument('--latch',action='store_true',help='T-225: with --holds, use the release-time latch model even when the trace has cb_ns')
 a=ap.parse_args()
 import math
 from collections import Counter
 VISIBLE=('release','move')
+MAX_NS=2**63-1 # Long.MAX_VALUE: the codec's callback had no usable time
 def jround(x): return math.floor(x+0.5) # Kotlin Math.round
 class HoldMeter:
     """T-220: the client's presentation metric, rule for rule (VideoStats.kt `HoldMeter`; keep both in step).
@@ -64,11 +68,41 @@ def latch(x):
     t=rel+dl
     earliest=last if t<=last else last+(t-last+P-1)//P*P
     return earliest if req<earliest-P//2 else req
-def holds(rows):
+def holds_cb(rows):
+    """T-225: the metric on the frame-rendered callback times (`cb_ns`, the codec's own nanoTime; `skip_pct` on the
+    client). A frame is decoded at its `ready_ns` and shown at its `cb_ns`; the two kinds of event are merged by time
+    (a callback follows its decode), a row with no callback was dropped by the compositor and is simply not shown, so
+    its predecessor's hold comes out long. The period is the one the client judged the callback with (`cb_period_ns`: the
+    panel period at the callback's delivery; older traces: `latch_period_ns`, the one at the release, else `period_ns`).
+    A `cb_ns` of Long.MAX_VALUE (the codec had no usable time) breaks the shown sequence, like the client (it has no time
+    of its own: it is placed one median decode->callback lag after its decode); a callback with no usable period is not
+    judged. Rows with no `ready_ns` (received but never decoded) are no decoded frame."""
+    lags = sorted(int(x['cb_ns']) - int(x['ready_ns']) for x in rows
+                  if 0 < int(x.get('cb_ns') or 0) < MAX_NS and int(x.get('ready_ns') or 0) > 0)
+    lag = lags[len(lags) // 2] if lags else 0
+    ev = []
+    for i, x in enumerate(rows):
+        cap = int(x['capture_us']); rdy = int(x.get('ready_ns') or 0); cb = int(x.get('cb_ns') or 0)
+        if rdy > 0: ev.append((rdy, 0, i, cap, 0))
+        if cb >= MAX_NS:
+            if rdy > 0: ev.append((rdy + lag, 2, i, cap, 0))
+        elif cb > 0:
+            P = int(x.get('cb_period_ns') or 0) or int(x.get('latch_period_ns') or 0) or int(x.get('period_ns') or 0)
+            if P > 0: ev.append((cb, 1, i, cap, P))
+    ev.sort(); m = HoldMeter(); groups = {}
+    for t, kind, i, cap, P in ev:
+        if kind == 0: m.decoded(cap); continue
+        if kind == 2: m.brk(); continue
+        v = m.presented(cap, t, P)
+        if v: groups.setdefault((v[0], v[1]), Counter())[v[2]] += 1
+    return groups
+def holds(rows, source='auto'):
     """rows: every scheduled frame of a trace, in record order. Returns {(hz, n): Counter(hold)} of the judged
-    intervals. With the client's own `latch_slot_ns`/`latch_period_ns` (traces since T-220's review) every released row
+    intervals. T-225: with callback times in the trace (and source != 'latch') the metric is [holds_cb]; otherwise,
+    with the client's own `latch_slot_ns`/`latch_period_ns` (traces since T-220's review) every released row
     counts with exactly the client's vsync and period, a row released at once ('now') too. Older traces: the vsync is
     rebuilt from the schedule-time grid and a 'now' row (no slot) breaks the shown sequence."""
+    if source != 'latch' and any(int(x.get('cb_ns') or 0) for x in rows): return holds_cb(rows)
     m=HoldMeter(); groups={}
     for x in rows:
         m.decoded(int(x['capture_us']))
@@ -115,6 +149,42 @@ if a.holds_selftest:
     g=holds(rows)
     assert {k:dict(v) for k,v in g.items()}=={(120,2):{2:39},(60,1):{1:38}}, g
     for line in holds_lines(g): print('holds self-test OK (latch columns): '+line)
+    # T-225: callback times. 60 fps on 120 Hz, 100 frames decoded 20 ms after capture; the latch columns say 3,1,3,1...
+    # (a release call returning past the old cut) but the callbacks are regularly 2 vsyncs apart. Frame 40 never gets a
+    # callback (dropped by the compositor): frame 39 is held 4 vsyncs, one long. 99 frames are shown and the first two
+    # of them judge nothing: 97 intervals, 96 exact and 1 long.
+    P=8_333_333; rows=[]
+    for k in range(100):
+        cb=10**9+k*2*P+51_000_000; lat=10**9+(k//2)*4*P+(0 if k%2==0 else 3*P)
+        rows.append({'capture_us':str(k*16_667),'ready_ns':str(10**9+k*2*P+20_000_000),'period_ns':str(P),'action':'release',
+                     'released_slot_ns':str(lat),'latch_slot_ns':str(lat),'latch_period_ns':str(P),'cb_ns':'0' if k==40 else str(cb)})
+    g=holds(rows); c=g[(120,2)]
+    assert list(g)==[(120,2)] and sum(c.values())==97 and c[2]==96 and c[4]==1, g
+    for line in holds_lines(g): print('holds self-test OK (callback times): '+line)
+    g=holds(rows,'latch'); assert sum(v for k,v in g[(120,2)].items() if k!=2)>50, g
+    for line in holds_lines(g): print('holds self-test OK (--latch, same rows): '+line)
+    # T-225 review 1: a callback with the Long.MAX_VALUE sentinel (frame 30) breaks the shown sequence, as in the client,
+    # instead of being a frame shown at the end of time (which made the 16.7% skips of the review's repro).
+    def regular(n=100):
+        return [{'capture_us':str(k*16_667),'ready_ns':str(10**9+k*2*P+20_000_000),'period_ns':str(P),'action':'release',
+                 'released_slot_ns':'0','latch_period_ns':str(P),'cb_ns':str(10**9+k*2*P+51_000_000)} for k in range(n)]
+    g0=holds(regular()); assert dict(g0[(120,2)])=={2:98}, g0
+    sent=regular(); sent[30]['cb_ns']=str(MAX_NS)
+    g1=holds(sent); c1=g1[(120,2)]; assert list(c1)==[2] and 92<=c1[2]<=96, g1 # no long, no short: only the sequence around 30 is cut
+    for line in holds_lines(g1): print('holds self-test OK (callback sentinel breaks the sequence): '+line)
+    # T-225 review 2: the callback is judged with the period current at its delivery (`cb_period_ns`), not the release's.
+    # Frames 0..49 on a 120 Hz panel; from frame 50 the callbacks are delivered on the 60 Hz grid while latch_period_ns
+    # (the release's) is still the 120 Hz one: only cb_period_ns gives the right cadence for them.
+    P2=16_666_667; rows=[]
+    for k in range(100):
+        cb=10**9+k*2*P+51_000_000 if k<50 else 10**9+100*P+(k-49)*P2+51_000_000
+        rows.append({'capture_us':str(k*16_667),'ready_ns':str(10**9+k*2*P+20_000_000),'period_ns':str(P),'action':'release',
+                     'released_slot_ns':'0','latch_period_ns':str(P),'cb_period_ns':str(P if k<50 else P2),'cb_ns':str(cb)})
+    g=holds(rows); assert {k:dict(v) for k,v in g.items()}=={(120,2):{2:49},(60,1):{1:48}}, g
+    for line in holds_lines(g): print('holds self-test OK (cb_period_ns): '+line)
+    for x in rows: del x['cb_period_ns'] # an older trace: latch_period_ns stands in, the 60 Hz frames are misjudged as 120 Hz holds of 2
+    g=holds(rows); assert (60,1) not in g, g
+    for line in holds_lines(g): print('holds self-test OK (older trace falls back to latch_period_ns): '+line)
     raise SystemExit
 if a.trace is None: ap.error('trace is required')
 if a.holds:
@@ -126,7 +196,9 @@ if a.holds:
     for x in t:
         hz=round(1e9/int(x['period_ns'])); paths[(hz,x['path'])]+=1
         lat.setdefault(hz,[]).append((int(x['released_slot_ns'])-int(x['ready_ns']))/1e6)
-    for line in holds_lines(holds(allrows)): print(line)
+    src = 'latch' if a.latch else 'auto'
+    print('source: ' + ('callback times (cb_ns)' if src != 'latch' and any(int(x.get('cb_ns') or 0) for x in allrows) else 'release-time latch model'))
+    for line in holds_lines(holds(allrows, src)): print(line)
     for hz in sorted(lat):
         print(f'{hz} Hz: ready->slot p50 {st.median(lat[hz]):.1f} ms, paths '+' '.join(f'{p}={v}' for (h,p),v in sorted(paths.items()) if h==hz))
     raise SystemExit
