@@ -8,6 +8,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
 
+## review
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-228](tasks/T-228-host-usb-watcher-skip-network-adb.md) | Host — the USB tunnel watcher must ignore network adb devices (adb over Wi-Fi is not USB) | 6 | mac-host-dev | [] |
+
 ## todo
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
@@ -32,7 +38,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-227](tasks/T-227-client-endpoint-rediscovery.md) | Client — when the stored Mac address stops answering, rediscover the host via Bonjour (Mac moved from Wi-Fi to Ethernet) | 6 | android-client-dev | [] |
-| [T-228](tasks/T-228-host-usb-watcher-skip-network-adb.md) | Host — the USB tunnel watcher must ignore network adb devices (adb over Wi-Fi is not USB) | 6 | mac-host-dev | [] |
 
 ## done
 
