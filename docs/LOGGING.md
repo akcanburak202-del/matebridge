@@ -534,3 +534,11 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
   - `hdr_static_info`: `hdr-static-info` varsa ham baytlar onaltılık (en çok 64 bayt, fazlası `+<n>`); yoksa `unset`.
   - `req_*`: bu codec'in configure'da aldığı renk anahtarları (`unset` = konmadı).
   - Codec başına: aynı alanlar art arda tekrarlanmaz, en çok 16 satır. Mevcut `ev=output_format` (codec başına bir kez) değişmedi.
+
+## Boşta karartma ve kapatma (tablet, `MB/input`, T-234, karar 0031)
+
+- `ev=idle stage=dim reason=timeout idle_ms=<n>`: "Boşta karart" süresi yerel girdisiz geçti; pencere parlaklığı düşürüldü (oturum, video, ses sürer).
+- `ev=idle stage=off reason=timeout`: kısmadan 60 sn sonra da girdi yok; `FLAG_KEEP_SCREEN_ON` kaldırıldı. Ekranı tabletin kendi zaman aşımı kapatır; ardından her zamanki `activity_stop` / release-all / BYE.
+- `ev=idle stage=wake reason=touch|pen|key|pad|mouse|gesture|ui|setting|game|start swallowed=<n> held_ms=<n>`: kısılmış (ya da kapatma aşamasındaki) pencere geri geldi. Satır uyandıran hareket bitince yazılır: `swallowed` Mac'e gönderilmeden yutulan olay sayısı, `held_ms` uyanmadan o ana kadar geçen süre. `ui`: Mac'e gitmeyen bir olay (panel, sistem tuşu) uyandırdı, hiçbir şey yutulmadı. `setting`/`game`: ayar değişti ya da Oyun moduna geçildi. `start`: onStart (ekran açıldı).
+- `ev=idle stage=config reason=setting|game timeout_min=2|5|10|15|off game=0|1`: süre ayarı ya da Oyun modu değişti; sayaç yeniden başladı.
+- Koordinat, tuş ya da karakter loglanmaz.

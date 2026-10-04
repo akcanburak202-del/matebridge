@@ -1,5 +1,6 @@
 package dev.matebridge.client.input
 
+import dev.matebridge.client.idle.IdleDimPolicy
 import dev.matebridge.client.protocol.PenGesture
 import dev.matebridge.client.protocol.Pinch
 import dev.matebridge.client.protocol.ReleaseAll
@@ -23,7 +24,10 @@ import dev.matebridge.client.stream.VideoViewport
  *    ([onRefused]) and the host releases on disconnect;
  *  - pointer capture (touchpad and mouse, T-034): [onPointerCaptureLost] and every release path send `buttons = 0` for a
  *    reported button and end an open pad scroll; a held physical button is reported again only after a new press;
- *  - a new control connection ([onSessionReset]) forgets the model as well.
+ *  - a new control connection ([onSessionReset]) forgets the model as well;
+ *  - idle dim (T-234, decision 0031): [idleGate] may swallow a whole motion before any tracker sees it (nothing was sent,
+ *    so nothing needs releasing); it never swallows a release whose press went out, and the release paths above
+ *    ([releaseAll], [onPointerCaptureLost], [onDeviceRemoved]) never go through it.
  */
 class InputCapture(
     private val sink: InputSink,
@@ -46,6 +50,9 @@ class InputCapture(
 
     /** Local pen indicator tap (T-056); display only, never affects what is sent. */
     var penInk: PenInkListener? = null
+
+    /** T-234 (decision 0031): the idle-dim gate in front of the trackers; null lets every event through. */
+    var idleGate: IdleDimPolicy? = null
 
     /** Mirror of the host's eraser mode (decision 0006: toggled by every PEN_GESTURE DOUBLE_TAP, reset with the session). */
     private var eraserModeMirror = false
@@ -117,6 +124,7 @@ class InputCapture(
 
     fun onPen(f: PenFrame, nowMs: Long) {
         if (!accepting) return
+        idleGate?.let { if (!IdleGestures.pen(it, f, nowMs)) return }
         devices += f.deviceId
         penInk?.onPenFrame(f, f.eraser || eraserModeMirror)
         val wasInRange = pen.inRange
@@ -126,6 +134,7 @@ class InputCapture(
 
     fun onTouch(f: TouchFrame, nowMs: Long) {
         if (!accepting) return
+        idleGate?.let { if (!IdleGestures.touch(it, f, nowMs)) return }
         devices += f.deviceId
         dispatch(gate(Src.TOUCH, touch.onFrame(f, nowMs)))
     }
@@ -142,12 +151,14 @@ class InputCapture(
     /** A touchpad event under pointer capture (T-034). The touchscreen and the pen never come through here. */
     fun onPad(f: PadFrame, nowMs: Long) {
         if (!accepting) return
+        idleGate?.let { if (!IdleGestures.pad(it, f, nowMs)) return }
         dispatch(gate(Src.PAD, rel.onPad(f, nowMs)))
     }
 
     /** A mouse event under pointer capture (T-034). */
     fun onMouse(f: MouseFrame, nowMs: Long) {
         if (!accepting) return
+        idleGate?.let { if (!IdleGestures.mouse(it, f, nowMs)) return }
         dispatch(rel.onMouse(f, nowMs))
     }
 
@@ -167,6 +178,7 @@ class InputCapture(
      */
     fun onGestureKeyDown(eventTimeMs: Long) {
         if (!accepting) return
+        idleGate?.let { if (!IdleGestures.gestureKey(it, eventTimeMs)) return }
         if (doubleTap.onDown(eventTimeMs)) {
             onEvent("pen_gesture", "gesture=double_tap")
             eraserModeMirror = !eraserModeMirror
@@ -185,6 +197,8 @@ class InputCapture(
             if (f3 && f.down && f.repeatCount == 0) return KeyDecision(consumed = true, local = LocalAction.STATS)
             return KeyDecision(consumed = f3)
         }
+        // T-234: a swallowed key (and a local chord typed while dimmed) is consumed and does nothing.
+        idleGate?.let { if (!IdleGestures.key(it, f, f.timeUs / 1000)) return KeyDecision(consumed = true) }
         val d = keys.onKey(f)
         if (d.out.isNotEmpty()) dispatch(d.out)
         return d
@@ -284,6 +298,7 @@ class InputCapture(
         keys.reset()
         rel.reset()
         outbox.dropHeld()
+        idleGate?.forgetGestures()
     }
 
     private enum class Src { NONE, TOUCH, PAD }

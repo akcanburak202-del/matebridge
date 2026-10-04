@@ -3,6 +3,7 @@ package dev.matebridge.client.settings
 import dev.matebridge.client.BuildInfo
 import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.files.FilesRoot
+import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
@@ -49,6 +50,10 @@ interface SettingsHost {
      * stored values; the panels mark them.
      */
     val modeLayer: StreamMode?
+    /** "Boşta karart" (decision 0031, T-234): stored; the counter does not run in Oyun. */
+    val idleTimeout: IdleTimeout
+    /** Persists the choice and restarts the idle counter (a dimmed window comes back). */
+    fun selectIdleTimeout(t: IdleTimeout)
 
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
@@ -203,6 +208,12 @@ object SettingsCatalog {
     fun frameRateMarker(mode: StreamMode, fps: Int) =
         if (mode.hasFpsSetting) " (${mode.label})" else " (${mode.label}: hep $fps)"
 
+    /** T-234: idle dim then screen-off (decision 0031). */
+    const val IDLE_DIM_TITLE = "Boşta karart"
+
+    /** What the "Boşta karart" title shows: in Oyun the row stays visible but the counter does not run. */
+    fun idleDimMarker(mode: StreamMode) = if (mode.isGame) " (Oyun modunda kapalı)" else ""
+
     const val RESET_TITLE = "Varsayılanlara dön"
     const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
     val RESET_ARMED = "Onaylamak için ${TwoTapConfirm.WINDOW_MS / 1000} saniye içinde yeniden dokun."
@@ -267,6 +278,14 @@ object SettingsCatalog {
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
+                add(
+                    SettingItem.Choice(
+                        "idle_dim", IDLE_DIM_TITLE,
+                        IdleTimeout.entries.map { SettingItem.Option(it.id, it.label) },
+                        { h.idleTimeout.id },
+                        { idleDimMarker(h.streamMode) },
+                    ) { id -> h.selectIdleTimeout(IdleTimeout.parse(id)) },
+                )
             },
         )
         if (h.audioAvailable) {

@@ -49,6 +49,11 @@ import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.files.FilesController
 import dev.matebridge.client.files.FilesSessionGate
 import dev.matebridge.client.files.FilesRoot
+import dev.matebridge.client.idle.IdleDimPolicy
+import dev.matebridge.client.idle.IdleSource
+import dev.matebridge.client.idle.IdleTimeout
+import dev.matebridge.client.idle.IdleTimeoutStore
+import dev.matebridge.client.idle.IdleWindow
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.KeyframeRequest
@@ -194,6 +199,24 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var unbufferedPen: UnbufferedPenDispatch
     private val rootLoc = IntArray(2)
     private var inputFaultUntilMs = 0L
+
+    // T-234 (decision 0031): idle dim, then FLAG_KEEP_SCREEN_ON dropped; the first input while dimmed only wakes.
+    private lateinit var idleStore: IdleTimeoutStore
+    private lateinit var idle: IdleDimPolicy
+    private val idleWindow = object : IdleWindow {
+        override fun setDimmed(dimmed: Boolean) {
+            val lp = window.attributes
+            val b = if (dimmed) IDLE_DIM_BRIGHTNESS else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            if (lp.screenBrightness == b) return
+            lp.screenBrightness = b // the window only: the system and auto brightness are never touched
+            window.attributes = lp
+        }
+
+        override fun setKeepScreenOn(on: Boolean) {
+            if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     // Video state. renderer is read from the video reader thread; the rest is main-thread only.
     @Volatile private var renderer: VideoRenderer? = null
@@ -556,6 +579,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
         capture.setFingerPolicy(gameSettings.fingers, SystemClock.uptimeMillis()) // T-223: Çizim layer included
+        idleStore = IdleTimeoutStore(prefsStore) // T-234
+        idle = IdleDimPolicy(idleWindow, SystemClock.uptimeMillis(), idleStore.get()) { fields -> MbLog.i("idle", fields, "input") }
+        idle.setGameMode(streamMode.isGame, SystemClock.uptimeMillis())
+        capture.idleGate = idle
         applyPointerSpeeds()
         // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
         // sits on a LEAF view, `video` (a fixed child of root): a ViewGroup
@@ -716,12 +743,28 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         noteInputActivity()
-        return routeToCapture(ev) || super.dispatchTouchEvent(ev)
+        try {
+            return routeToCapture(ev) || super.dispatchTouchEvent(ev)
+        } finally {
+            noteIdleInput()
+        }
     }
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
         noteInputActivity()
-        return routeToCapture(ev) || super.dispatchGenericMotionEvent(ev)
+        try {
+            return routeToCapture(ev) || super.dispatchGenericMotionEvent(ev)
+        } finally {
+            noteIdleInput()
+        }
+    }
+
+    /**
+     * T-234: every local event counts as activity for the idle counter. Called after routing, so an event the capture's
+     * idle gate swallowed has already woken the window there; anything else (panels, system keys) wakes it here.
+     */
+    private fun noteIdleInput() {
+        if (::idle.isInitialized) idle.onInput(IdleSource.UI, SystemClock.uptimeMillis())
     }
 
     /**
@@ -733,6 +776,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        try {
+            return routeKeyEvent(ev)
+        } finally {
+            noteIdleInput() // T-234
+        }
+    }
+
+    private fun routeKeyEvent(ev: KeyEvent): Boolean {
         // The M-Pencil double tap arrives as keyCode 718 / scanCode 190; it becomes PEN_GESTURE and is never sent as KEY.
         if (DoubleTapDetector.isGestureKey(ev.keyCode, ev.scanCode)) {
             if (ev.action == KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
@@ -869,6 +920,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
         override val modeLayer get() = gameSettings.modeLayer
+        override val idleTimeout get() = idle.timeout
+        override fun selectIdleTimeout(t: IdleTimeout) { // T-234
+            idleStore.set(t)
+            idle.setTimeout(t, SystemClock.uptimeMillis())
+        }
 
         override val audioAvailable get() = audio != null
         override val audioEnabled get() = settings.audioEnabled()
@@ -956,6 +1012,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         streamMode = settings.streamMode()
         gameSettings.onModeChanged(streamMode)?.let { change -> applyGameLayer(change) }
         controller.setStreamPrefs(gameSettings.prefs(streamMode))
+        // T-234: idle dim back to its default (its key lives in IdleTimeoutStore, not Settings).
+        idleStore.reset()
+        idle.setGameMode(streamMode.isGame, SystemClock.uptimeMillis())
+        idle.setTimeout(idleStore.get(), SystemClock.uptimeMillis())
         // Audio: output (ends a launch override, like the panel), and on/off to the host only when it changed.
         audioOutFromExtra = false
         audio?.setOutPref(gameSettings.audioOut)
@@ -1006,6 +1066,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val now = SystemClock.uptimeMillis()
             try {
                 syncInputActive(now)
+                idle.tick(now) // T-234
                 if (now >= inputFaultUntilMs) capture.tick(now)
             } catch (e: RuntimeException) {
                 inputFailed(e, now)
@@ -1048,6 +1109,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun setStreamMode(m: StreamMode, toast: Boolean) {
         streamMode = m
         settings.setStreamMode(m)
+        idle.setGameMode(m.isGame, SystemClock.uptimeMillis()) // T-234: no idle stages in Oyun
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
         controller.setStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
@@ -1624,6 +1686,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.postDelayed(ticker, KEYFRAME_RETRY_MS)
         ui.removeCallbacks(inputTicker)
         ui.post(inputTicker)
+        if (::idle.isInitialized) idle.restart(SystemClock.uptimeMillis()) // T-234: back from screen-off at full brightness
         (getSystemService(Context.INPUT_SERVICE) as InputManager).registerInputDeviceListener(inputDeviceListener, ui)
         registerCableReceiver()
         applyTransport()
@@ -2511,6 +2574,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         const val KEYFRAME_RETRY_MS = 500L
         const val RATE_POLL_MS = 100L
         const val INPUT_TICK_MS = 25L
+        /** T-234: window brightness of the idle dim stage (decision 0031: visible but very dark on the OLED). */
+        const val IDLE_DIM_BRIGHTNESS = 0.03f
         const val POINTER_CAPTURE_RETRY_MS = 500L
         const val INPUT_FAULT_BACKOFF_MS = 1000L
         const val AUTO_TICK_MS = 500L // T-096; attempts themselves are >= 2 s apart (AutoUsbPolicy)
