@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
 import java.util.Locale
 
@@ -75,6 +76,12 @@ data class DevKnobs(
      * Absent or unknown = [DecoderLatencyKnobs.STANDARD] (`off`, `max`; T-222). `dec_oprate fps` = the pre-T-222 rate.
      */
     val decoderLatency: DecoderLatencyKnobs = DecoderLatencyKnobs.STANDARD,
+    /**
+     * `--es color_range auto|full|limited|unset`, `--es color_standard auto|bt709|bt601|unset`,
+     * `--es color_transfer auto|srgb|sdr_video|unset` (T-231): the decoder's colour keys. Absent or unknown = `auto`
+     * ([ColorOverrides.AUTO], today's STREAM_CONFIG mapping); `unset` leaves the key out.
+     */
+    val colorOverrides: ColorOverrides = ColorOverrides.AUTO,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -127,6 +134,9 @@ data class DevKnobs(
             Spec("game_display", Kind.INT, debugOnly = true),
             Spec("dec_lowlat", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.LOW_LAT_IDS),
             Spec("dec_oprate", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.OP_RATE_IDS),
+            Spec("color_range", Kind.STRING, debugOnly = true, ids = ColorOverrides.RANGE_IDS),
+            Spec("color_standard", Kind.STRING, debugOnly = true, ids = ColorOverrides.STANDARD_IDS),
+            Spec("color_transfer", Kind.STRING, debugOnly = true, ids = ColorOverrides.TRANSFER_IDS),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -164,6 +174,9 @@ data class DevKnobs(
                 decoderFaultAfterS = if (x.has("decoder_fault_after_s")) x.int("decoder_fault_after_s", 0) else null,
                 gameDisplay = !(x.has("game_display") && x.int("game_display", 1) == 0),
                 decoderLatency = DecoderLatencyKnobs.parse(x.string("dec_lowlat"), x.string("dec_oprate")),
+                colorOverrides = ColorOverrides.parse(
+                    x.string("color_range"), x.string("color_standard"), x.string("color_transfer"),
+                ),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

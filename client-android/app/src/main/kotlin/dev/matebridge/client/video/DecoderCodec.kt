@@ -32,6 +32,8 @@ interface DecoderCodec {
         fun containsKey(key: String): Boolean
         fun getInteger(key: String): Int
         fun getFloat(key: String): Float
+        /** T-231: `MediaFormat.getByteBuffer` (`hdr-static-info`); null when unknown. Diagnostics only. */
+        fun getByteBuffer(key: String): ByteBuffer? = null
     }
 
     companion object {
@@ -165,6 +167,7 @@ class MediaCodecDecoder private constructor(private val codec: MediaCodec) : Dec
         override fun containsKey(key: String) = f.containsKey(key)
         override fun getInteger(key: String) = f.getInteger(key)
         override fun getFloat(key: String) = f.getFloat(key)
+        override fun getByteBuffer(key: String): ByteBuffer? = f.getByteBuffer(key)
     }
 }
 
