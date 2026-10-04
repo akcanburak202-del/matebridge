@@ -10,6 +10,10 @@ public struct AdbDevice: Equatable, Sendable {
         self.state = state
     }
     public var isReady: Bool { state == "device" }
+
+    /// adb over the network (`adb connect host:port`, or Wireless debugging's mDNS service name such as
+    /// `adb-<id>._adb-tls-connect._tcp`), not a USB cable. USB serials never contain `:` or a `._tcp` service suffix.
+    public var isNetwork: Bool { serial.contains(":") || serial.contains("._tcp") }
 }
 
 /// Parsers for adb's text output. Pure so they are unit-testable; adb also prints `* daemon ...` banners
@@ -64,9 +68,10 @@ public enum AdbOutput {
         return ports
     }
 
-    /// The device to tunnel to: the first ready one, physical devices (USB) before emulators.
+    /// The device to tunnel to: the first ready one, physical devices (USB) before emulators. Network adb devices
+    /// are never chosen: `adb reverse` over Wi-Fi would make the tablet's "USB" path a Wi-Fi tunnel (T-228).
     public static func selectDevice(_ devices: [AdbDevice]) -> AdbDevice? {
-        let ready = devices.filter(\.isReady)
+        let ready = devices.filter { $0.isReady && !$0.isNetwork }
         return ready.first { !$0.serial.hasPrefix("emulator-") } ?? ready.first
     }
 }
