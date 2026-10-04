@@ -1,7 +1,7 @@
 ---
 id: T-230
 title: Black level lifted on the tablet (Mac 0 → tablet 16) — Mac-side bitstream probe (what Y values and VUI the encoder really emits)
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -44,7 +44,13 @@ Bu kart yalnız Mac tarafını ayırır: kodlayıcının ürettiği bit akışı
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `probes/color-range-probe/` SwiftPM paketi (hdr-probe düzeni): `ColorRangeProbeCore` (donanımdan bağımsız: bant düzeni, bant medyanı ölçümü, HEVC SPS VUI ayrıştırıcı — `MateBridgeCore/Video/HEVCSPS.swift` + `AnnexB.swift`'ten kopya, yapılandırma tablosu, argüman ayrıştırma) + unit testler; `color-range-probe` yürütülebilir hedefi (VideoToolbox).
+2. Desen: 2800×1840 `CVPixelBuffer`, 8 dikey bant Y = 0, 8, 16, 32, 64, 128, 235, 255; Cb = Cr = 128. Giriş biçimi `420f` ya da `420v` (Y değerleri aynen yazılır; bant değeri "kod değeri"dir).
+3. Kodlayıcı oturumu `HEVCEncoder.init`'i birebir taklit eder (`.fast` profil: HW açık, RealTime=false, reorder kapalı, HEVC Main AutoLevel, 60 fps, 30 Mbps + DataRateLimits 2×, MaxKeyFrameInterval, PrioritizeSpeed, oturum renkleri 709/sRGB/709).
+4. Yapılandırmalar: `prod` (420f + SCK ekleri → T-113 yeniden etiket), `noretag` (420f + SCK ekleri 709/709/709 + sRGB CGColorSpace, olduğu gibi), `420v-retag`, `420v-noretag`, `420f-untagged` (ek yok). Her biri birkaç kare kodlanır (ilki anahtar kare).
+5. Her yapılandırma için: SPS VUI alanları; `.hevc` (Annex-B) `~/.cache/matebridge-tools/data/color-probe/<config>.hevc`; VideoToolbox ile Mac'te geri çözme — çıktı biçimi `420f`, `420v` ve yerel (biçim istenmeden) — her bandın merkez bölgesindeki Y medyanı.
+6. Ayrıca HW kodlayıcıyı kullandığı için kısa tutulur (yapılandırma başına birkaç kare); pencere, sanal ekran, SCK, adb yok.
+7. Sonuç tablosu + yargı Handoff'a; probes/README'ye satır; `./scripts/check.sh`.
 
 ## Handoff
 
