@@ -1309,3 +1309,9 @@ Tablet içi log (16:21–22:34) çekildi, koşu aralıkları ses durumu + `.star
 - Ethernet satırı ses bütçesini karşılıyor; kare takılması %26 → %3,3.
 - **Kablosuz adb (HarmonyOS'ta "Kablosuz hata ayıklama" yok):** kablo takılıyken `adb tcpip 5555`, `adb connect 192.168.1.105:5555`, kablo çıkarıldı; çalışıyor (tablet yeniden başlayana kadar). `adb tcpip` adbd'yi yeniden başlattığı için tablet içi `logcat -f` kaydı durdu; gerekirse yeniden başlat.
 - **Bulgu → T-228:** host USB izleyicisi ağ adb cihazına `adb reverse` tüneli kurdu (`host-15 tcp:47001`). Tablet bağlantısı elle **Wi-Fi**'ye sabitlendi (ölçüm süresince böyle kalmalı; sonra "Otomatik"e dönülür).
+
+## 2026-10-04 ~22:45 — Dock: Apple Music ikonu pürüzlü, ara sıra ince siyah çizgi
+
+- **Kullanıcı:** Dock'ta Apple Music ikonu diğerlerine göre pürüzlü/kalitesiz; Dock'ta bazen çok ince uzun siyah çizgi.
+- **İkon (açıklandı):** aynı anda Mac `screencapture` ve tablet `screencap` karşılaştırması: tablette kırmızı ikonun kenarları basamaklı/noktalı, Mac'te pürüzsüz; mavi/yeşil ikonlarda hafif. Neden 4:2:0 renk alt örnekleme: doygun kırmızı ile gri-yeşil Dock arasındaki kenar parlaklıkta zayıf, renkte güçlü → kenar yarım çözünürlüklü renk düzleminde çiziliyor. Bit hızından bağımsız (T-188: 30/100 Mbps aynı). Çaresi 4:4:4 (sıradaki araştırma; tablet decoder desteği bilinmiyor). Bu, 4:4:4 için somut kullanıcı-görünür gerekçe.
+- **Siyah çizgi (açık):** bu yakalamada görünmedi. Olasılıklar: oyun çözünürlüğü 1848×1214'ün 35:23'ten küçük sapmasıyla 1 px'lik kenar şeridi (T-215 toleransı), Dock animasyonunda kodlama artığı, ya da macOS. Kullanıcı görünce "çizgi var" diyecek; o an iki ekran görüntüsü + mod + Dock durumu alınacak.
