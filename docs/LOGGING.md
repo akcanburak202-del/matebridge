@@ -204,6 +204,9 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
 
 - `ev=video_health state=idle|starting|healthy|fault cause=-|give_up|no_output|not_running|stuck|video_lost from=<önceki> vgen=N` (I; fault'ta W). Input yalnız `healthy`'de açık; her `starting` ve `fault` input'u kapatır (`RELEASE_ALL(USER)`). `vgen` decoder kuşağıdır (`gen=` zaten oturum kuşağı). `video_lost` (T-218): akış sırasında video bağlantısı koptu, kontrol oturumu sürse bile.
 - `ev=video_recover step=restart|reconnect|manual|retry|resume|done n=N vgen=N` (W; `done` ve `resume` I): kurtarma adımları, +1 sn ve +3 sn decoder yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` (T-218): `video_lost`'tan sonra yeni video bağlantısının ilk karesi geldi. Decoder yeni kuşakla yeniden başlar ve input o kuşağın ilk çözülmüş çıktısında açılır.
+  - Bölüm başına en çok 3 `resume` olur. `resume` merdiveni ertelemez.
+  - `step=resume_skipped resumes=N manual=0|1` (I): bütçe doldu ya da merdiven el ile aşamasında.
+  - `step=resume_stale conn=N lost_conn=N` (I): kaybedilen bağlantıdan yeni olmayan bir bağlantının geç gelen bildirimi düşürüldü.
 - `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--ez dev true --es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
 
 ## Encoder gönderim sırası (Mac, `encoder`, T-162)

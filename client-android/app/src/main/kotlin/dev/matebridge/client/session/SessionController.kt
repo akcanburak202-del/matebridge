@@ -75,7 +75,8 @@ interface SessionListener {
 
     /**
      * T-218: video connection [gen] delivered its first frame (video reader thread, once per connection, right after
-     * that frame's [onVideoFrame]).
+     * that frame's [onVideoFrame], inside the delivery barrier: it must not block, like [onVideoFrame]). The receiver
+     * must still drop it when [gen] is not newer than the last [onVideoLost] connection (it may be consumed late).
      */
     fun onVideoFlowing(gen: Int) {}
 
@@ -915,11 +916,15 @@ class SessionController(
                             trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
                             // T-160: only the open connection's frames of the renderer-installed config pass
-                            if (videoGate.deliver(gen, hello.configId) { listener.onVideoFrame(msg) }) {
-                                if (gated >= 0) {
+                            val first = gated >= 0
+                            val delivered = deliverVideoFrame(
+                                videoGate, gen, hello.configId, first,
+                                { listener.onVideoFrame(msg) }, { listener.onVideoFlowing(gen) },
+                            )
+                            if (delivered) {
+                                if (first) {
                                     MbLog.i("video_gate_open", "vgen=$gen config_id=${hello.configId} gated=$gated")
                                     gated = -1
-                                    listener.onVideoFlowing(gen) // T-218: fresh video on this connection
                                 }
                             } else if (gated >= 0) {
                                 gated++
@@ -1060,6 +1065,19 @@ object FirstAck {
             )
         }
     }
+}
+
+/**
+ * T-218: one frame of video connection [gen] through [gate] (the `VideoConn` reader's delivery). [frame] hands it to
+ * the renderer; for the connection's [first] delivered frame [flowing] follows **inside the gate's barrier**, so the
+ * notification is out before the connection's `abort()` / replacement returns, and a reader that resumes after its
+ * replacement can never send one. Both must not block (see [VideoDeliveryGate]). Returns whether the frame was delivered.
+ */
+internal fun deliverVideoFrame(
+    gate: VideoDeliveryGate, gen: Int, configId: Int, first: Boolean, frame: () -> Unit, flowing: () -> Unit,
+): Boolean = gate.deliver(gen, configId) {
+    frame()
+    if (first) flowing()
 }
 
 /**

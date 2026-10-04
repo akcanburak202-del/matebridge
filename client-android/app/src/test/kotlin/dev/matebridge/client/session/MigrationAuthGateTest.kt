@@ -472,7 +472,7 @@ class MigrationAuthGateTest {
         ackOnly(c, mac()) // a real candidate whose proof answer is delayed
         val lost = step(Event.VideoClosed(video))
         assertEquals(listOf<Action>(Action.VideoLost(video, duringMigration = true)), lost)
-        lost.filterIsInstance<Action.VideoLost>().forEach { health.videoLost(quietOverlay = it.duringMigration) }
+        lost.filterIsInstance<Action.VideoLost>().forEach { health.videoLost(it.gen, quietOverlay = it.duringMigration) }
         // Same step: input closed and released on the current (Wi-Fi) connection; nothing went to the candidate.
         assertFalse(health.inputAllowed)
         val wifi = sent(w)

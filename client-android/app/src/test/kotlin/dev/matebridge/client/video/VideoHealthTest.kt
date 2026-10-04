@@ -223,10 +223,16 @@ class VideoHealthTest {
 
     // ---- T-218: video connection loss ----
 
+    /** The session's current video connection generation (rises with every connection). */
+    private var conn = 100
+    private fun lost(quiet: Boolean = false) = health.videoLost(conn, quietOverlay = quiet)
+    /** A new video connection delivered its first frame. */
+    private fun flowing(): Action? = health.videoFlowing(++conn)
+
     @Test fun videoLossClosesInputInTheSameCallAndShowsTheOverlay() {
         healthy(1)
         val before = changes
-        health.videoLost()
+        lost()
         assertEquals(State.FAULT, health.state)
         assertEquals(FaultCause.VIDEO_LOST, health.cause)
         assertFalse(health.inputAllowed)
@@ -236,13 +242,13 @@ class VideoHealthTest {
         assertTrue(logs.toString(), "W video_health state=fault cause=video_lost from=healthy vgen=1" in logs)
         // A second report (another failed reconnect) changes nothing.
         val again = changes
-        health.videoLost()
+        lost()
         assertEquals(again, changes)
     }
 
     @Test fun aLostVideoKeepsInputClosedAndTheOverlayWhileItStaysAway() {
         healthy(1)
-        health.videoLost()
+        lost()
         // The decoder still holds the last picture and may even decode one late frame of the old connection.
         progress.onOutput(1)
         health.onEvent(FirstOutput(1))
@@ -258,7 +264,7 @@ class VideoHealthTest {
             }
             assertFalse("input stays closed at ${it * 500} ms", health.inputAllowed)
             assertTrue("overlay stays up at ${it * 500} ms", health.showOverlay)
-            health.videoLost() // every failed video reconnect reports again
+            conn++; lost() // every failed video reconnect reports again
         }
         assertEquals(listOf(Action.RESTART_CODEC, Action.RESTART_CODEC, Action.RECONNECT), actions.filterNotNull())
         assertTrue(health.manual)
@@ -266,9 +272,9 @@ class VideoHealthTest {
 
     @Test fun freshVideoAfterALossRestartsTheCodecAndReopensOnlyAtTheNewGenerationsOutput() {
         healthy(1)
-        health.videoLost()
+        lost()
         now += 600 // the session reconnects the video after 500 ms
-        assertEquals(Action.RESTART_CODEC, health.videoFlowing())
+        assertEquals(Action.RESTART_CODEC, flowing())
         assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume ") })
         begin(2) // MainActivity: renderer.restartCodec() -> a new generation
         assertEquals(State.STARTING, health.state)
@@ -277,8 +283,8 @@ class VideoHealthTest {
         // A late output of the old generation does not count.
         health.onEvent(FirstOutput(1))
         assertFalse(health.inputAllowed)
-        // The ladder's next step waits a full gap after the resume, so the resumed generation is not restarted at once.
-        now += 900
+        // The ladder keeps its own schedule (+1 s after the loss); the resumed generation decodes before it.
+        now += 300
         assertNull(tick())
         progress.onInput(2, now)
         assertTrue(progress.onOutput(2))
@@ -287,25 +293,71 @@ class VideoHealthTest {
         assertTrue(health.inputAllowed)
         assertFalse(health.showOverlay)
         // A later first frame of yet another connection does nothing while the video is fine.
-        assertNull(health.videoFlowing())
+        assertNull(flowing())
+    }
+
+    /**
+     * Review P2: every reconnect (every 500 ms) gets a first frame (e.g. CODEC_CONFIG) and closes before any decoded
+     * output. The resumes are bounded and never move the ladder: restart +1 s, restart +3 s, reconnect +6 s, manual +15 s.
+     */
+    @Test fun partialReconnectsKeepTheLadderOnScheduleAndBoundTheResumes() {
+        healthy(1)
+        val t0 = now
+        lost()
+        val ladder = ArrayList<Pair<Long, Action>>()
+        var resumes = 0
+        var manualAt = -1L
+        repeat(120) { // 60 s
+            now += 500
+            when (val a = tick()) {
+                Action.RESTART_CODEC -> { ladder += (now - t0) to a; begin(health.generation + 1) }
+                Action.RECONNECT -> {
+                    ladder += (now - t0) to a
+                    health.onEvent(Detached(health.generation))
+                    begin(health.generation + 1)
+                }
+                null -> Unit
+            }
+            if (health.manual && manualAt < 0) manualAt = now - t0
+            if (flowing() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1) }
+            assertFalse(health.inputAllowed)
+            lost() // the connection drops before any decoded output
+        }
+        assertEquals(
+            listOf(1000L to Action.RESTART_CODEC, 3000L to Action.RESTART_CODEC, 6000L to Action.RECONNECT),
+            ladder,
+        )
+        assertEquals(15_000L, manualAt)
+        assertEquals(VideoHealth.MAX_RESUMES, resumes)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") })
+    }
+
+    @Test fun aStaleFirstFrameNoticeOfAReplacedConnectionIsDropped() {
+        healthy(1)
+        health.videoLost(7) // connection 7 (which replaced 5) failed
+        assertNull(health.videoFlowing(5)) // connection 5's late notice
+        assertNull(health.videoFlowing(7))
+        assertEquals(State.FAULT, health.state)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_stale conn=5 lost_conn=7") })
+        assertEquals(Action.RESTART_CODEC, health.videoFlowing(9))
     }
 
     @Test fun videoFlowingRestartsOnlyAfterAVideoLossFault() {
-        assertNull(health.videoFlowing()) // no surface
+        assertNull(flowing()) // no surface
         begin(1)
-        assertNull(health.videoFlowing()) // STARTING: it is fed already
+        assertNull(flowing()) // STARTING: it is fed already
         health.onEvent(Fault(1, FaultCause.GIVE_UP))
-        assertNull("a decoder fault keeps its own recovery", health.videoFlowing())
+        assertNull("a decoder fault keeps its own recovery", flowing())
         begin(2)
-        health.videoLost()
+        lost()
         assertEquals(State.FAULT, health.state)
-        assertEquals(Action.RESTART_CODEC, health.videoFlowing())
+        assertEquals(Action.RESTART_CODEC, flowing())
     }
 
     @Test fun aLossDuringAMigrationGatesInputAtOnceButHoldsTheOverlayUntilTheFirstStep() {
         healthy(1)
         val before = changes
-        health.videoLost(quietOverlay = true)
+        lost(quiet = true)
         assertEquals(State.FAULT, health.state)
         assertFalse("input is gated exactly as for any loss", health.inputAllowed)
         assertTrue(changes > before)
@@ -323,7 +375,7 @@ class VideoHealthTest {
 
     @Test fun aPromotionThatReconfiguresInTimeNeverShowsTheOverlay() {
         healthy(1)
-        health.videoLost(quietOverlay = true)
+        lost(quiet = true)
         now += 200
         begin(2) // the promotion's STREAM_CONFIG reconfigures
         assertFalse(health.inputAllowed)
@@ -334,23 +386,23 @@ class VideoHealthTest {
         assertTrue(health.inputAllowed)
         assertFalse(health.showOverlay)
         // A later loss outside a migration shows it at once.
-        health.videoLost()
+        lost()
         assertTrue(health.showOverlay)
     }
 
     @Test fun aLossOutsideAMigrationOrAnotherFaultEndsTheQuietOverlay() {
         healthy(1)
-        health.videoLost(quietOverlay = true)
+        lost(quiet = true)
         assertFalse(health.showOverlay)
         val before = changes
-        health.videoLost() // the next video connection failed after the proof was over
+        lost() // the next video connection failed after the proof was over
         assertTrue(health.showOverlay)
         assertTrue(changes > before)
     }
 
     @Test fun anotherFaultOfThePromotedGenerationShowsTheOverlayAtOnce() {
         healthy(1)
-        health.videoLost(quietOverlay = true)
+        lost(quiet = true)
         begin(2, running = false) // the promotion reconfigures, but its decoder thread never runs
         assertFalse(health.showOverlay)
         now += 2000
@@ -363,12 +415,12 @@ class VideoHealthTest {
         healthy(1)
         health.onEvent(Fault(1, FaultCause.GIVE_UP))
         healthy(2) // recovered, but the episode is still open (< 10 s healthy)
-        health.videoLost(quietOverlay = true)
+        lost(quiet = true)
         assertTrue("an overlay already in an episode is never hidden", health.showOverlay)
     }
 
     @Test fun videoLossWithoutASurfaceDoesNothing() {
-        health.videoLost()
+        lost()
         assertEquals(State.IDLE, health.state)
         assertFalse(health.showOverlay)
         assertEquals(0, changes)
@@ -381,7 +433,7 @@ class VideoHealthTest {
         assertEquals(State.HEALTHY, health.state)
         assertTrue(health.inputAllowed)
         assertFalse(health.showOverlay)
-        assertNull(health.videoFlowing()) // a reconnect without a loss changes nothing
+        assertNull(flowing()) // a reconnect without a loss changes nothing
     }
 
     // ---- recovery ladder ----

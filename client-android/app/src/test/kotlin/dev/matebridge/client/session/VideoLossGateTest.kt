@@ -69,7 +69,7 @@ class VideoLossGateTest {
             is Action.CloseControl -> health.onEvent(HealthEvent.Detached(rgen)) // panel shown, releaseRenderer()
             is Action.OpenVideo -> video = x.gen
             is Action.ApplyConfig -> newGeneration() // installConfig -> reconfigure / attach
-            is Action.VideoLost -> health.videoLost(quietOverlay = x.duringMigration) // listener.onVideoLost
+            is Action.VideoLost -> health.videoLost(x.gen, quietOverlay = x.duringMigration) // listener.onVideoLost
             else -> Unit
         }
         actions += a
@@ -110,7 +110,7 @@ class VideoLossGateTest {
     }
 
     /** The first frame of the current video connection reached the listener (`onVideoFlowing`). */
-    private fun videoFlowing() = recover(health.videoFlowing())
+    private fun videoFlowing() = recover(health.videoFlowing(video))
 
     /**
      * The 100 ms engine tick with the host answering pings and accepting reconnects, plus the activity's 500 ms health

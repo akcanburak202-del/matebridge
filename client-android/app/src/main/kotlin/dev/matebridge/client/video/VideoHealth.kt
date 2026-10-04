@@ -90,7 +90,8 @@ class DecodeProgress {
  * - T-218 video loss: [videoLost] (the session's video connection ended) faults at once with `video_lost`. The decoder
  *   keeps the last picture and gets no input, so no timer rule would ever fire. [videoFlowing] (a new video connection
  *   delivered its first frame) then asks for a codec restart. The restart starts a new generation, so input re-opens
- *   only at a decoded output of video sent after the loss. If the video stays away, the ladder above runs.
+ *   only at a decoded output of video sent after the loss. Resumes are bounded ([MAX_RESUMES] per episode) and never
+ *   move the ladder, which runs on its own schedule while the video stays away or keeps half-reconnecting.
  */
 class VideoHealth(
     private val clock: () -> Long,
@@ -111,6 +112,8 @@ class VideoHealth(
         const val NO_OUTPUT_MS = 1500L
         const val NOT_RUNNING_MS = 2000L
         const val EPISODE_END_HEALTHY_MS = 10_000L
+        /** T-218: codec restarts on fresh video ([videoFlowing]) per recovery episode, besides the ladder's steps. */
+        const val MAX_RESUMES = 3
         private val STEPS = arrayOf(Step.RESTART, Step.RESTART, Step.RECONNECT, Step.MANUAL)
         /** Gap before each step: restart at +1 s, restart at +3 s, reconnect at +6 s, manual at +15 s. */
         val STEP_GAPS_MS = longArrayOf(1000L, 2000L, 3000L, 9000L)
@@ -151,6 +154,11 @@ class VideoHealth(
      */
     private var quietOverlay = false
 
+    /** T-218: the newest session video connection reported lost (-1: none since the last Detached). */
+    private var lostConn = -1
+    /** T-218: [videoFlowing] restarts used in the current episode. */
+    private var resumes = 0
+
     /** How long the current generation has been HEALTHY (0 when it is not). */
     fun healthyForMs(): Long = if (state == State.HEALTHY) clock() - healthySinceMs else 0L
 
@@ -170,6 +178,7 @@ class VideoHealth(
             is HealthEvent.Detached -> {
                 running = false
                 quietOverlay = false
+                lostConn = -1 // the session's connections end with the surface; a new controller may count anew
                 nextStepAtMs = null // nothing to recover without a surface; re-armed on the next generation
                 set(State.IDLE, null)
             }
@@ -195,7 +204,8 @@ class VideoHealth(
      * generation is STARTING anyway. [quietOverlay] (a migration proof was pending) only holds the overlay back, see
      * [showOverlay]; the gate, the stopped feeding and the recovery ladder are the same.
      */
-    fun videoLost(quietOverlay: Boolean = false) {
+    fun videoLost(videoConn: Int, quietOverlay: Boolean = false) {
+        if (videoConn > lostConn) lostConn = videoConn
         if (state == State.IDLE) return
         if (state == State.FAULT) {
             if (!quietOverlay) showOverlayNow() // a loss outside a migration: the overlay is due now
@@ -214,16 +224,32 @@ class VideoHealth(
     }
 
     /**
-     * T-218: a video connection delivered its first frame. After a `video_lost` FAULT this returns
+     * T-218: video connection [videoConn] delivered its first frame. After a `video_lost` FAULT this returns
      * [Action.RESTART_CODEC]: a new generation (queue reset, keyframe request) that is STARTING until its first decoded
      * output. Otherwise it returns null: a STARTING or HEALTHY generation is fed as usual, and another fault keeps its
      * own recovery.
+     *
+     * Bounds (review P2):
+     * - A resume never moves the ladder's deadline, so restart, reconnect and manual come on schedule however many
+     *   connections half-succeed.
+     * - At most [MAX_RESUMES] resumes per episode, and none once the ladder is manual. A video that keeps getting a frame
+     *   and dropping must not restart the codec (and request a keyframe) every 500 ms.
+     * - A notification of a connection that is not newer than the last lost one is stale and dropped. That covers a
+     *   replaced reader whose first frame is consumed only after its successor was reported lost. Connection
+     *   generations rise within a session machine; [lostConn] is forgotten on Detached.
      */
-    fun videoFlowing(): Action? {
+    fun videoFlowing(videoConn: Int): Action? {
+        if (videoConn <= lostConn) {
+            log('I', "video_recover", "step=resume_stale conn=$videoConn lost_conn=$lostConn vgen=$generation")
+            return null
+        }
         if (state != State.FAULT || cause != FaultCause.VIDEO_LOST) return null
-        // The resumed generation gets a full step gap before the ladder's next step, which would restart it again.
-        if (!manual) nextStepAtMs = clock() + STEP_GAPS_MS[steps]
-        log('I', "video_recover", "step=resume n=$steps vgen=$generation")
+        if (manual || resumes >= MAX_RESUMES) {
+            log('I', "video_recover", "step=resume_skipped resumes=$resumes manual=${if (manual) 1 else 0} vgen=$generation")
+            return null
+        }
+        resumes++
+        log('I', "video_recover", "step=resume n=$resumes vgen=$generation")
         return Action.RESTART_CODEC
     }
 
@@ -270,6 +296,7 @@ class VideoHealth(
         quietOverlay = false
         recovering = true
         steps = 1
+        resumes = 0
         nextStepAtMs = now + STEP_GAPS_MS[steps]
         log('W', "video_recover", "step=retry n=$steps vgen=$generation")
         return Action.RESTART_CODEC
@@ -278,7 +305,7 @@ class VideoHealth(
     private fun fault(cause: FaultCause, now: Long) {
         if (state == State.FAULT || state == State.IDLE) return
         if (cause != FaultCause.VIDEO_LOST) quietOverlay = false // T-218: any other fault shows the overlay at once
-        if (!recovering) { recovering = true; steps = 0 }
+        if (!recovering) { recovering = true; steps = 0; resumes = 0 }
         if (nextStepAtMs == null && !manual) nextStepAtMs = now + STEP_GAPS_MS[steps]
         set(State.FAULT, cause)
     }

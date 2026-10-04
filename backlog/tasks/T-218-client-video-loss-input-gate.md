@@ -61,23 +61,32 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
   - `duringMigration` yalnız katmanı geciktirir (`VideoHealth.quietOverlay`). Katman şu durumlarda açılır: merdivenin ilk adımında (+1 sn), göç dışı bir kopuşta ya da başka bir hatada. Görüntü HEALTHY olursa bayrak temizlenir. Açık bir kurtarma bölümündeyse katman hiç gizlenmez.
   - Ertelenmiş bildirim (`videoLostDeferred`) kaldırıldı.
   - Regresyon testi: `MigrationAuthGateTest.currentVideoLossDuringAStalledProofGatesInputAtOnce`.
+- **Codex 2. tur (--high), iki P2 düzeltmesi** (commit: bu Handoff'tan bir önceki `T-218: bound video resumes ...`):
+  1. *Yarım yeniden bağlanmalar merdiveni atlıyordu.* `videoFlowing` artık merdivenin zamanını ötelemez.
+     - Bölüm başına en çok `MAX_RESUMES` = 3 resume olur; merdiven el ile aşamasındaysa hiç olmaz.
+     - Test `VideoHealthTest.partialReconnectsKeepTheLadderOnScheduleAndBoundTheResumes`: her 500 ms'de kare alıp çıktıdan önce kopan bağlantılarda yeniden başlatmalar +1/+3 sn'de, oturum yeniden kurma +6 sn'de, el ile aşama +15 sn'de gelir; 3 resume olur.
+  2. *Değiştirilen okuyucu geçerli bağlantı için kurtarma tetikleyebiliyordu.*
+     - Bildirim artık `deliverVideoFrame` ile gate'in teslim bariyerinin **içinde** gönderilir. Böylece bağlantının `abort()`/değiştirilmesi dönmeden önce kuyruğa girer.
+     - UI bağlantı kuşağını doğrular. `VideoHealth.videoLost(conn)` en yeni kayıp bağlantıyı tutar; `videoFlowing(conn)` bundan yeni olmayan bir bağlantının bildirimini düşürür (`resume_stale`). Kayıt `Detached`'ta sıfırlanır.
+     - Testler: `session/VideoFlowingBarrierTest.kt` (bekletilen okuyucu, deterministik sıra) ve `VideoHealthTest.aStaleFirstFrameNoticeOfAReplacedConnectionIsDropped`.
 - **Dokunulan dosyalar:**
   - `session/SessionMachine.kt`: `Action.VideoLost(gen, duringMigration)`.
   - `session/SessionController.kt`:
     - `SessionListener.onVideoLost` / `onVideoFlowing`, `exec(VideoLost)` + `ev=video_lost`.
-    - `VideoConn`: `video_gate_open` noktasında `onVideoFlowing`, connect sonrası `VideoKeepalive.forSocket`.
-    - Dosya sonunda yeni `object VideoKeepalive`.
-  - `video/VideoHealth.kt`: `FaultCause.VIDEO_LOST`, `videoLost(quietOverlay)`, `videoFlowing()`.
+    - `VideoConn`: ilk teslim edilen karede bariyer içinde `onVideoFlowing` (`deliverVideoFrame`), connect sonrası `VideoKeepalive.forSocket`.
+    - Dosya sonunda yeni `deliverVideoFrame` ve `object VideoKeepalive`.
+  - `video/VideoHealth.kt`: `FaultCause.VIDEO_LOST`, `videoLost(conn, quietOverlay)`, `videoFlowing(conn)`, `MAX_RESUMES`.
   - `MainActivity.kt`: iki listener override'ı (UI thread'e geçer).
   - Testler:
-    - yeni: `session/VideoLossGateTest.kt` (makine + VideoHealth + gerçek `InputCapture`/`FakeSink` host modeli), `session/VideoKeepaliveTest.kt`;
-    - güncellenen: `video/VideoHealthTest.kt` (+10 test, neden listesi). `session/MigrationAuthGateTest.kt`: kanıt beklenirken `VideoClosed` artık `VideoLost(duringMigration = true)` verir; ayrıca yeni regresyon testi.
+    - yeni: `session/VideoLossGateTest.kt` (makine + VideoHealth + gerçek `InputCapture`/`FakeSink` host modeli), `session/VideoKeepaliveTest.kt`, `session/VideoFlowingBarrierTest.kt`;
+    - güncellenen: `video/VideoHealthTest.kt` (+12 test, neden listesi). `session/MigrationAuthGateTest.kt`: kanıt beklenirken `VideoClosed` artık `VideoLost(duringMigration = true)` verir; ayrıca yeni regresyon testi.
   - `docs/LOGGING.md`.
 - **Varsayımlar:**
   - `VideoClosed` yalnız beklenmeyen kopuşta gelir: `abort()` `closedPosted`'ı kurduğu için yeniden yapılandırma, oturum kaybı ve göç onu üretmez (mevcut kod).
   - Makinenin `inputAllowed`'ı bilerek değişmedi. Kapı `VideoHealth` → `syncInputActive` → `capture.setActive(false)`, yani `RELEASE_ALL(USER)`. Kontrol bağlantısı açık olduğu için bırakmalar gider; tel değişmez.
   - Video dönünce `videoFlowing` → `restartCodec()`: kuyruk sıfırlanır, `KEYFRAME_REQUEST(STARTUP)` gider. Eski bağlantının kodek içindeki kareleri yeni kuşağın ilk çıktısı sayılamaz.
-  - Video hiç dönmezse mevcut 0019 merdiveni işler: +1/+3 sn decoder, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` merdivenin sonraki adımını bir tam aralık öteler.
+  - Video hiç dönmezse mevcut 0019 merdiveni işler: +1/+3 sn decoder, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene". `resume` merdiveni ötelemez; bölüm başına en çok 3 kez olur.
+  - Video bağlantı kuşakları bir `SessionMachine` içinde artar (paylaşılan `genCounter`). Controller yeniden kurulursa sayaç sıfırlanabilir; bunun öncesinde `releaseRenderer` → `Detached` gelir ve `lostConn` sıfırlanır.
   - Keepalive sabitleri (3 s / 1 s × 3) Linux `tcp.h` numaralarıyla, QuickAck'teki gibi kopyalanmış fd üzerinden ayarlanır. HarmonyOS 4.3 Linux çekirdeği varsayıldı. Başarısızlık yalnız `ev=video_keepalive ok=0` yazar.
 - **Test edilmeyenler / cihazda doğrulanacaklar** (orkestratör, tek tek):
   1. Akışta tablette `adb logcat -s 'MB:*'` içinde her video bağlantısında `ev=video_keepalive ok=1 idle_s=3 intvl_s=1 cnt=3` görülmeli; `ok=0` olmamalı (setsockopt HarmonyOS'ta çalışıyor mu).
