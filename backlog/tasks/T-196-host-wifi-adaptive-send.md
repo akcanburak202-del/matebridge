@@ -1,7 +1,7 @@
 ---
 id: T-196
 title: Wire the congestion controller into the video gate and the encoder (Wi-Fi, knob)
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-177, T-195]
@@ -73,6 +73,8 @@ Decision 0023 must be accepted by the user before work starts.
 _(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
 
 ## Handoff
+
+**Kapatıldı, uygulanmadı (2026-10-04):** T-195 ile birlikte; bkz. T-195 Handoff.
 
 _(Ajan bitirince doldurur.)_
 

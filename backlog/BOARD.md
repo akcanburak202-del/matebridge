@@ -19,20 +19,16 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
-| [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
 | [T-164](tasks/T-164-video-fault-churn-device-run.md) | Run decoder fault injection and the surface-churn soak on the tablet | 6 | orchestrator | [T-159, T-161] |
 | [T-166](tasks/T-166-parked-display-measurement.md) | Measure parked-display behaviour across sleep, lock and long outages | 6 | user | [T-165, T-147] |
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
-| [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
 | [T-180](tasks/T-180-pen-keyboard-validation-matrix.md) | Run the pen and keyboard device validation matrix | 6 | orchestrator | [] |
 | [T-192](tasks/T-192-host-settings-reset.md) | Add "Ayarları sıfırla" to the menu (approvals kept) | 6 | mac-host-dev | [T-167, T-189] |
 | [T-193](tasks/T-193-readme-plan-refresh.md) | Rewrite the README to the current state; refresh PLAN status; record the version pair | 6 | orchestrator | [T-145, T-146, T-147] |
 | [T-194](tasks/T-194-soak-8h-week.md) | Run the 8 h soak, then one week of real use, with resource trends | 6 | user | [T-173, T-157, T-164, T-167, T-193] |
-| [T-195](tasks/T-195-core-congestion-controller.md) | Write a pure Wi-Fi congestion controller (in-flight budget, fast-down/slow-up) | 6 | mac-host-dev | [T-127] |
-| [T-196](tasks/T-196-host-wifi-adaptive-send.md) | Wire the congestion controller into the video gate and the encoder (Wi-Fi, knob) | 6 | mac-host-dev | [T-177, T-195] |
 | [T-197](tasks/T-197-client-ctl-lowat-knob.md) | Experiment knob: TCP_NOTSENT_LOWAT on the client control socket | 6 | android-client-dev | [T-127, T-171] |
 | [T-198](tasks/T-198-host-pen-playout-experiment.md) | Experimental bounded pen playout on Wi-Fi (knob, default off) | 6 | mac-host-dev | [T-179, T-171] |
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
@@ -170,6 +166,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-124](tasks/T-124-host-wifi-service-class-default.md) | Host — Wi-Fi'de varsayılan servis sınıfı `signaling` (kontrol/ses AC_VO, video AC_VI) | 5 | mac-host-dev | [] |
 | [T-125](tasks/T-125-client-audio-late-bunch-skip.md) | Tablet — alt taşmadan sonra geç gelen toplu ses paketleri seviyeyi şişirmesin (çalarken ileri atla, yumuşak geçişle) | 5 | android-client-dev | [T-118, T-123] |
 | [T-126](tasks/T-126-host-tcp-info-control-video.md) | Host — kontrol (ses) ve video soketlerinin TCP durumunu saniyelik logla (yeniden gönderim, RTO, srtt, gönderilmemiş/onaylanmamış bayt) | 5 | mac-host-dev | [T-124] |
+| [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
 | [T-128](tasks/T-128-host-sleep-policy-wol-txt.md) | Mac — kasıtlı uykuya saygı, oturumda ekran uykusunu önle, Bonjour TXT `wol` (Wake-on-LAN adresleri) | 4 | mac-host-dev | [T-081] |
 | [T-129](tasks/T-129-client-wake-on-lan.md) | Tablet — Mac bulunamayınca Wake-on-LAN magic packet ile uyandır (TXT `wol`) | 4 | android-client-dev | [] |
 | [T-130](tasks/T-130-host-app-icon.md) | Mac — uygulama ikonu ve menü çubuğu simgesi (öneri C "M çizgisi") | 5 | mac-host-dev | [] |
@@ -214,6 +211,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |
+| [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-181](tasks/T-181-palm-before-pen-measurement.md) | Measure palm-before-pen clicks and the touchMajor distribution | 6 | orchestrator | [] |
 | [T-182](tasks/T-182-experiment-knob-inventory.md) | Record decision 0026 and the knob inventory; close T-019 and T-067 | 6 | orchestrator | [] |
 | [T-183](tasks/T-183-client-retire-experiments.md) | Retire concluded client experiments (perf hint, rvote, cpd, …; Wi-Fi knobs kept) | 6 | android-client-dev | [T-182, T-168] |
@@ -225,6 +223,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-189](tasks/T-189-host-usb-only-profile.md) | Add a "Yalnız USB" network profile | 6 | mac-host-dev | [] |
 | [T-190](tasks/T-190-client-share-folder-scope.md) | Share a chosen folder (optional read-only) instead of all storage | 6 | android-client-dev | [T-153] |
 | [T-191](tasks/T-191-client-settings-reset.md) | Add "Varsayılanlara dön" (settings + learned audio state; pairing kept) | 6 | android-client-dev | [T-185] |
+| [T-195](tasks/T-195-core-congestion-controller.md) | Write a pure Wi-Fi congestion controller (in-flight budget, fast-down/slow-up) | 6 | mac-host-dev | [T-127] |
+| [T-196](tasks/T-196-host-wifi-adaptive-send.md) | Wire the congestion controller into the video gate and the encoder (Wi-Fi, knob) | 6 | mac-host-dev | [T-177, T-195] |
 | [T-201](tasks/T-201-host-chroma-bench.md) | Add an RGB-referenced chroma metric and test patterns to SharpnessBench | 6 | mac-host-dev | [T-188, T-204] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-204](tasks/T-204-host-retire-encoder-knobs.md) | Retire concluded host encoder experiments (idle refresh, …); add host `ev=profile` | 6 | mac-host-dev | [T-182, T-177, T-145] |

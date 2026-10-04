@@ -1,7 +1,7 @@
 ---
 id: T-178
 title: Use a conservative default bitrate on Wi-Fi (host only)
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-127]
@@ -69,6 +69,8 @@ Wire: none. No PROTOCOL.md change.
 _(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
 
 ## Handoff
+
+**Kapatıldı, uygulanmadı (2026-10-04):** T-127 sonucu: 15 Mbps tam ekran geçişini yalnız ~15 ms kısalttı, ses zaten bütçede; kullanıcı 15/30 farkını fark etmedi. Wi-Fi için ayrı varsayılan gerekmiyor (NOTES 2026-10-04 ~23:55).
 
 _(Ajan bitirince doldurur.)_
 

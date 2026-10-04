@@ -1,7 +1,7 @@
 ---
 id: T-195
 title: Write a pure Wi-Fi congestion controller (in-flight budget, fast-down/slow-up)
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-127]
@@ -65,6 +65,8 @@ Wire: none. USB is unaffected (T-196 enables it on `transport=network` only).
 _(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
 
 ## Handoff
+
+**Kapatıldı, uygulanmadı (2026-10-04):** T-127 / 0023 dalı "sabit profil yeterli". Gecikme tablet Wi-Fi atlamasının patlama kuyruğu; ses Ethernet topolojisinde korunuyor. Mac Wi-Fi'ye dönülürse yeniden açılabilir (NOTES 2026-10-04 ~23:55).
 
 _(Ajan bitirince doldurur.)_
 

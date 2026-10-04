@@ -1,7 +1,7 @@
 ---
 id: T-127
 title: Measure the Wi-Fi baseline across three topologies before any congestion code
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-126, T-168, T-170, T-173]
@@ -128,6 +128,8 @@ Former *Plan*: _(Değerlendirme zamanı gelince.)_
 _(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
 
 ## Handoff
+
+**Kapatıldı 2026-10-04 (kullanıcı kararı):** satırlar 1'er koşu (≥ 3 tamamlanmadı; kullanıcı tekrar istemedi). Sonuç ve karar NOTES 2026-10-04 ~23:50 ve ~23:55: Mac Ethernet + tablet Wi-Fi'de ses bütçesi karşılanıyor, kare takılması %2–3; tam ekran geçişleri (cd95 110–145 ms) bit hızı ve `wifi_ll`/`tos_ctl` ile değişmiyor. 0023 dalı: **sabit profil yeterli** (Wi-Fi varsayılan bit hızı değişmez). Düğme kararları docs/KNOBS.md satır 15. Kullanıcı 15/30 Mbps durağan yazı farkını fark etmedi.
 
 _(Ajan bitirince doldurur.)_
 

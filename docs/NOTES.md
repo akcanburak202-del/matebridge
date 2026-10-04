@@ -1333,3 +1333,9 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 - Ses bütçesi üç satırda da karşılanıyor (0–1 kesilme / 5 dk), kare takılması %2–3.
 - **Değerlendirme:** Mac Ethernet'teyken Wi-Fi "sabit profil yeterli" dalında. Kalan tam ekran gecikmesi tablet Wi-Fi bağlantısının patlama kapasitesi; düğmelerle düzelmiyor. Uyarlamalı tıkanıklık denetimi (T-195/T-196) bunu kısaltmaz, yalnız sesi korur (ses zaten korunuyor).
 - Kart kabulündeki "her satır ≥ 3 koşu" tamamlanmadı (her satır 1 koşu). Kapatma kararı kullanıcıda.
+
+## 2026-10-04 ~23:55 — T-127 kapandı (kullanıcı kararı)
+
+- Kullanıcı 15 ve 30 Mbps arasında durağan yazı farkını fark etmedi (beklenen: durağan içerik birkaç karede en düşük QP'ye oturur, T-085; fark hareket sırasında, kaydırmada çıkar).
+- Karşılaştırma: USB'de tam ekran geçişi cd95 73 ms (büyük kare kodlama + aktarım), Ethernet + tablet Wi-Fi'de 110–145 ms, yani kablosuz atlama patlamada ~40–70 ms ekliyor. Ham Wi-Fi kapasitesi ~410 Mbps (T-090): sorun kapasite değil, yük altında kablosuz kuyruk gecikmesi (yüklü kontrol srtt 34 ms; modem ya da tablet tarafı ayrıştırılmadı).
+- 0023: sabit profil yeterli. T-178, T-195, T-196 uygulanmadan kapatıldı. T-179 / T-197 artık engelsiz (isteğe bağlı).
