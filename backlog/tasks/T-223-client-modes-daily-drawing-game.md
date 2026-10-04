@@ -1,7 +1,7 @@
 ---
 id: T-223
 title: Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-215, T-222]
@@ -18,6 +18,7 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/input/TouchTracker.kt  # eklendi (aynı)
   - client-android/app/src/main/kotlin/dev/matebridge/client/input/InputCapture.kt  # eklendi (aynı)
   - client-android/app/src/test/kotlin/dev/matebridge/client/input/FingerPolicyTest.kt  # eklendi (aynı)
+  - client-android/app/src/test/kotlin/dev/matebridge/client/input/InputHardeningTest.kt  # eklendi (orkestratör, Codex P3: uzlaştırma kuralı bir beklentiyi değiştirdi)
   - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/main/res/values/strings.xml
   - client-android/app/src/test/kotlin/dev/matebridge/client/stream/

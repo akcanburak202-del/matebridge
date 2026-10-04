@@ -33,8 +33,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
-| [T-223](tasks/T-223-client-modes-daily-drawing-game.md) | Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution | 6 | android-client-dev | [T-215, T-222] |
-| [T-224](tasks/T-224-host-single-instance.md) | Host — only one MateBridge instance may run (second instance exits) | 6 | mac-host-dev | [T-148] |
 
 ## done
 
@@ -234,3 +232,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-220](tasks/T-220-client-presentation-metric-and-game120-cadence.md) | One presentation metric across pacers; infer 60 fps cadence in Oyun 120 | 6 | android-client-dev | [T-208, T-211] |
 | [T-221](tasks/T-221-hotfix-input-viewport.md) | Hotfix — input viewport stays empty after T-215's MATCH_PARENT layout | 6 | orchestrator | [T-215] |
 | [T-222](tasks/T-222-client-operating-rate-max-default.md) | Decoder operating rate "max" by default (device A/B result of T-217) | 6 | android-client-dev | [T-217] |
+| [T-223](tasks/T-223-client-modes-daily-drawing-game.md) | Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution | 6 | android-client-dev | [T-215, T-222] |
+| [T-224](tasks/T-224-host-single-instance.md) | Host — only one MateBridge instance may run (second instance exits) | 6 | mac-host-dev | [T-148] |

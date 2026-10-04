@@ -30,3 +30,9 @@ Bugün beş görüntü modu var (`StreamMode`): Netlik (60, tam), Akıcı (120, 
 - **Kaybedilen:** "Performans" (%75 ölçek) yolu; gerekirse geliştirici ayarıyla (`scale`) A/B için tutulabilir — kart karar verir, varsayılan yolda yok.
 - **Kart:** T-223 (istemci). Cihaz kabulü kartın içinde.
 - **Mevcut kararlar:** 0014 (oyun katmanı) Oyun moduna, Çizim katmanı aynı mekanizmaya; 0016 (Oyun 60/120 iki biçim) bu kararla "Oyun + kare hızı ayarı" olur; 0029 değişmez (listeye 2240×1472 eklenir).
+
+## Ek (2026-10-04, T-223 uygulaması)
+
+- **Çizim'de "parmak kapalı" = yalnız hareketler** (`FingerPolicy.GESTURES_ONLY`): tek parmak hiçbir şey göndermez (tıklama/sürükleme yok, avuç tıklamaz); **iki parmak sıkıştırma ve iki parmak kaydırma** Mac'e gider (tuvali yakınlaştırma/kaydırma). Kullanıcının kayıtlı "Parmak dokunmasını tamamen kapat" ayarı açıksa Çizim'de de her şey kapalı kalır.
+- **Katman yalnız kendi ayarlarını geçici tutar:** Çizim'de ses ve kalem izi/noktası, Oyun'da parmak ayarı değiştirilirse kalıcı kaydedilir; geçici olan yalnız o modun üstüne bindiği ayarlardır (0014 §3).
+- **Camda kalan parmak kuralı (tüm modlar):** izlenmeyen bir parmak hâlâ camdayken (ör. avuç) yeni dokunuş tıklama ya da hareket başlatmaz; tüm parmaklar kalkınca dokunma normale döner.

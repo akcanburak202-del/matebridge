@@ -1,7 +1,7 @@
 ---
 id: T-224
 title: Host — only one MateBridge instance may run (second instance exits)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-148]
