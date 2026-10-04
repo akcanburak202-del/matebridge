@@ -76,6 +76,8 @@ class VideoRenderer(
     private val previousWaitMs: Long = PREVIOUS_WAIT_MS,
     /** T-161: backoff before the 1st / 2nd / 3rd codec restart of a [RestartPolicy] window. */
     private val restartDelaysMs: LongArray = RestartPolicy.DELAYS_MS,
+    /** T-217 dev knob (`dec_lowlat`, `dec_oprate`): decoder latency keys; [DecoderLatencyKnobs.DEFAULT] adds none. */
+    private val decoderTuning: DecoderLatencyKnobs = DecoderLatencyKnobs.DEFAULT,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -347,30 +349,31 @@ class VideoRenderer(
     private fun mime(config: StreamConfig) = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC
     else MediaFormat.MIMETYPE_VIDEO_HEVC
 
-    private fun createCodec(surface: Any): DecoderCodec {
-        val config = this.config
-        val mime = mime(config)
+    /**
+     * T-217: the decoder input format. With [DecoderLatencyKnobs.DEFAULT] these are exactly the pre-T-217 keys, values
+     * and order; a tuning changes the operating rate in place and appends its extra keys at the end.
+     */
+    private fun decoderFormat(
+        config: StreamConfig,
+        mime: String,
+        lowLatency: Boolean?,
+        tuning: DecoderLatencyKnobs,
+    ): DecoderFormat {
         val format = DecoderFormat(mime, config.widthPx, config.heightPx)
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-        val rate = OperatingRate.resolve(config.fps)
-        if (rate != null) format.setInteger(MediaFormat.KEY_OPERATING_RATE, rate)
+        tuning.operatingRate(config.fps)?.let { format.setInteger(MediaFormat.KEY_OPERATING_RATE, it) }
         ColorMapping.standard(config.matrix)?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
         ColorMapping.transfer(config.transfer)?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
         format.setInteger(MediaFormat.KEY_COLOR_RANGE, ColorMapping.range(config.fullRange))
-        if (config.colorPrimaries != 1) {
-            // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged.
-            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
-        }
+        if (lowLatency == true) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+        for ((k, v) in tuning.extraKeys) format.setInteger(k, v)
+        return format
+    }
 
-        val codec = codecFactory.create(mime)
-        var lowLatency = "n/a"
-        val supported = codec.lowLatencySupport(mime) // null: API < 30
-        if (supported != null) {
-            if (supported) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            lowLatency = if (supported) "on" else "unsupported"
-        }
+    /** `configure` + `start`; on failure releases [codec] and rethrows. */
+    private fun configureAndStart(codec: DecoderCodec, format: DecoderFormat, surface: Any) {
         try {
             codec.configure(format, surface)
             codec.start()
@@ -378,6 +381,36 @@ class VideoRenderer(
             try { codec.release() } catch (_: Exception) {}
             throw e
         }
+    }
+
+    private fun createCodec(surface: Any): DecoderCodec {
+        val config = this.config
+        val mime = mime(config)
+        if (config.colorPrimaries != 1) {
+            // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged.
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
+        }
+
+        var codec = codecFactory.create(mime)
+        val supported = codec.lowLatencySupport(mime) // null: API < 30
+        val lowLatency = when (supported) { null -> "n/a"; true -> "on"; false -> "unsupported" }
+        val tuning = decoderTuning
+        var rejected = false
+        try {
+            configureAndStart(codec, decoderFormat(config, mime, supported, tuning), surface)
+        } catch (e: Exception) {
+            if (tuning.isDefault) throw e
+            // T-217: the knob must never cost the stream: exactly one retry, on a fresh codec, with the default format.
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=dec_lowlat_rejected lowlat=${tuning.lowLat.id} " +
+                "oprate=${tuning.opRate.id} keys=${tuning.changedKeys().joinToString(",")} err=${e.javaClass.simpleName}")
+            rejected = true
+            codec = codecFactory.create(mime)
+            configureAndStart(codec, decoderFormat(config, mime, supported, DecoderLatencyKnobs.DEFAULT), surface)
+        }
+        val rate = (if (rejected) DecoderLatencyKnobs.DEFAULT else tuning).operatingRate(config.fps)
+        // T-217 `codec_start`: the requested knob value, or `rejected` when it fell back to the default format.
+        val lowlat = if (rejected && tuning.lowLat != DecoderLatencyKnobs.LowLat.OFF) "rejected" else tuning.lowLat.id
+        val oprate = if (rejected && tuning.opRate != DecoderLatencyKnobs.OpRate.FPS) "rejected" else tuning.opRate.id
         codecInfo = "${codec.name} ${config.widthPx}x${config.heightPx} lowLatency=$lowLatency"
         val accepted = try {
             val f = codec.inputFormat
@@ -394,12 +427,24 @@ class VideoRenderer(
         val swOnly = flag(codec.isSoftwareOnly)
         env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=codec_start name=${codec.name} mime=$mime " +
             "size=${config.widthPx}x${config.heightPx} low_latency=$lowLatency requested_rate=${rate ?: "none"} " +
-            "is_hw=$hw sw_only=$swOnly accepted $accepted")
+            "is_hw=$hw sw_only=$swOnly lowlat=$lowlat oprate=$oprate accepted $accepted")
         if (codec.isHardwareAccelerated == false || codec.isSoftwareOnly == true) {
             env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=codec_software name=${codec.name} mime=$mime " +
                 "is_hw=$hw sw_only=$swOnly")
         }
+        logVendorParameters(codec)
         return codec
+    }
+
+    /** T-217: component names whose vendor parameters were logged (decoder threads, one codec at a time). */
+    private val vendorParamsLogged = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** T-217: `ev=vendor_params`, once per component name per renderer; key names only, never values. */
+    private fun logVendorParameters(codec: DecoderCodec) {
+        if (!vendorParamsLogged.add(codec.name)) return
+        val names = try { codec.supportedVendorParameters } catch (e: Exception) { null }
+        env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=vendor_params name=${codec.name} " +
+            VendorParams.fields(names))
     }
 
     /** `1` / `0`, or `?` when unknown. */

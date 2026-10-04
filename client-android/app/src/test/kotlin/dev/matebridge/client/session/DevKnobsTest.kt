@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.video.DecoderLatencyKnobs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -23,7 +24,7 @@ class DevKnobsTest {
         "tos_video" to 0x88, "wifi_ll" to true, "audio" to false, "transport" to "wifi", "audio_out" to "track",
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
-        "decoder_fault_after_s" to 15, "game_display" to 0,
+        "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -42,6 +43,7 @@ class DevKnobsTest {
         assertNull(k.decoderFault)
         assertNull(k.decoderFaultAfterS)
         assertTrue(k.gameDisplay)
+        assertEquals(DecoderLatencyKnobs.DEFAULT, k.decoderLatency)
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -94,6 +96,7 @@ class DevKnobsTest {
         assertEquals("dequeue", k.decoderFault)
         assertEquals(15, k.decoderFaultAfterS)
         assertFalse(k.gameDisplay)
+        assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.ALL, DecoderLatencyKnobs.OpRate.MAX), k.decoderLatency)
         assertEquals("dev=1 ignored=-", k.logFields())
     }
 
@@ -147,7 +150,8 @@ class DevKnobsTest {
             listOf(
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
-                "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "stats_1s:1",
+                "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
+                "stats_1s:1",
             ),
             k.knobs,
         )
@@ -205,6 +209,22 @@ class DevKnobsTest {
         assertEquals(listOf("game_display:0"), off.knobs)
         assertTrue(parse("dev" to true, "game_display" to 1).gameDisplay)
         assertTrue(parse("dev" to true, "game_display" to "0").gameDisplay) // wrong type reads as the default
+    }
+
+    @Test fun decoderLatencyKnobsNeedDev() {
+        // T-217: without `--ez dev true` the keys are ignored (names only) and the format stays today's.
+        val ignored = parse("dec_lowlat" to "all", "dec_oprate" to "max")
+        assertEquals(DecoderLatencyKnobs.DEFAULT, ignored.decoderLatency)
+        assertEquals("dev=0 ignored=dec_lowlat,dec_oprate", ignored.logFields())
+        assertEquals(emptyList<String>(), ignored.knobs)
+        assertEquals("dev=0 ignored=dec_lowlat", parse("dec_lowlat" to "hisi").logFields())
+
+        val on = parse("dev" to true, "dec_lowlat" to "hisi")
+        assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.HISI), on.decoderLatency)
+        assertEquals(listOf("dec_lowlat:hisi"), on.knobs)
+        val odd = parse("dev" to true, "dec_lowlat" to "turbo", "dec_oprate" to 1)
+        assertEquals(DecoderLatencyKnobs.DEFAULT, odd.decoderLatency) // unknown or wrong type = default
+        assertEquals(listOf("dec_lowlat:other", "dec_oprate:other"), odd.knobs)
     }
 
     @Test fun profileShowsTheGameDisplay() {

@@ -38,6 +38,14 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     /** T-168: what [DecoderCodec.isHardwareAccelerated] / [DecoderCodec.isSoftwareOnly] answer (null = unknown). */
     @Volatile var hardware: Boolean? = true
     @Volatile var softwareOnly: Boolean? = false
+    /** T-217: the next n `start()` calls (any codec) throw, then it works again. */
+    @Volatile var failStarts = 0
+    /** T-217: configure throws `IllegalArgumentException` when the format has any of these keys. */
+    @Volatile var rejectKeys: Set<String> = emptySet()
+    /** T-217: what [DecoderCodec.supportedVendorParameters] answers (null = unknown / API < 31). */
+    @Volatile var vendorParameters: List<String>? = null
+    /** T-217: the integer keys of every configure call (any codec, failed ones included), in order. */
+    val configureFormats = java.util.concurrent.CopyOnWriteArrayList<Map<String, Int>>()
 
     /**
      * T-168 review: a render release (`releaseOutputBuffer(idx, ns)` / `(idx, true)`) calls the frame-rendered listener
@@ -124,16 +132,20 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         override fun lowLatencySupport(mime: String) = lowLatency
         override val isHardwareAccelerated: Boolean? get() = hardware
         override val isSoftwareOnly: Boolean? get() = softwareOnly
+        override val supportedVendorParameters: List<String>? get() = vendorParameters
 
         override fun configure(format: DecoderFormat, surface: Any) {
+            configureFormats.add(LinkedHashMap(format.integers))
             record("configure#$serial")
             if (failConfigure) throw IllegalStateException("fake configure failure")
+            if (format.integers.keys.any { it in rejectKeys }) throw IllegalArgumentException("fake unsupported key")
             this.format = format; this.surface = surface
         }
 
         override fun start() {
-            record("start#$serial")
-            if (failStart) throw IllegalStateException("fake start failure")
+            var fail = failStart
+            record("start#$serial") { if (failStarts > 0) { failStarts--; fail = true } }
+            if (fail) throw IllegalStateException("fake start failure")
         }
 
         override fun dequeueInputBuffer(timeoutUs: Long): Int {

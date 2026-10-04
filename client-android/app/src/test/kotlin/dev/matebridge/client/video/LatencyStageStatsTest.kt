@@ -188,7 +188,8 @@ class LatencyStageRendererTest {
         renderer.attachTarget(Any())
         assertTrue(env.awaitLines("codec_start"))
         val line = env.lines("codec_start").single()
-        assertTrue(line, line.contains(" requested_rate=") && line.contains(" is_hw=1 sw_only=0 accepted "))
+        // T-217: `lowlat=` `oprate=` sit between `sw_only=` and `accepted`.
+        assertTrue(line, line.contains(" requested_rate=") && line.contains(" is_hw=1 sw_only=0 lowlat=off oprate=fps accepted "))
         assertEquals(0, env.lines("codec_software").size)
     }
 

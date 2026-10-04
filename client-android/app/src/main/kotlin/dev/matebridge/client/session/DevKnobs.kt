@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.video.DecoderLatencyKnobs
 import java.util.Locale
 
 /** Read access to launch extras (Android: an `Intent`). Pure, so [DevKnobs] is JVM-testable. */
@@ -69,6 +70,11 @@ data class DevKnobs(
      * the native HiDPI display) for A/B; any other value or absent = the "Oyun çözünürlüğü" setting applies.
      */
     val gameDisplay: Boolean = true,
+    /**
+     * `--es dec_lowlat off|hisi|vdec|all`, `--es dec_oprate fps|max` (T-217, A/B; closed by T-217's device result):
+     * decoder latency keys for `VideoRenderer`. Absent or unknown = [DecoderLatencyKnobs.DEFAULT] (today's format).
+     */
+    val decoderLatency: DecoderLatencyKnobs = DecoderLatencyKnobs.DEFAULT,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -119,6 +125,8 @@ data class DevKnobs(
             Spec("decoder_fault", Kind.STRING, debugOnly = true, ids = setOf("create", "configure", "dequeue", "silent")),
             Spec("decoder_fault_after_s", Kind.INT, debugOnly = true),
             Spec("game_display", Kind.INT, debugOnly = true),
+            Spec("dec_lowlat", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.LOW_LAT_IDS),
+            Spec("dec_oprate", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.OP_RATE_IDS),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -155,6 +163,7 @@ data class DevKnobs(
                 decoderFault = x.string("decoder_fault"),
                 decoderFaultAfterS = if (x.has("decoder_fault_after_s")) x.int("decoder_fault_after_s", 0) else null,
                 gameDisplay = !(x.has("game_display") && x.int("game_display", 1) == 0),
+                decoderLatency = DecoderLatencyKnobs.parse(x.string("dec_lowlat"), x.string("dec_oprate")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),
