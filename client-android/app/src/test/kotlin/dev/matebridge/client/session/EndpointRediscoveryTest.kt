@@ -149,8 +149,10 @@ class EndpointRediscoveryTest {
         assertTrue(restart())
         assertEquals(Pick.CONNECT, r.onDiscovered(other, current, last))
         connectTo(other)
-        val v = ui(connected(tag = macB))
+        // The machine's host gate refused it before its HELLO_ACK (WrongHostGateTest).
+        val v = ui(SessionUi.Failed(Cause.WRONG_HOST))
         assertEquals(Verdict.Foreign(wifi, other), v)
+        assertTrue(r.isSkipped(other))
         assertEquals("result=foreign old=*.107 new=*.50", EndpointRediscovery.resultFields(v))
         // The caller goes back to the stored address; the foreign one is never picked again in this episode.
         current = wifi
@@ -163,14 +165,87 @@ class EndpointRediscoveryTest {
         assertEquals(Verdict.Accepted(wifi, ethernet), ui(connected()))
     }
 
-    @Test fun aMacAskingToPairIsForeign() {
+    @Test fun aConnectedOtherHostIsStillForeign() {
+        // Defence in depth behind the machine's gate: an authenticated session of another host is never accepted.
         establish()
         dropAndFailOnce()
         assertTrue(restart())
-        assertEquals(Pick.CONNECT, r.onDiscovered(other, current, last))
+        r.onDiscovered(other, current, last)
         connectTo(other)
-        assertEquals(Verdict.Foreign(wifi, other), ui(SessionUi.PairingNeedsUser("Other", rePair = false)))
+        assertEquals(Verdict.Foreign(wifi, other), ui(connected(tag = macB)))
         assertEquals(Pick.SKIP, r.onDiscovered(other, wifi, failed()))
+    }
+
+    @Test fun ourOwnHostAskingToPairAgainAtTheNewAddressIsNotForeign() {
+        // Past the gate a PAIRING answer claims our host's id (the Mac forgot the tablet): the usual prompt, no verdict.
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        r.onDiscovered(ethernet, current, last)
+        connectTo(ethernet)
+        assertEquals(Verdict.None, ui(SessionUi.PairingNeedsUser("Mac", rePair = true, hostTag = macA)))
+        assertNull(r.candidate)
+        assertFalse(r.isSkipped(ethernet))
+    }
+
+    @Test fun expectedHostIsTheLastAuthenticatedHostOnlyDuringAnEpisode() {
+        assertNull(r.expectedHost())
+        establish()
+        assertNull(r.expectedHost()) // no episode: ordinary starts are not gated
+        dropAndFailOnce()
+        assertNull(r.expectedHost())
+        assertTrue(restart())
+        assertEquals(macA, r.expectedHost())
+        r.onDiscovered(ethernet, current, last)
+        connectTo(ethernet)
+        ui(connected())
+        assertNull(r.expectedHost())
+    }
+
+    @Test fun aLateConnectedOfTheOldSessionDoesNotEndTheEpisode() {
+        // Review #2: the old address's retry connected, but its Connected renders after the switch to the candidate.
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        ui(SessionUi.Connecting(wifi))
+        assertEquals(Pick.CONNECT, r.onDiscovered(ethernet, current, last))
+        current = ethernet
+        assertEquals(Verdict.None, ui(connected()))
+        assertTrue(r.active)
+        assertEquals(ethernet, r.candidate)
+        assertEquals(macA, r.expectedHost())
+        ui(SessionUi.Connecting(ethernet))
+        assertEquals(Verdict.Foreign(wifi, ethernet), ui(connected(tag = macB)))
+    }
+
+    @Test fun storedTrustInsteadOfConnectingDropsTheCandidate() {
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        r.onDiscovered(ethernet, current, last)
+        current = ethernet
+        assertEquals(Verdict.None, ui(SessionUi.StoredTrust(code = "123456", confirmed = false)))
+        assertNull(r.candidate)
+    }
+
+    @Test fun aWrongHostAtTheOldAddressItselfDoesNotLoop() {
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        ui(SessionUi.Connecting(wifi))
+        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.WRONG_HOST)))
+        assertTrue(r.isSkipped(wifi))
+    }
+
+    @Test fun forgetCandidateDropsOnlyThatCandidate() {
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        r.onDiscovered(ethernet, current, last)
+        r.forgetCandidate(other)
+        assertEquals(ethernet, r.candidate)
+        r.forgetCandidate(ethernet)
+        assertNull(r.candidate)
     }
 
     @Test fun aTerminalFailureAtTheCandidateIsForeign() {
@@ -276,6 +351,7 @@ class EndpointRediscoveryTest {
         // Identity survives: another Mac at a new address is still refused in a later episode.
         dropAndFailOnce()
         assertTrue(restart())
+        assertEquals(macA, r.expectedHost())
         r.onDiscovered(other, current, last)
         connectTo(other)
         assertEquals(Verdict.Foreign(wifi, other), ui(connected(tag = macB)))

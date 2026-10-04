@@ -1991,13 +1991,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onDiscovered(ep: Endpoint) {
         if (!started || manualMode || userDisconnected || hostSleep.asleep) return
-        pairPick.onDiscovered(ep) // T-151: remembered, so a pick prompt does not hide it (NSD reports a service once)
-        if (!pairPick.allowsAuto(ep)) return // it answered PAIRING already: only a user start goes there again
-        // T-227: during a rediscovery episode a new address is tried at once (also while the old one is still connecting);
-        // one that answered as another host in this episode is never connected to automatically.
+        // T-227: an address that answered as another host in this rediscovery episode is dropped before anything
+        // remembers it (review #3: T-151's pick fallback must not pick it up either).
+        // During an episode a new address is tried at once (CONNECT), also while the old one is still connecting.
         val pick = rediscovery.onDiscovered(ep, currentEndpoint, lastUi)
         if (pick == EndpointRediscovery.Pick.SKIP) {
             MbLog.i("endpoint_rediscover_skip", "new=${EndpointRediscovery.octet(ep)}")
+            return
+        }
+        pairPick.onDiscovered(ep) // T-151: remembered, so a pick prompt does not hide it (NSD reports a service once)
+        if (!pairPick.allowsAuto(ep)) { // it answered PAIRING already: only a user start goes there again
+            if (pick == EndpointRediscovery.Pick.CONNECT) rediscovery.forgetCandidate(ep)
             return
         }
         // T-134: discovery wins over a direct wake attempt (it replaces it; the start closes it first, one connection).
@@ -2072,7 +2076,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         transportEpoch++ // a migration started before this new session reports into nothing (onMigrationResult)
         if (ConnectMode.transportOf(ep) == Transport.WIFI) lastWifiEndpoint = ep
         MbLog.i("transport", "transport=${ConnectMode.transportOf(ep).logName} origin=${origin.logName}")
-        controller.start(ep, userInitiated = origin.userInitiated)
+        // T-227: during a rediscovery episode every automatic start (candidate, way back, T-151's pick fallback) may reach
+        // only the host of the last authenticated session; the machine refuses any other one before HELLO_ACK.
+        val expect = if (origin.automatic) rediscovery.expectedHost() else null
+        controller.start(ep, userInitiated = origin.userInitiated, expectHost = expect)
         return true
     }
 
@@ -2429,7 +2436,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun tryNextAfterPick() {
         if (!started || isDestroyed || manualMode || userDisconnected || hostSleep.asleep || discovery == null) return
         if (lastUi !is SessionUi.PairingNeedsUser) return
-        pairPick.nextAuto()?.let { connect(it, ConnectOrigin.DISCOVERY) }
+        // T-227: never an address that answered as another host in this rediscovery episode (review #3).
+        pairPick.nextAuto()?.takeUnless { rediscovery.isSkipped(it) }?.let { connect(it, ConnectOrigin.DISCOVERY) }
     }
 
     /** "Bu Mac'i unut" from either settings panel: two confirmations, then [SessionController.forgetCurrentHost]. */
@@ -2512,6 +2520,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             SessionUi.Cause.VERSION_MISMATCH -> R.string.cause_version_mismatch
             SessionUi.Cause.PROTOCOL_ERROR -> R.string.cause_protocol_error
             SessionUi.Cause.CONNECT_FAILED -> R.string.cause_connect_failed
+            SessionUi.Cause.WRONG_HOST -> R.string.cause_connect_failed // T-227: brief; the app goes back to the old address
             SessionUi.Cause.KEY_MISSING, SessionUi.Cause.KEY_STORE_FAILED, SessionUi.Cause.PAIR_CANCELLED,
             SessionUi.Cause.KEY_MISMATCH ->
                 R.string.cause_protocol_error // own texts in applyStatusText() (PAIR_CANCELLED: the trust view)

@@ -232,11 +232,12 @@ class SessionController(
      * [WakeConnect.CONNECT_TIMEOUT_MS] and reports through [SessionListener.onWakeConnect].
      * [userInitiated] (T-150): only a start the user made (a tap) may pair; any other start aborts at a PAIRING answer
      * ([SessionUi.PairingNeedsUser]) and opens no connection while a pairing is unresolved ([SessionUi.StoredTrust]).
+     * [expectHost] (T-227): only that host may answer ([SessionMachine.Event.Start]).
      */
-    fun start(endpoint: Endpoint, wake: WakeTag? = null, userInitiated: Boolean = false) {
+    fun start(endpoint: Endpoint, wake: WakeTag? = null, userInitiated: Boolean = false, expectHost: HostTag? = null) {
         if (terminated.get()) return
         ensureEngine()
-        intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated))
+        intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost))
     }
 
     /**

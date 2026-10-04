@@ -9,10 +9,11 @@ package dev.matebridge.client.session
  *
  * The rediscovery runs *next to* the session machine's own retries of the stored address and the T-134 wake attempts:
  * it never stops them (a sleeping Mac may be absent from Bonjour but still wakes on a direct connect). A newly found
- * address is tried at once ([Pick.CONNECT]); the session that answers there must be the same host
- * ([HostTag], learned from the last authenticated session). Another paired Mac, a Mac asking to pair, or a terminal
- * failure there is [Verdict.Foreign]: that address is ignored for the rest of the episode and the caller returns to the
- * old address. A candidate that cannot be reached is [Verdict.Unreachable] (the caller returns to the old address too).
+ * address is tried at once ([Pick.CONNECT]). Every automatic start during an episode carries [expectedHost] (the
+ * [HostTag] of the last authenticated session), and the session machine refuses any other host at its first answer
+ * ([SessionUi.Cause.WRONG_HOST], before HELLO_ACK, so nothing is ever enabled for it). Such an address, or a terminal
+ * failure at the candidate (an impostor), is [Verdict.Foreign]: it is skipped for the rest of the episode and the caller
+ * returns to the old address. A candidate that cannot be reached is [Verdict.Unreachable] (back to the old address too).
  *
  * Pure and clock-injected; main thread only.
  */
@@ -27,7 +28,7 @@ class EndpointRediscovery(
         data object None : Verdict
         /** The candidate is the same host: it is the session's address from now on (update the stored endpoint). */
         data class Accepted(val old: Endpoint, val new: Endpoint) : Verdict
-        /** The candidate is another host (or asks to pair): reconnect to [old]; [foreign] is not offered again this episode. */
+        /** Another host (or an impostor) answered at [foreign]: reconnect to [old]; [foreign] is skipped this episode. */
         data class Foreign(val old: Endpoint, val foreign: Endpoint) : Verdict
         /** The candidate did not answer: reconnect to [old] (a later restart may offer it again). */
         data class Unreachable(val old: Endpoint, val candidate: Endpoint) : Verdict
@@ -43,8 +44,9 @@ class EndpointRediscovery(
         DEFAULT,
     }
 
-    /** Identity of the last authenticated session (null: none seen yet). Survives [reset]. */
+    /** Identity of the last authenticated session (null: none seen yet) and its endpoint. Survive [reset]. */
     private var known: HostTag? = null
+    private var knownEp: Endpoint? = null
 
     /** Endpoint whose consecutive drops are counted (null: the session is not failing). */
     private var streakEp: Endpoint? = null
@@ -82,8 +84,22 @@ class EndpointRediscovery(
      */
     fun onUi(state: SessionUi, current: Endpoint?, nowMs: Long): Verdict {
         if (candidate != null && candidate != current) dropCandidate() // someone else replaced the candidate's session
-        if (state is SessionUi.Connecting && candidate != null && state.endpoint == candidate) candidateStarted = true
-        val cand = candidate?.takeIf { candidateStarted }
+        if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(current)
+        if (candidate != null && !candidateStarted) {
+            if (state is SessionUi.Connecting && state.endpoint == candidate) {
+                candidateStarted = true
+            } else if (state is SessionUi.StoredTrust || state is SessionUi.Failed) {
+                // The candidate's start may end like this without connecting (an unresolved pairing, a latch). It cannot
+                // be told from a late state of the old session: stop tracking; the machine's host gate still holds.
+                dropCandidate()
+                clearStreak()
+                return Verdict.None
+            } else {
+                // A late state of the old session (the controller hops threads; review #2): settles nothing.
+                return Verdict.None
+            }
+        }
+        val cand = candidate // non-null only once its session was seen connecting
         when (state) {
             is SessionUi.Connected -> {
                 clearStreak() // reachable
@@ -91,12 +107,13 @@ class EndpointRediscovery(
                 if (cand != null) {
                     val o = old ?: cand
                     val k = known
+                    // Defence in depth: the machine's host gate already refused another host before its HELLO_ACK.
                     if (k != null && tag != k) return foreignVerdict(o, cand)
-                    known = tag
+                    learn(tag, cand)
                     endEpisode()
                     return Verdict.Accepted(o, cand)
                 }
-                known = tag
+                if (current != null) learn(tag, current)
                 endEpisode() // the session works again: no more rediscovery
             }
             is SessionUi.Disconnected -> {
@@ -117,13 +134,44 @@ class EndpointRediscovery(
                 if (current != null && current != streakEp && streakEp != null) startStreak(current)
                 down = false
             }
-            is SessionUi.PairingNeedsUser, is SessionUi.Failed -> {
-                clearStreak() // a host answered (or the session ended for good): not an address problem
-                if (cand != null) return foreignVerdict(old ?: cand, cand)
+            is SessionUi.Failed -> {
+                clearStreak() // the session ended for good: not an address problem
+                if (cand != null) return foreignVerdict(old ?: cand, cand) // e.g. KEY_MISMATCH: an impostor of our host
+            }
+            is SessionUi.PairingNeedsUser -> {
+                // Past the host gate this is our own host asking to pair again (it forgot the tablet): the usual prompt.
+                clearStreak()
+                dropCandidate()
             }
             else -> clearStreak() // Idle, Searching, pairing prompts: nothing is being retried
         }
         return Verdict.None
+    }
+
+    /**
+     * The host every automatic start must reach during an episode (null: no episode, or no host authenticated yet in
+     * this process). The caller passes it to `SessionController.start` (expectHost), so the session machine refuses
+     * another host at its first answer, before any HELLO_ACK: nothing (clipboard, files, input) is ever enabled for it.
+     */
+    fun expectedHost(): HostTag? = if (active) known else null
+
+    /**
+     * The machine refused the host at [current] ([SessionUi.Cause.WRONG_HOST]): another Mac, or a Mac asking to pair, at
+     * that address. It is skipped for the rest of the episode; the caller goes back to the old address (or, when the
+     * episode already ended, to the address of the last authenticated session).
+     */
+    private fun onWrongHost(current: Endpoint?): Verdict {
+        clearStreak()
+        dropCandidate()
+        val bad = current ?: return Verdict.None
+        foreign += bad
+        val back = old ?: knownEp
+        return if (back != null && back != bad) Verdict.Foreign(back, bad) else Verdict.None
+    }
+
+    private fun learn(tag: HostTag, ep: Endpoint) {
+        known = tag
+        knownEp = ep
     }
 
     /**
@@ -166,6 +214,14 @@ class EndpointRediscovery(
         candidateStarted = false
         return Pick.CONNECT
     }
+
+    /** [onDiscovered] picked [ep], but the caller will not connect to it (e.g. it answered PAIRING before, T-151). */
+    fun forgetCandidate(ep: Endpoint) {
+        if (candidate == ep) dropCandidate()
+    }
+
+    /** [ep] answered as another host in this episode: no automatic start goes there (T-151's pick fallback included). */
+    fun isSkipped(ep: Endpoint): Boolean = active && ep in foreign
 
     /** The transport was applied again, the activity stopped, or the user disconnected: forget the episode (not [known]). */
     fun reset() {

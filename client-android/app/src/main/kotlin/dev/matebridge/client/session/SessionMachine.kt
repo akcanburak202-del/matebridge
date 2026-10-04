@@ -82,7 +82,17 @@ class SessionMachine(
          * timer (the wake planner paces the attempts): the machine goes idle with `Ui(Disconnected(CONNECT_FAILED, 0))`.
          * Once the connection opens it is an ordinary session (normal retries).
          */
-        data class Start(val endpoint: Endpoint, val wake: WakeTag? = null, val userInitiated: Boolean = false) : Event
+        /**
+         * [expectHost] (T-227): only this host may answer this start and its automatic retries; any other host_id (or a
+         * PAIRING answer claiming another one) ends it with `Failed(WRONG_HOST)` at the first answer, before HELLO_ACK.
+         * A spoofed host_id still has to pass the key proof (T-156). Null: any host, as before.
+         */
+        data class Start(
+            val endpoint: Endpoint,
+            val wake: WakeTag? = null,
+            val userInitiated: Boolean = false,
+            val expectHost: HostTag? = null,
+        ) : Event
         data object Stop : Event
         data class ControlOpened(val gen: Int) : Event
         /** Control connection failed to open, hit EOF/IO error, or its send queue overflowed. */
@@ -255,6 +265,8 @@ class SessionMachine(
     // T-150 local trust of the current start / connection.
     /** The current start (and its automatic retries) was made by the user: a PAIRING answer may be stored pending. */
     private var userInitiated = false
+    /** T-227: the only host the current start (and its retries) may reach (null: any). */
+    private var expectHost: HostTag? = null
     private var pairingSession = false
     private var locallyTrusted = false
     private var sessionHostId: ByteArray? = null
@@ -330,6 +342,7 @@ class SessionMachine(
                 frames = 0
                 wakeAttempt = event.wake
                 userInitiated = event.userInitiated
+                expectHost = event.expectHost
                 // T-150: an automatic start never touches an unresolved pairing (it would replace the Mac's pending code).
                 val stored = if (event.userInitiated) null else storedPrompt()
                 if (stored != null) showStoredPrompt(stored, nowUs, out) else openControl(out)
@@ -337,6 +350,7 @@ class SessionMachine(
             Event.Stop -> {
                 wakeAttempt = null
                 userInitiated = false
+                expectHost = null
                 authFailures.clear() // T-156
                 clearPrompt()
                 if (phase != Phase.IDLE) {
@@ -390,13 +404,20 @@ class SessionMachine(
                 }
             }
             is Event.Secured -> if (event.gen == controlGen) {
-                onSecured(event, out)
+                if (wrongHost(event.hostId, pairing = event.code != null)) {
+                    event.pendingKey?.value?.fill(0)
+                    refuseWrongHost(out)
+                } else {
+                    onSecured(event, out)
+                }
             } else {
                 event.pendingKey?.value?.fill(0) // a stale reader (stopped or superseded connection) never writes
                 if (isCandidate(event.gen)) onCandidateSecured(event, nowUs, out) // T-205: never stores or pends a key
             }
             is Event.PairingNeedsUser -> if (isCandidate(event.gen)) {
                 failCandidate(out, nowUs, REASON_KEY) // a migration never pairs
+            } else if (event.gen == controlGen && wrongHost(event.hostId, pairing = false)) {
+                refuseWrongHost(out) // T-227: another Mac asking to pair; our own host asking again gets the prompt
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 phase = Phase.FAILED // no retry: each one would raise a new approval dialog on the Mac
@@ -405,6 +426,8 @@ class SessionMachine(
             }
             is Event.PairedWithPending -> if (isCandidate(event.gen)) {
                 failCandidate(out, nowUs, REASON_KEY)
+            } else if (event.gen == controlGen && wrongHost(event.hostId, pairing = false)) {
+                refuseWrongHost(out)
             } else if (event.gen == controlGen) {
                 closeAll(out, graceful = false)
                 val pending = try { trust?.freshPending(event.hostId.value) } catch (e: Exception) { null }
@@ -649,6 +672,21 @@ class SessionMachine(
      * and the session is locally trusted (PAIRED: derived with our trusted key; pairing: the Mac's sealed ACCEPTED after
      * the local confirmation). The plaintext first ack of a PAIRED answer proves nothing yet: null until a record.
      */
+    /** T-227: [hostId] is not the host this start expects ([expectHost]); a PAIRING answer is never the expected one. */
+    private fun wrongHost(hostId: Bytes?, pairing: Boolean): Boolean {
+        val want = expectHost ?: return false
+        return pairing || HostTag.of(hostId?.value) != want
+    }
+
+    /** T-227: another host answered an expect-host start: close at once, no retry, nothing stored or enabled. */
+    private fun refuseWrongHost(out: MutableList<Action>) {
+        closeAll(out, graceful = false)
+        wakeAttempt = null
+        phase = Phase.FAILED
+        log('W', "wrong_host", "")
+        out += Action.Ui(SessionUi.Failed(SessionUi.Cause.WRONG_HOST))
+    }
+
     private fun provenHostTag(): HostTag? = if (sealedSeen && locallyTrusted) HostTag.of(sessionHostId) else null
 
     // ---- T-150 local trust ----

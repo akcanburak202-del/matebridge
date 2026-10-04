@@ -61,6 +61,13 @@ sealed interface SessionUi {
          * ours, or an answerer that knows the host_id cannot seal records). Terminal; in AUTO on USB it falls back to Wi-Fi.
          */
         KEY_MISMATCH,
+
+        /**
+         * T-227: the start expected one host (rediscovery after the Mac's address changed) and another host answered: a
+         * different host_id, or a PAIRING answer from another Mac. Refused at its first answer, before any HELLO_ACK
+         * (nothing is enabled for it); terminal for this start, the UI goes back to the old address.
+         */
+        WRONG_HOST,
     }
 }
 
