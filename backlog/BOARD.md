@@ -17,6 +17,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-229](tasks/T-229-client-rediscovery-multi-mac.md) | Client — T-227 rediscovery edge cases with more than one paired Mac (candidate starvation, user pick inherits identity gate) | 6 | android-client-dev | [T-227] |
 | [T-231](tasks/T-231-client-color-override-knobs.md) | Black level lifted on the tablet — client dev knobs to override colour range/standard/transfer and a logged output-format report (A/B on device) | 6 | android-client-dev | [] |
 | [T-232](tasks/T-232-host-hdr-display-knob.md) | Host dev knob — create the MateBridge virtual display with an HDR transfer function (tf=1) so games can be checked for an HDR toggle; stream stays SDR | 6 | mac-host-dev | [T-226] |
+| [T-234](tasks/T-234-client-idle-dim-off.md) | Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode) | 6 | android-client-dev | [] |
 
 ## todo
 
@@ -37,7 +38,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-234](tasks/T-234-client-idle-dim-off.md) | Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode) | 6 | android-client-dev | [] |
 
 ## done
 

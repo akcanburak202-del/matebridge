@@ -22,4 +22,5 @@ Monitör araştırması (docs/research/2026-10-04-monitor-vs-matebridge.md §4.1
 - OLED yanma ve pil riski azalır; Mac de boşta uyuyabilir (T-128'in varsayımı gerçek olur).
 - Kaybedilen: Günlük/Çizim modunda tablete dokunmadan uzun video izlerken ekran kararır. Çözüm Kapalı seçmek ya da süreyi uzatmak.
 - Tekrar düşünülür: Mac'e bağlı klavye/fare ile çalışırken kararma rahatsız ederse (host'tan "Mac'te kullanıcı etkin" sinyali, protokol değişikliği), ya da tablette ekran zaman aşımı çok uzunsa (aktif kapatma için başka yol).
+- **Cihazda (2026-10-05):** bayrak kaldırılınca Android kullanıcı etkinliği sayar (`ON_AFTER_RELEASE`), ekran tabletin zaman aşımı kadar sonra kapanır: toplam = seçilen süre + 1 dk + tablet uyku süresi. Tablet uyku süresinin kısa (ör. 1 dk) tutulması önerilir; oturumu etkilemez.
 - PLAN Aşama 4 "ekran uyumaz" maddesi bu kararla daralır: oturum açılırken ve kullanılırken uyumaz.

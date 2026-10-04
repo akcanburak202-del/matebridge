@@ -1351,3 +1351,9 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 
 - `MATEBRIDGE_VD_TRANSFER=1` ile: `ev=vd_transfer requested=1 applied=1 edr_max=5.00 edr_potential=5.00` (varsayılanda 1.00/1.00). macOS ekranı EDR yetenekli görüyor (5× başlık). Yakalama ve kodlama çalışıyor; SDR akışta siyah/beyaz doğru (0→0, 255→255). `system_profiler` HDR satırı göstermiyor.
 - Kullanıcıya kalan: Sistem Ayarları → Ekranlar'da HDR anahtarı görünüyor mu, RE4/GameHub HDR seçeneğini açıyor mu, HDR açıkken tablette görüntü nasıl (akış SDR olduğu için soluk/kırpık beklenir). Host varsayılana döndürüldü.
+
+## 2026-10-05 ~01:25 — T-234 boşta karartma: cihaz denemesi (kullanıcı yokken)
+
+- `idle_dim=2` ile: `ev=idle stage=dim` tam 2:00'de (`idle_ms=120020`), `stage=off` 3:00'te. Ekran tabletin kendi zaman aşımıyla kapandı → `release_all` (contact=0 pressed=0), `activity_stop`, `bye_sent`; host `bye_received`. Basılı girdi yok, temiz.
+- **Bulgu:** ekran `stage=off`'tan **10 dk sonra** kapandı (tablet `mScreenOffTimeoutSetting=600000`). Neden platform: WindowManager'ın ekran-açık kilidi `ON_AFTER_RELEASE` ile tutulur; `FLAG_KEEP_SCREEN_ON` kaldırılınca PowerManager kullanıcı etkinliği sayar (`lastUserActivityTimeNoChangeLights` = off anı) ve zaman aşımı baştan başlar. Toplam = seçilen süre + 1 dk + tablet ekran zaman aşımı. Çare: tablette Ayarlar → Ekran → Uyku süresini kısa tutmak (ör. 1 dk). MateBridge oturumdayken bayrak tutulduğu için bu ayar oturumu etkilemez. Kod değişikliği gerekmez; 0031 Sonuçlar'a not.
+- Uyandırma denemesi yapılamadı: tablette kilit ekranı var (`isKeyguardShowing=true`), `input keyevent 224` uyandırmadı. Uyanınca Mac'i uyandırma ve tam parlaklık + ilk dokunuşun yutulması kullanıcıya kaldı. `idle_dim` varsayılana (5 dk) döndürüldü.
