@@ -54,7 +54,7 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
 - [ ] [JVM] Çizim katmanı: girince parmak kapalı + (Otomatik ise) 60 Mbps; çıkınca kayıtlı değerler aynen geri gelir (0014 §3 kuralları).
 - [ ] [JVM] STREAM_PREFS baytları: Günlük 120 = (120, 1000, auto, 0×0); Oyun 60 1848×1214 = (60, 1000, 60000, 1848, 1214); 2240×1472 geçerli seçenek.
 - [ ] [JVM] Ctrl+Shift+7 üç mod arasında döner; ayar sıfırlama yeni anahtarları kapsar.
-- [ ] [device] Her mod girişinde beklenen `ev=profile`; Günlük 60↔120 değişimi bir kez ekran yeniden kurulumu; Çizim'de avuç teması tıklamıyor, kalem çiziyor; Oyun'da 2240×1472 seçilebiliyor ve oyunda görünüyor.
+- [x] [device] Her mod girişinde beklenen `ev=profile`; Günlük 60↔120 değişimi bir kez ekran yeniden kurulumu; Çizim'de avuç teması tıklamıyor, kalem çiziyor; Oyun'da 2240×1472 seçilebiliyor ve oyunda görünüyor.
 
 ## Plan
 
@@ -94,3 +94,4 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
   - Çizim katmanında ses/kalem ezilmiyor (karar 0030 yalnız parmak + bit hızı diyor); farklı isteniyorsa `GameModeSettings.defaults` tek yerden değişir.
 
 **Cihaz (2026-10-04 ~14:20–14:40):** Oyun 60'ta 2240×1472 seçilebiliyor ve uygulanıyor (`display_applied=1`), 1848↔2240 geçişi çalışıyor; eski `clarity` → Günlük 60 geçişi doğrulandı (`ev=modes_migrated`). Çizim avuç/kalem, Ctrl+Shift+7 döngüsü, Günlük 60↔120 henüz denenmedi.
+**Kullanıcı (2026-10-04 ~14:50):** Ctrl+Shift+7 üç mod döngüsü, Çizim'de avuç tıklamıyor/kalem çiziyor/iki parmak yakınlaştırma, Günlük 60↔120 — hepsi çalışıyor. Cihaz kabulü tamam.
