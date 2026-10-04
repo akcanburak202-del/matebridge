@@ -503,3 +503,9 @@ Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) a
 
 - `ev=settings_reset keys=<n>`: "Varsayılanlara dön" ikinci dokunuşla onaylandı; `n` silinen ayar anahtarı sayısı. Değer yazılmaz. Eşleşme kayıtları, `device_id`, son uç nokta ve `wol_*` korunur.
 - `ev=audio_learned_clear at=reset|stream_start`: öğrenilmiş ses tamponu/güvenlik payı sıfırlandı (sıfırlamada ve sonraki ilk ses akışı başında).
+
+## USB tünel bekçisi (Mac, `usb`, T-228)
+
+- `ev=usb_tunnel state=up|down|no_device|no_adb`: `adb reverse tcp:47001/47002` bekçisinin durumu, yalnız değişince yazılır.
+- Ağ üzerinden adb cihazları (`adb connect` ile `host:port`, Kablosuz hata ayıklamanın `adb-…._adb-tls-connect._tcp` mDNS adı) USB sayılmaz ve seçilmez. Yalnız ağ cihazı bağlıysa durum `no_device` olur ve tünel kurulmaz. Aynı kural `files` tarafındaki `adb forward` için de geçerlidir.
+- Seri numarası loglanmaz.

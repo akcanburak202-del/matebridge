@@ -47,6 +47,50 @@ final class AdbOutputTests: XCTestCase {
         XCTAssertNil(AdbOutput.selectDevice([devices[1]]))
     }
 
+    func testNetworkSerialsAreRecognized() {
+        for serial in ["192.168.1.105:5555", "[fe80::1%en0]:5555", "tablet.local:5555",
+                       "adb-ABC123-xYz9._adb-tls-connect._tcp", "adb-ABC123-xYz9._adb-tls-connect._tcp.",
+                       "adb-ABC123._adb._tcp"] {
+            XCTAssertTrue(AdbDevice(serial: serial, state: "device").isNetwork, serial)
+        }
+        for serial in ["ABC123DEF456", "emulator-5554", "R5CT-1234_x"] {
+            XCTAssertFalse(AdbDevice(serial: serial, state: "device").isNetwork, serial)
+        }
+    }
+
+    func testSelectDeviceSkipsNetworkAdb() {
+        let wifi = AdbDevice(serial: "192.168.1.105:5555", state: "device")
+        let mdns = AdbDevice(serial: "adb-ABC123-xYz9._adb-tls-connect._tcp", state: "device")
+        let usb = AdbDevice(serial: "ABC123", state: "device")
+        let emulator = AdbDevice(serial: "emulator-5554", state: "device")
+        XCTAssertNil(AdbOutput.selectDevice([wifi]))
+        XCTAssertNil(AdbOutput.selectDevice([wifi, mdns]))
+        XCTAssertEqual(AdbOutput.selectDevice([wifi, usb]), usb)
+        XCTAssertEqual(AdbOutput.selectDevice([mdns, usb, wifi]), usb)
+        XCTAssertEqual(AdbOutput.selectDevice([usb, wifi]), usb)
+        XCTAssertEqual(AdbOutput.selectDevice([wifi, emulator]), emulator)
+        XCTAssertEqual(AdbOutput.selectDevice([wifi, emulator, usb]), usb)
+        XCTAssertNil(AdbOutput.selectDevice([AdbDevice(serial: "ABC123", state: "unauthorized"), wifi]))
+    }
+
+    func testSelectDeviceFromRealDevicesOutputWithWirelessAdb() {
+        let text = "List of devices attached\n192.168.1.105:5555\tdevice\n"
+            + "adb-ABC123-xYz9._adb-tls-connect._tcp\tdevice\n"
+        let devices = AdbOutput.parseDevices(text)
+        XCTAssertEqual(devices.map(\.serial), ["192.168.1.105:5555", "adb-ABC123-xYz9._adb-tls-connect._tcp"])
+        XCTAssertNil(AdbOutput.selectDevice(devices))
+        XCTAssertEqual(AdbOutput.selectDevice(AdbOutput.parseDevices(text + "ABC123\tdevice\n"))?.serial, "ABC123")
+    }
+
+    func testPlannerReportsNoDeviceWhenOnlyNetworkAdb() {
+        var planner = UsbTunnelPlanner()
+        let snapshot = UsbSnapshot(adbFound: true, serverUp: true,
+                                   devices: [AdbDevice(serial: "192.168.1.105:5555", state: "device")])
+        let decision = planner.decide(snapshot)
+        XCTAssertEqual(decision.state, .noDevice)
+        XCTAssertNil(decision.action)
+    }
+
     func testServerLaunchNeverListensOnAllInterfaces() {
         let cmd = AdbServerLaunch.command(adb: "/sdk/platform-tools/adb")
         XCTAssertFalse(cmd.contains("-a"))
