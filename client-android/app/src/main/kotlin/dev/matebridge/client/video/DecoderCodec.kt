@@ -50,6 +50,12 @@ interface DecoderCodec {
     val isHardwareAccelerated: Boolean? get() = null
     val isSoftwareOnly: Boolean? get() = null
 
+    /**
+     * T-217 diagnostics only: `MediaCodec.getSupportedVendorParameters()` (API 31+), the vendor parameter names the
+     * component exposes; null when unknown (older API or the call failed).
+     */
+    val supportedVendorParameters: List<String>? get() = null
+
     /** Whether `FEATURE_LowLatency` is supported for [mime]; null when the platform has no such feature (API < 30). */
     fun lowLatencySupport(mime: String): Boolean?
 
@@ -81,6 +87,23 @@ class DecoderFormat(val mime: String, val width: Int, val height: Int) {
     val integers: Map<String, Int> get() = ints
 }
 
+/**
+ * T-217: the `ev=vendor_params` fields for [DecoderCodec.supportedVendorParameters]: key names only (never values),
+ * at most [MAX_NAMES], and only plain parameter names, so the line stays `key=value` parseable.
+ */
+object VendorParams {
+    const val MAX_NAMES = 64
+    private val NAME = Regex("[A-Za-z0-9._-]{1,128}")
+
+    /** `count=<n> keys=<a>,<b>…|-` (+ ` more=<k>` for names not shown), or `count=? keys=unavailable` when unknown. */
+    fun fields(names: List<String>?): String {
+        if (names == null) return "count=? keys=unavailable"
+        val shown = names.filter { NAME.matches(it) }.take(MAX_NAMES)
+        val more = names.size - shown.size
+        return "count=${names.size} keys=${shown.joinToString(",").ifEmpty { "-" }}" + if (more > 0) " more=$more" else ""
+    }
+}
+
 /** Production [DecoderCodec]: forwards every call to one `MediaCodec`. */
 class MediaCodecDecoder private constructor(private val codec: MediaCodec) : DecoderCodec {
     companion object {
@@ -93,6 +116,8 @@ class MediaCodecDecoder private constructor(private val codec: MediaCodec) : Dec
     override val name: String get() = codec.name
     override val isHardwareAccelerated: Boolean? get() = try { codec.codecInfo.isHardwareAccelerated } catch (e: Exception) { null }
     override val isSoftwareOnly: Boolean? get() = try { codec.codecInfo.isSoftwareOnly } catch (e: Exception) { null }
+    override val supportedVendorParameters: List<String>?
+        get() = if (Build.VERSION.SDK_INT < 31) null else try { codec.supportedVendorParameters } catch (e: Exception) { null }
 
     override fun lowLatencySupport(mime: String): Boolean? {
         if (Build.VERSION.SDK_INT < 30) return null

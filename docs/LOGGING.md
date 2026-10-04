@@ -457,6 +457,18 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
     - `net_bench*` hiç yazılmaz. Varsayılana eşit verilen değer de listelenir.
   - `is_hw` yoktur (bkz. `ev=codec_start`, T-168). Uç nokta adresi, seri numarası ve cihaz kimliği asla yazılmaz.
 
+## Decoder gecikme anahtarları (tablet, `MB/decoder`, T-217, karar 0026)
+
+- **`I decoder ev=codec_start`**: `sw_only=` ile `accepted` arasına `lowlat=off|hisi|vdec|all|rejected oprate=fps|max|rejected` eklendi.
+  - Değer, istenen geliştirici ayarıdır (`--ez dev true --es dec_lowlat … --es dec_oprate …`); ayar yoksa `lowlat=off oprate=fps`.
+  - `rejected`: istenen anahtarlar configure/start'ta reddedildi ve codec varsayılan formatla açıldı (bkz. `dec_lowlat_rejected`). Varsayılanda kalan alan kendi kimliğini yazar.
+  - `requested_rate=` gerçekten konan değerdir (`max` ile `32767`); codec'in kabul ettiği `accepted … operating_rate=` alanındadır.
+- **`W decoder ev=dec_lowlat_rejected lowlat=<id> oprate=<id> keys=<anahtar>[,…] err=<istisna sınıfı>`**: ayarlı format configure ya da start'ta hata verdi. Codec bırakılır, yeni bir codec varsayılan formatla **bir kez** denenir. O da başarısız olursa olağan `decode_error` yolu işler. `keys=` yalnız anahtar adlarıdır (değişen işletim hızı için `operating-rate`).
+- **`I decoder ev=vendor_params name=<codec> count=<n>|? keys=<ad>[,…]|-|unavailable [more=<k>]`**: `MediaCodec.getSupportedVendorParameters()` (API 31+), renderer başına codec adı için bir kez, ilk `codec_start`'tan hemen sonra. Ayardan bağımsız yazılır.
+  - Yalnız parametre adları, değerler asla. En çok 64 ad; düz ad olmayanlar (`[A-Za-z0-9._-]` dışı) ve fazlası `more=` ile sayılır.
+  - `count=? keys=unavailable`: API 31 altı ya da çağrı başarısız.
+- `ev=profile knobs=` (T-185) bu ayarları `dec_lowlat:<id>`, `dec_oprate:<id>` olarak listeler; `dev` yoksa `diag ev=dev_knobs ignored=dec_lowlat,dec_oprate`.
+
 ## Kodlayıcı donanım denetimi (Mac, `video`, T-187)
 
 Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) ama zorunlu kılmaz (`Require` değil, NOTES T-046). VideoToolbox yazılım kodlayıcıya düşerse gecikme ve CPU artar. Bu satır o durumu görünür kılar.
