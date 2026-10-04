@@ -1,7 +1,7 @@
 ---
 id: T-230
 title: Black level lifted on the tablet (Mac 0 → tablet 16) — Mac-side bitstream probe (what Y values and VUI the encoder really emits)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

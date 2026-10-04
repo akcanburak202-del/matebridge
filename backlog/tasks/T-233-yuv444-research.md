@@ -1,7 +1,7 @@
 ---
 id: T-233
 title: Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []
