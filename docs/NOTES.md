@@ -1258,7 +1258,7 @@ Koşul: host sha=91aaa2c, APK a9d7980, macOS 27.0.1 (26A434), HarmonyOS MRDI-W09
 
 ## 2026-10-04 ~16:20–16:50 — T-127 ara sonuçlar (hızlı yol, her satır 1 koşu)
 
-Host 91aaa2c-derlemesi (`MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`), APK a9d7980, Günlük 60 fps 2800×1840, bit hızı Otomatik = 30 Mbps (Wi-Fi'de de 30), ses açık (`afplay` ton, 5 dk). İş yükü `wload` (40 sn döngü: 20 sn kaydırma 60 fps, 10 sn 2 sn'de bir tam ekran değişim, 10 sn durağan). Analiz: scratchpad `wload/an2.py`; Wi-Fi satırlarında tablet logu tablet içinde `/data/local/tmp/t127.log*` (henüz çekilmedi). **Topoloji: oturum Mac'in Wi-Fi adresinden (en1 192.168.1.107) gidiyordu; Mac'te Ethernet (en0, 1 Gbit) bağlı olsa da tablet Wi-Fi adresine bağlanıyor.**
+Host 91aaa2c-derlemesi (`MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`), APK a9d7980, Günlük 60 fps 2800×1840, bit hızı Otomatik = 30 Mbps (Wi-Fi'de de 30), ses açık (`afplay` ton, 5 dk). İş yükü `wload` (40 sn döngü: 20 sn kaydırma 60 fps, 10 sn 2 sn'de bir tam ekran değişim, 10 sn durağan). Analiz: scratchpad `wload/an2.py`; Wi-Fi satırlarında tablet logu tablet içinde `/data/local/tmp/t127.log*` (henüz çekilmedi). **Topoloji: oturum Mac'in Wi-Fi adresinden (en1 192.168.1.107) gidiyordu; Mac'te Ethernet (en0) bu satırlar sırasında bağlı değildi; kullanıcı ~16:55te bağladı.**
 
 | satır | kontrol srtt p50/p95/max | video srtt p95/max | cap_dec p50/p95/max (ms, host STATS) | retx | idr | tablette atılan kare |
 |---|---|---|---|---|---|---|
