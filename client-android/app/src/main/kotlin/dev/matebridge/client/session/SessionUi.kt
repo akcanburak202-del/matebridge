@@ -45,10 +45,17 @@ sealed interface SessionUi {
     data class Disconnected(val cause: Cause, val retryInMs: Long) : SessionUi
 
     /**
-     * Terminal until the user retries: no automatic reconnect. [Cause.HOST_SLEEP] (BYE HOST_SLEEP, T-133): the Mac went
+     * Terminal until the user retries: no automatic reconnect. [endpoint] (T-227): the address of the start that ended
+     * (set by the session machine), so a late one of a superseded start is not blamed on the next address. Not part of
+     * equality.
+     * [Cause.HOST_SLEEP] (BYE HOST_SLEEP, T-133): the Mac went
      * to sleep; nothing is sent to it (no reconnect, no automatic wake) until a user action or the next foreground.
      */
-    data class Failed(val cause: Cause) : SessionUi
+    data class Failed(val cause: Cause, val endpoint: Endpoint? = null) : SessionUi {
+        // [endpoint] attributes the state to its start (T-227); it is not part of what the state *is*.
+        override fun equals(other: Any?) = other is Failed && other.cause == cause
+        override fun hashCode() = cause.hashCode()
+    }
 
     enum class Cause {
         LOST, HOST_CLOSED, BUSY, REJECTED, VERSION_MISMATCH, PROTOCOL_ERROR, CONNECT_FAILED, KEY_MISSING, KEY_STORE_FAILED, HOST_SLEEP,
@@ -61,6 +68,13 @@ sealed interface SessionUi {
          * ours, or an answerer that knows the host_id cannot seal records). Terminal; in AUTO on USB it falls back to Wi-Fi.
          */
         KEY_MISMATCH,
+
+        /**
+         * T-227: the start expected one host (rediscovery after the Mac's address changed) and another host answered: a
+         * different host_id, or a PAIRING answer from another Mac. Refused at its first answer, before any HELLO_ACK
+         * (nothing is enabled for it); terminal for this start, the UI goes back to the old address.
+         */
+        WRONG_HOST,
     }
 }
 

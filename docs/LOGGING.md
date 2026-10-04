@@ -509,3 +509,14 @@ Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) a
 - `ev=usb_tunnel state=up|down|no_device|no_adb`: `adb reverse tcp:47001/47002` bekçisinin durumu, yalnız değişince yazılır.
 - Ağ üzerinden adb cihazları (`adb connect` ile `host:port`, Kablosuz hata ayıklamanın `adb-…._adb-tls-connect._tcp` mDNS adı) USB sayılmaz ve seçilmez. Yalnız ağ cihazı bağlıysa durum `no_device` olur ve tünel kurulmaz. Aynı kural `files` tarafındaki `adb forward` için de geçerlidir.
 - Seri numarası loglanmaz.
+
+## Mac'in yeni adresini yeniden keşif (tablet, `MB/session`, T-227)
+
+Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam adres ve host adı yazılmaz.
+
+- `ev=endpoint_rediscover reason=connect_failed|down_time failures=<n> restart=<k>`: oturumun uç noktası art arda düştü (`connect_failed`: ≥ 2 düşüş; `down_time`: ilk düşüşten bu yana ≥ 4 sn) ve NSD keşfi yeniden başlatıldı. `k` bu bölümdeki yeniden başlatma sayısı; aralık 8 → 16 → 30 sn (üst sınır). Kayıtlı adres denemeleri ve T-134 uyandırma denemeleri sürer.
+- `ev=endpoint_rediscover_found old=*.<o> new=*.<n>`: yeniden keşif aynı hizmeti yeni bir adreste buldu; oturum oraya bağlanıyor (eski adrese bağlanılırken bile).
+- `ev=endpoint_rediscover_result result=accepted|foreign|unreachable old=*.<o> new=*.<n>`: `accepted`: yeni adresteki host aynı kimlik (son doğrulanmış oturumun host_id'si), adres kaydı güncellendi. `foreign`: orada başka bir Mac (`wrong_host`) ya da adayda kalıcı hata (ör. anahtar uyuşmazlığı); o adres bu bölümde bir daha denenmez, eski adrese dönülür. `unreachable`: yeni adres yanıt vermedi, eski adrese dönülür.
+- `W session ev=wrong_host`: bölüm sırasında yapılan otomatik bağlantılar (aday, eski adrese dönüş, T-151 seçim geri dönüşü) yalnız son doğrulanmış host_id'ye gidebilir. İlk yanıttaki host_id farklıysa ya da başka bir Mac eşleşme istiyorsa, oturum makinesi bağlantıyı HELLO_ACK'tan önce kapatır ve `Failed(WRONG_HOST)` verir. O bağlantıda pano, dosya ve girdi hiç açılmaz. Kimlik yazılmaz.
+- `I session ev=expect_host`: bölüm başladığında eski adresi zaten yeniden deneyen oturum da aynı kapıya bağlandı. Bundan sonraki yeniden denemelerde yalnız son doğrulanmış host kabul edilir. Uyandırma denemesi bağlanmaz. `ev=session_start ... expect_host=1`: bu başlangıç kapılı. Kimlik ve adres yazılmaz.
+- `ev=endpoint_rediscover_skip new=*.<n>`: bu bölümde `foreign` çıkmış bir adres yeniden bulundu; otomatik bağlanılmadı.

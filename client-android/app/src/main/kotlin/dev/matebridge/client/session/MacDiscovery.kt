@@ -76,6 +76,17 @@ class MacDiscovery(
         }
     }
 
+    /**
+     * T-227: a fresh discovery run, so NSD reports every service again (it reports a service once per run, and not again
+     * when only its address changes). No-op unless started. Results of the old run are dropped like after [stop].
+     */
+    @Synchronized
+    fun restart() {
+        if (!started) return
+        stop()
+        start()
+    }
+
     @Synchronized
     fun stop() {
         started = false
