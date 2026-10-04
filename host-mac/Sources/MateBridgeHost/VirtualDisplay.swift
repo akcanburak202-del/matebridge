@@ -52,8 +52,13 @@ final class VirtualDisplay: @unchecked Sendable {
     ///   - physicalPixelWidth/physicalPixelHeight: the panel's pixel size, for `sizeInMillimeters` (default: the
     ///     backing size). A game display passes the native size so the reported physical size stays the panel's.
     ///   - hidpi: when true, exposes a 2x mode (pixels/2 points) instead of a 1x mode.
+    ///   - transfer: T-232 developer knob `MATEBRIDGE_VD_TRANSFER`. The default (requested 0) uses the legacy
+    ///     `initWithWidth:height:refreshRate:` mode initializer exactly as before. Requested 1 uses
+    ///     `initWithWidth:height:refreshRate:transferFunction:` and falls back to the legacy modes once when that
+    ///     selector is missing, returns nil or its modes are rejected (`transferOutcome`).
     init(name: String, pixelWidth: Int, pixelHeight: Int, physicalPixelWidth: Int? = nil,
-         physicalPixelHeight: Int? = nil, hidpi: Bool, refreshRate: Double = 60) throws {
+         physicalPixelHeight: Int? = nil, hidpi: Bool, refreshRate: Double = 60,
+         transfer: VirtualDisplayTransfer.Knob = VirtualDisplayTransfer.parse(nil)) throws {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
             throw VirtualDisplayError.apiUnavailable("CGVirtualDisplayDescriptor")
         }
@@ -105,22 +110,50 @@ final class VirtualDisplay: @unchecked Sendable {
             guard let a = modeClass.perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() else { return nil }
             return modeImp(a, modeSel, UInt32(w), UInt32(h), refreshRate)?.takeRetainedValue() as? NSObject
         }
-        var modes: [NSObject] = []
-        if hidpi {
-            if let m = makeMode(pixelWidth / 2, pixelHeight / 2) { modes.append(m) }
-        } else if let m = makeMode(pixelWidth, pixelHeight) {
-            modes.append(m)
-        }
+        // The one mode's size: points for HiDPI (pixels / 2), pixels for a 1x display.
+        let modeW = hidpi ? pixelWidth / 2 : pixelWidth
+        let modeH = hidpi ? pixelHeight / 2 : pixelHeight
+        func legacyModes() -> [NSObject] { makeMode(modeW, modeH).map { [$0] } ?? [] }
 
         let settings = settingsClass.init()
         settings.setValue(UInt32(hidpi ? 1 : 0), forKey: "hiDPI")
-        settings.setValue(modes, forKey: "modes")
 
         let applySel = NSSelectorFromString("applySettings:")
         guard created.responds(to: applySel) else { throw VirtualDisplayError.apiUnavailable("applySettings:") }
         typealias ApplyFn = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
         let applyImp = unsafeBitCast(class_getMethodImplementation(displayClass, applySel), to: ApplyFn.self)
-        guard applyImp(created, applySel, settings) else { throw VirtualDisplayError.settingsRejected }
+        func apply(_ modes: [NSObject]) -> Bool {
+            settings.setValue(modes, forKey: "modes")
+            return applyImp(created, applySel, settings)
+        }
+
+        // T-232: a transfer function only when the knob asks for one; the default path below is the pre-T-232 code.
+        let tfSel = NSSelectorFromString("initWithWidth:height:refreshRate:transferFunction:")
+        var applied: UInt32 = 0
+        var fallback: VirtualDisplayTransfer.FallbackReason?
+        switch VirtualDisplayTransfer.decide(requested: transfer.requested,
+                                             selectorAvailable: modeClass.instancesRespond(to: tfSel)) {
+        case .legacy:
+            break
+        case .fallback(let reason):
+            fallback = reason
+        case .transfer(let tf):
+            typealias ModeTfInitFn = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double, UInt32)
+                -> Unmanaged<AnyObject>?
+            let tfImp = unsafeBitCast(class_getMethodImplementation(modeClass, tfSel), to: ModeTfInitFn.self)
+            let mode = modeClass.perform(NSSelectorFromString("alloc")).flatMap {
+                tfImp($0.takeUnretainedValue(), tfSel, UInt32(modeW), UInt32(modeH), refreshRate, tf)?
+                    .takeRetainedValue() as? NSObject
+            }
+            let accepted = mode.map { apply([$0]) } ?? false
+            fallback = VirtualDisplayTransfer.fallbackAfterAttempt(modeCreated: mode != nil, settingsAccepted: accepted)
+            if fallback == nil { applied = tf }
+        }
+        if applied == 0 {
+            guard apply(legacyModes()) else { throw VirtualDisplayError.settingsRejected }
+        }
+        self.transferOutcome = VirtualDisplayTransfer.Outcome(requested: transfer.requested, applied: applied,
+                                                              fallback: fallback, invalidKnob: transfer.invalid)
 
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
         kept = true
@@ -136,6 +169,9 @@ final class VirtualDisplay: @unchecked Sendable {
 
     /// Refresh rate the display mode was created with.
     let requestedRefreshHz: Double
+
+    /// T-232: the transfer function requested and applied to the display's mode (`ev=vd_transfer`).
+    let transferOutcome: VirtualDisplayTransfer.Outcome
 
     /// Current mode as the system reports it, e.g. "2800x1840px 1400x920pt 120Hz" (0 Hz = the system reports none).
     var appliedModeDescription: String {
