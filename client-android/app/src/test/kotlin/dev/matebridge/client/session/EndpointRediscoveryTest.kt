@@ -267,6 +267,43 @@ class EndpointRediscoveryTest {
         assertEquals(Verdict.Accepted(wifi, ethernet), ui(connected()))
     }
 
+    @Test fun aLateTerminalStateOfTheOldStartKeepsTheCandidateTracked() {
+        // Review 3 #1: the old connection's Failed(KEY_MISMATCH) renders after the switch to candidate C.
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        assertEquals(Pick.CONNECT, r.onDiscovered(ethernet, current, last))
+        current = ethernet
+        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.KEY_MISMATCH, wifi)))
+        assertEquals(ethernet, r.candidate)
+        ui(SessionUi.Connecting(ethernet))
+        assertEquals(Verdict.Foreign(wifi, ethernet), ui(SessionUi.Failed(Cause.KEY_MISSING, ethernet)))
+    }
+
+    @Test fun aCandidateStartEndingBeforeItConnectsIsStillJudged() {
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        r.onDiscovered(other, current, last)
+        current = other
+        assertEquals(Verdict.Foreign(wifi, other), ui(SessionUi.Failed(Cause.KEY_MISMATCH, other))) // a latch, no Connecting
+    }
+
+    @Test fun aUserStartEndsTheEpisode() {
+        // Review 3 #2: the user taps "Bağlan" for paired Mac B while rediscovery tracks B as a candidate.
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        r.onDiscovered(other, current, last)
+        connectTo(other)
+        r.onUserStart()
+        assertFalse(r.active)
+        assertNull(r.expectedHost())
+        ui(SessionUi.Connecting(other))
+        assertEquals(Verdict.None, ui(connected(tag = macB))) // never Foreign: no jump back to the old address
+        assertFalse(r.active)
+    }
+
     @Test fun forgetCandidateDropsOnlyThatCandidate() {
         establish()
         dropAndFailOnce()

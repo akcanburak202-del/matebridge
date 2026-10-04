@@ -84,10 +84,14 @@ class EndpointRediscovery(
      */
     fun onUi(state: SessionUi, current: Endpoint?, nowMs: Long): Verdict {
         if (candidate != null && candidate != current) dropCandidate() // someone else replaced the candidate's session
+        // A terminal state of a superseded start (its address is not the session's any more; review 3 #1) settles nothing.
+        if (state is SessionUi.Failed && state.endpoint != null && state.endpoint != current) return Verdict.None
         if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(state.endpoint, current, nowMs)
         if (candidate != null && !candidateStarted) {
             if (state is SessionUi.Connecting && state.endpoint == candidate) {
                 candidateStarted = true
+            } else if (state is SessionUi.Failed && state.endpoint == candidate) {
+                candidateStarted = true // the candidate's own start ended before connecting (a latch): judged below
             } else if (state is SessionUi.StoredTrust || state is SessionUi.Failed) {
                 // The candidate's start may end like this without connecting (an unresolved pairing, a latch). It cannot
                 // be told from a late state of the old session: stop tracking; the machine's host gate still holds.
@@ -233,6 +237,12 @@ class EndpointRediscovery(
 
     /** [ep] answered as another host in this episode: no automatic start goes there (T-151's pick fallback included). */
     fun isSkipped(ep: Endpoint): Boolean = active && ep in foreign
+
+    /**
+     * The user started a connection themselves ("Bağlan", a typed address, "Eşleş", …): the episode is over (review 3 #2),
+     * so the host they picked is never judged against the old one and the app never jumps back to the old address.
+     */
+    fun onUserStart() = reset()
 
     /** The transport was applied again, the activity stopped, or the user disconnected: forget the episode (not [known]). */
     fun reset() {

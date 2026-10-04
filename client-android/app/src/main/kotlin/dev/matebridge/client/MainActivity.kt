@@ -1990,7 +1990,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             else -> return
         }
         ui.post {
-            if (rediscoveryEligible() && currentEndpoint == left) connect(old, ConnectOrigin.DISCOVERY)
+            // Not after a user start (it ended the episode) or once the session moved on.
+            if (rediscovery.active && rediscoveryEligible() && currentEndpoint == left) connect(old, ConnectOrigin.DISCOVERY)
         }
     }
 
@@ -2075,6 +2076,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return false
         }
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
+        if (!origin.automatic) rediscovery.onUserStart() // T-227: the user's choice ends a rediscovery episode
         currentEndpoint = ep
         forgetNotice = false
         forgetFailed = false

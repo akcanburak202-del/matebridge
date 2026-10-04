@@ -45,12 +45,17 @@ sealed interface SessionUi {
     data class Disconnected(val cause: Cause, val retryInMs: Long) : SessionUi
 
     /**
-     * Terminal until the user retries: no automatic reconnect. [endpoint] (T-227): set for [Cause.WRONG_HOST] only, the
-     * address of the start that was refused (a late one of a superseded start must not be blamed on the next address).
+     * Terminal until the user retries: no automatic reconnect. [endpoint] (T-227): the address of the start that ended
+     * (set by the session machine), so a late one of a superseded start is not blamed on the next address. Not part of
+     * equality.
      * [Cause.HOST_SLEEP] (BYE HOST_SLEEP, T-133): the Mac went
      * to sleep; nothing is sent to it (no reconnect, no automatic wake) until a user action or the next foreground.
      */
-    data class Failed(val cause: Cause, val endpoint: Endpoint? = null) : SessionUi
+    data class Failed(val cause: Cause, val endpoint: Endpoint? = null) : SessionUi {
+        // [endpoint] attributes the state to its start (T-227); it is not part of what the state *is*.
+        override fun equals(other: Any?) = other is Failed && other.cause == cause
+        override fun hashCode() = cause.hashCode()
+    }
 
     enum class Cause {
         LOST, HOST_CLOSED, BUSY, REJECTED, VERSION_MISMATCH, PROTOCOL_ERROR, CONNECT_FAILED, KEY_MISSING, KEY_STORE_FAILED, HOST_SLEEP,
