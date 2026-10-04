@@ -9,3 +9,4 @@ Aşama 0 deneyleri. Her probe bağımsız, küçük ve tek bir soruyu cevaplar. 
 | `pen-sink-probe/` (Swift) | Sentetik basınç/eğim olaylarını macOS uygulamaları kalem olarak görüyor mu? | T-005 |
 | `aaudio-probe/` (Android, NDK) | Tablette AAudio MMAP var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük? | T-099 |
 | `hdr-probe/` (Swift + Android) | Sanal ekran HDR (EDR) bildirebilir mi, SCK/VT 10-bit PQ hattı ve tablette HDR10 gösterim çalışıyor mu? | T-226 |
+| `color-range-probe/` (Swift) | HEVC bit akışında siyah gerçekten Y=0 mı, SPS VUI `video_full_range_flag` ve renk açıklaması ne? | T-230 |
