@@ -1,7 +1,7 @@
 ---
 id: T-172
 title: Record decision 0021 and correct the latency and late-input prose
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: [T-170]
@@ -65,7 +65,9 @@ Source: external architecture review 2026-10-03 (H05, LM4, M04); verification: d
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+1. T-170 verisini host loglarından çıkar (yapıldı: 8.157 pencere, 0021 "Veri" bölümü).
+2. Seçenekten bağımsız metin düzeltmeleri: PROTOCOL §0x22, §6, §4 "Kabul edilen davranış"; LOGGING `unacked_bytes` notu ve SCK kayması notu (yapıldı; `gen.py --check` yeşil).
+3. Kullanıcıya A/B seçimi sorulur (veri B'yi gösteriyor). B seçilirse `video_frame_origin` fixture'ı ve host/istemci takip kartları.
 
 ## Handoff
 

@@ -84,6 +84,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
   - `unacked_bytes`, `notsent_bytes`: **tahmin**, çünkü herkese açık API bu ikisini ayırmaz.
     - `unacked_bytes = min(sndbuf_bytes, snd_cwnd, snd_wnd)`: Nagle kapalı, pencere izin veriyorsa bayt yoldadır.
     - `notsent_bytes = sndbuf_bytes − unacked_bytes`.
+    - `snd_cwnd` ≫ `sndbuf_bytes` iken (çoğu an) bu ayrım anlamsızdır: `unacked_bytes = sndbuf_bytes`, `notsent_bytes = 0` çıkar. Bu durumda `unacked_bytes`'ı yalnız `sndbuf_bytes` (tampondaki toplam) olarak okuyun (karar 0021).
   - `user_pending_bytes`: `bsd` soketinde çekirdeğin henüz almadığı, kullanıcı alanında bekleyen bayt. `nw`'de `na`.
   - `loss_recovery=1`: okuma anında TCP kayıp kurtarmadaydı (`TCPCI_FLAG_LOSSRECOVERY`).
 - `D net ev=tcp_snap … trigger=send_gap`: ses `ev=send_gap` satırının hemen ardından kontrol soketinin anlık durumu. Alanlar `ev=tcp` ile aynıdır. `*_delta` son `ev=tcp` satırından bu yanadır ve tabanı ilerletmez. `send_gap` saniyede en çok 5 kez yazıldığı için ek okuma da en çok 5'tir.
@@ -401,7 +402,7 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 
 ## Tablet gecikme aşamaları (tablet, `MB/render`/`MB/decoder`, T-168, karar 0021)
 
-Tüm aşamalar host'un yakalama damgasından (`VIDEO_FRAME.capture_time_us`, SCK PTS) tablet saatine ölçülür (`ClockSync` ofseti). Hiçbiri "ekranda görünme" değildir. Ayrıca SCK PTS'nin geri çağrıya göre ~6,6 ms ileride olması (karar 0021) bu sayılarda **yoktur**; analizde host'un `pts_vs_deliv` değeri eklenir. Değerler işaretlidir (kırpma yok), log penceresi başına (10 sn) p50/p95/p99/max verilir; örnek yoksa `-`.
+Tüm aşamalar host'un yakalama damgasından (`VIDEO_FRAME.capture_time_us`, SCK PTS) tablet saatine ölçülür (`ClockSync` ofseti). Hiçbiri "ekranda görünme" değildir. Ayrıca SCK PTS'nin geri çağrıya göre ileride olması (karar 0021; 2026-10-03/04 host loglarında pencere p50'si ~7 ms ve ~15 ms civarında iki kümede, sabit değil) bu sayılarda **yoktur**; analizde host'un aynı pencerelerdeki `pts_vs_deliv` değeri eklenir. Değerler işaretlidir (kırpma yok), log penceresi başına (10 sn) p50/p95/p99/max verilir; örnek yoksa `-`.
 
 - **`MB/render ev=stats`** satırının sonuna eklenenler:
   - `cap_dec_p50_us= cap_dec_p95_us= cap_dec_p99_us= cap_dec_max_us=`: yakalama damgası → decoder çıkışı. Pacing, `releaseOutputBuffer`, SurfaceFlinger ve panel dahil değil. Sonradan atılan kareler de sayılır.

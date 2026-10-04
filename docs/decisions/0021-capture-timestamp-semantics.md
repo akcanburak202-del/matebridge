@@ -40,6 +40,15 @@ Seçenekten bağımsız olarak hemen yapılacak metin düzeltmeleri:
 1. Seçeneğin T-170 verisine göre seçilmesini ve o zamana kadar yalnızca metnin düzeltilmesini kabul ediyor musun?
 2. **Gecikme bütçeleri (manifest §5 soru 14):** bütçelerin incelemenin önerdiği 45/70 ms ile şimdi değil, optik ölçümden (T-174) sonra belirlenmesine katılıyor musun? Bütçe kararı ertelendi ve henüz numarası yok.
 
+## Veri (2026-10-04, T-172)
+
+Kaynak: host `ev=latency` satırları, `pts_vs_deliv_ms_p1_50_99` (T-170), `~/Library/Logs/MateBridge/host*.log` 2026-10-03 akşam – 2026-10-04 öğlen, 8.157 pencere (10 sn), USB, Günlük/Oyun modları, 60 ve 120 Hz.
+
+- **Pencere içi yayılım (p99 − p1):** p50 5,5 ms, p90 14,8 ms, p99 16,6 ms, en çok 21,6 ms. Yalnız pencerelerin %20'sinde < 1 ms.
+- **Pencere p50'si iki kümede:** ~7–8 ms ve ~14–15 ms (yaklaşık bir ve iki 120 Hz periyodu). Sanal ekranın 60/120 Hz olmasıyla açıkça ayrışmıyor.
+- **Sonuç:** kayma sabit değil; kararın kuralına göre (p99 − p1 < 1 ms koşulu tutmuyor) **(B) yeniden önerilir**. Kullanıcı seçimi bekleniyor.
+- Metin düzeltmeleri (§0x22, §6, §4, LOGGING) seçenekten bağımsız olarak yapıldı.
+
 ## Sonuçlar
 - **Kazanılan:** host ve tablet sayıları aynı başlangıçtan ölçülüyormuş gibi karşılaştırılmaz. Belgeler kodun gerçekten ölçtüğünü söyler. T-072'nin açık sorusu kapanır.
 - **Kaybedilen:** (A)'da kayma tablet ekranında görünmez, analizde eklenir.

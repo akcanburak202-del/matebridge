@@ -312,7 +312,7 @@ Kalem örnekleri **toplu** gönderilir. Bir Android `MotionEvent`'in bütün ge�
 - Temas sürerken araç değişirse (çift dokunmayla silgi modu dahil) **yeni araç kilitli başlar**: vuruşun kalanı hover olarak işlenir, yeni araçla çizmek için kalemi kaldırıp yeniden basmak gerekir.
 - **Watchdog kilit kurmaz** (§7). Watchdog kapanışından sonra gelen vuruş ortası örnekleri yeni bir vuruş başlatır; kısa bir ağ takılmasında çizginin kalanı kaybolmaz, iki vuruşa bölünür.
 
-**Kabul edilen davranış:** Bağlantı tıkanıp host watchdog'u çalıştıktan sonra, kuyrukta bekleyen bir vuruş (tam ya da yarıda kalmış) geç de olsa çizilir. Bu takılı girdi yaratmaz, çünkü vuruşun bırakma örneği aynı sıralı akışta arkasından gelir. Gecikmenin üst sınırı istemci kuyruk sınırıdır (§5, 1 sn).
+**Kabul edilen davranış:** Bağlantı tıkanıp host watchdog'u çalıştıktan sonra, kuyrukta bekleyen bir vuruş (tam ya da yarıda kalmış) geç de olsa çizilir. Bu takılı girdi yaratmaz, çünkü vuruşun bırakma örneği aynı sıralı akışta arkasından gelir. Gecikmenin gerçek üst sınırı istemci kuyruğu (§5, 1 sn) **değildir**: istemcinin çekirdek soket tamponuna geçmiş baytların yaş sınırı yoktur. Gerçek sınır host'un 5 sn sessizlik kapanışıdır (§6). 1,5–5 sn'lik bir tıkanmadan sonra release-all ve kilit uygulanır, ama tamponda bekleyen tam tıklamalar, tuşlar ve vuruşlar geç de olsa uygulanabilir (karar 0021; eski girdi politikası karar 0025 / T-199).
 
 ### 0x11 KEY (C→H)
 
@@ -468,7 +468,7 @@ PONG (PING'i alan taraf hemen cevaplar):
 | frames_rendered | u32 | |
 | frames_dropped | u32 | Eskidiği için atılan (§5) |
 | decode_time_avg_us | u32 | Decoder'a veriş → çıkış |
-| latency_avg_us | u32 | Yakalama → ekranda gösterim, saat farkı düzeltilmiş tahmin (§6). Bilinmiyorsa 0. |
+| latency_avg_us | u32 | Yakalama damgası (`capture_time_us`) → çözücü çıktısı, saat farkı düzeltilmiş tahmin (§6). Ekranda gösterim (pacing, SurfaceFlinger, panel) dahil değildir; SCK damgasının geri çağrıya göre ileride olması da dahil değildir (karar 0021). Bilinmiyorsa 0. |
 | bytes_received | u32 | Video bağlantısından alınan bayt |
 
 ### 0x23 KEYFRAME_REQUEST (C→H)
@@ -585,7 +585,7 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 - Saat farkı tahmini (istemci):
   - `rtt = now − echo_time_us`
   - `offset = responder_time_us − (echo_time_us + rtt/2)`, en düşük `rtt`'li son örneklerle
-  - `latency = gösterim_zamanı − (capture_time_us − offset)`
+  - `latency = çözücü_çıktı_zamanı − (capture_time_us − offset)` (ekranda gösterim değil; karar 0021)
 
 ## 7. Girdi güvenliği (AGENTS.md: girdi asla takılı kalmaz)
 
