@@ -78,12 +78,16 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         const val HEADER_LINE = "seq,capture_us,ready_ns,now_vsync_last_ns,period_ns,epoch,deadline_ns,dev_ns," +
             "d_ns,jitter_ns,earliest_ns,slot_ns,lock_slot_ns,k,acquire_ns,bad_run,path,late_drop,collided," +
             "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action," +
-            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre"
+            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns"
         const val COLS = 24
         /** Receive-path CSV columns after the presentation ones: six from T-073, seven from T-077. */
         private const val RX_CSV = 13
-        /** CSV columns: the [COLS] presentation columns plus the receive-path columns. */
-        const val CSV_COLS = COLS + RX_CSV
+        /**
+         * CSV columns: the [COLS] presentation columns, the receive-path columns, then T-220's `latch_slot_ns` and
+         * `latch_period_ns` (the vsync the client's presentation metric attributed the release to and its panel period,
+         * [HoldMeter.releasedSlot]; 0 = not released).
+         */
+        const val CSV_COLS = COLS + RX_CSV + 2
         /**
          * Columns of the receive ring: seq, capture_us, bytes, recv, decrypted, queued, input, action (T-073), then the
          * record open stamps and the decoder input steps (T-077).
@@ -124,6 +128,8 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
     }
 
     private val data = LongArray(capacity * COLS)
+    /** T-220: release-time vsync and period of each row ([onLatch]), two per row, same index as [data]'s rows. */
+    private val latch = LongArray(capacity * 2)
     // Receive ring (T-073), slot = frameSeq % capacity, valid when R_SEQ matches. Written by the video connection
     // thread (onRecv), the queue (onRx*) and the decoder input thread (onInput); joined to the rows above by seq.
     private val rx = LongArray(capacity * RX_COLS).also { for (i in 0 until capacity) it[i * RX_COLS + R_SEQ] = -1 }
@@ -154,6 +160,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         d[b + C_SLOT] = slotNs; d[b + C_LATE] = if (lateDrop) 1 else 0; d[b + C_COLL] = if (collided) 1 else 0
         d[b + C_RSLOT] = 0; d[b + C_RELNS] = 0; d[b + C_RENDER] = 0
         d[b + C_ACTION] = action.toLong(); d[b + C_OWN] = ownSlotNs
+        latch[(id % capacity).toInt() * 2] = 0; latch[(id % capacity).toInt() * 2 + 1] = 0
         count = id + 1
         return id
     }
@@ -178,6 +185,16 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
     fun onMove(id: Long) {
         val b = base(id); if (b < 0) return
         data[b + C_ACTION] = ACTION_MOVE.toLong()
+    }
+
+    /**
+     * T-220: the frame was handed to the codec and the presentation metric attributed it to the vsync at [slotNs] on a
+     * panel of [periodNs] (after the release call returned, on the grid of that moment). `sim.py --holds` uses them.
+     */
+    fun onLatch(id: Long, slotNs: Long, periodNs: Long) {
+        if (base(id) < 0) return
+        val i = (id % capacity).toInt() * 2
+        latch[i] = slotNs; latch[i + 1] = periodNs
     }
 
     private fun rxBase(seq: Long): Int {
@@ -258,6 +275,8 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                 }
             }
             for (c in 0 until RX_CSV) { out.append(','); if (rb >= 0) appendRx(out, rb, c) else out.append(if (c == 5) "none" else "0") }
+            val li = (id % capacity).toInt() * 2 // T-220
+            out.append(',').append(latch[li].toString()).append(',').append(latch[li + 1].toString())
             out.append('\n')
         }
         // Frames that were received but never decoded/presented (dropped, gated, still queued): one row each, the
@@ -271,7 +290,8 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                 out.append(if (c == C_PATH) "none" else if (c == C_ACTION) RX_ACTIONS.getOrElse(rx[rb + R_ACTION].toInt()) { "?" } else "0").append(',')
             }
             for (c in 0 until RX_CSV) { if (c > 0) out.append(','); appendRx(out, rb, c) }
-            out.append('\n')
+            out.append(",0,0\n") // T-220 latch_slot_ns, latch_period_ns: never released
+
         }
     }
 

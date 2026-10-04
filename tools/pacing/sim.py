@@ -35,7 +35,7 @@ class HoldMeter:
         else: s.run_start=cap; s.run_gap=0
         s.last_dec=cap; s.dec.append((cap,s.run_start,s.run_gap)); del s.dec[:-s.DEC_MAX]
     def presented(s,cap,slot,P):
-        """Returns (n, hold) of the interval this release confirms, or None (not judged)."""
+        """Returns (hz, n, hold) of the interval this release confirms (hz of THAT interval), or None (not judged)."""
         if s.last is not None:
             d=slot-s.last[1]
             if abs(d)<P//2: s.last=(cap,slot,P); return None
@@ -54,9 +54,10 @@ class HoldMeter:
         if g<=0 or start is None or pc<start or pc>=lc: return None
         n=jround(g/lp)
         if n<1 or n>s.MAX_N or abs(g-n*lp)>s.TOL: return None
-        return n,jround((ls-ps)/lp)
+        return round(1e9/lp),n,jround((ls-ps)/lp)
 def latch(x):
-    """The vsync a released row was due on (HoldMeter.latchSlot): its slot, unless handed over after the deadline."""
+    """Older traces (no `latch_slot_ns`): the vsync a released row was due on, rebuilt like HoldMeter.latchSlot from the
+    schedule-time grid (can differ from the client's release-time grid across a panel-rate change)."""
     req=int(x['released_slot_ns']); P=int(x['period_ns']); last=int(x.get('now_vsync_last_ns') or 0)
     rel=int(x.get('release_ns') or 0); dl=int(x.get('deadline_ns') or 0)
     if last<=0 or rel<=0 or P<=0: return req
@@ -65,15 +66,18 @@ def latch(x):
     return earliest if req<earliest-P//2 else req
 def holds(rows):
     """rows: every scheduled frame of a trace, in record order. Returns {(hz, n): Counter(hold)} of the judged
-    intervals. A row released at once ('now': no slot in the trace) breaks the shown sequence."""
+    intervals. With the client's own `latch_slot_ns`/`latch_period_ns` (traces since T-220's review) every released row
+    counts with exactly the client's vsync and period, a row released at once ('now') too. Older traces: the vsync is
+    rebuilt from the schedule-time grid and a 'now' row (no slot) breaks the shown sequence."""
     m=HoldMeter(); groups={}
     for x in rows:
         m.decoded(int(x['capture_us']))
-        if x['action']=='now': m.brk(); continue
-        if x['action'] not in VISIBLE or x['released_slot_ns'] in ('','0'): continue
-        P=int(x['period_ns'])
-        v=m.presented(int(x['capture_us']),latch(x),P)
-        if v: groups.setdefault((round(1e9/P),v[0]),Counter())[v[1]]+=1
+        own=int(x.get('latch_slot_ns') or 0); ownP=int(x.get('latch_period_ns') or 0)
+        if own and ownP: v=m.presented(int(x['capture_us']),own,ownP)
+        elif x['action']=='now': m.brk(); continue
+        elif x['action'] not in VISIBLE or x['released_slot_ns'] in ('','0'): continue
+        else: v=m.presented(int(x['capture_us']),latch(x),int(x['period_ns']))
+        if v: groups.setdefault((v[0],v[1]),Counter())[v[2]]+=1
     return groups
 def holds_lines(groups):
     judged=long=0
@@ -96,11 +100,26 @@ if a.holds_selftest:
     g=holds(rows); c=g[(120,2)]
     assert list(g)==[(120,2)] and sum(c.values())==88 and c[2]==76 and c[4]==10 and c[3]==1 and c[1]==1, g
     for line in holds_lines(g): print('holds self-test OK: '+line)
+    # A trace with the client's latch columns across a 120 -> 60 Hz change. Frames 40 and 41 were scheduled on the old
+    # grid (their period_ns / released_slot_ns are 120 Hz ones) but released on the new one: only latch_* count. Frame
+    # 60 was released at once ('now'). The interval 38 -> 39 is confirmed by frame 40 and stays a 120 Hz one; 39 -> 40
+    # spans the change and is not judged. Expected: 120 Hz cadence 2: 39 exact; 60 Hz cadence 1: 38 exact.
+    P1=8_333_333; P2=16_666_667; rows=[]
+    for k in range(80):
+        if k<40: slot=10**9+k*2*P1; lp=P1; per=P1; rs=slot; act='release'
+        else: slot=10**9+80*P1+(k-39)*P2; lp=P2; per=P1 if k<42 else P2; rs=slot-P2+P1 if k<42 else slot; act='release'
+        if k==60: act='now'; rs=0; per=0
+        rows.append({'capture_us':str(k*16_667),'period_ns':str(per),'action':act,'released_slot_ns':str(rs),
+                     'now_vsync_last_ns':str(10**9),'deadline_ns':'6000000','release_ns':str(slot-10_000_000),
+                     'latch_slot_ns':str(slot),'latch_period_ns':str(lp)})
+    g=holds(rows)
+    assert {k:dict(v) for k,v in g.items()}=={(120,2):{2:39},(60,1):{1:38}}, g
+    for line in holds_lines(g): print('holds self-test OK (latch columns): '+line)
     raise SystemExit
 if a.trace is None: ap.error('trace is required')
 if a.holds:
-    # Planned hold of each released frame (released_slot_ns distance to the previous released frame, in vsyncs),
-    # per panel rate and content cadence n (see holds()). Exact = held n vsyncs.
+    # The client's presentation metric (see HoldMeter / holds()): per panel rate and content cadence n of the judged
+    # interval, the hold distribution; exact = held n vsyncs. Then ready->slot p50 and paths (schedule-time values).
     allrows=list(csv.DictReader(open(a.trace)))
     t=[x for x in allrows if x['action'] in VISIBLE and x['released_slot_ns'] not in ('','0')]
     paths=Counter(); lat={}

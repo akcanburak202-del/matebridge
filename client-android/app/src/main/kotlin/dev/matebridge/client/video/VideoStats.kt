@@ -379,9 +379,9 @@ class VideoStats {
 
 /**
  * T-220: the presentation metric, one calculation for every pacer (adaptive, fixed buffer, buffer 0). Each frame
- * released for rendering is reported with the vsync it was released for ([latchSlot]: the slot the pacer asked for, or
- * the earliest vsync a buffer queued at the release can still make); its hold is the distance to the next shown
- * frame's vsync, in panel periods, compared with the content cadence n:
+ * released for rendering is reported with the vsync it was released for ([releasedSlot]: the slot the pacer asked for,
+ * or the earliest vsync a buffer queued when the release call returned can still make); its hold is the distance to
+ * the next shown frame's vsync, in panel periods, compared with the content cadence n:
  *  - content runs: decoded frames whose capture gaps all stay within [RUN_TOLERANCE_NS] of the run's first gap are one
  *    continuous run ([onDecoded], decode order = capture order). Two shown frames are judged only when the later one's
  *    run reaches back to the earlier one (no source gap, no irregular capture in between), the panel rate is the same,
@@ -417,6 +417,20 @@ class HoldMeter {
             if (renderNs <= 0) return earliest
             val requested = renderNs + leadNs
             return if (requested < earliest - grid.periodNs / 2) earliest else requested
+        }
+
+        /**
+         * T-220 review: runs [release] (the codec's `releaseOutputBuffer`) and [report]s the vsync the frame is due on
+         * and the panel period, from [clock] and [vsync]'s grid read AFTER the call returned. A release that stalled past its slot's deadline
+         * inside the call is attributed to the next vsync it can make, not to the slot it was meant for, so a missed
+         * deadline is never hidden. The same for every pacer (buffer 0: [renderNs] 0).
+         */
+        inline fun releasedSlot(
+            vsync: VsyncClock, renderNs: Long, clock: () -> Long, release: () -> Unit, report: (slotNs: Long, periodNs: Long) -> Unit,
+        ) {
+            release()
+            val g = vsync.grid() // one snapshot: the slot and its period belong to the same grid
+            report(latchSlot(g, renderNs, vsync.leadNs(), clock()), g.periodNs)
         }
     }
 

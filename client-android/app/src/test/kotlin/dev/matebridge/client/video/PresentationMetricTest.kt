@@ -91,6 +91,48 @@ class PresentationMetricTest {
         assertEquals(0L, HoldMeter.latchSlot(VsyncClock.Grid(-1, p120, 0, 0), 0, lead, slot))
     }
 
+    @Test fun releaseThatStallsPastTheDeadlineCountsForTheNextVsync() {
+        // T-220 review: the clock is read once the release call returned. A call that starts 1 ms before its slot's
+        // deadline and returns 2 ms later is attributed to the next vsync (a missed deadline is never hidden).
+        val clk = VsyncClock(120f).also { it.onVsync(0); it.setDisplayTiming(0, 13_330_000L) }
+        val g = clk.grid()
+        val slot = g.lastNs + 4 * g.periodNs
+        val render = slot - clk.leadNs()
+        var now = slot - g.deadlineNs - ms
+        var got = LongArray(2)
+        fun release(stallNs: Long) = HoldMeter.releasedSlot(clk, render, { now }, { now += stallNs }) { s, p -> got = longArrayOf(s, p) }
+        release(0)
+        assertEquals("on time", slot, got[0])
+        now = slot - g.deadlineNs - ms
+        release(2 * ms)
+        assertEquals("stalled past the deadline inside the call", slot + g.periodNs, got[0])
+        assertEquals(g.periodNs, got[1])
+        // Buffer 0 (released at once): the earliest vsync after the call returned.
+        now = slot - g.deadlineNs - ms
+        HoldMeter.releasedSlot(clk, 0, { now }, { now += 2 * ms }) { s, _ -> got[0] = s }
+        assertEquals(slot + g.periodNs, got[0])
+        // The panel rate changes during the call: slot and period come from the grid after it (one snapshot).
+        HoldMeter.releasedSlot(clk, render, { now }, { clk.setNominalHz(60f) }) { s, p -> got = longArrayOf(s, p) }
+        assertEquals(clk.grid().periodNs, got[1])
+        assertTrue("period ${got[1]}", got[1] > 16_000_000L)
+    }
+
+    @Test fun traceRecordsTheReleaseTimeVsyncAndPeriod() {
+        val t = PaceTrace(capacity = 8)
+        val id = t.record(1, 1_000, 2_000, null, 5_000_000, false, false, 0)
+        t.onRelease(id, 5_000_000, 4_000_000, 0)
+        t.onLatch(id, 13_333_333, 8_333_333)
+        val id2 = t.record(2, 17_000, 18_000, null, 0, false, false, 0) // not released
+        t.onDiscard(id2, 19_000, PaceTrace.ACTION_REPLACE)
+        val lines = StringBuilder().also { t.writeCsv(it) }.toString().trim().split("\n")
+        val h = lines[0].split(",")
+        assertEquals(listOf("latch_slot_ns", "latch_period_ns"), h.takeLast(2))
+        assertEquals(PaceTrace.CSV_COLS, h.size)
+        assertEquals(listOf("13333333", "8333333"), lines[1].split(",").takeLast(2))
+        assertEquals(listOf("0", "0"), lines[2].split(",").takeLast(2))
+        assertEquals(PaceTrace.CSV_COLS, lines[2].split(",").size)
+    }
+
     @Test fun onceSlotsAreReportedSchedulerAndCallbackNoLongerCount() {
         // Legacy callers (no slot reported) keep the old definition; the renderer reports slots, so the metric is one.
         val legacy = VideoStats()
