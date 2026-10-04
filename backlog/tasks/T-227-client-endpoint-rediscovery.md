@@ -1,7 +1,7 @@
 ---
 id: T-227
 title: Client — when the stored Mac address stops answering, rediscover the host via Bonjour (Mac moved from Wi-Fi to Ethernet)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -33,7 +33,17 @@ Cihaz 2026-10-04 ~22:15 (T-127 topoloji 2): Mac Wi-Fi'den (192.168.1.107) Ethern
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır; NSD bir hizmeti **bir kez** bildirir. `onDiscovered()` → `wakeConnect.onDiscovered(current, disconnected=lastUi is Disconnected, …)` zaten "oturum Disconnected iken bulunan her uç noktaya bağlan" diyor. Kopan oturumu `SessionMachine` aynı adrese 1→5 sn geri çekilmeyle (connect zaman aşımı 5 sn) yeniden dener. Sorun: Mac'in adresi değişince (Wi-Fi → Ethernet, aynı hizmet adı) NSD yeni bir `onServiceFound` vermiyor, bu yüzden `onDiscovered` hiç çağrılmıyor. Uygulama yeniden açılınca yeni keşif doğru adresi buluyor.
+
+1. **`EndpointRediscovery` (session/, saf, saat enjekte, ana thread)**:
+   - `onUi(state, current, nowMs)`: o anki uç noktanın art arda düşüşlerini sayar (`Disconnected(retryInMs>0)`'a her geçiş bir başarısızlıktır, ilk düşüş anı da tutulur). `Connected` başarısızlık sayacını sıfırlar ve host kimliğini (`HostTag`, kimliği doğrulanmış oturum) öğrenir. Uç nokta değişince ya da başka bir durum gelince (Failed, eşleşme istemi, Idle/Searching) sayaç sıfırlanır.
+   - `shouldRestart(nowMs, eligible)`: `eligible` (Wi-Fi keşif modu, manuel adres değil, USB değil, kullanıcı kesmedi, Mac uyku demedi) ve (≥ 2 başarısızlık **ya da** ilk düşüşten bu yana ≥ 4 sn) ise NSD keşfini yeniden başlat der; sonraki yeniden başlatmalar 8 → 16 → 30 sn aralıkla (üst sınır) sürer. Kayıtlı adres denemeleri ve uyandırma yolu değişmez: yeniden keşif onların **yanına** gelir.
+   - `onDiscovered(ep, current, ui)`: yeniden keşif etkinken, eski adresten farklı ve "yabancı" işaretli olmayan bir uç nokta bulunursa, oturum Disconnected **ya da Connecting(eski adres)** durumundaysa ona bağlanılmasını söyler (NSD sonucu bir kez geldiği için Connecting sırasında kaybolmasın). Adayı ve eski adresi hatırlar.
+   - Kimlik: aday `Connected(hostTag)` olunca öğrenilen kimlikle karşılaştırılır. Aynıysa (ya da önceden kimlik yoksa) `Accepted(old,new)`: kayıt güncellenir. Farklı kimlik (başka eşleşmiş Mac) ya da `PairingNeedsUser` (eşleşmemiş Mac) → `Foreign`: o adres bu bölüm için yabancı işaretlenir ve çağıran eski adrese geri bağlanır (geri çekilme sürer).
+2. **`MacDiscovery.restart()`**: dinleyiciyi durdurup aynı nesneyle yeni nesil keşif başlatır (NSD hizmeti yeniden bildirir).
+3. **Log** (`docs/LOGGING.md`): `ev=endpoint_rediscover reason=connect_failed restart=N`, `ev=endpoint_rediscover_found old=*.107 new=*.106`, `ev=endpoint_rediscover_result result=accepted|foreign`; adreslerin yalnız son okteti (`EndpointRediscovery.octet()`).
+4. **JVM testleri** (`EndpointRediscoveryTest`): N başarısızlık → yeniden başlatma; zaman eşiği; aralık/üst sınır; yeni adres → bağlan + Accepted; sonuç yok → yalnızca yeniden başlatma, eski adres denemeleri etkilenmez; farklı kimlik/PairingNeedsUser → Foreign ve yabancı adres yeniden kabul edilmez; Connected/istem sırasında bağlanma yok; uygun değilken (USB, manuel) yeniden başlatma yok.
+5. **MainActivity bağlantısı (kart `files:` dışında — Açık sorular)**: `render()` → `rediscovery.onUi(...)` ve sonucuna göre log/eski adrese dönüş; `wolTicker` → `shouldRestart(...)` → `pairPick.clearSeen(); discovery?.restart()`; `onDiscovered()` → `rediscovery.onDiscovered(...)` ile `wakeConnect.onDiscovered(...)` VEYA'lanır; `applyTransport()/onStop()/disconnect` → `rediscovery.reset()`.
 
 ## Handoff
 
