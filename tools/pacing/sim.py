@@ -2,49 +2,100 @@ import argparse, csv, statistics as st
 # Constant-playout-delay replay of a pace trace. Reference for the client's ConstantPlayoutPacer (T-080).
 # Default: the 60 Hz table. --hz 120: 120 Hz rows and continuity. --idle-ms/--refill: the client's idle rule
 # (window cleared after a ready gap > idle-ms, C kept, C may only rise until the window holds `refill` samples).
-# --q/--L/--hold: one run instead of the table. --holds (T-208): hold distribution of a trace's released frames;
-# --holds-selftest checks it on a synthetic trace with drops.
+# --q/--L/--hold: one run instead of the table. --holds (T-208, T-220): the client's presentation metric (hold of each
+# released frame against its content cadence, the `skip_pct` rules) on a trace; --holds-selftest checks it on a
+# synthetic trace (the same vector as the JVM test PresentationMetricTest.simSelfTestVector).
 ap=argparse.ArgumentParser(); ap.add_argument('trace',nargs='?'); ap.add_argument('--hz',type=int,default=60)
 ap.add_argument('--idle-ms',type=float,default=None); ap.add_argument('--refill',type=int,default=32)
 ap.add_argument('--q',type=float); ap.add_argument('--L',type=float,default=6.0); ap.add_argument('--hold',type=float,default=2.0)
-ap.add_argument('--holds',action='store_true',help='T-208: hold distribution of the released frames instead of the replay')
-ap.add_argument('--holds-selftest',action='store_true',help='T-208: check --holds on a synthetic trace with drops')
+ap.add_argument('--holds',action='store_true',help='T-208/T-220: presentation metric of the released frames instead of the replay')
+ap.add_argument('--holds-selftest',action='store_true',help='T-220: check --holds on a synthetic trace')
 a=ap.parse_args()
+import math
 from collections import Counter
 VISIBLE=('release','move')
+def jround(x): return math.floor(x+0.5) # Kotlin Math.round
+class HoldMeter:
+    """T-220: the client's presentation metric, rule for rule (VideoStats.kt `HoldMeter`; keep both in step).
+    Decoded frames (every trace row, in record order = decode order) form content runs: capture gaps within 1 ms of
+    the run's first gap. A released frame is reported with the vsync it was released for (latch()). Two shown frames
+    are judged when the later one's run reaches back to the earlier one, the panel rate is the same (5 %), and the run
+    gap is n periods +- 1 ms (1 <= n <= 3): hold < n short, = n exact, > n long (a frame dropped in between makes its
+    predecessor's hold long). A release for the same vsync as the previous one replaces it (never shown), so an
+    interval is judged only when the next release confirms it (the last one of a trace never is)."""
+    TOL=1_000_000; MAX_N=3; DEC_MAX=64
+    def __init__(s): s.reset()
+    def reset(s):
+        s.dec=[]; s.last_dec=None; s.run_start=None; s.run_gap=0; s.brk()
+    def brk(s): s.last=None; s.prev=None
+    def decoded(s,cap):
+        if s.last_dec is not None and cap>s.last_dec:
+            g=(cap-s.last_dec)*1000
+            if s.run_gap==0 or abs(g-s.run_gap)>s.TOL: s.run_start=s.last_dec; s.run_gap=g
+        else: s.run_start=cap; s.run_gap=0
+        s.last_dec=cap; s.dec.append((cap,s.run_start,s.run_gap)); del s.dec[:-s.DEC_MAX]
+    def presented(s,cap,slot,P):
+        """Returns (n, hold) of the interval this release confirms, or None (not judged)."""
+        if s.last is not None:
+            d=slot-s.last[1]
+            if abs(d)<P//2: s.last=(cap,slot,P); return None
+            if d<0: s.prev=None; s.last=(cap,slot,P); return None
+        v=None
+        if s.last is not None:
+            if s.prev is not None: v=s.judge()
+            s.prev=s.last
+        s.last=(cap,slot,P); return v
+    def judge(s):
+        (pc,ps,pp),(lc,ls,lp)=s.prev,s.last
+        if abs(pp-lp)*20>lp: return None
+        e=next((x for x in reversed(s.dec) if x[0]==lc),None)
+        if e is None: return None
+        _,start,g=e
+        if g<=0 or start is None or pc<start or pc>=lc: return None
+        n=jround(g/lp)
+        if n<1 or n>s.MAX_N or abs(g-n*lp)>s.TOL: return None
+        return n,jround((ls-ps)/lp)
+def latch(x):
+    """The vsync a released row was due on (HoldMeter.latchSlot): its slot, unless handed over after the deadline."""
+    req=int(x['released_slot_ns']); P=int(x['period_ns']); last=int(x.get('now_vsync_last_ns') or 0)
+    rel=int(x.get('release_ns') or 0); dl=int(x.get('deadline_ns') or 0)
+    if last<=0 or rel<=0 or P<=0: return req
+    t=rel+dl
+    earliest=last if t<=last else last+(t-last+P-1)//P*P
+    return earliest if req<earliest-P//2 else req
 def holds(rows):
-    """T-208. rows: every scheduled frame of a trace, in record order. Returns {(hz, n): Counter(hold)}.
-    The content cadence n comes from the ORIGINAL capture sequence (all decoded frames, also the replaced/discarded
-    ones): a pair of consecutive visible frames counts only when every capture gap from the first to the second is
-    n*P +- 1 ms (same n, same period). Its hold (released_slot_ns distance in vsyncs) is then compared to n, so a
-    frame dropped in between shows up as a long hold (2n) instead of hiding behind a wider capture gap."""
-    vis=[i for i,x in enumerate(rows) if x['action'] in VISIBLE and x['released_slot_ns'] not in ('','0')]
-    groups={}
-    for i,j in zip(vis,vis[1:]):
-        P=int(rows[i]['period_ns'])
-        if any(int(rows[k]['period_ns'])!=P for k in range(i,j+1)): continue
-        if any(rows[k]['action']=='now' for k in range(i+1,j)): continue # unpaced frame in between: no planned slot
-        gaps=[(int(rows[k+1]['capture_us'])-int(rows[k]['capture_us']))*1000 for k in range(i,j)]
-        n=round(gaps[0]/P)
-        if n<1 or n>3 or any(abs(g-n*P)>1_000_000 for g in gaps): continue
-        hold=round((int(rows[j]['released_slot_ns'])-int(rows[i]['released_slot_ns']))/P)
-        groups.setdefault((round(1e9/P),n),Counter())[hold]+=1
+    """rows: every scheduled frame of a trace, in record order. Returns {(hz, n): Counter(hold)} of the judged
+    intervals. A row released at once ('now': no slot in the trace) breaks the shown sequence."""
+    m=HoldMeter(); groups={}
+    for x in rows:
+        m.decoded(int(x['capture_us']))
+        if x['action']=='now': m.brk(); continue
+        if x['action'] not in VISIBLE or x['released_slot_ns'] in ('','0'): continue
+        P=int(x['period_ns'])
+        v=m.presented(int(x['capture_us']),latch(x),P)
+        if v: groups.setdefault((round(1e9/P),v[0]),Counter())[v[1]]+=1
     return groups
 def holds_lines(groups):
+    judged=long=0
     for (hz,n),c in sorted(groups.items()):
-        tot=sum(c.values()); ex=c[n]
-        yield f'{hz} Hz, cadence {n}: {tot} intervals, exact {100*ex/tot:.1f}%, holds '+' '.join(f'{h}:{100*v/tot:.1f}%' for h,v in sorted(c.items()))
+        tot=sum(c.values()); ex=c[n]; sh=sum(v for h,v in c.items() if h<n); lo=sum(v for h,v in c.items() if h>n)
+        judged+=tot; long+=lo
+        yield (f'{hz} Hz, cadence {n}: {tot} intervals, exact {100*ex/tot:.1f}%, short {100*sh/tot:.1f}%, long {100*lo/tot:.1f}%, '
+               'holds '+' '.join(f'{h}:{100*v/tot:.1f}%' for h,v in sorted(c.items())))
+    if judged: yield f'skip_pct (long holds, the client metric): {100*long/judged:.1f}% of {judged} judged'
 if a.holds_selftest:
-    # 60 fps on 120 Hz, 100 frames, every 10th replaced by its successor (newest wins): 89 visible intervals,
-    # 79 held 2 vsyncs, 10 held 4 (the dropped frame's slot is the next one's). Must not report 100 % exact.
+    # 60 fps on 120 Hz, 100 frames: every 10th replaced (never shown), frame 50 handed over 4 ms after its slot's
+    # deadline (due one vsync later: frame 49 held 3, frame 50 held 1). Judged 88 (the last release is unconfirmed):
+    # 10 long 4-vsync holds over a dropped frame, one long 3, one short 1, 76 exact.
     P=8_333_333; rows=[]
     for k in range(100):
-        dropped=k%10==5
+        dropped=k%10==5; slot=10**9+k*2*P
         rows.append({'capture_us':str(k*16_667),'period_ns':str(P),'action':'replace' if dropped else 'release',
-                     'released_slot_ns':'0' if dropped else str(10**9+k*2*P)})
-    c=holds(rows)[(120,2)]
-    assert sum(c.values())==89 and c[2]==79 and c[4]==10, c
-    print('holds self-test OK: '+next(holds_lines({(120,2):c})))
+                     'released_slot_ns':'0' if dropped else str(slot),'now_vsync_last_ns':str(10**9),'deadline_ns':'6000000',
+                     'release_ns':str(slot-6_000_000+4_000_000 if k==50 else slot-10_000_000)})
+    g=holds(rows); c=g[(120,2)]
+    assert list(g)==[(120,2)] and sum(c.values())==88 and c[2]==76 and c[4]==10 and c[3]==1 and c[1]==1, g
+    for line in holds_lines(g): print('holds self-test OK: '+line)
     raise SystemExit
 if a.trace is None: ap.error('trace is required')
 if a.holds:

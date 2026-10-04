@@ -8,6 +8,11 @@ package dev.matebridge.client.video
  * vsync slot ([Snapshot.readySlot], pacer only), capture -> `releaseOutputBuffer` ([Snapshot.capRel]) and capture ->
  * codec frame-rendered callback ([Snapshot.capCb]). None of them is "on screen": SurfaceFlinger and the panel come
  * after the callback.
+ *
+ * T-220: `skip_pct` ([Snapshot.skipPct]) is one presentation metric for every pacer ([HoldMeter]): the hold of each
+ * released frame against its content cadence, from the vsync it was released for. Before, it came from the adaptive
+ * pacer's own decisions in that mode and from the frame-rendered callback otherwise, so buffer 0 and adaptive did not
+ * compare.
  */
 class VideoStats {
     companion object {
@@ -35,7 +40,12 @@ class VideoStats {
         val shown: IntervalSummary = IntervalSummary.EMPTY,
         /** Average delay the pacer added versus presenting at the earliest vsync, or null when unpaced. */
         val paceAddAvgUs: Long? = null,
-        /** Percent of presentation intervals that skipped a vsync while a frame was ready, or null when unmeasured. */
+        /**
+         * T-220: percent of judged presentation intervals held longer than the content cadence ([holdLong] of
+         * [holdJudged], [HoldMeter]), the same calculation for every pacer; null when none was judged. Only a caller
+         * that never reports a presentation slot ([onReleased] without one: tests, legacy) gets the old definition: the
+         * adaptive pacer's own skips, else the callback meter.
+         */
         val skipPct: Double? = null,
         /** Diagnostic: skip percentage derived from the frame-rendered callback times (overestimates; see PresentMeter). */
         val cbSkipPct: Double? = null,
@@ -55,7 +65,27 @@ class VideoStats {
         val discarded: Long = 0,
         /** T-168: released frames whose frame-rendered callback never came (a later frame's callback came first). */
         val renderCbMissing: Long = 0,
+        /** T-220: presentation intervals judged by [HoldMeter] (continuous content, one panel rate). */
+        val holdJudged: Long = 0,
+        /** T-220: judged intervals held shorter than the content cadence (a 1-vsync hold of 60 fps on 120 Hz). */
+        val holdShort: Long = 0,
+        /** T-220: judged intervals held longer than the content cadence (a late frame, or a dropped successor). */
+        val holdLong: Long = 0,
+        /** T-220 diagnostic: the adaptive pacer's own skip decisions ([FramePacer.Decision.skipped]), or null. */
+        val schedSkipPct: Double? = null,
     )
+
+    /** T-220: [HoldMeter] counts of one `render ev=present` window ([holdWindow]). */
+    data class HoldCounts(val judged: Long, val short: Long, val long: Long) {
+        val shortPct: Double? get() = if (judged > 0) short * 100.0 / judged else null
+        val longPct: Double? get() = if (judged > 0) long * 100.0 / judged else null
+
+        /** `hold_n=<judged> hold_short_pct=<%.1f|-> hold_long_pct=<%.1f|->` (docs/LOGGING.md). */
+        fun logFields(): String {
+            fun pct(v: Double?) = v?.let { String.format(java.util.Locale.ROOT, "%.1f", it) } ?: "-"
+            return "hold_n=$judged hold_short_pct=${pct(shortPct)} hold_long_pct=${pct(longPct)}"
+        }
+    }
 
     /**
      * Raw sums of one window. T-141: each closed per-second window is added to [log], the log window (10 s by default),
@@ -70,8 +100,10 @@ class VideoStats {
         /** [PresentMeter] counts (log window only; the live window reads the meter itself). */
         var meterIntervals = 0L; var meterSkipped = 0L
         var latNeg = 0L; var discarded = 0L; var cbMissing = 0L
+        var holdJudged = 0L; var holdShort = 0L; var holdLong = 0L
 
         fun add(o: Sums) {
+            holdJudged += o.holdJudged; holdShort += o.holdShort; holdLong += o.holdLong
             received += o.received; decoded += o.decoded; rendered += o.rendered; dropped += o.dropped; bytes += o.bytes
             decodeSumUs += o.decodeSumUs; decodeCount += o.decodeCount
             latencySumUs += o.latencySumUs; latencyCount += o.latencyCount
@@ -82,6 +114,7 @@ class VideoStats {
         }
 
         fun clear() {
+            holdJudged = 0; holdShort = 0; holdLong = 0
             received = 0; decoded = 0; rendered = 0; dropped = 0; bytes = 0
             decodeSumUs = 0; decodeCount = 0
             latencySumUs = 0; latencyCount = 0
@@ -94,6 +127,11 @@ class VideoStats {
 
     private val cur = Sums()
     private val log = Sums()
+    /** T-220: the presentation metric; under this object's lock. */
+    private val holds = HoldMeter()
+    /** T-220: true once a presentation slot was reported; from then on `skip_pct` is [holds] only. */
+    private var presentationReported = false
+    private var winJudged = 0L; private var winShort = 0L; private var winLong = 0L
     /**
      * pts (frame_seq) -> time. T-168: bounded in insertion order, not by the smallest key: frame_seq restarts at 0 on
      * every video connection, and stale high keys (frames lost in a teardown) must not evict the new stream's low ones.
@@ -159,7 +197,10 @@ class VideoStats {
     }
 
     /** Stream restart: gaps must not span it. */
-    fun breakGaps() { networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence(); meter.breakSequence() }
+    fun breakGaps() {
+        networkGaps.breakSequence(); readyGaps.breakSequence(); shownGaps.breakSequence(); meter.breakSequence()
+        synchronized(this) { holds.reset() } // T-220: no presentation interval or content run spans it either
+    }
     @Synchronized fun onDropped(n: Int) { cur.dropped += n }
     @Synchronized fun onRendered() { cur.rendered++ }
 
@@ -167,10 +208,27 @@ class VideoStats {
      * T-168: a decoded frame went to `releaseOutputBuffer` for rendering at [clientUs] (`System.nanoTime() / 1000`).
      * Counts as rendered (logged as `released=`); with its [captureUs] it adds a capture -> release sample. In
      * codec-render mode the frame was registered with [awaitCallback] before the release.
+     *
+     * T-220: [slotNs] is the vsync it was released for ([HoldMeter.latchSlot], 0 = unknown) on a panel of [periodNs];
+     * it feeds the presentation metric ([HoldMeter]).
      */
-    @Synchronized fun onReleased(ptsUs: Long?, captureUs: Long?, clientUs: Long) {
+    @Synchronized fun onReleased(ptsUs: Long?, captureUs: Long?, clientUs: Long, slotNs: Long = 0, periodNs: Long = 0) {
         cur.rendered++
         if (ptsUs != null && captureUs != null) latencyOf?.invoke(captureUs, clientUs)?.let { capRel.record(it) }
+        if (slotNs == 0L || periodNs <= 0 || captureUs == null) { holds.breakSequence(); return }
+        presentationReported = true
+        when (holds.onPresented(captureUs, slotNs, periodNs)) {
+            HoldMeter.SHORT -> { cur.holdJudged++; cur.holdShort++; winJudged++; winShort++ }
+            HoldMeter.EXACT -> { cur.holdJudged++; winJudged++ }
+            HoldMeter.LONG -> { cur.holdJudged++; cur.holdLong++; winJudged++; winLong++ }
+        }
+    }
+
+    /** T-220: [HoldMeter] counts since the last reset of this window (the `render ev=present` line). */
+    @Synchronized fun holdWindow(reset: Boolean = true): HoldCounts {
+        val h = HoldCounts(winJudged, winShort, winLong)
+        if (reset) { winJudged = 0; winShort = 0; winLong = 0 }
+        return h
     }
 
     /**
@@ -218,6 +276,7 @@ class VideoStats {
      */
     @Synchronized fun resetFrames() {
         inputTimes.clear(); captureTimes.clear(); awaitingCallback.clear()
+        holds.reset()
     }
 
     /** Frame handed to the decoder. Bounded: the oldest entries are evicted ([FRAME_MAP_MAX]). */
@@ -244,6 +303,7 @@ class VideoStats {
             lastDecodeUs = d
         }
         captureTimes.remove(ptsUs)?.let { cap ->
+            holds.onDecoded(cap) // T-220: the content sequence every released frame is judged against
             latencyOf?.invoke(cap, clientUs)?.let { raw ->
                 capDec.record(raw)
                 if (raw < 0) cur.latNeg++
@@ -266,12 +326,12 @@ class VideoStats {
             if (reset) readyGaps.summaryInto(readyLog) else readyGaps.summary(),
             if (reset) shownGaps.summaryInto(shownLog) else shownGaps.summary(),
             if (c.paceAddCount > 0) c.paceAddSumUs / c.paceAddCount else null,
-            if (c.scheduled > 0) c.scheduleSkips * 100.0 / c.scheduled else m.skipPct,
+            skipPctOf(c, m.skipPct),
             m.skipPct,
             if (reset) decodeLat.summaryInto(decodeLatLog) else decodeLat.summary(),
             stage(capDec, capDecLog, reset), stage(readySlot, readySlotLog, reset),
             stage(capRel, capRelLog, reset), stage(capCb, capCbLog, reset),
-            c.latNeg, c.discarded, c.cbMissing)
+            c.latNeg, c.discarded, c.cbMissing, c.holdJudged, c.holdShort, c.holdLong, schedPctOf(c))
         if (reset) {
             c.meterIntervals = m.intervals.toLong(); c.meterSkipped = m.skipped.toLong()
             log.add(c)
@@ -301,11 +361,146 @@ class VideoStats {
             if (l.latencyCount > 0) l.latencySumUs / l.latencyCount else null,
             networkLog.summary(reset), readyLog.summary(reset), shownLog.summary(reset),
             if (l.paceAddCount > 0) l.paceAddSumUs / l.paceAddCount else null,
-            if (l.scheduled > 0) l.scheduleSkips * 100.0 / l.scheduled else meterPct,
+            skipPctOf(l, meterPct),
             meterPct, decodeLatLog.summary(reset),
             capDecLog.summary(reset), readySlotLog.summary(reset), capRelLog.summary(reset), capCbLog.summary(reset),
-            l.latNeg, l.discarded, l.cbMissing)
+            l.latNeg, l.discarded, l.cbMissing, l.holdJudged, l.holdShort, l.holdLong, schedPctOf(l))
         if (reset) l.clear()
         return s
+    }
+
+    /** T-220: see [Snapshot.skipPct]; [meterPct] is the callback meter's share (legacy fallback only). */
+    private fun skipPctOf(s: Sums, meterPct: Double?): Double? =
+        if (presentationReported) (if (s.holdJudged > 0) s.holdLong * 100.0 / s.holdJudged else null)
+        else schedPctOf(s) ?: meterPct
+
+    private fun schedPctOf(s: Sums): Double? = if (s.scheduled > 0) s.scheduleSkips * 100.0 / s.scheduled else null
+}
+
+/**
+ * T-220: the presentation metric, one calculation for every pacer (adaptive, fixed buffer, buffer 0). Each frame
+ * released for rendering is reported with the vsync it was released for ([latchSlot]: the slot the pacer asked for, or
+ * the earliest vsync a buffer queued at the release can still make); its hold is the distance to the next shown
+ * frame's vsync, in panel periods, compared with the content cadence n:
+ *  - content runs: decoded frames whose capture gaps all stay within [RUN_TOLERANCE_NS] of the run's first gap are one
+ *    continuous run ([onDecoded], decode order = capture order). Two shown frames are judged only when the later one's
+ *    run reaches back to the earlier one (no source gap, no irregular capture in between), the panel rate is the same,
+ *    and the run gap is n panel periods (+-[RUN_TOLERANCE_NS], 1 <= n <= [MAX_CADENCE]);
+ *  - hold < n is [SHORT], = n [EXACT], > n [LONG]. A decoded frame never shown in between (discarded, replaced) makes
+ *    its predecessor's hold long: one content frame went missing on screen;
+ *  - two releases for the same vsync: the newer replaces the older one, which was never shown. So an interval is judged
+ *    only once the next release lands on a later vsync (one frame later).
+ * `tools/pacing/sim.py --holds` implements the same rules on a pace trace. The vsync is the one the frame was handed
+ * over for; SurfaceFlinger's actual latch is not observed (`cb_skip_pct` and `dumpsys SurfaceFlinger --latency` are
+ * the cross-checks). Not thread-safe: [VideoStats] calls it under its own lock.
+ */
+class HoldMeter {
+    companion object {
+        /** Capture gaps of one content run stay this close to its first gap; the run gap this close to n periods. */
+        const val RUN_TOLERANCE_NS = 1_000_000L
+        const val MAX_CADENCE = 3L
+        /** Decoded frames remembered for the run lookup (a shown frame is at most a few frames behind the decoder). */
+        const val DECODED_MAX = 64
+        const val NONE = 0
+        const val SHORT = 1
+        const val EXACT = 2
+        const val LONG = 3
+
+        /**
+         * The vsync a frame released at [releaseNs] is due on: the requested one ([renderNs] + [leadNs], the pacer's slot)
+         * unless the buffer was handed over too late for it; then, and for a frame released at once ([renderNs] <= 0),
+         * the earliest vsync a buffer queued at [releaseNs] can make (presentation deadline). 0 while [grid] has no sample.
+         */
+        fun latchSlot(grid: VsyncClock.Grid, renderNs: Long, leadNs: Long, releaseNs: Long): Long {
+            if (grid.lastNs < 0 || grid.periodNs <= 0) return 0
+            val earliest = grid.slotAtOrAfter(releaseNs + grid.deadlineNs, 0.0)
+            if (renderNs <= 0) return earliest
+            val requested = renderNs + leadNs
+            return if (requested < earliest - grid.periodNs / 2) earliest else requested
+        }
+    }
+
+    private val decCapture = LongArray(DECODED_MAX)
+    private val decRunStart = LongArray(DECODED_MAX)
+    private val decRunGap = LongArray(DECODED_MAX)
+    private var decPos = 0
+    private var decN = 0
+    private var lastDecodedUs = Long.MIN_VALUE
+    private var runStartUs = Long.MIN_VALUE
+    private var runGapNs = 0L
+
+    // The latest release (not yet confirmed: a newer one for the same vsync replaces it) and the shown one before it.
+    private var lastCapUs = Long.MIN_VALUE
+    private var lastSlotNs = 0L
+    private var lastPeriodNs = 0L
+    private var prevCapUs = Long.MIN_VALUE
+    private var prevSlotNs = 0L
+    private var prevPeriodNs = 0L
+
+    /** A frame came out of the decoder (shown or not); [captureUs] is its host capture stamp. */
+    fun onDecoded(captureUs: Long) {
+        val last = lastDecodedUs
+        if (last != Long.MIN_VALUE && captureUs > last) {
+            val gap = (captureUs - last) * 1000
+            if (runGapNs == 0L || Math.abs(gap - runGapNs) > RUN_TOLERANCE_NS) { runStartUs = last; runGapNs = gap }
+        } else {
+            runStartUs = captureUs; runGapNs = 0 // first frame, or capture time went back (a new stream)
+        }
+        lastDecodedUs = captureUs
+        decCapture[decPos] = captureUs; decRunStart[decPos] = runStartUs; decRunGap[decPos] = runGapNs
+        decPos = (decPos + 1) % DECODED_MAX
+        if (decN < DECODED_MAX) decN++
+    }
+
+    /**
+     * The frame captured at [captureUs] was released for the vsync at [slotNs] on a panel of [periodNs]. Returns the
+     * verdict of the interval confirmed by it ([SHORT]/[EXACT]/[LONG]), or [NONE].
+     */
+    fun onPresented(captureUs: Long, slotNs: Long, periodNs: Long): Int {
+        if (lastCapUs != Long.MIN_VALUE) {
+            val d = slotNs - lastSlotNs
+            if (Math.abs(d) < periodNs / 2) { lastCapUs = captureUs; lastSlotNs = slotNs; lastPeriodNs = periodNs; return NONE }
+            if (d < 0) { prevCapUs = Long.MIN_VALUE; lastCapUs = captureUs; lastSlotNs = slotNs; lastPeriodNs = periodNs; return NONE }
+        }
+        var verdict = NONE
+        if (lastCapUs != Long.MIN_VALUE) {
+            if (prevCapUs != Long.MIN_VALUE) verdict = judge()
+            prevCapUs = lastCapUs; prevSlotNs = lastSlotNs; prevPeriodNs = lastPeriodNs
+        }
+        lastCapUs = captureUs; lastSlotNs = slotNs; lastPeriodNs = periodNs
+        return verdict
+    }
+
+    /** The interval from the previous shown frame to the latest one (both known shown). */
+    private fun judge(): Int {
+        val p = lastPeriodNs
+        if (Math.abs(prevPeriodNs - p) * 20 > p) return NONE // another panel rate
+        val i = find(lastCapUs)
+        if (i < 0) return NONE
+        val start = decRunStart[i]
+        val gap = decRunGap[i]
+        if (gap <= 0 || start == Long.MIN_VALUE || prevCapUs < start || prevCapUs >= lastCapUs) return NONE
+        val n = Math.round(gap.toDouble() / p)
+        if (n < 1 || n > MAX_CADENCE || Math.abs(gap - n * p) > RUN_TOLERANCE_NS) return NONE
+        val hold = Math.round((lastSlotNs - prevSlotNs).toDouble() / p)
+        return if (hold < n) SHORT else if (hold == n) EXACT else LONG
+    }
+
+    private fun find(captureUs: Long): Int {
+        for (k in 1..decN) {
+            val i = Math.floorMod(decPos - k, DECODED_MAX)
+            if (decCapture[i] == captureUs) return i
+        }
+        return -1
+    }
+
+    /** The shown sequence is broken (a release with no known slot): no interval spans it. */
+    fun breakSequence() { lastCapUs = Long.MIN_VALUE; prevCapUs = Long.MIN_VALUE }
+
+    /** Stream or codec boundary: shown sequence and content runs start over. */
+    fun reset() {
+        breakSequence()
+        decPos = 0; decN = 0
+        lastDecodedUs = Long.MIN_VALUE; runStartUs = Long.MIN_VALUE; runGapNs = 0
     }
 }

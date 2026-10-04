@@ -160,11 +160,13 @@ class VideoRenderer(
         val rephases = pacer?.rephases ?: 0L
         val rephaseDelta = (rephases - lastRephases).coerceAtLeast(0)
         lastRephases = rephases
+        val holds = stats.holdWindow(reset = true) // T-220: the presentation metric over the same window, every pacer
         if (!write) return
         MbLog.i(
             "present",
             // T-183: the inflight limit is retired; `inflight_limit=` stays in the line with a constant 0.
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), 0, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs),
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), 0, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs) +
+                " " + holds.logFields(),
             "render",
         )
     }
@@ -487,7 +489,10 @@ class VideoRenderer(
             adaptivePacer.probe = probe
             // T-059: the host thins frames to the reported panel rate; follow the measured arrivals, never the codec.
             val arrival = st.arrival
-            val intervalOf: (Long) -> Long = { period -> FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs) }
+            // T-220: with the measured content cadence (a 60 fps game in a 120 fps stream on 120 Hz: two periods).
+            val intervalOf: (Long) -> Long = { period ->
+                FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
+            }
             pacer.intervalProvider = intervalOf
             adaptivePacer.intervalProvider = intervalOf
             st.adaptive = adaptivePacer
@@ -503,7 +508,7 @@ class VideoRenderer(
                     // shared lock (review 2: the UI thread must not wait on output bookkeeping).
                     if (st.current) {
                         val period = vsync.periodNs
-                        val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs)
+                        val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
                         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
                         stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
                         stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000) // T-168 cap_cb
@@ -615,24 +620,28 @@ class VideoRenderer(
 
         fun tag(idx: Int, ptsUs: Long) { ptsOf[idx] = ptsUs }
 
-        override fun release(idx: Int, renderNs: Long) = render(idx) { codec.releaseOutputBuffer(idx, renderNs) }
+        override fun release(idx: Int, renderNs: Long) = render(idx, renderNs) { codec.releaseOutputBuffer(idx, renderNs) }
         override fun discard(idx: Int) {
             codec.releaseOutputBuffer(idx, false)
             ptsOf.remove(idx)
             st.ifCurrent { stats.onDiscarded() }
             st.gauge.onDone(System.nanoTime())
         }
-        fun releaseNow(idx: Int) = render(idx) { codec.releaseOutputBuffer(idx, true) }
+        fun releaseNow(idx: Int) = render(idx, 0L) { codec.releaseOutputBuffer(idx, true) }
 
         /**
          * A release for rendering ([releaseCall], the codec call, runs outside the shared lock). T-168 review: in
          * codec-render mode the frame is awaited BEFORE the call, because its frame-rendered callback (main looper) may
-         * run before the call returns; a call that throws takes the registration back.
+         * run before the call returns; a call that throws takes the registration back. T-220: [renderNs] is the render
+         * time handed to the codec (0 = at once); with the grid at the release it gives the vsync the frame is due on
+         * ([HoldMeter.latchSlot]), the same way for every pacer.
          */
-        private inline fun render(idx: Int, releaseCall: () -> Unit) {
+        private inline fun render(idx: Int, renderNs: Long, releaseCall: () -> Unit) {
             val pts = ptsOf.remove(idx)
             val captureUs = if (pts != null) st.captureByPts.get(pts) else null // own lock, outside the shared one
             val tracked = expectCallback && pts != null && st.ifCurrent { stats.awaitCallback(pts) }
+            val grid = vsync.grid()
+            val slotNs = HoldMeter.latchSlot(grid, renderNs, vsync.leadNs(), System.nanoTime())
             try {
                 releaseCall()
             } catch (e: Exception) {
@@ -640,7 +649,7 @@ class VideoRenderer(
                 throw e
             }
             val nowNs = System.nanoTime()
-            st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000) }
+            st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000, slotNs, grid.periodNs) }
             st.gauge.onDone(nowNs)
         }
     }
