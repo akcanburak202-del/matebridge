@@ -102,5 +102,16 @@ if want protocol; then
   done
 fi
 
+# Measurement kit (T-173): offline self-test with stubs, no device; full run only (like the probes).
+# The host tools use BSD stat/top, so macOS only; on failure only the failed checks are printed.
+if [ -z "$only" ] && [ -x tools/measure/selftest.sh ]; then
+  if [ "$(uname -s)" = Darwin ]; then
+    run "measurement kit selftest" . bash -c 'o=$(tools/measure/selftest.sh 2>&1) || { echo "$o" | grep -v "    ok: "; exit 1; }'
+  else
+    echo "==> measurement kit selftest"
+    echo "    SKIP (needs macOS): measurement kit selftest"
+  fi
+fi
+
 if [ $fail -eq 0 ]; then echo "check.sh: ALL OK"; else echo "check.sh: FAILURES"; fi
 exit $fail

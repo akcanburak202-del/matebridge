@@ -37,3 +37,6 @@ probes/**/out/
 # Local tooling
 .claude/settings.local.json
 .claude/worktrees/
+
+# Python bytecode (tools/)
+__pycache__/

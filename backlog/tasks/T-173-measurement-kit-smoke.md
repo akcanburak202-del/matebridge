@@ -1,7 +1,7 @@
 ---
 id: T-173
 title: Version the measurement and soak scripts and add device-smoke.sh
-status: todo
+status: review
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146]
@@ -13,6 +13,11 @@ files:
   - docs/WORKFLOW.md
   - docs/NOTES.md
   - backlog/tasks/T-173-measurement-kit-smoke.md
+  # added after review, approved by the orchestrator (2026-10-04): selftest in check.sh, __pycache__ ignore,
+  # LOGGING skip_pct line fix
+  - scripts/check.sh
+  - .gitignore
+  - docs/LOGGING.md
 ---
 
 ## Amaç
@@ -64,14 +69,44 @@ Source: external architecture review 2026-10-03 (M07, D5, D10); verification: do
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Eski araçlar kayıp (`~/.cache/matebridge-tools/` ve scratchpad'lerde `mbmon.sh`/`an.py`/`macmon.sh`/`macan.py` yok); NOTES tariflerinden ve LOGGING.md'deki satır biçimlerinden yeniden yazılır. Yalnız bash (macOS 3.2 uyumlu), tablette POSIX sh (toybox) ve python3 stdlib.
+
+1. `tools/measure/mblog.py`: ortak kütüphane. Log satırı ayrıştırma (`<mono> <L> <comp> sid= gen= ev= k=v`, logcat threadtime/epoch önekleri), **gizlilik filtresi** (yalnız beyaz listedeki `(component, ev)` satırları; değerden yalnız sayı / `a/b/c` sayı demeti / `-`; kimlik alanları sıkı regex'le: sha, codec adı, boyut, mod kimlikleri; geri kalan her şey atılır), yüzdelik, sonuç başlığı (commit SHA'ları, macOS ve HarmonyOS build, codec, topoloji/taşıma, çözünürlük, hedef ve gerçek Hz, bit hızı, içerik, süre, tur sayısı; < 3 tur ise "iddia değil" uyarısı). Ham log diske hiç yazılmaz: filtre boru hattında çalışır.
+2. `tools/measure/smoke.py` + `scripts/device-smoke.sh`: kimlik (host `app_start`/`profile`/`session_started`, tablet `app_start`/`profile`/`codec_start`/`stream_config`, `getprop ro.build.display.id`, `sw_vers`), sonra 60 s pencere (tablet `adb logcat -T 1` → fifo → filtre; host `host.log` bayt ofsetinden ekleneni okur, dönüşü (rotation) karşılar). Anahtar alanların p50/p95'i stdout'a. `--out DIR` yalnız filtrelenmiş dosyaları saklar. Salt okunur: kurmaz, ayar değiştirmez, uygulama başlatmaz/durdurmaz; HUAWEI olmayan cihazda tablet kısmını reddeder; seri numarası basmaz.
+3. `tools/measure/mbmon.sh` (tablette çalışır, `/data/local/tmp/mbmon.txt`): 1 Hz panel hızı (Huawei `lcd_fps_scence` düğümü, yoksa SurfaceFlinger), sıcaklık bölgeleri, CPU/GPU frekansı, ham CPU tick'leri (sistem + istemci/surfaceflinger/codec/HAL/adbd/logd). `--soak`: 60 s'de PSS, fd (`run-as`), iş parçacığı adları (önek grupları), codec kaynak sayısı ve arka planda olay sayımı için `logcat -e`. `an.py`: pencere özeti (CPU payları /800, panel Hz dağılımı, sıcaklık, frekans; isteğe bağlı logcat ile `MB/decoder recv`/s, `vsync_ms_p50`, AGP `final lcd fps` ve dokunma olayları).
+4. `tools/measure/macmon.sh` (host, 5 s; `top -l 2` ile CPU, `ioreg` GPU kullanımı, MateBridgeApp/WindowServer/`--proc` süreçleri; `--soak`: RSS, `lsof` fd, `ps -M` iş parçacığı, host.log olay artışları). `macan.py`: özet + isteğe bağlı host.log penceresi (`ev=latency`/`cadence`/`net ev=stats`).
+5. `tools/soak/`: `tablet-soak.sh start|stop|pull|status` (mbmon.sh `--soak`'u tablete itip ayrık başlatır; `pull` filtreleyerek çeker), `host-soak.sh` (macmon.sh `--soak --interval 60` sarmalayıcısı), `summarize.py` (saatlik eğilimler ve eğimler: RSS/PSS, fd, önek başına iş parçacığı, codec örnekleri, olay sayıları, yeniden başlatmalar; hüküm yok).
+6. `tools/measure/selftest.sh` + `tools/measure/testdata/` (sentetik, yalnız sayısal): `bash -n`, `sh -n`, `py_compile`, ayrıştırıcı/özet beklenen değerleri, gizlilik grep'i (pano/tuş/metin/seri/IP içeren sentetik satırların çıktıya sızmadığı).
+7. `tools/measure/README.md` (tarifler, başlık biçimi, gizlilik grep kontrolü), `tools/soak/README.md` (kısa), `docs/WORKFLOW.md` bir paragraf.
+
+Riskler: tablet düğüm yolları (`lcd_fps_scence`, termal bölge adları, `media.resource_manager` biçimi) cihazda doğrulanmadı → değer yoksa `-` ve README'de "cihazda doğrula". Canlı cihazda hiçbir şey çalıştırılmaz (orkestratör merge sonrası tek tek). `check.sh` kart dosyalarında değil; selftest elle çalıştırılır (Açık sorular).
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `ba56260` (uygulama; plan `8d1b680`; main'e rebase sonrası SHA'lar), inceleme düzeltmeleri ayrı commit (aşağıda). `./scripts/check.sh` ALL OK; `tools/measure/selftest.sh` ALL OK.
+- **Dokunulan dosyalar:** `scripts/device-smoke.sh`; `tools/measure/` (`mblog.py`, `smoke.py`, `mbmon.sh`, `an.py`, `macmon.sh`, `macan.py`, `selftest.sh`, `README.md`, `testdata/` yalnız sentetik sayısal dosyalar); `tools/soak/` (`tablet-soak.sh`, `host-soak.sh`, `summarize.py`, `README.md`); `docs/WORKFLOW.md` ("Ölçüm" paragrafı); bu kart. `docs/NOTES.md`'ye dokunulmadı (cihaz çıktıları orkestratörün işi).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Eski araçlar hiçbir yerde yok (`~/.cache/matebridge-tools/` ve scratchpad'ler tarandı); NOTES tariflerinden ve LOGGING.md + kaynak koddaki satır biçimlerinden yeniden yazıldı.
+  - Gizlilik: `mblog.py filter` boru hattında çalışır, ham log diske yazılmaz. Beyaz listedeki `(component, ev)` satırlarında yalnız sayısal değerler ve sıkı regex'li kimlik alanları kalır. Bunun yanında `--events` (yalnız olay adı) ve `--agp` (yalnız fps sayısı ve `touch`) kipleri var. İstemcinin decoder yaşam döngüsü satırlarında (`codec_start`, `give_up`, `detach_slow`) `sid=/gen=` yok; ayrıştırıcı bunu da kabul ediyor.
+  - Gerçek Hz başlıkta istemcinin `vsync_ms_p50` medyanından çıkar (vekil değer). Panelin kendisi `mbmon.sh` ile okunur.
+  - `tablet-soak.sh start`, `mbmon.sh`'yi `/data/local/tmp`'ye itip tablette ayrık (`setsid nohup`) çalıştırır. Uygulama kurulumu ya da ayar değişikliği değildir. `device-smoke.sh` hiçbir şey itmez.
+  - Yüzdelikler doğrusal interpolasyonla hesaplanır. Smoke tablosu pencere değerlerinin dağılımını verir: tablet 10 s, host 1 s pencere. `enc_ms.p95` gibi alanlar host'un pencere başına yüzdeliğidir.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbir şey canlı cihazda ya da canlı Mac'te çalıştırılmadı. Testler stub'larla yapıldı: adb/top/ioreg/ps/lsof/pgrep/sw_vers sahte, `/proc` ve `/sys` sahte ağaç, host.log geçici dosya. Cihazda bakılacaklar:
+  - [device] kriteri: bir USB, bir Wi-Fi `device-smoke.sh` koşusu, çıktıları NOTES'a.
+  - Huawei panel düğümü `/sys/class/graphics/fb0/lcd_fps_scence` var mı, biçimi `current_fps:N` mi (yoksa `panel_src=sf`)?
+  - Termal bölge adları ve devfreq GPU düğümü.
+  - `dumpsys media.resource_manager` biçimi (`codec_res` yalnız eğilim sayısı).
+  - HarmonyOS'ta `logcat -e` ve `-f`; `run-as` ile fd sayımı; toybox `pgrep -f`, `setsid`.
+  - `dumpsys meminfo` "TOTAL PSS:" satırı.
+  - Gerçek `top -l 2` ve `ioreg` çıktısında `macmon.sh` ayrıştırması. Biçim yerelde bir kez salt okunur kontrol edildi, örnekleyici koşturulmadı.
+  - logcat halkası döndüyse `apk_sha` `-` çıkar. README'de anlatıldı.
+- **Codex incelemesi sonrası (5 × P2, aynı dal, main'e — T-225 dahil — rebase edildi):**
+  1. `tablet-soak.sh pull`: iki aktarım da tabletteki bayt sayısıyla doğrulanıyor (olaylar için `mblog.py filter --bytes-to`). Sonuçlar `.part` + `mv` ile yazılıyor. Tablet dosyaları yalnız ikisi de başarılıysa siliniyor. Selftest: kesik aktarım başarısız oluyor, hiçbir şey silinmiyor, yarım dosya kalmıyor; tam aktarım siliyor.
+  2. `tablet-soak.sh stop`: stop dosyası örnekleyicinin çıktığı görülene kadar kalıyor (30 s'den sonra "tekrar stop" uyarısı, dosya yerinde). Örnekleyici çıkarken dosyayı kendisi siler.
+  3. `mbmon.sh`: ölçülemeyen değer artık `-`, sıfır değil: okunamayan pid grubu (`t_*`), başarısız ya da boş `run-as`/`ls` fd listesi, okunamayan thread adları (önce doğrudan, sonra `run-as` ile uygulama kimliğiyle), boş `dumpsys`, okunamayan frekans/sıcaklık. `summarize.py` `threads=-` örneklerini önek gruplarında sıfır saymıyor. Selftest: izinsiz fd/comm → `fds=- threads=-`, olmayan grup → `t_codec=-`.
+  4. `macmon.sh`: `top -n 5000` (tüm süreçler). İzlenen süreç çalışmıyorsa `cpu_<ad>=-`, top başarısızsa `top_other_cpu=-`. Selftest `--proc Absent` → `-`.
+  5. `macan.py`: dilim için ofsetlerin azalmadığı, `hl_ino` (macmon artık yazıyor) tek ve geçerli dosyanınkiyle aynı olduğu ve dosyanın yeterince uzun olduğu kontrol ediliyor; değilse nedenli uyarı. Selftest: geri giden ofset ve başka inode.
+  - Onaylanan ek dosyalar: `scripts/check.sh` selftest'i tam koşuda çağırıyor (yalnız macOS'ta; Linux CI'da SKIP, araçlar BSD `stat`/`top` kullanıyor; hata olunca yalnız başarısız satırlar basılıyor). `.gitignore`'a `__pycache__/`. `docs/LOGGING.md`: `skip_pct` `render ev=stats` satırında (T-225 metni korundu).
+  - Commit: bu Handoff güncellemesiyle aynı commit (aşağıdaki `git log`). `./scripts/check.sh` ALL OK (selftest dahil).
 - **Açık sorular:**
+  - İstemci `migrate_request` satırı uç nokta IP'sini logluyor (`host=`); filtre atıyor. Orkestratör ayrıca not edecek.
