@@ -51,7 +51,12 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `StreamMode` -> üç değer (`DAILY daily`, `DRAWING drawing`, `GAME game`, bu sırayla; Ctrl+Shift+7 döngüsü). Kare hızı enum'dan çıkar: `defaultFps` (Günlük 120, Çizim 120, Oyun 60), `hasFpsSetting` (Çizim hariç), `resolveFps` (Çizim hep 120, geçersiz değer varsayılan), `toPrefs(fps, bitrate)` hep `scale_permille = 1000`. Eski kimlikler (`clarity|smooth|performance|performance144|game60`) `LegacyModes` ile 0030 §5'e göre eşlenir; bilinmeyen = Günlük.
+2. `Settings`: `fps_daily` / `fps_game` anahtarları (`modeFps(mode)`, `setModeFps`), `USER_KEYS`'e eklenir (T-191 sıfırlaması kapsar). Tek seferlik geçiş `migrateModesOnce()` (bayrak `modes_migrated`, sıfırlamada korunur, T-096 gibi): eski `stream_mode` yeni kimliğe ve `fps_*` değerine yazılır (ör. `game` -> Oyun 120, `game60` -> Oyun 60). Getter eski kimlikleri de tolere eder.
+3. `GameModeSettings` (isim korunur, "mod katmanı" olur): `Values`'a `fingerOff` eklenir; katman moda göre kurulur: Oyun = 0014 §3 (60 Mbps/ses/kalem), Çizim = parmak kapalı + Otomatik ise 60 Mbps (ses ve kalem kayıtlı kalır). Oyun<->Çizim geçişi katmanı baştan kurar (ENTER). `onModeChanged` artık `Transition(change, mode)` döner; `prefs(mode)` kare hızını `Settings.modeFps`'ten alır; `selectFrameRate`. Log: `ev=mode_layer mode= action= overrides= ...`.
+4. `SettingsCatalog`/`SettingsHost`: mod listesi üç düğme; yeni "Kare hızı" (60/120) seçimi (`frameRate`, `selectFrameRate`), Çizim'de başlığı "(Çizim: hep 120)" olur ve seçim etkisizdir (gizleme `SettingsViews.kt` ister, kart dışı: Açık sorular). `gameDefaultsActive` -> `modeLayer: StreamMode?`; işaretler ayar bazında ("(oyun modu)" / "(çizim modu)"; parmak kapalı Çizim'de işaretlenir). Oyun çözünürlüğü listesine 2240×1472.
+5. `MainActivity`: katman parmak durumunu da uygular (`capture.setFingersDisabled` ancak `gameSettings.fingerOff`'tan), açılış/sıfırlama/mod değişimi, `selectFrameRate`, `migrateModesOnce()` en başta, profil `mode=` yeni kimlik, toast metinleri.
+6. JVM testleri: StreamModeTest, GameModeTest (katman), GameResolutionTest, SettingsCatalogTest, SettingsResetTest, BitrateSettingTest/SessionMachineTest uyarlaması, yeni geçiş testleri. Sonra docs/KNOBS.md ve docs/LOGGING.md.
 
 ## Handoff
 
