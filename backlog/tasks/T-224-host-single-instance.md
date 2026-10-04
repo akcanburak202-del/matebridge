@@ -34,7 +34,19 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+**Kod okuma sonucu (nedenin doğrulanması, uygulama çalıştırılmadı):**
+- (a) T-148 kayıt yolu ikinci kopya başlatmaz. `LoginItemPolicy.action(for: .launch)` yalnızca `loginItemFirstRunDone` yokken ve durum `enabled/requiresApproval` değilken `register` çağırır; başarıyla bitince bayrak yazılır, sonraki açılışlarda hiç çağrılmaz. `SMAppService.mainApp.register()` ayrıca uygulamayı hemen başlatmaz, yalnızca giriş öğesini kaydeder (başlatma bir sonraki oturum açılışında olur). Depoda KeepAlive'lı bir LaunchAgent de yok (T-202 hâlâ todo). Yani kayıt yolunda değişiklik gerekmez; `LoginItem.swift` içinde kod değişikliği yapılmaz (dosya kapsamda kaldı, dokunulmadı).
+- (b) En olası neden: `quit` + `open` yarışı, ya da iki `open` (`-n` dahil) aynı anda. Info.plist'te `LSMultipleInstancesProhibited` yoktu ve uygulama içinde hiçbir bekçi yoktu. Port düşüşü (61082/61083) ikinci kopyanın 47001/47002'yi alamadığını gösteriyor, yani ikisi de gerçekten yaşıyordu.
+
+**Tasarım:**
+1. `MateBridgeCore/Session/SingleInstancePolicy.swift` (saf): `Instance { pid, launchDate?, isTerminated }` ve `decide(ownPID:, ownLaunchDate:, others:, waitedMs:) -> Decision` (`proceed`, `wait(ms:)`, `exit(existingPID:)`).
+   - Kendi pid'i ve `isTerminated` olanlar sayılmaz.
+   - Engelleyen kopya yalnızca *daha eski* olandır (launchDate küçük; eşit ya da bilinmiyorsa küçük pid). Böylece aynı anda başlayan iki kopya birbirini öldürmez: yalnızca yeni olan çıkar, eski devam eder.
+   - Engelleyen varsa ve `waitedMs < graceMs (5000)`: `wait(200)`. Neden: `quit` + hemen `open`'da eski kopya kapanırken yeni kopya hemen çıkarsa hiç kopya kalmaz. Süre dolunca `exit`.
+2. `main.swift`: `applicationDidFinishLaunching` en başında `app_start` satırından sonra, durum çubuğu simgesi/dinleyici/ekrandan önce bekçi çalışır. `NSRunningApplication.runningApplications(withBundleIdentifier:)` ile liste kurulur, politika döngüsü ana iş parçacığında kısa uyumalarla yürütülür, `exit` kararında `ev=second_instance action=exit` loglanıp `exit(0)`. `bundleIdentifier` yoksa (`swift run`) bekçi atlanır. CLI kipleri (`--dump-video` vb.) NSApplication'dan önce çıktığı için etkilenmez.
+3. `Info.plist`: `LSMultipleInstancesProhibited = true` (LaunchServices katmanı; uygulama içi bekçi `open -n` ve doğrudan çalıştırma için yedek).
+4. `docs/LOGGING.md`: `ev=second_instance` satırı.
+5. Testler: `Tests/MateBridgeCoreTests/Session/SingleInstancePolicyTests.swift` (başkası varken çık, yalnızken devam, kendi pid'i sayılmaz, sonlanmış sayılmaz, eşzamanlı başlangıç eski kazanır, bekleme süresi dolana kadar `wait`).
 
 ## Handoff
 
