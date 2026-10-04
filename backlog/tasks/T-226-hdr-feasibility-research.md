@@ -1,7 +1,7 @@
 ---
 id: T-226
 title: Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-188]
@@ -84,3 +84,5 @@ Riskler: canlı kullanıcı oturumu — tablette yalnız okuma komutları; Mac't
   - `probes/README.md` tablosuna `hdr-probe` satırı eklenmeli; kartın `files:` listesinde olmadığı için dokunulmadı.
   - Android probunun check.sh'a girmesi istenir mi? Şu an `probes/hdr-probe/android` olduğu için girmiyor.
   - `vd` probunun ekranı tablette görünmez; RE4 testi ancak kart A (ürün ekranında geliştirici anahtarı) ile yapılabilir.
+
+**Orkestratör (2026-10-04):** rapor birleşti; probes/README satırı eklendi. Sonraki adım kullanıcı kararına bağlı (dev knob `MATEBRIDGE_VD_TRANSFER=1` ile RE4/GameHub HDR anahtarını denemek, ~0,5 gün).

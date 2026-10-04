@@ -31,7 +31,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-226](tasks/T-226-hdr-feasibility-research.md) | Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code | 6 | orchestrator | [T-188] |
 
 ## done
 
@@ -241,3 +240,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-223](tasks/T-223-client-modes-daily-drawing-game.md) | Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution | 6 | android-client-dev | [T-215, T-222] |
 | [T-224](tasks/T-224-host-single-instance.md) | Host — only one MateBridge instance may run (second instance exits) | 6 | mac-host-dev | [T-148] |
 | [T-225](tasks/T-225-client-callback-presentation-metric.md) | Client — base the presentation metric (skip_pct) on frame-rendered callbacks; the latch model miscounts ~20% of game frames and pins the pacer at its cap | 6 | android-client-dev | [T-220, T-222] |
+| [T-226](tasks/T-226-hdr-feasibility-research.md) | Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code | 6 | orchestrator | [T-188] |

@@ -8,3 +8,4 @@ Aşama 0 deneyleri. Her probe bağımsız, küçük ve tek bir soruyu cevaplar. 
 | `vdisplay-probe/` (Swift) | macOS 27'de 2800×1840 HiDPI sanal ekran oluşturup yakalayabiliyor muyuz? | T-004 |
 | `pen-sink-probe/` (Swift) | Sentetik basınç/eğim olaylarını macOS uygulamaları kalem olarak görüyor mu? | T-005 |
 | `aaudio-probe/` (Android, NDK) | Tablette AAudio MMAP var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük? | T-099 |
+| `hdr-probe/` (Swift + Android) | Sanal ekran HDR (EDR) bildirebilir mi, SCK/VT 10-bit PQ hattı ve tablette HDR10 gösterim çalışıyor mu? | T-226 |
