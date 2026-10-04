@@ -56,6 +56,7 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
   - `ff8afa3` MainActivity bağlantısı.
   - `35cb0cd` Codex inceleme düzeltmeleri (3 × P1).
   - `f22f8a2` Codex ikinci tur düzeltmeleri (P1 + P2).
+  - `aee92a4` Codex üçüncü tur düzeltmeleri (2 × P2).
   - Dal: `task/T-227-endpoint-rediscovery`.
 - **Dokunulan dosyalar:**
   - `client-android/app/src/main/kotlin/dev/matebridge/client/session/EndpointRediscovery.kt` (yeni, saf politika)
@@ -68,7 +69,7 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
     - `start(..., expectHost)`,
     - `expectHost(endpoint, host)` (kendi `Latest` posta kutusu),
     - log: `expect_host`, `session_start expect_host=1`.
-  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionUi.kt`: `Cause.WRONG_HOST`, `Failed.endpoint` (yalnız WRONG_HOST için dolu).
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionUi.kt`: `Cause.WRONG_HOST`, `Failed.endpoint` (makine her `Failed`'a biten başlangıcın adresini koyar; eşitliğe girmez, mevcut testler etkilenmez).
   - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt` (orkestratör onayıyla):
     - `render()` → `rediscovery.onUi(...)` + eski adrese dönüş (`ui.post`),
     - `wolTicker` → `rediscoveryStep()`; her yeniden başlatmada çalışan oturum `controller.expectHost(...)` ile kapıya bağlanır (uyandırma denemesi değilse),
@@ -78,7 +79,7 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
     - `causeText(WRONG_HOST)`,
     - sıfırlama: `applyTransport/startWifi/userDisconnect/onStop`.
   - Testler:
-    - `EndpointRediscoveryTest.kt` (28),
+    - `EndpointRediscoveryTest.kt` (31),
     - `WrongHostGateTest.kt` (10, yeni).
   - `docs/LOGGING.md`: `endpoint_rediscover`, `_found`, `_result`, `_skip`, `wrong_host`, `expect_host`.
 - **İnceleme düzeltmeleri (Codex 3 × P1):**
@@ -89,6 +90,9 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
   1. **P1 — eski adresi zaten deneyen oturum kapısızdı.** Bölüm başladığında (her yeniden başlatmada, tekrarı zararsız) MainActivity `controller.expectHost(currentEndpoint, sonDoğrulanmışHost)` gönderir. Makine `Event.ExpectHost`'u yalnız şu koşulda uygular: oturum o adreste çalışıyor, IDLE değil, ve kabul edilmemiş bir kullanıcı başlangıcı değil. Kabulden sonra yeniden denemeler zaten otomatik. Uygulanınca sonraki her yeniden denemede başka bir host_id HELLO_ACK'tan önce `WRONG_HOST` ile reddedilir. İlk yanıtı başka bir host'tan almış bir bağlantı varsa o da hemen kapatılır. Uyandırma denemesi (`wakeConnect.owned`) bağlanmaz.
   2. **P2 — geç gelen ret yeni adrese yükleniyordu.** `Failed(WRONG_HOST)` artık reddedilen başlangıcın adresini taşıyor. Adres oturumun şimdiki adresi değilse, durum eski bir başlangıcın geç sonucu sayılır ve hiçbir şeye karar vermez: kara listeye almaz, geri dönmez, aday izlemesini bozmaz.
   3. **Önceki açığın kapanması.** Eski adresin kendisinde ret gelirse bölüm durmaz. Akış, o adres düşmeye devam ediyormuş gibi sürer: keşif aralıkla yeniden başlar ve host'umuzun yeni adresi `Failed(WRONG_HOST)` durumundan da hemen denenir.
+- **Üçüncü tur düzeltmeleri (Codex 2 × P2):**
+  1. **Eski bağlantının geç gelen kalıcı durumu aday izlemesini düşürüyordu.** Artık her `Failed` başlangıcının adresini taşıyor. Adres oturumun şimdiki adresi değilse durum yok sayılır. Adayın kendi başlangıcı bağlanmadan bitse bile (ör. kilit) aday yine değerlendirilir ve `foreign` sonucu verir.
+  2. **Kullanıcı başlangıcı bölümü bitirmiyordu.** `connect()` içinde otomatik olmayan her başlangıç `rediscovery.onUserStart()` çağırıyor; bu bölümü kapatır. Kullanıcının seçtiği Mac `foreign` sayılmaz ve uygulama eski adrese geri atlamaz. Kuyruktaki bir geri dönüş de çalışmadan önce bölümün hâlâ etkin olduğunu denetliyor.
 - **Varsayımlar:**
   - Kök neden: NSD bir hizmeti keşif başına bir kez bildiriyor, bu yüzden düzeltme keşfi yeniden başlatmak.
   - Eşik: 2 düşüş ya da 4 sn; sonraki yeniden başlatmalar 8/16/30 sn aralıkla.
@@ -96,7 +100,7 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
   - Kendi host'umuz yeni adreste yeniden eşleşme isterse (aynı host_id) olağan T-151 istemi gelir.
   - Eski adreste `WRONG_HOST` çıkarsa o adres bölüm boyunca atlanır. Yeni adres bulunana kadar ekranda bağlantı hatası metni kalır.
   - Uyandırma yolu (`WakeConnect`, `wolStep`) değişmedi; uyandırma denemeleri kapısız.
-- **Test edilmeyenler / cihazda doğrulananlar:** Cihazda hiçbir şey denenmedi. `./scripts/check.sh` `f22f8a2` üzerinde geçti. Tablette denenecekler:
+- **Test edilmeyenler / cihazda doğrulananlar:** Cihazda hiçbir şey denenmedi. `./scripts/check.sh` `aee92a4` üzerinde geçti. Tablette denenecekler:
   1. Wi-Fi modunda bağlıyken Mac'te Ethernet'i tak ve Wi-Fi'yi kapat. Tablet uygulama yeniden açılmadan ≤ ~10 sn içinde yeniden bağlanmalı. Log sırası: `endpoint_rediscover reason=…`, `endpoint_rediscover_found old=*.107 new=*.106`, `endpoint_rediscover_result result=accepted`. `expect_host` satırı görülebilir; `wrong_host` çıkmamalı.
   2. Aynı deneme AUTO modunda (Wi-Fi'de) yapılmalı.
   3. Mac uyurken uyandırma: `wake_connect` satırları önceki gibi sürmeli.
