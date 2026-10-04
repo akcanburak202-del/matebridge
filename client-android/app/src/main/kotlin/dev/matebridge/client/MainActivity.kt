@@ -1172,6 +1172,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
+            decoderTuning = devKnobs.decoderLatency, // T-217 dev knob (`dec_lowlat`, `dec_oprate`)
         ).also {
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")

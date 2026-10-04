@@ -179,6 +179,32 @@ class DecoderLatencyKnobsTest {
         assertTrue(env.lines("dec_lowlat_rejected").single().endsWith(" err=IllegalStateException"))
     }
 
+    /**
+     * The launch-extras chain MainActivity uses (`DevKnobs.parse` → `decoderLatency` → `VideoRenderer(decoderTuning=)`):
+     * with `dev` the keys reach the codec, without it the format stays today's.
+     */
+    @Test fun launchExtrasReachTheCodecOnlyWithDev() {
+        class Extras(private val m: Map<String, Any>) : dev.matebridge.client.session.LaunchExtras {
+            override fun has(key: String) = key in m
+            override fun int(key: String, default: Int) = m[key] as? Int ?: default
+            override fun bool(key: String, default: Boolean) = m[key] as? Boolean ?: default
+            override fun string(key: String): String? = m[key] as? String
+        }
+        val withDev = dev.matebridge.client.session.DevKnobs.parse(
+            Extras(mapOf("dev" to true, "dec_lowlat" to "hisi", "dec_oprate" to "max")))
+        start(tuning = withDev.decoderLatency)
+        assertTrue(env.awaitLines("codec_start"))
+        assertEquals(
+            todayHevc60.map { if (it.first == "operating-rate") it.first to 32767 else it } +
+                listOf(HISI_REQ to 1, HISI_RDY to -1),
+            keys(factory.codecs.single()),
+        )
+        assertTrue(env.lines("codec_start").single().contains(" lowlat=hisi oprate=max accepted "))
+
+        val noDev = dev.matebridge.client.session.DevKnobs.parse(Extras(mapOf("dec_lowlat" to "hisi", "dec_oprate" to "max")))
+        assertEquals(DecoderLatencyKnobs.DEFAULT, noDev.decoderLatency)
+    }
+
     // --- vendor parameters ---
 
     @Test fun vendorParametersAreLoggedOncePerComponentNamesOnly() {
