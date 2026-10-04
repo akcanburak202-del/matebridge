@@ -81,6 +81,7 @@ import dev.matebridge.client.video.VsyncClock
 import dev.matebridge.client.video.VsyncIdleGate
 import dev.matebridge.client.session.ConnectMode
 import dev.matebridge.client.session.Endpoint
+import dev.matebridge.client.session.EndpointRediscovery
 import dev.matebridge.client.session.Transport
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.session.AutoUsbPolicy
@@ -180,6 +181,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var wolRefreshDiscovery: MacDiscovery? = null
     /** T-134: direct wake attempts (an ordinary session to the stored host IPv4:port) during a wake episode. */
     private val wakeConnect = WakeConnect()
+    /** T-227: restarts discovery when the session's address keeps failing and checks the host at a new address. */
+    private val rediscovery = EndpointRediscovery()
     private lateinit var root: FrameLayout
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
@@ -986,6 +989,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         closeSettingsPanel(SettingsPanelState.Via.DISCONNECT, resync = false)
         discovery?.stop()
         discovery = null
+        rediscovery.reset() // T-227
         ui.removeCallbacks(usbHintCheck)
         probeGuard.bump()
         picking = false
@@ -1636,6 +1640,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun applyTransport() {
         discovery?.stop()
         discovery = null
+        rediscovery.reset() // T-227
         ui.removeCallbacks(usbHintCheck)
         probeGuard.bump()
         picking = false
@@ -1654,6 +1659,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun startWifi() {
         manualMode = false
         discovery?.stop()
+        rediscovery.reset() // T-227: a fresh discovery run reports every service anyway
         pairPick.clearSeen() // T-151: the new discovery run reports every service again
         discovery = MacDiscovery(this, onTxt = { host, wol, port -> onHostTxt(host, wol, port) }) { ep -> runOnUiThread { onDiscovered(ep) } }
             .also { it.start() }
@@ -1917,6 +1923,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         (getSystemService(Context.INPUT_SERVICE) as InputManager).unregisterInputDeviceListener(inputDeviceListener)
         discovery?.stop()
         discovery = null
+        rediscovery.reset() // T-227
         ui.removeCallbacks(usbHintCheck)
         ui.removeCallbacks(autoTicker)
         ui.removeCallbacks(wolTicker)
@@ -1949,15 +1956,57 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onDestroy()
     }
 
+    /**
+     * T-227: the app searches the Mac by Wi-Fi discovery right now (not a typed address, not USB, not after "Bağlantıyı
+     * kes", not while the Mac said HOST_SLEEP). Only then may discovery be restarted or a candidate be left again.
+     */
+    private fun rediscoveryEligible(): Boolean =
+        started && !isDestroyed && discovery != null && !manualMode && !isOnUsb() && !userDisconnected && !hostSleep.asleep
+
+    /** T-227, from [wolTicker]: restart NSD discovery when the session's address keeps failing (next to its retries). */
+    private fun rediscoveryStep() {
+        if (!rediscovery.shouldRestart(SystemClock.elapsedRealtime(), rediscoveryEligible())) return
+        MbLog.i("endpoint_rediscover", "reason=${rediscovery.restartReason()} failures=${rediscovery.failures} restart=${rediscovery.restarts}")
+        pairPick.clearSeen() // the new run reports every service again (as in startWifi)
+        discovery?.restart()
+    }
+
+    /**
+     * T-227: a candidate address was settled. Accepted: it is the session's address now ([connect] already made it the
+     * remembered Wi-Fi endpoint). Foreign / unreachable: go back to the old address (posted after T-151's pick handling:
+     * when that already moved the session elsewhere, it is left alone).
+     */
+    private fun onRediscoveryVerdict(v: EndpointRediscovery.Verdict) {
+        val fields = EndpointRediscovery.resultFields(v) ?: return
+        MbLog.i("endpoint_rediscover_result", fields)
+        val (old, left) = when (v) {
+            is EndpointRediscovery.Verdict.Foreign -> v.old to v.foreign
+            is EndpointRediscovery.Verdict.Unreachable -> v.old to v.candidate
+            else -> return
+        }
+        ui.post {
+            if (rediscoveryEligible() && currentEndpoint == left) connect(old, ConnectOrigin.DISCOVERY)
+        }
+    }
+
     private fun onDiscovered(ep: Endpoint) {
         if (!started || manualMode || userDisconnected || hostSleep.asleep) return
         pairPick.onDiscovered(ep) // T-151: remembered, so a pick prompt does not hide it (NSD reports a service once)
         if (!pairPick.allowsAuto(ep)) return // it answered PAIRING already: only a user start goes there again
+        // T-227: during a rediscovery episode a new address is tried at once (also while the old one is still connecting);
+        // one that answered as another host in this episode is never connected to automatically.
+        val pick = rediscovery.onDiscovered(ep, currentEndpoint, lastUi)
+        if (pick == EndpointRediscovery.Pick.SKIP) {
+            MbLog.i("endpoint_rediscover_skip", "new=${EndpointRediscovery.octet(ep)}")
+            return
+        }
         // T-134: discovery wins over a direct wake attempt (it replaces it; the start closes it first, one connection).
         // T-151: a pick prompt holds no connection, so another Mac is tried (an impostor must not park the tablet).
-        if (wakeConnect.onDiscovered(currentEndpoint, lastUi is SessionUi.Disconnected, lastUi is SessionUi.PairingNeedsUser)) {
-            connect(ep, ConnectOrigin.DISCOVERY)
+        val usual = wakeConnect.onDiscovered(currentEndpoint, lastUi is SessionUi.Disconnected, lastUi is SessionUi.PairingNeedsUser)
+        if (pick == EndpointRediscovery.Pick.CONNECT) {
+            MbLog.i("endpoint_rediscover_found", "old=${EndpointRediscovery.octet(rediscovery.old)} new=${EndpointRediscovery.octet(ep)}")
         }
+        if (usual || pick == EndpointRediscovery.Pick.CONNECT) connect(ep, ConnectOrigin.DISCOVERY)
     }
 
     private fun onConnectClicked() {
@@ -2049,6 +2098,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (TrustUiText.hostReached(state)) hostReached = true // terminal errors and prompts must not be replaced by the USB hint
         promptVisibility.onRender(state, started)?.let { controller.setConfirmPromptVisible(it) } // T-151: T-150's timer
         if (pairPick.onUi(state)) ui.post { tryNextAfterPick() } // T-151: never parked on one answerer's prompt
+        onRediscoveryVerdict(rediscovery.onUi(state, currentEndpoint, SystemClock.elapsedRealtime())) // T-227
         pairPick.takeCleared().takeIf { it.isNotEmpty() }?.let { onAskedCleared(it) } // T-207: that Mac now trusts us
         forgetFlow.onUi(state, SystemClock.elapsedRealtime())?.let { onForgetResult(it) } // T-151: the forget's result
         // T-096: AUTO on USB that lost its session falls back to Wi-Fi (posted: render() must not restart the session itself).
@@ -2120,6 +2170,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun run() {
             wolStep()
             wolRefreshStep(wolRefresh.tick(SystemClock.elapsedRealtime())) // T-133
+            rediscoveryStep() // T-227
             ui.postDelayed(this, WOL_TICK_MS)
         }
     }

@@ -1,7 +1,7 @@
 ---
 id: T-227
 title: Client — when the stored Mac address stops answering, rediscover the host via Bonjour (Mac moved from Wi-Fi to Ethernet)
-status: blocked
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -9,6 +9,7 @@ decisions: []
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - docs/LOGGING.md
   - backlog/tasks/T-227-client-endpoint-rediscovery.md
 ---
@@ -23,6 +24,8 @@ Cihaz 2026-10-04 ~22:15 (T-127 topoloji 2): Mac Wi-Fi'den (192.168.1.107) Ethern
 - İstenen davranış: Wi-Fi modunda kayıtlı adrese art arda N deneme (ör. 2–3, ya da ~5 sn) başarısız olursa NSD keşfini yeniden başlat; aynı `device`/host kimliğine ait yeni bir adres bulunursa ona bağlan ve kaydı güncelle. Eşleştirme kimliği (anahtar kanıtı) zaten bağlanınca doğrulanır; yeni adres kimliği değiştirmez. Bulunamazsa mevcut geri çekilme sürer.
 - Uyku/uyanma yolu (kayıtlı IP'ye doğrudan TCP ile Mac'i uyandırma) bozulmamalı: uyuyan Mac Bonjour'da görünmeyebilir; yeniden keşif kayıtlı adres denemelerinin yerine değil, yanına gelir.
 - Log: `ev=endpoint_rediscover reason=… old=<redacted?> new=…` — adresleri loglama kuralı için docs/LOGGING.md ve NOTES 2026-10-04 `migrate_request` IP notuna bakın; gerekirse adresin yalnız son okteti.
+
+- **Kapsam (2026-10-04):** `MainActivity.kt` `files:` listesine orkestratör onayıyla eklendi (yeniden keşfin bağlantısı orada).
 
 ## Kabul kriterleri
 
