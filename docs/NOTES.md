@@ -1272,3 +1272,17 @@ Host 91aaa2c-derlemesi (`MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`), APK a9
 - **İki ayrı sorun:** (1) kaydırma sırasında 60 karenin 3–10'u/sn atılıyor (~%10; kullanıcının "akıcı değil, takılma" dediği) — kareler havadan topak hâlinde geliyor, tablet yenisini gösterip eskiyi atıyor; AWDL bunu değiştirmedi. (2) tam ekran değişiminin ekrana gelişi 110–170 ms (USB ~75); durağan evreden sonra bağlantı "soğuk" (TCP boşta kalma sonrası yeniden hızlanma şüphesi). 
 - **Wi-Fi 7:** Mac kartı 802.11be destekliyor, modem (FiberHGW) ax; iki cihaz da Wi-Fi 6 ile bağlı. MLO anlık sıçramaları azaltabilir; karar bu ölçümün sonuna kaldı.
 - Sıradaki satırlar: 15 Mbps; tablet `wifi_ll` + `tos_ctl` (güç tasarrufu → topak hipotezi); Mac Ethernet (topoloji 2, Mac Wi-Fi'si kapatılarak).
+
+## 2026-10-04 ~22:20 — T-127 topoloji 2: Mac Ethernet (en0 1 Gbit) + tablet Wi-Fi
+
+Mac ~22:01'de yeniden başladı (kullanıcı Ethernet'i bağladı); host aynı derleme (91aaa2c) ölçüm ortamıyla yeniden açıldı. Mac Wi-Fi'si kapatıldı (`networksetup -setairportpower en1 off`; awdl0 da pasif), tablet uygulaması yeniden açılınca Mac'i Ethernet adresinden (192.168.1.106) buldu (kayıtlı Wi-Fi adresine bağlanamayınca kendiliğinden geçmedi — uygulamayı yeniden açmak gerekti; not). Ping Mac→tablet 3,2/4,3/17,8 ms. 30 Mbps, aynı `wload` + ton, 5 dk, 1 koşu. Veri `~/.cache/matebridge-tools/data/wifi-runs/r4_eth.*`.
+
+| satır | kontrol srtt p50/p95/max | video srtt p95/max | cap_dec p50/p95/max | retx | idr | atılan kare |
+|---|---|---|---|---|---|---|
+| Ethernet + tablet Wi-Fi | 34 / 43 / 45 | 58 / 63 | 42 / 126 / 143 | 14 | 1 | **23** |
+
+- **Atılan kare 1220–1282 → 23 (USB düzeyi).** Kaydırma evresinde saniyede 0 (Wi-Fi'de 3–10/sn). Akıcılık sorunu Mac'in Wi-Fi bacağındaymış (iki kablosuz atlama + AWDL).
+- Kaydırmada cap_dec ~35–50 ms, gönderilen ~18 Mbps (bu koşuda kodlayıcı kaydırmada ~18 Mbps üretti; önceki satırların saniye başına bit hızı kayıtları scratchpad ile kayboldu, karşılaştırma yalnız atılan kare ve gecikme üzerinden).
+- **Tam ekran değişimleri hâlâ 107–143 ms** (Wi-Fi satırlarıyla aynı, USB ~75): bu, tabletin Wi-Fi indirme bacağı ya da boşta kalma sonrası TCP yeniden hızlanması; Mac tarafı ağdan bağımsız.
+- Kontrol srtt tabanı durağan evrede ~12 ms (Wi-Fi'de ~24), kaydırmada 34–44.
+- Bütçeler: kontrol srtt p95 43 (≤ 40, sınırda kaldı), cap_dec p95 126 (≤ 70, tam ekran değişimleri yüzünden geçemedi). Tablet tarafı (`skip_pct`, ses kesilmesi) tablet içi logdan çekilecek.
