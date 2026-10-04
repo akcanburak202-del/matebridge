@@ -55,7 +55,7 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
 
 ## Handoff
 
-- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Codex P1 düzeltmesi ayrı bir commit'te (bkz. aşağı). Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
+- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Codex P1 düzeltmesi `2bbd857`. Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
 - **Codex (--high) P1 düzeltmesi:** İlk sürüm, göç kanıtı beklenirken (`candAck != null`) `VideoLost`'u bastırıyordu. Kanıt takılır ve geçerli video bağımsız olarak koparsa, input donuk görüntüde 3 sn'ye kadar açık kalıyordu.
   - Şimdi geçerli videonun her kopuşu input'u hemen kapatır. Bırakmalar geçerli kontrol bağlantısından gider.
   - `duringMigration` yalnız katmanı geciktirir (`VideoHealth.quietOverlay`). Katman şu durumlarda açılır: merdivenin ilk adımında (+1 sn), göç dışı bir kopuşta ya da başka bir hatada. Görüntü HEALTHY olursa bayrak temizlenir. Açık bir kurtarma bölümündeyse katman hiç gizlenmez.
