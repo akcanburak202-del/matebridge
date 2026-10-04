@@ -1170,3 +1170,19 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - T-208 sonrası (tampon 0, oyun modu): pace trace 20 000 karenin hepsi `queued/path=none`, `phase_lock=0`, `skip_pct` ortanca %10 → oyun modu (0014 §2) zamanlayıcıyı atlıyor; T-208 hiç çalışmadı.
 - T-210 ile `--ez dev true --ei jitter -1` (uyarlamalı, oyun modunda): `phase_lock=1` 333/333 pencere, paths `locked` 19 866/20 000; `skip_pct` ortanca **%0** (p90 %1,7); `shown_p95` 25 → 16,7 ms; `sim.py --holds` 120 Hz cadence 2 exact %88,8 (katı filtreyle 330 aralık); yakalama→bırakma p50 20,6 → 25,6 ms. Kullanıcı gecikme farkı hissetmedi → 0014 §2 değişti, T-211.
 - **Kalan takılma Mac'te:** içerik (SCK pts) aralığı %99,52 tam 16,7 ms; saniyede ~0,55 eksik kare, 47 boşluk 50–100 ms. Host `ev=cadence cap_int p99=33,3`, `status=complete`, `sck_lag=0` → macOS oyun yeni kareyi zamanında vermediği vsync'lerde kare üretmiyor; MateBridge kaynaklı değil. Oyun (Ori, GameHub) ayarlarında en fazla 1400×920 seçilebiliyor (HiDPI sanal ekranın nokta boyutu).
+
+## 2026-10-04 gece — devir (kullanıcı uyurken)
+
+- **Boşta kontrol:** tablet ayrıldıktan sonra ekran 10 s'de kalktı (`keep_expired`); MateBridgeApp %0,0–0,4 CPU, 8 iş parçacığı, ~7 uyanma/s, enerji puanı 0,5. Anormal arka plan çalışması yok.
+- **gpt-6-astra (xhigh) genel değerlendirme** (kullanıcı onayıyla): `docs/reviews/2026-10-04/astra-assessment.md`. P1'ler: yalnız video kaybında input açık kalıyordu → T-218; emekliye ayrılan decoder yeni kuşağın karesini kapabiliyordu → T-219; ekran ömrü medya hatasına bağlı → T-200 (T-166'ya bağlı). Ölçüt tutarsızlığı ve Oyun 120'de 60 fps kadansı → T-220. 0029 fayda modeli ve PROTOCOL "uygulandı mı" kontrolü düzeltildi.
+- **Araştırma:** `docs/research/2026-10-04-smoothness.md` (Moonlight HiSilicon düşük gecikme anahtarları, 60 fps'te DVFS şüphesi, Metal HUD teşhisi, önerilmeyenler) → T-217.
+- **Merge edilen kartlar:** T-207, T-208, T-209, T-210, T-211 (0014 §2: oyunda uyarlamalı zamanlayıcı), T-213/T-214/T-215 (0029 oyun ekranı: protokol + host + istemci), T-217, T-218, T-219, T-220. Hepsi `check.sh` ALL OK; T-207..T-220'nin çoğu Codex --high'tan (gerekirse 2–3 tur) geçti.
+- **Cihazda doğrulanmayanlar** (sabah): T-216 (oyun ekranı ölçümü), T-217 A/B, T-218 (video kaybı), T-219/T-220 (mod değişimi + sunum ölçütü), T-209 (ölü birim), T-207 (yeniden eşleşmede USB'ye dönüş).
+
+### Sabah için deneme listesi (sırayla, tek tek)
+
+1. Yeni APK + host kurulumu (orkestratör yapar), sessiz yeniden bağlanma.
+2. **Oyun ekranı (T-216):** Ayarlar → Görüntü → "Oyun çözünürlüğü" 1848×1214; Oyun 60'a gir → ekran ~1 sn yeniden kurulur; Ori'nin çözünürlük listesinde 1848×1214 görünmeli; 2–3 dk oyun (ölçüm izi açık). Sonra 1400×920 ve 2100×1380.
+3. **Decoder A/B (T-217):** Oyun 60 tam boyut, `--ez dev true --es dec_lowlat all --es dec_oprate max` ile ve onsuz birer tur; çözme süresi ve his.
+4. **Mod değişimi (T-219/T-220):** Netlik ↔ Akıcı ↔ Oyun 60 ↔ Oyun 120 arası 10 geçiş, her seferinde görüntü ve takılı girdi yok.
+5. **Dosyalar (T-209):** MatePad Finder'da açıkken tablet uygulamasını yeniden başlat → menüden aç çalışmalı.
