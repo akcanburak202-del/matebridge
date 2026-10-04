@@ -1,7 +1,7 @@
 ---
 id: T-233
 title: Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost
-status: todo
+status: in_progress
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -30,7 +30,12 @@ NOTES 2026-10-04 ~22:45: Dock'taki Apple Music ikonu tablette kenarlarda basamak
 
 ## Plan
 
-_(Araştırma ajanı doldurur.)_
+1. Repo bağlamı: bugünkü hat (SCK piksel biçimi, VT oturum ayarları, hızlı profil), `STREAM_CONFIG`/`CODEC_CONFIG` alanları, T-047/T-053/T-188/T-222/T-226 notları.
+2. Mac (salt sorgu + tek kısa deneme): `VTCopyVideoEncoderList`, `VTCopySupportedPropertyDictionaryForEncoder` (HEVC/H.264/ProRes, 2800×1840), profil sabitleri ve kabul edilen piksel biçimleri; SCK `pixelFormat` için BGRA/`444v`/`xf44` kabulünü SDK başlığından ve preset'lerden okumak. Scratch'te küçük bir Swift CLI: sentetik 4:4:4 kareleri (birkaç kare, kısa) `Main 4:4:4` profilleriyle kodlamayı dener; oturum ayarı kabulü, çıkan SPS'teki `chroma_format_idc`/profil, kare başı süre ve bayt, LLRC ve hızlı yol. Akışı etkilememek için yalnız birkaç kare.
+3. Tablet (salt okuma adb): `dumpsys media.player` HEVC/AVC/AV1/VP9 profil listeleri, `/vendor/etc/media_codecs*.xml` ve `/system/etc/media_codecs*.xml`, `getprop` (SoC, çözücü). APK yok, uygulama başlatma yok, girdi yok.
+4. Web: Apple VT 4:4:4 belgeleri ve üçüncü taraf deneyimleri (Sunshine/Moonlight 4:4:4, Parsec, RDP AVC444, Chrome Remote Desktop), Kirin/HiSilicon RExt, AV1 4:4:4 (Professional profil) çözücü durumu, chroma-aware alternatifler.
+5. `docs/research/2026-10-05-yuv444.md`: her soruya [ölçüm]/[kaynak]/[çıkarım] etiketli cevap, çalıştırılan komutlar listesi, bütçe tablosu, net öneri, protokol etkisi ve kart bölümlemesi.
+6. Handoff doldur, commit.
 
 ## Handoff
 
