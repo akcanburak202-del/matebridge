@@ -1,7 +1,7 @@
 ---
 id: T-173
 title: Version the measurement and soak scripts and add device-smoke.sh
-status: in-progress
+status: review
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146]
@@ -78,10 +78,25 @@ Riskler: tablet düğüm yolları (`lcd_fps_scence`, termal bölge adları, `med
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `51ee3ee` (uygulama; plan `5622d95`). `./scripts/check.sh` ALL OK; `tools/measure/selftest.sh` ALL OK.
+- **Dokunulan dosyalar:** `scripts/device-smoke.sh`; `tools/measure/` (`mblog.py`, `smoke.py`, `mbmon.sh`, `an.py`, `macmon.sh`, `macan.py`, `selftest.sh`, `README.md`, `testdata/` yalnız sentetik sayısal dosyalar); `tools/soak/` (`tablet-soak.sh`, `host-soak.sh`, `summarize.py`, `README.md`); `docs/WORKFLOW.md` ("Ölçüm" paragrafı); bu kart. `docs/NOTES.md`'ye dokunulmadı (cihaz çıktıları orkestratörün işi).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  - Eski araçlar hiçbir yerde yok (`~/.cache/matebridge-tools/` ve scratchpad'ler tarandı); NOTES tariflerinden ve LOGGING.md + kaynak koddaki satır biçimlerinden yeniden yazıldı.
+  - Gizlilik: `mblog.py filter` boru hattında çalışır, ham log diske yazılmaz. Beyaz listedeki `(component, ev)` satırlarında yalnız sayısal değerler ve sıkı regex'li kimlik alanları kalır. Bunun yanında `--events` (yalnız olay adı) ve `--agp` (yalnız fps sayısı ve `touch`) kipleri var. İstemcinin decoder yaşam döngüsü satırlarında (`codec_start`, `give_up`, `detach_slow`) `sid=/gen=` yok; ayrıştırıcı bunu da kabul ediyor.
+  - Gerçek Hz başlıkta istemcinin `vsync_ms_p50` medyanından çıkar (vekil değer). Panelin kendisi `mbmon.sh` ile okunur.
+  - `tablet-soak.sh start`, `mbmon.sh`'yi `/data/local/tmp`'ye itip tablette ayrık (`setsid nohup`) çalıştırır. Uygulama kurulumu ya da ayar değişikliği değildir. `device-smoke.sh` hiçbir şey itmez.
+  - Yüzdelikler doğrusal interpolasyonla hesaplanır. Smoke tablosu pencere değerlerinin dağılımını verir: tablet 10 s, host 1 s pencere. `enc_ms.p95` gibi alanlar host'un pencere başına yüzdeliğidir.
+- **Test edilmeyenler / cihazda doğrulanacaklar:** Hiçbir şey canlı cihazda ya da canlı Mac'te çalıştırılmadı. Testler stub'larla yapıldı: adb/top/ioreg/ps/lsof/pgrep/sw_vers sahte, `/proc` ve `/sys` sahte ağaç, host.log geçici dosya. Cihazda bakılacaklar:
+  - [device] kriteri: bir USB, bir Wi-Fi `device-smoke.sh` koşusu, çıktıları NOTES'a.
+  - Huawei panel düğümü `/sys/class/graphics/fb0/lcd_fps_scence` var mı, biçimi `current_fps:N` mi (yoksa `panel_src=sf`)?
+  - Termal bölge adları ve devfreq GPU düğümü.
+  - `dumpsys media.resource_manager` biçimi (`codec_res` yalnız eğilim sayısı).
+  - HarmonyOS'ta `logcat -e` ve `-f`; `run-as` ile fd sayımı; toybox `pgrep -f`, `setsid`.
+  - `dumpsys meminfo` "TOTAL PSS:" satırı.
+  - Gerçek `top -l 2` ve `ioreg` çıktısında `macmon.sh` ayrıştırması. Biçim yerelde bir kez salt okunur kontrol edildi, örnekleyici koşturulmadı.
+  - logcat halkası döndüyse `apk_sha` `-` çıkar. README'de anlatıldı.
 - **Açık sorular:**
+  - `scripts/check.sh` `tools/measure/selftest.sh`'yi çağırmıyor (dosya kartta yok). Eklenmeli mi? Selftest ~10 s sürüyor, cihaz ve ağ istemiyor.
+  - `.gitignore`'da `__pycache__` yok. Araçlar `sys.dont_write_bytecode` ile önbellek yazmıyor, ama bir satır eklemek iyi olur.
+  - LOGGING.md `skip_pct`'yi `decoder ev=stats`'ta gösteriyor; kodda alan `render ev=stats`'ta (`MainActivity.writeStatsLog`). Araçlar doğru satırı okuyor; LOGGING düzeltmesi orkestratörün kararı.
+  - İstemci `migrate_request` satırı uç nokta IP'sini logluyor (`host=`). Filtre bu satırı atıyor, ama AGENTS/LOGGING gizlilik kuralı açısından bakılmalı (ilgisiz kod, dokunulmadı).
