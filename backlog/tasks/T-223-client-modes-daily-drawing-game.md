@@ -12,6 +12,8 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/stream/GameResolution.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/Settings.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/settings/SettingsCatalog.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/settings/SettingsViews.kt  # eklendi (orkestratör onayı): "Kare hızı" satırı Çizim'de gizlenir
+  - client-android/app/src/test/kotlin/dev/matebridge/client/input/InputCaptureTest.kt  # eklendi (orkestratör onayı): Çizim geçişinde takılı girdi testleri
   - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
   - client-android/app/src/main/res/values/strings.xml
   - client-android/app/src/test/kotlin/dev/matebridge/client/stream/
@@ -74,7 +76,9 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
   3. Çizim'de avuç teması tıklamıyor, kalem çiziyor; Çizim'den Günlük'e dönünce parmak dokunması eski haline (kayıtlı değer) dönüyor. Çizim açıkken parmak anahtarını elle açmak katmanda kalır (kayda yazılmaz).
   4. Oyun'da Oyun çözünürlüğü listesinde 2240×1472 seçilebiliyor ve oyunda görünüyor (`display_applied=1`).
   5. Eski sürümden güncelleme: kayıtlı `game`/`game60`/`clarity`/`smooth` ilk açılışta doğru mod + hıza dönüşüyor (`ev=modes_migrated`).
+- **Takip (orkestratör onayı):**
+  - "Kare hızı" satırı Çizim'de gizlenir: `SettingItem.Choice.hidden` (katalogda `!streamMode.hasFpsSetting`), `SettingsViews` satırı `GONE` yapar (her yenilemede yeniden okur). `SettingsViews.kt` ve `InputCaptureTest.kt` `files:` listesine eklendi. JVM testi: `SettingsCatalogTest.frameRateChoiceIsPerModeAndFixedInDrawing` (Çizim'de hidden, Günlük/Oyun'da değil, başka satır hiç gizli değil). Gerçek görünürlük (View) cihazda bakılır.
+  - Takılı girdi kontrolü (dokunma yolu okundu): kod değişikliği gerekmedi. `InputCapture.setFingersDisabled(true)` → `TouchTracker.setDisabled(true)` → `forceRelease`: sürükleme/basılı parmak için `PointerAbs buttons=0`, iki parmak kaydırma için `Scroll.CANCELLED`, sıkıştırma için `Pinch.CANCELLED` aynı çağrıda gönderilir (gate: sahibi dokunma olduğundan geçer), sonra tracker sıfırlanır. Parmak hâlâ camdayken gelen sonraki MOVE/UP'lar IDLE'da yok sayılır (sahte tıklama yok). Çizim'den çıkış (`setDisabled(false)`) bir şey göndermez; çünkü kapalıyken başlayan dokunuş hiç basılmadı, borç yok, ve o dokunuşun MOVE/UP'ı yok sayılır; yeni DOWN normal çalışır. Mod katmanı `applyGameLayer` içinde bu yolu çağırır (panel anahtarı ve Ctrl+Shift+7 aynı yol). Eklenen testler (`InputCaptureTest`): sürükleme sırasında Çizim'e giriş (host'ta düğme kalkar, sonrası yok sayılır), kaydırma sırasında giriş (`Scroll.CANCELLED`), Çizim'den çıkış sırasında parmak hâlâ aşağıdayken (sahte basış yok, yeni dokunuş çalışır). Mevcut `TouchTrackerTest`/`PinchTest` aynı geçişi tracker düzeyinde zaten kapsıyordu.
 - **Açık sorular:**
-  - "Kare hızı Çizim'de gösterilmez" kriteri tam karşılanamadı: gizlemek için `settings/SettingsViews.kt`'ye bir `visible` desteği gerekir (kart dışı). Şimdilik satır Çizim'de görünür, başlığı "Kare hızı (Çizim: hep 120)" olur ve düğmeler etkisizdir. Orkestratör isterse `SettingsViews.kt` kapsama alınıp `SettingItem.Choice`'a `hidden: () -> Boolean` eklenebilir.
   - `SessionController.kt`, `SessionMachine.kt`, `DevKnobs.kt` `StreamMode.DEFAULT.toPrefs()` ile derleniyor (Günlük 120 → aynı baytlar), dokunulmadı.
   - Çizim katmanında ses/kalem ezilmiyor (karar 0030 yalnız parmak + bit hızı diyor); farklı isteniyorsa `GameModeSettings.defaults` tek yerden değişir.

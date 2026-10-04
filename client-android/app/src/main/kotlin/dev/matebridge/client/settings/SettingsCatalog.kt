@@ -144,6 +144,8 @@ sealed interface SettingItem {
         val options: List<Option>,
         val selected: () -> String,
         val marker: () -> String = { "" },
+        /** T-223: true while the whole row (title and buttons) is not shown, e.g. "Kare hızı" in Çizim. */
+        val hidden: () -> Boolean = { false },
         val select: (String) -> Unit,
     ) : SettingItem {
         /** The title with its current mark, e.g. "Bit hızı (oyun modu)". */
@@ -195,8 +197,8 @@ object SettingsCatalog {
     const val FRAME_RATE_TITLE = "Kare hızı"
 
     /**
-     * What the "Kare hızı" title shows next to it: the mode whose rate the buttons change (each mode remembers its own),
-     * or for Çizim that it is fixed (the buttons do nothing there; hiding the row needs the views, T-223 open question).
+     * What the "Kare hızı" title shows next to it: the mode whose rate the buttons change (each mode remembers its own).
+     * The row is hidden in Çizim ([SettingItem.Choice.hidden]); the fixed-rate text is only a fallback.
      */
     fun frameRateMarker(mode: StreamMode, fps: Int) =
         if (mode.hasFpsSetting) " (${mode.label})" else " (${mode.label}: hep $fps)"
@@ -246,6 +248,7 @@ object SettingsCatalog {
                         StreamMode.FPS_OPTIONS.map { SettingItem.Option(it.toString(), "$it fps") },
                         { h.frameRate.toString() },
                         { frameRateMarker(h.streamMode, h.frameRate) },
+                        { !h.streamMode.hasFpsSetting }, // decision 0030 §2: not shown in Çizim (always 120)
                     ) { id -> id.toIntOrNull()?.let { h.selectFrameRate(it) } },
                 )
                 add(

@@ -62,6 +62,7 @@ class SettingsViews(
         val scroller = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
         col.addView(scroller)
         refreshers += {
+            col.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-223: e.g. "Kare hızı" in Çizim
             title.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {

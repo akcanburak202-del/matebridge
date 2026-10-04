@@ -162,14 +162,22 @@ class SettingsCatalogTest {
         assertEquals("120", c.selected())
         c.select("60")
         assertEquals("60", c.selected())
+        assertFalse(c.hidden())
         h.streamMode = StreamMode.GAME // the host reports that mode's own rate
         h.frameRate = 60
+        assertFalse(c.hidden())
         assertEquals("Kare hızı (Oyun)", c.titleText())
         c.select("bogus") // not a number: nothing
         assertEquals(listOf("fps 60"), h.calls)
         h.streamMode = StreamMode.DRAWING
         h.frameRate = 120
+        assertTrue(c.hidden()) // decision 0030 §2: the row is not shown in Çizim
+        h.streamMode = StreamMode.DAILY
+        assertFalse(c.hidden()) // and it comes back
+        h.streamMode = StreamMode.DRAWING
         assertEquals("Kare hızı (Çizim: hep 120)", c.titleText())
+        // no other row is ever hidden
+        for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" }) assertFalse(it.key, it.hidden())
         c.select("60") // the host ignores it in Çizim
         assertEquals("120", c.selected())
     }
