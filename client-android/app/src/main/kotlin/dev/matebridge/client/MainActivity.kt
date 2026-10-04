@@ -1978,8 +1978,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /**
      * T-227: a candidate address was settled. Accepted: it is the session's address now ([connect] already made it the
-     * remembered Wi-Fi endpoint). Foreign / unreachable: go back to the old address (posted after T-151's pick handling:
-     * when that already moved the session elsewhere, it is left alone).
+     * remembered Wi-Fi endpoint). Foreign / unreachable: try the next queued discovery result (T-229), else go back to
+     * the old address (posted after T-151's pick handling: when that already moved the session elsewhere, it is left
+     * alone).
      */
     private fun onRediscoveryVerdict(v: EndpointRediscovery.Verdict) {
         val fields = EndpointRediscovery.resultFields(v) ?: return
@@ -1991,7 +1992,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         ui.post {
             // Not after a user start (it ended the episode) or once the session moved on.
-            if (rediscovery.active && rediscoveryEligible() && currentEndpoint == left) connect(old, ConnectOrigin.DISCOVERY)
+            if (!(rediscovery.active && rediscoveryEligible() && currentEndpoint == left)) return@post
+            val next = rediscovery.nextQueued { pairPick.allowsAuto(it) } // T-229: another Mac found meanwhile
+            if (next != null) {
+                MbLog.i("endpoint_rediscover_found", "old=${EndpointRediscovery.octet(old)} new=${EndpointRediscovery.octet(next)}")
+                connect(next, ConnectOrigin.DISCOVERY)
+            } else {
+                connect(old, ConnectOrigin.DISCOVERY)
+            }
         }
     }
 
@@ -2006,6 +2014,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return
         }
         pairPick.onDiscovered(ep) // T-151: remembered, so a pick prompt does not hide it (NSD reports a service once)
+        if (pick == EndpointRediscovery.Pick.QUEUED) return // T-229: a candidate is being tried; this one waits its turn
         if (!pairPick.allowsAuto(ep)) { // it answered PAIRING already: only a user start goes there again
             if (pick == EndpointRediscovery.Pick.CONNECT) rediscovery.forgetCandidate(ep)
             return
@@ -2076,7 +2085,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             return false
         }
         wakeConnect.disown() // T-134: an ordinary session from here, even to the same address
-        if (!origin.automatic) rediscovery.onUserStart() // T-227: the user's choice ends a rediscovery episode
+        // T-227: the user's choice ends a rediscovery episode; T-229: another Mac also drops the remembered identity.
+        if (!origin.automatic) rediscovery.onUserStart(ep)
         currentEndpoint = ep
         forgetNotice = false
         forgetFailed = false
