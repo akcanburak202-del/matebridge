@@ -503,3 +503,12 @@ Oturum donanım kodlayıcıyı ister (`EnableHardwareAcceleratedVideoEncoder`) a
 
 - `ev=settings_reset keys=<n>`: "Varsayılanlara dön" ikinci dokunuşla onaylandı; `n` silinen ayar anahtarı sayısı. Değer yazılmaz. Eşleşme kayıtları, `device_id`, son uç nokta ve `wol_*` korunur.
 - `ev=audio_learned_clear at=reset|stream_start`: öğrenilmiş ses tamponu/güvenlik payı sıfırlandı (sıfırlamada ve sonraki ilk ses akışı başında).
+
+## Mac'in yeni adresini yeniden keşif (tablet, `MB/session`, T-227)
+
+Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam adres ve host adı yazılmaz.
+
+- `ev=endpoint_rediscover reason=connect_failed|down_time failures=<n> restart=<k>`: oturumun uç noktası art arda düştü (`connect_failed`: ≥ 2 düşüş; `down_time`: ilk düşüşten bu yana ≥ 4 sn) ve NSD keşfi yeniden başlatıldı. `k` bu bölümdeki yeniden başlatma sayısı; aralık 8 → 16 → 30 sn (üst sınır). Kayıtlı adres denemeleri ve T-134 uyandırma denemeleri sürer.
+- `ev=endpoint_rediscover_found old=*.<o> new=*.<n>`: yeniden keşif aynı hizmeti yeni bir adreste buldu; oturum oraya bağlanıyor (eski adrese bağlanılırken bile).
+- `ev=endpoint_rediscover_result result=accepted|foreign|unreachable old=*.<o> new=*.<n>`: `accepted`: yeni adresteki host aynı kimlik (son doğrulanmış oturumun host_id'si), adres kaydı güncellendi. `foreign`: orada başka bir eşleşmiş Mac, eşleşme isteyen bir Mac ya da kalıcı hata; o adres bu bölümde bir daha denenmez, eski adrese dönülür. `unreachable`: yeni adres yanıt vermedi, eski adrese dönülür.
+- `ev=endpoint_rediscover_skip new=*.<n>`: bu bölümde `foreign` çıkmış bir adres yeniden bulundu; otomatik bağlanılmadı.
