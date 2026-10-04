@@ -55,13 +55,13 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
 
 ## Handoff
 
-- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Codex P1 düzeltmesi `2bbd857`. Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
+- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Codex P1 düzeltmesi `2bbd857`, P2 düzeltmeleri `9a668a2`. Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
 - **Codex (--high) P1 düzeltmesi:** İlk sürüm, göç kanıtı beklenirken (`candAck != null`) `VideoLost`'u bastırıyordu. Kanıt takılır ve geçerli video bağımsız olarak koparsa, input donuk görüntüde 3 sn'ye kadar açık kalıyordu.
   - Şimdi geçerli videonun her kopuşu input'u hemen kapatır. Bırakmalar geçerli kontrol bağlantısından gider.
   - `duringMigration` yalnız katmanı geciktirir (`VideoHealth.quietOverlay`). Katman şu durumlarda açılır: merdivenin ilk adımında (+1 sn), göç dışı bir kopuşta ya da başka bir hatada. Görüntü HEALTHY olursa bayrak temizlenir. Açık bir kurtarma bölümündeyse katman hiç gizlenmez.
   - Ertelenmiş bildirim (`videoLostDeferred`) kaldırıldı.
   - Regresyon testi: `MigrationAuthGateTest.currentVideoLossDuringAStalledProofGatesInputAtOnce`.
-- **Codex 2. tur (--high), iki P2 düzeltmesi** (commit: bu Handoff'tan bir önceki `T-218: bound video resumes ...`):
+- **Codex 2. tur (--high), iki P2 düzeltmesi** (commit `9a668a2`):
   1. *Yarım yeniden bağlanmalar merdiveni atlıyordu.* `videoFlowing` artık merdivenin zamanını ötelemez.
      - Bölüm başına en çok `MAX_RESUMES` = 3 resume olur; merdiven el ile aşamasındaysa hiç olmaz.
      - Test `VideoHealthTest.partialReconnectsKeepTheLadderOnScheduleAndBoundTheResumes`: her 500 ms'de kare alıp çıktıdan önce kopan bağlantılarda yeniden başlatmalar +1/+3 sn'de, oturum yeniden kurma +6 sn'de, el ile aşama +15 sn'de gelir; 3 resume olur.
