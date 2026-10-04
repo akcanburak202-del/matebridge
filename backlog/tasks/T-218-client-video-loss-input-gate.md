@@ -41,10 +41,10 @@ Mevcut canlılık incelemesi (kod okuması):
 - Host durağan ekranda video soketine hiçbir şey yazmaz. Boşta keyframe (`HEVCEncoder.idleKeyframeNs` 1 sn) yalnız **bekleyen bir keyframe isteği** varken son tamponu yeniden kodlar; `KEYFRAME_INTERVAL_S` (300 sn) yalnız kare akarken geçerli. Yani host tarafında periyodik bir video canlılık sinyali yok.
 - Host video soketi: `BsdTcpOptions` varsayılanı, `SO_KEEPALIVE` kapalı. Tablet video soketi: keepalive yok, okuma zaman aşımı yok (`SessionController.VideoConn`).
 - T-160 `VideoDeliveryGate`: bir video bağlantısının ilk teslim edilen karesi (`video_gate_open`) belli. `abort()` (yeniden yapılandırma, oturum kaybı, göç) `closedPosted`'ı kurar, bu yüzden `VideoClosed` yalnız **beklenmeyen** kopuşta (EOF, IO/protokol hatası, bağlanamama, anahtar yok) gelir.
-- T-205: kanıt beklenirken (`candAck != null`) eski videonun kapanması beklenen bir durumdur (host devralıyor). Mevcut test bu durumda eylem olmamasını istiyor.
+- T-205: kanıt beklenirken (`candAck != null`) eski videonun kapanması host'un devralmasından gelebilir, ama bunun kanıtı yok (Codex incelemesi, P1). Input kapısı bu durumda da hemen kapanır; yalnız katman bekleyebilir.
 
 En küçük güvenli çözüm (protokol değişikliği yok):
-1. **Bilinen kopuş → aynı anda input kapalı.** `SessionMachine`, STREAMING'de geçerli video kuşağının `VideoClosed`'ında yeni `Action.VideoLost(gen)` üretir. Kanıt beklenirken üretmez; aday başarısız olur ve eski oturum kalırsa o zaman üretir. Makinenin `inputAllowed`'ı **değişmez**: kontrol bağlantısı açık kalır, bırakmalar (`RELEASE_ALL(USER)`) reddedilmez.
+1. **Bilinen kopuş → aynı anda input kapalı.** `SessionMachine`, STREAMING'de geçerli video kuşağının `VideoClosed`'ında yeni `Action.VideoLost(gen, duringMigration)` üretir. Bunu her zaman yapar, kanıt beklenirken de (`duringMigration = true`). Bu bayrak yalnız katmanı geciktirir: promosyon yoksa merdivenin ilk adımına (+1 sn) kadar. Makinenin `inputAllowed`'ı **değişmez**: kontrol bağlantısı açık kalır, bırakmalar (`RELEASE_ALL(USER)`) reddedilmez.
 2. `SessionController`: `SessionListener.onVideoLost(gen)` (motor iş parçacığı) ve `onVideoFlowing(gen)` (yeni video bağlantısının ilk teslim edilen karesi, bağlantı başına bir kez).
 3. `VideoHealth`: yeni `FaultCause.VIDEO_LOST` (`video_lost`). `videoLost()` → FAULT; mevcut yol input'u kapatır (`syncInputActive` → `RELEASE_ALL(USER)`), beslemeyi durdurur, "Görüntü durdu" katmanını gösterir, kurtarma merdiveni işler (+1/+3 sn decoder, +6 sn oturum, +15 sn "Yeniden dene"). `videoFlowing()`: FAULT(video_lost) iken RESTART_CODEC döner, yani yeni bir decoder kuşağı. Kuşak STARTING'dedir; ilk çözülmüş çıktısında HEALTHY olur (0019). Eski bağlantının kareleri kuyruk sıfırlamasıyla düşer.
 4. **Belirsiz sessizlik (yarı açık soket):** tablet video soketinde TCP keepalive açılır (`SO_KEEPALIVE`, `TCP_KEEPIDLE` 3 sn, `TCP_KEEPINTVL` 1 sn, `TCP_KEEPCNT` 3). Ayar QuickAck gibi kopyalanmış fd üzerinden `Os.setsockoptInt` ile yapılır. Durağan masaüstünde Mac çekirdeği probu ACK'ler, yanlış alarm yok. Ölü ya da sıfırlanmış uçta okuma ≤ ~6 sn'de ETIMEDOUT/ECONNRESET ile biter ve olağan `VideoClosed` → 1. adım işler. Bu, kontrolün PONG zaman aşımından (3 sn) daha gevşektir. "N sn kare yok" kuralı yok. Ayar başarısız olursa yalnız loglanır, oturuma dokunmaz. Saf `VideoKeepalive` nesnesi sahte setter'la JVM'de test edilir.
@@ -55,18 +55,23 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
 
 ## Handoff
 
-- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Bu Handoff ayrı bir commit'te. Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
+- **Commit:** `105891c` (kod + testler + LOGGING). Plan `2d49e82`. Codex P1 düzeltmesi ayrı bir commit'te (bkz. aşağı). Dal `task/T-218-client-video-loss-input-gate`. `./scripts/check.sh`: ALL OK.
+- **Codex (--high) P1 düzeltmesi:** İlk sürüm, göç kanıtı beklenirken (`candAck != null`) `VideoLost`'u bastırıyordu. Kanıt takılır ve geçerli video bağımsız olarak koparsa, input donuk görüntüde 3 sn'ye kadar açık kalıyordu.
+  - Şimdi geçerli videonun her kopuşu input'u hemen kapatır. Bırakmalar geçerli kontrol bağlantısından gider.
+  - `duringMigration` yalnız katmanı geciktirir (`VideoHealth.quietOverlay`). Katman şu durumlarda açılır: merdivenin ilk adımında (+1 sn), göç dışı bir kopuşta ya da başka bir hatada. Görüntü HEALTHY olursa bayrak temizlenir. Açık bir kurtarma bölümündeyse katman hiç gizlenmez.
+  - Ertelenmiş bildirim (`videoLostDeferred`) kaldırıldı.
+  - Regresyon testi: `MigrationAuthGateTest.currentVideoLossDuringAStalledProofGatesInputAtOnce`.
 - **Dokunulan dosyalar:**
-  - `session/SessionMachine.kt`: `Action.VideoLost(gen)`, `videoLostDeferred` (T-205 kanıt beklemesi).
+  - `session/SessionMachine.kt`: `Action.VideoLost(gen, duringMigration)`.
   - `session/SessionController.kt`:
     - `SessionListener.onVideoLost` / `onVideoFlowing`, `exec(VideoLost)` + `ev=video_lost`.
     - `VideoConn`: `video_gate_open` noktasında `onVideoFlowing`, connect sonrası `VideoKeepalive.forSocket`.
     - Dosya sonunda yeni `object VideoKeepalive`.
-  - `video/VideoHealth.kt`: `FaultCause.VIDEO_LOST`, `videoLost()`, `videoFlowing()`.
+  - `video/VideoHealth.kt`: `FaultCause.VIDEO_LOST`, `videoLost(quietOverlay)`, `videoFlowing()`.
   - `MainActivity.kt`: iki listener override'ı (UI thread'e geçer).
   - Testler:
     - yeni: `session/VideoLossGateTest.kt` (makine + VideoHealth + gerçek `InputCapture`/`FakeSink` host modeli), `session/VideoKeepaliveTest.kt`;
-    - güncellenen: `video/VideoHealthTest.kt` (+6 test, neden listesi), `session/MigrationAuthGateTest.kt` (aday başarısız olup Wi-Fi oturumu kalırsa artık `VideoLost` beklenir; promosyonda yok).
+    - güncellenen: `video/VideoHealthTest.kt` (+10 test, neden listesi). `session/MigrationAuthGateTest.kt`: kanıt beklenirken `VideoClosed` artık `VideoLost(duringMigration = true)` verir; ayrıca yeni regresyon testi.
   - `docs/LOGGING.md`.
 - **Varsayımlar:**
   - `VideoClosed` yalnız beklenmeyen kopuşta gelir: `abort()` `closedPosted`'ı kurduğu için yeniden yapılandırma, oturum kaybı ve göç onu üretmez (mevcut kod).
@@ -80,7 +85,7 @@ Kapsam dışı (Açık sorular'a): host video hattı canlı ama takılı (Mac ç
   3. Video dönünce: `video_gate_open` → `video_recover step=resume` → `state=starting` → ilk çıktıda `state=healthy`; input tekrar açılır.
   4. Durağan masaüstü (Mac'te hiçbir şey değişmesin) ≥ 2 dk: `video_lost` / `fault` yok, input açık. Keepalive probları ACK'lenmeli.
   5. Yarı açık soket (isteğe bağlı): video akışı sırasında Mac tarafında video akışının paketlerini sessizce düşür (`pfctl block drop` yalnız video portu, RST yok). ~6 sn içinde `video_lost` beklenir. Kontrol de etkilenirse bunun yerine oturum kaybı (PONG 3 sn) görülür; bu da doğru.
-  6. USB↔Wi-Fi göçünde (T-205) "Görüntü durdu" katmanı yanıp sönmemeli (kanıt beklenirken eski video kopuşu sayılmıyor).
+  6. USB↔Wi-Fi göçü (T-205). Eski video kanıt beklenirken koparsa logda `video_lost migrating=1` ve `video_overlay quiet=1` görülür; input kısa süre kapanır. Promosyon 1 sn içinde yeni kuşağı HEALTHY yaparsa "Görüntü durdu" katmanı hiç görünmemeli. Göç sonrası Mac'te takılı tuş ya da kalem kalmamalı.
 - **Açık sorular:**
   - Host video hattı canlı ama takılı (encoder/SCK asılı, soket açık): Mac çekirdeği keepalive'ı ACK'ler, tablet bunu ayırt edemez. Bu kart kapsamında değil (astra P2 #4 / host liveness). İstenirse protokol değiştirmeden bir aktif prob yapılabilir: sessizlikte seyrek `KEYFRAME_REQUEST` gönderilir, host `resubmitNow` ile yanıt verir. Ama bu durağan ekranda periyodik IDR (bant/pil) demek. Ürün kararı gerekir, uygulanmadı.
   - USB (`adb reverse`, 127.0.0.1): keepalive probları tabletteki adbd'ye gider. Yarı açık bir USB video soketini keepalive yakalamaz. Tünel düşünce adbd yerel soketi kapatır, bu bilinen kopuş yoluna (`video_lost`) girer.

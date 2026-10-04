@@ -337,7 +337,8 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 
 ## Video kopuşu ve input (tablet, `MB/session`, T-218)
 
-- `ev=video_lost vgen=N` (W): akış sırasında geçerli video bağlantısı beklenmedik biçimde bitti (EOF, IO/protokol hatası, bağlanamama, keepalive zaman aşımı). Hemen ardından `MB/decoder ev=video_health state=fault cause=video_lost` gelir ve input kapanır. Kontrol oturumu sürer, video 500 ms sonra yeniden bağlanır. Yeniden yapılandırma, oturum kaybı ve göç video bağlantısını kendisi kapatır; bunlar `video_lost` yazmaz. Göç kanıtı beklenirken kopan eski video da yazmaz; aday başarısız olur ve oturum kalırsa yazar.
+- `ev=video_lost vgen=N migrating=0|1` (W): akış sırasında geçerli video bağlantısı beklenmedik biçimde bitti (EOF, IO/protokol hatası, bağlanamama, keepalive zaman aşımı). Hemen ardından `MB/decoder ev=video_health state=fault cause=video_lost` gelir ve input kapanır. Kontrol oturumu sürer, video 500 ms sonra yeniden bağlanır. Yeniden yapılandırma, oturum kaybı ve göç video bağlantısını kendisi kapatır; bunlar `video_lost` yazmaz.
+- `migrating=1`: kopuş, bir göç kanıtı (T-205) beklenirken geldi. Input aynı şekilde hemen kapanır. Yalnız "Görüntü durdu" katmanı bekler; böylece promosyonun yeniden yapılandırması katmanı yanıp söndürmez. Bu durumda `MB/decoder ev=video_overlay quiet=1 reason=migration vgen=N` (I) yazılır. Katman şu durumlarda gösterilir: merdivenin ilk adımında (+1 sn) görüntü hâlâ bozuksa, göç dışında yeni bir kopuşta ya da başka bir hatada.
 - `ev=video_keepalive ok=1 idle_s=3 intvl_s=1 cnt=3` (I) / `ok=0 err=<adım>:<istisna>|nofd` (W): her video bağlantısında bir kez. Video soketinde TCP keepalive açılır. Yarı açık soket, son host segmentinden ~6 sn sonra okuma hatasıyla kapanır (→ `video_lost`). Durağan masaüstünde Mac çekirdeği probları yanıtlar, yanlış alarm olmaz. `ok=0` oturumu etkilemez; yalnız yarı açık soket sınırı yoktur.
 
 ## Tablet dosyalarını Mac'te yeniden bağlama (Mac, `files`, T-206)

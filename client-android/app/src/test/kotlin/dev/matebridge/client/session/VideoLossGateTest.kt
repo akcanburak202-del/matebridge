@@ -69,7 +69,7 @@ class VideoLossGateTest {
             is Action.CloseControl -> health.onEvent(HealthEvent.Detached(rgen)) // panel shown, releaseRenderer()
             is Action.OpenVideo -> video = x.gen
             is Action.ApplyConfig -> newGeneration() // installConfig -> reconfigure / attach
-            is Action.VideoLost -> health.videoLost() // listener.onVideoLost
+            is Action.VideoLost -> health.videoLost(quietOverlay = x.duringMigration) // listener.onVideoLost
             else -> Unit
         }
         actions += a

@@ -491,7 +491,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
 
             // T-218: a known video loss closes input at once (FAULT -> RELEASE_ALL(USER)); the control session goes on.
-            override fun onVideoLost(gen: Int) { runOnUiThread { videoHealth.videoLost() } }
+            // During a migration proof only the overlay waits (a promotion reconfigures at once); input closes all the same.
+            override fun onVideoLost(gen: Int, duringMigration: Boolean) {
+                runOnUiThread { videoHealth.videoLost(quietOverlay = duringMigration) }
+            }
 
             // T-218: fresh video after a loss: a new decoder generation, input re-opens at its first decoded output.
             override fun onVideoFlowing(gen: Int) {

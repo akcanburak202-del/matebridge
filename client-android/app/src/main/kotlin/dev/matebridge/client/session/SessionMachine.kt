@@ -178,8 +178,12 @@ class SessionMachine(
          * failure, a keepalive timeout). The picture is stale: the UI closes input at once (video FAULT, then
          * `RELEASE_ALL(USER)`). The session and [inputAllowed] stay as they are, so the releases still go out. The video
          * reconnects as before.
+         *
+         * [duringMigration]: a migration proof was pending (T-205). The host's takeover may have caused the close, and a
+         * promotion would reconfigure the video at once. This flag only softens the *overlay* (the UI may delay it); input
+         * is gated exactly the same, because a pending proof does not prove that the takeover caused the close.
          */
-        data class VideoLost(val gen: Int) : Action
+        data class VideoLost(val gen: Int, val duringMigration: Boolean = false) : Action
     }
 
     /**
@@ -199,8 +203,6 @@ class SessionMachine(
     private var videoGen = -1
     private var videoOpen = false
     private var videoRetryAtUs = 0L
-    /** T-218: the video closed while a migration proof was pending; reported if the candidate fails and the session stays. */
-    private var videoLostDeferred = false
 
     private var hostName = ""
     private var pairingCode: String? = null
@@ -455,10 +457,10 @@ class SessionMachine(
                 videoOpen = false
                 if (phase == Phase.STREAMING) {
                     videoRetryAtUs = nowUs + VIDEO_RETRY_US
-                    // T-218: while a migration proof is pending, the host's takeover closes the old video. That is
-                    // expected, and the promotion reconfigures the video. It counts only if the candidate fails and this
-                    // session stays.
-                    if (candAck != null) videoLostDeferred = true else out += Action.VideoLost(event.gen)
+                    // T-218: every loss of the current video gates input at once, also while a migration proof is pending
+                    // (the close may be the takeover's or an unrelated failure, and the proof may stall until its deadline).
+                    // The flag only lets the UI hold back the overlay for a promotion that is about to reconfigure.
+                    out += Action.VideoLost(event.gen, duringMigration = candAck != null)
                 }
             }
             is Event.SetPrefs -> {
@@ -1014,7 +1016,6 @@ class SessionMachine(
     private fun resetSessionFields() {
         videoGen = -1
         videoOpen = false
-        videoLostDeferred = false
         config = null
         sessionId = 0
         videoPort = 0
@@ -1102,14 +1103,7 @@ class SessionMachine(
     private fun failCandidate(out: MutableList<Action>, nowUs: Long, reason: String) {
         val gone = oldGone || oldStale
         abortMigration(out, reason)
-        if (gone) {
-            lose(out, nowUs, SessionUi.Cause.LOST)
-        } else if (videoLostDeferred) {
-            // T-218: the session stays, but its video closed during the proof, so the picture may be stale. This is
-            // reported even if the video was reopened meanwhile; the health ladder restarts the decoder then.
-            videoLostDeferred = false
-            if (phase == Phase.STREAMING && videoGen >= 0) out += Action.VideoLost(videoGen)
-        }
+        if (gone) lose(out, nowUs, SessionUi.Cause.LOST)
     }
 
     /** Closes the candidate (if any) and reports the failed migration; the current session is not touched. */

@@ -302,6 +302,71 @@ class VideoHealthTest {
         assertEquals(Action.RESTART_CODEC, health.videoFlowing())
     }
 
+    @Test fun aLossDuringAMigrationGatesInputAtOnceButHoldsTheOverlayUntilTheFirstStep() {
+        healthy(1)
+        val before = changes
+        health.videoLost(quietOverlay = true)
+        assertEquals(State.FAULT, health.state)
+        assertFalse("input is gated exactly as for any loss", health.inputAllowed)
+        assertTrue(changes > before)
+        assertFalse(health.feedAllowed)
+        assertFalse(health.showOverlay)
+        now += 500
+        assertNull(tick())
+        assertFalse(health.showOverlay)
+        now += 500
+        assertEquals("the ladder runs as usual", Action.RESTART_CODEC, tick())
+        assertTrue("still broken at the first step: the overlay shows", health.showOverlay)
+        begin(2)
+        assertTrue(health.showOverlay) // recovering and STARTING
+    }
+
+    @Test fun aPromotionThatReconfiguresInTimeNeverShowsTheOverlay() {
+        healthy(1)
+        health.videoLost(quietOverlay = true)
+        now += 200
+        begin(2) // the promotion's STREAM_CONFIG reconfigures
+        assertFalse(health.inputAllowed)
+        assertFalse(health.showOverlay)
+        now += 300
+        assertNull(tick())
+        health.onEvent(FirstOutput(2))
+        assertTrue(health.inputAllowed)
+        assertFalse(health.showOverlay)
+        // A later loss outside a migration shows it at once.
+        health.videoLost()
+        assertTrue(health.showOverlay)
+    }
+
+    @Test fun aLossOutsideAMigrationOrAnotherFaultEndsTheQuietOverlay() {
+        healthy(1)
+        health.videoLost(quietOverlay = true)
+        assertFalse(health.showOverlay)
+        val before = changes
+        health.videoLost() // the next video connection failed after the proof was over
+        assertTrue(health.showOverlay)
+        assertTrue(changes > before)
+    }
+
+    @Test fun anotherFaultOfThePromotedGenerationShowsTheOverlayAtOnce() {
+        healthy(1)
+        health.videoLost(quietOverlay = true)
+        begin(2, running = false) // the promotion reconfigures, but its decoder thread never runs
+        assertFalse(health.showOverlay)
+        now += 2000
+        tick()
+        assertEquals(FaultCause.NOT_RUNNING, health.cause)
+        assertTrue(health.showOverlay)
+    }
+
+    @Test fun aQuietLossInsideAnOpenEpisodeKeepsTheOverlay() {
+        healthy(1)
+        health.onEvent(Fault(1, FaultCause.GIVE_UP))
+        healthy(2) // recovered, but the episode is still open (< 10 s healthy)
+        health.videoLost(quietOverlay = true)
+        assertTrue("an overlay already in an episode is never hidden", health.showOverlay)
+    }
+
     @Test fun videoLossWithoutASurfaceDoesNothing() {
         health.videoLost()
         assertEquals(State.IDLE, health.state)

@@ -1,7 +1,14 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.input.InputCapture
+import dev.matebridge.client.input.InputSink
+import dev.matebridge.client.input.KeyFrame
+import dev.matebridge.client.input.VP
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
+import dev.matebridge.client.protocol.ReleaseAll
+import dev.matebridge.client.video.HealthEvent
+import dev.matebridge.client.video.VideoHealth
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Key
@@ -291,7 +298,8 @@ class MigrationAuthGateTest {
         // input made now still goes to the Wi-Fi generation (the host released everything there already): never refused
         assertTrue(sendInput(key(Key.DOWN), w) && sendInput(key(Key.UP), w))
         // the old connection is not pinged, PONG-timed-out or video-retried any more while the proof is pending
-        assertTrue(step(Event.VideoClosed(video)).isEmpty()) // the host closed the old video too
+        // the host closed the old video too. T-218: input is gated at once anyway (the overlay may wait for the promotion).
+        assertEquals(listOf<Action>(Action.VideoLost(video, duringMigration = true)), step(Event.VideoClosed(video)))
         val idle = ArrayList<Action>()
         repeat(25) { idle += step(Event.Tick(0), 100_000) } // 4 s since the last PONG, 2.5 s into the proof wait
         assertTrue(idle.isEmpty())
@@ -316,8 +324,8 @@ class MigrationAuthGateTest {
         assertEquals(listOf(true, false), sent(w).filterIsInstance<Pen>().map { it.samples.single().flags and PenSample.CONTACT != 0 })
         // the new generation carries input
         assertTrue(sendInput(key(Key.DOWN), c.gen))
-        // T-218: the takeover's close of the old video was expected; the promotion reconfigured the video instead
-        assertTrue(actions.none { it is Action.VideoLost })
+        // T-218: the one video loss (the takeover's close) was reported, marked as during the migration
+        assertEquals(listOf(true), actions.filterIsInstance<Action.VideoLost>().map { it.duringMigration })
     }
 
     @Test fun oldSupersededThenCandidateFailsLosesTheSessionInsteadOfHanging() {
@@ -409,7 +417,8 @@ class MigrationAuthGateTest {
         ackOnly(c, mac(key = wrongKey))
         assertTrue(step(Event.Tick(0), 150_000).isEmpty()) // expired: stale, nothing sent or retried on it
         assertTrue(logs.any { it == "I migration_old_stale " })
-        assertTrue(step(Event.VideoClosed(video)).isEmpty()) // T-218: no VideoLost while the proof is pending
+        // T-218: the current video's loss gates input at once, also while the proof is pending
+        assertEquals(listOf<Action>(Action.VideoLost(video, duringMigration = true)), step(Event.VideoClosed(video)))
         val pings = sent(w).count { it is Ping }
         assertTrue(step(Event.Tick(0), 100_000).isEmpty())
         assertEquals(pings, sent(w).count { it is Ping })
@@ -421,18 +430,74 @@ class MigrationAuthGateTest {
         assertEquals(1, resumed.count { it is Action.OpenVideo })
         assertEquals(pings + 1, sent(w).count { it is Ping })
         assertTrue(sendInput(key(Key.DOWN), w) && sendInput(key(Key.UP), w))
-        // the squatter's record does not authenticate: the candidate fails, the Wi-Fi session stays. T-218: its video
-        // closed during the proof, so the picture may be stale: VideoLost now (input closes until fresh decoded video).
+        // the squatter's record does not authenticate: the candidate fails, the Wi-Fi session stays
         val since = actions.size
         val r = c.records(cfg(2))
-        assertEquals(
-            listOf(Action.CloseCandidate, Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED), Action.VideoLost(video)),
-            r,
-        )
+        assertEquals(listOf(Action.CloseCandidate, Action.MigrationResult(usb, false, SessionMachine.REASON_PROOF_FAILED)), r)
         assertWifiUntouched(w, since)
         // its heartbeat is the ordinary one again: no PONG for 3 s now loses the session as before T-205
         val lost = step(Event.Tick(0), SessionMachine.PONG_TIMEOUT_US)
         assertTrue(lost.filterIsInstance<Action.Ui>().single().state is SessionUi.Disconnected)
+    }
+
+    /**
+     * T-218 review (Codex P1): the candidate is ACCEPTED but its proof stalls, and the *current* video closes on its own
+     * while the Wi-Fi control link keeps answering. A pending ack does not prove the takeover closed it: input must be
+     * gated at once (releases on the current Wi-Fi connection), for the whole proof wait and after the candidate fails.
+     * Only the overlay waits, until the ladder's first step.
+     */
+    @Test fun currentVideoLossDuringAStalledProofGatesInputAtOnce() {
+        val healthLogs = ArrayList<String>()
+        lateinit var health: VideoHealth
+        lateinit var cap: InputCapture
+        // MainActivity: health changes drive syncInputActive; capture sends through trySendInput (gate + generation).
+        health = VideoHealth({ now / 1000 }, log = { l, ev, f -> healthLogs += "$l $ev $f" }) {
+            cap.setActive(health.inputAllowed, now / 1000)
+        }
+        cap = InputCapture(object : InputSink {
+            override fun send(msg: Message) = sendInput(msg, current)
+            override fun congested() = false
+            override fun closeConnection() {}
+        }, { VP })
+        cap.setStreamGeometry(1400, 920)
+        val w = streamingOnWifi()
+        health.onEvent(HealthEvent.Generation(1))
+        health.onEvent(HealthEvent.Running(1))
+        health.onEvent(HealthEvent.FirstOutput(1))
+        assertTrue(health.inputAllowed)
+        cap.onKey(KeyFrame(7, 30, 29, true, 0, false, false, false, now))
+        assertEquals(listOf(Key.DOWN), sent(w).filterIsInstance<Key>().map { it.action })
+
+        val c = openCandidate()
+        ackOnly(c, mac()) // a real candidate whose proof answer is delayed
+        val lost = step(Event.VideoClosed(video))
+        assertEquals(listOf<Action>(Action.VideoLost(video, duringMigration = true)), lost)
+        lost.filterIsInstance<Action.VideoLost>().forEach { health.videoLost(quietOverlay = it.duringMigration) }
+        // Same step: input closed and released on the current (Wi-Fi) connection; nothing went to the candidate.
+        assertFalse(health.inputAllowed)
+        val wifi = sent(w)
+        assertTrue("RELEASE_ALL(USER) follows the held key on Wi-Fi",
+            wifi.indexOfLast { it is ReleaseAll && it.reason == ReleaseAll.USER } > wifi.indexOfFirst { it is Key })
+        val keysAtLoss = wifi.count { it is Key }
+        assertTrue(sent(c.gen).none { it is Key || it is ReleaseAll })
+        assertFalse("the overlay waits for a promotion", health.showOverlay)
+
+        // The proof stalls to its deadline with Wi-Fi PONGs going on; typing on the frozen picture reaches nothing.
+        var t = 0L
+        while (m.migrating) {
+            ticksWithPongs(100_000)
+            t += 100_000
+            if (t % 500_000 == 0L) health.tick(null)
+            cap.onKey(KeyFrame(7, 31, 30, true, 0, false, false, false, now))
+            assertFalse(health.inputAllowed)
+            if (t >= 1_000_000) assertTrue("the overlay shows from the ladder's first step at $t us", health.showOverlay)
+        }
+        assertTrue(actions.any { it is Action.MigrationResult && !it.ok })
+        assertTrue("the Wi-Fi session stays", m.inputAllowed && current == w)
+        assertFalse(health.inputAllowed)
+        assertEquals("no key reached the Mac after the loss", keysAtLoss, sent(w).count { it is Key })
+        assertTrue(sent(c.gen).none { it is Key })
+        assertTrue(healthLogs.toString(), healthLogs.any { it.startsWith("W video_health state=fault cause=video_lost") })
     }
 
     @Test fun aCloseAfterTheHeartbeatExpiredStaysFinal() {

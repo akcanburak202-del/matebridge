@@ -142,7 +142,14 @@ class VideoHealth(
     /** The automatic steps are used up; only the user's "Yeniden dene" is left. */
     val manual: Boolean get() = recovering && steps >= STEPS.size
     /** The video-fault overlay is due (the caller also requires the connect panel to be hidden). */
-    val showOverlay: Boolean get() = state == State.FAULT || (recovering && state == State.STARTING)
+    val showOverlay: Boolean get() = !quietOverlay && (state == State.FAULT || (recovering && state == State.STARTING))
+
+    /**
+     * T-218: a `video_lost` during a migration proof holds the overlay back (never the input gate) until the episode's
+     * first ladder step (+1 s), a loss outside a migration, another fault, or the video is HEALTHY again: a promotion
+     * reconfigures at once and should not flash "Görüntü durdu".
+     */
+    private var quietOverlay = false
 
     /** How long the current generation has been HEALTHY (0 when it is not). */
     fun healthyForMs(): Long = if (state == State.HEALTHY) clock() - healthySinceMs else 0L
@@ -162,6 +169,7 @@ class VideoHealth(
         when (e) {
             is HealthEvent.Detached -> {
                 running = false
+                quietOverlay = false
                 nextStepAtMs = null // nothing to recover without a surface; re-armed on the next generation
                 set(State.IDLE, null)
             }
@@ -170,6 +178,7 @@ class VideoHealth(
             is HealthEvent.FirstOutput -> if (state == State.STARTING) {
                 healthySinceMs = now
                 nextStepAtMs = null
+                quietOverlay = false
                 set(State.HEALTHY, null)
             }
             is HealthEvent.Fault -> fault(e.cause, now)
@@ -183,9 +192,26 @@ class VideoHealth(
     /**
      * T-218: the session's video connection ended while streaming. FAULT (`video_lost`) at once; this closes input
      * through [onChange]. Without a surface (IDLE) there is nothing to close: input is shut already, and the next
-     * generation is STARTING anyway.
+     * generation is STARTING anyway. [quietOverlay] (a migration proof was pending) only holds the overlay back, see
+     * [showOverlay]; the gate, the stopped feeding and the recovery ladder are the same.
      */
-    fun videoLost() = fault(FaultCause.VIDEO_LOST, clock())
+    fun videoLost(quietOverlay: Boolean = false) {
+        if (state == State.IDLE) return
+        if (state == State.FAULT) {
+            if (!quietOverlay) showOverlayNow() // a loss outside a migration: the overlay is due now
+            return
+        }
+        // An open episode may already show the overlay: it is never hidden again.
+        this.quietOverlay = quietOverlay && !recovering
+        if (this.quietOverlay) log('I', "video_overlay", "quiet=1 reason=migration vgen=$generation")
+        fault(FaultCause.VIDEO_LOST, clock())
+    }
+
+    private fun showOverlayNow() {
+        if (!quietOverlay) return
+        quietOverlay = false
+        onChange()
+    }
 
     /**
      * T-218: a video connection delivered its first frame. After a `video_lost` FAULT this returns
@@ -226,6 +252,7 @@ class VideoHealth(
         val step = STEPS[steps++]
         nextStepAtMs = if (steps < STEPS.size) now + STEP_GAPS_MS[steps] else null
         log('W', "video_recover", "step=${step.logName} n=$steps vgen=$generation")
+        showOverlayNow() // T-218: still not healthy at the first step: no promotion fixed it
         return when (step) {
             Step.RESTART -> Action.RESTART_CODEC
             Step.RECONNECT -> Action.RECONNECT
@@ -240,6 +267,7 @@ class VideoHealth(
     fun retry(): Action? {
         if (state == State.IDLE) return null
         val now = clock()
+        quietOverlay = false
         recovering = true
         steps = 1
         nextStepAtMs = now + STEP_GAPS_MS[steps]
@@ -249,6 +277,7 @@ class VideoHealth(
 
     private fun fault(cause: FaultCause, now: Long) {
         if (state == State.FAULT || state == State.IDLE) return
+        if (cause != FaultCause.VIDEO_LOST) quietOverlay = false // T-218: any other fault shows the overlay at once
         if (!recovering) { recovering = true; steps = 0 }
         if (nextStepAtMs == null && !manual) nextStepAtMs = now + STEP_GAPS_MS[steps]
         set(State.FAULT, cause)

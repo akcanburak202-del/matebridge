@@ -69,8 +69,9 @@ interface SessionListener {
     /**
      * T-218: the current video connection [gen] ended unexpectedly while streaming (engine thread). The picture is stale,
      * so input must close at once. The control session goes on and the video reconnects on its own.
+     * [duringMigration]: a migration proof was pending; only the overlay may wait (input closes all the same).
      */
-    fun onVideoLost(gen: Int) {}
+    fun onVideoLost(gen: Int, duringMigration: Boolean) {}
 
     /**
      * T-218: video connection [gen] delivered its first frame (video reader thread, once per connection, right after
@@ -599,8 +600,8 @@ class SessionController(
             }
             is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
             is SessionMachine.Action.VideoLost -> {
-                MbLog.w("video_lost", "vgen=${a.gen}")
-                listener.onVideoLost(a.gen)
+                MbLog.w("video_lost", "vgen=${a.gen} migrating=${if (a.duringMigration) 1 else 0}")
+                listener.onVideoLost(a.gen, a.duringMigration)
             }
         }
     }
