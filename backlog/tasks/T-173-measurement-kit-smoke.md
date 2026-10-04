@@ -1,7 +1,7 @@
 ---
 id: T-173
 title: Version the measurement and soak scripts and add device-smoke.sh
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146]
@@ -64,7 +64,17 @@ Source: external architecture review 2026-10-03 (M07, D5, D10); verification: do
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur: adımlar, dokunulacak dosyalar, riskler.)_
+Eski araçlar kayıp (`~/.cache/matebridge-tools/` ve scratchpad'lerde `mbmon.sh`/`an.py`/`macmon.sh`/`macan.py` yok); NOTES tariflerinden ve LOGGING.md'deki satır biçimlerinden yeniden yazılır. Yalnız bash (macOS 3.2 uyumlu), tablette POSIX sh (toybox) ve python3 stdlib.
+
+1. `tools/measure/mblog.py`: ortak kütüphane. Log satırı ayrıştırma (`<mono> <L> <comp> sid= gen= ev= k=v`, logcat threadtime/epoch önekleri), **gizlilik filtresi** (yalnız beyaz listedeki `(component, ev)` satırları; değerden yalnız sayı / `a/b/c` sayı demeti / `-`; kimlik alanları sıkı regex'le: sha, codec adı, boyut, mod kimlikleri; geri kalan her şey atılır), yüzdelik, sonuç başlığı (commit SHA'ları, macOS ve HarmonyOS build, codec, topoloji/taşıma, çözünürlük, hedef ve gerçek Hz, bit hızı, içerik, süre, tur sayısı; < 3 tur ise "iddia değil" uyarısı). Ham log diske hiç yazılmaz: filtre boru hattında çalışır.
+2. `tools/measure/smoke.py` + `scripts/device-smoke.sh`: kimlik (host `app_start`/`profile`/`session_started`, tablet `app_start`/`profile`/`codec_start`/`stream_config`, `getprop ro.build.display.id`, `sw_vers`), sonra 60 s pencere (tablet `adb logcat -T 1` → fifo → filtre; host `host.log` bayt ofsetinden ekleneni okur, dönüşü (rotation) karşılar). Anahtar alanların p50/p95'i stdout'a. `--out DIR` yalnız filtrelenmiş dosyaları saklar. Salt okunur: kurmaz, ayar değiştirmez, uygulama başlatmaz/durdurmaz; HUAWEI olmayan cihazda tablet kısmını reddeder; seri numarası basmaz.
+3. `tools/measure/mbmon.sh` (tablette çalışır, `/data/local/tmp/mbmon.txt`): 1 Hz panel hızı (Huawei `lcd_fps_scence` düğümü, yoksa SurfaceFlinger), sıcaklık bölgeleri, CPU/GPU frekansı, ham CPU tick'leri (sistem + istemci/surfaceflinger/codec/HAL/adbd/logd). `--soak`: 60 s'de PSS, fd (`run-as`), iş parçacığı adları (önek grupları), codec kaynak sayısı ve arka planda olay sayımı için `logcat -e`. `an.py`: pencere özeti (CPU payları /800, panel Hz dağılımı, sıcaklık, frekans; isteğe bağlı logcat ile `MB/decoder recv`/s, `vsync_ms_p50`, AGP `final lcd fps` ve dokunma olayları).
+4. `tools/measure/macmon.sh` (host, 5 s; `top -l 2` ile CPU, `ioreg` GPU kullanımı, MateBridgeApp/WindowServer/`--proc` süreçleri; `--soak`: RSS, `lsof` fd, `ps -M` iş parçacığı, host.log olay artışları). `macan.py`: özet + isteğe bağlı host.log penceresi (`ev=latency`/`cadence`/`net ev=stats`).
+5. `tools/soak/`: `tablet-soak.sh start|stop|pull|status` (mbmon.sh `--soak`'u tablete itip ayrık başlatır; `pull` filtreleyerek çeker), `host-soak.sh` (macmon.sh `--soak --interval 60` sarmalayıcısı), `summarize.py` (saatlik eğilimler ve eğimler: RSS/PSS, fd, önek başına iş parçacığı, codec örnekleri, olay sayıları, yeniden başlatmalar; hüküm yok).
+6. `tools/measure/selftest.sh` + `tools/measure/testdata/` (sentetik, yalnız sayısal): `bash -n`, `sh -n`, `py_compile`, ayrıştırıcı/özet beklenen değerleri, gizlilik grep'i (pano/tuş/metin/seri/IP içeren sentetik satırların çıktıya sızmadığı).
+7. `tools/measure/README.md` (tarifler, başlık biçimi, gizlilik grep kontrolü), `tools/soak/README.md` (kısa), `docs/WORKFLOW.md` bir paragraf.
+
+Riskler: tablet düğüm yolları (`lcd_fps_scence`, termal bölge adları, `media.resource_manager` biçimi) cihazda doğrulanmadı → değer yoksa `-` ve README'de "cihazda doğrula". Canlı cihazda hiçbir şey çalıştırılmaz (orkestratör merge sonrası tek tek). `check.sh` kart dosyalarında değil; selftest elle çalıştırılır (Açık sorular).
 
 ## Handoff
 
