@@ -1255,3 +1255,20 @@ Koşul: host sha=91aaa2c, APK a9d7980, macOS 27.0.1 (26A434), HarmonyOS MRDI-W09
 - **Ağ:** Mac en1 802.11ax, kanal 52 (5 GHz DFS, 80 MHz), −45 dBm, 960 Mbps; kart 802.11be destekliyor ama modem (FiberHGW) ax. Tablet Wi-Fi 6, −31…−35 dBm, 2401 Mbps (160 MHz). `awdl0` aktif. Ethernet satırı (topoloji 2) bu oturumda yok (Mac kapatılmadan kablo bağlanamıyor).
 - **İş yükü:** `~/.cache/matebridge-tools/wload.swift` (yeni): 40 sn döngü — 20 sn tam ekran yoğun yazı kaydırma, 10 sn 2 sn'de bir tam ekran içerik değişimi, 10 sn durağan; 5 dk. Krita ve müzik yok.
 - **Satırlar:** USB; Wi-Fi varsayılan; Wi-Fi 30 Mbps; Wi-Fi 15 Mbps; Wi-Fi + `tos_ctl 0xB8` + `wifi_ll`; Wi-Fi + `awdl0` kapalı. Host `MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`.
+
+## 2026-10-04 ~16:20–16:50 — T-127 ara sonuçlar (hızlı yol, her satır 1 koşu)
+
+Host 91aaa2c-derlemesi (`MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`), APK a9d7980, Günlük 60 fps 2800×1840, bit hızı Otomatik = 30 Mbps (Wi-Fi'de de 30), ses açık (`afplay` ton, 5 dk). İş yükü `wload` (40 sn döngü: 20 sn kaydırma 60 fps, 10 sn 2 sn'de bir tam ekran değişim, 10 sn durağan). Analiz: scratchpad `wload/an2.py`; Wi-Fi satırlarında tablet logu tablet içinde `/data/local/tmp/t127.log*` (henüz çekilmedi). **Topoloji: oturum Mac'in Wi-Fi adresinden (en1 192.168.1.107) gidiyordu; Mac'te Ethernet (en0, 1 Gbit) bağlı olsa da tablet Wi-Fi adresine bağlanıyor.**
+
+| satır | kontrol srtt p50/p95/max | video srtt p95/max | cap_dec p50/p95/max (ms, host STATS) | retx | idr | tablette atılan kare |
+|---|---|---|---|---|---|---|
+| USB | 1 / 1 / 2 | 2 / 2 | 7 / 73 / 86 | 46 | 1 | 23 |
+| Wi-Fi (awdl0 açık) | 30 / 57 / 77 | 135 / 180 | 43 / 152 / 212 | 10 | 2 | **1282** |
+| Wi-Fi, awdl0 kapalı | 24 / 50 / 67 | 105 / 127 | 24 / 151 / 1128 | 17 | 1 | **1220** |
+
+- **Bütçe:** iki Wi-Fi satırı da kontrol srtt p95 (≤ 40) ve cap_dec p95 (≤ 70) bütçesini geçemedi. USB satırı cap_dec p95'te de 73 (tam ekran değişimlerinin büyük kareleri; bütçe bu iş yükünde USB'de bile sınırda).
+- **AWDL bulgusu (ping, 0,1 sn aralık):** awdl0 açıkken Mac→modem min/ort/max 2,8/10,6/64 ms, Mac→tablet 4,9/9,6/72 ms; `sudo ifconfig awdl0 down` sonrası Mac→modem 2,7/3,2/3,9, Mac→tablet 4,9/5,7/10. AWDL Mac Wi-Fi'sinde 60–70 ms'lik periyodik sıçramalar yaratıyor. Kaydırma evresinde cap_dec ~45 → ~22 ms.
+- **Kontrol srtt tabanı ~24 ms** (durağan evrede bile, ping 5,7 ms iken): büyük olasılıkla tabletin gecikmeli ACK'i (kontrol soketinde seyrek küçük mesajlar). Kontrol srtt ağ RTT'si değil; bütçe metriği olarak sorgulanmalı (T-197 / TCP_QUICKACK karşılığı istemci tarafında?).
+- **İki ayrı sorun:** (1) kaydırma sırasında 60 karenin 3–10'u/sn atılıyor (~%10; kullanıcının "akıcı değil, takılma" dediği) — kareler havadan topak hâlinde geliyor, tablet yenisini gösterip eskiyi atıyor; AWDL bunu değiştirmedi. (2) tam ekran değişiminin ekrana gelişi 110–170 ms (USB ~75); durağan evreden sonra bağlantı "soğuk" (TCP boşta kalma sonrası yeniden hızlanma şüphesi). 
+- **Wi-Fi 7:** Mac kartı 802.11be destekliyor, modem (FiberHGW) ax; iki cihaz da Wi-Fi 6 ile bağlı. MLO anlık sıçramaları azaltabilir; karar bu ölçümün sonuna kaldı.
+- Sıradaki satırlar: 15 Mbps; tablet `wifi_ll` + `tos_ctl` (güç tasarrufu → topak hipotezi); Mac Ethernet (topoloji 2, Mac Wi-Fi'si kapatılarak).
