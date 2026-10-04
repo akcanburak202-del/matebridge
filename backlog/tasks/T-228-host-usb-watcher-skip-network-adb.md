@@ -1,7 +1,7 @@
 ---
 id: T-228
 title: Host — the USB tunnel watcher must ignore network adb devices (adb over Wi-Fi is not USB)
-status: todo
+status: in_progress
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -26,7 +26,13 @@ Cihaz 2026-10-04 ~22:40: tablette kablosuz adb açıldı (`adb tcpip 5555` + `ad
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+- **Kural seçimi: seri numarası biçimi** (`usb:` alanı değil). `UsbTunnelWatcher` ve `TabletFilesBridge` `adb devices` çağırıyor (`-l` yok) ve ikisi de kartın `files:` listesinde değil; `usb:` kuralı bu çağrıları değiştirmeyi gerektirir. Seri biçimi bugünkü çıktıyla çalışır.
+- `AdbDevice.isNetwork` (MateBridgeCore): seri `:` içeriyorsa (`192.168.1.105:5555`, `[fe80::1]:5555`, `host:port`) ya da mDNS hizmet adıysa (`._adb-tls-connect._tcp`, `._adb._tcp` gibi `._tcp` içeren; sondaki `.` dahil) ağ cihazıdır. USB seri numaraları bunları içermez.
+- `AdbOutput.selectDevice`: hazır cihazlardan ağ cihazlarını at; kalanlarda mevcut sıra aynen kalır (ilk fiziksel, yoksa `emulator-`). Yalnız ağ cihazı varsa `nil` → planner `no_device`, tünel kurulmaz.
+- Yan etki (bilinçli): `TabletFilesBridge` de `selectDevice` kullanıyor, artık ağ adb'sine `adb forward` kurmaz (WebDAV zaten yalnız USB oturumunda çalışıyor).
+- XCTest (`AdbOutputTests`): IP:port, IPv6, mDNS biçimleri seçilmez; USB+ağ karışık listede USB seçilir (sıra fark etmeksizin); yalnız ağ → `nil`; ağ + emulator → emulator; mevcut emulator/offline testleri değişmeden geçer; `parseDevices` mDNS satırını doğru ayrıştırır.
+- `docs/LOGGING.md`: `usb_tunnel state=no_device` satırının ağ adb cihazlarını saymadığını not et (yeni log alanı yok; seri loglanmaz).
+- Sınır: düzeltmeden önce ağ bağlantısına kurulmuş eski `adb reverse` tünelleri bu değişiklikle silinmez (watcher artık o seriyi görmez); cihazda bir kez `adb -s <ip:port> reverse --remove-all` ya da `adb disconnect` gerekir.
 
 ## Handoff
 
