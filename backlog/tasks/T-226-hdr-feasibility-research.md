@@ -1,7 +1,7 @@
 ---
 id: T-226
 title: Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code
-status: in_progress
+status: review
 phase: 6
 owner: orchestrator
 depends_on: [T-188]
@@ -35,9 +35,9 @@ Kullanıcı (2026-10-04): Resident Evil 4 ayarlarında HDR açılamıyor ("monit
 
 ## Kabul kriterleri
 
-- [ ] [doc] `docs/research/2026-10-04-hdr-feasibility.md`: her halka için cevap (evet / hayır / bilinmiyor + nasıl öğrenilir), kanıt (kaynak bağlantısı, runtime çıktısı, cihaz okuması), engel varsa hangisi.
-- [ ] [doc] Uygulanabilirse: önerilen mimari (hangi modda, hangi biçim: HDR10 mı HLG mi), protokol etkisi taslağı, kart bölümlemesi ve kaba maliyet; gecikme/bant/güç riski.
-- [ ] [doc] Uygulanamazsa: hangi halkanın neden engel olduğu ve neyin değişmesi gerektiği (ör. macOS sürümü, kamuya açık API).
+- [x] [doc] `docs/research/2026-10-04-hdr-feasibility.md`: her halka için cevap (evet / hayır / bilinmiyor + nasıl öğrenilir), kanıt (kaynak bağlantısı, runtime çıktısı, cihaz okuması), engel varsa hangisi.
+- [x] [doc] Uygulanabilirse: önerilen mimari (hangi modda, hangi biçim: HDR10 mı HLG mi), protokol etkisi taslağı, kart bölümlemesi ve kaba maliyet; gecikme/bant/güç riski.
+- [x] [doc] Uygulanamazsa: hangi halkanın neden engel olduğu ve neyin değişmesi gerektiği (ör. macOS sürümü, kamuya açık API).
 - [ ] [device, isteğe bağlı] Prob gerekirse orkestratör kullanıcı onayıyla çalıştırır ve sonucu rapora ekler.
 
 ## Plan
@@ -53,10 +53,34 @@ Riskler: canlı kullanıcı oturumu — tablette yalnız okuma komutları; Mac't
 
 ## Handoff
 
-_(Araştırmacı bitirince doldurur.)_
+**Sonuç:** Kesin engel yok.
+- Mac tarafı macOS 27'de mevcut:
+  - `CGVirtualDisplayMode` `initWithWidth:height:refreshRate:transferFunction:` (Apple'ın SidecarDisplayAgent'ı Reference Mode'da `tf=1` kullanıyor);
+  - SCK HDR preset'leri (`x420` + BT.2100 PQ);
+  - VT Main10 + MDCV/CLL (LLRC dahil).
+- Tablet: decoder `Main10` ve `Main10HDR10` (L5.1) bildiriyor; HWC `hdr10=true hlg=true`.
+- Açık riskler:
+  - HarmonyOS 4.3'ün üçüncü taraf `SurfaceView` HDR sunumu (Android probu);
+  - RE4/GameHub'ın (D3DMetal, FB22330617) HDR ekranı görmesi (önerilen kart A: geliştirici anahtarıyla MateBridge ekranını `tf=1` kurmak, akış SDR).
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+Öneri: HDR10, yalnız Oyun modu, isteğe bağlı. Ayrıntı, protokol taslağı ve kart bölümlemesi raporda (~4–5 ajan günü + 3–4 cihaz oturumu).
+
+- **Commit:** plan 5335345; rapor + prob 891c231; bu Handoff bir sonraki commit.
+- **Dokunulan dosyalar:** `docs/research/2026-10-04-hdr-feasibility.md`, `probes/hdr-probe/` (Swift paketi + `android/` alt projesi + README), bu kart.
 - **Varsayımlar:**
+  - `transferFunction` değerlerinin anlamı (1 = HDR) Sidecar disassembly'si ve Vibepollo #539'dan çıkarıldı; bu Mac'te ekran kurulmadığı için doğrulanmadı.
+  - CTA-861 EOTF kodu benzerliği tahmin.
+  - Web bulguları bir araştırma alt ajanından geldi; Vibepollo alıntısı ayrıca doğrulandı.
 - **Test edilmeyenler / cihazda doğrulananlar:**
+  - Cihazda yalnız salt okuma yapıldı: `dumpsys display`, `dumpsys SurfaceFlinger`, `dumpsys media.player`, `media_codecs.xml`, `getprop`.
+  - Mac'te yalnız runtime ve yetenek sorgusu yapıldı.
+  - Hiçbir prob komutu (`vd`, `encode`, Android APK) çalıştırılmadı:
+    - `vd` sanal ekran kurar → kullanıcı onayı gerekir;
+    - `encode` tek donanım kodlayıcısını kullanır → canlı akış varken çalıştırılmamalı;
+    - APK kurulumu ve açılışı → onay gerekir.
+  - `swift build/test` (check.sh içinde) ve Android `assembleDebug testDebugUnitTest` (elle; check.sh alt klasörü taramaz) geçti.
+  - `./scripts/check.sh` ALL OK.
 - **Açık sorular:**
+  - `probes/README.md` tablosuna `hdr-probe` satırı eklenmeli; kartın `files:` listesinde olmadığı için dokunulmadı.
+  - Android probunun check.sh'a girmesi istenir mi? Şu an `probes/hdr-probe/android` olduğu için girmiyor.
+  - `vd` probunun ekranı tablette görünmez; RE4 testi ancak kart A (ürün ekranında geliştirici anahtarı) ile yapılabilir.
