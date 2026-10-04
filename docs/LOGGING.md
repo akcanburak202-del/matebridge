@@ -520,3 +520,17 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
 - `W session ev=wrong_host`: bölüm sırasında yapılan otomatik bağlantılar (aday, eski adrese dönüş, T-151 seçim geri dönüşü) yalnız son doğrulanmış host_id'ye gidebilir. İlk yanıttaki host_id farklıysa ya da başka bir Mac eşleşme istiyorsa, oturum makinesi bağlantıyı HELLO_ACK'tan önce kapatır ve `Failed(WRONG_HOST)` verir. O bağlantıda pano, dosya ve girdi hiç açılmaz. Kimlik yazılmaz.
 - `I session ev=expect_host`: bölüm başladığında eski adresi zaten yeniden deneyen oturum da aynı kapıya bağlandı. Bundan sonraki yeniden denemelerde yalnız son doğrulanmış host kabul edilir. Uyandırma denemesi bağlanmaz. `ev=session_start ... expect_host=1`: bu başlangıç kapılı. Kimlik ve adres yazılmaz.
 - `ev=endpoint_rediscover_skip new=*.<n>`: bu bölümde `foreign` çıkmış bir adres yeniden bulundu; otomatik bağlanılmadı.
+
+## Decoder renk anahtarları ve çıkış biçimi (tablet, `MB/decoder`, T-231, karar 0026)
+
+- Geliştirici ayarları (`--ez dev true` ile; yoksa `diag ev=dev_knobs ignored=color_range,…` ve varsayılan): `--es color_range auto|full|limited|unset`, `--es color_standard auto|bt709|bt601|unset`, `--es color_transfer auto|srgb|sdr_video|unset`.
+  - `auto` (ya da ayar yok / bilinmeyen değer): STREAM_CONFIG'den bugünkü eşleme (`ColorMapping`), decoder formatı bayt bayt aynı.
+  - Sabit değerler: range `full=1 limited=2`; standard `bt709=1 bt601=4`; transfer `sdr_video=3`, `srgb=2` (ColorUtils `kColorTransferSRGB`, public MediaFormat sabiti değil).
+  - `unset`: anahtar decoder formatına hiç konmaz (bitstream VUI belirler).
+  - T-217 geri düşüş formatı aynı renk anahtarlarını kullanır.
+  - `ev=profile knobs=` bunları `color_range:<id>` vb. listeler; bilinmeyen değer `other`.
+- **`I decoder ev=decoder_output_format gen=<n> range=<v>|unset|? standard=… transfer=… hdr_static_info=<hex>|unset|empty|? req_range=<v>|unset req_standard=… req_transfer=…`**: çıkış iş parçacığı `INFO_OUTPUT_FORMAT_CHANGED` gördükten sonra, codec'in çıkış formatından.
+  - `range/standard/transfer`: çıkış formatındaki `color-range/standard/transfer` (`?` = okunamadı).
+  - `hdr_static_info`: `hdr-static-info` varsa ham baytlar onaltılık (en çok 64 bayt, fazlası `+<n>`); yoksa `unset`.
+  - `req_*`: bu codec'in configure'da aldığı renk anahtarları (`unset` = konmadı).
+  - Codec başına: aynı alanlar art arda tekrarlanmaz, en çok 16 satır. Mevcut `ev=output_format` (codec başına bir kez) değişmedi.

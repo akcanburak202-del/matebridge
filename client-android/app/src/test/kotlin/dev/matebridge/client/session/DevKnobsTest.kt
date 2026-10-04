@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,6 +26,7 @@ class DevKnobsTest {
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
         "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
+        "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -44,6 +46,7 @@ class DevKnobsTest {
         assertNull(k.decoderFaultAfterS)
         assertTrue(k.gameDisplay)
         assertEquals(DecoderLatencyKnobs.STANDARD, k.decoderLatency) // T-222: oprate=max
+        assertEquals(ColorOverrides.AUTO, k.colorOverrides) // T-231
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -97,6 +100,7 @@ class DevKnobsTest {
         assertEquals(15, k.decoderFaultAfterS)
         assertFalse(k.gameDisplay)
         assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.ALL, DecoderLatencyKnobs.OpRate.MAX), k.decoderLatency)
+        assertEquals(ColorOverrides.parse("limited", "bt601", "unset"), k.colorOverrides)
         assertEquals("dev=1 ignored=-", k.logFields())
     }
 
@@ -151,7 +155,7 @@ class DevKnobsTest {
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "stats_1s:1",
+                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -257,5 +261,40 @@ class DevKnobsTest {
         }
         // Each field stays one key=value token.
         assertTrue(line, line.split(' ').all { it.count { c -> c == '=' } == 1 })
+    }
+
+    // --- T-231: colour overrides ---
+
+    @Test fun colorKnobsWithoutDevAreIgnoredAndKeepAuto() {
+        val k = parse("color_range" to "full", "color_standard" to "bt709", "color_transfer" to "srgb")
+        assertEquals(ColorOverrides.AUTO, k.colorOverrides)
+        assertEquals("dev=0 ignored=color_range,color_standard,color_transfer", k.logFields())
+        assertEquals(emptyList<String>(), k.knobs)
+    }
+
+    @Test fun colorKnobsWithDevApplyAndAreListedInKnobs() {
+        val k = parse("dev" to true, "color_range" to "Full", "color_standard" to " bt709 ", "color_transfer" to "srgb")
+        assertEquals(ColorOverrides.parse("full", "bt709", "srgb"), k.colorOverrides)
+        assertEquals(listOf("color_range:full", "color_standard:bt709", "color_transfer:srgb"), k.knobs)
+        assertEquals("dev=1 ignored=-", k.logFields())
+    }
+
+    @Test fun anUnknownColorValueIsAutoAndLogsAsOther() {
+        val k = parse("dev" to true, "color_range" to "10.0.0.5", "color_transfer" to "pq")
+        assertEquals(ColorOverrides.AUTO, k.colorOverrides)
+        assertEquals(listOf("color_range:other", "color_transfer:other"), k.knobs)
+        assertFalse(k.knobs.joinToString().contains("10.0.0.5"))
+    }
+
+    @Test fun everyColorIdIsLoggable() {
+        for (id in listOf("auto", "full", "limited", "unset")) {
+            assertEquals(listOf("color_range:$id"), parse("dev" to true, "color_range" to id).knobs)
+        }
+        for (id in listOf("auto", "bt709", "bt601", "unset")) {
+            assertEquals(listOf("color_standard:$id"), parse("dev" to true, "color_standard" to id).knobs)
+        }
+        for (id in listOf("auto", "srgb", "sdr_video", "unset")) {
+            assertEquals(listOf("color_transfer:$id"), parse("dev" to true, "color_transfer" to id).knobs)
+        }
     }
 }

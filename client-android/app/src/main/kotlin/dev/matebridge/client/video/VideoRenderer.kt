@@ -78,6 +78,8 @@ class VideoRenderer(
     private val restartDelaysMs: LongArray = RestartPolicy.DELAYS_MS,
     /** T-217 dev knob (`dec_lowlat`, `dec_oprate`): decoder latency keys; [DecoderLatencyKnobs.DEFAULT] adds none. */
     private val decoderTuning: DecoderLatencyKnobs = DecoderLatencyKnobs.DEFAULT,
+    /** T-231 dev knob (`color_range`, `color_standard`, `color_transfer`); [ColorOverrides.AUTO] = today's colour keys. */
+    private val colorOverrides: ColorOverrides = ColorOverrides.AUTO,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -364,12 +366,21 @@ class VideoRenderer(
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
         tuning.operatingRate(config.fps)?.let { format.setInteger(MediaFormat.KEY_OPERATING_RATE, it) }
-        ColorMapping.standard(config.matrix)?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
-        ColorMapping.transfer(config.transfer)?.let { format.setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
-        format.setInteger(MediaFormat.KEY_COLOR_RANGE, ColorMapping.range(config.fullRange))
+        // T-231: [ColorOverrides.AUTO] puts exactly the pre-T-231 keys (ColorMapping); a knob replaces a value in place
+        // or leaves its key out. The T-217 fallback format gets the same colour keys (the knobs are independent).
+        for ((k, v) in colorKeys(config)) format.setInteger(k, v)
         if (lowLatency == true) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
         for ((k, v) in tuning.extraKeys) format.setInteger(k, v)
         return format
+    }
+
+    /** T-231: the colour keys of the decoder format for [config], in format order (absent = left unset). */
+    private fun colorKeys(config: StreamConfig): Map<String, Int> {
+        val m = LinkedHashMap<String, Int>()
+        colorOverrides.standard(config)?.let { m[MediaFormat.KEY_COLOR_STANDARD] = it }
+        colorOverrides.transfer(config)?.let { m[MediaFormat.KEY_COLOR_TRANSFER] = it }
+        colorOverrides.range(config)?.let { m[MediaFormat.KEY_COLOR_RANGE] = it }
+        return m
     }
 
     /** `configure` + `start`; on failure releases [codec] and rethrows. */
@@ -383,8 +394,10 @@ class VideoRenderer(
         }
     }
 
-    private fun createCodec(surface: Any): DecoderCodec {
+    /** [onColorKeys]: T-231, the colour keys this codec is configured with (called once, before configure). */
+    private fun createCodec(surface: Any, onColorKeys: (Map<String, Int>) -> Unit = {}): DecoderCodec {
         val config = this.config
+        onColorKeys(colorKeys(config))
         val mime = mime(config)
         if (config.colorPrimaries != 1) {
             // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged.
@@ -524,7 +537,8 @@ class VideoRenderer(
             // T-168: frame_seq restarts per video connection; no per-frame entry of an earlier codec may pair with ours.
             // Decoder thread, before this codec's first input (the previous codec's threads no longer touch stats).
             stats.resetFrames()
-            codec = createCodec(att.surface)
+            var requestedColors: Map<String, Int> = emptyMap()
+            codec = createCodec(att.surface) { requestedColors = it }
             var held: VideoFrame? = null
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
             val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
@@ -565,9 +579,11 @@ class VideoRenderer(
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
             // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
             val c = codec
+            val colors = requestedColors
             val t = Thread({
                 val outInfo = DecoderCodec.OutputInfo()
                 var loggedFormat = false
+                val formatGate = OutputFormatLogGate() // T-231: `ev=decoder_output_format`, per codec
                 st.lastOutputNs = System.nanoTime()
                 try {
                     while (st.current) {
@@ -585,6 +601,7 @@ class VideoRenderer(
                             loggedFormat = true
                             logOutputFormat(c)
                         }
+                        if (changed) logDecoderOutputFormat(c, formatGate, att.gen, colors)
                     }
                 } catch (e: Exception) {
                     if (st.running) outError.set(e.javaClass.simpleName)
@@ -841,6 +858,16 @@ class VideoRenderer(
             "transfer=${key(MediaFormat.KEY_COLOR_TRANSFER)} " +
             "size=${key(MediaFormat.KEY_WIDTH)}x${key(MediaFormat.KEY_HEIGHT)} " +
             "crop=${key("crop-left")},${key("crop-top")},${key("crop-right")},${key("crop-bottom")}")
+    }
+
+    /**
+     * T-231: `ev=decoder_output_format` after an output-format change ([OutputFormatLogGate]: the same fields are not
+     * repeated, bounded per codec). [requested]: the colour keys this codec was configured with (`req_*`).
+     */
+    private fun logDecoderOutputFormat(codec: DecoderCodec, gate: OutputFormatLogGate, gen: Int, requested: Map<String, Int>) {
+        val fields = try { OutputFormatReport.fields(codec.outputFormat, requested) } catch (e: Exception) { "output_format=unavailable" }
+        if (!gate.take(fields)) return
+        env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=decoder_output_format gen=$gen $fields")
     }
 
     private fun nowUs() = env.elapsedRealtimeNanos() / 1000

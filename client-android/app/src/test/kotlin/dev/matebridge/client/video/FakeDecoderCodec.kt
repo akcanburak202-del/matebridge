@@ -44,6 +44,12 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     @Volatile var rejectKeys: Set<String> = emptySet()
     /** T-217: what [DecoderCodec.supportedVendorParameters] answers (null = unknown / API < 31). */
     @Volatile var vendorParameters: List<String>? = null
+    /** T-231: the next n dequeueOutputBuffer calls (any codec) return `INFO_OUTPUT_FORMAT_CHANGED`. */
+    @Volatile var outputFormatChanges = 0
+    /** T-231: the integer keys of every codec's output format. */
+    @Volatile var outputFormatInts: Map<String, Int> = emptyMap()
+    /** T-231: the byte-buffer keys of every codec's output format (e.g. `hdr-static-info`). */
+    @Volatile var outputFormatBuffers: Map<String, ByteArray> = emptyMap()
     /** T-217: the integer keys of every configure call (any codec, failed ones included), in order. */
     val configureFormats = java.util.concurrent.CopyOnWriteArrayList<Map<String, Int>>()
 
@@ -111,10 +117,14 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         try { latch.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
     }
 
-    private class Format(private val values: Map<String, Int>) : DecoderCodec.FormatView {
-        override fun containsKey(key: String) = values.containsKey(key)
+    private class Format(
+        private val values: Map<String, Int>,
+        private val buffers: Map<String, ByteArray> = emptyMap(),
+    ) : DecoderCodec.FormatView {
+        override fun containsKey(key: String) = values.containsKey(key) || buffers.containsKey(key)
         override fun getInteger(key: String) = values[key] ?: throw NullPointerException(key)
         override fun getFloat(key: String): Float = throw ClassCastException(key)
+        override fun getByteBuffer(key: String): ByteBuffer? = buffers[key]?.let { ByteBuffer.wrap(it).asReadOnlyBuffer() }
     }
 
     inner class Codec(val serial: Int, val mime: String) : DecoderCodec {
@@ -177,6 +187,11 @@ class FakeDecoderFactory : DecoderCodec.Factory {
                     log.add("dequeueOutputFailure#$serial"); lock.notifyAll()
                     throw IllegalStateException("fake dequeueOutputBuffer failure")
                 }
+                if (outputFormatChanges > 0) {
+                    outputFormatChanges--
+                    log.add("outputFormatChanged#$serial"); lock.notifyAll()
+                    return DecoderCodec.INFO_OUTPUT_FORMAT_CHANGED
+                }
                 val pts = ready.removeFirstOrNull()
                 if (pts != null) {
                     outputs++; lock.notifyAll()
@@ -207,7 +222,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         }
 
         override val inputFormat: DecoderCodec.FormatView get() = Format(format?.integers ?: emptyMap())
-        override val outputFormat: DecoderCodec.FormatView get() = Format(emptyMap())
+        override val outputFormat: DecoderCodec.FormatView get() = Format(outputFormatInts, outputFormatBuffers)
 
         override fun stop() {
             record("stop#$serial>"); gate(stopGate); record("stop#$serial<")
