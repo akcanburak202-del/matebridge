@@ -85,6 +85,13 @@ class EndpointRediscovery(
      */
     private var candidateStarted = false
     private val foreign = HashSet<Endpoint>()
+    /**
+     * T-229 review: the endpoint of a user start ([onUserStart]) whose first state has not been seen yet. Until its
+     * `Connecting` (or its own `Failed`) arrives, every state is a late one of the superseded session (the controller
+     * hops threads) and settles nothing: above all, a late `Connected(hostTag = previous Mac)` must not be learnt as the
+     * picked address's identity.
+     */
+    private var userStartEp: Endpoint? = null
     /** T-229: candidates that did not answer in this episode (tried after fresh addresses). */
     private val unreachable = HashSet<Endpoint>()
     /** T-229: addresses discovered while a candidate was being tried, oldest first (at most [MAX_QUEUE]). */
@@ -98,6 +105,7 @@ class EndpointRediscovery(
         if (candidate != null && candidate != current) dropCandidate() // someone else replaced the candidate's session
         // A terminal state of a superseded start (its address is not the session's any more; review 3 #1) settles nothing.
         if (state is SessionUi.Failed && state.endpoint != null && state.endpoint != current) return Verdict.None
+        if (awaitingUserStart(state, current)) return Verdict.None
         if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(state.endpoint, current, nowMs)
         if (candidate != null && !candidateStarted) {
             if (state is SessionUi.Connecting && state.endpoint == candidate) {
@@ -195,6 +203,20 @@ class EndpointRediscovery(
         downSinceMs = nowMs
         down = true
         return Verdict.None
+    }
+
+    /** Whether [state] predates the latest user start's first state ([userStartEp]); releases the barrier otherwise. */
+    private fun awaitingUserStart(state: SessionUi, current: Endpoint?): Boolean {
+        var want = userStartEp ?: return false
+        if (current != want) { // the session moved on before the start showed up: wait for the newer start instead
+            userStartEp = current
+            want = current ?: return false
+        }
+        val ours = (state is SessionUi.Connecting && state.endpoint == want) ||
+            (state is SessionUi.Failed && state.endpoint == want) // e.g. a latch ends the start before connecting
+        if (!ours) return true
+        userStartEp = null
+        return false
     }
 
     private fun learn(tag: HostTag, ep: Endpoint) {
@@ -305,6 +327,7 @@ class EndpointRediscovery(
      */
     fun onUserStart(ep: Endpoint? = null) {
         reset()
+        userStartEp = ep // states of the superseded session settle nothing until this start shows up
         if (ep != null && ep != knownEp) {
             known = null
             knownEp = null
@@ -313,6 +336,7 @@ class EndpointRediscovery(
 
     /** The transport was applied again, the activity stopped, or the user disconnected: forget the episode (not [known]). */
     fun reset() {
+        userStartEp = null
         clearStreak()
         endEpisode()
     }

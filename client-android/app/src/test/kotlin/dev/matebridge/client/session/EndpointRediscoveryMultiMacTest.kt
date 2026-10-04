@@ -185,6 +185,42 @@ class EndpointRediscoveryMultiMacTest {
         assertEquals(macB, r.expectedHost()) // B's identity is the remembered one now
     }
 
+    @Test fun aLateConnectedOfTheSupersededSessionIsNotLearntForTheUserPick() {
+        // Codex T-229: Mac A finishes reconnecting while the user starts Mac B; A's Connected renders before B's
+        // Connecting (the controller hops threads), with currentEndpoint already B.
+        establishAndDrop()
+        ui(SessionUi.Connecting(wifi))
+        r.onUserStart(macBEp)
+        current = macBEp
+        assertEquals(Verdict.None, ui(connected(macA))) // late: must not learn A as B's identity
+        ui(SessionUi.Disconnected(Cause.LOST, 1000)) // a late drop of A's session counts nothing for B either
+        assertEquals(0, r.failures)
+        ui(SessionUi.Connecting(macBEp))
+        ui(failed(), advanceMs = 300)
+        ui(SessionUi.Connecting(macBEp), advanceMs = 1000)
+        ui(failed(), advanceMs = 300)
+        assertTrue(restart())
+        assertEquals(macBEp, r.old)
+        assertNull(r.expectedHost()) // no ExpectHost(A): B is not refused as WRONG_HOST
+        ui(SessionUi.Connecting(macBEp))
+        assertEquals(Verdict.None, ui(connected(macB)))
+        dropAgain(macBEp)
+        assertTrue(restart())
+        assertEquals(macB, r.expectedHost())
+    }
+
+    @Test fun aUserStartEndedByItsOwnFailureReleasesTheBarrier() {
+        establishAndDrop()
+        r.onUserStart(macBEp)
+        current = macBEp
+        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.KEY_MISMATCH, macBEp))) // a latch, no Connecting
+        ui(SessionUi.Connecting(macBEp))
+        assertEquals(Verdict.None, ui(connected(macB)))
+        dropAgain(macBEp)
+        assertTrue(restart())
+        assertEquals(macB, r.expectedHost())
+    }
+
     @Test fun aUserStartAtTheSameAddressKeepsTheIdentity() {
         establishAndDrop()
         r.onUserStart(wifi)
