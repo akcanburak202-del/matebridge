@@ -1316,3 +1316,20 @@ Tablet içi log (16:21–22:34) çekildi, koşu aralıkları ses durumu + `.star
 - **İkon (açıklandı):** aynı anda Mac `screencapture` ve tablet `screencap` karşılaştırması: tablette kırmızı ikonun kenarları basamaklı/noktalı, Mac'te pürüzsüz; mavi/yeşil ikonlarda hafif. Neden 4:2:0 renk alt örnekleme: doygun kırmızı ile gri-yeşil Dock arasındaki kenar parlaklıkta zayıf, renkte güçlü → kenar yarım çözünürlüklü renk düzleminde çiziliyor. Bit hızından bağımsız (T-188: 30/100 Mbps aynı). Çaresi 4:4:4 (sıradaki araştırma; tablet decoder desteği bilinmiyor). Bu, 4:4:4 için somut kullanıcı-görünür gerekçe.
 - **Siyah çizgi (videoda doğrulandı, neden açık):** kullanıcı videosu (telefonla, 22:16, Günlük mod, Mac Ethernet'e geçişten hemen sonra): Dock'un üst kenarında Fotoğraflar→Telefon ikonları üstünde kısa, ince, koyu yatay parça; 6 sn boyunca sabit. 22:41 Mac+tablet ekran görüntülerinde o bölgede yok. Önde gelen hipotez: durağan bölgede kalıcı kodlama artığı (P-kare atlama blokları eski hatayı taşır; ince düşük kontrastlı hata kodlayıcının düzeltme eşiğinin altında). Ayırt etme: kullanıcı "çizgi var" deyince aynı anda Mac `screencapture` + tablet `screencap`; yalnız tablette → bizde (çare: durağan bölge yenilemesi, `MATEBRIDGE_IDLE_REFRESH_*` T-086 / intra refresh), Mac'te de → macOS Dock çizimi. Kullanıcı testi: çizgi varken fareyi Dock'ta gezdir, Dock yeniden çizilince kayboluyor mu.
 - **Eski not:** bu yakalamada görünmedi. Olasılıklar: oyun çözünürlüğü 1848×1214'ün 35:23'ten küçük sapmasıyla 1 px'lik kenar şeridi (T-215 toleransı), Dock animasyonunda kodlama artığı, ya da macOS. Kullanıcı görünce "çizgi var" diyecek; o an iki ekran görüntüsü + mod + Dock durumu alınacak.
+
+## 2026-10-04 ~23:50 — T-127: 15 Mbps ve `wifi_ll`+`tos_ctl` satırları (Mac Ethernet + tablet Wi-Fi)
+
+Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlantısı Wi-Fi'ye sabit, Günlük 60. Her satır 1 koşu (5 dk, `run_wifi.sh`). r4/r5 host 91aaa2c + APK 14:17; r6 host 5940512 + APK 23:41 (T-227/T-228; ikisi de yalnız kopuk/USB yolunu etkiler). Tablet logu `t127b.log`, satırlar `.start/.end` ile dilimlendi.
+
+| satır | c50 | c95 | v95 | cd50 | **cd95** | cdmx | retx | drop | ses kesilmesi | skip_pct | fps | kbps |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| r4 Ethernet, 30 Mbps | 34 | 43 | 58 | 42 | 126 | 143 | 14 | 23 | 1 | 3,3 | 33,8 | 17 897 |
+| r5 Ethernet, **15 Mbps** | 43 | 50 | 54 | 45 | 110 | 135 | 50 | 21 | 0 | 2,4 | 36,8 | 14 471 |
+| r6 Ethernet, 30 Mbps, **`wifi_ll` + `tos_ctl 0xB8`** | 35 | 43 | 60 | 43 | 131 | 145 | 9 | 43 | 0 | 2,3 | 37,0 | 18 167 |
+
+(c = kontrol srtt ms, v = video srtt ms, cd = tabletin bildirdiği yakalama→çözme ms.) r6'da `ev=wifi_knobs … tos_ctl=0xb8 … wifi_ll=1`, `ev=traffic_class sock=control requested=0xb8 applied=0xb8`, `ev=wifi_lock held=1 mode=low_latency` görüldü.
+
+- **Tam ekran geçişleri (cd95 ~110–145 ms) ne bit hızıyla ne tablet Wi-Fi güç kilidiyle değişiyor.** Tablet Wi-Fi güç tasarrufu hipotezi reddedildi. 15 Mbps yalnız ~15 ms kazandırıyor; kontrol srtt'si ve retx biraz kötüleşiyor (tek koşu, gürültü olabilir).
+- Ses bütçesi üç satırda da karşılanıyor (0–1 kesilme / 5 dk), kare takılması %2–3.
+- **Değerlendirme:** Mac Ethernet'teyken Wi-Fi "sabit profil yeterli" dalında. Kalan tam ekran gecikmesi tablet Wi-Fi bağlantısının patlama kapasitesi; düğmelerle düzelmiyor. Uyarlamalı tıkanıklık denetimi (T-195/T-196) bunu kısaltmaz, yalnız sesi korur (ses zaten korunuyor).
+- Kart kabulündeki "her satır ≥ 3 koşu" tamamlanmadı (her satır 1 koşu). Kapatma kararı kullanıcıda.
