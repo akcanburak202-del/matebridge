@@ -143,13 +143,14 @@ public enum StreamProfileLog {
         return k.isEmpty ? "-" : k.map { "\($0.name):\($0.value)" }.joined(separator: ";")
     }
 
-    /// `fps=… bitrate_kbps=… bitrate_source=… codec=… encoder_profile=… scale_permille=… refresh_hz=… sha=… knobs=…`.
+    /// `fps=… bitrate_kbps=… bitrate_source=… codec=… encoder_profile=… scale_permille=… refresh_hz=… display=… sha=…
+    /// knobs=…`. `display=` is the virtual display mode (`2800x1840@2x`, or a game display `1848x1214@1x`, T-214).
     public static func fields(settings: VideoSettings, encoderProfile: EncoderProfile, build: BuildInfo,
                               env: [String: String]) -> String {
         "fps=\(settings.fps) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) "
             + "codec=\(settings.codec.logName) encoder_profile=\(encoderProfile.rawValue) "
             + "scale_permille=\(settings.scalePermille) refresh_hz=\(settings.displayRefreshHz) "
-            + "sha=\(value(build.sha)) knobs=\(knobsField(env))"
+            + "display=\(settings.displayModeText) sha=\(value(build.sha)) knobs=\(knobsField(env))"
     }
 
     /// One log token: trimmed, cut to `maxValueLength` characters, whitespace and the separators `=` and `;` become

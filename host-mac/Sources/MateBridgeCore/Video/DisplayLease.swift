@@ -5,9 +5,15 @@ import Foundation
 /// (the coordinator passes a continuous clock, so the keep time is wall time, T-165).
 ///
 /// A session end **parks** the display (T-165): capture and encoder stop at once, only the display stays alive for the
-/// keep time (default 10 s, `MATEBRIDGE_DISPLAY_KEEP_S`). The same device coming back with the same display size gets
-/// the display back (`reuse` / `reconfigure`, the owner builds a new pipeline on the parked display); a different
-/// device or size replaces it; when the keep time runs out the display is torn down.
+/// keep time (default 10 s, `MATEBRIDGE_DISPLAY_KEEP_S`). The same device coming back with the same native display
+/// size gets the display back (`reuse` / `reconfigure`, the owner builds a new pipeline on the parked display); a
+/// different device or native size replaces it; when the keep time runs out the display is torn down.
+///
+/// Display identity is device + native (HELLO) size (`VideoSettings.sameNative`). A different display mode of the
+/// same identity (native HiDPI <-> 1x game display, decision 0029, or another refresh rate) is a `.reconfigure`: the
+/// pipeline built for it decides whether the display can be kept (`DisplayReuse`) and otherwise removes it and waits
+/// `DisplayRecreateGap` before creating the new one. `.teardown` + `.create` is only for another device or native
+/// size.
 public struct DisplayLease: Sendable {
     public static let defaultGraceUs: UInt64 = 10_000_000
     /// `MATEBRIDGE_DISPLAY_KEEP_S` bounds and default (T-165). The upper bound is one day.
@@ -21,8 +27,9 @@ public struct DisplayLease: Sendable {
         case create(VideoSettings)
         /// Keep the existing display. If it is parked, build a new pipeline on it with the session's settings.
         case reuse
-        /// Keep the display (same device and size) but restart capture and encoder with these settings (fps, scale,
-        /// refresh rate changed; T-049). If it is parked, build a new pipeline on it with these settings.
+        /// Keep the display identity (same device and native size) but restart capture and encoder with these settings
+        /// (fps, scale, refresh rate, display mode changed; T-049, T-214). If it is parked, build a new pipeline on it
+        /// with these settings. The pipeline recreates the display when its mode or refresh rate differs.
         case reconfigure(VideoSettings)
         /// The session ended: stop capture and encoder now, keep only the virtual display (T-165).
         case park
@@ -32,6 +39,7 @@ public struct DisplayLease: Sendable {
     public enum TeardownReason: String, Equatable, Sendable {
         case keepExpired = "keep_expired"
         case deviceChanged = "device_changed"
+        /// Another native (HELLO) size; a game display of the same tablet is not a size change.
         case sizeChanged = "size_changed"
         case shutdown
 
@@ -65,18 +73,19 @@ public struct DisplayLease: Sendable {
         case .active(let d, let s), .parked(let d, let s, _):
             state = .active(device, settings)
             guard d == device else { return teardownAndCreate(settings, .deviceChanged) }
-            guard s.sameDisplay(as: settings) else { return teardownAndCreate(settings, .sizeChanged) }
+            guard s.sameNative(as: settings) else { return teardownAndCreate(settings, .sizeChanged) }
             return s == settings ? [.reuse] : [.reconfigure(settings)]
         }
     }
 
-    /// A live session changed its stream mode. No display work unless the settings really differ; the display size
-    /// never changes this way (a different size would be replaced).
+    /// A live session changed its stream mode. No display work unless the settings really differ. A game display
+    /// on/off or size change keeps the native size, so it is a `.reconfigure` (the pipeline recreates the display);
+    /// a different native size would be replaced.
     public mutating func reconfigure(settings: VideoSettings) -> [Action] {
         guard case .active(let d, let s) = state else { return [] }
         guard s != settings else { return [] }
         state = .active(d, settings)
-        return s.sameDisplay(as: settings) ? [.reconfigure(settings)] : teardownAndCreate(settings, .sizeChanged)
+        return s.sameNative(as: settings) ? [.reconfigure(settings)] : teardownAndCreate(settings, .sizeChanged)
     }
 
     /// The control session ended (or was taken over: a new `sessionStarted` follows). Returns `[.park]` when a

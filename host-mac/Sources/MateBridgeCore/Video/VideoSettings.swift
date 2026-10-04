@@ -2,12 +2,14 @@ import Foundation
 
 /// Tunable video parameters and the `STREAM_CONFIG` derived from them.
 public struct VideoSettings: Equatable, Sendable {
-    /// Virtual display size in pixels (the encoded size is `encodedWidthPx` x `encodedHeightPx`).
+    /// Virtual display size in pixels (the encoded size is `encodedWidthPx` x `encodedHeightPx`): the native display
+    /// (HELLO size, HiDPI) or a 1x game display (decision 0029, `displayHiDPI == false`).
     public var widthPx: Int
     public var heightPx: Int
-    /// Encoded size as a fraction of the display size, in permille (500...1000; `STREAM_PREFS`, T-049).
+    /// Encoded size as a fraction of the display size, in permille (500...1000; `STREAM_PREFS`, T-049). Always 1000
+    /// on a game display (the requested size is the encoded size).
     public var scalePermille: Int = 1000
-    /// Logical size in points (HiDPI: half of the pixel size).
+    /// Logical size in points (HiDPI: half of the pixel size; 1x game display: equal to it).
     public var widthPt: Int
     public var heightPt: Int
     public var fps: Int
@@ -23,6 +25,23 @@ public struct VideoSettings: Equatable, Sendable {
     /// default. Always nil while `bitrateOverrideKbps` is set: the user's choice is not in effect then, so a change
     /// of it alone is no change of the settings.
     public var userBitrateKbps: Int?
+    /// 1x game display only (decision 0029): the native HiDPI display it stands in for. nil = this is the native
+    /// display, whose own size is the native size. Set by `applying(_:)`; the single source of `displayHiDPI`.
+    public internal(set) var replacedNative: NativeDisplaySize?
+
+    /// The native display (HELLO size, HiDPI 2x) a 1x game display replaces.
+    public struct NativeDisplaySize: Equatable, Sendable {
+        public var widthPx: Int
+        public var heightPx: Int
+        public var widthPt: Int
+        public var heightPt: Int
+    }
+
+    /// The virtual display is HiDPI (2x, the native display). false = a 1x game display (decision 0029).
+    public var displayHiDPI: Bool { replacedNative == nil }
+    /// The tablet's native pixel size (HELLO): the same for the native display and for a game display replacing it.
+    public var nativeWidthPx: Int { replacedNative?.widthPx ?? widthPx }
+    public var nativeHeightPx: Int { replacedNative?.heightPx ?? heightPx }
 
     /// Tablet native panel, 2x HiDPI.
     public static let tabletDefault = VideoSettings(
@@ -77,9 +96,24 @@ public struct VideoSettings: Equatable, Sendable {
         return s
     }
 
-    /// Same virtual display size and point size (refresh rate, fps, scale and bitrate may differ).
+    /// Same virtual display size, point size and HiDPI (refresh rate, fps, scale and bitrate may differ).
     public func sameDisplay(as other: VideoSettings) -> Bool {
         widthPx == other.widthPx && heightPx == other.heightPx && widthPt == other.widthPt && heightPt == other.heightPt
+            && displayHiDPI == other.displayHiDPI
+    }
+
+    /// Same native (HELLO) size: the native display and a game display of the same tablet are one display identity
+    /// for `DisplayLease`; only their mode differs (decision 0029).
+    public func sameNative(as other: VideoSettings) -> Bool {
+        nativeWidthPx == other.nativeWidthPx && nativeHeightPx == other.nativeHeightPx
+    }
+
+    /// Display mode for the logs: `2800x1840@2x` (native, HiDPI) or `1848x1214@1x` (game display).
+    public var displayModeText: String { displayMode.text }
+
+    /// The mode the virtual display must have for these settings (`DisplayReuse`).
+    public var displayMode: DisplayMode {
+        DisplayMode(widthPx: widthPx, heightPx: heightPx, hidpi: displayHiDPI, refreshHz: displayRefreshHz)
     }
 
     public static let colorPrimaries: UInt8 = 1

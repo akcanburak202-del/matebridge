@@ -1,4 +1,4 @@
-/// Host-side rules for `STREAM_PREFS` (T-049, docs/PROTOCOL.md 0x05). Pure: no clock, no I/O.
+/// Host-side rules for `STREAM_PREFS` (T-049, T-214, docs/PROTOCOL.md 0x05). Pure: no clock, no I/O.
 extension VideoSettings {
     /// Encoded width: `widthPx x scale`, rounded to an even number (at least 2).
     public var encodedWidthPx: Int { Self.encodedSize(widthPx, scalePermille: scalePermille) }
@@ -36,20 +36,55 @@ extension VideoSettings {
         return min(max(Int(raw), userBitrateRangeKbps.lowerBound), userBitrateRangeKbps.upperBound)
     }
 
-    /// The settings a session runs with after the tablet's `STREAM_PREFS`. The display size and point size never
-    /// change. Bitrate priority (decision 0013): `bitrateOverrideKbps` (env, T-086/T-088) > the tablet's
-    /// `bitrate_kbps` (clamped, T-106) > the mode default. A change of the bitrate alone keeps `displayRefreshHz`, so
-    /// the virtual display is kept and only capture and encoder restart. `defaultRefreshHz` is the refresh rate used
-    /// for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps put the virtual display at the same rate.
-    public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60) -> VideoSettings {
-        let p = prefs.normalized
+    /// Scale of the encoded size relative to the native display, in permille: `scalePermille` on the native display;
+    /// on a game display `1000 · encodedWidth / nativeWidth` (1848 of 2800 → 660), so the mode-default bitrate follows
+    /// the encoded size the same way (PROTOCOL.md 0x05).
+    public var effectiveScalePermille: Int {
+        guard !displayHiDPI, nativeWidthPx > 0 else { return scalePermille }
+        return Int((1000 * Double(encodedWidthPx) / Double(nativeWidthPx)).rounded())
+    }
+
+    /// The same settings on the native display (HELLO size, HiDPI): `self` unless a game display replaced it.
+    var onNativeDisplay: VideoSettings {
+        guard let n = replacedNative else { return self }
         var s = self
+        s.widthPx = n.widthPx
+        s.heightPx = n.heightPx
+        s.widthPt = n.widthPt
+        s.heightPt = n.heightPt
+        s.replacedNative = nil
+        return s
+    }
+
+    /// The settings a session runs with after the tablet's `STREAM_PREFS`. Without an accepted game display
+    /// (`display_*` 0x0, rejected by `GameDisplayPolicy`, or `allowGameDisplay == false` after `game_display_failed`)
+    /// the display is the native one: its size and point size never change, `scale_permille` sets the encoded size.
+    /// With one (decision 0029) the display is `w x h` at 1x: points = pixels, the scale is ignored (encoded = display).
+    /// Bitrate priority (decision 0013): `bitrateOverrideKbps` (env, T-086/T-088) > the tablet's `bitrate_kbps`
+    /// (clamped, T-106) > the mode default (`effectiveScalePermille`). A change of the bitrate alone keeps the display
+    /// mode and `displayRefreshHz`, so the virtual display is kept and only capture and encoder restart.
+    /// `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps put the
+    /// virtual display at the same rate.
+    public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60,
+                         allowGameDisplay: Bool = true) -> VideoSettings {
+        let p = prefs.normalized
+        var s = onNativeDisplay
         s.fps = Int(p.fps)
-        s.scalePermille = Int(p.scalePermille)
         s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
+        if allowGameDisplay, let game = GameDisplayPolicy.size(of: p, nativeW: s.widthPx, nativeH: s.heightPx) {
+            s.replacedNative = NativeDisplaySize(widthPx: s.widthPx, heightPx: s.heightPx,
+                                                 widthPt: s.widthPt, heightPt: s.heightPt)
+            s.widthPx = game.w
+            s.heightPx = game.h
+            s.widthPt = game.w
+            s.heightPt = game.h
+            s.scalePermille = 1000
+        } else {
+            s.scalePermille = Int(p.scalePermille)
+        }
         s.userBitrateKbps = bitrateOverrideKbps == nil ? Self.clampedUserBitrateKbps(p.bitrateKbps) : nil
         s.bitrateKbps = bitrateOverrideKbps ?? s.userBitrateKbps
-            ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.scalePermille)
+            ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.effectiveScalePermille)
         return s
     }
 }

@@ -6,12 +6,15 @@ public enum VideoPipelineError: Error, CustomStringConvertible {
     case screenRecordingDenied
     case unsupportedCodec
     case alreadyStarted
+    /// The 1x game display (decision 0029) was created but its mode could not be made current.
+    case gameDisplayUnavailable
 
     public var description: String {
         switch self {
         case .screenRecordingDenied: return ScreenCaptureError.permissionDenied.description
         case .unsupportedCodec: return "only HEVC and H.264 are implemented"
         case .alreadyStarted: return "video pipeline was already started (create a new one to restart)"
+        case .gameDisplayUnavailable: return "1x game display mode could not be selected"
         }
     }
 }
@@ -56,9 +59,9 @@ public final class VideoPipeline: @unchecked Sendable {
 
     /// - Parameters:
     ///   - tap: observes every encoder output with its encode time, in encoder order (stats, dump tool).
-    ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its refresh rate
-    ///     already equals `settings.displayRefreshHz` and it is still online (`isOnline`), replaced by a new display
-    ///     otherwise.
+    ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its
+    ///     pixel size, HiDPI and refresh rate already equal the settings' and it is still online (`DisplayReuse`),
+    ///     replaced by a new display otherwise.
     ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
     init(settings: VideoSettings = .tabletDefault,
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
@@ -102,8 +105,12 @@ public final class VideoPipeline: @unchecked Sendable {
             set { $0.encoder = encoder }
 
             let display = try await obtainDisplay()
-            set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
+            set { $0.displayInfo = "requested=\(display.requestedRefreshHz)Hz mode=\(display.mode.text) mode_selected=\(display.modeSelected) applied=\(display.appliedModeDescription)" }
             set { $0.display = display }
+            // A 1x game display whose mode did not become current would be captured at whatever mode the system
+            // picked; the owner falls back to the native display instead (game_display_failed). The catch below
+            // removes the display.
+            if !display.hidpi && !display.modeSelected { throw VideoPipelineError.gameDisplayUnavailable }
             let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us, displayUs in
                 encoder?.encode(pb, presentationTime: pts, captureTimeUs: us, displayTimeUs: displayUs)
             }, onStop: { [weak self] error in self?.fail(error) })
@@ -129,24 +136,37 @@ public final class VideoPipeline: @unchecked Sendable {
         }
     }
 
-    /// The inherited display when it already runs at the wanted refresh rate and is still online (capture and encoder
-    /// restart only); otherwise a new display. A display parked for a while may have gone offline (display sleep,
-    /// T-165), and capture on an offline display only fails. ScreenCaptureKit keeps delivering at the old rate after an in-place mode switch
-    /// (measured, T-049: 60 fps after 60 -> 120 Hz even for a new SCStream, 126 fps on a display created at 120 Hz),
-    /// so a refresh change needs a new display. The old one must be gone first: a second display with the same
-    /// vendor/product/serial cannot be created while it exists. The short wait lets the system finish removing it.
+    /// The inherited display when its pixel size, HiDPI and refresh rate already match and it is still online (capture
+    /// and encoder restart only); otherwise a new display (`DisplayReuse`). A display parked for a while may have gone
+    /// offline (display sleep, T-165), and capture on an offline display only fails. ScreenCaptureKit keeps delivering
+    /// at the old rate after an in-place mode switch (measured, T-049: 60 fps after 60 -> 120 Hz even for a new
+    /// SCStream, 126 fps on a display created at 120 Hz), so a refresh change needs a new display; so does a native
+    /// <-> game display change (decision 0029). The old one must be gone first: a second display with the same
+    /// vendor/product/serial cannot be created while it exists. Every new display waits until `DisplayRecreateGap`
+    /// (~700 ms) has passed since the last removal, whichever path removed it (this one, a teardown, a failed start).
     private func obtainDisplay() async throws -> VirtualDisplay {
-        let rate = Double(settings.displayRefreshHz)
         if let old = lock.withLock({ () -> VirtualDisplay? in defer { inherited = nil }; return inherited }) {
-            if old.requestedRefreshHz == rate && Self.isOnline(old) {
+            if DisplayReuse.decide(current: old.mode, online: Self.isOnline(old), wanted: settings.displayMode) == .reuse {
                 set { $0.reusedDisplay = true }
                 return old
             }
             old.invalidate()
-            try await Task.sleep(nanoseconds: 700_000_000)
         }
+        let waitUs = VirtualDisplay.recreateWaitUs()
+        if waitUs > 0 { try await Task.sleep(nanoseconds: waitUs * 1_000) }
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
-                                  hidpi: true, refreshRate: rate)
+                                  physicalPixelWidth: settings.nativeWidthPx, physicalPixelHeight: settings.nativeHeightPx,
+                                  hidpi: settings.displayHiDPI, refreshRate: Double(settings.displayRefreshHz))
+    }
+
+    /// Whether a `start()` error concerns setting up the virtual display itself (creation, settings, mode selection),
+    /// as opposed to permissions, the encoder or capture: only those make a game display fall back to the native one.
+    /// Capture not finding the display (`ScreenCaptureError.displayNotFound`) is left out on purpose: it also happens
+    /// around display sleep (T-081/T-128) and would switch game displays off for the whole process.
+    static func isDisplayFailure(_ error: Error) -> Bool {
+        if error is VirtualDisplayError { return true }
+        if case VideoPipelineError.gameDisplayUnavailable = error { return true }
+        return false
     }
 
     /// The virtual display is still known to the window server (public CoreGraphics, `CGDisplayIsOnline`).

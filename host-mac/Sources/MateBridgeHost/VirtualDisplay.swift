@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import MateBridgeCore
 import ObjectiveC
 
 // The ONLY file that touches the private CGVirtualDisplay API (AGENTS.md hard rule).
@@ -15,6 +16,7 @@ import ObjectiveC
 // HiDPI note (docs/NOTES.md 2026-09-29): with hiDPI = 1 the mode sizes are in POINTS
 // (pixels = 2x), so only the half-size mode is registered while maxPixels stays at the full
 // pixel size. A 1400x920 mode + 2800x1840 maxPixels yields 2800x1840 px frames.
+// With hiDPI = 0 (the 1x game display, decision 0029) the mode is the pixel size itself.
 
 public enum VirtualDisplayError: Error, CustomStringConvertible {
     case apiUnavailable(String)
@@ -40,10 +42,18 @@ final class VirtualDisplay: @unchecked Sendable {
     static let vendorID: UInt32 = 0x4D42  // "MB"
     static let productID: UInt32 = 0x0001
 
+    /// Backing pixel size and HiDPI the display was created with.
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let hidpi: Bool
+
     /// - Parameters:
-    ///   - pixelWidth/pixelHeight: backing pixel size (e.g. 2800x1840).
+    ///   - pixelWidth/pixelHeight: backing pixel size (e.g. 2800x1840, or a 1x game display such as 1848x1214).
+    ///   - physicalPixelWidth/physicalPixelHeight: the panel's pixel size, for `sizeInMillimeters` (default: the
+    ///     backing size). A game display passes the native size so the reported physical size stays the panel's.
     ///   - hidpi: when true, exposes a 2x mode (pixels/2 points) instead of a 1x mode.
-    init(name: String, pixelWidth: Int, pixelHeight: Int, hidpi: Bool, refreshRate: Double = 60) throws {
+    init(name: String, pixelWidth: Int, pixelHeight: Int, physicalPixelWidth: Int? = nil,
+         physicalPixelHeight: Int? = nil, hidpi: Bool, refreshRate: Double = 60) throws {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
             throw VirtualDisplayError.apiUnavailable("CGVirtualDisplayDescriptor")
         }
@@ -62,8 +72,8 @@ final class VirtualDisplay: @unchecked Sendable {
         descriptor.setValue(UInt32(pixelWidth), forKey: "maxPixelsWide")
         descriptor.setValue(UInt32(pixelHeight), forKey: "maxPixelsHigh")
         // ~264 dpi panel (12.2 inch tablet, 2800x1840).
-        let mmW = Double(pixelWidth) / 264.0 * 25.4
-        let mmH = Double(pixelHeight) / 264.0 * 25.4
+        let mmW = Double(physicalPixelWidth ?? pixelWidth) / 264.0 * 25.4
+        let mmH = Double(physicalPixelHeight ?? pixelHeight) / 264.0 * 25.4
         descriptor.setValue(NSValue(size: CGSize(width: mmW, height: mmH)), forKey: "sizeInMillimeters")
         descriptor.setValue(VirtualDisplay.vendorID, forKey: "vendorID")
         descriptor.setValue(VirtualDisplay.productID, forKey: "productID")
@@ -80,6 +90,10 @@ final class VirtualDisplay: @unchecked Sendable {
               let created = initImp(allocated, initSel, descriptor)?.takeRetainedValue() as? NSObject else {
             throw VirtualDisplayError.creationFailed
         }
+        // A display object that is dropped on a later error removes whatever it created: count it as a removal so
+        // the next creation waits out `DisplayRecreateGap`.
+        var kept = false
+        defer { if !kept { VirtualDisplay.removals.mark() } }
 
         typealias ModeInitFn = @convention(c) (AnyObject, Selector, UInt32, UInt32, Double) -> Unmanaged<AnyObject>?
         let modeSel = NSSelectorFromString("initWithWidth:height:refreshRate:")
@@ -109,8 +123,12 @@ final class VirtualDisplay: @unchecked Sendable {
         guard applyImp(created, applySel, settings) else { throw VirtualDisplayError.settingsRejected }
 
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
+        kept = true
         self.display = created
         self.displayID = id
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.hidpi = hidpi
         self.requestedRefreshHz = refreshRate
         self.modeSelected = VirtualDisplay.selectMode(id, pixelWidth: pixelWidth, pixelHeight: pixelHeight, hidpi: hidpi,
                                                       refreshRate: refreshRate)
@@ -145,10 +163,39 @@ final class VirtualDisplay: @unchecked Sendable {
         return false
     }
 
-    /// Releases the retained object, which removes the virtual display.
-    func invalidate() {
-        display = nil
+    /// The mode this display was created with (`DisplayReuse` compares it with the wanted one).
+    var mode: DisplayMode {
+        DisplayMode(widthPx: pixelWidth, heightPx: pixelHeight, hidpi: hidpi, refreshHz: Int(requestedRefreshHz.rounded()))
     }
 
-    deinit { display = nil }
+    /// Releases the retained object, which removes the virtual display. The removal time is recorded so the next
+    /// display (same vendor/product/serial) is created only after `DisplayRecreateGap`.
+    func invalidate() {
+        guard display != nil else { return }
+        display = nil
+        Self.removals.mark()
+    }
+
+    deinit {
+        if display != nil {
+            display = nil
+            Self.removals.mark()
+        }
+    }
+
+    // MARK: Recreate gap
+
+    /// Host-clock time of the last display removal, shared by all instances (there is one serial number).
+    private final class RemovalClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastUs: UInt64?
+        func mark() { let now = HostClock.nowUs(); lock.withLock { lastUs = now } }
+        var last: UInt64? { lock.withLock { lastUs } }
+    }
+    private static let removals = RemovalClock()
+
+    /// How long a new display must still wait after the last removal (0 when none is recent).
+    static func recreateWaitUs() -> UInt64 {
+        DisplayRecreateGap.remainingUs(lastRemovedUs: removals.last, nowUs: HostClock.nowUs())
+    }
 }
