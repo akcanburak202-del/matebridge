@@ -1,7 +1,7 @@
 ---
 id: T-232
 title: Host dev knob — create the MateBridge virtual display with an HDR transfer function (tf=1) so games can be checked for an HDR toggle; stream stays SDR
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-226]
@@ -32,10 +32,10 @@ T-226 araştırmasının (docs/research/2026-10-04-hdr-feasibility.md, "kart A")
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Knob ayrıştırma (yok/0/1/geçersiz) ve geri dönüş kararı saf fonksiyon olarak test edilir.
-- [ ] Varsayılan yolda `CGVirtualDisplayMode` çağrısı değişmez.
-- [ ] `ev=vd_transfer` ve EDR değerleri docs/LOGGING.md'de; knob docs/KNOBS.md'de (geliştirici sınıfı).
-- [ ] `./scripts/check.sh` geçer.
+- [x] [XCTest] Knob ayrıştırma (yok/0/1/geçersiz) ve geri dönüş kararı saf fonksiyon olarak test edilir.
+- [x] Varsayılan yolda `CGVirtualDisplayMode` çağrısı değişmez.
+- [x] `ev=vd_transfer` ve EDR değerleri docs/LOGGING.md'de; knob docs/KNOBS.md'de (geliştirici sınıfı).
+- [x] `./scripts/check.sh` geçer.
 - [ ] [device, orkestratör + kullanıcı] `MATEBRIDGE_VD_TRANSFER=1` ile: Sistem Ayarları → Ekranlar'da MateBridge ekranında HDR seçeneği görünüyor mu, EDR başlığı > 1 mi, RE4'te HDR anahtarı açılıyor mu. Sonuç NOTES'a.
 
 ## Plan
@@ -64,4 +64,27 @@ T-226 araştırmasının (docs/research/2026-10-04-hdr-feasibility.md, "kart A")
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `2a58faf` (uygulama; dalda ayrıca plan `cda7561` ve kapsam notu `2e342bc`). Dal `task/T-232-hdr-display-knob`, `main` `ab765c6` üstünde.
+- **check.sh:** ALL OK (host build + test, probes, android, protocol).
+- **Dosyalar:**
+  - `host-mac/Sources/MateBridgeCore/Video/VirtualDisplayTransfer.swift` (yeni): `parse` (yok/""/0 → 0; 1 → 1; başka → 0 + `invalid`), `decide` (`.legacy`/`.transfer`/`.fallback(selector_missing)`), `fallbackAfterAttempt` (`mode_nil`, `settings_rejected`), `Outcome` (+ `logLevel`: geri dönüş ya da geçersiz değer → `W`), `logFields`, `EDRHeadroom`.
+  - `host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift`: `knobAllowList`'e `MATEBRIDGE_VD_TRANSFER` (yalnız bu satır + yorumdaki satır no).
+  - `host-mac/Sources/MateBridgeHost/VirtualDisplay.swift`: `init(... transfer: VirtualDisplayTransfer.Knob = parse(nil))`; `transferOutcome`. Varsayılan yolda aynı seçici (`initWithWidth:height:refreshRate:`), aynı argümanlar, tek kip. Tek fark sıra: eski kip artık `applySettings:` seçici kontrolünden sonra oluşturuluyor (o seçici yoksa zaten hata atılıyordu).
+  - `host-mac/Sources/MateBridgeHost/Video/VideoPipeline.swift`: `obtainDisplay` env'den knob'u geçirir; `displayTransfer` (id + outcome).
+  - `host-mac/Sources/MateBridgeHost/Video/DisplayEDR.swift` (yeni): `NSScreen` (`NSScreenNumber` eşleşmesi) → EDR değerleri, `MainActor.run` ile. Pencere açmaz.
+  - `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`: `display_created`'tan sonra `logDisplayTransfer` → ayrı `Task`'te `ev=vd_transfer` (açılışı bekletmez; sid/gen önceden alınır).
+  - `host-mac/Tests/MateBridgeCoreTests/Video/VirtualDisplayTransferTests.swift` (yeni, 13 test).
+  - `docs/KNOBS.md` satır 43 (yalnızca geliştirici); `docs/LOGGING.md` `ev=vd_transfer`.
+- **Varsayımlar:**
+  - `transferFunction:` argümanı `UInt32` (`@convention(c)` imzası `(UInt32, UInt32, Double, UInt32)`), T-226 Handoff'taki imzaya göre. Gerçek tip farklıysa (ör. `int`/`uint32_t` aynı ABI, sorun yok; `NSInteger` olsaydı yine x0..x3 kayıtlarında, arm64'te pratikte uyumlu) cihazda görülür.
+  - Reddedilen `applySettings:`'ten sonra aynı `CGVirtualDisplay` nesnesine eski kiple ikinci `applySettings:` çağrısının çalıştığı varsayıldı.
+  - `ev=vd_transfer` her yeni ekranda yazılır (varsayılan `requested=0` dahil; SDR temel EDR değerlerini karşılaştırmak için). Korunan (`pipeline_started display=reused`) ekranda yazılmaz. Env süreç boyunca sabit olduğundan `DisplayReuse` kararı etkilenmez.
+  - EDR okuması ekran kurulumundan ~1 sn sonra (yakalama başladıktan sonra) yapılır; AppKit ekranı henüz listelemiyorsa `edr_*=na`.
+- **Test EDİLMEDİ (cihaz, orkestratör):**
+  1. `MATEBRIDGE_VD_TRANSFER=1` ile host başlat: `ev=vd_transfer requested=1 applied=1` mi, yoksa `reason=` ile geri dönüş mü? `ev=profile knobs=MATEBRIDGE_VD_TRANSFER:1` görünüyor mu?
+  2. `edr_potential`/`edr_max` > 1,00 mi (MateBridge ekranında macOS EDR başlığı veriyor mu)? Varsayılan koşuda 1,00 bekleniyor; karşılaştırın.
+  3. Sistem Ayarları → Ekranlar'da MateBridge ekranında HDR anahtarı görünüyor mu (orkestratör/kullanıcı; Mac'te pencere açmak kullanıcının işi).
+  4. Oyun modu (1x oyun ekranı, 0029) geçişinde ikinci `ev=vd_transfer` satırı ve tf'nin 1x kipte de uygulandığı.
+  5. RE4/GameHub'da HDR seçeneği açılıyor mu; tablette görüntü (soluk olması beklenen) ve yakalama/encode'un tf=1 ekranda hatasız sürdüğü (SCK 8-bit BGRA, akış SDR).
+  6. Varsayılan koşu (`MATEBRIDGE_VD_TRANSFER` yok) eskisiyle aynı: `display_created`, `cadence_setup` `mode_selected=true`.
+- **Açık sorular:** yok (kapsam sorusu yukarıda cevaplandı).
