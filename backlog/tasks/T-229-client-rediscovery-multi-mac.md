@@ -1,7 +1,7 @@
 ---
 id: T-229
 title: Client — T-227 rediscovery edge cases with more than one paired Mac (candidate starvation, user pick inherits identity gate)
-status: in_progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-227]
@@ -48,4 +48,31 @@ T-227'nin dördüncü Codex turu (`~/.cache/matebridge-tools/data/codex-T-227d.t
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `74efb6c` plan, `3291301` uygulama ve testler. Dal: `task/T-229-rediscovery-multi-mac`.
+- **Dokunulan dosyalar:**
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/EndpointRediscovery.kt`:
+    - `Pick.QUEUED`, sınırlı kuyruk (`MAX_QUEUE = 4`), `unreachable` kümesi,
+    - `nextQueued(allowed)`,
+    - `onUserStart(ep)`.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt` (yalnız yeniden keşif satırları):
+    - `onDiscovered()` `QUEUED`'da bağlanmaz,
+    - `onRediscoveryVerdict()` eski adrese dönmeden önce kuyruğu dener,
+    - `connect()` → `onUserStart(ep)`.
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/EndpointRediscoveryMultiMacTest.kt` (yeni, 8 test).
+- **Kabul kriterleri:**
+  - [x] [JVM] İki Codex dizisi:
+    - `aLaterResultWaitsWhileTheRightHostIsTried`, `anUnreachableCandidateHandsOverToTheQueuedOneNotToTheOldAddress`, `aFreshAddressReplacesACandidateThatWasAlreadyUnreachable`;
+    - `aUserPickedOtherMacIsNotRefusedByALaterEpisode`.
+  - [x] [JVM] `EndpointRediscoveryTest` (31) ve `WrongHostGateTest` dosyalarına dokunulmadı; hepsi geçti.
+  - `./scripts/check.sh` `3291301` üzerinde: ALL OK.
+- **Varsayımlar:**
+  - Kuyruk bölüme ait; `Accepted`/sıfırlama/kullanıcı başlangıcıyla temizlenir. Kuyruk dolarsa taze bir sonuç `unreachable` bir girdiyi çıkarır, yoksa yeni sonuç düşer. Yeniden başlatma onu zaten tekrar bildirir.
+  - Taze adresin, o an bağlanmakta olan ve bu bölümde zaten `unreachable` işaretli bir adayın yerini alması bilinçli bir istisna. Bu, T-227'nin eski "yerini alma" davranışının (geç durum koruması dahil) daraltılmış hali.
+  - `onUserStart(ep)`: `ep` son doğrulanmış hostun adresinden farklıysa kimlik unutulur. Aynı adrese kullanıcı başlangıcı kimliği korur. Seçilen host bağlanınca kimliği olağan yoldan öğrenilir.
+  - Yeni log olayı eklenmedi (`docs/LOGGING.md` `files:` dışında). Kuyruktan çekilen aday mevcut `endpoint_rediscover_found old= new=` satırıyla loglanır; kuyruğa alma loglanmaz.
+- **Test edilmeyenler:** Cihazda hiçbir şey denenmedi. Kullanıcının tek Mac'i var, bu yüzden çok-Mac senaryoları cihazda büyük olasılıkla denenemez. Tablette yalnız regresyon kontrolü:
+  1. T-227 cihaz denemesi (Wi-Fi modunda Mac Wi-Fi → Ethernet, Mac Wi-Fi kapalı) aynen geçmeli. ≤ ~10 sn içinde `endpoint_rediscover` → `endpoint_rediscover_found old=*.107 new=*.106` → `endpoint_rediscover_result result=accepted` gelmeli; `wrong_host` olmamalı.
+  2. "Bağlan" (adres yazmadan) Mac'e normal bağlanmalı. Sonra Mac'in ağını kısa süre kesip geri verince yeniden bağlanmalı ve `wrong_host` olmamalı.
+  3. Mac kapalıyken `endpoint_rediscover restart=` satırları 8/16/30 sn aralıkla sürmeli; bağlıyken ve USB'de bu satır çıkmamalı.
+- **Açık sorular:**
+  1. (Not) Kuyruk olayları için ayrı bir log satırı istenirse (`endpoint_rediscover_queued`) `docs/LOGGING.md` kart kapsamına eklenmeli.
