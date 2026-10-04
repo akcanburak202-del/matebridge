@@ -36,6 +36,10 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - Bilinmeyen değer `unknown` (`swift run`, git olmadan derleme). Seri numarası, cihaz kimliği ya da ad yazılmaz.
 - Tablette `versionCode` commit sayısıdır; daha az commit'li bir dalın APK'sı `adb install -r -d` ister (`scripts/install-apk.sh` bunu yapar). Eşleşme anahtarları silineceği için uygulama asla kaldırılmaz.
 
+## Tek kopya (Mac, `session`, T-224)
+
+- `W session ev=second_instance action=exit existing_pid=<pid>`: aynı bundle id'li daha eski bir kopya çalışıyor; bu süreç dinleyici, menü simgesi ve ekran kurmadan çıkar (`app_start` satırından hemen sonra). Daha eski kopya kapanmak üzereyse (`quit` + hemen `open`) yeni kopya en çok 5 sn bekler; o sürede eski kopya kapanırsa normal başlar. Aynı anda başlayan iki kopyadan yalnız yeni olan çıkar.
+
 ## Taşıma ve dinleyici olayları (Mac, `session`)
 
 - `ev=listening control_port=… video_port=… service_class=signaling|video|off [video_class=… control_class=…] video_socket=bsd notsent_lowat_kb=<n> control_socket=bsd tcp_log=auto|on|off profile=all|usb_only`: dinleyiciler hazır. `profile=usb_only` ise iki dinleyici de yalnız `127.0.0.1`'e bağlıdır ve Bonjour yayını yoktur (T-189, karar 0027).

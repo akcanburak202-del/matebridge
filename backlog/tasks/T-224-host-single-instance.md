@@ -1,7 +1,7 @@
 ---
 id: T-224
 title: Host — only one MateBridge instance may run (second instance exits)
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-148]
@@ -28,7 +28,7 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] `SingleInstancePolicy`: başka kopya varken → çık; yalnızken → devam; kendi pid'i sayılmaz.
+- [x] [XCTest] `SingleInstancePolicy`: başka kopya varken → çık; yalnızken → devam; kendi pid'i sayılmaz.
 - [ ] [device] `quit` + `open` ve login-item kayıt yolu sonrasında `pgrep -x MateBridgeApp` tek süreç; menü çubuğunda tek simge; 47001/47002 dinleniyor.
 - [ ] [device] Elle ikinci `open -n build/MateBridge.app` → ikinci kopya `second_instance action=exit` loglayıp çıkar, mevcut oturum etkilenmez.
 
@@ -50,10 +50,16 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
-- **Açık sorular:**
+- **Commit:** (SHA aşağıda commit sonrası yazıldı; dal `task/T-224-host-single-instance`, plan commit'i + uygulama commit'i)
+- **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Session/SingleInstancePolicy.swift` (yeni), `host-mac/Tests/MateBridgeCoreTests/Session/SingleInstancePolicyTests.swift` (yeni, 9 test), `host-mac/Sources/MateBridgeApp/main.swift`, `host-mac/Resources/Info.plist` (`LSMultipleInstancesProhibited`), `docs/LOGGING.md`, bu kart. `LoginItem.swift` değişmedi.
+- **check.sh:** ALL OK.
+- **T-148 kayıt yolu (yalnız kod okuma):** ikinci kopya başlatmaz. `register` yalnızca `loginItemFirstRunDone` yokken ve durum `enabled/requiresApproval` değilken çağrılır, başarıda bayrak yazılır; `SMAppService.mainApp.register()` uygulamayı hemen başlatmaz, yalnız giriş öğesini kaydeder. Depoda KeepAlive LaunchAgent'ı da yok (T-202 todo). Bu yüzden kayıt koduna dokunulmadı. En olası neden `quit`+`open` yarışı / çift `open`; kesin kanıt cihazda aranabilir (iki `app_start` satırı, `second_instance` ile yakalanır).
+- **Varsayımlar / tasarım kararları:**
+  - Kartın "başka kopya varsa çık" kuralına iki ek: (1) yalnızca *daha eski* canlı kopya engeller (launchDate, eşitse küçük pid), böylece aynı anda başlayan iki kopya birbirini öldürmez; (2) eski kopya kapanırken yeni kopya en çok 5 sn (200 ms aralıkla) bekler, çünkü `quit` + hemen `open` akışında yeni kopya hemen çıkarsa hiç kopya kalmaz. Süre dolarsa çıkar. Bekleme ana iş parçacığında, hiçbir UI/dinleyici açılmadan önce (`Thread.sleep`).
+  - Bekçi `app_start` satırından sonra, simge/dinleyiciden önce çalışır; `second_instance` WARNING seviyesinde `action=exit existing_pid=<pid>`.
+  - `Bundle.main.bundleIdentifier == nil` (`swift run`) ve CLI kipleri (`--dump-video` vb., NSApplication'dan önce çıkarlar) etkilenmez. Farklı `--bundle-id` ile paketlenen kopyalar birbirini engellemez.
+- **Test edilmeyenler (cihaz, orkestratör):**
+  - `quit` + `open` sonrası `pgrep -x MateBridgeApp` tek süreç, menü çubuğunda tek simge, 47001/47002 dinleniyor.
+  - Elle `open -n build/MateBridge.app` ve doğrudan `build/MateBridge.app/Contents/MacOS/MateBridgeApp` çalıştırma: ikincisi `second_instance action=exit` loglar, mevcut oturum etkilenmez. `LSMultipleInstancesProhibited` ile LaunchServices `open -n`'i zaten engelleyebilir, o durumda log satırı çıkmaz (yalnız doğrudan exec yolunda görünür); ikisi de kabul edilebilir.
+  - `quit` + hemen `open`: eski kopya kapanana kadar (<5 sn) beklenip yeni kopyanın başladığı (`app_start` sonra `listening`, `second_instance` yok). Not: `LSMultipleInstancesProhibited` açıkken LaunchServices, eski kopya ölürken `open`'ı eskiye yönlendirirse yeni süreç hiç başlamayabilir (düz `open` zaten bugün de böyle davranıyordu); gerekirse deploy betiği quit sonrası kapanmayı beklemeli (kapsam dışı, not).
+- **Açık sorular:** yok (kapsam dışı dosya gerekmedi).

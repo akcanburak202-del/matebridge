@@ -52,11 +52,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var approvalPanel: ApprovalPanel?
     private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
+    /// Pid of an older live copy with our bundle identifier once `SingleInstancePolicy` gave up waiting for it, else
+    /// nil. Sleeps (main thread, before any UI) while an older copy is still quitting. A `swift run` binary has no
+    /// bundle identifier and skips the check.
+    private static func olderRunningCopyPID() -> Int32? {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return nil }
+        let own = NSRunningApplication.current
+        var waitedMs = 0
+        while true {
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).map {
+                SingleInstancePolicy.Instance(pid: $0.processIdentifier, launchDate: $0.launchDate,
+                                              isTerminated: $0.isTerminated)
+            }
+            switch SingleInstancePolicy.decide(ownPID: own.processIdentifier, ownLaunchDate: own.launchDate,
+                                               others: others, waitedMs: waitedMs) {
+            case .proceed: return nil
+            case .exit(let pid): return pid
+            case .wait(let ms):
+                Thread.sleep(forTimeInterval: Double(ms) / 1000)
+                waitedMs += ms
+            }
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // T-145: the first host.log line of every launch names the exact build (before `listening`).
         let build = BuildInfo(infoDictionary: Bundle.main.infoDictionary)
         HostLog.log(.info, component: "session", event: "app_start",
                     fields: build.logFields(os: ProcessInfo.processInfo.operatingSystemVersionString))
+        // T-224: a second copy exits before it opens a listener, a menu bar item or a display.
+        if let existing = Self.olderRunningCopyPID() {
+            HostLog.log(.warning, component: "session", event: "second_instance",
+                        fields: "action=exit existing_pid=\(existing)")
+            exit(0)
+        }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = menuBarGlyph()
         item.button?.imagePosition = .imageOnly
