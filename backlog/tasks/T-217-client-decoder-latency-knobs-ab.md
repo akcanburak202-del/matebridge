@@ -1,7 +1,7 @@
 ---
 id: T-217
 title: A/B HiSilicon decoder low-latency keys and operating rate (dev knob)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-185, T-219]
