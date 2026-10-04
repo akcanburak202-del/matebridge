@@ -97,6 +97,24 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
 - Açılışta `render ev=stats_log window_ms=10000|1000`.
 - Vsync döngüsü ≥ 1 s uyuduğunda `render ev=idle state=on since_frame_ms=<n>`, uyanınca `state=off idle_ms=<n>`.
 - `render ev=present ... phase_lock=0|1 rephase=<n>`: `phase_lock=1` faz kilidi açık. T-208'den beri içerik aralığı panel periyodunun tam katı olduğunda da (n ≤ 2; 120 Hz panelde 60 fps) kilitli; kilitliyken her kare n vsync tutulur. Pace trace'te bu kareler `path=locked`, `k=2`. Kilitli slotunu kaçırıp bir sonraki vsync'te gösterilen kare `slot_ns > lock_slot_ns` olur (düşürülmez). Tutma dağılımı: `tools/pacing/sim.py TRACE --holds`.
+  - T-220: içerik aralığı ölçülen yakalamalardan da çıkarılır. Hızlı panelde (> 90 Hz) son 16 yakalama aralığının en az 12'si iki panel periyoduna (±1 ms) eşitse aralık 2 periyot sayılır; 8'in altına düşünce çıkarım kalkar. Örnek: Oyun 120 akışında 60 fps oyun, 120 Hz panel. Bu durumda da `phase_lock=1` ve 2:1 kilit kurulur. Aynı ızgarada n değişince (1 ↔ 2) kilit yeniden kurulur.
+- `skip_pct` (T-220; `decoder ev=stats` ve katman): **tek sunum ölçütü, her zamanlayıcıda aynı hesap** (tampon 0, sabit tampon, uyarlamalı).
+  - Her bırakılan karenin tutması, bırakıldığı vsync'ten hesaplanır.
+    - Bu vsync zamanlayıcının istediği slottur.
+    - Kare son tarihten sonra verildiyse ya da tampon 0'daysa, bırakmadan sonra yetişebileceği ilk vsync kullanılır.
+    - Saat ve vsync ızgarası `releaseOutputBuffer` çağrısı döndükten sonra okunur. Çağrı içinde son tarihi kaçıran kare bir sonraki vsync'e yazılır.
+    - Pace trace bu değeri son iki sütunda tutar: `latch_slot_ns` ve `latch_period_ns`.
+  - Tutma, bir sonraki gösterilen karenin vsync'ine olan uzaklıktır (vsync cinsinden).
+  - Bu tutma içerik kadansı n ile karşılaştırılır. n, yakalama aralığından gelir; aralıkların ±1 ms içinde düzenli olması gerekir.
+  - `skip_pct` = n'den **uzun** tutulan aralıkların yargılanan aralıklara oranı (%). Uzun tutmanın nedeni geç kare ya da arada düşen kare olabilir.
+  - Kaynak boşluğu, düzensiz yakalama, panel hızı değişimi ve tam sayı olmayan kadans (144 Hz'de 60 fps) yargılanmaz.
+  - Değişiklik: T-220'den önce `skip_pct` uyarlamalı modda zamanlayıcının kendi kararıydı, diğer modlarda geri çağrı ölçeriydi. Bu yüzden eski tampon 0 ↔ uyarlamalı karşılaştırmaları (ör. "%10 → %0") birebir değildir.
+  - `cb_skip_pct` aynı kaldı: MediaCodec frame-rendered geri çağrısından türetilen tanı değeridir. Ölçüt SurfaceFlinger'ın gerçek latch'ini görmez. Çapraz kontrol `cb_skip_pct` ya da `dumpsys SurfaceFlinger --latency` ile yapılır.
+- `render ev=present ... hold_n=<n> hold_short_pct=<%|-> hold_long_pct=<%|->` (T-220): log penceresinde aynı ölçüt.
+  - `hold_n`: yargılanan aralık sayısı.
+  - `hold_short_pct`: kadanstan kısa tutulanlar (ör. 120 Hz'de 60 fps karenin 1 vsync kalması).
+  - `hold_long_pct`: uzun tutulanlar (`skip_pct` ile aynı tanım).
+  - Kalan aralıklar tam tutulmuştur. Tampon 0 ile uyarlamalı zamanlayıcının karşılaştırması bu alanlarla yapılır.
 - Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`) değişmedi.
 
 ## Keyframe isteği birleştirme (Mac, `net`, T-122)

@@ -50,6 +50,8 @@ package dev.matebridge.client.video
  *    irregular interval at most, no warm-up re-locks).
  *  - A locked frame at n = 2 that missed its lattice slot is shown on the next free vsync instead of being folded onto
  *    the previous slot (see [scheduleLocked]); n = 1 keeps the T-060 drop rule.
+ *  - T-220: n may change on one grid when the content interval is inferred from the arrivals ([FrameInterval.resolve]);
+ *    the lock and D then start over ([recadence]).
  *
  * Decoder/output thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
@@ -176,6 +178,8 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             epoch = grid.epoch
         } else if (idle) {
             reanchor()
+        } else if (lastN > 0 && n > 0 && n != lastN) {
+            recadence() // T-220: the inferred content cadence changed (1 <-> 2) on the same grid
         }
         lastFi = fi; lastN = n
         val readyGapNs = if (lastScheduleNs == Long.MIN_VALUE) Long.MAX_VALUE else nowNs - lastScheduleNs
@@ -241,7 +245,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         lastSlot = slot
         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
         // A skip: a vsync went by without a new frame although this one was decoded (late, not an idle source).
-        val skipped = late && previous != Long.MIN_VALUE && (slot - previous) * 2 > cadence * 3
+        // T-220: the previous frame is held at least one vsync longer than the cadence (was "> 1.5 x cadence", which
+        // missed a 3-vsync hold at cadence 2; at cadence 1 both are the same).
+        val skipped = late && previous != Long.MIN_VALUE && slot - previous > cadence + period / 2
         return FramePacer.Decision(
             slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), skipped,
             slotNs = slot, lateDrop = lateDrop, ownSlotNs = if (lateDrop) ownSlot else 0,
@@ -367,7 +373,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
             lastSlot = earliest
             val cadence = n * period
             return FramePacer.Decision(
-                earliest - vsync.leadNs(), false, 0, (earliest - previous) * 2 > cadence * 3, slotNs = earliest,
+                earliest - vsync.leadNs(), false, 0, earliest - previous > cadence + period / 2, slotNs = earliest, // T-220
             )
         }
         if (late) {
@@ -410,9 +416,10 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     }
 
     /**
-     * Feedback once per stats window from the pacer's own schedule ([FramePacer.Decision.skipped]); [skipPct]
-     * null = no measurement. Conservative: a level is added only after [HIGH_WINDOWS] high windows in a row,
-     * removed after [LOW_WINDOWS] low ones, and never within [HOLD_WINDOWS] of the previous change.
+     * Feedback once per stats window from the presentation metric (T-220: `skip_pct`, the share of frames held longer
+     * than their content cadence, [VideoStats.Snapshot.skipPct]); [skipPct] null = no measurement. Conservative: a
+     * level is added only after [HIGH_WINDOWS] high windows in a row, removed after [LOW_WINDOWS] low ones, and never
+     * within [HOLD_WINDOWS] of the previous change.
      */
     fun onSkipWindow(skipPct: Double?) {
         if (skipPct == null) return
@@ -432,6 +439,17 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         lockSlot = Long.MIN_VALUE; badRun = 0; lastCaptureUs = Long.MIN_VALUE; phaseLock = false
         devN = 0; devPos = 0
         baseNs = Long.MIN_VALUE; dNs = Long.MIN_VALUE
+    }
+
+    /**
+     * T-220: the content cadence n changed on an unchanged grid (the inferred cadence of [FrameInterval.resolve] went
+     * 1 <-> 2: a 120 fps stream whose content went 60 <-> 120 fps). The lattice, the latency bound and the cap of D
+     * belong to n, so the lock and D start over (the next frame acquires a centred lock). The jitter history, the
+     * baseline and the slack level stay (same grid, same stream). A constant n never gets here.
+     */
+    private fun recadence() {
+        lockSlot = Long.MIN_VALUE; badRun = 0; phaseLock = false
+        dNs = Long.MIN_VALUE
     }
 
     /**
