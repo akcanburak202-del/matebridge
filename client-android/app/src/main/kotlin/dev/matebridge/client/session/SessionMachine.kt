@@ -173,6 +173,17 @@ class SessionMachine(
         data object OpenSettings : Action
         /** T-150: a CLIPBOARD arrived on the accepted (and locally trusted) control connection [gen]. Never log its data. */
         data class DeliverClipboard(val msg: Clipboard, val gen: Int) : Action
+        /**
+         * T-218: the current video connection [gen] ended unexpectedly while streaming (EOF, IO/protocol error, connect
+         * failure, a keepalive timeout). The picture is stale: the UI closes input at once (video FAULT, then
+         * `RELEASE_ALL(USER)`). The session and [inputAllowed] stay as they are, so the releases still go out. The video
+         * reconnects as before.
+         *
+         * [duringMigration]: a migration proof was pending (T-205). The host's takeover may have caused the close, and a
+         * promotion would reconfigure the video at once. This flag only softens the *overlay* (the UI may delay it); input
+         * is gated exactly the same, because a pending proof does not prove that the takeover caused the close.
+         */
+        data class VideoLost(val gen: Int, val duringMigration: Boolean = false) : Action
     }
 
     /**
@@ -444,7 +455,13 @@ class SessionMachine(
             }
             is Event.VideoClosed -> if (event.gen == videoGen) {
                 videoOpen = false
-                if (phase == Phase.STREAMING) videoRetryAtUs = nowUs + VIDEO_RETRY_US
+                if (phase == Phase.STREAMING) {
+                    videoRetryAtUs = nowUs + VIDEO_RETRY_US
+                    // T-218: every loss of the current video gates input at once, also while a migration proof is pending
+                    // (the close may be the takeover's or an unrelated failure, and the proof may stall until its deadline).
+                    // The flag only lets the UI hold back the overlay for a promotion that is about to reconfigure.
+                    out += Action.VideoLost(event.gen, duringMigration = candAck != null)
+                }
             }
             is Event.SetPrefs -> {
                 if (event.prefs != prefs) {

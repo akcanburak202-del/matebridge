@@ -490,6 +490,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 r.onFrame(frame)
             }
 
+            // T-218: a known video loss closes input at once (FAULT -> RELEASE_ALL(USER)); the control session goes on.
+            // During a migration proof only the overlay waits (a promotion reconfigures at once); input closes all the same.
+            override fun onVideoLost(gen: Int, duringMigration: Boolean) {
+                runOnUiThread { videoHealth.videoLost(gen, quietOverlay = duringMigration) }
+            }
+
+            // T-218: fresh video after a loss: a new decoder generation, input re-opens at its first decoded output.
+            // Posted inside the delivery barrier (a non-blocking post); VideoHealth drops a stale `gen`.
+            override fun onVideoFlowing(gen: Int) {
+                runOnUiThread { videoHealth.videoFlowing(gen)?.let { runVideoRecovery(it) } }
+            }
+
             override fun onSessionStart() {
                 clock.reset()
                 rttStats.reset()

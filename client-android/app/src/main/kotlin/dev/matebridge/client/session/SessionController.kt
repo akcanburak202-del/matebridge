@@ -66,6 +66,20 @@ interface SessionListener {
     /** One VIDEO_FRAME wire fragment, from the video reader thread. Frames are only counted in T-012. */
     fun onVideoFrame(frame: VideoFrame) {}
 
+    /**
+     * T-218: the current video connection [gen] ended unexpectedly while streaming (engine thread). The picture is stale,
+     * so input must close at once. The control session goes on and the video reconnects on its own.
+     * [duringMigration]: a migration proof was pending; only the overlay may wait (input closes all the same).
+     */
+    fun onVideoLost(gen: Int, duringMigration: Boolean) {}
+
+    /**
+     * T-218: video connection [gen] delivered its first frame (video reader thread, once per connection, right after
+     * that frame's [onVideoFrame], inside the delivery barrier: it must not block, like [onVideoFrame]). The receiver
+     * must still drop it when [gen] is not newer than the last [onVideoLost] connection (it may be consumed late).
+     */
+    fun onVideoFlowing(gen: Int) {}
+
     /** A new control connection is being opened (first start and every automatic reconnect); reset per-session state. */
     fun onSessionStart() {}
 
@@ -586,6 +600,10 @@ class SessionController(
                 listener.onSettingsOpen()
             }
             is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
+            is SessionMachine.Action.VideoLost -> {
+                MbLog.w("video_lost", "vgen=${a.gen} migrating=${if (a.duringMigration) 1 else 0}")
+                listener.onVideoLost(a.gen, a.duringMigration)
+            }
         }
     }
 
@@ -876,6 +894,7 @@ class SessionController(
                 val tosErr = TrafficClass.trySet(knobs.tosVideo) { socket.trafficClass = it } // T-089, before connect
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
+                VideoKeepalive.forSocket(socket) // T-218: a half-open video socket fails its read within seconds
                 knobs.tosVideo?.let { MbLog.i("traffic_class", TrafficClass.logFields("video", it, tosErr) { socket.trafficClass }) }
                 // VIDEO_HELLO in plaintext, then one sealed PING as proof of the key (the host sends no frames before it).
                 socket.getOutputStream().apply { write(channel.opening(hello, nonce, nowUs())); flush() }
@@ -897,8 +916,16 @@ class SessionController(
                             trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
                             // T-160: only the open connection's frames of the renderer-installed config pass
-                            if (videoGate.deliver(gen, hello.configId) { listener.onVideoFrame(msg) }) {
-                                if (gated >= 0) { MbLog.i("video_gate_open", "vgen=$gen config_id=${hello.configId} gated=$gated"); gated = -1 }
+                            val first = gated >= 0
+                            val delivered = deliverVideoFrame(
+                                videoGate, gen, hello.configId, first,
+                                { listener.onVideoFrame(msg) }, { listener.onVideoFlowing(gen) },
+                            )
+                            if (delivered) {
+                                if (first) {
+                                    MbLog.i("video_gate_open", "vgen=$gen config_id=${hello.configId} gated=$gated")
+                                    gated = -1
+                                }
                             } else if (gated >= 0) {
                                 gated++
                             }
@@ -1037,5 +1064,80 @@ object FirstAck {
                 sec, terminal = false,
             )
         }
+    }
+}
+
+/**
+ * T-218: one frame of video connection [gen] through [gate] (the `VideoConn` reader's delivery). [frame] hands it to
+ * the renderer; for the connection's [first] delivered frame [flowing] follows **inside the gate's barrier**, so the
+ * notification is out before the connection's `abort()` / replacement returns, and a reader that resumes after its
+ * replacement can never send one. Both must not block (see [VideoDeliveryGate]). Returns whether the frame was delivered.
+ */
+internal fun deliverVideoFrame(
+    gate: VideoDeliveryGate, gen: Int, configId: Int, first: Boolean, frame: () -> Unit, flowing: () -> Unit,
+): Boolean = gate.deliver(gen, configId) {
+    frame()
+    if (first) flowing()
+}
+
+/**
+ * T-218: TCP keepalive on the tablet's video socket puts a time bound on a half-open video connection.
+ *
+ * A static desktop sends no video at all, and decision 0019 rules out an "N s without frames" check. The Mac's kernel
+ * still ACKs keepalive probes on a live idle socket, so that socket never fails. When the host's socket is gone, its
+ * kernel answers a probe with RST. When the path is dead, nothing answers. Either way the blocked `read()` fails
+ * (ECONNRESET or ETIMEDOUT) about [IDLE_S] + [INTERVAL_S] x [COUNT] s after the last segment from the host, and the
+ * failed read takes the ordinary `VideoClosed` path.
+ *
+ * This bound is looser than the control heartbeat (3 s), so a general network loss still ends the session through the
+ * control connection first. Over USB (`adb reverse`) the probes only reach the local adbd, which closes our socket
+ * itself when the tunnel goes. The option numbers are Linux's, because `OsConstants` does not define them. A failure
+ * to set them is logged and never touches the session.
+ */
+object VideoKeepalive {
+    const val TCP_KEEPIDLE = 4 // linux/tcp.h
+    const val TCP_KEEPINTVL = 5
+    const val TCP_KEEPCNT = 6
+    const val IDLE_S = 3
+    const val INTERVAL_S = 1
+    const val COUNT = 3
+
+    /**
+     * Turns keepalive on through [setKeepAlive] (SO_KEEPALIVE), then sets the timers through [setTcp] (IPPROTO_TCP
+     * option and value). Returns null on success. On failure it returns the failing step and the exception class, for
+     * the log only.
+     */
+    fun apply(setKeepAlive: () -> Unit, setTcp: (Int, Int) -> Unit): String? {
+        var step = "so_keepalive"
+        return try {
+            setKeepAlive()
+            step = "keepidle"
+            setTcp(TCP_KEEPIDLE, IDLE_S)
+            step = "keepintvl"
+            setTcp(TCP_KEEPINTVL, INTERVAL_S)
+            step = "keepcnt"
+            setTcp(TCP_KEEPCNT, COUNT)
+            null
+        } catch (e: Exception) {
+            "$step:${e.javaClass.simpleName}"
+        }
+    }
+
+    /**
+     * Applies the options to a connected [socket] through a dup'd fd, as [QuickAck] does. Closing the dup leaves the
+     * socket open.
+     */
+    fun forSocket(socket: java.net.Socket) {
+        val pfd = try { android.os.ParcelFileDescriptor.fromSocket(socket) } catch (e: Exception) { null }
+        val err = if (pfd == null) "nofd" else try {
+            val fd = pfd.fileDescriptor
+            apply({ socket.keepAlive = true }) { opt, v ->
+                android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_TCP, opt, v)
+            }
+        } finally {
+            try { pfd.close() } catch (_: Exception) {}
+        }
+        if (err != null) MbLog.w("video_keepalive", "ok=0 err=$err")
+        else MbLog.i("video_keepalive", "ok=1 idle_s=$IDLE_S intvl_s=$INTERVAL_S cnt=$COUNT")
     }
 }
