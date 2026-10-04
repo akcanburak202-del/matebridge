@@ -556,7 +556,9 @@ class VideoRenderer(
                         val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
                         val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
                         stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
-                        stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000) // T-168 cap_cb
+                        // T-168 cap_cb; T-225: the callback times are also the presentation metric (`skip_pct`).
+                        stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000, nanoTime, period)
+                        trace?.onCallback(pts, nanoTime)
                     }
                 }
             }

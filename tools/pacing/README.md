@@ -13,10 +13,16 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
   (`cd client-android && ./gradlew testDebugUnitTest --tests '*SparseFrameNoHoldTest*' -i | grep trace7`).
   Path names in pace traces: `early_sparse` / `early_first` = lone frame on the earliest slot (`acquire_ns` is the slot
   the old hold would have chosen), `warmup` = lock re-acquired on a thin jitter history.
-- `sim.py TRACE --holds` (T-208, rules since T-220) — the client's presentation metric (`skip_pct`, `hold_*` in
-  `render ev=present`, `HoldMeter` in `VideoStats.kt`) on a device trace, rule for rule:
+- `sim.py TRACE --holds [--latch]` (T-208, rules since T-220, source since T-225) — the client's presentation metric
+  (`skip_pct`, `hold_*` in `render ev=present`, `HoldMeter` in `VideoStats.kt`) on a device trace, rule for rule:
+  - Source (T-225): traces with a `cb_ns` column (the frame-rendered callback's `nanoTime`, last column, 0 = none) are
+    judged on the callback times, like the client's `skip_pct`: a frame is decoded at `ready_ns` and shown at `cb_ns`
+    (events merged by time), a frame without a callback was dropped by the compositor and is not shown (its predecessor's
+    hold comes out long). The first output line says `source: callback times (cb_ns)`. Traces without `cb_ns`, and
+    `--latch`, use T-220's release-time latch model described below, which is the client's `latch_skip_pct`
+    diagnostic and over-counts when the release call returns within ~1 ms of the compositor deadline.
   - Content runs: every decoded row in record order; capture gaps within 1 ms of the run's first gap are one run.
-  - Each released row counts at the vsync the client attributed it to. Traces from the T-220 review on have
+  - Latch model: each released row counts at the vsync the client attributed it to. Traces from the T-220 review on have
     `latch_slot_ns` / `latch_period_ns` (last two columns: clock and grid read after the release call returned;
     a frame released at once, action `now`, has them too). For older traces the vsync is rebuilt from the
     schedule-time grid (`released_slot_ns`, or the first vsync after `release_ns + deadline_ns` when that was later);
@@ -33,6 +39,8 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
   `python3 sim.py --holds-selftest` checks the same vector as the JVM test `PresentationMetricTest.simSelfTestVector`
   (every 10th frame replaced, one late release: `88 intervals, exact 86.4%, short 1.1%, long 12.5%`). It also checks a
   trace with the latch columns across a 120 -> 60 Hz change (`120 Hz, cadence 2: 39`, `60 Hz, cadence 1: 38`).
+  Third vector (T-225): callback times regular 2 vsyncs apart while the latch columns alternate 3 and 1, one frame
+  without a callback: `97 intervals, exact 99.0%, long 1.0%`, and `--latch` on the same rows `short 50% long 50%`.
 - T-208 old/new replay of the integer-cadence lock: the JVM test `IntegerCadenceLockTest` (synthetic 60 fps on 120 Hz,
   uniform and two-bucket jitter, panel switches, host drift) and `traceReplayThinnedTo60FpsOldVersusNew` (`trace7` with every
   second capture = 60 fps content with real decode jitter) print old (`integerLock` off) against new

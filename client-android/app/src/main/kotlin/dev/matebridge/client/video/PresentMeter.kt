@@ -2,10 +2,12 @@ package dev.matebridge.client.video
 
 /**
  * Presentation interval meter (T-052), fed by MediaCodec's frame-rendered callback. An interval counts as a
- * skip when it is longer than 1.5 x the expected cadence while the frame was already available: it was ready
- * no later than one period after the previous frame's shown time (so an idle source does not count).
- * Note: for timed releases the callback time may be the requested render time rather than the real
- * display time, in which case this measures the schedule's regularity; compare with SurfaceFlinger latency.
+ * skip when it is longer than the expected cadence by more than half a panel period (T-225: it was 1.5 x the
+ * cadence, which at a cadence of 2 periods could not see a 3-period hold) while the frame was already available: it
+ * was ready no later than one period after the previous frame's shown time (so an idle source does not count).
+ * T-225: a diagnostic next to `skip_pct`, which [VideoStats] now takes from the same callback times with the hold
+ * rules of [HoldMeter] (content runs, short/long). The callback's `nanoTime` is not the requested render time
+ * (it came ~31 ms after the release on the tablet), but only the gaps matter here.
  * Thread-safe.
  */
 class PresentMeter {
@@ -28,7 +30,7 @@ class PresentMeter {
         if (prev < 0) return
         intervals++
         val gap = shownNs - prev
-        if (gap * 2 > cadenceNs * 3 && readyNs != null && readyNs <= prev + periodNs) skipped++
+        if (gap > cadenceNs + periodNs / 2 && readyNs != null && readyNs <= prev + periodNs) skipped++
     }
 
     @Synchronized fun breakSequence() { prevShownNs = -1 }
