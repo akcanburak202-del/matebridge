@@ -13,6 +13,8 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt   # only if the interval provider needs measured arrivals
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/
   - tools/pacing/sim.py
+  - tools/pacing/README.md   # review 2026-10-04: approved by the orchestrator
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/PaceTrace.kt   # review: latch columns (orchestrator's request)
   - docs/LOGGING.md
   - backlog/tasks/T-220-client-presentation-metric-and-game120-cadence.md
 ---
@@ -61,7 +63,7 @@ gpt-6-astra değerlendirmesi: (1) `skip_pct` uyarlamalı zamanlayıcıda zamanla
 
 ## Handoff
 
-- **Commit:** `b407dd3` (kod, testler, araç, belge); plan `7d992d9`; bu Handoff ayrı bir commit. Dal `task/T-220-client-presentation-metric-and-game120-cadence`. `./scripts/check.sh` → ALL OK.
+- **Commit:** `b407dd3` (kod, testler, araç, belge); plan `7d992d9`; Codex inceleme düzeltmeleri `3a1f175`; Handoff ayrı commit'ler. Dal `task/T-220-client-presentation-metric-and-game120-cadence`. `./scripts/check.sh` → ALL OK.
 - **Dokunulan dosyalar:**
   - `client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoStats.kt`:
     - yeni `HoldMeter` sınıfı;
@@ -125,9 +127,23 @@ gpt-6-astra değerlendirmesi: (1) `skip_pct` uyarlamalı zamanlayıcıda zamanla
   3. **Akıcı (120 fps) kalemle çizim** regresyonu: `hold_short_pct`/`hold_long_pct` ≈ 0. `--holds`'ta `120 Hz, cadence 1` exact değişmemeli, hazır→slot p50 öncekiyle aynı (±1 ms).
   4. Oyun 120'de oyun menüsü (60 fps) ↔ oynanış geçişi ya da kare hızı değişimi: geçişte en çok bir kısa takılma, ardından `phase_lock=1`.
   5. `cb_skip_pct` ile `skip_pct`'yi karşılaştır. Tampon 0'da ikisi yakın çıkmalı; çok farklıysa latch modeli SF ile uyuşmuyor demektir (açık soru 1).
+- **Codex (--high) incelemesi düzeltmeleri (`3a1f175`):**
+  - P2, bırakma gecikmesi:
+    - Saat ve ızgara artık `releaseOutputBuffer` döndükten sonra okunuyor (`HoldMeter.releasedSlot`, renderer'da `releaseClock` seam). Çağrı içinde son tarihi geçen kare bir sonraki vsync'e yazılır; bu her zamanlayıcıda aynıdır.
+    - Slot ve periyot tek ızgara anlık görüntüsünden gelir.
+    - Test: `releaseThatStallsPastTheDeadlineCountsForTheNextVsync`. Sahte saat çağrı içinde 2 ms ilerliyor: sonuç slot + P. Tampon 0 da aynı. Çağrı içinde panel 60 Hz'e geçince periyot yeni ızgaradan geliyor.
+  - P2, iz farklı ızgara:
+    - Pace trace'e son iki sütun eklendi: `latch_slot_ns` ve `latch_period_ns`. Bunlar istemcinin hesapladığı değerlerdir; bypass (`now`) karelerde de yazılır. `PaceTrace.onLatch`, `CodecSink` iz satır kimliğini taşıyor.
+    - `sim.py --holds` bu sütunlar varsa yalnız onları kullanır. Eski izlerde eski yeniden kurma sürer.
+    - Self-test'e ikinci vektör eklendi: 120 → 60 Hz geçişi. 40–41. satırların zamanlama değerleri eski ızgaradan; sonuç `120 Hz/2: 39`, `60 Hz/1: 38`.
+    - `PaceTraceTest`'te üç düzen beklentisi yeni son sütunlara uyarlandı. Yeni test: `traceRecordsTheReleaseTimeVsyncAndPeriod`.
+  - P3: `presented()` artık yargılanan aralığın kendi Hz'ini döndürüyor, gruplama ona göre. Bunu yukarıdaki self-test yakalar: 38→39 aralığı 120 Hz'te kalır.
+  - `tools/pacing/README.md` T-220 `--holds` kurallarıyla güncellendi; dosya `files:`'a eklendi.
+  - `./scripts/check.sh` ALL OK, `python3 tools/pacing/sim.py --holds-selftest` OK.
 - **Açık sorular:**
   1. Tampon 0'da SF'nin aynı vsync'e düşen iki tampondan eskisini düşürüp düşürmediği cihazda doğrulanmadı. Uyuşmazsa ölçüt yalnız iz/geri çağrıyla çapraz kontrol edilebilir.
-  2. `tools/pacing/README.md` hâlâ eski `--holds` kuralını ve self-test çıktısını anlatıyor; dosya bu kartın `files:` listesinde değil. Kısa güncelleme gerekiyor: T-220 kuralı, self-test `88 intervals, exact 86.4%, short 1.1%, long 12.5%`, son satır `skip_pct`.
+  2. ~~`tools/pacing/README.md` güncellemesi~~ (incelemede yapıldı).
   3. `StatsLogWindowTest` (`stream/`, kart dışı) eski tanımla (`onScheduled`) `skipPct` bekliyor. Bunun için yalnız slot bildirmeyen çağıranlara eski tanım bırakıldı. O test güncellenirse geri dönüş yolu (`presentationReported`) kaldırılabilir.
   4. Ölçülen ama değiştirilmeyen bir T-208 davranışı var: kurulu kilit altında titreme artınca (120 fps ±2 ms → 60 fps iki kovalı), `REPHASE_FRAMES` (≈ 0,5 s) boyunca 1/3 tutmalar oluyor. Bu T-220 öncesinde de aynı. Bir kadans değişiminden sonra T-115 ısınma kuralını açmak bunu kısaltabilir; ayrı kart.
   5. Tampon 0 trace'i sunum satırı yazmıyor; `sim.py --holds` yalnız zamanlanmış izlerde çalışır. Tampon 0 A/B'si log alanlarıyla (`hold_*`, `skip_pct`) yapılır.
+  6. `PaceTrace.kt` başta kartta yoktu. Orkestratörün istediği iz sütunu için eklendi (`files:` notlu).
