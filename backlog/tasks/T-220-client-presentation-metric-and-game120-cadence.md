@@ -1,7 +1,7 @@
 ---
 id: T-220
 title: One presentation metric across pacers; infer 60 fps cadence in Oyun 120
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-208, T-211]
