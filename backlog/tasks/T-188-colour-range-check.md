@@ -1,7 +1,7 @@
 ---
 id: T-188
 title: Check stream colour, range and chroma fidelity with test patterns
-status: todo
+status: done
 phase: 6
 owner: user
 depends_on: []
@@ -59,10 +59,10 @@ Wire: none.
 
 ## Kabul kriterleri
 
-- [ ] [device] Patch values for 0/16/235/255 from both screenshots at the default and the maximum bitrate, plus the explicit range verdict judged on the tablet screencap against the authored values (correct: 0→0, 255→255 ±2, no crush of 16/235; or the defect described).
-- [ ] [device] Grey ramp verdict and the thin coloured text observation at both bitrates.
-- [ ] [doc] docs/NOTES.md has a dated entry with the build IDs (host SHA, APK SHA, macOS and HarmonyOS builds), mode, bitrates, the `ev=output_format` line, the verdicts and the SDR/8-bit/4:2:0 limit paragraph.
-- [ ] [doc] NOTES says whether a follow-up card or T-201 is needed, and why.
+- [x] [device] Patch values for 0/16/235/255 from both screenshots at the default and the maximum bitrate, plus the explicit range verdict judged on the tablet screencap against the authored values (correct: 0→0, 255→255 ±2, no crush of 16/235; or the defect described).
+- [x] [device] Grey ramp verdict and the thin coloured text observation at both bitrates.
+- [x] [doc] docs/NOTES.md has a dated entry with the build IDs (host SHA, APK SHA, macOS and HarmonyOS builds), mode, bitrates, the `ev=output_format` line, the verdicts and the SDR/8-bit/4:2:0 limit paragraph.
+- [x] [doc] NOTES says whether a follow-up card or T-201 is needed, and why.
 
 ## Plan
 
@@ -77,3 +77,5 @@ _(Ajan bitirince doldurur.)_
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
+
+**Sonuç (2026-10-04):** NOTES "T-188 renk, aralık…" girdisi. Aralık doğru, renkler doğru (P3'e renk yönetimli), en koyu 1–8 seviyede −1/−2, takip kartı yok; T-201 gereksiz.

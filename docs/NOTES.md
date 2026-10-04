@@ -1236,3 +1236,14 @@ Koşul: USB, panel 60 Hz, host a9d7980-sonrası main, APK a9d7980 (T-223+T-225),
 - **2240×1472 sınırda:** çözme p95 karenin 16,7 ms'sini aşıyor → ~%2–3 iki-vsync kare, D sınırda. İlk %17–23'lük ölçüm oyun ekrana oturmamışken / sahne yüklenirken alındı.
 - **Oyun içinde çözünürlük değişimi:** oyun açıkken Oyun çözünürlüğü değişince RE4 eski boyutta kaldı ("ekran tam oturmadı"); oyunun kendi ayarından yeniden seçince düzeldi. Beklenen davranış (0029), kullanıcıya not.
 - **Kullanıcı:** 1848 ile 2240 arasında fark hissetmedi. **Varsayılan 1848×1214 kalır** (0029 değişmez).
+
+## 2026-10-04 ~15:45 — T-188 renk, aralık ve renk sıkıştırması kontrolü
+
+Koşul: host sha=91aaa2c, APK a9d7980, macOS 27.0.1 (26A434), HarmonyOS MRDI-W09 4.3.0.145, Günlük 60 fps 2800×1840, USB; bit hızı Otomatik (30 Mbps) ve 100 Mbps. `ev=output_format range=1 standard=1 transfer=2` (full range, BT.709, SDR). Desen: kenarlıksız tam ekran AppKit penceresi, sRGB değerleri (0/16/235/255, 1–8 ve 247–254 basamakları, 33 adımlı gri rampa, ana renkler, 11/13/16 pt renkli yazı). Mac `screencapture` ile tablet `screencap` karşılaştırıldı (13×13 px ortalama).
+
+- **Aralık doğru (full range):** 0→0, 16→15, 235→235, 255→255; 247–254 birebir; rampa 48–255 birebir. 16/235 kırpması yok.
+- **En koyu tonlarda hafif ezilme:** 1→0, 2→0, 4→2, 8→6, 16–40 arası −1. Her iki bit hızında aynı (sıkıştırma değil, sabit dönüşüm). Pratikte görünmez; karanlık oyun sahnelerinde OLED'de en derin gölge ayrıntısı çok az kayabilir. Takip kartı gerekmiyor.
+- **Renkler doğru, renk yönetimli:** tablet ekran görüntüsü Display P3 ICC profilli (rXYZ 0,5151/0,2412). Ana renkler sRGB'nin P3'teki karşılığı (ör. kırmızı 255,0,0 → P3 234,51,35; hesaplanan beklenen değerlerle ±2). Yani SurfaceFlinger BT.709 videoyu P3 panele doğru dönüştürüyor; aşırı doygunluk yok.
+- **İnce renkli yazı (4:2:0):** 11 pt kırmızı/mavi, mavi/kırmızı, kırmızı/siyah okunaklı, Türkçe karakterler net; renkli harf kenarları Mac'e göre çok hafif yumuşak (beklenen 4:2:0 sınırı). 30 ve 100 Mbps arasında fark yok (durağan içerik zaten en düşük QP'de, T-087).
+- **SDR/8-bit/4:2:0 sınırı:** akış SDR, 8-bit, 4:2:0 HEVC Main. HDR (tablet HDR10/HLG, 500 nit bildiriyor) ve 4:4:4 bu hattın dışında; Mac sanal ekranı SDR olduğundan oyunlar HDR seçeneğini kapatıyor (RE4: "monitör HDR desteklemiyor").
+- **T-201 (RGB referanslı renk metriği) gerekli değil:** cihazda ölçülen hata renk sıkıştırması kaynaklı değil, yazı okunaklı.
