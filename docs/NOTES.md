@@ -1339,3 +1339,10 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 - Kullanıcı 15 ve 30 Mbps arasında durağan yazı farkını fark etmedi (beklenen: durağan içerik birkaç karede en düşük QP'ye oturur, T-085; fark hareket sırasında, kaydırmada çıkar).
 - Karşılaştırma: USB'de tam ekran geçişi cd95 73 ms (büyük kare kodlama + aktarım), Ethernet + tablet Wi-Fi'de 110–145 ms, yani kablosuz atlama patlamada ~40–70 ms ekliyor. Ham Wi-Fi kapasitesi ~410 Mbps (T-090): sorun kapasite değil, yük altında kablosuz kuyruk gecikmesi (yüklü kontrol srtt 34 ms; modem ya da tablet tarafı ayrıştırılmadı).
 - 0023: sabit profil yeterli. T-178, T-195, T-196 uygulanmadan kapatıldı. T-179 / T-197 artık engelsiz (isteğe bağlı).
+
+## 2026-10-05 ~00:30 — Siyah seviyesi: bit akışı doğru, tablette kalkma aralıklı
+
+- T-230 probu: üretim yapılandırmasında siyah bit akışında Y=0, VUI full=1, 709/sRGB/709; bantlar birebir. Host düzeltmesi gerekmiyor.
+- Gri durum (00:00 ve 00:05, APK 23:41): Mac 0 → tablet 16, Mac (35,45,59) → (50,57,69); 2026-10-01 yakalamasında da aynı.
+- T-231 APK'sı (00:18) kurulduktan sonra varsayılan ayarlarla da doğru: Mac (33,39,52) → tablet (33,38,50), 0 → 1–2, 255 → 254. `color_range limited|unset`, hepsi `unset`, `color_transfer sdr_video` ile de aynı (tablet çözücüsü çıkışta her durumda `range=1 standard=1 transfer=2` bildiriyor, istenen anahtarları yok sayıyor gibi). SF katmanı DEVICE, dataspace V0_SRGB; `service call SurfaceFlinger 1008` (HW overlay kapatma) bu cihazda etkisiz.
+- Varsayılan yol T-231'de değişmedi (diff incelendi). Neden bilinmiyor; aday: tablette ekran durumuna bağlı bir renk dönüşümü (SF renk matrisi, göz konforu/ekran modu) ya da çözücünün bir durumu. Kullanıcı gri görünce `~/.cache/matebridge-tools/data/gray/snap.sh NAME` (eşli yakalama + SurfaceFlinger dökümü + çözücü renk satırları) çalıştırılacak.
