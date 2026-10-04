@@ -1,7 +1,7 @@
 ---
 id: T-225
 title: Client — base the presentation metric (skip_pct) on frame-rendered callbacks; the latch model miscounts ~20% of game frames and pins the pacer at its cap
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-220, T-222]
@@ -83,10 +83,44 @@ Ori Oyun 60 (panel 120, n=2) ve Oyun 120, ~3 dk: `--ez stats_1s true --ez pace_t
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `3eaeb5d` (kod, test, araç, belge); plan `3fe3721`; bu Handoff ayrı commit. Dal `task/T-225-client-callback-presentation-metric`. `./scripts/check.sh` -> ALL OK.
+- **Dokunulan dosyalar:** `VideoStats.kt`, `VideoRenderer.kt`, `PresentMeter.kt`, `PaceTrace.kt`; testler `CallbackPresentationMetricTest.kt` (yeni), `PresentRig.kt`, `PresentationMetricTest.kt`, `PaceTraceTest.kt`; `tools/pacing/sim.py`, `tools/pacing/README.md`, `docs/LOGGING.md`; bu kart. Kart dışına çıkılmadı (`MainActivity.kt` dokunulmadı).
+- **Ne değişti:**
+  - `VideoStats` iki `HoldMeter` tutar: `holds` geri çağrı damgalarını (`onRenderCallback(ptsUs, captureUs, clientUs, shownNs, periodNs)`) alır, `latchHolds` T-220'nin bırakma-anı modelini (`onReleased`) sürdürür. İkisi de aynı `onDecoded` koşularını görür; kural kümesi (`HoldMeter`) bayt bayt aynı, yeni kilit yok (`onRenderCallback` zaten stats kilidini alıyordu).
+  - `skip_pct`, `holdJudged/Short/Long` ve `render ev=present` `hold_*` alanları: bir kez geri çağrı bildirildiyse `holds`, hiç bildirilmediyse `latchHolds`, ikisi de yoksa eski geri dönüş. `AdaptivePacer.onSkipWindow(s.skipPct)` (MainActivity) otomatik olarak geri çağrıdan beslenir.
+  - Yeni tanı: `Snapshot.latchSkipPct`; `render ev=present` satırına `hold_src=cb|latch latch_skip_pct=` eklendi (`render ev=stats` satırı ve `cb_skip_pct` alanı yerinde, MainActivity kart dışı olduğu için `latch_skip_pct` yalnız present satırında).
+  - Geri çağrısı gelmeyen kare: yeni kod yok, mevcut koşu/n kuralı öncülü uzun sayar (JVM testli). `shownNs == Long.MAX_VALUE` ya da `captureUs` bilinmiyorsa dizi kesilir.
+  - `PresentMeter` kaldı: eşik `gap > cadence + P/2` (n=2'de 3 vsync görülür), `cb_skip_pct` tanı olarak sürer.
+  - `PaceTrace`: son sütun `cb_ns` (`onCallback(seq, ns)` son 64 satırda seq arar). `VideoRenderer` dinleyicisi `trace?.onCallback(pts, nanoTime)` çağırır.
+  - `sim.py --holds`: `cb_ns` varsa onu kullanır (decode `ready_ns`'te, gösterim `cb_ns`'te, olaylar zamana göre birleştirilir; geri çağrısı olmayan satır gösterilmemiş); `--latch` eski kaynağı zorlar; self-test'e üçüncü vektör.
+- **JVM sonuçları** (`CallbackPresentationMetricTest`, 120 Hz panel, 60 fps, iki kovalı titreme, uyarlamalı pacer, saniyede bir pencere, 60 sn; `release jitter` = `releaseOutputBuffer` dönüşünün 0..J us rastgele gecikmesi):
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+  | J (us) | geri çağrı `skip_pct` max | latch `skip_pct` max | `level` (geri çağrıdan) |
+  |---|---|---|---|
+  | 0 | 0,0 | 0,0 | 0 |
+  | 1000 | 0,0 | 0,0 | 0 |
+  | 1500 | 0,0 | 30,0 | 0 |
+  | 2500 | 0,0 | 31,7 | 0 |
+  | 2500, `level` latch'ten beslenseydi (T-220 davranışı) | 1,7 | 31,7 | 2 |
+  | gerçek atlama (her 8. kare bir vsync geç) | 15,0 | 1,7 | 2 |
+
+  Kabul maddeleri: eski kesimin ötesinde dönen bırakmalar + düzenli callback'ler -> `skip_pct` 0 (latch > %40); n=2'de 3 vsync -> uzun, ardından 1 vsync kısa; callback'i gelmeyen kare -> öncülü uzun (kısa yok); tampon 0 ve uyarlamalı aynı callback akışında aynı metrik (latch'leri farklı); `level` kusursuz callback'lerde 0, gerçek atlamada yükselir; `PresentMeter` n=2'de 3 vsync'i görür; callback yoksa latch'e düşer.
+- **Çevrimdışı doğrulama (kayıtlı izler, `~/.cache/matebridge-tools/data/2026-10-04-session2/`).** Kayıtlı izlerde `cb_ns` yok (sütun bu kartla eklendi), o yüzden gerçek geri çağrı damgalarıyla yeniden oynatılamadı. Yerine "planlanan slot = geri çağrı zamanı" vekili kullanıldı (kart tablosundaki "kesim = slot" sütunu; yalnız gösterilen karelerin `released_slot_ns`'i, `sim.py --holds` `cb_ns` yolundan). Geçici CSV'ler scratchpad'de, commit edilmedi:
+
+  | İz | latch `skip_pct` (T-220, `--latch`) | planlanan-slot vekili (yeni yol) | cihaz logu: eski model `skip_pct` p50 / eski `cb_skip_pct` p50 |
+  |---|---|---|---|
+  | Ori (pace_trace5) | 17,2 | 2,9 | 19,0 / 5,2 (game5-7 logları) |
+  | RE4 varsayılan (re4a) | 16,1 | 0,7 | 19,6 / 0,0 |
+  | RE4 max (re4b) | 19,8 | 0,1 | 20,4 / 0,0 |
+
+  Latch ve vekil, kart tablosuyla uyumlu (model %17-20, cihaz callback ~%0-3). Bu bir vekil: gerçek callback damgalarının panel ızgarasına ne kadar oturduğu (jitter < P/2 mi) cihazda doğrulanmadı. Eski `cb_skip_pct` Ori'de n=2'de 3-vsync'i göremiyordu (yeni eşikle değişecek).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
-- **Açık sorular:**
+  - Callback `nanoTime` değerleri vsync ızgarasına P/2'den az sapmayla oturur (kart: `cb_skip_pct` RE4'te p50 0, `render_cb_missing` ~ 0). Oturmazsa `round(fark/P)` yanlış kısa/uzun üretebilir; bu cihaz ölçümünde `skip_pct` ile `cb_skip_pct` arasındaki farktan görünür.
+  - Callback gelmiş bir cihazda sonradan callback kesilirse pencereler `null` döner ve geri besleme o pencereleri yok sayar (latch'e geri düşülmez; `callbacksReported` yapışkan).
+  - Frame-rendered dinleyicisi ana looper'da çalışır; `PaceTrace.onCallback` kilitsizdir, son 64 satırda arar (tanı verisi, T-069 ile aynı kabul).
+- **Test edilmeyenler / cihazda doğrulanacaklar (orkestratör):**
+  1. Ori Oyun 60 (panel 120, n=2) ve RE4 Oyun 60 @60 Hz, `--ez stats_1s true --ez pace_trace true`, 2-3 dk. `render ev=stats` `skip_pct` ile `cb_skip_pct` birbirine +-2 puan yakın olmalı (yeni eşikle `cb_skip_pct` n=2'de de doğru); `render ev=present` `hold_src=cb`, `latch_skip_pct` hâlâ %15-20 ise model yanlış kalıyor demektir (beklenen), `skip_pct` ~%0-3.
+  2. `AdaptivePacer.level` (`pace_d_us`, `level` alanı) 15 sn sonra 0 kalmalı; RE4 @60 Hz'de D ölçülen jitter + ~0,5 ms civarında, sınırda (karelerin %94/%99'u) değil.
+  3. Trace'i çekip `python3 tools/pacing/sim.py TRACE --holds`: ilk satır `source: callback times (cb_ns)`; `--latch` ile karşılaştır. `cb_ns` doluluğu (0 olmayan oran) ~%99+ olmalı, gösterilen karelerde.
+  4. Callback damgası ızgarası: `sim.py --holds` çıktısındaki hold dağılımı `exact` ağırlıklı olmalı; `holds 1:..% 3:..%` gibi simetrik kısa/uzun çiftleri çok yüksekse damga jitter'ı P/2'yi aşıyor demektir (varsayım yanlış, geri bildir).
+- **Açık sorular:** Yok. Not: `MainActivity` `render ev=stats` satırına `latch_skip_pct` eklemek isteniyorsa o dosya karta eklenmeli.
