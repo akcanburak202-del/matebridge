@@ -29,8 +29,8 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
 ## Kabul kriterleri
 
 - [x] [XCTest] `SingleInstancePolicy`: başka kopya varken → çık; yalnızken → devam; kendi pid'i sayılmaz.
-- [ ] [device] `quit` + `open` ve login-item kayıt yolu sonrasında `pgrep -x MateBridgeApp` tek süreç; menü çubuğunda tek simge; 47001/47002 dinleniyor.
-- [ ] [device] Elle ikinci `open -n build/MateBridge.app` → ikinci kopya `second_instance action=exit` loglayıp çıkar, mevcut oturum etkilenmez.
+- [x] [device] `quit` + `open` ve login-item kayıt yolu sonrasında `pgrep -x MateBridgeApp` tek süreç; menü çubuğunda tek simge; 47001/47002 dinleniyor.
+- [x] [device] Elle ikinci `open -n build/MateBridge.app` → ikinci kopya `second_instance action=exit` loglayıp çıkar, mevcut oturum etkilenmez.
 
 ## Plan
 
@@ -63,3 +63,5 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
   - Elle `open -n build/MateBridge.app` ve doğrudan `build/MateBridge.app/Contents/MacOS/MateBridgeApp` çalıştırma: ikincisi `second_instance action=exit` loglar, mevcut oturum etkilenmez. `LSMultipleInstancesProhibited` ile LaunchServices `open -n`'i zaten engelleyebilir, o durumda log satırı çıkmaz (yalnız doğrudan exec yolunda görünür); ikisi de kabul edilebilir.
   - `quit` + hemen `open`: eski kopya kapanana kadar (<5 sn) beklenip yeni kopyanın başladığı (`app_start` sonra `listening`, `second_instance` yok). Not: `LSMultipleInstancesProhibited` açıkken LaunchServices, eski kopya ölürken `open`'ı eskiye yönlendirirse yeni süreç hiç başlamayabilir (düz `open` zaten bugün de böyle davranıyordu); gerekirse deploy betiği quit sonrası kapanmayı beklemeli (kapsam dışı, not).
 - **Açık sorular:** yok (kapsam dışı dosya gerekmedi).
+
+**Cihaz (orkestratör, 2026-10-04 ~12:57):** `quit` + `open` → tek süreç (pid 26019), 47001/47002 dinleniyor. `open -n` → LaunchServices ikinci kopyayı açmadı. Doğrudan exec → 5 sn bekleyip `ev=second_instance action=exit existing_pid=26019` ile çıktı; oturum etkilenmedi.
