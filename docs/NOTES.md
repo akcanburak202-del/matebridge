@@ -1295,3 +1295,17 @@ Mac ~22:01'de yeniden başladı (kullanıcı Ethernet'i bağladı); host aynı d
 - **adb kablosuz:** HarmonyOS geliştirici seçeneklerinde "Kablosuz hata ayıklama" varsa eşleştirme kodu; yoksa kabloyla bir kez `adb tcpip 5555` + `adb connect 192.168.1.105:5555`. adb trafiği yalnız koşu aralarında.
 - **Açılan kart:** T-227 (Mac adresi değişince tablet Bonjour ile yeniden bulsun; bugün uygulamayı yeniden açmak gerekti).
 - **Bekleyen kullanıcı kararları:** HDR sonraki adım (T-226: `MATEBRIDGE_VD_TRANSFER=1` dev knob ile RE4 HDR anahtarını denemek); "boşta karart/kapat" özelliği (docs/research/2026-10-04-monitor-vs-matebridge.md öneri 1); T-180 kopma testi (ertelendi).
+
+## 2026-10-04 ~22:40 — Tablet tarafı T-127 sonuçları ve kablosuz adb
+
+Tablet içi log (16:21–22:34) çekildi, koşu aralıkları ses durumu + `.start/.end` ile dilimlendi (r2/r3 için bitiş − 300 sn tahmini). `~/.cache/matebridge-tools/data/wifi-runs/*.tablet.log`.
+
+| satır | `skip_pct` medyan | `cb_skip_pct` medyan | ses kesilmesi (5 dk) | ses owd p95 medyan |
+|---|---|---|---|---|
+| İkisi de Wi-Fi | 25,8 | 26,8 | 5 | 62,6 ms |
+| Wi-Fi, awdl0 kapalı | 27,0 | 29,2 | 10 | 19,3 ms |
+| **Mac Ethernet + tablet Wi-Fi** | **3,3** | **3,9** | **1** (bütçe ✓) | 38,5 ms |
+
+- Ethernet satırı ses bütçesini karşılıyor; kare takılması %26 → %3,3.
+- **Kablosuz adb (HarmonyOS'ta "Kablosuz hata ayıklama" yok):** kablo takılıyken `adb tcpip 5555`, `adb connect 192.168.1.105:5555`, kablo çıkarıldı; çalışıyor (tablet yeniden başlayana kadar). `adb tcpip` adbd'yi yeniden başlattığı için tablet içi `logcat -f` kaydı durdu; gerekirse yeniden başlat.
+- **Bulgu → T-228:** host USB izleyicisi ağ adb cihazına `adb reverse` tüneli kurdu (`host-15 tcp:47001`). Tablet bağlantısı elle **Wi-Fi**'ye sabitlendi (ölçüm süresince böyle kalmalı; sonra "Otomatik"e dönülür).
