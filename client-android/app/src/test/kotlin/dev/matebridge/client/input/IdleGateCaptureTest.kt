@@ -306,6 +306,37 @@ class IdleGateCaptureTest {
         assertTrue(sink.sent.any { it is dev.matebridge.client.protocol.PointerRel && it.buttons == Buttons.LEFT })
     }
 
+    // ---- review round 3: a click as DOWN + BUTTON_PRESS; a still waking pen ----
+
+    @Test fun aMouseClickDeliveredAsDownThenButtonPressWhileDimmedIsSwallowed() {
+        dimNow()
+        sink.nowMs = 130_000
+        cap.onMouse(MouseFrame(130_000_000, 0f, 0f, Buttons.LEFT, 0, deviceId = 9), 130_000) // ACTION_DOWN carries the button
+        cap.onMouse(MouseFrame(130_001_000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 9), 130_001) // BUTTON_PRESS
+        cap.onMouse(MouseFrame(130_080_000, 0f, 0f, 0, deviceId = 9), 130_080) // release
+        assertTrue(sink.sent.isEmpty())
+        cap.onMouse(MouseFrame(131_000_000, 0f, 0f, Buttons.LEFT, 0, deviceId = 9), 131_000)
+        cap.onMouse(MouseFrame(131_001_000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 9), 131_001)
+        assertTrue(sink.sent.any { it is dev.matebridge.client.protocol.PointerRel && it.buttons == Buttons.LEFT })
+    }
+
+    @Test fun aWakingPenHeldStillThenTouchedDownNeverDrawsAndAPalmMeanwhileNeverClicks() {
+        dimNow()
+        pen(PenAction.HOVER_ENTER, 130_000)
+        var t = 130_000L
+        while (t < 131_200) { t += 25; tick(t); idle.tick(t) } // held still in range for 1.2 s
+        touch(TouchAction.DOWN, 131_210, 0, finger(0, 1000f, 900f)) // a palm lands
+        tick(131_300)
+        pen(PenAction.HOVER_EXIT, 131_400)
+        cap.downConfirmed(penFrame(PenAction.DOWN, pt(131_402), device = PEN_DEVICE), 131_402)
+        pen(PenAction.MOVE, 131_450)
+        pen(PenAction.UP, 131_500)
+        touch(TouchAction.UP, 131_600, 0, finger(0, 1000f, 900f))
+        tick(131_700)
+        assertTrue(sink.sent.isEmpty())
+        assertEquals(0, sink.host.pressesAccepted)
+    }
+
     @Test fun inGameModeTheFirstTapClicks() {
         idle.setGameMode(true, 0)
         idle.tick(30 * 60_000L)

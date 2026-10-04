@@ -27,8 +27,9 @@ enum class IdleSource(val id: String) {
  * The first input while dimmed only wakes ([admit]): its whole motion is swallowed, so it never reaches the Mac. Rules,
  * per channel (one touchscreen, one pen, one key, ...):
  *  1. a channel being swallowed stays swallowed until it disengages (all fingers up, pen lifted, key up); an engaged but
- *     unpressed channel (a hovering pen, also across the HOVER_EXIT Android sends right before the tip touches) ends
- *     after [LINGER_MS] without an event on it (the pen left range). A pressed one silent for [STALE_MS] goes stale: it
+ *     unpressed channel (a hovering pen, still or moving) ends only when it leaves: an observed exit (HOVER_EXIT) with no
+ *     further event within [EXIT_WINDOW_MS] (Android sends HOVER_EXIT right before the tip's DOWN), or, as a last resort,
+ *     [STALE_MS] without any event on it. A pressed one silent for [STALE_MS] goes stale: it
  *     no longer counts as held for the counter, but its continuation is still swallowed until its real release or a fresh
  *     press on the channel, so a tracker never sees the middle of the waking motion as a new gesture;
  *  2. a release, or anything on a channel whose press already went to the Mac, always passes: a release that belongs to a
@@ -62,6 +63,9 @@ class IdleDimPolicy(
     private class Swallow(var pressed: Boolean, var lastMs: Long) {
         /** Pressed but silent for [STALE_MS]: not held for the counter any more, still swallowed. */
         var stale = false
+
+        /** When the channel reported leaving (pen HOVER_EXIT) with nothing after it yet, or [NO_EXIT]. */
+        var exitAtMs = NO_EXIT
     }
 
     private val swallowing = HashMap<Long, Swallow>()
@@ -113,25 +117,35 @@ class IdleDimPolicy(
      * channel is still in its motion after this event (fingers down, pen touching or in hover range, key down), [pressed]
      * whether it holds something (hover is not a press); [release] marks a release event (UP, CANCEL, hover exit, key up,
      * button up). [fresh] marks the start of a new motion with nothing else down on the channel (the first finger, a key
-     * DOWN that is not a repeat): a swallow left over from a release that never arrived ends there instead of eating it.
+     * DOWN that is not a repeat; only events that cannot belong to a press already under way): a swallow left over from a
+     * release that never arrived ends there instead of eating it. [leaving] marks an exit that may or may not be followed
+     * by more of the motion (pen HOVER_EXIT): a swallowed channel ends [EXIT_WINDOW_MS] later unless another event comes.
      * Returns false when the event must be swallowed.
      */
     fun admit(
-        channel: Long, source: IdleSource, engaged: Boolean, pressed: Boolean, release: Boolean, nowMs: Long, fresh: Boolean = false,
+        channel: Long, source: IdleSource, engaged: Boolean, pressed: Boolean, release: Boolean, nowMs: Long,
+        fresh: Boolean = false, leaving: Boolean = false,
     ): Boolean {
         expireLingering(nowMs)
         if (fresh) swallowing.remove(channel)
         val woke = activity(source, nowMs)
-        val pass = decide(channel, engaged, pressed, release, woke, nowMs)
+        val pass = decide(channel, engaged, pressed, release, woke, nowMs, leaving)
         if (!pass) swallowed++
         closeWakeIfDone(nowMs)
         return pass
     }
 
-    private fun decide(channel: Long, engaged: Boolean, pressed: Boolean, release: Boolean, woke: Boolean, nowMs: Long): Boolean {
+    private fun decide(
+        channel: Long, engaged: Boolean, pressed: Boolean, release: Boolean, woke: Boolean, nowMs: Long, leaving: Boolean,
+    ): Boolean {
         val sw = swallowing[channel]
         if (sw != null) {
-            if (engaged) { sw.pressed = pressed; sw.lastMs = nowMs; sw.stale = false } else swallowing.remove(channel)
+            if (engaged) {
+                sw.pressed = pressed; sw.lastMs = nowMs; sw.stale = false
+                sw.exitAtMs = if (leaving) nowMs else NO_EXIT
+            } else {
+                swallowing.remove(channel)
+            }
             return false
         }
         if (release || channel in sent) {
@@ -139,7 +153,7 @@ class IdleDimPolicy(
             return true
         }
         if (woke || shadowed(channel)) {
-            if (engaged) swallowing[channel] = Swallow(pressed, nowMs)
+            if (engaged) swallowing[channel] = Swallow(pressed, nowMs).also { if (leaving) it.exitAtMs = nowMs }
             return false
         }
         if (pressed) sent += channel
@@ -216,10 +230,15 @@ class IdleDimPolicy(
         return swallowing.keys.any { IdleChannel.shadows(IdleChannel.kindOf(it), kind) }
     }
 
-    /** A hover swallow ends after [LINGER_MS] of silence; a pressed one goes stale after [STALE_MS] (see the class doc). */
+    /**
+     * A hover swallow ends [EXIT_WINDOW_MS] after an exit with nothing after it, or after [STALE_MS] without any event; a
+     * pressed one goes stale after [STALE_MS] (see the class doc).
+     */
     private fun expireLingering(nowMs: Long) {
         if (swallowing.isEmpty()) return
-        var changed = swallowing.values.removeAll { !it.pressed && nowMs - it.lastMs >= LINGER_MS }
+        var changed = swallowing.values.removeAll {
+            !it.pressed && ((it.exitAtMs != NO_EXIT && nowMs - it.exitAtMs >= EXIT_WINDOW_MS) || nowMs - it.lastMs >= STALE_MS)
+        }
         for (sw in swallowing.values) {
             if (sw.pressed && !sw.stale && nowMs - sw.lastMs >= STALE_MS) { sw.stale = true; changed = true }
         }
@@ -286,12 +305,15 @@ class IdleDimPolicy(
         /** Decision 0031: one more minute without input after dimming, then the flag goes. */
         const val OFF_AFTER_MS = 60_000L
 
-        /** A swallowed hovering pen silent this long has left range (HOVER_EXIT to the tip's DOWN is a few ms). */
-        const val LINGER_MS = 1_000L
+        /** A swallowed pen that sent HOVER_EXIT and nothing for this long has left range (exit to the tip's DOWN: a few ms). */
+        const val EXIT_WINDOW_MS = 300L
+
+        private const val NO_EXIT = Long.MIN_VALUE
 
         /**
          * A swallowed press with no event for this long stops holding the counter (the trackers' own last-resort guards use
-         * the same 10 s: PenTracker.CONTACT_STALE_MS, TouchTracker.PRESS_STALE_MS; a held key autorepeats).
+         * the same 10 s: PenTracker.CONTACT_STALE_MS, TouchTracker.PRESS_STALE_MS; a held key autorepeats). A swallowed
+         * hover with no event at all for this long ends (last resort, so a lost HOVER_EXIT cannot keep fingers swallowed).
          */
         const val STALE_MS = 10_000L
     }

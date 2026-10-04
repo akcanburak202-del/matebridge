@@ -41,7 +41,7 @@ class IdleDimPolicyTest {
     private fun tMove(t: Long) = p.admit(touch, IdleSource.TOUCH, true, true, false, t)
     private fun tUp(t: Long, othersDown: Boolean = false) = p.admit(touch, IdleSource.TOUCH, othersDown, othersDown, true, t)
     private fun hover(t: Long) = p.admit(pen, IdleSource.PEN, true, false, false, t)
-    private fun hoverExit(t: Long) = p.admit(pen, IdleSource.PEN, true, false, true, t)
+    private fun hoverExit(t: Long) = p.admit(pen, IdleSource.PEN, true, false, true, t, leaving = true)
     private fun penDown(t: Long) = p.admit(pen, IdleSource.PEN, true, true, false, t)
     private fun penUp(t: Long) = p.admit(pen, IdleSource.PEN, false, false, true, t)
     private fun key(ch: Long, down: Boolean, t: Long, repeat: Boolean = false) =
@@ -194,9 +194,44 @@ class IdleDimPolicyTest {
         assertFalse(hover(130_000))
         assertFalse(hoverExit(130_010))
         assertTrue(p.swallowingAny)
-        p.tick(130_010 + IdleDimPolicy.LINGER_MS)
+        p.tick(130_010 + IdleDimPolicy.EXIT_WINDOW_MS - 25)
+        assertTrue(p.swallowingAny)
+        p.tick(130_010 + IdleDimPolicy.EXIT_WINDOW_MS)
         assertFalse(p.swallowingAny)
         assertTrue(penDown(133_000)) // a later stroke draws
+    }
+
+    @Test fun aWakingPenHeldStillInRangeStaysSwallowedAndKeepsGuardingAgainstThePalm() {
+        dimAt()
+        assertFalse(hover(130_000))
+        run(130_000, 131_200) // 1.2 s still, no HOVER_EXIT
+        assertTrue(p.isSwallowing(pen))
+        assertFalse(tDown(131_000)) // a palm during the pause
+        assertFalse(tUp(131_100))
+        assertFalse(hoverExit(131_200))
+        assertFalse(penDown(131_205)) // the first stroke is still the waking motion
+        assertFalse(penUp(131_400))
+        assertTrue(hover(131_410))
+        assertTrue(penDown(131_500))
+    }
+
+    @Test fun aSwallowedHoverWithNoEventsAtAllEndsAtTheLastResortBound() {
+        dimAt()
+        assertFalse(hover(130_000))
+        p.tick(130_000 + IdleDimPolicy.STALE_MS - 25)
+        assertTrue(p.swallowingAny)
+        p.tick(130_000 + IdleDimPolicy.STALE_MS)
+        assertFalse(p.swallowingAny)
+        assertTrue(tDown(141_000)) // fingers are not swallowed forever
+    }
+
+    @Test fun aHoverExitFollowedByMoreHoverCancelsTheExit() {
+        dimAt()
+        assertFalse(hover(130_000))
+        assertFalse(hoverExit(130_100))
+        assertFalse(hover(130_200)) // back in range
+        p.tick(130_200 + IdleDimPolicy.EXIT_WINDOW_MS + 500)
+        assertTrue(p.swallowingAny)
     }
 
     @Test fun aPalmPutDownWhileTheWakingPenIsSwallowedIsSwallowedToo() {

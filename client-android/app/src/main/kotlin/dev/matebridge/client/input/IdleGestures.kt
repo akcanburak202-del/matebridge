@@ -12,10 +12,13 @@ import dev.matebridge.client.idle.IdleSource
  *    event: an UP drops the acting finger, a CANCEL drops all), so an ACTION_DOWN always shows the true state;
  *  - pen: contact is a press; hover keeps the pen engaged but is not a press (it does not stop the counter); UP and CANCEL
  *    are releases and disengage, so a swallowed pen motion ends when the pen is lifted; HOVER_EXIT is a release that keeps
- *    the pen engaged (the policy ends a silent hover swallow after [IdleDimPolicy.LINGER_MS]: the pen left range);
+ *    the pen engaged and marks it leaving (the policy ends a swallowed hover [IdleDimPolicy.EXIT_WINDOW_MS] after an exit
+ *    that no DOWN follows; a pen held still in range stays swallowed);
  *  - touchpad: fingers on the pad or a physical button; mouse: a button (motion and wheel are single events);
  *  - keys: one channel per (device, key identity), DOWN to UP, autorepeat included. A first finger (touchscreen,
- *    touchpad), a first mouse button or a key DOWN that is not a repeat is "fresh": it ends a swallow whose release was lost;
+ *    touchpad) or a key DOWN that is not a repeat is "fresh": it ends a swallow whose release was lost. Mouse presses are
+ *    never fresh (Android may report one click as ACTION_DOWN then ACTION_BUTTON_PRESS); a lost mouse release ends at the
+ *    next frame without a button;
  *  - the M-Pencil double tap: a single event.
  */
 object IdleGestures {
@@ -25,8 +28,9 @@ object IdleGestures {
             PenAction.DOWN, PenAction.MOVE -> gate.admit(ch, IdleSource.PEN, engaged = true, pressed = true, release = false, nowMs = nowMs)
             PenAction.HOVER_ENTER, PenAction.HOVER_MOVE ->
                 gate.admit(ch, IdleSource.PEN, engaged = true, pressed = false, release = false, nowMs = nowMs)
-            // Android sends HOVER_EXIT right before the tip's DOWN: the pen stays engaged (a swallowed hover lingers briefly).
-            PenAction.HOVER_EXIT -> gate.admit(ch, IdleSource.PEN, engaged = true, pressed = false, release = true, nowMs = nowMs)
+            // Android sends HOVER_EXIT right before the tip's DOWN: the pen stays engaged, only marked leaving.
+            PenAction.HOVER_EXIT ->
+                gate.admit(ch, IdleSource.PEN, engaged = true, pressed = false, release = true, nowMs = nowMs, leaving = true)
             PenAction.UP, PenAction.CANCEL ->
                 gate.admit(ch, IdleSource.PEN, engaged = false, pressed = false, release = true, nowMs = nowMs)
         }
@@ -60,8 +64,7 @@ object IdleGestures {
         val held = f.buttons != 0
         // A button release under capture carries no motion, no wheel and no press: never swallowed unless its press was.
         val release = !held && f.pressedButton == 0 && f.dx == 0f && f.dy == 0f && f.wheelV == 0f && f.wheelH == 0f
-        val fresh = f.pressedButton != 0 && f.buttons == f.pressedButton // a press with no other button down
-        return gate.admit(IdleChannel.of(IdleChannel.MOUSE, f.deviceId), IdleSource.MOUSE, held, held, release, nowMs, fresh)
+        return gate.admit(IdleChannel.of(IdleChannel.MOUSE, f.deviceId), IdleSource.MOUSE, held, held, release, nowMs)
     }
 
     fun key(gate: IdleDimPolicy, f: KeyFrame, nowMs: Long): Boolean {
