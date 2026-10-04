@@ -1,7 +1,7 @@
 ---
 id: T-214
 title: Host: 1x game display at the requested pixel size (decision 0029)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-213]
