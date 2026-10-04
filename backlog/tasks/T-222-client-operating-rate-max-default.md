@@ -1,7 +1,7 @@
 ---
 id: T-222
 title: Decoder operating rate "max" by default (device A/B result of T-217)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-217]
