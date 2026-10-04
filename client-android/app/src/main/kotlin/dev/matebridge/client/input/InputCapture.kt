@@ -98,12 +98,20 @@ class InputCapture(
     }
 
     private fun admitTouch(gate: IdleDimPolicy, f: TouchFrame, nowMs: Long): Boolean {
-        val pass = IdleGestures.touch(gate, f, nowMs)
+        val tracked = f.deviceId == idleTouchDevice && idleSwallows(IdleChannel.TOUCH, f.deviceId)
+        // A stale swallow (silent 10 s) does not count: a fresh first finger may end it (IdleDimPolicy rule 1).
+        val others = tracked && idleGate?.isSwallowingLive(IdleChannel.of(IdleChannel.TOUCH, f.deviceId)) == true &&
+            idleTouchIds.any { it != f.actingId }
+        val pass = IdleGestures.touch(gate, f, nowMs, swallowedOthers = others)
         if (!pass) {
+            // Ids leave only by their own UP (or a CANCEL): a pointer reclassified as PALM drops out of the finger list
+            // while it is still down, and its release must still be routed here.
+            if (!tracked) idleTouchIds.clear()
             idleTouchDevice = f.deviceId
-            idleTouchIds.clear()
-            if (f.action != TouchAction.CANCEL) {
-                for (finger in f.fingers) if (f.action != TouchAction.UP || finger.id != f.actingId) idleTouchIds += finger.id
+            when (f.action) {
+                TouchAction.CANCEL -> idleTouchIds.clear()
+                TouchAction.UP -> { idleTouchIds.remove(f.actingId); for (x in f.fingers) if (x.id != f.actingId) idleTouchIds += x.id }
+                else -> for (x in f.fingers) idleTouchIds += x.id
             }
         } else if (f.deviceId == idleTouchDevice) {
             idleTouchDevice = NO_DEVICE

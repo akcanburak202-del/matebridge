@@ -36,14 +36,19 @@ object IdleGestures {
         }
     }
 
-    fun touch(gate: IdleDimPolicy, f: TouchFrame, nowMs: Long): Boolean {
+    /**
+     * [swallowedOthers]: a pointer of the (live) swallowed motion other than the acting one is still down (it may have
+     * been reclassified as PALM/UNKNOWN and so be missing from [TouchFrame.fingers]); a DOWN is then not a fresh gesture
+     * and an UP does not end the motion.
+     */
+    fun touch(gate: IdleDimPolicy, f: TouchFrame, nowMs: Long, swallowedOthers: Boolean = false): Boolean {
         val down = when (f.action) {
             TouchAction.DOWN, TouchAction.MOVE -> f.fingers.isNotEmpty()
-            TouchAction.UP -> f.fingers.any { it.id != f.actingId }
+            TouchAction.UP -> f.fingers.any { it.id != f.actingId } || swallowedOthers
             TouchAction.CANCEL -> false
         }
         val release = f.action == TouchAction.UP || f.action == TouchAction.CANCEL
-        val fresh = f.action == TouchAction.DOWN && f.fingers.all { it.id == f.actingId }
+        val fresh = f.action == TouchAction.DOWN && f.fingers.all { it.id == f.actingId } && !swallowedOthers
         return gate.admit(IdleChannel.of(IdleChannel.TOUCH, f.deviceId), IdleSource.TOUCH, down, down, release, nowMs, fresh)
     }
 
@@ -53,7 +58,7 @@ object IdleGestures {
             PadAction.CANCEL -> false
             else -> f.fingers.isNotEmpty()
         }
-        val held = fingers || f.buttons != 0
+        val held = f.action != PadAction.CANCEL && (fingers || f.buttons != 0) // CANCEL resets the tracker, buttons too
         val release = f.action == PadAction.UP || f.action == PadAction.CANCEL ||
             (f.action == PadAction.BUTTON && f.pressedButton == 0)
         val fresh = f.action == PadAction.DOWN && f.buttons == 0 && f.fingers.all { it.id == f.actingId }

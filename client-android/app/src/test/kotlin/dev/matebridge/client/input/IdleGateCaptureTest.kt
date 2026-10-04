@@ -337,6 +337,54 @@ class IdleGateCaptureTest {
         assertEquals(0, sink.host.pressesAccepted)
     }
 
+    // ---- review round 4 ----
+
+    @Test fun aTouchpadCancelWithAButtonStillReportedEndsTheHold() {
+        pad(PadAction.DOWN, 1_000, 0, finger(0, 500f, 500f))
+        pad(PadAction.BUTTON, 1_010, -1, finger(0, 500f, 500f), buttons = Buttons.LEFT, pressed = Buttons.LEFT)
+        assertTrue(idle.held)
+        pad(PadAction.CANCEL, 1_050, -1, finger(0, 500f, 500f), buttons = Buttons.LEFT) // buttonState still nonzero
+        assertFalse(idle.held)
+        idle.tick(1_050 + dim)
+        assertEquals(IdleStage.DIM, idle.stage)
+        // and a swallowed press cancelled the same way ends its swallow
+        pad(PadAction.DOWN, 300_000, 0, finger(0, 500f, 500f))
+        pad(PadAction.BUTTON, 300_010, -1, finger(0, 500f, 500f), buttons = Buttons.LEFT, pressed = Buttons.LEFT)
+        assertTrue(idle.swallowingAny)
+        pad(PadAction.CANCEL, 300_050, -1, finger(0, 500f, 500f), buttons = Buttons.LEFT)
+        assertFalse(idle.swallowingAny)
+    }
+
+    @Test fun aWakingFingerReclassifiedAsPalmKeepsTheNextFingerSwallowed() {
+        dimNow()
+        touch(TouchAction.DOWN, 130_000, 0, finger(0, 1000f, 900f))
+        // finger 0 is now PALM/UNKNOWN: missing from the finger list when finger 1 joins (looks like a first finger)
+        touch(TouchAction.DOWN, 130_100, 1, finger(1, 1300f, 900f))
+        tick(130_200)
+        touch(TouchAction.UP, 130_250, 1, finger(1, 1300f, 900f))
+        tick(130_400)
+        assertTrue(sink.sent.isEmpty())
+        assertEquals(0, sink.host.pressesAccepted)
+        // the palm's own release is still routed to the gate
+        assertTrue(cap.followsFinger(TOUCH_DEVICE, 0))
+        cap.androidUp(ToolKind.OTHER, TOUCH_DEVICE, 0, 130_500)
+        assertFalse(idle.swallowingAny)
+        tap(131_000)
+        assertEquals(1, sink.host.pressesAccepted)
+    }
+
+    @Test fun aStaleSwallowWithAPalmLeftBehindStillEndsAtAFreshFinger() {
+        dimNow()
+        touch(TouchAction.DOWN, 130_000, 0, finger(0, 1000f, 900f))
+        touch(TouchAction.DOWN, 130_100, 1, finger(1, 1300f, 900f)) // finger 0 reclassified, still down
+        touch(TouchAction.UP, 130_200, 1, finger(1, 1300f, 900f))
+        assertTrue(idle.swallowingAny) // the palm keeps the motion open
+        idle.tick(130_200 + IdleDimPolicy.STALE_MS) // its release never comes
+        assertFalse(idle.held)
+        tap(150_000) // a fresh first finger is an ordinary touch again
+        assertEquals(1, sink.host.pressesAccepted)
+    }
+
     @Test fun inGameModeTheFirstTapClicks() {
         idle.setGameMode(true, 0)
         idle.tick(30 * 60_000L)

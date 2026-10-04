@@ -86,6 +86,9 @@ class IdleDimPolicy(
 
     fun isSwallowing(channel: Long) = channel in swallowing
 
+    /** Swallowing and not stale (an event came within [STALE_MS]). */
+    fun isSwallowingLive(channel: Long) = swallowing[channel]?.stale == false
+
     /** Every input tick (~25 ms). */
     fun tick(nowMs: Long) {
         expireLingering(nowMs)
