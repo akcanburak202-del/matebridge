@@ -37,6 +37,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-229](tasks/T-229-client-rediscovery-multi-mac.md) | Client — T-227 rediscovery edge cases with more than one paired Mac (candidate starvation, user pick inherits identity gate) | 6 | android-client-dev | [T-227] |
 | [T-230](tasks/T-230-black-level-bitstream-probe.md) | Black level lifted on the tablet (Mac 0 → tablet 16) — Mac-side bitstream probe (what Y values and VUI the encoder really emits) | 6 | mac-host-dev | [] |
 | [T-231](tasks/T-231-client-color-override-knobs.md) | Black level lifted on the tablet — client dev knobs to override colour range/standard/transfer and a logged output-format report (A/B on device) | 6 | android-client-dev | [] |
+| [T-232](tasks/T-232-host-hdr-display-knob.md) | Host dev knob — create the MateBridge virtual display with an HDR transfer function (tf=1) so games can be checked for an HDR toggle; stream stays SDR | 6 | mac-host-dev | [T-226] |
+| [T-233](tasks/T-233-yuv444-research.md) | Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost | 6 | orchestrator | [] |
+| [T-234](tasks/T-234-client-idle-dim-off.md) | Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode) | 6 | android-client-dev | [] |
 
 ## done
 
