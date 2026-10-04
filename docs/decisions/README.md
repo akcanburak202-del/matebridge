@@ -37,7 +37,7 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0013 | Akış sırasında ayarlar paneli: Ctrl+Shift+6 + Mac menüsü, sağ yan panel, bit hızı tabletten | kabul |
 | 0014 | Oyun modu: 120 fps, %66, en düşük gecikme; geçici varsayılanlar | kabul |
 | 0015 | Tablet dosyaları Mac'te: tablette WebDAV sunucusu, yalnızca USB tüneli üzerinden | kabul (madde 1 → 0028) |
-| 0016 | Oyun modunun iki biçimi: Oyun 120 ve Oyun 60 | kabul |
+| 0016 | Oyun modunun iki biçimi: Oyun 120 ve Oyun 60 | kabul (0030 ile "Oyun + kare hızı" oldu) |
 | 0017 | Çizim modu: kararlı 120 fps, %90 | geri alındı (2026-10-03) |
 | 0018 | Tablet tarafında güven onayı ve yalnızca kullanıcının başlattığı eşleşme | kabul |
 | 0019 | Girdi yalnızca görüntü sağlıklıyken açık | kabul |
@@ -51,3 +51,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0027 | Host'ta "Yalnız USB" ağ profili | kabul |
 | 0028 | Tablet dosya paylaşımı: seçilen klasör ve salt okunur seçeneği (0015'i değiştirir) | kabul |
 | 0029 | Oyunlar için düşük çözünürlüklü sanal ekran | kabul |
+| 0030 | Modlar sadeleşir: Günlük / Çizim / Oyun; kare hızı ve oyun çözünürlüğü ayrı ayar | kabul |
