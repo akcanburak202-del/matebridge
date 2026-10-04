@@ -28,7 +28,8 @@ enum class IdleSource(val id: String) {
  * per channel (one touchscreen, one pen, one key, ...):
  *  1. a channel being swallowed stays swallowed until it disengages (all fingers up, pen lifted, key up); an engaged but
  *     unpressed channel (a hovering pen, also across the HOVER_EXIT Android sends right before the tip touches) ends
- *     after [LINGER_MS] without an event on it (the pen left range);
+ *     after [LINGER_MS] without an event on it (the pen left range), a pressed one after [STALE_MS] (a lost release: the
+ *     trackers drop the orphan events that follow, as after any release-all);
  *  2. a release, or anything on a channel whose press already went to the Mac, always passes: a release that belongs to a
  *     press the Mac got is never swallowed (input state never stuck);
  *  3. a new motion is swallowed when it woke the window, or when it is a touchscreen motion while the pen is being
@@ -74,6 +75,8 @@ class IdleDimPolicy(
     val held get() = sent.isNotEmpty() || swallowing.values.any { it.pressed }
 
     val swallowingAny get() = swallowing.isNotEmpty()
+
+    fun isSwallowing(channel: Long) = channel in swallowing
 
     /** Every input tick (~25 ms). */
     fun tick(nowMs: Long) {
@@ -149,6 +152,21 @@ class IdleDimPolicy(
         closeWakeIfDone(lastActivityMs)
     }
 
+    /**
+     * An input device went away (T-234 review): its releases were sent (or nothing was, for a swallowed motion), so every
+     * channel of that device is forgotten; other devices keep theirs.
+     */
+    fun forgetDevice(deviceId: Int) {
+        sent.removeAll { IdleChannel.deviceOf(it) == deviceId }
+        if (swallowing.keys.removeAll { IdleChannel.deviceOf(it) == deviceId }) closeWakeIfDone(lastActivityMs)
+    }
+
+    /** A per-source release (pointer capture lost: touchpad and mouse buttons go to 0) forgets every channel of [kinds]. */
+    fun forgetKinds(vararg kinds: Int) {
+        sent.removeAll { IdleChannel.kindOf(it) in kinds }
+        if (swallowing.keys.removeAll { IdleChannel.kindOf(it) in kinds }) closeWakeIfDone(lastActivityMs)
+    }
+
     /** "Boşta karart" changed: the counter starts again; a dimmed window comes back. */
     fun setTimeout(t: IdleTimeout, nowMs: Long) {
         timeout = t
@@ -185,10 +203,11 @@ class IdleDimPolicy(
         return swallowing.keys.any { IdleChannel.shadows(IdleChannel.kindOf(it), kind) }
     }
 
-    /** Engaged-but-unpressed swallows (hover) end once their channel has been silent for [LINGER_MS]. */
+    /** Swallows end once their channel has been silent for [LINGER_MS] (hover) or [STALE_MS] (pressed: release lost). */
     private fun expireLingering(nowMs: Long) {
         if (swallowing.isEmpty()) return
-        if (swallowing.values.removeAll { !it.pressed && nowMs - it.lastMs >= LINGER_MS }) closeWakeIfDone(nowMs)
+        val gone = swallowing.values.removeAll { nowMs - it.lastMs >= if (it.pressed) STALE_MS else LINGER_MS }
+        if (gone) closeWakeIfDone(nowMs)
     }
 
     private fun activity(source: IdleSource, nowMs: Long): Boolean {
@@ -253,6 +272,12 @@ class IdleDimPolicy(
 
         /** A swallowed hovering pen silent this long has left range (HOVER_EXIT to the tip's DOWN is a few ms). */
         const val LINGER_MS = 1_000L
+
+        /**
+         * A swallowed press with no event for this long lost its release (the trackers' own last-resort guards use the
+         * same 10 s: PenTracker.CONTACT_STALE_MS, TouchTracker.PRESS_STALE_MS; a held key autorepeats).
+         */
+        const val STALE_MS = 10_000L
     }
 }
 
@@ -269,6 +294,8 @@ object IdleChannel {
         (kind.toLong() shl 56) or ((deviceId.toLong() and 0xFFFF_FFFFL) shl 24) or (code.toLong() and 0xFF_FFFFL)
 
     fun kindOf(channel: Long): Int = (channel ushr 56).toInt()
+
+    fun deviceOf(channel: Long): Int = ((channel ushr 24) and 0xFFFF_FFFFL).toInt()
 
     /**
      * A new motion of [newKind] is swallowed while a channel of [swallowedKind] is: only touchscreen fingers under a

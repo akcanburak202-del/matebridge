@@ -282,11 +282,60 @@ class IdleDimPolicyTest {
         assertTrue(tUp(135_100))
     }
 
+    @Test fun aDetachedDeviceIsForgottenAndOthersKeepTheirs() {
+        val otherKb = IdleChannel.of(IdleChannel.KEY, 8, 30)
+        assertTrue(key(keyA, true, 0))
+        assertTrue(key(otherKb, true, 0))
+        p.forgetDevice(7)
+        assertTrue(p.held) // keyboard 8 still holds its key
+        p.forgetDevice(8)
+        assertFalse(p.held)
+        p.tick(twoMin); assertEquals(IdleStage.DIM, p.stage)
+        // a swallowed motion of a detached device is forgotten too
+        assertFalse(tDown(130_000))
+        p.forgetDevice(2)
+        assertFalse(p.swallowingAny)
+    }
+
+    @Test fun forgettingAKindReleasesItsChannelsOnly() {
+        assertTrue(p.admit(mouse, IdleSource.MOUSE, true, true, false, 0)) // a button held
+        assertTrue(key(keyA, true, 0))
+        p.forgetKinds(IdleChannel.PAD, IdleChannel.MOUSE)
+        assertTrue(p.held)
+        assertTrue(key(keyA, false, 10))
+        assertFalse(p.held)
+    }
+
+    @Test fun aSwallowedPressWhoseReleaseNeverArrivesEndsAfterTheStaleBound() {
+        dimAt()
+        assertFalse(tDown(130_000))
+        assertTrue(p.held)
+        run(130_000, 130_000 + IdleDimPolicy.STALE_MS - 25)
+        assertTrue(p.swallowingAny)
+        p.tick(130_000 + IdleDimPolicy.STALE_MS)
+        assertFalse(p.swallowingAny)
+        assertFalse(p.held)
+        val end = 130_000 + IdleDimPolicy.STALE_MS // the counter stood still while the press was believed held
+        p.tick(end + twoMin - 100); assertEquals(IdleStage.ACTIVE, p.stage) // last held tick was 25 ms before the expiry
+        p.tick(end + twoMin); assertEquals(IdleStage.DIM, p.stage)
+    }
+
+    @Test fun aSwallowedPressThatKeepsSendingEventsIsNotExpired() {
+        dimAt()
+        assertFalse(key(keyA, true, 130_000))
+        var t = 130_000L
+        while (t < 130_000 + 3 * IdleDimPolicy.STALE_MS) { t += 50; assertFalse(key(keyA, true, t, repeat = true)); p.tick(t) }
+        assertTrue(p.isSwallowing(keyA))
+        assertFalse(key(keyA, false, t + 10))
+    }
+
     @Test fun channelIdsKeepKindDeviceAndCodeApart() {
         assertEquals(IdleChannel.TOUCH, IdleChannel.kindOf(touch))
         assertEquals(IdleChannel.KEY, IdleChannel.kindOf(IdleChannel.of(IdleChannel.KEY, -5, 0x10000 + 700)))
         assertTrue(IdleChannel.of(IdleChannel.KEY, 7, 30) != IdleChannel.of(IdleChannel.KEY, 8, 30))
         assertTrue(IdleChannel.of(IdleChannel.TOUCH, 1) != IdleChannel.of(IdleChannel.PEN, 1))
+        assertEquals(-5, IdleChannel.deviceOf(IdleChannel.of(IdleChannel.KEY, -5, 0x10000 + 700)))
+        assertEquals(7, IdleChannel.deviceOf(keyA))
     }
 
     @Test fun timeoutChoicesParseAndPersist() {

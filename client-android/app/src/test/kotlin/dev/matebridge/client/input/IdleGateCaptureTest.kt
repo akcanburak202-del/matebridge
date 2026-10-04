@@ -4,6 +4,7 @@ import dev.matebridge.client.idle.IdleDimPolicy
 import dev.matebridge.client.idle.IdleDimPolicyTest
 import dev.matebridge.client.idle.IdleStage
 import dev.matebridge.client.idle.IdleTimeout
+import dev.matebridge.client.protocol.Buttons
 import dev.matebridge.client.protocol.Key
 import dev.matebridge.client.protocol.Pen
 import dev.matebridge.client.protocol.PenGesture
@@ -166,6 +167,82 @@ class IdleGateCaptureTest {
         sink.nowMs = 130_010
         cap.releaseAll(ReleaseAll.FOCUS_LOST, 130_010)
         assertEquals(listOf(ReleaseAll.FOCUS_LOST), sink.sent.filterIsInstance<ReleaseAll>().map { it.reason })
+        assertFalse(idle.swallowingAny)
+    }
+
+    // ---- review fixes: detach and capture loss forget what they released; swallowed motions stay routable ----
+
+    @Test fun aKeyboardDetachedWithAKeyDownLetsTheWindowDimAgain() {
+        key(30, true, 1_000)
+        assertTrue(idle.held)
+        sink.nowMs = 2_000
+        cap.onDeviceRemoved(kb, 2_000)
+        assertEquals(listOf(Key.DOWN, Key.UP), keys().map { it.action })
+        assertFalse(idle.held)
+        idle.tick(2_000 + dim)
+        assertEquals(IdleStage.DIM, idle.stage)
+    }
+
+    @Test fun aSwallowedKeyOfADetachedKeyboardIsForgotten() {
+        dimNow()
+        key(30, true, 130_000)
+        assertTrue(idle.swallowingAny)
+        sink.nowMs = 130_100
+        cap.onDeviceRemoved(kb, 130_100)
+        assertFalse(idle.swallowingAny)
+        assertTrue(keys().isEmpty())
+    }
+
+    @Test fun pointerCaptureLostWithAMouseButtonHeldLetsTheWindowDimAgain() {
+        sink.nowMs = 1_000
+        cap.onMouse(MouseFrame(1_000_000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 9), 1_000)
+        assertTrue(idle.held)
+        sink.nowMs = 2_000
+        cap.onPointerCaptureLost(2_000)
+        assertFalse(idle.held)
+        idle.tick(2_000 + dim)
+        assertEquals(IdleStage.DIM, idle.stage)
+    }
+
+    @Test fun aSwallowedPenContactIsEndedByAnUpReportedAsUnknownTool() {
+        dimNow()
+        pen(PenAction.DOWN, 130_000)
+        assertTrue(idle.held)
+        assertTrue(cap.followsPen(PEN_DEVICE, 0))
+        cap.androidUp(ToolKind.OTHER, PEN_DEVICE, 0, 130_050) // the platform calls the lift UNKNOWN / PALM
+        assertFalse(idle.swallowingAny)
+        assertFalse(cap.followsPen(PEN_DEVICE, 0))
+        assertTrue(sink.sent.none { it is Pen })
+        idle.tick(130_050 + dim)
+        assertEquals(IdleStage.DIM, idle.stage)
+    }
+
+    @Test fun aSwallowedPenContactIsEndedByACancelWithoutAPenPointer() {
+        dimNow()
+        pen(PenAction.DOWN, 130_000)
+        assertEquals(PEN_DEVICE, cap.penContactDevice)
+        cap.androidCancel(PEN_DEVICE, penPointerInEvent = false, fingerPointerInEvent = false, nowMs = 130_050)
+        assertFalse(idle.swallowingAny)
+        assertTrue(sink.sent.isEmpty())
+    }
+
+    @Test fun aSwallowedFingerIsEndedByAnUpReportedAsPalm() {
+        dimNow()
+        touch(TouchAction.DOWN, 130_000, 0, finger(0, 1000f, 900f))
+        assertTrue(cap.followsFinger(TOUCH_DEVICE, 0))
+        assertEquals(TOUCH_DEVICE, cap.touchDevice)
+        cap.androidUp(ToolKind.OTHER, TOUCH_DEVICE, 0, 130_050) // not a finger any more: not in the finger list
+        assertFalse(idle.swallowingAny)
+        assertFalse(cap.followsFinger(TOUCH_DEVICE, 0))
+        assertTrue(sink.sent.isEmpty())
+        tap(131_000)
+        assertEquals(1, sink.host.pressesAccepted)
+    }
+
+    @Test fun aSwallowedPalmCancelledWithoutFingerPointersStillEnds() {
+        dimNow()
+        touch(TouchAction.DOWN, 130_000, 0, finger(0, 1000f, 900f))
+        cap.androidCancel(TOUCH_DEVICE, penPointerInEvent = false, fingerPointerInEvent = false, nowMs = 130_050)
         assertFalse(idle.swallowingAny)
     }
 
