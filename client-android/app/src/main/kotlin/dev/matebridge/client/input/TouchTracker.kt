@@ -34,6 +34,9 @@ import kotlin.math.hypot
  *   range and for [GATE_HOLD_MS] after the last PEN message was sent (the host's clock, plus a margin). Releases are never
  *   refused. When the pen enters range, a pending or pressed single finger is released and an open (or parked)
  *   scroll is cancelled; those fingers are ignored until they lift.
+ * - A new contact while this tracker owns none but another finger is already down in the same frame (one it let go of:
+ *   an expired contact, one from before a policy change, a refused one) is not a first finger: no press and no gesture
+ *   start until every finger has lifted (lockout). Reconciling with the live pointer list covers every path alike.
  * - [policy] ([FingerPolicy]): [FingerPolicy.OFF] ("Parmak dokunmasını tamamen kapat") refuses every press and
  *   gesture. [FingerPolicy.GESTURES_ONLY] (Çizim, decision 0030 §1, T-223) sends nothing for one finger (no click, no
  *   drag: a palm cannot press) but a second finger still starts the two-finger scroll or pinch as usual.
@@ -247,6 +250,15 @@ class TouchTracker(
     private fun down(f: TouchFrame, nowMs: Long, out: MutableList<Outgoing>) {
         val fp = f.fingers.firstOrNull { it.id == f.actingId } ?: return
         if (policy == FingerPolicy.OFF || (lockout && f.deviceId == lockoutDevice)) return
+        // Reconcile with the live pointer list (T-223): a new contact while the tracker owns none but another finger is
+        // already down is not a first finger. That finger is one this tracker let go of (a silent one that expired, one
+        // from before a policy change or a refused one); pairing the new finger with it, or clicking for it, would be a
+        // stray press. So no press and no gesture start until every finger has lifted (the lockout clears on that).
+        if (mode == Mode.IDLE && f.fingers.any { it.id != f.actingId }) {
+            lockout = true
+            lockoutDevice = f.deviceId
+            return
+        }
         if (blocked(nowMs)) {
             counters.palmRejects++
             return

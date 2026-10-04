@@ -117,6 +117,45 @@ class FingerPolicyTest {
         assertEquals(listOf(0), ptrs(t.tick(10 + TouchTracker.PRESS_STALE_MS)).map { it.buttons })
     }
 
+    // ---- reconciliation with the live pointer list (Codex): a finger the tracker let go of is never a first finger ----
+
+    @Test fun expiredSilentFingerThenPolicyChangeThenSecondFingerClicksNothing() {
+        val t = tracker().gesturesOnly()
+        down(t, 0, 1, finger(1, 300f, 300f))
+        t.tick(TouchTracker.PRESS_STALE_MS) // the silent contact expires; finger 1 is still on the glass
+        assertTrue(t.isIdle)
+        assertTrue(t.setPolicy(FingerPolicy.ALL, TouchTracker.PRESS_STALE_MS + 10).isEmpty()) // Ctrl+Shift+7 to Oyun
+        val now = TouchTracker.PRESS_STALE_MS + 100
+        assertTrue(down(t, now, 2, finger(1, 300f, 300f), finger(2, 900f, 300f)).isEmpty())
+        assertTrue(t.tick(now + 100).isEmpty()) // no LEFT after the hold time
+        assertTrue(move(t, now + 120, finger(1, 300f, 300f), finger(2, 1200f, 600f)).isEmpty()) // and no drag
+        assertTrue(t.isLockedOut)
+        assertTrue(up(t, now + 200, 2, finger(1, 300f, 300f), finger(2, 1200f, 600f)).isEmpty())
+        assertTrue(up(t, now + 210, 1, finger(1, 300f, 300f)).isEmpty())
+        assertFalse(t.isLockedOut) // every finger lifted
+        down(t, now + 300, 3, finger(3, 100f, 100f)) // a fresh touch presses as usual
+        assertEquals(listOf(Buttons.LEFT), ptrs(t.tick(now + 360)).map { it.buttons })
+    }
+
+    @Test fun expiredPressInAllWithTheFingerStillDownThenSecondFingerClicksNothing() {
+        val t = tracker()
+        down(t, 0, 1, finger(1, 300f, 300f))
+        move(t, 10, finger(1, 500f, 500f)) // pressed
+        assertEquals(listOf(0), ptrs(t.tick(10 + TouchTracker.PRESS_STALE_MS)).map { it.buttons }) // stale: released
+        assertTrue(t.isIdle)
+        val now = TouchTracker.PRESS_STALE_MS + 100
+        assertTrue(down(t, now, 2, finger(1, 500f, 500f), finger(2, 900f, 300f)).isEmpty())
+        assertTrue(t.tick(now + 100).isEmpty()) // no LEFT
+        assertTrue(t.isLockedOut)
+    }
+
+    @Test fun aFirstFingerAloneStillPressesNormally() {
+        val t = tracker()
+        down(t, 0, 1, finger(1, 300f, 300f))
+        assertEquals(listOf(Buttons.LEFT), ptrs(t.tick(50)).map { it.buttons })
+        assertFalse(t.isLockedOut)
+    }
+
     // ---- two fingers still work ----
 
     @Test fun twoFingerPinchPasses() {
