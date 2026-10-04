@@ -435,9 +435,9 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
 
 ## Modlar: Günlük / Çizim / Oyun (tablet, `MB/session`, T-223, karar 0030)
 
-- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> jitter=adaptive|<N> [jitter_src=extra] bitrate_kbps=<n> audio_out=auto|aaudio|track finger_off=0|1 [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `finger_off=` ile).
+- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> jitter=adaptive|<N> [jitter_src=extra] bitrate_kbps=<n> audio_out=auto|aaudio|track fingers=all|gestures|off [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `fingers=` ile).
   - `mode`: katmanı kurulan ya da bırakılan mod. Oyun ↔ Çizim geçişi tek bir `enter`dir (yeni katman baştan kurulur); Günlük'e dönüş `exit`tir. Aynı modda tekrar satır çıkmaz.
-  - `overrides`: katmanın ezdiği ayarlar. Oyun `bitrate,audio,pen`; Çizim `bitrate,finger` (parmak kapalı + Otomatik bit hızı ise 60 Mbps).
+  - `overrides`: katmanın ezdiği ayarlar. Oyun `bitrate,audio,pen`; Çizim `bitrate,finger` (parmak politikası `gestures`: tek parmak hiçbir şey göndermez, iki parmak kaydırma ve sıkıştırma çalışır; kayıtlı "tamamen kapat" açıksa `off` kalır; Otomatik bit hızı ise 60 Mbps). Katmanın ezmediği ayarlar (Oyun: parmak; Çizim: ses, kalem izi/noktası) panelde değiştirilince normal olarak kaydedilir.
   - Değerler katmanın etkin değerleridir (kayıtlı ayarlar değil). `at=start`: uygulama açılışında kayıtlı mod Oyun/Çizim olduğu için kuruldu.
 - `I session ev=modes_migrated mode=daily|game fps=60|120`: ilk açılışta eski beş mod kimliğinden biri yeni mod ve kare hızına çevrildi (`clarity` Günlük 60, `smooth`/`performance` Günlük 120, `game` Oyun 120, `game60` Oyun 60). Bir kez yazılır; kayıtlı mod yoksa yazılmaz.
 - Kare hızı seçimi ayrı bir log satırı yazmaz: sonucu yeni `ev=profile fps=` satırıdır (60↔120 değişimi Mac sanal ekranını bir kez yeniden kurar).

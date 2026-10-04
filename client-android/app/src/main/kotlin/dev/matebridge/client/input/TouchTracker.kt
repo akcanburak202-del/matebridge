@@ -34,7 +34,10 @@ import kotlin.math.hypot
  *   range and for [GATE_HOLD_MS] after the last PEN message was sent (the host's clock, plus a margin). Releases are never
  *   refused. When the pen enters range, a pending or pressed single finger is released and an open (or parked)
  *   scroll is cancelled; those fingers are ignored until they lift.
- * - [disabled] ("Parmak dokunmasını tamamen kapat") refuses every press.
+ * - [policy] ([FingerPolicy]): [FingerPolicy.OFF] ("Parmak dokunmasını tamamen kapat") refuses every press and
+ *   gesture. [FingerPolicy.GESTURES_ONLY] (Çizim, decision 0030 §1, T-223) sends nothing for one finger (no click, no
+ *   drag: a palm cannot press) but a second finger still starts the two-finger scroll or pinch as usual.
+ *   Changing the policy mid-contact ([setPolicy]) releases only what the new policy no longer allows.
  *
  * Fingers that were refused or abandoned are simply not tracked: their MOVE/UP events are ignored. A release is
  * routed here by (device, pointer id) through [follows], whatever tool type the platform reports for it by then.
@@ -53,7 +56,14 @@ class TouchTracker(
     var widthPt = 0
     var heightPt = 0
 
-    var disabled = false
+    /** What fingers may do ([setPolicy] changes it with the releases that needs). */
+    var policy = FingerPolicy.ALL
+        private set
+
+    /** Every finger refused ([FingerPolicy.OFF]); assigning is [setPolicy] without sending the releases. */
+    var disabled: Boolean
+        get() = policy == FingerPolicy.OFF
+        set(value) { policy = if (value) FingerPolicy.OFF else FingerPolicy.ALL }
 
     private var mode = Mode.IDLE
     private var pointerId = -1
@@ -137,7 +147,10 @@ class TouchTracker(
     fun tick(nowMs: Long): List<Outgoing> {
         val out = ArrayList<Outgoing>(1)
         when (mode) {
-            Mode.PENDING -> if (nowMs - downMs >= HOLD_MS) pressNow(nowMs, nowMs * 1000, out, movedBeyondSlop = false)
+            Mode.PENDING -> if (policy == FingerPolicy.GESTURES_ONLY) {
+                // A silent single finger: forget it if Android lost its lift (otherwise it would pose as a first finger forever).
+                if (nowMs - downMs >= PRESS_STALE_MS) { counters.pressStale++; mode = Mode.IDLE }
+            } else if (nowMs - downMs >= HOLD_MS) pressNow(nowMs, nowMs * 1000, out, movedBeyondSlop = false)
             Mode.POINTER -> if (nowMs - pressEventMs >= PRESS_STALE_MS) {
                 // No event from a pressed finger for this long: Android lost the lift. Release it, forget it.
                 counters.pressStale++
@@ -193,16 +206,44 @@ class TouchTracker(
         return out
     }
 
-    fun setDisabled(value: Boolean, nowMs: Long): List<Outgoing> {
-        disabled = value
-        return if (value) release(nowMs) else emptyList()
+    fun setDisabled(value: Boolean, nowMs: Long): List<Outgoing> =
+        setPolicy(if (value) FingerPolicy.OFF else FingerPolicy.ALL, nowMs)
+
+    /**
+     * Switches the finger policy and returns the releases it owes:
+     * - [FingerPolicy.OFF]: everything held ends (button up, scroll/pinch cancelled), like [release].
+     * - [FingerPolicy.GESTURES_ONLY]: a held one-finger press or drag gets its button up and the finger stays tracked
+     *   but silent (a second finger can still start a gesture); an open two-finger scroll or pinch is left running.
+     * - [FingerPolicy.ALL]: nothing is owed. A finger that was held silently (one finger, [FingerPolicy.GESTURES_ONLY])
+     *   is forgotten until it lifts, so that it does not turn into a press now.
+     */
+    fun setPolicy(value: FingerPolicy, nowMs: Long): List<Outgoing> {
+        val old = policy
+        policy = value
+        if (value == old) return emptyList()
+        val out = ArrayList<Outgoing>(1)
+        when (value) {
+            FingerPolicy.OFF -> forceRelease(nowMs * 1000, out)
+            FingerPolicy.GESTURES_ONLY -> if (mode == Mode.POINTER) {
+                out += ptr(nowMs * 1000, lastX, lastY, 0)
+                mode = Mode.PENDING // still down, tracked, silent
+                downX = lastX; downY = lastY
+                downMs = nowMs
+            }
+            FingerPolicy.ALL -> if (mode == Mode.PENDING) {
+                lockout = true
+                lockoutDevice = gestureDevice
+                reset()
+            }
+        }
+        return out
     }
 
     // ---- events ----
 
     private fun down(f: TouchFrame, nowMs: Long, out: MutableList<Outgoing>) {
         val fp = f.fingers.firstOrNull { it.id == f.actingId } ?: return
-        if (disabled || (lockout && f.deviceId == lockoutDevice)) return
+        if (policy == FingerPolicy.OFF || (lockout && f.deviceId == lockoutDevice)) return
         if (blocked(nowMs)) {
             counters.palmRejects++
             return
@@ -370,6 +411,7 @@ class TouchTracker(
      * this press, so the finger is dropped instead (returns false, nothing sent, finger untracked).
      */
     private fun pressNow(nowMs: Long, timeUs: Long, out: MutableList<Outgoing>, movedBeyondSlop: Boolean): Boolean {
+        if (policy == FingerPolicy.GESTURES_ONLY) return false // one finger sends nothing; it stays tracked (PENDING) for a second finger
         if (blocked(nowMs)) {
             counters.palmRejects++
             mode = Mode.IDLE

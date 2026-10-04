@@ -1,6 +1,7 @@
 package dev.matebridge.client.stream
 
 import dev.matebridge.client.audio.AudioOutPref
+import dev.matebridge.client.input.FingerPolicy
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.session.Settings
 import dev.matebridge.client.video.VideoRenderer
@@ -10,10 +11,13 @@ import dev.matebridge.client.video.VideoRenderer
  * over the user's stored [Settings] for the bit rate, the audio output, the local pen trail/dot and the finger switch.
  *
  * - Entering Oyun or Çizim builds the layer from that mode's defaults ([defaults]):
- *   Oyun: 60 Mbps if Otomatik, "Düşük gecikme", no pen trail/dot. Çizim: fingers off, 60 Mbps if Otomatik.
- *   Values a mode does not override keep the stored ones.
- * - While a layer is active every read here returns the layer's value and every write changes only the layer;
- *   [Settings] is never written (the layer is rebuilt on each entry, also Oyun to Çizim and back).
+ *   Oyun: 60 Mbps if Otomatik, "Düşük gecikme", no pen trail/dot. Çizim: fingers gestures-only (one finger sends
+ *   nothing, pinch and two-finger scroll still work; [FingerPolicy.GESTURES_ONLY]), 60 Mbps if Otomatik.
+ *   Values a mode does not override ([overridesOf]) keep the stored ones.
+ * - While a layer is active every read here returns the layer's value. A write changes only the layer for a setting
+ *   that layer overrides ([overridesOf]); any other setting is persisted as usual (and the layer's copy follows), so a
+ *   change to a non-overridden setting never silently reverts when the mode changes. The layer is rebuilt on each
+ *   entry, also Oyun to Çizim and back.
  * - Leaving to Günlük drops the layer, so the stored values are in effect again.
  * - Opening the app with the stored mode Oyun or Çizim builds the layer at once (the caller calls [onModeChanged] at start).
  *
@@ -30,8 +34,11 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
         val audioOut: AudioOutPref,
         val penTrail: Boolean,
         val penDot: Boolean,
-        val fingerOff: Boolean = false,
-    )
+        val fingers: FingerPolicy = FingerPolicy.ALL,
+    ) {
+        /** Every finger refused (the stored "tamamen kapat" switch, or its layer value). */
+        val fingerOff: Boolean get() = fingers == FingerPolicy.OFF
+    }
 
     enum class Change(val action: String) { ENTER("enter"), EXIT("exit") }
 
@@ -55,7 +62,10 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
 
     /** What the user stored, regardless of the layer. */
     fun saved(): Values =
-        Values(settings.bitrateKbps(), settings.audioOut(), settings.penTrail(), settings.penDot(), settings.fingerTouchDisabled())
+        Values(
+            settings.bitrateKbps(), settings.audioOut(), settings.penTrail(), settings.penDot(),
+            if (settings.fingerTouchDisabled()) FingerPolicy.OFF else FingerPolicy.ALL,
+        )
 
     /** What applies now: the layer while a mode layer is on, otherwise the stored values. */
     fun effective(): Values = layer ?: saved()
@@ -64,33 +74,45 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
     val audioOut: AudioOutPref get() = effective().audioOut
     val penTrail: Boolean get() = effective().penTrail
     val penDot: Boolean get() = effective().penDot
-    val fingerOff: Boolean get() = effective().fingerOff
+    /** What fingers may do now (Çizim: [FingerPolicy.GESTURES_ONLY] unless the stored switch is fully off). */
+    val fingers: FingerPolicy get() = effective().fingers
+
+    /** The switch's own state: every finger refused ([FingerPolicy.OFF]). */
+    val fingerOff: Boolean get() = fingers == FingerPolicy.OFF
+
+    /** True while the active layer overrides [o] (a write to it then stays in the layer; otherwise it is persisted). */
+    private fun layered(o: Override): Boolean = layerMode?.let { o in overridesOf(it) } == true
+
+    /**
+     * The write rule (decision 0014 §3, T-223): a setting the active layer overrides changes only the layer; any other
+     * setting is a normal persistent change, and the layer's copy of it follows so [effective] stays consistent.
+     */
+    private inline fun write(o: Override, persist: () -> Unit, update: (Values) -> Values) {
+        val l = layer
+        if (l != null && layered(o)) { layer = update(l); return }
+        persist()
+        if (l != null) layer = update(l)
+    }
 
     fun setBitrateKbps(kbps: Long) {
         val v = Bitrate.sanitize(kbps)
-        val l = layer
-        if (l != null) layer = l.copy(bitrateKbps = v) else settings.setBitrateKbps(v)
+        write(Override.BITRATE, { settings.setBitrateKbps(v) }) { it.copy(bitrateKbps = v) }
     }
 
-    fun setAudioOut(p: AudioOutPref) {
-        val l = layer
-        if (l != null) layer = l.copy(audioOut = p) else settings.setAudioOut(p)
-    }
+    fun setAudioOut(p: AudioOutPref) = write(Override.AUDIO, { settings.setAudioOut(p) }) { it.copy(audioOut = p) }
 
-    fun setPenTrail(on: Boolean) {
-        val l = layer
-        if (l != null) layer = l.copy(penTrail = on) else settings.setPenTrail(on)
-    }
+    fun setPenTrail(on: Boolean) = write(Override.PEN, { settings.setPenTrail(on) }) { it.copy(penTrail = on) }
 
-    fun setPenDot(on: Boolean) {
-        val l = layer
-        if (l != null) layer = l.copy(penDot = on) else settings.setPenDot(on)
-    }
+    fun setPenDot(on: Boolean) = write(Override.PEN, { settings.setPenDot(on) }) { it.copy(penDot = on) }
 
-    fun setFingerOff(off: Boolean) {
-        val l = layer
-        if (l != null) layer = l.copy(fingerOff = off) else settings.setFingerTouchDisabled(off)
-    }
+    /**
+     * The "Parmak dokunmasını tamamen kapat" switch. In Çizim (which overrides the finger policy) it changes only the
+     * layer: on = [FingerPolicy.OFF], off = Çizim's [FingerPolicy.GESTURES_ONLY]; elsewhere it is the stored setting.
+     */
+    fun setFingerOff(off: Boolean) = write(
+        Override.FINGER,
+        { settings.setFingerTouchDisabled(off) },
+    ) { it.copy(fingers = if (off) FingerPolicy.OFF else if (layered(Override.FINGER)) FingerPolicy.GESTURES_ONLY else FingerPolicy.ALL) }
 
     /**
      * The display mode is now [mode]. Builds the layer on entering Oyun or Çizim ([Change.ENTER], also when switching
@@ -172,7 +194,11 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
             val high = if (saved.bitrateKbps == Bitrate.AUTO_KBPS) GAME_BITRATE_KBPS else saved.bitrateKbps
             return when (mode) {
                 StreamMode.GAME -> saved.copy(bitrateKbps = high, audioOut = AudioOutPref.AUTO, penTrail = false, penDot = false)
-                StreamMode.DRAWING -> saved.copy(bitrateKbps = high, fingerOff = true)
+                // A stored "tamamen kapat" stays fully off; otherwise one finger goes silent but pinch/scroll still work.
+                StreamMode.DRAWING -> saved.copy(
+                    bitrateKbps = high,
+                    fingers = if (saved.fingers == FingerPolicy.OFF) FingerPolicy.OFF else FingerPolicy.GESTURES_ONLY,
+                )
                 StreamMode.DAILY -> saved
             }
         }
@@ -181,7 +207,7 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
         fun logFields(t: Transition, jitter: GameJitter.Choice, effective: Values): String =
             "mode=${t.mode.id} action=${t.change.action} overrides=${overridesText(t.mode)} jitter=${GameJitter.label(jitter.bufferFrames)}" +
                 (if (jitter.source != GameJitter.Source.MODE) " jitter_src=${jitter.source.id}" else "") +
-                " bitrate_kbps=${effective.bitrateKbps} audio_out=${effective.audioOut.id} finger_off=${if (effective.fingerOff) 1 else 0}"
+                " bitrate_kbps=${effective.bitrateKbps} audio_out=${effective.audioOut.id} fingers=${effective.fingers.id}"
     }
 }
 

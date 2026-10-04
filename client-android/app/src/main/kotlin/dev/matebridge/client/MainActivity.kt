@@ -552,7 +552,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             { viewport },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
-        capture.setFingersDisabled(gameSettings.fingerOff, SystemClock.uptimeMillis()) // T-223: Çizim layer included
+        capture.setFingerPolicy(gameSettings.fingers, SystemClock.uptimeMillis()) // T-223: Çizim layer included
         applyPointerSpeeds()
         // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
         // sits on a LEAF view, `video` (a fixed child of root): a ViewGroup
@@ -890,7 +890,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override val fingerTouchDisabled get() = capture.fingersDisabled
         override fun setFingerTouchDisabled(off: Boolean) { // decision 0006; T-223: in Çizim only the layer changes
             gameSettings.setFingerOff(off)
-            capture.setFingersDisabled(off, SystemClock.uptimeMillis())
+            capture.setFingerPolicy(gameSettings.fingers, SystemClock.uptimeMillis())
         }
         override val penTrail get() = penOverlay.model.trailEnabled
         override fun setPenTrail(on: Boolean) { // T-056
@@ -959,8 +959,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (settings.audioEnabled() != audioWas) controller.setAudioEnabled(settings.audioEnabled())
         // Input and overlays.
         applyPointerSpeeds()
-        if (capture.fingersDisabled != gameSettings.fingerOff) {
-            capture.setFingersDisabled(gameSettings.fingerOff, SystemClock.uptimeMillis())
+        if (capture.fingerPolicy != gameSettings.fingers) {
+            capture.setFingerPolicy(gameSettings.fingers, SystemClock.uptimeMillis())
         }
         applyPenTrail(gameSettings.effective().penTrail)
         applyPenDot(gameSettings.effective().penDot)
@@ -1056,9 +1056,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!audioOutFromExtra) audio?.setOutPref(e.audioOut) // no-op (no reopen) when unchanged
         applyPenTrail(e.penTrail)
         applyPenDot(e.penDot)
-        // Çizim: palm touches stop here; the touch gate releases anything held (never a stuck contact).
-        if (::capture.isInitialized && capture.fingersDisabled != e.fingerOff) {
-            capture.setFingersDisabled(e.fingerOff, SystemClock.uptimeMillis())
+        // Çizim: one-finger touches go silent (palm), pinch and two-finger scroll stay; whatever the new policy forbids
+        // (a held one-finger drag) is released on the host right here, never left stuck.
+        if (::capture.isInitialized && capture.fingerPolicy != e.fingers) {
+            capture.setFingerPolicy(e.fingers, SystemClock.uptimeMillis())
         }
         applyJitter()
         MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), e))

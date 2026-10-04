@@ -89,8 +89,18 @@ class InputCapture(
     }
 
     /** "Parmak dokunmasını tamamen kapat". Turning it on releases any finger currently held. */
-    fun setFingersDisabled(disabled: Boolean, nowMs: Long) {
-        val outs = gate(Src.TOUCH, touch.setDisabled(disabled, nowMs))
+    fun setFingersDisabled(disabled: Boolean, nowMs: Long) =
+        setFingerPolicy(if (disabled) FingerPolicy.OFF else FingerPolicy.ALL, nowMs)
+
+    /** The finger policy in effect ([FingerPolicy]); [fingersDisabled] is only its OFF case. */
+    val fingerPolicy get() = touch.policy
+
+    /**
+     * Changes the finger policy (T-223). Whatever the new policy no longer allows is released on the host right here
+     * (button up for a held drag, scroll/pinch cancelled for OFF); an open scroll or pinch survives GESTURES_ONLY.
+     */
+    fun setFingerPolicy(policy: FingerPolicy, nowMs: Long) {
+        val outs = gate(Src.TOUCH, touch.setPolicy(policy, nowMs))
         if (outs.isNotEmpty()) dispatch(outs)
     }
 
