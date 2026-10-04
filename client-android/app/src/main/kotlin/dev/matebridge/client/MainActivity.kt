@@ -412,11 +412,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         panel = findViewById(R.id.panel)
         statsView = findViewById(R.id.stats)
         video.holder.addCallback(this)
-        video.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            viewport = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
-            else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
-            if (::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
-        }
+        video.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateViewport() }
         video.setOnLongClickListener { toggleStats(); true }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
         endpointField = findViewById(R.id.endpoint)
@@ -1456,7 +1452,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             lp.width = w
             lp.height = h
             video.layoutParams = lp
+        } else {
+            // T-221: unchanged params (e.g. MATCH_PARENT before and after a config) cause no relayout, so the
+            // layout listener would not run and the input viewport would stay empty: recompute it here.
+            updateViewport()
         }
+    }
+
+    /** Input viewport = the video view's laid-out rectangle; empty until a stream config exists. */
+    private fun updateViewport() {
+        val v = video
+        val next = if (streamConfig == null || v.width <= 0 || v.height <= 0) VideoViewport(0, 0, 0, 0)
+        else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
+        viewport = next
+        if (::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
+        if (::capture.isInitialized) syncInputActive()
     }
 
     /** Every 500 ms: re-request a keyframe while gated; every 1 s: STATS, overlay and log summary. */
