@@ -1,7 +1,7 @@
 ---
 id: T-222
 title: Decoder operating rate "max" by default (device A/B result of T-217)
-status: in_progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-217]
@@ -40,10 +40,17 @@ T-217 cihaz A/B'si (docs/NOTES.md 2026-10-04 ~11:00–11:50): `KEY_OPERATING_RAT
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
-- **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
-- **Açık sorular:**
+- **Commit:** `814ccea` (uygulama; plan `6ff0417`), dal `task/T-222-client-operating-rate-max-default`. `./scripts/check.sh`: ALL OK.
+- **Dokunulan dosyalar:** `client-android/app/src/main/kotlin/dev/matebridge/client/video/OperatingRate.kt`, `…/session/DevKnobs.kt`, `client-android/app/src/test/kotlin/dev/matebridge/client/video/DecoderLatencyKnobsTest.kt`, `…/test/…/session/DevKnobsTest.kt`, `docs/KNOBS.md` (23d), `docs/LOGGING.md`, bu kart.
+- **Ne değişti:**
+  - `DecoderLatencyKnobs` kurucu varsayılanı `opRate = MAX`; yeni `STANDARD` (= `off`, `max`) uygulama varsayılanı. `parse` yok/bilinmeyen değerde `STANDARD`'ın değerini verir; `DevKnobs.decoderLatency` varsayılanı `STANDARD`. `dev` olmadan `dec_*` yine yok sayılır → `max`.
+  - `DEFAULT` adı **korundu** ama artık "T-217 öncesi format = geri düşüş formatı" (`off`, `fps`) demek: `VideoRenderer` dosya listesinde değil ve tek seferlik geri düşüşü `DEFAULT`/`isDefault` ile yapıyor. Böylece varsayılan `max` configure/start'ta reddedilirse bir kez akış fps'li formata düşülür (`dec_lowlat_rejected lowlat=off oprate=max keys=operating-rate`, `codec_start … requested_rate=<fps> lowlat=off oprate=rejected`). `--ez dev true --es dec_oprate fps` T-222 öncesi formatı bayt bayt verir ve (T-217 öncesi gibi) reddi yeniden denenmez.
+  - `dec_lowlat` varsayılanı `off`.
+- **Testler:** T-217'nin "varsayılan değişmedi" kilidi (`withoutTheKnobTheFormatIsTodays`) **yeni varsayılanı sabitleyecek şekilde değiştirildi** → `withoutTheKnobTheOperatingRateIsMax` (format = T-217 öncesi, `operating-rate` yerinde 32767; `requested_rate=32767 … lowlat=off oprate=max`). Yeni: fps=0'da da 32767; varsayılanın start hatası → tek geri düşüş (akış fps'i); `dec_oprate=fps` → eski format; MainActivity zinciri (`DevKnobs.parse` boş/`dev` yok → `STANDARD`, `dev`+`fps` → `DEFAULT`). `hisi`/`all`/`vdec` testleri artık `max` oranla beklenir; `aRejectedLowLatKeepsTheDefaultOprateFieldAsFps` açıkça `FPS` kullanır. DevKnobsTest varsayılan beklentileri `STANDARD`.
+- **Varsayımlar:** `VideoRenderer`'ın kendi kurucu varsayılanı (`decoderTuning = DEFAULT`) `fps` kaldı; uygulamada `MainActivity` her zaman `devKnobs.decoderLatency` geçtiği için etkisi yok, yalnız tuning vermeyen testler (ör. `LatencyStageStatsTest`) eski formatı görür.
+- **Test edilmeyenler / cihazda doğrulanacaklar:**
+  1. `dev` olmadan normal açılış: `adb logcat -s 'MB:*' | grep codec_start` → `requested_rate=32767 … lowlat=off oprate=max accepted … operating_rate=32767` (ya da codec'in yazdığı değer); `dec_lowlat_rejected` **yok**.
+  2. Görüntü ve kalem normal; Oyun 60 (RE4) ve Akıcı çizim 120'de çözme süresi/`cb_skip_pct` T-217 A/B'deki `max` değerlerine yakın.
+  3. `--ez dev true --es dec_oprate fps` ile açılış → `requested_rate=60 … oprate=fps` (eski davranış).
+  4. `diag ev=dev_knobs` dev yokken `ignored=-` (hiç `dec_*` verilmediyse).
+- **Açık sorular:** `DecoderLatencyKnobs.DEFAULT` adı artık uygulama varsayılanı değil (geri düşüş formatı). Okunurluk için ileride `VideoRenderer`'da `DEFAULT`→`FALLBACK`, `isDefault`→`isFallback` yeniden adlandırması yapılabilir (bu kartın dosya listesi dışında olduğu için yapılmadı).
