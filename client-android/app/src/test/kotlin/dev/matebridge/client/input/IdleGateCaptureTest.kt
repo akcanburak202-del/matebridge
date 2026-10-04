@@ -146,7 +146,7 @@ class IdleGateCaptureTest {
     @Test fun aKeyHeldWhileTheGateWatchesKeepsTheWindowAwakeAndItsUpIsSent() {
         key(30, true, 1_000)
         var t = 1_000L
-        while (t < 10 * 60_000L) { idle.tick(t); t += 1_000 }
+        while (t < 10 * 60_000L) { tick(t); idle.tick(t); t += 1_000 } // a held key never expires, whatever the trackers do
         assertEquals(IdleStage.ACTIVE, idle.stage)
         key(30, false, t)
         assertEquals(listOf(Key.DOWN, Key.UP), keys().map { it.action })
@@ -244,6 +244,66 @@ class IdleGateCaptureTest {
         touch(TouchAction.DOWN, 130_000, 0, finger(0, 1000f, 900f))
         cap.androidCancel(TOUCH_DEVICE, penPointerInEvent = false, fingerPointerInEvent = false, nowMs = 130_050)
         assertFalse(idle.swallowingAny)
+    }
+
+    // ---- review round 2: tracker-made releases end the hold; a stale swallow never leaks its continuation ----
+
+    @Test fun aFingerPressReleasedByTheTrackersStaleGuardLetsTheWindowDim() {
+        touch(TouchAction.DOWN, 1_000, 0, finger(0, 1000f, 900f))
+        tick(1_200) // pressed on the host
+        assertTrue(sink.host.touchDown)
+        assertTrue(idle.held)
+        tick(1_200 + TouchTracker.PRESS_STALE_MS + 100) // the UP was lost: the tracker releases the press itself
+        assertFalse(sink.host.touchDown)
+        assertFalse(idle.held)
+        idle.tick(1_300 + TouchTracker.PRESS_STALE_MS + dim)
+        assertEquals(IdleStage.DIM, idle.stage)
+    }
+
+    @Test fun aPenContactReleasedByTheTrackersStaleGuardLetsTheWindowDim() {
+        cap.downConfirmed(penFrame(PenAction.DOWN, pt(1_000), device = PEN_DEVICE), 1_000)
+        assertTrue(sink.host.penContact)
+        assertTrue(idle.held)
+        tick(1_000 + PenTracker.CONTACT_STALE_MS + 100)
+        assertFalse(sink.host.penContact)
+        assertFalse(idle.held)
+    }
+
+    private fun pad(action: PadAction, t: Long, acting: Int, vararg f: Finger, buttons: Int = 0, pressed: Int = 0) {
+        sink.nowMs = t
+        cap.onPad(PadFrame(action, acting, f.toList(), t * 1000, 5, buttons, pressed, 1000f), t)
+    }
+
+    @Test fun aStillTouchpadFingerThatWokeTheWindowNeverTapsAfterTheStaleBound() {
+        dimNow()
+        pad(PadAction.DOWN, 130_000, 0, finger(0, 500f, 500f))
+        var t = 130_000L
+        while (t < 130_000 + IdleDimPolicy.STALE_MS + 2_000) { t += 25; tick(t); idle.tick(t) }
+        assertFalse(idle.held) // the counter may run again
+        pad(PadAction.MOVE, t + 10, -1, finger(0, 502f, 500f)) // a little motion, then a quick lift: a "tap" shape
+        pad(PadAction.UP, t + 60, 0, finger(0, 502f, 500f))
+        tick(t + 400)
+        assertTrue(sink.sent.isEmpty())
+        // the next touch of the pad is ordinary: a tap clicks
+        pad(PadAction.DOWN, t + 1_000, 0, finger(0, 500f, 500f))
+        pad(PadAction.UP, t + 1_060, 0, finger(0, 500f, 500f))
+        tick(t + 1_400)
+        assertTrue(sink.sent.any { it is dev.matebridge.client.protocol.PointerRel })
+    }
+
+    @Test fun aMouseButtonHeldSinceTheWakeIsNeverReportedWhenMotionResumes() {
+        dimNow()
+        sink.nowMs = 130_000
+        cap.onMouse(MouseFrame(130_000_000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 9), 130_000)
+        var t = 130_000L
+        while (t < 130_000 + IdleDimPolicy.STALE_MS + 2_000) { t += 25; tick(t); idle.tick(t) }
+        assertFalse(idle.held)
+        sink.nowMs = t
+        cap.onMouse(MouseFrame(t * 1000, 5f, 0f, Buttons.LEFT, deviceId = 9), t) // dragging on with the button down
+        cap.onMouse(MouseFrame((t + 50) * 1000, 0f, 0f, 0, deviceId = 9), t + 50) // its release
+        assertTrue(sink.sent.isEmpty())
+        cap.onMouse(MouseFrame((t + 500) * 1000, 0f, 0f, Buttons.LEFT, Buttons.LEFT, deviceId = 9), t + 500) // a new click
+        assertTrue(sink.sent.any { it is dev.matebridge.client.protocol.PointerRel && it.buttons == Buttons.LEFT })
     }
 
     @Test fun inGameModeTheFirstTapClicks() {

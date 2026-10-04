@@ -81,6 +81,9 @@ class PenTracker(
     fun followsPointer(deviceId: Int, pointerId: Int) =
         (state == State.CONTACT || pending != null) && contactDeviceId == deviceId && contactPointerId == pointerId
 
+    /** T-234: a contact is open or held unconfirmed for [deviceId] (what the idle gate may count as held). */
+    fun holdsContact(deviceId: Int) = (state == State.CONTACT || pending != null) && contactDeviceId == deviceId
+
     private class S(
         val timeUs: Long, val x: Int, val y: Int, val pressure: Int,
         val tiltX: Int, val tiltY: Int, val flags: Int,

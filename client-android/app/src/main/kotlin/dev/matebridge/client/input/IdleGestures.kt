@@ -14,7 +14,8 @@ import dev.matebridge.client.idle.IdleSource
  *    are releases and disengage, so a swallowed pen motion ends when the pen is lifted; HOVER_EXIT is a release that keeps
  *    the pen engaged (the policy ends a silent hover swallow after [IdleDimPolicy.LINGER_MS]: the pen left range);
  *  - touchpad: fingers on the pad or a physical button; mouse: a button (motion and wheel are single events);
- *  - keys: one channel per (device, key identity), DOWN to UP, autorepeat included;
+ *  - keys: one channel per (device, key identity), DOWN to UP, autorepeat included. A first finger (touchscreen,
+ *    touchpad), a first mouse button or a key DOWN that is not a repeat is "fresh": it ends a swallow whose release was lost;
  *  - the M-Pencil double tap: a single event.
  */
 object IdleGestures {
@@ -51,14 +52,16 @@ object IdleGestures {
         val held = fingers || f.buttons != 0
         val release = f.action == PadAction.UP || f.action == PadAction.CANCEL ||
             (f.action == PadAction.BUTTON && f.pressedButton == 0)
-        return gate.admit(IdleChannel.of(IdleChannel.PAD, f.deviceId), IdleSource.PAD, held, held, release, nowMs)
+        val fresh = f.action == PadAction.DOWN && f.buttons == 0 && f.fingers.all { it.id == f.actingId }
+        return gate.admit(IdleChannel.of(IdleChannel.PAD, f.deviceId), IdleSource.PAD, held, held, release, nowMs, fresh)
     }
 
     fun mouse(gate: IdleDimPolicy, f: MouseFrame, nowMs: Long): Boolean {
         val held = f.buttons != 0
         // A button release under capture carries no motion, no wheel and no press: never swallowed unless its press was.
         val release = !held && f.pressedButton == 0 && f.dx == 0f && f.dy == 0f && f.wheelV == 0f && f.wheelH == 0f
-        return gate.admit(IdleChannel.of(IdleChannel.MOUSE, f.deviceId), IdleSource.MOUSE, held, held, release, nowMs)
+        val fresh = f.pressedButton != 0 && f.buttons == f.pressedButton // a press with no other button down
+        return gate.admit(IdleChannel.of(IdleChannel.MOUSE, f.deviceId), IdleSource.MOUSE, held, held, release, nowMs, fresh)
     }
 
     fun key(gate: IdleDimPolicy, f: KeyFrame, nowMs: Long): Boolean {

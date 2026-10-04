@@ -72,6 +72,21 @@ class InputCapture(
     private fun idleFollowsFinger(deviceId: Int, pointerId: Int) =
         deviceId == idleTouchDevice && pointerId in idleTouchIds && idleSwallows(IdleChannel.TOUCH, deviceId)
 
+    /**
+     * T-234 review: a pen or finger press the tracker no longer holds (its stale guard released it, a bounce was dropped)
+     * stops holding the idle counter. Keys, touchpad and mouse have no such guards and end only by their own releases.
+     */
+    private fun syncIdleHeld() {
+        val g = idleGate ?: return
+        g.retainSent { ch ->
+            when (IdleChannel.kindOf(ch)) {
+                IdleChannel.PEN -> pen.holdsContact(IdleChannel.deviceOf(ch))
+                IdleChannel.TOUCH -> touch.deviceInUse == IdleChannel.deviceOf(ch)
+                else -> true
+            }
+        }
+    }
+
     private fun admitPen(gate: IdleDimPolicy, f: PenFrame, nowMs: Long): Boolean {
         val pass = IdleGestures.pen(gate, f, nowMs)
         when (f.action) {
@@ -268,6 +283,7 @@ class InputCapture(
     }
 
     private fun finishTick(nowMs: Long) {
+        syncIdleHeld()
         if (lastStatsMs == NEVER_MS) lastStatsMs = nowMs
         if (nowMs - lastStatsMs >= STATS_INTERVAL_MS) {
             if (counters.any() || pen.inRange) onStatsLine(counters.fields(nowMs - lastStatsMs))

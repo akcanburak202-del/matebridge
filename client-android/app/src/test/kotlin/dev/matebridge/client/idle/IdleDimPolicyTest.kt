@@ -306,18 +306,47 @@ class IdleDimPolicyTest {
         assertFalse(p.held)
     }
 
-    @Test fun aSwallowedPressWhoseReleaseNeverArrivesEndsAfterTheStaleBound() {
+    @Test fun aSilentSwallowedPressStopsHoldingTheCounterButItsContinuationStaysSwallowed() {
         dimAt()
         assertFalse(tDown(130_000))
         assertTrue(p.held)
         run(130_000, 130_000 + IdleDimPolicy.STALE_MS - 25)
-        assertTrue(p.swallowingAny)
+        assertTrue(p.held)
         p.tick(130_000 + IdleDimPolicy.STALE_MS)
-        assertFalse(p.swallowingAny)
+        assertTrue(p.swallowingAny)
         assertFalse(p.held)
+        assertTrue(logs.last().startsWith("stage=wake reason=touch swallowed=1"))
         val end = 130_000 + IdleDimPolicy.STALE_MS // the counter stood still while the press was believed held
         p.tick(end + twoMin - 100); assertEquals(IdleStage.ACTIVE, p.stage) // last held tick was 25 ms before the expiry
         p.tick(end + twoMin); assertEquals(IdleStage.DIM, p.stage)
+    }
+
+    @Test fun aStaleSwallowEndsAtItsRealReleaseOrAFreshPress() {
+        dimAt()
+        assertFalse(tDown(130_000))
+        p.tick(130_000 + IdleDimPolicy.STALE_MS)
+        assertFalse(p.held)
+        assertFalse(tMove(145_000)) // the finger moves again: still the waking motion
+        assertTrue(p.held) // and it is alive again
+        assertFalse(tUp(145_100)) // its real release
+        assertFalse(p.swallowingAny)
+        assertTrue(tDown(146_000))
+        assertTrue(tUp(146_100))
+        // a lost release: the next first finger is ordinary
+        p.tick(146_100 + twoMin)
+        assertFalse(tDown(400_000))
+        p.tick(400_000 + IdleDimPolicy.STALE_MS)
+        assertTrue(tDown(500_000, fresh = true))
+    }
+
+    @Test fun retainSentDropsOnlyWhatTheTrackerNoLongerHolds() {
+        assertTrue(tDown(0))
+        assertTrue(key(keyA, true, 0))
+        p.retainSent { IdleChannel.kindOf(it) != IdleChannel.TOUCH } // the touch tracker released its stale press
+        assertTrue(p.held) // the key is genuinely held
+        assertTrue(key(keyA, false, 10))
+        assertFalse(p.held)
+        p.tick(10 + twoMin); assertEquals(IdleStage.DIM, p.stage)
     }
 
     @Test fun aSwallowedPressThatKeepsSendingEventsIsNotExpired() {

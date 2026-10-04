@@ -28,8 +28,9 @@ enum class IdleSource(val id: String) {
  * per channel (one touchscreen, one pen, one key, ...):
  *  1. a channel being swallowed stays swallowed until it disengages (all fingers up, pen lifted, key up); an engaged but
  *     unpressed channel (a hovering pen, also across the HOVER_EXIT Android sends right before the tip touches) ends
- *     after [LINGER_MS] without an event on it (the pen left range), a pressed one after [STALE_MS] (a lost release: the
- *     trackers drop the orphan events that follow, as after any release-all);
+ *     after [LINGER_MS] without an event on it (the pen left range). A pressed one silent for [STALE_MS] goes stale: it
+ *     no longer counts as held for the counter, but its continuation is still swallowed until its real release or a fresh
+ *     press on the channel, so a tracker never sees the middle of the waking motion as a new gesture;
  *  2. a release, or anything on a channel whose press already went to the Mac, always passes: a release that belongs to a
  *     press the Mac got is never swallowed (input state never stuck);
  *  3. a new motion is swallowed when it woke the window, or when it is a touchscreen motion while the pen is being
@@ -58,7 +59,10 @@ class IdleDimPolicy(
     private val sent = HashSet<Long>()
 
     /** Channels being swallowed: whether the channel is pressed right now (a hovering pen is engaged, not pressed). */
-    private class Swallow(var pressed: Boolean, var lastMs: Long)
+    private class Swallow(var pressed: Boolean, var lastMs: Long) {
+        /** Pressed but silent for [STALE_MS]: not held for the counter any more, still swallowed. */
+        var stale = false
+    }
 
     private val swallowing = HashMap<Long, Swallow>()
 
@@ -72,7 +76,7 @@ class IdleDimPolicy(
     val enabled get() = !gameMode && timeout.ms != null
 
     /** Something local is held (sent to the Mac or swallowed): the counter stands still. */
-    val held get() = sent.isNotEmpty() || swallowing.values.any { it.pressed }
+    val held get() = sent.isNotEmpty() || swallowing.values.any { it.pressed && !it.stale }
 
     val swallowingAny get() = swallowing.isNotEmpty()
 
@@ -127,7 +131,7 @@ class IdleDimPolicy(
     private fun decide(channel: Long, engaged: Boolean, pressed: Boolean, release: Boolean, woke: Boolean, nowMs: Long): Boolean {
         val sw = swallowing[channel]
         if (sw != null) {
-            if (engaged) { sw.pressed = pressed; sw.lastMs = nowMs } else swallowing.remove(channel)
+            if (engaged) { sw.pressed = pressed; sw.lastMs = nowMs; sw.stale = false } else swallowing.remove(channel)
             return false
         }
         if (release || channel in sent) {
@@ -167,6 +171,15 @@ class IdleDimPolicy(
         if (swallowing.keys.removeAll { IdleChannel.kindOf(it) in kinds }) closeWakeIfDone(lastActivityMs)
     }
 
+    /**
+     * T-234 review: keeps a sent channel only while [holds] says its tracker still holds the press. A tracker's own
+     * release (the 10 s stale guards of the pen and touch trackers) thus ends the channel's hold on the counter. The caller
+     * leaves channels without such guards (keys, touchpad, mouse) to their own releases.
+     */
+    fun retainSent(holds: (Long) -> Boolean) {
+        sent.retainAll(holds)
+    }
+
     /** "Boşta karart" changed: the counter starts again; a dimmed window comes back. */
     fun setTimeout(t: IdleTimeout, nowMs: Long) {
         timeout = t
@@ -203,11 +216,14 @@ class IdleDimPolicy(
         return swallowing.keys.any { IdleChannel.shadows(IdleChannel.kindOf(it), kind) }
     }
 
-    /** Swallows end once their channel has been silent for [LINGER_MS] (hover) or [STALE_MS] (pressed: release lost). */
+    /** A hover swallow ends after [LINGER_MS] of silence; a pressed one goes stale after [STALE_MS] (see the class doc). */
     private fun expireLingering(nowMs: Long) {
         if (swallowing.isEmpty()) return
-        val gone = swallowing.values.removeAll { nowMs - it.lastMs >= if (it.pressed) STALE_MS else LINGER_MS }
-        if (gone) closeWakeIfDone(nowMs)
+        var changed = swallowing.values.removeAll { !it.pressed && nowMs - it.lastMs >= LINGER_MS }
+        for (sw in swallowing.values) {
+            if (sw.pressed && !sw.stale && nowMs - sw.lastMs >= STALE_MS) { sw.stale = true; changed = true }
+        }
+        if (changed) closeWakeIfDone(nowMs)
     }
 
     private fun activity(source: IdleSource, nowMs: Long): Boolean {
@@ -238,7 +254,7 @@ class IdleDimPolicy(
     }
 
     private fun closeWakeIfDone(nowMs: Long) {
-        if (!wakeOpen || swallowing.isNotEmpty()) return
+        if (!wakeOpen || swallowing.values.any { !it.stale }) return
         wakeOpen = false
         log("stage=wake reason=$wakeReason swallowed=$swallowed held_ms=${nowMs - wakeAtMs}")
     }
@@ -274,8 +290,8 @@ class IdleDimPolicy(
         const val LINGER_MS = 1_000L
 
         /**
-         * A swallowed press with no event for this long lost its release (the trackers' own last-resort guards use the
-         * same 10 s: PenTracker.CONTACT_STALE_MS, TouchTracker.PRESS_STALE_MS; a held key autorepeats).
+         * A swallowed press with no event for this long stops holding the counter (the trackers' own last-resort guards use
+         * the same 10 s: PenTracker.CONTACT_STALE_MS, TouchTracker.PRESS_STALE_MS; a held key autorepeats).
          */
         const val STALE_MS = 10_000L
     }
