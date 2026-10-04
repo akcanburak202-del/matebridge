@@ -1,7 +1,7 @@
 ---
 id: T-234
 title: Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode)
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -33,10 +33,10 @@ Decision 0031'i uygula. Kural ve gerekçe kararda; burada tekrar edilmez.
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Süre dolunca dim, +60 sn off; basılı girdi varken sayaç durur; Oyun modunda aşama yok; Kapalı ayarında aşama yok; ayar değişince sayaç yeniden başlar.
-- [ ] [JVM] Kısılmışken: dokunma DOWN..tüm UP yutulur; kalem temas..kalkış yutulur; tuş down + up yutulur; kısmadan önce basılmış ve gönderilmiş bir tuşun up'ı yutulmaz (gönderilir).
-- [ ] [JVM] Wake'ten sonra sayaç sıfırlanır, `FLAG_KEEP_SCREEN_ON` geri gelir (bağlama katmanı için arayüz testi).
-- [ ] `./scripts/check.sh` geçer; `ev=idle` docs/LOGGING.md'de.
+- [x] [JVM] Süre dolunca dim, +60 sn off; basılı girdi varken sayaç durur; Oyun modunda aşama yok; Kapalı ayarında aşama yok; ayar değişince sayaç yeniden başlar.
+- [x] [JVM] Kısılmışken: dokunma DOWN..tüm UP yutulur; kalem temas..kalkış yutulur; tuş down + up yutulur; kısmadan önce basılmış ve gönderilmiş bir tuşun up'ı yutulmaz (gönderilir).
+- [x] [JVM] Wake'ten sonra sayaç sıfırlanır, `FLAG_KEEP_SCREEN_ON` geri gelir (bağlama katmanı için arayüz testi).
+- [x] `./scripts/check.sh` geçer; `ev=idle` docs/LOGGING.md'de.
 - [ ] [device, orkestratör] 2 dk ayarıyla: kısma, +1 dk sonra ekran kapanması, açınca Mac'in uyanıp bağlanması; ilk dokunuşun Mac'e tıklama olarak gitmemesi.
 
 ## Plan
@@ -59,4 +59,27 @@ Bağlam dışı: bağlantı ekranı ve ayar panelindeki Android görünümlerine
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `00e498d` (uygulama), plan `a04fd67`; dal `task/T-234-idle-dim-off`.
+- **Dokunulan dosyalar:** `idle/IdleDimPolicy.kt` (yeni: aşamalar, sayaç, yutma kuralları, `IdleWindow`, `IdleChannel`), `idle/IdleTimeout.kt` (yeni: seçenekler + `IdleTimeoutStore`, prefs anahtarı `idle_dim`), `input/IdleGestures.kt` (yeni: kare → kanal), `input/InputCapture.kt` (`idleGate`, her girişte önce sorulur; `forget()` kapıyı da unutturur), `MainActivity.kt` (pencere bağlama, dispatch*, ticker, onStart, mod, panel, sıfırlama), `settings/SettingsCatalog.kt` (`idle_dim` satırı, `SettingsHost.idleTimeout`/`selectIdleTimeout`), testler `idle/IdleDimPolicyTest.kt` (25), `input/IdleGateCaptureTest.kt` (9), `settings/SettingsCatalogTest.kt`, `docs/LOGGING.md`.
+- **check.sh:** `ALL OK`. İlk tam koşuda `swift test (host-mac)` bir kez FAIL verdi (host'a dokunulmadı); tek başına yeniden koşuda 814 test geçti, ikinci tam koşu `ALL OK`. Muhtemelen paralel yükte zamanlamaya bağlı bir host testi; ayrıntı kayboldu.
+- **Seçimler / varsayımlar:**
+  - Kısma parlaklığı pencere `screenBrightness = 0.03`; geri dönüş `BRIGHTNESS_OVERRIDE_NONE`. Sistem parlaklığına dokunulmaz.
+  - Panel satırı "Boşta karart" Görüntü bölümünün sonunda (yan panelde "Uygulanan"dan sonra). Oyun modunda satır görünür, başlıkta " (Oyun modunda kapalı)" yazar.
+  - Sayaç uygulama ön plandayken her ekranda çalışır (bağlantı ekranı dahil). Yutma yalnız Mac'e giden girdide: bağlantı ekranı ya da ayar panelindeki Android görünümlerine giden ilk dokunuş yalnız uyandırmaz, görünüme de gider.
+  - Kalem: yutma ilk kalem olayından (hover dahil) kalem kalkana kadar sürer. Android dokunmadan hemen önce HOVER_EXIT gönderdiği için hover yutması 1 sn sessizlikte biter (kalem menzilden çıktı). Hover sayacı durdurmaz, temas durdurur.
+  - Çapraz kanal: yalnız kalem yutulurken başlayan dokunmatik hareketi de yutulur (TouchTracker'ın avuç kapısı yutulan kalemi görmez). Avuç uyandırdıysa kalem çizgileri normal gider. Başka kanallar bağımsızdır: tuş A ile uyandırıp B'ye basmak B'yi gönderir.
+  - Uyandırma log satırı uyandıran hareket bitince yazılır (`swallowed`, `held_ms` ile). Ek satır: `stage=config` (ayar/oyun değişimi).
+  - `session/Settings.kt` kartta yok: anahtar `IdleTimeoutStore`'da tutuluyor, T-191 sıfırlamasında MainActivity ayrıca `idleStore.reset()` çağırıyor (`settings_reset keys=` sayısına dahil değil).
+- **Girdi durumu:** release yolları (`releaseAll`, `onPointerCaptureLost`, `onDeviceRemoved`) kapıdan geçmez. Kapı yalnız basışı yuttuğu kanalın bırakmasını yutar; bırakma olayları ve gönderilmiş basışın devamı her zaman geçer. Bir şey basılıyken sayaç durduğu için basılı tuş varken kısma olmaz. Kapının görmediği basışın bırakması da kısılmışken gider (`IdleGateCaptureTest.aKeyPressedBeforeTheDimIsReleasedOnTheMac`).
+- **Test edilmedi (tablet gerekli):** gerçek parlaklık görünümü, bayrak kalkınca ekranın kapanma süresi, HOVER_EXIT→DOWN sırası ve 1 sn bekleme süresinin yeterliliği, ekran açılınca uyanma zinciri.
+- **Tablette kontrol (orkestratör):**
+  1. Yan panelde "Boşta karart: 2 dk" seç (Günlük ya da Çizim). Dokunmadan 2 dk bekle: ekran çok koyu ama görünür olmalı, video ve ses sürmeli. Log: `MB/input ev=idle stage=dim`.
+  2. 1 dk daha bekle: `ev=idle stage=off`, ardından tabletin kendi zaman aşımıyla ekran kapanmalı, sonra `activity_stop` ve release-all/BYE gelmeli. Açınca Mac uyanıp bağlanmalı, ekran tam parlaklıkta olmalı (`stage=wake reason=start`).
+  3. Kısılmışken parmakla bir simgeye dokun: ekran aydınlanmalı, Mac'te tıklama olmamalı (`stage=wake reason=touch swallowed=<n>`). İkinci dokunuş tıklamalı.
+  4. Kısılmışken kalemle dokun (tap): Mac'te tıklama/çizgi olmamalı; kalemi kaldırınca sonraki çizgi çizmeli. Kalemi yaklaştırıp uzaklaştırınca 1 sn sonra parmak dokunuşları normal olmalı.
+  5. Oyun moduna geç: 2 dk+ sonra kısma olmamalı, panelde "(Oyun modunda kapalı)" görünmeli. "Kapalı" seçeneğinde de kısma olmamalı.
+
+## Open questions
+
+- `Settings.USER_KEYS`'e `idle_dim` eklemek daha temiz olur (kart dışı dosya); şimdilik MainActivity sıfırlamada ayrıca siliyor.
+- Bağlantı ekranı / ayar paneli görünümlerine giden ilk dokunuşu yutmak istenirse ayrı iş (karar yalnız Mac'e giden girdiyi kapsıyor).
