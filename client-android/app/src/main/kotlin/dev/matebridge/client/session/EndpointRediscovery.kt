@@ -15,6 +15,12 @@ package dev.matebridge.client.session
  * failure at the candidate (an impostor), is [Verdict.Foreign]: it is skipped for the rest of the episode and the caller
  * returns to the old address. A candidate that cannot be reached is [Verdict.Unreachable] (back to the old address too).
  *
+ * T-229 (more than one paired Mac): a candidate attempt is never cut short by a later discovery result; later results
+ * wait in a bounded queue ([Pick.QUEUED], [nextQueued]) and are tried before the caller goes back to the old address.
+ * Addresses found unreachable in the episode stay in the background: fresh ones go first, and a fresh one replaces a
+ * running candidate that was already unreachable. A user start at another address forgets the remembered identity
+ * ([onUserStart]), so the host the user picked is never refused as [SessionUi.Cause.WRONG_HOST].
+ *
  * Pure and clock-injected; main thread only.
  */
 class EndpointRediscovery(
@@ -42,6 +48,8 @@ class EndpointRediscovery(
         SKIP,
         /** Not a rediscovery matter: the usual discovery rules decide. */
         DEFAULT,
+        /** T-229: another candidate is being tried; this one waits ([nextQueued]). Do not connect to it now. */
+        QUEUED,
     }
 
     /** Identity of the last authenticated session (null: none seen yet) and its endpoint. Survive [reset]. */
@@ -77,6 +85,17 @@ class EndpointRediscovery(
      */
     private var candidateStarted = false
     private val foreign = HashSet<Endpoint>()
+    /**
+     * T-229 review: the endpoint of a user start ([onUserStart]) whose first state has not been seen yet. Until its
+     * `Connecting` (or its own `Failed`) arrives, every state is a late one of the superseded session (the controller
+     * hops threads) and settles nothing: above all, a late `Connected(hostTag = previous Mac)` must not be learnt as the
+     * picked address's identity.
+     */
+    private var userStartEp: Endpoint? = null
+    /** T-229: candidates that did not answer in this episode (tried after fresh addresses). */
+    private val unreachable = HashSet<Endpoint>()
+    /** T-229: addresses discovered while a candidate was being tried, oldest first (at most [MAX_QUEUE]). */
+    private val queue = ArrayDeque<Endpoint>()
 
     /**
      * One rendered session state. [current]: the endpoint the app's session uses (null: none chosen). Returns the verdict
@@ -86,6 +105,7 @@ class EndpointRediscovery(
         if (candidate != null && candidate != current) dropCandidate() // someone else replaced the candidate's session
         // A terminal state of a superseded start (its address is not the session's any more; review 3 #1) settles nothing.
         if (state is SessionUi.Failed && state.endpoint != null && state.endpoint != current) return Verdict.None
+        if (awaitingUserStart(state, current)) return Verdict.None
         if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(state.endpoint, current, nowMs)
         if (candidate != null && !candidateStarted) {
             if (state is SessionUi.Connecting && state.endpoint == candidate) {
@@ -129,6 +149,7 @@ class EndpointRediscovery(
                     if (downSinceMs < 0) downSinceMs = nowMs
                 }
                 if (cand != null) {
+                    unreachable += cand // T-229: in the background for the rest of the episode
                     dropCandidate()
                     clearStreak()
                     return Verdict.Unreachable(old ?: cand, cand)
@@ -171,6 +192,7 @@ class EndpointRediscovery(
         if (refused == null || refused != current) return Verdict.None
         dropCandidate()
         foreign += refused
+        queue.remove(refused)
         val back = old ?: knownEp
         if (back != null && back != refused) {
             clearStreak()
@@ -181,6 +203,20 @@ class EndpointRediscovery(
         downSinceMs = nowMs
         down = true
         return Verdict.None
+    }
+
+    /** Whether [state] predates the latest user start's first state ([userStartEp]); releases the barrier otherwise. */
+    private fun awaitingUserStart(state: SessionUi, current: Endpoint?): Boolean {
+        var want = userStartEp ?: return false
+        if (current != want) { // the session moved on before the start showed up: wait for the newer start instead
+            userStartEp = current
+            want = current ?: return false
+        }
+        val ours = (state is SessionUi.Connecting && state.endpoint == want) ||
+            (state is SessionUi.Failed && state.endpoint == want) // e.g. a latch ends the start before connecting
+        if (!ours) return true
+        userStartEp = null
+        return false
     }
 
     private fun learn(tag: HostTag, ep: Endpoint) {
@@ -222,12 +258,56 @@ class EndpointRediscovery(
         if (ep in foreign) return Pick.SKIP
         val o = old ?: return Pick.DEFAULT
         if (ep == o || ep == current) return Pick.DEFAULT // the same address: nothing new
+        val running = candidate
+        if (running != null) { // T-229: the running attempt finishes; a later result waits
+            if (ep == running) return Pick.QUEUED
+            if (running in unreachable && ep !in unreachable && ui is SessionUi.Connecting) {
+                enqueue(running) // it did not answer before and is still connecting: a fresh address goes first
+                return pick(ep)
+            }
+            enqueue(ep)
+            return Pick.QUEUED
+        }
         val retrying = ui is SessionUi.Disconnected || (ui is SessionUi.Connecting && ui.endpoint == current) ||
             (ui is SessionUi.Failed && ui.cause == SessionUi.Cause.WRONG_HOST) // refused at the old address: stuck otherwise
         if (!retrying || current == null) return Pick.DEFAULT // connected, prompting, or nothing chosen: usual rules
+        return pick(ep)
+    }
+
+    private fun pick(ep: Endpoint): Pick {
+        queue.remove(ep)
         candidate = ep
         candidateStarted = false
         return Pick.CONNECT
+    }
+
+    private fun enqueue(ep: Endpoint) {
+        if (ep in foreign || ep == old || ep in queue) return
+        if (queue.size >= MAX_QUEUE) {
+            // Full: a fresh address pushes out one that did not answer; otherwise the new one is dropped (a later
+            // restart reports it again).
+            val stale = queue.firstOrNull { it in unreachable }
+            if (stale == null || ep in unreachable) return
+            queue.remove(stale)
+        }
+        queue.addLast(ep)
+    }
+
+    /**
+     * T-229: after a [Verdict.Foreign] / [Verdict.Unreachable], the next queued address to try instead of going back to
+     * the old one (null: none; go back). It becomes the [candidate]. Fresh addresses go before ones found unreachable in
+     * this episode; addresses [allowed] rejects (e.g. T-151: it answered PAIRING) are dropped.
+     */
+    fun nextQueued(allowed: (Endpoint) -> Boolean = { true }): Endpoint? {
+        if (!active || candidate != null) return null
+        while (queue.isNotEmpty()) {
+            val ep = queue.firstOrNull { it !in unreachable } ?: queue.first()
+            queue.remove(ep)
+            if (ep in foreign || ep == old || !allowed(ep)) continue
+            pick(ep)
+            return ep
+        }
+        return null
     }
 
     /** [onDiscovered] picked [ep], but the caller will not connect to it (e.g. it answered PAIRING before, T-151). */
@@ -241,17 +321,29 @@ class EndpointRediscovery(
     /**
      * The user started a connection themselves ("Bağlan", a typed address, "Eşleş", …): the episode is over (review 3 #2),
      * so the host they picked is never judged against the old one and the app never jumps back to the old address.
+     * T-229: when [ep] is not the address of the last authenticated session, its identity is forgotten too, so a later
+     * episode (the picked Mac's first attempts failing) does not expect the previous host and refuse the picked one as
+     * [SessionUi.Cause.WRONG_HOST]. The picked host's identity is learnt when it connects. Null: keep the identity.
      */
-    fun onUserStart() = reset()
+    fun onUserStart(ep: Endpoint? = null) {
+        reset()
+        userStartEp = ep // states of the superseded session settle nothing until this start shows up
+        if (ep != null && ep != knownEp) {
+            known = null
+            knownEp = null
+        }
+    }
 
     /** The transport was applied again, the activity stopped, or the user disconnected: forget the episode (not [known]). */
     fun reset() {
+        userStartEp = null
         clearStreak()
         endEpisode()
     }
 
     private fun foreignVerdict(o: Endpoint, cand: Endpoint): Verdict {
         foreign += cand
+        queue.remove(cand)
         dropCandidate()
         clearStreak()
         return Verdict.Foreign(o, cand)
@@ -281,6 +373,8 @@ class EndpointRediscovery(
         dropCandidate()
         old = null
         foreign.clear()
+        unreachable.clear()
+        queue.clear()
         nextRestartAtMs = 0L
         gapMs = firstGapMs
     }
@@ -293,6 +387,8 @@ class EndpointRediscovery(
         /** Pause before the next restart while the session stays down; doubles up to [RESTART_GAP_MAX_MS]. */
         const val RESTART_GAP_MS = 8_000L
         const val RESTART_GAP_MAX_MS = 30_000L
+        /** T-229: discovery results kept while a candidate is being tried (more paired Macs than this is unlikely). */
+        const val MAX_QUEUE = 4
 
         const val REASON_CONNECT_FAILED = "connect_failed"
         const val REASON_DOWN_TIME = "down_time"
