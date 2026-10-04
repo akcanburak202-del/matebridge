@@ -2,6 +2,7 @@ package dev.matebridge.client.settings
 
 import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.files.FilesRoot
+import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.GameResolution
@@ -31,6 +32,8 @@ class SettingsCatalogTest {
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
         override var modeLayer: StreamMode? = null
+        override var idleTimeout = IdleTimeout.DEFAULT
+        override fun selectIdleTimeout(t: IdleTimeout) { calls += "idle ${t.id}"; idleTimeout = t }
         override var audioAvailable = true
         val v = HashMap<String, Boolean>()
         var out = AudioOutPref.AUTO
@@ -81,12 +84,31 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "idle_dim", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
             side,
         )
+    }
+
+    @Test fun idleDimChoices() { // T-234, decision 0031
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "idle_dim")
+        assertEquals("Boşta karart", c.titleText())
+        assertEquals(listOf("2 dk", "5 dk", "10 dk", "15 dk", "Kapalı"), c.options.map { it.label })
+        assertEquals("5", c.selected())
+        c.select("off")
+        assertEquals(listOf("idle off"), h.calls)
+        assertEquals("off", c.selected())
+        c.select("bogus") // not an option: the default
+        assertEquals("idle 5", h.calls.last())
+        assertFalse(c.hidden())
+        h.streamMode = StreamMode.GAME // visible, but marked: the counter does not run in Oyun
+        assertEquals("Boşta karart (Oyun modunda kapalı)", c.titleText())
+        assertFalse(c.hidden())
+        h.streamMode = StreamMode.DRAWING
+        assertEquals("Boşta karart", c.titleText())
     }
 
     @Test fun noAudioSectionWithoutAudio() {
