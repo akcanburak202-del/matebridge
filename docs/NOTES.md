@@ -1286,3 +1286,12 @@ Mac ~22:01'de yeniden başladı (kullanıcı Ethernet'i bağladı); host aynı d
 - **Tam ekran değişimleri hâlâ 107–143 ms** (Wi-Fi satırlarıyla aynı, USB ~75): bu, tabletin Wi-Fi indirme bacağı ya da boşta kalma sonrası TCP yeniden hızlanması; Mac tarafı ağdan bağımsız.
 - Kontrol srtt tabanı durağan evrede ~12 ms (Wi-Fi'de ~24), kaydırmada 34–44.
 - Bütçeler: kontrol srtt p95 43 (≤ 40, sınırda kaldı), cap_dec p95 126 (≤ 70, tam ekran değişimleri yüzünden geçemedi). Tablet tarafı (`skip_pct`, ses kesilmesi) tablet içi logdan çekilecek.
+
+## 2026-10-04 ~22:30 — T-127 devir notu (yeni sohbette devam)
+
+- **Kullanıcı:** Ethernet koşusunda kaydırma "daha akıcı idi". Mac Ethernet'te kalacak (öneri). Wi-Fi 7 modem gerekmiyor (Mac Ethernet'teyken).
+- **Durum:** host build/ 91aaa2c, `MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1` ile çalışıyor (latency.csv yazılıyor). Oturum Ethernet'te (Mac 192.168.1.106, tablet 192.168.1.105). Mac Wi-Fi'si yeniden açıldı (awdl0 açılışta yeniden etkin olabilir; Ethernet'te önemsiz). Tablette `logcat -f /data/local/tmp/t127.log` (20×8 MB döner) 16:21'den beri çalışıyor — çekilmedi, durdurulmadı.
+- **Kalan satırlar (topoloji 2 üzerinde):** (a) 15 Mbps (panelden, kablosuz); (b) tablet `--ei tos_ctl 0xB8 --ez wifi_ll true` (+`--ez dev true` gerekirse) — tam ekran değişimleri (107–143 ms) için tablet Wi-Fi güç tasarrufu hipotezi; (c) tablet içi logları çekip satır satır `skip_pct`/ses kesilmesi ekle (an2.py `NAME.tablet.log`, zaman dilimi `.start/.end`). Kalan doğrulama: her satırı 3'e tamamlamak.
+- **adb kablosuz:** HarmonyOS geliştirici seçeneklerinde "Kablosuz hata ayıklama" varsa eşleştirme kodu; yoksa kabloyla bir kez `adb tcpip 5555` + `adb connect 192.168.1.105:5555`. adb trafiği yalnız koşu aralarında.
+- **Açılan kart:** T-227 (Mac adresi değişince tablet Bonjour ile yeniden bulsun; bugün uygulamayı yeniden açmak gerekti).
+- **Bekleyen kullanıcı kararları:** HDR sonraki adım (T-226: `MATEBRIDGE_VD_TRANSFER=1` dev knob ile RE4 HDR anahtarını denemek); "boşta karart/kapat" özelliği (docs/research/2026-10-04-monitor-vs-matebridge.md öneri 1); T-180 kopma testi (ertelendi).
