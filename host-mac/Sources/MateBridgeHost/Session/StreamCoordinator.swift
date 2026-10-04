@@ -230,18 +230,19 @@ public final class StreamCoordinator: @unchecked Sendable {
                        fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.nativeWidthPx)x\(settings.nativeHeightPx)")
         }
         let config = settings.streamConfig(configID: Self.configID)
-        announcedLock.withLock { announced.record(config, device: hello.deviceID) }
+        announcedLock.withLock { announced.record(config, for: hello) }
         return config
     }
 
     /// The session is active (after proof, for a reconnect): only now are the settings derived from its HELLO. If
-    /// they no longer match the config announced at HELLO (game displays switched off by `game_display_failed`, or
-    /// other stored prefs, in between), the event loop announces a new `config_id` before starting the pipeline.
+    /// they no longer match the config this connection was told at HELLO (game displays switched off by
+    /// `game_display_failed`, or other stored prefs, in between), the event loop announces a new `config_id` before
+    /// starting the pipeline.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello, transport: SessionTransport) {
         liveSessionLock.withLock { liveSessionID = sessionID }
         let (base, initial, stored) = settings(for: hello, transport: transport)
         let reannounce = announcedLock.withLock {
-            announced.activationDiffers(device: hello.deviceID, activation: initial.streamConfig(configID: configID))
+            announced.activationDiffers(hello: hello, activation: initial.streamConfig(configID: configID))
         }
         post(.sessionStarted(sessionID: sessionID, configID: configID, device: hello.deviceID,
                              settings: initial, base: base, prefs: stored, reannounce: reannounce, transport: transport))
@@ -345,22 +346,36 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
                                   settings: VideoSettings?, base: VideoSettings?, prefs: StreamPrefs?,
                                   reannounce: Bool, transport: SessionTransport) async {
-        guard let device, let settings, let base else {
+        guard let device, var settings, let base else {
             log(.error, "session_without_config")
             return
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         pipelineRetried = false
-        // T-214 review: the config sent at HELLO no longer matches these settings; announce them under a new
-        // config_id (STREAM_CONFIG + video close) before any pipeline starts, so the tablet never decodes a stream
-        // whose size or point size it was not told.
-        let activeConfigID = reannounce ? nextConfigID(after: configID) : configID
+        // T-214 review: the settings were derived before this event waited in the mailbox; a game display that failed
+        // meanwhile (game_display_failed) must not be tried again. The tablet holds the HELLO config (equal to the
+        // derived settings unless `reannounce` is already set), so a changed result is announced too.
+        var reasons: [String] = reannounce ? ["hello_mismatch"] : []
+        let refresh = VideoSettings.parseRefreshHz(ProcessInfo.processInfo.environment["MATEBRIDGE_REFRESH"])
+        if let fixed = gameDisplayLock.withLock({
+            gameDisplay.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh)
+        }) {
+            if AnnouncedStreamConfigs.differs(settings.streamConfig(configID: configID),
+                                              fixed.streamConfig(configID: configID)) {
+                reasons.append("game_display_off")
+            }
+            settings = fixed
+        }
+        // The config the tablet was told no longer matches these settings; announce them under a new config_id
+        // (STREAM_CONFIG + video close) before any pipeline starts, so the tablet never decodes a stream whose size
+        // or point size it was not told.
+        let activeConfigID = reasons.isEmpty ? configID : nextConfigID(after: configID)
         session = ActiveSession(sessionID: sessionID, configID: activeConfigID, deviceID: device, settings: settings,
                                 base: base, prefs: prefs, transport: transport)
-        if reannounce {
+        if !reasons.isEmpty {
             log(.info, "stream_config_reannounced", "config_id=\(configID)->\(activeConfigID) "
-                + "display=\(settings.displayModeText) encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx) "
-                + "fps=\(settings.fps)")
+                + "reason=\(reasons.joined(separator: ",")) display=\(settings.displayModeText) "
+                + "encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx) fps=\(settings.fps)")
             onReconfigure(sessionID, settings.streamConfig(configID: activeConfigID))
         }
         prefsGate = StreamPrefsGate()

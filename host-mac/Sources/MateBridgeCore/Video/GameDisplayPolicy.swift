@@ -106,38 +106,63 @@ public enum DisplayRecreateGap {
     }
 }
 
-/// The first `STREAM_CONFIG` each tablet was told at HELLO (`streamConfig(for:)`), kept until its session is
-/// activated. The session machine sends that config at HELLO but the session's settings are derived again at
-/// activation (after proof, for a reconnect). In between, the inputs can change: `game_display_failed` may switch game
-/// displays off (T-214), or the previous session may store other prefs (T-049). Comparing both tells the owner to
+/// The first `STREAM_CONFIG` each connection was told at HELLO (`streamConfig(for:)`), kept until that connection's
+/// session is activated. The session machine sends that config at HELLO but the session's settings are derived again
+/// at activation (after proof, for a reconnect). In between, the inputs can change: `game_display_failed` may switch
+/// game displays off (T-214), or the previous session may store other prefs (T-049). Comparing both tells the owner to
 /// announce a new `config_id` before the pipeline starts, so the announced config never disagrees with the pipeline.
+///
+/// Records are per connection, not per device: overlapping reconnects of one tablet can each be told a different
+/// config. The connection is identified by its HELLO (`Key`: device + `client_nonce`, 16 fresh random bytes per
+/// connection, PROTOCOL.md 9); the session machine hands the coordinator the same HELLO value at both points.
 public struct AnnouncedStreamConfigs: Sendable {
-    /// At most this many devices are remembered (HELLOs that never become a session must not grow memory).
-    public static let maxDevices = 16
-    private var byDevice: [DeviceID: StreamConfig] = [:]
+    /// One connection's HELLO.
+    public struct Key: Hashable, Sendable {
+        public var deviceID: DeviceID
+        public var clientNonce: [UInt8]
 
-    public init() {}
-
-    public var count: Int { byDevice.count }
-
-    /// `config` was announced for a HELLO of `device` (replaces an older one of the same device).
-    public mutating func record(_ config: StreamConfig, device: DeviceID) {
-        byDevice[device] = config
-        while byDevice.count > Self.maxDevices, let drop = byDevice.keys.first(where: { $0 != device }) {
-            byDevice.removeValue(forKey: drop)
+        public init(_ hello: Hello) {
+            deviceID = hello.deviceID
+            clientNonce = hello.clientNonce
         }
     }
 
-    /// The session of `device` is activated with `activation` (its settings' `STREAM_CONFIG` under the session's
-    /// `config_id`). True when the config announced at HELLO differs in anything but `config_id` and `bitrate_kbps`
-    /// (the tablet does not use the first config's bitrate, and the transport knobs are applied only at activation):
-    /// the owner must announce `activation` under a new `config_id` before starting the pipeline. Consumes the record;
-    /// with none (unknown device) false.
-    public mutating func activationDiffers(device: DeviceID, activation: StreamConfig) -> Bool {
-        guard var announced = byDevice.removeValue(forKey: device) else { return false }
-        announced.configID = activation.configID
-        announced.bitrateKbps = activation.bitrateKbps
-        return announced != activation
+    /// At most this many connections are remembered, oldest dropped first (HELLOs that never become a session, and
+    /// connections that close before their proof, must not grow memory). A dropped record makes its activation
+    /// re-announce (see `activationDiffers`), so eviction never hides a mismatch.
+    public static let capacity = 64
+    private var entries: [(key: Key, config: StreamConfig)] = []
+
+    public init() {}
+
+    public var count: Int { entries.count }
+
+    /// `config` was announced for the connection that sent `hello` (replaces an older record of the same connection).
+    public mutating func record(_ config: StreamConfig, for hello: Hello) {
+        let key = Key(hello)
+        entries.removeAll { $0.key == key }
+        entries.append((key, config))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+    }
+
+    /// The session of the connection that sent `hello` is activated with `activation` (its settings' `STREAM_CONFIG`
+    /// under the session's `config_id`). True when the owner must announce `activation` under a new `config_id`
+    /// before starting the pipeline: the config this connection was told differs (`differs`), or there is no record
+    /// of it (evicted, or never recorded), so what it was told is unknown. Consumes this connection's record only.
+    public mutating func activationDiffers(hello: Hello, activation: StreamConfig) -> Bool {
+        let key = Key(hello)
+        guard let index = entries.firstIndex(where: { $0.key == key }) else { return true }
+        let announced = entries.remove(at: index).config
+        return Self.differs(announced, activation)
+    }
+
+    /// Two configs differ for the tablet: in anything but `config_id` and `bitrate_kbps` (the tablet does not use the
+    /// first config's bitrate, and the transport knobs are applied only at activation).
+    public static func differs(_ a: StreamConfig, _ b: StreamConfig) -> Bool {
+        var a = a
+        a.configID = b.configID
+        a.bitrateKbps = b.bitrateKbps
+        return a != b
     }
 }
 
@@ -158,5 +183,15 @@ public struct GameDisplayFallback: Equatable, Sendable {
         guard !settings.displayHiDPI, displayFailure else { return false }
         failed = true
         return true
+    }
+
+    /// Settings derived earlier (a session start waiting in the mailbox) re-checked against the current state: a game
+    /// display derived before game displays were switched off becomes the native display, with the same `prefs`
+    /// re-applied without it. nil = `settings` are still valid.
+    public func revalidated(_ settings: VideoSettings, base: VideoSettings, prefs: StreamPrefs?,
+                            defaultRefreshHz: Int) -> VideoSettings? {
+        guard !settings.displayHiDPI, !allowsGameDisplay else { return nil }
+        guard let prefs else { return base }
+        return base.applying(prefs, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: false)
     }
 }
