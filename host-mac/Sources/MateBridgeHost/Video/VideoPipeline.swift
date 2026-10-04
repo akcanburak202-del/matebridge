@@ -156,7 +156,8 @@ public final class VideoPipeline: @unchecked Sendable {
         if waitUs > 0 { try await Task.sleep(nanoseconds: waitUs * 1_000) }
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
                                   physicalPixelWidth: settings.nativeWidthPx, physicalPixelHeight: settings.nativeHeightPx,
-                                  hidpi: settings.displayHiDPI, refreshRate: Double(settings.displayRefreshHz))
+                                  hidpi: settings.displayHiDPI, refreshRate: Double(settings.displayRefreshHz),
+                                  transfer: VirtualDisplayTransfer.parse(env: ProcessInfo.processInfo.environment))
     }
 
     /// Whether a `start()` error concerns setting up the virtual display itself (creation, settings, mode selection),
@@ -174,6 +175,12 @@ public final class VideoPipeline: @unchecked Sendable {
 
     /// After `start()`: true when the pipeline kept the display it was handed (`reusing:`), false when it created one.
     var displayWasReused: Bool { lock.withLock { reusedDisplay } }
+
+    /// After `start()`: the display's id and its T-232 transfer function outcome (`ev=vd_transfer`); nil without a
+    /// display.
+    var displayTransfer: (displayID: CGDirectDisplayID, outcome: VirtualDisplayTransfer.Outcome)? {
+        lock.withLock { display.map { ($0.displayID, $0.transferOutcome) } }
+    }
 
     /// Closes the current cadence window (call about once a second). `sentTotal` is the sender's cumulative
     /// frame count.

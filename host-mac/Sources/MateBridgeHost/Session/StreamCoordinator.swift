@@ -720,6 +720,21 @@ public final class StreamCoordinator: @unchecked Sendable {
         await createPipeline(settings: settings, reusing: p.display)
     }
 
+    /// T-232: `ev=vd_transfer` for a newly created display (native or game, decision 0029): the transfer function
+    /// requested (`MATEBRIDGE_VD_TRANSFER`) and applied, and the screen's EDR headroom. AppKit is read on the main
+    /// actor in a separate task, so pipeline start does not wait for it; ids are taken now.
+    private func logDisplayTransfer(_ p: VideoPipeline) {
+        guard let (displayID, outcome) = p.displayTransfer else { return }
+        let sid = session?.sessionID ?? 0
+        let gen = session?.configID ?? 0
+        let logger = self.logger
+        Task {
+            let edr = await DisplayEDR.read(displayID: displayID)
+            logger.log(outcome.logLevel, "vd_transfer", sessionID: sid, generation: gen,
+                       fields: VirtualDisplayTransfer.logFields(outcome, edr: edr))
+        }
+    }
+
     /// Removes the parked display, if any (keep time over, other device or size, shutdown).
     private func dropParked() {
         guard let p = parked else { return }
@@ -751,6 +766,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                 log(.info, "pipeline_started", "display=reused \(sizes)")
             } else {
                 log(.info, "display_created", sizes)
+                logDisplayTransfer(p)
             }
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: p.cadenceSetup)
