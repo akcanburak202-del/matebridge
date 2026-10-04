@@ -1346,3 +1346,8 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 - Gri durum (00:00 ve 00:05, APK 23:41): Mac 0 → tablet 16, Mac (35,45,59) → (50,57,69); 2026-10-01 yakalamasında da aynı.
 - T-231 APK'sı (00:18) kurulduktan sonra varsayılan ayarlarla da doğru: Mac (33,39,52) → tablet (33,38,50), 0 → 1–2, 255 → 254. `color_range limited|unset`, hepsi `unset`, `color_transfer sdr_video` ile de aynı (tablet çözücüsü çıkışta her durumda `range=1 standard=1 transfer=2` bildiriyor, istenen anahtarları yok sayıyor gibi). SF katmanı DEVICE, dataspace V0_SRGB; `service call SurfaceFlinger 1008` (HW overlay kapatma) bu cihazda etkisiz.
 - Varsayılan yol T-231'de değişmedi (diff incelendi). Neden bilinmiyor; aday: tablette ekran durumuna bağlı bir renk dönüşümü (SF renk matrisi, göz konforu/ekran modu) ya da çözücünün bir durumu. Kullanıcı gri görünce `~/.cache/matebridge-tools/data/gray/snap.sh NAME` (eşli yakalama + SurfaceFlinger dökümü + çözücü renk satırları) çalıştırılacak.
+
+## 2026-10-05 ~00:45 — T-232: HDR aktarım işlevli sanal ekran (cihaz)
+
+- `MATEBRIDGE_VD_TRANSFER=1` ile: `ev=vd_transfer requested=1 applied=1 edr_max=5.00 edr_potential=5.00` (varsayılanda 1.00/1.00). macOS ekranı EDR yetenekli görüyor (5× başlık). Yakalama ve kodlama çalışıyor; SDR akışta siyah/beyaz doğru (0→0, 255→255). `system_profiler` HDR satırı göstermiyor.
+- Kullanıcıya kalan: Sistem Ayarları → Ekranlar'da HDR anahtarı görünüyor mu, RE4/GameHub HDR seçeneğini açıyor mu, HDR açıkken tablette görüntü nasıl (akış SDR olduğu için soluk/kırpık beklenir). Host varsayılana döndürüldü.
