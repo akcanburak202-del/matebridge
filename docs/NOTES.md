@@ -1247,3 +1247,11 @@ Koşul: host sha=91aaa2c, APK a9d7980, macOS 27.0.1 (26A434), HarmonyOS MRDI-W09
 - **İnce renkli yazı (4:2:0):** 11 pt kırmızı/mavi, mavi/kırmızı, kırmızı/siyah okunaklı, Türkçe karakterler net; renkli harf kenarları Mac'e göre çok hafif yumuşak (beklenen 4:2:0 sınırı). 30 ve 100 Mbps arasında fark yok (durağan içerik zaten en düşük QP'de, T-087).
 - **SDR/8-bit/4:2:0 sınırı:** akış SDR, 8-bit, 4:2:0 HEVC Main. HDR (tablet HDR10/HLG, 500 nit bildiriyor) ve 4:4:4 bu hattın dışında; Mac sanal ekranı SDR olduğundan oyunlar HDR seçeneğini kapatıyor (RE4: "monitör HDR desteklemiyor").
 - **T-201 (RGB referanslı renk metriği) gerekli değil:** cihazda ölçülen hata renk sıkıştırması kaynaklı değil, yazı okunaklı.
+
+## 2026-10-04 ~16:15 — T-127 Wi-Fi ölçümü: bütçeler ve karar kuralı (ölçümden ÖNCE yazıldı, sonradan değişmez)
+
+- **Bütçeler:** ses kesilmesi ≤ 1 / 5 dk (bu oturumda ses kapalı: kullanıcının günlük ayarı `audio_enabled=0`; satır "ölçülmedi"); kontrol srtt p95 ≤ 40 ms; istemci yakalama→çözme p95 (`cap_dec_p95_us`) ≤ 70 ms.
+- **Karar kuralı (0023):** kart T-127'deki gibi. Bu oturum **hızlı yol**: her satır 1 koşu (kart ≥ 3 ister); sonuç "yön" sayılır, sınırda satırlar sonra 3'e tamamlanır.
+- **Ağ:** Mac en1 802.11ax, kanal 52 (5 GHz DFS, 80 MHz), −45 dBm, 960 Mbps; kart 802.11be destekliyor ama modem (FiberHGW) ax. Tablet Wi-Fi 6, −31…−35 dBm, 2401 Mbps (160 MHz). `awdl0` aktif. Ethernet satırı (topoloji 2) bu oturumda yok (Mac kapatılmadan kablo bağlanamıyor).
+- **İş yükü:** `~/.cache/matebridge-tools/wload.swift` (yeni): 40 sn döngü — 20 sn tam ekran yoğun yazı kaydırma, 10 sn 2 sn'de bir tam ekran içerik değişimi, 10 sn durağan; 5 dk. Krita ve müzik yok.
+- **Satırlar:** USB; Wi-Fi varsayılan; Wi-Fi 30 Mbps; Wi-Fi 15 Mbps; Wi-Fi + `tos_ctl 0xB8` + `wifi_ll`; Wi-Fi + `awdl0` kapalı. Host `MATEBRIDGE_SENDQ_LOG=1 MATEBRIDGE_LAT_TRACE=1`.
