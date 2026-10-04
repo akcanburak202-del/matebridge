@@ -1,7 +1,7 @@
 ---
 id: T-226
 title: Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code
-status: todo
+status: in_progress
 phase: 6
 owner: orchestrator
 depends_on: [T-188]
@@ -42,7 +42,14 @@ Kullanıcı (2026-10-04): Resident Evil 4 ayarlarında HDR açılamıyor ("monit
 
 ## Plan
 
-_(Araştırmacı doldurur.)_
+1. Kod okuması: bugünkü SDR zinciri (`VirtualDisplay.swift`, `ScreenCapture.swift`, `HEVCEncoder.swift`, `VideoSettings.swift`, `VideoRenderer.kt`, `docs/PROTOCOL.md` STREAM_CONFIG) — HDR için değişecek noktaların listesi.
+2. Mac, salt okuma: ObjC runtime ile `CGVirtualDisplay*` sınıflarının özellik/yöntem listesi (örnek oluşturmadan); `VTCopySupportedPropertyDictionaryForEncoder` ile HEVC Main10/HDR anahtarları (oturum yok); SDK başlıklarında `captureDynamicRange`, EDR anahtarları.
+3. Tablet, salt okuma: `dumpsys display`, `dumpsys SurfaceFlinger` (HDR katman/renk modu), `media_codecs*.xml` ve `dumpsys media.codec` ile HEVC Main10/HDR10 profilleri; `getprop`.
+4. Web: BetterDisplay/açık kaynak sanal ekran projelerinde HDR iddiaları, CGVirtualDisplay class-dump'ları, SCK HDR yakalama, VT HEVC Main10 PQ/HLG, Android HDR10 SurfaceView, Huawei HDR video.
+5. Yalnız deneyle cevaplanacak halka varsa `probes/hdr-probe/` altında küçük, izole prob kaynağı + çalıştırma talimatı (çalıştırılmaz).
+6. Rapor `docs/research/2026-10-04-hdr-feasibility.md`: halka halka evet/hayır/bilinmiyor + kanıt, engel, önerilen mimari, protokol taslağı, kart bölümlemesi, maliyet/risk.
+
+Riskler: canlı kullanıcı oturumu — tablette yalnız okuma komutları; Mac'te ekran/sanal ekran kurulmaz, pencere açılmaz.
 
 ## Handoff
 
