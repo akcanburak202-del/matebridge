@@ -31,6 +31,9 @@
 	<!-- Menu bar app: no Dock icon. -->
 	<key>LSUIElement</key>
 	<true/>
+	<!-- One copy only (T-224): LaunchServices refuses a second instance; main.swift guards the direct-exec path. -->
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
