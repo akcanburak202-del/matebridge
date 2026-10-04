@@ -1,7 +1,7 @@
 ---
 id: T-147
 title: Write and rehearse the recovery runbook and known-good version pair
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146]

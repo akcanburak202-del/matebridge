@@ -1207,3 +1207,10 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
   | Çizim 120 max | 9,0 | 16,4 | 39,9 | 1,7 | — |
 
   RE4'te "eksik karelerin" çoğu yavaş çözmede tablet kuyruğunun düşürdüğü karelermiş; `max` ile kayboldu. Kullanıcı: "takılmalar azaldı, seyrek de olsa var". → T-222 (varsayılan `max`).
+
+## 2026-10-04 — T-147 ön bilgiler (orkestratör, komutla doğrulandı)
+
+- Otomatik giriş **açık** (`com.apple.loginwindow autoLoginUser = burakakcan`), FileVault **kapalı** (`fdesetup status`), macOS 27.0.1 (26A434).
+- HDMI dummy **yok**: `system_profiler SPDisplaysDataType` yalnız 1920×1080 yer tutucu ekranı listeliyor.
+- Uzak yol Parsec (2026-10-03 cevabı); Parsec süreci çalışıyor.
+- `docs/RECOVERY.md` taslağı yazıldı; senaryo provaları (T-147 adım 2–10) kullanıcıyla yapılacak.
