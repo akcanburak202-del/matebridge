@@ -69,6 +69,54 @@ class FingerPolicyTest {
         assertTrue(t.isIdle) // no ghost "first finger" left for the next touch
     }
 
+    @Test fun aMovingSilentFingerIsNotForgottenAndASecondFingerStillStartsAGesture() {
+        // Codex re-review: the stale guard counts from the last event of the contact, not from the DOWN.
+        val t = tracker().gesturesOnly()
+        down(t, 0, 1, finger(1, 1000f, 900f))
+        var now = 0L
+        while (now < TouchTracker.PRESS_STALE_MS + 2_000) { // well past the stale limit, the finger keeps moving
+            now += 1_000
+            assertTrue(move(t, now, finger(1, 1000f + (now / 1000) * 3f, 900f)).isEmpty())
+            assertTrue(t.tick(now).isEmpty())
+            assertFalse("still tracked at $now", t.isIdle)
+        }
+        val x1 = 1000f + (now / 1000) * 3f
+        assertTrue(down(t, now + 100, 2, finger(1, x1, 900f), finger(2, x1 + 200f, 900f)).isEmpty())
+        val out = move(t, now + 120, finger(1, x1 - 50f, 900f), finger(2, x1 + 250f, 900f))
+        assertEquals(listOf(Pinch.BEGAN, Pinch.CHANGED), pinches(out))
+    }
+
+    @Test fun aMovingSilentFingerThenTwoFingerScrollPasses() {
+        val t = tracker().gesturesOnly()
+        down(t, 0, 1, finger(1, 1000f, 900f))
+        var now = 0L
+        while (now < TouchTracker.PRESS_STALE_MS + 1_000) { now += 1_000; move(t, now, finger(1, 1000f, 900f + now / 1000)); t.tick(now) }
+        val y1 = 900f + now / 1000
+        down(t, now + 100, 2, finger(1, 1000f, y1), finger(2, 1200f, y1))
+        val out = move(t, now + 120, finger(1, 1000f, y1 + 60f), finger(2, 1200f, y1 + 60f))
+        assertEquals(listOf(Scroll.BEGAN, Scroll.CHANGED), scrolls(out))
+    }
+
+    @Test fun aFingerThatStopsSendingEventsIsStillForgottenAfterAMove() {
+        val t = tracker().gesturesOnly()
+        down(t, 0, 1, finger(1, 300f, 300f))
+        move(t, 5_000, finger(1, 320f, 300f)) // last event
+        t.tick(5_000 + TouchTracker.PRESS_STALE_MS - 1)
+        assertFalse(t.isIdle)
+        t.tick(5_000 + TouchTracker.PRESS_STALE_MS)
+        assertTrue(t.isIdle)
+    }
+
+    @Test fun aPressedFingerKeepsItsOwnStaleRuleUnderTheDefaultPolicy() {
+        // Unchanged by the fix: ALL still releases a pressed finger PRESS_STALE_MS after its last event, never earlier.
+        val t = tracker()
+        down(t, 0, 1, finger(1, 300f, 300f))
+        move(t, 10, finger(1, 500f, 500f)) // pressed
+        assertTrue(t.isPressed)
+        assertTrue(t.tick(10 + TouchTracker.PRESS_STALE_MS - 1).isEmpty())
+        assertEquals(listOf(0), ptrs(t.tick(10 + TouchTracker.PRESS_STALE_MS)).map { it.buttons })
+    }
+
     // ---- two fingers still work ----
 
     @Test fun twoFingerPinchPasses() {

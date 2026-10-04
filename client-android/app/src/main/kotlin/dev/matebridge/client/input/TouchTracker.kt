@@ -148,8 +148,10 @@ class TouchTracker(
         val out = ArrayList<Outgoing>(1)
         when (mode) {
             Mode.PENDING -> if (policy == FingerPolicy.GESTURES_ONLY) {
-                // A silent single finger: forget it if Android lost its lift (otherwise it would pose as a first finger forever).
-                if (nowMs - downMs >= PRESS_STALE_MS) { counters.pressStale++; mode = Mode.IDLE }
+                // A silent single finger: forget it if no event arrived for it for a long time (Android lost its lift;
+                // otherwise it would pose as a first finger forever). Measured from its last event, as for a pressed finger:
+                // a finger that keeps moving is alive, and a second finger must still find it here.
+                if (nowMs - pressEventMs >= PRESS_STALE_MS) { counters.pressStale++; mode = Mode.IDLE }
             } else if (nowMs - downMs >= HOLD_MS) pressNow(nowMs, nowMs * 1000, out, movedBeyondSlop = false)
             Mode.POINTER -> if (nowMs - pressEventMs >= PRESS_STALE_MS) {
                 // No event from a pressed finger for this long: Android lost the lift. Release it, forget it.
@@ -229,6 +231,7 @@ class TouchTracker(
                 mode = Mode.PENDING // still down, tracked, silent
                 downX = lastX; downY = lastY
                 downMs = nowMs
+                pressEventMs = nowMs
             }
             FingerPolicy.ALL -> if (mode == Mode.PENDING) {
                 lockout = true
@@ -256,6 +259,7 @@ class TouchTracker(
                 downX = fp.x; downY = fp.y
                 lastX = fp.x; lastY = fp.y
                 downMs = nowMs
+                pressEventMs = nowMs // last event of this contact (the stale guard of a silent finger, [tick])
             }
             Mode.PENDING, Mode.POINTER -> {
                 if (fp.id == pointerId || widthPt <= 0 || heightPt <= 0) return
@@ -284,6 +288,7 @@ class TouchTracker(
         when (mode) {
             Mode.PENDING -> {
                 val fp = f.fingers.firstOrNull { it.id == pointerId } ?: return
+                pressEventMs = nowMs // any MOVE keeps the contact alive (matters only for a silent finger; ALL resolves in 40 ms)
                 lastX = fp.x; lastY = fp.y
                 if (abs(fp.x - downX) > SLOP_PX || abs(fp.y - downY) > SLOP_PX) pressNow(nowMs, f.timeUs, out, movedBeyondSlop = true)
             }
