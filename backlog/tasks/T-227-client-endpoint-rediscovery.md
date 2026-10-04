@@ -50,33 +50,49 @@ Mevcut akış (okundu): `MainActivity.startWifi()` bir `MacDiscovery` başlatır
 
 ## Handoff
 
-- **Commit:** `9d97235` (plan), `4e4cae2` (saf politika + `MacDiscovery.restart()` + testler + LOGGING), `ff8afa3` (MainActivity bağlantısı; kapsam orkestratör onayıyla genişletildi). Dal: `task/T-227-endpoint-rediscovery`.
+- **Commit:**
+  - `9d97235` plan.
+  - `4e4cae2` saf politika, `MacDiscovery.restart()`, testler, LOGGING.
+  - `ff8afa3` MainActivity bağlantısı.
+  - `35cb0cd` Codex inceleme düzeltmeleri (3 × P1).
+  - Dal: `task/T-227-endpoint-rediscovery`.
 - **Dokunulan dosyalar:**
   - `client-android/app/src/main/kotlin/dev/matebridge/client/session/EndpointRediscovery.kt` (yeni, saf politika)
   - `client-android/app/src/main/kotlin/dev/matebridge/client/session/MacDiscovery.kt` (`restart()`)
-  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/EndpointRediscoveryTest.kt` (21 test)
-  - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt`:
-    - `render()` → `rediscovery.onUi(...)`; `foreign`/`unreachable` olursa eski adrese dönüş `ui.post` ile yapılır, T-151 seçim işleminden sonra. Oturum o arada başka yere geçtiyse dokunulmaz.
-    - `wolTicker` → `rediscoveryStep()` → `pairPick.clearSeen()` + `discovery?.restart()`.
-    - `onDiscovered()` → `rediscovery.onDiscovered(...)`: `SKIP` olursa bağlanılmaz; `CONNECT` ya da var olan kural sağlanırsa `connect(ep, DISCOVERY)`. `wakeConnect.onDiscovered(...)` her durumda çağrılır.
-    - Sıfırlama noktaları: `applyTransport()`, `startWifi()`, `userDisconnect()`, `onStop()`.
-  - `docs/LOGGING.md` (`endpoint_rediscover`, `_found`, `_result`, `_skip`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionMachine.kt`:
+    - `Event.Start.expectHost`,
+    - kimlik kapısı `wrongHost()` / `refuseWrongHost()`.
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt` (`start(..., expectHost)`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionUi.kt` (`Cause.WRONG_HOST`)
+  - `client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt` (orkestratör onayıyla):
+    - `render()` → `rediscovery.onUi(...)` + eski adrese dönüş (`ui.post`),
+    - `wolTicker` → `rediscoveryStep()`,
+    - `onDiscovered()`: `SKIP` kontrolü artık `pairPick.onDiscovered`'dan önce,
+    - `connect()`: otomatik başlangıçlara bölüm sırasında `expectHost`,
+    - `tryNextAfterPick()` yabancı adresi atlar,
+    - `causeText(WRONG_HOST)`,
+    - sıfırlama: `applyTransport/startWifi/userDisconnect/onStop`.
+  - Testler:
+    - `EndpointRediscoveryTest.kt` (27),
+    - `WrongHostGateTest.kt` (6, yeni).
+  - `docs/LOGGING.md`: `endpoint_rediscover`, `_found`, `_result`, `_skip`, `wrong_host`.
+- **İnceleme düzeltmeleri (Codex 3 × P1):**
+  1. **Pano sızıntısı.** Kimlik denetimi bağlantıdan önceye alınamadı: TXT kaydında host_id yok, yalnız `v` ve `wol` var. Onu eklemek protokol değişikliği olur. Bunun yerine kimlik kapısı oturum makinesine kondu. Bölüm sırasındaki her otomatik başlangıç `expectHost` = son doğrulanmış host'un `HostTag`'ini taşır. Makine ilk yanıtta (`Secured`, `PairingNeedsUser`, `PairedWithPending`) farklı host_id görürse ya da başka bir Mac eşleşme isterse bağlantıyı HELLO_ACK'tan önce kapatır ve `Failed(WRONG_HOST)` verir. Böylece `Connected` hiç gelmez; pano, dosya ve girdi açılmaz. Beklenen host_id'yi taklit eden biri de anahtarımızı bilmediği için mühürlü kayıtları okuyamaz; T-156 anahtar uyuşmazlığı onu yakalar ve aday `foreign` olur. Bu, kayıtlı adrese bugün yapılan sıradan yeniden bağlanmayla aynı tehdit modeli.
+  2. **Eski oturumun geç durumu.** Aday seçildikten sonra, adayın `Connecting`'i görülene kadar gelen her durum eski oturumun geç durumu sayılır ve hiçbir şeye karar vermez: bölümü bitirmez, kimlik öğrenmez. Tek istisna `StoredTrust`/`Failed`: adayın başlangıcı bağlanmadan bunlarla bitebilir, o zaman yalnızca aday izlemesi bırakılır. Asıl güvence yine makinedeki kapı: `expectHost` başlangıç olayına bağlı, UI iş parçacığı yarışından etkilenmez.
+  3. **Seçim geri dönüşü.** `SKIP` adresler artık `pairPick`'e hiç verilmiyor. `tryNextAfterPick()` yabancı adresi atlıyor. Bu yoldan gelen bağlantı da `connect()` üzerinden kapıdan geçiyor.
 - **Varsayımlar:**
-  - Kök neden: NSD bir hizmeti keşif başına bir kez bildiriyor; yalnızca adres değişince yeni `onServiceFound` gelmiyor. Düzeltme: kayıtlı adres art arda düşünce keşfi yeniden başlatmak. Yeni adres, eski adrese bağlanılırken bile hemen denenir.
-  - Eşik: 2 düşüş ya da ilk düşüşten 4 sn sonra; sonra 8/16/30 sn aralık. Adres kaybolunca connect 5 sn asılı kalabildiği için zaman eşiği önemli. Beklenen toplam süre ≈ 4 sn + NSD çözümü + bağlantı, yani ≤ ~10 sn.
-  - Kimlik = son doğrulanmış oturumun `HostTag`'i (host_id). Bu süreçte henüz kimlik görülmemişse ilk aday kabul edilir. Aşağıdakiler `foreign` sayılır; o adres bölüm boyunca atlanır ve eski adrese dönülür:
-    - başka bir eşleşmiş Mac,
-    - eşleşme isteyen bir Mac (`PairingNeedsUser`),
-    - adayda kalıcı `Failed`.
-  - Başka bir eşleşmiş Mac'te oturum, kimlik görülene kadar kısa süre `Connected` olabilir; ardından eski adrese dönülür.
-  - "Kaydı güncelle": `connect()` `lastWifiEndpoint`'i günceller. Uyandırma adresi (`wolStore`) `onHostTxt` ile zaten güncelleniyor. Elle yazılmış adreste (`manualMode`), USB'de, "Bağlantıyı kes" sonrası ve HOST_SLEEP'te yeniden keşif kapalı.
-  - Uyandırma yolu değişmedi: `WakeConnect` ve `wolStep` dokunulmadı. Yeniden keşif yalnızca yanına NSD yeniden başlatması ekliyor. Kayıtlı adres denemeleri (SessionMachine geri çekilmesi) sürüyor.
-  - Uyandırma bölümü bitip oturum `Searching`e (uç nokta yok) düşerse yeniden keşif tetiklenmez (sayılacak uç nokta yok). Asıl senaryo, Disconnected yeniden deneme döngüsü, kapsanıyor.
-- **Test edilmeyenler / cihazda doğrulananlar:** Cihazda hiçbir şey denenmedi (adb/tablet yok). `./scripts/check.sh` `ff8afa3` üzerinde geçti. Orkestratörün tablette denemesi gerekenler:
-  1. Wi-Fi modunda bağlıyken Mac'te Ethernet'i tak ve Wi-Fi'yi kapat. Tablet uygulama yeniden açılmadan ≤ ~10 sn içinde yeniden bağlanmalı. `adb logcat -s 'MB:*'` içinde sırasıyla `ev=endpoint_rediscover reason=…`, `ev=endpoint_rediscover_found old=*.107 new=*.106`, `ev=endpoint_rediscover_result result=accepted` görülmeli.
-  2. AUTO modunda (Wi-Fi'de) aynı deneme yapılmalı.
-  3. Mac uykuya geçip uyandırılırken `wake_connect` satırları önceki gibi sürmeli; yeniden keşif yalnızca `endpoint_rediscover` satırları eklemeli.
-  4. Mac kapalıyken geri çekilme sürmeli; `restart=` satırları 8/16/30 sn aralıkla gelmeli, yığılma olmamalı.
-  5. Bağlıyken ve USB'deyken hiç `endpoint_rediscover` satırı çıkmamalı.
+  - Kök neden: NSD bir hizmeti keşif başına bir kez bildiriyor, bu yüzden düzeltme keşfi yeniden başlatmak.
+  - Eşik: 2 düşüş ya da 4 sn; sonraki yeniden başlatmalar 8/16/30 sn aralıkla.
+  - Kapı yalnızca etkin bir bölüm sırasında ve bu süreçte en az bir doğrulanmış oturum görülmüşse açık. Bölüm dışındaki keşif davranışı değişmedi.
+  - Kendi host'umuz yeni adreste yeniden eşleşme isterse (aynı host_id) olağan T-151 istemi gelir.
+  - Eski adresin kendisinde `WRONG_HOST` çıkarsa döngü olmasın diye oturum `Failed`'da kalır (kullanıcı dokunuşu gerekir). Tek Mac'li kurulumda beklenmiyor.
+  - Uyandırma yolu (`WakeConnect`, `wolStep`) değişmedi; uyandırma denemeleri kapısız.
+- **Test edilmeyenler / cihazda doğrulananlar:** Cihazda hiçbir şey denenmedi. `./scripts/check.sh` `35cb0cd` üzerinde geçti. Tablette denenecekler:
+  1. Wi-Fi modunda bağlıyken Mac'te Ethernet'i tak ve Wi-Fi'yi kapat. Tablet uygulama yeniden açılmadan ≤ ~10 sn içinde yeniden bağlanmalı. Log sırası: `endpoint_rediscover reason=…`, `endpoint_rediscover_found old=*.107 new=*.106`, `endpoint_rediscover_result result=accepted`. `wrong_host` çıkmamalı.
+  2. Aynı deneme AUTO modunda (Wi-Fi'de) yapılmalı.
+  3. Mac uyurken uyandırma: `wake_connect` satırları önceki gibi sürmeli.
+  4. Mac kapalıyken `restart=` satırları 8/16/30 sn aralıkla gelmeli.
+  5. Bağlıyken ya da USB'deyken hiç `endpoint_rediscover` satırı çıkmamalı.
 - **Açık sorular:**
-  1. (Kapsam dışı, not) `onHostTxt` her çözümlemede `wolStore` uyandırma adresini kimlik denetimi olmadan güncelliyor (var olan davranış). Başka bir Mac'in çözümlemesi uyandırma hedefini değiştirebilir. T-227 bunu değiştirmiyor.
+  1. (Kapsam dışı, not) `onHostTxt` her çözümlemede `wolStore` uyandırma adresini kimlik denetimi olmadan güncelliyor (var olan davranış). T-227 bunu değiştirmiyor.
+  2. (Orkestratöre) Bağlanmadan önce kimlik denetimi istenirse, host TXT kaydına host_id eklemek protokol değişikliği gerektirir (PROTOCOL.md 3.1, iki taraf). Makinedeki kapı bunu gerektirmiyor.
