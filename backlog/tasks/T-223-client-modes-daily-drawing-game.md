@@ -1,7 +1,7 @@
 ---
 id: T-223
 title: Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-215, T-222]
@@ -60,10 +60,21 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
-
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** `b05dc6c` (dal `task/T-223-client-modes-daily-drawing-game`; plan `781f6d8`). `./scripts/check.sh`: ALL OK.
+- **Dokunulan dosyalar:** `stream/StreamMode.kt` (üç mod, `LegacyModes`), `stream/GameMode.kt` (`GameModeSettings` mod katmanı: Oyun + Çizim, `Transition`, `selectFrameRate`), `stream/GameResolution.kt` (+2240×1472), `session/Settings.kt` (`fps_daily`/`fps_game`, `migrateModesOnce`), `settings/SettingsCatalog.kt` ("Kare hızı" seçimi, `modeLayer`, ayar bazlı işaretler), `MainActivity.kt`, testler (`stream/`, `settings/`, `session/`: StreamModeTest, GameModeTest, GameResolutionTest, SettingsCatalogTest, SettingsResetTest, BitrateSettingTest, SessionMachineTest), `docs/KNOBS.md`, `docs/LOGGING.md`. `strings.xml`'e gerek olmadı (metinler kodda, mevcut desen).
 - **Varsayımlar:**
-- **Test edilmeyenler / cihazda doğrulananlar:**
+  - Eski kimlikler tek seferlik `Settings.migrateModesOnce()` ile (bayrak `modes_migrated`, "Varsayılanlara dön" bunu silmez) yeni mod + `fps_*` değerine yazılır; `game` yeni Oyun kimliğiyle aynı olduğu için bayrak gerekti (yeni Oyun 60 seçimi eski Oyun 120 sanılmasın). Getter eski kimlikleri de Günlük/Oyun'a çevirir.
+  - Katman Oyun ↔ Çizim geçişinde baştan kurulur (`ENTER`); Günlük'e dönüş `EXIT`. Çizim katmanı yalnız parmak ve (Otomatik ise) bit hızını ezer; ses ve kalem izi/noktası kayıtlı kalır. Oyun katmanı parmak anahtarına dokunmaz.
+  - Log olayı `ev=game_mode` yerine `ev=mode_layer mode= action= overrides= ... finger_off=` (eski olay LOGGING'de hiç belgelenmemişti); yeni `ev=modes_migrated`. `ev=profile` `mode=daily|drawing|game`, `fps=` zaten STREAM_CONFIG değeri, `scale_permille` hep 1000. `ev=stats stream_mode=` yeni kimlikler.
+  - Toast: "Günlük: 120 fps", "Çizim: 120 fps", "Oyun: 60 fps, 1848×1214". Panelde mod düğmeleri yalın etiket ("Günlük", "Çizim", "Oyun"); "Kare hızı (Günlük|Oyun)" başlığı hangi modun hızını değiştirdiğini gösterir. Katman işaretleri: "(oyun modu)" / "(çizim modu)", ayar bazlı (parmak kapalı yalnız Çizim'de işaretlenir).
+  - `protocol/fixtures/stream_prefs_game_display` eski Oyun 120'nin (120, 660) baytları; fixture'a dokunulmadı, testte yalnız bit hızı + `display_*` kuyruğu karşılaştırılıyor, fps/ölçek ayrıca doğrulanıyor.
+- **Test edilmeyenler / cihazda doğrulananlar:** Hepsi JVM'de test edildi (üç mod, mod başına fps, eski kimlik geçişi, katman giriş/çıkış, STREAM_PREFS baytları, 2240×1472, Ctrl+Shift+7 döngüsü, sıfırlama anahtarları). Cihazda bakılacak:
+  1. Ctrl+Shift+7 üç mod arasında döner; her girişte `ev=mode_layer` ve `ev=profile mode=` beklenen kimlikte (Günlük: `fps=120`, Çizim: `fps=120` + `finger_off=1`, Oyun: `fps=60` + `display=1848x1214`).
+  2. Günlük'te Kare hızı 60 ↔ 120: bir kez ekran yeniden kurulumu; Oyun'a geçince kendi hızını (varsayılan 60) hatırlıyor, Günlük'e dönünce Günlük'ünü.
+  3. Çizim'de avuç teması tıklamıyor, kalem çiziyor; Çizim'den Günlük'e dönünce parmak dokunması eski haline (kayıtlı değer) dönüyor. Çizim açıkken parmak anahtarını elle açmak katmanda kalır (kayda yazılmaz).
+  4. Oyun'da Oyun çözünürlüğü listesinde 2240×1472 seçilebiliyor ve oyunda görünüyor (`display_applied=1`).
+  5. Eski sürümden güncelleme: kayıtlı `game`/`game60`/`clarity`/`smooth` ilk açılışta doğru mod + hıza dönüşüyor (`ev=modes_migrated`).
 - **Açık sorular:**
+  - "Kare hızı Çizim'de gösterilmez" kriteri tam karşılanamadı: gizlemek için `settings/SettingsViews.kt`'ye bir `visible` desteği gerekir (kart dışı). Şimdilik satır Çizim'de görünür, başlığı "Kare hızı (Çizim: hep 120)" olur ve düğmeler etkisizdir. Orkestratör isterse `SettingsViews.kt` kapsama alınıp `SettingItem.Choice`'a `hidden: () -> Boolean` eklenebilir.
+  - `SessionController.kt`, `SessionMachine.kt`, `DevKnobs.kt` `StreamMode.DEFAULT.toPrefs()` ile derleniyor (Günlük 120 → aynı baytlar), dokunulmadı.
+  - Çizim katmanında ses/kalem ezilmiyor (karar 0030 yalnız parmak + bit hızı diyor); farklı isteniyorsa `GameModeSettings.defaults` tek yerden değişir.
