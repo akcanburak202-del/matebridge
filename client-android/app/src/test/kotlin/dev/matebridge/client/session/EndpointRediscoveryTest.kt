@@ -150,7 +150,7 @@ class EndpointRediscoveryTest {
         assertEquals(Pick.CONNECT, r.onDiscovered(other, current, last))
         connectTo(other)
         // The machine's host gate refused it before its HELLO_ACK (WrongHostGateTest).
-        val v = ui(SessionUi.Failed(Cause.WRONG_HOST))
+        val v = ui(SessionUi.Failed(Cause.WRONG_HOST, other))
         assertEquals(Verdict.Foreign(wifi, other), v)
         assertTrue(r.isSkipped(other))
         assertEquals("result=foreign old=*.107 new=*.50", EndpointRediscovery.resultFields(v))
@@ -228,13 +228,43 @@ class EndpointRediscoveryTest {
         assertNull(r.candidate)
     }
 
-    @Test fun aWrongHostAtTheOldAddressItselfDoesNotLoop() {
+    @Test fun aWrongHostAtTheOldAddressKeepsTheEpisodeGoing() {
+        // Review 2 #1: the armed retry of the old address met another Mac there. Nothing to go back to, but the tablet
+        // must not stay parked on that Failed: discovery keeps restarting and our host's new address is connected to.
         establish()
         dropAndFailOnce()
         assertTrue(restart())
         ui(SessionUi.Connecting(wifi))
-        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.WRONG_HOST)))
+        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.WRONG_HOST, wifi)))
         assertTrue(r.isSkipped(wifi))
+        assertTrue(r.active)
+        assertFalse(restart(advanceMs = 1_000))
+        assertTrue(restart(advanceMs = 7_000)) // the next restart on the usual gap
+        assertEquals(Pick.CONNECT, r.onDiscovered(ethernet, current, last))
+        connectTo(ethernet)
+        assertEquals(Verdict.Accepted(wifi, ethernet), ui(connected()))
+    }
+
+    @Test fun aLateRefusalOfASupersededStartBlamesNobody() {
+        // Review 2 #2: foreign candidate B is connecting, discovery moves on to our host's real new address C, then B's
+        // queued Failed(WRONG_HOST) renders before C's Connecting.
+        establish()
+        dropAndFailOnce()
+        assertTrue(restart())
+        assertEquals(Pick.CONNECT, r.onDiscovered(other, current, last))
+        connectTo(other)
+        ui(SessionUi.Disconnected(Cause.CONNECT_FAILED, 1000)) // B unreachable for now: back to the old address
+        current = wifi
+        ui(SessionUi.Connecting(wifi))
+        assertEquals(Pick.CONNECT, r.onDiscovered(other, current, last))
+        connectTo(other)
+        assertEquals(Pick.CONNECT, r.onDiscovered(ethernet, current, last)) // still connecting to B: C wins
+        current = ethernet
+        assertEquals(Verdict.None, ui(SessionUi.Failed(Cause.WRONG_HOST, other)))
+        assertFalse(r.isSkipped(ethernet))
+        assertEquals(ethernet, r.candidate)
+        ui(SessionUi.Connecting(ethernet))
+        assertEquals(Verdict.Accepted(wifi, ethernet), ui(connected()))
     }
 
     @Test fun forgetCandidateDropsOnlyThatCandidate() {

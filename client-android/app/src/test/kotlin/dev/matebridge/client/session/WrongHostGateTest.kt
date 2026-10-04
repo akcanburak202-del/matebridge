@@ -23,7 +23,7 @@ class WrongHostGateTest {
     private val logs = ArrayList<String>()
     private val m = SessionMachine(hello, recordAuthenticated = { false }) { level, ev, fields -> logs += "$level $ev $fields" }
     private var now = 1_000_000L
-    private val wrongHost = SessionUi.Failed(SessionUi.Cause.WRONG_HOST)
+    private val wrongHost = SessionUi.Failed(SessionUi.Cause.WRONG_HOST, candidate)
 
     private fun step(e: Event, advanceUs: Long = 0): List<Action> {
         now += advanceUs
@@ -88,6 +88,58 @@ class WrongHostGateTest {
         gen = genOf(step(Event.Tick(0), SessionMachine.BACKOFF_MAX_US))
         step(Event.ControlOpened(gen))
         assertEquals(listOf<SessionUi>(wrongHost), step(Event.Secured(gen, null, false, Bytes(idB.copyOf()))).ui())
+    }
+
+    /** A start without expectation whose PAIRED session to Mac A dropped: it now waits to retry. */
+    private fun retryingWithoutExpectation() {
+        val gen = genOf(step(Event.Start(candidate)))
+        step(Event.ControlOpened(gen))
+        step(Event.Secured(gen, null, false, Bytes(idA.copyOf())))
+        step(Event.Received(gen, ack()))
+        assertTrue(step(Event.ControlClosed(gen)).ui().single() is SessionUi.Disconnected)
+    }
+
+    private fun nextRetry(): Int {
+        val gen = genOf(step(Event.Tick(0), SessionMachine.BACKOFF_MAX_US))
+        step(Event.ControlOpened(gen))
+        return gen
+    }
+
+    @Test fun armingTheRunningRetryRefusesAnotherHostAtTheOldAddress() {
+        // Review 2 #1: the episode began while this session was already retrying the old address.
+        retryingWithoutExpectation()
+        assertTrue(step(Event.ExpectHost(candidate, tagA)).isEmpty())
+        val gen = nextRetry()
+        assertEquals(listOf<SessionUi>(wrongHost), step(Event.Secured(gen, null, false, Bytes(idB.copyOf()))).ui())
+        assertFalse(step(Event.Received(gen, ack())).ui().any { it is SessionUi.Connected })
+    }
+
+    @Test fun armingKeepsOurOwnHostConnecting() {
+        retryingWithoutExpectation()
+        step(Event.ExpectHost(candidate, tagA))
+        val gen = nextRetry()
+        assertTrue(step(Event.Secured(gen, null, false, Bytes(idA.copyOf()))).ui().isEmpty())
+        assertTrue(step(Event.Received(gen, ack())).ui().any { it is SessionUi.Connected })
+    }
+
+    @Test fun armingClosesAConnectionAlreadyPastAnotherHostsAnswer() {
+        val gen = start(expect = null)
+        step(Event.Secured(gen, null, false, Bytes(idB.copyOf())))
+        assertEquals(listOf<SessionUi>(wrongHost), step(Event.ExpectHost(candidate, tagA)).ui())
+        assertFalse(step(Event.Received(gen, ack())).ui().any { it is SessionUi.Connected })
+    }
+
+    @Test fun armingIsIgnoredForAnotherEndpointOrAUserStart() {
+        retryingWithoutExpectation()
+        step(Event.ExpectHost(Endpoint("192.168.1.107", 47001), tagA))
+        var gen = nextRetry()
+        assertFalse(step(Event.Secured(gen, null, false, Bytes(idB.copyOf()))).ui().contains(wrongHost))
+        step(Event.Stop)
+        // A user's own start that has not been accepted yet stays ungated (once accepted, its retries are automatic).
+        gen = genOf(step(Event.Start(candidate, userInitiated = true)))
+        step(Event.ControlOpened(gen))
+        step(Event.ExpectHost(candidate, tagA))
+        assertFalse(step(Event.Secured(gen, null, false, Bytes(idB.copyOf()))).ui().contains(wrongHost))
     }
 
     @Test fun withoutAnExpectationAnyHostIsAcceptedAsBefore() {

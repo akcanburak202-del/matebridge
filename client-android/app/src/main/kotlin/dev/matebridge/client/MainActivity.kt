@@ -1967,6 +1967,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun rediscoveryStep() {
         if (!rediscovery.shouldRestart(SystemClock.elapsedRealtime(), rediscoveryEligible())) return
         MbLog.i("endpoint_rediscover", "reason=${rediscovery.restartReason()} failures=${rediscovery.failures} restart=${rediscovery.restarts}")
+        // The session already retrying the old address was started without an expectation: arm it, so another Mac
+        // answering there is refused before HELLO_ACK too (review 2 #1). Idempotent; the wake path is not gated.
+        val expect = rediscovery.expectedHost()
+        val ep = currentEndpoint
+        if (expect != null && ep != null && wakeConnect.owned != ep) controller.expectHost(ep, expect)
         pairPick.clearSeen() // the new run reports every service again (as in startWifi)
         discovery?.restart()
     }

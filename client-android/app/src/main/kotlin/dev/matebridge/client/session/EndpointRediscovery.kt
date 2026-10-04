@@ -84,7 +84,7 @@ class EndpointRediscovery(
      */
     fun onUi(state: SessionUi, current: Endpoint?, nowMs: Long): Verdict {
         if (candidate != null && candidate != current) dropCandidate() // someone else replaced the candidate's session
-        if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(current)
+        if (state is SessionUi.Failed && state.cause == SessionUi.Cause.WRONG_HOST) return onWrongHost(state.endpoint, current, nowMs)
         if (candidate != null && !candidateStarted) {
             if (state is SessionUi.Connecting && state.endpoint == candidate) {
                 candidateStarted = true
@@ -156,17 +156,27 @@ class EndpointRediscovery(
     fun expectedHost(): HostTag? = if (active) known else null
 
     /**
-     * The machine refused the host at [current] ([SessionUi.Cause.WRONG_HOST]): another Mac, or a Mac asking to pair, at
+     * The machine refused the host at [refused] ([SessionUi.Cause.WRONG_HOST]): another Mac, or a Mac asking to pair, at
      * that address. It is skipped for the rest of the episode; the caller goes back to the old address (or, when the
-     * episode already ended, to the address of the last authenticated session).
+     * episode already ended, to the address of the last authenticated session). A refusal of a superseded start (its
+     * address is no longer the session's, review 2 #2) settles nothing: the next address must not be blamed for it.
+     * Refused at the old address itself: there is no address to go back to, so the episode goes on as if that address
+     * kept failing (discovery restarts, and a new address of our host is connected to from this state, [onDiscovered]).
      */
-    private fun onWrongHost(current: Endpoint?): Verdict {
-        clearStreak()
+    private fun onWrongHost(refused: Endpoint?, current: Endpoint?, nowMs: Long): Verdict {
+        if (refused == null || refused != current) return Verdict.None
         dropCandidate()
-        val bad = current ?: return Verdict.None
-        foreign += bad
+        foreign += refused
         val back = old ?: knownEp
-        return if (back != null && back != bad) Verdict.Foreign(back, bad) else Verdict.None
+        if (back != null && back != refused) {
+            clearStreak()
+            return Verdict.Foreign(back, refused)
+        }
+        startStreak(refused)
+        failures = failLimit
+        downSinceMs = nowMs
+        down = true
+        return Verdict.None
     }
 
     private fun learn(tag: HostTag, ep: Endpoint) {
@@ -208,7 +218,8 @@ class EndpointRediscovery(
         if (ep in foreign) return Pick.SKIP
         val o = old ?: return Pick.DEFAULT
         if (ep == o || ep == current) return Pick.DEFAULT // the same address: nothing new
-        val retrying = ui is SessionUi.Disconnected || (ui is SessionUi.Connecting && ui.endpoint == current)
+        val retrying = ui is SessionUi.Disconnected || (ui is SessionUi.Connecting && ui.endpoint == current) ||
+            (ui is SessionUi.Failed && ui.cause == SessionUi.Cause.WRONG_HOST) // refused at the old address: stuck otherwise
         if (!retrying || current == null) return Pick.DEFAULT // connected, prompting, or nothing chosen: usual rules
         candidate = ep
         candidateStarted = false

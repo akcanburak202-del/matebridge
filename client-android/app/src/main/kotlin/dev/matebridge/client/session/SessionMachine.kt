@@ -94,6 +94,12 @@ class SessionMachine(
             val expectHost: HostTag? = null,
         ) : Event
         data object Stop : Event
+        /**
+         * T-227: from now on only [host] may answer the running start to [endpoint] and its automatic retries (a
+         * rediscovery episode began while the session was already retrying that address). Ignored for another endpoint
+         * or a user-initiated start. A connection already past its first answer with another host is closed.
+         */
+        data class ExpectHost(val endpoint: Endpoint, val host: HostTag) : Event
         data class ControlOpened(val gen: Int) : Event
         /** Control connection failed to open, hit EOF/IO error, or its send queue overflowed. */
         data class ControlClosed(val gen: Int, val connectFailed: Boolean = false) : Event
@@ -346,6 +352,11 @@ class SessionMachine(
                 // T-150: an automatic start never touches an unresolved pairing (it would replace the Mac's pending code).
                 val stored = if (event.userInitiated) null else storedPrompt()
                 if (stored != null) showStoredPrompt(stored, nowUs, out) else openControl(out)
+            }
+            is Event.ExpectHost -> if (phase != Phase.IDLE && endpoint == event.endpoint && !userInitiated) {
+                expectHost = event.host
+                val id = sessionHostId
+                if (id != null && HostTag.of(id) != event.host) refuseWrongHost(out)
             }
             Event.Stop -> {
                 wakeAttempt = null
@@ -680,11 +691,12 @@ class SessionMachine(
 
     /** T-227: another host answered an expect-host start: close at once, no retry, nothing stored or enabled. */
     private fun refuseWrongHost(out: MutableList<Action>) {
+        if (phase == Phase.FAILED) return // already refused (or ended) on this start
         closeAll(out, graceful = false)
         wakeAttempt = null
         phase = Phase.FAILED
         log('W', "wrong_host", "")
-        out += Action.Ui(SessionUi.Failed(SessionUi.Cause.WRONG_HOST))
+        out += Action.Ui(SessionUi.Failed(SessionUi.Cause.WRONG_HOST, endpoint))
     }
 
     private fun provenHostTag(): HostTag? = if (sealedSeen && locallyTrusted) HostTag.of(sessionHostId) else null

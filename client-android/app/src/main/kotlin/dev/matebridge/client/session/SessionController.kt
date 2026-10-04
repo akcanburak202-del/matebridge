@@ -172,6 +172,7 @@ class SessionController(
 
     /** Commands and close notifications: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine. */
     private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
+    private val expectMailbox = Latest<SessionMachine.Event>() // T-227: the newest host expectation wins
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
@@ -238,6 +239,16 @@ class SessionController(
         if (terminated.get()) return
         ensureEngine()
         intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost))
+    }
+
+    /**
+     * Non-blocking. T-227: only [host] may answer the running start to [endpoint] from now on, its automatic retries
+     * included ([SessionMachine.Event.ExpectHost]); a rediscovery episode began while that start was retrying.
+     */
+    fun expectHost(endpoint: Endpoint, host: HostTag) {
+        if (terminated.get()) return
+        ensureEngine()
+        expectMailbox.post(SessionMachine.Event.ExpectHost(endpoint, host))
     }
 
     /**
@@ -415,7 +426,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: promptVisibleMailbox.take() ?:
+                var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: expectMailbox.take() ?: promptVisibleMailbox.take() ?:
                     prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: filesMailbox.take() ?:
                     migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
@@ -965,9 +976,11 @@ class SessionController(
             is SessionMachine.Event.Start -> LogLine(
                 'I', "session_start",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName} " +
-                    "user=${if (e.userInitiated) 1 else 0} $startExtra" + (e.wake?.let { " wake_attempt=${it.n}" } ?: ""),
+                    "user=${if (e.userInitiated) 1 else 0} $startExtra" + (e.wake?.let { " wake_attempt=${it.n}" } ?: "") +
+                    (if (e.expectHost != null) " expect_host=1" else ""), // T-227
             )
             SessionMachine.Event.Stop -> LogLine('I', "session_stop")
+            is SessionMachine.Event.ExpectHost -> LogLine('I', "expect_host") // T-227; never the host_id or address
             is SessionMachine.Event.ControlOpened -> LogLine('I', "connect_ok")
             is SessionMachine.Event.ControlClosed -> if (e.connectFailed) LogLine('W', "connect_fail") else LogLine('W', "control_closed")
             is SessionMachine.Event.ProtocolError -> LogLine('E', "protocol_error")
