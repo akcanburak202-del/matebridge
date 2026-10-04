@@ -70,7 +70,16 @@ Ori Oyun 60 (panel 120, n=2) ve Oyun 120, ~3 dk: `--ez stats_1s true --ez pace_t
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **İki `HoldMeter`, `VideoStats` içinde.** `holds` artık geri çağrı zaman damgalarını alır (`onRenderCallback(..., shownNs, periodNs)` -> `holds.onPresented(captureUs, cbNs, periodNs)`); `latchHolds` T-220'nin bırakma-anı modelini (`onReleased`) tanı olarak sürdürür. İkisi de `onDecoded` ile aynı içerik koşularını görür. Kural kümesi (koşu sürekliliği, n, kısa/uzun) aynı sınıftır, değişmez.
+2. **`skip_pct` kaynağı:** callback bir kez bildirildiyse `holds` (geri çağrı), hiç bildirilmediyse (codec geri çağrı vermiyor, testler) `latchHolds`; ikisi de yoksa eski geri dönüş. `Snapshot.skipPct`, `holdJudged/Short/Long` ve `render ev=present` `hold_*` alanları seçili kaynaktan gelir; pacer geri beslemesi (`onSkipWindow(s.skipPct)`) otomatik olarak geri çağrıdan beslenir. Yeni tanı: `Snapshot.latchSkipPct` ve `render ev=present` satırında `hold_src=cb|latch latch_skip_pct=`. (`MainActivity` kart dışı: `latch_skip_pct` yalnız `present` satırında, `render ev=stats` satırı değişmez.)
+3. **Geri çağrısı gelmeyen kare** (SF düşürdü): `onPresented` onu hiç görmez; sonraki gösterilen karenin koşusu önceki gösterilene uzandığı için önceki tutma n'den uzun çıkar (mevcut kural, yeni kod yok). `captureUs` bilinmiyorsa ya da zaman `Long.MAX_VALUE` ise dizi kesilir.
+4. **`PresentMeter`: kalır**, eşik `gap > cadence + P/2` (n=2'de 3-vsync boşluğunu görür); `cb_skip_pct` bu eşikle tanı olarak sürer. Hold kuralları ve koşular `HoldMeter`'dadır, `PresentMeter` yalnız ham boşluk.
+5. **`VideoRenderer`:** frame-rendered dinleyicisi `nanoTime` ve `vsync.periodNs`'yi `onRenderCallback`'e geçirir ve `trace?.onCallback(pts, nanoTime)` çağırır. Yeni kilit yok.
+6. **`PaceTrace`:** `cb_ns` sütunu (son), `onCallback(seq, ns)` son 64 satırda seq arar; CSV_COLS +1.
+7. **`tools/pacing/sim.py --holds`:** `cb_ns` varsa ve sıfırdan farklıysa onu kullanır (decode ve geri çağrı olayları zamana göre birleştirilir; geri çağrısı olmayan satır gösterilmemiş sayılır); `--latch` eski kaynağı zorlar. Self-test'e geri çağrı vektörü eklenir. README güncellenir.
+8. **Belge:** `docs/LOGGING.md` `skip_pct` / `cb_skip_pct` / `latch_skip_pct` / `hold_src` anlamları.
+9. **Testler** (`CallbackPresentationMetricTest`, `PresentRig` geri çağrı + bırakma gecikmesi seçenekleri): her kabul maddesi; ayrıca eski testler yeni `HoldCounts`/log biçimine uyarlanır.
+10. **Çevrimdışı doğrulama:** kayıtlı izlerde `cb_ns` yok; bırakılan slotları (kesim = slot) geri çağrı yerine koyarak ve cihaz loglarındaki `skip_pct`/`cb_skip_pct` ile karşılaştırarak Handoff'a yazılır.
 
 ## Handoff
 
