@@ -34,6 +34,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-203](tasks/T-203-client-palm-size-filter.md) | Contact-size palm filter | 6 | android-client-dev | [T-181] |
 | [T-216](tasks/T-216-game-display-measurement.md) | Device measurement: game display sizes vs native (decision 0029) | 6 | orchestrator | [T-214, T-215] |
 | [T-223](tasks/T-223-client-modes-daily-drawing-game.md) | Client — three modes (Günlük / Çizim / Oyun), per-mode frame rate setting, 2240×1472 game resolution | 6 | android-client-dev | [T-215, T-222] |
+| [T-224](tasks/T-224-host-single-instance.md) | Host — only one MateBridge instance may run (second instance exits) | 6 | mac-host-dev | [T-148] |
 
 ## done
 
