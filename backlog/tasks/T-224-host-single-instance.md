@@ -50,7 +50,7 @@ Cihaz 2026-10-04 ~12:15: Mac menü çubuğunda iki MateBridge simgesi. İki sür
 
 ## Handoff
 
-- **Commit:** (SHA aşağıda commit sonrası yazıldı; dal `task/T-224-host-single-instance`, plan commit'i + uygulama commit'i)
+- **Commit:** `c4a8d89` (plan commit before it), branch `task/T-224-host-single-instance`
 - **Dokunulan dosyalar:** `host-mac/Sources/MateBridgeCore/Session/SingleInstancePolicy.swift` (yeni), `host-mac/Tests/MateBridgeCoreTests/Session/SingleInstancePolicyTests.swift` (yeni, 9 test), `host-mac/Sources/MateBridgeApp/main.swift`, `host-mac/Resources/Info.plist` (`LSMultipleInstancesProhibited`), `docs/LOGGING.md`, bu kart. `LoginItem.swift` değişmedi.
 - **check.sh:** ALL OK.
 - **T-148 kayıt yolu (yalnız kod okuma):** ikinci kopya başlatmaz. `register` yalnızca `loginItemFirstRunDone` yokken ve durum `enabled/requiresApproval` değilken çağrılır, başarıda bayrak yazılır; `SMAppService.mainApp.register()` uygulamayı hemen başlatmaz, yalnız giriş öğesini kaydeder. Depoda KeepAlive LaunchAgent'ı da yok (T-202 todo). Bu yüzden kayıt koduna dokunulmadı. En olası neden `quit`+`open` yarışı / çift `open`; kesin kanıt cihazda aranabilir (iki `app_start` satırı, `second_instance` ile yakalanır).
