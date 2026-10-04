@@ -10,6 +10,8 @@ files:
   - host-mac/Sources/MateBridgeHost/VirtualDisplay.swift
   - host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift
   - host-mac/Sources/MateBridgeHost/Video/
+  - host-mac/Sources/MateBridgeCore/Video/VirtualDisplayTransfer.swift
+  - host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift
   - host-mac/Tests/
   - docs/KNOBS.md
   - docs/LOGGING.md
@@ -50,14 +52,15 @@ T-226 araştırmasının (docs/research/2026-10-04-hdr-feasibility.md, "kart A")
 6. **Belgeler:** `docs/KNOBS.md` yeni host satırı (yalnızca geliştirici, varsayılan 0, T-232; kaldıran/benimseyen kart: HDR akış kartı B ya da cihaz sonucu olumsuzsa kaldır); `docs/LOGGING.md` `ev=vd_transfer` alanları.
 7. `./scripts/check.sh`, Handoff, `status: review`.
 
-**Durum (2026-10-05, ajan):** Plan yazıldı; kodlamaya başlanmadı. Kapsam sorusu nedeniyle durdu, bkz. *Açık sorular*.
+**Durum (2026-10-05, ajan):** Plan yazıldı. Kapsam sorusu orkestratörce onaylandı (aşağı), uygulama başladı.
 
 ## Açık sorular
 
 1. **`files:` listesinde MateBridgeCore yok.** Kabul kriteri "[XCTest] knob ayrıştırma ve geri dönüş kararı saf fonksiyon olarak test edilir" diyor; ancak tek test hedefi `MateBridgeCoreTests` yalnız `MateBridgeCore`'a bağlı (`Package.swift`), yani `MateBridgeHost` içindeki bir fonksiyon test edilemez. Ayrıca "host `knobs=` profil alanı" düzenine uymak `StreamProfileLog.knobAllowList`'i (`host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift`) değiştirmeyi gerektiriyor. Önerilen ek dosyalar:
    - `host-mac/Sources/MateBridgeCore/Video/VirtualDisplayTransfer.swift` (yeni, saf mantık)
    - `host-mac/Sources/MateBridgeCore/Video/EncoderKnobs.swift` (yalnız allow-list'e bir satır)
-   Onaylanırsa yukarıdaki plan aynen uygulanır. (Alternatif `Package.swift`'e `MateBridgeHostTests` hedefi eklemek; daha büyük değişiklik, önermiyorum.)
+   Onaylanırsa yukarıdaki plan aynen uygulanır.
+   **Cevap (orkestratör, 2026-10-05):** onaylandı; iki dosya `files:` listesine eklendi (`EncoderKnobs.swift` yalnız allow-list satırı). (Alternatif `Package.swift`'e `MateBridgeHostTests` hedefi eklemek; daha büyük değişiklik, önermiyorum.)
 
 ## Handoff
 
