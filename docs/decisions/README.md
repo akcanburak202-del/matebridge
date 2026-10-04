@@ -42,7 +42,7 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0018 | Tablet tarafında güven onayı ve yalnızca kullanıcının başlattığı eşleşme | kabul |
 | 0019 | Girdi yalnızca görüntü sağlıklıyken açık | kabul |
 | 0020 | Sanal ekranın ömrü oturumdan ayrılır (bekletilen ekran) | önerildi |
-| 0021 | `capture_time_us`'in anlamı ve gecikme sayıları | ilke olarak kabul |
+| 0021 | `capture_time_us`'in anlamı ve gecikme sayıları | kabul (A) |
 | 0022 | Birleştirme kapısı olarak GitHub Actions CI | kabul |
 | 0023 | Wi-Fi tıkanıklığı TCP üzerinde çözülür: önce sabit Wi-Fi profili, gerekirse uçuştaki bayt bütçesi ve canlı bit hızı | önerildi (düşük öncelik) |
 | 0024 | Wi-Fi'de kalem örneklerini zamana yayma (deneysel, sınırlı) | önerildi (park) |

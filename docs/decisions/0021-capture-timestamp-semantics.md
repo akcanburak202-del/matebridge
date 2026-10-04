@@ -1,6 +1,6 @@
 # 0021 — `capture_time_us`'in anlamı ve gecikme sayıları
 
-- **Durum:** ilke olarak kabul (2026-10-03); A/B seçimi T-170 verisiyle
+- **Durum:** kabul (2026-10-04) — **seçenek A**
 - **Tarih:** 2026-10-03
 
 ## Bağlam
@@ -46,7 +46,8 @@ Kaynak: host `ev=latency` satırları, `pts_vs_deliv_ms_p1_50_99` (T-170), `~/Li
 
 - **Pencere içi yayılım (p99 − p1):** p50 5,5 ms, p90 14,8 ms, p99 16,6 ms, en çok 21,6 ms. Yalnız pencerelerin %20'sinde < 1 ms.
 - **Pencere p50'si iki kümede:** ~7–8 ms ve ~14–15 ms (yaklaşık bir ve iki 120 Hz periyodu). Sanal ekranın 60/120 Hz olmasıyla açıkça ayrışmıyor.
-- **Sonuç:** kayma sabit değil; kararın kuralına göre (p99 − p1 < 1 ms koşulu tutmuyor) **(B) yeniden önerilir**. Kullanıcı seçimi bekleniyor.
+- **Sonuç:** kayma sabit değil; kararın kuralına göre (p99 − p1 < 1 ms koşulu tutmuyor) (B) yeniden önerildi.
+- **Kullanıcı kararı (2026-10-04): A.** Gerekçe (orkestratör önerisi): sayı yalnız tanı amaçlı; pacing, ses/görüntü eşlemesi ve kare zamanlaması etkilenmiyor; gerçek uçtan uca gecikmeyi optik ölçüm (T-174) verecek; bir tanı sayısı için tel değişikliği değmez. Tablet sayıları "capture-stamp→…" anlamında kalır; analizde aynı pencerelerin host `pts_vs_deliv` değeri eklenir (sabit bir sayı değil). T-174 tablet sayısıyla optik ölçüm arasında kullanılamaz bir fark gösterirse B yeniden açılır.
 - Metin düzeltmeleri (§0x22, §6, §4, LOGGING) seçenekten bağımsız olarak yapıldı.
 
 ## Sonuçlar

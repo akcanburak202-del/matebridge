@@ -7,7 +7,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
-| [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 
 ## todo
 
@@ -207,6 +206,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-169](tasks/T-169-client-refresh-target-log.md) | Log target and real refresh separately; warn on a mismatch | 6 | android-client-dev | [T-168] |
 | [T-170](tasks/T-170-host-latency-trace-join.md) | Make the host latency CSV joinable with the tablet trace; fix labels | 6 | mac-host-dev | [T-162] |
 | [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
+| [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 | [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |

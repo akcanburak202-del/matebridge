@@ -1,7 +1,7 @@
 ---
 id: T-172
 title: Record decision 0021 and correct the latency and late-input prose
-status: in-progress
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-170]
@@ -56,11 +56,11 @@ Source: external architecture review 2026-10-03 (H05, LM4, M04); verification: d
 
 ## Kabul kriterleri
 
-- [ ] [doc] `docs/decisions/0021-capture-timestamp-semantics.md` is recorded with the T-170 `pts_vs_deliv` p1/p50/p99 data and the chosen option, accepted by the user; `docs/decisions/README.md` has the row.
-- [ ] [doc] PROTOCOL §0x22 `latency_avg_us` and the §6 formula say "decoder output" (capture stamp → decoder output, clock-corrected estimate), not "ekranda gösterim". No byte changes.
-- [ ] [doc] PROTOCOL §4 "Kabul edilen davranış" states that the real late-input bound is the host's 5 s silence close (§6), not the 1 s client queue, and that late complete clicks/keys/strokes can replay after a 1.5–5 s stall.
-- [ ] [doc] LOGGING.md notes that tablet `latency_us`/`cap_dec_*` exclude the SCK lead (~6.6 ms, host `pts_vs_deliv`) and pacing, and that macOS `unacked_bytes` should be read as `sbbytes` when cwnd ≫ sbbytes.
-- [ ] `python3 protocol/fixtures/gen.py --check` is green.
+- [x] [doc] `docs/decisions/0021-capture-timestamp-semantics.md` is recorded with the T-170 `pts_vs_deliv` p1/p50/p99 data and the chosen option, accepted by the user; `docs/decisions/README.md` has the row.
+- [x] [doc] PROTOCOL §0x22 `latency_avg_us` and the §6 formula say "decoder output" (capture stamp → decoder output, clock-corrected estimate), not "ekranda gösterim". No byte changes.
+- [x] [doc] PROTOCOL §4 "Kabul edilen davranış" states that the real late-input bound is the host's 5 s silence close (§6), not the 1 s client queue, and that late complete clicks/keys/strokes can replay after a 1.5–5 s stall.
+- [x] [doc] LOGGING.md notes that tablet `latency_us`/`cap_dec_*` exclude the SCK lead (~6.6 ms, host `pts_vs_deliv`) and pacing, and that macOS `unacked_bytes` should be read as `sbbytes` when cwnd ≫ sbbytes.
+- [x] `python3 protocol/fixtures/gen.py --check` is green.
 - [ ] **Only if option B:** fixture `video_frame_origin` added, both fixture tests pass, two follow-up cards (host + client) created; `./scripts/check.sh` geçiyor.
 
 ## Plan
@@ -73,8 +73,8 @@ Source: external architecture review 2026-10-03 (H05, LM4, M04); verification: d
 
 _(Ajan bitirince doldurur.)_
 
-- **Commit:**
-- **Dokunulan dosyalar:**
+- **Commit:** 1144cfc (metin + veri), bu commit (karar A)
+- **Dokunulan dosyalar:** docs/PROTOCOL.md (§0x22, §4, §6), docs/LOGGING.md, docs/decisions/0021, docs/decisions/README.md
 - **Varsayımlar:**
 - **Test edilmeyenler / cihazda doğrulanacaklar:**
 - **Açık sorular:**
