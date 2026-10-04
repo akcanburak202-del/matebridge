@@ -2,17 +2,22 @@
 
 _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 
+## in-progress
+
+| ID | Başlık | Aşama | Sahip | Bağımlılık |
+|---|---|---|---|---|
+| [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
+| [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
+
 ## todo
 
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-127](tasks/T-127-wifi-video-burst-pacing.md) | Measure the Wi-Fi baseline across three topologies before any congestion code | 6 | orchestrator | [T-126, T-168, T-170, T-173] |
-| [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
 | [T-157](tasks/T-157-trust-device-acceptance.md) | Run the trust-transition device acceptance (X1) | 6 | orchestrator | [T-150, T-151, T-152, T-153, T-154, T-155, T-156, T-205] |
 | [T-164](tasks/T-164-video-fault-churn-device-run.md) | Run decoder fault injection and the surface-churn soak on the tablet | 6 | orchestrator | [T-159, T-161] |
 | [T-166](tasks/T-166-parked-display-measurement.md) | Measure parked-display behaviour across sleep, lock and long outages | 6 | user | [T-165, T-147] |
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
-| [T-172](tasks/T-172-latency-semantics-docs.md) | Record decision 0021 and correct the latency and late-input prose | 6 | orchestrator | [T-170] |
 | [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
 | [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
