@@ -378,31 +378,28 @@ def merged_header(args, derived):
 # ---------------------------------------------------------------------------------------------------------------
 # CLI
 
-def _lines_with_deadline(stream, seconds):
-    """Lines of `stream` until EOF or until `seconds` have passed (select-based, works on pipes and fifos)."""
-    if seconds is None:
-        for line in stream:
-            yield line
-        return
-    deadline = time.monotonic() + seconds
-    fd = stream.fileno()
+def _raw_lines(fd, seconds=None):
+    """Raw byte lines of file descriptor `fd` until EOF, or until `seconds` have passed (select-based, works on pipes
+    and fifos). The last line may lack its newline."""
+    deadline = None if seconds is None else time.monotonic() + seconds
     buf = b''
     while True:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            return
-        r, _, _ = select.select([fd], [], [], left)
-        if not r:
-            return
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            r, _, _ = select.select([fd], [], [], left)
+            if not r:
+                return
         chunk = os.read(fd, 65536)
         if not chunk:
             if buf:
-                yield buf.decode('utf-8', 'replace')
+                yield buf
             return
         buf += chunk
         while b'\n' in buf:
             line, buf = buf.split(b'\n', 1)
-            yield line.decode('utf-8', 'replace') + '\n'
+            yield line + b'\n'
 
 
 def main(argv=None):
@@ -414,13 +411,14 @@ def main(argv=None):
     f.add_argument('--skip-first', type=int, default=0, help='drop the first N non-divider input lines')
     f.add_argument('--agp', action='store_true', help='also keep Huawei AGP lcd fps / touch numbers (tablet)')
     f.add_argument('--events', action='store_true', help='only stability event names (soak counts), no fields')
+    f.add_argument('--bytes-to', help='write the number of input bytes read to this file (transfer check)')
     a = ap.parse_args(argv)
     side = 'T' if a.side == 'tablet' else 'H'
-    stream = sys.stdin
     skip = a.skip_first
-    src = _lines_with_deadline(stream.buffer if hasattr(stream, 'buffer') else stream, a.seconds) \
-        if a.seconds is not None else stream
-    for line in src:
+    nbytes = 0
+    for raw in _raw_lines(sys.stdin.fileno(), a.seconds):
+        nbytes += len(raw)
+        line = raw.decode('utf-8', 'replace')
         if skip > 0 and not line.startswith('---------'):
             skip -= 1
             continue
@@ -428,6 +426,9 @@ def main(argv=None):
         if out:
             sys.stdout.write(out + '\n')
             sys.stdout.flush()
+    if a.bytes_to:
+        with open(a.bytes_to, 'w') as fh:
+            fh.write('%d\n' % nbytes)
     return 0
 
 

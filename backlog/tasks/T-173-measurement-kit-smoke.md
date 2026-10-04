@@ -13,6 +13,11 @@ files:
   - docs/WORKFLOW.md
   - docs/NOTES.md
   - backlog/tasks/T-173-measurement-kit-smoke.md
+  # added after review, approved by the orchestrator (2026-10-04): selftest in check.sh, __pycache__ ignore,
+  # LOGGING skip_pct line fix
+  - scripts/check.sh
+  - .gitignore
+  - docs/LOGGING.md
 ---
 
 ## Amaç
@@ -78,7 +83,7 @@ Riskler: tablet düğüm yolları (`lcd_fps_scence`, termal bölge adları, `med
 
 ## Handoff
 
-- **Commit:** `51ee3ee` (uygulama; plan `5622d95`). `./scripts/check.sh` ALL OK; `tools/measure/selftest.sh` ALL OK.
+- **Commit:** `ba56260` (uygulama; plan `8d1b680`; main'e rebase sonrası SHA'lar), inceleme düzeltmeleri ayrı commit (aşağıda). `./scripts/check.sh` ALL OK; `tools/measure/selftest.sh` ALL OK.
 - **Dokunulan dosyalar:** `scripts/device-smoke.sh`; `tools/measure/` (`mblog.py`, `smoke.py`, `mbmon.sh`, `an.py`, `macmon.sh`, `macan.py`, `selftest.sh`, `README.md`, `testdata/` yalnız sentetik sayısal dosyalar); `tools/soak/` (`tablet-soak.sh`, `host-soak.sh`, `summarize.py`, `README.md`); `docs/WORKFLOW.md` ("Ölçüm" paragrafı); bu kart. `docs/NOTES.md`'ye dokunulmadı (cihaz çıktıları orkestratörün işi).
 - **Varsayımlar:**
   - Eski araçlar hiçbir yerde yok (`~/.cache/matebridge-tools/` ve scratchpad'ler tarandı); NOTES tariflerinden ve LOGGING.md + kaynak koddaki satır biçimlerinden yeniden yazıldı.
@@ -95,8 +100,13 @@ Riskler: tablet düğüm yolları (`lcd_fps_scence`, termal bölge adları, `med
   - `dumpsys meminfo` "TOTAL PSS:" satırı.
   - Gerçek `top -l 2` ve `ioreg` çıktısında `macmon.sh` ayrıştırması. Biçim yerelde bir kez salt okunur kontrol edildi, örnekleyici koşturulmadı.
   - logcat halkası döndüyse `apk_sha` `-` çıkar. README'de anlatıldı.
+- **Codex incelemesi sonrası (5 × P2, aynı dal, main'e — T-225 dahil — rebase edildi):**
+  1. `tablet-soak.sh pull`: iki aktarım da tabletteki bayt sayısıyla doğrulanıyor (olaylar için `mblog.py filter --bytes-to`). Sonuçlar `.part` + `mv` ile yazılıyor. Tablet dosyaları yalnız ikisi de başarılıysa siliniyor. Selftest: kesik aktarım başarısız oluyor, hiçbir şey silinmiyor, yarım dosya kalmıyor; tam aktarım siliyor.
+  2. `tablet-soak.sh stop`: stop dosyası örnekleyicinin çıktığı görülene kadar kalıyor (30 s'den sonra "tekrar stop" uyarısı, dosya yerinde). Örnekleyici çıkarken dosyayı kendisi siler.
+  3. `mbmon.sh`: ölçülemeyen değer artık `-`, sıfır değil: okunamayan pid grubu (`t_*`), başarısız ya da boş `run-as`/`ls` fd listesi, okunamayan thread adları (önce doğrudan, sonra `run-as` ile uygulama kimliğiyle), boş `dumpsys`, okunamayan frekans/sıcaklık. `summarize.py` `threads=-` örneklerini önek gruplarında sıfır saymıyor. Selftest: izinsiz fd/comm → `fds=- threads=-`, olmayan grup → `t_codec=-`.
+  4. `macmon.sh`: `top -n 5000` (tüm süreçler). İzlenen süreç çalışmıyorsa `cpu_<ad>=-`, top başarısızsa `top_other_cpu=-`. Selftest `--proc Absent` → `-`.
+  5. `macan.py`: dilim için ofsetlerin azalmadığı, `hl_ino` (macmon artık yazıyor) tek ve geçerli dosyanınkiyle aynı olduğu ve dosyanın yeterince uzun olduğu kontrol ediliyor; değilse nedenli uyarı. Selftest: geri giden ofset ve başka inode.
+  - Onaylanan ek dosyalar: `scripts/check.sh` selftest'i tam koşuda çağırıyor (yalnız macOS'ta; Linux CI'da SKIP, araçlar BSD `stat`/`top` kullanıyor; hata olunca yalnız başarısız satırlar basılıyor). `.gitignore`'a `__pycache__/`. `docs/LOGGING.md`: `skip_pct` `render ev=stats` satırında (T-225 metni korundu).
+  - Commit: bu Handoff güncellemesiyle aynı commit (aşağıdaki `git log`). `./scripts/check.sh` ALL OK (selftest dahil).
 - **Açık sorular:**
-  - `scripts/check.sh` `tools/measure/selftest.sh`'yi çağırmıyor (dosya kartta yok). Eklenmeli mi? Selftest ~10 s sürüyor, cihaz ve ağ istemiyor.
-  - `.gitignore`'da `__pycache__` yok. Araçlar `sys.dont_write_bytecode` ile önbellek yazmıyor, ama bir satır eklemek iyi olur.
-  - LOGGING.md `skip_pct`'yi `decoder ev=stats`'ta gösteriyor; kodda alan `render ev=stats`'ta (`MainActivity.writeStatsLog`). Araçlar doğru satırı okuyor; LOGGING düzeltmesi orkestratörün kararı.
-  - İstemci `migrate_request` satırı uç nokta IP'sini logluyor (`host=`). Filtre bu satırı atıyor, ama AGENTS/LOGGING gizlilik kuralı açısından bakılmalı (ilgisiz kod, dokunulmadı).
+  - İstemci `migrate_request` satırı uç nokta IP'sini logluyor (`host=`); filtre atıyor. Orkestratör ayrıca not edecek.

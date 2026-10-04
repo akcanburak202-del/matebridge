@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mblog  # noqa: E402
 import smoke  # noqa: E402
 
-SKIP = {'ep', 'dt', 'hl_off', 'pid'}
+SKIP = {'ep', 'dt', 'hl_off', 'hl_ino', 'pid'}
 
 
 def load(path):
@@ -32,19 +32,30 @@ def load(path):
     return rows
 
 
-def host_slice(path, start, end):
-    if not path or start is None or end is None:
-        return None
+def host_slice(path, rows):
+    """(records, None) for the host.log bytes between the window's first and last hl_off, or (None, reason) when
+    the offsets cannot describe one slice of this file: missing, going backwards (rotation), past its end, or
+    recorded on another file (inode)."""
+    offs = [mblog.fnum(r, 'hl_off') for r in rows]
+    if any(o is None for o in offs):
+        return None, 'no hl_off in the samples'
+    if any(b < a for a, b in zip(offs, offs[1:])):
+        return None, 'hl_off went backwards (host.log rotated during the window)'
     try:
-        size = os.path.getsize(path)
+        st = os.stat(path)
     except OSError:
-        return None
-    if size < end:
-        return None
+        return None, 'cannot read %s' % path
+    inos = {r.get('hl_ino') for r in rows} - {None, '-'}
+    if len(inos) > 1:
+        return None, 'host.log changed files during the window (rotated)'
+    if inos and inos != {str(st.st_ino)}:
+        return None, 'samples were taken on another host.log file (rotated since)'
+    if st.st_size < offs[-1]:
+        return None, 'host.log is shorter than the recorded offset (rotated or truncated)'
     with open(path, 'rb') as fh:
-        fh.seek(int(start))
-        data = fh.read(int(end - start)).decode('utf-8', 'replace')
-    return mblog.read_records(data.splitlines(), side='H')
+        fh.seek(int(offs[0]))
+        data = fh.read(int(offs[-1] - offs[0])).decode('utf-8', 'replace')
+    return mblog.read_records(data.splitlines(), side='H'), None
 
 
 def block(idx, rows, t0, host_log):
@@ -71,9 +82,9 @@ def block(idx, rows, t0, host_log):
         changes = sum(1 for x, y in zip(pids, pids[1:]) if x != y)
         out.append('  MateBridgeApp pid changes (restarts): %d' % changes)
     if host_log:
-        recs = host_slice(host_log, mblog.fnum(rows[0], 'hl_off'), mblog.fnum(rows[-1], 'hl_off'))
+        recs, why = host_slice(host_log, rows)
         if recs is None:
-            out.append('  host.log: slice unavailable (rotated, or no hl_off)')
+            out.append('  host.log: slice unavailable: %s' % why)
         else:
             out.extend('  ' + line for line in smoke.summary(recs, [], sides=('H',)))
     return out

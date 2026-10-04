@@ -3,8 +3,8 @@
 #
 #   default (5 s): system CPU (user/sys/idle %), GPU utilisation (ioreg IOAccelerator: device/renderer/tiler %),
 #                  %CPU of MateBridgeApp, WindowServer, kernel_task and every --proc name, and the busiest other
-#                  process's %CPU without its name (top_other_cpu). hl_off= is the host.log size, so macan.py can
-#                  cut the matching host.log slice.
+#                  process's %CPU without its name (top_other_cpu); "-" = not running. hl_off=/hl_ino= are the
+#                  host.log size and inode, so macan.py can cut the matching host.log slice.
 #   --soak:        adds MateBridgeApp pid, instance count, RSS (KB), open files (lsof) and threads (ps -M), and how
 #                  many of these host.log events appeared since the previous sample: pipeline_retry, input_release,
 #                  session_started, display_recreate, app_start, keyframe_request.
@@ -37,20 +37,25 @@ size_of() { stat -f %z "$1" 2>/dev/null || echo 0; }
 
 # One sample of top: blocks for $interval seconds and prints "cpu_user=.. cpu_sys=.. cpu_idle=.. cpu_<proc>=.. top_other_cpu=.."
 top_fields() {
-  top -l 2 -s "$interval" -n 15 -o cpu -stats pid,cpu,command 2>/dev/null | awk -v procs="$procs" '
+  # Every process (-n 5000), not the top N: a tracked process outside the busiest few must not read as 0 %.
+  top -l 2 -s "$interval" -n 5000 -o cpu -stats pid,cpu,command 2>/dev/null | awk -v procs="$procs" '
     BEGIN { n = split(procs, p, "|"); for (i = 1; i <= n; i++) { want[p[i]] = 1; cpu[p[i]] = 0 } }
     /^Processes:/ { snap++; hdr = 0; next }
     snap == 2 && /^CPU usage:/ { gsub("%", ""); u = $3; s = $5; idl = $7; next }
     snap == 2 && /^ *PID/ { hdr = 1; next }
     snap == 2 && hdr && NF >= 3 {
       cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
-      if (cmd in want) cpu[cmd] += $2
+      if (cmd in want) { cpu[cmd] += $2; seen[cmd] = 1 }
       else if (cmd != "top" && $2 + 0 > other) other = $2 + 0
     }
     END {
+      # a tracked process that is not running prints "-", not 0.0; so does everything when top failed
       printf "cpu_user=%s cpu_sys=%s cpu_idle=%s", (u == "" ? "-" : u), (s == "" ? "-" : s), (idl == "" ? "-" : idl)
-      for (i = 1; i <= n; i++) { k = p[i]; gsub(/[^A-Za-z0-9_]/, "_", k); printf " cpu_%s=%.1f", k, cpu[p[i]] }
-      printf " top_other_cpu=%.1f", other
+      for (i = 1; i <= n; i++) {
+        k = p[i]; gsub(/[^A-Za-z0-9_]/, "_", k)
+        if (p[i] in seen) printf " cpu_%s=%.1f", k, cpu[p[i]]; else printf " cpu_%s=-", k
+      }
+      if (hdr) printf " top_other_cpu=%.1f", other; else printf " top_other_cpu=-"
     }'
 }
 
@@ -101,9 +106,9 @@ emit "# macmon v1 interval=$interval soak=$soak procs=$(echo "$procs" | tr '| ' 
 start=$(date +%s) samples=0
 trap 'exit 0' INT TERM
 while :; do
-  hl=$(size_of "$HOSTLOG")
+  hl=$(size_of "$HOSTLOG"); hl_ino=$(stat -f %i "$HOSTLOG" 2>/dev/null || echo -)
   t=$(top_fields)          # takes $interval seconds
-  line="ep=$(date +%s) dt=$interval $t $(gpu_fields) hl_off=$hl"
+  line="ep=$(date +%s) dt=$interval $t $(gpu_fields) hl_off=$hl hl_ino=$hl_ino"
   if [ $soak -eq 1 ]; then soak_fields; line="$line $soak_line"; fi
   emit "$line"
   samples=$((samples + 1))

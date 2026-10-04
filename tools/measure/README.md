@@ -110,7 +110,8 @@ python3 tools/measure/an.py ~/mb-measure/mbmon.txt --log ~/mb-measure/cap.txt --
 
 `mbmon.txt` perf line: `ep= up= gen= cpu_total= cpu_idle= t_client= t_sf= t_codec= t_hal= t_adbd= t_logd=
 f_cpu<policy>= (kHz) f_gpu= (Hz) temp_<zone>= (m°C) panel_hz=`. `gen` changes when a process group's pids
-change; `an.py` takes no tick delta across it.
+change; `an.py` takes no tick delta across it. In every sampler `-` means "could not be measured" (process absent,
+node unreadable, command failed), never zero.
 
 ### 3. Mac CPU / GPU (macmon.sh + macan.py)
 

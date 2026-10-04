@@ -62,6 +62,20 @@ MBMON_ROOT="$F" MBMON_STOP="$F/out/stop" MBMON_PIDS='P_client=101 P_sf=202' \
 expect "perf ticks (comm with a space)" "$F/out/mbmon.txt" "t_client=300 t_sf=50"
 expect "perf freq/temp/panel" "$F/out/mbmon.txt" "f_cpu0=1800000 f_gpu=840000000 temp_soc_thermal=37500 panel_hz=120"
 expect "soak fds and thread groups" "$F/out/mbsoak.txt" "fds=2 threads=3 thr_Binder=1 thr_mb-ctl-read=2"
+expect "perf: missing process group is -, not 0" "$F/out/mbmon.txt" "t_codec=- t_hal=-"
+# A client whose fd dir and thread names cannot be read (no run-as here): unavailable, not zero.
+mkdir -p "$F/proc/303/task/1" "$F/proc/303/fd"
+echo 'mb-video-1' >"$F/proc/303/task/1/comm"
+touch "$F/proc/303/fd/0"
+chmod 000 "$F/proc/303/fd" "$F/proc/303/task/1/comm"
+MBMON_ROOT="$F" MBMON_STOP="$F/out/stop" MBMON_PIDS='P_client=303' \
+  sh "$HERE/mbmon.sh" --soak --interval 1 --seconds 1 --out "$F/out/mbsoak_denied.txt"
+chmod 755 "$F/proc/303/fd"; chmod 644 "$F/proc/303/task/1/comm"
+if [ "$(id -u)" = 0 ]; then
+  ok "unreadable fds/threads (skipped: root reads everything)"
+else
+  expect "unreadable fds/threads are -" "$F/out/mbsoak_denied.txt" "pid=303 pss_kb=- codec_res=- fds=- threads=-"
+fi
 
 echo "==> an.py"
 python3 "$HERE/an.py" "$TD/mbmon.txt" --log "$TD/tablet_logcat.txt" --window 15 >"$tmp/an.txt"
@@ -134,14 +148,56 @@ chmod +x "$B"/*
 : >"$tmp/logs/host.log"
 
 echo "==> macmon.sh + macan.py (stubs)"
-PATH="$B:$PATH" MB_HOST_LOG_DIR="$tmp/logs" bash "$HERE/macmon.sh" --interval 1 --count 2 --soak --proc 'Some Game' \
+PATH="$B:$PATH" MB_HOST_LOG_DIR="$tmp/logs" bash "$HERE/macmon.sh" --interval 1 --count 2 --soak --proc 'Some Game' --proc Absent \
   --out "$tmp/macmon.txt"
-expect "top fields" "$tmp/macmon.txt" "cpu_user=10.5 cpu_sys=4.5 cpu_idle=85.0 cpu_MateBridgeApp=12.3 cpu_WindowServer=20.0 cpu_kernel_task=1.5 cpu_Some_Game=55.5 top_other_cpu=0.0"
+expect "top fields" "$tmp/macmon.txt" "cpu_user=10.5 cpu_sys=4.5 cpu_idle=85.0 cpu_MateBridgeApp=12.3 cpu_WindowServer=20.0 cpu_kernel_task=1.5 cpu_Some_Game=55.5 cpu_Absent=- top_other_cpu=0.0"
 expect "gpu fields" "$tmp/macmon.txt" "gpu_dev=54 gpu_ren=50 gpu_til=10"
 expect "soak fields" "$tmp/macmon.txt" "pid=26019 instances=1 rss_kb=68464 fds=40 threads=8 ev_pipeline_retry=1 ev_input_release=2"
 python3 "$HERE/macan.py" "$tmp/macmon.txt" --host-log "$tmp/logs/host.log" >"$tmp/macan.txt"
 expect "macan sampler field" "$tmp/macan.txt" "cpu_MateBridgeApp 12.3 12.3 12.3"
 expect "macan host.log slice" "$tmp/macan.txt" "host video latency enc_ms.p50 1 7.00 7.00 7.00"
+ino=$(stat -f %i "$tmp/logs/host.log")
+printf 'ep=100 dt=5 cpu_user=1.0 hl_off=500 hl_ino=%s\nep=105 dt=5 cpu_user=1.0 hl_off=100 hl_ino=%s\n' "$ino" "$ino" \
+  >"$tmp/macmon_rot.txt"
+python3 "$HERE/macan.py" "$tmp/macmon_rot.txt" --host-log "$tmp/logs/host.log" >"$tmp/macan_rot.txt"
+expect "macan: offsets going backwards" "$tmp/macan_rot.txt" "slice unavailable: hl_off went backwards"
+printf 'ep=100 dt=5 cpu_user=1.0 hl_off=0 hl_ino=1\nep=105 dt=5 cpu_user=1.0 hl_off=100 hl_ino=1\n' >"$tmp/macmon_ino.txt"
+python3 "$HERE/macan.py" "$tmp/macmon_ino.txt" --host-log "$tmp/logs/host.log" >"$tmp/macan_ino.txt"
+expect "macan: another host.log file" "$tmp/macan_ino.txt" "slice unavailable: samples were taken on another host.log file"
+
+echo "==> tablet-soak.sh pull (adb stub)"
+grep -E 'ev=(give_up|release_all)' "$TD/tablet_logcat.txt" >"$tmp/ev_raw.txt"
+cat >"$B/adb_soak" <<EOF
+#!/bin/bash
+case "\$*" in
+  get-state) echo device ;;
+  "shell getprop ro.product.brand") echo HUAWEI ;;
+  shell*pgrep*) : ;;
+  shell*wc*mbsoak_events.txt*) wc -c <"$tmp/ev_raw.txt" ;;
+  shell*wc*mbsoak.txt*) wc -c <"$TD/tablet_soak.txt" ;;
+  "exec-out cat /data/local/tmp/mbsoak_events.txt")
+    if [ -n "\${TRUNC:-}" ]; then head -c 100 "$tmp/ev_raw.txt"; else cat "$tmp/ev_raw.txt"; fi ;;
+  "exec-out cat /data/local/tmp/mbsoak.txt") cat "$TD/tablet_soak.txt" ;;
+  shell\ rm*) echo "\$*" >>"$tmp/adb_rm.log" ;;
+  *) echo "adb stub: unexpected \$*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$B/adb_soak"
+if TRUNC=1 ADB="$B/adb_soak" bash "$ROOT/tools/soak/tablet-soak.sh" pull "$tmp/pull" >/dev/null 2>&1; then
+  bad "truncated pull must fail"
+elif [ -e "$tmp/adb_rm.log" ] || [ -e "$tmp/pull/tablet-soak.txt" ] || [ -n "$(ls -A "$tmp/pull")" ]; then
+  bad "truncated pull deleted tablet files or left output"
+else
+  ok "truncated pull fails, deletes nothing, leaves no partial files"
+fi
+if ADB="$B/adb_soak" bash "$ROOT/tools/soak/tablet-soak.sh" pull "$tmp/pull" >/dev/null 2>&1 &&
+   [ -s "$tmp/adb_rm.log" ]; then
+  ok "complete pull deletes the tablet files"
+else
+  bad "complete pull"
+fi
+expect "pulled samples" "$tmp/pull/tablet-soak.txt" "thr_mb-ctl-read=2"
+expect "pulled events are names only" "$tmp/pull/tablet-events.txt" "decoder give_up"
 
 echo "==> device-smoke.sh (adb stub, temp host.log)"
 cp "$TD/host_log.txt" "$tmp/logs/host.log"

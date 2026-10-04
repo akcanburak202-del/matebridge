@@ -54,6 +54,13 @@ def thread_groups(row):
     return g
 
 
+def group_count(row, group):
+    """Threads of `group` in one sample; None when the sample could not read thread names (threads=-)."""
+    if mblog.fnum(row, 'threads') is None:
+        return None
+    return thread_groups(row).get(group, 0)
+
+
 def mean(xs):
     xs = [x for x in xs if x is not None]
     return sum(xs) / len(xs) if xs else None
@@ -116,7 +123,7 @@ def main(argv=None):
         vals = [hr, len(hs), m(hs, 'rss_kb', 1024.0), m(hs, 'fds'), m(hs, 'threads'),
                 max([mblog.fnum(r, 'instances') or 0 for r in hs], default=None),
                 len(ts), m(ts, 'pss_kb', 1024.0), m(ts, 'fds'), m(ts, 'threads'), m(ts, 'codec_res')]
-        vals += [mean([thread_groups(r).get(g, 0) for r in ts]) if ts else None for g in groups]
+        vals += [mean([group_count(r, g) for r in ts]) if ts else None for g in groups]
         vals += [int(sum(mblog.fnum(r, e) or 0 for r in hs)) if hs else None for e in host_ev]
         vals += [b['ev'].get(e, 0) for e in tab_ev]
         table.append([mblog.fmt(v, 1) if isinstance(v, float) else ('-' if v is None else str(v)) for v in vals])
@@ -146,7 +153,7 @@ def main(argv=None):
         ('tablet codec lines /h', pts(tab, 'codec_res')),
     ]
     for g in groups:
-        series.append(('tablet thr %s /h' % g, pts(tab, None, getter=lambda r, g=g: thread_groups(r).get(g, 0))))
+        series.append(('tablet thr %s /h' % g, pts(tab, None, getter=lambda r, g=g: group_count(r, g))))
     for name, p in series:
         ys = [y for _, y in p if y is not None]
         out.append('%-28s %10s   (n=%d, first %s, last %s)' % (

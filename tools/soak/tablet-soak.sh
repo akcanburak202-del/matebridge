@@ -65,13 +65,15 @@ case $cmd in
   stop)
     device
     "$ADB" shell "touch $D/mbmon.stop"
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
       [ "$(running)" = yes ] || break
       sleep 1
     done
+    # The stop file stays until the sampler is gone (it removes the file itself on exit); deleting it early would
+    # let a sampler that is slow to see it run on forever.
+    [ "$(running)" = yes ] && die "sampler still running after 30 s; the stop file stays in place, run stop again"
     # The event logcat is the sampler's child; clear a leftover one (sampler killed hard).
     "$ADB" shell "pkill -f '[l]ogcat.*mbsoak_events' 2>/dev/null; rm -f $D/mbmon.stop" >/dev/null 2>&1
-    [ "$(running)" = yes ] && die "sampler still running after 15 s"
     echo "tablet-soak: stopped"
     ;;
   pull)
@@ -80,11 +82,25 @@ case $cmd in
     keep=0; [ "${1:-}" = --keep ] && keep=1
     device
     [ "$(running)" = yes ] && die "stop the sampler before pulling"
-    mkdir -p "$dir"
-    # Samples are numeric key=value lines by construction; event lines keep only their names (no fields).
-    "$ADB" exec-out cat "$SAMPLES" | grep -E '^(# mbmon|ep=)' >"$dir/tablet-soak.txt"
-    "$ADB" exec-out cat "$EVENTS" 2>/dev/null | python3 "$M/mblog.py" filter --side tablet --events \
-      >"$dir/tablet-events.txt"
+    mkdir -p "$dir" || die "cannot create $dir"
+    s_part="$dir/.tablet-soak.txt.part" e_part="$dir/.tablet-events.txt.part" n_part="$dir/.tablet-events.bytes.part"
+    trap 'rm -f "$s_part" "$s_part.raw" "$e_part" "$n_part"' EXIT
+    remote_size() { "$ADB" shell "[ -f $1 ] && wc -c < $1" 2>/dev/null | tr -d '\r '; }
+    s_size=$(remote_size "$SAMPLES")
+    e_size=$(remote_size "$EVENTS")
+    case $s_size in ''|*[!0-9]*) die "no sample file on the tablet (nothing deleted)" ;; esac
+    case $e_size in ''|*[!0-9]*) die "no event file on the tablet (nothing deleted)" ;; esac
+    # Samples are numeric key=value lines by construction; event lines keep only their names (no fields). Each
+    # transfer is checked against the tablet's byte count, results land via .part + mv, and the tablet files are
+    # deleted only after both succeeded.
+    "$ADB" exec-out cat "$SAMPLES" >"$s_part.raw" || die "sample transfer failed (nothing deleted)"
+    [ "$(wc -c <"$s_part.raw" | tr -d ' ')" = "$s_size" ] || die "sample transfer incomplete (nothing deleted)"
+    grep -E '^(# mbmon|ep=)' "$s_part.raw" >"$s_part" || die "no samples in the sample file (nothing deleted)"
+    rm -f "$s_part.raw"
+    "$ADB" exec-out cat "$EVENTS" | python3 "$M/mblog.py" filter --side tablet --events --bytes-to "$n_part" \
+      >"$e_part" || die "event transfer failed (nothing deleted)"
+    [ "$(tr -d ' \n' <"$n_part" 2>/dev/null)" = "$e_size" ] || die "event transfer incomplete (nothing deleted)"
+    { mv "$s_part" "$dir/tablet-soak.txt" && mv "$e_part" "$dir/tablet-events.txt"; } || die "cannot write $dir"
     echo "tablet-soak: $(grep -c '^ep=' "$dir/tablet-soak.txt") samples, $(wc -l <"$dir/tablet-events.txt" | tr -d ' ') events -> $dir"
     [ $keep -eq 1 ] || "$ADB" shell "rm -f $SAMPLES $EVENTS"
     ;;

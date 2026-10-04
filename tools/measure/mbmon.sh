@@ -66,15 +66,18 @@ find_pids() {
 
 # utime + stime of the given pids (fields 14, 15 of /proc/<pid>/stat, counted after the ") " that ends comm)
 ticks() {
-  t=0
+  t=0 seen=""
   for p in $*; do
     [ -r "$R/proc/$p/stat" ] || continue
-    read -r line <"$R/proc/$p/stat"
+    read -r line <"$R/proc/$p/stat" 2>/dev/null || continue
     rest=${line##*") "}
     set -- $rest
-    [ $# -ge 13 ] && t=$((t + ${12} + ${13}))
+    [ $# -ge 13 ] || continue
+    t=$((t + ${12} + ${13}))
+    seen=1
   done
-  echo $t
+  # `-` when no pid of the group could be read: unavailable, not zero CPU
+  if [ -n "$seen" ]; then echo $t; else echo -; fi
 }
 
 # --- static choices made once
@@ -104,7 +107,7 @@ esac
 
 panel_hz() {
   case $psrc in
-    node) read -r v <"$panel_node" 2>/dev/null; v=${v##*current_fps:}; v=${v#"${v%%[0-9]*}"}; echo "${v%%[!0-9]*}" ;;
+    node) v=""; read -r v <"$panel_node" 2>/dev/null; v=${v##*current_fps:}; v=${v#"${v%%[0-9]*}"}; echo "${v%%[!0-9]*}" ;;
     sf) dumpsys SurfaceFlinger 2>/dev/null | grep -m1 -E 'refresh-rate *:' | sed -E 's/.*: *([0-9]+).*/\1/' ;;
     *) echo "" ;;
   esac
@@ -121,12 +124,16 @@ perf_sample() {
   for f in "$R"/sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq; do
     [ -r "$f" ] || continue
     d=${f%/scaling_cur_freq}
-    read -r v <"$f"
-    line="$line f_cpu${d##*/policy}=$v"
+    read -r v <"$f" 2>/dev/null || v=-
+    line="$line f_cpu${d##*/policy}=${v:--}"
   done
-  [ -n "$gpu_node" ] && { read -r v <"$gpu_node"; line="$line f_gpu=$v"; }
+  if [ -n "$gpu_node" ]; then
+    read -r v <"$gpu_node" 2>/dev/null || v=-
+    line="$line f_gpu=${v:--}"
+  fi
   for zp in $zones; do
-    read -r v <"${zp#*:}/temp" 2>/dev/null && line="$line temp_${zp%%:*}=$v"
+    read -r v <"${zp#*:}/temp" 2>/dev/null || v=-
+    line="$line temp_${zp%%:*}=${v:--}"
   done
   hz=$(panel_hz)
   line="$line panel_hz=${hz:--}"
@@ -135,31 +142,41 @@ perf_sample() {
 
 soak_sample() {
   pid=$(echo $P_client | cut -d' ' -f1)
+  # Every value is `-` when its command failed or returned nothing: unavailable must never read as zero.
   pss=- fds=- threads=- codec=-
   if has dumpsys; then
     pss=$(dumpsys meminfo "$PKG" 2>/dev/null | grep -m1 -E 'TOTAL PSS:|^ *TOTAL +[0-9]' |
       sed -E 's/^ *TOTAL( PSS:)? +([0-9]+).*/\2/')
-    codec=$(dumpsys media.resource_manager 2>/dev/null | grep -c -i 'codec')
+    case $pss in ''|*[!0-9]*) pss=- ;; esac
+    rm_out=$(dumpsys media.resource_manager 2>/dev/null)
+    [ -n "$rm_out" ] && codec=$(printf '%s\n' "$rm_out" | grep -c -i 'codec')
   fi
-  line="ep=$(date +%s) up=$(cut -d' ' -f1 "$R/proc/uptime") pid=${pid:--} pss_kb=${pss:--} codec_res=${codec:--}"
+  line="ep=$(date +%s) up=$(cut -d' ' -f1 "$R/proc/uptime") pid=${pid:--} pss_kb=$pss codec_res=$codec"
   if [ -n "$pid" ] && [ -d "$R/proc/$pid/task" ]; then
-    if has run-as; then
-      fds=$(run-as "$PKG" ls "/proc/$pid/fd" 2>/dev/null | wc -l | tr -d ' ')
-    elif [ -r "$R/proc/$pid/fd" ]; then
-      fds=$(ls "$R/proc/$pid/fd" | wc -l | tr -d ' ')
+    # fds: the shell user cannot list another app's fd dir; run-as (debug APK) has the app's credentials.
+    if fdl=$(ls "$R/proc/$pid/fd" 2>/dev/null) && [ -n "$fdl" ]; then
+      fds=$(printf '%s\n' "$fdl" | grep -c .)
+    elif has run-as && fdl=$(run-as "$PKG" ls "/proc/$pid/fd" 2>/dev/null) && [ -n "$fdl" ]; then
+      fds=$(printf '%s\n' "$fdl" | grep -c .)
     fi
-    groups=$(cat "$R"/proc/$pid/task/*/comm 2>/dev/null | sed -E 's/([:_-]?[0-9]+)+$//' |
-      tr -c 'A-Za-z0-9._\n-' '_' | sort | uniq -c)
-    threads=0
+    # thread names: directly, else with the app's credentials
+    comms=$(cat "$R"/proc/$pid/task/*/comm 2>/dev/null)
+    if [ -z "$comms" ] && has run-as; then
+      comms=$(run-as "$PKG" sh -c "cat /proc/$pid/task/*/comm" 2>/dev/null)
+    fi
     tl=""
-    while read -r c nm; do
-      [ -n "$c" ] || continue
-      threads=$((threads + c))
-      tl="$tl thr_${nm:-unnamed}=$c"
-    done <<EOF
+    if [ -n "$comms" ]; then
+      groups=$(printf '%s\n' "$comms" | sed -E 's/([:_-]?[0-9]+)+$//' | tr -c 'A-Za-z0-9._\n-' '_' | sort | uniq -c)
+      threads=0
+      while read -r c nm; do
+        [ -n "$c" ] || continue
+        threads=$((threads + c))
+        tl="$tl thr_${nm:-unnamed}=$c"
+      done <<EOF
 $groups
 EOF
-    line="$line fds=${fds:--} threads=$threads$tl"
+    fi
+    line="$line fds=$fds threads=$threads$tl"
   else
     line="$line fds=- threads=-"
   fi
