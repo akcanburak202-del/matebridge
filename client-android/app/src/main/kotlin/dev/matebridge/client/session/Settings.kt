@@ -53,11 +53,44 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setStatsOverlay(on: Boolean) = store.putString(KEY_STATS, if (on) "1" else "0")
 
-    /** Display mode (T-050); default Akıcı. */
+    /** Display mode (T-050, decision 0030); default Günlük, also for an unknown stored value; pre-T-223 ids map via `LegacyModes`. */
     fun streamMode(): dev.matebridge.client.stream.StreamMode =
         dev.matebridge.client.stream.StreamMode.parse(store.getString(KEY_STREAM_MODE))
 
     fun setStreamMode(m: dev.matebridge.client.stream.StreamMode) = store.putString(KEY_STREAM_MODE, m.id)
+
+    /**
+     * "Kare hızı" of [mode] (T-223, decision 0030 §2): each mode remembers its own (Günlük default 120, Oyun default 60);
+     * an unknown stored value gives the default; Çizim is always 120 and stores nothing.
+     */
+    fun modeFps(mode: dev.matebridge.client.stream.StreamMode): Int {
+        val key = fpsKey(mode) ?: return mode.resolveFps(null)
+        return mode.resolveFps(store.getString(key)?.toIntOrNull())
+    }
+
+    /** Stores [fps] for [mode] when it is a selectable rate; Çizim and other values are ignored. */
+    fun setModeFps(mode: dev.matebridge.client.stream.StreamMode, fps: Int) {
+        val key = fpsKey(mode) ?: return
+        if (fps in dev.matebridge.client.stream.StreamMode.FPS_OPTIONS) store.putString(key, fps.toString())
+    }
+
+    /**
+     * T-223 one-time migration (decision 0030 §5): the pre-T-223 five mode ids become a mode plus that mode's frame rate
+     * (`clarity` Günlük 60, `smooth`/`performance` Günlük 120, `game` Oyun 120, `game60` Oyun 60). The flag is set either
+     * way (so a new Oyun choice with the default 60 is never mistaken for an old `game`) and survives "Varsayılanlara
+     * dön". Returns what the stored id became, or null when nothing was stored to migrate.
+     */
+    fun migrateModesOnce(): dev.matebridge.client.stream.LegacyModes.Migrated? {
+        if (store.getString(KEY_MODES_MIGRATED) == "1") return null
+        val old = store.getString(KEY_STREAM_MODE)
+        val m = dev.matebridge.client.stream.LegacyModes.migrateStored(old)
+        if (m != null) {
+            store.putString(KEY_STREAM_MODE, m.mode.id)
+            setModeFps(m.mode, m.fps)
+        }
+        store.putString(KEY_MODES_MIGRATED, "1")
+        return m
+    }
 
     /** "Oyun çözünürlüğü" (T-215, decision 0029); default 1848×1214, also for an unknown stored value. */
     fun gameResolution(): dev.matebridge.client.stream.GameResolution =
@@ -175,6 +208,12 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         return removed
     }
 
+    private fun fpsKey(mode: dev.matebridge.client.stream.StreamMode): String? = when (mode) {
+        dev.matebridge.client.stream.StreamMode.DAILY -> KEY_FPS_DAILY
+        dev.matebridge.client.stream.StreamMode.GAME -> KEY_FPS_GAME
+        dev.matebridge.client.stream.StreamMode.DRAWING -> null
+    }
+
     private fun readSpeed(key: String): Float = store.getString(key)?.toFloatOrNull()?.let { SpeedRange.clamp(it) } ?: 1f
 
     private fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
@@ -193,7 +232,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         val USER_KEYS: List<String> get() = listOf(
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
-            KEY_TRANSPORT, KEY_GAME_RESOLUTION,
+            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -204,6 +243,9 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_STREAM_MODE = "stream_mode"
         const val KEY_BITRATE = "bitrate_kbps"
         const val KEY_GAME_RESOLUTION = "game_resolution"
+        const val KEY_FPS_DAILY = "fps_daily"
+        const val KEY_FPS_GAME = "fps_game"
+        const val KEY_MODES_MIGRATED = "modes_migrated"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
         const val KEY_CLIPBOARD = "clipboard_share"

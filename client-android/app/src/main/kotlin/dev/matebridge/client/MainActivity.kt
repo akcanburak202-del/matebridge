@@ -457,13 +457,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             },
             AndroidKeystoreWrapper(),
         )
+        // T-223 (decision 0030 §5): the five pre-update mode ids become mode + frame rate once, before any read.
+        settings.migrateModesOnce()?.let { MbLog.i("modes_migrated", "mode=${it.mode.id} fps=${it.fps}") }
         streamMode = settings.streamMode()
         gameSettings = GameModeSettings(settings, devKnobs.gameDisplay) // T-215: `--ei game_display 0` = native display
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
-        // T-109: stored mode Game starts with the game defaults (layer built before anything reads them).
+        // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
             applyJitter()
-            MbLog.i("game_mode", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
+            MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
         }
         if (audioAllowed) {
             audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts) {
@@ -550,7 +552,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             { viewport },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
         ) { line -> MbLog.i("stats", line, "input") }
-        capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        capture.setFingersDisabled(gameSettings.fingerOff, SystemClock.uptimeMillis()) // T-223: Çizim layer included
         applyPointerSpeeds()
         // T-026: ask the system not to batch pen samples per display frame while input capture is active. The request
         // sits on a LEAF view, `video` (a fixed child of root): a ViewGroup
@@ -846,7 +848,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         override val streamMode get() = this@MainActivity.streamMode
         override fun selectStreamMode(m: StreamMode) = setStreamMode(m, toast = false)
-        // T-215 (decision 0029): stored; one complete STREAM_PREFS only while a game mode is on.
+        // T-223 (decision 0030 §2): the current mode's own rate; one complete STREAM_PREFS (a 60<->120 change recreates the display once).
+        override val frameRate get() = gameSettings.fps(this@MainActivity.streamMode)
+        override fun selectFrameRate(fps: Int) {
+            gameSettings.selectFrameRate(this@MainActivity.streamMode, fps)?.let { controller.setStreamPrefs(it) }
+        }
+        // T-215 (decision 0029): stored; one complete STREAM_PREFS only while Oyun is on.
         override val gameResolution get() = settings.gameResolution()
         override fun selectGameResolution(r: GameResolution) {
             gameSettings.selectGameResolution(r, this@MainActivity.streamMode)?.let { controller.setStreamPrefs(it) }
@@ -858,7 +865,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             controller.setStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
-        override val gameDefaultsActive get() = gameSettings.active
+        override val modeLayer get() = gameSettings.modeLayer
 
         override val audioAvailable get() = audio != null
         override val audioEnabled get() = settings.audioEnabled()
@@ -881,8 +888,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             applyPointerSpeeds()
         }
         override val fingerTouchDisabled get() = capture.fingersDisabled
-        override fun setFingerTouchDisabled(off: Boolean) { // decision 0006
-            settings.setFingerTouchDisabled(off)
+        override fun setFingerTouchDisabled(off: Boolean) { // decision 0006; T-223: in Çizim only the layer changes
+            gameSettings.setFingerOff(off)
             capture.setFingersDisabled(off, SystemClock.uptimeMillis())
         }
         override val penTrail get() = penOverlay.model.trailEnabled
@@ -952,8 +959,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (settings.audioEnabled() != audioWas) controller.setAudioEnabled(settings.audioEnabled())
         // Input and overlays.
         applyPointerSpeeds()
-        if (capture.fingersDisabled != settings.fingerTouchDisabled()) {
-            capture.setFingersDisabled(settings.fingerTouchDisabled(), SystemClock.uptimeMillis())
+        if (capture.fingersDisabled != gameSettings.fingerOff) {
+            capture.setFingersDisabled(gameSettings.fingerOff, SystemClock.uptimeMillis())
         }
         applyPenTrail(gameSettings.effective().penTrail)
         applyPenDot(gameSettings.effective().penDot)
@@ -1031,8 +1038,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /**
      * Display mode (T-050): persist, tell the host (STREAM_PREFS, with the bit rate choice), refresh both panels.
-     * Entering or leaving game mode (T-109) first builds or drops the game layer and applies what changed (audio output,
-     * pen trail/dot, jitter buffer); fps, scale and bit rate still go in this one STREAM_PREFS.
+     * Entering or leaving Oyun or Çizim (T-109, T-223) first builds or drops the mode layer and applies what changed (audio output,
+     * pen trail/dot, finger switch, jitter buffer); fps, scale and bit rate still go in this one STREAM_PREFS.
      */
     private fun setStreamMode(m: StreamMode, toast: Boolean) {
         streamMode = m
@@ -1040,17 +1047,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
         controller.setStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
-        if (toast) Toast.makeText(this, m.toastText(gameSettings.display(m)), Toast.LENGTH_SHORT).show()
+        if (toast) Toast.makeText(this, m.toastText(gameSettings.fps(m), gameSettings.display(m)), Toast.LENGTH_SHORT).show()
     }
 
-    /** T-109: the game layer was built or dropped; apply the effective values that differ from what runs now. */
-    private fun applyGameLayer(change: GameModeSettings.Change) {
+    /** T-109/T-223: a mode layer was built or dropped; apply the effective values that differ from what runs now. */
+    private fun applyGameLayer(change: GameModeSettings.Transition) {
         val e = gameSettings.effective()
         if (!audioOutFromExtra) audio?.setOutPref(e.audioOut) // no-op (no reopen) when unchanged
         applyPenTrail(e.penTrail)
         applyPenDot(e.penDot)
+        // Çizim: palm touches stop here; the touch gate releases anything held (never a stuck contact).
+        if (::capture.isInitialized && capture.fingersDisabled != e.fingerOff) {
+            capture.setFingersDisabled(e.fingerOff, SystemClock.uptimeMillis())
+        }
         applyJitter()
-        MbLog.i("game_mode", GameModeSettings.logFields(change, currentJitter(), e))
+        MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), e))
     }
 
     private fun applyPenTrail(on: Boolean) {
@@ -1066,7 +1077,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** Jitter buffer for the current mode (decision 0014 §2); a launch value wins. */
-    private fun currentJitter() = GameJitter.choose(launchBufferFrames, bufferFixedBy, gameSettings.active)
+    private fun currentJitter() = GameJitter.choose(launchBufferFrames, bufferFixedBy, gameSettings.gameActive)
 
     /** Applies [currentJitter]; a running renderer takes it on its next frame. */
     private fun applyJitter() {
@@ -1199,7 +1210,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             fps = config.fps,
             widthPx = config.widthPx,
             heightPx = config.heightPx,
-            scalePermille = streamMode.scalePermille,
+            scalePermille = StreamMode.SCALE_PERMILLE,
             bitrateKbps = config.bitrateKbps,
             bitrateSettingKbps = gameSettings.bitrateKbps,
             transport = currentEndpoint?.let { ConnectMode.transportOf(it).logName } ?: "-",
@@ -1508,7 +1519,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val tr = currentTransport()
             val text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
                 (if (mode == TransportMode.AUTO) " (otomatik)" else "") + "\n" +
-                StreamMode.overlayLine(streamMode, streamConfig) + "\n" + base
+                StreamMode.overlayLine(streamMode, gameSettings.fps(streamMode), streamConfig) + "\n" + base
             if (text != lastOverlayText) { // T-141: an idle overlay does not change; skip the relayout and redraw
                 lastOverlayText = text
                 statsView.text = text

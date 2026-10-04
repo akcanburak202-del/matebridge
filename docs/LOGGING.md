@@ -424,7 +424,7 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
   - `target_hz=`: istenen panel hızı, `FrameRatePolicy.modeTargetHz` (`hz` açılış parametresi ya da akış fps'i). `0` = mod değiştirilmez.
   - `display_hz=`: `Display.refreshRate` (1 ondalık). Yalnız vekil bir değerdir. AGP'nin `final lcd fps` değeri farklı olabilir (NOTES, verify-E X12).
   - `vsync_ms_p50=`: pencere boyunca ölçülen Choreographer vsync aralığının medyanı (ms, 2 ondalık; örnek yoksa `-`). Gerçek hıza en yakın istemci sinyali budur: 120 Hz ≈ 8.33, 60 Hz ≈ 16.67.
-  - `stream_mode=`: kullanıcının seçtiği mod kimliği (`clarity|smooth|performance|game|game60`).
+  - `stream_mode=`: kullanıcının seçtiği mod kimliği (`daily|drawing|game`, T-223; eski beş kimlik kalktı).
   - **Kullanımdan kalkan takma ad:** `hz=`, `display_hz=` ile aynı değerdir (tam sayıya yuvarlanır). Bir sürüm daha yazılır, sonra kalkar. Satırın başında kalır, böylece basit `hz=` aramaları `target_hz=`'e takılmaz.
 - **`W render ev=refresh_mismatch target_hz=<n> measured_hz=<n.n> dur_ms=<n> stream_mode=<id>`**: akış sürerken saniyelik vsync medyanından hesaplanan hız (`1e6 / p50_us`) hedeften ±%10'dan fazla saptı ve bu durum 5 sn'den uzun sürdü. Her sapma dönemi için bir satır yazılır, iki satır arasında en az 60 sn olur. Dönem 60 sn sınırı içinde başladıysa satır, sınır dolduğunda sapma hâlâ sürüyorsa yazılır. `dur_ms`, satır yazılana kadar geçen süredir. `target_hz=0`, akışsız zaman ve ölçümsüz saniyeler (vsync döngüsü uykuda) satır üretmez. Ölçümsüz boşluk 3 sn'yi geçerse ya da hedef değişirse dönem yeniden başlar.
 - Ölçüm notu: "60 Hz" ölçümü için içerik yalnız klavyeyle sürülmelidir. Kalem, dokunma ve trackpad paneli 120 Hz'e çıkarır (PF3).
@@ -432,6 +432,15 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
 ## Kaldırılan istemci deney olayları (T-183, karar 0026)
 
 Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=render_mode` (GL yolu, T-184), `ev=perf_hint`, `perf_hint_target`, `perf_hint_error`, `rvote_config`, `rvote`, `rvote_reflect`, `rvote_reflect_failed`, `crypto_bench`. `ev=display_timing`'den `keep_jitter= recenter= pacer= cpd_q_permille= cpd_hold_us= inflight=` alanları, `ev=present`'ten `recenters=` çıktı; `present` satırındaki `inflight_limit=` hep 0. Kaldırılan açılış parametreleri (`render`, `frate`, `glpts` — T-184; `perf_hint`, `rvote`, `pacer=cpd`, `inflight`, `recenter`, `keep_jitter`, `crypto_bench`, `oprate`) yok sayılır.
+
+## Modlar: Günlük / Çizim / Oyun (tablet, `MB/session`, T-223, karar 0030)
+
+- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> jitter=adaptive|<N> [jitter_src=extra] bitrate_kbps=<n> audio_out=auto|aaudio|track finger_off=0|1 [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `finger_off=` ile).
+  - `mode`: katmanı kurulan ya da bırakılan mod. Oyun ↔ Çizim geçişi tek bir `enter`dir (yeni katman baştan kurulur); Günlük'e dönüş `exit`tir. Aynı modda tekrar satır çıkmaz.
+  - `overrides`: katmanın ezdiği ayarlar. Oyun `bitrate,audio,pen`; Çizim `bitrate,finger` (parmak kapalı + Otomatik bit hızı ise 60 Mbps).
+  - Değerler katmanın etkin değerleridir (kayıtlı ayarlar değil). `at=start`: uygulama açılışında kayıtlı mod Oyun/Çizim olduğu için kuruldu.
+- `I session ev=modes_migrated mode=daily|game fps=60|120`: ilk açılışta eski beş mod kimliğinden biri yeni mod ve kare hızına çevrildi (`clarity` Günlük 60, `smooth`/`performance` Günlük 120, `game` Oyun 120, `game60` Oyun 60). Bir kez yazılır; kayıtlı mod yoksa yazılmaz.
+- Kare hızı seçimi ayrı bir log satırı yazmaz: sonucu yeni `ev=profile fps=` satırıdır (60↔120 değişimi Mac sanal ekranını bir kez yeniden kurar).
 
 ## Geliştirici kapısı ve akış profili (tablet, T-185, karar 0026)
 
@@ -443,7 +452,7 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
   - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
   - Alanların kaynağı:
     - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
-    - `mode`, `scale_permille`: tablette seçilen mod.
+    - `mode` (`daily|drawing|game`, T-223, karar 0030), `scale_permille`: tablette seçilen mod (ölçek artık hep 1000). Kare hızı ayrı bir ayardır: `fps` her zaman uygulanan STREAM_CONFIG değeridir (Günlük/Oyun için "Kare hızı" ayarı, Çizim hep 120).
     - `display` (T-215, karar 0029): STREAM_PREFS'te istenen oyun ekranı. `native` = grup yok (oyun dışı modlar ya da `--ez dev true --ei game_display 0`); oyun modunda "Oyun çözünürlüğü" ayarı, ör. `1848x1214`.
     - `display_applied` yalnız oyun ekranı istendiğinde yazılır. `1`: host uyguladı, tam geometriyle (`width_px == width_pt == w` ve `height_px == height_pt == h`, PROTOCOL §0x05). `0`: eski host ya da `game_display_failed` geri düşüşü (doğal HiDPI ekran).
     - `bitrate_setting`: tabletin ayarı (0 = `auto`).

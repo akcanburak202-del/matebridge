@@ -21,14 +21,16 @@ class SettingsCatalogTest {
         override fun disconnect() { calls += "disconnect" }
         override val forgetHostLabel = "Bu Mac'i unut"
         override fun forgetHost() { calls += "forget" }
-        override var streamMode = StreamMode.SMOOTH
+        override var streamMode = StreamMode.DAILY
         override fun selectStreamMode(m: StreamMode) { calls += "mode ${m.id}"; streamMode = m }
+        override var frameRate = 120
+        override fun selectFrameRate(fps: Int) { calls += "fps $fps"; if (streamMode.hasFpsSetting) frameRate = fps }
         override var gameResolution = GameResolution.DEFAULT
         override fun selectGameResolution(r: GameResolution) { calls += "game_resolution ${r.id}"; gameResolution = r }
         override var bitrateKbps = 0L
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
-        override var gameDefaultsActive = false
+        override var modeLayer: StreamMode? = null
         override var audioAvailable = true
         val v = HashMap<String, Boolean>()
         var out = AudioOutPref.AUTO
@@ -79,7 +81,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "game_resolution", "bitrate", "bitrate_applied", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -112,9 +114,10 @@ class SettingsCatalogTest {
     @Test fun modeTransportAndAudioOutChoices() {
         val s = SettingsCatalog.sections(h, inStream = true)
         val mode = choice(s, "stream_mode")
-        assertEquals(listOf("Netlik (60 fps)", "Akıcı (120 fps)", "Performans (120 fps)", "Oyun 120 (120 fps)", "Oyun 60 (60 fps)"), mode.options.map { it.label })
-        assertEquals("smooth", mode.selected())
-        mode.select("clarity")
+        assertEquals(listOf("Günlük", "Çizim", "Oyun"), mode.options.map { it.label })
+        assertEquals(listOf("daily", "drawing", "game"), mode.options.map { it.id })
+        assertEquals("daily", mode.selected())
+        mode.select("drawing")
         val tr = choice(s, "transport")
         assertEquals(listOf("auto", "usb", "wifi"), tr.options.map { it.id })
         tr.select("usb")
@@ -124,27 +127,51 @@ class SettingsCatalogTest {
         assertEquals("track", out.selected())
         h.out = AudioOutPref.AAUDIO // a launch override shows as "Düşük gecikme"
         assertEquals("auto", out.selected())
-        assertEquals(listOf("mode clarity", "transport usb", "audio_out track"), h.calls)
+        assertEquals(listOf("mode drawing", "transport usb", "audio_out track"), h.calls)
     }
 
     @Test fun gameResolutionChoice() {
         for (inStream in listOf(true, false)) {
             val s = SettingsCatalog.sections(h, inStream)
             val keys = s.single { it.title == "Görüntü" }.items.map { it.key }
-            assertEquals(keys.indexOf("stream_mode") + 1, keys.indexOf("game_resolution")) // right after the mode
+            assertEquals(keys.indexOf("stream_mode") + 1, keys.indexOf("frame_rate")) // the rate right after the mode
+            assertEquals(keys.indexOf("frame_rate") + 1, keys.indexOf("game_resolution"))
         }
         val s = SettingsCatalog.sections(h, inStream = true)
         val c = choice(s, "game_resolution")
         assertEquals("Oyun çözünürlüğü", c.titleText())
-        assertEquals(listOf("1400×920", "1848×1214", "2100×1380"), c.options.map { it.label })
-        assertEquals(listOf("1400x920", "1848x1214", "2100x1380"), c.options.map { it.id })
+        assertEquals(listOf("1400×920", "1848×1214", "2100×1380", "2240×1472"), c.options.map { it.label })
+        assertEquals(listOf("1400x920", "1848x1214", "2100x1380", "2240x1472"), c.options.map { it.id })
         assertEquals("1848x1214", c.selected())
         c.select("1400x920")
         assertEquals("1400x920", c.selected())
         c.select("bogus") // unknown: the default
         assertEquals(listOf("game_resolution 1400x920", "game_resolution 1848x1214"), h.calls)
-        h.gameDefaultsActive = true // a persistent setting: never marked as part of the game layer
+        h.modeLayer = StreamMode.GAME // a persistent setting: never marked as part of a mode layer
         assertEquals("Oyun çözünürlüğü", c.titleText())
+        h.modeLayer = StreamMode.DRAWING
+        assertEquals("Oyun çözünürlüğü", c.titleText())
+    }
+
+    @Test fun frameRateChoiceIsPerModeAndFixedInDrawing() { // T-223, decision 0030 §2
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "frame_rate")
+        assertEquals(listOf("60", "120"), c.options.map { it.id })
+        assertEquals(listOf("60 fps", "120 fps"), c.options.map { it.label })
+        assertEquals("Kare hızı (Günlük)", c.titleText())
+        assertEquals("120", c.selected())
+        c.select("60")
+        assertEquals("60", c.selected())
+        h.streamMode = StreamMode.GAME // the host reports that mode's own rate
+        h.frameRate = 60
+        assertEquals("Kare hızı (Oyun)", c.titleText())
+        c.select("bogus") // not a number: nothing
+        assertEquals(listOf("fps 60"), h.calls)
+        h.streamMode = StreamMode.DRAWING
+        h.frameRate = 120
+        assertEquals("Kare hızı (Çizim: hep 120)", c.titleText())
+        c.select("60") // the host ignores it in Çizim
+        assertEquals("120", c.selected())
     }
 
     @Test fun togglesSteppersAndActions() {
@@ -192,6 +219,7 @@ class SettingsCatalogTest {
 
     @Test fun gameModeMarksTheLayeredSettingsOnly() { // T-109
         val s = SettingsCatalog.sections(h, inStream = true)
+        val finger = item(s, "finger_off") as SettingItem.Toggle
         val bitrate = choice(s, "bitrate")
         val out = choice(s, "audio_out")
         val trail = item(s, "pen_trail") as SettingItem.Toggle
@@ -202,16 +230,34 @@ class SettingsCatalogTest {
         assertEquals("Ses çıkışı", out.titleText())
         assertEquals("Kalem izi: kapalı", trail.text())
         assertEquals("Kalem noktası: kapalı", dot.text())
-        h.gameDefaultsActive = true // the same items follow the host (refresh re-reads them)
+        h.modeLayer = StreamMode.GAME // the same items follow the host (refresh re-reads them)
         assertEquals("Bit hızı (oyun modu)", bitrate.titleText())
         assertEquals("Ses çıkışı (oyun modu)", out.titleText())
         assertEquals("Kalem izi (oyun modu): kapalı", trail.text())
         assertEquals("Kalem noktası (oyun modu): kapalı", dot.text())
+        assertEquals("Parmak dokunmasını tamamen kapat: kapalı", finger.text()) // Oyun leaves the finger switch alone
         assertEquals("Görüntü modu", mode.titleText())
         assertEquals("İstatistik katmanı: kapalı", stats.text())
-        h.gameDefaultsActive = false
+        h.modeLayer = null
         assertEquals("Bit hızı", bitrate.titleText())
         assertEquals("Kalem izi: kapalı", trail.text())
+    }
+
+    @Test fun drawingModeMarksBitrateAndFingersOnly() { // T-223
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val bitrate = choice(s, "bitrate")
+        val out = choice(s, "audio_out")
+        val finger = item(s, "finger_off") as SettingItem.Toggle
+        val trail = item(s, "pen_trail") as SettingItem.Toggle
+        val dot = item(s, "pen_dot") as SettingItem.Toggle
+        h.modeLayer = StreamMode.DRAWING
+        assertEquals("Bit hızı (çizim modu)", bitrate.titleText())
+        assertEquals("Parmak dokunmasını tamamen kapat (çizim modu): kapalı", finger.text())
+        assertEquals("Ses çıkışı", out.titleText())
+        assertEquals("Kalem izi: kapalı", trail.text())
+        assertEquals("Kalem noktası: kapalı", dot.text())
+        h.modeLayer = null
+        assertEquals("Parmak dokunmasını tamamen kapat: kapalı", finger.text())
     }
 
     @Test fun filesSectionTogglesAndShowsStatus() {

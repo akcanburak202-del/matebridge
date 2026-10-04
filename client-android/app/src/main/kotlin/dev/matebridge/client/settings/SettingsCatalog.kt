@@ -30,6 +30,10 @@ interface SettingsHost {
     // Görüntü
     val streamMode: StreamMode
     fun selectStreamMode(m: StreamMode)
+    /** "Kare hızı" (decision 0030 §2, T-223): the frame rate the current mode runs at (Çizim: always 120). */
+    val frameRate: Int
+    /** Stores the rate for the current mode (each mode remembers its own) and asks the host; no effect in Çizim. */
+    fun selectFrameRate(fps: Int)
     /** "Oyun çözünürlüğü" (decision 0029, T-215): the stored game display size; applies only in the game modes. */
     val gameResolution: GameResolution
     /** Persists the choice; a STREAM_PREFS goes to the host only while a game mode is on. */
@@ -40,10 +44,11 @@ interface SettingsHost {
     /** `STREAM_CONFIG.bitrate_kbps` of the running stream, null without one. */
     val appliedBitrateKbps: Long?
     /**
-     * Game mode's temporary defaults are in effect (decision 0014, T-109): bit rate, audio output, pen trail and pen dot
-     * show and change the session layer, not the stored settings; the panels mark them.
+     * The mode whose temporary layer is in effect (Oyun, decision 0014; Çizim, decision 0030; T-109, T-223), null in
+     * Günlük: the settings it overrides ([GameModeSettings.overridesOf]) show and change the session layer, not the
+     * stored values; the panels mark them.
      */
-    val gameDefaultsActive: Boolean
+    val modeLayer: StreamMode?
 
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
@@ -181,10 +186,20 @@ class SettingsSection(val title: String, val items: List<SettingItem>)
 object SettingsCatalog {
     const val SHORTCUTS =
         "Kısayollar: Ctrl+Shift+6: ayarlar paneli · Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · " +
-            "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu"
+            "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu (Günlük/Çizim/Oyun)"
 
-    /** T-215: only the game modes use it (the others run the native 2800×1840 HiDPI display). */
+    /** T-215: only Oyun uses it (the other modes run the native 2800×1840 HiDPI display). */
     const val GAME_RESOLUTION_TITLE = "Oyun çözünürlüğü"
+
+    /** T-223: the frame rate of the current mode (decision 0030 §2). */
+    const val FRAME_RATE_TITLE = "Kare hızı"
+
+    /**
+     * What the "Kare hızı" title shows next to it: the mode whose rate the buttons change (each mode remembers its own),
+     * or for Çizim that it is fixed (the buttons do nothing there; hiding the row needs the views, T-223 open question).
+     */
+    fun frameRateMarker(mode: StreamMode, fps: Int) =
+        if (mode.hasFpsSetting) " (${mode.label})" else " (${mode.label}: hep $fps)"
 
     const val RESET_TITLE = "Varsayılanlara dön"
     const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
@@ -195,7 +210,7 @@ object SettingsCatalog {
      * while streaming: "Bağlantıyı kes" and the bit rate the host applied. Ses is left out when audio is unavailable.
      */
     fun sections(h: SettingsHost, inStream: Boolean): List<SettingsSection> {
-        val game = { if (h.gameDefaultsActive) GameModeSettings.MARKER else "" }
+        fun layered(o: GameModeSettings.Override) = { GameModeSettings.marker(h.modeLayer, o) }
         val out = ArrayList<SettingsSection>(5)
         out += SettingsSection(
             "Bağlantı",
@@ -221,9 +236,17 @@ object SettingsCatalog {
                 add(
                     SettingItem.Choice(
                         "stream_mode", "Görüntü modu",
-                        StreamMode.entries.map { SettingItem.Option(it.id, "${it.label} (${it.fps} fps)") },
+                        StreamMode.entries.map { SettingItem.Option(it.id, it.label) },
                         { h.streamMode.id },
                     ) { id -> h.selectStreamMode(StreamMode.parse(id)) },
+                )
+                add(
+                    SettingItem.Choice(
+                        "frame_rate", FRAME_RATE_TITLE,
+                        StreamMode.FPS_OPTIONS.map { SettingItem.Option(it.toString(), "$it fps") },
+                        { h.frameRate.toString() },
+                        { frameRateMarker(h.streamMode, h.frameRate) },
+                    ) { id -> id.toIntOrNull()?.let { h.selectFrameRate(it) } },
                 )
                 add(
                     SettingItem.Choice(
@@ -237,7 +260,7 @@ object SettingsCatalog {
                         "bitrate", "Bit hızı",
                         Bitrate.OPTIONS_KBPS.map { SettingItem.Option(it.toString(), Bitrate.label(it)) },
                         { h.bitrateKbps.toString() },
-                        game,
+                        layered(GameModeSettings.Override.BITRATE),
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
@@ -255,7 +278,7 @@ object SettingsCatalog {
                             SettingItem.Option(AudioOutPref.TRACK.id, "Uyumlu"),
                         ),
                         { if (h.audioOut == AudioOutPref.TRACK) AudioOutPref.TRACK.id else AudioOutPref.AUTO.id },
-                        game,
+                        layered(GameModeSettings.Override.AUDIO),
                     ) { id -> h.setAudioOut(if (id == AudioOutPref.TRACK.id) AudioOutPref.TRACK else AudioOutPref.AUTO) },
                 ),
             )
@@ -273,10 +296,14 @@ object SettingsCatalog {
                 ),
                 SettingItem.Toggle(
                     "finger_off", "Parmak dokunmasını tamamen kapat", { h.fingerTouchDisabled }, { h.setFingerTouchDisabled(it) },
-                    onText = "AÇIK",
+                    onText = "AÇIK", marker = layered(GameModeSettings.Override.FINGER),
                 ),
-                SettingItem.Toggle("pen_trail", "Kalem izi", { h.penTrail }, { h.setPenTrail(it) }, marker = game),
-                SettingItem.Toggle("pen_dot", "Kalem noktası", { h.penDot }, { h.setPenDot(it) }, marker = game),
+                SettingItem.Toggle(
+                    "pen_trail", "Kalem izi", { h.penTrail }, { h.setPenTrail(it) }, marker = layered(GameModeSettings.Override.PEN),
+                ),
+                SettingItem.Toggle(
+                    "pen_dot", "Kalem noktası", { h.penDot }, { h.setPenDot(it) }, marker = layered(GameModeSettings.Override.PEN),
+                ),
             ),
         )
         out += SettingsSection(

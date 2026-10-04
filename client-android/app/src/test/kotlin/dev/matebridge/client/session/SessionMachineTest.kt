@@ -169,19 +169,19 @@ class SessionMachineTest {
 
     @Test fun setPrefsSendsWhenAcceptedAndRemembersOtherwise() {
         // not connected: nothing goes out, the value is remembered for the next ACCEPTED
-        assertTrue(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs())).isEmpty())
+        assertTrue(step(Event.SetPrefs(StreamPrefs(120, 750))).isEmpty())
         val gen = step(Event.Start(ep)).only<Action.OpenControl>().gen
         step(Event.ControlOpened(gen))
         // awaiting approval: still nothing
-        assertTrue(step(Event.SetPrefs(StreamMode.CLARITY.toPrefs())).isEmpty())
+        assertTrue(step(Event.SetPrefs(StreamPrefs(60, 1000))).isEmpty())
         val acc = step(Event.Received(gen, ack(HelloAck.ACCEPTED, 5, 7421)))
         assertEquals(StreamPrefs(60, 1000), sends(acc).last())
         // accepted: sent at once; the same value again sends nothing
-        assertEquals(listOf<Any>(StreamPrefs(120, 750)), sends(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs()))))
-        assertTrue(step(Event.SetPrefs(StreamMode.PERFORMANCE.toPrefs())).isEmpty())
+        assertEquals(listOf<Any>(StreamPrefs(120, 750)), sends(step(Event.SetPrefs(StreamPrefs(120, 750)))))
+        assertTrue(step(Event.SetPrefs(StreamPrefs(120, 750))).isEmpty())
         // streaming state too
         step(Event.Received(gen, cfg(1)))
-        assertEquals(listOf<Any>(StreamPrefs(60, 1000)), sends(step(Event.SetPrefs(StreamMode.CLARITY.toPrefs()))))
+        assertEquals(listOf<Any>(StreamPrefs(60, 1000)), sends(step(Event.SetPrefs(StreamPrefs(60, 1000)))))
     }
 
     @Test fun smallerStreamConfigIsAppliedLikeAnyOther() {

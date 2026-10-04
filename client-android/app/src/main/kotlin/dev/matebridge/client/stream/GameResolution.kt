@@ -10,7 +10,10 @@ import dev.matebridge.client.protocol.StreamConfig
 enum class GameResolution(val id: String, val widthPx: Int, val heightPx: Int) {
     R1400("1400x920", 1400, 920),
     R1848("1848x1214", 1848, 1214),
-    R2100("2100x1380", 2100, 1380);
+    R2100("2100x1380", 2100, 1380),
+
+    /** Decision 0030 §3 (T-223): exactly the panel shape (80%). */
+    R2240("2240x1472", 2240, 1472);
 
     /** Panel and toast text, e.g. "1848×1214". */
     val label: String get() = "$widthPx×$heightPx"
