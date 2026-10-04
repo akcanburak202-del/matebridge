@@ -1,7 +1,7 @@
 ---
 id: T-233
 title: Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost
-status: in_progress
+status: review
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -25,8 +25,8 @@ NOTES 2026-10-04 ~22:45: Dock'taki Apple Music ikonu tablette kenarlarda basamak
 
 ## Kabul kriterleri
 
-- [ ] docs/research/2026-10-05-yuv444.md: her soruya kaynaklı cevap, [ölçüm]/[kaynak]/[çıkarım] etiketleriyle; sonunda net öneri.
-- [ ] Cihaz ve Mac komutları yalnız salt okuma ya da kısa sentetik deneme; hangi komutun çalıştırıldığı yazılır.
+- [x] docs/research/2026-10-05-yuv444.md: her soruya kaynaklı cevap, [ölçüm]/[kaynak]/[çıkarım] etiketleriyle; sonunda net öneri.
+- [x] Cihaz ve Mac komutları yalnız salt okuma ya da kısa sentetik deneme; hangi komutun çalıştırıldığı yazılır.
 
 ## Plan
 
@@ -39,4 +39,23 @@ NOTES 2026-10-04 ~22:45: Dock'taki Apple Music ikonu tablette kenarlarda basamak
 
 ## Handoff
 
-_(Araştırma ajanı doldurur.)_
+**Sonuç:** Engel tablet çözücüsü; Mac hazır. Yerel 4:4:4 şimdilik yapılmamalı; host tarafında luma ayarlı 4:2:0 (sharp YUV) önerilir.
+- Mac (M6): `ave.hevc` belgelenmemiş `HEVC_Main444_AutoLevel` / `HEVC_Main44410_AutoLevel` dizgelerini kabul ediyor. Hızlı yolda donanımda kodluyor (SPS `profile_idc=4`, `chroma_format_idc=3`). `BGRA` girdiyi VT kendisi 4:4:4'e çeviriyor (LLRC'de ise sessizce 4:2:0'a düşüyor). Kodlama +0,2–1,2 ms; anahtar kare +%27–55, kaydırmalı içerikte toplam ~1,7–2× bit. SCK 8-bit 4:4:4 vermiyor, yalnız `xf44` (10-bit). AV1/VVC kodlayıcı yok.
+- Tablet: `OMX.hisi.video.decoder.hevc` yalnız Main/Main10/Main10HDR10 ve 4:2:0 çıkış bildiriyor; AVC'de High444 yok; AV1 yalnız yazılım. `HEVCProfileMain444` API 37'de eklendi (tablet API 31).
+- Alternatifler: AVC444 paketleme (2× çözme, GL yolu: önerilmez), durağan yama (çok pahalı), AV1/VVC/yazılım (kapalı). Luma ayarı codec'siz deneyde kenar açıklık hatasını 34,9 → 62,9 dB düzeltiyor; renk saçağı kalıyor. Protokol ve istemci etkisi yok. Önerilen kart A: host geliştirici anahtarı `MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444`; tek cihaz oturumu, `444` değeri aynı zamanda çözücü denemesi.
+
+- **Commit:** plan 43c395d; rapor ed9f308; bu Handoff bir sonraki commit.
+- **Dokunulan dosyalar:** `docs/research/2026-10-05-yuv444.md`, bu kart.
+- **Varsayımlar:**
+  - Luma ayarı deneyi çözücü/ekranın çift doğrusal, ortalanmış renk büyütmesi yaptığını varsayıyor. Tablet DSS filtresi bilinmiyor; en yakın komşu olursa kazanç ~+9 dB'e iniyor.
+  - Kodlama süreleri canlı MateBridge akışı kodlayıcıyı paylaşırken alındı; mutlak değerler gürültülü.
+  - Ström ve ark. DCC 2016 bu görevde yeniden okunmadı (bilinen birincil kaynak olarak anıldı).
+- **Test edilmeyenler:**
+  - Tablet çözücüsüne gerçek bir Main 4:4:4 akışı verilmedi (APK/uygulama başlatma yasaktı); "hayır" bildirime dayanıyor.
+  - Luma ayarı gerçek codec ve tablet ekranında denenmedi; Metal kernel maliyeti ölçülmedi.
+  - 120 fps'te 4:4:4 kodlama süresi ölçülmedi.
+  - Uzun süreli bit hızı ölçümü yapılmadı.
+- **Cihaz/Mac komutları:** rapordaki "Çalıştırılan komutlar" bölümünde. Tablette yalnız `ls`, `cat` (media_codecs xml) ve `dumpsys media.player`; Mac'te oturumsuz VT sorgusu ve kısa sentetik kodlama (12 kare × 16 yapılandırma). Pencere, sanal ekran ve yakalama yok. Araştırma alt ajanı da 60 karelik kısa bir sentetik kodlama yaptı.
+- **Açık sorular:**
+  - Kart A açılsın mı? (mac-host-dev, ~1,5–2 gün + 1 cihaz oturumu.) Oyun modunda BGRA yakalama ve Metal geçişinin GPU maliyeti kabul edilebilir mi, yoksa yalnız Günlük/Çizim'de mi açık olmalı?
+  - Host'un VUI'ye `chroma_loc_info` yazmaması, tablette yarım piksellik renk kaymasına yol açıyor olabilir; ayrıca kontrol edilmeli (kart A'ya eklenebilir).
