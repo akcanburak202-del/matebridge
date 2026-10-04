@@ -48,12 +48,14 @@ class SettingsResetTest {
     private fun snapshot(s: Settings): List<Any> = listOf(
         s.statsOverlay(), s.streamMode(), s.bitrateKbps(), s.touchpadSpeed(), s.mouseSpeed(), s.clipboardShare(),
         s.filesShare(), s.filesRoot(), s.filesReadOnly(), s.audioEnabled(), s.audioOut(), s.penTrail(), s.penDot(),
-        s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(),
+        s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(), s.modeFps(StreamMode.DAILY), s.modeFps(StreamMode.GAME),
     )
 
     private fun setEverythingNonDefault(s: Settings) {
         s.setStatsOverlay(true)
-        s.setStreamMode(StreamMode.CLARITY)
+        s.setStreamMode(StreamMode.GAME)
+        s.setModeFps(StreamMode.DAILY, 60) // T-223
+        s.setModeFps(StreamMode.GAME, 120)
         s.setGameResolution(GameResolution.R1400) // T-215
         s.setBitrateKbps(60_000)
         s.setTouchpadSpeed(2f)
@@ -77,11 +79,13 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(16, s.resetToDefaults())
+        assertEquals(18, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())
-        assertEquals(StreamMode.SMOOTH, s.streamMode()) // Akıcı
+        assertEquals(StreamMode.DAILY, s.streamMode()) // Günlük
+        assertEquals(120, s.modeFps(StreamMode.DAILY)) // T-223: Günlük 120
+        assertEquals(60, s.modeFps(StreamMode.GAME)) // Oyun 60
         assertEquals(0L, s.bitrateKbps()) // Otomatik
         assertEquals(1f, s.touchpadSpeed())
         assertEquals(1f, s.mouseSpeed())

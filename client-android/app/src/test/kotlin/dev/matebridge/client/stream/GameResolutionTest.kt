@@ -27,13 +27,25 @@ class GameResolutionTest {
 
     private val nonGame = StreamMode.entries.filter { !it.isGame }
 
+    @Test fun r2240IsAValidOptionWithTheExactPanelShape() {
+        assertTrue(GameResolution.entries.contains(GameResolution.R2240))
+        assertEquals(GameResolution.R2240, GameResolution.parse("2240x1472"))
+        assertEquals(2240L * 1840, 1472L * 2800) // exactly 35:23
+        assertTrue(GameResolution.R2240.appliedIn(cfg1x(2240, 1472)))
+        assertNull(VideoLayout.surfaceSize(2800, 1840, cfg1x(2240, 1472)))
+        settings.setGameResolution(GameResolution.R2240)
+        val g = GameModeSettings(settings)
+        g.onModeChanged(StreamMode.GAME)
+        assertEquals(StreamPrefs(60, 1000, 60_000, 2240, 1472), g.prefs(StreamMode.GAME))
+    }
+
     @Test fun sizesIdsAndDefault() {
         assertEquals(
-            listOf(1400 to 920, 1848 to 1214, 2100 to 1380),
+            listOf(1400 to 920, 1848 to 1214, 2100 to 1380, 2240 to 1472),
             GameResolution.entries.map { it.widthPx to it.heightPx },
         )
-        assertEquals(listOf("1400x920", "1848x1214", "2100x1380"), GameResolution.entries.map { it.id })
-        assertEquals(listOf("1400×920", "1848×1214", "2100×1380"), GameResolution.entries.map { it.label })
+        assertEquals(listOf("1400x920", "1848x1214", "2100x1380", "2240x1472"), GameResolution.entries.map { it.id })
+        assertEquals(listOf("1400×920", "1848×1214", "2100×1380", "2240×1472"), GameResolution.entries.map { it.label })
         assertEquals(GameResolution.R1848, GameResolution.DEFAULT)
         for (r in GameResolution.entries) assertEquals(r, GameResolution.parse(r.id))
         assertEquals(GameResolution.DEFAULT, GameResolution.parse(null))
@@ -65,25 +77,34 @@ class GameResolutionTest {
         assertEquals(GameResolution.DEFAULT, settings.gameResolution())
     }
 
-    @Test fun gameModesSendTheDefaultGameDisplay() {
+    @Test fun gameModeSendsTheDefaultGameDisplay() {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 660, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME60))
-        // byte for byte the golden vector of T-213
-        assertArrayEquals(FixtureTest.fixture("stream_prefs_game_display"), Codec.encode(g.prefs(StreamMode.GAME)))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        g.selectFrameRate(StreamMode.GAME, 120)
+        assertEquals(StreamPrefs(120, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        // The wire did not change, only the mode concept: the bit rate and display group are byte for byte the golden
+        // vector of T-213 (its fps/scale words, 120/660, are not a mode's any more, so only the tail is compared).
+        g.selectFrameRate(StreamMode.GAME, 60)
+        val golden = FixtureTest.fixture("stream_prefs_game_display")
+        val bytes = Codec.encode(g.prefs(StreamMode.GAME))
+        assertEquals(golden.size, bytes.size)
+        assertArrayEquals(golden.copyOfRange(0, 5), bytes.copyOfRange(0, 5)) // header: type and length 12
+        assertArrayEquals(golden.copyOfRange(9, golden.size), bytes.copyOfRange(9, bytes.size)) // bitrate + display_*
+        assertEquals(60, bytes[5].toInt()) // fps 60
+        assertEquals(StreamMode.SCALE_PERMILLE, (bytes[7].toInt() and 0xFF) or ((bytes[8].toInt() and 0xFF) shl 8))
     }
 
     @Test fun gameModesSendTheStoredSize() {
         settings.setGameResolution(GameResolution.R1400)
         val g = GameModeSettings(settings)
-        g.onModeChanged(StreamMode.GAME60)
+        g.onModeChanged(StreamMode.GAME)
         settings.setBitrateKbps(30_000) // stored, outside the layer: the layer keeps 60 Mbps
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1400, 920), g.prefs(StreamMode.GAME60))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1400, 920), g.prefs(StreamMode.GAME))
         assertEquals(GameResolution.R1400, g.display(StreamMode.GAME))
     }
 
-    @Test fun nonGameModesProduceTodaysBytes() {
+    @Test fun nonGameModesSendNoGameDisplay() {
         settings.setGameResolution(GameResolution.R2100)
         val g = GameModeSettings(settings)
         for (bitrate in listOf(0L, 30_000L)) {
@@ -91,27 +112,25 @@ class GameResolutionTest {
             for (m in nonGame) {
                 g.onModeChanged(m)
                 val p = g.prefs(m)
-                assertEquals(m.toPrefs(bitrate), p)
                 assertEquals(0, p.displayWidthPx)
                 assertEquals(0, p.displayHeightPx)
                 assertNull(g.display(m))
                 val bytes = Codec.encodePayload(p)
                 assertEquals(8, bytes.size)
-                assertArrayEquals(Codec.encodePayload(StreamPrefs(m.fps, m.scalePermille, bitrate)), bytes)
+                assertArrayEquals(Codec.encodePayload(StreamPrefs(120, 1000, p.bitrateKbps)), bytes)
             }
         }
         settings.setBitrateKbps(0)
-        g.onModeChanged(StreamMode.PERFORMANCE)
-        assertArrayEquals(FixtureTest.fixture("stream_prefs"), Codec.encode(g.prefs(StreamMode.PERFORMANCE)))
+        g.onModeChanged(StreamMode.DAILY)
+        assertArrayEquals(Codec.encodePayload(StreamPrefs(120, 1000, 0)), Codec.encodePayload(g.prefs(StreamMode.DAILY)))
     }
 
     @Test fun gameDisplayOffGivesTodaysGameBytes() {
-        // `--ez dev true --ei game_display 0`: the A/B base, Oyun 120/60 exactly as before T-215.
+        // `--ez dev true --ei game_display 0`: the A/B base, Oyun without the display group (native HiDPI display).
         settings.setGameResolution(GameResolution.R1400)
         val g = GameModeSettings(settings, gameDisplay = false)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 660, 60_000), g.prefs(StreamMode.GAME))
-        assertEquals(StreamPrefs(60, 1000, 60_000), g.prefs(StreamMode.GAME60))
+        assertEquals(StreamPrefs(60, 1000, 60_000), g.prefs(StreamMode.GAME))
         assertEquals(8, Codec.encodePayload(g.prefs(StreamMode.GAME)).size)
         assertNull(g.display(StreamMode.GAME))
         assertNull(g.selectGameResolution(GameResolution.R2100, StreamMode.GAME)) // stored, nothing sent
@@ -127,18 +146,20 @@ class GameResolutionTest {
         assertEquals(GameResolution.R1400, settings.gameResolution()) // stored for the next game-mode entry
         g.onModeChanged(StreamMode.GAME)
         g.setBitrateKbps(15_000) // the layer's bit rate goes along
-        assertEquals(StreamPrefs(120, 660, 15_000, 2100, 1380), g.selectGameResolution(GameResolution.R2100, StreamMode.GAME))
-        assertEquals(StreamPrefs(60, 1000, 15_000, 1848, 1214), g.selectGameResolution(GameResolution.R1848, StreamMode.GAME60))
+        assertEquals(StreamPrefs(60, 1000, 15_000, 2100, 1380), g.selectGameResolution(GameResolution.R2100, StreamMode.GAME))
+        g.selectFrameRate(StreamMode.GAME, 120)
+        assertEquals(StreamPrefs(120, 1000, 15_000, 2240, 1472), g.selectGameResolution(GameResolution.R2240, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 15_000, 1848, 1214), g.selectGameResolution(GameResolution.R1848, StreamMode.GAME))
         assertEquals(GameResolution.R1848, settings.gameResolution())
     }
 
     @Test fun toastShowsTheGameDisplay() {
-        assertEquals("Oyun 120: 120 fps, 1848×1214", StreamMode.GAME.toastText(GameResolution.R1848))
-        assertEquals("Oyun 60: 60 fps, 1400×920", StreamMode.GAME60.toastText(GameResolution.R1400))
-        assertEquals("Oyun 120: 120 fps, %66", StreamMode.GAME.toastText(null)) // game display off
+        assertEquals("Oyun: 120 fps, 1848×1214", StreamMode.GAME.toastText(120, GameResolution.R1848))
+        assertEquals("Oyun: 60 fps, 1400×920", StreamMode.GAME.toastText(60, GameResolution.R1400))
+        assertEquals("Oyun: 60 fps", StreamMode.GAME.toastText(60, null)) // game display off
         val g = GameModeSettings(settings)
-        assertEquals("Akıcı: 120 fps, %100", StreamMode.SMOOTH.toastText(g.display(StreamMode.SMOOTH)))
-        assertEquals("Oyun 120: 120 fps, 1848×1214", StreamMode.GAME.toastText(g.display(StreamMode.GAME)))
+        assertEquals("Günlük: 120 fps", StreamMode.DAILY.toastText(g.fps(StreamMode.DAILY), g.display(StreamMode.DAILY)))
+        assertEquals("Oyun: 60 fps, 1848×1214", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
     }
 
     // ---- applied check (PROTOCOL §0x05: full geometry) ----

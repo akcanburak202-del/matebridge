@@ -361,6 +361,54 @@ class InputCaptureTest {
         assertFalse(sink.host.touchDown)
     }
 
+    // T-223: the Çizim layer flips the finger switch live (Ctrl+Shift+7 or the panel); nothing may stay held on the host.
+
+    @Test fun enteringDrawingDuringAFingerDragReleasesTheButtonAndIgnoresTheRest() {
+        touch(TouchAction.DOWN, 0, 1, finger(1, 300f, 300f))
+        touch(TouchAction.MOVE, 10, -1, finger(1, 500f, 500f)) // beyond the slop: a drag, the button is down
+        assertTrue(sink.host.touchDown)
+        setFingersDisabled(true, 20) // mode layer: fingers off
+        assertFalse(sink.host.touchDown)
+        assertTrue(sink.host.clear)
+        assertEquals(0, (sink.sent.last() as PointerAbs).buttons) // the matching up reached the host
+        val n = sink.sent.size
+        touch(TouchAction.MOVE, 30, -1, finger(1, 600f, 600f)) // the finger is still on the glass
+        touch(TouchAction.UP, 40, 1, finger(1, 600f, 600f))
+        assertEquals(n, sink.sent.size)
+        assertTrue(sink.host.violations.isEmpty())
+    }
+
+    @Test fun enteringDrawingDuringAScrollOrPinchCancelsItOnTheHost() {
+        touch(TouchAction.DOWN, 0, 1, finger(1, 1000f, 900f))
+        touch(TouchAction.DOWN, 5, 2, finger(1, 1000f, 900f), finger(2, 1200f, 900f))
+        touch(TouchAction.MOVE, 10, -1, finger(1, 1000f, 930f), finger(2, 1200f, 930f))
+        assertTrue(sink.host.scrollOpen)
+        setFingersDisabled(true, 20)
+        assertFalse(sink.host.scrollOpen)
+        assertEquals(Scroll.CANCELLED, sink.sent.filterIsInstance<Scroll>().last().phase)
+        assertTrue(sink.host.clear)
+        val n = sink.sent.size
+        touch(TouchAction.UP, 30, 2, finger(1, 1000f, 930f), finger(2, 1200f, 930f))
+        touch(TouchAction.UP, 35, 1, finger(1, 1000f, 930f))
+        assertEquals(n, sink.sent.size)
+    }
+
+    @Test fun leavingDrawingWhileAFingerIsStillDownStartsNothingUntilAFreshTouch() {
+        setFingersDisabled(true, 0)
+        touch(TouchAction.DOWN, 10, 1, finger(1, 300f, 300f)) // refused: fingers are off
+        assertTrue(sink.sent.isEmpty())
+        setFingersDisabled(false, 20) // Çizim left with that finger still down
+        assertTrue(sink.sent.isEmpty()) // nothing is held, so nothing is owed
+        touch(TouchAction.MOVE, 30, -1, finger(1, 500f, 500f))
+        touch(TouchAction.UP, 40, 1, finger(1, 500f, 500f))
+        assertTrue(sink.sent.isEmpty()) // no stray press or click from a touch that began while off
+        touch(TouchAction.DOWN, 100, 2, finger(2, 300f, 300f)) // a fresh touch works again
+        tick(200)
+        assertTrue(sink.host.touchDown)
+        touch(TouchAction.UP, 210, 2, finger(2, 300f, 300f))
+        assertFalse(sink.host.touchDown)
+    }
+
     @Test fun eraserToolIsReportedAsToolOne() {
         penDown(0, pt(0), eraser = true)
         assertEquals(Pen.TOOL_ERASER, (sink.sent.last() as Pen).tool)

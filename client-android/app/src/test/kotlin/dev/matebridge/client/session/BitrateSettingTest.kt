@@ -70,22 +70,22 @@ class BitrateSettingTest {
     }
 
     @Test fun streamPrefsCarryTheBitrateOnTheWire() {
-        assertEquals(StreamPrefs(120, 1000, 40_000), StreamMode.SMOOTH.toPrefs(40_000))
-        assertArrayEquals(FixtureTest.fixture("stream_prefs_bitrate"), Codec.encode(StreamMode.SMOOTH.toPrefs(40_000)))
-        assertEquals(StreamPrefs(120, 750, 0), StreamMode.PERFORMANCE.toPrefs()) // Otomatik = 0
-        assertArrayEquals(FixtureTest.fixture("stream_prefs"), Codec.encode(StreamMode.PERFORMANCE.toPrefs()))
+        assertEquals(StreamPrefs(120, 1000, 40_000), StreamMode.DAILY.toPrefs(bitrateKbps = 40_000))
+        assertArrayEquals(FixtureTest.fixture("stream_prefs_bitrate"), Codec.encode(StreamMode.DAILY.toPrefs(bitrateKbps = 40_000)))
+        assertEquals(StreamPrefs(120, 1000, 0), StreamMode.DAILY.toPrefs()) // Otomatik = 0
+        assertArrayEquals(FixtureTest.fixture("stream_prefs"), Codec.encode(StreamPrefs(120, 750)))
     }
 
     @Test fun initialBitrateGoesOutOnAcceptAndAChangeAtOnce() {
-        val m = SessionMachine(hello, StreamMode.CLARITY.toPrefs(60_000))
+        val m = SessionMachine(hello, StreamMode.DAILY.toPrefs(fps = 60, bitrateKbps = 60_000))
         val (gen, acc) = accepted(m)
         assertEquals(StreamPrefs(60, 1000, 60_000), sends(acc)[1])
         m.handle(Event.Received(gen, StreamConfig(1, 2, 2800, 1840, 1400, 920, 60, 60_000, 1, 1, 1, 1)), now)
         // bit rate changed while streaming: sent now; the same again: nothing
-        assertEquals(listOf<Any>(StreamPrefs(60, 1000, 100_000)), sends(m.handle(Event.SetPrefs(StreamMode.CLARITY.toPrefs(100_000)), now)))
-        assertTrue(m.handle(Event.SetPrefs(StreamMode.CLARITY.toPrefs(100_000)), now).isEmpty())
+        assertEquals(listOf<Any>(StreamPrefs(60, 1000, 100_000)), sends(m.handle(Event.SetPrefs(StreamMode.DAILY.toPrefs(fps = 60, bitrateKbps = 100_000)), now)))
+        assertTrue(m.handle(Event.SetPrefs(StreamMode.DAILY.toPrefs(fps = 60, bitrateKbps = 100_000)), now).isEmpty())
         // back to Otomatik
-        assertEquals(listOf<Any>(StreamPrefs(60, 1000, 0)), sends(m.handle(Event.SetPrefs(StreamMode.CLARITY.toPrefs()), now)))
+        assertEquals(listOf<Any>(StreamPrefs(60, 1000, 0)), sends(m.handle(Event.SetPrefs(StreamMode.DAILY.toPrefs(fps = 60)), now)))
     }
 
     @Test fun settingsOpenOnlyOnAnAcceptedSession() {

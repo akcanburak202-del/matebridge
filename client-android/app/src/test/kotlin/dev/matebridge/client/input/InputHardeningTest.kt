@@ -111,7 +111,10 @@ class InputHardeningTest {
         assertEquals(0, r.sink.pressesRejected)
     }
 
-    @Test fun aSecondFingerLandingWhileTheFirstIsStaleStartsASinglePressNotAScroll() {
+    @Test fun aSecondFingerLandingWhileTheFirstIsStaleStartsNeitherAScrollNorAPress() {
+        // T-223 (Codex): changed from "a single press". Reconciling with the live pointer list, a finger that lands while
+        // another one this tracker let go of is still down is not a first finger: no scroll (as before) and no stray click
+        // either, until every finger has lifted. A fresh touch after that presses as usual.
         val r = Rig()
         r.touch(TouchAction.DOWN, 0, 1, finger(1, 300f, 400f))
         r.tick(60)
@@ -121,7 +124,13 @@ class InputHardeningTest {
         r.touch(TouchAction.DOWN, 100, 2, finger(1, 300f, 400f), finger(2, 900f, 400f))
         r.tick(200)
         assertTrue(r.sink.sent.drop(n).none { it is Scroll })
-        assertTrue(r.host.touchDown) // finger 2 is a fresh press
+        assertFalse(r.host.touchDown)
+        assertEquals(n, r.sink.sent.size)
+        r.touch(TouchAction.UP, 300, 2, finger(1, 300f, 400f), finger(2, 900f, 400f))
+        r.touch(TouchAction.UP, 310, 1, finger(1, 300f, 400f))
+        r.touch(TouchAction.DOWN, 1_000, 3, finger(3, 100f, 100f))
+        r.tick(1_060)
+        assertTrue(r.host.touchDown)
     }
 
     // ================= fix 1: releases do not depend on the tool type at release time =================
