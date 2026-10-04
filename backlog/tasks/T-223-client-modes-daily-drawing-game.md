@@ -92,3 +92,5 @@ Karar 0030'u uygulamak: beş mod (Netlik, Akıcı, Performans, Oyun 120, Oyun 60
 - **Açık sorular:**
   - `SessionController.kt`, `SessionMachine.kt`, `DevKnobs.kt` `StreamMode.DEFAULT.toPrefs()` ile derleniyor (Günlük 120 → aynı baytlar), dokunulmadı.
   - Çizim katmanında ses/kalem ezilmiyor (karar 0030 yalnız parmak + bit hızı diyor); farklı isteniyorsa `GameModeSettings.defaults` tek yerden değişir.
+
+**Cihaz (2026-10-04 ~14:20–14:40):** Oyun 60'ta 2240×1472 seçilebiliyor ve uygulanıyor (`display_applied=1`), 1848↔2240 geçişi çalışıyor; eski `clarity` → Günlük 60 geçişi doğrulandı (`ev=modes_migrated`). Çizim avuç/kalem, Ctrl+Shift+7 döngüsü, Günlük 60↔120 henüz denenmedi.

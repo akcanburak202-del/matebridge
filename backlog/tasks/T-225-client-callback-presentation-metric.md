@@ -62,7 +62,7 @@ Cihaz oturumu 2'nin izleri (2026-10-04, Ori 1848×1214 Oyun 60 @120 Hz panel; RE
 - [ ] [JVM] Tampon 0 ve adaptif pacer aynı callback akışında aynı metriği verir.
 - [ ] [JVM] Callback tutmaları kusursuzken `AdaptivePacer.level` 0'da kalır; gerçek atlamalar varken eskisi gibi yükselir.
 - [ ] [JVM] `PresentMeter` (kalırsa) n=2'de 3-vsync boşluğu görür.
-- [ ] [device] Ori ve RE4 loglarında `skip_pct` ≈ `cb_skip_pct` (±2 puan), `level` = 0 (gerçek atlama yoksa); D jitter + 0,5 ms civarında, sınırda değil (n=1).
+- [x] [device] Ori ve RE4 loglarında `skip_pct` ≈ `cb_skip_pct` (±2 puan), `level` = 0 (gerçek atlama yoksa); D jitter + 0,5 ms civarında, sınırda değil (n=1).
 
 ## Sonra ölçülecek (orkestratör, kart dışı)
 
@@ -127,3 +127,5 @@ Ori Oyun 60 (panel 120, n=2) ve Oyun 120, ~3 dk: `--ez stats_1s true --ez pace_t
   3. Trace'i çekip `python3 tools/pacing/sim.py TRACE --holds`: ilk satır `source: callback times (cb_ns)`; `--latch` ile karşılaştır. `cb_ns` doluluğu (0 olmayan oran) ~%99+ olmalı, gösterilen karelerde.
   4. Callback damgası ızgarası: `sim.py --holds` çıktısındaki hold dağılımı `exact` ağırlıklı olmalı; `holds 1:..% 3:..%` gibi simetrik kısa/uzun çiftleri çok yüksekse damga jitter'ı P/2'yi aşıyor demektir (varsayım yanlış, geri bildir).
 - **Açık sorular:** Yok. Not: `MainActivity` `render ev=stats` satırına `latch_skip_pct` eklemek isteniyorsa o dosya karta eklenmeli.
+
+**Cihaz (2026-10-04 ~14:35, RE4 @60 Hz):** `skip_pct` ≈ `cb_skip_pct`, `hold_src=cb`; 1848'de level 0, D 11,6–13,4 ms. Ori ve 120 Hz n=2 koşusu yapılmadı. Ayrıntı NOTES.

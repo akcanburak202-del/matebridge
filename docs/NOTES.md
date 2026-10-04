@@ -1220,3 +1220,19 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - `scripts/device-smoke.sh` başlık kısmı cihazda çalıştı (host SHA, decoder `OMX.hisi…` oprate=max, usb, 2800×1840@60, mode=daily). İstatistik penceresi boş: tablet 13:07'den beri kilit ekranında (oturum yok). Tam 60 sn'lik koşu (USB ve Wi-Fi) sonraki kullanımda; `real_hz`, `tablet version/built` `-` çıktı → o koşuda kontrol.
 - T-225 (callback tabanlı `skip_pct`) birleşti, APK henüz kurulmadı. Doğrulama: Ori Oyun 60 (panel 120) ve RE4 @60 Hz, `--ez stats_1s true --ez pace_trace true`; `skip_pct ≈ cb_skip_pct` (±2), `hold_src=cb`, `level=0`, D sınırda değil; `sim.py TRACE --holds` "source: callback times (cb_ns)".
 - Gizlilik notu: istemcinin `ev=migrate_request` satırı uç nokta IP'sini (`host=`) logluyor. AGENTS.md'yi ihlal etmiyor (anahtar/metin değil), ama loglar paylaşılacaksa kısaltılması düşünülebilir; smoke filtresi zaten atıyor.
+
+## 2026-10-04 ~14:20–14:40 — RE4 Oyun 60, 2240×1472 ve 1848×1214 (T-223, T-225 cihaz)
+
+Koşul: USB, panel 60 Hz, host a9d7980-sonrası main, APK a9d7980 (T-223+T-225), oprate=max, 60 Mbps. Tek koşu, kullanıcı oynuyor (aynı sahne). Filtreli log: `~/.cache/matebridge-tools/data/2026-10-04-session3/`.
+
+| | 1848×1214 | 2240×1472 (oyun ekrana oturduktan sonra) |
+|---|---|---|
+| `skip_pct` = `cb_skip_pct` | %0–1,5 | %2–3 (geçişin ilk 10 sn'si %10) |
+| çözme p50 / p95 | ~13,8 / ~16,4 ms | ~14,9 / ~17,8 ms |
+| pacer D | 11,6–13,4 ms (level 0) | 16,67 ms (sınır) |
+| host | 60 fps, enc ~5,3 ms, kayıp 0 | aynı |
+
+- **T-225 doğrulandı:** `skip_pct` ≈ `cb_skip_pct` (fark ≤ 0,2 puan), `hold_src=cb`; 1848'de geri besleme düşük kalıyor ve D sınırdan iniyor (~3–5 ms daha az bekleme). Not: 2240'ın ilk penceresinde latch modeli %0 derken callback %23 gösterdi; eski model artık iki yönde de yanılabildiği için yalnız tanı.
+- **2240×1472 sınırda:** çözme p95 karenin 16,7 ms'sini aşıyor → ~%2–3 iki-vsync kare, D sınırda. İlk %17–23'lük ölçüm oyun ekrana oturmamışken / sahne yüklenirken alındı.
+- **Oyun içinde çözünürlük değişimi:** oyun açıkken Oyun çözünürlüğü değişince RE4 eski boyutta kaldı ("ekran tam oturmadı"); oyunun kendi ayarından yeniden seçince düzeldi. Beklenen davranış (0029), kullanıcıya not.
+- **Kullanıcı:** 1848 ile 2240 arasında fark hissetmedi. **Varsayılan 1848×1214 kalır** (0029 değişmez).
