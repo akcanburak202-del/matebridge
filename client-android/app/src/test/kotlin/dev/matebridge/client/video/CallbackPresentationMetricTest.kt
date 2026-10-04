@@ -209,12 +209,12 @@ class CallbackPresentationMetricTest {
         val id = t.record(7, 1_000, 2_000, null, 5_000_000, false, false, 0)
         t.onRelease(id, 5_000_000, 4_000_000, 0)
         t.record(8, 17_000, 18_000, null, 6_000_000, false, false, 0)
-        t.onCallback(7, 123_456_789L)
+        t.onCallback(7, 123_456_789L, 8_333_333L)
         t.onCallback(99, 5L) // not a row of this trace: ignored
         val lines = StringBuilder().also { t.writeCsv(it) }.toString().trim().split("\n")
-        assertEquals("cb_ns", lines[0].split(",").last())
-        assertEquals("123456789", lines[1].split(",").last())
-        assertEquals("0", lines[2].split(",").last())
+        assertEquals(listOf("cb_ns", "cb_period_ns"), lines[0].split(",").takeLast(2))
+        assertEquals(listOf("123456789", "8333333"), lines[1].split(",").takeLast(2))
+        assertEquals(listOf("0", "0"), lines[2].split(",").takeLast(2))
         assertEquals(PaceTrace.CSV_COLS, lines[1].split(",").size)
         // A reused row starts without the old callback.
         val small = PaceTrace(capacity = 2)

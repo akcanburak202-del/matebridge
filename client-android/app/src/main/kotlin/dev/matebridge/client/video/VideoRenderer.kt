@@ -558,7 +558,7 @@ class VideoRenderer(
                         stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
                         // T-168 cap_cb; T-225: the callback times are also the presentation metric (`skip_pct`).
                         stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000, nanoTime, period)
-                        trace?.onCallback(pts, nanoTime)
+                        trace?.onCallback(pts, nanoTime, period)
                     }
                 }
             }

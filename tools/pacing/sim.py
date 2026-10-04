@@ -17,6 +17,7 @@ a=ap.parse_args()
 import math
 from collections import Counter
 VISIBLE=('release','move')
+MAX_NS=2**63-1 # Long.MAX_VALUE: the codec's callback had no usable time
 def jround(x): return math.floor(x+0.5) # Kotlin Math.round
 class HoldMeter:
     """T-220: the client's presentation metric, rule for rule (VideoStats.kt `HoldMeter`; keep both in step).
@@ -71,18 +72,27 @@ def holds_cb(rows):
     """T-225: the metric on the frame-rendered callback times (`cb_ns`, the codec's own nanoTime; `skip_pct` on the
     client). A frame is decoded at its `ready_ns` and shown at its `cb_ns`; the two kinds of event are merged by time
     (a callback follows its decode), a row with no callback was dropped by the compositor and is simply not shown, so
-    its predecessor's hold comes out long. The period is the client's panel period at the release (`latch_period_ns`,
-    else `period_ns`). Rows with no `ready_ns` (received but never decoded) are no decoded frame."""
+    its predecessor's hold comes out long. The period is the one the client judged the callback with (`cb_period_ns`: the
+    panel period at the callback's delivery; older traces: `latch_period_ns`, the one at the release, else `period_ns`).
+    A `cb_ns` of Long.MAX_VALUE (the codec had no usable time) breaks the shown sequence, like the client (it has no time
+    of its own: it is placed one median decode->callback lag after its decode); a callback with no usable period is not
+    judged. Rows with no `ready_ns` (received but never decoded) are no decoded frame."""
+    lags = sorted(int(x['cb_ns']) - int(x['ready_ns']) for x in rows
+                  if 0 < int(x.get('cb_ns') or 0) < MAX_NS and int(x.get('ready_ns') or 0) > 0)
+    lag = lags[len(lags) // 2] if lags else 0
     ev = []
     for i, x in enumerate(rows):
         cap = int(x['capture_us']); rdy = int(x.get('ready_ns') or 0); cb = int(x.get('cb_ns') or 0)
         if rdy > 0: ev.append((rdy, 0, i, cap, 0))
-        if cb > 0:
-            P = int(x.get('latch_period_ns') or 0) or int(x.get('period_ns') or 0)
+        if cb >= MAX_NS:
+            if rdy > 0: ev.append((rdy + lag, 2, i, cap, 0))
+        elif cb > 0:
+            P = int(x.get('cb_period_ns') or 0) or int(x.get('latch_period_ns') or 0) or int(x.get('period_ns') or 0)
             if P > 0: ev.append((cb, 1, i, cap, P))
     ev.sort(); m = HoldMeter(); groups = {}
     for t, kind, i, cap, P in ev:
         if kind == 0: m.decoded(cap); continue
+        if kind == 2: m.brk(); continue
         v = m.presented(cap, t, P)
         if v: groups.setdefault((v[0], v[1]), Counter())[v[2]] += 1
     return groups
@@ -153,6 +163,28 @@ if a.holds_selftest:
     for line in holds_lines(g): print('holds self-test OK (callback times): '+line)
     g=holds(rows,'latch'); assert sum(v for k,v in g[(120,2)].items() if k!=2)>50, g
     for line in holds_lines(g): print('holds self-test OK (--latch, same rows): '+line)
+    # T-225 review 1: a callback with the Long.MAX_VALUE sentinel (frame 30) breaks the shown sequence, as in the client,
+    # instead of being a frame shown at the end of time (which made the 16.7% skips of the review's repro).
+    def regular(n=100):
+        return [{'capture_us':str(k*16_667),'ready_ns':str(10**9+k*2*P+20_000_000),'period_ns':str(P),'action':'release',
+                 'released_slot_ns':'0','latch_period_ns':str(P),'cb_ns':str(10**9+k*2*P+51_000_000)} for k in range(n)]
+    g0=holds(regular()); assert dict(g0[(120,2)])=={2:98}, g0
+    sent=regular(); sent[30]['cb_ns']=str(MAX_NS)
+    g1=holds(sent); c1=g1[(120,2)]; assert list(c1)==[2] and 92<=c1[2]<=96, g1 # no long, no short: only the sequence around 30 is cut
+    for line in holds_lines(g1): print('holds self-test OK (callback sentinel breaks the sequence): '+line)
+    # T-225 review 2: the callback is judged with the period current at its delivery (`cb_period_ns`), not the release's.
+    # Frames 0..49 on a 120 Hz panel; from frame 50 the callbacks are delivered on the 60 Hz grid while latch_period_ns
+    # (the release's) is still the 120 Hz one: only cb_period_ns gives the right cadence for them.
+    P2=16_666_667; rows=[]
+    for k in range(100):
+        cb=10**9+k*2*P+51_000_000 if k<50 else 10**9+100*P+(k-49)*P2+51_000_000
+        rows.append({'capture_us':str(k*16_667),'ready_ns':str(10**9+k*2*P+20_000_000),'period_ns':str(P),'action':'release',
+                     'released_slot_ns':'0','latch_period_ns':str(P),'cb_period_ns':str(P if k<50 else P2),'cb_ns':str(cb)})
+    g=holds(rows); assert {k:dict(v) for k,v in g.items()}=={(120,2):{2:49},(60,1):{1:48}}, g
+    for line in holds_lines(g): print('holds self-test OK (cb_period_ns): '+line)
+    for x in rows: del x['cb_period_ns'] # an older trace: latch_period_ns stands in, the 60 Hz frames are misjudged as 120 Hz holds of 2
+    g=holds(rows); assert (60,1) not in g, g
+    for line in holds_lines(g): print('holds self-test OK (older trace falls back to latch_period_ns): '+line)
     raise SystemExit
 if a.trace is None: ap.error('trace is required')
 if a.holds:

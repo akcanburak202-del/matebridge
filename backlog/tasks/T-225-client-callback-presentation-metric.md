@@ -91,8 +91,11 @@ Ori Oyun 60 (panel 120, n=2) ve Oyun 120, ~3 dk: `--ez stats_1s true --ez pace_t
   - Yeni tanı: `Snapshot.latchSkipPct`; `render ev=present` satırına `hold_src=cb|latch latch_skip_pct=` eklendi (`render ev=stats` satırı ve `cb_skip_pct` alanı yerinde, MainActivity kart dışı olduğu için `latch_skip_pct` yalnız present satırında).
   - Geri çağrısı gelmeyen kare: yeni kod yok, mevcut koşu/n kuralı öncülü uzun sayar (JVM testli). `shownNs == Long.MAX_VALUE` ya da `captureUs` bilinmiyorsa dizi kesilir.
   - `PresentMeter` kaldı: eşik `gap > cadence + P/2` (n=2'de 3 vsync görülür), `cb_skip_pct` tanı olarak sürer.
-  - `PaceTrace`: son sütun `cb_ns` (`onCallback(seq, ns)` son 64 satırda seq arar). `VideoRenderer` dinleyicisi `trace?.onCallback(pts, nanoTime)` çağırır.
+  - `PaceTrace`: son sütunlar `cb_ns`, `cb_period_ns` (`onCallback(seq, ns, period)` son 64 satırda seq arar). `VideoRenderer` dinleyicisi `trace?.onCallback(pts, nanoTime)` çağırır.
   - `sim.py --holds`: `cb_ns` varsa onu kullanır (decode `ready_ns`'te, gösterim `cb_ns`'te, olaylar zamana göre birleştirilir; geri çağrısı olmayan satır gösterilmemiş); `--latch` eski kaynağı zorlar; self-test'e üçüncü vektör.
+- **Codex incelemesi düzeltmeleri (2 x P2, ayrı commit):**
+  1. `sim.py` `Long.MAX_VALUE` callback damgasını gösterilen kare sayıyordu; istemci diziyi kesiyor. Artık `cb_ns >= MAX` bir dizi kesme olayı (zamanı: kendi `ready_ns` + ortanca decode->callback gecikmesi). Self-test: aynı düzenli akış, 30. karede sentinel -> `skip_pct` 0 (çevresindeki aralıklar yargılanmaz, 95 aralık).
+  2. `PaceTrace` yeni son sütun `cb_period_ns` (`onCallback(seq, ns, periodNs)`, `VideoRenderer` `vsync.periodNs`'yi teslim anında geçirir; CSV_COLS +1). `sim.py` periyot sırası `cb_period_ns` > `latch_period_ns` > `period_ns`. Self-test: 120 -> 60 Hz geçişinde callback'ler 60 Hz ızgarasında, `latch_period_ns` hâlâ 120 Hz: `cb_period_ns` ile `(120,2): 49 + (60,1): 48` hepsi exact; sütun silinince (eski iz) 60 Hz grubu çıkmaz. JVM: `PaceTrace` testleri iki sütunu kontrol eder. `./scripts/check.sh` -> ALL OK.
 - **JVM sonuçları** (`CallbackPresentationMetricTest`, 120 Hz panel, 60 fps, iki kovalı titreme, uyarlamalı pacer, saniyede bir pencere, 60 sn; `release jitter` = `releaseOutputBuffer` dönüşünün 0..J us rastgele gecikmesi):
 
   | J (us) | geri çağrı `skip_pct` max | latch `skip_pct` max | `level` (geri çağrıdan) |

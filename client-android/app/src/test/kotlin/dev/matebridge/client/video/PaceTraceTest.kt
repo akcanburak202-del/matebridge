@@ -12,7 +12,7 @@ class PaceTraceTest {
         assertEquals(1, lines.size)
         assertEquals(PaceTrace.CSV_COLS, lines[0].split(",").size)
         assertTrue(lines[0].contains(",own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action,"))
-        assertTrue(lines[0].endsWith(",rx_action,open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns,cb_ns")) // T-220 latch columns, T-225 cb_ns last
+        assertTrue(lines[0].endsWith(",rx_action,open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns,cb_ns,cb_period_ns")) // T-220 latch columns, T-225 cb_ns last
         assertTrue(lines[0].startsWith("seq,capture_us,ready_ns,"))
         assertTrue(lines[0].contains(",path,late_drop,collided,released_slot_ns,release_ns,render_ns,action"))
     }

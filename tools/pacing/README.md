@@ -15,7 +15,7 @@ Offline tools for tablet presentation traces (`--ez pace_trace true`, pull with
   the old hold would have chosen), `warmup` = lock re-acquired on a thin jitter history.
 - `sim.py TRACE --holds [--latch]` (T-208, rules since T-220, source since T-225) — the client's presentation metric
   (`skip_pct`, `hold_*` in `render ev=present`, `HoldMeter` in `VideoStats.kt`) on a device trace, rule for rule:
-  - Source (T-225): traces with a `cb_ns` column (the frame-rendered callback's `nanoTime`, last column, 0 = none) are
+  - Source (T-225): traces with a `cb_ns` column (the frame-rendered callback's `nanoTime`, 0 = none, Long.MAX_VALUE = no usable time, which breaks the shown sequence as in the client; with `cb_period_ns`, the panel period the client judged it with, older traces fall back to `latch_period_ns`) are
     judged on the callback times, like the client's `skip_pct`: a frame is decoded at `ready_ns` and shown at `cb_ns`
     (events merged by time), a frame without a callback was dropped by the compositor and is not shown (its predecessor's
     hold comes out long). The first output line says `source: callback times (cb_ns)`. Traces without `cb_ns`, and

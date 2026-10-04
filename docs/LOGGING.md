@@ -122,7 +122,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
   - `hold_src`: sayıların kaynağı: `cb` geri çağrı damgaları, `latch` bırakma-anı modeli (geri çağrı yok).
   - `latch_skip_pct`: aynı pencerede bırakma-anı modelinin uzun yüzdesi (tanı).
   - Kalan aralıklar tam tutulmuştur. Tampon 0 ile uyarlamalı zamanlayıcının karşılaştırması bu alanlarla yapılır.
-- Pace trace (`--ez pace_trace true`) son sütunu `cb_ns` (T-225): karenin frame-rendered geri çağrısının `nanoTime`'ı, 0 = geri çağrı yok. `tools/pacing/sim.py TRACE --holds` varsa onu kullanır (`--latch` eski modeli zorlar).
+- Pace trace (`--ez pace_trace true`) son iki sütunu `cb_ns` ve `cb_period_ns` (T-225): karenin frame-rendered geri çağrısının `nanoTime`'ı (0 = geri çağrı yok, `9223372036854775807` = codec kullanılabilir zaman vermedi; istemci diziyi keser) ve ölçütün o geri çağrıyı yargılarken kullandığı panel periyodu (geri çağrı teslim anındaki). `tools/pacing/sim.py TRACE --holds` varsa onları kullanır (eski izlerde `latch_period_ns`; `--latch` eski modeli zorlar).
 - Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`) değişmedi.
 
 ## Keyframe isteği birleştirme (Mac, `net`, T-122)
