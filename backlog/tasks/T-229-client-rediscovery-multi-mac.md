@@ -48,7 +48,7 @@ T-227'nin dördüncü Codex turu (`~/.cache/matebridge-tools/data/codex-T-227d.t
 
 ## Handoff
 
-- **Commit:** `74efb6c` plan, `3291301` uygulama ve testler. Dal: `task/T-229-rediscovery-multi-mac`.
+- **Commit:** `74efb6c` plan, `3291301` uygulama ve testler, `c45bb81` Codex inceleme düzeltmesi (P2). Dal: `task/T-229-rediscovery-multi-mac`.
 - **Dokunulan dosyalar:**
   - `client-android/app/src/main/kotlin/dev/matebridge/client/session/EndpointRediscovery.kt`:
     - `Pick.QUEUED`, sınırlı kuyruk (`MAX_QUEUE = 4`), `unreachable` kümesi,
@@ -58,13 +58,19 @@ T-227'nin dördüncü Codex turu (`~/.cache/matebridge-tools/data/codex-T-227d.t
     - `onDiscovered()` `QUEUED`'da bağlanmaz,
     - `onRediscoveryVerdict()` eski adrese dönmeden önce kuyruğu dener,
     - `connect()` → `onUserStart(ep)`.
-  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/EndpointRediscoveryMultiMacTest.kt` (yeni, 8 test).
+  - `client-android/app/src/test/kotlin/dev/matebridge/client/session/EndpointRediscoveryMultiMacTest.kt` (yeni, 10 test).
+- **İnceleme düzeltmesi (Codex T-229 P2):**
+  - Sorun: `onUserStart(B)` ile B'nin `Connecting`'i arasında eski oturumun geç `Connected(hostTag=A)` durumu render edilirse `learn(A, B)` çağrılıyordu.
+  - Çözüm: `onUserStart(ep)` bir bariyer kurar (`userStartEp`). O başlangıcın `Connecting(ep)` ya da kendi `Failed(endpoint=ep)` durumu (kilit) görülene kadar gelen her durum eski oturumun geç durumu sayılır ve hiçbir şeye karar vermez: kimlik öğrenmez, düşüş saymaz. Bu, T-227'nin aday için kullandığı `candidateStarted` mantığının aynısı.
+  - `SessionUi`'ye uç nokta damgası eklenmedi: `SessionUi.kt`/`SessionMachine.kt` kart `files:` dışında.
+  - Oturum başka bir adrese geçerse bariyer yeni adresi bekler; `reset()` bariyeri temizler.
+  - Testler: `aLateConnectedOfTheSupersededSessionIsNotLearntForTheUserPick` (Codex'in sırası), `aUserStartEndedByItsOwnFailureReleasesTheBarrier`.
 - **Kabul kriterleri:**
   - [x] [JVM] İki Codex dizisi:
     - `aLaterResultWaitsWhileTheRightHostIsTried`, `anUnreachableCandidateHandsOverToTheQueuedOneNotToTheOldAddress`, `aFreshAddressReplacesACandidateThatWasAlreadyUnreachable`;
     - `aUserPickedOtherMacIsNotRefusedByALaterEpisode`.
   - [x] [JVM] `EndpointRediscoveryTest` (31) ve `WrongHostGateTest` dosyalarına dokunulmadı; hepsi geçti.
-  - `./scripts/check.sh` `3291301` üzerinde: ALL OK.
+  - `./scripts/check.sh` `c45bb81` üzerinde: ALL OK.
 - **Varsayımlar:**
   - Kuyruk bölüme ait; `Accepted`/sıfırlama/kullanıcı başlangıcıyla temizlenir. Kuyruk dolarsa taze bir sonuç `unreachable` bir girdiyi çıkarır, yoksa yeni sonuç düşer. Yeniden başlatma onu zaten tekrar bildirir.
   - Taze adresin, o an bağlanmakta olan ve bu bölümde zaten `unreachable` işaretli bir adayın yerini alması bilinçli bir istisna. Bu, T-227'nin eski "yerini alma" davranışının (geç durum koruması dahil) daraltılmış hali.
