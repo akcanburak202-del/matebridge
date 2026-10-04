@@ -1,7 +1,7 @@
 ---
 id: T-217
 title: A/B HiSilicon decoder low-latency keys and operating rate (dev knob)
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-185, T-219]
@@ -38,7 +38,13 @@ Araştırma (docs/research/2026-10-04-smoothness.md §1, §4): oyun modunda 2800
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. Kilit testi önce (mevcut koda karşı): ayar yokken `createCodec`'in formata koyduğu anahtar/değer listesi (sıra dahil) `FakeDecoderFactory` ile sabitlenir.
+2. `OperatingRate.kt`: saf `DecoderLatencyKnobs` (`lowLat` off|hisi|vdec|all, `opRate` fps|max). `hisi` = iki `vendor.hisi-ext-low-latency-video-dec.*` anahtarı (`…-req=1`, `…-rdy=-1`); `vdec` = `vdec-lowlatency=1`, `low-latency=1`; `all` = dördü. `max` = `KEY_OPERATING_RATE = Short.MAX_VALUE` (Moonlight). Varsayılan = bugünkü davranış.
+3. `DevKnobs.kt`: `--es dec_lowlat off|hisi|vdec|all`, `--es dec_oprate fps|max` (kartta `--ei` yazıyor ama değer metin; `--es` kullanılır), yalnızca geliştirici, `ev=profile knobs=` içinde. Alan: `decoderLatency`.
+4. `DecoderCodec.kt`: `supportedVendorParameters` (API 31+, aksi hâlde null).
+5. `VideoRenderer.kt`: yapıcıya `decoderTuning` (varsayılan DEFAULT) + `createCodec`: varsayılanda anahtarlar ve hata yolu aynı; ayar açıkken configure/start hata verirse codec bırakılır, yeni codec ile **anahtarsız bir kez** denenir, `W decoder ev=dec_lowlat_rejected` (yalnız anahtar adları). `ev=codec_start`'a `lowlat=` `oprate=` (`accepted`'tan önce). `I decoder ev=vendor_params` codec adı başına bir kez (yalnız anahtar adları).
+6. JVM testleri (fake codec), `docs/KNOBS.md`, `docs/LOGGING.md`.
+7. Kapsam dışı: `MainActivity.kt` bağlantısı (`DevKnobs.decoderLatency` → `VideoRenderer(decoderTuning=)`) kartın `files:` listesinde yok → *Açık sorular*.
 
 ## Handoff
 
