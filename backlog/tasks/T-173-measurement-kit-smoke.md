@@ -1,7 +1,7 @@
 ---
 id: T-173
 title: Version the measurement and soak scripts and add device-smoke.sh
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-145, T-146]

@@ -18,7 +18,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-164](tasks/T-164-video-fault-churn-device-run.md) | Run decoder fault injection and the surface-churn soak on the tablet | 6 | orchestrator | [T-159, T-161] |
 | [T-166](tasks/T-166-parked-display-measurement.md) | Measure parked-display behaviour across sleep, lock and long outages | 6 | user | [T-165, T-147] |
 | [T-167](tasks/T-167-host-display-keep-menu.md) | Add a display keep-time preference and "Sanal ekranı şimdi kaldır" to the menu | 6 | mac-host-dev | [T-165, T-166] |
-| [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-174](tasks/T-174-optical-latency-baseline.md) | Record the optical input-to-photon baseline (USB/Wi-Fi, 60/120 Hz) | 6 | user | [T-168, T-173] |
 | [T-178](tasks/T-178-host-wifi-default-bitrate.md) | Use a conservative default bitrate on Wi-Fi (host only) | 6 | mac-host-dev | [T-127] |
 | [T-179](tasks/T-179-pen-wifi-rhythm-measurement.md) | Measure Wi-Fi pen arrival rhythm after T-111 across 3 topologies | 6 | orchestrator | [T-171, T-127] |
@@ -208,6 +207,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-169](tasks/T-169-client-refresh-target-log.md) | Log target and real refresh separately; warn on a mismatch | 6 | android-client-dev | [T-168] |
 | [T-170](tasks/T-170-host-latency-trace-join.md) | Make the host latency CSV joinable with the tablet trace; fix labels | 6 | mac-host-dev | [T-162] |
 | [T-171](tasks/T-171-host-input-age-ping.md) | Measure input age at injection through host PING (diagnostics only) | 6 | mac-host-dev | [T-152, T-163] |
+| [T-173](tasks/T-173-measurement-kit-smoke.md) | Version the measurement and soak scripts and add device-smoke.sh | 6 | orchestrator | [T-145, T-146] |
 | [T-175](tasks/T-175-host-input-delivery-timing.md) | Time host input delivery, environment lookups and CGEventPost per message | 6 | mac-host-dev | [T-171] |
 | [T-176](tasks/T-176-host-drop-idr-feedback.md) | Stop forced-IDR feedback on host-side queue drops | 6 | mac-host-dev | [T-162] |
 | [T-177](tasks/T-177-host-live-bitrate-setter.md) | Add a live encoder bitrate setter (no restart) and verify VT honours it | 6 | mac-host-dev | [T-162, T-176] |

@@ -1214,3 +1214,9 @@ Kurulum: USB, Çizim modu, `--ez stats_1s true --ei draw_scale N`, kullanıcı K
 - HDMI dummy **yok**: `system_profiler SPDisplaysDataType` yalnız 1920×1080 yer tutucu ekranı listeliyor.
 - Uzak yol Parsec (2026-10-03 cevabı); Parsec süreci çalışıyor.
 - `docs/RECOVERY.md` taslağı yazıldı; senaryo provaları (T-147 adım 2–10) kullanıcıyla yapılacak.
+
+## 2026-10-04 ~13:45 — T-173 ilk smoke, T-225/T-173 açık notlar
+
+- `scripts/device-smoke.sh` başlık kısmı cihazda çalıştı (host SHA, decoder `OMX.hisi…` oprate=max, usb, 2800×1840@60, mode=daily). İstatistik penceresi boş: tablet 13:07'den beri kilit ekranında (oturum yok). Tam 60 sn'lik koşu (USB ve Wi-Fi) sonraki kullanımda; `real_hz`, `tablet version/built` `-` çıktı → o koşuda kontrol.
+- T-225 (callback tabanlı `skip_pct`) birleşti, APK henüz kurulmadı. Doğrulama: Ori Oyun 60 (panel 120) ve RE4 @60 Hz, `--ez stats_1s true --ez pace_trace true`; `skip_pct ≈ cb_skip_pct` (±2), `hold_src=cb`, `level=0`, D sınırda değil; `sim.py TRACE --holds` "source: callback times (cb_ns)".
+- Gizlilik notu: istemcinin `ev=migrate_request` satırı uç nokta IP'sini (`host=`) logluyor. AGENTS.md'yi ihlal etmiyor (anahtar/metin değil), ama loglar paylaşılacaksa kısaltılması düşünülebilir; smoke filtresi zaten atıyor.
