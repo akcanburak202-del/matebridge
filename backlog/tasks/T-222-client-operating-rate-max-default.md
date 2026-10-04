@@ -1,7 +1,7 @@
 ---
 id: T-222
 title: Decoder operating rate "max" by default (device A/B result of T-217)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-217]
@@ -33,7 +33,10 @@ T-217 cihaz A/B'si (docs/NOTES.md 2026-10-04 ~11:00–11:50): `KEY_OPERATING_RAT
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `DecoderLatencyKnobs` kurucu varsayılanı `opRate = MAX`; `parse` yok/bilinmeyen `dec_oprate` → `max`. Yeni `STANDARD` (= `off`, `max`) uygulama varsayılanı; `DevKnobs.decoderLatency` varsayılanı `STANDARD`.
+2. `DEFAULT` adı korunur ama anlamı "T-217 öncesi format = createCodec'in tek seferlik geri düşüş formatı" (`off`, `fps`) olur: `VideoRenderer` dosya listesinde değil ve geri düşüşü `DEFAULT` + `isDefault` ile yapıyor; böylece `max` reddedilirse akış fps'li formata bir kez düşülür, `dec_oprate=fps` (eski davranış) reddi yeniden denenmez (T-217 öncesi gibi).
+3. Testler: T-217 "varsayılan değişmedi" kilidi yeni varsayılanı (32767) sabitler; varsayılanın reddi → fps formatına tek geri düşüş testi; `fps` açıkça eski formatı verir. DevKnobsTest varsayılanları `STANDARD`.
+4. KNOBS 23d, LOGGING `codec_start` varsayılanı `oprate=max`.
 
 ## Handoff
 
