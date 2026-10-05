@@ -6,6 +6,12 @@ public struct EncodedVideoFrame: Equatable, Sendable {
     public var captureTimeUs: UInt64
     /// Annex-B NAL units.
     public var data: [UInt8]
+    /// `VIDEO_FRAME.view` (decision 0034): 0 main, 1 auxiliary.
+    public var view: UInt8 = 0
+    /// T-258: submission identity of a packed pair (0 = none, CODEC_CONFIG). The main and the auxiliary frame of one
+    /// submission carry the same value; it rises with submission order, so pairing never depends on timestamps (a
+    /// refinement frame has a synthetic, later timestamp).
+    public var pairID: UInt64 = 0
     /// Per-stage host timestamps (T-070); not part of the wire format.
     public var trace = FrameTrace()
 
@@ -21,6 +27,6 @@ public struct EncodedVideoFrame: Equatable, Sendable {
     var isProtected: Bool { isKeyframe || isCodecConfig }
 
     public func toVideoFrame(seq: UInt32) -> VideoFrame {
-        VideoFrame(frameSeq: seq, captureTimeUs: captureTimeUs, flags: flags, data: data)
+        VideoFrame(frameSeq: seq, captureTimeUs: captureTimeUs, flags: flags, view: view, data: data)
     }
 }

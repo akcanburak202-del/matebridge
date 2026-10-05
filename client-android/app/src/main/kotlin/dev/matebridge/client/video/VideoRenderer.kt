@@ -14,6 +14,21 @@ fun interface VideoFrameSink {
 }
 
 /**
+ * Decision 0034 (T-259): the main stream of the packed full colour path decodes into an ImageReader instead of the
+ * SurfaceView; a GL pass shows it. With a [PackedOutput] set ([VideoRenderer.packed]) a frame that would be released at
+ * `renderNs` is released to the reader at once (rendering to an ImageReader must not carry a target time, it would become
+ * the image timestamp) and the presenter is told its target first. Null (the default, `chroma_layout = 0`): nothing of
+ * this exists on the path.
+ */
+interface PackedOutput {
+    /** Called before the release of main frame [pts] (frame_seq) captured at [captureUs] with target [renderNs] (0 = now). */
+    fun onRelease(pts: Long, captureUs: Long?, renderNs: Long)
+
+    /** Extra time before the slot the buffer must be handed over (GL pass + image hop); added to the dispatch lead. */
+    val extraLeadNs: Long
+}
+
+/**
  * MediaCodec decoder bound to a Surface, through the [DecoderCodec] seam (T-158). One decoder thread per attachment;
  * all codec calls happen on it (outputs on its companion `mb-decoder-out` thread). Frames go through [FrameQueue]
  * (bounded, newest wins, keyframe gated).
@@ -106,6 +121,21 @@ class VideoRenderer(
 
     /** Read at each codec start; switch before re-attaching a surface (GL -> SurfaceView fallback). */
     @Volatile var codecReportsShown: Boolean = codecReportsShown
+
+    /**
+     * Decision 0034: set (before [attachSurface] of the main ImageReader's surface) while the packed full colour path
+     * runs; null for the direct path. Read at each codec start.
+     */
+    @Volatile var packed: PackedOutput? = null
+
+    /** The running codec's shown-time sink while [packed] is set ([reportPackedShown]); null otherwise. */
+    @Volatile private var packedShownSink: ((Long, Long) -> Unit)? = null
+
+    /**
+     * Decision 0034: the presenter's display time of main frame [pts] (EGL present timestamp, `System.nanoTime` clock);
+     * feeds the same statistics the codec's frame-rendered callback feeds on the direct path. Any thread.
+     */
+    fun reportPackedShown(pts: Long, shownNs: Long) { packedShownSink?.invoke(pts, shownNs) }
 
     /** [BUFFER_ADAPTIVE] or jitter buffer size in content frames (0..2); takes effect on the next frame. */
     @Volatile var bufferFrames: Int = bufferFrames.coerceIn(BUFFER_ADAPTIVE, 2)
@@ -218,6 +248,12 @@ class VideoRenderer(
 
     /** T-161: bounded hand-off between generations (owner = the last generation that may hold a codec). */
     private val handoff = GenerationHandoff(handoffTimer)
+
+    /**
+     * T-259: true when the last codec's decoder and output threads have all exited (after [detachSurface] timed out they
+     * may still be inside a codec call that uses the output surface).
+     */
+    fun decoderThreadsFinished(): Boolean = handoff.isIdle()
 
     /** T-161 (tests): decoder threads waiting for the previous generation right now. */
     internal val handoffWaitingThreads: Int get() = handoff.waitingThreads
@@ -401,6 +437,7 @@ class VideoRenderer(
     /** T-231: the colour keys of the decoder format for [config], in format order (absent = left unset). */
     private fun colorKeys(config: StreamConfig): Map<String, Int> {
         val m = LinkedHashMap<String, Int>()
+        if (packed != null) return m // decision 0034: raw samples, no colour tagging
         colorOverrides.standard(config)?.let { m[MediaFormat.KEY_COLOR_STANDARD] = it }
         colorOverrides.transfer(config)?.let { m[MediaFormat.KEY_COLOR_TRANSFER] = it }
         colorOverrides.range(config)?.let { m[MediaFormat.KEY_COLOR_RANGE] = it }
@@ -581,24 +618,30 @@ class VideoRenderer(
             st.adaptive = adaptivePacer
             live = st
             val gauge = st.gauge
+            val pk = packed // decision 0034: null = the direct path, exactly as before
             val reportsShown = codecReportsShown
-            val sink = CodecSink(codec, st, expectCallback = reportsShown, trace = trace)
+            val sink = CodecSink(codec, st, expectCallback = reportsShown && pk == null, trace = trace, packedOut = pk)
             val releaser = SlotReleaser(sink, st.counters)
             releaser.trace = trace
-            if (reportsShown) {
-                codec.setOnFrameRenderedListener { pts, nanoTime -> // on the main looper (adapter)
-                    // T-161: a late callback of a stopped codec must not count. Main thread: a plain check, never the
-                    // shared lock (review 2: the UI thread must not wait on output bookkeeping).
-                    if (st.current) {
-                        val period = vsync.periodNs
-                        val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
-                        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
-                        stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
-                        // T-168 cap_cb; T-225: the callback times are also the presentation metric (`skip_pct`).
-                        stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000, nanoTime, period)
-                        trace?.onCallback(pts, nanoTime, period)
-                    }
+            // The shown-time handling of one frame; the direct path calls it from the codec's callback, the packed path
+            // from the presenter (EGL present timestamp).
+            val onShown = { pts: Long, nanoTime: Long ->
+                // T-161: a late callback of a stopped codec must not count. Main thread: a plain check, never the
+                // shared lock (review 2: the UI thread must not wait on output bookkeeping).
+                if (st.current) {
+                    val period = vsync.periodNs
+                    val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
+                    val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+                    stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
+                    // T-168 cap_cb; T-225: the callback times are also the presentation metric (`skip_pct`).
+                    stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000, nanoTime, period)
+                    trace?.onCallback(pts, nanoTime, period)
                 }
+            }
+            if (pk != null) {
+                if (reportsShown) packedShownSink = onShown
+            } else if (reportsShown) {
+                codec.setOnFrameRenderedListener { pts, nanoTime -> onShown(pts, nanoTime) } // on the main looper (adapter)
             }
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
             // moment it is ready instead of after the input side's 4 ms poll/dequeue waits (T-052).
@@ -692,6 +735,7 @@ class VideoRenderer(
                     "join_ms=$OUTPUT_JOIN_MS")
             }
             if (live === st) live = null // only this codec's own entry (codecs of one renderer never overlap)
+            packedShownSink = null
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
             env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=codec_stop")
@@ -707,6 +751,8 @@ class VideoRenderer(
     private inner class CodecSink(
         private val codec: DecoderCodec, private val st: CodecState, private val expectCallback: Boolean,
         private val trace: PaceTrace?,
+        /** Decision 0034: the packed path (release to the ImageReader now, the presenter times it); null = direct. */
+        private val packedOut: PackedOutput? = null,
     ) : SlotReleaser.Sink {
         /** Output buffer index -> pts (frame_seq) of the frame in it; bounded by the codec's output buffers. */
         private val ptsOf = HashMap<Int, Long>()
@@ -718,7 +764,10 @@ class VideoRenderer(
             if (trace != null) traceIdOf[idx] = traceId
         }
 
-        override fun release(idx: Int, renderNs: Long) = render(idx, renderNs) { codec.releaseOutputBuffer(idx, renderNs) }
+        override fun release(idx: Int, renderNs: Long) {
+            val pk = packedOut ?: return render(idx, renderNs) { codec.releaseOutputBuffer(idx, renderNs) }
+            releasePacked(pk, idx, renderNs)
+        }
         override fun discard(idx: Int) {
             codec.releaseOutputBuffer(idx, false)
             ptsOf.remove(idx)
@@ -726,7 +775,20 @@ class VideoRenderer(
             st.ifCurrent { stats.onDiscarded() }
             st.gauge.onDone(System.nanoTime())
         }
-        fun releaseNow(idx: Int) = render(idx, 0L) { codec.releaseOutputBuffer(idx, true) }
+        fun releaseNow(idx: Int) {
+            val pk = packedOut ?: return render(idx, 0L) { codec.releaseOutputBuffer(idx, true) }
+            releasePacked(pk, idx, 0L)
+        }
+
+        /** Decision 0034: tells the presenter the frame's target, then renders it to the ImageReader at once. */
+        private fun releasePacked(pk: PackedOutput, idx: Int, renderNs: Long) {
+            val pts = ptsOf[idx]
+            val captureUs = if (pts != null) st.captureByPts.get(pts) else null
+            render(idx, renderNs) {
+                if (pts != null) pk.onRelease(pts, captureUs, renderNs)
+                codec.releaseOutputBuffer(idx, true)
+            }
+        }
 
         /**
          * A release for rendering ([releaseCall], the codec call, runs outside the shared lock). T-168 review: in
@@ -759,7 +821,8 @@ class VideoRenderer(
     /** How long an output may be held for a possible same-slot successor: the compositor needs it this long before the slot. */
     private fun dispatchLeadNs(): Long {
         val g = vsync.grid()
-        return if (g.deadlineNs > 0) g.deadlineNs + DISPATCH_MARGIN_NS else g.periodNs
+        val extra = packed?.extraLeadNs ?: 0L // decision 0034: the GL pass comes after the release
+        return (if (g.deadlineNs > 0) g.deadlineNs + DISPATCH_MARGIN_NS else g.periodNs) + extra
     }
 
     /**

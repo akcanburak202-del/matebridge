@@ -37,6 +37,18 @@ public struct VideoSettings: Equatable, Sendable {
     /// a change of it alone is no change of the settings). `MATEBRIDGE_CHROMA` wins over it (`ChromaPolicy`). Not part
     /// of `displayMode`: a change keeps the virtual display, only capture and encoder restart.
     public var chromaPreference: ChromaPreference = .normal
+    /// Decision 0034: the tablet's HELLO carries `Capabilities.fullChroma` (bit11). Set by `forTablet`.
+    public var clientFullChroma = false
+    /// Decision 0034: packed full colour may be used in this session: bit11, the session's own `STREAM_PREFS.chroma = 2`
+    /// (not a remembered one), every condition of PROTOCOL.md 0x05 (`FullChromaPolicy`), and no runtime fallback.
+    /// Set by `applying(_:fullChroma:)` only; `chromaPreference` is `.full` exactly then.
+    public internal(set) var fullChromaGranted = false
+    /// Decision 0034 section 7: full colour was requested and qualifies but a runtime fallback is in force. The encoder
+    /// then runs normal 4:2:0, also against `MATEBRIDGE_CHROMA=packed444` (not the sharp path).
+    public internal(set) var fullChromaFellBack = false
+    /// `MATEBRIDGE_CHROMA` (read by `applyingExperimentKnobs`); it wins over the tablet's choice, and `packed444` still
+    /// needs `fullChromaGranted`.
+    public var chromaKnob = ChromaKnob.unset
     /// T-232 developer knob `MATEBRIDGE_VD_TRANSFER` (read by `applyingExperimentKnobs`): the transfer function of an
     /// SDR stream's virtual display. An HDR10 stream always asks for 1 (`displayTransfer`).
     public var vdTransferKnob = VirtualDisplayTransfer.parse(nil)
@@ -106,6 +118,7 @@ public struct VideoSettings: Equatable, Sendable {
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
             ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
         s.vdTransferKnob = VirtualDisplayTransfer.parse(env: env)
+        s.chromaKnob = ChromaKnob.parse(env: env)
         return s
     }
 
@@ -149,6 +162,15 @@ public struct VideoSettings: Equatable, Sendable {
     public static let hdr10Matrix: UInt8 = 9
     public static let hdr10FullRange = false
 
+    /// The stream is a packed full colour pair (decision 0034): granted, and the developer knob (when set) says
+    /// `packed444`. Every other `MATEBRIDGE_CHROMA` value wins over the tablet's choice.
+    public var packedChroma: Bool {
+        fullChromaGranted && (chromaKnob.isSet ? chromaKnob.requested == .packed444 : true)
+    }
+
+    /// `STREAM_CONFIG.chroma_layout`.
+    public var chromaLayout: UInt8 { packedChroma ? 1 : 0 }
+
     public func streamConfig(configID: UInt16) -> StreamConfig {
         let hdr = dynamicRange == .hdr10
         return StreamConfig(
@@ -159,6 +181,6 @@ public struct VideoSettings: Equatable, Sendable {
             colorPrimaries: hdr ? Self.hdr10ColorPrimaries : Self.colorPrimaries,
             transfer: hdr ? Self.hdr10Transfer : Self.transfer,
             matrix: hdr ? Self.hdr10Matrix : Self.matrix,
-            fullRange: hdr ? Self.hdr10FullRange : Self.fullRange)
+            fullRange: hdr ? Self.hdr10FullRange : Self.fullRange, chromaLayout: chromaLayout)
     }
 }

@@ -4,6 +4,8 @@ import Foundation
 /// A plain value that travels inside `EncodedVideoFrame`, so measuring needs no lookup tables and no allocation.
 /// 0 means "not stamped".
 public struct FrameTrace: Equatable, Sendable {
+    /// T-258: the submission this frame belongs to (the main and the auxiliary frame of one packed pair share it).
+    public var pairID: UInt64 = 0
     /// Trace origin: the earliest of the SCK stamps (`displayUs`, `ptsUs`) and `deliveredUs` (see `origin`).
     public var captureUs: UInt64 = 0
     /// ScreenCaptureKit presentation timestamp (the same value as `VIDEO_FRAME.capture_time_us`); 0 = unknown.

@@ -1,6 +1,6 @@
 # 0034 — Tam renk (4:4:4) Günlük 60'ta: 4:2:0 içinde paketlenmiş iki akış (AVC444v2 düzeni)
 
-- **Durum:** taslak (kullanıcı onayı bekliyor)
+- **Durum:** kabul (kullanıcı 2026-10-05)
 - **Tarih:** 2026-10-05
 
 ## Bağlam
@@ -17,7 +17,7 @@
 ## Karar
 
 1. **Kapsam:** yalnız **Günlük modu, 60 fps, doğal 2800×1840 HiDPI**. Günlük 120, Çizim (hep 120), Oyun ve HDR10 bu yolu kullanmaz; o modlarda renk seçeneği 0033'e (ya da normale) düşer.
-2. **Panel:** "Renk" satırı üç seçenekli olur: **Normal / Keskin kenarlar / Tam renk**. 0033'ün mevcut Kapalı/Açık seçeneğinin yerini alır, kayıtlı değer taşınır. "Tam renk" yalnız Günlük 60'ta uygulanır; diğer modlarda satır notu "Tam renk yalnız Günlük 60'ta, şimdi: Keskin kenarlar". Tablet kapıları geçemezse (yetenek testi) "Tam renk" gri olur ("Bu cihazda yok"). Varsayılan, cihaz kabulüne kadar **Normal**; kabulden sonra yeniden değerlendirilir.
+2. **Panel:** "Renk" satırı üç seçenekli olur: **Normal / Keskin kenarlar / Tam renk**. 0033'ün mevcut Kapalı/Açık seçeneğinin yerini alır, kayıtlı değer taşınır. "Tam renk" yalnız Günlük 60'ta uygulanır; diğer modlarda satır notu "Tam renk yalnız Günlük 60'ta, şimdi: Keskin kenarlar". Tablet kapıları geçemezse (yetenek testi) "Tam renk" gri olur ("Bu cihazda yok"). Varsayılan **Normal** (kullanıcı: kendisi panelden seçer; kabulden sonra da değişmez).
 3. **Düzen:** AVC444v2 örnek düzeni (FreeRDP `prim_YUV.c` ile doğrulandı, T-255 Plan). Ana görüntü normal 4:2:0 kare: Y + çift/çift örnekten Cb/Cr (`pick`, `box` değil). Yardımcı görüntü, geri kalan Cb/Cr örneklerini taşıyan ayrı bir 4:2:0 kare. **İki ayrı HEVC akışı:** iki VT oturumu ve tablette iki `MediaCodec`. Çift yükseklik ve tek akışta sıralı kodlama elendi (araştırma §1).
 4. **Her karede yardımcı** (araştırma §6 ara yol 1): karo haritası yok, en basit doğru çözüm. Durağan ekranda zaten kare gitmez. T-253 netleştirme trenleri iki akışta da çalışır.
 5. **Sunum:**
@@ -31,6 +31,7 @@
    - `STREAM_CONFIG`: `reserved` → `chroma_layout u8` (`0` 4:2:0, `1` AVC444v2 iki akış).
    - `VIDEO_FRAME`: `reserved` → `view u8` (`0` ana, `1` yardımcı). `frame_seq` her akışta kendi içinde artar. Yardımcı, ait olduğu ana karenin `capture_time_us`'unu taşır; eşleme bununla yapılır.
    - `KEYFRAME_REQUEST`: sona isteğe bağlı `view u8`. Eski host bunu yok sayar ve iki akışa IDR gönderir.
+   - `HELLO.capabilities` bit11 `FULL_CHROMA`: host yardımcı akışı yalnız bit11 + bu oturumdaki `chroma = 2` ile gönderir (eski istemciyi geliştirici değişkeni ya da hatırlanan tercih bozamaz; Codex T-257).
    - Fixture'lar: `stream_prefs_full_chroma`, `stream_config_packed444`, `video_frame_aux`, `keyframe_request_view`, kısa/geçersiz varyantlar.
 9. **Kabul şartı (ilk cihaz oturumu, durdurma kuralı):** ürün içinde aynı oturumda doğrudan yol ↔ tam renk A/B. Ekran gecikmesi p50 ve p95'te **≤ +5 ms** ise devam. **> +10 ms** ise tam renk kapatılır, 0033 kalır. Arası kullanıcıyla konuşulur. Akıcılık (`skip_pct`) bugünkünden kötü olmamalı.
 

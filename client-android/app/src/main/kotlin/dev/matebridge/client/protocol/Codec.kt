@@ -168,7 +168,7 @@ object Codec {
             }
             is StreamConfig -> {
                 requireEnum(msg.codec, 1..2, "STREAM_CONFIG.codec")
-                w.u16(msg.configId); w.u8(msg.codec); w.u8(0)
+                w.u16(msg.configId); w.u8(msg.codec); w.u8(msg.chromaLayout)
                 w.u16(msg.widthPx); w.u16(msg.heightPx)
                 w.u16(msg.widthPt); w.u16(msg.heightPt)
                 w.u16(msg.fps); w.u32(msg.bitrateKbps)
@@ -239,7 +239,7 @@ object Codec {
                 w.u32(msg.framesRendered); w.u32(msg.framesDropped)
                 w.u32(msg.decodeTimeAvgUs); w.u32(msg.latencyAvgUs); w.u32(msg.bytesReceived)
             }
-            is KeyframeRequest -> w.u8(msg.reason)
+            is KeyframeRequest -> { w.u8(msg.reason); if (msg.view != KeyframeRequest.VIEW_UNSPECIFIED) w.u8(msg.view) }
             is AudioPrefs -> { w.u8(if (msg.enabled) 1 else 0); w.u8(0); w.u16(0) }
             is AudioConfig -> {
                 w.u16(msg.streamId); w.u8(msg.state); w.u8(msg.format)
@@ -260,7 +260,7 @@ object Codec {
                 require(msg.fragmentIndex == 0 && msg.fragmentCount == 1 && msg.frameSize == msg.data.size.toLong()) {
                     "VIDEO_FRAME must be a single fragment with frame_size == data length"
                 }
-                w.u32(msg.frameSeq); w.u64(msg.captureTimeUs); w.u8(msg.flags); w.u8(0)
+                w.u32(msg.frameSeq); w.u64(msg.captureTimeUs); w.u8(msg.flags); w.u8(msg.view)
                 w.u16(msg.fragmentIndex); w.u16(msg.fragmentCount); w.u16(0)
                 w.u32(msg.frameSize); w.bytes(msg.data.value)
             }
@@ -299,13 +299,14 @@ object Codec {
                 )
             }
             MsgType.STREAM_CONFIG -> {
-                val configId = r.u16(); val codec = r.u8(); r.skip(1)
+                val configId = r.u16(); val codec = r.u8(); val layout = r.u8()
                 checkEnum(codec, 1..2, "STREAM_CONFIG.codec")
                 StreamConfig(
                     configId, codec,
                     widthPx = r.u16(), heightPx = r.u16(), widthPt = r.u16(), heightPt = r.u16(),
                     fps = r.u16(), bitrateKbps = r.u32(),
                     colorPrimaries = r.u8(), transfer = r.u8(), matrix = r.u8(), fullRange = r.u8(),
+                    chromaLayout = layout,
                 )
             }
             MsgType.CLIPBOARD -> {
@@ -363,7 +364,10 @@ object Codec {
             MsgType.PING -> Ping(r.u32(), r.u64())
             MsgType.PONG -> Pong(r.u32(), r.u64(), r.u64())
             MsgType.STATS -> Stats(r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32())
-            MsgType.KEYFRAME_REQUEST -> KeyframeRequest(r.u8())
+            MsgType.KEYFRAME_REQUEST -> {
+                val reason = r.u8()
+                KeyframeRequest(reason, if (r.remaining() > 0) r.u8() else KeyframeRequest.VIEW_UNSPECIFIED)
+            }
             MsgType.AUDIO_PREFS -> { val enabled = r.u8(); r.skip(3); AudioPrefs(enabled == 1) }
             MsgType.AUDIO_CONFIG -> {
                 val streamId = r.u16(); val state = r.u8(); val format = r.u8()
@@ -382,7 +386,7 @@ object Codec {
             }
             MsgType.VIDEO_HELLO -> VideoHello(r.u16(), r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
             MsgType.VIDEO_FRAME -> {
-                val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); r.skip(1)
+                val seq = r.u32(); val capture = r.u64(); val flags = r.u8(); val view = r.u8()
                 val index = r.u16(); val count = r.u16(); r.skip(2)
                 val size = r.u32()
                 // TCP v0: single fragment; data is exactly frame_size bytes.
@@ -393,7 +397,7 @@ object Codec {
                     throw ProtocolException(ProtocolException.Kind.SHORT_PAYLOAD, "video data shorter than frame_size")
                 }
                 val data = r.bytes(size.toInt()) // exactly frame_size bytes; trailing bytes are future fields
-                VideoFrame(seq, capture, flags, index, count, size, Bytes(data))
+                VideoFrame(seq, capture, flags, index, count, size, Bytes(data), view)
             }
             else -> null
         }

@@ -116,6 +116,9 @@ class GenerationHandoff(private val timer: HandoffTimer = HandoffTimer.SYSTEM) {
 
     fun isFinished(g: CodecGeneration): Boolean = lock.withLock { g.liveThreads <= 0 }
 
+    /** True when no generation holds a codec any more (the owner's decoder and output threads all exited). */
+    fun isIdle(): Boolean = lock.withLock { owner.let { it == null || it.liveThreads <= 0 } }
+
     /**
      * On [g]'s decoder thread, before it opens a codec: waits until the owner generation is finished, at most
      * [timeoutMs]. [Result.Ready] makes [g] the owner. Throws [InterruptedException] like any wait.

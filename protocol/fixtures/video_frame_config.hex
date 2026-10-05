@@ -5,7 +5,7 @@
 00 00 00 00              # u32 frame_seq = 0
 30 26 da fe 16 00 00 00  # u64 capture_time_us = 98764990000
 02                       # u8 flags = 2 (CODEC_CONFIG)
-00                       # u8 reserved = 0
+00                       # u8 view = 0 (main)
 00 00                    # u16 fragment_index = 0
 01 00                    # u16 fragment_count = 1
 00 00                    # u16 reserved2 = 0

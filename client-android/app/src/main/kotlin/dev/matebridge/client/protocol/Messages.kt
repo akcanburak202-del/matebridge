@@ -83,6 +83,9 @@ object Capabilities {
 
     /** Can run the tablet-files WebDAV server and sends FILES_INFO (decision 0015, T-135). */
     const val FILES = 1 shl 10
+
+    /** Handles `chroma_layout = 1` (two streams, `VIDEO_FRAME.view`) and passed the capability self-test (decision 0034, T-259). */
+    const val FULL_CHROMA = 1 shl 11
 }
 
 // ---- Session ----
@@ -143,8 +146,13 @@ data class StreamConfig(
     val transfer: Int,
     val matrix: Int,
     val fullRange: Int,
+    /** Decision 0034: `0` normal single 4:2:0 stream, `1` packed full colour (main + auxiliary streams). Other values: treat as 0. */
+    val chromaLayout: Int = CHROMA_LAYOUT_420,
 ) : Message {
     override val type get() = MsgType.STREAM_CONFIG
+
+    /** True only for the known packed layout; unknown values behave as 0 (PROTOCOL.md 0x03). */
+    val isPacked444: Boolean get() = chromaLayout == CHROMA_LAYOUT_PACKED_444
 
     /** Decision 0032: the host applied HDR10 (PQ transfer); anything else is SDR (PROTOCOL.md 0x03). */
     val isHdr10: Boolean get() = transfer == TRANSFER_PQ
@@ -152,6 +160,8 @@ data class StreamConfig(
     companion object {
         const val CODEC_H264 = 1
         const val CODEC_HEVC = 2
+        const val CHROMA_LAYOUT_420 = 0
+        const val CHROMA_LAYOUT_PACKED_444 = 1
 
         /** H.273 codes of an HDR10 stream (decision 0032): BT.2020 primaries, SMPTE ST 2084 (PQ), BT.2020 NCL matrix. */
         const val PRIMARIES_BT2020 = 9
@@ -187,6 +197,9 @@ data class StreamPrefs(
         const val DYNAMIC_RANGE_HDR10 = 1
         const val CHROMA_NORMAL = 0
         const val CHROMA_SHARP = 1
+
+        /** Decision 0034: packed full colour (only sent in Gunluk 60, native display, SDR, capability passed). */
+        const val CHROMA_FULL = 2
     }
 }
 
@@ -407,10 +420,19 @@ data class Stats(
     override val type get() = MsgType.STATS
 }
 
-data class KeyframeRequest(val reason: Int) : Message {
+/**
+ * [view] is the optional trailing byte (decision 0034): [VIEW_MAIN], [VIEW_AUX], [VIEW_BOTH]; [VIEW_UNSPECIFIED] = absent on
+ * the wire (single stream, or an old peer). The client writes it only while `chroma_layout = 1`.
+ */
+data class KeyframeRequest(val reason: Int, val view: Int = VIEW_UNSPECIFIED) : Message {
     override val type get() = MsgType.KEYFRAME_REQUEST
 
     companion object {
+        const val VIEW_UNSPECIFIED = -1
+        const val VIEW_MAIN = 0
+        const val VIEW_AUX = 1
+        const val VIEW_BOTH = 2
+
         const val STARTUP = 0
         const val DECODE_ERROR = 1
         const val FRAMES_DROPPED = 2
@@ -485,6 +507,8 @@ data class VideoFrame(
     val fragmentCount: Int,
     val frameSize: Long, // u32
     val data: Bytes,
+    /** Decision 0034: [VIEW_MAIN] or [VIEW_AUX]; any other value is unknown (the receiver skips the frame). */
+    val view: Int = VIEW_MAIN,
 ) : Message {
     override val type get() = MsgType.VIDEO_FRAME
 
@@ -494,5 +518,7 @@ data class VideoFrame(
     companion object {
         const val KEYFRAME = 1
         const val CODEC_CONFIG = 2
+        const val VIEW_MAIN = 0
+        const val VIEW_AUX = 1
     }
 }

@@ -29,6 +29,16 @@ struct HDRSetupError: Error, CustomStringConvertible {
     var description: String { "HDR10 unavailable (\(reason.rawValue): \(detail))" }
 }
 
+/// Packed full colour (decision 0034, T-258) could not be set up at pipeline start (Metal, the auxiliary VideoToolbox
+/// session): the owner announces `chroma_layout = 0` under a new `config_id` (`ev=chroma_fallback`). Never a
+/// `VirtualDisplayError`, so it does not trigger the game display fallback.
+struct PackedSetupError: Error, CustomStringConvertible {
+    let reason: String
+    let detail: String
+
+    var description: String { "packed full colour unavailable (\(reason): \(detail))" }
+}
+
 /// Virtual display -> ScreenCaptureKit -> HEVC or H.264 (`settings.codec`, T-086) -> bounded queue (`frames`).
 /// Does not touch the network: the session (T-014) consumes `frames` and wraps each frame in a `VIDEO_FRAME`.
 ///
@@ -44,6 +54,9 @@ public final class VideoPipeline: @unchecked Sendable {
     public let settings: VideoSettings
     /// Encoder output: CODEC_CONFIG first, then keyframe, then frames. At most 2 wait here.
     public let frames: VideoFrameQueue
+    /// Packed full colour (decision 0034): the auxiliary stream's encoder output, same bounds as `frames`. Empty (and
+    /// unused) without it.
+    public let auxFrames: VideoFrameQueue
     /// Cadence measurements (T-017): SCK arrival, encoder in/out, overwritten pending frames.
     public let meter: CadenceMeter
     /// Per-stage capture-to-sent latency (T-070); fed by the sender through `recordTrace`.
@@ -58,7 +71,14 @@ public final class VideoPipeline: @unchecked Sendable {
     private var failureNotified = false
     private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
     private let onFailure: @Sendable (Error) -> Void
+    private let onPackedFallback: @Sendable (String) -> Void
     private let box: EncoderBox
+    /// The auxiliary stream's own T-122 coalescer and queue watcher (T-258): no new auxiliary IDR while one is queued or
+    /// in flight.
+    private let auxKeyframes: KeyframeGate
+    private let auxBox: EncoderBox
+    /// T-258: the auxiliary encoder's loss rule, fed once a second (`checkPackedWindow`).
+    private let packedMonitor = PackedMonitorBox()
     /// Still-screen refinement settings (T-253); `.disabled` unless the owner passes the session's.
     private let refine: StillRefineConfig
     /// Client keyframe requests are coalesced here (T-122).
@@ -80,7 +100,9 @@ public final class VideoPipeline: @unchecked Sendable {
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
                 reusing display: VirtualDisplay? = nil,
                 refine: StillRefineConfig = .disabled,
+                onPackedFallback: @escaping @Sendable (String) -> Void = { _ in },
                 onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+        self.onPackedFallback = onPackedFallback
         self.inherited = display
         self.refine = refine
         self.settings = settings
@@ -95,6 +117,15 @@ public final class VideoPipeline: @unchecked Sendable {
         let frames = VideoFrameQueue(keyframeNeeded: { box.queueDropped() })
         self.frames = frames
         box.frames = frames
+        // An auxiliary overflow only breaks the auxiliary chain: an auxiliary keyframe, no coalescing needed (the
+        // queue refuses auxiliary deltas until it arrives, so one request per hole).
+        let auxGate = KeyframeGate()
+        auxKeyframes = auxGate
+        let auxBox = EncoderBox(keyframes: auxGate, view: .auxiliary)
+        self.auxBox = auxBox
+        let auxFrames = VideoFrameQueue(keyframeNeeded: { auxBox.queueDropped() })
+        self.auxFrames = auxFrames
+        auxBox.frames = auxFrames
     }
 
     /// Fills `STREAM_CONFIG` (pixel/point size, fps, bitrate, colour tags).
@@ -111,13 +142,26 @@ public final class VideoPipeline: @unchecked Sendable {
             let frames = self.frames
             let tap = self.tap
             let encoder = try HEVCEncoder(settings: settings, meter: meter, refine: refine,
-                                          refineReady: { frames.isReadyForRefine }, output: { frame, encodeUs in
+                                          refineReady: { [auxFrames, packed = settings.packedChroma] in
+                                              RefineReadiness.ready(mainReady: frames.isReadyForRefine,
+                                                                    auxReady: auxFrames.isReadyForRefine, packed: packed)
+                                          }, output: { frame, encodeUs in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)
                 tap?(frame, encodeUs)
-            }, onFailure: { [weak self] error in self?.fail(error) })
+            }, auxOutput: { [auxFrames, auxKeyframes] frame, _ in
+                var frame = frame
+                frame.trace.enqueuedUs = HostClock.nowUs()
+                // The auxiliary stream has no write trace: a keyframe counts as written when it is queued.
+                if frame.isKeyframe {
+                    auxKeyframes.update { $0.keyframeWritten(nowUs: HostClock.nowUs(), bytes: frame.data.count) }
+                }
+                auxFrames.push(frame)
+            }, onPackedError: { [onPackedFallback] reason in onPackedFallback(reason) },
+               onFailure: { [weak self] error in self?.fail(error) })
             box.encoder = encoder
+            auxBox.encoder = encoder
             set { $0.encoder = encoder }
 
             let display = try await obtainDisplay()
@@ -281,7 +325,22 @@ public final class VideoPipeline: @unchecked Sendable {
     public func requestKeyframe() {
         let pushed = frames.keyframesPushed
         keyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
-        box.encoder?.requestKeyframe(resubmitNow: true)
+        box.encoder?.requestKeyframe(resubmitNow: true, view: .main)
+    }
+
+    /// The sender dropped or refused an auxiliary frame (packed full colour): the next auxiliary frame is an IDR.
+    public func requestAuxKeyframe() {
+        let pushed = auxFrames.keyframesPushed
+        auxKeyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
+        box.encoder?.requestKeyframe(resubmitNow: true, view: .auxiliary)
+    }
+
+    /// The sender dropped an auxiliary frame whose main frame never went out and broke the auxiliary chain
+    /// (`VideoFrameQueue.breakChain`, which keeps a keyframe already queued behind the hole). Goes through the
+    /// auxiliary coalescer's host-drop logic (T-176): nothing is forced when that surviving keyframe, one in the
+    /// encoder or one just written covers the hole; otherwise the force is deferred and re-checked, with a hard bound.
+    public func auxPairingDropped() {
+        auxBox.queueDropped(resubmitNow: true)
     }
 
     /// Handles a client `KEYFRAME_REQUEST` through the coalescer (T-122, `KeyframeRequestCoalescer`).
@@ -290,8 +349,30 @@ public final class VideoPipeline: @unchecked Sendable {
     /// the queue reset to hold only it; a keyframe is then forced unless the pending one is still inside the encoder,
     /// so the keyframe is always pushed behind the config. `FRAMES_DROPPED` forces a keyframe only when none is on its
     /// way and none was written within the coalescing window.
-    public func handleKeyframeRequest(reason: KeyframeReason) -> KeyframeRequestCoalescer.Decision {
+    public func handleKeyframeRequest(reason: KeyframeReason, view: KeyframeView? = nil) -> KeyframeRequestCoalescer.Decision {
         let encoder = box.encoder
+        // Decision 0034: `view` picks the stream (absent / both / unknown: both; main only; auxiliary only); `reason`
+        // only decides whether that stream's CODEC_CONFIG is re-sent. Without packed full colour there is one stream.
+        let packed = encoder?.isPacked ?? false
+        let wanted: KeyframeView = packed ? (view ?? .both) : .main
+        if wanted.wantsAuxiliary, let encoder {
+            // The same T-122 rules per stream: a resync resets the auxiliary queue to hold only its CODEC_CONFIG; a keyframe
+            // is forced only when none is queued, in flight or just written.
+            let now = HostClock.nowUs()
+            let aux: KeyframeRequestCoalescer.Decision
+            if reason.resendsCodecConfig {
+                let r = auxFrames.resyncCountingKeyframes(config: { encoder.currentAuxCodecConfig() })
+                aux = auxKeyframes.update {
+                    $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+                }
+            } else {
+                let pushed = auxFrames.keyframesPushed
+                aux = auxKeyframes.update { $0.request(reason, nowUs: now, keyframesPushed: pushed) }
+            }
+            if aux.forceKeyframe { encoder.requestKeyframe(resubmitNow: true, view: .auxiliary) }
+            if !wanted.wantsMain { return aux }
+        }
+        guard wanted.wantsMain else { return .auxiliaryOnly }
         let now = HostClock.nowUs()
         let decision: KeyframeRequestCoalescer.Decision
         if reason.resendsCodecConfig {
@@ -306,14 +387,14 @@ public final class VideoPipeline: @unchecked Sendable {
             let pushed = frames.keyframesPushed
             decision = keyframes.update { $0.request(reason, nowUs: now, keyframesPushed: pushed) }
         }
-        if decision.forceKeyframe { encoder?.requestKeyframe(resubmitNow: true) }
+        if decision.forceKeyframe { encoder?.requestKeyframe(resubmitNow: true, view: .main) }
         return decision
     }
 
     /// `handleKeyframeRequest` for callers that only need to know whether a config was re-sent.
     @discardableResult
-    public func requestKeyframe(reason: KeyframeReason) -> Bool {
-        handleKeyframeRequest(reason: reason).action == .configResent
+    public func requestKeyframe(reason: KeyframeReason, view: KeyframeView? = nil) -> Bool {
+        handleKeyframeRequest(reason: reason, view: view).action == .configResent
     }
 
     /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122).
@@ -325,9 +406,22 @@ public final class VideoPipeline: @unchecked Sendable {
     public func prepareForNewConsumer() {
         let encoder = box.encoder
         frames.startNewConsumer(configProvider: { encoder?.currentCodecConfig() })
+        auxFrames.startNewConsumer(configProvider: { encoder?.currentAuxCodecConfig() })
+        let auxPushed = auxFrames.keyframesPushed
+        auxKeyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: auxPushed) }
         let pushed = frames.keyframesPushed
         keyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
         encoder?.requestKeyframe(resubmitNow: true)
+    }
+
+    /// Packed full colour (T-258), once a second: closes the auxiliary loss window (encoder-side losses, auxiliary queue
+    /// overflows, and `senderAuxDroppedTotal`, the sender's cumulative count of auxiliary frames it dropped) and returns
+    /// the fallback decision when the rule is met. Always nil without packed full colour.
+    func checkPackedWindow(senderAuxDroppedTotal: Int) -> PackedChromaMonitor.Decision? {
+        guard let encoder = box.encoder, encoder.isPacked else { return nil }
+        let c = encoder.takeAuxCounters()
+        return packedMonitor.close(offered: c.offered, lost: c.lost, queueDroppedTotal: auxFrames.discardedCount,
+                                   senderDroppedTotal: senderAuxDroppedTotal)
     }
 
     /// T-235: `video ev=chroma_stats` fields once the encoder's 10 s window is over (call about once a second); nil
@@ -387,7 +481,9 @@ public final class VideoPipeline: @unchecked Sendable {
         await cap?.stop()
         await enc?.shutdown()
         box.encoder = nil
+        auxBox.encoder = nil
         frames.finish()
+        auxFrames.finish()
         let plan = DisplayTeardown.plan(current: disp, inherited: inh, keeping: keepingDisplay)
         plan.release.forEach { $0.invalidate() }
         return plan.keep
@@ -412,7 +508,12 @@ private final class EncoderBox: @unchecked Sendable {
     private var _encoder: HEVCEncoder?
     private weak var _frames: VideoFrameQueue?
     private let keyframes: KeyframeGate
-    init(keyframes: KeyframeGate) { self.keyframes = keyframes }
+    /// The stream this box watches (T-258): its forced keyframes are requested for that stream only.
+    private let view: KeyframeView
+    init(keyframes: KeyframeGate, view: KeyframeView = .main) {
+        self.keyframes = keyframes
+        self.view = view
+    }
     var encoder: HEVCEncoder? {
         get { lock.lock(); defer { lock.unlock() }; return _encoder }
         set { lock.lock(); _encoder = newValue; lock.unlock() }
@@ -428,8 +529,8 @@ private final class EncoderBox: @unchecked Sendable {
     /// when none is on its way and none was written within the coalescing window; otherwise deferred and re-checked
     /// (`KeyframeRequestCoalescer.hostDrop`). Captures keep arriving here (one just overflowed the queue), so the
     /// next one becomes the keyframe.
-    func queueDropped() {
-        decide(resubmitNow: false) { $0.hostDrop(nowUs: $1, queue: $2) }
+    func queueDropped(resubmitNow: Bool = false) {
+        decide(resubmitNow: resubmitNow) { $0.hostDrop(nowUs: $1, queue: $2) }
     }
 
     /// Timer: re-checks a deferred host-side keyframe. The screen may have gone static meanwhile, so a keyframe
@@ -448,7 +549,7 @@ private final class EncoderBox: @unchecked Sendable {
         // Queue state read under the gate lock (lock order gate -> queue: the queue never calls out while holding
         // its lock, and nothing takes the gate lock while holding the queue lock).
         let d = keyframes.update { body(&$0, now, frames.keyframeState) }
-        if d.forceKeyframe { encoder.requestKeyframe(resubmitNow: resubmitNow) }
+        if d.forceKeyframe { encoder.requestKeyframe(resubmitNow: resubmitNow, view: view) }
         if let at = d.recheckAtUs { schedule(at: at, nowUs: now) }
     }
 
@@ -472,4 +573,23 @@ private final class KeyframeGate: @unchecked Sendable {
     private let lock = NSLock()
     private var coalescer = KeyframeRequestCoalescer()
     func update<T>(_ body: (inout KeyframeRequestCoalescer) -> T) -> T { lock.withLock { body(&coalescer) } }
+}
+
+/// The auxiliary loss rule's state, with the cumulative drop counters it turns into per-window deltas (T-258).
+private final class PackedMonitorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var monitor = PackedChromaMonitor()
+    private var lastQueueDropped = 0
+    private var lastSenderDropped = 0
+
+    func close(offered: Int, lost: Int, queueDroppedTotal: Int, senderDroppedTotal: Int) -> PackedChromaMonitor.Decision? {
+        lock.withLock {
+            let extra = max(0, queueDroppedTotal - lastQueueDropped) + max(0, senderDroppedTotal - lastSenderDropped)
+            lastQueueDropped = queueDroppedTotal
+            lastSenderDropped = senderDroppedTotal
+            for _ in 0..<offered { monitor.recordOffered() }
+            for _ in 0..<(lost + extra) { monitor.recordLost() }
+            return monitor.closeWindow()
+        }
+    }
 }

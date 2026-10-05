@@ -122,7 +122,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -147,7 +147,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 |---|---|---|
 | config_id | u16 | Her yeni ayarda artar (1'den başlar) |
 | codec | u8 | `1` H.264, `2` HEVC |
-| reserved | u8 | |
+| chroma_layout | u8 | *Eski `reserved` (karar 0034).* `0` normal tek akış 4:2:0. `1` paketlenmiş tam renk: ana + yardımcı iki 4:2:0 akış, AVC444v2 düzeni (aşağıda). Diğer değerler: istemci `0` sayar ve yardımcı kareleri yok sayar. |
 | width_px | u16 | Kodlanan görüntünün piksel boyutu. Varsayılan = sanal ekranın piksel boyutu; `STREAM_PREFS.display_* = 0` iken `scale_permille < 1000` ise daha küçük (oyun ekranında ölçek yok sayılır, kodlanan = ekran boyutu) (en-boy oranı korunur, çift sayıya yuvarlanır). İstemci çözülen görüntüyü video yüzeyine ölçekler; koordinatlar normalize olduğu için girdi etkilenmez. |
 | height_px | u16 | |
 | width_pt | u16 | Sanal ekranın Mac nokta boyutu (HiDPI'da piksel/2; oyun ekranında, 1x, piksele eşit — karar 0029). İstemci göreli hareket ve kaydırmayı bununla ölçekler. |
@@ -160,6 +160,8 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | full_range | u8 | `1` tam aralık, `0` sınırlı |
 
 **HDR10 (karar 0032):** host `STREAM_PREFS.dynamic_range = 1` isteğini uygulayabildiyse `color_primaries = 9`, `transfer = 16`, `matrix = 9`, `full_range = 0` gönderir; akış HEVC Main10 (bit derinliği ve profil SPS'te), HDR10 statik meta verisi (MDCV/CLL) bit akışında SEI olarak gider, ayrı alan yoktur. İstemci uygulanan dinamik aralığı yalnız bu kodlardan anlar: `transfer = 16` ise HDR10, değilse SDR. Uygulayamadıysa SDR kodları gider (geri dönüş protokol hatası değildir).
+
+**Paketlenmiş tam renk (karar 0034):** `chroma_layout = 1` iken video bağlantısında iki HEVC akışı birlikte gider; `VIDEO_FRAME.view` hangisi olduğunu söyler. Ana akış (`view = 0`) tek başına geçerli, normal bir 4:2:0 görüntüdür: Y tam çözünürlük, Cb/Cr her 2×2 bloğun sol üst (çift satır, çift sütun) örneğidir. Yardımcı akış (`view = 1`) aynı boyutta ikinci bir 4:2:0 kare olup geri kalan Cb/Cr örneklerini AVC444v2 düzeninde taşır (FreeRDP `prim_YUV.c`; düzenin örnek bazında tanımı `probes/yuv444-probe` README'sinde ve T-255'te). İstemci ikisini birleştirerek tam çözünürlüklü Cb/Cr kurar; yardımcı yoksa ya da geç kalırsa ana kareyi tek başına gösterir. Renk kodları (`color_primaries`…`full_range`) iki akış için aynıdır. Host `chroma_layout = 1`'i yalnız bu oturumun `HELLO.capabilities` bit11 `FULL_CHROMA` varsa, **bu oturumda** gelen son `STREAM_PREFS.chroma = 2` ise ve uygulayabildiyse gönderir. Geliştirici değişkeni ya da hatırlanan tercih (T-049) bu oturum koşulunu aşamaz: bit11 olmayan (eski) istemciye ya da bu oturumda henüz `chroma = 2` istememiş istemciye yardımcı akış asla gönderilmez.
 
 ### 0x04 BYE (iki yön, kontrol)
 
@@ -183,7 +185,7 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 | display_width_px | u16 | *İsteğe bağlı grup (yoksa 0).* `0` = doğal ekran (HELLO boyutu, HiDPI 2x, bugünkü gibi). `≠0`: host sanal ekranı **HiDPI olmadan (1x)** bu piksel boyutunda kurar; nokta = piksel (karar 0029, "oyun ekranı"). |
 | display_height_px | u16 | |
 | dynamic_range | u8 | *İkinci isteğe bağlı grup (yoksa 0; karar 0032).* `0` SDR, `1` HDR10 (PQ). Diğer değerler: host `0` sayar. |
-| chroma | u8 | *Aynı grupta (eski `reserved`; karar 0033).* `0` normal 4:2:0, `1` keskin renk kenarları (host'ta luma ayarlı 4:2:0, `sharp_nearest`). Diğer değerler: host `0` sayar. HDR10 uygulanırken yok sayılır. |
+| chroma | u8 | *Aynı grupta (eski `reserved`; karar 0033).* `0` normal 4:2:0, `1` keskin renk kenarları (host'ta luma ayarlı 4:2:0, `sharp_nearest`), `2` tam renk (paketlenmiş 4:4:4, karar 0034). Diğer değerler: host `0` sayar. HDR10 uygulanırken yok sayılır. |
 
 - Payload 8 bayt (eski istemci; ekran `0×0`), 12 bayt (ekran grubu) ya da en az 14 bayttır (ekran + dinamik aralık grubu). 9–11 ve 13 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`).
 - Gönderen ekran grubunu yalnız iki alandan biri sıfırdan farklıysa ya da dinamik aralık grubu yazılacaksa yazar (o zaman `0×0` olabilir); dinamik aralık grubunu yalnız `dynamic_range ≠ 0` ya da `chroma ≠ 0` ise yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt; `stream_prefs_hdr` 14 bayt).
@@ -200,6 +202,7 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 - Host'un cihaz başına hatırladığı tercih (T-049) `display_*`'ı da tutar: oyun modunda yeniden bağlanan tablet ekranı doğrudan oyun boyutunda bulur.
 - **HDR10 (karar 0032):** istemci `dynamic_range = 1`'i yalnız tabletin ekranı HDR10 bildiriyorsa, HEVC çözücüsü `Main10HDR10` bildiriyorsa ve kullanıcı Oyun modunda HDR'yi açtıysa gönderir. Host isteği uygulayabilirse sanal ekranı HDR aktarım işleviyle (`transferFunction`, yalnız `VirtualDisplay`) kurar, HDR yakalar, HEVC Main10 PQ kodlar ve `STREAM_CONFIG`'te HDR10 kodlarını bildirir. `dynamic_range` değişimi ekran kipi değişimi sayılır (ekran yeniden kurulur, yeni `config_id`). Herhangi bir halka başarısız olursa host SDR'ye döner, SDR kodlarını bildirir ve `ev=hdr_fallback reason=` loglar. Grubu tanımayan eski host 14 baytlık payload'un fazlasını yok sayar ve SDR kalır (§2, uzun payload kuralı); istemci bunu `transfer ≠ 16`'dan anlar.
 - **Keskin renk kenarları (karar 0033):** `chroma = 1` iken host yakalamayı BGRA'ya alır ve kodlamadan önce bir Metal geçişiyle luma ayarlı 4:2:0 üretir (protokol ve istemci çözücüsü değişmez; ~+3 ms yakalama→kodlama). Değişim yeni `config_id` ile bildirilir (ekran yeniden kurulmaz). Host ortam değişkeni `MATEBRIDGE_CHROMA` (geliştirici) bu alandan önce gelir. Uygulanan değer `STREAM_CONFIG`'te bildirilmez; host `ev=chroma_config` loglar.
+- **Tam renk (karar 0034):** istemci `chroma = 2`'yi yalnız Günlük modunda, `fps = 60`, `display_* = 0`, `scale_permille = 1000`, `dynamic_range = 0` iken ve yetenek testini (GPU ham YUV örnekleme, ikinci çözücü) geçtiyse gönderir; diğer durumlarda kullanıcının seçimi `1`'e iner. Host `chroma = 2`'yi bu koşullar tutarsa (aksi halde `1` gibi) uygular: yakalama BGRA, Metal paketleyici iki 4:2:0 görüntü üretir, iki VT oturumu ana ve yardımcıyı kodlar; yardımcının bit hızı tavanı ana hedefin yarısıdır ve `STREAM_CONFIG.bitrate_kbps` yalnız ana akışın hedefidir. Uygulanınca `STREAM_CONFIG.chroma_layout = 1`. Yardımcı kodlama sürekli yetişemezse (ör. başka bir uygulama kodlayıcıyı kullanıyor) ya da hata olursa host yeni `config_id` ile `chroma_layout = 0`'a döner ve `ev=chroma_fallback reason=` loglar; tercih korunur, sonraki ekran kipi değişiminde yeniden denenir. `MATEBRIDGE_CHROMA` (geliştirici) bu alandan önce gelir. Grubu tanımayan ya da `2`'yi bilmeyen eski host normal 4:2:0 kalır (`chroma_layout = 0`); istemci bunu `STREAM_CONFIG`'ten anlar. Hatırlanan tercih ile başlayan oturum, istemcinin bu oturumdaki `STREAM_PREFS`'i gelene kadar `chroma = 2`'yi `1` gibi uygular; `MATEBRIDGE_CHROMA=packed444` de yalnız bit11 + bu oturumda `chroma = 2` iken etkilidir (yoksa keskin yol).
 - **Bit hızı önceliği:** host ortam değişkeni (`MATEBRIDGE_BITRATE_KBPS`, Wi-Fi'de `MATEBRIDGE_WIFI_BITRATE_KBPS`; geliştirici ayarı) > `bitrate_kbps ≠ 0` > modun varsayılanı. Uygulanan değer `STREAM_CONFIG.bitrate_kbps`'te bildirilir.
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
 - İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini (bit hızı dahil) hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
@@ -482,8 +485,9 @@ PONG (PING'i alan taraf hemen cevaplar):
 | Alan | Tip | Açıklama |
 |---|---|---|
 | reason | u8 | `0` STARTUP, `1` DECODE_ERROR, `2` FRAMES_DROPPED |
+| view | u8 | *İsteğe bağlı (yoksa: iki akış; karar 0034).* `0` yalnız ana, `1` yalnız yardımcı, `2` ikisi. Diğer değerler: ikisi. Yalnız `chroma_layout = 1` iken anlamlıdır; tek akışta yok sayılır. İstemci alanı yalnız `chroma_layout = 1` iken yazar. |
 
-Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleştirilebilir. Sebep `STARTUP`, `DECODE_ERROR` ya da bilinmeyen ise host o keyframe'den önce güncel `CODEC_CONFIG`'i **yeniden gönderir** (istemci çözücüsünü yeniden kurmuş ve eski parametre setlerini atmış olabilir); `FRAMES_DROPPED` için göndermez. İstemci akış ortasında gelen, öncekiyle aynı `CODEC_CONFIG`'i kabul eder.
+Host bir sonraki kareyi (istenen akışta) keyframe olarak kodlar. Art arda gelen istekler birleştirilebilir. Sebep `STARTUP`, `DECODE_ERROR` ya da bilinmeyen ise host o keyframe'den önce güncel `CODEC_CONFIG`'i **yeniden gönderir** (istemci çözücüsünü yeniden kurmuş ve eski parametre setlerini atmış olabilir); `FRAMES_DROPPED` için göndermez. İstemci akış ortasında gelen, öncekiyle aynı `CODEC_CONFIG`'i kabul eder. Paketlenmiş tam renkte `CODEC_CONFIG` ilgili akışın (`view`) parametre setleridir; iki akışa birden IDR gerekirse host yardımcınınkini bir kare sonraya kaydırabilir.
 
 ### 0x30 AUDIO_PREFS (C→H, kontrol)
 
@@ -547,15 +551,17 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| frame_seq | u32 | Bu video bağlantısında her karede 1 artar, 0'dan başlar (CODEC_CONFIG dahil) |
-| capture_time_us | u64 | ScreenCaptureKit karesinin host monoton zamanı |
+| frame_seq | u32 | Bu video bağlantısında **her akışta (`view`) ayrı** 1 artar, 0'dan başlar (CODEC_CONFIG dahil). Tek akışta bugünkü gibidir. |
+| capture_time_us | u64 | ScreenCaptureKit karesinin host monoton zamanı. Yardımcı kare, ait olduğu ana karenin değerini taşır; eşleme bununla yapılır. |
 | flags | u8 | bit0 `KEYFRAME`, bit1 `CODEC_CONFIG` (yalnızca parametre setleri: H.264 SPS/PPS, HEVC VPS/SPS/PPS) |
-| reserved | u8 | Codec bu bağlantının `STREAM_CONFIG`'inden bilinir |
+| view | u8 | *Eski `reserved` (karar 0034).* `0` ana (tek akışta hep `0`), `1` yardımcı (yalnız `chroma_layout = 1`). Codec bu bağlantının `STREAM_CONFIG`'inden bilinir. Bilinmeyen değer ya da tek akışta `1`: istemci kareyi atlar (protokol hatası değil). |
 | fragment_index | u16 | TCP'de `0` |
 | fragment_count | u16 | TCP'de `1` |
 | reserved2 | u16 | |
 | frame_size | u32 | Karenin tüm parçalarının toplam veri boyutu. TCP'de bu mesajdaki `data` uzunluğudur. |
 | data | bytes[frame_size] | Annex-B NAL birimleri (`00 00 00 01` başlangıç kodlarıyla). Tam olarak `frame_size` bayt. Payload bundan sonra devam ederse fazlası gelecekteki alanlardır ve yok sayılır (§2). |
+
+Paketlenmiş tam renkte host, bir yakalamanın ana karesini yardımcısından önce gönderir; yardımcıyı beklemek için ana kareyi geciktirmez. Kodlayıcı ya da soket yetişemezse **önce yardımcı** kareler atlanır; ana akış §5'teki sınırlı kuyruk kurallarına (en çok 2 bekleyen, eskiler atılır, sonraki keyframe istenir) aynen tabidir. Yardımcı kare yalnız gönderilmiş bir ana karenin `capture_time_us`'u ile gider.
 
 `fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır. TCP'de `fragment_index ≠ 0`, `fragment_count ≠ 1` veya payload'da `24 + frame_size` bayttan az veri olması **protokol hatasıdır** (video bağlantısı kapanır, §2).
 
@@ -564,10 +570,12 @@ Host bir sonraki kareyi keyframe olarak kodlar. Art arda gelen istekler birleşt
 **Video:**
 - Host: kodlayıcı çıkışı ile soket arasında en çok **2** kare bekler. Soket yetişemiyorsa eski, keyframe olmayan kareler atılır ve bir sonraki kare keyframe olarak istenir.
 - İstemci: decoder'a verilmeyi bekleyen kareler sınırlıdır. Sınır akışın fps'ine göre ~64 ms'lik karedir: 120 fps'te 8, 60 fps'te 4 (T-121; önceden 2). Kısa ağ yığılmaları böylece atılmadan çözülür; ekranda yine en yeni kare gösterilir.
-  - Taşarsa bekleyen kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir.
+  - Sınır aşılınca önce **yetişme** (T-252): referans zinciri bozulmadan bütün bekleyenler çözülür, yalnız en yenisi gösterilir (en az 50 ms'de bir ara kare), istek gönderilmez. Birikme ~0,5 s / 64 kare / 32 MB'ı aşarsa ya da 300 ms içinde normal derinliğe inmezse aşağıdaki eski yol işler.
+  - Eski yol: bekleyen kareler atılır ve `frames_dropped` artar. Referans zinciri koptuğu için `KEYFRAME_REQUEST(FRAMES_DROPPED)` gönderilir.
   - Keyframe gelene kadar, gelen keyframe olmayan kareler decoder'a verilmez.
   - İstemci bir istekten sonra 500 ms içinde yeni `FRAMES_DROPPED` isteği göndermez (T-121). `STARTUP` / `DECODE_ERROR` hemen gider.
   - Host, yolda olan bir IDR varken gelen `FRAMES_DROPPED` isteklerini birleştirir (T-122). Tel biçimi değişmez.
+- **Paketlenmiş tam renk (karar 0034):** yardımcı akışın kendi sınırlı kuyruğu vardır (ana ile aynı derinlik). Yardımcı kuyruğu taşarsa yalnız yardımcı kareler atılır, `KEYFRAME_REQUEST(view = 1)` gider; bu sırada ana kareler yalnız-ana gösterilir. Ana akışın kuralları yukarıdaki gibidir. Host'ta yardımcı kareler de en çok 2 kare bekler; soket tıkanınca önce yardımcı atılır.
 
 **Ses (karar 0011):**
 - Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
@@ -648,13 +656,13 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `stream_config_packed444`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `stream_prefs_full_chroma`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
-- Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`
+- Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`, `keyframe_request_view`
 - Ses: `audio_prefs`, `audio_config`, `audio_config_stopped`, `audio_frame`, `invalid_audio_frame_short`
-- Video: `video_hello`, `video_frame`, `video_frame_config`
+- Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)
 

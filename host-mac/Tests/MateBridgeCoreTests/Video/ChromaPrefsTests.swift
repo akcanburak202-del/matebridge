@@ -50,7 +50,7 @@ final class ChromaPrefsTests: XCTestCase {
     }
 
     func testUnknownChromaIsNormal() throws {
-        for raw: UInt8 in [2, 3, 0x7f, 0xff] {
+        for raw: UInt8 in [3, 0x7f, 0xff] {  // 2 is full colour since decision 0034
             let p = prefs(chroma: raw)
             // The wire value survives the codec untouched...
             XCTAssertEqual(try decode(try Message.streamPrefs(p).encode()), .streamPrefs(p))
