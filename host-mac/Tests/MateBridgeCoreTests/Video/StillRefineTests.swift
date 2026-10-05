@@ -155,6 +155,48 @@ final class StillRefineTests: XCTestCase {
                        "frames=12 bytes=375000 first_bytes=10000 last_bytes=440 ms=205 reason=converged")
     }
 
+    func testTrainIDRevalidation() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        let first = p.trainID
+        XCTAssertTrue(p.isCurrent(first))
+        p.noteCapture(nowUs: 310_000)  // cancel: a refine frame validated later is refused
+        XCTAssertFalse(p.isCurrent(first))
+        XCTAssertTrue(p.tick(nowUs: 900_000, queueReady: true).start)
+        XCTAssertNotEqual(p.trainID, first)
+        XCTAssertFalse(p.isCurrent(first))
+        XCTAssertTrue(p.isCurrent(p.trainID))
+    }
+
+    func testPendingKeyframeBlocksStartAndEndsTrain() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertFalse(p.tick(nowUs: 300_000, queueReady: true, keyframePending: true).start)
+        XCTAssertTrue(p.tick(nowUs: 310_000, queueReady: true, keyframePending: false).start)
+        let r = p.noteOutput(bytes: 20_000, nowUs: 320_000, queueReady: true, keyframePending: true)
+        XCTAssertFalse(r.submitNext)
+        XCTAssertEqual(r.report?.reason, .keyframePending)
+        var q = StillRefinePolicy(config: config())
+        q.noteCapture(nowUs: 0)
+        XCTAssertTrue(q.tick(nowUs: 300_000, queueReady: true).start)
+        XCTAssertEqual(q.end(.keyframePending, nowUs: 310_000)?.reason, .keyframePending)
+        XCTAssertNil(q.end(.keyframePending, nowUs: 311_000))
+    }
+
+    func testByteCeilingIsConservative() {
+        // The next frame is assumed as large as the largest so far: 100 + 90 + 100 > 250 stops before a third
+        // frame could overshoot.
+        var p = StillRefinePolicy(config: config { $0.maxBytes = 250_000 })
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        XCTAssertTrue(p.noteOutput(bytes: 100_000, nowUs: 1, queueReady: true).submitNext)
+        let r = p.noteOutput(bytes: 90_000, nowUs: 2, queueReady: true)
+        XCTAssertFalse(r.submitNext)
+        XCTAssertEqual(r.report?.reason, .maxBytes)
+        XCTAssertLessThanOrEqual(r.report?.bytes ?? Int.max, 250_000)
+    }
+
     func testQueueReadyForRefine() {
         let q = VideoFrameQueue(keyframeNeeded: {})
         XCTAssertTrue(q.isReadyForRefine)

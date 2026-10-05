@@ -357,6 +357,10 @@ Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sü
 - Kullanıcı değişikliği (`STREAM_PREFS`) yine yeniden başlatma yolundan geçer.
 
 Log satırı:
+- `I video ev=refine frames=<n> bytes=<n> first_bytes=<n> last_bytes=<n> ms=<n> reason=converged|max_frames|max_bytes|cancelled|queue_busy|timeout|failed|keyframe_pending` (T-253): durağan ekran iyileştirme treninin (aynı tamponun art arda P kareleri olarak yeniden kodlanması) sonunda tren başına bir satır.
+  - Tren, 200 ms yeni gerçek kare olmayınca ve çıkış kuyruğu boşken başlar; `MATEBRIDGE_REFINE=0` kapatır, `_MS`, `_KB`, `_FRAMES` ayarlar.
+  - İlk karede yakınsayan ya da hiç kare üretmeden iptal olan trenler `D` düzeyinde yazılır.
+  - `max_bytes`: bayt tavanı (USB 1024 KB, ağ 256 KB) muhafazakâr denetlenir; bir sonraki karenin şimdiye kadarki en büyük kare kadar olacağı varsayılır ve sığmıyorsa durulur.
 - `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
   - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
   - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.

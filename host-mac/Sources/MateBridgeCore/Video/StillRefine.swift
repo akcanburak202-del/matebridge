@@ -74,6 +74,8 @@ public enum StillRefineEnd: String, Sendable {
     case queueBusy = "queue_busy"
     case timeout
     case failed
+    /// A keyframe request is pending: the normal capture path serves it, refinement never turns into it.
+    case keyframePending = "keyframe_pending"
 }
 
 /// What one train did (`video ev=refine`).
@@ -111,10 +113,17 @@ public struct StillRefinePolicy: Sendable {
     private var firstBytes = 0
     private var lastBytes = 0
     private var startedUs: UInt64 = 0
+    private var largestFrame = 0
+    /// Identifies the running train (0 = none yet). Frames are offered with it and revalidated inside the ordered
+    /// offer (`isCurrent`), so a capture that cancelled the train can never be followed by a stale refine frame.
+    public private(set) var trainID: UInt64 = 0
 
     public init(config: StillRefineConfig) { self.config = config }
 
     public var isRunning: Bool { phase == .running }
+
+    /// The train `id` is still running (not cancelled, ended or replaced).
+    public func isCurrent(_ id: UInt64) -> Bool { phase == .running && trainID == id }
 
     /// A real capture reached the encoder: the screen is moving. Returns the report of a train it cancelled.
     @discardableResult
@@ -128,7 +137,8 @@ public struct StillRefinePolicy: Sendable {
 
     /// Timer: true = submit the first refine frame now (a train started). Also ends a train whose frame never
     /// produced output (returned in `timedOut`).
-    public mutating func tick(nowUs: UInt64, queueReady: Bool) -> (start: Bool, timedOut: StillRefineReport?) {
+    public mutating func tick(nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false)
+        -> (start: Bool, timedOut: StillRefineReport?) {
         guard config.enabled else { return (false, nil) }
         switch phase {
         case .idle:
@@ -139,21 +149,22 @@ public struct StillRefinePolicy: Sendable {
             }
             return (false, nil)
         case .armed:
-            guard nowUs &- lastCaptureUs >= config.stillUs, queueReady else { return (false, nil) }
+            guard nowUs &- lastCaptureUs >= config.stillUs, queueReady, !keyframePending else { return (false, nil) }
             if let last = lastStartUs, nowUs &- last < config.minGapUs { return (false, nil) }
             phase = .running
             lastStartUs = nowUs
             startedUs = nowUs
             submittedAtUs = nowUs
             waitingOutput = true
-            frames = 0; bytes = 0; firstBytes = 0; lastBytes = 0
+            frames = 0; bytes = 0; firstBytes = 0; lastBytes = 0; largestFrame = 0
+            trainID &+= 1
             return (true, nil)
         }
     }
 
     /// A refine frame's encoder output (`bytes` of the encoded frame). `submitNext`: submit another refine frame;
     /// `report`: the train ended with this frame.
-    public mutating func noteOutput(bytes frameBytes: Int, nowUs: UInt64, queueReady: Bool)
+    public mutating func noteOutput(bytes frameBytes: Int, nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false)
         -> (submitNext: Bool, report: StillRefineReport?) {
         guard phase == .running, waitingOutput else { return (false, nil) }
         waitingOutput = false
@@ -161,16 +172,26 @@ public struct StillRefinePolicy: Sendable {
         bytes += frameBytes
         if frames == 1 { firstBytes = frameBytes }
         lastBytes = frameBytes
+        largestFrame = max(largestFrame, frameBytes)
         let reason: StillRefineEnd?
         if frameBytes <= config.convergedBytes { reason = .converged }
         else if frames >= config.maxFrames { reason = .maxFrames }
-        else if bytes >= config.maxBytes { reason = .maxBytes }
+        // Conservative admission: the next frame is assumed as large as the largest one so far, so the ceiling holds
+        // unless a frame is bigger than every earlier one (the encoder's size cannot be known beforehand).
+        else if bytes + largestFrame > config.maxBytes { reason = .maxBytes }
+        else if keyframePending { reason = .keyframePending }
         else if !queueReady { reason = .queueBusy }
         else { reason = nil }
         if let reason { return (false, finish(reason, nowUs: nowUs)) }
         waitingOutput = true
         submittedAtUs = nowUs
         return (true, nil)
+    }
+
+    /// Ends the running train for `reason` (nil when none runs).
+    public mutating func end(_ reason: StillRefineEnd, nowUs: UInt64) -> StillRefineReport? {
+        guard phase == .running else { return nil }
+        return finish(reason, nowUs: nowUs)
     }
 
     /// The encoder refused a refine frame or produced no output for it.

@@ -223,8 +223,14 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// this object. `bypassGate`: keyframe re-submissions do not wait for the send-rate slot. Never blocks on the
     /// encoder.
     public func offer(bypassGate: Bool, build: (_ last: Frame?) -> Frame?) {
+        offerChecked(bypassGate: bypassGate) { last, _ in build(last) }
+    }
+
+    /// `offer` whose `build` also sees whether a keyframe is pending (T-253: a still-screen refinement frame must not
+    /// consume a keyframe request). Same lock rules as `offer`.
+    public func offerChecked(bypassGate: Bool, build: (_ last: Frame?, _ keyframePending: Bool) -> Frame?) {
         lock.lock()
-        guard !stopped, var frame = build(last) else { lock.unlock(); return }
+        guard !stopped, var frame = build(last, forceKeyframe) else { lock.unlock(); return }
         let slotFree = inFlight < maxInFlight
         frame.arrived(slotFree: slotFree)
         last = frame
@@ -239,6 +245,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         lock.unlock()
         if let delay { armFlush(delay) }
     }
+
+    /// A keyframe was requested and no frame has been submitted since.
+    public var keyframePending: Bool { lock.withLock { forceKeyframe } }
 
     /// The next submitted frame will be a keyframe.
     public func requestKeyframe() {
