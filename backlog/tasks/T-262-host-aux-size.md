@@ -75,7 +75,7 @@ Probe `quality` (2800x1840, ana hedef 30 Mbps, ana kroma `pick` = ürün, 600 ka
 | %12 | 1,7 (0,32) | 2,2 (0,29) | 4,2 (0,14) | 22 | 38,03 | 33,8 / 32,8 |
 | %6 | 1,9 (0,36) | 2,2 (0,29) | 2,1 (0,07) | 9 | 37,75 | 33,1 / 32,0 |
 
-Taban (yalnız ana 4:2:0 `box`, aynı sahne): RGB 35,6 dB, kenar Cb/Cr 27,7 / 24,9 dB. %25 hâlâ 4:2:0'dan RGB +2,9 dB, renk kenarında +6,6 / +8,3 dB iyi (önceki %50 için: +4,0 / +8,7 / +10,5).
+Taban (yalnız ana 4:2:0 `box`, aynı sahne; Codex turu sonrası `--main-chroma box,pick` ile yeniden koşuldu, etiketler düzeltildi, sayılar değişmedi: %50 koşusunda 35,60 dB, %25 koşusunda da 35,60; `pick` ana kromayı tek başına oynatmak 33,3 dB verir ve taban değildir): RGB 35,6 dB, kenar Cb/Cr 27,7 / 24,9 dB. %25 hâlâ 4:2:0'dan RGB +2,9 dB, renk kenarında +6,6 / +8,3 dB iyi (önceki %50 için: +4,0 / +8,7 / +10,5).
 Ek koşullar: `--grain 40` (çok ağır video, ana ~36 Mbps): %50 aux 17,8 Mbps (0,49) RGB 37,39; %30 10,7 (0,30) RGB 36,40; %25 8,9 (0,25) RGB 36,42. Ana 8 Mbps, grain 14 (iki oturum da bağlayıcı): %50 video aux 4,7 Mbps (0,71) RGB 36,68; %30 2,8 (0,42) 36,50; %25 2,3 (0,35) 36,49.
 Seçim gerekçesi: %30 ile %25 arasında kalite farkı ölçüm gürültüsü içinde (grain 40'ta aynı, grain 14'te RGB 0,07 dB); %12'ye inmek ek bant kazandırır ama kenar kalitesi ve gürültülü videoda renk düşer; %25 kartın istediği %25-35 aralığının dibinde, ağır harekette toplam bant ~1,5x yerine ~1,3x. Yardımcı IDR 66 -> 45 kB (ana IDR 209 kB).
 Kodlama süresi etkilenmedi (paced `encode-bench`, 60 fps, scroll/video, %50 ve %25: aux enc p50 11,1-11,4 ms, ana 5,9-6,2 ms).

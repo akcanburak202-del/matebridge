@@ -128,7 +128,7 @@ func runQuality(_ args: ProbeArgs) throws {
             if args.flag("by-phase") {
                 let ph = ScenePhase.of(frame: f, frames: frames).rawValue
                 post.add("  [\(ph)] packed \(name) as-is", evaluate(AVC444v2.unpack(main: md, aux: ad, reconstruction: .asIs), truth: truth, sourceRGB: rgb, mask: mask))
-                post.add("  [\(ph)] plain 4:2:0 box nearest", evaluate(ColorMath.upsample(md, .nearest), truth: truth, sourceRGB: rgb, mask: mask))
+                post.add("  [\(ph)] main-only 4:2:0 (\(chroma.rawValue) chroma) nearest", evaluate(ColorMath.upsample(md, .nearest), truth: truth, sourceRGB: rgb, mask: mask))
             }
             if chroma == .box {
                 post.add("packed box main+aux, inverse box", evaluate(AVC444v2.unpack(main: md, aux: ad, reconstruction: .inverseBox), truth: truth, sourceRGB: rgb, mask: mask))
