@@ -142,10 +142,11 @@ class FullChromaPipeline(
     private fun teardown() {
         active = false
         renderer.packed = null
-        auxDecoder?.stop()
-        presenter?.shutdown()
+        // No image may reach the presenter or the pending queue once they are going away.
         runCatching { mainReader?.setOnImageAvailableListener(null, null) }
         runCatching { auxReader?.setOnImageAvailableListener(null, null) }
+        auxDecoder?.stop()
+        presenter?.shutdown()
         runCatching { mainReader?.close() }
         runCatching { auxReader?.close() }
         mainThread?.quitSafely()

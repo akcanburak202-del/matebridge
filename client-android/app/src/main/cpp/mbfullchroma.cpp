@@ -156,6 +156,7 @@ void main() {
 const char* kFsDump = R"(#version 300 es
 #extension GL_EXT_YUV_target : require
 precision highp float;
+precision highp int;
 uniform __samplerExternal2DY2YEXT uMain;
 in vec2 vUv;
 out vec4 o;
@@ -166,6 +167,7 @@ void main() { o = vec4(texture(uMain, vUv).rgb, 1.0); }
 const char* kFsMain = R"(#version 300 es
 #extension GL_EXT_YUV_target : require
 precision highp float;
+precision highp int;
 uniform __samplerExternal2DY2YEXT uMain;
 uniform vec3 uConv0;  // yOffset, yScale, cScale
 uniform vec4 uConv1;  // crR, cbG, crG, cbB
@@ -185,6 +187,7 @@ void main() {
 const char* kFsMerge = R"(#version 300 es
 #extension GL_EXT_YUV_target : require
 precision highp float;
+precision highp int;
 uniform __samplerExternal2DY2YEXT uMain;
 uniform __samplerExternal2DY2YEXT uAux;
 uniform ivec2 uSize;
