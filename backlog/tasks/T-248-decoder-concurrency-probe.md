@@ -1,7 +1,7 @@
 ---
 id: T-248
 title: Probe — does the tablet's HEVC decoder scale with concurrent sessions? (1 vs 2 vs 3 decoders, full vs half frames)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -31,7 +31,13 @@ Kullanıcı 2026-10-05: çözücü sınırını aşmak için görüntüyü iki y
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Swift CLI** `probes/decoder-concurrency-probe/` (SwiftPM, `check.sh` builds + tests it):
+   - `DecProbeCore` (testable): `ClipSpec` listesi (full 2800×1840 @60 Mbps; `half` = sol yarı, `half_right` = sağ yarı 1400×1840 @30 Mbps; `quarter` = sol üst 1400×920 @15 Mbps; bit hızı alanla orantılı), uzunluk önekli → Annex-B dönüşümü, NAL bölme + erişim birimi (AU) sayımı (`first_slice_segment_in_pic_flag`), argüman ayrıştırma.
+   - `decprobe-clips` (exe): içerik = tüm kareyi kaplayan prosedürel "fotoğraf" (yumuşak renk lekeleri + gren) 2,5/1,5 px/kare kayar; her yarıda bir beyaz metin paneli, farklı hızlarda dikey kayan yazı (Menlo/Helvetica). Yarım/çeyrek klipler aynı sahnenin kırpıntısıdır (aynı çizim, öteleme ile) → 2×half (sol+sağ) gerçek bölme senaryosunun aynısı. VT: donanım HEVC Main 8-bit, hızlı profil (LLRC yok, RealTime=false, B-kare yok, PrioritizeSpeed, ExpectedFrameRate 120, DataRateLimits 2×), tek IDR (kare 0), 600 kare. Klipler sırayla kodlanır (tek oturum aynı anda). Çıktı Annex-B, IDR önüne VPS/SPS/PPS; yazdıktan sonra dosya yeniden okunup AU sayısı = kare sayısı doğrulanır. Varsayılan dizin `~/.cache/matebridge-tools/data/decprobe/`.
+2. **Android probu** `probes/decoder-concurrency-probe/android` (hdr-probe düzeni, paket `dev.matebridge.decprobe`, elle derlenir):
+   - Saf Kotlin + JVM testleri: `AnnexB` (NAL bölme, AU gruplama, csd-0 çıkarma), `ClipFiles` (ad → boyut), `Scenario` (`2xhalf` → half+half_right, `3xhalf` → half+half_right+half, açık `a+b` biçimi), `Stats` (p50/p95, özet satırı).
+   - `DecProbeActivity`: klipleri `getExternalFilesDir` altından okur; senaryo × çıkış (`image` = `ImageReader` PRIVATE, hemen kapat; `buffer` = yüzeysiz ByteBuffer, render'sız bırak) için N `MediaCodec`'i ayrı iş parçacıklarında, ortak başlangıç mandalıyla, klibi döngüleyerek en hızlı şekilde çözer (`KEY_PRIORITY 0`, `KEY_OPERATING_RATE` Short.MAX). Isınma (1 s) sonrası ortak pencerede oturum başına ve toplam fps, Mpx/s, giriş→çıkış süresi ve çıkışlar arası süre p50/p95. `DECPROBE` etiketiyle senaryo başına tek satır + `files/decprobe-results.txt`. Extras: `scenarios`, `outputs`, `seconds`, `warmup`, `codec`, `prio`. `onPause`'da her şey durur.
+3. README (probes/README.md satırı + prob README'si: derleme, push, çalıştırma, okuma komutları), `./scripts/check.sh`, `assembleDebug testDebugUnitTest`, Handoff.
 
 ## Handoff
 
