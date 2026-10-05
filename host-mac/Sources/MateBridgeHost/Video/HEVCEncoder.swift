@@ -347,9 +347,13 @@ final class HEVCEncoder: @unchecked Sendable {
                     configLog(line.level, ChromaConfigLog.event, line.fields)
                 } else if !frame.data.isEmpty {
                     statsLock.withLock { self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs) }
-                    self?.refinePairResolved(captureTimeUs: frame.captureTimeUs, aux: frame.data.count)
                 }
                 auxOutput(frame, encodeUs)
+                // After the frame is queued: a refinement train continues only once both streams' frames are in their
+                // queues, so it never decides on a queue the auxiliary frame is about to overflow.
+                if !frame.isCodecConfig, !frame.data.isEmpty {
+                    self?.refinePairResolved(captureTimeUs: frame.captureTimeUs, aux: frame.data.count)
+                }
             }
             do {
                 let aux = try PackedAuxEncoder(

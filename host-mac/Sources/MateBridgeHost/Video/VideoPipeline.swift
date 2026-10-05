@@ -142,7 +142,7 @@ public final class VideoPipeline: @unchecked Sendable {
             let frames = self.frames
             let tap = self.tap
             let encoder = try HEVCEncoder(settings: settings, meter: meter, refine: refine,
-                                          refineReady: { frames.isReadyForRefine }, output: { frame, encodeUs in
+                                          refineReady: { [auxFrames] in frames.isReadyForRefine && auxFrames.isReadyForRefine }, output: { frame, encodeUs in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)
@@ -409,7 +409,7 @@ public final class VideoPipeline: @unchecked Sendable {
     func checkPackedWindow(senderAuxDroppedTotal: Int) -> PackedChromaMonitor.Decision? {
         guard let encoder = box.encoder, encoder.isPacked else { return nil }
         let c = encoder.takeAuxCounters()
-        return packedMonitor.close(offered: c.offered, lost: c.lost, queueDroppedTotal: auxFrames.droppedCount,
+        return packedMonitor.close(offered: c.offered, lost: c.lost, queueDroppedTotal: auxFrames.discardedCount,
                                    senderDroppedTotal: senderAuxDroppedTotal)
     }
 

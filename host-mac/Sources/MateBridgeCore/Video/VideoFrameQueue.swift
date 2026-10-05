@@ -166,6 +166,9 @@ public final class VideoFrameQueue: @unchecked Sendable {
 
     public var droppedCount: Int { lock.lock(); defer { lock.unlock() }; return policy.droppedCount }
 
+    /// Every discarded frame: overflow, purge, refusal while awaiting a keyframe, `breakChain` (T-258 fallback rule).
+    public var discardedCount: Int { lock.lock(); defer { lock.unlock() }; return policy.discardedCount }
+
     /// Keyframe-related queue state, read under one lock (T-176: input to `KeyframeRequestCoalescer.hostDrop`).
     public var keyframeState: KeyframeQueueState {
         lock.lock(); defer { lock.unlock() }

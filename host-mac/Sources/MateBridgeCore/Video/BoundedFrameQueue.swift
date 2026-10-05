@@ -24,6 +24,11 @@ public struct BoundedFrameQueue: Sendable {
     private var frames: [EncodedVideoFrame] = []
     private var keyframeNeeded = false
     public private(set) var droppedCount = 0
+    /// Deltas refused while awaiting a keyframe and deltas purged by `breakChain` (not in `droppedCount`).
+    public private(set) var refusedCount = 0
+    public private(set) var purgedByBreakCount = 0
+    /// Every frame the queue discarded for any reason: overflow, purge, refusal, `breakChain` (T-258 loss accounting).
+    public var discardedCount: Int { droppedCount + refusedCount + purgedByBreakCount }
     private var awaitingKeyframe = false
 
     public init(capacity: Int = BoundedFrameQueue.defaultCapacity) {
@@ -43,7 +48,12 @@ public struct BoundedFrameQueue: Sendable {
     public mutating func push(_ frame: EncodedVideoFrame) -> Int {
         // A new consumer must see CODEC_CONFIG then a keyframe: stale deltas still in flight are refused.
         if awaitingKeyframe {
-            if frame.isKeyframe { awaitingKeyframe = false } else if !frame.isCodecConfig { return 1 }
+            if frame.isKeyframe {
+                awaitingKeyframe = false
+            } else if !frame.isCodecConfig {
+                refusedCount += 1
+                return 1
+            }
         }
         // The same parameter sets queued twice (encoder announcement racing a resync) are redundant.
         if frame.isCodecConfig {
@@ -115,7 +125,9 @@ public struct BoundedFrameQueue: Sendable {
     /// The reference chain was broken outside the queue (the sender dropped a frame, T-258 auxiliary stream): queued
     /// deltas are purged and deltas are refused until a keyframe is pushed. The caller asks the encoder for one.
     public mutating func breakChain() {
+        let before = frames.count
         frames.removeAll { !$0.isProtected }
+        purgedByBreakCount += before - frames.count
         awaitingKeyframe = true
     }
 

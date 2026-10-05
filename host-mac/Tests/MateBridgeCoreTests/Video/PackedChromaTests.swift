@@ -310,6 +310,18 @@ final class PackedChromaFlowTests: XCTestCase {
         XCTAssertEqual(q.tryPop()?.captureTimeUs, 4)
     }
 
+    func testDiscardedCountIncludesRefusedAndPurgedFrames() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        q.push(frame(1, key: true))
+        q.push(frame(2))
+        q.breakChain()  // purges the delta
+        XCTAssertEqual(q.discardedCount, 1)
+        q.push(frame(3))  // refused while awaiting a keyframe
+        q.push(frame(4))
+        XCTAssertEqual(q.discardedCount, 3)
+        XCTAssertEqual(q.droppedCount, 0, "the cadence counter is unchanged")
+    }
+
     func testActivityHandlerFiresOnPushAndFinish() {
         let q = VideoFrameQueue(keyframeNeeded: {})
         let n = ActivityCounter()

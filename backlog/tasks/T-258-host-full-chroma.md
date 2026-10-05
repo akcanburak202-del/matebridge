@@ -70,6 +70,11 @@ Dal: `task/T-258-host-full-chroma` (T-257 üzerine). Protokole dokunulmaz.
 5. Yardımcı bit hızı `Backend.setBitrate` (sıralı owner kuyruğu) içinde ana ile birlikte uygulanır; doğrudan çağrı kaldırıldı.
 6. `VideoSettings.fullChromaFellBack` + `ChromaPolicy.resolve(packedFellBack:)`: çalışma zamanı geri düşüşü `MATEBRIDGE_CHROMA=packed444` ile bile normal 4:2:0 (`reason=full_chroma_fallback`); onaysız istek yine keskin. Birim testi eklendi (`FullChromaPolicyTests`). 1-5 Host hedefinde (test hedefi yok), derlendi, cihazda doğrulanacak: yardımcı callback hatası enjekte etmek zor; `ev=chroma_stats aux_lost` ve `chroma_fallback` izlenmeli, `DECODE_ERROR view=1` durağan ekranda yardımcı IDR'ın gelmesi.
 
+### Codex turu 2 (2 x P2)
+
+1. Yardımcı kayıp sayımı artık `VideoFrameQueue.discardedCount` (taşma + bekleyen akıştan reddedilen delta'lar + `breakChain` ile temizlenenler) kullanır; ana kuyruğun `droppedCount` (cadence) sayacı değişmedi. Geri çağrı hataları zaten `auxLost`'ta. Test: `testDiscardedCountIncludesRefusedAndPurgedFrames`.
+2. Refine hazır koşulu ana ve yardımcı kuyruğun ikisini birden ister; çift çözümü (devam kararı) yardımcı kare kuyruğa konduktan sonra verilir (`auxOutput` sonrası `refinePairResolved`), böylece refine yardımcı taşması ya da zincir kırığı üretmez. Host hedefi, derlendi; cihazda doğrulanacak.
+
 ## Open questions
 
 - Orkestratörün sonradan gönderdiği kart açıklaması (KEYFRAME_REQUEST `view`/`reason`) için protokol dalını birleştirme komutu izin sistemi tarafından reddedildi; açıklama mesajdaki metne göre uygulandı (PROTOCOL §0x23 ile uyumlu varsayıldı). Birleştirme gerekirse orkestratör yapmalı; protokol değişikliği yok.
