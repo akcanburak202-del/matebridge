@@ -1370,3 +1370,16 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 - Tablet `hdrprobe` (MateBridge kapalıyken, sonra kaldırıldı): PQ klibi: çözücü `OMX.hisi.video.decoder.hevc` Main10HDR10, çıkış `standard=6 transfer=6 range=2 hdrStaticInfo=true`; SF katmanı `BT2020_ITU_PQ`, `DEVICE`. `dumpsys display mIsHdrLayerPresent=false` kaldı (Huawei bu bayrağı güncellemiyor olabilir). **Kullanıcı:** 1000 nit yaması SDR beyaz yamadan belirgin parlak ve beyaz; rampa yumuşak (kutular desen gereği). `static_info=false` varyantı da aynı (çözücü SEI'den okuyor). HLG klibi: `IllegalArgumentException: codec does not support type` → HLG yok.
 - Sonuç: decision 0032 (HDR10, Oyun modu, isteğe bağlı); protokol `task/T-236-hdr-protocol`, T-237 (host) ve T-238 (istemci) çalışıyor.
 - Kablosuz adb gece düşmüştü; `adb connect 192.168.1.105:5555` yeterli oldu (tablet yeniden başlamamış).
+
+## 2026-10-05 ~12:20 — T-235 renk keskinleştirme: cihaz karşılaştırması
+
+Günlük 60, Safari'de `tools/chroma-test/index.html` + Dock. Kenar ölçümü tablet `screencap` ile (ekran yolu değil; yalnız yön göstergesi).
+
+| değer | kullanıcı | kenar RGB / luma PSNR | yakalama→kodlama p50 |
+|---|---|---|---|
+| `420` | pürüzlü (temel) | 21,6 / 32,0 dB | 6,7 ms |
+| `sharp_bilinear` | Apple Music belirgin keskin, hafif pürüz | 22,5 / 27,4 dB | ~11 ms (tek pencere) |
+| `sharp_nearest` | **en iyi**; kırmızıda dikkat edince hafif pürüz | 23,2 / 30,9 dB | 9,4–9,8 ms (Metal GPU ~2,5 ms) |
+| `444` | — | — | tablet `video_health fault cause=no_output` (çözücü çıktı vermiyor) → yerel 4:4:4 kesin yok |
+
+Kullanıcı kararı: varsayılan kapalı, panelden açılır → decision 0033, T-240/T-241 (protokol `task/T-239-chroma-protocol`).
