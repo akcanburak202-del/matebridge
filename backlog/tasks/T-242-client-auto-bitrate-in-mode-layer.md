@@ -1,7 +1,7 @@
 ---
 id: T-242
 title: Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula
-status: in-progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -19,10 +19,10 @@ Cihaz 2026-10-05: kullanıcı Oyun modundayken panelden bit hızını "Otomatik"
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Oyun ve Çizim katmanı açıkken Otomatik seçilirse etkin bit hızı katman varsayılanı (`GAME_BITRATE_KBPS`) olur; STREAM_PREFS'te 60000 gider. Günlük'te Otomatik bugünkü gibi 0 (host formülü).
-- [ ] [JVM] Panel etiketi katman açıkken "Otomatik (60 Mbps)"; seçili işaret Otomatik'te kalır.
-- [ ] [JVM] Kalıcı (kaydedilen) değer kuralı değişmez (0014 §3 yazma kuralı).
-- [ ] `./scripts/check.sh` geçer.
+- [x] [JVM] Oyun ve Çizim katmanı açıkken Otomatik seçilirse etkin bit hızı katman varsayılanı (`GAME_BITRATE_KBPS`) olur; STREAM_PREFS'te 60000 gider. Günlük'te Otomatik bugünkü gibi 0 (host formülü).
+- [x] [JVM] Panel etiketi katman açıkken "Otomatik (60 Mbps)"; seçili işaret Otomatik'te kalır.
+- [x] [JVM] Kalıcı (kaydedilen) değer kuralı değişmez (0014 §3 yazma kuralı).
+- [x] `./scripts/check.sh` geçer.
 
 ## Plan
 
@@ -34,4 +34,18 @@ Cihaz 2026-10-05: kullanıcı Oyun modundayken panelden bit hızını "Otomatik"
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `8f949ed` (uygulama + testler; plan `39176d3`). Dal: `task/T-242-auto-bitrate-layer` (a0efa0d'den; main sonra yalnız docs commit'i 611e237 aldı, çakışma yok).
+- **Dosyalar:** `stream/GameMode.kt`, `settings/SettingsCatalog.kt` (`SettingItem.Option` etiketi lambda ile; `String` kurucusu korundu), `settings/SettingsViews.kt` (yenilemede buton metni güncellenir), test: `stream/AutoBitrateLayerTest.kt` (yeni), `settings/SettingsCatalogTest.kt` (+1 test).
+- **Davranış:** katman açıkken seçim (`layerBitrateChoice`, 0 = Otomatik) ile gönderilen değer (`Values.bitrateKbps`) ayrıldı. Otomatik katmanda hep `GAME_BITRATE_KBPS` (60000) gönderir, girişte de panelden seçilince de. `GameModeSettings.bitrateKbps` artık **panel seçimi**ni döndürür (katmanda Otomatik → 0); `prefs()` `effective().bitrateKbps`'i kullanır. Günlük'te Otomatik = 0 (host formülü), kayıt kuralı (0014 §3) aynı: katmanda seçim kaydedilmez. `ev=mode_layer bitrate_kbps=` çözülmüş değeri (60000) yazmaya devam eder.
+- **Varsayım / yan etki (MainActivity dosya listesinde değil, dokunulmadı):** MainActivity `gameSettings.bitrateKbps`'i panel seçimi (istenen), `ev=stream_config_bitrate wanted_kbps=` ve `ev=profile bitrate_setting=` için kullanıyor. Katmanda Otomatik iken bunlar artık `wanted_kbps=0` / `bitrate_setting=auto` gösterir (önceden 60000). Ayar gerçekten Otomatik olduğu için doğru sayılabilir; istenirse ayrı kartla `wanted_kbps` = `effective().bitrateKbps` yapılabilir.
+- **Test edilmedi (tablet gerekli):** panel etiketinin cihazda yenilenmesi, host'un gerçekten 60 Mbps uygulaması.
+- **check.sh:** ALL OK.
+
+### Tablette kontrol
+1. Kayıtlı bit hızı Otomatik, Günlük'te panel: "Otomatik" seçili, etiket "Otomatik".
+2. Oyun moduna geç: bit hızı satırında ilk buton "Otomatik (60 Mbps)" ve seçili; host logu `ev=profile ... bitrate_kbps=60000`.
+3. Oyun'da 30 Mbps seç → host 30000; sonra Otomatik seç → seçim Otomatik'te kalır, host `bitrate_kbps=60000 bitrate_source=prefs` (önceden 20000), panelde "Uygulanan: 60 Mbps".
+4. Çizim'de aynı adım 3: 60000. Günlük'e dön: etiket "Otomatik", host modun formülünü uygular (STREAM_PREFS 0); kayıtlı değer hâlâ Otomatik (uygulamayı yeniden aç, Günlük'te Otomatik).
+
+### Open questions
+- Yukarıdaki `wanted_kbps`/`bitrate_setting` log anlamı değişikliği kabul mü? (MainActivity kapsam dışı.)
