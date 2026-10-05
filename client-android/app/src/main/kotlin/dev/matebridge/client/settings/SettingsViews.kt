@@ -74,7 +74,9 @@ class SettingsViews(
             for (b in buttons) { b.isEnabled = enabled; b.alpha = if (enabled) 1f else DISABLED_ALPHA }
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {
-                val on = item.options[i].id == sel
+                val o = item.options[i]
+                b.text = o.label // T-242: e.g. "Otomatik (60 Mbps)" inside a mode layer
+                val on = o.id == sel
                 b.isSelected = on // the background's state_selected entry turns it blue (T-107)
                 b.setTypeface(null, if (on) Typeface.BOLD else Typeface.NORMAL)
             }
