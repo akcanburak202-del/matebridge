@@ -1,7 +1,7 @@
 ---
 id: T-254
 title: Probe (tablet) — 4:4:4 packing gates: raw YUV sampling on the GPU, ImageReader→GL→SurfaceView presentation, dual decode at 60 fps
-status: ready
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -30,6 +30,15 @@ files:
 - [ ] Handoff: kopyala-yapıştır çalıştırma bloğu (T2, T3 panel 60/120, T1, T4), beklenen çıktı ve kapı yorumları.
 
 ## Plan
+
+Ayrı proje `probes/yuv444-probe/android` (paket `dev.matebridge.yuv444probe`, `decoder-concurrency-probe` düzeni, NDK/CMake client-android ile aynı pin). Java'da `eglGetNativeClientBufferANDROID` ve `AHardwareBuffer`->GL içe aktarma yok, bu yüzden küçük bir probe-only C++ (`y444native`, EGL/GLES3/Vulkan sorgusu) var; ürün koduna girmez.
+
+- **Saf mantık (JVM testli):** `Stats.kt` (yüzdelik, `PairLatency` çift gecikmesi, `PresentStats` EGL zaman damgaları), `ClipName`/`SizeSpec` (ad çözümleme), `Args`/`TestKind`/`GlMode`, `RawVerdict`, `PlaneCopy`, `AnnexB`.
+- **T2:** `Native.caps()` GL/EGL/Vulkan uzantı listesi (`GL_EXT_YUV_target`, `VK_KHR_sampler_ycbcr_conversion` + özellik, AHB içe aktarma) -> `files/y444-caps.txt`. Ham örnekleme: çözücü -> `ImageReader` YUV_420_888 (CPU okunur + GPU örneklenir) -> `HardwareBuffer` -> EGLImage -> `__samplerExternal2DY2YEXT` ham Y/Cb/Cr -> RGBA8 FBO -> `glReadPixels` vs CPU düzlemleri (Y tam çözünürlükte, Cb/Cr yarım çözünürlükte doku merkezlerinde: bit-tam; ek bilgi: tam çözünürlükte sürücü kroma büyütmesi).
+- **T3:** çözücü (ana + aux) -> `ImageReader` PRIVATE (`GPU_SAMPLED_IMAGE`) -> GL iş parçacığı (yeni kare kazanır, EGLImage önbelleği) -> tek birleştirme geçişi -> `SurfaceView` EGL penceresi; `eglGetFrameTimestampsANDROID` (latch/present), `GL_EXT_disjoint_timer_query` GPU süresi, 60 fps tempolu besleyici (`Feeder`, hiçbir erişim birimi atlanmaz). Panel 60/120: `preferredDisplayModeId` + `Surface.setFrameRate`. `direct` = bugünkü çözücü->SurfaceView yolu, aynı klip. HWC/GPU birleşimi ve SurfaceFlinger gecikmesi dumpsys ile (Handoff).
+- **T1:** iki `MediaCodec` aynı tickte beslenir; çift gecikmesi = max(ana, aux çıkışı) - kare tick'i; tek akış taban çizgisi ile.
+- **T4:** T3'ün 300 sn'lik hali, 10 sn'de bir `thermal`, pil akımı/sıcaklığı, yenileme hızı.
+- Merge shader AVC444v2 ters eşlemesi **değil**, maliyet-eşdeğeri (iki ham YUV örneği + parite seçimi + dönüşüm); doğruluk T3 kapısı için gerekmiyor, süre/bellek trafiği ölçülür.
 
 ## Handoff
 
