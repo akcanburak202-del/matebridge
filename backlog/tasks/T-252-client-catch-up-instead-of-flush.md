@@ -71,6 +71,8 @@ Tasarım: kareler çözücüye sırayla verilmeye devam eder (referans zinciri b
 
 - **Codex tur 3:** (1) Eşikler ayrıldı (orkestratör kararı): catch-up kuyruk boşalana kadar (arkada kare kalmayana dek) SKIP eder, TAIL = gerçekten en yeni kare (kalıcı gecikme yok); 300 ms süre sınırı (eski yol) yalnız o anda bekleyen > `maxPending` ise çalışır, `maxPending` altına inmiş birikim asla boşaltılmaz, en yeniye atlamaya devam eder (yanıp sönme 50 ms kuralıyla sınırlı). Test: `aBacklogDrainedToTheNormalDepth...`. (2) `cu_skipped` çıkış tarafında gerçek discard sayısıdır (50 ms kuralıyla gösterilenler sayılmaz). Testler güncellendi + `backBelowTheNormalDepthInsideTake...`. check.sh ALL OK.
 
+- **Codex tur 4:** yeni catch-up bölümü her zaman kendi süre damgasını alır (eskiden `skippedOut == 0` ise); bir süre aşımından sonra kurtarma anahtar karesi + yeni burst eski damgayla boşaltılmaz. Test: `aNewEpisodeAfterAnExpiry...`. check.sh ALL OK.
+
 ## Open questions
 
 - (Çözüldü) Orkestratör `DevKnobs.kt`, `MainActivity.kt` (tek satır) ve `docs/LOGGING.md` dosyalarını kapsama ekledi; `--ez catch_up false` (dev kapısı arkasında, `ev=profile knobs=` içinde `catch_up:0`) bağlandı, `DevKnobsTest` ve LOGGING.md güncellendi.

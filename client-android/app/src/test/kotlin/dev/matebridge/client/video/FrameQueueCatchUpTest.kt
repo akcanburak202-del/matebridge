@@ -319,4 +319,24 @@ class FrameQueueCatchUpTest {
         now += 600 * ms
         assertTrue(q.takeRetry()) // the periodic retry sends it later
     }
+
+    @Test fun aNewEpisodeAfterAnExpiryGetsAFreshDeadlineAndKeepsTheRecoveryKeyframe() {
+        val exp = ArrayList<Int>()
+        q.onExpired = { exp += it }
+        key(); take()
+        repeat(6) { p() } // episode 1
+        take() // one SKIP handed out
+        now += 350 * ms
+        assertNull(take()) // expired: flushed, gated
+        assertEquals(1, exp.size)
+        val keySeq = seq
+        key() // the recovery keyframe, not taken yet
+        repeat(4) { p() } // another burst: pending 5 > limit 4 -> episode 2
+        assertTrue(q.isCatchingUp())
+        now += 10 * ms
+        p() // must not flush with episode 1's timestamp
+        assertFalse(q.isWaitingKeyframe())
+        assertEquals(1L, q.counters().overflows)
+        assertEquals(keySeq, take()!!.frameSeq) // the recovery keyframe is still there, in order
+    }
 }

@@ -217,7 +217,7 @@ class FrameQueue(
                         // T-252: a backlog inside the bounds is decoded and caught up, not flushed.
                         if (!catchingUp) {
                             catchingUp = true
-                            if (skippedOut == 0) catchStartNs = nowNs
+                            catchStartNs = nowNs // every episode gets its own deadline, whatever skippedOut is
                             catchUps++
                         }
                         tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
