@@ -104,8 +104,9 @@ class FullChromaPipeline(
             // Ownership is recorded right after each allocation so a failure of the next one is torn down by teardown().
             val mt = HandlerThread("mb-img-main").also { mainThread = it; it.start() }
             val at = HandlerThread("mb-img-aux").also { auxThread = it; it.start() }
-            // One more than the aux reader: the presenter holds the last drawn main image for the late upgrade (T-261).
-            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES + 1, usage).also { mainReader = it }
+            // T-263: MAX_IMAGES like before T-261; the hardware decoder's ACodec fails to start with 7 ("maxDequeuedBufferCount -2").
+            // The presenter's held image (late upgrade) is short-lived and counts inside this budget ([LateUpgrade.holdsImage]).
+            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { mainReader = it }
             val aux = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { auxReader = it }
 
             val token = runGen.begin()

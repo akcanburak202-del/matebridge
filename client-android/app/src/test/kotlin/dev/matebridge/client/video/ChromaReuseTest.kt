@@ -262,6 +262,37 @@ class ChromaReuseTest {
         assertEquals("x", p.find(500))
     }
 
+    // ---- T-263: the held main image stays within the reader's budget ----
+
+    @Test fun heldImageIsKeptOnlyForAnUnpairedFrameWithinTheLateWindow() {
+        val u = LateUpgrade()
+        u.onMainDrawn(2000, paired = false, targetNs = 1_000_000_000)
+        val windowEnd = 1_000_000_000 + LateUpgrade.GRACE_NS + LateUpgrade.HOLD_NS
+        assertTrue(u.holdsImage(1_000_000_000))
+        assertTrue(u.holdsImage(windowEnd - 1))
+        assertFalse(u.holdsImage(windowEnd)) // nothing arrived in time: the image goes back to the decoder
+    }
+
+    @Test fun heldImageIsReleasedOnceUpgradedOrWhenNothingCanBeUpgraded() {
+        val u = LateUpgrade()
+        u.onMainDrawn(2000, paired = false, targetNs = 0)
+        u.onUpgraded()
+        assertFalse(u.holdsImage(1))
+        u.onMainDrawn(3000, paired = true, targetNs = 0)
+        assertFalse(u.holdsImage(1)) // paired draw: no upgrade, nothing to hold
+        u.onMainDrawn(LateUpgrade.NONE, paired = false, targetNs = 0)
+        assertFalse(u.holdsImage(1)) // no expectation: never matched
+        u.onMainDrawn(4000, paired = false, targetNs = 0)
+        u.clear()
+        assertFalse(u.holdsImage(1))
+    }
+
+    @Test fun mainReaderBudgetLeavesTheDecoderImages() {
+        // Worst case on the main reader: held (<= 1) + pending slot (1) + retired awaiting fences (<= in-flight draws, 3).
+        val worst = 1 + 1 + 3
+        assertTrue(worst < FullChromaPipeline.MAX_IMAGES) // at least one image stays free for the decoder
+    }
+
     // ---- stats fields ----
 
     @Test fun statsFieldsCarryReuseAndUpgrades() {

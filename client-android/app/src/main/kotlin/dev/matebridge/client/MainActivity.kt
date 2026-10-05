@@ -1368,6 +1368,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /**
+     * T-263: the main decoder gave up. In packed mode (`chroma_layout = 1`) its codec may be what failed (an output
+     * target the hardware decoder refuses), so the picture comes back through the negotiated fallback (process latch,
+     * `chroma = 1`, direct path) instead of staying on "Görüntü durdu". The direct path has no further fallback.
+     */
+    private fun onMainDecoderGaveUp() {
+        if (isDestroyed || !packedVideo || chromaPipeline?.active != true) return
+        MbLog.w("full_chroma_fallback", "reason=main_decoder_give_up", "render")
+        onFullChromaFailed("main_decoder_give_up")
+    }
+
+    /**
      * Once per build: the capability self-test off the UI thread, before any stream decoder exists. A result that arrives
      * later shows on the next connection's HELLO and applies to the running session through a fresh STREAM_PREFS.
      */
@@ -1412,7 +1423,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val r = renderer ?: VideoRenderer(
             config,
             onKeyframeRequest = { reason -> controller.trySend(mainKeyframeRequest(reason)) }, // T-259: `view` only in packed mode
-            onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
+            onGiveUp = { why ->
+                MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder")
+                runOnUiThread { onMainDecoderGaveUp() }
+            },
             vsync = vsync,
             bufferFrames = bufferFrames,
             codecReportsShown = true, // T-184: the only path; the codec's render callback reports shown times
@@ -1563,6 +1577,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         val retry = Button(this).apply {
             setText(R.string.video_fault_retry)
+            // T-263: explicit colours; the theme's default button drew white text on a white face (no visible label).
+            isAllCaps = false
+            setTextColor(Color.BLACK)
+            textSize = 16f
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.rgb(0xE8, 0xE8, 0xE8))
+                cornerRadius = 8 * d
+            }
+            minimumWidth = (160 * d).toInt()
+            minimumHeight = (48 * d).toInt()
             setOnClickListener { videoHealth.retry()?.let { runVideoRecovery(it) } }
         }
         val box = android.widget.LinearLayout(this).apply {
