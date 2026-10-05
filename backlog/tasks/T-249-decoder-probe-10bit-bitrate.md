@@ -1,7 +1,7 @@
 ---
 id: T-249
 title: Probe — decoder headroom for 10-bit (SDR + HDR PQ) and high bitrates (60–150 Mbps) at 2800×1840
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-248]
@@ -107,3 +107,4 @@ Kontrol: `info clip … units=600`; çözücü adı ve `profiles=[…]` (Main10H
 
 - `scripts/check.sh` yalnız Swift probunu derler/test eder; Android probu elle derlenir (T-248 ile aynı, bilinçli).
 - Gerçek 10-bit hassasiyetli içerik (bantlanma/gradyan testi) bu kartın kapsamında değil.
+- (Orkestratör, cihaz koşusu) Çok senaryolu tek koşu (10 klip) klip yükleme sırasında takıldı (son klibin `info` satırı yok, hiç `scen=` yok; büyük olasılıkla tüm klipleri belleğe almak ~570 MB). Senaryolar tek tek koşularak ölçüldü. Prob ileride kullanılırsa: klipleri senaryo başına yükle/bırak.

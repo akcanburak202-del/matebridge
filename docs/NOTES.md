@@ -1458,3 +1458,25 @@ Araştırma: kalkma `out = in·(1−16/255) + 16` ile ±1 içinde birebir (gamma
 - **Mac tarafı:** 2800×1840@120 kodlayıcıda ~%70 (sınır değil; Mac değişikliği gerekmiyor, kısıt istemcide `GameResolution.kt` + 0030 Ek). 144: Mac yolu var (T-050'de 2100×1380 çalıştı), istemci `FPS_OPTIONS` 60/120; panel 144'ü uygulamaya vermiyor bulgusu (T-050) yeniden doğrulanmalı; 2800@144 kodlayıcıda ~%83, dar. DISPLAY_RATE 144→120 seyreltmesi eşit aralıklı olamaz.
 - **Açık:** 10-bit HEVC (HDR) ve 80–100 Mbps için çözücü probu yapılmadı (T-248 yalnız 8-bit 60/30 Mbps).
 - **Varsayıma dayanan ve gözden geçirilecek kararlar:** 0030 Ek T-245 (2800 yalnız Oyun 60), 0029 gerekçesi (çözme küçülür), 0032 Sonuçlar (HDR yalnız 60 olasılığı), 0014 §3/0013 + `StreamPrefsPolicy` 80 Mbps tavanı (T-085 yeniden ölç), NOTES ~1065 xml tavan tahmini (eskidi).
+
+## 2026-10-05 ~18:40 — T-249 çözücü probu: 10-bit ve yüksek bit hızı (2800×1840, MateBridge kapalı)
+
+Ham çıktı: `~/.cache/matebridge-tools/data/decprobe/t249-run-1831-single.txt`. Senaryolar tek tek koşuldu (10 klip aynı anda yüklenince prob takıldı: ~570 MB bellek; bkz. T-249 Open questions). `lat` = giriş→çıkış p50/p95/p99/maks ms; tempolu koşularda `miss` hepsinde 0, `thermal=0`.
+
+| klip | sınırsız fps | pace=120 lat | pace=60 lat |
+|---|---|---|---|
+| 8-bit 60 Mbps | 356 | 13,2 / 16,4 / 17,9 / 19,8 | 12,6 / 14,8 / 15,9 / 18,3 |
+| 10-bit SDR 60 | 354 | 13,5 / 16,2 / 17,8 / 19,7 | 12,9 / 15,2 / 16,6 / 17,7 |
+| 10-bit PQ 60 | 373 | 13,0 / 15,9 / 18,3 / 21,2 | 12,6 / 14,7 / 15,9 / 18,3 |
+| 8-bit 80 | 316 | 14,0 / 18,0 / 19,2 / 21,0 | 13,3 / 16,5 / 17,8 / 18,9 |
+| 8-bit 100 | 306 | 14,2 / 18,3 / 19,4 / 23,9 | 14,1 / 17,3 / 18,1 / 19,8 |
+| 8-bit 150 | 297 | 15,4 / 19,7 / 20,6 / 23,5 | 15,1 / 18,9 / 20,2 / 20,9 |
+| 10-bit PQ 80 | 336 | 13,5 / 17,5 / 18,5 / 20,0 | 13,1 / 15,3 / 16,3 / 19,5 |
+| 10-bit PQ 100 | 321 | 14,3 / 18,4 / 19,8 / 23,1 | 13,5 / 17,0 / 18,3 / 19,6 |
+| 10-bit PQ 150 | 300 | 15,8 / 20,5 / 22,1 / 30,0 | 14,6 / 18,8 / 20,3 / 20,8 |
+| 8-bit 60, IDR/60 kare | 343 | IDR kareleri 28,1 / 31,7 | IDR kareleri 26,3 / 30,7 |
+
+- **10-bit = 8-bit:** Main10 ve Main10HDR10 kapasite ve gecikmede 8-bit ile aynı (PQ biraz daha hızlı bile). → 0032 "HDR yalnız Oyun 60" çekincesi için çözücü engeli yok; HDR+120+2800 çözücü tarafında serbest. 10-bit SDR çözücüde bedava.
+- **Bit hızı ucuz:** 150 Mbps'te bile kapasite ~300 fps (120'nin 2,5 katı). Kare gecikmesi 60→100 Mbps ~+1 ms, 150 Mbps ~+2 ms (p50); p99 ~+1,5–3 ms, maks ≤ 24 ms (PQ 150: 30). → T-085'teki p99 40 ms çözücüden gelmiyor (çözücü maks ~24 ms); büyük karelerin ağ/alış süresi aranmalı. Oyun/Çizim 60 Mbps ve host 80 Mbps tavanı çözücü açısından gevşetilebilir (ağ/USB 2.0 ~480 Mbit/s ve Wi-Fi ayrı sınır).
+- **IDR maliyeti:** IDR karesi ~26–31 ms (normal kare ~13) → IDR başına ~+15 ms tek seferlik gecikme sıçraması, 120 fps'te bile kaçırma yok.
+- Uyarı: klip içeriği yapay (kayan fotoğraf + gren + yazı); 10-bit klipler 8-bit sahneden dönüştürülmüş (bantlanma değerlendirmesi için uygun değil).

@@ -266,3 +266,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-244](tasks/T-244-host-limited-range-knob.md) | Host experiment — encode limited (video) range (SCK 420v, VUI full=0, STREAM_CONFIG full_range=0) to fix the black lift when the tablet scales the picture | 6 | mac-host-dev | [T-230] |
 | [T-246](tasks/T-246-client-no-focus-highlight.md) | Client — disable Android's default focus highlight on the video SurfaceView (the intermittent "grey" black lift) | 6 | android-client-dev | [] |
 | [T-248](tasks/T-248-decoder-concurrency-probe.md) | Probe — does the tablet's HEVC decoder scale with concurrent sessions? (1 vs 2 vs 3 decoders, full vs half frames) | 6 | android-client-dev | [] |
+| [T-249](tasks/T-249-decoder-probe-10bit-bitrate.md) | Probe — decoder headroom for 10-bit (SDR + HDR PQ) and high bitrates (60–150 Mbps) at 2800×1840 | 6 | android-client-dev | [T-248] |
