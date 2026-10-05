@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.stream.HzPinVariant
 import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
 import org.junit.Assert.assertEquals
@@ -26,7 +27,7 @@ class DevKnobsTest {
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
         "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
-        "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset",
+        "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -47,6 +48,7 @@ class DevKnobsTest {
         assertTrue(k.gameDisplay)
         assertEquals(DecoderLatencyKnobs.STANDARD, k.decoderLatency) // T-222: oprate=max
         assertEquals(ColorOverrides.AUTO, k.colorOverrides) // T-231
+        assertEquals(HzPinVariant.OFF, k.hzPin) // T-243
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -101,6 +103,7 @@ class DevKnobsTest {
         assertFalse(k.gameDisplay)
         assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.ALL, DecoderLatencyKnobs.OpRate.MAX), k.decoderLatency)
         assertEquals(ColorOverrides.parse("limited", "bt601", "unset"), k.colorOverrides)
+        assertEquals(HzPinVariant.ALL, k.hzPin)
         assertEquals("dev=1 ignored=-", k.logFields())
     }
 
@@ -155,7 +158,7 @@ class DevKnobsTest {
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "stats_1s:1",
+                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -301,5 +304,20 @@ class DevKnobsTest {
         for (id in listOf("auto", "srgb", "sdr_video", "unset")) {
             assertEquals(listOf("color_transfer:$id"), parse("dev" to true, "color_transfer" to id).knobs)
         }
+    }
+
+    @Test fun hzPinNeedsDevAndUnknownIsOff() {
+        val ignored = parse("hz_pin" to "lp")
+        assertEquals(HzPinVariant.OFF, ignored.hzPin)
+        assertEquals("dev=0 ignored=hz_pin", ignored.logFields())
+        assertEquals(emptyList<String>(), ignored.knobs)
+        val lp = parse("dev" to true, "hz_pin" to " LP ")
+        assertEquals(HzPinVariant.LP, lp.hzPin)
+        assertEquals(listOf("hz_pin:lp"), lp.knobs)
+        assertEquals(HzPinVariant.OFF, parse("dev" to true, "hz_pin" to "off").hzPin)
+        val odd = parse("dev" to true, "hz_pin" to "120")
+        assertEquals(HzPinVariant.OFF, odd.hzPin)
+        assertEquals(listOf("hz_pin:other"), odd.knobs)
+        assertTrue("hz_pin" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 }
