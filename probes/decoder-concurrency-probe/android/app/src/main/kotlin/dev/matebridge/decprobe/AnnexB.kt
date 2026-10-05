@@ -66,6 +66,17 @@ object AnnexB {
         return units
     }
 
+    /** Per access unit: does it hold an IRAP picture (first slice with NAL type 16..23, i.e. an IDR/CRA/BLA)? */
+    fun irapFlags(data: ByteArray, units: List<Unit>): BooleanArray {
+        val flags = BooleanArray(units.size)
+        var u = 0
+        for (nal in nals(data)) {
+            while (u + 1 < units.size && nal.codeStart >= units[u + 1].offset) u++
+            if (u < units.size && type(data, nal) in 16..23 && isFirstSlice(data, nal)) flags[u] = true
+        }
+        return flags
+    }
+
     /** The VPS/SPS/PPS NAL units before the first picture, with start codes (MediaFormat `csd-0`); null if none. */
     fun codecConfig(data: ByteArray): ByteArray? {
         val out = java.io.ByteArrayOutputStream()

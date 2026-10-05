@@ -29,6 +29,19 @@ public enum AnnexB {
         nals.reduce(into: [UInt8]()) { $0 += startCode; $0 += $1 }
     }
 
+    /// Inserts emulation prevention bytes (`00 00 0x` with x <= 3 becomes `00 00 03 0x`) into a NAL payload.
+    public static func escapeEmulation(_ rbsp: [UInt8]) -> [UInt8] {
+        var out: [UInt8] = []
+        out.reserveCapacity(rbsp.count + 4)
+        var zeros = 0
+        for b in rbsp {
+            if zeros >= 2 && b <= 3 { out.append(3); zeros = 0 }
+            out.append(b)
+            zeros = b == 0 ? zeros + 1 : 0
+        }
+        return out
+    }
+
     /// Splits an Annex-B stream (3- or 4-byte start codes) into NAL unit payloads (without start codes).
     public static func splitNALs(_ data: [UInt8]) -> [ArraySlice<UInt8>] {
         var starts: [(code: Int, payload: Int)] = []
