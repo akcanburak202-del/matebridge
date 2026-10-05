@@ -211,8 +211,6 @@ class FrameQueue(
                     if (sinceKeyframe >= 0) sinceKeyframe++
                     queue.addLast(frame)
                     val n = notePending()
-                    // T-252 review: back within the normal depth = caught up (the next take is the TAIL).
-                    if (catchingUp && n <= limit) endCatchUp(forgetSkipped = false)
                     // A catch-up that has not got the queue back under the normal depth in time is not shrinking.
                     val expired = catchingUp && nowNs - catchStartNs > maxCatchUpNs
                     if (n > limit && n <= depthCatchUp && !expired && pendingBytes() <= bytesCatchUp) {
@@ -296,10 +294,9 @@ class FrameQueue(
             if (!owns(consumer)) return null
             // T-252 review 2: the catch-up deadline holds without new arrivals too (burst, then silence, slow decode).
             val nowNs = clockNs()
-            // T-252 review 3: back within the normal depth = caught up; the frame taken now is the TAIL (if any was
-            // skipped) and the deadline below no longer applies.
-            if (catchingUp && pendingCount() <= limit) endCatchUp(forgetSkipped = false)
-            if (catchingUp && nowNs - catchStartNs > maxCatchUpNs && pendingCount() > 0) {
+            // The deadline only fires while the backlog is still above the normal depth: one that has drained to
+            // maxPending or less is never flushed, the catch-up just goes on skipping to the newest frame.
+            if (catchingUp && nowNs - catchStartNs > maxCatchUpNs && pendingCount() > limit) {
                 overflows++
                 dropPending(trace, nowNs)
                 endCatchUp(forgetSkipped = false) // the next frame is the keyframe: shown at once (TAIL)

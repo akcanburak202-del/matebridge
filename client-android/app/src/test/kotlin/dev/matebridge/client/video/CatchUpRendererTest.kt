@@ -55,13 +55,13 @@ class CatchUpRendererTest {
         assertTrue("outputs", factory.await { outputsDequeued >= total })
         assertTrue("all released", factory.await { codec.renderedPts.size + codec.discardedPts.size >= total })
         assertEquals("every frame decoded in order", listOf(0L) + (1L..15L).toList(), codec.inputPts.toList())
-        // pending 15..5 are skipped (the 50 ms rule may show one), the frame at the normal depth (12) is the TAIL, the rest normal
-        assertEquals("tail and the frames behind it rendered", listOf(12L, 13L, 14L, 15L), codec.renderedPts.toList().takeLast(4))
+        // pending 15..2 are skipped (the 50 ms rule may show some), the newest frame (15) is the TAIL
+        assertEquals("the newest frame is rendered last", 15L, codec.renderedPts.toList().last())
         assertEquals("every frame released once", (1L..15L).toList(), (codec.renderedPts + codec.discardedPts).sorted())
         assertEquals("only the startup request", listOf(KeyframeRequest.STARTUP), requests.toList())
         assertFalse(r.isWaitingKeyframe())
         assertTrue(env.awaitLines("catch_up"))
-        assertTrue(env.lines("catch_up").single().contains("frames=12"))
+        assertTrue(env.lines("catch_up").single().contains("frames=15"))
         val fields = r.queueStatsFields(reset = false)
         assertTrue(fields, fields.contains("catchups=1 cu_skipped=${codec.discardedPts.size} "))
     }
@@ -72,7 +72,7 @@ class CatchUpRendererTest {
         assertTrue(factory.await { codec.renderedPts.size + codec.discardedPts.size >= 15 })
         r.onFrame(frame(100))
         assertTrue("next frame rendered", factory.await { codec.renderedPts.contains(100L) })
-        assertEquals(listOf(12L, 13L, 14L, 15L, 100L), codec.renderedPts.toList().takeLast(5))
+        assertEquals(listOf(15L, 100L), codec.renderedPts.toList().takeLast(2))
     }
 
     @Test fun withCatchUpOffTheBacklogIsFlushedAndAKeyframeIsRequested() {

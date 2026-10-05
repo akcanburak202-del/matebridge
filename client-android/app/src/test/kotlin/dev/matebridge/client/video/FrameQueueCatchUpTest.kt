@@ -58,8 +58,7 @@ class FrameQueueCatchUpTest {
         key(); take()
         repeat(10) { p() }
         val marks = drain()
-        // pending 10..5 are skipped; at the normal depth (4) the frame taken is the TAIL and the rest is normal
-        assertEquals(List(6) { CatchUp.SKIP } + CatchUp.TAIL + List(3) { CatchUp.NONE }, marks)
+        assertEquals(List(9) { CatchUp.SKIP } + CatchUp.TAIL, marks)
         assertFalse(q.isCatchingUp())
     }
 
@@ -68,7 +67,7 @@ class FrameQueueCatchUpTest {
         repeat(6) { p() } // starts at now
         now += 25 * ms
         drain()
-        assertEquals(listOf(3 to 25L), done)
+        assertEquals(listOf(6 to 25L), done)
     }
 
     @Test fun framesAfterTheTailAreNormalAgain() {
@@ -78,7 +77,7 @@ class FrameQueueCatchUpTest {
         p(); take()
         assertEquals(CatchUp.NONE, mark.value)
         repeat(6) { p() } // a second episode counts separately
-        assertEquals(List(2) { CatchUp.SKIP } + CatchUp.TAIL + List(3) { CatchUp.NONE }, drain())
+        assertEquals(List(5) { CatchUp.SKIP } + CatchUp.TAIL, drain())
         assertEquals(2L, q.counters().catchUps)
     }
 
@@ -187,7 +186,7 @@ class FrameQueueCatchUpTest {
         config() // a config in the middle goes to the front, is not a pending frame
         take()
         assertEquals(CatchUp.NONE, mark.value)
-        assertEquals(List(2) { CatchUp.SKIP } + CatchUp.TAIL + List(3) { CatchUp.NONE }, drain())
+        assertEquals(List(5) { CatchUp.SKIP } + CatchUp.TAIL, drain())
     }
 
     @Test fun aRevokedConsumerTakesNothingAndChangesNoCatchUpState() {
@@ -202,7 +201,7 @@ class FrameQueueCatchUpTest {
         q.assignConsumer(2)
         val m = ArrayList<Int>()
         while (q.awaitNext(0, 2, mark) != null) m += mark.value
-        assertEquals(List(2) { CatchUp.SKIP } + CatchUp.TAIL + List(3) { CatchUp.NONE }, m)
+        assertEquals(List(5) { CatchUp.SKIP } + CatchUp.TAIL, m)
     }
 
     @Test fun theQueueStaysBoundedWhateverTheArrival() {
@@ -271,22 +270,22 @@ class FrameQueueCatchUpTest {
         assertTrue(done.isNotEmpty())
     }
 
-    @Test fun backBelowTheNormalDepthInsideTakeEndsTheCatchUpBeforeTheDeadline() {
+    @Test fun aBacklogDrainedToTheNormalDepthIsNeverFlushedAtTheDeadlineAndKeepsSkippingToTheNewest() {
         val exp = ArrayList<Int>()
         q.onExpired = { exp += it }
         key(); take()
         repeat(10) { p() } // limit 4; no further arrivals
-        repeat(7) { take() } // pending 10..4 -> 3 left (the frame taken at pending 4 was the TAIL)
+        repeat(7) { take(); assertEquals(CatchUp.SKIP, mark.value) } // 3 left, below the normal depth
         assertEquals(3, q.pending())
-        assertFalse(q.isCatchingUp())
-        assertEquals(1, done.size)
+        assertTrue(q.isCatchingUp())
         now += 400 * ms // well past the 300 ms deadline
-        assertNotNull(take())
-        assertEquals(CatchUp.NONE, mark.value)
+        val rest = drain()
+        assertEquals(listOf(CatchUp.SKIP, CatchUp.SKIP, CatchUp.TAIL), rest) // still straight to the newest
         assertTrue(exp.isEmpty())
         assertTrue(requests.isEmpty())
         assertFalse(q.isWaitingKeyframe())
         assertEquals(0L, q.counters().overflows)
+        assertFalse(q.isCatchingUp())
     }
 
     @Test fun burstThenSilenceStillRecoversAtTheDeadlineInsideTake() {
