@@ -16,6 +16,10 @@ package dev.matebridge.yuv444probe
  * - `out`     t1 decoder output: image (default) or buffer.
  * - `frames`  t2 frame numbers compared (default 12,24,36).
  * - `ui`      1 = keep the status text over the video in t3/t4/direct (changes layer composition; default off).
+ * - `present` GL path presentation (t3/t4): queue (default), depth1 or pts ([PresentMode]); `swap=0` adds swapint0.
+ * - `direct_mode` direct path release: immediate (default) or pts ([DirectMode]).
+ * - `lead_ms` slot lead of the pts variants (default 6, like the product).
+ * - `vsync_off_ms` phase shift of the Choreographer vsync grid (default 0; tuning knob for the pts variants).
  * - `codec`   decoder name override (default: findDecoderForFormat per clip).
  */
 class Args(private val map: Map<String, String>) {
@@ -30,6 +34,10 @@ class Args(private val map: Map<String, String>) {
     val warmup: Double get() = double("warmup", 2.0).coerceAtLeast(0.0)
     val panel: Int get() = int("panel", 60)
     val gl: GlMode? get() = GlMode.parse(str("gl"))
+    val present: PresentMode? get() = PresentMode.parse(str("present"))
+    val directMode: DirectMode? get() = DirectMode.parse(str("direct_mode"))
+    val leadNs: Long get() = (double("lead_ms", 6.0).coerceIn(0.0, 30.0) * 1e6).toLong()
+    val vsyncOffsetNs: Long get() = (double("vsync_off_ms", 0.0).coerceIn(-30.0, 30.0) * 1e6).toLong()
     val swap: Int get() = int("swap", 1).coerceIn(0, 4)
     val bufferOut: Boolean get() = str("out")?.lowercase() == "buffer"
     val ui: Boolean get() = str("ui") == "1"

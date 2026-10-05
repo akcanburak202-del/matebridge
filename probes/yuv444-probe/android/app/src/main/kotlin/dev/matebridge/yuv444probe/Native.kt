@@ -23,8 +23,14 @@ object Native {
     @JvmStatic external fun presentInit(surface: Surface, w: Int, h: Int, mode: Int, swapInterval: Int): String
     @JvmStatic external fun presentFeatures(): String
 
-    /** 0 on success. [auxHwb] may be null (the merge pass then samples main twice). */
-    @JvmStatic external fun presentDraw(mainHwb: HardwareBuffer, auxHwb: HardwareBuffer?, queuedNs: Long): Int
+    /**
+     * 0 on success. [auxHwb] may be null (the merge pass then samples main twice). [presentNs] > 0 sets
+     * `eglPresentationTimeANDROID` (desired present time, monotonic ns) for this swap.
+     */
+    @JvmStatic external fun presentDraw(mainHwb: HardwareBuffer, auxHwb: HardwareBuffer?, queuedNs: Long, presentNs: Long): Int
+
+    /** Swapped frames whose compositor latch time is not known yet; -1 when frame timestamps are unavailable. */
+    @JvmStatic external fun presentOutstanding(): Int
     @JvmStatic external fun presentLastError(): String
     @JvmStatic external fun presentDrainTimestamps(): LongArray
     @JvmStatic external fun presentDrainGpuNs(): LongArray

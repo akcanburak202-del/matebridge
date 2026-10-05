@@ -246,6 +246,7 @@ class ProbeRunner(
     // ---- direct SurfaceView baseline ----
 
     private fun runDirect() {
+        val dmode = args.directMode ?: run { log("Y444PROBE direct bad direct_mode '${args.str("direct_mode")}' (immediate, pts)"); return }
         val clips = pickClips(wantAux = false) ?: return
         val main = clips.first
         val codec = codecFor(main) ?: run { log("Y444PROBE direct no HEVC decoder"); return }
@@ -256,12 +257,20 @@ class ProbeRunner(
         val seconds = args.seconds(TestKind.T1)
         val frames = (fps * seconds).toInt() + 8
         val outMain = LongArray(frames + 64)
+        val rendered = LongArray(frames + 64)
         val panel = host.requestPanel(args.panel)
+        val vsync = VsyncTracker(args.vsyncOffsetNs)
+        vsync.start()
+        val slots = SlotAllocator(args.leadNs)
+        val releaseTarget: ((Long) -> Long)? = if (dmode == DirectMode.PTS) {
+            { now -> vsync.grid()?.let { slots.targetNs(now, it) } ?: 0L }
+        } else null
         val dec = ClipDecoder("direct", main, codec, Output.SURFACE, surface, fps, 0,
-            { s, t -> if (s < outMain.size) outMain[s.toInt()] = t }, null, log)
+            { s, t -> if (s < outMain.size) outMain[s.toInt()] = t }, null, log, releaseTarget,
+            { s, t -> if (s >= 0 && s < rendered.size) rendered[s.toInt()] = t })
         val err = dec.start()
-        if (err != null) { log("Y444PROBE direct $err"); dec.stop(); return }
-        pauseMs(300)
+        if (err != null) { log("Y444PROBE direct $err"); dec.stop(); vsync.stop(); return }
+        pauseMs(700)  // display mode and the first vsync samples settle
         val t0 = System.nanoTime() + 100_000_000L
         val feeder = Feeder(fps, listOf(dec), t0, frames)
         feeder.start()
@@ -275,10 +284,31 @@ class ProbeRunner(
         feeder.join(2000)
         val ticks = feeder.ticks
         val derr = dec.error
+        pauseMs(200)
         dec.stop()
-        val r = PairLatency.compute(t0, feeder.periodNs, outMain, null, (args.warmup * fps).toInt(), ticks - 2)
+        val grid = vsync.grid()
+        vsync.stop()
+        val warm = (args.warmup * fps).toInt()
+        val r = PairLatency.compute(t0, feeder.periodNs, outMain, null, warm, ticks - 2)
+        // Per-frame arrival (decoder output) -> estimated display, same quads as the GL path's EGL timestamps.
+        val quads = LongList()
+        var notShown = 0
+        for (k in warm.coerceAtLeast(0) until minOf(ticks - 2, outMain.size, rendered.size)) {
+            if (outMain[k] == 0L) continue
+            if (rendered[k] == 0L || grid == null) { notShown++; continue }
+            quads.add(outMain[k]); quads.add(rendered[k])
+            quads.add(DisplayEstimate.presentNs(grid, rendered[k], args.leadNs)); quads.add(0L)
+        }
+        val shown = PresentStats.analyze(quads.toArray(), feeder.periodNs)
+        val hz = rates.toArray().map { it / 100.0 }
+        log(LatLine.format("direct", dmode.key, "est", "${main.name.width}x${main.name.height}", fps, args.panel, hz,
+            shown, quads.size / 4, notShown,
+            String.format(Locale.US, "lead_ms=%.1f vsync_period_ms=%.3f slot_bumps=%d slot_folds=%d no_grid=%s missed=%d " +
+                "latch_col=render_time decode_out_ms=%s errors=%s thermal=%d",
+                args.leadNs / 1e6, (grid?.periodNs ?: 0L) / 1e6, slots.bumps, slots.folds, grid == null,
+                feeder.missed[0], msDist(r.mainNs), derr, thermal())))
         log(String.format(
-            Locale.US, "Y444PROBE direct size=%dx%d fps=%d panel_req=%d(%s) refresh_hz_samples=%s decode_out_ms=%s " +
+            Locale.US, "Y444PROBE direct mode=${dmode.key} size=%dx%d fps=%d panel_req=%d(%s) refresh_hz_samples=%s decode_out_ms=%s " +
                 "missed=%d errors=%s thermal=%d",
             main.name.width, main.name.height, fps, args.panel, panel, rates.toArray().map { it / 100.0 },
             msDist(r.mainNs), feeder.missed[0], derr, thermal(),
@@ -291,6 +321,7 @@ class ProbeRunner(
     private fun runT3(long: Boolean) {
         val tag = if (long) "t4" else "t3"
         val gl = args.gl ?: run { log("Y444PROBE $tag bad gl '${args.str("gl")}' (oes, main, merge)"); return }
+        val pmode = args.present ?: run { log("Y444PROBE $tag bad present '${args.str("present")}' (queue, depth1, pts)"); return }
         val clips = pickClips(wantAux = gl == GlMode.MERGE) ?: return
         val main = clips.first
         val aux = if (gl == GlMode.MERGE) clips.second else null
@@ -307,11 +338,15 @@ class ProbeRunner(
         val retired = ConcurrentLinkedQueue<Image>()
         val mailbox = Mailbox(retired)
         val feedPeriodNs = 1_000_000_000L / fps
-        val loop = PresentLoop(surface, main.name.width, main.name.height, gl, args.swap, feedPeriodNs, retired, mailbox)
+        val vsync = VsyncTracker(args.vsyncOffsetNs)
+        if (pmode == PresentMode.PTS) vsync.start()
+        val loop = PresentLoop(surface, main.name.width, main.name.height, gl, args.swap, feedPeriodNs, retired, mailbox,
+            pmode, args.leadNs) { vsync.grid() }
         loop.start()
         while (!loop.started) pauseMs(10)
         loop.result()?.let { r ->
             log("Y444PROBE $tag FAILED ${r.error}")
+            vsync.stop()
             loop.join(2000)
             return
         }
@@ -328,7 +363,7 @@ class ProbeRunner(
         if (errs.any { it != null }) {
             log("Y444PROBE $tag start_failed=$errs")
             decoders.forEach { it.stop() }
-            loop.halt(); loop.join(2000); mailbox.closeAll()
+            loop.halt(); loop.join(2000); mailbox.closeAll(); vsync.stop()
             return
         }
         pauseMs(1000)  // let the requested display mode settle
@@ -356,6 +391,7 @@ class ProbeRunner(
         decoders.forEach { it.stop() }
         loop.halt()
         loop.join(5000)
+        vsync.stop()
         mailbox.closeAll()
         while (true) (retired.poll() ?: break).close()
         val res = loop.result()
@@ -365,7 +401,7 @@ class ProbeRunner(
         val winSec = seconds - args.warmup
         log(String.format(
             Locale.US,
-            "Y444PROBE %s size=%dx%d fps=%d gl=%s aux=%s swap=%d panel_req=%d(%s) refresh_hz_samples=%s seconds=%.0f " +
+            "Y444PROBE %s present=${pmode.key} size=%dx%d fps=%d gl=%s aux=%s swap=%d panel_req=%d(%s) refresh_hz_samples=%s seconds=%.0f " +
                 "drawn=%d/%d decode_pair_ms=%s arrival_to_swap_ms=%s draw_call_ms=%s gpu_ms_mean=%.2f gpu_ms=%s " +
                 "arrival_to_latch_ms=%s arrival_to_present_ms=%s present_gap_ms=%s skipped_gaps=%d unresolved_ts=%d " +
                 "ts_frames=%d missed_main=%d missed_aux=%d features=[%s] draw_errors=%d error=%s decoder_errors=%s " +
@@ -378,6 +414,15 @@ class ProbeRunner(
             res.present.arrivalToLatchNs.size, feeder.missed[0], if (aux != null) feeder.missed[1] else -1,
             res.features, res.drawErrors, res.error, errors, thermal0, thermal(), winSec,
         ))
+        log(LatLine.format("gl", pmode.key + if (args.swap == 0) "+swapint0" else "", "measured",
+            "${main.name.width}x${main.name.height}", fps, args.panel, rates.toArray().map { it / 100.0 }.takeLast(8),
+            res.present, res.present.arrivalToLatchNs.size, res.drawn - res.present.arrivalToLatchNs.size,
+            String.format(Locale.US, "swap=%d lead_ms=%.1f draws=%d/%d draw_call_ms=%s arrival_to_swap_ms=%s " +
+                "gate_waits=%d gate_wait_ms=%s slot_bumps=%d slot_folds=%d no_grid=%d missed_main=%d draw_errors=%d " +
+                "features=[%s] thermal=%d",
+                args.swap, args.leadNs / 1e6, res.drawn, ticks, msDist(res.drawCallNs), msDist(res.arrivalToSwapNs),
+                res.gateWaitsNs.size, msDist(res.gateWaitsNs), res.slotBumps, res.slotFolds, res.noGridDraws,
+                feeder.missed[0], res.drawErrors, res.features, thermal())))
         log("Y444PROBE $tag note: layer composition (HWC vs GPU) and SurfaceFlinger latency come from dumpsys (README / Handoff)")
     }
 
