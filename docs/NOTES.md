@@ -1484,3 +1484,10 @@ Ham çıktı: `~/.cache/matebridge-tools/data/decprobe/t249-run-1831-single.txt`
 ## 2026-10-05 ~20:10 — Kumandayla 120 Hz: sahte dokunuş yolu yapılmayacak
 
 - Önerilen tek denenmemiş yol (kumanda kullanılırken host'un adb üzerinden periyodik sahte dokunuş/fare olayı göndermesi, istemcinin yutması) kullanıcı kararıyla **yapılmayacak** (2026-10-05: "gerek yok"). Kumanda/klavye ile oyunda panel 60 Hz kalır (T-140, T-243); Oyun 60 bu durum için doğru mod.
+
+## 2026-10-05 ~20:35 — T-250 cihaz testi (Wi-Fi), panel 60 Hz kilidi, 100 Mbps
+
+- **Panel 60'ta takılı kalmasının nedeni:** tablet Ayarlar → Ekran yenileme hızı kullanıcı tarafından Standart'a alınmıştı (`settings secure hw_screen_freq=0`; AGP: `dev.matebridge.client strategyCode 2 … max 60` → `final refresh rate 60`, dokunma `touchinfo … 120` görünse bile). HDR ya da 2800 ile ilgisi yok. Kullanıcı "Yüksek"e aldı (`hw_screen_freq=1`): dokunmayla panel 120.
+- **Oyun 120, 2800×1840, Wi-Fi (Mac Ethernet), RE4, dokunarak:** tablet ~92 fps alıyor (host gönderdiği en çok ~100 fps; kaynak = oyun/Mac tarafı), gösterilen ~84–90; `skip_pct` ~26–27 (büyük kısmı 120 Hz panelde ~90 fps düzensiz içeriğin 1/2 vsync tutmaları), ağ p99 26–38 ms, hazır olma p99 28–43 ms, çözme p50/p99 14/22–31 ms, `d_jitter` ~26 ms > D tavanı 8,3 ms → `late_drops` ~2/s. HDR açık/kapalı fark yok (kullanıcı da hissetmedi). Kare zamanlayıcı ayarı ölçümü (T-251 düğmeleri) USB'de yapılmalı; Wi-Fi'da sapma ağdan.
+- **Oyun 60 ↔ 120 geçişi:** 2800 korunuyor, sorun yok (T-250 doğrulandı).
+- **100 Mbps (Wi-Fi):** gerçekleşen 66 Mbps; ağ p99 ort. 26→40 ms, en büyük sıçrama 361 ms, KEYFRAME isteği 1→5, atılan kare 119→209 (aynı süre) — kullanıcı donma gördü. Wi-Fi'da 60 Mbps kalır; USB ölçümü sonra.
