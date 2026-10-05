@@ -1,7 +1,7 @@
 ---
 id: T-243
 title: Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first
-status: in_progress
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -32,9 +32,9 @@ HDR araştırması (NOTES 2026-10-05 ~13:00): Oyun 60'ta düşen karelerin önem
 
 ## Kabul kriterleri
 
-- [ ] [JVM] Knob ayrıştırma; varsayılan yolda çağrılar bit-bit aynı; varyant → çağrılacak ipuçları listesi saf fonksiyon.
-- [ ] `ev=hz_pin`, `hz_switches=` docs/LOGGING.md'de.
-- [ ] `./scripts/check.sh` geçer. APK kurma ve tablete dokunma yok; cihaz A/B'sini orkestratör yapar.
+- [x] [JVM] Knob ayrıştırma; varsayılan yolda çağrılar bit-bit aynı; varyant → çağrılacak ipuçları listesi saf fonksiyon.
+- [x] `ev=hz_pin`, `hz_switches=` docs/LOGGING.md'de.
+- [x] `./scripts/check.sh` geçer. APK kurma ve tablete dokunma yok; cihaz A/B'sini orkestratör yapar.
 
 ## Plan
 
@@ -56,4 +56,23 @@ HDR araştırması (NOTES 2026-10-05 ~13:00): Oyun 60'ta düşen karelerin önem
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** `f44371b` (uygulama), plan `b716a3a`; dal `task/T-243-pin-60hz`.
+- **Dosyalar:** `stream/HzPin.kt` (yeni: `HzPinVariant`, `HzPinHint`, `HzPinResult`, `HzPin`, `HzSwitchCounter`), `session/DevKnobs.kt` (`hz_pin`), `MainActivity.kt`, test: `stream/HzPinTest.kt` (yeni), `session/DevKnobsTest.kt`; `docs/LOGGING.md`.
+- **`./scripts/check.sh`:** ALL OK (HzPinTest 9, DevKnobsTest 26 test geçti).
+- **Varsayılan yol:** `hz_pin` yoksa/`off`/geçitsizse `HzPin.plan` boş → `applyRefreshRate`/`releaseRefreshRate` aynı `window.attributes` atamalarını yapar, ek `setFrameRate` yok, `ev=hz_pin` yazılmaz. Tek görünür fark: `MB/render ev=stats` sonunda her zaman `hz_switches=<n>`.
+- **Varsayımlar:**
+  - `lp` = yalnız pencere ipuçları (`lp_rate`, `lp_minmax`); `all` = bunlar + `hw_lp` + `reapply`.
+  - `hw_lp` yalnız keşif (kart: "yalnız okunur"): `LayoutParams`'ta AOSP dışı `refresh|framerate|fps|hz` public alan adları ve `com.huawei.android.view.LayoutParamsEx` varlığı loglanır; hiçbir şey yazılmaz. Bir alan bulunursa ona yazmak ayrı bir kart olmalı.
+  - `hz_switches` = log penceresinde debounced `display_rate` raporlarının değişim sayısı (düşüş 500 ms kararlılık ister, yani < 500 ms'lik 120 sıçramaları sonrasında tek düşüşle sayılır; ham Choreographer geçişleri değil).
+  - Pin hızı sabit 60 (`HzPin.PIN_HZ`); kapsam: `streamMode.isGame && streamConfig.fps == 60`. Pin, `installConfig` → `applyRefreshRate` ile açılır; Oyun 60'tan başka moda geçince ya da akış bitince kaldırılır (`state=off`).
+- **Test EDİLMEDİ (tablet gerekli):** hiçbir ipucunun panel hızına etkisi; API 31'de `lp_minmax` `missing` beklentisi; Huawei alan keşfinin sonucu; `reapply`'nin dokunma gecikmesine etkisi.
+- **Tablette kontrol (orkestratör A/B, Oyun modu, 60 fps):**
+  1. Varsayılan (extra yok): `adb logcat -s MB:*` → `ev=hz_pin` yok, `MB/render ev=stats ... hz_switches=N` var; periyodik `adb shell input swipe` ile N tabanını kaydet.
+  2. `am start ... --ez dev true --es hz_pin lp`: `ev=hz_pin variant=lp state=on applied=lp_rate:ok,lp_minmax:missing` beklenir; `hz=`/`display_hz=`/`vsync_ms_p50=` ve `hz_switches` tabanla karşılaştır.
+  3. `--es hz_pin all`: `applied=` içinde `hw_lp:<ok|missing>`, `reapply:ok`; `hw_fields=`/`hw_ex=` değerlerini NOTES'a yaz; aynı swipe A/B.
+  4. Oyun 60'tan Günlük'e geç: `ev=hz_pin ... state=off applied=-` görülmeli; Günlük'te ipucu yok.
+  5. Kalem/dokunmada `reapply` ile hissedilir gecikme ya da `W set_frame_rate_failed` olmamalı.
+
+## Open questions
+
+- `docs/KNOBS.md` kartın `files:` listesinde yok; `hz_pin` anahtarı orada listelenmedi. Orkestratör deney sonucu kalıcı olursa ekleyebilir.
