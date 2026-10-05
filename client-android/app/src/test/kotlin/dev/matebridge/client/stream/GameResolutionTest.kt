@@ -164,37 +164,11 @@ class GameResolutionTest {
         assertEquals("Oyun: 60 fps, 1848×1214", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
     }
 
-    // ---- T-245: experimental 2800×1840, only in Oyun 60 ----
+    // ---- T-245/T-250: experimental 2800×1840, every Oyun frame rate ----
 
-    @Test fun experimentalSizeIsAvailableOnlyAt60() {
-        assertTrue(GameResolution.R2800.availableAt(60))
-        assertFalse(GameResolution.R2800.availableAt(120))
-        assertEquals(GameResolution.R2800, GameResolution.R2800.effectiveAt(60))
-        assertEquals(GameResolution.R2240, GameResolution.R2800.effectiveAt(120))
-        assertEquals(GameResolution.R2240, GameResolution.EXPERIMENTAL_FALLBACK)
-        for (r in GameResolution.entries.filter { !it.experimental }) {
-            for (fps in StreamMode.FPS_OPTIONS) {
-                assertTrue(r.id, r.availableAt(fps))
-                assertEquals(r.id, r, r.effectiveAt(fps))
-            }
-        }
-    }
-
-    @Test fun experimentalPanelLabelEnabledAndSelection() {
-        assertEquals("2800×1840 (deneysel)", GameResolution.R2800.panelLabel(60))
-        assertEquals("2800×1840 (yalnız 60 fps)", GameResolution.R2800.panelLabel(120))
-        assertEquals("2800×1840 (deneysel, yalnız 60 fps)", GameResolution.R2800.panelLabel(null))
-        for (r in GameResolution.entries.filter { !it.experimental }) {
-            for (fps in listOf(60, 120, null)) assertEquals(r.label, r.panelLabel(fps))
-        }
-        assertTrue(GameResolution.panelEnabled(GameResolution.R2800, 60))
-        assertFalse(GameResolution.panelEnabled(GameResolution.R2800, 120))
-        assertTrue(GameResolution.panelEnabled(GameResolution.R2800, null))
-        assertTrue(GameResolution.panelEnabled(GameResolution.R2240, 120))
-        assertEquals(GameResolution.R2800, GameResolution.panelSelected(GameResolution.R2800, 60))
-        assertEquals(GameResolution.R2240, GameResolution.panelSelected(GameResolution.R2800, 120)) // what runs
-        assertEquals(GameResolution.R2800, GameResolution.panelSelected(GameResolution.R2800, null)) // outside Oyun
-        assertEquals(GameResolution.R1400, GameResolution.panelSelected(GameResolution.R1400, 120))
+    @Test fun experimentalPanelLabel() {
+        assertEquals("2800×1840 (deneysel)", GameResolution.R2800.panelLabel)
+        for (r in GameResolution.entries.filter { !it.experimental }) assertEquals(r.label, r.panelLabel)
     }
 
     @Test fun oyun60SendsTheNativeSizeAt1x() {
@@ -216,37 +190,29 @@ class GameResolutionTest {
         assertNull(VideoLayout.surfaceSize(2800, 1840, cfg1x(2800, 1840)))
     }
 
-    @Test fun oyun120FallsBackTo2240AndKeepsTheStoredChoice() {
+    @Test fun oyun120SendsTheNativeSizeToo() { // T-250
         settings.setGameResolution(GameResolution.R2800)
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        // 60 -> 120: one complete STREAM_PREFS, fps and display_* change together
-        assertEquals(StreamPrefs(120, 1000, 60_000, 2240, 1472), g.selectFrameRate(StreamMode.GAME, 120))
-        assertEquals(GameResolution.R2240, g.display(StreamMode.GAME))
-        assertEquals(GameResolution.R2800, settings.gameResolution()) // stored choice kept
-        assertEquals("Oyun: 120 fps, 2240×1472", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
-        // 120 -> 60: 2800×1840 comes back
+        // 60 -> 120: only fps changes, display_* stays 2800×1840
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g.selectFrameRate(StreamMode.GAME, 120))
+        assertEquals(GameResolution.R2800, g.display(StreamMode.GAME))
+        assertEquals("Oyun: 120 fps, 2800×1840", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
         assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840), g.selectFrameRate(StreamMode.GAME, 60))
-        // entering Oyun with 120 stored asks for 2240×1472 right away
+        // entering Oyun with 120 stored asks for 2800×1840 right away
         settings.setModeFps(StreamMode.GAME, 120)
         val g2 = GameModeSettings(settings)
         g2.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 1000, 60_000, 2240, 1472), g2.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g2.prefs(StreamMode.GAME))
     }
 
-    @Test fun picking2800InOyun120StoresButSendsNothing() {
+    @Test fun picking2800InOyun120SendsAtOnce() { // T-250
         settings.setGameResolution(GameResolution.R2240)
         settings.setModeFps(StreamMode.GAME, 120)
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        assertNull(g.selectGameResolution(GameResolution.R2800, StreamMode.GAME)) // still 2240×1472: nothing to send
-        assertEquals(GameResolution.R2800, settings.gameResolution())
-        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840), g.selectFrameRate(StreamMode.GAME, 60))
-        // in Oyun 60 picking it sends at once; from another size at 120 a real change still sends
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.selectGameResolution(GameResolution.R1848, StreamMode.GAME))
-        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840), g.selectGameResolution(GameResolution.R2800, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g.selectGameResolution(GameResolution.R2800, StreamMode.GAME))
         assertNull(g.selectGameResolution(GameResolution.R2800, StreamMode.GAME)) // the same size again: nothing new
-        g.selectFrameRate(StreamMode.GAME, 120)
         assertEquals(StreamPrefs(120, 1000, 60_000, 1400, 920), g.selectGameResolution(GameResolution.R1400, StreamMode.GAME))
     }
 
