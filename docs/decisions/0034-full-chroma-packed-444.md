@@ -31,6 +31,7 @@
    - `STREAM_CONFIG`: `reserved` → `chroma_layout u8` (`0` 4:2:0, `1` AVC444v2 iki akış).
    - `VIDEO_FRAME`: `reserved` → `view u8` (`0` ana, `1` yardımcı). `frame_seq` her akışta kendi içinde artar. Yardımcı, ait olduğu ana karenin `capture_time_us`'unu taşır; eşleme bununla yapılır.
    - `KEYFRAME_REQUEST`: sona isteğe bağlı `view u8`. Eski host bunu yok sayar ve iki akışa IDR gönderir.
+   - `HELLO.capabilities` bit11 `FULL_CHROMA`: host yardımcı akışı yalnız bit11 + bu oturumdaki `chroma = 2` ile gönderir (eski istemciyi geliştirici değişkeni ya da hatırlanan tercih bozamaz; Codex T-257).
    - Fixture'lar: `stream_prefs_full_chroma`, `stream_config_packed444`, `video_frame_aux`, `keyframe_request_view`, kısa/geçersiz varyantlar.
 9. **Kabul şartı (ilk cihaz oturumu, durdurma kuralı):** ürün içinde aynı oturumda doğrudan yol ↔ tam renk A/B. Ekran gecikmesi p50 ve p95'te **≤ +5 ms** ise devam. **> +10 ms** ise tam renk kapatılır, 0033 kalır. Arası kullanıcıyla konuşulur. Akıcılık (`skip_pct`) bugünkünden kötü olmamalı.
 

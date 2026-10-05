@@ -32,6 +32,8 @@ Karar 0034'ün host tarafı. Protokol ve fixture'lar `task/T-257-full-chroma-pro
 - **Log:** `ev=chroma_config` (`layout=packed444`), `ev=chroma_stats` (paketleyici GPU ms, yardımcı enc ms, yardımcı/ana bayt oranı, yardımcı kaybı), `ev=chroma_fallback`. `docs/LOGGING.md`, `docs/KNOBS.md`.
 - Mac'te pencere açma, uygulamayı çalıştırma; sanal ekran kurma. Komut satırı VT/Metal testleri serbest. Cihaz testi orkestratörde.
 
+- **Oturum onayı (Codex T-257):** `HELLO.capabilities` bit11 `FULL_CHROMA`. Host: yardımcı akış yalnız bit11 + bu oturumda gelen son `STREAM_PREFS.chroma = 2` ile; hatırlanan tercih ya da `MATEBRIDGE_CHROMA=packed444` bunu aşamaz. Ana akış §5 sınırlı kuyruk kurallarına tabi; tıkanmada önce yardımcı atılır.
+
 ## Kabul kriterleri
 
 - [ ] Fixture testleri (eski + yeni) geçer; `./scripts/check.sh` geçer.

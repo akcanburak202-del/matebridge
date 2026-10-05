@@ -37,6 +37,8 @@ Karar 0034'ün istemci tarafı (panel hariç: T-260). Protokol `task/T-257-full-
 - **Ölçüm (kabul şartı için):** `render ev=stats`'a `chroma_layout`, `aux_paired_pct`, `aux_late`, `gl_ms_p50/p95`; ekran gecikmesi bugünkü alanlarla (`latency_us`, `shown_*`) aynı tanımla iki yolda karşılaştırılabilir olmalı. `--ez dev true --ez full_chroma_direct true` gibi bir A/B düğmesi gerekmez: panelden Keskin ↔ Tam renk geçişi A/B'dir; ama aynı oturumda hızlı geçiş mümkün olmalı.
 - Yeni bağımlılık ekleme (NDK/CMake zaten var, AAudio native modülü). Mac'te pencere açma; adb/tablet yok.
 
+- **Oturum onayı (Codex T-257):** istemci `HELLO.capabilities` bit11 `FULL_CHROMA`'yı yalnız yetenek testi geçtiyse yazar.
+
 ## Kabul kriterleri
 
 - [ ] Fixture testleri + birim testleri (eşleme, yalnız-ana geri düşüş, yardımcı kuyruğu, KEYFRAME_REQUEST view, tercih kuralları, yetenek saklama); `./scripts/check.sh` geçer.
