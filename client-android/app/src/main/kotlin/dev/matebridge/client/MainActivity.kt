@@ -1267,6 +1267,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.detachSurface()
     }
 
+    /** T-251: the pacer knobs in effect go on the first `render ev=stats` line of each renderer, once. */
+    private var pacerKnobsLogged = false
+
+    private fun pacerKnobsField(): String {
+        if (pacerKnobsLogged) return ""
+        pacerKnobsLogged = true
+        return " pacer_knobs=${devKnobs.pacerTuning.logFields()}"
+    }
+
     private fun installConfig(config: StreamConfig) {
         if (!started || isDestroyed) return
         streamConfig = config
@@ -1284,6 +1293,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             decoderTuning = devKnobs.decoderLatency, // T-217 dev knob (`dec_lowlat`, `dec_oprate`)
             colorOverrides = devKnobs.colorOverrides, // T-231 dev knob (`color_range`, `color_standard`, `color_transfer`)
         ).also {
+            it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
+            pacerKnobsLogged = false
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")
             it.stats.latencyOf = { cap, at -> clock.latencySignedUs(cap, at) } // T-168: signed; `at` on SessionController.clockUs()'s clock
@@ -1792,7 +1803,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 " pace_d_us=${r.paceDUs()} " +
                 // T-168: latency stages from the capture stamp; latency_us= above is the deprecated alias (clamped mean).
                 StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()) +
-                " hz_switches=$switches", // T-243
+                " hz_switches=$switches" + // T-243
+                pacerKnobsField(), // T-251: once per renderer
             "render",
         )
     }

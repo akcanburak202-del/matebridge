@@ -126,9 +126,9 @@ class PresentationMetricTest {
         t.onDiscard(id2, 19_000, PaceTrace.ACTION_REPLACE)
         val lines = StringBuilder().also { t.writeCsv(it) }.toString().trim().split("\n")
         val h = lines[0].split(",")
-        assertEquals(listOf("latch_slot_ns", "latch_period_ns", "cb_ns", "cb_period_ns"), h.takeLast(4))
+        assertEquals(listOf("latch_slot_ns", "latch_period_ns", "cb_ns", "cb_period_ns"), h.dropLast(1).takeLast(4))
         assertEquals(PaceTrace.CSV_COLS, h.size)
-        assertEquals(listOf("13333333", "8333333", "0", "0"), lines[1].split(",").takeLast(4))
+        assertEquals(listOf("13333333", "8333333", "0", "0"), lines[1].split(",").dropLast(1).takeLast(4))
         assertEquals(listOf("0", "0", "0", "0"), lines[2].split(",").takeLast(4))
         assertEquals(PaceTrace.CSV_COLS, lines[2].split(",").size)
     }
