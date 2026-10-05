@@ -25,7 +25,8 @@ class FullChromaPipeline(
     /** `KEYFRAME_REQUEST(reason, view = 1)`; any thread. */
     private val sendAuxKeyframeRequest: (reason: Int) -> Unit,
     /** The presenter failed to start or kept failing (any thread): the owner falls back to the direct path. */
-    private val onFailed: (String) -> Unit,
+    /** (reason, stillCurrent): [stillCurrent] must be re-checked where the failure is acted on (e.g. after a UI post). */
+    private val onFailed: (String, () -> Boolean) -> Unit,
     private val extraLeadNs: Long = DEFAULT_EXTRA_LEAD_NS,
 ) {
     companion object {
@@ -67,6 +68,7 @@ class FullChromaPipeline(
     @Volatile private var failedReported = false
 
     /** True between a successful [start] and [stop]. */
+    private val runGen = RunGeneration()
     @Volatile var active = false
         private set
 
@@ -105,10 +107,11 @@ class FullChromaPipeline(
             val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { mainReader = it }
             val aux = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { auxReader = it }
 
+            val token = runGen.begin()
             val pres = PackedPresenter(
                 surface, w, h, YuvConversion.of(config.matrix, config.fullRange == 1), this::log,
                 onShown = { pts, ns -> renderer.reportPackedShown(pts, ns) },
-                onFailed = { why -> reportFailure(why) },
+                onFailed = { why -> reportFailure(why, token) },
             )
             presenter = pres
 
@@ -118,7 +121,7 @@ class FullChromaPipeline(
                 config, aux.surface, queue, sendAuxKeyframeRequest,
                 onGaveUp = { why ->
                     log('E', "aux_give_up", "reason=${why.take(40)}")
-                    reportFailure("aux_give_up") // main-only from here on: the owner drops to chroma = 1 for the process
+                    reportFailure("aux_give_up", token) // main-only from here on: the owner drops to chroma = 1 for the process
                 },
             )
             auxDecoder = dec
@@ -167,6 +170,7 @@ class FullChromaPipeline(
 
     /** False when the aux decoder or the GL thread did not stop in time: ownership of the readers stays here ([reap]). */
     private fun teardown(): Boolean {
+        runGen.end() // failures of this run reported from now on are ignored
         active = false
         renderer.packed = null
         // No image may reach the presenter or the pending queue once they are going away.
@@ -226,11 +230,15 @@ class FullChromaPipeline(
         )
     }
 
-    private fun reportFailure(why: String) {
+    private fun reportFailure(why: String, token: Int) {
+        if (!runGen.isCurrent(token)) {
+            log('I', "full_chroma_failure_ignored", "reason=${why.take(60)} stale=1")
+            return
+        }
         if (failedReported) return
         failedReported = true
         log('E', "full_chroma_failed", "reason=${why.take(60)}")
-        onFailed(why)
+        onFailed(why) { runGen.isCurrent(token) }
     }
 
     /** Takes every image the reader has (a burst), handing each to [sink]; a full reader is counted, never fatal. */

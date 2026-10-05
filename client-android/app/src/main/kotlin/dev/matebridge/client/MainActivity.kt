@@ -256,14 +256,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     // ---- T-259 (decision 0034): packed full colour (chroma_layout 1) ----
     private lateinit var fullChromaCap: dev.matebridge.client.video.FullChromaCapability
-    /** The presenter failed in this process: no `chroma = 2`, no HELLO bit11 until the app restarts (any thread). */
-    @Volatile private var fullChromaRuntimeOff = false
+    /** The presenter failure latch is process-scoped: [dev.matebridge.client.video.FullChromaRuntime]. */
     /** The applied STREAM_CONFIG has `chroma_layout = 1` (any thread: keyframe requests carry `view` only then). */
     @Volatile private var packedVideo = false
     private var chromaPipeline: dev.matebridge.client.video.FullChromaPipeline? = null
 
     /** Capability self-test passed and the packed path has not failed in this process. */
-    private fun fullChromaOn(): Boolean = ::fullChromaCap.isInitialized && fullChromaCap.available() && !fullChromaRuntimeOff
+    private fun fullChromaOn(): Boolean = ::fullChromaCap.isInitialized && fullChromaCap.available() && !dev.matebridge.client.video.FullChromaRuntime.isOff
 
     /** `KEYFRAME_REQUEST` of the main stream: `view` is written only while `chroma_layout = 1` (PROTOCOL.md 0x23). */
     private fun mainKeyframeRequest(reason: Int) = KeyframeRequest(
@@ -1311,7 +1310,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val p = chromaPipeline ?: dev.matebridge.client.video.FullChromaPipeline(
                 r,
                 sendAuxKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason, KeyframeRequest.VIEW_AUX)) },
-                onFailed = { why -> runOnUiThread { onFullChromaFailed(why) } },
+                onFailed = { why, current -> runOnUiThread { if (current()) onFullChromaFailed(why) } },
             ).also { chromaPipeline = it }
             if (p.start(surface, c)) return
             // Start failed synchronously (ImageReader, thread, previous teardown...): the negotiated fallback, not a
@@ -1358,8 +1357,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * 4:2:0 picture.
      */
     private fun onFullChromaFailed(why: String) {
-        if (isDestroyed || fullChromaRuntimeOff) return
-        fullChromaRuntimeOff = true
+        if (!dev.matebridge.client.video.FullChromaRuntime.disable()) return
+        if (isDestroyed) return
         MbLog.e("full_chroma_disabled", "reason=${why.take(60)} scope=process", "render")
         val surface = if (surfaceValid) video.holder.surface else null
         detachVideoOutput()

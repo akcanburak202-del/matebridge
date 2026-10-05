@@ -56,3 +56,30 @@ class FullChromaCapability(private val store: KeyValueStore, private val buildKe
         const val MAX_ATTEMPTS = 3
     }
 }
+
+/**
+ * Process-scoped latch (not an Activity field, so it survives Activity recreation): once the packed path failed at
+ * runtime, `chroma = 2` and HELLO bit11 stay off until the app process restarts.
+ */
+object FullChromaRuntime {
+    @Volatile private var off = false
+    val isOff: Boolean get() = off
+
+    /** True only for the call that flips the latch. */
+    @Synchronized fun disable(): Boolean { if (off) return false; off = true; return true }
+
+    /** Tests only. */
+    @Synchronized fun resetForTest() { off = false }
+}
+
+/**
+ * Generation token for failure delivery: a failure reported by a run that has since been stopped (or replaced) is
+ * ignored. [begin] starts a run and returns its token; [end] invalidates the current one.
+ */
+class RunGeneration {
+    private val gen = java.util.concurrent.atomic.AtomicInteger(0)
+    private val live = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun begin(): Int { val g = gen.incrementAndGet(); live.set(true); return g }
+    fun end() { live.set(false); gen.incrementAndGet() }
+    fun isCurrent(token: Int): Boolean = live.get() && gen.get() == token
+}

@@ -182,7 +182,7 @@ class PackedPresenter(
         val initError = FullChromaNative.presentInit(surface, width, height, 0)
         if (initError.isNotEmpty()) {
             started = true
-            onFailed("init:$initError")
+            if (!stopFlag) onFailed("init:$initError")
             return
         }
         FullChromaNative.presentSetConversion(conversion.toArray())
@@ -243,7 +243,7 @@ class PackedPresenter(
             synchronized(lock) { mainSlot?.let { runCatching { it.image.close() } }; mainSlot = null }
             retired.closeDue(clockNs(), Long.MAX_VALUE, force = true) // after glFinish + EGL teardown
         }
-        failed?.let { onFailed(it) }
+        failed?.let { if (!stopFlag) onFailed(it) }
     }
 
     private fun takeMain(): Arrived? = synchronized(lock) {

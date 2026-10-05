@@ -933,7 +933,8 @@ class SessionController(
                     while (true) {
                         val msg = decoder.next() ?: break
                         if (msg is VideoFrame) {
-                            trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
+                            // aux frames carry their own frame_seq: tracing them would overwrite main records in the seq-keyed ring
+                            if (msg.view == VideoFrame.VIEW_MAIN) trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
                             // T-160: only the open connection's frames of the renderer-installed config pass
                             val first = gated >= 0
