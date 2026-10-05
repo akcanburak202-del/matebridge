@@ -79,8 +79,6 @@ import dev.matebridge.client.stream.HzPin
 import dev.matebridge.client.stream.HzPinHint
 import dev.matebridge.client.stream.HzPinResult
 import dev.matebridge.client.stream.HzSwitchCounter
-import dev.matebridge.client.stream.SharpChromaPolicy
-import dev.matebridge.client.stream.SharpChromaStore
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
@@ -527,8 +525,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-215: `--ei game_display 0` = native display.
         // T-241 (decision 0033): "Keskin renk kenarları" has its own key in the same store.
         gameSettings = GameModeSettings(
-            settings, devKnobs.gameDisplay, hdrCaps, SharpChromaStore(prefsStore),
-            colourStore = dev.matebridge.client.stream.ColourStore(prefsStore), // T-259: T-260's panel writes it
+            settings, devKnobs.gameDisplay, hdrCaps,
+            colourStore = dev.matebridge.client.stream.ColourStore(prefsStore), // T-260: the panel writes it
             fullChromaAvailable = { fullChromaOn() },
         )
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
@@ -980,10 +978,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             gameSettings.selectHdr(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
         override val appliedConfig get() = streamConfig
-        // T-241 (decision 0033): stored; one complete STREAM_PREFS when it changes (every mode).
-        override val sharpChroma get() = gameSettings.sharpChroma
-        override fun selectSharpChroma(on: Boolean) {
-            gameSettings.selectSharpChroma(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
+        // T-241/T-260 (decisions 0033, 0034): stored; one complete STREAM_PREFS when what is asked of the host changes.
+        override val colourChoice get() = gameSettings.colourChoice()
+        override val fullChromaCapable get() = gameSettings.fullChromaCapable
+        override val colourRequest get() = gameSettings.chromaFor(this@MainActivity.streamMode)
+        override fun selectColour(choice: dev.matebridge.client.stream.ColourChoice) {
+            gameSettings.selectColour(choice, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
         override val modeLayer get() = gameSettings.modeLayer
         override val idleTimeout get() = idle.timeout
@@ -1070,8 +1070,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(resetHintExpiry)
         val audioWas = settings.audioEnabled()
         val scopeWas = settings.filesScope()
-        // T-241: "Keskin renk kenarları" lives outside Settings; reset before the STREAM_PREFS below.
-        val removed = settings.resetToDefaults() + (if (gameSettings.resetSharpChroma()) 1 else 0)
+        // T-241/T-260: "Renk" lives outside Settings; reset before the STREAM_PREFS below.
+        val removed = settings.resetToDefaults() + (if (gameSettings.resetColour()) 1 else 0)
         audio?.forgetLearned() // takes effect at the next audio stream start
         MbLog.i("settings_reset", "keys=$removed")
         // Display: mode (a game layer is dropped and its values re-applied) and STREAM_PREFS with the default bit rate.
@@ -1506,8 +1506,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             displayApplied = gameSettings.display(streamMode)?.appliedIn(config) ?: false,
             hdr = config.isHdr10, // T-238: applied, from STREAM_CONFIG
         )
-        // T-241 (decision 0033): the requested `chroma` (the host does not report the applied one).
-        val chroma = SharpChromaPolicy.profileField(gameSettings.sharpChroma)
+        // T-241/T-260: the requested `chroma` (the applied layout is `chroma_layout` in STREAM_CONFIG).
+        val chroma = dev.matebridge.client.stream.ColourPolicy.profileField(gameSettings.chromaFor(streamMode))
         MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs) + " " + chroma)
     }
 

@@ -32,8 +32,8 @@ import dev.matebridge.client.video.VideoRenderer
  * the stored "HDR" on and a capable tablet ([hdr], computed once at start); every other case asks for SDR, so a mode
  * change re-sends the right `dynamic_range` through the same one STREAM_PREFS.
  *
- * "Keskin renk kenarları" (decision 0033, T-241) is persistent and outside the layer as well, the same in every mode
- * ([chromaStore]; null = always off). [selectSharpChroma] stores it and returns the STREAM_PREFS to send.
+ * "Renk" (decisions 0033/0034, T-241/T-260) is persistent and outside the layer as well ([colourStore]; null = always
+ * Normal). [selectColour] stores it and returns the STREAM_PREFS to send.
  *
  * The caller applies the effective values (STREAM_PREFS, audio, pen overlay, finger switch). Main thread only. Pure Kotlin.
  */
@@ -42,13 +42,13 @@ class GameModeSettings(
     private val gameDisplay: Boolean = true,
     /** Decision 0032: whether this tablet can show HDR10 ([HdrCapability.NONE] = never ask for it). */
     val hdr: HdrCapability = HdrCapability.NONE,
-    /** Decision 0033: the stored "Keskin renk kenarları" (null = always off). */
-    private val chromaStore: SharpChromaStore? = null,
-    /** Decision 0034 (T-259): the stored "Renk" choice (T-260 writes it); null = only the legacy sharp switch counts. */
+    /** Decision 0034: the stored "Renk" choice; null = always Normal. The 0033 on/off value is migrated at construction. */
     private val colourStore: ColourStore? = null,
     /** Decision 0034: true while the full-chroma capability self-test has passed ([dev.matebridge.client.video.FullChromaCapability]). */
     private val fullChromaAvailable: () -> Boolean = { false },
 ) {
+    init { colourStore?.migrate() } // decision 0034: the 0033 "Keskin renk kenarları" value moves into `colour`
+
     /** The layered values, either stored or from the layer. */
     data class Values(
         val bitrateKbps: Long,
@@ -206,14 +206,11 @@ class GameModeSettings(
         return if (dynamicRange(mode) != before) prefs(mode) else null
     }
 
-    /** The stored "Keskin renk kenarları" (decision 0033), the same in every mode. */
-    val sharpChroma: Boolean get() = chromaStore?.get() == true
+    /** The stored "Renk" choice (decision 0034). */
+    fun colourChoice(): ColourChoice = colourStore?.get() ?: ColourChoice.NORMAL
 
-    /** STREAM_PREFS `chroma` ([SharpChromaPolicy.chroma]); every mode asks for the stored value. */
-    val chroma: Int get() = SharpChromaPolicy.chroma(sharpChroma)
-
-    /** The stored "Renk" choice (decision 0034), the legacy sharp switch when no choice is stored. */
-    fun colourChoice(): ColourChoice = colourStore?.get() ?: if (sharpChroma) ColourChoice.SHARP else ColourChoice.NORMAL
+    /** True while the full-chroma capability self-test has passed (the "Tam renk" option is usable). */
+    val fullChromaCapable: Boolean get() = fullChromaAvailable()
 
     /**
      * STREAM_PREFS `chroma` for [mode] ([FullChromaPolicy.chromaRequest]): `2` only for Tam renk in Günlük at 60 fps on the
@@ -224,18 +221,20 @@ class GameModeSettings(
         fullChromaAvailable(),
     )
 
-    /** "Varsayılanlara dön": back to off; true when a value was stored. */
-    fun resetSharpChroma(): Boolean = chromaStore?.reset() == true
+    /** "Varsayılanlara dön": back to Normal; true when a value was stored. */
+    fun resetColour(): Boolean = colourStore?.reset() == true
 
     /**
-     * Stores the "Keskin renk kenarları" choice; returns the complete STREAM_PREFS for [mode] when it changed, else null
-     * (no store, or the same value).
+     * Stores the "Renk" choice; returns the complete STREAM_PREFS for [mode] when it changes what is asked of the host
+     * (`chroma`), else null (no store, the same value, or a choice that asks for the same `chroma`; the choice is still
+     * stored). Tam renk without the capability is refused (nothing stored).
      */
-    fun selectSharpChroma(on: Boolean, mode: StreamMode): StreamPrefs? {
-        val store = chromaStore ?: return null
-        if (store.get() == on) return null
-        store.set(on)
-        return prefs(mode)
+    fun selectColour(choice: ColourChoice, mode: StreamMode): StreamPrefs? {
+        val store = colourStore ?: return null
+        if (!ColourPolicy.optionEnabled(choice, fullChromaAvailable())) return null
+        val before = chromaFor(mode)
+        store.set(choice)
+        return if (chromaFor(mode) != before) prefs(mode) else null
     }
 
     /**

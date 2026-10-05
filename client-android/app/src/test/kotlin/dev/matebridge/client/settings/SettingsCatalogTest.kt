@@ -6,6 +6,7 @@ import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.protocol.StreamConfig
+import dev.matebridge.client.stream.ColourChoice
 import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.StreamMode
@@ -37,8 +38,10 @@ class SettingsCatalogTest {
         override var hdrEnabled = false
         override fun selectHdr(on: Boolean) { calls += "hdr $on"; hdrEnabled = on }
         override var appliedConfig: StreamConfig? = null
-        override var sharpChroma = false
-        override fun selectSharpChroma(on: Boolean) { calls += "sharp_chroma $on"; sharpChroma = on }
+        override var colourChoice = ColourChoice.NORMAL
+        override var fullChromaCapable = true
+        override var colourRequest = 0
+        override fun selectColour(choice: ColourChoice) { calls += "colour ${choice.id}"; colourChoice = choice }
         override var modeLayer: StreamMode? = null
         override var idleTimeout = IdleTimeout.DEFAULT
         override fun selectIdleTimeout(t: IdleTimeout) { calls += "idle ${t.id}"; idleTimeout = t }
@@ -89,10 +92,10 @@ class SettingsCatalogTest {
     @Test fun bothPanelsHaveTheSameControlsExceptTheStreamOnlyOnes() {
         val side = SettingsCatalog.sections(h, inStream = true).flatMap { it.items }.map { it.key }
         val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
-        assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied"), connect)
+        assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied", "colour_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "sharp_chroma", "idle_dim", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -194,31 +197,70 @@ class SettingsCatalogTest {
         assertFalse("hdr_applied" in connect)
     }
 
-    @Test fun sharpChromaRowInEveryModeAndGreyUnderHdr10() { // T-241, decision 0033
+    @Test fun colourRowInEveryModeAndGreyUnderHdr10() { // T-260, decisions 0033/0034
         val s = SettingsCatalog.sections(h, inStream = true)
-        val c = choice(s, "sharp_chroma")
-        assertEquals("Keskin renk kenarları", c.titleText())
-        assertEquals(listOf("Kapalı", "Açık"), c.options.map { it.label })
-        assertEquals(listOf("off", "on"), c.options.map { it.id })
+        val c = choice(s, "colour")
+        assertEquals("Renk", c.titleText())
+        assertEquals(listOf("Normal", "Keskin kenarlar", "Tam renk"), c.options.map { it.label })
+        assertEquals(listOf("normal", "sharp", "full"), c.options.map { it.id })
         for (m in StreamMode.entries) { h.streamMode = m; assertFalse(m.id, c.hidden()); assertTrue(m.id, c.enabled()) }
-        assertEquals("off", c.selected()) // default off
-        c.select("on")
-        assertEquals(listOf("sharp_chroma true"), h.calls)
-        assertEquals("on", c.selected())
-        c.select("off")
-        assertEquals("sharp_chroma false", h.calls.last())
+        assertEquals("normal", c.selected()) // default Normal
+        c.select("sharp")
+        assertEquals(listOf("colour sharp"), h.calls)
+        assertEquals("sharp", c.selected())
+        c.select("full")
+        assertEquals("colour full", h.calls.last())
         // SDR stream: unchanged. HDR10 applied (transfer 16): grey, marked, a tap does nothing.
         h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 1, 13, 1, 1)
         assertTrue(c.enabled())
-        assertEquals("Keskin renk kenarları", c.titleText())
+        assertEquals("Renk", c.titleText())
         h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0)
         h.calls.clear()
         assertFalse(c.enabled())
-        assertEquals("Keskin renk kenarları (HDR açıkken etkisiz)", c.titleText())
-        c.select("on")
+        assertEquals("Renk (HDR açıkken etkisiz)", c.titleText())
+        c.select("sharp")
         assertTrue(h.calls.isEmpty())
-        // The connect panel has it too.
-        assertTrue("sharp_chroma" in SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key })
+        // The connect panel has the row and the note but not the applied line.
+        val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
+        assertTrue("colour" in connect)
+        assertTrue("colour_note" in connect)
+        assertFalse("colour_applied" in connect)
+    }
+
+    @Test fun tamRenkIsGreyWithoutTheCapability() {
+        val c = choice(SettingsCatalog.sections(h, inStream = true), "colour")
+        h.fullChromaCapable = false
+        val full = c.options.first { it.id == "full" }
+        assertEquals("Tam renk (Bu cihazda yok)", full.label)
+        assertFalse(full.enabled())
+        assertTrue(c.options.first { it.id == "sharp" }.enabled())
+        c.select("full")
+        assertTrue(h.calls.isEmpty())
+        h.fullChromaCapable = true
+        assertEquals("Tam renk", full.label)
+        assertTrue(full.enabled())
+    }
+
+    @Test fun colourNoteAndAppliedLines() {
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val note = item(s, "colour_note") as SettingItem.Info
+        val applied = item(s, "colour_applied") as SettingItem.Info
+        assertTrue(note.hidden()); assertTrue(applied.hidden())
+        // Tam renk chosen but not requested (e.g. Günlük 120): the note shows.
+        h.colourChoice = ColourChoice.FULL
+        h.colourRequest = 1
+        assertFalse(note.hidden())
+        assertEquals("Tam renk yalnız Günlük 60'ta, şimdi: Keskin kenarlar", note.text())
+        assertTrue(applied.hidden())
+        // Requested (Günlük 60): no note; the applied line follows STREAM_CONFIG.
+        h.colourRequest = 2
+        assertTrue(note.hidden())
+        h.appliedConfig = StreamConfig(1, 2, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1, chromaLayout = 1)
+        assertEquals("Uygulanan: Tam renk", applied.text())
+        h.appliedConfig = StreamConfig(1, 2, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1, chromaLayout = 0)
+        assertEquals("Uygulanan: Normal (Mac yetişemedi)", applied.text())
+        h.appliedConfig = null
+        assertTrue(applied.hidden())
     }
 
     @Test fun modeTransportAndAudioOutChoices() {
