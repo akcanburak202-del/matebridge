@@ -1405,3 +1405,9 @@ Huawei dokunma hızlandırması (60→120) uygulama ipuçlarının hiçbirine uy
 ## 2026-10-05 ~13:40 — Siyah kalkması = tablet ölçeklemesi (oyun ekranı)
 
 - Oyun modu 2240×1472, HDR kapalı: Mac (33,39,52) → tablet (47,52,63); 2026-10-05 00:00 grilik (35,45,59)→(50,57,69) ile aynı desen. Günlük 2800×1840 (ölçeksiz) aynı terminal (33,39,52) → (33,38,50) doğru. Host etiketleri iki durumda aynı (`input_retag` 709/sRGB/709, `full_range=1`). Sonuç: kalkma tablet görüntüyü panel boyutuna büyütürken oluşuyor (HWC ölçekleyici tam aralığı sıkıştırıyor olabilir). 1 Ekim yakalaması da ölçekli bir moddaydı (Performans 660 o zaman vardı). T-231 renk düğmeleri ölçeksiz durumda denenmişti (her şey doğru göründüğü için sonuç vermemişti). → T-244 (host sınırlı aralık deneyi).
+
+## 2026-10-05 ~14:00 — Siyah kalkması: ölçekleme değil, uygulamaya bağlı sistem durumu
+
+- Düzeltme: ölçekleme hipotezi yanlış. Günlük 2800×1840'ta (ölçeksiz) de kalkık: 0→17, (35,45,59)→(50,57,69). SF katman durumu (DEVICE, V0_SRGB, renk modu DISPLAY_P3, colorTransform birim) doğru durumla birebir aynı.
+- Tablet uygulamasını yeniden başlatmak düzeltmedi, host'u yeniden başlatmak düzeltmedi, Göz konforu (`eyes_protection_mode` 0/1) etkisiz. **Aynı APK'yı yeniden kurmak düzeltti** (0→1, 16→15, 255→255). 00:18'deki "düzelme" de APK kurulumuydu.
+- Sonuç: Huawei'nin uygulamaya özel, paket değişince sıfırlanan bir durumu (şüpheli: oyun asistanı / AGP ya da DisplayEngine video iyileştirmesi; iki seferde de oyun oturumlarından sonra başladı). Doğru durumda `AGPService`, `DisplayEngine*`, `aps_service`, `game` dump'ları boş; `color_display` paket başına doygunluk listesi normal. `snap.sh` artık bu servisleri ve `settings` listelerini kaydediyor; bir sonraki kalkmada `ok` anlık görüntüsüyle karşılaştırılacak (`~/.cache/matebridge-tools/data/gray/*_ok_*`).
