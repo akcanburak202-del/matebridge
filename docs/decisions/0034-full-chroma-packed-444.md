@@ -1,6 +1,6 @@
 # 0034 — Tam renk (4:4:4) Günlük 60'ta: 4:2:0 içinde paketlenmiş iki akış (AVC444v2 düzeni)
 
-- **Durum:** taslak (kullanıcı onayı bekliyor)
+- **Durum:** kabul (kullanıcı 2026-10-05)
 - **Tarih:** 2026-10-05
 
 ## Bağlam
@@ -17,7 +17,7 @@
 ## Karar
 
 1. **Kapsam:** yalnız **Günlük modu, 60 fps, doğal 2800×1840 HiDPI**. Günlük 120, Çizim (hep 120), Oyun ve HDR10 bu yolu kullanmaz; o modlarda renk seçeneği 0033'e (ya da normale) düşer.
-2. **Panel:** "Renk" satırı üç seçenekli olur: **Normal / Keskin kenarlar / Tam renk**. 0033'ün mevcut Kapalı/Açık seçeneğinin yerini alır, kayıtlı değer taşınır. "Tam renk" yalnız Günlük 60'ta uygulanır; diğer modlarda satır notu "Tam renk yalnız Günlük 60'ta, şimdi: Keskin kenarlar". Tablet kapıları geçemezse (yetenek testi) "Tam renk" gri olur ("Bu cihazda yok"). Varsayılan, cihaz kabulüne kadar **Normal**; kabulden sonra yeniden değerlendirilir.
+2. **Panel:** "Renk" satırı üç seçenekli olur: **Normal / Keskin kenarlar / Tam renk**. 0033'ün mevcut Kapalı/Açık seçeneğinin yerini alır, kayıtlı değer taşınır. "Tam renk" yalnız Günlük 60'ta uygulanır; diğer modlarda satır notu "Tam renk yalnız Günlük 60'ta, şimdi: Keskin kenarlar". Tablet kapıları geçemezse (yetenek testi) "Tam renk" gri olur ("Bu cihazda yok"). Varsayılan **Normal** (kullanıcı: kendisi panelden seçer; kabulden sonra da değişmez).
 3. **Düzen:** AVC444v2 örnek düzeni (FreeRDP `prim_YUV.c` ile doğrulandı, T-255 Plan). Ana görüntü normal 4:2:0 kare: Y + çift/çift örnekten Cb/Cr (`pick`, `box` değil). Yardımcı görüntü, geri kalan Cb/Cr örneklerini taşıyan ayrı bir 4:2:0 kare. **İki ayrı HEVC akışı:** iki VT oturumu ve tablette iki `MediaCodec`. Çift yükseklik ve tek akışta sıralı kodlama elendi (araştırma §1).
 4. **Her karede yardımcı** (araştırma §6 ara yol 1): karo haritası yok, en basit doğru çözüm. Durağan ekranda zaten kare gitmez. T-253 netleştirme trenleri iki akışta da çalışır.
 5. **Sunum:**

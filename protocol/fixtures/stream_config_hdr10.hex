@@ -4,7 +4,7 @@
 16 00 00 00  # header u32 length = 22
 03 00        # u16 config_id = 3
 02           # u8 codec = 2 (HEVC)
-00           # u8 reserved = 0
+00           # u8 chroma_layout = 0 (4:2:0)
 38 07        # u16 width_px = 1848
 be 04        # u16 height_px = 1214
 38 07        # u16 width_pt = 1848
