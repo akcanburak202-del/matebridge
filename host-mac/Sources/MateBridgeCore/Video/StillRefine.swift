@@ -118,11 +118,15 @@ public struct StillRefinePolicy: Sendable {
     private enum Phase { case idle, armed, running }
 
     public let config: StillRefineConfig
+    /// How long a deferred next frame waits for the queues to drain before the train ends as `queue_busy`.
+    public static let queueDrainWaitUs: UInt64 = 500_000
     private var phase = Phase.idle
     private var lastCaptureUs: UInt64 = 0
     private var lastStartUs: UInt64?
     private var submittedAtUs: UInt64 = 0
     private var waitingOutput = false
+    /// Packed full colour: the next frame is held back until the queues drain (since when); `tick` retries it.
+    private var drainWaitSinceUs: UInt64?
     private var frames = 0
     private var bytes = 0
     private var firstBytes = 0
@@ -162,6 +166,18 @@ public struct StillRefinePolicy: Sendable {
         case .idle:
             return (false, nil)
         case .running:
+            if let since = drainWaitSinceUs {
+                if keyframePending { return (false, finish(.keyframePending, nowUs: nowUs)) }
+                if keyframeDue { return (false, finish(.keyframeDue, nowUs: nowUs)) }
+                if queueReady {
+                    drainWaitSinceUs = nil
+                    waitingOutput = true
+                    submittedAtUs = nowUs
+                    return (true, nil)
+                }
+                if nowUs &- since >= Self.queueDrainWaitUs { return (false, finish(.queueBusy, nowUs: nowUs)) }
+                return (false, nil)
+            }
             if waitingOutput, nowUs &- submittedAtUs >= config.timeoutUs {
                 return (false, finish(.timeout, nowUs: nowUs))
             }
@@ -183,8 +199,12 @@ public struct StillRefinePolicy: Sendable {
 
     /// A refine frame's encoder output (`bytes` of the encoded frame). `submitNext`: submit another refine frame;
     /// `report`: the train ended with this frame.
+    ///
+    /// `deferQueueBusy` (packed full colour): a not-ready queue does not end the train. The output has just been queued
+    /// and the sender may not have drained it yet, so the next frame waits (`tick` retries it) for at most
+    /// `queueDrainWaitUs`, then the train ends as `queue_busy`.
     public mutating func noteOutput(bytes frameBytes: Int, nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false,
-                                    keyframeDue: Bool = false)
+                                    keyframeDue: Bool = false, deferQueueBusy: Bool = false)
         -> (submitNext: Bool, report: StillRefineReport?) {
         guard phase == .running, waitingOutput else { return (false, nil) }
         waitingOutput = false
@@ -201,9 +221,13 @@ public struct StillRefinePolicy: Sendable {
         else if bytes + largestFrame > config.maxBytes { reason = .maxBytes }
         else if keyframePending { reason = .keyframePending }
         else if keyframeDue { reason = .keyframeDue }
-        else if !queueReady { reason = .queueBusy }
+        else if !queueReady && !deferQueueBusy { reason = .queueBusy }
         else { reason = nil }
         if let reason { return (false, finish(reason, nowUs: nowUs)) }
+        if !queueReady {
+            drainWaitSinceUs = nowUs
+            return (false, nil)
+        }
         waitingOutput = true
         submittedAtUs = nowUs
         return (true, nil)
@@ -225,6 +249,7 @@ public struct StillRefinePolicy: Sendable {
     private mutating func finish(_ reason: StillRefineEnd, nowUs: UInt64) -> StillRefineReport {
         phase = .idle
         waitingOutput = false
+        drainWaitSinceUs = nil
         return StillRefineReport(frames: frames, bytes: bytes, firstBytes: firstBytes, lastBytes: lastBytes,
                                  durationUs: nowUs &- startedUs, reason: reason)
     }

@@ -24,6 +24,11 @@ public struct BoundedFrameQueue: Sendable {
     private var frames: [EncodedVideoFrame] = []
     private var keyframeNeeded = false
     public private(set) var droppedCount = 0
+    /// Deltas refused while awaiting a keyframe and deltas purged by `breakChain` (not in `droppedCount`).
+    public private(set) var refusedCount = 0
+    public private(set) var purgedByBreakCount = 0
+    /// Every frame the queue discarded for any reason: overflow, purge, refusal, `breakChain` (T-258 loss accounting).
+    public var discardedCount: Int { droppedCount + refusedCount + purgedByBreakCount }
     private var awaitingKeyframe = false
 
     public init(capacity: Int = BoundedFrameQueue.defaultCapacity) {
@@ -43,7 +48,12 @@ public struct BoundedFrameQueue: Sendable {
     public mutating func push(_ frame: EncodedVideoFrame) -> Int {
         // A new consumer must see CODEC_CONFIG then a keyframe: stale deltas still in flight are refused.
         if awaitingKeyframe {
-            if frame.isKeyframe { awaitingKeyframe = false } else if !frame.isCodecConfig { return 1 }
+            if frame.isKeyframe {
+                awaitingKeyframe = false
+            } else if !frame.isCodecConfig {
+                refusedCount += 1
+                return 1
+            }
         }
         // The same parameter sets queued twice (encoder announcement racing a resync) are redundant.
         if frame.isCodecConfig {
@@ -107,6 +117,26 @@ public struct BoundedFrameQueue: Sendable {
     /// instead of stacking a second one.
     public mutating func resync(config: EncodedVideoFrame) {
         startNewConsumer(config: config)
+    }
+
+    /// The first queued frame, without removing it.
+    public var first: EncodedVideoFrame? { frames.first }
+
+    /// The reference chain was broken outside the queue (the sender dropped a frame, T-258 auxiliary stream): queued
+    /// deltas are purged and deltas are refused until a keyframe is pushed. The caller asks the encoder for one.
+    public mutating func breakChain() {
+        // Every queued frame is later than the lost one. Deltas up to the first queued keyframe are useless; that
+        // keyframe restarts the chain (so recovery is already satisfied and later deltas stay valid). Without one,
+        // deltas are refused until a keyframe is pushed.
+        let before = frames.count
+        var i = 0
+        var restarted = false
+        while i < frames.count {
+            if frames[i].isKeyframe { restarted = true; break }
+            if frames[i].isProtected { i += 1 } else { frames.remove(at: i) }
+        }
+        purgedByBreakCount += before - frames.count
+        if !restarted { awaitingKeyframe = true }
     }
 
     public mutating func removeAll() {

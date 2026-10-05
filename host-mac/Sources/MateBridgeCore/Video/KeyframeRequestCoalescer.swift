@@ -39,6 +39,8 @@ public struct KeyframeRequestCoalescer: Sendable {
         case forced
         case coalesced
         case configResent = "config_resent"
+        /// T-258: the request named the auxiliary stream only; the main stream's coalescer was not involved.
+        case auxiliaryOnly = "aux_only"
     }
 
     public struct Decision: Equatable, Sendable {
@@ -53,6 +55,9 @@ public struct KeyframeRequestCoalescer: Sendable {
             self.forceKeyframe = forceKeyframe
             self.sinceIdrUs = sinceIdrUs
         }
+
+        /// The decision for a request that concerned the auxiliary stream only (decision 0034).
+        public static let auxiliaryOnly = Decision(action: .auxiliaryOnly, forceKeyframe: false, sinceIdrUs: nil)
 
         /// `action=… idr_forced=0|1 since_idr_ms=<n>|-` (LOGGING.md).
         public var logFields: String {

@@ -20,7 +20,8 @@ public enum Message: Equatable, Sendable {
     case ping(Ping)
     case pong(Pong)
     case stats(Stats)
-    case keyframeRequest(KeyframeReason)
+    /// `view` is the optional trailing byte (decision 0034); nil = absent on the wire = both streams.
+    case keyframeRequest(KeyframeReason, view: KeyframeView? = nil)
     case audioPrefs(AudioPrefs)
     case audioConfig(AudioConfig)
     case audioFrame(AudioFrame)
@@ -95,7 +96,9 @@ public enum Message: Equatable, Sendable {
             w.u32(m.decodeTimeAvgUs)
             w.u32(m.latencyAvgUs)
             w.u32(m.bytesReceived)
-        case .keyframeRequest(let r): w.u8(r.rawValue)
+        case .keyframeRequest(let r, let view):
+            w.u8(r.rawValue)
+            if let view { w.u8(view.rawValue) }
         case .audioPrefs(let m): m.write(&w)
         case .audioConfig(let m): m.write(&w)
         case .audioFrame(let m): m.write(&w)
@@ -194,7 +197,10 @@ public enum Message: Equatable, Sendable {
                                 framesRendered: try r.u32(), framesDropped: try r.u32(),
                                 decodeTimeAvgUs: try r.u32(), latencyAvgUs: try r.u32(),
                                 bytesReceived: try r.u32()))
-        case .keyframeRequest: return .keyframeRequest(KeyframeReason(rawValue: try r.u8()))
+        case .keyframeRequest:
+            let reason = KeyframeReason(rawValue: try r.u8())
+            // Optional trailing view (decision 0034); a longer payload's extra bytes are ignored.
+            return .keyframeRequest(reason, view: r.remaining > 0 ? KeyframeView(wire: try r.u8()) : nil)
         case .audioPrefs: return .audioPrefs(try AudioPrefs.read(&r))
         case .audioConfig: return .audioConfig(try AudioConfig.read(&r))
         case .audioFrame: return .audioFrame(try AudioFrame.read(&r))
