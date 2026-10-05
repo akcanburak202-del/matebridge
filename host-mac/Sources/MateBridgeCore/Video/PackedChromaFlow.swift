@@ -91,8 +91,24 @@ public struct PackedChromaMonitor: Sendable {
     }
 }
 
-/// `video ev=chroma_stats` fields of the packed path, a 10 s window (T-258): packer GPU time, auxiliary encode time,
-/// auxiliary / main byte ratio and the auxiliary frames lost. Samples are bounded like `ChromaStatsWindow`.
+/// Which kind of frame a packed-path byte count belongs to (T-262): a keyframe (IDR), a still-screen refinement frame
+/// (T-253), or an ordinary delta frame. The auxiliary / main ratio differs a lot between them (a tiny static delta
+/// frame is mostly per-frame overhead on both views, so its ratio is near 1 although the bytes are negligible).
+public enum PackedFrameKind: Int, CaseIterable, Sendable {
+    case key, refine, delta
+
+    var logName: String {
+        switch self {
+        case .key: return "key"
+        case .refine: return "refine"
+        case .delta: return "delta"
+        }
+    }
+}
+
+/// `video ev=chroma_stats` fields of the packed path, a 10 s window (T-258, T-262): packer GPU time, auxiliary encode
+/// time, auxiliary / main byte ratio overall and per frame kind, absolute main and auxiliary rates, and the auxiliary
+/// frames lost. Samples are bounded like `ChromaStatsWindow`.
 public struct PackedChromaStatsWindow: Sendable {
     public static let windowUs: UInt64 = 10_000_000
     public static let maxSamples = 4096
@@ -105,6 +121,8 @@ public struct PackedChromaStatsWindow: Sendable {
     private var mainBytes = 0
     private var auxBytes = 0
     private var auxFrames = 0
+    private var mainBytesByKind = [Int](repeating: 0, count: PackedFrameKind.allCases.count)
+    private var auxBytesByKind = [Int](repeating: 0, count: PackedFrameKind.allCases.count)
     private var auxLost = 0
     private var packFailures = 0
 
@@ -115,23 +133,38 @@ public struct PackedChromaStatsWindow: Sendable {
         if packGpuUs.count < Self.maxSamples { packGpuUs.append(gpuUs) }
     }
     public mutating func recordPackFailure() { packFailures += 1 }
-    public mutating func recordMain(bytes: Int) { mainFrames += 1; mainBytes += bytes }
-    public mutating func recordAux(bytes: Int, encodeUs: UInt64) {
+    public mutating func recordMain(bytes: Int, kind: PackedFrameKind = .delta) {
+        mainFrames += 1
+        mainBytes += bytes
+        mainBytesByKind[kind.rawValue] += bytes
+    }
+    public mutating func recordAux(bytes: Int, encodeUs: UInt64, kind: PackedFrameKind = .delta) {
         auxFrames += 1
         auxBytes += bytes
+        auxBytesByKind[kind.rawValue] += bytes
         if auxEncodeUs.count < Self.maxSamples { auxEncodeUs.append(encodeUs) }
     }
     public mutating func recordAuxLost() { auxLost += 1 }
 
+    private static func ratio(_ aux: Int, _ main: Int) -> String {
+        main > 0 ? String(format: "%.2f", Double(aux) / Double(main)) : "-"
+    }
+
     /// `mode=packed444 frames=<main> aux_frames=<n> pack_ms_p50_95=a/b pack_gpu_ms_p50_95=a/b aux_enc_ms_p50_95=a/b
-    /// aux_main_bytes=<ratio|-> aux_lost=<n> pack_fail=<n>` once `windowUs` has passed; nil before.
+    /// aux_main_bytes=<ratio|-> aux_lost=<n> pack_fail=<n> main_kbps=<n> aux_kbps=<n> aux_main_key=<ratio|->
+    /// aux_main_refine=<ratio|-> aux_main_delta=<ratio|->` once `windowUs` has passed; nil before. The rates are over
+    /// the elapsed window, so a near-static window (a few hundred kbps) is told apart from a busy one.
     public mutating func take(nowUs: UInt64) -> String? {
         guard nowUs >= startUs, nowUs - startUs >= Self.windowUs else { return nil }
-        let ratio = mainBytes > 0 ? String(format: "%.2f", Double(auxBytes) / Double(mainBytes)) : "-"
-        let f = "mode=packed444 frames=\(mainFrames) aux_frames=\(auxFrames) "
+        let elapsedUs = max(1, nowUs - startUs)
+        func kbps(_ bytes: Int) -> Int { Int(UInt64(bytes) * 8 * 1000 / elapsedUs) }
+        var f = "mode=packed444 frames=\(mainFrames) aux_frames=\(auxFrames) "
             + "pack_ms_p50_95=\(ChromaStatsWindow.pair(packWallUs)) pack_gpu_ms_p50_95=\(ChromaStatsWindow.pair(packGpuUs)) "
-            + "aux_enc_ms_p50_95=\(ChromaStatsWindow.pair(auxEncodeUs)) aux_main_bytes=\(ratio) "
-            + "aux_lost=\(auxLost) pack_fail=\(packFailures)"
+            + "aux_enc_ms_p50_95=\(ChromaStatsWindow.pair(auxEncodeUs)) aux_main_bytes=\(Self.ratio(auxBytes, mainBytes)) "
+            + "aux_lost=\(auxLost) pack_fail=\(packFailures) main_kbps=\(kbps(mainBytes)) aux_kbps=\(kbps(auxBytes))"
+        for kind in PackedFrameKind.allCases {
+            f += " aux_main_\(kind.logName)=\(Self.ratio(auxBytesByKind[kind.rawValue], mainBytesByKind[kind.rawValue]))"
+        }
         self = PackedChromaStatsWindow(startUs: nowUs)
         return f
     }

@@ -69,6 +69,11 @@ func runQuality(_ args: ProbeArgs) throws {
     let mainMbps = args.double("main-mbps", 40)
     let auxRatio = args.double("aux-ratio", 0.5)
     let perPhase = args.int("samples", 1)
+    // T-262 aux-session experiments (auxiliary view only).
+    let auxQuality: Float? = !args.string("aux-quality", "").isEmpty ? Float(args.double("aux-quality", 0.5)) : nil
+    let auxMinQP: Int? = !args.string("aux-min-qp", "").isEmpty ? args.int("aux-min-qp", 0) : nil
+    let auxMaxQP: Int? = !args.string("aux-max-qp", "").isEmpty ? args.int("aux-max-qp", 0) : nil
+    let auxBurst = args.int("aux-burst", 2)
     let rates = ClipNaming.bitrates(size: size, mainMbps: mainMbps, auxRatio: auxRatio)
     let q = max(1, frames / 4)
     var sampleFrames: [Int] = []
@@ -84,7 +89,8 @@ func runQuality(_ args: ProbeArgs) throws {
 
     for chroma in chromas {
         let r = try encodeSequence(scene: scene, size: size, frames: frames, fps: fps, chroma: chroma, mainKbps: rates.mainKbps,
-                                   auxKbps: rates.auxKbps, sampleFrames: Set(sampleFrames), keepBGRA: true)
+                                   auxKbps: rates.auxKbps, auxQuality: auxQuality, auxMinQP: auxMinQP, auxMaxQP: auxMaxQP,
+                                   auxBurst: auxBurst, sampleFrames: Set(sampleFrames), keepBGRA: true)
         line(String(format: "-- main-chroma=%@ encoded in %.1f s hw=%@ settings main=%@ aux=%@ errors=%d pack_gpu p50=%.0f us",
                     chroma.rawValue, r.seconds, r.hardware, r.mainSettings, r.auxSettings, r.errors,
                     Metrics.percentile(r.packGpuUs, 50)))
@@ -119,6 +125,11 @@ func runQuality(_ args: ProbeArgs) throws {
             truthKept[f] = (truth, rgb, mask, bgra)
             let name = "\(chroma.rawValue)"
             post.add("packed \(name) main+aux, rebuilt as-is", evaluate(AVC444v2.unpack(main: md, aux: ad, reconstruction: .asIs), truth: truth, sourceRGB: rgb, mask: mask))
+            if args.flag("by-phase") {
+                let ph = ScenePhase.of(frame: f, frames: frames).rawValue
+                post.add("  [\(ph)] packed \(name) as-is", evaluate(AVC444v2.unpack(main: md, aux: ad, reconstruction: .asIs), truth: truth, sourceRGB: rgb, mask: mask))
+                post.add("  [\(ph)] plain 4:2:0 box nearest", evaluate(ColorMath.upsample(md, .nearest), truth: truth, sourceRGB: rgb, mask: mask))
+            }
             if chroma == .box {
                 post.add("packed box main+aux, inverse box", evaluate(AVC444v2.unpack(main: md, aux: ad, reconstruction: .inverseBox), truth: truth, sourceRGB: rgb, mask: mask))
                 post.add("plain 4:2:0 (main only, box) nearest", evaluate(ColorMath.upsample(md, .nearest), truth: truth, sourceRGB: rgb, mask: mask))

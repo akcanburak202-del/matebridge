@@ -38,6 +38,8 @@ Klipler: 600 kare, 60 fps, her akışta tek IDR (kare 0), Annex-B (IDR önünde 
 
 Tablet tarafı (T-254, `android/` altında) komutlarını orkestratör sonradan buraya ekler.
 
+T-262 (yardımcı akış boyutu) deneyleri `quality` komutuna eklendi: `--by-phase` (faz başına PSNR satırları), `--aux-ratio` (yardımcı `AverageBitRate` / ana), `--aux-min-qp N`, `--aux-max-qp N`, `--aux-quality q`, `--aux-burst k` (yalnız yardımcı oturum); `--main-chroma pick` ürünün seçimidir. Örnek: `quality --main-mbps 30 --main-chroma pick --no-intra --by-phase --grain 14 --aux-ratio 0.25`.
+
 ## Notlar
 
 - `SharpYUVReference.swift`, host'taki `SharpYUV.swift`'in (T-235, karar 0033) kopyasıdır (probe host-mac'e dokunmaz); 0033 ile kıyas için.

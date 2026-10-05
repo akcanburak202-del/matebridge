@@ -29,6 +29,11 @@ final class VTStream: @unchecked Sendable {
         var primaries: CFString = SessionTags.primaries
         var transfer: CFString = SessionTags.transfer
         var matrix: CFString = SessionTags.matrix
+        /// T-262 experiments: QP bounds (`MinAllowedFrameQP` / `MaxAllowedFrameQP`); nil = not set.
+        var minQP: Int? = nil
+        var maxQP: Int? = nil
+        /// Burst cap as a multiple of the average over one second (host: 2).
+        var burstFactor: Int = 2
     }
 
     struct Output {
@@ -71,7 +76,9 @@ final class VTStream: @unchecked Sendable {
         qualityApplied = q
         if !q { set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (config.bitrateKbps * 1000) as CFNumber) }
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
-            [config.bitrateKbps * 1000 / 8 * 2, 1] as CFArray)
+            [config.bitrateKbps * 1000 / 8 * config.burstFactor, 1] as CFArray)
+        if let v = config.minQP { set("MinAllowedFrameQP", kVTCompressionPropertyKey_MinAllowedFrameQP, v as CFNumber) }
+        if let v = config.maxQP { set("MaxAllowedFrameQP", kVTCompressionPropertyKey_MaxAllowedFrameQP, v as CFNumber) }
         set("MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval,
             (config.keyframeEveryFrames > 0 ? config.keyframeEveryFrames : 1_000_000) as CFNumber)
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue)
