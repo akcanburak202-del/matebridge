@@ -97,6 +97,10 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastStampUs: UInt64?
     /// The first input retag was logged (T-113). Guarded by `lock`.
     private var retagLogged = false
+    /// T-235 `chroma_stats` window; nil unless `MATEBRIDGE_CHROMA` is set. Guarded by `lock`.
+    private var chromaStats: ChromaStatsWindow?
+    /// The first failed Metal pass was logged. Guarded by `lock`.
+    private var chromaFailureLogged = false
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
@@ -105,6 +109,10 @@ final class HEVCEncoder: @unchecked Sendable {
     let knobs: EncoderKnobs
     /// `kVTCompressionPropertyKey_Quality` was accepted (then `AverageBitRate` is not set).
     private(set) var qualityApplied = false
+    /// T-235 `MATEBRIDGE_CHROMA`: requested and applied chroma mode. Final once `init` returns.
+    private(set) var chroma = ChromaDecision(knob: .unset, applied: .yuv420, reason: nil)
+    /// The sharp-YUV Metal pass (`chroma.applied` is `sharp_*`); used on the owner queue only. Set in `init` only.
+    private var chromaConverter: ChromaConverter?
     private let logSink: LogSink
     private let meter: CadenceMeter?
     /// `VTSessionSetProperty` failures at creation (key: OSStatus), for diagnostics.
@@ -170,17 +178,29 @@ final class HEVCEncoder: @unchecked Sendable {
 
         var failures: [String] = []
         var report: [String] = []
-        func set(_ name: String, _ key: CFString, _ value: CFTypeRef) {
+        @discardableResult
+        func set(_ name: String, _ key: CFString, _ value: CFTypeRef) -> OSStatus {
             let st = VTSessionSetProperty(s, key: key, value: value)
             report.append("\(name)=\(st == noErr ? "ok" : String(st))")
             if st != noErr {
                 failures.append("\(name)=\(st)")
                 HEVCEncoder.log.error("ev=prop_set_failed key=\(name, privacy: .public) status=\(st)")
             }
+            return st
         }
         set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
+        // T-235: `444` asks for the undocumented HEVC Main 4:4:4 profile (fast path only, `ChromaPolicy`); refused,
+        // the session stays Main and capture stays 4:2:0. Every other mode sets exactly what it set before.
+        var chroma = ChromaPolicy.resolve(knob: knobs.chroma, codec: settings.codec, profile: profile)
+        if chroma.applied == .yuv444 {
+            if set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.main444ProfileLevel) != noErr {
+                set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
+                chroma = chroma.fallingBack(.profileRejected)
+            }
+        } else {
+            set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
+        }
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
         // T-086: a constant-quality target replaces the average bitrate; if VideoToolbox refuses it, fall back.
         var qualityOK = false
@@ -215,6 +235,20 @@ final class HEVCEncoder: @unchecked Sendable {
         propertyFailures = failures
         propertyReport = report
         VTCompressionSessionPrepareToEncodeFrames(s)
+
+        // T-235: the sharp modes need the Metal pass; without it the session runs today's 4:2:0 path.
+        if let upsample = chroma.applied.sharpUpsample {
+            do {
+                chromaConverter = try ChromaConverter(width: settings.encodedWidthPx, height: settings.encodedHeightPx,
+                                                      upsample: upsample)
+            } catch {
+                logSink(.warning, "chroma_metal_unavailable",
+                        "error=\(StreamProfileLog.value(String(describing: error)))")
+                chroma = chroma.fallingBack(.metalUnavailable)
+            }
+        }
+        self.chroma = chroma
+        if chroma.logsEnabled { chromaStats = ChromaStatsWindow(mode: chroma.applied, startUs: HostClock.nowUs()) }
 
         // Idle keyframe: a pending keyframe request with no new frames for ~1 s re-encodes the last buffer.
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.idle"))
@@ -265,6 +299,20 @@ final class HEVCEncoder: @unchecked Sendable {
         codec == .h264 ? kVTProfileLevel_H264_High_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
     }
 
+    /// T-235 `MATEBRIDGE_CHROMA=444`: HEVC Main 4:4:4. The SDK has no constant; `ave.hevc` accepts this string
+    /// (research 2026-10-05 section 1). Apple may change it, hence the `profile_rejected` fallback.
+    static var main444ProfileLevel: CFString { "HEVC_Main444_AutoLevel" as CFString }
+
+    /// What ScreenCaptureKit must deliver for the applied chroma mode: `420f` (today) or `BGRA` (T-235).
+    var capturePixelFormat: OSType {
+        chroma.applied.captureFormat == .bgra ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+    }
+
+    /// T-235: the `chroma_stats` fields once its 10 s window is over; nil before, and always nil without the knob.
+    func takeChromaStats(nowUs: UInt64) -> String? {
+        lock.withLock { chromaStats?.take(nowUs: nowUs) }
+    }
+
     /// Profile name logged for H.264 (`profile=high`).
     static let h264ProfileLogName = "high"
 
@@ -295,7 +343,9 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     /// Profile name for the `ev=encoder_config` line logged with the parameter sets.
-    private var profileLogName: String { settings.codec == .h264 ? Self.h264ProfileLogName : "main" }
+    private var profileLogName: String {
+        settings.codec == .h264 ? Self.h264ProfileLogName : (chroma.applied == .yuv444 ? "main444" : "main")
+    }
 
     /// Effective periodic keyframe interval in seconds (0 = on request only).
     static let keyframeIntervalSeconds = KeyframeIntervalPolicy.fromEnvironment()
@@ -352,7 +402,8 @@ final class HEVCEncoder: @unchecked Sendable {
         if resubmitNow { resubmitLast() }
     }
 
-    /// Encodes one captured frame (full-range 4:2:0, see `ScreenCapture`). Never blocks and never grows a queue:
+    /// Encodes one captured frame (full-range 4:2:0, or `BGRA` under T-235's `MATEBRIDGE_CHROMA`; see
+    /// `capturePixelFormat`). Never blocks and never grows a queue:
     /// if the encoder is backed up the frame replaces the single pending one.
     func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64,
                 displayTimeUs: UInt64 = 0) {
@@ -470,6 +521,9 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// Owner queue only (`Backend.encode`).
     private func send(_ frame: Input, key: Bool, token: EncoderSubmitToken, session: VTCompressionSession) {
+        // T-235: the Metal pass runs here, so only frames that are really submitted are converted (the pacer may
+        // replace or decimate captures); its time falls between `deliveredUs` and `submittedUs` in the trace.
+        let image = chromaConverter.map { convertForEncoder(frame.buffer, $0) } ?? frame.buffer
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
@@ -485,7 +539,7 @@ final class HEVCEncoder: @unchecked Sendable {
         trace.resubmit = frame.resubmit
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
-            session, imageBuffer: frame.buffer, presentationTimeStamp: frame.pts,
+            session, imageBuffer: image, presentationTimeStamp: frame.pts,
             duration: .invalid, frameProperties: props, infoFlagsOut: nil
         ) { [weak self, trace] status, _, sampleBuffer in
             guard let self else { return }
@@ -501,12 +555,35 @@ final class HEVCEncoder: @unchecked Sendable {
         }
     }
 
+    /// T-235: the converted `420f` buffer, or `buffer` unchanged when it is not a session-size `BGRA` frame or the
+    /// pass failed (VideoToolbox then converts the `BGRA` frame itself; counted as `conv_fail`).
+    private func convertForEncoder(_ buffer: CVPixelBuffer, _ converter: ChromaConverter) -> CVPixelBuffer {
+        switch converter.convert(buffer) {
+        case .converted(let out, let wallUs, let gpuUs):
+            lock.withLock { chromaStats?.recordConversion(wallUs: wallUs, gpuUs: gpuUs) }
+            return out
+        case .passThrough:
+            return buffer
+        case .failed(let reason):
+            let first = lock.withLock { () -> Bool in
+                chromaStats?.recordConversionFailure()
+                defer { chromaFailureLogged = true }
+                return !chromaFailureLogged
+            }
+            if first { logSink(.warning, "chroma_convert_failed", "reason=\(reason)") }
+            return buffer
+        }
+    }
+
     /// A submitted frame produced output (or none); frees the slot and starts the pending frame, if any.
     private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, token: EncoderSubmitToken,
                            captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
         let ok = status == noErr && sampleBuffer != nil
         if let sb = sampleBuffer, ok {
             meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
+            if chroma.logsEnabled, !trace.resubmit, trace.encodedUs >= trace.deliveredUs {
+                lock.withLock { chromaStats?.recordEncoded(captureToEncodeUs: trace.encodedUs - trace.deliveredUs) }
+            }
             handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
         }
         if ok { lock.lock(); consecutiveFailures = 0; lock.unlock() }
@@ -585,6 +662,11 @@ final class HEVCEncoder: @unchecked Sendable {
             let level = Self.levelIdc(sets, codec: settings.codec).map { String($0) } ?? "unknown"
             logSink(.info, "encoder_config", "codec=\(settings.codec.logName) profile=\(profileLogName) "
                     + "level_idc=\(level) sets=\(sets.count)")
+            if chroma.logsEnabled {
+                let info = ChromaBitstreamInfo.parse(parameterSets: sets, codec: settings.codec)
+                let line = ChromaConfigLog.line(chroma, info)
+                logSink(line.level, ChromaConfigLog.event, line.fields)
+            }
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
