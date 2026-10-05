@@ -50,7 +50,7 @@ files:
 
 ## Handoff
 
-Commit: (aşağıda, son commit) · Dosyalar: `probes/yuv444-probe/**` (Package, 3 hedef: Core/GPU/yürütülebilir, testler, README), `probes/README.md`, bu kart. Klipler `~/.cache/matebridge-tools/data/yuv444/`: `main_/aux_ 2800x1840_60.h265` ve `1848x1214_60.h265` (600 kare, tek IDR, Annex-B), `ref_*.png` (faz ortası kareleri), `yuv444_*.txt` (meta/düzen). `swift test`: CPU pack/unpack bit-tam, Metal çekirdeği (fused ve iki geçişli) CPU ile birebir.
+Commit: b36b70e · Dosyalar: `probes/yuv444-probe/**` (Package, 3 hedef: Core/GPU/yürütülebilir, testler, README), `probes/README.md`, bu kart. Klipler `~/.cache/matebridge-tools/data/yuv444/`: `main_/aux_ 2800x1840_60.h265` ve `1848x1214_60.h265` (600 kare, tek IDR, Annex-B), `ref_*.png` (faz ortası kareleri), `yuv444_*.txt` (meta/düzen). `swift test`: CPU pack/unpack bit-tam, Metal çekirdeği (fused ve iki geçişli) CPU ile birebir.
 
 **Önemli koşul:** ölçümler sırasında `MateBridgeApp` (pid 17851, 6,5 saat açık, ~%14 CPU) ve sistem yükü ~7 vardı; ben dokunmadım. M2 sayıları bu yüzden temkinli okunmalı; boşta bir makinede `encode-bench --matrix` yeniden koşulmalı. Tek oturum tavanı burada ~110 kare/sn (2800×1840) çıktı, NOTES'taki 167 `--encode-bench max` değerinden düşük.
 
