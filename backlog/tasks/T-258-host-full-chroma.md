@@ -75,6 +75,11 @@ Dal: `task/T-258-host-full-chroma` (T-257 üzerine). Protokole dokunulmaz.
 1. Yardımcı kayıp sayımı artık `VideoFrameQueue.discardedCount` (taşma + bekleyen akıştan reddedilen delta'lar + `breakChain` ile temizlenenler) kullanır; ana kuyruğun `droppedCount` (cadence) sayacı değişmedi. Geri çağrı hataları zaten `auxLost`'ta. Test: `testDiscardedCountIncludesRefusedAndPurgedFrames`.
 2. Refine hazır koşulu ana ve yardımcı kuyruğun ikisini birden ister; çift çözümü (devam kararı) yardımcı kare kuyruğa konduktan sonra verilir (`auxOutput` sonrası `refinePairResolved`), böylece refine yardımcı taşması ya da zincir kırığı üretmez. Host hedefi, derlendi; cihazda doğrulanacak.
 
+### Codex turu 3 (2 x P2)
+
+1. `PackedAuxEncoder`: `ProfileLevel`, `ColorPrimaries`, `TransferFunction` veya `YCbCrMatrix` reddedilirse oturum kurulmaz (`AuxSetupError`), `HEVCEncoder` `PackedSetupError(reason: "aux_setup")` fırlatır: `chroma_layout = 0`, `ev=chroma_fallback reason=aux_setup` (eski `aux_session_failed` adı kalktı; `docs/LOGGING.md`'deki ad `aux_setup` olarak okunmalı).
+2. İlk refine çifti tahmini artık ana + yardımcı: `lastMotionAuxBytes` (son gerçek yardımcı kare, refine olmayan) eklenir; yoksa ana/2. Host hedefi, derlendi; cihazda doğrulanacak.
+
 ## Open questions
 
 - Orkestratörün sonradan gönderdiği kart açıklaması (KEYFRAME_REQUEST `view`/`reason`) için protokol dalını birleştirme komutu izin sistemi tarafından reddedildi; açıklama mesajdaki metne göre uygulandı (PROTOCOL §0x23 ile uyumlu varsayıldı). Birleştirme gerekirse orkestratör yapmalı; protokol değişikliği yok.

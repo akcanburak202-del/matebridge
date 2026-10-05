@@ -13,6 +13,12 @@ import VideoToolbox
 /// at most `maxInFlight` (2) auxiliary frames are inside VideoToolbox, and a frame that finds both busy is dropped
 /// (`encode` returns false) and the caller asks for an auxiliary keyframe, because the dropped frame broke that
 /// stream's reference chain.
+/// A property the auxiliary session needs for bit-exact samples was refused.
+struct AuxSetupError: Error, CustomStringConvertible {
+    let detail: String
+    var description: String { "aux property refused: \(detail)" }
+}
+
 final class PackedAuxEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
@@ -90,6 +96,14 @@ final class PackedAuxEncoder: @unchecked Sendable {
         let prepared = VTCompressionSessionPrepareToEncodeFrames(s)
         if prepared != noErr { failed.append("PrepareToEncodeFrames=\(prepared)") }
         propertyFailures = failed
+        // The auxiliary samples are raw chroma: if the session does not carry exactly the session colour tags (or the
+        // profile), VideoToolbox would colour-convert the buffers and corrupt the packed chroma silently. Any refused
+        // required property is a setup failure (the owner falls back, `reason=aux_setup`).
+        let required = ["ProfileLevel", "ColorPrimaries", "TransferFunction", "YCbCrMatrix"]
+        if let refused = failed.first(where: { f in required.contains { f.hasPrefix($0 + "=") } }) {
+            VTCompressionSessionInvalidate(s)
+            throw AuxSetupError(detail: refused)
+        }
         if prepared != noErr {
             VTCompressionSessionInvalidate(s)
             throw VideoEncoderError.sessionCreation(prepared)

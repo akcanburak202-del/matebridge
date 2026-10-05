@@ -118,6 +118,8 @@ final class HEVCEncoder: @unchecked Sendable {
     /// `lock`.
     private var lastKeyframeUs = HostClock.nowUs()
     private var lastMotionBytes = 0
+    /// Byte size of the newest real auxiliary frame (packed full colour): the first refinement pair's estimate adds it.
+    private var lastMotionAuxBytes = 0
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
@@ -346,7 +348,11 @@ final class HEVCEncoder: @unchecked Sendable {
                                                     view: "aux")
                     configLog(line.level, ChromaConfigLog.event, line.fields)
                 } else if !frame.data.isEmpty {
-                    statsLock.withLock { self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs) }
+                    statsLock.withLock {
+                        self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs)
+                        // A real (non-refinement) auxiliary frame sets the first refinement pair's size estimate.
+                        if self?.refinePairs[frame.captureTimeUs] == nil { self?.lastMotionAuxBytes = frame.data.count }
+                    }
                 }
                 auxOutput(frame, encodeUs)
                 // After the frame is queued: a refinement train continues only once both streams' frames are in their
@@ -364,7 +370,7 @@ final class HEVCEncoder: @unchecked Sendable {
                 auxEncoder = aux
                 backend.aux = aux
             } catch {
-                throw PackedSetupError(reason: "aux_session_failed", detail: String(describing: error))
+                throw PackedSetupError(reason: "aux_setup", detail: String(describing: error))
             }
             packedStats = PackedChromaStatsWindow(startUs: HostClock.nowUs())
             auxKeyframePending = true  // the first auxiliary frame is an IDR, like the main one
@@ -679,7 +685,7 @@ final class HEVCEncoder: @unchecked Sendable {
             let now = HostClock.nowUs()
             let r = refinePolicy.tick(nowUs: now, queueReady: ready, keyframePending: keyframePending,
                                       keyframeDue: periodicKeyframeDueLocked(nowUs: now),
-                                      firstFrameEstimate: lastMotionBytes > 0 ? lastMotionBytes
+                                      firstFrameEstimate: lastMotionBytes > 0 ? lastMotionBytes + (auxEncoder == nil ? 0 : (lastMotionAuxBytes > 0 ? lastMotionAuxBytes : lastMotionBytes / 2))
                                           : StillRefineConfig.defaultFirstFrameEstimate)
             return (r.start, r.timedOut, refinePolicy.trainID)
         }
