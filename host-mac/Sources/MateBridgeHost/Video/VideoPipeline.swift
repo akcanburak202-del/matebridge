@@ -142,7 +142,10 @@ public final class VideoPipeline: @unchecked Sendable {
             let frames = self.frames
             let tap = self.tap
             let encoder = try HEVCEncoder(settings: settings, meter: meter, refine: refine,
-                                          refineReady: { [auxFrames] in frames.isReadyForRefine && auxFrames.isReadyForRefine }, output: { frame, encodeUs in
+                                          refineReady: { [auxFrames, packed = settings.packedChroma] in
+                                              RefineReadiness.ready(mainReady: frames.isReadyForRefine,
+                                                                    auxReady: auxFrames.isReadyForRefine, packed: packed)
+                                          }, output: { frame, encodeUs in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)

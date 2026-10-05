@@ -80,6 +80,11 @@ Dal: `task/T-258-host-full-chroma` (T-257 üzerine). Protokole dokunulmaz.
 1. `PackedAuxEncoder`: `ProfileLevel`, `ColorPrimaries`, `TransferFunction` veya `YCbCrMatrix` reddedilirse oturum kurulmaz (`AuxSetupError`), `HEVCEncoder` `PackedSetupError(reason: "aux_setup")` fırlatır: `chroma_layout = 0`, `ev=chroma_fallback reason=aux_setup` (eski `aux_session_failed` adı kalktı; `docs/LOGGING.md`'deki ad `aux_setup` olarak okunmalı).
 2. İlk refine çifti tahmini artık ana + yardımcı: `lastMotionAuxBytes` (son gerçek yardımcı kare, refine olmayan) eklenir; yoksa ana/2. Host hedefi, derlendi; cihazda doğrulanacak.
 
+### Codex turu 4 (2 x P2)
+
+1. Gerileme düzeltildi: refine hazırlığı `RefineReadiness.ready(mainReady:auxReady:packed:)` (Core, test edildi); yardımcı kuyruk yalnız `settings.packedChroma` iken sayılır, Normal/Sharp/geri düşüş sonrası T-253 eskisi gibi çalışır.
+2. Taşıyıcının reddettiği yardımcı kare `counters.auxDropped`'a sayılır (geri düşüş kuralının kullandığı sayaç).
+
 ## Open questions
 
 - Orkestratörün sonradan gönderdiği kart açıklaması (KEYFRAME_REQUEST `view`/`reason`) için protokol dalını birleştirme komutu izin sistemi tarafından reddedildi; açıklama mesajdaki metne göre uygulandı (PROTOCOL §0x23 ile uyumlu varsayıldı). Birleştirme gerekirse orkestratör yapmalı; protokol değişikliği yok.

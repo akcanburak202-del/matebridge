@@ -142,6 +142,8 @@ public final class VideoSender: @unchecked Sendable {
                         seqs[view] &+= 1
                         if view == 0, !out.isCodecConfig { arbiter.mainSent(captureTimeUs: out.captureTimeUs) }
                     } else if view == 1 {
+                        // A transport-refused auxiliary frame is a loss like a dropped one (the fallback rule counts it).
+                        lock.withLock { counters.auxDropped += 1 }
                         aux.breakChain()
                         requestAuxKeyframe()
                     } else if keyframeRequestAllowed() {

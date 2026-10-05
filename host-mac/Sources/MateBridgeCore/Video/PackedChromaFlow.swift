@@ -40,6 +40,15 @@ public struct PackedSendArbiter: Sendable {
     }
 }
 
+/// Whether a still-screen refinement frame may be submitted (T-253, T-258). Pure.
+public enum RefineReadiness {
+    /// The main queue must be ready; the auxiliary queue only when the stream is packed full colour. Without it the
+    /// auxiliary queue sits idle (and awaiting a keyframe after `prepareForNewConsumer`), which must not block T-253.
+    public static func ready(mainReady: Bool, auxReady: Bool, packed: Bool) -> Bool {
+        mainReady && (!packed || auxReady)
+    }
+}
+
 /// Decides when the auxiliary encoder cannot keep up (decision 0034 section 7). Pure; one window per second.
 /// A window with at least `minFrames` offered auxiliary frames and more than 5 % lost counts as bad; `badWindows`
 /// bad windows in a row, or any hard error (VideoToolbox, Metal), ask for the fallback to normal 4:2:0 once.

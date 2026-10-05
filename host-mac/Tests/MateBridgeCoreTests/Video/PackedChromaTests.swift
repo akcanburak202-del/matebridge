@@ -269,6 +269,13 @@ final class PackedChromaFlowTests: XCTestCase {
         XCTAssertNil(m.closeWindow())
     }
 
+    func testRefineReadinessNeedsTheAuxQueueOnlyWhenPacked() {
+        XCTAssertTrue(RefineReadiness.ready(mainReady: true, auxReady: false, packed: false), "idle aux queue must not block")
+        XCTAssertFalse(RefineReadiness.ready(mainReady: true, auxReady: false, packed: true))
+        XCTAssertTrue(RefineReadiness.ready(mainReady: true, auxReady: true, packed: true))
+        XCTAssertFalse(RefineReadiness.ready(mainReady: false, auxReady: true, packed: false))
+    }
+
     func testStatsWindowLine() {
         var w = PackedChromaStatsWindow(startUs: 0)
         w.recordPack(wallUs: 900, gpuUs: 700)
