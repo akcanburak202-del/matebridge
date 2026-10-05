@@ -229,4 +229,69 @@ class FrameQueueCatchUpTest {
         m.put(9, CatchUp.NONE)
         assertEquals(CatchUp.NONE, m.take(9))
     }
+
+    // --- T-252 review (P1): a catch-up must not suppress presentation or run unbounded ---
+
+    private val step = 8 * ms // 120 fps
+
+    /** Longest gap between two frames that were shown (not SKIP) over the run, in ms; run ends when the old path fires. */
+    private class Run(var worstGapMs: Long = 0, var steps: Int = 0, var flushed: Boolean = false, var shown: Int = 0)
+
+    private fun sustained(arrivalsPerTakes: Pair<Int, Int>, startBurst: Int = 6, maxSteps: Int = 400): Run {
+        key(); take()
+        repeat(startBurst) { p() } // a burst: backlog above the limit of 4
+        val (arr, tak) = arrivalsPerTakes
+        val r = Run()
+        var lastShown = now
+        var i = 0
+        while (i < maxSteps && !r.flushed) {
+            now += step; i++
+            repeat(arr) { p() }
+            repeat(tak) {
+                if (take() != null && mark.value != CatchUp.SKIP) {
+                    r.worstGapMs = maxOf(r.worstGapMs, (now - lastShown) / ms); lastShown = now; r.shown++
+                }
+            }
+            r.flushed = q.isWaitingKeyframe()
+        }
+        r.steps = i
+        r.worstGapMs = maxOf(r.worstGapMs, (now - lastShown) / ms)
+        return r
+    }
+
+    @Test fun arrivalEqualToDecodeRateKeepsPresentingAndEndsInTheOldPath() {
+        val r = sustained(1 to 1)
+        assertTrue("old path never fired in ${r.steps} steps", r.flushed)
+        assertTrue("catch-up ran ${r.steps} steps (> 300 ms + slack)", r.steps * 8 <= 300 + 2 * 8 + 8)
+        assertTrue("display stood still ${r.worstGapMs} ms", r.worstGapMs <= CatchUp.SHOW_INTERVAL_MS + 8)
+        assertTrue(r.shown >= 3)
+        assertEquals(1L, q.counters().overflows)
+    }
+
+    @Test fun arrivalSlightlyAboveDecodeRateKeepsPresentingAndEnds() {
+        val r = sustained(10 to 9) // but per step: 10 arrivals vs 9 takes scaled below
+        assertTrue(r.flushed)
+        assertTrue("display stood still ${r.worstGapMs} ms", r.worstGapMs <= CatchUp.SHOW_INTERVAL_MS + 8)
+    }
+
+    @Test fun decodeFasterThanArrivalEndsTheCatchUpWithATailAndNoRequest() {
+        val r = sustained(1 to 2)
+        assertFalse(r.flushed)
+        assertFalse(q.isCatchingUp())
+        assertTrue(requests.isEmpty())
+        assertEquals(0L, q.counters().overflows)
+        assertTrue(done.isNotEmpty())
+        assertTrue(r.steps == 400)
+    }
+
+    @Test fun backBelowTheNormalDepthEndsTheCatchUpAndTheNextFrameIsTheTail() {
+        key(); take()
+        repeat(6) { p() }
+        take() // SKIP; pending 5
+        repeat(4) { take() } // pending 1 (all handed out as SKIP or SHOW)
+        p() // pending 2 <= limit: caught up
+        assertFalse(q.isCatchingUp())
+        take()
+        assertEquals(CatchUp.TAIL, mark.value)
+    }
 }

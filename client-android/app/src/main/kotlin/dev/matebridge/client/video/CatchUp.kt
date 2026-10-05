@@ -17,6 +17,20 @@ object CatchUp {
     /** Newest frame of the backlog (or the first frame after a flush that ended a catch-up): show now, re-anchor. */
     const val TAIL = 2
 
+    /**
+     * Presented during a catch-up although newer frames are queued (T-252 review): the display never stands still for
+     * longer than [SHOW_INTERVAL_MS] while a backlog is worked off. Handled like [TAIL] on the output side, but the
+     * catch-up goes on.
+     */
+    const val SHOW = 3
+    /** Longest gap between two presented frames during a catch-up. */
+    const val SHOW_INTERVAL_MS = 50L
+    /**
+     * Longest catch-up (from its start): a backlog that is still above the normal depth after this long is not
+     * shrinking (arrival rate >= decode rate); the old flush + keyframe request path takes over.
+     */
+    const val MAX_CATCH_UP_MS = 300L
+
     /** Milliseconds of video the backlog may reach before the old drop + keyframe request path takes over. */
     const val MAX_BACKLOG_MS = 500
     /** Memory bound of the backlog (frame payload bytes). */

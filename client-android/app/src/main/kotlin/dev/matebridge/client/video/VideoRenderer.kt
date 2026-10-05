@@ -812,7 +812,7 @@ class VideoRenderer(
                     // T-141: the first output after an idle sleep is released at once (null), independent of the clock.
                     val tookBypass = firstOutput.take()
                     // T-252: the newest frame of a caught-up backlog is shown at once; the pacer forgets the backlog.
-                    val tail = mark == CatchUp.TAIL
+                    val tail = mark == CatchUp.TAIL || mark == CatchUp.SHOW
                     if (tail) { adaptivePacer.reanchorAfterCatchUp(); pacer.reset() }
                     val decision = if (tookBypass || tail) null
                     else if (!useAdaptive) pacer.schedule(readyNs)

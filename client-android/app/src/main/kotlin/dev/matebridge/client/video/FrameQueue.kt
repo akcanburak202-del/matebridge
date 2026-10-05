@@ -138,6 +138,9 @@ class FrameQueue(
     /** Frames handed out as SKIP whose TAIL has not been taken yet. */
     private var skippedOut = 0
     private var catchStartNs = 0L
+    private var lastShownNs = 0L
+    private var showIntervalNs = CatchUp.SHOW_INTERVAL_MS * 1_000_000L
+    private var maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
     private var catchUps = 0L
     private var catchSkipped = 0L
 
@@ -155,6 +158,12 @@ class FrameQueue(
     var catchUpMaxBytes: Long
         get() = synchronized(lock) { bytesCatchUp }
         set(v) = synchronized(lock) { bytesCatchUp = v.coerceAtLeast(0) }
+
+    /** T-252 (tests): longest gap between presented frames, and longest catch-up, in milliseconds. */
+    fun setCatchUpTiming(showIntervalMs: Long, maxMs: Long) = synchronized(lock) {
+        showIntervalNs = showIntervalMs * 1_000_000L
+        maxCatchUpNs = maxMs * 1_000_000L
+    }
 
     /** True while a backlog is being caught up (pure query). */
     fun isCatchingUp(): Boolean = synchronized(lock) { catchingUp }
@@ -200,11 +209,16 @@ class FrameQueue(
                     if (sinceKeyframe >= 0) sinceKeyframe++
                     queue.addLast(frame)
                     val n = notePending()
-                    if (n > limit && n <= depthCatchUp && pendingBytes() <= bytesCatchUp) {
+                    // T-252 review: back within the normal depth = caught up (the next take is the TAIL).
+                    if (catchingUp && n <= limit) endCatchUp(forgetSkipped = false)
+                    // A catch-up that has not got the queue back under the normal depth in time is not shrinking.
+                    val expired = catchingUp && nowNs - catchStartNs > maxCatchUpNs
+                    if (n > limit && n <= depthCatchUp && !expired && pendingBytes() <= bytesCatchUp) {
                         // T-252: a backlog inside the bounds is decoded and caught up, not flushed.
                         if (!catchingUp) {
                             catchingUp = true
                             if (skippedOut == 0) catchStartNs = nowNs
+                            lastShownNs = nowNs
                             catchUps++
                         }
                         tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
@@ -283,9 +297,16 @@ class FrameQueue(
             var m = CatchUp.NONE
             if (!f.isCodecConfig) {
                 if (catchingUp && pendingCount() > 0) {
-                    m = CatchUp.SKIP
-                    skippedOut++
-                    catchSkipped++
+                    val t = clockNs()
+                    if (t - lastShownNs >= showIntervalNs) {
+                        m = CatchUp.SHOW // keep the display moving; the backlog is still worked off
+                        lastShownNs = t
+                        skippedOut++ // a frame that was shown is a re-anchor point like the TAIL, count it with the rest
+                    } else {
+                        m = CatchUp.SKIP
+                        skippedOut++
+                        catchSkipped++
+                    }
                 } else if (catchingUp || skippedOut > 0) {
                     // The newest frame of the backlog (or the first one after a flush that ended the catch-up).
                     m = CatchUp.TAIL

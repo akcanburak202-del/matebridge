@@ -59,11 +59,13 @@ Tasarım: kareler çözücüye sırayla verilmeye devam eder (referans zinciri b
 
 - Commit: `git log task/T-252-catch-up` (T-252 commit'i).
 - Dosyalar: `video/CatchUp.kt` (yeni), `video/FrameQueue.kt`, `video/VideoRenderer.kt`, `video/AdaptivePacer.kt` (`reanchorAfterCatchUp`), `video/CodecGeneration.kt` (`catchMarks`); testler `FrameQueueCatchUpTest`, `CatchUpRendererTest`, `FakeDecoderCodec` (renderedPts/discardedPts).
-- Varsayımlar: backlog sınırı 0,5 s / 64 kare / 32 MB; eşik = bugünkü `maxPending` (120 fps'te 8); TAIL anında gösterilir (render zamanı 0 = bir sonraki vsync). Eksik kare / sıra boşluğu algılaması FrameQueue'da yok (oturum katmanında); dokunulmadı.
+- Varsayımlar: backlog sınırı 0,5 s / 64 kare / 32 MB, süre sınırı 300 ms, sunum aralığı 50 ms (`CatchUp.MAX_CATCH_UP_MS`, `SHOW_INTERVAL_MS`); eşik = bugünkü `maxPending` (120 fps'te 8); TAIL anında gösterilir (render zamanı 0 = bir sonraki vsync). Eksik kare / sıra boşluğu algılaması FrameQueue'da yok (oturum katmanında); dokunulmadı.
 - check.sh: ALL OK (3 kez; knob + LOGGING eklemesinden sonra yeniden koşuldu, aşağıya bkz.).
 - A/B: `adb shell am start ... --ez dev true --ez catch_up false` eski flush + keyframe yolunu verir.
 - Test EDİLMEDİ (cihaz): Wi-Fi'da 120 fps tam ekran geçişi, gerçek çözücüde SKIP discard davranışı, TAIL sonrası pacer kilidinin geri gelmesi.
 - Cihazda kontrol: (1) Wi-Fi'da `adb logcat -s MB:*` ile `ev=catch_up frames= ms=` satırları (ms ~ 25-60 beklenir), aynı pencerede `kf_req` artmaması, `ev=queue_overflow` yalnız >0,5 s birikmede; (2) görsel donma süresi eski yola göre kısa mı (A/B: `catch_up false`, bağlantı bekliyor); (3) catch-up sonrası `render ev=present` `skip_pct`/`lock` normale dönüyor mu; (4) USB'de aynı, `catchups=` çoğunlukla 0; (5) bağlantı kopma/uyku-uyanma sonrası görüntü normal.
+
+- **Codex P1 düzeltmesi (sunum donması):** catch-up artık sınırlı. (1) Sürerken en geç her 50 ms'de bir kare `SHOW` işaretiyle hemen gösterilir (çıkışta TAIL gibi, pacer yeniden demirler; catch-up sürer). (2) Kuyruk normal derinliğe (`maxPending`) inince catch-up biter, sıradaki kare TAIL. (3) 300 ms içinde normal derinliğe inmezse (varış hızı >= çözme hızı) eski boşalt + KEYFRAME_REQUEST yolu çalışır. Testler: varış = çözme, varış > çözme, çözme > varış, derinliğe dönüş (`FrameQueueCatchUpTest`). check.sh ALL OK.
 
 ## Open questions
 
