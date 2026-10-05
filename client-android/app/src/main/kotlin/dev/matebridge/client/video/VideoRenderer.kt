@@ -179,6 +179,18 @@ class VideoRenderer(
     }
     private val queue = FrameQueue(stats, FrameQueue.depthForFps(initialConfig.fps))
 
+    /**
+     * T-252: a backlog (more than the normal queue depth, up to [CatchUp.MAX_BACKLOG_MS] / [CatchUp.MAX_BACKLOG_BYTES])
+     * is decoded in order and only its newest frame is shown, with no keyframe request; false = the pre-T-252 flush +
+     * KEYFRAME_REQUEST (A/B). Takes effect from the next frame.
+     */
+    @Volatile var catchUp: Boolean = true
+        set(v) { field = v; applyCatchUpDepth(config.fps) }
+
+    private fun applyCatchUpDepth(fps: Int) {
+        queue.catchUpDepth = if (catchUp) CatchUp.depthForFps(fps) else 0
+    }
+
     init {
         // T-121: root-cause line for every overflow and a line per keyframe request (both rare: the gate and the
         // request limit bound them).
@@ -187,6 +199,10 @@ class VideoRenderer(
                 "in_codec=${live?.gauge?.current() ?: 0} decode_last_us=${stats.lastDecodeUs} since_kf=${o.sinceKeyframe} " +
                 "gaps_us=${if (o.gapsUs.isEmpty()) "-" else o.gapsUs.joinToString(",")} " +
                 "req=${if (o.requested) "sent" else "held"} since_req_ms=${o.sinceRequestMs}")
+        }
+        applyCatchUpDepth(initialConfig.fps)
+        queue.onCatchUp = { frames, ms ->
+            env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=catch_up frames=$frames ms=$ms")
         }
         queue.onRequest = { reason, source ->
             env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=kf_request reason=$reason src=${source.logName}")
@@ -259,7 +275,7 @@ class VideoRenderer(
     fun queueStatsFields(reset: Boolean = true): String {
         val q = queue.counters(reset)
         return "kf_req=${q.kfRequests} kf_held=${q.kfHeld} overflows=${q.overflows} max_pending=${q.maxPending} " +
-            "limit=${queue.maxPending}"
+            "limit=${queue.maxPending} catchups=${q.catchUps} cu_skipped=${q.catchUpSkipped} kf_avoided=${q.catchUps}"
     }
 
     override fun onFrame(frame: VideoFrame) {
@@ -302,6 +318,7 @@ class VideoRenderer(
     fun reconfigure(newConfig: StreamConfig) {
         config = newConfig
         queue.maxPending = FrameQueue.depthForFps(newConfig.fps)
+        applyCatchUpDepth(newConfig.fps)
         val surface = current?.surface
         retire(wait = false)
         val reason = queue.reset(KeyframeRequest.STARTUP, keepConfig = false)
@@ -620,18 +637,21 @@ class VideoRenderer(
             val inSlot = InputBufferSlot { timeoutUs -> c.dequeueInputBuffer(timeoutUs) }
             var takenNs = 0L
             var lastFrameNs = System.nanoTime()
+            val takeMark = TakeMark() // T-252: catch-up mark of the frame taken
+            var heldMark = CatchUp.NONE
             while (att.active && outError.get() == null) {
                 inSlot.prefetch()
                 // T-141: an offer unparks the wait at once; the timeout only bounds how fast a stop is seen.
                 // T-219: frames of this generation only; once retired it gets null and the loop ends on `active`.
-                val fromQueue = if (held == null) queue.awaitNext(IdleWait.waitNs(System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen) else null
+                val fromQueue = if (held == null) queue.awaitNext(IdleWait.waitNs(System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen, takeMark) else null
                 if (fromQueue != null) lastFrameNs = System.nanoTime()
                 if (fromQueue != null && trace != null) takenNs = lastFrameNs
                 val frame = held ?: fromQueue
+                val mark = if (held != null) heldMark else takeMark.value
                 held = null
                 if (frame == null) continue
                 val idx = inSlot.take(4_000)
-                if (idx < 0) { held = frame; continue }
+                if (idx < 0) { held = frame; heldMark = mark; continue }
                 val inbufNs = if (trace != null) System.nanoTime() else 0L
                 val buf = codec.getInputBuffer(idx)!!
                 if (buf.capacity() < frame.data.size) {
@@ -647,6 +667,7 @@ class VideoRenderer(
                 val flags = if (frame.isCodecConfig) DecoderCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 if (!frame.isCodecConfig) { st.captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
+                if (!frame.isCodecConfig) st.catchMarks.put(frame.frameSeq, mark) // before the codec can output it
                 if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
                 if (!frame.isCodecConfig) progress.onInput(att.gen, env.elapsedRealtimeMs()) // T-159 no-output rule
@@ -766,6 +787,7 @@ class VideoRenderer(
             var d: FramePacer.Decision? = null
             var tag = -1L
             var firstOfGeneration = false
+            var skip = false // T-252: decoded only, a newer frame of the backlog is shown instead
             // Review P2-3: the shared bookkeeping of this output (decode progress, stats, first-output bypass, pacing,
             // trace) runs atomically with the "still current?" check; a retire waits for it (bounded), so an output of a
             // retired codec never touches the next generation's state. Review 2: in-memory work only; codec calls and
@@ -779,14 +801,20 @@ class VideoRenderer(
                     stats.onOutput(info.presentationTimeUs, nowUs(), readyNs / 1000)
                     st.readyByPts.put(info.presentationTimeUs, readyNs)
                 }
-                if (paced && isFrame) {
+                val mark = if (isFrame) st.catchMarks.take(info.presentationTimeUs) else CatchUp.NONE
+                if (mark == CatchUp.SKIP) {
+                    skip = true // no pacer, no first-output bypass: the backlog's delay is no stream jitter
+                } else if (paced && isFrame) {
                     val captureUs = st.captureByPts.get(info.presentationTimeUs)
                     val trace = releaser.trace
                     val probe = adaptivePacer.probe
                     probe?.clear()
                     // T-141: the first output after an idle sleep is released at once (null), independent of the clock.
                     val tookBypass = firstOutput.take()
-                    val decision = if (tookBypass) null
+                    // T-252: the newest frame of a caught-up backlog is shown at once; the pacer forgets the backlog.
+                    val tail = mark == CatchUp.TAIL
+                    if (tail) { adaptivePacer.reanchorAfterCatchUp(); pacer.reset() }
+                    val decision = if (tookBypass || tail) null
                     else if (!useAdaptive) pacer.schedule(readyNs)
                     else adaptivePacer.schedule(captureUs, readyNs)
                     giveBackIfRetired(st, tookBypass)
@@ -816,6 +844,7 @@ class VideoRenderer(
             }
             waitUs = 0
             if (isFrame) sink.tag(idx, info.presentationTimeUs, tag) // T-168: which frame a later release/discard is (T-220: and its trace row)
+            if (skip) { sink.discard(idx); continue }
             if (paced) {
                 if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
                 val decision = d

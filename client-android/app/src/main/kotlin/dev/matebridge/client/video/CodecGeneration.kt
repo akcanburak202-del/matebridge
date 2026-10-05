@@ -204,6 +204,8 @@ internal class CodecState(val generation: CodecGeneration, ptsMapMax: Int) {
     /** frameSeq (codec pts) -> time the decoded frame became ready (ns, System.nanoTime). */
     val readyByPts = PtsMap(ptsMapMax)
     val arrival = ArrivalTracker()
+    /** T-252: frameSeq (codec pts) -> [CatchUp] mark, input thread -> output thread. */
+    val catchMarks = CatchUpMarks(ptsMapMax)
     @Volatile var adaptive: AdaptivePacer? = null
     /** Output thread: time of the latest dequeued output (T-141 idle wait). */
     var lastOutputNs = 0L

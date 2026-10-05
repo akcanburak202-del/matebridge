@@ -137,6 +137,9 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         private val outPts = java.util.concurrent.ConcurrentHashMap<Int, Long>() // output index -> pts
         /** T-219: pts of every non-empty input queued to this codec, in order (config inputs included). */
         val inputPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        /** T-252: pts of the outputs released for rendering / without rendering, in release order. */
+        val renderedPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        val discardedPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
@@ -209,11 +212,12 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         override fun releaseOutputBuffer(index: Int, renderTimestampNs: Long) { record("releaseOutput#$serial"); rendered(index) }
         override fun releaseOutputBuffer(index: Int, render: Boolean) {
             record("releaseOutput#$serial")
-            if (render) rendered(index)
+            if (render) rendered(index) else outPts.remove(index)?.let { discardedPts.add(it) }
         }
 
         private fun rendered(index: Int) {
             val pts = outPts.remove(index) ?: return
+            renderedPts.add(pts)
             if (renderCallbackInRelease) renderedListener?.invoke(pts, System.nanoTime())
         }
 

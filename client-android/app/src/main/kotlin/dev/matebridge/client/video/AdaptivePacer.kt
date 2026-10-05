@@ -457,6 +457,17 @@ class AdaptivePacer(
     }
 
     /**
+     * T-252: a backlog was caught up (its newest frame was shown at once, the others were skipped): the measurements of
+     * the backlog frames (their delay is the backlog, not jitter) are not used, the pacer restarts like after an idle
+     * gap (the next frame is a lone frame at the earliest slot, the one after acquires a lock). The feedback level is
+     * kept. Output thread only, like [schedule].
+     */
+    fun reanchorAfterCatchUp() {
+        reanchor()
+        lastScheduleNs = Long.MIN_VALUE
+    }
+
+    /**
      * T-220: the content cadence n changed on an unchanged grid (the inferred cadence of [FrameInterval.resolve] went
      * 1 <-> 2: a 120 fps stream whose content went 60 <-> 120 fps). The lattice, the latency bound and the cap of D
      * belong to n, so the lock and D start over (the next frame acquires a centred lock). The jitter history, the
