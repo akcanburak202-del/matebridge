@@ -76,3 +76,4 @@ Tasarım: kareler çözücüye sırayla verilmeye devam eder (referans zinciri b
 ## Open questions
 
 - (Çözüldü) Orkestratör `DevKnobs.kt`, `MainActivity.kt` (tek satır) ve `docs/LOGGING.md` dosyalarını kapsama ekledi; `--ez catch_up false` (dev kapısı arkasında, `ev=profile knobs=` içinde `catch_up:0`) bağlandı, `DevKnobsTest` ve LOGGING.md güncellendi.
+- (Orkestratör, birleştirme) Codex 5. tur P2: tutulan kare codec giriş tamponu beklerken 300 ms süre sınırı denetlenmiyor (`VideoRenderer.kt` ~650). Bilinen sınırlama olarak kabul: uzun süre giriş tamponu vermeyen codec bir çözücü takılmasıdır, `VideoHealth`/`DecoderFault` (NO_OUTPUT) yolu ele alır. Cihazda görülürse küçük takip kartı.
