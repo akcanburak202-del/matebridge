@@ -6,6 +6,8 @@ import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Handler
+import android.os.HandlerThread
 import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -83,12 +85,15 @@ object FullChromaSelfTest {
         }
         var first: Decoder? = null
         var second: Decoder? = null
+        // ImageReader listeners need a Looper: this runs on a plain thread, so give them their own (a null handler throws).
+        val ht = HandlerThread("mb-fc-selftest-img").also { it.start() }
+        val handler = Handler(ht.looper)
         try {
             first = Decoder.open(w, h, config.data.value, ImageFormat.YUV_420_888,
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_CPU_READ_OFTEN)
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_CPU_READ_OFTEN, handler)
                 ?: return Outcome.Inconclusive("decoder_open")
             // The second decoder is opened while the first one is alive (the auxiliary stream's situation).
-            second = Decoder.open(w, h, config.data.value, ImageFormat.PRIVATE, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE)
+            second = Decoder.open(w, h, config.data.value, ImageFormat.PRIVATE, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE, handler)
             if (second == null) {
                 log("second_decoder=open_failed")
                 return Outcome.Fail("second_decoder")
@@ -107,6 +112,7 @@ object FullChromaSelfTest {
             first?.close()
             second?.close()
             FullChromaNative.rawShutdown()
+            ht.quitSafely()
         }
     }
 
@@ -126,7 +132,7 @@ object FullChromaSelfTest {
         private val images: LinkedBlockingQueue<Image>,
     ) {
         companion object {
-            fun open(w: Int, h: Int, parameterSets: ByteArray, imageFormat: Int, usage: Long): Decoder? {
+            fun open(w: Int, h: Int, parameterSets: ByteArray, imageFormat: Int, usage: Long, handler: Handler): Decoder? {
                 var codec: MediaCodec? = null
                 var reader: ImageReader? = null
                 try {
@@ -135,7 +141,7 @@ object FullChromaSelfTest {
                     reader = r
                     r.setOnImageAvailableListener({ rd ->
                         try { rd.acquireNextImage()?.let { images.add(it) } } catch (_: IllegalStateException) {}
-                    }, null)
+                    }, handler)
                     val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
                     codec = c
                     val f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, w, h)

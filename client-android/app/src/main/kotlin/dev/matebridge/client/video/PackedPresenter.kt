@@ -6,24 +6,24 @@ import android.view.Surface
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
-/** Time a decoder image waits after its last possible use by the GPU before it goes back to its ImageReader. */
-internal const val IMAGE_RETIRE_NS = 50_000_000L
+/** Safety net: an image whose fence never signals is closed anyway after this long. */
+internal const val IMAGE_RETIRE_MAX_NS = 500_000_000L
 
 /**
- * An image with the moment it was closed late: the GPU may still read it for a while after the draw call returned, so a
- * displaced or used image is closed [IMAGE_RETIRE_NS] after it was retired (T-254/T-256 closed one draw late).
+ * Images the GPU may still read: each is retired with the number of the last submitted draw that can use it and is closed
+ * only once that draw's fence signalled ([closeDue] with the completed-draw count), or after [IMAGE_RETIRE_MAX_NS].
  */
 internal class RetiredImages {
-    private class Entry(val image: Image, val atNs: Long)
+    private class Entry(val image: Image, val atNs: Long, val draw: Long)
     private val q = ConcurrentLinkedQueue<Entry>()
 
-    fun retire(image: Image, nowNs: Long) { q.add(Entry(image, nowNs)) }
+    fun retire(image: Image, nowNs: Long, lastDraw: Long) { q.add(Entry(image, nowNs, lastDraw)) }
 
-    /** Closes what has been retired for at least [IMAGE_RETIRE_NS]; [force] closes everything. */
-    fun closeDue(nowNs: Long, force: Boolean = false) {
+    /** Closes images whose draw completed ([completedDraws]) or that waited too long; [force] closes everything. */
+    fun closeDue(nowNs: Long, completedDraws: Long, force: Boolean = false) {
         while (true) {
             val e = q.peek() ?: return
-            if (!force && nowNs - e.atNs < IMAGE_RETIRE_NS) return
+            if (!force && e.draw > completedDraws && nowNs - e.atNs < IMAGE_RETIRE_MAX_NS) return
             q.poll()
             runCatching { e.image.close() }
         }
@@ -38,7 +38,7 @@ class FrameExpectation(val captureUs: Long, val renderNs: Long)
  * with the auxiliary image of the same `capture_time_us` ([AuxPairing]; none in time: main-only pass), draws into the
  * SurfaceView's EGL window surface with swap interval 0 and `eglPresentationTimeANDROID` = the slot target the pacer
  * chose (no standing queue, T-256), and reports each frame's display time (EGL present timestamp) through [onShown].
- * All native GL calls of this context happen on this thread. Images are closed [IMAGE_RETIRE_NS] after their last use.
+ * All native GL calls of this context happen on this thread. Images are closed once the fence of the last draw that may read them signalled ([RetiredImages]).
  *
  * Failure ([onFailed]): init failed, or [MAX_CONSECUTIVE_ERRORS] draws in a row failed; the owner falls back to the direct
  * path. [stop] must complete before the Surface is destroyed.
@@ -61,7 +61,22 @@ class PackedPresenter(
         const val EXPECT_MAX = 64
         private const val EXPECT_TRIM = 32
         private const val TICK_MS = 25L
+
+        /** The native present context is a single global: never two presenters at once ([awaitPrevious]). */
+        @Volatile private var previous: PackedPresenter? = null
+
+        /**
+         * Waits up to [ms] for the previously created presenter's GL thread to exit. False = it is still alive (a stuck
+         * GL call): the caller must NOT start another presenter (the native context would be replaced under it).
+         */
+        fun awaitPrevious(ms: Long): Boolean {
+            val p = previous ?: return true
+            if (p.isAlive) { try { p.join(ms) } catch (_: InterruptedException) {} }
+            return !p.isAlive
+        }
     }
+
+    init { previous = this }
 
     /** One window of presenter counters (the `render ev=stats` fields). */
     class Snapshot(
@@ -80,7 +95,9 @@ class PackedPresenter(
     private val lock = Object()
     private var mainSlot: Arrived? = null
     private val auxArrivals = ConcurrentLinkedQueue<AuxArrived>()
-    private val pairing = AuxPairing<Image>(AUX_RING) { retired.retire(it, clockNs()) }
+    /** Draws submitted with a fence (GL thread writes; other threads read it to tag retired images). */
+    @Volatile private var submitted = 0L
+    private val pairing = AuxPairing<Image>(AUX_RING) { retired.retire(it, clockNs(), submitted) }
     private val timings = GlTimings()
     @Volatile private var stopFlag = false
     @Volatile var started = false
@@ -107,7 +124,7 @@ class PackedPresenter(
     /** A decoded main image (from the main ImageReader listener): newest wins. The presenter owns [image] from now on. */
     fun offerMain(image: Image, seq: Long) {
         synchronized(lock) {
-            mainSlot?.let { retired.retire(it.image, clockNs()); synchronized(counters) { displaced++ } }
+            mainSlot?.let { retired.retire(it.image, clockNs(), submitted); synchronized(counters) { displaced++ } }
             mainSlot = Arrived(image, seq)
             lock.notifyAll()
         }
@@ -117,7 +134,7 @@ class PackedPresenter(
     fun offerAux(image: Image, captureUs: Long) {
         auxArrivals.add(AuxArrived(image, captureUs))
         // Bounded even if the GL thread is stuck: a backlog beyond a few images is stale.
-        while (auxArrivals.size > AUX_RING + 2) auxArrivals.poll()?.let { retired.retire(it.image, clockNs()) }
+        while (auxArrivals.size > AUX_RING + 2) auxArrivals.poll()?.let { retired.retire(it.image, clockNs(), submitted) }
     }
 
     /** Counters since the last call with [reset]. */
@@ -159,7 +176,7 @@ class PackedPresenter(
                 val item = takeMain()
                 val now = clockNs()
                 absorbAux()
-                retired.closeDue(now)
+                retired.closeDue(now, FullChromaNative.presentCompletedDraws())
                 if (item == null) { drainTimestamps(); continue }
                 val exp = expectations.remove(item.seq)
                 val aux = if (exp != null) pairing.pair(exp.captureUs) else null
@@ -175,7 +192,8 @@ class PackedPresenter(
                 val cpuMs = (clockNs() - t0) / 1e6
                 hwMain?.close()
                 hwAux?.close()
-                retired.retire(item.image, clockNs())
+                if (rc == 0 || rc == -5) submitted++ // a fence was created for this draw
+                retired.retire(item.image, clockNs(), submitted)
                 if (rc != 0) {
                     synchronized(counters) { drawErrors++ }
                     if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -198,7 +216,7 @@ class PackedPresenter(
             auxArrivals.clear()
             pairing.clear()
             synchronized(lock) { mainSlot?.let { runCatching { it.image.close() } }; mainSlot = null }
-            retired.closeDue(clockNs(), force = true)
+            retired.closeDue(clockNs(), Long.MAX_VALUE, force = true) // after glFinish + EGL teardown
         }
         failed?.let { onFailed(it) }
     }

@@ -72,6 +72,11 @@ class FullChromaPipeline(
             log('W', "full_chroma_unsupported", "layout=${config.chromaLayout} size=${config.widthPx}x${config.heightPx}")
             return false
         }
+        if (!PackedPresenter.awaitPrevious(1_000)) {
+            // The old GL thread is stuck inside a native call: a new presenter would replace its context. Direct path.
+            log('E', "full_chroma_gl_busy", "reason=previous_presenter_alive")
+            return false
+        }
         failedReported = false
         auxUnmatched = 0
         imageErrors = 0
@@ -99,7 +104,10 @@ class FullChromaPipeline(
             auxQueue = queue
             val dec = AuxDecoder(
                 config, aux.surface, queue, sendAuxKeyframeRequest,
-                onGaveUp = { why -> log('E', "aux_give_up", "reason=${why.take(40)}") },
+                onGaveUp = { why ->
+                    log('E', "aux_give_up", "reason=${why.take(40)}")
+                    reportFailure("aux_give_up") // main-only from here on: the owner drops to chroma = 1 for the process
+                },
             )
             auxDecoder = dec
 
@@ -162,7 +170,7 @@ class FullChromaPipeline(
     }
 
     /** Periodic keyframe retry of the auxiliary stream while its gate is closed (through its own request limit). */
-    fun takeAuxRetry(): Boolean = active && auxQueue?.takeRetry() == true
+    fun takeAuxRetry(): Boolean = active && auxDecoder?.gaveUp != true && auxQueue?.takeRetry() == true
 
     /**
      * `chroma_layout=1 aux_paired_pct= aux_late= gl_ms_p50= gl_ms_p95= ...` for one log window ([StatsFormat.fullChromaFields]),

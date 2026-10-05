@@ -130,6 +130,8 @@ struct Ctx {
         int64_t tag;
     };
     std::deque<Pending> pendingTs;
+    std::deque<GLsync> fences;  // one per submitted draw, in order
+    int64_t fencesDone = 0;     // draws whose GPU work is known complete
     std::vector<int64_t> tsOut;  // quads: tag, latch, present, rendering complete
     std::deque<GLuint> pendingQueries;
     std::vector<GLuint> freeQueries;
@@ -380,6 +382,8 @@ void destroy(std::unique_ptr<Ctx>& p) {
         if (c.progMerge) glDeleteProgram(c.progMerge);
         if (c.progMain) glDeleteProgram(c.progMain);
         if (c.progDump) glDeleteProgram(c.progDump);
+        for (GLsync f : c.fences) glDeleteSync(f);
+        c.fences.clear();
         if (c.fbo) glDeleteFramebuffers(1, &c.fbo);
         if (c.fboTex) glDeleteTextures(1, &c.fboTex);
         if (c.vao) glDeleteVertexArrays(1, &c.vao);
@@ -682,6 +686,8 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
     if (presentNs > 0 && pPresentationTime) pPresentationTime(c.dpy, c.surf, (EGLnsecsANDROID)presentNs);
     uint64_t frameId = 0;
     bool haveId = c.timestamps && pNextFrameId(c.dpy, c.surf, &frameId);
+    c.fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+    glFlush();
     if (!eglSwapBuffers(c.dpy, c.surf)) {
         c.lastError = fmt("eglSwapBuffers:0x%x", eglGetError());
         return -5;
@@ -692,6 +698,21 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
     }
     if (c.timer) pollGpu(c);
     return 0;
+}
+
+// Number of draws (since presentInit) whose GPU work has completed: fences signal in order, so images last used by draw N
+// may be closed once this is >= N (a draw that failed before its fence counts as nothing submitted, see Kotlin).
+JNIEXPORT jlong JNICALL Java_dev_matebridge_client_video_FullChromaNative_presentCompletedDraws(JNIEnv*, jclass) {
+    if (!gPres) return 0;
+    Ctx& c = *gPres;
+    while (!c.fences.empty()) {
+        GLenum r = glClientWaitSync(c.fences.front(), 0, 0);
+        if (r != GL_ALREADY_SIGNALED && r != GL_CONDITION_SATISFIED) break;
+        glDeleteSync(c.fences.front());
+        c.fences.pop_front();
+        c.fencesDone++;
+    }
+    return (jlong)c.fencesDone;
 }
 
 // Swapped frames whose compositor latch time is still unknown (-1: timestamps unavailable, cannot tell).

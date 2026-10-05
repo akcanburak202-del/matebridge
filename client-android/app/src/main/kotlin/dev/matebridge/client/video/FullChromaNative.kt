@@ -36,6 +36,9 @@ object FullChromaNative {
      */
     @JvmStatic external fun presentDraw(mainHwb: HardwareBuffer, auxHwb: HardwareBuffer?, tag: Long, presentNs: Long): Int
 
+    /** Draws (since [presentInit]) whose GPU work completed (EGL/GL fence per draw); images used by draw N close at >= N. */
+    @JvmStatic external fun presentCompletedDraws(): Long
+
     /** Swapped frames whose compositor latch time is not known yet; -1 when frame timestamps are unavailable. */
     @JvmStatic external fun presentOutstanding(): Int
     @JvmStatic external fun presentLastError(): String

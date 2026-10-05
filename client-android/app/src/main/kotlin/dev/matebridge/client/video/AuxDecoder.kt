@@ -81,6 +81,7 @@ class AuxDecoder(
             env.log('E', TAG, "${env.elapsedRealtimeMs()} E decoder ev=aux_decode_error err=$failure")
             if (!policy.allow(env.elapsedRealtimeMs())) {
                 gaveUp = true
+                active = false // no more ingest, no more aux keyframe requests
                 env.log('E', TAG, "${env.elapsedRealtimeMs()} E decoder ev=aux_give_up")
                 onGaveUp("aux decoder failed repeatedly: $failure")
                 return
