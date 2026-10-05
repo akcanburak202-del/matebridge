@@ -177,12 +177,16 @@ data class StreamPrefs(
     val displayWidthPx: Int = 0,
     val displayHeightPx: Int = 0,
     val dynamicRange: Int = DYNAMIC_RANGE_SDR,
+    /** Decision 0033: `0` normal 4:2:0, `1` sharp colour edges (host luma-adjusted 4:2:0). Same group as [dynamicRange]. */
+    val chroma: Int = CHROMA_NORMAL,
 ) : Message {
     override val type get() = MsgType.STREAM_PREFS
 
     companion object {
         const val DYNAMIC_RANGE_SDR = 0
         const val DYNAMIC_RANGE_HDR10 = 1
+        const val CHROMA_NORMAL = 0
+        const val CHROMA_SHARP = 1
     }
 }
 

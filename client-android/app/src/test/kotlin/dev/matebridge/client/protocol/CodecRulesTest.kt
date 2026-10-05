@@ -133,8 +133,8 @@ class CodecRulesTest {
         val p = Codec.encodePayload(game)
         assertEquals(12, p.size)
         assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p)))
-        // 15 bytes: dynamic_range 0 (SDR), reserved and the excess ignored (decision 0032 group).
-        assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7, 7))))
+        // 15 bytes: dynamic_range 0 (SDR), chroma 7 (unknown, decoded as is; the host treats it as normal), excess ignored.
+        assertEquals(game.copy(chroma = 7), decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7, 7))))
         // Either non-zero field writes the whole group.
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 0)).size)
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 0, 1214)).size)
@@ -159,15 +159,28 @@ class CodecRulesTest {
         assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p)))
         // Longer payloads: the excess is ignored.
         assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(5, 5))))
-        // An unknown value decodes as is (the host treats it as SDR); the reserved byte is ignored.
+        // Unknown values decode as is (the host treats them as SDR / normal).
         val odd = p.copyOf().also { it[12] = 7; it[13] = 3 }
-        assertEquals(native.copy(dynamicRange = 7), decode(frame(MsgType.STREAM_PREFS, odd)))
+        assertEquals(native.copy(dynamicRange = 7, chroma = 3), decode(frame(MsgType.STREAM_PREFS, odd)))
         // 12 bytes = SDR; 13 bytes = short payload.
         assertEquals(native.copy(dynamicRange = 0), decode(frame(MsgType.STREAM_PREFS, p.copyOf(12))))
         val dec = FrameDecoder.control()
         dec.feed(frame(MsgType.STREAM_PREFS, p.copyOf(13)))
         expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
         assertEquals(StreamPrefs.DYNAMIC_RANGE_SDR, StreamPrefs(60, 1000).dynamicRange)
+    }
+
+    @Test
+    fun streamPrefsChromaAloneWritesTheGroup() {
+        // Decision 0033: chroma = 1 alone writes the display group as 0x0 and the group; both zero keeps 8 / 12 bytes.
+        val sharp = StreamPrefs(60, 1000, 0, chroma = StreamPrefs.CHROMA_SHARP)
+        val p = Codec.encodePayload(sharp)
+        assertEquals(14, p.size)
+        assertArrayEquals(byteArrayOf(0, 0, 0, 0, 0, 1), p.copyOfRange(8, 14))
+        assertEquals(sharp, decode(frame(MsgType.STREAM_PREFS, p)))
+        assertEquals(8, Codec.encodePayload(StreamPrefs(60, 1000, 0)).size)
+        assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 1214)).size)
+        assertEquals(StreamPrefs.CHROMA_NORMAL, StreamPrefs(60, 1000).chroma)
     }
 
     @Test

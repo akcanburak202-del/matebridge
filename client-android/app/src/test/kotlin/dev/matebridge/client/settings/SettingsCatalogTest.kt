@@ -37,6 +37,8 @@ class SettingsCatalogTest {
         override var hdrEnabled = false
         override fun selectHdr(on: Boolean) { calls += "hdr $on"; hdrEnabled = on }
         override var appliedConfig: StreamConfig? = null
+        override var sharpChroma = false
+        override fun selectSharpChroma(on: Boolean) { calls += "sharp_chroma $on"; sharpChroma = on }
         override var modeLayer: StreamMode? = null
         override var idleTimeout = IdleTimeout.DEFAULT
         override fun selectIdleTimeout(t: IdleTimeout) { calls += "idle ${t.id}"; idleTimeout = t }
@@ -90,7 +92,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "idle_dim", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "sharp_chroma", "idle_dim", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -178,6 +180,33 @@ class SettingsCatalogTest {
         val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
         assertTrue("hdr" in connect)
         assertFalse("hdr_applied" in connect)
+    }
+
+    @Test fun sharpChromaRowInEveryModeAndGreyUnderHdr10() { // T-241, decision 0033
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "sharp_chroma")
+        assertEquals("Keskin renk kenarları", c.titleText())
+        assertEquals(listOf("Kapalı", "Açık"), c.options.map { it.label })
+        assertEquals(listOf("off", "on"), c.options.map { it.id })
+        for (m in StreamMode.entries) { h.streamMode = m; assertFalse(m.id, c.hidden()); assertTrue(m.id, c.enabled()) }
+        assertEquals("off", c.selected()) // default off
+        c.select("on")
+        assertEquals(listOf("sharp_chroma true"), h.calls)
+        assertEquals("on", c.selected())
+        c.select("off")
+        assertEquals("sharp_chroma false", h.calls.last())
+        // SDR stream: unchanged. HDR10 applied (transfer 16): grey, marked, a tap does nothing.
+        h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 1, 13, 1, 1)
+        assertTrue(c.enabled())
+        assertEquals("Keskin renk kenarları", c.titleText())
+        h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0)
+        h.calls.clear()
+        assertFalse(c.enabled())
+        assertEquals("Keskin renk kenarları (HDR açıkken etkisiz)", c.titleText())
+        c.select("on")
+        assertTrue(h.calls.isEmpty())
+        // The connect panel has it too.
+        assertTrue("sharp_chroma" in SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key })
     }
 
     @Test fun modeTransportAndAudioOutChoices() {

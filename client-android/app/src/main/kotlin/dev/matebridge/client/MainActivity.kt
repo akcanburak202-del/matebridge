@@ -75,6 +75,8 @@ import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.HdrRequestLog
+import dev.matebridge.client.stream.SharpChromaPolicy
+import dev.matebridge.client.stream.SharpChromaStore
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
@@ -496,7 +498,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val hdrCaps = detectHdrCapability()
         MbLog.i("hdr_caps", hdrCaps.logFields())
         // T-215: `--ei game_display 0` = native display.
-        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay, hdrCaps)
+        // T-241 (decision 0033): "Keskin renk kenarları" has its own key in the same store.
+        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay, hdrCaps, SharpChromaStore(prefsStore))
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
@@ -936,6 +939,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             gameSettings.selectHdr(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
         override val appliedConfig get() = streamConfig
+        // T-241 (decision 0033): stored; one complete STREAM_PREFS when it changes (every mode).
+        override val sharpChroma get() = gameSettings.sharpChroma
+        override fun selectSharpChroma(on: Boolean) {
+            gameSettings.selectSharpChroma(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
+        }
         override val modeLayer get() = gameSettings.modeLayer
         override val idleTimeout get() = idle.timeout
         override fun selectIdleTimeout(t: IdleTimeout) { // T-234
@@ -1021,7 +1029,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.removeCallbacks(resetHintExpiry)
         val audioWas = settings.audioEnabled()
         val scopeWas = settings.filesScope()
-        val removed = settings.resetToDefaults()
+        // T-241: "Keskin renk kenarları" lives outside Settings; reset before the STREAM_PREFS below.
+        val removed = settings.resetToDefaults() + (if (gameSettings.resetSharpChroma()) 1 else 0)
         audio?.forgetLearned() // takes effect at the next audio stream start
         MbLog.i("settings_reset", "keys=$removed")
         // Display: mode (a game layer is dropped and its values re-applied) and STREAM_PREFS with the default bit rate.
@@ -1343,7 +1352,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             displayApplied = gameSettings.display(streamMode)?.appliedIn(config) ?: false,
             hdr = config.isHdr10, // T-238: applied, from STREAM_CONFIG
         )
-        MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs))
+        // T-241 (decision 0033): the requested `chroma` (the host does not report the applied one).
+        val chroma = SharpChromaPolicy.profileField(gameSettings.sharpChroma)
+        MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs) + " " + chroma)
     }
 
     /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
