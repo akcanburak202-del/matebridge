@@ -32,6 +32,22 @@ Kullanıcı onayladı (2026-10-05): ekran durunca yazı/ikonlar netleşsin. Hare
 
 ## Plan
 
+**Ölçüm (CLI VT bench, 2800x1840 HEVC Main, HW, `.fast` profili, RealTime kapalı, kaydırılan yazı + gürültülü fotoğraf alanı, kodlayıcı çıktısı VT ile çözülüp luma PSNR'ı alındı):**
+
+- Oturum içi `Quality`, `MaxAllowedFrameQP`, `AverageBitRate`/`DataRateLimits` (x8, x20) değişikliği tek karede HİÇ etki etmiyor: aynı pikselleri yeniden kodlayan P karesi birebir aynı bayt sayısı ve PSNR veriyor (37 473 B, 38.34 dB). `Quality` oturum açılırken verilse bile HW HEVC'de yok sayılıyor (bayt bayt aynı). Yani "geçici kalite yükselt + tek kare" yolu çalışmıyor.
+- Zorunlu IDR: 20 Mbps'te 1.16 MB (36.97 dB, hareketli zincirden DAHA kötü), 60 Mbps'te ~1.9 MB; bit hızı değişikliği IDR'yi de etkilemiyor. Tablette ~+15 ms çözme. Kötü yol.
+- Etkili olan: SON YAKALANAN tamponu art arda normal P kareleri olarak yeniden kodlamak. Kodlayıcı her karede referansa kalan kuantalama hatasını biraz daha kodluyor ve yakınsıyor: 20 Mbps'te 38.09 -> 41.13 dB (+3.0), 60 Mbps'te 45.6 -> 47.64 dB (+2.0); 12-14 karede yakınsıyor (kare boyutu < 1.5 KB), toplam ~360-430 KB, her kare ~6 ms kodlama. Sonraki gerçek kare normal P (kaliteli referanstan), bit hızı ayarı hiç değişmediği için "geri alma" gerekmiyor, hız denetimi/profil (LLRC/fast) dokunulmuyor.
+
+**Tasarım (tek kare yerine kısa "tren": N özdeş P karesi; tel biçimi değişmez, her biri sıradan kare):**
+
+1. Durağanlık: `HEVCEncoder.encode` (her gerçek SCK karesi) politikaya `noteCapture` der. Son gerçek kareden `stillMs` (varsayılan 200 ms) sonra, yeni gerçek kare yoksa ve çıkış kuyruğu boşsa tren başlar. 25 ms'lik bir zamanlayıcı yalnız ilk kareyi başlatır; sonraki kareler önceki karenin kodlama çıktısıyla tetiklenir (pacer kapısı karelerin hızını stream fps'te tutar, patlama yok).
+2. Tutulan tampon: kodlayıcı zaten son tamponu `EncoderSubmitOrder.last` içinde tutuyor (T-086 resubmitLast, idle keyframe); yeni bir tutma yok, SCK havuz ömrü etkilenmez (queueDepth 5 > 2 + 1 tutulan).
+3. Bitiş: (a) yakınsama (kare <= 1.5 KB), (b) en çok 16 kare, (c) tren bayt tavanı (`MATEBRIDGE_REFINE_KB`; USB 1024 KB, Wi-Fi 256 KB), (d) yeni gerçek kare = iptal (öncelik harekette; bekleyen refine karesini pacer zaten ezer), (e) çıkış kuyruğu dolu = dur (kuyruk taşması "frame drop -> IDR" zincirini tetikler, bu yüzden her kareden önce kuyruğun boş olması şart), (f) 250 ms çıktı gelmezse zaman aşımı. Hiçbir kare sonradan atılmaz: hepsi geçerli P karesi, referans zinciri bozulmaz (tek büyük kareyi atmak zinciri bozardı).
+4. Tekrar: tren bittikten sonra yeni bir gerçek kare gelmeden yeni tren yok; iki tren başlangıcı arası en az 500 ms (ekranda saniyelik saat gibi küçük değişimler sürekli tren üretmesin; yakınsamış ekranda tren 1 karede biter).
+5. Etkileşimler: boşta karartma tablette (0031) ve akışa bakmıyor, karartılmış ekranda tren zararsız (tek sefer). DISPLAY_RATE: kapı `min(fps, hz)`'e uyar. HDR10/keskin renk: aynı yeniden kodlama yolu; keskin renkte her tren karesi Metal geçişinden geçer (~2.5 ms GPU x en çok 16). Tren, bekleyen keyframe isteğini normal kare gibi tüketir (yeni tüketici zaten kendi keyframe'ini resubmitLast ile ister).
+6. Varsayılan AÇIK (bedel sınırlı: toplam bayt tavanı, hareket yokken, yalnız boş kuyrukta; tel/istemci değişmez; `MATEBRIDGE_REFINE=0` ile kapanır). Cihaz doğrulaması orkestratörde.
+7. Kod: Core'da saf `StillRefineConfig` (env + taşıma) ve `StillRefinePolicy` durum makinesi (birim testli); host'ta `HEVCEncoder` yapıştırması (zamanlayıcı, `resubmitLast(refine:)`, çıktı bayt bildirimi), `VideoFrameQueue.isReadyForRefine`, `VideoPipeline`/`StreamCoordinator` bağlantısı (taşıma bilgisi), log `video ev=refine frames= bytes= first_bytes= last_bytes= ms= reason=` (tren başına bir satır; `quality=` alanı yok çünkü kalite düğmesi etkisiz, bkz. ölçüm).
+
 ## Handoff
 
 ## Open questions
