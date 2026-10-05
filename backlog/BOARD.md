@@ -26,6 +26,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-242](tasks/T-242-client-auto-bitrate-in-mode-layer.md) | Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula | 6 | android-client-dev | [] |
 | [T-245](tasks/T-245-client-game-native-2800-option.md) | Client — experimental "2800×1840 (deneysel)" game resolution, offered only in Oyun 60 | 6 | android-client-dev | [] |
 | [T-247](tasks/T-247-client-first-nav-key-after-touch.md) | Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode | 6 | android-client-dev | [] |
+| [T-250](tasks/T-250-client-2800-at-oyun-120.md) | Client — allow 2800×1840 game resolution in Oyun 120 too (drop the 60-only rule) | 6 | android-client-dev | [T-245, T-249] |
 
 ## todo
 
