@@ -44,7 +44,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-244](tasks/T-244-host-limited-range-knob.md) | Host experiment — encode limited (video) range (SCK 420v, VUI full=0, STREAM_CONFIG full_range=0) to fix the black lift when the tablet scales the picture | 6 | mac-host-dev | [T-230] |
 
 ## done
 
@@ -262,3 +261,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-230](tasks/T-230-black-level-bitstream-probe.md) | Black level lifted on the tablet (Mac 0 → tablet 16) — Mac-side bitstream probe (what Y values and VUI the encoder really emits) | 6 | mac-host-dev | [] |
 | [T-233](tasks/T-233-yuv444-research.md) | Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost | 6 | orchestrator | [] |
 | [T-243](tasks/T-243-client-pin-60hz-experiment.md) | Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first | 6 | android-client-dev | [] |
+| [T-244](tasks/T-244-host-limited-range-knob.md) | Host experiment — encode limited (video) range (SCK 420v, VUI full=0, STREAM_CONFIG full_range=0) to fix the black lift when the tablet scales the picture | 6 | mac-host-dev | [T-230] |

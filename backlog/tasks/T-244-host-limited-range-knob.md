@@ -1,7 +1,7 @@
 ---
 id: T-244
 title: Host experiment — encode limited (video) range (SCK 420v, VUI full=0, STREAM_CONFIG full_range=0) to fix the black lift when the tablet scales the picture
-status: todo
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-230]
@@ -42,3 +42,5 @@ _(Ajan kodlamadan önce doldurur.)_
 ## Handoff
 
 _(Ajan bitirince doldurur.)_
+
+**Orkestratör (2026-10-05 ~14:00):** iptal, uygulanmadı. Ölçekleme hipotezi yanlış çıktı: kalkma ölçeksiz Günlük'te de var ve APK yeniden kurulunca düzeliyor (NOTES 2026-10-05 ~14:00). Ajan durduruldu.
