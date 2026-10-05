@@ -65,6 +65,9 @@ class FixtureTest {
             "stream_config_hdr10" to StreamConfig(
                 3, StreamConfig.CODEC_HEVC, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0,
             ),
+            "stream_config_packed444" to StreamConfig(
+                4, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 30000, 1, 13, 1, 1, StreamConfig.CHROMA_LAYOUT_PACKED_444,
+            ),
             "bye" to Bye(Bye.NORMAL),
             "bye_host_sleep" to Bye(Bye.HOST_SLEEP),
             "stream_prefs" to StreamPrefs(120, 750, 0),
@@ -72,6 +75,7 @@ class FixtureTest {
             "stream_prefs_game_display" to StreamPrefs(120, 660, 60000, 1848, 1214),
             "stream_prefs_hdr" to StreamPrefs(120, 660, 0, 1848, 1214, StreamPrefs.DYNAMIC_RANGE_HDR10),
             "stream_prefs_sharp_chroma" to StreamPrefs(60, 1000, 0, 0, 0, StreamPrefs.DYNAMIC_RANGE_SDR, StreamPrefs.CHROMA_SHARP),
+            "stream_prefs_full_chroma" to StreamPrefs(60, 1000, 0, 0, 0, StreamPrefs.DYNAMIC_RANGE_SDR, StreamPrefs.CHROMA_FULL),
             "display_rate" to DisplayRate(60),
             "settings_open" to SettingsOpen,
             "files_info_ready" to FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef"),
@@ -115,6 +119,7 @@ class FixtureTest {
             "pong" to Pong(7, 1127500700000L, 98765432100L),
             "stats" to Stats(1000, 60, 60, 59, 1, 4200, 23000, 6250000),
             "keyframe_request" to KeyframeRequest(KeyframeRequest.DECODE_ERROR),
+            "keyframe_request_view" to KeyframeRequest(KeyframeRequest.DECODE_ERROR, KeyframeRequest.VIEW_AUX),
             "audio_prefs" to AudioPrefs(true),
             "audio_config" to AudioConfig(3, AudioConfig.STATE_STARTED, AudioConfig.FORMAT_PCM_S16LE, 48000, 2, 480),
             "audio_config_stopped" to AudioConfig.stopped(3),
@@ -125,6 +130,12 @@ class FixtureTest {
             ),
             "video_frame_config" to VideoFrame(
                 0, 98764990000L, VideoFrame.CODEC_CONFIG, 0, 1, 6, Bytes(hex("000000014001")),
+            ),
+            "video_frame_aux" to VideoFrame(
+                1, 98765000000L, VideoFrame.KEYFRAME, 0, 1, 8, Bytes(hex("0000000126010af0")), VideoFrame.VIEW_AUX,
+            ),
+            "video_frame_aux_config" to VideoFrame(
+                0, 98764990000L, VideoFrame.CODEC_CONFIG, 0, 1, 6, Bytes(hex("000000014001")), VideoFrame.VIEW_AUX,
             ),
         )
 

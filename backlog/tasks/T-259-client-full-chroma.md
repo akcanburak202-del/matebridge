@@ -47,6 +47,20 @@ Karar 0034'ün istemci tarafı (panel hariç: T-260). Protokol `task/T-257-full-
 
 ## Plan
 
+Dilimler (her biri JVM testli saf mantık + ince Android yapıştırıcı):
+
+1. **Codec** (yapıldı): `StreamConfig.chromaLayout`, `VideoFrame.view`, `KeyframeRequest.view` (isteğe bağlı), `StreamPrefs.CHROMA_FULL`, `Capabilities.FULL_CHROMA`; 5 yeni fixture `FixtureTest`'te.
+2. **Tercih/yetenek** (`stream/ColourChoice.kt`, `video/FullChromaCapability.kt`): `ColourChoice` (Normal/Keskin/Tam renk) okuma (`colour` anahtarı, yoksa eski `sharp_chroma`); `FullChromaPolicy.chromaRequest` (Günlük + 60 fps + doğal ekran + SDR + yetenek → 2, aksi halde Tam renk seçiliyse 1); `FullChromaCapability` kalıcı sonuç (APK sürüm anahtarlı; panel T-260 okur); `HELLO` bit11 yalnız geçtiyse (`SessionController` hello'ya çağrı anında OR'lanan sağlayıcı).
+3. **Düzen matematiği** (`video/Avc444v2.kt`): ters eşleme (`sourceOf`), `YuvConversion` katsayıları; testte Swift `AVC444v2.pack`'in Kotlin kopyasıyla gidiş-dönüş bit-tamlığı. GLSL bu fonksiyonun satır satır çevirisidir.
+4. **Yardımcı hat saf mantığı**: `AuxFrameQueue` (sınırlı, en yeni kazanır, CODEC_CONFIG saklanır, keyframe kapısı, `KEYFRAME_REQUEST(view=1)` hold-off), `AuxPairing` (son N yardımcı kare, `capture_time_us` ile eşleme, yalnız-ana geri düşüşü, `aux_paired_pct`/`aux_late`), `PackedStats` (gl_ms p50/p95).
+5. **Native** (`cpp/mbfullchroma.cpp`, T-254/T-256 kodundan): EGL pencere yüzeyi (swap interval 0), AHardwareBuffer → EGLImage → `GL_EXT_YUV_target` dokuları, birleştirme/yalnız-ana programları, `eglPresentationTimeANDROID`, EGL zaman damgaları (present zamanı), GPU zamanlayıcı; pbuffer üstünde ham örnekleme karşılaştırması (yetenek testi).
+6. **Sunucu** (`video/PackedPresenter.kt`, `AuxDecoder.kt`, `FullChromaPipeline.kt`): GL iş parçacığı (ana görüntü posta kutusu newest-wins, yardımcı halka, görüntüler bir çizim geç kapanır), ikinci `MediaCodec` + ImageReader, ana akış `VideoRenderer`'a küçük kanca: çıkış yüzeyi ana ImageReader'ın yüzeyi, `release` -> `releaseOutputBuffer(idx, true)` + `presenter.expect(pts, captureUs, renderNs)`; GL yolu ek öncü süre (`extraLeadNs`); gösterim zamanı EGL present zamanından `stats.onRenderCallback`'e. `chroma_layout = 0` yolu kancalar `null` iken değişmez.
+7. **Bağlama** (`MainActivity`, `SessionController`): yapılandırma `isPacked444` ise boru hattı yeniden kurulur, aksi halde bugünkü yol; `view = 1` kareler boru hattına, tek akışta atılır; yardımcı hatası ayrı sayaç, yardımcı yeniden kurulur; GL başlatma hatasında yalnız-ana doğrudan yola düşülür (log).
+8. **Yetenek testi** (`FullChromaSelfTest`): ilk kullanımda ve APK güncellenince arka planda: GL_EXT_YUV_target + ham örnekleme CPU ile bit-tam (gömülü küçük HEVC IDR, T-254 `t2` mantığı) + ikinci MediaCodec açılabiliyor mu; sonuç saklanır, başarısızsa `chroma = 2` ve bit11 hiç gönderilmez.
+9. **Ölçüm**: `render ev=stats`'a `chroma_layout`, `aux_paired_pct`, `aux_late`, `gl_ms_p50/p95`; docs/LOGGING.md.
+
+Kısıt: tablet/adb yok; GL ve MediaCodec yapıştırıcısı yalnız derleme + JVM testiyle doğrulanır, cihaz adımları Handoff'ta.
+
 ## Handoff
 
 ## Open questions
