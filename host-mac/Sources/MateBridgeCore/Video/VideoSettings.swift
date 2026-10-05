@@ -32,6 +32,11 @@ public struct VideoSettings: Equatable, Sendable {
     /// `HDRPolicy` allowed it (`applying(_:)`). A runtime failure of the HDR path falls back to `.sdr` with a new
     /// `config_id` (`HDRFallback`), so this is also what `STREAM_CONFIG` reports.
     public var dynamicRange: DynamicRange = .sdr
+    /// The tablet's chroma choice in effect (decision 0033, `STREAM_PREFS.chroma`): `.sharp` asks the encoder for
+    /// T-235's `sharp_nearest` path. Always `.normal` while `dynamicRange` is HDR10 (the choice has no effect then, so
+    /// a change of it alone is no change of the settings). `MATEBRIDGE_CHROMA` wins over it (`ChromaPolicy`). Not part
+    /// of `displayMode`: a change keeps the virtual display, only capture and encoder restart.
+    public var chromaPreference: ChromaPreference = .normal
     /// T-232 developer knob `MATEBRIDGE_VD_TRANSFER` (read by `applyingExperimentKnobs`): the transfer function of an
     /// SDR stream's virtual display. An HDR10 stream always asks for 1 (`displayTransfer`).
     public var vdTransferKnob = VirtualDisplayTransfer.parse(nil)

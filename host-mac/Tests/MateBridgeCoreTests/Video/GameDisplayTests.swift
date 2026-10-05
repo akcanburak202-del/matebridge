@@ -126,8 +126,9 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertEqual(StreamPrefsStorageCodec.decode([120, 750]), StreamPrefs(fps: 120, scalePermille: 750))
         XCTAssertEqual(StreamPrefsStorageCodec.decode([120, 750, 30_000]),
                        StreamPrefs(fps: 120, scalePermille: 750, bitrateKbps: 30_000))
-        // A 6th value is `dynamic_range` since T-237 (HDRTests); 4 or 7 values stay invalid.
-        for bad in [[], [60], [60, 1000, 0, 1848], [60, 1000, 0, 1848, 1214, 1, 0], [60, 1000, 0, -1, 1214],
+        // A 6th value is `dynamic_range` since T-237 (HDRTests), a 7th `chroma` since T-240 (ChromaPrefsTests); 4 or 8
+        // values stay invalid.
+        for bad in [[], [60], [60, 1000, 0, 1848], [60, 1000, 0, 1848, 1214, 1, 0, 0], [60, 1000, 0, -1, 1214],
                     [60, 1000, 0, 1848, 70_000]] {
             XCTAssertNil(StreamPrefsStorageCodec.decode(bad), "\(bad)")
         }

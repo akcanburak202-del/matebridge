@@ -29,6 +29,9 @@ import dev.matebridge.client.video.VideoRenderer
  * the stored "HDR" on and a capable tablet ([hdr], computed once at start); every other case asks for SDR, so a mode
  * change re-sends the right `dynamic_range` through the same one STREAM_PREFS.
  *
+ * "Keskin renk kenarları" (decision 0033, T-241) is persistent and outside the layer as well, the same in every mode
+ * ([chromaStore]; null = always off). [selectSharpChroma] stores it and returns the STREAM_PREFS to send.
+ *
  * The caller applies the effective values (STREAM_PREFS, audio, pen overlay, finger switch). Main thread only. Pure Kotlin.
  */
 class GameModeSettings(
@@ -36,6 +39,8 @@ class GameModeSettings(
     private val gameDisplay: Boolean = true,
     /** Decision 0032: whether this tablet can show HDR10 ([HdrCapability.NONE] = never ask for it). */
     val hdr: HdrCapability = HdrCapability.NONE,
+    /** Decision 0033: the stored "Keskin renk kenarları" (null = always off). */
+    private val chromaStore: SharpChromaStore? = null,
 ) {
     /** The layered values, either stored or from the layer. */
     data class Values(
@@ -164,7 +169,7 @@ class GameModeSettings(
     fun prefs(mode: StreamMode): StreamPrefs {
         val p = mode.toPrefs(fps(mode), bitrateKbps)
         val d = display(mode)
-        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode))
+        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode), chroma)
     }
 
     /**
@@ -177,6 +182,26 @@ class GameModeSettings(
         val before = dynamicRange(mode)
         settings.setHdrGame(on)
         return if (dynamicRange(mode) != before) prefs(mode) else null
+    }
+
+    /** The stored "Keskin renk kenarları" (decision 0033), the same in every mode. */
+    val sharpChroma: Boolean get() = chromaStore?.get() == true
+
+    /** STREAM_PREFS `chroma` ([SharpChromaPolicy.chroma]); every mode asks for the stored value. */
+    val chroma: Int get() = SharpChromaPolicy.chroma(sharpChroma)
+
+    /** "Varsayılanlara dön": back to off; true when a value was stored. */
+    fun resetSharpChroma(): Boolean = chromaStore?.reset() == true
+
+    /**
+     * Stores the "Keskin renk kenarları" choice; returns the complete STREAM_PREFS for [mode] when it changed, else null
+     * (no store, or the same value).
+     */
+    fun selectSharpChroma(on: Boolean, mode: StreamMode): StreamPrefs? {
+        val store = chromaStore ?: return null
+        if (store.get() == on) return null
+        store.set(on)
+        return prefs(mode)
     }
 
     /**

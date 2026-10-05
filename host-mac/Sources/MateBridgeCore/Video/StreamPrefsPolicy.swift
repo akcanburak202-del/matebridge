@@ -68,11 +68,15 @@ extension VideoSettings {
     /// `dynamic_range` (decision 0032): HDR10 when the tablet asks for it and `HDRPolicy` allows it (`allowHDR` false
     /// after an HDR failure in this process, or a non-HEVC codec, gives SDR). A change of it changes the display's
     /// transfer function, so the display is recreated (`DisplayReuse`).
+    /// `chroma` (decision 0033): `chromaPreference` follows it on SDR and is `.normal` under HDR10; a change of it
+    /// alone keeps the display (capture and encoder restart under a new `config_id`).
     public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60,
                          allowGameDisplay: Bool = true, allowHDR: Bool = true) -> VideoSettings {
         let p = prefs.normalized
         var s = onNativeDisplay
         s.dynamicRange = HDRPolicy.decide(requested: p.requestedDynamicRange, codec: s.codec, allowed: allowHDR).applied
+        // Decision 0033: ignored under HDR10 (re-applied without HDR after an `hdr_fallback`, so it then takes effect).
+        s.chromaPreference = s.dynamicRange == .hdr10 ? .normal : p.requestedChroma
         s.fps = Int(p.fps)
         s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
         if allowGameDisplay, let game = GameDisplayPolicy.size(of: p, nativeW: s.widthPx, nativeH: s.heightPx) {

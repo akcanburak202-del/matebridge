@@ -12,6 +12,7 @@ import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
+import dev.matebridge.client.stream.SharpChromaPolicy
 import dev.matebridge.client.stream.StreamMode
 import java.util.Locale
 
@@ -55,6 +56,10 @@ interface SettingsHost {
     fun selectHdr(on: Boolean)
     /** STREAM_CONFIG of the running stream (the applied dynamic range is read from it), null without one. */
     val appliedConfig: StreamConfig?
+    /** Decision 0033 (T-241): the stored "Keskin renk kenarları" (every mode, default off). */
+    val sharpChroma: Boolean
+    /** Persists the choice and sends a STREAM_PREFS when it changed. */
+    fun selectSharpChroma(on: Boolean)
     /**
      * The mode whose temporary layer is in effect (Oyun, decision 0014; Çizim, decision 0030; T-109, T-223), null in
      * Günlük: the settings it overrides ([GameModeSettings.overridesOf]) show and change the session layer, not the
@@ -305,6 +310,19 @@ object SettingsCatalog {
                 if (inStream) {
                     add(SettingItem.Info("hdr_applied", { HdrPolicy.rowHidden(h.streamMode) }) { HdrPolicy.appliedLabel(h.appliedConfig) })
                 }
+                // Decision 0033 (T-241): every mode; grey "(HDR açıkken etkisiz)" while HDR10 is applied.
+                add(
+                    SettingItem.Choice(
+                        "sharp_chroma", SharpChromaPolicy.TITLE,
+                        listOf(
+                            SettingItem.Option(SharpChromaPolicy.OPTION_OFF, "Kapalı"),
+                            SettingItem.Option(SharpChromaPolicy.OPTION_ON, "Açık"),
+                        ),
+                        { SharpChromaPolicy.selected(h.sharpChroma) },
+                        { SharpChromaPolicy.marker(h.appliedConfig) },
+                        enabled = { SharpChromaPolicy.rowEnabled(h.appliedConfig) },
+                    ) { id -> if (SharpChromaPolicy.rowEnabled(h.appliedConfig)) h.selectSharpChroma(id == SharpChromaPolicy.OPTION_ON) },
+                )
                 add(
                     SettingItem.Choice(
                         "idle_dim", IDLE_DIM_TITLE,

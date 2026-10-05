@@ -412,7 +412,16 @@ FIXTURES = {
         field("u16", "display_width_px", 1848),
         field("u16", "display_height_px", 1214),
         field("u8", "dynamic_range", 1, "HDR10"),
-        field("u8", "reserved", 0),
+        field("u8", "chroma", 0, "normal (ignored under HDR10)"),
+    ])),
+    "stream_prefs_sharp_chroma": ("STREAM_PREFS: Günlük 60, no game display, SDR, user turned on sharp colour edges (decision 0033)", frame("STREAM_PREFS", [
+        field("u16", "fps", 60),
+        field("u16", "scale_permille", 1000),
+        field("u32", "bitrate_kbps", 0, "host default"),
+        field("u16", "display_width_px", 0),
+        field("u16", "display_height_px", 0),
+        field("u8", "dynamic_range", 0, "SDR"),
+        field("u8", "chroma", 1, "sharp colour edges"),
     ])),
     "settings_open": ("SETTINGS_OPEN: Mac menu asks the tablet to show its settings panel", frame("SETTINGS_OPEN", [
         field("u32", "reserved", 0),
@@ -510,7 +519,7 @@ FIXTURES = {
         field("u32", "bitrate_kbps", 0),
         field("u16", "display_width_px", 0),
         field("u16", "display_height_px", 0),
-        field("u8", "dynamic_range", 1, "reserved byte missing"),
+        field("u8", "dynamic_range", 1, "chroma byte missing"),
     ])),
     "invalid_key_short": ("MUST BE REJECTED (PROTOCOL_ERROR): KEY payload shorter than 16 bytes", frame("KEY", [
         field("u64", "time_us", 0),

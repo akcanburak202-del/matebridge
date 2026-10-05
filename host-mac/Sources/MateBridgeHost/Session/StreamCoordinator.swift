@@ -427,7 +427,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille) requested_bitrate_kbps=\(prefs.bitrateKbps) "
             + "display=\(derived.displayModeText) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
             + "game_display=\(game.logName) dynamic_range=\(derived.dynamicRange.logName) "
-            + "requested_dynamic_range=\(prefs.dynamicRange)")
+            + "requested_dynamic_range=\(prefs.dynamicRange) chroma=\(derived.chromaPreference.logName) "
+            + "requested_chroma=\(prefs.chroma)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -479,7 +480,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
             + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource) "
             + "display=\(old.displayModeText)->\(wanted.displayModeText) "
-            + "dynamic_range=\(old.dynamicRange.logName)->\(wanted.dynamicRange.logName)")
+            + "dynamic_range=\(old.dynamicRange.logName)->\(wanted.dynamicRange.logName) "
+            + "chroma=\(old.chromaPreference.logName)->\(wanted.chromaPreference.logName)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }
@@ -578,7 +580,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             videoLogger.log(.info, "latency", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
                             fields: lat.logFields)
         }
-        // T-235: every 10 s while `MATEBRIDGE_CHROMA` is set.
+        // T-235: every 10 s while `MATEBRIDGE_CHROMA` is set or the sharp path runs (T-240).
         if let chroma = pipeline.takeChromaStats() {
             videoLogger.log(.info, "chroma_stats", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: chroma)
