@@ -48,10 +48,12 @@ class PaceProbe {
     var k = 0L
     var acquireNs = 0L
     var badRun = 0
+    /** T-251: the skip-feedback level at this frame. */
+    var level = 0
 
     fun clear() {
         path = PATH_NONE; nowVsyncLastNs = 0; periodNs = 0; epoch = 0; deadlineNs = 0; devNs = 0; dNs = 0
-        jitterNs = 0; earliestNs = 0; lockSlotNs = 0; k = 0; acquireNs = 0; badRun = 0
+        jitterNs = 0; earliestNs = 0; lockSlotNs = 0; k = 0; acquireNs = 0; badRun = 0; level = 0
     }
 }
 
@@ -78,7 +80,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         const val HEADER_LINE = "seq,capture_us,ready_ns,now_vsync_last_ns,period_ns,epoch,deadline_ns,dev_ns," +
             "d_ns,jitter_ns,earliest_ns,slot_ns,lock_slot_ns,k,acquire_ns,bad_run,path,late_drop,collided," +
             "released_slot_ns,release_ns,render_ns,action,own_slot_ns,recv_ns,decrypted_ns,queued_ns,input_ns,bytes,rx_action," +
-            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns,cb_ns,cb_period_ns"
+            "open_start_ns,open_init_ns,open_final_ns,taken_ns,inbuf_ns,copied_ns,inbuf_pre,latch_slot_ns,latch_period_ns,cb_ns,cb_period_ns,level"
         const val COLS = 24
         /** T-225: rows [onCallback] searches back for the frame (a callback comes a few frames after its release). */
         const val CB_LOOKBACK = 64L
@@ -87,9 +89,9 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         /**
          * CSV columns: the [COLS] presentation columns, the receive-path columns, then T-220's `latch_slot_ns` and
          * `latch_period_ns` (the vsync the release-time latch model attributed the release to and its panel period,
-         * [HoldMeter.releasedSlot]; 0 = not released), then T-225's `cb_ns` and `cb_period_ns`.
+         * [HoldMeter.releasedSlot]; 0 = not released), then T-225's `cb_ns` and `cb_period_ns`, then T-251's `level` (the pacer's skip-feedback level).
          */
-        const val CSV_COLS = COLS + RX_CSV + 4
+        const val CSV_COLS = COLS + RX_CSV + 5
         /**
          * Columns of the receive ring: seq, capture_us, bytes, recv, decrypted, queued, input, action (T-073), then the
          * record open stamps and the decoder input steps (T-077).
@@ -136,6 +138,8 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
     private val cb = LongArray(capacity)
     /** T-225 review: the panel period the callback was judged with (the one current at its delivery), per row. */
     private val cbPeriod = LongArray(capacity)
+    /** T-251: the pacer's feedback level per row. */
+    private val lvl = IntArray(capacity)
     // Receive ring (T-073), slot = frameSeq % capacity, valid when R_SEQ matches. Written by the video connection
     // thread (onRecv), the queue (onRx*) and the decoder input thread (onInput); joined to the rows above by seq.
     private val rx = LongArray(capacity * RX_COLS).also { for (i in 0 until capacity) it[i * RX_COLS + R_SEQ] = -1 }
@@ -168,6 +172,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
         d[b + C_ACTION] = action.toLong(); d[b + C_OWN] = ownSlotNs
         latch[(id % capacity).toInt() * 2] = 0; latch[(id % capacity).toInt() * 2 + 1] = 0
         cb[(id % capacity).toInt()] = 0; cbPeriod[(id % capacity).toInt()] = 0
+        lvl[(id % capacity).toInt()] = probe?.level ?: 0
         count = id + 1
         return id
     }
@@ -302,6 +307,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
             out.append(',').append(latch[li].toString()).append(',').append(latch[li + 1].toString())
             out.append(',').append(cb[(id % capacity).toInt()].toString()) // T-225
             out.append(',').append(cbPeriod[(id % capacity).toInt()].toString())
+            out.append(',').append(lvl[(id % capacity).toInt()].toString()) // T-251
             out.append('\n')
         }
         // Frames that were received but never decoded/presented (dropped, gated, still queued): one row each, the
@@ -315,7 +321,7 @@ class PaceTrace(val capacity: Int = DEFAULT_CAPACITY) {
                 out.append(if (c == C_PATH) "none" else if (c == C_ACTION) RX_ACTIONS.getOrElse(rx[rb + R_ACTION].toInt()) { "?" } else "0").append(',')
             }
             for (c in 0 until RX_CSV) { if (c > 0) out.append(','); appendRx(out, rb, c) }
-            out.append(",0,0,0,0\n") // T-220 latch_slot_ns, latch_period_ns, T-225 cb_ns, cb_period_ns: never released
+            out.append(",0,0,0,0,0\n") // T-220 latch_slot_ns, latch_period_ns, T-225 cb_ns, cb_period_ns: never released
 
         }
     }

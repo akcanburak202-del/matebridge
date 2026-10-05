@@ -55,7 +55,12 @@ package dev.matebridge.client.video
  *
  * Decoder/output thread only for [schedule]/[reset]; [onSkipWindow] may come from another thread.
  */
-class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: Long = 0) {
+class AdaptivePacer(
+    private val vsync: VsyncClock,
+    private val frameIntervalNs: Long = 0,
+    /** T-251: developer knobs; the default changes nothing. */
+    private val tuning: PacerTuning = PacerTuning.STANDARD,
+) {
     companion object {
         const val WINDOW_NS = 2_000_000_000L
         const val DEV_SAMPLES = 256
@@ -156,6 +161,15 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
     @Volatile var lastDNs = 0L
         private set
 
+    /** T-251 diagnostics: p99 jitter and the cap that applied to D for the latest frame. */
+    @Volatile var lastJitterNs = 0L
+        private set
+    @Volatile var lastCapNs = 0L
+        private set
+
+    /** T-251: the components of D for the log (`render ev=present`). */
+    fun diag() = PacerDiag(level, lastJitterNs / 1000, extraNs / 1000, lastCapNs / 1000)
+
     /** Null when no vsync sample or capture time is known: the caller renders at once. */
     fun schedule(captureUs: Long?, nowNs: Long): FramePacer.Decision? {
         if (captureUs == null || !vsync.hasSample) return null
@@ -203,8 +217,9 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         val lockable = n > 0
         val jitter = percentile()
         val dTarget = if (surplus) (jitter + MARGIN_NS).coerceAtMost(period + MARGIN_NS)
-        else if (n == 1L) (jitter + MARGIN_NS + extraNs).coerceAtMost(period)
-        else (jitter + MARGIN_NS + extraNs).coerceAtMost(MAX_D_HALF_PERIODS * period / 2)
+        else (jitter + MARGIN_NS + extraNs).coerceAtMost(tuning.capHalfFor(n) * period / 2)
+        lastJitterNs = jitter
+        lastCapNs = if (surplus) period + MARGIN_NS else tuning.capHalfFor(n) * period / 2
         val d = if (dNs == Long.MIN_VALUE) dTarget else slew(dNs, dTarget, D_SLEW_UP_NS, D_SLEW_DOWN_NS)
         dNs = d
         // T-115: a lone frame (no predecessor in the stream) is no stream jitter: its delay stays out of the history.
@@ -219,7 +234,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         val earliest = grid.slotAtOrAfter(nowNs + grid.deadlineNs, 0.0)
         probe?.let {
             it.nowVsyncLastNs = grid.lastNs; it.periodNs = period; it.epoch = grid.epoch; it.deadlineNs = grid.deadlineNs
-            it.devNs = dev; it.dNs = d; it.jitterNs = jitter; it.earliestNs = earliest
+            it.devNs = dev; it.dNs = d; it.jitterNs = jitter; it.earliestNs = earliest; it.level = level
             it.path = PaceProbe.PATH_UNLOCKED
         }
         if (lockable) {
@@ -230,7 +245,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         probe?.let { it.acquireNs = targetSlot }
         val late = targetSlot < earliest // the frame missed its own ideal slot: the content gap is our doing
         // Latency bound on the final slot: at most one vsync after the earliest possible one.
-        val limit = earliest + period
+        val limit = earliest + period + tuning.boundExtraHalf(n) * period / 2
         var slot = minOf(maxOf(targetSlot, earliest), limit)
         var collided = false
         var lateDrop = false
@@ -272,7 +287,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
         }
         // Latency bound (T-057) for the final slot: one period after the earliest possible one, plus the half-jitter
         // the centered phase adds on purpose. T-208: n periods at an integer cadence n (D may then exceed a period).
-        val latencyBound = n * period + minOf(jitter, period) / 2
+        val latencyBound = n * period + minOf(jitter, period) / 2 + tuning.boundExtraHalf(n) * period / 2
         var slot: Long
         val sparse = prevCaptureUs != Long.MIN_VALUE && isGap(captureUs, prevCaptureUs, n * period)
         if (lone) {
@@ -422,7 +437,7 @@ class AdaptivePacer(private val vsync: VsyncClock, private val frameIntervalNs: 
      * within [HOLD_WINDOWS] of the previous change.
      */
     fun onSkipWindow(skipPct: Double?) {
-        if (skipPct == null) return
+        if (skipPct == null || !tuning.feedback) return
         if (hold > 0) hold--
         if (skipPct > SKIP_HIGH_PCT) { highRun++; lowRun = 0 }
         else if (skipPct < SKIP_LOW_PCT) { lowRun++; highRun = 0 }

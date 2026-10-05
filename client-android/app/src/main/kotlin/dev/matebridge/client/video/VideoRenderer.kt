@@ -118,6 +118,9 @@ class VideoRenderer(
             dev.matebridge.client.security.Records.stampOpens = v != null // T-077: record open stamps
         }
     @Volatile var paceTraceFile: java.io.File? = null
+
+    /** T-251: developer knobs for the next adaptive pacer (read at each codec start). */
+    @Volatile var pacerTuning: PacerTuning = PacerTuning.STANDARD
     private var traceWindows = 0
     private val traceWriter by lazy {
         java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "mb-pace-trace").also { it.isDaemon = true } }
@@ -170,7 +173,7 @@ class VideoRenderer(
             "present",
             // T-183: the inflight limit is retired; `inflight_limit=` stays in the line with a constant 0.
             StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), 0, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs) +
-                " " + holds.logFields(),
+                " " + holds.logFields() + " " + (pacer?.diag()?.logFields() ?: PacerDiag.NONE),
             "render",
         )
     }
@@ -542,7 +545,7 @@ class VideoRenderer(
             var held: VideoFrame? = null
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
             val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
-            val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs)
+            val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs, pacerTuning)
             val trace = paceTrace
             val probe = if (trace != null) PaceProbe() else null
             adaptivePacer.probe = probe

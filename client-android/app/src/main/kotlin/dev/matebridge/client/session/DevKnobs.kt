@@ -3,6 +3,7 @@ package dev.matebridge.client.session
 import dev.matebridge.client.stream.HzPinVariant
 import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
+import dev.matebridge.client.video.PacerTuning
 import java.util.Locale
 
 /** Read access to launch extras (Android: an `Intent`). Pure, so [DevKnobs] is JVM-testable. */
@@ -88,6 +89,11 @@ data class DevKnobs(
      * [HzPinVariant.OFF] (today's calls only).
      */
     val hzPin: HzPinVariant = HzPinVariant.OFF,
+    /**
+     * `--ei pace_dcap_half N`, `--ez pace_feedback false` (T-251): adaptive pacer D cap (half periods) and the skip
+     * feedback. Absent = [PacerTuning.STANDARD].
+     */
+    val pacerTuning: PacerTuning = PacerTuning.STANDARD,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -144,6 +150,8 @@ data class DevKnobs(
             Spec("color_standard", Kind.STRING, debugOnly = true, ids = ColorOverrides.STANDARD_IDS),
             Spec("color_transfer", Kind.STRING, debugOnly = true, ids = ColorOverrides.TRANSFER_IDS),
             Spec("hz_pin", Kind.STRING, debugOnly = true, ids = HzPinVariant.IDS),
+            Spec("pace_dcap_half", Kind.INT, debugOnly = true),
+            Spec("pace_feedback", Kind.BOOL, debugOnly = true),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -185,6 +193,9 @@ data class DevKnobs(
                     x.string("color_range"), x.string("color_standard"), x.string("color_transfer"),
                 ),
                 hzPin = HzPinVariant.parse(x.string("hz_pin")),
+                pacerTuning = PacerTuning.parse(
+                    if (x.has("pace_dcap_half")) x.int("pace_dcap_half", 0) else null, x.bool("pace_feedback", true),
+                ),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),
