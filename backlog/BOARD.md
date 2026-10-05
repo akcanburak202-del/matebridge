@@ -21,6 +21,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-235](tasks/T-235-host-chroma-knob.md) | Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page | 6 | mac-host-dev | [T-233] |
 | [T-237](tasks/T-237-host-hdr10-pipeline.md) | Host — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec + HDR display, SCK HDR capture, VT Main10 PQ, SDR fallback) | 6 | mac-host-dev | [T-232] |
 | [T-238](tasks/T-238-client-hdr10.md) | Client — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec, capability check, Oyun-mode panel toggle, decoder setup, logs) | 6 | android-client-dev | [T-231] |
+| [T-240](tasks/T-240-host-chroma-pref.md) | Host — apply STREAM_PREFS.chroma (decision 0033) via the T-235 sharp_nearest path; codec field rename | 6 | mac-host-dev | [T-235, T-237] |
+| [T-241](tasks/T-241-client-chroma-pref.md) | Client — "Keskin renk kenarları" panel toggle and STREAM_PREFS.chroma (decision 0033) | 6 | android-client-dev | [T-238] |
 
 ## todo
 
