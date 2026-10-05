@@ -1,7 +1,7 @@
 ---
 id: T-253
 title: Host — "refine when still": after motion stops, send one high-quality frame of the unchanged screen
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

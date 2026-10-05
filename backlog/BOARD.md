@@ -28,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-247](tasks/T-247-client-first-nav-key-after-touch.md) | Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode | 6 | android-client-dev | [] |
 | [T-251](tasks/T-251-client-pacer-120-diagnostics.md) | Client — 120 Hz pacer diagnostics: log feedback level, dev knobs for D cap and feedback | 6 | android-client-dev | [] |
 | [T-252](tasks/T-252-client-catch-up-instead-of-flush.md) | Client — on queue overflow, decode the backlog fast and show only the newest frame instead of flushing + keyframe request | 6 | android-client-dev | [T-251] |
-| [T-253](tasks/T-253-host-static-refinement-frame.md) | Host — "refine when still": after motion stops, send one high-quality frame of the unchanged screen | 6 | mac-host-dev | [] |
 
 ## todo
 
@@ -271,5 +270,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-248](tasks/T-248-decoder-concurrency-probe.md) | Probe — does the tablet's HEVC decoder scale with concurrent sessions? (1 vs 2 vs 3 decoders, full vs half frames) | 6 | android-client-dev | [] |
 | [T-249](tasks/T-249-decoder-probe-10bit-bitrate.md) | Probe — decoder headroom for 10-bit (SDR + HDR PQ) and high bitrates (60–150 Mbps) at 2800×1840 | 6 | android-client-dev | [T-248] |
 | [T-250](tasks/T-250-client-2800-at-oyun-120.md) | Client — allow 2800×1840 game resolution in Oyun 120 too (drop the 60-only rule) | 6 | android-client-dev | [T-245, T-249] |
+| [T-253](tasks/T-253-host-static-refinement-frame.md) | Host — "refine when still": after motion stops, send one high-quality frame of the unchanged screen | 6 | mac-host-dev | [] |
 | [T-254](tasks/T-254-probe-yuv444-tablet.md) | Probe (tablet) — 4:4:4 packing gates: raw YUV sampling on the GPU, ImageReader→GL→SurfaceView presentation, dual decode at 60 fps | 6 | android-client-dev | [] |
 | [T-255](tasks/T-255-probe-yuv444-mac.md) | Probe (Mac) — 4:4:4 packing costs: Metal packer time, two VT sessions at 60 fps, auxiliary bitrate, reconstruction quality; v2 test clips | 6 | mac-host-dev | [] |
