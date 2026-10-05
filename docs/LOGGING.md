@@ -377,7 +377,7 @@ Tanı ayarları (varsayılan kapalı, karar 0026):
 - `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> display=<w>x<h>@2x|@1x sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
  - Kodlayıcı her oluşturulduğunda bir kez yazılır: her akış başlangıcında ve her yeniden başlatmada (ör. `STREAM_PREFS`). Hemen `ev=encoder_config`'ten sonra gelir.
  - `sha=` `ev=app_start` ile aynı kaynaktan gelir (`BuildInfo`, T-145).
- - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S` (hepsi `MATEBRIDGE_` önekli).
+ - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S, VD_TRANSFER, CHROMA` (hepsi `MATEBRIDGE_` önekli).
  - Değer ham yazılır: boşluk, `=` ve `;` `_` olur, en çok 64 karakter. Varsayılana eşit ya da geçersiz değer de listelenir; etkin değerler önceki alanlardadır.
  - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
 - `ev=encoder_config` satırındaki `prio_speed=1 idle_refresh=off input_retag=1` T-204'ten beri sabittir (ayarları kaldırıldı). Log ayrıştırıcıları kırılmasın diye kalır.
@@ -554,3 +554,20 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
 - `ev=idle stage=wake reason=touch|pen|key|pad|mouse|gesture|ui|setting|game|start swallowed=<n> held_ms=<n>`: kısılmış (ya da kapatma aşamasındaki) pencere geri geldi. Satır uyandıran hareket bitince yazılır: `swallowed` Mac'e gönderilmeden yutulan olay sayısı, `held_ms` uyanmadan o ana kadar geçen süre. `ui`: Mac'e gitmeyen bir olay (panel, sistem tuşu) uyandırdı, hiçbir şey yutulmadı. `setting`/`game`: ayar değişti ya da Oyun moduna geçildi. `start`: onStart (ekran açıldı).
 - `ev=idle stage=config reason=setting|game timeout_min=2|5|10|15|off game=0|1`: süre ayarı ya da Oyun modu değişti; sayaç yeniden başladı.
 - Koordinat, tuş ya da karakter loglanmaz.
+
+## Renk alt örnekleme anahtarı (Mac, `encoder`/`video`, T-235, karar 0026)
+
+Geliştirici ayarı `MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444` (docs/KNOBS.md #44). Aşağıdaki satırlar **yalnız ayar tanımlıyken** yazılır (geçersiz değer dahil); ayar yokken log bayt bayt eskisi gibidir. Karşılaştırma tabanı için `MATEBRIDGE_CHROMA=420` verilir (bugünkü yol, ama satırlar yazılır).
+
+- **`I|W encoder ev=chroma_config requested=<m> applied=<m> [reason=llrc|codec|profile_rejected|metal_unavailable|hdr|invalid_value] chroma_format_idc=<n>|unknown profile_idc=<n>|unknown vui_full_range=0|1|unknown chroma_loc=<n>|unset|unknown [mismatch=1]`**: parametre setleri her duyurulduğunda (ilk karede ve değişince), `ev=encoder_config … level_idc=` satırının hemen ardından.
+  - `requested` istenen, `applied` gerçekten kullanılan mod. `reason`: `llrc` = `444` LLRC profilinde istendi (VT LLRC'de BGRA'yı sessizce 4:2:0 kodluyor, araştırma §4), `codec` = `444` H.264 ile istendi (yalnız HEVC Main 4:4:4 denemesi var), `profile_rejected` = VT `HEVC_Main444_AutoLevel`'i reddetti, `metal_unavailable` = Metal geçişi kurulamadı (ayrıca `W encoder ev=chroma_metal_unavailable error=<neden>`), `hdr` = akış HDR10 (T-237, karar 0032): ayar yok sayılır, HDR kazanır (yakalama `x420` PQ, profil Main10, `profile_idc=2` beklenir), `invalid_value` = dört değer dışında (420 sayıldı). Bu durumlarda (`hdr` hariç) yakalama `420f` kalır.
+  - `chroma_format_idc` / `profile_idc` SPS'ten okunur (HEVC `general_profile_idc`: 1 = Main, 4 = RExt; chroma 1 = 4:2:0, 3 = 4:4:4). `vui_full_range` ve `chroma_loc` (`chroma_sample_loc_type_top_field`; `unset` = VUI'de `chroma_loc_info` yok, varsayılan 0 = "sol") yalnız HEVC'de; H.264'te `unknown`.
+  - `sharp_*` modlarında çıkış tamponları `ChromaLocation=Center` etiketlidir; VT bunu VUI'ye `chroma_loc=1` olarak yazıyor (M6'da sentetik denemeyle görüldü).
+  - `444`'te VT BGRA girdiyi video aralığına çevirir: `vui_full_range=0` beklenir (STREAM_CONFIG tam aralık der; istemci bunu ayrıca bilmez, yalnız çözücü denemesidir).
+  - `W`: istenen uygulanmadı, değer geçersiz ya da SPS'teki renk biçimi uygulanan modunkinden farklı (`mismatch=1`, ör. 4:4:4 profilinde 4:2:0 çıktı).
+- **`I video ev=chroma_stats mode=<applied> frames=<n> conv_ms_p50_95=<a>/<b>|- gpu_ms_p50_95=<a>/<b>|- cap_enc_ms_p50_95=<a>/<b>|- conv=<n> conv_fail=<n>`**: 10 sn'lik pencere, saniyelik `ev=cadence` ile aynı döngüde (pencere dolunca).
+  - `conv_ms`: Metal geçişinin duvar süresi (komut tamponu oluşturma → tamamlanma; kodlayıcının sahip kuyruğunda, VT'ye göndermeden hemen önce). `gpu_ms`: aynı komut tamponunun GPU yürütme süresi. `420`/`444`'te geçiş yoktur, `-`.
+  - `cap_enc_ms`: ScreenCaptureKit geri çağrısı → kodlayıcı çıktısı (pacer beklemesi, dönüşüm ve kodlama dahil). Modlar arasında gecikme farkı bu alandan (ve `ev=latency`'den) okunur. Yeniden gönderilen kareler sayılmaz.
+  - `frames` kodlanan kare sayısı; `conv` dönüştürülen kare; `conv_fail` geçişi çalışmayan kare (havuz dolu ya da GPU hatası; o kare BGRA olarak VT'ye gider, VT kendisi 4:2:0'a çevirir). İlk hata bir kez `W encoder ev=chroma_convert_failed reason=<neden>` olarak da yazılır.
+  - Örnek sayısı seri başına 4096 ile sınırlı (fazlası sayılır, tutulmaz).
+- `ev=profile knobs=` ayarı `MATEBRIDGE_CHROMA:<değer>` olarak listeler; `ev=encoder_config` (oturum başı) satırına `chroma=<istenen>|invalid` eklenir.

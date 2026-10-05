@@ -299,6 +299,51 @@ final class HDRTests: XCTestCase {
                                             session: SessionColorTags.hdr10))
     }
 
+    // MARK: Chroma knob (T-235) with HDR10
+
+    func testHDRWinsOverTheChromaKnob() {
+        for raw in ["420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+            let knob = ChromaKnob.parse(raw)
+            for profile in [EncoderProfile.fast, .llrc] {
+                let d = ChromaPolicy.resolve(knob: knob, codec: .hevc, profile: profile, dynamicRange: .hdr10)
+                XCTAssertEqual(d.applied, .yuv420, "\(raw) \(profile)")
+                XCTAssertEqual(d.reason, .hdr, "\(raw) \(profile)")
+                XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange, "no BGRA / Metal pass")
+                XCTAssertNil(d.applied.sharpUpsample)
+                XCTAssertTrue(d.logsEnabled, "the ignored knob is still logged")
+                let line = ChromaConfigLog.line(d, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 2,
+                                                                      vuiFullRange: false, parsed: true))
+                XCTAssertTrue(line.fields.hasPrefix("requested=\(knob.requested.rawValue) applied=420 reason=hdr "),
+                              line.fields)
+                XCTAssertFalse(line.fields.contains("mismatch"), "Main10 4:2:0 matches the applied 420")
+                XCTAssertEqual(line.level, .warning)
+            }
+        }
+        // Unset knob with HDR: nothing to report, nothing logged.
+        let unset = ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast, dynamicRange: .hdr10)
+        XCTAssertEqual(unset.applied, .yuv420)
+        XCTAssertNil(unset.reason)
+        XCTAssertFalse(unset.logsEnabled)
+        XCTAssertEqual(ChromaFallbackReason.hdr.rawValue, "hdr")
+    }
+
+    func testChromaKnobUnchangedForSDR() {
+        for raw in [nil, "420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+            let knob = ChromaKnob.parse(raw)
+            for codec in [Codec.hevc, .h264] {
+                for profile in [EncoderProfile.fast, .llrc] {
+                    XCTAssertEqual(ChromaPolicy.resolve(knob: knob, codec: codec, profile: profile, dynamicRange: .sdr),
+                                   ChromaPolicy.resolve(knob: knob, codec: codec, profile: profile),
+                                   "\(raw ?? "unset") \(codec) \(profile)")
+                }
+            }
+        }
+        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("444"), codec: .hevc, profile: .fast, dynamicRange: .sdr).applied,
+                       .yuv444)
+        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("sharp_nearest"), codec: .hevc, profile: .fast,
+                                            dynamicRange: .sdr).applied, .sharpNearest)
+    }
+
     // MARK: Logs
 
     func testHDRConfigFields() {

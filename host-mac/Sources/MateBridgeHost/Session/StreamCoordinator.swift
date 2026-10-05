@@ -578,6 +578,11 @@ public final class StreamCoordinator: @unchecked Sendable {
             videoLogger.log(.info, "latency", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
                             fields: lat.logFields)
         }
+        // T-235: every 10 s while `MATEBRIDGE_CHROMA` is set.
+        if let chroma = pipeline.takeChromaStats() {
+            videoLogger.log(.info, "chroma_stats", sessionID: session?.sessionID ?? 0,
+                            generation: session?.configID ?? 0, fields: chroma)
+        }
         reportSendQueue()
         publishSummary()
     }

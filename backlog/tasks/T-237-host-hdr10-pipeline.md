@@ -80,5 +80,7 @@ Decision 0032'nin host tarafı. Protokol (PROTOCOL.md §0x03 HDR10 notu, §0x05 
 4. SDR varsayılan yolun değişmediği: HDR kapalıyken `encoder_config`/`profile` satırları ve renk etiketleri öncekiyle aynı.
 5. Geri dönüş yolu cihazda tetiklenmedi (VT/SCK/ekran reddi yapay olarak üretilemedi); kod yolu `game_display_failed` ile aynı desende.
 
+**main birleştirmesi (T-235 `MATEBRIDGE_CHROMA` ile):** çakışmalar `HEVCEncoder.swift`, `ScreenCapture.swift`, `docs/KNOBS.md`'de çözüldü. Kural: HDR10 uygulanınca chroma ayarı yok sayılır, HDR kazanır (`x420` PQ yakalama, Main10, Metal geçişi yok). `ChromaPolicy.resolve(…, dynamicRange:)` → `applied=420 reason=hdr` (ayar tanımlıysa `W encoder ev=chroma_config … reason=hdr`, tanımsızsa satır yok). SDR'de karar main'deki ile birebir (test: `HDRTests.testChromaKnobUnchangedForSDR`, `testHDRWinsOverTheChromaKnob`). Yeni `ChromaFallbackReason.hdr`; LOGGING.md `chroma_config` ve KNOBS.md #44'e not. `--only host,protocol` ALL OK. Cihazda: HDR + `MATEBRIDGE_CHROMA=sharp_*|444` ile `chroma_config applied=420 reason=hdr profile_idc=2` görülmeli.
+
 **Açık sorular:**
 - Yok (protokol uyuşmazlığı görülmedi). Not: `CodecTests`'teki iki eski beklenti 12. bayttan sonrasını "yok sayılan fazlalık" olarak kullanıyordu; 0032 bu baytları dinamik aralık grubuna çevirdiği için test girdileri `0,0` grubu + fazlalık olacak şekilde güncellendi (davranış PROTOCOL.md ile uyumlu).

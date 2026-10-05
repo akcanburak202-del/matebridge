@@ -134,7 +134,12 @@ public final class VideoPipeline: @unchecked Sendable {
             // ScreenCaptureKit needs about a second to see a new display.
             var lastError: Error?
             for _ in 0..<20 {
-                do { try await cap.start(displayID: display.displayID, settings: settings); lastError = nil; break }
+                do {
+                    try await cap.start(displayID: display.displayID, settings: settings,
+                                        pixelFormat: encoder.capturePixelFormat)
+                    lastError = nil
+                    break
+                }
                 catch ScreenCaptureError.displayNotFound(let id) {
                     lastError = ScreenCaptureError.displayNotFound(id)
                     try await Task.sleep(nanoseconds: 250_000_000)
@@ -318,6 +323,10 @@ public final class VideoPipeline: @unchecked Sendable {
         keyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
         encoder?.requestKeyframe(resubmitNow: true)
     }
+
+    /// T-235: `video ev=chroma_stats` fields once the encoder's 10 s window is over (call about once a second); nil
+    /// before that, without an encoder, and always without `MATEBRIDGE_CHROMA`.
+    func takeChromaStats() -> String? { box.encoder?.takeChromaStats(nowUs: HostClock.nowUs()) }
 
     /// Colour tags the encoder session reports (VUI source), for diagnostics.
     public var encoderColorReadback: String { box.encoder?.colorReadback() ?? "no encoder" }
