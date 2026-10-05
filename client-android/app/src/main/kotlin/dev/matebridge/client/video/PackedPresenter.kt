@@ -50,6 +50,10 @@ class FrameExpectation(val captureUs: Long, val renderNs: Long)
  * chose (no standing queue, T-256), and reports each frame's display time (EGL present timestamp) through [onShown].
  * All native GL calls of this context happen on this thread. Images are closed once the fence of the last draw that may read them signalled ([RetiredImages]).
  *
+ * T-261: the native draw keeps the last full colour in unchanged blocks of main-only frames ([ChromaReuse],
+ * [reuseTolerance] < 0 = off), and the last drawn main image is held so that an auxiliary frame arriving after it was
+ * shown redraws the same frame in full colour when nothing newer is waiting ([LateUpgrade]).
+ *
  * Failure ([onFailed]): init failed, or [MAX_CONSECUTIVE_ERRORS] draws in a row failed; the owner falls back to the direct
  * path. [stop] must complete before the Surface is destroyed.
  */
@@ -64,10 +68,13 @@ class PackedPresenter(
     private val onShown: (Long, Long) -> Unit,
     private val onFailed: (String) -> Unit,
     private val clockNs: () -> Long = System::nanoTime,
+    private val reuseTolerance: Int = ChromaReuse.TOLERANCE,
 ) : Thread("mb-gl") {
     companion object {
         const val AUX_RING = 2
         const val MAX_CONSECUTIVE_ERRORS = 30
+        /** Timestamp tag of a late-upgrade redraw: not a displayed frame of the stream. */
+        const val UPGRADE_TAG = -1L
         const val EXPECT_MAX = 64
         private const val EXPECT_TRIM = 32
         private const val TICK_MS = 25L
@@ -97,7 +104,14 @@ class PackedPresenter(
     class Snapshot(
         val drawn: Long, val mainOnly: Long, val paired: Long, val displaced: Long, val drawErrors: Long,
         val glMsP50: Double?, val glMsP95: Double?, val outstandingMax: Int,
+        /** Sampled 2x2 blocks of main-only frames that kept the reference's full colour / were sampled (T-261). */
+        val reuseSame: Long = 0, val reuseTotal: Long = 0,
+        /** Frames redrawn in full colour because their auxiliary frame arrived late (T-261). */
+        val lateUpgrades: Long = 0,
     ) {
+        /** `reuse_pct` of the window, null when no block was sampled. */
+        val reusePct: Double? get() = if (reuseTotal == 0L) null else reuseSame * 100.0 / reuseTotal
+
         /** `aux_paired_pct` of the window, null when nothing was drawn. */
         val pairedPct: Double? get() = if (paired + mainOnly == 0L) null else paired * 100.0 / (paired + mainOnly)
     }
@@ -113,6 +127,10 @@ class PackedPresenter(
     /** Draws submitted with a fence (GL thread writes; other threads read it to tag retired images). */
     @Volatile private var submitted = 0L
     private val pairing = AuxPairing<Image>(AUX_RING) { retired.retire(it, clockNs(), submitted) }
+    /** The last drawn main image, kept (not retired) until the next main frame is drawn: GL thread only. */
+    private var held: Arrived? = null
+    private val upgrade = LateUpgrade()
+    private var reuseActive = false
     private val timings = GlTimings()
     @Volatile private var stopFlag = false
     @Volatile var started = false
@@ -123,6 +141,9 @@ class PackedPresenter(
     private var drawn = 0L
     private var displaced = 0L
     private var drawErrors = 0L
+    private var upgrades = 0L
+    private var reuseSame = 0L
+    private var reuseTotal = 0L
     private var outstandingMax = 0
     private var consecutiveErrors = 0
     private var cpuFallbackMs = false
@@ -148,6 +169,7 @@ class PackedPresenter(
     /** A decoded auxiliary image (from the aux ImageReader listener). The presenter owns [image] from now on. */
     fun offerAux(image: Image, captureUs: Long) {
         auxArrivals.add(AuxArrived(image, captureUs))
+        synchronized(lock) { lock.notifyAll() } // wakes the GL thread: this may complete the frame it shows (late upgrade)
         // Bounded even if the GL thread is stuck: a backlog beyond a few images is stale.
         while (auxArrivals.size > AUX_RING + 2) auxArrivals.poll()?.let { retired.retire(it.image, clockNs(), submitted) }
     }
@@ -156,8 +178,14 @@ class PackedPresenter(
     fun snapshot(reset: Boolean = true): Snapshot {
         val gl = timings.percentiles(reset)
         synchronized(counters) {
-            val s = Snapshot(drawn, pairing.late, pairing.paired, displaced, drawErrors, gl?.first, gl?.second, outstandingMax)
-            if (reset) { drawn = 0; displaced = 0; drawErrors = 0; outstandingMax = 0; pairing.resetCounts() }
+            val s = Snapshot(
+                drawn, pairing.late, pairing.paired, displaced, drawErrors, gl?.first, gl?.second, outstandingMax,
+                reuseSame, reuseTotal, upgrades,
+            )
+            if (reset) {
+                drawn = 0; displaced = 0; drawErrors = 0; outstandingMax = 0; pairing.resetCounts()
+                upgrades = 0; reuseSame = 0; reuseTotal = 0
+            }
             return s
         }
     }
@@ -186,9 +214,14 @@ class PackedPresenter(
             return
         }
         FullChromaNative.presentSetConversion(conversion.toArray())
+        FullChromaNative.presentSetReuseTolerance(reuseTolerance)
         val features = FullChromaNative.presentFeatures()
-        cpuFallbackMs = !features.contains("gpu_timer=1") // no GPU timer: the draw call's CPU time stands in for gl_ms
-        log('I', "gl_present_init", "$features size=${width}x$height swap_interval=0")
+        cpuFallbackMs = !features.contains("render_ts=1") // no EGL rendering-complete stamp: the draw call's CPU time stands in for gl_ms
+        reuseActive = features.contains("reuse=1")
+        log('I', "gl_present_init", "$features size=${width}x$height swap_interval=0 reuse_tol=$reuseTolerance")
+        if (reuseTolerance >= 0 && !reuseActive) {
+            log('W', "chroma_reuse_unavailable", "err=${FullChromaNative.presentLastError().replace(Regex("\\s+"), "_").take(120)}")
+        }
         started = true
         var failed: String? = null
         try {
@@ -202,33 +235,25 @@ class PackedPresenter(
                     failed = "fence_stall"
                     break
                 }
-                if (item == null) { drainTimestamps(); continue }
-                val exp = expectations.remove(item.seq)
-                val aux = if (exp != null) pairing.pair(exp.captureUs) else null
-                val presentNs = exp?.renderNs ?: 0L
-                val hwMain = item.image.hardwareBuffer
-                val hwAux = aux?.hardwareBuffer
-                val t0 = clockNs()
-                val rc = if (hwMain != null) {
-                    try {
-                        FullChromaNative.presentDraw(hwMain, hwAux, item.seq, presentNs)
-                    } catch (e: Exception) { -20 }
-                } else -10
-                val cpuMs = (clockNs() - t0) / 1e6
-                hwMain?.close()
-                hwAux?.close()
-                if (rc == 0 || rc == -5) submitted++ // a fence was created for this draw
-                retired.retire(item.image, clockNs(), submitted)
-                if (rc != 0) {
-                    synchronized(counters) { drawErrors++ }
-                    if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                if (item == null) {
+                    val rc = tryUpgrade()
+                    if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         failed = "draw:$rc:${FullChromaNative.presentLastError()}"
                         break
                     }
-                } else {
-                    consecutiveErrors = 0
-                    synchronized(counters) { drawn++ }
-                    if (cpuFallbackMs) timings.add(cpuMs)
+                    drainTimestamps()
+                    continue
+                }
+                val exp = expectations.remove(item.seq)
+                val captureUs = exp?.captureUs ?: LateUpgrade.NONE
+                val aux = if (exp != null) pairing.pair(exp.captureUs) else null
+                val rc = drawFrame(item.image, aux, item.seq, exp?.renderNs ?: 0L, main = true)
+                held?.let { retired.retire(it.image, clockNs(), submitted) } // the previous frame: no draw reads it any more
+                held = item
+                upgrade.onMainDrawn(captureUs, paired = aux != null || rc != 0)
+                if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                    failed = "draw:$rc:${FullChromaNative.presentLastError()}"
+                    break
                 }
                 drainTimestamps()
             }
@@ -240,14 +265,60 @@ class PackedPresenter(
             for (a in auxArrivals) runCatching { a.image.close() }
             auxArrivals.clear()
             pairing.clear()
+            held?.let { retired.retire(it.image, clockNs(), submitted) }
+            held = null
+            upgrade.clear()
             synchronized(lock) { mainSlot?.let { runCatching { it.image.close() } }; mainSlot = null }
             retired.closeDue(clockNs(), Long.MAX_VALUE, force = true) // after glFinish + EGL teardown
         }
         failed?.let { if (!stopFlag) onFailed(it) }
     }
 
+    /**
+     * One native draw of [image] (+ [aux]): bookkeeping of the submitted-draw counter, error counters and the CPU time
+     * fallback. [main] = a newly arrived main frame (counted in `gl_drawn`); false = a late-upgrade redraw. Returns the native code.
+     */
+    private fun drawFrame(image: Image, aux: Image?, tag: Long, presentNs: Long, main: Boolean): Int {
+        val hwMain = image.hardwareBuffer
+        val hwAux = aux?.hardwareBuffer
+        val t0 = clockNs()
+        val rc = if (hwMain != null) {
+            try {
+                FullChromaNative.presentDraw(hwMain, hwAux, tag, presentNs)
+            } catch (e: Exception) { -20 }
+        } else -10
+        val cpuMs = (clockNs() - t0) / 1e6
+        hwMain?.close()
+        hwAux?.close()
+        if (rc == 0 || rc == -5) submitted++ // a fence was created for this draw
+        if (rc != 0) {
+            consecutiveErrors++
+            synchronized(counters) { drawErrors++ }
+        } else {
+            consecutiveErrors = 0
+            if (main) synchronized(counters) { drawn++ }
+            if (cpuFallbackMs) timings.add(cpuMs)
+        }
+        return rc
+    }
+
+    /**
+     * Nothing newer is waiting: when the held frame was shown main-only and its auxiliary frame has arrived since, draws
+     * it again merged (presented at the next vsync, tag -1 = not a new frame for the display statistics). 0 = nothing
+     * drawn or a good draw, else the failed draw's code.
+     */
+    private fun tryUpgrade(): Int {
+        val cap = upgrade.candidate() ?: return 0
+        val h = held ?: return 0
+        val aux = pairing.find(cap) ?: return 0
+        upgrade.onUpgraded() // one attempt per frame, successful or not
+        val rc = drawFrame(h.image, aux, UPGRADE_TAG, 0L, main = false)
+        if (rc == 0) synchronized(counters) { upgrades++ }
+        return rc
+    }
+
     private fun takeMain(): Arrived? = synchronized(lock) {
-        if (mainSlot == null && !stopFlag) lock.wait(TICK_MS)
+        if (mainSlot == null && auxArrivals.isEmpty() && !stopFlag) lock.wait(TICK_MS)
         val m = mainSlot
         mainSlot = null
         m
@@ -261,14 +332,19 @@ class PackedPresenter(
     }
 
     private fun drainTimestamps() {
-        for (ns in FullChromaNative.presentDrainGpuNs()) timings.add(ns / 1e6)
         val q = FullChromaNative.presentDrainTimestamps()
         var i = 0
-        while (i + 3 < q.size) {
-            val tag = q[i]; val latch = q[i + 1]; val present = q[i + 2]
+        while (i + 4 < q.size) {
+            val tag = q[i]; val latch = q[i + 1]; val present = q[i + 2]; val render = q[i + 3]; val submit = q[i + 4]
             val shown = if (present > 0) present else latch
-            if (shown > 0) onShown(tag, shown)
-            i += 4
+            if (shown > 0 && tag >= 0) onShown(tag, shown) // upgrade redraws (UPGRADE_TAG) are no new frame for the display statistics
+            // gl_ms: from just before the swap to the GPU finishing this frame (EGL rendering-complete stamp, same clock)
+            if (render > 0 && submit > 0 && render >= submit) timings.add((render - submit) / 1e6)
+            i += 5
+        }
+        if (reuseActive) {
+            val r = FullChromaNative.presentReuseStats()
+            if (r[1] > 0) synchronized(counters) { reuseSame += r[0]; reuseTotal += r[1] }
         }
         val out = FullChromaNative.presentOutstanding()
         if (out > 0) synchronized(counters) { if (out > outstandingMax) outstandingMax = out }

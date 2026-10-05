@@ -43,8 +43,16 @@ object FullChromaNative {
     @JvmStatic external fun presentOutstanding(): Int
     @JvmStatic external fun presentLastError(): String
 
-    /** Quads `[tag, latchNs, presentNs, renderCompleteNs]` of frames resolved since the last call (monotonic ns). */
+    /**
+     * Quintuples `[tag, latchNs, presentNs, renderCompleteNs, submitNs]` of frames resolved since the last call (monotonic
+     * ns; `renderCompleteNs` 0 when the EGL stamp is unsupported). `submitNs` = just before the swap.
+     */
     @JvmStatic external fun presentDrainTimestamps(): LongArray
-    @JvmStatic external fun presentDrainGpuNs(): LongArray
+
+    /** T-261: block tolerance of the temporal chroma reuse in 8-bit steps ([ChromaReuse.TOLERANCE]); negative = off. */
+    @JvmStatic external fun presentSetReuseTolerance(tolerance: Int)
+
+    /** T-261: `[same, total]` sampled blocks of main-only draws since the last call (`reuse_pct`). GL thread only. */
+    @JvmStatic external fun presentReuseStats(): LongArray
     @JvmStatic external fun presentShutdown()
 }
