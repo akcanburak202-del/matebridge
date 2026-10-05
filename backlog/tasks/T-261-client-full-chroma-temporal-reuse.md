@@ -71,6 +71,8 @@ Kısıt: tablet/adb yok; GLSL yalnız derleme + CPU referans testiyle doğrulan�
 4. Hızlı hareket sonrası ekran ~1 kare içinde tam renge oturuyor mu; yalnız-ana karede eski bloktan sızan hayalet renk görünüyor mu? Görünürse tolerans 2 -> 1/0 (tek yer: `ChromaReuse.TOLERANCE`).
 5. Keskin <-> Tam renk hızlı geçiş, uygulamayı arka plana alıp geri getirme (`full_chroma_failed`/`fence_stall` olmamalı; `img_errors` artmamalı).
 
+**Codex --high düzeltmeleri (P2 x3, aynı dal):** (1) Geç yükseltme artık özgün karenin etiketiyle (`seq`) çizilir; `FirstShown` her etiketin yalnız ilk gösterimini bildirir (özgün ya da yükseltme, hangisi önce görünürse; ikinci kez asla). Yükseltme, özgün karenin sunumu EGL damgasıyla doğrulanınca ya da hedef/çizim zamanı + 20 ms (`LateUpgrade.GRACE_NS`) geçince yapılır (özgün BufferQueue'da yerinden edilmesin). (2) `DrawWatch`: gönderilen her çizimin yaşı görüntü kuyruğundan bağımsız izlenir; tutulan (static ekran) görüntünün fence'i sinyal vermezse 500 ms'de `fence_stall` (retire kuyruğu kontrolüyle birlikte). (3) `gl_ms` başlangıç damgası artık ilk geçişten ÖNCE alınır (`presentDraw` içinde çizim çağrısından önce), takas sonrası değil. Testler: `LateUpgrade` geçidi, `FirstShown`, `DrawWatch` (`ChromaReuseTest`). check.sh ALL OK. Cihazda ek kontrol: durağan ekranda `late_upgrades` hâlâ > 0, ekran gecikmesi istatistiğinde kare kaybolmuyor (`shown_*` sayısı kare sayısıyla uyumlu), `gl_ms` önceki sürümden büyük (iki geçişin tamamı dahil).
+
 **TEST EDİLMEDİ (cihaz gerekir):** GLSL derleme/doğruluğu (durum geçişleri, örnek ızgarası, gösterim geçişi), FBO tamlığı, RENDERING_COMPLETE damgasının `gl_ms` için geçerliliği, örnek okumanın bekletmediği, bellek/gecikme etkisi, tolerans seçimi (T-253 netleştirme ile).
 
 ## Open questions

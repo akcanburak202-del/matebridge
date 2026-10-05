@@ -104,25 +104,41 @@ class ChromaReuseModel(val w: Int, val h: Int, private val tolerance: Int = Chro
 /**
  * Whether a frame already shown main-only may be shown again with its auxiliary view because that arrived late
  * (the static screen case: nothing newer will replace the frame, so without this it would stay 4:2:0 until the next
- * change). Pure state; the presenter owns the held image.
+ * change). The upgrade is only offered once the original is known to have been presented ([onShown]) or its target time
+ * plus [GRACE_NS] has passed, so that it does not replace the original in the BufferQueue before it was displayed.
+ * Pure state; the presenter owns the held image.
  */
 class LateUpgrade {
     private var heldCaptureUs = NONE
     private var heldPaired = true
+    private var heldShown = false
+    private var notBeforeNs = 0L
 
     companion object {
         /** `capture_time_us` of a frame without an expectation (never matched). */
         const val NONE = Long.MIN_VALUE
+
+        /** Margin after the original's target (or draw) time, covering the compositor latch (>= 1 vsync at 60 Hz). */
+        const val GRACE_NS = 20_000_000L
     }
 
-    /** The main frame [captureUs] was just drawn; [paired] = with its auxiliary view (or a draw that cannot be upgraded). */
-    fun onMainDrawn(captureUs: Long, paired: Boolean) {
+    /**
+     * The main frame [captureUs] was just drawn; [paired] = with its auxiliary view (or a draw that cannot be upgraded);
+     * [targetNs] = the later of its presentation target and the draw time.
+     */
+    fun onMainDrawn(captureUs: Long, paired: Boolean, targetNs: Long = 0L) {
         heldCaptureUs = captureUs
         heldPaired = paired || captureUs == NONE
+        heldShown = false
+        notBeforeNs = targetNs + GRACE_NS
     }
 
-    /** `capture_time_us` to look up in the auxiliary ring when the held frame was drawn without its auxiliary view, else null. */
-    fun candidate(): Long? = if (heldPaired || heldCaptureUs == NONE) null else heldCaptureUs
+    /** The held frame's own presentation was confirmed (EGL timestamps). */
+    fun onShown() { heldShown = true }
+
+    /** `capture_time_us` to look up in the auxiliary ring when the held frame is due an upgrade at [nowNs], else null. */
+    fun candidate(nowNs: Long): Long? =
+        if (heldPaired || heldCaptureUs == NONE || !(heldShown || nowNs >= notBeforeNs)) null else heldCaptureUs
 
     /** The held frame was redrawn with its auxiliary view. */
     fun onUpgraded() { heldPaired = true }
@@ -130,5 +146,36 @@ class LateUpgrade {
     fun clear() {
         heldCaptureUs = NONE
         heldPaired = true
+        heldShown = false
+    }
+}
+
+/** Reports each frame tag's first presentation only (an upgrade redraw shares its original's tag). Bounded. */
+class FirstShown(private val capacity: Int = 64) {
+    private val seen = LinkedHashSet<Long>()
+
+    /** True the first time [tag] is offered. */
+    fun first(tag: Long): Boolean {
+        if (!seen.add(tag)) return false
+        while (seen.size > capacity) seen.remove(seen.first())
+        return true
+    }
+
+    fun clear() = seen.clear()
+}
+
+/**
+ * Age of the oldest submitted draw whose fence has not signalled, independent of which images are still held (a static
+ * screen keeps the last image outside the retire queue). Draw numbers are the presenter's `submitted` counter.
+ */
+class DrawWatch {
+    private val times = ArrayDeque<Pair<Long, Long>>() // (draw number, submit time ns)
+
+    fun onSubmitted(draw: Long, nowNs: Long) { times.addLast(draw to nowNs) }
+
+    /** 0 when every submitted draw completed, else how long the oldest incomplete one has been waiting. */
+    fun stalledForNs(nowNs: Long, completedDraws: Long): Long {
+        while (times.isNotEmpty() && times.first().first <= completedDraws) times.removeFirst()
+        return if (times.isEmpty()) 0L else nowNs - times.first().second
     }
 }

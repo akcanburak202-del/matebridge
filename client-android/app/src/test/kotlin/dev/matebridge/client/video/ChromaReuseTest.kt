@@ -179,31 +179,66 @@ class ChromaReuseTest {
 
     @Test fun lateUpgradeOnlyForAMainOnlyFrame() {
         val u = LateUpgrade()
-        assertNull(u.candidate())
+        assertNull(u.candidate(Long.MAX_VALUE))
         u.onMainDrawn(1000, paired = true)
-        assertNull(u.candidate())
-        u.onMainDrawn(2000, paired = false)
-        assertEquals(2000L, u.candidate())
+        assertNull(u.candidate(Long.MAX_VALUE))
+        u.onMainDrawn(2000, paired = false, targetNs = 0)
+        assertEquals(2000L, u.candidate(Long.MAX_VALUE))
         u.onUpgraded()
-        assertNull(u.candidate()) // once per frame
+        assertNull(u.candidate(Long.MAX_VALUE)) // once per frame
+    }
+
+    @Test fun upgradeWaitsForThePresentationOfTheOriginal() {
+        val u = LateUpgrade()
+        u.onMainDrawn(2000, paired = false, targetNs = 1_000_000_000)
+        assertNull(u.candidate(1_000_000_000)) // target reached but not past the grace
+        assertNull(u.candidate(1_000_000_000 + LateUpgrade.GRACE_NS - 1))
+        assertEquals(2000L, u.candidate(1_000_000_000 + LateUpgrade.GRACE_NS))
+        // or earlier, once the original's presentation is confirmed
+        u.onMainDrawn(3000, paired = false, targetNs = 5_000_000_000)
+        assertNull(u.candidate(1_000_000_000))
+        u.onShown()
+        assertEquals(3000L, u.candidate(1_000_000_000))
     }
 
     @Test fun aNewMainFrameReplacesTheCandidate() {
         val u = LateUpgrade()
         u.onMainDrawn(2000, paired = false)
         u.onMainDrawn(3000, paired = false)
-        assertEquals(3000L, u.candidate())
+        assertEquals(3000L, u.candidate(Long.MAX_VALUE))
         u.onMainDrawn(4000, paired = true)
-        assertNull(u.candidate())
+        assertNull(u.candidate(Long.MAX_VALUE))
+        u.onMainDrawn(5000, paired = false, targetNs = Long.MAX_VALUE / 2)
+        assertNull(u.candidate(0)) // the shown flag of the previous frame does not carry over
     }
 
     @Test fun framesWithoutACaptureTimeAreNeverUpgraded() {
         val u = LateUpgrade()
         u.onMainDrawn(LateUpgrade.NONE, paired = false)
-        assertNull(u.candidate())
+        assertNull(u.candidate(Long.MAX_VALUE))
         u.onMainDrawn(5, paired = false)
         u.clear()
-        assertNull(u.candidate())
+        assertNull(u.candidate(Long.MAX_VALUE))
+    }
+
+    @Test fun aTagIsReportedOnlyOnce() {
+        val f = FirstShown(capacity = 3)
+        assertTrue(f.first(10))
+        assertFalse(f.first(10)) // the upgrade redraw of the same frame
+        assertTrue(f.first(11))
+        assertTrue(f.first(12))
+        assertTrue(f.first(13)) // 10 evicted (bounded)
+        assertFalse(f.first(13))
+    }
+
+    @Test fun drawWatchSeesAStuckDrawWithoutAnyRetiredImage() {
+        val w = DrawWatch()
+        assertEquals(0L, w.stalledForNs(1_000, 0))
+        w.onSubmitted(1, 100)
+        w.onSubmitted(2, 200)
+        assertEquals(900L, w.stalledForNs(1_000, 0))   // the held (static) image's draw never completes
+        assertEquals(800L, w.stalledForNs(1_000, 1))   // draw 1 done, 2 still waiting
+        assertEquals(0L, w.stalledForNs(5_000, 2))
     }
 
     @Test fun pairingFindDoesNotJudgeOrEvict() {

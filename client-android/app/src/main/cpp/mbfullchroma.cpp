@@ -131,7 +131,7 @@ struct Ctx {
     struct Pending {
         uint64_t id;
         int64_t tag;
-        int64_t submitNs;  // CLOCK_MONOTONIC just before the swap: gl_ms = rendering complete - submitNs
+        int64_t submitNs;  // CLOCK_MONOTONIC before the first render pass of the draw: gl_ms = rendering complete - submitNs
     };
     std::deque<Pending> pendingTs;
     std::deque<GLsync> fences;  // one per submitted draw, in order; nullptr = created after a glFinish (already complete)
@@ -1008,6 +1008,7 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
         at = importBuffer(c, a);
         if (!at) return -4;
     }
+    const int64_t submitNs = monotonicNs();  // start of this frame's GPU work (before the first pass)
     if (c.reuseOk && c.reuseTol >= 0) {
         drawReuse(c, mt, at);
     } else {
@@ -1021,7 +1022,6 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
     c.fences.push_back(fence);
     c.fencesPushed++;
     glFlush();
-    const int64_t submitNs = monotonicNs();
     if (!eglSwapBuffers(c.dpy, c.surf)) {
         c.lastError = fmt("eglSwapBuffers:0x%x", eglGetError());
         return -5;
@@ -1062,7 +1062,7 @@ JNIEXPORT jstring JNICALL Java_dev_matebridge_client_video_FullChromaNative_pres
     return str(env, gPres ? gPres->lastError : std::string("no context"));
 }
 
-// Quintuples [tag, latchNs, presentNs, renderCompleteNs, submitNs] of frames resolved since the last call.
+// Quintuples [tag, latchNs, presentNs, renderCompleteNs, startNs] of frames resolved since the last call.
 JNIEXPORT jlongArray JNICALL Java_dev_matebridge_client_video_FullChromaNative_presentDrainTimestamps(JNIEnv* env, jclass) {
     std::vector<int64_t> v;
     if (gPres) {

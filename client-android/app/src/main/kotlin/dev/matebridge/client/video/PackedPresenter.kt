@@ -73,8 +73,6 @@ class PackedPresenter(
     companion object {
         const val AUX_RING = 2
         const val MAX_CONSECUTIVE_ERRORS = 30
-        /** Timestamp tag of a late-upgrade redraw: not a displayed frame of the stream. */
-        const val UPGRADE_TAG = -1L
         const val EXPECT_MAX = 64
         private const val EXPECT_TRIM = 32
         private const val TICK_MS = 25L
@@ -130,6 +128,8 @@ class PackedPresenter(
     /** The last drawn main image, kept (not retired) until the next main frame is drawn: GL thread only. */
     private var held: Arrived? = null
     private val upgrade = LateUpgrade()
+    private val firstShown = FirstShown()
+    private val drawWatch = DrawWatch()
     private var reuseActive = false
     private val timings = GlTimings()
     @Volatile private var stopFlag = false
@@ -231,12 +231,12 @@ class PackedPresenter(
                 absorbAux()
                 val completed = FullChromaNative.presentCompletedDraws()
                 retired.closeDue(now, completed)
-                if (retired.stalledForNs(now, completed) > IMAGE_STALL_NS) {
+                if (maxOf(retired.stalledForNs(now, completed), drawWatch.stalledForNs(now, completed)) > IMAGE_STALL_NS) {
                     failed = "fence_stall"
                     break
                 }
                 if (item == null) {
-                    val rc = tryUpgrade()
+                    val rc = tryUpgrade(now)
                     if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         failed = "draw:$rc:${FullChromaNative.presentLastError()}"
                         break
@@ -250,7 +250,7 @@ class PackedPresenter(
                 val rc = drawFrame(item.image, aux, item.seq, exp?.renderNs ?: 0L, main = true)
                 held?.let { retired.retire(it.image, clockNs(), submitted) } // the previous frame: no draw reads it any more
                 held = item
-                upgrade.onMainDrawn(captureUs, paired = aux != null || rc != 0)
+                upgrade.onMainDrawn(captureUs, paired = aux != null || rc != 0, targetNs = maxOf(exp?.renderNs ?: 0L, clockNs()))
                 if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                     failed = "draw:$rc:${FullChromaNative.presentLastError()}"
                     break
@@ -268,6 +268,7 @@ class PackedPresenter(
             held?.let { retired.retire(it.image, clockNs(), submitted) }
             held = null
             upgrade.clear()
+            firstShown.clear()
             synchronized(lock) { mainSlot?.let { runCatching { it.image.close() } }; mainSlot = null }
             retired.closeDue(clockNs(), Long.MAX_VALUE, force = true) // after glFinish + EGL teardown
         }
@@ -290,7 +291,10 @@ class PackedPresenter(
         val cpuMs = (clockNs() - t0) / 1e6
         hwMain?.close()
         hwAux?.close()
-        if (rc == 0 || rc == -5) submitted++ // a fence was created for this draw
+        if (rc == 0 || rc == -5) { // a fence was created for this draw
+            submitted++
+            drawWatch.onSubmitted(submitted, clockNs())
+        }
         if (rc != 0) {
             consecutiveErrors++
             synchronized(counters) { drawErrors++ }
@@ -304,15 +308,17 @@ class PackedPresenter(
 
     /**
      * Nothing newer is waiting: when the held frame was shown main-only and its auxiliary frame has arrived since, draws
-     * it again merged (presented at the next vsync, tag -1 = not a new frame for the display statistics). 0 = nothing
+     * it again merged once the original was presented (or its target time passed), at the next vsync, under the original's
+     * tag (its display statistics are reported once). 0 = nothing
      * drawn or a good draw, else the failed draw's code.
      */
-    private fun tryUpgrade(): Int {
-        val cap = upgrade.candidate() ?: return 0
+    private fun tryUpgrade(nowNs: Long): Int {
+        val cap = upgrade.candidate(nowNs) ?: return 0
         val h = held ?: return 0
         val aux = pairing.find(cap) ?: return 0
         upgrade.onUpgraded() // one attempt per frame, successful or not
-        val rc = drawFrame(h.image, aux, UPGRADE_TAG, 0L, main = false)
+        // Same tag as the original: whichever of the two reaches the display first reports the frame ([FirstShown]).
+        val rc = drawFrame(h.image, aux, h.seq, 0L, main = false)
         if (rc == 0) synchronized(counters) { upgrades++ }
         return rc
     }
@@ -337,7 +343,10 @@ class PackedPresenter(
         while (i + 4 < q.size) {
             val tag = q[i]; val latch = q[i + 1]; val present = q[i + 2]; val render = q[i + 3]; val submit = q[i + 4]
             val shown = if (present > 0) present else latch
-            if (shown > 0 && tag >= 0) onShown(tag, shown) // upgrade redraws (UPGRADE_TAG) are no new frame for the display statistics
+            if (shown > 0 && tag >= 0 && firstShown.first(tag)) { // an upgrade redraw shares its original's tag: reported once
+                onShown(tag, shown)
+                if (tag == held?.seq) upgrade.onShown()
+            }
             // gl_ms: from just before the swap to the GPU finishing this frame (EGL rendering-complete stamp, same clock)
             if (render > 0 && submit > 0 && render >= submit) timings.add((render - submit) / 1e6)
             i += 5
