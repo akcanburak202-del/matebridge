@@ -19,8 +19,9 @@ public enum ScreenCaptureError: Error, CustomStringConvertible {
     }
 }
 
-/// Captures one display as full-range BT.709 4:2:0 frames (what the encoder wants, no conversion), or as sRGB `BGRA`
-/// when T-235's `MATEBRIDGE_CHROMA` asks for it.
+/// Captures one display as full-range BT.709 4:2:0 frames (what the encoder wants, no conversion), as sRGB `BGRA`
+/// when T-235's `MATEBRIDGE_CHROMA` asks for it, or for an HDR10 stream (decision 0032) as 10-bit video-range
+/// BT.2100 PQ 4:2:0 frames (the chroma knob does not apply then).
 final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     /// pixel buffer, presentation time, host monotonic microseconds of the frame, and the frame's display time
     /// (`SCStreamFrameInfo.displayTime`, host clock microseconds; 0 when SCK gave none) used as the latency-trace origin
@@ -56,9 +57,21 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         // SCK scales the display to the encoded size (T-049 performance mode); at scale 1000 this is the display size.
         cfg.width = settings.encodedWidthPx
         cfg.height = settings.encodedHeightPx
-        cfg.pixelFormat = pixelFormat
-        cfg.colorSpaceName = CGColorSpace.sRGB
-        cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
+        if settings.dynamicRange == .hdr10 {
+            // Decision 0032: 10-bit 4:2:0 video range in BT.2100 PQ, the HEVC Main10 input without conversion. The
+            // same values as macOS 26+'s `captureHDRRecordingPreservedSDRHDR10` preset (read on macOS 27, T-237),
+            // set one by one so the code also builds for macOS 15. Needs the display created with transfer
+            // function 1 (an SDR display has no headroom to capture). HDR wins over `MATEBRIDGE_CHROMA`
+            // (`ChromaPolicy`, `reason=hdr`): `pixelFormat` is not used here.
+            cfg.captureDynamicRange = .hdrCanonicalDisplay
+            cfg.pixelFormat = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            cfg.colorSpaceName = CGColorSpace.itur_2100_PQ
+            cfg.colorMatrix = kCVImageBufferYCbCrMatrix_ITU_R_2020
+        } else {
+            cfg.pixelFormat = pixelFormat
+            cfg.colorSpaceName = CGColorSpace.sRGB
+            cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
+        }
         // SCK discards frames that arrive slightly before the interval, so with exactly 1/fps a 60 Hz source
         // loses ~5% (measured 57.4 fps). Half the interval lets every frame through; the encoder's
         // `FrameGate` keeps the send rate at the stream fps.

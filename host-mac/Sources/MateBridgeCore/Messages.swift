@@ -357,48 +357,80 @@ public struct StreamPrefs: Equatable, Sendable {
     /// field used to be `reserved`).
     public var bitrateKbps: UInt32
     /// Optional trailing group (decision 0029, "game display"): the requested 1x virtual display size in pixels.
-    /// 0x0 = the native display (HELLO size, HiDPI). Absent on the wire = 0x0; written only when either is non-zero.
+    /// 0x0 = the native display (HELLO size, HiDPI). Absent on the wire = 0x0; written when either is non-zero, or
+    /// when the dynamic range group follows (it may then be 0x0).
     public var displayWidthPx: UInt16
     public var displayHeightPx: UInt16
+    /// Second optional group (decision 0032): the raw `dynamic_range` (0 SDR, 1 HDR10; the host counts any other
+    /// value as 0, see `normalized`). Absent on the wire = 0; written (with `reserved = 0`) only when non-zero.
+    public var dynamicRange: UInt8
 
     public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0,
-                displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0) {
+                displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0, dynamicRange: UInt8 = 0) {
         self.fps = fps
         self.scalePermille = scalePermille
         self.bitrateKbps = bitrateKbps
         self.displayWidthPx = displayWidthPx
         self.displayHeightPx = displayHeightPx
+        self.dynamicRange = dynamicRange
     }
 
-    /// What the host honours: fps in {60, 120, 144} (anything else is 60) and scale clamped to 500...1000.
-    /// `bitrateKbps` and `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is
-    /// validated by the host's policy, not here).
+    /// What the host honours: fps in {60, 120, 144} (anything else is 60), scale clamped to 500...1000 and
+    /// `dynamicRange` in {0, 1} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
+    /// `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is validated by the
+    /// host's policy, not here).
     public var normalized: StreamPrefs {
         let f = Self.supportedFps.contains(Int(fps)) ? fps : 60
         let s = min(max(Int(scalePermille), Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
         return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps,
-                           displayWidthPx: displayWidthPx, displayHeightPx: displayHeightPx)
+                           displayWidthPx: displayWidthPx, displayHeightPx: displayHeightPx,
+                           dynamicRange: DynamicRange(wire: dynamicRange).rawValue)
     }
+
+    /// The requested dynamic range as the host reads it (unknown values are SDR).
+    public var requestedDynamicRange: DynamicRange { DynamicRange(wire: dynamicRange) }
 
     func write(_ w: inout ByteWriter) {
         w.u16(fps)
         w.u16(scalePermille)
         w.u32(bitrateKbps)
-        if displayWidthPx != 0 || displayHeightPx != 0 {
+        if displayWidthPx != 0 || displayHeightPx != 0 || dynamicRange != 0 {
             w.u16(displayWidthPx)
             w.u16(displayHeightPx)
+        }
+        if dynamicRange != 0 {
+            w.u8(dynamicRange)
+            w.u8(0)
         }
     }
 
     static func read(_ r: inout ByteReader) throws -> StreamPrefs {
         var prefs = StreamPrefs(fps: try r.u16(), scalePermille: try r.u16(), bitrateKbps: try r.u32())
-        // Optional trailing group (PROTOCOL.md 2): absent -> 0x0; partially present -> payload too short.
+        // Optional trailing groups (PROTOCOL.md 2, 0x05): absent -> 0; partially present -> payload too short
+        // (9-11 and 13 bytes); anything after the second group is ignored (long payload rule).
         if r.remaining > 0 {
             prefs.displayWidthPx = try r.u16()
             prefs.displayHeightPx = try r.u16()
         }
+        if r.remaining > 0 {
+            prefs.dynamicRange = try r.u8()
+            try r.skip(1)
+        }
         return prefs
     }
+}
+
+/// `STREAM_PREFS.dynamic_range` as the host reads it (decision 0032).
+public enum DynamicRange: UInt8, Equatable, Sendable {
+    case sdr = 0
+    /// HEVC Main10, BT.2020 / PQ (ST 2084) / BT.2020 NCL, limited range, MDCV + CLL SEI.
+    case hdr10 = 1
+
+    /// A wire value: unknown values are SDR (PROTOCOL.md 0x05).
+    public init(wire: UInt8) { self = DynamicRange(rawValue: wire) ?? .sdr }
+
+    /// Log value: `sdr` / `hdr10`.
+    public var logName: String { self == .sdr ? "sdr" : "hdr10" }
 }
 
 /// `SETTINGS_OPEN` (H->C, docs/PROTOCOL.md 0x08): asks the tablet to show its settings panel while streaming

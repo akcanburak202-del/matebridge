@@ -48,7 +48,12 @@ class SettingsViews(
         }.also { b -> refreshers += { b.text = item.text() } }
         is SettingItem.Stepper -> stepper(item)
         is SettingItem.Action -> button(item.title) { item.run() }
-        is SettingItem.Info -> text("", 15f, INFO_COLOR).also { t -> refreshers += { t.text = item.text() } }
+        is SettingItem.Info -> text("", 15f, INFO_COLOR).also { t ->
+            refreshers += {
+                t.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-238: e.g. "Uygulanan: HDR10" outside Oyun
+                t.text = item.text()
+            }
+        }
     }
 
     private fun choice(item: SettingItem.Choice): View {
@@ -64,6 +69,9 @@ class SettingsViews(
         refreshers += {
             col.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-223: e.g. "Kare hızı" in Çizim
             title.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
+            val enabled = item.enabled() // T-238: grey row, e.g. "HDR (Bu cihazda yok)"
+            title.setTextColor(if (enabled) TEXT_COLOR else DISABLED_COLOR)
+            for (b in buttons) { b.isEnabled = enabled; b.alpha = if (enabled) 1f else DISABLED_ALPHA }
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {
                 val on = item.options[i].id == sel
@@ -115,6 +123,8 @@ class SettingsViews(
     private companion object {
         val TEXT_COLOR = Color.WHITE
         val INFO_COLOR = Color.parseColor("#BBBBBB")
+        val DISABLED_COLOR = Color.parseColor("#888888")
+        const val DISABLED_ALPHA = 0.4f
     }
 }
 

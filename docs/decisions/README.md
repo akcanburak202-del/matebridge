@@ -53,3 +53,4 @@ Kazanılan, kaybedilen, neyi tetikler. Hangi koşulda tekrar düşünülür.
 | 0029 | Oyunlar için düşük çözünürlüklü sanal ekran | kabul |
 | 0030 | Modlar sadeleşir: Günlük / Çizim / Oyun; kare hızı ve oyun çözünürlüğü ayrı ayar | kabul |
 | 0031 | Boşta karartma ve kapatma (tablet): panelden 2/5/10/15/kapalı, kısma → 1 dk sonra kapatma, ilk dokunuş yutulur, Oyun modunda yok | kabul |
+| 0032 | HDR10 akış (HEVC Main10 PQ), yalnız Oyun modunda, panelden isteğe bağlı; STREAM_PREFS dynamic_range grubu | kabul |

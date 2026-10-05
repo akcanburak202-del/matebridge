@@ -146,9 +146,17 @@ data class StreamConfig(
 ) : Message {
     override val type get() = MsgType.STREAM_CONFIG
 
+    /** Decision 0032: the host applied HDR10 (PQ transfer); anything else is SDR (PROTOCOL.md 0x03). */
+    val isHdr10: Boolean get() = transfer == TRANSFER_PQ
+
     companion object {
         const val CODEC_H264 = 1
         const val CODEC_HEVC = 2
+
+        /** H.273 codes of an HDR10 stream (decision 0032): BT.2020 primaries, SMPTE ST 2084 (PQ), BT.2020 NCL matrix. */
+        const val PRIMARIES_BT2020 = 9
+        const val TRANSFER_PQ = 16
+        const val MATRIX_BT2020_NCL = 9
     }
 }
 
@@ -157,7 +165,10 @@ data class StreamConfig(
  * display, and the user's target [bitrateKbps] (u32, decision 0013; 0 = host default for the mode).
  * [displayWidthPx]/[displayHeightPx] are the optional trailing group (decision 0029, "game display"): the requested 1x
  * virtual display size in pixels; 0x0 = the native display. Absent on the wire = 0x0; encoded only when either is
- * non-zero (PROTOCOL.md 2, optional trailing group).
+ * non-zero or when the dynamic range group follows (PROTOCOL.md 2, optional trailing group).
+ * [dynamicRange] is the second optional group (decision 0032): [DYNAMIC_RANGE_SDR] or [DYNAMIC_RANGE_HDR10]; absent on
+ * the wire = SDR; encoded only when non-zero (with the display group before it, 0x0 allowed). A decoded unknown value is
+ * kept as is (the host treats it as SDR).
  */
 data class StreamPrefs(
     val fps: Int,
@@ -165,8 +176,14 @@ data class StreamPrefs(
     val bitrateKbps: Long = 0,
     val displayWidthPx: Int = 0,
     val displayHeightPx: Int = 0,
+    val dynamicRange: Int = DYNAMIC_RANGE_SDR,
 ) : Message {
     override val type get() = MsgType.STREAM_PREFS
+
+    companion object {
+        const val DYNAMIC_RANGE_SDR = 0
+        const val DYNAMIC_RANGE_HDR10 = 1
+    }
 }
 
 /** Host asks the tablet to show its settings panel while streaming (H to C, PROTOCOL.md 0x08, decision 0013). */

@@ -132,6 +132,11 @@ public final class StreamCoordinator: @unchecked Sendable {
     private let gameDisplayLock = NSLock()
     private var gameDisplay = GameDisplayFallback()
     private var allowsGameDisplay: Bool { gameDisplayLock.withLock { gameDisplay.allowsGameDisplay } }
+    /// T-237: after an HDR10 ring failed at pipeline start, no HDR for the rest of the process (decision 0032,
+    /// `ev=hdr_fallback`). Read by the entry points (any thread) and the event loop.
+    private let hdrLock = NSLock()
+    private var hdrFallback = HDRFallback()
+    private var allowsHDR: Bool { hdrLock.withLock { hdrFallback.allowsHDR } }
     /// T-214 review: the config each tablet was told at HELLO, checked at activation (`AnnouncedStreamConfigs`).
     private let announcedLock = NSLock()
     private var announced = AnnouncedStreamConfigs()
@@ -216,7 +221,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         let initial = VideoSettings.initialSettings(
             defaults: base, stored: stored,
             defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-            allowGameDisplay: allowsGameDisplay)
+            allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR)
         return (base, initial, stored)
     }
 
@@ -357,12 +362,24 @@ public final class StreamCoordinator: @unchecked Sendable {
         // derived settings unless `reannounce` is already set), so a changed result is announced too.
         var reasons: [String] = reannounce ? ["hello_mismatch"] : []
         let refresh = VideoSettings.parseRefreshHz(ProcessInfo.processInfo.environment["MATEBRIDGE_REFRESH"])
+        let allowHDR = allowsHDR, allowGame = allowsGameDisplay
         if let fixed = gameDisplayLock.withLock({
-            gameDisplay.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh)
+            gameDisplay.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh, allowHDR: allowHDR)
         }) {
             if AnnouncedStreamConfigs.differs(settings.streamConfig(configID: configID),
                                               fixed.streamConfig(configID: configID)) {
                 reasons.append("game_display_off")
+            }
+            settings = fixed
+        }
+        // T-237: the same for HDR10 switched off by an `hdr_fallback` while this start waited.
+        if let fixed = hdrLock.withLock({
+            hdrFallback.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh,
+                                    allowGameDisplay: allowGame)
+        }) {
+            if AnnouncedStreamConfigs.differs(settings.streamConfig(configID: configID),
+                                              fixed.streamConfig(configID: configID)) {
+                reasons.append("hdr_off")
             }
             settings = fixed
         }
@@ -402,13 +419,15 @@ public final class StreamCoordinator: @unchecked Sendable {
         let p = prefs.normalized
         let userKbps = VideoSettings.clampedUserBitrateKbps(p.bitrateKbps).map(String.init) ?? "default"
         let allowed = allowsGameDisplay
-        let display = live.base.applying(p, allowGameDisplay: allowed).displayModeText
+        let allowHDR = allowsHDR
+        let derived = live.base.applying(p, allowGameDisplay: allowed, allowHDR: allowHDR)
         let game = GameDisplayPolicy.outcome(of: p, nativeW: live.base.nativeWidthPx, nativeH: live.base.nativeHeightPx,
                                              allowed: allowed)
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) bitrate_kbps=\(userKbps) "
             + "requested_fps=\(prefs.fps) requested_scale=\(prefs.scalePermille) requested_bitrate_kbps=\(prefs.bitrateKbps) "
-            + "display=\(display) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
-            + "game_display=\(game.logName)")
+            + "display=\(derived.displayModeText) requested_display=\(prefs.displayWidthPx)x\(prefs.displayHeightPx) "
+            + "game_display=\(game.logName) dynamic_range=\(derived.dynamicRange.logName) "
+            + "requested_dynamic_range=\(prefs.dynamicRange)")
         if let now = prefsGate.offer(p, now: HostClock.nowUs()) { await applyPrefs(now) }
     }
 
@@ -445,7 +464,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard var live = session else { return }
         let env = ProcessInfo.processInfo.environment
         let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: allowsGameDisplay)
+                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR)
         prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
         live.prefs = prefs
         session = live
@@ -459,7 +478,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             "config_id=\(live.configID) fps=\(old.fps)->\(wanted.fps) scale=\(old.scalePermille)->\(wanted.scalePermille) "
             + "encoded=\(wanted.encodedWidthPx)x\(wanted.encodedHeightPx) refresh_hz=\(old.displayRefreshHz)->\(wanted.displayRefreshHz) "
             + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource) "
-            + "display=\(old.displayModeText)->\(wanted.displayModeText)")
+            + "display=\(old.displayModeText)->\(wanted.displayModeText) "
+            + "dynamic_range=\(old.dynamicRange.logName)->\(wanted.dynamicRange.logName)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }
@@ -692,6 +712,8 @@ public final class StreamCoordinator: @unchecked Sendable {
                 + "refresh_hz=\(current.refreshHz)->\(settings.displayRefreshHz)")
         case .recreate(.refreshChange):
             log(.info, "display_recreate", "reason=refresh_change refresh_hz=\(current.refreshHz)->\(settings.displayRefreshHz)")
+        case .recreate(.transferChange):
+            log(.info, "display_recreate", "reason=transfer_change transfer=\(current.transfer)->\(settings.displayMode.transfer)")
         case .recreate(.offline):
             log(.info, "display_recreate", "reason=offline")
         }
@@ -773,6 +795,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                 log(.info, "display_created", sizes)
                 logDisplayTransfer(p)
             }
+            logHDRConfig(settings)
             videoLogger.log(.info, "cadence_setup", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: p.cadenceSetup)
             // T-187: once per pipeline; the menu keeps a software/unknown warning while this pipeline runs.
@@ -786,8 +809,41 @@ public final class StreamCoordinator: @unchecked Sendable {
             lease.displayLost()
             wakeDisplayIfNeeded(DisplayWaker.reason(for: error))
             onSummary("Video başlamadı: \(error)")
+            if await fallBackFromHDR(failed: settings, error: error) { return }
             await fallBackFromGameDisplay(failed: settings, error: error)
         }
+    }
+
+    /// T-237: `video ev=hdr_config` for every configured pipeline: what the tablet asked for, what runs (= what
+    /// `STREAM_CONFIG` reported), and why a request runs as SDR.
+    private func logHDRConfig(_ settings: VideoSettings) {
+        let requested = session?.prefs?.requestedDynamicRange ?? .sdr
+        let reason = HDRPolicy.decide(requested: requested, codec: settings.codec, allowed: allowsHDR).reason
+        videoLogger.log(.info, "hdr_config", sessionID: session?.sessionID ?? 0, generation: session?.configID ?? 0,
+                        fields: HDRLog.configFields(requested: requested, settings: settings, reason: reason))
+    }
+
+    /// T-237 (decision 0032, PROTOCOL.md 0x05): an HDR10 pipeline whose display, capture or encoder refused HDR falls
+    /// back to SDR once. HDR stays off for the rest of the process (`HDRFallback`); the session's prefs are re-applied
+    /// without it, announced with a new `config_id` (`STREAM_CONFIG` with SDR codes + video close), and the SDR
+    /// pipeline is created (after `DisplayRecreateGap`, since the failed start removed the HDR display). Returns true
+    /// when it handled the failure.
+    private func fallBackFromHDR(failed: VideoSettings, error: Error) async -> Bool {
+        guard let hdr = VideoPipeline.hdrFailure(error) else { return false }
+        let fallBack = hdrLock.withLock { hdrFallback.startFailed(settings: failed, reason: hdr.reason) }
+        guard fallBack, !isShuttingDown, var live = session, live.settings.dynamicRange == .hdr10,
+              let prefs = live.prefs else { return fallBack }
+        let env = ProcessInfo.processInfo.environment
+        let sdr = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                     allowGameDisplay: allowsGameDisplay, allowHDR: false)
+        live.settings = sdr
+        live.configID = nextConfigID(after: live.configID)
+        session = live
+        log(.warning, "hdr_fallback", HDRLog.fallbackFields(reason: hdr.reason, detail: hdr.detail,
+                                                            configID: live.configID, settings: sdr))
+        onReconfigure(live.sessionID, sdr.streamConfig(configID: live.configID))
+        await perform(lease.sessionStarted(device: live.deviceID, settings: sdr))
+        return true
     }
 
     /// T-214 (PROTOCOL.md 0x05): a 1x game display that cannot be set up falls back to the native display once. Game
@@ -803,7 +859,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         let env = ProcessInfo.processInfo.environment
         let native = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: false)
+                                        allowGameDisplay: false, allowHDR: allowsHDR)
         let old = live.settings
         live.settings = native
         live.configID = nextConfigID(after: live.configID)

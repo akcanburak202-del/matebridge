@@ -3,12 +3,15 @@ package dev.matebridge.client.settings
 import dev.matebridge.client.BuildInfo
 import dev.matebridge.client.audio.AudioOutPref
 import dev.matebridge.client.files.FilesRoot
+import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
 import dev.matebridge.client.stream.Bitrate
 import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
+import dev.matebridge.client.stream.HdrCapability
+import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.StreamMode
 import java.util.Locale
 
@@ -44,6 +47,14 @@ interface SettingsHost {
     fun selectBitrate(kbps: Long)
     /** `STREAM_CONFIG.bitrate_kbps` of the running stream, null without one. */
     val appliedBitrateKbps: Long?
+    /** Decision 0032 (T-238): this tablet can show HDR10 (display and decoder), computed once at start. */
+    val hdrCapability: HdrCapability
+    /** The stored "HDR" setting (applies only in Oyun). */
+    val hdrEnabled: Boolean
+    /** Persists the choice; a STREAM_PREFS goes to the host only when Oyun's request changes. No effect without the capability. */
+    fun selectHdr(on: Boolean)
+    /** STREAM_CONFIG of the running stream (the applied dynamic range is read from it), null without one. */
+    val appliedConfig: StreamConfig?
     /**
      * The mode whose temporary layer is in effect (Oyun, decision 0014; Çizim, decision 0030; T-109, T-223), null in
      * Günlük: the settings it overrides ([GameModeSettings.overridesOf]) show and change the session layer, not the
@@ -151,6 +162,8 @@ sealed interface SettingItem {
         val marker: () -> String = { "" },
         /** T-223: true while the whole row (title and buttons) is not shown, e.g. "Kare hızı" in Çizim. */
         val hidden: () -> Boolean = { false },
+        /** T-238: false while the row is shown grey and its buttons do nothing, e.g. "HDR" without the capability. */
+        val enabled: () -> Boolean = { true },
         val select: (String) -> Unit,
     ) : SettingItem {
         /** The title with its current mark, e.g. "Bit hızı (oyun modu)". */
@@ -183,8 +196,8 @@ sealed interface SettingItem {
 
     class Action(override val key: String, val title: String, val run: () -> Unit) : SettingItem
 
-    /** Read-only text. */
-    class Info(override val key: String, val text: () -> String) : SettingItem
+    /** Read-only text; [hidden] (T-238) while it is not shown. */
+    class Info(override val key: String, val hidden: () -> Boolean = { false }, val text: () -> String) : SettingItem
 }
 
 class SettingsSection(val title: String, val items: List<SettingItem>)
@@ -278,6 +291,20 @@ object SettingsCatalog {
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
+                // Decision 0032 (T-238): only in Oyun; grey "(Bu cihazda yok)" without the capability.
+                add(
+                    SettingItem.Choice(
+                        "hdr", HdrPolicy.TITLE,
+                        listOf(SettingItem.Option(HdrPolicy.OPTION_OFF, "Kapalı"), SettingItem.Option(HdrPolicy.OPTION_ON, "Açık")),
+                        { HdrPolicy.selected(h.hdrCapability, h.hdrEnabled) },
+                        { HdrPolicy.marker(h.hdrCapability) },
+                        { HdrPolicy.rowHidden(h.streamMode) },
+                        { HdrPolicy.rowEnabled(h.hdrCapability) },
+                    ) { id -> if (HdrPolicy.rowEnabled(h.hdrCapability)) h.selectHdr(id == HdrPolicy.OPTION_ON) },
+                )
+                if (inStream) {
+                    add(SettingItem.Info("hdr_applied", { HdrPolicy.rowHidden(h.streamMode) }) { HdrPolicy.appliedLabel(h.appliedConfig) })
+                }
                 add(
                     SettingItem.Choice(
                         "idle_dim", IDLE_DIM_TITLE,

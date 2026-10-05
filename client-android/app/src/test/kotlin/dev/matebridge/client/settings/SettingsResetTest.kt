@@ -49,6 +49,7 @@ class SettingsResetTest {
         s.statsOverlay(), s.streamMode(), s.bitrateKbps(), s.touchpadSpeed(), s.mouseSpeed(), s.clipboardShare(),
         s.filesShare(), s.filesRoot(), s.filesReadOnly(), s.audioEnabled(), s.audioOut(), s.penTrail(), s.penDot(),
         s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(), s.modeFps(StreamMode.DAILY), s.modeFps(StreamMode.GAME),
+        s.hdrGame(), // T-238
     )
 
     private fun setEverythingNonDefault(s: Settings) {
@@ -70,6 +71,7 @@ class SettingsResetTest {
         s.setPenDot(true)
         s.setFingerTouchDisabled(true)
         s.setTransportMode(TransportMode.USB)
+        s.setHdrGame(true) // T-238
     }
 
     @Test fun everyGetterReturnsItsDefaultAfterTheReset() {
@@ -79,7 +81,7 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(18, s.resetToDefaults())
+        assertEquals(19, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())
@@ -101,6 +103,7 @@ class SettingsResetTest {
         assertFalse(s.fingerTouchDisabled())
         assertEquals(TransportMode.AUTO, s.transportMode())
         assertEquals(GameResolution.R1848, s.gameResolution()) // T-215: 1848×1214
+        assertFalse(s.hdrGame()) // T-238: HDR off
     }
 
     @Test fun identityEndpointMigrationWakeDataAndPairKeysAreKeptByteForByte() {

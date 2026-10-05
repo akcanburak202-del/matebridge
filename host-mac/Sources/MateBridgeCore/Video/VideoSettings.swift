@@ -28,6 +28,13 @@ public struct VideoSettings: Equatable, Sendable {
     /// 1x game display only (decision 0029): the native HiDPI display it stands in for. nil = this is the native
     /// display, whose own size is the native size. Set by `applying(_:)`; the single source of `displayHiDPI`.
     public internal(set) var replacedNative: NativeDisplaySize?
+    /// The dynamic range the stream is configured for (decision 0032): `.hdr10` only when the tablet asked for it and
+    /// `HDRPolicy` allowed it (`applying(_:)`). A runtime failure of the HDR path falls back to `.sdr` with a new
+    /// `config_id` (`HDRFallback`), so this is also what `STREAM_CONFIG` reports.
+    public var dynamicRange: DynamicRange = .sdr
+    /// T-232 developer knob `MATEBRIDGE_VD_TRANSFER` (read by `applyingExperimentKnobs`): the transfer function of an
+    /// SDR stream's virtual display. An HDR10 stream always asks for 1 (`displayTransfer`).
+    public var vdTransferKnob = VirtualDisplayTransfer.parse(nil)
 
     /// The native display (HELLO size, HiDPI 2x) a 1x game display replaces.
     public struct NativeDisplaySize: Equatable, Sendable {
@@ -93,7 +100,14 @@ public struct VideoSettings: Equatable, Sendable {
         s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
             ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
+        s.vdTransferKnob = VirtualDisplayTransfer.parse(env: env)
         return s
+    }
+
+    /// What the virtual display is created with (T-232, decision 0032): transfer function 1 for an HDR10 stream (the
+    /// knob is not needed), the `MATEBRIDGE_VD_TRANSFER` knob otherwise (default 0, the legacy SDR mode).
+    public var displayTransfer: VirtualDisplayTransfer.Knob {
+        dynamicRange == .hdr10 ? VirtualDisplayTransfer.Knob(requested: 1, invalid: false) : vdTransferKnob
     }
 
     /// Same virtual display size, point size and HiDPI (refresh rate, fps, scale and bitrate may differ).
@@ -113,21 +127,33 @@ public struct VideoSettings: Equatable, Sendable {
 
     /// The mode the virtual display must have for these settings (`DisplayReuse`).
     public var displayMode: DisplayMode {
-        DisplayMode(widthPx: widthPx, heightPx: heightPx, hidpi: displayHiDPI, refreshHz: displayRefreshHz)
+        DisplayMode(widthPx: widthPx, heightPx: heightPx, hidpi: displayHiDPI, refreshHz: displayRefreshHz,
+                    transfer: displayTransfer.requested)
     }
 
+    // SDR (today's stream, unchanged): sRGB primaries = BT.709 primaries, transfer 13 = sRGB, matrix 1 = BT.709,
+    // full range.
     public static let colorPrimaries: UInt8 = 1
     public static let transfer: UInt8 = 13
     public static let matrix: UInt8 = 1
     public static let fullRange = true
 
+    // HDR10 (decision 0032, PROTOCOL.md 0x03): BT.2020 primaries, SMPTE ST 2084 (PQ), BT.2020 NCL, limited range.
+    public static let hdr10ColorPrimaries: UInt8 = 9
+    public static let hdr10Transfer: UInt8 = 16
+    public static let hdr10Matrix: UInt8 = 9
+    public static let hdr10FullRange = false
+
     public func streamConfig(configID: UInt16) -> StreamConfig {
-        StreamConfig(
+        let hdr = dynamicRange == .hdr10
+        return StreamConfig(
             configID: configID, codec: codec,
             widthPx: UInt16(clamping: encodedWidthPx), heightPx: UInt16(clamping: encodedHeightPx),
             widthPt: UInt16(clamping: widthPt), heightPt: UInt16(clamping: heightPt),
             fps: UInt16(clamping: fps), bitrateKbps: UInt32(clamping: bitrateKbps),
-            colorPrimaries: VideoSettings.colorPrimaries, transfer: VideoSettings.transfer,
-            matrix: VideoSettings.matrix, fullRange: VideoSettings.fullRange)
+            colorPrimaries: hdr ? Self.hdr10ColorPrimaries : Self.colorPrimaries,
+            transfer: hdr ? Self.hdr10Transfer : Self.transfer,
+            matrix: hdr ? Self.hdr10Matrix : Self.matrix,
+            fullRange: hdr ? Self.hdr10FullRange : Self.fullRange)
     }
 }

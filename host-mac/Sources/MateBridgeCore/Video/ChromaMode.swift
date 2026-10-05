@@ -83,6 +83,8 @@ public enum ChromaFallbackReason: String, Equatable, Sendable {
     case profileRejected = "profile_rejected"
     /// The Metal pass could not be set up (no device, or the kernel did not compile).
     case metalUnavailable = "metal_unavailable"
+    /// T-237: the stream is HDR10 (decision 0032). HDR wins: x420 PQ capture and HEVC Main10, the knob is ignored.
+    case hdr
 }
 
 /// The requested and the applied chroma mode of one encoder session.
@@ -110,8 +112,14 @@ public struct ChromaDecision: Equatable, Sendable {
 
 public enum ChromaPolicy {
     /// The mode to apply before any session exists: `444` needs HEVC and the fast profile; the sharp modes and `420`
-    /// work with every codec and profile (their encoder input stays `420f`).
-    public static func resolve(knob: ChromaKnob, codec: Codec, profile: EncoderProfile) -> ChromaDecision {
+    /// work with every codec and profile (their encoder input stays `420f`). An HDR10 stream (T-237, decision 0032)
+    /// ignores the knob: applied `420` (the 10-bit PQ 4:2:0 path), and a set knob is logged with `reason=hdr`. SDR
+    /// resolves exactly as before.
+    public static func resolve(knob: ChromaKnob, codec: Codec, profile: EncoderProfile,
+                               dynamicRange: DynamicRange = .sdr) -> ChromaDecision {
+        if dynamicRange == .hdr10 {
+            return ChromaDecision(knob: knob, applied: .yuv420, reason: knob.isSet ? .hdr : nil)
+        }
         guard knob.requested == .yuv444 else { return ChromaDecision(knob: knob, applied: knob.requested, reason: nil) }
         if codec != .hevc { return ChromaDecision(knob: knob, applied: .yuv420, reason: .codec) }
         if profile == .llrc { return ChromaDecision(knob: knob, applied: .yuv420, reason: .llrc) }

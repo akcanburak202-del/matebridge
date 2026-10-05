@@ -65,10 +65,14 @@ extension VideoSettings {
     /// mode and `displayRefreshHz`, so the virtual display is kept and only capture and encoder restart.
     /// `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps put the
     /// virtual display at the same rate.
+    /// `dynamic_range` (decision 0032): HDR10 when the tablet asks for it and `HDRPolicy` allows it (`allowHDR` false
+    /// after an HDR failure in this process, or a non-HEVC codec, gives SDR). A change of it changes the display's
+    /// transfer function, so the display is recreated (`DisplayReuse`).
     public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60,
-                         allowGameDisplay: Bool = true) -> VideoSettings {
+                         allowGameDisplay: Bool = true, allowHDR: Bool = true) -> VideoSettings {
         let p = prefs.normalized
         var s = onNativeDisplay
+        s.dynamicRange = HDRPolicy.decide(requested: p.requestedDynamicRange, codec: s.codec, allowed: allowHDR).applied
         s.fps = Int(p.fps)
         s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
         if allowGameDisplay, let game = GameDisplayPolicy.size(of: p, nativeW: s.widthPx, nativeH: s.heightPx) {

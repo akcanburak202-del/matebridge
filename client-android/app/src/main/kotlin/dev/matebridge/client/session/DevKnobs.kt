@@ -230,9 +230,12 @@ data class StreamProfile(
     val displayHeightPx: Int = 0,
     /** T-215: the host applied the requested game display (full geometry, `GameResolution.appliedIn`). */
     val displayApplied: Boolean = false,
+    /** T-238 (decision 0032): the host applied HDR10 (STREAM_CONFIG transfer 16). */
+    val hdr: Boolean = false,
 ) {
     fun logFields(sha: String, built: String, knobs: DevKnobs): String =
         "mode=${id(mode)} fps=$fps size=${widthPx}x$heightPx scale_permille=$scalePermille ${displayFields()} " +
+            "hdr=${if (hdr) 1 else 0} " +
             "bitrate_kbps=$bitrateKbps " +
             "bitrate_setting=${if (bitrateSettingKbps <= 0) "auto" else bitrateSettingKbps.toString()} " +
             "transport=${id(transport)} transport_mode=${id(transportMode)} audio=${if (audioOn) 1 else 0} " +
