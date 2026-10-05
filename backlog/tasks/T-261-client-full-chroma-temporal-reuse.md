@@ -1,7 +1,7 @@
 ---
 id: T-261
 title: Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs
-status: ready
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-259]
@@ -29,8 +29,8 @@ files:
 
 ## Kabul kriterleri
 
-- [ ] Saf mantık JVM testli (blok karşılaştırma kuralı/toleransı CPU referans uygulamasıyla, geç yardımcı yükseltme kararı).
-- [ ] `./scripts/check.sh` geçer.
+- [x] Saf mantık JVM testli (blok karşılaştırma kuralı/toleransı CPU referans uygulamasıyla, geç yardımcı yükseltme kararı).
+- [x] `./scripts/check.sh` geçer.
 - [ ] Handoff: cihazda doğrulama (Wi-Fi Günlük 60: durağan ikonlar kaydırma sırasında titremiyor; `reuse_pct`, `late_upgrades`, `aux_paired_pct`; gecikme değişmiyor).
 
 ## Plan
@@ -46,5 +46,31 @@ Tasarım (yalnız GL/presenter tarafı; `chroma_layout = 0` yolu ve tel biçimi 
 Kısıt: tablet/adb yok; GLSL yalnız derleme + CPU referans testiyle doğrulanır, cihaz adımları Handoff'ta.
 
 ## Handoff
+
+**Commit:** `b89c01d` (dal `task/T-261-chroma-reuse`; plan commit `6062c00`; handoff commiti bunun üstünde). `./scripts/check.sh` (tam çalıştırma) ALL OK.
+
+**Dosyalar:** `client-android/app/src/main/kotlin/dev/matebridge/client/video/`: `ChromaReuse.kt` (yeni: blok kuralı + CPU referans durum modeli `ChromaReuseModel` + `LateUpgrade`), `PackedPresenter.kt` (tutulan ana görüntü, geç yükseltme, yeni zaman damgası biçimi, yeni sayaçlar), `FullChromaNative.kt`, `FullChromaPipeline.kt` (stats alanları, ana ImageReader `MAX_IMAGES + 1`), `AuxPairing.kt` (`find`); `cpp/mbfullchroma.cpp`; `docs/LOGGING.md`; test `video/ChromaReuseTest.kt` (16 test).
+
+**Tasarım:** iki RGBA8 durum dokusu (ping-pong, tam çözünürlük, tampon koordinatları): RGB = ham Y/Cb/Cr (gösterilen), A = referans Y. Çizim iki geçiş: (1) durum geçişi (YUV_target ile ana + yardımcı -> `state[next]`): eşleşmiş karede bugünkü birleştirme (ham değerler); yalnız-ana karede 2x2 blok karşılaştırması (4 Y vs A, ana Cb/Cr vs durumun (çift,çift) Cb/Cr'si, tolerans 2): değişmediyse durumun tam kromu + güncel Y (A korunur -> kayma yok), değiştiyse ana kromu bloğa çoğalt (bugünkü yalnız-ana görüntüsü) ve A = güncel Y. (2) gösterim geçişi `state[next]` -> RGB -> pencere (eglPresentationTimeANDROID, fence, zaman damgaları aynen; T-256 düzeni korunur). Kurulum (shader/FBO) başarısızsa `chroma_reuse_unavailable` loglanır ve eski tek geçişli yol çalışır. Tolerans `ChromaReuse.TOLERANCE = 2` (`presentSetReuseTolerance`, negatif = reuse kapalı; PackedPresenter ctor `reuseTolerance`).
+
+**Geç yardımcı:** son çizilen ana görüntü tutulur; yeni ana beklemiyorsa ve yardımcısı sonradan geldiyse (aux ring'de `capture_time_us` eşleşmesi) aynı kare birleştirilerek yeniden çizilir (sunum zamanı 0 = sonraki vsync, etiket -1: görüntü istatistiğine yeni kare olarak girmez), kare başına en çok bir kez; `late_upgrades++`. `offerAux` GL iş parçacığını uyandırır (25 ms tick beklemez).
+
+**Ölçüm:** `render ev=stats` sonuna `reuse_pct` (her 4. yalnız-ana çizimde 64x40 örnek ızgarası, fence tamamlanınca `glReadPixels`; bekletmez) ve `late_upgrades`. `gl_ms`: `EXT_disjoint_timer_query` kaldırıldı; yerine EGL `RENDERING_COMPLETE_TIME` - takas öncesi CLOCK_MONOTONIC (gönderimden GPU bitişine, sıra bekleme dahil; destek yoksa CPU süresi). `ev=gl_present_init` artık `render_ts=`, `reuse=`, `reuse_tol=` yazar (`gpu_timer=` kalktı). LOGGING.md güncel.
+
+**Varsayımlar / sapmalar**
+- Bellek: 2 x RGBA8 2800x1840 = ~41 MB (+küçük örnek hedefi), kartın 15-20 MB tahmininin üstünde; A kanalı referans Y'yi taşıdığı için ek doku yok.
+- Ana krom referansı = durum dokusunun (çift,çift) pikselindeki Cb/Cr'si (host `pick` ve yalnız-ana büyütmenin çoğaltması bunu tutarlı kılar).
+- Ana ImageReader `maxImages` 7 (6+1): presenter son çizilen görüntüyü tutuyor.
+- Gösterim için bir ek tam çözünürlüklü geçiş var: `gl_ms` artışı beklenir; `render_ts` ile ölçülür.
+- GLSL cihaz dışında derlenemedi/çalıştırılamadı (yalnız NDK ile C++ derlendi); CPU referansı (`ChromaReuseModel`) kuralın birebir modeli.
+
+**Cihazda kontrol edilecekler (Wi-Fi, Günlük 60, Tam renk; `adb logcat -s 'MB/*'`)**
+1. `render ev=gl_present_init ... reuse=1 render_ts=1` (`reuse=0` ise `chroma_reuse_unavailable err=` satırındaki shader/FBO hatası; resim eski yolla yine doğru olmalı).
+2. Resim doğru yönde/renkte mi (ilk kare, eşleşmiş ve yalnız-ana kareler; ters/dikey çevrik ya da renk bozulması durum/gösterim geçişi hatasıdır). Kaydırma sırasında durağan Apple Music ikonu titremiyor mu (asıl kabul).
+3. `render ev=stats`: `reuse_pct` (kaydırmada yüksek, hareketli içerikte düşük olması normal), `late_upgrades` (durağan ekranda > 0), `aux_paired_pct` (değişmemeli), `gl_ms_p50/p95` (artık 0,01 değil), `gl_outstanding_max`, `skip_pct`, `cap_cb_p50/p95_us`: gecikme önceki Tam renk oturumuna göre değişmemeli.
+4. Hızlı hareket sonrası ekran ~1 kare içinde tam renge oturuyor mu; yalnız-ana karede eski bloktan sızan hayalet renk görünüyor mu? Görünürse tolerans 2 -> 1/0 (tek yer: `ChromaReuse.TOLERANCE`).
+5. Keskin <-> Tam renk hızlı geçiş, uygulamayı arka plana alıp geri getirme (`full_chroma_failed`/`fence_stall` olmamalı; `img_errors` artmamalı).
+
+**TEST EDİLMEDİ (cihaz gerekir):** GLSL derleme/doğruluğu (durum geçişleri, örnek ızgarası, gösterim geçişi), FBO tamlığı, RENDERING_COMPLETE damgasının `gl_ms` için geçerliliği, örnek okumanın bekletmediği, bellek/gecikme etkisi, tolerans seçimi (T-253 netleştirme ile).
 
 ## Open questions
