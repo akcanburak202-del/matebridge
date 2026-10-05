@@ -1,7 +1,7 @@
 ---
 id: T-235
 title: Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-233]
@@ -34,10 +34,10 @@ T-233 araştırmasının (docs/research/2026-10-05-yuv444.md §3b ve "Kart A") u
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Knob ayrıştırma ve geri dönüş kararları (LLRC + 444 → 420) saf fonksiyon olarak test edilir; luma ayarının CPU referans uygulaması küçük sentetik bloklarda (kırmızı/gri kenar) bilinen PSNR iyileşmesini verir; Metal kernel çıktısı CPU referansıyla ±1 kod değerinde eşleşir (Metal test ortamında yoksa probe/CLI ile, Handoff'ta).
-- [ ] Varsayılan yolda yakalama biçimi ve kodlayıcı ayarları değişmez.
-- [ ] `ev=chroma_config`, `ev=chroma_stats` docs/LOGGING.md'de; knob docs/KNOBS.md'de.
-- [ ] `./scripts/check.sh` geçer.
+- [x] [XCTest] Knob ayrıştırma ve geri dönüş kararları (LLRC + 444 → 420) saf fonksiyon olarak test edilir; luma ayarının CPU referans uygulaması küçük sentetik bloklarda (kırmızı/gri kenar) bilinen PSNR iyileşmesini verir; Metal kernel çıktısı CPU referansıyla ±1 kod değerinde eşleşir (Metal test ortamında yoksa probe/CLI ile, Handoff'ta).
+- [x] Varsayılan yolda yakalama biçimi ve kodlayıcı ayarları değişmez.
+- [x] `ev=chroma_config`, `ev=chroma_stats` docs/LOGGING.md'de; knob docs/KNOBS.md'de.
+- [x] `./scripts/check.sh` geçer.
 - [ ] [device, orkestratör + kullanıcı] Dört değer sırayla: test sayfası ve Dock (kullanıcı gözle; gerekirse telefon fotoğrafı), `444` için istemci `ev=decoder_output_format`/hata, gecikme farkı. Sonuç NOTES'a; olumluysa kart B (karar).
 
 ## Plan
@@ -58,4 +58,32 @@ T-233 araştırmasının (docs/research/2026-10-05-yuv444.md §3b ve "Kart A") u
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** plan `714b760`; uygulama `b7bc247`; bu Handoff bir sonraki commit. Dal `task/T-235-chroma-knob`.
+- **Dokunulan dosyalar:**
+  - Yeni: `host-mac/Sources/MateBridgeCore/Video/ChromaMode.swift` (knob, `ChromaPolicy`, `ChromaConfigLog`, `ChromaStatsWindow`, `ChromaBitstreamInfo`, H.264 chroma), `SharpYUV.swift` (CPU referansı), `SharpYUVKernel.swift` (Metal kaynağı); `host-mac/Sources/MateBridgeHost/Video/ChromaConverter.swift`; testler `ChromaKnobTests.swift`, `SharpYUVTests.swift`; `tools/chroma-test/index.html`.
+  - Değişen: `HEVCSPS.swift` (`summary`: profile/chroma/VUI `chroma_loc`; `vuiColor` aynı davranış), `EncoderKnobs.swift` (`chroma`, allow list, `StreamProfileLog.value` public), `HEVCEncoder.swift`, `ScreenCapture.swift`, `VideoPipeline.swift`, `SharpnessBench.swift` (knob BGRA istiyorsa BGRA kare besler, sonda `chroma_stats`), `StreamCoordinator.swift` (10 sn'de `video ev=chroma_stats`), `docs/KNOBS.md` (#44), `docs/LOGGING.md` (yeni bölüm; `knobs=` sıra listesine `VD_TRANSFER, CHROMA` eklendi, T-232'den eksikti). `Package.swift` değişmedi.
+- **Tasarım özeti:**
+  - Knob yok/boş → `420`, hiçbir yeni ayar, satır ya da kilit yok (ProfileLevel aynı çağrı, yakalama `420f`, `ScreenCapture` satırları aynı; yalnız `pixelFormat` parametresi varsayılanla geçiyor). `chroma_config`/`chroma_stats` yalnız knob tanımlıyken (taban için `MATEBRIDGE_CHROMA=420`).
+  - `sharp_*`: Metal geçişi kodlayıcının sahip kuyruğunda, yalnız gerçekten gönderilen karelerde (`send`, `submittedUs`'tan önce; pacer'ın attığı karelere GPU harcanmaz), eşzamanlı bekleme. Havuz eşiği 8; geçiş başarısızsa kare BGRA olarak VT'ye gider (`conv_fail`, ilk hata `W ev=chroma_convert_failed`). Çıkışta oturum renk etiketleri + `ChromaLocation=Center`.
+  - Algoritma: 2×2 kutu ortalaması Cb/Cr; luma = çözücü modeliyle (renk büyütme varsayımı, BT.709, sRGB EOTF tablo + doğrusal ara değer) kaynağın doğrusal parlaklığına en yakın Y kodu. Düz pikseller (katkı veren tüm renk örnekleri = pikselin kendi rengi) düz Y'yi korur. GPU: sekant tahmini + dörtnala + ikiye bölme (monotonluk sayesinde CPU'nun düz ikiye bölmesiyle aynı sonuç).
+  - `444`: HEVC + `fast` profilde `HEVC_Main444_AutoLevel`; red → Main + `profile_rejected`; LLRC → `reason=llrc`, H.264 → `reason=codec` (yakalama `420f`).
+- **Ölçümler (Mac mini M6, sentetik, pencere/sanal ekran/yakalama yok):**
+  - XCTest: Metal kernel CPU referansıyla **bit bit aynı** (max |dY| = |dC| = 0; 67×45 tek boyut, gri/koyu zemin, rastgele yama, beyaz üstünde saf mavi, siyah üstünde sarı; düz, bilinear, nearest).
+  - Açıklık (L*) PSNR, CPU referansı: kırmızı/gri 29,5 → 63,0 dB (bilinear), 29,7 → 66,4 (nearest); macenta/koyu 30,2 → 57,6 / 29,0 → 46,5. Yanlış varsayım (bilinear ayarlı, nearest gösterim) 29,7 → 39,3 dB (araştırmadaki ~+9 dB ile uyumlu).
+  - Sentetik VT (scratch, 640×480, 3 kare): `ChromaLocation=Center` etiketli 420f girdi VUI'ye `chroma_loc_info` (tip 1) yazıyor; `_Left`/etiketsiz yazmıyor. Main444 + BGRA: SPS `profile_idc=4 chroma_format_idc=3`, `vui_full_range=0` (VT video aralığına çeviriyor).
+  - `--sharpness-bench` (2800×1840, gerçek `HEVCEncoder` + Mac'te çözme; canlı akış kodlayıcıyı paylaşıyor olabilir, gürültülü): 120 fps, 240 kare, yoğun renkli metin sayfası: `420` `cap_enc` p50 6,6 ms; `sharp_bilinear` dönüşüm duvar p50/p95 2,6/3,3 ms (GPU 2,0/2,8), `cap_enc` 8,7/13,0; `sharp_nearest` 2,2/2,3 (GPU 1,7/1,7), `cap_enc` 8,3/8,6. `444`: `profile=main444`, `chroma_format_idc=3`, `cap_enc` 7,6/11,5. LLRC+444 ve H.264+444 → `W … applied=420 reason=llrc|codec`; geçersiz değer → `reason=invalid_value`.
+  - Yalnız kernel (scratch, 120 fps aralıklı, GPU düşük saatte): masaüstü benzeri içerik ~1,5 ms, düz ekran ~0,9 ms, her yeri renkli nokta (en kötü) ~4,9 ms; arka arkaya (yüksek saat) en kötü ~1,8 ms. Gri/siyah metin düz sayılır (renk nötr), maliyeti renkli içerik belirliyor. Araştırmanın "<1 ms" tahmini yalnız düz ekranda tutuyor.
+- **Varsayımlar:**
+  - Tablet çözücüsü/DSS renk büyütmesi ya ortalanmış çift doğrusal ya da en yakın komşu; VUI `chroma_loc=1`'e uyup uymadığı bilinmiyor (iki değişkenin A/B nedeni bu).
+  - Ekran EOTF'u sRGB parçalı eğri (STREAM_CONFIG transfer 13); gamma 2.2 ise kazanç biraz düşer.
+  - SCK `BGRA` + `colorSpaceName = sRGB` değerleri bugünkü `420f` yolundaki sRGB kodlamasıyla aynı; `colorMatrix` BGRA'da yok sayılıyor (değiştirilmedi).
+  - `444`'te VUI video aralığında; STREAM_CONFIG tam aralık diyor. Bu değer yalnız "çözücü kabul ediyor mu" denemesi; görüntü açılırsa siyah/beyaz seviyeleri yanlış olabilir.
+- **Test edilmeyenler (cihaz / orkestratör):**
+  - Gerçek SCK `BGRA` yakalaması (canlı host'a ve sanal ekrana dokunulmadı): `CVMetalTextureCache`'in SCK IOSurface'larıyla çalışması, satır hizası, BGRA kuyruk belleği (5 × ~20 MB).
+  - Tablette görüntü: dört değer, test sayfası + Dock (telefon fotoğrafı), `sharp_*` kazancı ve renk saçağı; `444`'te istemci `ev=decoder_output_format` / `decode_error` / yeşil-bozuk görüntü.
+  - Gerçek akışta gecikme farkı (`ev=chroma_stats cap_enc_ms`, `ev=latency`) ve Oyun modunda GPU yükü (oyun GPU'yu doldururken geçiş uzayabilir).
+  - Metal derleme ilk pipeline başlangıcında ~100–200 ms (süreç başına bir kez); ölçülmedi.
+- **Orkestratör için cihaz sırası önerisi:** `MATEBRIDGE_CHROMA=420` (taban) → `sharp_bilinear` → `sharp_nearest` → `444`; her birinde `ev=chroma_config` (özellikle `444`: `applied=444 chroma_format_idc=3`) ve 10 sn'lik `ev=chroma_stats`. `tools/chroma-test/index.html` Safari'de.
+- **Açık sorular:**
+  - Dönüşüm sahip kuyruğunu ~2–3 ms (en kötü ~5 ms) bekletiyor; 120 fps'te verim yetiyor (kuyruk başına bir dönüşüm, VT iki kare paralel), gecikme ekliyor. Kart B'de benimsenirse optimizasyon (blok başına iş parçacığı, renk farkı küçükse atlama eşiği) ayrı iş olabilir.
+  - `444`'ün tam aralık olması gerekirse (çözücü kabul ederse) host'ta BGRA → `444f` dönüşümü ya da VT ayarı ayrıca araştırılmalı (kart C).
