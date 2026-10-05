@@ -182,9 +182,13 @@ object Codec {
             is DisplayRate -> { w.u16(msg.hz); w.u16(0) }
             is StreamPrefs -> {
                 w.u16(msg.fps); w.u16(msg.scalePermille); w.u32(msg.bitrateKbps)
-                if (msg.displayWidthPx != 0 || msg.displayHeightPx != 0) {
+                // PROTOCOL.md 0x05: the display group when either size is non-zero or the dynamic range group follows
+                // (then 0x0 is fine); the dynamic range group only when non-zero (decision 0032).
+                val hdrGroup = msg.dynamicRange != StreamPrefs.DYNAMIC_RANGE_SDR
+                if (msg.displayWidthPx != 0 || msg.displayHeightPx != 0 || hdrGroup) {
                     w.u16(msg.displayWidthPx); w.u16(msg.displayHeightPx)
                 }
+                if (hdrGroup) { w.u8(msg.dynamicRange); w.u8(0) }
             }
             is SettingsOpen -> w.u32(0)
             is FilesInfo -> { w.u8(msg.state); w.u16(msg.port); w.str8(msg.token) }
@@ -312,8 +316,12 @@ object Codec {
             MsgType.DISPLAY_RATE -> { val hz = r.u16(); r.skip(2); DisplayRate(hz) }
             MsgType.STREAM_PREFS -> {
                 val fps = r.u16(); val pm = r.u16(); val kbps = r.u32()
-                // Optional trailing group: absent -> 0x0; partially present -> short payload (PROTOCOL.md 2).
-                if (r.remaining() > 0) StreamPrefs(fps, pm, kbps, r.u16(), r.u16()) else StreamPrefs(fps, pm, kbps)
+                // Optional trailing groups: absent -> 0x0 / SDR; partially present -> short payload (PROTOCOL.md 2, 0x05).
+                if (r.remaining() == 0) return StreamPrefs(fps, pm, kbps)
+                val dw = r.u16(); val dh = r.u16()
+                if (r.remaining() == 0) return StreamPrefs(fps, pm, kbps, dw, dh)
+                val dr = r.u8(); r.skip(1) // reserved
+                StreamPrefs(fps, pm, kbps, dw, dh, dr)
             }
             MsgType.SETTINGS_OPEN -> { r.skip(4); SettingsOpen }
             MsgType.FILES_INFO -> FilesInfo(r.u8(), r.u16(), r.str8()) // unknown state kept: the receiver treats it as OFF

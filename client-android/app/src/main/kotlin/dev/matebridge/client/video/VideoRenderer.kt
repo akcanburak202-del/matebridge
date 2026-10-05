@@ -399,8 +399,8 @@ class VideoRenderer(
         val config = this.config
         onColorKeys(colorKeys(config))
         val mime = mime(config)
-        if (config.colorPrimaries != 1) {
-            // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged.
+        if (!ColorMapping.primariesConveyed(config.colorPrimaries, config.matrix)) {
+            // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged (BT.2020 rides on the standard).
             env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
         }
 

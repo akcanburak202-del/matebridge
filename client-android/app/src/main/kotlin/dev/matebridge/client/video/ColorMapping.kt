@@ -30,4 +30,15 @@ object ColorMapping {
     }
 
     fun range(fullRange: Int): Int = if (fullRange == 1) RANGE_FULL else RANGE_LIMITED
+
+    /**
+     * MediaFormat has no primaries key: [primaries] is conveyed only where [standard] implies it, i.e. BT.709 (1) with
+     * the BT.709 matrix, and BT.2020 (9, HDR10, decision 0032) with a BT.2020 matrix. Anything else (e.g. Display P3) is
+     * decoded but not tagged.
+     */
+    fun primariesConveyed(primaries: Int, matrix: Int): Boolean = when (primaries) {
+        1 -> true
+        9 -> standard(matrix) == STANDARD_BT2020
+        else -> false
+    }
 }

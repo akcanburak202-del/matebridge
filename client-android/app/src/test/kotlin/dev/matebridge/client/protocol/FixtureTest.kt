@@ -61,11 +61,16 @@ class FixtureTest {
             "stream_config_game_display" to StreamConfig(
                 2, StreamConfig.CODEC_HEVC, 1848, 1214, 1848, 1214, 120, 60000, 1, 13, 1, 1,
             ),
+            // Decision 0032: HDR10 applied (BT.2020 / PQ / BT.2020 NCL, limited range).
+            "stream_config_hdr10" to StreamConfig(
+                3, StreamConfig.CODEC_HEVC, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0,
+            ),
             "bye" to Bye(Bye.NORMAL),
             "bye_host_sleep" to Bye(Bye.HOST_SLEEP),
             "stream_prefs" to StreamPrefs(120, 750, 0),
             "stream_prefs_bitrate" to StreamPrefs(120, 1000, 40000),
             "stream_prefs_game_display" to StreamPrefs(120, 660, 60000, 1848, 1214),
+            "stream_prefs_hdr" to StreamPrefs(120, 660, 0, 1848, 1214, StreamPrefs.DYNAMIC_RANGE_HDR10),
             "display_rate" to DisplayRate(60),
             "settings_open" to SettingsOpen,
             "files_info_ready" to FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef"),
@@ -124,6 +129,7 @@ class FixtureTest {
 
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
+            "invalid_stream_prefs_hdr_partial",
         )
         val skipped = setOf("unknown_type")
 

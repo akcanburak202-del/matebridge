@@ -5,7 +5,9 @@ import dev.matebridge.client.files.FilesRoot
 import dev.matebridge.client.idle.IdleTimeout
 import dev.matebridge.client.session.SpeedRange
 import dev.matebridge.client.session.TransportMode
+import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.stream.GameResolution
+import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.StreamMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,6 +33,10 @@ class SettingsCatalogTest {
         override var bitrateKbps = 0L
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
+        override var hdrCapability = HdrCapability(displayHdr10 = true, decoderMain10Hdr10 = true)
+        override var hdrEnabled = false
+        override fun selectHdr(on: Boolean) { calls += "hdr $on"; hdrEnabled = on }
+        override var appliedConfig: StreamConfig? = null
         override var modeLayer: StreamMode? = null
         override var idleTimeout = IdleTimeout.DEFAULT
         override fun selectIdleTimeout(t: IdleTimeout) { calls += "idle ${t.id}"; idleTimeout = t }
@@ -81,10 +87,10 @@ class SettingsCatalogTest {
     @Test fun bothPanelsHaveTheSameControlsExceptTheStreamOnlyOnes() {
         val side = SettingsCatalog.sections(h, inStream = true).flatMap { it.items }.map { it.key }
         val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
-        assertEquals(side - setOf("disconnect", "bitrate_applied"), connect)
+        assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "idle_dim", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "idle_dim", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -131,6 +137,47 @@ class SettingsCatalogTest {
         assertEquals("Uygulanan: —", applied.text())
         h.appliedBitrateKbps = 60_000
         assertEquals("Uygulanan: 60 Mbps", applied.text())
+    }
+
+    @Test fun hdrRowOnlyInOyunAndGreyWithoutCapability() { // T-238, decision 0032
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "hdr")
+        val applied = item(s, "hdr_applied") as SettingItem.Info
+        assertEquals(listOf("Kapalı", "Açık"), c.options.map { it.label })
+        assertEquals(listOf("off", "on"), c.options.map { it.id })
+        // Günlük and Çizim: hidden (SDR), also the applied line.
+        assertTrue(c.hidden()); assertTrue(applied.hidden())
+        h.streamMode = StreamMode.DRAWING
+        assertTrue(c.hidden()); assertTrue(applied.hidden())
+        h.streamMode = StreamMode.GAME
+        assertFalse(c.hidden()); assertFalse(applied.hidden())
+        assertTrue(c.enabled())
+        assertEquals("HDR", c.titleText())
+        assertEquals("off", c.selected()) // default off
+        c.select("on")
+        assertEquals(listOf("hdr true"), h.calls)
+        assertEquals("on", c.selected())
+        c.select("off")
+        assertEquals("hdr false", h.calls.last())
+        // The applied dynamic range comes only from STREAM_CONFIG.
+        assertEquals("Uygulanan: —", applied.text())
+        h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0)
+        assertEquals("Uygulanan: HDR10", applied.text())
+        h.appliedConfig = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 1, 13, 1, 1)
+        assertEquals("Uygulanan: SDR", applied.text())
+        // Without the capability: grey, marked, shows off, and a tap does nothing.
+        h.hdrEnabled = true
+        h.hdrCapability = HdrCapability(displayHdr10 = true, decoderMain10Hdr10 = false)
+        h.calls.clear()
+        assertFalse(c.enabled())
+        assertEquals("HDR (Bu cihazda yok)", c.titleText())
+        assertEquals("off", c.selected())
+        c.select("on")
+        assertTrue(h.calls.isEmpty())
+        // The connect panel has the row but not the applied line.
+        val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
+        assertTrue("hdr" in connect)
+        assertFalse("hdr_applied" in connect)
     }
 
     @Test fun modeTransportAndAudioOutChoices() {
@@ -198,8 +245,8 @@ class SettingsCatalogTest {
         assertFalse(c.hidden()) // and it comes back
         h.streamMode = StreamMode.DRAWING
         assertEquals("Kare hızı (Çizim: hep 120)", c.titleText())
-        // no other row is ever hidden
-        for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" }) assertFalse(it.key, it.hidden())
+        // no other row is hidden in Çizim except HDR (T-238: only in Oyun)
+        for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" && it.key != "hdr" }) assertFalse(it.key, it.hidden())
         c.select("60") // the host ignores it in Çizim
         assertEquals("120", c.selected())
     }

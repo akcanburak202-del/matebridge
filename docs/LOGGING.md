@@ -457,13 +457,14 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
   - `ignored`: `--ez dev true` verilmediği için yok sayılan "yalnızca geliştirici" anahtarları, `docs/KNOBS.md` sırasıyla.
   - Yalnız anahtar adları yazılır, değerler asla (`net_bench` adresi dahil). Biçim T-127 için sabittir.
 - `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme). Oturum normal başlar.
-- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|-`
+- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] hdr=0|1 bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|-`
   - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
   - Alanların kaynağı:
     - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
     - `mode` (`daily|drawing|game`, T-223, karar 0030), `scale_permille`: tablette seçilen mod (ölçek artık hep 1000). Kare hızı ayrı bir ayardır: `fps` her zaman uygulanan STREAM_CONFIG değeridir (Günlük/Oyun için "Kare hızı" ayarı, Çizim hep 120).
     - `display` (T-215, karar 0029): STREAM_PREFS'te istenen oyun ekranı. `native` = grup yok (oyun dışı modlar ya da `--ez dev true --ei game_display 0`); oyun modunda "Oyun çözünürlüğü" ayarı, ör. `1848x1214`.
     - `display_applied` yalnız oyun ekranı istendiğinde yazılır. `1`: host uyguladı, tam geometriyle (`width_px == width_pt == w` ve `height_px == height_pt == h`, PROTOCOL §0x05). `0`: eski host ya da `game_display_failed` geri düşüşü (doğal HiDPI ekran).
+    - `hdr` (T-238, karar 0032): host HDR10 uyguladı (STREAM_CONFIG `transfer = 16`). İstek `ev=hdr_request`'te; istek 1 iken `hdr=0` host'un SDR'ye düştüğünü gösterir.
     - `bitrate_setting`: tabletin ayarı (0 = `auto`).
     - `transport`: geçerli bağlantı. `transport_mode`: geçerli bağlantı modu ayarı ya da açılış geçersiz kılması.
     - `audio=1`: ses açık (`--ez audio false` verilmedi ve panel ayarı açık).
@@ -535,6 +536,12 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
   - `hdr_static_info`: `hdr-static-info` varsa ham baytlar onaltılık (en çok 64 bayt, fazlası `+<n>`); yoksa `unset`.
   - `req_*`: bu codec'in configure'da aldığı renk anahtarları (`unset` = konmadı).
   - Codec başına: aynı alanlar art arda tekrarlanmaz, en çok 16 satır. Mevcut `ev=output_format` (codec başına bir kez) değişmedi.
+
+## HDR10 (tablet, `MB/session`, T-238, karar 0032)
+
+- `I session ev=hdr_caps display_hdr10=0|1 decoder_main10hdr10=0|1`: `onCreate`'te bir kez. `display_hdr10`: ekranın `HdrCapabilities`'i HDR10 (tip 2) içeriyor. `decoder_main10hdr10`: kod çözücü listesindeki ilk HEVC çözücü (`createDecoderByType`'ın seçtiği) `HEVCProfileMain10HDR10` bildiriyor. İkisi de 1 değilse panelde "HDR (Bu cihazda yok)" gri ve istek hep 0.
+- `I session ev=hdr_request dynamic_range=0|1 mode=daily|drawing|game setting=on|off capable=0|1`: STREAM_PREFS'te istenen dinamik aralık değişti (ve açılıştaki ilk istek). `1` yalnız Oyun + ayar açık + `capable=1`. Her STREAM_PREFS'te değil, yalnız değişimde yazılır.
+- Uygulanan dinamik aralık `ev=profile hdr=`'de; çözücüye giden renk anahtarları `ev=decoder_output_format req_*`'ta (HDR10: `req_standard=6 req_transfer=6 req_range=2`). HDR10 akışta `ev=color_unsupported` yazılmaz (BT.2020 birincilleri `color-standard` ile taşınır).
 
 ## Boşta karartma ve kapatma (tablet, `MB/input`, T-234, karar 0031)
 

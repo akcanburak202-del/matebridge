@@ -25,9 +25,18 @@ import dev.matebridge.client.video.VideoRenderer
  * for it in STREAM_PREFS `display_*`, other modes (and [gameDisplay] false, `--ei game_display 0`) for the native display
  * (0×0, today's bytes). The frame rate is the per-mode stored "Kare hızı" ([Settings.modeFps]), also outside the layer.
  *
+ * HDR (decision 0032, T-238) is a persistent setting outside the layer too: [prefs] asks for HDR10 only in Oyun, with
+ * the stored "HDR" on and a capable tablet ([hdr], computed once at start); every other case asks for SDR, so a mode
+ * change re-sends the right `dynamic_range` through the same one STREAM_PREFS.
+ *
  * The caller applies the effective values (STREAM_PREFS, audio, pen overlay, finger switch). Main thread only. Pure Kotlin.
  */
-class GameModeSettings(private val settings: Settings, private val gameDisplay: Boolean = true) {
+class GameModeSettings(
+    private val settings: Settings,
+    private val gameDisplay: Boolean = true,
+    /** Decision 0032: whether this tablet can show HDR10 ([HdrCapability.NONE] = never ask for it). */
+    val hdr: HdrCapability = HdrCapability.NONE,
+) {
     /** The layered values, either stored or from the layer. */
     data class Values(
         val bitrateKbps: Long,
@@ -142,11 +151,32 @@ class GameModeSettings(private val settings: Settings, private val gameDisplay: 
     /** The game display [mode] asks for: the stored "Oyun çözünürlüğü" in Oyun, null (native display) otherwise. */
     fun display(mode: StreamMode): GameResolution? = if (mode.isGame && gameDisplay) settings.gameResolution() else null
 
-    /** The one STREAM_PREFS for [mode]: its frame rate and the full scale with the effective bit rate, plus the game display size in Oyun. */
+    /** The stored "HDR" setting (decision 0032), regardless of mode or capability. */
+    val hdrSetting: Boolean get() = settings.hdrGame()
+
+    /** STREAM_PREFS `dynamic_range` for [mode] ([HdrPolicy.dynamicRange]). */
+    fun dynamicRange(mode: StreamMode): Int = HdrPolicy.dynamicRange(hdr, mode, settings.hdrGame())
+
+    /**
+     * The one STREAM_PREFS for [mode]: its frame rate and the full scale with the effective bit rate, plus the game
+     * display size in Oyun and the dynamic range ([dynamicRange]; SDR writes no group).
+     */
     fun prefs(mode: StreamMode): StreamPrefs {
         val p = mode.toPrefs(fps(mode), bitrateKbps)
-        val d = display(mode) ?: return p
-        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d.widthPx, d.heightPx)
+        val d = display(mode)
+        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode))
+    }
+
+    /**
+     * Stores the "HDR" choice; returns the complete STREAM_PREFS to send when it changes what [mode] asks for (Oyun on a
+     * capable tablet), else null (nothing stored without the capability: the row is grey; elsewhere it applies on the
+     * next Oyun entry).
+     */
+    fun selectHdr(on: Boolean, mode: StreamMode): StreamPrefs? {
+        if (!hdr.supported) return null
+        val before = dynamicRange(mode)
+        settings.setHdrGame(on)
+        return if (dynamicRange(mode) != before) prefs(mode) else null
     }
 
     /**
