@@ -24,6 +24,8 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     @Volatile var throwOnDequeueOutput = false
     /** T-159: the next n dequeueOutputBuffer calls (any codec) throw, then it works again. */
     @Volatile var dequeueOutputFailures = 0
+    /** T-252: when > 0, outputs come at least this far apart (a slow decoder that swallowed its inputs early). */
+    @Volatile var outputSpacingMs = 0L
     /** T-159: each non-empty, non-config input yields one output. */
     @Volatile var produceOutput = false
     /** While set and closed, `stop()` / `release()` / `dequeueOutputBuffer()` block until the latch opens. */
@@ -134,9 +136,13 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         private var nextIndex = 0 // input thread only
         private val ready = ArrayDeque<Long>() // under the factory lock
         private var nextOut = 0
+        private var nextOutNs = 0L // under the factory lock
         private val outPts = java.util.concurrent.ConcurrentHashMap<Int, Long>() // output index -> pts
         /** T-219: pts of every non-empty input queued to this codec, in order (config inputs included). */
         val inputPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        /** T-252: pts of the outputs released for rendering / without rendering, in release order. */
+        val renderedPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        val discardedPts = java.util.concurrent.CopyOnWriteArrayList<Long>()
 
         override val name = "fake.decoder"
         override fun lowLatencySupport(mime: String) = lowLatency
@@ -192,8 +198,10 @@ class FakeDecoderFactory : DecoderCodec.Factory {
                     log.add("outputFormatChanged#$serial"); lock.notifyAll()
                     return DecoderCodec.INFO_OUTPUT_FORMAT_CHANGED
                 }
-                val pts = ready.removeFirstOrNull()
+                val nowNs = System.nanoTime()
+                val pts = if (outputSpacingMs > 0 && nowNs < nextOutNs) null else ready.removeFirstOrNull()
                 if (pts != null) {
+                    nextOutNs = nowNs + outputSpacingMs * 1_000_000L
                     outputs++; lock.notifyAll()
                     info.presentationTimeUs = pts
                     info.flags = 0
@@ -209,11 +217,12 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         override fun releaseOutputBuffer(index: Int, renderTimestampNs: Long) { record("releaseOutput#$serial"); rendered(index) }
         override fun releaseOutputBuffer(index: Int, render: Boolean) {
             record("releaseOutput#$serial")
-            if (render) rendered(index)
+            if (render) rendered(index) else outPts.remove(index)?.let { discardedPts.add(it) }
         }
 
         private fun rendered(index: Int) {
             val pts = outPts.remove(index) ?: return
+            renderedPts.add(pts)
             if (renderCallbackInRelease) renderedListener?.invoke(pts, System.nanoTime())
         }
 

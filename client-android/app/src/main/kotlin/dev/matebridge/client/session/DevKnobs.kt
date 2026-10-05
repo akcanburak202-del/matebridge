@@ -94,6 +94,8 @@ data class DevKnobs(
      * feedback. Absent = [PacerTuning.STANDARD].
      */
     val pacerTuning: PacerTuning = PacerTuning.STANDARD,
+    /** `--ez catch_up false` (T-252): the pre-T-252 queue overflow (flush + keyframe request) for A/B. Default on. */
+    val catchUp: Boolean = true,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -152,6 +154,7 @@ data class DevKnobs(
             Spec("hz_pin", Kind.STRING, debugOnly = true, ids = HzPinVariant.IDS),
             Spec("pace_dcap_half", Kind.INT, debugOnly = true),
             Spec("pace_feedback", Kind.BOOL, debugOnly = true),
+            Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -196,6 +199,7 @@ data class DevKnobs(
                 pacerTuning = PacerTuning.parse(
                     if (x.has("pace_dcap_half")) x.int("pace_dcap_half", 0) else null, x.bool("pace_feedback", true),
                 ),
+                catchUp = x.bool("catch_up", true),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

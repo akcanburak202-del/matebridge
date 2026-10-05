@@ -1294,6 +1294,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             colorOverrides = devKnobs.colorOverrides, // T-231 dev knob (`color_range`, `color_standard`, `color_transfer`)
         ).also {
             it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
+            it.catchUp = devKnobs.catchUp // T-252 dev knob (`catch_up`)
             pacerKnobsLogged = false
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")

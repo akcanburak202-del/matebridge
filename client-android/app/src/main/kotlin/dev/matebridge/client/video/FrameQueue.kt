@@ -16,6 +16,13 @@ import java.util.concurrent.locks.LockSupport
  *  - an arriving keyframe flushes older pending frames (stale) and re-opens the gate;
  *  - the latest CODEC_CONFIG is kept so it can be replayed after a codec restart.
  *
+ * T-252 catch-up: with [catchUpDepth] > 0 an overflow (pending > [maxPending]) up to [catchUpDepth] frames and
+ * [catchUpMaxBytes] is NOT dropped and produces no keyframe request: the frames stay queued and are decoded in order
+ * (the reference chain is intact). [awaitNext] marks each taken frame ([CatchUp]): SKIP while more frames are behind
+ * it, TAIL for the last one, so the presentation shows only the newest. Beyond the bounds the old path (drop everything,
+ * gate, request) applies. Keyframe gating and decoder errors are unchanged; a flush that ends a catch-up (keyframe
+ * arrival, overflow beyond the bound) makes the next taken frame the TAIL, and [reset] / [onDecoderError] forget it.
+ *
  * T-121 request limit: after any KEYFRAME_REQUEST, no FRAMES_DROPPED request goes out for [HOLDOFF_MS], even if a
  * keyframe arrived in between (that is what breaks the IDR -> overflow -> request chain). A suppressed request is
  * held and goes out on the first frame offered after the hold-off while the gate is still closed. STARTUP
@@ -78,13 +85,26 @@ class FrameQueue(
     )
 
     /** Per-window counters (T-121), see [counters]. */
-    data class Counters(val kfRequests: Long, val kfHeld: Long, val overflows: Long, val maxPending: Int)
+    data class Counters(
+        val kfRequests: Long, val kfHeld: Long, val overflows: Long, val maxPending: Int,
+        /** T-252: catch-ups started (each would have been a flush + keyframe request). */
+        val catchUps: Long = 0,
+    )
 
     /** T-073 receive-path trace (null = off): stamps the fate of every offered frame. */
     @Volatile var trace: PaceTrace? = null
 
     /** Called outside the lock on every overflow (any thread). */
     @Volatile var onOverflow: ((Overflow) -> Unit)? = null
+
+    /** T-252: called outside the lock when a catch-up ends (the TAIL was taken): frames of the backlog, ms it took. */
+    @Volatile var onCatchUp: ((frames: Int, ms: Long) -> Unit)? = null
+
+    /**
+     * T-252: a catch-up that ran out of time inside [awaitNext] produced this KEYFRAME_REQUEST (any thread, outside the
+     * lock); the owner must send it (offer() returns its requests, take() cannot).
+     */
+    @Volatile var onExpired: ((reason: Int) -> Unit)? = null
 
     /** Called outside the lock with every request the queue produces or allows (any thread); for logging. */
     @Volatile var onRequest: ((reason: Int, source: Source) -> Unit)? = null
@@ -117,10 +137,38 @@ class FrameQueue(
     private var overflows = 0L
     private var maxSeen = 0
 
+    // T-252 catch-up (guarded by lock).
+    private var depthCatchUp = 0
+    private var bytesCatchUp = CatchUp.MAX_BACKLOG_BYTES
+    private var catchingUp = false
+    /** Frames handed out as SKIP whose TAIL has not been taken yet. */
+    private var skippedOut = 0
+    private var catchStartNs = 0L
+    private var maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
+    private var catchUps = 0L
+
     /** Depth limit in non-config frames; applies from the next frame on. */
     var maxPending: Int
         get() = synchronized(lock) { limit }
         set(v) = synchronized(lock) { limit = v.coerceAtLeast(1) }
+
+    /** T-252: most non-config frames a backlog may reach before it is dropped as before; 0 = catch-up off. */
+    var catchUpDepth: Int
+        get() = synchronized(lock) { depthCatchUp }
+        set(v) = synchronized(lock) { depthCatchUp = v.coerceAtLeast(0) }
+
+    /** T-252: payload bytes a backlog may reach before it is dropped as before. */
+    var catchUpMaxBytes: Long
+        get() = synchronized(lock) { bytesCatchUp }
+        set(v) = synchronized(lock) { bytesCatchUp = v.coerceAtLeast(0) }
+
+    /** T-252 (tests): longest catch-up in milliseconds. */
+    fun setCatchUpMaxMs(maxMs: Long) = synchronized(lock) {
+        maxCatchUpNs = maxMs * 1_000_000L
+    }
+
+    /** True while a backlog is being caught up (pure query). */
+    fun isCatchingUp(): Boolean = synchronized(lock) { catchingUp }
 
     /** Returns the KEYFRAME_REQUEST reason to send now, or null. */
     fun offer(frame: VideoFrame): Int? {
@@ -141,6 +189,7 @@ class FrameQueue(
                 }
                 frame.isKeyframe -> {
                     dropPending(tr, nowNs)
+                    endCatchUp(forgetSkipped = false) // if frames were skipped, the keyframe is the TAIL (shown at once)
                     tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
                     queue.addLast(frame)
                     waitingKeyframe = false
@@ -162,7 +211,17 @@ class FrameQueue(
                     if (sinceKeyframe >= 0) sinceKeyframe++
                     queue.addLast(frame)
                     val n = notePending()
-                    if (n > limit) {
+                    // A catch-up that has not got the queue back under the normal depth in time is not shrinking.
+                    val expired = catchingUp && nowNs - catchStartNs > maxCatchUpNs
+                    if (n > limit && n <= depthCatchUp && !expired && pendingBytes() <= bytesCatchUp) {
+                        // T-252: a backlog inside the bounds is decoded and caught up, not flushed.
+                        if (!catchingUp) {
+                            catchingUp = true
+                            catchStartNs = nowNs // every episode gets its own deadline, whatever skippedOut is
+                            catchUps++
+                        }
+                        tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
+                    } else if (n > limit) {
                         overflows++
                         val sinceReqMs = if (hasRequested) (nowNs - lastRequestNs) / 1_000_000 else -1L
                         val send = mayRequest(nowNs)
@@ -171,6 +230,7 @@ class FrameQueue(
                         queue.removeLast()
                         tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUE_DROP)
                         dropPending(tr, nowNs)
+                        endCatchUp(forgetSkipped = false)
                         waitingKeyframe = true
                         if (send) {
                             request = KeyframeRequest.FRAMES_DROPPED
@@ -202,15 +262,16 @@ class FrameQueue(
      * an [offer] that read [waiter] just before it was cleared), so the wait re-parks for the time left until the
      * deadline instead of giving up after the first wake-up.
      */
-    fun awaitNext(timeoutNs: Long, consumer: Int = ANY_CONSUMER): VideoFrame? {
-        take(consumer)?.let { return it }
+    fun awaitNext(timeoutNs: Long, consumer: Int = ANY_CONSUMER, mark: TakeMark? = null): VideoFrame? {
+        mark?.value = CatchUp.NONE
+        take(consumer, mark)?.let { return it }
         if (timeoutNs <= 0 || !owns(consumer)) return null
         val deadline = System.nanoTime() + timeoutNs
         val self = Thread.currentThread()
         waiter = self
         try {
             while (true) {
-                take(consumer)?.let { return it }
+                take(consumer, mark)?.let { return it }
                 // T-219: retired while waiting: leave at once and leave the frames to the owner.
                 if (!owns(consumer)) return null
                 val left = deadline - System.nanoTime()
@@ -224,8 +285,62 @@ class FrameQueue(
     }
 
     /** T-219: the ownership check and the removal are one step under [lock], so a revoked consumer takes nothing. */
-    private fun take(consumer: Int): VideoFrame? = synchronized(lock) {
-        if (owns(consumer)) queue.removeFirstOrNull() else null
+    private fun take(consumer: Int, mark: TakeMark?): VideoFrame? {
+        var frame: VideoFrame? = null
+        var doneFrames = -1
+        var doneMs = 0L
+        var expiredRequest = -1
+        synchronized(lock) {
+            if (!owns(consumer)) return null
+            // T-252 review 2: the catch-up deadline holds without new arrivals too (burst, then silence, slow decode).
+            val nowNs = clockNs()
+            // The deadline only fires while the backlog is still above the normal depth: one that has drained to
+            // maxPending or less is never flushed, the catch-up just goes on skipping to the newest frame.
+            if (catchingUp && nowNs - catchStartNs > maxCatchUpNs && pendingCount() > limit) {
+                overflows++
+                dropPending(trace, nowNs)
+                endCatchUp(forgetSkipped = false) // the next frame is the keyframe: shown at once (TAIL)
+                waitingKeyframe = true
+                if (mayRequest(nowNs)) {
+                    heldRequest = false
+                    recordRequest(nowNs)
+                    expiredRequest = KeyframeRequest.FRAMES_DROPPED
+                } else {
+                    heldRequest = true
+                    kfHeld++
+                }
+                return@synchronized
+            }
+            val f = queue.removeFirstOrNull() ?: return null
+            frame = f
+            var m = CatchUp.NONE
+            if (!f.isCodecConfig) {
+                if (catchingUp && pendingCount() > 0) {
+                    m = CatchUp.SKIP
+                    skippedOut++
+                } else if (catchingUp || skippedOut > 0) {
+                    // The newest frame of the backlog (or the first one after a flush that ended the catch-up).
+                    m = CatchUp.TAIL
+                    doneFrames = skippedOut + 1
+                    doneMs = ((clockNs() - catchStartNs) / 1_000_000).coerceAtLeast(0)
+                    catchingUp = false
+                    skippedOut = 0
+                }
+            }
+            mark?.value = m
+        }
+        if (expiredRequest >= 0) {
+            onRequest?.invoke(expiredRequest, Source.OVERFLOW)
+            onExpired?.invoke(expiredRequest)
+        }
+        if (doneFrames >= 0) onCatchUp?.invoke(doneFrames, doneMs)
+        return frame
+    }
+
+    /** T-252: a flush or restart ends the catch-up; [forgetSkipped] also forgets the frames already handed out as SKIP. */
+    private fun endCatchUp(forgetSkipped: Boolean) {
+        catchingUp = false
+        if (forgetSkipped) skippedOut = 0
     }
 
     private fun owns(consumer: Int) = consumer == ANY_CONSUMER || consumer == owner
@@ -267,6 +382,7 @@ class FrameQueue(
             if (!owns(consumer)) return null
             val now = clockNs()
             dropPending(trace, now)
+            endCatchUp(forgetSkipped = true)
             waitingKeyframe = true
             heldRequest = false
             recordRequest(now)
@@ -292,6 +408,7 @@ class FrameQueue(
             val now = clockNs()
             trace?.let { t -> for (f in queue) t.onRxAction(f.frameSeq, now, PaceTrace.RX_RESET_DROP) }
             queue.clear()
+            endCatchUp(forgetSkipped = true)
             stats.breakGaps()
             waitingKeyframe = true
             heldRequest = false
@@ -324,14 +441,20 @@ class FrameQueue(
 
     /** Counters of the window (requests produced or allowed, held, overflows, deepest queue); [reset] starts a new one. */
     fun counters(reset: Boolean = false): Counters = synchronized(lock) {
-        val c = Counters(kfRequests, kfHeld, overflows, maxSeen)
+        val c = Counters(kfRequests, kfHeld, overflows, maxSeen, catchUps)
         if (reset) {
-            kfRequests = 0; kfHeld = 0; overflows = 0; maxSeen = pendingCount()
+            kfRequests = 0; kfHeld = 0; overflows = 0; maxSeen = pendingCount(); catchUps = 0
         }
         c
     }
 
     private fun pendingCount() = queue.count { !it.isCodecConfig }
+
+    private fun pendingBytes(): Long {
+        var b = 0L
+        for (f in queue) if (!f.isCodecConfig) b += f.data.size
+        return b
+    }
 
     private fun notePending(): Int {
         val n = pendingCount()
