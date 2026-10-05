@@ -1530,3 +1530,11 @@ Ham: `~/.cache/matebridge-tools/data/yuv444/t256-run-2122.txt`. "Varış" = çö
 
 - Kullanıcı: Wi-Fi dosya erişimi = yalnız `/sdcard/MateBridge/`, 256 MB sınırı yalnız Wi-Fi'da (USB etkilenmez), ayrı açma ayarı yok (menü tıklaması onay). Karar 0035. SMB (kısmi okuma, sınırsız) araştırma probu başka güne ertelendi (0035 sonunda kayıtlı).
 - 0034 tam renk ana dalda (2474e36); APK + host kuruldu (00:21). Tablet kendi kendine testi: `full_chroma_selftest result=pass`, ham örnekleme bit-tam. Cihaz kabulü kullanıcıyla.
+
+## 2026-10-06 ~00:35 — 0034 ilk cihaz testi (Wi-Fi, Günlük 60): tam renk çalışıyor, ikon titriyor
+
+Ham: `~/.cache/matebridge-tools/data/fullchroma/{tablet,host,sf}-0023.log`.
+- Kendi kendine test geçti; `chroma_layout=1` uygulandı, panel "Uygulanan: Tam renk". Host: `aux_lost=0`, paketleyici GPU ~1,0 ms, yardımcı kodlama p50 ~6,3 ms (ananın ardından, tek motor), **yardımcı/ana bayt oranı 1,23–1,50** (tasarımda ~0,3–0,45 bekleniyordu; toplam bant ~2,2–2,5×).
+- **Kullanıcı:** Apple Music ikonu tam renkte pürüzlü ↔ düzgün arasında titriyor. **Neden:** istemcide `aux_paired_pct` 57–92 % (`aux_late` 18–80/pencere): yardımcı kare ana karenin slotuna yetişmiyor (kodlama ~6 ms sonra + daha büyük kare Wi-Fi'da), o kare yalnız-ana (4:2:0) gösteriliyor → durağan ikon tam renk ↔ 4:2:0 arasında gidip geliyor.
+- `gl_ms` 0,01 (GPU zamanlayıcı sorgusu çalışmıyor, ölçüm hatası). Gecikme A/B bu kısa oturumda anlamlı değil (az pencere, farklı içerik).
+- Çözüm seçenekleri kullanıcıya sunuldu: (A) çifti bekle (≤1 kare, ~+7 ms), (B) shader'da değişmeyen bloklarda önceki tam rengi koru (gecikme yok), (C) kısa bekleme + B.
