@@ -59,6 +59,8 @@ public final class VideoPipeline: @unchecked Sendable {
     private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
     private let onFailure: @Sendable (Error) -> Void
     private let box: EncoderBox
+    /// Still-screen refinement settings (T-253); `.disabled` unless the owner passes the session's.
+    private let refine: StillRefineConfig
     /// Client keyframe requests are coalesced here (T-122).
     private let keyframes: KeyframeGate
     private var displayInfo = "no display"
@@ -72,12 +74,15 @@ public final class VideoPipeline: @unchecked Sendable {
     ///   - display: the virtual display of a pipeline that was stopped with `stopKeepingDisplay()`. It is kept when its
     ///     pixel size, HiDPI and refresh rate already equal the settings' and it is still online (`DisplayReuse`),
     ///     replaced by a new display otherwise.
+    ///   - refine: still-screen refinement (T-253, `StillRefineConfig.resolve`); off by default.
     ///   - onFailure: capture or encoder failed unexpectedly (e.g. permission revoked); the pipeline is already stopped.
     init(settings: VideoSettings = .tabletDefault,
                 tap: (@Sendable (EncodedVideoFrame, UInt64) -> Void)? = nil,
                 reusing display: VirtualDisplay? = nil,
+                refine: StillRefineConfig = .disabled,
                 onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
         self.inherited = display
+        self.refine = refine
         self.settings = settings
         self.tap = tap
         self.onFailure = onFailure
@@ -105,7 +110,8 @@ public final class VideoPipeline: @unchecked Sendable {
 
             let frames = self.frames
             let tap = self.tap
-            let encoder = try HEVCEncoder(settings: settings, meter: meter, output: { frame, encodeUs in
+            let encoder = try HEVCEncoder(settings: settings, meter: meter, refine: refine,
+                                          refineReady: { frames.isReadyForRefine }, output: { frame, encodeUs in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)

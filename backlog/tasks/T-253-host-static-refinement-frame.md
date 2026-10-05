@@ -1,7 +1,7 @@
 ---
 id: T-253
 title: Host — "refine when still": after motion stops, send one high-quality frame of the unchanged screen
-status: ready
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -49,5 +49,15 @@ Kullanıcı onayladı (2026-10-05): ekran durunca yazı/ikonlar netleşsin. Hare
 7. Kod: Core'da saf `StillRefineConfig` (env + taşıma) ve `StillRefinePolicy` durum makinesi (birim testli); host'ta `HEVCEncoder` yapıştırması (zamanlayıcı, `resubmitLast(refine:)`, çıktı bayt bildirimi), `VideoFrameQueue.isReadyForRefine`, `VideoPipeline`/`StreamCoordinator` bağlantısı (taşıma bilgisi), log `video ev=refine frames= bytes= first_bytes= last_bytes= ms= reason=` (tren başına bir satır; `quality=` alanı yok çünkü kalite düğmesi etkisiz, bkz. ölçüm).
 
 ## Handoff
+
+- **Commit:** `git log task/T-253-still-refine` (plan 12e2ee5, implementation is the next commit).
+- **Dosyalar:** `host-mac/Sources/MateBridgeCore/Video/StillRefine.swift` (yeni: `StillRefineConfig`, `StillRefinePolicy`), `VideoFrameQueue.swift` (`isReadyForRefine`), `Tests/MateBridgeCoreTests/Video/StillRefineTests.swift` (14 test), `Sources/MateBridgeHost/Video/HEVCEncoder.swift` (zamanlayıcı, `resubmitLast(refine:)`, çıktı bildirimi), `VideoPipeline.swift`, `Session/StreamCoordinator.swift` (taşımaya göre bayt tavanı).
+- **Önemli sapma:** kart "tek yüksek kaliteli kare" diyordu; ölçüm bunun çalışmadığını gösterdi (Plan bölümü): VT'de oturum içi Quality/MaxAllowedFrameQP/bit hızı tek karede etkisiz, zorunlu IDR 1-2 MB ve daha kötü PSNR. Çalışan yol aynı tamponu art arda normal P karesi olarak kodlamak ("tren", yakınsayana kadar, en çok 16 kare / bayt tavanı). Tel biçimi ve istemci değişmedi; her kare sıradan kare.
+- **Davranış:** varsayılan AÇIK. 200 ms yeni gerçek kare yoksa ve çıkış kuyruğu boşsa başlar; her kare pacer kapısından (stream fps) geçer, sonraki kare önceki çıktıyla tetiklenir. Biter: yakınsama (kare <= 1.5 KB), 16 kare, bayt tavanı (USB 1024 KB, ağ 256 KB), yeni gerçek kare (iptal), kuyruk dolu, 250 ms çıktı gelmezse. Kare asla atılmaz (zincir bozulmaz). İki tren başlangıcı >= 500 ms; yeni gerçek kare gelmeden yeni tren yok.
+- **Düğmeler:** `MATEBRIDGE_REFINE=0`, `MATEBRIDGE_REFINE_MS` (50-2000), `MATEBRIDGE_REFINE_KB` (16-8192), `MATEBRIDGE_REFINE_FRAMES` (1-60).
+- **Log:** `video ev=refine frames= bytes= first_bytes= last_bytes= ms= reason=` (tren başına; ilk karede yakınsayan ve 0 kareli iptaller `debug`). Kartın `quality=`/`enc_ms=` alanları yok: kalite düğmesi etkisiz, kare başına kodlama ~6 ms. `docs/LOGGING.md` güncellenmedi (kapsam dışı); orkestratör eklesin.
+- **Varsayımlar:** SCK durağan ekranda kare üretmez (idle-keyframe tasarımı da buna dayanıyor); imleç kıpırtısı dahil her tamamlanmış kare "hareket" sayılır. Bench: sentetik içerik (kaydırılan Menlo yazı + gürültülü gradyan), 2800x1840 HEVC Main HW `.fast`, 20 ve 60 Mbps; luma PSNR, VT çözücüyle. Bench kodu depoda yok.
+- **Test edilmedi:** HEVCEncoder yapıştırması için birim testi yok (politika ve kuyruk Core'da testli; host hedefinde test hedefi yok). Cihazda hiçbir şey denenmedi, uygulama çalıştırılmadı.
+- **Cihazda doğrulanacak:** (1) yazı/ikon netliği öncesi/sonrası (durduktan ~200-400 ms içinde keskinleşme); (2) `ev=refine` satırları: kare sayısı ~10-16, toplam bayt, reason; (3) tablet `dec_*` ve gecikme: sonraki ilk hareket karesinde gecikme artışı olmamalı; (4) Wi-Fi'da ses/girdi kesintisi yok (tavan 256 KB; sorun olursa `MATEBRIDGE_REFINE_KB` düşür ya da `REFINE=0`); (5) HDR10 ve keskin renk açıkken aynı davranış (Main10 ve BGRA+Metal yolu ölçülmedi); (6) saniyelik değişen ekranda (saat) tren 1 karede yakınsamalı, sürekli bayt üretmemeli; (7) tablet pacer'ı (T-251/T-252) bu kısa kare dizisiyle sorunsuz mu.
 
 ## Open questions
