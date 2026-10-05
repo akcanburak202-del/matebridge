@@ -52,7 +52,8 @@ final class VirtualDisplay: @unchecked Sendable {
     ///   - physicalPixelWidth/physicalPixelHeight: the panel's pixel size, for `sizeInMillimeters` (default: the
     ///     backing size). A game display passes the native size so the reported physical size stays the panel's.
     ///   - hidpi: when true, exposes a 2x mode (pixels/2 points) instead of a 1x mode.
-    ///   - transfer: T-232 developer knob `MATEBRIDGE_VD_TRANSFER`. The default (requested 0) uses the legacy
+    ///   - transfer: T-232 developer knob `MATEBRIDGE_VD_TRANSFER`, or requested 1 for an HDR10 stream (decision
+    ///     0032, `VideoSettings.displayTransfer`). The default (requested 0) uses the legacy
     ///     `initWithWidth:height:refreshRate:` mode initializer exactly as before. Requested 1 uses
     ///     `initWithWidth:height:refreshRate:transferFunction:` and falls back to the legacy modes once when that
     ///     selector is missing, returns nil or its modes are rejected (`transferOutcome`).
@@ -199,9 +200,11 @@ final class VirtualDisplay: @unchecked Sendable {
         return false
     }
 
-    /// The mode this display was created with (`DisplayReuse` compares it with the wanted one).
+    /// The mode this display was created with (`DisplayReuse` compares it with the wanted one). `transfer` is the
+    /// requested transfer function (an HDR10 stream checks `transferOutcome.applied` separately).
     var mode: DisplayMode {
-        DisplayMode(widthPx: pixelWidth, heightPx: pixelHeight, hidpi: hidpi, refreshHz: Int(requestedRefreshHz.rounded()))
+        DisplayMode(widthPx: pixelWidth, heightPx: pixelHeight, hidpi: hidpi, refreshHz: Int(requestedRefreshHz.rounded()),
+                    transfer: transferOutcome.requested)
     }
 
     /// Releases the retained object, which removes the virtual display. The removal time is recorded so the next

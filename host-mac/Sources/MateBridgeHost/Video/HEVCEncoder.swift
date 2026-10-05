@@ -178,9 +178,11 @@ final class HEVCEncoder: @unchecked Sendable {
                 HEVCEncoder.log.error("ev=prop_set_failed key=\(name, privacy: .public) status=\(st)")
             }
         }
+        let hdr = settings.dynamicRange == .hdr10
         set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
+        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
+            Self.profileLevel(settings.codec, dynamicRange: settings.dynamicRange))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
         // T-086: a constant-quality target replaces the average bitrate; if VideoToolbox refuses it, fall back.
         var qualityOK = false
@@ -207,13 +209,30 @@ final class HEVCEncoder: @unchecked Sendable {
         // Always on (T-204 retired `MATEBRIDGE_PRIO_SPEED=0`: ~25 ms per frame without it, T-086).
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             kCFBooleanTrue)
-        // Colour tags consistent with STREAM_CONFIG (sRGB / BT.709, full range). Captured buffers are retagged to
-        // these before encoding (T-113, `retagForSession`).
-        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, Self.sessionPrimaries)
-        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, Self.sessionTransfer)
-        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, Self.sessionMatrix)
+        // Colour tags consistent with STREAM_CONFIG (SDR: sRGB / BT.709, full range; HDR10: BT.2020 / PQ / BT.2020,
+        // limited range from the x420 input). Captured buffers are retagged to these before encoding (T-113,
+        // `retagForSession`).
+        let color = Self.sessionColor(settings.dynamicRange)
+        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, color.primaries)
+        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, color.transfer)
+        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, color.matrix)
+        if hdr {
+            // Decision 0032: HDR10 static metadata as SEI (MDCV + CLL), inserted by VideoToolbox.
+            let md = HDR10Metadata.host
+            set("MasteringDisplayColorVolume", kVTCompressionPropertyKey_MasteringDisplayColorVolume,
+                Data(md.mdcvSEI) as CFData)
+            set("ContentLightLevelInfo", kVTCompressionPropertyKey_ContentLightLevelInfo, Data(md.cllSEI) as CFData)
+            set("HDRMetadataInsertionMode", kVTCompressionPropertyKey_HDRMetadataInsertionMode,
+                kVTHDRMetadataInsertionMode_Auto)
+        }
         propertyFailures = failures
         propertyReport = report
+        // HDR10: a refused Main10 / colour / metadata property means the stream would not be what STREAM_CONFIG
+        // announces; the owner falls back to SDR (`ev=hdr_fallback reason=encoder_rejected`). `deinit` closes the
+        // session. SDR keeps logging failures only, as before.
+        if hdr, let refused = HDRPolicy.refusedEncoderProperty(failures) {
+            throw HDRSetupError(reason: .encoderRejected, detail: refused)
+        }
         VTCompressionSessionPrepareToEncodeFrames(s)
 
         // Idle keyframe: a pending keyframe request with no new frames for ~1 s re-encodes the last buffer.
@@ -233,13 +252,15 @@ final class HEVCEncoder: @unchecked Sendable {
             t.resume()
         }
 
+        // The SDR lines are unchanged; HDR10 appends `dynamic_range=hdr10`.
+        let rangeField = hdr ? " dynamic_range=\(settings.dynamicRange.logName)" : ""
         logSink(.info, "encoder_config",
                 "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
                 + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
-                + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)")
+                + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)" + rangeField)
         // T-204 (decision 0026 §4): one line per stream start naming the configuration this log came from.
         logSink(.info, "profile", StreamProfileLog.fields(settings: settings, encoderProfile: profile,
-                                                          build: Self.buildInfo, env: env))
+                                                          build: Self.buildInfo, env: env) + rangeField)
     }
 
     /// The running build (T-145), for `ev=profile`'s `sha=`: the same source as `ev=app_start`.
@@ -260,9 +281,11 @@ final class HEVCEncoder: @unchecked Sendable {
         codec == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC
     }
 
-    /// HEVC Main, or H.264 High (constant since T-204 retired `MATEBRIDGE_H264_PROFILE`), level chosen by the encoder.
-    static func profileLevel(_ codec: Codec) -> CFString {
-        codec == .h264 ? kVTProfileLevel_H264_High_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
+    /// HEVC Main (Main10 for an HDR10 stream, decision 0032), or H.264 High (constant since T-204 retired
+    /// `MATEBRIDGE_H264_PROFILE`), level chosen by the encoder. `HDRPolicy` never derives HDR10 for H.264.
+    static func profileLevel(_ codec: Codec, dynamicRange: DynamicRange = .sdr) -> CFString {
+        if codec == .h264 { return kVTProfileLevel_H264_High_AutoLevel }
+        return dynamicRange == .hdr10 ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
     }
 
     /// Profile name logged for H.264 (`profile=high`).
@@ -275,27 +298,48 @@ final class HEVCEncoder: @unchecked Sendable {
     static let sessionColorTags = ColorTags(primaries: sessionPrimaries as String, transfer: sessionTransfer as String,
                                             matrix: sessionMatrix as String)
 
+    /// The session's colour properties for a dynamic range: SDR as above; HDR10 BT.2020 / SMPTE ST 2084 (PQ) /
+    /// BT.2020 (decision 0032). Their string values equal `SessionColorTags` (tested in Core).
+    static func sessionColor(_ range: DynamicRange) -> (primaries: CFString, transfer: CFString, matrix: CFString) {
+        range == .hdr10
+            ? (kCVImageBufferColorPrimaries_ITU_R_2020, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+               kCVImageBufferYCbCrMatrix_ITU_R_2020)
+            : (sessionPrimaries, sessionTransfer, sessionMatrix)
+    }
+
+    /// `sessionColor(range)` as `ColorTags` (the retag comparison and its log line).
+    static func colorTags(for range: DynamicRange) -> ColorTags {
+        let c = sessionColor(range)
+        return ColorTags(primaries: c.primaries as String, transfer: c.transfer as String, matrix: c.matrix as String)
+    }
+
     /// T-113: VideoToolbox colour-converts every input whose colour tags differ from the session's (~2.4 ms per
     /// 2800x1840 frame on the M6, and a gamma shift). ScreenCaptureKit tags its sRGB 4:2:0 buffers with BT.709
     /// transfer, so they are retagged to the session's tags here (see `InputRetag`). The pixels are not touched.
+    /// HDR10 (decision 0032): the session is BT.2020 / PQ / BT.2020; SCK's BT.2100 PQ capture normally carries those
+    /// tags already, anything else is rewritten the same way.
     /// Returns the tags that were replaced, nil when the buffer already matched (or carries no colour information).
-    static func retagForSession(_ buffer: CVPixelBuffer) -> ColorTags? {
+    static func retagForSession(_ buffer: CVPixelBuffer, range: DynamicRange = .sdr) -> ColorTags? {
         func tag(_ key: CFString) -> String? { CVBufferCopyAttachment(buffer, key, nil) as? String }
         let current = ColorTags(primaries: tag(kCVImageBufferColorPrimariesKey),
                                 transfer: tag(kCVImageBufferTransferFunctionKey),
                                 matrix: tag(kCVImageBufferYCbCrMatrixKey))
         let hasColorSpace = CVBufferCopyAttachment(buffer, kCVImageBufferCGColorSpaceKey, nil) != nil
-        guard InputRetag.needsRetag(buffer: current, hasColorSpace: hasColorSpace, session: sessionColorTags) else {
+        guard InputRetag.needsRetag(buffer: current, hasColorSpace: hasColorSpace, session: colorTags(for: range)) else {
             return nil
         }
-        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, sessionPrimaries, .shouldPropagate)
-        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, sessionTransfer, .shouldPropagate)
-        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, sessionMatrix, .shouldPropagate)
+        let c = sessionColor(range)
+        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, c.primaries, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, c.transfer, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, c.matrix, .shouldPropagate)
         return current
     }
 
     /// Profile name for the `ev=encoder_config` line logged with the parameter sets.
-    private var profileLogName: String { settings.codec == .h264 ? Self.h264ProfileLogName : "main" }
+    private var profileLogName: String {
+        if settings.codec == .h264 { return Self.h264ProfileLogName }
+        return settings.dynamicRange == .hdr10 ? "main10" : "main"
+    }
 
     /// Effective periodic keyframe interval in seconds (0 = on request only).
     static let keyframeIntervalSeconds = KeyframeIntervalPolicy.fromEnvironment()
@@ -359,7 +403,7 @@ final class HEVCEncoder: @unchecked Sendable {
         meter?.recordEncoderIn()
         // T-113: before the buffer reaches VideoToolbox (and before it becomes `last`, which re-submissions reuse).
         // Unconditional since T-204.
-        if let replaced = Self.retagForSession(buffer) { noteRetag(replaced) }
+        if let replaced = Self.retagForSession(buffer, range: settings.dynamicRange) { noteRetag(replaced) }
         let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
                           deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
         order.offer(bypassGate: false) { _ in
@@ -378,7 +422,8 @@ final class HEVCEncoder: @unchecked Sendable {
         retagLogged = true
         lock.unlock()
         if first {
-            logSink(.info, "input_retag", "from=\(replaced.logValue) to=\(Self.sessionColorTags.logValue)")
+            logSink(.info, "input_retag",
+                    "from=\(replaced.logValue) to=\(Self.colorTags(for: settings.dynamicRange).logValue)")
         }
     }
 

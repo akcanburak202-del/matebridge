@@ -335,8 +335,9 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         // STREAM_PREFS: 8 bytes; the old 4-byte prefix (fps + scale) is now short, extra bytes are ignored.
         let prefs = Message.streamPrefs(StreamPrefs(fps: 144, scalePermille: 800, bitrateKbps: 150_000))
         #expect(prefs.encodePayload().count == 8)
-        // Extra bytes after the (here 0x0) optional display group are ignored; 9-11 bytes are short (see below).
-        #expect(try decodeOne(frame(0x05, prefs.encodePayload() + [0, 0, 0, 0, 9, 9])) == prefs)
+        // Extra bytes after the (here 0x0) optional display and (here 0) dynamic range groups are ignored; 9-11 and
+        // 13 bytes are short (see below; decision 0032 made bytes 13-14 the dynamic range group).
+        #expect(try decodeOne(frame(0x05, prefs.encodePayload() + [0, 0, 0, 0, 0, 0, 9, 9])) == prefs)
         #expect(throws: ProtocolError.payloadTooShort(type: 0x05)) { try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3])) }
         #expect(try decodeOne(frame(0x05, [0x78, 0, 0xe8, 3, 0xff, 0xff, 0xff, 0xff]))
             == .streamPrefs(StreamPrefs(fps: 120, scalePermille: 1000, bitrateKbps: UInt32.max)))
@@ -367,7 +368,8 @@ private func decodeOne(_ bytes: [UInt8], _ c: FrameDecoder.Connection = .control
         let p = game.encodePayload()
         #expect(p.count == 12)
         #expect(try decodeOne(frame(0x05, p)) == game)
-        #expect(try decodeOne(frame(0x05, p + [7, 7, 7])) == game)
+        // Bytes 13-14 are the dynamic range group since decision 0032 (here 0); anything after it is ignored.
+        #expect(try decodeOne(frame(0x05, p + [0, 0, 7, 7, 7])) == game)
         // Either non-zero field writes the whole group.
         #expect(Message.streamPrefs(StreamPrefs(fps: 120, scalePermille: 660, displayWidthPx: 1848))
             .encodePayload().count == 12)

@@ -46,12 +46,16 @@ public struct DisplayMode: Equatable, Sendable {
     public var heightPx: Int
     public var hidpi: Bool
     public var refreshHz: Int
+    /// The transfer function the display's mode was requested with (T-232, decision 0032): 0 = the legacy SDR mode,
+    /// 1 = HDR (an HDR10 stream, or the `MATEBRIDGE_VD_TRANSFER` developer knob).
+    public var transfer: UInt32
 
-    public init(widthPx: Int, heightPx: Int, hidpi: Bool, refreshHz: Int) {
+    public init(widthPx: Int, heightPx: Int, hidpi: Bool, refreshHz: Int, transfer: UInt32 = 0) {
         self.widthPx = widthPx
         self.heightPx = heightPx
         self.hidpi = hidpi
         self.refreshHz = refreshHz
+        self.transfer = transfer
     }
 
     /// `2800x1840@2x` / `1848x1214@1x` (the refresh rate is logged separately).
@@ -72,6 +76,8 @@ public enum DisplayReuse {
         /// Pixel size or HiDPI differs (native <-> game display, or another game size).
         case modeChange = "mode_change"
         case refreshChange = "refresh_change"
+        /// The transfer function differs (SDR <-> HDR10 stream, decision 0032): the mode's EOTF is fixed at creation.
+        case transferChange = "transfer_change"
         /// Same mode, but the display went offline while it was parked (display sleep).
         case offline
 
@@ -87,6 +93,7 @@ public enum DisplayReuse {
     public static func decide(current: DisplayMode, online: Bool, wanted: DisplayMode) -> Decision {
         if !current.sameKind(as: wanted) { return .recreate(.modeChange) }
         if current.refreshHz != wanted.refreshHz { return .recreate(.refreshChange) }
+        if current.transfer != wanted.transfer { return .recreate(.transferChange) }
         return online ? .reuse : .recreate(.offline)
     }
 }
@@ -187,11 +194,12 @@ public struct GameDisplayFallback: Equatable, Sendable {
 
     /// Settings derived earlier (a session start waiting in the mailbox) re-checked against the current state: a game
     /// display derived before game displays were switched off becomes the native display, with the same `prefs`
-    /// re-applied without it. nil = `settings` are still valid.
+    /// re-applied without it (and with `allowHDR`, so a switched-off HDR path stays off). nil = `settings` are still
+    /// valid.
     public func revalidated(_ settings: VideoSettings, base: VideoSettings, prefs: StreamPrefs?,
-                            defaultRefreshHz: Int) -> VideoSettings? {
+                            defaultRefreshHz: Int, allowHDR: Bool = true) -> VideoSettings? {
         guard !settings.displayHiDPI, !allowsGameDisplay else { return nil }
         guard let prefs else { return base }
-        return base.applying(prefs, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: false)
+        return base.applying(prefs, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: false, allowHDR: allowHDR)
     }
 }

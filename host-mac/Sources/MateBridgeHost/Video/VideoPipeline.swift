@@ -19,6 +19,16 @@ public enum VideoPipelineError: Error, CustomStringConvertible {
     }
 }
 
+/// A ring of the HDR10 path (decision 0032) refused HDR at pipeline start: the owner re-applies the prefs as SDR
+/// (`HDRFallback`, `ev=hdr_fallback`). Never a `VirtualDisplayError`, so it does not trigger the game display fallback.
+struct HDRSetupError: Error, CustomStringConvertible {
+    let reason: HDRFallbackReason
+    /// Short cause for the log (`VirtualDisplayTransfer.FallbackReason`, `Name=<OSStatus>`, the SCK error).
+    let detail: String
+
+    var description: String { "HDR10 unavailable (\(reason.rawValue): \(detail))" }
+}
+
 /// Virtual display -> ScreenCaptureKit -> HEVC or H.264 (`settings.codec`, T-086) -> bounded queue (`frames`).
 /// Does not touch the network: the session (T-014) consumes `frames` and wraps each frame in a `VIDEO_FRAME`.
 ///
@@ -111,6 +121,12 @@ public final class VideoPipeline: @unchecked Sendable {
             // picked; the owner falls back to the native display instead (game_display_failed). The catch below
             // removes the display.
             if !display.hidpi && !display.modeSelected { throw VideoPipelineError.gameDisplayUnavailable }
+            // HDR10 (decision 0032): the display must really run transfer function 1 (a fresh one fell back to the
+            // legacy mode, or a reused one was created with the knob and fell back then). The catch removes it.
+            if settings.dynamicRange == .hdr10, display.transferOutcome.applied != 1 {
+                throw HDRSetupError(reason: .displayRejected,
+                                    detail: display.transferOutcome.fallback?.rawValue ?? "applied_0")
+            }
             let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us, displayUs in
                 encoder?.encode(pb, presentationTime: pts, captureTimeUs: us, displayTimeUs: displayUs)
             }, onStop: { [weak self] error in self?.fail(error) })
@@ -122,6 +138,8 @@ public final class VideoPipeline: @unchecked Sendable {
                 catch ScreenCaptureError.displayNotFound(let id) {
                     lastError = ScreenCaptureError.displayNotFound(id)
                     try await Task.sleep(nanoseconds: 250_000_000)
+                } catch {
+                    throw Self.captureStartError(error, settings: settings)
                 }
             }
             if let lastError { throw lastError }
@@ -154,11 +172,25 @@ public final class VideoPipeline: @unchecked Sendable {
         }
         let waitUs = VirtualDisplay.recreateWaitUs()
         if waitUs > 0 { try await Task.sleep(nanoseconds: waitUs * 1_000) }
+        // Transfer function: 1 for an HDR10 stream, else the `MATEBRIDGE_VD_TRANSFER` knob (read into the settings by
+        // `applyingExperimentKnobs`; default 0, the legacy mode).
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
                                   physicalPixelWidth: settings.nativeWidthPx, physicalPixelHeight: settings.nativeHeightPx,
                                   hidpi: settings.displayHiDPI, refreshRate: Double(settings.displayRefreshHz),
-                                  transfer: VirtualDisplayTransfer.parse(env: ProcessInfo.processInfo.environment))
+                                  transfer: settings.displayTransfer)
     }
+
+    /// A capture start error other than `displayNotFound`: for an HDR10 stream a refusal of the HDR capture becomes
+    /// `HDRSetupError(.captureFailed)` (SDR fallback). Errors that display sleep explains (`DisplayWaker.reason`) stay
+    /// as they are, so a dark display wakes and retries instead of switching HDR off for the process.
+    static func captureStartError(_ error: Error, settings: VideoSettings) -> Error {
+        guard settings.dynamicRange == .hdr10, DisplayWaker.reason(for: error) == nil else { return error }
+        let ns = error as NSError
+        return HDRSetupError(reason: .captureFailed, detail: "\(ns.domain)_\(ns.code)")
+    }
+
+    /// The HDR ring that failed in a `start()` error, nil for any other failure.
+    static func hdrFailure(_ error: Error) -> HDRSetupError? { error as? HDRSetupError }
 
     /// Whether a `start()` error concerns setting up the virtual display itself (creation, settings, mode selection),
     /// as opposed to permissions, the encoder or capture: only those make a game display fall back to the native one.
