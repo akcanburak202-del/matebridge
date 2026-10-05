@@ -1,7 +1,7 @@
 ---
 id: T-238
 title: Client — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec, capability check, Oyun-mode panel toggle, decoder setup, logs)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: [T-231]
@@ -41,7 +41,15 @@ Decision 0032'nin istemci tarafı. Protokol ve fixture'lar orkestratörün `task
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Codec** (`protocol/`): `StreamPrefs.dynamicRange: Int = 0` (+ `DYNAMIC_RANGE_SDR/HDR10`). Encode: ekran grubu `display ≠ 0×0` **ya da** `dynamicRange ≠ 0` ise; dinamik aralık grubu (`u8 + reserved 0`) yalnız `≠ 0` ise. Decode: 8 → 0/0/0, 12 → ekran, ≥14 → ekran + `dynamic_range` (ham değer korunur; host bilinmeyeni 0 sayar), 9–11 ve 13 → SHORT_PAYLOAD. `StreamConfig.isHdr10` (`transfer == 16`). FixtureTest'e üç yeni fixture; eski fixture'lar değişmez.
+2. **Saf mantık** (`stream/Hdr.kt`): `HdrCapability(displayHdr10, decoderMain10Hdr10)` + `fromHdrTypes()` / `firstHevcDecoder()` (createDecoderByType'ın seçeceği ilk HEVC çözücü) + `ev=hdr_caps` alanları; `HdrPolicy.dynamicRange(cap, mode, userOn)`; panel durumu (`rowHidden` Oyun dışı, `rowEnabled` yetenek, işaret " (Bu cihazda yok)"), `appliedLabel(config)` "Uygulanan: HDR10 / SDR / —"; `HdrRequestLog` (değişince bir `ev=hdr_request` satırı).
+3. **Ayar** (`session/Settings.kt`): `hdrGame()` / `setHdrGame()`, anahtar `hdr_game`, varsayılan kapalı, `USER_KEYS`'e eklenir (Varsayılanlara dön kapatır).
+4. **GameModeSettings**: yapıcıya `HdrCapability`; `dynamicRange(mode)`; `prefs(mode)` artık `dynamicRange` taşır (tüm gönderim yolları — mod değişimi, bit hızı, kare hızı, reset — kendiliğinden doğru değeri yollar); `selectHdr(on, mode)` saklar, Oyun + yetenekte tam STREAM_PREFS döner.
+5. **Panel** (`settings/`): `SettingItem.Choice`'a `enabled` (gri, dokunulmaz), `SettingItem.Info`'ya `hidden`; Görüntü bölümüne "HDR" (Kapalı/Açık; Oyun dışında gizli; yetenek yoksa gri "(Bu cihazda yok)") ve yan panelde "Uygulanan: HDR10 / SDR" (Oyun dışında gizli). `SettingsHost`'a `hdrAvailable`, `hdrEnabled`, `setHdrEnabled`, `appliedHdr`.
+6. **Çözücü** (`video/`): `ColorMapping` zaten 9→BT2020, 16→ST2084, `full_range=0`→limited; SDR yolu değişmez (test). Yalnız `ev=color_unsupported` uyarısı HDR10'da (`primaries=9` + `matrix=9`, BT2020 standardı primaries'i taşır) yazılmaz. Prob (`HdrProbeActivity`) yüzey/dataspace ayarı yapmadı (düz `SurfaceView` + `configure(surface)`), `KEY_HDR_STATIC_INFO` gerekmedi; istemci de yapmaz. `KEY_PROFILE` konmaz (çözücü SPS'ten okur).
+7. **MainActivity**: onCreate'te yeteneği bir kez hesapla (`Display.hdrCapabilities` tip 2 + `MediaCodecList`), `ev=hdr_caps` logla, `GameModeSettings`'e ver; STREAM_PREFS gönderimini tek yardımcıdan geçir (`ev=hdr_request dynamic_range= mode= setting= capable=` değişimde); `ev=profile`'a `hdr=0|1` (uygulanan, STREAM_CONFIG'ten); `installConfig` panel tazelemesi "Uygulanan" satırını günceller.
+8. **LOGGING.md**: `hdr_caps`, `hdr_request`, `profile hdr=`.
+9. Testler: codec kuralları + fixture; `HdrPolicy` (yetenek × mod × ayar), mod değişiminde prefs; panel gizli/gri; ColorOverrides HDR10 anahtarları ve SDR değişmezliği; Settings reset; StreamProfile `hdr=`.
 
 ## Handoff
 
