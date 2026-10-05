@@ -130,6 +130,7 @@ final class PackedSenderTests: XCTestCase {
     private func enc(_ t: UInt64, view: UInt8, key: Bool = false, config: Bool = false) -> EncodedVideoFrame {
         var f = EncodedVideoFrame(flags: config ? .codecConfig : (key ? .keyframe : []), captureTimeUs: t, data: [UInt8(t & 0xff)])
         f.view = view
+        f.pairID = config ? 0 : t  // the tests use one number for the capture time and the submission
         return f
     }
 
@@ -199,10 +200,20 @@ final class PackedChromaFlowTests: XCTestCase {
         XCTAssertEqual(a.pick(mainAvailable: true, aux: (100, false)), .main)
         // The auxiliary frame of capture 100 waits until main 100 was sent.
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (100, false)), .wait)
-        a.mainSent(captureTimeUs: 100)
+        a.mainSent(pairID: 100)
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (100, false)), .aux)
         // A newer main frame still goes before any auxiliary one.
         XCTAssertEqual(a.pick(mainAvailable: true, aux: (100, false)), .main)
+    }
+
+    func testRefinementTimestampsDoNotMakeARealAuxFrameLookLost() {
+        // Pair ids rise with submission order. A refinement pair (id 11) has a synthetic, later timestamp than the real
+        // capture pair (id 12) submitted after it: matching is by id, so the real aux frame is not dropped.
+        var a = PackedSendArbiter()
+        a.mainSent(pairID: 11)
+        a.mainSent(pairID: 12)
+        XCTAssertEqual(a.pick(mainAvailable: false, aux: (11, false)), .aux)
+        XCTAssertEqual(a.pick(mainAvailable: false, aux: (12, false)), .aux)
     }
 
     func testAuxConfigIsNeverHeld() {
@@ -212,8 +223,8 @@ final class PackedChromaFlowTests: XCTestCase {
 
     func testAuxWhoseMainFrameWasLostIsDropped() {
         var a = PackedSendArbiter()
-        a.mainSent(captureTimeUs: 100)
-        a.mainSent(captureTimeUs: 130)  // the main frame of capture 115 never went out
+        a.mainSent(pairID: 100)
+        a.mainSent(pairID: 130)  // the main frame of submission 115 never went out
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (115, false)), .dropAux)
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (130, false)), .aux)
         XCTAssertEqual(a.pick(mainAvailable: false, aux: nil), .wait)
@@ -221,7 +232,7 @@ final class PackedChromaFlowTests: XCTestCase {
 
     func testMemoryIsBounded() {
         var a = PackedSendArbiter()
-        for i in 1...20 { a.mainSent(captureTimeUs: UInt64(i)) }
+        for i in 1...20 { a.mainSent(pairID: UInt64(i)) }
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (20, false)), .aux)
         XCTAssertEqual(a.pick(mainAvailable: false, aux: (3, false)), .dropAux)  // forgotten, older than the newest
     }

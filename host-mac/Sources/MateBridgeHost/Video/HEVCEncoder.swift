@@ -117,6 +117,10 @@ final class HEVCEncoder: @unchecked Sendable {
     /// (non-resubmitted) frame: the periodic-keyframe guard and the first refine frame's size estimate. Guarded by
     /// `lock`.
     private var lastKeyframeUs = HostClock.nowUs()
+    /// Host time of the newest auxiliary keyframe output (packed full colour: the auxiliary session has its own
+    /// periodic IDR deadline) and the submission counter pairing main and auxiliary frames. Guarded by `lock`.
+    private var lastAuxKeyframeUs = HostClock.nowUs()
+    private var nextPairID: UInt64 = 0
     private var lastMotionBytes = 0
     /// Byte size of the newest real auxiliary frame (packed full colour): the first refinement pair's estimate adds it.
     private var lastMotionAuxBytes = 0
@@ -349,6 +353,7 @@ final class HEVCEncoder: @unchecked Sendable {
                     configLog(line.level, ChromaConfigLog.event, line.fields)
                 } else if !frame.data.isEmpty {
                     statsLock.withLock {
+                        if frame.isKeyframe { self?.lastAuxKeyframeUs = HostClock.nowUs() }
                         self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs)
                         // A real (non-refinement) auxiliary frame sets the first refinement pair's size estimate.
                         if self?.refinePairs[frame.captureTimeUs] == nil { self?.lastMotionAuxBytes = frame.data.count }
@@ -699,8 +704,12 @@ final class HEVCEncoder: @unchecked Sendable {
     private func periodicKeyframeDueLocked(nowUs: UInt64) -> Bool {
         let c = refinePolicy.config
         let horizon = UInt64(c.maxFrames) * 1_000_000 / UInt64(max(1, settings.fps)) + c.timeoutUs + 1_000_000
-        return PeriodicKeyframe.isDue(nowUs: nowUs, lastKeyframeUs: lastKeyframeUs,
-                                      intervalSeconds: Self.keyframeIntervalSeconds, horizonUs: horizon)
+        func due(_ last: UInt64) -> Bool {
+            PeriodicKeyframe.isDue(nowUs: nowUs, lastKeyframeUs: last,
+                                   intervalSeconds: Self.keyframeIntervalSeconds, horizonUs: horizon)
+        }
+        // T-258: the auxiliary session has its own periodic IDR deadline; either stream's falls within a train.
+        return due(lastKeyframeUs) || (auxEncoder != nil && due(lastAuxKeyframeUs))
     }
 
     /// A held refine frame was dropped at reservation because a keyframe became pending: ends its train.
@@ -823,14 +832,16 @@ final class HEVCEncoder: @unchecked Sendable {
     private func send(_ frame: Input, key: Bool, token: EncoderSubmitToken, session: VTCompressionSession) {
         // T-235: the Metal pass runs here, so only frames that are really submitted are converted (the pacer may
         // replace or decimate captures); its time falls between `deliveredUs` and `submittedUs` in the trace.
+        let pairID: UInt64 = lock.withLock { nextPairID &+= 1; return nextPairID }
         var image = chromaConverter.map { convertForEncoder(frame.buffer, $0) } ?? frame.buffer
         // T-258: one Metal pass makes both pictures; the auxiliary one goes to its own session right away, with this
         // frame's PTS and `capture_time_us`. The main frame is submitted below, the auxiliary one never waits for it.
-        if let packer, let auxEncoder { image = packAndSubmitAux(frame, packer: packer, aux: auxEncoder) ?? image }
+        if let packer, let auxEncoder { image = packAndSubmitAux(frame, pairID: pairID, packer: packer, aux: auxEncoder) ?? image }
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
         var trace = FrameTrace()
+        trace.pairID = pairID
         // Origin: the earliest of the SCK stamps and the callback (T-072), so the totals can never be shorter than
         // the stages; the raw stamps travel along and are logged as signed offsets.
         trace.ptsUs = captureTimeUs
@@ -862,7 +873,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// T-258 (owner queue): packs `frame` and hands the auxiliary picture to the auxiliary session; returns the main
     /// picture for the main session, nil when the frame could not be packed (the main session then gets the `BGRA`
     /// frame, a normal 4:2:0 picture, and the owner falls back).
-    private func packAndSubmitAux(_ frame: Input, packer: PackedChromaPacker, aux: PackedAuxEncoder) -> CVPixelBuffer? {
+    private func packAndSubmitAux(_ frame: Input, pairID: UInt64, packer: PackedChromaPacker, aux: PackedAuxEncoder) -> CVPixelBuffer? {
         switch packer.pack(frame.buffer) {
         case .packed(let main, let auxBuffer, let wallUs, let gpuUs):
             lock.withLock { packedStats?.recordPack(wallUs: wallUs, gpuUs: gpuUs) }
@@ -879,7 +890,8 @@ final class HEVCEncoder: @unchecked Sendable {
                     refinePairs[frame.captureTimeUs] = RefinePair(train: train, main: nil, aux: nil)
                 }
             }
-            if !aux.encode(auxBuffer, presentationTime: frame.pts, captureTimeUs: frame.captureTimeUs, keyframe: wantKey) {
+            if !aux.encode(auxBuffer, presentationTime: frame.pts, captureTimeUs: frame.captureTimeUs, pairID: pairID,
+                              keyframe: wantKey) {
                 // The auxiliary stream lost a frame: its chain has a hole, so the next one is an IDR.
                 lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
                 auxFlagLock.withLock { auxKeyframePending = true }
@@ -1058,6 +1070,7 @@ final class HEVCEncoder: @unchecked Sendable {
         if isKey { lock.withLock { lastKeyframeUs = HostClock.nowUs() } }
         lock.withLock { packedStats?.recordMain(bytes: annexB.count) }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
+        frame.pairID = trace.pairID
         frame.trace = trace
         output(frame, encodeTimeUs)
         return annexB.count

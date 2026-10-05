@@ -1,8 +1,10 @@
 import Foundation
 
 /// Which frame the sender writes next in a packed full colour stream (decision 0034, PROTOCOL.md 0x05 / section 5).
-/// Pure. The main picture always goes first; an auxiliary frame goes only with the `capture_time_us` of a main frame
-/// that was actually sent (`mainSent`).
+/// Pure. The main picture always goes first; an auxiliary frame goes only after the main frame of the same submission
+/// (`EncodedVideoFrame.pairID`) was actually sent (`mainSent`). Pairs are matched by submission identity, never by
+/// timestamp order: a refinement frame carries a synthetic later timestamp (it also shares the wire `capture_time_us`
+/// of its main frame, which is what the client pairs by).
 public struct PackedSendArbiter: Sendable {
     public enum Pick: Equatable, Sendable {
         case main
@@ -14,7 +16,7 @@ public struct PackedSendArbiter: Sendable {
         case wait
     }
 
-    /// Main capture times remembered (the auxiliary frame of a main frame sent a moment ago may still arrive).
+    /// Main pair ids remembered (the auxiliary frame of a main frame sent a moment ago may still arrive).
     public static let memory = 8
     private var recent: [UInt64] = []
     private var latest: UInt64?
@@ -22,20 +24,20 @@ public struct PackedSendArbiter: Sendable {
     public init() {}
 
     /// A main frame (not a CODEC_CONFIG) was handed to the transport.
-    public mutating func mainSent(captureTimeUs: UInt64) {
-        recent.append(captureTimeUs)
+    public mutating func mainSent(pairID: UInt64) {
+        recent.append(pairID)
         if recent.count > Self.memory { recent.removeFirst(recent.count - Self.memory) }
-        latest = max(latest ?? 0, captureTimeUs)
+        latest = max(latest ?? 0, pairID)
     }
 
     /// - Parameters:
     ///   - mainAvailable: the main queue holds a frame.
-    ///   - aux: the auxiliary queue's head: its `captureTimeUs` and whether it is a CODEC_CONFIG; nil when empty.
-    public func pick(mainAvailable: Bool, aux: (captureTimeUs: UInt64, isConfig: Bool)?) -> Pick {
+    ///   - aux: the auxiliary queue's head: its `pairID` and whether it is a CODEC_CONFIG; nil when empty.
+    public func pick(mainAvailable: Bool, aux: (pairID: UInt64, isConfig: Bool)?) -> Pick {
         if mainAvailable { return .main }
         guard let aux else { return .wait }
-        if aux.isConfig || recent.contains(aux.captureTimeUs) { return .aux }
-        if let latest, aux.captureTimeUs < latest { return .dropAux }
+        if aux.isConfig || recent.contains(aux.pairID) { return .aux }
+        if let latest, aux.pairID < latest { return .dropAux }
         return .wait
     }
 }

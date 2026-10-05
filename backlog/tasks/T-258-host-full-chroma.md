@@ -85,6 +85,11 @@ Dal: `task/T-258-host-full-chroma` (T-257 üzerine). Protokole dokunulmaz.
 1. Gerileme düzeltildi: refine hazırlığı `RefineReadiness.ready(mainReady:auxReady:packed:)` (Core, test edildi); yardımcı kuyruk yalnız `settings.packedChroma` iken sayılır, Normal/Sharp/geri düşüş sonrası T-253 eskisi gibi çalışır.
 2. Taşıyıcının reddettiği yardımcı kare `counters.auxDropped`'a sayılır (geri düşüş kuralının kullandığı sayaç).
 
+### Codex turu 5 (2 x P2)
+
+1. Eşleme artık zaman damgasıyla değil gönderim kimliğiyle: `EncodedVideoFrame.pairID` (kodlayıcı her `send` için artan sayaç; ana kare `FrameTrace.pairID` ile taşır, yardımcı `PackedAuxEncoder.encode(pairID:)` ile). `PackedSendArbiter` `pairID` ile çalışır; tel üzerindeki `capture_time_us` aynen ana karenin değeri (istemci onunla eşler). Refine kareleri sentetik daha geç damga taşısa da gerçek yakalamanın yardımcısı atılmaz. Test: `testRefinementTimestampsDoNotMakeARealAuxFrameLookLost` ve mevcut arbiter/gönderici testleri pairID ile.
+2. Refine "keyframe due" koruması iki akışın periyodik IDR son zamanına bakar (`lastAuxKeyframeUs`). Host hedefi, derlendi.
+
 ## Open questions
 
 - Orkestratörün sonradan gönderdiği kart açıklaması (KEYFRAME_REQUEST `view`/`reason`) için protokol dalını birleştirme komutu izin sistemi tarafından reddedildi; açıklama mesajdaki metne göre uygulandı (PROTOCOL §0x23 ile uyumlu varsayıldı). Birleştirme gerekirse orkestratör yapmalı; protokol değişikliği yok.

@@ -122,9 +122,9 @@ public final class VideoSender: @unchecked Sendable {
                 if let f = frames.tryPop() {
                     picked = (f, 0)
                 } else if let f = aux.tryPop(where: { head in
-                    arbiter.pick(mainAvailable: false, aux: (head.captureTimeUs, head.isCodecConfig)) != .wait
+                    arbiter.pick(mainAvailable: false, aux: (head.pairID, head.isCodecConfig)) != .wait
                 }) {
-                    if arbiter.pick(mainAvailable: false, aux: (f.captureTimeUs, f.isCodecConfig)) == .aux {
+                    if arbiter.pick(mainAvailable: false, aux: (f.pairID, f.isCodecConfig)) == .aux {
                         picked = (f, 1)
                     } else {
                         // Its main frame never went out: the auxiliary chain has a hole.
@@ -140,7 +140,7 @@ public final class VideoSender: @unchecked Sendable {
                     let accepted = write(out, seq: seqs[view])
                     if accepted {
                         seqs[view] &+= 1
-                        if view == 0, !out.isCodecConfig { arbiter.mainSent(captureTimeUs: out.captureTimeUs) }
+                        if view == 0, !out.isCodecConfig { arbiter.mainSent(pairID: out.pairID) }
                     } else if view == 1 {
                         // A transport-refused auxiliary frame is a loss like a dropped one (the fallback rule counts it).
                         lock.withLock { counters.auxDropped += 1 }

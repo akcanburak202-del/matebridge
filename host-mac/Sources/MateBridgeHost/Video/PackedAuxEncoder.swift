@@ -115,7 +115,8 @@ final class PackedAuxEncoder: @unchecked Sendable {
 
     /// Submits one auxiliary picture. false = not submitted (both slots busy, the session is closed, or VideoToolbox
     /// refused it): the caller counts a loss and requests an auxiliary keyframe. Owner queue only.
-    func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64, keyframe: Bool) -> Bool {
+    func encode(_ buffer: CVPixelBuffer, presentationTime: CMTime, captureTimeUs: UInt64, pairID: UInt64,
+                keyframe: Bool) -> Bool {
         let accepted: Bool = lock.withLock {
             guard !closed, inFlight < Self.maxInFlight else { return false }
             inFlight += 1
@@ -129,7 +130,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
             frameProperties: props, infoFlagsOut: nil
         ) { [weak self] status, _, sampleBuffer in
             guard let self else { return }
-            self.completed(status: status, sampleBuffer: sampleBuffer, captureTimeUs: captureTimeUs,
+            self.completed(status: status, sampleBuffer: sampleBuffer, captureTimeUs: captureTimeUs, pairID: pairID,
                            encodeUs: (DispatchTime.now().uptimeNanoseconds - start) / 1000)
         }
         if status != noErr {
@@ -187,7 +188,8 @@ final class PackedAuxEncoder: @unchecked Sendable {
         if trip { onError("aux_encode_errors") }
     }
 
-    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeUs: UInt64) {
+    private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, pairID: UInt64,
+                           encodeUs: UInt64) {
         guard status == noErr, let sb = sampleBuffer else {
             Self.log.error("ev=aux_encode_no_output status=\(status)")
             lock.withLock { awaitingKeyframe = true }
@@ -196,14 +198,14 @@ final class PackedAuxEncoder: @unchecked Sendable {
             return
         }
         lock.withLock { failures = 0 }
-        let delivered = handle(sb, captureTimeUs: captureTimeUs, encodeUs: encodeUs)
+        let delivered = handle(sb, captureTimeUs: captureTimeUs, pairID: pairID, encodeUs: encodeUs)
         lock.withLock { inFlight = max(0, inFlight - 1) }
         if !delivered { onLoss(captureTimeUs) }
     }
 
     /// true when the frame went to `output`; false when it was discarded (after a lost frame, until a keyframe).
     @discardableResult
-    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeUs: UInt64) -> Bool {
+    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, pairID: UInt64, encodeUs: UInt64) -> Bool {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return false }
         let isKey: Bool = {
             guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
@@ -231,6 +233,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
               let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return false }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.view = 1
+        frame.pairID = pairID
         output(frame, encodeUs)
         return true
     }
