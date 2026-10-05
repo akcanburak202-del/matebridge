@@ -1,7 +1,7 @@
 ---
 id: T-247
 title: Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode
-status: todo
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -32,7 +32,9 @@ Araştırma (2026-10-05, siyah kalkması raporu, yan bulgu, kaynaktan; cihazda �
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. Kaynak analizi (kod yok): AOSP `android12-release` `ViewRootImpl` (`EarlyPostImeInputStage.processKeyEvent` → `checkForLeavingTouchModeAndConsume` → `ensureTouchMode(false)` → `leaveTouchMode`) ile istemcinin tuş yolunu (`MainActivity.dispatchKeyEvent` → `routeKeyEvent` → `InputCapture.onKey` → `KeyTracker`) ve odak kurulumunu (`video` SurfaceView, `syncPointerCapture`) karşılaştır.
+2. Yutma yalnızca dokunma kipinde, odak yokken (ya da odak `FOCUS_AFTER_DESCENDANTS` bir ViewGroup'tayken) ve `restoreDefaultFocus()` yeni odak yerleştirdiğinde olur. Akış sırasında bu koşulun oluşup oluşmadığını tüm odak yollarında kontrol et.
+3. Sorun varsa: `video` odağını garanti eden yalıtılmış bir koruma (ör. `ViewTreeObserver.OnTouchModeChangeListener`, `leaveTouchMode`'dan önce çağrılır) + JVM testli saf karar sınıfı. Sorun yoksa: kod değişikliği yok; sonuç ve cihaz kontrolü Handoff'a.
 
 ## Handoff
 
