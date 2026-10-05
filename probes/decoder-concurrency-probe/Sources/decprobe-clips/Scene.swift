@@ -14,9 +14,11 @@ final class Scene {
     private let panX = 2.5   // px per frame
     private let panY = 1.5
 
-    init(frames: Int) {
+    /// `grain` = per-channel grain amplitude (+-grain) of the photo; more grain means more bits at a given quality.
+    init(frames: Int, grain: Int = 6) {
         let maxPan = Int(ceil(Double(frames) * 2.5)) + 8
-        photo = Scene.makePhoto(width: Scene.width + maxPan, height: Scene.height + Int(ceil(Double(frames) * 1.5)) + 8)
+        photo = Scene.makePhoto(width: Scene.width + maxPan, height: Scene.height + Int(ceil(Double(frames) * 1.5)) + 8,
+                               grain: grain)
         // Panels in scene coordinates (CG origin bottom-left); one in each half, not touching the split line.
         let left = CGRect(x: 90, y: 110, width: 1180, height: 1580)
         let right = CGRect(x: 1520, y: 170, width: 1200, height: 1500)
@@ -66,7 +68,7 @@ final class Scene {
 
     /// Smooth gradient sky plus a few hundred soft radial blobs, then per-pixel grain: photo-like mid and high
     /// frequency content, not a flat synthetic pattern.
-    private static func makePhoto(width w: Int, height h: Int) -> CGImage {
+    private static func makePhoto(width w: Int, height h: Int, grain: Int) -> CGImage {
         let ctx = rgbContext(w, h)
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
         var rng = LCG(seed: 0x248)
@@ -95,13 +97,13 @@ final class Scene {
             }
             ctx.strokePath()
         }
-        // Grain: +-6 per channel.
+        // Grain: +-grain per channel.
         if let base = ctx.data {
             let stride = ctx.bytesPerRow
             for y in 0..<h {
                 let row = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
                 for x in 0..<(w * 4) where x & 3 != 3 {
-                    let v = Int(row[x]) + Int(rng.next() % 13) - 6
+                    let v = Int(row[x]) + Int(rng.next() % UInt64(2 * grain + 1)) - grain
                     row[x] = UInt8(clamping: v)
                 }
             }

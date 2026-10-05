@@ -40,9 +40,16 @@ data class SessionResult(
     /** Paced runs: ticks with no free input buffer (the decoder fell behind). */
     val missedTicks: Int = 0,
     val error: String? = null,
+    /** Queue-to-output time of the IRAP (IDR) frames only (ns); empty when the window held none. */
+    val idrLatNs: LongArray = LongArray(0),
+    /** HEVC profile the clip needs (`Main`, `Main10`, `Main10HDR10`). */
+    val profile: String = "",
 )
 
-/** Formats the one-line DECPROBE summary of one scenario run. */
+/**
+ * Formats the one-line DECPROBE summary of one scenario run. Per session: `lat` = queue-to-output p50/p95/p99/max (ms),
+ * `gap` = time between consecutive outputs p50/p95/p99 (ms), `idrN:p50/max` = latency of the N IDR frames in the window.
+ */
 object Summary {
     private fun ms(ns: Long) = ns / 1e6
 
@@ -67,18 +74,25 @@ object Summary {
                 "s$i=${s.clip}:ERR(${s.error.replace(' ', '_')})"
             } else {
                 String.format(
-                    Locale.US, "s%d=%s:%.1ffps,lat%.2f/%.2f,gap%.2f/%.2f%s%s", i, s.clip, fps[i],
-                    ms(percentile(s.latNs, 50.0)), ms(percentile(s.latNs, 95.0)),
-                    ms(percentile(s.gapNs, 50.0)), ms(percentile(s.gapNs, 95.0)),
+                    Locale.US, "s%d=%s:%.1ffps,lat%.2f/%.2f/%.2f/%.2f,gap%.2f/%.2f/%.2f%s%s%s", i, s.clip, fps[i],
+                    ms(percentile(s.latNs, 50.0)), ms(percentile(s.latNs, 95.0)), ms(percentile(s.latNs, 99.0)),
+                    ms(s.latNs.maxOrNull() ?: 0L),
+                    ms(percentile(s.gapNs, 50.0)), ms(percentile(s.gapNs, 95.0)), ms(percentile(s.gapNs, 99.0)),
+                    if (s.idrLatNs.isNotEmpty()) {
+                        String.format(Locale.US, ",idr%d:%.2f/%.2f", s.idrLatNs.size,
+                            ms(percentile(s.idrLatNs, 50.0)), ms(s.idrLatNs.max()))
+                    } else "",
                     if (s.images >= 0) ",img${s.images}" else "",
                     if (paceFps > 0) ",miss${s.missedTicks}" else "",
                 )
             }
         }
+        val prof = sessions.map { it.profile }.filter { it.isNotEmpty() }.distinct().joinToString("+").ifEmpty { "-" }
         return String.format(
             Locale.US,
-            "DECPROBE scen=%s out=%s pace=%d n=%d ok=%d win=%.1fs total_fps=%.1f min_fps=%.1f total_mpxs=%.1f codec=%s %s",
-            scenario, output, paceFps, sessions.size, ok.size, windowSec, totalFps, minFps, totalMpxs, codec, per,
+            "DECPROBE scen=%s out=%s pace=%d n=%d ok=%d win=%.1fs total_fps=%.1f min_fps=%.1f total_mpxs=%.1f " +
+                "codec=%s prof=%s %s",
+            scenario, output, paceFps, sessions.size, ok.size, windowSec, totalFps, minFps, totalMpxs, codec, prof, per,
         )
     }
 }

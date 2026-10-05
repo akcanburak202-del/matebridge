@@ -21,7 +21,11 @@ import java.io.File
  *
  * Extras (all optional): scenarios (default [Scenario.DEFAULT]), outputs (`image,buffer`), seconds (8), warmup (1),
  * pace (0 = flood; e.g. 120 = one frame per 1/120 s), prio (`0`, `1` or `none`), oprate (`max`, a number or `none`),
- * codec (decoder name; default findDecoderForFormat for HEVC 2800x1840).
+ * codec (decoder name; default findDecoderForFormat per clip, asking for Main10 / Main10HDR10 for 10-bit clips),
+ * imgfmt (ImageReader format of the `image` output: `private` default, `p010`, `rgba1010102`, `rgba8888`; an
+ * unsupported one shows up as ERR(configure:...), never as a silent fallback), colorkeys (`none` = do not pass profile
+ * and colour keys for 10-bit clips). T-249 adds 10-bit / high-bitrate clips (`full_10pq_100m` ...), p99/max latency
+ * and the latency of IDR frames.
  */
 class DecProbeActivity : Activity() {
 
@@ -92,17 +96,30 @@ class DecProbeActivity : Activity() {
             log("DECPROBE info clip $id ${cf.width}x${cf.height} units=${lc.units.size} bytes=${lc.data.size} " +
                 "csd=${lc.csd?.size ?: 0} max_unit=${lc.maxUnit}")
         }
-        val codecName = intent.getStringExtra("codec") ?: findCodec()
-        if (codecName == null) { log("DECPROBE info no HEVC decoder"); return }
-        logCodecInfo(codecName, clips.values.map { it.file })
+        val (imgFmtName, imgFmt) = ImgFormat.parse(intent.getStringExtra("imgfmt")) ?: run {
+            log("DECPROBE info bad imgfmt '${intent.getStringExtra("imgfmt")}' (private, p010, rgba1010102, rgba8888)")
+            return
+        }
+        val colorKeys = intent.getStringExtra("colorkeys") != "none"
+        // One decoder per clip format (a 10-bit clip may be served by another decoder than an 8-bit one).
+        val override = intent.getStringExtra("codec")
+        val codecNames = HashMap<String, String>()
+        for ((id, lc) in clips) {
+            val name = override ?: findCodec(lc.file)
+            if (name == null) { log("DECPROBE info no HEVC decoder for clip $id (${lc.file.profileName})"); continue }
+            codecNames[id] = name
+        }
+        for (name in codecNames.values.toSet()) {
+            logCodecInfo(name, clips.filter { codecNames[it.key] == name }.values.map { it.file })
+        }
         log("DECPROBE info device=${Build.MODEL} sdk=${Build.VERSION.SDK_INT} seconds=$seconds warmup=$warmup " +
-            "pace=$pace prio=${prio ?: "none"} oprate=${opRate ?: "none"} outputs=$outputs " +
-            "scenarios=${scenarios.joinToString(",") { it.name }}")
+            "pace=$pace prio=${prio ?: "none"} oprate=${opRate ?: "none"} outputs=$outputs imgfmt=$imgFmtName " +
+            "colorkeys=$colorKeys scenarios=${scenarios.joinToString(",") { it.name }}")
 
         outer@ for (out in outputs) {
             for (sc in scenarios) {
                 if (!running) break@outer
-                runScenario(sc, out, clips, codecName, seconds, warmup, pace, prio, opRate)
+                runScenario(sc, out, clips, codecNames, seconds, warmup, pace, imgFmt, colorKeys, prio, opRate)
                 pauseMs(1500)
             }
         }
@@ -110,13 +127,14 @@ class DecProbeActivity : Activity() {
     }
 
     private fun runScenario(
-        sc: Scenario, out: String, clips: Map<String, LoadedClip>, codecName: String,
-        seconds: Double, warmup: Double, pace: Int, prio: Int?, opRate: Int?,
+        sc: Scenario, out: String, clips: Map<String, LoadedClip>, codecNames: Map<String, String>,
+        seconds: Double, warmup: Double, pace: Int, imgFmt: Int, colorKeys: Boolean, prio: Int?, opRate: Int?,
     ) {
-        val missing = sc.clips.filter { it !in clips }
+        val missing = sc.clips.filter { it !in clips || it !in codecNames }
         if (missing.isNotEmpty()) { log("DECPROBE scen=${sc.name} out=$out skipped: missing $missing"); return }
+        val codecName = sc.clips.map { codecNames.getValue(it) }.distinct().joinToString("+")
         val sessions = sc.clips.mapIndexed { i, id ->
-            DecoderSession(i, clips.getValue(id), codecName, out, pace, prio, opRate, ::log)
+            DecoderSession(i, clips.getValue(id), codecNames.getValue(id), out, pace, imgFmt, colorKeys, prio, opRate, ::log)
         }
         val configured = sessions.map { it.configure() }
         configured.forEachIndexed { i, e -> if (e != null) log("DECPROBE info scen=${sc.name} s$i $e") }
@@ -137,9 +155,12 @@ class DecProbeActivity : Activity() {
     private fun thermal(): Int =
         runCatching { (getSystemService(POWER_SERVICE) as PowerManager).currentThermalStatus }.getOrDefault(-1)
 
-    private fun findCodec(): String? {
-        val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 2800, 1840)
-        return MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(fmt)
+    /** The decoder the platform picks for this clip's size and profile (10-bit clips ask for Main10 / Main10HDR10). */
+    private fun findCodec(f: ClipFile): String? {
+        val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+        val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, f.width, f.height)
+        if (f.bitDepth == 10) fmt.setInteger(MediaFormat.KEY_PROFILE, HevcProfiles.forClip(f))
+        return list.findDecoderForFormat(fmt)
     }
 
     private fun logCodecInfo(name: String, files: Collection<ClipFile>) {
@@ -149,8 +170,12 @@ class DecProbeActivity : Activity() {
             ?: run { log("DECPROBE info codec $name has no HEVC caps"); return }
         val vc = caps.videoCapabilities ?: run { log("DECPROBE info codec $name has no video caps"); return }
         val pps = vc.supportedPerformancePoints?.joinToString(";")
+        val profiles = HevcProfiles.names(caps.profileLevels.map { it.profile })
         log("DECPROBE info codec=$name hw=${info.isHardwareAccelerated} max_instances=${caps.maxSupportedInstances} " +
-            "perf_points=${pps ?: "-"}")
+            "profiles=$profiles perf_points=${pps ?: "-"}")
+        for (f in files.map { it.profileName }.toSet()) {
+            if (f !in profiles) log("DECPROBE info codec=$name does not advertise profile $f (clips may still decode)")
+        }
         for (f in files) {
             val rates = runCatching { vc.getAchievableFrameRatesFor(f.width, f.height) }.getOrNull()
             log("DECPROBE info codec=$name ${f.width}x${f.height} achievable=${rates ?: "-"} " +

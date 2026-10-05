@@ -10,4 +10,4 @@ Aşama 0 deneyleri. Her probe bağımsız, küçük ve tek bir soruyu cevaplar. 
 | `aaudio-probe/` (Android, NDK) | Tablette AAudio MMAP var mı, çıkış gecikmesi AudioTrack'e göre ne kadar düşük? | T-099 |
 | `hdr-probe/` (Swift + Android) | Sanal ekran HDR (EDR) bildirebilir mi, SCK/VT 10-bit PQ hattı ve tablette HDR10 gösterim çalışıyor mu? | T-226 |
 | `color-range-probe/` (Swift) | HEVC bit akışında siyah gerçekten Y=0 mı, SPS VUI `video_full_range_flag` ve renk açıklaması ne? | T-230 |
-| `decoder-concurrency-probe/` (Swift + Android) | Tabletin HEVC çözücüsü eş zamanlı oturumlarla (1/2/3, tam/yarım kare) toplam hızı artırıyor mu? | T-248 |
+| `decoder-concurrency-probe/` (Swift + Android) | Tabletin HEVC çözücüsü eş zamanlı oturumlarla (1/2/3, tam/yarım kare) toplam hızı artırıyor mu? 10-bit (SDR/HDR PQ) ve 60–150 Mbps'te kapasite/gecikme nasıl? | T-248, T-249 |

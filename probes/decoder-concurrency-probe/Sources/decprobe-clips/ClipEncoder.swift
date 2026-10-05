@@ -57,17 +57,27 @@ final class ClipEncoder: @unchecked Sendable {
         }
         set("RealTime", kVTCompressionPropertyKey_RealTime, kCFBooleanFalse)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
+        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
+            spec.depth == .b8 ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_HEVC_Main10_AutoLevel)
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
         set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (spec.bitrateKbps * 1000) as CFNumber)
         let bytesPerSecond = spec.bitrateKbps * 1000 / 8 * 2
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits, [bytesPerSecond, 1] as CFArray)
-        set("MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval, (frames + 1) as CFNumber)
+        set("MaxKeyFrameInterval", kVTCompressionPropertyKey_MaxKeyFrameInterval,
+            (spec.idrInterval > 0 ? spec.idrInterval : frames + 1) as CFNumber)
         set("PrioritizeEncodingSpeedOverQuality", kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
             kCFBooleanTrue)
-        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
-        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2)
-        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+        let colour = Self.colour(spec.depth)
+        set("ColorPrimaries", kVTCompressionPropertyKey_ColorPrimaries, colour.primaries)
+        set("TransferFunction", kVTCompressionPropertyKey_TransferFunction, colour.transfer)
+        set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, colour.matrix)
+        if spec.depth == .pq10 {
+            set("MasteringDisplayColorVolume", kVTCompressionPropertyKey_MasteringDisplayColorVolume,
+                Data(HDR10SEI.mdcv()) as CFData)
+            set("ContentLightLevelInfo", kVTCompressionPropertyKey_ContentLightLevelInfo, Data(HDR10SEI.cll()) as CFData)
+            set("HDRMetadataInsertionMode", kVTCompressionPropertyKey_HDRMetadataInsertionMode,
+                kVTHDRMetadataInsertionMode_Auto)
+        }
         VTCompressionSessionPrepareToEncodeFrames(session)
         guard let pool = VTCompressionSessionGetPixelBufferPool(session) else {
             throw ProbeError("no pixel buffer pool for \(spec.id)")
@@ -121,10 +131,21 @@ final class ClipEncoder: @unchecked Sendable {
             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return }
         scene.draw(frame: i, into: ctx, originX: spec.x, originY: spec.y, clipHeight: spec.height)
-        CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2,
-                              .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        let colour = Self.colour(spec.depth)
+        CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, colour.primaries, .shouldPropagate)
+        CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, colour.transfer, .shouldPropagate)
+        CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, colour.matrix, .shouldPropagate)
+    }
+
+    private static func colour(_ d: ClipDepth) -> (primaries: CFString, transfer: CFString, matrix: CFString) {
+        switch d {
+        case .b8, .sdr10:
+            return (kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferTransferFunction_ITU_R_709_2,
+                    kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+        case .pq10:
+            return (kCVImageBufferColorPrimaries_ITU_R_2020, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+                    kCVImageBufferYCbCrMatrix_ITU_R_2020)
+        }
     }
 
     private func done(index: Int, status: OSStatus, sample: CMSampleBuffer?) {
@@ -157,6 +178,7 @@ final class ClipEncoder: @unchecked Sendable {
                     sets.append(Array(UnsafeBufferPointer(start: ptr, count: size)))
                 }
             }
+            if spec.depth == .pq10 { sets += HDR10SEI.nalUnits() }   // VT keeps HDR10 SEI out of the samples
             annexB = AnnexB.join(sets) + annexB
         }
         lock.withLock { output[index] = annexB }

@@ -1,6 +1,5 @@
 package dev.matebridge.decprobe
 
-import android.graphics.ImageFormat
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import android.media.MediaCodec
@@ -17,6 +16,8 @@ class LoadedClip(val file: ClipFile, val data: ByteArray) {
     val units: List<AnnexB.Unit> = AnnexB.accessUnits(data)
     val csd: ByteArray? = AnnexB.codecConfig(data)
     val maxUnit: Int = units.maxOfOrNull { it.length } ?: 0
+    /** IRAP flag per access unit. */
+    val idr: BooleanArray = AnnexB.irapFlags(data, units)
 }
 
 /**
@@ -34,6 +35,10 @@ class DecoderSession(
     private val codecName: String,
     private val output: String,
     private val paceFps: Int,
+    /** ImageReader pixel format of the `image` output (see [ImgFormat]). */
+    private val imgFormat: Int,
+    /** 10-bit clips: also tell the decoder the profile and the BT.2020 / PQ colour description. */
+    private val colorKeys: Boolean,
     private val priority: Int?,
     private val operatingRate: Int?,
     private val log: (String) -> Unit,
@@ -50,6 +55,8 @@ class DecoderSession(
     private var endNs = Long.MAX_VALUE
     private var stopped = false
     private val queuedAt = LongArray(RING)
+    private val queuedIdr = BooleanArray(RING)
+    private val idrLat = LongList(64)
     private var nextUnit = 0
     private var frameNo = 0L
     private val free = ArrayDeque<Int>()
@@ -82,13 +89,25 @@ class DecoderSession(
             fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, clip.maxUnit + 4096)
             fmt.setInteger(MediaFormat.KEY_FRAME_RATE, if (paceFps > 0) paceFps else STREAM_FPS)
             clip.csd?.let { fmt.setByteBuffer("csd-0", ByteBuffer.wrap(it)) }
+            if (colorKeys && f.bitDepth == 10) {
+                fmt.setInteger(MediaFormat.KEY_PROFILE, HevcProfiles.forClip(f))
+                fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                if (f.depth == "10pq") {
+                    fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
+                    fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_ST2084)
+                } else {
+                    fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                    fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                }
+            }
             priority?.let { fmt.setInteger(MediaFormat.KEY_PRIORITY, it) }
             operatingRate?.let { fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, it) }
             val c = MediaCodec.createByCodecName(codecName)
             codec = c
             c.setCallback(callback, handler)
             val surface = if (output == "image") {
-                val r = ImageReader.newInstance(f.width, f.height, ImageFormat.PRIVATE, 4,
+                // No silent fallback: an unsupported format fails here and shows up as ERR(configure:...).
+                val r = ImageReader.newInstance(f.width, f.height, imgFormat, 4,
                     HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE)
                 r.setOnImageAvailableListener({ onImage(it) }, handler)
                 reader = r
@@ -131,6 +150,7 @@ class DecoderSession(
                     clip = clip.file.id, width = clip.file.width, height = clip.file.height, frames = frames,
                     latNs = lat.toArray(), gapNs = gap.toArray(), images = if (output == "image") images else -1,
                     missedTicks = missed, error = configureError ?: error,
+                    idrLatNs = idrLat.toArray(), profile = clip.file.profileName,
                 )
             }
         } catch (t: Throwable) {
@@ -174,7 +194,9 @@ class DecoderSession(
         val buf = c.getInputBuffer(idx) ?: return
         buf.clear()
         buf.put(clip.data, u.offset, u.length)
-        queuedAt[(frameNo and (RING - 1).toLong()).toInt()] = System.nanoTime()
+        val slot = (frameNo and (RING - 1).toLong()).toInt()
+        queuedAt[slot] = System.nanoTime()
+        queuedIdr[slot] = clip.idr[nextUnit]
         c.queueInputBuffer(idx, 0, u.length, frameNo * PTS_STEP_US, 0)
         frameNo++
         nextUnit = (nextUnit + 1) % clip.units.size
@@ -211,7 +233,9 @@ class DecoderSession(
                     if (now in winStartNs until winEndNs) {
                         val fn = info.presentationTimeUs / PTS_STEP_US
                         frames++
-                        lat.add(now - queuedAt[(fn and (RING - 1).toLong()).toInt()])
+                        val slot = (fn and (RING - 1).toLong()).toInt()
+                        lat.add(now - queuedAt[slot])
+                        if (queuedIdr[slot]) idrLat.add(now - queuedAt[slot])
                         if (lastOutNs >= winStartNs) gap.add(now - lastOutNs)
                     }
                     lastOutNs = now
