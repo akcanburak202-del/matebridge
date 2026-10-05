@@ -335,6 +335,14 @@ public final class VideoPipeline: @unchecked Sendable {
         box.encoder?.requestKeyframe(resubmitNow: true, view: .auxiliary)
     }
 
+    /// The sender dropped an auxiliary frame whose main frame never went out and broke the auxiliary chain
+    /// (`VideoFrameQueue.breakChain`, which keeps a keyframe already queued behind the hole). Goes through the
+    /// auxiliary coalescer's host-drop logic (T-176): nothing is forced when that surviving keyframe, one in the
+    /// encoder or one just written covers the hole; otherwise the force is deferred and re-checked, with a hard bound.
+    public func auxPairingDropped() {
+        auxBox.queueDropped(resubmitNow: true)
+    }
+
     /// Handles a client `KEYFRAME_REQUEST` through the coalescer (T-122, `KeyframeRequestCoalescer`).
     ///
     /// For reasons that imply a rebuilt decoder (`resendsCodecConfig`) the current `CODEC_CONFIG` is always queued and
@@ -521,8 +529,8 @@ private final class EncoderBox: @unchecked Sendable {
     /// when none is on its way and none was written within the coalescing window; otherwise deferred and re-checked
     /// (`KeyframeRequestCoalescer.hostDrop`). Captures keep arriving here (one just overflowed the queue), so the
     /// next one becomes the keyframe.
-    func queueDropped() {
-        decide(resubmitNow: false) { $0.hostDrop(nowUs: $1, queue: $2) }
+    func queueDropped(resubmitNow: Bool = false) {
+        decide(resubmitNow: resubmitNow) { $0.hostDrop(nowUs: $1, queue: $2) }
     }
 
     /// Timer: re-checks a deferred host-side keyframe. The screen may have gone static meanwhile, so a keyframe

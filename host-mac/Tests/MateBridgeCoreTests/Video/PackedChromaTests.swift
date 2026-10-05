@@ -185,6 +185,23 @@ final class PackedSenderTests: XCTestCase {
         XCTAssertEqual(t.sent.suffix(2).map(\.view), [0, 1])
         await sender.stop()
     }
+
+    func testPairingDropUsesTheCoalescedRecoveryWhenWired() async {
+        let main = VideoFrameQueue(keyframeNeeded: {}), aux = VideoFrameQueue(keyframeNeeded: {})
+        let t = RecordingTransport()
+        let forced = ActivityCounter(), pairing = ActivityCounter()
+        let sender = VideoSender(transport: t, frames: main, auxFrames: aux, requestKeyframe: {},
+                                 requestAuxKeyframe: { forced.increment() },
+                                 auxPairingDropped: { pairing.increment() })
+        sender.start()
+        main.push(enc(100, view: 0, key: true))
+        await waitUntil("main 100") { t.sent.count == 1 }
+        aux.push(enc(115, view: 1))
+        await waitUntil("aux 115 dropped") { sender.currentCounters.auxDropped == 1 }
+        XCTAssertEqual(pairing.value, 1)
+        XCTAssertEqual(forced.value, 0, "a pairing drop is not an unconditional forced keyframe")
+        await sender.stop()
+    }
 }
 
 private final class ActivityCounter: @unchecked Sendable {
@@ -320,23 +337,44 @@ final class PackedChromaFlowTests: XCTestCase {
         q.push(frame(1, key: true))
         q.push(frame(2))
         q.breakChain()
-        XCTAssertEqual(q.tryPop()?.captureTimeUs, 1)  // the keyframe survives, the delta was purged
+        XCTAssertEqual(q.tryPop()?.captureTimeUs, 1)  // the keyframe survives
+        XCTAssertEqual(q.tryPop()?.captureTimeUs, 2, "a delta after a surviving keyframe references it and stays")
+    }
+
+    func testBreakChainWithoutQueuedKeyframeRefusesDeltasUntilOne() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        q.push(frame(1, key: true))
+        _ = q.tryPop()
+        q.push(frame(2))
+        q.breakChain()
         XCTAssertNil(q.tryPop())
+        XCTAssertTrue(q.keyframeState.awaitingKeyframe)
         q.push(frame(3))  // refused
         XCTAssertNil(q.tryPop())
         q.push(frame(4, key: true))
         XCTAssertEqual(q.tryPop()?.captureTimeUs, 4)
     }
 
-    func testDiscardedCountIncludesRefusedAndPurgedFrames() {
+    func testBreakChainKeepsLaterKeyframeAndDoesNotAwait() {
         let q = VideoFrameQueue(keyframeNeeded: {})
         q.push(frame(1, key: true))
+        _ = q.tryPop()
         q.push(frame(2))
-        q.breakChain()  // purges the delta
-        XCTAssertEqual(q.discardedCount, 1)
+        q.push(frame(3, key: true))
+        q.breakChain()
+        XCTAssertFalse(q.keyframeState.awaitingKeyframe)
+        XCTAssertEqual(q.tryPop()?.captureTimeUs, 3, "the delta before the surviving keyframe was purged")
+    }
+
+    func testDiscardedCountIncludesRefusedAndPurgedFrames() {
+        let q = VideoFrameQueue(keyframeNeeded: {})
+        q.push(frame(1))
+        q.push(frame(2))
+        q.breakChain()  // purges both deltas
+        XCTAssertEqual(q.discardedCount, 2)
         q.push(frame(3))  // refused while awaiting a keyframe
         q.push(frame(4))
-        XCTAssertEqual(q.discardedCount, 3)
+        XCTAssertEqual(q.discardedCount, 4)
         XCTAssertEqual(q.droppedCount, 0, "the cadence counter is unchanged")
     }
 

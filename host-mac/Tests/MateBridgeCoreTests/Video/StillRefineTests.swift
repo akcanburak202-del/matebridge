@@ -96,6 +96,44 @@ final class StillRefineTests: XCTestCase {
         XCTAssertEqual(r.report?.reason, .queueBusy)
     }
 
+    func testDeferredQueueBusyWaitsForDrainThenContinues() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        let r = p.noteOutput(bytes: 20_000, nowUs: 300_100, queueReady: false, deferQueueBusy: true)
+        XCTAssertFalse(r.submitNext)
+        XCTAssertNil(r.report, "the train stays alive while the sender drains")
+        XCTAssertTrue(p.isRunning)
+        XCTAssertFalse(p.tick(nowUs: 310_000, queueReady: false).start)
+        XCTAssertTrue(p.tick(nowUs: 320_000, queueReady: true).start, "continues once the queues drained")
+        let r2 = p.noteOutput(bytes: 20_000, nowUs: 330_000, queueReady: true, deferQueueBusy: true)
+        XCTAssertTrue(r2.submitNext)
+    }
+
+    func testDeferredQueueBusyIsBounded() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        _ = p.noteOutput(bytes: 20_000, nowUs: 300_100, queueReady: false, deferQueueBusy: true)
+        let t = p.tick(nowUs: 300_100 + StillRefinePolicy.queueDrainWaitUs, queueReady: false)
+        XCTAssertFalse(t.start)
+        XCTAssertEqual(t.timedOut?.reason, .queueBusy)
+        XCTAssertFalse(p.isRunning)
+    }
+
+    func testDeferredWaitEndsOnPendingKeyframeAndCaptureCancels() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        _ = p.noteOutput(bytes: 20_000, nowUs: 300_100, queueReady: false, deferQueueBusy: true)
+        XCTAssertEqual(p.tick(nowUs: 310_000, queueReady: true, keyframePending: true).timedOut?.reason, .keyframePending)
+        p.noteCapture(nowUs: 400_000)
+        XCTAssertTrue(p.tick(nowUs: 700_000, queueReady: true).start)
+        _ = p.noteOutput(bytes: 20_000, nowUs: 700_100, queueReady: false, deferQueueBusy: true)
+        XCTAssertEqual(p.noteCapture(nowUs: 700_200)?.reason, .cancelled)
+        XCTAssertFalse(p.tick(nowUs: 700_300, queueReady: true).start)
+    }
+
     func testCaptureCancelsAndLateOutputIsIgnored() {
         var p = StillRefinePolicy(config: config())
         p.noteCapture(nowUs: 0)

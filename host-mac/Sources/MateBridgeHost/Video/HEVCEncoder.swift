@@ -733,7 +733,8 @@ final class HEVCEncoder: @unchecked Sendable {
             guard let bytes else { return (false, refinePolicy.noteFailure(nowUs: now)) }
             let r = refinePolicy.noteOutput(bytes: bytes, nowUs: now, queueReady: ready,
                                             keyframePending: keyframePending,
-                                            keyframeDue: periodicKeyframeDueLocked(nowUs: now))
+                                            keyframeDue: periodicKeyframeDueLocked(nowUs: now),
+                                            deferQueueBusy: auxEncoder != nil)
             return (r.submitNext, r.report)
         }
         if let report { logRefine(report) }

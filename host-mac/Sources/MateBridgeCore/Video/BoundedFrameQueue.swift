@@ -125,10 +125,18 @@ public struct BoundedFrameQueue: Sendable {
     /// The reference chain was broken outside the queue (the sender dropped a frame, T-258 auxiliary stream): queued
     /// deltas are purged and deltas are refused until a keyframe is pushed. The caller asks the encoder for one.
     public mutating func breakChain() {
+        // Every queued frame is later than the lost one. Deltas up to the first queued keyframe are useless; that
+        // keyframe restarts the chain (so recovery is already satisfied and later deltas stay valid). Without one,
+        // deltas are refused until a keyframe is pushed.
         let before = frames.count
-        frames.removeAll { !$0.isProtected }
+        var i = 0
+        var restarted = false
+        while i < frames.count {
+            if frames[i].isKeyframe { restarted = true; break }
+            if frames[i].isProtected { i += 1 } else { frames.remove(at: i) }
+        }
         purgedByBreakCount += before - frames.count
-        awaitingKeyframe = true
+        if !restarted { awaitingKeyframe = true }
     }
 
     public mutating func removeAll() {

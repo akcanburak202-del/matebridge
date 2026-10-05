@@ -39,6 +39,7 @@ public final class VideoSender: @unchecked Sendable {
     private let requestKeyframe: @Sendable () -> Void
     private let auxFrames: VideoFrameQueue?
     private let requestAuxKeyframe: @Sendable () -> Void
+    private let auxPairingDropped: (@Sendable () -> Void)?
     private let onEnded: @Sendable (EndReason) -> Void
     private let trace: (@Sendable (FrameTrace) -> Void)?
     private let clock: @Sendable () -> UInt64
@@ -64,11 +65,13 @@ public final class VideoSender: @unchecked Sendable {
                 auxFrames: VideoFrameQueue? = nil,
                 requestKeyframe: @escaping @Sendable () -> Void,
                 requestAuxKeyframe: @escaping @Sendable () -> Void = {},
+                auxPairingDropped: (@Sendable () -> Void)? = nil,
                 onEnded: @escaping @Sendable (EndReason) -> Void = { _ in },
                 trace: (@Sendable (FrameTrace) -> Void)? = nil,
                 clock: @escaping @Sendable () -> UInt64 = { 0 }) {
         self.auxFrames = auxFrames
         self.requestAuxKeyframe = requestAuxKeyframe
+        self.auxPairingDropped = auxPairingDropped
         self.trace = trace
         self.clock = clock
         self.transport = transport
@@ -130,7 +133,9 @@ public final class VideoSender: @unchecked Sendable {
                         // Its main frame never went out: the auxiliary chain has a hole.
                         aux.breakChain()
                         lock.withLock { counters.auxDropped += 1 }
-                        requestAuxKeyframe()
+                        // Recovery goes through the auxiliary coalescer when wired: a keyframe already queued behind
+                        // the hole (kept by `breakChain`) covers it, so no extra IDR is forced.
+                        (auxPairingDropped ?? requestAuxKeyframe)()
                         continue
                     }
                 }

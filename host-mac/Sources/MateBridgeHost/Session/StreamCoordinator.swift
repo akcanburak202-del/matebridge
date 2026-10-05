@@ -552,6 +552,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                                  auxFrames: s.settings.packedChroma ? pipeline.auxFrames : nil,
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
                                  requestAuxKeyframe: { [weak pipeline] in pipeline?.requestAuxKeyframe() },
+                                 auxPairingDropped: { [weak pipeline] in pipeline?.auxPairingDropped() },
                                  onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
                                  // T-170: join keys from the link, not the pipeline (it outlives sessions).
                                  trace: { [weak pipeline, sid = link.sessionID, cid = link.configID] t in
