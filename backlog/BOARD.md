@@ -18,6 +18,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-231](tasks/T-231-client-color-override-knobs.md) | Black level lifted on the tablet — client dev knobs to override colour range/standard/transfer and a logged output-format report (A/B on device) | 6 | android-client-dev | [] |
 | [T-232](tasks/T-232-host-hdr-display-knob.md) | Host dev knob — create the MateBridge virtual display with an HDR transfer function (tf=1) so games can be checked for an HDR toggle; stream stays SDR | 6 | mac-host-dev | [T-226] |
 | [T-234](tasks/T-234-client-idle-dim-off.md) | Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode) | 6 | android-client-dev | [] |
+| [T-235](tasks/T-235-host-chroma-knob.md) | Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page | 6 | mac-host-dev | [T-233] |
+| [T-237](tasks/T-237-host-hdr10-pipeline.md) | Host — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec + HDR display, SCK HDR capture, VT Main10 PQ, SDR fallback) | 6 | mac-host-dev | [T-232] |
+| [T-238](tasks/T-238-client-hdr10.md) | Client — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec, capability check, Oyun-mode panel toggle, decoder setup, logs) | 6 | android-client-dev | [T-231] |
 
 ## todo
 
@@ -38,7 +41,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-235](tasks/T-235-host-chroma-knob.md) | Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page | 6 | mac-host-dev | [T-233] |
 
 ## done
 
