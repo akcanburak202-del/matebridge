@@ -20,7 +20,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                           base: VideoSettings?, prefs: StreamPrefs?, reannounce: Bool, transport: SessionTransport)
         case sessionEnded
         case videoAttached(VideoLink)
-        case keyframeRequest(KeyframeReason)
+        case keyframeRequest(KeyframeReason, KeyframeView?)
         case streamPrefs(sessionID: UInt32, StreamPrefs)
         case displayRate(sessionID: UInt32, hz: UInt16)
         case stats(Stats)
@@ -29,12 +29,14 @@ public final class StreamCoordinator: @unchecked Sendable {
         /// T-128: the deadline of a deferred display wake passed (coalesced).
         case deferredWakeDue
         case senderEnded(id: Int, VideoSender.EndReason)
+        /// T-258: the auxiliary encoder failed for good (id = pipeline id).
+        case packedFallback(id: Int, reason: String)
         case shutdown(done: @Sendable () -> Void)
     }
 
     private enum Consumer {
         case none
-        case drain(Task<Void, Never>)
+        case drain(Task<Void, Never>, Task<Void, Never>)
         case sender(id: Int, VideoSender, VideoLink)
     }
 
@@ -51,6 +53,14 @@ public final class StreamCoordinator: @unchecked Sendable {
         var prefs: StreamPrefs?
         /// USB or Wi-Fi (T-088), from the session's control connection.
         var transport: SessionTransport
+        /// Decision 0034: the latest applied `STREAM_PREFS` arrived in this session (false: the remembered ones).
+        var prefsFromSession = false
+        /// Packed full colour fell back at runtime (`ev=chroma_fallback`); retried at the next stream mode change.
+        var packedFallback = false
+
+        var fullChroma: FullChromaSession {
+            FullChromaSession(prefsFromThisSession: prefsFromSession, allowed: !packedFallback)
+        }
     }
 
     /// Menu text for the video/stats line ("" = nothing to show). Called on an arbitrary queue.
@@ -157,8 +167,10 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Coalescing merge: keyframe requests keep the strongest pending requirement (see `KeyframeReason.merged`);
     /// every other coalesced event is latest-wins.
     private static func mergeEvents(pending: Event, incoming: Event) -> Event {
-        if case .keyframeRequest(let old) = pending, case .keyframeRequest(let new) = incoming {
-            return .keyframeRequest(KeyframeReason.merged(pending: old, incoming: new))
+        if case .keyframeRequest(let old, let oldView) = pending, case .keyframeRequest(let new, let newView) = incoming {
+            // A missing view means both streams; the union of the two requests is kept (decision 0034).
+            return .keyframeRequest(KeyframeReason.merged(pending: old, incoming: new),
+                                    (oldView ?? .both).merged(with: newView ?? .both))
         }
         return incoming
     }
@@ -265,7 +277,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// Messages from the approved session; only `KEYFRAME_REQUEST` and `STATS` are handled here.
     public func deliver(_ message: Message) {
         switch message {
-        case .keyframeRequest(let reason): post(.keyframeRequest(reason), key: Self.keyframeKey)
+        case .keyframeRequest(let reason, let view): post(.keyframeRequest(reason, view), key: Self.keyframeKey)
         case .stats(let stats): post(.stats(stats), key: Self.statsKey)
         case .streamPrefs(let prefs):
             // Stamped with the session that is live now (sessionStarted/sessionEnded arrive on the same queue, in
@@ -319,9 +331,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             await onSessionEnded()
         case .videoAttached(let link):
             await onVideoAttached(link)
-        case .keyframeRequest(let reason):
-            if let decision = pipeline?.handleKeyframeRequest(reason: reason) {
-                log(.info, "keyframe_request", "reason=\(reason.rawValue) \(decision.logFields)")
+        case .keyframeRequest(let reason, let view):
+            if let decision = pipeline?.handleKeyframeRequest(reason: reason, view: view) {
+                log(.info, "keyframe_request", "reason=\(reason.rawValue) view=\(view?.logName ?? "both") \(decision.logFields)")
             } else {
                 log(.info, "keyframe_request", "reason=\(reason.rawValue) action=no_pipeline")
             }
@@ -342,6 +354,9 @@ public final class StreamCoordinator: @unchecked Sendable {
             onDeferredWakeDue()
         case .senderEnded(let id, let reason):
             await onSenderEnded(id: id, reason: reason)
+        case .packedFallback(let id, let reason):
+            guard id == pipelineID else { break }
+            await fallBackFromPackedChroma(reason: reason, startFailed: false)
         case .shutdown(let done):
             await onShutdown()
             done()
@@ -420,7 +435,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         let userKbps = VideoSettings.clampedUserBitrateKbps(p.bitrateKbps).map(String.init) ?? "default"
         let allowed = allowsGameDisplay
         let allowHDR = allowsHDR
-        let derived = live.base.applying(p, allowGameDisplay: allowed, allowHDR: allowHDR)
+        let derived = live.base.applying(p, allowGameDisplay: allowed, allowHDR: allowHDR,
+                                         fullChroma: FullChromaSession(prefsFromThisSession: true,
+                                                                       allowed: !live.packedFallback))
         let game = GameDisplayPolicy.outcome(of: p, nativeW: live.base.nativeWidthPx, nativeH: live.base.nativeHeightPx,
                                              allowed: allowed)
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) bitrate_kbps=\(userKbps) "
@@ -464,8 +481,17 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
         let env = ProcessInfo.processInfo.environment
-        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR)
+        live.prefsFromSession = true
+        var wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+                                        fullChroma: live.fullChroma)
+        // Decision 0034: a runtime fallback is retried at the next stream mode change.
+        if live.packedFallback, !wanted.sameStreamMode(as: live.settings) {
+            live.packedFallback = false
+            wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+                                        fullChroma: live.fullChroma)
+        }
         prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
         live.prefs = prefs
         session = live
@@ -481,7 +507,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "bitrate_kbps=\(old.bitrateKbps)->\(wanted.bitrateKbps) bitrate_source=\(wanted.bitrateSource) "
             + "display=\(old.displayModeText)->\(wanted.displayModeText) "
             + "dynamic_range=\(old.dynamicRange.logName)->\(wanted.dynamicRange.logName) "
-            + "chroma=\(old.chromaPreference.logName)->\(wanted.chromaPreference.logName)")
+            + "chroma=\(old.chromaPreference.logName)->\(wanted.chromaPreference.logName) "
+            + "chroma_layout=\(old.chromaLayout)->\(wanted.chromaLayout)")
         onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
         await perform(lease.reconfigure(settings: wanted))
     }
@@ -522,7 +549,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         consumerID += 1
         let id = consumerID
         let sender = VideoSender(transport: link, frames: pipeline.frames,
+                                 auxFrames: s.settings.packedChroma ? pipeline.auxFrames : nil,
                                  requestKeyframe: { [weak pipeline] in pipeline?.requestKeyframe() },
+                                 requestAuxKeyframe: { [weak pipeline] in pipeline?.requestAuxKeyframe() },
                                  onEnded: { [weak self] reason in self?.post(.senderEnded(id: id, reason)) },
                                  // T-170: join keys from the link, not the pipeline (it outlives sessions).
                                  trace: { [weak pipeline, sid = link.sessionID, cid = link.configID] t in
@@ -585,9 +614,20 @@ public final class StreamCoordinator: @unchecked Sendable {
             videoLogger.log(.info, "chroma_stats", sessionID: session?.sessionID ?? 0,
                             generation: session?.configID ?? 0, fields: chroma)
         }
+        // T-258: the auxiliary loss rule, once a second (`PackedChromaMonitor`).
+        if settingsArePacked {
+            var senderAuxDropped = 0
+            if case .sender(_, let sender, _) = consumer { senderAuxDropped = sender.currentCounters.auxDropped }
+            if let decision = pipeline.checkPackedWindow(senderAuxDroppedTotal: senderAuxDropped),
+               case .fallback(let reason) = decision {
+                post(.packedFallback(id: pipelineID, reason: reason))
+            }
+        }
         reportSendQueue()
         publishSummary()
     }
+
+    private var settingsArePacked: Bool { session?.settings.packedChroma ?? false }
 
     /// T-088: the video connection's kernel send queue, RTT and retransmits of the last second (`ev=sendq`), only
     /// while `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
@@ -778,7 +818,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         // T-253: the byte ceiling of a refinement train depends on the link (USB or network).
         let refine = StillRefineConfig.resolve(env: ProcessInfo.processInfo.environment,
                                                transport: session?.transport ?? .usb)
-        let p = VideoPipeline(settings: settings, reusing: display, refine: refine, onFailure: { [weak self] error in
+        let p = VideoPipeline(settings: settings, reusing: display, refine: refine,
+                              onPackedFallback: { [weak self] reason in self?.post(.packedFallback(id: id, reason: reason)) },
+                              onFailure: { [weak self] error in
             self?.post(.pipelineFailed(id: id, message: "\(error)", wake: DisplayWaker.reason(for: error)))
         })
         do {
@@ -815,6 +857,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             wakeDisplayIfNeeded(DisplayWaker.reason(for: error))
             onSummary("Video başlamadı: \(error)")
             if await fallBackFromHDR(failed: settings, error: error) { return }
+            if await fallBackFromPackedSetup(failed: settings, error: error) { return }
             await fallBackFromGameDisplay(failed: settings, error: error)
         }
     }
@@ -840,7 +883,7 @@ public final class StreamCoordinator: @unchecked Sendable {
               let prefs = live.prefs else { return fallBack }
         let env = ProcessInfo.processInfo.environment
         let sdr = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                     allowGameDisplay: allowsGameDisplay, allowHDR: false)
+                                     allowGameDisplay: allowsGameDisplay, allowHDR: false, fullChroma: live.fullChroma)
         live.settings = sdr
         live.configID = nextConfigID(after: live.configID)
         session = live
@@ -849,6 +892,37 @@ public final class StreamCoordinator: @unchecked Sendable {
         onReconfigure(live.sessionID, sdr.streamConfig(configID: live.configID))
         await perform(lease.sessionStarted(device: live.deviceID, settings: sdr))
         return true
+    }
+
+    /// T-258: packed full colour whose Metal packer or auxiliary session could not be set up at pipeline start falls
+    /// back like HDR does: announced with a new `config_id`, then the normal pipeline starts. true = handled.
+    private func fallBackFromPackedSetup(failed: VideoSettings, error: Error) async -> Bool {
+        guard failed.packedChroma, let setup = error as? PackedSetupError else { return false }
+        await fallBackFromPackedChroma(reason: setup.reason, startFailed: true)
+        return true
+    }
+
+    /// T-258 (decision 0034 section 7, PROTOCOL.md 0x05): the auxiliary encoder cannot keep up or failed. A new
+    /// `config_id` with `chroma_layout = 0` (the main stream alone, normal 4:2:0, not sharp), `ev=chroma_fallback`.
+    /// The user's choice is kept (`prefs`); the next stream mode change tries again.
+    private func fallBackFromPackedChroma(reason: String, startFailed: Bool) async {
+        guard !isShuttingDown, var live = session, live.settings.packedChroma, let prefs = live.prefs else { return }
+        live.packedFallback = true
+        let env = ProcessInfo.processInfo.environment
+        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
+                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+                                        fullChroma: live.fullChroma)
+        live.settings = wanted
+        live.configID = nextConfigID(after: live.configID)
+        session = live
+        videoLogger.log(.warning, PackedChromaFallbackLog.event, sessionID: live.sessionID, generation: live.configID,
+                        fields: PackedChromaFallbackLog.fields(reason: reason, configID: live.configID))
+        onReconfigure(live.sessionID, wanted.streamConfig(configID: live.configID))
+        if startFailed {
+            await perform(lease.sessionStarted(device: live.deviceID, settings: wanted))
+        } else {
+            await perform(lease.reconfigure(settings: wanted))
+        }
     }
 
     /// T-214 (PROTOCOL.md 0x05): a 1x game display that cannot be set up falls back to the native display once. Game
@@ -864,7 +938,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         let env = ProcessInfo.processInfo.environment
         let native = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: false, allowHDR: allowsHDR)
+                                        allowGameDisplay: false, allowHDR: allowsHDR, fullChroma: live.fullChroma)
         let old = live.settings
         live.settings = native
         live.configID = nextConfigID(after: live.configID)
@@ -991,9 +1065,9 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     /// Consumes and discards frames while nobody is connected, so the bounded queue never backs up.
     private func startDrain() {
-        guard let frames = pipeline?.frames else { return }
+        guard let frames = pipeline?.frames, let aux = pipeline?.auxFrames else { return }
         if case .none = consumer {} else { return }
-        consumer = .drain(Task { while await frames.next() != nil {} })
+        consumer = .drain(Task { while await frames.next() != nil {} }, Task { while await aux.next() != nil {} })
     }
 
     private func stopConsumer() async {
@@ -1001,9 +1075,11 @@ public final class StreamCoordinator: @unchecked Sendable {
         consumer = .none
         switch old {
         case .none: break
-        case .drain(let task):
+        case .drain(let task, let auxTask):
             task.cancel()
+            auxTask.cancel()
             await task.value
+            await auxTask.value
         case .sender(_, let sender, let link):
             await sender.stop()
             link.cancel()

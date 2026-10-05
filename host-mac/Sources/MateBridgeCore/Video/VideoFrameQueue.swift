@@ -21,6 +21,35 @@ public final class VideoFrameQueue: @unchecked Sendable {
         self.keyframeNeeded = keyframeNeeded
     }
 
+    /// T-258: called (outside the lock) after every push and after `finish()`, so a consumer that polls two queues
+    /// (`tryPop`, the packed full colour sender) can wake. Not used by the awaiting consumer.
+    public func setActivityHandler(_ handler: (@Sendable () -> Void)?) {
+        lock.withLock { activity = handler }
+    }
+    private var activity: (@Sendable () -> Void)?
+
+    /// Next frame without waiting (nil when empty).
+    public func tryPop() -> EncodedVideoFrame? { lock.withLock { policy.pop() } }
+
+    /// The head frame without removing it.
+    public func peek() -> EncodedVideoFrame? { lock.withLock { policy.first } }
+
+    /// Removes and returns the head frame only when `accept` says so (decided under the queue lock, so the frame
+    /// judged is the frame removed). `accept` must be quick and must not call back into this queue.
+    public func tryPop(where accept: (EncodedVideoFrame) -> Bool) -> EncodedVideoFrame? {
+        lock.withLock {
+            guard let head = policy.first, accept(head) else { return nil }
+            return policy.pop()
+        }
+    }
+
+    public var hasFrames: Bool { lock.withLock { !policy.isEmpty } }
+
+    public var isFinished: Bool { lock.withLock { finished } }
+
+    /// `BoundedFrameQueue.breakChain`: the caller dropped a frame the queue had handed out.
+    public func breakChain() { lock.withLock { policy.breakChain() } }
+
     public func push(_ frame: EncodedVideoFrame) {
         lock.lock()
         if finished { lock.unlock(); return }
@@ -32,8 +61,10 @@ public final class VideoFrameQueue: @unchecked Sendable {
             waiter = nil
             handoff = (w.cont, f)
         }
+        let notify = activity
         lock.unlock()
         handoff.map { $0.0.resume(returning: $0.1) }
+        notify?()
         if request { keyframeNeeded() }
     }
 
@@ -155,8 +186,10 @@ public final class VideoFrameQueue: @unchecked Sendable {
         policy.removeAll()
         let w = waiter
         waiter = nil
+        let notify = activity
         lock.unlock()
         w?.cont.resume(returning: nil)
+        notify?()
     }
 }
 

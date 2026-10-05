@@ -39,6 +39,35 @@ public struct KeyframeReason: OpenCode {
 }
 
 /// Unknown gestures are ignored by the host, so they decode successfully.
+/// `KEYFRAME_REQUEST.view` (decision 0034): which stream of a packed full colour pair needs the keyframe. An absent
+/// field (`nil` in `Message.keyframeRequest`) and every unknown value mean both streams.
+public enum KeyframeView: UInt8, Equatable, Sendable {
+    case main = 0
+    case auxiliary = 1
+    case both = 2
+
+    /// A wire value: unknown values are `both`.
+    public init(wire: UInt8) { self = KeyframeView(rawValue: wire) ?? .both }
+
+    public var wantsMain: Bool { self != .auxiliary }
+    public var wantsAuxiliary: Bool { self != .main }
+
+    /// Log value: `main` / `aux` / `both`.
+    public var logName: String {
+        switch self {
+        case .main: return "main"
+        case .auxiliary: return "aux"
+        case .both: return "both"
+        }
+    }
+
+    /// The union of two requests: asking for the main and the auxiliary stream separately is asking for both.
+    public func merged(with other: KeyframeView) -> KeyframeView {
+        let main = wantsMain || other.wantsMain, aux = wantsAuxiliary || other.wantsAuxiliary
+        return main && aux ? .both : (main ? .main : .auxiliary)
+    }
+}
+
 public struct PenGestureKind: OpenCode {
     public var rawValue: UInt8
     public init(rawValue: UInt8) { self.rawValue = rawValue }
@@ -96,6 +125,9 @@ public struct Capabilities: OptionSet, Sendable {
     public static let settingsPanel = Capabilities(rawValue: 1 << 9)
     /// The client can serve its files over WebDAV and sends `FILES_INFO` (decision 0015).
     public static let files = Capabilities(rawValue: 1 << 10)
+    /// The client handles `chroma_layout = 1` (two 4:2:0 streams, `VIDEO_FRAME.view`) and passed its capability test
+    /// (decision 0034).
+    public static let fullChroma = Capabilities(rawValue: 1 << 11)
 }
 
 public struct PenFlags: OptionSet, Sendable {
@@ -300,10 +332,13 @@ public struct StreamConfig: Equatable, Sendable {
     public var transfer: UInt8
     public var matrix: UInt8
     public var fullRange: Bool
+    /// Decision 0034 (the former `reserved` byte): `0` normal single 4:2:0 stream, `1` packed full colour (main +
+    /// auxiliary 4:2:0 streams, AVC444v2 layout). The client counts any other value as 0.
+    public var chromaLayout: UInt8
 
     public init(configID: UInt16, codec: Codec, widthPx: UInt16, heightPx: UInt16, widthPt: UInt16,
                 heightPt: UInt16, fps: UInt16, bitrateKbps: UInt32, colorPrimaries: UInt8, transfer: UInt8,
-                matrix: UInt8, fullRange: Bool) {
+                matrix: UInt8, fullRange: Bool, chromaLayout: UInt8 = 0) {
         self.configID = configID
         self.codec = codec
         self.widthPx = widthPx
@@ -316,12 +351,16 @@ public struct StreamConfig: Equatable, Sendable {
         self.transfer = transfer
         self.matrix = matrix
         self.fullRange = fullRange
+        self.chromaLayout = chromaLayout
     }
+
+    /// The stream is a packed full colour pair (`chroma_layout = 1`).
+    public var isPacked444: Bool { chromaLayout == 1 }
 
     func write(_ w: inout ByteWriter) {
         w.u16(configID)
         w.u8(codec.rawValue)
-        w.u8(0)
+        w.u8(chromaLayout)
         w.u16(widthPx)
         w.u16(heightPx)
         w.u16(widthPt)
@@ -337,11 +376,11 @@ public struct StreamConfig: Equatable, Sendable {
     static func read(_ r: inout ByteReader) throws -> StreamConfig {
         let id = try r.u16()
         guard let codec = Codec(rawValue: try r.u8()) else { throw ProtocolError.invalidField("codec") }
-        try r.skip(1)
+        let layout = try r.u8()
         return StreamConfig(configID: id, codec: codec, widthPx: try r.u16(), heightPx: try r.u16(),
                             widthPt: try r.u16(), heightPt: try r.u16(), fps: try r.u16(),
                             bitrateKbps: try r.u32(), colorPrimaries: try r.u8(), transfer: try r.u8(),
-                            matrix: try r.u8(), fullRange: try r.u8() != 0)
+                            matrix: try r.u8(), fullRange: try r.u8() != 0, chromaLayout: layout)
     }
 }
 
@@ -364,8 +403,8 @@ public struct StreamPrefs: Equatable, Sendable {
     /// Second optional group (decision 0032): the raw `dynamic_range` (0 SDR, 1 HDR10; the host counts any other
     /// value as 0, see `normalized`). Absent on the wire = 0.
     public var dynamicRange: UInt8
-    /// Same group (decision 0033, the former `reserved` byte): the raw `chroma` (0 normal 4:2:0, 1 sharp colour edges;
-    /// the host counts any other value as 0). Absent on the wire = 0. The group is written only when `dynamicRange`
+    /// Same group (decision 0033, the former `reserved` byte): the raw `chroma` (0 normal 4:2:0, 1 sharp colour edges,
+    /// 2 full colour / packed 4:4:4, decision 0034; the host counts any other value as 0). Absent on the wire = 0. The group is written only when `dynamicRange`
     /// or `chroma` is non-zero.
     public var chroma: UInt8
 
@@ -382,7 +421,7 @@ public struct StreamPrefs: Equatable, Sendable {
     }
 
     /// What the host honours: fps in {60, 120, 144} (anything else is 60), scale clamped to 500...1000, and
-    /// `dynamicRange` and `chroma` in {0, 1} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
+    /// `dynamicRange` in {0, 1} and `chroma` in {0, 1, 2} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
     /// `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is validated by the
     /// host's policy, not here).
     public var normalized: StreamPrefs {
@@ -450,12 +489,21 @@ public enum ChromaPreference: UInt8, Equatable, Sendable {
     case normal = 0
     /// Sharp colour edges: luma-adjusted 4:2:0 (T-235 `sharp_nearest`). Ignored while HDR10 is applied.
     case sharp = 1
+    /// Full colour (decision 0034): packed 4:4:4 as two 4:2:0 streams. Applied only where PROTOCOL.md 0x05 allows it
+    /// (`VideoSettings.applying`), else as `sharp`.
+    case full = 2
 
     /// A wire value: unknown values are normal (PROTOCOL.md 0x05).
     public init(wire: UInt8) { self = ChromaPreference(rawValue: wire) ?? .normal }
 
-    /// Log value: `normal` / `sharp`.
-    public var logName: String { self == .normal ? "normal" : "sharp" }
+    /// Log value: `normal` / `sharp` / `full`.
+    public var logName: String {
+        switch self {
+        case .normal: return "normal"
+        case .sharp: return "sharp"
+        case .full: return "full"
+        }
+    }
 }
 
 /// `SETTINGS_OPEN` (H->C, docs/PROTOCOL.md 0x08): asks the tablet to show its settings panel while streaming
@@ -902,25 +950,29 @@ public struct VideoFrame: Equatable, Sendable {
     public var fragmentIndex: UInt16
     public var fragmentCount: UInt16
     public var frameSize: UInt32
+    /// Decision 0034 (the former `reserved` byte): `0` main (always, in a single stream), `1` auxiliary.
+    public var view: UInt8
     /// Annex-B NAL units.
     public var data: [UInt8]
 
     /// Single-fragment (TCP) frame: `frameSize` is derived from `data`.
-    public init(frameSeq: UInt32, captureTimeUs: UInt64, flags: VideoFrameFlags, data: [UInt8]) {
+    public init(frameSeq: UInt32, captureTimeUs: UInt64, flags: VideoFrameFlags, view: UInt8 = 0, data: [UInt8]) {
         self.frameSeq = frameSeq
         self.captureTimeUs = captureTimeUs
         self.flags = flags
         self.fragmentIndex = 0
         self.fragmentCount = 1
         self.frameSize = UInt32(data.count)
+        self.view = view
         self.data = data
     }
 
-    public init(frameSeq: UInt32, captureTimeUs: UInt64, flags: VideoFrameFlags, fragmentIndex: UInt16,
-                fragmentCount: UInt16, frameSize: UInt32, data: [UInt8]) {
+    public init(frameSeq: UInt32, captureTimeUs: UInt64, flags: VideoFrameFlags, view: UInt8 = 0,
+                fragmentIndex: UInt16, fragmentCount: UInt16, frameSize: UInt32, data: [UInt8]) {
         self.frameSeq = frameSeq
         self.captureTimeUs = captureTimeUs
         self.flags = flags
+        self.view = view
         self.fragmentIndex = fragmentIndex
         self.fragmentCount = fragmentCount
         self.frameSize = frameSize
@@ -931,7 +983,7 @@ public struct VideoFrame: Equatable, Sendable {
         w.u32(frameSeq)
         w.u64(captureTimeUs)
         w.u8(flags.rawValue)
-        w.u8(0)
+        w.u8(view)
         w.u16(fragmentIndex)
         w.u16(fragmentCount)
         w.u16(0)
@@ -943,7 +995,7 @@ public struct VideoFrame: Equatable, Sendable {
         let seq = try r.u32()
         let capture = try r.u64()
         let flags = try r.u8()
-        try r.skip(1)
+        let view = try r.u8()
         let index = try r.u16()
         let count = try r.u16()
         try r.skip(2)
@@ -953,7 +1005,7 @@ public struct VideoFrame: Equatable, Sendable {
         guard index == 0, count == 1, Int(size) <= r.remaining else {
             throw ProtocolError.invalidField("video fragment")
         }
-        return VideoFrame(frameSeq: seq, captureTimeUs: capture, flags: VideoFrameFlags(rawValue: flags),
+        return VideoFrame(frameSeq: seq, captureTimeUs: capture, flags: VideoFrameFlags(rawValue: flags), view: view,
                           fragmentIndex: index, fragmentCount: count, frameSize: size,
                           data: try r.raw(Int(size)))
     }

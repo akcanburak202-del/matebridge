@@ -70,8 +70,13 @@ extension VideoSettings {
     /// transfer function, so the display is recreated (`DisplayReuse`).
     /// `chroma` (decision 0033): `chromaPreference` follows it on SDR and is `.normal` under HDR10; a change of it
     /// alone keeps the display (capture and encoder restart under a new `config_id`).
+    /// `chroma = 2` (decision 0034, `FullChromaPolicy`): `.full` and `fullChromaGranted` only when the client has bit11,
+    /// `fullChroma.prefsFromThisSession` (a remembered request counts as `chroma = 1`), the stream mode qualifies and
+    /// `fullChroma.allowed` (no runtime fallback); a qualifying request after a fallback is `.normal` (not sharp),
+    /// every other one is `.sharp`.
     public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60,
-                         allowGameDisplay: Bool = true, allowHDR: Bool = true) -> VideoSettings {
+                         allowGameDisplay: Bool = true, allowHDR: Bool = true,
+                         fullChroma: FullChromaSession = FullChromaSession()) -> VideoSettings {
         let p = prefs.normalized
         var s = onNativeDisplay
         s.dynamicRange = HDRPolicy.decide(requested: p.requestedDynamicRange, codec: s.codec, allowed: allowHDR).applied
@@ -90,10 +95,41 @@ extension VideoSettings {
         } else {
             s.scalePermille = Int(p.scalePermille)
         }
+        s.fullChromaGranted = false
+        if s.chromaPreference == .full {
+            if FullChromaPolicy.qualifies(s) && s.clientFullChroma && fullChroma.prefsFromThisSession {
+                if fullChroma.allowed { s.fullChromaGranted = true } else { s.chromaPreference = .normal }
+            } else {
+                s.chromaPreference = .sharp
+            }
+        }
         s.userBitrateKbps = bitrateOverrideKbps == nil ? Self.clampedUserBitrateKbps(p.bitrateKbps) : nil
         s.bitrateKbps = bitrateOverrideKbps ?? s.userBitrateKbps
             ?? Self.defaultBitrateKbps(fps: s.fps, scalePermille: s.effectiveScalePermille)
         return s
+    }
+}
+
+/// Session-level state of decision 0034's full colour that a `STREAM_PREFS` derivation needs.
+public struct FullChromaSession: Equatable, Sendable {
+    /// The prefs being applied arrived in this session (not remembered from an earlier one): only these may grant
+    /// full colour (PROTOCOL.md 0x05, Codex T-257).
+    public var prefsFromThisSession: Bool
+    /// false after a runtime fallback (`chroma_fallback`) until the next stream mode change.
+    public var allowed: Bool
+
+    public init(prefsFromThisSession: Bool = false, allowed: Bool = true) {
+        self.prefsFromThisSession = prefsFromThisSession
+        self.allowed = allowed
+    }
+}
+
+extension VideoSettings {
+    /// Same stream mode: fps, encoded scale, display (size, HiDPI, game display) and dynamic range. Chroma and bitrate
+    /// may differ. A change of mode retries a full colour that fell back (decision 0034).
+    public func sameStreamMode(as other: VideoSettings) -> Bool {
+        fps == other.fps && scalePermille == other.scalePermille && widthPx == other.widthPx
+            && heightPx == other.heightPx && displayHiDPI == other.displayHiDPI && dynamicRange == other.dynamicRange
     }
 }
 

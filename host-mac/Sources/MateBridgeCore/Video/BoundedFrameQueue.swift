@@ -109,6 +109,16 @@ public struct BoundedFrameQueue: Sendable {
         startNewConsumer(config: config)
     }
 
+    /// The first queued frame, without removing it.
+    public var first: EncodedVideoFrame? { frames.first }
+
+    /// The reference chain was broken outside the queue (the sender dropped a frame, T-258 auxiliary stream): queued
+    /// deltas are purged and deltas are refused until a keyframe is pushed. The caller asks the encoder for one.
+    public mutating func breakChain() {
+        frames.removeAll { !$0.isProtected }
+        awaitingKeyframe = true
+    }
+
     public mutating func removeAll() {
         frames.removeAll()
     }

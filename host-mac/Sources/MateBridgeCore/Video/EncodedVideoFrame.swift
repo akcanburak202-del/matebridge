@@ -6,6 +6,8 @@ public struct EncodedVideoFrame: Equatable, Sendable {
     public var captureTimeUs: UInt64
     /// Annex-B NAL units.
     public var data: [UInt8]
+    /// `VIDEO_FRAME.view` (decision 0034): 0 main, 1 auxiliary.
+    public var view: UInt8 = 0
     /// Per-stage host timestamps (T-070); not part of the wire format.
     public var trace = FrameTrace()
 
@@ -21,6 +23,6 @@ public struct EncodedVideoFrame: Equatable, Sendable {
     var isProtected: Bool { isKeyframe || isCodecConfig }
 
     public func toVideoFrame(seq: UInt32) -> VideoFrame {
-        VideoFrame(frameSeq: seq, captureTimeUs: captureTimeUs, flags: flags, data: data)
+        VideoFrame(frameSeq: seq, captureTimeUs: captureTimeUs, flags: flags, view: view, data: data)
     }
 }

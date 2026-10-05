@@ -20,6 +20,7 @@ extension VideoSettings {
         }
         let hz = Int(hello.maxRefreshHz)
         settings.fps = hz > 0 ? min(hz, defaultFps) : defaultFps
+        settings.clientFullChroma = hello.capabilities.contains(.fullChroma)
         return settings
     }
 }

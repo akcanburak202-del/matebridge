@@ -15,13 +15,17 @@ public enum ChromaMode: String, Equatable, Sendable, CaseIterable {
     case sharpBilinear = "sharp_bilinear"
     case sharpNearest = "sharp_nearest"
     case yuv444 = "444"
+    /// Decision 0034 (T-258): packed full colour. `BGRA` capture, a Metal pass packs the AVC444v2 main and auxiliary
+    /// `420f` pictures, a second VideoToolbox session encodes the auxiliary one. Only with the session's consent
+    /// (`VideoSettings.packedChroma`); otherwise `sharp_nearest` runs.
+    case packed444
 
     /// The decoder upsampling the luma adjustment assumes; nil when the mode has no Metal pass.
     public var sharpUpsample: SharpYUV.Upsample? {
         switch self {
         case .sharpBilinear: return .bilinear
         case .sharpNearest: return .nearest
-        case .yuv420, .yuv444: return nil
+        case .yuv420, .yuv444, .packed444: return nil
         }
     }
 
@@ -86,6 +90,9 @@ public enum ChromaFallbackReason: String, Equatable, Sendable {
     case metalUnavailable = "metal_unavailable"
     /// T-237: the stream is HDR10 (decision 0032). HDR wins: x420 PQ capture and HEVC Main10, the knob is ignored.
     case hdr
+    /// T-258: `packed444` requested (knob) but the session did not grant it (no bit11, no `chroma = 2` in this session,
+    /// stream mode outside Günlük 60, or a runtime fallback): the sharp path runs instead.
+    case fullChromaDenied = "full_chroma_denied"
 }
 
 /// Where the requested chroma mode came from (`ev=chroma_config source=`, T-240).
@@ -128,7 +135,7 @@ public struct ChromaDecision: Equatable, Sendable {
 
     /// Whether `video ev=chroma_stats` is written: while the developer knob is set (T-235, any value, so `420` gives
     /// a baseline) or the sharp path runs. `ev=chroma_config` is written for every session (T-240).
-    public var statsEnabled: Bool { knob.isSet || applied.sharpUpsample != nil }
+    public var statsEnabled: Bool { knob.isSet || applied.sharpUpsample != nil || applied == .packed444 }
 }
 
 public enum ChromaPolicy {
@@ -141,17 +148,22 @@ public enum ChromaPolicy {
     /// HDR10 stream (T-237, decision 0032) ignores every request: applied `420` (the 10-bit PQ 4:2:0 path), logged
     /// with `reason=hdr` unless nothing was requested. Without a preference SDR resolves exactly as in T-235.
     public static func resolve(knob: ChromaKnob, preference: ChromaPreference = .normal, codec: Codec,
-                               profile: EncoderProfile, dynamicRange: DynamicRange = .sdr) -> ChromaDecision {
-        let source: ChromaSource = knob.isSet ? .env : (preference == .sharp ? .prefs : .default)
+                               profile: EncoderProfile, dynamicRange: DynamicRange = .sdr,
+                               packedChroma: Bool = false) -> ChromaDecision {
+        let source: ChromaSource = knob.isSet ? .env : (preference == .normal ? .default : .prefs)
         let requested: ChromaMode = switch source {
         case .env: knob.requested
-        case .prefs: sharpPreferenceMode
+        case .prefs: preference == .full ? .packed444 : sharpPreferenceMode
         case .default: .yuv420
         }
         func decision(_ applied: ChromaMode, _ reason: ChromaFallbackReason?) -> ChromaDecision {
             ChromaDecision(knob: knob, source: source, requested: requested, applied: applied, reason: reason)
         }
         if dynamicRange == .hdr10 { return decision(.yuv420, source == .default ? nil : .hdr) }
+        // T-258: packed full colour only with the session's consent (`VideoSettings.packedChroma`); else sharp.
+        if requested == .packed444 {
+            return packedChroma ? decision(.packed444, nil) : decision(sharpPreferenceMode, .fullChromaDenied)
+        }
         guard requested == .yuv444 else { return decision(requested, nil) }
         if codec != .hevc { return decision(.yuv420, .codec) }
         if profile == .llrc { return decision(.yuv420, .llrc) }
@@ -187,7 +199,8 @@ public enum ChromaConfigLog {
     /// profile_idc=<n|unknown> vui_full_range=<0|1|unknown> chroma_loc=<n|unset|unknown> [mismatch=1]`. `W` when the
     /// request was not applied, the knob was invalid, or the SPS chroma format differs from the applied mode's (e.g.
     /// VideoToolbox silently encoding 4:2:0); `I` otherwise.
-    public static func line(_ d: ChromaDecision, _ info: ChromaBitstreamInfo) -> (level: LogLevel, fields: String) {
+    public static func line(_ d: ChromaDecision, _ info: ChromaBitstreamInfo,
+                            view: String? = nil) -> (level: LogLevel, fields: String) {
         var f = "requested=\(d.requested.rawValue) applied=\(d.applied.rawValue)"
         if let r = d.reason {
             f += " reason=\(r.rawValue)"
@@ -200,6 +213,8 @@ public enum ChromaConfigLog {
         f += " vui_full_range=\(info.vuiFullRange.map { $0 ? "1" : "0" } ?? "unknown")"
         let loc = info.chromaSampleLocTop.map(String.init) ?? (info.parsed ? "unset" : "unknown")
         f += " chroma_loc=\(loc)"
+        // T-258: `layout=packed444` (and which of the two streams this SPS belongs to).
+        if d.applied == .packed444 { f += " layout=packed444 view=\(view ?? "main")" }
         let mismatch = info.chromaFormatIdc.map { $0 != d.applied.expectedChromaFormatIdc } ?? false
         if mismatch { f += " mismatch=1" }
         let warn = d.reason != nil || d.knob.invalid || mismatch

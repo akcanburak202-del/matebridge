@@ -24,6 +24,11 @@ public final class VideoSender: @unchecked Sendable {
         /// Frames the transport refused (invalid, e.g. over the payload limit); a keyframe was requested.
         public var framesRejected = 0
         public var sendFailures = 0
+        /// Packed full colour (decision 0034): auxiliary frames sent (also counted in `framesSent`), their bytes, and
+        /// auxiliary frames dropped because their main frame was never sent.
+        public var auxFramesSent = 0
+        public var auxBytesSent = 0
+        public var auxDropped = 0
         public init() {}
     }
 
@@ -32,6 +37,8 @@ public final class VideoSender: @unchecked Sendable {
     private let transport: VideoTransport
     private let frames: VideoFrameQueue
     private let requestKeyframe: @Sendable () -> Void
+    private let auxFrames: VideoFrameQueue?
+    private let requestAuxKeyframe: @Sendable () -> Void
     private let onEnded: @Sendable (EndReason) -> Void
     private let trace: (@Sendable (FrameTrace) -> Void)?
     private let clock: @Sendable () -> UInt64
@@ -41,6 +48,8 @@ public final class VideoSender: @unchecked Sendable {
     private var lastKeyframeRequestNs: UInt64?
     static let keyframeRequestIntervalNs: UInt64 = 500_000_000
     private var task: Task<Void, Never>?
+    /// The packed loop's wake signal (guarded by `lock`).
+    private var wakeLoop: (@Sendable () -> Void)?
 
     /// - Parameters:
     ///   - requestKeyframe: asks the encoder for a keyframe (after a frame the transport refused).
@@ -48,11 +57,18 @@ public final class VideoSender: @unchecked Sendable {
     ///   - trace: receives the finished `FrameTrace` of every frame whose write completed (T-070), stamped with
     ///     `clock` (must be the host clock the encoder stamps with) and its `frame_seq`. nil: no measuring, no
     ///     clock reads.
+    ///   - auxFrames: packed full colour (decision 0034): the auxiliary stream's queue. The sender then writes both
+    ///     streams on the one connection, main first (`PackedSendArbiter`), with a `frame_seq` per stream.
+    ///   - requestAuxKeyframe: asks the auxiliary encoder for a keyframe (an auxiliary frame was dropped or refused).
     public init(transport: VideoTransport, frames: VideoFrameQueue,
+                auxFrames: VideoFrameQueue? = nil,
                 requestKeyframe: @escaping @Sendable () -> Void,
+                requestAuxKeyframe: @escaping @Sendable () -> Void = {},
                 onEnded: @escaping @Sendable (EndReason) -> Void = { _ in },
                 trace: (@Sendable (FrameTrace) -> Void)? = nil,
                 clock: @escaping @Sendable () -> UInt64 = { 0 }) {
+        self.auxFrames = auxFrames
+        self.requestAuxKeyframe = requestAuxKeyframe
         self.trace = trace
         self.clock = clock
         self.transport = transport
@@ -81,7 +97,94 @@ public final class VideoSender: @unchecked Sendable {
         await t?.value
     }
 
+    /// Packed full colour loop (decision 0034): one wake signal for the transport and both queues. The main queue is
+    /// served first; an auxiliary frame goes only after the main frame with its `capture_time_us` was sent, and one whose
+    /// main frame was lost is dropped (with an auxiliary keyframe request). `frame_seq` counts per stream.
+    private func runPacked(aux: VideoFrameQueue) async -> EndReason {
+        let (ready, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        transport.setReadyHandler { signal.yield() }
+        frames.setActivityHandler { signal.yield() }
+        aux.setActivityHandler { signal.yield() }
+        lock.withLock { wakeLoop = { signal.yield() } }
+        defer {
+            signal.finish()
+            frames.setActivityHandler(nil)
+            aux.setActivityHandler(nil)
+        }
+        var iterator = ready.makeAsyncIterator()
+        var seqs: [UInt32] = [0, 0]
+        var arbiter = PackedSendArbiter()
+        while !Task.isCancelled {
+            if hasFailed { return .transportFailed }
+            if frames.isFinished { return .queueClosed }
+            if transport.canSend {
+                var picked: (frame: EncodedVideoFrame, view: Int)?
+                if let f = frames.tryPop() {
+                    picked = (f, 0)
+                } else if let f = aux.tryPop(where: { head in
+                    arbiter.pick(mainAvailable: false, aux: (head.captureTimeUs, head.isCodecConfig)) != .wait
+                }) {
+                    if arbiter.pick(mainAvailable: false, aux: (f.captureTimeUs, f.isCodecConfig)) == .aux {
+                        picked = (f, 1)
+                    } else {
+                        // Its main frame never went out: the auxiliary chain has a hole.
+                        aux.breakChain()
+                        lock.withLock { counters.auxDropped += 1 }
+                        requestAuxKeyframe()
+                        continue
+                    }
+                }
+                if let (encoded, view) = picked {
+                    var out = encoded
+                    out.view = UInt8(view)
+                    let accepted = write(out, seq: seqs[view])
+                    if accepted {
+                        seqs[view] &+= 1
+                        if view == 0, !out.isCodecConfig { arbiter.mainSent(captureTimeUs: out.captureTimeUs) }
+                    } else if view == 1 {
+                        aux.breakChain()
+                        requestAuxKeyframe()
+                    } else if keyframeRequestAllowed() {
+                        requestKeyframe()
+                    }
+                    continue
+                }
+            }
+            guard await iterator.next() != nil else { return .cancelled }
+        }
+        return .cancelled
+    }
+
+    /// Hands one frame to the transport and records it; the completion marks the sender failed on a write error.
+    private func write(_ encoded: EncodedVideoFrame, seq: UInt32) -> Bool {
+        let frame = encoded.toVideoFrame(seq: seq)
+        let size = frame.data.count
+        var timing = encoded.trace
+        let measure = trace != nil && !encoded.isCodecConfig && encoded.view == 0
+        if measure {
+            timing.writeStartUs = clock()
+            timing.frameSeq = seq
+            timing.isKeyframe = encoded.isKeyframe
+            timing.bytes = size
+        }
+        let accepted = transport.send(frame) { [self, timing] ok in
+            if !ok {
+                markFailed()
+                lock.withLock { wakeLoop }?()
+            }
+            if ok, measure, let trace {
+                var done = timing
+                done.writeDoneUs = clock()
+                trace(done)
+            }
+        }
+        record(accepted: accepted, bytes: size, keyframe: encoded.isKeyframe)
+        if accepted, encoded.view == 1 { lock.withLock { counters.auxFramesSent += 1; counters.auxBytesSent += size } }
+        return accepted
+    }
+
     private func run() async -> EndReason {
+        if let aux = auxFrames { return await runPacked(aux: aux) }
         let (ready, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         transport.setReadyHandler { signal.yield() }
         defer { signal.finish() }

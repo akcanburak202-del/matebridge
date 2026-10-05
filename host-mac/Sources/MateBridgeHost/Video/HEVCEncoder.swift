@@ -131,6 +131,18 @@ final class HEVCEncoder: @unchecked Sendable {
     private(set) var chroma = ChromaDecision(knob: .unset, applied: .yuv420, reason: nil)
     /// The sharp-YUV Metal pass (`chroma.applied` is `sharp_*`); used on the owner queue only. Set in `init` only.
     private var chromaConverter: ChromaConverter?
+    /// Packed full colour (decision 0034, T-258; `chroma.applied` is `packed444`): the Metal packer (owner queue only)
+    /// and the auxiliary VideoToolbox session it feeds. Set in `init` only.
+    private var packer: PackedChromaPacker?
+    private var auxEncoder: PackedAuxEncoder?
+    /// Auxiliary keyframe wanted (the next real auxiliary frame is an IDR) and the packed path's counters, `lock`.
+    private var auxKeyframePending = false  // guarded by auxFlagLock (also read where `lock` is held)
+    private let auxFlagLock = NSLock()
+    private var packedStats: PackedChromaStatsWindow?
+    private var auxOffered = 0
+    private var auxLost = 0
+    private var packedErrorReported = false
+    private var packedError: (@Sendable (String) -> Void)?
     private let logSink: LogSink
     private let meter: CadenceMeter?
     /// `VTSessionSetProperty` failures at creation (key: OSStatus), for diagnostics.
@@ -156,7 +168,9 @@ final class HEVCEncoder: @unchecked Sendable {
     init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
          logSink: @escaping LogSink = HEVCEncoder.hostLog, refine: StillRefineConfig = .disabled,
          refineReady: @escaping @Sendable () -> Bool = { true }, output: @escaping Output,
+         auxOutput: Output? = nil, onPackedError: @escaping @Sendable (String) -> Void = { _ in },
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
+        self.packedError = onPackedError
         self.settings = settings
         self.refinePolicy = StillRefinePolicy(config: refine)
         self.refineReady = refineReady
@@ -220,7 +234,8 @@ final class HEVCEncoder: @unchecked Sendable {
         // T-237: HDR10 wins over the chroma knob (`reason=hdr`, applied `420`): Main10, x420 PQ capture.
         // T-240: without the knob the tablet's `STREAM_PREFS.chroma = 1` asks for `sharp_nearest` (decision 0033).
         var chroma = ChromaPolicy.resolve(knob: knobs.chroma, preference: settings.chromaPreference,
-                                          codec: settings.codec, profile: profile, dynamicRange: settings.dynamicRange)
+                                          codec: settings.codec, profile: profile, dynamicRange: settings.dynamicRange,
+                                          packedChroma: settings.packedChroma)
         if chroma.applied == .yuv444 {
             if set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.main444ProfileLevel) != noErr {
                 set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
@@ -300,8 +315,47 @@ final class HEVCEncoder: @unchecked Sendable {
                 chroma = chroma.fallingBack(.metalUnavailable)
             }
         }
+        // T-258: packed full colour needs the packer and the auxiliary session. The stream was announced as
+        // `chroma_layout = 1`, so a failure here is not a silent fallback: the owner announces `chroma_layout = 0`
+        // under a new config_id (`PackedSetupError`, `ev=chroma_fallback`).
+        if chroma.applied == .packed444 {
+            guard let auxOutput else { throw PackedSetupError(reason: "no_aux_output", detail: "") }
+            do {
+                packer = try PackedChromaPacker(width: settings.encodedWidthPx, height: settings.encodedHeightPx)
+            } catch {
+                throw PackedSetupError(reason: "metal_unavailable", detail: String(describing: error))
+            }
+            let configLog = logSink
+            let decision = chroma
+            let statsLock = lock
+            let wrapped: Output = { [weak self] frame, encodeUs in
+                if frame.isCodecConfig {
+                    let sets = AnnexB.nalUnits(frame.data)
+                    let line = ChromaConfigLog.line(decision, ChromaBitstreamInfo.parse(parameterSets: sets, codec: .hevc),
+                                                    view: "aux")
+                    configLog(line.level, ChromaConfigLog.event, line.fields)
+                } else if !frame.data.isEmpty {
+                    statsLock.withLock { self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs) }
+                }
+                auxOutput(frame, encodeUs)
+            }
+            do {
+                let aux = try PackedAuxEncoder(
+                    width: settings.encodedWidthPx, height: settings.encodedHeightPx, fps: settings.fps,
+                    mainKbps: settings.bitrateKbps, profile: profile, rateWindowMs: knobs.rateWindowMs, logSink: logSink,
+                    output: wrapped, onError: { [weak self] reason in self?.reportPackedError(reason) })
+                auxEncoder = aux
+                backend.aux = aux
+            } catch {
+                throw PackedSetupError(reason: "aux_session_failed", detail: String(describing: error))
+            }
+            packedStats = PackedChromaStatsWindow(startUs: HostClock.nowUs())
+            auxKeyframePending = true  // the first auxiliary frame is an IDR, like the main one
+        }
         self.chroma = chroma
-        if chroma.statsEnabled { chromaStats = ChromaStatsWindow(mode: chroma.applied, startUs: HostClock.nowUs()) }
+        if chroma.statsEnabled, chroma.applied != .packed444 {
+            chromaStats = ChromaStatsWindow(mode: chroma.applied, startUs: HostClock.nowUs())
+        }
 
         // Idle keyframe: a pending keyframe request with no new frames for ~1 s re-encodes the last buffer.
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.idle"))
@@ -377,7 +431,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// T-235: the `chroma_stats` fields once its 10 s window is over; nil before, and always nil unless
     /// `chroma.statsEnabled`.
     func takeChromaStats(nowUs: UInt64) -> String? {
-        lock.withLock { chromaStats?.take(nowUs: nowUs) }
+        lock.withLock { packedStats?.take(nowUs: nowUs) ?? chromaStats?.take(nowUs: nowUs) }
     }
 
     /// Profile name logged for H.264 (`profile=high`).
@@ -484,9 +538,43 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// The next encoded frame will be a keyframe. With `resubmitNow`, the last captured buffer is encoded
     /// immediately (needed on a static screen, where no new capture may ever arrive).
-    func requestKeyframe(resubmitNow: Bool = false) {
-        order.requestKeyframe()
+    func requestKeyframe(resubmitNow: Bool = false, view: KeyframeView = .both) {
+        // T-258: `view` picks the stream (decision 0034). The auxiliary one exists only in packed full colour.
+        let aux = view.wantsAuxiliary && auxEncoder != nil
+        let main = view.wantsMain || auxEncoder == nil
+        guard main || aux else { return }
+        if main { order.requestKeyframe() }
+        if aux { auxFlagLock.withLock { auxKeyframePending = true } }
         if resubmitNow { resubmitLast() }
+    }
+
+    /// Packed full colour is running (an auxiliary session exists).
+    var isPacked: Bool { auxEncoder != nil }
+
+    /// CODEC_CONFIG of the auxiliary stream (`view = 1`); nil without packed full colour or before the first frame.
+    func currentAuxCodecConfig() -> EncodedVideoFrame? { auxEncoder?.currentCodecConfig() }
+
+    /// A keyframe request is pending in either stream (the refinement train must not run then).
+    private var auxPending: Bool { auxFlagLock.withLock { auxKeyframePending } }
+    private var anyKeyframePending: Bool { order.keyframePending || auxPending }
+
+    /// The packed path failed for good (Metal, the auxiliary session): reported once; the owner falls back.
+    private func reportPackedError(_ reason: String) {
+        let report: (@Sendable (String) -> Void)? = lock.withLock {
+            guard !packedErrorReported else { return nil }
+            packedErrorReported = true
+            return packedError
+        }
+        report?(reason)
+    }
+
+    /// Auxiliary frames offered to the auxiliary session and lost before it (both slots busy, refused) since the last
+    /// call; the pipeline adds the queue and sender drops (`PackedChromaMonitor`).
+    func takeAuxCounters() -> (offered: Int, lost: Int) {
+        lock.withLock {
+            defer { auxOffered = 0; auxLost = 0 }
+            return (auxOffered, auxLost)
+        }
     }
 
     /// Encodes one captured frame (full-range 4:2:0, or `BGRA` under T-235's `MATEBRIDGE_CHROMA`; see
@@ -547,7 +635,7 @@ final class HEVCEncoder: @unchecked Sendable {
             lock.lock()
             if let id = trainID {
                 if !refinePolicy.isCurrent(id) { lock.unlock(); return nil }
-                if keyframePending {
+                if keyframePending || auxPending {
                     ended = refinePolicy.end(.keyframePending, nowUs: nowUs)
                     lock.unlock()
                     return nil
@@ -569,7 +657,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// probe runs before the encoder lock is taken.
     private func refineTick() {
         let ready = refineReady()
-        let keyframePending = order.keyframePending
+        let keyframePending = anyKeyframePending
         let (start, timedOut, id) = lock.withLock { () -> (Bool, StillRefineReport?, UInt64) in
             let now = HostClock.nowUs()
             let r = refinePolicy.tick(nowUs: now, queueReady: ready, keyframePending: keyframePending,
@@ -606,7 +694,7 @@ final class HEVCEncoder: @unchecked Sendable {
     /// since) was delivered like every frame but is not counted for, and does not advance, the current train.
     private func refineOutput(trainID: UInt64, bytes: Int?) {
         let ready = refineReady()
-        let keyframePending = order.keyframePending
+        let keyframePending = anyKeyframePending
         let now = HostClock.nowUs()
         let (next, report) = lock.withLock { () -> (Bool, StillRefineReport?) in
             guard refinePolicy.isCurrent(trainID) else { return (false, nil) }
@@ -644,7 +732,10 @@ final class HEVCEncoder: @unchecked Sendable {
     /// `DataRateLimits` changes (`AverageBitRate` is not in use).
     @discardableResult
     func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
-        order.setBitrate(kbps: kbps)
+        let decision = order.setBitrate(kbps: kbps)
+        // T-258: the auxiliary session follows at half the main target.
+        if case .apply(let v) = decision { auxEncoder?.setBitrate(mainKbps: v) }
+        return decision
     }
 
     /// `MATEBRIDGE_BITRATE_STEP` tick (its own timer queue).
@@ -674,6 +765,8 @@ final class HEVCEncoder: @unchecked Sendable {
     final class Backend: CompressionBackend, @unchecked Sendable {
         let session: VTCompressionSession
         weak var encoder: HEVCEncoder?
+        /// The packed full colour auxiliary session (T-258), closed after the main one on the same owner queue.
+        var aux: PackedAuxEncoder?
         init(session: VTCompressionSession) { self.session = session }
 
         /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
@@ -690,6 +783,7 @@ final class HEVCEncoder: @unchecked Sendable {
         func completeAndInvalidate() {
             VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(session)
+            aux?.stop()
         }
     }
 
@@ -697,7 +791,10 @@ final class HEVCEncoder: @unchecked Sendable {
     private func send(_ frame: Input, key: Bool, token: EncoderSubmitToken, session: VTCompressionSession) {
         // T-235: the Metal pass runs here, so only frames that are really submitted are converted (the pacer may
         // replace or decimate captures); its time falls between `deliveredUs` and `submittedUs` in the trace.
-        let image = chromaConverter.map { convertForEncoder(frame.buffer, $0) } ?? frame.buffer
+        var image = chromaConverter.map { convertForEncoder(frame.buffer, $0) } ?? frame.buffer
+        // T-258: one Metal pass makes both pictures; the auxiliary one goes to its own session right away, with this
+        // frame's PTS and `capture_time_us`. The main frame is submitted below, the auxiliary one never waits for it.
+        if let packer, let auxEncoder { image = packAndSubmitAux(frame, packer: packer, aux: auxEncoder) ?? image }
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
@@ -727,6 +824,34 @@ final class HEVCEncoder: @unchecked Sendable {
         if status != noErr {
             HEVCEncoder.log.error("ev=encode_failed status=\(status)")
             slotFailed(token, VideoEncoderError.encode(status))
+        }
+    }
+
+    /// T-258 (owner queue): packs `frame` and hands the auxiliary picture to the auxiliary session; returns the main
+    /// picture for the main session, nil when the frame could not be packed (the main session then gets the `BGRA`
+    /// frame, a normal 4:2:0 picture, and the owner falls back).
+    private func packAndSubmitAux(_ frame: Input, packer: PackedChromaPacker, aux: PackedAuxEncoder) -> CVPixelBuffer? {
+        switch packer.pack(frame.buffer) {
+        case .packed(let main, let auxBuffer, let wallUs, let gpuUs):
+            lock.withLock { packedStats?.recordPack(wallUs: wallUs, gpuUs: gpuUs) }
+            // A refinement frame never takes the auxiliary keyframe (it would end the train, like the main one).
+            let wantKey = frame.refineTrain == nil && auxFlagLock.withLock {
+                defer { auxKeyframePending = false }
+                return auxKeyframePending
+            }
+            lock.withLock { auxOffered += 1 }
+            if !aux.encode(auxBuffer, presentationTime: frame.pts, captureTimeUs: frame.captureTimeUs, keyframe: wantKey) {
+                // The auxiliary stream lost a frame: its chain has a hole, so the next one is an IDR.
+                lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
+                auxFlagLock.withLock { auxKeyframePending = true }
+            }
+            return main
+        case .passThrough:
+            return nil
+        case .failed(let reason):
+            lock.withLock { packedStats?.recordPackFailure() }
+            reportPackedError("pack_\(reason)")
+            return nil
         }
     }
 
@@ -772,7 +897,11 @@ final class HEVCEncoder: @unchecked Sendable {
             order.release(token, failed: false)
         }
         // After the release, so the next refinement frame can claim the slot at once.
-        if let refineTrain { refineOutput(trainID: refineTrain, bytes: ok && outputBytes > 0 ? outputBytes : nil) }
+        if let refineTrain {
+            // T-258: the byte ceiling is the total of both streams; the auxiliary frame is estimated at half the main one.
+            let total = auxEncoder == nil ? outputBytes : outputBytes + outputBytes / 2
+            refineOutput(trainID: refineTrain, bytes: ok && outputBytes > 0 ? total : nil)
+        }
     }
 
     private func slotFailed(_ token: EncoderSubmitToken, _ error: Error) {
@@ -856,6 +985,7 @@ final class HEVCEncoder: @unchecked Sendable {
         guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return 0 }
         guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return 0 }
         if isKey { lock.withLock { lastKeyframeUs = HostClock.nowUs() } }
+        lock.withLock { packedStats?.recordMain(bytes: annexB.count) }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.trace = trace
         output(frame, encodeTimeUs)
