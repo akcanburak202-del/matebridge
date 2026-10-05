@@ -775,7 +775,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard !isShuttingDown else { return }
         pipelineID += 1
         let id = pipelineID
-        let p = VideoPipeline(settings: settings, reusing: display, onFailure: { [weak self] error in
+        // T-253: the byte ceiling of a refinement train depends on the link (USB or network).
+        let refine = StillRefineConfig.resolve(env: ProcessInfo.processInfo.environment,
+                                               transport: session?.transport ?? .usb)
+        let p = VideoPipeline(settings: settings, reusing: display, refine: refine, onFailure: { [weak self] error in
             self?.post(.pipelineFailed(id: id, message: "\(error)", wake: DisplayWaker.reason(for: error)))
         })
         do {

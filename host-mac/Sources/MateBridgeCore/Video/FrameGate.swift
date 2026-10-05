@@ -70,7 +70,7 @@ public struct FramePacer<Frame: Sendable>: Sendable {
     private let baseToleranceUs: UInt64
     /// `readyAtUs`: earliest time it may go out (0 = ready). `deferred`: it arrived before its grid slot and is only
     /// sent by the hold-last-frame timer (T-066), so the gate has not been advanced for it yet.
-    private var pending: (frame: Frame, ptsUs: UInt64, readyAtUs: UInt64, deferred: Bool)?
+    private var pending: (frame: Frame, ptsUs: UInt64, readyAtUs: UInt64, deferred: Bool, synthetic: Bool)?
     public private(set) var lastSubmittedPtsUs: UInt64?
     private var overwrittenCount = 0
 
@@ -131,8 +131,12 @@ public struct FramePacer<Frame: Sendable>: Sendable {
 
     /// A captured frame. `slotFree`: the encoder can take a frame right now. `bypassGate`: keyframe re-submissions
     /// do not wait for the send-rate slot.
+    ///
+    /// `synthetic` (T-253): a re-encode of an old capture with an invented timestamp. It takes its send slot like any
+    /// frame but never moves `lastSubmittedPtsUs`, so a real capture with an earlier (jittered or delayed) SCK
+    /// timestamp is not judged stale by it: real captures always win.
     public mutating func offer(_ frame: Frame, ptsUs: UInt64, nowUs: UInt64, slotFree: Bool,
-                               bypassGate: Bool = false) -> Offer {
+                               bypassGate: Bool = false, synthetic: Bool = false) -> Offer {
         if let last = lastSubmittedPtsUs, ptsUs <= last {
             overwrittenCount += 1
             return .drop
@@ -153,28 +157,28 @@ public struct FramePacer<Frame: Sendable>: Sendable {
                     decimatedCount += 1   // superseded by a newer capture
                     if !old.deferred { readyAt = old.readyAtUs; deferred = false }   // already passed the grid
                 }
-                pending = (frame, ptsUs, readyAt, deferred)
+                pending = (frame, ptsUs, readyAt, deferred, synthetic)
                 return .hold(retryAfterUs: slotFree && deferred ? (readyAt > nowUs ? readyAt - nowUs : 0) : nil)
             }
             gate.accept(nowUs: ptsUs)
             if slotFree {
                 if pending != nil { pending = nil; decimatedCount += 1 }
-                lastSubmittedPtsUs = ptsUs
+                if !synthetic { lastSubmittedPtsUs = ptsUs }
                 return .submit(frame)
             }
             if pending != nil { overwrittenCount += 1 }
-            pending = (frame, ptsUs, 0, false)
+            pending = (frame, ptsUs, 0, false, synthetic)
             return .hold(retryAfterUs: nil)   // the next slot release submits it
         }
         let wait = gate.waitUs(nowUs: nowUs)
         if slotFree, bypassGate || wait == 0 {
             // A newer frame goes out directly: whatever was waiting is older and must never follow it.
             if pending != nil { pending = nil; overwrittenCount += 1 }
-            submitted(ptsUs: ptsUs, nowUs: nowUs)
+            submitted(ptsUs: ptsUs, nowUs: nowUs, synthetic: synthetic)
             return .submit(frame)
         }
         if pending != nil { overwrittenCount += 1 }
-        pending = (frame, ptsUs, 0, false)
+        pending = (frame, ptsUs, 0, false, synthetic)
         return .hold(retryAfterUs: slotFree ? wait : nil)
     }
 
@@ -194,13 +198,13 @@ public struct FramePacer<Frame: Sendable>: Sendable {
         pending = nil
         if decimating {
             if p.deferred { gate.accept(nowUs: p.ptsUs); deferredCount += 1 }
-            lastSubmittedPtsUs = p.ptsUs
-        } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs) }
+            if !p.synthetic { lastSubmittedPtsUs = p.ptsUs }
+        } else { submitted(ptsUs: p.ptsUs, nowUs: nowUs, synthetic: p.synthetic) }
         return .submit(p.frame)
     }
 
-    private mutating func submitted(ptsUs: UInt64, nowUs: UInt64) {
+    private mutating func submitted(ptsUs: UInt64, nowUs: UInt64, synthetic: Bool = false) {
         gate.accept(nowUs: nowUs)
-        lastSubmittedPtsUs = ptsUs
+        if !synthetic { lastSubmittedPtsUs = ptsUs }
     }
 }

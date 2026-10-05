@@ -142,6 +142,13 @@ public final class VideoFrameQueue: @unchecked Sendable {
                                   keyframesPushed: pushedKeyframes)
     }
 
+    /// T-253: the queue holds nothing and is not waiting for a keyframe, so a still-screen refinement frame cannot
+    /// overflow it (an overflow drops a delta and forces a keyframe). One lock for both facts.
+    public var isReadyForRefine: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !finished && policy.isEmpty && !policy.isAwaitingKeyframe
+    }
+
     public func finish() {
         lock.lock()
         finished = true

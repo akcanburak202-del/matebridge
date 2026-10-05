@@ -57,6 +57,12 @@ final class HEVCEncoder: @unchecked Sendable {
         var slotWaitUs: UInt64 = 0
         /// Any re-submission of the last buffer (synthetic `now + lead` stamp); trace only (T-170).
         var resubmit = false
+        /// The still-screen refinement train (T-253) this frame belongs to; its output feeds `StillRefinePolicy` only
+        /// while that train is still the current one.
+        var refineTrain: UInt64?
+
+        var skipsOnPendingKeyframe: Bool { refineTrain != nil }
+        var isSynthetic: Bool { refineTrain != nil }
 
         var stamp: PTS {
             get { PTS(time: pts) }
@@ -102,6 +108,16 @@ final class HEVCEncoder: @unchecked Sendable {
     private var chromaStats: ChromaStatsWindow?
     /// The first failed Metal pass was logged. Guarded by `lock`.
     private var chromaFailureLogged = false
+    /// T-253 still-screen refinement (guarded by `lock`), its 25 ms start timer, and the output queue's "empty"
+    /// probe (called outside `lock`: the queue lock is taken before the encoder lock elsewhere).
+    private var refinePolicy: StillRefinePolicy
+    private var refineTimer: DispatchSourceTimer?
+    private let refineReady: @Sendable () -> Bool
+    /// Host time of the newest keyframe output (init time before the first) and the byte size of the newest real
+    /// (non-resubmitted) frame: the periodic-keyframe guard and the first refine frame's size estimate. Guarded by
+    /// `lock`.
+    private var lastKeyframeUs = HostClock.nowUs()
+    private var lastMotionBytes = 0
 
     let settings: VideoSettings
     /// Encoder configuration in use (for diagnostics).
@@ -135,10 +151,15 @@ final class HEVCEncoder: @unchecked Sendable {
     /// - Parameters:
     ///   - knobs: encoder experiment knobs; nil reads them from the process environment (`EncoderKnobs.parse`).
     ///   - logSink: where `ev=encoder_config` / `ev=profile` go (the benches print them instead).
+    ///   - refine: still-screen refinement (T-253); `.disabled` (default) keeps the encoder exactly as before.
+    ///   - refineReady: whether the output queue can take another refinement frame (`VideoFrameQueue.isReadyForRefine`).
     init(settings: VideoSettings, meter: CadenceMeter? = nil, knobs: EncoderKnobs? = nil,
-         logSink: @escaping LogSink = HEVCEncoder.hostLog, output: @escaping Output,
+         logSink: @escaping LogSink = HEVCEncoder.hostLog, refine: StillRefineConfig = .disabled,
+         refineReady: @escaping @Sendable () -> Bool = { true }, output: @escaping Output,
          onFailure: @escaping @Sendable (Error) -> Void = { _ in }) throws {
         self.settings = settings
+        self.refinePolicy = StillRefinePolicy(config: refine)
+        self.refineReady = refineReady
         self.meter = meter
         self.output = output
         self.onFailure = onFailure
@@ -175,7 +196,8 @@ final class HEVCEncoder: @unchecked Sendable {
                 for _ in 0..<decimated { meter?.recordDecimated() }
                 for _ in 0..<deferred { meter?.recordDeferred() }
             },
-            log: logSink)
+            log: logSink,
+            onSkipped: { [weak self] frame in self?.refineSkipped(frame) })
         backend.encoder = self
 
         var failures: [String] = []
@@ -287,6 +309,15 @@ final class HEVCEncoder: @unchecked Sendable {
         timer.setEventHandler { [weak self] in self?.idleTick() }
         idleTimer = timer
         timer.resume()
+
+        // T-253: starts a refinement train once the screen has been still; later frames are chained from outputs.
+        if refine.enabled {
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.refine"))
+            t.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
+            t.setEventHandler { [weak self] in self?.refineTick() }
+            refineTimer = t
+            t.resume()
+        }
 
         // T-177 debug step (off by default): drives the live setter on a timer.
         if let step = knobs.bitrateStep {
@@ -469,13 +500,18 @@ final class HEVCEncoder: @unchecked Sendable {
         if let replaced = Self.retagForSession(buffer, range: settings.dynamicRange) { noteRetag(replaced) }
         let input = Input(buffer: buffer, pts: presentationTime, captureTimeUs: captureTimeUs,
                           deliveredUs: HostClock.nowUs(), displayTimeUs: displayTimeUs)
+        // T-253: motion cancels a running refinement train. It is noted inside the ordered offer, so every refine
+        // frame offered before this point was validated against the old train and none can follow it.
+        var cancelled: StillRefineReport?
         order.offer(bypassGate: false) { _ in
             lock.lock()
+            cancelled = refinePolicy.noteCapture(nowUs: HostClock.nowUs())
             captureLeadUs = ResubmitStamp.lead(captureUs: input.captureTimeUs, deliveredUs: input.deliveredUs)
             lastStampUs = max(lastStampUs ?? 0, input.captureTimeUs)
             lock.unlock()
             return input
         }
+        if let cancelled { logRefine(cancelled) }
     }
 
     /// Logs the first retag of this encoder (one line per session: which tags the capture carried).
@@ -495,19 +531,100 @@ final class HEVCEncoder: @unchecked Sendable {
     /// never be replaced in `last` by an older buffer.
     /// The stamp keeps the real captures' capture-to-delivery lead (T-086): the tablet pacer judges lateness as
     /// `ready - capture_time`, and a re-submission stamped plain "now" would look one lead (~6.6 ms) late.
-    private func resubmitLast() {
-        order.offer(bypassGate: true) { last in
+    ///
+    /// `refine` (T-253): a frame of the still-screen refinement train. It goes through the pacer gate like a capture
+    /// (`bypassGate: false`), so the train runs at the stream rate, never as a burst.
+    ///
+    /// `trainID` names the train a refinement frame belongs to; it is revalidated here, inside the ordered offer
+    /// (where a capture notes its cancel under the same order lock), and a pending keyframe request is never given to
+    /// a refinement frame: the train ends and the normal capture path serves the keyframe.
+    private func resubmitLast(trainID: UInt64? = nil) {
+        let refine = trainID != nil
+        var ended: StillRefineReport?
+        order.offerChecked(bypassGate: !refine) { last, keyframePending in
             guard let l = last else { return nil }
             let nowUs = HostClock.nowUs()
             lock.lock()
+            if let id = trainID {
+                if !refinePolicy.isCurrent(id) { lock.unlock(); return nil }
+                if keyframePending {
+                    ended = refinePolicy.end(.keyframePending, nowUs: nowUs)
+                    lock.unlock()
+                    return nil
+                }
+            }
             let stamp = ResubmitStamp.stamp(nowUs: nowUs, leadUs: captureLeadUs, lastStampUs: lastStampUs)
             lastStampUs = max(lastStampUs ?? 0, stamp)
             lock.unlock()
             var input = Input(buffer: l.buffer, pts: CMTime(value: CMTimeValue(stamp), timescale: 1_000_000),
                               captureTimeUs: stamp, deliveredUs: nowUs)
             input.resubmit = true
+            input.refineTrain = trainID
             return input
         }
+        if let ended { logRefine(ended) }
+    }
+
+    /// 25 ms timer: starts a refinement train when the screen has been still (`StillRefinePolicy.tick`). The queue
+    /// probe runs before the encoder lock is taken.
+    private func refineTick() {
+        let ready = refineReady()
+        let keyframePending = order.keyframePending
+        let (start, timedOut, id) = lock.withLock { () -> (Bool, StillRefineReport?, UInt64) in
+            let now = HostClock.nowUs()
+            let r = refinePolicy.tick(nowUs: now, queueReady: ready, keyframePending: keyframePending,
+                                      keyframeDue: periodicKeyframeDueLocked(nowUs: now),
+                                      firstFrameEstimate: lastMotionBytes > 0 ? lastMotionBytes
+                                          : StillRefineConfig.defaultFirstFrameEstimate)
+            return (r.start, r.timedOut, refinePolicy.trainID)
+        }
+        if let timedOut { logRefine(timedOut) }
+        if start { resubmitLast(trainID: id) }
+    }
+
+    /// A refinement frame produced output (`bytes` > 0) or failed (`bytes` nil): continues or ends the train.
+    /// Must hold `lock`. The session's periodic keyframe (`MaxKeyFrameIntervalDuration`) falls within the longest
+    /// train: a refine frame must never be an IDR, so no train starts or continues then (`keyframe_due`).
+    private func periodicKeyframeDueLocked(nowUs: UInt64) -> Bool {
+        let c = refinePolicy.config
+        let horizon = UInt64(c.maxFrames) * 1_000_000 / UInt64(max(1, settings.fps)) + c.timeoutUs + 1_000_000
+        return PeriodicKeyframe.isDue(nowUs: nowUs, lastKeyframeUs: lastKeyframeUs,
+                                      intervalSeconds: Self.keyframeIntervalSeconds, horizonUs: horizon)
+    }
+
+    /// A held refine frame was dropped at reservation because a keyframe became pending: ends its train.
+    private func refineSkipped(_ frame: Input) {
+        guard let id = frame.refineTrain else { return }
+        let report = lock.withLock { () -> StillRefineReport? in
+            guard refinePolicy.isCurrent(id) else { return nil }
+            return refinePolicy.end(.keyframePending, nowUs: HostClock.nowUs())
+        }
+        if let report { logRefine(report) }
+    }
+
+    /// `trainID` is the train the frame was submitted for. Output of any other train (cancelled, ended or replaced
+    /// since) was delivered like every frame but is not counted for, and does not advance, the current train.
+    private func refineOutput(trainID: UInt64, bytes: Int?) {
+        let ready = refineReady()
+        let keyframePending = order.keyframePending
+        let now = HostClock.nowUs()
+        let (next, report) = lock.withLock { () -> (Bool, StillRefineReport?) in
+            guard refinePolicy.isCurrent(trainID) else { return (false, nil) }
+            guard let bytes else { return (false, refinePolicy.noteFailure(nowUs: now)) }
+            let r = refinePolicy.noteOutput(bytes: bytes, nowUs: now, queueReady: ready,
+                                            keyframePending: keyframePending,
+                                            keyframeDue: periodicKeyframeDueLocked(nowUs: now))
+            return (r.submitNext, r.report)
+        }
+        if let report { logRefine(report) }
+        if next { resubmitLast(trainID: trainID) }
+    }
+
+    /// `video ev=refine` (one line per train). A train that converged on its first frame (a tiny change on an
+    /// already refined screen) or was cancelled before any output is `debug`.
+    private func logRefine(_ r: StillRefineReport) {
+        let quiet = r.frames == 0 || (r.frames == 1 && r.reason == .converged)
+        Self.videoLog(quiet ? .debug : .info, "refine", r.logFields)
     }
 
     private func idleTick() {
@@ -594,6 +711,7 @@ final class HEVCEncoder: @unchecked Sendable {
                                             deliveredUs: frame.deliveredUs)
         trace.slotWaitUs = frame.slotWaitUs
         trace.resubmit = frame.resubmit
+        let refineTrain = frame.refineTrain
         trace.submittedUs = HostClock.nowUs()
         let status = VTCompressionSessionEncodeFrame(
             session, imageBuffer: image, presentationTimeStamp: frame.pts,
@@ -603,7 +721,7 @@ final class HEVCEncoder: @unchecked Sendable {
             let elapsedUs = (DispatchTime.now().uptimeNanoseconds - start) / 1000
             var t = trace
             t.encodedUs = HostClock.nowUs()
-            self.completed(status: status, sampleBuffer: sampleBuffer, token: token, captureTimeUs: captureTimeUs,
+            self.completed(status: status, sampleBuffer: sampleBuffer, token: token, captureTimeUs: captureTimeUs, refineTrain: refineTrain,
                            encodeTimeUs: elapsedUs, trace: t)
         }
         if status != noErr {
@@ -634,14 +752,16 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// A submitted frame produced output (or none); frees the slot and starts the pending frame, if any.
     private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, token: EncoderSubmitToken,
-                           captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
+                           captureTimeUs: UInt64, refineTrain: UInt64? = nil, encodeTimeUs: UInt64, trace: FrameTrace) {
         let ok = status == noErr && sampleBuffer != nil
+        var outputBytes = 0
         if let sb = sampleBuffer, ok {
             meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
             if chroma.statsEnabled, !trace.resubmit, trace.encodedUs >= trace.deliveredUs {
                 lock.withLock { chromaStats?.recordEncoded(captureToEncodeUs: trace.encodedUs - trace.deliveredUs) }
             }
-            handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
+            outputBytes = handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
+            if !trace.resubmit, outputBytes > 0 { lock.withLock { lastMotionBytes = outputBytes } }
         }
         if ok { lock.lock(); consecutiveFailures = 0; lock.unlock() }
         if !ok {
@@ -651,6 +771,8 @@ final class HEVCEncoder: @unchecked Sendable {
         } else {
             order.release(token, failed: false)
         }
+        // After the release, so the next refinement frame can claim the slot at once.
+        if let refineTrain { refineOutput(trainID: refineTrain, bytes: ok && outputBytes > 0 ? outputBytes : nil) }
     }
 
     private func slotFailed(_ token: EncoderSubmitToken, _ error: Error) {
@@ -690,9 +812,12 @@ final class HEVCEncoder: @unchecked Sendable {
         idleTimer = nil
         let step = stepTimer
         stepTimer = nil
+        let refineT = refineTimer
+        refineTimer = nil
         lock.unlock()
         timer?.cancel()
         step?.cancel()
+        refineT?.cancel()
         // `order` is nil only if `init` threw before creating it (then there is no session to close).
         if let order { order.stop(completion: completion) } else { completion?() }
     }
@@ -700,8 +825,10 @@ final class HEVCEncoder: @unchecked Sendable {
     /// Only enqueues the teardown: no wait, and the teardown block captures the backend, never `self`.
     deinit { beginStop(completion: nil) }
 
-    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) {
-        guard let format = CMSampleBufferGetFormatDescription(sb) else { return }
+    /// Returns the size of the delivered frame in bytes (0 when nothing was delivered).
+    @discardableResult
+    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) -> Int {
+        guard let format = CMSampleBufferGetFormatDescription(sb) else { return 0 }
         let isKey: Bool = {
             guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
                   let first = arr.first else { return true }
@@ -726,11 +853,13 @@ final class HEVCEncoder: @unchecked Sendable {
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
-        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return }
-        guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return }
+        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return 0 }
+        guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return 0 }
+        if isKey { lock.withLock { lastKeyframeUs = HostClock.nowUs() } }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.trace = trace
         output(frame, encodeTimeUs)
+        return annexB.count
     }
 
     /// All bytes of a block buffer. The data pointer is valid for `lengthAtOffset` bytes only: a block buffer made of

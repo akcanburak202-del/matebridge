@@ -13,11 +13,19 @@ public protocol EncoderSubmitFrame: Sendable {
     mutating func arrived(slotFree: Bool)
     /// Called under the lock when the frame claims a slot; `lastSlotFreeUs`: host time of the last slot release.
     mutating func reserved(lastSlotFreeUs: UInt64)
+    /// An optional frame (T-253 still-screen refinement) is never allowed to consume a pending keyframe request: if one
+    /// is pending when the frame would claim its slot, the frame is skipped instead (nothing was encoded yet).
+    var skipsOnPendingKeyframe: Bool { get }
+    /// A re-encode of an old capture with an invented timestamp: the pacer must not let it make a later real
+    /// capture look stale (`FramePacer.offer(synthetic:)`).
+    var isSynthetic: Bool { get }
 }
 
 extension EncoderSubmitFrame {
     public mutating func arrived(slotFree: Bool) {}
     public mutating func reserved(lastSlotFreeUs: UInt64) {}
+    public var skipsOnPendingKeyframe: Bool { false }
+    public var isSynthetic: Bool { false }
 }
 
 /// Identifies one slot reservation. Every reservation is released exactly once (`EncoderSubmitOrder.release`).
@@ -157,6 +165,10 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     private let log: LogSink
     /// Test seam: runs right before `backend.encode`, on the owner queue.
     private let beforeSubmit: (@Sendable (Frame) -> Void)?
+    /// Called (outside the lock) for a frame skipped because a keyframe was pending (`skipsOnPendingKeyframe`).
+    private let onSkipped: @Sendable (Frame) -> Void
+    /// Frames skipped under the lock, delivered to `onSkipped` after it is released. Guarded by `lock`.
+    private var skipped: [Frame] = []
     /// The single submit owner.
     private let queue: DispatchQueue
     private let queueKey = DispatchSpecificKey<UInt8>()
@@ -194,7 +206,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
                 pacerCounts: @escaping PacerCounts = { _, _, _ in },
                 log: @escaping LogSink = { _, _, _ in },
                 queueLabel: String = "matebridge.encoder.submit",
-                beforeSubmit: (@Sendable (Frame) -> Void)? = nil) {
+                beforeSubmit: (@Sendable (Frame) -> Void)? = nil,
+                onSkipped: @escaping @Sendable (Frame) -> Void = { _ in }) {
+        self.onSkipped = onSkipped
         self.backend = backend
         self.maxInFlight = maxInFlight
         self.nowUs = nowUs
@@ -223,22 +237,34 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
     /// this object. `bypassGate`: keyframe re-submissions do not wait for the send-rate slot. Never blocks on the
     /// encoder.
     public func offer(bypassGate: Bool, build: (_ last: Frame?) -> Frame?) {
+        offerChecked(bypassGate: bypassGate) { last, _ in build(last) }
+    }
+
+    /// `offer` whose `build` also sees whether a keyframe is pending (T-253: a still-screen refinement frame must not
+    /// consume a keyframe request). Same lock rules as `offer`.
+    public func offerChecked(bypassGate: Bool, build: (_ last: Frame?, _ keyframePending: Bool) -> Frame?) {
         lock.lock()
-        guard !stopped, var frame = build(last) else { lock.unlock(); return }
+        guard !stopped, var frame = build(last, forceKeyframe) else { lock.unlock(); return }
         let slotFree = inFlight < maxInFlight
         frame.arrived(slotFree: slotFree)
         last = frame
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
-        switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate) {
-        case .submit(let f): submitLocked(reserveLocked(f))
+        switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
+                         synthetic: frame.isSynthetic) {
+        case .submit(let f): reserveOrSkipLocked(f)
         case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
         case .drop: break
         }
         reportPacerLocked()
+        let skippedNow = takeSkippedLocked()
         lock.unlock()
+        skippedNow.forEach(onSkipped)
         if let delay { armFlush(delay) }
     }
+
+    /// A keyframe was requested and no frame has been submitted since.
+    public var keyframePending: Bool { lock.withLock { forceKeyframe } }
 
     /// The next submitted frame will be a keyframe.
     public func requestKeyframe() {
@@ -313,7 +339,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         noteInFlightLocked()
         lastSlotFreeUs = nowUs()
         let delay = takePendingLocked()
+        let skippedNow = takeSkippedLocked()
         lock.unlock()
+        skippedNow.forEach(onSkipped)
         if let delay { armFlush(delay) }
     }
 
@@ -322,7 +350,9 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         lock.lock()
         flushScheduled = false
         let delay = takePendingLocked()
+        let skippedNow = takeSkippedLocked()
         lock.unlock()
+        skippedNow.forEach(onSkipped)
         if let delay { armFlush(delay) }
     }
 
@@ -399,13 +429,26 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         return Submit(frame: f, keyframe: key, token: EncoderSubmitToken(id: nextToken))
     }
 
+    /// Must hold `lock`. Reserves and submits `f`, unless it is an optional frame and a keyframe is pending: the
+    /// request stays for the next regular frame (`reserveLocked` would hand the flag to `f`).
+    private func reserveOrSkipLocked(_ f: Frame) {
+        if f.skipsOnPendingKeyframe && forceKeyframe { skipped.append(f); return }
+        submitLocked(reserveLocked(f))
+    }
+
+    private func takeSkippedLocked() -> [Frame] {
+        if skipped.isEmpty { return [] }
+        defer { skipped.removeAll() }
+        return skipped
+    }
+
     /// Must hold `lock`. Submits the pending frame if a slot is free and the gate is open (judged by the current
     /// time, not the frame's capture time); otherwise returns the delay after which a flush should retry.
     private func takePendingLocked() -> UInt64? {
         guard !stopped else { return nil }
         defer { reportPacerLocked() }
         switch pacer.takePending(nowUs: nowUs(), slotFree: inFlight < maxInFlight) {
-        case .submit(let f): submitLocked(reserveLocked(f)); return nil
+        case .submit(let f): reserveOrSkipLocked(f); return nil
         case .retry(let wait): return scheduleFlushLocked(afterUs: wait)
         case .none: return nil
         }
