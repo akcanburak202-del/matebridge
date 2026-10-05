@@ -1,7 +1,7 @@
 ---
 id: T-242
 title: Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -26,7 +26,11 @@ Cihaz 2026-10-05: kullanıcı Oyun modundayken panelden bit hızını "Otomatik"
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `GameModeSettings` (stream/GameMode.kt): katman kullanıcının bit hızı **seçimini** ayrıca tutar (`layerBitrateChoice`, 0 = Otomatik). `Values.bitrateKbps` (etkin, gönderilen değer) seçimden türetilir: katman açıkken Otomatik → `GAME_BITRATE_KBPS` (yeni `layerBitrateKbps(choice)`; `defaults()` de bunu kullanır). `setBitrateKbps(0)` katmanda artık 0 değil 60000 yazar → `prefs()` STREAM_PREFS'te 60000 gönderir. Günlük'te Otomatik bugünkü gibi 0.
+2. Genel `bitrateKbps` getter'ı panelin seçimini döndürür (katmanda Otomatik → 0), böylece seçili işaret Otomatik'te kalır. `effective()`/`prefs()`/`ev=mode_layer` çözülmüş değeri (60000) kullanmaya devam eder. Kalıcı yazma kuralı (0014 §3) değişmez: katmanda yazılan seçim kaydedilmez.
+3. Panel etiketi: `SettingItem.Option` etiketi lambda ile okunabilir hale gelir (mevcut `String` kurucusu korunur); `SettingsViews` yenilemede buton metnini günceller. Bit hızı seçeneklerinde Otomatik, katman açıkken "Otomatik (60 Mbps)" (`GameModeSettings.bitrateOptionLabel(layer, kbps)`), Günlük'te "Otomatik".
+4. JVM testleri: katmanda Otomatik seçince prefs 60000 / seçim 0 / kayıt değişmez (Oyun ve Çizim); Günlük'te 0; etiket metinleri; catalog'da etiketin mod değişince yenilenmesi.
+5. MainActivity dosya listesinde değil: `bitrateKbps`'i panel seçimi, `wanted_kbps`/`bitrate_setting` log alanları için kullanıyor; bunlar katmanda Otomatik iken artık 0/"auto" gösterir (ayar = Otomatik). Handoff'ta not edilir.
 
 ## Handoff
 
