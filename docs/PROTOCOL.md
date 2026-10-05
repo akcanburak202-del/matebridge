@@ -154,10 +154,12 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | height_pt | u16 | |
 | fps | u16 | Hedef kare hızı |
 | bitrate_kbps | u32 | Hedef bit hızı |
-| color_primaries | u8 | ITU-T H.273 kodu: `1` BT.709/sRGB, `12` Display P3 |
-| transfer | u8 | H.273: `1` BT.709, `13` sRGB |
-| matrix | u8 | H.273: `1` BT.709 |
+| color_primaries | u8 | ITU-T H.273 kodu: `1` BT.709/sRGB, `12` Display P3, `9` BT.2020 (HDR10, karar 0032) |
+| transfer | u8 | H.273: `1` BT.709, `13` sRGB, `16` SMPTE ST 2084 / PQ (HDR10) |
+| matrix | u8 | H.273: `1` BT.709, `9` BT.2020 NCL (HDR10) |
 | full_range | u8 | `1` tam aralık, `0` sınırlı |
+
+**HDR10 (karar 0032):** host `STREAM_PREFS.dynamic_range = 1` isteğini uygulayabildiyse `color_primaries = 9`, `transfer = 16`, `matrix = 9`, `full_range = 0` gönderir; akış HEVC Main10 (bit derinliği ve profil SPS'te), HDR10 statik meta verisi (MDCV/CLL) bit akışında SEI olarak gider, ayrı alan yoktur. İstemci uygulanan dinamik aralığı yalnız bu kodlardan anlar: `transfer = 16` ise HDR10, değilse SDR. Uygulayamadıysa SDR kodları gider (geri dönüş protokol hatası değildir).
 
 ### 0x04 BYE (iki yön, kontrol)
 
@@ -180,9 +182,11 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 | bitrate_kbps | u32 | Kullanıcının seçtiği hedef bit hızı (karar 0013). `0` = host varsayılanı (moda göre). Sıfırdan farklı değer host'ta `5000`–`150000` aralığına sıkıştırılır. Eski istemciler burada `0` (eski `reserved`) gönderir. |
 | display_width_px | u16 | *İsteğe bağlı grup (yoksa 0).* `0` = doğal ekran (HELLO boyutu, HiDPI 2x, bugünkü gibi). `≠0`: host sanal ekranı **HiDPI olmadan (1x)** bu piksel boyutunda kurar; nokta = piksel (karar 0029, "oyun ekranı"). |
 | display_height_px | u16 | |
+| dynamic_range | u8 | *İkinci isteğe bağlı grup (yoksa 0; karar 0032).* `0` SDR, `1` HDR10 (PQ). Diğer değerler: host `0` sayar. |
+| reserved | u8 | `0` |
 
-- Payload 8 bayt (eski istemci; ekran `0×0`) ya da en az 12 bayttır; 9–11 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`).
-- Gönderen grubu yalnız iki alandan biri sıfırdan farklıysa yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt).
+- Payload 8 bayt (eski istemci; ekran `0×0`), 12 bayt (ekran grubu) ya da en az 14 bayttır (ekran + dinamik aralık grubu). 9–11 ve 13 bayt kısa payload'dur (fixture `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`).
+- Gönderen ekran grubunu yalnız iki alandan biri sıfırdan farklıysa ya da dinamik aralık grubu yazılacaksa yazar (o zaman `0×0` olabilir); dinamik aralık grubunu yalnız `dynamic_range ≠ 0` ise yazar (`stream_prefs`, `stream_prefs_bitrate` 8 bayt kalır; `stream_prefs_game_display` 12 bayt; `stream_prefs_hdr` 14 bayt).
 
 **Host kuralları:**
 - `display_* = 0` iken sanal ekranın boyutu ve nokta ölçüsü (`width_pt`) **değişmez** (HELLO boyutu, HiDPI; Mac'teki düzen aynı kalır). Değişen: yakalama/kodlama boyutu (`scale_permille`), sanal ekranın yenileme hızı ve akış fps'i (`fps`; 144 için sanal ekran 144 Hz), bit hızı (`bitrate_kbps`).
@@ -194,6 +198,7 @@ Kullanıcının görüntü modu tercihi (Faz 5, "performans modu"). İstemci `AC
 - Ekran kipi (piksel boyutu ya da HiDPI) ya da yenileme hızı değişirse host sanal ekranı yeniden kurar (eskisini kaldırıp ~700 ms bekledikten sonra; aynı seri numarasıyla hemen yeniden kurma başarısız olabilir). Pencereler kısa süre yedek ekrana taşınır, imleç yeni sınırlara sıkıştırılır. 1x ekran kurulamazsa host bir kez doğal ekrana döner ve yeni `config_id` ile bildirir (`game_display_failed`).
 - Varsayılan bit hızı oyun ekranında `kodlanan genişlik / HELLO genişliği` oranıyla hesaplanır (1848 → 660 ile aynı).
 - Host'un cihaz başına hatırladığı tercih (T-049) `display_*`'ı da tutar: oyun modunda yeniden bağlanan tablet ekranı doğrudan oyun boyutunda bulur.
+- **HDR10 (karar 0032):** istemci `dynamic_range = 1`'i yalnız tabletin ekranı HDR10 bildiriyorsa, HEVC çözücüsü `Main10HDR10` bildiriyorsa ve kullanıcı Oyun modunda HDR'yi açtıysa gönderir. Host isteği uygulayabilirse sanal ekranı HDR aktarım işleviyle (`transferFunction`, yalnız `VirtualDisplay`) kurar, HDR yakalar, HEVC Main10 PQ kodlar ve `STREAM_CONFIG`'te HDR10 kodlarını bildirir. `dynamic_range` değişimi ekran kipi değişimi sayılır (ekran yeniden kurulur, yeni `config_id`). Herhangi bir halka başarısız olursa host SDR'ye döner, SDR kodlarını bildirir ve `ev=hdr_fallback reason=` loglar. Grubu tanımayan eski host 14 baytlık payload'un fazlasını yok sayar ve SDR kalır (§2, uzun payload kuralı); istemci bunu `transfer ≠ 16`'dan anlar.
 - **Bit hızı önceliği:** host ortam değişkeni (`MATEBRIDGE_BITRATE_KBPS`, Wi-Fi'de `MATEBRIDGE_WIFI_BITRATE_KBPS`; geliştirici ayarı) > `bitrate_kbps ≠ 0` > modun varsayılanı. Uygulanan değer `STREAM_CONFIG.bitrate_kbps`'te bildirilir.
 - Tercih mevcut ayardan farklıysa host §3 adım 7'deki gibi yeni `config_id` ile `STREAM_CONFIG` gönderir ve video bağlantısını kapatır; istemci yeniden açar. Aynıysa hiçbir şey yapmaz.
 - İstemci tercihi her bağlantıda yeniden gönderir. Host her cihazın (`device_id`) son uygulanan tercihini (bit hızı dahil) hatırlar ve yeni oturumu doğrudan onunla başlatır (T-049): sanal ekranın yenileme hızı değişince ekran yeniden yaratılmak zorunda olduğundan (ScreenCaptureKit yaratılıştaki hızda veriyor), her bağlantıda yeniden yaratma olmasın diye. Aynı tercih arka arkaya gelirse bir kez uygulanır; host saniyede en çok bir yeniden yapılandırma yapar (sonraki tercih bekletilir, en sonuncusu uygulanır).
@@ -642,7 +647,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `invalid_stream_prefs_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
+- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`
