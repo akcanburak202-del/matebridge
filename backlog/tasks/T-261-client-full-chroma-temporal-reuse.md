@@ -35,6 +35,16 @@ files:
 
 ## Plan
 
+Tasarım (yalnız GL/presenter tarafı; `chroma_layout = 0` yolu ve tel biçimi değişmez):
+
+1. **Durum dokusu (GL):** iki RGBA8 doku (ping-pong, tam çözünürlük, tampon koordinatlarında): `R,G,B` = ham Y/Cb/Cr (gösterilen), `A` = referans Y (blok değişmedikçe korunur; kayma olmaz). 2x41 MB, kart bütçesinin üstünde ama sabit (not edilecek). Referans kromu = durum dokusunun Cb/Cr'si; ana kromun referansı = (çift,çift) pikselinin Cb/Cr'si (host `pick`: ana krom = tam krom (2bx,2by); yalnız-ana büyütmede 2x2 bloğa çoğaltıldığı için aynı değer).
+2. **Geçişler:** (1) durum geçişi (YUV_target ile ana + varsa yardımcı -> `state[next]`): eşleşmiş karede bugünkü birleştirme (ham değerler yazılır); yalnız-ana karede 2x2 blok karşılaştırması (4 Y vs `A`, ana Cb/Cr vs durumun (çift,çift) Cb/Cr'si, `|d| <= tol` (varsayılan 2, `presentSetReuseTolerance`; negatif = kapalı)): değişmediyse durumun tam kromu + güncel Y (A korunur), değiştiyse ana kromu 2x2'ye çoğalt (bugünkü çıktı) ve A = güncel Y. (2) gösterim geçişi: `state[next]` -> YUV->RGB -> pencere yüzeyi (eglPresentationTimeANDROID, fence, zaman damgaları aynen). Kurulum (shader/FBO) başarısızsa reuse kapanır, mevcut tek geçiş yolu kullanılır (`reuse=0` log).
+3. **Geç yardımcı yükseltme (Kotlin):** son çizilen ana görüntü tutulur (retire edilmez, yeni ana çizilince ya da kapanışta bırakılır); yeni ana beklemiyorsa ve bu karenin yardımcısı sonradan geldiyse (`AuxPairing.find`) aynı kare birleştirme ile yeniden çizilir (sunum zamanı 0 = sonraki vsync, etiket -1 = gösterim istatistiği yok), `late_upgrades++`. Karar mantığı saf `LateUpgrade` sınıfında.
+4. **Ölçüm:** `reuse_pct` = yalnız-ana (reuse) karelerde referanstan tam renk alan blok oranı: seyrek (her 4. yalnız-ana çizim) küçük 64x40 örnek ızgarası geçişi, sonuç sonraki çizimde fence tamamlandıktan sonra `glReadPixels` ile (bekletmez) okunur. `late_upgrades`. `gl_ms`: GPU zamanlayıcı sorgusu kaldırılır; yerine EGL `RENDERING_COMPLETE_TIME` - takas öncesi CLOCK_MONOTONIC (gönderimden GPU bitişine; destek yoksa çizim çağrısının CPU süresi). LOGGING.md güncellenir.
+5. **Saf mantık + JVM testleri:** `ChromaReuse` (blok karşılaştırma kuralı/tolerans, CPU referans durum makinesi: eşleşmiş/yalnız-ana/geç yükseltme; shader'ın satır satır karşılığı), `LateUpgrade`, `AuxPairing.find`; stats biçimi.
+
+Kısıt: tablet/adb yok; GLSL yalnız derleme + CPU referans testiyle doğrulanır, cihaz adımları Handoff'ta.
+
 ## Handoff
 
 ## Open questions
