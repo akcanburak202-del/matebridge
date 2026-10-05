@@ -1,7 +1,7 @@
 ---
 id: T-240
 title: Host — apply STREAM_PREFS.chroma (decision 0033) via the T-235 sharp_nearest path; codec field rename
-status: in-progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-235, T-237]
@@ -29,9 +29,9 @@ Decision 0033'ün host tarafı. Protokol ve fixture'lar `task/T-239-chroma-proto
 
 ## Kabul kriterleri
 
-- [ ] [XCTest] Fixture'lar (yeni + adı değişen), politika önceliği, HDR kuralı, hatırlanan tercih.
-- [ ] Varsayılan (chroma=0, env yok) yol T-235'teki varsayılanla bit-bit aynı.
-- [ ] `./scripts/check.sh --only host,protocol` geçer (Kotlin fixture testi T-241'de).
+- [x] [XCTest] Fixture'lar (yeni + adı değişen), politika önceliği, HDR kuralı, hatırlanan tercih.
+- [x] Varsayılan (chroma=0, env yok) yol T-235'teki varsayılanla bit-bit aynı.
+- [x] `./scripts/check.sh --only host,protocol` geçer (Kotlin fixture testi T-241'de).
 
 ## Plan
 
@@ -45,4 +45,24 @@ Decision 0033'ün host tarafı. Protokol ve fixture'lar `task/T-239-chroma-proto
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+- **Commit:** plan `65a4f49`; uygulama `1399147`; bu Handoff bir sonraki commit. Dal `task/T-240-host-chroma` (`task/T-239-chroma-protocol` üzerinde). Protokol/fixture değişmedi.
+- **Dokunulan dosyalar:**
+  - Core: `Messages.swift` (`StreamPrefs.chroma`, yazma/okuma, `normalized`, `requestedChroma`, yeni `ChromaPreference`), `Video/ChromaMode.swift` (`ChromaSource`, `ChromaDecision.source/requested/statsEnabled`, `ChromaPolicy.resolve(knob:preference:…)`, `ChromaConfigLog` `source=`), `Video/VideoSettings.swift` (`chromaPreference`), `Video/StreamPrefsPolicy.swift` (`applying`), `Video/StreamPrefsStore.swift` (7. değer).
+  - Host: `Video/HEVCEncoder.swift` (çözüm tercihle; `chroma_config` her oturumda; stats `statsEnabled`), `Video/VideoPipeline.swift` (yorum), `Session/StreamCoordinator.swift` (`stream_prefs` `chroma= requested_chroma=`, `stream_reconfigure` `chroma=a->b`), `Session/UserDefaultsStreamPrefsStore.swift` (yorum).
+  - Testler: yeni `Video/ChromaPrefsTests.swift` (12 test); `FixtureTests.swift` (`stream_prefs_sharp_chroma`, `stream_prefs_hdr` `chroma: 0`), `ChromaKnobTests.swift` (`source=env`, `statsEnabled`), `HDRTests.swift` (`statsEnabled`, mesaj), `GameDisplayTests.swift` (7 değer artık geçerli, geçersiz örnek 8 değer).
+  - Belgeler: `docs/LOGGING.md` (bölüm başlığı + kaynak önceliği, `source=`, `stream_prefs`/`stream_reconfigure` alanları), `docs/KNOBS.md` #44.
+- **Tasarım kararları / varsayımlar:**
+  - Öncelik: `MATEBRIDGE_CHROMA` tanımlıysa (geçersiz değer dahil; T-235 anlamı: `420` + `reason=invalid_value`) `env` kazanır; `MATEBRIDGE_CHROMA=420` tablet tercihini kapatır. Değilse `chroma=1` → `sharp_nearest` (`source=prefs`), yoksa `default`.
+  - HDR10'da `VideoSettings.chromaPreference` her zaman `.normal`: tercih değişimi HDR'de ayarları değiştirmez (boşuna `config_id`/yakalama yeniden başlatma yok; karar 0033 "etkisiz"). HDR geri dönüşü (`hdr_fallback`, `revalidated`) prefs'i HDR'siz yeniden uyguladığı için SDR'ye düşünce keskin yol devreye girer (test edildi). Bedeli: HDR + tablet tercihi `chroma_config`'te `source=default` görünür, `reason=hdr` yalnız env ile çıkar; tercih `stream_prefs requested_chroma=1 chroma=normal`'da görünür (LOGGING.md'de yazılı). `ChromaPolicy` tek başına çağrılırsa `preference: .sharp` + HDR → `reason=hdr source=prefs` (test edildi).
+  - `chroma_stats`: env tanımlıyken (T-235'teki gibi, `420` tabanı dahil) ya da uygulanan mod `sharp_*` iken. Tablet tercihiyle Metal kurulamazsa (`metal_unavailable`) stats yok, `chroma_config` `W`.
+  - `chroma_config` artık varsayılan yolda da her parametre seti duyurusunda bir `I` satırı (`requested=420 applied=420 source=default …`) yazar; SPS ayrıştırması yalnız o anda (oturum başına ~1 kez). Video yolu (ProfileLevel çağrısı, `420f` yakalama, dönüştürücü yok, stats yok) T-235 varsayılanıyla aynı (`testDefaultPathIsUnchanged`: karar `ChromaDecision(knob: .unset, applied: .yuv420, reason: nil)` ile eşit).
+  - Yalnız `chroma` değişimi: `displayMode` aynı → `DisplayReuse` `.reuse`, mevcut `wanted != live.settings` yolu yeni `config_id` + `STREAM_CONFIG` (içerik aynı, yalnız id) + video kapatma; yakalama biçimi kodlayıcının uyguladığı moddan (`capturePixelFormat`).
+  - Kayıt: `[fps, scale, bitrate, dw, dh, dynamic_range, chroma]`; `chroma ≠ 0` iken 7 değer (o zaman `dynamic_range` 0 da olsa yazılır). Eski build 7 değerli kaydı yok sayar (mod varsayılanı; T-237'deki 6 değer kuralıyla aynı).
+- **Test edilmeyenler (cihaz / orkestratör):**
+  - Canlı host'ta tablet `chroma=1` gönderince: `stream_prefs chroma=sharp requested_chroma=1` → `stream_reconfigure … chroma=normal->sharp` (`display_recreate` olmamalı) → `encoder ev=chroma_config requested=sharp_nearest applied=sharp_nearest source=prefs … chroma_loc=1` ve 10 sn'de `video ev=chroma_stats mode=sharp_nearest`. Kapatınca `chroma=sharp->normal`, `source=default`. İstemci T-241 gerektirir.
+  - Yeniden bağlanınca hatırlanan tercihle doğrudan keskin yol (`stream_session from_stored=true`, ilk `STREAM_PREFS` değişiklik yapmamalı).
+  - HDR10 + tercih açık: `chroma_config … applied=420 source=default`, `stream_prefs … chroma=normal requested_chroma=1`; toggle'da yeniden yapılandırma olmamalı.
+  - Gerçek SCK `BGRA` yakalaması / Metal geçişi T-235 cihaz denemesinde (2026-10-05) çalıştı; burada yeniden denenmedi.
+- **Açık sorular:**
+  - HDR'de tablet tercihinin `chroma_config`'te `reason=hdr source=prefs` olarak görünmesi istenirse, ham tercihin `VideoSettings` eşitliğinin dışında taşınması gerekir (şimdilik `stream_prefs` satırında). Orkestratör karar verir.
+  - `docs/KNOBS.md` #44'ün son sütunu ("kart B (karar)") eski; karar 0033 verildi, satırın "kalıcı mı" sütunu orkestratörce güncellenebilir.
