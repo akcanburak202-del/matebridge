@@ -8,4 +8,4 @@
 38 07        # u16 display_width_px = 1848
 be 04        # u16 display_height_px = 1214
 01           # u8 dynamic_range = 1 (HDR10)
-00           # u8 reserved = 0
+00           # u8 chroma = 0 (normal (ignored under HDR10))

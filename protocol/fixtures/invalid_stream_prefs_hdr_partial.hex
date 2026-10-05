@@ -7,4 +7,4 @@
 00 00 00 00  # u32 bitrate_kbps = 0
 00 00        # u16 display_width_px = 0
 00 00        # u16 display_height_px = 0
-01           # u8 dynamic_range = 1 (reserved byte missing)
+01           # u8 dynamic_range = 1 (chroma byte missing)
