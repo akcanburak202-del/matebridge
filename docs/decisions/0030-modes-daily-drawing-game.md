@@ -36,3 +36,10 @@ Bugün beş görüntü modu var (`StreamMode`): Netlik (60, tam), Akıcı (120, 
 - **Çizim'de "parmak kapalı" = yalnız hareketler** (`FingerPolicy.GESTURES_ONLY`): tek parmak hiçbir şey göndermez (tıklama/sürükleme yok, avuç tıklamaz); **iki parmak sıkıştırma ve iki parmak kaydırma** Mac'e gider (tuvali yakınlaştırma/kaydırma). Kullanıcının kayıtlı "Parmak dokunmasını tamamen kapat" ayarı açıksa Çizim'de de her şey kapalı kalır.
 - **Katman yalnız kendi ayarlarını geçici tutar:** Çizim'de ses ve kalem izi/noktası, Oyun'da parmak ayarı değiştirilirse kalıcı kaydedilir; geçici olan yalnız o modun üstüne bindiği ayarlardır (0014 §3).
 - **Camda kalan parmak kuralı (tüm modlar):** izlenmeyen bir parmak hâlâ camdayken (ör. avuç) yeni dokunuş tıklama ya da hareket başlatmaz; tüm parmaklar kalkınca dokunma normale döner.
+
+## Ek (2026-10-05, T-245): deneysel 2800×1840, yalnız Oyun 60
+
+- Oyun çözünürlüğü listesine **2800×1840 (deneysel)** eklenir: 1x oyun ekranı panelin tam boyutunda (STREAM_PREFS `display_*` = 2800×1840; 0029 host kuralı `w ≤ screen_width` ile kabul eder). Gerekçe: Oyun 60'ta 2800×1840 çözme ~14 ms (60 fps bütçesinin ~%85'i, NOTES 2026-10-05 ~14:30); 120 fps'e yetmez.
+- **Yalnız Oyun 60'ta geçerli.** Oyun 120'de (ya da Oyun 120'ye geçince) etkin boyut **2240×1472** olur; kayıtlı seçim korunur, 60'a dönünce 2800×1840 geri gelir. 60↔120 değişimi `fps` ile `display_*`'ı aynı tek STREAM_PREFS'te gönderir (ekran bir kez yeniden kurulur).
+- Panel: Oyun 60'ta "2800×1840 (deneysel)"; Oyun 120'de düğme gri "2800×1840 (yalnız 60 fps)", dokunma bir şey yapmaz ve seçili görünen etkin 2240×1472'dir; Oyun dışında (panel Oyun'un kare hızını bilmez) "2800×1840 (deneysel, yalnız 60 fps)" seçilebilir, sonraki Oyun girişinde kurala göre uygulanır.
+- Tel biçimi ve host değişmez.

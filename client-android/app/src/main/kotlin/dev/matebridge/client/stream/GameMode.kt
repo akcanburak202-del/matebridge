@@ -167,8 +167,13 @@ class GameModeSettings(
     /** The "Kare hızı" [mode] runs at: its stored choice or default, Çizim always 120. */
     fun fps(mode: StreamMode): Int = settings.modeFps(mode)
 
-    /** The game display [mode] asks for: the stored "Oyun çözünürlüğü" in Oyun, null (native display) otherwise. */
-    fun display(mode: StreamMode): GameResolution? = if (mode.isGame && gameDisplay) settings.gameResolution() else null
+    /**
+     * The game display [mode] asks for: the stored "Oyun çözünürlüğü" in Oyun at its effective size for the mode's frame
+     * rate (T-245: the experimental 2800×1840 only at 60, else 2240×1472; the stored choice is kept), null (native
+     * display) otherwise.
+     */
+    fun display(mode: StreamMode): GameResolution? =
+        if (mode.isGame && gameDisplay) settings.gameResolution().effectiveAt(fps(mode)) else null
 
     /** The stored "HDR" setting (decision 0032), regardless of mode or capability. */
     val hdrSetting: Boolean get() = settings.hdrGame()
@@ -230,11 +235,14 @@ class GameModeSettings(
 
     /**
      * Stores the "Oyun çözünürlüğü" choice; returns the complete STREAM_PREFS to send when it changes what [mode] asks
-     * for (Oyun with the game display on), else null (nothing to send; the next Oyun entry uses it).
+     * for (Oyun with the game display on, and a different effective size), else null (nothing to send; the next Oyun
+     * entry uses it). T-245: 2800×1840 picked in Oyun 120 is stored but sends nothing (it still asks for 2240×1472).
      */
     fun selectGameResolution(r: GameResolution, mode: StreamMode): StreamPrefs? {
+        val before = display(mode)
         settings.setGameResolution(r)
-        return if (display(mode) != null) prefs(mode) else null
+        val after = display(mode)
+        return if (after != null && after != before) prefs(mode) else null
     }
 
     companion object {

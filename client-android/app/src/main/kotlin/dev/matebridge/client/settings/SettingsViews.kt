@@ -71,10 +71,12 @@ class SettingsViews(
             title.text = item.titleText() // T-109: "(oyun modu)" comes and goes with game mode
             val enabled = item.enabled() // T-238: grey row, e.g. "HDR (Bu cihazda yok)"
             title.setTextColor(if (enabled) TEXT_COLOR else DISABLED_COLOR)
-            for (b in buttons) { b.isEnabled = enabled; b.alpha = if (enabled) 1f else DISABLED_ALPHA }
             val sel = item.selected()
             for ((i, b) in buttons.withIndex()) {
                 val o = item.options[i]
+                val optionEnabled = enabled && o.enabled() // T-245: one grey option, e.g. "2800×1840 (yalnız 60 fps)"
+                b.isEnabled = optionEnabled
+                b.alpha = if (optionEnabled) 1f else DISABLED_ALPHA
                 b.text = o.label // T-242: e.g. "Otomatik (60 Mbps)" inside a mode layer
                 val on = o.id == sel
                 b.isSelected = on // the background's state_selected entry turns it blue (T-107)

@@ -175,9 +175,13 @@ sealed interface SettingItem {
         fun titleText() = title + marker()
     }
 
-    /** One button; its label is read through [labelOf] so a refresh can change it (T-242: "Otomatik (60 Mbps)"). */
-    class Option(val id: String, private val labelOf: () -> String) {
-        constructor(id: String, label: String) : this(id, { label })
+    /**
+     * One button; its label is read through [labelOf] so a refresh can change it (T-242: "Otomatik (60 Mbps)").
+     * [enabled] (T-245) is false while this one button is grey and does nothing (the row's [Choice.enabled] also applies),
+     * e.g. "2800×1840 (yalnız 60 fps)" in Oyun 120.
+     */
+    class Option(val id: String, val enabled: () -> Boolean = { true }, private val labelOf: () -> String) {
+        constructor(id: String, label: String) : this(id, labelOf = { label })
 
         val label: String get() = labelOf()
     }
@@ -220,6 +224,12 @@ object SettingsCatalog {
 
     /** T-215: only Oyun uses it (the other modes run the native 2800×1840 HiDPI display). */
     const val GAME_RESOLUTION_TITLE = "Oyun çözünürlüğü"
+
+    /**
+     * T-245: Oyun's frame rate as far as the panel knows it: the current rate in Oyun, null elsewhere (the host only
+     * exposes the current mode's rate; [GameResolution.panelLabel] then names both conditions).
+     */
+    fun gameFps(h: SettingsHost): Int? = if (h.streamMode.isGame) h.frameRate else null
 
     /** T-223: the frame rate of the current mode (decision 0030 §2). */
     const val FRAME_RATE_TITLE = "Kare hızı"
@@ -288,9 +298,15 @@ object SettingsCatalog {
                 add(
                     SettingItem.Choice(
                         "game_resolution", GAME_RESOLUTION_TITLE,
-                        GameResolution.entries.map { SettingItem.Option(it.id, it.label) },
-                        { h.gameResolution.id },
-                    ) { id -> h.selectGameResolution(GameResolution.parse(id)) },
+                        // T-245: "2800×1840 (deneysel)" only in Oyun 60; grey "(yalnız 60 fps)" in Oyun 120.
+                        GameResolution.entries.map { r ->
+                            SettingItem.Option(r.id, enabled = { GameResolution.panelEnabled(r, gameFps(h)) }) { r.panelLabel(gameFps(h)) }
+                        },
+                        { GameResolution.panelSelected(h.gameResolution, gameFps(h)).id },
+                    ) { id ->
+                        val r = GameResolution.parse(id)
+                        if (GameResolution.panelEnabled(r, gameFps(h))) h.selectGameResolution(r)
+                    },
                 )
                 add(
                     SettingItem.Choice(
