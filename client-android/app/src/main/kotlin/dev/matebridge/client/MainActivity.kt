@@ -75,6 +75,10 @@ import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.HdrRequestLog
+import dev.matebridge.client.stream.HzPin
+import dev.matebridge.client.stream.HzPinHint
+import dev.matebridge.client.stream.HzPinResult
+import dev.matebridge.client.stream.HzSwitchCounter
 import dev.matebridge.client.stream.SharpChromaPolicy
 import dev.matebridge.client.stream.SharpChromaStore
 import dev.matebridge.client.protocol.StreamPrefs
@@ -267,6 +271,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var bufferFixedBy: GameJitter.Source? = null
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
+    /** T-243: the `hz_pin` hints currently applied (empty = none; always empty without `--es hz_pin`). */
+    private var hzPinApplied: List<HzPinHint> = emptyList()
+    /** T-243: `display_rate` switches in the stats log window (`MB/render ev=stats hz_switches=`). */
+    private val hzSwitches = HzSwitchCounter()
     private val vsyncGaps = IntervalHistogram()
     private val vsyncGapsLog = IntervalHistogram() // T-141: the log window's vsync gaps (fed per second from vsyncGaps)
     private val refreshMismatch = RefreshMismatch() // T-169: target vs measured refresh, fed per second
@@ -756,6 +764,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         noteInputActivity()
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && HzPin.reapplies(hzPinApplied)) setSurfaceFrameRate(true, log = false) // T-243
         try {
             return routeToCapture(ev) || super.dispatchTouchEvent(ev)
         } finally {
@@ -1454,6 +1463,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Choreographer.getInstance().postFrameCallback(vsyncCallback)
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(displayListener, ui)
         rateDebouncer = DisplayRateDebouncer()
+        hzSwitches.restart()
         ui.removeCallbacks(rateTicker)
         ui.post(rateTicker)
     }
@@ -1469,6 +1479,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 rateDebouncer.observe(hz, SystemClock.elapsedRealtime())?.let {
                     controller.setDisplayRate(it)
                     MbLog.i("display_rate", "hz=$it", "render")
+                    hzSwitches.observe(it) // T-243
+                    if (HzPin.reapplies(hzPinApplied)) setSurfaceFrameRate(true, log = false) // T-243
                 }
             }
             ui.postDelayed(this, RATE_POLL_MS)
@@ -1533,7 +1545,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     @Suppress("DEPRECATION")
     private fun applyRefreshRate() {
         val target = FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0)
-        if (target <= 0 || (modeApplied && appliedModeHz == target)) return
+        val pin = HzPin.plan(devKnobs.hzPin, streamMode.isGame, streamConfig?.fps ?: 0) // T-243: empty unless `hz_pin`
+        if (target <= 0) { clearHzPin(); return }
+        if (modeApplied && appliedModeHz == target && pin == hzPinApplied) return
         val d = windowManager.defaultDisplay
         val cur = d.mode
         val all = d.supportedModes.map { DisplayModeInfo(it.modeId, it.physicalWidth, it.physicalHeight, it.refreshRate) }
@@ -1547,11 +1561,57 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 all.joinToString(",") { "${it.id}:${it.refreshHz.roundToInt()}" },
             "render",
         )
-        if (pick == null) return
+        if (pick == null) { clearHzPin(); return }
         modeApplied = true
         appliedModeHz = target
-        window.attributes = window.attributes.also { it.preferredDisplayModeId = pick.id }
+        val was = hzPinApplied
+        val results = ArrayList<Pair<HzPinHint, HzPinResult>>()
+        window.attributes = window.attributes.also {
+            it.preferredDisplayModeId = pick.id
+            if (pin.isNotEmpty()) results += applyHzPinHints(it, pin, HzPin.PIN_HZ.toFloat())
+            else if (was.isNotEmpty()) applyHzPinHints(it, was, 0f)
+        }
+        hzPinApplied = pin
+        if (pin.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, true, results) + hzPinVendorFields(pin), "render")
+        else if (was.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
         setSurfaceFrameRate(true) // vsync period follows via DisplayListener once the mode settles
+    }
+
+    /**
+     * T-243: writes the window hints of [hints] into [lp] ([rate] 0 = clear). [HzPinHint.HW_LP] only looks (nothing is
+     * written) and [HzPinHint.REAPPLY] acts on rate changes and touch starts, so both just report here.
+     */
+    private fun applyHzPinHints(lp: WindowManager.LayoutParams, hints: List<HzPinHint>, rate: Float): List<Pair<HzPinHint, HzPinResult>> =
+        hints.map { h ->
+            h to when (h) {
+                HzPinHint.LP_RATE -> HzPin.setFloatField(lp, HzPin.FIELD_PREFERRED_REFRESH_RATE, rate)
+                HzPinHint.LP_MINMAX -> HzPin.setMinMax(lp, rate)
+                HzPinHint.HW_LP -> HzPin.vendorResult(HzPin.vendorFields(WindowManager.LayoutParams::class.java), hwLayoutParamsExPresent())
+                HzPinHint.REAPPLY -> if (Build.VERSION.SDK_INT >= 30) HzPinResult.OK else HzPinResult.MISSING
+            }
+        }
+
+    /** T-243: ` hw_fields=<names>|- hw_ex=0|1` when [HzPinHint.HW_LP] is in [pin], else empty. Class metadata only. */
+    private fun hzPinVendorFields(pin: List<HzPinHint>): String {
+        if (HzPinHint.HW_LP !in pin) return ""
+        val names = HzPin.vendorFields(WindowManager.LayoutParams::class.java)
+        return " hw_fields=${HzPin.fieldList(names)} hw_ex=${if (hwLayoutParamsExPresent()) 1 else 0}"
+    }
+
+    private fun hwLayoutParamsExPresent(): Boolean = try {
+        Class.forName(HzPin.HW_LAYOUT_PARAMS_EX, false, classLoader)
+        true
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** T-243: removes applied `hz_pin` window hints (no-op without them, so the default path makes no extra call). */
+    private fun clearHzPin() {
+        val was = hzPinApplied
+        if (was.isEmpty()) return
+        hzPinApplied = emptyList()
+        window.attributes = window.attributes.also { applyHzPinHints(it, was, 0f) }
+        MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
     }
 
     private fun releaseRefreshRate() {
@@ -1559,10 +1619,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         modeApplied = false
         appliedModeHz = 0
         setSurfaceFrameRate(false)
-        window.attributes = window.attributes.also { it.preferredDisplayModeId = 0 }
+        val was = hzPinApplied
+        hzPinApplied = emptyList()
+        window.attributes = window.attributes.also {
+            it.preferredDisplayModeId = 0
+            if (was.isNotEmpty()) applyHzPinHints(it, was, 0f) // T-243
+        }
+        if (was.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
     }
 
-    private fun setSurfaceFrameRate(on: Boolean) {
+    /** [log] false: T-243 re-issues (every touch start / rate change) do not write `ev=set_frame_rate`. */
+    private fun setSurfaceFrameRate(on: Boolean, log: Boolean = true) {
         if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
         // T-046: always an explicit FIXED_SOURCE request at the stream fps (the `frate` override went with the GL path,
         // T-184). On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
@@ -1576,7 +1643,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } else {
                 sf.setFrameRate(if (on) rate else 0f, compat)
             }
-            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
+            if (on && log) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
         } catch (e: Exception) {
             MbLog.w("set_frame_rate_failed", "err=${e.javaClass.simpleName}", "render")
         }
@@ -1694,6 +1761,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val s = r.stats.logSnapshot(reset = true)
         val vg = vsyncGapsLog.summary(reset = true)
         val queueFields = r.queueStatsFields(reset = true)
+        val switches = hzSwitches.take() // T-243: always taken, so a skipped window does not carry over
         val write = interval >= 0 && StatsLogWindow.hasFrames(s)
         r.logPresent(write)
         if (!write) return
@@ -1723,7 +1791,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 StatsFormat.gapFields("shown", s.shown) + " " + StatsFormat.gapFields("dec", s.decode) +
                 " pace_d_us=${r.paceDUs()} " +
                 // T-168: latency stages from the capture stamp; latency_us= above is the deprecated alias (clamped mean).
-                StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()),
+                StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()) +
+                " hz_switches=$switches", // T-243
             "render",
         )
     }

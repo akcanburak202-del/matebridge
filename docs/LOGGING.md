@@ -450,6 +450,12 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
   - **Kullanımdan kalkan takma ad:** `hz=`, `display_hz=` ile aynı değerdir (tam sayıya yuvarlanır). Bir sürüm daha yazılır, sonra kalkar. Satırın başında kalır, böylece basit `hz=` aramaları `target_hz=`'e takılmaz.
 - **`W render ev=refresh_mismatch target_hz=<n> measured_hz=<n.n> dur_ms=<n> stream_mode=<id>`**: akış sürerken saniyelik vsync medyanından hesaplanan hız (`1e6 / p50_us`) hedeften ±%10'dan fazla saptı ve bu durum 5 sn'den uzun sürdü. Her sapma dönemi için bir satır yazılır, iki satır arasında en az 60 sn olur. Dönem 60 sn sınırı içinde başladıysa satır, sınır dolduğunda sapma hâlâ sürüyorsa yazılır. `dur_ms`, satır yazılana kadar geçen süredir. `target_hz=0`, akışsız zaman ve ölçümsüz saniyeler (vsync döngüsü uykuda) satır üretmez. Ölçümsüz boşluk 3 sn'yi geçerse ya da hedef değişirse dönem yeniden başlar.
 - Ölçüm notu: "60 Hz" ölçümü için içerik yalnız klavyeyle sürülmelidir. Kalem, dokunma ve trackpad paneli 120 Hz'e çıkarır (PF3).
+- **`hz_switches=<n>`** (T-243): `MB/render ev=stats` satırının **sonunda**, her zaman. Log penceresi (varsayılan 10 sn) içinde debounced `ev=display_rate` raporlarının kaç kez değiştiği (60→120 ve 120→60 ayrı sayılır). Bir vsync çalışmasının ilk raporu geçiş sayılmaz. Kare olmayan (yazılmayan) pencerenin sayısı sonrakine taşınmaz.
+- **`I render ev=hz_pin variant=<off|lp|all> state=<on|off> applied=<ipucu>:<ok|missing|error>,…|- [hw_fields=<ad>,…|- hw_ex=0|1]`** (T-243 deneyi, `--ez dev true --es hz_pin lp|all`): yalnız Oyun + akış 60 fps'te, ek 60 Hz ipuçları uygulandığında (`state=on`) ya da kaldırıldığında (`state=off`, `applied=-`) bir satır. Varsayılan `off`'ta hiç yazılmaz. İpuçları:
+  - `lp_rate`: `WindowManager.LayoutParams.preferredRefreshRate = 60` (`preferredDisplayModeId` ile aynı atamada).
+  - `lp_minmax`: `preferredMinDisplayRefreshRate` / `preferredMaxDisplayRefreshRate = 60` (API 34 alanları, yansıma; API 31 tablette `missing` beklenir).
+  - `hw_lp` (yalnız `all`): yalnız okuyan keşif, hiçbir şey yazılmaz. `LayoutParams`'ta AOSP dışı `refresh|framerate|fps|hz` adlı public alanlar (`hw_fields=`) ve `com.huawei.android.view.LayoutParamsEx` sınıfı (`hw_ex=`). Biri varsa `ok`.
+  - `reapply` (yalnız `all`): `Surface.setFrameRate` her `ev=display_rate` raporunda ve her dokunma başlangıcında (`ACTION_DOWN`) yeniden verilir. Bu tekrarlar `ev=set_frame_rate` satırı yazmaz.
 
 ## Kaldırılan istemci deney olayları (T-183, karar 0026)
 
