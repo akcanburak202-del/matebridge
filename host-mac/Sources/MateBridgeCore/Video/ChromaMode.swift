@@ -47,8 +47,9 @@ public struct ChromaKnob: Equatable, Sendable {
     public static let envKey = "MATEBRIDGE_CHROMA"
 
     public let requested: ChromaMode
-    /// The variable is present and not empty (also when invalid). The `chroma_config` / `chroma_stats` lines and the
-    /// `encoder_config` `chroma=` field appear only then, so the default path logs exactly what it logged before.
+    /// The variable is present and not empty (also when invalid). It then wins over the tablet's `STREAM_PREFS.chroma`
+    /// (T-240, `ChromaPolicy`). The `encoder_config` `chroma=` field appears only then; `chroma_stats` also while the
+    /// sharp path runs (`ChromaDecision.statsEnabled`).
     public let isSet: Bool
     /// Set to something other than the four values (treated as `420`).
     public let invalid: Bool
@@ -87,43 +88,74 @@ public enum ChromaFallbackReason: String, Equatable, Sendable {
     case hdr
 }
 
+/// Where the requested chroma mode came from (`ev=chroma_config source=`, T-240).
+public enum ChromaSource: String, Equatable, Sendable {
+    /// `MATEBRIDGE_CHROMA` is set (developer knob, wins over the tablet; an invalid value counts as set: `420`).
+    case env
+    /// The tablet's `STREAM_PREFS.chroma = 1` (decision 0033): `sharp_nearest`.
+    case prefs
+    /// Neither: today's `420` path.
+    case `default`
+}
+
 /// The requested and the applied chroma mode of one encoder session.
 public struct ChromaDecision: Equatable, Sendable {
     public let knob: ChromaKnob
+    public let source: ChromaSource
+    public let requested: ChromaMode
     public let applied: ChromaMode
     public let reason: ChromaFallbackReason?
 
-    public init(knob: ChromaKnob, applied: ChromaMode, reason: ChromaFallbackReason?) {
+    public init(knob: ChromaKnob, source: ChromaSource, requested: ChromaMode, applied: ChromaMode,
+                reason: ChromaFallbackReason?) {
         self.knob = knob
+        self.source = source
+        self.requested = requested
         self.applied = applied
         self.reason = reason
     }
 
-    public var requested: ChromaMode { knob.requested }
+    /// A knob-only decision (no tablet preference): source `env` when the knob is set, `default` otherwise.
+    public init(knob: ChromaKnob, applied: ChromaMode, reason: ChromaFallbackReason?) {
+        self.init(knob: knob, source: knob.isSet ? .env : .default, requested: knob.requested, applied: applied,
+                  reason: reason)
+    }
 
     /// The same request falling back to `420` for `reason`.
     public func fallingBack(_ reason: ChromaFallbackReason) -> ChromaDecision {
-        ChromaDecision(knob: knob, applied: .yuv420, reason: reason)
+        ChromaDecision(knob: knob, source: source, requested: requested, applied: .yuv420, reason: reason)
     }
 
-    /// Whether the knob lines (`chroma_config`, `chroma_stats`) are written.
-    public var logsEnabled: Bool { knob.isSet }
+    /// Whether `video ev=chroma_stats` is written: while the developer knob is set (T-235, any value, so `420` gives
+    /// a baseline) or the sharp path runs. `ev=chroma_config` is written for every session (T-240).
+    public var statsEnabled: Bool { knob.isSet || applied.sharpUpsample != nil }
 }
 
 public enum ChromaPolicy {
-    /// The mode to apply before any session exists: `444` needs HEVC and the fast profile; the sharp modes and `420`
-    /// work with every codec and profile (their encoder input stays `420f`). An HDR10 stream (T-237, decision 0032)
-    /// ignores the knob: applied `420` (the 10-bit PQ 4:2:0 path), and a set knob is logged with `reason=hdr`. SDR
-    /// resolves exactly as before.
-    public static func resolve(knob: ChromaKnob, codec: Codec, profile: EncoderProfile,
-                               dynamicRange: DynamicRange = .sdr) -> ChromaDecision {
-        if dynamicRange == .hdr10 {
-            return ChromaDecision(knob: knob, applied: .yuv420, reason: knob.isSet ? .hdr : nil)
+    /// The tablet's choice maps to T-235's best-rated mode (decision 0033).
+    public static let sharpPreferenceMode = ChromaMode.sharpNearest
+
+    /// The mode to apply before any session exists. Input priority (T-240): `MATEBRIDGE_CHROMA` (set, also invalid) >
+    /// `preference` (`STREAM_PREFS.chroma = 1` -> `sharp_nearest`) > `420`. `444` (knob only) needs HEVC and the fast
+    /// profile; the sharp modes and `420` work with every codec and profile (their encoder input stays `420f`). An
+    /// HDR10 stream (T-237, decision 0032) ignores every request: applied `420` (the 10-bit PQ 4:2:0 path), logged
+    /// with `reason=hdr` unless nothing was requested. Without a preference SDR resolves exactly as in T-235.
+    public static func resolve(knob: ChromaKnob, preference: ChromaPreference = .normal, codec: Codec,
+                               profile: EncoderProfile, dynamicRange: DynamicRange = .sdr) -> ChromaDecision {
+        let source: ChromaSource = knob.isSet ? .env : (preference == .sharp ? .prefs : .default)
+        let requested: ChromaMode = switch source {
+        case .env: knob.requested
+        case .prefs: sharpPreferenceMode
+        case .default: .yuv420
         }
-        guard knob.requested == .yuv444 else { return ChromaDecision(knob: knob, applied: knob.requested, reason: nil) }
-        if codec != .hevc { return ChromaDecision(knob: knob, applied: .yuv420, reason: .codec) }
-        if profile == .llrc { return ChromaDecision(knob: knob, applied: .yuv420, reason: .llrc) }
-        return ChromaDecision(knob: knob, applied: .yuv444, reason: nil)
+        func decision(_ applied: ChromaMode, _ reason: ChromaFallbackReason?) -> ChromaDecision {
+            ChromaDecision(knob: knob, source: source, requested: requested, applied: applied, reason: reason)
+        }
+        if dynamicRange == .hdr10 { return decision(.yuv420, source == .default ? nil : .hdr) }
+        guard requested == .yuv444 else { return decision(requested, nil) }
+        if codec != .hevc { return decision(.yuv420, .codec) }
+        if profile == .llrc { return decision(.yuv420, .llrc) }
+        return decision(.yuv444, nil)
     }
 }
 
@@ -147,14 +179,14 @@ public struct ChromaBitstreamInfo: Equatable, Sendable {
     }
 }
 
-/// `encoder ev=chroma_config` (T-235): one line per parameter-set announcement while `MATEBRIDGE_CHROMA` is set.
+/// `encoder ev=chroma_config` (T-235, T-240): one line per parameter-set announcement of every session.
 public enum ChromaConfigLog {
     public static let event = "chroma_config"
 
-    /// `requested=<m> applied=<m> [reason=<r>|invalid_value] chroma_format_idc=<n|unknown> profile_idc=<n|unknown>
-    /// vui_full_range=<0|1|unknown> chroma_loc=<n|unset|unknown> [mismatch=1]`. `W` when the request was not applied,
-    /// the knob was invalid, or the SPS chroma format differs from the applied mode's (e.g. VideoToolbox silently
-    /// encoding 4:2:0); `I` otherwise.
+    /// `requested=<m> applied=<m> [reason=<r>|invalid_value] source=env|prefs|default chroma_format_idc=<n|unknown>
+    /// profile_idc=<n|unknown> vui_full_range=<0|1|unknown> chroma_loc=<n|unset|unknown> [mismatch=1]`. `W` when the
+    /// request was not applied, the knob was invalid, or the SPS chroma format differs from the applied mode's (e.g.
+    /// VideoToolbox silently encoding 4:2:0); `I` otherwise.
     public static func line(_ d: ChromaDecision, _ info: ChromaBitstreamInfo) -> (level: LogLevel, fields: String) {
         var f = "requested=\(d.requested.rawValue) applied=\(d.applied.rawValue)"
         if let r = d.reason {
@@ -162,6 +194,7 @@ public enum ChromaConfigLog {
         } else if d.knob.invalid {
             f += " reason=invalid_value"
         }
+        f += " source=\(d.source.rawValue)"
         f += " chroma_format_idc=\(info.chromaFormatIdc.map(String.init) ?? "unknown")"
         f += " profile_idc=\(info.profileIdc.map(String.init) ?? "unknown")"
         f += " vui_full_range=\(info.vuiFullRange.map { $0 ? "1" : "0" } ?? "unknown")"
@@ -174,7 +207,8 @@ public enum ChromaConfigLog {
     }
 }
 
-/// `video ev=chroma_stats` (T-235): a 10 s window of the chroma path's timings while `MATEBRIDGE_CHROMA` is set.
+/// `video ev=chroma_stats` (T-235): a 10 s window of the chroma path's timings while `ChromaDecision.statsEnabled`
+/// (`MATEBRIDGE_CHROMA` set, or the sharp path chosen by the tablet).
 /// Samples are bounded (`maxSamples` per series; later samples in a window are counted, not kept).
 public struct ChromaStatsWindow: Sendable {
     public static let windowUs: UInt64 = 10_000_000

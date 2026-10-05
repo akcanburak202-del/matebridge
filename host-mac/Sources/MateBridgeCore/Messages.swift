@@ -362,21 +362,27 @@ public struct StreamPrefs: Equatable, Sendable {
     public var displayWidthPx: UInt16
     public var displayHeightPx: UInt16
     /// Second optional group (decision 0032): the raw `dynamic_range` (0 SDR, 1 HDR10; the host counts any other
-    /// value as 0, see `normalized`). Absent on the wire = 0; written (with `reserved = 0`) only when non-zero.
+    /// value as 0, see `normalized`). Absent on the wire = 0.
     public var dynamicRange: UInt8
+    /// Same group (decision 0033, the former `reserved` byte): the raw `chroma` (0 normal 4:2:0, 1 sharp colour edges;
+    /// the host counts any other value as 0). Absent on the wire = 0. The group is written only when `dynamicRange`
+    /// or `chroma` is non-zero.
+    public var chroma: UInt8
 
     public init(fps: UInt16, scalePermille: UInt16, bitrateKbps: UInt32 = 0,
-                displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0, dynamicRange: UInt8 = 0) {
+                displayWidthPx: UInt16 = 0, displayHeightPx: UInt16 = 0, dynamicRange: UInt8 = 0,
+                chroma: UInt8 = 0) {
         self.fps = fps
         self.scalePermille = scalePermille
         self.bitrateKbps = bitrateKbps
         self.displayWidthPx = displayWidthPx
         self.displayHeightPx = displayHeightPx
         self.dynamicRange = dynamicRange
+        self.chroma = chroma
     }
 
-    /// What the host honours: fps in {60, 120, 144} (anything else is 60), scale clamped to 500...1000 and
-    /// `dynamicRange` in {0, 1} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
+    /// What the host honours: fps in {60, 120, 144} (anything else is 60), scale clamped to 500...1000, and
+    /// `dynamicRange` and `chroma` in {0, 1} (anything else is 0, PROTOCOL.md 0x05). `bitrateKbps` and
     /// `displayWidthPx`/`displayHeightPx` are carried through unchanged (the game display size is validated by the
     /// host's policy, not here).
     public var normalized: StreamPrefs {
@@ -384,23 +390,28 @@ public struct StreamPrefs: Equatable, Sendable {
         let s = min(max(Int(scalePermille), Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
         return StreamPrefs(fps: f, scalePermille: UInt16(s), bitrateKbps: bitrateKbps,
                            displayWidthPx: displayWidthPx, displayHeightPx: displayHeightPx,
-                           dynamicRange: DynamicRange(wire: dynamicRange).rawValue)
+                           dynamicRange: DynamicRange(wire: dynamicRange).rawValue,
+                           chroma: ChromaPreference(wire: chroma).rawValue)
     }
 
     /// The requested dynamic range as the host reads it (unknown values are SDR).
     public var requestedDynamicRange: DynamicRange { DynamicRange(wire: dynamicRange) }
 
+    /// The requested chroma path as the host reads it (unknown values are normal).
+    public var requestedChroma: ChromaPreference { ChromaPreference(wire: chroma) }
+
     func write(_ w: inout ByteWriter) {
         w.u16(fps)
         w.u16(scalePermille)
         w.u32(bitrateKbps)
-        if displayWidthPx != 0 || displayHeightPx != 0 || dynamicRange != 0 {
+        let rangeGroup = dynamicRange != 0 || chroma != 0
+        if displayWidthPx != 0 || displayHeightPx != 0 || rangeGroup {
             w.u16(displayWidthPx)
             w.u16(displayHeightPx)
         }
-        if dynamicRange != 0 {
+        if rangeGroup {
             w.u8(dynamicRange)
-            w.u8(0)
+            w.u8(chroma)
         }
     }
 
@@ -414,7 +425,7 @@ public struct StreamPrefs: Equatable, Sendable {
         }
         if r.remaining > 0 {
             prefs.dynamicRange = try r.u8()
-            try r.skip(1)
+            prefs.chroma = try r.u8()
         }
         return prefs
     }
@@ -431,6 +442,20 @@ public enum DynamicRange: UInt8, Equatable, Sendable {
 
     /// Log value: `sdr` / `hdr10`.
     public var logName: String { self == .sdr ? "sdr" : "hdr10" }
+}
+
+/// `STREAM_PREFS.chroma` as the host reads it (decision 0033).
+public enum ChromaPreference: UInt8, Equatable, Sendable {
+    /// Today's 4:2:0 path.
+    case normal = 0
+    /// Sharp colour edges: luma-adjusted 4:2:0 (T-235 `sharp_nearest`). Ignored while HDR10 is applied.
+    case sharp = 1
+
+    /// A wire value: unknown values are normal (PROTOCOL.md 0x05).
+    public init(wire: UInt8) { self = ChromaPreference(rawValue: wire) ?? .normal }
+
+    /// Log value: `normal` / `sharp`.
+    public var logName: String { self == .normal ? "normal" : "sharp" }
 }
 
 /// `SETTINGS_OPEN` (H->C, docs/PROTOCOL.md 0x08): asks the tablet to show its settings panel while streaming

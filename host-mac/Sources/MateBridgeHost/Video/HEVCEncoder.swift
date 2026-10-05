@@ -97,7 +97,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastStampUs: UInt64?
     /// The first input retag was logged (T-113). Guarded by `lock`.
     private var retagLogged = false
-    /// T-235 `chroma_stats` window; nil unless `MATEBRIDGE_CHROMA` is set. Guarded by `lock`.
+    /// T-235 `chroma_stats` window; nil unless `chroma.statsEnabled` (knob set, or the sharp path runs). Guarded by
+    /// `lock`.
     private var chromaStats: ChromaStatsWindow?
     /// The first failed Metal pass was logged. Guarded by `lock`.
     private var chromaFailureLogged = false
@@ -109,7 +110,8 @@ final class HEVCEncoder: @unchecked Sendable {
     let knobs: EncoderKnobs
     /// `kVTCompressionPropertyKey_Quality` was accepted (then `AverageBitRate` is not set).
     private(set) var qualityApplied = false
-    /// T-235 `MATEBRIDGE_CHROMA`: requested and applied chroma mode. Final once `init` returns.
+    /// T-235 `MATEBRIDGE_CHROMA` / T-240 `settings.chromaPreference`: requested and applied chroma mode. Final once
+    /// `init` returns.
     private(set) var chroma = ChromaDecision(knob: .unset, applied: .yuv420, reason: nil)
     /// The sharp-YUV Metal pass (`chroma.applied` is `sharp_*`); used on the owner queue only. Set in `init` only.
     private var chromaConverter: ChromaConverter?
@@ -194,8 +196,9 @@ final class HEVCEncoder: @unchecked Sendable {
         // T-235: `444` asks for the undocumented HEVC Main 4:4:4 profile (fast path only, `ChromaPolicy`); refused,
         // the session stays Main and capture stays 4:2:0. Every other mode sets exactly what it set before.
         // T-237: HDR10 wins over the chroma knob (`reason=hdr`, applied `420`): Main10, x420 PQ capture.
-        var chroma = ChromaPolicy.resolve(knob: knobs.chroma, codec: settings.codec, profile: profile,
-                                          dynamicRange: settings.dynamicRange)
+        // T-240: without the knob the tablet's `STREAM_PREFS.chroma = 1` asks for `sharp_nearest` (decision 0033).
+        var chroma = ChromaPolicy.resolve(knob: knobs.chroma, preference: settings.chromaPreference,
+                                          codec: settings.codec, profile: profile, dynamicRange: settings.dynamicRange)
         if chroma.applied == .yuv444 {
             if set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.main444ProfileLevel) != noErr {
                 set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
@@ -276,7 +279,7 @@ final class HEVCEncoder: @unchecked Sendable {
             }
         }
         self.chroma = chroma
-        if chroma.logsEnabled { chromaStats = ChromaStatsWindow(mode: chroma.applied, startUs: HostClock.nowUs()) }
+        if chroma.statsEnabled { chromaStats = ChromaStatsWindow(mode: chroma.applied, startUs: HostClock.nowUs()) }
 
         // Idle keyframe: a pending keyframe request with no new frames for ~1 s re-encodes the last buffer.
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.idle"))
@@ -340,7 +343,8 @@ final class HEVCEncoder: @unchecked Sendable {
         chroma.applied.captureFormat == .bgra ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
     }
 
-    /// T-235: the `chroma_stats` fields once its 10 s window is over; nil before, and always nil without the knob.
+    /// T-235: the `chroma_stats` fields once its 10 s window is over; nil before, and always nil unless
+    /// `chroma.statsEnabled`.
     func takeChromaStats(nowUs: UInt64) -> String? {
         lock.withLock { chromaStats?.take(nowUs: nowUs) }
     }
@@ -634,7 +638,7 @@ final class HEVCEncoder: @unchecked Sendable {
         let ok = status == noErr && sampleBuffer != nil
         if let sb = sampleBuffer, ok {
             meter?.recordEncoderOut(encodeTimeUs: encodeTimeUs)
-            if chroma.logsEnabled, !trace.resubmit, trace.encodedUs >= trace.deliveredUs {
+            if chroma.statsEnabled, !trace.resubmit, trace.encodedUs >= trace.deliveredUs {
                 lock.withLock { chromaStats?.recordEncoded(captureToEncodeUs: trace.encodedUs - trace.deliveredUs) }
             }
             handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
@@ -715,11 +719,10 @@ final class HEVCEncoder: @unchecked Sendable {
             let level = Self.levelIdc(sets, codec: settings.codec).map { String($0) } ?? "unknown"
             logSink(.info, "encoder_config", "codec=\(settings.codec.logName) profile=\(profileLogName) "
                     + "level_idc=\(level) sets=\(sets.count)")
-            if chroma.logsEnabled {
-                let info = ChromaBitstreamInfo.parse(parameterSets: sets, codec: settings.codec)
-                let line = ChromaConfigLog.line(chroma, info)
-                logSink(line.level, ChromaConfigLog.event, line.fields)
-            }
+            // T-240: every session, with `source=env|prefs|default`.
+            let info = ChromaBitstreamInfo.parse(parameterSets: sets, codec: settings.codec)
+            let line = ChromaConfigLog.line(chroma, info)
+            logSink(line.level, ChromaConfigLog.event, line.fields)
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 

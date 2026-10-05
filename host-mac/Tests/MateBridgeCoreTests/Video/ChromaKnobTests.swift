@@ -71,10 +71,10 @@ final class ChromaKnobTests: XCTestCase {
         XCTAssertEqual(ChromaMode.sharpNearest.expectedChromaFormatIdc, 1)
     }
 
-    func testLogsOnlyWhenSet() {
-        XCTAssertFalse(ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast).logsEnabled)
-        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("420"), codec: .hevc, profile: .fast).logsEnabled)
-        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("x"), codec: .hevc, profile: .fast).logsEnabled)
+    func testStatsOnlyWhenSetOrSharp() {
+        XCTAssertFalse(ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast).statsEnabled)
+        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("420"), codec: .hevc, profile: .fast).statsEnabled)
+        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("x"), codec: .hevc, profile: .fast).statsEnabled)
     }
 
     func testEncoderConfigFieldOnlyWhenSet() {
@@ -101,7 +101,7 @@ final class ChromaKnobTests: XCTestCase {
                                           parsed: true)
         var l = ChromaConfigLog.line(ok, info444)
         XCTAssertEqual(l.level, .info)
-        XCTAssertEqual(l.fields, "requested=444 applied=444 chroma_format_idc=3 profile_idc=4 vui_full_range=0 chroma_loc=unset")
+        XCTAssertEqual(l.fields, "requested=444 applied=444 source=env chroma_format_idc=3 profile_idc=4 vui_full_range=0 chroma_loc=unset")
 
         // VideoToolbox silently encoding 4:2:0 despite the 4:4:4 profile.
         l = ChromaConfigLog.line(ok, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 4, vuiFullRange: true,
@@ -113,26 +113,26 @@ final class ChromaKnobTests: XCTestCase {
         l = ChromaConfigLog.line(llrc, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
                                                            chromaSampleLocTop: nil, parsed: true))
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=444 applied=420 reason=llrc chroma_format_idc=1 profile_idc=1 "
+        XCTAssertEqual(l.fields, "requested=444 applied=420 reason=llrc source=env chroma_format_idc=1 profile_idc=1 "
                        + "vui_full_range=1 chroma_loc=unset")
 
         let sharp = ChromaPolicy.resolve(knob: .parse("sharp_bilinear"), codec: .hevc, profile: .fast)
         l = ChromaConfigLog.line(sharp, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
                                                             chromaSampleLocTop: 1, parsed: true))
         XCTAssertEqual(l.level, .info)
-        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=sharp_bilinear chroma_format_idc=1 profile_idc=1 "
-                       + "vui_full_range=1 chroma_loc=1")
+        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=sharp_bilinear source=env chroma_format_idc=1 "
+                       + "profile_idc=1 vui_full_range=1 chroma_loc=1")
 
         let invalid = ChromaPolicy.resolve(knob: .parse("zzz"), codec: .h264, profile: .fast)
         l = ChromaConfigLog.line(invalid, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 100))
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value chroma_format_idc=1 profile_idc=100 "
-                       + "vui_full_range=unknown chroma_loc=unknown")
+        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value source=env chroma_format_idc=1 "
+                       + "profile_idc=100 vui_full_range=unknown chroma_loc=unknown")
 
         l = ChromaConfigLog.line(sharp.fallingBack(.metalUnavailable), ChromaBitstreamInfo())
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=420 reason=metal_unavailable chroma_format_idc=unknown "
-                       + "profile_idc=unknown vui_full_range=unknown chroma_loc=unknown")
+        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=420 reason=metal_unavailable source=env "
+                       + "chroma_format_idc=unknown profile_idc=unknown vui_full_range=unknown chroma_loc=unknown")
     }
 
     func testStatsWindow() {

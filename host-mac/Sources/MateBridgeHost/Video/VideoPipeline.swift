@@ -325,7 +325,7 @@ public final class VideoPipeline: @unchecked Sendable {
     }
 
     /// T-235: `video ev=chroma_stats` fields once the encoder's 10 s window is over (call about once a second); nil
-    /// before that, without an encoder, and always without `MATEBRIDGE_CHROMA`.
+    /// before that, without an encoder, and always unless `MATEBRIDGE_CHROMA` is set or the sharp path runs (T-240).
     func takeChromaStats() -> String? { box.encoder?.takeChromaStats(nowUs: HostClock.nowUs()) }
 
     /// Colour tags the encoder session reports (VUI source), for diagnostics.

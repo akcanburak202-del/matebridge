@@ -40,7 +40,7 @@ final class HDRTests: XCTestCase {
         let p = prefs(fps: 120, scale: 1000, dr: 1)
         let bytes = try Message.streamPrefs(p).encode()
         XCTAssertEqual(bytes.count, 5 + 14)
-        XCTAssertEqual(Array(bytes[13...]), [0, 0, 0, 0, 1, 0], "display 0x0, dynamic_range 1, reserved 0")
+        XCTAssertEqual(Array(bytes[13...]), [0, 0, 0, 0, 1, 0], "display 0x0, dynamic_range 1, chroma 0")
         XCTAssertEqual(try decode(bytes), .streamPrefs(p))
     }
 
@@ -352,7 +352,7 @@ final class HDRTests: XCTestCase {
                 XCTAssertEqual(d.reason, .hdr, "\(raw) \(profile)")
                 XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange, "no BGRA / Metal pass")
                 XCTAssertNil(d.applied.sharpUpsample)
-                XCTAssertTrue(d.logsEnabled, "the ignored knob is still logged")
+                XCTAssertTrue(d.statsEnabled, "a set knob keeps its stats window")
                 let line = ChromaConfigLog.line(d, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 2,
                                                                       vuiFullRange: false, parsed: true))
                 XCTAssertTrue(line.fields.hasPrefix("requested=\(knob.requested.rawValue) applied=420 reason=hdr "),
@@ -365,7 +365,7 @@ final class HDRTests: XCTestCase {
         let unset = ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast, dynamicRange: .hdr10)
         XCTAssertEqual(unset.applied, .yuv420)
         XCTAssertNil(unset.reason)
-        XCTAssertFalse(unset.logsEnabled)
+        XCTAssertFalse(unset.statsEnabled)
         XCTAssertEqual(ChromaFallbackReason.hdr.rawValue, "hdr")
     }
 

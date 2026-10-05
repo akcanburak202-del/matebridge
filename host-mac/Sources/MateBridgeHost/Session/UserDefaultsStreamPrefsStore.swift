@@ -2,9 +2,10 @@ import Foundation
 import MateBridgeCore
 
 /// `StreamPrefsStoring` in UserDefaults:
-/// `{device hex: [fps, scale_permille, bitrate_kbps(, display_w, display_h(, dynamic_range))]}`
+/// `{device hex: [fps, scale_permille, bitrate_kbps(, display_w, display_h(, dynamic_range(, chroma)))]}`
 /// (`StreamPrefsStorageCodec`; the game display pair of T-214 only when set or followed by `dynamic_range`, which is
-/// written only for HDR10, T-237; pre-T-106 entries without the bitrate still load). The device id is not secret; at most `maxDevices` entries are kept.
+/// written only for HDR10 (T-237) or when `chroma` follows, written only for sharp chroma (T-240); pre-T-106 entries
+/// without the bitrate still load). The device id is not secret; at most `maxDevices` entries are kept.
 final class UserDefaultsStreamPrefsStore: StreamPrefsStoring, @unchecked Sendable {
     private static let key = "streamPrefsByDevice"
     private static let maxDevices = 16
