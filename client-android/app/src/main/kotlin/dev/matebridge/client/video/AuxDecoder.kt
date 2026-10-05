@@ -23,7 +23,11 @@ class AuxWatchdog(private val limitNs: Long = 2_000_000_000L) {
     /** A new codec instance starts at [nowNs]. */
     @Synchronized fun reset(nowNs: Long) { waitingSinceNs = 0; lastOutputNs = nowNs; inFlight = 0 }
 
+    /** Register BEFORE `queueInputBuffer`: the output may come back before that call returns. */
     @Synchronized fun onInput(nowNs: Long) { if (inFlight == 0) lastOutputNs = nowNs; inFlight++; waitingSinceNs = 0 }
+
+    /** The `queueInputBuffer` that [onInput] announced failed: no output will come for it. */
+    @Synchronized fun onInputFailed() { if (inFlight > 0) inFlight-- }
     @Synchronized fun onOutput(nowNs: Long) { if (inFlight > 0) inFlight--; lastOutputNs = nowNs }
 
     /** [waiting]: a frame is waiting for an input buffer (checked on every input-loop turn). */
@@ -67,7 +71,8 @@ class AuxDecoder(
     @Volatile private var active = false
     private var thread: Thread? = null
     private val captureBySeq = ConcurrentHashMap<Long, Long>()
-    @Volatile private var watchdog: AuxWatchdog? = null
+    /** The previous codec's output thread when it did not exit in time: no new codec may replace it. */
+    @Volatile private var straggler: Thread? = null
 
     @Volatile var decoded = 0L
         private set
@@ -94,7 +99,7 @@ class AuxDecoder(
     }
 
     /** True while the decoder thread still runs (possibly stuck in a codec call after a timed-out [stop]). */
-    fun isAlive(): Boolean = thread?.isAlive == true
+    fun isAlive(): Boolean = thread?.isAlive == true || straggler?.isAlive == true
 
     /** Stops and waits (bounded); false = the thread is still inside a codec call (the surface is still in use). */
     fun stop(): Boolean {
@@ -124,6 +129,19 @@ class AuxDecoder(
                 return
             }
             try { Thread.sleep(policy.delayMs()) } catch (_: InterruptedException) { return }
+            // Never a new codec while the previous codec's output thread is still inside a call (T-161 rule): wait a
+            // bounded time, then give up (the picture goes on main-only).
+            straggler?.let { old ->
+                try { old.join(JOIN_MS * 4) } catch (_: InterruptedException) { return }
+                if (old.isAlive) {
+                    gaveUp = true
+                    active = false
+                    env.log('E', TAG, "${env.elapsedRealtimeMs()} E decoder ev=aux_give_up reason=output_straggler")
+                    onGaveUp("aux output thread stuck")
+                    return
+                }
+                straggler = null
+            }
             restarts++
             if (active) onKeyframeRequest(queue.reset(KeyframeRequest.DECODE_ERROR))
         }
@@ -154,6 +172,7 @@ class AuxDecoder(
             c.configure(format(c), surface)
             c.start()
             env.log('I', TAG, "${env.elapsedRealtimeMs()} I decoder ev=aux_codec_start name=${c.name} size=${config.widthPx}x${config.heightPx}")
+            val dog = AuxWatchdog().also { it.reset(System.nanoTime()) } // this codec generation's own
             val t = Thread({
                 val info = DecoderCodec.OutputInfo()
                 try {
@@ -162,7 +181,7 @@ class AuxDecoder(
                         if (idx < 0) continue // try again / format changed
                         val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
                         c.releaseOutputBuffer(idx, isFrame) // render to the ImageReader at once
-                        if (isFrame) { decoded++; watchdog?.onOutput(System.nanoTime()) }
+                        if (isFrame) { decoded++; dog.onOutput(System.nanoTime()) }
                     }
                 } catch (e: Exception) {
                     if (running.get()) outError.set(e.javaClass.simpleName)
@@ -171,8 +190,6 @@ class AuxDecoder(
             outThread = t
             t.start()
             var held: VideoFrame? = null
-            val dog = AuxWatchdog().also { it.reset(System.nanoTime()) }
-            watchdog = dog
             while (active && outError.get() == null) {
                 if (dog.stalled(System.nanoTime(), held != null || queue.pendingFrames() > 0)) {
                     env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stalled")
@@ -199,8 +216,13 @@ class AuxDecoder(
                     }
                 }
                 val flags = if (frame.isCodecConfig) DecoderCodec.BUFFER_FLAG_CODEC_CONFIG else 0
-                c.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
                 if (!frame.isCodecConfig) dog.onInput(System.nanoTime())
+                try {
+                    c.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                } catch (e: Exception) {
+                    if (!frame.isCodecConfig) dog.onInputFailed()
+                    throw e
+                }
             }
             if (active && error == null) error = outError.get()
         } catch (e: Exception) {
@@ -208,6 +230,7 @@ class AuxDecoder(
         } finally {
             running.set(false)
             try { outThread?.join(JOIN_MS) } catch (_: InterruptedException) {}
+            if (outThread?.isAlive == true) straggler = outThread
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
             captureBySeq.clear()

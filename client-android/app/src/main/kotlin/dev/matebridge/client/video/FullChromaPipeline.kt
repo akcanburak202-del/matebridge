@@ -35,6 +35,17 @@ class FullChromaPipeline(
         /** ImageReader depth: a few images in flight, being drawn, and waiting to be closed (T-254 used 6). */
         const val MAX_IMAGES = 6
 
+        /** Timed-out teardowns of ANY pipeline instance (an Activity may be recreated meanwhile); cleaned by [REAPER]. */
+        private val LEAKS = LeakList()
+        private val reaperHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) } // process-level, not the Activity's
+        private val REAPER = object : Runnable {
+            override fun run() { LEAKS.reap(); if (!LEAKS.isEmpty()) reaperHandler.postDelayed(this, REAP_MS) }
+        }
+        private const val REAP_MS = 250L
+
+        /** Starts the self-rescheduling cleanup (it stops by itself when the list is empty). */
+        private fun scheduleReaper() { reaperHandler.removeCallbacks(REAPER); reaperHandler.postDelayed(REAPER, REAP_MS) }
+
         /** True when the packed path can run for [c] at all (size layout, library loaded). */
         fun supports(c: StreamConfig): Boolean =
             FullChromaNative.available && c.isPacked444 && c.codec == StreamConfig.CODEC_HEVC && Avc444v2.isValid(c.widthPx, c.heightPx)
@@ -151,33 +162,11 @@ class FullChromaPipeline(
         return teardown()
     }
 
-    /** What a timed-out teardown keeps: the readers (their surfaces) and threads stay open until the threads exit. */
-    private class Leak(
-        val main: ImageReader?, val aux: ImageReader?, val mt: HandlerThread?, val at: HandlerThread?,
-        val dec: AuxDecoder?, val pres: PackedPresenter?,
-    ) {
-        fun alive() = pres?.isAlive == true || dec?.isAlive() == true
-    }
+    /** True while an earlier teardown timed out and its threads still own surfaces (process-wide list). */
+    fun busy(): Boolean { LEAKS.reap(); return !LEAKS.isEmpty() }
 
-    private val leaked = ArrayList<Leak>()
-
-    /** True while an earlier teardown timed out and its threads still own surfaces (UI thread). */
-    fun busy(): Boolean { reap(); return leaked.isNotEmpty() }
-
-    /** Closes the readers of timed-out teardowns whose threads have exited since. UI thread; non-blocking. */
-    fun reap() {
-        val it = leaked.iterator()
-        while (it.hasNext()) {
-            val l = it.next()
-            if (l.alive()) continue
-            runCatching { l.main?.close() }
-            runCatching { l.aux?.close() }
-            l.mt?.quitSafely()
-            l.at?.quitSafely()
-            it.remove()
-            log('I', "full_chroma_reaped", "late=1")
-        }
-    }
+    /** Closes the readers of timed-out teardowns whose threads have exited since. Non-blocking; any thread. */
+    fun reap() { LEAKS.reap() }
 
     /** False when the aux decoder or the GL thread did not stop in time: ownership of the readers stays here ([reap]). */
     private fun teardown(): Boolean {
@@ -188,7 +177,8 @@ class FullChromaPipeline(
         runCatching { auxReader?.setOnImageAvailableListener(null, null) }
         val auxClean = auxDecoder?.stop() ?: true
         val presClean = presenter?.shutdown() ?: true
-        val clean = auxClean && presClean
+        val mainClean = renderer.decoderThreadsFinished() // detachSurface waits at most 300 ms
+        val clean = auxClean && presClean && mainClean
         if (clean) {
             runCatching { mainReader?.close() }
             runCatching { auxReader?.close() }
@@ -196,8 +186,21 @@ class FullChromaPipeline(
             auxThread?.quitSafely()
         } else {
             // A thread is still inside a codec/GL call and uses these surfaces: keep ownership, close them once it exits.
-            leaked.add(Leak(mainReader, auxReader, mainThread, auxThread, auxDecoder, presenter))
-            log('E', "full_chroma_teardown_timeout", "aux_clean=${if (auxClean) 1 else 0} gl_clean=${if (presClean) 1 else 0}")
+            val mr = mainReader; val ar = auxReader; val mt = mainThread; val at = auxThread
+            val dec = auxDecoder; val pres = presenter; val rd = renderer
+            LEAKS.add(object : Reapable {
+                override fun alive() = pres?.isAlive == true || dec?.isAlive() == true || !rd.decoderThreadsFinished()
+                override fun release() {
+                    runCatching { mr?.close() }
+                    runCatching { ar?.close() }
+                    mt?.quitSafely()
+                    at?.quitSafely()
+                    log('I', "full_chroma_reaped", "late=1")
+                }
+            })
+            scheduleReaper()
+            log('E', "full_chroma_teardown_timeout",
+                "aux_clean=${if (auxClean) 1 else 0} gl_clean=${if (presClean) 1 else 0} main_clean=${if (mainClean) 1 else 0}")
         }
         presenter = null; auxDecoder = null; auxQueue = null; mainReader = null; auxReader = null
         mainThread = null; auxThread = null
@@ -262,5 +265,30 @@ object FullChromaStatsFormat {
         return head + " gl_drawn=${s?.drawn ?: 0} gl_displaced=${s?.displaced ?: 0} gl_errors=${s?.drawErrors ?: 0} " +
             "gl_outstanding_max=${s?.outstandingMax ?: 0} aux_drop=$auxDropped aux_kf_req=$auxKfRequests " +
             "aux_restarts=$auxRestarts aux_dead=${if (auxDead) 1 else 0} aux_unmatched=$auxUnmatched img_errors=$imageErrors"
+    }
+}
+
+/** Something a timed-out teardown could not release yet: [alive] while a thread may still use its surfaces. */
+interface Reapable {
+    fun alive(): Boolean
+    fun release()
+}
+
+/** Thread-safe list of [Reapable]s; [reap] releases the ones no longer alive. Pure Kotlin (the reaper's logic). */
+class LeakList {
+    private val items = ArrayList<Reapable>()
+
+    @Synchronized fun add(r: Reapable) { items.add(r) }
+    @Synchronized fun isEmpty() = items.isEmpty()
+
+    /** Releases and removes every item that is no longer alive; returns how many were released. */
+    fun reap(): Int {
+        val done = synchronized(this) {
+            val d = items.filter { !it.alive() }
+            items.removeAll(d.toSet())
+            d
+        }
+        for (r in done) r.release()
+        return done.size
     }
 }

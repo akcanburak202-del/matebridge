@@ -249,6 +249,12 @@ class VideoRenderer(
     /** T-161: bounded hand-off between generations (owner = the last generation that may hold a codec). */
     private val handoff = GenerationHandoff(handoffTimer)
 
+    /**
+     * T-259: true when the last codec's decoder and output threads have all exited (after [detachSurface] timed out they
+     * may still be inside a codec call that uses the output surface).
+     */
+    fun decoderThreadsFinished(): Boolean = handoff.isIdle()
+
     /** T-161 (tests): decoder threads waiting for the previous generation right now. */
     internal val handoffWaitingThreads: Int get() = handoff.waitingThreads
 
