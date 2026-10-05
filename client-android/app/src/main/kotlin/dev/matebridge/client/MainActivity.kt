@@ -255,6 +255,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ) { fields -> MbLog.w("decoder_fault", fields, "decoder") }
     }
     private var streamConfig: StreamConfig? = null
+
+    // ---- T-259 (decision 0034): packed full colour (chroma_layout 1) ----
+    private lateinit var fullChromaCap: dev.matebridge.client.video.FullChromaCapability
+    /** The presenter failed in this process: no `chroma = 2`, no HELLO bit11 until the app restarts (any thread). */
+    @Volatile private var fullChromaRuntimeOff = false
+    /** The applied STREAM_CONFIG has `chroma_layout = 1` (any thread: keyframe requests carry `view` only then). */
+    @Volatile private var packedVideo = false
+    private var chromaPipeline: dev.matebridge.client.video.FullChromaPipeline? = null
+
+    /** Capability self-test passed and the packed path has not failed in this process. */
+    private fun fullChromaOn(): Boolean = ::fullChromaCap.isInitialized && fullChromaCap.available() && !fullChromaRuntimeOff
+
+    /** `KEYFRAME_REQUEST` of the main stream: `view` is written only while `chroma_layout = 1` (PROTOCOL.md 0x23). */
+    private fun mainKeyframeRequest(reason: Int) = KeyframeRequest(
+        reason, if (packedVideo) KeyframeRequest.VIEW_MAIN else KeyframeRequest.VIEW_UNSPECIFIED,
+    )
     private var surfaceValid = false
     private var statsOn = false
     private var lastStatsMs = 0L
@@ -465,6 +481,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun remove(key: String) { prefs.edit().remove(key).apply() } // T-191
         }
         settings = Settings(prefsStore)
+        fullChromaCap = dev.matebridge.client.video.FullChromaCapability(
+            prefsStore, "${BuildInfo.current.sha}@${BuildInfo.current.builtUtc}",
+        ) // T-259: the self-test result is per build
         wolStore = WolStore(prefsStore) // T-129
         wolSender = WolSender(this)
         settings.migrateTransportToAutoOnce()?.let { old -> MbLog.i("transport_pref_migrated", "from=${TransportMode.parse(old)?.id ?: "other"} to=auto") } // T-096
@@ -507,7 +526,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.i("hdr_caps", hdrCaps.logFields())
         // T-215: `--ei game_display 0` = native display.
         // T-241 (decision 0033): "Keskin renk kenarları" has its own key in the same store.
-        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay, hdrCaps, SharpChromaStore(prefsStore))
+        gameSettings = GameModeSettings(
+            settings, devKnobs.gameDisplay, hdrCaps, SharpChromaStore(prefsStore),
+            colourStore = dev.matebridge.client.stream.ColourStore(prefsStore), // T-259: T-260's panel writes it
+            fullChromaAvailable = { fullChromaOn() },
+        )
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
@@ -527,6 +550,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onStreamConfig(config: StreamConfig) { runOnUiThread { installConfig(config) } }
 
             override fun onVideoFrame(frame: VideoFrame) {
+                // Decision 0034: the auxiliary view goes to its own decoder; without the packed pipeline it is dropped (an
+                // unknown or unexpected `view` is skipped, never a protocol error).
+                if (frame.view != VideoFrame.VIEW_MAIN) {
+                    if (frame.view == VideoFrame.VIEW_AUX) chromaPipeline?.onAuxFrame(frame)
+                    return
+                }
                 // Never feed the queue while no surface is attached (T-013 handoff).
                 val r = renderer ?: return
                 if (!r.attached) return
@@ -588,7 +617,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
+            // T-259 (decision 0034): HELLO bit11 only while the full colour self-test has passed (read per connection)
+            helloCapabilities = { if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L },
         )
+        startFullChromaSelfTest()
         files = FilesController({ controller.setFilesInfo(it) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
         capture = InputCapture(
             object : InputSink {
@@ -1255,7 +1287,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         surfaceValid = true
         if (streamConfig != null) {
             setSurfaceFrameRate(true)
-            renderer?.attachSurface(holder.surface)
+            attachVideoOutput(holder.surface)
         }
     }
 
@@ -1264,7 +1296,79 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         if (holder !== video.holder) return
         surfaceValid = false
-        renderer?.detachSurface()
+        detachVideoOutput()
+    }
+
+    /**
+     * Points the video at [surface] for the current [streamConfig]: the packed pipeline for `chroma_layout = 1` (when it can
+     * be built), else the direct path (the main stream straight into the SurfaceView, exactly as before decision 0034).
+     * UI thread.
+     */
+    private fun attachVideoOutput(surface: android.view.Surface) {
+        val r = renderer ?: return
+        val c = streamConfig
+        if (c != null && c.isPacked444 && fullChromaOn()) {
+            val p = chromaPipeline ?: dev.matebridge.client.video.FullChromaPipeline(
+                r,
+                sendAuxKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason, KeyframeRequest.VIEW_AUX)) },
+                onFailed = { why -> runOnUiThread { onFullChromaFailed(why) } },
+            ).also { chromaPipeline = it }
+            if (p.start(surface, c)) return
+            MbLog.w("full_chroma_fallback", "reason=start layout=${c.chromaLayout}", "render")
+        }
+        r.attachSurface(surface)
+    }
+
+    /** Releases the video output (the surface is about to go): the packed pipeline when it runs, else the renderer. */
+    private fun detachVideoOutput() {
+        val p = chromaPipeline
+        if (p != null && p.active) p.stop() else renderer?.detachSurface()
+    }
+
+    /**
+     * The packed path failed in this process (GL init or repeated draw errors): from now on this process asks for the
+     * sharp colour value instead (no `chroma = 2`, no bit11) and shows the main view through the direct path. The host
+     * follows the new STREAM_PREFS with a `chroma_layout = 0` STREAM_CONFIG; the main stream shown meanwhile is a normal
+     * 4:2:0 picture.
+     */
+    private fun onFullChromaFailed(why: String) {
+        if (isDestroyed || fullChromaRuntimeOff) return
+        fullChromaRuntimeOff = true
+        MbLog.e("full_chroma_disabled", "reason=${why.take(60)} scope=process", "render")
+        val surface = if (surfaceValid) video.holder.surface else null
+        detachVideoOutput()
+        if (surface != null && streamConfig != null) renderer?.attachSurface(surface)
+        sendStreamPrefs(gameSettings.prefs(streamMode))
+        refreshSettings()
+    }
+
+    /**
+     * Once per build: the capability self-test off the UI thread, before any stream decoder exists. A result that arrives
+     * later shows on the next connection's HELLO and applies to the running session through a fresh STREAM_PREFS.
+     */
+    private fun startFullChromaSelfTest() {
+        val st = fullChromaCap.status()
+        if (!fullChromaCap.needsTest()) {
+            MbLog.i("full_chroma_cap", "state=${st.state.name.lowercase()} reason=${st.reason.ifEmpty { "-" }} cached=1", "render")
+            return
+        }
+        Thread({
+            val outcome = dev.matebridge.client.video.FullChromaSelfTest.runAndRecord(fullChromaCap) { detail ->
+                MbLog.i("full_chroma_selftest_detail", detail.take(300).replace('\n', ' '), "render")
+            }
+            val result = when (outcome) {
+                dev.matebridge.client.video.FullChromaSelfTest.Outcome.Pass -> "pass reason=-"
+                is dev.matebridge.client.video.FullChromaSelfTest.Outcome.Fail -> "fail reason=${outcome.reason}"
+                is dev.matebridge.client.video.FullChromaSelfTest.Outcome.Inconclusive -> "inconclusive reason=${outcome.reason}"
+            }
+            MbLog.i("full_chroma_selftest", "result=$result", "render")
+            runOnUiThread {
+                if (!isDestroyed) {
+                    refreshSettings()
+                    if (lastUi is SessionUi.Connected) sendStreamPrefs(gameSettings.prefs(streamMode))
+                }
+            }
+        }, "mb-fc-selftest").start()
     }
 
     /** T-251: the pacer knobs in effect go on the first `render ev=stats` line of each renderer, once. */
@@ -1282,7 +1386,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         capture.setStreamGeometry(config.widthPt, config.heightPt)
         val r = renderer ?: VideoRenderer(
             config,
-            onKeyframeRequest = { reason -> controller.trySend(KeyframeRequest(reason)) },
+            onKeyframeRequest = { reason -> controller.trySend(mainKeyframeRequest(reason)) }, // T-259: `view` only in packed mode
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
             vsync = vsync,
             bufferFrames = bufferFrames,
@@ -1309,8 +1413,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         lastStatsMs = SystemClock.elapsedRealtime()
         statsLog.start(lastStatsMs)
         rttStats.reset() // T-089: the first ev=net window holds no approval-wait or reconnect samples
+        // T-259: a change into, out of or within the packed layout rebuilds the video output (the decoder target differs).
+        packedVideo = config.isPacked444
+        if (chromaPipeline?.active == true || (config.isPacked444 && fullChromaOn() && r.attached)) detachVideoOutput()
         r.reconfigure(config) // restarts the codec without blocking when a surface is attached
-        if (!r.attached && surfaceValid) r.attachSurface(video.holder.surface)
+        if (!r.attached && surfaceValid) attachVideoOutput(video.holder.surface)
         MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
         logProfile(config)
         if (filesGate.onConfigApplied()) syncFiles() // T-153: the authenticated config makes this session trusted
@@ -1380,7 +1487,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Stops video (surface released, frames gated). The renderer object is kept and reused. */
     private fun releaseRenderer() {
-        renderer?.detachSurface()
+        detachVideoOutput()
+        packedVideo = false
         streamConfig = null
         audio?.onVideoLatency(null) // no video: no A/V target
         flushStatsLog() // T-141: the partial log window of the stream that ends
@@ -1700,7 +1808,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val r = renderer
             if (r != null && r.attached) {
                 // T-121: the retry goes through the queue's request limit (no retry right after another request).
-                if (videoHealth.keyframeRetriesAllowed && r.takeKeyframeRetry()) controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP))
+                if (videoHealth.keyframeRetriesAllowed && r.takeKeyframeRetry()) controller.trySend(mainKeyframeRequest(KeyframeRequest.STARTUP))
+                // T-259: the auxiliary stream's own retry (its own request limit; never gates video_health)
+                if (videoHealth.keyframeRetriesAllowed && chromaPipeline?.takeAuxRetry() == true) {
+                    controller.trySend(KeyframeRequest(KeyframeRequest.STARTUP, KeyframeRequest.VIEW_AUX))
+                }
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastStatsMs >= 1000) statsTick(r, now)
             }
@@ -1762,6 +1874,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         lastStatsMs = now
     }
 
+    /** T-259: the full colour fields of one log window (counters reset); layout 0 = dashes (the direct path). */
+    private fun chromaStatsFields(): String {
+        val p = chromaPipeline
+        return if (p != null && p.active) p.statsFields(reset = true)
+        else dev.matebridge.client.video.FullChromaStatsFormat.fields(0, null)
+    }
+
     /**
      * T-141: closes the log window at [endMs] (the end of its last per-second window) and writes `MB/render ev=present`,
      * `MB/decoder ev=stats` and `MB/render ev=stats` for it: same fields as the per-second lines, values over the whole
@@ -1805,6 +1924,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 // T-168: latency stages from the capture stamp; latency_us= above is the deprecated alias (clamped mean).
                 StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()) +
                 " hz_switches=$switches" + // T-243
+                " " + chromaStatsFields() + // T-259: chroma_layout, aux_paired_pct, aux_late, gl_ms_p50/p95 (+ packed counters)
                 pacerKnobsField(), // T-251: once per renderer
             "render",
         )
