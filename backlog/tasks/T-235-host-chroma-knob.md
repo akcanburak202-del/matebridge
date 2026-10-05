@@ -1,7 +1,7 @@
 ---
 id: T-235
 title: Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page
-status: todo
+status: in-progress
 phase: 6
 owner: mac-host-dev
 depends_on: [T-233]
@@ -42,7 +42,19 @@ T-233 araştırmasının (docs/research/2026-10-05-yuv444.md §3b ve "Kart A") u
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Core (saf, test edilir)** `MateBridgeCore/Video/ChromaMode.swift`:
+   - `ChromaMode` (`420`, `sharp_bilinear`, `sharp_nearest`, `444`) ve `ChromaKnob.parse` (`MATEBRIDGE_CHROMA`; yok/boş = `420`, `set=false`; geçersiz = `420`, `invalid`).
+   - `ChromaPolicy.resolve(knob, codec, profile)` → `requested/applied/reason`: `444` yalnız HEVC + `fast`; LLRC'de `reason=llrc`, H.264'te `reason=codec` ile `420`. Sonradan düşüşler aynı türle: `profile_rejected` (VT Main444'ü reddetti), `metal_unavailable` (kernel kurulamadı).
+   - Yakalama biçimi kararı: `420` → `420f` (bugünkü), `sharp_*`/`444` → `BGRA`.
+   - `ChromaStatsWindow` (10 sn, sınırlı örnek): dönüşüm duvar süresi, GPU süresi, yakalama (SCK geri çağrısı) → kodlayıcı çıkışı; `ev=chroma_stats` alanları p50/p95. `ev=chroma_config` alanları.
+   - `HEVCSPS.chromaFormatIdc` / `generalProfileIdc` ve VUI `chroma_loc_info` okuma (mevcut BitReader).
+2. **Core CPU referansı** `SharpYUV.swift`: BGRA → `420f` tam aralık BT.709 (2×2 kutu ortalaması Cb/Cr; luma ayarı = her piksel için 8 adımlı tamsayı ikili arama, çözücünün renk büyütmesi `bilinear` (ortalanmış konum) ya da `nearest` varsayımıyla, hedef sRGB EOTF sonrası doğrusal BT.709 parlaklığı); düz 4:2:0 ve yeniden kurma + açıklık PSNR yardımcıları. Metal kernel kaynağı da Core'da dize olarak (`SharpYUVKernel.metalSource`), böylece XCTest kernel'i düz MTLTexture'larla çalıştırıp CPU referansıyla ±1 karşılaştırır (Metal aygıtı yoksa test atlanır).
+3. **Host** `Video/ChromaConverter.swift`: Metal (çalışma zamanında derlenen kaynak), `CVMetalTextureCache`, sınırlı `CVPixelBufferPool` (420f, IOSurface, eşik aşılırsa kare BGRA olarak VT'ye gider ve `conv_fail` sayılır). İki geçiş (renk bloğu, luma) tek komut tamponunda, eşzamanlı bekleme. Çıkışa oturum renk etiketleri + `ChromaLocation=Center` eklenir (VUI'ye yazılırsa `chroma_loc=1` loglanır; sentetik VT denemesiyle kontrol).
+4. **HEVCEncoder**: knob'u çözer; `444` için ProfileLevel `"HEVC_Main444_AutoLevel"` (red → Main + `profile_rejected`); `sharp_*` için dönüştürücüyü sahiplenir ve dönüşümü sahip kuyruğunda (`send`, yalnız gerçekten gönderilen karelerde, `submittedUs`'tan önce) yapar; BGRA dışı girdi olduğu gibi geçer (benchler). İlk/değişen parametre setlerinde `ev=chroma_config`. Knob yoksa hiçbir yeni satır ve ayar yok (bit bit aynı yol).
+5. **VideoPipeline/ScreenCapture**: yakalama biçimi kodlayıcının uyguladığı moddan; `420f` dalı satır satır aynı kalır. **StreamCoordinator**: saniyelik `reportCadence` içinde 10 sn dolunca `video ev=chroma_stats`.
+6. `StreamProfileLog.knobAllowList`'e `MATEBRIDGE_CHROMA`; `EncoderKnobs.logFields` yalnız ayarlıyken `chroma=`.
+7. `tools/chroma-test/index.html` (tek dosya, çevrimdışı). `docs/KNOBS.md` satır 44, `docs/LOGGING.md` bölüm.
+8. XCTest: parse/resolve/fallback, yakalama biçimi, CPU referansı kırmızı/gri kenarda açıklık PSNR artışı (bilinear ve nearest), Metal ±1, SPS chroma ayrıştırma (sentetik SPS), stats penceresi. `./scripts/check.sh`.
 
 ## Handoff
 
