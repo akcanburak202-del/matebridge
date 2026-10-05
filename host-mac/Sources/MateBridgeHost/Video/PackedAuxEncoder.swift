@@ -6,7 +6,7 @@ import os
 import VideoToolbox
 
 /// The auxiliary VideoToolbox session of packed full colour (decision 0034, T-258): encodes the AVC444v2 auxiliary
-/// `420f` picture with the same fast profile as the main session, at half the main target bitrate.
+/// `420f` picture with the same fast profile as the main session, at a quarter of the main target bitrate (`AuxBitratePolicy`).
 ///
 /// Driven by `HEVCEncoder` from its single submit owner queue (`encode`), so the auxiliary PTS rise exactly like the
 /// main ones and carry the same value. It never waits for the main session and the main session never waits for it:
@@ -26,8 +26,8 @@ final class PackedAuxEncoder: @unchecked Sendable {
     static let failureLimit = 5
     private static let log = Logger(subsystem: "dev.matebridge.host", category: "aux-encoder")
 
-    /// The auxiliary target as a fraction of the main one (decision 0034 section 6).
-    static func auxBitrateKbps(main kbps: Int) -> Int { max(1_000, kbps / 2) }
+    /// The auxiliary target as a fraction of the main one (`AuxBitratePolicy`, T-262).
+    static func auxBitrateKbps(main kbps: Int) -> Int { AuxBitratePolicy.kbps(main: kbps) }
 
     private let session: VTCompressionSession
     private let output: Output
@@ -49,7 +49,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private(set) var propertyFailures: [String] = []
 
     /// - Parameters:
-    ///   - mainKbps: the main session's target; the auxiliary one is half of it.
+    ///   - mainKbps: the main session's target; the auxiliary one follows `AuxBitratePolicy`.
     ///   - profile: the main session's resolved profile (the same rate control and speed settings).
     init(width: Int, height: Int, fps: Int, mainKbps: Int, profile: EncoderProfile, rateWindowMs: Int?,
          logSink: @escaping HEVCEncoder.LogSink, output: @escaping Output,
@@ -141,7 +141,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
         return true
     }
 
-    /// Live bitrate change (the main target's half), like `HEVCEncoder.setTargetBitrate`.
+    /// Live bitrate change (`AuxBitratePolicy` of the main target), like `HEVCEncoder.setTargetBitrate`.
     func setBitrate(mainKbps: Int) {
         let kbps = Self.auxBitrateKbps(main: mainKbps)
         let apply: Bool = lock.withLock {

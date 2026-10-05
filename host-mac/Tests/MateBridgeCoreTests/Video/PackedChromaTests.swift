@@ -315,7 +315,36 @@ final class PackedChromaFlowTests: XCTestCase {
         XCTAssertNil(w.take(nowUs: 9_999_999))
         let line = w.take(nowUs: 10_000_000)
         XCTAssertEqual(line, "mode=packed444 frames=1 aux_frames=1 pack_ms_p50_95=0.90/0.90 pack_gpu_ms_p50_95=0.70/0.70 "
-                       + "aux_enc_ms_p50_95=5.00/5.00 aux_main_bytes=0.40 aux_lost=1 pack_fail=0")
+                       + "aux_enc_ms_p50_95=5.00/5.00 aux_main_bytes=0.40 aux_lost=1 pack_fail=0 main_kbps=0 aux_kbps=0 "
+                       + "aux_main_key=- aux_main_refine=- aux_main_delta=0.40")
+    }
+
+    /// T-262: the ratio per frame kind and the absolute rates tell a busy window from a near-static one.
+    func testStatsWindowSplitsByFrameKindAndReportsRates() {
+        var w = PackedChromaStatsWindow(startUs: 0)
+        w.recordMain(bytes: 200_000, kind: .key)
+        w.recordAux(bytes: 60_000, encodeUs: 6000, kind: .key)
+        for _ in 0..<10 {
+            w.recordMain(bytes: 100_000)
+            w.recordAux(bytes: 30_000, encodeUs: 6000)
+        }
+        w.recordMain(bytes: 2_000, kind: .refine)
+        w.recordAux(bytes: 3_000, encodeUs: 6000, kind: .refine)
+        let line = w.take(nowUs: 10_000_000) ?? ""
+        // 1.2 MB main + 0.363 MB aux over 10 s.
+        XCTAssertTrue(line.contains("main_kbps=961 aux_kbps=290"), line)
+        XCTAssertTrue(line.contains("aux_main_key=0.30 aux_main_refine=1.50 aux_main_delta=0.30"), line)
+        XCTAssertTrue(line.contains("aux_main_bytes=0.30"), line)
+        // The window restarts empty.
+        XCTAssertEqual(w.take(nowUs: 20_000_000)?.contains("aux_main_delta=-"), true)
+    }
+
+    func testAuxBitrateIsAQuarterOfMainWithAFloor() {
+        XCTAssertEqual(AuxBitratePolicy.kbps(main: 30_000), 7_500)
+        XCTAssertEqual(AuxBitratePolicy.kbps(main: 8_000), 2_000)
+        XCTAssertEqual(AuxBitratePolicy.kbps(main: 4_000), 1_000)
+        XCTAssertEqual(AuxBitratePolicy.kbps(main: 1_000), 1_000, "never below the floor")
+        XCTAssertEqual(AuxBitratePolicy.kbps(main: 0), 1_000)
     }
 
     // MARK: Queue helpers

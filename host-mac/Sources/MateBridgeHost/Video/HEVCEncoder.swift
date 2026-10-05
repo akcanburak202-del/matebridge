@@ -354,9 +354,11 @@ final class HEVCEncoder: @unchecked Sendable {
                 } else if !frame.data.isEmpty {
                     statsLock.withLock {
                         if frame.isKeyframe { self?.lastAuxKeyframeUs = HostClock.nowUs() }
-                        self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs)
+                        let isRefine = self?.refinePairs[frame.captureTimeUs] != nil
+                        self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs,
+                                                     kind: frame.isKeyframe ? .key : (isRefine ? .refine : .delta))
                         // A real (non-refinement) auxiliary frame sets the first refinement pair's size estimate.
-                        if self?.refinePairs[frame.captureTimeUs] == nil { self?.lastMotionAuxBytes = frame.data.count }
+                        if !isRefine { self?.lastMotionAuxBytes = frame.data.count }
                     }
                 }
                 auxOutput(frame, encodeUs)
@@ -938,7 +940,8 @@ final class HEVCEncoder: @unchecked Sendable {
             if chroma.statsEnabled, !trace.resubmit, trace.encodedUs >= trace.deliveredUs {
                 lock.withLock { chromaStats?.recordEncoded(captureToEncodeUs: trace.encodedUs - trace.deliveredUs) }
             }
-            outputBytes = handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace)
+            outputBytes = handle(sb, captureTimeUs: captureTimeUs, encodeTimeUs: encodeTimeUs, trace: trace,
+                                 refine: refineTrain != nil)
             if !trace.resubmit, outputBytes > 0 { lock.withLock { lastMotionBytes = outputBytes } }
         }
         if ok { lock.lock(); consecutiveFailures = 0; lock.unlock() }
@@ -1040,7 +1043,8 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// Returns the size of the delivered frame in bytes (0 when nothing was delivered).
     @discardableResult
-    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace) -> Int {
+    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace,
+                        refine: Bool = false) -> Int {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return 0 }
         let isKey: Bool = {
             guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
@@ -1069,7 +1073,7 @@ final class HEVCEncoder: @unchecked Sendable {
         guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return 0 }
         guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return 0 }
         if isKey { lock.withLock { lastKeyframeUs = HostClock.nowUs() } }
-        lock.withLock { packedStats?.recordMain(bytes: annexB.count) }
+        lock.withLock { packedStats?.recordMain(bytes: annexB.count, kind: isKey ? .key : (refine ? .refine : .delta)) }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.pairID = trace.pairID
         frame.trace = trace

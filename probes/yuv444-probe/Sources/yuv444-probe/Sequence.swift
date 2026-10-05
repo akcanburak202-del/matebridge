@@ -21,11 +21,13 @@ struct SequenceResult {
 /// Offline encode: render each frame, pack it on the GPU, submit both views (the encoders run concurrently; at most
 /// `maxInFlight` frames queued per session), then wait. Not paced.
 func encodeSequence(scene: Scene, size: FrameSize, frames: Int, fps: Int, chroma: MainChroma, mainKbps: Int, auxKbps: Int,
-                    quality: Float? = nil, sampleFrames: Set<Int> = [], keepBGRA: Bool = false) throws -> SequenceResult {
+                    quality: Float? = nil, auxQuality: Float? = nil, auxMinQP: Int? = nil, auxMaxQP: Int? = nil,
+                    auxBurst: Int = 2, sampleFrames: Set<Int> = [], keepBGRA: Bool = false) throws -> SequenceResult {
     guard let bgra = PixelBufferIO.makeBGRA(width: size.width, height: size.height) else { throw ProbeError("BGRA buffer") }
     let packer = try Packer444(width: size.width, height: size.height, mainChroma: chroma)
     let mainStream = try VTStream(.init(width: size.width, height: size.height, fps: fps, bitrateKbps: mainKbps, quality: quality))
-    let auxStream = try VTStream(.init(width: size.width, height: size.height, fps: fps, bitrateKbps: auxKbps, quality: quality))
+    let auxStream = try VTStream(.init(width: size.width, height: size.height, fps: fps, bitrateKbps: auxKbps, quality: auxQuality ?? quality,
+                                       minQP: auxMinQP, maxQP: auxMaxQP, burstFactor: auxBurst))
     var result = SequenceResult(main: Array(repeating: nil, count: frames), aux: Array(repeating: nil, count: frames))
     result.mainSettings = mainStream.settingsSummary
     result.auxSettings = auxStream.settingsSummary
