@@ -43,6 +43,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
+| [T-242](tasks/T-242-client-auto-bitrate-in-mode-layer.md) | Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula | 6 | android-client-dev | [] |
 
 ## done
 
