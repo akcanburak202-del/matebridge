@@ -1,7 +1,7 @@
 ---
 id: T-246
 title: Client — disable Android's default focus highlight on the video SurfaceView (the intermittent "grey" black lift)
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -27,7 +27,10 @@ NOTES 2026-10-05 (siyah kalkması) ve araştırma: kalkma tam olarak `out = in·
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+- Yer: layout XML (`res/layout/activity_main.xml`), kod değil. `android:defaultFocusHighlightEnabled="false"` API 26+, minSdk 29 → koşulsuz. `MainActivity.kt`'ye dokunulmaz (T-245/T-247 ile çakışma yok); odaklanabilirlik (`isFocusable`/`isFocusableInTouchMode`, `requestFocus()`) aynen kalır, yalnızca vurgu çizimi kapanır.
+- Bayrak: `@id/root` (FrameLayout), `@id/video` (SurfaceView) ve tam ekran odaklanabilir `@id/panel` (ScrollView, bağlantı paneli; ucuz güvence).
+- Test: Robolectric yok → JVM testi `FocusHighlightLayoutTest` layout XML'ini (`src/main/res/layout/activity_main.xml`) DOM ile ayrıştırır ve bu üç id'de bayrağın `false` olduğunu doğrular (gelecekte biri silerse kırılır).
+- `./scripts/check.sh`.
 
 ## Handoff
 
