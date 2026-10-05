@@ -1,7 +1,7 @@
 ---
 id: T-254
 title: Probe (tablet) — 4:4:4 packing gates: raw YUV sampling on the GPU, ImageReader→GL→SurfaceView presentation, dual decode at 60 fps
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

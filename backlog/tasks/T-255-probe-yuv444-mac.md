@@ -1,7 +1,7 @@
 ---
 id: T-255
 title: Probe (Mac) — 4:4:4 packing costs: Metal packer time, two VT sessions at 60 fps, auxiliary bitrate, reconstruction quality; v2 test clips
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
