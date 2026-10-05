@@ -1,7 +1,7 @@
 ---
 id: T-250
 title: Client — allow 2800×1840 game resolution in Oyun 120 too (drop the 60-only rule)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-245, T-249]
