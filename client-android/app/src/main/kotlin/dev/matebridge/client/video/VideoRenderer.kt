@@ -201,6 +201,7 @@ class VideoRenderer(
                 "req=${if (o.requested) "sent" else "held"} since_req_ms=${o.sinceRequestMs}")
         }
         applyCatchUpDepth(initialConfig.fps)
+        queue.onExpired = { reason -> onKeyframeRequest(reason) }
         queue.onCatchUp = { frames, ms ->
             env.log('I', tag, "${env.elapsedRealtimeMs()} I decoder ev=catch_up frames=$frames ms=$ms")
         }
@@ -801,7 +802,12 @@ class VideoRenderer(
                     stats.onOutput(info.presentationTimeUs, nowUs(), readyNs / 1000)
                     st.readyByPts.put(info.presentationTimeUs, readyNs)
                 }
-                val mark = if (isFrame) st.catchMarks.take(info.presentationTimeUs) else CatchUp.NONE
+                var mark = if (isFrame) st.catchMarks.take(info.presentationTimeUs) else CatchUp.NONE
+                // T-252 review 2: presented on the real output time, not the input time: while a backlog is worked off
+                // a decoded output is shown whenever none was for SHOW_INTERVAL_MS (the codec may swallow many inputs
+                // first and emit the outputs much later).
+                if (mark == CatchUp.SKIP && readyNs - st.lastShowNs >= CatchUp.SHOW_INTERVAL_MS * 1_000_000L) mark = CatchUp.SHOW
+                if (isFrame && mark != CatchUp.SKIP) st.lastShowNs = readyNs
                 if (mark == CatchUp.SKIP) {
                     skip = true // no pacer, no first-output bypass: the backlog's delay is no stream jitter
                 } else if (paced && isFrame) {

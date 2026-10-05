@@ -18,9 +18,9 @@ object CatchUp {
     const val TAIL = 2
 
     /**
-     * Presented during a catch-up although newer frames are queued (T-252 review): the display never stands still for
-     * longer than [SHOW_INTERVAL_MS] while a backlog is worked off. Handled like [TAIL] on the output side, but the
-     * catch-up goes on.
+     * Output side only (T-252 review): a [SKIP] output that comes out at least [SHOW_INTERVAL_MS] after the last
+     * presented one is shown after all (like [TAIL], the catch-up goes on), so the display never stands still for
+     * longer than that while a backlog is worked off, however late the codec emits its outputs.
      */
     const val SHOW = 3
     /** Longest gap between two presented frames during a catch-up. */

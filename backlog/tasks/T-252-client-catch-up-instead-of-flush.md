@@ -67,6 +67,8 @@ Tasarım: kareler çözücüye sırayla verilmeye devam eder (referans zinciri b
 
 - **Codex P1 düzeltmesi (sunum donması):** catch-up artık sınırlı. (1) Sürerken en geç her 50 ms'de bir kare `SHOW` işaretiyle hemen gösterilir (çıkışta TAIL gibi, pacer yeniden demirler; catch-up sürer). (2) Kuyruk normal derinliğe (`maxPending`) inince catch-up biter, sıradaki kare TAIL. (3) 300 ms içinde normal derinliğe inmezse (varış hızı >= çözme hızı) eski boşalt + KEYFRAME_REQUEST yolu çalışır. Testler: varış = çözme, varış > çözme, çözme > varış, derinliğe dönüş (`FrameQueueCatchUpTest`). check.sh ALL OK.
 
+- **Codex tur 2:** (1) 300 ms süre sınırı artık `take()` içinde de denetlenir (varış olmasa da: burst + sessizlik + yavaş çözme); dolunca eski yol (boşalt, kapı, FRAMES_DROPPED; hold-off varsa bekletilir, periyodik retry yollar), istek `FrameQueue.onExpired` ile renderer'ın `onKeyframeRequest`'ine gider. (2) 50 ms'lik periyodik sunum kararı artık çıkış iş parçacığında, gerçek çıkış zamanıyla verilir (`CodecState.lastShowNs`; SKIP çıkışı son sunumdan >= 50 ms sonra geliyorsa gösterilir, pacer yeniden demirler); kuyruk yalnız SKIP/TAIL işaretler. Testler: burst-sonra-sessizlik, bekletilen istek, `CatchUpRendererTest.delayedOutputs...` (sahte codec çıkışları 20 ms aralıkla verir). check.sh ALL OK (3 kez).
+
 ## Open questions
 
 - (Çözüldü) Orkestratör `DevKnobs.kt`, `MainActivity.kt` (tek satır) ve `docs/LOGGING.md` dosyalarını kapsama ekledi; `--ez catch_up false` (dev kapısı arkasında, `ev=profile knobs=` içinde `catch_up:0`) bağlandı, `DevKnobsTest` ve LOGGING.md güncellendi.

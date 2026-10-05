@@ -100,6 +100,12 @@ class FrameQueue(
     /** T-252: called outside the lock when a catch-up ends (the TAIL was taken): frames of the backlog, ms it took. */
     @Volatile var onCatchUp: ((frames: Int, ms: Long) -> Unit)? = null
 
+    /**
+     * T-252: a catch-up that ran out of time inside [awaitNext] produced this KEYFRAME_REQUEST (any thread, outside the
+     * lock); the owner must send it (offer() returns its requests, take() cannot).
+     */
+    @Volatile var onExpired: ((reason: Int) -> Unit)? = null
+
     /** Called outside the lock with every request the queue produces or allows (any thread); for logging. */
     @Volatile var onRequest: ((reason: Int, source: Source) -> Unit)? = null
 
@@ -138,8 +144,6 @@ class FrameQueue(
     /** Frames handed out as SKIP whose TAIL has not been taken yet. */
     private var skippedOut = 0
     private var catchStartNs = 0L
-    private var lastShownNs = 0L
-    private var showIntervalNs = CatchUp.SHOW_INTERVAL_MS * 1_000_000L
     private var maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
     private var catchUps = 0L
     private var catchSkipped = 0L
@@ -159,9 +163,8 @@ class FrameQueue(
         get() = synchronized(lock) { bytesCatchUp }
         set(v) = synchronized(lock) { bytesCatchUp = v.coerceAtLeast(0) }
 
-    /** T-252 (tests): longest gap between presented frames, and longest catch-up, in milliseconds. */
-    fun setCatchUpTiming(showIntervalMs: Long, maxMs: Long) = synchronized(lock) {
-        showIntervalNs = showIntervalMs * 1_000_000L
+    /** T-252 (tests): longest catch-up in milliseconds. */
+    fun setCatchUpMaxMs(maxMs: Long) = synchronized(lock) {
         maxCatchUpNs = maxMs * 1_000_000L
     }
 
@@ -218,7 +221,6 @@ class FrameQueue(
                         if (!catchingUp) {
                             catchingUp = true
                             if (skippedOut == 0) catchStartNs = nowNs
-                            lastShownNs = nowNs
                             catchUps++
                         }
                         tr?.onRxAction(frame.frameSeq, nowNs, PaceTrace.RX_QUEUED)
@@ -290,23 +292,34 @@ class FrameQueue(
         var frame: VideoFrame? = null
         var doneFrames = -1
         var doneMs = 0L
+        var expiredRequest = -1
         synchronized(lock) {
             if (!owns(consumer)) return null
+            // T-252 review 2: the catch-up deadline holds without new arrivals too (burst, then silence, slow decode).
+            val nowNs = clockNs()
+            if (catchingUp && nowNs - catchStartNs > maxCatchUpNs && pendingCount() > 0) {
+                overflows++
+                dropPending(trace, nowNs)
+                endCatchUp(forgetSkipped = false) // the next frame is the keyframe: shown at once (TAIL)
+                waitingKeyframe = true
+                if (mayRequest(nowNs)) {
+                    heldRequest = false
+                    recordRequest(nowNs)
+                    expiredRequest = KeyframeRequest.FRAMES_DROPPED
+                } else {
+                    heldRequest = true
+                    kfHeld++
+                }
+                return@synchronized
+            }
             val f = queue.removeFirstOrNull() ?: return null
             frame = f
             var m = CatchUp.NONE
             if (!f.isCodecConfig) {
                 if (catchingUp && pendingCount() > 0) {
-                    val t = clockNs()
-                    if (t - lastShownNs >= showIntervalNs) {
-                        m = CatchUp.SHOW // keep the display moving; the backlog is still worked off
-                        lastShownNs = t
-                        skippedOut++ // a frame that was shown is a re-anchor point like the TAIL, count it with the rest
-                    } else {
-                        m = CatchUp.SKIP
-                        skippedOut++
-                        catchSkipped++
-                    }
+                    m = CatchUp.SKIP
+                    skippedOut++
+                    catchSkipped++
                 } else if (catchingUp || skippedOut > 0) {
                     // The newest frame of the backlog (or the first one after a flush that ended the catch-up).
                     m = CatchUp.TAIL
@@ -317,6 +330,10 @@ class FrameQueue(
                 }
             }
             mark?.value = m
+        }
+        if (expiredRequest >= 0) {
+            onRequest?.invoke(expiredRequest, Source.OVERFLOW)
+            onExpired?.invoke(expiredRequest)
         }
         if (doneFrames >= 0) onCatchUp?.invoke(doneFrames, doneMs)
         return frame

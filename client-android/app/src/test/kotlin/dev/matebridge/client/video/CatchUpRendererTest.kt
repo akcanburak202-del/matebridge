@@ -89,4 +89,16 @@ class CatchUpRendererTest {
         assertTrue(r.isWaitingKeyframe())
         assertTrue(r.queueStatsFields(reset = false).contains("overflows=1 "))
     }
+
+    @Test fun delayedOutputsStillPresentAtLeastEvery50msDuringTheCatchUp() {
+        factory.outputSpacingMs = 20 // the codec swallows all inputs at once and emits the outputs 20 ms apart
+        val r = make()
+        val codec = backlog(r, 14)
+        assertTrue("all released", factory.await(10_000) { codec.renderedPts.size + codec.discardedPts.size >= 15 })
+        val shown = codec.renderedPts.toList()
+        assertEquals("the newest frame is shown last", 15L, shown.last())
+        assertEquals("shown frames keep their order", shown.sorted(), shown)
+        assertTrue("display stood still: only $shown shown over ~300 ms of outputs", shown.size >= 3)
+        assertEquals(listOf(KeyframeRequest.STARTUP), requests.toList())
+    }
 }

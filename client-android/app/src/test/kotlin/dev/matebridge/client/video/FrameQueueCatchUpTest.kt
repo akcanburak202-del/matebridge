@@ -230,68 +230,86 @@ class FrameQueueCatchUpTest {
         assertEquals(CatchUp.NONE, m.take(9))
     }
 
-    // --- T-252 review (P1): a catch-up must not suppress presentation or run unbounded ---
+    // --- T-252 review: a catch-up must be bounded in time, with or without new arrivals ---
 
     private val step = 8 * ms // 120 fps
 
-    /** Longest gap between two frames that were shown (not SKIP) over the run, in ms; run ends when the old path fires. */
-    private class Run(var worstGapMs: Long = 0, var steps: Int = 0, var flushed: Boolean = false, var shown: Int = 0)
-
-    private fun sustained(arrivalsPerTakes: Pair<Int, Int>, startBurst: Int = 6, maxSteps: Int = 400): Run {
+    /** Offers [arr] and takes [tak] frames per 8 ms step; stops when the old path has fired. Returns the steps run. */
+    private fun sustained(arr: Int, tak: Int, startBurst: Int = 6, maxSteps: Int = 400): Int {
         key(); take()
         repeat(startBurst) { p() } // a burst: backlog above the limit of 4
-        val (arr, tak) = arrivalsPerTakes
-        val r = Run()
-        var lastShown = now
         var i = 0
-        while (i < maxSteps && !r.flushed) {
+        while (i < maxSteps && !q.isWaitingKeyframe()) {
             now += step; i++
             repeat(arr) { p() }
-            repeat(tak) {
-                if (take() != null && mark.value != CatchUp.SKIP) {
-                    r.worstGapMs = maxOf(r.worstGapMs, (now - lastShown) / ms); lastShown = now; r.shown++
-                }
-            }
-            r.flushed = q.isWaitingKeyframe()
+            repeat(tak) { take() }
         }
-        r.steps = i
-        r.worstGapMs = maxOf(r.worstGapMs, (now - lastShown) / ms)
-        return r
+        return i
     }
 
-    @Test fun arrivalEqualToDecodeRateKeepsPresentingAndEndsInTheOldPath() {
-        val r = sustained(1 to 1)
-        assertTrue("old path never fired in ${r.steps} steps", r.flushed)
-        assertTrue("catch-up ran ${r.steps} steps (> 300 ms + slack)", r.steps * 8 <= 300 + 2 * 8 + 8)
-        assertTrue("display stood still ${r.worstGapMs} ms", r.worstGapMs <= CatchUp.SHOW_INTERVAL_MS + 8)
-        assertTrue(r.shown >= 3)
+    @Test fun arrivalEqualToDecodeRateEndsInTheOldPathWithinTheDeadline() {
+        val steps = sustained(1, 1)
+        assertTrue("old path never fired", q.isWaitingKeyframe())
+        assertTrue("catch-up ran ${steps * 8} ms", steps * 8 <= 300 + 8 + 8)
+        assertEquals(1L, q.counters().overflows)
+        assertEquals(1L, q.counters().kfRequests)
+    }
+
+    @Test fun arrivalAboveDecodeRateEndsInTheOldPath() {
+        sustained(2, 1)
+        assertTrue(q.isWaitingKeyframe())
         assertEquals(1L, q.counters().overflows)
     }
 
-    @Test fun arrivalSlightlyAboveDecodeRateKeepsPresentingAndEnds() {
-        val r = sustained(10 to 9) // but per step: 10 arrivals vs 9 takes scaled below
-        assertTrue(r.flushed)
-        assertTrue("display stood still ${r.worstGapMs} ms", r.worstGapMs <= CatchUp.SHOW_INTERVAL_MS + 8)
-    }
-
     @Test fun decodeFasterThanArrivalEndsTheCatchUpWithATailAndNoRequest() {
-        val r = sustained(1 to 2)
-        assertFalse(r.flushed)
+        val steps = sustained(1, 2)
+        assertEquals(400, steps)
+        assertFalse(q.isWaitingKeyframe())
         assertFalse(q.isCatchingUp())
         assertTrue(requests.isEmpty())
         assertEquals(0L, q.counters().overflows)
         assertTrue(done.isNotEmpty())
-        assertTrue(r.steps == 400)
     }
 
     @Test fun backBelowTheNormalDepthEndsTheCatchUpAndTheNextFrameIsTheTail() {
         key(); take()
         repeat(6) { p() }
-        take() // SKIP; pending 5
-        repeat(4) { take() } // pending 1 (all handed out as SKIP or SHOW)
+        repeat(5) { take() } // pending 1, all handed out as SKIP
         p() // pending 2 <= limit: caught up
         assertFalse(q.isCatchingUp())
         take()
         assertEquals(CatchUp.TAIL, mark.value)
+    }
+
+    @Test fun burstThenSilenceStillRecoversAtTheDeadlineInsideTake() {
+        val exp = ArrayList<Int>()
+        q.onExpired = { exp += it }
+        key(); take()
+        repeat(10) { p() } // catch-up starts, no more arrivals
+        now += 100 * ms
+        assertNotNull(take()) // within the deadline: normal catch-up
+        now += 250 * ms // 350 ms after the start, the queue is not empty yet (slow decode)
+        assertNull(take()) // the deadline fires in take(): backlog flushed, request produced
+        assertEquals(listOf(KeyframeRequest.FRAMES_DROPPED), exp)
+        assertTrue(q.isWaitingKeyframe())
+        assertEquals(0, q.pending())
+        assertFalse(q.isCatchingUp())
+        assertEquals(1L, q.counters().overflows)
+        key(); take()
+        assertEquals(CatchUp.TAIL, mark.value) // skipped frames were never shown: the keyframe is
+    }
+
+    @Test fun anExpiredRequestInsideTakeIsHeldByTheHoldOffLikeAnyOther() {
+        val exp = ArrayList<Int>()
+        q.onExpired = { exp += it }
+        q.reset(KeyframeRequest.STARTUP) // a request just went out
+        key(); take()
+        repeat(10) { p() }
+        now += 350 * ms
+        assertNull(take())
+        assertTrue(exp.isEmpty())
+        assertEquals(1L, q.counters().kfHeld)
+        now += 600 * ms
+        assertTrue(q.takeRetry()) // the periodic retry sends it later
     }
 }
