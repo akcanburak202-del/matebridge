@@ -27,6 +27,8 @@ public struct StillRefineConfig: Equatable, Sendable {
     public static let usbKB = 1024
     public static let networkKB = 256
     public static let kbRange = 16...8192
+    /// First-frame size assumed when no real frame has been encoded yet (a motion frame is the normal estimate).
+    public static let defaultFirstFrameEstimate = 64 * 1024
 
     public static let disabled = StillRefineConfig(enabled: false, stillUs: 200_000, maxFrames: 16,
                                                    maxBytes: 0, convergedBytes: 1536, minGapUs: 500_000,
@@ -63,6 +65,17 @@ public struct StillRefineConfig: Equatable, Sendable {
     }
 }
 
+/// The session's periodic keyframe (`MaxKeyFrameIntervalDuration`, `KeyframeIntervalPolicy`): VideoToolbox emits an
+/// IDR on its own once the interval has passed since the last keyframe. A refinement train must not run into it.
+public enum PeriodicKeyframe {
+    /// True when the next periodic keyframe may fall within `horizonUs` from now. `intervalSeconds` 0 = never.
+    public static func isDue(nowUs: UInt64, lastKeyframeUs: UInt64, intervalSeconds: Int, horizonUs: UInt64) -> Bool {
+        guard intervalSeconds > 0 else { return false }
+        let elapsed = nowUs &- lastKeyframeUs
+        return elapsed &+ horizonUs >= UInt64(intervalSeconds) * 1_000_000
+    }
+}
+
 /// Why a refinement train ended.
 public enum StillRefineEnd: String, Sendable {
     case converged
@@ -76,6 +89,8 @@ public enum StillRefineEnd: String, Sendable {
     case failed
     /// A keyframe request is pending: the normal capture path serves it, refinement never turns into it.
     case keyframePending = "keyframe_pending"
+    /// The session's periodic keyframe is due within a train's length: a refine frame must never be an IDR.
+    case keyframeDue = "keyframe_due"
 }
 
 /// What one train did (`video ev=refine`).
@@ -137,7 +152,10 @@ public struct StillRefinePolicy: Sendable {
 
     /// Timer: true = submit the first refine frame now (a train started). Also ends a train whose frame never
     /// produced output (returned in `timedOut`).
-    public mutating func tick(nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false)
+    /// `firstFrameEstimate`: expected size of the first refine frame (the last motion frame's size, or a default);
+    /// a train whose first frame might not fit `maxBytes` does not start. `keyframeDue`: see `StillRefineEnd.keyframeDue`.
+    public mutating func tick(nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false,
+                              keyframeDue: Bool = false, firstFrameEstimate: Int = 0)
         -> (start: Bool, timedOut: StillRefineReport?) {
         guard config.enabled else { return (false, nil) }
         switch phase {
@@ -149,7 +167,8 @@ public struct StillRefinePolicy: Sendable {
             }
             return (false, nil)
         case .armed:
-            guard nowUs &- lastCaptureUs >= config.stillUs, queueReady, !keyframePending else { return (false, nil) }
+            guard nowUs &- lastCaptureUs >= config.stillUs, queueReady, !keyframePending, !keyframeDue,
+                  firstFrameEstimate <= config.maxBytes else { return (false, nil) }
             if let last = lastStartUs, nowUs &- last < config.minGapUs { return (false, nil) }
             phase = .running
             lastStartUs = nowUs
@@ -164,7 +183,8 @@ public struct StillRefinePolicy: Sendable {
 
     /// A refine frame's encoder output (`bytes` of the encoded frame). `submitNext`: submit another refine frame;
     /// `report`: the train ended with this frame.
-    public mutating func noteOutput(bytes frameBytes: Int, nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false)
+    public mutating func noteOutput(bytes frameBytes: Int, nowUs: UInt64, queueReady: Bool, keyframePending: Bool = false,
+                                    keyframeDue: Bool = false)
         -> (submitNext: Bool, report: StillRefineReport?) {
         guard phase == .running, waitingOutput else { return (false, nil) }
         waitingOutput = false
@@ -180,6 +200,7 @@ public struct StillRefinePolicy: Sendable {
         // unless a frame is bigger than every earlier one (the encoder's size cannot be known beforehand).
         else if bytes + largestFrame > config.maxBytes { reason = .maxBytes }
         else if keyframePending { reason = .keyframePending }
+        else if keyframeDue { reason = .keyframeDue }
         else if !queueReady { reason = .queueBusy }
         else { reason = nil }
         if let reason { return (false, finish(reason, nowUs: nowUs)) }

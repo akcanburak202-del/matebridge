@@ -360,7 +360,9 @@ Log satırı:
 - `I video ev=refine frames=<n> bytes=<n> first_bytes=<n> last_bytes=<n> ms=<n> reason=converged|max_frames|max_bytes|cancelled|queue_busy|timeout|failed|keyframe_pending` (T-253): durağan ekran iyileştirme treninin (aynı tamponun art arda P kareleri olarak yeniden kodlanması) sonunda tren başına bir satır.
   - Tren, 200 ms yeni gerçek kare olmayınca ve çıkış kuyruğu boşken başlar; `MATEBRIDGE_REFINE=0` kapatır, `_MS`, `_KB`, `_FRAMES` ayarlar.
   - İlk karede yakınsayan ya da hiç kare üretmeden iptal olan trenler `D` düzeyinde yazılır.
-  - `max_bytes`: bayt tavanı (USB 1024 KB, ağ 256 KB) muhafazakâr denetlenir; bir sonraki karenin şimdiye kadarki en büyük kare kadar olacağı varsayılır ve sığmıyorsa durulur.
+  - `max_bytes`: bayt tavanı (USB 1024 KB, ağ 256 KB) YUMUŞAK bir sınırdır: kodlanmış P karesi asla atılmaz (zincir bozulur), bu yüzden en çok bir karelik aşım kabul edilir. Denetim muhafazakârdır: bir sonraki karenin şimdiye kadarki en büyük tren karesi kadar olacağı varsayılır ve sığmıyorsa durulur. İlk karenin tahmini son gerçek (hareket) karenin boyutudur (yoksa 64 KB); sığmıyorsa tren başlamaz.
+  - `keyframe_due`: oturumun periyodik keyframe'i (varsayılan 300 s, `MATEBRIDGE_KEYFRAME_INTERVAL_S`) bir trenin olası uzunluğu içinde düşüyor; refine karesi hiçbir zaman IDR olmasın diye tren başlamaz ya da sürmez. `keyframe_pending`: bekleyen keyframe isteği.
+  - Önceki bir trenin gecikmiş çıktısı/hatası yeni trene sayılmaz ve onu ilerletmez (kare yine normal iletilir).
 - `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
   - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
   - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.

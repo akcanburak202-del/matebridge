@@ -197,6 +197,42 @@ final class StillRefineTests: XCTestCase {
         XCTAssertLessThanOrEqual(r.report?.bytes ?? Int.max, 250_000)
     }
 
+    func testPeriodicKeyframeGuard() {
+        let s: UInt64 = 1_000_000
+        XCTAssertFalse(PeriodicKeyframe.isDue(nowUs: 1000 * s, lastKeyframeUs: 0, intervalSeconds: 0, horizonUs: 5 * s))
+        XCTAssertFalse(PeriodicKeyframe.isDue(nowUs: 100 * s, lastKeyframeUs: 0, intervalSeconds: 300, horizonUs: 5 * s))
+        XCTAssertTrue(PeriodicKeyframe.isDue(nowUs: 296 * s, lastKeyframeUs: 0, intervalSeconds: 300, horizonUs: 5 * s))
+        XCTAssertTrue(PeriodicKeyframe.isDue(nowUs: 400 * s, lastKeyframeUs: 0, intervalSeconds: 300, horizonUs: 5 * s))
+    }
+
+    func testKeyframeDueBlocksStartAndEndsTrain() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertFalse(p.tick(nowUs: 300_000, queueReady: true, keyframeDue: true).start)
+        XCTAssertTrue(p.tick(nowUs: 310_000, queueReady: true).start)
+        let r = p.noteOutput(bytes: 20_000, nowUs: 320_000, queueReady: true, keyframeDue: true)
+        XCTAssertEqual(r.report?.reason, .keyframeDue)
+    }
+
+    func testFirstFrameEstimateGatesStart() {
+        var p = StillRefinePolicy(config: config { $0.maxBytes = 100_000 })
+        p.noteCapture(nowUs: 0)
+        XCTAssertFalse(p.tick(nowUs: 300_000, queueReady: true, firstFrameEstimate: 150_000).start)
+        XCTAssertTrue(p.tick(nowUs: 310_000, queueReady: true, firstFrameEstimate: 90_000).start)
+    }
+
+    func testOutputOfOldTrainDoesNotAdvanceNewOne() {
+        var p = StillRefinePolicy(config: config())
+        p.noteCapture(nowUs: 0)
+        XCTAssertTrue(p.tick(nowUs: 300_000, queueReady: true).start)
+        let old = p.trainID
+        p.noteCapture(nowUs: 310_000)
+        XCTAssertTrue(p.tick(nowUs: 900_000, queueReady: true).start)
+        // The encoder gates callbacks with `isCurrent(trainID)` before calling the policy.
+        XCTAssertFalse(p.isCurrent(old))
+        XCTAssertTrue(p.isCurrent(p.trainID))
+    }
+
     func testQueueReadyForRefine() {
         let q = VideoFrameQueue(keyframeNeeded: {})
         XCTAssertTrue(q.isReadyForRefine)
