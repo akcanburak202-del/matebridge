@@ -59,8 +59,24 @@ object FullChromaSelfTest {
 
     private const val DECODE_TIMEOUT_MS = 4_000L
 
-    /** Records [run]'s outcome in [capability]; returns it. Call off the UI thread. */
-    fun runAndRecord(capability: FullChromaCapability, log: (String) -> Unit): Outcome {
+    private val SINGLE_FLIGHT = Any()
+
+    /**
+     * Records [run]'s outcome in [capability]; returns it. Call off the UI thread. Single flight, process-wide (the native
+     * raw context is global): a second caller (e.g. a recreated activity) waits, then sees the stored result and does not
+     * run again.
+     */
+    fun runAndRecord(capability: FullChromaCapability, log: (String) -> Unit): Outcome = synchronized(SINGLE_FLIGHT) {
+        val st = capability.status()
+        when (st.state) {
+            FullChromaCapability.State.PASSED -> return Outcome.Pass
+            FullChromaCapability.State.FAILED -> return Outcome.Fail(st.reason)
+            FullChromaCapability.State.UNKNOWN -> {}
+        }
+        runAndRecordLocked(capability, log)
+    }
+
+    private fun runAndRecordLocked(capability: FullChromaCapability, log: (String) -> Unit): Outcome {
         val outcome = try { run(log) } catch (t: Throwable) { Outcome.Inconclusive("exception_${t.javaClass.simpleName}") }
         when (outcome) {
             Outcome.Pass -> capability.recordPass()
@@ -81,7 +97,9 @@ object FullChromaSelfTest {
         val rawErr = FullChromaNative.rawInit()
         if (rawErr.isNotEmpty()) {
             log("raw_init=$rawErr")
-            return Outcome.Fail("raw_init_" + rawErr.take(40))
+            // Only a missing extension is a definitive "no"; an EGL/context failure may be transient.
+            return if (rawErr.contains("not exposed")) Outcome.Fail("raw_init_" + rawErr.take(40))
+            else Outcome.Inconclusive("raw_init_" + rawErr.take(40))
         }
         var first: Decoder? = null
         var second: Decoder? = null
@@ -96,7 +114,7 @@ object FullChromaSelfTest {
             second = Decoder.open(w, h, config.data.value, ImageFormat.PRIVATE, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE, handler)
             if (second == null) {
                 log("second_decoder=open_failed")
-                return Outcome.Fail("second_decoder")
+                return Outcome.Inconclusive("second_decoder_open") // contention is indistinguishable from a limit: retried
             }
             val img = first.decodeOne(frame.data.value) ?: return Outcome.Inconclusive("no_output")
             val secondImg = second.decodeOne(frame.data.value)
@@ -104,9 +122,12 @@ object FullChromaSelfTest {
             val line = try { compare(img, w, h) } finally { img.close() }
             log("raw_compare $line second_output=${if (secondImg != null) 1 else 0}")
             return when (RawVerdict.exact(line)) {
-                true -> if (secondImg != null) Outcome.Pass else Outcome.Fail("second_decoder_no_output")
+                true -> if (secondImg != null) Outcome.Pass else Outcome.Inconclusive("second_decoder_no_output")
                 false -> Outcome.Fail("raw_samples_differ")
-                null -> Outcome.Fail("raw_compare_" + line.substringAfter("err=", "unknown").take(40))
+                null -> {
+                    val err = line.substringAfter("err=", "unknown").take(40)
+                    if (err.startsWith("no_")) Outcome.Inconclusive("raw_compare_$err") else Outcome.Fail("raw_compare_$err")
+                }
             }
         } finally {
             first?.close()

@@ -7,6 +7,34 @@ import dev.matebridge.client.protocol.VideoFrame
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * Progress watchdog of the auxiliary decoder (independent of the main stream's `video_health`): stalled when frames wait
+ * for an input buffer, or frames went in and no output came, for longer than [limitNs]. Pure; one thread.
+ */
+class AuxWatchdog(private val limitNs: Long = 2_000_000_000L) {
+    companion object {
+        /** A decoder may legitimately keep a frame or two (idle screen); a real stall piles up inputs. */
+        const val MIN_IN_FLIGHT = 3
+    }
+
+    private var waitingSinceNs = 0L
+    private var lastOutputNs = 0L
+    private var inFlight = 0
+
+    /** A new codec instance starts at [nowNs]. */
+    @Synchronized fun reset(nowNs: Long) { waitingSinceNs = 0; lastOutputNs = nowNs; inFlight = 0 }
+
+    @Synchronized fun onInput(nowNs: Long) { if (inFlight == 0) lastOutputNs = nowNs; inFlight++; waitingSinceNs = 0 }
+    @Synchronized fun onOutput(nowNs: Long) { if (inFlight > 0) inFlight--; lastOutputNs = nowNs }
+
+    /** [waiting]: a frame is waiting for an input buffer (checked on every input-loop turn). */
+    @Synchronized fun stalled(nowNs: Long, waiting: Boolean): Boolean {
+        if (!waiting) waitingSinceNs = 0 else if (waitingSinceNs == 0L) waitingSinceNs = nowNs
+        return (waitingSinceNs != 0L && nowNs - waitingSinceNs > limitNs) ||
+            (inFlight >= MIN_IN_FLIGHT && nowNs - lastOutputNs > limitNs)
+    }
+}
+
+/**
  * The auxiliary stream's decoder (decision 0034): a second `MediaCodec` (same HEVC mime and size as the main one) whose
  * output goes to the auxiliary ImageReader's surface, rendered at once (no pacing: the GL thread pairs by capture time).
  * Frames come through the bounded [AuxFrameQueue]. Its failures never reach the main stream's `video_health`: a decode
@@ -39,6 +67,7 @@ class AuxDecoder(
     @Volatile private var active = false
     private var thread: Thread? = null
     private val captureBySeq = ConcurrentHashMap<Long, Long>()
+    @Volatile private var watchdog: AuxWatchdog? = null
 
     @Volatile var decoded = 0L
         private set
@@ -64,13 +93,21 @@ class AuxDecoder(
         thread = Thread({ run() }, "mb-aux-dec").also { it.start() }
     }
 
-    fun stop() {
+    /** True while the decoder thread still runs (possibly stuck in a codec call after a timed-out [stop]). */
+    fun isAlive(): Boolean = thread?.isAlive == true
+
+    /** Stops and waits (bounded); false = the thread is still inside a codec call (the surface is still in use). */
+    fun stop(): Boolean {
         active = false
         queue.wake()
-        val t = thread ?: return
-        thread = null
+        val t = thread ?: return true
         try { t.join(JOIN_MS) } catch (_: InterruptedException) {}
-        if (t.isAlive) env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stop_slow join_ms=$JOIN_MS")
+        if (t.isAlive) {
+            env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stop_slow join_ms=$JOIN_MS")
+            return false
+        }
+        thread = null
+        return true
     }
 
     private fun run() {
@@ -125,7 +162,7 @@ class AuxDecoder(
                         if (idx < 0) continue // try again / format changed
                         val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
                         c.releaseOutputBuffer(idx, isFrame) // render to the ImageReader at once
-                        if (isFrame) decoded++
+                        if (isFrame) { decoded++; watchdog?.onOutput(System.nanoTime()) }
                     }
                 } catch (e: Exception) {
                     if (running.get()) outError.set(e.javaClass.simpleName)
@@ -134,7 +171,14 @@ class AuxDecoder(
             outThread = t
             t.start()
             var held: VideoFrame? = null
+            val dog = AuxWatchdog().also { it.reset(System.nanoTime()) }
+            watchdog = dog
             while (active && outError.get() == null) {
+                if (dog.stalled(System.nanoTime(), held != null || queue.pendingFrames() > 0)) {
+                    env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stalled")
+                    error = "stalled"
+                    break
+                }
                 val frame = held ?: queue.awaitNext(INPUT_WAIT_NS)
                 held = null
                 if (frame == null) continue
@@ -156,8 +200,9 @@ class AuxDecoder(
                 }
                 val flags = if (frame.isCodecConfig) DecoderCodec.BUFFER_FLAG_CODEC_CONFIG else 0
                 c.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                if (!frame.isCodecConfig) dog.onInput(System.nanoTime())
             }
-            if (active) error = outError.get()
+            if (active && error == null) error = outError.get()
         } catch (e: Exception) {
             error = e.javaClass.simpleName
         } finally {

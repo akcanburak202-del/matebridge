@@ -1314,9 +1314,31 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 onFailed = { why -> runOnUiThread { onFullChromaFailed(why) } },
             ).also { chromaPipeline = it }
             if (p.start(surface, c)) return
+            // Start failed synchronously (ImageReader, thread, previous teardown...): the negotiated fallback, not a
+            // silent direct attach, so the host stops sending the auxiliary stream too.
             MbLog.w("full_chroma_fallback", "reason=start layout=${c.chromaLayout}", "render")
+            onFullChromaFailed("start_failed")
+            return
         }
-        r.attachSurface(surface)
+        attachDirect(surface)
+    }
+
+    /** Set while the direct decoder could not be attached because a stuck presenter still owns the surface. */
+    private var directDeferred = false
+
+    /**
+     * The direct path on [surface], but only once no GL thread of the packed path can still be producing into it; else it
+     * is deferred (the ticker retries) and an error is logged.
+     */
+    private fun attachDirect(surface: android.view.Surface) {
+        val pipe = chromaPipeline
+        if (!dev.matebridge.client.video.PackedPresenter.awaitPrevious(0) || pipe?.busy() == true) {
+            if (!directDeferred) MbLog.e("full_chroma_surface_busy", "action=defer", "render")
+            directDeferred = true
+            return
+        }
+        directDeferred = false
+        renderer?.attachSurface(surface)
     }
 
     /** Releases the video output (the surface is about to go): the packed pipeline when it runs, else the renderer. */
@@ -1337,7 +1359,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.e("full_chroma_disabled", "reason=${why.take(60)} scope=process", "render")
         val surface = if (surfaceValid) video.holder.surface else null
         detachVideoOutput()
-        if (surface != null && streamConfig != null) renderer?.attachSurface(surface)
+        if (surface != null && streamConfig != null) attachDirect(surface)
         sendStreamPrefs(gameSettings.prefs(streamMode))
         refreshSettings()
     }
@@ -1805,6 +1827,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (choreographerOn && vsyncIdle.idleLogDue(System.nanoTime())) { // T-141: once per sleep of >= 1 s
                 MbLog.i("idle", "state=on since_frame_ms=${vsyncIdle.sinceActivityNs(System.nanoTime()) / 1_000_000}", "render")
             }
+            chromaPipeline?.reap() // T-259: close the readers of a timed-out teardown once its threads exited
+            if (directDeferred && surfaceValid) attachDirect(video.holder.surface) // T-259: the stuck presenter exited
             val r = renderer
             if (r != null && r.attached) {
                 // T-121: the retry goes through the queue's request limit (no retry right after another request).

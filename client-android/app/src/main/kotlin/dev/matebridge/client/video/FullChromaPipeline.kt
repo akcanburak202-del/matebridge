@@ -68,6 +68,10 @@ class FullChromaPipeline(
      */
     fun start(surface: Surface, config: StreamConfig): Boolean {
         if (active) stop()
+        if (busy()) {
+            log('E', "full_chroma_busy", "reason=previous_teardown_pending")
+            return false
+        }
         if (!supports(config)) {
             log('W', "full_chroma_unsupported", "layout=${config.chromaLayout} size=${config.widthPx}x${config.heightPx}")
             return false
@@ -141,26 +145,63 @@ class FullChromaPipeline(
      * Stops everything, main decoder first (no release may follow the presenter), then the auxiliary decoder, the GL
      * thread (the EGL surface is gone afterwards) and the readers. UI thread; bounded waits.
      */
-    fun stop() {
-        if (!active && presenter == null) return
+    fun stop(): Boolean {
+        if (!active && presenter == null) return true
         renderer.detachSurface()
-        teardown()
+        return teardown()
     }
 
-    private fun teardown() {
+    /** What a timed-out teardown keeps: the readers (their surfaces) and threads stay open until the threads exit. */
+    private class Leak(
+        val main: ImageReader?, val aux: ImageReader?, val mt: HandlerThread?, val at: HandlerThread?,
+        val dec: AuxDecoder?, val pres: PackedPresenter?,
+    ) {
+        fun alive() = pres?.isAlive == true || dec?.isAlive() == true
+    }
+
+    private val leaked = ArrayList<Leak>()
+
+    /** True while an earlier teardown timed out and its threads still own surfaces (UI thread). */
+    fun busy(): Boolean { reap(); return leaked.isNotEmpty() }
+
+    /** Closes the readers of timed-out teardowns whose threads have exited since. UI thread; non-blocking. */
+    fun reap() {
+        val it = leaked.iterator()
+        while (it.hasNext()) {
+            val l = it.next()
+            if (l.alive()) continue
+            runCatching { l.main?.close() }
+            runCatching { l.aux?.close() }
+            l.mt?.quitSafely()
+            l.at?.quitSafely()
+            it.remove()
+            log('I', "full_chroma_reaped", "late=1")
+        }
+    }
+
+    /** False when the aux decoder or the GL thread did not stop in time: ownership of the readers stays here ([reap]). */
+    private fun teardown(): Boolean {
         active = false
         renderer.packed = null
         // No image may reach the presenter or the pending queue once they are going away.
         runCatching { mainReader?.setOnImageAvailableListener(null, null) }
         runCatching { auxReader?.setOnImageAvailableListener(null, null) }
-        auxDecoder?.stop()
-        presenter?.shutdown()
-        runCatching { mainReader?.close() }
-        runCatching { auxReader?.close() }
-        mainThread?.quitSafely()
-        auxThread?.quitSafely()
+        val auxClean = auxDecoder?.stop() ?: true
+        val presClean = presenter?.shutdown() ?: true
+        val clean = auxClean && presClean
+        if (clean) {
+            runCatching { mainReader?.close() }
+            runCatching { auxReader?.close() }
+            mainThread?.quitSafely()
+            auxThread?.quitSafely()
+        } else {
+            // A thread is still inside a codec/GL call and uses these surfaces: keep ownership, close them once it exits.
+            leaked.add(Leak(mainReader, auxReader, mainThread, auxThread, auxDecoder, presenter))
+            log('E', "full_chroma_teardown_timeout", "aux_clean=${if (auxClean) 1 else 0} gl_clean=${if (presClean) 1 else 0}")
+        }
         presenter = null; auxDecoder = null; auxQueue = null; mainReader = null; auxReader = null
         mainThread = null; auxThread = null
+        return clean
     }
 
     /** A VIDEO_FRAME of the auxiliary view. Any thread; dropped while the pipeline is not running. */

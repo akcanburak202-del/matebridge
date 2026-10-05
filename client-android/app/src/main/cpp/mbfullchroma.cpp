@@ -110,6 +110,8 @@ struct Imported {
 };
 
 constexpr size_t kMaxCachedImages = 16;
+// Draws in flight (fences not yet signalled) beyond which a new draw is refused: the GPU is not keeping up or a fence is stuck.
+constexpr size_t kMaxFences = 8;
 
 struct Ctx {
     EGLDisplay dpy = EGL_NO_DISPLAY;
@@ -130,7 +132,7 @@ struct Ctx {
         int64_t tag;
     };
     std::deque<Pending> pendingTs;
-    std::deque<GLsync> fences;  // one per submitted draw, in order
+    std::deque<GLsync> fences;  // one per submitted draw, in order; nullptr = created after a glFinish (already complete)
     int64_t fencesDone = 0;     // draws whose GPU work is known complete
     std::vector<int64_t> tsOut;  // quads: tag, latch, present, rendering complete
     std::deque<GLuint> pendingQueries;
@@ -382,7 +384,9 @@ void destroy(std::unique_ptr<Ctx>& p) {
         if (c.progMerge) glDeleteProgram(c.progMerge);
         if (c.progMain) glDeleteProgram(c.progMain);
         if (c.progDump) glDeleteProgram(c.progDump);
-        for (GLsync f : c.fences) glDeleteSync(f);
+        for (GLsync f : c.fences) {
+            if (f) glDeleteSync(f);
+        }
         c.fences.clear();
         if (c.fbo) glDeleteFramebuffers(1, &c.fbo);
         if (c.fboTex) glDeleteTextures(1, &c.fboTex);
@@ -425,6 +429,30 @@ void pollGpu(Ctx& c) {
         if (!disjoint) c.gpuOut.push_back((int64_t)ns);
         c.pendingQueries.pop_front();
         c.freeQueries.push_back(q);
+    }
+}
+
+// Pops the fences that signalled (in order). A failed wait (GL_WAIT_FAILED) is handled by finishing the queue: glFinish
+// completes every earlier draw, so all queued fences count as done.
+void pollFences(Ctx& c) {
+    while (!c.fences.empty()) {
+        GLsync f = c.fences.front();
+        if (f) {
+            GLenum r = glClientWaitSync(f, 0, 0);
+            if (r == GL_WAIT_FAILED) {
+                glFinish();
+                for (GLsync g : c.fences) {
+                    if (g) glDeleteSync(g);
+                }
+                c.fencesDone += (int64_t)c.fences.size();
+                c.fences.clear();
+                return;
+            }
+            if (r != GL_ALREADY_SIGNALED && r != GL_CONDITION_SATISFIED) return;
+            glDeleteSync(f);
+        }
+        c.fences.pop_front();
+        c.fencesDone++;
     }
 }
 
@@ -640,6 +668,11 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
     JNIEnv* env, jclass, jobject mainHwb, jobject auxHwb, jlong tag, jlong presentNs) {
     if (!gPres) return -1;
     Ctx& c = *gPres;
+    pollFences(c);
+    if (c.fences.size() > kMaxFences) {
+        c.lastError = "fence_backlog";
+        return -6;
+    }
     AHardwareBuffer* m = AHardwareBuffer_fromHardwareBuffer(env, mainHwb);
     if (!m) {
         c.lastError = "no main ahb";
@@ -686,7 +719,9 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
     if (presentNs > 0 && pPresentationTime) pPresentationTime(c.dpy, c.surf, (EGLnsecsANDROID)presentNs);
     uint64_t frameId = 0;
     bool haveId = c.timestamps && pNextFrameId(c.dpy, c.surf, &frameId);
-    c.fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+    GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!fence) glFinish();  // no fence: wait for the GPU here, the draw is complete when the queue entry is popped
+    c.fences.push_back(fence);
     glFlush();
     if (!eglSwapBuffers(c.dpy, c.surf)) {
         c.lastError = fmt("eglSwapBuffers:0x%x", eglGetError());
@@ -705,13 +740,7 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_client_video_FullChromaNative_present
 JNIEXPORT jlong JNICALL Java_dev_matebridge_client_video_FullChromaNative_presentCompletedDraws(JNIEnv*, jclass) {
     if (!gPres) return 0;
     Ctx& c = *gPres;
-    while (!c.fences.empty()) {
-        GLenum r = glClientWaitSync(c.fences.front(), 0, 0);
-        if (r != GL_ALREADY_SIGNALED && r != GL_CONDITION_SATISFIED) break;
-        glDeleteSync(c.fences.front());
-        c.fences.pop_front();
-        c.fencesDone++;
-    }
+    pollFences(c);
     return (jlong)c.fencesDone;
 }
 

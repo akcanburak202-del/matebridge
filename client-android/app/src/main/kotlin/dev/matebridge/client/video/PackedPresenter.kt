@@ -6,12 +6,16 @@ import android.view.Surface
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
-/** Safety net: an image whose fence never signals is closed anyway after this long. */
-internal const val IMAGE_RETIRE_MAX_NS = 500_000_000L
+/**
+ * An image whose draw's fence has not signalled for this long means the GPU (or the fence) is stuck: the presenter fails
+ * over to the direct path, but the image is NEVER closed before its fence signals (or glFinish returned at teardown).
+ */
+internal const val IMAGE_STALL_NS = 500_000_000L
 
 /**
  * Images the GPU may still read: each is retired with the number of the last submitted draw that can use it and is closed
- * only once that draw's fence signalled ([closeDue] with the completed-draw count), or after [IMAGE_RETIRE_MAX_NS].
+ * only once that draw's fence signalled ([closeDue] with the completed-draw count). A fence that stays unsignalled is
+ * detected by [stalledForNs] (recovery is the owner's job), never by closing the image early.
  */
 internal class RetiredImages {
     private class Entry(val image: Image, val atNs: Long, val draw: Long)
@@ -19,14 +23,20 @@ internal class RetiredImages {
 
     fun retire(image: Image, nowNs: Long, lastDraw: Long) { q.add(Entry(image, nowNs, lastDraw)) }
 
-    /** Closes images whose draw completed ([completedDraws]) or that waited too long; [force] closes everything. */
+    /** Closes images whose draw completed ([completedDraws]); [force] closes everything (only after a glFinish). */
     fun closeDue(nowNs: Long, completedDraws: Long, force: Boolean = false) {
         while (true) {
             val e = q.peek() ?: return
-            if (!force && e.draw > completedDraws && nowNs - e.atNs < IMAGE_RETIRE_MAX_NS) return
+            if (!force && e.draw > completedDraws) return
             q.poll()
             runCatching { e.image.close() }
         }
+    }
+
+    /** How long the oldest still-waiting image has been waiting for its draw's fence (0 when none waits). */
+    fun stalledForNs(nowNs: Long, completedDraws: Long): Long {
+        val e = q.peek() ?: return 0L
+        return if (e.draw > completedDraws) nowNs - e.atNs else 0L
     }
 }
 
@@ -71,7 +81,7 @@ class PackedPresenter(
          */
         fun awaitPrevious(ms: Long): Boolean {
             val p = previous ?: return true
-            if (p.isAlive) { try { p.join(ms) } catch (_: InterruptedException) {} }
+            if (p.isAlive && ms > 0) { try { p.join(ms) } catch (_: InterruptedException) {} }
             return !p.isAlive
         }
     }
@@ -148,13 +158,14 @@ class PackedPresenter(
     }
 
     /** Stops the GL thread and waits (bounded) for it; the EGL surface is gone afterwards. */
-    fun shutdown(joinMs: Long = 500) {
+    fun shutdown(joinMs: Long = 500): Boolean {
         stopFlag = true
         synchronized(lock) { lock.notifyAll() }
         if (isAlive && Thread.currentThread() !== this) {
             try { join(joinMs) } catch (_: InterruptedException) {}
             if (isAlive) log('W', "gl_stop_slow", "join_ms=$joinMs")
         }
+        return !isAlive
     }
 
     override fun run() {
@@ -176,7 +187,12 @@ class PackedPresenter(
                 val item = takeMain()
                 val now = clockNs()
                 absorbAux()
-                retired.closeDue(now, FullChromaNative.presentCompletedDraws())
+                val completed = FullChromaNative.presentCompletedDraws()
+                retired.closeDue(now, completed)
+                if (retired.stalledForNs(now, completed) > IMAGE_STALL_NS) {
+                    failed = "fence_stall"
+                    break
+                }
                 if (item == null) { drainTimestamps(); continue }
                 val exp = expectations.remove(item.seq)
                 val aux = if (exp != null) pairing.pair(exp.captureUs) else null
