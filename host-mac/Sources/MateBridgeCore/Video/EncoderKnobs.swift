@@ -73,18 +73,21 @@ public struct EncoderKnobs: Equatable, Sendable {
     /// Short `DataRateLimits` window in ms next to the 1 s pair (T-177 diagnostics, `MATEBRIDGE_RATE_WINDOW_MS`);
     /// nil = off (only the 1 s pair). Closed by T-196, or removed after T-127 (decision 0026 §2).
     public var rateWindowMs: Int?
+    /// T-235 `MATEBRIDGE_CHROMA` (`ChromaKnob`); unset = today's 4:2:0 path.
+    public var chroma: ChromaKnob = .unset
 
     public static let rateWindowRangeMs: ClosedRange<Int> = 10...999
 
     public init() {}
 
     /// `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset), `MATEBRIDGE_BITRATE_STEP` (`BitrateStepKnob.parse`),
-    /// `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off).
+    /// `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off), `MATEBRIDGE_CHROMA` (`ChromaKnob.parse`).
     public static func parse(_ env: [String: String]) -> EncoderKnobs {
         var k = EncoderKnobs()
         k.quality = parseQuality(env["MATEBRIDGE_QUALITY"])
         k.bitrateStep = BitrateStepKnob.parse(env["MATEBRIDGE_BITRATE_STEP"])
         if let v = int(env["MATEBRIDGE_RATE_WINDOW_MS"]), rateWindowRangeMs.contains(v) { k.rateWindowMs = v }
+        k.chroma = ChromaKnob.parse(env: env)
         return k
     }
 
@@ -103,12 +106,14 @@ public struct EncoderKnobs: Equatable, Sendable {
     /// Fields for the `ev=encoder_config` line logged when the encoder is created. `prio_speed=1`,
     /// `idle_refresh=off` and `input_retag=1` are constants since T-204 (their knobs were retired), kept so the line
     /// and its parsers stay unchanged (like `video_socket=bsd` after T-186). The T-177 debug knobs add
-    /// `bitrate_step=` / `rate_window_ms=` only when set, so the default line is unchanged.
+    /// `bitrate_step=` / `rate_window_ms=` only when set, so the default line is unchanged; so does T-235's `chroma=`
+    /// (the requested mode, `invalid` for an unknown value).
     public var logFields: String {
         var f = "prio_speed=1 quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
             + "idle_refresh=off input_retag=1"
         if let s = bitrateStep { f += " bitrate_step=\(s.logValue)" }
         if let w = rateWindowMs { f += " rate_window_ms=\(w)" }
+        if chroma.isSet { f += " chroma=\(chroma.invalid ? "invalid" : chroma.requested.rawValue)" }
         return f
     }
 }
@@ -121,13 +126,13 @@ public struct EncoderKnobs: Equatable, Sendable {
 /// variable is never listed. The socket knobs are left out: `ev=listening` reports the sockets.
 public enum StreamProfileLog {
     /// Host env knobs classed keep or debug-only in decision 0026 (`docs/KNOBS.md` rows 24, 25, 26, 28, 30, 31,
-    /// 33, 34, 36-42, 43), in log order.
+    /// 33, 34, 36-42, 43, 44), in log order.
     public static let knobAllowList: [String] = [
         "MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_WIFI_BITRATE_KBPS", "MATEBRIDGE_CODEC",
         "MATEBRIDGE_REFRESH", "MATEBRIDGE_ENCODER", "MATEBRIDGE_QUALITY", "MATEBRIDGE_KEYFRAME_INTERVAL_S",
         "MATEBRIDGE_BITRATE_STEP", "MATEBRIDGE_RATE_WINDOW_MS", "MATEBRIDGE_SERVICE_CLASS",
         "MATEBRIDGE_NOTSENT_LOWAT_KB", "MATEBRIDGE_SENDQ_LOG", "MATEBRIDGE_LAT_TRACE", "MATEBRIDGE_TCP_LOG",
-        "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_VD_TRANSFER",
+        "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_VD_TRANSFER", "MATEBRIDGE_CHROMA",
     ]
     /// A logged knob value is cut to this many characters.
     public static let maxValueLength = 64
@@ -155,7 +160,7 @@ public enum StreamProfileLog {
 
     /// One log token: trimmed, cut to `maxValueLength` characters, whitespace and the separators `=` and `;` become
     /// `_`. An empty value is logged as `_`.
-    static func value(_ raw: String) -> String {
+    public static func value(_ raw: String) -> String {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return "_" }
         return String(t.prefix(maxValueLength).map { $0.isWhitespace || $0 == "=" || $0 == ";" ? "_" : $0 })

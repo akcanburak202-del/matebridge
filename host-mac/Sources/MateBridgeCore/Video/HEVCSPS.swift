@@ -13,6 +13,24 @@ public enum HEVCSPS {
     /// Parses VUI colour info from an SPS NAL unit (with its 2-byte header, without start code).
     /// Returns nil if this is not an SPS, has no VUI signal-type info, or parsing fails.
     public static func vuiColor(sps nal: [UInt8]) -> HEVCVUIColor? {
+        summary(sps: nal)?.vuiColor
+    }
+
+    /// Chroma-related SPS fields (T-235 `ev=chroma_config`).
+    public struct Summary: Equatable, Sendable {
+        public var generalProfileIdc: Int
+        /// 0 = monochrome, 1 = 4:2:0, 2 = 4:2:2, 3 = 4:4:4.
+        public var chromaFormatIdc: Int
+        public var vuiPresent: Bool
+        /// As `vuiColor(sps:)` returns it.
+        public var vuiColor: HEVCVUIColor?
+        /// `chroma_sample_loc_type_top_field` when the VUI carries `chroma_loc_info` (nil: absent or unreadable).
+        public var chromaSampleLocTop: Int?
+    }
+
+    /// Parses an SPS NAL unit (with its 2-byte header, without start code); nil if it is not an SPS or the fields up to
+    /// `chroma_format_idc` cannot be read. Later fields that fail to parse are left nil/false.
+    public static func summary(sps nal: [UInt8]) -> Summary? {
         guard AnnexB.hevcNALType(nal) == 33, nal.count > 3 else { return nil }
         var r = BitReader(unescape(Array(nal[2...])))
         return try? parse(&r)
@@ -139,13 +157,28 @@ public enum HEVCSPS {
         return out
     }
 
-    private static func parse(_ r: inout BitReader) throws -> HEVCVUIColor? {
+    private static func parse(_ r: inout BitReader) throws -> Summary {
         try r.skip(4)  // vps id
         let maxSub = try r.bits(3)
         try r.skip(1)
+        // general_profile_space (2), general_tier_flag (1), general_profile_idc (5): the next byte.
+        let profileIdc = r.d.count > 1 ? Int(r.d[1] & 0x1F) : 0
         try profileTierLevel(&r, maxSubLayersMinus1: maxSub)
         _ = try r.ue()  // sps id
         let chroma = try r.ue()
+        var out = Summary(generalProfileIdc: profileIdc, chromaFormatIdc: chroma, vuiPresent: false, vuiColor: nil,
+                          chromaSampleLocTop: nil)
+        guard let vui = try? parseToVUI(&r, chroma: chroma, maxSub: maxSub) else { return out }
+        out.vuiPresent = vui.present
+        out.vuiColor = vui.color
+        out.chromaSampleLocTop = vui.chromaLocTop
+        return out
+    }
+
+    private struct VUIFields { var present = false; var color: HEVCVUIColor?; var chromaLocTop: Int? }
+
+    /// From after `chroma_format_idc` through the VUI's `chroma_loc_info`.
+    private static func parseToVUI(_ r: inout BitReader, chroma: Int, maxSub: Int) throws -> VUIFields {
         if chroma == 3 { try r.skip(1) }
         _ = try r.ue(); _ = try r.ue()  // width, height
         if try r.bit() == 1 { for _ in 0..<4 { _ = try r.ue() } }  // conformance window
@@ -169,7 +202,9 @@ public enum HEVCSPS {
             for _ in 0..<n { try r.skip(log2MaxPocLsb + 1) }
         }
         try r.skip(2)  // temporal mvp, strong intra smoothing
-        guard try r.bit() == 1 else { return nil }  // vui_parameters_present_flag
+        var out = VUIFields()
+        guard try r.bit() == 1 else { return out }  // vui_parameters_present_flag
+        out.present = true
         if try r.bit() == 1 {  // aspect ratio
             if try r.bits(8) == 255 { try r.skip(32) }
         }
@@ -178,13 +213,16 @@ public enum HEVCSPS {
             try r.skip(3)  // video_format
             let full = try r.bit() == 1
             if try r.bit() == 1 {
-                return HEVCVUIColor(fullRange: full, colourPrimaries: UInt8(try r.bits(8)),
-                                    transferCharacteristics: UInt8(try r.bits(8)),
-                                    matrixCoefficients: UInt8(try r.bits(8)), colourDescriptionPresent: true)
+                out.color = HEVCVUIColor(fullRange: full, colourPrimaries: UInt8(try r.bits(8)),
+                                         transferCharacteristics: UInt8(try r.bits(8)),
+                                         matrixCoefficients: UInt8(try r.bits(8)), colourDescriptionPresent: true)
+            } else {
+                out.color = HEVCVUIColor(fullRange: full, colourPrimaries: 2, transferCharacteristics: 2,
+                                         matrixCoefficients: 2, colourDescriptionPresent: false)
             }
-            return HEVCVUIColor(fullRange: full, colourPrimaries: 2, transferCharacteristics: 2,
-                                matrixCoefficients: 2, colourDescriptionPresent: false)
         }
-        return nil
+        // chroma_loc_info_present_flag: a failure here keeps what was read so far.
+        if (try? r.bit()) == 1, let top = try? r.ue() { out.chromaLocTop = top }
+        return out
     }
 }

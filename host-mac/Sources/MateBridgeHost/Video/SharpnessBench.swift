@@ -11,7 +11,8 @@ import VideoToolbox
 ///
 /// A 2800x1840 synthetic text page (CoreText: several sizes, grey and coloured text, hairlines) scrolls for
 /// `--motion-frames` frames at the stream fps and then stops. Frames go through `HEVCEncoder` itself, with the app's
-/// environment knobs (`MATEBRIDGE_CODEC`, `_BITRATE_KBPS`, `_QUALITY`, `_ENCODER`), like ScreenCaptureKit: nothing is
+/// environment knobs (`MATEBRIDGE_CODEC`, `_BITRATE_KBPS`, `_QUALITY`, `_ENCODER`, `_CHROMA`; T-235 feeds `BGRA` when the
+/// chroma mode captures `BGRA`), like ScreenCaptureKit: nothing is
 /// submitted while the content is static. Any output not made from a scrolled frame is a re-submission of the last
 /// buffer by the encoder itself (`phase=resubmit`, e.g. the idle keyframe). The Annex-B output is decoded in-process
 /// with `VTDecompressionSession` and compared with the source luma (PSNR, 8x8 SSIM). No display, capture, input or
@@ -42,6 +43,8 @@ public enum SharpnessBench {
         var height: Int
         var luma: [UInt8]
         var chroma: [UInt8]   // (height / 2) rows of width bytes (Cb, Cr pairs)
+        /// The rendered page (sRGB RGBA, `width x height x 4`): the source of `BGRA` frames (T-235).
+        var rgba: [UInt8] = []
 
         /// Luma of the visible window starting at row `top`.
         func lumaWindow(top: Int, rows: Int) -> LumaPlane {
@@ -60,7 +63,9 @@ public enum SharpnessBench {
             return true
         }
         guard ok else { return nil }
-        return toYCbCr(rgba, width: width, height: height)
+        var page = toYCbCr(rgba, width: width, height: height)
+        page.rgba = rgba
+        return page
     }
 
     private static func drawPage(_ ctx: CGContext, width: Int, height: Int) {
@@ -149,8 +154,10 @@ public enum SharpnessBench {
         return Page(width: width, height: height, luma: luma, chroma: chroma)
     }
 
-    /// One visible frame (rows `top ..< top + height`) as an IOSurface-backed full-range NV12 buffer.
-    static func frame(_ page: Page, top: Int, height: Int) -> CVPixelBuffer? {
+    /// One visible frame (rows `top ..< top + height`) as an IOSurface-backed full-range NV12 buffer, or as `BGRA` when
+    /// the encoder's chroma mode captures `BGRA` (T-235 `MATEBRIDGE_CHROMA`, like ScreenCaptureKit would deliver).
+    static func frame(_ page: Page, top: Int, height: Int, bgra: Bool = false) -> CVPixelBuffer? {
+        if bgra { return bgraFrame(page, top: top, height: height) }
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]]
         var pb: CVPixelBuffer?
         guard CVPixelBufferCreate(nil, page.width, height, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -166,6 +173,34 @@ public enum SharpnessBench {
                                                    byteCount: page.width)
                 }
             }
+        }
+        return pb
+    }
+
+    private static func bgraFrame(_ page: Page, top: Int, height: Int) -> CVPixelBuffer? {
+        let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]]
+        var pb: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, page.width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary,
+                                  &pb) == kCVReturnSuccess, let pb else { return nil }
+        CVPixelBufferLockBaseAddress(pb, [])
+        defer { CVPixelBufferUnlockBaseAddress(pb, []) }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return nil }
+        let stride = CVPixelBufferGetBytesPerRow(pb)
+        let dst = base.assumingMemoryBound(to: UInt8.self)
+        page.rgba.withUnsafeBufferPointer { src in
+            for r in 0..<height {
+                let s = (top + r) * page.width * 4, d = r * stride
+                for x in 0..<page.width {
+                    dst[d + x * 4] = src[s + x * 4 + 2]
+                    dst[d + x * 4 + 1] = src[s + x * 4 + 1]
+                    dst[d + x * 4 + 2] = src[s + x * 4]
+                    dst[d + x * 4 + 3] = 255
+                }
+            }
+        }
+        // ScreenCaptureKit is configured for sRGB.
+        if let cs = CGColorSpace(name: CGColorSpace.sRGB) {
+            CVBufferSetAttachment(pb, kCVImageBufferCGColorSpaceKey, cs, .shouldPropagate)
         }
         return pb
     }
@@ -313,6 +348,10 @@ public enum SharpnessBench {
             return 1
         }
 
+        // T-235: feed BGRA when the chroma mode captures BGRA (the sharp modes' Metal pass, or 444).
+        let bgra = encoder.capturePixelFormat == kCVPixelFormatType_32BGRA
+        print("capture=\(bgra ? "bgra" : "420f") chroma_applied=\(encoder.chroma.applied.rawValue)")
+
         // Motion: one frame per stream interval, timestamped on the host clock like ScreenCaptureKit.
         var sourceIndex: [UInt64: Int] = [:]   // capture time -> frame index (scroll position index * shift)
         let intervalNs = UInt64(1e9 / Double(settings.fps))
@@ -322,7 +361,7 @@ public enum SharpnessBench {
                 let now = DispatchTime.now().uptimeNanoseconds
                 if next > now { Thread.sleep(forTimeInterval: Double(next - now) / 1e9) }
                 next += intervalNs
-                guard let pb = frame(page, top: i * shift, height: height) else { return false }
+                guard let pb = frame(page, top: i * shift, height: height, bgra: bgra) else { return false }
                 let pts = CMClockGetTime(CMClockGetHostTimeClock())
                 let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
                 sourceIndex[us] = i
@@ -390,6 +429,7 @@ public enum SharpnessBench {
                          resume.count, o.resumeFrames, resume.map(\.psnr).reduce(0, +) / n,
                          Double(resume.map(\.bytes).reduce(0, +)) / n, maxBytes, resume.first?.bytes ?? 0))
         }
+        if let c = encoder.takeChromaStats(nowUs: .max) { print("chroma_stats \(c)") }
         print("summary codec_configs=\(configs) outputs=\(outputs.value.count - configs)")
         return failed.value == nil ? 0 : 1
     }

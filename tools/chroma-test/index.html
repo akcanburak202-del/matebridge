@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chroma Test</title>
+<!--
+  T-235: offline colour-edge test page for MATEBRIDGE_CHROMA (420 / sharp_bilinear / sharp_nearest / 444).
+  Open it in Safari on the Mac (shown on the tablet) and compare the four values by eye or by phone photo.
+  No external resources. The canvases are drawn in device pixels, so "1 px" there is one physical pixel.
+-->
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1d1d1f;
+    --muted: #6e6e73;
+    --grey: #8e8e93;
+    --light: #d1d1d6;
+    --dark: #1c1c1e;
+    --red: #e3242b;
+    --blue: #1d5fd6;
+    --green: #1f9d3a;
+    --purple: #9b2fc9;
+    --orange: #f07c00;
+    --pink: #e0218a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 14px/1.4 -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; color: var(--muted); font-weight: 600; }
+  p.note { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 0; }
+  .panel { padding: 18px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center; flex: 1 1 320px; }
+  .panel.grey { background: var(--grey); }
+  .panel.light { background: var(--light); }
+  .panel.dark { background: var(--dark); }
+  .panel.white { background: #fff; }
+  .icon { width: 64px; height: 64px; border-radius: 15px; position: relative; flex: none; }
+  .icon.small { width: 32px; height: 32px; border-radius: 8px; }
+  .icon::after {
+    content: ""; position: absolute; inset: 22%; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
+  }
+  .icon.note::after { inset: 26% 30%; border-radius: 3px; background: #fff; clip-path: polygon(40% 0, 100% 0, 100% 25%, 55% 30%, 55% 80%, 35% 100%, 0 85%, 20% 65%, 40% 70%); }
+  .red { background: var(--red); }
+  .blue { background: var(--blue); }
+  .green { background: var(--green); }
+  .purple { background: var(--purple); }
+  .orange { background: var(--orange); }
+  .pink { background: var(--pink); }
+  .grad-red { background: linear-gradient(180deg, #fb5c74, #fa233b); }
+  .text-block { padding: 14px 18px; flex: 1 1 320px; }
+  .text-block p { margin: 2px 0; }
+  .t12 { font-size: 12px; } .t13 { font-size: 13px; } .t14 { font-size: 14px; } .t16 { font-size: 16px; }
+  .c-red { color: var(--red); } .c-blue { color: var(--blue); } .c-green { color: var(--green); }
+  .c-purple { color: var(--purple); } .c-orange { color: var(--orange); } .c-pink { color: var(--pink); }
+  .on-blue { background: var(--blue); color: #ff3b30; padding: 2px 6px; }
+  .on-red { background: var(--red); color: #0a84ff; padding: 2px 6px; }
+  .on-green { background: var(--green); color: #ff2d55; padding: 2px 6px; }
+  code { font: 13px/1.5 Menlo, Monaco, monospace; }
+  .ide { background: #1e1e1e; color: #d4d4d4; padding: 12px 16px; flex: 1 1 360px; white-space: pre; overflow: hidden; }
+  .ide .k { color: #c586c0; } .ide .s { color: #ce9178; } .ide .f { color: #dcdcaa; } .ide .t { color: #4ec9b0; }
+  .ide .n { color: #b5cea8; } .ide .c { color: #6a9955; } .ide .r { color: #f44747; }
+  .ide.light { background: #ffffff; color: #1f1f1f; }
+  .ide.light .k { color: #af00db; } .ide.light .s { color: #a31515; } .ide.light .f { color: #795e26; }
+  .ide.light .t { color: #267f99; } .ide.light .n { color: #098658; } .ide.light .c { color: #008000; }
+  .ide.light .r { color: #e51400; }
+  canvas { display: block; width: 100%; height: 240px; }
+  .edges { display: grid; grid-template-columns: repeat(6, 1fr); height: 80px; }
+  .hue { height: 40px; background: linear-gradient(90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+  footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Renk kenarı testi (MATEBRIDGE_CHROMA)</h1>
+<p class="note">Aynı sayfayı dört değerle aç: <code>420</code>, <code>sharp_bilinear</code>, <code>sharp_nearest</code>, <code>444</code>. Kırmızı ikon kenarına, renkli yazıya ve 1 px çizgilere bak.</p>
+
+<h2>1. İkonlar (Dock benzeri)</h2>
+<div class="row">
+  <div class="panel grey">
+    <div class="icon grad-red note"></div><div class="icon red"></div><div class="icon blue"></div>
+    <div class="icon green"></div><div class="icon purple"></div><div class="icon orange"></div>
+    <div class="icon small red"></div><div class="icon small blue"></div><div class="icon small pink"></div>
+  </div>
+  <div class="panel light">
+    <div class="icon grad-red note"></div><div class="icon red"></div><div class="icon blue"></div>
+    <div class="icon green"></div><div class="icon purple"></div><div class="icon pink"></div>
+    <div class="icon small red"></div><div class="icon small green"></div><div class="icon small purple"></div>
+  </div>
+  <div class="panel dark">
+    <div class="icon grad-red note"></div><div class="icon red"></div><div class="icon blue"></div>
+    <div class="icon green"></div><div class="icon purple"></div><div class="icon orange"></div>
+    <div class="icon small red"></div><div class="icon small blue"></div><div class="icon small orange"></div>
+  </div>
+</div>
+
+<h2>2. Renkli yazı (12–16 px)</h2>
+<div class="row">
+  <div class="text-block panel white" style="display:block">
+    <p class="t12"><span class="c-red">Kırmızı 12 px: The quick brown fox 0123456789</span> · <span class="c-blue">Mavi 12 px: jumps over</span></p>
+    <p class="t13"><span class="c-green">Yeşil 13 px: the lazy dog iiil1| mm WW</span> · <span class="c-purple">Mor 13 px: (){}[] ;:</span></p>
+    <p class="t14"><span class="c-orange">Turuncu 14 px: MateBridge çğıöşü</span> · <span class="c-pink">Pembe 14 px: ÇĞİÖŞÜ</span></p>
+    <p class="t16"><span class="c-red">Kırmızı 16 px</span> <span class="c-blue">Mavi 16 px</span> <span class="c-green">Yeşil 16 px</span> <span class="c-purple">Mor 16 px</span></p>
+    <p class="t14"><span class="on-blue">kırmızı mavi üstünde</span> <span class="on-red">mavi kırmızı üstünde</span> <span class="on-green">pembe yeşil üstünde</span></p>
+  </div>
+  <div class="text-block panel grey" style="display:block">
+    <p class="t12"><span class="c-red">Kırmızı 12 px gri zemin</span> · <span class="c-blue">Mavi 12 px</span></p>
+    <p class="t13"><span class="c-green">Yeşil 13 px gri zemin</span> · <span class="c-purple">Mor 13 px</span></p>
+    <p class="t14"><span class="c-orange">Turuncu 14 px</span> · <span class="c-pink">Pembe 14 px</span></p>
+    <p class="t16"><span class="c-red">Kırmızı 16</span> <span class="c-blue">Mavi 16</span> <span class="c-green">Yeşil 16</span></p>
+  </div>
+  <div class="text-block panel dark" style="display:block">
+    <p class="t12"><span class="c-red">Kırmızı 12 px koyu zemin</span> · <span class="c-blue">Mavi 12 px</span></p>
+    <p class="t13"><span class="c-green">Yeşil 13 px koyu zemin</span> · <span class="c-purple">Mor 13 px</span></p>
+    <p class="t14"><span class="c-orange">Turuncu 14 px</span> · <span class="c-pink">Pembe 14 px</span></p>
+    <p class="t16"><span class="c-red">Kırmızı 16</span> <span class="c-blue">Mavi 16</span> <span class="c-green">Yeşil 16</span></p>
+  </div>
+</div>
+
+<h2>3. Sözdizimi renklendirmesi</h2>
+<div class="row">
+<code class="ide"><span class="k">func</span> <span class="f">encode</span>(_ buffer: <span class="t">CVPixelBuffer</span>, fps: <span class="t">Int</span>) -&gt; <span class="t">Bool</span> {
+    <span class="c">// T-235: sharp YUV luma adjustment</span>
+    <span class="k">let</span> name = <span class="s">"HEVC_Main444_AutoLevel"</span>
+    <span class="k">guard</span> fps &gt;= <span class="n">120</span> <span class="k">else</span> { <span class="k">return</span> <span class="r">false</span> }
+    <span class="k">return</span> <span class="f">submit</span>(buffer, keyframe: <span class="n">true</span>)
+}</code>
+<code class="ide light"><span class="k">func</span> <span class="f">encode</span>(_ buffer: <span class="t">CVPixelBuffer</span>, fps: <span class="t">Int</span>) -&gt; <span class="t">Bool</span> {
+    <span class="c">// T-235: sharp YUV luma adjustment</span>
+    <span class="k">let</span> name = <span class="s">"HEVC_Main444_AutoLevel"</span>
+    <span class="k">guard</span> fps &gt;= <span class="n">120</span> <span class="k">else</span> { <span class="k">return</span> <span class="r">false</span> }
+    <span class="k">return</span> <span class="f">submit</span>(buffer, keyframe: <span class="n">true</span>)
+}</code>
+</div>
+
+<h2>4. Doygun renk kenarları ve ton şeridi</h2>
+<div class="edges">
+  <div style="background:#f00"></div><div style="background:#0f0"></div>
+  <div style="background:#00f"></div><div style="background:#ff0"></div>
+  <div style="background:#f0f"></div><div style="background:#0ff"></div>
+</div>
+<div class="hue"></div>
+
+<h2>5. Fiziksel piksel çizgileri ve ızgaralar (canvas, aygıt pikseli)</h2>
+<p class="note">Sol: gri zemin, orta: koyu zemin, sağ: kırmızı-mavi ızgaralar (1, 2, 4 piksel kareler).</p>
+<canvas id="px"></canvas>
+
+<footer>tools/chroma-test/index.html · T-235 · çevrimdışı, dış kaynak yok</footer>
+
+<script>
+(function () {
+  var canvas = document.getElementById('px');
+  function draw() {
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.floor(canvas.clientWidth * dpr), h = Math.floor(canvas.clientHeight * dpr);
+    canvas.width = w; canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    var third = Math.floor(w / 3);
+    var colors = ['#e3242b', '#1d5fd6', '#1f9d3a', '#9b2fc9', '#f07c00', '#e0218a'];
+    function lines(x0, bg) {
+      ctx.fillStyle = bg; ctx.fillRect(x0, 0, third, h);
+      // 1 px horizontal lines, then 1 px vertical lines, then 2 px lines.
+      for (var i = 0; i < colors.length; i++) {
+        ctx.fillStyle = colors[i];
+        ctx.fillRect(x0 + 8, 8 + i * 7, third - 16, 1);
+        ctx.fillRect(x0 + 8 + i * 9, 60, 1, h - 120);
+        ctx.fillRect(x0 + 70 + i * 11, 60, 2, h - 120);
+        ctx.fillRect(x0 + 8, h - 52 + i * 8, third - 16, 2);
+      }
+      // 1 px diagonal (stair-step) lines.
+      for (var d = 0; d < 3; d++) {
+        ctx.fillStyle = colors[d];
+        for (var k = 0; k < Math.min(third - 160, h - 130); k++) ctx.fillRect(x0 + 150 + k + d * 20, 62 + k, 1, 1);
+      }
+    }
+    lines(0, '#8e8e93');
+    lines(third, '#1c1c1e');
+    // Red-blue checkerboards with 1, 2 and 4 device-pixel cells.
+    var x0 = 2 * third, cell = [1, 2, 4], bw = Math.floor((w - x0) / 3);
+    for (var c = 0; c < 3; c++) {
+      var s = cell[c];
+      for (var y = 0; y < h; y += s) {
+        for (var x = 0; x < bw; x += s) {
+          ctx.fillStyle = ((x / s + y / s) % 2 === 0) ? '#e3242b' : '#1d5fd6';
+          ctx.fillRect(x0 + c * bw + x, y, s, s);
+        }
+      }
+    }
+  }
+  draw();
+  window.addEventListener('resize', draw);
+})();
+</script>
+</body>
+</html>

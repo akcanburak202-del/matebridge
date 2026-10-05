@@ -19,7 +19,8 @@ public enum ScreenCaptureError: Error, CustomStringConvertible {
     }
 }
 
-/// Captures one display as full-range BT.709 4:2:0 frames (what the encoder wants, no conversion).
+/// Captures one display as full-range BT.709 4:2:0 frames (what the encoder wants, no conversion), or as sRGB `BGRA`
+/// when T-235's `MATEBRIDGE_CHROMA` asks for it.
 final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     /// pixel buffer, presentation time, host monotonic microseconds of the frame, and the frame's display time
     /// (`SCStreamFrameInfo.displayTime`, host clock microseconds; 0 when SCK gave none) used as the latency-trace origin
@@ -41,7 +42,11 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     /// Does not prompt; false means capture would fail.
     static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
 
-    func start(displayID: CGDirectDisplayID, settings: VideoSettings) async throws {
+    /// - Parameter pixelFormat: `420f` (default, today's path) or `BGRA` for T-235's `MATEBRIDGE_CHROMA` modes
+    ///   (`HEVCEncoder.capturePixelFormat`). Colour space and matrix are set the same either way (the matrix only
+    ///   applies to YCbCr output).
+    func start(displayID: CGDirectDisplayID, settings: VideoSettings,
+               pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) async throws {
         guard ScreenCapture.hasPermission else { throw ScreenCaptureError.permissionDenied }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
@@ -51,7 +56,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         // SCK scales the display to the encoded size (T-049 performance mode); at scale 1000 this is the display size.
         cfg.width = settings.encodedWidthPx
         cfg.height = settings.encodedHeightPx
-        cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        cfg.pixelFormat = pixelFormat
         cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         // SCK discards frames that arrive slightly before the interval, so with exactly 1/fps a 60 Hz source
