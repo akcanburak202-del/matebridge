@@ -1,7 +1,7 @@
 ---
 id: T-242
 title: Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula
-status: in_progress
+status: in-progress
 phase: 6
 owner: android-client-dev
 depends_on: []

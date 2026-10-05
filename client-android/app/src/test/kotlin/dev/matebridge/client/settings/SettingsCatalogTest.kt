@@ -141,6 +141,18 @@ class SettingsCatalogTest {
         assertEquals("Uygulanan: 60 Mbps", applied.text())
     }
 
+    @Test fun bitrateOtomatikLabelFollowsTheModeLayer() { // T-242
+        val c = choice(SettingsCatalog.sections(h, inStream = true), "bitrate")
+        assertEquals("Otomatik", c.options.first().label)
+        h.modeLayer = StreamMode.GAME // the same option re-reads its label on refresh
+        assertEquals(listOf("Otomatik (60 Mbps)", "15 Mbps", "30 Mbps", "60 Mbps", "100 Mbps"), c.options.map { it.label })
+        assertEquals("0", c.selected()) // Otomatik stays selected
+        h.modeLayer = StreamMode.DRAWING
+        assertEquals("Otomatik (60 Mbps)", c.options.first().label)
+        h.modeLayer = null
+        assertEquals("Otomatik", c.options.first().label)
+    }
+
     @Test fun hdrRowOnlyInOyunAndGreyWithoutCapability() { // T-238, decision 0032
         val s = SettingsCatalog.sections(h, inStream = true)
         val c = choice(s, "hdr")

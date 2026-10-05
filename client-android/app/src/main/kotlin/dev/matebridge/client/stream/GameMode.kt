@@ -14,6 +14,9 @@ import dev.matebridge.client.video.VideoRenderer
  *   Oyun: 60 Mbps if Otomatik, "Düşük gecikme", no pen trail/dot. Çizim: fingers gestures-only (one finger sends
  *   nothing, pinch and two-finger scroll still work; [FingerPolicy.GESTURES_ONLY]), 60 Mbps if Otomatik.
  *   Values a mode does not override ([overridesOf]) keep the stored ones.
+ * - The layer keeps the user's bit rate choice ([bitrateKbps], 0 = Otomatik) apart from the value it sends
+ *   ([Values.bitrateKbps]): Otomatik inside a layer always means the layer default [GAME_BITRATE_KBPS], whether it was
+ *   stored on entry or picked while the layer is on (T-242); the panel keeps "Otomatik" selected.
  * - While a layer is active every read here returns the layer's value. A write changes only the layer for a setting
  *   that layer overrides ([overridesOf]); any other setting is persisted as usual (and the layer's copy follows), so a
  *   change to a non-overridden setting never silently reverts when the mode changes. The layer is rebuilt on each
@@ -65,6 +68,9 @@ class GameModeSettings(
     private var layer: Values? = null
     private var layerMode: StreamMode? = null
 
+    /** T-242: the bit rate choice while a layer is on (0 = Otomatik); [Values.bitrateKbps] is its resolved value. */
+    private var layerBitrateChoice: Long = Bitrate.AUTO_KBPS
+
     /** True while a layer (Oyun or Çizim) is in effect. */
     val active: Boolean get() = layer != null
 
@@ -84,7 +90,11 @@ class GameModeSettings(
     /** What applies now: the layer while a mode layer is on, otherwise the stored values. */
     fun effective(): Values = layer ?: saved()
 
-    val bitrateKbps: Long get() = effective().bitrateKbps
+    /**
+     * The user's bit rate choice, one of [Bitrate.OPTIONS_KBPS] (0 = Otomatik): the panel selection. Inside a layer it
+     * is the layer's choice; what STREAM_PREFS sends is [Values.bitrateKbps] of [effective] (Otomatik there = 60 Mbps).
+     */
+    val bitrateKbps: Long get() = if (layer != null) layerBitrateChoice else settings.bitrateKbps()
     val audioOut: AudioOutPref get() = effective().audioOut
     val penTrail: Boolean get() = effective().penTrail
     val penDot: Boolean get() = effective().penDot
@@ -110,7 +120,8 @@ class GameModeSettings(
 
     fun setBitrateKbps(kbps: Long) {
         val v = Bitrate.sanitize(kbps)
-        write(Override.BITRATE, { settings.setBitrateKbps(v) }) { it.copy(bitrateKbps = v) }
+        write(Override.BITRATE, { settings.setBitrateKbps(v) }) { it.copy(bitrateKbps = layerBitrateKbps(v)) }
+        if (layer != null) layerBitrateChoice = v
     }
 
     fun setAudioOut(p: AudioOutPref) = write(Override.AUDIO, { settings.setAudioOut(p) }) { it.copy(audioOut = p) }
@@ -139,12 +150,15 @@ class GameModeSettings(
             target == current -> null
             target != null -> {
                 layerMode = target
-                layer = defaults(target, saved())
+                val s = saved()
+                layerBitrateChoice = s.bitrateKbps
+                layer = defaults(target, s)
                 Transition(Change.ENTER, target)
             }
             else -> {
                 layerMode = null
                 layer = null
+                layerBitrateChoice = Bitrate.AUTO_KBPS
                 Transition(Change.EXIT, current!!)
             }
         }
@@ -167,7 +181,7 @@ class GameModeSettings(
      * display size in Oyun and the dynamic range ([dynamicRange]; SDR writes no group).
      */
     fun prefs(mode: StreamMode): StreamPrefs {
-        val p = mode.toPrefs(fps(mode), bitrateKbps)
+        val p = mode.toPrefs(fps(mode), effective().bitrateKbps) // T-242: the resolved rate, not the panel choice
         val d = display(mode)
         return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode), chroma)
     }
@@ -227,6 +241,20 @@ class GameModeSettings(
         /** Decision 0014/0030: "yüksek bit hızı" when the stored choice is Otomatik (Oyun and Çizim). */
         const val GAME_BITRATE_KBPS = 60_000L
 
+        /** What a layer sends for the bit rate [choice] (T-242): Otomatik = [GAME_BITRATE_KBPS], else the choice. */
+        fun layerBitrateKbps(choice: Long): Long = if (choice == Bitrate.AUTO_KBPS) GAME_BITRATE_KBPS else choice
+
+        /**
+         * The panel label of the bit rate option [kbps] while [layer]'s mode is on (T-242): Otomatik shows what it means
+         * there, "Otomatik (60 Mbps)"; in Günlük (null) and for the fixed rates it is [Bitrate.label].
+         */
+        fun bitrateOptionLabel(layer: StreamMode?, kbps: Long): String =
+            if (kbps == Bitrate.AUTO_KBPS && layer != null && Override.BITRATE in overridesOf(layer)) {
+                "${Bitrate.label(kbps)} (${Bitrate.mbps(GAME_BITRATE_KBPS)})"
+            } else {
+                Bitrate.label(kbps)
+            }
+
         /** The settings [mode]'s layer overrides, in log order. */
         fun overridesOf(mode: StreamMode): List<Override> = when (mode) {
             StreamMode.GAME -> listOf(Override.BITRATE, Override.AUDIO, Override.PEN)
@@ -246,7 +274,7 @@ class GameModeSettings(
 
         /** Mode defaults over the [saved] values: Oyun = 0014 §3, Çizim = 0030 §1 (see the class comment). */
         fun defaults(mode: StreamMode, saved: Values): Values {
-            val high = if (saved.bitrateKbps == Bitrate.AUTO_KBPS) GAME_BITRATE_KBPS else saved.bitrateKbps
+            val high = layerBitrateKbps(saved.bitrateKbps)
             return when (mode) {
                 StreamMode.GAME -> saved.copy(bitrateKbps = high, audioOut = AudioOutPref.AUTO, penTrail = false, penDot = false)
                 // A stored "tamamen kapat" stays fully off; otherwise one finger goes silent but pinch/scroll still work.

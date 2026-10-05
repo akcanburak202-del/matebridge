@@ -175,7 +175,12 @@ sealed interface SettingItem {
         fun titleText() = title + marker()
     }
 
-    class Option(val id: String, val label: String)
+    /** One button; its label is read through [labelOf] so a refresh can change it (T-242: "Otomatik (60 Mbps)"). */
+    class Option(val id: String, private val labelOf: () -> String) {
+        constructor(id: String, label: String) : this(id, { label })
+
+        val label: String get() = labelOf()
+    }
 
     /** One button showing "title: açık/kapalı"; a tap flips it. */
     class Toggle(
@@ -290,7 +295,9 @@ object SettingsCatalog {
                 add(
                     SettingItem.Choice(
                         "bitrate", "Bit hızı",
-                        Bitrate.OPTIONS_KBPS.map { SettingItem.Option(it.toString(), Bitrate.label(it)) },
+                        Bitrate.OPTIONS_KBPS.map { kbps ->
+                            SettingItem.Option(kbps.toString()) { GameModeSettings.bitrateOptionLabel(h.modeLayer, kbps) }
+                        },
                         { h.bitrateKbps.toString() },
                         layered(GameModeSettings.Override.BITRATE),
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
