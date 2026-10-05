@@ -38,6 +38,9 @@ public enum HDRPolicy {
     public static let encoderCriticalProperties = [
         "ProfileLevel", "ColorPrimaries", "TransferFunction", "YCbCrMatrix",
         "MasteringDisplayColorVolume", "ContentLightLevelInfo", "HDRMetadataInsertionMode",
+        // Not a property: `VTCompressionSessionPrepareToEncodeFrames` failing with the HDR10 configuration (recorded
+        // in the same `Name=<OSStatus>` form, Codex review of T-237).
+        "PrepareToEncodeFrames",
     ]
 
     /// The first refused critical property among the encoder's `Name=<OSStatus>` failures, or nil.

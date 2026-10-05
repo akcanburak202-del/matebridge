@@ -247,15 +247,22 @@ final class HEVCEncoder: @unchecked Sendable {
             set("HDRMetadataInsertionMode", kVTCompressionPropertyKey_HDRMetadataInsertionMode,
                 kVTHDRMetadataInsertionMode_Auto)
         }
+        // A failed prepare is recorded like a refused property (only on failure, so the SDR `encoder_set[…]` report
+        // is unchanged when it succeeds).
+        let prepared = VTCompressionSessionPrepareToEncodeFrames(s)
+        if prepared != noErr {
+            failures.append("PrepareToEncodeFrames=\(prepared)")
+            report.append("PrepareToEncodeFrames=\(prepared)")
+            HEVCEncoder.log.error("ev=prepare_failed status=\(prepared)")
+        }
         propertyFailures = failures
         propertyReport = report
-        // HDR10: a refused Main10 / colour / metadata property means the stream would not be what STREAM_CONFIG
-        // announces; the owner falls back to SDR (`ev=hdr_fallback reason=encoder_rejected`). `deinit` closes the
-        // session. SDR keeps logging failures only, as before.
+        // HDR10: a refused Main10 / colour / metadata property, or a session that would not prepare with them, means
+        // the stream would not be what STREAM_CONFIG announces; the owner falls back to SDR (`ev=hdr_fallback
+        // reason=encoder_rejected`). `deinit` closes the session. SDR keeps logging failures only, as before.
         if hdr, let refused = HDRPolicy.refusedEncoderProperty(failures) {
             throw HDRSetupError(reason: .encoderRejected, detail: refused)
         }
-        VTCompressionSessionPrepareToEncodeFrames(s)
 
         // T-235: the sharp modes need the Metal pass; without it the session runs today's 4:2:0 path.
         if let upsample = chroma.applied.sharpUpsample {

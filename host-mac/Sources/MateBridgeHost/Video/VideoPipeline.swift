@@ -363,23 +363,28 @@ public final class VideoPipeline: @unchecked Sendable {
     private func markStopped() -> Bool {
         lock.withLock { if state == .stopped { return false }; state = .stopped; return true }
     }
-    private func takeResources() -> (ScreenCapture?, HEVCEncoder?, VirtualDisplay?) {
+    /// Capture, encoder, the running display and a handed-over display that `obtainDisplay` never consumed (a start
+    /// that failed before it, e.g. an HDR10 encoder refusal; Codex review of T-237).
+    private func takeResources() -> (ScreenCapture?, HEVCEncoder?, VirtualDisplay?, VirtualDisplay?) {
         lock.withLock {
-            defer { capture = nil; encoder = nil; display = nil }
-            return (capture, encoder, display)
+            defer { capture = nil; encoder = nil; display = nil; inherited = nil }
+            return (capture, encoder, display, inherited)
         }
     }
 
+    /// An unconsumed inherited display is released too (or handed over when keeping and there is no running one):
+    /// otherwise it stays alive inside this failed pipeline and the owner's fallback (`hdr_fallback`,
+    /// `game_display_failed`) would create a second display with the same vendor/product/serial, which fails.
     @discardableResult
     private func teardown(keepingDisplay: Bool = false) async -> VirtualDisplay? {
-        let (cap, enc, disp) = takeResources()
+        let (cap, enc, disp, inh) = takeResources()
         await cap?.stop()
         await enc?.shutdown()
         box.encoder = nil
         frames.finish()
-        if keepingDisplay { return disp }
-        disp?.invalidate()
-        return nil
+        let plan = DisplayTeardown.plan(current: disp, inherited: inh, keeping: keepingDisplay)
+        plan.release.forEach { $0.invalidate() }
+        return plan.keep
     }
 
     /// Unexpected failure: tear down, then tell the owner once.

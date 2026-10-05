@@ -239,6 +239,48 @@ final class HDRTests: XCTestCase {
         XCTAssertEqual(HDRPolicy.refusedEncoderProperty(["HDRMetadataInsertionMode=-12900"]),
                        "HDRMetadataInsertionMode=-12900")
         XCTAssertNil(HDRPolicy.refusedEncoderProperty(["ProfileLevelX=1"]), "exact names only")
+        // Codex review: a failed VTCompressionSessionPrepareToEncodeFrames under HDR10 is an encoder refusal too.
+        XCTAssertEqual(HDRPolicy.refusedEncoderProperty(["Quality=-1", "PrepareToEncodeFrames=-12902"]),
+                       "PrepareToEncodeFrames=-12902")
+    }
+
+    // MARK: Display teardown (Codex review: unconsumed inherited display)
+
+    private final class FakeDisplay {}
+
+    func testFailedStartReleasesAnUnconsumedInheritedDisplay() {
+        let inherited = FakeDisplay()
+        // HDR10 encoder refused before obtainDisplay: no running display, the handed-over one is released, so the
+        // SDR fallback can create its display (same vendor/product/serial) after the recreate gap.
+        let failed = DisplayTeardown.plan(current: nil, inherited: inherited, keeping: false)
+        XCTAssertNil(failed.keep)
+        XCTAssertEqual(failed.release.count, 1)
+        XCTAssertTrue(failed.release.first === inherited)
+        // Running display only (normal stop): released; nothing at all: nothing to do.
+        let current = FakeDisplay()
+        let stop = DisplayTeardown.plan(current: current, inherited: nil, keeping: false)
+        XCTAssertNil(stop.keep)
+        XCTAssertTrue(stop.release.count == 1 && stop.release[0] === current)
+        let none = DisplayTeardown.plan(current: nil as FakeDisplay?, inherited: nil, keeping: false)
+        XCTAssertNil(none.keep)
+        XCTAssertTrue(none.release.isEmpty)
+        // Both (defensive): all released when not keeping.
+        XCTAssertEqual(DisplayTeardown.plan(current: current, inherited: inherited, keeping: false).release.count, 2)
+    }
+
+    func testKeepingHandsOnOneDisplayAndReleasesTheRest() {
+        let current = FakeDisplay(), inherited = FakeDisplay()
+        let running = DisplayTeardown.plan(current: current, inherited: nil, keeping: true)
+        XCTAssertTrue(running.keep === current)
+        XCTAssertTrue(running.release.isEmpty)
+        let unconsumed = DisplayTeardown.plan(current: nil, inherited: inherited, keeping: true)
+        XCTAssertTrue(unconsumed.keep === inherited, "still alive: handed on instead of dropped")
+        XCTAssertTrue(unconsumed.release.isEmpty)
+        let both = DisplayTeardown.plan(current: current, inherited: inherited, keeping: true)
+        XCTAssertTrue(both.keep === current)
+        XCTAssertTrue(both.release.count == 1 && both.release[0] === inherited, "never two displays")
+        let same = DisplayTeardown.plan(current: current, inherited: current, keeping: false)
+        XCTAssertEqual(same.release.count, 1, "the same object is released once")
     }
 
     // MARK: Remembered prefs
