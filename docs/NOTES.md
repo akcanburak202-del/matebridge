@@ -1539,3 +1539,9 @@ Ham: `~/.cache/matebridge-tools/data/fullchroma/{tablet,host,sf}-0023.log`.
 - `gl_ms` 0,01 (GPU zamanlayıcı sorgusu çalışmıyor, ölçüm hatası). Gecikme A/B bu kısa oturumda anlamlı değil (az pencere, farklı içerik).
 - Çözüm seçenekleri kullanıcıya sunuldu: (A) çifti bekle (≤1 kare, ~+7 ms), (B) shader'da değişmeyen bloklarda önceki tam rengi koru (gecikme yok), (C) kısa bekleme + B.
 - **Düzeltme (2026-10-06 ~01:00, T-262):** "yardımcı/ana 1,23–1,50, toplam bant ~2,2–2,5×" yorumu yanlıştı: bu oranlar yalnız neredeyse durağan pencerelerden (toplam 170–470 kbps, birkaç yüz baytlık kareler). Hareketli pencerelerde yardımcı/ana 0,14–0,28. Yardımcının geç kalması boyuttan değil, tek motorda sıralı kodlamadan (T-261 istemci çözümü). T-262: yardımcı hedefi ana × %25 (videoda oran 0,58 → 0,29; RGB 39,6 → 38,5 dB, renkli kenar Cb/Cr ~36/35 → 34/33 dB; 4:2:0 taban 35,6 dB, 27,7/24,9 dB).
+
+## 2026-10-06 ~01:30 — Gece sonu: T-261 + T-262 kuruldu, tekrar testi sabaha
+
+- T-261 (istemci: değişmeyen bloklarda son tam rengi koru, geç yardımcıyla yükseltme; Codex 2 tur, son tur temiz) ve T-262 (host: yardımcı hedefi ana × %25) ana dalda. Tablete T-261 APK'sı kuruldu (01:23, kendi kendine test geçti), host T-262 ile yeniden başlatıldı. Kullanıcı tekrar testini sabaha bıraktı.
+- **Sabah testi (Wi-Fi, Günlük 60, Tam renk):** Apple Music ikonu kaydırma sırasında titremiyor mu; hareket bitince tam renge oturma; hızlı hareketten sonra renk gölgesi (varsa `ChromaReuse.TOLERANCE` düşür); `gl_present_init reuse=1 render_ts=1`, `reuse_pct`, `late_upgrades`, `aux_paired_pct`, `gl_ms`; 0034 §9 durdurma kuralı (Keskin ↔ Tam renk aynı oturumda; SF örnekleyici `(BLAST)` katmanını seçmeli); `chroma_stats aux_main_delta` ~0,25–0,35.
+- Sonra: 0035 Wi-Fi dosya erişimi kartları (protokol → host/istemci), SMB probu ertelendi.
