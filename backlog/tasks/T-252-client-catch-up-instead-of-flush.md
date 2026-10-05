@@ -9,6 +9,9 @@ decisions: [0021]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/
   - client-android/app/src/test/kotlin/dev/matebridge/client/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/DevKnobs.kt   # orchestrator extension: catch_up knob
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt         # orchestrator extension: one wiring line
+  - docs/LOGGING.md                                                                  # orchestrator extension: ev=catch_up docs
   - backlog/tasks/T-252-client-catch-up-instead-of-flush.md
 ---
 
@@ -57,11 +60,11 @@ Tasarım: kareler çözücüye sırayla verilmeye devam eder (referans zinciri b
 - Commit: `git log task/T-252-catch-up` (T-252 commit'i).
 - Dosyalar: `video/CatchUp.kt` (yeni), `video/FrameQueue.kt`, `video/VideoRenderer.kt`, `video/AdaptivePacer.kt` (`reanchorAfterCatchUp`), `video/CodecGeneration.kt` (`catchMarks`); testler `FrameQueueCatchUpTest`, `CatchUpRendererTest`, `FakeDecoderCodec` (renderedPts/discardedPts).
 - Varsayımlar: backlog sınırı 0,5 s / 64 kare / 32 MB; eşik = bugünkü `maxPending` (120 fps'te 8); TAIL anında gösterilir (render zamanı 0 = bir sonraki vsync). Eksik kare / sıra boşluğu algılaması FrameQueue'da yok (oturum katmanında); dokunulmadı.
-- check.sh: ALL OK (3 kez).
+- check.sh: ALL OK (3 kez; knob + LOGGING eklemesinden sonra yeniden koşuldu, aşağıya bkz.).
+- A/B: `adb shell am start ... --ez dev true --ez catch_up false` eski flush + keyframe yolunu verir.
 - Test EDİLMEDİ (cihaz): Wi-Fi'da 120 fps tam ekran geçişi, gerçek çözücüde SKIP discard davranışı, TAIL sonrası pacer kilidinin geri gelmesi.
 - Cihazda kontrol: (1) Wi-Fi'da `adb logcat -s MB:*` ile `ev=catch_up frames= ms=` satırları (ms ~ 25-60 beklenir), aynı pencerede `kf_req` artmaması, `ev=queue_overflow` yalnız >0,5 s birikmede; (2) görsel donma süresi eski yola göre kısa mı (A/B: `catch_up false`, bağlantı bekliyor); (3) catch-up sonrası `render ev=present` `skip_pct`/`lock` normale dönüyor mu; (4) USB'de aynı, `catchups=` çoğunlukla 0; (5) bağlantı kopma/uyku-uyanma sonrası görüntü normal.
 
 ## Open questions
 
-- `--ez catch_up false` (A/B) için `session/DevKnobs.kt` (SPEC `catch_up`, BOOL, debugOnly) ve `MainActivity.kt` (`r.catchUp = devKnobs.catchUp`, T-251'deki `pacerTuning` satırının yanına) gerekli; `files:` dışında olduğu için yapılmadı. `VideoRenderer.catchUp` hazır.
-- `docs/LOGGING.md`: `ev=catch_up frames= ms=` ve `catchups= cu_skipped= kf_avoided=` alanları orkestratör tarafından belgelenmeli (kapsam dışı).
+- (Çözüldü) Orkestratör `DevKnobs.kt`, `MainActivity.kt` (tek satır) ve `docs/LOGGING.md` dosyalarını kapsama ekledi; `--ez catch_up false` (dev kapısı arkasında, `ev=profile knobs=` içinde `catch_up:0`) bağlandı, `DevKnobsTest` ve LOGGING.md güncellendi.

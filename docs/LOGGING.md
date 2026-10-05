@@ -207,7 +207,11 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
   - `kf_held`: 500 ms sınırına takılıp bekletilen istek;
   - `overflows`: kuyruk taşması;
   - `max_pending`: bekleyen kare tepe değeri;
-  - `limit`: kuyruk sınırı (fps'e göre ~64 ms).
+  - `limit`: kuyruk sınırı (fps'e göre ~64 ms);
+  - `catchups` (T-252): yetişme (catch-up) bölümü sayısı; her biri eskiden bir boşaltma + keyframe isteği olacaktı;
+  - `cu_skipped`: yetişmede çözülüp gösterilmeden bırakılan kare sayısı (`releaseOutputBuffer(render=false)`);
+  - `kf_avoided`: istenmeyen keyframe sayısı (şimdilik `catchups` ile aynı değer).
+- `I decoder ev=catch_up frames= ms=` (T-252): bir yetişme bitince bir kez. `frames` birikimdeki kare sayısı (en yenisi dahil, yalnız o gösterilir), `ms` birikimin başlangıcından en yeni karenin alınmasına kadar. Kuyruk `maxPending`'i aşınca (0,5 sn / 64 kare / 32 MB sınırı içinde) kareler atılmaz, sırayla çözülür, KEYFRAME_REQUEST gitmez; sınır aşılırsa eski `queue_overflow` yolu çalışır. `--ez dev true --ez catch_up false` eski davranışı geri getirir (`ev=profile knobs=` içinde `catch_up:0`).
 - `W decoder ev=queue_overflow pending= limit= in_codec= decode_last_us= since_kf= gaps_us= req=sent|held since_req_ms=`: her taşmada yazılır. `gaps_us` son varış aralıklarıdır.
   - Küçük aralıklar + düşük `in_codec`: ağ yığılması.
   - Yüksek `in_codec` / uzun `decode_last_us`: çözücü yetişmiyor.
