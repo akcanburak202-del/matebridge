@@ -185,11 +185,16 @@ class DevKnobsTest {
     @Test fun profileHasTheDocumentedFieldsInOrder() {
         val line = profile().logFields("abc1234", "2026-10-03T12:34Z", parse())
         assertEquals(
-            "mode=smooth fps=120 size=2800x1840 scale_permille=1000 display=native bitrate_kbps=60000 bitrate_setting=auto " +
+            "mode=smooth fps=120 size=2800x1840 scale_permille=1000 display=native hdr=0 bitrate_kbps=60000 bitrate_setting=auto " +
                 "transport=usb transport_mode=auto audio=1 audio_out=auto pacer=adaptive " +
                 "sha=abc1234 built=2026-10-03T12:34Z dev=0 knobs=-",
             line,
         )
+    }
+
+    @Test fun profileShowsTheAppliedHdr() { // T-238, decision 0032
+        val line = profile().copy(mode = "game", hdr = true).logFields("abc1234", "2026-10-03T12:34Z", parse())
+        assertTrue(line, line.contains(" display=native hdr=1 bitrate_kbps=60000 "))
     }
 
     @Test fun profileShowsFixedBufferBitrateSettingDevAndKnobs() {
@@ -235,11 +240,11 @@ class DevKnobsTest {
     @Test fun profileShowsTheGameDisplay() {
         val base = profile(mode = "game")
         val asked = base.copy(displayWidthPx = 1848, displayHeightPx = 1214, displayApplied = true).logFields("abc1234", "unknown", parse())
-        assertTrue(asked, asked.contains(" scale_permille=1000 display=1848x1214 display_applied=1 bitrate_kbps="))
+        assertTrue(asked, asked.contains(" scale_permille=1000 display=1848x1214 display_applied=1 hdr=0 bitrate_kbps="))
         val old = base.copy(displayWidthPx = 1400, displayHeightPx = 920).logFields("abc1234", "unknown", parse())
         assertTrue(old, old.contains(" display=1400x920 display_applied=0 "))
         val native = base.logFields("abc1234", "unknown", parse())
-        assertTrue(native, native.contains(" display=native bitrate_kbps="))
+        assertTrue(native, native.contains(" display=native hdr=0 bitrate_kbps="))
         assertFalse(native, native.contains("display_applied"))
     }
 

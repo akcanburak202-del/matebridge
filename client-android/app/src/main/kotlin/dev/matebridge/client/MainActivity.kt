@@ -72,6 +72,10 @@ import dev.matebridge.client.stream.FrameRatePolicy
 import dev.matebridge.client.stream.GameJitter
 import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
+import dev.matebridge.client.stream.HdrCapability
+import dev.matebridge.client.stream.HdrPolicy
+import dev.matebridge.client.stream.HdrRequestLog
+import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.video.IntervalHistogram
 import dev.matebridge.client.stream.StatsFormat
 import dev.matebridge.client.stream.StatsLogWindow
@@ -151,6 +155,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * mode's temporary defaults sit over [settings] without ever being stored.
      */
     private lateinit var gameSettings: GameModeSettings
+    /** T-238 (decision 0032): one `ev=hdr_request` line per change of the requested dynamic range. */
+    private val hdrRequestLog = HdrRequestLog()
     /** A valid `--es audio_out` launch override is in effect: game mode leaves the audio output alone until the panel changes it. */
     private var audioOutFromExtra = false
     private lateinit var clipboard: ClipboardBridge // T-055
@@ -486,7 +492,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-223 (decision 0030 §5): the five pre-update mode ids become mode + frame rate once, before any read.
         settings.migrateModesOnce()?.let { MbLog.i("modes_migrated", "mode=${it.mode.id} fps=${it.fps}") }
         streamMode = settings.streamMode()
-        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay) // T-215: `--ei game_display 0` = native display
+        // T-238 (decision 0032): HDR10 capability once (display + the HEVC decoder the renderer gets).
+        val hdrCaps = detectHdrCapability()
+        MbLog.i("hdr_caps", hdrCaps.logFields())
+        // T-215: `--ei game_display 0` = native display.
+        gameSettings = GameModeSettings(settings, devKnobs.gameDisplay, hdrCaps)
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
@@ -563,7 +573,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
-        }, gameSettings.prefs(streamMode), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
+        }, loggedPrefs(gameSettings.prefs(streamMode)), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
             initialFiles = FilesInfo.OFF, // T-135: FILES_INFO once per session, READY when the server listens
             stallDiag = stallDiag, // T-142
@@ -905,20 +915,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-223 (decision 0030 §2): the current mode's own rate; one complete STREAM_PREFS (a 60<->120 change recreates the display once).
         override val frameRate get() = gameSettings.fps(this@MainActivity.streamMode)
         override fun selectFrameRate(fps: Int) {
-            gameSettings.selectFrameRate(this@MainActivity.streamMode, fps)?.let { controller.setStreamPrefs(it) }
+            gameSettings.selectFrameRate(this@MainActivity.streamMode, fps)?.let { sendStreamPrefs(it) }
         }
         // T-215 (decision 0029): stored; one complete STREAM_PREFS only while Oyun is on.
         override val gameResolution get() = settings.gameResolution()
         override fun selectGameResolution(r: GameResolution) {
-            gameSettings.selectGameResolution(r, this@MainActivity.streamMode)?.let { controller.setStreamPrefs(it) }
+            gameSettings.selectGameResolution(r, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
         // T-109: bit rate, audio output and pen trail/dot go through gameSettings (stored, or the game layer).
         override val bitrateKbps get() = gameSettings.bitrateKbps
         override fun selectBitrate(kbps: Long) {
             gameSettings.setBitrateKbps(kbps)
-            controller.setStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
+            sendStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
+        // T-238 (decision 0032): stored; one complete STREAM_PREFS only when Oyun's request changes.
+        override val hdrCapability get() = gameSettings.hdr
+        override val hdrEnabled get() = gameSettings.hdrSetting
+        override fun selectHdr(on: Boolean) {
+            gameSettings.selectHdr(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
+        }
+        override val appliedConfig get() = streamConfig
         override val modeLayer get() = gameSettings.modeLayer
         override val idleTimeout get() = idle.timeout
         override fun selectIdleTimeout(t: IdleTimeout) { // T-234
@@ -1011,7 +1028,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // A 60<->120 change may recreate the virtual display once (decision 0016).
         streamMode = settings.streamMode()
         gameSettings.onModeChanged(streamMode)?.let { change -> applyGameLayer(change) }
-        controller.setStreamPrefs(gameSettings.prefs(streamMode))
+        sendStreamPrefs(gameSettings.prefs(streamMode))
         // T-234: idle dim back to its default (its key lives in IdleTimeoutStore, not Settings).
         idleStore.reset()
         idle.setGameMode(streamMode.isGame, SystemClock.uptimeMillis())
@@ -1111,7 +1128,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settings.setStreamMode(m)
         idle.setGameMode(m.isGame, SystemClock.uptimeMillis()) // T-234: no idle stages in Oyun
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
-        controller.setStreamPrefs(gameSettings.prefs(m))
+        sendStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
         if (toast) Toast.makeText(this, m.toastText(gameSettings.fps(m), gameSettings.display(m)), Toast.LENGTH_SHORT).show()
     }
@@ -1267,7 +1284,42 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         MbLog.i("stream_config_bitrate", "bitrate_kbps=${config.bitrateKbps} wanted_kbps=${gameSettings.bitrateKbps}") // T-105
         logProfile(config)
         if (filesGate.onConfigApplied()) syncFiles() // T-153: the authenticated config makes this session trusted
-        refreshSettings() // "Uygulanan: N Mbps"
+        refreshSettings() // "Uygulanan: N Mbps", "Uygulanan: HDR10 / SDR" (T-238)
+    }
+
+    /** T-238: every STREAM_PREFS goes to the session through here (logs a changed dynamic range first). */
+    private fun sendStreamPrefs(prefs: StreamPrefs) {
+        controller.setStreamPrefs(loggedPrefs(prefs))
+    }
+
+    /** T-238: `ev=hdr_request` when [prefs] asks for a different dynamic range than the last request; returns [prefs]. */
+    private fun loggedPrefs(prefs: StreamPrefs): StreamPrefs {
+        if (hdrRequestLog.take(prefs.dynamicRange)) {
+            MbLog.i("hdr_request", HdrPolicy.requestFields(prefs.dynamicRange, streamMode, gameSettings.hdrSetting, gameSettings.hdr))
+        }
+        return prefs
+    }
+
+    /**
+     * T-238 (decision 0032): the display reports HDR10 and the first HEVC decoder of the codec list (the one
+     * `createDecoderByType` returns, as the renderer does) advertises Main10HDR10. Any failure counts as "no".
+     */
+    @Suppress("DEPRECATION")
+    private fun detectHdrCapability(): HdrCapability {
+        val types = try {
+            val d = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+            d?.hdrCapabilities?.supportedHdrTypes
+        } catch (e: Exception) { null }
+        val codecs = try {
+            android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.map { info ->
+                val hevc = info.supportedTypes.firstOrNull { it.equals(HdrCapability.MIME_HEVC, ignoreCase = true) }
+                val profiles = if (info.isEncoder || hevc == null) null else try {
+                    info.getCapabilitiesForType(hevc).profileLevels.map { it.profile }.toIntArray()
+                } catch (e: Exception) { null }
+                HdrCapability.CodecEntry(info.isEncoder, info.supportedTypes.toList(), profiles)
+            }
+        } catch (e: Exception) { emptyList() }
+        return HdrCapability(HdrCapability.displayHdr10(types), HdrCapability.decoderMain10Hdr10(codecs))
     }
 
     /** T-185 (decision 0026 §4): one `ev=profile` line per installed config; no address, serial or device id. */
@@ -1289,6 +1341,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             displayWidthPx = gameSettings.display(streamMode)?.widthPx ?: 0,
             displayHeightPx = gameSettings.display(streamMode)?.heightPx ?: 0,
             displayApplied = gameSettings.display(streamMode)?.appliedIn(config) ?: false,
+            hdr = config.isHdr10, // T-238: applied, from STREAM_CONFIG
         )
         MbLog.i("profile", profile.logFields(BuildInfo.current.sha, BuildInfo.current.builtUtc, devKnobs))
     }

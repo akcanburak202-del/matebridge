@@ -2,7 +2,9 @@ package dev.matebridge.client.protocol
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -108,8 +110,8 @@ class CodecRulesTest {
         val prefs = StreamPrefs(144, 800, 150_000)
         val p = Codec.encodePayload(prefs)
         assertEquals(8, p.size)
-        // Extra bytes after the (here 0x0) optional display group are ignored; 9-11 bytes are short (see below).
-        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 0, 0, 9, 9))))
+        // Extra bytes after the (here 0x0) optional groups are ignored; 9-11 and 13 bytes are short (see below).
+        assertEquals(prefs, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 0, 0, 0, 0, 0, 9, 9))))
         // Full u32 range survives the round trip.
         val max = byteArrayOf(0x78, 0, 0xe8.toByte(), 3, -1, -1, -1, -1)
         assertEquals(StreamPrefs(120, 1000, 0xFFFFFFFFL), decode(frame(MsgType.STREAM_PREFS, max)))
@@ -131,7 +133,8 @@ class CodecRulesTest {
         val p = Codec.encodePayload(game)
         assertEquals(12, p.size)
         assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p)))
-        assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(7, 7, 7))))
+        // 15 bytes: dynamic_range 0 (SDR), reserved and the excess ignored (decision 0032 group).
+        assertEquals(game, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(0, 7, 7))))
         // Either non-zero field writes the whole group.
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 0)).size)
         assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 0, 1214)).size)
@@ -142,6 +145,37 @@ class CodecRulesTest {
         }
         assertEquals(0, StreamPrefs(60, 1000).displayWidthPx)
         assertEquals(0, StreamPrefs(60, 1000).displayHeightPx)
+    }
+
+    @Test
+    fun streamPrefsDynamicRangeGroupFollowsTheWriteRule() {
+        // Decision 0032 / PROTOCOL.md 0x05: the group is written only when non-zero; it forces the display group (0x0 ok).
+        assertEquals(8, Codec.encodePayload(StreamPrefs(120, 660, 0, dynamicRange = StreamPrefs.DYNAMIC_RANGE_SDR)).size)
+        assertEquals(12, Codec.encodePayload(StreamPrefs(120, 660, 0, 1848, 1214, StreamPrefs.DYNAMIC_RANGE_SDR)).size)
+        val native = StreamPrefs(120, 1000, 60_000, dynamicRange = StreamPrefs.DYNAMIC_RANGE_HDR10)
+        val p = Codec.encodePayload(native)
+        assertEquals(14, p.size)
+        assertArrayEquals(byteArrayOf(0, 0, 0, 0, 1, 0), p.copyOfRange(8, 14))
+        assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p)))
+        // Longer payloads: the excess is ignored.
+        assertEquals(native, decode(frame(MsgType.STREAM_PREFS, p + byteArrayOf(5, 5))))
+        // An unknown value decodes as is (the host treats it as SDR); the reserved byte is ignored.
+        val odd = p.copyOf().also { it[12] = 7; it[13] = 3 }
+        assertEquals(native.copy(dynamicRange = 7), decode(frame(MsgType.STREAM_PREFS, odd)))
+        // 12 bytes = SDR; 13 bytes = short payload.
+        assertEquals(native.copy(dynamicRange = 0), decode(frame(MsgType.STREAM_PREFS, p.copyOf(12))))
+        val dec = FrameDecoder.control()
+        dec.feed(frame(MsgType.STREAM_PREFS, p.copyOf(13)))
+        expectError(ProtocolException.Kind.SHORT_PAYLOAD, dec)
+        assertEquals(StreamPrefs.DYNAMIC_RANGE_SDR, StreamPrefs(60, 1000).dynamicRange)
+    }
+
+    @Test
+    fun streamConfigHdr10IsReadFromTheTransferCode() {
+        assertTrue(StreamConfig(1, 2, 1, 1, 1, 1, 60, 1, 9, 16, 9, 0).isHdr10)
+        assertFalse(StreamConfig(1, 2, 1, 1, 1, 1, 60, 1, 1, 13, 1, 1).isHdr10)
+        // Only the transfer decides (PROTOCOL.md 0x03).
+        assertFalse(StreamConfig(1, 2, 1, 1, 1, 1, 60, 1, 9, 1, 9, 0).isHdr10)
     }
 
     @Test
