@@ -38,4 +38,21 @@ class AuxDecoderTest {
         assertTrue(requests.contains(KeyframeRequest.STARTUP))
         assertFalse(requests.isEmpty())
     }
+
+    @Test fun stopIsNotCompleteWhileTheOutputThreadIsStuck() {
+        val f = FakeDecoderFactory()
+        val gate = CountDownLatch(1)
+        f.dequeueOutputGate = gate // the output thread blocks inside dequeueOutputBuffer
+        val d = AuxDecoder(config, Any(), AuxFrameQueue(4), { requests.add(it) }, f, env, {}, longArrayOf(1, 1, 1))
+        dec = d
+        d.start()
+        assertTrue(f.awaitEvent("dequeueOutput#1>"))
+        assertFalse(d.stop()) // input thread is gone, the output straggler is not: the surface is still in use
+        assertTrue(d.isAlive())
+        gate.countDown()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (d.isAlive() && System.nanoTime() < deadline) Thread.sleep(10)
+        assertFalse(d.isAlive())
+        assertTrue(d.stop())
+    }
 }

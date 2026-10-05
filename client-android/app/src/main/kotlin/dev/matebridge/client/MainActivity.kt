@@ -1325,6 +1325,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Set while the direct decoder could not be attached because a stuck presenter still owns the surface. */
     private var directDeferred = false
+    /** `config_id` the deferred direct attach was requested for; a retry only serves that very configuration. */
+    private var directDeferredConfigId = -1
 
     /**
      * The direct path on [surface], but only once no GL thread of the packed path can still be producing into it; else it
@@ -1335,6 +1337,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (!dev.matebridge.client.video.PackedPresenter.awaitPrevious(0) || pipe?.busy() == true) {
             if (!directDeferred) MbLog.e("full_chroma_surface_busy", "action=defer", "render")
             directDeferred = true
+            directDeferredConfigId = streamConfig?.configId ?: -1
             return
         }
         directDeferred = false
@@ -1343,6 +1346,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** Releases the video output (the surface is about to go): the packed pipeline when it runs, else the renderer. */
     private fun detachVideoOutput() {
+        directDeferred = false // a pending direct attach belongs to the output that is going away
         val p = chromaPipeline
         if (p != null && p.active) p.stop() else renderer?.detachSurface()
     }
@@ -1828,7 +1832,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 MbLog.i("idle", "state=on since_frame_ms=${vsyncIdle.sinceActivityNs(System.nanoTime()) / 1_000_000}", "render")
             }
             chromaPipeline?.reap() // T-259: close the readers of a timed-out teardown once its threads exited
-            if (directDeferred && surfaceValid) attachDirect(video.holder.surface) // T-259: the stuck presenter exited
+            if (directDeferred) {
+                // T-259: retry once the stuck presenter exited, but only for the configuration it was requested for
+                val c = streamConfig
+                if (c == null || !surfaceValid || c.configId != directDeferredConfigId || lastUi !is SessionUi.Connected) {
+                    directDeferred = false
+                } else attachDirect(video.holder.surface)
+            }
             val r = renderer
             if (r != null && r.attached) {
                 // T-121: the retry goes through the queue's request limit (no retry right after another request).

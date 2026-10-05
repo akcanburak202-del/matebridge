@@ -105,14 +105,13 @@ class AuxDecoder(
     fun stop(): Boolean {
         active = false
         queue.wake()
-        val t = thread ?: return true
+        val t = thread ?: return !isAlive()
         try { t.join(JOIN_MS) } catch (_: InterruptedException) {}
-        if (t.isAlive) {
-            env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stop_slow join_ms=$JOIN_MS")
-            return false
-        }
-        thread = null
-        return true
+        // Complete only when BOTH the input thread and a possible output straggler are gone (the surface is in use by either).
+        if (!t.isAlive) thread = null
+        val clean = !isAlive()
+        if (!clean) env.log('W', TAG, "${env.elapsedRealtimeMs()} W decoder ev=aux_stop_slow join_ms=$JOIN_MS")
+        return clean
     }
 
     private fun run() {
