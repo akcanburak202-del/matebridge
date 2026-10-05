@@ -3,13 +3,20 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#000000"
+    android:defaultFocusHighlightEnabled="false">
+
+    <!-- T-246: outside touch mode (after a key, mouse or gamepad event) Android 8+ draws its default focus highlight
+         over the focused view. On the full-screen video SurfaceView that is a ~6% white veil composited on top of the
+         stream (black lifted to 16). Disabled here on every full-screen focusable view; focusability itself is
+         unchanged (pointer capture and key events still need the focused video view). -->
 
     <SurfaceView
         android:id="@+id/video"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center" />
+        android:layout_gravity="center"
+        android:defaultFocusHighlightEnabled="false" />
 
     <TextView
         android:id="@+id/stats"
@@ -30,6 +37,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="#000000"
+        android:defaultFocusHighlightEnabled="false"
         android:fillViewport="true">
 
         <LinearLayout
