@@ -1,7 +1,7 @@
 ---
 id: T-243
 title: Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -38,7 +38,21 @@ HDR araştırması (NOTES 2026-10-05 ~13:00): Oyun 60'ta düşen karelerin önem
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. **Saf mantık `stream/HzPin.kt`** (JVM testli):
+   - `HzPinVariant { OFF, LP, ALL }`, `parse(raw)` (bilinmeyen/yok = `OFF`), `IDS`.
+   - `HzPinHint { LP_RATE, LP_MINMAX, HW_LP, REAPPLY }` (log kimlikleri `lp_rate`, `lp_minmax`, `hw_lp`, `reapply`).
+   - `HzPin.plan(variant, isGame, streamFps): List<HzPinHint>`: yalnız Oyun + fps 60'ta; `OFF` ya da başka mod → boş liste (= bugünkü çağrılar). `LP` → `lp_rate, lp_minmax`; `ALL` → dördü.
+   - `HzPin.setFloatField(target, name, value)`: yansıma ile public float alan yazma → `OK/MISSING/ERROR` (sahte sınıfla test edilir; tablette API 31'de `preferredMin/MaxDisplayRefreshRate` yok → `missing`).
+   - `HzPin.extensionFields(cls)`: LayoutParams'ta AOSP dışı `refresh|framerate|fps` adlı public alanlar (yalnız okunur keşif; yazılmaz) + Huawei `com.huawei.android.view.LayoutParamsEx` sınıfı var mı. Bulunursa `ok` ve adlar loglanır, yoksa `missing`.
+   - `HzPin.logFields(variant, state, results)` → `variant=<id> state=on|off applied=<hint>:<ok|missing|error>,…|-`.
+   - `HzSwitchCounter`: `display_rate` raporları arasındaki değişim sayısı; log penceresinde `take()` ile sıfırlanır.
+2. **`DevKnobs`**: `--es hz_pin off|lp|all` (debugOnly, `ids` = `HzPinVariant.IDS`), alan `hzPin: HzPinVariant = OFF`. Testler: geçit, varsayılan, bilinmeyen değer.
+3. **`MainActivity`** (varsayılan yolda platform çağrıları bit-bit aynı):
+   - `applyRefreshRate`: plan boş değilse aynı `window.attributes` atamasında `preferredRefreshRate=60f` ve min/max (yansıma); Oyun 60'tan çıkınca/`releaseRefreshRate`'te temizler (0f). `ev=hz_pin` her açma/kapamada bir satır. Erken dönüş koşulu yalnız pin durumu değişince ek olarak geçilir.
+   - `REAPPLY`: her debounced `display_rate` raporunda ve her `ACTION_DOWN`'da `setSurfaceFrameRate(true, log=false)`.
+   - `writeStatsLog`: `MB/render ev=stats` satırının sonuna `hz_switches=<n>` (her zaman; A/B tabanı için).
+4. **`docs/LOGGING.md`**: `ev=hz_pin`, `hz_switches=`.
+5. `./scripts/check.sh`, Handoff, `status: review`.
 
 ## Handoff
 
