@@ -42,6 +42,17 @@ Karar 0034'ün host tarafı. Protokol ve fixture'lar `task/T-257-full-chroma-pro
 
 ## Plan
 
+Dal: `task/T-258-host-full-chroma` (T-257 üzerine). Protokole dokunulmaz.
+
+1. **Codec (Core):** `StreamConfig.chromaLayout` (eski reserved), `VideoFrame.view`, `Message.keyframeRequest(reason, view:)` (isteğe bağlı ikinci bayt; yoksa `nil` = iki akış), `Capabilities.fullChroma` (bit11), `ChromaPreference.full` (2). Fixture testleri yeni beş dosyayı kapsar.
+2. **Politika (Core, saf):** `VideoSettings` — `clientFullChroma` (HELLO bit11), `fullChromaGranted` (bit11 + bu oturumda gelen `chroma = 2` + fps 60 + doğal ekran + ölçek 1000 + SDR + HEVC + çalışma zamanı geri düşüşü yok), `packedChroma` (granted + env), `streamConfig.chromaLayout`. `applying(..., fullChroma: FullChromaSession)`: hatırlanan tercih (`prefsFromThisSession = false`) 1 gibi uygulanır; geri düşüşte `.normal`. `ChromaMode.packed444`, `ChromaPolicy` (env önceliği; `packed444` onay yoksa keskin yola düşer), `ChromaConfigLog` (`layout=packed444`).
+3. **Paketleyici:** `AVC444v2` CPU referansı + Metal çekirdeği kaynağı (`PackedChromaKernel`, T-255 `pack_v2` birleşik tek geçiş, `pick`) Core'da; `PackedChromaPacker` (Host/Video, `ChromaConverter` kalıbı: IOSurface havuzu, doku önbelleği, T-113 etiketleri iki çıktıya). Testler: CPU referansı kendi içinde gidiş-dönüş, GPU çıktısı CPU ile bit-tam (Metal yoksa atlanır).
+4. **İkinci VT oturumu:** `PackedAuxEncoder` (Host/Video): aynı hızlı profil, `AverageBitRate`/`DataRateLimits` = ana hedefin %50'si, en çok 2 uçuşta kare (doluysa yardımcı atılır ve yardımcı IDR beklenir), kendi CODEC_CONFIG'i (`view = 1`). `HEVCEncoder` paketleyiciyi owner kuyruğunda çalıştırır (`send`): ana tampon ana oturuma, yardımcı tampon `PackedAuxEncoder`'a aynı `capture_time_us` ve PTS ile. Yardımcı IDR bayrağı ayrı (`requestKeyframe(view:)`); refine kareleri yardımcı IDR'ı yemez, bekleyen yardımcı IDR refine trenini bitirir; refine bayt hesabı toplam (ana + yardımcı tahmini).
+5. **Sıra ve sınır (Core, saf):** `PackedSendArbiter`: önce ana; yardımcı yalnız gönderilmiş bir ana karenin `capture_time_us`'u ile gider (ana henüz gelmediyse bekler, ana atılmışsa yardımcı atılır ve yardımcı IDR istenir). `VideoFrameQueue`'ya `tryPop/peek/breakChain/observer` eklenir; yardımcı kuyruk kapasitesi 2. `VideoSender` yardımcı kuyruğu alır (`frame_seq` akış başına, soket tıkanınca zaten yalnız ana önce çekilir, yardımcı bekler/atılır). Yardımcı IDR/CODEC_CONFIG yeniden eşzamanlama (`view` 1 ve 2) VideoPipeline'da.
+6. **Geri düşüş (Core, saf):** `PackedChromaMonitor`: pencere (1 s) başına yardımcı kaybı > %5, 3 ardışık pencere, ya da VT/Metal/oturum hatası → `chroma_fallback reason=`. `StreamCoordinator`: yeni `config_id`, `chroma_layout = 0` (normal 4:2:0), tercih saklı kalır; sonraki ekran kipi değişiminde (`sameStreamMode`) bayrak silinir, yeniden denenir.
+7. **Log/belge:** `ev=chroma_config layout=packed444`, `ev=chroma_stats` (paketleyici GPU ms, yardımcı enc ms, yardımcı/ana bayt oranı, yardımcı kaybı), `ev=chroma_fallback`; `docs/LOGGING.md`, `docs/KNOBS.md`.
+8. **Test:** Core birim testleri (politika, env/HDR/onay, `view` yönlendirme, sıra, kuyruk sınırı, geri düşüş kararı, paketleyici bit-tamlığı). `./scripts/check.sh`.
+
 ## Handoff
 
 ## Open questions
