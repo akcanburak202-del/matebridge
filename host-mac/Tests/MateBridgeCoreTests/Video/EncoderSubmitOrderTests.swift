@@ -9,6 +9,7 @@ private struct FakeFrame: EncoderSubmitFrame {
     /// T-253: an optional (refinement) frame, skipped instead of taking a pending keyframe.
     var optional = false
     var skipsOnPendingKeyframe: Bool { optional }
+    var isSynthetic: Bool { optional }
     static func stamp(after previous: Int) -> Int { previous + 1 }
 }
 
@@ -204,6 +205,21 @@ final class EncoderSubmitOrderTests: XCTestCase {
         order.offer(bypassGate: true) { _ in FakeFrame(stamp: 4, gateUs: 4_000) }
         drain(order)
         XCTAssertEqual(backend.events.last, .encode(stamp: 4, key: true, token: 3))
+    }
+
+    /// T-253: a refine frame carries an invented `now + lead` timestamp; a real capture that arrives later with an
+    /// earlier SCK timestamp holds newer pixels and must still be encoded.
+    func testRealCaptureWithEarlierTimestampBeatsSyntheticFrame() {
+        let clock = ManualClock()
+        let (order, backend) = makeOrder(clock: clock)
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 90_000, optional: true) }  // synthetic, late stamp
+        order.offer(bypassGate: false) { _ in FakeFrame(stamp: 3, gateUs: 80_000) }                  // real, earlier: held
+        drain(order)
+        clock.advance(40_000)
+        backend.completeOldest()
+        drain(order)
+        XCTAssertEqual(backend.encodedStamps.last, 3, "the delayed real capture is encoded, not dropped as stale")
     }
 
     /// Without a pending keyframe an optional frame is submitted normally (as a delta).

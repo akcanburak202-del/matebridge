@@ -62,6 +62,7 @@ final class HEVCEncoder: @unchecked Sendable {
         var refineTrain: UInt64?
 
         var skipsOnPendingKeyframe: Bool { refineTrain != nil }
+        var isSynthetic: Bool { refineTrain != nil }
 
         var stamp: PTS {
             get { PTS(time: pts) }

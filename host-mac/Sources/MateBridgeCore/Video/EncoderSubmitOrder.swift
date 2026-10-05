@@ -16,12 +16,16 @@ public protocol EncoderSubmitFrame: Sendable {
     /// An optional frame (T-253 still-screen refinement) is never allowed to consume a pending keyframe request: if one
     /// is pending when the frame would claim its slot, the frame is skipped instead (nothing was encoded yet).
     var skipsOnPendingKeyframe: Bool { get }
+    /// A re-encode of an old capture with an invented timestamp: the pacer must not let it make a later real
+    /// capture look stale (`FramePacer.offer(synthetic:)`).
+    var isSynthetic: Bool { get }
 }
 
 extension EncoderSubmitFrame {
     public mutating func arrived(slotFree: Bool) {}
     public mutating func reserved(lastSlotFreeUs: UInt64) {}
     public var skipsOnPendingKeyframe: Bool { false }
+    public var isSynthetic: Bool { false }
 }
 
 /// Identifies one slot reservation. Every reservation is released exactly once (`EncoderSubmitOrder.release`).
@@ -246,7 +250,8 @@ public final class EncoderSubmitOrder<Backend: CompressionBackend>: @unchecked S
         last = frame
         var delay: UInt64?
         // The pacer decides: send now, hold as the single pending frame (newest wins), or drop a stale one.
-        switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate) {
+        switch pacer.offer(frame, ptsUs: frame.gateUs, nowUs: nowUs(), slotFree: slotFree, bypassGate: bypassGate,
+                         synthetic: frame.isSynthetic) {
         case .submit(let f): reserveOrSkipLocked(f)
         case .hold(let retryAfterUs): if let r = retryAfterUs { delay = scheduleFlushLocked(afterUs: r) }
         case .drop: break
