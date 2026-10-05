@@ -1401,3 +1401,7 @@ Oyun 60, 1848×1214, `--ez stats_1s true`; her varyantta kullanıcı ~30 sn masa
 | `hz_pin all` (+ `LayoutParamsEx` var `hw_ex=1`, alan yok `hw_fields=-`, her dokunuş/geçişte setFrameRate yeniden) | 12 | 52 | 16 |
 
 Huawei dokunma hızlandırması (60→120) uygulama ipuçlarının hiçbirine uymuyor; T-140 ile aynı sonuç. Kod varsayılan kapalı kalır. Kullanıcı seçenekleri: oyunu kumandayla oynamak (dokunma yok → panel 60), ya da tablet Ayarlar → Ekran yenileme hızı → Standart (60 Hz) (Günlük/Çizim 120'yi de kapatır).
+
+## 2026-10-05 ~13:40 — Siyah kalkması = tablet ölçeklemesi (oyun ekranı)
+
+- Oyun modu 2240×1472, HDR kapalı: Mac (33,39,52) → tablet (47,52,63); 2026-10-05 00:00 grilik (35,45,59)→(50,57,69) ile aynı desen. Günlük 2800×1840 (ölçeksiz) aynı terminal (33,39,52) → (33,38,50) doğru. Host etiketleri iki durumda aynı (`input_retag` 709/sRGB/709, `full_range=1`). Sonuç: kalkma tablet görüntüyü panel boyutuna büyütürken oluşuyor (HWC ölçekleyici tam aralığı sıkıştırıyor olabilir). 1 Ekim yakalaması da ölçekli bir moddaydı (Performans 660 o zaman vardı). T-231 renk düğmeleri ölçeksiz durumda denenmişti (her şey doğru göründüğü için sonuç vermemişti). → T-244 (host sınırlı aralık deneyi).
