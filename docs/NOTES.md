@@ -1525,3 +1525,8 @@ Ham: `~/.cache/matebridge-tools/data/yuv444/t256-run-2122.txt`. "Varış" = çö
 - Probun "doğrudan" tabanı aynı duran kuyruk etkisini taşıyor (pacer'sız, tahmini ekran zamanı) ve ürünü temsil etmiyor; ürünün doğrudan yolu pacer ile bu kuyruğu tutmuyor. Bu yüzden otomatik "PROCEED" kararları sayısal olarak güvenilir değil. Yine de fizik ve mutlak sayılar GL yolunun ek maliyetinin birkaç ms olduğunu (çizim ~3 ms, olası +1 vsync değil) gösteriyor. Kesin A/B ürün içinde yapılmalı (uygulama kartlarının ilk kabul ölçütü).
 - SF `--latency` dökümleri yine boş geldi (katman adında `(BLAST)` eki ve tırnaklama); önemsiz.
 - **Sonuç:** gecikme riski büyük ölçüde kapandı → 4:4:4 (Günlük 60) uygulaması için kullanıcı onayı istenebilir; ilk kartın kabulünde ürün içi doğrudan ↔ 4:4:4 gecikme A/B'si zorunlu.
+
+## 2026-10-06 ~00:25 — Kararlar: Wi-Fi dosyaları (0035), SMB probu ertelendi; 0034 kuruldu
+
+- Kullanıcı: Wi-Fi dosya erişimi = yalnız `/sdcard/MateBridge/`, 256 MB sınırı yalnız Wi-Fi'da (USB etkilenmez), ayrı açma ayarı yok (menü tıklaması onay). Karar 0035. SMB (kısmi okuma, sınırsız) araştırma probu başka güne ertelendi (0035 sonunda kayıtlı).
+- 0034 tam renk ana dalda (2474e36); APK + host kuruldu (00:21). Tablet kendi kendine testi: `full_chroma_selftest result=pass`, ham örnekleme bit-tam. Cihaz kabulü kullanıcıyla.
