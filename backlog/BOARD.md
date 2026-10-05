@@ -24,7 +24,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-240](tasks/T-240-host-chroma-pref.md) | Host — apply STREAM_PREFS.chroma (decision 0033) via the T-235 sharp_nearest path; codec field rename | 6 | mac-host-dev | [T-235, T-237] |
 | [T-241](tasks/T-241-client-chroma-pref.md) | Client — "Keskin renk kenarları" panel toggle and STREAM_PREFS.chroma (decision 0033) | 6 | android-client-dev | [T-238] |
 | [T-242](tasks/T-242-client-auto-bitrate-in-mode-layer.md) | Client — "Otomatik" bit rate picked inside Oyun/Çizim must mean the layer default (60 Mbps), not the host formula | 6 | android-client-dev | [] |
-| [T-243](tasks/T-243-client-pin-60hz-experiment.md) | Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first | 6 | android-client-dev | [] |
 
 ## todo
 
@@ -261,3 +260,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-226](tasks/T-226-hdr-feasibility-research.md) | Research — can MateBridge stream HDR (HDR virtual display → 10-bit HEVC → HDR10/HLG on the tablet)? Feasibility and cost, no product code | 6 | orchestrator | [T-188] |
 | [T-230](tasks/T-230-black-level-bitstream-probe.md) | Black level lifted on the tablet (Mac 0 → tablet 16) — Mac-side bitstream probe (what Y values and VUI the encoder really emits) | 6 | mac-host-dev | [] |
 | [T-233](tasks/T-233-yuv444-research.md) | Research — 4:4:4 chroma (HEVC RExt or alternatives) for sharp coloured edges: Mac encoder support, tablet decoder support, cost | 6 | orchestrator | [] |
+| [T-243](tasks/T-243-client-pin-60hz-experiment.md) | Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first | 6 | android-client-dev | [] |

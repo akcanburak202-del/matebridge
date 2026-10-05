@@ -1389,3 +1389,15 @@ Kullanıcı kararı: varsayılan kapalı, panelden açılır → decision 0033, 
 - Araştırma (host logları, HDR 788 s / SDR 419 s oyun): Mac'te kayıp yok. SCK `cap_fps` 60,0/59,95, `enc_ms` p50 3,9/4,2 ms (HDR daha hızlı), `cap_to_sent` p95 6,0/6,3 ms, gösterilen/gönderilen 0,981/0,981. Host `ev=stats fps=` tabletin gösterdiği kare (StatsSummary), "Mac'in ürettiği" değil (orkestratörün önceki tablosu yanlış etiketlemişti). Düşüşler: Wi-Fi srtt sıçramaları (40–70 ms), dokunmayla tetiklenen panel 60↔120 Hz geçişleri (geçiş sonrası 3 sn'de 1,9/sn düşüş vs sabit 0,6/sn; HDR penceresinde 3,5 geçiş/dk vs 1,6), sahne. HDR'ye özgü fark yalnız panel 120 Hz'de ~%0,4 kare. Yan bulgu: HDR yakalamada SCK hiç `idle` kare vermiyor (durağan ekranda da 60 complete) → oyunun gerçek fps'i bu loglardan bilinemez (ölçüm: Metal HUD).
 - Kullanıcı: Oyun modu + HDR açıkken masaüstündeki terminal grimsi. Ölçüm: Mac (36,45,59) → tablet (28,32,40), katman BT2020_ITU_PQ. HDR akışta SDR içerik PQ'ya çevriliyor ve tablet ton eşlemesiyle soluk görünüyor (API 31'de SDR karartma yok; araştırma §6 öngörmüştü). Pratik: masaüstünde Günlük, oyunda Oyun+HDR.
 - Panel 60 Hz sabitleme: istemci zaten 60 Hz mod + setFrameRate istiyor, Huawei dokununca 120'ye çıkarıyor → T-243 deney.
+
+## 2026-10-05 ~13:25 — T-243 panel 60 Hz sabitleme: olumsuz
+
+Oyun 60, 1848×1214, `--ez stats_1s true`; her varyantta kullanıcı ~30 sn masaüstünde ara ara dokunup kaydırdı.
+
+| varyant | `display_rate` satırı | 120 Hz saniye | 60 Hz saniye |
+|---|---|---|---|
+| yok (mod 60 + setFrameRate 60, bugünkü) | 12 | 39 | 16 |
+| `hz_pin lp` (`preferredRefreshRate=60`, min/max yansıma `ok`) | 12 | 49 | 17 |
+| `hz_pin all` (+ `LayoutParamsEx` var `hw_ex=1`, alan yok `hw_fields=-`, her dokunuş/geçişte setFrameRate yeniden) | 12 | 52 | 16 |
+
+Huawei dokunma hızlandırması (60→120) uygulama ipuçlarının hiçbirine uymuyor; T-140 ile aynı sonuç. Kod varsayılan kapalı kalır. Kullanıcı seçenekleri: oyunu kumandayla oynamak (dokunma yok → panel 60), ya da tablet Ayarlar → Ekran yenileme hızı → Standart (60 Hz) (Günlük/Çizim 120'yi de kapatır).

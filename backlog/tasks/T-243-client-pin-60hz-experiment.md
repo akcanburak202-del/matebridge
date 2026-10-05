@@ -1,7 +1,7 @@
 ---
 id: T-243
 title: Client experiment — keep the panel at 60 Hz in Oyun 60 despite touch (preferredRefreshRate and other platform hints), knob first
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -76,3 +76,5 @@ HDR araştırması (NOTES 2026-10-05 ~13:00): Oyun 60'ta düşen karelerin önem
 ## Open questions
 
 - `docs/KNOBS.md` kartın `files:` listesinde yok; `hz_pin` anahtarı orada listelenmedi. Orkestratör deney sonucu kalıcı olursa ekleyebilir.
+
+**Orkestratör (2026-10-05):** cihaz A/B olumsuz (NOTES 2026-10-05 ~13:25): üç varyantta da panel dokunmayla 120 Hz'e çıktı. Knob varsayılan kapalı kalır; Huawei uzantı alanı bulunmadığı için takip kartı yok.
