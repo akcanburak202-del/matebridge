@@ -53,6 +53,10 @@ class ClipDecoder(
     /** Image outputs: called on the decoder thread; the receiver owns and must close the Image. */
     private val onImage: ((Image, Long) -> Unit)?,
     private val log: (String) -> Unit,
+    /** Output.SURFACE only: `releaseOutputBuffer(idx, ns)` target for a frame ready at `now` (<= 0: render at once). */
+    private val releaseTarget: ((Long) -> Long)? = null,
+    /** Output.SURFACE only: `OnFrameRenderedListener` (sequence number, render `nanoTime`), on the decoder thread. */
+    private val onRendered: ((Long, Long) -> Unit)? = null,
 ) {
     private val thread = HandlerThread("y444-$tag").also { it.start() }
     private val handler = Handler(thread.looper)
@@ -109,6 +113,10 @@ class ClipDecoder(
                 }
             }
             c.configure(fmt, target, null, 0)
+            val rendered = onRendered
+            if (output == Output.SURFACE && rendered != null) {
+                c.setOnFrameRenderedListener({ _, pts, nano -> rendered(pts / stepUs, nano) }, handler)
+            }
             c.start()
             null
         } catch (e: MediaCodec.CodecException) {
@@ -167,7 +175,13 @@ class ClipDecoder(
                 if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                     onOutput(info.presentationTimeUs / stepUs, now)
                 }
-                c.releaseOutputBuffer(idx, output != Output.BUFFER)
+                val target = releaseTarget
+                if (output == Output.SURFACE && target != null && info.size > 0) {
+                    val ns = target(now)
+                    if (ns > 0) c.releaseOutputBuffer(idx, ns) else c.releaseOutputBuffer(idx, true)
+                } else {
+                    c.releaseOutputBuffer(idx, output != Output.BUFFER)
+                }
             } catch (_: IllegalStateException) {
             }
         }

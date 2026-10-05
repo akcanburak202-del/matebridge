@@ -57,6 +57,12 @@ class PresentTotals(
     val features: String,
     val error: String?,
     val drawErrors: Int,
+    /** Depth-1 gate: times the loop had to wait for a latch, and the waits (ns). */
+    val gateWaitsNs: LongArray = LongArray(0),
+    val slotBumps: Int = 0,
+    val slotFolds: Int = 0,
+    /** Draws of the pts variant that had no vsync grid yet (presented without a target). */
+    val noGridDraws: Int = 0,
 )
 
 /**
@@ -72,6 +78,9 @@ class PresentLoop(
     private val feedPeriodNs: Long,
     private val retired: ConcurrentLinkedQueue<Image>,
     private val mailbox: Mailbox,
+    private val present: PresentMode = PresentMode.QUEUE,
+    private val leadNs: Long = 6_000_000L,
+    private val grid: () -> VsyncGrid? = { null },
 ) : Thread("y444-gl") {
     @Volatile private var stopFlag = false
     /** Draws before this `System.nanoTime()` are warm-up and not measured. */
@@ -106,14 +115,33 @@ class PresentLoop(
         var drawErrors = 0
         var delayed = ArrayList<Image>()
         var lastError: String? = null
+        val gateWaits = LongList()
+        val slots = SlotAllocator(leadNs)
+        var noGrid = 0
         try {
             while (!stopFlag) {
+                if (present == PresentMode.DEPTH1) {
+                    // No new swap before the previous one is latched; frames arriving meanwhile replace each other.
+                    val waitStart = System.nanoTime()
+                    var waited = 0L
+                    while (!stopFlag && !Depth1Gate.open(Native.presentOutstanding(), 1, waited)) {
+                        java.util.concurrent.locks.LockSupport.parkNanos(200_000L)
+                        waited = System.nanoTime() - waitStart
+                    }
+                    if (waited > 0) gateWaits.add(waited)
+                    if (stopFlag) break
+                }
                 val item = mailbox.takeMain(50) ?: continue
                 val aux = mailbox.latestAux()
                 val t0 = System.nanoTime()
+                var presentNs = 0L
+                if (present == PresentMode.PTS) {
+                    val g = grid()
+                    if (g != null) presentNs = slots.targetNs(t0, g) else noGrid++
+                }
                 val hwMain = item.image.hardwareBuffer
                 val hwAux = aux?.image?.hardwareBuffer
-                val rc = if (hwMain != null) Native.presentDraw(hwMain, hwAux, item.arrivalNs) else -10
+                val rc = if (hwMain != null) Native.presentDraw(hwMain, hwAux, item.arrivalNs, presentNs) else -10
                 val t1 = System.nanoTime()
                 hwMain?.close()
                 hwAux?.close()
@@ -141,6 +169,7 @@ class PresentLoop(
             totals = PresentTotals(
                 drawn, swap.toArray(), call.toArray(), gpu.toArray().let { if (it.size > 30) it.copyOfRange(30, it.size) else it },
                 PresentStats.analyze(inWindow, feedPeriodNs), features, lastError, drawErrors,
+                gateWaits.toArray(), slots.bumps, slots.folds, noGrid,
             )
         }
     }

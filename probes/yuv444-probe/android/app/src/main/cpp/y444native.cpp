@@ -47,6 +47,7 @@ namespace {
 typedef EGLClientBuffer (*PFN_getNativeClientBuffer)(const struct AHardwareBuffer*);
 typedef EGLBoolean (*PFN_getNextFrameId)(EGLDisplay, EGLSurface, uint64_t*);
 typedef EGLBoolean (*PFN_getFrameTimestamps)(EGLDisplay, EGLSurface, uint64_t, EGLint, const EGLint*, int64_t*);
+typedef EGLBoolean (*PFN_presentationTime)(EGLDisplay, EGLSurface, EGLnsecsANDROID);
 typedef void (*PFN_genQueries)(GLsizei, GLuint*);
 typedef void (*PFN_beginQuery)(GLenum, GLuint);
 typedef void (*PFN_endQuery)(GLenum);
@@ -59,6 +60,7 @@ PFNEGLDESTROYIMAGEKHRPROC pDestroyImage;
 PFNGLEGLIMAGETARGETTEXTURE2DOESPROC pImageTarget;
 PFN_getNextFrameId pNextFrameId;
 PFN_getFrameTimestamps pFrameTimestamps;
+PFN_presentationTime pPresentationTime;
 PFN_genQueries pGenQueries;
 PFN_beginQuery pBeginQuery;
 PFN_endQuery pEndQuery;
@@ -72,6 +74,7 @@ void loadProcs() {
     pImageTarget = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     pNextFrameId = (PFN_getNextFrameId)eglGetProcAddress("eglGetNextFrameIdANDROID");
     pFrameTimestamps = (PFN_getFrameTimestamps)eglGetProcAddress("eglGetFrameTimestampsANDROID");
+    pPresentationTime = (PFN_presentationTime)eglGetProcAddress("eglPresentationTimeANDROID");
     pGenQueries = (PFN_genQueries)eglGetProcAddress("glGenQueriesEXT");
     pBeginQuery = (PFN_beginQuery)eglGetProcAddress("glBeginQueryEXT");
     pEndQuery = (PFN_endQuery)eglGetProcAddress("glEndQueryEXT");
@@ -640,12 +643,12 @@ JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_presentInit(
 
 JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_presentFeatures(JNIEnv* env, jclass) {
     if (!gPres) return str(env, "none");
-    return str(env, fmt("frame_timestamps=%d gpu_timer=%d", (int)gPres->timestamps, (int)gPres->timer));
+    return str(env, fmt("frame_timestamps=%d gpu_timer=%d present_time=%d", (int)gPres->timestamps, (int)gPres->timer, (int)(pPresentationTime != nullptr)));
 }
 
 // Draws main (+ aux when mode 2) and swaps. Returns 0, or a negative code (see presentLastError).
 JNIEXPORT jint JNICALL Java_dev_matebridge_yuv444probe_Native_presentDraw(
-    JNIEnv* env, jclass, jobject mainHwb, jobject auxHwb, jlong queuedNs) {
+    JNIEnv* env, jclass, jobject mainHwb, jobject auxHwb, jlong queuedNs, jlong presentNs) {
     if (!gPres) return -1;
     Ctx& c = *gPres;
     AHardwareBuffer* m = AHardwareBuffer_fromHardwareBuffer(env, mainHwb);
@@ -685,6 +688,7 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_yuv444probe_Native_presentDraw(
         pEndQuery(GL_TIME_ELAPSED_EXT_);
         c.pendingQueries.push_back(q);
     }
+    if (presentNs > 0 && pPresentationTime) pPresentationTime(c.dpy, c.surf, (EGLnsecsANDROID)presentNs);
     uint64_t frameId = 0;
     bool haveId = c.timestamps && pNextFrameId(c.dpy, c.surf, &frameId);
     if (!eglSwapBuffers(c.dpy, c.surf)) {
@@ -698,6 +702,21 @@ JNIEXPORT jint JNICALL Java_dev_matebridge_yuv444probe_Native_presentDraw(
     }
     if (c.timer) pollGpu(c);
     return 0;
+}
+
+// Swapped frames whose compositor latch time is still unknown (-1: timestamps unavailable, cannot tell).
+JNIEXPORT jint JNICALL Java_dev_matebridge_yuv444probe_Native_presentOutstanding(JNIEnv*, jclass) {
+    if (!gPres || !gPres->timestamps) return -1;
+    Ctx& c = *gPres;
+    pollTimestamps(c);
+    const EGLint names[1] = {EGL_COMPOSITION_LATCH_TIME_ANDROID};
+    int outstanding = 0;
+    for (const auto& p : c.pendingTs) {
+        int64_t v[1] = {0};
+        if (!pFrameTimestamps(c.dpy, c.surf, p.id, 1, names, v)) continue;  // history lost it: not waiting
+        if (v[0] == EGL_TIMESTAMP_PENDING_ANDROID) outstanding++;
+    }
+    return outstanding;
 }
 
 JNIEXPORT jstring JNICALL Java_dev_matebridge_yuv444probe_Native_presentLastError(JNIEnv* env, jclass) {
