@@ -1363,3 +1363,10 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 - Host `MATEBRIDGE_VD_TRANSFER=1`: Sistem Ayarları → Ekranlar → MateBridge'de **"Yüksek Dinamik Aralık" anahtarı var ve açık**; RE4 (GameHub) HDR'yi **kendiliğinden açtı**. T-226'nın açık riski (b) "oyun HDR ekranı görüyor mu" → evet. Akış hâlâ SDR (8-bit 4:2:0, sRGB etiketi), tablette HDR görüntü beklenmiyor.
 - Sonraki adım (karar gerektirir): T-226 raporundaki HDR10 akış yolu (SCK HDR preset + VT Main10/PQ + STREAM_PREFS/STREAM_CONFIG renk alanları + tablette HDR SurfaceView sunumu; ~4–5 ajan günü, 3–4 cihaz oturumu; yalnız Oyun modu, isteğe bağlı).
 - Kullanıcı (~11:00): HDR açıkken (akış SDR) RE4 "kötü görünmüyordu", koyu tonlar biraz farklıydı. Host varsayılana döndürüldü (`vd_transfer requested=0`). Tam HDR10 yolu (T-226 B–E) için kullanıcı kararı bekleniyor.
+
+## 2026-10-05 ~11:30 — HDR probu tablette: HDR10 gösterim çalışıyor
+
+- Mac `hdr-probe encode` Main10 PQ: 120 fps p50/p95/p99 5,6/6,4/7,4 ms (8-bit ile aynı; canlı akış açıkken). Klipler `~/.cache/matebridge-tools/data/hdr/`.
+- Tablet `hdrprobe` (MateBridge kapalıyken, sonra kaldırıldı): PQ klibi: çözücü `OMX.hisi.video.decoder.hevc` Main10HDR10, çıkış `standard=6 transfer=6 range=2 hdrStaticInfo=true`; SF katmanı `BT2020_ITU_PQ`, `DEVICE`. `dumpsys display mIsHdrLayerPresent=false` kaldı (Huawei bu bayrağı güncellemiyor olabilir). **Kullanıcı:** 1000 nit yaması SDR beyaz yamadan belirgin parlak ve beyaz; rampa yumuşak (kutular desen gereği). `static_info=false` varyantı da aynı (çözücü SEI'den okuyor). HLG klibi: `IllegalArgumentException: codec does not support type` → HLG yok.
+- Sonuç: decision 0032 (HDR10, Oyun modu, isteğe bağlı); protokol `task/T-236-hdr-protocol`, T-237 (host) ve T-238 (istemci) çalışıyor.
+- Kablosuz adb gece düşmüştü; `adb connect 192.168.1.105:5555` yeterli oldu (tablet yeniden başlamamış).
