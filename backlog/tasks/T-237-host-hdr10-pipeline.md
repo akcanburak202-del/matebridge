@@ -1,7 +1,7 @@
 ---
 id: T-237
 title: Host — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec + HDR display, SCK HDR capture, VT Main10 PQ, SDR fallback)
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-232]
@@ -53,4 +53,32 @@ Decision 0032'nin host tarafı. Protokol (PROTOCOL.md §0x03 HDR10 notu, §0x05 
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+**Commit:** `3778ca6` (uygulama; plan `e61063d`), dal `task/T-237-host-hdr10` (`task/T-236-hdr-protocol` üstünde). Push/merge yok.
+
+**Dosyalar:**
+- Core: `Messages.swift` (`StreamPrefs.dynamicRange`, `DynamicRange`), yeni `Video/HDRPolicy.swift` (`HDRPolicy`, `HDRFallbackReason`, `HDRFallback`, `HDR10Metadata`, `SessionColorTags`, `HDRLog`), `VideoSettings.swift` (`dynamicRange`, `vdTransferKnob`, `displayTransfer`, HDR10 `streamConfig` kodları), `StreamPrefsPolicy.swift` / `StreamPrefsStore.swift` (`allowHDR`, 6 değerli kayıt), `GameDisplayPolicy.swift` (`DisplayMode.transfer`, `DisplayReuse.transferChange`, `revalidated(allowHDR:)`).
+- Host: `VirtualDisplay.swift` (yalnız `mode.transfer` + yorum; özel API dokunuşu değişmedi, tf istek değeri ayardan gelir), `Video/VideoPipeline.swift` (`HDRSetupError`, ekran `applied≠1` ve SCK hata sınıflaması), `Video/HEVCEncoder.swift` (Main10, 2020/PQ/2020, MDCV/CLL, `HDRMetadataInsertionMode=Auto`, ayara göre retag), `Video/ScreenCapture.swift` (HDR yapılandırması), `Video/VideoDump.swift` (knob'u env'den okumaya devam), `Session/StreamCoordinator.swift` (`allowHDR` her türetmede, `fallBackFromHDR`, `ev=hdr_config`/`hdr_fallback`, `display_recreate reason=transfer_change`, `stream_prefs`/`stream_reconfigure` alanları, `hdr_off` yeniden bildirim), `Session/UserDefaultsStreamPrefsStore.swift` (yorum).
+- Testler: yeni `Video/HDRTests.swift` (21 test), `FixtureTests.swift` (3 yeni fixture), `CodecTests.swift` ve `GameDisplayTests.swift` (protokol değişiminin gerektirdiği güncelleme: 12. bayttan sonraki "fazlalık" baytlar artık dinamik aralık grubu; 6 değerli kayıt artık geçerli).
+- Belgeler: `docs/LOGGING.md` (yeni "HDR10 akış" bölümü, `display_recreate`, `vd_transfer`), `docs/KNOBS.md` #43.
+
+**check.sh:** host (swift build + 814 swift-testing / 476 XCTest), tüm Swift problar, Android problar, protokol fixture/crypto/belge kontrolleri, ölçüm kiti: **geçti**. **Düşen tek şey** `client-android` `FixtureTest.everyFixtureHasATestCase` (3 yeni fixture'ın Kotlin test kaydı yok; T-238'in işi, kartta öngörüldüğü gibi). `--only host,protocol`: ALL OK.
+
+**Doğrulanan (sentetik, ekran/akış yok):** HEVCEncoder'ın HDR özellik kümesinin aynısı (hızlı profil, 1848×1214, 30 sentetik `x420` kare) VT'de: tüm `VTSessionSetProperty` `0`, 30/30 kare, donanım kodlayıcı, çıktı biçimi `ITU_R_2020/SMPTE_ST_2084_PQ/ITU_R_2020`, `FullRangeVideo=0`, `BitsPerComponent=10`, MDCV/CLL baytları beklenen (`33c286c4…00000001`, `03e80190`), SPS profil 2 (Main10). SCK preset değerleri (yakalamasız okuma): `captureHDRRecordingPreservedSDRHDR10` = `x420`, `kCGColorSpaceITUR_2100_PQ`, `captureDynamicRange=2` (`hdrCanonicalDisplay`) — kod bu değerleri tek tek kuruyor.
+
+**Varsayımlar:**
+- HDR geri dönüşü süreç boyunca (oyun ekranı T-214 kuralıyla aynı); host yeniden başlayınca HDR tekrar denenir. Politika düzeyindeki düşüşler (`codec_not_hevc`, `disabled`) yeni `config_id` gerektirmez (ayarlar zaten SDR türetilir), yalnız `hdr_config reason=` yazar.
+- Host `dynamic_range=1`'i oyun ekranı şartı olmadan da uygular (doğal ekranda da); "yalnız Oyun modu" istemcinin kuralı (karar 0032).
+- SCK hatalarından ekran uykusuyla açıklananlar (`DisplayWaker.reason ≠ nil`) ve `displayNotFound` HDR hatası sayılmaz (yanlışlıkla HDR'yi kapatmasın); yalnız kurulum anı hataları geri dönüş tetikler. Çalışırken (kurulumdan sonra) oluşan kodlama hataları bugünkü `pipeline_failed`/retry yolunda kalır.
+- `MATEBRIDGE_VD_TRANSFER=1` açıkken ekran tf=1 kalır, SDR ↔ HDR10 geçişi ekranı yeniden kurmaz (yalnız yakalama+kodlayıcı); anahtar kapalıyken geçiş `display_recreate reason=transfer_change` ile ekranı yeniden kurar.
+- Meta veri: MDCV P3-D65 1000/0,0001 nit, CLL 1000/400 (gerekçe Plan 4'te). Cihazda ton eşleme kötü görünürse yalnız `HDR10Metadata.host` değişir.
+- Eski build 6 değerli hatırlanan tercih kaydını okuyamaz → o cihaz için varsayılan mod (yalnız HDR açıkken kaydedilmişse; zararsız).
+
+**Gerçek donanımda / izinle doğrulanacaklar (orkestratör):**
+1. T-238 istemcisiyle Oyun modunda HDR Açık: `ev=hdr_config requested=1 applied=1 … transfer=16`, `vd_transfer requested=1 applied=1 edr_potential≈5`, `encoder_config … profile=main10`, `input_retag` satırı çıkıyor mu (çıkarsa SCK etiketleri oturumunkinden farklı demek: `from=` değerini not et).
+2. SCK'nin HDR sanal ekrandan gerçekten `x420` + PQ verdiği, kare hızı (120 fps oyun ekranında `cadence`), enc ms (`latency`) — ilk gerçek HDR yakalama ölçümü bu olacak.
+3. HDR Kapalı ↔ Açık geçişi: `stream_reconfigure dynamic_range=sdr->hdr10`, `display_recreate reason=transfer_change`, yeni `config_id`; Mac'te pencereler kısa süre yedek ekrana taşınır (oyun ekranı geçişiyle aynı).
+4. SDR varsayılan yolun değişmediği: HDR kapalıyken `encoder_config`/`profile` satırları ve renk etiketleri öncekiyle aynı.
+5. Geri dönüş yolu cihazda tetiklenmedi (VT/SCK/ekran reddi yapay olarak üretilemedi); kod yolu `game_display_failed` ile aynı desende.
+
+**Açık sorular:**
+- Yok (protokol uyuşmazlığı görülmedi). Not: `CodecTests`'teki iki eski beklenti 12. bayttan sonrasını "yok sayılan fazlalık" olarak kullanıyordu; 0032 bu baytları dinamik aralık grubuna çevirdiği için test girdileri `0,0` grubu + fazlalık olacak şekilde güncellendi (davranış PROTOCOL.md ile uyumlu).
