@@ -169,7 +169,7 @@ class GameModeSettings(
     fun prefs(mode: StreamMode): StreamPrefs {
         val p = mode.toPrefs(fps(mode), bitrateKbps)
         val d = display(mode)
-        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode))
+        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode), chroma)
     }
 
     /**

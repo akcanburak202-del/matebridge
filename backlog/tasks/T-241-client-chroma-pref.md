@@ -1,7 +1,7 @@
 ---
 id: T-241
 title: Client — "Keskin renk kenarları" panel toggle and STREAM_PREFS.chroma (decision 0033)
-status: blocked
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-238]
@@ -73,3 +73,5 @@ Decision 0033'ün istemci tarafı. Protokol ve fixture'lar `task/T-239-chroma-pr
 - **Engel:** `protocol/Messages.kt` ve `protocol/Codec.kt` düzenlemesi (kartın kapsamında) izin sınıflandırıcısı tarafından reddedildi. Kullanıcı ya da orkestratör izin verirse ya da değişikliği kendisi yaparsa (yukarıdaki 1–4) kart tamamlanır.
 - Ayar `session/Settings.kt` yerine ayrı bir anahtarda. Orkestratör `Settings`'e taşınmasını isterse küçük bir takip işi olur (`USER_KEYS`'e `sharp_chroma` eklenir, `SharpChromaStore` kalkar).
 - `ev=profile`'da `chroma=` satır sonunda, `hdr=`'nin yanında değil (`StreamProfile` `session/DevKnobs.kt`'de, listede değil).
+
+**Orkestratör (2026-10-05):** kullanıcı codec düzenlemesini açıkça onayladı ("Codec düzenleme izni veriyorum"); orkestratör Handoff'taki dört adımı uyguladı (`StreamPrefs.chroma`, grup yazma kuralı, decode, `GameModeSettings.prefs`, `FixtureTest` + `CodecRulesTest`). `CodecRulesTest`'teki eski "reserved yok sayılır" beklentisi `chroma = 7` olarak güncellendi. `./scripts/check.sh --only android` ALL OK.
