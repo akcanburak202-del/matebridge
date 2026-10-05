@@ -1383,3 +1383,9 @@ Günlük 60, Safari'de `tools/chroma-test/index.html` + Dock. Kenar ölçümü t
 | `444` | — | — | tablet `video_health fault cause=no_output` (çözücü çıktı vermiyor) → yerel 4:4:4 kesin yok |
 
 Kullanıcı kararı: varsayılan kapalı, panelden açılır → decision 0033, T-240/T-241 (protokol `task/T-239-chroma-protocol`).
+
+## 2026-10-05 ~13:00 — HDR kare düşüşü araştırması ve masaüstü grilik
+
+- Araştırma (host logları, HDR 788 s / SDR 419 s oyun): Mac'te kayıp yok. SCK `cap_fps` 60,0/59,95, `enc_ms` p50 3,9/4,2 ms (HDR daha hızlı), `cap_to_sent` p95 6,0/6,3 ms, gösterilen/gönderilen 0,981/0,981. Host `ev=stats fps=` tabletin gösterdiği kare (StatsSummary), "Mac'in ürettiği" değil (orkestratörün önceki tablosu yanlış etiketlemişti). Düşüşler: Wi-Fi srtt sıçramaları (40–70 ms), dokunmayla tetiklenen panel 60↔120 Hz geçişleri (geçiş sonrası 3 sn'de 1,9/sn düşüş vs sabit 0,6/sn; HDR penceresinde 3,5 geçiş/dk vs 1,6), sahne. HDR'ye özgü fark yalnız panel 120 Hz'de ~%0,4 kare. Yan bulgu: HDR yakalamada SCK hiç `idle` kare vermiyor (durağan ekranda da 60 complete) → oyunun gerçek fps'i bu loglardan bilinemez (ölçüm: Metal HUD).
+- Kullanıcı: Oyun modu + HDR açıkken masaüstündeki terminal grimsi. Ölçüm: Mac (36,45,59) → tablet (28,32,40), katman BT2020_ITU_PQ. HDR akışta SDR içerik PQ'ya çevriliyor ve tablet ton eşlemesiyle soluk görünüyor (API 31'de SDR karartma yok; araştırma §6 öngörmüştü). Pratik: masaüstünde Günlük, oyunda Oyun+HDR.
+- Panel 60 Hz sabitleme: istemci zaten 60 Hz mod + setFrameRate istiyor, Huawei dokununca 120'ye çıkarıyor → T-243 deney.
