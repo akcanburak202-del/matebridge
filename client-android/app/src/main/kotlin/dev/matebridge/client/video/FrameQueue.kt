@@ -87,8 +87,8 @@ class FrameQueue(
     /** Per-window counters (T-121), see [counters]. */
     data class Counters(
         val kfRequests: Long, val kfHeld: Long, val overflows: Long, val maxPending: Int,
-        /** T-252: catch-ups started (each would have been a flush + keyframe request), frames handed out as SKIP. */
-        val catchUps: Long = 0, val catchUpSkipped: Long = 0,
+        /** T-252: catch-ups started (each would have been a flush + keyframe request). */
+        val catchUps: Long = 0,
     )
 
     /** T-073 receive-path trace (null = off): stamps the fate of every offered frame. */
@@ -146,7 +146,6 @@ class FrameQueue(
     private var catchStartNs = 0L
     private var maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
     private var catchUps = 0L
-    private var catchSkipped = 0L
 
     /** Depth limit in non-config frames; applies from the next frame on. */
     var maxPending: Int
@@ -297,6 +296,9 @@ class FrameQueue(
             if (!owns(consumer)) return null
             // T-252 review 2: the catch-up deadline holds without new arrivals too (burst, then silence, slow decode).
             val nowNs = clockNs()
+            // T-252 review 3: back within the normal depth = caught up; the frame taken now is the TAIL (if any was
+            // skipped) and the deadline below no longer applies.
+            if (catchingUp && pendingCount() <= limit) endCatchUp(forgetSkipped = false)
             if (catchingUp && nowNs - catchStartNs > maxCatchUpNs && pendingCount() > 0) {
                 overflows++
                 dropPending(trace, nowNs)
@@ -319,7 +321,6 @@ class FrameQueue(
                 if (catchingUp && pendingCount() > 0) {
                     m = CatchUp.SKIP
                     skippedOut++
-                    catchSkipped++
                 } else if (catchingUp || skippedOut > 0) {
                     // The newest frame of the backlog (or the first one after a flush that ended the catch-up).
                     m = CatchUp.TAIL
@@ -443,9 +444,9 @@ class FrameQueue(
 
     /** Counters of the window (requests produced or allowed, held, overflows, deepest queue); [reset] starts a new one. */
     fun counters(reset: Boolean = false): Counters = synchronized(lock) {
-        val c = Counters(kfRequests, kfHeld, overflows, maxSeen, catchUps, catchSkipped)
+        val c = Counters(kfRequests, kfHeld, overflows, maxSeen, catchUps)
         if (reset) {
-            kfRequests = 0; kfHeld = 0; overflows = 0; maxSeen = pendingCount(); catchUps = 0; catchSkipped = 0
+            kfRequests = 0; kfHeld = 0; overflows = 0; maxSeen = pendingCount(); catchUps = 0
         }
         c
     }

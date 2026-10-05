@@ -55,13 +55,15 @@ class CatchUpRendererTest {
         assertTrue("outputs", factory.await { outputsDequeued >= total })
         assertTrue("all released", factory.await { codec.renderedPts.size + codec.discardedPts.size >= total })
         assertEquals("every frame decoded in order", listOf(0L) + (1L..15L).toList(), codec.inputPts.toList())
-        assertEquals("only the newest frame rendered", listOf(15L), codec.renderedPts.toList())
-        assertEquals((1L..14L).toList(), codec.discardedPts.toList())
+        // pending 15..5 are skipped (the 50 ms rule may show one), the frame at the normal depth (12) is the TAIL, the rest normal
+        assertEquals("tail and the frames behind it rendered", listOf(12L, 13L, 14L, 15L), codec.renderedPts.toList().takeLast(4))
+        assertEquals("every frame released once", (1L..15L).toList(), (codec.renderedPts + codec.discardedPts).sorted())
         assertEquals("only the startup request", listOf(KeyframeRequest.STARTUP), requests.toList())
         assertFalse(r.isWaitingKeyframe())
         assertTrue(env.awaitLines("catch_up"))
-        assertTrue(env.lines("catch_up").single().contains("frames=15"))
-        assertTrue(r.queueStatsFields(reset = false).contains("catchups=1 cu_skipped=14"))
+        assertTrue(env.lines("catch_up").single().contains("frames=12"))
+        val fields = r.queueStatsFields(reset = false)
+        assertTrue(fields, fields.contains("catchups=1 cu_skipped=${codec.discardedPts.size} "))
     }
 
     @Test fun framesAfterTheCatchUpAreRenderedNormally() {
@@ -70,7 +72,7 @@ class CatchUpRendererTest {
         assertTrue(factory.await { codec.renderedPts.size + codec.discardedPts.size >= 15 })
         r.onFrame(frame(100))
         assertTrue("next frame rendered", factory.await { codec.renderedPts.contains(100L) })
-        assertEquals(listOf(15L, 100L), codec.renderedPts.toList())
+        assertEquals(listOf(12L, 13L, 14L, 15L, 100L), codec.renderedPts.toList().takeLast(5))
     }
 
     @Test fun withCatchUpOffTheBacklogIsFlushedAndAKeyframeIsRequested() {

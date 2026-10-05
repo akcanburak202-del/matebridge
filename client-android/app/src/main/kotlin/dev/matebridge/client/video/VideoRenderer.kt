@@ -179,6 +179,9 @@ class VideoRenderer(
     }
     private val queue = FrameQueue(stats, FrameQueue.depthForFps(initialConfig.fps))
 
+    /** T-252: outputs actually released without rendering during a catch-up (stats window; the 50 ms rule may show some). */
+    private val catchDiscards = java.util.concurrent.atomic.AtomicLong()
+
     /**
      * T-252: a backlog (more than the normal queue depth, up to [CatchUp.MAX_BACKLOG_MS] / [CatchUp.MAX_BACKLOG_BYTES])
      * is decoded in order and only its newest frame is shown, with no keyframe request; false = the pre-T-252 flush +
@@ -276,7 +279,7 @@ class VideoRenderer(
     fun queueStatsFields(reset: Boolean = true): String {
         val q = queue.counters(reset)
         return "kf_req=${q.kfRequests} kf_held=${q.kfHeld} overflows=${q.overflows} max_pending=${q.maxPending} " +
-            "limit=${queue.maxPending} catchups=${q.catchUps} cu_skipped=${q.catchUpSkipped} kf_avoided=${q.catchUps}"
+            "limit=${queue.maxPending} catchups=${q.catchUps} cu_skipped=${if (reset) catchDiscards.getAndSet(0) else catchDiscards.get()} kf_avoided=${q.catchUps}"
     }
 
     override fun onFrame(frame: VideoFrame) {
@@ -850,7 +853,7 @@ class VideoRenderer(
             }
             waitUs = 0
             if (isFrame) sink.tag(idx, info.presentationTimeUs, tag) // T-168: which frame a later release/discard is (T-220: and its trace row)
-            if (skip) { sink.discard(idx); continue }
+            if (skip) { catchDiscards.incrementAndGet(); sink.discard(idx); continue }
             if (paced) {
                 if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
                 val decision = d
