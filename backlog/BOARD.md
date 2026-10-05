@@ -45,6 +45,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-245](tasks/T-245-client-game-native-2800-option.md) | Client — experimental "2800×1840 (deneysel)" game resolution, offered only in Oyun 60 | 6 | android-client-dev | [] |
+| [T-246](tasks/T-246-client-no-focus-highlight.md) | Client — disable Android's default focus highlight on the video SurfaceView (the intermittent "grey" black lift) | 6 | android-client-dev | [] |
+| [T-247](tasks/T-247-client-first-nav-key-after-touch.md) | Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode | 6 | android-client-dev | [] |
 
 ## done
 
