@@ -1,7 +1,7 @@
 ---
 id: T-245
 title: Client — experimental "2800×1840 (deneysel)" game resolution, offered only in Oyun 60
-status: todo
+status: in_progress
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -33,7 +33,19 @@ Kullanıcı 2026-10-05: Oyun modunda daha yüksek çözünürlük. Ölçüm (NOT
 
 ## Plan
 
-_(Ajan kodlamadan önce doldurur.)_
+1. `stream/GameResolution.kt`: yeni giriş `R2800("2800x1840", 2800, 1840)`, `experimental = true`. Saf yardımcılar:
+   `availableAt(fps)` (deneysel olan yalnız 60'ta), `effectiveAt(fps)` (120'de `R2240`'a düşer), `panelLabel(gameFps: Int?)`
+   ("2800×1840 (deneysel)" / 120'de "2800×1840 (yalnız 60 fps)" / Oyun dışı, Oyun fps'i bilinmezken "2800×1840 (deneysel, yalnız 60 fps)"),
+   `panelSelected(stored, gameFps)` (Oyun 120'de etkin 2240 seçili görünür). `parse("2800x1840")` artık R2800.
+2. `stream/GameMode.kt`: `display(mode)` kayıtlı seçimi Oyun'un kare hızına göre etkin boyuta çevirir (STREAM_PREFS, toast,
+   profile log hepsi buradan okur; kayıtlı seçim değişmez). `selectGameResolution` etkin boyut değişmediyse null döner.
+   60↔120 geçişinde `selectFrameRate` zaten tam STREAM_PREFS gönderir → `fps` ve `display_*` tek mesajda değişir.
+3. `settings/SettingsCatalog.kt`: `SettingItem.Option`'a seçenek başına `enabled` (varsayılan true); oyun çözünürlüğü
+   satırında etiket/gri durum/seçili id yukarıdaki saf fonksiyonlardan; gri seçeneğe dokunma hiçbir şey yapmaz.
+   `settings/SettingsViews.kt`: buton `isEnabled`/alpha = satır && seçenek.
+4. MainActivity'ye dokunulmaz (kapsam dışı): panel Oyun dışında Oyun'un kare hızını bilmez → orada etiket iki koşulu birden yazar.
+5. JVM testleri: GameResolutionTest, SettingsCatalogTest (+ gerekiyorsa StreamModeTest). 0030'a kısa ek.
+6. Host doğrulaması (kod okuma): `GameDisplayPolicy.accepts` 2800×1840'ı kabul eder; Handoff'a yazılır.
 
 ## Handoff
 
