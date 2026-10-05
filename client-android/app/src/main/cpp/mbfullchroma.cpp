@@ -47,6 +47,7 @@ namespace {
 typedef EGLClientBuffer (*PFN_getNativeClientBuffer)(const struct AHardwareBuffer*);
 typedef EGLBoolean (*PFN_getNextFrameId)(EGLDisplay, EGLSurface, uint64_t*);
 typedef EGLBoolean (*PFN_getFrameTimestamps)(EGLDisplay, EGLSurface, uint64_t, EGLint, const EGLint*, int64_t*);
+typedef EGLBoolean (*PFN_tsSupported)(EGLDisplay, EGLSurface, EGLint);
 typedef EGLBoolean (*PFN_presentationTime)(EGLDisplay, EGLSurface, EGLnsecsANDROID);
 typedef void (*PFN_genQueries)(GLsizei, GLuint*);
 typedef void (*PFN_beginQuery)(GLenum, GLuint);
@@ -60,6 +61,7 @@ PFNEGLDESTROYIMAGEKHRPROC pDestroyImage;
 PFNGLEGLIMAGETARGETTEXTURE2DOESPROC pImageTarget;
 PFN_getNextFrameId pNextFrameId;
 PFN_getFrameTimestamps pFrameTimestamps;
+PFN_tsSupported pTsSupported;
 PFN_presentationTime pPresentationTime;
 PFN_genQueries pGenQueries;
 PFN_beginQuery pBeginQuery;
@@ -74,6 +76,7 @@ void loadProcs() {
     pImageTarget = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     pNextFrameId = (PFN_getNextFrameId)eglGetProcAddress("eglGetNextFrameIdANDROID");
     pFrameTimestamps = (PFN_getFrameTimestamps)eglGetProcAddress("eglGetFrameTimestampsANDROID");
+    pTsSupported = (PFN_tsSupported)eglGetProcAddress("eglGetFrameTimestampSupportedANDROID");
     pPresentationTime = (PFN_presentationTime)eglGetProcAddress("eglPresentationTimeANDROID");
     pGenQueries = (PFN_genQueries)eglGetProcAddress("glGenQueriesEXT");
     pBeginQuery = (PFN_beginQuery)eglGetProcAddress("glBeginQueryEXT");
@@ -140,6 +143,8 @@ struct Ctx {
     std::vector<int64_t> gpuOut;
     bool timer = false;
     bool timestamps = false;
+    bool tsRender = false;   // EGL_RENDERING_COMPLETE_TIME_ANDROID supported (else reported as 0)
+    bool tsPresent = false;  // EGL_DISPLAY_PRESENT_TIME_ANDROID supported (else the latch time stands in)
     std::string lastError;
 };
 
@@ -457,26 +462,33 @@ void pollFences(Ctx& c) {
 }
 
 void pollTimestamps(Ctx& c) {
-    const EGLint names[3] = {EGL_RENDERING_COMPLETE_TIME_ANDROID, EGL_COMPOSITION_LATCH_TIME_ANDROID,
-                             EGL_DISPLAY_PRESENT_TIME_ANDROID};
+    // Only the supported timestamps are queried (an unsupported name fails the whole query): latch is required
+    // (checked at init), present falls back to latch, rendering-complete to 0.
+    EGLint names[3];
+    int n = 0, iRender = -1, iLatch = -1, iPresent = -1;
+    if (c.tsRender) { iRender = n; names[n++] = EGL_RENDERING_COMPLETE_TIME_ANDROID; }
+    iLatch = n; names[n++] = EGL_COMPOSITION_LATCH_TIME_ANDROID;
+    if (c.tsPresent) { iPresent = n; names[n++] = EGL_DISPLAY_PRESENT_TIME_ANDROID; }
     while (!c.pendingTs.empty()) {
         auto p = c.pendingTs.front();
         int64_t v[3] = {0, 0, 0};
-        if (!pFrameTimestamps(c.dpy, c.surf, p.id, 3, names, v)) {
+        if (!pFrameTimestamps(c.dpy, c.surf, p.id, n, names, v)) {
             c.pendingTs.pop_front();  // history no longer holds this frame
             continue;
         }
-        if (v[1] == EGL_TIMESTAMP_PENDING_ANDROID || v[2] == EGL_TIMESTAMP_PENDING_ANDROID) {
+        if (v[iLatch] == EGL_TIMESTAMP_PENDING_ANDROID || (iPresent >= 0 && v[iPresent] == EGL_TIMESTAMP_PENDING_ANDROID)) {
             if (c.pendingTs.size() > 12) {
                 c.pendingTs.pop_front();  // too far behind: give up on the oldest
                 continue;
             }
             break;
         }
+        int64_t latch = v[iLatch];
+        int64_t present = (iPresent >= 0 && v[iPresent] > 0) ? v[iPresent] : latch;
         c.tsOut.push_back(p.tag);
-        c.tsOut.push_back(v[1]);
-        c.tsOut.push_back(v[2]);
-        c.tsOut.push_back(v[0]);
+        c.tsOut.push_back(latch);
+        c.tsOut.push_back(present);
+        c.tsOut.push_back(iRender >= 0 ? v[iRender] : 0);
         c.pendingTs.pop_front();
     }
 }
@@ -634,6 +646,13 @@ JNIEXPORT jstring JNICALL Java_dev_matebridge_client_video_FullChromaNative_pres
     eglSwapInterval(c.dpy, swapInterval);
     if (pNextFrameId && pFrameTimestamps && hasExt(eglExt, "EGL_ANDROID_get_frame_timestamps")) {
         c.timestamps = eglSurfaceAttrib(c.dpy, c.surf, EGL_TIMESTAMPS_ANDROID, EGL_TRUE) == EGL_TRUE;
+        if (c.timestamps && pTsSupported) {
+            c.tsRender = pTsSupported(c.dpy, c.surf, EGL_RENDERING_COMPLETE_TIME_ANDROID) == EGL_TRUE;
+            c.tsPresent = pTsSupported(c.dpy, c.surf, EGL_DISPLAY_PRESENT_TIME_ANDROID) == EGL_TRUE;
+            if (pTsSupported(c.dpy, c.surf, EGL_COMPOSITION_LATCH_TIME_ANDROID) != EGL_TRUE) c.timestamps = false;
+        } else {
+            c.timestamps = false;  // cannot tell what is supported: do not query
+        }
     }
     if (hasExt(glExt, "GL_EXT_disjoint_timer_query") && pGenQueries && pBeginQuery && pEndQuery && pGetQueryuiv &&
         pGetQueryui64v) {

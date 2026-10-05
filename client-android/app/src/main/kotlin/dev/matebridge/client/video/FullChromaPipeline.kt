@@ -99,14 +99,11 @@ class FullChromaPipeline(
             val w = config.widthPx
             val h = config.heightPx
             val usage = HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
-            val mt = HandlerThread("mb-img-main").also { it.start() }
-            val at = HandlerThread("mb-img-aux").also { it.start() }
-            mainThread = mt
-            auxThread = at
-            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage)
-            val aux = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage)
-            mainReader = main
-            auxReader = aux
+            // Ownership is recorded right after each allocation so a failure of the next one is torn down by teardown().
+            val mt = HandlerThread("mb-img-main").also { mainThread = it; it.start() }
+            val at = HandlerThread("mb-img-aux").also { auxThread = it; it.start() }
+            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { mainReader = it }
+            val aux = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { auxReader = it }
 
             val pres = PackedPresenter(
                 surface, w, h, YuvConversion.of(config.matrix, config.fullRange == 1), this::log,

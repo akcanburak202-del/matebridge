@@ -79,6 +79,11 @@ class PackedPresenter(
          * Waits up to [ms] for the previously created presenter's GL thread to exit. False = it is still alive (a stuck
          * GL call): the caller must NOT start another presenter (the native context would be replaced under it).
          */
+        /** Clears [previous] once [p] has terminated (identity-guarded: a newer presenter is never cleared). */
+        internal fun clearIfPrevious(p: PackedPresenter) {
+            synchronized(PackedPresenter::class.java) { if (previous === p) previous = null }
+        }
+
         fun awaitPrevious(ms: Long): Boolean {
             val p = previous ?: return true
             if (p.isAlive && ms > 0) { try { p.join(ms) } catch (_: InterruptedException) {} }
@@ -86,7 +91,7 @@ class PackedPresenter(
         }
     }
 
-    init { previous = this }
+    init { synchronized(PackedPresenter::class.java) { previous = this } }
 
     /** One window of presenter counters (the `render ev=stats` fields). */
     class Snapshot(
@@ -169,6 +174,10 @@ class PackedPresenter(
     }
 
     override fun run() {
+        try { runLoop() } finally { clearIfPrevious(this) } // do not retain the pipeline/activity after the thread ends
+    }
+
+    private fun runLoop() {
         try { Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY) } catch (_: Exception) {}
         val initError = FullChromaNative.presentInit(surface, width, height, 0)
         if (initError.isNotEmpty()) {
