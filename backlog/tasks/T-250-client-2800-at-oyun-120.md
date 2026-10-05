@@ -1,7 +1,7 @@
 ---
 id: T-250
 title: Client — allow 2800×1840 game resolution in Oyun 120 too (drop the 60-only rule)
-status: ready
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-245, T-249]
@@ -32,6 +32,14 @@ Karar 0030 "Ek (2026-10-05, T-250)": çözücü 2800×1840'ı 120 fps'te taşıy
 
 ## Plan
 
+`GameResolution`: `availableAt/effectiveAt/EXPERIMENTAL_FPS/FALLBACK/ONLY_60_TEXT/panelEnabled/panelSelected` silinir, `panelLabel` parametresiz özellik ("(deneysel)" etiketi kalır). `GameModeSettings.display` saklanan boyutu doğrudan verir. Katalogda `gameFps` ve `Option.enabled` (başka yerde kullanılmıyordu) ile SettingsViews'taki gri-seçenek yolu silinir. Testler güncellenir.
+
 ## Handoff
+
+- Commit: son commit `task/T-250-2800-oyun-120` dalında (`T-250: ...`).
+- Dosyalar: `stream/GameResolution.kt`, `stream/GameMode.kt`, `settings/SettingsCatalog.kt`, `settings/SettingsViews.kt`, `GameResolutionTest.kt`, `SettingsCatalogTest.kt`, bu kart.
+- Varsayım: `SettingItem.Option.enabled` yalnız T-245 için vardı, kaldırıldı (satır düzeyindeki `Choice.enabled` duruyor).
+- check.sh: ALL OK.
+- Tablette: Oyun 120'de panelde "2800×1840 (deneysel)" seçilebilir (gri değil, "yalnız 60 fps" yok); seçince STREAM_PREFS display=2800x1840, fps=120 gider; 60↔120 geçişinde çözünürlük değişmez. 2800×1840 @120'de akış, gecikme ve kare düşmesi gözlenmeli.
 
 ## Open questions

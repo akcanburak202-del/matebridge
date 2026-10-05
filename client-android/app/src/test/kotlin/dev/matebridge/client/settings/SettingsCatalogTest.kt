@@ -250,13 +250,12 @@ class SettingsCatalogTest {
         val s = SettingsCatalog.sections(h, inStream = true)
         val c = choice(s, "game_resolution")
         assertEquals("Oyun çözünürlüğü", c.titleText())
-        // Günlük: Oyun's rate is not known here, so the experimental label names both conditions (T-245)
+        // T-250: the experimental label is the same in every mode and at every rate
         assertEquals(
-            listOf("1400×920", "1848×1214", "2100×1380", "2240×1472", "2800×1840 (deneysel, yalnız 60 fps)"),
+            listOf("1400×920", "1848×1214", "2100×1380", "2240×1472", "2800×1840 (deneysel)"),
             c.options.map { it.label },
         )
         assertEquals(listOf("1400x920", "1848x1214", "2100x1380", "2240x1472", "2800x1840"), c.options.map { it.id })
-        assertTrue(c.options.all { it.enabled() })
         assertEquals("1848x1214", c.selected())
         c.select("1400x920")
         assertEquals("1400x920", c.selected())
@@ -268,44 +267,24 @@ class SettingsCatalogTest {
         assertEquals("Oyun çözünürlüğü", c.titleText())
     }
 
-    @Test fun experimentalGameResolutionOnlyInOyun60() { // T-245
+    @Test fun experimentalGameResolutionAtEveryRate() { // T-250
         val c = choice(SettingsCatalog.sections(h, inStream = true), "game_resolution")
         val exp = c.options.single { it.id == "2800x1840" }
+        for (m in StreamMode.entries) {
+            for (fps in listOf(60, 120)) {
+                h.streamMode = m
+                h.frameRate = fps
+                assertEquals("$m $fps", "2800×1840 (deneysel)", exp.label)
+                assertTrue(c.enabled())
+            }
+        }
         h.streamMode = StreamMode.GAME
-        h.frameRate = 60
-        assertEquals("2800×1840 (deneysel)", exp.label)
-        assertTrue(exp.enabled())
-        assertTrue(c.enabled())
+        h.frameRate = 120
         c.select("2800x1840")
         assertEquals(listOf("game_resolution 2800x1840"), h.calls)
         assertEquals("2800x1840", c.selected())
-        // Oyun 120: grey "(yalnız 60 fps)", 2240×1472 shown as the size in effect, the stored choice untouched
-        h.frameRate = 120
-        assertEquals("2800×1840 (yalnız 60 fps)", exp.label)
-        assertFalse(exp.enabled())
-        assertTrue(c.enabled()) // only the one button is grey, not the row
-        assertTrue(c.options.filter { it.id != "2800x1840" }.all { it.enabled() })
-        assertEquals("2240x1472", c.selected())
-        assertEquals(GameResolution.R2800, h.gameResolution)
-        c.select("2800x1840") // a tap on the grey button does nothing
-        assertEquals(listOf("game_resolution 2800x1840"), h.calls)
-        c.select("2240x1472") // a real choice still goes through
-        assertEquals(listOf("game_resolution 2800x1840", "game_resolution 2240x1472"), h.calls)
-        // back to 60 with 2800×1840 stored: selected again
-        h.gameResolution = GameResolution.R2800
         h.frameRate = 60
         assertEquals("2800x1840", c.selected())
-        // outside Oyun: stored selection, tappable, both conditions named
-        for (m in listOf(StreamMode.DAILY, StreamMode.DRAWING)) {
-            h.streamMode = m
-            h.frameRate = 120
-            assertEquals(m.id, "2800×1840 (deneysel, yalnız 60 fps)", exp.label)
-            assertTrue(m.id, exp.enabled())
-            assertEquals(m.id, "2800x1840", c.selected())
-        }
-        assertNull(SettingsCatalog.gameFps(h))
-        h.streamMode = StreamMode.GAME
-        assertEquals(120, SettingsCatalog.gameFps(h))
     }
 
     @Test fun frameRateChoiceIsPerModeAndFixedInDrawing() { // T-223, decision 0030 §2
