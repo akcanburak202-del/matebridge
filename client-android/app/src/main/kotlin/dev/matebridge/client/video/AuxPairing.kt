@@ -45,6 +45,9 @@ class AuxPairing<T : Any>(private val capacity: Int, private val onEvict: (T) ->
         return match
     }
 
+    /** The item captured at [captureUs] without judging or evicting anything (late upgrade of a frame already shown). */
+    fun find(captureUs: Long): T? = items.firstOrNull { it.captureUs == captureUs }?.item
+
     /** `aux_paired_pct` of the counts since the last [resetCounts]; null when no main frame was judged. */
     fun pairedPct(): Double? = if (paired + late == 0L) null else paired * 100.0 / (paired + late)
 

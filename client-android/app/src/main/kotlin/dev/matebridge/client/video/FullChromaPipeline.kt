@@ -104,7 +104,8 @@ class FullChromaPipeline(
             // Ownership is recorded right after each allocation so a failure of the next one is torn down by teardown().
             val mt = HandlerThread("mb-img-main").also { mainThread = it; it.start() }
             val at = HandlerThread("mb-img-aux").also { auxThread = it; it.start() }
-            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { mainReader = it }
+            // One more than the aux reader: the presenter holds the last drawn main image for the late upgrade (T-261).
+            val main = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES + 1, usage).also { mainReader = it }
             val aux = ImageReader.newInstance(w, h, ImageFormat.PRIVATE, MAX_IMAGES, usage).also { auxReader = it }
 
             val token = runGen.begin()
@@ -258,7 +259,7 @@ object FullChromaStatsFormat {
     /**
      * `chroma_layout=<0|1> aux_paired_pct=<%.1f|-> aux_late=<n|-> gl_ms_p50=<%.2f|-> gl_ms_p95=<%.2f|->`, and with layout 1
      * also `gl_drawn= gl_displaced= gl_errors= gl_outstanding_max= aux_drop= aux_kf_req= aux_restarts= aux_dead= aux_unmatched=
-     * img_errors=`. Layout 0 (the direct path) carries only the first group, all `-`.
+     * img_errors= reuse_pct= late_upgrades=`. Layout 0 (the direct path) carries only the first group, all `-`.
      */
     fun fields(
         layout: Int, s: PackedPresenter.Snapshot?, auxDropped: Long = 0, auxKfRequests: Long = 0, auxRestarts: Long = 0,
@@ -269,7 +270,8 @@ object FullChromaStatsFormat {
         if (layout != 1) return head
         return head + " gl_drawn=${s?.drawn ?: 0} gl_displaced=${s?.displaced ?: 0} gl_errors=${s?.drawErrors ?: 0} " +
             "gl_outstanding_max=${s?.outstandingMax ?: 0} aux_drop=$auxDropped aux_kf_req=$auxKfRequests " +
-            "aux_restarts=$auxRestarts aux_dead=${if (auxDead) 1 else 0} aux_unmatched=$auxUnmatched img_errors=$imageErrors"
+            "aux_restarts=$auxRestarts aux_dead=${if (auxDead) 1 else 0} aux_unmatched=$auxUnmatched img_errors=$imageErrors" +
+            " reuse_pct=${f1(s?.reusePct)} late_upgrades=${s?.lateUpgrades ?: 0}"
     }
 }
 
