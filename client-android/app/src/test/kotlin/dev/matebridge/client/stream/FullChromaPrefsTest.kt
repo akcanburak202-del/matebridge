@@ -71,13 +71,6 @@ class FullChromaPrefsTest {
         assertEquals(StreamPrefs.CHROMA_SHARP, g.prefs(StreamMode.GAME).chroma)
     }
 
-    @Test fun withoutAColourStoreTheLegacySwitchStillDecides() {
-        val g = GameModeSettings(Settings(kv), chromaStore = SharpChromaStore(kv))
-        assertEquals(StreamPrefs.CHROMA_NORMAL, g.prefs(StreamMode.DAILY).chroma)
-        kv.map["sharp_chroma"] = "1"
-        assertEquals(StreamPrefs.CHROMA_SHARP, g.prefs(StreamMode.DAILY).chroma)
-    }
-
     // ---- capability ----
 
     @Test fun capabilityStartsUnknownAndNeedsATest() {

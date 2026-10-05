@@ -12,7 +12,8 @@ import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
-import dev.matebridge.client.stream.SharpChromaPolicy
+import dev.matebridge.client.stream.ColourChoice
+import dev.matebridge.client.stream.ColourPolicy
 import dev.matebridge.client.stream.StreamMode
 import java.util.Locale
 
@@ -56,10 +57,14 @@ interface SettingsHost {
     fun selectHdr(on: Boolean)
     /** STREAM_CONFIG of the running stream (the applied dynamic range is read from it), null without one. */
     val appliedConfig: StreamConfig?
-    /** Decision 0033 (T-241): the stored "Keskin renk kenarları" (every mode, default off). */
-    val sharpChroma: Boolean
-    /** Persists the choice and sends a STREAM_PREFS when it changed. */
-    fun selectSharpChroma(on: Boolean)
+    /** Decisions 0033/0034 (T-241, T-260): the stored "Renk" choice (every mode, default Normal). */
+    val colourChoice: ColourChoice
+    /** The full-chroma capability self-test passed: "Tam renk" is usable (else grey "Bu cihazda yok"). */
+    val fullChromaCapable: Boolean
+    /** The STREAM_PREFS `chroma` asked of the host right now (2 = Tam renk is in effect for the current mode). */
+    val colourRequest: Int
+    /** Persists the choice and sends a STREAM_PREFS when what is asked of the host changed. */
+    fun selectColour(choice: ColourChoice)
     /**
      * The mode whose temporary layer is in effect (Oyun, decision 0014; Çizim, decision 0030; T-109, T-223), null in
      * Günlük: the settings it overrides ([GameModeSettings.overridesOf]) show and change the session layer, not the
@@ -179,6 +184,12 @@ sealed interface SettingItem {
     class Option(val id: String, private val labelOf: () -> String) {
         constructor(id: String, label: String) : this(id, labelOf = { label })
 
+        /** T-260: false while this button alone is grey and does nothing, e.g. "Tam renk (Bu cihazda yok)". */
+        var enabled: () -> Boolean = { true }
+            private set
+
+        fun enabledWhen(f: () -> Boolean): Option = apply { enabled = f }
+
         val label: String get() = labelOf()
     }
 
@@ -214,6 +225,11 @@ class SettingsSection(val title: String, val items: List<SettingItem>)
 
 /** The single description of the settings controls (T-105, decision 0013), shared by both panels. Pure Kotlin. */
 object SettingsCatalog {
+    private fun colourNote(h: SettingsHost) =
+        ColourPolicy.note(h.colourChoice, h.fullChromaCapable, h.colourRequest, h.appliedConfig)
+
+    private fun colourApplied(h: SettingsHost) = ColourPolicy.applied(h.colourRequest, h.appliedConfig)
+
     const val SHORTCUTS =
         "Kısayollar: Ctrl+Shift+6: ayarlar paneli · Ctrl+Shift+Esc: Android'e dön · Ctrl+Shift+9/0: imleç hızı · " +
             "Ctrl+Shift+8: istatistik · Ctrl+Shift+7: görüntü modu (Günlük/Çizim/Oyun)"
@@ -318,19 +334,27 @@ object SettingsCatalog {
                 if (inStream) {
                     add(SettingItem.Info("hdr_applied", { HdrPolicy.rowHidden(h.streamMode) }) { HdrPolicy.appliedLabel(h.appliedConfig) })
                 }
-                // Decision 0033 (T-241): every mode; grey "(HDR açıkken etkisiz)" while HDR10 is applied.
+                // Decisions 0033/0034 (T-241, T-260): every mode; grey "(HDR açıkken etkisiz)" while HDR10 is applied.
                 add(
                     SettingItem.Choice(
-                        "sharp_chroma", SharpChromaPolicy.TITLE,
-                        listOf(
-                            SettingItem.Option(SharpChromaPolicy.OPTION_OFF, "Kapalı"),
-                            SettingItem.Option(SharpChromaPolicy.OPTION_ON, "Açık"),
-                        ),
-                        { SharpChromaPolicy.selected(h.sharpChroma) },
-                        { SharpChromaPolicy.marker(h.appliedConfig) },
-                        enabled = { SharpChromaPolicy.rowEnabled(h.appliedConfig) },
-                    ) { id -> if (SharpChromaPolicy.rowEnabled(h.appliedConfig)) h.selectSharpChroma(id == SharpChromaPolicy.OPTION_ON) },
+                        "colour", ColourPolicy.TITLE,
+                        ColourChoice.entries.map { c ->
+                            SettingItem.Option(c.id) { ColourPolicy.label(c, h.fullChromaCapable) }.enabledWhen { ColourPolicy.optionEnabled(c, h.fullChromaCapable) }
+                        },
+                        { ColourPolicy.selected(h.colourChoice, h.fullChromaCapable) },
+                        { ColourPolicy.marker(h.appliedConfig) },
+                        enabled = { ColourPolicy.rowEnabled(h.appliedConfig) },
+                    ) { id ->
+                        val c = ColourChoice.parse(id)
+                        if (c != null && ColourPolicy.rowEnabled(h.appliedConfig) && ColourPolicy.optionEnabled(c, h.fullChromaCapable)) h.selectColour(c)
+                    },
                 )
+                add(
+                    SettingItem.Info("colour_note", { colourNote(h).isEmpty() }) { colourNote(h) },
+                )
+                if (inStream) {
+                    add(SettingItem.Info("colour_applied", { colourApplied(h).isEmpty() }) { colourApplied(h) })
+                }
                 add(
                     SettingItem.Choice(
                         "idle_dim", IDLE_DIM_TITLE,
