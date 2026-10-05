@@ -44,6 +44,10 @@ class GameModeSettings(
     val hdr: HdrCapability = HdrCapability.NONE,
     /** Decision 0033: the stored "Keskin renk kenarları" (null = always off). */
     private val chromaStore: SharpChromaStore? = null,
+    /** Decision 0034 (T-259): the stored "Renk" choice (T-260 writes it); null = only the legacy sharp switch counts. */
+    private val colourStore: ColourStore? = null,
+    /** Decision 0034: true while the full-chroma capability self-test has passed ([dev.matebridge.client.video.FullChromaCapability]). */
+    private val fullChromaAvailable: () -> Boolean = { false },
 ) {
     /** The layered values, either stored or from the layer. */
     data class Values(
@@ -187,7 +191,7 @@ class GameModeSettings(
     fun prefs(mode: StreamMode): StreamPrefs {
         val p = mode.toPrefs(fps(mode), effective().bitrateKbps) // T-242: the resolved rate, not the panel choice
         val d = display(mode)
-        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode), chroma)
+        return StreamPrefs(p.fps, p.scalePermille, p.bitrateKbps, d?.widthPx ?: 0, d?.heightPx ?: 0, dynamicRange(mode), chromaFor(mode))
     }
 
     /**
@@ -207,6 +211,18 @@ class GameModeSettings(
 
     /** STREAM_PREFS `chroma` ([SharpChromaPolicy.chroma]); every mode asks for the stored value. */
     val chroma: Int get() = SharpChromaPolicy.chroma(sharpChroma)
+
+    /** The stored "Renk" choice (decision 0034), the legacy sharp switch when no choice is stored. */
+    fun colourChoice(): ColourChoice = colourStore?.get() ?: if (sharpChroma) ColourChoice.SHARP else ColourChoice.NORMAL
+
+    /**
+     * STREAM_PREFS `chroma` for [mode] ([FullChromaPolicy.chromaRequest]): `2` only for Tam renk in Günlük at 60 fps on the
+     * native display, SDR, with the capability passed; a chosen Tam renk otherwise asks for the sharp value `1`.
+     */
+    fun chromaFor(mode: StreamMode): Int = FullChromaPolicy.chromaRequest(
+        colourChoice(), mode, fps(mode), display(mode) == null, StreamMode.SCALE_PERMILLE, dynamicRange(mode),
+        fullChromaAvailable(),
+    )
 
     /** "Varsayılanlara dön": back to off; true when a value was stored. */
     fun resetSharpChroma(): Boolean = chromaStore?.reset() == true

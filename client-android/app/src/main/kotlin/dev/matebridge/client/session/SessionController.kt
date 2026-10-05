@@ -148,7 +148,15 @@ class SessionController(
     private val wifiBinder: (Socket) -> Boolean = { true },
     initialFiles: FilesInfo? = null, // T-135: file server state; null = no file server, FILES_INFO never sent
     stallDiag: Boolean = false, // T-142: opt-in (--ez stall_diag true): the mb-stall tick thread and its log lines
+    /**
+     * T-259 (decision 0034): capability bits OR'd into each connection's HELLO when it is built (not at construction), so
+     * the full colour self-test finishing after start-up still shows on the next connection. Any thread.
+     */
+    private val helloCapabilities: () -> Long = { 0L },
 ) {
+    /** The HELLO template of a new connection: [hello] plus the capability bits of the moment ([helloCapabilities]). */
+    private fun currentHello(): Hello = hello.copy(capabilities = hello.capabilities or helloCapabilities())
+
     /** T-150: trusted/pending pair keys with the wall-clock rules of decision 0018. */
     private val trust = PairTrust(pairKeys, log = { ev, fields -> MbLog.i(ev, fields) })
 
@@ -502,7 +510,7 @@ class SessionController(
                 resetArrival()
                 listener.onConnectionGen(a.gen, ConnectMode.transportOf(a.endpoint))
                 control?.abort()
-                control = ControlConn(a.gen, a.endpoint, hello, wake = a.wake, userInitiated = a.userInitiated).also { it.startThreads() }
+                control = ControlConn(a.gen, a.endpoint, currentHello(), wake = a.wake, userInitiated = a.userInitiated).also { it.startThreads() }
                 stallDetector?.start()
             }
             is SessionMachine.Action.Send -> {
@@ -558,7 +566,7 @@ class SessionController(
             is SessionMachine.Action.OpenCandidate -> {
                 MbLog.i("migrate_start", "cand_gen=${a.gen} host=${a.endpoint.host} port=${a.endpoint.port}")
                 candidate?.cancel()
-                val c = ControlConn(a.gen, a.endpoint, hello, ControlCloseSlots.Owner.CANDIDATE, candidateTrust)
+                val c = ControlConn(a.gen, a.endpoint, currentHello(), ControlCloseSlots.Owner.CANDIDATE, candidateTrust)
                 candidate = c
                 c.startThreads()
             }
