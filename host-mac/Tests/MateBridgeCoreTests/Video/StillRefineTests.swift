@@ -128,10 +128,10 @@ final class StillRefineTests: XCTestCase {
         _ = p.noteOutput(bytes: 20_000, nowUs: 300_100, queueReady: false, deferQueueBusy: true)
         XCTAssertEqual(p.tick(nowUs: 310_000, queueReady: true, keyframePending: true).timedOut?.reason, .keyframePending)
         p.noteCapture(nowUs: 400_000)
-        XCTAssertTrue(p.tick(nowUs: 700_000, queueReady: true).start)
-        _ = p.noteOutput(bytes: 20_000, nowUs: 700_100, queueReady: false, deferQueueBusy: true)
-        XCTAssertEqual(p.noteCapture(nowUs: 700_200)?.reason, .cancelled)
-        XCTAssertFalse(p.tick(nowUs: 700_300, queueReady: true).start)
+        XCTAssertTrue(p.tick(nowUs: 900_000, queueReady: true).start)
+        _ = p.noteOutput(bytes: 20_000, nowUs: 900_100, queueReady: false, deferQueueBusy: true)
+        XCTAssertEqual(p.noteCapture(nowUs: 900_200)?.reason, .cancelled)
+        XCTAssertFalse(p.tick(nowUs: 900_300, queueReady: true).start)
     }
 
     func testCaptureCancelsAndLateOutputIsIgnored() {

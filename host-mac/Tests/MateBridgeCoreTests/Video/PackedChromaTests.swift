@@ -196,7 +196,9 @@ final class PackedSenderTests: XCTestCase {
         sender.start()
         main.push(enc(100, view: 0, key: true))
         await waitUntil("main 100") { t.sent.count == 1 }
-        aux.push(enc(115, view: 1))
+        main.push(enc(130, view: 0))
+        await waitUntil("main 130") { t.sent.count == 2 }
+        aux.push(enc(115, view: 1))  // its main frame (115) never went out
         await waitUntil("aux 115 dropped") { sender.currentCounters.auxDropped == 1 }
         XCTAssertEqual(pairing.value, 1)
         XCTAssertEqual(forced.value, 0, "a pairing drop is not an unconditional forced keyframe")
