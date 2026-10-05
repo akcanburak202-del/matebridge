@@ -273,3 +273,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-253](tasks/T-253-host-static-refinement-frame.md) | Host — "refine when still": after motion stops, send one high-quality frame of the unchanged screen | 6 | mac-host-dev | [] |
 | [T-254](tasks/T-254-probe-yuv444-tablet.md) | Probe (tablet) — 4:4:4 packing gates: raw YUV sampling on the GPU, ImageReader→GL→SurfaceView presentation, dual decode at 60 fps | 6 | android-client-dev | [] |
 | [T-255](tasks/T-255-probe-yuv444-mac.md) | Probe (Mac) — 4:4:4 packing costs: Metal packer time, two VT sessions at 60 fps, auxiliary bitrate, reconstruction quality; v2 test clips | 6 | mac-host-dev | [] |
+| [T-256](tasks/T-256-probe-yuv444-gl-latency.md) | Probe (tablet) — 4:4:4 GL merge path latency with depth-1 presentation vs today's direct path | 6 | android-client-dev | [T-254] |

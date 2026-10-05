@@ -1507,3 +1507,21 @@ Ham: `~/.cache/matebridge-tools/data/yuv444/t254-run-2039.txt`, `m2-idle-*.txt`.
 - **T-253 doğrulandı:** 38 tur (24 `max_frames` 16 kare, p50 ~65 KB / maks 106 KB, ~150 ms; 13 `cancelled`, 1 `converged`); Wi-Fi tavanı 256 KB'a yaklaşmadı. Kullanıcı: yazılar net, takılma/titreme/ses çıtırtısı yok. Varsayılan açık kalır. İzleme: çoğu tur yakınsamadan 16 karede bitiyor (eşik 1,5 KB gerçek masaüstünde sıkı olabilir; şimdilik zararsız).
 - **T-252** tablete kuruldu; bu oturumda Wi-Fi birikmesi olmadı (`catchups=0`). Cihaz doğrulaması ağır geçişlerde/oyunda kendiliğinden gelecek (`ev=catch_up`, `kf_avoided`).
 - **T-251** düğmeleri kurulu; 120-on-120 ölçümü USB'de bekliyor (Wi-Fi'da sapma ağdan).
+
+## 2026-10-05 ~21:40 — T-256 4:4:4 GL yolu gecikme probu
+
+Ham: `~/.cache/matebridge-tools/data/yuv444/t256-run-2122.txt`. "Varış" = çözücü çıktısı; 60 fps tempolu, panel 60 Hz (120 isteği Huawei'de dokunmasız 60 kaldı).
+
+| yol / sunum | 2800 varış→ekran p50/p95 | atlanan aralık | 1848 p50/p95 |
+|---|---|---|---|
+| doğrudan `immediate` (tahmini) | 65,3 / 68,1 | 279 | 55,4 / 57,3 |
+| doğrudan `pts` (tahmini) | 60,6 / 63,0 | 1 | 59,6 / 61,6 |
+| GL `queue` (T-254 düzeni) | 61,7 / 65,4 | 0 | — |
+| GL `depth1` | 24,0 / 36,9 | 7 | 23,4 / 40,1 |
+| GL `pts` | 28,9 / 32,3 | 81 | 21,2 / 23,5 |
+| GL `queue` + swap interval 0 | **30,9 / 33,8** | **0** | — |
+
+- T-254'teki 55–61 ms, sunum kuyruğunda başlangıçta biriken ve eşit hızlarda hiç erimeyen 2–3 karelik **duran kuyruktan** geliyordu. GL yolu doğru sunumla (swap interval 0 ya da derinlik-1/pts) çözücü çıktısından ekrana ~21–31 ms'ye iniyor. Bu, 60 Hz'te fiziksel alt sınıra yakın: çizim ~3 ms + bir sonraki vsync latch'i + 1 vsync sunum. 2800'de en akıcı varyant `queue+swapint0` (0 atlama).
+- Probun "doğrudan" tabanı aynı duran kuyruk etkisini taşıyor (pacer'sız, tahmini ekran zamanı) ve ürünü temsil etmiyor; ürünün doğrudan yolu pacer ile bu kuyruğu tutmuyor. Bu yüzden otomatik "PROCEED" kararları sayısal olarak güvenilir değil. Yine de fizik ve mutlak sayılar GL yolunun ek maliyetinin birkaç ms olduğunu (çizim ~3 ms, olası +1 vsync değil) gösteriyor. Kesin A/B ürün içinde yapılmalı (uygulama kartlarının ilk kabul ölçütü).
+- SF `--latency` dökümleri yine boş geldi (katman adında `(BLAST)` eki ve tırnaklama); önemsiz.
+- **Sonuç:** gecikme riski büyük ölçüde kapandı → 4:4:4 (Günlük 60) uygulaması için kullanıcı onayı istenebilir; ilk kartın kabulünde ürün içi doğrudan ↔ 4:4:4 gecikme A/B'si zorunlu.

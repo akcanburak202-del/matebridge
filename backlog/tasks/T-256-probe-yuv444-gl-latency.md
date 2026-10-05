@@ -1,7 +1,7 @@
 ---
 id: T-256
 title: Probe (tablet) — 4:4:4 GL merge path latency with depth-1 presentation vs today's direct path
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-254]
