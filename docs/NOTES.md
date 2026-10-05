@@ -1480,3 +1480,7 @@ Ham çıktı: `~/.cache/matebridge-tools/data/decprobe/t249-run-1831-single.txt`
 - **Bit hızı ucuz:** 150 Mbps'te bile kapasite ~300 fps (120'nin 2,5 katı). Kare gecikmesi 60→100 Mbps ~+1 ms, 150 Mbps ~+2 ms (p50); p99 ~+1,5–3 ms, maks ≤ 24 ms (PQ 150: 30). → T-085'teki p99 40 ms çözücüden gelmiyor (çözücü maks ~24 ms); büyük karelerin ağ/alış süresi aranmalı. Oyun/Çizim 60 Mbps ve host 80 Mbps tavanı çözücü açısından gevşetilebilir (ağ/USB 2.0 ~480 Mbit/s ve Wi-Fi ayrı sınır).
 - **IDR maliyeti:** IDR karesi ~26–31 ms (normal kare ~13) → IDR başına ~+15 ms tek seferlik gecikme sıçraması, 120 fps'te bile kaçırma yok.
 - Uyarı: klip içeriği yapay (kayan fotoğraf + gren + yazı); 10-bit klipler 8-bit sahneden dönüştürülmüş (bantlanma değerlendirmesi için uygun değil).
+
+## 2026-10-05 ~20:10 — Kumandayla 120 Hz: sahte dokunuş yolu yapılmayacak
+
+- Önerilen tek denenmemiş yol (kumanda kullanılırken host'un adb üzerinden periyodik sahte dokunuş/fare olayı göndermesi, istemcinin yutması) kullanıcı kararıyla **yapılmayacak** (2026-10-05: "gerek yok"). Kumanda/klavye ile oyunda panel 60 Hz kalır (T-140, T-243); Oyun 60 bu durum için doğru mod.
