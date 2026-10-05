@@ -43,3 +43,9 @@ Bugün beş görüntü modu var (`StreamMode`): Netlik (60, tam), Akıcı (120, 
 - **Yalnız Oyun 60'ta geçerli.** Oyun 120'de (ya da Oyun 120'ye geçince) etkin boyut **2240×1472** olur; kayıtlı seçim korunur, 60'a dönünce 2800×1840 geri gelir. 60↔120 değişimi `fps` ile `display_*`'ı aynı tek STREAM_PREFS'te gönderir (ekran bir kez yeniden kurulur).
 - Panel: Oyun 60'ta "2800×1840 (deneysel)"; Oyun 120'de düğme gri "2800×1840 (yalnız 60 fps)", dokunma bir şey yapmaz ve seçili görünen etkin 2240×1472'dir; Oyun dışında (panel Oyun'un kare hızını bilmez) "2800×1840 (deneysel, yalnız 60 fps)" seçilebilir, sonraki Oyun girişinde kurala göre uygulanır.
 - Tel biçimi ve host değişmez.
+
+## Ek (2026-10-05, T-250): 2800×1840 Oyun 120'de de geçerli
+
+- T-249/T-248 probu (NOTES 2026-10-05 ~16:40 ve ~18:40): çözücü 2800×1840'ı 120 fps'te kaçırmadan çözüyor (kapasite ~356 fps, kare gecikmesi ~13 ms; iki kare aynı anda hatta). T-245 ekindeki "120 fps'e yetmez" gerekçesi geçersiz.
+- **2800×1840 her Oyun kare hızında seçilebilir;** 60↔120 geri düşme kuralı (2240×1472) ve gri "(yalnız 60 fps)" düğmesi kalkar. "(deneysel)" etiketi cihaz doğrulamasına (1x 2800 oyun ekranı, kalem koordinatları, Mac GPU yükü) kadar kalır.
+- Varsayılan 1848×1214 değişmez (0029; kullanıcı 1848/2240 farkı hissetmedi, Mac GPU yükü).

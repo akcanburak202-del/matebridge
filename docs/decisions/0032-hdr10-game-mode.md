@@ -25,3 +25,4 @@ Kullanıcı 2026-10-05 tam HDR'yi onayladı.
 - HDR oyunlarda tablet OLED'inin parlaklık ve kontrast payı kullanılır.
 - Bilinmeyenler (kabul kartında ölçülür): 10-bit çözme süresi ve 120 fps'te D (pacer) payı; SDR arayüz/masaüstü öğelerinin HDR akışta ton farkı (API 31'de SDR karartma yok); güç/ısı; Mac'te HDR açılınca Ekranlar ayarının oturumlar arası hatırlanması.
 - Tekrar düşünülür: 10-bit çözme 120 fps'e sığmazsa (HDR yalnız Oyun 60), ya da SDR öğeler göze batarsa.
+- **Güncelleme (2026-10-05, T-249):** 10-bit (Main10HDR10 PQ) çözme 8-bit ile aynı: 2800×1840'ta kapasite ~373 fps, 120 fps'te kare gecikmesi p50/p99 13,0/18,3 ms, kaçırma yok (NOTES ~18:40). "HDR yalnız Oyun 60" geri düşmesi gerekmiyor; HDR her Oyun kare hızında ve her oyun çözünürlüğünde kalır.
