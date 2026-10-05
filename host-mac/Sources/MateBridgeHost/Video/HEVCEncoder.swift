@@ -61,6 +61,8 @@ final class HEVCEncoder: @unchecked Sendable {
         /// while that train is still the current one.
         var refineTrain: UInt64?
 
+        var skipsOnPendingKeyframe: Bool { refineTrain != nil }
+
         var stamp: PTS {
             get { PTS(time: pts) }
             set { pts = newValue.time }
@@ -193,7 +195,8 @@ final class HEVCEncoder: @unchecked Sendable {
                 for _ in 0..<decimated { meter?.recordDecimated() }
                 for _ in 0..<deferred { meter?.recordDeferred() }
             },
-            log: logSink)
+            log: logSink,
+            onSkipped: { [weak self] frame in self?.refineSkipped(frame) })
         backend.encoder = self
 
         var failures: [String] = []
@@ -586,6 +589,16 @@ final class HEVCEncoder: @unchecked Sendable {
         let horizon = UInt64(c.maxFrames) * 1_000_000 / UInt64(max(1, settings.fps)) + c.timeoutUs + 1_000_000
         return PeriodicKeyframe.isDue(nowUs: nowUs, lastKeyframeUs: lastKeyframeUs,
                                       intervalSeconds: Self.keyframeIntervalSeconds, horizonUs: horizon)
+    }
+
+    /// A held refine frame was dropped at reservation because a keyframe became pending: ends its train.
+    private func refineSkipped(_ frame: Input) {
+        guard let id = frame.refineTrain else { return }
+        let report = lock.withLock { () -> StillRefineReport? in
+            guard refinePolicy.isCurrent(id) else { return nil }
+            return refinePolicy.end(.keyframePending, nowUs: HostClock.nowUs())
+        }
+        if let report { logRefine(report) }
     }
 
     /// `trainID` is the train the frame was submitted for. Output of any other train (cancelled, ended or replaced

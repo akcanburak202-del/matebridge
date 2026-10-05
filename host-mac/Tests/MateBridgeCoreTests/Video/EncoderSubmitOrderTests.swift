@@ -6,6 +6,9 @@ import XCTest
 private struct FakeFrame: EncoderSubmitFrame {
     var stamp: Int
     var gateUs: UInt64
+    /// T-253: an optional (refinement) frame, skipped instead of taking a pending keyframe.
+    var optional = false
+    var skipsOnPendingKeyframe: Bool { optional }
     static func stamp(after previous: Int) -> Int { previous + 1 }
 }
 
@@ -102,14 +105,16 @@ private final class SubmitBarrier: @unchecked Sendable {
 final class EncoderSubmitOrderTests: XCTestCase {
     private func makeOrder(clock: ManualClock = ManualClock(), fps: Int = 60,
                            barrier: SubmitBarrier? = nil,
-                           log: @escaping EncoderSubmitOrder<FakeBackend>.LogSink = { _, _, _ in })
+                           log: @escaping EncoderSubmitOrder<FakeBackend>.LogSink = { _, _, _ in },
+                           onSkipped: @escaping @Sendable (FakeFrame) -> Void = { _ in })
         -> (EncoderSubmitOrder<FakeBackend>, FakeBackend) {
         let backend = FakeBackend()
         var hook: (@Sendable (FakeFrame) -> Void)?
         if let barrier { hook = { frame in barrier.hook(frame) } }
         let order = EncoderSubmitOrder<FakeBackend>(
             backend: backend, streamFps: fps, maxInFlight: 2, initialBitrateKbps: 60_000, nowUs: { clock.now },
-            scheduleFlush: { _, _ in }, log: log, beforeSubmit: hook)
+            scheduleFlush: { _, _ in }, log: log, beforeSubmit: hook,
+            onSkipped: onSkipped)
         backend.order = order
         return (order, backend)
     }
@@ -170,6 +175,44 @@ final class EncoderSubmitOrderTests: XCTestCase {
         drain(order)
         XCTAssertEqual(backend.encodedStamps, [1, 2, 4], "frame 3 was replaced by the newer pending frame 4")
         XCTAssertEqual(order.currentInFlight, 2)
+    }
+
+    private final class StampBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _v: [Int] = []
+        func add(_ s: Int) { lock.withLock { _v.append(s) } }
+        var values: [Int] { lock.withLock { _v } }
+    }
+
+    /// T-253: a held optional frame must not take a keyframe request that arrives while it waits for a slot.
+    func testHeldOptionalFrameIsSkippedWhenKeyframeBecomesPending() {
+        let clock = ManualClock()
+        let skipped = StampBox()
+        let (order, backend) = makeOrder(clock: clock, onSkipped: { skipped.add($0.stamp) })
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 2_000) }
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 3, gateUs: 3_000, optional: true) }  // slots full: held
+        order.requestKeyframe()                                                                      // arrives while held
+        drain(order)   // frames 1 and 2 reached the backend
+        clock.advance(40_000)
+        backend.completeOldest()                                                                     // release: reservation time
+        drain(order)
+        XCTAssertEqual(backend.encodedStamps, [1, 2], "the optional frame was not encoded")
+        XCTAssertEqual(skipped.values, [3])
+        XCTAssertTrue(order.keyframePending, "the request is still pending for the regular path")
+        XCTAssertEqual(order.currentInFlight, 1, "no slot was reserved for the skipped frame")
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 4, gateUs: 4_000) }
+        drain(order)
+        XCTAssertEqual(backend.events.last, .encode(stamp: 4, key: true, token: 3))
+    }
+
+    /// Without a pending keyframe an optional frame is submitted normally (as a delta).
+    func testOptionalFrameSubmitsWhenNoKeyframePending() {
+        let (order, backend) = makeOrder()
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 1, gateUs: 1_000) }
+        order.offer(bypassGate: true) { _ in FakeFrame(stamp: 2, gateUs: 2_000, optional: true) }
+        drain(order)
+        XCTAssertEqual(backend.events, [.encode(stamp: 1, key: true, token: 1), .encode(stamp: 2, key: false, token: 2)])
     }
 
     func testFailedReleaseForcesKeyframe() {
