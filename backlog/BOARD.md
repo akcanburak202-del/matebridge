@@ -28,6 +28,10 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-247](tasks/T-247-client-first-nav-key-after-touch.md) | Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode | 6 | android-client-dev | [] |
 | [T-251](tasks/T-251-client-pacer-120-diagnostics.md) | Client — 120 Hz pacer diagnostics: log feedback level, dev knobs for D cap and feedback | 6 | android-client-dev | [] |
 | [T-252](tasks/T-252-client-catch-up-instead-of-flush.md) | Client — on queue overflow, decode the backlog fast and show only the newest frame instead of flushing + keyframe request | 6 | android-client-dev | [T-251] |
+| [T-257](tasks/T-257-full-chroma-protocol.md) | Protocol — packed full chroma (decision 0034): STREAM_PREFS.chroma=2, STREAM_CONFIG.chroma_layout, VIDEO_FRAME.view, KEYFRAME_REQUEST.view | 6 | orchestrator | [T-254, T-255, T-256] |
+| [T-258](tasks/T-258-host-full-chroma.md) | Host — packed full chroma (decision 0034): codecs, Metal AVC444v2 packer, second VT session, pairing, fallback | 6 | mac-host-dev | [T-257, T-253] |
+| [T-259](tasks/T-259-client-full-chroma.md) | Client — packed full chroma (decision 0034): codecs, capability test, second decoder, ImageReader + GL merge path, pairing, prefs | 6 | android-client-dev | [T-257, T-252] |
+| [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
 
 ## todo
 
