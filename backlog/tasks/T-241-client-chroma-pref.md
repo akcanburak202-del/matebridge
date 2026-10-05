@@ -1,7 +1,7 @@
 ---
 id: T-241
 title: Client — "Keskin renk kenarları" panel toggle and STREAM_PREFS.chroma (decision 0033)
-status: in_progress
+status: blocked
 phase: 6
 owner: android-client-dev
 depends_on: [T-238]
@@ -44,4 +44,32 @@ Decision 0033'ün istemci tarafı. Protokol ve fixture'lar `task/T-239-chroma-pr
 
 ## Handoff
 
-_(Ajan bitirince doldurur.)_
+**Durum: blocked.** Kodek değişikliği (`protocol/Messages.kt`, `protocol/Codec.kt`) yapılamadı. Ajanın düzenlemesini Claude Code izin sınıflandırıcısı reddetti ("Modify Shared Resources"). Dosyalar kartın `files:` listesinde olsa da ajan bu reddi aşmaya çalışmadı. Geri kalan her şey commit edildi.
+
+- Commit: `86df92a` (uygulama), `8dfafb5` (plan). Dal `task/T-241-client-chroma` (`task/T-239-chroma-protocol` üstünde).
+- Dokunulan dosyalar: `stream/SharpChroma.kt` (yeni: `SharpChromaStore`, `SharpChromaPolicy`), `stream/GameMode.kt` (`chromaStore`, `sharpChroma`, `chroma`, `selectSharpChroma`, `resetSharpChroma`), `settings/SettingsCatalog.kt` (`SettingsHost.sharpChroma`/`selectSharpChroma`, `sharp_chroma` satırı), `MainActivity.kt` (store, host, reset, `ev=profile … chroma=`), `docs/LOGGING.md`, testler `stream/SharpChromaTest.kt` (yeni) ve `settings/SettingsCatalogTest.kt`.
+- `./scripts/check.sh --only android`: 1783 testten 1'i başarısız, beklenen: `FixtureTest` "fixtures without a test case" → `stream_prefs_sharp_chroma`. Yeni testlerin hepsi geçiyor. Tam `check.sh` çalıştırılmadı (host fixture testi zaten T-240'a kadar kırmızı).
+
+**Kodeki tamamlamak için kalan iş (orkestratör ya da izinli bir ajan):**
+1. `Messages.kt`: `StreamPrefs`'e `val chroma: Int = CHROMA_NORMAL`, `CHROMA_NORMAL = 0`, `CHROMA_SHARP = 1`. KDoc'u grup kuralına göre güncelle.
+2. `Codec.kt` kodlama: `val drGroup = msg.dynamicRange != 0 || msg.chroma != 0`, ekran grubu koşulunda `hdrGroup` yerine `drGroup`, `if (drGroup) { w.u8(msg.dynamicRange); w.u8(msg.chroma) }`. Çözme: `val dr = r.u8(); val chroma = r.u8(); StreamPrefs(fps, pm, kbps, dw, dh, dr, chroma)`.
+3. `GameMode.kt` `prefs()`: `StreamPrefs(..., dynamicRange(mode), chroma)`. `SharpChromaPolicy.CHROMA_*` yerine `StreamPrefs.CHROMA_*` kullanılabilir.
+4. `FixtureTest`: `"stream_prefs_sharp_chroma" to StreamPrefs(60, 1000, 0, 0, 0, 0, StreamPrefs.CHROMA_SHARP)`. `CodecRulesTest`: yalnız chroma=1 → 14 bayt (`00 00 00 00 00 01`). İkisi 0 iken 8/12 bayt değişmez. Grup içindeki chroma artık okunur (`odd` vakası `chroma = 3` bekler). `SharpChromaTest`'e `prefs(mode).chroma` doğrulaması.
+
+**Varsayımlar:**
+- `session/Settings.kt` ve `session/DevKnobs.kt` (`StreamProfile`) listede değil. Bu yüzden ayar, T-234'ün `IdleTimeoutStore` örneği gibi aynı prefs deposunda ayrı bir anahtarda tutuluyor (`sharp_chroma`, `SharpChromaStore`). "Varsayılanlara dön" STREAM_PREFS gönderilmeden önce onu da siler ve `keys=` sayısına ekler. `ev=profile` satırına `chroma=0|1` MainActivity'de satırın **sonuna** ekleniyor.
+- `chroma` her modda kayıtlı değer olarak istenir. HDR10'da host yok sayar. Satır HDR10 *uygulanırken* (`STREAM_CONFIG.transfer == 16`) gri ve not taşır, dokunuş yok sayılır (HDR satırının gri kuralıyla aynı). Akış yokken ya da SDR'de etkindir.
+- Satır Görüntü bölümünde HDR satırlarından hemen sonra, iki panelde de (bağlanma + akış içi) yer alır.
+
+**Tablette kontrol edilecekler (kodek tamamlandıktan sonra):**
+1. Ayarlar → Görüntü: "Keskin renk kenarları" Kapalı/Açık üç modda da görünüyor, varsayılan Kapalı.
+2. Açık'a dokun: Mac'te `ev=stream_prefs` yeni değerle geliyor, `ev=chroma_config applied=sharp_nearest` (T-240 ile), tablette yeni `ev=profile … chroma=1`. Kırmızı ikon kenarları keskinleşiyor.
+3. Uygulamayı kapatıp aç: ayar Açık kalıyor (kalıcı).
+4. Oyun + HDR açık + HDR10 uygulanınca satır gri, "(HDR açıkken etkisiz)", dokunuş bir şey yapmıyor.
+5. "Varsayılanlara dön" → satır Kapalı, `ev=profile … chroma=0`.
+
+## Open questions
+
+- **Engel:** `protocol/Messages.kt` ve `protocol/Codec.kt` düzenlemesi (kartın kapsamında) izin sınıflandırıcısı tarafından reddedildi. Kullanıcı ya da orkestratör izin verirse ya da değişikliği kendisi yaparsa (yukarıdaki 1–4) kart tamamlanır.
+- Ayar `session/Settings.kt` yerine ayrı bir anahtarda. Orkestratör `Settings`'e taşınmasını isterse küçük bir takip işi olur (`USER_KEYS`'e `sharp_chroma` eklenir, `SharpChromaStore` kalkar).
+- `ev=profile`'da `chroma=` satır sonunda, `hdr=`'nin yanında değil (`StreamProfile` `session/DevKnobs.kt`'de, listede değil).
