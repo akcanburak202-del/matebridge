@@ -142,6 +142,16 @@ final class HEVCEncoder: @unchecked Sendable {
     private var auxOffered = 0
     private var auxLost = 0
     private var packedErrorReported = false
+    /// Host time of the last auxiliary submission attempt (the idle retry of a pending auxiliary IDR), `lock`.
+    private var lastAuxAttemptUs: UInt64 = 0
+    /// Refinement frames waiting for both streams' outputs (T-258): capture stamp -> sizes. `lock`.
+    private var refinePairs: [UInt64: RefinePair] = [:]
+
+    private struct RefinePair {
+        var train: UInt64
+        var main: Int??  // nil = not in yet; .some(nil) = failed
+        var aux: Int??
+    }
     private var packedError: (@Sendable (String) -> Void)?
     private let logSink: LogSink
     private let meter: CadenceMeter?
@@ -235,7 +245,8 @@ final class HEVCEncoder: @unchecked Sendable {
         // T-240: without the knob the tablet's `STREAM_PREFS.chroma = 1` asks for `sharp_nearest` (decision 0033).
         var chroma = ChromaPolicy.resolve(knob: knobs.chroma, preference: settings.chromaPreference,
                                           codec: settings.codec, profile: profile, dynamicRange: settings.dynamicRange,
-                                          packedChroma: settings.packedChroma)
+                                          packedChroma: settings.packedChroma,
+                                          packedFellBack: settings.fullChromaFellBack)
         if chroma.applied == .yuv444 {
             if set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.main444ProfileLevel) != noErr {
                 set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
@@ -336,6 +347,7 @@ final class HEVCEncoder: @unchecked Sendable {
                     configLog(line.level, ChromaConfigLog.event, line.fields)
                 } else if !frame.data.isEmpty {
                     statsLock.withLock { self?.packedStats?.recordAux(bytes: frame.data.count, encodeUs: encodeUs) }
+                    self?.refinePairResolved(captureTimeUs: frame.captureTimeUs, aux: frame.data.count)
                 }
                 auxOutput(frame, encodeUs)
             }
@@ -343,7 +355,8 @@ final class HEVCEncoder: @unchecked Sendable {
                 let aux = try PackedAuxEncoder(
                     width: settings.encodedWidthPx, height: settings.encodedHeightPx, fps: settings.fps,
                     mainKbps: settings.bitrateKbps, profile: profile, rateWindowMs: knobs.rateWindowMs, logSink: logSink,
-                    output: wrapped, onError: { [weak self] reason in self?.reportPackedError(reason) })
+                    output: wrapped, onError: { [weak self] reason in self?.reportPackedError(reason) },
+                    onLoss: { [weak self] t in self?.auxLostAfterSubmit(captureTimeUs: t) })
                 auxEncoder = aux
                 backend.aux = aux
             } catch {
@@ -716,8 +729,17 @@ final class HEVCEncoder: @unchecked Sendable {
     }
 
     private func idleTick() {
-        if order.keyframeDue(idleUs: HEVCEncoder.idleKeyframeNs / 1000) { resubmitLast() }
+        if order.keyframeDue(idleUs: HEVCEncoder.idleKeyframeNs / 1000) { resubmitLast(); return }
+        // T-258: a pending auxiliary IDR (both auxiliary slots were busy, or a static screen) is retried here: the
+        // refinement train and the capture path both leave it alone otherwise.
+        guard auxEncoder != nil, auxPending else { return }
+        let now = HostClock.nowUs()
+        let due = lock.withLock { now &- lastAuxAttemptUs >= Self.auxRetryUs }
+        if due { resubmitLast() }
     }
+
+    /// Spacing of the idle retry of a pending auxiliary IDR (the idle timer ticks every 250 ms).
+    private static let auxRetryUs: UInt64 = 200_000
 
     /// Target send rate `min(stream fps, panel Hz)` (T-058). Only the frame gate changes: the session, the virtual
     /// display and capture keep running and already encoded frames are never dropped.
@@ -732,10 +754,9 @@ final class HEVCEncoder: @unchecked Sendable {
     /// `DataRateLimits` changes (`AverageBitRate` is not in use).
     @discardableResult
     func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
-        let decision = order.setBitrate(kbps: kbps)
-        // T-258: the auxiliary session follows at half the main target.
-        if case .apply(let v) = decision { auxEncoder?.setBitrate(mainKbps: v) }
-        return decision
+        // T-258: the auxiliary session follows at half the main target, inside the same ordered owner-queue operation
+        // (`Backend.setBitrate`), so neither session is touched after teardown or out of order.
+        order.setBitrate(kbps: kbps)
     }
 
     /// `MATEBRIDGE_BITRATE_STEP` tick (its own timer queue).
@@ -777,6 +798,7 @@ final class HEVCEncoder: @unchecked Sendable {
         /// After the encoder is gone nothing is set (its `deinit` already stopped the order).
         func setBitrate(kbps: Int) {
             encoder?.applyBitrate(kbps: kbps, session: session)
+            aux?.setBitrate(mainKbps: kbps)
         }
 
         /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
@@ -839,11 +861,19 @@ final class HEVCEncoder: @unchecked Sendable {
                 defer { auxKeyframePending = false }
                 return auxKeyframePending
             }
-            lock.withLock { auxOffered += 1 }
+            lock.withLock {
+                auxOffered += 1
+                lastAuxAttemptUs = HostClock.nowUs()
+                if let train = frame.refineTrain {
+                    if refinePairs.count >= 16 { refinePairs.removeAll() }
+                    refinePairs[frame.captureTimeUs] = RefinePair(train: train, main: nil, aux: nil)
+                }
+            }
             if !aux.encode(auxBuffer, presentationTime: frame.pts, captureTimeUs: frame.captureTimeUs, keyframe: wantKey) {
                 // The auxiliary stream lost a frame: its chain has a hole, so the next one is an IDR.
                 lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
                 auxFlagLock.withLock { auxKeyframePending = true }
+                refinePairResolved(captureTimeUs: frame.captureTimeUs, aux: .some(nil))
             }
             return main
         case .passThrough:
@@ -898,10 +928,41 @@ final class HEVCEncoder: @unchecked Sendable {
         }
         // After the release, so the next refinement frame can claim the slot at once.
         if let refineTrain {
-            // T-258: the byte ceiling is the total of both streams; the auxiliary frame is estimated at half the main one.
-            let total = auxEncoder == nil ? outputBytes : outputBytes + outputBytes / 2
-            refineOutput(trainID: refineTrain, bytes: ok && outputBytes > 0 ? total : nil)
+            let mainBytes: Int? = ok && outputBytes > 0 ? outputBytes : nil
+            if auxEncoder == nil {
+                refineOutput(trainID: refineTrain, bytes: mainBytes)
+            } else {
+                // T-258: the byte budget and the convergence test see both streams' real sizes together, so a tiny
+                // main frame cannot end a train whose auxiliary picture still changes (and the total ceiling holds).
+                refinePairResolved(captureTimeUs: captureTimeUs, main: .some(mainBytes))
+            }
         }
+    }
+
+    /// One stream's output (or failure) of a refinement frame; when both are in, the train sees their sum. `main` /
+    /// `aux`: nil argument = not this stream's report; `.some(nil)` = that stream failed.
+    private func refinePairResolved(captureTimeUs: UInt64, main: Int?? = nil, aux: Int?? = nil) {
+        let done: (train: UInt64, total: Int?)? = lock.withLock {
+            guard var pair = refinePairs[captureTimeUs] else { return nil }
+            if let main { pair.main = main }
+            if let aux { pair.aux = aux }
+            guard let m = pair.main, let a = pair.aux else {
+                refinePairs[captureTimeUs] = pair
+                return nil
+            }
+            refinePairs[captureTimeUs] = nil
+            if let m, let a { return (pair.train, m + a) }
+            return (pair.train, nil)
+        }
+        if let done { refineOutput(trainID: done.train, bytes: done.total) }
+    }
+
+    /// The auxiliary session lost a frame it had accepted (callback failure, or discarded after a lost one): counted
+    /// for the fallback rule, the next auxiliary frame is an IDR, and a refinement pair waiting for it fails.
+    private func auxLostAfterSubmit(captureTimeUs: UInt64) {
+        lock.withLock { auxLost += 1; packedStats?.recordAuxLost() }
+        auxFlagLock.withLock { auxKeyframePending = true }
+        refinePairResolved(captureTimeUs: captureTimeUs, aux: .some(nil))
     }
 
     private func slotFailed(_ token: EncoderSubmitToken, _ error: Error) {

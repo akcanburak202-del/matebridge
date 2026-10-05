@@ -73,6 +73,10 @@ public final class VideoPipeline: @unchecked Sendable {
     private let onFailure: @Sendable (Error) -> Void
     private let onPackedFallback: @Sendable (String) -> Void
     private let box: EncoderBox
+    /// The auxiliary stream's own T-122 coalescer and queue watcher (T-258): no new auxiliary IDR while one is queued or
+    /// in flight.
+    private let auxKeyframes: KeyframeGate
+    private let auxBox: EncoderBox
     /// T-258: the auxiliary encoder's loss rule, fed once a second (`checkPackedWindow`).
     private let packedMonitor = PackedMonitorBox()
     /// Still-screen refinement settings (T-253); `.disabled` unless the owner passes the session's.
@@ -115,7 +119,13 @@ public final class VideoPipeline: @unchecked Sendable {
         box.frames = frames
         // An auxiliary overflow only breaks the auxiliary chain: an auxiliary keyframe, no coalescing needed (the
         // queue refuses auxiliary deltas until it arrives, so one request per hole).
-        auxFrames = VideoFrameQueue(keyframeNeeded: { box.encoder?.requestKeyframe(resubmitNow: true, view: .auxiliary) })
+        let auxGate = KeyframeGate()
+        auxKeyframes = auxGate
+        let auxBox = EncoderBox(keyframes: auxGate, view: .auxiliary)
+        self.auxBox = auxBox
+        let auxFrames = VideoFrameQueue(keyframeNeeded: { auxBox.queueDropped() })
+        self.auxFrames = auxFrames
+        auxBox.frames = auxFrames
     }
 
     /// Fills `STREAM_CONFIG` (pixel/point size, fps, bitrate, colour tags).
@@ -137,13 +147,18 @@ public final class VideoPipeline: @unchecked Sendable {
                 frame.trace.enqueuedUs = HostClock.nowUs()
                 frames.push(frame)
                 tap?(frame, encodeUs)
-            }, auxOutput: { [auxFrames] frame, _ in
+            }, auxOutput: { [auxFrames, auxKeyframes] frame, _ in
                 var frame = frame
                 frame.trace.enqueuedUs = HostClock.nowUs()
+                // The auxiliary stream has no write trace: a keyframe counts as written when it is queued.
+                if frame.isKeyframe {
+                    auxKeyframes.update { $0.keyframeWritten(nowUs: HostClock.nowUs(), bytes: frame.data.count) }
+                }
                 auxFrames.push(frame)
             }, onPackedError: { [onPackedFallback] reason in onPackedFallback(reason) },
                onFailure: { [weak self] error in self?.fail(error) })
             box.encoder = encoder
+            auxBox.encoder = encoder
             set { $0.encoder = encoder }
 
             let display = try await obtainDisplay()
@@ -312,6 +327,8 @@ public final class VideoPipeline: @unchecked Sendable {
 
     /// The sender dropped or refused an auxiliary frame (packed full colour): the next auxiliary frame is an IDR.
     public func requestAuxKeyframe() {
+        let pushed = auxFrames.keyframesPushed
+        auxKeyframes.update { $0.internalForce(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
         box.encoder?.requestKeyframe(resubmitNow: true, view: .auxiliary)
     }
 
@@ -328,11 +345,21 @@ public final class VideoPipeline: @unchecked Sendable {
         let packed = encoder?.isPacked ?? false
         let wanted: KeyframeView = packed ? (view ?? .both) : .main
         if wanted.wantsAuxiliary, let encoder {
-            if reason.resendsCodecConfig { auxFrames.resync(config: { encoder.currentAuxCodecConfig() }) }
-            // The auxiliary stream has no coalescer: the keyframe flag is idempotent, and the queue refuses deltas
-            // until it arrives.
-            auxFrames.breakChain()
-            encoder.requestKeyframe(resubmitNow: true, view: .auxiliary)
+            // The same T-122 rules per stream: a resync resets the auxiliary queue to hold only its CODEC_CONFIG; a keyframe
+            // is forced only when none is queued, in flight or just written.
+            let now = HostClock.nowUs()
+            let aux: KeyframeRequestCoalescer.Decision
+            if reason.resendsCodecConfig {
+                let r = auxFrames.resyncCountingKeyframes(config: { encoder.currentAuxCodecConfig() })
+                aux = auxKeyframes.update {
+                    $0.request(reason, nowUs: now, keyframesPushed: r.keyframesPushed, configResent: r.configQueued)
+                }
+            } else {
+                let pushed = auxFrames.keyframesPushed
+                aux = auxKeyframes.update { $0.request(reason, nowUs: now, keyframesPushed: pushed) }
+            }
+            if aux.forceKeyframe { encoder.requestKeyframe(resubmitNow: true, view: .auxiliary) }
+            if !wanted.wantsMain { return aux }
         }
         guard wanted.wantsMain else { return .auxiliaryOnly }
         let now = HostClock.nowUs()
@@ -369,6 +396,8 @@ public final class VideoPipeline: @unchecked Sendable {
         let encoder = box.encoder
         frames.startNewConsumer(configProvider: { encoder?.currentCodecConfig() })
         auxFrames.startNewConsumer(configProvider: { encoder?.currentAuxCodecConfig() })
+        let auxPushed = auxFrames.keyframesPushed
+        auxKeyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: auxPushed) }
         let pushed = frames.keyframesPushed
         keyframes.update { $0.reset(nowUs: HostClock.nowUs(), keyframesPushed: pushed) }
         encoder?.requestKeyframe(resubmitNow: true)
@@ -441,6 +470,7 @@ public final class VideoPipeline: @unchecked Sendable {
         await cap?.stop()
         await enc?.shutdown()
         box.encoder = nil
+        auxBox.encoder = nil
         frames.finish()
         auxFrames.finish()
         let plan = DisplayTeardown.plan(current: disp, inherited: inh, keeping: keepingDisplay)
@@ -467,7 +497,12 @@ private final class EncoderBox: @unchecked Sendable {
     private var _encoder: HEVCEncoder?
     private weak var _frames: VideoFrameQueue?
     private let keyframes: KeyframeGate
-    init(keyframes: KeyframeGate) { self.keyframes = keyframes }
+    /// The stream this box watches (T-258): its forced keyframes are requested for that stream only.
+    private let view: KeyframeView
+    init(keyframes: KeyframeGate, view: KeyframeView = .main) {
+        self.keyframes = keyframes
+        self.view = view
+    }
     var encoder: HEVCEncoder? {
         get { lock.lock(); defer { lock.unlock() }; return _encoder }
         set { lock.lock(); _encoder = newValue; lock.unlock() }
@@ -503,7 +538,7 @@ private final class EncoderBox: @unchecked Sendable {
         // Queue state read under the gate lock (lock order gate -> queue: the queue never calls out while holding
         // its lock, and nothing takes the gate lock while holding the queue lock).
         let d = keyframes.update { body(&$0, now, frames.keyframeState) }
-        if d.forceKeyframe { encoder.requestKeyframe(resubmitNow: resubmitNow, view: .main) }
+        if d.forceKeyframe { encoder.requestKeyframe(resubmitNow: resubmitNow, view: view) }
         if let at = d.recheckAtUs { schedule(at: at, nowUs: now) }
     }
 

@@ -93,6 +93,8 @@ public enum ChromaFallbackReason: String, Equatable, Sendable {
     /// T-258: `packed444` requested (knob) but the session did not grant it (no bit11, no `chroma = 2` in this session,
     /// stream mode outside Günlük 60, or a runtime fallback): the sharp path runs instead.
     case fullChromaDenied = "full_chroma_denied"
+    /// T-258: `packed444` was granted for the session but fell back at runtime (`ev=chroma_fallback`): normal 4:2:0.
+    case fullChromaFallback = "full_chroma_fallback"
 }
 
 /// Where the requested chroma mode came from (`ev=chroma_config source=`, T-240).
@@ -149,7 +151,7 @@ public enum ChromaPolicy {
     /// with `reason=hdr` unless nothing was requested. Without a preference SDR resolves exactly as in T-235.
     public static func resolve(knob: ChromaKnob, preference: ChromaPreference = .normal, codec: Codec,
                                profile: EncoderProfile, dynamicRange: DynamicRange = .sdr,
-                               packedChroma: Bool = false) -> ChromaDecision {
+                               packedChroma: Bool = false, packedFellBack: Bool = false) -> ChromaDecision {
         let source: ChromaSource = knob.isSet ? .env : (preference == .normal ? .default : .prefs)
         let requested: ChromaMode = switch source {
         case .env: knob.requested
@@ -161,6 +163,7 @@ public enum ChromaPolicy {
         }
         if dynamicRange == .hdr10 { return decision(.yuv420, source == .default ? nil : .hdr) }
         // T-258: packed full colour only with the session's consent (`VideoSettings.packedChroma`); else sharp.
+        if requested == .packed444, packedFellBack { return decision(.yuv420, .fullChromaFallback) }
         if requested == .packed444 {
             return packedChroma ? decision(.packed444, nil) : decision(sharpPreferenceMode, .fullChromaDenied)
         }

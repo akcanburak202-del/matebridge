@@ -96,9 +96,15 @@ extension VideoSettings {
             s.scalePermille = Int(p.scalePermille)
         }
         s.fullChromaGranted = false
+        s.fullChromaFellBack = false
         if s.chromaPreference == .full {
             if FullChromaPolicy.qualifies(s) && s.clientFullChroma && fullChroma.prefsFromThisSession {
-                if fullChroma.allowed { s.fullChromaGranted = true } else { s.chromaPreference = .normal }
+                if fullChroma.allowed {
+                    s.fullChromaGranted = true
+                } else {
+                    s.chromaPreference = .normal
+                    s.fullChromaFellBack = true
+                }
             } else {
                 s.chromaPreference = .sharp
             }

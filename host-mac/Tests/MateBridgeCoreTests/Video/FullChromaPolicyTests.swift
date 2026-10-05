@@ -146,6 +146,26 @@ final class FullChromaPolicyTests: XCTestCase {
         XCTAssertEqual(other.chromaPreference, .sharp)
     }
 
+    func testRuntimeFallbackIsNormalEvenWithThePackedKnob() {
+        var b = base()
+        b.chromaKnob = .parse("packed444")
+        let fell = b.applying(prefs(), fullChroma: FullChromaSession(prefsFromThisSession: true, allowed: false))
+        XCTAssertTrue(fell.fullChromaFellBack)
+        XCTAssertFalse(fell.packedChroma)
+        let d = ChromaPolicy.resolve(knob: fell.chromaKnob, preference: fell.chromaPreference, codec: .hevc,
+                                     profile: .fast, packedChroma: fell.packedChroma, packedFellBack: fell.fullChromaFellBack)
+        XCTAssertEqual(d.applied, .yuv420, "normal 4:2:0, not sharp")
+        XCTAssertEqual(d.reason, .fullChromaFallback)
+        // An ungranted request (no consent) is still the sharp path.
+        let denied = b.applying(prefs())
+        XCTAssertFalse(denied.fullChromaFellBack)
+        XCTAssertEqual(ChromaPolicy.resolve(knob: denied.chromaKnob, preference: denied.chromaPreference, codec: .hevc,
+                                            profile: .fast, packedChroma: false,
+                                            packedFellBack: denied.fullChromaFellBack).applied, .sharpNearest)
+        // A fresh grant clears the flag.
+        XCTAssertFalse(b.applying(prefs(), fullChroma: session).fullChromaFellBack)
+    }
+
     func testStreamModeChangeIsDetectedIgnoringChromaAndBitrate() {
         let a = base().applying(prefs(), fullChroma: session)
         let b = base().applying(prefs(chroma: 0))

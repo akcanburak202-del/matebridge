@@ -43,6 +43,9 @@ public struct VideoSettings: Equatable, Sendable {
     /// (not a remembered one), every condition of PROTOCOL.md 0x05 (`FullChromaPolicy`), and no runtime fallback.
     /// Set by `applying(_:fullChroma:)` only; `chromaPreference` is `.full` exactly then.
     public internal(set) var fullChromaGranted = false
+    /// Decision 0034 section 7: full colour was requested and qualifies but a runtime fallback is in force. The encoder
+    /// then runs normal 4:2:0, also against `MATEBRIDGE_CHROMA=packed444` (not the sharp path).
+    public internal(set) var fullChromaFellBack = false
     /// `MATEBRIDGE_CHROMA` (read by `applyingExperimentKnobs`); it wins over the tablet's choice, and `packed444` still
     /// needs `fullChromaGranted`.
     public var chromaKnob = ChromaKnob.unset

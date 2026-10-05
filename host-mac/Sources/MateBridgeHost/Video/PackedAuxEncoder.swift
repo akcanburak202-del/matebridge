@@ -26,6 +26,11 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private let session: VTCompressionSession
     private let output: Output
     private let onError: @Sendable (String) -> Void
+    /// An accepted frame was lost afterwards (VideoToolbox failed it, or it followed a lost one and was discarded): the
+    /// caller counts a loss and re-arms the auxiliary IDR. Argument: that frame's `capture_time_us`.
+    private let onLoss: @Sendable (UInt64) -> Void
+    /// A frame was lost after submission: later deltas reference a broken chain and are discarded until a keyframe.
+    private var awaitingKeyframe = false
     private let lock = NSLock()
     private var inFlight = 0
     private var failures = 0
@@ -42,9 +47,11 @@ final class PackedAuxEncoder: @unchecked Sendable {
     ///   - profile: the main session's resolved profile (the same rate control and speed settings).
     init(width: Int, height: Int, fps: Int, mainKbps: Int, profile: EncoderProfile, rateWindowMs: Int?,
          logSink: @escaping HEVCEncoder.LogSink, output: @escaping Output,
-         onError: @escaping @Sendable (String) -> Void) throws {
+         onError: @escaping @Sendable (String) -> Void,
+         onLoss: @escaping @Sendable (UInt64) -> Void = { _ in }) throws {
         self.output = output
         self.onError = onError
+        self.onLoss = onLoss
         self.rateWindowMs = rateWindowMs
         self.logSink = logSink
         let kbps = Self.auxBitrateKbps(main: mainKbps)
@@ -113,7 +120,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
         }
         if status != noErr {
             Self.log.error("ev=aux_encode_failed status=\(status)")
-            failedFrame()
+            failedFrame()  // the caller sees `false`: it counts the loss and re-arms the keyframe itself
             return false
         }
         return true
@@ -169,21 +176,31 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private func completed(status: OSStatus, sampleBuffer: CMSampleBuffer?, captureTimeUs: UInt64, encodeUs: UInt64) {
         guard status == noErr, let sb = sampleBuffer else {
             Self.log.error("ev=aux_encode_no_output status=\(status)")
+            lock.withLock { awaitingKeyframe = true }
             failedFrame()
+            onLoss(captureTimeUs)
             return
         }
         lock.withLock { failures = 0 }
-        handle(sb, captureTimeUs: captureTimeUs, encodeUs: encodeUs)
+        let delivered = handle(sb, captureTimeUs: captureTimeUs, encodeUs: encodeUs)
         lock.withLock { inFlight = max(0, inFlight - 1) }
+        if !delivered { onLoss(captureTimeUs) }
     }
 
-    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeUs: UInt64) {
-        guard let format = CMSampleBufferGetFormatDescription(sb) else { return }
+    /// true when the frame went to `output`; false when it was discarded (after a lost frame, until a keyframe).
+    @discardableResult
+    private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeUs: UInt64) -> Bool {
+        guard let format = CMSampleBufferGetFormatDescription(sb) else { return false }
         let isKey: Bool = {
             guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
                   let first = arr.first else { return true }
             return (first[kCMSampleAttachmentKey_NotSync] as? Bool) != true
         }()
+        let discard: Bool = lock.withLock {
+            if isKey { awaitingKeyframe = false }
+            return awaitingKeyframe
+        }
+        if discard { return false }
         let (sets, lengthSize) = HEVCEncoder.parameterSets(format, codec: .hevc)
         let blob = AnnexB.parameterSets(sets)
         let changed: Bool = lock.withLock {
@@ -197,10 +214,11 @@ final class PackedAuxEncoder: @unchecked Sendable {
             output(config, 0)
         }
         guard let block = CMSampleBufferGetDataBuffer(sb), let raw = HEVCEncoder.bytes(of: block),
-              let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return }
+              let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return false }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.view = 1
         output(frame, encodeUs)
+        return true
     }
 
     deinit { stop() }
