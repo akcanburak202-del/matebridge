@@ -1420,3 +1420,24 @@ Huawei dokunma hızlandırması (60→120) uygulama ipuçlarının hiçbirine uy
 ## 2026-10-05 ~15:00 — Siyah kalkmasının nedeni (güçlü hipotez): Android odak vurgusu
 
 Araştırma: kalkma `out = in·(1−16/255) + 16` ile ±1 içinde birebir (gamma uzayında ~%6 beyaz karışım; aralık hatası beyazı 235'e indirirdi). `app:id/video` SurfaceView odaklı (`.F....`), istemci `isFocusable`/`isFocusableInTouchMode` + `requestFocus()`. Dokunma kipi dışında (`mInTouchMode=false`: klavye, fare, gamepad sonrası) Android varsayılan odak vurgusunu çiziyor. "Yeniden kurulum düzeltiyor" = kurulum ekranındaki `input tap` dokunuşları dokunma kipine sokuyor; `am start`/host yeniden başlatma dokunuşsuz. Huawei VideoEngine/AGP satırları iki durumda aynı (gürültü). Düzeltme T-246 (`defaultFocusHighlightEnabled=false`); yan risk T-247 (dokunuştan sonraki ilk gezinme tuşunun yutulması). Doğrulama: gri görünürken bir parmak dokunuşu anında düzeltmeli; bir tuş griyi geri getirmeli.
+
+## 2026-10-05 ~16:40 — T-248 çözücü eşzamanlılık probu ve siyah kalkması düzeltmesinin doğrulanması
+
+- **T-246 doğrulandı:** yeni APK, Finder öndeyken `input keyevent KEYCODE_Z` → `mInTouchMode=false`; eşli yakalama 0→1, 16→15, 255→255 (eski sürümde aynı durumda 0→16). Shift tuşu dokunma kipinden çıkarmıyor (yalnız yazma/gezinme tuşları).
+- **Çözücü probu** (`probes/decoder-concurrency-probe`, MateBridge kapalı, 8-bit HEVC klipler, 60/30 Mbps, öncelik 0, operating rate max), sınırsız besleme, 7 sn pencere:
+
+| senaryo | çıktı | toplam fps | toplam Mpx/s |
+|---|---|---|---|
+| 1×full 2800×1840 | image | 356,6 | 1837 |
+| 2×full | image | 355,4 | 1831 |
+| 1×half 1400×1840 | image | 370,1 | 954 |
+| 2×half | image | 392,9 | 1012 |
+| 3×half | image | 392,7 | 1012 |
+| 1×full | buffer | 343,9 | 1772 |
+| 1×half | buffer | 485,7 | 1251 |
+| 2×half | buffer | 592,4 | 1526 |
+
+  - **Tek hat:** iki/üç oturum toplamı artırmıyor (2×full = 1×full). Yarım karelerde kare başına sabit maliyet baskın (half fps ≈ full fps).
+  - **Kapasite belgenin ~3 katı:** 2800×1840'ta 356 fps (≈1,8 Gpx/s); `media_codecs_performance` (4K 71 fps) muhafazakâr.
+- **120 fps tempolu besleme** (`pace=120`, image): 1×full 120,0 fps, kaçırma 0, gecikme p50/p95 13,3/16,6 ms; 1×half 10,5/12,5 ms; 2×half 12,3/16,0 ms (her biri 120 fps). Bölme ~1 ms kazandırıyor → değmez.
+- **Sonuç:** sınır çözücünün verimi değil, **kare başına gecikmesi** (~13 ms > 8,3 ms kare aralığı); 120 fps'te iki kare aynı anda hatta olmalı. 2800×1840@120'yi çözücü kaçırmadan taşıyor; MateBridge'deki 120 fps sorunları (2240'ta D tavanda, %2–3 atlama) sunum zamanlaması/boru hattı derinliği tarafında aranmalı. Görüntüyü bölme fikri kapandı.

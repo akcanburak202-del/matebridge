@@ -1,7 +1,7 @@
 ---
 id: T-246
 title: Client — disable Android's default focus highlight on the video SurfaceView (the intermittent "grey" black lift)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-248
 title: Probe — does the tablet's HEVC decoder scale with concurrent sessions? (1 vs 2 vs 3 decoders, full vs half frames)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
