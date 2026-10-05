@@ -1362,3 +1362,4 @@ Topoloji: Mac en0 Ethernet (192.168.1.106), tablet Wi-Fi (.105), tablet bağlant
 
 - Host `MATEBRIDGE_VD_TRANSFER=1`: Sistem Ayarları → Ekranlar → MateBridge'de **"Yüksek Dinamik Aralık" anahtarı var ve açık**; RE4 (GameHub) HDR'yi **kendiliğinden açtı**. T-226'nın açık riski (b) "oyun HDR ekranı görüyor mu" → evet. Akış hâlâ SDR (8-bit 4:2:0, sRGB etiketi), tablette HDR görüntü beklenmiyor.
 - Sonraki adım (karar gerektirir): T-226 raporundaki HDR10 akış yolu (SCK HDR preset + VT Main10/PQ + STREAM_PREFS/STREAM_CONFIG renk alanları + tablette HDR SurfaceView sunumu; ~4–5 ajan günü, 3–4 cihaz oturumu; yalnız Oyun modu, isteğe bağlı).
+- Kullanıcı (~11:00): HDR açıkken (akış SDR) RE4 "kötü görünmüyordu", koyu tonlar biraz farklıydı. Host varsayılana döndürüldü (`vd_transfer requested=0`). Tam HDR10 yolu (T-226 B–E) için kullanıcı kararı bekleniyor.
