@@ -93,6 +93,25 @@ Neden: cihaz A/B'sinde (NOTES 2026-10-07 ~00:30–01:05) `event` uyanmayı ~955 
 - Testler: `DecoderWaitTest` (parse, `event_in` politika tablosu = çıkışta `poll` ile eş, boşta giriş uyanması az ve 50 ms'lik çıkış bekleme yok, uzun boşluktan sonra kare anında girer, detach/reconfigure/çıkış hatası park halindeki girişi anında bitirir), `DevKnobsTest` (`dec_wait event_in`, dev yokken yok sayılır). `./scripts/check.sh`: ALL OK.
 - Kapsam dışı dosya yok (bu dalda `files:` dışına yalnız `DevKnobs.kt` dokunuldu; T-286'daki aynı gerekçe, Open questions 1). `docs/KNOBS.md` 23e satırı orkestratörde: `poll/event` → `poll/event/event_in` güncellenmeli.
 
+### Benimseme: `event_in` varsayılan, `event` kaldırıldı (dal `task/T-286-adopt-event-in`)
+
+Cihaz A/B (10 fps arka plan, 3 tur; orkestratör NOTES'a ekler):
+
+| kol | çözücü uyanma/s | istemci CPU | `cap_dec` p50 / p95 |
+|---|---|---|---|
+| `poll` | ~958 | ~%34,3 | 23,6 / 37,5 ms |
+| `event_in` | ~690 | ~%31 | 23,2 / 37,4 ms |
+| `event` | ~308 | - | 24,3 / 39,0 ms |
+
+`event` yine +1,5 ms p50; `event_in` gürültü içinde. Karar: `event_in` benimsenir, `event` kaldırılır.
+
+- **Varsayılan:** `DecoderWait.DEFAULT = EVENT_IN` (`VideoRenderer.decoderWait` ve `DevKnobs.decoderWait` varsayılanı). Ayar verilmezse giriş iş parçacığı kare/emeklilik/çıkış hatasına kadar park eder (250 ms sigorta), çıkış iş parçacığı bugünkü 5 ms + `IdleWait`.
+- **`poll` geri dönüş:** `--ez dev true --es dec_wait poll` bir döngü boyunca seçilebilir (eski 4 ms giriş zaman aşımı); enum ve `DevKnobs` doc yorumlarında "will be removed later" yazıyor.
+- **Kaldırılanlar:** `DecoderWait.EVENT`, `longOutputIdle`, `EVENT_OUTPUT_IDLE_WAIT_US` (50 ms boşta `dequeueOutputBuffer`), `outputWaitUs`'un `mode`/`inFlight` parametreleri, `FakeDecoderCodec.longOutputWaits` ve `event` kipi testleri. Bilinmeyen değer, eski `event` dahil, varsayılana (`event_in`) düşer; `ev=profile knobs=` içinde `dec_wait:other` olarak görünür.
+- **Testler:** `DecoderWaitTest` (17: parse/varsayılan, politika, `abort`+`nudge` ve kayıp uyanma yarışı, sahte codec üzerinde `event_in` boşta uyanma sayısı, uzun boşluktan sonra kare, kip değişimi, detach/reconfigure/çıkış hatası), `DevKnobsTest` (31). `./scripts/check.sh`: ALL OK.
+- **Orkestratör:** `docs/KNOBS.md` 23e satırı: varsayılan `event_in`, `poll` geçici geri dönüş, `event` yok; NOTES'a A/B tablosu. Aynı satırdaki "varsayılan `event` olur" cümlesi `event_in` olarak güncellenmeli.
+- **Tablette kontrol:** varsayılan kurulumla (ayar yok) 10 fps arka plan ve Oyun 60: `decode_error`, `output_straggler`, `detach_slow`, `decoder_previous_stuck` çıkmamalı; ekran kapat/aç ve mod geçişi normal; `knobs=` içinde `dec_wait` yok (varsayılan). Test edilmedi: gerçek cihaz.
+
 ## Open questions
 
 1. **Kapsam genişlemesi (onay gerekir):** "mevcut ayar deseni" `DevKnobs.kt` (alan + `Spec`), `MainActivity.kt` (`it.decoderWait = devKnobs.decoderWait`, tek satır) ve `DevKnobsTest.kt` dosyalarını gerektiriyor; kartın `files:` listesinde yoklar. Orkestratörün açık talimatıyla en küçük değişiklik yapıldı. İstenmezse bu üç dosya geri alınır ve ayar yalnız `VideoRenderer.decoderWait` olarak kalır (cihazda tetiklenemez).

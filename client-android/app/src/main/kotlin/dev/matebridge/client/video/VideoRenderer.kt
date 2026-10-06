@@ -116,10 +116,11 @@ class VideoRenderer(
     private val tag = "MB/decoder"
 
     /**
-     * T-286 dev knob (`dec_wait`): how the decoder threads wait while idle; [DecoderWait.POLL] = the fixed 4/5 ms
-     * timeouts as before. Read on every loop turn, so it may be changed while running.
+     * T-286 dev knob (`dec_wait`): how the input thread waits while idle; default [DecoderWait.EVENT_IN] (parks until a
+     * frame, a retire or an output error). [DecoderWait.POLL] = the old fixed 4 ms timeout, a fallback that will be
+     * removed later. Read on every loop turn, so it may be changed while running.
      */
-    @Volatile var decoderWait: DecoderWait = DecoderWait.POLL
+    @Volatile var decoderWait: DecoderWait = DecoderWait.DEFAULT
 
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
@@ -663,13 +664,8 @@ class VideoRenderer(
                         val now = System.nanoTime()
                         val untilDeadline = releaser.untilDeadlineNs(now)
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
-                        // how fast a stop is seen, so it grows while no output comes. T-286 (`dec_wait event`): with no
-                        // frame inside the codec and no held buffer it is long (50 ms): no output is due.
-                        val mode = decoderWait
-                        val waitUs = DecoderWaits.outputWaitUs(
-                            mode, now - st.lastOutputNs, OUTPUT_WAIT_US,
-                            if (mode.longOutputIdle) st.gauge.current() else 1, untilDeadline,
-                        )
+                        // how fast a stop is seen, so it grows while no output comes.
+                        val waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)
                         val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, st, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())
@@ -703,7 +699,7 @@ class VideoRenderer(
                 inSlot.prefetch()
                 // T-141: an offer unparks the wait at once; the timeout only bounds how fast a stop is seen.
                 // T-219: frames of this generation only; once retired it gets null and the loop ends on `active`.
-                // T-286 (`dec_wait event`): parks until a frame, a retire or an output error; the timeout is a safety net.
+                // T-286 (`dec_wait event_in`, default): parks until a frame, a retire or an output error; the timeout is a safety net.
                 val mode = decoderWait
                 val fromQueue = if (held == null) {
                     queue.awaitNext(

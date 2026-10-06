@@ -156,23 +156,28 @@ object IdleWait {
 }
 
 /**
- * T-286 (dev knob `dec_wait`): how the decoder's input and output threads wait while nothing is happening.
- * [POLL] = the pre-T-286 fixed timeouts ([IdleWait] after 300 ms without a frame); [EVENT] = wake-ups only on events,
- * with long safety-net timeouts (see [DecoderWaits]); [EVENT_IN] = the input thread as [EVENT], the output thread exactly
- * as [POLL] (device A/B: the 50 ms output idle wait of [EVENT] added ~1.6 ms to `cap_dec`). Default [POLL] until the
- * device A/B decides.
+ * T-286 (dev knob `dec_wait`): how the decoder's input thread waits while nothing is happening. The output thread always
+ * keeps the fixed poll ([IdleWait] after 300 ms without an output): the long idle `dequeueOutputBuffer` wait of the
+ * dropped `event` arm added ~1.5 ms to `cap_dec` on the device (A/B 2026-10-07) and is gone.
+ *
+ * [EVENT_IN] (default, adopted after the device A/B: ~958 -> ~690 decoder wake-ups/s and ~34.3% -> ~31% client CPU at
+ * 10 fps, `cap_dec` within noise) = the input thread parks until a frame, a retire or an output error (see
+ * [DecoderWaits]). [POLL] = the pre-T-286 fixed 4 ms input timeout ([IdleWait] after 300 ms without a frame); kept
+ * selectable as a fallback for one cycle and will be removed later.
  */
-enum class DecoderWait(val id: String, val parksInput: Boolean, val longOutputIdle: Boolean) {
-    POLL("poll", parksInput = false, longOutputIdle = false),
-    EVENT("event", parksInput = true, longOutputIdle = true),
-    EVENT_IN("event_in", parksInput = true, longOutputIdle = false);
+enum class DecoderWait(val id: String, val parksInput: Boolean) {
+    EVENT_IN("event_in", parksInput = true),
+
+    /** Fallback for one cycle only; will be removed (T-286 adoption). */
+    POLL("poll", parksInput = false);
 
     companion object {
         val IDS: Set<String> = values().map { it.id }.toSet()
+        val DEFAULT: DecoderWait = EVENT_IN
 
-        /** Absent or unknown = [POLL] (today's behaviour). */
+        /** Absent or unknown (including the removed `event`) = [DEFAULT]. */
         fun parse(raw: String?): DecoderWait =
-            values().firstOrNull { it.id == raw?.trim()?.lowercase(java.util.Locale.ROOT) } ?: POLL
+            values().firstOrNull { it.id == raw?.trim()?.lowercase(java.util.Locale.ROOT) } ?: DEFAULT
     }
 }
 
@@ -180,33 +185,25 @@ enum class DecoderWait(val id: String, val parksInput: Boolean, val longOutputId
  * T-286: the wait policy of the two decoder threads. Pure; thread-safe (no state).
  *
  * Input thread ([inputWaitNs], `FrameQueue.awaitNext`): a frame arriving ([FrameQueue.offer] unparks), a retire/revoke
- * and an output-thread error ([FrameQueue.nudge], checked through `abort`) all wake it at once, so in [DecoderWait.EVENT]
- * the timeout is only a safety net against a wake-up nobody thought of ([EVENT_INPUT_WAIT_NS]).
+ * and an output-thread error ([FrameQueue.nudge], checked through `abort`) all wake it at once, so in
+ * [DecoderWait.EVENT_IN] the timeout is only a safety net against a wake-up nobody thought of ([EVENT_INPUT_WAIT_NS]).
  *
  * Output thread ([outputWaitUs], `dequeueOutputBuffer`): an output ends the wait at once, but nothing can wake a
- * blocked `dequeueOutputBuffer` for a stop, so a timeout stays and bounds the stop latency. With no frame inside the
- * codec (queued minus released) and no buffer held for its slot, no output is due and the wait is
- * [EVENT_OUTPUT_IDLE_WAIT_US]; any frame in flight or a held buffer keeps today's value.
+ * blocked `dequeueOutputBuffer` for a stop, so a short timeout stays and bounds the stop latency.
  */
 object DecoderWaits {
-    /** Safety net of the input thread's park in [DecoderWait.EVENT]. */
+    /** Safety net of the input thread's park in [DecoderWait.EVENT_IN]. */
     const val EVENT_INPUT_WAIT_NS = 250_000_000L
 
-    /** Output wait with nothing in flight in [DecoderWait.EVENT]: also the longest a stop can wait for this thread. */
-    const val EVENT_OUTPUT_IDLE_WAIT_US = 50_000L
-
-    fun inputWaitNs(mode: DecoderWait, sinceLastFrameNs: Long, pollNs: Long): Long = when (mode) {
-        DecoderWait.POLL -> IdleWait.waitNs(sinceLastFrameNs, pollNs)
-        DecoderWait.EVENT, DecoderWait.EVENT_IN -> EVENT_INPUT_WAIT_NS
-    }
+    fun inputWaitNs(mode: DecoderWait, sinceLastFrameNs: Long, pollNs: Long): Long =
+        if (mode.parksInput) EVENT_INPUT_WAIT_NS else IdleWait.waitNs(sinceLastFrameNs, pollNs)
 
     /**
-     * Longest `dequeueOutputBuffer` wait, in microseconds, with the held buffer's deadline ([untilDeadlineNs], null =
-     * none held) applied. [inFlight]: frames queued to the codec and not yet released/discarded.
+     * Longest `dequeueOutputBuffer` wait, in microseconds: [pollUs] ([IdleWait] after 300 ms without an output), shortened
+     * by the held buffer's deadline ([untilDeadlineNs], null = none held), never lengthened by it.
      */
-    fun outputWaitUs(mode: DecoderWait, sinceLastOutputNs: Long, pollUs: Long, inFlight: Int, untilDeadlineNs: Long?): Long {
+    fun outputWaitUs(sinceLastOutputNs: Long, pollUs: Long, untilDeadlineNs: Long?): Long {
         val poll = IdleWait.waitNs(sinceLastOutputNs, pollUs * 1000) / 1000
-        val max = if (mode.longOutputIdle && inFlight <= 0 && untilDeadlineNs == null) EVENT_OUTPUT_IDLE_WAIT_US else poll
-        return if (untilDeadlineNs == null) max else (untilDeadlineNs / 1000).coerceIn(0, max)
+        return if (untilDeadlineNs == null) poll else (untilDeadlineNs / 1000).coerceIn(0, poll)
     }
 }
