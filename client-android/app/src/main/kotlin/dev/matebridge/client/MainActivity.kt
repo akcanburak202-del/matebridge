@@ -172,7 +172,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     /** T-269: FILES_NET reaches the UI thread through one pending slot (the latest wins), so repeats cannot pile up. */
     private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }, { filesGate.generation }) { gen, msg ->
-        if (filesGate.onFilesNet(gen, msg)) syncFiles()
+        // Also when the gate saw no change: after a stop (server FAILED/OFF) the Mac's OPEN is a new request, and a sync is cheap.
+        filesGate.onFilesNet(gen, msg)
+        syncFiles()
     }
 
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.

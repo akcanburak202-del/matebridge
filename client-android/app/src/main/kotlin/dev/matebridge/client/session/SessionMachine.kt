@@ -557,6 +557,10 @@ class SessionMachine(
                 if (files != null && (event.info != files || event.scope != filesScope)) {
                     files = event.info
                     filesScope = event.scope
+                    // The same-port idempotence of FILES_NET(OPEN) is for a LIVE request only. Once the tablet is OFF or STANDBY
+                    // (sharing switched off, the server stopped or failed, a teardown) the remembered request is dead: the
+                    // host's next OPEN, even on the same port, is a new one (it tore down on our OFF and waits for READY).
+                    if (!event.info.ready) filesNet = null
                     if (inputAllowed) effectiveFiles()?.let { out += Action.Send(it) }
                 }
             }
