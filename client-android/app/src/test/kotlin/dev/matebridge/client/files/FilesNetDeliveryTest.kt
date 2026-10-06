@@ -84,6 +84,41 @@ class FilesNetDeliveryTest {
         assertEquals(listOf(5 to close), r.delivered)
     }
 
+    @Test fun anEjectCoalescedAwayIsStillDeliveredAsCloseBeforeTheNewerOpen() {
+        val r = Rig()
+        r.d.offer(3, open)
+        r.runAll() // the gate has its OPEN
+        r.delivered.clear()
+        // the Mac ejects and reopens on the same port before the UI runs
+        r.d.offer(3, close)
+        r.d.offer(3, open)
+        assertEquals(1, r.queue.size)
+        r.runAll()
+        assertEquals(listOf(3 to close, 3 to open), r.delivered) // stop (STANDBY), then a fresh start
+    }
+
+    @Test fun theTeardownFlagSurvivesRepeatsAndIsNotCarriedToAnotherGenerationOrADeliveredState() {
+        val r = Rig()
+        r.d.offer(3, close); r.d.offer(3, open); r.d.offer(3, open.copy(pool = 4)) // other sizes: still the same eject
+        r.runAll()
+        assertEquals(listOf(3 to close, 3 to open.copy(pool = 4)), r.delivered)
+        r.delivered.clear()
+        r.d.offer(3, open) // the CLOSE was delivered earlier: a plain OPEN now
+        r.runAll()
+        assertEquals(listOf(3 to open), r.delivered)
+        r.delivered.clear()
+        r.d.offer(3, close); r.d.offer(4, open) // a CLOSE of the old generation says nothing about generation 4
+        r.runAll()
+        assertEquals(listOf(4 to open), r.delivered)
+    }
+
+    @Test fun aCloseAloneIsDeliveredOnce() {
+        val r = Rig()
+        r.d.offer(3, open); r.d.offer(3, close); r.d.offer(3, close)
+        r.runAll()
+        assertEquals(listOf(3 to close), r.delivered)
+    }
+
     @Test fun aFailedPostLeavesTheDeliveryUsable() {
         var fail = true
         val got = ArrayList<FilesNet>()
