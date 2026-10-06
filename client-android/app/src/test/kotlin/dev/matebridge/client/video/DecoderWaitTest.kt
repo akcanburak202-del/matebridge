@@ -12,75 +12,58 @@ import java.util.concurrent.atomic.AtomicLong
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-286: event-driven waits of the decoder threads (`dec_wait event`) against the fixed polls (`poll`). */
+/**
+ * T-286: event-driven input wait of the decoder (`dec_wait event_in`, the default) against the old fixed poll (`poll`,
+ * a fallback kept for one cycle). The `event` arm (long output idle wait) is gone; its id parses to the default.
+ */
 class DecoderWaitTest {
     private val ms = 1_000_000L
 
     // ---- policy (pure) ----
 
-    @Test fun parseKnownIdsAndFallBackToPoll() {
-        assertEquals(DecoderWait.EVENT, DecoderWait.parse("event"))
-        assertEquals(DecoderWait.EVENT, DecoderWait.parse(" EVENT "))
-        assertEquals(DecoderWait.POLL, DecoderWait.parse("poll"))
-        assertEquals(DecoderWait.POLL, DecoderWait.parse(null))
-        assertEquals(DecoderWait.POLL, DecoderWait.parse("fast"))
+    @Test fun parseKnownIdsAndFallBackToTheDefault() {
+        assertEquals(DecoderWait.EVENT_IN, DecoderWait.DEFAULT)
         assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse("event_in"))
         assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse(" Event_In "))
-        assertEquals(setOf("poll", "event", "event_in"), DecoderWait.IDS)
+        assertEquals(DecoderWait.POLL, DecoderWait.parse("poll"))
+        assertEquals(DecoderWait.POLL, DecoderWait.parse(" POLL "))
+        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse(null))
+        assertEquals(DecoderWait.EVENT_IN, DecoderWait.parse("fast"))
+        assertEquals("the removed event arm falls back to the default", DecoderWait.EVENT_IN, DecoderWait.parse("event"))
+        assertEquals(setOf("poll", "event_in"), DecoderWait.IDS)
     }
 
-    @Test fun eventInParksTheInputThreadLikeEventAndKeepsTheOutputPollOfPoll() {
+    @Test fun defaultModeParksTheInputThread() {
         for (since in listOf(0L, 100 * ms, 5_000 * ms)) {
-            assertEquals(DecoderWaits.EVENT_INPUT_WAIT_NS, DecoderWaits.inputWaitNs(DecoderWait.EVENT_IN, since, 4 * ms))
+            assertEquals(DecoderWaits.EVENT_INPUT_WAIT_NS, DecoderWaits.inputWaitNs(DecoderWait.DEFAULT, since, 4 * ms))
         }
-        // the output side is poll's, for every in-flight count and held-buffer deadline
-        val sinces = listOf(10 * ms, 299 * ms, 400 * ms)
-        for (inFlight in listOf(0, 1, 3)) for (since in sinces) for (deadline in listOf(null, 0L, 2 * ms, 80 * ms)) {
-            assertEquals(
-                "inFlight=$inFlight since=$since deadline=$deadline",
-                DecoderWaits.outputWaitUs(DecoderWait.POLL, since, 5_000, inFlight, deadline),
-                DecoderWaits.outputWaitUs(DecoderWait.EVENT_IN, since, 5_000, inFlight, deadline),
-            )
-        }
-        assertEquals(5_000L, DecoderWaits.outputWaitUs(DecoderWait.EVENT_IN, 10 * ms, 5_000, 0, null)) // not the 50 ms of event
-        assertTrue(DecoderWait.EVENT_IN.parksInput && !DecoderWait.EVENT_IN.longOutputIdle)
-        assertTrue(!DecoderWait.POLL.parksInput && !DecoderWait.POLL.longOutputIdle)
-        assertTrue(DecoderWait.EVENT.parksInput && DecoderWait.EVENT.longOutputIdle)
+        assertTrue(DecoderWaits.EVENT_INPUT_WAIT_NS >= 100 * ms) // a safety net, not a poll
+        assertTrue(DecoderWait.EVENT_IN.parksInput)
+        assertFalse(DecoderWait.POLL.parksInput)
     }
 
-    @Test fun pollModeKeepsTodaysInputAndOutputWaits() {
+    @Test fun pollFallbackKeepsTodaysInputWait() {
         // 4 ms while frames flow, 20 ms (IdleWait) after 300 ms without one.
         assertEquals(4 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 0, 4 * ms))
         assertEquals(4 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 299 * ms, 4 * ms))
         assertEquals(20 * ms, DecoderWaits.inputWaitNs(DecoderWait.POLL, 300 * ms, 4 * ms))
-        for (inFlight in listOf(0, 3)) {
-            assertEquals(5_000L, DecoderWaits.outputWaitUs(DecoderWait.POLL, 10 * ms, 5_000, inFlight, null))
-            assertEquals(20_000L, DecoderWaits.outputWaitUs(DecoderWait.POLL, 400 * ms, 5_000, inFlight, null))
-            // the held buffer's deadline shortens it, never lengthens it
-            assertEquals(2_000L, DecoderWaits.outputWaitUs(DecoderWait.POLL, 10 * ms, 5_000, inFlight, 2 * ms))
-            assertEquals(5_000L, DecoderWaits.outputWaitUs(DecoderWait.POLL, 10 * ms, 5_000, inFlight, 80 * ms))
-            assertEquals(0L, DecoderWaits.outputWaitUs(DecoderWait.POLL, 10 * ms, 5_000, inFlight, 0))
-        }
     }
 
-    @Test fun eventModeParksLongOnInputAndOutputOnlyWhenNothingIsInFlight() {
-        for (since in listOf(0L, 100 * ms, 5_000 * ms)) {
-            assertEquals(DecoderWaits.EVENT_INPUT_WAIT_NS, DecoderWaits.inputWaitNs(DecoderWait.EVENT, since, 4 * ms))
-        }
-        assertTrue(DecoderWaits.EVENT_INPUT_WAIT_NS >= 100 * ms) // a safety net, not a poll
-        // nothing queued, nothing held: no output is due
-        assertEquals(DecoderWaits.EVENT_OUTPUT_IDLE_WAIT_US, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 10 * ms, 5_000, 0, null))
-        // a frame inside the codec, or a buffer held for its slot: today's polling
-        assertEquals(5_000L, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 10 * ms, 5_000, 1, null))
-        assertEquals(20_000L, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 400 * ms, 5_000, 2, null))
-        assertEquals(2_000L, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 10 * ms, 5_000, 0, 2 * ms))
-        assertEquals(5_000L, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 10 * ms, 5_000, 0, 50 * ms))
-        assertEquals(0L, DecoderWaits.outputWaitUs(DecoderWait.EVENT, 10 * ms, 5_000, 0, 0))
+    @Test fun outputWaitIsThePollForEveryModeWithNoLongIdleWait() {
+        // 5 ms while outputs flow, 20 ms (IdleWait) after 300 ms without one: never longer.
+        assertEquals(5_000L, DecoderWaits.outputWaitUs(10 * ms, 5_000, null))
+        assertEquals(5_000L, DecoderWaits.outputWaitUs(299 * ms, 5_000, null))
+        assertEquals(20_000L, DecoderWaits.outputWaitUs(400 * ms, 5_000, null))
+        assertEquals(20_000L, DecoderWaits.outputWaitUs(60_000 * ms, 5_000, null))
+        // the held buffer's deadline shortens it, never lengthens it
+        assertEquals(2_000L, DecoderWaits.outputWaitUs(10 * ms, 5_000, 2 * ms))
+        assertEquals(5_000L, DecoderWaits.outputWaitUs(10 * ms, 5_000, 80 * ms))
+        assertEquals(0L, DecoderWaits.outputWaitUs(10 * ms, 5_000, 0))
+        assertEquals(20_000L, DecoderWaits.outputWaitUs(400 * ms, 5_000, 80 * ms))
     }
 
     // ---- FrameQueue: abort + nudge ----
@@ -215,122 +198,16 @@ class DecoderWaitTest {
         return parks.get().also { r.inputParkHook = null }
     }
 
-    @Test fun eventModeIdlesWithFarFewerWakeUpsThanPoll() {
-        val poll = make(DecoderWait.POLL)
-        startStream(poll)
-        val pollParks = idleParks(poll, 1_000)
-        val pollOut = factory.silentOutputPolls
-        poll.detachSurface()
 
-        val event = make(DecoderWait.EVENT)
-        val codecsBefore = factory.codecs.size
-        event.attachTarget(Any())
-        assertTrue(factory.await { codecs.size > codecsBefore })
-        event.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
-        event.onFrame(frame(1, VideoFrame.KEYFRAME))
-        val codec = factory.codecs.last()
-        assertTrue(factory.await { codec.renderedPts.contains(1L) })
-        val outBefore = factory.silentOutputPolls
-        val longBefore = factory.longOutputWaits.get()
-        val eventParks = idleParks(event, 1_000)
-        val eventOut = factory.silentOutputPolls - outBefore
+    // ---- renderer: default (event_in) input park, output keeps polling ----
 
-        // Absolute upper bounds hold on a loaded machine too (slow threads only wake less often); poll (4 ms, then 20 ms
-        // after 300 ms idle) gives ~100 parks and ~50 output polls on an idle one, event mode a handful.
-        assertTrue("event input parks $eventParks (poll $pollParks)", eventParks <= 10)
-        assertTrue("event output polls $eventOut (poll $pollOut)", eventOut <= 40)
-        assertTrue("input parks: event $eventParks, poll $pollParks", eventParks < pollParks)
-        assertTrue("event output waits were long", factory.longOutputWaits.get() - longBefore >= 1)
+    @Test fun theDefaultModeIsEventIn() {
+        val r = VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env)
+        renderers.add(r)
+        assertEquals(DecoderWait.EVENT_IN, r.decoderWait)
     }
 
-    @Test fun aFrameAfterALongIdleIsTakenAtOnce() {
-        val r = make(DecoderWait.EVENT)
-        val codec = startStream(r)
-        Thread.sleep(600) // both threads are in their long waits
-        val inputsBefore = factory.queuedInputs
-        val t0 = System.nanoTime()
-        r.onFrame(frame(2))
-        assertTrue(factory.await { queuedInputs > inputsBefore })
-        val queuedMs = (System.nanoTime() - t0) / ms
-        assertTrue("queued after $queuedMs ms", queuedMs < 100)
-        assertTrue(factory.await { codec.renderedPts.contains(2L) })
-        val shownMs = (System.nanoTime() - t0) / ms
-        assertTrue("rendered after $shownMs ms", shownMs < 200)
-    }
-
-    @Test fun everyFrameOfASparseStreamIsDecodedAndRenderedInOrder() {
-        val r = make(DecoderWait.EVENT)
-        val codec = startStream(r)
-        for (seq in 2L..30L) { // ~10 fps: gaps long enough for both threads to go back to their long waits
-            r.onFrame(frame(seq))
-            assertTrue("frame $seq", factory.await { codec.renderedPts.contains(seq) })
-            Thread.sleep(40)
-        }
-        assertEquals((1L..30L).toList(), codec.renderedPts.toList())
-        assertEquals(listOf(0L) + (1L..30L).toList(), codec.inputPts.toList())
-        assertEquals(0, env.lines("decode_error").size)
-    }
-
-    @Test fun theModeCanBeSwitchedWhileRunning() {
-        val r = make(DecoderWait.POLL)
-        val codec = startStream(r)
-        r.decoderWait = DecoderWait.EVENT
-        Thread.sleep(100)
-        r.onFrame(frame(2))
-        assertTrue(factory.await { codec.renderedPts.contains(2L) })
-        r.decoderWait = DecoderWait.POLL
-        Thread.sleep(100)
-        r.onFrame(frame(3))
-        assertTrue(factory.await { codec.renderedPts.contains(3L) })
-    }
-
-    @Test fun aParkedInputThreadStopsAtOnceOnDetach() {
-        val r = make(DecoderWait.EVENT)
-        startStream(r)
-        Thread.sleep(150) // input thread parked long, output thread in its long idle wait
-        val t0 = System.nanoTime()
-        r.detachSurface()
-        val tookMs = (System.nanoTime() - t0) / ms
-        assertTrue("detach took $tookMs ms", tookMs < 200)
-        assertTrue(r.decoderThreadsFinished())
-        assertEquals(1, env.lines("codec_stop").size)
-        assertEquals(0, r.handoffWaitingThreads)
-    }
-
-    @Test fun reconfigureWhileParkedHandsOverToTheNextGeneration() {
-        val r = make(DecoderWait.EVENT)
-        startStream(r)
-        Thread.sleep(150)
-        r.reconfigure(config)
-        assertTrue("second codec", env.awaitLines("codec_start", count = 2))
-        r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
-        r.onFrame(frame(1, VideoFrame.KEYFRAME))
-        val second = factory.codecs[1]
-        assertTrue("rendered by the second codec", factory.await { second.renderedPts.contains(1L) })
-        assertEquals(0, env.lines("decode_error").size)
-        assertEquals(1, env.lines("codec_stop").size) // the first codec stopped once
-    }
-
-    @Test fun anOutputThreadErrorIsSeenByAParkedInputThreadAtOnce() {
-        val r = make(DecoderWait.EVENT)
-        startStream(r)
-        Thread.sleep(150)
-        val t0 = System.nanoTime()
-        factory.throwOnDequeueOutput = true
-        assertTrue("decode_error", env.awaitLines("decode_error", timeoutMs = 3_000))
-        factory.throwOnDequeueOutput = false
-        val tookMs = (System.nanoTime() - t0) / ms
-        // Fake output wait of up to 50 ms, then the nudge; the safety net alone would take 250 ms.
-        assertTrue("error seen after $tookMs ms", tookMs < 200)
-        assertTrue(env.lines("decode_error").single().contains("err=IllegalStateException"))
-        // The restarted codec works again.
-        assertTrue("restart", env.awaitLines("codec_start", count = 2, timeoutMs = 3_000))
-        assertNotNull(factory.codecs.getOrNull(1))
-    }
-
-    // ---- event_in: input parks, output keeps polling ----
-
-    @Test fun eventInParksInputButTheOutputThreadKeepsPolling() {
+    @Test fun eventInParksInputWithFarFewerWakeUpsThanPollAndTheOutputThreadKeepsPolling() {
         val poll = make(DecoderWait.POLL)
         startStream(poll)
         val pollParks = idleParks(poll, 1_000)
@@ -346,16 +223,16 @@ class DecoderWaitTest {
         val codec = factory.codecs.last()
         assertTrue(factory.await { codec.renderedPts.contains(1L) })
         val outBefore = factory.silentOutputPolls
-        val longBefore = factory.longOutputWaits.get()
         val parks = idleParks(r, 1_000)
         val out = factory.silentOutputPolls - outBefore
 
+        // Absolute bound holds on a loaded machine too (slow threads only wake less often); poll (4 ms, then 20 ms after
+        // 300 ms idle) gives ~100 parks on an idle machine, event_in a handful.
         assertTrue("input parks $parks (poll $pollParks)", parks <= 10 && parks < pollParks)
-        assertEquals("no 50 ms output idle wait", 0, factory.longOutputWaits.get() - longBefore)
         assertTrue("output polls $out (poll $pollOut)", out >= 15) // poll's 5 ms then 20 ms idle polls, not a handful
     }
 
-    @Test fun eventInTakesAFrameAfterALongIdleAtOnceAndKeepsOrder() {
+    @Test fun aFrameAfterALongIdleIsTakenAtOnceAndOrderIsKept() {
         val r = make(DecoderWait.EVENT_IN)
         val codec = startStream(r)
         Thread.sleep(600)
@@ -365,7 +242,10 @@ class DecoderWaitTest {
         assertTrue(factory.await { queuedInputs > inputsBefore })
         val queuedMs = (System.nanoTime() - t0) / ms
         assertTrue("queued after $queuedMs ms", queuedMs < 100)
-        for (seq in 3L..20L) {
+        assertTrue(factory.await { codec.renderedPts.contains(2L) })
+        val shownMs = (System.nanoTime() - t0) / ms
+        assertTrue("rendered after $shownMs ms", shownMs < 200)
+        for (seq in 3L..20L) { // ~10 fps: gaps long enough for the input thread to go back to its park
             r.onFrame(frame(seq))
             assertTrue("frame $seq", factory.await { codec.renderedPts.contains(seq) })
             Thread.sleep(40)
@@ -374,7 +254,20 @@ class DecoderWaitTest {
         assertEquals(0, env.lines("decode_error").size)
     }
 
-    @Test fun eventInStopsAParkedInputThreadAtOnceOnDetach() {
+    @Test fun theModeCanBeSwitchedWhileRunning() {
+        val r = make(DecoderWait.POLL)
+        val codec = startStream(r)
+        r.decoderWait = DecoderWait.EVENT_IN
+        Thread.sleep(100)
+        r.onFrame(frame(2))
+        assertTrue(factory.await { codec.renderedPts.contains(2L) })
+        r.decoderWait = DecoderWait.POLL
+        Thread.sleep(100)
+        r.onFrame(frame(3))
+        assertTrue(factory.await { codec.renderedPts.contains(3L) })
+    }
+
+    @Test fun aParkedInputThreadStopsAtOnceOnDetach() {
         val r = make(DecoderWait.EVENT_IN)
         startStream(r)
         Thread.sleep(150)
@@ -387,7 +280,7 @@ class DecoderWaitTest {
         assertEquals(0, r.handoffWaitingThreads)
     }
 
-    @Test fun eventInOutputErrorIsSeenByAParkedInputThreadAtOnce() {
+    @Test fun anOutputThreadErrorIsSeenByAParkedInputThreadAtOnce() {
         val r = make(DecoderWait.EVENT_IN)
         startStream(r)
         Thread.sleep(150)
@@ -397,10 +290,11 @@ class DecoderWaitTest {
         factory.throwOnDequeueOutput = false
         val tookMs = (System.nanoTime() - t0) / ms
         assertTrue("error seen after $tookMs ms", tookMs < 200) // the 250 ms safety net alone would be slower
+        assertTrue(env.lines("decode_error").single().contains("err=IllegalStateException"))
         assertTrue("restart", env.awaitLines("codec_start", count = 2, timeoutMs = 3_000))
     }
 
-    @Test fun eventInReconfigureWhileParkedHandsOverToTheNextGeneration() {
+    @Test fun reconfigureWhileParkedHandsOverToTheNextGeneration() {
         val r = make(DecoderWait.EVENT_IN)
         startStream(r)
         Thread.sleep(150)
@@ -411,5 +305,6 @@ class DecoderWaitTest {
         val second = factory.codecs[1]
         assertTrue(factory.await { second.renderedPts.contains(1L) })
         assertEquals(0, env.lines("decode_error").size)
+        assertEquals(1, env.lines("codec_stop").size) // the first codec stopped once
     }
 }

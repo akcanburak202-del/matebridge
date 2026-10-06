@@ -31,7 +31,7 @@ class DevKnobsTest {
         "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
         "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
         "pace_dcap_half" to 3, "pace_feedback" to false,
-        "catch_up" to false, "cursor_predict" to false, "dec_wait" to "event", "aead_path" to "direct",
+        "catch_up" to false, "cursor_predict" to false, "dec_wait" to "poll", "aead_path" to "direct",
         "audio_idle_pause" to "stop",
     )
 
@@ -58,7 +58,7 @@ class DevKnobsTest {
         assertEquals(PacerTuning.STANDARD, k.pacerTuning) // T-251
         assertTrue(k.catchUp) // T-252
         assertTrue(k.cursorPredict) // T-278
-        assertEquals(DecoderWait.POLL, k.decoderWait) // T-286
+        assertEquals(DecoderWait.EVENT_IN, k.decoderWait) // T-286
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -170,7 +170,7 @@ class DevKnobsTest {
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "dec_wait:event", "aead_path:direct", "stats_1s:1",
+                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "dec_wait:poll", "aead_path:direct", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -342,19 +342,20 @@ class DevKnobsTest {
         assertTrue("cursor_predict" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
-    @Test fun decWaitKnobIsDebugOnlyDefaultPollAndProfileListed() {
-        assertEquals(DecoderWait.POLL, parse().decoderWait)
-        assertEquals(DecoderWait.POLL, parse("dec_wait" to "event").decoderWait) // ignored without dev
-        val k = parse("dev" to true, "dec_wait" to " EVENT ")
-        assertEquals(DecoderWait.EVENT, k.decoderWait)
-        assertEquals(listOf("dec_wait:event"), k.knobs)
-        assertEquals(DecoderWait.POLL, parse("dev" to true, "dec_wait" to "poll").decoderWait)
+    @Test fun decWaitKnobIsDebugOnlyDefaultEventInAndProfileListed() {
+        assertEquals(DecoderWait.EVENT_IN, parse().decoderWait)
+        assertEquals(DecoderWait.EVENT_IN, parse("dec_wait" to "poll").decoderWait) // ignored without dev
+        val poll = parse("dev" to true, "dec_wait" to " POLL ") // the fallback, kept for one cycle
+        assertEquals(DecoderWait.POLL, poll.decoderWait)
+        assertEquals(listOf("dec_wait:poll"), poll.knobs)
         val eventIn = parse("dev" to true, "dec_wait" to "event_in")
         assertEquals(DecoderWait.EVENT_IN, eventIn.decoderWait)
         assertEquals(listOf("dec_wait:event_in"), eventIn.knobs)
-        assertEquals(DecoderWait.POLL, parse("dec_wait" to "event_in").decoderWait) // ignored without dev
+        val removed = parse("dev" to true, "dec_wait" to "event") // the removed arm: default, logged as unknown
+        assertEquals(DecoderWait.EVENT_IN, removed.decoderWait)
+        assertEquals(listOf("dec_wait:other"), removed.knobs)
         val odd = parse("dev" to true, "dec_wait" to "fast")
-        assertEquals(DecoderWait.POLL, odd.decoderWait)
+        assertEquals(DecoderWait.EVENT_IN, odd.decoderWait)
         assertEquals(listOf("dec_wait:other"), odd.knobs)
         assertTrue("dec_wait" in DevKnobs.DEBUG_ONLY_KEYS)
     }
