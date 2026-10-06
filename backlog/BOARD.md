@@ -54,7 +54,10 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-266](tasks/T-266-client-files-wifi-profile.md) | Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404 | 6 | android-client-dev | [] |
+| [T-267](tasks/T-267-host-core-files-net.md) | Host Core — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, planner ağ dalı, FilesRateCap | 6 | mac-host-dev | [T-265] |
+| [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
+| [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
+| [T-270](tasks/T-270-wifi-files-device.md) | Cihaz kabulü — Wi-Fi dosyaları (0035): bütçeli ölçüm + Codex --high | 6 | orchestrator | [T-268, T-269] |
 
 ## done
 
@@ -283,3 +286,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-256](tasks/T-256-probe-yuv444-gl-latency.md) | Probe (tablet) — 4:4:4 GL merge path latency with depth-1 presentation vs today's direct path | 6 | android-client-dev | [T-254] |
 | [T-263](tasks/T-263-full-chroma-hotfix.md) | Client — Tam renk acil düzeltme: ana ImageReader 6 imaj, ana dekoder çökünce negotiated geri dönüş, "Görüntü durdu" düğmesi okunur | 6 | android-client-dev | [T-261] |
 | [T-264](tasks/T-264-default-sharp-colour.md) | Client — "Renk" varsayılanı Keskin kenarlar (0034 eki) | 6 | android-client-dev | [T-260] |
+| [T-266](tasks/T-266-client-files-wifi-profile.md) | Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404 | 6 | android-client-dev | [] |
