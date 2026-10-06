@@ -1,7 +1,7 @@
 ---
 id: T-278
 title: Client — yerel imleç v2: tablette konum tahmini (göreli hareket + mutlak kalem/dokunma), host durumuyla uzlaştırma
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-276]
@@ -39,4 +39,19 @@ Karar 0036 v1: imleç host'un bildirdiği konumda çiziliyor (gecikme ≈ RTT + 
 
 ## Handoff
 
+- **Kod commit:** f39e2375 (dal `task/T-278-cursor-prediction`; bu kartın commit'i onun üstünde). `./scripts/check.sh`: ALL OK (CursorPredictorTest 18 test dahil).
+- **Dosyalar:** yeni `cursor/CursorPredictor.kt` (+ test); değişen `CursorLink.kt` (predictor'ı durum/enable/oturumla besler), `CursorOverlayView.kt` (redrawTask vsync'te tahmini sabitler, kirli alan = eski kutu + yeni kutu, `onDraw` aynı konumu çizer, animasyon gerektikçe sonraki kareyi ister), `CursorStats.kt` (pred/hold alanları), `RedrawGate.kt` (`requestRecompute`), `input/InputOutbox.kt` (`observer`, yalnız sink'e başarıyla verilen mesajlar), `input/InputCapture.kt` (`sentObserver`), `session/DevKnobs.kt` (`cursor_predict`), `MainActivity.kt` (bağlantı), 0036'ya ek, testler.
+- **Varsayımlar:** (1) Host'un imleci kalem hover/temas ve parmak (`POINTER_ABS`) ile de taşıdığı; taşımıyorsa durum 100 ms içinde düzeltir (kısa sıçrama). (2) Tek yön gecikme = en iyi RTT / 2 (yoksa 5 ms). (3) Durum örnekleme anı = `host_time - offset`, en çok `varış - tek yön`; offset yoksa `varış - tek yön`. (4) "Yerleşme" 100 ms (`SETTLE_US`), yumuşak geçiş eşiği 4 pt, sönüm ~10 ms.
+- **Test edilmedi (tablet gerekir):** gerçek ekranda görsel akıcılık, kirli-dikdörtgen kırpması (HW canvas'ta imleç izi/hayalet kalıyor mu), Wi-Fi'da saat farkı kaymasının etkisi, kalem/parmakta host'un gerçekten imleci taşıması.
+- **Cihazda bak (tek oturum, USB sonra Wi-Fi):**
+  1. Normal açılış (Günlük mod, İmleç: Tablette). Trackpad/fare ile hızlı hareket ettir: imleç parmakla birlikte anında hareket etmeli (v1'de gecikmeli). Aynı oturumu `--ez dev true --ez cursor_predict false` ile aç, farkı karşılaştır.
+  2. Hareketi aniden durdur: imleç <= ~100 ms'de Mac'teki konuma oturmalı, geri/ileri sallanma ya da kalıcı kayma olmamalı. Ekran kenarına sür: kenarda durmalı, taşmamalı.
+  3. Kalem hover ve parmak dokunma: imleç noktaya hemen gelmeli; iz/hayalet (eski konumda kalan imleç) olmamalı. Bir uygulama imleci taşıyorsa (ör. sürükleme sırasında warp) anında atlamalı.
+  4. Yazarken (imleç gizlenir) ve Oyun modunda tahmin olmamalı (bugünkü davranış).
+  5. Log: `adb logcat -s 'MB:*'` içinde `cursor_stats` satırı. `pred_err_pt_p50/p95`: önceki durumun tahmininin sonraki durumdan sapması (Mac noktası; 1 pt ~ 2 piksel). `hold_err_pt_p50/p95`: tahmin yapılmasaydı (son durumda kalsaydı) sapma. Beklenen: `pred_err` belirgin biçimde `hold_err`'den küçük (USB: p95 birkaç pt altı, Wi-Fi biraz büyük). `pred_err` >= `hold_err` ise saat farkı/tek yön tahmini yanlış demektir (Wi-Fi asimetrisi): o durumda `cursor_predict false` ile v1'e dönülür ve rapor edilir. `pred_n` o saniyedeki ölçüm sayısıdır (yalnız konum değişen ya da tahmini olan durumlar). `age_ms_*` v1'deki gibi durum yaşıdır (tahminle değişmez).
+- **Not:** `docs/KNOBS.md` kartın `files:` listesinde olmadığı için `cursor_predict` oraya eklenmedi (orkestratör ekler).
+
 ## Open questions
+
+- `docs/KNOBS.md`: `--ez cursor_predict false` satırı eklenmeli (kart kapsamı dışı).
+- Tahmin ufku şu an "çizim anı"; ekranda gösterim gecikmesi (~yarım vsync) için ileri öteleme yok. Ölçüm sonrası gerekirse ayrı kart.
