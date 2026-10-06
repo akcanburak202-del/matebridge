@@ -393,6 +393,20 @@ class FilesTunnelTest {
         assertEquals(before, c.pings.get())
     }
 
+    @Test fun theIdleHeartbeatIsADeadlineNotAReadTimeoutSoInboundTrafficCannotPostponeIt() {
+        val host = TestHost(); val dav = TestDav()
+        tunnel(host, dav, pool = 1, pingMs = 150)
+        assertTrue(host.awaitProven(1))
+        val c = host.conns[0]
+        // the Mac chatters every 20 ms (its own keepalives): a read timeout would never fire
+        val chatter = Thread {
+            var i = 0L
+            try { while (!c.eof) { c.send(Ping(i++, 0)); Thread.sleep(20) } } catch (_: Exception) {}
+        }.also { it.isDaemon = true; it.start() }
+        assertTrue("pings=${c.pings.get()}", eventually(3_000) { c.pings.get() >= 5 }) // proof + one per ~150 ms of ITS clock
+        chatter.interrupt()
+    }
+
     @Test fun aRecordFromTheWrongKeyClosesThatConnectionOnly() {
         val host = TestHost(); val dav = TestDav()
         val t = tunnel(host, dav, pool = 2)

@@ -334,21 +334,21 @@ class FilesTunnel(
         /** Reads sealed records from the Mac: PING (ignored), the first FILES_DATA pairs, then bytes flow. */
         private fun serve(channel: FilesChannel, input: InputStream, out: OutputStream): String {
             val buf = ByteArray(CHUNK_BYTES)
-            host.soTimeout = pingIntervalMs
             var pingSeq = 1L
             var davOut: OutputStream? = null
+            // The idle heartbeat is a send deadline on the monotonic clock, not a read timeout: the Mac's own records
+            // (its PINGs, anything) must never postpone ours (PROTOCOL: a PING every 10 s on every idle connection).
+            var nextPingMs = nowMs() + pingIntervalMs
             while (true) {
+                if (davOut == null) host.soTimeout = maxOf(1L, nextPingMs - nowMs()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                 val n = try {
                     input.read(buf)
                 } catch (e: SocketTimeoutException) {
-                    if (davOut != null) continue // paired: no protocol timeout (HTTP and TCP keepalive decide)
-                    val ping = channel.sealer.sealFrame(Codec.encode(Ping(pingSeq++, nowUs()))) // idle keepalive
-                    watched(hostWatch) { out.write(ping); out.flush() }
-                    continue
+                    0
                 }
                 if (n < 0) return if (davEnded) "dav_eof" else "host_eof"
-                channel.decoder.feed(buf, 0, n)
-                while (true) {
+                if (n > 0) channel.decoder.feed(buf, 0, n)
+                while (n > 0) {
                     val msg = channel.decoder.next() ?: break
                     when (msg) {
                         is Ping -> Unit // keepalive of the other side: no PONG on a file connection
@@ -362,6 +362,12 @@ class FilesTunnel(
                         }
                         else -> throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "unexpected message type ${msg.type} on a file connection")
                     }
+                }
+                // paired: no protocol timeout (HTTP and TCP keepalive decide)
+                if (davOut == null && nowMs() >= nextPingMs) {
+                    val ping = channel.sealer.sealFrame(Codec.encode(Ping(pingSeq++, nowUs())))
+                    watched(hostWatch) { out.write(ping); out.flush() }
+                    nextPingMs = nowMs() + pingIntervalMs
                 }
             }
         }

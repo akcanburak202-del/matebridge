@@ -29,6 +29,9 @@ class FilesSessionGate {
 
     val trusted: Boolean get() = connected && connGen >= 0 && configGen == connGen
 
+    /** The newest control connection generation the UI has seen (-1 before the first). */
+    val generation: Int get() = connGen
+
     /** The current connection's transport; null before the first connection. */
     val transport: Transport? get() = connTransport
 

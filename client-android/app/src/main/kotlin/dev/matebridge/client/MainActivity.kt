@@ -171,7 +171,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val filesGate = FilesSessionGate()
 
     /** T-269: FILES_NET reaches the UI thread through one pending slot (the latest wins), so repeats cannot pile up. */
-    private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }) { gen, msg ->
+    private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }, { filesGate.generation }) { gen, msg ->
         if (filesGate.onFilesNet(gen, msg)) syncFiles()
     }
 

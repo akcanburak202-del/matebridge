@@ -14,7 +14,8 @@ class FilesNetDeliveryTest {
     private class Rig {
         val queue = ArrayDeque<Runnable>()
         val delivered = ArrayList<Pair<Int, FilesNet>>()
-        val d = FilesNetDelivery({ queue.addLast(it) }) { g, m -> delivered += g to m }
+        var uiGen = 100
+        val d = FilesNetDelivery({ queue.addLast(it) }, { uiGen }) { g, m -> delivered += g to m }
         fun runAll() { while (queue.isNotEmpty()) queue.removeFirst().run() }
     }
 
@@ -41,7 +42,7 @@ class FilesNetDeliveryTest {
         val r = Rig()
         var rerun = false
         lateinit var d: FilesNetDelivery
-        d = FilesNetDelivery({ r.queue.addLast(it) }) { g, m ->
+        d = FilesNetDelivery({ r.queue.addLast(it) }, { 100 }) { g, m ->
             r.delivered += g to m
             if (!rerun) { rerun = true; d.offer(g, close) }
         }
@@ -50,10 +51,43 @@ class FilesNetDeliveryTest {
         assertEquals(listOf(1 to open, 1 to close), r.delivered)
     }
 
+    @Test fun aNewGenerationsOpenNeverRidesARunQueuedBeforeTheUiLearnedTheGeneration() {
+        val r = Rig()
+        r.uiGen = 4
+        r.d.offer(4, open) // queued run R1
+        // the engine posts the UI's own generation update (modelled as a queued task), then the new session's OPEN arrives
+        r.queue.addLast(Runnable { r.uiGen = 5 })
+        r.d.offer(5, open) // same slot, R1 still queued ahead of the update
+        r.runAll()
+        assertEquals(listOf(5 to open), r.delivered) // delivered once, after the update, not rejected by the gate
+    }
+
+    @Test fun aRunThatFindsANewerGenerationQueuesItselfBehindTheUpdateAndStaysBounded() {
+        val r = Rig()
+        r.uiGen = 4
+        r.d.offer(5, open)
+        repeat(5) { r.queue.removeFirst().run(); assertEquals(1, r.queue.size) } // waits, one run queued at all times
+        assertTrue(r.delivered.isEmpty())
+        r.uiGen = 5
+        r.runAll()
+        assertEquals(listOf(5 to open), r.delivered)
+    }
+
+    @Test fun aNewerOfferWhileWaitingReplacesTheWaitingMessage() {
+        val r = Rig()
+        r.uiGen = 4
+        r.d.offer(5, open)
+        r.queue.removeFirst().run() // waits for gen 5
+        r.d.offer(5, close)
+        r.uiGen = 5
+        r.runAll()
+        assertEquals(listOf(5 to close), r.delivered)
+    }
+
     @Test fun aFailedPostLeavesTheDeliveryUsable() {
         var fail = true
         val got = ArrayList<FilesNet>()
-        val d = FilesNetDelivery({ if (fail) throw IllegalStateException("gone") else it.run() }) { _, m -> got += m }
+        val d = FilesNetDelivery({ if (fail) throw IllegalStateException("gone") else it.run() }, { 100 }) { _, m -> got += m }
         try { d.offer(1, open); org.junit.Assert.fail() } catch (e: IllegalStateException) { }
         fail = false
         d.offer(1, close)
