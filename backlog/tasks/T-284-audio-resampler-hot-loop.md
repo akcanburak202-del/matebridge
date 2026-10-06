@@ -1,7 +1,7 @@
 ---
 id: T-284
 title: İstemci — ses örnekleyici sıcak döngüsü (roundToInt yorumlayıcıda; ses çalarken mb-audio %35–39)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
@@ -37,5 +37,11 @@ T-282 ölçümü (`docs/research/2026-10-07-perf-profile.md` §Sıcak noktalar 1
 - `./scripts/check.sh`: ALL OK (yeni test 3/3 geçti, mevcut `CubicResamplerTest` dahil hepsi geçti).
 - Varsayımlar: `Math.round(float)` anlamı (yarım yukarı, tam hesap) `roundToInt` ile aynı; NaN artık atmaz, 0 döner (girdiler sonlu s16, NaN üretilemez). `process` içinde kalan `System.arraycopy(w, ...)` (6 float, ~48 000/s) ve `floor` (burst başına) bilerek bırakıldı; profilde görünmüyordu.
 - Test EDİLMEDİ (cihaz): kabul 4. Tabletle 60 sn simpleperf, hedef `mb-audio` <= %10 tek çekirdek; `roundToInt`/`artQuickToInterpreterBridge` < %5. Hâlâ yorumlayıcıdaysa `process` kendisi JIT'lenmiyor demektir (debuggable çalışma zamanı tahmini); bu durumda sıradaki aday `System.arraycopy` ve `process`'in tek büyük metot oluşu.
+
+### Cihaz ölçümü (orkestratör, 2026-10-06 ~23:25, Wi-Fi, T-282 yöntemi)
+
+- YouTube 1080p60, sesli: `mb-audio` **%38,8 → %6,8** tek çekirdek (hedef ≤ %10). İstemci toplamı %106 → %85.
+- Oyun 60: `mb-audio` %33,6 → %4,8.
+- simpleperf: `roundToInt` artık görünmüyor. `AudioPlayout$Stream.loop` hâlâ yorumlayıcıdan giriyor (OSR), ama iç döngü JIT kodunda.
 
 ## Open questions

@@ -1703,3 +1703,10 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - **"Boşta" ölçümünde akış 10 fps:** kaynak Terminal'deki Claude Code dönen simgesi ("Noodling…"); `screencapture` farkıyla doğrulandı. Ajan çalışırken ve Terminal görünürken tablet hiç boşta kalmıyor.
 - Dakikada bir "Explicit concurrent copying GC" Binder iş parçacığından geliyor (çerçeve). Bizim kodda `System.gc()` yok.
 - Rapor: `docs/research/2026-10-07-perf-profile.md`.
+
+## 2026-10-06 ~23:20–23:30 — T-284/T-285 cihazda (Wi-Fi), T-289 host
+
+- APK `main` @ `f4dca767` kuruldu, host yeniden paketlendi ve başlatıldı (tek süreç).
+- YouTube 1080p60 sesli: istemci %106 → %85, `mb-audio` %38,8 → %6,8. Oyun 60: %108 → %86, `mb-audio` %33,6 → %4,8.
+- Oyunda GC %14 → %12,8 (T-285 hedefi tutmadı): kalan kaynak Conscrypt (kayıt başına `Cipher.init` sağlayıcı seçimi ve yeni SPI, AEAD iç tampon kopyası) → T-292.
+- T-289 (HDR çalışma anı SDR'ye düşme) ve T-288 (DAV güvenli değiştirme) cihazda tetiklenmedi.

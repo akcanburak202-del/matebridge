@@ -92,3 +92,17 @@ Eşik (T-282 Kabul 5): ≥%2 tek çekirdek ya da ≥100 uyanma/s.
 ## Ham veri
 
 Ham çıktılar scratch'te kaldı, commit edilmedi: simpleperf `perf.data`, `top`, `sample`, host penceresi. Betikler: `dev_perf.sh` (tablette, `/data/local/tmp/mbperf_dev.sh`), `mac_perf.sh`, `an.py`, `sample_threads.py`. Kart sonrası ölçüm aynı yöntemle tekrarlanmalı. Betikler kayıpsa bu bölümdeki tarif yeterli.
+
+## Sonuç ölçümü: T-284 + T-285 (2026-10-06 ~23:25, aynı yöntem, Wi-Fi)
+
+| | (b) önce | (b) sonra | (c) önce | (c) sonra |
+|---|---:|---:|---:|---:|
+| İstemci toplam | 106,4 | **84,7** | 107,6 | **85,9** |
+| `mb-audio` | 38,8 | **6,8** | 33,6 | **4,8** |
+| `HeapTaskDaemon` | 5,4 | 5,0 | 14,0 | 12,8 |
+| `mb-video` | 7,4 | 9,4 | 13,0 | 15,0 |
+| minor fault/s | 2 230 | 1 760 | 7 042 | 5 066 |
+| sistem toplamı (/800) | 137 | 128 | 153 | 140 |
+
+- T-284 hedefi tuttu. T-285 kod olarak doğru, ama kalan ayırma Conscrypt'in içinde (kayıt başına SPI yeniden kurulumu ve AEAD iç tampon kopyası) → T-292.
+- `latency_ms` ortalaması (oyun) 22,3 → 20,9; `decode_ms` 11,8 → 12,3 (gürültü içinde).

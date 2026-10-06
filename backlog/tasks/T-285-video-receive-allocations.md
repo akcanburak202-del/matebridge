@@ -1,7 +1,7 @@
 ---
 id: T-285
 title: İstemci — video alma yolunda kare başına ayırmaları azalt (oyunda GC %14, 7 000 fault/s)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
@@ -49,5 +49,22 @@ Gerçek durum: `RecordDecoder.next` zaten `openPlain` kullanıyor (`scratch.copy
 - `./scripts/check.sh`: bkz. son mesaj (OK). Fixture testleri değişmeden geçti.
 - Test EDİLMEDİ (orkestratör): madde 5 codex review; madde 6 cihaz ölçümü (Oyun 60: `HeapTaskDaemon` <= %5, minor fault/s <= 2 000, `mb-video` <= %10, `latency_ms`/`decode_ms` değişmemeli). Tablet ve Mac UI'ya dokunulmadı. Hedef tutmazsa kalan büyük ayırma `VideoFrame.data`; sonraki adım tüketici tarafı havuzu (ayrı kart).
 - Tablette kontrol: Oyun/Günlük modunda video normal (bozuk kare, artefakt, keyframe isteği artışı yok), Wi-Fi ve USB'de; Oyun 60'ta yukarıdaki üç metrik.
+
+### Cihaz ölçümü (orkestratör, 2026-10-06 ~23:28, Oyun 60, Wi-Fi)
+
+Hedefler tutmadı. Kod doğru ve `copyOfRange` profilden kalktı, ama ayırmanın asıl kaynağı Conscrypt'in içinde:
+
+| | önce | sonra | hedef |
+|---|---:|---:|---:|
+| `HeapTaskDaemon` | %14,0 | %12,8 | ≤ %5 |
+| minor fault/s | 7 042 | 5 066 | ≤ 2 000 |
+| `mb-video` | %13,0 | %15,0 | ≤ %10 |
+| `latency_ms` ort. / `decode_ms` ort. | 22,3 / 11,8 | 20,9 / 12,3 | değişmesin |
+
+- `mb-video` profili (`openPlain` %43):
+  - `Cipher.init` her kayıtta sağlayıcıyı yeniden seçiyor ve yeni bir SPI nesnesi oluşturuyor (`chooseProvider` → `tryCombinations` → `Provider$Service.newInstance`): iş parçacığının %11'i;
+  - Conscrypt AEAD şifre çözme, girdiyi kendi tamponuna kopyalıyor (`updateInternal` %12,5, `expand`);
+  - `doFinalInternal` %19.
+- Sonraki adım: T-292.
 
 ## Open questions
