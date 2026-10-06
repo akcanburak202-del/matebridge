@@ -1,7 +1,7 @@
 ---
 id: T-276
 title: Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-274]
@@ -39,4 +39,36 @@ Karar 0036, PROTOCOL (dal `task/T-274-cursor-protocol`). **Bu dalı `task/T-274-
 
 ## Handoff
 
+- **Commit:** T-276 uygulama commit'i bu dalın tepesinde (`git log -1 task/T-276-client-local-cursor`); önceki commit `45742e56` yalnız kart + plan. Dal `task/T-274-cursor-protocol` üzerine kuruldu.
+- **check.sh:** android (JVM testleri), probes, protocol fixtures, crypto vectors, measurement kit **OK**. Tek kırmızı: host `swift test` -> `FixtureTests.everyFixtureFileHasATestCase` (yalnız yeni 6 cursor fixture'ı: `cursor_prefs_on/off`, `cursor_shape`, `cursor_state`, `cursor_state_hidden`, `invalid_cursor_shape_short` host tarafında henüz kapsanmıyor); T-275 gelince kapanır. Başka host hatası yok. Kotlin tarafı 6 fixture'ın hepsini `FixtureTest`'te geçiyor (decode, byte-özdeş encode, bayt bayt ve rastgele parça, invalid reddi).
+- **Dokunulan dosyalar** (`client-android/app/src/...`):
+  - Protokol: `main/.../protocol/Messages.kt` (MsgType 0x0B-0x0D, `Capabilities.LOCAL_CURSOR` bit13, `CursorPrefs`, `CursorShape`, `CursorState`), `Codec.kt`.
+  - Yeni paket `main/.../cursor/`: `CursorStateSlot` (u32 seri aritmetikle en yeni seq), `ShapeCache` (LRU, 64), `CursorShapes` (arka planda PNG çözümü, sınırlı kuyruk 8, IHDR boyut denetimi <= 256 px), `PngInfo`, `CursorGeometry` + `BuiltinArrow`, `CursorPrefsPolicy` (istek, 1,5 s zaman aşımı, geri çekilmeli yeniden deneme), `CursorStats`, `CursorLink` (okuyucu iş parçacığı girişi), `CursorOverlayView` (katman).
+  - Oturum: `session/SessionMachine.kt` (`initialCursor`, `Event.SetCursor`, `acceptSession`'da `CURSOR_PREFS`, `deliversCursor`), `SessionController.kt` (`setCursorEnabled`, `listener.onCursor`, okuyucudan doğrudan teslim, log `cursor_prefs_sent enabled=`), `Settings.kt` (`cursorLocal`, USER_KEYS).
+  - Panel: `settings/SettingsCatalog.kt` ("İmleç": Tablette / Görüntüde, Oyun'da başlıkta "(Oyun modunda görüntüde)"; Görüntü bölümünde "Boşta karart"ın altı).
+  - `MainActivity.kt`: HELLO bit13, katman (pen overlay'in üstünde, istatistik metninin altında), mod/ayar değişiminde `applyCursorWish`, oturum başı/sonu (`render`, `onStop`, `onConnectionGen`, `onSessionEnd`), `inputTicker`'dan zaman aşımı + saniyelik sayaç.
+  - Testler: `FixtureTest` (+6 fixture), yeni `CursorCodecTest`, `CursorPrefsMachineTest`, `cursor/*Test` (slot, shapes/LRU/PNG, geometry, policy, stats, link), güncel `SettingsCatalogTest`, `SettingsResetTest` (19 -> 20 anahtar), `SessionSupportTest`.
+- **Varsayımlar / tasarım kararları:**
+  1. `CURSOR_*` mesajları ses gibi okuyucu iş parçacığından doğrudan `listener.onCursor`'a gider (motor kuyruğuna girmez; yalnız makinenin kabul ettiği, yerel güvenilir nesil). En yeni `seq` kazanır; çizim `postInvalidateOnAnimation(kirli dikdörtgen)` ile vsync'te, her STATE'te değil.
+  2. Politika (UI iş parçacığı): istek = ayar "Tablette" ve mod Oyun değil. Makine "wire" değerini hatırlar ve her oturum kabulünde gönderir (`CURSOR_PREFS`, Ping + STREAM_PREFS + AUDIO_PREFS'ten sonra); mod/ayar değişince `Event.SetCursor`. Oyun'a geçerken `setStreamMode` içinde `CURSOR_PREFS(0)` `STREAM_PREFS`'ten **önce** gider (PROTOCOL 0x0D).
+  3. Zaman aşımı 1,5 s (PREFS(1) kabulünden / son STATE'ten); düşünce katman gizlenir, PREFS(0) gider, log `W cursor_fallback reason=timeout retry_ms= count=`. Otomatik yeniden deneme en erken 10 s sonra; **sapma (izinli: "en erken")**: STATE görmeden art arda düşüşlerde bekleme 10, 20, 40, 60 s (üst sınır) — PREFS'i yok sayan eski bir host'u her 10 s rahatsız etmesin. Kullanıcının/modun gerçek istek değişimi hemen uygulanır; istek değişmediği sürece (ör. Günlük->Çizim) düşüşün beklemesi kısalmaz.
+  4. Şekil önbelleği oturum (kontrol bağlantısı nesli) başına: yeni bağlantı/geçiş (migration) ve oturum sonunda silinir; katman kapalıyken (düşüş, "Görüntüde") **silinmez** ve gelen SHAPE'ler yine saklanır, çünkü host o kimlikleri istemcide sanıyor. STATE katman kapalıyken yok sayılır.
+  5. Henüz çözülmemiş şekil: önceki şekil ekranda kalır; bilinmeyen biçim, PNG hatası, > 256 px ya da dolu kuyruk: yerleşik ok. Şekil ölçeği `genişlik_pt16/16 × (video yüzeyi genişliği px / STREAM_CONFIG.width_pt)`, hotspot aynı ölçek, konum `Coords.normalize`'ın tersi (letterbox'a saygılı).
+  6. Seq karşılaştırması u32 seri aritmetik (sarma güvenli). `shape_id = 0` yok sayılır (spec hata demiyor).
+  7. HELLO bit13 her zaman açık (kapatan geliştirici bayrağı eklenmedi).
+  8. Log: `I session cursor_prefs_sent enabled=`, `I render cursor_stats states shapes stale draws draw_ms_avg draw_ms_max age_ms_p50 age_ms_p95 age_n` (saniyelik, boş saniyede yazılmaz; yaş = istemci saati − (host_time_us − PING/PONG ofseti), ofset yokken örneklenmez). Konum, şekil içeriği, tuş yok.
+- **Test EDİLMEDİ (tablet gerekir):** katmanın gerçek görünümü/hizası (`CursorOverlayView.onDraw`, kirli dikdörtgenle artefakt kalıp kalmadığı), `BitmapFactory` ile PNG çözümü, `postInvalidateOnAnimation` gecikmesi, çizim süresi, gerçek host ile uçtan uca (T-275 yok), Oyun geçişi, eski host'a karşı zaman aşımı yolu.
+
+### Tablette kontrol listesi (T-275 host ile birlikte)
+
+1. Günlük, ayar "Tablette": imleç hareketi (trackpad, fare, kalem hover) video imleci olmadan, hotspot ve boyut Mac'tekiyle aynı; `adb logcat -s 'MB/*' | grep -E 'cursor_'` içinde `cursor_prefs_sent enabled=1`, saniyelik `cursor_stats` (states ~ hareket hızı, `draw_ms_avg` < 1, `age_ms_p50/p95` USB'de ~5-10 ms, Wi-Fi ~15-25 ms beklenir; "Görüntüde" ile gerçek gecikme farkını el ile de hisset).
+2. Şekiller: metin üstünde I-beam, link üstünde el, pencere kenarında yeniden boyutlandırma okları; şekil değişince titreme/ok'a düşme olmamalı. Yazarken imleç gizlenmeli (visible=0), hareketle dönmeli.
+3. Panel: "İmleç" Tablette/Görüntüde anında etkili olmalı (Görüntüde: tablette katman yok, video imleci geri), kalıcı (uygulamayı kapat-aç); Oyun'a geçince başlıkta "(Oyun modunda görüntüde)", Oyun'dan çıkınca Tablette ise geri gelir; Günlük<->Çizim geçişinde kesinti olmamalı.
+4. Zaman aşımı: host'ta imleç akışını durdur (ya da eski host sürümü) -> ~1,5 s sonra `W cursor_fallback`, imleç videoda görünür (imleçsiz kalma yok), 10 s+ sonra yeniden dener.
+5. Oturum sonu/yeniden bağlanma/arka plana atma: katmanda eski imleç kalmamalı; USB<->Wi-Fi geçişinde (migration) imleç yeniden gelmeli; bir sonraki oturum "Tablette" ile başlamalı. Pencere sürüklerken imleç, pencere videosundan ~40 ms önde olur (karar 0036'da kabul).
+
 ## Open questions
+
+- Spec: `CURSOR_PREFS(0)` sonra `(1)` döngüsünde host'un "istemcide var" kümesini sıfırlayıp sıfırlamadığı PROTOCOL.md'de yazmıyor. İstemci güvenli tarafta: katman kapalıyken de SHAPE'leri saklar ve önbelleği yalnız bağlantı/oturum sınırında siler. Host sıfırlıyorsa sorun yok, sıfırlamıyorsa da tutarlı. Yazılması iyi olur.
+- Spec: PREFS'i yok sayan eski host'a karşı zaman aşımı sonsuz döngüde kalır; geri çekilmeli (10-60 s) uygulandı (bkz. Handoff 3). İstenmiyorsa `CursorPrefsPolicy` içindeki katlama kaldırılır.
+- `CURSOR_SHAPE` PNG sınırı: spec 128 x 128 px diyor, istemci bellek güvenliği için 256 px'e kadar kabul eder (büyüğü ok'a düşer); spec'e yazılabilir.

@@ -76,6 +76,11 @@ interface SettingsHost {
     /** Persists the choice and restarts the idle counter (a dimmed window comes back). */
     fun selectIdleTimeout(t: IdleTimeout)
 
+    /** "İmleç" (decision 0036, T-276): true = "Tablette" (the tablet draws the cursor), false = "Görüntüde"; stored. */
+    val cursorLocal: Boolean
+    /** Persists the choice and tells the host (CURSOR_PREFS) when what it should do changed. Oyun always shows it in the video. */
+    fun setCursorLocal(on: Boolean)
+
     // Ses
     /** False with `--ez audio false`: no audio controls at all. */
     val audioAvailable: Boolean
@@ -253,6 +258,14 @@ object SettingsCatalog {
     /** What the "Boşta karart" title shows: in Oyun the row stays visible but the counter does not run. */
     fun idleDimMarker(mode: StreamMode) = if (mode.isGame) " (Oyun modunda kapalı)" else ""
 
+    /** T-276 (decision 0036): where the Mac's cursor is drawn. */
+    const val CURSOR_TITLE = "İmleç"
+    const val CURSOR_TABLET = "tablet"
+    const val CURSOR_VIDEO = "video"
+
+    /** What the "İmleç" title shows: in Oyun the setting is kept but the game draws its own cursor (the video's). */
+    fun cursorMarker(mode: StreamMode) = if (mode.isGame) " (Oyun modunda görüntüde)" else ""
+
     const val RESET_TITLE = "Varsayılanlara dön"
     const val RESET_IDLE = "Tüm ayarları varsayılana döndürür; Mac eşleşmesi korunur."
     val RESET_ARMED = "Onaylamak için ${TwoTapConfirm.WINDOW_MS / 1000} saniye içinde yeniden dokun."
@@ -362,6 +375,14 @@ object SettingsCatalog {
                         { h.idleTimeout.id },
                         { idleDimMarker(h.streamMode) },
                     ) { id -> h.selectIdleTimeout(IdleTimeout.parse(id)) },
+                )
+                add(
+                    SettingItem.Choice(
+                        "cursor", CURSOR_TITLE,
+                        listOf(SettingItem.Option(CURSOR_TABLET, "Tablette"), SettingItem.Option(CURSOR_VIDEO, "Görüntüde")),
+                        { if (h.cursorLocal) CURSOR_TABLET else CURSOR_VIDEO },
+                        { cursorMarker(h.streamMode) },
+                    ) { id -> h.setCursorLocal(id != CURSOR_VIDEO) },
                 )
             },
         )

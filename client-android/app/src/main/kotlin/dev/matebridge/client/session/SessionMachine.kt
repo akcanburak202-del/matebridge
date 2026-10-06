@@ -1,6 +1,7 @@
 package dev.matebridge.client.session
 
 import dev.matebridge.client.protocol.AudioPrefs
+import dev.matebridge.client.protocol.CursorPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Clipboard
@@ -76,6 +77,8 @@ class SessionMachine(
      * record, read at the moment a failure would count, so a close that overtakes the record's event cannot count.
      */
     private val recordAuthenticated: (Int) -> Boolean = { false },
+    /** T-276 (decision 0036): CURSOR_PREFS wish; null = this client does not draw the cursor (nothing is sent). */
+    initialCursor: Boolean? = null,
     /** T-150: log sink (level, ev, fields) for the trust lines; never given a code, key, host_id or host name. */
     private val log: (Char, String, String) -> Unit = { _, _, _ -> },
 ) {
@@ -145,6 +148,11 @@ class SessionMachine(
         data class SetDisplayRate(val hz: Int) : Event
         /** The user's audio setting (T-095): remembered, and sent as AUDIO_PREFS now when input is allowed. */
         data class SetAudio(val enabled: Boolean) : Event
+        /**
+         * T-276 (decision 0036): what the cursor policy wants the host to do now (true = the tablet draws the cursor). Remembered
+         * for later sessions too; sent as CURSOR_PREFS now when input is allowed and the value changed.
+         */
+        data class SetCursor(val enabled: Boolean) : Event
         /** T-135: the tablet file server's state: remembered, sent as FILES_INFO now when input is allowed and it changed. */
         data class SetFiles(val info: FilesInfo, val scope: FilesServerScope) : Event
         /**
@@ -253,6 +261,7 @@ class SessionMachine(
     private var prefs = initialPrefs
     private var displayHz = 0 // 0 = not measured yet: nothing is sent
     private var audio: Boolean? = initialAudio
+    private var cursor: Boolean? = initialCursor
     private var files: FilesInfo? = initialFiles
 
     /**
@@ -565,6 +574,14 @@ class SessionMachine(
                     if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
                 }
             }
+            is Event.SetCursor -> {
+                // Only a client that draws the cursor (non-null) ever sends CURSOR_PREFS. A value the host already has is not repeated.
+                val was = cursor
+                if (was != null && was != event.enabled) {
+                    cursor = event.enabled
+                    if (inputAllowed) out += Action.Send(CursorPrefs(event.enabled))
+                }
+            }
             is Event.SetFiles -> {
                 // Only a client with a file server (non-null) sends FILES_INFO (PROTOCOL.md 0x09): once per session, then on change.
                 if (files != null && (event.info != files || event.scope != filesScope)) {
@@ -782,6 +799,7 @@ class SessionMachine(
         out += Action.Send(prefs) // T-050: right after the proof PING, never before it
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
         audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
+        cursor?.let { out += Action.Send(CursorPrefs(it)) } // T-276: the session starts without the local cursor (host default 0); tell it ours
         effectiveFiles()?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS (never an earlier session's READY)
         nextPingUs = nowUs + pingIntervalUs
         backoffUs = BACKOFF_START_US
@@ -1381,5 +1399,8 @@ class SessionMachine(
 
         /** T-150: whether audio read on control connection [gen] may be delivered, given the machine's [acceptedGen]. */
         fun deliversAudio(acceptedGen: Int, gen: Int): Boolean = acceptedGen >= 0 && acceptedGen == gen
+
+        /** T-276: the same gate for CURSOR_SHAPE / CURSOR_STATE (display data of the accepted, locally trusted generation). */
+        fun deliversCursor(acceptedGen: Int, gen: Int): Boolean = deliversAudio(acceptedGen, gen)
     }
 }

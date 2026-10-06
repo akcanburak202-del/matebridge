@@ -155,6 +155,14 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setPenDot(on: Boolean) = store.putString(KEY_PEN_DOT, if (on) "1" else "0")
 
+    /**
+     * "İmleç" (T-276, decision 0036): true = "Tablette" (the tablet draws the cursor; the default, also for an unknown stored
+     * value), false = "Görüntüde" (the cursor stays in the video). Only a stored "0" means "Görüntüde".
+     */
+    fun cursorLocal(): Boolean = store.getString(KEY_CURSOR) != "0"
+
+    fun setCursorLocal(on: Boolean) = store.putString(KEY_CURSOR, if (on) "1" else "0")
+
     /** Connection mode (T-096). AUTO when nothing (or nothing valid) is stored. */
     fun transportMode(): TransportMode = TransportMode.fromSetting(store.getString(KEY_TRANSPORT))
 
@@ -237,7 +245,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         val USER_KEYS: List<String> get() = listOf(
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
-            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME,
+            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_CURSOR,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -263,6 +271,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_PEN_TRAIL = "pen_trail"
         const val KEY_PEN_DOT = "pen_dot"
         const val KEY_FINGER_OFF = "finger_touch_disabled"
+        const val KEY_CURSOR = "cursor_local"
     }
 }
 

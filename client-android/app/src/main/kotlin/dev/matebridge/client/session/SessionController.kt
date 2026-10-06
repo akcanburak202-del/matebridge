@@ -13,6 +13,9 @@ import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.protocol.Codec
+import dev.matebridge.client.protocol.CursorPrefs
+import dev.matebridge.client.protocol.CursorShape
+import dev.matebridge.client.protocol.CursorState
 import dev.matebridge.client.protocol.FrameDecoder
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
@@ -112,6 +115,14 @@ interface SessionListener {
     fun onAudio(msg: Message, gen: Int) {}
 
     /**
+     * T-276 (decision 0036): CURSOR_SHAPE or CURSOR_STATE from the reader thread of control connection [gen] (it bypasses
+     * the engine queue so the newest cursor never waits behind a tick), only for the machine's accepted generation. A reader
+     * can outlive its connection: the receiver must drop messages whose [gen] is not the one it was armed with
+     * ([onConnectionGen]). Must not block. Positions and images are never logged.
+     */
+    fun onCursor(msg: Message, gen: Int) {}
+
+    /**
      * T-096: outcome of [SessionController.migrate] (engine thread), once per request the engine took (a request
      * replaced in the mailbox by a newer one, or made after shutdown, gets none). On success the session now runs over
      * [endpoint]; [onSessionEnd], [onSessionStart] and [onConnectionGen] were called for the switch before it.
@@ -168,6 +179,8 @@ class SessionController(
      * the full colour self-test finishing after start-up still shows on the next connection. Any thread.
      */
     private val helloCapabilities: () -> Long = { 0L },
+    /** T-276 (decision 0036): CURSOR_PREFS wish at start; null = this client never draws the cursor, CURSOR_PREFS never sent. */
+    initialCursor: Boolean? = null,
 ) {
     /** The HELLO template of a new connection: [hello] plus the capability bits of the moment ([helloCapabilities]). */
     private fun currentHello(): Hello = hello.copy(capabilities = hello.capabilities or helloCapabilities())
@@ -178,6 +191,7 @@ class SessionController(
     private val machine = SessionMachine(
         hello, initialPrefs, knobs.pingIntervalUs, initialAudio, initialFiles, trust,
         recordAuthenticated = { gen -> recordAuthenticated(gen) },
+        initialCursor = initialCursor,
     ) { level, ev, fields -> emit(LogLine(level, ev, fields)) }
 
     /** T-156: whether the reader of control connection [gen] authenticated a host record (engine thread). */
@@ -199,6 +213,7 @@ class SessionController(
     private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
+    private val cursorMailbox = Latest<SessionMachine.Event>() // T-276: the newest cursor wish wins
     private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
     private val forgetMailbox = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
@@ -348,6 +363,16 @@ class SessionController(
     }
 
     /**
+     * Non-blocking. T-276 (decision 0036): whether the host should leave the cursor out of the video because the tablet
+     * draws it. Remembered for every later session; sent as CURSOR_PREFS when accepted and on change. Any thread.
+     */
+    fun setCursorEnabled(on: Boolean) {
+        if (terminated.get()) return
+        ensureEngine()
+        cursorMailbox.post(SessionMachine.Event.SetCursor(on))
+    }
+
+    /**
      * Non-blocking. T-269: the UI forgot the Mac's open request [requestId] with no server to publish about (sharing was
      * switched off while waiting); the machine drops it if it is still the live one. Any thread.
      */
@@ -464,7 +489,7 @@ class SessionController(
         try {
             while (true) {
                 var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: expectMailbox.take() ?: promptVisibleMailbox.take() ?:
-                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: forgetMailbox.take() ?: filesMailbox.take() ?:
+                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: cursorMailbox.take() ?: forgetMailbox.take() ?: filesMailbox.take() ?:
                     migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
@@ -550,6 +575,7 @@ class SessionController(
                     is DisplayRate -> MbLog.i("display_rate_sent", "hz=${m.hz}")
                     is StreamPrefs -> MbLog.i("stream_prefs_sent", "fps=${m.fps} scale=${m.scalePermille} bitrate_kbps=${m.bitrateKbps}")
                     is AudioPrefs -> MbLog.i("audio_prefs_sent", "enabled=${if (m.enabled) 1 else 0}")
+                    is CursorPrefs -> MbLog.i("cursor_prefs_sent", "enabled=${if (m.enabled) 1 else 0}") // T-276
                     is FilesInfo -> MbLog.i("files_info_sent", "state=${m.state} port=${m.port}") // never the token
                     else -> Unit
                 }
@@ -893,6 +919,8 @@ class SessionController(
                                 }
                             }
                             deliverAudio(msg)
+                        } else if (msg is CursorState || msg is CursorShape) {
+                            deliverCursor(msg) // T-276: the newest state wins at the receiver; nothing queues in the engine
                         } else {
                             events.put(SessionMachine.Event.Received(gen, msg))
                         }
@@ -919,6 +947,21 @@ class SessionController(
         }
 
         private var audioErrorLogged = false
+
+        /** T-276: cursor messages go from this reader straight to the listener, gated like audio (current, accepted, trusted generation). */
+        private fun deliverCursor(msg: Message) {
+            if (control !== this || !SessionMachine.deliversCursor(acceptedGen, gen)) return // the receiver re-checks [gen]
+            try {
+                listener.onCursor(msg, gen)
+            } catch (e: RuntimeException) {
+                if (!cursorErrorLogged) {
+                    cursorErrorLogged = true
+                    MbLog.e("cursor_deliver_failed", "err=${e.javaClass.simpleName}") // the cursor never takes the session down
+                }
+            }
+        }
+
+        private var cursorErrorLogged = false
 
         private fun writerLoop() {
             try {
@@ -1082,6 +1125,7 @@ class SessionController(
             is SessionMachine.Event.SetPrefs -> LogLine('I', "stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> LogLine('I', "display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> LogLine('I', "audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.SetCursor -> null // T-276: `cursor_prefs_sent` is logged when it actually goes out
             is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
