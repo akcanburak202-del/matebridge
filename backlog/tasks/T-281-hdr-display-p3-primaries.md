@@ -31,6 +31,13 @@ Karar 0032 güncellemesi (2026-10-06): HDR10 için `tf=1` ile kurulan sanal ekra
 
 ## Plan
 
+1. `MateBridgeCore/Video/VirtualDisplayPrimaries.swift` (yeni, saf): `MATEBRIDGE_VD_PRIMARIES` ayrıştırma (`unset|default|p3`, geçersiz = `p3` + `invalid`), karar (`transfer requested != 0` ve knob `default` değil -> `p3`; SDR her zaman `default`), P3 değerleri ve KVC anahtar/seçici adları (`redPrimary`, `greenPrimary`, `bluePrimary`, `whitePoint`; seçici `setRedPrimary:` ...), seçici eksikse `selector_missing` ile primersiz kurulum (`Applied`), log alanları.
+2. `VirtualDisplayTransfer.Outcome`'a `primaries` (`Applied`) eklenir (varsayılanlı, mevcut çağıranlar bozulmaz); `logFields(_:edr:wideGamut:)` sonuna `primaries=... wide_gamut=0|1|na` yazar.
+3. `DisplayMode`'a `primaries: Choice` (varsayılan `.default`) eklenir; `DisplayReuse.decide` farklı primerli ekranı yeniden kullanmaz (yeni `Reason` eklenmez: `transferChange` altında karşılaştırılır, `StreamCoordinator`'daki kapsamlı `switch` bozulmasın). `VideoSettings` knob'u `applyingExperimentKnobs`'ta okur, `displayMode.primaries` hesaplar. `knobAllowList`'e anahtar eklenir (`ev=profile knobs=`).
+4. `VirtualDisplay.swift`: `initWithDescriptor:`'dan once, karar P3 ise ve 4 setter varsa descriptor'a `NSValue(point:)` ile KVC; `transferOutcome.primaries` ve `mode.primaries` doldurulur. `wide_gamut` okuyucusu (`CGDisplayCopyColorSpace` -> `CGColorSpaceIsWideGamutRGB`, kisa `Task.sleep` sonrasi, bir kez) yine bu dosyada statik async fonksiyon.
+5. Tek gerekli dis dosya: `StreamCoordinator.logDisplayTransfer` icin ~3 satir (wide_gamut'u okuyup `logFields`'e vermek). Kartin `files:` listesinde yok; ev=vd_transfer'e `wide_gamut` (kabul 6) baska turlu yazilamaz. Handoff/Open questions'ta belirtilir.
+6. Testler: ayrıştırma, karar, `resolve`/seçici eksikliği, log alanları, `DisplayReuse` primer farkı, `VideoSettings.displayMode`. `docs/KNOBS.md`'ye satır.
+
 ## Handoff
 
 ## Open questions
