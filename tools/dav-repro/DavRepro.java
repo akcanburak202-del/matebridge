@@ -53,9 +53,17 @@ public final class DavRepro {
         // MB_DAV_OVERFLOW: connections taken beyond the limit when none is idle (T-139; 0 = the old wait, then 503).
         int overflow = System.getenv("MB_DAV_OVERFLOW") != null ? Integer.parseInt(System.getenv("MB_DAV_OVERFLOW"))
                 : FilesConfig.OVERFLOW_CONNECTIONS;
-        FilesConfig cfg = new FilesConfig(rate, 256L * 1024, maxConn, FilesConfig.BUFFER_BYTES,
+        // MB_DAV_PROFILE=wifi (T-266): the Wi-Fi profile (64 KiB bursts, 16 KiB buffers, small-request lane) at MB_DAV_RATE.
+        // MB_DAV_LANE=0: the same profile without the small-request lane (the "before" of the lane measurement).
+        boolean wifi = "wifi".equals(System.getenv("MB_DAV_PROFILE"));
+        boolean lane = !"0".equals(System.getenv("MB_DAV_LANE"));
+        long burst = wifi ? FilesConfig.WIFI_BURST_BYTES : 256L * 1024;
+        int buffer = wifi ? FilesConfig.WIFI_BUFFER_BYTES : FilesConfig.BUFFER_BYTES;
+        long smallRate = wifi && lane ? FilesConfig.WIFI_SMALL_RATE_BYTES_PER_SEC : 0L;
+        FilesConfig cfg = new FilesConfig(rate, burst, maxConn, buffer,
                 FilesConfig.IDLE_TIMEOUT_MS, FilesConfig.READ_TIMEOUT_MS, direct ? proxyPort : 0,
-                FilesConfig.EVICT_IDLE_MS, overflow, FilesConfig.ADMIT_WAIT_MS, FilesConfig.WRITE_TIMEOUT_MS);
+                FilesConfig.EVICT_IDLE_MS, overflow, FilesConfig.ADMIT_WAIT_MS, FilesConfig.WRITE_TIMEOUT_MS,
+                false, smallRate, FilesConfig.SMALL_BURST_BYTES, FilesConfig.SMALL_THRESHOLD_BYTES);
         DavServer server = new DavServer(root, token, secret, cfg, new DavServer.Hooks() {
             @Override public void threadStarted() { }
             @Override public void log(String ev, String fields) {
@@ -67,7 +75,7 @@ public final class DavRepro {
         }, System::currentTimeMillis, null);
         server.start();
         listening.await();
-        out("server", "listening port=" + serverPort[0] + " rate=" + rate + " max_conn=" + maxConn + " overflow=" + overflow);
+        out("server", "listening port=" + serverPort[0] + " rate=" + rate + " max_conn=" + maxConn + " profile=" + (wifi ? "wifi" : "usb") + " lane=" + (smallRate > 0 ? 1 : 0) + " overflow=" + overflow);
         if (direct) {
             out("proxy", "listening port=" + proxyPort + " (direct: no proxy)");
             Thread.sleep(Long.MAX_VALUE);

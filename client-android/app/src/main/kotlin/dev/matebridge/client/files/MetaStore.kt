@@ -74,6 +74,16 @@ class MetaStore(
     companion object {
         fun isMetaName(name: String) = name.startsWith("._") || name == ".DS_Store"
 
+        /**
+         * macOS probes that never name anything real on the tablet (T-266): answered 404 without touching the storage.
+         * `._*` and `.DS_Store` are not here: they stay with the in-memory [MetaStore].
+         */
+        private val PROBE_NAMES = setOf(
+            ".hidden", ".localized", ".Trashes", ".Spotlight-V100", ".fseventsd", ".VolumeIcon.icns", ".TemporaryItems",
+        )
+
+        fun isProbeName(name: String) = name in PROBE_NAMES
+
         fun key(segments: List<String>) = segments.joinToString("/")
     }
 }
