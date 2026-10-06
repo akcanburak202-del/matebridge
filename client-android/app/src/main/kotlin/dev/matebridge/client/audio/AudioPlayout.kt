@@ -58,10 +58,11 @@ import java.util.concurrent.locks.LockSupport
  *  - Idle pause (T-287, [IdlePause]): an AAudio output that has had no packet for 10 s (the host sends nothing while the
  *    Mac is silent, T-279) is paused, and the writer parks until a packet arrives, a stop or a rebuild; then the
  *    output is started again and [PlayoutCore] plays the new sound after its usual quick restart (the long gap is
- *    classified idle by its capture-time jump). Logs: `idle_pause`, `resume` (start cost), `first_sound` (first packet
- *    to first audible burst, also logged without pausing). A pause or resume that fails turns pausing off for the stream
- *    (a failed resume rebuilds the output). AudioTrack is never paused. `--es audio_idle_pause off|pause|stop`
- *    ([launchIdlePauseRaw], developer gate) picks requestPause (default), requestStop or no pausing.
+ *    classified idle by its capture-time jump). Logs: `idle_pause`, `resume` (`start_ms` = until the stream reports STARTED), `first_sound` (first packet
+ *    to the first write that succeeded once playback started, also logged without pausing). A pause or resume that
+ *    fails turns pausing off for the stream (a failed resume rebuilds the output). AudioTrack is never paused.
+ *    `--es audio_idle_pause off|pause|stop` ([launchIdlePauseRaw], developer gate) picks no pausing (default until the
+ *    device A/B passes, decision 0026), requestPause or requestStop.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
@@ -564,6 +565,8 @@ class AudioPlayout(
             var lastAudioMs: Long? = null
             var avSkipSeen = core.skipTrims // T-125
             var wasPlaying = false
+            var packetsAtRender = core.buffer.packets // T-287: packets the last render could have seen
+            var firstSoundPending = false // T-287: playback started; logged after the first successful write
             rawLogged = 0
             meter.reset()
             while (running) {
@@ -586,10 +589,16 @@ class AudioPlayout(
                     rawLogged = 0
                     meter.reset()
                     idlePause.onNewOutput()
+                    resumeWatch = 0 // a resume being watched on the replaced output is not reported
                 }
                 // T-287: a long silence suspends the output; the writer parks here until a packet, a stop or a rebuild.
-                if (idlePause.shouldPause(core.state == PlayoutCore.State.PRIMING, core.framesSinceLastPacket, t.canPause)) {
-                    when (parkIdle(t)) {
+                val packetsNow = core.buffer.packets
+                if (idlePause.shouldPause(
+                        core.state == PlayoutCore.State.PRIMING, core.framesSinceLastPacket, t.canPause,
+                        newPackets = packetsNow != packetsAtRender,
+                    )
+                ) {
+                    when (parkIdle(t, packetsNow)) {
                         Park.STOPPED -> return
                         Park.REBUILD -> continue
                         Park.RESUMED -> {
@@ -626,10 +635,11 @@ class AudioPlayout(
                         video.value()?.let { avSum += la - it; avN++ }
                     }
                 }
+                packetsAtRender = core.buffer.packets // before the render, which looks at the packets itself
                 core.render(out, t.burst)
                 idlePause.onRendered()
                 val playing = core.state == PlayoutCore.State.PLAYING
-                if (playing && !wasPlaying) logFirstSound()
+                if (playing && !wasPlaying) firstSoundPending = true
                 wasPlaying = playing
                 val headroom = t.headroom()
                 meter.onWriteStart(headroom, System.nanoTime(), t.headroomCounter, t.headroomFromTs)
@@ -650,6 +660,8 @@ class AudioPlayout(
                     continue
                 }
                 clock.onWrite(w)
+                if (firstSoundPending) { firstSoundPending = false; logFirstSound() }
+                if (resumeWatch != 0L) watchResume(t)
                 if (clock.written >= nextLogAt) {
                     nextLogAt += RATE
                     val xr = t.xruns()
@@ -693,9 +705,8 @@ class AudioPlayout(
          * NOT_PAUSED: the pause failed (pausing is then off for this stream) and [t] still runs. REBUILD: a rebuild
          * request (or a failed resume) is pending; [t] may be paused and is closed by the rebuild. STOPPED: [stop].
          */
-        private fun parkIdle(t: AudioSink): Park {
+        private fun parkIdle(t: AudioSink, packets: Long): Park {
             val idleS = core.framesSinceLastPacket / RATE
-            val packets = core.buffer.packets
             val stop = idlePause.mode == IdlePause.Mode.STOP
             val t0 = System.nanoTime()
             val ok = t.pause(stop)
@@ -731,23 +742,41 @@ class AudioPlayout(
             val arrivedNs = firstSound.peek()
             val s0 = System.nanoTime()
             val resumed = t.resume()
-            val startMs = (System.nanoTime() - s0) / 1_000_000
-            MbLog.i(
-                "resume",
-                "stream_id=$id api=${t.api} mode=${idlePause.mode.id} ok=${b(resumed)} paused_ms=${(wokeNs - pausedAtNs) / 1_000_000} " +
-                    "wake_ms=${if (arrivedNs != 0L) ms1(wokeNs - arrivedNs) else "-"} start_ms=$startMs",
-                COMPONENT,
-            )
+            val requestMs = (System.nanoTime() - s0) / 1_000_000
+            resumeFields = "stream_id=$id api=${t.api} mode=${idlePause.mode.id} paused_ms=${(wokeNs - pausedAtNs) / 1_000_000} " +
+                "wake_ms=${if (arrivedNs != 0L) ms1(wokeNs - arrivedNs) else "-"} request_ms=$requestMs"
             if (!resumed) {
+                MbLog.w("resume", "$resumeFields ok=0", COMPONENT)
                 idlePause.disable("resume_failed")
                 rebuildReason = "resume_failed"
                 return Park.REBUILD
             }
+            resumeWatch = s0
             idlePause.onResumed()
             return Park.RESUMED
         }
 
-        /** T-287: playback started: how long after the first packet of a gap (logged with or without pausing). */
+        /** T-287: fields of the `resume` line, and when the resume was requested (0 = none being watched). */
+        private var resumeFields = ""
+        private var resumeWatch = 0L
+
+        /**
+         * T-287: after a resume, `requestStart` is asynchronous, so its own duration says little: `start_ms` is the time
+         * from before the request until the stream reports STARTED (polled after each write; `started=0` if it did not
+         * within [RESUME_WATCH_MAX_NS]). `request_ms` is the call itself.
+         */
+        private fun watchResume(t: AudioSink) {
+            val started = t.started()
+            val ns = System.nanoTime() - resumeWatch
+            if (!started && ns < RESUME_WATCH_MAX_NS) return
+            resumeWatch = 0
+            MbLog.i("resume", "$resumeFields ok=1 started=${b(started)} start_ms=${ms1(ns)}", COMPONENT)
+        }
+
+        /**
+         * T-287: playback started: how long after the first packet of a gap, up to the return of the first write that
+         * succeeded after playback started (logged with or without pausing).
+         */
         private fun logFirstSound() {
             val arrivedNs = firstSound.take()
             if (arrivedNs == 0L) return
@@ -839,6 +868,8 @@ class AudioPlayout(
         const val PARK_CHECK_NS = 1_000_000_000L
         /** T-287: a first-sound stamp older than this belongs to a gap that never ended in a restart. */
         const val FIRST_SOUND_MAX_NS = 5_000_000_000L
+        /** T-287: how long a resumed stream is polled for STARTED. */
+        const val RESUME_WATCH_MAX_NS = 2_000_000_000L
 
         fun b(v: Boolean) = if (v) 1 else 0
 

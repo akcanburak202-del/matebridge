@@ -95,6 +95,8 @@ class AAudioSink private constructor(
         return true
     }
 
+    override fun started(): Boolean = AAudioNative.state(handle) == AAudioNative.STATE_STARTED
+
     override fun xruns(): Int = AAudioNative.xruns(handle).coerceAtLeast(0)
 
     private val headroomBuf = LongArray(AAudioNative.C_COUNT)

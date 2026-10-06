@@ -74,6 +74,9 @@ interface AudioSink {
     /** T-287: starts a paused output again; the next [write] may follow at once. False if it could not. */
     fun resume(): Boolean = false
 
+    /** T-287: the output reports itself running (after [resume] the request is asynchronous). */
+    fun started(): Boolean = true
+
     /** Output underruns since open. */
     fun xruns(): Int
 

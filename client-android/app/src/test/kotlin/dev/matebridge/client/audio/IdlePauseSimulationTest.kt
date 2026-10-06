@@ -45,6 +45,10 @@ class IdlePauseSimulationTest {
         val firstSamples = ArrayList<Int>()
         private var waitingSince = -1L
         private var heardPlaying = false
+        /** Packets in the buffer when the last burst started (what its render could have seen). */
+        private var packetsAtRender = 0L
+        /** When false the "packets the last render did not see" guard is left out (the T-287 review's P2 bug). */
+        var guardNewPackets = true
 
         private fun deliver() {
             while (next < pkts.size && pkts[next].arrival <= now) {
@@ -57,7 +61,8 @@ class IdlePauseSimulationTest {
         fun run(until: Long) {
             while (now < until) {
                 deliver()
-                if (pause.shouldPause(core.state == PlayoutCore.State.PRIMING, core.framesSinceLastPacket, canPause = true)) {
+                val newPackets = guardNewPackets && core.buffer.packets != packetsAtRender
+                if (pause.shouldPause(core.state == PlayoutCore.State.PRIMING, core.framesSinceLastPacket, canPause = true, newPackets)) {
                     pause.onPaused()
                     pauses++
                     val before = now
@@ -69,6 +74,7 @@ class IdlePauseSimulationTest {
                     pausedFrames += now - before
                     pause.onResumed()
                 }
+                packetsAtRender = core.buffer.packets
                 core.render(out, burst)
                 pause.onRendered()
                 val first = (0 until burst).firstOrNull { out[it * 2] != 0.toShort() }
@@ -152,6 +158,34 @@ class IdlePauseSimulationTest {
         assertEquals(1, tab.starts.size)
         assertEquals(0L, tab.core.drift.underruns)
         assertEquals("nothing had played before: no idle gap to count", 0L, tab.core.idleGaps)
+    }
+
+    /**
+     * Review P2: a sound whose first packet lands between the render that completes the 10 s and the pause decision
+     * must be played at once, not left queued until a later packet wakes the writer. Sweeps the first packet's arrival
+     * over one burst; returns the longest delay (frames) from that packet to the sound being heard.
+     */
+    private fun worstDelayAtTheThreshold(guard: Boolean): Long {
+        var worst = 0L
+        for (o in 0 until 240 step 4) {
+            val second = 10 * sec + 4_400 + o // its first packet arrives around the render that completes 10 s of silence
+            val tab = Tablet(240, host(listOf(0L until 4_800L, second until second + 4_800L)), IdlePause.Mode.PAUSE, 48 * 30L)
+            tab.guardNewPackets = guard
+            tab.run(second + 3 * sec)
+            assertEquals(2, tab.starts.size)
+            worst = maxOf(worst, tab.starts[1].second - tab.starts[1].first)
+        }
+        return worst
+    }
+
+    @Test fun aPacketQueuedJustBeforeThePauseDecisionIsPlayedAtOnce() {
+        val worst = worstDelayAtTheThreshold(guard = true)
+        assertTrue("worst delay $worst frames", worst <= 48 * 50L)
+    }
+
+    @Test fun withoutTheGuardThatPacketWaitsForTheNextOne() {
+        // documents the race the guard closes: the writer parks with the packet queued and a later packet wakes it
+        assertTrue(worstDelayAtTheThreshold(guard = false) > worstDelayAtTheThreshold(guard = true))
     }
 
     @Test fun noPauseWhileTheSoundContinues() {

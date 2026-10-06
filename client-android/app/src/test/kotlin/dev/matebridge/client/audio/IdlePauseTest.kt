@@ -17,6 +17,12 @@ class IdlePauseTest {
         assertFalse("playing audio is never paused", p.shouldPause(priming = false, framesSinceLastPacket = after * 3, canPause = true))
     }
 
+    @Test fun noPauseWhilePacketsAreQueuedThatTheLastRenderDidNotSee() {
+        val p = IdlePause(IdlePause.Mode.PAUSE)
+        assertFalse(p.shouldPause(priming = true, framesSinceLastPacket = after, canPause = true, newPackets = true))
+        assertTrue(p.shouldPause(priming = true, framesSinceLastPacket = after, canPause = true, newPackets = false))
+    }
+
     @Test fun outputsThatCannotPauseAreNeverPaused() {
         val p = IdlePause(IdlePause.Mode.PAUSE)
         assertFalse(p.shouldPause(priming = true, framesSinceLastPacket = after * 3, canPause = false))
@@ -63,12 +69,12 @@ class IdlePauseTest {
     }
 
     @Test fun launchSwitchResolves() {
-        assertEquals(IdlePause.Resolved(IdlePause.Mode.PAUSE, false), IdlePause.resolve(null))
+        assertEquals(IdlePause.Resolved(IdlePause.Mode.OFF, false), IdlePause.resolve(null))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.OFF, false), IdlePause.resolve("off"))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.PAUSE, false), IdlePause.resolve("PAUSE"))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.STOP, false), IdlePause.resolve(" stop "))
         assertEquals(IdlePause.Resolved(IdlePause.DEFAULT, true), IdlePause.resolve("later"))
-        assertEquals(IdlePause.Mode.PAUSE, IdlePause.DEFAULT)
+        assertEquals("off until the device A/B passes (decision 0026)", IdlePause.Mode.OFF, IdlePause.DEFAULT)
     }
 
     @Test fun firstPacketOfAStreamIsStamped() {
