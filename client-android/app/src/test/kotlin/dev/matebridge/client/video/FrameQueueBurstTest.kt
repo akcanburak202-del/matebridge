@@ -19,7 +19,7 @@ class FrameQueueBurstTest {
     private var seq = 0L
 
     private val stats = VideoStats()
-    private val q = FrameQueue(stats, FrameQueue.depthForFps(120)) { now }
+    private val q = FrameQueue(stats, FrameQueue.depthForFps(120)) { now }.ownedByTest()
     private val overflows = ArrayList<FrameQueue.Overflow>()
     private val requests = ArrayList<Pair<Int, FrameQueue.Source>>()
 
@@ -47,12 +47,12 @@ class FrameQueueBurstTest {
     }
 
     @Test fun fourFrameBunchAt120FpsIsAbsorbed() { // (a)
-        assertNull(key()); q.poll(0)
-        repeat(20) { assertNull(p()); assertNotNull(q.poll(0)); now += frameNs } // steady
+        assertNull(key()); q.takeNow()
+        repeat(20) { assertNull(p()); assertNotNull(q.takeNow()); now += frameNs } // steady
         repeat(4) { assertNull(p()) } // a network bunch: four frames at once, decoder busy
         assertEquals(4, q.pending())
-        repeat(4) { assertNotNull(q.poll(0)) } // the decoder catches up
-        repeat(5) { now += frameNs; assertNull(p()); assertNotNull(q.poll(0)) }
+        repeat(4) { assertNotNull(q.takeNow()) } // the decoder catches up
+        repeat(5) { now += frameNs; assertNull(p()); assertNotNull(q.takeNow()) }
         assertEquals(0L, stats.snapshot().dropped)
         assertTrue(requests.isEmpty())
         assertTrue(overflows.isEmpty())
@@ -60,7 +60,7 @@ class FrameQueueBurstTest {
     }
 
     @Test fun sustainedSlowDecoderOverflowsAtTheBoundWithOneRequest() { // (b)
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         var nextPollNs = now
         var first: Long? = null
         val until = now + 1_000 * ms
@@ -73,7 +73,7 @@ class FrameQueueBurstTest {
                     assertEquals(0L, stats.snapshot().dropped - (q.maxPending + 1)) // nothing dropped before the bound
                 }
             }
-            while (nextPollNs <= now) { q.poll(0); nextPollNs += 10 * ms } // decoder: 100 fps < 120 fps
+            while (nextPollNs <= now) { q.takeNow(); nextPollNs += 10 * ms } // decoder: 100 fps < 120 fps
             now += frameNs
             if (first != null && now - first >= 450 * ms) break // inside the hold-off, no keyframe answer
         }
@@ -88,7 +88,7 @@ class FrameQueueBurstTest {
     }
 
     @Test fun secondOverflowInsideHoldOffSendsNoRequestThenADeferredOne() { // (c)
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         assertEquals(KeyframeRequest.FRAMES_DROPPED, overflowNow())
         now += 100 * ms
         assertNull(key()) // the answer: gate open, big IDR
@@ -113,7 +113,7 @@ class FrameQueueBurstTest {
     }
 
     @Test fun keyframeAfterAHeldOverflowCancelsTheDeferredRequest() {
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         overflowNow()
         now += 50 * ms; key(); now += 50 * ms
         assertNull(overflowNow()) // held
@@ -125,9 +125,9 @@ class FrameQueueBurstTest {
     }
 
     @Test fun keyframeOpensTheGate() { // (d)
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         overflowNow()
-        assertNull(p()); assertNull(q.poll(0)) // gated
+        assertNull(p()); assertNull(q.takeNow()) // gated
         now += 80 * ms
         assertNull(key())
         assertFalse(q.isWaitingKeyframe())
@@ -136,7 +136,7 @@ class FrameQueueBurstTest {
     }
 
     @Test fun startupAndDecodeErrorAlwaysGoOutAndRestartTheHoldOff() {
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         assertEquals(KeyframeRequest.FRAMES_DROPPED, overflowNow())
         now += 10 * ms
         assertEquals(KeyframeRequest.STARTUP, q.reset()) // inside the hold-off: still sent
@@ -174,8 +174,8 @@ class FrameQueueBurstTest {
     }
 
     @Test fun overflowReportsItsPositionAndArrivalGaps() {
-        assertNull(key()); q.poll(0)
-        repeat(3) { now += frameNs; p(); q.poll(0) }
+        assertNull(key()); q.takeNow()
+        repeat(3) { now += frameNs; p(); q.takeNow() }
         now += 40 * ms // a stall, then the bunch
         repeat(q.maxPending + 1) { p(); now += 1 * ms }
         val o = overflows.single()
@@ -188,7 +188,7 @@ class FrameQueueBurstTest {
 
     @Test fun depthChangesWithTheStream() {
         q.maxPending = FrameQueue.depthForFps(60)
-        assertNull(key()); q.poll(0)
+        assertNull(key()); q.takeNow()
         repeat(4) { assertNull(p()) }
         assertEquals(KeyframeRequest.FRAMES_DROPPED, p())
     }
