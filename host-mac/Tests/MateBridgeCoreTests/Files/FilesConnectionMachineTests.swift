@@ -101,14 +101,72 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
             #expect(closes(out).map(\.1) == [.rejected])
             #expect(m.counts.total == 0)
         }
-        // Capacity: total < max, counted past HELLO.
-        proven(&m, F(10))
-        _ = m.accepted(F(11), peer: peer, now: 0)
-        _ = m.hello(F(11), hello(), now: 0)
-        _ = m.accepted(F(12), peer: peer, now: 0)
-        let full = m.hello(F(12), hello(), now: 0)
-        #expect(full.first == .sendAck(F(12), .rejected))
+    }
+
+    @Test func totalLimitCountsEveryConnectionFromItsAccept() {
+        var m = makeMachine(max: 3)
+        proven(&m, F(1))
+        proven(&m, F(2))
+        proven(&m, F(3))
+        // `max` proven: a further socket is closed at the accept, it never waits for a HELLO.
+        #expect(closes(m.accepted(F(4), peer: peer, now: 0)).map(\.1) == [.capacity])
+        #expect(m.counts.total == 3)
+        // Awaiting-HELLO sockets count too: with 1 proven and 2 awaiting (max 3) the next accept is refused.
+        var n = makeMachine(max: 3)
+        proven(&n, F(1))
+        #expect(n.accepted(F(2), peer: peer, now: 0).isEmpty)
+        #expect(n.accepted(F(3), peer: peer, now: 0).isEmpty)
+        #expect(closes(n.accepted(F(4), peer: peer, now: 0)).map(\.1) == [.capacity])
+        #expect(n.counts.total == 3)
+        // The ones that were admitted can still say HELLO (the others < max).
+        #expect(n.hello(F(2), hello(), now: 0).contains(.startRecords(F(2), clientNonce: clientNonce, hostNonce: hostNonce)))
+        // A slot freed by a close is usable again.
+        _ = n.record(F(2), ping, now: 0)
+        _ = n.fileClosed(F(1))
+        #expect(n.accepted(F(5), peer: peer, now: 0).isEmpty)
+    }
+
+    @Test func helloIsRejectedWhenTheLimitWasLoweredBelowTheCurrentCount() {
+        var m = makeMachine(max: 4)
+        proven(&m, F(1))
+        proven(&m, F(2))
+        _ = m.accepted(F(3), peer: peer, now: 0)
+        _ = m.open(sessionID: 7, controlPeer: peer, max: 2, pool: 1)  // same session: only the limits change
+        let out = m.hello(F(3), hello(), now: 0)
+        #expect(out.first == .sendAck(F(3), .rejected))
+        #expect(closes(out).map(\.1) == [.rejected])
         #expect(m.counts.total == 2)
+    }
+
+    @Test func aLateHelloOrProofIsTooLateEvenBeforeTheTick() {
+        // Accept t=0, HELLO at 4 s (fine), the proof PING is processed at 6 s before any tick ran: closed.
+        var m = makeMachine()
+        _ = m.accepted(F(1), peer: peer, now: 0)
+        #expect(!m.hello(F(1), hello(), now: 4 * sec).isEmpty)
+        let late = m.record(F(1), ping, now: 6 * sec)
+        #expect(closes(late).map(\.1) == [.proofTimeout])
+        #expect(m.counts.total == 0 && m.counts.idle == 0)
+        // The same instant as the deadline is already too late (like the tick).
+        _ = m.accepted(F(2), peer: peer, now: 0)
+        _ = m.hello(F(2), hello(), now: 1)
+        #expect(closes(m.record(F(2), ping, now: 5 * sec)).map(\.1) == [.proofTimeout])
+        // Just before it the proof is fine.
+        _ = m.accepted(F(3), peer: peer, now: 0)
+        _ = m.hello(F(3), hello(), now: 1)
+        _ = m.record(F(3), ping, now: 5 * sec - 1)
+        #expect(m.counts.idle == 1)
+        // A HELLO after the 5 s closes without an answer.
+        _ = m.accepted(F(4), peer: peer, now: 10 * sec)
+        let lateHello = m.hello(F(4), hello(), now: 15 * sec)
+        #expect(closes(lateHello).map(\.1) == [.helloTimeout])
+        #expect(!lateHello.contains { if case .sendAck = $0 { true } else { false } })
+        #expect(!lateHello.contains { if case .startRecords = $0 { true } else { false } })
+        // A late proof does not take a waiting local connection either.
+        var w = makeMachine()
+        _ = w.localOpened(L(1), now: 0)
+        _ = w.accepted(F(1), peer: peer, now: 0)
+        _ = w.hello(F(1), hello(), now: 1)
+        #expect(binds(w.record(F(1), ping, now: 5 * sec)).isEmpty)
     }
 
     @Test func rejectedAckCarriesAZeroNonce() {

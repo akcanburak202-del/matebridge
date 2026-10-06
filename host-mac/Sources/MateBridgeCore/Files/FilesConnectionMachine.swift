@@ -22,6 +22,8 @@ public enum FilesCloseReason: String, Sendable {
     case peerMismatch = "peer_mismatch"
     /// Already 2 connections that have not proven themselves.
     case unprovenLimit = "unproven_limit"
+    /// Already `max` file connections (every one counts from its TCP accept, proven or not).
+    case capacity
     /// No `FILES_HELLO` within 5 s of the TCP accept.
     case helloTimeout = "hello_timeout"
     /// No authenticated PING within 5 s of the TCP accept (the `FILES_HELLO` wait counts).
@@ -206,6 +208,9 @@ public struct FilesConnectionMachine: Sendable {
         guard FilesPeer.same(peer, controlPeer) else {
             return [.close(id, .peerMismatch), .log(.warning, ev: "files_conn", conn: id, fields: "state=refused reason=peer_mismatch")]
         }
+        guard conns.count < maxConnections else {
+            return [.close(id, .capacity), .log(.warning, ev: "files_conn", conn: id, fields: "state=refused reason=capacity")]
+        }
         guard unprovenCount < configuration.maxUnproven else {
             return [.close(id, .unprovenLimit), .log(.warning, ev: "files_conn", conn: id, fields: "state=refused reason=unproven_limit")]
         }
@@ -214,17 +219,23 @@ public struct FilesConnectionMachine: Sendable {
     }
 
     /// The plain `FILES_HELLO` of a connection. Accepted only for the current session, protocol version 1 and while
-    /// fewer than `max` other connections are past their HELLO. Otherwise `REJECTED` (zero nonce) and close.
+    /// fewer than `max` other connections exist (counted from their TCP accept, awaiting ones included). Otherwise
+    /// `REJECTED` (zero nonce) and close. A HELLO that arrives after the 5 s from the TCP accept closes without an
+    /// answer, even when the tick has not run yet.
     public mutating func hello(_ id: FilesConnID, _ hello: FilesHello, now: UInt64) -> [FilesAction] {
         guard case .awaitingHello(let deadline)? = conns[id] else {
             return conns[id] == nil ? [] : protocolError(id)
+        }
+        guard now < deadline else {
+            conns[id] = nil
+            return [.close(id, .helloTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=hello_timeout")]
         }
         var reason: String?
         if hello.protocolVersion != ProtocolConstants.protocolVersion {
             reason = "version"
         } else if !listening || hello.sessionID != sessionID {
             reason = "session"
-        } else if establishedCount >= maxConnections {
+        } else if conns.count - 1 >= maxConnections {
             reason = "capacity"
         }
         if let reason {
@@ -252,7 +263,12 @@ public struct FilesConnectionMachine: Sendable {
     public mutating func record(_ id: FilesConnID, _ message: Message, now: UInt64) -> [FilesAction] {
         guard let state = conns[id] else { return [] }
         switch (state, message) {
-        case (.awaitingProof, .ping):
+        case (.awaitingProof(let deadline), .ping):
+            // The 5 s run from the TCP accept: a proof that is processed late (before a delayed tick) is too late.
+            guard now < deadline else {
+                conns[id] = nil
+                return [.close(id, .proofTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=proof_timeout")]
+            }
             provenCount += 1
             conns[id] = .idle(since: provenCount, lastReceive: now)
             var out: [FilesAction] = [.log(.info, ev: "files_conn", conn: id, fields: "state=proven \(countsFields)")]
@@ -358,16 +374,6 @@ public struct FilesConnectionMachine: Sendable {
             switch $1 {
             case .awaitingHello, .awaitingProof: $0 + 1
             default: $0
-            }
-        }
-    }
-
-    /// Connections that are past their HELLO (the ones that count toward `max`).
-    private var establishedCount: Int {
-        conns.values.reduce(0) {
-            switch $1 {
-            case .awaitingHello: $0
-            default: $0 + 1
             }
         }
     }
