@@ -1655,3 +1655,15 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 ## 2026-10-06 ~18:50 — T-278 imleç tahmini cihazda (Wi-Fi)
 
 - Kullanıcı: "imleç hissiyatı iyi". `cursor_stats` (Wi-Fi, ~40 s hareket): tahmin hatası p50/p95 **0,01 / 0,49 nokta**; v1 gibi son host konumunda bekleseydi (hold) p50/p95 **33 / 146 nokta** (hareketli saniyelerde p95 medyanı 147 → 0,3). Durum yaşı p50 11 ms (RTT ~7 ms). Host göreli hareketi 1:1 uyguladığı için tahmin neredeyse birebir; imleç girdiyle aynı karede çiziliyor. USB ölçülmedi (kullanıcı Wi-Fi'da kaldı).
+
+## 2026-10-06 ~19:31–19:44 — T-279 sessizlik kapısı ve T-280 Günlük HDR (cihaz, Wi-Fi)
+
+**HDR, Günlük (T-280):**
+- Günlük'te HDR Açık → `stream_reconfigure dynamic_range=sdr->hdr10 chroma=sharp->normal`, `hdr_config applied=1 9/16/9`, `vd_transfer applied=1 edr_max=5.00`. ~11 dk HDR10 akış, geri düşme yok.
+- Kapalı → SDR (`chroma=normal->sharp`, `edr_max=1.00`). Oyun'a geçince Oyun'un kendi ayarı (açık) HDR10 uyguladı, Günlük'e dönünce SDR kaldı: mod başına ayar doğru.
+- Kullanıcı: denediği her şey sorunsuz; yalnız **Apple TV uygulamasında görüntü siyah, ses var**. Beklenen: FairPlay korumalı video ekran yakalamasından çıkarılıyor, HDR'den bağımsız (0032 güncellemesindeki çekince doğrulandı). Aşılmaz (DRM); korumalı içerik için Mac yansıtma yolu yok.
+
+**Ses (T-279):**
+- Host: 486 saniye boyunca `packets=0 silent_skipped=100–101` (sessizlik çalan uygulama açıkken hiç paket gitmedi). Açılış/kapanış saniyelerinde kısmi değerler (ör. `packets=74 silent_skipped=26`).
+- Tablet: `idle_gaps` 0 → 10, kapının her kapanışı idle sayıldı.
+- `underruns` 8, hepsi Wi-Fi gecikme sıçramalarında (`owd_ms_max` 78–91 ms, `audio_arrival_gap` 50–79 ms; dakikada 7–177 olay, SDR dakikalarda da var). Kapının açılıp kapanmasına bağlı değil.
