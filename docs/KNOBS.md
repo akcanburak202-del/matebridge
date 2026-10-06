@@ -121,3 +121,4 @@ Geldiklerinde buraya satır eklenir; hepsinin varsayılanı kapalı:
 - T-196: `MATEBRIDGE_WIFI_ADAPT`.
 - T-197: `ctl_lowat_kb` (`WifiKnobs.kt`'ye).
 - T-198: `MATEBRIDGE_PEN_PLAYOUT_MS`.
+- T-278: `--ez dev true --ez cursor_predict false` (yerel imleç tahminini kapatır; varsayılan **açık**, karar 0036 v2).

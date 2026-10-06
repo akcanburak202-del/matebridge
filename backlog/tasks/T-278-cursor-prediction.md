@@ -1,7 +1,7 @@
 ---
 id: T-278
 title: Client — yerel imleç v2: tablette konum tahmini (göreli hareket + mutlak kalem/dokunma), host durumuyla uzlaştırma
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-276]
