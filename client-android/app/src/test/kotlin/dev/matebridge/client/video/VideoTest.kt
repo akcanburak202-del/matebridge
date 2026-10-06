@@ -19,13 +19,13 @@ class FrameQueueTest {
     /** Depth 2 (pre-T-121) keeps these rule tests short; the T-121 depth is covered in FrameQueueBurstTest. */
     private fun newQueue(): Pair<FrameQueue, VideoStats> {
         val s = VideoStats()
-        return FrameQueue(s, maxPending = 2) to s
+        return FrameQueue(s, maxPending = 2).ownedByTest() to s
     }
 
     @Test fun pFramesBeforeKeyframeAreNotDelivered() {
         val (q, s) = newQueue()
         assertNull(q.offer(frame(0)))
-        assertNull(q.poll(0))
+        assertNull(q.takeNow())
         assertEquals(1, s.snapshot().dropped)
         assertTrue(q.isWaitingKeyframe())
     }
@@ -33,17 +33,17 @@ class FrameQueueTest {
     @Test fun configThenKeyframeThenPFramesFlow() {
         val (q, _) = newQueue()
         q.offer(frame(0, cfg)); q.offer(frame(1, key)); q.offer(frame(2))
-        assertEquals(0L, q.poll(0)!!.frameSeq)
-        assertEquals(1L, q.poll(0)!!.frameSeq)
-        assertEquals(2L, q.poll(0)!!.frameSeq)
-        assertNull(q.poll(0))
+        assertEquals(0L, q.takeNow()!!.frameSeq)
+        assertEquals(1L, q.takeNow()!!.frameSeq)
+        assertEquals(2L, q.takeNow()!!.frameSeq)
+        assertNull(q.takeNow())
         assertFalse(q.isWaitingKeyframe())
     }
 
     @Test fun overflowDropsAllPendingAndRequestsKeyframe() {
         val (q, s) = newQueue()
         q.offer(frame(0, key))
-        q.poll(0)
+        q.takeNow()
         assertNull(q.offer(frame(1)))
         assertNull(q.offer(frame(2)))
         assertEquals(KeyframeRequest.FRAMES_DROPPED, q.offer(frame(3)))
@@ -52,17 +52,17 @@ class FrameQueueTest {
         assertTrue(q.isWaitingKeyframe())
         // P-frames are refused until a keyframe
         assertNull(q.offer(frame(4)))
-        assertNull(q.poll(0))
+        assertNull(q.takeNow())
         q.offer(frame(5, key))
-        assertEquals(5L, q.poll(0)!!.frameSeq)
+        assertEquals(5L, q.takeNow()!!.frameSeq)
     }
 
     @Test fun keyframeFlushesStalePendingFrames() {
         val (q, s) = newQueue()
         q.offer(frame(0, key)); q.offer(frame(1))
         q.offer(frame(2, key))
-        assertEquals(2L, q.poll(0)!!.frameSeq)
-        assertNull(q.poll(0))
+        assertEquals(2L, q.takeNow()!!.frameSeq)
+        assertNull(q.takeNow())
         assertEquals(2, s.snapshot().dropped)
     }
 
@@ -71,24 +71,24 @@ class FrameQueueTest {
         q.offer(frame(0, cfg)); q.offer(frame(1, cfg)); q.offer(frame(2, key))
         q.offer(frame(3))
         assertEquals(3, q.pending()) // 1 config + key + 1 P
-        assertEquals(1L, q.poll(0)!!.frameSeq)
+        assertEquals(1L, q.takeNow()!!.frameSeq)
     }
 
     @Test fun resetReplaysConfigAndRequestsStartup() {
         val (q, _) = newQueue()
-        q.offer(frame(0, cfg)); q.offer(frame(1, key)); q.poll(0); q.poll(0)
+        q.offer(frame(0, cfg)); q.offer(frame(1, key)); q.takeNow(); q.takeNow()
         assertEquals(KeyframeRequest.STARTUP, q.reset())
-        assertEquals(0L, q.poll(0)!!.frameSeq)
+        assertEquals(0L, q.takeNow()!!.frameSeq)
         assertTrue(q.isWaitingKeyframe())
         q.offer(frame(2))
-        assertNull(q.poll(0))
+        assertNull(q.takeNow())
     }
 
     @Test fun decoderErrorClosesGate() {
         val (q, _) = newQueue()
         q.offer(frame(0, key)); q.offer(frame(1))
         assertEquals(KeyframeRequest.DECODE_ERROR, q.onDecoderError())
-        assertNull(q.poll(0))
+        assertNull(q.takeNow())
         assertTrue(q.isWaitingKeyframe())
     }
 }

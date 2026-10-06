@@ -244,7 +244,6 @@ class FrameQueue(
                     }
                 }
             }
-            lock.notifyAll()
         }
         waiter?.let(LockSupport::unpark) // outside the lock: the woken consumer never blocks on it
         overflow?.let { o -> onOverflow?.invoke(o) }
@@ -253,8 +252,8 @@ class FrameQueue(
     }
 
     /**
-     * Next frame for the decoder, parking up to [timeoutNs] (T-077). Same frames as [poll], with a direct hand-off:
-     * [offer] unparks the waiting thread once it has left the lock, instead of `notifyAll` inside it. One consumer
+     * Next frame for the decoder, parking up to [timeoutNs] (T-077), with a direct hand-off:
+     * [offer] unparks the waiting thread once it has left the lock. One consumer
      * thread at a time. No lost wake-ups: the waiter is published before the queue is re-checked, and an unpark that
      * comes before the park leaves a permit. Null on timeout, or at once if the thread is interrupted (flag kept).
      *
@@ -360,12 +359,6 @@ class FrameQueue(
     fun revokeConsumer(gen: Int) {
         synchronized(lock) { if (owner == gen) owner = NO_CONSUMER }
         waiter?.let(LockSupport::unpark)
-    }
-
-    /** Next frame for the decoder, waiting up to [timeoutMs]. Null on timeout. */
-    fun poll(timeoutMs: Long): VideoFrame? = synchronized(lock) {
-        if (queue.isEmpty() && timeoutMs > 0) lock.wait(timeoutMs)
-        queue.removeFirstOrNull()
     }
 
     fun pending(): Int = synchronized(lock) { queue.size }
