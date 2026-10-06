@@ -44,14 +44,14 @@ final class VirtualDisplayTransferTests: XCTestCase {
 
     func testLogFieldsDefault() {
         XCTAssertEqual(T.logFields(.legacy, edr: EDRHeadroom(current: 1, potential: 1)),
-                       "requested=0 applied=0 edr_max=1.00 edr_potential=1.00")
+                       "requested=0 applied=0 edr_max=1.00 edr_potential=1.00 primaries=default wide_gamut=na")
         XCTAssertEqual(T.Outcome.legacy.logLevel, .info)
     }
 
     func testLogFieldsApplied() {
         let o = T.Outcome(requested: 1, applied: 1, fallback: nil)
         XCTAssertEqual(T.logFields(o, edr: EDRHeadroom(current: 1.5, potential: 4)),
-                       "requested=1 applied=1 edr_max=1.50 edr_potential=4.00")
+                       "requested=1 applied=1 edr_max=1.50 edr_potential=4.00 primaries=default wide_gamut=na")
         XCTAssertEqual(o.logLevel, .info)
     }
 
@@ -59,7 +59,7 @@ final class VirtualDisplayTransferTests: XCTestCase {
         for reason in [T.FallbackReason.selectorMissing, .modeNil, .settingsRejected] {
             let o = T.Outcome(requested: 1, applied: 0, fallback: reason)
             XCTAssertEqual(T.logFields(o, edr: nil),
-                           "requested=1 applied=0 reason=\(reason.rawValue) edr_max=na edr_potential=na")
+                           "requested=1 applied=0 reason=\(reason.rawValue) edr_max=na edr_potential=na primaries=default wide_gamut=na")
             XCTAssertEqual(o.logLevel, .warning)
         }
         XCTAssertEqual(T.FallbackReason.selectorMissing.rawValue, "selector_missing")
@@ -70,13 +70,13 @@ final class VirtualDisplayTransferTests: XCTestCase {
     func testLogFieldsInvalidKnob() {
         let o = T.Outcome(requested: 0, applied: 0, fallback: nil, invalidKnob: true)
         XCTAssertEqual(T.logFields(o, edr: EDRHeadroom(current: 1, potential: 1)),
-                       "requested=0 applied=0 reason=invalid_value edr_max=1.00 edr_potential=1.00")
+                       "requested=0 applied=0 reason=invalid_value edr_max=1.00 edr_potential=1.00 primaries=default wide_gamut=na")
         XCTAssertEqual(o.logLevel, .warning)
     }
 
     func testLogFieldsNonFiniteEdrIsNa() {
         XCTAssertEqual(T.logFields(.legacy, edr: EDRHeadroom(current: .nan, potential: .infinity)),
-                       "requested=0 applied=0 edr_max=na edr_potential=na")
+                       "requested=0 applied=0 edr_max=na edr_potential=na primaries=default wide_gamut=na")
     }
 
     func testLogFieldsAreOneTokenEach() {
