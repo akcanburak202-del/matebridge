@@ -1,7 +1,7 @@
 ---
 id: T-283
 title: Review — gpt-6-astra (high), 2026-10-04 değerlendirmesinden bu yana + riskli dört bölge
-status: in-progress
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-282]
@@ -39,5 +39,10 @@ Kullanıcı onayı (2026-10-06): Codex `gpt-6-astra`, `model_reasoning_effort=hi
 - Çıktı aynen `docs/reviews/2026-10-07/astra-review.md`'ye, üstüne triyaj. P1/P2 doğrulaması okuma ajanlarıyla (paralel), gerçekse kart.
 
 ## Handoff
+
+- Çalıştırma: `gpt-6-astra` high, `main` @ `0ff7b86b`, ilk denemede başarılı. Çıktı aynen `docs/reviews/2026-10-07/astra-review.md`, üstünde triyaj.
+- Doğrulanan yeni bulgular: T-288 (DAV PUT veri kaybı yolu, P1 → P2), T-289 (HDR çalışma anı hatası SDR'ye düşmüyor; yeniden deneme tek seferlik), T-290 (yalnız testte kullanılan üretim kodu).
+- Bilinen ve açık olanlar: T-200 (ekranı medya hatasında koruma), T-199 (girdi tazeliği), kodlayıcı kapanış süresi, T-147 provası.
+- 2026-10-04'ten kapananlar: T-218, T-219, T-220, oyun geometrisi kontrolü, 0029 düzeltmesi.
 
 ## Open questions
