@@ -100,15 +100,161 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
             #expect(out.first == .sendAck(F(n), .rejected))
             #expect(closes(out).map(\.1) == [.rejected])
             #expect(m.counts.total == 0)
+            _ = m.fileClosed(F(n))  // the transport flushed the REJECTED ack and closed
         }
-        // Capacity: total < max, counted past HELLO.
-        proven(&m, F(10))
-        _ = m.accepted(F(11), peer: peer, now: 0)
-        _ = m.hello(F(11), hello(), now: 0)
-        _ = m.accepted(F(12), peer: peer, now: 0)
-        let full = m.hello(F(12), hello(), now: 0)
-        #expect(full.first == .sendAck(F(12), .rejected))
+    }
+
+    @Test func totalLimitCountsEveryConnectionFromItsAccept() {
+        var m = makeMachine(max: 3)
+        proven(&m, F(1))
+        proven(&m, F(2))
+        proven(&m, F(3))
+        // `max` proven: a further socket is closed at the accept, it never waits for a HELLO.
+        #expect(closes(m.accepted(F(4), peer: peer, now: 0)).map(\.1) == [.capacity])
+        #expect(m.counts.total == 3)
+        // Awaiting-HELLO sockets count too: with 1 proven and 2 awaiting (max 3) the next accept is refused.
+        var n = makeMachine(max: 3)
+        proven(&n, F(1))
+        #expect(n.accepted(F(2), peer: peer, now: 0).isEmpty)
+        #expect(n.accepted(F(3), peer: peer, now: 0).isEmpty)
+        #expect(closes(n.accepted(F(4), peer: peer, now: 0)).map(\.1) == [.capacity])
+        #expect(n.counts.total == 3)
+        // The ones that were admitted can still say HELLO (the others < max).
+        #expect(n.hello(F(2), hello(), now: 0).contains(.startRecords(F(2), clientNonce: clientNonce, hostNonce: hostNonce)))
+        // A slot freed by a close is usable again.
+        _ = n.record(F(2), ping, now: 0)
+        _ = n.fileClosed(F(1))
+        #expect(n.accepted(F(5), peer: peer, now: 0).isEmpty)
+    }
+
+    @Test func helloIsRejectedWhenTheLimitWasLoweredBelowTheCurrentCount() {
+        var m = makeMachine(max: 4)
+        proven(&m, F(1))
+        proven(&m, F(2))
+        _ = m.accepted(F(3), peer: peer, now: 0)
+        _ = m.open(sessionID: 7, controlPeer: peer, max: 2, pool: 1)  // same session: only the limits change
+        let out = m.hello(F(3), hello(), now: 0)
+        #expect(out.first == .sendAck(F(3), .rejected))
+        #expect(closes(out).map(\.1) == [.rejected])
         #expect(m.counts.total == 2)
+    }
+
+    @Test func aLateHelloOrProofIsTooLateEvenBeforeTheTick() {
+        // Accept t=0, HELLO at 4 s (fine), the proof PING is processed at 6 s before any tick ran: closed.
+        var m = makeMachine()
+        _ = m.accepted(F(1), peer: peer, now: 0)
+        #expect(!m.hello(F(1), hello(), now: 4 * sec).isEmpty)
+        let late = m.record(F(1), ping, now: 6 * sec)
+        #expect(closes(late).map(\.1) == [.proofTimeout])
+        #expect(m.counts.total == 0 && m.counts.idle == 0)
+        // The same instant as the deadline is already too late (like the tick).
+        _ = m.accepted(F(2), peer: peer, now: 0)
+        _ = m.hello(F(2), hello(), now: 1)
+        #expect(closes(m.record(F(2), ping, now: 5 * sec)).map(\.1) == [.proofTimeout])
+        // Just before it the proof is fine.
+        _ = m.accepted(F(3), peer: peer, now: 0)
+        _ = m.hello(F(3), hello(), now: 1)
+        _ = m.record(F(3), ping, now: 5 * sec - 1)
+        #expect(m.counts.idle == 1)
+        // A HELLO after the 5 s closes without an answer.
+        _ = m.accepted(F(4), peer: peer, now: 10 * sec)
+        let lateHello = m.hello(F(4), hello(), now: 15 * sec)
+        #expect(closes(lateHello).map(\.1) == [.helloTimeout])
+        #expect(!lateHello.contains { if case .sendAck = $0 { true } else { false } })
+        #expect(!lateHello.contains { if case .startRecords = $0 { true } else { false } })
+        // A late proof does not take a waiting local connection either.
+        var w = makeMachine()
+        _ = w.localOpened(L(1), now: 0)
+        _ = w.accepted(F(1), peer: peer, now: 0)
+        _ = w.hello(F(1), hello(), now: 1)
+        #expect(binds(w.record(F(1), ping, now: 5 * sec)).isEmpty)
+    }
+
+    @Test func aClosingConnectionStillCountsTowardTheLimitUntilTheTransportConfirms() {
+        var m = makeMachine(max: 2)
+        proven(&m, F(1))
+        proven(&m, F(2))
+        // The tablet stops reading while Finder cancels: the host closes F(1) and F(2) but their flush hangs.
+        _ = m.protocolError(F(1))
+        _ = m.protocolError(F(2))
+        #expect(m.counts.total == 0 && m.counts.closing == 2)
+        #expect(closes(m.accepted(F(3), peer: peer, now: 0)).map(\.1) == [.capacity])  // no room: they are draining
+        // One confirms: a slot is free again.
+        #expect(m.fileClosed(F(1)).isEmpty)
+        #expect(m.counts.closing == 1)
+        #expect(m.accepted(F(4), peer: peer, now: 0).isEmpty)
+        #expect(closes(m.accepted(F(5), peer: peer, now: 0)).map(\.1) == [.capacity])
+        // A repeated report is harmless.
+        #expect(m.fileClosed(F(1)).isEmpty)
+        #expect(m.counts.closing == 1)
+    }
+
+    @Test func everyCloseReasonKeepsTheConnectionCountedWhileItDrains() {
+        var m = makeMachine(max: 20)
+        proven(&m, F(1))  // closed by the Finder side
+        proven(&m, F(2))  // auth failure
+        _ = m.localOpened(L(1), now: 0)
+        _ = m.localClosed(L(1))
+        _ = m.recordAuthFailed(F(2))
+        _ = m.accepted(F(5), peer: peer, now: 0)  // key derivation failed
+        _ = m.hello(F(5), hello(), now: 0)
+        _ = m.keysUnavailable(F(5))
+        _ = m.accepted(F(6), peer: peer, now: 0)  // rejected HELLO
+        _ = m.hello(F(6), hello(session: 1), now: 0)
+        #expect(m.counts.closing == 4)
+        // A timer close drains too: a connection that never said HELLO.
+        _ = m.accepted(F(7), peer: peer, now: 0)
+        let out = m.tick(now: 5 * sec)
+        // The four older ones had their 5 s of flushing (clock 0): aborted. F(7) was closed just now: draining.
+        #expect(out.filter { if case .abort = $0 { true } else { false } }.count == 4)
+        #expect(closes(out).map(\.0) == [F(7)])
+        #expect(m.counts.closing == 1)
+        #expect(m.counts.total == 0)
+    }
+
+    @Test func idleTimeoutDrainsAndIsCounted() {
+        var m = makeMachine()
+        proven(&m, F(1), now: 0)
+        let out = m.tick(now: 30 * sec)
+        #expect(closes(out).map(\.1) == [.idleTimeout])
+        #expect(m.counts.closing == 1 && m.counts.total == 0)
+    }
+
+    @Test func aDrainThatDoesNotFinishIsAbortedAfterTheTimeout() {
+        var m = makeMachine()
+        _ = m.accepted(F(1), peer: peer, now: 100)
+        _ = m.hello(F(1), hello(), now: 100)
+        let out = m.protocolError(F(1))  // at the machine's clock: 100
+        #expect(closes(out).map(\.1) == [.protocolError])
+        #expect(m.nextDeadline == 100 + 5 * sec)
+        #expect(m.tick(now: 100 + 5 * sec - 1).isEmpty)
+        #expect(m.counts.closing == 1)
+        let abort = m.tick(now: 100 + 5 * sec)
+        #expect(abort.contains(.abort(F(1))))
+        #expect(m.counts.closing == 0)  // the hard close is immediate: it no longer counts
+        #expect(m.nextDeadline == nil)
+        #expect(!m.tick(now: 200 * sec).contains(.abort(F(1))))  // once only
+        #expect(m.fileClosed(F(1)).isEmpty)  // the late report changes nothing
+    }
+
+    @Test func aConfirmedCloseIsNeverAborted() {
+        var m = makeMachine()
+        proven(&m, F(1))
+        _ = m.localOpened(L(1), now: 0)
+        _ = m.localClosed(L(1))
+        _ = m.fileClosed(F(1))
+        #expect(m.tick(now: 60 * sec).isEmpty)
+        #expect(m.nextDeadline == nil)
+    }
+
+    @Test func aRefusalAtTheAcceptDoesNotOccupyAClosingSlot() {
+        var m = makeMachine(max: 1)
+        proven(&m, F(1))
+        _ = m.accepted(F(2), peer: "10.0.0.9", now: 0)  // wrong peer: nothing queued
+        _ = m.accepted(F(3), peer: peer, now: 0)  // capacity
+        #expect(m.counts.closing == 0)
+        _ = m.fileClosed(F(1))
+        #expect(m.accepted(F(4), peer: peer, now: 0).isEmpty)
     }
 
     @Test func rejectedAckCarriesAZeroNonce() {
@@ -349,6 +495,8 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         #expect(Set(closes(out).map(\.0)) == [F(1), F(2), F(3)])
         #expect(closes(out).allSatisfy { $0.1 == .sessionEnded })
         #expect(Set(closedLocals(out).map(\.0)) == [L(1), L(2), L(3)])
+        #expect(m.counts.closing == 3)  // flushing, until the transport reports them closed
+        for id in [F(1), F(2), F(3)] { _ = m.fileClosed(id) }
         #expect(m.counts == FilesPoolCounts())
         #expect(!m.isOpen)
         #expect(m.tick(now: 100 * sec).isEmpty)
