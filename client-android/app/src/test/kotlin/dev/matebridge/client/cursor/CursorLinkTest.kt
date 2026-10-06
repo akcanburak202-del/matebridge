@@ -127,4 +127,58 @@ class CursorLinkTest {
         assertTrue(r.link.slot.latest() == null)
         assertFalse(r.link.lastStateMs != 0L)
     }
+
+    @Test fun onlyAcceptedStatesKeepTheTimeoutAway() {
+        val r = Rig()
+        r.link.beginSession(1)
+        r.link.enable(true)
+        r.now = 2_000
+        r.link.onMessage(state(50), 1)
+        assertEquals(2_000L, r.link.lastStateMs)
+        r.now = 3_000
+        r.link.onMessage(state(50), 1) // a duplicate
+        r.link.onMessage(state(49), 1) // older
+        assertEquals(2_000L, r.link.lastStateMs) // a frozen cursor keeps timing out
+    }
+
+    @Test fun aHandlerOfTheOldConnectionCannotPoisonTheNewSession() {
+        // Thread A is inside onMessage for generation 1 (held in the redraw callback) while the connection switches to 2.
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var first = true
+        val frames = ArrayList<CursorFrame?>()
+        val shapes = CursorShapes<String>(executor = Executor { it.run() }, decode = { "bmp" })
+        val link = CursorLink(shapes, CursorStats(), { 1L }) { f ->
+            frames += f
+            if (f != null && first) { first = false; entered.countDown(); release.await() }
+        }
+        link.beginSession(1)
+        link.enable(true)
+        val a = Thread { link.onMessage(state(4_000_000_000L), 1) }
+        a.start()
+        assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val switched = java.util.concurrent.atomic.AtomicBoolean(false)
+        val b = Thread { link.beginSession(2); link.enable(true); switched.set(true) }
+        b.start()
+        Thread.sleep(100)
+        assertFalse("the switch must wait for the handler that is already accepting", switched.get())
+        release.countDown()
+        a.join(2_000); b.join(2_000)
+        assertTrue(switched.get())
+        assertNull(link.slot.latest()) // the old seq did not survive the switch
+        link.onMessage(state(1), 2) // the new session starts at 1
+        assertEquals(1L, link.slot.latest()!!.seq)
+        assertTrue(link.lastStateMs >= 0)
+    }
+
+    @Test fun shapeIdZeroIsAcceptedAsAStateAndHasNoShapeSoTheArrowIsDrawn() {
+        val r = Rig()
+        r.link.beginSession(1)
+        r.link.enable(true)
+        r.link.onMessage(CursorShape(0, 144, 288, 64, 144, 1, Bytes(png())), 1) // not a shape
+        r.link.onMessage(state(1, shape = 0), 1) // "the host could not read the shape"
+        assertEquals(0L, r.link.slot.latest()!!.shapeId)
+        assertNull(r.shapes.lookup(0)) // unknown id: the layer draws the built-in arrow
+        assertEquals(0, r.shapes.size)
+    }
 }
