@@ -1,7 +1,7 @@
 ---
 id: T-273
 title: Prob — USB tethering (NCM) adb ile başlatılabiliyor mu, uygulama Mac'e bu yoldan ulaşabiliyor mu
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

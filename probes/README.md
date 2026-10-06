@@ -13,3 +13,4 @@ Aşama 0 deneyleri. Her probe bağımsız, küçük ve tek bir soruyu cevaplar. 
 | `decoder-concurrency-probe/` (Swift + Android) | Tabletin HEVC çözücüsü eş zamanlı oturumlarla (1/2/3, tam/yarım kare) toplam hızı artırıyor mu? 10-bit (SDR/HDR PQ) ve 60–150 Mbps'te kapasite/gecikme nasıl? | T-248, T-249 |
 | `yuv444-probe/` (Swift; tablet yarısı `android/` T-254) | 4:4:4 görüntüyü AVC444v2 düzeniyle iki 4:2:0 HEVC akışında taşımak Mac bütçesine sığar mı? Metal paketleyici süresi, iki VT oturumu, yardımcı bit maliyeti, geri kurulan renk kalitesi, etiket yeniden yazımında bit-tamlık; tablet için v2 çift klipler. | T-255 |
 | `cursor-probe/` (Swift) | Yerel imleç fikri: başka uygulamaların imleç şekli, hotspot, gizli durumu ve konumu herkese açık API ile okunabiliyor mu, yoklama maliyeti ne? | T-271 |
+| `usb-tether-probe/` (Android dex + sh) | USB tethering (NCM) adb kabuğuyla başlatılıp uygulama Mac'e adb tünelsiz ulaşabilir mi? (Sonuç: hayır, MRDI-W09) | T-273 |
