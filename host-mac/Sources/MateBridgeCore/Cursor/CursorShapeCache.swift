@@ -32,7 +32,53 @@ public struct CursorShapeCache: Sendable {
         return false
     }
 
+    /// The tablet is not assumed to have `id` after all (the image could not be sent).
+    public mutating func forget(_ id: UInt32) { ids.removeAll { $0 == id } }
+
     public mutating func removeAll() { ids.removeAll() }
+}
+
+/// The encoded shapes the host holds for sending: at most `capacity` (48, more than the 32 the tablet is assumed to
+/// hold), the least recently used pushed out first. Written by the tracker when it builds a shape and read when the unit that needs it is
+/// written; the owner holds a lock around it.
+public struct CursorShapeStore: Sendable {
+    public static let defaultCapacity = 48
+
+    public let capacity: Int
+    private var shapes: [UInt32: CursorShape] = [:]
+    /// Oldest use first.
+    private var order: [UInt32] = []
+
+    public init(capacity: Int = CursorShapeStore.defaultCapacity) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    public var count: Int { shapes.count }
+
+    public mutating func put(_ shape: CursorShape) {
+        order.removeAll { $0 == shape.shapeID }
+        order.append(shape.shapeID)
+        shapes[shape.shapeID] = shape
+        while order.count > capacity { shapes[order.removeFirst()] = nil }
+    }
+
+    /// The shape, counted as used. nil when it was never stored or has been pushed out.
+    public mutating func use(_ id: UInt32) -> CursorShape? {
+        guard let shape = shapes[id] else { return nil }
+        if let i = order.firstIndex(of: id) {
+            order.remove(at: i)
+            order.append(id)
+        }
+        return shape
+    }
+
+    public func contains(_ id: UInt32) -> Bool { shapes[id] != nil }
+
+    public mutating func removeAll() {
+        shapes.removeAll()
+        order.removeAll()
+    }
 }
 
 /// The host side of "at most one cursor unit waiting" (PROTOCOL.md section 5): a unit (a state and, if needed, its

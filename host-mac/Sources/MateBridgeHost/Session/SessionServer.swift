@@ -242,6 +242,9 @@ public final class SessionServer: @unchecked Sendable {
     /// `bitrate_kbps` of the last `STREAM_CONFIG` sent on each control connection (T-268), reported when it becomes active.
     private var streamBitrates: [ConnectionID: UInt32] = [:]
     private let flushGroup = DispatchGroup()
+    /// The local cursor flow (decision 0036): samples the Mac's cursor and tells the tablet; writes through
+    /// `sendCursor` on this queue. Set at the end of `init` (its link needs `self`).
+    private var cursor: CursorService!
 
     static let maxInflightBytes = 256 * 1024
     /// Sealed size of one 10 ms AUDIO_FRAME: record length (4) + type and tag (17) + fixed part (28) + 1920 PCM bytes.
@@ -306,6 +309,11 @@ public final class SessionServer: @unchecked Sendable {
         // T-171: PING the active session every 500 ms; its PONG feeds the input-age clock offset (diagnostics only).
         configuration.hostPingIntervalUs = SessionMachine.Configuration.defaultHostPingIntervalUs
         self.machine = SessionMachine(configuration: configuration, approvedDevices: Set(known.keys))
+        self.cursor = CursorService(link: .init(
+            onSessionQueue: { [weak self] work in self?.queue.async(execute: work) },
+            send: { [weak self] sessionID, messages, done in
+                self?.sendCursor(sessionID: sessionID, messages, done: done) ?? false
+            }))
     }
 
     /// Native-resolution H.264 config (HiDPI 2x points). T-011 replaces this with the real virtual display values.
@@ -793,6 +801,18 @@ public final class SessionServer: @unchecked Sendable {
         return !socket.isWritableForNewRecord
     }
 
+    /// The local cursor (decision 0036) after the message was delivered, so an input message has been injected when
+    /// the cursor is sampled: `CURSOR_PREFS` goes to the cursor flow, a message that moves the cursor makes it sample.
+    private func routeCursor(_ message: Message) {
+        switch message {
+        case .cursorPrefs(let prefs):
+            cursor.prefs(sessionID: currentSessionID, enabled: prefs.enabled)
+        case .pen, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture:
+            cursor.noteInjected()
+        default: break
+        }
+    }
+
     /// AUDIO_PREFS handling: the machine has already seen the message (heartbeat). It reaches the audio streamer only
     /// from the active session's encrypted control connection; anything earlier (pending, proving) is ignored.
     private func routeAudioPrefs(_ id: ConnectionID, _ prefs: AudioPrefs) {
@@ -1210,8 +1230,11 @@ public final class SessionServer: @unchecked Sendable {
     }
 
     /// Encodes plain before the handshake answer, as a sealed record after it.
-    private func sendControl(_ id: ConnectionID, _ message: Message) {
-        guard controlConnections[id] != nil else { return }
+    private func sendControl(_ id: ConnectionID, _ message: Message, done: (@Sendable () -> Void)? = nil) {
+        guard controlConnections[id] != nil else {
+            done?()
+            return
+        }
         let bytes: [UInt8]
         do {
             if sealers[id] != nil {
@@ -1224,18 +1247,25 @@ public final class SessionServer: @unchecked Sendable {
                 logger.log(.warning, "counter_exhausted", sessionID: currentSessionID, generation: currentConfigID)
                 transportClosed(id, video: false)
             }
+            done?()
             return
         }
-        sendControlBytes(id, bytes)
+        sendControlBytes(id, bytes, done: done)
     }
 
-    private func sendControlBytes(_ id: ConnectionID, _ bytes: [UInt8]) {
-        guard let c = controlConnections[id] else { return }
+    /// `done` runs on `queue` once the record was entirely handed to the kernel (or could not be: the connection is
+    /// closing); never inside this call, except when nothing was queued at all.
+    private func sendControlBytes(_ id: ConnectionID, _ bytes: [UInt8], done: (@Sendable () -> Void)? = nil) {
+        guard let c = controlConnections[id] else {
+            done?()
+            return
+        }
         let pending = inflightBytes[id, default: 0] + bytes.count
         guard pending <= Self.maxInflightBytes else {
             // The peer is not reading. Drop the connection: input is released via connectionClosed.
             logger.log(.warning, "send_backlog", sessionID: currentSessionID, generation: currentConfigID)
             transportClosed(id, video: false)
+            done?()
             return
         }
         inflightBytes[id] = pending
@@ -1243,15 +1273,29 @@ public final class SessionServer: @unchecked Sendable {
         let count = bytes.count
         let queued = c.write(bytes) { [weak self] _ in
             self?.queue.async { [weak self] in
-                guard let self, let n = inflightBytes[id] else { return }
-                inflightBytes[id] = max(0, n - count)
+                guard let self else { return }
+                if let n = inflightBytes[id] { inflightBytes[id] = max(0, n - count) }
+                done?()
             }
         }
         if !queued {  // closed meanwhile (onClosed is on its way) or over the bound: input is released either way
             logger.log(.warning, "send_backlog", sessionID: currentSessionID, generation: currentConfigID,
                        fields: "reason=write_refused")
             transportClosed(id, video: false)
+            done?()
         }
+    }
+
+    /// Session queue: `CURSOR_SHAPE` and `CURSOR_STATE` of the local cursor flow, in order, to the active control
+    /// connection of `sessionID` (decision 0036). `done` runs after the last one was entirely written (PROTOCOL.md
+    /// section 5: the next unit starts then). False, without sending anything, when that is not the live session.
+    private func sendCursor(sessionID: UInt32, _ messages: [Message], done: @escaping @Sendable () -> Void) -> Bool {
+        guard !stopped, sessionID != 0, sessionID == currentSessionID, let id = activeControl,
+              sealers[id] != nil else { return false }
+        for (index, message) in messages.enumerated() {
+            sendControl(id, message, done: index == messages.count - 1 ? done : nil)
+        }
+        return true
     }
 
     // MARK: Applying machine actions
@@ -1292,6 +1336,7 @@ public final class SessionServer: @unchecked Sendable {
                 handlers.releaseInput(cause)
             case .deliver(_, let message):
                 handlers.deliver(message)
+                routeCursor(message)
             case .requestApproval(let id, let device, let name, let code, let replaced):
                 pendingApproval = id
                 let request = ApprovalRequest(id: id.raw, deviceName: name, code: code.digits, replaced: replaced,
@@ -1363,12 +1408,14 @@ public final class SessionServer: @unchecked Sendable {
                 currentConfigID = configID
                 startTcpInfoSampling(id, role: .control)
                 if let kbps = streamBitrates[id] { handlers.streamBitrate(kbps) }
+                cursor.sessionStarted(sessionID: sid, supported: hello.capabilities.contains(.localCursor))
                 handlers.sessionStarted(sid, configID, hello, activeTransport)
             case .sessionEnded(let id):
                 if activeControl == id { activeControl = nil }
                 tcpInfoSamplers[id] = nil
                 currentSessionID = 0
                 currentConfigID = 0
+                cursor.sessionEnded()  // the cursor goes back into the video
                 handlers.sessionEnded()
             case .videoAttached(let vid, _, let sid, let configID, let keys):
                 if let socket = videoConnections[vid] {

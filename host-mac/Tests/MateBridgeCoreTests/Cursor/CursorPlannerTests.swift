@@ -215,6 +215,50 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
     }
 }
 
+@Suite struct CursorShapeStoreTests {
+    private func shape(_ id: UInt32) -> CursorShape {
+        CursorShape(shapeID: id, widthPt16: 16, heightPt16: 16, hotXPt16: 0, hotYPt16: 0, data: [UInt8(id & 0xff)])
+    }
+
+    @Test func CURSTORE1_putAndUse() {
+        var s = CursorShapeStore()
+        s.put(shape(5))
+        #expect(s.use(5)?.data == [5])
+        #expect(s.use(6) == nil)
+    }
+
+    @Test func CURSTORE2_theLeastRecentlyUsedIsPushedOutPastTheCapacity() {
+        var s = CursorShapeStore(capacity: 3)
+        s.put(shape(1)); s.put(shape(2)); s.put(shape(3))
+        _ = s.use(1)  // 2 is now the oldest
+        s.put(shape(4))
+        #expect(s.count == 3)
+        #expect(!s.contains(2) && s.contains(1) && s.contains(3) && s.contains(4))
+    }
+
+    @Test func CURSTORE3_aReplacedShapeKeepsOneEntry() {
+        var s = CursorShapeStore(capacity: 3)
+        s.put(shape(1))
+        s.put(CursorShape(shapeID: 1, widthPt16: 16, heightPt16: 16, hotXPt16: 0, hotYPt16: 0, data: [9]))
+        #expect(s.count == 1)
+        #expect(s.use(1)?.data == [9])
+    }
+
+    @Test func CURSTORE4_removeAllEmpties() {
+        var s = CursorShapeStore()
+        s.put(shape(1))
+        s.removeAll()
+        #expect(s.count == 0 && !s.contains(1))
+    }
+
+    @Test func CURCACHE6_forgetMakesTheNextUseAMiss() {
+        var c = CursorShapeCache()
+        _ = c.use(4)
+        c.forget(4)
+        #expect(c.use(4) == false)
+    }
+}
+
 @Suite struct CursorOutboxTests {
     @Test func CURBOX1_theFirstUnitIsTakenImmediately() {
         var o = CursorOutbox<Int>()

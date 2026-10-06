@@ -8,6 +8,8 @@ import ScreenCaptureKit
 public enum ScreenCaptureError: Error, CustomStringConvertible {
     case permissionDenied
     case displayNotFound(CGDirectDisplayID)
+    /// `setShowsCursor` with no running stream.
+    case notRunning
 
     public var description: String {
         switch self {
@@ -15,6 +17,8 @@ public enum ScreenCaptureError: Error, CustomStringConvertible {
             return "Screen Recording permission is not granted. Enable MateBridge in System Settings > Privacy & Security > Screen & System Audio Recording, then restart it."
         case .displayNotFound(let id):
             return "display \(id) is not visible to ScreenCaptureKit"
+        case .notRunning:
+            return "the capture stream is not running"
         }
     }
 }
@@ -32,6 +36,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let onStop: @Sendable (Error) -> Void
     private let meter: CadenceMeter?
     private var stream: SCStream?
+    /// The configuration the running stream has now (decision 0036: `setShowsCursor` changes only `showsCursor`).
+    /// Guarded by `liveLock`, together with `stream`'s use there.
+    private let liveLock = NSLock()
+    private var liveConfig: SCStreamConfiguration?
     private let sampleQueue = DispatchQueue(label: "matebridge.capture", qos: .userInteractive)
 
     init(meter: CadenceMeter? = nil, handler: @escaping Handler, onStop: @escaping @Sendable (Error) -> Void = { _ in }) {
@@ -77,18 +85,41 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         // `FrameGate` keeps the send rate at the stream fps.
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps * 2))
         cfg.queueDepth = ScreenCapture.queueDepth  // > encoder in-flight limit + the retained last buffer
-        cfg.showsCursor = true
+        // Decision 0036: the cursor is out of the video while the tablet draws it (`VideoCursorSwitch` holds that wish
+        // across capture restarts); today's behavior, cursor in the video, otherwise.
+        cfg.showsCursor = VideoCursorSwitch.shared.showsCursor
         let s = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                          configuration: cfg, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
         try await s.startCapture()
-        stream = s
+        liveLock.withLock {
+            stream = s
+            liveConfig = cfg
+        }
+        VideoCursorSwitch.shared.attach(self)
     }
 
     func stop() async {
-        let s = stream
-        stream = nil
+        VideoCursorSwitch.shared.detach(self)
+        let s = liveLock.withLock { () -> SCStream? in
+            defer { stream = nil; liveConfig = nil }
+            return stream
+        }
         try? await s?.stopCapture()
+    }
+
+    /// Whether the running stream's configuration draws the cursor into the frames (true before it runs).
+    var showsCursorNow: Bool { liveLock.withLock { liveConfig?.showsCursor ?? true } }
+
+    /// Changes `showsCursor` of the running stream without rebuilding it (`SCStream.updateConfiguration`, decision
+    /// 0036). Throws when no stream runs or ScreenCaptureKit refuses; the old setting then stays.
+    func setShowsCursor(_ shows: Bool) async throws {
+        let (s, current) = liveLock.withLock { (stream, liveConfig) }
+        guard let s, let current else { throw ScreenCaptureError.notRunning }
+        guard let next = current.copy() as? SCStreamConfiguration else { throw ScreenCaptureError.notRunning }
+        next.showsCursor = shows
+        try await s.updateConfiguration(next)
+        liveLock.withLock { if stream === s { liveConfig = next } }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) { onStop(error) }
