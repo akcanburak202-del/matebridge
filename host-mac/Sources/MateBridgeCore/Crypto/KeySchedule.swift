@@ -13,6 +13,13 @@ public struct VideoKeys: Equatable, Sendable {
     public let h2c: SecretBytes
 }
 
+/// Keys of one Wi-Fi file connection (decision 0035), derived from the session `prk` and that connection's two
+/// fresh nonces.
+public struct FilesKeys: Equatable, Sendable {
+    public let c2h: SecretBytes
+    public let h2c: SecretBytes
+}
+
 /// The per-connection ephemeral P-256 key pair.
 public struct EphemeralKeyPair: @unchecked Sendable {
     private let key: P256.KeyAgreement.PrivateKey
@@ -104,7 +111,19 @@ public struct SessionKeySchedule: Sendable {
             h2c: SecretBytes(KDF.expand(prk: prk, info: "MB1 video h2c", extra: nonce, count: Self.keySize)))
     }
 
-    /// Zeroes the `prk`. Video keys can no longer be derived; already handed-out keys are unaffected.
+    /// Keys for one file connection: `Expand(prk, "MB1 files c2h|h2c" || client_files_nonce || host_files_nonce, 32)`
+    /// (PROTOCOL.md 9). nil after `wipe()` or when a nonce is not 16 bytes. Unlike video there is no nonce set: both
+    /// nonces are fresh per connection, so a replayed connection fails the tag check in both directions.
+    public func filesKeys(clientNonce: [UInt8], hostNonce: [UInt8]) -> FilesKeys? {
+        guard clientNonce.count == ProtocolConstants.nonceSize, hostNonce.count == ProtocolConstants.nonceSize,
+              let prk = secret.bytes else { return nil }
+        let extra = clientNonce + hostNonce
+        return FilesKeys(
+            c2h: SecretBytes(KDF.expand(prk: prk, info: "MB1 files c2h", extra: extra, count: Self.keySize)),
+            h2c: SecretBytes(KDF.expand(prk: prk, info: "MB1 files h2c", extra: extra, count: Self.keySize)))
+    }
+
+    /// Zeroes the `prk`. Video and file keys can no longer be derived; already handed-out keys are unaffected.
     public func wipe() { secret.wipe() }
 
     var prkBytes: [UInt8]? { secret.bytes }

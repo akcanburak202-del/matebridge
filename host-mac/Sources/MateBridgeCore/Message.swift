@@ -9,6 +9,7 @@ public enum Message: Equatable, Sendable {
     case displayRate(DisplayRate)
     case settingsOpen(SettingsOpen)
     case filesInfo(FilesInfo)
+    case filesNet(FilesNet)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -27,6 +28,9 @@ public enum Message: Equatable, Sendable {
     case audioFrame(AudioFrame)
     case videoHello(VideoHello)
     case videoFrame(VideoFrame)
+    case filesHello(FilesHello)
+    case filesHelloAck(FilesHelloAck)
+    case filesData(FilesData)
 
     public var type: MessageType {
         switch self {
@@ -39,6 +43,7 @@ public enum Message: Equatable, Sendable {
         case .displayRate: .displayRate
         case .settingsOpen: .settingsOpen
         case .filesInfo: .filesInfo
+        case .filesNet: .filesNet
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -56,6 +61,9 @@ public enum Message: Equatable, Sendable {
         case .audioFrame: .audioFrame
         case .videoHello: .videoHello
         case .videoFrame: .videoFrame
+        case .filesHello: .filesHello
+        case .filesHelloAck: .filesHelloAck
+        case .filesData: .filesData
         }
     }
 
@@ -72,6 +80,7 @@ public enum Message: Equatable, Sendable {
         case .displayRate(let m): m.write(&w)
         case .settingsOpen(let m): m.write(&w)
         case .filesInfo(let m): m.write(&w)
+        case .filesNet(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -108,6 +117,9 @@ public enum Message: Equatable, Sendable {
             w.u32(m.sessionID)
             w.raw(m.videoNonce)
         case .videoFrame(let m): m.write(&w)
+        case .filesHello(let m): m.write(&w)
+        case .filesHelloAck(let m): m.write(&w)
+        case .filesData(let m): m.write(&w)
         }
         return w.bytes
     }
@@ -116,6 +128,7 @@ public enum Message: Equatable, Sendable {
     public var connection: FrameDecoder.Connection {
         switch self {
         case .videoHello, .videoFrame: .video
+        case .filesHello, .filesHelloAck, .filesData: .files
         default: .control
         }
     }
@@ -123,7 +136,7 @@ public enum Message: Equatable, Sendable {
     /// Complete frame: type byte, u32 LE length, payload.
     /// Throws instead of producing a frame the peer would reject: payload over the connection limit,
     /// PEN count outside 1...64, AUDIO_FRAME frame_count outside 1...960 or data over 65535 bytes,
-    /// or a VIDEO_FRAME that is not a single whole fragment.
+    /// a VIDEO_FRAME that is not a single whole fragment, or a FILES_DATA with 0 or more than 65 534 bytes.
     public func encode() throws -> [UInt8] {
         let payload = try checkedPayload()
         var w = ByteWriter()
@@ -154,6 +167,10 @@ public enum Message: Equatable, Sendable {
             guard m.fragmentIndex == 0, m.fragmentCount == 1, Int(m.frameSize) == m.data.count else {
                 throw ProtocolError.invalidField("video fragment")
             }
+        case .filesData(let m):
+            guard (1...ProtocolConstants.filesDataMax).contains(m.data.count) else {
+                throw ProtocolError.invalidField("size")
+            }
         default: break
         }
         let payload = encodePayload()
@@ -182,6 +199,7 @@ public enum Message: Equatable, Sendable {
         case .displayRate: return .displayRate(try DisplayRate.read(&r))
         case .settingsOpen: return .settingsOpen(try SettingsOpen.read(&r))
         case .filesInfo: return .filesInfo(try FilesInfo.read(&r))
+        case .filesNet: return .filesNet(try FilesNet.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))
@@ -209,6 +227,9 @@ public enum Message: Equatable, Sendable {
                                           sessionID: try r.u32(),
                                           videoNonce: try r.raw(ProtocolConstants.nonceSize)))
         case .videoFrame: return .videoFrame(try VideoFrame.read(&r))
+        case .filesHello: return .filesHello(try FilesHello.read(&r))
+        case .filesHelloAck: return .filesHelloAck(try FilesHelloAck.read(&r))
+        case .filesData: return .filesData(try FilesData.read(&r))
         }
     }
 }

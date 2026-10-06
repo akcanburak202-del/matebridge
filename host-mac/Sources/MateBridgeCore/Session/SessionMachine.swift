@@ -473,6 +473,27 @@ public struct SessionMachine: Sendable {
         return actions
     }
 
+    /// Session id of the live (ACCEPTED) session, if any. A file connection is accepted only for this id.
+    public var activeSessionID: UInt32? {
+        for conn in connections.values {
+            if case .active(let s) = conn.phase { return s.id }
+        }
+        return nil
+    }
+
+    /// Keys of one Wi-Fi file connection (decision 0035) from the `prk` of the active session `sessionID`. The narrow
+    /// query the file listener needs after a valid `FILES_HELLO`: nil when that session is not the active one any
+    /// more (it ended, was superseded, its `prk` was wiped) or a nonce is malformed. The caller then closes the
+    /// connection. Nothing is remembered: both nonces are fresh per connection (PROTOCOL.md 9).
+    public func filesKeys(sessionID: UInt32, clientNonce: [UInt8], hostNonce: [UInt8]) -> FilesKeys? {
+        for conn in connections.values {
+            if case .active(let s) = conn.phase, s.id == sessionID {
+                return s.schedule.filesKeys(clientNonce: clientNonce, hostNonce: hostNonce)
+            }
+        }
+        return nil
+    }
+
     /// Sends `message` on the control connection of the active session `sessionID` (host-initiated messages such as
     /// CLIPBOARD). Nothing happens for an unknown or pending session.
     public func send(sessionID: UInt32, _ message: Message) -> [SessionAction] {
@@ -849,7 +870,8 @@ public struct SessionMachine: Sendable {
             return []  // decoded, no audio behaviour yet (T-094): ignored, as before when 0x30 was unknown
         case .pong(let pong):
             return isActive ? hostPong(id, pong) : []  // T-171: only answers to the host's own PINGs
-        case .helloAck, .streamConfig, .settingsOpen, .audioConfig, .audioFrame, .videoHello, .videoFrame:
+        case .helloAck, .streamConfig, .settingsOpen, .audioConfig, .audioFrame, .videoHello, .videoFrame,
+             .filesNet, .filesHello, .filesHelloAck, .filesData:
             return []  // wrong direction or connection: ignored
         }
     }
