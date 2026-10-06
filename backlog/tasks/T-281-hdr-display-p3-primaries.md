@@ -1,7 +1,7 @@
 ---
 id: T-281
 title: Host — HDR sanal ekranı Display P3 primerleriyle kur (Safari/YouTube HDR)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -66,3 +66,5 @@ Karar 0032 güncellemesi (2026-10-06): HDR10 için `tf=1` ile kurulan sanal ekra
 
 - `StreamCoordinator.swift` düzenlemesi `files:` dışındaydı (yukarıda gerekçe); kabul edilmezse `wide_gamut` okuması `VideoPipeline`/`StreamCoordinator` dışında bir yere taşınmalı (mümkün değil: log noktası orası).
 - `docs/LOGGING.md` güncellemesi orkestratörde.
+
+- Orkestratör: `StreamCoordinator.swift` (`logDisplayTransfer`, 2 satır) kapsam dışı düzenlemesi kabul edildi; LOGGING.md güncellendi.

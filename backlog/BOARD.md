@@ -298,3 +298,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-278](tasks/T-278-cursor-prediction.md) | Client — yerel imleç v2: tablette konum tahmini (göreli hareket + mutlak kalem/dokunma), host durumuyla uzlaştırma | 6 | android-client-dev | [T-276] |
 | [T-279](tasks/T-279-audio-silence-gate.md) | Host — tamamen sıfır sesi gönderme (sessizlik kapısı) | 6 | mac-host-dev | [] |
 | [T-280](tasks/T-280-hdr-daily-mode.md) | Client — HDR anahtarı Günlük modunda da (mod başına ayrı ayar) | 6 | android-client-dev | [] |
+| [T-281](tasks/T-281-hdr-display-p3-primaries.md) | Host — HDR sanal ekranı Display P3 primerleriyle kur (Safari/YouTube HDR) | 6 | mac-host-dev | [] |
