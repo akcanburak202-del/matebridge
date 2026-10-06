@@ -109,9 +109,9 @@ data class DevKnobs(
     val decoderWait: DecoderWait = DecoderWait.POLL,
     /**
      * `--es aead_path legacy|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
-     * [AeadPath.LEGACY] (the T-285 behaviour).
+     * [AeadPath.DEFAULT] (`direct`); `legacy` (the T-285 behaviour) is a fallback that will be removed later.
      */
-    val aeadPath: AeadPath = AeadPath.LEGACY,
+    val aeadPath: AeadPath = AeadPath.DEFAULT,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */

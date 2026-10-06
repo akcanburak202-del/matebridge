@@ -12,29 +12,33 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|direct` (needs `--ez dev true`).
+ * [DIRECT] is the default since the Game 60 device A/B (GC 11.2% -> 2.8%, minor faults 5,038 -> 2,362/s, no AUTH_FAILED).
+ * [LEGACY] stays selectable for one cycle as a fallback and will be removed later (with this knob).
  * Wire format, nonce, AAD, per-record `init` and error behaviour are identical in both modes.
  *
- * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind [DIRECT] (source read, not yet measured on device):
+ * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind [DIRECT] (source read; measured on device in the T-292 A/B):
  * `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), JNI-copies it again, and
  * `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two direct
  * buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation. (The per-`init`
  * SPI re-creation stays: a `Cipher` with a fixed SPI never calls `engineInit`, so it cannot be reused safely.)
  */
 enum class AeadPath(val id: String) {
-    /** The T-285 behaviour: `Cipher.doFinal(byte[])`. Default until the device A/B says otherwise. */
+    /** The T-285 behaviour: `Cipher.doFinal(byte[])`. Fallback only; will be removed after one cycle without a regression. */
     LEGACY("legacy"),
 
-    /** Direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
+    /** Default: direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
     DIRECT("direct");
 
     companion object {
         val IDS: Set<String> = values().map { it.id }.toSet()
 
-        /** Unknown or absent = [LEGACY]. */
+        /** Unknown or absent = [DEFAULT] ([DIRECT]). */
         fun parse(v: String?): AeadPath {
             val t = v?.trim()?.lowercase(java.util.Locale.ROOT)
-            return values().firstOrNull { it.id == t } ?: LEGACY
+            return values().firstOrNull { it.id == t } ?: DEFAULT
         }
+
+        val DEFAULT: AeadPath = DIRECT
     }
 }
 
@@ -75,7 +79,7 @@ object Records {
     }
 
     /** Path new [RecordOpener]s use unless told otherwise; set once at launch from the `aead_path` dev knob (T-292). */
-    @Volatile var aeadPath: AeadPath = AeadPath.LEGACY
+    @Volatile var aeadPath: AeadPath = AeadPath.DEFAULT
 
     /**
      * T-077 diagnostics: when true every [RecordOpener] open stamps [OpenStamps.current] of the calling thread (the

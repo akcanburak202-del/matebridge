@@ -95,6 +95,16 @@ atan şifre kuklasıyla** iki yol da AUTH_FAILED verir ve decoder terminal kalı
 - Güvenlik: kripto biçimi/nonce/AAD aynı; `RecordSealer` dokunulmadı. Güvenlik koduna dokunduğu için codex incelemesi (tekrar) önerilir,
   özellikle `doFinalDirect` tampon yaşam döngüsü ve yeni `RuntimeException` yakalama.
 
+## Handoff — varsayılan `direct` (takip, dal `task/T-292-direct-default`)
+
+Cihaz A/B geçti (docs/NOTES.md, "2026-10-07 ~00:30–01:05"). Oyun 60, `aead_path=direct`: GC %11,2 -> %2,8; minor fault 5 038 -> 2 362/s;
+AUTH_FAILED yok; gecikme 3 kolda da değişmedi (10 fps). Karar: `direct` benimsendi.
+- `AeadPath.DEFAULT = DIRECT`; `Records.aeadPath`, `DevKnobs.aeadPath` ve `AeadPath.parse` (yok/bilinmeyen) bunu kullanır.
+- `legacy` `--es aead_path legacy` ile bir döngü boyunca geri dönüş olarak seçilebilir; kod yorumunda "daha sonra kaldırılacak" yazar.
+- Güncellenen testler: `RecordAeadPathTest` (varsayılan DIRECT, `legacy` ayrıştırma, opener), `DevKnobsTest` (varsayılan DIRECT, `legacy` knob).
+- Cihazda bakılacak: bayraksız açılışta `ev=profile` `knobs=` içinde `aead_path` yok ama video/giriş normal (varsayılan artık direct); `--ez dev true --es aead_path legacy` ile `aead_path:legacy`.
+- `docs/KNOBS.md` satırı 23f hâlâ "yok = legacy" diyor (dosya kapsam dışı): orkestratör "yok = `direct`; `legacy` geri dönüş, sonra kaldırılacak" olarak güncellemeli.
+
 ## Open questions
 
 - `docs/KNOBS.md` girdisi eklenmedi (dosya kapsam dışı; kural 0026 §2 "aynı commit'te" diyor). Önerilen satır:
