@@ -138,6 +138,9 @@ public final class SessionServer: @unchecked Sendable {
         /// Called on every change, after `start()` and after `setNetworkProfile`.
         public var networkProfileChanged: @Sendable (_ applied: NetworkProfile, _ pending: NetworkProfile?) -> Void
             = { _, _ in }
+        /// `STREAM_CONFIG.bitrate_kbps` of the active session: at its start and whenever a new config is sent to it
+        /// (T-268: the Wi-Fi file budget follows the video target).
+        public var streamBitrate: @Sendable (_ kbps: UInt32) -> Void = { _ in }
         public init() {}
     }
 
@@ -236,6 +239,8 @@ public final class SessionServer: @unchecked Sendable {
     /// Video connections whose VIDEO_HELLO passed and that now owe one authenticated PING (PROTOCOL.md 3.5).
     private var videoProofDecoders: [ConnectionID: RecordDecoder] = [:]
     private var videoLinks: [ConnectionID: VideoLink] = [:]
+    /// `bitrate_kbps` of the last `STREAM_CONFIG` sent on each control connection (T-268), reported when it becomes active.
+    private var streamBitrates: [ConnectionID: UInt32] = [:]
     private let flushGroup = DispatchGroup()
 
     static let maxInflightBytes = 256 * 1024
@@ -678,6 +683,28 @@ public final class SessionServer: @unchecked Sendable {
             guard !stopped else { return }
             apply(machine.send(sessionID: sessionID, message))
         }
+    }
+
+    /// Peer address of the active session's control connection (T-268: the only address the Wi-Fi file listener serves).
+    /// nil for an unknown or ended session. Waits for the session queue (any thread but a session-queue handler's own
+    /// callees that wait for another queue).
+    public func controlPeerHost(sessionID: UInt32) -> String? {
+        onSessionQueue { [self] in
+            guard !stopped, sessionID == currentSessionID, let id = activeControl else { return nil }
+            return controlConnections[id]?.peerHost
+        }
+    }
+
+    /// Keys of one Wi-Fi file connection from the `prk` of the active session (decision 0035); nil once it is gone.
+    public func filesKeys(sessionID: UInt32, clientNonce: [UInt8], hostNonce: [UInt8]) -> FilesKeys? {
+        onSessionQueue { [self] in
+            guard !stopped else { return nil }
+            return machine.filesKeys(sessionID: sessionID, clientNonce: clientNonce, hostNonce: hostNonce)
+        }
+    }
+
+    private func onSessionQueue<T>(_ body: () -> T) -> T {
+        DispatchQueue.getSpecific(key: queueKey) == true ? body() : queue.sync(execute: body)
     }
 
     /// Host menu "open settings on the tablet" (decision 0013): sends `SETTINGS_OPEN` to the active session if its
@@ -1151,6 +1178,7 @@ public final class SessionServer: @unchecked Sendable {
             inflightBytes[id] = nil
             inbounds[id] = nil
             sealers[id] = nil
+            streamBitrates[id] = nil
             apply(machine.connectionClosed(id))
         }
     }
@@ -1166,6 +1194,7 @@ public final class SessionServer: @unchecked Sendable {
         inflightBytes[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
+        streamBitrates[id] = nil
         // Queued sends (BYE, REJECTED) are flushed before the FIN, then the socket is cancelled. Until then the
         // connection is "lingering": a host sleep cuts it short (T-132), whenever it was closed.
         flushGroup.enter()
@@ -1241,6 +1270,10 @@ public final class SessionServer: @unchecked Sendable {
             }
             switch action {
             case .send(let id, let message):
+                if case .streamConfig(let config) = message {
+                    streamBitrates[id] = config.bitrateKbps
+                    if id == activeControl { handlers.streamBitrate(config.bitrateKbps) }
+                }
                 sendControl(id, message)
             case .startEncryption(let id, let keys):
                 sealers[id] = RecordSealer(key: keys.h2c, maxPayload: ProtocolConstants.maxControlPayload)
@@ -1329,6 +1362,7 @@ public final class SessionServer: @unchecked Sendable {
                 currentSessionID = sid
                 currentConfigID = configID
                 startTcpInfoSampling(id, role: .control)
+                if let kbps = streamBitrates[id] { handlers.streamBitrate(kbps) }
                 handlers.sessionStarted(sid, configID, hello, activeTransport)
             case .sessionEnded(let id):
                 if activeControl == id { activeControl = nil }

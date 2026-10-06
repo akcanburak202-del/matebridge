@@ -4,6 +4,19 @@ import Foundation
 import MateBridgeCore
 import NetFS
 
+/// What the Wi-Fi file path needs from the live session (decision 0035, T-268). `SessionServer` is the implementation;
+/// the bridge talks to it through this so it never holds the session machine.
+public protocol FilesNetLink: AnyObject, Sendable {
+    /// Peer address of the active session's control connection.
+    func controlPeerHost(sessionID: UInt32) -> String?
+    /// Keys of one file connection, from the active session's `prk` and the two fresh nonces.
+    func filesKeys(sessionID: UInt32, clientNonce: [UInt8], hostNonce: [UInt8]) -> FilesKeys?
+    /// A host-initiated control message (`FILES_NET`).
+    func sendToSession(sessionID: UInt32, _ message: Message)
+}
+
+extension SessionServer: FilesNetLink {}
+
 /// Tablet files in Finder (T-136, decision 0015, PROTOCOL.md 0x09). Executes `TabletFilesPlanner` on its own serial
 /// queue: `adb forward` of the tablet's loopback-only WebDAV port (USB sessions only), a NetFS WebDAV mount with
 /// user `matebridge` and the session token, and the teardown (cancel pending mount, unmount, forward removal) on
@@ -13,6 +26,11 @@ import NetFS
 /// Queue discipline: session start/end, USB changes and shutdown are always queued (never coalesced or dropped).
 /// `FILES_INFO`, menu-open retries and open requests are coalesced, so a burst never piles up behind blocking
 /// adb or unmount work: at most one pending FILES_INFO per session epoch, one retry and one open.
+///
+/// Wi-Fi sessions (decision 0035, T-268): the planner's `startProxy` opens `FilesNetService` (file listener + loopback
+/// proxy), `sendFilesNet` sends `FILES_NET` on the control connection, and the volume is mounted through the proxy with
+/// the same NetFS call as over USB. `FILES_NET(CLOSE)` goes out only when the host closes (Finder eject); tablet-side
+/// OFF/STANDBY and the end of the session only tear down.
 public final class TabletFilesBridge: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.matebridge.files", qos: .utility)
     private let logger = SessionLogger(component: "files")
@@ -34,6 +52,9 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private var unmountedPaths: [String] = []
     /// One drain block at most is queued for `unmountedPaths`.
     private var unmountDrainQueued = false
+    private var link: (any FilesNetLink)?
+    /// Last `STREAM_CONFIG.bitrate_kbps` seen (0 unknown): the Wi-Fi file budget derives from it.
+    private var videoKbps: UInt32 = 0
     /// Far above what can matter: the planner watches at most `rememberedMounts + 1` paths.
     private static let maxPendingUnmounts = 16
 
@@ -44,6 +65,10 @@ public final class TabletFilesBridge: @unchecked Sendable {
     private var forwardSerials: [UInt16: String] = [:]
     /// Pending NetFS requests by mount generation, so teardown can cancel them.
     private var pendingMounts: [UInt64: AsyncRequestID] = [:]
+    /// Wi-Fi file listener and loopback proxy (decision 0035).
+    private let netService = FilesNetService()
+    /// Session the Wi-Fi path belongs to (0: none).
+    private var netSessionID: UInt32 = 0
 
     /// Called on the bridge queue whenever the menu state changes. Set before the first event.
     public var onMenuChange: (@Sendable (TabletFilesMenu) -> Void)?
@@ -62,10 +87,26 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     // MARK: - Events (any thread; handled in order on the bridge queue)
 
-    public func sessionStarted(transport: SessionTransport, capabilities: Capabilities) {
+    /// The session the Wi-Fi path talks to (keys, peer address, `FILES_NET`). Set once, before the first session.
+    public func attach(link: any FilesNetLink) {
+        lock.withLock { self.link = link }
+    }
+
+    /// `STREAM_CONFIG.bitrate_kbps` of the live session (any thread): the Wi-Fi file budget follows the video target.
+    public func streamBitrateChanged(kbps: UInt32) {
+        lock.withLock { videoKbps = kbps }
+        netService.setVideoKbps(kbps)
+    }
+
+    /// `netCapable`: the client announced `FILES_NET` (HELLO bit12) and the session is not a USB one (decision 0035).
+    public func sessionStarted(sessionID: UInt32, transport: SessionTransport, capabilities: Capabilities) {
         lock.withLock { epoch += 1 }
+        let netCapable = capabilities.contains(.filesNet) && transport != .usb
         queue.async { [self] in
-            apply(planner.sessionStarted(transport: transport, capable: capabilities.contains(.files)))
+            netSessionID = sessionID
+            apply(planner.sessionStarted(transport: transport, capable: capabilities.contains(.files),
+                                         netCapable: netCapable))
+            netService.stopAll()  // nothing of an older session may survive into this one
         }
     }
 
@@ -84,7 +125,12 @@ public final class TabletFilesBridge: @unchecked Sendable {
 
     public func sessionEnded() {
         lock.withLock { epoch += 1 }
-        queue.async { [self] in apply(planner.sessionEnded()) }
+        netService.sessionEnded()  // no new file connection from now on; the volume is detached first, then all close
+        queue.async { [self] in
+            apply(planner.sessionEnded())  // no FILES_NET(CLOSE): the control connection is gone
+            netService.stopAll()
+            netSessionID = 0
+        }
     }
 
     /// From the USB guard: no device or no adb means the cable is gone. `down` (repairing) and nil (guard off)
@@ -124,6 +170,7 @@ public final class TabletFilesBridge: @unchecked Sendable {
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
             apply(planner.shutdown())
+            netService.stopAll()
             done.signal()
         }
         if done.wait(timeout: .now() + timeout) == .timedOut {
@@ -162,7 +209,9 @@ public final class TabletFilesBridge: @unchecked Sendable {
         for path in paths where planner.volumeUnmounted(path: path, mountedNow: mountedNow) {
             logger.log(.info, "eject", sessionID: 0, generation: 0, fields: "remount=off seen=notification")
         }
-        apply([])  // publishes the new watched paths
+        // Wi-Fi: an eject owes `FILES_NET(CLOSE)`, the detach and the proxy stop (empty on USB). Also publishes the
+        // new watched paths.
+        apply(planner.takeQueuedActions())
     }
 
     private func removeUnmountObserver() {
@@ -233,10 +282,31 @@ public final class TabletFilesBridge: @unchecked Sendable {
         case .reveal(let path):
             let url = URL(fileURLWithPath: path, isDirectory: true)
             DispatchQueue.main.async { NSWorkspace.shared.open(url) }
-        case .startProxy, .stopProxy, .sendFilesNet:
-            // T-267 compile stub only: the Wi-Fi actions of `TabletFilesPlanner` (decision 0035) are executed by T-268.
-            // `sessionStarted` still passes no `netCapable`, so the planner never emits them yet.
-            break
+        case .startProxy(let gen):
+            let ports = startProxy()
+            apply(planner.proxyFinished(generation: gen, localPort: ports?.proxy, filesPort: ports?.files ?? 0))
+        case .stopProxy(let local):
+            netService.stop(proxyPort: local)
+        case .sendFilesNet(let message):
+            guard let link = lock.withLock({ self.link }), netSessionID != 0 else { return }
+            logger.log(.info, "files_net", sessionID: netSessionID, generation: 0,
+                       fields: "send=\(message.isOpen ? "open" : "close") port=\(message.port)")
+            link.sendToSession(sessionID: netSessionID, .filesNet(message))
+        }
+    }
+
+    // MARK: Wi-Fi proxy
+
+    /// Opens the file listener and the loopback proxy for the live session. nil: no session, no control peer or no
+    /// port could be bound (the menu shows the failure and the user may try again).
+    private func startProxy() -> FilesNetService.Ports? {
+        let (link, kbps) = lock.withLock { (self.link, videoKbps) }
+        guard let link, netSessionID != 0, let peer = link.controlPeerHost(sessionID: netSessionID) else {
+            logger.log(.warning, "files_net", sessionID: netSessionID, generation: 0, fields: "state=failed stage=session")
+            return nil
+        }
+        return netService.start(sessionID: netSessionID, controlPeer: peer, videoKbps: kbps) { [weak link] sid, cn, hn in
+            link?.filesKeys(sessionID: sid, clientNonce: cn, hostNonce: hn)
         }
     }
 

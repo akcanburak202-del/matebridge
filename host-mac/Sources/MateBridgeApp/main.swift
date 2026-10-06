@@ -7,6 +7,7 @@ DumpVideoCommand.runIfRequested()  // T-011: `--dump-video` CLI mode, exits befo
 EncodeBenchCommand.runIfRequested()  // T-047: `--encode-bench` (synthetic frames, no display/input/network)
 SharpnessBench.runIfRequested()  // T-086: `--sharpness-bench` (synthetic text through the real encoder + decoder)
 InjectTestCommand.runIfRequested()  // T-023: `--inject-test` CLI mode (posts real input events), same
+FilesNetSelfTest.runIfRequested()  // T-268: `--files-net-selftest` (Wi-Fi file path on loopback, no GUI, no mount)
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
@@ -185,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             input.sessionStarted(sessionID: sid, configID: cid)
             clipboard.sessionStarted(sessionID: sid)
             audio.sessionStarted(sessionID: sid, clientSupportsAudio: hello.capabilities.contains(.audioPCM))
-            tabletFiles.sessionStarted(transport: transport, capabilities: hello.capabilities)
+            tabletFiles.sessionStarted(sessionID: sid, transport: transport, capabilities: hello.capabilities)
         }
         handlers.sessionEnded = {
             audio.sessionEnded()  // first: the Mac's own sound comes back at once (no video grace period)
@@ -194,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             clipboard.sessionEnded()
             tabletFiles.sessionEnded()  // unmount the tablet volume, remove the forward
         }
+        handlers.streamBitrate = { kbps in tabletFiles.streamBitrateChanged(kbps: kbps) }  // Wi-Fi file budget (T-268)
         handlers.audioPrefs = { sid, prefs in audio.prefs(sessionID: sid, enabled: prefs.enabled) }
         handlers.networkProfileChanged = { [weak self] applied, pending in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.showNetworkProfile(applied, pending) } }
@@ -225,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let server = SessionServer(handlers: handlers, networkProfile: networkProfile,
                                    makeStreamConfig: { coordinator.streamConfig(for: $0) })
         self.server = server
+        tabletFiles.attach(link: server)  // Wi-Fi files (T-268): peer address, file keys, FILES_NET
         coordinator.onOverflow = { [server] in server.endSessions() }
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
         clipboard.send = { [server] sid, message in server.sendToSession(sessionID: sid, message) }
