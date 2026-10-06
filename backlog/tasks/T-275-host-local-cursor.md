@@ -1,7 +1,7 @@
 ---
 id: T-275
 title: Host — yerel imleç (0036): imleç izleyici, CURSOR_SHAPE/STATE gönderimi, videoda imleci kapatma
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-274]

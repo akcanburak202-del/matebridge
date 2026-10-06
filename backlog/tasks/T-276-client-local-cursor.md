@@ -1,7 +1,7 @@
 ---
 id: T-276
 title: Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-274]

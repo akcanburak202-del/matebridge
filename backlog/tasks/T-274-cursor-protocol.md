@@ -1,7 +1,7 @@
 ---
 id: T-274
 title: Protocol — local cursor (decision 0036): HELLO bit13, CURSOR_PREFS 0x0B, CURSOR_SHAPE 0x0C, CURSOR_STATE 0x0D
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-271]
