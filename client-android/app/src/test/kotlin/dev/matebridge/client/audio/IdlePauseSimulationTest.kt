@@ -6,7 +6,7 @@ import org.junit.Test
 import kotlin.math.abs
 
 /**
- * T-287: the writer pauses the output after 10 s of silence and starts it again on the next packet. Simulates the
+ * T-287: the writer pauses the output after 60 s of silence and starts it again on the next packet. Simulates the
  * host (480-frame packets, silence gate: nothing is sent while the Mac is silent, `sample_index` and capture time
  * jump over the gap) and the tablet rendering 240-frame bursts through [PlayoutCore] with an [IdlePause] on top, as
  * `AudioPlayout.loop` does: while paused no burst is rendered and no time is counted in output frames, the writer
@@ -92,18 +92,18 @@ class IdlePauseSimulationTest {
     private val sec = 48_000L
     private val sounds = listOf(
         0L until 4_800L, // 100 ms
-        13 * sec until 13 * sec + 4_800L, // after 12.9 s of silence
-        14 * sec until 14 * sec + 4_800L, // after 0.9 s: too short to pause
-        40 * sec until 40 * sec + 4_800L, // after 25 s
+        63 * sec until 63 * sec + 4_800L, // after 62.9 s of silence
+        64 * sec until 64 * sec + 4_800L, // after 0.9 s: too short to pause
+        140 * sec until 140 * sec + 4_800L, // after 75 s
     )
 
     private fun runTablet(mode: IdlePause.Mode, startFrames: Long): Tablet {
         val tab = Tablet(240, host(sounds), mode, startFrames)
-        tab.run(45 * sec)
+        tab.run(145 * sec)
         return tab
     }
 
-    @Test fun silenceOfTenSecondsPausesAndEachSoundResumesIt() {
+    @Test fun silenceOfSixtySecondsPausesAndEachSoundResumesIt() {
         val tab = runTablet(IdlePause.Mode.PAUSE, startFrames = 48 * 30L) // 30 ms to start the output
         assertEquals("one pause per long silence", 2, tab.pauses)
         assertEquals(2L, tab.pause.pauses)
@@ -152,8 +152,8 @@ class IdlePauseSimulationTest {
     }
 
     @Test fun silenceFromTheStartOfTheStreamPausesToo() {
-        val tab = Tablet(240, host(listOf(30 * sec until 30 * sec + 4_800L)), IdlePause.Mode.PAUSE, 48 * 30L)
-        tab.run(35 * sec)
+        val tab = Tablet(240, host(listOf(90 * sec until 90 * sec + 4_800L)), IdlePause.Mode.PAUSE, 48 * 30L)
+        tab.run(95 * sec)
         assertEquals(1, tab.pauses)
         assertEquals(1, tab.starts.size)
         assertEquals(0L, tab.core.drift.underruns)
@@ -161,14 +161,14 @@ class IdlePauseSimulationTest {
     }
 
     /**
-     * Review P2: a sound whose first packet lands between the render that completes the 10 s and the pause decision
+     * Review P2: a sound whose first packet lands between the render that completes the 60 s and the pause decision
      * must be played at once, not left queued until a later packet wakes the writer. Sweeps the first packet's arrival
      * over one burst; returns the longest delay (frames) from that packet to the sound being heard.
      */
     private fun worstDelayAtTheThreshold(guard: Boolean): Long {
         var worst = 0L
         for (o in 0 until 240 step 4) {
-            val second = 10 * sec + 4_400 + o // its first packet arrives around the render that completes 10 s of silence
+            val second = 60 * sec + 4_400 + o // its first packet arrives around the render that completes 60 s of silence
             val tab = Tablet(240, host(listOf(0L until 4_800L, second until second + 4_800L)), IdlePause.Mode.PAUSE, 48 * 30L)
             tab.guardNewPackets = guard
             tab.run(second + 3 * sec)
@@ -189,8 +189,8 @@ class IdlePauseSimulationTest {
     }
 
     @Test fun noPauseWhileTheSoundContinues() {
-        val tab = Tablet(240, host(listOf(0L until 20 * sec)), IdlePause.Mode.PAUSE, 48 * 30L)
-        tab.run(20 * sec)
+        val tab = Tablet(240, host(listOf(0L until 90 * sec)), IdlePause.Mode.PAUSE, 48 * 30L)
+        tab.run(90 * sec)
         assertEquals(0, tab.pauses)
         assertEquals(0L, tab.core.drift.underruns)
     }

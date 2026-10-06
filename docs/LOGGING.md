@@ -180,9 +180,9 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
 
 ## Sessizlikte çıkış duraklatma (tablet, `MB/audio`, T-287)
 
-Anahtar `--es audio_idle_pause off|pause|stop` (KNOBS 23g). Varsayılan `off`: duraklatma yok, ama `first_sound` yine yazılır (A/B tabanı).
+Anahtar `--es audio_idle_pause off|pause|stop` (KNOBS 23g). Varsayılan `pause` (60 sn sessizlik sonrası); `off` duraklatmayı kapatır ama `first_sound` yine yazılır (A/B tabanı).
 
-- `I ev=idle_pause stream_id= api= mode=pause|stop idle_s= state= pause_ms= count=`: 10 sn paket gelmedi ve AAudio çıkışı duraklatıldı; `mb-audio` park eder.
+- `I ev=idle_pause stream_id= api= mode=pause|stop idle_s= state= pause_ms= count=`: 60 sn paket gelmedi ve AAudio çıkışı duraklatıldı; `mb-audio` park eder.
 - `W ev=idle_pause_failed stream_id= api= mode= code= state= pause_ms=`: duraklatma başarısız; bu akış için duraklatma kapanır.
 - `I ev=resume stream_id= api= mode= ok=1 paused_ms= wake_ms= request_ms= start_ms= started=0|1`: ilk paketle devam. `request_ms` yalnız `requestStart` çağrısının süresi. `start_ms` çağrıdan önce başlar ve akış STARTED bildirene kadar sürer; durum yazmalardan sonra yoklanır. 2 sn içinde STARTED gelmezse `started=0`. İstek başarısızsa hemen `ok=0` (W) yazılır ve çıkış yeniden kurulur.
 - `I ev=resume_skipped stream_id= reason=rebuild paused_ms=`: devam yerine çıkış yeniden kuruldu.
