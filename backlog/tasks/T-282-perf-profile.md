@@ -1,7 +1,7 @@
 ---
 id: T-282
 title: Ölçüm — tablet ve Mac kaynak profili (boşta / video / oyun), hedefli iyileştirme kartları
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -47,6 +47,13 @@ Kullanıcı (2026-10-06): sadeleştirmeler Mac ve tabletin yükünü azaltır m�
 6. Örnekleyiciler yalnız ölçüm sırasında çalışır, sonra durdurulur (kullanıcı tercihi). Mac'te pencere açılmaz.
 
 ## Plan
+
+- Taşıma: Wi-Fi (adb da Wi-Fi üzerinden, 192.168.1.105:5555). APK debug (debuggable) → ART ölçümü release'ten kötümser olabilir; raporda belirtilir.
+- Senaryo başına ~100 sn, kullanıcı "hazır" deyince başlar:
+  1. 0–60 sn temiz pencere: tablette `/proc/<pid>/task/*/{stat,status}` önce/sonra farkı (iş parçacığı CPU %, gönüllü/gönülsüz bağlam değişimi/s, minor fault/s), `top -H -d 1` 30 örnek, sistem süreçleri (surfaceflinger, codec, adbd, audioserver); `dumpsys meminfo` önce/sonra, logcat GC ve `MB/` satırları. Mac'te `ps` CPU zamanı farkı (MateBridgeApp, VTEncoderXPC, WindowServer, coreaudiod, replayd) ve pencereye düşen host.log.
+  2. 60–90 sn: tablette `simpleperf record --app -g -f 500`, Mac'te `sample MateBridgeApp 10` (ikisi de ölçülen süreci bozar, bu yüzden temiz pencereden sonra).
+- Betikler scratch'te (`dev_perf.sh`, `mac_perf.sh`, `an.py`); ölçüm bitince hiçbir şey çalışır kalmaz.
+- Rapor `docs/research/2026-10-07-perf-profile.md`; eşik üstü adaylara kart.
 
 ## Handoff
 
