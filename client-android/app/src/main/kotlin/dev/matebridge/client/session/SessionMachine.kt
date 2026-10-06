@@ -153,6 +153,12 @@ class SessionMachine(
          * for later sessions too; sent as CURSOR_PREFS now when input is allowed and the value changed.
          */
         data class SetCursor(val enabled: Boolean) : Event
+        /**
+         * T-276: one ordered command for what the UI changes together on a mode switch ([EngineMailboxes.mode]): the cursor
+         * wish first (PROTOCOL.md 0x0D: switching to Oyun sends CURSOR_PREFS(0) first), then the display mode. Either part
+         * may be null (nothing to change). Handled exactly like [SetCursor] followed by [SetPrefs].
+         */
+        data class SetMode(val cursor: Boolean?, val prefs: StreamPrefs?) : Event
         /** T-135: the tablet file server's state: remembered, sent as FILES_INFO now when input is allowed and it changed. */
         data class SetFiles(val info: FilesInfo, val scope: FilesServerScope) : Event
         /**
@@ -573,6 +579,10 @@ class SessionMachine(
                     audio = event.enabled
                     if (inputAllowed) out += Action.Send(AudioPrefs(event.enabled))
                 }
+            }
+            is Event.SetMode -> {
+                event.cursor?.let { out += handleEvent(Event.SetCursor(it), nowUs) }
+                event.prefs?.let { out += handleEvent(Event.SetPrefs(it), nowUs) }
             }
             is Event.SetCursor -> {
                 // Only a client that draws the cursor (non-null) ever sends CURSOR_PREFS. A value the host already has is not repeated.

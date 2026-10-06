@@ -340,7 +340,7 @@ class SessionController(
     fun setStreamPrefs(prefs: StreamPrefs) {
         if (terminated.get()) return
         ensureEngine()
-        mail.prefs.post(SessionMachine.Event.SetPrefs(prefs))
+        mail.mode.setPrefs(prefs)
     }
 
     /** Non-blocking. The (already debounced) panel rate in Hz; sent when accepted and on change (T-059). */
@@ -364,7 +364,7 @@ class SessionController(
     fun setCursorEnabled(on: Boolean) {
         if (terminated.get()) return
         ensureEngine()
-        mail.cursor.post(SessionMachine.Event.SetCursor(on))
+        mail.mode.setCursor(on)
     }
 
     /**
@@ -1118,6 +1118,9 @@ class SessionController(
             is SessionMachine.Event.SetPrefs -> LogLine('I', "stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> LogLine('I', "display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> LogLine('I', "audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.SetMode -> e.prefs?.let {
+                LogLine('I', "stream_prefs_set", "fps=${it.fps} scale=${it.scalePermille} bitrate_kbps=${it.bitrateKbps}")
+            }
             is SessionMachine.Event.SetCursor -> null // T-276: `cursor_prefs_sent` is logged when it actually goes out
             is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
