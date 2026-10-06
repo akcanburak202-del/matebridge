@@ -1726,3 +1726,9 @@ Yöntem T-282 (iş parçacığı `/proc` farkı), her kol uygulama yeniden başl
   - `pause`: 129/126/133 ms; `stop`: 120/129/130 ms. Yani **~+80 ms**; kart sınırı ≤ +50 ms, tutmadı.
   - Neden: Huawei MMAP'ta `requestStart` 111–125 ms süren bloklayıcı bir çağrı.
   - Kazanç: sessizken `mb-audio` 200 uyanma/s → ~0, ~%2 tek çekirdek. Duraklatma ve devam hatasız: `ok=1`, `started=1`, underrun yok.
+- **T-286 `event_in`** (01:20–01:35, APK `1cd55280`, 10 fps, 3 tur):
+  - `poll`: çözücü uyanması ~958/s, istemci %34,3, `cap_dec` p50/p95 23,6/37,5 ms.
+  - `event_in`: ~690/s, ~%31, 23,2/37,4 ms.
+  - `event`: ~308/s, 24,3/39,0 ms; yine +1,5 ms. Üçüncü turu geçersiz: akış 0,4 fps'e düştü, çünkü komut arka plana geçince dönen simge durdu.
+  - Karar: `event_in` varsayılan olur, `event` silinir.
+- Aynı APK'da `aead_path` varsayılanı `direct`: 10 fps kollarında `HeapTaskDaemon` eşiğin altında, `AUTH_FAILED` yok.
