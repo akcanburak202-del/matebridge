@@ -1,7 +1,11 @@
 ---
 id: T-275
 title: Host — yerel imleç (0036): imleç izleyici, CURSOR_SHAPE/STATE gönderimi, videoda imleci kapatma
+<<<<<<< HEAD
 status: review
+=======
+status: todo
+>>>>>>> main
 phase: 6
 owner: mac-host-dev
 depends_on: [T-274]
@@ -29,6 +33,7 @@ Karar 0036, PROTOCOL (dal `task/T-274-cursor-protocol`): HELLO bit13, 0x0B/0x0C/
 
 ## Plan
 
+<<<<<<< HEAD
 1. Core (saf, testli): `CursorPrefs`/`CursorShape`/`CursorState` kodekleri + `Message`/`MessageType` 0x0B-0x0D + `Capabilities.localCursor` (bit13); `SessionMachine`: `CURSOR_PREFS` etkin oturumdan `.deliver`, `CURSOR_SHAPE/STATE` yanlış yön (yok sayılır). `FixtureTests`'e 6 yeni fixture.
 2. Core: `CursorStreamPlanner` (PREFS sırası: önce SHAPE+STATE, sonra video imleci kapat; kapatırken önce video imleci aç; değişiklikte ~8 ms, en az 500 ms), `CursorShapeCache` (32 LRU), `CursorOutbox` (tek bekleyen birim, gönderim tamamlanınca bir sonraki), `CursorShapeLayout` (temsil seçimi, ≤128 px, pt16, shape_id), `DisplayGeometry.normalizedPosition` (girdi eşlemesinin tersi), `CursorStats` (saniyelik sayaç).
 3. Host: `VideoCursorSwitch` (istenen durum + canlı `ScreenCapture`'a `updateConfiguration`; yeni yakalama istenen durumla başlar), `CursorTracker` (~120 Hz yoklama + enjeksiyon sonrası örnek; `NSCursor.currentSystem` -> PNG ImageIO), `CursorService` (planner + outbox + önbellek, `SessionServer` içinden bağlı: `main.swift` `files:` dışında olduğu için bağlama `SessionServer` içinde yapılır).
@@ -82,3 +87,10 @@ Tek seri model: `VideoCursorSwitch` içindeki BÜTÜN video-imleç değişiklikl
 3. **Düzeltme hatası bildirimi:** `attach` düzeltmesi `reportsFailure` ile işaretlenir; gizleme reddedilirse `onCorrectionFailed(generation)` -> `CursorService.videoCursorLost` -> `planner.videoCursorLost()` (yalnız `.on` fazı: akış durur, istek unutulur, tablet zaman aşımıyla videoya döner). Başka kuşağa ait bildirim yok sayılır. Testler: `CURPLAN18`, `CURPLAN19`.
 4. **Sınırlı PREFS posta kutusu:** Core `CursorPrefsMailbox` (en yeni kazanır, tek bekleyen uyandırma, oturum sınırında `clear()`); `CursorService.prefs` kuyruğa her mesajda blok eklemez. Testler: `CURPREFS1-3`.
 - Test EDİLMEDİ: gerçek yakalamada düzeltme hatası yolu ve seri kuyruğun gerçek `updateConfiguration` ile sırası (cihaz gerekir); sıralama mantığı `VideoCursorWish` testlerinde.
+=======
+(ajan doldurur)
+
+## Handoff
+
+## Open questions
+>>>>>>> main

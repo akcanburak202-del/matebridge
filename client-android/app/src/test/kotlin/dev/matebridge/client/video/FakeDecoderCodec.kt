@@ -223,6 +223,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
         private fun rendered(index: Int) {
             val pts = outPts.remove(index) ?: return
             renderedPts.add(pts)
+            synchronized(lock) { lock.notifyAll() } // T-277: a waiter on renderedPts wakes now, not on the next poll
             if (renderCallbackInRelease) renderedListener?.invoke(pts, System.nanoTime())
         }
 

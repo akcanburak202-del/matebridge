@@ -1,7 +1,11 @@
 ---
 id: T-276
 title: Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel
+<<<<<<< HEAD
 status: review
+=======
+status: todo
+>>>>>>> main
 phase: 6
 owner: android-client-dev
 depends_on: [T-274]
@@ -30,6 +34,7 @@ Karar 0036, PROTOCOL (dal `task/T-274-cursor-protocol`). **Bu dalı `task/T-274-
 
 ## Plan
 
+<<<<<<< HEAD
 1. Codec (`protocol/`): `MsgType` 0x0B/0x0C/0x0D, `Capabilities.LOCAL_CURSOR` (bit13), mesajlar `CursorPrefs`, `CursorShape`, `CursorState`; `Codec` encode/decode (CURSOR_SHAPE `data_len` 1..61440 ve `16 + data_len` kuralı, bilinmeyen `format` hata değil); `FixtureTest`'e 6 yeni fixture; `CursorCodecTest` (fixture'ın göstermediği kurallar).
 2. Saf mantık (`cursor/`, JVM testli): `CursorStateSlot` (u32 seri aritmetikle en yeni `seq`), `ShapeCache` (LRU >= 64), `CursorShapes` (PNG çözümü arka planda, sınırlı kuyruk, IHDR boyut denetimi, bilinmeyen biçim = yerleşik ok), `CursorGeometry` (nokta -> piksel ölçeği, hotspot), `CursorPrefsPolicy` (istek/zaman aşımı/10 s+ yeniden deneme, geri çekilmeli), `CursorStats` (sayaçlar + p50/p95), `CursorLink` (okuyucu iş parçacığı girişi: oturum nesli, STATE/SHAPE yönlendirme).
 3. Katman (`cursor/CursorOverlayView`): SurfaceView üstünde dokunmaz View, `postInvalidateOnAnimation(dirty)` ile vsync'te çizim, onDraw süresi ve STATE yaşı ölçülür.
@@ -73,3 +78,10 @@ Karar 0036, PROTOCOL (dal `task/T-274-cursor-protocol`). **Bu dalı `task/T-274-
 - Spec: `CURSOR_PREFS(0)` sonra `(1)` döngüsünde host'un "istemcide var" kümesini sıfırlayıp sıfırlamadığı PROTOCOL.md'de yazmıyor. İstemci güvenli tarafta: katman kapalıyken de SHAPE'leri saklar ve önbelleği yalnız bağlantı/oturum sınırında siler. Host sıfırlıyorsa sorun yok, sıfırlamıyorsa da tutarlı. Yazılması iyi olur.
 - Spec: PREFS'i yok sayan eski host'a karşı zaman aşımı sonsuz döngüde kalır; geri çekilmeli (10-60 s) uygulandı (bkz. Handoff 3). İstenmiyorsa `CursorPrefsPolicy` içindeki katlama kaldırılır.
 - `CURSOR_SHAPE` PNG sınırı: spec 128 x 128 px diyor, istemci bellek güvenliği için 256 px'e kadar kabul eder (büyüğü ok'a düşer); spec'e yazılabilir.
+=======
+(ajan doldurur)
+
+## Handoff
+
+## Open questions
+>>>>>>> main

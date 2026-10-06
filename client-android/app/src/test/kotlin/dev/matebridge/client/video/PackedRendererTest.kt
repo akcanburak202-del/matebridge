@@ -29,6 +29,12 @@ class PackedRendererTest {
 
     @After fun tearDown() { renderer?.detachSurface() }
 
+    /**
+     * T-277: the codec only exists once the decoder thread has created it, which can be after the first evaluation of
+     * the wait condition; `codecs.single()` there threw NoSuchElementException (the old flake). No codec yet = not yet.
+     */
+    private fun FakeDecoderFactory.anyRendered() = codecs.firstOrNull()?.renderedPts?.isNotEmpty() == true
+
     private fun frame(seq: Long, flags: Int = 0) = VideoFrame(seq, 5_000 + seq * 1000, flags, 0, 1, 3, Bytes(byteArrayOf(0, 0, 1)))
 
     private fun make(hook: PackedOutput?, buffer: Int = 0): VideoRenderer =
@@ -42,7 +48,7 @@ class PackedRendererTest {
         r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
         r.onFrame(frame(7, VideoFrame.KEYFRAME))
         assertTrue(factory.await { outputsDequeued >= 1 })
-        assertTrue(factory.await { codecs.single().renderedPts.isNotEmpty() })
+        assertTrue(factory.await { anyRendered() })
         assertEquals(listOf(7L), factory.codecs.single().renderedPts.toList())
         // the presenter hears about frame_seq 7 and its capture time before/with the release
         assertTrue(hook.calls.isNotEmpty())
@@ -75,7 +81,7 @@ class PackedRendererTest {
         r.attachTarget(Any())
         r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
         r.onFrame(frame(1, VideoFrame.KEYFRAME))
-        assertTrue(factory.await { codecs.single().renderedPts.isNotEmpty() })
+        assertTrue(factory.await { anyRendered() })
         assertTrue(hook.calls.isEmpty())
     }
 
@@ -85,7 +91,7 @@ class PackedRendererTest {
         r.attachTarget(Any())
         r.onFrame(frame(0, VideoFrame.CODEC_CONFIG))
         r.onFrame(frame(3, VideoFrame.KEYFRAME))
-        assertTrue(factory.await { codecs.single().renderedPts.isNotEmpty() })
+        assertTrue(factory.await { anyRendered() })
         assertEquals(0, r.stats.snapshot(reset = false).capCb.count)
         r.reportPackedShown(3L, System.nanoTime())
         val cb = r.stats.snapshot(reset = false).capCb

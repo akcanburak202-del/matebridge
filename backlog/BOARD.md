@@ -294,3 +294,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-271](tasks/T-271-cursor-probe.md) | Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu | 6 | mac-host-dev | [] |
 | [T-272](tasks/T-272-hidden-cursor-relative.md) | Host — imleç gizliyken göreli hareket imleci kaydırmasın (oyunda Dock/menü çubuğu açılmasın) | 6 | mac-host-dev | [T-271] |
 | [T-273](tasks/T-273-usb-tether-probe.md) | Prob — USB tethering (NCM) adb ile başlatılabiliyor mu, uygulama Mac'e bu yoldan ulaşabiliyor mu | 6 | android-client-dev | [] |
+| [T-277](tasks/T-277-flaky-packed-renderer-test.md) | Client test — PackedRendererTest.directPathNeverCallsAHook ara sıra düşüyor (yarış) | 6 | android-client-dev | [] |
