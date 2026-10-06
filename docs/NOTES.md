@@ -1622,3 +1622,18 @@ Kayıt: `~/.cache/matebridge-tools/data/2026-10-06-cursor/` (180 s, 60 Hz, table
 - Uygulamaya yol açmanın tek yolu Android tethering'i (arayüzü yerel ağa ekler, DHCP verir); `tether_force_usb_functions=1` ile yöntem NCM'e çevrildi, ama **MRDI-W09'da (yalnız Wi-Fi) USB paylaşımı arayüzü yok** (TetherSettings yalnız "Wi-Fi köprüsü" ve "Bluetooth bağlantı paylaşımı" gösteriyor). Tethering'i adb ile başlatmak mümkün olsa bile her takışta adb gerekeceğinden `adb reverse`'e göre kazanç yok. NCM işlevi kısa sürede kendiliğinden eski hâline döndü.
 - Geri alındı: `tether_force_usb_functions` silindi, USB `hisuite,mtp,mass_storage,adb`. **Konu kapandı**; AOA zaten rafta.
 - **T-273 probu (14:48–14:53) — kesin olumsuz:** kabuk hesabı tethering'i başlatabiliyor (`startTethering` sonuç 0), ama tabletin yapılandırması yalnız `usb\d`/`rndis\d` arayüzlerini kabul ediyor, NCM arayüzü `ncm0` adıyla geliyor → "ncm0 is not a tetherable iface" (TETHERING_USB + zorla NCM, TETHERING_NCM, `setUsbTethering`, `tether("ncm0")`, TETHERING_ETHERNET denendi). RNDIS tethering tablette çalışıyor (`rndis0` 192.168.42.129) ama macOS'ta RNDIS sürücüsü yok. Uygulama kimliğiyle ve kabukla `ncm0` üzerinden Mac'e TCP: ENETUNREACH. Ürüne alınamaz (root/overlay ya da Mac'e üçüncü taraf RNDIS sürücüsü gerekir) → `adb reverse` kalır. Yan etki: USB işlevi her değiştiğinde adbd yeniden başlıyor (USB + kablosuz adb düşüyor).
+
+## 2026-10-06 ~15:25 — adb tüneli ölçümü (USB, 3 × 150 s, kullanıcı ekranı normal kullandı)
+
+Kayıtlar `~/.cache/matebridge-tools/data/2026-10-06-adb/`. fps ≥ 20 olan 10 s pencereler:
+
+| aşama | tablet adbd %CPU | tablet uygulama % | Mac adb % | host % | fps | net p50/p95 ms | skip |
+|---|---|---|---|---|---|---|---|
+| A native (bugünkü) | 12,3 | 51,5 | 3,2 | 9,1 | 48 | 16,6 / 21,3 | 5,0 |
+| B libusb | 15,8 | 82,6 | 5,1 | 11,6 | 59,5 | 16,7 / 18,5 | 0,3 |
+| C libusb + burst | 15,6 | 78,1 | 5,1 | 11,1 | 59,9 | 16,7 / 18,2 | 0,5 |
+
+- Kontrol bağlantısı RTT (USB, adb dahil) p50 ~2–4 ms → adb'nin tek yön gecikme payı ≤ ~1–2 ms. `net` metriği yakalama→varış ölçtüğü için (kodlama dahil, ~16,7 ms) üç aşamada aynı; adb farkını ayırmıyor.
+- adbd %12–16 (fps ile orantılı; kare başına aynı). libusb/burst ölçülebilir kazanç getirmedi; fps/skip farkı içerikten.
+- **libusb'de ses bozuldu** (kullanıcı; tablette "uyumlu" ses moduna geçince düzeldi). → libusb ve burst reddedildi, adb sunucusu `NATIVE`'e geri alındı (doğrulandı).
+- Sonuç: adb tünelinin maliyeti tablette ~%12–16 bir çekirdek ve ≤ ~1–2 ms; ayarla iyileşmiyor. USB yolu konusu kapandı.
