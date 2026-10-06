@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicLong
  * holds the old, long value until one burst has been rendered, see [onRendered]).
  */
 class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
-    /** [PAUSE]: requestPause (buffered data kept, counters continuous); [STOP]: requestStop; [OFF]: never. */
+    /** [PAUSE]: requestPause (buffered data kept, counters continuous); [STOP]: requestStop; [OFF]: never (default). */
     enum class Mode(val id: String) { OFF("off"), PAUSE("pause"), STOP("stop") }
 
     /** Why pausing is switched off for this stream (null = it is not); logs. */
@@ -28,8 +28,13 @@ class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
 
     val enabled: Boolean get() = mode != Mode.OFF && disabledReason == null
 
-    fun shouldPause(priming: Boolean, framesSinceLastPacket: Long, canPause: Boolean): Boolean =
-        enabled && canPause && settled && priming && framesSinceLastPacket >= afterFrames
+    /**
+     * [newPackets]: packets reached the jitter buffer after the last rendered burst started, so
+     * [framesSinceLastPacket] (from that render) is stale and the buffered audio is not yet played: never pause then
+     * (a parked writer waits for a packet after its own snapshot and would leave that audio queued).
+     */
+    fun shouldPause(priming: Boolean, framesSinceLastPacket: Long, canPause: Boolean, newPackets: Boolean = false): Boolean =
+        enabled && canPause && settled && priming && !newPackets && framesSinceLastPacket >= afterFrames
 
     /** The output was paused and the writer parks. */
     fun onPaused() {
@@ -62,7 +67,8 @@ class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
     companion object {
         const val SECONDS = 10
         const val AFTER_FRAMES = SECONDS * 48_000L
-        val DEFAULT = Mode.PAUSE
+        /** Off until the device A/B passes (decision 0026: a new knob defaults to the old behaviour). */
+        val DEFAULT = Mode.OFF
 
         /** `--es audio_idle_pause off|pause|stop` (developer knob); null = the default. */
         fun resolve(raw: String?): Resolved {
@@ -70,6 +76,29 @@ class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
             val m = Mode.entries.firstOrNull { it.id == raw.trim().lowercase() }
             return if (m != null) Resolved(m, false) else Resolved(DEFAULT, true)
         }
+    }
+}
+
+/**
+ * T-287: when the `first_sound` line is due: after a successful write made while the output reported itself running.
+ * A burst can be accepted while the stream is still STARTING (requestStart is asynchronous), which would leave the
+ * rest of the start-up out of the time. The writer asks the output ([AudioSink.started]) only while [pending].
+ */
+class FirstSoundWait {
+    /** Playback started and no line was written for it yet. */
+    var pending = false
+        private set
+
+    /** Playback (PLAYING) started. */
+    fun onPlaybackStart() {
+        pending = true
+    }
+
+    /** A write succeeded; [started]: the output is running. True (once) when the line is due now. */
+    fun onWrite(started: Boolean): Boolean {
+        if (!pending || !started) return false
+        pending = false
+        return true
     }
 }
 

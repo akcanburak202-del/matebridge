@@ -23,6 +23,7 @@ object AAudioNative {
     const val PERF_LOW_LATENCY = 12
 
     // aaudio_stream_state_t (T-287, [pause] results).
+    const val STATE_STARTED = 4
     const val STATE_PAUSING = 5
     const val STATE_PAUSED = 6
     const val STATE_STOPPING = 9
@@ -73,6 +74,8 @@ object AAudioNative {
      * negative AAudio error. [start] resumes it.
      */
     external fun pause(handle: Long, stop: Int, timeoutNs: Long): Int
+    /** T-287: the stream's current state (AAudioStream_getState; 4 = STARTED). */
+    external fun state(handle: Long): Int
     /** Frames written (may be short on timeout) or a negative AAudio error. */
     external fun write(handle: Long, data: ShortArray, frames: Int, timeoutNs: Long): Int
     /** CLOCK_MONOTONIC timestamp into `out[0]` (frame position) and `out[1]` (ns); returns an AAudio result. */

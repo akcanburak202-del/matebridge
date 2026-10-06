@@ -189,6 +189,13 @@ Java_dev_matebridge_client_audio_AAudioNative_pause(JNIEnv*, jobject, jlong h, j
     return static_cast<jint>(cur);
 }
 
+// T-287: the stream's state, to see when a resumed stream reports STARTED (writer thread; a cheap call).
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_matebridge_client_audio_AAudioNative_state(JNIEnv*, jobject, jlong h) {
+    Out* o = fromHandle(h);
+    return o == nullptr ? AAUDIO_ERROR_NULL : static_cast<jint>(AAudioStream_getState(o->stream));
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_matebridge_client_audio_AAudioNative_write(JNIEnv* env, jobject, jlong h, jshortArray data, jint frames,
                                                      jlong timeoutNs) {
