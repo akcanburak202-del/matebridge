@@ -56,6 +56,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-275](tasks/T-275-host-local-cursor.md) | Host — yerel imleç (0036): imleç izleyici, CURSOR_SHAPE/STATE gönderimi, videoda imleci kapatma | 6 | mac-host-dev | [T-274] |
 | [T-276](tasks/T-276-client-local-cursor.md) | Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel | 6 | android-client-dev | [T-274] |
+| [T-277](tasks/T-277-flaky-packed-renderer-test.md) | Client test — PackedRendererTest.directPathNeverCallsAHook ara sıra düşüyor (yarış) | 6 | android-client-dev | [] |
 
 ## done
 
