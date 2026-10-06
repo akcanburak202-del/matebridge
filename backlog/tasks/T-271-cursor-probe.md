@@ -1,7 +1,7 @@
 ---
 id: T-271
 title: Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
