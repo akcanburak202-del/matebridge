@@ -100,7 +100,7 @@ data class DevKnobs(
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
     /**
-     * `--es aead_path legacy|spi|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
+     * `--es aead_path legacy|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
      * [AeadPath.LEGACY] (the T-285 behaviour).
      */
     val aeadPath: AeadPath = AeadPath.LEGACY,

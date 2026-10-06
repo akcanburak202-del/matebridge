@@ -38,79 +38,69 @@ Hedef, kare başına bu kopyaları ve ayırmaları kaldırmak. Protokol ve şifr
 
 Kabul 1'in cihaz deneyi bu ajanda yapılamadı (tablete dokunmak yasak); yerine API 31 platform kaynağı okundu
 (`android-12.0.0_r1`: `libcore/.../javax/crypto/Cipher.java`, `external/conscrypt/.../OpenSSLAeadCipher.java`, `OpenSSLCipher.java`).
-Bulgular, T-285 profilindeki üç kalemi satır satır açıklıyor:
 
-1. **SPI yeniden kurulumu (%11).** `Cipher.init(...)` her çağrıda `SpiAndProviderUpdater.updateAndGetSpiAndProvider(initParams, ...)`
-   çalıştırır. `initParams != null` olduğundan kısa yol (`spiImpl != null && initParams == null`) devreye girmez; `tryCombinations`
-   yeniden çalışır ve her seferinde yeni `OpenSSLAeadCipherAES$GCM` oluşturur. `Cipher.getInstance(T, Provider)` bunu ÖNLEMEZ
-   (yalnız sağlayıcı aramasını daraltır, `specifiedProvider` olarak saklar). Önleyen tek genel API yolu: korumalı
-   `Cipher(CipherSpi, Provider, String)` yapıcısı; o `specifiedSpi` set eder ve `init` hep aynı SPI'yı döner. SPI'yı
-   `provider.getService("Cipher", "AES/GCM/NoPadding").newInstance(null)` ile bir kez alıyoruz (hepsi SDK'daki genel/korumalı API,
-   yansıtma ya da gizli API yok). Yeni SPI'nın `reset()`'i ayrıca `lastGlobalMessageSize` (~kare boyutu) kadar bir `byte[]`
-   ayırır: bu da her kayıttaki LOS ayırmalarından biri.
-2. **Girdi kopyası (`updateInternal`/`expand`, %12,5).** `doFinal(byte[]...)` → `OpenSSLCipher.engineDoFinal` → `updateInternal`
-   girdiyi SPI'nın iç `buf`'ına kopyalar (`expand` gerekirse büyütür), sonra JNI `EVP_AEAD_CTX_open` bunu bir kez daha
-   kopyalayabilir. Üstüne `reset()` kayıt boyutu `lastGlobalMessageSize`'tan farklıysa `buf = new byte[bufCount]` ayırır
-   (kare boyutları değiştiği için neredeyse her kayıtta).
-3. **`doFinal(ByteBuffer, ByteBuffer)` (a): EVET, kopyasız yol var.** `OpenSSLAeadCipher.engineDoFinal(ByteBuffer, ByteBuffer)`
-   `ENABLE_BYTEBUFFER_OPTIMIZATIONS = true` iken, `bufCount == 0` ve iki tampon da direct ise doğrudan
-   `NativeCrypto.EVP_AEAD_CTX_open_buf`'a gider: iç tampon yok, kopya yok, ayırma yok. Heap tamponda geçici direct tampon
-   ayırıp kopyalar (daha kötü), bu yüzden tamponlar direct olmalı. `init` `bufCount`'u sıfırladığı ve `updateAAD` onu
-   değiştirmediği için `bufCount == 0` kalır.
+1. **SPI yeniden kurulumu (%11) önlenemiyor (b: HAYIR, güvenli bir yolla).** `Cipher.init` her çağrıda `tryCombinations` çalıştırır
+   ve yeni `OpenSSLAeadCipherAES$GCM` oluşturur; `Cipher.getInstance(T, Provider)` bunu önlemez. İlk sürümde korumalı
+   `Cipher(CipherSpi, Provider, String)` yapıcısıyla sabit SPI denendi, **ama bu yanlıştı**: `specifiedSpi != null` iken
+   `updateAndGetSpiAndProvider` `engineInit`'i hiç çağırmadan SPI'yı döner, yani anahtar/mod/nonce Conscrypt'e hiç verilmez ve ilk
+   kayıt `IllegalStateException("Cipher not initialized")` atar (codex incelemesi P1, SDK kaynağıyla doğrulandı; SunJCE JVM testleri
+   bunu yakalayamaz). `spi` modu tamamen kaldırıldı. `CipherSpi.engineInit` yansıtması **yapılmayacak**; SPI yeniden
+   kurulum maliyeti (`mb-video`'nun ~%11'i, ≈tek çekirdeğin %1,6'sı) kabul edildi.
+2. **Girdi kopyası (`updateInternal`/`expand`, %12,5) (a: EVET, kaldırılabilir).** `doFinal(byte[]...)` girdiyi SPI'nın iç `buf`'ına
+   kopyalar, JNI bir kez daha kopyalayabilir, ve `reset()` kayıt boyutu değişince `buf = new byte[bufCount]` ayırır.
+   `OpenSSLAeadCipher.engineDoFinal(ByteBuffer, ByteBuffer)` (`ENABLE_BYTEBUFFER_OPTIMIZATIONS = true`), `bufCount == 0` ve iki
+   tampon direct ise doğrudan `EVP_AEAD_CTX_open_buf`'a gider: iç tampon, kopya ve ayırma yok. Heap tamponda daha kötü
+   (geçici direct tampon), bu yüzden tamponlar direct.
 
 Uygulama (`Records.kt`), `enum AeadPath` ile çalışma zamanında seçilir (varsayılan **legacy** = bugünkü davranış, karar 0026 §2):
-- `legacy`: bugünkü `Cipher.getInstance` + `doFinal(byte[])`.
-- `spi`: bağlantı ömrü boyunca tek SPI (`ReusableCipher`), `doFinal(byte[])`. (b) maddesinin cevabı bu.
-- `direct`: `spi` + yeniden kullanılan direct girdi/çıktı tamponları, `doFinal(ByteBuffer, ByteBuffer)`. Girdi bir kez direct
-  tampona kopyalanır (`ByteBuffer.put`, memcpy), düz metin bir kez `scratch`'e kopyalanır (Codec `ByteArray` bekliyor ve
-  `Codec.kt` kapsam dışı). Bu yol Conscrypt'in iç `buf` kopyasını, JNI girdi/çıktı kopyalarını ve kayıt başı ayırmaları kaldırır.
-`ReusableCipher` kurulamazsa (hizmet yok, örnekleme hatası) `newCipher()`'e düşer: yavaşlar, bozulmaz. İlk kullanımda
-`crypto_provider provider=… spi_reused=0|1` loglanır.
-Şifreleme biçimi, nonce, AAD, sayaç ve `AEADBadTagException` → `ProtocolException(AUTH_FAILED)` davranışı aynı. `RecordSealer`
-dokunulmadı (kabloda yalnız küçük girdi olayları şifreliyor).
+- `legacy`: bugünkü `Records.newCipher()` + `doFinal(byte[])`.
+- `direct`: aynı `Records.newCipher()`, her kayıtta bugünkü gibi `init` + `updateAAD`; çözme `doFinal(ByteBuffer, ByteBuffer)` ile
+  yeniden kullanılan direct girdi/çıktı tamponları üzerinde. Girdi bir kez direct tampona (`ByteBuffer.put`), düz metin bir kez
+  `scratch`'e kopyalanır (Codec `ByteArray` bekliyor, `Codec.kt` kapsam dışı).
+- Dayanıklılık (codex P1 dersi): `openPlain` içinde sağlayıcıdan gelen beklenmedik `RuntimeException` (örn. `IllegalStateException`,
+  `ReadOnlyBufferException`) da `GeneralSecurityException` ile aynı yoldan `ProtocolException(AUTH_FAILED)` olur; okuma iş
+  parçacığından kaçıp oturum temizliğini atlayamaz. Mesaj sabit, sağlayıcı metni dışarı çıkmaz. Bu iki yolun ikisi ve
+  `RecordOpener` kullanan her bağlantı (kontrol bağlantısı dahil) için geçerli.
+Şifreleme biçimi, nonce, AAD, sayaç ve `AEADBadTagException` davranışı aynı. `RecordSealer` dokunulmadı.
 
-Bayrak: `--ez dev true --es aead_path legacy|spi|direct` (`DevKnobs`, `ev=profile knobs=` alanında `aead_path:<id>` görünür).
-`Records.aeadPath` açılışta `MainActivity.parseDevKnobs` ile set edilir; `RecordOpener` oluşturulurken (bağlantı başına) okunur.
+Bayrak: `--ez dev true --es aead_path legacy|direct` (`DevKnobs`, `ev=profile knobs=` alanında `aead_path:<id>`). `Records.aeadPath`
+açılışta `MainActivity.parseDevKnobs` ile set edilir; `RecordOpener` oluşturulurken (bağlantı başına) okunur.
 
-Testler: `RecordAeadPathTest` (üç yol aynı kayıtları açar, bozulmuş gövde/etiket/AAD/sayaç/kısa kayıt aynı hatayı verir, sayaç
-yalnız başarıda ilerler, `startCounter`, `openAt` ofsetleri, `RecordDecoder` çıktısı eşit), `AeadDecryptBenchTest` (JVM ayırma/
-verim, `RecordReceiveAllocTest` üslubunda), `DevKnobsTest` (yeni anahtar).
+Testler: `RecordAeadPathTest` (iki yol aynı kayıtları açar, bozulmuş gövde/etiket/AAD/sayaç/kısa kayıt aynı hatayı verir, sayaç yalnız
+başarıda ilerler, `startCounter`, `openAt` ofsetleri, decoder çıktısı eşit; **`init`/`aad`/`final` aşamasında `IllegalStateException`
+atan şifre kuklasıyla** iki yol da AUTH_FAILED verir ve decoder terminal kalır), `AeadDecryptBenchTest` (JVM ayırma/verim),
+`DevKnobsTest` (yeni anahtar).
 
 ## Handoff
 
-- Commit: `a0ce35df` (kod + Plan), bu kartın Handoff'u ayrı commit. Dal `task/T-292-aead-decrypt-copies`.
-- `./scripts/check.sh`: ALL OK (host, android, probes, protocol).
+- Commit: ilk uygulama `a0ce35df`; P1 düzeltmesi (spi kaldırıldı, direct korundu, RuntimeException yolu) bu kartı güncelleyen
+  commit'te (`git log task/T-292-aead-decrypt-copies`). Dal `task/T-292-aead-decrypt-copies`.
+- `./scripts/check.sh`: ALL OK.
 - Dokunulan dosyalar: `client-android/.../security/Records.kt`; yeni testler `.../security/RecordAeadPathTest.kt`,
   `.../bench/AeadDecryptBenchTest.kt`; knob bağlantısı `.../session/DevKnobs.kt`, `.../session/DevKnobsTest.kt`,
-  `.../MainActivity.kt` (tek satır). Son üçü kartın `files:` listesinde yoktu: orkestratörün "mevcut knob kalıbını izle"
-  talimatı bunları gerektirdiği için eklendi ve listeye yazıldı. Gerekirse geri alınabilir (knob olmadan A/B yapılamaz).
-- Cihazda bayrak: yalnız bu iki yol, geri kalan `legacy`.
+  `.../MainActivity.kt` (tek satır). Son üçü kartın ilk `files:` listesinde yoktu; orkestratörün "mevcut knob kalıbını izle"
+  talimatı bunları gerektirdiği için eklendi ve listeye yazıldı.
+- Cihazda A/B: yalnız iki değer.
   - A (taban): bayraksız ya da `--ez dev true --es aead_path legacy`.
-  - B: `--ez dev true --es aead_path spi` (tek SPI, `byte[]` doFinal).
-  - C: `--ez dev true --es aead_path direct` (tek SPI + direct tamponlar).
-  - Doğrulama: logcat `crypto_provider provider=AndroidOpenSSL spi_reused=1` (spi_reused=0 ise yedek yola düştü, ölçüm
-    geçersiz) ve `ev=profile ... knobs=...aead_path:direct`. Bayrak her açılışta verilmeli (Records.aeadPath süreç içinde
-    açılışta set edilir; bir sonraki bağlantıdan itibaren geçerli).
-- Varsayımlar: Android 12 Conscrypt kaynağı (`android-12.0.0_r1`) HarmonyOS 4.3'ün platform Conscrypt'iyle aynı davranıyor.
-  HarmonyOS kendi Conscrypt sürümünü taşıyorsa (HMS/ArkCompiler) bulgular değişebilir: bu yüzden A/B şart.
-- Ölçülmedi: Conscrypt'e özgü her şey (JVM testi SunJCE kullanır: orada `direct` yolu daha yavaş ve kayıt başı ~1,6 KB fazla
-  ayırıyor, çünkü SunJCE direct tamponu iç heap dizisine kopyalar; Conscrypt'te tersi beklenir). Kabul 3 (GC ≤ %6, minor fault ≤ 2 500/s,
-  `mb-video` ≤ %10) cihaz ölçümü orkestratörde: Oyun 60, aynı simpleperf yöntemi; iki bayrak değerini ayrı koş.
-- Cihazda bakılacaklar: (1) üç yolda da görüntü/giriş normal, `AUTH_FAILED`/bağlantı kopması yok; (2) `HeapTaskDaemon`, minor fault/s, `mb-video`
-  yolundaki `Cipher.init`/`updateInternal`/`expand` payları (spi: init ve SPI ayırma kaybolmalı; direct: ayrıca updateInternal/expand
-  ve LOS ayırmaları kaybolmalı); (3) `latency_ms`/`decode_ms` değişmemeli. Kazanç yoksa Kabul 4: kart "değmez".
-- Güvenlik: kripto biçimi/nonce/AAD aynı; `RecordSealer` dokunulmadı; log yalnız sağlayıcı adı ve 0/1. Güvenlik koduna dokunduğu için codex
-  incelemesi önerilir (özellikle `doFinalDirect` tampon yaşam döngüsü).
-- Kabul 2'ye ek: yeni yol seçilirse, sonraki adım varsayılanı değiştirmek (`Records.aeadPath` varsayılanı) ve `legacy`'yi silmek.
+  - B: `--ez dev true --es aead_path direct`.
+  - Doğrulama: `ev=profile ... knobs=...aead_path:direct`. Bayrak her açılışta verilmeli; bir sonraki bağlantıdan itibaren geçerli.
+    Eski `spi` değeri artık tanınmaz (`legacy`'ye düşer, `knobs=` içinde `aead_path:other`).
+- Ölçülmedi: Conscrypt'e özgü her şey. JVM testi SunJCE kullanır: orada `direct` biraz yavaş ve kayıt başı ~1,6 KB fazla ayırıyor
+  (SunJCE direct tamponu iç heap dizisine kopyalar); Conscrypt'te tersi beklenir. Kabul 3 (GC ≤ %6, minor fault ≤ 2 500/s,
+  `mb-video` ≤ %10) cihaz ölçümü orkestratörde. SPI yeniden kurulum payı (`Cipher.init`, ~%11) bilerek kalıyor: hedef değerlere
+  yalnız `direct` ile ulaşılırsa yeter, ulaşılmazsa kart "değmez" ya da yeni bir kart.
+- Cihazda bakılacaklar: (1) iki yolda da görüntü/giriş normal, `AUTH_FAILED`/bağlantı kopması yok (özellikle ilk kayıt: direct yolun
+  Conscrypt'te gerçekten çalıştığının kanıtı); (2) `HeapTaskDaemon`, minor fault/s, `mb-video` içindeki `updateInternal`/`expand` payı
+  ve LOS ayırmaları; (3) `latency_ms`/`decode_ms` değişmemeli.
+- Güvenlik: kripto biçimi/nonce/AAD aynı; `RecordSealer` dokunulmadı. Güvenlik koduna dokunduğu için codex incelemesi (tekrar) önerilir,
+  özellikle `doFinalDirect` tampon yaşam döngüsü ve yeni `RuntimeException` yakalama.
 
 ## Open questions
 
-- `docs/KNOBS.md` girdisi eklenmedi (kural 0026 §2 "aynı commit'te güncelle" diyor, ama dosya bu kartın kapsamında değildi). Önerilen satır:
-  `--es aead_path legacy|spi|direct` (varsayılan `legacy`; yalnızca geliştirici; T-292; `DevKnobs.kt`, `Records.kt`); benimsenince ya da
+- `docs/KNOBS.md` girdisi eklenmedi (dosya kapsam dışı; kural 0026 §2 "aynı commit'te" diyor). Önerilen satır:
+  `--es aead_path legacy|direct` (varsayılan `legacy`; yalnızca geliştirici; T-292; `DevKnobs.kt`, `Records.kt`); benimsenince ya da
   "değmez" çıkınca silinir. `ev=profile knobs=` alanında `aead_path:<id>`.
-- `docs/LOGGING.md`: `crypto_provider` olayına `spi_reused=0|1` alanı eklendi (yalnız `spi`/`direct` yollarında), belgelenmedi.
 - `RecordDecoder.feed` girdiyi `ByteArray` tamponuna kopyalıyor; `direct` yolu bunu bir kez daha direct tampona kopyalıyor.
-  Karar `direct` lehine çıkarsa sonraki adım: decoder'ın tamponunu doğrudan direct yapmak (tek kopya daha az) ve `Codec`'in
-  `ByteBuffer`'dan okuması: `Codec.kt` kapsam dışı olduğu için yapılmadı.
-- Ayrı konu (kapsam dışı): `worktree`te `client-android/local.properties` yok; `check.sh` onsuz Android'i atlamıyor mu diye bakmadım,
-  ben `sdk.dir` ile (gitignore'lu) çalıştırdım.
+  `direct` kazanırsa sonraki adım: decoder tamponunu doğrudan direct yapmak ve `Codec`'in `ByteBuffer`'dan okuması (`Codec.kt` kapsam dışı).
+- `openPlain` artık tüm `RuntimeException`'ları AUTH_FAILED'a çeviriyor: bir programlama hatası (örn. dizin dışı) da "kimlik doğrulama"
+  hatası gibi görünür. Ayrım gerekirse ayrı bir `ProtocolException.Kind` protokol sahibinin (orkestratör) işi.

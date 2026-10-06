@@ -344,7 +344,7 @@ class DevKnobsTest {
         val k = parse("dev" to true, "aead_path" to "direct")
         assertEquals(dev.matebridge.client.security.AeadPath.DIRECT, k.aeadPath)
         assertEquals(listOf("aead_path:direct"), k.knobs)
-        assertEquals(dev.matebridge.client.security.AeadPath.SPI, parse("dev" to true, "aead_path" to " SPI ").aeadPath)
+        assertEquals(dev.matebridge.client.security.AeadPath.LEGACY, parse("dev" to true, "aead_path" to " Legacy ").aeadPath)
         assertEquals(legacy, parse("dev" to true, "aead_path" to "boom").aeadPath)
         assertEquals(listOf("aead_path:other"), parse("dev" to true, "aead_path" to "boom").knobs)
         assertTrue("aead_path" in DevKnobs.DEBUG_ONLY_KEYS)

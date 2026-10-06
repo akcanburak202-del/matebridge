@@ -6,33 +6,25 @@ import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.session.MbLog
 import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
-import java.security.Provider
-import java.security.Security
 import javax.crypto.Cipher
-import javax.crypto.CipherSpi
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|spi|direct` (needs `--ez dev true`).
- * Wire format, nonce, AAD and error behaviour are identical in every mode.
+ * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|direct` (needs `--ez dev true`).
+ * Wire format, nonce, AAD, per-record `init` and error behaviour are identical in both modes.
  *
- * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind the modes (source read, not yet measured on device):
- * - `Cipher.init` runs `tryCombinations` every call and builds a new SPI (`OpenSSLAeadCipherAES$GCM`) each time; the fresh
- *   SPI's `reset()` also allocates a `lastGlobalMessageSize` buffer. A `Cipher` built with the protected
- *   `Cipher(CipherSpi, Provider, String)` constructor keeps one SPI for all inits.
- * - `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), then JNI-copies it
- *   again, and `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two
- *   direct buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation.
+ * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind [DIRECT] (source read, not yet measured on device):
+ * `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), JNI-copies it again, and
+ * `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two direct
+ * buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation. (The per-`init`
+ * SPI re-creation stays: a `Cipher` with a fixed SPI never calls `engineInit`, so it cannot be reused safely.)
  */
 enum class AeadPath(val id: String) {
-    /** The T-285 behaviour: `Cipher.getInstance` + `doFinal(byte[])`. Default until the device A/B says otherwise. */
+    /** The T-285 behaviour: `Cipher.doFinal(byte[])`. Default until the device A/B says otherwise. */
     LEGACY("legacy"),
 
-    /** One SPI for the connection's lifetime (no per-record provider selection / SPI construction), byte[] `doFinal`. */
-    SPI("spi"),
-
-    /** [SPI] plus direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
+    /** Direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
     DIRECT("direct");
 
     companion object {
@@ -78,37 +70,6 @@ object Records {
         if (!providerLogged) {
             providerLogged = true
             try { MbLog.i("crypto_provider", "provider=${c.provider.name}") } catch (_: Throwable) {}
-        }
-        return c
-    }
-
-    /** AES-GCM cipher with one SPI kept for all `init` calls ([AeadPath.SPI], [AeadPath.DIRECT]); see [AeadPath]. */
-    private class ReusableCipher(spi: CipherSpi, provider: Provider, transformation: String) :
-        Cipher(spi, provider, transformation)
-
-    @Volatile private var reuseLogged = false
-
-    /** True when [c] keeps its SPI across `init` calls (built by [newReusableCipher] without falling back). */
-    internal fun isReusable(c: Cipher): Boolean = c is ReusableCipher
-
-    /**
-     * A [Cipher] whose SPI is created once, from the preferred provider's service (default providers when it is absent).
-     * Falls back to [newCipher] (per-`init` SPI) if the provider exposes no usable service, so a platform quirk degrades
-     * to the legacy speed, never to a failure. The result is logged once per process.
-     */
-    fun newReusableCipher(): Cipher {
-        val reusable = try {
-            val provider = Security.getProvider(PREFERRED_PROVIDER)?.takeIf { it.getService("Cipher", TRANSFORMATION) != null }
-                ?: Security.getProviders().first { it.getService("Cipher", TRANSFORMATION) != null }
-            val spi = provider.getService("Cipher", TRANSFORMATION).newInstance(null) as CipherSpi
-            ReusableCipher(spi, provider, TRANSFORMATION)
-        } catch (e: Exception) { // no provider, no service, instantiation or class mismatch
-            null
-        }
-        val c = reusable ?: newCipher()
-        if (!reuseLogged) {
-            reuseLogged = true
-            try { MbLog.i("crypto_provider", "provider=${c.provider.name} spi_reused=${if (reusable != null) 1 else 0}") } catch (_: Throwable) {}
         }
         return c
     }
@@ -168,9 +129,14 @@ class RecordSealer(key: ByteArray, startCounter: Long = 0) {
 }
 
 /** Opens incoming records of one connection direction. */
-class RecordOpener(key: ByteArray, startCounter: Long = 0, val path: AeadPath = Records.aeadPath) {
+class RecordOpener(
+    key: ByteArray,
+    startCounter: Long = 0,
+    val path: AeadPath = Records.aeadPath,
+    /** Test hook: the cipher to use instead of the platform's. */
+    private val cipher: Cipher = Records.newCipher(),
+) {
     private val keySpec = SecretKeySpec(key, "AES")
-    private val cipher = if (path == AeadPath.LEGACY) Records.newCipher() else Records.newReusableCipher()
     private var counter = startCounter
     private var scratch = ByteArray(0)
 
@@ -217,6 +183,10 @@ class RecordOpener(key: ByteArray, startCounter: Long = 0, val path: AeadPath = 
             counter++
             return n
         } catch (e: GeneralSecurityException) {
+            throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
+        } catch (e: RuntimeException) {
+            // A provider misbehaving (IllegalStateException, ReadOnlyBufferException, ...) must end the connection through
+            // the same terminal path as a bad tag, never escape the reader thread and skip session cleanup.
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
         }
     }

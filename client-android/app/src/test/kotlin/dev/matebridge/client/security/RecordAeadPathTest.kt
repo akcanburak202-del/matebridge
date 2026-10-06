@@ -11,6 +11,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.security.AlgorithmParameters
+import java.security.Key
+import java.security.Provider
+import java.security.SecureRandom
+import java.security.spec.AlgorithmParameterSpec
+import javax.crypto.Cipher
+import javax.crypto.CipherSpi
 
 /** T-292: every [AeadPath] opens the same records, rejects the same forgeries and keeps the same counter behaviour. */
 class RecordAeadPathTest {
@@ -23,9 +31,10 @@ class RecordAeadPathTest {
     @Test fun parseKnowsTheThreeIdsAndDefaultsToLegacy() {
         assertEquals(AeadPath.LEGACY, AeadPath.parse(null))
         assertEquals(AeadPath.LEGACY, AeadPath.parse("nonsense"))
-        assertEquals(AeadPath.SPI, AeadPath.parse(" SPI "))
+        assertEquals(AeadPath.LEGACY, AeadPath.parse("spi")) // removed in T-292 rework: a fixed-SPI Cipher never calls engineInit
+        assertEquals(AeadPath.DIRECT, AeadPath.parse(" DIRECT "))
         assertEquals(AeadPath.DIRECT, AeadPath.parse("direct"))
-        assertEquals(setOf("legacy", "spi", "direct"), AeadPath.IDS)
+        assertEquals(setOf("legacy", "direct"), AeadPath.IDS)
         assertEquals(AeadPath.LEGACY, Records.aeadPath) // the process default stays legacy until the A/B says otherwise
     }
 
@@ -34,16 +43,61 @@ class RecordAeadPathTest {
         assertEquals(AeadPath.DIRECT, RecordOpener(key, 0, AeadPath.DIRECT).path)
         val saved = Records.aeadPath
         try {
-            Records.aeadPath = AeadPath.SPI
-            assertEquals(AeadPath.SPI, RecordOpener(key).path)
+            Records.aeadPath = AeadPath.DIRECT
+            assertEquals(AeadPath.DIRECT, RecordOpener(key).path)
         } finally {
             Records.aeadPath = saved
         }
     }
 
-    @Test fun reusablePathsKeepOneSpiLegacyDoesNot() {
-        assertTrue(Records.isReusable(Records.newReusableCipher()))
-        assertFalse(Records.isReusable(Records.newCipher()))
+    /** A provider that throws something other than a GeneralSecurityException (as Conscrypt did: "Cipher not initialized"). */
+    private class ThrowingSpi(private val where: String) : CipherSpi() {
+        private fun boom(at: String) { if (at == where) throw IllegalStateException("Cipher not initialized") }
+        override fun engineSetMode(mode: String?) {}
+        override fun engineSetPadding(padding: String?) {}
+        override fun engineGetBlockSize() = 16
+        override fun engineGetOutputSize(inputLen: Int) = inputLen
+        override fun engineGetIV(): ByteArray? = null
+        override fun engineGetParameters(): AlgorithmParameters? = null
+        override fun engineInit(opmode: Int, key: Key?, random: SecureRandom?) = boom("init")
+        override fun engineInit(opmode: Int, key: Key?, params: AlgorithmParameterSpec?, random: SecureRandom?) = boom("init")
+        override fun engineInit(opmode: Int, key: Key?, params: AlgorithmParameters?, random: SecureRandom?) = boom("init")
+        override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray? = null
+        override fun engineUpdate(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int) = 0
+        override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int): ByteArray? { boom("final"); return ByteArray(0) }
+        override fun engineDoFinal(input: ByteArray?, inputOffset: Int, inputLen: Int, output: ByteArray?, outputOffset: Int): Int {
+            boom("final"); return 0
+        }
+        override fun engineDoFinal(input: ByteBuffer?, output: ByteBuffer?): Int { boom("final"); return 0 }
+        override fun engineUpdateAAD(src: ByteArray?, offset: Int, len: Int) = boom("aad")
+    }
+
+    private class StubProvider : Provider("stub", 1.0, "throwing stub")
+
+    private fun throwingCipher(where: String): Cipher = object : Cipher(ThrowingSpi(where), StubProvider(), "AES/GCM/NoPadding") {}
+
+    @Test fun unexpectedRuntimeExceptionsFromTheCipherBecomeAuthFailedOnAllPaths() {
+        val (h, b) = split(RecordSealer(key).seal(0x41, payload(100, 3)))
+        for (path in AeadPath.values()) for (where in listOf("init", "aad", "final")) {
+            val opener = RecordOpener(key, 0, path, throwingCipher(where))
+            try { opener.open(h, b); fail("$path $where") } catch (e: ProtocolException) {
+                assertEquals("$path $where", ProtocolException.Kind.AUTH_FAILED, e.kind)
+                assertFalse(e.message!!.contains("initialized")) // the provider's text never reaches the caller
+            }
+        }
+    }
+
+    @Test fun decoderTurnsAProviderRuntimeExceptionIntoATerminalProtocolException() {
+        val rec = RecordSealer(key).seal(0x41, payload(100, 3))
+        for (path in AeadPath.values()) {
+            val dec = RecordDecoder(1 shl 20, RecordOpener(key, 0, path, throwingCipher("final")))
+            dec.feed(rec)
+            for (i in 1..2) { // terminal: later calls rethrow
+                try { dec.next(); fail("$path") } catch (e: ProtocolException) {
+                    assertEquals(ProtocolException.Kind.AUTH_FAILED, e.kind)
+                }
+            }
+        }
     }
 
     @Test fun allPathsOpenRecordsOfChangingSizes() {
