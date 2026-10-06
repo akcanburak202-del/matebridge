@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * T-287: when the writer suspends the output stream. While nothing plays the Mac sends no packets (T-279) but an
  * AAudio MMAP stream still wants a silent burst every 5 ms (~200 wake-ups/s, ~2% of a core, T-282). After
- * [AFTER_FRAMES] of silence (10 s counted in output frames, which the device paces in real time) the writer pauses the
+ * [AFTER_FRAMES] of silence (60 s counted in output frames, which the device paces in real time) the writer pauses the
  * stream and blocks until the next packet, then resumes it; [PlayoutCore] sees nothing but a long idle gap.
  *
  * Pure state; writer thread only. [shouldPause] holds only in PRIMING with no packet for [afterFrames] and not right
@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicLong
  * holds the old, long value until one burst has been rendered, see [onRendered]).
  */
 class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
-    /** [PAUSE]: requestPause (buffered data kept, counters continuous); [STOP]: requestStop; [OFF]: never (default). */
+    /** [PAUSE]: requestPause (buffered data kept, counters continuous); [STOP]: requestStop; [OFF]: never. */
     enum class Mode(val id: String) { OFF("off"), PAUSE("pause"), STOP("stop") }
 
     /** Why pausing is switched off for this stream (null = it is not); logs. */
@@ -65,10 +65,11 @@ class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
     data class Resolved(val mode: Mode, val unknown: Boolean)
 
     companion object {
-        const val SECONDS = 10
+        /** One fixed value, no knob: user decision 2026-10-07 (the A/B showed +80 ms on the first sound after a pause). */
+        const val SECONDS = 60
         const val AFTER_FRAMES = SECONDS * 48_000L
-        /** Off until the device A/B passes (decision 0026: a new knob defaults to the old behaviour). */
-        val DEFAULT = Mode.OFF
+        /** User decision 2026-10-07: pause after [SECONDS]; `off` and `stop` stay selectable through the knob. */
+        val DEFAULT = Mode.PAUSE
 
         /** `--es audio_idle_pause off|pause|stop` (developer knob); null = the default. */
         fun resolve(raw: String?): Resolved {

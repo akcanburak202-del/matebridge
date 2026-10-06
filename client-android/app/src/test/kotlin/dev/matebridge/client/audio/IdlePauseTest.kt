@@ -9,9 +9,9 @@ import org.junit.Test
 class IdlePauseTest {
     private val after = IdlePause.AFTER_FRAMES
 
-    @Test fun pausesOnlyAfterTenSecondsOfSilenceWhilePriming() {
+    @Test fun pausesOnlyAfterSixtySecondsOfSilenceWhilePriming() {
         val p = IdlePause(IdlePause.Mode.PAUSE)
-        assertEquals(10 * 48_000L, after)
+        assertEquals(60 * 48_000L, after)
         assertFalse(p.shouldPause(priming = true, framesSinceLastPacket = after - 1, canPause = true))
         assertTrue(p.shouldPause(priming = true, framesSinceLastPacket = after, canPause = true))
         assertFalse("playing audio is never paused", p.shouldPause(priming = false, framesSinceLastPacket = after * 3, canPause = true))
@@ -69,12 +69,12 @@ class IdlePauseTest {
     }
 
     @Test fun launchSwitchResolves() {
-        assertEquals(IdlePause.Resolved(IdlePause.Mode.OFF, false), IdlePause.resolve(null))
+        assertEquals(IdlePause.Resolved(IdlePause.Mode.PAUSE, false), IdlePause.resolve(null))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.OFF, false), IdlePause.resolve("off"))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.PAUSE, false), IdlePause.resolve("PAUSE"))
         assertEquals(IdlePause.Resolved(IdlePause.Mode.STOP, false), IdlePause.resolve(" stop "))
         assertEquals(IdlePause.Resolved(IdlePause.DEFAULT, true), IdlePause.resolve("later"))
-        assertEquals("off until the device A/B passes (decision 0026)", IdlePause.Mode.OFF, IdlePause.DEFAULT)
+        assertEquals("pause is the default (user decision 2026-10-07)", IdlePause.Mode.PAUSE, IdlePause.DEFAULT)
     }
 
     @Test fun firstSoundWaitsForAWriteOnAStartedOutput() {

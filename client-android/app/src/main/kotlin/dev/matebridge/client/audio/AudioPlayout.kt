@@ -55,14 +55,14 @@ import java.util.concurrent.locks.LockSupport
  *    a window with headroom below one burst, an estimated underflow or (where reported) an xrun grows the buffer by one
  *    burst ([OutBufGrowth]). A grown size is remembered per AAudio path ([OutBufMemory]) and the next output starts
  *    there; `--ei audio_buf_bursts` overrides the start.
- *  - Idle pause (T-287, [IdlePause]): an AAudio output that has had no packet for 10 s (the host sends nothing while the
+ *  - Idle pause (T-287, [IdlePause]): an AAudio output that has had no packet for 60 s (the host sends nothing while the
  *    Mac is silent, T-279) is paused, and the writer parks until a packet arrives, a stop or a rebuild; then the
  *    output is started again and [PlayoutCore] plays the new sound after its usual quick restart (the long gap is
  *    classified idle by its capture-time jump). Logs: `idle_pause`, `resume` (`start_ms` = until the stream reports STARTED), `first_sound` (first packet
  *    to the first write that succeeded once playback started, also logged without pausing). A pause or resume that
  *    fails turns pausing off for the stream (a failed resume rebuilds the output). AudioTrack is never paused.
- *    `--es audio_idle_pause off|pause|stop` ([launchIdlePauseRaw], developer gate) picks no pausing (default until the
- *    device A/B passes, decision 0026), requestPause or requestStop.
+ *    `--es audio_idle_pause off|pause|stop` ([launchIdlePauseRaw], developer gate) picks no pausing, requestPause (the default) or
+ *    requestStop.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
