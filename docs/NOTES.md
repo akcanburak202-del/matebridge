@@ -1637,3 +1637,12 @@ Kayıtlar `~/.cache/matebridge-tools/data/2026-10-06-adb/`. fps ≥ 20 olan 10 s
 - adbd %12–16 (fps ile orantılı; kare başına aynı). libusb/burst ölçülebilir kazanç getirmedi; fps/skip farkı içerikten.
 - **libusb'de ses bozuldu** (kullanıcı; tablette "uyumlu" ses moduna geçince düzeldi). → libusb ve burst reddedildi, adb sunucusu `NATIVE`'e geri alındı (doğrulandı).
 - Sonuç: adb tünelinin maliyeti tablette ~%12–16 bir çekirdek ve ≤ ~1–2 ms; ayarla iyileşmiyor. USB yolu konusu kapandı.
+
+## 2026-10-06 ~16:00 — Wi-Fi: gecikme sıçramaları paket kaybından mı? (UDP+FEC kararı için)
+
+Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRIDGE_LAT_TRACE=1` (kare başına `write_start/done`), tablet `--ez pace_trace true --ez stats_1s true` (kare başına `recv_ns`); `pts_us == capture_us` ile 12 409 kare eşlendi. Kayıp: host `ev=tcp conn=video retx_pkts_delta` (saniyelik). Kayıtlar `~/.cache/matebridge-tools/data/2026-10-06-adb/`.
+- Fazla gecikme (varış − yazma başlangıcı − en küçük): p50 9,7 / p90 41,5 / p99 87 / maks 325 ms. Host yazması p50 0,2 ms (soket hiç tıkanmıyor).
+- Yeniden gönderim nadir: 291 s'de 39 paket, saniyelerin %8'i.
+- > 50 ms sıçrayan kareler %8,2; bunların yalnız %27'si kaybın olduğu saniyede (taban oran ~%15) → **sıradan 30–90 ms sıçramaların çoğu kayıptan değil** (kablosuz kuyruk/yayın süresi).
+- > 100 ms kareler %0,6 (73 kare), hepsi ~10 s'lik tek kötü bir dönemde, %82'si kayıpla aynı saniyede (250–325 ms): kötü Wi-Fi anında kayıp ve kuyruk birlikte.
+- **Sonuç:** UDP+FEC yalnız nadir kötü anları (kare %0,6) kısaltır, yaygın 30–90 ms dalgalanmayı değil. Maliyete (takvimde 2–3 gün, iki aktarım yolu) değmez → park.
