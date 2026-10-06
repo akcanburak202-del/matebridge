@@ -74,6 +74,32 @@ class FilesNetMachineTest {
         assertTrue(m.step(Event.Received(gen, open.copy(port = 47010))).filterIsInstance<Action.Send>().isEmpty())
     }
 
+    @Test fun aSharingToggleMakesTheSamePortOpenANewRequestButARepeatDuringALiveShareStaysANoOp() {
+        val m = machine()
+        val gen = m.accepted()
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
+        // a true repeat while the share is live: nothing
+        val repeat = m.step(Event.Received(gen, open))
+        assertTrue(repeat.plans().isEmpty() && repeat.nets().isEmpty())
+        // the user switches sharing off on the tablet: OFF, the tunnel goes, the remembered request is dead
+        assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.OFF, FilesServerScope.NONE)).plans())
+        // ... and on again: STANDBY; the Mac tore down on OFF and sends a fresh OPEN on the SAME port
+        m.step(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE))
+        val fresh = m.step(Event.Received(gen, open))
+        assertEquals(listOf(Action.FilesNetReceived(open, gen)), fresh.nets()) // delivered: the UI starts the server again
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 40555)), m.step(Event.SetFiles(ready.copy(port = 40555), wifi(gen))).plans())
+        // and the live share is idempotent again
+        assertTrue(m.step(Event.Received(gen, open)).nets().isEmpty())
+    }
+
+    @Test fun aServerThatStoppedOnItsOwnAlsoMakesTheNextOpenNew() {
+        val m = machine()
+        val gen = m.accepted()
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
+        m.step(Event.SetFiles(FilesInfo.OFF, FilesServerScope.NONE)) // the server failed / was stopped (OFF is published)
+        assertEquals(listOf(Action.FilesNetReceived(open, gen)), m.step(Event.Received(gen, open)).nets())
+    }
+
     @Test fun closeClosesTheTunnelOnceAndIsForwardedAsClose() {
         val m = machine()
         val gen = m.accepted()
@@ -89,7 +115,9 @@ class FilesNetMachineTest {
         val gen = m.accepted()
         m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
         assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.OFF, FilesServerScope.NONE)).plans())
-        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 40999)), m.step(Event.SetFiles(ready.copy(port = 40999, token = "ffffffffffffffffffffffffffffffff"), wifi(gen))).plans())
+        // OFF ended the request (the Mac tore down on it): a new server's READY alone opens nothing until the Mac's new OPEN
+        assertTrue(m.step(Event.SetFiles(ready.copy(port = 40999, token = "ffffffffffffffffffffffffffffffff"), wifi(gen))).plans().isEmpty())
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 40999)), m.step(Event.Received(gen, open)).plans())
         // a new token on the same port is no change for the tunnel (the HTTP traffic carries the token, not the tunnel)
         assertTrue(m.step(Event.SetFiles(ready.copy(port = 40999, token = "00000000000000000000000000000000"), wifi(gen))).plans().isEmpty())
         // STANDBY is "server off" as well
