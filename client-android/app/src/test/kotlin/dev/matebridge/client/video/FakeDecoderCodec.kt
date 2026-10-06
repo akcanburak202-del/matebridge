@@ -55,6 +55,9 @@ class FakeDecoderFactory : DecoderCodec.Factory {
     /** T-217: the integer keys of every configure call (any codec, failed ones included), in order. */
     val configureFormats = java.util.concurrent.CopyOnWriteArrayList<Map<String, Int>>()
 
+    /** T-286: dequeueOutputBuffer calls (any codec) that asked for a wait of 40 ms or more (the idle wait of `dec_wait event`). */
+    val longOutputWaits = java.util.concurrent.atomic.AtomicInteger()
+
     /**
      * T-168 review: a render release (`releaseOutputBuffer(idx, ns)` / `(idx, true)`) calls the frame-rendered listener
      * before it returns, as if the main looper ran the callback while the output thread was descheduled.
@@ -209,6 +212,7 @@ class FakeDecoderFactory : DecoderCodec.Factory {
                     return nextOut.also { nextOut = (nextOut + 1) % 8 }
                 }
             }
+            if (timeoutUs >= 40_000) longOutputWaits.incrementAndGet()
             if (timeoutUs > 0) LockSupport.parkNanos(timeoutUs * 1000) // a real codec blocks up to the timeout
             synchronized(lock) { outputPolls++; lock.notifyAll() }
             return DecoderCodec.INFO_TRY_AGAIN_LATER

@@ -1,7 +1,7 @@
 ---
 id: T-286
 title: İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s)
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
@@ -55,4 +55,34 @@ Okuma notları (kod: `VideoRenderer.runCodec`, `FrameQueue.awaitNext`, `IdleWait
 
 ## Handoff
 
+Commit: bkz. `git log task/T-286-decoder-loop-wakeups` (kod commit'i "T-286: event-driven decoder waits behind dec_wait knob"; plan commit'i 918ea048).
+
+**Dosyalar:** `video/VsyncIdle.kt` (`DecoderWait`, `DecoderWaits`), `video/FrameQueue.kt` (`awaitNext(abort=)`, `nudge()`), `video/VideoRenderer.kt` (`decoderWait`, iki döngü), test `video/DecoderWaitTest.kt` (yeni), `video/FakeDecoderCodec.kt` (`longOutputWaits`). Kapı için kapsam dışı üç dosya (Open questions 1): `session/DevKnobs.kt`, `MainActivity.kt` (tek satır), `session/DevKnobsTest.kt`. `InputBufferSlot.kt` değişmedi (gerek yok).
+
+**Ayar (varsayılan kapalı = bugünkü kod yolu):** `--ez dev true --es dec_wait event` (A: `--es dec_wait poll` ya da hiç verme). `ev=profile` satırının `knobs=` alanında `dec_wait:event` görünür. `VideoRenderer.decoderWait` her döngü turunda okunur (çalışırken değişebilir; MainActivity yalnız açılışta atar).
+
+**Davranış (event kipi):**
+- Giriş (`mb-decoder`): kare yokken `awaitNext` 250 ms'lik sigorta ile park eder (`EVENT_INPUT_WAIT_NS`); `offer`, retire/revoke ve yeni `abort` (`!att.active || outError != null`) + `queue.nudge()` hepsi anında uyandırır. Bugünkü 4 ms/20 ms yok.
+- Çıkış (`mb-decoder-out`): codec içinde kare yok (`InFlightGauge.current()==0`) ve tutulan tampon yok ise `dequeueOutputBuffer` 50 ms bekler (`EVENT_OUTPUT_IDLE_WAIT_US`); aksi halde bugünkü 5 ms/`IdleWait`. **Başka uyarı yolu yok**: durdurmayı bir bekleyen `dequeueOutputBuffer`'a ileten yol olmadığı için zaman aşımı kalır; durdurma gecikmesi en çok +50 ms (bugün 5–20 ms). Çıkış hazır olunca `dequeue` yine anında döner, kare gecikmesi aynı.
+- Kalan sigorta bedeli: giriş ~4 uyanma/s, çıkış ~20 uyanma/s (boşta). Beklenen 10 fps'te: `mb-decoder` ~265 → ~5 (kare aralarında), `mb-decoder-out` ~246 → ~20-60, `MediaCodec_loop` orantılı düşer (her sync `dequeueOutputBuffer` zaman aşımı looper'da 2 uyanma) [Tahmin].
+- 60 fps'te kare uçuştayken çıkış iş parçacığı 5 ms poll'da kalır; kazanç küçük olur (orkestratör ölçer).
+
+**Tablette kontrol (orkestratör, tek seferde A/B):** aynı Mac senaryosu (10 fps arka plan, sonra Oyun 60), A = `dec_wait` yok, B = `--ez dev true --es dec_wait event`.
+1. `/proc/<pid>/task/*/status` gönüllü bağlam değişimi/s: `mb-decoder`, `mb-decoder-out`, `MediaCodec_loop`, `CodecLooper` (T-282 yöntemi). Hedef 10 fps'te üçünün toplamı ≥500/s düşer.
+2. `MB/render ev=stats`: `cap_dec_p50_us`, `cap_dec_p95_us`, `cap_dec_p99_us` (eski `latency_us`/`latency_ms` de), kötüleşme ±1 ms. Çözme süresi için `MB/decoder ev=stats`; `ready_slot_*`, `skip_pct`, `cb_skip_pct` aynı kalmalı.
+3. Bozulma işareti: `MB/decoder` altında `decode_error`, `output_straggler`, `detach_slow`, `decoder_previous_stuck` satırı çıkmamalı; Oyun'a/Günlüğe geçişte (reconfigure) ve ekran kapat/aç sonrası akış normal dönmeli; soğuk başlangıçta ilk kare gecikmesi artmamalı.
+4. Durdurma yolu (ekranı kapat/aç, mod geçişi) en çok +50 ms yavaşlayabilir; `detach_slow` görmemek yeterli.
+Kötüleşirse kart geri alınır (varsayılan zaten `poll`).
+
+**Varsayımlar:** `InFlightGauge` sayacı yanlışlıkla >0 kalırsa (codec girişi yutarsa) çıkış döngüsü bugünkü poll'a düşer: güvenli yön. Giriş sigortası 250 ms: bilinmeyen bir kayıp uyanma, takılma yerine ≤250 ms gecikme olarak görünür. `mb-video`/ağ iş parçacıkları ve `held != null` (codec girişi dolu, `dequeueInputBuffer(4 ms)`) yolu değişmedi.
+
+**Test edilmedi (tablet gerekir):** gerçek MediaCodec'te `dequeueOutputBuffer(50 ms)` davranışı, gerçek uyanma sayıları, 60 fps'te kazanç, HiSilicon decoder'ın boşta uzun `dequeue`'ye tepkisi.
+
+**Birim testler:** `DecoderWaitTest` (politika tablosu; `abort`+`nudge` ve 400 turluk kayıp uyanma yarışı; uzun parkta `offer`/revoke; sahte codec ile event kipinde boşta uyanma sayısı sınırlı ve poll'dan az; uzun boşluktan sonra kare <100 ms'de girer; seyrek akış sırayla çözülür/gösterilir; kip çalışırken değişir; detach, reconfigure ve çıkış hatası park halindeki iş parçacığını anında bitirir). `DevKnobsTest` `dec_wait`. `./scripts/check.sh`: ALL OK.
+
 ## Open questions
+
+1. **Kapsam genişlemesi (onay gerekir):** "mevcut ayar deseni" `DevKnobs.kt` (alan + `Spec`), `MainActivity.kt` (`it.decoderWait = devKnobs.decoderWait`, tek satır) ve `DevKnobsTest.kt` dosyalarını gerektiriyor; kartın `files:` listesinde yoklar. Orkestratörün açık talimatıyla en küçük değişiklik yapıldı. İstenmezse bu üç dosya geri alınır ve ayar yalnız `VideoRenderer.decoderWait` olarak kalır (cihazda tetiklenemez).
+2. **`docs/KNOBS.md` satırı (orkestratör ekler, kart dışı):** 23e `--es dec_wait poll|event`; varsayılan yok = `poll` (bugünkü 4/5 ms + `IdleWait`); `event` = girişte park (250 ms sigorta; `offer`/retire/hata `nudge` ile anında), çıkışta codec içinde kare yokken 50 ms; kod: `DevKnobs.kt` (`decoderWait`), `VideoRenderer.decoderWait`, `video/VsyncIdle.kt` (`DecoderWaits`); kart T-286; sınıf yalnızca geliştirici; A/B sonucuna göre benimsenir (varsayılan `event`, `poll` kalkar) ya da silinir.
+3. **`docs/LOGGING.md`:** değişmedi (yeni log alanı yok; yalnız `ev=profile knobs=` listesinde `dec_wait:event`).
+4. Not (kapsam dışı): `FrameQueue.awaitNext` iş parçacığı kesilmişse (interrupt bayrağı) hemen null döner ve giriş döngüsü dönerek bekler (T-112 notu). Şu an hiçbir yer kesmiyor; dokunulmadı.
