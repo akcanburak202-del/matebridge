@@ -1423,10 +1423,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val r = renderer ?: VideoRenderer(
             config,
             onKeyframeRequest = { reason -> controller.trySend(mainKeyframeRequest(reason)) }, // T-259: `view` only in packed mode
-            onGiveUp = { why ->
-                MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder")
-                runOnUiThread { onMainDecoderGaveUp() }
-            },
+            onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
             vsync = vsync,
             bufferFrames = bufferFrames,
             codecReportsShown = true, // T-184: the only path; the codec's render callback reports shown times
@@ -1541,7 +1538,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-159: renderer lifecycle, UI thread (a Generation arrives inline, before its decoder thread starts). */
     private fun onVideoHealthEvent(e: dev.matebridge.client.video.HealthEvent) {
         if (e is dev.matebridge.client.video.HealthEvent.Generation) decoderFault?.onGeneration(e.gen)
+        // T-263: only the current generation's give-up may trigger the fallback (a stale one must not tear down a newer
+        // packed pipeline); checked before onEvent, which ignores retired generations the same way.
+        val gaveUp = e is dev.matebridge.client.video.HealthEvent.Fault &&
+            e.cause == dev.matebridge.client.video.FaultCause.GIVE_UP && e.gen == videoHealth.generation
         videoHealth.onEvent(e)
+        if (gaveUp) onMainDecoderGaveUp()
     }
 
     /** T-159: FAULT stops feeding (no ~2 IDR/s loop); FAULT and STARTING close capture (releases + RELEASE_ALL(USER)). */
