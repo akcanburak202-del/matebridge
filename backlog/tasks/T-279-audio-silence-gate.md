@@ -28,6 +28,12 @@ Mac'te bir uygulama ses cihazını açık tutup sessizlik çalınca (tarayıcı 
 
 ## Plan
 
+1. `MateBridgeCore/Audio/AudioSilenceGate.swift`: saf mantik struct. `mutating func shouldSend(sumSquares: Double) -> Bool`. Sifir olmayan paket (`sumSquares > 0`) sayaci sifirlar ve gonderilir. Sifir paket sayaci artirir; ilk 50 sifir paket gonderilir, 51. ve sonrasi atlanir (`skipped` sayilir). `sumSquares` zaten s16'ya cevrilmis orneklerden hesaplaniyor (`PCMConvert.convertStereo`), yani `== 0` tam olarak "her s16 ornek 0" demek; 1 LSB (-90 dBFS) sifir sayilmaz. Gercek zamanli yola dokunulmaz.
+2. `AudioStreamer.Stream` icine `gate` konur (her `startCapture` yeni `Stream` olusturdugu icin yeni stream_id ve oturum degisiminde sayac kendiliginden sifirlanir). `drain()`: paket okununca kapi sorulur; atlanirsa `seq` artmaz, `stats.addSilentSkipped()`, paket gonderilmez. Akisin ilk paketi sifir olsa bile gonderilir (esik 50 > 0).
+3. `AudioStatsWindow`: `silentSkipped` sayaci, `logFields` sonuna `silent_skipped=<n>` eklenir; mevcut alanlar degismez; `rms_dbfs` yalniz gonderilen paketlerden.
+4. Istemci dogrulamasi (kod okuma, dokunulmaz): atlanan bosluk >= 500 ms > `maxGapFillFrames` (960 kare = 20 ms) -> `AudioJitterBuffer.write` bosluk doldurmaz, `gap*1e6/sampleRate >= jumpUs (20 ms)` ve capture-time sicramasi -> `discontinuities++` -> `PlayoutCore.classifyStarve` `idleGaps++` (alt tasma degil).
+5. Testler (`AudioStreamerTests`, `AudioSilenceGateTests` eklenir): 50 sifirdan sonra atlama, sifir olmayanda surme + seq ardisik + sample_index sicramasi, < 500 ms sessizlik aynen gider, ilk paket kurali, 1 LSB paket sifir sayilmaz (packetizer uzerinden gercek float -> s16), stats alani, yeni stream'de sayac sifirlanmasi.
+
 ## Handoff
 
 ## Open questions
