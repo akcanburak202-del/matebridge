@@ -1577,3 +1577,4 @@ Kullanıcı her modda ~30 s durağan + ~60 s kaydırma yaptı (Keskin 10:21:39�
 
 - Durağan ekranda ek yük yok (GPU %5–10, CPU %4).
 - **Bulgu:** ana karenin kodlaması 6,4 → 11,4 ms uzuyor (iki VT oturumu aynı motoru paylaşıyor), host tarafı gecikme +4,5 ms. 0034 §9 sınırının (≤ +5 ms) içinde ama sınırda; tablet tarafı ölçüm (10:15 notu) Wi-Fi gürültüsünde farkı göstermedi. Olası iyileştirme: yardımcıyı ana kare bitince kodlamak (ana gecikme ~6,4 ms'ye döner, yardımcı daha geç gelir → aux_paired_pct düşebilir). Kullanıcıyla konuşulacak.
+- **Kullanıcı kararı (10:40):** iyileştirmeye devam edilmeyecek (kodlama sırası değişikliği yapılmayacak); Keskin kenarlar kullanıcı için yeterli. Tam renk olduğu gibi seçenek olarak kalır (0034, varsayılan Normal).
