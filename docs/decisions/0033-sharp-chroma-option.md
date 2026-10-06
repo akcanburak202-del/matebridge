@@ -18,3 +18,4 @@ T-233 (docs/research/2026-10-05-yuv444.md): tablet çözücüsü 4:4:4 desteklem
 - Doygun renk kenarları (kırmızı ikonlar, renkli yazı) gözle görülür keskinleşir; tam 4:4:4 değildir.
 - Açıkken ~3 ms ek gecikme ve küçük GPU yükü; kullanıcı seçer.
 - Tekrar düşünülür: Metal geçişi 1 ms altına inerse varsayılan açık olabilir.
+- **Güncelleme 2026-10-06:** varsayılan artık Keskin kenarlar (0034 eki).

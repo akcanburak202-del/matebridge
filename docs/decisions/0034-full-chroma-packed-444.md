@@ -49,3 +49,7 @@
   - E: cihaz kabulü.
   - B ve C, A'dan sonra paralel yürür.
 - **Tekrar düşünülür:** kabul şartı tutmazsa. Kullanıcı 120'de de isterse (ara yol 2/3, karo haritası). Mac kodlama motoru başka işlerle sık çakışırsa.
+
+## Ek (2026-10-06): varsayılan Keskin kenarlar
+
+Kullanıcı kararı. Gerekçe: renk test sayfasında Normal (ScreenCaptureKit 4:2:0 dönüşümü) ince renk desenlerinde tonu kaydırıyor (1 px kırmızı/mavi şerit kırmızı görünüyor; NOTES 2026-10-06 ~10:55), Keskin kenarlar ve Tam renk doğru ortalamayı veriyor; Tam renk Keskin'e göre yalnız hafif iyileşme, Mac kodlayıcı yükü ~2× ve host gecikmesi +4,5 ms (NOTES ~10:30). §2'deki "Varsayılan Normal" yerine: **varsayılan Keskin kenarlar** (tek ayar, bütün modlar; HDR10'da bugünkü gibi etkisiz). Kullanıcının açıkça seçtiği değer korunur: kayıtlı `colour` aynen; eski 0033 anahtarı açıkça Kapalı ise Normal olarak taşınır. "Varsayılanlara dön" Keskin kenarlara döner. Bedel: Keskin ~+3 ms yakalama→kodlama (0033). Tam renk seçenek olarak kalır; kodlama sırası iyileştirmesi yapılmayacak (kullanıcı, 10:40).
