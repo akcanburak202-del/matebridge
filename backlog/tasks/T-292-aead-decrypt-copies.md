@@ -1,7 +1,7 @@
 ---
 id: T-292
 title: İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-285]

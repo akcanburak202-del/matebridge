@@ -36,7 +36,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
 | [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
 | [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
-| [T-292](tasks/T-292-aead-decrypt-copies.md) | İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt | 6 | android-client-dev | [T-285] |
 
 ## todo
 
@@ -310,3 +309,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-288](tasks/T-288-dav-put-safe-replace.md) | İstemci — WebDAV PUT değiştirmesi başarısız olunca hiçbir sürümü silme | 6 | android-client-dev | [] |
 | [T-289](tasks/T-289-hdr-runtime-sdr-fallback.md) | Host — HDR çalışma anı kodlayıcı hatasında SDR'ye düş; pipeline yeniden denemesi tek seferlik kalmasın | 6 | mac-host-dev | [] |
 | [T-290](tasks/T-290-test-only-code-cleanup.md) | İstemci — yalnız testte kullanılan üretim kodunu kaldır (FrameQueue.poll, ChromaReuse modelleri) | 6 | android-client-dev | [] |
+| [T-292](tasks/T-292-aead-decrypt-copies.md) | İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt | 6 | android-client-dev | [T-285] |
