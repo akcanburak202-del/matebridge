@@ -22,7 +22,7 @@ private func makeMachine(max: Int = 12, pool: Int = 2) -> FilesConnectionMachine
     var c = FilesConnectionMachine.Configuration()
     c.makeNonce = { hostNonce }
     var m = FilesConnectionMachine(configuration: c)
-    _ = m.open(sessionID: 7, controlPeer: peer, max: max, pool: pool)
+    _ = m.open(sessionID: 7, controlPeer: peer, max: max, pool: pool, now: 0)
     return m
 }
 
@@ -53,9 +53,9 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
     @Test func nothingIsAcceptedBeforeOpenOrAfterClose() {
         var m = FilesConnectionMachine()
         #expect(closes(m.accepted(F(1), peer: peer, now: 0)).map(\.1) == [.notOpen])
-        _ = m.open(sessionID: 7, controlPeer: peer, max: 12, pool: 2)
+        _ = m.open(sessionID: 7, controlPeer: peer, max: 12, pool: 2, now: 0)
         #expect(m.accepted(F(2), peer: peer, now: 0).isEmpty)
-        _ = m.close()
+        _ = m.close(now: 0)
         #expect(!m.isOpen)
         #expect(closes(m.accepted(F(3), peer: peer, now: 0)).map(\.1) == [.notOpen])
         #expect(closedLocals(m.localOpened(L(1), now: 0)).map(\.1) == [.notOpen])
@@ -132,7 +132,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))
         proven(&m, F(2))
         _ = m.accepted(F(3), peer: peer, now: 0)
-        _ = m.open(sessionID: 7, controlPeer: peer, max: 2, pool: 1)  // same session: only the limits change
+        _ = m.open(sessionID: 7, controlPeer: peer, max: 2, pool: 1, now: 0)  // same session: only the limits change
         let out = m.hello(F(3), hello(), now: 0)
         #expect(out.first == .sendAck(F(3), .rejected))
         #expect(closes(out).map(\.1) == [.rejected])
@@ -175,8 +175,8 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))
         proven(&m, F(2))
         // The tablet stops reading while Finder cancels: the host closes F(1) and F(2) but their flush hangs.
-        _ = m.protocolError(F(1))
-        _ = m.protocolError(F(2))
+        _ = m.protocolError(F(1), now: 0)
+        _ = m.protocolError(F(2), now: 0)
         #expect(m.counts.total == 0 && m.counts.closing == 2)
         #expect(closes(m.accepted(F(3), peer: peer, now: 0)).map(\.1) == [.capacity])  // no room: they are draining
         // One confirms: a slot is free again.
@@ -194,11 +194,11 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))  // closed by the Finder side
         proven(&m, F(2))  // auth failure
         _ = m.localOpened(L(1), now: 0)
-        _ = m.localClosed(L(1))
-        _ = m.recordAuthFailed(F(2))
+        _ = m.localClosed(L(1), now: 0)
+        _ = m.recordAuthFailed(F(2), now: 0)
         _ = m.accepted(F(5), peer: peer, now: 0)  // key derivation failed
         _ = m.hello(F(5), hello(), now: 0)
-        _ = m.keysUnavailable(F(5))
+        _ = m.keysUnavailable(F(5), now: 0)
         _ = m.accepted(F(6), peer: peer, now: 0)  // rejected HELLO
         _ = m.hello(F(6), hello(session: 1), now: 0)
         #expect(m.counts.closing == 4)
@@ -224,7 +224,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         var m = makeMachine()
         _ = m.accepted(F(1), peer: peer, now: 100)
         _ = m.hello(F(1), hello(), now: 100)
-        let out = m.protocolError(F(1))  // at the machine's clock: 100
+        let out = m.protocolError(F(1), now: 100)
         #expect(closes(out).map(\.1) == [.protocolError])
         #expect(m.nextDeadline == 100 + 5 * sec)
         #expect(m.tick(now: 100 + 5 * sec - 1).isEmpty)
@@ -237,11 +237,50 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         #expect(m.fileClosed(F(1)).isEmpty)  // the late report changes nothing
     }
 
+    @Test func theDrainTimeStartsAtTheCloseEventNotAtTheLastTimestampedOne() {
+        // Everything bound (no timer pending), the last timestamped event at t=0; the Finder closes at t=10 s with
+        // bytes still queued: the flush gets its full 5 s from t=10 s, not from t=0.
+        var m = makeMachine()
+        proven(&m, F(1), now: 0)
+        _ = m.localOpened(L(1), now: 0)
+        #expect(m.nextDeadline == nil)
+        let out = m.localClosed(L(1), now: 10 * sec)
+        #expect(closes(out).map(\.1) == [.localClosed])
+        #expect(m.nextDeadline == 15 * sec)
+        #expect(m.tick(now: 10 * sec).isEmpty)
+        #expect(m.tick(now: 15 * sec - 1).isEmpty)
+        #expect(m.tick(now: 15 * sec).contains(.abort(F(1))))
+    }
+
+    @Test(arguments: ["protocolError", "authFailed", "keysUnavailable", "close", "reopen"])
+    func everyCloseEventStartsTheDrainAtItsOwnTime(event: String) {
+        var m = makeMachine()
+        _ = m.accepted(F(1), peer: peer, now: 0)
+        _ = m.hello(F(1), hello(), now: 0)
+        _ = m.record(F(1), ping, now: 0)  // proven at t=0, no timer pending but the idle one
+        proven(&m, F(2), now: 0)
+        _ = m.fileClosed(F(2))
+        switch event {
+        case "protocolError": _ = m.protocolError(F(1), now: 20 * sec)
+        case "authFailed": _ = m.recordAuthFailed(F(1), now: 20 * sec)
+        case "keysUnavailable":
+            var k = makeMachine()
+            _ = k.accepted(F(1), peer: peer, now: 0)
+            _ = k.hello(F(1), hello(), now: 0)
+            _ = k.keysUnavailable(F(1), now: 4 * sec)
+            #expect(k.nextDeadline == 9 * sec)
+            return
+        case "close": _ = m.close(now: 20 * sec)
+        default: _ = m.open(sessionID: 9, controlPeer: peer, max: 12, pool: 2, now: 20 * sec)
+        }
+        #expect(m.nextDeadline == 25 * sec)
+    }
+
     @Test func aConfirmedCloseIsNeverAborted() {
         var m = makeMachine()
         proven(&m, F(1))
         _ = m.localOpened(L(1), now: 0)
-        _ = m.localClosed(L(1))
+        _ = m.localClosed(L(1), now: 0)
         _ = m.fileClosed(F(1))
         #expect(m.tick(now: 60 * sec).isEmpty)
         #expect(m.nextDeadline == nil)
@@ -272,7 +311,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
 
     @Test func aWrongSessionIsRejectedAfterTheListenerMovedToANewSession() {
         var m = makeMachine()
-        _ = m.open(sessionID: 8, controlPeer: peer, max: 12, pool: 2)
+        _ = m.open(sessionID: 8, controlPeer: peer, max: 12, pool: 2, now: 0)
         _ = m.accepted(F(1), peer: peer, now: 0)
         #expect(m.hello(F(1), hello(session: 7), now: 0).first == .sendAck(F(1), .rejected))
         _ = m.accepted(F(2), peer: peer, now: 0)
@@ -389,7 +428,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
     @Test func aWaitingLocalConnectionThatClosedIsForgotten() {
         var m = makeMachine()
         _ = m.localOpened(L(1), now: 0)
-        #expect(m.localClosed(L(1)).isEmpty)
+        #expect(m.localClosed(L(1), now: 0).isEmpty)
         #expect(m.counts.waitingLocal == 0)
         #expect(binds(proven(&m, F(1))).isEmpty)
     }
@@ -399,10 +438,10 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))
         proven(&m, F(2))
         _ = m.localOpened(L(1), now: 0)
-        let out = m.localClosed(L(1))
+        let out = m.localClosed(L(1), now: 0)
         #expect(closes(out).map(\.1) == [.localClosed])
         #expect(m.counts.total == 1 && m.counts.idle == 1)
-        #expect(m.localClosed(L(1)).isEmpty)  // repeated report
+        #expect(m.localClosed(L(1), now: 0).isEmpty)  // repeated report
     }
 
     @Test func closingTheFileSideClosesTheBoundLocalConnectionOnly() {
@@ -464,12 +503,12 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))
         proven(&m, F(2))
         _ = m.localOpened(L(1), now: 0)  // binds F(1)
-        let bad = m.protocolError(F(1))
+        let bad = m.protocolError(F(1), now: 0)
         #expect(closes(bad).map(\.1) == [.protocolError])
         #expect(closedLocals(bad).map(\.1) == [.fileClosed])
-        #expect(closes(m.recordAuthFailed(F(2))).map(\.1) == [.authFailed])
+        #expect(closes(m.recordAuthFailed(F(2), now: 0)).map(\.1) == [.authFailed])
         #expect(m.counts.total == 0)
-        #expect(m.protocolError(F(2)).isEmpty)
+        #expect(m.protocolError(F(2), now: 0).isEmpty)
     }
 
     @Test func keysUnavailableClosesWithoutTouchingOthers() {
@@ -477,7 +516,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         proven(&m, F(1))
         _ = m.accepted(F(2), peer: peer, now: 0)
         _ = m.hello(F(2), hello(), now: 0)
-        #expect(closes(m.keysUnavailable(F(2))).map(\.1) == [.keysUnavailable])
+        #expect(closes(m.keysUnavailable(F(2), now: 0)).map(\.1) == [.keysUnavailable])
         #expect(m.counts.idle == 1 && m.counts.total == 1)
     }
 
@@ -491,7 +530,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         _ = m.localOpened(L(1), now: 0)  // bound to F(1)
         _ = m.localOpened(L(2), now: 0)  // bound to F(2)
         _ = m.localOpened(L(3), now: 0)  // waits
-        let out = m.close()
+        let out = m.close(now: 0)
         #expect(Set(closes(out).map(\.0)) == [F(1), F(2), F(3)])
         #expect(closes(out).allSatisfy { $0.1 == .sessionEnded })
         #expect(Set(closedLocals(out).map(\.0)) == [L(1), L(2), L(3)])
@@ -506,14 +545,14 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
     @Test func reopeningForAnotherSessionClosesTheOldOnes() {
         var m = makeMachine()
         proven(&m, F(1))
-        let out = m.open(sessionID: 9, controlPeer: peer, max: 12, pool: 2)
+        let out = m.open(sessionID: 9, controlPeer: peer, max: 12, pool: 2, now: 0)
         #expect(closes(out).map(\.0) == [F(1)])
         #expect(m.counts.total == 0)
         // Opening again for the same session keeps the connections and only updates the limits.
         _ = m.accepted(F(2), peer: peer, now: 0)
         _ = m.hello(F(2), hello(session: 9), now: 0)
         _ = m.record(F(2), ping, now: 0)
-        #expect(closes(m.open(sessionID: 9, controlPeer: peer, max: 4, pool: 1)).isEmpty)
+        #expect(closes(m.open(sessionID: 9, controlPeer: peer, max: 4, pool: 1, now: 0)).isEmpty)
         #expect(m.counts.idle == 1)
     }
 
@@ -541,7 +580,7 @@ private func binds(_ actions: [FilesAction]) -> [FilesAction] {
         collect(m.hello(F(2), hello(session: 99), now: 0))
         collect(proven(&m, F(3)))
         collect(m.localOpened(L(1), now: 0))
-        collect(m.close())
+        collect(m.close(now: 0))
         #expect(!logs.isEmpty)
         for line in logs {
             #expect(!line.contains(peer))
