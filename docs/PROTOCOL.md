@@ -650,7 +650,7 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 **Dosya bağlantıları (karar 0035):**
 - Toplam dosya bağlantısı ≤ `FILES_NET.max` (≤ 16), boşta ≤ `pool`, host'ta kanıtlanmamış ≤ 2 (TCP kabulünden itibaren sayılır, `FILES_HELLO` + kanıt toplam 5 sn).
 - Mac vekilinde eşlenmeyi bekleyen yerel bağlantı ≤ 8 (her biri ≤ 5 sn); eşlenmiş yerel bağlantı sayısı dosya bağlantılarıyla sınırlıdır.
-- Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
+- Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
 - Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
 
 **Kontrol + girdi (istemci gönderim kuyruğu):**
