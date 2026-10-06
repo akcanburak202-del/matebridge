@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.security.AeadPath
 import dev.matebridge.client.stream.HzPinVariant
 import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
@@ -98,6 +99,11 @@ data class DevKnobs(
     val catchUp: Boolean = true,
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
+    /**
+     * `--es aead_path legacy|spi|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
+     * [AeadPath.LEGACY] (the T-285 behaviour).
+     */
+    val aeadPath: AeadPath = AeadPath.LEGACY,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -158,6 +164,7 @@ data class DevKnobs(
             Spec("pace_feedback", Kind.BOOL, debugOnly = true),
             Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
+            Spec("aead_path", Kind.STRING, debugOnly = true, ids = AeadPath.IDS),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -204,6 +211,7 @@ data class DevKnobs(
                 ),
                 catchUp = x.bool("catch_up", true),
                 cursorPredict = x.bool("cursor_predict", true),
+                aeadPath = AeadPath.parse(x.string("aead_path")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

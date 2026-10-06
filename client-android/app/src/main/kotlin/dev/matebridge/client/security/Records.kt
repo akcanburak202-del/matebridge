@@ -4,10 +4,47 @@ import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.session.MbLog
+import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
+import java.security.Provider
+import java.security.Security
 import javax.crypto.Cipher
+import javax.crypto.CipherSpi
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+
+/**
+ * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|spi|direct` (needs `--ez dev true`).
+ * Wire format, nonce, AAD and error behaviour are identical in every mode.
+ *
+ * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind the modes (source read, not yet measured on device):
+ * - `Cipher.init` runs `tryCombinations` every call and builds a new SPI (`OpenSSLAeadCipherAES$GCM`) each time; the fresh
+ *   SPI's `reset()` also allocates a `lastGlobalMessageSize` buffer. A `Cipher` built with the protected
+ *   `Cipher(CipherSpi, Provider, String)` constructor keeps one SPI for all inits.
+ * - `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), then JNI-copies it
+ *   again, and `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two
+ *   direct buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation.
+ */
+enum class AeadPath(val id: String) {
+    /** The T-285 behaviour: `Cipher.getInstance` + `doFinal(byte[])`. Default until the device A/B says otherwise. */
+    LEGACY("legacy"),
+
+    /** One SPI for the connection's lifetime (no per-record provider selection / SPI construction), byte[] `doFinal`. */
+    SPI("spi"),
+
+    /** [SPI] plus direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
+    DIRECT("direct");
+
+    companion object {
+        val IDS: Set<String> = values().map { it.id }.toSet()
+
+        /** Unknown or absent = [LEGACY]. */
+        fun parse(v: String?): AeadPath {
+            val t = v?.trim()?.lowercase(java.util.Locale.ROOT)
+            return values().firstOrNull { it.id == t } ?: LEGACY
+        }
+    }
+}
 
 /*
  * Encrypted records (PROTOCOL.md section 9): u32 length (LE) || AES-256-GCM(type || payload) || 16-byte tag.
@@ -44,6 +81,40 @@ object Records {
         }
         return c
     }
+
+    /** AES-GCM cipher with one SPI kept for all `init` calls ([AeadPath.SPI], [AeadPath.DIRECT]); see [AeadPath]. */
+    private class ReusableCipher(spi: CipherSpi, provider: Provider, transformation: String) :
+        Cipher(spi, provider, transformation)
+
+    @Volatile private var reuseLogged = false
+
+    /** True when [c] keeps its SPI across `init` calls (built by [newReusableCipher] without falling back). */
+    internal fun isReusable(c: Cipher): Boolean = c is ReusableCipher
+
+    /**
+     * A [Cipher] whose SPI is created once, from the preferred provider's service (default providers when it is absent).
+     * Falls back to [newCipher] (per-`init` SPI) if the provider exposes no usable service, so a platform quirk degrades
+     * to the legacy speed, never to a failure. The result is logged once per process.
+     */
+    fun newReusableCipher(): Cipher {
+        val reusable = try {
+            val provider = Security.getProvider(PREFERRED_PROVIDER)?.takeIf { it.getService("Cipher", TRANSFORMATION) != null }
+                ?: Security.getProviders().first { it.getService("Cipher", TRANSFORMATION) != null }
+            val spi = provider.getService("Cipher", TRANSFORMATION).newInstance(null) as CipherSpi
+            ReusableCipher(spi, provider, TRANSFORMATION)
+        } catch (e: Exception) { // no provider, no service, instantiation or class mismatch
+            null
+        }
+        val c = reusable ?: newCipher()
+        if (!reuseLogged) {
+            reuseLogged = true
+            try { MbLog.i("crypto_provider", "provider=${c.provider.name} spi_reused=${if (reusable != null) 1 else 0}") } catch (_: Throwable) {}
+        }
+        return c
+    }
+
+    /** Path new [RecordOpener]s use unless told otherwise; set once at launch from the `aead_path` dev knob (T-292). */
+    @Volatile var aeadPath: AeadPath = AeadPath.LEGACY
 
     /**
      * T-077 diagnostics: when true every [RecordOpener] open stamps [OpenStamps.current] of the calling thread (the
@@ -97,11 +168,15 @@ class RecordSealer(key: ByteArray, startCounter: Long = 0) {
 }
 
 /** Opens incoming records of one connection direction. */
-class RecordOpener(key: ByteArray, startCounter: Long = 0) {
+class RecordOpener(key: ByteArray, startCounter: Long = 0, val path: AeadPath = Records.aeadPath) {
     private val keySpec = SecretKeySpec(key, "AES")
-    private val cipher = Records.newCipher()
+    private val cipher = if (path == AeadPath.LEGACY) Records.newCipher() else Records.newReusableCipher()
     private var counter = startCounter
     private var scratch = ByteArray(0)
+
+    // AeadPath.DIRECT only: staging buffers, grown on demand and reused for every record.
+    private var directIn: ByteBuffer? = null
+    private var directOut: ByteBuffer? = null
 
     /**
      * [header] is the 4 length bytes (the AAD), [body] is ciphertext plus tag. Returns `type || payload`.
@@ -134,14 +209,41 @@ class RecordOpener(key: ByteArray, startCounter: Long = 0) {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
             cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
             stamps?.initNs = System.nanoTime()
-            scratch = Records.ensureOutput(scratch, cipher, bLen)
-            val n = cipher.doFinal(src, bOff, bLen, scratch, 0)
+            val n = if (path == AeadPath.DIRECT) doFinalDirect(src, bOff, bLen) else {
+                scratch = Records.ensureOutput(scratch, cipher, bLen)
+                cipher.doFinal(src, bOff, bLen, scratch, 0)
+            }
             stamps?.finalNs = System.nanoTime()
             counter++
             return n
         } catch (e: GeneralSecurityException) {
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
         }
+    }
+
+    /**
+     * [AeadPath.DIRECT]: stage `src[bOff, bOff+bLen)` in a reused direct buffer, decrypt direct to direct (no Conscrypt
+     * staging copy or allocation), then copy the plaintext once into [scratch]. Returns the plaintext length.
+     */
+    private fun doFinalDirect(src: ByteArray, bOff: Int, bLen: Int): Int {
+        var din = directIn
+        if (din == null || din.capacity() < bLen) {
+            din = ByteBuffer.allocateDirect(maxOf(bLen, (din?.capacity() ?: 0) * 2)).also { directIn = it }
+        }
+        var dout = directOut
+        if (dout == null || dout.capacity() < bLen) { // plaintext is bLen - tag, but some providers want room for the tag
+            dout = ByteBuffer.allocateDirect(maxOf(bLen, (dout?.capacity() ?: 0) * 2)).also { directOut = it }
+        }
+        din.clear()
+        din.put(src, bOff, bLen)
+        din.flip()
+        dout.clear()
+        cipher.doFinal(din, dout)
+        dout.flip()
+        val got = dout.remaining() // plaintext length: the position the provider advanced to
+        if (scratch.size < got) scratch = ByteArray(maxOf(got, scratch.size * 2))
+        dout.get(scratch, 0, got)
+        return got
     }
 
     /** Plaintext of the last [openPlain]. */

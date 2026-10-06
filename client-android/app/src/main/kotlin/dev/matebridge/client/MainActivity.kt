@@ -399,6 +399,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             },
         )
         MbLog.i("dev_knobs", devKnobs.logFields(), "diag") // keys only, never values
+        dev.matebridge.client.security.Records.aeadPath = devKnobs.aeadPath // T-292 dev knob (`aead_path`), read when a connection's opener is built
     }
 
     private fun parseWifiKnobs() {
