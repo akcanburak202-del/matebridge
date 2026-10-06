@@ -127,7 +127,8 @@ public struct CursorStreamPlanner: Sendable {
             lastSent = nil
             return [.stopTracking]
         case .applyingShow:
-            // Back in the video (or impossible: nothing more can be done); either way the flow stops.
+            // The flow stops either way. A refused show is not given up: `VideoCursorWish` keeps the wish on "cursor in
+            // the video" and the host retries it (bounded backoff) and applies it to every capture that (re)starts.
             phase = .off
             lastSent = nil
             return [.stopTracking] + advance()

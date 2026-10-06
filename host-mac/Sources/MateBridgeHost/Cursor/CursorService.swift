@@ -56,6 +56,9 @@ final class CursorService: @unchecked Sendable {
     private var supported = false
     /// Changes at every session start and end: work queued for an old session is dropped.
     private var epoch = 0
+    /// `VideoCursorSwitch.generation` of the live session, read when it starts: a video request of an ended session
+    /// carries an older one and is refused by the switch.
+    private var videoGeneration = 0
     private var warmedUp = false
 
     // Both queues, under `unitLock`.
@@ -85,6 +88,7 @@ final class CursorService: @unchecked Sendable {
             epoch += 1
             self.sessionID = sessionID
             self.supported = supported
+            videoGeneration = video.generation  // after the previous session's `reset()` (it ran before this block)
             resetSession()
         }
     }
@@ -166,8 +170,11 @@ final class CursorService: @unchecked Sendable {
                 }
             case .setVideoCursor(let shows):
                 let wanted = epoch
+                let generation = videoGeneration
                 Task { [self] in
-                    let ok = await video.set(shows: shows)
+                    // The switch refuses it when the session is over by the time it runs (a stale hide can never
+                    // undo the `reset()` of the session end).
+                    let ok = await video.set(shows: shows, generation: generation)
                     queue.async { [self] in videoResult(shows: shows, ok: ok, epoch: wanted) }
                 }
             }
