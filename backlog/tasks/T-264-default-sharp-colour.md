@@ -1,7 +1,7 @@
 ---
 id: T-264
 title: Client — "Renk" varsayılanı Keskin kenarlar (0034 eki)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-260]
