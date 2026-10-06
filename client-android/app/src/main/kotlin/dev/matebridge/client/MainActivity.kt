@@ -1533,6 +1533,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ).also {
             it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
             it.catchUp = devKnobs.catchUp // T-252 dev knob (`catch_up`)
+            it.decoderWait = devKnobs.decoderWait // T-286 dev knob (`dec_wait`)
             pacerKnobsLogged = false
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")

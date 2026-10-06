@@ -260,8 +260,12 @@ class FrameQueue(
      * T-112: `parkNanos` may return early (spurious wake-up, or a stale permit left on the thread by an AQS lock or by
      * an [offer] that read [waiter] just before it was cleared), so the wait re-parks for the time left until the
      * deadline instead of giving up after the first wake-up.
+     *
+     * T-286: [abort] (consumer's thread) is checked after the waiter is published and before every park; true leaves
+     * with null. The condition's writer must call [nudge] after making it true, so the consumer may park for long
+     * (event-driven) and still leave at once; no lost wake-up (see [nudge]).
      */
-    fun awaitNext(timeoutNs: Long, consumer: Int = ANY_CONSUMER, mark: TakeMark? = null): VideoFrame? {
+    fun awaitNext(timeoutNs: Long, consumer: Int = ANY_CONSUMER, mark: TakeMark? = null, abort: (() -> Boolean)? = null): VideoFrame? {
         mark?.value = CatchUp.NONE
         take(consumer, mark)?.let { return it }
         if (timeoutNs <= 0 || !owns(consumer)) return null
@@ -273,6 +277,7 @@ class FrameQueue(
                 take(consumer, mark)?.let { return it }
                 // T-219: retired while waiting: leave at once and leave the frames to the owner.
                 if (!owns(consumer)) return null
+                if (abort != null && abort()) return null
                 val left = deadline - System.nanoTime()
                 if (left <= 0 || self.isInterrupted) return null // interrupted: parkNanos would not block, never spin
                 parkHook?.invoke()
@@ -282,6 +287,14 @@ class FrameQueue(
             if (waiter === self) waiter = null // never clear another consumer's registration
         }
     }
+
+    /**
+     * T-286: wakes a consumer parked in [awaitNext] so it re-evaluates its `abort` condition. Call it after the
+     * condition became true (and was written with volatile/atomic semantics). No lost wake-up: the consumer publishes
+     * [waiter] and only then reads the condition; this writes the condition and only then reads [waiter]. Either the
+     * consumer sees the condition, or this sees the consumer (and the unpark leaves a permit if it is not parked yet).
+     */
+    fun nudge() { waiter?.let(LockSupport::unpark) }
 
     /** T-219: the ownership check and the removal are one step under [lock], so a revoked consumer takes nothing. */
     private fun take(consumer: Int, mark: TakeMark?): VideoFrame? {

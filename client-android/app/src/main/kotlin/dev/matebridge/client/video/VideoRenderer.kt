@@ -115,6 +115,12 @@ class VideoRenderer(
 
     private val tag = "MB/decoder"
 
+    /**
+     * T-286 dev knob (`dec_wait`): how the decoder threads wait while idle; [DecoderWait.POLL] = the fixed 4/5 ms
+     * timeouts as before. Read on every loop turn, so it may be changed while running.
+     */
+    @Volatile var decoderWait: DecoderWait = DecoderWait.POLL
+
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
@@ -657,10 +663,13 @@ class VideoRenderer(
                         val now = System.nanoTime()
                         val untilDeadline = releaser.untilDeadlineNs(now)
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
-                        // how fast a stop is seen, so it grows while no output comes.
-                        val maxWaitUs = IdleWait.waitNs(now - st.lastOutputNs, OUTPUT_WAIT_US * 1000) / 1000
-                        val waitUs = if (untilDeadline == null) maxWaitUs
-                        else (untilDeadline / 1000).coerceIn(0, maxWaitUs)
+                        // how fast a stop is seen, so it grows while no output comes. T-286 (`dec_wait event`): with no
+                        // frame inside the codec and no held buffer it is long (50 ms): no output is due.
+                        val mode = decoderWait
+                        val waitUs = DecoderWaits.outputWaitUs(
+                            mode, now - st.lastOutputNs, OUTPUT_WAIT_US,
+                            if (mode == DecoderWait.EVENT) st.gauge.current() else 1, untilDeadline,
+                        )
                         val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, st, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())
@@ -671,7 +680,10 @@ class VideoRenderer(
                         if (changed) logDecoderOutputFormat(c, formatGate, att.gen, colors)
                     }
                 } catch (e: Exception) {
-                    if (st.running) outError.set(e.javaClass.simpleName)
+                    if (st.running) {
+                        outError.set(e.javaClass.simpleName)
+                        queue.nudge() // T-286: the input thread may be parked for long; it must see the error now
+                    }
                 } finally {
                     handoff.threadExited(att) // T-161: the generation is finished only when this thread is gone too
                 }
@@ -685,12 +697,20 @@ class VideoRenderer(
             var takenNs = 0L
             var lastFrameNs = System.nanoTime()
             val takeMark = TakeMark() // T-252: catch-up mark of the frame taken
+            val inputAbort = { !att.active || outError.get() != null } // T-286: ends a long park; see FrameQueue.nudge
             var heldMark = CatchUp.NONE
             while (att.active && outError.get() == null) {
                 inSlot.prefetch()
                 // T-141: an offer unparks the wait at once; the timeout only bounds how fast a stop is seen.
                 // T-219: frames of this generation only; once retired it gets null and the loop ends on `active`.
-                val fromQueue = if (held == null) queue.awaitNext(IdleWait.waitNs(System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen, takeMark) else null
+                // T-286 (`dec_wait event`): parks until a frame, a retire or an output error; the timeout is a safety net.
+                val mode = decoderWait
+                val fromQueue = if (held == null) {
+                    queue.awaitNext(
+                        DecoderWaits.inputWaitNs(mode, System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen, takeMark,
+                        if (mode == DecoderWait.EVENT) inputAbort else null,
+                    )
+                } else null
                 if (fromQueue != null) lastFrameNs = System.nanoTime()
                 if (fromQueue != null && trace != null) takenNs = lastFrameNs
                 val frame = held ?: fromQueue
