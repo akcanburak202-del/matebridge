@@ -28,7 +28,12 @@ T-267'nin Core parçalarını uygulamaya bağla. Tasarım: araştırma §4 "Host
 
 ## Plan
 
-(ajan doldurur)
+1. `MateBridgeHost/Files/FilesSocket.swift`: küçük ham-fd TCP sarmalayıcı (durdurulabilir okuma, sınırlı yazma tamponu, "önce bekleyen baytlar" ile kapanma, FIN sonra EOF'a kadar okuyup atma). `BsdTcpConnection` Core'da ve `files:` dışında; okuma durdurma, `SO_SNDBUF` ve `NET_SERVICE_TYPE_BK` da yok, o yüzden Host'ta kendi sarmalayıcı.
+2. `MateBridgeHost/Files/FilesNetService.swift`: Core `FilesConnectionMachine` + `FilesRateLimiter`'ı sürer. Tek seri kuyruk. Dosya dinleyicisi (tercih 47003, doluysa sistem portu; `[::]` çift yığın), vekil dinleyici (127.0.0.1:47012 tercih, sonra sistem portu). Kabul → `FILES_HELLO` (düz, elle ayrıştırma, ≤ 64 bayt yük) → ACK → `startRecords` (anahtarlar oturumdan, `keys` kapanışı) → kanıt PING → havuz. Vekil bağlantısı → `localOpened` → `bind`; Finder→tablet yönü `FilesRateLimiter` ile (tek parça bekletme, okuma durur), tablet→Finder yönü geri basınçlı (yerel yazma tamponu ≥ 64 KiB ise dosya okuması durur). Saniyelik sayaç logu, 200 ms `tick`.
+3. `TabletFilesBridge`: `FilesNetLink` (SessionServer'dan: eş adres, anahtarlar, `FILES_NET` gönderimi); `.startProxy/.stopProxy/.sendFilesNet` gerçek yürütme; `sessionStarted(sessionID:transport:capabilities:)` `netCapable` geçirir; `drainUnmountedPaths` sonrası `takeQueuedActions()`; oturum bitişi/kapanışta servis her zaman durur (CLOSE mesajı yok).
+4. `SessionServer`: `controlPeerHost(sessionID:)`, `filesKeys(...)` (senkron, oturum kuyruğunda), `STREAM_CONFIG` gönderiminde `handlers.streamBitrate`. `main.swift`: bağlama + bitrate. Menü Wi-Fi'da planner'dan geliyor (menü durumları yeniden kullanılıyor), yalnız başlık metinleri.
+5. Test: Core testleri değişmez; Host kodu için `--files-net-selftest` komut satırı yolu (`MateBridgeApp/FilesNetSelfTest.swift`): sahte tablet istemcisi (gerçek kayıt şifrelemesi) + sahte HTTP sunucu ile uçtan uca bayt, geri basınç, kısıtlama ve 1:1 kapanma. Pencere/Finder yok.
+
 
 ## Handoff
 
