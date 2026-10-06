@@ -1646,3 +1646,8 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - > 50 ms sıçrayan kareler %8,2; bunların yalnız %27'si kaybın olduğu saniyede (taban oran ~%15) → **sıradan 30–90 ms sıçramaların çoğu kayıptan değil** (kablosuz kuyruk/yayın süresi).
 - > 100 ms kareler %0,6 (73 kare), hepsi ~10 s'lik tek kötü bir dönemde, %82'si kayıpla aynı saniyede (250–325 ms): kötü Wi-Fi anında kayıp ve kuyruk birlikte.
 - **Sonuç:** UDP+FEC yalnız nadir kötü anları (kare %0,6) kısaltır, yaygın 30–90 ms dalgalanmayı değil. Maliyete (takvimde 2–3 gün, iki aktarım yolu) değmez → park.
+
+## 2026-10-06 ~17:10 — Yerel imleç (0036) cihazda: kullanıcı onayı
+
+- Kurulum: APK 16:57, host 8f3e3d69. Kullanıcı: Günlük modda imleç tablette, şekiller (I-beam, el, boyutlandırma) ve boyut doğru, yazarken gizleniyor ve geri geliyor, İmleç Tablette↔Görüntüde ve Oyun↔Günlük geçişlerinde imleçsiz kalma ya da çift imleç yok — "her şey doğru çalışıyor".
+- Kod geçmişi: Codex bütünleşik 4 tur (host video imleci için operasyon kuyruğu yerine "uzlaştırıcı" modeli: istenen durum + tek uygulayıcı döngü; istemcide tek sıralı mod komutu, oturum kilidi, tek bekleyen yeniden çizim). Gecikme ölçümü yapılmadı (kullanıcı istemedi); `cursor_stats age_ms` loglarda.
