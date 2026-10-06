@@ -566,7 +566,7 @@ class AudioPlayout(
             var avSkipSeen = core.skipTrims // T-125
             var wasPlaying = false
             var packetsAtRender = core.buffer.packets // T-287: packets the last render could have seen
-            var firstSoundPending = false // T-287: playback started; logged after the first successful write
+            val firstSoundWait = FirstSoundWait() // T-287: playback started; logged after the first successful write on a started output
             rawLogged = 0
             meter.reset()
             while (running) {
@@ -639,7 +639,7 @@ class AudioPlayout(
                 core.render(out, t.burst)
                 idlePause.onRendered()
                 val playing = core.state == PlayoutCore.State.PLAYING
-                if (playing && !wasPlaying) firstSoundPending = true
+                if (playing && !wasPlaying) firstSoundWait.onPlaybackStart()
                 wasPlaying = playing
                 val headroom = t.headroom()
                 meter.onWriteStart(headroom, System.nanoTime(), t.headroomCounter, t.headroomFromTs)
@@ -660,7 +660,7 @@ class AudioPlayout(
                     continue
                 }
                 clock.onWrite(w)
-                if (firstSoundPending) { firstSoundPending = false; logFirstSound() }
+                if (firstSoundWait.pending && firstSoundWait.onWrite(t.started())) logFirstSound()
                 if (resumeWatch != 0L) watchResume(t)
                 if (clock.written >= nextLogAt) {
                     nextLogAt += RATE

@@ -80,6 +80,29 @@ class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
 }
 
 /**
+ * T-287: when the `first_sound` line is due: after a successful write made while the output reported itself running.
+ * A burst can be accepted while the stream is still STARTING (requestStart is asynchronous), which would leave the
+ * rest of the start-up out of the time. The writer asks the output ([AudioSink.started]) only while [pending].
+ */
+class FirstSoundWait {
+    /** Playback started and no line was written for it yet. */
+    var pending = false
+        private set
+
+    /** Playback (PLAYING) started. */
+    fun onPlaybackStart() {
+        pending = true
+    }
+
+    /** A write succeeded; [started]: the output is running. True (once) when the line is due now. */
+    fun onWrite(started: Boolean): Boolean {
+        if (!pending || !started) return false
+        pending = false
+        return true
+    }
+}
+
+/**
  * T-287: time from the first packet after a gap to the first audible burst, for the `first_sound` log (the A/B of
  * pausing against not pausing). The control reader calls [onPacket] for every accepted packet; the writer takes the
  * stamp with [take] when playback starts. A gap is [GAP_NS] without a packet (the host's silence gate sends nothing

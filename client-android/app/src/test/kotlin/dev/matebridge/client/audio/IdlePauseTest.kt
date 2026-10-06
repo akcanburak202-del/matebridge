@@ -77,6 +77,22 @@ class IdlePauseTest {
         assertEquals("off until the device A/B passes (decision 0026)", IdlePause.Mode.OFF, IdlePause.DEFAULT)
     }
 
+    @Test fun firstSoundWaitsForAWriteOnAStartedOutput() {
+        val w = FirstSoundWait()
+        assertFalse("nothing pending before playback starts", w.onWrite(started = true))
+        w.onPlaybackStart()
+        assertTrue(w.pending)
+        // writes are accepted while the stream is still STARTING (stop mode): not yet
+        assertFalse(w.onWrite(started = false))
+        assertFalse(w.onWrite(started = false))
+        assertTrue(w.pending)
+        assertTrue("first successful write once started", w.onWrite(started = true))
+        assertFalse(w.pending)
+        assertFalse("only once", w.onWrite(started = true))
+        w.onPlaybackStart()
+        assertTrue("a later playback start is reported again", w.onWrite(started = true))
+    }
+
     @Test fun firstPacketOfAStreamIsStamped() {
         val t = FirstSoundTimer()
         assertEquals(0L, t.peek())
