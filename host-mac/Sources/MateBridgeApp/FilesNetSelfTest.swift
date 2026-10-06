@@ -454,6 +454,7 @@ private final class FilesNetSelfTestRunner: @unchecked Sendable {
         check(slowTablet.ok, "4 MB with a tablet that stalls for 2 s is byte-identical")
         let peaks = service.peakBuffers
         check(peaks.toTablet <= 64 * 1024, "Finder to tablet relay buffer never exceeds 64 KiB", "peak=\(peaks.toTablet)")
+        // PROTOCOL.md section 5: a 64 KiB relay buffer per connection and direction plus the one record being decoded.
         check(peaks.toFinder <= 64 * 1024 + ProtocolConstants.filesDataMax,
               "tablet to Finder relay buffer stays within 64 KiB + one record", "peak=\(peaks.toFinder)")
 

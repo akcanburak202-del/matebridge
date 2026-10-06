@@ -100,6 +100,9 @@ public final class FilesNetService: @unchecked Sendable {
     /// File connections the machine told us to close and whose socket is still flushing or not yet closed. Only the
     /// socket's real closure reports `machine.fileClosed` (the machine keeps counting them until then).
     private var closingFiles: [FilesConnID: FileConn] = [:]
+    /// Finder connections the machine closed whose socket is still delivering the tablet's last bytes. Held here only
+    /// so that stopping the service can cut them (nothing of an ended run may keep sending).
+    private var drainingLocals: [LocalConnID: LocalConn] = [:]
     private var nextFileID: UInt64 = 0
     private var nextLocalID: UInt64 = 0
     private var limiter = FilesRateLimiter(videoKbps: 0, now: 0)
@@ -241,9 +244,11 @@ public final class FilesNetService: @unchecked Sendable {
         for conn in Array(locals.values) { conn.socket.closeNow() }
         // Sockets still flushing a close are cut as well: nothing of this run may keep transmitting, nor outlive it.
         for conn in Array(closingFiles.values) { conn.socket.closeNow() }
+        for conn in Array(drainingLocals.values) { conn.socket.closeNow() }
         files.removeAll()
         locals.removeAll()
         closingFiles.removeAll()
+        drainingLocals.removeAll()
         running = false
         logger.log(.info, "files_net", sessionID: sessionID, generation: 0, fields: "state=stopped reason=\(reason)")
         sessionID = 0
@@ -473,7 +478,9 @@ public final class FilesNetService: @unchecked Sendable {
     }
 
     private func localSocketClosed(_ lid: LocalConnID) {
-        guard running, let local = locals.removeValue(forKey: lid) else { return }  // one we closed ourselves is gone
+        guard running else { return }
+        if drainingLocals.removeValue(forKey: lid) != nil { return }  // our own close finished: the machine knows it
+        guard let local = locals.removeValue(forKey: lid) else { return }  // one we closed ourselves is gone
         // Bytes Finder sent before it closed go to the tablet first (the cap does not delay a closing connection).
         if let held = local.held, let fid = local.file, let file = files[fid] {
             local.held = nil
@@ -522,6 +529,7 @@ public final class FilesNetService: @unchecked Sendable {
                 guard let local = locals.removeValue(forKey: lid) else { continue }
                 if let fid = local.file, let file = files[fid], file.local == lid { file.local = nil }
                 if reason == .fileClosed {  // what the tablet already sent still reaches Finder
+                    drainingLocals[lid] = local
                     local.socket.closeAfterFlush(timeout: Self.closeFlushSeconds)
                 } else {
                     local.socket.closeNow()
