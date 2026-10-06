@@ -281,29 +281,45 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
 @Suite struct CursorPrefsMailboxTests {
     @Test func CURPREFS1_theNewestWinsAndOnlyOneWakeIsScheduled() {
         var m = CursorPrefsMailbox()
-        #expect(m.post(session: 5, enabled: true) == true)
-        #expect(m.post(session: 5, enabled: false) == false)
-        #expect(m.post(session: 5, enabled: true) == false)
-        let t = m.take()
+        let token = m.post(session: 5, enabled: true)
+        #expect(token != nil)
+        #expect(m.post(session: 5, enabled: false) == nil)
+        #expect(m.post(session: 5, enabled: true) == nil)
+        let t = m.take(token: token!)
         #expect(t?.session == 5 && t?.enabled == true)
-        #expect(m.take() == nil)
-        #expect(m.post(session: 5, enabled: false) == true)  // the wake was spent
+        #expect(m.take(token: token!) == nil)
+        #expect(m.post(session: 5, enabled: false) != nil)  // the wake was spent
     }
 
-    @Test func CURPREFS2_aSessionBoundaryVoidsWhatWasPosted() {
+    @Test func CURPREFS2_aSessionBoundaryVoidsWhatWasPostedAndOldWakesAreStale() {
         var m = CursorPrefsMailbox()
-        _ = m.post(session: 5, enabled: true)
-        m.clear()
-        #expect(m.post(session: 6, enabled: false) == false)  // the first wake is still on its way
-        let t = m.take()
-        #expect(t?.session == 6 && t?.enabled == false)
+        let a = m.post(session: 5, enabled: true)!
+        m.clear()  // A ends
+        m.clear()  // B starts
+        let b = m.post(session: 6, enabled: true)
+        #expect(b != nil && b != a)  // the old wake does not count for B: B gets its own
+        // The stale wake runs first: it takes nothing and leaves B's message alone.
+        #expect(m.take(token: a) == nil)
+        let t = m.take(token: b!)
+        #expect(t?.session == 6 && t?.enabled == true)
     }
 
-    @Test func CURPREFS3_aWakeThatFindsNothingIsHarmless() {
+    @Test func CURPREFS3_aStaleWakeThatFindsNothingIsHarmless() {
         var m = CursorPrefsMailbox()
-        _ = m.post(session: 5, enabled: true)
+        let a = m.post(session: 5, enabled: true)!
         m.clear()
-        #expect(m.take() == nil)
+        #expect(m.take(token: a) == nil)
+        #expect(m.post(session: 6, enabled: false) != nil)
+    }
+
+    @Test func CURPREFS4_theTakeoverFindingBPrefsIsNeverConsumedByAnOldWake() {
+        var m = CursorPrefsMailbox()
+        let a = m.post(session: 5, enabled: true)!  // A's wake is queued
+        m.clear()  // takeover: A ends...
+        m.clear()  // ...B starts
+        let b = m.post(session: 6, enabled: true)!  // B's PREFS(1)
+        #expect(m.take(token: a) == nil)  // A's wake runs before B's start block would: nothing consumed
+        #expect(m.take(token: b)?.session == 6)
     }
 }
 
