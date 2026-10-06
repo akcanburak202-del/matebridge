@@ -4,7 +4,7 @@ import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.session.KeyValueStore
 
-/** The user's "Renk" choice (decision 0034): Normal / Keskin kenarlar / Tam renk. Default [NORMAL]. */
+/** The user's "Renk" choice (decision 0034): Normal / Keskin kenarlar / Tam renk. Default [SHARP] (0034 addendum, 2026-10-06). */
 enum class ColourChoice(val id: String) {
     NORMAL("normal"), SHARP("sharp"), FULL("full");
 
@@ -14,14 +14,15 @@ enum class ColourChoice(val id: String) {
 }
 
 /**
- * The stored colour choice: the `colour` key (the panel writes it). The pre-0034 "Keskin renk kenarları" switch
- * (`sharp_chroma` = "1", decision 0033) is migrated by [migrate] (Açık -> [ColourChoice.SHARP]) and, until then, still
- * read by [get]. Pure over [KeyValueStore].
+ * The stored colour choice: the `colour` key (the panel writes it); nothing stored means [ColourChoice.SHARP]. The
+ * pre-0034 "Keskin renk kenarları" switch (`sharp_chroma`, decision 0033) is migrated by [migrate] and, until then,
+ * still read by [get]: `"1"` (Açık) -> [ColourChoice.SHARP]; any other stored value is an explicit Kapalı ->
+ * [ColourChoice.NORMAL], so the Keskin default never overrides a user's earlier "off". Pure over [KeyValueStore].
  */
 class ColourStore(private val store: KeyValueStore) {
     fun get(): ColourChoice =
         ColourChoice.parse(store.getString(KEY))
-            ?: if (store.getString(LEGACY_SHARP_KEY) == "1") ColourChoice.SHARP else ColourChoice.NORMAL
+            ?: legacyChoice(store.getString(LEGACY_SHARP_KEY))
 
     /** Stores [choice]; the legacy key is dropped so the two can never disagree. */
     fun set(choice: ColourChoice) {
@@ -29,15 +30,18 @@ class ColourStore(private val store: KeyValueStore) {
         store.remove(LEGACY_SHARP_KEY)
     }
 
-    /** One-time move of the 0033 value into `colour`; true when a legacy value was found. A stored `colour` wins. */
+    /**
+     * One-time move of the 0033 value into `colour`; true when a legacy value was found. A stored `colour` wins. Both
+     * Açık (`"1"` -> Keskin) and an explicit Kapalı (-> Normal) are written, because the default is now Keskin.
+     */
     fun migrate(): Boolean {
         val legacy = store.getString(LEGACY_SHARP_KEY) ?: return false
-        if (store.getString(KEY) == null && legacy == "1") store.putString(KEY, ColourChoice.SHARP.id)
+        if (store.getString(KEY) == null) store.putString(KEY, legacyChoice(legacy).id)
         store.remove(LEGACY_SHARP_KEY)
         return true
     }
 
-    /** "Varsayılanlara dön": back to Normal. True when something was stored (counted in `ev=settings_reset keys=`). */
+    /** "Varsayılanlara dön": back to the default, Keskin kenarlar. True when something was stored (counted in `ev=settings_reset keys=`). */
     fun reset(): Boolean {
         val had = store.getString(KEY) != null || store.getString(LEGACY_SHARP_KEY) != null
         store.remove(KEY)
@@ -48,6 +52,14 @@ class ColourStore(private val store: KeyValueStore) {
     companion object {
         const val KEY = "colour"
         const val LEGACY_SHARP_KEY = "sharp_chroma"
+        val DEFAULT = ColourChoice.SHARP
+
+        /** The choice a 0033 `sharp_chroma` value stands for: absent -> default; `"1"` -> Keskin; anything else -> Normal. */
+        private fun legacyChoice(legacy: String?): ColourChoice = when (legacy) {
+            null -> DEFAULT
+            "1" -> ColourChoice.SHARP
+            else -> ColourChoice.NORMAL
+        }
     }
 }
 

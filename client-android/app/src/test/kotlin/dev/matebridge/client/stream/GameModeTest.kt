@@ -13,6 +13,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** T-109 (decision 0014) and T-223 (decision 0030): the temporary mode layers (Oyun, Çizim) and the jitter buffer. */
+/** No colour store: the default "Renk" is Keskin kenarlar (decision 0034 addendum), so `chroma` is 1. */
+private const val SHARP = StreamPrefs.CHROMA_SHARP
+
 class GameModeTest {
     /** Records every write, so a test can prove the stored settings were never touched. */
     private class MemStore : KeyValueStore {
@@ -61,7 +64,7 @@ class GameModeTest {
         assertTrue(g.gameActive)
         assertEquals(StreamMode.GAME, g.modeLayer)
         assertEquals(values(60_000, AudioOutPref.AUTO, trail = false, dot = false), g.effective())
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME)) // card: Oyun 60 1848×1214
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME)) // card: Oyun 60 1848×1214
         assertTrue(store.writes.isEmpty())
     }
 
@@ -82,7 +85,7 @@ class GameModeTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
         assertEquals(30_000L, g.bitrateKbps)
-        assertEquals(StreamPrefs(60, 1000, 30_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 30_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         storeUserChoices(bitrateKbps = 100_000)
         val g2 = GameModeSettings(settings)
         g2.onModeChanged(StreamMode.GAME)
@@ -194,7 +197,7 @@ class GameModeTest {
         assertFalse(g.active)
         assertNull(g.modeLayer)
         assertEquals(before, g.effective())
-        assertEquals(StreamPrefs(120, 1000, 0), g.prefs(StreamMode.DAILY))
+        assertEquals(StreamPrefs(120, 1000, 0).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
         assertEquals(enterGame, g.onModeChanged(StreamMode.GAME))
         assertEquals(values(60_000, AudioOutPref.AUTO, trail = false, dot = false), g.effective())
         assertTrue(store.writes.isEmpty())
@@ -214,7 +217,7 @@ class GameModeTest {
         assertTrue(settings.penTrail())
         assertTrue(settings.penDot())
         assertTrue(settings.fingerTouchDisabled())
-        assertEquals(StreamPrefs(120, 1000, 30_000), g.prefs(StreamMode.DAILY))
+        assertEquals(StreamPrefs(120, 1000, 30_000).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
         // and Oyun then starts from those stored values (30 Mbps kept, the rest game defaults, fingers as stored)
         g.onModeChanged(StreamMode.GAME)
         assertEquals(values(30_000, AudioOutPref.AUTO, trail = false, dot = false, finger = FingerPolicy.OFF), g.effective())
@@ -233,7 +236,7 @@ class GameModeTest {
         assertEquals(values(60_000, AudioOutPref.TRACK, trail = true, dot = true, finger = FingerPolicy.GESTURES_ONLY), g.effective())
         assertEquals(FingerPolicy.GESTURES_ONLY, g.fingers)
         assertFalse(g.fingerOff) // not the "tamamen kapat" switch: pinch and two-finger scroll still work
-        assertEquals(StreamPrefs(120, 1000, 60_000), g.prefs(StreamMode.DRAWING)) // no game display group
+        assertEquals(StreamPrefs(120, 1000, 60_000).copy(chroma = SHARP), g.prefs(StreamMode.DRAWING)) // no game display group
         assertTrue(store.writes.isEmpty())
     }
 
@@ -242,7 +245,7 @@ class GameModeTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.DRAWING)
         assertEquals(30_000L, g.bitrateKbps)
-        assertEquals(StreamPrefs(120, 1000, 30_000), g.prefs(StreamMode.DRAWING))
+        assertEquals(StreamPrefs(120, 1000, 30_000).copy(chroma = SHARP), g.prefs(StreamMode.DRAWING))
     }
 
     @Test fun leavingDrawingBringsTheStoredValuesBackExactly() {
@@ -314,7 +317,7 @@ class GameModeTest {
         val g = GameModeSettings(s2)
         assertEquals(enterGame, g.onModeChanged(s2.streamMode()))
         assertEquals(values(60_000, AudioOutPref.AUTO, trail = false, dot = false), g.effective())
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(s2.streamMode()))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(s2.streamMode()))
         assertTrue(store.writes.isEmpty())
         assertEquals(AudioOutPref.TRACK, s2.audioOut())
         assertTrue(s2.penTrail())
@@ -332,27 +335,27 @@ class GameModeTest {
     @Test fun cardPrefsBytes() {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.DAILY)
-        assertEquals(StreamPrefs(120, 1000, 0, 0, 0), g.prefs(StreamMode.DAILY)) // Günlük 120 = (120, 1000, auto, 0×0)
-        assertEquals(StreamPrefs(120, 1000), g.prefs(StreamMode.DAILY))
+        assertEquals(StreamPrefs(120, 1000, 0, 0, 0).copy(chroma = SHARP), g.prefs(StreamMode.DAILY)) // Günlük 120 = (120, 1000, auto, 0×0)
+        assertEquals(StreamPrefs(120, 1000).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
         g.selectFrameRate(StreamMode.DAILY, 60)
-        assertEquals(StreamPrefs(60, 1000), g.prefs(StreamMode.DAILY))
+        assertEquals(StreamPrefs(60, 1000).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME)) // Oyun 60 1848×1214
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME)) // Oyun 60 1848×1214
     }
 
     @Test fun selectingTheFrameRateStoresItPerModeAndReturnsOnePrefs() {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.DAILY)
-        assertEquals(StreamPrefs(60, 1000, 0), g.selectFrameRate(StreamMode.DAILY, 60))
+        assertEquals(StreamPrefs(60, 1000, 0).copy(chroma = SHARP), g.selectFrameRate(StreamMode.DAILY, 60))
         assertEquals("60", store.map["fps_daily"])
         assertNull(store.map["fps_game"])
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 1000, 60_000, 1848, 1214), g.selectFrameRate(StreamMode.GAME, 120))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.selectFrameRate(StreamMode.GAME, 120))
         assertEquals(60, g.fps(StreamMode.DAILY))
         assertEquals(120, g.fps(StreamMode.GAME))
         // back to Günlük: its own 60 again
         g.onModeChanged(StreamMode.DAILY)
-        assertEquals(StreamPrefs(60, 1000, 0), g.prefs(StreamMode.DAILY))
+        assertEquals(StreamPrefs(60, 1000, 0).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
     }
 
     @Test fun drawingFrameRateCannotBeChanged() {

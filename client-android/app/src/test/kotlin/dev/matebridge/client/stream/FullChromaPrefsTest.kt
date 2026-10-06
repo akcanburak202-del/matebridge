@@ -44,6 +44,8 @@ class FullChromaPrefsTest {
 
     @Test fun storeReadsColourKeyThenTheLegacySharpSwitch() {
         val s = ColourStore(kv)
+        assertEquals(ColourChoice.SHARP, s.get())
+        kv.map["sharp_chroma"] = "0"
         assertEquals(ColourChoice.NORMAL, s.get())
         kv.map["sharp_chroma"] = "1"
         assertEquals(ColourChoice.SHARP, s.get())

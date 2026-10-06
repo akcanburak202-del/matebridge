@@ -33,7 +33,7 @@ import dev.matebridge.client.video.VideoRenderer
  * change re-sends the right `dynamic_range` through the same one STREAM_PREFS.
  *
  * "Renk" (decisions 0033/0034, T-241/T-260) is persistent and outside the layer as well ([colourStore]; null = always
- * Normal). [selectColour] stores it and returns the STREAM_PREFS to send.
+ * Keskin kenarlar). [selectColour] stores it and returns the STREAM_PREFS to send.
  *
  * The caller applies the effective values (STREAM_PREFS, audio, pen overlay, finger switch). Main thread only. Pure Kotlin.
  */
@@ -207,7 +207,7 @@ class GameModeSettings(
     }
 
     /** The stored "Renk" choice (decision 0034). */
-    fun colourChoice(): ColourChoice = colourStore?.get() ?: ColourChoice.NORMAL
+    fun colourChoice(): ColourChoice = colourStore?.get() ?: ColourStore.DEFAULT
 
     /** True while the full-chroma capability self-test has passed (the "Tam renk" option is usable). */
     val fullChromaCapable: Boolean get() = fullChromaAvailable()
@@ -221,7 +221,7 @@ class GameModeSettings(
         fullChromaAvailable(),
     )
 
-    /** "Varsayılanlara dön": back to Normal; true when a value was stored. */
+    /** "Varsayılanlara dön": back to Keskin kenarlar (the default); true when a value was stored. */
     fun resetColour(): Boolean = colourStore?.reset() == true
 
     /**

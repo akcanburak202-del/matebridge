@@ -14,6 +14,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** T-215 (decision 0029): "Oyun çözünürlüğü" and the game display group in STREAM_PREFS. */
+/** No colour store: the default "Renk" is Keskin kenarlar (decision 0034 addendum), so `chroma` is 1. */
+private const val SHARP = StreamPrefs.CHROMA_SHARP
+
 class GameResolutionTest {
     private class MemStore : KeyValueStore {
         val map = HashMap<String, String>()
@@ -36,7 +39,7 @@ class GameResolutionTest {
         settings.setGameResolution(GameResolution.R2240)
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 60_000, 2240, 1472), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 2240, 1472).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
     }
 
     @Test fun sizesIdsAndDefault() {
@@ -82,14 +85,14 @@ class GameResolutionTest {
     @Test fun gameModeSendsTheDefaultGameDisplay() {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         g.selectFrameRate(StreamMode.GAME, 120)
-        assertEquals(StreamPrefs(120, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         // The wire did not change, only the mode concept: the bit rate and display group are byte for byte the golden
         // vector of T-213 (its fps/scale words, 120/660, are not a mode's any more, so only the tail is compared).
         g.selectFrameRate(StreamMode.GAME, 60)
         val golden = FixtureTest.fixture("stream_prefs_game_display")
-        val bytes = Codec.encode(g.prefs(StreamMode.GAME))
+        val bytes = Codec.encode(g.prefs(StreamMode.GAME).copy(chroma = 0)) // the fixture predates `chroma`
         assertEquals(golden.size, bytes.size)
         assertArrayEquals(golden.copyOfRange(0, 5), bytes.copyOfRange(0, 5)) // header: type and length 12
         assertArrayEquals(golden.copyOfRange(9, golden.size), bytes.copyOfRange(9, bytes.size)) // bitrate + display_*
@@ -102,7 +105,7 @@ class GameResolutionTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
         settings.setBitrateKbps(30_000) // stored, outside the layer: the layer keeps 60 Mbps
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1400, 920), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1400, 920).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         assertEquals(GameResolution.R1400, g.display(StreamMode.GAME))
     }
 
@@ -117,14 +120,14 @@ class GameResolutionTest {
                 assertEquals(0, p.displayWidthPx)
                 assertEquals(0, p.displayHeightPx)
                 assertNull(g.display(m))
-                val bytes = Codec.encodePayload(p)
+                val bytes = Codec.encodePayload(p.copy(chroma = 0)) // the length checks look at the display group only
                 assertEquals(8, bytes.size)
                 assertArrayEquals(Codec.encodePayload(StreamPrefs(120, 1000, p.bitrateKbps)), bytes)
             }
         }
         settings.setBitrateKbps(0)
         g.onModeChanged(StreamMode.DAILY)
-        assertArrayEquals(Codec.encodePayload(StreamPrefs(120, 1000, 0)), Codec.encodePayload(g.prefs(StreamMode.DAILY)))
+        assertArrayEquals(Codec.encodePayload(StreamPrefs(120, 1000, 0).copy(chroma = SHARP)), Codec.encodePayload(g.prefs(StreamMode.DAILY)))
     }
 
     @Test fun gameDisplayOffGivesTodaysGameBytes() {
@@ -132,8 +135,8 @@ class GameResolutionTest {
         settings.setGameResolution(GameResolution.R1400)
         val g = GameModeSettings(settings, gameDisplay = false)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 60_000), g.prefs(StreamMode.GAME))
-        assertEquals(8, Codec.encodePayload(g.prefs(StreamMode.GAME)).size)
+        assertEquals(StreamPrefs(60, 1000, 60_000).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
+        assertEquals(8, Codec.encodePayload(g.prefs(StreamMode.GAME).copy(chroma = 0)).size)
         assertNull(g.display(StreamMode.GAME))
         assertNull(g.selectGameResolution(GameResolution.R2100, StreamMode.GAME)) // stored, nothing sent
         assertEquals(GameResolution.R2100, settings.gameResolution())
@@ -148,10 +151,10 @@ class GameResolutionTest {
         assertEquals(GameResolution.R1400, settings.gameResolution()) // stored for the next game-mode entry
         g.onModeChanged(StreamMode.GAME)
         g.setBitrateKbps(15_000) // the layer's bit rate goes along
-        assertEquals(StreamPrefs(60, 1000, 15_000, 2100, 1380), g.selectGameResolution(GameResolution.R2100, StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 15_000, 2100, 1380).copy(chroma = SHARP), g.selectGameResolution(GameResolution.R2100, StreamMode.GAME))
         g.selectFrameRate(StreamMode.GAME, 120)
-        assertEquals(StreamPrefs(120, 1000, 15_000, 2240, 1472), g.selectGameResolution(GameResolution.R2240, StreamMode.GAME))
-        assertEquals(StreamPrefs(120, 1000, 15_000, 1848, 1214), g.selectGameResolution(GameResolution.R1848, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 15_000, 2240, 1472).copy(chroma = SHARP), g.selectGameResolution(GameResolution.R2240, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 15_000, 1848, 1214).copy(chroma = SHARP), g.selectGameResolution(GameResolution.R1848, StreamMode.GAME))
         assertEquals(GameResolution.R1848, settings.gameResolution())
     }
 
@@ -177,11 +180,11 @@ class GameResolutionTest {
         assertEquals(GameResolution.R2800, Settings(store).gameResolution())
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME) // Oyun defaults to 60
-        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         assertEquals(GameResolution.R2800, g.display(StreamMode.GAME))
         assertEquals("Oyun: 60 fps, 2800×1840", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
         // the wire: the 12-byte display group with u16 LE 2800 (0x0AF0) and 1840 (0x0730)
-        val bytes = Codec.encodePayload(g.prefs(StreamMode.GAME))
+        val bytes = Codec.encodePayload(g.prefs(StreamMode.GAME).copy(chroma = 0))
         assertEquals(12, bytes.size)
         assertArrayEquals(byteArrayOf(0xF0.toByte(), 0x0A, 0x30, 0x07), bytes.copyOfRange(8, 12))
         // the host applies it as a 1x display: full geometry 2800×1840 px = pt (not the native HiDPI 1400×920 pt)
@@ -195,15 +198,15 @@ class GameResolutionTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
         // 60 -> 120: only fps changes, display_* stays 2800×1840
-        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g.selectFrameRate(StreamMode.GAME, 120))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840).copy(chroma = SHARP), g.selectFrameRate(StreamMode.GAME, 120))
         assertEquals(GameResolution.R2800, g.display(StreamMode.GAME))
         assertEquals("Oyun: 120 fps, 2800×1840", StreamMode.GAME.toastText(g.fps(StreamMode.GAME), g.display(StreamMode.GAME)))
-        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840), g.selectFrameRate(StreamMode.GAME, 60))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 2800, 1840).copy(chroma = SHARP), g.selectFrameRate(StreamMode.GAME, 60))
         // entering Oyun with 120 stored asks for 2800×1840 right away
         settings.setModeFps(StreamMode.GAME, 120)
         val g2 = GameModeSettings(settings)
         g2.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g2.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840).copy(chroma = SHARP), g2.prefs(StreamMode.GAME))
     }
 
     @Test fun picking2800InOyun120SendsAtOnce() { // T-250
@@ -211,9 +214,9 @@ class GameResolutionTest {
         settings.setModeFps(StreamMode.GAME, 120)
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
-        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840), g.selectGameResolution(GameResolution.R2800, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 2800, 1840).copy(chroma = SHARP), g.selectGameResolution(GameResolution.R2800, StreamMode.GAME))
         assertNull(g.selectGameResolution(GameResolution.R2800, StreamMode.GAME)) // the same size again: nothing new
-        assertEquals(StreamPrefs(120, 1000, 60_000, 1400, 920), g.selectGameResolution(GameResolution.R1400, StreamMode.GAME))
+        assertEquals(StreamPrefs(120, 1000, 60_000, 1400, 920).copy(chroma = SHARP), g.selectGameResolution(GameResolution.R1400, StreamMode.GAME))
     }
 
     @Test fun experimentalSizeNeverReachesOtherModes() {
@@ -222,7 +225,7 @@ class GameResolutionTest {
         for (m in nonGame) {
             g.onModeChanged(m)
             assertNull(m.id, g.display(m))
-            assertEquals(m.id, 8, Codec.encodePayload(g.prefs(m)).size)
+            assertEquals(m.id, 8, Codec.encodePayload(g.prefs(m).copy(chroma = 0)).size)
             assertNull(m.id, g.selectGameResolution(GameResolution.R2800, m))
         }
         val off = GameModeSettings(settings, gameDisplay = false) // `--ei game_display 0`
