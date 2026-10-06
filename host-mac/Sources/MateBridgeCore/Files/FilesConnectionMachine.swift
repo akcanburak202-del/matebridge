@@ -56,8 +56,14 @@ public enum FilesAction: Equatable, Sendable {
     /// inbound byte is a record under `c2h` and every outbound message is sealed under `h2c`. If the derivation
     /// returns nil, report `keysUnavailable`.
     case startRecords(FilesConnID, clientNonce: [UInt8], hostNonce: [UInt8])
-    /// Close the file connection after flushing queued sends. The machine has already forgotten it.
+    /// Close the file connection after flushing queued sends. The machine no longer routes data for it, but it keeps
+    /// counting toward `FILES_NET.max` as a *closing* connection until the caller reports `fileClosed(id)` after the
+    /// socket really is closed. If that has not happened within `drainTimeoutUs` the machine asks for `abort`.
+    /// (Refusals at `accepted` have nothing queued: they are not tracked.)
     case close(FilesConnID, FilesCloseReason)
+    /// The flush of a `close` did not finish in time (the peer stopped reading): close the socket now, dropping queued
+    /// bytes, then report `fileClosed(id)`. The machine has already stopped counting the connection.
+    case abort(FilesConnID)
     /// A local connection was paired with an idle file connection: from now on bytes read from the local connection
     /// go out as `FILES_DATA` (the first one tells the machine through `hostSentData`).
     case bind(FilesConnID, LocalConnID)
@@ -76,6 +82,8 @@ public struct FilesPoolCounts: Equatable, Sendable {
     public var idle = 0
     public var bound = 0
     public var waitingLocal = 0
+    /// Closed by the machine, still flushing; they count toward the limit until `fileClosed`.
+    public var closing = 0
 }
 
 /// Normalization of peer addresses for the "same host as the control connection" check.
@@ -103,6 +111,8 @@ public struct FilesConnectionMachine: Sendable {
         public var maxUnproven = 2
         /// Local connections waiting for a file connection.
         public var maxWaitingLocal = 8
+        /// A closing connection may flush queued sends for this long; then the caller aborts it.
+        public var drainTimeoutUs: UInt64 = 5_000_000
         public var makeNonce: @Sendable () -> [UInt8] = {
             (0..<ProtocolConstants.nonceSize).map { _ in UInt8.random(in: 0...255) }
         }
@@ -132,6 +142,10 @@ public struct FilesConnectionMachine: Sendable {
     private var conns: [FilesConnID: State] = [:]
     private var waiting: [Waiting] = []
     private var provenCount: UInt64 = 0
+    /// Connections the machine closed whose transport has not yet confirmed (`fileClosed`): id to flush deadline.
+    private var closing: [FilesConnID: UInt64] = [:]
+    /// Latest `now` seen, for events that carry none.
+    private var clock: UInt64 = 0
 
     public init(configuration: Configuration = Configuration()) { self.configuration = configuration }
 
@@ -141,6 +155,7 @@ public struct FilesConnectionMachine: Sendable {
         var c = FilesPoolCounts()
         c.total = conns.count
         c.waitingLocal = waiting.count
+        c.closing = closing.count
         for state in conns.values {
             switch state {
             case .awaitingHello, .awaitingProof: c.unproven += 1
@@ -159,7 +174,7 @@ public struct FilesConnectionMachine: Sendable {
 
     /// Earliest instant a `tick` has something to do, nil when nothing is pending.
     public var nextDeadline: UInt64? {
-        var times: [UInt64] = waiting.map(\.deadline)
+        var times: [UInt64] = waiting.map(\.deadline) + Array(closing.values)
         for state in conns.values {
             switch state {
             case .awaitingHello(let d), .awaitingProof(let d): times.append(d)
@@ -204,11 +219,12 @@ public struct FilesConnectionMachine: Sendable {
 
     /// A TCP connection reached the file listener. `peer` is its remote address.
     public mutating func accepted(_ id: FilesConnID, peer: String, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard listening else { return [.close(id, .notOpen)] }
         guard FilesPeer.same(peer, controlPeer) else {
             return [.close(id, .peerMismatch), .log(.warning, ev: "files_conn", conn: id, fields: "state=refused reason=peer_mismatch")]
         }
-        guard conns.count < maxConnections else {
+        guard conns.count + closing.count < maxConnections else {
             return [.close(id, .capacity), .log(.warning, ev: "files_conn", conn: id, fields: "state=refused reason=capacity")]
         }
         guard unprovenCount < configuration.maxUnproven else {
@@ -223,11 +239,13 @@ public struct FilesConnectionMachine: Sendable {
     /// `REJECTED` (zero nonce) and close. A HELLO that arrives after the 5 s from the TCP accept closes without an
     /// answer, even when the tick has not run yet.
     public mutating func hello(_ id: FilesConnID, _ hello: FilesHello, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard case .awaitingHello(let deadline)? = conns[id] else {
             return conns[id] == nil ? [] : protocolError(id)
         }
         guard now < deadline else {
             conns[id] = nil
+            markClosing(id)
             return [.close(id, .helloTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=hello_timeout")]
         }
         var reason: String?
@@ -235,11 +253,12 @@ public struct FilesConnectionMachine: Sendable {
             reason = "version"
         } else if !listening || hello.sessionID != sessionID {
             reason = "session"
-        } else if conns.count - 1 >= maxConnections {
+        } else if conns.count - 1 + closing.count >= maxConnections {
             reason = "capacity"
         }
         if let reason {
             conns[id] = nil
+            markClosing(id)
             return [.sendAck(id, .rejected), .close(id, .rejected),
                     .log(.warning, ev: "files_conn", conn: id, fields: "state=rejected reason=\(reason)")]
         }
@@ -253,6 +272,7 @@ public struct FilesConnectionMachine: Sendable {
     /// The key derivation after `startRecords` returned nil: the session is gone.
     public mutating func keysUnavailable(_ id: FilesConnID) -> [FilesAction] {
         guard let state = conns.removeValue(forKey: id) else { return [] }
+        markClosing(id)
         return [.close(id, .keysUnavailable)] + closeBoundLocal(state, .fileClosed)
     }
 
@@ -261,12 +281,14 @@ public struct FilesConnectionMachine: Sendable {
     /// sent its first `FILES_DATA` to the tablet (the host always speaks first). Any other known type is a protocol
     /// error. Unknown types never get here (the decoder skips them).
     public mutating func record(_ id: FilesConnID, _ message: Message, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard let state = conns[id] else { return [] }
         switch (state, message) {
         case (.awaitingProof(let deadline), .ping):
             // The 5 s run from the TCP accept: a proof that is processed late (before a delayed tick) is too late.
             guard now < deadline else {
                 conns[id] = nil
+                markClosing(id)
                 return [.close(id, .proofTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=proof_timeout")]
             }
             provenCount += 1
@@ -304,6 +326,7 @@ public struct FilesConnectionMachine: Sendable {
 
     /// The transport closed or failed. A bound local connection is closed after its pending bytes.
     public mutating func fileClosed(_ id: FilesConnID) -> [FilesAction] {
+        closing[id] = nil
         guard let state = conns.removeValue(forKey: id) else { return [] }
         return closeBoundLocal(state, .fileClosed)
     }
@@ -313,6 +336,7 @@ public struct FilesConnectionMachine: Sendable {
     /// A connection from Finder reached the loopback proxy: it gets the oldest idle file connection, or waits (at
     /// most 5 s, at most 8 waiting).
     public mutating func localOpened(_ lid: LocalConnID, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard listening else { return [.closeLocal(lid, .notOpen)] }
         if let fid = oldestIdle() {
             conns[fid] = .bound(lid, hostSentData: false)
@@ -335,6 +359,7 @@ public struct FilesConnectionMachine: Sendable {
         for (fid, state) in conns {
             if case .bound(let l, _) = state, l == lid {
                 conns[fid] = nil
+                markClosing(fid)
                 return [.close(fid, .localClosed)]
             }
         }
@@ -344,17 +369,25 @@ public struct FilesConnectionMachine: Sendable {
     // MARK: Time
 
     public mutating func tick(now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         var out: [FilesAction] = []
+        for (id, deadline) in closing.sorted(by: { $0.key.raw < $1.key.raw }) where now >= deadline {
+            closing[id] = nil
+            out += [.abort(id), .log(.warning, ev: "files_conn", conn: id, fields: "state=aborted reason=drain_timeout")]
+        }
         for id in conns.keys.sorted(by: { $0.raw < $1.raw }) {
             switch conns[id] {
             case .awaitingHello(let deadline)? where now >= deadline:
                 conns[id] = nil
+                markClosing(id)
                 out += [.close(id, .helloTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=hello_timeout")]
             case .awaitingProof(let deadline)? where now >= deadline:
                 conns[id] = nil
+                markClosing(id)
                 out += [.close(id, .proofTimeout), .log(.warning, ev: "files_conn", conn: id, fields: "state=timeout reason=proof_timeout")]
             case .idle(_, let last)? where now >= last + configuration.idleTimeoutUs:
                 conns[id] = nil
+                markClosing(id)
                 out += [.close(id, .idleTimeout), .log(.info, ev: "files_conn", conn: id, fields: "state=closed reason=idle_timeout")]
             default:
                 break
@@ -378,9 +411,14 @@ public struct FilesConnectionMachine: Sendable {
         }
     }
 
+    /// `.close` was emitted for `id`: it keeps counting toward the limit until `fileClosed`, at most one drain timeout.
+    private mutating func markClosing(_ id: FilesConnID) {
+        closing[id] = clock + configuration.drainTimeoutUs
+    }
+
     private var countsFields: String {
         let c = counts
-        return "total=\(c.total) idle=\(c.idle) bound=\(c.bound) unproven=\(c.unproven) waiting=\(c.waitingLocal)"
+        return "total=\(c.total) idle=\(c.idle) bound=\(c.bound) unproven=\(c.unproven) waiting=\(c.waitingLocal) closing=\(c.closing)"
     }
 
     private func oldestIdle() -> FilesConnID? {
@@ -408,6 +446,7 @@ public struct FilesConnectionMachine: Sendable {
 
     private mutating func end(_ id: FilesConnID, _ reason: FilesCloseReason, level: LogLevel) -> [FilesAction] {
         guard let state = conns.removeValue(forKey: id) else { return [] }
+        markClosing(id)
         return [.close(id, reason), .log(level, ev: "files_conn", conn: id, fields: "state=closed reason=\(reason.rawValue)")]
             + closeBoundLocal(state, .fileClosed)
     }
@@ -421,6 +460,7 @@ public struct FilesConnectionMachine: Sendable {
         var out: [FilesAction] = []
         for id in conns.keys.sorted(by: { $0.raw < $1.raw }) {
             if let state = conns.removeValue(forKey: id) {
+                markClosing(id)
                 out.append(.close(id, reason))
                 out += closeBoundLocal(state, reason)
             }
