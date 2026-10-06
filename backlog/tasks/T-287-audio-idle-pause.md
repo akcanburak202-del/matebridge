@@ -10,6 +10,9 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/audio/
   - client-android/app/src/main/cpp/mbaudio.cpp
   - client-android/app/src/test/kotlin/dev/matebridge/client/audio/
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/DevKnobs.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt
+  - client-android/app/src/test/kotlin/dev/matebridge/client/session/DevKnobsTest.kt
   - backlog/tasks/T-287-audio-idle-pause.md
 ---
 
@@ -58,7 +61,7 @@ Logcat: `adb logcat -s 'MB/audio'` (ses içeriği loglanmaz).
 
 ## Open questions
 
-1. **Anahtar kablolaması kartın `files:` dışında:** `AudioPlayout` yeni isteğe bağlı `launchIdlePauseRaw: String? = null` parametresi aldı (varsayılan `pause`), ama `DevKnobs` + `MainActivity` henüz geçirmiyor. Orkestratör ekleyecek: `DevKnobs.kt` içine `Spec("audio_idle_pause", Kind.STRING, debugOnly = true, ids = setOf("off", "pause", "stop"))` ve `val audioIdlePause: String? = null` + `audioIdlePause = x.string("audio_idle_pause")`; `MainActivity.kt:553` `AudioPlayout(this, {…}, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause) {…}`. Bunsuz varsayılan `pause` çalışır; yalnızca A/B yapılamaz.
+1. **Anahtar kablolaması (orkestratör onayıyla dal üzerinde yapıldı, `files:` genişletildi):** `AudioPlayout` yeni isteğe bağlı `launchIdlePauseRaw: String? = null` parametresi aldı (varsayılan `pause`), ama `DevKnobs` + `MainActivity` henüz geçirmiyor. Yapıldı (tek Spec satırı + tek alan + çağrıda bir argüman + DevKnobsTest): `DevKnobs.kt` içine `Spec("audio_idle_pause", Kind.STRING, debugOnly = true, ids = setOf("off", "pause", "stop"))` ve `val audioIdlePause: String? = null` + `audioIdlePause = x.string("audio_idle_pause")`; `MainActivity.kt:553` `AudioPlayout(this, {…}, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause) {…}`. `--es audio_idle_pause off|pause|stop` artık çalışır.
 2. **`docs/KNOBS.md` satırı (yeni):** `--es audio_idle_pause off|pause|stop`, varsayılan `pause`, `…/audio/IdlePause.kt`, T-287, yalnızca geliştirici (T-185 kapısı).
 3. **`docs/LOGGING.md` yeni olaylar** (`audio`): `ev=idle_pause stream_id= api= mode= idle_s= state= pause_ms= count=` (I); `ev=idle_pause_failed stream_id= api= mode= code= state= pause_ms=` (W); `ev=resume stream_id= api= mode= ok=0|1 paused_ms= wake_ms= start_ms=` (I); `ev=resume_skipped stream_id= reason=rebuild paused_ms=` (I); `ev=first_sound stream_id= api= ms= idle_pause= pauses=` (I; ilk paketten ilk duyulur burst'ün yazılışına, bir boşluktan sonraki her yeniden başlamada ve akış başında); `ev=audio_idle_pause_unknown using=` (W); `ev=stats` yeni alan `idle_pauses=`; `ev=audio_device` yeni alan `idle_pause=off|pause|stop`.
 4. `first_sound` çıkış arabelleğinin dinlenme gecikmesini (~`buf_frames`/48 ms) içermez; A/B'de iki kol aynı biçimde ölçüldüğü için karşılaştırılabilir.
