@@ -1667,3 +1667,17 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - Host: 486 saniye boyunca `packets=0 silent_skipped=100–101` (sessizlik çalan uygulama açıkken hiç paket gitmedi). Açılış/kapanış saniyelerinde kısmi değerler (ör. `packets=74 silent_skipped=26`).
 - Tablet: `idle_gaps` 0 → 10, kapının her kapanışı idle sayıldı.
 - `underruns` 8, hepsi Wi-Fi gecikme sıçramalarında (`owd_ms_max` 78–91 ms, `audio_arrival_gap` 50–79 ms; dakikada 7–177 olay, SDR dakikalarda da var). Kapının açılıp kapanmasına bağlı değil.
+
+## 2026-10-06 ~20:00–20:20 — Oyun + HDR10: imleç gizlenince tam ekran oyun aşırı parlak (Astris, TotK)
+
+- Belirti: Oyun modu + HDR Açık, Astris (Switch emülatörü) tam ekran, oyun içi HDR çıkışı Perceptual ya da Linear. Fare/trackpad durduktan **4–5 sn sonra** görüntü aşırı parlak, açık tonlar patlıyor. Fare oynayınca düzeliyor. SDR çıkışında sorun yok.
+- **Kaynak Mac tarafında, tablette değil:** Mac'ten CGEvent ile 1 px fare kıpırdatma (tablete dokunmadan) düzeltti. Mac'e bağlı klavyeden Shift basmak düzeltmedi. 4–5 sn macOS'un imleç gizleme süresi, yani görüntü imleç görünürken doğru, gizliyken parlak.
+- **Pencere modunda sorun yok,** yalnız tam ekranda. Varsayım: imleç gizlenince tam ekran Metal katmanı doğrudan ekrana gidiyor ve WindowServer'ın EDR ton eşlemesi atlanıyor.
+- Sabit kalanlar: host yakalaması iki durumda aynı (`cap_fps=60 status=complete=60`). Sanal ekran `NSScreen` EDR değeri iki durumda 5,0 (`edr_potential=5,0`). Tablet: parlaklık durumu 0,12, panel 60 Hz.
+- **Görünmez katman denemesi işe yaramadı:** 1×1 px, alfa 0,005, `.screenSaver` seviyesi, `canJoinAllSpaces + fullScreenAuxiliary`, tıklamayı geçiren pencere açık tutuldu (90 sn, kullanıcı onayıyla). Tam ekranda yine parlaklaştı. Ya katman tam ekran Space'inde görünmüyordu (doğrulanmadı) ya da mekanizma "doğrudan ekrana" değil.
+- **Geçici çözüm:** HDR oyunu pencere modunda oynamak (ya da Astris SDR çıkışı).
+- **Açık:** araştırılacaklar:
+  - imleç görünürlüğünün HDR yolunu nasıl değiştirdiği;
+  - SCK `showsCursor`;
+  - sanal ekranın HDR parlaklık meta verisi (maks. nit, `CGVirtualDisplay` tanımı);
+  - Moonlight/Sunshine, Parsec ve BetterDisplay'in macOS HDR deneyimleri.
