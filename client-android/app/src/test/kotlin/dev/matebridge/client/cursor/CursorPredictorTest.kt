@@ -44,7 +44,10 @@ class CursorPredictorTest {
             return seq
         }
 
-        fun rel(dx: Float, dy: Float, atUs: Long) = p.onSent(PointerRel(atUs, dx, dy, 0), atUs)
+        fun rel(dx: Float, dy: Float, atUs: Long, buttons: Int = 0) = p.onSent(PointerRel(atUs, dx, dy, buttons), atUs)
+
+        fun hover(xPt: Float, yPt: Float, atUs: Long, flags: Int = PenSample.IN_RANGE) =
+            p.onSent(Pen(Pen.TOOL_PEN, atUs, listOf(PenSample(0, nx(xPt), ny(yPt), 0, 0, 0, flags))), atUs)
 
         /** The predicted x, y in points, or null when there is no prediction. */
         fun at(seq: Long, nowUs: Long): Pair<Float, Float>? {
@@ -91,7 +94,7 @@ class CursorPredictorTest {
     @Test fun anAbsolutePointReplacesThePositionAndLaterDeltasAddToIt() {
         val r = Rig()
         val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        val touch = PointerAbs(60_000, r.nx(400f), r.ny(200f), 0, PointerAbs.SOURCE_TOUCH)
+        val touch = PointerAbs(60_000, r.nx(400f), r.ny(200f), 0, PointerAbs.SOURCE_MOUSE) // a mouse outside capture
         assertTrue(r.p.onSent(touch, 60_000))
         assertPt(400f, r.at(s, 61_000)?.first)
         r.rel(5f, 5f, 62_000)
@@ -112,6 +115,74 @@ class CursorPredictorTest {
         // A pen out of range (flags 0) is not a position.
         val gone = Pen(Pen.TOOL_PEN, 62_000, listOf(sample(10f, 10f, 0)))
         assertFalse(r.p.onSent(gone, 62_000))
+    }
+
+    @Test fun aPenHoveringDuringATrackpadDragDoesNotMoveThePredictedCursor() { // host OWN-9 / PEN-6
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        assertTrue(r.rel(0f, 0f, 60_000, buttons = 0).not()) // no motion: nothing recorded
+        r.rel(5f, 0f, 61_000, buttons = 1) // the left button goes down with motion: the trackpad owns it
+        assertTrue(r.rel(5f, 0f, 62_000, buttons = 1))
+        assertFalse(r.hover(700f, 400f, 63_000)) // the pen hovers elsewhere: the Mac ignores it
+        assertTrue(r.rel(5f, 0f, 64_000, buttons = 1))
+        assertFalse(r.hover(710f, 410f, 65_000))
+        val pos = r.at(s, 66_000)!!
+        assertPt(115f, pos.first) // three deltas of 5
+        assertPt(100f, pos.second)
+        // The button is released: hover moves the cursor again.
+        r.rel(0f, 0f, 67_000, buttons = 0)
+        assertTrue(r.hover(300f, 200f, 68_000))
+        assertPt(300f, r.at(s, 69_000)?.first)
+    }
+
+    @Test fun aPenContactTakesTheCursorFromADragAndThePointerIsIgnoredWhileItTouches() {
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        r.rel(5f, 0f, 60_000, buttons = 1)
+        assertTrue(r.hover(400f, 300f, 61_000, flags = PenSample.IN_RANGE or PenSample.CONTACT)) // pen priority (OWN-2)
+        assertFalse(r.rel(5f, 0f, 62_000, buttons = 1)) // the trackpad is no longer the owner
+        assertTrue(r.hover(410f, 300f, 63_000, flags = PenSample.IN_RANGE or PenSample.CONTACT))
+        assertPt(410f, r.at(s, 64_000)?.first)
+        // The pen lifts: that sample still moves, then the button is free; the trackpad's own press has to be new.
+        assertTrue(r.hover(420f, 300f, 65_000))
+        // Nobody owns the button now, so the trackpad's motion moves the cursor again (a hold never becomes ownership).
+        assertTrue(r.rel(5f, 0f, 66_000, buttons = 1))
+    }
+
+    @Test fun aFingerThatDoesNotHoldTheButtonNeverMovesThePredictedCursor() { // palm rejection
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        assertFalse(r.p.onSent(PointerAbs(60_000, r.nx(500f), r.ny(300f), 0, PointerAbs.SOURCE_TOUCH), 60_000))
+        assertTrue(r.p.onSent(PointerAbs(61_000, r.nx(510f), r.ny(300f), 1, PointerAbs.SOURCE_TOUCH), 61_000))
+        assertPt(510f, r.at(s, 62_000)?.first)
+        assertFalse(r.p.onSent(PointerAbs(62_000, r.nx(900f), r.ny(10f), 0, PointerAbs.SOURCE_MOUSE), 62_000)) // the finger owns the button
+        assertTrue(r.p.onSent(PointerAbs(63_000, r.nx(510f), r.ny(300f), 0, PointerAbs.SOURCE_TOUCH), 63_000)) // its release still moves
+        assertTrue(r.p.onSent(PointerAbs(64_000, r.nx(900f), r.ny(10f), 0, PointerAbs.SOURCE_MOUSE), 64_000)) // now a mouse moves it
+    }
+
+    @Test fun releaseAllAndANewSessionForgetWhoOwnsTheButton() {
+        val r = Rig()
+        r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        r.rel(5f, 0f, 60_000, buttons = 1)
+        assertFalse(r.hover(700f, 400f, 61_000))
+        r.p.onSent(dev.matebridge.client.protocol.ReleaseAll(dev.matebridge.client.protocol.ReleaseAll.USER), 62_000)
+        assertTrue(r.hover(700f, 400f, 63_000))
+        r.rel(5f, 0f, 64_000, buttons = 1) // a new owner...
+        r.hover(10f, 10f, 65_000)
+        r.p.endSession()
+        r.state(100f, 100f, sampleUs = 90_000, rxUs = 95_000)
+        assertTrue(r.hover(700f, 400f, 96_000)) // ...forgotten with the session
+    }
+
+    @Test fun aFrozenPositionIsUsedOnlyForTheStateThatIsStillTheNewest() {
+        val a = CursorFrame(1, 10, 10, true, 1, 0, 0)
+        val hidden = CursorFrame(2, 10, 10, false, 1, 0, 0)
+        assertTrue(FrozenFrame.usable(a, a, 1_000, 50_000))
+        assertFalse(FrozenFrame.usable(a, hidden, 1_000, 50_000)) // a hide arrived before the draw
+        assertFalse(FrozenFrame.usable(a, null, 1_000, 50_000)) // the session ended / the layer was cleared
+        assertFalse(FrozenFrame.usable(a, CursorFrame(1, 10, 10, true, 1, 0, 0), 1_000, 50_000)) // another session's state
+        assertFalse(FrozenFrame.usable(a, a, 50_000, 50_000)) // too old
+        assertFalse(FrozenFrame.usable(hidden, hidden, 1_000, 50_000))
     }
 
     @Test fun aMessageThatDoesNotMoveTheCursorIsNotRecorded() {

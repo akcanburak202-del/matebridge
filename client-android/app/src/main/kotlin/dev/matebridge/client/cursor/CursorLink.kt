@@ -62,7 +62,7 @@ class CursorLink<B : Any>(
     }
 
     private fun reset() {
-        predictor?.reset()
+        predictor?.endSession() // the host released everything with the old connection: forget the button owner too
         slot.clear()
         shapes.clear()
         lastStateMs = 0L

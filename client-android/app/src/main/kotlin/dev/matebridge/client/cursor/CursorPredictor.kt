@@ -6,6 +6,7 @@ import dev.matebridge.client.protocol.Pen
 import dev.matebridge.client.protocol.PenSample
 import dev.matebridge.client.protocol.PointerAbs
 import dev.matebridge.client.protocol.PointerRel
+import dev.matebridge.client.protocol.ReleaseAll
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.min
@@ -67,6 +68,11 @@ class CursorPredictor(
 
     private var anchor: Anchor? = null
 
+    // Mirror of the host's left-button owner (see [onSent]); guarded by [lock].
+    private var owner = NO_OWNER
+    private var penContact = false
+    private val heldLeft = BooleanArray(4)
+
     // Reconciliation state (draw thread).
     private var shown: Anchor? = null
     private var corrX = 0f
@@ -116,19 +122,89 @@ class CursorPredictor(
 
     /**
      * UI thread, after [msg] was handed to the connection at [nowUs]. Returns true when it moves the cursor, i.e. the layer
-     * should redraw: relative motion, a `POINTER_ABS`, or a pen sample in range or in contact.
+     * should redraw.
+     *
+     * Only the source the host listens to is predicted from (T-278 review). The host has one left-button owner
+     * (`InputStateMachine`: OWN-1..4, PEN-6, GATE): while a source holds the left button (a drag) other sources' motion does
+     * not move the Mac cursor, a pen contact takes the button from a pointer source, a pen hover moves the cursor only when
+     * nobody holds the button, and a finger that does not hold the button never moves it (palm rejection). This class
+     * mirrors that owner from the same messages (always, even while the layer is off, so a layer that turns on mid-drag is
+     * only briefly wrong) and records an event only when the host would act on it. The finger gate is not mirrored: a press
+     * the host gates out is assumed accepted.
      */
-    fun onSent(msg: Message, nowUs: Long): Boolean {
-        if (!active) return false
-        return when (msg) {
-            is PointerRel -> if (msg.dx == 0f && msg.dy == 0f) false else add(KIND_REL, msg.dx, msg.dy, nowUs)
-            is PointerAbs -> add(KIND_ABS, msg.x.toFloat(), msg.y.toFloat(), nowUs)
+    fun onSent(msg: Message, nowUs: Long): Boolean = synchronized(lock) {
+        when (msg) {
+            is ReleaseAll -> { clearOwnership(); false }
+            is PointerRel -> {
+                val moves = pointer(SRC_REL, msg.buttons, msg.dx != 0f || msg.dy != 0f)
+                moves && active && add(KIND_REL, msg.dx, msg.dy, nowUs)
+            }
+            is PointerAbs -> {
+                val moves = pointer(if (msg.source == PointerAbs.SOURCE_TOUCH) SRC_TOUCH else SRC_MOUSE, msg.buttons, true)
+                moves && active && add(KIND_ABS, msg.x.toFloat(), msg.y.toFloat(), nowUs)
+            }
             is Pen -> {
-                val s = msg.samples.lastOrNull { it.flags and (PenSample.IN_RANGE or PenSample.CONTACT) != 0 }
-                if (s == null) false else add(KIND_ABS, s.x.toFloat(), s.y.toFloat(), nowUs)
+                var last: PenSample? = null
+                for (s in msg.samples) if (pen(s)) last = s
+                last != null && active && add(KIND_ABS, last.x.toFloat(), last.y.toFloat(), nowUs)
             }
             else -> false
         }
+    }
+
+    /** Host rules for one pointer message of [src] (`handlePointer`). Returns whether the Mac cursor moves. */
+    private fun pointer(src: Int, buttons: Int, hasMotion: Boolean): Boolean {
+        val left = buttons and BUTTON_LEFT != 0
+        val pressed = left && !heldLeft[src]
+        val released = !left && heldLeft[src]
+        val accept = pressed && owner == NO_OWNER
+        val moves = hasMotion && when {
+            owner == src || accept -> true
+            owner != NO_OWNER -> false
+            else -> src != SRC_TOUCH
+        }
+        if (accept) owner = src else if (released && owner == src) owner = NO_OWNER
+        heldLeft[src] = left
+        return moves
+    }
+
+    /** Host rules for one pen sample (`handlePen`). Returns whether the Mac cursor moves to it. */
+    private fun pen(s: PenSample): Boolean {
+        val inRange = s.flags and (PenSample.IN_RANGE or PenSample.CONTACT) != 0
+        val contact = s.flags and PenSample.CONTACT != 0
+        if (!inRange) { // leaving: a touching pen lifts first (the position it lifts at is not predicted)
+            endPenContact()
+            return false
+        }
+        return when {
+            contact -> { // the pen always gets the left button (OWN-2)
+                penContact = true
+                owner = SRC_PEN
+                true
+            }
+            penContact -> { // CONTACT 1 -> 0: the lift happens at this sample
+                endPenContact()
+                true
+            }
+            else -> owner == NO_OWNER // hover: the Mac ignores it while a pointer source owns the button (OWN-9)
+        }
+    }
+
+    private fun endPenContact() {
+        penContact = false
+        if (owner == SRC_PEN) owner = NO_OWNER
+    }
+
+    private fun clearOwnership() {
+        owner = NO_OWNER
+        penContact = false
+        heldLeft.fill(false)
+    }
+
+    /** The control connection ended or a new one began: the host released everything ([reset] plus the owner mirror). */
+    fun endSession(): Unit = synchronized(lock) {
+        clearOwnership()
+        reset()
     }
 
     private fun add(k: Int, a: Float, b: Float, nowUs: Long): Boolean = synchronized(lock) {
@@ -263,6 +339,12 @@ class CursorPredictor(
 
     companion object {
         const val CAP = 512
+        private const val NO_OWNER = -1
+        private const val SRC_PEN = 0
+        private const val SRC_REL = 1
+        private const val SRC_MOUSE = 2
+        private const val SRC_TOUCH = 3
+        private const val BUTTON_LEFT = 1
         private const val KIND_REL = 0
         private const val KIND_ABS = 1
         private const val NORM = 65535f

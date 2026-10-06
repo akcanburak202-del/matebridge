@@ -119,7 +119,7 @@ class CursorOverlayView(
     }
 
     private fun invalidateBox(a: CursorGeometry.Box?, b: CursorGeometry.Box?) {
-        requestRedraw(CursorGeometry.dirty(a, b), full = false)
+        requestRedrawAlways(CursorGeometry.dirty(a, b))
     }
 
     /**
@@ -128,6 +128,16 @@ class CursorOverlayView(
      */
     private fun requestRedraw(rect: IntArray?, full: Boolean) {
         if (redraw.request(rect, full)) postOnAnimation(redrawTask)
+    }
+
+    /**
+     * A new accepted state (or a clear) always gets a frame, even when there is no rectangle to invalidate: a state that
+     * hides a cursor which was never drawn has no old box, but a draw prepared for the previous state may be pending and
+     * must see the newest state (T-278 review).
+     */
+    private fun requestRedrawAlways(rect: IntArray?) {
+        if (rect != null) requestRedraw(rect, full = false)
+        else if (redraw.requestRecompute()) postOnAnimation(redrawTask)
     }
 
     /**
@@ -186,8 +196,10 @@ class CursorOverlayView(
         // The task's frozen position of this frame when there is one (fresh and the layer still predicts), else the newest state.
         val fz = frozen
         frozen = null
-        val useFrozen = fz != null && predictor.active && t0 / 1000 - fz.atUs < FROZEN_MAX_US
-        val frame = if (useFrozen) fz!!.frame else link.slot.latest()
+        val latest = link.slot.latest()
+        // Only for the state that is still the newest (a hide, a new state or a session reset since then discards it).
+        val useFrozen = fz != null && predictor.active && FrozenFrame.usable(fz.frame, latest, t0 / 1000 - fz.atUs, FROZEN_MAX_US)
+        val frame = if (useFrozen) fz!!.frame else latest
         var posX = if (useFrozen) fz!!.x else frame?.x ?: 0
         var posY = if (useFrozen) fz!!.y else frame?.y ?: 0
         var animating = useFrozen && fz!!.animating

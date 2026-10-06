@@ -59,3 +59,13 @@ class RedrawGate {
 
     val isPending: Boolean @Synchronized get() = pending
 }
+
+/**
+ * Whether the position the redraw task fixed for [frozen] may still be painted (T-278 review): only while it is the newest
+ * accepted state. [CursorFrame]s are immutable and one object per accepted state, so identity also covers a hide
+ * (`visible = 0` is a newer frame), a newer seq and a session reset (the slot is cleared, a later state is another object).
+ */
+object FrozenFrame {
+    fun usable(frozen: CursorFrame, latest: CursorFrame?, ageUs: Long, maxAgeUs: Long): Boolean =
+        latest === frozen && frozen.visible && ageUs >= 0 && ageUs < maxAgeUs
+}
