@@ -80,6 +80,19 @@ Kötüleşirse kart geri alınır (varsayılan zaten `poll`).
 
 **Birim testler:** `DecoderWaitTest` (politika tablosu; `abort`+`nudge` ve 400 turluk kayıp uyanma yarışı; uzun parkta `offer`/revoke; sahte codec ile event kipinde boşta uyanma sayısı sınırlı ve poll'dan az; uzun boşluktan sonra kare <100 ms'de girer; seyrek akış sırayla çözülür/gösterilir; kip çalışırken değişir; detach, reconfigure ve çıkış hatası park halindeki iş parçacığını anında bitirir). `DevKnobsTest` `dec_wait`. `./scripts/check.sh`: ALL OK.
 
+### Ek: `event_in` (üçüncü kip, dal `task/T-286-event-in`)
+
+Neden: cihaz A/B'sinde (NOTES 2026-10-07 ~00:30–01:05) `event` uyanmayı ~955 → ~300/s ve istemci CPU'sunu ~%6 düşürdü, ama `cap_dec_p50` +1,6 ms, p95 +2,5 ms (kart sınırı ±1 ms), `dec_p50` aynı. Şüphe: çıkıştaki 50 ms'lik `dequeueOutputBuffer` beklemesi (InFlightGauge 0 iken) HiSilicon codec'te kare kuyruğa girince hemen uyanmıyor.
+
+**Ayar:** `--ez dev true --es dec_wait event_in` (`poll` varsayılan kalır, `event` olduğu gibi). `ev=profile knobs=` içinde `dec_wait:event_in`.
+- Giriş (`mb-decoder`): `event` ile aynı: 250 ms sigortalı park, `offer`/retire/hata-`nudge` ile anında uyanma.
+- Çıkış (`mb-decoder-out`): bugünkü `poll` gibi (5 ms + `IdleWait`; kare uçuşta olsun olmasın, tutulan tampon son tarihi aynı), 50 ms boşta beklemesi yok.
+- Kod: `DecoderWait` artık `parksInput` / `longOutputIdle` özellikleri taşıyor (`POLL` false/false, `EVENT` true/true, `EVENT_IN` true/false); `VideoRenderer` iki döngüde kip yerine bu özelliklere bakıyor (`event` ve `poll` davranışı bayt bayt aynı). Durdurma gecikmesi `poll` ile aynı (5–20 ms): `event`'teki +50 ms yok.
+- **Beklenen uyanma azalması (10 fps, tahmin):** `mb-decoder` ~265 → ~5/s (giriş park), `mb-decoder-out` ~246/s kalır (poll), `MediaCodec_loop` ~453/s kalır; üç iş parçacığı toplamı ~955 → ~700/s (~-250/s), yani `event`in kazancının yaklaşık dörtte biri/üçte biri; CPU kazancı da orantılı küçük (~%2–3 tek çekirdek). Kart hedefi (≥500/s) bu kipte tutmaz; amaç `cap_dec` +1,6 ms'in kaynağının çıkış beklemesi mi giriş parkı mı olduğunu ayırmak.
+- **Orkestratör A/B:** aynı senaryoda üç kol (`poll`, `event`, `event_in`): üç iş parçacığı uyanma/s ve `cap_dec_p50/p95` + `dec_p50`. Yorum: `event_in` `cap_dec` ±1 ms içindeyse sorun çıkış 50 ms'indeydi (o halde varsayılan adayı `event_in`, ek kazanç için çıkış bekleme süresi ara değerle denenebilir); `event_in` de +1,6 ms ise sebep giriş parkı (park/unpark gecikmesi), `event` ailesi bırakılır.
+- Testler: `DecoderWaitTest` (parse, `event_in` politika tablosu = çıkışta `poll` ile eş, boşta giriş uyanması az ve 50 ms'lik çıkış bekleme yok, uzun boşluktan sonra kare anında girer, detach/reconfigure/çıkış hatası park halindeki girişi anında bitirir), `DevKnobsTest` (`dec_wait event_in`, dev yokken yok sayılır). `./scripts/check.sh`: ALL OK.
+- Kapsam dışı dosya yok (bu dalda `files:` dışına yalnız `DevKnobs.kt` dokunuldu; T-286'daki aynı gerekçe, Open questions 1). `docs/KNOBS.md` 23e satırı orkestratörde: `poll/event` → `poll/event/event_in` güncellenmeli.
+
 ## Open questions
 
 1. **Kapsam genişlemesi (onay gerekir):** "mevcut ayar deseni" `DevKnobs.kt` (alan + `Spec`), `MainActivity.kt` (`it.decoderWait = devKnobs.decoderWait`, tek satır) ve `DevKnobsTest.kt` dosyalarını gerektiriyor; kartın `files:` listesinde yoklar. Orkestratörün açık talimatıyla en küçük değişiklik yapıldı. İstenmezse bu üç dosya geri alınır ve ayar yalnız `VideoRenderer.decoderWait` olarak kalır (cihazda tetiklenemez).

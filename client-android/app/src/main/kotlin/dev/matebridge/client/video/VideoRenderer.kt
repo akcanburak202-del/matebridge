@@ -668,7 +668,7 @@ class VideoRenderer(
                         val mode = decoderWait
                         val waitUs = DecoderWaits.outputWaitUs(
                             mode, now - st.lastOutputNs, OUTPUT_WAIT_US,
-                            if (mode == DecoderWait.EVENT) st.gauge.current() else 1, untilDeadline,
+                            if (mode.longOutputIdle) st.gauge.current() else 1, untilDeadline,
                         )
                         val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, st, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
@@ -708,7 +708,7 @@ class VideoRenderer(
                 val fromQueue = if (held == null) {
                     queue.awaitNext(
                         DecoderWaits.inputWaitNs(mode, System.nanoTime() - lastFrameNs, INPUT_WAIT_NS), att.gen, takeMark,
-                        if (mode == DecoderWait.EVENT) inputAbort else null,
+                        if (mode.parksInput) inputAbort else null,
                     )
                 } else null
                 if (fromQueue != null) lastFrameNs = System.nanoTime()

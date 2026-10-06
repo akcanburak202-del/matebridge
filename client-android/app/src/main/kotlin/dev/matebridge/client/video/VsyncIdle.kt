@@ -158,11 +158,14 @@ object IdleWait {
 /**
  * T-286 (dev knob `dec_wait`): how the decoder's input and output threads wait while nothing is happening.
  * [POLL] = the pre-T-286 fixed timeouts ([IdleWait] after 300 ms without a frame); [EVENT] = wake-ups only on events,
- * with long safety-net timeouts (see [DecoderWaits]). Default [POLL] until the device A/B decides.
+ * with long safety-net timeouts (see [DecoderWaits]); [EVENT_IN] = the input thread as [EVENT], the output thread exactly
+ * as [POLL] (device A/B: the 50 ms output idle wait of [EVENT] added ~1.6 ms to `cap_dec`). Default [POLL] until the
+ * device A/B decides.
  */
-enum class DecoderWait(val id: String) {
-    POLL("poll"),
-    EVENT("event");
+enum class DecoderWait(val id: String, val parksInput: Boolean, val longOutputIdle: Boolean) {
+    POLL("poll", parksInput = false, longOutputIdle = false),
+    EVENT("event", parksInput = true, longOutputIdle = true),
+    EVENT_IN("event_in", parksInput = true, longOutputIdle = false);
 
     companion object {
         val IDS: Set<String> = values().map { it.id }.toSet()
@@ -194,7 +197,7 @@ object DecoderWaits {
 
     fun inputWaitNs(mode: DecoderWait, sinceLastFrameNs: Long, pollNs: Long): Long = when (mode) {
         DecoderWait.POLL -> IdleWait.waitNs(sinceLastFrameNs, pollNs)
-        DecoderWait.EVENT -> EVENT_INPUT_WAIT_NS
+        DecoderWait.EVENT, DecoderWait.EVENT_IN -> EVENT_INPUT_WAIT_NS
     }
 
     /**
@@ -203,7 +206,7 @@ object DecoderWaits {
      */
     fun outputWaitUs(mode: DecoderWait, sinceLastOutputNs: Long, pollUs: Long, inFlight: Int, untilDeadlineNs: Long?): Long {
         val poll = IdleWait.waitNs(sinceLastOutputNs, pollUs * 1000) / 1000
-        val max = if (mode == DecoderWait.EVENT && inFlight <= 0 && untilDeadlineNs == null) EVENT_OUTPUT_IDLE_WAIT_US else poll
+        val max = if (mode.longOutputIdle && inFlight <= 0 && untilDeadlineNs == null) EVENT_OUTPUT_IDLE_WAIT_US else poll
         return if (untilDeadlineNs == null) max else (untilDeadlineNs / 1000).coerceIn(0, max)
     }
 }
