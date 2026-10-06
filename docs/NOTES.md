@@ -1681,3 +1681,9 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
   - SCK `showsCursor`;
   - sanal ekranın HDR parlaklık meta verisi (maks. nit, `CGVirtualDisplay` tanımı);
   - Moonlight/Sunshine, Parsec ve BetterDisplay'in macOS HDR deneyimleri.
+
+## 2026-10-06 ~20:40–21:20 — HDR parlaklık çözümü, Safari HDR, durağan ekranda 60 fps
+
+- **Parlaklaşma (önceki bölüm) çözüldü, kullanıcı ayarıyla:** Astris → General → "Auto-hide interface" (3 sn hareketsizlikte imleci ve oyun katmanını gizler) **kapatılınca** tam ekran HDR'de parlaklaşma olmuyor. İmleci gizleyen Astris'ti. Araştırma: `docs/research/2026-10-06-hdr-fullscreen-cursor.md`. MateBridge'de kod değişikliği yok.
+- **Safari/YouTube HDR yok:** Günlük HDR açıkken (`edr_potential=5,0`) `MTShouldPlayHDRVideo([111]) = false`. Neden: harici ekranda geniş gamut şartı; ekranımız 709 primerli (araştırma `docs/research/2026-10-06-safari-hdr-virtual-display.md`). Kullanıcı Ekranlar → MateBridge → Renk profili → **Display P3** seçince YouTube'da HDR simgesi çıktı. Kalıcı düzeltme: T-281 (HDR ekranına P3 primerleri, karar 0032 güncellemesi).
+- **Durağan ekranda sürekli 60 fps (SDR ve HDR):** 20:43'ten itibaren `cap_fps=60 status=complete=60`; ardışık ekran görüntüleri piksel piksel aynı. Kaynak **Finder**: ana iş parçacığında sürekli `RenderBox` (SwiftUI) çizimi, ~%11 CPU. Başlangıcı, kullanıcının ekran görüntüsü küçük resmini sohbete sürüklediği ana (20:42:44) denk geliyor [Tahmin: takılı kalan sürükleme animasyonu]. Finder yeniden başlatılınca fps 0'a düştü. MateBridge hatası değil. Teşhis: iki `screencapture` farkı + `sample Finder`.
