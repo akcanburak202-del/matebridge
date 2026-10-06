@@ -32,6 +32,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-258](tasks/T-258-host-full-chroma.md) | Host — packed full chroma (decision 0034): codecs, Metal AVC444v2 packer, second VT session, pairing, fallback | 6 | mac-host-dev | [T-257, T-253] |
 | [T-259](tasks/T-259-client-full-chroma.md) | Client — packed full chroma (decision 0034): codecs, capability test, second decoder, ImageReader + GL merge path, pairing, prefs | 6 | android-client-dev | [T-257, T-252] |
 | [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
+| [T-261](tasks/T-261-client-full-chroma-temporal-reuse.md) | Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs | 6 | android-client-dev | [T-259] |
+| [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
 
 ## todo
 
@@ -278,3 +280,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-254](tasks/T-254-probe-yuv444-tablet.md) | Probe (tablet) — 4:4:4 packing gates: raw YUV sampling on the GPU, ImageReader→GL→SurfaceView presentation, dual decode at 60 fps | 6 | android-client-dev | [] |
 | [T-255](tasks/T-255-probe-yuv444-mac.md) | Probe (Mac) — 4:4:4 packing costs: Metal packer time, two VT sessions at 60 fps, auxiliary bitrate, reconstruction quality; v2 test clips | 6 | mac-host-dev | [] |
 | [T-256](tasks/T-256-probe-yuv444-gl-latency.md) | Probe (tablet) — 4:4:4 GL merge path latency with depth-1 presentation vs today's direct path | 6 | android-client-dev | [T-254] |
+| [T-263](tasks/T-263-full-chroma-hotfix.md) | Client — Tam renk acil düzeltme: ana ImageReader 6 imaj, ana dekoder çökünce negotiated geri dönüş, "Görüntü durdu" düğmesi okunur | 6 | android-client-dev | [T-261] |

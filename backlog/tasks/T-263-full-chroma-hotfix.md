@@ -1,7 +1,7 @@
 ---
 id: T-263
 title: Client — Tam renk acil düzeltme: ana ImageReader 6 imaj, ana dekoder çökünce negotiated geri dönüş, "Görüntü durdu" düğmesi okunur
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-261]
