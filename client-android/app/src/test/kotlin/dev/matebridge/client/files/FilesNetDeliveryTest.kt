@@ -15,7 +15,7 @@ class FilesNetDeliveryTest {
         val queue = ArrayDeque<Runnable>()
         val delivered = ArrayList<Pair<Int, FilesNet>>()
         var uiGen = 100
-        val d = FilesNetDelivery({ queue.addLast(it) }, { uiGen }) { g, m -> delivered += g to m }
+        val d = FilesNetDelivery({ queue.addLast(it) }, { uiGen }) { g, m, _ -> delivered += g to m }
         fun runAll() { while (queue.isNotEmpty()) queue.removeFirst().run() }
     }
 
@@ -42,7 +42,7 @@ class FilesNetDeliveryTest {
         val r = Rig()
         var rerun = false
         lateinit var d: FilesNetDelivery
-        d = FilesNetDelivery({ r.queue.addLast(it) }, { 100 }) { g, m ->
+        d = FilesNetDelivery({ r.queue.addLast(it) }, { 100 }) { g, m, _ ->
             r.delivered += g to m
             if (!rerun) { rerun = true; d.offer(g, close) }
         }
@@ -122,7 +122,7 @@ class FilesNetDeliveryTest {
     @Test fun aFailedPostLeavesTheDeliveryUsable() {
         var fail = true
         val got = ArrayList<FilesNet>()
-        val d = FilesNetDelivery({ if (fail) throw IllegalStateException("gone") else it.run() }, { 100 }) { _, m -> got += m }
+        val d = FilesNetDelivery({ if (fail) throw IllegalStateException("gone") else it.run() }, { 100 }) { _, m, _ -> got += m }
         try { d.offer(1, open); org.junit.Assert.fail() } catch (e: IllegalStateException) { }
         fail = false
         d.offer(1, close)

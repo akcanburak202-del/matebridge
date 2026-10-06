@@ -564,8 +564,8 @@ class FilesTunnelTest {
     }
 
     @Test fun theTunnelNeverPairsWithAServerThatIsNotTheWifiServerOfItsGeneration() {
-        for (bad in listOf(FilesServerScope(false, 7), FilesServerScope(true, 6), FilesServerScope.NONE)) {
-            davScopeNow = bad // a USB-scope server (possibly the whole storage), an earlier session's, or none
+        for (bad in listOf(FilesServerScope(false, 7), FilesServerScope(true, 6), FilesServerScope(true, 7, 3), FilesServerScope.NONE)) {
+            davScopeNow = bad // a USB-scope server (possibly the whole storage), an earlier session's, one started for another open request, or none
             val host = TestHost(); val dav = TestDav()
             val logs = CopyOnWriteArrayList<String>()
             val t = tunnel(host, dav, pool = 1, logs = logs)

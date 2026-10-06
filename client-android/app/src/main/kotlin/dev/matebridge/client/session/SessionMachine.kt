@@ -147,6 +147,11 @@ class SessionMachine(
         data class SetAudio(val enabled: Boolean) : Event
         /** T-135: the tablet file server's state: remembered, sent as FILES_INFO now when input is allowed and it changed. */
         data class SetFiles(val info: FilesInfo, val scope: FilesServerScope) : Event
+        /**
+         * T-269: the UI forgot the Mac's open request [requestId] without a server to publish about (sharing was switched
+         * off while only waiting). Forgets that request only if it is still the live one.
+         */
+        data class ForgetFilesNet(val requestId: Int) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -195,7 +200,7 @@ class SessionMachine(
          * sanitised ([FilesNet.pool] 1..4, [FilesNet.max] pool..16, an OPEN without a port dropped). The UI decides about
          * the tablet's server; the tunnel is driven by [FilesTunnel].
          */
-        data class FilesNetReceived(val msg: FilesNet, val gen: Int) : Action
+        data class FilesNetReceived(val msg: FilesNet, val gen: Int, val requestId: Int = 0) : Action
         /**
          * T-269: the file tunnel the session wants now ([plan], null = none). Emitted only when it changes: it closes the
          * running tunnel (if any) and, for a non-null plan, opens a new one. Every session end (BYE, close, loss, stop,
@@ -259,6 +264,14 @@ class SessionMachine(
 
     /** T-269: the Mac's open request of the current connection (sanitised), null = none/closed; and the last tunnel plan sent. */
     private var filesNet: FilesNet? = null
+
+    /**
+     * Correlation id of the live open request (0 = none). Every accepted OPEN gets a new one ([netRequestSeq]); the UI and
+     * the server it starts carry it back (`FilesServerScope.request`), so what happens to an OLD request (a delayed STANDBY of
+     * the server that served it, its READY) never clears or arms a NEWER one, whatever the order of arrival.
+     */
+    private var filesNetId = 0
+    private var netRequestSeq = 0
     private var tunnelPlan: FilesTunnelPlan? = null
     private var pingSeq = 0L
     private var nextPingUs = 0L
@@ -560,10 +573,11 @@ class SessionMachine(
                     // The same-port idempotence of FILES_NET(OPEN) is for a LIVE request only. Once the tablet is OFF or STANDBY
                     // (sharing switched off, the server stopped or failed, a teardown) the remembered request is dead: the
                     // host's next OPEN, even on the same port, is a new one (it tore down on our OFF and waits for READY).
-                    if (!event.info.ready) filesNet = null
+                    if (!event.info.ready && event.scope.request != 0 && event.scope.request == filesNetId) forgetNet()
                     if (inputAllowed) effectiveFiles()?.let { out += Action.Send(it) }
                 }
             }
+            is Event.ForgetFilesNet -> if (event.requestId != 0 && event.requestId == filesNetId) forgetNet()
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
         }
         return out
@@ -582,7 +596,7 @@ class SessionMachine(
             return
         }
         if (!msg.isOpen) {
-            filesNet = null
+            forgetNet()
             out += Action.FilesNetReceived(FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), controlGen)
             return
         }
@@ -599,7 +613,8 @@ class SessionMachine(
         val pool = msg.pool.coerceIn(FilesNet.POOL_MIN, FilesNet.POOL_MAX)
         val clean = FilesNet(FilesNet.STATE_OPEN, msg.port, pool, msg.max.coerceIn(pool, FilesNet.MAX_MAX))
         filesNet = clean
-        out += Action.FilesNetReceived(clean, controlGen)
+        filesNetId = ++netRequestSeq
+        out += Action.FilesNetReceived(clean, controlGen, filesNetId)
         // PROTOCOL.md 0x0A: "izin yoksa FILES_INFO(OFF)". An OPEN that finds the tablet OFF (sharing off, no permission) is
         // answered with that state again (the Mac may have missed or ignored the earlier one); STANDBY and READY answer
         // themselves (the server starts and publishes READY).
@@ -610,6 +625,11 @@ class SessionMachine(
      * T-269: the file tunnel this session wants right now: an accepted, trusted Wi-Fi session, the Mac's open request and
      * the tablet's server READY on a port. The token is not part of it (the Mac's HTTP traffic carries it).
      */
+    private fun forgetNet() {
+        filesNet = null
+        filesNetId = 0
+    }
+
     /** The FILES_INFO this session may announce: a READY of another session's server (or none) is OFF. */
     private fun effectiveFiles(): FilesInfo? {
         val f = files ?: return null
@@ -623,9 +643,10 @@ class SessionMachine(
         // Only the Wi-Fi server of THIS control connection: never a USB-scope server (possibly the whole storage), never
         // one started for an earlier session or before a migration switch.
         if (!filesScope.wifi || filesScope.generation != controlGen) return null
+        if (filesNetId == 0 || filesScope.request != filesNetId) return null // a server started for another (older) request
         val ep = endpoint ?: return null
         if (ConnectMode.transportOf(ep) == Transport.USB) return null
-        return FilesTunnelPlan(controlGen, ep.host, net.port, net.pool, net.max, info.port, sessionId)
+        return FilesTunnelPlan(controlGen, ep.host, net.port, net.pool, net.max, info.port, sessionId, filesNetId)
     }
 
     private fun onMessage(msg: Message, nowUs: Long, out: MutableList<Action>) {
@@ -1178,7 +1199,7 @@ class SessionMachine(
         sealedSeen = false
         hostTagShown = false
         bufferedConfig = null
-        filesNet = null // T-269: a new or ended session starts without the Mac's open request
+        forgetNet() // T-269: a new or ended session starts without the Mac's open request
     }
 
     // ---- T-096 migration ----
@@ -1247,7 +1268,7 @@ class SessionMachine(
         // T-269: the old control session is definitively over: its file connections end now (the plan turns null), and the
         // UI hears CLOSE so the tablet's server stops, whether or not the candidate is ever promoted.
         if (filesNet != null) {
-            filesNet = null
+            forgetNet()
             out += Action.FilesNetReceived(FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), controlGen)
         }
     }

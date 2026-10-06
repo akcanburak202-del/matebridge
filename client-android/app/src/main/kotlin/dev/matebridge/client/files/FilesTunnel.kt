@@ -40,15 +40,20 @@ data class FilesTunnelPlan(
     val max: Int,
     val davPort: Int,
     val sessionId: Long,
+    /** The Mac's open request this tunnel serves (the local server must have been started for the same one). */
+    val request: Int = 0,
 )
 
 /**
- * Which tablet server a published `FILES_INFO` describes (T-269, round 3): [wifi] = a server started for the Wi-Fi scope
+ * Which tablet server a published `FILES_INFO` describes (T-269, round 3). [request] correlates with the Mac's open
+ * request (the machine numbers every accepted OPEN): a READY is only for the request it was started for, and an OFF or
+ * STANDBY ends only the request it belongs to, so a delayed teardown of an old server never clears a newer OPEN (0 = none).
+ * [wifi] = a server started for the Wi-Fi scope
  * (`MateBridge/Wi-Fi/` only), [generation] = the control connection generation it was started for. A READY that is not
  * tagged with the current generation, and a file tunnel whose server is not a Wi-Fi one, are never trusted: a stale or
  * USB-scope server (possibly the whole storage) must not be reachable over Wi-Fi. [NONE]: no server.
  */
-data class FilesServerScope(val wifi: Boolean, val generation: Int) {
+data class FilesServerScope(val wifi: Boolean, val generation: Int, val request: Int = 0) {
     companion object {
         val NONE = FilesServerScope(false, -1)
     }
@@ -420,7 +425,7 @@ class FilesTunnel(
         /** The first FILES_DATA arrived: connect to the tablet's own server and start the tablet-to-Mac pump. */
         private fun pair(channel: FilesChannel, out: OutputStream): OutputStream {
             val sc = davScope()
-            if (!sc.wifi || sc.generation != plan.gen) throw ScopeMismatch() // never the USB root or an earlier session's server
+            if (!sc.wifi || sc.generation != plan.gen || sc.request != plan.request) throw ScopeMismatch() // never the USB root or an earlier session's server
             val d = newDavSocket()
             dav = d
             if (closing.get() || closed.get()) { closeQuietly(d); throw IOException("closed") }

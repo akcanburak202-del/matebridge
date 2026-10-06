@@ -130,9 +130,9 @@ class FilesController(
      */
     fun sync(
         enabled: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?, netOpen: Boolean = false,
-        generation: Int = -1,
+        generation: Int = -1, requestId: Int = 0,
     ) {
-        lastSync = { lifecycle.sync(enabled, hasPermission(), foreground, sessionTrusted, transport, netOpen, generation) }
+        lastSync = { lifecycle.sync(enabled, hasPermission(), foreground, sessionTrusted, transport, netOpen, generation, requestId) }
         lastSync?.invoke()
     }
 
