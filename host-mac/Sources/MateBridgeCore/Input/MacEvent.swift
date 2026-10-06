@@ -180,9 +180,15 @@ public struct InjectionEnvironment: Equatable, Sendable {
     /// sampled or when the query failed (then the planner uses the last known position). Games warp the cursor or
     /// detach it from the mouse, so a relative move starts where the cursor really is, not where it was last put.
     public var cursor: DisplayPoint?
+    /// The Mac's cursor is hidden (`CGCursorIsVisible() == false`: a game hid it), sampled by the Host together with
+    /// `cursor` for relative pointer messages; false when not sampled or unknown (the symbol is missing). A relative
+    /// move then reports its delta but leaves the cursor where it is, as a physical mouse does for a game that
+    /// detached the cursor (T-272): otherwise the invisible cursor runs into the Dock and the menu bar.
+    public var cursorHidden: Bool
 
     public init(canInject: Bool, geometry: DisplayGeometry?, opensBlocked: Bool = false, capsLockOn: Bool? = nil,
-                cursor: DisplayPoint? = nil) {
+                cursor: DisplayPoint? = nil, cursorHidden: Bool = false) {
+        self.cursorHidden = cursorHidden
         self.canInject = canInject
         self.geometry = geometry
         self.opensBlocked = opensBlocked

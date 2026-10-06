@@ -66,6 +66,8 @@ public struct InjectionPlanner: Sendable {
         /// Live cursor samples within a point of an OLDER posted relative target: WindowServer had not applied our
         /// latest moves yet, so the sample was ignored and the planner's own cursor kept.
         public var liveCursorLagIgnored = 0
+        /// Relative moves made while the cursor was hidden (T-272): delta only, the cursor stayed where it was.
+        public var hiddenCursorMoves = 0
         public init() {}
     }
 
@@ -263,6 +265,15 @@ public struct InjectionPlanner: Sendable {
             case .absolute(let x, let y):
                 target = g.point(x: x, y: y)
                 if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
+            case .relative(let dx, let dy) where env.cursorHidden:
+                // T-272: a hidden cursor (a game) does not move; only the delta flows, like a physical mouse whose
+                // cursor the game detached. The position is the live cursor itself (what WindowServer holds, never
+                // behind our own posts since none moved it), else the last known one. Nothing is remembered as a
+                // target: no post of ours changes where the cursor is.
+                let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
+                target = env.cursor.flatMap { g.onDisplay($0) } ?? validCursor ?? g.center
+                delta = takeRelativeDelta(fx, fy)
+                counters.hiddenCursorMoves += 1
             case .relative(let dx, let dy):
                 // Starts at the live cursor (adopted in `plan`), else the last known position, else the display
                 // center. The position is clamped; the delta is the raw movement, so there is no wall at the edge.
@@ -529,6 +540,20 @@ public struct InjectionPlanner: Sendable {
     private mutating func adoptLiveCursor(_ env: InjectionEnvironment, now: UInt64) {
         recentTargets.removeAll { now < $0.at || now - $0.at > lagWindowUs }
         guard let sample = env.cursor, let g = display, let live = g.onDisplay(sample) else { return }
+        if env.cursorHidden {
+            // T-272: a hidden cursor is only moved by the game, never by our posts, so the sample is never behind
+            // them: it IS the position, for moves and for button-only messages alike (a click right after the game
+            // recentered the cursor must land there, not at the stale position of a visible-mode move). The cached
+            // fraction is kept when the sample is the position we hold (the system may round it).
+            if let c = cursor, g.contains(c), Self.near(c, live) {
+                counters.liveCursorCurrent += 1
+            } else {
+                counters.liveCursorAdopted += 1
+                cursor = live
+            }
+            recentTargets.removeAll()
+            return
+        }
         if let c = cursor, g.contains(c), Self.near(c, live) {
             counters.liveCursorCurrent += 1
             // Caught up: older entries are retired. The current position stays, stamped now, so a sample that still
