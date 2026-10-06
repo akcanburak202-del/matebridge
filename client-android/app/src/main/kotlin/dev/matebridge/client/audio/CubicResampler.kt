@@ -1,7 +1,6 @@
 package dev.matebridge.client.audio
 
 import kotlin.math.floor
-import kotlin.math.roundToInt
 
 /**
  * 4-point cubic Hermite (Catmull-Rom) resampler for interleaved s16 frames, for ratios very close to 1 (clock drift
@@ -50,7 +49,7 @@ class CubicResampler(private val channels: Int = 2) {
                 val c2 = xm1 - 2.5f * x0 + 2f * x1 - 0.5f * x2
                 val c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1)
                 val y = ((c3 * t + c2) * t + c1) * t + x0
-                out[j * ch + c] = y.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                out[j * ch + c] = toS16(y)
             }
             frac += step
             while (frac >= 1.0) {
@@ -66,4 +65,25 @@ class CubicResampler(private val channels: Int = 2) {
         }
         return consumed
     }
+}
+
+/**
+ * T-284: `y.roundToInt().coerceIn(-32768, 32767).toShort()` without stdlib calls (they fell out of JIT code into the
+ * interpreter on the tablet, ~50 % of the audio thread). Bit-identical to it for every finite [y]: `roundToInt` is
+ * `Math.round(float)` = floor(y + 0.5) computed exactly (half up), then clamped. Inline, so no call is left in the
+ * resampler's inner loop. NaN (never produced: the inputs are finite s16 values) maps to 0 instead of throwing.
+ */
+@Suppress("NOTHING_TO_INLINE")
+internal inline fun toS16(y: Float): Short {
+    if (y >= 32766.5f) return 32767
+    if (y < -32768.5f) return -32768
+    // Here |y| < 2^15 + 1, so t is exact and so is d = y - t (|d| < 1).
+    val t = y.toInt()
+    val d = y - t
+    val r = if (y >= 0f) {
+        if (d >= 0.5f) t + 1 else t
+    } else {
+        if (d < -0.5f) t - 1 else t
+    }
+    return r.toShort()
 }
