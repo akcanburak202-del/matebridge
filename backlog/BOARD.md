@@ -36,6 +36,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
 | [T-265](tasks/T-265-files-net-protocol.md) | Protocol — Wi-Fi tablet files (decision 0035): HELLO bit12, FILES_INFO STANDBY, FILES_NET, file connection 0x50–0x52, §9 file keys | 6 | orchestrator | [] |
 | [T-267](tasks/T-267-host-core-files-net.md) | Host Core — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, planner ağ dalı, FilesRateCap | 6 | mac-host-dev | [T-265] |
+| [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
 | [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
 
 ## todo
@@ -57,7 +58,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
 | [T-270](tasks/T-270-wifi-files-device.md) | Cihaz kabulü — Wi-Fi dosyaları (0035): bütçeli ölçüm + Codex --high | 6 | orchestrator | [T-268, T-269] |
 
 ## done
