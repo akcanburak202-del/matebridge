@@ -1,7 +1,7 @@
 ---
 id: T-282
 title: Ölçüm — tablet ve Mac kaynak profili (boşta / video / oyun), hedefli iyileştirme kartları
-status: in-progress
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []
@@ -56,5 +56,11 @@ Kullanıcı (2026-10-06): sadeleştirmeler Mac ve tabletin yükünü azaltır m�
 - Rapor `docs/research/2026-10-07-perf-profile.md`; eşik üstü adaylara kart.
 
 ## Handoff
+
+- Rapor: `docs/research/2026-10-07-perf-profile.md`. Ölçüm 2026-10-06 22:12–22:37, Wi-Fi, 4 senaryo × (60 sn temiz + 30 sn simpleperf/sample). Örnekleyicilerin hepsi durduruldu.
+- Kartlar: T-284 (ses örnekleyici, %20–30), T-285 (video alma ayırmaları, oyunda %10–15), T-286 (çözücü yoklaması, ≥500 uyanma/s, yüksek risk), T-287 (sessizlikte AAudio duraklatma, %2 + 200 uyanma/s).
+- Değmez: ana iş parçacığı durum metni/vsync, log/istatistik, pacer sıralaması, QuickAck, Mac tarafı.
+- Ölçülmedi: debuggable olmayan günlük APK (run-as bedeli). T-284/T-285 sonrası yeniden ölçülecek.
+- (a) "boşta" aslında 10 fps: Claude Code'un Terminal'deki dönen simgesi. Gerçek 0 fps değerleri T-141/T-142'de.
 
 ## Open questions

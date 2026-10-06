@@ -54,8 +54,11 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-282](tasks/T-282-perf-profile.md) | Ölçüm — tablet ve Mac kaynak profili (boşta / video / oyun), hedefli iyileştirme kartları | 6 | orchestrator | [] |
 | [T-283](tasks/T-283-astra-review.md) | Review — gpt-6-astra (high), 2026-10-04 değerlendirmesinden bu yana + riskli dört bölge | 6 | orchestrator | [T-282] |
+| [T-284](tasks/T-284-audio-resampler-hot-loop.md) | İstemci — ses örnekleyici sıcak döngüsü (roundToInt yorumlayıcıda; ses çalarken mb-audio %35–39) | 6 | android-client-dev | [T-282] |
+| [T-285](tasks/T-285-video-receive-allocations.md) | İstemci — video alma yolunda kare başına ayırmaları azalt (oyunda GC %14, 7 000 fault/s) | 6 | android-client-dev | [T-282] |
+| [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
+| [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
 
 ## done
 
@@ -301,3 +304,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-279](tasks/T-279-audio-silence-gate.md) | Host — tamamen sıfır sesi gönderme (sessizlik kapısı) | 6 | mac-host-dev | [] |
 | [T-280](tasks/T-280-hdr-daily-mode.md) | Client — HDR anahtarı Günlük modunda da (mod başına ayrı ayar) | 6 | android-client-dev | [] |
 | [T-281](tasks/T-281-hdr-display-p3-primaries.md) | Host — HDR sanal ekranı Display P3 primerleriyle kur (Safari/YouTube HDR) | 6 | mac-host-dev | [] |
+| [T-282](tasks/T-282-perf-profile.md) | Ölçüm — tablet ve Mac kaynak profili (boşta / video / oyun), hedefli iyileştirme kartları | 6 | orchestrator | [] |

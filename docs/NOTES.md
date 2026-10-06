@@ -1693,3 +1693,13 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - Host `1e65c99f`. Elle atanan Display P3 profili ColorSync İzlencesi'nden kaldırıldı (`CustomProfiles: nil`, fabrika profili "MateBridge"). Ayarlar → Ekranlar renk profili menüsü bu sırada fabrika profilini listelemiyordu; ColorSync İzlencesi → Aygıtlar → Ekranlar → MateBridge → "Şu Anki Profil" ile geri alındı.
 - HDR10 açılışında `ev=vd_transfer requested=1 applied=1 edr_potential=5.00 primaries=p3 wide_gamut=1`; `MTShouldPlayHDRVideo([display]) = true`. **Kullanıcı: Safari'de YouTube HDR seçeneği çıktı.** Kullanıcı HDR'yi açıp kapatmadan önce Safari'yi yeniden başlattı.
 - Not: elle P3 atanmışken SDR ekranda da `wide_gamut=1` görünüyordu (gen 2). Elle atama `wide_gamut` değerini etkiliyor (LOGGING'de belirtildi).
+
+## 2026-10-06 ~22:12–22:37 — T-282 kaynak profili (Wi-Fi, 4 senaryo)
+
+- İstemci, tek çekirdeğin yüzdesi: 10 fps arka plan %24, YouTube 1080p60 sesli %106, Oyun 60 %108, yazı/kaydırma %47. Mac MateBridgeApp %5–21, VTEncoderXPC %0,6–3, WindowServer %5–22.
+- **Ses çalarken `mb-audio` %34–39:** `CubicResampler.process` → `kotlin.math.roundToInt` yorumlayıcıda (örneklerin yarısı) → T-284.
+- **Oyunda GC %14, 7 000 minor fault/s:** video kaydı başına üç tam boy ayırma (`scratch.copyOf`, `copyOfRange(1,n)`, `Reader.bytes`) → T-285.
+- Çözücü döngüleri 4/5 ms yokluyor: 10 fps'te ~950 uyanma/s → T-286. Sessizken AAudio 200 uyanma/s → T-287.
+- **"Boşta" ölçümünde akış 10 fps:** kaynak Terminal'deki Claude Code dönen simgesi ("Noodling…"); `screencapture` farkıyla doğrulandı. Ajan çalışırken ve Terminal görünürken tablet hiç boşta kalmıyor.
+- Dakikada bir "Explicit concurrent copying GC" Binder iş parçacığından geliyor (çerçeve). Bizim kodda `System.gc()` yok.
+- Rapor: `docs/research/2026-10-07-perf-profile.md`.
