@@ -25,3 +25,8 @@
 ## Ertelenen: SMB araştırma probu
 
 macOS'un SMB istemcisi kısmi okuma yapar (önizleme bütün dosyayı indirmez). Tablette uygulama içi SMB sunucusu (aday: JFileServer, LGPL, Java) + Mac yerel uç (`smb://127.0.0.1:<port>`) ile denenebilir. Kullanıcı 2026-10-06: başka bir güne ertelendi, kayıt altında. Prob soruları: Android'de çalışıyor mu, Finder bağlanıyor mu, önizlemede yalnız kısmi okuma mı, lisans/boyut/bağımlılık karar kaydı.
+
+## Ek (2026-10-06, kullanıcı): kök `MateBridge/Wi-Fi`, boyut sınırı yok
+
+- §3 yerine: **Wi-Fi'da kök `/sdcard/MateBridge/Wi-Fi/`** (yoksa tablet oluşturur). Kullanıcı MateBridge içinde iki klasör tutar; Wi-Fi'da yalnız bu alt klasör görünür, diğeri hiç listelenmez. USB'de kök değişmez (ikisi de görünür).
+- §4 kaldırıldı: **Wi-Fi'da boyut sınırı yok.** Gerekçe: klasörün içeriği tamamen kullanıcının kontrolünde; sınırın koruduğu durum (Finder'ın kendiliğinden büyük medya klasörlerine dokunması) bu kökle oluşmuyor, sınır ise kasıtlı büyük kopyaları engellerdi. Kalan bilinen davranış: klasörde büyük dosya varken Finder önizlemesi dosyanın tamamını indirir (Wi-Fi payı ~0,5–3 MB/s, akış yokken daha yüksek); bu sürede Finder o birimde yavaşlar, görüntü akışı hız kuralıyla (§5) korunur. Kullanıcıya öneri: klasörü liste görünümünde tutmak.
