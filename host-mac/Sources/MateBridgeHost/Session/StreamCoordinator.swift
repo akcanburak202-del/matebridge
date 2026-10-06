@@ -25,7 +25,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         case displayRate(sessionID: UInt32, hz: UInt16)
         case stats(Stats)
         case tick
-        case pipelineFailed(id: Int, message: String, wake: DisplayWakeReason?)
+        case pipelineFailed(id: Int, message: String, kind: PipelineFailureKind, wake: DisplayWakeReason?)
         /// T-128: the deadline of a deferred display wake passed (coalesced).
         case deferredWakeDue
         case senderEnded(id: Int, VideoSender.EndReason)
@@ -73,8 +73,6 @@ public final class StreamCoordinator: @unchecked Sendable {
     public var onOverflow: @Sendable () -> Void = {}
 
     private static let tickKey = 1, statsKey = 2, keyframeKey = 3, deferredWakeKey = 4
-    /// Backoff of the one pipeline rebuild after a failure.
-    private static let pipelineRetryUs: UInt64 = 1_000_000
     /// After a deferred display wake (T-128), how long the rebuild waits for the displays to power on.
     private static let retryAfterDeferredWakeUs: UInt64 = 500_000
 
@@ -114,7 +112,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var consumerID = 0
     private var session: ActiveSession?
     private var lastSent = VideoSender.Counters()
-    private var pipelineRetried = false
+    /// T-289: bounded rebuilds after a running pipeline died, and the HDR10 to SDR fallback after repeated encoder failures.
+    private var retryPolicy = PipelineRetryPolicy()
     private var lastStatsText = ""
     private var lastCadenceText = ""
     /// T-187: the hardware-encoder read-back of pipeline `pipelineID`, read once when it started.
@@ -348,8 +347,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             await perform(lease.tick(now: Self.leaseNowUs()))
             if let waiting = prefsGate.poll(now: now) { await applyPrefs(waiting) }
             reportCadence()
-        case .pipelineFailed(let id, let message, let wake):
-            await onPipelineFailed(id: id, message: message, wake: wake)
+        case .pipelineFailed(let id, let message, let kind, let wake):
+            await onPipelineFailed(id: id, message: message, kind: kind, wake: wake)
         case .deferredWakeDue:
             onDeferredWakeDue()
         case .senderEnded(let id, let reason):
@@ -371,7 +370,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
-        pipelineRetried = false
+        retryPolicy.reset()
         // T-214 review: the settings were derived before this event waited in the mailbox; a game display that failed
         // meanwhile (game_display_failed) must not be tried again. The tablet holds the HELLO config (equal to the
         // derived settings unless `reannounce` is already set), so a changed result is announced too.
@@ -657,9 +656,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         return hw.check.menuText
     }
 
-    private func onPipelineFailed(id: Int, message: String, wake: DisplayWakeReason?) async {
+    private func onPipelineFailed(id: Int, message: String, kind: PipelineFailureKind,
+                                  wake: DisplayWakeReason?) async {
         guard id == pipelineID, pipeline != nil else { return }
-        log(.error, "pipeline_failed", "error=\(message)")
+        log(.error, "pipeline_failed", "kind=\(kind.rawValue) error=\(message)")
         let failedAt = HostClock.nowUs()
         // Wakes at once, or (capture_source_lost, T-128) defers the wake by `SleepWakeGate.captureLossDeferUs`.
         wakeDisplayIfNeeded(wake)
@@ -667,15 +667,35 @@ public final class StreamCoordinator: @unchecked Sendable {
         pipeline = nil  // the pipeline already closed its display and queue
         lease.displayLost()
         onSummary("Video durdu: \(message)")
-        // With a live session, rebuild once after a short backoff; the cancelled video link makes the client
-        // reconnect its video connection, which then gets a sender.
-        guard let live = session, !pipelineRetried, !isShuttingDown else { return }
-        pipelineRetried = true
-        // The retry comes at least `pipelineRetryUs` after the failure. With a deferred wake pending (T-128) it waits
+        // With a live session, rebuild after a backoff (T-289: `PipelineRetryPolicy`, a bounded budget per window
+        // instead of one rebuild per session); the cancelled video link makes the client reconnect its video
+        // connection, which then gets a sender. An HDR10 pipeline whose encoder failed twice in the window is rebuilt
+        // as SDR instead (`ev=hdr_fallback`, new `config_id`).
+        guard let live = session, !isShuttingDown else { return }
+        var settings = live.settings
+        var delayUs = PipelineRetryPolicy.baseDelayUs
+        switch retryPolicy.failed(kind: kind, hdr10: live.settings.dynamicRange == .hdr10, nowUs: failedAt) {
+        case .giveUp:
+            log(.warning, "pipeline_retry_exhausted",
+                "kind=\(kind.rawValue) max=\(PipelineRetryPolicy.maxRetries) "
+                + "window_s=\(PipelineRetryPolicy.windowUs / 1_000_000)")
+            return
+        case .retry(let delay, let attempt):
+            delayUs = delay
+            log(.info, "pipeline_retry_scheduled", "attempt=\(attempt) delay_ms=\(delay / 1_000)")
+        case .fallBackToSDR:
+            let fallBack = hdrLock.withLock {
+                hdrFallback.startFailed(settings: live.settings, reason: .encoderRejected)
+            }
+            if fallBack, let sdr = announceHDRFallback(reason: .encoderRejected, detail: "runtime_\(kind.rawValue)") {
+                settings = sdr
+            }
+        }
+        // The retry comes at least `delayUs` after the failure. With a deferred wake pending (T-128) it waits
         // for that wake's deadline, runs the wake itself (this loop is busy until the retry, so `.deferredWakeDue`
         // would only be handled after it) and then gives the displays `retryAfterDeferredWakeUs` to come up;
         // otherwise the retry would always land inside the deferral window and find the displays still dark.
-        var retryAt = failedAt + Self.pipelineRetryUs
+        var retryAt = failedAt + delayUs
         if let deadline = gateLock.withLock({ sleepGate.pendingDeadlineUs }) {
             await sleep(until: deadline)
             guard !isShuttingDown else { return }
@@ -685,8 +705,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         await sleep(until: retryAt)
         guard !isShuttingDown, pipeline == nil else { return }
         log(.info, "pipeline_retry")
-        _ = lease.sessionStarted(device: live.deviceID, settings: live.settings)
-        await createPipeline(settings: live.settings)
+        _ = lease.sessionStarted(device: live.deviceID, settings: settings)
+        await createPipeline(settings: settings)
     }
 
     private func onShutdown() async {
@@ -823,7 +843,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         let p = VideoPipeline(settings: settings, reusing: display, refine: refine,
                               onPackedFallback: { [weak self] reason in self?.post(.packedFallback(id: id, reason: reason)) },
                               onFailure: { [weak self] error in
-            self?.post(.pipelineFailed(id: id, message: "\(error)", wake: DisplayWaker.reason(for: error)))
+            self?.post(.pipelineFailed(id: id, message: "\(error)", kind: VideoPipeline.failureKind(error),
+                                       wake: DisplayWaker.reason(for: error)))
         })
         do {
             try await p.start()
@@ -881,19 +902,31 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func fallBackFromHDR(failed: VideoSettings, error: Error) async -> Bool {
         guard let hdr = VideoPipeline.hdrFailure(error) else { return false }
         let fallBack = hdrLock.withLock { hdrFallback.startFailed(settings: failed, reason: hdr.reason) }
-        guard fallBack, !isShuttingDown, var live = session, live.settings.dynamicRange == .hdr10,
-              let prefs = live.prefs else { return fallBack }
+        guard fallBack, !isShuttingDown, let live = session, live.settings.dynamicRange == .hdr10,
+              let sdr = announceHDRFallback(reason: hdr.reason, detail: hdr.detail) else { return fallBack }
+        await perform(lease.sessionStarted(device: live.deviceID, settings: sdr))
+        return true
+    }
+
+    /// The announcing half of the HDR fallback, shared by the start failure (`fallBackFromHDR`) and the runtime encoder
+    /// failure (T-289, `onPipelineFailed`): re-applies the session's prefs without HDR10 (`HDRFallback` has already
+    /// switched it off), gives them a new `config_id`, logs `ev=hdr_fallback` and sends `STREAM_CONFIG` (the session
+    /// layer closes the video connection). Returns the SDR settings; the caller creates the pipeline. nil = nothing to
+    /// switch (no session, not HDR10, no prefs).
+    private func announceHDRFallback(reason: HDRFallbackReason, detail: String) -> VideoSettings? {
+        guard !isShuttingDown, var live = session, live.settings.dynamicRange == .hdr10, let prefs = live.prefs else {
+            return nil
+        }
         let env = ProcessInfo.processInfo.environment
         let sdr = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
                                      allowGameDisplay: allowsGameDisplay, allowHDR: false, fullChroma: live.fullChroma)
         live.settings = sdr
         live.configID = nextConfigID(after: live.configID)
         session = live
-        log(.warning, "hdr_fallback", HDRLog.fallbackFields(reason: hdr.reason, detail: hdr.detail,
+        log(.warning, "hdr_fallback", HDRLog.fallbackFields(reason: reason, detail: detail,
                                                             configID: live.configID, settings: sdr))
         onReconfigure(live.sessionID, sdr.streamConfig(configID: live.configID))
-        await perform(lease.sessionStarted(device: live.deviceID, settings: sdr))
-        return true
+        return sdr
     }
 
     /// T-258: packed full colour whose Metal packer or auxiliary session could not be set up at pipeline start falls

@@ -244,6 +244,12 @@ public final class VideoPipeline: @unchecked Sendable {
         return HDRSetupError(reason: .captureFailed, detail: "\(ns.domain)_\(ns.code)")
     }
 
+    /// T-289: what a running pipeline's `onFailure` error is about, carried in the owner's event (`PipelineFailureKind`)
+    /// so the decision never depends on the error text. VideoToolbox errors are `.encoder`.
+    static func failureKind(_ error: Error) -> PipelineFailureKind {
+        error is VideoEncoderError ? .encoder : .other
+    }
+
     /// The HDR ring that failed in a `start()` error, nil for any other failure.
     static func hdrFailure(_ error: Error) -> HDRSetupError? { error as? HDRSetupError }
 
