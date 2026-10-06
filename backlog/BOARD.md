@@ -296,3 +296,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-276](tasks/T-276-client-local-cursor.md) | Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel | 6 | android-client-dev | [T-274] |
 | [T-277](tasks/T-277-flaky-packed-renderer-test.md) | Client test — PackedRendererTest.directPathNeverCallsAHook ara sıra düşüyor (yarış) | 6 | android-client-dev | [] |
 | [T-278](tasks/T-278-cursor-prediction.md) | Client — yerel imleç v2: tablette konum tahmini (göreli hareket + mutlak kalem/dokunma), host durumuyla uzlaştırma | 6 | android-client-dev | [T-276] |
+| [T-280](tasks/T-280-hdr-daily-mode.md) | Client — HDR anahtarı Günlük modunda da (mod başına ayrı ayar) | 6 | android-client-dev | [] |

@@ -1,7 +1,7 @@
 ---
 id: T-280
 title: Client — HDR anahtarı Günlük modunda da (mod başına ayrı ayar)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

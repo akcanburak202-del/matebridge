@@ -573,7 +573,7 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
 ## HDR10 (tablet, `MB/session`, T-238, karar 0032)
 
 - `I session ev=hdr_caps display_hdr10=0|1 decoder_main10hdr10=0|1`: `onCreate`'te bir kez. `display_hdr10`: ekranın `HdrCapabilities`'i HDR10 (tip 2) içeriyor. `decoder_main10hdr10`: kod çözücü listesindeki ilk HEVC çözücü (`createDecoderByType`'ın seçtiği) `HEVCProfileMain10HDR10` bildiriyor. İkisi de 1 değilse panelde "HDR (Bu cihazda yok)" gri ve istek hep 0.
-- `I session ev=hdr_request dynamic_range=0|1 mode=daily|drawing|game setting=on|off capable=0|1`: STREAM_PREFS'te istenen dinamik aralık değişti (ve açılıştaki ilk istek). `1` yalnız Oyun + ayar açık + `capable=1`. Her STREAM_PREFS'te değil, yalnız değişimde yazılır.
+- `I session ev=hdr_request dynamic_range=0|1 mode=daily|drawing|game setting=on|off capable=0|1`: STREAM_PREFS'te istenen dinamik aralık değişti (ve açılıştaki ilk istek). `1` yalnız Günlük ya da Oyun + o modun ayarı açık + `capable=1` (T-280; `setting` o modun ayarı, Çizim hep `off`). Her STREAM_PREFS'te değil, yalnız değişimde yazılır.
 - Uygulanan dinamik aralık `ev=profile hdr=`'de; çözücüye giden renk anahtarları `ev=decoder_output_format req_*`'ta (HDR10: `req_standard=6 req_transfer=6 req_range=2`). HDR10 akışta `ev=color_unsupported` yazılmaz (BT.2020 birincilleri `color-standard` ile taşınır).
 
 ## Boşta karartma ve kapatma (tablet, `MB/input`, T-234, karar 0031)

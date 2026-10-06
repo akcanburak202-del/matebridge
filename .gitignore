@@ -40,3 +40,4 @@ probes/**/out/
 
 # Python bytecode (tools/)
 __pycache__/
+.kotlin/
