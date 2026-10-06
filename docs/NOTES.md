@@ -1710,3 +1710,4 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - YouTube 1080p60 sesli: istemci %106 → %85, `mb-audio` %38,8 → %6,8. Oyun 60: %108 → %86, `mb-audio` %33,6 → %4,8.
 - Oyunda GC %14 → %12,8 (T-285 hedefi tutmadı): kalan kaynak Conscrypt (kayıt başına `Cipher.init` sağlayıcı seçimi ve yeni SPI, AEAD iç tampon kopyası) → T-292.
 - T-289 (HDR çalışma anı SDR'ye düşme) ve T-288 (DAV güvenli değiştirme) cihazda tetiklenmedi.
+- Kullanıcı: iki ölçümde (video ve oyun) seste cızırtı ya da kesilme, görüntüde bozulma yok.
