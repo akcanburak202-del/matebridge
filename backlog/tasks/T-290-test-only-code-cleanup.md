@@ -1,7 +1,7 @@
 ---
 id: T-290
 title: İstemci — yalnız testte kullanılan üretim kodunu kaldır (FrameQueue.poll, ChromaReuse modelleri)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
