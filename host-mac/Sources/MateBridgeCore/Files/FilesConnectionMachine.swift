@@ -191,7 +191,9 @@ public struct FilesConnectionMachine: Sendable {
     /// session's control connection) are what every file connection is checked against. `max` and `pool` are the
     /// values that went into `FILES_NET`. Opening again for the same session only updates `max`/`pool`; for another
     /// session every connection of the old one closes first.
-    public mutating func open(sessionID: UInt32, controlPeer: String, max: Int, pool: Int) -> [FilesAction] {
+    public mutating func open(sessionID: UInt32, controlPeer: String, max: Int, pool: Int,
+                              now: UInt64) -> [FilesAction] {
+        clock = Swift.max(clock, now)
         var out: [FilesAction] = []
         if listening, self.sessionID != sessionID { out += closeAll(.sessionEnded) }
         listening = true
@@ -205,7 +207,8 @@ public struct FilesConnectionMachine: Sendable {
 
     /// `FILES_NET(CLOSE)`, session end (BYE, HOST_SLEEP, takeover, connection loss), `FILES_INFO(OFF)` or shutdown:
     /// every file connection and every waiting local connection closes, the listener is to be closed by the caller.
-    public mutating func close(_ reason: FilesCloseReason = .sessionEnded) -> [FilesAction] {
+    public mutating func close(_ reason: FilesCloseReason = .sessionEnded, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard listening else { return closeAll(reason) }
         var out = closeAll(reason)
         listening = false
@@ -241,7 +244,7 @@ public struct FilesConnectionMachine: Sendable {
     public mutating func hello(_ id: FilesConnID, _ hello: FilesHello, now: UInt64) -> [FilesAction] {
         clock = max(clock, now)
         guard case .awaitingHello(let deadline)? = conns[id] else {
-            return conns[id] == nil ? [] : protocolError(id)
+            return conns[id] == nil ? [] : protocolError(id, now: now)
         }
         guard now < deadline else {
             conns[id] = nil
@@ -263,14 +266,15 @@ public struct FilesConnectionMachine: Sendable {
                     .log(.warning, ev: "files_conn", conn: id, fields: "state=rejected reason=\(reason)")]
         }
         let hostNonce = configuration.makeNonce()
-        guard hostNonce.count == ProtocolConstants.nonceSize else { return protocolError(id) }
+        guard hostNonce.count == ProtocolConstants.nonceSize else { return protocolError(id, now: now) }
         conns[id] = .awaitingProof(deadline: deadline)
         return [.sendAck(id, FilesHelloAck(status: .ok, hostNonce: hostNonce)),
                 .startRecords(id, clientNonce: hello.clientNonce, hostNonce: hostNonce)]
     }
 
     /// The key derivation after `startRecords` returned nil: the session is gone.
-    public mutating func keysUnavailable(_ id: FilesConnID) -> [FilesAction] {
+    public mutating func keysUnavailable(_ id: FilesConnID, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         guard let state = conns.removeValue(forKey: id) else { return [] }
         markClosing(id)
         return [.close(id, .keysUnavailable)] + closeBoundLocal(state, .fileClosed)
@@ -302,10 +306,10 @@ public struct FilesConnectionMachine: Sendable {
         case (.bound, .ping):
             return []
         case (.bound(let local, let sent), .filesData):
-            guard sent else { return protocolError(id) }
+            guard sent else { return protocolError(id, now: now) }
             return [.dataToLocal(id, local)]
         default:
-            return protocolError(id)
+            return protocolError(id, now: now)
         }
     }
 
@@ -315,13 +319,15 @@ public struct FilesConnectionMachine: Sendable {
     }
 
     /// The decoder or the record layer reported a protocol violation (malformed payload, `FILES_DATA` with size 0).
-    public mutating func protocolError(_ id: FilesConnID) -> [FilesAction] {
-        end(id, .protocolError, level: .warning)
+    public mutating func protocolError(_ id: FilesConnID, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
+        return end(id, .protocolError, level: .warning)
     }
 
     /// A record failed authentication or had an invalid length (PROTOCOL.md section 9): no reply, close.
-    public mutating func recordAuthFailed(_ id: FilesConnID) -> [FilesAction] {
-        end(id, .authFailed, level: .warning)
+    public mutating func recordAuthFailed(_ id: FilesConnID, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
+        return end(id, .authFailed, level: .warning)
     }
 
     /// The transport closed or failed. A bound local connection is closed after its pending bytes.
@@ -351,7 +357,8 @@ public struct FilesConnectionMachine: Sendable {
 
     /// The Finder side closed (or failed). A bound file connection closes with it (1:1, no message), after the
     /// bytes the caller still owes the tablet.
-    public mutating func localClosed(_ lid: LocalConnID) -> [FilesAction] {
+    public mutating func localClosed(_ lid: LocalConnID, now: UInt64) -> [FilesAction] {
+        clock = max(clock, now)
         if let i = waiting.firstIndex(where: { $0.id == lid }) {
             waiting.remove(at: i)
             return []
