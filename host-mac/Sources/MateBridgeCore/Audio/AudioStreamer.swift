@@ -138,6 +138,8 @@ public final class AudioStreamer: @unchecked Sendable {
         var sessionID: UInt32
         var packetizer: AudioPacketizer
         var seq: UInt32 = 0
+        /// T-279: skips all-zero packets after 500 ms of them. Per stream, so a new stream starts open.
+        var gate = AudioSilenceGate()
         /// STARTED sent: frames may flow.
         var live = false
     }
@@ -318,6 +320,11 @@ public final class AudioStreamer: @unchecked Sendable {
             guard let packet = read.packet else { break }
             let meta = packet.meta
             guard meta.frameCount > 0 else { continue }  // never produced; defensive
+            // seq counts sent packets only; skipped ones show as a sample_index / capture time jump.
+            guard s.gate.shouldSend(sumSquares: meta.sumSquares) else {
+                stats.addSilentSkipped()
+                continue
+            }
             let offsetUs = UInt64(meta.hostOffsetFrames) * 1_000_000 / UInt64(AudioStreamPolicy.sampleRate)
             let frame = AudioFrame(streamID: s.id, seq: s.seq, sampleIndex: meta.sampleIndex,
                                    captureTimeUs: clock.hostTicksToUs(meta.hostTime) &+ offsetUs,
@@ -329,5 +336,6 @@ public final class AudioStreamer: @unchecked Sendable {
                             callbackUs: meta.callbackMaxTicks > 0 ? clock.hostTicksToUs(meta.callbackMaxTicks) : 0)
         }
         stream?.seq = s.seq
+        stream?.gate = s.gate
     }
 }

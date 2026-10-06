@@ -292,6 +292,119 @@ import Testing
         #expect(h.box.logs.filter { $0.contains(" stats ") }.count == 1)
     }
 
+    // MARK: Silence gate (T-279)
+
+    /// Feeds `packets` packets of the constant `value`, packet `k` of this call at `hostTime + k * 10_000`.
+    private func feedConstant(_ h: Harness, _ id: UInt16, value: Float, packets: Int, hostTime: UInt64) {
+        guard let p = h.backend.packetizer(id) else { return }
+        let samples = [Float](repeating: value, count: 480 * 2)
+        for k in 0..<packets {
+            samples.withUnsafeBufferPointer {
+                p.ingest(.interleaved($0.baseAddress!), frames: 480, hostTime: hostTime + UInt64(k) * 10_000,
+                         sampleTime: nil)
+            }
+        }
+    }
+
+    private func startedHarness() -> Harness {
+        let h = Harness()
+        h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
+        h.streamer.prefs(sessionID: 7, enabled: true)
+        h.streamer.sync()
+        h.started(1)
+        return h
+    }
+
+    /// Feeds and drains in chunks of 8 packets, like the sender timer would (the ring holds 16 packets).
+    private func pump(_ h: Harness, value: Float, packets: Int, hostTime: UInt64) {
+        var done = 0
+        while done < packets {
+            let n = min(8, packets - done)
+            feedConstant(h, 1, value: value, packets: n, hostTime: hostTime + UInt64(done) * 10_000)
+            h.streamer.drainNow()
+            done += n
+        }
+    }
+
+    private func frames(_ h: Harness) -> [AudioFrame] {
+        h.sink.sent.compactMap { if case .audioFrame(let f) = $0.1 { return f } else { return nil } }
+    }
+
+    @Test func zeroPacketsAreSkippedAfterFiftyAndSoundResumesWithContiguousSeq() {
+        let h = startedHarness()
+        pump(h, value: 0, packets: 80, hostTime: 0)
+        #expect(frames(h).count == 50)  // 500 ms of zeros went out, the next 30 did not
+        #expect(frames(h).last?.sampleIndex == 49 * 480)
+        pump(h, value: 0.25, packets: 2, hostTime: 800_000)
+        let f = frames(h)
+        #expect(f.count == 52)
+        #expect(f.map(\.seq) == Array(0..<52))  // seq counts sent packets
+        #expect(f[50].sampleIndex == 80 * 480)  // the skipped 30 packets are a sample_index jump
+        #expect(f[50].captureTimeUs == 800_000)
+        #expect(f[51].sampleIndex == 81 * 480)
+    }
+
+    @Test func shortSilenceIsSentAsIs() {
+        let h = startedHarness()
+        pump(h, value: 0.25, packets: 5, hostTime: 0)
+        pump(h, value: 0, packets: 49, hostTime: 50_000)
+        pump(h, value: 0.25, packets: 5, hostTime: 540_000)
+        pump(h, value: 0, packets: 50, hostTime: 590_000)
+        #expect(frames(h).count == 109)
+        #expect(frames(h).map(\.sampleIndex) == (0..<109).map { UInt64($0) * 480 })
+    }
+
+    @Test func silenceRunRestartsAfterSound() {
+        let h = startedHarness()
+        pump(h, value: 0, packets: 60, hostTime: 0)  // 10 skipped
+        pump(h, value: 0.25, packets: 1, hostTime: 600_000)
+        pump(h, value: 0, packets: 60, hostTime: 610_000)  // a fresh run: 50 sent, 10 skipped
+        #expect(frames(h).count == 50 + 1 + 50)
+    }
+
+    @Test func firstPacketOfAStreamIsSentEvenIfZero() {
+        let h = startedHarness()
+        pump(h, value: 0, packets: 1, hostTime: 0)
+        #expect(h.sink.summary == ["cfg+1", "f1#0@0"])
+    }
+
+    @Test func oneLsbPacketIsNotSilence() {
+        let h = startedHarness()
+        pump(h, value: 0, packets: 60, hostTime: 0)
+        #expect(frames(h).count == 50)
+        // 1/32767 converts to s16 value 1 (-90 dBFS); 0.4/32767 rounds to 0.
+        pump(h, value: 1.0 / 32767, packets: 1, hostTime: 600_000)
+        #expect(frames(h).count == 51)
+        pump(h, value: 0.4 / 32767, packets: 1, hostTime: 610_000)
+        pump(h, value: 0, packets: 50, hostTime: 620_000)
+        #expect(frames(h).count == 51 + 1 + 49)  // the sub-LSB packet counted as zero: the run started after the LSB one
+    }
+
+    @Test func newStreamStartsOpenAfterInterruption() {
+        let h = startedHarness()
+        pump(h, value: 0, packets: 60, hostTime: 0)
+        #expect(frames(h).count == 50)
+        h.backend.emit(.interrupted(streamID: 1, reason: "default output changed"), for: 1)
+        h.streamer.sync()
+        h.started(2)
+        feedConstant(h, 2, value: 0, packets: 3, hostTime: 1_000_000)
+        h.streamer.drainNow()
+        let f = frames(h).filter { $0.streamID == 2 }
+        #expect(f.map(\.seq) == [0, 1, 2])
+    }
+
+    @Test func statsCountSkippedAndLevelCoversSentPacketsOnly() {
+        let h = startedHarness()
+        h.box.now = 0
+        pump(h, value: 0, packets: 80, hostTime: 0)
+        h.box.now = 1_000_000
+        h.streamer.drainNow()
+        let stats = h.box.logs.filter { $0.contains(" stats ") }
+        #expect(stats.count == 1)
+        #expect(stats.first?.hasPrefix("I sid=7 stats packets=50 ") == true)
+        #expect(stats.first?.hasSuffix("rms_dbfs=-120.0 wire_dropped=0 silent_skipped=30") == true)
+    }
+
     @Test func prefsBurstCoalescesAndSessionEndIsNotDelayed() {
         let h = Harness()
         h.streamer.sessionStarted(sessionID: 7, clientSupportsAudio: true)
