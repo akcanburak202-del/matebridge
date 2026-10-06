@@ -758,7 +758,7 @@ class DavHandler(
 
 /** File operations PUT commits with (T-288). The default is the real file system; tests inject failures. */
 interface DavFs {
-    /** Moves [from] over [to], atomically when the file system can. Throws [IOException] on failure. */
+    /** Moves [from] over [to] atomically, or throws [IOException] (also when atomic moves are unsupported). */
     fun replace(from: File, to: File)
 
     /** Plain rename that never replaces an existing [to] on the platforms we run on; false on failure. */
@@ -768,14 +768,13 @@ interface DavFs {
 
     object Default : DavFs {
         override fun replace(from: File, to: File) {
-            try {
-                java.nio.file.Files.move(
-                    from.toPath(), to.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
-                java.nio.file.Files.move(from.toPath(), to.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-            }
+            // Atomic only: a non-atomic REPLACE_EXISTING move deletes the target first on Unix, which is the data-loss
+            // path this exists to avoid. AtomicMoveNotSupportedException is an IOException: the caller's backup path
+            // takes over.
+            java.nio.file.Files.move(
+                from.toPath(), to.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
         }
 
         override fun rename(from: File, to: File) = from.renameTo(to)

@@ -89,6 +89,20 @@ class DavPutReplaceTest {
         assertEquals(emptyList<String>(), logs)
     }
 
+    @Test fun atomicMoveNotSupportedTakesTheBackupPathAndKeepsTheOldContentOnFailure() {
+        File(root, "a.txt").writeText("old")
+        val unsupported = object : DavFs {
+            override fun replace(from: File, to: File) = throw java.nio.file.AtomicMoveNotSupportedException("x", "y", "z")
+            override fun rename(from: File, to: File): Boolean =
+                if (DavHandler.isTempName(from.name) && !DavHandler.isTempName(to.name) && from.readText().startsWith("new")) false
+                else from.renameTo(to)
+            override fun delete(f: File) = f.delete()
+        }
+        assertEquals(500, call(handler(unsupported), "PUT", "/MatePad/a.txt", "new".toByteArray()).first)
+        assertEquals("old", File(root, "a.txt").readText())
+        assertEquals(emptyList<File>(), hidden())
+    }
+
     @Test fun failedMoveInRestoresTheOldFile() {
         File(root, "a.txt").writeText("old")
         val h = handler(FaultyFs(failIntoTarget = true))

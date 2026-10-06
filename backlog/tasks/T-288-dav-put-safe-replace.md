@@ -26,7 +26,7 @@ Astra incelemesi 2026-10-07, bulgu 1 (`docs/reviews/2026-10-07/astra-review.md`)
 ## Plan
 
 1. `DavHandler` alır bir `DavFs` (replace / rename / delete; varsayılan gerçek dosya sistemi). Testler hata enjekte eder.
-2. PUT'un son adımı `commit(tmp, target)`: önce `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)` (desteklenmezse `ATOMIC_MOVE` olmadan). Reddedilirse eski dosya silinmez, gizli `.mbput-*.tmp` yedek adına taşınır; yükleme yerine geçerse yedek silinir, geçmezse yedek geri taşınır (500).
+2. PUT'un son adımı `commit(tmp, target)`: önce `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)` (yalnız atomik; `ATOMIC_MOVE` desteklenmezse de istisna yedek yoluna düşer, çünkü atomik olmayan move Unix'te hedefi önce siler). Reddedilirse eski dosya silinmez, gizli `.mbput-*.tmp` yedek adına taşınır; yükleme yerine geçerse yedek silinir, geçmezse yedek geri taşınır (500).
 3. Geri alma da başarısız olursa geçici yükleme silinmez (yedek de durur), `ev=put_replace_failed restored=0` loglanır (ad yok), 500 döner. İkisi de `.mbput-` öneki yüzünden PROPFIND'da görünmez.
 4. Testler `DavPutReplaceTest`: başarılı 201/204, reddedilen replace yedek yoluyla başarı, yeniden adlandırma hatasında eski içerik geri, yedekleme hatası, geri alma hatasında iki içerik de diskte ve listede yok, eksik hedef.
 
