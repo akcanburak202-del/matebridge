@@ -143,6 +143,12 @@ object KeySchedule {
     fun videoH2c(prk: ByteArray, videoNonce: ByteArray) = Hkdf.expand(prk, ascii("MB1 video h2c") + videoNonce, 32)
     fun videoC2h(prk: ByteArray, videoNonce: ByteArray) = Hkdf.expand(prk, ascii("MB1 video c2h") + videoNonce, 32)
 
+    /** Decision 0035: file connection keys; both nonces are fresh per connection (client's in FILES_HELLO, host's in FILES_HELLO_ACK). */
+    fun filesC2h(prk: ByteArray, clientNonce: ByteArray, hostNonce: ByteArray) =
+        Hkdf.expand(prk, ascii("MB1 files c2h") + clientNonce + hostNonce, 32)
+    fun filesH2c(prk: ByteArray, clientNonce: ByteArray, hostNonce: ByteArray) =
+        Hkdf.expand(prk, ascii("MB1 files h2c") + clientNonce + hostNonce, 32)
+
     fun sasBytes(prk: ByteArray) = Hkdf.expand(prk, ascii("MB1 sas"), 4)
 
     /** 6-digit pairing code: u32 little-endian of the 4 bytes, mod 1 000 000, zero padded. */

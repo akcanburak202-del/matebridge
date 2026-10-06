@@ -21,7 +21,9 @@ import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.DisplayRate
+import dev.matebridge.client.files.FilesTunnel
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.StreamMode
@@ -120,6 +122,19 @@ interface SessionListener {
     fun onSettingsOpen() {}
 
     /**
+     * T-269 (decision 0035): `FILES_NET` of the accepted, trusted Wi-Fi session on control connection [gen] (engine
+     * thread), sanitised by the machine. OPEN: the Mac wants the tablet files over Wi-Fi (start the server); CLOSE: stop
+     * it. The file connections themselves belong to the controller (they close with the session).
+     */
+    fun onFilesNet(msg: FilesNet, gen: Int, requestId: Int) {}
+
+    /**
+     * T-269 round 3 (defence in depth): the scope of the tablet server that is READY now ([FilesServerScope.NONE] when
+     * none). The file tunnel pairs a connection only with a Wi-Fi server of its own control generation. Any thread.
+     */
+    fun filesServerScope(): dev.matebridge.client.files.FilesServerScope = dev.matebridge.client.files.FilesServerScope.NONE
+
+    /**
      * T-134: the TCP connect of direct wake attempt [wake] finished ([ok]: connected; the session goes on as usual).
      * Control reader thread, before the machine sees the connection open or fail.
      */
@@ -185,6 +200,7 @@ class SessionController(
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
     private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
+    private val forgetMailbox = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
     private val trustMailbox = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
     private val promptVisibleMailbox = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
@@ -209,6 +225,9 @@ class SessionController(
     @Volatile private var candidate: ControlConn? = null
     @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
+
+    /** T-269: the encrypted file connections of the Wi-Fi tablet-files server; the engine thread opens and closes them. */
+    @Volatile private var filesTunnel: FilesTunnel? = null
     @Volatile private var inputAllowed = false
     /** T-150: mirrors of the machine (engine thread writes): audio gate, "Bu Mac'i unut" possible. */
     @Volatile private var acceptedGen = -1
@@ -328,11 +347,21 @@ class SessionController(
         audioMailbox.post(SessionMachine.Event.SetAudio(on))
     }
 
-    /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
-    fun setFilesInfo(info: FilesInfo) {
+    /**
+     * Non-blocking. T-269: the UI forgot the Mac's open request [requestId] with no server to publish about (sharing was
+     * switched off while waiting); the machine drops it if it is still the live one. Any thread.
+     */
+    fun forgetFilesNet(requestId: Int) {
         if (terminated.get()) return
         ensureEngine()
-        filesMailbox.post(SessionMachine.Event.SetFiles(info))
+        forgetMailbox.post(SessionMachine.Event.ForgetFilesNet(requestId))
+    }
+
+    /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
+    fun setFilesInfo(info: FilesInfo, scope: dev.matebridge.client.files.FilesServerScope) {
+        if (terminated.get()) return
+        ensureEngine()
+        filesMailbox.post(SessionMachine.Event.SetFiles(info, scope))
     }
 
     /**
@@ -435,7 +464,7 @@ class SessionController(
         try {
             while (true) {
                 var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: expectMailbox.take() ?: promptVisibleMailbox.take() ?:
-                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: filesMailbox.take() ?:
+                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: forgetMailbox.take() ?: filesMailbox.take() ?:
                     migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
@@ -453,6 +482,7 @@ class SessionController(
             // shutting down
         } finally {
             stallDetector?.stop()
+            closeFilesTunnel("shutdown")
             control?.closeGracefully()
             candidate?.abort()
             retired?.abort()
@@ -528,6 +558,7 @@ class SessionController(
                 c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg) // overflow is reported through the link itself
             }
             is SessionMachine.Action.CloseControl -> {
+                closeFilesTunnel("session_end") // before the keys are wiped: no file connection outlives its session
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
                 stallDetector?.stop()
@@ -581,6 +612,7 @@ class SessionController(
                 candidate = null
             }
             SessionMachine.Action.RetireControl -> {
+                closeFilesTunnel("session_end") // a migration is a new host session: it starts without file connections
                 // No BYE and no more input; queued messages still drain. The host closes it on our takeover proof.
                 retired?.closeGracefully()
                 retired = control
@@ -620,11 +652,46 @@ class SessionController(
                 listener.onSettingsOpen()
             }
             is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
+            is SessionMachine.Action.FilesNetReceived -> {
+                // the host's file listener port is no secret; the pool sizes are the sanitised ones
+                MbLog.i("files_net_recv", "state=${a.msg.state} port=${a.msg.port} pool=${a.msg.pool} max=${a.msg.max} req=${a.requestId}", "files")
+                listener.onFilesNet(a.msg, a.gen, a.requestId)
+            }
+            is SessionMachine.Action.FilesTunnel -> {
+                closeFilesTunnel("plan")
+                val plan = a.plan
+                if (plan != null) {
+                    val secrets = control?.takeIf { it.gen == plan.gen }?.secrets
+                    if (secrets == null) {
+                        MbLog.w("files_tunnel_no_keys", "", "files")
+                    } else {
+                        filesTunnel = FilesTunnel(
+                            plan, secrets,
+                            davScope = { listener.filesServerScope() },
+                            newHostSocket = {
+                                Socket().also { sock ->
+                                    // Low priority on the wire (decision 0035): CS1 ("lower effort"), before the connect.
+                                    TrafficClass.trySet(FILES_TRAFFIC_CLASS) { sock.trafficClass = it }
+                                }
+                            },
+                            tune = { sock -> VideoKeepalive.forSocket(sock, "files_keepalive", logOk = false) },
+                            threadStarted = { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) },
+                            log = { warn, ev, fields -> if (warn) MbLog.w(ev, fields, "files") else MbLog.i(ev, fields, "files") },
+                        ).also { it.start() }
+                    }
+                }
+            }
             is SessionMachine.Action.VideoLost -> {
                 MbLog.w("video_lost", "vgen=${a.gen} migrating=${if (a.duringMigration) 1 else 0}")
                 listener.onVideoLost(a.gen, a.duringMigration)
             }
         }
+    }
+
+    /** T-269: closes the file tunnel (and with it every file connection and its local connection). Engine thread. */
+    private fun closeFilesTunnel(reason: String) {
+        filesTunnel?.close(reason)
+        filesTunnel = null
     }
 
     /** T-117: a new session (like the listener's clock in [SessionListener.onSessionStart]). Engine thread. */
@@ -1015,6 +1082,7 @@ class SessionController(
             is SessionMachine.Event.SetPrefs -> LogLine('I', "stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> LogLine('I', "display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> LogLine('I', "audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
             is SessionMachine.Event.Migrate -> LogLine(
@@ -1026,6 +1094,9 @@ class SessionController(
 
         /** T-089: the engine tick for a ping interval: [TICK_MS] unless half the interval is shorter, never below 10 ms. */
         fun engineTickMs(pingMs: Int): Long = minOf(TICK_MS, maxOf(10L, pingMs / 2L))
+
+        /** T-269: IP_TOS of file connections: DSCP CS1 (0x20), best-effort background (WifiKnobs `trafficClass 0x20`). */
+        private const val FILES_TRAFFIC_CLASS = 0x20
 
         private const val TICK_MS = 100L
         private const val GRACEFUL_CLOSE_MS = 1000L
@@ -1150,7 +1221,7 @@ object VideoKeepalive {
      * Applies the options to a connected [socket] through a dup'd fd, as [QuickAck] does. Closing the dup leaves the
      * socket open.
      */
-    fun forSocket(socket: java.net.Socket) {
+    fun forSocket(socket: java.net.Socket, ev: String = "video_keepalive", logOk: Boolean = true) {
         val pfd = try { android.os.ParcelFileDescriptor.fromSocket(socket) } catch (e: Exception) { null }
         val err = if (pfd == null) "nofd" else try {
             val fd = pfd.fileDescriptor
@@ -1160,7 +1231,7 @@ object VideoKeepalive {
         } finally {
             try { pfd.close() } catch (_: Exception) {}
         }
-        if (err != null) MbLog.w("video_keepalive", "ok=0 err=$err")
-        else MbLog.i("video_keepalive", "ok=1 idle_s=$IDLE_S intvl_s=$INTERVAL_S cnt=$COUNT")
+        if (err != null) MbLog.w(ev, "ok=0 err=$err")
+        else if (logOk) MbLog.i(ev, "ok=1 idle_s=$IDLE_S intvl_s=$INTERVAL_S cnt=$COUNT")
     }
 }

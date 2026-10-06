@@ -54,7 +54,7 @@ class PairTrustFlowTest {
     private val f = TrustFixture()
     private val machineLogs = ArrayList<String>()
     private val m = SessionMachine(
-        template, initialAudio = true, initialFiles = FilesInfo(FilesInfo.STATE_READY, 8443, token), trust = f.trust,
+        template, initialAudio = true, initialFiles = FilesInfo.OFF, trust = f.trust,
     ) { level, ev, fields -> machineLogs += "$level $ev $fields" }
     private var now = 1_000_000L
 
@@ -315,6 +315,8 @@ class PairTrustFlowTest {
         val b = start(usb, user = true)!!
         b.first(squatter, pairing = true, squatter.acceptedRecord())
         ticks(2_000_000)
+        // the tablet's server of THIS connection reports READY meanwhile (T-269: READY is tagged with the generation)
+        step(Event.SetFiles(FilesInfo(FilesInfo.STATE_READY, 8443, token), dev.matebridge.client.files.FilesServerScope(false, b.gen)))
         assertTrue(sent.none { it is FilesInfo })
         val confirm = step(Event.TrustConfirmed(shownGen()))
         assertEquals(FilesInfo(FilesInfo.STATE_READY, 8443, token), confirm.sends().single { it is FilesInfo })

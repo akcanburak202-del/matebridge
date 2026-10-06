@@ -192,6 +192,19 @@ object Codec {
             }
             is SettingsOpen -> w.u32(0)
             is FilesInfo -> { w.u8(msg.state); w.u16(msg.port); w.str8(msg.token) }
+            is FilesNet -> { w.u8(msg.state); w.u16(msg.port); w.u8(msg.pool); w.u8(msg.max) }
+            is FilesHello -> {
+                require(msg.clientFilesNonce.size == Limits.NONCE_BYTES) { "client_files_nonce must be 16 bytes" }
+                w.u16(msg.protocolVersion); w.u32(msg.sessionId); w.bytes(msg.clientFilesNonce.value)
+            }
+            is FilesHelloAck -> {
+                require(msg.hostFilesNonce.size == Limits.NONCE_BYTES) { "host_files_nonce must be 16 bytes" }
+                w.u8(msg.status); w.bytes(msg.hostFilesNonce.value)
+            }
+            is FilesData -> {
+                require(msg.data.size in 1..FilesData.MAX_DATA_BYTES) { "FILES_DATA size must be 1..${FilesData.MAX_DATA_BYTES}" }
+                w.u16(msg.data.size); w.bytes(msg.data.value)
+            }
             is Pen -> {
                 require(msg.tool == Pen.TOOL_PEN || msg.tool == Pen.TOOL_ERASER) { "invalid tool" }
                 require(msg.samples.size in 1..Limits.PEN_MAX_SAMPLES) { "sample count must be 1..64" }
@@ -326,6 +339,14 @@ object Codec {
             }
             MsgType.SETTINGS_OPEN -> { r.skip(4); SettingsOpen }
             MsgType.FILES_INFO -> FilesInfo(r.u8(), r.u16(), r.str8()) // unknown state kept: the receiver treats it as OFF
+            MsgType.FILES_NET -> FilesNet(r.u8(), r.u16(), r.u8(), r.u8()) // unknown state kept: the receiver treats it as CLOSE
+            MsgType.FILES_HELLO -> FilesHello(r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
+            MsgType.FILES_HELLO_ACK -> FilesHelloAck(r.u8(), Bytes(r.bytes(Limits.NONCE_BYTES))) // unknown status: rejected
+            MsgType.FILES_DATA -> {
+                val size = r.u16()
+                if (size == 0) throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "FILES_DATA size 0")
+                FilesData(Bytes(r.bytes(size))) // shorter than size: SHORT_PAYLOAD from the reader; trailing bytes ignored
+            }
             MsgType.PEN -> decodePen(r)
             MsgType.KEY -> {
                 val time = r.u64(); val scan = r.u16(); val code = r.u16()

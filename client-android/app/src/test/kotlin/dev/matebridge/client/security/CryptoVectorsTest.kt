@@ -99,6 +99,14 @@ class CryptoVectorsTest {
             val nonce = inp("video_nonce")
             assertArrayEquals("$name key_video_c2h", hex(m.getValue("key_video_c2h")), KeySchedule.videoC2h(prk, nonce))
             assertArrayEquals("$name key_video_h2c", hex(m.getValue("key_video_h2c")), KeySchedule.videoH2c(prk, nonce))
+            // decision 0035: both nonces of a file connection are in the info string
+            val cn = inp("client_files_nonce")
+            val hn = inp("host_files_nonce")
+            assertArrayEquals("$name key_files_c2h", hex(m.getValue("key_files_c2h")), KeySchedule.filesC2h(prk, cn, hn))
+            assertArrayEquals("$name key_files_h2c", hex(m.getValue("key_files_h2c")), KeySchedule.filesH2c(prk, cn, hn))
+            val viaSecrets = SessionSecrets(prk, pairing = false, hostId = ByteArray(16)).filesKeys(cn, hn)
+            assertArrayEquals("$name SessionSecrets.filesKeys c2h", hex(m.getValue("key_files_c2h")), viaSecrets.c2h)
+            assertArrayEquals("$name SessionSecrets.filesKeys h2c", hex(m.getValue("key_files_h2c")), viaSecrets.h2c)
             if (name == "pairing") {
                 assertArrayEquals("sas_bytes", hex(m.getValue("sas_bytes")), KeySchedule.sasBytes(prk))
                 assertEquals("sas", m.getValue("sas"), KeySchedule.sas(prk))
@@ -206,6 +214,44 @@ class CryptoVectorsTest {
     }
 
     @Test
+    fun fileConnectionRecordsOfTheVectorsOpenAndSealWithTheDerivedKeys() {
+        @Suppress("UNCHECKED_CAST")
+        val frames = v["frames"] as List<Map<String, String>>
+        val m = mode("paired")
+        val cn = inp("client_files_nonce")
+        val hn = inp("host_files_nonce")
+        val ch = FilesChannel(SessionSecrets(hex(m.getValue("prk")), pairing = false, hostId = ByteArray(16)).filesKeys(cn, hn))
+        // c2h counter 0: the proof PING; c2h counter 1: an HTTP answer as FILES_DATA (what the tablet's pump seals)
+        val c2h = frames.filter { it.getValue("key") == m.getValue("key_files_c2h") }.sortedBy { it.getValue("counter").toLong() }
+        assertEquals(2, c2h.size)
+        for (f in c2h) {
+            assertArrayEquals(
+                "files c2h counter ${f.getValue("counter")}", hex(f.getValue("frame")),
+                ch.sealer.seal(f.getValue("type").removePrefix("0x").toInt(16), hex(f.getValue("payload"))),
+            )
+        }
+        // h2c counter 0: the Mac's first FILES_DATA decodes to the message on the tablet's file decoder
+        val h2c = frames.single { it.getValue("key") == m.getValue("key_files_h2c") }
+        val dec = ch.decoder
+        dec.feed(hex(h2c.getValue("frame")))
+        val msg = dec.next() as dev.matebridge.client.protocol.FilesData
+        assertEquals("OPTIONS / HTTP/1.1", String(msg.data.value, Charsets.US_ASCII))
+        // the keys differ per direction, per nonce and from the control and video keys of the same session
+        val other = KeySchedule.filesC2h(hex(m.getValue("prk")), cn, ByteArray(16))
+        assertTrue(!other.contentEquals(hex(m.getValue("key_files_c2h"))))
+        assertTrue(!hex(m.getValue("key_files_c2h")).contentEquals(hex(m.getValue("key_files_h2c"))))
+        assertTrue(!hex(m.getValue("key_files_c2h")).contentEquals(hex(m.getValue("key_control_c2h"))))
+        assertTrue(!hex(m.getValue("key_files_h2c")).contentEquals(hex(m.getValue("key_video_h2c"))))
+    }
+
+    @Test
+    fun filesChannelWipesTheKeyArraysItWasGiven() {
+        val keys = FilesKeys(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        FilesChannel(keys)
+        assertTrue(keys.c2h.all { it == 0.toByte() } && keys.h2c.all { it == 0.toByte() })
+    }
+
+    @Test
     fun pairingHandshakeShowsTheVectorCodeAndKeepsTheNewKeyPendingUntilConfirmed() {
         val eph = EphemeralKeyPair(P256.privateFromScalar(inp("client_eph_priv")), inp("client_eph_pub"))
         val hs = ClientHandshake(eph, hex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"))
@@ -255,7 +301,7 @@ class CryptoVectorsTest {
     fun wipedSecretsRefuseToDeriveAnything() {
         val s = SessionSecrets(ByteArray(32) { 1 }, pairing = true, hostId = ByteArray(16))
         s.wipe()
-        for (f in listOf<() -> Any>({ s.sas() }, { s.newPairKey() }, { s.videoKeys(ByteArray(16)) })) {
+        for (f in listOf<() -> Any>({ s.sas() }, { s.newPairKey() }, { s.videoKeys(ByteArray(16)) }, { s.filesKeys(ByteArray(16), ByteArray(16)) })) {
             try {
                 f(); fail()
             } catch (e: IllegalStateException) {

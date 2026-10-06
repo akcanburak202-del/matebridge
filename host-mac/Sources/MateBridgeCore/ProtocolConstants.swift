@@ -19,6 +19,8 @@ public enum ProtocolConstants {
     public static let recordOverhead = 17
     /// Largest AUDIO_FRAME `frame_count` (docs/PROTOCOL.md 0x32).
     public static let audioMaxFrames = 960
+    /// Largest `FILES_DATA.data`: the control/file payload limit minus the `size` field (docs/PROTOCOL.md 0x52).
+    public static let filesDataMax = maxControlPayload - 2
 }
 
 public enum MessageType: UInt8, Sendable, CaseIterable {
@@ -31,6 +33,7 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case displayRate = 0x07
     case settingsOpen = 0x08
     case filesInfo = 0x09
+    case filesNet = 0x0A
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12
@@ -48,4 +51,7 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case audioFrame = 0x32
     case videoHello = 0x40
     case videoFrame = 0x41
+    case filesHello = 0x50
+    case filesHelloAck = 0x51
+    case filesData = 0x52
 }

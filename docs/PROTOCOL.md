@@ -19,16 +19,17 @@ Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 
 
 ## 2. Bağlantılar ve çerçeveleme
 
-İki ayrı TCP bağlantısı vardır. Büyük video kareleri girdi olaylarını bekletmesin diye ayrılırlar (head-of-line blocking).
+İki ayrı TCP bağlantısı vardır. Büyük video kareleri girdi olaylarını bekletmesin diye ayrılırlar (head-of-line blocking). Wi-Fi'da tablet dosyaları için istek üzerine üçüncü tür bağlantılar açılır (dosya bağlantıları, karar 0035).
 
 | Bağlantı | Port | Seçenekler | İçerik |
 |---|---|---|---|
 | **Kontrol + girdi** | Bonjour ile bulunur (§3) | `TCP_NODELAY` her iki uçta | Oturum, girdi, heartbeat, istatistik. Sıralı ve kayıpsız. |
 | **Video** | `HELLO_ACK.video_port` | `TCP_NODELAY` | Yalnızca `VIDEO_HELLO` (C→H) ve `VIDEO_FRAME` (H→C). |
+| **Dosya** (0..n adet, yalnız Wi-Fi) | `FILES_NET.port` | `TCP_NODELAY`, düşük öncelik (host `NET_SERVICE_TYPE_BK`, istemci `trafficClass 0x20`) | Yalnızca `FILES_HELLO` (C→H), `FILES_HELLO_ACK` (H→C), `PING` (C→H, kanıt/canlı tutma) ve `FILES_DATA` (iki yön). §4 "Dosya bağlantısı". |
 
 USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol değişmez.
 
-**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık). Bu biçim yalnızca şifreleme başlamadan önceki mesajlar içindir (`HELLO`, ilk `HELLO_ACK`, `VIDEO_HELLO`); sonrasında her çerçeve şifreli kayıt biçimindedir (§9):
+**Çerçeve** (her iki bağlantıda aynı, 5 bayt başlık). Bu biçim yalnızca şifreleme başlamadan önceki mesajlar içindir (`HELLO`, ilk `HELLO_ACK`, `VIDEO_HELLO`, `FILES_HELLO`, `FILES_HELLO_ACK`); sonrasında her çerçeve şifreli kayıt biçimindedir (§9):
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -36,7 +37,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 | `length` | u32 | Yalnızca payload uzunluğu (başlık hariç) |
 | payload | `length` bayt | Mesaja göre |
 
-- **En büyük payload:** kontrol bağlantısında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
+- **En büyük payload:** kontrol ve dosya bağlantılarında 65.536 bayt, video bağlantısında 16.777.216 bayt. Sınır, başlığın 5 baytı gelir gelmez denetlenir; alıcı payload'u tamponlamadan reddeder. Gönderen de sınırı aşan bir çerçeve **üretmez** (kodlayıcı hata verir).
 - **Bilinmeyen tip:** alıcı payload'u atlar ve devam eder (ileri uyumluluk, fixture `unknown_type`).
 - **Uzunluk:** bilinen bir tip beklenenden **uzun** payload ile gelirse fazlası yok sayılır (yeni alanlar yalnızca sona eklenir). Değişken uzunluklu alanların boyu her zaman kendi uzunluk alanından okunur (`str8` uzunluğu, `PEN.count`, `VIDEO_FRAME.frame_size`), "payload'un geri kalanı" olarak değil. **Kısa** gelirse protokol hatasıdır (fixture `invalid_key_short`).
 - **İsteğe bağlı sondaki grup:** sona sonradan eklenen alanlar bir grup olarak tanımlanabilir. Payload grubun hiçbir baytını içermiyorsa alıcı belgedeki varsayılanı kullanır; grubun yalnız bir kısmı varsa payload kısadır (protokol hatası). Gönderen, grup varsayılan değerdeyse grubu yazmaz. Şu an tek örnek: `STREAM_PREFS.display_*` (fixture `invalid_stream_prefs_partial`).
@@ -47,6 +48,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 - **Protokol hatası:**
   - Kontrol bağlantısında: alıcı `BYE(PROTOCOL_ERROR)` gönderir, **iki bağlantıyı da** kapatır.
   - Video bağlantısında: alıcı **yalnızca video bağlantısını** kapatır, `BYE` göndermez. Host'ta hata loglanır. İstemci video bağlantısını yeniden açabilir (§3.5).
+  - Dosya bağlantısında: alıcı **yalnızca o dosya bağlantısını** (ve ona eşlenmiş yerel bağlantıyı) kapatır, `BYE` göndermez. Oturum etkilenmez.
 
 ## 3. Oturum akışı
 
@@ -68,6 +70,7 @@ USB kullanımında aynı bağlantılar `adb reverse` ile taşınır. Protokol de
 5. **Video bağlantısı:** İstemci video bağlantısını `video_port`'a açar. İlk mesaj olarak şifresiz `VIDEO_HELLO(session_id, config_id, video_nonce)` gönderir; sonrası bu bağlantının anahtarlarıyla şifrelidir (§9); `config_id` istemcinin uyguladığı son `STREAM_CONFIG`'dir. Host, `session_id` veya `config_id` güncel değilse video bağlantısını kapatır. İstemci VIDEO_HELLO'nun hemen ardından video bağlantısında şifreli bir `PING` gönderir; host bu kayıt doğrulanana kadar o bağlantıya kare göndermez ve varsa eski video bağlantısını **kapatmaz** (anahtarı olmayan biri geçerli `session_id` ile akışı kesemesin). Kanıt 5 sn içinde gelmezse yeni video bağlantısı kapatılır. Video bağlantısındaki PING'e PONG gönderilmez. `video_nonce` her bağlantıda yenidir; host aynı oturumda tekrar eden bir `video_nonce`'u reddeder (bağlantıyı kapatır; aynı anahtar ve nonce ile AES-GCM tekrarını önler).
 6. **Video akışı:** Host `VIDEO_FRAME` akışına başlar: önce `CODEC_CONFIG`, sonra keyframe.
 7. **Ayar değişikliği** (çözünürlük, codec, FPS): Host yeni `config_id` ile `STREAM_CONFIG` gönderir, sonra mevcut video bağlantısını kapatır. İstemci yeni ayarı uygulayıp yeni `config_id` ile video bağlantısını yeniden açar. Böylece bir video bağlantısındaki bütün kareler tek bir ayara aittir ve iki bağlantı arasındaki sıra sorunu oluşmaz.
+8. **Tablet dosyaları:** USB'de `FILES_INFO` + `adb forward` (karar 0015, 0x09). Wi-Fi'da istek üzerine şifreli dosya bağlantıları (karar 0035): `FILES_INFO(STANDBY)` → kullanıcı Mac menüsünden açar → `FILES_NET(OPEN)` → `FILES_INFO(READY)` + tablet dosya bağlantıları açar (0x0A, §4 "Dosya bağlantısı").
 
 **Onay öncesi:** `ACCEPTED` gelmeden istemci girdi mesajı **göndermez**. Yeni eşleşmede istemci ayrıca kullanıcı kodu tablette onaylayana kadar (§9, karar 0018) PING dışında bir şey göndermez. Gelirse host yok sayar ve hiçbir olay enjekte edilmez. `PING/PONG`, `HELLO` alındıktan sonra her durumda (onay beklerken de) geçerlidir ve cevaplanır.
 
@@ -85,7 +88,8 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x06 | CLIPBOARD | iki yön | kontrol | `clipboard_text`, `clipboard_empty` |
 | 0x07 | DISPLAY_RATE | C→H | kontrol | `display_rate` |
 | 0x08 | SETTINGS_OPEN | H→C | kontrol | `settings_open` |
-| 0x09 | FILES_INFO | C→H | kontrol | `files_info_ready`, `files_info_off` |
+| 0x09 | FILES_INFO | C→H | kontrol | `files_info_ready`, `files_info_off`, `files_info_standby` |
+| 0x0A | FILES_NET | H→C | kontrol | `files_net_open`, `files_net_close` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -103,9 +107,12 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x23 | KEYFRAME_REQUEST | C→H | kontrol | `keyframe_request` |
 | 0x40 | VIDEO_HELLO | C→H | video | `video_hello` |
 | 0x41 | VIDEO_FRAME | H→C | video | `video_frame`, `video_frame_config` |
+| 0x50 | FILES_HELLO | C→H | dosya | `files_hello`, `invalid_files_hello_short` |
+| 0x51 | FILES_HELLO_ACK | H→C | dosya | `files_hello_ack`, `files_hello_ack_rejected` |
+| 0x52 | FILES_DATA | iki yön | dosya | `files_data`, `invalid_files_data_empty` |
 | — | (bilinmeyen) | — | — | `unknown_type` |
 
-Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x30–0x3F` ses, `0x40–0x4F` video. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
+Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/istatistik, `0x30–0x3F` ses, `0x40–0x4F` video, `0x50–0x5F` dosya bağlantısı. `invalid_*` fixture'ları **reddedilmesi** gereken girdilerdir. `unknown_type` ise **atlanması** gereken bir çerçevedir.
 
 ### 0x01 HELLO (C→H)
 
@@ -122,7 +129,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -255,13 +262,33 @@ Tablet dosyalarına Mac'ten erişim (karar 0015). İstemci, tablette çalışan 
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| state | u8 | `0` OFF (sunucu kapalı / izin yok), `1` READY |
-| port | u16 | Sunucunun **tablet** `127.0.0.1` üzerindeki TCP portu (OFF'ta 0) |
-| token | str8 | HTTP kimlik doğrulama parolası (Digest ya da Basic; kullanıcı adı `matebridge`); 32 küçük harf onaltılık karakter, her sunucu başlangıcında yeni (OFF'ta boş). **Loglanmaz.** |
+| state | u8 | `0` OFF (sunucu kapalı / izin yok), `1` READY, `2` STANDBY (yalnız bit12 ile, Wi-Fi: paylaşım izinli, sunucu kapalı, Mac'in `FILES_NET(OPEN)`'ını bekliyor; karar 0035) |
+| port | u16 | Sunucunun **tablet** `127.0.0.1` üzerindeki TCP portu (OFF ve STANDBY'da 0) |
+| token | str8 | HTTP kimlik doğrulama parolası (Digest ya da Basic; kullanıcı adı `matebridge`); 32 küçük harf onaltılık karakter, her sunucu başlangıcında yeni (OFF ve STANDBY'da boş). **Loglanmaz.** |
 
 - İstemci yalnızca `ACCEPTED` oturumda, `HELLO.capabilities` bit10 `FILES` ile gönderir: oturum başında bir kez ve durum/port/jeton değişince.
-- Host: READY ve oturum USB ise `adb forward tcp:<yerel> tcp:<port>` kurar, dosya erişimini kullanıcıya sunar; OFF, oturum sonu ya da USB kaybında forward'ı kaldırır ve bağlı birimi ayırır. Wi-Fi oturumunda READY'yi saklar ama erişim sunmaz.
-- Bilinmeyen `state`: protokol hatası değil, OFF sayılır.
+- Host: READY ve oturum USB ise `adb forward tcp:<yerel> tcp:<port>` kurar, dosya erişimini kullanıcıya sunar; OFF, oturum sonu ya da USB kaybında forward'ı kaldırır ve bağlı birimi ayırır. USB oturumunda STANDBY, OFF sayılır.
+- **Wi-Fi oturumu (karar 0035):**
+  - İstemci bit12 `FILES_NET` ile: paylaşım izinliyse ve sunucu çalışmıyorsa STANDBY gönderir (USB'de hiç göndermez). Sunucuyu yalnız `FILES_NET(OPEN)` üzerine başlatır; o zaman READY (gerçek `port`, yeni `token`) gönderir. Wi-Fi'da sunucunun kökü `MateBridge/Wi-Fi/` klasörüdür (0035 eki; USB kök seçimi değişmez). `FILES_NET(CLOSE)` üzerine sunucuyu durdurur ve yeniden STANDBY gönderir. İzin kalkarsa OFF.
+  - Host (bit12 varsa): STANDBY ya da READY'de "Tablet dosyalarını aç" sunar. READY'deki `port` Wi-Fi'da bilgi amaçlıdır (host kullanmaz); `token` yerel vekil üzerinden bağlamada kimlik doğrulama parolasıdır. OFF'ta dosya bağlantılarını kapatır, dinleyiciyi kapatır, birimi ayırır.
+  - bit12 yoksa: bugünkü gibi, READY saklanır ama Wi-Fi'da erişim sunulmaz.
+- Bilinmeyen `state`: protokol hatası değil, OFF sayılır (eski host STANDBY'ı da böyle görür).
+
+### 0x0A FILES_NET (H→C, kontrol)
+
+Wi-Fi'da tablet dosyalarını açma/kapama (karar 0035). Host yalnızca etkin `ACCEPTED` oturumda, `HELLO.capabilities` bit12 `FILES_NET` varsa ve oturum USB değilse gönderir.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| state | u8 | `0` CLOSE, `1` OPEN |
+| port | u16 | OPEN: host dosya dinleyicisinin TCP portu (dinleyici bu mesajdan **önce** açılır; tercih 47003, doluysa sistemin verdiği). CLOSE: 0 |
+| pool | u8 | OPEN: istemcinin hazır tutacağı boşta (kanıtlanmış, eşlenmemiş) dosya bağlantısı sayısı (öneri 2). CLOSE: 0 |
+| max | u8 | OPEN: toplam dosya bağlantısı üst sınırı (öneri 12 = tablet DAV sınırı 8 + 4). CLOSE: 0 |
+
+- **OPEN:** kullanıcı Wi-Fi oturumunda Mac menüsünden "Tablet dosyalarını aç" dediğinde (son `FILES_INFO` STANDBY ya da READY iken) gider. İstemci: paylaşım izinliyse sunucuyu başlatır, `FILES_INFO(READY)` gönderir ve dosya bağlantılarını açar (§4 "Dosya bağlantısı"); izin yoksa `FILES_INFO(OFF)`. Tekrar gelen OPEN aynı `port` ile bir şey değiştirmez; farklı `port` ile mevcut dosya bağlantıları kapatılıp yenileri açılır. İstemci `pool`'u `[1, 4]`, `max`'ı `[pool, 16]` aralığına sıkıştırır.
+- **CLOSE:** Mac'te birim ayrılınca (çıkarma, hata) ya da kullanıcı kapatınca gider. İstemci bütün dosya bağlantılarını kapatır, sunucuyu durdurur, `FILES_INFO(STANDBY)` gönderir. Host CLOSE'dan sonra dinleyiciyi kapatır.
+- **Oturum sonu** (BYE, `HOST_SLEEP`, devralma, bağlantı kopması): iki taraf da mesajsız olarak bütün dosya bağlantılarını kapatır; host dinleyiciyi kapatır, istemci sunucuyu durdurur. Yeni oturum STANDBY ile başlar; host kullanıcının açma isteği sürüyorsa (birim çıkarılmadıysa) yeniden OPEN gönderebilir.
+- Bilinmeyen `state`: CLOSE sayılır.
 
 ### 0x10 PEN (C→H)
 
@@ -565,6 +592,45 @@ Paketlenmiş tam renkte host, bir yakalamanın ana karesini yardımcısından ö
 
 `fragment_*` ve `frame_size` alanları ileride UDP'ye geçiş için ayrılmıştır (PLAN §4). v0'da her kare tek parçadır. TCP'de `fragment_index ≠ 0`, `fragment_count ≠ 1` veya payload'da `24 + frame_size` bayttan az veri olması **protokol hatasıdır** (video bağlantısı kapanır, §2).
 
+### Dosya bağlantısı (karar 0035)
+
+Wi-Fi'da tablet WebDAV sunucusu Mac'e şifreli dosya bağlantıları üzerinden açılır. Tablette LAN'a yeni port açılmaz: bağlantıları tablet kurar. Mac'te yerel bir vekil (`127.0.0.1`, öneri port 47012) Finder'ın (NetFS/webdavfs) her TCP bağlantısını **bir** boşta dosya bağlantısıyla eşler (1:1); vekil HTTP'yi yorumlamaz, baytları aktarır.
+
+1. **Açılış:** istemci, `FILES_NET(OPEN)`'dan sonra kontrol bağlantısının host adresine, `FILES_NET.port`'a TCP açar ve ilk mesaj olarak şifresiz `FILES_HELLO` gönderir.
+2. **Kabul:** host bir dosya bağlantısını TCP kabulünden itibaren, kanıtlanana kadar **kanıtlanmamış** sayar (en çok 2; fazlası kabul edilir edilmez kapatılır) ve `FILES_HELLO`'yu kabulden itibaren en çok **5 sn** bekler (gelmezse kapatır). Sonra şunları denetler: dinleyici açık, eş adres kontrol bağlantısının eş adresiyle aynı, `protocol_version = 1`, `session_id` etkin oturumunki, toplam dosya bağlantısı < `max`. Uyarsa şifresiz `FILES_HELLO_ACK(OK, host_files_nonce)` gönderir (her bağlantıda yeni rastgele nonce); uymazsa `FILES_HELLO_ACK(REJECTED)` (nonce sıfır) gönderip kapatır. Eş adres uymazsa cevapsız kapatabilir. İstemci 5 sn içinde ACK almazsa kapatır.
+3. **Anahtarlar** iki nonce'tan türetilir (§9); OK'tan sonra iki yönde şifreli kayıtlar başlar.
+4. **Kanıt:** istemcinin ilk şifreli kaydı `PING`'dir. Host bu kayıt doğrulanana kadar bağlantıyı havuza almaz ve ona `FILES_DATA` göndermez; TCP kabulünden itibaren toplam 5 sn içinde (2. adımdaki süre dahil) gelmezse ya da doğrulanamazsa bağlantıyı kapatır. Dosya bağlantısındaki PING'e PONG gönderilmez.
+5. **Havuz ve eşleme:** kanıtlanmış ve eşlenmemiş bağlantılar boşta havuzdur. Vekile yeni bir yerel bağlantı gelince host boştaki bir dosya bağlantısını ona ayırır ve yerel bağlantıdan okunan baytları `FILES_DATA` (H→C) olarak gönderir. İstemci bir dosya bağlantısında ilk `FILES_DATA`'yı alınca `127.0.0.1:<FILES_INFO.port>`'taki kendi sunucusuna bağlanır ve baytları iki yönde aktarır. Eşlenen bağlantının yerine istemci yenisini açar: boşta en çok `pool`, toplam en çok `max`. Boşta bağlantı yoksa vekil yeni yerel bağlantıyı en çok 5 sn bekletir, sonra kapatır. Bekleyen yerel bağlantılar en çok **8**'dir; fazlası kabul edilir edilmez kapatılır.
+6. **Yön kuralı:** bir dosya bağlantısında ilk `FILES_DATA`'yı her zaman host gönderir. Host'tan `FILES_DATA` almamış bir bağlantıda istemciden `FILES_DATA` gelirse protokol hatasıdır.
+7. **Kapanma (1:1, mesajsız):** yerel tarafı (Finder bağlantısı ya da tabletteki sunucu bağlantısı) kapanan uç, elindeki aktarılmamış baytları gönderdikten sonra dosya bağlantısını kapatır; öteki uç dosya bağlantısı kapanınca kendi yerel bağlantısına elindeki baytları yazıp onu kapatır. Yarım kapama (half-close) kullanılmaz.
+8. **Canlı tutma:** istemci boştaki her dosya bağlantısında 10 sn'de bir şifreli `PING` gönderir. Host 30 sn boyunca hiçbir kayıt gelmeyen **boştaki** bağlantıyı kapatır. Eşlenmiş bağlantılar için protokol zaman aşımı yoktur (HTTP ve TCP keepalive). İki uçta TCP keepalive açıktır.
+9. **Oturuma bağlılık:** dosya bağlantıları `session_id`'ye aittir. Oturum biterse ya da `FILES_NET(CLOSE)` gelirse bütün dosya bağlantıları kapanır (§0x0A).
+10. Dosya bağlantısında geçerli tipler yalnız `FILES_HELLO`, `FILES_HELLO_ACK`, `PING` ve `FILES_DATA`'dır; başka **bilinen** bir tip protokol hatasıdır, bilinmeyen tip atlanır (§2).
+
+### 0x50 FILES_HELLO (C→H, dosya bağlantısı, şifresiz)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| protocol_version | u16 | `1` |
+| session_id | u32 | `HELLO_ACK`'teki değer |
+| client_files_nonce | bytes[16] | Her dosya bağlantısında yeni rastgele değer (§9) |
+
+### 0x51 FILES_HELLO_ACK (H→C, dosya bağlantısı, şifresiz)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| status | u8 | `0` OK, `1` REJECTED. Bilinmeyen değer REJECTED sayılır (istemci kapatır). |
+| host_files_nonce | bytes[16] | OK'ta her dosya bağlantısında yeni rastgele değer (§9); REJECTED'da sıfır |
+
+### 0x52 FILES_DATA (iki yön, dosya bağlantısı)
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| size | u16 | `data` uzunluğu, `1…65 534` (0 protokol hatası) |
+| data | bytes[size] | Eşlenmiş yerel bağlantının opak baytları (HTTP). İçerik loglanmaz. |
+
+Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, küçük isteklerin gecikmesi).
+
 ## 5. Kuyruk sınırları (AGENTS.md: yalnızca sınırlı kuyruk)
 
 **Video:**
@@ -580,6 +646,12 @@ Paketlenmiş tam renkte host, bir yakalamanın ana karesini yardımcısından ö
 **Ses (karar 0011):**
 - Host: gönderilmeyi bekleyen ses en çok **100 ms** (10 paket). Taşarsa en eski paketler atılır; `sample_index` boşluğu oluşur. Ses paketleri kontrol bağlantısının H→C yönündedir, girdiyi (C→H) bekletmez.
 - İstemci: titreşim tamponu en çok **300 ms**. Taşarsa en eski ses atılır (kısa sönümle).
+
+**Dosya bağlantıları (karar 0035):**
+- Toplam dosya bağlantısı ≤ `FILES_NET.max` (≤ 16), boşta ≤ `pool`, host'ta kanıtlanmamış ≤ 2 (TCP kabulünden itibaren sayılır, `FILES_HELLO` + kanıt toplam 5 sn).
+- Mac vekilinde eşlenmeyi bekleyen yerel bağlantı ≤ 8 (her biri ≤ 5 sn); eşlenmiş yerel bağlantı sayısı dosya bağlantılarıyla sınırlıdır.
+- Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
+- Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
 
 **Kontrol + girdi (istemci gönderim kuyruğu):**
 - En çok **256 KiB** veya en eski mesaj **1 sn**.
@@ -663,6 +735,7 @@ Swift ve Kotlin testleri:
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`, `keyframe_request_view`
 - Ses: `audio_prefs`, `audio_config`, `audio_config_stopped`, `audio_frame`, `invalid_audio_frame_short`
 - Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
+- Dosya: `files_info_ready`, `files_info_off`, `files_info_standby`, `files_net_open`, `files_net_close`, `files_hello`, `files_hello_ack`, `files_hello_ack_rejected`, `files_data`, `invalid_files_hello_short`, `invalid_files_data_empty`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)
 
@@ -681,10 +754,11 @@ Amaç: ev ağında (Wi-Fi) kontrol + girdi (yazılan şifreler dahil) ve görün
 - `prk` = HKDF-Extract(salt = `transcript_hash`, ikm).
 - Kontrol bağlantısı: `k_c2h` = Expand(prk, `"MB1 control c2h"`, 32), `k_h2c` = Expand(prk, `"MB1 control h2c"`, 32).
 - Video bağlantısı: `kv_h2c` = Expand(prk, `"MB1 video h2c" ‖ video_nonce`, 32), `kv_c2h` = Expand(prk, `"MB1 video c2h" ‖ video_nonce`, 32). Host `prk`'yi oturum boyunca tutar; oturum bitince siler.
+- Dosya bağlantısı (karar 0035): `kf_c2h` = Expand(prk, `"MB1 files c2h" ‖ client_files_nonce ‖ host_files_nonce`, 32), `kf_h2c` = Expand(prk, `"MB1 files h2c" ‖ client_files_nonce ‖ host_files_nonce`, 32). İki nonce da her bağlantıda tazedir (host'unki `FILES_HELLO_ACK`'te), bu yüzden kaydedilmiş bir bağlantının tekrarı iki yönde de etiket doğrulamasında düşer; video'daki gibi nonce kümesi gerekmez. İstemci de `prk`'yi oturum boyunca tutar ve oturum bitince siler.
 - PAIRING'de ayrıca: eşleşme kodu `sas` = Expand(prk, `"MB1 sas"`, 4) → u32 little-endian `mod 1 000 000`, 6 hane (baştaki sıfırlarla); yeni eşleşme anahtarı `new_pair_key` = Expand(prk, `"MB1 pair"`, 32).
 - `info` dizeleri ASCII'dir, sonlandırıcı yoktur.
 
-**Şifreli kayıt** (ilk HELLO_ACK'ten sonra kontrol bağlantısında iki yönde, VIDEO_HELLO'dan sonra video bağlantısında iki yönde):
+**Şifreli kayıt** (ilk HELLO_ACK'ten sonra kontrol bağlantısında iki yönde, VIDEO_HELLO'dan sonra video bağlantısında iki yönde, `FILES_HELLO_ACK(OK)`'tan sonra dosya bağlantısında iki yönde):
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -708,4 +782,4 @@ Amaç: ev ağında (Wi-Fi) kontrol + girdi (yazılan şifreler dahil) ve görün
 
 **Saklama:** eşleşme anahtarları gizlidir, **asla loglanmaz**. Host: macOS Anahtar Zinciri (generic password, hizmet `dev.matebridge.host.pair`, hesap = device_id hex). İstemci: Android Keystore'da üretilen dışa aktarılamaz bir AES-GCM anahtarıyla şifrelenip SharedPreferences'ta. `host_id` host'ta bir kez üretilir ve saklanır. "Onaylı cihazları unut" anahtarları da siler.
 
-**Test vektörleri:** `protocol/fixtures/crypto_vectors.json` (`crypto_vectors.swift` ile üretilir; girdi olarak `hello.hex`, `hello_ack.hex`, `hello_ack_pending.hex` payload'larını kullanır). Her iki taraf: sabit özel anahtarlardan `ecdh`, iki moddaki `transcript_hash`, `prk`, bütün anahtarları, `sas` ve `new_pair_key`'i, ve `frames` altındaki şifreli kayıtları bayt bayt üretir; kayıtları çözer; bir baytı bozulmuş kaydı reddeder.
+**Test vektörleri:** `protocol/fixtures/crypto_vectors.json` (`crypto_vectors.swift` ile üretilir; girdi olarak `hello.hex`, `hello_ack.hex`, `hello_ack_pending.hex` payload'larını kullanır). Her iki taraf: sabit özel anahtarlardan `ecdh`, iki moddaki `transcript_hash`, `prk`, bütün anahtarları (dosya anahtarları `inputs.client_files_nonce` / `inputs.host_files_nonce` ile: `key_files_c2h`, `key_files_h2c`), `sas` ve `new_pair_key`'i, ve `frames` altındaki şifreli kayıtları bayt bayt üretir; kayıtları çözer; bir baytı bozulmuş kaydı reddeder.

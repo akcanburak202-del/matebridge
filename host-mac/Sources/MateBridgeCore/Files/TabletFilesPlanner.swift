@@ -70,6 +70,13 @@ public enum TabletFilesAction: Equatable, Sendable {
     case mount(localPort: UInt16, secret: FilesSecret, generation: UInt64, knownPath: String?)
     /// Open the mounted volume in Finder.
     case reveal(path: String)
+    /// Wi-Fi (decision 0035): open the host's file listener and the loopback proxy (preferred
+    /// `WebDavMount.proxyPreferredLocalPort`), then report both ports through `proxyFinished`. USB sessions never get it.
+    case startProxy(generation: UInt64)
+    /// Wi-Fi: close the proxy listener on `localPort` and every file connection (the volume was detached before).
+    case stopProxy(localPort: UInt16)
+    /// Wi-Fi: send this `FILES_NET` on the session's control connection.
+    case sendFilesNet(FilesNet)
 }
 
 /// Pure state machine for tablet files on the Mac (T-136, decision 0015, PROTOCOL.md 0x09): when to forward the
@@ -148,6 +155,17 @@ public struct TabletFilesPlanner: Sendable {
     private struct Session: Sendable {
         var transport: SessionTransport
         var capable: Bool
+        /// `HELLO` bit12 `FILES_NET` (decision 0035): the client can serve its files over Wi-Fi.
+        var netCapable = false
+
+        /// A Wi-Fi session of a client that speaks `FILES_NET`: the volume goes through the loopback proxy.
+        var usesNet: Bool { transport == .network && netCapable }
+    }
+
+    /// What the upstream of the NetFS mount is: the USB `adb forward`, or the Wi-Fi loopback proxy.
+    private enum UpstreamKind: Equatable, Sendable {
+        case adbForward
+        case netProxy
     }
 
     private enum Forward: Equatable, Sendable {
@@ -162,6 +180,15 @@ public struct TabletFilesPlanner: Sendable {
     private var info: FilesInfo?
     private var usbDeviceLost = false
     private var forward: Forward = .none
+    private var forwardKind: UpstreamKind = .adbForward
+    /// Wi-Fi: the last `FILES_INFO` was STANDBY (sharing allowed, server off, waits for `FILES_NET(OPEN)`).
+    private var netStandby = false
+    /// Wi-Fi: the user chose "Tablet dosyalarını aç" and the volume is not mounted yet (proxy start, `FILES_NET(OPEN)`,
+    /// READY); the first mount of this chain is the user's own, so it is revealed in Finder.
+    private var userOpenPending = false
+    /// Actions that follow an event whose entry point cannot return them (`volumeUnmounted` returns a Bool): the host
+    /// takes them with `takeQueuedActions()`.
+    private var queuedActions: [TabletFilesAction] = []
     private var mountingGeneration: UInt64?
     /// The pending mount was started by the planner (remount), not by the user: its success is not revealed.
     private var mountingIsAutomatic = false
@@ -198,12 +225,16 @@ public struct TabletFilesPlanner: Sendable {
 
     // MARK: - Events
 
-    /// An ACCEPTED session started. `capable`: its HELLO has `Capabilities.files`.
-    public mutating func sessionStarted(transport: SessionTransport, capable: Bool) -> [TabletFilesAction] {
+    /// An ACCEPTED session started. `capable`: its HELLO has `Capabilities.files`. `netCapable`: it has
+    /// `Capabilities.filesNet` (bit12, decision 0035); on a Wi-Fi session that is what offers the volume at all.
+    public mutating func sessionStarted(transport: SessionTransport, capable: Bool,
+                                        netCapable: Bool = false) -> [TabletFilesAction] {
         guard !isShutDown else { return [] }
         let out = teardown() + retryGivenUpRemovals()
-        session = Session(transport: transport, capable: capable)
+        session = Session(transport: transport, capable: capable, netCapable: netCapable)
         info = nil
+        netStandby = false
+        queuedActions = []
         forgetMountIntent()  // a new session needs the user's "Tablet dosyalarını aç" again
         leaveSessionForReplacedMounts()
         if transport == .usb { usbDeviceLost = false }  // the session itself came through the cable
@@ -214,6 +245,7 @@ public struct TabletFilesPlanner: Sendable {
         guard !isShutDown, var current = session else { return [] }
         current.capable = true  // it sends FILES_INFO, so it shares files
         session = current
+        if current.usesNet { return netFilesInfo(message) }
         let ready = message.isReady ? message : nil
         guard ready != info else { return [] }
         let previous = info
@@ -242,6 +274,8 @@ public struct TabletFilesPlanner: Sendable {
         let out = teardown() + retryGivenUpRemovals()
         session = nil
         info = nil
+        netStandby = false
+        queuedActions = []
         forgetMountIntent()
         leaveSessionForReplacedMounts()
         return out
@@ -253,7 +287,7 @@ public struct TabletFilesPlanner: Sendable {
         if !present {
             guard !usbDeviceLost else { return [] }
             usbDeviceLost = true
-            return teardown()
+            return forwardKind == .adbForward ? teardown() : []  // the Wi-Fi proxy does not care about the cable
         }
         guard usbDeviceLost else { return [] }
         usbDeviceLost = false
@@ -282,6 +316,8 @@ public struct TabletFilesPlanner: Sendable {
         }
         session = nil
         info = nil
+        netStandby = false
+        queuedActions = []
         forgetMountIntent()
         replacedMounts = []
         leftovers = []
@@ -328,6 +364,7 @@ public struct TabletFilesPlanner: Sendable {
 
     /// The user chose "Tablet dosyalarını aç".
     public mutating func openRequested() -> [TabletFilesAction] {
+        if session?.usesNet == true { return netOpenRequested() }
         guard !isShutDown, case .up = forward, info != nil, mountingGeneration == nil, collisionRetry == nil else {
             return []
         }
@@ -355,7 +392,16 @@ public struct TabletFilesPlanner: Sendable {
               !mountedNow.contains(where: { Self.samePath($0, path) }) else { return false }
         self.mountedPath = nil
         forgetMountIntent()
+        queuedActions += netEjectActions()
         return true
+    }
+
+    /// Actions the planner owes after an event that could only return a Bool (`volumeUnmounted`): on Wi-Fi, a Finder
+    /// eject closes the file connections (`FILES_NET(CLOSE)`, stop the proxy). Empty on USB. The host calls it after
+    /// every such event and executes the result like any other step.
+    public mutating func takeQueuedActions() -> [TabletFilesAction] {
+        defer { queuedActions = [] }
+        return queuedActions
     }
 
     /// Result of `unmount(localPort:)`: the volumes of ours on that port that the host detached (`detached`) and the
@@ -384,9 +430,13 @@ public struct TabletFilesPlanner: Sendable {
                 ejected = true
             }
         }
-        if ejected { forgetMountIntent() }
+        var netClose: [TabletFilesAction] = []
+        if ejected {
+            forgetMountIntent()
+            netClose = netEjectActions()
+        }
         let forces = forceDeadLeftovers()
-        return forces + resumeAfterCleanup()
+        return netClose + forces + resumeAfterCleanup()
     }
 
     /// Result of `forceUnmount`. `gone`: the volume is not mounted any more (detached, or already absent), or the
@@ -473,15 +523,136 @@ public struct TabletFilesPlanner: Sendable {
         return [.unmountPath(path: path, localPort: localPort)]
     }
 
+    // MARK: - Wi-Fi events (decision 0035)
+
+    /// Result of `startProxy`. `localPort`: the loopback proxy the volume mounts through (nil: it could not start, the
+    /// user may try again); `filesPort`: the TCP port of the host's file listener, which goes into `FILES_NET(OPEN)`.
+    /// A stale result (its session or open attempt ended meanwhile) is undone: the proxy is stopped again.
+    public mutating func proxyFinished(generation: UInt64, localPort: UInt16?, filesPort: UInt16) -> [TabletFilesAction] {
+        if case .installing(_, let gen) = forward, gen == generation, forwardKind == .netProxy {
+            guard let localPort else {
+                forward = .none
+                forwardKind = .adbForward
+                userOpenPending = false
+                autoMountArmed = false
+                lastMountFailed = true
+                return []
+            }
+            forward = .up(localPort: localPort, remotePort: filesPort)
+            var out: [TabletFilesAction] = [.sendFilesNet(.open(port: filesPort, pool: Self.netPool, max: Self.netMax))]
+            // The tablet's server may already be READY (we only learn that from FILES_INFO): then no new READY is
+            // coming, so the mount that was asked for goes ahead now.
+            if info != nil { out += mountWhenReadyAndWanted() }
+            return out
+        }
+        guard let localPort else { return [] }
+        if case .up(let current, _) = forward, current == localPort, forwardKind == .netProxy { return [] }
+        return [.stopProxy(localPort: localPort)]
+    }
+
+    /// Idle file connections the client keeps ready, and the total, as proposed in `FILES_NET(OPEN)`.
+    public static let netPool: UInt8 = FilesNet.recommendedPool
+    public static let netMax: UInt8 = FilesNet.recommendedMax
+
+    private mutating func netOpenRequested() -> [TabletFilesAction] {
+        guard !isShutDown, mountingGeneration == nil, collisionRetry == nil, info != nil || netStandby else { return [] }
+        switch forward {
+        case .up where info != nil:
+            keepsMounted = true
+            autoMountArmed = false  // the user's own mount covers this READY
+            return startMount(automatic: false)
+        case .none, .failed:
+            guard !userOpenPending else { return [] }
+            keepsMounted = true
+            userOpenPending = true
+            autoMountArmed = false
+            return startProxyAction()
+        default:
+            return []  // the proxy is starting, or FILES_NET(OPEN) is out and READY is awaited: already on its way
+        }
+    }
+
+    private mutating func startProxyAction() -> [TabletFilesAction] {
+        let gen = takeGeneration()
+        forward = .installing(remotePort: 0, generation: gen)
+        forwardKind = .netProxy
+        return [.startProxy(generation: gen)]
+    }
+
+    /// `FILES_INFO` of a Wi-Fi session of a bit12 client: READY (server running), STANDBY (waiting for our OPEN) or
+    /// OFF. The proxy outlives a server restart (new token, even a new port), the volume does not: it is mounted again
+    /// with the new token (T-206). A tablet that goes STANDBY or OFF takes the upstream away; with the user's mount
+    /// intent still alive STANDBY asks for a new OPEN by itself (sharing switched off and on again on the tablet).
+    private mutating func netFilesInfo(_ message: FilesInfo) -> [TabletFilesAction] {
+        let ready = message.isReady ? message : nil
+        let standby = ready == nil && message.isStandby
+        let previous = info
+        guard ready != previous || standby != netStandby else { return [] }
+        info = ready
+        netStandby = standby
+        if let ready {
+            autoMountArmed = keepsMounted && !userOpenPending
+            if previous != nil, case .up(let local, _) = forward {
+                // Server restart in this session: the old token is dead, mount again with the new one.
+                var out = cancelPendingMount() + [unmountAction(localPort: local)]
+                replaceMountedVolume(localPort: local)
+                lastMountFailed = false
+                out += forceDeadLeftovers()
+                out += autoMountIfArmed(afterUnmountInThisList: local)
+                return out
+            }
+            switch forward {
+            case .up:
+                return forceDeadLeftovers() + mountWhenReadyAndWanted()
+            case .installing:
+                return forceDeadLeftovers()  // `proxyFinished` mounts, the info is known by then
+            case .none, .failed:
+                // Offered, or the tablet came back (OFF then READY) while the user still wants the volume.
+                return forceDeadLeftovers() + (keepsMounted ? startProxyAction() : [])
+            }
+        }
+        // STANDBY or OFF: the server is down, so the volume and the proxy go (no CLOSE: the tablet closed by itself).
+        autoMountArmed = false
+        let out = teardown() + forceDeadLeftovers()
+        guard standby, keepsMounted else { return out }
+        autoMountArmed = true  // after the OPEN round trip the READY mounts it again, not revealed
+        return out + startProxyAction()
+    }
+
+    /// The proxy is up and READY is known: the user's pending open mounts (and reveals), else the owed automatic one.
+    private mutating func mountWhenReadyAndWanted() -> [TabletFilesAction] { autoMountIfArmed() }
+
+    /// The user ejected the volume (or it failed for good): close the file connections and stop the proxy. Empty
+    /// unless a Wi-Fi proxy is (being) set up, so a repeated report does nothing.
+    private mutating func netEjectActions() -> [TabletFilesAction] {
+        guard forwardKind == .netProxy, session?.usesNet == true else { return [] }
+        if case .none = forward { return [] }
+        return [.sendFilesNet(.close)] + teardown()
+    }
+
     // MARK: - State
 
     public var menu: TabletFilesMenu {
         guard let session, session.capable, !isShutDown else { return .hidden }
+        if session.usesNet { return netMenu }
         guard session.transport == .usb else { return .usbOnly }
         guard info != nil else { return .enableOnTablet }
         guard case .up = forward, !usbDeviceLost else { return .preparing }
         let mounting = mountingGeneration != nil || collisionRetry != nil
         return mounting ? .mounting : .ready(lastMountFailed: lastMountFailed)
+    }
+
+    /// Wi-Fi menu (decision 0035): STANDBY or READY offers the volume, a click opens it.
+    private var netMenu: TabletFilesMenu {
+        switch forward {
+        case .installing, .failed: return .preparing
+        case .up:
+            guard info != nil else { return .preparing }  // `FILES_NET(OPEN)` sent, READY not here yet
+            return mountingGeneration != nil || collisionRetry != nil ? .mounting : .ready(lastMountFailed: lastMountFailed)
+        case .none:
+            guard info != nil || netStandby else { return .enableOnTablet }
+            return mountingGeneration != nil || collisionRetry != nil ? .mounting : .ready(lastMountFailed: lastMountFailed)
+        }
     }
 
     /// Local port of the installed forward, if any.
@@ -511,6 +682,12 @@ public struct TabletFilesPlanner: Sendable {
     private mutating func takeGeneration() -> UInt64 {
         defer { nextGeneration += 1 }
         return nextGeneration
+    }
+
+    /// The session can carry the volume right now: USB with the cable present, or a Wi-Fi session of a bit12 client.
+    private var upstreamUsable: Bool {
+        guard let session else { return false }
+        return session.usesNet || (session.transport == .usb && !usbDeviceLost)
     }
 
     private mutating func startForward(remotePort: UInt16) -> [TabletFilesAction] {
@@ -551,7 +728,16 @@ public struct TabletFilesPlanner: Sendable {
     /// other pending cleanup still holds the mount back.
     private mutating func autoMountIfArmed(afterUnmountInThisList port: UInt16? = nil) -> [TabletFilesAction] {
         let cleanupPending = pendingUnmounts.contains { $0.key != port || $0.value > 1 }
-        guard autoMountArmed, keepsMounted, !isShutDown, !usbDeviceLost, session?.transport == .usb,
+        if userOpenPending {
+            // Wi-Fi: the user's own mount, owed since the click, waits for the same cleanup as an automatic one.
+            guard session?.usesNet == true, !isShutDown, case .up = forward, info != nil, mountingGeneration == nil,
+                  collisionRetry == nil, pendingForces.isEmpty, !cleanupPending,
+                  !replacedMounts.contains(where: \.inSession) else { return [] }
+            userOpenPending = false
+            autoMountArmed = false
+            return startMount(automatic: false)
+        }
+        guard autoMountArmed, keepsMounted, !isShutDown, upstreamUsable,
               case .up = forward, info != nil, mountingGeneration == nil, collisionRetry == nil, pendingForces.isEmpty,
               !cleanupPending, !replacedMounts.contains(where: \.inSession) else { return [] }
         autoMountArmed = false
@@ -674,15 +860,26 @@ public struct TabletFilesPlanner: Sendable {
     private mutating func teardown() -> [TabletFilesAction] {
         var out = cancelPendingMount()
         lastMountFailed = false
-        defer { forward = .none }
+        userOpenPending = false
+        let kind = forwardKind
+        defer {
+            forward = .none
+            forwardKind = .adbForward
+        }
         guard case .up(let local, _) = forward else {
             mountedPath = nil  // a mount only exists on an up forward
             mountedOrigin = MountOrigin()
             return out
         }
         replaceMountedVolume(localPort: local)
-        owedForwards[local] = 0
-        out += [unmountAction(localPort: local), .removeForward(localPort: local)]
+        switch kind {
+        case .adbForward:
+            owedForwards[local] = 0
+            out += [unmountAction(localPort: local), .removeForward(localPort: local)]
+        case .netProxy:
+            // Same order: detach the volume first, then take the upstream away. A proxy stops in one local step.
+            out += [unmountAction(localPort: local), .stopProxy(localPort: local)]
+        }
         return out
     }
 }

@@ -19,12 +19,13 @@ HERE = Path(__file__).resolve().parent
 
 # Message type codes (docs/PROTOCOL.md, "Mesaj tipleri").
 T = {
-    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09,
+    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09, "FILES_NET": 0x0A,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
     "AUDIO_PREFS": 0x30, "AUDIO_CONFIG": 0x31, "AUDIO_FRAME": 0x32,
     "VIDEO_HELLO": 0x40, "VIDEO_FRAME": 0x41,
+    "FILES_HELLO": 0x50, "FILES_HELLO_ACK": 0x51, "FILES_DATA": 0x52,
 }
 
 
@@ -35,6 +36,9 @@ HOST_ID = bytes(range(0x30, 0x40))
 HOST_NONCE = bytes(range(0xE0, 0xF0))
 HOST_EPH_PUB = bytes.fromhex("04a417215b2ffac23f26ff2b85372f155fc16a7aa6b79ffbf4a37e5bb82cd72453761d437b3fe609bf5d0cefdfd95463724938ae81a3f04c8dbc2af6be0cac5efb")
 VIDEO_NONCE = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
+# Section 9 file connection nonces (decision 0035); also inputs of crypto_vectors.swift.
+CLIENT_FILES_NONCE = bytes(range(0x70, 0x80))
+HOST_FILES_NONCE = bytes(range(0x80, 0x90))
 
 FMT = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h", "u32": "<I", "u64": "<Q", "f32": "<f"}
 
@@ -485,6 +489,48 @@ FIXTURES = {
         field("u8", "state", 0, "OFF"),
         field("u16", "port", 0),
         field("str8", "token", ""),
+    ])),
+    "files_info_standby": ("FILES_INFO: Wi-Fi session, sharing allowed, server waits for FILES_NET(OPEN)", frame("FILES_INFO", [
+        field("u8", "state", 2, "STANDBY"),
+        field("u16", "port", 0),
+        field("str8", "token", ""),
+    ])),
+    "files_net_open": ("FILES_NET: Mac opens tablet files over Wi-Fi, listener on 47003", frame("FILES_NET", [
+        field("u8", "state", 1, "OPEN"),
+        field("u16", "port", 47003),
+        field("u8", "pool", 2),
+        field("u8", "max", 12),
+    ])),
+    "files_net_close": ("FILES_NET: Mac closes tablet files over Wi-Fi", frame("FILES_NET", [
+        field("u8", "state", 0, "CLOSE"),
+        field("u16", "port", 0),
+        field("u8", "pool", 0),
+        field("u8", "max", 0),
+    ])),
+    "files_hello": ("FILES_HELLO: first message on a file connection (plain)", frame("FILES_HELLO", [
+        field("u16", "protocol_version", 1),
+        field("u32", "session_id", 0xA1B2C3D4),
+        field("bytes", "client_files_nonce", CLIENT_FILES_NONCE),
+    ])),
+    "files_hello_ack": ("FILES_HELLO_ACK: host accepts the file connection (plain)", frame("FILES_HELLO_ACK", [
+        field("u8", "status", 0, "OK"),
+        field("bytes", "host_files_nonce", HOST_FILES_NONCE),
+    ])),
+    "files_hello_ack_rejected": ("FILES_HELLO_ACK: host rejects the file connection (plain, zero nonce)", frame("FILES_HELLO_ACK", [
+        field("u8", "status", 1, "REJECTED"),
+        field("bytes", "host_files_nonce", bytes(16)),
+    ])),
+    "files_data": ("FILES_DATA: opaque HTTP bytes of the paired local connection", frame("FILES_DATA", [
+        field("u16", "size", 18),
+        field("bytes", "data", list(b"OPTIONS / HTTP/1.1"), "ASCII"),
+    ])),
+    "invalid_files_hello_short": ("MUST BE REJECTED (PROTOCOL_ERROR): FILES_HELLO payload shorter than 22 bytes", frame("FILES_HELLO", [
+        field("u16", "protocol_version", 1),
+        field("u32", "session_id", 0xA1B2C3D4),
+        field("bytes", "client_files_nonce", CLIENT_FILES_NONCE[:8], "only 8 of 16 bytes"),
+    ])),
+    "invalid_files_data_empty": ("MUST BE REJECTED (PROTOCOL_ERROR): FILES_DATA with size = 0", frame("FILES_DATA", [
+        field("u16", "size", 0, "invalid"),
     ])),
     "clipboard_text": ("CLIPBOARD: Turkish UTF-8 text copied on one side", frame("CLIPBOARD", [
         field("u32", "seq", 3),

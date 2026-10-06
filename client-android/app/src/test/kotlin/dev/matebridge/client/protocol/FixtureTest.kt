@@ -80,6 +80,13 @@ class FixtureTest {
             "settings_open" to SettingsOpen,
             "files_info_ready" to FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef"),
             "files_info_off" to FilesInfo.OFF,
+            "files_info_standby" to FilesInfo.STANDBY,
+            "files_net_open" to FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12),
+            "files_net_close" to FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0),
+            "files_hello" to FilesHello(1, 2712847316L, Bytes(hex("707172737475767778797a7b7c7d7e7f"))),
+            "files_hello_ack" to FilesHelloAck(FilesHelloAck.OK, Bytes(hex("808182838485868788898a8b8c8d8e8f"))),
+            "files_hello_ack_rejected" to FilesHelloAck(FilesHelloAck.REJECTED, zeros16),
+            "files_data" to FilesData(Bytes("OPTIONS / HTTP/1.1".toByteArray(Charsets.US_ASCII))),
             "clipboard_text" to Clipboard(3, Clipboard.KIND_TEXT_UTF8, Bytes("Merhaba ğüşıöç — kopyala".toByteArray())),
             "clipboard_empty" to Clipboard(4, Clipboard.KIND_EMPTY, Bytes(ByteArray(0))),
             "pen_hover_to_contact" to Pen(
@@ -141,7 +148,7 @@ class FixtureTest {
 
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
-            "invalid_stream_prefs_hdr_partial",
+            "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty",
         )
         val skipped = setOf("unknown_type")
 

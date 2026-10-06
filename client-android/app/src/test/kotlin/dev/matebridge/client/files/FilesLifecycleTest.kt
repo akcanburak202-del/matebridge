@@ -1,6 +1,7 @@
 package dev.matebridge.client.files
 
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.session.Transport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,7 +11,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-153: the file server runs only during a trusted USB session. */
+/** T-153: the file server runs only during a trusted USB session; T-269 (decision 0035): or a Wi-Fi one the Mac opened. */
 class FilesLifecycleTest {
     // ---- FilesSwitch ----
 
@@ -27,6 +28,23 @@ class FilesLifecycleTest {
         assertEquals(1, trueCount)
     }
 
+    @Test fun overWifiTheServerRunsOnlyAfterTheMacOpenedIt() {
+        val bools = listOf(false, true)
+        var trueCount = 0
+        for (enabled in bools) for (permission in bools) for (foreground in bools) for (trusted in bools)
+            for (transport in listOf(Transport.USB, Transport.WIFI, null)) for (netOpen in bools) {
+                val run = FilesSwitch.shouldRun(enabled, permission, foreground, trusted, transport, netOpen)
+                val base = enabled && permission && foreground && trusted
+                val expected = base && (transport == Transport.USB || (transport == Transport.WIFI && netOpen))
+                assertEquals("e=$enabled p=$permission f=$foreground t=$trusted tr=$transport n=$netOpen", expected, run)
+                if (run) trueCount++
+                // STANDBY is the Wi-Fi state in which everything holds but the Mac has not opened it; never on USB
+                val standby = FilesSwitch.standbyEligible(enabled, permission, foreground, trusted, transport)
+                assertEquals(base && transport == Transport.WIFI, standby)
+            }
+        assertEquals(3, trueCount) // USB with netOpen either way, and Wi-Fi with netOpen
+    }
+
     @Test fun idleStatusNamesTheFirstMissingCondition() {
         assertEquals(FilesStatus.DISABLED, FilesSwitch.idleStatus(enabled = false, permission = false, foreground = false))
         assertEquals(FilesStatus.NO_PERMISSION, FilesSwitch.idleStatus(enabled = true, permission = false, foreground = true))
@@ -35,7 +53,26 @@ class FilesLifecycleTest {
         val texts = listOf(FilesStatus.DISABLED, FilesStatus.NO_PERMISSION, FilesStatus.PAUSED, FilesStatus.NO_USB_SESSION)
             .map { FilesSwitch.statusText(it) }
         assertEquals(texts.size, texts.toSet().size)
-        assertEquals("Durum: Mac'e USB ile bağlanınca açılır", FilesSwitch.statusText(FilesStatus.NO_USB_SESSION))
+        assertEquals(
+            "Durum: Mac'e bağlanınca açılır (USB'de hemen, Wi-Fi'da Mac'ten açılınca)",
+            FilesSwitch.statusText(FilesStatus.NO_USB_SESSION),
+        )
+    }
+
+    @Test fun wifiStatusLinesAreTheTurkishTextsOfTheCard() {
+        // a trusted Wi-Fi session that the Mac has not opened: standby; with a server up: open on the Wi-Fi folder
+        assertEquals(
+            FilesStatus.WIFI_STANDBY,
+            FilesSwitch.idleStatus(enabled = true, permission = true, foreground = true, sessionTrusted = true, transport = Transport.WIFI),
+        )
+        assertEquals(
+            FilesStatus.NO_USB_SESSION,
+            FilesSwitch.idleStatus(enabled = true, permission = true, foreground = true, sessionTrusted = true, transport = Transport.USB),
+        )
+        assertEquals("Durum: Mac'ten açılmayı bekliyor (Wi-Fi)", FilesSwitch.statusText(FilesStatus.WIFI_STANDBY))
+        assertEquals("Durum: Mac'e açık (Wi-Fi, MateBridge/Wi-Fi)", FilesSwitch.statusText(FilesStatus.WIFI_READY))
+        val all = FilesStatus.entries.map { FilesSwitch.statusText(it) }
+        assertEquals(all.size, all.toSet().size)
     }
 
     @Test fun stopReasons() {
@@ -44,6 +81,7 @@ class FilesLifecycleTest {
         assertEquals("background", FilesSwitch.stopReason(enabled = true, permission = true, foreground = false, sessionTrusted = true))
         assertEquals("no_session", FilesSwitch.stopReason(enabled = true, permission = true, foreground = true, sessionTrusted = false))
         assertEquals("wifi", FilesSwitch.stopReason(enabled = true, permission = true, foreground = true, sessionTrusted = true))
+        assertEquals("net_closed", FilesSwitch.stopReason(true, true, true, true, Transport.WIFI))
     }
 
     // ---- FilesSessionGate ----
@@ -97,6 +135,50 @@ class FilesLifecycleTest {
         assertFalse(g.trusted)
     }
 
+    @Test fun theMacsOpenRequestBelongsToTheConnectionAndIsForgottenWithIt() {
+        val open = FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12)
+        val g = trustedGate(4, Transport.WIFI)
+        assertFalse(g.netOpen)
+        assertTrue(g.onFilesNet(4, open))
+        assertTrue(g.netOpen)
+        assertFalse(g.onFilesNet(4, open)) // a repeat changes nothing
+        assertTrue(g.onFilesNet(4, open.copy(port = 47004))) // another listener port: a change
+        assertFalse(g.onFilesNet(3, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0))) // an old generation is ignored
+        assertTrue(g.netOpen)
+        assertTrue(g.onFilesNet(4, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0)))
+        assertFalse(g.netOpen)
+        assertTrue(g.onFilesNet(4, open))
+        assertTrue(g.onFilesNet(4, FilesNet(77, 0, 0, 0))) // an unknown state is CLOSE
+        assertFalse(g.netOpen)
+        // a new connection generation and any non-Connected state forget an OPEN
+        g.onFilesNet(4, open)
+        assertTrue(g.onConnectionGen(5, Transport.WIFI))
+        assertFalse(g.netOpen)
+        g.onConfigApplied()
+        g.onFilesNet(5, open)
+        assertTrue(g.onUi(connected = false))
+        assertFalse(g.netOpen)
+    }
+
+    @Test fun aForgottenOpenDoesNotRestartTheServerWhenSharingIsSwitchedBackOn() {
+        val g = trustedGate(2, Transport.WIFI)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12))
+        assertTrue(g.netOpen)
+        assertTrue(g.forgetNet())
+        assertFalse(g.netOpen)
+        assertFalse(g.forgetNet()) // nothing left to forget
+        assertTrue(g.trusted) // the session itself is untouched
+    }
+
+    @Test fun anOpenBeforeTheConfigIsKeptAndCountsOnceTrusted() {
+        val g = FilesSessionGate()
+        g.onConnectionGen(1, Transport.WIFI)
+        g.onUi(connected = true)
+        assertFalse(g.onFilesNet(1, FilesNet(FilesNet.STATE_OPEN, 1, 1, 1))) // untrusted: no visible change yet
+        assertTrue(g.netOpen)
+        assertTrue(g.onConfigApplied())
+    }
+
     // ---- FilesLifecycle ----
 
     private class FakeServer(val token: String, val events: FilesLifecycle.Events, val after: FakeServer?, val log: MutableList<String>) :
@@ -116,13 +198,25 @@ class FilesLifecycleTest {
         val lc = FilesLifecycle<FakeServer>(
             factory = { token, ev, after -> FakeServer(token, ev, after, events).also { servers += it } },
             newToken = { "tok${++n}" },
-            publish = { published += it; events += if (it.ready) "ready:${it.token}" else "off" },
+            publish = {
+                published += it
+                events += when (it.state) {
+                    FilesInfo.STATE_READY -> "ready:${it.token}"
+                    FilesInfo.STATE_STANDBY -> "standby"
+                    else -> "off"
+                }
+            },
             onStatus = { statusCalls++ },
             log = { _, _, _ -> },
         )
 
-        fun sync(trusted: Boolean = true, transport: Transport? = Transport.USB, enabled: Boolean = true, foreground: Boolean = true) =
-            lc.sync(enabled, permission = true, foreground = foreground, sessionTrusted = trusted, transport = transport)
+        fun sync(
+            trusted: Boolean = true, transport: Transport? = Transport.USB, enabled: Boolean = true, foreground: Boolean = true,
+            netOpen: Boolean = false, requestId: Int = 0,
+        ) = lc.sync(
+            enabled, permission = true, foreground = foreground, sessionTrusted = trusted, transport = transport, netOpen = netOpen,
+            requestId = requestId,
+        )
     }
 
     @Test fun startsOnTrustedUsbAndPublishesReadyOnlyWhenListening() {
@@ -139,14 +233,217 @@ class FilesLifecycleTest {
         assertEquals(1, r.servers.size)
     }
 
-    @Test fun neverStartsOnWifiOrUntrusted() {
+    @Test fun neverStartsOnWifiWithoutTheMacOrWhenUntrusted() {
         val r = Rig()
-        r.sync(transport = Transport.WIFI)
+        r.sync(transport = Transport.WIFI) // allowed, not opened: STANDBY, no server
         r.sync(trusted = false)
         r.sync(trusted = false, transport = null)
         assertTrue(r.servers.isEmpty())
-        assertTrue(r.published.isEmpty())
+        assertEquals(listOf(FilesInfo.STANDBY, FilesInfo.OFF), r.published) // standby once, then off when the session is untrusted
         assertEquals(FilesStatus.NO_USB_SESSION, r.lc.status)
+    }
+
+    @Test fun standbyIsPublishedOnceForAnAllowedWifiSessionAndNeverOnUsb() {
+        val r = Rig()
+        r.sync(trusted = false) // USB, untrusted: nothing, exactly as before
+        r.sync(transport = null, trusted = false)
+        assertTrue(r.published.isEmpty())
+        r.sync(transport = Transport.WIFI)
+        r.sync(transport = Transport.WIFI)
+        r.sync(transport = Transport.WIFI)
+        assertEquals(listOf(FilesInfo.STANDBY), r.published)
+        assertEquals(FilesStatus.WIFI_STANDBY, r.lc.status)
+        // switch off in the settings (or no permission / background): OFF once
+        r.sync(transport = Transport.WIFI, enabled = false)
+        r.sync(transport = Transport.WIFI, enabled = false)
+        assertEquals(listOf(FilesInfo.STANDBY, FilesInfo.OFF), r.published)
+        assertEquals(FilesStatus.DISABLED, r.lc.status)
+        // allowed again, then the background ends it
+        r.sync(transport = Transport.WIFI)
+        r.sync(transport = Transport.WIFI, foreground = false)
+        assertEquals(listOf(FilesInfo.STANDBY, FilesInfo.OFF, FilesInfo.STANDBY, FilesInfo.OFF), r.published)
+        assertTrue(r.servers.isEmpty())
+    }
+
+    @Test fun theMacsOpenStartsAWifiServerAndReadySupersedesStandby() {
+        val r = Rig()
+        r.sync(transport = Transport.WIFI)
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        assertEquals(1, r.servers.size)
+        assertTrue(r.servers[0].events.wifi)
+        assertEquals(FilesStatus.STARTING, r.lc.status)
+        assertEquals(listOf(FilesInfo.STANDBY), r.published) // nothing before the socket listens
+        r.servers[0].events.onListening(47100)
+        assertEquals(FilesInfo(FilesInfo.STATE_READY, 47100, "tok1"), r.published.last())
+        assertEquals(FilesStatus.WIFI_READY, r.lc.status)
+        r.sync(transport = Transport.WIFI, netOpen = true) // running: nothing new
+        assertEquals(1, r.servers.size)
+        assertEquals(2, r.published.size)
+    }
+
+    @Test fun theMacsCloseStopsTheWifiServerAndGoesBackToStandbyWithoutAnOff() {
+        val r = Rig()
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        r.servers[0].events.onListening(1)
+        r.events.clear()
+        r.sync(transport = Transport.WIFI, netOpen = false) // FILES_NET(CLOSE)
+        assertEquals(listOf("standby", "stop:tok1"), r.events)
+        assertTrue(r.servers[0].stopped)
+        assertEquals(FilesStatus.WIFI_STANDBY, r.lc.status)
+        // a later open starts a new server with a new token, waiting for the old one's workers
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        assertEquals(2, r.servers.size)
+        assertNotEquals(r.servers[0].token, r.servers[1].token)
+        assertSame(r.servers[0], r.servers[1].after)
+    }
+
+    @Test fun aWifiSessionEndPublishesOffNotStandby() {
+        val r = Rig()
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        r.servers[0].events.onListening(1)
+        r.events.clear()
+        r.sync(trusted = false, transport = Transport.WIFI)
+        assertEquals(listOf("off", "stop:tok1"), r.events)
+        assertEquals(FilesStatus.NO_USB_SESSION, r.lc.status)
+    }
+
+    @Test fun everyPublishedReadyCarriesTheScopeOfItsServerAndOffAndStandbyCarryNone() {
+        val out = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val servers = mutableListOf<FakeServer>()
+        val lc = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { servers += it } },
+            newToken = { "tok${servers.size + 1}" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope -> out += info to scope },
+        )
+        // Wi-Fi: standby, then the Mac's open on generation 9
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 9)
+        servers[0].events.onListening(41000)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9) // CLOSE
+        lc.sync(true, true, true, false, Transport.WIFI, netOpen = false, generation = 9) // session over
+        // USB on generation 10
+        lc.sync(true, true, true, true, Transport.USB, generation = 10)
+        servers[1].events.onListening(42000)
+        assertEquals(
+            listOf(
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9),
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo.OFF to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 42000, "tok2") to FilesServerScope(false, 10),
+            ),
+            out,
+        )
+    }
+
+    @Test fun anEjectAndReopenOnTheSamePortStopsTheServerAndStartsAFreshOneWithANewToken() {
+        // The MainActivity wiring: FILES_NET -> FilesNetDelivery -> gate -> sync, with the Mac's CLOSE and OPEN coalesced.
+        val r = Rig()
+        val gate = trustedGate(5, Transport.WIFI)
+        val queue = ArrayDeque<Runnable>()
+        val delivery = FilesNetDelivery({ queue.addLast(it) }, { gate.generation }) { gen, msg, req ->
+            gate.onFilesNet(gen, msg, req)
+            r.sync(transport = Transport.WIFI, netOpen = gate.netOpen, requestId = gate.netRequestId)
+        }
+        val open = FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12)
+        delivery.offer(5, open, 1)
+        queue.removeFirst().run()
+        r.servers[0].events.onListening(41000)
+        r.events.clear()
+        // eject and reopen (same port) before the UI thread gets to run: a NEW request (id 2)
+        delivery.offer(5, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0))
+        delivery.offer(5, open, 2)
+        queue.removeFirst().run()
+        assertEquals(listOf("standby", "stop:tok1", "start:tok2"), r.events.filterNot { it.startsWith("ready") })
+        assertEquals(2, r.servers.size)
+        assertNotEquals(r.servers[0].token, r.servers[1].token)
+        assertSame(r.servers[0], r.servers[1].after) // the old workers (a running COPY) are waited for, then gone
+        assertTrue(r.servers[0].stopped)
+    }
+
+    @Test fun everyServerIsTaggedWithTheOpenRequestItWasStartedForAndAStopNamesIt() {
+        val out = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val servers = mutableListOf<FakeServer>()
+        val lc = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { servers += it } },
+            newToken = { "tok${servers.size + 1}" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope -> out += info to scope },
+        )
+        fun sync(netOpen: Boolean, req: Int) = lc.sync(true, true, true, true, Transport.WIFI, netOpen = netOpen, generation = 9, requestId = req)
+        sync(true, 1)
+        servers[0].events.onListening(41000)
+        // the Mac ejected and reopened (request 2) while the UI was busy: the delayed teardown of request 1's server
+        // announces STANDBY for request 1 ...
+        sync(false, 0)
+        // ... and the reopen starts the next server for request 2
+        sync(true, 2)
+        servers[1].events.onListening(41001)
+        // another port of the Mac's listener while this share is live (request 3): the SAME server (same token) is re-tagged and
+        // READY is published again for the new request; no OFF and no STANDBY in between (the Mac must not tear down)
+        sync(true, 3)
+        assertEquals(
+            listOf(
+                FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9, 1),
+                FilesInfo.STANDBY to FilesServerScope(false, -1, 1),
+                FilesInfo(FilesInfo.STATE_READY, 41001, "tok2") to FilesServerScope(true, 9, 2),
+                FilesInfo(FilesInfo.STATE_READY, 41001, "tok2") to FilesServerScope(true, 9, 3),
+            ),
+            out,
+        )
+        assertEquals(2, servers.size)
+        assertTrue(!servers[1].stopped)
+        // a retag before the server listens: its READY simply carries the newest request
+        val early = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val s2 = mutableListOf<FakeServer>()
+        val lc2 = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { s2 += it } },
+            newToken = { "t" }, publish = { }, onStatus = { }, log = { _, _, _ -> },
+            publishScoped = { info, scope -> early += info to scope },
+        )
+        lc2.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 4, requestId = 1)
+        lc2.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 4, requestId = 2)
+        s2[0].events.onListening(5)
+        assertEquals(listOf(FilesInfo(FilesInfo.STATE_READY, 5, "t") to FilesServerScope(true, 4, 2)), early)
+        assertEquals(1, s2.size)
+    }
+
+    @Test fun theGateKeepsTheRequestIdOfTheLiveOpenAndForgetsItWithTheOpen() {
+        val g = trustedGate(2, Transport.WIFI)
+        assertEquals(0, g.netRequestId)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 5)
+        assertEquals(5, g.netRequestId)
+        assertTrue(g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 6)) // the same OPEN as a new request is a change
+        assertEquals(6, g.netRequestId)
+        assertTrue(g.forgetNet())
+        assertEquals(0, g.netRequestId)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 7)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), 0)
+        assertEquals(0, g.netRequestId)
+    }
+
+    @Test fun aUsbServerIsNotAWifiServer() {
+        val r = Rig()
+        r.sync()
+        assertFalse(r.servers[0].events.wifi)
+        r.servers[0].events.onListening(5)
+        assertEquals(FilesStatus.READY, r.lc.status)
+    }
+
+    @Test fun aWifiServerThatFailsReportsOffAndRestartsWhileTheMacStillWantsIt() {
+        val r = Rig()
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        r.servers[0].events.onStopped(failed = true)
+        assertEquals(FilesInfo.OFF, r.published.last())
+        assertEquals(FilesStatus.FAILED, r.lc.status)
+        r.sync(transport = Transport.WIFI, netOpen = true)
+        assertEquals(2, r.servers.size)
+        assertSame(r.servers[0], r.servers[1].after)
     }
 
     @Test fun sessionEndPublishesOffBeforeStopAndTheNextStartHasANewToken() {
@@ -165,13 +462,13 @@ class FilesLifecycleTest {
         assertEquals(FilesInfo(FilesInfo.STATE_READY, 2, "tok2"), r.published.last())
     }
 
-    @Test fun switchToWifiStopsWithOffFirst() {
+    @Test fun switchToWifiStopsWithOffFirstThenStandby() {
         val r = Rig()
         r.sync()
         r.servers[0].events.onListening(1)
         r.events.clear()
         r.sync(transport = Transport.WIFI)
-        assertEquals(listOf("off", "stop:tok1"), r.events)
+        assertEquals(listOf("off", "stop:tok1", "standby"), r.events) // the USB server is no Wi-Fi server: OFF, then STANDBY
         assertTrue(r.servers[0].stopped)
     }
 

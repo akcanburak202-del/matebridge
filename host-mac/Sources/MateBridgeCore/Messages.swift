@@ -128,6 +128,9 @@ public struct Capabilities: OptionSet, Sendable {
     /// The client handles `chroma_layout = 1` (two 4:2:0 streams, `VIDEO_FRAME.view`) and passed its capability test
     /// (decision 0034).
     public static let fullChroma = Capabilities(rawValue: 1 << 11)
+    /// The client handles `FILES_INFO(STANDBY)`, `FILES_NET` and the file connections of Wi-Fi tablet files
+    /// (decision 0035).
+    public static let filesNet = Capabilities(rawValue: 1 << 12)
 }
 
 public struct PenFlags: OptionSet, Sendable {
