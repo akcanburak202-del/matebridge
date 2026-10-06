@@ -309,7 +309,7 @@ Yerel imleç açma/kapama (karar 0036). İstemci yalnız `ACCEPTED` oturumda ve 
 
 ### 0x0C CURSOR_SHAPE (H→C, kontrol)
 
-Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken ve istemcinin o oturumda bu `shape_id`'yi henüz almadığını bildiği zaman gönderir; bir `CURSOR_STATE` bir `shape_id`'yi ilk kez kullanmadan **önce** aynı bağlantıda gönderilir.
+Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken ve istemcide olduğunu varsaymadığı bir `shape_id`'yi kullanan `CURSOR_STATE`'i göndermek **üzereyken** gönderir: şekil, onu anan durumla birlikte ve hemen önünde gider; ayrı ya da önceden gönderilmez. Böylece bekleyen şekil sayısı bekleyen durum sayısıyla sınırlıdır (§5).
 
 | Alan | Tip | Açıklama |
 |---|---|---|
@@ -708,7 +708,7 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 - Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
 - Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
 
-**İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok bir `CURSOR_STATE` vardır (en yenisi kazanır); `CURSOR_SHAPE`'ler atılmaz ama oturum başına en çok 32 farklı kimlik, büyük şekiller küçültülür. Kontrol bağlantısı tıkanırsa `CURSOR_STATE` beklemez, sonraki birleşik durum gider.
+**İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok **bir** imleç birimi vardır: bir `CURSOR_STATE` ve (gerekiyorsa) onun ihtiyaç duyduğu tek `CURSOR_SHAPE` (≤ 61 456 bayt). Yeni durum bekleyeni değiştirir (en yenisi kazanır); değiştirilen birimin şekli de gönderilmez ve "istemcide var" sayılmaz. Bir birim yalnız kontrol bağlantısının yazma tamponu bir öncekini aldıktan sonra kuyruğa girer; tıkanmada imleç trafiği büyümez, 256 KiB sınırına katkısı en çok bir birimdir.
 
 **Kontrol + girdi (istemci gönderim kuyruğu):**
 - En çok **256 KiB** veya en eski mesaj **1 sn**.
