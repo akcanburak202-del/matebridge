@@ -1,7 +1,7 @@
 ---
 id: T-268
 title: Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-267]

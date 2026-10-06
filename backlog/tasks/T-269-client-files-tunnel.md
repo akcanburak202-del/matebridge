@@ -1,7 +1,7 @@
 ---
 id: T-269
 title: Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-265, T-266]

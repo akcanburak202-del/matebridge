@@ -34,10 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
 | [T-261](tasks/T-261-client-full-chroma-temporal-reuse.md) | Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs | 6 | android-client-dev | [T-259] |
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
-| [T-265](tasks/T-265-files-net-protocol.md) | Protocol — Wi-Fi tablet files (decision 0035): HELLO bit12, FILES_INFO STANDBY, FILES_NET, file connection 0x50–0x52, §9 file keys | 6 | orchestrator | [] |
-| [T-267](tasks/T-267-host-core-files-net.md) | Host Core — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, planner ağ dalı, FilesRateCap | 6 | mac-host-dev | [T-265] |
-| [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
-| [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
 
 ## todo
 
@@ -287,5 +283,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-256](tasks/T-256-probe-yuv444-gl-latency.md) | Probe (tablet) — 4:4:4 GL merge path latency with depth-1 presentation vs today's direct path | 6 | android-client-dev | [T-254] |
 | [T-263](tasks/T-263-full-chroma-hotfix.md) | Client — Tam renk acil düzeltme: ana ImageReader 6 imaj, ana dekoder çökünce negotiated geri dönüş, "Görüntü durdu" düğmesi okunur | 6 | android-client-dev | [T-261] |
 | [T-264](tasks/T-264-default-sharp-colour.md) | Client — "Renk" varsayılanı Keskin kenarlar (0034 eki) | 6 | android-client-dev | [T-260] |
+| [T-265](tasks/T-265-files-net-protocol.md) | Protocol — Wi-Fi tablet files (decision 0035): HELLO bit12, FILES_INFO STANDBY, FILES_NET, file connection 0x50–0x52, §9 file keys | 6 | orchestrator | [] |
 | [T-266](tasks/T-266-client-files-wifi-profile.md) | Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404 | 6 | android-client-dev | [] |
+| [T-267](tasks/T-267-host-core-files-net.md) | Host Core — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, planner ağ dalı, FilesRateCap | 6 | mac-host-dev | [T-265] |
+| [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
+| [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
 | [T-271](tasks/T-271-cursor-probe.md) | Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu | 6 | mac-host-dev | [] |

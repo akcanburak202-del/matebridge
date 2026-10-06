@@ -1,7 +1,7 @@
 ---
 id: T-265
 title: Protocol — Wi-Fi tablet files (decision 0035): HELLO bit12, FILES_INFO STANDBY, FILES_NET, file connection 0x50–0x52, §9 file keys
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-267
 title: Host Core — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, planner ağ dalı, FilesRateCap
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-265]
