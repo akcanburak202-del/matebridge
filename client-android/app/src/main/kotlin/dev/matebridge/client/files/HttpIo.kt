@@ -205,7 +205,7 @@ class ChunkedOutputStream(out: OutputStream) : FilterOutputStream(out) {
  */
 class ThrottledInputStream(
     src: InputStream,
-    private val bucket: TokenBucket,
+    private val bucket: ByteBudget,
     private val stats: FilesStats,
     private val arrived: () -> Unit = {},
     private val tick: () -> Unit = {},
@@ -237,7 +237,7 @@ class ThrottledInputStream(
  */
 class ThrottledOutputStream(
     dst: OutputStream,
-    private val bucket: TokenBucket,
+    private val bucket: ByteBudget,
     private val stats: FilesStats,
     private val maxPiece: Int,
     private val watch: WriteWatchdog.Watch? = null,

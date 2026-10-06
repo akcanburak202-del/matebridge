@@ -56,6 +56,9 @@ class DavServer(
 
     private val auth = DigestAuth(token, secret, nowMs)
     private val bucket = TokenBucket(config.rateBytesPerSec, config.burstBytes)
+    /** T-266: the small-request lane (null on USB); each connection takes two lanes of it, one per direction. */
+    private val smallBucket = if (config.smallRateBytesPerSec > 0) TokenBucket(config.smallRateBytesPerSec, config.smallBurstBytes) else null
+    private val lanes = LaneBudget(bucket, smallBucket, config.smallThresholdBytes)
     private val stats = FilesStats()
     private val lock = Object()
     private val conns = HashSet<Conn>()
@@ -70,6 +73,12 @@ class DavServer(
     /** The bound port, 0 until listening. */
     @Volatile var port = 0
         private set
+
+    /**
+     * Changes the main rate cap while running (T-266; the Wi-Fi cap follows the video bit rate, see
+     * [filesCapBytesPerSec]). The small-request lane keeps its own rate. Any thread.
+     */
+    fun setRate(bytesPerSec: Long) = bucket.setRate(bytesPerSec)
 
     fun start() {
         synchronized(lock) {
@@ -282,12 +291,14 @@ class DavServer(
             hooks.threadStarted()
             try {
                 socket.tcpNoDelay = true
+                val inLane = lanes.newLane()
+                val outLane = lanes.newLane()
                 val input = BufferedInputStream(
-                    ThrottledInputStream(socket.getInputStream(), bucket, stats, arrived = { idle = false }) { pollStats() },
+                    ThrottledInputStream(socket.getInputStream(), inLane, stats, arrived = { idle = false }) { pollStats() },
                     config.bufferBytes,
                 )
                 val output = BufferedOutputStream(
-                    ThrottledOutputStream(socket.getOutputStream(), bucket, stats, config.bufferBytes, watch) { pollStats() },
+                    ThrottledOutputStream(socket.getOutputStream(), outLane, stats, config.bufferBytes, watch) { pollStats() },
                     config.bufferBytes,
                 )
                 while (!stopped) {
@@ -311,6 +322,8 @@ class DavServer(
                         pollStats() // at most one line per second; only the stop forces a final one
                     }
                     served = true
+                    inLane.reset()
+                    outLane.reset()
                     if (!keep) break
                 }
             } catch (e: SocketTimeoutException) {

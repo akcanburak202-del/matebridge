@@ -41,6 +41,15 @@ data class FilesConfig(
      * class 1 only, so macOS mounts the volume read-only.
      */
     val readOnly: Boolean = false,
+    /**
+     * T-266 (decision 0035): the small-request lane. The first [smallThresholdBytes] bytes of every request and every
+     * response (heads, PROPFIND, small GET/PUT) are paid from a separate bucket of this rate and depth
+     * [smallBurstBytes], so they never queue behind a big transfer's debt. 0 = no lane (USB: today's behaviour).
+     * The ceiling of the whole server is then [rateBytesPerSec] + this rate.
+     */
+    val smallRateBytesPerSec: Long = 0,
+    val smallBurstBytes: Long = SMALL_BURST_BYTES,
+    val smallThresholdBytes: Long = SMALL_THRESHOLD_BYTES,
 ) {
     companion object {
         const val RATE_BYTES_PER_SEC = 20L * 1000 * 1000
@@ -54,6 +63,26 @@ data class FilesConfig(
         const val OVERFLOW_CONNECTIONS = 4
         const val ADMIT_WAIT_MS = 2_000
         const val WRITE_TIMEOUT_MS = 30_000
+
+        /** Wi-Fi profile (T-266, research 2026-10-05-wifi-files.md section 2): smaller bursts and copy buffer. */
+        const val WIFI_BURST_BYTES = 64L * 1024
+        const val WIFI_BUFFER_BYTES = 16 * 1024
+        const val WIFI_SMALL_RATE_BYTES_PER_SEC = 256_000L
+        const val SMALL_BURST_BYTES = 32L * 1024
+        const val SMALL_THRESHOLD_BYTES = 32L * 1024
+
+        /**
+         * The Wi-Fi profile (decision 0035): total rate [capBytesPerSec] (see [filesCapBytesPerSec]; changeable while
+         * running through [DavServer.setRate]), 64 KiB bursts, 16 KiB buffers, the small-request lane on. Connection
+         * limits (8 + 4) and the rest are the USB values. The USB profile is the plain constructor defaults.
+         */
+        fun wifi(capBytesPerSec: Long, readOnly: Boolean = false) = FilesConfig(
+            rateBytesPerSec = capBytesPerSec,
+            burstBytes = WIFI_BURST_BYTES,
+            bufferBytes = WIFI_BUFFER_BYTES,
+            readOnly = readOnly,
+            smallRateBytesPerSec = WIFI_SMALL_RATE_BYTES_PER_SEC,
+        )
 
         /** HTTP auth user name (PROTOCOL.md 0x09); the password is the per-start token. */
         const val USER = "matebridge"
@@ -98,21 +127,7 @@ data class FilesScope(val root: FilesRoot, val readOnly: Boolean) {
      */
     fun directory(storage: File): File? {
         val folder = root.folder ?: return storage
-        val d = File(storage, folder)
-        return try {
-            if (java.nio.file.Files.isSymbolicLink(d.toPath())) return null
-            if (!d.exists() && !d.mkdir() && !d.isDirectory) return null
-            if (!d.isDirectory || java.nio.file.Files.isSymbolicLink(d.toPath())) return null
-            // The canonical form must be exactly storage/<folder>: nothing (a link, a mount trick) leads elsewhere.
-            if (d.canonicalFile != File(storage.canonicalFile, folder)) return null
-            d
-        } catch (e: IOException) {
-            null
-        } catch (e: SecurityException) {
-            null
-        } catch (e: java.nio.file.InvalidPathException) {
-            null
-        }
+        return safeSubdirectory(storage, listOf(folder))
     }
 
     companion object {
@@ -121,3 +136,59 @@ data class FilesScope(val root: FilesRoot, val readOnly: Boolean) {
             "Durum: \"${root.folder ?: root.label}\" klasörü açılamadı; paylaşım kapalı"
     }
 }
+
+/**
+ * The directory [segments] below [storage], one level at a time: each must be a real directory (created when missing),
+ * not a symbolic link, and its canonical path must be exactly the parent's canonical path + the name (nothing, no link
+ * or mount trick, leads elsewhere). Null otherwise (a file, a link, a failed mkdir, an I/O error); the caller never
+ * falls back to a parent or the storage.
+ */
+fun safeSubdirectory(storage: File, segments: List<String>): File? {
+    var cur = storage
+    for (seg in segments) {
+        cur = try {
+            val d = File(cur, seg)
+            if (java.nio.file.Files.isSymbolicLink(d.toPath())) return null
+            if (!d.exists() && !d.mkdir() && !d.isDirectory) return null
+            if (!d.isDirectory || java.nio.file.Files.isSymbolicLink(d.toPath())) return null
+            if (d.canonicalFile != File(cur.canonicalFile, seg)) return null
+            d
+        } catch (e: IOException) {
+            return null
+        } catch (e: SecurityException) {
+            return null
+        } catch (e: java.nio.file.InvalidPathException) {
+            return null
+        }
+    }
+    return cur
+}
+
+/**
+ * The Wi-Fi file root (decision 0035 addendum, T-266): `storage/MateBridge/Wi-Fi/` and nothing else. Both levels are
+ * created when missing; a file, a link or a failure gives null and the server stays off: never the parent
+ * `MateBridge`, never the storage. The USB choice ([FilesRoot]) is separate and unchanged; the user's
+ * `MateBridge/` stays visible over USB, over Wi-Fi only this sub-folder is.
+ */
+object WifiFilesRoot {
+    val SEGMENTS = listOf("MateBridge", "Wi-Fi")
+
+    /** Log fields: the class only, never a path. */
+    const val LOG_FIELDS = "root=wifi"
+
+    fun directory(storage: File): File? = safeSubdirectory(storage, SEGMENTS)
+}
+
+/**
+ * The share of the Wi-Fi link the file server may use (decision 0035, research section 2): the whole stream stays
+ * around 48 Mbps (about three quarters of the 66 Mbps that froze on the device), the rest in MB/s (10^6 bytes):
+ * clamp((48 - video_Mbps) / 8, 0.5, 3.0). 30 Mbps gives 2.25 MB/s, 15 gives 3, 60 gives 0.5. An unknown video rate
+ * (0 or less) gets [UNKNOWN_VIDEO_BYTES_PER_SEC], not the lowest.
+ */
+fun filesCapBytesPerSec(videoKbps: Int): Long {
+    if (videoKbps <= 0) return UNKNOWN_VIDEO_BYTES_PER_SEC
+    val mbps = videoKbps / 1000.0
+    return (((48.0 - mbps) / 8.0).coerceIn(0.5, 3.0) * 1_000_000).toLong()
+}
+
+const val UNKNOWN_VIDEO_BYTES_PER_SEC = 2_000_000L

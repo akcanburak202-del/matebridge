@@ -97,6 +97,10 @@ class DavHandler(
         // The storage lives under /MatePad/ so Finder names the volume "MatePad" (orchestrator decision); nothing else exists.
         if (all[0] != MOUNT) return ex.empty(404)
         val segs = all.drop(1)
+        // T-266: Finder's probes (.hidden, .Trashes, ...) at the root or in any folder: 404 at once, no storage access.
+        if ((req.method == "GET" || req.method == "HEAD" || req.method == "PROPFIND") && segs.any { MetaStore.isProbeName(it) }) {
+            return ex.empty(404)
+        }
         val res = DavPath.resolve(root, segs) ?: return ex.empty(403)
         if (!res.isRoot && MetaStore.isMetaName(res.name)) return metaRequest(req, body, ex, segs, res)
         when (req.method) {

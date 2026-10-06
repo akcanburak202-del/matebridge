@@ -30,7 +30,12 @@ Karar 0035 (ve 2026-10-06 eki) için tabletteki WebDAV sunucusunun Wi-Fi'a hazı
 
 ## Plan
 
-(ajan doldurur)
+1. `TokenBucket.setRate` (kilit altında yeni hız, eski hızla settle; borç bayt olarak kalır). `acquire` 100 ms dilimlerle uyur, hız değişmişse kalan borcu yeni hızla yeniden hesaplar (artışta aşırı uyku yok). `ByteBudget` arayüzü: akışlar `TokenBucket` yerine bunu alır.
+2. Küçük şerit: `LaneBudget` + bağlantı/yön başına `Lane`: her isteğin/yanıtın ilk `smallThresholdBytes` (32 KiB) baytı küçük kovadan (256 KB/s, derinlik 32 KiB), kalanı ana kovadan; her istek sonunda `reset()`. `smallRateBytesPerSec = 0` (USB varsayılanı) = şerit yok. Toplam üst sınır = ana + küçük hız. `DavServer.setRate` ana kovayı değiştirir.
+3. `FilesConfig.wifi(cap)`; `filesCapBytesPerSec(videoKbps)`.
+4. Wi-Fi kökü: `FilesRoot` enum'una DOKUNMADAN (ayar arayüzünde seçenek olmasın) `WifiFilesRoot.directory(storage)`; `FilesScope.directory` ile ortak `safeSubdirectory` (seviye seviye: sembolik bağ yok, kanonik yol tam eşit, eksikse oluştur, aksi null).
+5. Hızlı 404: `MetaStore.isProbeName`; `DavHandler.dispatch` içinde GET/HEAD/PROPFIND için herhangi bir segment eşleşirse 404 (çözümlemeden önce).
+6. Testler: setRate, şerit önceliği, formül, Wi-Fi kökü, 404 (sunucu testi). `tools/dav-repro`: `MB_DAV_PROFILE=wifi`, `MB_DAV_LANE=0/1` ve bir PROPFIND gecikme ölçüm betiği (komut satırı, GUI yok).
 
 ## Handoff
 
