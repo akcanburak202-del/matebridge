@@ -1610,3 +1610,8 @@ Kayıt: `~/.cache/matebridge-tools/data/2026-10-06-cursor/` (180 s, 60 Hz, table
 - **Maliyet:** bu kayıtta tüm adaylarla (pencere listesi 10 Hz dahil) 60 Hz'de bir çekirdeğin %5'i; üründe pencere listesi ve `current` yoklaması gerekmez.
 - **RE4'te tablete bağlı BT mouse ve tablet klavyesi çalışmadı.** Host tuşları alıyor ve enjekte ediyor (`input_age key_n`, tuş tekrarında `input_watchdog`), ama RE4 girdiyi **GameController** çerçevesinden okuyor: ikilide `GCKeyboardInput` / `GCMouseInput` işleyicileri var, `GameController.framework` bağlı. GameController doğrudan HID aygıtlarını okur; `CGEvent` enjeksiyonunu görmez. Mac'e doğrudan bağlı fare/klavye bu yüzden çalışıyor. Çözüm ancak sanal HID aygıtıyla (ör. Karabiner DriverKit VirtualHIDDevice; yeni bağımlılık + sistem uzantısı → karar kaydı gerekir).
 - Dock/menü çubuğu sorunu (oyunda imleç kenara gidince): host `POINTER_REL`'de gizli imleci de hareket ettiriyor. Gizliyken konumu sabit tutup yalnız delta göndermek bunu çözer (T-272).
+
+## 2026-10-06 ~14:10 — T-272 cihazda
+
+- Deneme host'u (2f673912) ile: yazı yazınca gizlenen imleç tablete bağlı mouse ile geri geliyor (risk yok). RE4'te `pointer_hidden_mode on` ~6 dk, gizliyken hareketler konumu değiştirmeden gitti (`pointer_hidden_n` 60–90/s).
+- RE4: oyun içinde (oynanış) tablet klavyesi ve tablete bağlı mouse **çalışıyor** (NSEvent/CGEvent yolu); **oyun içi menüde çalışmıyor** (menü GameController `GCKeyboard`/`GCMouse` okuyor) → kullanıcı menüde Mac'e doğrudan bağlı mouse kullanmak zorunda. Çözüm sanal HID aygıtı (karar + araştırma gerekir).

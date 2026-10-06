@@ -1,7 +1,7 @@
 ---
 id: T-272
 title: Host — imleç gizliyken göreli hareket imleci kaydırmasın (oyunda Dock/menü çubuğu açılmasın)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-271]

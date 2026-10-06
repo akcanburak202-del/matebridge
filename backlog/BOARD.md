@@ -54,7 +54,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-272](tasks/T-272-hidden-cursor-relative.md) | Host — imleç gizliyken göreli hareket imleci kaydırmasın (oyunda Dock/menü çubuğu açılmasın) | 6 | mac-host-dev | [T-271] |
 
 ## done
 
@@ -290,3 +289,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
 | [T-270](tasks/T-270-wifi-files-device.md) | Cihaz kabulü — Wi-Fi dosyaları (0035): bütçeli ölçüm + Codex --high | 6 | orchestrator | [T-268, T-269] |
 | [T-271](tasks/T-271-cursor-probe.md) | Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu | 6 | mac-host-dev | [] |
+| [T-272](tasks/T-272-hidden-cursor-relative.md) | Host — imleç gizliyken göreli hareket imleci kaydırmasın (oyunda Dock/menü çubuğu açılmasın) | 6 | mac-host-dev | [T-271] |
