@@ -137,6 +137,17 @@ public struct CursorStreamPlanner: Sendable {
         }
     }
 
+    /// The video cursor could not be taken out of the video although `CURSOR_*` flows (a capture that started and was
+    /// corrected afterwards, `VideoCursorSwitch`): the tablet would draw a second cursor. The flow stops, the request
+    /// is forgotten, and the tablet times out and asks again later. Only a running flow is affected.
+    public mutating func videoCursorLost() -> [Command] {
+        guard phase == .on else { return [] }  // the other phases have their own answer pending
+        wanted = false
+        phase = .off
+        lastSent = nil
+        return [.stopTracking]
+    }
+
     /// The session is over: forget everything. The host puts the video cursor back by itself.
     public mutating func reset() {
         phase = .off
