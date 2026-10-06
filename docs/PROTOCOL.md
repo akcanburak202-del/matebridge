@@ -313,7 +313,7 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 
 | Alan | Tip | Açıklama |
 |---|---|---|
-| shape_id | u32 | Şeklin kimliği (görüntü + hotspot özeti); `0` kullanılmaz |
+| shape_id | u32 | Şeklin kimliği (görüntü + hotspot özeti); `0` hiçbir `CURSOR_SHAPE`'te kullanılmaz |
 | width_pt16 | u16 | Şeklin Mac nokta genişliği × 16 (1/16 nokta) |
 | height_pt16 | u16 | Yüksekliği × 16 |
 | hot_x_pt16 | u16 | Hotspot'un şeklin sol üstünden uzaklığı, nokta × 16 |
@@ -324,7 +324,7 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 | data | bytes[data_len] | Görüntü. Piksel boyutu en çok 128 × 128 (host büyük temsili küçültür). |
 
 - İstemci şekli `width_pt16/16 × (yüzey_genişliği_px / STREAM_CONFIG.width_pt)` piksel genişlikte çizer (yükseklik aynı ölçekle); hotspot aynı ölçekle.
-- Önbellek: host, istemcide olduğunu varsaydığı kimlikleri oturum başına en çok **32** tutar (en son kullanılan; kullanım = `CURSOR_SHAPE` ya da onu anan `CURSOR_STATE`); 33. kimlikte en eskisini unutur ve gerekirse yeniden gönderir. İstemci aynı kuralla en az **64** şekil saklar (bilinmeyen biçimdekiler dahil), böylece host'un varsaydığı her kimlik istemcide bulunur.
+- Önbellek: host, istemcide olduğunu varsaydığı kimlikleri oturum başına en çok **32** tutar (en son kullanılan; kullanım = `CURSOR_SHAPE` ya da onu anan `CURSOR_STATE`); 33. kimlikte en eskisini unutur ve gerekirse yeniden gönderir. İstemci aynı kuralla en az **64** şekil saklar (bilinmeyen biçimdekiler dahil), böylece host'un varsaydığı her kimlik istemcide bulunur. İstemci önbelleği yalnız bağlantı/oturum sınırında siler (`CURSOR_PREFS` 0↔1 geçişinde silmez); host ise `CURSOR_PREFS(0)`'da kendi varsayım kümesini boşaltabilir (yalnız fazladan gönderim olur).
 - `data_len = 0` ya da `> 61 440`, ya da payload `16 + data_len`'den kısa: protokol hatası.
 
 ### 0x0D CURSOR_STATE (H→C, kontrol)
@@ -338,7 +338,7 @@ Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken v
 | y | u16 | |
 | visible | u8 | `1` görünür, `0` gizli (yazarken, oyunda, uygulama gizledi). Bilinmeyen değer `0`. |
 | reserved | u8 | |
-| shape_id | u32 | Çizilecek şekil (`CURSOR_SHAPE` ile gelmiş olmalı); istemcide yoksa yerleşik ok çizilir |
+| shape_id | u32 | Çizilecek şekil (`CURSOR_SHAPE` ile gelmiş olmalı). `0` = host şekli okuyamadı: istemci yerleşik oku çizer. İstemcide olmayan bir kimlik de yerleşik okla çizilir. |
 | host_time_us | u64 | Host monoton saatinde örnekleme anı (yalnız ölçüm; istemci saat farkıyla gecikme hesaplayabilir) |
 
 - İstemci en yeni `seq`'i çizer; daha eski `seq` gelirse yok sayar.

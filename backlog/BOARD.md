@@ -34,6 +34,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
 | [T-261](tasks/T-261-client-full-chroma-temporal-reuse.md) | Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs | 6 | android-client-dev | [T-259] |
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
+| [T-274](tasks/T-274-cursor-protocol.md) | Protocol — local cursor (decision 0036): HELLO bit13, CURSOR_PREFS 0x0B, CURSOR_SHAPE 0x0C, CURSOR_STATE 0x0D | 6 | orchestrator | [T-271] |
+| [T-275](tasks/T-275-host-local-cursor.md) | Host — yerel imleç (0036): imleç izleyici, CURSOR_SHAPE/STATE gönderimi, videoda imleci kapatma | 6 | mac-host-dev | [T-274] |
+| [T-276](tasks/T-276-client-local-cursor.md) | Client — yerel imleç (0036): imleç katmanı, şekil önbelleği, zaman aşımı geri dönüşü, panel | 6 | android-client-dev | [T-274] |
 
 ## todo
 
