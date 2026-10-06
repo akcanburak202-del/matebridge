@@ -50,8 +50,9 @@ data class HdrCapability(val displayHdr10: Boolean, val decoderMain10Hdr10: Bool
 }
 
 /**
- * Decision 0032: what the client asks for and what the panel shows. HDR10 is requested only in Oyun, with the user's
- * "HDR" setting on, on a capable tablet; anything else asks for SDR (the group is then not written, PROTOCOL.md 0x05).
+ * Decision 0032: what the client asks for and what the panel shows. HDR10 is requested only in Günlük or Oyun, with
+ * that mode's own "HDR" setting on (T-280: one per mode), on a capable tablet; Çizim and anything else asks for SDR (the
+ * group is then not written, PROTOCOL.md 0x05).
  * The applied dynamic range is read only from STREAM_CONFIG ([StreamConfig.isHdr10]). Pure Kotlin.
  */
 object HdrPolicy {
@@ -60,12 +61,12 @@ object HdrPolicy {
     const val OPTION_OFF = "off"
     const val OPTION_ON = "on"
 
-    /** STREAM_PREFS `dynamic_range` for [mode] with the stored setting [userOn]. */
+    /** STREAM_PREFS `dynamic_range` for [mode] with [mode]'s own stored setting [userOn] (Çizim is always SDR). */
     fun dynamicRange(cap: HdrCapability, mode: StreamMode, userOn: Boolean): Int =
-        if (cap.supported && mode.isGame && userOn) StreamPrefs.DYNAMIC_RANGE_HDR10 else StreamPrefs.DYNAMIC_RANGE_SDR
+        if (cap.supported && !mode.isDrawing && userOn) StreamPrefs.DYNAMIC_RANGE_HDR10 else StreamPrefs.DYNAMIC_RANGE_SDR
 
-    /** The "HDR" row is shown only in Oyun (Günlük and Çizim stay SDR, decision 0032). */
-    fun rowHidden(mode: StreamMode): Boolean = !mode.isGame
+    /** The "HDR" row is shown in Günlük and Oyun, hidden only in Çizim (stays SDR, decision 0032 update, T-280). */
+    fun rowHidden(mode: StreamMode): Boolean = mode.isDrawing
 
     /** Without the capability the row is grey and does nothing. */
     fun rowEnabled(cap: HdrCapability): Boolean = cap.supported

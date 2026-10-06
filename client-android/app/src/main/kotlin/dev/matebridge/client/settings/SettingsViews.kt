@@ -50,7 +50,7 @@ class SettingsViews(
         is SettingItem.Action -> button(item.title) { item.run() }
         is SettingItem.Info -> text("", 15f, INFO_COLOR).also { t ->
             refreshers += {
-                t.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-238: e.g. "Uygulanan: HDR10" outside Oyun
+                t.visibility = if (item.hidden()) View.GONE else View.VISIBLE // T-238/T-280: e.g. "Uygulanan: HDR10" in Çizim
                 t.text = item.text()
             }
         }

@@ -50,6 +50,7 @@ class SettingsResetTest {
         s.filesShare(), s.filesRoot(), s.filesReadOnly(), s.audioEnabled(), s.audioOut(), s.penTrail(), s.penDot(),
         s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(), s.modeFps(StreamMode.DAILY), s.modeFps(StreamMode.GAME),
         s.hdrGame(), // T-238
+        s.hdrDaily(), // T-280
         s.cursorLocal(), // T-276
     )
 
@@ -73,6 +74,7 @@ class SettingsResetTest {
         s.setFingerTouchDisabled(true)
         s.setTransportMode(TransportMode.USB)
         s.setHdrGame(true) // T-238
+        s.setHdrDaily(true) // T-280
         s.setCursorLocal(false) // T-276: Görüntüde
     }
 
@@ -83,7 +85,7 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(20, s.resetToDefaults())
+        assertEquals(21, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())
@@ -106,6 +108,7 @@ class SettingsResetTest {
         assertEquals(TransportMode.AUTO, s.transportMode())
         assertEquals(GameResolution.R1848, s.gameResolution()) // T-215: 1848×1214
         assertFalse(s.hdrGame()) // T-238: HDR off
+        assertFalse(s.hdrDaily()) // T-280: both HDR settings off
         assertTrue(s.cursorLocal()) // T-276: İmleç back to Tablette
     }
 

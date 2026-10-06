@@ -35,7 +35,11 @@ class SettingsCatalogTest {
         override fun selectBitrate(kbps: Long) { calls += "bitrate $kbps"; bitrateKbps = kbps }
         override var appliedBitrateKbps: Long? = null
         override var hdrCapability = HdrCapability(displayHdr10 = true, decoderMain10Hdr10 = true)
-        override var hdrEnabled = false
+        /** T-280: the HDR setting is per mode (the row reads and writes the current mode's). */
+        val hdrByMode = HashMap<StreamMode, Boolean>()
+        override var hdrEnabled: Boolean
+            get() = hdrByMode[streamMode] == true
+            set(v) { hdrByMode[streamMode] = v }
         override fun selectHdr(on: Boolean) { calls += "hdr $on"; hdrEnabled = on }
         override var appliedConfig: StreamConfig? = null
         override var colourChoice = ColourChoice.NORMAL
@@ -181,14 +185,14 @@ class SettingsCatalogTest {
         assertEquals("Otomatik", c.options.first().label)
     }
 
-    @Test fun hdrRowOnlyInOyunAndGreyWithoutCapability() { // T-238, decision 0032
+    @Test fun hdrRowInDailyAndOyunHiddenInDrawingAndGreyWithoutCapability() { // T-238, decision 0032
         val s = SettingsCatalog.sections(h, inStream = true)
         val c = choice(s, "hdr")
         val applied = item(s, "hdr_applied") as SettingItem.Info
         assertEquals(listOf("Kapalı", "Açık"), c.options.map { it.label })
         assertEquals(listOf("off", "on"), c.options.map { it.id })
-        // Günlük and Çizim: hidden (SDR), also the applied line.
-        assertTrue(c.hidden()); assertTrue(applied.hidden())
+        // T-280: Günlük and Oyun show the row and the applied line; only Çizim (always SDR) hides them.
+        assertFalse(c.hidden()); assertFalse(applied.hidden())
         h.streamMode = StreamMode.DRAWING
         assertTrue(c.hidden()); assertTrue(applied.hidden())
         h.streamMode = StreamMode.GAME
@@ -220,6 +224,24 @@ class SettingsCatalogTest {
         val connect = SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.map { it.key }
         assertTrue("hdr" in connect)
         assertFalse("hdr_applied" in connect)
+    }
+
+    @Test fun hdrRowReadsAndWritesTheCurrentModesSetting() { // T-280
+        val s = SettingsCatalog.sections(h, inStream = true)
+        val c = choice(s, "hdr")
+        h.streamMode = StreamMode.DAILY
+        assertEquals("off", c.selected()) // Günlük default off
+        c.select("on")
+        assertEquals("on", c.selected())
+        h.streamMode = StreamMode.GAME
+        assertEquals("off", c.selected()) // Oyun's own setting is untouched
+        c.select("on")
+        h.streamMode = StreamMode.DAILY
+        c.select("off")
+        assertEquals("off", c.selected())
+        h.streamMode = StreamMode.GAME
+        assertEquals("on", c.selected()) // turning Günlük off left Oyun on
+        assertEquals(listOf("hdr true", "hdr true", "hdr false"), h.calls)
     }
 
     @Test fun colourRowInEveryModeAndGreyUnderHdr10() { // T-260, decisions 0033/0034
@@ -377,7 +399,7 @@ class SettingsCatalogTest {
         assertFalse(c.hidden()) // and it comes back
         h.streamMode = StreamMode.DRAWING
         assertEquals("Kare hızı (Çizim: hep 120)", c.titleText())
-        // no other row is hidden in Çizim except HDR (T-238: only in Oyun)
+        // no other row is hidden in Çizim except HDR (T-238/T-280: hidden only in Çizim)
         for (it in s.flatMap { it.items }.filterIsInstance<SettingItem.Choice>().filter { it.key != "frame_rate" && it.key != "hdr" }) assertFalse(it.key, it.hidden())
         c.select("60") // the host ignores it in Çizim
         assertEquals("120", c.selected())

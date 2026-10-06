@@ -1014,9 +1014,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             sendStreamPrefs(gameSettings.prefs(this@MainActivity.streamMode))
         }
         override val appliedBitrateKbps get() = streamConfig?.bitrateKbps
-        // T-238 (decision 0032): stored; one complete STREAM_PREFS only when Oyun's request changes.
+        // T-238/T-280 (decision 0032): stored per mode (Günlük, Oyun); one complete STREAM_PREFS only when the current mode's request changes.
         override val hdrCapability get() = gameSettings.hdr
-        override val hdrEnabled get() = gameSettings.hdrSetting
+        override val hdrEnabled get() = gameSettings.hdrSetting(this@MainActivity.streamMode)
         override fun selectHdr(on: Boolean) {
             gameSettings.selectHdr(on, this@MainActivity.streamMode)?.let { sendStreamPrefs(it) }
         }
@@ -1566,7 +1566,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-238: `ev=hdr_request` when [prefs] asks for a different dynamic range than the last request; returns [prefs]. */
     private fun loggedPrefs(prefs: StreamPrefs): StreamPrefs {
         if (hdrRequestLog.take(prefs.dynamicRange)) {
-            MbLog.i("hdr_request", HdrPolicy.requestFields(prefs.dynamicRange, streamMode, gameSettings.hdrSetting, gameSettings.hdr))
+            MbLog.i("hdr_request", HdrPolicy.requestFields(prefs.dynamicRange, streamMode, gameSettings.hdrSetting(streamMode), gameSettings.hdr))
         }
         return prefs
     }

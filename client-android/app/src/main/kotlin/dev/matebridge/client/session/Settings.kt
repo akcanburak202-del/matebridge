@@ -103,6 +103,27 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
 
     fun setHdrGame(on: Boolean) = store.putString(KEY_HDR_GAME, if (on) "1" else "0")
 
+    /** "HDR" in Günlük (decision 0032 update, T-280): its own setting, apart from Oyun's; default off, only a stored "1" enables. */
+    fun hdrDaily(): Boolean = store.getString(KEY_HDR_DAILY) == "1"
+
+    fun setHdrDaily(on: Boolean) = store.putString(KEY_HDR_DAILY, if (on) "1" else "0")
+
+    /** The "HDR" setting of [mode]: Oyun and Günlük each have one; Çizim has none (always SDR, false). */
+    fun hdrFor(mode: dev.matebridge.client.stream.StreamMode): Boolean = when {
+        mode.isGame -> hdrGame()
+        mode.isDrawing -> false
+        else -> hdrDaily()
+    }
+
+    /** Stores [mode]'s "HDR" setting; ignored for Çizim. */
+    fun setHdrFor(mode: dev.matebridge.client.stream.StreamMode, on: Boolean) {
+        when {
+            mode.isGame -> setHdrGame(on)
+            mode.isDrawing -> Unit
+            else -> setHdrDaily(on)
+        }
+    }
+
     /** Target bit rate (T-105, decision 0013): one of [dev.matebridge.client.stream.Bitrate.OPTIONS_KBPS]; default 0 = Otomatik. */
     fun bitrateKbps(): Long = dev.matebridge.client.stream.Bitrate.sanitize(store.getString(KEY_BITRATE)?.toLongOrNull())
 
@@ -245,7 +266,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         val USER_KEYS: List<String> get() = listOf(
             KEY_STATS, KEY_STREAM_MODE, KEY_BITRATE, KEY_PAD_SPEED, KEY_MOUSE_SPEED, KEY_CLIPBOARD, KEY_FILES,
             KEY_FILES_ROOT, KEY_FILES_RO, KEY_AUDIO, KEY_AUDIO_OUT, KEY_PEN_TRAIL, KEY_PEN_DOT, KEY_FINGER_OFF,
-            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_CURSOR,
+            KEY_TRANSPORT, KEY_GAME_RESOLUTION, KEY_FPS_DAILY, KEY_FPS_GAME, KEY_HDR_GAME, KEY_HDR_DAILY, KEY_CURSOR,
         )
 
         const val KEY_DEVICE_ID = "device_id"
@@ -259,6 +280,7 @@ class Settings(private val store: KeyValueStore, private val random: java.util.R
         const val KEY_FPS_DAILY = "fps_daily"
         const val KEY_FPS_GAME = "fps_game"
         const val KEY_HDR_GAME = "hdr_game"
+        const val KEY_HDR_DAILY = "hdr_daily"
         const val KEY_MODES_MIGRATED = "modes_migrated"
         const val KEY_PAD_SPEED = "touchpad_speed"
         const val KEY_MOUSE_SPEED = "mouse_speed"
