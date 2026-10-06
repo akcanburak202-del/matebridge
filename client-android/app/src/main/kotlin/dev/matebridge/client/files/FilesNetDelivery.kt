@@ -24,20 +24,20 @@ import java.util.concurrent.atomic.AtomicReference
 class FilesNetDelivery(
     private val post: (Runnable) -> Unit,
     private val currentGen: () -> Int,
-    private val deliver: (Int, FilesNet) -> Unit,
+    private val deliver: (gen: Int, msg: FilesNet, request: Int) -> Unit,
 ) {
     /** [closeSeen]: a CLOSE of this generation was coalesced into (or is) this state and has not been delivered. */
-    private data class Pending(val gen: Int, val msg: FilesNet, val closeSeen: Boolean)
+    private data class Pending(val gen: Int, val msg: FilesNet, val request: Int, val closeSeen: Boolean)
 
     private val slot = AtomicReference<Pending?>(null)
     private val queued = AtomicBoolean(false)
 
     /** False when an identical state already waits in the slot (nothing to do), true otherwise. */
-    fun offer(gen: Int, msg: FilesNet): Boolean {
+    fun offer(gen: Int, msg: FilesNet, request: Int = 0): Boolean {
         while (true) {
             val cur = slot.get()
             val closeSeen = !msg.isOpen || (cur != null && cur.gen == gen && cur.closeSeen)
-            val next = Pending(gen, msg, closeSeen)
+            val next = Pending(gen, msg, request, closeSeen)
             if (cur == next) return false
             if (slot.compareAndSet(cur, next)) break
         }
@@ -66,7 +66,7 @@ class FilesNetDelivery(
             return
         }
         // an eject that was coalesced away still happens: CLOSE first, then the newer OPEN
-        if (v.msg.isOpen && v.closeSeen) deliver(v.gen, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0))
-        deliver(v.gen, v.msg)
+        if (v.msg.isOpen && v.closeSeen) deliver(v.gen, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), 0)
+        deliver(v.gen, v.msg, v.request)
     }
 }

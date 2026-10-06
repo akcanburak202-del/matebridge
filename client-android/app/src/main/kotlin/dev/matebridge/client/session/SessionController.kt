@@ -126,7 +126,7 @@ interface SessionListener {
      * thread), sanitised by the machine. OPEN: the Mac wants the tablet files over Wi-Fi (start the server); CLOSE: stop
      * it. The file connections themselves belong to the controller (they close with the session).
      */
-    fun onFilesNet(msg: FilesNet, gen: Int) {}
+    fun onFilesNet(msg: FilesNet, gen: Int, requestId: Int) {}
 
     /**
      * T-269 round 3 (defence in depth): the scope of the tablet server that is READY now ([FilesServerScope.NONE] when
@@ -200,6 +200,7 @@ class SessionController(
     private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
     private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
     private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
+    private val forgetMailbox = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
     private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
     private val trustMailbox = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
     private val promptVisibleMailbox = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
@@ -346,6 +347,16 @@ class SessionController(
         audioMailbox.post(SessionMachine.Event.SetAudio(on))
     }
 
+    /**
+     * Non-blocking. T-269: the UI forgot the Mac's open request [requestId] with no server to publish about (sharing was
+     * switched off while waiting); the machine drops it if it is still the live one. Any thread.
+     */
+    fun forgetFilesNet(requestId: Int) {
+        if (terminated.get()) return
+        ensureEngine()
+        forgetMailbox.post(SessionMachine.Event.ForgetFilesNet(requestId))
+    }
+
     /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
     fun setFilesInfo(info: FilesInfo, scope: dev.matebridge.client.files.FilesServerScope) {
         if (terminated.get()) return
@@ -453,7 +464,7 @@ class SessionController(
         try {
             while (true) {
                 var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: expectMailbox.take() ?: promptVisibleMailbox.take() ?:
-                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: filesMailbox.take() ?:
+                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: forgetMailbox.take() ?: filesMailbox.take() ?:
                     migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
@@ -643,8 +654,8 @@ class SessionController(
             is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
             is SessionMachine.Action.FilesNetReceived -> {
                 // the host's file listener port is no secret; the pool sizes are the sanitised ones
-                MbLog.i("files_net_recv", "state=${a.msg.state} port=${a.msg.port} pool=${a.msg.pool} max=${a.msg.max}", "files")
-                listener.onFilesNet(a.msg, a.gen)
+                MbLog.i("files_net_recv", "state=${a.msg.state} port=${a.msg.port} pool=${a.msg.pool} max=${a.msg.max} req=${a.requestId}", "files")
+                listener.onFilesNet(a.msg, a.gen, a.requestId)
             }
             is SessionMachine.Action.FilesTunnel -> {
                 closeFilesTunnel("plan")
@@ -1071,6 +1082,7 @@ class SessionController(
             is SessionMachine.Event.SetPrefs -> LogLine('I', "stream_prefs_set", "fps=${e.prefs.fps} scale=${e.prefs.scalePermille} bitrate_kbps=${e.prefs.bitrateKbps}")
             is SessionMachine.Event.SetDisplayRate -> LogLine('I', "display_rate_set", "hz=${e.hz}")
             is SessionMachine.Event.SetAudio -> LogLine('I', "audio_prefs_set", "enabled=${if (e.enabled) 1 else 0}")
+            is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
             is SessionMachine.Event.Migrate -> LogLine(

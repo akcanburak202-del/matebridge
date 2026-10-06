@@ -171,9 +171,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val filesGate = FilesSessionGate()
 
     /** T-269: FILES_NET reaches the UI thread through one pending slot (the latest wins), so repeats cannot pile up. */
-    private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }, { filesGate.generation }) { gen, msg ->
+    private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }, { filesGate.generation }) { gen, msg, request ->
         // Also when the gate saw no change: after a stop (server FAILED/OFF) the Mac's OPEN is a new request, and a sync is cheap.
-        filesGate.onFilesNet(gen, msg)
+        filesGate.onFilesNet(gen, msg, request)
         syncFiles()
     }
 
@@ -618,7 +618,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
             // T-269 (decision 0035): the Mac opens / closes the tablet files over Wi-Fi. Same UI-thread order as onConnectionGen.
-            override fun onFilesNet(msg: FilesNet, gen: Int) { filesNetDelivery.offer(gen, msg) } // bounded: one queued run
+            override fun onFilesNet(msg: FilesNet, gen: Int, requestId: Int) { filesNetDelivery.offer(gen, msg, requestId) } // bounded: one queued run
 
             override fun filesServerScope() = if (::files.isInitialized) files.liveScope else dev.matebridge.client.files.FilesServerScope.NONE
 
@@ -2127,8 +2127,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun syncFiles(foreground: Boolean = started) {
         // T-269: while sharing is off or not permitted the Mac has seen OFF and closed; a stale open request must not
         // restart the server when it is switched back on (the Mac's menu sends a new one).
-        if (!settings.filesShare() || !files.hasPermission()) filesGate.forgetNet()
-        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen, filesGate.generation)
+        if (!settings.filesShare() || !files.hasPermission()) {
+            val id = filesGate.netRequestId
+            if (filesGate.forgetNet() && id != 0) controller.forgetFilesNet(id) // the machine forgets that request only
+        }
+        files.sync(
+            settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen, filesGate.generation,
+            filesGate.netRequestId,
+        )
     }
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI

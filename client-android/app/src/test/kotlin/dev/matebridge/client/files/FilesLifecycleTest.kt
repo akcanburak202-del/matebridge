@@ -212,8 +212,11 @@ class FilesLifecycleTest {
 
         fun sync(
             trusted: Boolean = true, transport: Transport? = Transport.USB, enabled: Boolean = true, foreground: Boolean = true,
-            netOpen: Boolean = false,
-        ) = lc.sync(enabled, permission = true, foreground = foreground, sessionTrusted = trusted, transport = transport, netOpen = netOpen)
+            netOpen: Boolean = false, requestId: Int = 0,
+        ) = lc.sync(
+            enabled, permission = true, foreground = foreground, sessionTrusted = trusted, transport = transport, netOpen = netOpen,
+            requestId = requestId,
+        )
     }
 
     @Test fun startsOnTrustedUsbAndPublishesReadyOnlyWhenListening() {
@@ -341,23 +344,72 @@ class FilesLifecycleTest {
         val r = Rig()
         val gate = trustedGate(5, Transport.WIFI)
         val queue = ArrayDeque<Runnable>()
-        val delivery = FilesNetDelivery({ queue.addLast(it) }, { gate.generation }) { gen, msg ->
-            if (gate.onFilesNet(gen, msg)) r.sync(transport = Transport.WIFI, netOpen = gate.netOpen)
+        val delivery = FilesNetDelivery({ queue.addLast(it) }, { gate.generation }) { gen, msg, req ->
+            gate.onFilesNet(gen, msg, req)
+            r.sync(transport = Transport.WIFI, netOpen = gate.netOpen, requestId = gate.netRequestId)
         }
         val open = FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12)
-        delivery.offer(5, open)
+        delivery.offer(5, open, 1)
         queue.removeFirst().run()
         r.servers[0].events.onListening(41000)
         r.events.clear()
-        // eject and reopen (same port) before the UI thread gets to run
+        // eject and reopen (same port) before the UI thread gets to run: a NEW request (id 2)
         delivery.offer(5, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0))
-        delivery.offer(5, open)
+        delivery.offer(5, open, 2)
         queue.removeFirst().run()
         assertEquals(listOf("standby", "stop:tok1", "start:tok2"), r.events.filterNot { it.startsWith("ready") })
         assertEquals(2, r.servers.size)
         assertNotEquals(r.servers[0].token, r.servers[1].token)
         assertSame(r.servers[0], r.servers[1].after) // the old workers (a running COPY) are waited for, then gone
         assertTrue(r.servers[0].stopped)
+    }
+
+    @Test fun everyServerIsTaggedWithTheOpenRequestItWasStartedForAndAStopNamesIt() {
+        val out = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val servers = mutableListOf<FakeServer>()
+        val lc = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { servers += it } },
+            newToken = { "tok${servers.size + 1}" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope -> out += info to scope },
+        )
+        fun sync(netOpen: Boolean, req: Int) = lc.sync(true, true, true, true, Transport.WIFI, netOpen = netOpen, generation = 9, requestId = req)
+        sync(true, 1)
+        servers[0].events.onListening(41000)
+        // the Mac ejected and reopened (request 2) while the UI was busy: the delayed teardown of request 1's server
+        // announces STANDBY for request 1 ...
+        sync(false, 0)
+        // ... and the reopen starts the next server for request 2
+        sync(true, 2)
+        servers[1].events.onListening(41001)
+        // request changes while a server runs (cannot normally happen: a CLOSE comes first): restart for the new one
+        sync(true, 3)
+        assertEquals(
+            listOf(
+                FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9, 1),
+                FilesInfo.STANDBY to FilesServerScope(false, -1, 1),
+                FilesInfo(FilesInfo.STATE_READY, 41001, "tok2") to FilesServerScope(true, 9, 2),
+                FilesInfo.OFF to FilesServerScope(false, -1, 2),
+            ),
+            out,
+        )
+        assertEquals(3, servers.size)
+    }
+
+    @Test fun theGateKeepsTheRequestIdOfTheLiveOpenAndForgetsItWithTheOpen() {
+        val g = trustedGate(2, Transport.WIFI)
+        assertEquals(0, g.netRequestId)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 5)
+        assertEquals(5, g.netRequestId)
+        assertTrue(g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 6)) // the same OPEN as a new request is a change
+        assertEquals(6, g.netRequestId)
+        assertTrue(g.forgetNet())
+        assertEquals(0, g.netRequestId)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12), 7)
+        g.onFilesNet(2, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), 0)
+        assertEquals(0, g.netRequestId)
     }
 
     @Test fun aUsbServerIsNotAWifiServer() {
