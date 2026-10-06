@@ -384,18 +384,33 @@ class FilesLifecycleTest {
         // ... and the reopen starts the next server for request 2
         sync(true, 2)
         servers[1].events.onListening(41001)
-        // request changes while a server runs (cannot normally happen: a CLOSE comes first): restart for the new one
+        // another port of the Mac's listener while this share is live (request 3): the SAME server (same token) is re-tagged and
+        // READY is published again for the new request; no OFF and no STANDBY in between (the Mac must not tear down)
         sync(true, 3)
         assertEquals(
             listOf(
                 FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9, 1),
                 FilesInfo.STANDBY to FilesServerScope(false, -1, 1),
                 FilesInfo(FilesInfo.STATE_READY, 41001, "tok2") to FilesServerScope(true, 9, 2),
-                FilesInfo.OFF to FilesServerScope(false, -1, 2),
+                FilesInfo(FilesInfo.STATE_READY, 41001, "tok2") to FilesServerScope(true, 9, 3),
             ),
             out,
         )
-        assertEquals(3, servers.size)
+        assertEquals(2, servers.size)
+        assertTrue(!servers[1].stopped)
+        // a retag before the server listens: its READY simply carries the newest request
+        val early = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val s2 = mutableListOf<FakeServer>()
+        val lc2 = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { s2 += it } },
+            newToken = { "t" }, publish = { }, onStatus = { }, log = { _, _, _ -> },
+            publishScoped = { info, scope -> early += info to scope },
+        )
+        lc2.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 4, requestId = 1)
+        lc2.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 4, requestId = 2)
+        s2[0].events.onListening(5)
+        assertEquals(listOf(FilesInfo(FilesInfo.STATE_READY, 5, "t") to FilesServerScope(true, 4, 2)), early)
+        assertEquals(1, s2.size)
     }
 
     @Test fun theGateKeepsTheRequestIdOfTheLiveOpenAndForgetsItWithTheOpen() {

@@ -143,6 +143,10 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     private var serverWifi = false
     private var serverGen = -1
     private var serverRequest = 0
+
+    /** The running server's port and token once it listens (0 / null before), to re-publish READY for a new request. */
+    private var serverPort = 0
+    private var serverToken: String? = null
     private var standbyShown = false
 
     @Volatile var status = FilesStatus.DISABLED
@@ -160,10 +164,12 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
         if (FilesSwitch.shouldRun(enabled, permission, foreground, sessionTrusted, transport, netOpen)) {
             val wifi = transport == Transport.WIFI
             // A running server of the other kind (cannot happen across a connection change, which drops trust first) goes first.
-            if (synchronized(lock) { server != null && (serverWifi != wifi || serverGen != generation || serverRequest != requestId) }) {
+            if (synchronized(lock) { server != null && (serverWifi != wifi || serverGen != generation) }) {
                 stop("mode", FilesInfo.OFF)
             }
-            synchronized(lock) { if (server == null) startLocked(wifi, generation, requestId) }
+            synchronized(lock) {
+                if (server == null) startLocked(wifi, generation, requestId) else retagLocked(requestId)
+            }
         } else {
             val standby = FilesSwitch.standbyEligible(enabled, permission, foreground, sessionTrusted, transport)
             stop(FilesSwitch.stopReason(enabled, permission, foreground, sessionTrusted, transport), if (standby) FilesInfo.STANDBY else FilesInfo.OFF)
@@ -192,13 +198,30 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     /** OFF and STANDBY describe no server; they only name the request (or 0) they end. */
     private fun idleScope(request: Int) = FilesServerScope(false, -1, request)
 
+    /**
+     * A new open request (another port of the Mac's listener, PROTOCOL 0x0A: only the file CONNECTIONS are replaced) while
+     * the same share is running: the server stays (same token, no OFF or STANDBY, the Mac must not tear down and unmount);
+     * it is tagged with the new request and READY is published again for it. Before it listens, the tag is simply updated
+     * (its READY then carries the new request).
+     */
+    private fun retagLocked(requestId: Int) {
+        if (serverRequest == requestId) return
+        serverRequest = requestId
+        val token = serverToken
+        if (serverPort != 0 && token != null) {
+            emit(FilesInfo(FilesInfo.STATE_READY, serverPort, token), FilesServerScope(serverWifi, serverGen, requestId))
+        }
+        log(false, "server", "retag request=$requestId")
+    }
+
     private fun startLocked(forWifi: Boolean, forGeneration: Int, forRequest: Int) {
         val myGen = ++gen
         val token = newToken()
         serverWifi = forWifi
         serverGen = forGeneration
         serverRequest = forRequest
-        val scope = FilesServerScope(forWifi, forGeneration, forRequest)
+        serverPort = 0
+        serverToken = null
         standbyShown = false // READY (or OFF) supersedes STANDBY
         val s = factory.create(token, object : Events {
             override val wifi: Boolean = forWifi
@@ -208,7 +231,9 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
             override fun onListening(port: Int) {
                 synchronized(lock) {
                     if (gen != myGen) return
-                    emit(FilesInfo(FilesInfo.STATE_READY, port, token), scope)
+                    serverPort = port
+                    serverToken = token
+                    emit(FilesInfo(FilesInfo.STATE_READY, port, token), FilesServerScope(forWifi, forGeneration, serverRequest))
                     setStatus(if (wifi) FilesStatus.WIFI_READY else FilesStatus.READY)
                 }
                 log(false, "server", "state=on port=$port")
@@ -219,7 +244,7 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
                     if (gen != myGen) return // stopped on purpose: stop() already reported OFF
                     retired = server
                     server = null
-                    emit(FilesInfo.OFF, idleScope(forRequest))
+                    emit(FilesInfo.OFF, idleScope(serverRequest))
                     setStatus(FilesStatus.FAILED)
                 }
                 log(true, "server", "state=off port=0 reason=${if (failed) "failed" else "ended"}")

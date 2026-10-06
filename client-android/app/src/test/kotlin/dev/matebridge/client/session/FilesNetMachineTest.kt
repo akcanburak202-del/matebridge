@@ -223,8 +223,54 @@ class FilesNetMachineTest {
         assertTrue(a.plans().isEmpty() || a.plans() == listOf<FilesTunnelPlan?>(null)) // the old server serves request 1 only
         assertEquals(
             listOf<FilesTunnelPlan?>(plan(gen, port = 47004, req = 2)),
-            m.step(Event.SetFiles(ready.copy(token = "ffffffffffffffffffffffffffffffff"), wifi(gen, req = 2))).plans(),
+            m.step(Event.SetFiles(ready, wifi(gen, req = 2))).plans(), // the same server (same token), re-tagged
         )
+    }
+
+    @Test fun aDifferentPortOpenDuringALiveShareKeepsTheServerPublishesNoOffOrStandbyAndTargetsTheNewPort() {
+        // The real chain: machine -> (gate, lifecycle) -> scoped FILES_INFO -> machine
+        val m = machine()
+        val gen = m.accepted()
+        val published = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val plans = mutableListOf<FilesTunnelPlan?>()
+        var events: dev.matebridge.client.files.FilesLifecycle.Events? = null
+        var stops = 0
+        val lc = dev.matebridge.client.files.FilesLifecycle<dev.matebridge.client.files.FilesLifecycle.Server>(
+            factory = { _, ev, _ ->
+                events = ev
+                object : dev.matebridge.client.files.FilesLifecycle.Server {
+                    override fun start() {}
+                    override fun stop() { stops++ }
+                }
+            },
+            newToken = { "0123456789abcdef0123456789abcdef" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope ->
+                published += info to scope
+                plans += m.step(Event.SetFiles(info, scope)).plans()
+            },
+        )
+        val gate = dev.matebridge.client.files.FilesSessionGate()
+        gate.onConnectionGen(gen, Transport.WIFI); gate.onUi(true); gate.onConfigApplied()
+        fun sync() = lc.sync(true, true, true, true, Transport.WIFI, gate.netOpen, gate.generation, gate.netRequestId)
+        fun deliver(a: List<Action>) {
+            for (n in a.nets()) gate.onFilesNet(n.gen, n.msg, n.requestId)
+            sync()
+        }
+        sync() // STANDBY
+        deliver(m.step(Event.Received(gen, open))) // live share on 47003 (request 1)
+        events!!.onListening(41000)
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 41000, req = 1)), plans.filterNotNull())
+        val before = published.size
+        // the Mac reopens on ANOTHER port while the share is live (request 2): only the file connections are replaced
+        deliver(m.step(Event.Received(gen, open.copy(port = 47004))))
+        val after = published.drop(before)
+        assertTrue("nothing but READY is published: $after", after.isNotEmpty() && after.all { it.first.ready })
+        assertEquals(FilesServerScope(true, gen, 2), after.last().second)
+        assertEquals(0, stops) // the server was never stopped (same token, same port)
+        assertEquals(plan(gen, port = 47004, dav = 41000, req = 2), plans.last())
     }
 
     @Test fun poolAndMaxAreClampedAndAPortlessOpenIsIgnored() {
