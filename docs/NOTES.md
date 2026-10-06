@@ -1549,3 +1549,12 @@ Ham: `~/.cache/matebridge-tools/data/fullchroma/{tablet,host,sf}-0023.log`.
 ## 2026-10-06 ~01:35 — T-261 cihazda tam renk başlamıyor (hotfix T-263)
 
 - Kullanıcı Tam renk seçti → "Görüntü durdu", takılı (boş beyaz düğme). Log: ana ImageReader `m7` (T-261 `MAX_IMAGES + 1`) ile Hisi çözücü `nBufferCountActual 6` → `setMaxDequeuedBufferCount (-2)` → `native_window_set_buffer_count failed` → `IllegalArgumentException` ×4 → `decoder_give_up`. 6 ile (00:25 testi) çalışıyordu. Ayrıca ana çözücü hatası tam renkten Keskin'e geri düşmüyor, görüntüyü bırakıyor (hata). Hotfix T-263 ajanda (6'ya dönüş + tutulan görüntü muhasebesi, ana çözücü hatasında chroma=1 geri düşüşü, boş düğme etiketi). Kullanıcı yarın devam edecek; geçici çözüm panelden Renk = Keskin/Normal.
+
+## 2026-10-06 ~10:15 — T-263 cihazda: Tam renk açılıyor; 0034 §9 gecikme kuralı geçti
+
+- T-263 (ana ImageReader 6, ana çözücü vazgeçerse chroma=1 geri dönüşü, "Yeniden dene" etiketi; Codex 2 tur, P2 düzeltildi) birleştirildi, APK 10:06 kuruldu. Wi-Fi, Günlük 60, 2800x1840, 30 Mbps; ~4,5 dk test (10:07:44–10:12:17), Keskin ↔ Tam renk 4 kez gidip geldi + arka plan/ön plan.
+- Tam renk her seferinde açıldı (`full_chroma_start` → `gl_present_init reuse=1 render_ts=1` → `healthy`); `decoder_give_up`, `full_chroma_disabled`, `fence_stall`, `img_errors` yok.
+- Gecikme (aynı oturum): `cap_cb_p50` Keskin ~54–95 ms, Tam renk ~50–69 ms; SF (BLAST katmanı) actual−desired p50 iki modda da 22,7 ms. Tam renk ölçülebilir ek gecikme getirmiyor → §9 durdurma kuralı geçti (≤ +5 ms). Mutlak değerler Wi-Fi'nin sıçramalı ağ gecikmesinden (net_p95 30–800 ms) yüksek, iki modda da aynı.
+- Tam renk istatistikleri: `aux_paired_pct` 50–88 (hâlâ yüksek değil), `aux_late` 60–280/10 s, `late_upgrades` 5–57/10 s (geç yükseltme çalışıyor), `reuse_pct` 80–100, `gl_ms_p50` 8–13 ms, p95 13–18 ms.
+- Kayıtlar: `~/.cache/matebridge-tools/data/2026-10-06-chroma/` (tablet.log, sf.log, sf.sh).
+- Görsel izlenim (ikon titremesi, hayalet renk) kullanıcıdan bekleniyor.
