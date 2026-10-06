@@ -203,6 +203,7 @@ private final class FakeTablet: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var fds: [Int32] = []
+    private var stallUntil = Date.distantPast
     let bound = Counter()
 
     init(filesPort: UInt16, sessionID: UInt32, upstreamPort: UInt16, schedule: SessionKeySchedule) {
@@ -214,6 +215,19 @@ private final class FakeTablet: @unchecked Sendable {
 
     func open(_ count: Int) {
         for _ in 0..<count { Thread.detachNewThread { [self] in connection() } }
+    }
+
+    /// The tablet stops reading its file connections for `seconds` after the next bytes arrive (a slow tablet).
+    func stall(seconds: Double) {
+        lock.withLock { stallUntil = Date().addingTimeInterval(seconds) }
+    }
+
+    private func stallIfNeeded() {
+        while true {
+            let until = lock.withLock { stallUntil }
+            if Date() >= until { return }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
     }
 
     func stop() {
@@ -254,6 +268,7 @@ private final class FakeTablet: @unchecked Sendable {
         while true {
             let bytes = TestNet.readSome(fd)
             if bytes.isEmpty { break }
+            stallIfNeeded()
             decoder.append(bytes)
             while let message = try? decoder.nextMessage() {
                 guard case .filesData(let data) = message else { continue }
@@ -311,7 +326,7 @@ private final class FilesNetSelfTestRunner: @unchecked Sendable {
 
     /// One bulk request through the proxy to the "tablet server" and its reply back; written on a second thread (the
     /// host's pumps stop reading a full direction, so one thread writing everything first could deadlock by design).
-    private func roundTrip(proxyPort: UInt16, payload: [UInt8]) -> (ok: Bool, seconds: Double) {
+    private func roundTrip(proxyPort: UInt16, payload: [UInt8], readDelay: Double = 0) -> (ok: Bool, seconds: Double) {
         guard let fd = TestNet.connect(port: proxyPort) else { return (false, 0) }
         defer { close(fd) }
         let start = Date()
@@ -320,6 +335,7 @@ private final class FilesNetSelfTestRunner: @unchecked Sendable {
         request += payload
         let writer = Thread { _ = TestNet.writeAll(fd, request) }
         writer.start()
+        if readDelay > 0 { Thread.sleep(forTimeInterval: readDelay) }  // a Finder that is slow to read
         let back = TestNet.readExact(fd, payload.count)
         return (back == payload, Date().timeIntervalSince(start))
     }
@@ -427,6 +443,36 @@ private final class FilesNetSelfTestRunner: @unchecked Sendable {
         Thread.sleep(forTimeInterval: 0.2)
         let fast = roundTrip(proxyPort: ports.proxy, payload: big)
         check(fast.ok && fast.seconds < slow.seconds, "cap follows the video target", String(format: "%.2f s", fast.seconds))
+
+        // 4b. Back pressure: a Finder that reads late and a tablet that reads late. The relay buffers stay within
+        //     64 KiB per connection and direction (the Finder side plus the one record being decoded), nothing is lost.
+        let bulk = randomBytes(4_000_000)
+        let lateReader = roundTrip(proxyPort: ports.proxy, payload: bulk, readDelay: 2)
+        check(lateReader.ok, "4 MB with a Finder that starts reading after 2 s is byte-identical")
+        tablet.stall(seconds: 2)
+        let slowTablet = roundTrip(proxyPort: ports.proxy, payload: bulk)
+        check(slowTablet.ok, "4 MB with a tablet that stalls for 2 s is byte-identical")
+        let peaks = service.peakBuffers
+        check(peaks.toTablet <= 64 * 1024, "Finder to tablet relay buffer never exceeds 64 KiB", "peak=\(peaks.toTablet)")
+        check(peaks.toFinder <= 64 * 1024 + ProtocolConstants.filesDataMax,
+              "tablet to Finder relay buffer stays within 64 KiB + one record", "peak=\(peaks.toFinder)")
+
+        // 4c. A FILES_HELLO with trailing extension bytes (65 byte payload) is valid (PROTOCOL.md section 2).
+        if let fd = TestNet.connect(port: ports.files) {
+            let nonce = (0..<16).map { _ in UInt8.random(in: 0...255) }
+            if var hello = try? Message.filesHello(FilesHello(sessionID: sessionID, clientNonce: nonce)).encode() {
+                hello[1] = 65  // payload length 22 + 43 extension bytes (little-endian u32, high bytes are 0)
+                hello += [UInt8](repeating: 0xAB, count: 43)
+                TestNet.writeAll(fd, hello)
+                var plain = FrameDecoder(connection: .files)
+                plain.append(TestNet.readSome(fd))
+                var ok = false
+                if let message = try? plain.nextMessage(), case .filesHelloAck(let ack) = message { ok = ack.isOK }
+                check(ok, "a FILES_HELLO with extension bytes is accepted")
+            }
+            close(fd)
+        }
+        Thread.sleep(forTimeInterval: 0.3)
 
         // 5. Admission: a wrong session id is REJECTED, three silent connections leave the third closed at once, and
         //    a silent connection is closed after the 5 s proof window.

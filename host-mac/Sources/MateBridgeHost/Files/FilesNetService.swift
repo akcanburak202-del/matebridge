@@ -37,10 +37,10 @@ public final class FilesNetService: @unchecked Sendable {
     /// Per direction and connection: the pumps stop reading from the source above `highWater`, resume below `lowWater`.
     static let highWater = 64 * 1024
     static let lowWater = 32 * 1024
+    /// Record framing and tag on top of a `FILES_DATA` chunk, as counted by the buffer check.
+    static let recordSlack = 64
     /// One `FILES_DATA` of the Finder to tablet direction (PROTOCOL.md section 4: on Wi-Fi at most 16 KiB).
     static let dataChunk = 16 * 1024
-    /// Largest plain `FILES_HELLO` payload read from a peer that has not proven itself (the real one has 22 bytes).
-    static let maxHelloPayload = 64
     /// A closing socket gets this long to deliver what it still owes.
     static let closeFlushSeconds: TimeInterval = 3
 
@@ -109,6 +109,9 @@ public final class FilesNetService: @unchecked Sendable {
     private var windowTicks = 0
     private var running = false
     private var loggedSocketGaps = false
+    /// Largest user-space write buffers seen since `start` (diagnostics for the selftest, never logged per byte).
+    private var peakFilePending = 0
+    private var peakLocalPending = 0
 
     private let fileOptions = FilesSocketOptions(noDelay: true, keepAlive: true, sendBufferBytes: 128 * 1024,
                                                  notSentLowatBytes: 16 * 1024, backgroundService: true)
@@ -117,6 +120,11 @@ public final class FilesNetService: @unchecked Sendable {
     public init() {}
 
     public var isRunning: Bool { queue.sync { running } }
+
+    /// Largest write buffers (bytes) of the Finder to tablet direction (file connection) and the tablet to Finder
+    /// direction (Finder connection) since `start`. The relay limit is 64 KiB per connection and direction; the second
+    /// may exceed it by the one record that was being decoded.
+    public var peakBuffers: (toTablet: Int, toFinder: Int) { queue.sync { (peakFilePending, peakLocalPending) } }
 
     // MARK: - Control (any thread)
 
@@ -161,12 +169,14 @@ public final class FilesNetService: @unchecked Sendable {
             windowTicks = 0
             running = true
             loggedSocketGaps = false
+            peakFilePending = 0
+            peakLocalPending = 0
             filesListener.start()
             proxy.start()
             logger.log(.info, "files_net", sessionID: sessionID, generation: 0,
                        fields: "state=listening files_port=\(filesListener.port) proxy_port=\(proxy.port) fallback=\(fallbacks)")
             run(machine.open(sessionID: sessionID, controlPeer: controlPeer, max: Int(TabletFilesPlanner.netMax),
-                             pool: Int(TabletFilesPlanner.netPool)))
+                             pool: Int(TabletFilesPlanner.netPool), now: Self.nowUs()))
             startTimer()
             return Ports(proxy: proxy.port, files: filesListener.port)
         }
@@ -218,7 +228,7 @@ public final class FilesNetService: @unchecked Sendable {
     }
 
     private func stopLocked(reason: String) {
-        run(machine.close(.sessionEnded))
+        run(machine.close(.sessionEnded, now: Self.nowUs()))
         fileListener?.cancel()
         proxyListener?.cancel()
         fileListener = nil
@@ -229,6 +239,8 @@ public final class FilesNetService: @unchecked Sendable {
         // Anything the machine did not know (a file connection before its first byte) still goes.
         for conn in Array(files.values) { conn.socket.closeNow() }
         for conn in Array(locals.values) { conn.socket.closeNow() }
+        // Sockets still flushing a close are cut as well: nothing of this run may keep transmitting, nor outlive it.
+        for conn in Array(closingFiles.values) { conn.socket.closeNow() }
         files.removeAll()
         locals.removeAll()
         closingFiles.removeAll()
@@ -316,24 +328,31 @@ public final class FilesNetService: @unchecked Sendable {
         }
     }
 
-    /// Plain phase: exactly one `FILES_HELLO` is valid (type 0x50, payload at most 64 bytes, hand-checked so a peer
-    /// that has not proven itself can never make the host buffer a large frame). Bytes behind it are records.
+    /// Plain phase: exactly one `FILES_HELLO` is valid (type 0x50; trailing extension bytes are allowed up to the
+    /// 65 536 byte payload limit of PROTOCOL.md section 2, so the 22 byte minimum and any longer one both pass). The
+    /// memory a peer that has not proven itself can pin is bounded by the limit of 2 such connections. Bytes behind
+    /// the frame are records.
     private func helloBytes(_ conn: FileConn, _ bytes: [UInt8]) {
         let id = conn.id
         conn.helloBuffer += bytes
         let header = ProtocolConstants.headerSize
         guard conn.helloBuffer.count >= header else { return }
-        guard conn.helloBuffer[0] == MessageType.filesHello.rawValue else { return run(machine.protocolError(id)) }
+        guard conn.helloBuffer[0] == MessageType.filesHello.rawValue else { return run(machine.protocolError(id, now: Self.nowUs())) }
         let length = (0..<4).reduce(UInt32(0)) { $0 | UInt32(conn.helloBuffer[1 + $1]) << (8 * UInt32($1)) }
-        guard length <= UInt32(Self.maxHelloPayload) else { return run(machine.protocolError(id)) }
+        guard length <= UInt32(ProtocolConstants.maxControlPayload) else { return run(machine.protocolError(id, now: Self.nowUs())) }
         let total = header + Int(length)
         guard conn.helloBuffer.count >= total else { return }
         var decoder = FrameDecoder(connection: .files)
-        decoder.append(Array(conn.helloBuffer[..<total]))
+        var offset = 0
+        while offset < total {  // `FrameDecoder` takes at most `maxReadChunk` bytes per call
+            let end = min(total, offset + FrameDecoder.maxReadChunk)
+            decoder.append(Array(conn.helloBuffer[offset..<end]))
+            offset = end
+        }
         let rest = Array(conn.helloBuffer[total...])
         conn.helloBuffer = []
         guard let message = try? decoder.nextMessage(), case .filesHello(let hello) = message else {
-            return run(machine.protocolError(id))
+            return run(machine.protocolError(id, now: Self.nowUs()))
         }
         run(machine.hello(id, hello, now: Self.nowUs()))
         if !rest.isEmpty, files[id]?.decoder != nil { recordBytes(conn, rest) }
@@ -341,16 +360,32 @@ public final class FilesNetService: @unchecked Sendable {
 
     /// Record phase: `PING` (proof, keep-alive) and `FILES_DATA` are the only valid messages; the machine decides.
     private func recordBytes(_ conn: FileConn, _ bytes: [UInt8]) {
-        let id = conn.id
         conn.decoder?.append(bytes)
+        pumpRecords(conn)
+    }
+
+    /// Pulls records out of the decoder. While the paired Finder connection has a full write buffer (64 KiB) no further
+    /// record is taken and the file socket is not read: at most that buffer plus the one record being decoded is held
+    /// per connection and direction (PROTOCOL.md section 5). Reading and decoding resume below 32 KiB.
+    private func pumpRecords(_ conn: FileConn) {
+        let id = conn.id
         while running, files[id] === conn, conn.decoder != nil {
+            if let lid = conn.local, let local = locals[lid], local.socket.pendingBytes >= Self.highWater {
+                conn.socket.pauseReading()
+                local.socket.notifyWhenPendingBelow(Self.lowWater) { [weak self, weak conn] in
+                    guard let self, let conn else { return }
+                    conn.socket.resumeReading()
+                    pumpRecords(conn)
+                }
+                return
+            }
             let message: Message?
             do {
                 message = try conn.decoder!.nextMessage()
             } catch is CryptoError {
-                return run(machine.recordAuthFailed(id))
+                return run(machine.recordAuthFailed(id, now: Self.nowUs()))
             } catch {
-                return run(machine.protocolError(id))
+                return run(machine.protocolError(id, now: Self.nowUs()))
             }
             guard let message else { return }
             let payload: [UInt8]? = if case .filesData(let d) = message { d.data } else { nil }
@@ -379,7 +414,7 @@ public final class FilesNetService: @unchecked Sendable {
         }
         let wait = limiter.reserve(bytes.count, lane: &local.lane, now: Self.nowNs())
         window.toTablet += bytes.count
-        if wait == 0, file.socket.pendingBytes < Self.highWater {
+        if wait == 0, hasRoom(for: bytes.count, on: file) {
             send(bytes, on: file)
             return
         }
@@ -398,13 +433,19 @@ public final class FilesNetService: @unchecked Sendable {
 
     private func releaseHeld(_ lid: LocalConnID) {
         guard running, let local = locals[lid], let held = local.held, let fid = local.file, let file = files[fid] else { return }
-        guard file.socket.pendingBytes < Self.highWater else {
+        guard hasRoom(for: held.count, on: file) else {
             file.socket.notifyWhenPendingBelow(Self.lowWater) { [weak self] in self?.releaseHeld(lid) }
             return
         }
         local.held = nil
         send(held, on: file)
         local.socket.resumeReading()
+    }
+
+    /// The 64 KiB relay buffer of the Finder to tablet direction has room for this chunk (checked before it is
+    /// enqueued, so the buffer never exceeds the limit). `lowWater` plus the largest chunk always fits.
+    private func hasRoom(for chunk: Int, on file: FileConn) -> Bool {
+        file.socket.pendingBytes + chunk + Self.recordSlack <= Self.highWater
     }
 
     /// Seals `bytes` (one `FILES_DATA`, 1...16 KiB) and queues it on the file connection.
@@ -424,6 +465,7 @@ public final class FilesNetService: @unchecked Sendable {
             return
         }
         file.socket.write(sealed)
+        peakFilePending = max(peakFilePending, file.socket.pendingBytes)
         if !file.hostSentData {
             file.hostSentData = true
             machine.hostSentData(file.id)  // the first FILES_DATA is the host's; the tablet may answer from now on
@@ -437,7 +479,7 @@ public final class FilesNetService: @unchecked Sendable {
             local.held = nil
             send(held, on: file)
         }
-        run(machine.localClosed(lid))
+        run(machine.localClosed(lid, now: Self.nowUs()))
     }
 
     // MARK: - Machine actions (on queue)
@@ -450,7 +492,7 @@ public final class FilesNetService: @unchecked Sendable {
             case .startRecords(let id, let clientNonce, let hostNonce):
                 guard let conn = files[id] else { continue }
                 guard let keys = keyProvider?(sessionID, clientNonce, hostNonce) else {
-                    run(machine.keysUnavailable(id))
+                    run(machine.keysUnavailable(id, now: Self.nowUs()))
                     continue
                 }
                 conn.decoder = RecordDecoder(key: keys.c2h, connection: .files)
@@ -485,14 +527,11 @@ public final class FilesNetService: @unchecked Sendable {
                     local.socket.closeNow()
                 }
             case .dataToLocal(let fid, let lid):
-                guard let payload, let local = locals[lid], let file = files[fid] else { continue }
+                guard let payload, let local = locals[lid], files[fid] != nil else { continue }
                 local.sawInbound = true
                 window.fromTablet += payload.count
-                local.socket.write(payload)
-                if local.socket.pendingBytes >= Self.highWater {  // Finder reads slowly: stop reading the tablet
-                    file.socket.pauseReading()
-                    local.socket.notifyWhenPendingBelow(Self.lowWater) { [weak file] in file?.socket.resumeReading() }
-                }
+                local.socket.write(payload)  // `pumpRecords` takes no further record while this buffer is full
+                peakLocalPending = max(peakLocalPending, local.socket.pendingBytes)
             case .log(let level, let ev, let conn, let fields):
                 let id = conn.map { "conn=\($0.raw) " } ?? ""
                 logger.log(level, ev, sessionID: sessionID, generation: 0, fields: id + fields)
