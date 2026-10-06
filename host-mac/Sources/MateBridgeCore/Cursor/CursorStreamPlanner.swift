@@ -80,6 +80,16 @@ public struct CursorStreamPlanner: Sendable {
 
     public init(configuration: Configuration = Configuration()) { self.configuration = configuration }
 
+    /// What the planner waits to hear about the video cursor (`true`: back in the video, `false`: out of it); nil when it
+    /// waits for nothing. Lets the host ignore an outcome that is not the one asked for.
+    public var expectedVideoShows: Bool? {
+        switch phase {
+        case .applyingHide: return false
+        case .applyingShow: return true
+        case .off, .enabling, .on: return nil
+        }
+    }
+
     /// Samples are wanted (the tracker should poll) in every phase but `off`.
     public var isTracking: Bool { phase != .off }
 

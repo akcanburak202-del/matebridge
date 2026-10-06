@@ -82,3 +82,13 @@ Tek seri model: `VideoCursorSwitch` içindeki BÜTÜN video-imleç değişiklikl
 3. **Düzeltme hatası bildirimi:** `attach` düzeltmesi `reportsFailure` ile işaretlenir; gizleme reddedilirse `onCorrectionFailed(generation)` -> `CursorService.videoCursorLost` -> `planner.videoCursorLost()` (yalnız `.on` fazı: akış durur, istek unutulur, tablet zaman aşımıyla videoya döner). Başka kuşağa ait bildirim yok sayılır. Testler: `CURPLAN18`, `CURPLAN19`.
 4. **Sınırlı PREFS posta kutusu:** Core `CursorPrefsMailbox` (en yeni kazanır, tek bekleyen uyandırma, oturum sınırında `clear()`); `CursorService.prefs` kuyruğa her mesajda blok eklemez. Testler: `CURPREFS1-3`.
 - Test EDİLMEDİ: gerçek yakalamada düzeltme hatası yolu ve seri kuyruğun gerçek `updateConfiguration` ile sırası (cihaz gerekir); sıralama mantığı `VideoCursorWish` testlerinde.
+
+## Codex --high tur 3 (3 x P2): operasyon kuyruğu yerine uzlaştırıcı (reconciler)
+
+`VideoCursorWish` ve operasyon kuyruğu kaldırıldı. `VideoCursorSwitch` artık Core `VideoCursorReconciler` tutuyor: tek durum, istenen `(shows, generation)` (en yeni kazanır, kilit altında eşzamanlı yazılır). Tek uygulayıcı döngü, GEÇERLİ yakalamanın gerçek durumunu (`ScreenCapture.showsCursorNow`) istenenle karşılaştırır ve fark varken tek `updateConfiguration` çalıştırır; başarısızlıkta istenen değişmez, sınırlı geri çekilme (0,25 -> 8 sn) ile yeniden dener; yeni istek/yakalama/reset geri çekilmeyi keser. Kuyruk yok, bu yüzden birikme yok.
+1. **A'nın gizleme hatası, B (gizli) bağlandıktan sonra:** istenen durum hatayla "göster"e dönmüyor; B zaten istenen durumda, döngü hiçbir şey yapmaz (`CURREC10`). Hata geçerli yakalamada değilse bildirilmez. Gerçekten geçerli yakalamada gizleme reddedilirse bir kez `Outcome(ok:false)`; `CursorService` akışı durdurur ve `request(shows: true)` ile imleci geri ister (böylece o sırada gizli gelmiş bir yakalama da geri alınır).
+2. **PREFS uyandırması oturum sınırına kapsamlı:** `CursorPrefsMailbox.post` bir sınır jetonu döndürür, `take(token:)` eski sınırın uyandırmasına hiçbir şey vermez ve mesajı yeni oturumun kendi uyandırmasına bırakır (`CURPREFS2`, `CURPREFS4` = bulgu senaryosu).
+3. **Sınırsız dizi yok:** operasyon dizisi gitti; durum sabit boyutlu.
+- Testler: `VideoCursorReconcilerTests` (`CURREC1-12`), `CursorPrefsMailboxTests` (`CURPREFS1-4`), `CURPLAN18/19` ve `expectedVideoShows`. Ayrıca geçici (commit edilmeyen) bir testle `CursorService` + sahte yazıcı: 50 tekrarlı `PREFS(1)` tek uyandırmayla işlendi, devralma sonrası B'nin `PREFS(1)`'i uygulandı, oturum sonunda istenen durum "videoda".
+- Test EDİLMEDİ: gerçek yakalamada `updateConfiguration` reddi/yeniden deneme ve yakalama değişimi sırasındaki yarış (cihaz gerekir).
+

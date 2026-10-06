@@ -83,9 +83,9 @@ final class CursorService: @unchecked Sendable {
         self.sampler = sampler ?? CursorSampler(store: shapes)
         self.video = video
         self.link = link
-        // A corrective hide of a capture that started with the cursor in it failed: stop the flow (no second cursor).
-        video.onCorrectionFailed { [weak self] generation in
-            self?.queue.async { [weak self] in self?.videoCursorLost(generation: generation) }
+        // What the video switch reports about the desire it was given (the capture has it, or refused it).
+        video.onOutcome { [weak self] outcome in
+            self?.queue.async { [weak self] in self?.videoOutcome(outcome) }
         }
     }
 
@@ -123,10 +123,10 @@ final class CursorService: @unchecked Sendable {
     /// `CURSOR_PREFS` of the active session. Bounded: one message waits, the newest, and one wake-up is queued however
     /// many arrive (a repeating tablet cannot grow the cursor queue).
     func prefs(sessionID: UInt32, enabled: Bool) {
-        let wake = prefsLock.withLock { prefsBox.post(session: sessionID, enabled: enabled) }
-        guard wake else { return }
+        guard let token = prefsLock.withLock({ prefsBox.post(session: sessionID, enabled: enabled) }) else { return }
         queue.async { [self] in
-            guard let message = prefsLock.withLock({ prefsBox.take() }) else { return }
+            // A wake-up of an earlier session boundary gets nothing: the message waits for its own session's wake-up.
+            guard let message = prefsLock.withLock({ prefsBox.take(token: token) }) else { return }
             guard message.session == self.sessionID, message.session != 0 else { return }
             guard supported else {
                 logger.log(.info, "cursor_prefs", sessionID: message.session, generation: 0,
@@ -187,31 +187,32 @@ final class CursorService: @unchecked Sendable {
                     cache.removeAll()  // the tablet may drop its images when it turns the flow off
                 }
             case .setVideoCursor(let shows):
-                let wanted = epoch
-                let generation = videoGeneration
-                Task { [self] in
-                    // The switch refuses it when the session is over by the time it runs (a stale hide can never
-                    // undo the `reset()` of the session end).
-                    let ok = await video.set(shows: shows, generation: generation)
-                    queue.async { [self] in videoResult(shows: shows, ok: ok, epoch: wanted) }
-                }
+                // Returns at once; the answer comes as an outcome. The desire carries this session's generation, so
+                // the switch ignores it if the session is over by then (it cannot undo the session end's reset).
+                video.request(shows: shows, generation: videoGeneration)
             }
         }
     }
 
-    /// The capture's corrective hide failed (`VideoCursorSwitch`): the video keeps its cursor, so the flow must stop or
-    /// the tablet would draw a second one for good. Stale when it is about another session.
-    private func videoCursorLost(generation: Int) {
-        guard generation == videoGeneration, sessionID != 0 else { return }
-        logger.log(.warning, "cursor_video", sessionID: sessionID, generation: 0, fields: "shows=0 ok=0 reason=correction")
-        execute(planner.videoCursorLost())
-    }
-
-    private func videoResult(shows: Bool, ok: Bool, epoch wanted: Int) {
-        logger.log(ok ? .info : .warning, "cursor_video", sessionID: sessionID, generation: 0,
-                   fields: "shows=\(shows ? 1 : 0) ok=\(ok ? 1 : 0)")
-        guard wanted == epoch else { return }  // the session it was for is gone: `reset` put everything back
-        execute(planner.videoCursorResult(ok: ok))
+    /// The video switch's report about the desire of this session (stale when it is about another one):
+    /// - the capture has what was asked: the planner goes on;
+    /// - a refusal: the video keeps (or does not get back) its cursor. A refused hide stops the flow (no second cursor;
+    ///   the tablet times out and falls back) and the cursor is asked back into the video, which also puts it back in
+    ///   a capture that came up hidden meanwhile; a refused show stops the flow too, and the switch keeps retrying.
+    private func videoOutcome(_ outcome: VideoCursorReconciler.Outcome) {
+        guard outcome.generation == videoGeneration, sessionID != 0 else { return }
+        logger.log(outcome.ok ? .info : .warning, "cursor_video", sessionID: sessionID, generation: 0,
+                   fields: "shows=\(outcome.shows ? 1 : 0) ok=\(outcome.ok ? 1 : 0)")
+        if outcome.ok {
+            if planner.expectedVideoShows == outcome.shows { execute(planner.videoCursorResult(ok: true)) }
+            return
+        }
+        if planner.expectedVideoShows == outcome.shows {
+            execute(planner.videoCursorResult(ok: false))
+        } else if !outcome.shows {
+            execute(planner.videoCursorLost())  // a hide nobody here was waiting for (a capture brought in line)
+        }
+        if !outcome.shows { video.request(shows: true, generation: videoGeneration) }
     }
 
     private func startTimer() {
