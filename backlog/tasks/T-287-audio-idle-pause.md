@@ -1,7 +1,7 @@
 ---
 id: T-287
 title: İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
