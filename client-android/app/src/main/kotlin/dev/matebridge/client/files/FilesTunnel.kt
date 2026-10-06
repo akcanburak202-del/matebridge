@@ -117,6 +117,8 @@ class FilesTunnel(
      * (`reason=scope_mismatch`), so a USB-scope or previous-session server is never reached through the tunnel.
      */
     private val davScope: () -> FilesServerScope,
+    /** A new unconnected socket for the local connection to the tablet's own server (tests wrap it). */
+    private val newDavSocket: () -> Socket = { Socket() },
     /** A socket write (Mac side or tablet-server side) with no progress for this long closes BOTH sockets of its connection. */
     private val writeTimeoutMs: Long = WRITE_TIMEOUT_MS,
 ) {
@@ -257,6 +259,7 @@ class FilesTunnel(
         @Volatile private var ackTimedOut = false
         @Volatile private var davEnded = false
         @Volatile private var stalled = false
+        @Volatile private var davWriteFailed = false
 
         /** One watch per writing thread (the reader writes to the local server, the pump and the idle PING write to the Mac). */
         private val hostWatch = watchdog.Watch { onStall() }
@@ -366,7 +369,7 @@ class FilesTunnel(
                 } catch (e: SocketTimeoutException) {
                     0
                 }
-                if (n < 0) return if (davEnded) "dav_eof" else "host_eof"
+                if (n < 0) return if (davWriteFailed) "dav_write_failed" else if (davEnded) "dav_eof" else "host_eof"
                 if (n > 0) channel.decoder.feed(buf, 0, n)
                 while (n > 0) {
                     val msg = channel.decoder.next() ?: break
@@ -375,8 +378,15 @@ class FilesTunnel(
                         is FilesData -> {
                             if (davOut == null) davOut = pair(channel, out)
                             val data = msg.data.value
+                            if (davWriteFailed) continue // the local server stopped reading: what the Mac still sends is dropped
                             val dout = davOut
-                            watched(davWatch) { dout.write(data); dout.flush() }
+                            try {
+                                watched(davWatch) { dout.write(data); dout.flush() }
+                            } catch (e: IOException) {
+                                if (closing.get() || closed.get()) throw e // the stall watchdog or a close: end as before
+                                onLocalWriteFailed()
+                                continue
+                            }
                             h2c += data.size
                             bytesFromHost.addAndGet(data.size.toLong())
                         }
@@ -392,11 +402,26 @@ class FilesTunnel(
             }
         }
 
+        /**
+         * The local server stopped reading (e.g. an early 401/403 to a big PUT, then it closed its input): it may still be
+         * sending its answer. Stop writing to it and drop the rest of what the Mac sends on this connection, but keep the
+         * pump running so the Mac gets the answer instead of an EOF or reset; the connection then ends when the server
+         * closes (the pump's FIN and drain timer), or after at most [DRAIN_GRACE_MS] from now if it never does.
+         */
+        private fun onLocalWriteFailed() {
+            davWriteFailed = true
+            try {
+                timer.schedule({ closeAll() }, DRAIN_GRACE_MS, TimeUnit.MILLISECONDS)
+            } catch (e: RejectedExecutionException) {
+                closeAll()
+            }
+        }
+
         /** The first FILES_DATA arrived: connect to the tablet's own server and start the tablet-to-Mac pump. */
         private fun pair(channel: FilesChannel, out: OutputStream): OutputStream {
             val sc = davScope()
             if (!sc.wifi || sc.generation != plan.gen) throw ScopeMismatch() // never the USB root or an earlier session's server
-            val d = Socket()
+            val d = newDavSocket()
             dav = d
             if (closing.get() || closed.get()) { closeQuietly(d); throw IOException("closed") }
             d.connect(InetSocketAddress(LOOPBACK, plan.davPort), DAV_CONNECT_TIMEOUT_MS)

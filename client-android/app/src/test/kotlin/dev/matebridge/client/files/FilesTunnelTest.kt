@@ -170,7 +170,11 @@ class FilesTunnelTest {
     // ---- scripted tablet server ----
 
     /** What the tablet's own server does with a local connection: echo everything, or answer from [answer] then close. */
-    private inner class TestDav(val echo: Boolean = true, val closeAfterEcho: Boolean = false, val answer: ByteArray? = null) : AutoCloseable {
+    private inner class TestDav(
+        val echo: Boolean = true, val closeAfterEcho: Boolean = false, val answer: ByteArray? = null,
+        /** The answer comes this long after the first request chunk (an early error reply that is not instant). */
+        val answerDelayMs: Long = 0,
+    ) : AutoCloseable {
         val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
         val port get() = server.localPort
         val accepted = AtomicInteger()
@@ -203,6 +207,7 @@ class FilesTunnelTest {
                     // read one chunk of the request, answer, close (a "Connection: close" answer)
                     val n = input.read(buf)
                     if (n > 0) got += buf.copyOf(n)
+                    if (answerDelayMs > 0) Thread.sleep(answerDelayMs)
                     out.write(answer); out.flush()
                     s.close()
                     return
@@ -228,11 +233,11 @@ class FilesTunnelTest {
     private fun tunnel(
         host: TestHost, dav: TestDav?, pool: Int = 2, max: Int = 12, secrets: SessionSecrets = this.secrets,
         pingMs: Int = FilesTunnel.PING_INTERVAL_MS, ackMs: Long = FilesTunnel.ACK_TIMEOUT_MS, logs: MutableList<String>? = null,
-        writeMs: Long = FilesTunnel.WRITE_TIMEOUT_MS,
+        writeMs: Long = FilesTunnel.WRITE_TIMEOUT_MS, newDav: () -> Socket = { Socket() },
     ): FilesTunnel {
         val plan = FilesTunnelPlan(7, "127.0.0.1", host.port, pool, max, dav?.port ?: 1, 2712847316L)
         return FilesTunnel(
-            plan, secrets, davScope = { davScopeNow },
+            plan, secrets, davScope = { davScopeNow }, newDavSocket = newDav,
             log = { _, ev, f -> logs?.add("$ev $f") },
             pingIntervalMs = pingMs, ackTimeoutMs = ackMs, writeTimeoutMs = writeMs,
         ).also { toClose += AutoCloseable { it.close() }; it.start() }
@@ -510,6 +515,52 @@ class FilesTunnelTest {
             assertFalse(line, line.contains("127.0.0.1"))
         }
         assertNull(logs.firstOrNull { it.contains("path=") })
+    }
+
+    /** A local socket whose writes fail after [allow] of them (the server closed its read side), reads work as usual. */
+    private class BrokenWriteSocket(private val allow: Int) : Socket() {
+        override fun getOutputStream(): java.io.OutputStream {
+            val real = super.getOutputStream()
+            var n = 0
+            return object : java.io.OutputStream() {
+                override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    if (++n > allow) throw IOException("Broken pipe")
+                    real.write(b, off, len)
+                }
+                override fun flush() = real.flush()
+                override fun close() = real.close()
+            }
+        }
+    }
+
+    @Test fun anEarlyAnswerFromTheLocalServerStillReachesTheMacWhenItsInputIsClosed() {
+        // e.g. a 401/403 to a big PUT: the server answers after the first chunk, then stops reading and closes. Our next
+        // local write fails; the connection must NOT be torn down before the answer is forwarded.
+        val answer = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n".toByteArray()
+        val host = TestHost(); val dav = TestDav(echo = false, answer = answer, answerDelayMs = 300)
+        val logs = CopyOnWriteArrayList<String>()
+        val t = tunnel(host, dav, pool = 1, logs = logs, newDav = { BrokenWriteSocket(allow = 1) })
+        assertTrue(host.awaitProven(1))
+        val c = host.conns[0]
+        c.send(FilesData(Bytes("PUT /big HTTP/1.1\r\n\r\n".toByteArray())))
+        repeat(5) { c.send(FilesData(Bytes(http(8 * 1024)))) } // the body keeps coming: the first of these fails locally
+        assertTrue(eventually(5_000) { c.data().size == answer.size })
+        assertArrayEquals(answer, c.data())
+        assertTrue(eventually { c.eof }) // then the connection ends (the server closed)
+        assertTrue(eventually { logs.any { it.startsWith("files_conn_closed") && it.contains("reason=dav_write_failed") } })
+        assertFalse(t.isClosed)
+        assertTrue(host.awaitProven(2)) // and the pool replaced it
+    }
+
+    @Test fun aLocalServerThatStopsReadingAndNeverAnswersIsLetGoAfterTheDrainGrace() {
+        val host = TestHost(); val dav = TestDav(echo = false, answer = null).also { }
+        val t = tunnel(host, dav, pool = 1, newDav = { BrokenWriteSocket(allow = 0) })
+        assertTrue(host.awaitProven(1))
+        val c = host.conns[0]
+        c.send(FilesData(Bytes("GET / HTTP/1.1\r\n\r\n".toByteArray())))
+        assertTrue(eventually(8_000) { c.eof }) // bounded by FilesTunnel.DRAIN_GRACE_MS
+        assertFalse(t.isClosed)
     }
 
     @Test fun theTunnelNeverPairsWithAServerThatIsNotTheWifiServerOfItsGeneration() {
