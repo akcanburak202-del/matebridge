@@ -22,6 +22,25 @@ object AAudioNative {
     const val ERROR_NULL = -886
     const val PERF_LOW_LATENCY = 12
 
+    // aaudio_stream_state_t (T-287, [pause] results).
+    const val STATE_PAUSING = 5
+    const val STATE_PAUSED = 6
+    const val STATE_STOPPING = 9
+    const val STATE_STOPPED = 10
+    const val STATE_DISCONNECTED = 13
+
+    /** Short name of an AAudio stream state for logs. */
+    fun stateName(state: Int): String = when (state) {
+        STATE_PAUSING -> "pausing"
+        STATE_PAUSED -> "paused"
+        STATE_STOPPING -> "stopping"
+        STATE_STOPPED -> "stopped"
+        STATE_DISCONNECTED -> "disconnected"
+        4 -> "started"
+        3 -> "starting"
+        else -> "state$state"
+    }
+
     // Layout of open()'s info array; must match the Info enum in mbaudio.cpp.
     const val I_ERROR = 0
     const val I_STAGE = 1
@@ -48,6 +67,12 @@ object AAudioNative {
     /** Opens (not started) and writes one burst of silence; returns the handle, or 0 (see `info[I_ERROR/I_STAGE]`). */
     external fun open(sharing: Int, startBursts: Int, info: IntArray): Long
     external fun start(handle: Long): Int
+    /**
+     * T-287: suspends a started stream (writer thread, not real time): [stop] false = requestPause, true =
+     * requestStop; waits up to [timeoutNs] for the state change. Returns the stream state ([STATE_PAUSED] ...) or a
+     * negative AAudio error. [start] resumes it.
+     */
+    external fun pause(handle: Long, stop: Int, timeoutNs: Long): Int
     /** Frames written (may be short on timeout) or a negative AAudio error. */
     external fun write(handle: Long, data: ShortArray, frames: Int, timeoutNs: Long): Int
     /** CLOCK_MONOTONIC timestamp into `out[0]` (frame position) and `out[1]` (ns); returns an AAudio result. */

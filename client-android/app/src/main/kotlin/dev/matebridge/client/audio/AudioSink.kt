@@ -56,6 +56,24 @@ interface AudioSink {
     /** T-114: the last [headroom] came from the output's timestamp (else from its counters). */
     val headroomFromTs: Boolean get() = false
 
+    /**
+     * T-287: the output can be suspended while the source is silent ([pause]) and resumed ([resume]); false for
+     * AudioTrack, which keeps writing silence.
+     */
+    val canPause: Boolean get() = false
+
+    /** T-287: the stream state after the last [pause] (logs). */
+    val pauseState: String get() = "-"
+
+    /**
+     * T-287: suspends the (started) output, writer thread, not real time: [stop] false = pause (data kept), true =
+     * stop. True if it is paused or on its way (then only [resume] or [close] may follow; no [write]).
+     */
+    fun pause(stop: Boolean): Boolean = false
+
+    /** T-287: starts a paused output again; the next [write] may follow at once. False if it could not. */
+    fun resume(): Boolean = false
+
     /** Output underruns since open. */
     fun xruns(): Int
 

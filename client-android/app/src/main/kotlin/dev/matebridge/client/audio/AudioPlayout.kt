@@ -18,6 +18,7 @@ import dev.matebridge.client.session.MbLog
 import dev.matebridge.client.session.Transport
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.LockSupport
 
 /**
  * Mac audio on the tablet (decisions 0011, 0012): one writer thread per host stream feeds an [AudioSink] (AAudio
@@ -54,6 +55,13 @@ import java.util.concurrent.TimeUnit
  *    a window with headroom below one burst, an estimated underflow or (where reported) an xrun grows the buffer by one
  *    burst ([OutBufGrowth]). A grown size is remembered per AAudio path ([OutBufMemory]) and the next output starts
  *    there; `--ei audio_buf_bursts` overrides the start.
+ *  - Idle pause (T-287, [IdlePause]): an AAudio output that has had no packet for 10 s (the host sends nothing while the
+ *    Mac is silent, T-279) is paused, and the writer parks until a packet arrives, a stop or a rebuild; then the
+ *    output is started again and [PlayoutCore] plays the new sound after its usual quick restart (the long gap is
+ *    classified idle by its capture-time jump). Logs: `idle_pause`, `resume` (start cost), `first_sound` (first packet
+ *    to first audible burst, also logged without pausing). A pause or resume that fails turns pausing off for the stream
+ *    (a failed resume rebuilds the output). AudioTrack is never paused. `--es audio_idle_pause off|pause|stop`
+ *    ([launchIdlePauseRaw], developer gate) picks requestPause (default), requestStop or no pausing.
  *  - ACTION_AUDIO_BECOMING_NOISY mutes the stream and calls [onNoisy] (the UI turns audio off, so the host stops and
  *    the Mac's own output returns). No audio focus is requested, so the tablet's own media keeps playing.
  *
@@ -62,7 +70,7 @@ import java.util.concurrent.TimeUnit
  *
  * [launchOutRaw] (`--es audio_out aaudio|track`) and [launchBufBursts] (`--ei audio_buf_bursts N`, [AudioBufferConfig])
  * are the launch experiment switches. The caller passes them only behind the developer gate (T-185, decision 0026);
- * null = not given.
+ * null = not given. [launchIdlePauseRaw] is the same kind of switch for the idle pause ([IdlePause.resolve]).
  */
 class AudioPlayout(
     context: Context,
@@ -70,6 +78,7 @@ class AudioPlayout(
     storedOutPref: AudioOutPref = AudioOutPref.AUTO,
     launchOutRaw: String? = null,
     launchBufBursts: Int? = null,
+    launchIdlePauseRaw: String? = null,
     private val onNoisy: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
@@ -98,6 +107,7 @@ class AudioPlayout(
     private val trackBurst: Int
     private val nativeRate: Int
     private val bufBurstsRaw: Int? = launchBufBursts
+    private val idlePauseMode: IdlePause.Mode
     private val policy: SinkPolicy
 
     private val noisyReceiver = object : BroadcastReceiver() {
@@ -122,6 +132,9 @@ class AudioPlayout(
             MbLog.w("audio_out_pref_unknown", "using=${resolved.pref.id}", COMPONENT) // the raw value is not logged
         }
         val pref = resolved.pref
+        val idleResolved = IdlePause.resolve(launchIdlePauseRaw)
+        idlePauseMode = idleResolved.mode
+        if (idleResolved.unknown) MbLog.w("audio_idle_pause_unknown", "using=${idlePauseMode.id}", COMPONENT) // raw value not logged
         // TRACK does not load the native library (as before); a later switch to AUTO lets AAudioSink.open check it.
         val lib = pref != AudioOutPref.TRACK && AAudioNative.available
         policy = SinkPolicy(pref, pref == AudioOutPref.TRACK || lib)
@@ -134,7 +147,7 @@ class AudioPlayout(
                 "low_latency_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_LOW_LATENCY))} " +
                 "pro_feature=${b(pm.hasSystemFeature(PackageManager.FEATURE_AUDIO_PRO))} rate=$RATE " +
                 "buf_bursts=${bufBurstsRaw?.let { AudioBufferConfig.startBursts(it) } ?: "default"} " +
-                "audio_out=${pref.name.lowercase()} aaudio_lib=${b(lib)}",
+                "audio_out=${pref.name.lowercase()} aaudio_lib=${b(lib)} idle_pause=${idlePauseMode.id}",
             COMPONENT,
         )
         try {
@@ -263,6 +276,7 @@ class AudioPlayout(
         val s = stream ?: return
         if (!gate.accepts(f, gen) || f.streamId != s.id) { s.rejected++; return }
         s.core.buffer.write(f.sampleIndex, f.captureTimeUs, f.data.value, f.frameCount)
+        s.onPacket()
     }
 
     /** Terminal (onDestroy). */
@@ -294,15 +308,34 @@ class AudioPlayout(
         /** [OutBufMemory] path of the current output; null for AudioTrack (not remembered). Writer thread only. */
         private var outBufPath: String? = null
         val finished = CountDownLatch(1)
+        /** T-287: pausing rules and state of this stream (writer thread only). */
+        private val idlePause = IdlePause(idlePauseMode)
+        private val firstSound = FirstSoundTimer()
+        /** The writer is parked with its output paused; the reader wakes it on a packet. */
+        @Volatile private var parked = false
+        @Volatile private var writer: Thread? = null
 
         fun start() {
             MbLog.i("audio_start", "stream_id=$id", COMPONENT)
-            Thread({ run() }, "mb-audio-$id").also { it.isDaemon = true; it.start() }
+            Thread({ run() }, "mb-audio-$id").also { writer = it; it.isDaemon = true; it.start() }
         }
 
         /** Any thread: the writer reopens its output before its next burst (T-101 output preference). */
         fun requestRebuild(reason: String) {
-            if (running) rebuildReason = reason
+            if (running) {
+                rebuildReason = reason
+                wakeWriter()
+            }
+        }
+
+        /** Control reader thread: a packet was added to the jitter buffer (T-287). No allocation, no blocking. */
+        fun onPacket() {
+            firstSound.onPacket(System.nanoTime())
+            if (parked) wakeWriter()
+        }
+
+        private fun wakeWriter() {
+            writer?.let { LockSupport.unpark(it) }
         }
 
         /** Any thread, non-blocking. */
@@ -311,6 +344,7 @@ class AudioPlayout(
             running = false
             MbLog.i("audio_stop", "stream_id=$id reason=$reason", COMPONENT)
             current?.interrupt()
+            wakeWriter()
         }
 
         private fun run() {
@@ -529,6 +563,7 @@ class AudioPlayout(
             var lastAvMs: Long? = null
             var lastAudioMs: Long? = null
             var avSkipSeen = core.skipTrims // T-125
+            var wasPlaying = false
             rawLogged = 0
             meter.reset()
             while (running) {
@@ -550,6 +585,22 @@ class AudioPlayout(
                     nextTsAt = 0; nextLogAt = clock.written + RATE; xrunBase = null
                     rawLogged = 0
                     meter.reset()
+                    idlePause.onNewOutput()
+                }
+                // T-287: a long silence suspends the output; the writer parks here until a packet, a stop or a rebuild.
+                if (idlePause.shouldPause(core.state == PlayoutCore.State.PRIMING, core.framesSinceLastPacket, t.canPause)) {
+                    when (parkIdle(t)) {
+                        Park.STOPPED -> return
+                        Park.REBUILD -> continue
+                        Park.RESUMED -> {
+                            // The device's counters and timestamps stood still: re-read them before the next write, and
+                            // do not act on the first second's output underruns (the start may count one).
+                            nextTsAt = 0
+                            meter.reset()
+                            xrunBase = null
+                        }
+                        Park.NOT_PAUSED -> Unit
+                    }
                 }
                 val priming = core.state == PlayoutCore.State.PRIMING
                 val probing = probe != null
@@ -576,6 +627,10 @@ class AudioPlayout(
                     }
                 }
                 core.render(out, t.burst)
+                idlePause.onRendered()
+                val playing = core.state == PlayoutCore.State.PLAYING
+                if (playing && !wasPlaying) logFirstSound()
+                wasPlaying = playing
                 val headroom = t.headroom()
                 meter.onWriteStart(headroom, System.nanoTime(), t.headroomCounter, t.headroomFromTs)
                 val w = t.write(out, t.burst)
@@ -633,6 +688,78 @@ class AudioPlayout(
             }
         }
 
+        /**
+         * T-287: pauses [t], parks until a packet arrives (or a stop or rebuild is requested) and starts it again.
+         * NOT_PAUSED: the pause failed (pausing is then off for this stream) and [t] still runs. REBUILD: a rebuild
+         * request (or a failed resume) is pending; [t] may be paused and is closed by the rebuild. STOPPED: [stop].
+         */
+        private fun parkIdle(t: AudioSink): Park {
+            val idleS = core.framesSinceLastPacket / RATE
+            val packets = core.buffer.packets
+            val stop = idlePause.mode == IdlePause.Mode.STOP
+            val t0 = System.nanoTime()
+            val ok = t.pause(stop)
+            val pauseMs = (System.nanoTime() - t0) / 1_000_000
+            if (!ok) {
+                idlePause.disable("pause_failed")
+                MbLog.w(
+                    "idle_pause_failed",
+                    "stream_id=$id api=${t.api} mode=${idlePause.mode.id} code=${t.lastError} state=${t.pauseState} pause_ms=$pauseMs",
+                    COMPONENT,
+                )
+                return Park.NOT_PAUSED
+            }
+            idlePause.onPaused()
+            MbLog.i(
+                "idle_pause",
+                "stream_id=$id api=${t.api} mode=${idlePause.mode.id} idle_s=$idleS state=${t.pauseState} pause_ms=$pauseMs " +
+                    "count=${idlePause.pauses}",
+                COMPONENT,
+            )
+            val pausedAtNs = System.nanoTime()
+            parked = true
+            while (running && rebuildReason == null && core.buffer.packets == packets) {
+                LockSupport.parkNanos(this, PARK_CHECK_NS) // unpark() on a packet, stop or rebuild; the timeout is a safety net
+            }
+            parked = false
+            val wokeNs = System.nanoTime()
+            if (!running) return Park.STOPPED
+            if (rebuildReason != null) {
+                MbLog.i("resume_skipped", "stream_id=$id reason=rebuild paused_ms=${(wokeNs - pausedAtNs) / 1_000_000}", COMPONENT)
+                return Park.REBUILD
+            }
+            val arrivedNs = firstSound.peek()
+            val s0 = System.nanoTime()
+            val resumed = t.resume()
+            val startMs = (System.nanoTime() - s0) / 1_000_000
+            MbLog.i(
+                "resume",
+                "stream_id=$id api=${t.api} mode=${idlePause.mode.id} ok=${b(resumed)} paused_ms=${(wokeNs - pausedAtNs) / 1_000_000} " +
+                    "wake_ms=${if (arrivedNs != 0L) ms1(wokeNs - arrivedNs) else "-"} start_ms=$startMs",
+                COMPONENT,
+            )
+            if (!resumed) {
+                idlePause.disable("resume_failed")
+                rebuildReason = "resume_failed"
+                return Park.REBUILD
+            }
+            idlePause.onResumed()
+            return Park.RESUMED
+        }
+
+        /** T-287: playback started: how long after the first packet of a gap (logged with or without pausing). */
+        private fun logFirstSound() {
+            val arrivedNs = firstSound.take()
+            if (arrivedNs == 0L) return
+            val ns = System.nanoTime() - arrivedNs
+            if (ns !in 0..FIRST_SOUND_MAX_NS) return // a gap that never became a restart
+            MbLog.i(
+                "first_sound",
+                "stream_id=$id api=${current?.api ?: "-"} ms=${ms1(ns)} idle_pause=${idlePause.mode.id} pauses=${idlePause.pauses}",
+                COMPONENT,
+            )
+        }
+
         /** `audio_clock_raw` lines logged for the current output (T-101): the first read and one ~1 s in. */
         private var rawLogged = 0
 
@@ -683,7 +810,7 @@ class AudioPlayout(
                     "underflow_est=${if (win.headroomMinFrames != null) win.underflowEst else "-"} " +
                     "headroom_source=${win.source} out_headroom_counter_min_frames=${win.counterMinFrames ?: "-"} " +
                     "write_gap_ms_max=${ms1(win.gapMaxNs)} write_busy_ms_max=${ms1(win.busyMaxNs)} " +
-                    "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} late_frames=${buf.lateFrames} " +
+                    "drops=${buf.dropEvents} drop_ms=${buf.dropFrames / MS} gaps=${buf.gapEvents} gap_ms=${buf.gapFrames / MS} jumps=${buf.jumpEvents} idle_gaps=${core.idleGaps} idle_pauses=${idlePause.pauses} late_frames=${buf.lateFrames} " +
                     "resyncs=${d.resyncs} rebuffers=${d.rebuffers} rejected=$rejected muted=${b(core.muted)} " +
                     "refill_trims=${core.refillTrims} refill_trim_ms=${core.refillTrimFrames / MS} " +
                     "skip_trims=${core.skipTrims} skip_trim_ms=${core.skipTrimFrames / MS} " +
@@ -708,6 +835,10 @@ class AudioPlayout(
         const val PREVIOUS_JOIN_MS = 500L
         const val REASON_SHARED_LATENCY = "shared_latency"
         const val REASON_PREF = "pref"
+        /** T-287: a parked writer re-checks its wake conditions at least this often (normally it is unparked). */
+        const val PARK_CHECK_NS = 1_000_000_000L
+        /** T-287: a first-sound stamp older than this belongs to a gap that never ended in a restart. */
+        const val FIRST_SOUND_MAX_NS = 5_000_000_000L
 
         fun b(v: Boolean) = if (v) 1 else 0
 
@@ -718,3 +849,6 @@ class AudioPlayout(
         }
     }
 }
+
+/** T-287: how [AudioPlayout]'s writer left its idle park. */
+private enum class Park { NOT_PAUSED, RESUMED, REBUILD, STOPPED }
