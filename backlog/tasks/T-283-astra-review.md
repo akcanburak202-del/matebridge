@@ -1,7 +1,7 @@
 ---
 id: T-283
 title: Review — gpt-6-astra (high), 2026-10-04 değerlendirmesinden bu yana + riskli dört bölge
-status: todo
+status: in-progress
 phase: 6
 owner: orchestrator
 depends_on: [T-282]
@@ -34,6 +34,9 @@ Kullanıcı onayı (2026-10-06): Codex `gpt-6-astra`, `model_reasoning_effort=hi
 4. Onay yalnız bu çalıştırmayı kapsar (başarısız olursa bir kez yeniden). Başka astra kullanımları için yeniden sorulur.
 
 ## Plan
+
+- İstem scratch'te (`astra-prompt.txt`), `main` @ T-282 sonrası sabit SHA. `codex exec -m gpt-6-astra -s read-only -c 'model_reasoning_effort="high"' -o <scratch>/astra-out.md`, arka planda.
+- Çıktı aynen `docs/reviews/2026-10-07/astra-review.md`'ye, üstüne triyaj. P1/P2 doğrulaması okuma ajanlarıyla (paralel), gerçekse kart.
 
 ## Handoff
 
