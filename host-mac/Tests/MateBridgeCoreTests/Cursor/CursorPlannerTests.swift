@@ -159,6 +159,25 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
         #expect(p.observe(snap(300), nowUs: 1_010_000).send == snap(300))
     }
 
+    @Test func CURPLAN18_aLostVideoCursorStopsARunningFlow() {
+        var p = onPlanner()
+        #expect(p.videoCursorLost() == [.stopTracking])
+        #expect(p.phase == .off && !p.wanted)
+        #expect(p.observe(snap(9), nowUs: 9_000_000).send == nil)
+        // The tablet's later request starts over.
+        #expect(p.prefs(enabled: true) == [.startTracking])
+    }
+
+    @Test func CURPLAN19_aLostVideoCursorIsIgnoredWhenNothingRuns() {
+        var p = CursorStreamPlanner()
+        #expect(p.videoCursorLost().isEmpty)
+        _ = p.prefs(enabled: true)
+        #expect(p.videoCursorLost().isEmpty)  // still enabling
+        _ = p.observe(snap(), nowUs: 0)
+        #expect(p.videoCursorLost().isEmpty)  // the planner's own hide is in flight and answers itself
+        #expect(p.phase == .applyingHide)
+    }
+
     @Test func CURPLAN17_customIntervals() {
         var c = CursorStreamPlanner.Configuration()
         c.minIntervalUs = 1_000
@@ -256,6 +275,35 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
         _ = c.use(4)
         c.forget(4)
         #expect(c.use(4) == false)
+    }
+}
+
+@Suite struct CursorPrefsMailboxTests {
+    @Test func CURPREFS1_theNewestWinsAndOnlyOneWakeIsScheduled() {
+        var m = CursorPrefsMailbox()
+        #expect(m.post(session: 5, enabled: true) == true)
+        #expect(m.post(session: 5, enabled: false) == false)
+        #expect(m.post(session: 5, enabled: true) == false)
+        let t = m.take()
+        #expect(t?.session == 5 && t?.enabled == true)
+        #expect(m.take() == nil)
+        #expect(m.post(session: 5, enabled: false) == true)  // the wake was spent
+    }
+
+    @Test func CURPREFS2_aSessionBoundaryVoidsWhatWasPosted() {
+        var m = CursorPrefsMailbox()
+        _ = m.post(session: 5, enabled: true)
+        m.clear()
+        #expect(m.post(session: 6, enabled: false) == false)  // the first wake is still on its way
+        let t = m.take()
+        #expect(t?.session == 6 && t?.enabled == false)
+    }
+
+    @Test func CURPREFS3_aWakeThatFindsNothingIsHarmless() {
+        var m = CursorPrefsMailbox()
+        _ = m.post(session: 5, enabled: true)
+        m.clear()
+        #expect(m.take() == nil)
     }
 }
 

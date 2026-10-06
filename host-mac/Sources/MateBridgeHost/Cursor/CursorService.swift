@@ -61,6 +61,10 @@ final class CursorService: @unchecked Sendable {
     private var videoGeneration = 0
     private var warmedUp = false
 
+    /// `CURSOR_PREFS` waiting for the cursor queue: one, newest wins, one wake-up (any thread, under `prefsLock`).
+    private let prefsLock = NSLock()
+    private var prefsBox = CursorPrefsMailbox()
+
     // Both queues, under `unitLock`.
     private let unitLock = NSLock()
     private var outbox = CursorOutbox<Unit>()
@@ -79,16 +83,24 @@ final class CursorService: @unchecked Sendable {
         self.sampler = sampler ?? CursorSampler(store: shapes)
         self.video = video
         self.link = link
+        // A corrective hide of a capture that started with the cursor in it failed: stop the flow (no second cursor).
+        video.onCorrectionFailed { [weak self] generation in
+            self?.queue.async { [weak self] in self?.videoCursorLost(generation: generation) }
+        }
     }
 
     // MARK: Session events (any thread; the session queue calls them)
 
     func sessionStarted(sessionID: UInt32, supported: Bool) {
+        // Read now, in the caller's order of events: the previous session's `reset()` ran before this call and the next
+        // one's will run after it, whenever the block below gets its turn.
+        let generation = video.generation
+        prefsLock.withLock { prefsBox.clear() }
         queue.async { [self] in
             epoch += 1
             self.sessionID = sessionID
             self.supported = supported
-            videoGeneration = video.generation  // after the previous session's `reset()` (it ran before this block)
+            videoGeneration = generation
             resetSession()
         }
     }
@@ -97,6 +109,7 @@ final class CursorService: @unchecked Sendable {
     /// forgotten. Safe to call more than once.
     func sessionEnded() {
         video.reset()  // the wish is back at once, whatever the cursor queue is doing
+        prefsLock.withLock { prefsBox.clear() }
         queue.async { [self] in
             epoch += 1
             let wasOn = planner.phase != .off
@@ -107,17 +120,22 @@ final class CursorService: @unchecked Sendable {
         }
     }
 
-    /// `CURSOR_PREFS` of the active session.
+    /// `CURSOR_PREFS` of the active session. Bounded: one message waits, the newest, and one wake-up is queued however
+    /// many arrive (a repeating tablet cannot grow the cursor queue).
     func prefs(sessionID: UInt32, enabled: Bool) {
+        let wake = prefsLock.withLock { prefsBox.post(session: sessionID, enabled: enabled) }
+        guard wake else { return }
         queue.async { [self] in
-            guard sessionID == self.sessionID, sessionID != 0 else { return }
+            guard let message = prefsLock.withLock({ prefsBox.take() }) else { return }
+            guard message.session == self.sessionID, message.session != 0 else { return }
             guard supported else {
-                logger.log(.info, "cursor_prefs", sessionID: sessionID, generation: 0,
-                           fields: "enabled=\(enabled ? 1 : 0) ignored=no_capability")
+                logger.log(.info, "cursor_prefs", sessionID: message.session, generation: 0,
+                           fields: "enabled=\(message.enabled ? 1 : 0) ignored=no_capability")
                 return
             }
-            logger.log(.info, "cursor_prefs", sessionID: sessionID, generation: 0, fields: "enabled=\(enabled ? 1 : 0)")
-            execute(planner.prefs(enabled: enabled))
+            logger.log(.info, "cursor_prefs", sessionID: message.session, generation: 0,
+                       fields: "enabled=\(message.enabled ? 1 : 0)")
+            execute(planner.prefs(enabled: message.enabled))
         }
     }
 
@@ -179,6 +197,14 @@ final class CursorService: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// The capture's corrective hide failed (`VideoCursorSwitch`): the video keeps its cursor, so the flow must stop or
+    /// the tablet would draw a second one for good. Stale when it is about another session.
+    private func videoCursorLost(generation: Int) {
+        guard generation == videoGeneration, sessionID != 0 else { return }
+        logger.log(.warning, "cursor_video", sessionID: sessionID, generation: 0, fields: "shows=0 ok=0 reason=correction")
+        execute(planner.videoCursorLost())
     }
 
     private func videoResult(shows: Bool, ok: Bool, epoch wanted: Int) {
