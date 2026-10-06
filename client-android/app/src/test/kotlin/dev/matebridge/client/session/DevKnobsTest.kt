@@ -355,15 +355,16 @@ class DevKnobsTest {
         assertTrue("dec_wait" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
-    @Test fun aeadPathKnobIsDebugOnlyDefaultLegacyAndProfileListed() {
+    @Test fun aeadPathKnobIsDebugOnlyDefaultDirectAndProfileListed() {
+        val direct = dev.matebridge.client.security.AeadPath.DIRECT
         val legacy = dev.matebridge.client.security.AeadPath.LEGACY
-        assertEquals(legacy, parse().aeadPath)
-        assertEquals(legacy, parse("aead_path" to "direct").aeadPath) // ignored without dev
-        val k = parse("dev" to true, "aead_path" to "direct")
-        assertEquals(dev.matebridge.client.security.AeadPath.DIRECT, k.aeadPath)
-        assertEquals(listOf("aead_path:direct"), k.knobs)
-        assertEquals(dev.matebridge.client.security.AeadPath.LEGACY, parse("dev" to true, "aead_path" to " Legacy ").aeadPath)
-        assertEquals(legacy, parse("dev" to true, "aead_path" to "boom").aeadPath)
+        assertEquals(direct, parse().aeadPath)
+        assertEquals(direct, parse("aead_path" to "legacy").aeadPath) // ignored without dev
+        val k = parse("dev" to true, "aead_path" to "legacy")
+        assertEquals(legacy, k.aeadPath)
+        assertEquals(listOf("aead_path:legacy"), k.knobs)
+        assertEquals(direct, parse("dev" to true, "aead_path" to " Direct ").aeadPath)
+        assertEquals(direct, parse("dev" to true, "aead_path" to "boom").aeadPath)
         assertEquals(listOf("aead_path:other"), parse("dev" to true, "aead_path" to "boom").knobs)
         assertTrue("aead_path" in DevKnobs.DEBUG_ONLY_KEYS)
     }

@@ -28,23 +28,26 @@ class RecordAeadPathTest {
 
     private fun split(rec: ByteArray) = rec.copyOf(4) to rec.copyOfRange(4, rec.size)
 
-    @Test fun parseKnowsTheThreeIdsAndDefaultsToLegacy() {
-        assertEquals(AeadPath.LEGACY, AeadPath.parse(null))
-        assertEquals(AeadPath.LEGACY, AeadPath.parse("nonsense"))
-        assertEquals(AeadPath.LEGACY, AeadPath.parse("spi")) // removed in T-292 rework: a fixed-SPI Cipher never calls engineInit
+    @Test fun parseKnowsTheTwoIdsAndDefaultsToDirect() {
+        assertEquals(AeadPath.DIRECT, AeadPath.parse(null))
+        assertEquals(AeadPath.DIRECT, AeadPath.parse("nonsense"))
+        assertEquals(AeadPath.LEGACY, AeadPath.parse("legacy"))
+        assertEquals(AeadPath.LEGACY, AeadPath.parse(" Legacy "))
+        assertEquals(AeadPath.DIRECT, AeadPath.parse("spi")) // removed in T-292 rework: a fixed-SPI Cipher never calls engineInit
         assertEquals(AeadPath.DIRECT, AeadPath.parse(" DIRECT "))
         assertEquals(AeadPath.DIRECT, AeadPath.parse("direct"))
         assertEquals(setOf("legacy", "direct"), AeadPath.IDS)
-        assertEquals(AeadPath.LEGACY, Records.aeadPath) // the process default stays legacy until the A/B says otherwise
+        assertEquals(AeadPath.DIRECT, Records.aeadPath) // adopted after the Game 60 device A/B
     }
 
     @Test fun openerUsesTheProcessDefaultUnlessGivenAPath() {
-        assertEquals(AeadPath.LEGACY, RecordOpener(key).path)
+        assertEquals(AeadPath.DIRECT, RecordOpener(key).path)
+        assertEquals(AeadPath.LEGACY, RecordOpener(key, 0, AeadPath.LEGACY).path)
         assertEquals(AeadPath.DIRECT, RecordOpener(key, 0, AeadPath.DIRECT).path)
         val saved = Records.aeadPath
         try {
-            Records.aeadPath = AeadPath.DIRECT
-            assertEquals(AeadPath.DIRECT, RecordOpener(key).path)
+            Records.aeadPath = AeadPath.LEGACY
+            assertEquals(AeadPath.LEGACY, RecordOpener(key).path)
         } finally {
             Records.aeadPath = saved
         }
