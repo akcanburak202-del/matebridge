@@ -34,6 +34,9 @@ public enum MessageType: UInt8, Sendable, CaseIterable {
     case settingsOpen = 0x08
     case filesInfo = 0x09
     case filesNet = 0x0A
+    case cursorPrefs = 0x0B
+    case cursorShape = 0x0C
+    case cursorState = 0x0D
     case pen = 0x10
     case key = 0x11
     case pointerRel = 0x12

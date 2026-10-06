@@ -704,6 +704,30 @@ extension SessionMachineTests {
         activate(&m, A)
         #expect(m.received(A, info, now: 1) == [.deliver(A, info)])
     }
+
+    @Test func cursorPrefsIsDeliveredOnlyFromTheActiveSession() {
+        let prefs = Message.cursorPrefs(CursorPrefs(enabled: true))
+        var pending = makeMachine()
+        _ = pending.connectionOpened(A, now: 0)
+        _ = pending.received(A, hello(), now: 0)
+        #expect(pending.received(A, prefs, now: 1).isEmpty)
+
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        #expect(m.received(A, prefs, now: 1) == [.deliver(A, prefs)])
+    }
+
+    @Test func cursorShapeAndStateFromTheClientAreIgnored() {
+        var m = makeMachine(approved: [device(1)])
+        activate(&m, A)
+        let shape = Message.cursorShape(CursorShape(shapeID: 1, widthPt16: 16, heightPt16: 16, hotXPt16: 0,
+                                                    hotYPt16: 0, data: [1]))
+        let state = Message.cursorState(CursorState(seq: 1, x: 0, y: 0, visible: true, shapeID: 1, hostTimeUs: 0))
+        #expect(m.received(A, shape, now: 1).isEmpty)
+        #expect(m.received(A, state, now: 1).isEmpty)
+        // The session is alive and still delivers.
+        #expect(m.received(A, keyDown(), now: 2) == [.deliver(A, keyDown())])
+    }
 }
 
 // MARK: - SETTINGS_OPEN from the host menu (T-106, decision 0013)
