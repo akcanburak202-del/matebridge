@@ -551,7 +551,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
         }
         if (audioAllowed) {
-            audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts) {
+            audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause) {
                 runOnUiThread { onAudioBecomingNoisy() }
             }
         }

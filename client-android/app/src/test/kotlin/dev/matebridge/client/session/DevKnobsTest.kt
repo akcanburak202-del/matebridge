@@ -32,6 +32,7 @@ class DevKnobsTest {
         "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
         "pace_dcap_half" to 3, "pace_feedback" to false,
         "catch_up" to false, "cursor_predict" to false, "dec_wait" to "event", "aead_path" to "direct",
+        "audio_idle_pause" to "stop",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -45,6 +46,7 @@ class DevKnobsTest {
         assertNull(k.transport)
         assertNull(k.audioOut)
         assertNull(k.audioBufBursts)
+        assertNull(k.audioIdlePause)
         assertTrue(k.quickAck)
         assertFalse(k.netBench)
         assertNull(k.decoderFault)
@@ -104,6 +106,7 @@ class DevKnobsTest {
         assertEquals("wifi", k.transport)
         assertEquals("track", k.audioOut)
         assertEquals(3, k.audioBufBursts)
+        assertEquals("stop", k.audioIdlePause)
         assertFalse(k.quickAck)
         assertTrue(k.netBench)
         assertEquals("dequeue", k.decoderFault)
@@ -165,7 +168,7 @@ class DevKnobsTest {
         assertEquals(
             listOf(
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
-                "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
+                "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
                 "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "dec_wait:event", "aead_path:direct", "stats_1s:1",
             ),

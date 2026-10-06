@@ -169,6 +169,26 @@ Java_dev_matebridge_client_audio_AAudioNative_start(JNIEnv*, jobject, jlong h) {
     return AAudioStream_requestStart(o->stream);
 }
 
+// T-287: suspends the stream while the source is silent for a long time (writer thread only; never on the data path).
+// stop == 0: requestPause (buffered data is kept, the counters stay continuous); otherwise requestStop. Both are
+// asynchronous, so the stream state is waited for up to timeoutNs. Returns the AAudio stream state afterwards (>= 0:
+// 5 pausing, 6 paused, 9 stopping, 10 stopped, 13 disconnected) or the negative AAudio error of the request.
+// The stream is resumed with start().
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_matebridge_client_audio_AAudioNative_pause(JNIEnv*, jobject, jlong h, jint stop, jlong timeoutNs) {
+    Out* o = fromHandle(h);
+    if (o == nullptr) return AAUDIO_ERROR_NULL;
+    const aaudio_result_t r = stop != 0 ? AAudioStream_requestStop(o->stream) : AAudioStream_requestPause(o->stream);
+    if (r != AAUDIO_OK) return r;
+    const aaudio_stream_state_t pending = stop != 0 ? AAUDIO_STREAM_STATE_STOPPING : AAUDIO_STREAM_STATE_PAUSING;
+    aaudio_stream_state_t cur = AAudioStream_getState(o->stream);
+    if (cur == pending) {
+        // The result of the wait is not needed: the state it reached (or still has after the timeout) is returned.
+        AAudioStream_waitForStateChange(o->stream, pending, &cur, timeoutNs);
+    }
+    return static_cast<jint>(cur);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_matebridge_client_audio_AAudioNative_write(JNIEnv* env, jobject, jlong h, jshortArray data, jint frames,
                                                      jlong timeoutNs) {

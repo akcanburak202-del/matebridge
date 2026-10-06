@@ -34,14 +34,15 @@ class AAudioSink private constructor(
     override var lastError = 0
         private set
     private var closed = false
-    private val openedNs = System.nanoTime()
+    /** Start of the stream (or of its last [resume]): the first writes get the longer start timeout. */
+    private var startedNs = System.nanoTime()
 
     override fun logFields(): String =
         "api=$api sharing=${if (exclusive) "exclusive" else "shared"} mmap=$mmap burst=$burst buf=$bufFrames " +
             "capacity=$capacity max_buf=$maxBufFrames perf_mode=$perfName"
 
     override fun write(pcm: ShortArray, frames: Int): Int {
-        val timeout = if (System.nanoTime() - openedNs < START_GRACE_NS) START_WRITE_TIMEOUT_NS else WRITE_TIMEOUT_NS
+        val timeout = if (System.nanoTime() - startedNs < START_GRACE_NS) START_WRITE_TIMEOUT_NS else WRITE_TIMEOUT_NS
         val r = AAudioNative.write(handle, pcm, frames, timeout)
         if (r == frames) return r
         if (r >= 0) {
@@ -61,6 +62,38 @@ class AAudioSink private constructor(
 
     /** The native side zeroes the timestamp fields when getTimestamp fails (no timestamp yet: the read counter is used). */
     override fun counters(out: LongArray): Boolean = AAudioNative.counters(handle, out) != AAudioNative.ERROR_NULL
+
+    override val canPause: Boolean get() = true
+
+    override var pauseState = "-"
+        private set
+
+    /** T-287: [AAudioNative.pause]; true if the stream is paused/stopped or on its way there. */
+    override fun pause(stop: Boolean): Boolean {
+        val r = AAudioNative.pause(handle, if (stop) 1 else 0, PAUSE_WAIT_NS)
+        if (r < 0) {
+            lastError = r
+            pauseState = "err"
+            return false
+        }
+        pauseState = AAudioNative.stateName(r)
+        if (r == AAudioNative.STATE_DISCONNECTED) {
+            deadReason = "disconnected"
+            return false
+        }
+        return true
+    }
+
+    /** T-287: requestStart; the stream's first writes after it get the start grace (MMAP may take a while to run). */
+    override fun resume(): Boolean {
+        val r = AAudioNative.start(handle)
+        if (r != AAudioNative.OK) {
+            lastError = r
+            return false
+        }
+        startedNs = System.nanoTime()
+        return true
+    }
 
     override fun xruns(): Int = AAudioNative.xruns(handle).coerceAtLeast(0)
 
@@ -102,6 +135,8 @@ class AAudioSink private constructor(
         const val WRITE_TIMEOUT_NS = 200_000_000L
         const val START_WRITE_TIMEOUT_NS = 1_000_000_000L
         const val START_GRACE_NS = 500_000_000L
+        /** T-287: how long [pause] waits for the stream to reach its paused/stopped state. */
+        const val PAUSE_WAIT_NS = 200_000_000L
 
         /**
          * Opens and starts a LOW_LATENCY stream with [sharing] (AAudioNative.SHARING_*); throws [SinkOpenException]

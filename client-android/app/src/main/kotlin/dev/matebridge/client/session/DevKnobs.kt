@@ -62,6 +62,8 @@ data class DevKnobs(
     val audioOut: String? = null,
     /** `--ei audio_buf_bursts N` (T-110); null = absent. */
     val audioBufBursts: Int? = null,
+    /** `--es audio_idle_pause off|pause|stop` raw value (T-287); null = absent. */
+    val audioIdlePause: String? = null,
     /** `--ez quickack false` turns TCP_QUICKACK off (T-074). */
     val quickAck: Boolean = true,
     /** `--es net_bench HOST:PORT`: forward to the debug NetBench screen (T-090). The value is never kept or logged here. */
@@ -151,6 +153,7 @@ data class DevKnobs(
             Spec("transport", Kind.STRING, debugOnly = true, ids = setOf("auto", "usb", "wifi")),
             Spec("audio_out", Kind.STRING, debugOnly = true, ids = setOf("auto", "aaudio", "track", "audiotrack")),
             Spec("audio_buf_bursts", Kind.INT, debugOnly = true),
+            Spec("audio_idle_pause", Kind.STRING, debugOnly = true, ids = setOf("off", "pause", "stop")),
             Spec("quickack", Kind.BOOL, debugOnly = true),
             Spec("net_bench", Kind.STRING, debugOnly = true, inProfile = false),
             Spec("net_bench_s", Kind.INT, debugOnly = true, inProfile = false),
@@ -203,6 +206,7 @@ data class DevKnobs(
                 transport = x.string("transport"),
                 audioOut = x.string("audio_out"),
                 audioBufBursts = if (x.has("audio_buf_bursts")) x.int("audio_buf_bursts", 0) else null,
+                audioIdlePause = x.string("audio_idle_pause"),
                 quickAck = if (x.has("quickack")) x.bool("quickack", true) else true,
                 netBench = x.has("net_bench"),
                 decoderFault = x.string("decoder_fault"),

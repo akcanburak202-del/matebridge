@@ -1,0 +1,102 @@
+package dev.matebridge.client.audio
+
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * T-287: when the writer suspends the output stream. While nothing plays the Mac sends no packets (T-279) but an
+ * AAudio MMAP stream still wants a silent burst every 5 ms (~200 wake-ups/s, ~2% of a core, T-282). After
+ * [AFTER_FRAMES] of silence (10 s counted in output frames, which the device paces in real time) the writer pauses the
+ * stream and blocks until the next packet, then resumes it; [PlayoutCore] sees nothing but a long idle gap.
+ *
+ * Pure state; writer thread only. [shouldPause] holds only in PRIMING with no packet for [afterFrames] and not right
+ * after a resume (the core has not yet seen the packet that woke the writer: its "frames since the last packet" still
+ * holds the old, long value until one burst has been rendered, see [onRendered]).
+ */
+class IdlePause(val mode: Mode, private val afterFrames: Long = AFTER_FRAMES) {
+    /** [PAUSE]: requestPause (buffered data kept, counters continuous); [STOP]: requestStop; [OFF]: never. */
+    enum class Mode(val id: String) { OFF("off"), PAUSE("pause"), STOP("stop") }
+
+    /** Why pausing is switched off for this stream (null = it is not); logs. */
+    var disabledReason: String? = null
+        private set
+
+    /** Pause cycles done by this stream (logs). */
+    var pauses = 0L
+        private set
+
+    private var settled = true
+
+    val enabled: Boolean get() = mode != Mode.OFF && disabledReason == null
+
+    fun shouldPause(priming: Boolean, framesSinceLastPacket: Long, canPause: Boolean): Boolean =
+        enabled && canPause && settled && priming && framesSinceLastPacket >= afterFrames
+
+    /** The output was paused and the writer parks. */
+    fun onPaused() {
+        pauses++
+    }
+
+    /** The output was started again: no new pause before a burst has been rendered. */
+    fun onResumed() {
+        settled = false
+    }
+
+    /** A burst was rendered (the core has seen the packets that arrived while parked). */
+    fun onRendered() {
+        settled = true
+    }
+
+    /** The output could not be paused or resumed: do not try again for this stream. */
+    fun disable(reason: String) {
+        if (disabledReason == null) disabledReason = reason
+    }
+
+    /** A new output replaced the old one (rebuild): nothing is in flight. */
+    fun onNewOutput() {
+        settled = true
+    }
+
+    /** [raw] resolved: [mode] (default [DEFAULT] when null or unknown) and whether a non-null [raw] was unknown. */
+    data class Resolved(val mode: Mode, val unknown: Boolean)
+
+    companion object {
+        const val SECONDS = 10
+        const val AFTER_FRAMES = SECONDS * 48_000L
+        val DEFAULT = Mode.PAUSE
+
+        /** `--es audio_idle_pause off|pause|stop` (developer knob); null = the default. */
+        fun resolve(raw: String?): Resolved {
+            if (raw == null) return Resolved(DEFAULT, false)
+            val m = Mode.entries.firstOrNull { it.id == raw.trim().lowercase() }
+            return if (m != null) Resolved(m, false) else Resolved(DEFAULT, true)
+        }
+    }
+}
+
+/**
+ * T-287: time from the first packet after a gap to the first audible burst, for the `first_sound` log (the A/B of
+ * pausing against not pausing). The control reader calls [onPacket] for every accepted packet; the writer takes the
+ * stamp with [take] when playback starts. A gap is [GAP_NS] without a packet (the host's silence gate sends nothing
+ * after 500 ms of zeros) or the stream's first packet. Thread-safe, allocation-free.
+ */
+class FirstSoundTimer(private val gapNs: Long = GAP_NS) {
+    private val pending = AtomicLong(0)
+    private var lastNs = 0L // reader thread only
+
+    /** A packet arrived at [nowNs] (System.nanoTime(), never 0). */
+    fun onPacket(nowNs: Long) {
+        val last = lastNs
+        lastNs = nowNs
+        if (last == 0L || nowNs - last >= gapNs) pending.compareAndSet(0, nowNs)
+    }
+
+    /** Arrival stamp of the packet that ended the last gap (0 = none), without consuming it. */
+    fun peek(): Long = pending.get()
+
+    /** Consumes the stamp (0 = none). */
+    fun take(): Long = pending.getAndSet(0)
+
+    companion object {
+        const val GAP_NS = 400_000_000L
+    }
+}
