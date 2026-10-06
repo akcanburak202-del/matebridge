@@ -1,7 +1,7 @@
 ---
 id: T-266
 title: Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
