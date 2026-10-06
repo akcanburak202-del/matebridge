@@ -618,6 +618,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             // T-269 (decision 0035): the Mac opens / closes the tablet files over Wi-Fi. Same UI-thread order as onConnectionGen.
             override fun onFilesNet(msg: FilesNet, gen: Int) { filesNetDelivery.offer(gen, msg) } // bounded: one queued run
 
+            override fun filesServerScope() = if (::files.isInitialized) files.liveScope else dev.matebridge.client.files.FilesServerScope.NONE
+
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
         }, loggedPrefs(gameSettings.prefs(streamMode)), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
             wifiBinder = { s -> wolSender.bindToWifi(s) }, // T-134: direct wake attempts go out on Wi-Fi only
@@ -627,7 +629,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             helloCapabilities = { if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L },
         )
         startFullChromaSelfTest()
-        files = FilesController({ controller.setFilesInfo(it) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
+        files = FilesController({ info, scope -> controller.setFilesInfo(info, scope) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -2124,7 +2126,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-269: while sharing is off or not permitted the Mac has seen OFF and closed; a stale open request must not
         // restart the server when it is switched back on (the Mac's menu sends a new one).
         if (!settings.filesShare() || !files.hasPermission()) filesGate.forgetNet()
-        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen)
+        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen, filesGate.generation)
     }
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI

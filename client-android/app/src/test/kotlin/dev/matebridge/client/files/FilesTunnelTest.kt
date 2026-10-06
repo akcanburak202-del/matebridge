@@ -43,6 +43,9 @@ class FilesTunnelTest {
     private val secrets = SessionSecrets(prk, pairing = false, hostId = ByteArray(16))
     private val toClose = ArrayList<AutoCloseable>()
 
+    /** What the tablet reports as the running server's scope: a Wi-Fi server of the plan's generation (7) by default. */
+    @Volatile private var davScopeNow = FilesServerScope(true, 7)
+
     @After fun cleanup() {
         for (c in toClose.reversed()) try { c.close() } catch (_: Exception) {}
     }
@@ -229,7 +232,7 @@ class FilesTunnelTest {
     ): FilesTunnel {
         val plan = FilesTunnelPlan(7, "127.0.0.1", host.port, pool, max, dav?.port ?: 1, 2712847316L)
         return FilesTunnel(
-            plan, secrets,
+            plan, secrets, davScope = { davScopeNow },
             log = { _, ev, f -> logs?.add("$ev $f") },
             pingIntervalMs = pingMs, ackTimeoutMs = ackMs, writeTimeoutMs = writeMs,
         ).also { toClose += AutoCloseable { it.close() }; it.start() }
@@ -453,7 +456,7 @@ class FilesTunnelTest {
         val port = dav.port
         dav.close() // nothing listens on the tablet's server port any more
         val plan = FilesTunnelPlan(7, "127.0.0.1", host.port, 1, 12, port, 5)
-        val t = FilesTunnel(plan, secrets).also { toClose += AutoCloseable { it.close() }; it.start() }
+        val t = FilesTunnel(plan, secrets, davScope = { davScopeNow }).also { toClose += AutoCloseable { it.close() }; it.start() }
         assertTrue(host.awaitProven(1))
         val c = host.conns[0]
         c.send(FilesData(Bytes("GET / HTTP/1.1\r\n\r\n".toByteArray())))
@@ -507,6 +510,30 @@ class FilesTunnelTest {
             assertFalse(line, line.contains("127.0.0.1"))
         }
         assertNull(logs.firstOrNull { it.contains("path=") })
+    }
+
+    @Test fun theTunnelNeverPairsWithAServerThatIsNotTheWifiServerOfItsGeneration() {
+        for (bad in listOf(FilesServerScope(false, 7), FilesServerScope(true, 6), FilesServerScope.NONE)) {
+            davScopeNow = bad // a USB-scope server (possibly the whole storage), an earlier session's, or none
+            val host = TestHost(); val dav = TestDav()
+            val logs = CopyOnWriteArrayList<String>()
+            val t = tunnel(host, dav, pool = 1, logs = logs)
+            assertTrue(host.awaitProven(1))
+            val c = host.conns[0]
+            c.send(FilesData(Bytes("GET /secret HTTP/1.1\r\n\r\n".toByteArray())))
+            assertTrue("$bad: connection must end", eventually { c.eof })
+            assertEquals("$bad: the server is never touched", 0, dav.accepted.get())
+            assertEquals(0L, t.counters().paired)
+            assertTrue(logs.any { it.contains("reason=scope_mismatch") })
+            t.close()
+        }
+        // the right scope pairs as usual
+        davScopeNow = FilesServerScope(true, 7)
+        val host = TestHost(); val dav = TestDav()
+        tunnel(host, dav, pool = 1)
+        assertTrue(host.awaitProven(1))
+        host.conns[0].send(FilesData(Bytes("ok".toByteArray())))
+        assertTrue(eventually { String(host.conns[0].data()) == "ok" })
     }
 
     @Test fun aMacThatStopsReadingCannotHoldASlotForEver() {

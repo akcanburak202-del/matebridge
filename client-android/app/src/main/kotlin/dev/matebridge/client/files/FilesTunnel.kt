@@ -43,6 +43,18 @@ data class FilesTunnelPlan(
 )
 
 /**
+ * Which tablet server a published `FILES_INFO` describes (T-269, round 3): [wifi] = a server started for the Wi-Fi scope
+ * (`MateBridge/Wi-Fi/` only), [generation] = the control connection generation it was started for. A READY that is not
+ * tagged with the current generation, and a file tunnel whose server is not a Wi-Fi one, are never trusted: a stale or
+ * USB-scope server (possibly the whole storage) must not be reachable over Wi-Fi. [NONE]: no server.
+ */
+data class FilesServerScope(val wifi: Boolean, val generation: Int) {
+    companion object {
+        val NONE = FilesServerScope(false, -1)
+    }
+}
+
+/**
  * How many file connections to open next (PROTOCOL.md "Dosya bağlantısı", research section 2): keep [pool] proven idle
  * connections, at most [max] in total, at most [MAX_UNPROVEN] still handshaking at once (the host drops more of them).
  * Pure; the tunnel feeds it the counters under its lock.
@@ -99,6 +111,12 @@ class FilesTunnel(
     /** Idle keepalive PING interval and the handshake deadline; the PROTOCOL.md values, parameters only for tests. */
     private val pingIntervalMs: Int = PING_INTERVAL_MS,
     private val ackTimeoutMs: Long = ACK_TIMEOUT_MS,
+    /**
+     * Defence in depth: the scope of the tablet server that is running right now. A connection pairs (connects to the
+     * local server) only when it is a Wi-Fi server of the plan's generation; anything else ends the connection
+     * (`reason=scope_mismatch`), so a USB-scope or previous-session server is never reached through the tunnel.
+     */
+    private val davScope: () -> FilesServerScope,
     /** A socket write (Mac side or tablet-server side) with no progress for this long closes BOTH sockets of its connection. */
     private val writeTimeoutMs: Long = WRITE_TIMEOUT_MS,
 ) {
@@ -261,6 +279,8 @@ class FilesTunnel(
                 reason = session()
             } catch (e: ProtocolException) {
                 reason = "protocol"
+            } catch (e: ScopeMismatch) {
+                reason = "scope_mismatch"
             } catch (e: IOException) {
                 reason = when {
                     stalled -> "write_stall"
@@ -374,6 +394,8 @@ class FilesTunnel(
 
         /** The first FILES_DATA arrived: connect to the tablet's own server and start the tablet-to-Mac pump. */
         private fun pair(channel: FilesChannel, out: OutputStream): OutputStream {
+            val sc = davScope()
+            if (!sc.wifi || sc.generation != plan.gen) throw ScopeMismatch() // never the USB root or an earlier session's server
             val d = Socket()
             dav = d
             if (closing.get() || closed.get()) { closeQuietly(d); throw IOException("closed") }
@@ -472,6 +494,9 @@ class FilesTunnel(
     private fun closeQuietly(s: Socket) {
         try { s.close() } catch (_: IOException) {}
     }
+
+    /** The tablet server running now is not the Wi-Fi server of this session. */
+    private class ScopeMismatch : IOException("server scope")
 
     companion object {
         const val CONNECT_TIMEOUT_MS = 5_000

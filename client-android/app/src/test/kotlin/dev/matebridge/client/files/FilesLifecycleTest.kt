@@ -304,6 +304,38 @@ class FilesLifecycleTest {
         assertEquals(FilesStatus.NO_USB_SESSION, r.lc.status)
     }
 
+    @Test fun everyPublishedReadyCarriesTheScopeOfItsServerAndOffAndStandbyCarryNone() {
+        val out = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val servers = mutableListOf<FakeServer>()
+        val lc = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { servers += it } },
+            newToken = { "tok${servers.size + 1}" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope -> out += info to scope },
+        )
+        // Wi-Fi: standby, then the Mac's open on generation 9
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 9)
+        servers[0].events.onListening(41000)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9) // CLOSE
+        lc.sync(true, true, true, false, Transport.WIFI, netOpen = false, generation = 9) // session over
+        // USB on generation 10
+        lc.sync(true, true, true, true, Transport.USB, generation = 10)
+        servers[1].events.onListening(42000)
+        assertEquals(
+            listOf(
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9),
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo.OFF to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 42000, "tok2") to FilesServerScope(false, 10),
+            ),
+            out,
+        )
+    }
+
     @Test fun aUsbServerIsNotAWifiServer() {
         val r = Rig()
         r.sync()

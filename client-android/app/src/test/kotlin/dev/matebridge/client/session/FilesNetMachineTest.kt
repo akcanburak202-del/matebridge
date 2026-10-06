@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.files.FilesServerScope
 import dev.matebridge.client.files.FilesTunnelPlan
 import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
@@ -39,6 +40,8 @@ class FilesNetMachineTest {
         return gen
     }
 
+    private fun wifi(gen: Int) = FilesServerScope(true, gen)
+
     private fun List<Action>.plans() = filterIsInstance<Action.FilesTunnel>().map { it.plan }
     private fun List<Action>.nets() = filterIsInstance<Action.FilesNetReceived>()
 
@@ -51,13 +54,13 @@ class FilesNetMachineTest {
         val a = m.step(Event.Received(gen, open))
         assertEquals(listOf(Action.FilesNetReceived(open, gen)), a.nets())
         assertTrue(a.plans().isEmpty()) // the server is not READY yet: no tunnel
-        assertEquals(listOf<FilesTunnelPlan?>(plan(gen)), m.step(Event.SetFiles(ready)).plans())
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen)), m.step(Event.SetFiles(ready, wifi(gen))).plans())
     }
 
     @Test fun readyThenOpenGivesTheSamePlan() {
         val m = machine()
         val gen = m.accepted()
-        assertTrue(m.step(Event.SetFiles(ready)).plans().isEmpty())
+        assertTrue(m.step(Event.SetFiles(ready, wifi(gen))).plans().isEmpty())
         assertEquals(listOf<FilesTunnelPlan?>(plan(gen)), m.step(Event.Received(gen, open)).plans())
     }
 
@@ -67,14 +70,14 @@ class FilesNetMachineTest {
         val a = m.step(Event.Received(gen, open))
         assertEquals(listOf<dev.matebridge.client.protocol.Message>(FilesInfo.OFF), a.filterIsInstance<Action.Send>().map { it.msg })
         // STANDBY and READY answer themselves: the server starts and publishes READY
-        m.step(Event.SetFiles(FilesInfo.STANDBY))
+        m.step(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE))
         assertTrue(m.step(Event.Received(gen, open.copy(port = 47010))).filterIsInstance<Action.Send>().isEmpty())
     }
 
     @Test fun closeClosesTheTunnelOnceAndIsForwardedAsClose() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
         val a = m.step(Event.Received(gen, close))
         assertEquals(listOf<FilesTunnelPlan?>(null), a.plans())
         assertEquals(listOf(Action.FilesNetReceived(close, gen)), a.nets())
@@ -84,19 +87,19 @@ class FilesNetMachineTest {
     @Test fun theServerStoppingTakesTheTunnelAwayAndANewServerPortReopensIt() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
-        assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.OFF)).plans())
-        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 40999)), m.step(Event.SetFiles(ready.copy(port = 40999, token = "ffffffffffffffffffffffffffffffff"))).plans())
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
+        assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.OFF, FilesServerScope.NONE)).plans())
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, dav = 40999)), m.step(Event.SetFiles(ready.copy(port = 40999, token = "ffffffffffffffffffffffffffffffff"), wifi(gen))).plans())
         // a new token on the same port is no change for the tunnel (the HTTP traffic carries the token, not the tunnel)
-        assertTrue(m.step(Event.SetFiles(ready.copy(port = 40999, token = "00000000000000000000000000000000"))).plans().isEmpty())
+        assertTrue(m.step(Event.SetFiles(ready.copy(port = 40999, token = "00000000000000000000000000000000"), wifi(gen))).plans().isEmpty())
         // STANDBY is "server off" as well
-        assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.STANDBY)).plans())
+        assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE)).plans())
     }
 
     @Test fun aRepeatedOpenOnTheSamePortChangesNothingEvenWithOtherPoolAndMax() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.SetFiles(ready))
+        m.step(Event.SetFiles(ready, wifi(gen)))
         m.step(Event.Received(gen, open))
         // PROTOCOL 0x0A: same port = nothing changes; live connections (and copies on them) are never torn down
         for (again in listOf(open, open.copy(pool = 4, max = 16), open.copy(pool = 1, max = 1))) {
@@ -111,7 +114,7 @@ class FilesNetMachineTest {
     @Test fun anotherListenerPortReplacesThePlanAndARepeatDoesNot() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.SetFiles(ready))
+        m.step(Event.SetFiles(ready, wifi(gen)))
         m.step(Event.Received(gen, open))
         assertTrue(m.step(Event.Received(gen, open)).plans().isEmpty())
         val a = m.step(Event.Received(gen, open.copy(port = 47004)))
@@ -121,7 +124,7 @@ class FilesNetMachineTest {
     @Test fun poolAndMaxAreClampedAndAPortlessOpenIsIgnored() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.SetFiles(ready))
+        m.step(Event.SetFiles(ready, wifi(gen)))
         val a = m.step(Event.Received(gen, FilesNet(FilesNet.STATE_OPEN, 47003, 0, 200)))
         assertEquals(listOf<FilesTunnelPlan?>(plan(gen, pool = 1, max = 16)), a.plans())
         assertEquals(FilesNet(FilesNet.STATE_OPEN, 47003, 1, 16), a.nets().single().msg)
@@ -134,7 +137,7 @@ class FilesNetMachineTest {
     @Test fun anUnknownStateIsClose() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.SetFiles(ready)); m.step(Event.Received(gen, open))
+        m.step(Event.SetFiles(ready, wifi(gen))); m.step(Event.Received(gen, open))
         val a = m.step(Event.Received(gen, FilesNet(9, 47003, 2, 12)))
         assertEquals(listOf<FilesTunnelPlan?>(null), a.plans())
         assertFalse(a.nets().single().msg.isOpen)
@@ -143,7 +146,7 @@ class FilesNetMachineTest {
     @Test fun neverOnUsbAndNeverBeforeTheSessionIsAccepted() {
         val usbM = machine()
         val usbGen = usbM.accepted(usb)
-        usbM.step(Event.SetFiles(ready))
+        usbM.step(Event.SetFiles(ready, FilesServerScope(false, usbGen)))
         val a = usbM.step(Event.Received(usbGen, open))
         assertTrue(a.nets().isEmpty() && a.plans().isEmpty())
 
@@ -168,7 +171,7 @@ class FilesNetMachineTest {
         for ((name, end) in ends) {
             val m = machine()
             val gen = m.accepted()
-            m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
+            m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
             assertEquals("$name: tunnel closed exactly once", listOf<FilesTunnelPlan?>(null), end(m, gen).plans())
         }
     }
@@ -176,12 +179,14 @@ class FilesNetMachineTest {
     @Test fun aNewSessionStartsWithoutTheOldOpenRequestEvenThoughTheServerIsStillReady() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
         m.step(Event.Stop)
         val gen2 = m.accepted(session = 78)
         // the machine remembers READY (the activity publishes OFF/STANDBY itself), but the Mac has not opened this session
-        assertTrue(m.step(Event.SetFiles(ready.copy(token = "ffffffffffffffffffffffffffffffff"))).plans().isEmpty())
-        assertEquals(listOf<FilesTunnelPlan?>(plan(gen2, session = 78)), m.step(Event.Received(gen2, open)).plans())
+        assertTrue(m.step(Event.SetFiles(ready.copy(token = "ffffffffffffffffffffffffffffffff"), wifi(gen))).plans().isEmpty())
+        // (that READY belongs to the old session's server: no tunnel for the new session's OPEN until its own server is READY)
+        assertTrue(m.step(Event.Received(gen2, open)).plans().isEmpty())
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen2, session = 78)), m.step(Event.SetFiles(ready, wifi(gen2))).plans())
         // an automatic reconnect after a loss is a new session as well
         m.step(Event.ControlClosed(gen2))
         val retry = m.handle(Event.Tick(0), now + SessionMachine.BACKOFF_MAX_US + 1).filterIsInstance<Action.OpenControl>().single().gen
@@ -193,7 +198,7 @@ class FilesNetMachineTest {
     @Test fun aSessionLostByHeartbeatTakesTheTunnelAway() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
         val a = m.handle(Event.Tick(0), now + SessionMachine.PONG_TIMEOUT_US + 1)
         assertEquals(listOf<FilesTunnelPlan?>(null), a.plans())
         assertTrue(a.any { it is Action.CloseControl })
@@ -202,7 +207,7 @@ class FilesNetMachineTest {
     @Test fun anOldGenerationsFilesNetIsIgnored() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.SetFiles(ready))
+        m.step(Event.SetFiles(ready, wifi(gen)))
         val a = m.step(Event.Received(gen + 50, open))
         assertTrue(a.nets().isEmpty() && a.plans().isEmpty())
     }
@@ -210,7 +215,7 @@ class FilesNetMachineTest {
     @Test fun migrationToUsbEndsTheWifiTunnel() {
         val m = machine()
         val gen = m.accepted()
-        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready))
+        m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
         val cand = m.step(Event.Migrate(usb)).filterIsInstance<Action.OpenCandidate>().single().gen
         m.step(Event.ControlOpened(cand))
         m.step(Event.Received(cand, HelloAck(1, HelloAck.ACCEPTED, 78, 47002, "Mac"))) // proof PING on the candidate
@@ -218,5 +223,82 @@ class FilesNetMachineTest {
         val r = m.step(Event.Received(cand, StreamConfig(2, 1, 2800, 1840, 1400, 920, 60, 20000, 1, 1, 1, 1)))
         assertEquals(listOf<FilesTunnelPlan?>(null), r.plans())
         assertTrue(r.any { it is Action.PromoteCandidate })
+    }
+
+    private fun sent(a: List<Action>) = a.filterIsInstance<Action.Send>().map { it.msg }
+
+    @Test fun aPreviousSessionsReadyIsNeverRepublishedOnANewSession() {
+        val m = machine()
+        val gen = m.accepted()
+        m.step(Event.SetFiles(ready, wifi(gen)))
+        m.step(Event.Stop) // the UI has not stopped the old server yet (slow UI thread)
+        val g = m.step(Event.Start(wifi)).filterIsInstance<Action.OpenControl>().single().gen
+        m.step(Event.ControlOpened(g))
+        val acc = m.step(Event.Received(g, HelloAck(1, HelloAck.ACCEPTED, 78, 47002, "Mac")))
+        assertEquals(FilesInfo.OFF, acc.filterIsInstance<Action.Send>().map { it.msg }.filterIsInstance<FilesInfo>().single())
+        assertTrue(acc.filterIsInstance<Action.Send>().none { (it.msg as? FilesInfo)?.ready == true })
+        // and the Mac's OPEN of the new session cannot arm the old server
+        assertTrue(m.step(Event.Received(g, open)).plans().isEmpty())
+        // only this session's own Wi-Fi server counts
+        assertEquals(listOf<FilesTunnelPlan?>(plan(g, session = 78)), m.step(Event.SetFiles(ready, wifi(g))).plans())
+    }
+
+    @Test fun aStaleReadyArrivingLateIsAnnouncedAsOffAndNeverTunnelled() {
+        val m = machine()
+        val old = m.accepted()
+        m.step(Event.Stop)
+        val g = m.accepted(session = 78)
+        m.step(Event.Received(g, open))
+        val a = m.step(Event.SetFiles(ready, wifi(old)))
+        assertTrue(a.plans().isEmpty())
+        assertEquals(listOf<dev.matebridge.client.protocol.Message>(FilesInfo.OFF), sent(a))
+    }
+
+    @Test fun aUsbScopeServerIsNeverTunnelledOverWifiEvenInTheSameGeneration() {
+        val m = machine()
+        val gen = m.accepted()
+        m.step(Event.Received(gen, open))
+        // a server started for the USB scope (whole storage possible) that claims READY on this very generation
+        val a = m.step(Event.SetFiles(ready, FilesServerScope(false, gen)))
+        assertTrue(a.plans().isEmpty())
+    }
+
+    @Test fun usbToWifiMigrationNeverCarriesTheUsbServersReadyAcrossAndTheTunnelWaitsForTheWifiServer() {
+        val m = machine()
+        val usbGen = m.accepted(usb)
+        m.step(Event.SetFiles(ready, FilesServerScope(false, usbGen))) // the USB server is READY and announced
+        val cand = m.step(Event.Migrate(wifi)).filterIsInstance<Action.OpenCandidate>().single().gen
+        m.step(Event.ControlOpened(cand))
+        m.step(Event.Received(cand, HelloAck(1, HelloAck.ACCEPTED, 78, 47002, "Mac")))
+        val r = m.step(Event.Received(cand, StreamConfig(2, 1, 2800, 1840, 1400, 920, 60, 20000, 1, 1, 1, 1)))
+        assertTrue(r.any { it is Action.PromoteCandidate })
+        // the new Wi-Fi session starts with OFF, not the USB server's READY and token
+        val fi = r.filterIsInstance<Action.Send>().map { it.msg }.filterIsInstance<FilesInfo>()
+        assertEquals(listOf(FilesInfo.OFF), fi)
+        // the slow UI has not stopped the USB server; the Mac's early OPEN must not reach it
+        assertTrue(m.step(Event.Received(cand, open)).plans().isEmpty())
+        assertTrue(m.step(Event.SetFiles(ready, FilesServerScope(false, usbGen))).plans().isEmpty())
+        // the Wi-Fi server this session started (Wi-Fi scope, this generation) is what the tunnel uses
+        assertEquals(
+            listOf<FilesTunnelPlan?>(plan(cand, dav = 41000, session = 78)),
+            m.step(Event.SetFiles(ready.copy(port = 41000), wifi(cand))).plans(),
+        )
+    }
+
+    @Test fun whenTheOldSessionIsSupersededDuringAMigrationProofTheFileResourcesEndAtOnce() {
+        for (how in listOf("bye", "closed")) {
+            val m = machine()
+            val gen = m.accepted()
+            m.step(Event.Received(gen, open)); m.step(Event.SetFiles(ready, wifi(gen)))
+            val cand = m.step(Event.Migrate(usb)).filterIsInstance<Action.OpenCandidate>().single().gen
+            m.step(Event.ControlOpened(cand))
+            m.step(Event.Received(cand, HelloAck(1, HelloAck.ACCEPTED, 78, 47002, "Mac"))) // proof PING sent, waiting
+            val a = if (how == "bye") m.step(Event.Received(gen, Bye(Bye.SUPERSEDED))) else m.step(Event.ControlClosed(gen))
+            assertEquals("$how: tunnel closed now", listOf<FilesTunnelPlan?>(null), a.plans())
+            assertEquals("$how: the UI hears CLOSE (server stops)", listOf(Action.FilesNetReceived(close, gen)), a.nets())
+            // the dead session cannot be re-armed by a late OPEN
+            val b = m.step(Event.Received(gen, open))
+            assertTrue(b.plans().isEmpty() && b.nets().isEmpty())
+        }
     }
 }
