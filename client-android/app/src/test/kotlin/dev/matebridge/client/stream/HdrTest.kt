@@ -11,7 +11,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-238 (decision 0032): HDR10 capability, the request rule (capability x mode x setting) and the panel texts. */
+/** T-238/T-280 (decision 0032): HDR10 capability, the request rule (capability x mode x that mode's setting) and the panel texts. */
 /** No colour store: the default "Renk" is Keskin kenarlar (decision 0034 addendum), so `chroma` is 1. */
 private const val SHARP = StreamPrefs.CHROMA_SHARP
 
@@ -20,6 +20,7 @@ class HdrTest {
         val map = HashMap<String, String>()
         override fun getString(key: String) = map[key]
         override fun putString(key: String, value: String) { map[key] = value }
+        override fun remove(key: String) { map.remove(key) }
     }
 
     private val store = MemStore()
@@ -65,10 +66,10 @@ class HdrTest {
 
     // ---- request rule ----
 
-    @Test fun hdr10OnlyWithCapabilityOyunAndTheSettingOn() {
+    @Test fun hdr10OnlyWithCapabilityDailyOrOyunAndTheSettingOn() {
         val caps = listOf(capable, HdrCapability(true, false), HdrCapability(false, true), HdrCapability.NONE)
         for (cap in caps) for (mode in StreamMode.entries) for (on in listOf(false, true)) {
-            val want = if (cap.supported && mode == StreamMode.GAME && on) HDR else SDR
+            val want = if (cap.supported && mode != StreamMode.DRAWING && on) HDR else SDR
             assertEquals("cap=$cap mode=$mode on=$on", want, HdrPolicy.dynamicRange(cap, mode, on))
         }
     }
@@ -83,12 +84,51 @@ class HdrTest {
         assertFalse(settings.hdrGame())
     }
 
-    @Test fun prefsCarryTheDynamicRangeOnlyInOyun() {
+    @Test fun dailySettingDefaultsOffIsSeparateAndPersists() { // T-280
+        assertFalse(settings.hdrDaily())
+        settings.setHdrDaily(true)
+        assertTrue(Settings(store).hdrDaily())
+        assertFalse(settings.hdrGame()) // Oyun's stored value is not touched
+        assertEquals("1", store.map["hdr_daily"])
+        store.map["hdr_daily"] = "yes" // anything but "1" is off
+        assertFalse(settings.hdrDaily())
+    }
+
+    @Test fun oldStoredOyunValueSurvivesAndDailyStartsOff() { // T-280: an install from before this task
+        store.map["hdr_game"] = "1"
+        val g = GameModeSettings(settings, hdr = capable)
+        assertTrue(g.hdrSetting(StreamMode.GAME))
+        assertFalse(g.hdrSetting(StreamMode.DAILY))
+        assertEquals(HDR, g.prefs(StreamMode.GAME).dynamicRange)
+        assertEquals(SDR, g.prefs(StreamMode.DAILY).dynamicRange)
+    }
+
+    @Test fun hdrForReadsAndWritesPerMode() { // T-280
+        settings.setHdrFor(StreamMode.DAILY, true)
+        assertTrue(settings.hdrFor(StreamMode.DAILY)); assertFalse(settings.hdrFor(StreamMode.GAME))
+        settings.setHdrFor(StreamMode.GAME, true)
+        settings.setHdrFor(StreamMode.DAILY, false)
+        assertFalse(settings.hdrFor(StreamMode.DAILY)); assertTrue(settings.hdrFor(StreamMode.GAME))
+        settings.setHdrFor(StreamMode.DRAWING, true) // Çizim has no setting
+        assertFalse(settings.hdrFor(StreamMode.DRAWING))
+        assertFalse(settings.hdrDaily())
+    }
+
+    @Test fun prefsCarryTheDynamicRangeOfTheModesOwnSetting() {
         settings.setHdrGame(true)
         val g = GameModeSettings(settings, hdr = capable)
         assertEquals(HDR, g.prefs(StreamMode.GAME).dynamicRange)
-        assertEquals(SDR, g.prefs(StreamMode.DAILY).dynamicRange)
+        assertEquals(SDR, g.prefs(StreamMode.DAILY).dynamicRange) // Oyun's HDR on does not reach Günlük
         assertEquals(SDR, g.prefs(StreamMode.DRAWING).dynamicRange)
+        settings.setHdrGame(false)
+        settings.setHdrDaily(true)
+        assertEquals(SDR, g.prefs(StreamMode.GAME).dynamicRange) // and the other way round
+        assertEquals(HDR, g.prefs(StreamMode.DAILY).dynamicRange)
+        assertEquals(SDR, g.prefs(StreamMode.DRAWING).dynamicRange) // Çizim always SDR
+        // Günlük HDR10 on the native display: 14 bytes (display 0x0, dynamic range 1)
+        assertEquals(14, Codec.encodePayload(g.prefs(StreamMode.DAILY)).size)
+        settings.setHdrDaily(false)
+        settings.setHdrGame(true)
         // Oyun's prefs: game display and HDR10 -> 14 bytes; the others stay today's 8 bytes.
         val game = g.prefs(StreamMode.GAME)
         assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR).copy(chroma = SHARP), game)
@@ -101,9 +141,13 @@ class HdrTest {
         val g = GameModeSettings(settings, hdr = capable)
         // The caller sends prefs(mode) on every mode change (MainActivity.setStreamMode).
         val sent = StreamMode.entries.map { m -> g.onModeChanged(m); g.prefs(m).dynamicRange }
-        assertEquals(listOf(SDR, SDR, HDR), sent) // Günlük, Çizim, Oyun
+        assertEquals(listOf(SDR, SDR, HDR), sent) // Günlük (its own setting is off), Çizim, Oyun
         g.onModeChanged(StreamMode.DAILY)
         assertEquals(SDR, g.prefs(StreamMode.DAILY).dynamicRange)
+        // Both on: Günlük and Oyun ask HDR10, Çizim SDR; the layer changes do not matter.
+        settings.setHdrDaily(true)
+        val both = StreamMode.entries.map { m -> g.onModeChanged(m); g.prefs(m).dynamicRange }
+        assertEquals(listOf(HDR, SDR, HDR), both)
     }
 
     @Test fun sdrPrefsAreByteIdenticalToBeforeHdr() {
@@ -121,16 +165,42 @@ class HdrTest {
         assertEquals(14, Codec.encodePayload(native).size)
     }
 
-    @Test fun selectHdrReturnsPrefsOnlyWhenOyunsRequestChanges() {
+    @Test fun selectHdrReturnsPrefsOnlyWhenTheCurrentModesRequestChanges() {
         val g = GameModeSettings(settings, hdr = capable)
         assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR).copy(chroma = SHARP), g.selectHdr(true, StreamMode.GAME))
         assertTrue(settings.hdrGame())
         assertNull(g.selectHdr(true, StreamMode.GAME)) // no change
         assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, SDR).copy(chroma = SHARP), g.selectHdr(false, StreamMode.GAME))
-        // Outside Oyun: stored, nothing to send; the next Oyun entry uses it.
-        assertNull(g.selectHdr(true, StreamMode.DAILY))
-        assertTrue(settings.hdrGame())
+        // T-280: Günlük has its own setting; changing it there sends Günlük's prefs and leaves Oyun alone.
+        assertTrue(g.selectHdr(true, StreamMode.GAME) != null)
+        val daily = g.selectHdr(true, StreamMode.DAILY)
+        assertEquals(StreamPrefs(120, 1000, 0, 0, 0, HDR).copy(chroma = SHARP), daily)
+        assertTrue(settings.hdrDaily())
+        assertNull(g.selectHdr(true, StreamMode.DAILY)) // no change
         assertEquals(HDR, g.prefs(StreamMode.GAME).dynamicRange)
+        assertEquals(StreamPrefs(120, 1000, 0, 0, 0, SDR).copy(chroma = SHARP), g.selectHdr(false, StreamMode.DAILY))
+        assertTrue(settings.hdrGame()) // Oyun still on
+        // Writing a mode's setting while another mode is current is stored per mode, never crosses over.
+        assertFalse(settings.hdrDaily())
+        // Çizim: nothing stored, nothing sent.
+        assertNull(g.selectHdr(true, StreamMode.DRAWING))
+        assertFalse(settings.hdrDaily())
+        assertEquals(SDR, g.prefs(StreamMode.DRAWING).dynamicRange)
+    }
+
+    @Test fun dailyHdr10MakesTheColourRequestSharpNotFull() { // T-280 + decisions 0033/0034
+        val colour = ColourStore(store)
+        colour.set(ColourChoice.FULL)
+        settings.setModeFps(StreamMode.DAILY, 60)
+        val g = GameModeSettings(settings, hdr = capable, colourStore = colour, fullChromaAvailable = { true })
+        assertEquals(StreamPrefs.CHROMA_FULL, g.prefs(StreamMode.DAILY).chroma) // SDR: packed Tam renk
+        val on = g.selectHdr(true, StreamMode.DAILY)!!
+        assertEquals(HDR, on.dynamicRange)
+        assertEquals(StreamPrefs.CHROMA_SHARP, on.chroma) // HDR10 is 4:2:0: no packed request
+        assertEquals(ColourChoice.FULL, g.colourChoice()) // the choice itself is kept
+        val off = g.selectHdr(false, StreamMode.DAILY)!!
+        assertEquals(SDR, off.dynamicRange)
+        assertEquals(StreamPrefs.CHROMA_FULL, off.chroma) // comes back when HDR goes off
     }
 
     @Test fun withoutCapabilityNothingIsStoredOrRequested() {
@@ -147,7 +217,7 @@ class HdrTest {
     // ---- panel and logs ----
 
     @Test fun panelRowVisibilityAndTexts() {
-        assertTrue(HdrPolicy.rowHidden(StreamMode.DAILY))
+        assertFalse(HdrPolicy.rowHidden(StreamMode.DAILY)) // T-280
         assertTrue(HdrPolicy.rowHidden(StreamMode.DRAWING))
         assertFalse(HdrPolicy.rowHidden(StreamMode.GAME))
         assertTrue(HdrPolicy.rowEnabled(capable))

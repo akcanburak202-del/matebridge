@@ -28,9 +28,10 @@ import dev.matebridge.client.video.VideoRenderer
  * for it in STREAM_PREFS `display_*`, other modes (and [gameDisplay] false, `--ei game_display 0`) for the native display
  * (0×0, today's bytes). The frame rate is the per-mode stored "Kare hızı" ([Settings.modeFps]), also outside the layer.
  *
- * HDR (decision 0032, T-238) is a persistent setting outside the layer too: [prefs] asks for HDR10 only in Oyun, with
- * the stored "HDR" on and a capable tablet ([hdr], computed once at start); every other case asks for SDR, so a mode
- * change re-sends the right `dynamic_range` through the same one STREAM_PREFS.
+ * HDR (decision 0032, T-238; per mode since T-280) is a persistent setting outside the layer too: [prefs] asks for HDR10
+ * only in Günlük or Oyun, with that mode's own stored "HDR" on and a capable tablet ([hdr], computed once at start);
+ * every other case (incl. all of Çizim) asks for SDR, so a mode change re-sends the right `dynamic_range` through the
+ * same one STREAM_PREFS.
  *
  * "Renk" (decisions 0033/0034, T-241/T-260) is persistent and outside the layer as well ([colourStore]; null = always
  * Keskin kenarlar). [selectColour] stores it and returns the STREAM_PREFS to send.
@@ -178,11 +179,11 @@ class GameModeSettings(
     fun display(mode: StreamMode): GameResolution? =
         if (mode.isGame && gameDisplay) settings.gameResolution() else null
 
-    /** The stored "HDR" setting (decision 0032), regardless of mode or capability. */
-    val hdrSetting: Boolean get() = settings.hdrGame()
+    /** The stored "HDR" setting of [mode] (decision 0032, T-280), regardless of capability; Çizim has none (false). */
+    fun hdrSetting(mode: StreamMode): Boolean = settings.hdrFor(mode)
 
-    /** STREAM_PREFS `dynamic_range` for [mode] ([HdrPolicy.dynamicRange]). */
-    fun dynamicRange(mode: StreamMode): Int = HdrPolicy.dynamicRange(hdr, mode, settings.hdrGame())
+    /** STREAM_PREFS `dynamic_range` for [mode] ([HdrPolicy.dynamicRange]) from [mode]'s own setting. */
+    fun dynamicRange(mode: StreamMode): Int = HdrPolicy.dynamicRange(hdr, mode, settings.hdrFor(mode))
 
     /**
      * The one STREAM_PREFS for [mode]: its frame rate and the full scale with the effective bit rate, plus the game
@@ -195,14 +196,14 @@ class GameModeSettings(
     }
 
     /**
-     * Stores the "HDR" choice; returns the complete STREAM_PREFS to send when it changes what [mode] asks for (Oyun on a
-     * capable tablet), else null (nothing stored without the capability: the row is grey; elsewhere it applies on the
-     * next Oyun entry).
+     * Stores the "HDR" choice for [mode] (the setting is per mode); returns the complete STREAM_PREFS to send when it
+     * changes what [mode] asks for (Günlük or Oyun on a capable tablet), else null (nothing stored without the capability
+     * or in Çizim: the row is grey or hidden).
      */
     fun selectHdr(on: Boolean, mode: StreamMode): StreamPrefs? {
-        if (!hdr.supported) return null
+        if (!hdr.supported || mode.isDrawing) return null
         val before = dynamicRange(mode)
-        settings.setHdrGame(on)
+        settings.setHdrFor(mode, on)
         return if (dynamicRange(mode) != before) prefs(mode) else null
     }
 

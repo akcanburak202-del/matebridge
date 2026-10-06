@@ -51,9 +51,9 @@ interface SettingsHost {
     val appliedBitrateKbps: Long?
     /** Decision 0032 (T-238): this tablet can show HDR10 (display and decoder), computed once at start. */
     val hdrCapability: HdrCapability
-    /** The stored "HDR" setting (applies only in Oyun). */
+    /** The stored "HDR" setting of the current [streamMode] (one per mode: Günlük, Oyun; T-280). */
     val hdrEnabled: Boolean
-    /** Persists the choice; a STREAM_PREFS goes to the host only when Oyun's request changes. No effect without the capability. */
+    /** Persists the choice for the current mode; a STREAM_PREFS goes to the host only when that mode's request changes. No effect without the capability. */
     fun selectHdr(on: Boolean)
     /** STREAM_CONFIG of the running stream (the applied dynamic range is read from it), null without one. */
     val appliedConfig: StreamConfig?
@@ -333,7 +333,7 @@ object SettingsCatalog {
                     ) { id -> id.toLongOrNull()?.let { h.selectBitrate(Bitrate.sanitize(it)) } },
                 )
                 if (inStream) add(SettingItem.Info("bitrate_applied") { Bitrate.appliedLabel(h.appliedBitrateKbps) })
-                // Decision 0032 (T-238): only in Oyun; grey "(Bu cihazda yok)" without the capability.
+                // Decision 0032 (T-238, T-280): Günlük and Oyun (hidden only in Çizim); grey "(Bu cihazda yok)" without the capability.
                 add(
                     SettingItem.Choice(
                         "hdr", HdrPolicy.TITLE,
