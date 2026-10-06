@@ -38,6 +38,8 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
     struct Failure: Equatable, Sendable {
         var atUs: UInt64
         var kind: PipelineFailureKind
+        /// The failed pipeline ran HDR10: only HDR10 encoder failures count toward the SDR fallback.
+        var hdr10: Bool
     }
 
     private var failures: [Failure] = []
@@ -53,16 +55,33 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
     /// Records a failure of a running pipeline at `nowUs` and says what to do about it. `hdr10` is whether the failed
     /// pipeline ran HDR10.
     public mutating func failed(kind: PipelineFailureKind, hdr10: Bool, nowUs: UInt64) -> Decision {
-        failures.removeAll { nowUs > $0.atUs && nowUs - $0.atUs > Self.windowUs }
-        let priorEncoderFailure = failures.contains { $0.kind == .encoder }
-        failures.append(Failure(atUs: nowUs, kind: kind))
-        if hdr10, kind == .encoder, priorEncoderFailure {
+        prune(nowUs: nowUs)
+        let priorHDREncoderFailure = failures.contains { $0.kind == .encoder && $0.hdr10 }
+        failures.append(Failure(atUs: nowUs, kind: kind, hdr10: hdr10))
+        if hdr10, kind == .encoder, priorHDREncoderFailure {
             failures.removeAll()  // the SDR pipeline starts with a fresh budget
             return .fallBackToSDR
         }
         let attempt = failures.count
         guard attempt <= Self.maxRetries else { return .giveUp }
         return .retry(delayUs: Self.delay(attempt: attempt), attempt: attempt)
+    }
+
+    private mutating func prune(nowUs: UInt64) {
+        failures.removeAll { nowUs > $0.atUs && nowUs - $0.atUs > Self.windowUs }
+    }
+
+    /// The earliest host-clock time (`nowUs` or later) at which a rebuild that nobody scheduled (the tablet reopening
+    /// its video connection after `.giveUp`) fits the budget: now while the window holds at most `maxRetries`
+    /// failures, otherwise the moment enough of the oldest ones have left the window. So recovery is bounded but never
+    /// permanent: the headless Mac's only display is the tablet.
+    public func nextAllowedUs(nowUs: UInt64) -> UInt64 {
+        let live = failures.filter { !(nowUs > $0.atUs && nowUs - $0.atUs > Self.windowUs) }
+            .map(\.atUs).sorted()
+        guard live.count > Self.maxRetries else { return nowUs }
+        // The failure that has to expire is the (count - maxRetries)-th oldest; it is outside the window one
+        // microsecond after `atUs + windowUs`.
+        return live[live.count - Self.maxRetries - 1] + Self.windowUs + 1
     }
 
     /// Backoff before rebuild number `attempt` (1-based): 1 s, 2 s, then 4 s.
