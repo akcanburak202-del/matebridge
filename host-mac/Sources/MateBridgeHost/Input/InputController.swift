@@ -52,6 +52,7 @@ public final class InputController: @unchecked Sendable {
     private let displays: DisplayProviding
     private let capsLock: CapsLockControlling
     private let cursor: CursorLocating
+    private let visibility: CursorVisibilityChecking
     private let logger = SessionLogger(component: "input")
     /// Control activity (`noteControlActivity(at:)`): written on the session queue, taken on `queue`, only under
     /// `activityLock`. Its gap is the machine's stall pause (`InputStateMachine.Configuration`).
@@ -85,6 +86,10 @@ public final class InputController: @unchecked Sendable {
     private var cursorQueryFailures = 0
     private var cursorQueryTotalNs: UInt64 = 0
     private var cursorQueryMaxNs: UInt64 = 0
+    /// The last sampled hidden state of the cursor (T-272), for the `pointer_hidden_mode` change line, and how many
+    /// hidden-cursor moves were already reported in `input_age` lines.
+    private var cursorHidden = false
+    private var hiddenMovesLogged = 0
     /// The planner's counters at session start (the live cursor counters are reported per session).
     private var sessionStartCounters = InjectionPlanner.Counters()
     /// Input age at delivery (T-171): clock offset from PONG, per-class distributions.
@@ -96,12 +101,14 @@ public final class InputController: @unchecked Sendable {
                 displays: DisplayProviding = VirtualDisplayLocator(),
                 capsLock: CapsLockControlling = SystemCapsLock(),
                 cursor: CursorLocating = SystemCursor(),
+                visibility: CursorVisibilityChecking = SystemCursorVisibility(),
                 doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval) {
         self.poster = poster
         self.permission = permission
         self.displays = displays
         self.capsLock = capsLock
         self.cursor = cursor
+        self.visibility = visibility
         var planner = InjectionPlanner.Configuration()
         planner.clicks.intervalUs = UInt64(max(0.05, min(doubleClickInterval, 5)) * 1_000_000)
         pipeline = InputPipeline(planner: planner)
@@ -161,6 +168,8 @@ public final class InputController: @unchecked Sendable {
             cursorQueryTotalNs = 0
             cursorQueryMaxNs = 0
             sessionStartCounters = pipeline.planner.counters
+            cursorHidden = false  // the first hidden sample of the session logs its state
+            hiddenMovesLogged = pipeline.planner.counters.hiddenCursorMoves
             ages.reset()  // the offset and ages belong to this session's connection
             timingLock.lock()
             timing.reset()  // T-175: this session's delivery times only
@@ -249,7 +258,10 @@ public final class InputController: @unchecked Sendable {
                 envNs &+= DispatchTime.now().uptimeNanoseconds &- capsStart
                 unknownBefore = pipeline.machine?.keyCounters.unknown ?? 0
             }
-            if case .pointerRel = message { env.cursor = liveCursor() }  // relative moves start where the cursor is
+            if case .pointerRel = message {
+                env.cursor = liveCursor()  // relative moves start where the cursor is
+                env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
+            }
             pushActivity()  // the activity from BEFORE this message (T-163)
             let postNs = flush(pipeline.handle(message, now: now, environment: env), now: now)
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
@@ -365,6 +377,16 @@ public final class InputController: @unchecked Sendable {
         cursorQueryMaxNs = max(cursorQueryMaxNs, elapsed)
         if location == nil { cursorQueryFailures += 1 }
         return location
+    }
+
+    /// The hidden state of the cursor for a relative move (T-272). One log line per change, nothing else.
+    private func sampleCursorHidden() -> Bool {
+        let hidden = visibility.isHidden()
+        if hidden != cursorHidden {
+            cursorHidden = hidden
+            log(.info, "pointer_hidden_mode", "state=\(hidden ? "on" : "off")")
+        }
+        return hidden
     }
 
     /// Mean time of this session's live cursor queries, in microseconds with two decimals.
@@ -539,7 +561,11 @@ public final class InputController: @unchecked Sendable {
 
     /// `ev=input_age` when the open window is a second old (`force`: any open window). Counts and times only.
     private func logInputAge(now: UInt64, force: Bool = false) {
-        if let fields = ages.takeReport(now: now, force: force) { log(.info, "input_age", fields) }
+        if let fields = ages.takeReport(now: now, force: force) {
+            let hidden = pipeline.planner.counters.hiddenCursorMoves
+            log(.info, "input_age", fields + " pointer_hidden_n=\(hidden - hiddenMovesLogged)")
+            hiddenMovesLogged = hidden
+        }
     }
 
     private func log(_ level: LogLevel, _ event: String, _ fields: String = "") {

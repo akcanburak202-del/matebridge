@@ -320,6 +320,8 @@ Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi p
   - Bir sınıfta örnek yoksa yalnız `<sınıf>_n=0` yazılır. Yüzdelikler sabit boyutlu log-doğrusal histogramdan gelir (≤ %6,25 hata, kova üst sınırı, kesin `max` ile kırpılır). `max` kesindir.
   - `late_250ms`: yaşı 250 ms'yi aşan girdi. `neg`: negatif yaş. `no_offset`: ilk PONG'dan önce gelen, yaşı hesaplanamayan girdi (dağılıma girmez).
   - `offset_rtt_us`: kullanılan örneğin RTT'si. `clock_unc_us` = onun yarısı. Örnek yoksa `none`.
+- `I input ev=pointer_hidden_mode state=on|off` (T-272): `CGCursorIsVisible()` değişti (oyun imleci gizledi / gösterdi). Yalnız değişimde bir satır; her `POINTER_REL`'de örneklenir, oturum başında `off` varsayılır. Gizliyken göreli hareket imleci kaydırmaz (yalnız delta akar). Sembol yoksa her zaman görünür sayılır, satır yazılmaz.
+- `input_age` satırının sonuna `pointer_hidden_n=<n>` (T-272): o pencerede imleç gizliyken işlenen göreli hareket sayısı.
 - `input_session_end` satırının sonuna oturum toplamları eklenir, alan adları `age_` önekiyle aynıdır: `age_pen_n= …`, `age_late_250ms= age_neg= age_no_offset= age_offset_rtt_us= age_clock_unc_us=`, ayrıca `age_pongs=<n>` (kabul edilen saat örneği sayısı).
 - Tuş, karakter, keycode ya da koordinat hiçbir satıra yazılmaz; yalnız sayı ve süre.
 

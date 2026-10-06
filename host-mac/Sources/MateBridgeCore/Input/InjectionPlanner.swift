@@ -66,6 +66,8 @@ public struct InjectionPlanner: Sendable {
         /// Live cursor samples within a point of an OLDER posted relative target: WindowServer had not applied our
         /// latest moves yet, so the sample was ignored and the planner's own cursor kept.
         public var liveCursorLagIgnored = 0
+        /// Relative moves made while the cursor was hidden (T-272): delta only, the cursor stayed where it was.
+        public var hiddenCursorMoves = 0
         public init() {}
     }
 
@@ -263,6 +265,15 @@ public struct InjectionPlanner: Sendable {
             case .absolute(let x, let y):
                 target = g.point(x: x, y: y)
                 if let c = validCursor { delta = DisplayPoint(x: target.x - c.x, y: target.y - c.y) }
+            case .relative(let dx, let dy) where env.cursorHidden:
+                // T-272: a hidden cursor (a game) does not move; only the delta flows, like a physical mouse whose
+                // cursor the game detached. The position is the live cursor itself (what WindowServer holds, never
+                // behind our own posts since none moved it), else the last known one. Nothing is remembered as a
+                // target: no post of ours changes where the cursor is.
+                let fx = dx.isFinite ? Double(dx) : 0, fy = dy.isFinite ? Double(dy) : 0
+                target = env.cursor.flatMap { g.onDisplay($0) } ?? validCursor ?? g.center
+                delta = takeRelativeDelta(fx, fy)
+                counters.hiddenCursorMoves += 1
             case .relative(let dx, let dy):
                 // Starts at the live cursor (adopted in `plan`), else the last known position, else the display
                 // center. The position is clamped; the delta is the raw movement, so there is no wall at the edge.

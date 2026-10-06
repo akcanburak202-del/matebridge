@@ -19,3 +19,27 @@ public struct SystemCursor: CursorLocating {
         return DisplayPoint(x: Double(p.x), y: Double(p.y))
     }
 }
+
+/// Whether the Mac's cursor is hidden right now (T-272): a game hides it and works from mouse deltas.
+public protocol CursorVisibilityChecking: Sendable {
+    /// True only when the system says the cursor is hidden. Unknown counts as visible (today's behavior).
+    func isHidden() -> Bool
+}
+
+/// `CGCursorIsVisible` (public, deprecated), looked up with `dlsym` so a Mac without the symbol still builds and runs
+/// (the answer is then always "visible"). T-271 recorded it flipping with the game's hide and show of the cursor;
+/// a call costs a few nanoseconds, so every relative message may ask. It takes no arguments and posts nothing.
+public struct SystemCursorVisibility: CursorVisibilityChecking {
+    private typealias Fn = @convention(c) () -> UInt32
+    private static let function: Fn? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGCursorIsVisible") else { return nil }  // RTLD_DEFAULT
+        return unsafeBitCast(symbol, to: Fn.self)
+    }()
+
+    public init() {}
+
+    public func isHidden() -> Bool {
+        guard let function = Self.function else { return false }
+        return function() == 0
+    }
+}
