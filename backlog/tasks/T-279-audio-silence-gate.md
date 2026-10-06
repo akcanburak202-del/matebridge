@@ -1,7 +1,7 @@
 ---
 id: T-279
 title: Host — tamamen sıfır sesi gönderme (sessizlik kapısı)
-status: in_progress
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -28,6 +28,20 @@ Mac'te bir uygulama ses cihazını açık tutup sessizlik çalınca (tarayıcı 
 
 ## Plan
 
+1. `MateBridgeCore/Audio/AudioSilenceGate.swift`: saf mantik struct. `mutating func shouldSend(sumSquares: Double) -> Bool`. Sifir olmayan paket (`sumSquares > 0`) sayaci sifirlar ve gonderilir. Sifir paket sayaci artirir; ilk 50 sifir paket gonderilir, 51. ve sonrasi atlanir (`skipped` sayilir). `sumSquares` zaten s16'ya cevrilmis orneklerden hesaplaniyor (`PCMConvert.convertStereo`), yani `== 0` tam olarak "her s16 ornek 0" demek; 1 LSB (-90 dBFS) sifir sayilmaz. Gercek zamanli yola dokunulmaz.
+2. `AudioStreamer.Stream` icine `gate` konur (her `startCapture` yeni `Stream` olusturdugu icin yeni stream_id ve oturum degisiminde sayac kendiliginden sifirlanir). `drain()`: paket okununca kapi sorulur; atlanirsa `seq` artmaz, `stats.addSilentSkipped()`, paket gonderilmez. Akisin ilk paketi sifir olsa bile gonderilir (esik 50 > 0).
+3. `AudioStatsWindow`: `silentSkipped` sayaci, `logFields` sonuna `silent_skipped=<n>` eklenir; mevcut alanlar degismez; `rms_dbfs` yalniz gonderilen paketlerden.
+4. Istemci dogrulamasi (kod okuma, dokunulmaz): atlanan bosluk >= 500 ms > `maxGapFillFrames` (960 kare = 20 ms) -> `AudioJitterBuffer.write` bosluk doldurmaz, `gap*1e6/sampleRate >= jumpUs (20 ms)` ve capture-time sicramasi -> `discontinuities++` -> `PlayoutCore.classifyStarve` `idleGaps++` (alt tasma degil).
+5. Testler (`AudioStreamerTests`, `AudioSilenceGateTests` eklenir): 50 sifirdan sonra atlama, sifir olmayanda surme + seq ardisik + sample_index sicramasi, < 500 ms sessizlik aynen gider, ilk paket kurali, 1 LSB paket sifir sayilmaz (packetizer uzerinden gercek float -> s16), stats alani, yeni stream'de sayac sifirlanmasi.
+
 ## Handoff
+
+- Commit: `git log task/T-279-audio-silence-gate` (kod + handoff tek commit; SHA orkestratorun raporunda).
+- Dosyalar: `host-mac/Sources/MateBridgeCore/Audio/AudioSilenceGate.swift` (yeni), `AudioStreamer.swift`, `AudioStats.swift`; testler `AudioSilenceGateTests.swift` (yeni), `AudioStreamerTests.swift` (7 yeni test), `AudioCaptureTests.swift` (stats satırı beklentisi). Protokol, istemci ve gerçek zamanlı yol (`AudioPacketizer`, `PCMConvert`) değişmedi.
+- Davranış: `AudioStreamer.drain` her okunan pakette `sumSquares == 0` mı bakar (s16 üzerinden hesaplandığı için tam olarak "her s16 örnek 0"; 1 LSB sıfır sayılmaz). İlk 50 sıfır paket gönderilir, 51. ve sonrası atlanır; sıfır olmayan paket sayacı sıfırlar ve gönderilir. `seq` yalnız gönderilen paketleri sayar. Kapı `Stream` içinde olduğu için yeni stream_id / oturum / yeniden kurulumda açık başlar; akışın ilk paketi her zaman gider.
+- Stats: `... wire_dropped=<n> silent_skipped=<n>`; `packets` ve `rms_dbfs` yalnız gönderilenlerden. Atlanan paket `dropped` sayılmaz.
+- İstemci doğrulaması (kod okuma, çalıştırılmadı): atlanan boşluk >= 500 ms; `AudioJitterBuffer.maxGapFillFrames` = 960 kare (20 ms) olduğundan sessizlik doldurulmaz, `jumpUs` = 20 ms aşıldığı için `discontinuities++`, `PlayoutCore.classifyStarve` bunu `idleGaps++` sayar (alt taşma değil, güvenlik payı büyümez).
+- check.sh: ALL OK (host-mac 1021 test, gradle, probes).
+- Gerçek donanımda doğrulanacak: sessizlik çalan bir sekmeyle host logunda `silent_skipped` ~100/sn ve `packets` ~0; sesin yeniden başlamasında ilk 10-20 ms'in kesilmemesi, istemci logunda `idleGaps` artışı ve `underrun` artmaması. 500 ms'den kısa sessizlik üreten uygulamalarda kapı hiç kapanmaz (beklenen).
 
 ## Open questions

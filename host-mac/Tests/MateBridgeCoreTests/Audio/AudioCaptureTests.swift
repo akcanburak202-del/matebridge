@@ -291,11 +291,13 @@ import Testing
         }
         s.addDropped(3)
         s.addWireDropped(1)
+        s.addSilentSkipped()
+        s.addSilentSkipped()
         s.noteBacklog(packets: 4, packetMs: 10)
         s.noteBacklog(packets: 2, packetMs: 10)
         #expect(abs(s.rmsDbfs - 20 * log10(0.5)) < 1e-9)
         #expect(s.logFields == "packets=4 dropped=4 ring_ms_max=40 callback_ms_p50_95=0.20/0.40 rms_dbfs=-6.0 "
-            + "wire_dropped=1")
+            + "wire_dropped=1 silent_skipped=2")
     }
 
     @Test func audioKnobOffOnlyForOff() {
