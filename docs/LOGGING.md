@@ -331,6 +331,7 @@ Yalnız ölçüm; girdinin nasıl uygulandığını değiştirmez (bayat girdi p
 - `ev=scope root=matebridge|download|all ro=0|1` (T-190, karar 0028): her sunucu başlangıcında sunulan kök sınıfı. Varsayılan `matebridge` (`/sdcard/MateBridge/`).
 - `ev=scope_missing root= ro=` (W): klasör yok ve oluşturulamadı; sunucu kapalı kalır (`state=off reason=failed`), asla tüm depolamaya düşmez.
 - `ev=scope_change root= ro= running=0|1`: klasör ya da salt okunur değişti. `running=1` ise ardından `state=off reason=destroy` ve yeni bir `state=on` gelir (Mac'in kendiliğinden yeniden bağlaması T-206).
+- `ev=put_replace_failed restored=0|1` (W, T-288): PUT var olan dosyanın yerine geçemedi; istek 500 döner. `restored=1`: eski dosya geri yerinde, yüklenen geçici dosya silindi. `restored=0`: geri alma da başarısız; eski içerik yedek adıyla, yeni içerik geçici adıyla gizli (`.mbput-*`) kalır, ikisi de silinmez. Dosya adı loglanmaz.
 
 ## Girdi teslim zamanlaması (Mac, `input`, T-175)
 

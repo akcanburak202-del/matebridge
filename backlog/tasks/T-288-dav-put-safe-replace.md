@@ -1,7 +1,7 @@
 ---
 id: T-288
 title: İstemci — WebDAV PUT değiştirmesi başarısız olunca hiçbir sürümü silme
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
