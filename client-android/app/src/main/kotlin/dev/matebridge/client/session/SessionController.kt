@@ -129,6 +129,12 @@ interface SessionListener {
     fun onFilesNet(msg: FilesNet, gen: Int) {}
 
     /**
+     * T-269 round 3 (defence in depth): the scope of the tablet server that is READY now ([FilesServerScope.NONE] when
+     * none). The file tunnel pairs a connection only with a Wi-Fi server of its own control generation. Any thread.
+     */
+    fun filesServerScope(): dev.matebridge.client.files.FilesServerScope = dev.matebridge.client.files.FilesServerScope.NONE
+
+    /**
      * T-134: the TCP connect of direct wake attempt [wake] finished ([ok]: connected; the session goes on as usual).
      * Control reader thread, before the machine sees the connection open or fail.
      */
@@ -341,10 +347,10 @@ class SessionController(
     }
 
     /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
-    fun setFilesInfo(info: FilesInfo) {
+    fun setFilesInfo(info: FilesInfo, scope: dev.matebridge.client.files.FilesServerScope) {
         if (terminated.get()) return
         ensureEngine()
-        filesMailbox.post(SessionMachine.Event.SetFiles(info))
+        filesMailbox.post(SessionMachine.Event.SetFiles(info, scope))
     }
 
     /**
@@ -650,6 +656,7 @@ class SessionController(
                     } else {
                         filesTunnel = FilesTunnel(
                             plan, secrets,
+                            davScope = { listener.filesServerScope() },
                             newHostSocket = {
                                 Socket().also { sock ->
                                     // Low priority on the wire (decision 0035): CS1 ("lower effort"), before the connect.

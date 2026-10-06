@@ -29,6 +29,9 @@ class FilesSessionGate {
 
     val trusted: Boolean get() = connected && connGen >= 0 && configGen == connGen
 
+    /** The newest control connection generation the UI has seen (-1 before the first). */
+    val generation: Int get() = connGen
+
     /** The current connection's transport; null before the first connection. */
     val transport: Transport? get() = connTransport
 
@@ -94,7 +97,17 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     private val publish: (FilesInfo) -> Unit,
     private val onStatus: () -> Unit,
     private val log: (warn: Boolean, ev: String, fields: String) -> Unit,
+    /**
+     * T-269 round 3: when set, used instead of [publish]; every FILES_INFO carries the [FilesServerScope] of the server it
+     * describes (READY: that server's kind and control generation; OFF and STANDBY: [FilesServerScope.NONE]).
+     */
+    private val publishScoped: ((FilesInfo, FilesServerScope) -> Unit)? = null,
 ) {
+    private fun emit(info: FilesInfo, scope: FilesServerScope = FilesServerScope.NONE) {
+        val p = publishScoped
+        if (p != null) p(info, scope) else publish(info)
+    }
+
     interface Server {
         fun start()
         fun stop()
@@ -120,6 +133,7 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
 
     /** The running server is a Wi-Fi server; and STANDBY is the last thing published (both guarded by [lock]). */
     private var serverWifi = false
+    private var serverGen = -1
     private var standbyShown = false
 
     @Volatile var status = FilesStatus.DISABLED
@@ -129,12 +143,14 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     fun sync(
         enabled: Boolean, permission: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?,
         netOpen: Boolean = false,
+        /** The control connection generation of the session this sync belongs to (tags a server started now). */
+        generation: Int = -1,
     ) {
         if (FilesSwitch.shouldRun(enabled, permission, foreground, sessionTrusted, transport, netOpen)) {
             val wifi = transport == Transport.WIFI
             // A running server of the other kind (cannot happen across a connection change, which drops trust first) goes first.
-            if (synchronized(lock) { server != null && serverWifi != wifi }) stop("mode", FilesInfo.OFF)
-            synchronized(lock) { if (server == null) startLocked(wifi) }
+            if (synchronized(lock) { server != null && (serverWifi != wifi || serverGen != generation) }) stop("mode", FilesInfo.OFF)
+            synchronized(lock) { if (server == null) startLocked(wifi, generation) }
         } else {
             val standby = FilesSwitch.standbyEligible(enabled, permission, foreground, sessionTrusted, transport)
             stop(FilesSwitch.stopReason(enabled, permission, foreground, sessionTrusted, transport), if (standby) FilesInfo.STANDBY else FilesInfo.OFF)
@@ -150,20 +166,22 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     private fun publishIdle(standby: Boolean) {
         synchronized(lock) {
             if (standby && server == null) {
-                if (!standbyShown) { standbyShown = true; publish(FilesInfo.STANDBY) }
+                if (!standbyShown) { standbyShown = true; emit(FilesInfo.STANDBY) }
             } else if (!standby && standbyShown) {
                 standbyShown = false
-                publish(FilesInfo.OFF)
+                emit(FilesInfo.OFF)
             }
         }
     }
 
     fun shutdown() = stop("destroy")
 
-    private fun startLocked(forWifi: Boolean) {
+    private fun startLocked(forWifi: Boolean, forGeneration: Int) {
         val myGen = ++gen
         val token = newToken()
         serverWifi = forWifi
+        serverGen = forGeneration
+        val scope = FilesServerScope(forWifi, forGeneration)
         standbyShown = false // READY (or OFF) supersedes STANDBY
         val s = factory.create(token, object : Events {
             override val wifi: Boolean = forWifi
@@ -173,7 +191,7 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
             override fun onListening(port: Int) {
                 synchronized(lock) {
                     if (gen != myGen) return
-                    publish(FilesInfo(FilesInfo.STATE_READY, port, token))
+                    emit(FilesInfo(FilesInfo.STATE_READY, port, token), scope)
                     setStatus(if (wifi) FilesStatus.WIFI_READY else FilesStatus.READY)
                 }
                 log(false, "server", "state=on port=$port")
@@ -184,7 +202,7 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
                     if (gen != myGen) return // stopped on purpose: stop() already reported OFF
                     retired = server
                     server = null
-                    publish(FilesInfo.OFF)
+                    emit(FilesInfo.OFF)
                     setStatus(FilesStatus.FAILED)
                 }
                 log(true, "server", "state=off port=0 reason=${if (failed) "failed" else "ended"}")
@@ -204,7 +222,7 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
             retired = cur
             gen++ // late callbacks of the old server are ignored
             standbyShown = final.state == FilesInfo.STATE_STANDBY && serverWifi
-            publish(if (standbyShown) FilesInfo.STANDBY else FilesInfo.OFF) // queued before the listener closes, so the host learns it as early as possible
+            emit(if (standbyShown) FilesInfo.STANDBY else FilesInfo.OFF) // queued before the listener closes, so the host learns it as early as possible
             cur
         }
         s.stop()

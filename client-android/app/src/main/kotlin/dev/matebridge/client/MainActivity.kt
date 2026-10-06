@@ -170,6 +170,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** T-153: the server also needs a trusted USB session (authenticated STREAM_CONFIG on the current connection). */
     private val filesGate = FilesSessionGate()
 
+    /** T-269: FILES_NET reaches the UI thread through one pending slot (the latest wins), so repeats cannot pile up. */
+    private val filesNetDelivery = dev.matebridge.client.files.FilesNetDelivery({ ui.post(it) }, { filesGate.generation }) { gen, msg ->
+        if (filesGate.onFilesNet(gen, msg)) syncFiles()
+    }
+
     // T-105: settings controls, built once from SettingsCatalog over [settingsHost] into both panels.
     private val settingsPanel = SettingsPanelState { ev, fields -> MbLog.i(ev, fields) }
     private lateinit var sidePanel: SettingsSidePanel
@@ -611,9 +616,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
             // T-269 (decision 0035): the Mac opens / closes the tablet files over Wi-Fi. Same UI-thread order as onConnectionGen.
-            override fun onFilesNet(msg: FilesNet, gen: Int) {
-                runOnUiThread { if (filesGate.onFilesNet(gen, msg)) syncFiles() }
-            }
+            override fun onFilesNet(msg: FilesNet, gen: Int) { filesNetDelivery.offer(gen, msg) } // bounded: one queued run
+
+            override fun filesServerScope() = if (::files.isInitialized) files.liveScope else dev.matebridge.client.files.FilesServerScope.NONE
 
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
         }, loggedPrefs(gameSettings.prefs(streamMode)), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
@@ -624,7 +629,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             helloCapabilities = { if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L },
         )
         startFullChromaSelfTest()
-        files = FilesController({ controller.setFilesInfo(it) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
+        files = FilesController({ info, scope -> controller.setFilesInfo(info, scope) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
         capture = InputCapture(
             object : InputSink {
                 override fun send(msg: Message) = controller.trySendInput(msg, inputGen)
@@ -2121,7 +2126,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-269: while sharing is off or not permitted the Mac has seen OFF and closed; a stale open request must not
         // restart the server when it is switched back on (the Mac's menu sends a new one).
         if (!settings.filesShare() || !files.hasPermission()) filesGate.forgetNet()
-        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen)
+        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen, filesGate.generation)
     }
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI

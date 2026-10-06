@@ -31,7 +31,8 @@ import java.security.SecureRandom
  * changed while running by [onStreamBitrate]). A Wi-Fi folder that cannot be made keeps the server off like on USB.
  */
 class FilesController(
-    publish: (FilesInfo) -> Unit,
+    /** FILES_INFO with the scope of the server it describes (READY) or [FilesServerScope.NONE] (OFF, STANDBY). */
+    publish: (FilesInfo, FilesServerScope) -> Unit,
     /** The stored scope (T-190); read at every server start. Main thread. */
     private val scope: () -> FilesScope,
     onStatus: () -> Unit,
@@ -48,6 +49,13 @@ class FilesController(
     @Volatile private var startedWifi = false
 
     /** T-269: the stream's video bit rate (kbit/s, 0 = unknown) and the newest Wi-Fi server, whose cap follows it. */
+    /**
+     * T-269 round 3: the scope of the server that is READY right now ([FilesServerScope.NONE] otherwise), read by the file
+     * tunnel before it pairs a connection with the local server.
+     */
+    @Volatile var liveScope: FilesServerScope = FilesServerScope.NONE
+        private set
+
     @Volatile private var videoKbps = 0
     @Volatile private var wifiServer: DavServer? = null
 
@@ -93,7 +101,11 @@ class FilesController(
             }
         },
         newToken = { FilesSwitch.newToken(random) },
-        publish = publish,
+        publish = { },
+        publishScoped = { info, scope ->
+            liveScope = if (info.ready) scope else FilesServerScope.NONE // before the host hears READY, after OFF it is gone
+            publish(info, scope)
+        },
         onStatus = onStatus,
         log = { warn, ev, fields -> if (warn) MbLog.w(ev, fields, COMPONENT) else MbLog.i(ev, fields, COMPONENT) },
     )
@@ -116,8 +128,11 @@ class FilesController(
      * Starts or stops the server for the current [enabled] setting, [foreground] state and session ([sessionTrusted]
      * and its [transport], see [FilesSessionGate]). Main thread.
      */
-    fun sync(enabled: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?, netOpen: Boolean = false) {
-        lastSync = { lifecycle.sync(enabled, hasPermission(), foreground, sessionTrusted, transport, netOpen) }
+    fun sync(
+        enabled: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?, netOpen: Boolean = false,
+        generation: Int = -1,
+    ) {
+        lastSync = { lifecycle.sync(enabled, hasPermission(), foreground, sessionTrusted, transport, netOpen, generation) }
         lastSync?.invoke()
     }
 

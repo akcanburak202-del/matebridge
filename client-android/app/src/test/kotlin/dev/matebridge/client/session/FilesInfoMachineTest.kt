@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.files.FilesServerScope
 import dev.matebridge.client.protocol.AudioPrefs
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.FilesInfo
@@ -20,6 +21,8 @@ class FilesInfoMachineTest {
     private val ep = Endpoint("127.0.0.1", 7420)
     private val now = 1_000_000L
     private val ready = FilesInfo(FilesInfo.STATE_READY, 47010, "0123456789abcdef0123456789abcdef")
+
+    private fun usbScope(gen: Int) = FilesServerScope(false, gen)
 
     private fun sends(a: List<Action>) = a.filterIsInstance<Action.Send>().map { it.msg }
 
@@ -45,37 +48,54 @@ class FilesInfoMachineTest {
     @Test fun neverSentWithoutFileServer() {
         val m = SessionMachine(hello) // initialFiles = null
         assertTrue(sends(accept(m, open(m))).none { it is FilesInfo })
-        assertTrue(m.handle(Event.SetFiles(ready), now).isEmpty())
+        assertTrue(m.handle(Event.SetFiles(ready, usbScope(1)), now).isEmpty())
     }
 
     @Test fun changeBeforeApprovalIsRememberedAndSentOnAccept() {
         val m = SessionMachine(hello, initialFiles = FilesInfo.OFF)
-        assertTrue(m.handle(Event.SetFiles(ready), now).isEmpty()) // idle
+        assertTrue(m.handle(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE), now).isEmpty()) // idle
         val gen = open(m)
-        assertTrue(m.handle(Event.SetFiles(ready), now).isEmpty()) // awaiting the ack
-        assertEquals(ready, sends(accept(m, gen)).last())
+        assertTrue(m.handle(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE), now).isEmpty()) // awaiting the ack
+        assertEquals(FilesInfo.STANDBY, sends(accept(m, gen)).last())
     }
 
     @Test fun changesAreSentAndRepeatsAreNot() {
         val m = SessionMachine(hello, initialFiles = FilesInfo.OFF)
-        accept(m, open(m))
-        assertEquals(listOf(ready), sends(m.handle(Event.SetFiles(ready), now)))
-        assertTrue(m.handle(Event.SetFiles(ready.copy()), now).isEmpty())
+        val gen = open(m)
+        accept(m, gen)
+        val scope = usbScope(gen) // the server of THIS connection
+        assertEquals(listOf(ready), sends(m.handle(Event.SetFiles(ready, scope), now)))
+        assertTrue(m.handle(Event.SetFiles(ready.copy(), scope), now).isEmpty())
         val newToken = ready.copy(token = "ffffffffffffffffffffffffffffffff")
-        assertEquals(listOf(newToken), sends(m.handle(Event.SetFiles(newToken), now)))
-        assertEquals(listOf(FilesInfo.OFF), sends(m.handle(Event.SetFiles(FilesInfo.OFF), now)))
+        assertEquals(listOf(newToken), sends(m.handle(Event.SetFiles(newToken, scope), now)))
+        assertEquals(listOf(FilesInfo.OFF), sends(m.handle(Event.SetFiles(FilesInfo.OFF, FilesServerScope.NONE), now)))
     }
 
-    @Test fun everySessionGetsTheCurrentStateOnce() {
+    @Test fun aReadyOfAnotherSessionsServerIsAnnouncedAsOff() {
         val m = SessionMachine(hello, initialFiles = FilesInfo.OFF)
-        accept(m, open(m))
-        m.handle(Event.SetFiles(ready), now)
+        val gen = open(m)
+        accept(m, gen)
+        assertEquals(listOf(FilesInfo.OFF), sends(m.handle(Event.SetFiles(ready, usbScope(gen - 1)), now)))
+    }
+
+    @Test fun everySessionGetsTheCurrentStateOnceButNeverAnEarlierSessionsReady() {
+        val m = SessionMachine(hello, initialFiles = FilesInfo.OFF)
+        val g1 = open(m)
+        accept(m, g1)
+        m.handle(Event.SetFiles(ready, usbScope(g1)), now)
         m.handle(Event.Stop, now)
-        assertEquals(ready, sends(accept(m, open(m))).last())
+        // the UI has not stopped that server yet: the new session still must not hear its READY and token
+        assertEquals(FilesInfo.OFF, sends(accept(m, open(m))).last())
+        // STANDBY is a state, not a server: it is republished
+        val m2 = SessionMachine(hello, initialFiles = FilesInfo.OFF)
+        accept(m2, open(m2))
+        m2.handle(Event.SetFiles(FilesInfo.STANDBY, FilesServerScope.NONE), now)
+        m2.handle(Event.Stop, now)
+        assertEquals(FilesInfo.STANDBY, sends(accept(m2, open(m2))).last())
     }
 
     @Test fun tokenIsNotInToString() {
         assertFalse(ready.toString().contains(ready.token))
-        assertFalse(Event.SetFiles(ready).toString().contains(ready.token))
+        assertFalse(Event.SetFiles(ready, usbScope(1)).toString().contains(ready.token))
     }
 }

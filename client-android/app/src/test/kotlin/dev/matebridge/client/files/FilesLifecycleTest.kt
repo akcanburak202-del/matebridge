@@ -304,6 +304,62 @@ class FilesLifecycleTest {
         assertEquals(FilesStatus.NO_USB_SESSION, r.lc.status)
     }
 
+    @Test fun everyPublishedReadyCarriesTheScopeOfItsServerAndOffAndStandbyCarryNone() {
+        val out = mutableListOf<Pair<FilesInfo, FilesServerScope>>()
+        val servers = mutableListOf<FakeServer>()
+        val lc = FilesLifecycle<FakeServer>(
+            factory = { token, ev, after -> FakeServer(token, ev, after, mutableListOf()).also { servers += it } },
+            newToken = { "tok${servers.size + 1}" },
+            publish = { },
+            onStatus = { },
+            log = { _, _, _ -> },
+            publishScoped = { info, scope -> out += info to scope },
+        )
+        // Wi-Fi: standby, then the Mac's open on generation 9
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = true, generation = 9)
+        servers[0].events.onListening(41000)
+        lc.sync(true, true, true, true, Transport.WIFI, netOpen = false, generation = 9) // CLOSE
+        lc.sync(true, true, true, false, Transport.WIFI, netOpen = false, generation = 9) // session over
+        // USB on generation 10
+        lc.sync(true, true, true, true, Transport.USB, generation = 10)
+        servers[1].events.onListening(42000)
+        assertEquals(
+            listOf(
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 41000, "tok1") to FilesServerScope(true, 9),
+                FilesInfo.STANDBY to FilesServerScope.NONE,
+                FilesInfo.OFF to FilesServerScope.NONE,
+                FilesInfo(FilesInfo.STATE_READY, 42000, "tok2") to FilesServerScope(false, 10),
+            ),
+            out,
+        )
+    }
+
+    @Test fun anEjectAndReopenOnTheSamePortStopsTheServerAndStartsAFreshOneWithANewToken() {
+        // The MainActivity wiring: FILES_NET -> FilesNetDelivery -> gate -> sync, with the Mac's CLOSE and OPEN coalesced.
+        val r = Rig()
+        val gate = trustedGate(5, Transport.WIFI)
+        val queue = ArrayDeque<Runnable>()
+        val delivery = FilesNetDelivery({ queue.addLast(it) }, { gate.generation }) { gen, msg ->
+            if (gate.onFilesNet(gen, msg)) r.sync(transport = Transport.WIFI, netOpen = gate.netOpen)
+        }
+        val open = FilesNet(FilesNet.STATE_OPEN, 47003, 2, 12)
+        delivery.offer(5, open)
+        queue.removeFirst().run()
+        r.servers[0].events.onListening(41000)
+        r.events.clear()
+        // eject and reopen (same port) before the UI thread gets to run
+        delivery.offer(5, FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0))
+        delivery.offer(5, open)
+        queue.removeFirst().run()
+        assertEquals(listOf("standby", "stop:tok1", "start:tok2"), r.events.filterNot { it.startsWith("ready") })
+        assertEquals(2, r.servers.size)
+        assertNotEquals(r.servers[0].token, r.servers[1].token)
+        assertSame(r.servers[0], r.servers[1].after) // the old workers (a running COPY) are waited for, then gone
+        assertTrue(r.servers[0].stopped)
+    }
+
     @Test fun aUsbServerIsNotAWifiServer() {
         val r = Rig()
         r.sync()

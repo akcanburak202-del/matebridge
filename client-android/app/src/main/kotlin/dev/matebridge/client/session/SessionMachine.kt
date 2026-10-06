@@ -5,6 +5,7 @@ import dev.matebridge.client.protocol.Bye
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.protocol.DisplayRate
+import dev.matebridge.client.files.FilesServerScope
 import dev.matebridge.client.files.FilesTunnelPlan
 import dev.matebridge.client.protocol.FilesInfo
 import dev.matebridge.client.protocol.FilesNet
@@ -145,7 +146,7 @@ class SessionMachine(
         /** The user's audio setting (T-095): remembered, and sent as AUDIO_PREFS now when input is allowed. */
         data class SetAudio(val enabled: Boolean) : Event
         /** T-135: the tablet file server's state: remembered, sent as FILES_INFO now when input is allowed and it changed. */
-        data class SetFiles(val info: FilesInfo) : Event
+        data class SetFiles(val info: FilesInfo, val scope: FilesServerScope) : Event
         /** Video connection closed or failed to open. */
         data class VideoClosed(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
@@ -248,6 +249,13 @@ class SessionMachine(
     private var displayHz = 0 // 0 = not measured yet: nothing is sent
     private var audio: Boolean? = initialAudio
     private var files: FilesInfo? = initialFiles
+
+    /**
+     * T-269 round 3: which server [files] describes (READY only; OFF/STANDBY carry NONE). A READY is only ever sent to the
+     * host or used for a tunnel while its generation is the current control connection's ([effectiveFiles]): a previous
+     * session's READY and token are never republished, and a Wi-Fi tunnel never targets a server that is not a Wi-Fi one.
+     */
+    private var filesScope = FilesServerScope.NONE
 
     /** T-269: the Mac's open request of the current connection (sanitised), null = none/closed; and the last tunnel plan sent. */
     private var filesNet: FilesNet? = null
@@ -417,7 +425,7 @@ class SessionMachine(
                 failCandidate(out, nowUs, reason)
             } else if (event.gen == controlGen) {
                 if (candAck != null) {
-                    oldConnectionGone("closed") // T-205: the host's takeover may close it before the candidate's record
+                    oldConnectionGone("closed", out) // T-205: the host's takeover may close it before the candidate's record
                 } else if (wakeAttempt != null) {
                     // T-134: a wake attempt that did not connect has no retry timer; the wake planner paces attempts.
                     wakeAttempt = null
@@ -546,9 +554,10 @@ class SessionMachine(
             }
             is Event.SetFiles -> {
                 // Only a client with a file server (non-null) sends FILES_INFO (PROTOCOL.md 0x09): once per session, then on change.
-                if (files != null && event.info != files) {
+                if (files != null && (event.info != files || event.scope != filesScope)) {
                     files = event.info
-                    if (inputAllowed) out += Action.Send(event.info)
+                    filesScope = event.scope
+                    if (inputAllowed) effectiveFiles()?.let { out += Action.Send(it) }
                 }
             }
             is Event.Tick -> onTick(event.videoFrames, nowUs, out)
@@ -562,7 +571,7 @@ class SessionMachine(
      * port is ignored.
      */
     private fun onFilesNet(msg: FilesNet, out: MutableList<Action>) {
-        if (!inputAllowed) return
+        if (!inputAllowed || oldGone) return
         val ep = endpoint
         if (ep == null || ConnectMode.transportOf(ep) == Transport.USB) {
             log('W', "files_net_ignored", "reason=usb")
@@ -575,6 +584,12 @@ class SessionMachine(
         }
         if (msg.port == 0) {
             log('W', "files_net_ignored", "reason=no_port")
+            return
+        }
+        // PROTOCOL.md 0x0A: a repeated OPEN with the same port changes nothing (other pool/max too: live connections and
+        // copies on them are never interrupted); only another port replaces the open request and so the tunnel.
+        if (filesNet?.port == msg.port) {
+            log('I', "files_net_repeat", "")
             return
         }
         val pool = msg.pool.coerceIn(FilesNet.POOL_MIN, FilesNet.POOL_MAX)
@@ -591,10 +606,19 @@ class SessionMachine(
      * T-269: the file tunnel this session wants right now: an accepted, trusted Wi-Fi session, the Mac's open request and
      * the tablet's server READY on a port. The token is not part of it (the Mac's HTTP traffic carries it).
      */
+    /** The FILES_INFO this session may announce: a READY of another session's server (or none) is OFF. */
+    private fun effectiveFiles(): FilesInfo? {
+        val f = files ?: return null
+        return if (f.ready && filesScope.generation != controlGen) FilesInfo.OFF else f
+    }
+
     private fun desiredTunnel(): FilesTunnelPlan? {
         val net = filesNet ?: return null
-        val info = files ?: return null
-        if (!inputAllowed || !info.ready || info.port !in 1..65535) return null
+        val info = effectiveFiles() ?: return null
+        if (!inputAllowed || oldGone || !info.ready || info.port !in 1..65535) return null
+        // Only the Wi-Fi server of THIS control connection: never a USB-scope server (possibly the whole storage), never
+        // one started for an earlier session or before a migration switch.
+        if (!filesScope.wifi || filesScope.generation != controlGen) return null
         val ep = endpoint ?: return null
         if (ConnectMode.transportOf(ep) == Transport.USB) return null
         return FilesTunnelPlan(controlGen, ep.host, net.port, net.pool, net.max, info.port, sessionId)
@@ -626,7 +650,7 @@ class SessionMachine(
             is Clipboard -> if (inputAllowed) out += Action.DeliverClipboard(msg, controlGen) // T-150: never before local trust
             is Bye -> {
                 if (msg.reason == Bye.SUPERSEDED && candAck != null) {
-                    oldConnectionGone("bye") // T-205: the host took over for our candidate's proof; it decides now
+                    oldConnectionGone("bye", out) // T-205: the host took over for our candidate's proof; it decides now
                     return
                 }
                 if (msg.reason == Bye.REJECTED) onPairingRejected()
@@ -733,7 +757,7 @@ class SessionMachine(
         out += Action.Send(prefs) // T-050: right after the proof PING, never before it
         if (displayHz > 0) out += Action.Send(DisplayRate(displayHz)) // T-059: once, after STREAM_PREFS
         audio?.let { out += Action.Send(AudioPrefs(it)) } // T-095: after the display messages
-        files?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS
+        effectiveFiles()?.let { out += Action.Send(it) } // T-135: once per session, after AUDIO_PREFS (never an earlier session's READY)
         nextPingUs = nowUs + pingIntervalUs
         backoffUs = BACKOFF_START_US
         userInitiated = false
@@ -1211,11 +1235,17 @@ class SessionMachine(
     }
 
     /** T-205: BYE(SUPERSEDED) or a close of the current connection while the proof is pending (final, unlike [oldStale]). */
-    private fun oldConnectionGone(how: String) {
+    private fun oldConnectionGone(how: String, out: MutableList<Action>) {
         if (oldGone) return
         oldGone = true
         oldStale = false
         log('I', "migration_old_gone", "how=$how")
+        // T-269: the old control session is definitively over: its file connections end now (the plan turns null), and the
+        // UI hears CLOSE so the tablet's server stops, whether or not the candidate is ever promoted.
+        if (filesNet != null) {
+            filesNet = null
+            out += Action.FilesNetReceived(FilesNet(FilesNet.STATE_CLOSE, 0, 0, 0), controlGen)
+        }
     }
 
     /**
