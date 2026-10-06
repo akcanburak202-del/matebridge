@@ -28,6 +28,13 @@ Karar 0032 güncellemesi (2026-10-06): film ve video izlemek için HDR anahtarı
 
 ## Plan
 
+1. `Settings`: yeni `KEY_HDR_DAILY = "hdr_daily"`, `hdrDaily()`/`setHdrDaily()`; `hdrFor(mode)`/`setHdrFor(mode, on)` (Oyun -> eski `hdr_game`, Günlük -> `hdr_daily`, Çizim -> false/yoksay). `hdr_game` anahtarı ve değeri aynen kalır; `USER_KEYS`'e `hdr_daily` eklenir (Varsayılanlara dön ikisini de siler).
+2. `HdrPolicy`: `dynamicRange(cap, mode, userOn)` -> `cap.supported && (Günlük || Oyun) && userOn` (`userOn` = o modun ayarı); `rowHidden` yalnız Çizim; KDoc ve yorumlar güncellenir.
+3. `GameModeSettings`: `hdrSetting` -> `hdrSetting(mode)`; `dynamicRange(mode)` o modun ayarını okur; `selectHdr(on, mode)` o moda yazar (Çizim: yazmaz, null), istek değişirse `prefs(mode)` döner. Mod değişince `prefs(mode)` zaten yeni modun ayarını okur.
+4. `SettingsCatalog`/`MainActivity`: `hdrEnabled` o anki modun ayarı; `ev=hdr_request` `setting=` o modun ayarı. Satır/Info gizleme `rowHidden` ile (Çizim). Yorum "yalnız Oyun" güncellenir.
+5. Testler: `HdrTest` (karar tablosu, mod başına okuma/yazma, eski `hdr_game` korunur, mod değişimi, Tam renk + HDR10), `SettingsCatalogTest` (satır Günlük'te görünür, Çizim'de gizli), `SettingsResetTest` (iki ayar da Kapalı).
+6. `./scripts/check.sh`.
+
 ## Handoff
 
 ## Open questions
