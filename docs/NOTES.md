@@ -1615,3 +1615,9 @@ Kayıt: `~/.cache/matebridge-tools/data/2026-10-06-cursor/` (180 s, 60 Hz, table
 
 - Deneme host'u (2f673912) ile: yazı yazınca gizlenen imleç tablete bağlı mouse ile geri geliyor (risk yok). RE4'te `pointer_hidden_mode on` ~6 dk, gizliyken hareketler konumu değiştirmeden gitti (`pointer_hidden_n` 60–90/s).
 - RE4: oyun içinde (oynanış) tablet klavyesi ve tablete bağlı mouse **çalışıyor** (NSEvent/CGEvent yolu); **oyun içi menüde çalışmıyor** (menü GameController `GCKeyboard`/`GCMouse` okuyor) → kullanıcı menüde Mac'e doğrudan bağlı mouse kullanmak zorunda. Çözüm sanal HID aygıtı (karar + araştırma gerekir).
+
+## 2026-10-06 ~14:40 — USB tethering denemesi: kapandı (Wi-Fi modelinde yok)
+
+- `svc usb setFunctions ncm` (kablosuz adb ile) çalıştı: tablet `ncm,adb`, Mac yerleşik sürücüyle "MRDI-W09" ağ arayüzü açtı (en8, CDC-NCM, 480 Mb/s). Tablette `ncm0` UP, kendiliğinden 192.168.66.163/24 (Huawei'nin kendi PC bağlantısı yapısı gibi), ama uygulamalar (ve shell) bu arayüze yönlenemiyor: `ping6 -I ncm0 … → Network is unreachable` (netd ilke yönlendirmesi; arayüz ConnectivityService'te kayıtlı ağ değil). Mac→tablet ICMP/IPv6 de yanıtsız.
+- Uygulamaya yol açmanın tek yolu Android tethering'i (arayüzü yerel ağa ekler, DHCP verir); `tether_force_usb_functions=1` ile yöntem NCM'e çevrildi, ama **MRDI-W09'da (yalnız Wi-Fi) USB paylaşımı arayüzü yok** (TetherSettings yalnız "Wi-Fi köprüsü" ve "Bluetooth bağlantı paylaşımı" gösteriyor). Tethering'i adb ile başlatmak mümkün olsa bile her takışta adb gerekeceğinden `adb reverse`'e göre kazanç yok. NCM işlevi kısa sürede kendiliğinden eski hâline döndü.
+- Geri alındı: `tether_force_usb_functions` silindi, USB `hisuite,mtp,mass_storage,adb`. **Konu kapandı**; AOA zaten rafta.
