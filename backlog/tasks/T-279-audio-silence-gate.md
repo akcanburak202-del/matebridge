@@ -1,7 +1,7 @@
 ---
 id: T-279
 title: Host — tamamen sıfır sesi gönderme (sessizlik kapısı)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
