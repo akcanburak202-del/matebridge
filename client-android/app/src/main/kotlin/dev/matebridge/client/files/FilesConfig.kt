@@ -144,24 +144,35 @@ data class FilesScope(val root: FilesRoot, val readOnly: Boolean) {
  * falls back to a parent or the storage.
  */
 fun safeSubdirectory(storage: File, segments: List<String>): File? {
-    var cur = storage
-    for (seg in segments) {
-        cur = try {
+    try {
+        // Anchored to the storage's canonical path taken once (Codex T-266): an ancestor replaced by a link between two
+        // levels cannot move the expected path along with it.
+        val base = storage.canonicalFile
+        var cur = storage
+        var expected = base
+        for (seg in segments) {
             val d = File(cur, seg)
+            expected = File(expected, seg)
             if (java.nio.file.Files.isSymbolicLink(d.toPath())) return null
             if (!d.exists() && !d.mkdir() && !d.isDirectory) return null
             if (!d.isDirectory || java.nio.file.Files.isSymbolicLink(d.toPath())) return null
-            if (d.canonicalFile != File(cur.canonicalFile, seg)) return null
-            d
-        } catch (e: IOException) {
-            return null
-        } catch (e: SecurityException) {
-            return null
-        } catch (e: java.nio.file.InvalidPathException) {
-            return null
+            if (d.canonicalFile != expected) return null
+            cur = d
         }
+        // Every level once more, after the last one was accepted: no ancestor became a link meanwhile.
+        var check = cur
+        for (i in segments.indices) {
+            if (java.nio.file.Files.isSymbolicLink(check.toPath())) return null
+            check = check.parentFile ?: return null
+        }
+        return if (cur.canonicalFile != expected) null else cur
+    } catch (e: IOException) {
+        return null
+    } catch (e: SecurityException) {
+        return null
+    } catch (e: java.nio.file.InvalidPathException) {
+        return null
     }
-    return cur
 }
 
 /**
