@@ -35,8 +35,9 @@ class ProtocolException(val kind: Kind, message: String) : Exception(message) {
 }
 
 /** Sequential little-endian reader over a payload. Throws SHORT_PAYLOAD when running out. */
-internal class Reader(bytes: ByteArray) {
-    private val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+internal class Reader(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size - offset) {
+    // A view over bytes[offset, offset + length): nothing is copied, remaining() counts from the view's end.
+    private val buf = ByteBuffer.wrap(bytes, offset, length).order(ByteOrder.LITTLE_ENDIAN)
 
     private fun need(n: Int) {
         if (buf.remaining() < n) {
@@ -297,8 +298,16 @@ object Codec {
      * Decodes one payload of a known [type]. Returns null for an unknown type (caller skips it).
      * Longer-than-expected payloads are accepted and the excess ignored; shorter ones throw.
      */
-    fun decodePayload(type: Int, payload: ByteArray): Message? {
-        val r = Reader(payload)
+    fun decodePayload(type: Int, payload: ByteArray): Message? = decodePayload(type, payload, 0, payload.size)
+
+    /**
+     * Same as [decodePayload] for the payload at `buf[offset, offset + length)`, read in place (T-285: the encrypted
+     * record path hands over its decrypt scratch without copying the payload out). The slice is only read during the
+     * call; every byte the returned message keeps is copied out of it.
+     */
+    fun decodePayload(type: Int, buf: ByteArray, offset: Int, length: Int): Message? {
+        require(offset >= 0 && length >= 0 && offset + length <= buf.size) { "bad range" }
+        val r = Reader(buf, offset, length)
         return when (type) {
             MsgType.HELLO -> Hello(
                 protocolVersion = r.u16(),
