@@ -636,4 +636,43 @@ class DavServerTest {
         assertEquals(404, call("GET", "/MatePad/Arsiv/._son.pdf").status)
         assertEquals(10, File(root, ".DS_Store").length())
     }
+
+    // ---- T-266: Wi-Fi profile ----
+
+    @Test fun macOsProbesGetAFast404WithoutTouchingTheStorage() {
+        // Even real files and folders with these names are not looked at: the answer is 404 for GET, HEAD and PROPFIND.
+        File(root, ".hidden").writeText("x")
+        File(root, "Belgeler").mkdir()
+        File(root, "Belgeler/.Trashes").mkdir()
+        for (n in listOf(".hidden", ".localized", ".Trashes", ".Spotlight-V100", ".fseventsd", ".VolumeIcon.icns", ".TemporaryItems")) {
+            for (base in listOf("/MatePad/", "/MatePad/Belgeler/")) {
+                assertEquals("GET $base$n", 404, call("GET", base + n).status)
+                assertEquals("HEAD $base$n", 404, call("HEAD", base + n).status)
+                assertEquals("PROPFIND $base$n", 404, call("PROPFIND", base + n, listOf("Depth" to "0")).status)
+            }
+        }
+        assertEquals(404, call("PROPFIND", "/MatePad/Belgeler/.Trashes/", listOf("Depth" to "1")).status)
+        // Other names are not affected; metadata stays with the in-memory store.
+        assertEquals(207, call("PROPFIND", "/MatePad/Belgeler/", listOf("Depth" to "0")).status)
+        assertEquals(201, call("PUT", "/MatePad/Belgeler/._x", body = ByteArray(5)).status)
+        assertEquals(200, call("GET", "/MatePad/Belgeler/._x").status)
+        // Authentication still comes first.
+        assertEquals(401, call("GET", "/MatePad/.hidden", auth = false).status)
+    }
+
+    @Test fun theWifiProfileServesAndFollowsRateChanges() {
+        server.stop()
+        assertTrue(stopped.await(5, TimeUnit.SECONDS))
+        startServer(FilesConfig.wifi(2_000_000).copy(preferredPort = 0, idleTimeoutMs = 5000, readTimeoutMs = 5000))
+        val data = ByteArray(300_000) { (it % 251).toByte() }
+        File(root, "a.bin").writeBytes(data)
+        assertEquals(207, call("PROPFIND", "/MatePad/", listOf("Depth" to "1")).status)
+        val t0 = System.nanoTime()
+        assertArrayEquals(data, call("GET", "/MatePad/a.bin").body) // 300 KB: ~150 ms at 2 MB/s plus the small lane
+        assertTrue("took ${(System.nanoTime() - t0) / 1_000_000} ms", (System.nanoTime() - t0) < 5_000_000_000L)
+        server.setRate(100_000_000)
+        val t1 = System.nanoTime()
+        assertArrayEquals(data, call("GET", "/MatePad/a.bin").body)
+        assertTrue("after the raise took ${(System.nanoTime() - t1) / 1_000_000} ms", (System.nanoTime() - t1) < 1_000_000_000L)
+    }
 }

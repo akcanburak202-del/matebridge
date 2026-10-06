@@ -1,7 +1,7 @@
 ---
 id: T-266
 title: Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: []
@@ -38,5 +38,25 @@ Karar 0035 (ve 2026-10-06 eki) için tabletteki WebDAV sunucusunun Wi-Fi'a hazı
 6. Testler: setRate, şerit önceliği, formül, Wi-Fi kökü, 404 (sunucu testi). `tools/dav-repro`: `MB_DAV_PROFILE=wifi`, `MB_DAV_LANE=0/1` ve bir PROPFIND gecikme ölçüm betiği (komut satırı, GUI yok).
 
 ## Handoff
+
+- Commit: bkz. `git log task/T-266-client-files-wifi-profile` (ilk commit plan + ana kod, son commit testler + dav-repro + kart).
+- Dosyalar: `files/TokenBucket.kt` (setRate, `ByteBudget`, `LaneBudget`), `files/FilesConfig.kt` (alanlar, `FilesConfig.wifi`, `safeSubdirectory`, `WifiFilesRoot`, `filesCapBytesPerSec`), `files/DavServer.kt` (şerit bağlama, `setRate`), `files/HttpIo.kt` (akışlar `ByteBudget` alır), `files/MetaStore.kt` (`isProbeName`), `files/DavHandler.kt` (hızlı 404), testler `WifiProfileTest.kt` + `DavServerTest.kt` (2 yeni), `tools/dav-repro/DavRepro.java` (`MB_DAV_PROFILE=wifi`, `MB_DAV_LANE=0`) + yeni `lane.sh`.
+- check.sh: ALL OK (ilk koşuda ilgisiz `PackedRendererTest.directPathNeverCallsAHook` bir kez düştü, tekrarda geçti: yarış gibi görünüyor, bu karta ait değil).
+- **Tasarım notları / varsayımlar:**
+  - Şerit sınıflaması istek boyutunu önceden bilmeden yapılır: bağlantı ve yön başına her isteğin/yanıtın İLK 32 KiB'ı küçük kovadan, kalanı ana kovadan; her istek bitince sıfırlanır. Büyük GET'in de ilk 32 KiB'ı şeritten geçer. Toplam üst sınır = ana tavan + 256 KB/s.
+  - `setRate` yalnız ana kovayı değiştirir (`DavServer.setRate`); uyuyanlar 100 ms dilimle yeni hızı görür (artışta aşırı uyku yok, testli). Oturum bağlama (C2/T-269) bunu `filesCapBytesPerSec(bitrate_kbps)` ile çağıracak.
+  - Wi-Fi kökü `FilesRoot` enum'una EKLENMEDİ (ayar arayüzünde seçenek çıkmasın diye); ayrı `WifiFilesRoot.directory(storage)`, log `root=wifi`. `FilesScope.directory` aynı `safeSubdirectory` yardımcısını kullanır (davranış aynı, testler değişmedi).
+  - Hızlı 404: herhangi bir yol bölümü listedeki adlardan biriyse GET/HEAD/PROPFIND 404 (gerçek bir `.hidden` dosyası bile görünmez); kimlik doğrulamadan SONRA, yol çözümlemeden ÖNCE. `._*`/`.DS_Store` değişmedi.
+  - Hiçbir şey oturuma/`FilesController`'a bağlanmadı (kart gereği): `FilesConfig.wifi`, `WifiFilesRoot`, `setRate` henüz kullanılmıyor.
+- **dav-repro ölçümü** (tablet yok, GUI yok; `tools/dav-repro/lane.sh`, 2 MB/s Wi-Fi profili, 6 eşzamanlı büyük indirme sürerken yeni bağlantıda Digest'li PROPFIND Depth:1, 40 istek; Mac JVM, loopback):
+
+  | klasör | şeritsiz p50 / p95 | şeritli p50 / p95 |
+  |---|---|---|
+  | 20 dosya | 247 / 254 ms | 48 / 52 ms |
+  | 100 dosya | 464 / 474 ms | 210 / 223 ms |
+  | 200 dosya | 696 / 707 ms | 440 / 447 ms |
+
+  Şerit küçük PROPFIND'u ~5x hızlandırır; yanıtın 32 KiB'ı aşan kısmı yine ana kovada beklediği için büyük listelerde kazanç azalır (eşik 32 KiB kartın tanımı; gerekirse `smallThresholdBytes` yükseltilebilir, ölçümle).
+- **Tablette bakılacak:** bu kart oturuma bağlı olmadığından Wi-Fi tarafında doğrudan gözlenecek bir şey yok (T-269 sonrası). USB regresyon kontrolü: `FilesConfig()` varsayılanları ve şerit kapalı, davranış aynı olmalı; USB'de Finder bağlama + büyük kopya hâlâ ~20 MB/s.
 
 ## Open questions
