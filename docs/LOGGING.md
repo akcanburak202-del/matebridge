@@ -178,6 +178,18 @@ Yalnız ölçüm; davranışı değiştirmez. Yalnız güncel kontrol bağlantı
   - `refill_trims`: alt taşmadan sonraki toplu varışta, çalma başlamadan eşiğin üstündeki fazla atıldığı başlangıç sayısı;
   - `refill_trim_ms`: atılan toplam süre.
 
+## Sessizlikte çıkış duraklatma (tablet, `MB/audio`, T-287)
+
+Anahtar `--es audio_idle_pause off|pause|stop` (KNOBS 23g). Varsayılan `off`: duraklatma yok, ama `first_sound` yine yazılır (A/B tabanı).
+
+- `I ev=idle_pause stream_id= api= mode=pause|stop idle_s= state= pause_ms= count=`: 10 sn paket gelmedi ve AAudio çıkışı duraklatıldı; `mb-audio` park eder.
+- `W ev=idle_pause_failed stream_id= api= mode= code= state= pause_ms=`: duraklatma başarısız; bu akış için duraklatma kapanır.
+- `I ev=resume stream_id= api= mode= ok=1 paused_ms= wake_ms= request_ms= start_ms= started=0|1`: ilk paketle devam. `request_ms` yalnız `requestStart` çağrısının süresi. `start_ms` çağrıdan önce başlar ve akış STARTED bildirene kadar sürer; durum yazmalardan sonra yoklanır. 2 sn içinde STARTED gelmezse `started=0`. İstek başarısızsa hemen `ok=0` (W) yazılır ve çıkış yeniden kurulur.
+- `I ev=resume_skipped stream_id= reason=rebuild paused_ms=`: devam yerine çıkış yeniden kuruldu.
+- `I ev=first_sound stream_id= api= ms= idle_pause= pauses=`: bir boşluktan sonraki ilk paketten, çıkış STARTED iken yapılan ilk başarılı yazmaya kadar geçen süre. Akış başında ve her boşluktan sonra yazılır. Çıkış tamponunun dinlenme gecikmesini içermez; A/B kollarında aynı biçimde ölçülür.
+- `W ev=audio_idle_pause_unknown using=`: anahtar değeri tanınmadı.
+- `ev=stats` satırına `idle_pauses=`, `ev=audio_device` satırına `idle_pause=off|pause|stop` alanı eklendi.
+
 ## Ses yakalama yeniden denemesi (Mac, `audio`, T-119)
 
 - `ev=audio_retry reason=tap_create|aggregate_create attempt=N delay_ms=… status=… stream_id=…` (info): tap ya da aggregate oluşturulamadı (hata kodu, ya da `noErr` ama nesne yok). En çok 4 deneme yapılır: 100, 250, 500, 1000 ms; her deneme yeni bir `stream_id` alır. Hepsi başarısız olursa bugünkü `audio_unavailable` satırı yazılır.

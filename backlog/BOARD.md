@@ -34,6 +34,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
 | [T-261](tasks/T-261-client-full-chroma-temporal-reuse.md) | Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs | 6 | android-client-dev | [T-259] |
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
+| [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
+| [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
+| [T-292](tasks/T-292-aead-decrypt-copies.md) | İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt | 6 | android-client-dev | [T-285] |
 
 ## todo
 
@@ -54,10 +57,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
-| [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
 | [T-291](tasks/T-291-rebuild-budget-with-client-ladder.md) | Host + istemci — tekrarlayan medya hatasında yeniden kurma bütçesini istemcinin kurtarma merdiveniyle birlikte tasarla | 6 | orchestrator | [T-289, T-200] |
-| [T-292](tasks/T-292-aead-decrypt-copies.md) | İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt | 6 | android-client-dev | [T-285] |
 
 ## done
 
