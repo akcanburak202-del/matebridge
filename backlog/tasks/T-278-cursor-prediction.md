@@ -29,7 +29,13 @@ Karar 0036 v1: imleç host'un bildirdiği konumda çiziliyor (gecikme ≈ RTT + 
 
 ## Plan
 
-(ajan doldurur)
+1. `cursor/CursorPredictor` (saf Kotlin, kilitli): InputOutbox'tan gönderilen PointerRel (dx,dy nokta), PointerAbs ve Pen (son IN_RANGE/CONTACT örneği) için gönderim anıyla (istemci monotonik saati) 512'lik halka; en son CURSOR_STATE bir "anchor" (konum, host örnekleme anı istemci saatine `hostTime - offset`, en çok `rx - tek yön`'e kısıtlı; offset yoksa `rx - tek yön`).
+2. Tahmin = anchor konumu + (gönderim + tek yön > anchor örnekleme anı) olan, gönderimi <= şimdi ve yaşı < 100 ms olan olaylar sırayla (REL topla + sınıra sıkıştır, ABS konumu ata). 100 ms'den eski olaylar "yerleşti" sayılır (host durunca <= 100 ms'de host konumuna oturma).
+3. Uzlaştırma (yalnız UI/çizim): yeni anchor görülünce `eskiHedef + düzeltme - yeniHedef` <= 4 pt ise düzeltme olarak taşınır ve exp(-dt/10 ms) ile sönümlenir; büyükse anında atlar.
+4. Ölçüm: yeni STATE gelince önceki anchor + olaylarla o durumun örnekleme anına tahmin edilen konum ile gerçek konum farkı -> `CursorStats.onPred(err, hold)`; `cursor_stats`'a `pred_err_pt_p50/p95`, `pred_n`, `hold_err_pt_p50/p95` (tahminsiz "son STATE'te kal" farkı, karşılaştırma için).
+5. Bağlantı: InputOutbox'a `observer` (iletim başarılı olunca), InputCapture.sentObserver, CursorLink predictor'ı state/oturum/enable ile besler, CursorOverlayView redrawTask'ta (vsync öncesi) tahmini hesaplayıp kirli dikdörtgeni eski+yeni kutuyla birleştirir, onDraw aynı sonucu kullanır; animasyon gerektikçe bir sonraki kareyi ister. `--ez dev true --ez cursor_predict false` (DevKnobs).
+6. JVM testleri: CursorPredictorTest (halka/varış kesimi, sıkıştırma, mutlak, uzlaştırma, durunca oturma, gizli/kapalı, ölçüm), RedrawGate, CursorStats, DevKnobs, InputOutbox observer.
+7. 0036'ya v2 eki.
 
 ## Handoff
 
