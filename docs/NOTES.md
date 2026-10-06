@@ -1592,3 +1592,11 @@ Kullanıcı her modda ~30 s durağan + ~60 s kaydırma yaptı (Keskin 10:21:39�
 - `dumpsys tethering`: `mUsbTetheringFunction: RNDIS`, `tetherableUsbRegexs: [usb\d, rndis\d]`, `tetherableNcmRegexs: []` (NCM yapılandırılmamış); `settings global tether_force_usb_functions` = null.
 - macOS RNDIS'i yerleşik desteklemez (Apple silicon'da kext yolu da yok) [doğrulanmadı ama bilinen durum]; yerleşik destek CDC-ECM/NCM. → Varsayılan tethering Mac'te büyük olasılıkla arayüz açmaz. Kalan tek şans: NCM'i zorlamak (`tether_force_usb_functions=1` / `svc usb setFunctions ncm`) — çekirdek desteği bilinmiyor, kablo + kullanıcıyla 5 dk deney gerekir.
 - `pm list features`: `android.hardware.usb.accessory` var (AOA bildirilmiş).
+
+## 2026-10-06 ~13:20 — T-270 ilk cihaz denemesi: Wi-Fi dosyaları çalışıyor, hız tavanı görüntüyü koruyamıyor
+
+- Kurulum: APK 13:02, host 13:02 (5ab7e7f1). Wi-Fi, Günlük 60, 30 Mbps. Kayıtlar `~/.cache/matebridge-tools/data/2026-10-06-wifi-files/`.
+- **İşlevsel olarak çalıştı:** STANDBY → menüden aç → `FILES_NET(OPEN)` → READY → 2 kanıtlı bağlantı → bağlama `mount result=ok ms=160`. Tablette Dosyalar uygulamasına geçince oturum bitti (arka plan, beklenen), dosya bağlantıları kapandı; dönüşte otomatik yeniden bağlama (ms=144). Çıkarma → `send=close`, yeniden açma 7 s sonra bağlama OK (`req=2`). Toplam ~95 MB Mac→tablet, ~430 MB tablet→Mac; `failed=0 rejected=0`.
+- **Hız tavanı (2,25 MB/s) tablet tarafında doğru uygulanıyor** (tablet `bytes_out` ≤ 2,26 MB/s; host'taki 5–7 MB/s saniyelikler Finder geri basıncından sonra çekirdek tamponunun boşalması, tel hızı değil).
+- **Ama görüntü bozuluyor:** tablet→Mac 2,26 MB/s (≈18 Mbps yukarı) sürerken `net_p50` ~100 ms, `skip_pct` 78–94 (dosyasız ~3–11). Mac→tablet 2,25 MB/s sırasında skip ~20–40. → T-270 bütçesi (skip +1 puan) aşıldı; formül (toplam ≤ 48 Mbps) özellikle tabletin yukarı yönünü hesaba katmıyor. Not: 13:03–13:08 arasında (dosya henüz açılmadan) da `net_p50` 100–200 ms, skip %50–100 görüldü → ayrı bir Wi-Fi/oturum sorunu olabilir, kullanıcıya sorulacak.
+- Sonraki adım önerisi: tavanı düşürmek (özellikle tablet→Mac) + görüntü gecikmesine göre uyarlamalı kısma (tablet kendi `net_p95`'iyle C→H'yi, Mac video soketi srtt'siyle H→C'yi kısar; tel değişikliği yok).
