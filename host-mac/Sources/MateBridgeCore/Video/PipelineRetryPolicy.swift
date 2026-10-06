@@ -25,8 +25,8 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
         case retry(delayUs: UInt64, attempt: Int)
         /// Re-apply the session's prefs without HDR10 and rebuild as SDR (new `config_id`).
         case fallBackToSDR
-        /// The budget of this window is used up; the next video attach (or a later failure outside the window)
-        /// decides again.
+        /// The budget of this window is used up: no rebuild is scheduled. (A client reconnect still rebuilds through
+        /// `onVideoAttached`, as before T-289; gating that is a follow-up.)
         case giveUp
     }
 
@@ -69,19 +69,6 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
 
     private mutating func prune(nowUs: UInt64) {
         failures.removeAll { nowUs > $0.atUs && nowUs - $0.atUs > Self.windowUs }
-    }
-
-    /// The earliest host-clock time (`nowUs` or later) at which a rebuild that nobody scheduled (the tablet reopening
-    /// its video connection after `.giveUp`) fits the budget: now while the window holds at most `maxRetries`
-    /// failures, otherwise the moment enough of the oldest ones have left the window. So recovery is bounded but never
-    /// permanent: the headless Mac's only display is the tablet.
-    public func nextAllowedUs(nowUs: UInt64) -> UInt64 {
-        let live = failures.filter { !(nowUs > $0.atUs && nowUs - $0.atUs > Self.windowUs) }
-            .map(\.atUs).sorted()
-        guard live.count > Self.maxRetries else { return nowUs }
-        // The failure that has to expire is the (count - maxRetries)-th oldest; it is outside the window one
-        // microsecond after `atUs + windowUs`.
-        return live[live.count - Self.maxRetries - 1] + Self.windowUs + 1
     }
 
     /// Backoff before rebuild number `attempt` (1-based): 1 s, 2 s, then 4 s.

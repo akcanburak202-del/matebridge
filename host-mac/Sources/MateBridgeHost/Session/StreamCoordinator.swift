@@ -29,8 +29,6 @@ public final class StreamCoordinator: @unchecked Sendable {
         /// T-128: the deadline of a deferred display wake passed (coalesced).
         case deferredWakeDue
         case senderEnded(id: Int, VideoSender.EndReason)
-        /// T-289: the wait of a deferred, reconnect-triggered pipeline rebuild is over (`token` = `deferredRebuild`).
-        case rebuildDue(token: Int)
         /// T-258: the auxiliary encoder failed for good (id = pipeline id).
         case packedFallback(id: Int, reason: String)
         case shutdown(done: @Sendable () -> Void)
@@ -116,11 +114,6 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var lastSent = VideoSender.Counters()
     /// T-289: bounded rebuilds after a running pipeline died, and the HDR10 to SDR fallback after repeated encoder failures.
     private var retryPolicy = PipelineRetryPolicy()
-    /// T-289: a video connection that arrived while `retryPolicy` had no budget left. Its rebuild waits until the window
-    /// has room again; the link is held meanwhile (not cancelled, so the tablet does not reconnect in a loop). At most
-    /// one; cleared by session end, a new session, shutdown, or a pipeline that exists by the time another link arrives.
-    private var deferredRebuild: (token: Int, link: VideoLink, wait: Task<Void, Never>)?
-    private var rebuildToken = 0
     private var lastStatsText = ""
     private var lastCadenceText = ""
     /// T-187: the hardware-encoder read-back of pipeline `pipelineID`, read once when it started.
@@ -360,10 +353,6 @@ public final class StreamCoordinator: @unchecked Sendable {
             onDeferredWakeDue()
         case .senderEnded(let id, let reason):
             await onSenderEnded(id: id, reason: reason)
-        case .rebuildDue(let token):
-            guard let deferred = deferredRebuild, deferred.token == token else { break }
-            deferredRebuild = nil
-            await onVideoAttached(deferred.link)
         case .packedFallback(let id, let reason):
             guard id == pipelineID else { break }
             await fallBackFromPackedChroma(reason: reason, startFailed: false)
@@ -382,7 +371,6 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         // Takeover safety: a previous session that never reported its end no longer owns the consumer.
         retryPolicy.reset()
-        cancelDeferredRebuild()
         // T-214 review: the settings were derived before this event waited in the mailbox; a game display that failed
         // meanwhile (game_display_failed) must not be tried again. The tablet holds the HELLO config (equal to the
         // derived settings unless `reannounce` is already set), so a changed result is announced too.
@@ -526,7 +514,6 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onSessionEnded() async {
         session = nil
-        cancelDeferredRebuild()
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
@@ -546,16 +533,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             link.cancel()
             return
         }
-        if pipeline != nil { cancelDeferredRebuild() }
         if pipeline == nil {  // earlier creation failed or the pipeline died: try again
-            // T-289: not beyond the retry budget. After `giveUp` the tablet reconnects on its own; the rebuild waits
-            // until the window has room, then proceeds (bounded, never permanent).
-            let now = HostClock.nowUs()
-            let allowedAt = retryPolicy.nextAllowedUs(nowUs: now)
-            if allowedAt > now {
-                deferRebuild(link: link, until: allowedAt, now: now)
-                return
-            }
             _ = lease.sessionStarted(device: s.deviceID, settings: s.settings)
             // Normally nothing is parked during a session (unparked at session start); never strand one.
             let leftover = parked?.display
@@ -587,33 +565,6 @@ public final class StreamCoordinator: @unchecked Sendable {
         lastSent = VideoSender.Counters()
         sender.start()
         log(.info, "video_streaming")
-    }
-
-    /// Holds `link` until `allowedAt` (host clock), then posts `.rebuildDue`. A newer link replaces the held one (the
-    /// old one is cancelled); `pipeline_rebuild_deferred` is logged once per deferral.
-    private func deferRebuild(link: VideoLink, until allowedAt: UInt64, now: UInt64) {
-        let waitUs = allowedAt - now
-        if let old = deferredRebuild {
-            old.wait.cancel()
-            old.link.cancel()
-        } else {
-            log(.warning, "pipeline_rebuild_deferred", "wait_ms=\(waitUs / 1_000)")
-        }
-        rebuildToken += 1
-        let token = rebuildToken
-        let wait = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: waitUs * 1_000)
-            guard !Task.isCancelled else { return }
-            self?.post(.rebuildDue(token: token))
-        }
-        deferredRebuild = (token, link, wait)
-    }
-
-    private func cancelDeferredRebuild() {
-        guard let old = deferredRebuild else { return }
-        deferredRebuild = nil
-        old.wait.cancel()
-        old.link.cancel()
     }
 
     private func onSenderEnded(id: Int, reason: VideoSender.EndReason) async {
@@ -760,7 +711,6 @@ public final class StreamCoordinator: @unchecked Sendable {
 
     private func onShutdown() async {
         session = nil
-        cancelDeferredRebuild()
         wakePolicy.sessionEnded()
         gateLock.withLock { sleepGate.cancelPending() }
         logDisplaySleep(displaySleep.release())
