@@ -30,6 +30,12 @@ class InputOutbox(
 ) {
     private var held: Outgoing? = null
 
+    /**
+     * T-278: told about every message that was handed to the sink successfully, in order, on the UI thread. Read-only
+     * (the local cursor prediction); it must never throw or send.
+     */
+    var observer: ((Message) -> Unit)? = null
+
     val hasHeld get() = held != null
 
     /** Returns false when the sink refused a message; [onRefused] has run and the rest of a batch should be dropped. */
@@ -86,6 +92,7 @@ class InputOutbox(
                 is PointerRel -> counters.relMsgs++
                 else -> counters.otherMsgs++
             }
+            observer?.invoke(msg)
             return true
         }
         held = null

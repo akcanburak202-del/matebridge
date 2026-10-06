@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.os.SystemClock
 import android.view.View
+import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.stream.VideoViewport
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
@@ -30,6 +31,12 @@ class CursorOverlayView(
     context: Context,
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
     private val ageUs: (hostTimeUs: Long) -> Long? = { null },
+    /** T-278: host time -> client monotonic microseconds (the clock offset), null while unknown. */
+    hostToClientUs: (hostTimeUs: Long) -> Long? = { null },
+    /** T-278: one-way delay estimate in microseconds (best RTT / 2), null while unknown. */
+    oneWayUs: () -> Long? = { null },
+    /** T-278: false (`--ez cursor_predict false`) draws the host's position as in v1. */
+    predict: Boolean = true,
 ) : View(context) {
     /** Decoding runs here: one thread, a short queue; a full queue makes that shape an arrow (never blocks the reader). */
     private val decoder = ThreadPoolExecutor(
@@ -40,14 +47,21 @@ class CursorOverlayView(
 
     val stats = CursorStats()
     private val redraw = RedrawGate()
+    val predictor = CursorPredictor(hostToClientUs, oneWayUs, stats).also { it.setAllowed(predict) }
     val link = CursorLink(
         CursorShapes<Bitmap>(
             executor = decoder,
             decode = { bytes -> decodePng(bytes) },
             onReady = { requestRedraw(null, full = true) }, // a shape that arrived after its state: redraw (rare)
         ),
-        stats, nowMs,
+        stats, nowMs, predictor,
     ) { frame -> onFrameFromReader(frame) }
+
+    /** The position the redraw task chose for this frame; [onDraw] paints exactly it (its dirty area was computed from it). */
+    private class Frozen(val frame: CursorFrame, val x: Int, val y: Int, val animating: Boolean, val atUs: Long)
+
+    private var frozen: Frozen? = null
+    private val predicted = CursorPredictor.Result()
 
     @Volatile private var viewport = VideoViewport(0, 0, 0, 0)
     @Volatile private var streamWidthPt = 0
@@ -74,9 +88,14 @@ class CursorOverlayView(
     }
 
     /** Where the picture is and how many Mac points wide the stream is; a change repaints everything. */
-    fun setGeometry(vp: VideoViewport, streamWidthPt: Int) {
+    fun setGeometry(vp: VideoViewport, streamWidthPt: Int, streamHeightPt: Int = 0) {
         viewport = vp
         this.streamWidthPt = streamWidthPt
+        // The picture's own aspect gives the height when the stream config did not (never expected).
+        val h = if (streamHeightPt > 0) streamHeightPt
+        else if (!vp.isEmpty && streamWidthPt > 0) (streamWidthPt * vp.height / vp.width).toInt() else 0
+        predictor.setStream(streamWidthPt, h)
+        frozen = null
         lastBox = null
         requestRedraw(null, full = true)
     }
@@ -84,6 +103,7 @@ class CursorOverlayView(
     /** Hides the cursor and forgets what was drawn (session end, the layer turned off). UI thread. */
     fun clear() {
         link.slot.clear()
+        frozen = null
         stickyShape = null
         lastDrawnSeq = -1L
         val old = lastBox
@@ -94,7 +114,7 @@ class CursorOverlayView(
     /** Reader thread (or the engine thread on a reset): a newer state is held, or the layer was cleared (null). */
     private fun onFrameFromReader(frame: CursorFrame?) {
         val old = lastBox
-        invalidateBox(old, if (frame != null && frame.visible) boxOf(frame) else null)
+        invalidateBox(old, if (frame != null && frame.visible) boxOf(frame, frame.x, frame.y) else null)
         if (frame == null) lastBox = null // nothing will be drawn: the next state is not compared with a stale box
     }
 
@@ -110,22 +130,52 @@ class CursorOverlayView(
         if (redraw.request(rect, full)) postOnAnimation(redrawTask)
     }
 
+    /**
+     * T-278, UI thread: the app just sent [msg] to the host. When it moves the cursor, the predicted position changes now, so
+     * a redraw is asked for; the task works out where (at vsync, just before the draw).
+     */
+    fun onInputSent(msg: Message) {
+        if (predictor.onSent(msg, System.nanoTime() / 1000) && redraw.requestRecompute()) postOnAnimation(redrawTask)
+    }
+
+    /**
+     * Runs at the start of a frame (animation callback), before the draw of that frame. With a prediction the position is
+     * fixed here: the dirty area is the old box united with the new one, and [onDraw] paints the same position, so what is
+     * cleared and what is drawn always agree (a hardware canvas repaints only the invalidated area).
+     */
     @Suppress("DEPRECATION") // the rectangle is a hint only on API 21+; the single invalidate is what matters
     private val redrawTask = Runnable {
         val d = redraw.take() ?: return@Runnable
-        if (d.full) invalidate() else invalidate(d.left, d.top, d.right, d.bottom)
+        var rect: IntArray? = if (d.full || !d.hasRect) null else intArrayOf(d.left, d.top, d.right, d.bottom)
+        frozen = null
+        val frame = link.slot.latest()
+        if (frame != null && frame.visible && !viewport.isEmpty && streamWidthPt > 0 && predictor.active) {
+            val nowUs = System.nanoTime() / 1000
+            if (predictor.advance(frame.seq, nowUs, predicted)) {
+                frozen = Frozen(frame, predicted.xNorm, predicted.yNorm, predicted.animating, nowUs)
+                val extra = CursorGeometry.dirty(lastBox, boxOf(frame, predicted.xNorm, predicted.yNorm))
+                rect = unite(rect, extra)
+            }
+        }
+        if (d.full) invalidate() else if (rect != null) invalidate(rect[0], rect[1], rect[2], rect[3])
     }
 
-    /** The rectangle [frame] would be drawn in right now, from the entry the cache holds for its shape (or the arrow). */
-    private fun boxOf(frame: CursorFrame): CursorGeometry.Box? {
+    private fun unite(a: IntArray?, b: IntArray?): IntArray? = when {
+        a == null -> b
+        b == null -> a
+        else -> intArrayOf(minOf(a[0], b[0]), minOf(a[1], b[1]), maxOf(a[2], b[2]), maxOf(a[3], b[3]))
+    }
+
+    /** The rectangle [frame]'s shape would be drawn in at normalized ([x], [y]), from the entry the cache holds (or the arrow). */
+    private fun boxOf(frame: CursorFrame, x: Int, y: Int): CursorGeometry.Box? {
         val e = link.shapes.lookup(frame.shapeId)
         val vp = viewport
         val pt = streamWidthPt
         return if (e != null && e.status != ShapeStatus.FALLBACK) {
-            CursorGeometry.place(vp, pt, frame.x, frame.y, e.widthPt16, e.heightPt16, e.hotXPt16, e.hotYPt16)
+            CursorGeometry.place(vp, pt, x, y, e.widthPt16, e.heightPt16, e.hotXPt16, e.hotYPt16)
         } else {
             CursorGeometry.place(
-                vp, pt, frame.x, frame.y,
+                vp, pt, x, y,
                 BuiltinArrow.WIDTH_PT16, BuiltinArrow.HEIGHT_PT16, BuiltinArrow.HOT_X_PT16, BuiltinArrow.HOT_Y_PT16,
             )
         }
@@ -133,7 +183,21 @@ class CursorOverlayView(
 
     override fun onDraw(canvas: Canvas) {
         val t0 = System.nanoTime()
-        val frame = link.slot.latest()
+        // The task's frozen position of this frame when there is one (fresh and the layer still predicts), else the newest state.
+        val fz = frozen
+        frozen = null
+        val useFrozen = fz != null && predictor.active && t0 / 1000 - fz.atUs < FROZEN_MAX_US
+        val frame = if (useFrozen) fz!!.frame else link.slot.latest()
+        var posX = if (useFrozen) fz!!.x else frame?.x ?: 0
+        var posY = if (useFrozen) fz!!.y else frame?.y ?: 0
+        var animating = useFrozen && fz!!.animating
+        if (!useFrozen && frame != null && frame.visible && predictor.active && streamWidthPt > 0 &&
+            predictor.advance(frame.seq, t0 / 1000, predicted)
+        ) { // a draw the task did not prepare (the system asked): still never show the stale host position of a moving cursor
+            posX = predicted.xNorm
+            posY = predicted.yNorm
+            animating = predicted.animating
+        }
         val vp = viewport
         if (frame == null) { // nothing held: a session ended or the layer was turned off, so what was remembered goes too
             stickyShape = null
@@ -154,7 +218,7 @@ class CursorOverlayView(
         }
         val box: CursorGeometry.Box?
         if (shape != null && shape.bitmap != null) {
-            box = CursorGeometry.place(vp, pt, frame.x, frame.y, shape.widthPt16, shape.heightPt16, shape.hotXPt16, shape.hotYPt16)
+            box = CursorGeometry.place(vp, pt, posX, posY, shape.widthPt16, shape.heightPt16, shape.hotXPt16, shape.hotYPt16)
             if (box != null) {
                 dst.set(box.left, box.top, box.right, box.bottom)
                 canvas.drawBitmap(shape.bitmap!!, null, dst, bitmapPaint)
@@ -162,7 +226,7 @@ class CursorOverlayView(
         } else if (entry != null && entry.status == ShapeStatus.PENDING) {
             box = null // nothing to show yet and nothing shown before: the next frame draws it
         } else {
-            box = drawArrow(canvas, vp, pt, frame)
+            box = drawArrow(canvas, vp, pt, posX, posY)
         }
         lastBox = box
         if (box != null && frame.seq != lastDrawnSeq) {
@@ -170,11 +234,13 @@ class CursorOverlayView(
             ageUs(frame.hostTimeUs)?.let { stats.onAge(it) }
         }
         stats.onDraw((System.nanoTime() - t0) / 1000)
+        // Still easing a correction or waiting for the host to confirm sent input: the next frame moves it again.
+        if (animating && redraw.requestRecompute()) postOnAnimation(redrawTask)
     }
 
-    private fun drawArrow(canvas: Canvas, vp: VideoViewport, pt: Int, frame: CursorFrame): CursorGeometry.Box? {
+    private fun drawArrow(canvas: Canvas, vp: VideoViewport, pt: Int, x: Int, y: Int): CursorGeometry.Box? {
         val box = CursorGeometry.place(
-            vp, pt, frame.x, frame.y,
+            vp, pt, x, y,
             BuiltinArrow.WIDTH_PT16, BuiltinArrow.HEIGHT_PT16, BuiltinArrow.HOT_X_PT16, BuiltinArrow.HOT_Y_PT16,
         ) ?: return null
         val k = CursorGeometry.pixelsPerPoint(vp, pt)
@@ -195,6 +261,9 @@ class CursorOverlayView(
 
     private companion object {
         const val DECODE_QUEUE = 8
+
+        /** A position fixed by the redraw task is used by the draw of the same frame only (a few ms later); older is dropped. */
+        const val FROZEN_MAX_US = 50_000L
 
         fun decodePng(bytes: ByteArray): Bitmap? {
             val o = BitmapFactory.Options().apply {

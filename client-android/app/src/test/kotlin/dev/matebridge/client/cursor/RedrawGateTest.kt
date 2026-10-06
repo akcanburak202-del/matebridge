@@ -56,6 +56,23 @@ class RedrawGateTest {
         assertNotNull(gate.take())
     }
 
+    @Test fun aRecomputeRequestSchedulesOnceAndCarriesNoRectangle() {
+        val gate = RedrawGate()
+        assertTrue(gate.requestRecompute())
+        assertFalse(gate.requestRecompute())
+        assertFalse(gate.request(null)) // nothing to merge, one is already pending
+        val d = gate.take()!!
+        assertFalse(d.full)
+        assertFalse(d.hasRect)
+        assertNull(gate.take())
+        // A rectangle merged into the pending recompute is kept.
+        assertTrue(gate.requestRecompute())
+        gate.request(intArrayOf(1, 2, 3, 4))
+        val e = gate.take()!!
+        assertTrue(e.hasRect)
+        assertEquals(listOf(1, 2, 3, 4), listOf(e.left, e.top, e.right, e.bottom))
+    }
+
     @Test fun concurrentRequestersScheduleExactlyOne() {
         val gate = RedrawGate()
         val scheduled = java.util.concurrent.atomic.AtomicInteger()

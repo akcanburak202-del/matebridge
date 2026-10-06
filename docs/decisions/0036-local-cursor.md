@@ -23,3 +23,13 @@
 - Ekran görüntüsü/kayıt (Mac'te) imleci içermeye devam eder (sistem çizer); yalnız video akışından çıkar.
 - İş: protokol + host (yoklama, şekil kodlama, `showsCursor`) + istemci (katman, önbellek, panel) ≈ 4–6 ajan günü, 1 cihaz oturumu.
 - **Tekrar düşünülür:** v2 tablette tahmin (göreli ve mutlak hareket), kalem hover'ında imleç yerine kalem noktası.
+
+## Ek (2026-10-06, T-278): v2 tablette konum tahmini, protokol değişmeden
+
+Kullanıcı onayladı (2026-10-06). Yalnız istemci çizimi değişir; `CURSOR_STATE` gerçek olarak kalır, girdi yoluna hiçbir şey geri beslenmez, protokol ve host aynı.
+
+- **Model:** tablet gönderdiği her hareketi (`POINTER_REL` deltası nokta olarak, `POINTER_ABS`, `PEN` örneklerinin son in-range/contact noktası) gönderim anıyla 512'lik halkada tutar. Tahmin = son kabul edilen durum + o durumun host'ta örneklendiği andan sonra host'a varmış sayılan olaylar (varış = gönderim + RTT/2). Durumun örnekleme anı: `host_time_us − saat_farkı`, en çok `varış − RTT/2`; saat farkı yoksa `varış − RTT/2`. Göreli deltalar her adımda `STREAM_CONFIG` nokta boyutuna sıkıştırılır (Mac kenarda durur); mutlak nokta konumu değiştirir.
+- **Uzlaştırma:** yeni durum gelince eski ve yeni tahmin arasındaki fark ≤ 4 pt ise ekranda görünen konum korunur ve ~10 ms zaman sabitiyle erir (1–2 kare); büyükse anında atlar (uygulama imleci taşıdı). 100 ms'den eski olaylar "yerleşti" sayılır: hareket durunca ya da host hareketi yok saydığında tahmin ≤ 100 ms içinde host konumuna döner.
+- **Kapalı olduğu yerler:** imleç "Görüntüde", Oyun modu, `visible=0`, stream boyutu bilinmiyor; geliştirici anahtarı `--ez dev true --ez cursor_predict false` (v1 çizimi, A/B).
+- **Ölçüm:** `cursor_stats` satırına `pred_err_pt_p50/p95` (önceki durumun, yeni durumun örnekleme anına tahmini ile gerçek konum farkı, Mac noktası), `pred_n`, ve karşılaştırma için `hold_err_pt_p50/p95` (hiç tahmin etmeseydik, yani v1 gibi son durumda kalsaydık fark). `pred_err` `hold_err`'den belirgin küçükse tahmin işe yarıyor.
+- **Bilinen sınır:** saat farkı belirsizliği (RTT/2) olay kesimini kaydırır; Wi-Fi'da sistematik sapma `pred_err`'de görünür. Kalem/parmak mutlak noktası host'un o girdiyi imleç hareketine çevirdiği varsayımına dayanır; çevirmiyorsa durum 100 ms içinde düzeltir (kısa sıçrama).

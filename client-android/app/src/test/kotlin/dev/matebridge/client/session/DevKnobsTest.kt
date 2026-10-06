@@ -30,7 +30,7 @@ class DevKnobsTest {
         "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
         "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
         "pace_dcap_half" to 3, "pace_feedback" to false,
-        "catch_up" to false,
+        "catch_up" to false, "cursor_predict" to false,
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -54,6 +54,7 @@ class DevKnobsTest {
         assertEquals(HzPinVariant.OFF, k.hzPin) // T-243
         assertEquals(PacerTuning.STANDARD, k.pacerTuning) // T-251
         assertTrue(k.catchUp) // T-252
+        assertTrue(k.cursorPredict) // T-278
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -164,7 +165,7 @@ class DevKnobsTest {
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "stats_1s:1",
+                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -325,6 +326,15 @@ class DevKnobsTest {
         assertEquals(HzPinVariant.OFF, odd.hzPin)
         assertEquals(listOf("hz_pin:other"), odd.knobs)
         assertTrue("hz_pin" in DevKnobs.DEBUG_ONLY_KEYS)
+    }
+
+    @Test fun cursorPredictKnobIsDebugOnlyDefaultOnAndProfileListed() {
+        assertTrue(parse().cursorPredict)
+        assertTrue(parse("cursor_predict" to false).cursorPredict) // ignored without dev
+        val k = parse("dev" to true, "cursor_predict" to false)
+        assertFalse(k.cursorPredict)
+        assertEquals(listOf("cursor_predict:0"), k.knobs)
+        assertTrue("cursor_predict" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
     @Test fun catchUpKnobIsDebugOnlyDefaultOnAndProfileListed() {

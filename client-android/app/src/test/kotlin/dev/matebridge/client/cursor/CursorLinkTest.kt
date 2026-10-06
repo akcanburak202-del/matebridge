@@ -171,6 +171,32 @@ class CursorLinkTest {
         assertTrue(link.lastStateMs >= 0)
     }
 
+    @Test fun theLocalPredictionIsFedByAcceptedStatesAndFollowsTheLayerAndTheSession() {
+        val stats = CursorStats()
+        val predictor = CursorPredictor({ null }, { 1_000L }, stats)
+        predictor.setStream(1000, 500)
+        var us = 100_000L
+        val link = CursorLink(CursorShapes<String>(executor = Executor { it.run() }, decode = { "bmp" }), stats, { 1_000L }, predictor, { us }) {}
+        val out = CursorPredictor.Result()
+        link.beginSession(1)
+        link.enable(true)
+        link.onMessage(state(5, x = 32_768, y = 16_384), 1)
+        assertTrue(predictor.advance(5, us, out))
+        link.onMessage(state(4, x = 1, y = 1), 1) // stale: not the anchor
+        assertTrue(predictor.advance(5, us, out))
+        link.onMessage(state(6, x = 1, y = 1, visible = false), 1)
+        assertFalse(predictor.advance(6, us, out)) // hidden: no prediction
+        link.onMessage(state(7, x = 1, y = 1), 1)
+        link.enable(false) // the layer turned off: the anchor is gone
+        assertFalse(predictor.active)
+        assertFalse(predictor.advance(7, us, out))
+        link.enable(true)
+        link.onMessage(state(8, x = 1, y = 1), 1)
+        assertTrue(predictor.advance(8, us, out))
+        link.endSession()
+        assertFalse(predictor.advance(8, us, out))
+    }
+
     @Test fun shapeIdZeroIsAcceptedAsAStateAndHasNoShapeSoTheArrowIsDrawn() {
         val r = Rig()
         r.link.beginSession(1)
