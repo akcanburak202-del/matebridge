@@ -49,6 +49,10 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
         let video = try #require(s.videoKeys(nonce: v.bytes("inputs", "video_nonce")))
         #expect(video.c2h.bytes == v.bytes("paired", "key_video_c2h"))
         #expect(video.h2c.bytes == v.bytes("paired", "key_video_h2c"))
+        let files = try #require(s.filesKeys(clientNonce: v.bytes("inputs", "client_files_nonce"),
+                                             hostNonce: v.bytes("inputs", "host_files_nonce")))
+        #expect(files.c2h.bytes == v.bytes("paired", "key_files_c2h"))
+        #expect(files.h2c.bytes == v.bytes("paired", "key_files_h2c"))
         #expect(s.pairingCode == nil && s.newPairKey == nil)
     }
 
@@ -63,6 +67,10 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
         let video = try #require(s.videoKeys(nonce: v.bytes("inputs", "video_nonce")))
         #expect(video.c2h.bytes == v.bytes("pairing", "key_video_c2h"))
         #expect(video.h2c.bytes == v.bytes("pairing", "key_video_h2c"))
+        let files = try #require(s.filesKeys(clientNonce: v.bytes("inputs", "client_files_nonce"),
+                                             hostNonce: v.bytes("inputs", "host_files_nonce")))
+        #expect(files.c2h.bytes == v.bytes("pairing", "key_files_c2h"))
+        #expect(files.h2c.bytes == v.bytes("pairing", "key_files_h2c"))
         #expect(KDF.expand(prk: v.bytes("pairing", "prk"), info: "MB1 sas", count: 4) == v.bytes("pairing", "sas_bytes"))
         #expect(s.pairingCode?.digits == v.string("pairing", "sas"))
         #expect(s.newPairKey?.bytes == v.bytes("pairing", "new_pair_key"))
@@ -109,13 +117,84 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
         #expect(throws: ProtocolError.payloadTooShort(type: 0x41)) { try d.nextMessage() }
     }
 
+    @Test func fileConnectionFramesDecodeUnderTheFileKeys() throws {
+        let frames = v.frames
+        #expect(frames.count == 7)
+        // c2h counter 0: the proof PING; counter 1: the tablet's first reply FILES_DATA. h2c counter 0: the host's request.
+        var c2h = RecordDecoder(key: SecretBytes(frames[4].key), connection: .files)
+        c2h.append(frames[4].frame + frames[6].frame)
+        #expect(try c2h.nextMessage() == .ping(Ping(seq: 1, senderTimeUs: 1_127_500_100_000)))
+        #expect(try c2h.nextMessage() == .filesData(FilesData(data: Array("HTTP/1.1 200 OK".utf8))))
+        #expect(try c2h.nextMessage() == nil)
+        #expect(c2h.counter == 2)
+        var h2c = RecordDecoder(key: SecretBytes(frames[5].key), connection: .files)
+        h2c.append(frames[5].frame)
+        #expect(try h2c.nextMessage() == .filesData(FilesData(data: Array("OPTIONS / HTTP/1.1".utf8))))
+        // The two directions and the control keys are independent: a record never opens under another key.
+        var wrong = RecordDecoder(key: SecretBytes(frames[5].key), connection: .files)
+        wrong.append(frames[4].frame)
+        #expect(throws: CryptoError.authenticationFailed) { try wrong.nextMessage() }
+        #expect(frames[4].key != frames[5].key)
+        #expect(frames[4].key != v.frames[0].key)
+    }
+
+    @Test func fileKeysDependOnBothNoncesAndDieWithThePrk() throws {
+        let s = try schedule(paired: true)
+        let client = v.bytes("inputs", "client_files_nonce"), host = v.bytes("inputs", "host_files_nonce")
+        let base = try #require(s.filesKeys(clientNonce: client, hostNonce: host))
+        var otherHost = host
+        otherHost[0] ^= 1
+        var otherClient = client
+        otherClient[15] ^= 1
+        let a = try #require(s.filesKeys(clientNonce: client, hostNonce: otherHost))
+        let b = try #require(s.filesKeys(clientNonce: otherClient, hostNonce: host))
+        #expect(a.c2h != base.c2h && a.h2c != base.h2c)
+        #expect(b.c2h != base.c2h && b.h2c != base.h2c)
+        // Swapping the nonces is another connection too (client first, host second).
+        let swapped = try #require(s.filesKeys(clientNonce: host, hostNonce: client))
+        #expect(swapped.c2h != base.c2h)
+        #expect(s.filesKeys(clientNonce: [1, 2, 3], hostNonce: host) == nil)
+        #expect(s.filesKeys(clientNonce: client, hostNonce: []) == nil)
+        s.wipe()
+        #expect(s.filesKeys(clientNonce: client, hostNonce: host) == nil)
+        // Keys handed out earlier are unaffected.
+        #expect(base.c2h.bytes == v.bytes("paired", "key_files_c2h"))
+    }
+
+    @Test func fileConnectionRecordsCarryTheFullPayloadLimit() throws {
+        let s = try schedule(paired: true)
+        let keys = try #require(s.filesKeys(clientNonce: v.bytes("inputs", "client_files_nonce"),
+                                            hostNonce: v.bytes("inputs", "host_files_nonce")))
+        var sealer = RecordSealer(key: keys.h2c, maxPayload: ProtocolConstants.maxControlPayload)
+        var decoder = RecordDecoder(key: keys.h2c, connection: .files)
+        let biggest = Message.filesData(FilesData(data: [UInt8](repeating: 0x5a, count: ProtocolConstants.filesDataMax)))
+        let record = try biggest.sealed(using: &sealer)
+        #expect(record.count == 4 + ProtocolConstants.maxControlPayload + ProtocolConstants.recordOverhead)
+        var offset = 0
+        while offset < record.count {  // the receive loop hands over at most 64 KiB at a time
+            let end = min(offset + FrameDecoder.maxReadChunk, record.count)
+            decoder.append(Array(record[offset..<end]))
+            offset = end
+        }
+        #expect(try decoder.nextMessage() == biggest)
+        // One byte more is refused before sealing, and a header that announces more is refused on arrival.
+        #expect(throws: ProtocolError.invalidField("size")) {
+            try Message.filesData(FilesData(data: [UInt8](repeating: 0, count: ProtocolConstants.filesDataMax + 1)))
+                .sealed(using: &sealer)
+        }
+        var tooLong = RecordDecoder(key: keys.h2c, connection: .files)
+        let announced = UInt32(ProtocolConstants.maxControlPayload + ProtocolConstants.recordOverhead + 1)
+        tooLong.append((0..<4).map { UInt8(truncatingIfNeeded: announced >> (8 * UInt32($0))) })
+        #expect(throws: CryptoError.invalidRecordLength(announced)) { try tooLong.nextMessage() }
+    }
+
     @Test func everyCorruptedByteIsRejected() throws {
         for (index, f) in v.frames.enumerated() {
             for position in 0..<f.frame.count {
                 var bad = f.frame
                 bad[position] ^= 0x01
-                var d = RecordDecoder(key: SecretBytes(f.key), connection: index == 3 ? .video : .control,
-                                      startingCounter: f.counter)
+                let connection: FrameDecoder.Connection = index == 3 ? .video : (index >= 4 ? .files : .control)
+                var d = RecordDecoder(key: SecretBytes(f.key), connection: connection, startingCounter: f.counter)
                 d.append(bad)
                 do {
                     let m = try d.nextMessage()

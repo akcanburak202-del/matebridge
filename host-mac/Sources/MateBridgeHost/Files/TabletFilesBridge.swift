@@ -233,6 +233,10 @@ public final class TabletFilesBridge: @unchecked Sendable {
         case .reveal(let path):
             let url = URL(fileURLWithPath: path, isDirectory: true)
             DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+        case .startProxy, .stopProxy, .sendFilesNet:
+            // T-267 compile stub only: the Wi-Fi actions of `TabletFilesPlanner` (decision 0035) are executed by T-268.
+            // `sessionStarted` still passes no `netCapable`, so the planner never emits them yet.
+            break
         }
     }
 

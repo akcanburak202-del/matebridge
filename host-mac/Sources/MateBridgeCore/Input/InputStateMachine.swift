@@ -212,7 +212,8 @@ public struct InputStateMachine: Sendable {
         case .key(let k):
             out += handleKey(k, now: now)
         case .hello, .helloAck, .streamConfig, .streamPrefs, .clipboard, .displayRate, .settingsOpen, .filesInfo, .ping, .pong, .stats, .keyframeRequest,
-             .audioPrefs, .audioConfig, .audioFrame, .videoHello, .videoFrame:
+             .audioPrefs, .audioConfig, .audioFrame, .videoHello, .videoFrame, .filesNet, .filesHello, .filesHelloAck,
+             .filesData:
             break
         }
         return out

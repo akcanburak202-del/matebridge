@@ -61,6 +61,13 @@ private let validFixtures: [String: Message] = [
     "settings_open": .settingsOpen(SettingsOpen()),
     "files_info_ready": .filesInfo(FilesInfo(state: .ready, port: 47010, token: "0123456789abcdef0123456789abcdef")),
     "files_info_off": .filesInfo(.off),
+    "files_info_standby": .filesInfo(.standby),
+    "files_net_open": .filesNet(FilesNet(state: .open, port: 47003, pool: 2, max: 12)),
+    "files_net_close": .filesNet(.close),
+    "files_hello": .filesHello(FilesHello(sessionID: 2_712_847_316, clientNonce: Array(0x70...0x7f))),
+    "files_hello_ack": .filesHelloAck(FilesHelloAck(status: .ok, hostNonce: Array(0x80...0x8f))),
+    "files_hello_ack_rejected": .filesHelloAck(.rejected),
+    "files_data": .filesData(FilesData(data: Array("OPTIONS / HTTP/1.1".utf8))),
     "clipboard_text": .clipboard(Clipboard.text(seq: 3, "Merhaba ğüşıöç — kopyala")),
     "clipboard_empty": .clipboard(Clipboard.empty(seq: 4)),
     "pen_hover_to_contact": .pen(PenBatch(tool: .pen, baseTimeUs: 1_127_411_618_000, samples: [
@@ -124,16 +131,13 @@ private let invalidFixtures: [String: ProtocolError] = [
     "invalid_stream_prefs_hdr_partial": .payloadTooShort(type: 0x05),
     "invalid_pen_count_zero": .invalidField("count"),
     "invalid_audio_frame_short": .payloadTooShort(type: 0x32),
+    "invalid_files_hello_short": .payloadTooShort(type: 0x50),
+    "invalid_files_data_empty": .invalidField("size"),
 ]
 
 private let skippedFixtures: Set<String> = ["unknown_type"]
 
-private func connection(for message: Message) -> FrameDecoder.Connection {
-    switch message.type {
-    case .videoFrame, .videoHello: .video
-    default: .control
-    }
-}
+private func connection(for message: Message) -> FrameDecoder.Connection { message.connection }
 
 @Suite struct FixtureTests {
     @Test func everyFixtureFileHasATestCase() {
@@ -159,7 +163,7 @@ private func connection(for message: Message) -> FrameDecoder.Connection {
 
     @Test(arguments: invalidFixtures.keys.sorted())
     func invalidFixturesAreRejected(name: String) {
-        var decoder = FrameDecoder(connection: .control)
+        var decoder = FrameDecoder(connection: name.hasPrefix("invalid_files_") ? .files : .control)
         decoder.append(Fixtures.bytes(name))
         #expect(throws: invalidFixtures[name]!) { try decoder.nextMessage() }
         // The decoder stays failed.

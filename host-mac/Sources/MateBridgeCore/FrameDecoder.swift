@@ -4,11 +4,12 @@
 /// (the caller closes the connection per PROTOCOL.md 2); later calls throw `.decoderFailed`.
 public struct FrameDecoder: Sendable {
     public enum Connection: Sendable {
-        case control, video
+        /// `.files`: a Wi-Fi file connection (decision 0035); the same payload limit as the control connection.
+        case control, video, files
 
         public var maxPayload: Int {
             switch self {
-            case .control: ProtocolConstants.maxControlPayload
+            case .control, .files: ProtocolConstants.maxControlPayload
             case .video: ProtocolConstants.maxVideoPayload
             }
         }
