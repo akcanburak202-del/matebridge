@@ -1,7 +1,7 @@
 ---
 id: T-277
 title: Client test — PackedRendererTest.directPathNeverCallsAHook ara sıra düşüyor (yarış)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []
