@@ -1651,3 +1651,7 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 
 - Kurulum: APK 16:57, host 8f3e3d69. Kullanıcı: Günlük modda imleç tablette, şekiller (I-beam, el, boyutlandırma) ve boyut doğru, yazarken gizleniyor ve geri geliyor, İmleç Tablette↔Görüntüde ve Oyun↔Günlük geçişlerinde imleçsiz kalma ya da çift imleç yok — "her şey doğru çalışıyor".
 - Kod geçmişi: Codex bütünleşik 4 tur (host video imleci için operasyon kuyruğu yerine "uzlaştırıcı" modeli: istenen durum + tek uygulayıcı döngü; istemcide tek sıralı mod komutu, oturum kilidi, tek bekleyen yeniden çizim). Gecikme ölçümü yapılmadı (kullanıcı istemedi); `cursor_stats age_ms` loglarda.
+
+## 2026-10-06 ~18:50 — T-278 imleç tahmini cihazda (Wi-Fi)
+
+- Kullanıcı: "imleç hissiyatı iyi". `cursor_stats` (Wi-Fi, ~40 s hareket): tahmin hatası p50/p95 **0,01 / 0,49 nokta**; v1 gibi son host konumunda bekleseydi (hold) p50/p95 **33 / 146 nokta** (hareketli saniyelerde p95 medyanı 147 → 0,3). Durum yaşı p50 11 ms (RTT ~7 ms). Host göreli hareketi 1:1 uyguladığı için tahmin neredeyse birebir; imleç girdiyle aynı karede çiziliyor. USB ölçülmedi (kullanıcı Wi-Fi'da kaldı).
