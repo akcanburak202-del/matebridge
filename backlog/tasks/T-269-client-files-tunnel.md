@@ -1,7 +1,7 @@
 ---
 id: T-269
 title: Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-265, T-266]
@@ -42,4 +42,36 @@ Karar 0035 (+ 2026-10-06 eki) istemci oturum tarafı. Tel biçimi: `docs/PROTOCO
 
 ## Handoff
 
+- Commit: ilk commit "T-269: plan", ikinci commit kod + testler + bu kart (SHA için dal geçmişine bakın: `task/T-269-client-files-tunnel`). Dal `task/T-265-files-net-protocol` üzerine kuruldu, `main` (T-266) birleştirildi.
+- check.sh: **android ve protocol OK** (`./scripts/check.sh --only android,protocol`: ALL OK; kripto vektörleri ve fixture'lar güncel). Tam `./scripts/check.sh`: tek hata `swift test (host-mac)` -> `FixtureTests.everyFixtureFileHasATestCase` (host tarafı yeni 9 fixture'ı henüz kapsamıyor; T-267 inince düzelir). Başka her şey (probe'lar, ölçüm kiti, android probe'ları) geçti.
+- Dosyalar:
+  - `protocol/Messages.kt`, `Codec.kt`: `MsgType` 0x0A/0x50/0x51/0x52, `Capabilities.FILES_NET`, `FilesInfo.STANDBY`, `FilesNet`, `FilesHello`, `FilesHelloAck`, `FilesData`.
+  - `security/Crypto.kt`, `Handshake.kt`: `KeySchedule.filesC2h/H2c`, `SessionSecrets.filesKeys` (wipe sonrası IllegalState), `FilesKeys`, `FilesChannel`.
+  - `session/SessionMachine.kt`: `FILES_NET` işleme, `Action.FilesNetReceived`, `Action.FilesTunnel(plan?)`, `desiredTunnel()`. `SessionController.kt`: tüneli açar/kapatır, `SessionListener.onFilesNet`, `VideoKeepalive.forSocket(socket, ev, logOk)` (dosya soketleri için günlüksüz).
+  - `files/FilesTunnel.kt` (yeni; `FilesTunnelPlan`, `PoolPlanner`, `FilesTunnel`), `FilesSwitch.kt`, `FilesLifecycle.kt` (STANDBY, Wi-Fi sunucusu, gate `netOpen`), `FilesController.kt` (Wi-Fi kökü/profili/`onStreamBitrate`), `FilesConfig.kt` (`WifiFilesRoot.missingFolderText`).
+  - `MainActivity.kt`: HELLO bit12, `onFilesNet`, `syncFiles(netOpen)`, `installConfig` bit hızı, paylaşım kapalıyken eski OPEN unutulur.
+  - Testler: `FixtureTest` (9 yeni fixture), `FilesNetCodecTest`, `CryptoVectorsTest` (+3), `FilesNetMachineTest` (14), `FilesTunnelTest` (21; gerçek loopback sahte Mac + sahte tablet sunucusu), `FilesLifecycleTest` (STANDBY, gate; `neverStartsOnWifi...` ve `switchToWifi...` beklentileri bilerek değişti).
+- Davranış özeti:
+  - Wi-Fi'da güvenilir oturum + paylaşım açık + izin varsa `FILES_INFO(STANDBY)` bir kez; USB'de hiç yok (USB davranışı aynı: aynı sunucu/ayarlar, `shouldRun` USB'de `netOpen` istemez). Ayrı Wi-Fi ayarı yok.
+  - `FILES_NET(OPEN)` -> sunucu `MateBridge/Wi-Fi/` kökü + `FilesConfig.wifi(filesCapBytesPerSec(bitrate))` ile başlar -> READY -> makine tünel planı üretir -> `FilesTunnel` havuzu açar. `CLOSE` -> tünel kapanır, sunucu durur, OFF yerine doğrudan STANDBY. OPEN'ı OFF durumundaki tablet OFF ile yeniden yanıtlar (PROTOCOL: "izin yoksa FILES_INFO(OFF)").
+  - Oturum sonu / BYE(HOST_SLEEP) / kopma / geçiş / arka plan: plan null -> tünel kapanır (`CloseControl`/`RetireControl`'de ayrıca); sunucu lifecycle ile durur.
+  - Durum satırı: "Durum: Mac'ten açılmayı bekliyor (Wi-Fi)" / "Durum: Mac'e açık (Wi-Fi, MateBridge/Wi-Fi)" / Wi-Fi klasörü açılamazsa "Durum: \"MateBridge/Wi-Fi\" klasörü açılamadı; Wi-Fi paylaşımı kapalı". `NO_USB_SESSION` metni artık "Mac'e bağlanınca açılır (USB'de hemen, Wi-Fi'da Mac'ten açılınca)".
+- Varsayımlar / yorumlar:
+  - **C→H hız kovası:** kart "C→H hız `TokenBucket`" diyor; bunu T-266'nın `DavServer` kovası olarak uyguladım (`FilesController.onStreamBitrate` -> `DavServer.setRate`, `STREAM_CONFIG.bitrate_kbps` değişince). Tünelde ikinci bir kova yok: seri ikinci kova küçük şerit önceliğini (T-266) yeniden büyük aktarımın borcunun arkasına koyardı. Tünel yalnız bayt basar; geri basınç blok soketlerle. Başka bir yorum isteniyorsa tünele `ByteBudget` kancası eklemek küçük iş.
+  - Wi-Fi sunucusu da kullanıcının "Salt okunur" ayarına uyar (kök seçimi USB'ye özel).
+  - Makine, `FILES_NET`'i USB uç noktasında yok sayar (W log `files_net_ignored reason=usb`); portsuz OPEN yok sayılır; pool 1..4, max pool..16'ya sıkıştırılır.
+  - Bağlantı hatalarında havuz 250 ms..5 sn geri çekilir (yalnız kanıtlanmamış bağlantılar sayar); arka arkaya açılış arası en az 20 ms.
+  - Tablet sunucusu kapatınca bayt kaybı olmasın diye önce FIN (`shutdownOutput`), Mac kapatmazsa 3 sn sonra tam kapanış.
+- Log olayları (docs/LOGGING.md'ye orkestratör ekleyebilir; bileşen `files`; yol/jeton/HTTP içeriği/adres yok): `files_net_recv state= port= pool= max=`, `files_tunnel_open pool= max=`, `files_tunnel_close reason= opened= proven= paired= failed= rejected= h2c_bytes= c2h_bytes=`, `files_conn_closed conn= reason= [h2c_bytes= c2h_bytes= ms=|idle=1]`, `files_conn_failed conn= reason= streak=` (W; ilk 3, sonra her 12.), `files_tunnel_no_keys` (W), `rate_cap cap_kbps= video_kbps=`, `scope root=wifi ro=`, `scope_missing root=wifi` (W), `files_net_ignored reason=` (W, bileşen `session`), `server state=on|off ...` (mevcut).
+- **Test edilmedi (tablet gerek):** gerçek Wi-Fi/Mac host'u, HarmonyOS soket seçenekleri (trafik sınıfı 0x20 ve TCP keepalive dosya soketlerinde etkili mi), `Process.setThreadPriority` etkisi, webdavfs ile gerçek aktarım hızı ve görüntüye etkisi, host (T-267/T-268) ile uçtan uca.
+- **Tablette / cihazda bakılacak (T-270 ile):**
+  1. Wi-Fi oturumunda (Tablet dosyaları anahtarı + izin açık) ayarlar panelinde durum "Mac'ten açılmayı bekliyor (Wi-Fi)"; `adb logcat -s 'MB/files'` içinde `server state=on` satırı yok (sunucu kapalı).
+  2. Mac menüsünden "Tablet dosyalarını aç" sonrası: `files_net_recv state=1`, `scope root=wifi`, `server state=on`, `files_tunnel_open pool=2 max=12`, durum "Mac'e açık (Wi-Fi, MateBridge/Wi-Fi)"; Mac'te 2 kanıtlanmış bağlantı; Finder'da yalnız `MateBridge/Wi-Fi` içeriği.
+  3. Büyük dosya kopyası sürerken `rate_cap` değeri bit hızıyla uyumlu ve görüntü akıcı (`skip_pct`, ses kesilmesi); bit hızını değiştirince yeni `rate_cap` satırı.
+  4. Çıkarma (CLOSE): `files_tunnel_close`, sunucu `state=off`, durum yeniden "bekliyor". Mac uykusu / uygulamayı arka plana alma / USB'ye geçiş: `files_tunnel_close reason=session_end` ve sunucu kapanır, 47003'e açık dosya soketi kalmaz.
+  5. USB regresyonu: USB oturumunda durum satırı/davranış aynı (STANDBY yok, kök seçimi, 20 MB/s).
+
 ## Open questions
+
+- **Spec (orkestratöre):** (1) Dosya bağlantısında host'tan gelen `PING` geçerli sayılıyor, PONG verilmiyor ve yok sayılıyor (PROTOCOL "Dosya bağlantısı" madde 10 ile uyumlu). (2) `FILES_INFO(STANDBY)` yalnız `sessionTrusted` (STREAM_CONFIG uygulandıktan sonra) gidiyor; yani Wi-Fi oturumu açılır açılmaz değil, birkaç yüz ms sonra. Host "bit12 varsa STANDBY/READY'de menü sunar" diyor; bu gecikme sorun değilse spec'e dokunmaya gerek yok. (3) Hız tavanının yeri için yukarıdaki "C→H hız kovası" notuna bakın; PROTOCOL §5 "C→H tabletin hız kovasında" diyor, doğrulayın.
+- Kapsam dışı not: `docs/LOGGING.md` yeni `files` log olaylarını içermiyor (kartın dosya listesinde yok).

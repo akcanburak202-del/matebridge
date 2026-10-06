@@ -46,6 +46,7 @@ import dev.matebridge.client.audio.AudioPlayout
 import dev.matebridge.client.audio.AvSync
 import dev.matebridge.client.protocol.Capabilities
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.files.FilesController
 import dev.matebridge.client.files.FilesSessionGate
 import dev.matebridge.client.files.FilesRoot
@@ -608,6 +609,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             override fun onSessionEnd() { audio?.endSession("session_end") }
 
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
+
+            // T-269 (decision 0035): the Mac opens / closes the tablet files over Wi-Fi. Same UI-thread order as onConnectionGen.
+            override fun onFilesNet(msg: FilesNet, gen: Int) {
+                runOnUiThread { if (filesGate.onFilesNet(gen, msg)) syncFiles() }
+            }
 
             override fun onWakeConnect(wake: WakeTag, ok: Boolean) { runOnUiThread { onWakeConnectResult(wake, ok) } } // T-134
         }, loggedPrefs(gameSettings.prefs(streamMode)), quickAck, knobs,if (audioAllowed) settings.audioEnabled() else null,
@@ -1419,6 +1425,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun installConfig(config: StreamConfig) {
         if (!started || isDestroyed) return
         streamConfig = config
+        files.onStreamBitrate(config.bitrateKbps.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) // T-269: the Wi-Fi file cap follows the video rate
         capture.setStreamGeometry(config.widthPt, config.heightPt)
         val r = renderer ?: VideoRenderer(
             config,
@@ -2110,8 +2117,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** T-135 / T-153: starts or stops the file server for the setting, [foreground] and the session gate. */
-    private fun syncFiles(foreground: Boolean = started) =
-        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport)
+    private fun syncFiles(foreground: Boolean = started) {
+        // T-269: while sharing is off or not permitted the Mac has seen OFF and closed; a stale open request must not
+        // restart the server when it is switched back on (the Mac's menu sends a new one).
+        if (!settings.filesShare() || !files.hasPermission()) filesGate.forgetNet()
+        files.sync(settings.filesShare(), foreground, filesGate.trusted, filesGate.transport, filesGate.netOpen)
+    }
 
     private fun currentTransport(): Transport = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI
 
@@ -2947,7 +2958,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             Capabilities.TOUCHPAD or Capabilities.TOUCH or Capabilities.DECODE_H264 or Capabilities.DECODE_HEVC or
             (if (audioAllowed) Capabilities.AUDIO_PCM else 0) or // T-095
             Capabilities.SETTINGS_PANEL or // T-105: handles SETTINGS_OPEN
-            Capabilities.FILES // T-135: sends FILES_INFO (OFF until the user enables the file server)
+            Capabilities.FILES or // T-135: sends FILES_INFO (OFF until the user enables the file server)
+            Capabilities.FILES_NET // T-269: STANDBY, FILES_NET and Wi-Fi file connections (decision 0035)
         return Hello(
             protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),

@@ -1,6 +1,7 @@
 package dev.matebridge.client.files
 
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.session.Transport
 
 /**
@@ -13,32 +14,53 @@ import dev.matebridge.client.session.Transport
  *
  * The transport is the connection's own (reported with its generation), not the endpoint the UI targets.
  *
- * Every call returns whether ([trusted], transport) changed, so the caller re-syncs the server only then. Main thread.
+ * T-269 (decision 0035): the gate also remembers the Mac's `FILES_NET(OPEN)` of the current connection generation
+ * ([netOpen]); a new generation or any non-Connected state forgets it (the host closes its file connections with the
+ * session). A OPEN with another listener port is a change as well.
+ *
+ * Every call returns whether ([trusted], transport, net) changed, so the caller re-syncs the server only then. Main thread.
  */
 class FilesSessionGate {
     private var connGen = -1
     private var connTransport: Transport? = null
     private var configGen = -1
     private var connected = false
+    private var net: FilesNet? = null
 
     val trusted: Boolean get() = connected && connGen >= 0 && configGen == connGen
 
     /** The current connection's transport; null before the first connection. */
     val transport: Transport? get() = connTransport
 
+    /** The Mac asked to open the files over Wi-Fi on this connection and has not closed them. */
+    val netOpen: Boolean get() = net != null
+
     /** A new control connection (also a migration's promoted candidate) became the session's. */
     fun onConnectionGen(gen: Int, transport: Transport): Boolean = changes {
         connGen = gen
         connTransport = transport
+        net = null
+    }
+
+    /** `FILES_NET` of connection [gen]: OPEN is remembered, CLOSE (or any unknown state) forgets it; another generation is ignored. */
+    fun onFilesNet(gen: Int, msg: FilesNet): Boolean = changes {
+        if (gen == connGen) net = if (msg.isOpen) msg else null
     }
 
     /** An authenticated STREAM_CONFIG was applied; it belongs to the current generation (same ordered thread). */
     fun onConfigApplied(): Boolean = changes { configGen = connGen }
 
+    /**
+     * The tablet side no longer allows sharing (the setting went off or the permission is gone): the Mac has been told OFF
+     * and closed its end, so its earlier open request must not start the server again when sharing is switched back on.
+     * The Mac's menu sends a new one.
+     */
+    fun forgetNet(): Boolean = changes { net = null }
+
     /** The rendered session state: Connected or anything else. */
     fun onUi(connected: Boolean): Boolean = changes {
         this.connected = connected
-        if (!connected) configGen = -1
+        if (!connected) { configGen = -1; net = null }
     }
 
     private inline fun changes(f: () -> Unit): Boolean {
@@ -47,8 +69,8 @@ class FilesSessionGate {
         return key() != before
     }
 
-    /** Null while untrusted, else the transport the trusted session runs on. */
-    private fun key(): Transport? = if (trusted) connTransport else null
+    /** Null while untrusted, else the transport the trusted session runs on and the Mac's open request. */
+    private fun key(): Pair<Transport?, FilesNet?>? = if (trusted) connTransport to net else null
 }
 
 /**
@@ -59,7 +81,10 @@ class FilesSessionGate {
  *   lock **before** a stopped server is told to stop, so a READY can never overtake the OFF of a stop that raced it;
  * - callbacks of a server that was stopped on purpose are ignored (generation check);
  * - a server that ends by itself publishes OFF and reports [FilesStatus.FAILED];
- * - the last stopped server is handed to the next start ([Factory.create] `after`), which waits for its workers.
+ * - the last stopped server is handed to the next start ([Factory.create] `after`), which waits for its workers;
+ * - T-269 (decision 0035): over Wi-Fi the server runs only after the Mac's open request (`netOpen`), as a Wi-Fi server
+ *   ([Events.wifi]: its own root and profile). While a Wi-Fi session is allowed but not open, [FilesInfo.STANDBY] is
+ *   published (once); a Wi-Fi server stopped by the Mac's CLOSE publishes STANDBY instead of OFF.
  *
  * [sync] and [shutdown] are main-thread calls; [Events] may arrive on the server's own threads.
  */
@@ -76,6 +101,9 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     }
 
     interface Events {
+        /** This server is a Wi-Fi server (decision 0035): Wi-Fi root and profile, started by the Mac's open request. */
+        val wifi: Boolean
+
         fun onListening(port: Int)
         fun onStopped(failed: Boolean)
     }
@@ -90,32 +118,63 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
     private var retired: S? = null
     private var gen = 0
 
+    /** The running server is a Wi-Fi server; and STANDBY is the last thing published (both guarded by [lock]). */
+    private var serverWifi = false
+    private var standbyShown = false
+
     @Volatile var status = FilesStatus.DISABLED
         private set
 
     /** Starts or stops the server for the inputs of [FilesSwitch.shouldRun]. Main thread. */
-    fun sync(enabled: Boolean, permission: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?) {
-        if (FilesSwitch.shouldRun(enabled, permission, foreground, sessionTrusted, transport)) {
-            synchronized(lock) { if (server == null) startLocked() }
+    fun sync(
+        enabled: Boolean, permission: Boolean, foreground: Boolean, sessionTrusted: Boolean, transport: Transport?,
+        netOpen: Boolean = false,
+    ) {
+        if (FilesSwitch.shouldRun(enabled, permission, foreground, sessionTrusted, transport, netOpen)) {
+            val wifi = transport == Transport.WIFI
+            // A running server of the other kind (cannot happen across a connection change, which drops trust first) goes first.
+            if (synchronized(lock) { server != null && serverWifi != wifi }) stop("mode", FilesInfo.OFF)
+            synchronized(lock) { if (server == null) startLocked(wifi) }
         } else {
-            stop(FilesSwitch.stopReason(enabled, permission, foreground, sessionTrusted))
-            setStatus(FilesSwitch.idleStatus(enabled, permission, foreground))
+            val standby = FilesSwitch.standbyEligible(enabled, permission, foreground, sessionTrusted, transport)
+            stop(FilesSwitch.stopReason(enabled, permission, foreground, sessionTrusted, transport), if (standby) FilesInfo.STANDBY else FilesInfo.OFF)
+            publishIdle(standby)
+            setStatus(FilesSwitch.idleStatus(enabled, permission, foreground, sessionTrusted, transport))
+        }
+    }
+
+    /**
+     * No server runs: STANDBY goes out once when a Wi-Fi session is allowed, OFF once when that no longer holds. USB and
+     * a plain OFF state publish nothing here (the machine starts at OFF), exactly as before.
+     */
+    private fun publishIdle(standby: Boolean) {
+        synchronized(lock) {
+            if (standby && server == null) {
+                if (!standbyShown) { standbyShown = true; publish(FilesInfo.STANDBY) }
+            } else if (!standby && standbyShown) {
+                standbyShown = false
+                publish(FilesInfo.OFF)
+            }
         }
     }
 
     fun shutdown() = stop("destroy")
 
-    private fun startLocked() {
+    private fun startLocked(forWifi: Boolean) {
         val myGen = ++gen
         val token = newToken()
+        serverWifi = forWifi
+        standbyShown = false // READY (or OFF) supersedes STANDBY
         val s = factory.create(token, object : Events {
+            override val wifi: Boolean = forWifi
+
             // Publishing happens under the lock (it only posts to a mailbox), so a READY can never overtake the OFF of
             // a stop() that raced with it.
             override fun onListening(port: Int) {
                 synchronized(lock) {
                     if (gen != myGen) return
                     publish(FilesInfo(FilesInfo.STATE_READY, port, token))
-                    setStatus(FilesStatus.READY)
+                    setStatus(if (wifi) FilesStatus.WIFI_READY else FilesStatus.READY)
                 }
                 log(false, "server", "state=on port=$port")
             }
@@ -137,13 +196,15 @@ class FilesLifecycle<S : FilesLifecycle.Server>(
         s.start()
     }
 
-    private fun stop(reason: String) {
+    /** [final] is what the host learns first: OFF, or STANDBY when the Mac closed a Wi-Fi server of a session that stays allowed. */
+    private fun stop(reason: String, final: FilesInfo = FilesInfo.OFF) {
         val s = synchronized(lock) {
             val cur = server ?: return
             server = null
             retired = cur
             gen++ // late callbacks of the old server are ignored
-            publish(FilesInfo.OFF) // queued before the listener closes, so the host learns OFF as early as possible
+            standbyShown = final.state == FilesInfo.STATE_STANDBY && serverWifi
+            publish(if (standbyShown) FilesInfo.STANDBY else FilesInfo.OFF) // queued before the listener closes, so the host learns it as early as possible
             cur
         }
         s.stop()

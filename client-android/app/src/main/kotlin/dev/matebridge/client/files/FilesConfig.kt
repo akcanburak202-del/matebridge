@@ -188,6 +188,9 @@ object WifiFilesRoot {
     const val LOG_FIELDS = "root=wifi"
 
     fun directory(storage: File): File? = safeSubdirectory(storage, SEGMENTS)
+
+    /** Status line when [directory] gave null (T-269): the server stays off. */
+    fun missingFolderText(): String = "Durum: \"MateBridge/Wi-Fi\" klasörü açılamadı; Wi-Fi paylaşımı kapalı"
 }
 
 /**

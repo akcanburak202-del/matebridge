@@ -27,6 +27,7 @@ object MsgType {
     const val DISPLAY_RATE = 0x07
     const val SETTINGS_OPEN = 0x08
     const val FILES_INFO = 0x09
+    const val FILES_NET = 0x0A
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -44,6 +45,9 @@ object MsgType {
     const val AUDIO_FRAME = 0x32
     const val VIDEO_HELLO = 0x40
     const val VIDEO_FRAME = 0x41
+    const val FILES_HELLO = 0x50
+    const val FILES_HELLO_ACK = 0x51
+    const val FILES_DATA = 0x52
 }
 
 object Limits {
@@ -86,6 +90,9 @@ object Capabilities {
 
     /** Handles `chroma_layout = 1` (two streams, `VIDEO_FRAME.view`) and passed the capability self-test (decision 0034, T-259). */
     const val FULL_CHROMA = 1 shl 11
+
+    /** Sends `FILES_INFO` STANDBY, handles `FILES_NET` and opens encrypted file connections on Wi-Fi (decision 0035, T-269). */
+    const val FILES_NET = 1 shl 12
 }
 
 // ---- Session ----
@@ -210,8 +217,10 @@ data object SettingsOpen : Message {
 
 /**
  * State of the tablet's WebDAV file server (C to H, PROTOCOL.md 0x09, decision 0015). [port] is the server's TCP port on
- * the tablet's 127.0.0.1 (0 when OFF); [token] is the HTTP auth password (32 lowercase hex chars, empty when OFF).
- * Unknown [state] values decode fine and mean OFF. Never log [token]: [toString] leaves it out.
+ * the tablet's 127.0.0.1 (0 when OFF or STANDBY); [token] is the HTTP auth password (32 lowercase hex chars, empty when
+ * OFF or STANDBY). Unknown [state] values decode fine and mean OFF. STANDBY (decision 0035, only with HELLO bit12): Wi-Fi
+ * session, sharing allowed, the server is off and waits for the Mac's `FILES_NET(OPEN)`. Never log [token]: [toString]
+ * leaves it out.
  */
 data class FilesInfo(val state: Int, val port: Int, val token: String) : Message {
     override val type get() = MsgType.FILES_INFO
@@ -223,7 +232,62 @@ data class FilesInfo(val state: Int, val port: Int, val token: String) : Message
     companion object {
         const val STATE_OFF = 0
         const val STATE_READY = 1
+        const val STATE_STANDBY = 2
         val OFF = FilesInfo(STATE_OFF, 0, "")
+        val STANDBY = FilesInfo(STATE_STANDBY, 0, "")
+    }
+}
+
+/**
+ * The Mac opens or closes the tablet files over Wi-Fi (H to C, PROTOCOL.md 0x0A, decision 0035). [port] is the host's
+ * file listener (OPEN), [pool] the idle file connections to keep ready, [max] the total limit; all 0 on CLOSE. An
+ * unknown [state] counts as CLOSE ([isOpen] is true only for [STATE_OPEN]).
+ */
+data class FilesNet(val state: Int, val port: Int, val pool: Int, val max: Int) : Message {
+    override val type get() = MsgType.FILES_NET
+
+    val isOpen: Boolean get() = state == STATE_OPEN
+
+    companion object {
+        const val STATE_CLOSE = 0
+        const val STATE_OPEN = 1
+        const val POOL_MIN = 1
+        const val POOL_MAX = 4
+        const val MAX_MAX = 16
+    }
+}
+
+/** First message of a file connection (C to H, plain; PROTOCOL.md 0x50). A fresh [clientFilesNonce] per connection. */
+data class FilesHello(
+    val protocolVersion: Int,
+    val sessionId: Long, // u32
+    val clientFilesNonce: Bytes,
+) : Message {
+    override val type get() = MsgType.FILES_HELLO
+}
+
+/** The host's answer on a file connection (H to C, plain; PROTOCOL.md 0x51). Any [status] other than [OK] counts as rejected. */
+data class FilesHelloAck(val status: Int, val hostFilesNonce: Bytes) : Message {
+    override val type get() = MsgType.FILES_HELLO_ACK
+
+    val ok: Boolean get() = status == OK
+
+    companion object {
+        const val OK = 0
+        const val REJECTED = 1
+    }
+}
+
+/**
+ * Opaque HTTP bytes of the paired local connection (both directions, PROTOCOL.md 0x52). [data] is 1..[MAX_DATA_BYTES]
+ * bytes (an empty record is a protocol error). Never log [data].
+ */
+data class FilesData(val data: Bytes) : Message {
+    override val type get() = MsgType.FILES_DATA
+
+    companion object {
+        /** The u16 size of a record is at most the payload limit minus its own two bytes. */
+        const val MAX_DATA_BYTES = Limits.CONTROL_MAX_PAYLOAD - 2
     }
 }
 

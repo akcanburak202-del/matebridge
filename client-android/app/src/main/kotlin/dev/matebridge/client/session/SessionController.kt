@@ -21,7 +21,9 @@ import dev.matebridge.client.protocol.Pong
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.protocol.StreamConfig
 import dev.matebridge.client.protocol.DisplayRate
+import dev.matebridge.client.files.FilesTunnel
 import dev.matebridge.client.protocol.FilesInfo
+import dev.matebridge.client.protocol.FilesNet
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.StreamMode
@@ -120,6 +122,13 @@ interface SessionListener {
     fun onSettingsOpen() {}
 
     /**
+     * T-269 (decision 0035): `FILES_NET` of the accepted, trusted Wi-Fi session on control connection [gen] (engine
+     * thread), sanitised by the machine. OPEN: the Mac wants the tablet files over Wi-Fi (start the server); CLOSE: stop
+     * it. The file connections themselves belong to the controller (they close with the session).
+     */
+    fun onFilesNet(msg: FilesNet, gen: Int) {}
+
+    /**
      * T-134: the TCP connect of direct wake attempt [wake] finished ([ok]: connected; the session goes on as usual).
      * Control reader thread, before the machine sees the connection open or fail.
      */
@@ -209,6 +218,9 @@ class SessionController(
     @Volatile private var candidate: ControlConn? = null
     @Volatile private var retired: ControlConn? = null
     @Volatile private var video: VideoConn? = null
+
+    /** T-269: the encrypted file connections of the Wi-Fi tablet-files server; the engine thread opens and closes them. */
+    @Volatile private var filesTunnel: FilesTunnel? = null
     @Volatile private var inputAllowed = false
     /** T-150: mirrors of the machine (engine thread writes): audio gate, "Bu Mac'i unut" possible. */
     @Volatile private var acceptedGen = -1
@@ -453,6 +465,7 @@ class SessionController(
             // shutting down
         } finally {
             stallDetector?.stop()
+            closeFilesTunnel("shutdown")
             control?.closeGracefully()
             candidate?.abort()
             retired?.abort()
@@ -528,6 +541,7 @@ class SessionController(
                 c?.link?.send(if (a.msg is Hello) c.helloMsg else a.msg) // overflow is reported through the link itself
             }
             is SessionMachine.Action.CloseControl -> {
+                closeFilesTunnel("session_end") // before the keys are wiped: no file connection outlives its session
                 control?.let { if (a.graceful) it.closeGracefully() else it.abort() }
                 control = null
                 stallDetector?.stop()
@@ -581,6 +595,7 @@ class SessionController(
                 candidate = null
             }
             SessionMachine.Action.RetireControl -> {
+                closeFilesTunnel("session_end") // a migration is a new host session: it starts without file connections
                 // No BYE and no more input; queued messages still drain. The host closes it on our takeover proof.
                 retired?.closeGracefully()
                 retired = control
@@ -620,11 +635,45 @@ class SessionController(
                 listener.onSettingsOpen()
             }
             is SessionMachine.Action.DeliverClipboard -> listener.onClipboard(a.msg, a.gen)
+            is SessionMachine.Action.FilesNetReceived -> {
+                // the host's file listener port is no secret; the pool sizes are the sanitised ones
+                MbLog.i("files_net_recv", "state=${a.msg.state} port=${a.msg.port} pool=${a.msg.pool} max=${a.msg.max}", "files")
+                listener.onFilesNet(a.msg, a.gen)
+            }
+            is SessionMachine.Action.FilesTunnel -> {
+                closeFilesTunnel("plan")
+                val plan = a.plan
+                if (plan != null) {
+                    val secrets = control?.takeIf { it.gen == plan.gen }?.secrets
+                    if (secrets == null) {
+                        MbLog.w("files_tunnel_no_keys", "", "files")
+                    } else {
+                        filesTunnel = FilesTunnel(
+                            plan, secrets,
+                            newHostSocket = {
+                                Socket().also { sock ->
+                                    // Low priority on the wire (decision 0035): CS1 ("lower effort"), before the connect.
+                                    TrafficClass.trySet(FILES_TRAFFIC_CLASS) { sock.trafficClass = it }
+                                }
+                            },
+                            tune = { sock -> VideoKeepalive.forSocket(sock, "files_keepalive", logOk = false) },
+                            threadStarted = { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) },
+                            log = { warn, ev, fields -> if (warn) MbLog.w(ev, fields, "files") else MbLog.i(ev, fields, "files") },
+                        ).also { it.start() }
+                    }
+                }
+            }
             is SessionMachine.Action.VideoLost -> {
                 MbLog.w("video_lost", "vgen=${a.gen} migrating=${if (a.duringMigration) 1 else 0}")
                 listener.onVideoLost(a.gen, a.duringMigration)
             }
         }
+    }
+
+    /** T-269: closes the file tunnel (and with it every file connection and its local connection). Engine thread. */
+    private fun closeFilesTunnel(reason: String) {
+        filesTunnel?.close(reason)
+        filesTunnel = null
     }
 
     /** T-117: a new session (like the listener's clock in [SessionListener.onSessionStart]). Engine thread. */
@@ -1027,6 +1076,9 @@ class SessionController(
         /** T-089: the engine tick for a ping interval: [TICK_MS] unless half the interval is shorter, never below 10 ms. */
         fun engineTickMs(pingMs: Int): Long = minOf(TICK_MS, maxOf(10L, pingMs / 2L))
 
+        /** T-269: IP_TOS of file connections: DSCP CS1 (0x20), best-effort background (WifiKnobs `trafficClass 0x20`). */
+        private const val FILES_TRAFFIC_CLASS = 0x20
+
         private const val TICK_MS = 100L
         private const val GRACEFUL_CLOSE_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 5000
@@ -1150,7 +1202,7 @@ object VideoKeepalive {
      * Applies the options to a connected [socket] through a dup'd fd, as [QuickAck] does. Closing the dup leaves the
      * socket open.
      */
-    fun forSocket(socket: java.net.Socket) {
+    fun forSocket(socket: java.net.Socket, ev: String = "video_keepalive", logOk: Boolean = true) {
         val pfd = try { android.os.ParcelFileDescriptor.fromSocket(socket) } catch (e: Exception) { null }
         val err = if (pfd == null) "nofd" else try {
             val fd = pfd.fileDescriptor
@@ -1160,7 +1212,7 @@ object VideoKeepalive {
         } finally {
             try { pfd.close() } catch (_: Exception) {}
         }
-        if (err != null) MbLog.w("video_keepalive", "ok=0 err=$err")
-        else MbLog.i("video_keepalive", "ok=1 idle_s=$IDLE_S intvl_s=$INTERVAL_S cnt=$COUNT")
+        if (err != null) MbLog.w(ev, "ok=0 err=$err")
+        else if (logOk) MbLog.i(ev, "ok=1 idle_s=$IDLE_S intvl_s=$INTERVAL_S cnt=$COUNT")
     }
 }

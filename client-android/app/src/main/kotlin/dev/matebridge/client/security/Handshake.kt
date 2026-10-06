@@ -35,6 +35,12 @@ class SessionSecrets(prk: ByteArray, val pairing: Boolean, val hostId: ByteArray
         return VideoKeys(KeySchedule.videoC2h(p, videoNonce), KeySchedule.videoH2c(p, videoNonce))
     }
 
+    /** Decision 0035: the keys of one file connection from its two fresh nonces. Throws IllegalStateException once wiped. */
+    fun filesKeys(clientFilesNonce: ByteArray, hostFilesNonce: ByteArray): FilesKeys {
+        val p = prkOrThrow()
+        return FilesKeys(KeySchedule.filesC2h(p, clientFilesNonce, hostFilesNonce), KeySchedule.filesH2c(p, clientFilesNonce, hostFilesNonce))
+    }
+
     fun wipe() {
         prk?.fill(0)
         prk = null
@@ -42,6 +48,8 @@ class SessionSecrets(prk: ByteArray, val pairing: Boolean, val hostId: ByteArray
 }
 
 class VideoKeys(val c2h: ByteArray, val h2c: ByteArray)
+
+class FilesKeys(val c2h: ByteArray, val h2c: ByteArray)
 
 /** Everything the control connection needs after a valid encrypted first HELLO_ACK. */
 class SecureSession(
@@ -199,6 +207,20 @@ object PlainFrames {
             pos += r
         }
         return out
+    }
+}
+
+/**
+ * Client side of one file connection's crypto (decision 0035, PROTOCOL.md section 9): the sealer of the tablet's records
+ * (counter from 0, one writer at a time) and the decoder of the host's. Both hold their own copy of the keys.
+ */
+class FilesChannel(keys: FilesKeys) {
+    val sealer = RecordSealer(keys.c2h)
+    val decoder = RecordDecoder(Limits.CONTROL_MAX_PAYLOAD, RecordOpener(keys.h2c))
+
+    init {
+        keys.c2h.fill(0)
+        keys.h2c.fill(0)
     }
 }
 
