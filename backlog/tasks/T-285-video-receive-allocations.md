@@ -1,7 +1,7 @@
 ---
 id: T-285
 title: İstemci — video alma yolunda kare başına ayırmaları azalt (oyunda GC %14, 7 000 fault/s)
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
@@ -34,6 +34,20 @@ Oyun 60'ta (2800×1840, 100–300 KB/kare) `HeapTaskDaemon` tek çekirdeğin %14
 
 ## Plan
 
+Gerçek durum: `RecordDecoder.next` zaten `openPlain` kullanıyor (`scratch.copyOf` yalnızca `open/openAt` yolunda, üretimde çağıran yok). Yani video yolunda kalan tam boy ayırmalar ikiydi: `plain.copyOfRange(1, n)` ve `Reader.bytes(size)`.
+1. `Reader` ofset/uzunluk alır (`ByteBuffer.wrap(bytes, off, len)`: kopyasız görünüm, `remaining()` dilimin sonundan sayar).
+2. `Codec.decodePayload(type, buf, offset, length)` aşırı yüklemesi; eski imza buna yönlenir. Dilim yalnızca çağrı sırasında okunur, mesajın tuttuğu her bayt kopyalanır (`Bytes(r.bytes(..))`), bu yüzden `scratch` yeniden kullanımı güvenli.
+3. `RecordDecoder.next` dilimi yerinde çözer. Tel biçimi, hata türleri (`SHORT_PAYLOAD`, `INVALID_VALUE`, `AUTH_FAILED`, `OVERSIZE`) ve `VideoFrame`/`Bytes` API'si değişmez.
+4. Testler: art arda kareler (bozulma yok), dilim = tam dizi, sınır dışı baytlar yük sayılmaz, JVM thread-başına ayırma sayacıyla 1 000 kayıtta bayt sınırı.
+
 ## Handoff
+
+- Commit: `git log task/T-285-video-receive-allocations` (tek T-285 commit'i).
+- Dosyalar: `client-android/.../protocol/Codec.kt`, `.../security/Records.kt`, yeni testler `.../protocol/DecodeSliceTest.kt` ve `.../security/RecordReceiveAllocTest.kt`, bu kart.
+- Sonuç: video kaydı başına tam boy ayırma 2 -> 1 (`VideoFrame.data`). Ölçüm (JVM, 20 KB kare, 1 000 kayıt): kayıt başına 41 232 bayt (2.06x) -> 21 268 bayt (1.06x). Test eşiği 1.5x; eski kodla başarısız olduğu doğrulandı.
+- Varsayım: karttaki "üç ayırma" sayımındaki `scratch.copyOf(n)` video yolunda zaten yoktu (`openAt` yalnızca testlerde kullanılıyor); dokunmadım. Havuz yok (kart gereği). `Reader` `internal`, yeni parametreler varsayılanlı, diğer çağıranlar etkilenmez.
+- `./scripts/check.sh`: bkz. son mesaj (OK). Fixture testleri değişmeden geçti.
+- Test EDİLMEDİ (orkestratör): madde 5 codex review; madde 6 cihaz ölçümü (Oyun 60: `HeapTaskDaemon` <= %5, minor fault/s <= 2 000, `mb-video` <= %10, `latency_ms`/`decode_ms` değişmemeli). Tablet ve Mac UI'ya dokunulmadı. Hedef tutmazsa kalan büyük ayırma `VideoFrame.data`; sonraki adım tüketici tarafı havuzu (ayrı kart).
+- Tablette kontrol: Oyun/Günlük modunda video normal (bozuk kare, artefakt, keyframe isteği artışı yok), Wi-Fi ve USB'de; Oyun 60'ta yukarıdaki üç metrik.
 
 ## Open questions

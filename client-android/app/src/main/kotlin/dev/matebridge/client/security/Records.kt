@@ -229,7 +229,8 @@ class RecordDecoder(maxPayload: Int, private val opener: RecordOpener) {
                 val n = opener.openPlain(buf, at, buf, at + Records.HEADER_BYTES, len.toInt())
                 val plain = opener.plain
                 val type = plain[0].toInt() and 0xFF
-                val msg = Codec.decodePayload(type, plain.copyOfRange(1, n))
+                // In place: the only full-size copy of a video record is VideoFrame.data (T-285).
+                val msg = Codec.decodePayload(type, plain, 1, n - 1)
                 if (msg != null) return msg
                 skippedFrames++
             }
