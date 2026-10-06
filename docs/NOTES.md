@@ -1711,3 +1711,18 @@ Wi-Fi (Mac Ethernet), ~5 dk normal kullanım, dosya kopyası yok. Host `MATEBRID
 - Oyunda GC %14 → %12,8 (T-285 hedefi tutmadı): kalan kaynak Conscrypt (kayıt başına `Cipher.init` sağlayıcı seçimi ve yeni SPI, AEAD iç tampon kopyası) → T-292.
 - T-289 (HDR çalışma anı SDR'ye düşme) ve T-288 (DAV güvenli değiştirme) cihazda tetiklenmedi.
 - Kullanıcı: iki ölçümde (video ve oyun) seste cızırtı ya da kesilme, görüntüde bozulma yok.
+
+## 2026-10-07 ~00:30–01:05 — T-286 / T-287 / T-292 cihaz A/B (Wi-Fi, APK `01ca537c`)
+
+Yöntem T-282 (iş parçacığı `/proc` farkı), her kol uygulama yeniden başlatılarak 45–60 sn. Gecikme `MB/render ev=stats` medyanı (kolun süreci).
+
+- **T-292 `aead_path=direct`, Oyun 60 (kullanıcı oynadı):** GC %11,2 → **%2,8**, minor fault/s 5 038 → 2 362, `mb-video` %13,0 → %11,1, istemci %77,5 → %65,9. `AUTH_FAILED` yok. 10 fps'te üç kol: `cap_dec_p50` direct 24,3/24,3 ms, legacy 23,3 ms (aynı gürültü bandı). Oyundaki tek kolda p50 +10 ms göründü, ama host `latency_ms` da aynı dakikada yükseldi; 10 fps tekrarında fark yok → gürültü.
+- **T-286 `dec_wait=event`:**
+  - 10 fps arka plan (Claude Code dönen simgesi), 4 çift: çözücü üç iş parçacığı **~955 → ~300 uyanma/s**, istemci ~%34,5 → ~%28,6.
+  - Ama gecikme her çiftte biraz daha kötü: `cap_dec_p50` 24,3 → 25,9 ms (+1,6), p95 38,3 → 40,8 ms (+2,5). Kart sınırı ±1 ms, yani tutmadı. `dec_p50` aynı (11,6 ms): fark çözücü dışında, büyük olasılıkla çıkıştaki 50 ms'lik bekleme.
+  - Oyun 60'ta: `mb-decoder` 388 → 190 uyanma/s, CPU aynı, p95/p99 daha iyi.
+- **T-287 `audio_idle_pause` (Mac'ten `afplay` Ping, 15 sn arayla 3 kez):**
+  - `off`: `first_sound` 41/53/49 ms.
+  - `pause`: 129/126/133 ms; `stop`: 120/129/130 ms. Yani **~+80 ms**; kart sınırı ≤ +50 ms, tutmadı.
+  - Neden: Huawei MMAP'ta `requestStart` 111–125 ms süren bloklayıcı bir çağrı.
+  - Kazanç: sessizken `mb-audio` 200 uyanma/s → ~0, ~%2 tek çekirdek. Duraklatma ve devam hatasız: `ok=1`, `started=1`, underrun yok.
