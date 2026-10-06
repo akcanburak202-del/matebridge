@@ -23,3 +23,15 @@
 - Ekran görüntüsü/kayıt (Mac'te) imleci içermeye devam eder (sistem çizer); yalnız video akışından çıkar.
 - İş: protokol + host (yoklama, şekil kodlama, `showsCursor`) + istemci (katman, önbellek, panel) ≈ 4–6 ajan günü, 1 cihaz oturumu.
 - **Tekrar düşünülür:** v2 tablette tahmin (göreli ve mutlak hareket), kalem hover'ında imleç yerine kalem noktası.
+
+## Ek (2026-10-06, T-278): v2 tablette konum tahmini, protokol değişmeden
+
+Kullanıcı onayladı (2026-10-06). Yalnız istemci çizimi değişir; `CURSOR_STATE` gerçek olarak kalır, girdi yoluna hiçbir şey geri beslenmez, protokol ve host aynı.
+
+- **Tek kaynak:** tahmin yalnız göreli harekettendir (`POINTER_REL`: fare, trackpad). Host'un imleci kimin taşıyabileceği kuralları (sol düğme sahibi, kalem yakınlığı, parmak kapısı, araç değişimi) istemcide aynalanmaz: aynalamak host'tan sapıp durdu. Herhangi bir `PEN` örneği ya da `POINTER_ABS` (parmak, yakalama dışı fare) tahmini son örnekten **300 ms** sonrasına dek askıya alır; o sürede host'un bildirdiği konum çizilir (v1 gecikmesi; kalemin zaten kendi yerel geri bildirimi var). Fare/trackpad düğmesi basılıyken (sürükleme) göreli tahmin aynen sürer.
+- **Model:** tablet gönderdiği her `POINTER_REL` deltasını (nokta) gönderim anıyla 512'lik halkada tutar. Tahmin = son kabul edilen durum + o durumun host'ta örneklendiği andan sonra host'a varmış sayılan deltalar (varış = gönderim + RTT/2). Durumun örnekleme anı: `host_time_us − saat_farkı`, en çok `varış − RTT/2`; saat farkı yoksa `varış − RTT/2`. Deltalar her adımda `STREAM_CONFIG` nokta boyutuna sıkıştırılır (Mac kenarda durur).
+- **Nesil:** her gözlem, gönderildiği kontrol bağlantısının nesil numarasını taşır; eski nesil (geçiş/yeniden bağlanma yarışı) yok sayılır. Halka oturum başında ve sonunda boşaltılır.
+- **Uzlaştırma:** yeni durum gelince eski ve yeni tahmin arasındaki fark ≤ 4 pt ise ekranda görünen konum korunur ve ~10 ms zaman sabitiyle erir (1–2 kare); büyükse anında atlar (uygulama imleci taşıdı). 100 ms'den eski olaylar "yerleşti" sayılır: hareket durunca ya da host hareketi yok saydığında tahmin ≤ 100 ms içinde host konumuna döner.
+- **Kapalı olduğu yerler:** imleç "Görüntüde", Oyun modu, `visible=0`, stream boyutu bilinmiyor; geliştirici anahtarı `--ez dev true --ez cursor_predict false` (v1 çizimi, A/B).
+- **Ölçüm:** `cursor_stats` satırına `pred_err_pt_p50/p95` (önceki durumun, yeni durumun örnekleme anına tahmini ile gerçek konum farkı, Mac noktası), `pred_n`, ve karşılaştırma için `hold_err_pt_p50/p95` (hiç tahmin etmeseydik, yani v1 gibi son durumda kalsaydık fark). `pred_err` `hold_err`'den belirgin küçükse tahmin işe yarıyor.
+- **Bilinen sınır:** saat farkı belirsizliği (RTT/2) olay kesimini kaydırır; Wi-Fi'da sistematik sapma `pred_err`'de görünür. Kalem hover'ı ve parmak v2'de yok (askıya alma); ileride istenirse host'un kaynak kararını protokolle bildirmesi gerekir (istemci aynalamaz).

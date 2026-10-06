@@ -8,7 +8,7 @@ package dev.matebridge.client.cursor
  */
 class RedrawGate {
     /** The merged dirty area: the whole layer when [full], else the rectangle (left, top, right, bottom). */
-    class Dirty(val full: Boolean, val left: Int, val top: Int, val right: Int, val bottom: Int)
+    class Dirty(val full: Boolean, val left: Int, val top: Int, val right: Int, val bottom: Int, val hasRect: Boolean = true)
 
     private var pending = false
     private var full = false
@@ -37,10 +37,20 @@ class RedrawGate {
         return true
     }
 
+    /**
+     * T-278: asks for a redraw task without any area (the cursor position is predicted from the input just sent, so the task
+     * itself works out the area at vsync time). Returns true when no redraw was pending, so the caller schedules exactly one task.
+     */
+    @Synchronized fun requestRecompute(): Boolean {
+        if (pending) return false
+        pending = true
+        return true
+    }
+
     /** The scheduled task: the merged area, then nothing is pending (a later [request] schedules the next task). */
     @Synchronized fun take(): Dirty? {
         if (!pending) return null
-        val d = Dirty(full, l, t, r, b)
+        val d = Dirty(full, l, t, r, b, hasRect)
         pending = false
         full = false
         hasRect = false
@@ -48,4 +58,14 @@ class RedrawGate {
     }
 
     val isPending: Boolean @Synchronized get() = pending
+}
+
+/**
+ * Whether the position the redraw task fixed for [frozen] may still be painted (T-278 review): only while it is the newest
+ * accepted state. [CursorFrame]s are immutable and one object per accepted state, so identity also covers a hide
+ * (`visible = 0` is a newer frame), a newer seq and a session reset (the slot is cleared, a later state is another object).
+ */
+object FrozenFrame {
+    fun usable(frozen: CursorFrame, latest: CursorFrame?, ageUs: Long, maxAgeUs: Long): Boolean =
+        latest === frozen && frozen.visible && ageUs >= 0 && ageUs < maxAgeUs
 }

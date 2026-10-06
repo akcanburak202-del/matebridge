@@ -21,6 +21,10 @@ class CursorLink<B : Any>(
     val shapes: CursorShapes<B>,
     val stats: CursorStats,
     private val nowMs: () -> Long,
+    /** T-278: the local prediction (v2); fed every accepted state, switched with [enable], emptied with the session. */
+    val predictor: CursorPredictor? = null,
+    /** Client monotonic clock in microseconds (the PING/PONG clock) for [predictor]. */
+    private val nowUs: () -> Long = { System.nanoTime() / 1000 },
     private val onFrame: (CursorFrame?) -> Unit,
 ) {
     val slot = CursorStateSlot()
@@ -39,23 +43,28 @@ class CursorLink<B : Any>(
     fun beginSession(gen: Int) = synchronized(lock) {
         armedGen = gen
         reset()
+        predictor?.beginSession(gen) // input observed from now on must carry this generation
     }
 
     /** The control connection ended: nothing is drawn or accepted until the next [beginSession]. */
     fun endSession() = synchronized(lock) {
         armedGen = -1
         reset()
+        predictor?.endSession()
     }
 
     /** The layer turns off or on: forgets the held state (the next one starts fresh), keeps shapes. */
     fun enable(on: Boolean) = synchronized(lock) {
         enabled = on
+        predictor?.setLayerOn(on)
+        predictor?.reset() // the next state starts a fresh anchor
         slot.clear()
         lastStateMs = 0L
         if (!on) onFrame(null)
     }
 
     private fun reset() {
+        predictor?.reset()
         slot.clear()
         shapes.clear()
         lastStateMs = 0L
@@ -86,6 +95,7 @@ class CursorLink<B : Any>(
                 val now = nowMs()
                 if (slot.offer(msg, now)) {
                     lastStateMs = now // only an accepted state keeps the timeout away: a frozen cursor must time out
+                    predictor?.onState(msg, nowUs())
                     onFrame(slot.latest())
                 } else {
                     stats.onStale()

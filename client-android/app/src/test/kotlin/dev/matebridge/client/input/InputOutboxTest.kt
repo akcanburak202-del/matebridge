@@ -29,6 +29,18 @@ class InputOutboxTest {
 
     private fun xs(msgs: List<Message>) = penSamples(msgs).map { it.x }
 
+    @Test fun theObserverSeesExactlyWhatWasHandedToTheSinkInOrder() { // T-278: local cursor prediction
+        val seen = ArrayList<Message>()
+        outbox.observer = { seen += it }
+        sink.congestedNow = true
+        outbox.send(hover(1)); outbox.send(hover(2)) // held and merged: not sent yet, not observed
+        assertTrue(seen.isEmpty())
+        sink.congestedNow = false
+        outbox.send(pen(0, 3)) // flushes the held one first, then itself
+        assertEquals(sink.sent, seen)
+        assertEquals(listOf(2, 3), xs(seen))
+    }
+
     @Test fun withoutCongestionEverythingIsSentAtOnceInOrder() {
         outbox.send(hover(1)); outbox.send(hover(2)); outbox.send(pen(0, 3))
         assertEquals(listOf(1, 2, 3), xs(sink.sent))

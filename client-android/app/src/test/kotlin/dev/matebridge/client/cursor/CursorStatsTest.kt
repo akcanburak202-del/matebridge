@@ -45,8 +45,29 @@ class CursorStatsTest {
         st.onState(); st.onDraw(1_500); st.onAge(8_100); st.onAge(14_200)
         val f = st.take().fields()
         assertEquals(
-            "states=1 shapes=0 stale=0 draws=1 draw_ms_avg=1.50 draw_ms_max=1.50 age_ms_p50=14.20 age_ms_p95=14.20 age_n=2", f,
+            "states=1 shapes=0 stale=0 draws=1 draw_ms_avg=1.50 draw_ms_max=1.50 age_ms_p50=14.20 age_ms_p95=14.20 age_n=2 " +
+                "pred_err_pt_p50=- pred_err_pt_p95=- pred_n=0 hold_err_pt_p50=- hold_err_pt_p95=-",
+            f,
         )
+    }
+
+    @Test fun predictionErrorsAreSummarisedInPointsAndResetWithTheWindow() {
+        val st = CursorStats()
+        for (e in 1..100) st.onPred(e / 10f, e / 5f) // 0.1..10.0 pt, hold twice that
+        val s = st.take()
+        assertEquals(100, s.predN)
+        assertFalse(s.idle)
+        assertEquals(5.1f, s.predErrP50Pt, 0.001f)
+        assertEquals(9.5f, s.predErrP95Pt, 0.001f)
+        assertEquals(10.2f, s.holdErrP50Pt, 0.001f)
+        assertTrue(s.fields().contains("pred_err_pt_p50=5.10 pred_err_pt_p95=9.50 pred_n=100 hold_err_pt_p50=10.20 hold_err_pt_p95=19.00"))
+        assertTrue(st.take().idle)
+    }
+
+    @Test fun predictionSamplesAreBounded() {
+        val st = CursorStats()
+        repeat(CursorStats.MAX_PRED_SAMPLES * 3) { st.onPred(1f, 2f) }
+        assertEquals(CursorStats.MAX_PRED_SAMPLES, st.take().predN)
     }
 
     @Test fun anAgeMayBeNegativeWhileTheClockOffsetIsRough() {

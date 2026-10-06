@@ -48,6 +48,11 @@ class InputCapture(
     private val rel = RelPointerTracker(counters)
     private val outbox = InputOutbox(sink, counters) { onRefused() }
 
+    /** T-278: sees every input message that was sent (local cursor prediction); never changes what is sent. */
+    var sentObserver: ((dev.matebridge.client.protocol.Message) -> Unit)?
+        get() = outbox.observer
+        set(v) { outbox.observer = v }
+
     private var active = false
     private var suspended = false
 

@@ -700,8 +700,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         capture.penInk = penOverlay
         // T-276 (decision 0036): the cursor layer above the pen overlay, below the stats text and the panel; never touchable.
-        cursorOverlay = CursorOverlayView(this, ageUs = { hostUs -> clock.latencySignedUs(hostUs, System.nanoTime() / 1000) })
-        cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0)
+        cursorOverlay = CursorOverlayView(
+            this,
+            ageUs = { hostUs -> clock.latencySignedUs(hostUs, System.nanoTime() / 1000) },
+            // T-278 (v2): the tablet guesses the cursor from the input it sent; the host's state corrects it.
+            hostToClientUs = { hostUs -> clock.offsetUs()?.let { hostUs - it } },
+            oneWayUs = { clock.bestRttUs()?.let { it / 2 } },
+            predict = devKnobs.cursorPredict,
+        )
+        cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0, streamConfig?.heightPt ?: 0)
+        // T-278: the observer runs on the UI thread right after a successful send, so inputGen is the generation it went out on.
+        capture.sentObserver = { msg -> cursorOverlay.onInputSent(msg, inputGen) }
         root.addView(cursorOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         addVideoFaultOverlay() // T-159
         setupSettingsPanels()
@@ -1936,7 +1945,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
         viewport = next
         if (::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
-        if (::cursorOverlay.isInitialized) cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0) // T-276
+        if (::cursorOverlay.isInitialized) cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0, streamConfig?.heightPt ?: 0) // T-276, T-278
         if (::capture.isInitialized) syncInputActive()
     }
 
