@@ -800,8 +800,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         let logger = self.logger
         Task {
             let edr = await DisplayEDR.read(displayID: displayID)
+            let wideGamut = await VirtualDisplay.readWideGamut(displayID: displayID)  // T-281, after a short delay
             logger.log(outcome.logLevel, "vd_transfer", sessionID: sid, generation: gen,
-                       fields: VirtualDisplayTransfer.logFields(outcome, edr: edr))
+                       fields: VirtualDisplayTransfer.logFields(outcome, edr: edr, wideGamut: wideGamut))
         }
     }
 

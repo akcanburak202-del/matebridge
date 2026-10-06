@@ -52,6 +52,9 @@ public struct VideoSettings: Equatable, Sendable {
     /// T-232 developer knob `MATEBRIDGE_VD_TRANSFER` (read by `applyingExperimentKnobs`): the transfer function of an
     /// SDR stream's virtual display. An HDR10 stream always asks for 1 (`displayTransfer`).
     public var vdTransferKnob = VirtualDisplayTransfer.parse(nil)
+    /// T-281 developer knob `MATEBRIDGE_VD_PRIMARIES` (read by `applyingExperimentKnobs`): `default` switches the
+    /// Display P3 primaries of an HDR display off. Unset: P3 for HDR, none for SDR.
+    public var vdPrimariesKnob = VirtualDisplayPrimaries.parse(nil)
 
     /// The native display (HELLO size, HiDPI 2x) a 1x game display replaces.
     public struct NativeDisplaySize: Equatable, Sendable {
@@ -118,6 +121,7 @@ public struct VideoSettings: Equatable, Sendable {
         s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
             ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
         s.vdTransferKnob = VirtualDisplayTransfer.parse(env: env)
+        s.vdPrimariesKnob = VirtualDisplayPrimaries.parse(env: env)
         s.chromaKnob = ChromaKnob.parse(env: env)
         return s
     }
@@ -146,7 +150,9 @@ public struct VideoSettings: Equatable, Sendable {
     /// The mode the virtual display must have for these settings (`DisplayReuse`).
     public var displayMode: DisplayMode {
         DisplayMode(widthPx: widthPx, heightPx: heightPx, hidpi: displayHiDPI, refreshHz: displayRefreshHz,
-                    transfer: displayTransfer.requested)
+                    transfer: displayTransfer.requested,
+                    primaries: VirtualDisplayPrimaries.decide(transferRequested: displayTransfer.requested,
+                                                              knob: vdPrimariesKnob))
     }
 
     // SDR (today's stream, unchanged): sRGB primaries = BT.709 primaries, transfer 13 = sRGB, matrix 1 = BT.709,

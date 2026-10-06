@@ -49,13 +49,17 @@ public struct DisplayMode: Equatable, Sendable {
     /// The transfer function the display's mode was requested with (T-232, decision 0032): 0 = the legacy SDR mode,
     /// 1 = HDR (an HDR10 stream, or the `MATEBRIDGE_VD_TRANSFER` developer knob).
     public var transfer: UInt32
+    /// The primaries the display's descriptor was created with (T-281): fixed at creation like the transfer function.
+    public var primaries: VirtualDisplayPrimaries.Choice
 
-    public init(widthPx: Int, heightPx: Int, hidpi: Bool, refreshHz: Int, transfer: UInt32 = 0) {
+    public init(widthPx: Int, heightPx: Int, hidpi: Bool, refreshHz: Int, transfer: UInt32 = 0,
+                primaries: VirtualDisplayPrimaries.Choice = .default) {
         self.widthPx = widthPx
         self.heightPx = heightPx
         self.hidpi = hidpi
         self.refreshHz = refreshHz
         self.transfer = transfer
+        self.primaries = primaries
     }
 
     /// `2800x1840@2x` / `1848x1214@1x` (the refresh rate is logged separately).
@@ -77,6 +81,8 @@ public enum DisplayReuse {
         case modeChange = "mode_change"
         case refreshChange = "refresh_change"
         /// The transfer function differs (SDR <-> HDR10 stream, decision 0032): the mode's EOTF is fixed at creation.
+        /// T-281: also reported when only the primaries differ (fixed at creation too; they follow the transfer
+        /// function, so that case is unreachable in practice).
         case transferChange = "transfer_change"
         /// Same mode, but the display went offline while it was parked (display sleep).
         case offline
@@ -93,7 +99,9 @@ public enum DisplayReuse {
     public static func decide(current: DisplayMode, online: Bool, wanted: DisplayMode) -> Decision {
         if !current.sameKind(as: wanted) { return .recreate(.modeChange) }
         if current.refreshHz != wanted.refreshHz { return .recreate(.refreshChange) }
-        if current.transfer != wanted.transfer { return .recreate(.transferChange) }
+        if current.transfer != wanted.transfer || current.primaries != wanted.primaries {
+            return .recreate(.transferChange)
+        }
         return online ? .reuse : .recreate(.offline)
     }
 }

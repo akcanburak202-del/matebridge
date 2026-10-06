@@ -57,9 +57,15 @@ final class VirtualDisplay: @unchecked Sendable {
     ///     `initWithWidth:height:refreshRate:` mode initializer exactly as before. Requested 1 uses
     ///     `initWithWidth:height:refreshRate:transferFunction:` and falls back to the legacy modes once when that
     ///     selector is missing, returns nil or its modes are rejected (`transferOutcome`).
+    ///   - primariesKnob: T-281 developer knob `MATEBRIDGE_VD_PRIMARIES` (default: read from the process environment,
+    ///     like `VideoSettings.vdPrimariesKnob`). A display created for an HDR transfer function (`transfer.requested`
+    ///     != 0) gets Display P3 primaries in its descriptor, before `initWithDescriptor:`, so macOS counts it as wide
+    ///     gamut and Safari/YouTube offer HDR (`VirtualDisplayPrimaries`). An SDR display gets none (as before).
     init(name: String, pixelWidth: Int, pixelHeight: Int, physicalPixelWidth: Int? = nil,
          physicalPixelHeight: Int? = nil, hidpi: Bool, refreshRate: Double = 60,
-         transfer: VirtualDisplayTransfer.Knob = VirtualDisplayTransfer.parse(nil)) throws {
+         transfer: VirtualDisplayTransfer.Knob = VirtualDisplayTransfer.parse(nil),
+         primariesKnob: VirtualDisplayPrimaries.Knob = VirtualDisplayPrimaries.parse(env: ProcessInfo.processInfo.environment))
+        throws {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
             throw VirtualDisplayError.apiUnavailable("CGVirtualDisplayDescriptor")
         }
@@ -85,6 +91,16 @@ final class VirtualDisplay: @unchecked Sendable {
         descriptor.setValue(VirtualDisplay.productID, forKey: "productID")
         descriptor.setValue(UInt32(1), forKey: "serialNum")
         descriptor.setValue(queue, forKey: "queue")
+
+        // T-281: primaries are only honored at creation, so they go in before `initWithDescriptor:`. A missing setter
+        // creates the display without them (`primaries_fallback=selector_missing`); creation never fails over this.
+        let primariesWanted = VirtualDisplayPrimaries.decide(transferRequested: transfer.requested, knob: primariesKnob)
+        let primariesApplied = VirtualDisplayPrimaries.resolve(choice: primariesWanted, invalidKnob: primariesKnob.invalid) {
+            descriptorClass.instancesRespond(to: NSSelectorFromString($0))
+        }
+        for property in VirtualDisplayPrimaries.properties(for: primariesApplied.choice) {
+            descriptor.setValue(NSValue(point: CGPoint(x: property.value.x, y: property.value.y)), forKey: property.key)
+        }
 
         let initSel = NSSelectorFromString("initWithDescriptor:")
         guard displayClass.instancesRespond(to: initSel) else {
@@ -154,7 +170,9 @@ final class VirtualDisplay: @unchecked Sendable {
             guard apply(legacyModes()) else { throw VirtualDisplayError.settingsRejected }
         }
         self.transferOutcome = VirtualDisplayTransfer.Outcome(requested: transfer.requested, applied: applied,
-                                                              fallback: fallback, invalidKnob: transfer.invalid)
+                                                              fallback: fallback, invalidKnob: transfer.invalid,
+                                                              primaries: primariesApplied)
+        self.primariesWanted = primariesWanted
 
         guard let id = created.value(forKey: "displayID") as? UInt32 else { throw VirtualDisplayError.creationFailed }
         kept = true
@@ -171,8 +189,23 @@ final class VirtualDisplay: @unchecked Sendable {
     /// Refresh rate the display mode was created with.
     let requestedRefreshHz: Double
 
-    /// T-232: the transfer function requested and applied to the display's mode (`ev=vd_transfer`).
+    /// T-232: the transfer function requested and applied to the display's mode (`ev=vd_transfer`); T-281: also the
+    /// primaries the descriptor was given.
     let transferOutcome: VirtualDisplayTransfer.Outcome
+
+    /// T-281: the primaries the display was meant to be created with (`DisplayMode.primaries`). Not the applied ones:
+    /// a missing setter must not make `DisplayReuse` recreate the display on every pipeline start.
+    private let primariesWanted: VirtualDisplayPrimaries.Choice
+
+    /// T-281: whether macOS treats the display's colour space as wide gamut (`CGColorSpace.isWideGamutRGB` of
+    /// `CGDisplayCopyColorSpace`), the condition `MTShouldPlayHDRVideo` checks for an external display. Read once after
+    /// a short delay (the system installs the display's colour space shortly after creation); suspends, never blocks a
+    /// thread. nil when the display is not online by then.
+    static func readWideGamut(displayID: CGDirectDisplayID) async -> Bool? {
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard CGDisplayIsOnline(displayID) != 0 else { return nil }
+        return CGDisplayCopyColorSpace(displayID).isWideGamutRGB
+    }
 
     /// Current mode as the system reports it, e.g. "2800x1840px 1400x920pt 120Hz" (0 Hz = the system reports none).
     var appliedModeDescription: String {
@@ -204,7 +237,7 @@ final class VirtualDisplay: @unchecked Sendable {
     /// requested transfer function (an HDR10 stream checks `transferOutcome.applied` separately).
     var mode: DisplayMode {
         DisplayMode(widthPx: pixelWidth, heightPx: pixelHeight, hidpi: hidpi, refreshHz: Int(requestedRefreshHz.rounded()),
-                    transfer: transferOutcome.requested)
+                    transfer: transferOutcome.requested, primaries: primariesWanted)
     }
 
     /// Releases the retained object, which removes the virtual display. The removal time is recorded so the next

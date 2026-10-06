@@ -74,25 +74,34 @@ public enum VirtualDisplayTransfer {
         public let fallback: FallbackReason?
         /// The knob had an invalid value (treated as 0).
         public let invalidKnob: Bool
+        /// T-281: the primaries the descriptor was created with (`default` = none set).
+        public let primaries: VirtualDisplayPrimaries.Applied
 
-        public init(requested: UInt32, applied: UInt32, fallback: FallbackReason?, invalidKnob: Bool = false) {
+        public init(requested: UInt32, applied: UInt32, fallback: FallbackReason?, invalidKnob: Bool = false,
+                    primaries: VirtualDisplayPrimaries.Applied = .none) {
             self.requested = requested
             self.applied = applied
             self.fallback = fallback
             self.invalidKnob = invalidKnob
+            self.primaries = primaries
         }
 
         /// The default path: nothing requested, nothing applied.
         public static let legacy = Outcome(requested: 0, applied: 0, fallback: nil)
 
-        /// `W` when the knob was invalid or a requested transfer function fell back; `I` otherwise.
-        public var logLevel: LogLevel { fallback != nil || invalidKnob ? .warning : .info }
+        /// `W` when a knob was invalid or a requested transfer function or primaries fell back; `I` otherwise.
+        public var logLevel: LogLevel {
+            fallback != nil || invalidKnob || primaries.fallback != nil || primaries.invalidKnob ? .warning : .info
+        }
     }
 
-    /// `requested=<n> applied=<n> [reason=<fallback>|invalid_value] edr_max=<x.xx|na> edr_potential=<x.xx|na>`.
+    /// `requested=<n> applied=<n> [reason=<fallback>|invalid_value] edr_max=<x.xx|na> edr_potential=<x.xx|na>
+    /// primaries=<default|p3> [primaries_fallback=<r>] [primaries_reason=invalid_value] wide_gamut=<0|1|na>`.
     /// `edr_max` is `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (current headroom), `edr_potential` the
-    /// `maximumPotential…` value; `na` when the display's screen was not found.
-    public static func logFields(_ outcome: Outcome, edr: EDRHeadroom?) -> String {
+    /// `maximumPotential…` value; `na` when the display's screen was not found. `wide_gamut` (T-281) is
+    /// `CGColorSpaceIsWideGamutRGB(CGDisplayCopyColorSpace(id))` read once shortly after creation; `na` when it was
+    /// not read.
+    public static func logFields(_ outcome: Outcome, edr: EDRHeadroom?, wideGamut: Bool? = nil) -> String {
         var f = "requested=\(outcome.requested) applied=\(outcome.applied)"
         if let r = outcome.fallback {
             f += " reason=\(r.rawValue)"
@@ -100,6 +109,8 @@ public enum VirtualDisplayTransfer {
             f += " reason=invalid_value"
         }
         f += " edr_max=\(format(edr?.current)) edr_potential=\(format(edr?.potential))"
+        f += " \(VirtualDisplayPrimaries.logFields(outcome.primaries))"
+        f += " wide_gamut=\(wideGamut.map { $0 ? "1" : "0" } ?? "na")"
         return f
     }
 
