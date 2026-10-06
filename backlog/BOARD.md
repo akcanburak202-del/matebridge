@@ -34,7 +34,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-260](tasks/T-260-client-colour-panel.md) | Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting | 6 | android-client-dev | [T-259] |
 | [T-261](tasks/T-261-client-full-chroma-temporal-reuse.md) | Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs | 6 | android-client-dev | [T-259] |
 | [T-262](tasks/T-262-host-aux-size.md) | Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×) | 6 | mac-host-dev | [T-258] |
-| [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
 | [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
 
 ## todo
@@ -306,6 +305,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-283](tasks/T-283-astra-review.md) | Review — gpt-6-astra (high), 2026-10-04 değerlendirmesinden bu yana + riskli dört bölge | 6 | orchestrator | [T-282] |
 | [T-284](tasks/T-284-audio-resampler-hot-loop.md) | İstemci — ses örnekleyici sıcak döngüsü (roundToInt yorumlayıcıda; ses çalarken mb-audio %35–39) | 6 | android-client-dev | [T-282] |
 | [T-285](tasks/T-285-video-receive-allocations.md) | İstemci — video alma yolunda kare başına ayırmaları azalt (oyunda GC %14, 7 000 fault/s) | 6 | android-client-dev | [T-282] |
+| [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
 | [T-288](tasks/T-288-dav-put-safe-replace.md) | İstemci — WebDAV PUT değiştirmesi başarısız olunca hiçbir sürümü silme | 6 | android-client-dev | [] |
 | [T-289](tasks/T-289-hdr-runtime-sdr-fallback.md) | Host — HDR çalışma anı kodlayıcı hatasında SDR'ye düş; pipeline yeniden denemesi tek seferlik kalmasın | 6 | mac-host-dev | [] |
 | [T-290](tasks/T-290-test-only-code-cleanup.md) | İstemci — yalnız testte kullanılan üretim kodunu kaldır (FrameQueue.poll, ChromaReuse modelleri) | 6 | android-client-dev | [] |

@@ -1,7 +1,7 @@
 ---
 id: T-286
 title: İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-282]
