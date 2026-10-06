@@ -12,6 +12,14 @@ private func pen(_ dt: UInt32, _ x: UInt16, _ y: UInt16, _ p: UInt16, _ tx: Int1
     PenSample(dtUs: dt, x: x, y: y, pressure: p, tiltX: tx, tiltY: ty, flags: f)
 }
 
+/// The 18x36 RGBA PNG of `cursor_shape` (96 bytes), copied from the comment block of that fixture.
+private let cursorPng = Hex.bytes("89504e470d0a1a0a0000000d49484452"
+    + "0000001200000024080600000084ed6a"
+    + "e7000000274944415478da6360200cfe"
+    + "4331c560d4a05183460d1a3568d4a051"
+    + "83460d1a3568d4a061611000d2a147b9"
+    + "4dc703e80000000049454e44ae426082")
+
 /// Hand-written expectations, copied from the comments in each `.hex` file.
 private let validFixtures: [String: Message] = [
     "hello": .hello(Hello(deviceID: deviceA, screenWidthPx: 2800, screenHeightPx: 1840, densityDpi: 360,
@@ -64,6 +72,14 @@ private let validFixtures: [String: Message] = [
     "files_info_standby": .filesInfo(.standby),
     "files_net_open": .filesNet(FilesNet(state: .open, port: 47003, pool: 2, max: 12)),
     "files_net_close": .filesNet(.close),
+    "cursor_prefs_on": .cursorPrefs(CursorPrefs(enabled: true)),
+    "cursor_prefs_off": .cursorPrefs(CursorPrefs(enabled: false)),
+    "cursor_shape": .cursorShape(CursorShape(shapeID: 1_740_286_567, widthPt16: 144, heightPt16: 288, hotXPt16: 64,
+                                             hotYPt16: 144, format: .png, data: cursorPng)),
+    "cursor_state": .cursorState(CursorState(seq: 42, x: 32768, y: 32768, visible: true, shapeID: 1_740_286_567,
+                                             hostTimeUs: 123_456_789_012)),
+    "cursor_state_hidden": .cursorState(CursorState(seq: 43, x: 32768, y: 65535, visible: false,
+                                                    shapeID: 1_740_286_567, hostTimeUs: 123_456_799_012)),
     "files_hello": .filesHello(FilesHello(sessionID: 2_712_847_316, clientNonce: Array(0x70...0x7f))),
     "files_hello_ack": .filesHelloAck(FilesHelloAck(status: .ok, hostNonce: Array(0x80...0x8f))),
     "files_hello_ack_rejected": .filesHelloAck(.rejected),
@@ -131,6 +147,7 @@ private let invalidFixtures: [String: ProtocolError] = [
     "invalid_stream_prefs_hdr_partial": .payloadTooShort(type: 0x05),
     "invalid_pen_count_zero": .invalidField("count"),
     "invalid_audio_frame_short": .payloadTooShort(type: 0x32),
+    "invalid_cursor_shape_short": .payloadTooShort(type: 0x0c),
     "invalid_files_hello_short": .payloadTooShort(type: 0x50),
     "invalid_files_data_empty": .invalidField("size"),
 ]
