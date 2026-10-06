@@ -1585,3 +1585,10 @@ Kullanıcı her modda ~30 s durağan + ~60 s kaydırma yaptı (Keskin 10:21:39�
 - Kullanıcı gözlemi: 1 px kırmızı/mavi şeritler **Normal'de kırmızı**, Keskin kenarlar ve Tam renk'te **mor** (kaynakta göz morumsu görür); kırmızı/yeşil 1 px dama Normal'de kahverengi, diğer ikisinde kahverengimsi (hafif farklı). Mac ekran görüntüsünde iki ayarda da mor (ekran görüntüsü kaynağı okur, akışı değil).
 - **Çıkarım (doğrulanmadı):** Normal'de 4:2:0 dönüşümünü ScreenCaptureKit yapıyor (`420f`, `ScreenCapture.swift`) ve renk örneğini 2x2 bloğun ortalaması yerine tek pikselden (büyük olasılıkla sol/üst) alıyor gibi; şeritte blok kırmızı pikselin rengini alıyor, parlaklık ayrı kaldığı için şerit koyu-açık kırmızı görünüyor. Keskin kenarlar (T-235 Metal geçişi) 2x2 kutu ortalaması kullanıyor (`ChromaMode.swift`), Tam renk her pikselin rengini taşıyor → ikisi de doğru ortalama tonu veriyor. Gerçek içerikte etkisi: ince renkli kenarlarda Normal'in saçağı tek yöne kayıyor. 0033'ün "varsayılan açık" değerlendirmesine ek gerekçe (Keskin bugün ~+3 ms).
 - Kullanıcı (test sayfası, renkli zeminde renkli yazı): Tam renk, Keskin kenarlara göre **hafif** iyileşme. Beklentiyle uyumlu; Keskin kenarlar günlük kullanım için yeterli, Tam renk ince renk işi için seçenek olarak kalır.
+
+## 2026-10-06 ~11:50 — USB tethering / AOA ön kontrol (tablet, salt okuma, kablosuz adb)
+
+- MRDI-W09, HarmonyOS 4.3.0.145, Android tabanı 12 (SDK 31). USB işlevleri: `hisuite,mtp,mass_storage,adb`.
+- `dumpsys tethering`: `mUsbTetheringFunction: RNDIS`, `tetherableUsbRegexs: [usb\d, rndis\d]`, `tetherableNcmRegexs: []` (NCM yapılandırılmamış); `settings global tether_force_usb_functions` = null.
+- macOS RNDIS'i yerleşik desteklemez (Apple silicon'da kext yolu da yok) [doğrulanmadı ama bilinen durum]; yerleşik destek CDC-ECM/NCM. → Varsayılan tethering Mac'te büyük olasılıkla arayüz açmaz. Kalan tek şans: NCM'i zorlamak (`tether_force_usb_functions=1` / `svc usb setFunctions ncm`) — çekirdek desteği bilinmiyor, kablo + kullanıcıyla 5 dk deney gerekir.
+- `pm list features`: `android.hardware.usb.accessory` var (AOA bildirilmiş).

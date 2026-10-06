@@ -288,3 +288,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-263](tasks/T-263-full-chroma-hotfix.md) | Client — Tam renk acil düzeltme: ana ImageReader 6 imaj, ana dekoder çökünce negotiated geri dönüş, "Görüntü durdu" düğmesi okunur | 6 | android-client-dev | [T-261] |
 | [T-264](tasks/T-264-default-sharp-colour.md) | Client — "Renk" varsayılanı Keskin kenarlar (0034 eki) | 6 | android-client-dev | [T-260] |
 | [T-266](tasks/T-266-client-files-wifi-profile.md) | Client files/ — Wi-Fi profili: değişebilir hız tavanı + küçük istek şeridi, Wi-Fi kökü MateBridge/Wi-Fi, hızlı 404 | 6 | android-client-dev | [] |
+| [T-271](tasks/T-271-cursor-probe.md) | Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu | 6 | mac-host-dev | [] |
