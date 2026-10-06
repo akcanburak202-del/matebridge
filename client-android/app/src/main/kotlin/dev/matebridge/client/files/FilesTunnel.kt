@@ -99,6 +99,8 @@ class FilesTunnel(
     /** Idle keepalive PING interval and the handshake deadline; the PROTOCOL.md values, parameters only for tests. */
     private val pingIntervalMs: Int = PING_INTERVAL_MS,
     private val ackTimeoutMs: Long = ACK_TIMEOUT_MS,
+    /** A socket write (Mac side or tablet-server side) with no progress for this long closes BOTH sockets of its connection. */
+    private val writeTimeoutMs: Long = WRITE_TIMEOUT_MS,
 ) {
     private val planner = PoolPlanner(plan.pool.coerceIn(1, 4), plan.max.coerceIn(plan.pool.coerceIn(1, 4), 16))
     private val lock = Object()
@@ -108,6 +110,14 @@ class FilesTunnel(
     private var failStreak = 0
     private var nextOpenAtMs = 0L
     private val connSeq = AtomicLong()
+
+    /**
+     * Java sockets have no write timeout: a Mac that keeps the TCP connection open but stops reading (or a local server
+     * that stops reading) would leave a writer blocked for ever and the slot counted against `max`. Every raw write is
+     * bracketed by a [WriteWatchdog] watch; a stalled one closes the whole connection (network and local socket).
+     */
+    private val watchdog = WriteWatchdog(writeTimeoutMs)
+    private val stallTotal = AtomicLong()
     private val timer = ScheduledThreadPoolExecutor(1) { r -> Thread(r, "mb-files-timer").also { it.isDaemon = true } }
         .apply { removeOnCancelPolicy = true }
 
@@ -131,6 +141,9 @@ class FilesTunnel(
         bytesFromHost.get(), bytesToHost.get(),
     )
 
+    /** Connections closed because a write made no progress for the write timeout. */
+    fun writeStalls(): Long = stallTotal.get()
+
     /** Live connection counts (idle / paired / still handshaking). */
     fun live(): Triple<Int, Int, Int> = synchronized(lock) { Triple(planner.idle, planner.paired, planner.opening) }
 
@@ -143,6 +156,7 @@ class FilesTunnel(
         }
         if (closed.get()) return
         log(false, "files_tunnel_open", "pool=${planner.pool} max=${planner.max}")
+        startThread("mb-files-watchdog") { watchdog.runLoop() }
         startThread("mb-files-pool") { poolLoop() }
     }
 
@@ -163,6 +177,7 @@ class FilesTunnel(
             copy
         }
         for (c in all) c.closeAll()
+        watchdog.stop()
         try { timer.shutdownNow() } catch (_: RuntimeException) {}
         val c = counters()
         log(
@@ -223,6 +238,22 @@ class FilesTunnel(
         /** The handshake deadline closed the socket / the local side ended first (reasons of the closing log line). */
         @Volatile private var ackTimedOut = false
         @Volatile private var davEnded = false
+        @Volatile private var stalled = false
+
+        /** One watch per writing thread (the reader writes to the local server, the pump and the idle PING write to the Mac). */
+        private val hostWatch = watchdog.Watch { onStall() }
+        private val davWatch = watchdog.Watch { onStall() }
+
+        private fun onStall() {
+            stalled = true
+            stallTotal.incrementAndGet()
+            closeAll() // both sockets: the blocked writer fails, the other direction ends too
+        }
+
+        private inline fun <T> watched(w: WriteWatchdog.Watch, write: () -> T): T {
+            w.begin()
+            try { return write() } finally { w.end() }
+        }
 
         fun run() {
             var reason = "error"
@@ -232,6 +263,7 @@ class FilesTunnel(
                 reason = "protocol"
             } catch (e: IOException) {
                 reason = when {
+                    stalled -> "write_stall"
                     ackTimedOut -> "ack_timeout"
                     closing.get() || closed.get() -> "closed"
                     else -> "io"
@@ -310,8 +342,8 @@ class FilesTunnel(
                     input.read(buf)
                 } catch (e: SocketTimeoutException) {
                     if (davOut != null) continue // paired: no protocol timeout (HTTP and TCP keepalive decide)
-                    out.write(channel.sealer.sealFrame(Codec.encode(Ping(pingSeq++, nowUs())))) // idle keepalive
-                    out.flush()
+                    val ping = channel.sealer.sealFrame(Codec.encode(Ping(pingSeq++, nowUs()))) // idle keepalive
+                    watched(hostWatch) { out.write(ping); out.flush() }
                     continue
                 }
                 if (n < 0) return if (davEnded) "dav_eof" else "host_eof"
@@ -323,8 +355,8 @@ class FilesTunnel(
                         is FilesData -> {
                             if (davOut == null) davOut = pair(channel, out)
                             val data = msg.data.value
-                            davOut.write(data)
-                            davOut.flush()
+                            val dout = davOut
+                            watched(davWatch) { dout.write(data); dout.flush() }
                             h2c += data.size
                             bytesFromHost.addAndGet(data.size.toLong())
                         }
@@ -367,8 +399,8 @@ class FilesTunnel(
                     payload[0] = n.toByte()
                     payload[1] = (n ushr 8).toByte()
                     System.arraycopy(buf, 0, payload, 2, n)
-                    out.write(channel.sealer.seal(MsgType.FILES_DATA, payload))
-                    out.flush()
+                    val record = channel.sealer.seal(MsgType.FILES_DATA, payload)
+                    watched(hostWatch) { out.write(record); out.flush() }
                     c2h += n
                     bytesToHost.addAndGet(n.toLong())
                 }
@@ -440,6 +472,9 @@ class FilesTunnel(
         const val ACK_TIMEOUT_MS = 5_000L
         const val DAV_CONNECT_TIMEOUT_MS = 2_000
         const val PING_INTERVAL_MS = 10_000
+
+        /** Same stall limit as the tablet's own server (FilesConfig.WRITE_TIMEOUT_MS). */
+        const val WRITE_TIMEOUT_MS = FilesConfig.WRITE_TIMEOUT_MS.toLong()
 
         /** Least time between two pool openings (a safety against a spin; a handshake takes longer anyway). */
         const val MIN_OPEN_GAP_MS = 20L

@@ -93,6 +93,21 @@ class FilesNetMachineTest {
         assertEquals(listOf<FilesTunnelPlan?>(null), m.step(Event.SetFiles(FilesInfo.STANDBY)).plans())
     }
 
+    @Test fun aRepeatedOpenOnTheSamePortChangesNothingEvenWithOtherPoolAndMax() {
+        val m = machine()
+        val gen = m.accepted()
+        m.step(Event.SetFiles(ready))
+        m.step(Event.Received(gen, open))
+        // PROTOCOL 0x0A: same port = nothing changes; live connections (and copies on them) are never torn down
+        for (again in listOf(open, open.copy(pool = 4, max = 16), open.copy(pool = 1, max = 1))) {
+            val a = m.step(Event.Received(gen, again))
+            assertTrue(a.plans().isEmpty() && a.nets().isEmpty() && a.filterIsInstance<Action.Send>().isEmpty())
+        }
+        // after a CLOSE the same port is a fresh open with the new sizes
+        m.step(Event.Received(gen, close))
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, pool = 4, max = 16)), m.step(Event.Received(gen, open.copy(pool = 4, max = 16))).plans())
+    }
+
     @Test fun anotherListenerPortReplacesThePlanAndARepeatDoesNot() {
         val m = machine()
         val gen = m.accepted()
@@ -110,8 +125,8 @@ class FilesNetMachineTest {
         val a = m.step(Event.Received(gen, FilesNet(FilesNet.STATE_OPEN, 47003, 0, 200)))
         assertEquals(listOf<FilesTunnelPlan?>(plan(gen, pool = 1, max = 16)), a.plans())
         assertEquals(FilesNet(FilesNet.STATE_OPEN, 47003, 1, 16), a.nets().single().msg)
-        val b = m.step(Event.Received(gen, FilesNet(FilesNet.STATE_OPEN, 47003, 9, 3)))
-        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, pool = 4, max = 4)), b.plans())
+        val b = m.step(Event.Received(gen, FilesNet(FilesNet.STATE_OPEN, 47004, 9, 3)))
+        assertEquals(listOf<FilesTunnelPlan?>(plan(gen, port = 47004, pool = 4, max = 4)), b.plans())
         val c = m.step(Event.Received(gen, FilesNet(FilesNet.STATE_OPEN, 0, 2, 12)))
         assertTrue(c.plans().isEmpty() && c.nets().isEmpty()) // no port: ignored, the earlier open stands
     }

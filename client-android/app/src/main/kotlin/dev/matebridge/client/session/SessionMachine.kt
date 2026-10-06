@@ -577,6 +577,12 @@ class SessionMachine(
             log('W', "files_net_ignored", "reason=no_port")
             return
         }
+        // PROTOCOL.md 0x0A: a repeated OPEN with the same port changes nothing (other pool/max too: live connections and
+        // copies on them are never interrupted); only another port replaces the open request and so the tunnel.
+        if (filesNet?.port == msg.port) {
+            log('I', "files_net_repeat", "")
+            return
+        }
         val pool = msg.pool.coerceIn(FilesNet.POOL_MIN, FilesNet.POOL_MAX)
         val clean = FilesNet(FilesNet.STATE_OPEN, msg.port, pool, msg.max.coerceIn(pool, FilesNet.MAX_MAX))
         filesNet = clean

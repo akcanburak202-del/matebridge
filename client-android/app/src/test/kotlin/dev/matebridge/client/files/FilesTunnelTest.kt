@@ -121,6 +121,7 @@ class FilesTunnelTest {
         val inbox = LinkedBlockingQueue<Message>()
         val pings = AtomicInteger()
         val received = ByteArrayOutputStream()
+        @Volatile var paused = false // stop reading: the Mac keeps the TCP connection open but never drains it
         @Volatile var maxRecord = 0
         @Volatile var records = 0
 
@@ -129,6 +130,7 @@ class FilesTunnelTest {
             val input = socket.getInputStream()
             try {
                 while (true) {
+                    while (paused) Thread.sleep(5)
                     val n = input.read(buf)
                     if (n < 0) break
                     decoder.feed(buf, 0, n)
@@ -172,6 +174,7 @@ class FilesTunnelTest {
         val socks = CopyOnWriteArrayList<Socket>()
         val got = CopyOnWriteArrayList<ByteArray>()
         @Volatile var eofSeen = 0
+        @Volatile var stopReading = false
 
         init {
             Thread({
@@ -192,6 +195,7 @@ class FilesTunnelTest {
                 val input = s.getInputStream()
                 val out = s.getOutputStream()
                 val buf = ByteArray(8192)
+                if (stopReading) { Thread.sleep(30_000); return }
                 if (answer != null) {
                     // read one chunk of the request, answer, close (a "Connection: close" answer)
                     val n = input.read(buf)
@@ -221,12 +225,13 @@ class FilesTunnelTest {
     private fun tunnel(
         host: TestHost, dav: TestDav?, pool: Int = 2, max: Int = 12, secrets: SessionSecrets = this.secrets,
         pingMs: Int = FilesTunnel.PING_INTERVAL_MS, ackMs: Long = FilesTunnel.ACK_TIMEOUT_MS, logs: MutableList<String>? = null,
+        writeMs: Long = FilesTunnel.WRITE_TIMEOUT_MS,
     ): FilesTunnel {
         val plan = FilesTunnelPlan(7, "127.0.0.1", host.port, pool, max, dav?.port ?: 1, 2712847316L)
         return FilesTunnel(
             plan, secrets,
             log = { _, ev, f -> logs?.add("$ev $f") },
-            pingIntervalMs = pingMs, ackTimeoutMs = ackMs,
+            pingIntervalMs = pingMs, ackTimeoutMs = ackMs, writeTimeoutMs = writeMs,
         ).also { toClose += AutoCloseable { it.close() }; it.start() }
     }
 
@@ -488,6 +493,41 @@ class FilesTunnelTest {
             assertFalse(line, line.contains("127.0.0.1"))
         }
         assertNull(logs.firstOrNull { it.contains("path=") })
+    }
+
+    @Test fun aMacThatStopsReadingCannotHoldASlotForEver() {
+        // The Mac keeps the TCP connection open but never drains it; the tablet's server has a lot to say. The pump blocks
+        // in write(): the write watchdog closes BOTH sockets, the slot frees and the pool replaces the connection.
+        val host = TestHost(); val dav = TestDav(echo = false, answer = http(40_000_000))
+        val logs = CopyOnWriteArrayList<String>()
+        val t = tunnel(host, dav, pool = 1, max = 2, writeMs = 300, logs = logs)
+        assertTrue(host.awaitProven(1))
+        val c = host.conns[0]
+        c.paused = true
+        c.send(FilesData(Bytes("GET /big HTTP/1.1\r\n\r\n".toByteArray())))
+        assertTrue("write stall never fired", eventually(10_000) { t.writeStalls() >= 1 })
+        assertTrue(eventually { t.live().second == 0 })
+        assertTrue(eventually { logs.any { it.startsWith("files_conn_closed") && it.contains("reason=write_stall") } })
+        assertTrue(host.awaitProven(2)) // the pool opened a replacement
+        assertFalse(t.isClosed)
+        assertTrue(eventually { dav.eofSeen >= 1 || dav.socks.all { it.isClosed } }) // the local socket was closed too
+    }
+
+    @Test fun aLocalServerThatStopsReadingIsDroppedTheSameWay() {
+        val host = TestHost(); val dav = TestDav(echo = false, answer = null).also { }
+        val t = tunnel(host, dav, pool = 1, writeMs = 300)
+        assertTrue(host.awaitProven(1))
+        // the "server" never reads: it only accepts. The Mac sends more than the buffers hold.
+        dav.stopReading = true
+        val c = host.conns[0]
+        var sent = 0
+        val chunk = Bytes(http(16 * 1024))
+        val sender = Thread {
+            try { while (sent < 200) { c.send(FilesData(chunk)); sent++ } } catch (_: IOException) {}
+        }.also { it.isDaemon = true; it.start() }
+        assertTrue(eventually(10_000) { t.writeStalls() >= 1 })
+        assertTrue(eventually { t.live().second == 0 })
+        sender.interrupt()
     }
 
     // ---- pure pieces ----
