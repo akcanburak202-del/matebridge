@@ -58,6 +58,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-268](tasks/T-268-host-app-files-proxy.md) | Host App — Wi-Fi dosyaları (0035): dosya dinleyicisi + kanıt, FilesNetProxy (127.0.0.1:47012), menü | 6 | mac-host-dev | [T-267] |
 | [T-269](tasks/T-269-client-files-tunnel.md) | Client — Wi-Fi dosyaları (0035): kodekler, dosya anahtarları, FILES_NET, FilesTunnel havuzu, STANDBY | 6 | android-client-dev | [T-265, T-266] |
 | [T-270](tasks/T-270-wifi-files-device.md) | Cihaz kabulü — Wi-Fi dosyaları (0035): bütçeli ölçüm + Codex --high | 6 | orchestrator | [T-268, T-269] |
+| [T-271](tasks/T-271-cursor-probe.md) | Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu | 6 | mac-host-dev | [] |
 
 ## done
 
