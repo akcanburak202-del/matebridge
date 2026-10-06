@@ -1732,3 +1732,4 @@ Yöntem T-282 (iş parçacığı `/proc` farkı), her kol uygulama yeniden başl
   - `event`: ~308/s, 24,3/39,0 ms; yine +1,5 ms. Üçüncü turu geçersiz: akış 0,4 fps'e düştü, çünkü komut arka plana geçince dönen simge durdu.
   - Karar: `event_in` varsayılan olur, `event` silinir.
 - Aynı APK'da `aead_path` varsayılanı `direct`: 10 fps kollarında `HeapTaskDaemon` eşiğin altında, `AUTH_FAILED` yok.
+- Son APK (`main`, varsayılan `dec_wait=event_in` ve `aead_path=direct`, anahtarsız) 10 fps'te: çözücü uyanması 728/s, istemci %32, `cap_dec` p50 23,1 ms; hata satırı yok.
