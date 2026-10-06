@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.protocol.StreamPrefs
 import java.util.concurrent.atomic.AtomicReference
 
 /** Single-slot mailbox: the newest posted value wins. Memory use is O(1) however often it is posted. */
@@ -56,18 +57,42 @@ class ControlCloseSlots {
 }
 
 /**
- * The engine's command mailboxes (one [Latest] slot each) and the one order they are drained in. The order is part of the
- * protocol: the CURSOR_PREFS that [cursor] carries goes out **before** a STREAM_PREFS from [prefs] that is pending at the same
- * time (PROTOCOL.md 0x0D: switching to Oyun sends CURSOR_PREFS(0) first, T-276); the UI posts the cursor wish before the
- * display mode, so "cursor first when both are pending" keeps that order whatever the engine's timing.
+ * T-276: the display mode and the cursor wish as ONE pending command (PROTOCOL.md 0x0D: switching to Oyun sends
+ * CURSOR_PREFS(0) before STREAM_PREFS). Two separate mailboxes cannot keep that order: the engine may find the cursor slot
+ * empty, be preempted while the UI posts the cursor wish and then the display mode, and take the display mode first. Here
+ * a post merges into the pending command with a compare-and-set (the newest value of each part wins, a part that is not
+ * posted again stays) and [take] removes the whole command at once, so the engine sees either nothing, the cursor part
+ * alone (posted first), or both together (cursor handled first, see [SessionMachine.Event.SetMode]).
+ */
+class ModeSlot {
+    private val slot = AtomicReference<SessionMachine.Event.SetMode?>(null)
+
+    fun setPrefs(prefs: StreamPrefs) = merge(null, prefs)
+
+    fun setCursor(enabled: Boolean) = merge(enabled, null)
+
+    /** [beforeCas] is a test hook that runs between reading the pending command and publishing the merge. */
+    internal fun merge(cursor: Boolean?, prefs: StreamPrefs?, beforeCas: () -> Unit = {}) {
+        while (true) {
+            val cur = slot.get()
+            val next = SessionMachine.Event.SetMode(cursor ?: cur?.cursor, prefs ?: cur?.prefs)
+            beforeCas()
+            if (slot.compareAndSet(cur, next)) return
+        }
+    }
+
+    fun take(): SessionMachine.Event.SetMode? = slot.getAndSet(null)
+}
+
+/**
+ * The engine's command mailboxes (one [Latest] slot each, [mode] merged) and the one order they are drained in.
  */
 class EngineMailboxes {
     val trust = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
     val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
     val expect = Latest<SessionMachine.Event>() // T-227: the newest host expectation wins
     val promptVisible = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
-    val cursor = Latest<SessionMachine.Event>() // T-276: the newest cursor wish wins
-    val prefs = Latest<SessionMachine.Event>() // the newest display-mode request wins
+    val mode = ModeSlot() // the newest display-mode request and cursor wish, in one ordered command
     val rate = Latest<SessionMachine.Event>() // the newest panel rate wins
     val audio = Latest<SessionMachine.Event>() // the newest audio setting wins
     val forget = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
@@ -76,6 +101,6 @@ class EngineMailboxes {
 
     /** The next pending command in priority order, or null. */
     fun take(): SessionMachine.Event? =
-        trust.take() ?: intent.take() ?: expect.take() ?: promptVisible.take() ?: cursor.take() ?: prefs.take() ?:
+        trust.take() ?: intent.take() ?: expect.take() ?: promptVisible.take() ?: mode.take() ?:
             rate.take() ?: audio.take() ?: forget.take() ?: files.take() ?: migrate.take()
 }
