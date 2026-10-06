@@ -54,3 +54,28 @@ class ControlCloseSlots {
     /** The current connection's close first; the other comes on the next take. */
     fun take(): SessionMachine.Event.ControlClosed? = current.take() ?: candidate.take()
 }
+
+/**
+ * The engine's command mailboxes (one [Latest] slot each) and the one order they are drained in. The order is part of the
+ * protocol: the CURSOR_PREFS that [cursor] carries goes out **before** a STREAM_PREFS from [prefs] that is pending at the same
+ * time (PROTOCOL.md 0x0D: switching to Oyun sends CURSOR_PREFS(0) first, T-276); the UI posts the cursor wish before the
+ * display mode, so "cursor first when both are pending" keeps that order whatever the engine's timing.
+ */
+class EngineMailboxes {
+    val trust = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
+    val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
+    val expect = Latest<SessionMachine.Event>() // T-227: the newest host expectation wins
+    val promptVisible = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
+    val cursor = Latest<SessionMachine.Event>() // T-276: the newest cursor wish wins
+    val prefs = Latest<SessionMachine.Event>() // the newest display-mode request wins
+    val rate = Latest<SessionMachine.Event>() // the newest panel rate wins
+    val audio = Latest<SessionMachine.Event>() // the newest audio setting wins
+    val forget = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
+    val files = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
+    val migrate = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
+
+    /** The next pending command in priority order, or null. */
+    fun take(): SessionMachine.Event? =
+        trust.take() ?: intent.take() ?: expect.take() ?: promptVisible.take() ?: cursor.take() ?: prefs.take() ?:
+            rate.take() ?: audio.take() ?: forget.take() ?: files.take() ?: migrate.take()
+}

@@ -208,17 +208,12 @@ class SessionController(
     private val events = LinkedBlockingQueue<SessionMachine.Event>(EVENT_QUEUE_CAP)
 
     /** Commands and close notifications: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine. */
-    private val intent = Latest<SessionMachine.Event>() // Start/Stop: the latest desired state wins
-    private val expectMailbox = Latest<SessionMachine.Event>() // T-227: the newest host expectation wins
-    private val prefsMailbox = Latest<SessionMachine.Event>() // the newest display-mode request wins
-    private val rateMailbox = Latest<SessionMachine.Event>() // the newest panel rate wins
-    private val audioMailbox = Latest<SessionMachine.Event>() // the newest audio setting wins
-    private val cursorMailbox = Latest<SessionMachine.Event>() // T-276: the newest cursor wish wins
-    private val filesMailbox = Latest<SessionMachine.Event>() // T-135: the newest file server state wins
-    private val forgetMailbox = Latest<SessionMachine.Event>() // T-269: the newest forgotten open request wins
-    private val migrateMailbox = Latest<SessionMachine.Event>() // T-096: the newest migration request wins
-    private val trustMailbox = Latest<SessionMachine.Event>() // T-150: confirm / cancel / forget; the latest wins
-    private val promptVisibleMailbox = Latest<SessionMachine.Event>() // T-150: the latest prompt visibility wins
+    /**
+     * Commands: single-slot mailboxes, non-blocking and O(1) memory, drained by the engine in one fixed priority order
+     * ([EngineMailboxes.take]).
+     */
+    private val mail = EngineMailboxes()
+
     /** T-096: a migration candidate's close has its own slot, so it cannot hide the (lower-gen) current one's close. */
     private val controlClosed = ControlCloseSlots()
 
@@ -280,7 +275,7 @@ class SessionController(
     fun start(endpoint: Endpoint, wake: WakeTag? = null, userInitiated: Boolean = false, expectHost: HostTag? = null) {
         if (terminated.get()) return
         ensureEngine()
-        intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost))
+        mail.intent.post(SessionMachine.Event.Start(endpoint, wake, userInitiated, expectHost))
     }
 
     /**
@@ -290,7 +285,7 @@ class SessionController(
     fun expectHost(endpoint: Endpoint, host: HostTag) {
         if (terminated.get()) return
         ensureEngine()
-        expectMailbox.post(SessionMachine.Event.ExpectHost(endpoint, host))
+        mail.expect.post(SessionMachine.Event.ExpectHost(endpoint, host))
     }
 
     /**
@@ -301,7 +296,7 @@ class SessionController(
     fun confirmTrust(promptGen: Int): Boolean {
         if (terminated.get() || promptGen < 0) return false
         ensureEngine()
-        trustMailbox.post(SessionMachine.Event.TrustConfirmed(promptGen))
+        mail.trust.post(SessionMachine.Event.TrustConfirmed(promptGen))
         return true
     }
 
@@ -309,7 +304,7 @@ class SessionController(
     fun cancelTrust(promptGen: Int): Boolean {
         if (terminated.get() || promptGen < 0) return false
         ensureEngine()
-        trustMailbox.post(SessionMachine.Event.TrustCancelled(promptGen))
+        mail.trust.post(SessionMachine.Event.TrustCancelled(promptGen))
         return true
     }
 
@@ -324,7 +319,7 @@ class SessionController(
     fun forgetCurrentHost(): Boolean {
         if (terminated.get() || !forgettable) return false
         ensureEngine()
-        trustMailbox.post(SessionMachine.Event.ForgetHost)
+        mail.trust.post(SessionMachine.Event.ForgetHost)
         return true
     }
 
@@ -335,7 +330,7 @@ class SessionController(
     fun setConfirmPromptVisible(visible: Boolean) {
         if (terminated.get()) return
         ensureEngine()
-        promptVisibleMailbox.post(SessionMachine.Event.ConfirmPromptVisible(visible))
+        mail.promptVisible.post(SessionMachine.Event.ConfirmPromptVisible(visible))
     }
 
     /**
@@ -345,21 +340,21 @@ class SessionController(
     fun setStreamPrefs(prefs: StreamPrefs) {
         if (terminated.get()) return
         ensureEngine()
-        prefsMailbox.post(SessionMachine.Event.SetPrefs(prefs))
+        mail.prefs.post(SessionMachine.Event.SetPrefs(prefs))
     }
 
     /** Non-blocking. The (already debounced) panel rate in Hz; sent when accepted and on change (T-059). */
     fun setDisplayRate(hz: Int) {
         if (terminated.get()) return
         ensureEngine()
-        rateMailbox.post(SessionMachine.Event.SetDisplayRate(hz))
+        mail.rate.post(SessionMachine.Event.SetDisplayRate(hz))
     }
 
     /** Non-blocking. The audio setting (T-095); sent as AUDIO_PREFS when accepted and on change. */
     fun setAudioEnabled(on: Boolean) {
         if (terminated.get()) return
         ensureEngine()
-        audioMailbox.post(SessionMachine.Event.SetAudio(on))
+        mail.audio.post(SessionMachine.Event.SetAudio(on))
     }
 
     /**
@@ -369,7 +364,7 @@ class SessionController(
     fun setCursorEnabled(on: Boolean) {
         if (terminated.get()) return
         ensureEngine()
-        cursorMailbox.post(SessionMachine.Event.SetCursor(on))
+        mail.cursor.post(SessionMachine.Event.SetCursor(on))
     }
 
     /**
@@ -379,14 +374,14 @@ class SessionController(
     fun forgetFilesNet(requestId: Int) {
         if (terminated.get()) return
         ensureEngine()
-        forgetMailbox.post(SessionMachine.Event.ForgetFilesNet(requestId))
+        mail.forget.post(SessionMachine.Event.ForgetFilesNet(requestId))
     }
 
     /** Non-blocking. T-135: the file server's state; sent as FILES_INFO when accepted and on change. Any thread. */
     fun setFilesInfo(info: FilesInfo, scope: dev.matebridge.client.files.FilesServerScope) {
         if (terminated.get()) return
         ensureEngine()
-        filesMailbox.post(SessionMachine.Event.SetFiles(info, scope))
+        mail.files.post(SessionMachine.Event.SetFiles(info, scope))
     }
 
     /**
@@ -397,7 +392,7 @@ class SessionController(
     fun migrate(endpoint: Endpoint) {
         if (terminated.get()) return
         ensureEngine()
-        migrateMailbox.post(SessionMachine.Event.Migrate(endpoint))
+        mail.migrate.post(SessionMachine.Event.Migrate(endpoint))
     }
 
     /**
@@ -408,18 +403,18 @@ class SessionController(
     fun cancelMigration() {
         if (terminated.get()) return
         ensureEngine()
-        migrateMailbox.post(SessionMachine.Event.CancelMigration)
+        mail.migrate.post(SessionMachine.Event.CancelMigration)
     }
 
     /** Non-blocking. */
     fun stop() {
-        intent.post(SessionMachine.Event.Stop)
+        mail.intent.post(SessionMachine.Event.Stop)
     }
 
     /** Terminal: stops the session (BYE goes out gracefully) and the engine; later [start] calls are ignored. */
     fun shutdown() {
         if (!terminated.compareAndSet(false, true)) return
-        intent.post(SessionMachine.Event.Stop)
+        mail.intent.post(SessionMachine.Event.Stop)
         stopAfterDrain = true
     }
 
@@ -488,9 +483,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = trustMailbox.take() ?: intent.take() ?: expectMailbox.take() ?: promptVisibleMailbox.take() ?:
-                    prefsMailbox.take() ?: rateMailbox.take() ?: audioMailbox.take() ?: cursorMailbox.take() ?: forgetMailbox.take() ?: filesMailbox.take() ?:
-                    migrateMailbox.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = mail.take() ?: controlClosed.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
