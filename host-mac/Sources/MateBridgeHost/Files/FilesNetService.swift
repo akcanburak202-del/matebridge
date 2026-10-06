@@ -256,7 +256,7 @@ public final class FilesNetService: @unchecked Sendable {
         let c = machine.counts
         if !w.isQuiet {
             logger.log(.info, "files_stats", sessionID: sessionID, generation: 0,
-                       fields: "total=\(c.total) idle=\(c.idle) bound=\(c.bound) unproven=\(c.unproven) waiting=\(c.waitingLocal)"
+                       fields: "total=\(c.total) idle=\(c.idle) bound=\(c.bound) unproven=\(c.unproven) waiting=\(c.waitingLocal) closing=\(c.closing)"
                            + " accepted=\(w.accepted) closed=\(w.closed) to_tablet_bytes=\(w.toTablet)"
                            + " from_tablet_bytes=\(w.fromTablet) throttled_ms=\(w.throttledNs / 1_000_000)"
                            + " cap_bps=\(limiter.mainBytesPerSec)")
@@ -466,6 +466,9 @@ public final class FilesNetService: @unchecked Sendable {
                 default:
                     conn.socket.closeNow()
                 }
+            case .abort(let id):
+                // The flush of a close did not finish in time: drop what is queued; the socket's `onClosed` reports it.
+                if let conn = closingFiles[id] { conn.socket.closeNow() }
             case .bind(let fid, let lid):
                 guard let file = files[fid], let local = locals[lid] else { continue }
                 file.local = lid
