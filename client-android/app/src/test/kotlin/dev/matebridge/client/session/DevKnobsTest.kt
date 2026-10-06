@@ -349,6 +349,10 @@ class DevKnobsTest {
         assertEquals(DecoderWait.EVENT, k.decoderWait)
         assertEquals(listOf("dec_wait:event"), k.knobs)
         assertEquals(DecoderWait.POLL, parse("dev" to true, "dec_wait" to "poll").decoderWait)
+        val eventIn = parse("dev" to true, "dec_wait" to "event_in")
+        assertEquals(DecoderWait.EVENT_IN, eventIn.decoderWait)
+        assertEquals(listOf("dec_wait:event_in"), eventIn.knobs)
+        assertEquals(DecoderWait.POLL, parse("dec_wait" to "event_in").decoderWait) // ignored without dev
         val odd = parse("dev" to true, "dec_wait" to "fast")
         assertEquals(DecoderWait.POLL, odd.decoderWait)
         assertEquals(listOf("dec_wait:other"), odd.knobs)

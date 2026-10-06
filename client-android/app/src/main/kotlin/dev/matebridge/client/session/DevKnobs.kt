@@ -103,8 +103,9 @@ data class DevKnobs(
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
     /**
-     * `--es dec_wait poll|event` (T-286): how the decoder threads wait while idle. Absent or unknown = [DecoderWait.POLL]
-     * (the fixed 4/5 ms timeouts of today); `event` = wake-ups on events only (A/B on the device).
+     * `--es dec_wait poll|event|event_in` (T-286): how the decoder threads wait while idle. Absent or unknown = [DecoderWait.POLL]
+     * (the fixed 4/5 ms timeouts of today); `event` = wake-ups on events only; `event_in` = event park on the input thread only, the output
+     * thread keeps the poll (A/B on the device).
      */
     val decoderWait: DecoderWait = DecoderWait.POLL,
     /**
