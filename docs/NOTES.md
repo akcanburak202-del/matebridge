@@ -1558,3 +1558,22 @@ Ham: `~/.cache/matebridge-tools/data/fullchroma/{tablet,host,sf}-0023.log`.
 - Tam renk istatistikleri: `aux_paired_pct` 50–88 (hâlâ yüksek değil), `aux_late` 60–280/10 s, `late_upgrades` 5–57/10 s (geç yükseltme çalışıyor), `reuse_pct` 80–100, `gl_ms_p50` 8–13 ms, p95 13–18 ms.
 - Kayıtlar: `~/.cache/matebridge-tools/data/2026-10-06-chroma/` (tablet.log, sf.log, sf.sh).
 - Görsel izlenim (ikon titremesi, hayalet renk) kullanıcıdan bekleniyor.
+
+## 2026-10-06 ~10:30 — Tam renk Mac yükü (Keskin ↔ Tam renk, Wi-Fi, Günlük 60, 2800)
+
+Kullanıcı her modda ~30 s durağan + ~60 s kaydırma yaptı (Keskin 10:21:39–10:23:44, Tam renk 10:23:45–10:25:48). Kaynak: host.log `ev=cadence/latency/chroma_stats`, Mac örnekleyici `~/.cache/matebridge-tools/data/2026-10-06-chroma/mac2.log` (ioreg GPU, ps CPU). Hareketli saniyeler (enc_fps ≥ 30) ayrı:
+
+| | Keskin | Tam renk |
+|---|---|---|
+| enc_fps (ana) | 46 | 46 |
+| ana enc_ms p50 | 6,4 | 11,4 |
+| yardımcı enc_ms p50 | – | 6,3 |
+| kodlama motoru doluluğu (tahmin) | ~%30 | ~%55–60 |
+| paketleme GPU ms/kare | – | ~1,0 (CPU dahil 1,6) |
+| GPU Device Util (hareket) | %22 | %16 (içerik farkı; artış yok) |
+| MateBridgeApp CPU (hareket) | %9 | %12 |
+| gönderilen kbps (hareket) | ~8,5 Mbps | ~13,1 Mbps (yardımcı/ana bayt ~0,13–0,18) |
+| host cap→sent p50/p95 | 9,5 / 10,8 ms | 14,0 / 15,4 ms |
+
+- Durağan ekranda ek yük yok (GPU %5–10, CPU %4).
+- **Bulgu:** ana karenin kodlaması 6,4 → 11,4 ms uzuyor (iki VT oturumu aynı motoru paylaşıyor), host tarafı gecikme +4,5 ms. 0034 §9 sınırının (≤ +5 ms) içinde ama sınırda; tablet tarafı ölçüm (10:15 notu) Wi-Fi gürültüsünde farkı göstermedi. Olası iyileştirme: yardımcıyı ana kare bitince kodlamak (ana gecikme ~6,4 ms'ye döner, yardımcı daha geç gelir → aux_paired_pct düşebilir). Kullanıcıyla konuşulacak.
