@@ -38,3 +38,5 @@ Araştırma (NOTES 2026-10-01 ~19:10):
 - Ses saatleri arasındaki kayma (~50 ppm) yeniden örneklemeyle emilir.
 - Bluetooth kulaklıkta gecikme 150–250 ms'ye çıkar; kabul edilir.
 - Kontrol bağlantısı Network.framework (`ch`) üzerinde. Wi-Fi'de kayıp ses kesintisi yaparsa kontrol bağlantısı da BSD soketine taşınır (T-091 deneyimi).
+
+- **Güncelleme (2026-10-06, T-279):** Host tamamen sıfır olan sesi göndermez. Arka arkaya ~500 ms boyunca her örneği 0 olan paket gelirse gönderim durur; ilk sıfır olmayan paketle sürer. `seq` ardışık kalır, `sample_index` ile `capture_time_us` sıçrar. İstemci bunu, Mac ses çalmayınca IO'nun durmasıyla oluşan boşluk gibi görür (`idle gap`). Gerekçe: bir uygulama ses cihazını açık tutup sessizlik çaldığında ~1,5 Mbps boşa gidiyordu (2026-10-06 host logu: sesli saniyelerin %25'i `rms_dbfs=-120`). Protokol değişmez.
