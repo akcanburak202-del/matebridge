@@ -25,12 +25,38 @@ class ColourPanelTest {
     private val cfgPacked = cfg420.copy(chromaLayout = 1)
     private val hdr10 = StreamConfig(3, 2, 1848, 1214, 1848, 1214, 120, 60000, 9, 16, 9, 0)
 
-    @Test fun defaultsToNormalAndStoresEachChoice() {
+    @Test fun defaultsToSharpAndStoresEachChoice() {
         val s = ColourStore(kv)
-        assertEquals(ColourChoice.NORMAL, s.get())
+        assertEquals(ColourChoice.SHARP, s.get()) // empty store: the 0034 addendum default
+        assertEquals(StreamPrefs.CHROMA_SHARP, chromaOf(s.get()))
         for (c in ColourChoice.entries) { s.set(c); assertEquals(c, s.get()); assertEquals(c.id, kv.map["colour"]) }
         kv.map["colour"] = "garbage"
+        assertEquals(ColourChoice.SHARP, s.get())
+    }
+
+    private fun chromaOf(c: ColourChoice) =
+        FullChromaPolicy.chromaRequest(c, StreamMode.DAILY, 60, true, StreamMode.SCALE_PERMILLE, StreamPrefs.DYNAMIC_RANGE_SDR, false)
+
+    @Test fun anExplicitStoredChoiceIsKept() {
+        val s = ColourStore(kv)
+        kv.map["colour"] = "normal"
         assertEquals(ColourChoice.NORMAL, s.get())
+        assertEquals(StreamPrefs.CHROMA_NORMAL, chromaOf(s.get()))
+        kv.map["colour"] = "sharp"
+        assertEquals(ColourChoice.SHARP, s.get())
+        kv.map["colour"] = "full"
+        assertEquals(ColourChoice.FULL, s.get())
+    }
+
+    @Test fun anExplicitOffLegacySwitchStaysNormalBeforeAndAfterMigration() {
+        val s = ColourStore(kv)
+        kv.map["sharp_chroma"] = "0"
+        assertEquals(ColourChoice.NORMAL, s.get()) // before the migration
+        assertTrue(s.migrate())
+        assertEquals("normal", kv.map["colour"])
+        assertNull(kv.map["sharp_chroma"])
+        assertEquals(ColourChoice.NORMAL, s.get())
+        assertFalse(s.migrate())
     }
 
     @Test fun migratesTheOldOnOffSwitch() {
@@ -47,7 +73,7 @@ class ColourPanelTest {
         val s = ColourStore(kv)
         kv.map["sharp_chroma"] = "0"
         assertTrue(s.migrate())
-        assertNull(kv.map["colour"])
+        assertEquals("normal", kv.map["colour"]) // explicit Kapalı is kept as Normal (the default is Keskin now)
         assertNull(kv.map["sharp_chroma"])
         assertEquals(ColourChoice.NORMAL, s.get())
         kv.map["colour"] = "full"
@@ -61,10 +87,11 @@ class ColourPanelTest {
         assertFalse(s.reset())
         kv.map["sharp_chroma"] = "1"
         assertTrue(s.reset())
-        assertEquals(ColourChoice.NORMAL, s.get())
-        s.set(ColourChoice.FULL)
+        assertEquals(ColourChoice.SHARP, s.get())
+        s.set(ColourChoice.NORMAL)
         assertTrue(s.reset())
         assertNull(kv.map["colour"])
+        assertEquals(ColourChoice.SHARP, s.get()) // "Varsayılanlara dön" -> Keskin kenarlar
     }
 
     @Test fun policyLabelsSelectionAndMarks() {
@@ -121,12 +148,29 @@ class ColourPanelTest {
         assertEquals(ColourChoice.FULL, g.colourChoice())
         assertNotNull(g.selectColour(ColourChoice.NORMAL, daily)) // 1 -> 0
         assertTrue(g.resetColour())
-        assertEquals(ColourChoice.NORMAL, g.colourChoice())
+        assertEquals(ColourChoice.SHARP, g.colourChoice())
     }
 
-    @Test fun withoutAStoreEverythingIsNormal() {
-        val g = GameModeSettings(Settings(kv))
+    @Test fun freshInstallSendsSharpAndKeepsAnExplicitNormal() {
+        val g = GameModeSettings(Settings(kv), colourStore = ColourStore(kv), fullChromaAvailable = { false })
+        assertEquals(ColourChoice.SHARP, g.colourChoice())
+        assertEquals(StreamPrefs.CHROMA_SHARP, g.prefs(StreamMode.DAILY).chroma)
+        assertEquals(StreamPrefs.CHROMA_SHARP, g.chromaFor(StreamMode.DRAWING))
+        kv.map["colour"] = "normal"
+        assertEquals(StreamPrefs.CHROMA_NORMAL, g.prefs(StreamMode.DAILY).chroma)
+    }
+
+    @Test fun gameModeSettingsMigratesAnExplicitOffSwitchToNormal() {
+        kv.map["sharp_chroma"] = "0"
+        val g = GameModeSettings(Settings(kv), colourStore = ColourStore(kv), fullChromaAvailable = { false })
+        assertEquals("normal", kv.map["colour"])
         assertEquals(ColourChoice.NORMAL, g.colourChoice())
+        assertEquals(StreamPrefs.CHROMA_NORMAL, g.prefs(StreamMode.DAILY).chroma)
+    }
+
+    @Test fun withoutAStoreEverythingIsSharp() {
+        val g = GameModeSettings(Settings(kv))
+        assertEquals(ColourChoice.SHARP, g.colourChoice())
         assertNull(g.selectColour(ColourChoice.SHARP, StreamMode.DAILY))
         assertFalse(g.resetColour())
     }

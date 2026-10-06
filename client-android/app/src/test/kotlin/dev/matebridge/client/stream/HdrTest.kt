@@ -12,6 +12,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** T-238 (decision 0032): HDR10 capability, the request rule (capability x mode x setting) and the panel texts. */
+/** No colour store: the default "Renk" is Keskin kenarlar (decision 0034 addendum), so `chroma` is 1. */
+private const val SHARP = StreamPrefs.CHROMA_SHARP
+
 class HdrTest {
     private class MemStore : KeyValueStore {
         val map = HashMap<String, String>()
@@ -88,9 +91,9 @@ class HdrTest {
         assertEquals(SDR, g.prefs(StreamMode.DRAWING).dynamicRange)
         // Oyun's prefs: game display and HDR10 -> 14 bytes; the others stay today's 8 bytes.
         val game = g.prefs(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR), game)
+        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR).copy(chroma = SHARP), game)
         assertEquals(14, Codec.encodePayload(game).size)
-        assertEquals(8, Codec.encodePayload(g.prefs(StreamMode.DAILY)).size)
+        assertEquals(8, Codec.encodePayload(g.prefs(StreamMode.DAILY).copy(chroma = 0)).size)
     }
 
     @Test fun modeChangeResendsTheRightDynamicRange() {
@@ -107,23 +110,23 @@ class HdrTest {
         // With HDR off (or no capability) every mode's STREAM_PREFS is what the pre-T-238 code sent.
         for (cap in listOf(capable, HdrCapability.NONE)) {
             val g = GameModeSettings(settings, hdr = cap)
-            assertEquals(StreamPrefs(120, 1000, 0), g.prefs(StreamMode.DAILY))
-            assertEquals(StreamPrefs(120, 1000, 0), g.prefs(StreamMode.DRAWING))
-            assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214), g.prefs(StreamMode.GAME))
+            assertEquals(StreamPrefs(120, 1000, 0).copy(chroma = SHARP), g.prefs(StreamMode.DAILY))
+            assertEquals(StreamPrefs(120, 1000, 0).copy(chroma = SHARP), g.prefs(StreamMode.DRAWING))
+            assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         }
         // The game display off (dev knob) with HDR10: the display group is written as 0x0.
         settings.setHdrGame(true)
         val native = GameModeSettings(settings, gameDisplay = false, hdr = capable).prefs(StreamMode.GAME)
-        assertEquals(StreamPrefs(60, 1000, 0, 0, 0, HDR), native)
+        assertEquals(StreamPrefs(60, 1000, 0, 0, 0, HDR).copy(chroma = SHARP), native)
         assertEquals(14, Codec.encodePayload(native).size)
     }
 
     @Test fun selectHdrReturnsPrefsOnlyWhenOyunsRequestChanges() {
         val g = GameModeSettings(settings, hdr = capable)
-        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR), g.selectHdr(true, StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, HDR).copy(chroma = SHARP), g.selectHdr(true, StreamMode.GAME))
         assertTrue(settings.hdrGame())
         assertNull(g.selectHdr(true, StreamMode.GAME)) // no change
-        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, SDR), g.selectHdr(false, StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 0, 1848, 1214, SDR).copy(chroma = SHARP), g.selectHdr(false, StreamMode.GAME))
         // Outside Oyun: stored, nothing to send; the next Oyun entry uses it.
         assertNull(g.selectHdr(true, StreamMode.DAILY))
         assertTrue(settings.hdrGame())

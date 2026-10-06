@@ -8,6 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** T-242 (decisions 0014 §3, 0030 §1): Otomatik picked inside a mode layer means the layer default, not the host formula. */
+/** No colour store: the default "Renk" is Keskin kenarlar (decision 0034 addendum), so `chroma` is 1. */
+private const val SHARP = StreamPrefs.CHROMA_SHARP
+
 class AutoBitrateLayerTest {
     private class MemStore : KeyValueStore {
         val map = HashMap<String, String>()
@@ -43,13 +46,13 @@ class AutoBitrateLayerTest {
         val g = GameModeSettings(settings)
         g.onModeChanged(StreamMode.GAME)
         assertEquals(Bitrate.AUTO_KBPS, g.bitrateKbps)
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME))
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME))
         g.setBitrateKbps(15_000)
         assertEquals(15_000L, g.bitrateKbps)
         assertEquals(15_000L, g.prefs(StreamMode.GAME).bitrateKbps)
         g.setBitrateKbps(Bitrate.AUTO_KBPS)
         assertEquals(Bitrate.AUTO_KBPS, g.bitrateKbps)
-        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214), g.prefs(StreamMode.GAME)) // same as on entry
+        assertEquals(StreamPrefs(60, 1000, 60_000, 1848, 1214).copy(chroma = SHARP), g.prefs(StreamMode.GAME)) // same as on entry
         g.setBitrateKbps(60_000) // the fixed 60 Mbps is a different selection with the same rate
         assertEquals(60_000L, g.bitrateKbps)
         assertTrue(store.writes.isEmpty())
