@@ -40,6 +40,23 @@ VIDEO_NONCE = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
 CLIENT_FILES_NONCE = bytes(range(0x70, 0x80))
 HOST_FILES_NONCE = bytes(range(0x80, 0x90))
 
+def tiny_png(w, h):
+    """A complete, valid RGBA PNG (deterministic): transparent with a 2 px black vertical bar in the middle."""
+    import zlib
+    rows = b""
+    for _y in range(h):
+        row = b"\x00"
+        for x in range(w):
+            row += b"\x00\x00\x00\xff" if x in (w // 2 - 1, w // 2) else b"\x00\x00\x00\x00"
+        rows += row
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+CURSOR_PNG = tiny_png(18, 36)
+
 FMT = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h", "u32": "<I", "u64": "<Q", "f32": "<f"}
 
 
@@ -500,7 +517,7 @@ FIXTURES = {
         field("u8", "reserved", 0),
         field("u16", "reserved2", 0),
     ])),
-    "cursor_shape": ("CURSOR_SHAPE: I-beam 9x18 pt, hotspot 4,9 (PNG shortened to its signature + IHDR start)", frame("CURSOR_SHAPE", [
+    "cursor_shape": ("CURSOR_SHAPE: 9x18 pt shape (18x36 px, 2x), hotspot 4,9, complete PNG", frame("CURSOR_SHAPE", [
         field("u32", "shape_id", 0x67BAAA67),
         field("u16", "width_pt16", 9 * 16),
         field("u16", "height_pt16", 18 * 16),
@@ -508,8 +525,8 @@ FIXTURES = {
         field("u16", "hot_y_pt16", 9 * 16),
         field("u8", "format", 1, "PNG"),
         field("u8", "reserved", 0),
-        field("u16", "data_len", 29),
-        field("bytes", "data", bytes.fromhex("89504e470d0a1a0a0000000d4948445200000012000000240806000000"), "PNG bytes"),
+        field("u16", "data_len", len(CURSOR_PNG)),
+        field("bytes", "data", CURSOR_PNG, "complete 18x36 RGBA PNG"),
     ])),
     "invalid_cursor_shape_short": ("MUST BE REJECTED (PROTOCOL_ERROR): CURSOR_SHAPE shorter than 16 + data_len", frame("CURSOR_SHAPE", [
         field("u32", "shape_id", 0x67BAAA67),
@@ -519,8 +536,8 @@ FIXTURES = {
         field("u16", "hot_y_pt16", 9 * 16),
         field("u8", "format", 1, "PNG"),
         field("u8", "reserved", 0),
-        field("u16", "data_len", 29),
-        field("bytes", "data", bytes.fromhex("89504e470d0a1a0a"), "only 8 of 29 bytes"),
+        field("u16", "data_len", len(CURSOR_PNG)),
+        field("bytes", "data", CURSOR_PNG[:8], "only the PNG signature"),
     ])),
     "cursor_state": ("CURSOR_STATE: visible I-beam at the centre of the video surface", frame("CURSOR_STATE", [
         field("u32", "seq", 42),

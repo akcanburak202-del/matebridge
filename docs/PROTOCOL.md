@@ -304,7 +304,7 @@ Yerel imleç açma/kapama (karar 0036). İstemci yalnız `ACCEPTED` oturumda ve 
 | reserved2 | u16 | |
 
 - Varsayılan (oturum başında, mesaj gelmeden): `0`.
-- Host `enabled = 1`'i uygularken önce gerekli `CURSOR_SHAPE`'i ve bir `CURSOR_STATE` gönderir, **sonra** videodan imleci kaldırır (yakalama ayarı); `enabled = 0`'da önce videoya imleci geri koyar, sonra `CURSOR_*` göndermeyi bırakır. Oturum bitince host video imlecini geri açar (bir sonraki oturum `0` ile başlar).
+- Host `enabled = 1`'i uygularken önce gerekli `CURSOR_SHAPE`'i ve bir `CURSOR_STATE` gönderir, **sonra** videodan imleci kaldırır (yakalama ayarı). Kontrol ve video ayrı bağlantılar olduğundan bu sıra en iyi çabadır: kontrol bağlantısı geciktiyse imleçsiz kareler ilk durumdan önce görünebilir (kısa; en kötü 1,5 s zaman aşımı geri dönüşüyle sınırlı); `enabled = 0`'da önce videoya imleci geri koyar, sonra `CURSOR_*` göndermeyi bırakır. Oturum bitince host video imlecini geri açar (bir sonraki oturum `0` ile başlar).
 - Host uygulayamazsa (ör. imleç okunamıyor) videoda imleç kalır ve `CURSOR_*` göndermez; istemci 1,5 s içinde `CURSOR_STATE` görmezse kendi katmanını gizler (aşağıda).
 
 ### 0x0C CURSOR_SHAPE (H→C, kontrol)
@@ -708,7 +708,7 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 - Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
 - Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
 
-**İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok **bir** imleç birimi vardır: bir `CURSOR_STATE` ve (gerekiyorsa) onun ihtiyaç duyduğu tek `CURSOR_SHAPE` (≤ 61 456 bayt). Yeni durum bekleyeni değiştirir (en yenisi kazanır); değiştirilen birimin şekli de gönderilmez ve "istemcide var" sayılmaz. Bir birim yalnız kontrol bağlantısının yazma tamponu bir öncekini aldıktan sonra kuyruğa girer; tıkanmada imleç trafiği büyümez, 256 KiB sınırına katkısı en çok bir birimdir.
+**İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok **bir** imleç birimi vardır: bir `CURSOR_STATE` ve (gerekiyorsa) onun ihtiyaç duyduğu tek `CURSOR_SHAPE` (≤ 61 456 bayt). Yeni durum bekleyeni değiştirir (en yenisi kazanır); değiştirilen birimin şekli de gönderilmez ve "istemcide var" sayılmaz. Bir birim yalnız bir öncekinin **tamamı sokete yazıldıktan sonra** (gönderim tamamlandı) yazılmaya başlar; yani gönderimde en çok bir, beklemede en çok bir birim vardır. Tıkanmada imleç trafiği büyümez; 256 KiB sınırına katkısı en çok iki birimdir (~120 KiB, yalnız iki büyük şekil üst üste gelirse).
 
 **Kontrol + girdi (istemci gönderim kuyruğu):**
 - En çok **256 KiB** veya en eski mesaj **1 sn**.

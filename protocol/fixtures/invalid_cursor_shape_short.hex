@@ -9,5 +9,5 @@
 90 00                    # u16 hot_y_pt16 = 144
 01                       # u8 format = 1 (PNG)
 00                       # u8 reserved = 0
-1d 00                    # u16 data_len = 29
-89 50 4e 47 0d 0a 1a 0a  # bytes data = 89504e470d0a1a0a (only 8 of 29 bytes)
+60 00                    # u16 data_len = 96
+89 50 4e 47 0d 0a 1a 0a  # bytes data = 89504e470d0a1a0a (only the PNG signature)
