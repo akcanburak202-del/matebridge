@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  * the Mac's cursor where the host says it is. The video path and the input path are not touched (a plain, non-clickable
  * View returns false for every touch, so events reach the views below as before). Drawn on the normal hardware-accelerated
  * canvas at vsync: [CursorLink] runs on the reader thread, requests a redraw of just the old and new cursor rectangle with
- * `postInvalidateOnAnimation`, and [onDraw] paints the newest state, never every arrived one. The cost of a draw and the
+ * one guarded vsync task ([RedrawGate]), and [onDraw] paints the newest state, never every arrived one. The cost of a draw and the
  * age of a state at its first draw feed [CursorStats].
  *
  * The overlay fills the window (like the pen overlay), so [VideoViewport] coordinates are its own. [ageUs] returns the
@@ -39,11 +39,12 @@ class CursorOverlayView(
     ).also { it.allowCoreThreadTimeOut(true) }
 
     val stats = CursorStats()
+    private val redraw = RedrawGate()
     val link = CursorLink(
         CursorShapes<Bitmap>(
             executor = decoder,
             decode = { bytes -> decodePng(bytes) },
-            onReady = { postInvalidateOnAnimation() }, // a shape that arrived after its state: redraw (rare)
+            onReady = { requestRedraw(null, full = true) }, // a shape that arrived after its state: redraw (rare)
         ),
         stats, nowMs,
     ) { frame -> onFrameFromReader(frame) }
@@ -77,7 +78,7 @@ class CursorOverlayView(
         viewport = vp
         this.streamWidthPt = streamWidthPt
         lastBox = null
-        postInvalidateOnAnimation()
+        requestRedraw(null, full = true)
     }
 
     /** Hides the cursor and forgets what was drawn (session end, the layer turned off). UI thread. */
@@ -98,8 +99,21 @@ class CursorOverlayView(
     }
 
     private fun invalidateBox(a: CursorGeometry.Box?, b: CursorGeometry.Box?) {
-        val d = CursorGeometry.dirty(a, b) ?: return
-        postInvalidateOnAnimation(d[0], d[1], d[2], d[3])
+        requestRedraw(CursorGeometry.dirty(a, b), full = false)
+    }
+
+    /**
+     * At most one redraw is ever pending ([RedrawGate]): states that arrive while the UI thread is busy only widen the dirty
+     * rectangle, and the single task invalidates once. Any thread.
+     */
+    private fun requestRedraw(rect: IntArray?, full: Boolean) {
+        if (redraw.request(rect, full)) postOnAnimation(redrawTask)
+    }
+
+    @Suppress("DEPRECATION") // the rectangle is a hint only on API 21+; the single invalidate is what matters
+    private val redrawTask = Runnable {
+        val d = redraw.take() ?: return@Runnable
+        if (d.full) invalidate() else invalidate(d.left, d.top, d.right, d.bottom)
     }
 
     /** The rectangle [frame] would be drawn in right now, from the entry the cache holds for its shape (or the arrow). */
