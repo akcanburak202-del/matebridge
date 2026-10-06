@@ -109,4 +109,41 @@ struct HiddenCursorTests {
         #expect(m.position == DisplayPoint(x: testGeometry.originX, y: testGeometry.originY))
         #expect(p.counters.hiddenCursorMoves == 0)
     }
+
+    @Test("HID-8 a button-only message right after the game recentered the hidden cursor lands at the live cursor (P2)")
+    func hid8_clickAfterRecenter() {
+        var p = InjectionPlanner()
+        var model = MacEventModel()
+        let c = testGeometry.center  // (800, 510)
+        // A visible move posts c -> c + 30.
+        var events = p.plan([rel(30, 0)], environment: env(cursor: c, hidden: false), now: 0)
+        #expect(events == [mouseEvent(.moved, at: DisplayPoint(x: c.x + 30, y: c.y), delta: DisplayPoint(x: 30, y: 0))])
+        model.apply(events)
+        // Within the lag window the game hides the cursor and recenters it; the user clicks without moving.
+        // Without the fix the sample (the older position) is dropped as lag and the down lands at c + 30.
+        events = p.plan([.mouseButton(.left, down: true)], environment: env(cursor: c, hidden: true), now: 50_000)
+        #expect(events == [mouseEvent(.down, at: c, clickState: 1)])
+        model.apply(events)
+        // The up (still hidden, sample unchanged) is posted at the same place and never dropped.
+        events = p.plan([.mouseButton(.left, down: false)], environment: env(cursor: c, hidden: true), now: 100_000)
+        #expect(events == [mouseEvent(.up, at: c, clickState: 1)])
+        model.apply(events)
+        #expect(model.violations.isEmpty)
+        #expect(model.isIdle)
+        #expect(!p.isHoldingInput)
+    }
+
+    @Test("HID-9 the cursor un-hides between a down and its up: the up is still posted, at the cursor's real position")
+    func hid9_upAfterUnhide() {
+        var p = InjectionPlanner()
+        var model = MacEventModel()
+        let a = DisplayPoint(x: 600, y: 400)
+        var events = p.plan([.mouseButton(.left, down: true)], environment: env(cursor: a, hidden: true), now: 0)
+        model.apply(events)
+        events = p.plan([.mouseButton(.left, down: false)], environment: env(cursor: a, hidden: false), now: 10_000)
+        #expect(events == [mouseEvent(.up, at: a, clickState: 1)])
+        model.apply(events)
+        #expect(model.violations.isEmpty)
+        #expect(model.isIdle)
+    }
 }
