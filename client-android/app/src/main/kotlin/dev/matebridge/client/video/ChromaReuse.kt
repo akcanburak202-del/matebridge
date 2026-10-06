@@ -120,7 +120,20 @@ class LateUpgrade {
 
         /** Margin after the original's target (or draw) time, covering the compositor latch (>= 1 vsync at 60 Hz). */
         const val GRACE_NS = 20_000_000L
+
+        /**
+         * How long after [GRACE_NS] a main-only frame's image is kept for a late auxiliary frame (T-263). The auxiliary
+         * ring ([AuxPairing]) forgets older frames anyway; holding longer would only take one of the main reader's images.
+         */
+        const val HOLD_NS = 250_000_000L
     }
+
+    /**
+     * Whether the presenter must still keep the held main image at [nowNs]: only while an upgrade is possible (frame not
+     * paired yet, within [HOLD_NS] of its upgrade window). Once false the image goes to the retire queue.
+     */
+    fun holdsImage(nowNs: Long): Boolean =
+        !heldPaired && heldCaptureUs != NONE && nowNs < notBeforeNs + HOLD_NS
 
     /**
      * The main frame [captureUs] was just drawn; [paired] = with its auxiliary view (or a draw that cannot be upgraded);

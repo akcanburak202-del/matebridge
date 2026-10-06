@@ -125,7 +125,7 @@ class PackedPresenter(
     /** Draws submitted with a fence (GL thread writes; other threads read it to tag retired images). */
     @Volatile private var submitted = 0L
     private val pairing = AuxPairing<Image>(AUX_RING) { retired.retire(it, clockNs(), submitted) }
-    /** The last drawn main image, kept (not retired) until the next main frame is drawn: GL thread only. */
+    /** The last drawn main image while it can still be upgraded ([LateUpgrade.holdsImage]); null otherwise. GL thread only. */
     private var held: Arrived? = null
     private val upgrade = LateUpgrade()
     private val firstShown = FirstShown()
@@ -237,6 +237,7 @@ class PackedPresenter(
                 }
                 if (item == null) {
                     val rc = tryUpgrade(now)
+                    if (held != null && !upgrade.holdsImage(clockNs())) releaseHeld() // upgraded, or the late window is over
                     if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         failed = "draw:$rc:${FullChromaNative.presentLastError()}"
                         break
@@ -248,9 +249,12 @@ class PackedPresenter(
                 val captureUs = exp?.captureUs ?: LateUpgrade.NONE
                 val aux = if (exp != null) pairing.pair(exp.captureUs) else null
                 val rc = drawFrame(item.image, aux, item.seq, exp?.renderNs ?: 0L, main = true)
-                held?.let { retired.retire(it.image, clockNs(), submitted) } // the previous frame: no draw reads it any more
-                held = item
-                upgrade.onMainDrawn(captureUs, paired = aux != null || rc != 0, targetNs = maxOf(exp?.renderNs ?: 0L, clockNs()))
+                releaseHeld() // the previous frame: no draw reads it any more
+                val paired = aux != null || rc != 0
+                upgrade.onMainDrawn(captureUs, paired = paired, targetNs = maxOf(exp?.renderNs ?: 0L, clockNs()))
+                // T-263: only a frame that may still be upgraded keeps its image (the main reader has MAX_IMAGES images and the
+                // codec needs the rest); a paired or failed draw releases it to the fence-ordered retire queue at once.
+                if (paired || captureUs == LateUpgrade.NONE) retired.retire(item.image, clockNs(), submitted) else held = item
                 if (rc != 0 && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                     failed = "draw:$rc:${FullChromaNative.presentLastError()}"
                     break
@@ -265,14 +269,19 @@ class PackedPresenter(
             for (a in auxArrivals) runCatching { a.image.close() }
             auxArrivals.clear()
             pairing.clear()
-            held?.let { retired.retire(it.image, clockNs(), submitted) }
-            held = null
+            releaseHeld()
             upgrade.clear()
             firstShown.clear()
             synchronized(lock) { mainSlot?.let { runCatching { it.image.close() } }; mainSlot = null }
             retired.closeDue(clockNs(), Long.MAX_VALUE, force = true) // after glFinish + EGL teardown
         }
         failed?.let { if (!stopFlag) onFailed(it) }
+    }
+
+    /** Hands the held main image to the retire queue (closed once the last submitted draw's fence signalled). GL thread. */
+    private fun releaseHeld() {
+        held?.let { retired.retire(it.image, clockNs(), submitted) }
+        held = null
     }
 
     /**
