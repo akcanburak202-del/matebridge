@@ -29,7 +29,16 @@ Cihaz günlüğü (2026-10-06 01:29, Tam renk seçildi, video hiç gelmedi, ekra
 
 ## Handoff
 
-Aşağıda (commit sonrası).
+**Commit:** `10e667f` (dal `task/T-263-full-chroma-hotfix`; ajan oturum sonunda durduruldu, orkestratör inceleyip tamamladı). `./scripts/check.sh` ALL OK.
+
+**Dosyalar:** `video/FullChromaPipeline.kt` (ana reader `MAX_IMAGES` = 6), `video/PackedPresenter.kt` (`held` yalnız yükseltilebilir kare için; `releaseHeld()`), `video/ChromaReuse.kt` (`LateUpgrade.HOLD_NS`, `holdsImage`), `MainActivity.kt` (`onMainDecoderGaveUp` -> `onFullChromaFailed`; "Yeniden dene" düğme renkleri), test `ChromaReuseTest.kt` (+3 test).
+
+**Varsayımlar**
+- Ana reader bütçesi: tutulan <= 1 + bekleyen slot 1 + fence bekleyen retire (uçuştaki çizimler, ~3) < 6. Fence gecikirse dekoder bekler (geri basınç), kilitlenmez; fence hiç gelmezse mevcut `fence_stall` bekçisi devrede.
+- Geri dönüş sırası: `onGiveUp` UI'ye geri dönüşü, ardından eski neslin `Fault`'unu postalar; doğrudan yol bağlanınca yeni `Generation` gelir ve eski `Fault` yok sayılır. `attachDirect` ertelenirse (yüzey meşgul) "Görüntü durdu" kısa süre görünebilir, ertelenen bağlanmada düzelir.
+- `onFullChromaFailed` süreç mandalıdır: bu süreçte Tam renk bir daha istenmez (uygulama yeniden başlayınca tekrar denenir).
+
+**TEST EDİLMEDİ (cihaz gerekir):** Hisi dekoderin 6 imajla packed modda açılması (T-261 öncesi çalışıyordu), geç yükseltmenin 6 bütçeyle hâlâ çalışması (`late_upgrades` > 0), ana dekoder çökünce otomatik Keskin/doğrudan yola dönüş, düğme etiketinin görünmesi.
 
 ## Open questions
 
