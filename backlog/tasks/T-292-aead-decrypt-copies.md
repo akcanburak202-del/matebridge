@@ -78,4 +78,39 @@ verim, `RecordReceiveAllocTest` üslubunda), `DevKnobsTest` (yeni anahtar).
 
 ## Handoff
 
+- Commit: `a0ce35df` (kod + Plan), bu kartın Handoff'u ayrı commit. Dal `task/T-292-aead-decrypt-copies`.
+- `./scripts/check.sh`: ALL OK (host, android, probes, protocol).
+- Dokunulan dosyalar: `client-android/.../security/Records.kt`; yeni testler `.../security/RecordAeadPathTest.kt`,
+  `.../bench/AeadDecryptBenchTest.kt`; knob bağlantısı `.../session/DevKnobs.kt`, `.../session/DevKnobsTest.kt`,
+  `.../MainActivity.kt` (tek satır). Son üçü kartın `files:` listesinde yoktu: orkestratörün "mevcut knob kalıbını izle"
+  talimatı bunları gerektirdiği için eklendi ve listeye yazıldı. Gerekirse geri alınabilir (knob olmadan A/B yapılamaz).
+- Cihazda bayrak: yalnız bu iki yol, geri kalan `legacy`.
+  - A (taban): bayraksız ya da `--ez dev true --es aead_path legacy`.
+  - B: `--ez dev true --es aead_path spi` (tek SPI, `byte[]` doFinal).
+  - C: `--ez dev true --es aead_path direct` (tek SPI + direct tamponlar).
+  - Doğrulama: logcat `crypto_provider provider=AndroidOpenSSL spi_reused=1` (spi_reused=0 ise yedek yola düştü, ölçüm
+    geçersiz) ve `ev=profile ... knobs=...aead_path:direct`. Bayrak her açılışta verilmeli (Records.aeadPath süreç içinde
+    açılışta set edilir; bir sonraki bağlantıdan itibaren geçerli).
+- Varsayımlar: Android 12 Conscrypt kaynağı (`android-12.0.0_r1`) HarmonyOS 4.3'ün platform Conscrypt'iyle aynı davranıyor.
+  HarmonyOS kendi Conscrypt sürümünü taşıyorsa (HMS/ArkCompiler) bulgular değişebilir: bu yüzden A/B şart.
+- Ölçülmedi: Conscrypt'e özgü her şey (JVM testi SunJCE kullanır: orada `direct` yolu daha yavaş ve kayıt başı ~1,6 KB fazla
+  ayırıyor, çünkü SunJCE direct tamponu iç heap dizisine kopyalar; Conscrypt'te tersi beklenir). Kabul 3 (GC ≤ %6, minor fault ≤ 2 500/s,
+  `mb-video` ≤ %10) cihaz ölçümü orkestratörde: Oyun 60, aynı simpleperf yöntemi; iki bayrak değerini ayrı koş.
+- Cihazda bakılacaklar: (1) üç yolda da görüntü/giriş normal, `AUTH_FAILED`/bağlantı kopması yok; (2) `HeapTaskDaemon`, minor fault/s, `mb-video`
+  yolundaki `Cipher.init`/`updateInternal`/`expand` payları (spi: init ve SPI ayırma kaybolmalı; direct: ayrıca updateInternal/expand
+  ve LOS ayırmaları kaybolmalı); (3) `latency_ms`/`decode_ms` değişmemeli. Kazanç yoksa Kabul 4: kart "değmez".
+- Güvenlik: kripto biçimi/nonce/AAD aynı; `RecordSealer` dokunulmadı; log yalnız sağlayıcı adı ve 0/1. Güvenlik koduna dokunduğu için codex
+  incelemesi önerilir (özellikle `doFinalDirect` tampon yaşam döngüsü).
+- Kabul 2'ye ek: yeni yol seçilirse, sonraki adım varsayılanı değiştirmek (`Records.aeadPath` varsayılanı) ve `legacy`'yi silmek.
+
 ## Open questions
+
+- `docs/KNOBS.md` girdisi eklenmedi (kural 0026 §2 "aynı commit'te güncelle" diyor, ama dosya bu kartın kapsamında değildi). Önerilen satır:
+  `--es aead_path legacy|spi|direct` (varsayılan `legacy`; yalnızca geliştirici; T-292; `DevKnobs.kt`, `Records.kt`); benimsenince ya da
+  "değmez" çıkınca silinir. `ev=profile knobs=` alanında `aead_path:<id>`.
+- `docs/LOGGING.md`: `crypto_provider` olayına `spi_reused=0|1` alanı eklendi (yalnız `spi`/`direct` yollarında), belgelenmedi.
+- `RecordDecoder.feed` girdiyi `ByteArray` tamponuna kopyalıyor; `direct` yolu bunu bir kez daha direct tampona kopyalıyor.
+  Karar `direct` lehine çıkarsa sonraki adım: decoder'ın tamponunu doğrudan direct yapmak (tek kopya daha az) ve `Codec`'in
+  `ByteBuffer`'dan okuması: `Codec.kt` kapsam dışı olduğu için yapılmadı.
+- Ayrı konu (kapsam dışı): `worktree`te `client-android/local.properties` yok; `check.sh` onsuz Android'i atlamıyor mu diye bakmadım,
+  ben `sdk.dir` ile (gitignore'lu) çalıştırdım.
