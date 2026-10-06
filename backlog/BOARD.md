@@ -58,7 +58,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-286](tasks/T-286-decoder-loop-wakeups.md) | İstemci — çözücü döngülerinde sabit 4/5 ms yoklama yerine olaya bağlı uyanma (10 fps'te ~950 uyanma/s) | 6 | android-client-dev | [T-282] |
 | [T-287](tasks/T-287-audio-idle-pause.md) | İstemci — uzun sessizlikte AAudio akışını duraklat (ses yokken 200 uyanma/s, %2) | 6 | android-client-dev | [T-282] |
-| [T-289](tasks/T-289-hdr-runtime-sdr-fallback.md) | Host — HDR çalışma anı kodlayıcı hatasında SDR'ye düş; pipeline yeniden denemesi tek seferlik kalmasın | 6 | mac-host-dev | [] |
+| [T-291](tasks/T-291-rebuild-budget-with-client-ladder.md) | Host + istemci — tekrarlayan medya hatasında yeniden kurma bütçesini istemcinin kurtarma merdiveniyle birlikte tasarla | 6 | orchestrator | [T-289, T-200] |
 
 ## done
 
@@ -307,4 +307,5 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-282](tasks/T-282-perf-profile.md) | Ölçüm — tablet ve Mac kaynak profili (boşta / video / oyun), hedefli iyileştirme kartları | 6 | orchestrator | [] |
 | [T-283](tasks/T-283-astra-review.md) | Review — gpt-6-astra (high), 2026-10-04 değerlendirmesinden bu yana + riskli dört bölge | 6 | orchestrator | [T-282] |
 | [T-288](tasks/T-288-dav-put-safe-replace.md) | İstemci — WebDAV PUT değiştirmesi başarısız olunca hiçbir sürümü silme | 6 | android-client-dev | [] |
+| [T-289](tasks/T-289-hdr-runtime-sdr-fallback.md) | Host — HDR çalışma anı kodlayıcı hatasında SDR'ye düş; pipeline yeniden denemesi tek seferlik kalmasın | 6 | mac-host-dev | [] |
 | [T-290](tasks/T-290-test-only-code-cleanup.md) | İstemci — yalnız testte kullanılan üretim kodunu kaldır (FrameQueue.poll, ChromaReuse modelleri) | 6 | android-client-dev | [] |

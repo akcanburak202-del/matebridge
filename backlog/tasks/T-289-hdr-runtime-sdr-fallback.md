@@ -1,7 +1,7 @@
 ---
 id: T-289
 title: Host — HDR çalışma anı kodlayıcı hatasında SDR'ye düş; pipeline yeniden denemesi tek seferlik kalmasın
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []
