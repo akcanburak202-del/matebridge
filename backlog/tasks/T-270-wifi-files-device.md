@@ -1,7 +1,7 @@
 ---
 id: T-270
 title: Cihaz kabulü — Wi-Fi dosyaları (0035): bütçeli ölçüm + Codex --high
-status: todo
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-268, T-269]

@@ -30,3 +30,7 @@ macOS'un SMB istemcisi kısmi okuma yapar (önizleme bütün dosyayı indirmez).
 
 - §3 yerine: **Wi-Fi'da kök `/sdcard/MateBridge/Wi-Fi/`** (yoksa tablet oluşturur). Kullanıcı MateBridge içinde iki klasör tutar; Wi-Fi'da yalnız bu alt klasör görünür, diğeri hiç listelenmez. USB'de kök değişmez (ikisi de görünür).
 - §4 kaldırıldı: **Wi-Fi'da boyut sınırı yok.** Gerekçe: klasörün içeriği tamamen kullanıcının kontrolünde; sınırın koruduğu durum (Finder'ın kendiliğinden büyük medya klasörlerine dokunması) bu kökle oluşmuyor, sınır ise kasıtlı büyük kopyaları engellerdi. Kalan bilinen davranış: klasörde büyük dosya varken Finder önizlemesi dosyanın tamamını indirir (Wi-Fi payı ~0,5–3 MB/s, akış yokken daha yüksek); bu sürede Finder o birimde yavaşlar, görüntü akışı hız kuralıyla (§5) korunur. Kullanıcıya öneri: klasörü liste görünümünde tutmak.
+
+## Ek 2 (2026-10-06, cihaz denemesi T-270)
+
+Çalışıyor (bağlama ~0,15 s, iki yönde kopya, çıkarma/yeniden açma, arka plan sonrası otomatik bağlama). Tavan (2,25 MB/s @ 30 Mbps) tablette doğru uygulanıyor; büyük kopya sırasında görüntü ölçümle bozuluyor (özellikle tablet→Mac), ama kullanıcı belirgin kötüleşme görmedi ve kopyalarken ekranı kullanmıyor → **tavan aynen kalır**, uyarlamalı kısma yok. §5'teki ölçüm bütçeleri bu kararla geçersiz.
