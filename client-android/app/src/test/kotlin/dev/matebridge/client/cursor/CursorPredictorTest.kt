@@ -7,6 +7,7 @@ import dev.matebridge.client.protocol.PointerAbs
 import dev.matebridge.client.protocol.PointerRel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,6 +33,7 @@ class CursorPredictorTest {
             p.setStream(W, H)
             p.setAllowed(predict)
             p.setLayerOn(true)
+            p.beginSession(1)
         }
 
         fun nx(xPt: Float) = (xPt / W * 65535f).toInt()
@@ -44,10 +46,11 @@ class CursorPredictorTest {
             return seq
         }
 
-        fun rel(dx: Float, dy: Float, atUs: Long, buttons: Int = 0) = p.onSent(PointerRel(atUs, dx, dy, buttons), atUs)
+        fun rel(dx: Float, dy: Float, atUs: Long, buttons: Int = 0, gen: Int = 1) =
+            p.onSent(PointerRel(atUs, dx, dy, buttons), atUs, gen)
 
-        fun hover(xPt: Float, yPt: Float, atUs: Long, flags: Int = PenSample.IN_RANGE) =
-            p.onSent(Pen(Pen.TOOL_PEN, atUs, listOf(PenSample(0, nx(xPt), ny(yPt), 0, 0, 0, flags))), atUs)
+        fun hover(xPt: Float, yPt: Float, atUs: Long, flags: Int = PenSample.IN_RANGE, gen: Int = 1) =
+            p.onSent(Pen(Pen.TOOL_PEN, atUs, listOf(PenSample(0, nx(xPt), ny(yPt), 0, 0, 0, flags))), atUs, gen)
 
         /** The predicted x, y in points, or null when there is no prediction. */
         fun at(seq: Long, nowUs: Long): Pair<Float, Float>? {
@@ -91,87 +94,71 @@ class CursorPredictorTest {
         assertPt(1f, pos.second) // 0 + 1
     }
 
-    @Test fun anAbsolutePointReplacesThePositionAndLaterDeltasAddToIt() {
+    @Test fun aPenSampleSuspendsPredictionFor300MsAndThenRelativeMotionResumes() {
         val r = Rig()
         val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        val touch = PointerAbs(60_000, r.nx(400f), r.ny(200f), 0, PointerAbs.SOURCE_MOUSE) // a mouse outside capture
-        assertTrue(r.p.onSent(touch, 60_000))
-        assertPt(400f, r.at(s, 61_000)?.first)
-        r.rel(5f, 5f, 62_000)
+        assertTrue(r.rel(5f, 0f, 60_000))
+        assertPt(105f, r.at(s, 61_000)?.first)
+        // A hovering pen: from here on the host-reported position is drawn (no prediction), and the transition asks for a redraw.
+        assertTrue(r.hover(700f, 400f, 62_000))
+        assertEquals(null, r.at(s, 63_000))
+        assertFalse(r.hover(710f, 400f, 100_000)) // already suspended: no further redraw requests
+        assertFalse(r.rel(5f, 0f, 150_000)) // relative motion during the suspension is not predicted either
+        assertEquals(null, r.at(s, 100_000 + CursorPredictor.SUSPEND_US - 1_000))
+        // 300 ms after the last pen sample the prediction may resume; deltas sent before that never come back.
+        val resume = 100_000 + CursorPredictor.SUSPEND_US
+        assertPt(100f, r.at(s, resume)?.first)
+        assertTrue(r.rel(7f, 0f, resume + 1_000))
+        assertPt(107f, r.at(s, resume + 2_000)?.first)
+    }
+
+    @Test fun aTouchOrAbsolutePointSuspendsPredictionToo() {
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        assertTrue(r.rel(5f, 0f, 60_000))
+        assertTrue(r.p.onSent(PointerAbs(61_000, r.nx(400f), r.ny(200f), 1, PointerAbs.SOURCE_TOUCH), 61_000, 1))
+        assertEquals(null, r.at(s, 62_000))
+        assertFalse(r.p.onSent(PointerAbs(70_000, r.nx(400f), r.ny(200f), 0, PointerAbs.SOURCE_MOUSE), 70_000, 1))
+        assertEquals(null, r.at(s, 70_000 + CursorPredictor.SUSPEND_US - 1))
+        assertNotNull(r.at(s, 70_000 + CursorPredictor.SUSPEND_US))
+    }
+
+    @Test fun aHeldButtonDoesNotChangeRelativePrediction() {
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        r.rel(5f, 0f, 60_000, buttons = 1) // the press
+        assertTrue(r.rel(5f, 5f, 61_000, buttons = 1)) // the drag
+        assertTrue(r.rel(5f, 5f, 62_000, buttons = 1))
         val pos = r.at(s, 63_000)!!
-        assertPt(405f, pos.first)
-        assertPt(205f, pos.second)
+        assertPt(115f, pos.first)
+        assertPt(110f, pos.second)
     }
 
-    @Test fun aPenSampleInRangeIsAnAbsolutePointAndTheLastOneWins() {
+    @Test fun inputOfARetiredGenerationIsIgnored() {
         val r = Rig()
         val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        fun sample(x: Float, y: Float, flags: Int) = PenSample(0, r.nx(x), r.ny(y), 0, 0, 0, flags)
-        val pen = Pen(Pen.TOOL_PEN, 60_000, listOf(sample(300f, 300f, PenSample.IN_RANGE), sample(320f, 310f, PenSample.IN_RANGE or PenSample.CONTACT)))
-        assertTrue(r.p.onSent(pen, 60_000))
-        val pos = r.at(s, 61_000)!!
-        assertPt(320f, pos.first)
-        assertPt(310f, pos.second)
-        // A pen out of range (flags 0) is not a position.
-        val gone = Pen(Pen.TOOL_PEN, 62_000, listOf(sample(10f, 10f, 0)))
-        assertFalse(r.p.onSent(gone, 62_000))
-    }
-
-    @Test fun aPenHoveringDuringATrackpadDragDoesNotMoveThePredictedCursor() { // host OWN-9 / PEN-6
-        val r = Rig()
-        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        assertTrue(r.rel(0f, 0f, 60_000, buttons = 0).not()) // no motion: nothing recorded
-        r.rel(5f, 0f, 61_000, buttons = 1) // the left button goes down with motion: the trackpad owns it
-        assertTrue(r.rel(5f, 0f, 62_000, buttons = 1))
-        assertFalse(r.hover(700f, 400f, 63_000)) // the pen hovers elsewhere: the Mac ignores it
-        assertTrue(r.rel(5f, 0f, 64_000, buttons = 1))
-        assertFalse(r.hover(710f, 410f, 65_000))
-        val pos = r.at(s, 66_000)!!
-        assertPt(115f, pos.first) // three deltas of 5
-        assertPt(100f, pos.second)
-        // The button is released: hover moves the cursor again.
-        r.rel(0f, 0f, 67_000, buttons = 0)
-        assertTrue(r.hover(300f, 200f, 68_000))
-        assertPt(300f, r.at(s, 69_000)?.first)
-    }
-
-    @Test fun aPenContactTakesTheCursorFromADragAndThePointerIsIgnoredWhileItTouches() {
-        val r = Rig()
-        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        r.rel(5f, 0f, 60_000, buttons = 1)
-        assertTrue(r.hover(400f, 300f, 61_000, flags = PenSample.IN_RANGE or PenSample.CONTACT)) // pen priority (OWN-2)
-        assertFalse(r.rel(5f, 0f, 62_000, buttons = 1)) // the trackpad is no longer the owner
-        assertTrue(r.hover(410f, 300f, 63_000, flags = PenSample.IN_RANGE or PenSample.CONTACT))
-        assertPt(410f, r.at(s, 64_000)?.first)
-        // The pen lifts: that sample still moves, then the button is free; the trackpad's own press has to be new.
-        assertTrue(r.hover(420f, 300f, 65_000))
-        // Nobody owns the button now, so the trackpad's motion moves the cursor again (a hold never becomes ownership).
-        assertTrue(r.rel(5f, 0f, 66_000, buttons = 1))
-    }
-
-    @Test fun aFingerThatDoesNotHoldTheButtonNeverMovesThePredictedCursor() { // palm rejection
-        val r = Rig()
-        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        assertFalse(r.p.onSent(PointerAbs(60_000, r.nx(500f), r.ny(300f), 0, PointerAbs.SOURCE_TOUCH), 60_000))
-        assertTrue(r.p.onSent(PointerAbs(61_000, r.nx(510f), r.ny(300f), 1, PointerAbs.SOURCE_TOUCH), 61_000))
-        assertPt(510f, r.at(s, 62_000)?.first)
-        assertFalse(r.p.onSent(PointerAbs(62_000, r.nx(900f), r.ny(10f), 0, PointerAbs.SOURCE_MOUSE), 62_000)) // the finger owns the button
-        assertTrue(r.p.onSent(PointerAbs(63_000, r.nx(510f), r.ny(300f), 0, PointerAbs.SOURCE_TOUCH), 63_000)) // its release still moves
-        assertTrue(r.p.onSent(PointerAbs(64_000, r.nx(900f), r.ny(10f), 0, PointerAbs.SOURCE_MOUSE), 64_000)) // now a mouse moves it
-    }
-
-    @Test fun releaseAllAndANewSessionForgetWhoOwnsTheButton() {
-        val r = Rig()
-        r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        r.rel(5f, 0f, 60_000, buttons = 1)
-        assertFalse(r.hover(700f, 400f, 61_000))
-        r.p.onSent(dev.matebridge.client.protocol.ReleaseAll(dev.matebridge.client.protocol.ReleaseAll.USER), 62_000)
-        assertTrue(r.hover(700f, 400f, 63_000))
-        r.rel(5f, 0f, 64_000, buttons = 1) // a new owner...
-        r.hover(10f, 10f, 65_000)
-        r.p.endSession()
+        assertTrue(r.rel(5f, 0f, 60_000)) // generation 1, the armed one
+        r.p.beginSession(2) // a migration switched to generation 2
+        val s2 = r.state(100f, 100f, sampleUs = 70_000, rxUs = 75_000)
+        assertFalse(r.rel(9f, 0f, 76_000, gen = 1)) // the old connection's observation arrives late
+        assertFalse(r.hover(1f, 1f, 77_000, gen = 1)) // ...and neither suspends nor moves
+        assertPt(100f, r.at(s2, 78_000)?.first)
+        assertTrue(r.rel(3f, 0f, 79_000, gen = 2))
+        assertPt(103f, r.at(s2, 80_000)?.first)
+        assertTrue(s != s2)
+        r.p.endSession() // nothing is observed between connections
         r.state(100f, 100f, sampleUs = 90_000, rxUs = 95_000)
-        assertTrue(r.hover(700f, 400f, 96_000)) // ...forgotten with the session
+        assertFalse(r.rel(3f, 0f, 96_000, gen = 2))
+    }
+
+    @Test fun theDeltaRingIsEmptiedAtSessionStartAndEnd() {
+        val r = Rig()
+        val s = r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
+        r.rel(5f, 0f, 60_000)
+        r.p.beginSession(1)
+        assertEquals(null, r.at(s, 61_000)) // anchor gone with the session
+        val s2 = r.state(100f, 100f, sampleUs = 70_000, rxUs = 75_000)
+        assertPt(100f, r.at(s2, 76_000)?.first) // the old delta did not survive
     }
 
     @Test fun aFrozenPositionIsUsedOnlyForTheStateThatIsStillTheNewest() {
@@ -188,7 +175,7 @@ class CursorPredictorTest {
     @Test fun aMessageThatDoesNotMoveTheCursorIsNotRecorded() {
         val r = Rig()
         r.state(100f, 100f, sampleUs = 50_000, rxUs = 55_000)
-        assertFalse(r.p.onSent(PointerRel(60_000, 0f, 0f, 1), 60_000)) // a button change only
+        assertFalse(r.p.onSent(PointerRel(60_000, 0f, 0f, 1), 60_000, 1)) // a button change only
     }
 
     @Test fun whenTheHostStopsThePredictionSettlesOnItsPositionWithinTheSettleTime() {

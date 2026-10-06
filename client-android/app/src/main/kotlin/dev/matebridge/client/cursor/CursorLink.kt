@@ -43,12 +43,14 @@ class CursorLink<B : Any>(
     fun beginSession(gen: Int) = synchronized(lock) {
         armedGen = gen
         reset()
+        predictor?.beginSession(gen) // input observed from now on must carry this generation
     }
 
     /** The control connection ended: nothing is drawn or accepted until the next [beginSession]. */
     fun endSession() = synchronized(lock) {
         armedGen = -1
         reset()
+        predictor?.endSession()
     }
 
     /** The layer turns off or on: forgets the held state (the next one starts fresh), keeps shapes. */
@@ -62,7 +64,7 @@ class CursorLink<B : Any>(
     }
 
     private fun reset() {
-        predictor?.endSession() // the host released everything with the old connection: forget the button owner too
+        predictor?.reset()
         slot.clear()
         shapes.clear()
         lastStateMs = 0L

@@ -709,7 +709,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             predict = devKnobs.cursorPredict,
         )
         cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0, streamConfig?.heightPt ?: 0)
-        capture.sentObserver = { msg -> cursorOverlay.onInputSent(msg) }
+        // T-278: the observer runs on the UI thread right after a successful send, so inputGen is the generation it went out on.
+        capture.sentObserver = { msg -> cursorOverlay.onInputSent(msg, inputGen) }
         root.addView(cursorOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         addVideoFaultOverlay() // T-159
         setupSettingsPanels()

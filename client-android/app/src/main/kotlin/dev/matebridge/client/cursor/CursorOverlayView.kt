@@ -144,8 +144,8 @@ class CursorOverlayView(
      * T-278, UI thread: the app just sent [msg] to the host. When it moves the cursor, the predicted position changes now, so
      * a redraw is asked for; the task works out where (at vsync, just before the draw).
      */
-    fun onInputSent(msg: Message) {
-        if (predictor.onSent(msg, System.nanoTime() / 1000) && redraw.requestRecompute()) postOnAnimation(redrawTask)
+    fun onInputSent(msg: Message, gen: Int) {
+        if (predictor.onSent(msg, System.nanoTime() / 1000, gen) && redraw.requestRecompute()) postOnAnimation(redrawTask)
     }
 
     /**
@@ -163,8 +163,10 @@ class CursorOverlayView(
             val nowUs = System.nanoTime() / 1000
             if (predictor.advance(frame.seq, nowUs, predicted)) {
                 frozen = Frozen(frame, predicted.xNorm, predicted.yNorm, predicted.animating, nowUs)
-                val extra = CursorGeometry.dirty(lastBox, boxOf(frame, predicted.xNorm, predicted.yNorm))
-                rect = unite(rect, extra)
+                rect = unite(rect, CursorGeometry.dirty(lastBox, boxOf(frame, predicted.xNorm, predicted.yNorm)))
+            } else {
+                // No prediction (suspended by pen or touch, hidden): the host's own position; what was predicted is erased.
+                rect = unite(rect, CursorGeometry.dirty(lastBox, boxOf(frame, frame.x, frame.y)))
             }
         }
         if (d.full) invalidate() else if (rect != null) invalidate(rect[0], rect[1], rect[2], rect[3])

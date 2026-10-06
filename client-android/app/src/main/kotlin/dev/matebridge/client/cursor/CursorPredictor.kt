@@ -3,35 +3,42 @@ package dev.matebridge.client.cursor
 import dev.matebridge.client.protocol.CursorState
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.Pen
-import dev.matebridge.client.protocol.PenSample
 import dev.matebridge.client.protocol.PointerAbs
 import dev.matebridge.client.protocol.PointerRel
-import dev.matebridge.client.protocol.ReleaseAll
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Local cursor v2 (decision 0036, T-278): the tablet guesses where the Mac cursor is going from the input it just sent, so
- * the drawn cursor does not wait for the round trip. Drawing only: nothing here feeds the input path, and the host's
- * `CURSOR_STATE` stays the truth.
+ * Local cursor v2 (decision 0036, T-278): the tablet guesses where the Mac cursor is going from the relative motion it just
+ * sent (mouse and trackpad), so the drawn cursor does not wait for the round trip. Drawing only: nothing here feeds the input
+ * path, and the host's `CURSOR_STATE` stays the truth.
+ *
+ * One source only. The host decides who may move its cursor (left-button owner, pen proximity, finger gate, tool changes),
+ * and mirroring that here kept diverging, so the prediction does not try: it predicts from `POINTER_REL` alone, and any
+ * `PEN` sample or `POINTER_ABS` (finger, mouse outside capture) suspends it for [SUSPEND_US] after the last such sample. While
+ * suspended the layer draws the host's reported position (v1). Holding a mouse or trackpad button changes nothing: the
+ * relative motion is still the only source.
  *
  * Model. The newest accepted state is the [Anchor]: a position plus the moment the host sampled it, on the client clock.
- * Every input message that went out is kept in a bounded ring with its send time: relative motion (points) from
- * `POINTER_REL`, absolute points from `POINTER_ABS` and the newest in-range sample of a `PEN`. An event reaches the host at
- * `send + oneWay`; the anchor already contains it when that is not after the anchor's sample time. The prediction at time `t`
- * is the anchor position, then every event that is not in the anchor yet and was sent at or before `t`, in order: a relative
- * delta adds (clamped to the screen after each step, as the Mac clamps at the edge), an absolute point replaces the position.
- * Events older than [SETTLE_US] are treated as settled, so when the host stops (or never moved: clamped, ignored) the
- * prediction falls back to the host's position within that time.
+ * Every `POINTER_REL` that went out is kept in a bounded ring with its send time and delta (points). A delta reaches the host
+ * at `send + oneWay`; the anchor already contains it when that is not after the anchor's sample time. The prediction at time
+ * `t` is the anchor position plus every delta that is not in the anchor yet and was sent at or before `t`, in order, clamped
+ * to the screen after each step (the Mac stops at the edge). Deltas older than [SETTLE_US] are treated as settled, so when
+ * the host stops (or never moved: clamped, ignored) the prediction falls back to the host's position within that time.
+ *
+ * Generations. Observations carry the generation of the control connection the input was sent on; one of a retired
+ * generation (a migration or reconnect switched while the message was being observed) is ignored, and the ring is emptied at
+ * [beginSession] and [endSession].
  *
  * Reconciling (draw thread). A new state moves the anchor; the shown position must not jump for a small disagreement, so the
  * difference between the old forecast and the new one becomes a correction that decays within a frame or two, and a
  * disagreement beyond [SMOOTH_PT] (an app moved or warped the cursor) is shown at once.
  *
  * Measuring. When a state arrives, the previous anchor's forecast for that state's sample time is compared with the state:
- * `pred_err` (and `hold_err`, what staying at the previous state would have missed by) go to [CursorStats].
+ * `pred_err` (and `hold_err`, what staying at the previous state would have missed by) go to [CursorStats]; states that
+ * arrive while suspended are not measured.
  *
  * Threads: [onSent] and [advance] run on the UI thread, [onState] on the control reader thread; one lock guards everything
  * (every critical section is a few hundred array steps at most). Clock: `nowUs` values are the client monotonic clock in
@@ -57,21 +64,21 @@ class CursorPredictor(
 
     private val lock = Any()
 
-    // Event ring (oldest at [head]); parallel arrays, no allocation per event.
+    // Delta ring (oldest at [head]); parallel arrays, no allocation per event.
     private val sendUs = LongArray(CAP)
-    private val kind = ByteArray(CAP)
-    private val v0 = FloatArray(CAP)
-    private val v1 = FloatArray(CAP)
+    private val dxPt = FloatArray(CAP)
+    private val dyPt = FloatArray(CAP)
     private var head = 0
     private var count = 0
     private var lastSendUs = 0L
 
     private var anchor: Anchor? = null
 
-    // Mirror of the host's left-button owner (see [onSent]); guarded by [lock].
-    private var owner = NO_OWNER
-    private var penContact = false
-    private val heldLeft = BooleanArray(4)
+    /** The control connection generation observations are accepted from; -1 = none. */
+    private var armedGen = -1
+
+    /** A pen sample or `POINTER_ABS` was sent: no prediction before this client-clock time. */
+    private var suspendUntilUs = Long.MIN_VALUE
 
     // Reconciliation state (draw thread).
     private var shown: Anchor? = null
@@ -109,8 +116,8 @@ class CursorPredictor(
         this.heightPt = heightPt
     }
 
-    /** Forgets events, anchor and correction (session end, layer off). */
-    fun reset() = synchronized(lock) {
+    /** Forgets deltas, anchor and correction (layer off, a session boundary). */
+    fun reset(): Unit = synchronized(lock) {
         head = 0
         count = 0
         anchor = null
@@ -118,96 +125,52 @@ class CursorPredictor(
         corrX = 0f
         corrY = 0f
         lastAdvanceUs = 0L
+        suspendUntilUs = Long.MIN_VALUE
+    }
+
+    /** A control connection of generation [gen] starts (or takes over): only its input is observed from now on. */
+    fun beginSession(gen: Int): Unit = synchronized(lock) {
+        armedGen = gen
+        reset()
+    }
+
+    /** The control connection ended: nothing is observed until the next [beginSession]. */
+    fun endSession(): Unit = synchronized(lock) {
+        armedGen = -1
+        reset()
     }
 
     /**
-     * UI thread, after [msg] was handed to the connection at [nowUs]. Returns true when it moves the cursor, i.e. the layer
-     * should redraw.
+     * UI thread, after [msg] was handed to the connection of generation [gen] at [nowUs]. Returns true when the layer should
+     * redraw because of it: a relative move, or the switch from predicting to suspended.
      *
-     * Only the source the host listens to is predicted from (T-278 review). The host has one left-button owner
-     * (`InputStateMachine`: OWN-1..4, PEN-6, GATE): while a source holds the left button (a drag) other sources' motion does
-     * not move the Mac cursor, a pen contact takes the button from a pointer source, a pen hover moves the cursor only when
-     * nobody holds the button, and a finger that does not hold the button never moves it (palm rejection). This class
-     * mirrors that owner from the same messages (always, even while the layer is off, so a layer that turns on mid-drag is
-     * only briefly wrong) and records an event only when the host would act on it. The finger gate is not mirrored: a press
-     * the host gates out is assumed accepted.
+     * - `POINTER_REL` with motion adds a delta (unless suspended).
+     * - Any `PEN` sample or `POINTER_ABS` suspends the prediction until [SUSPEND_US] after this message and empties the ring.
+     * - Everything else, and anything of another generation, is ignored.
      */
-    fun onSent(msg: Message, nowUs: Long): Boolean = synchronized(lock) {
+    fun onSent(msg: Message, nowUs: Long, gen: Int): Boolean = synchronized(lock) {
+        if (gen != armedGen) return false
         when (msg) {
-            is ReleaseAll -> { clearOwnership(); false }
-            is PointerRel -> {
-                val moves = pointer(SRC_REL, msg.buttons, msg.dx != 0f || msg.dy != 0f)
-                moves && active && add(KIND_REL, msg.dx, msg.dy, nowUs)
-            }
-            is PointerAbs -> {
-                val moves = pointer(if (msg.source == PointerAbs.SOURCE_TOUCH) SRC_TOUCH else SRC_MOUSE, msg.buttons, true)
-                moves && active && add(KIND_ABS, msg.x.toFloat(), msg.y.toFloat(), nowUs)
-            }
-            is Pen -> {
-                var last: PenSample? = null
-                for (s in msg.samples) if (pen(s)) last = s
-                last != null && active && add(KIND_ABS, last.x.toFloat(), last.y.toFloat(), nowUs)
-            }
+            is PointerRel ->
+                (msg.dx != 0f || msg.dy != 0f) && active && nowUs >= suspendUntilUs && add(msg.dx, msg.dy, nowUs)
+            is PointerAbs -> suspendPrediction(nowUs)
+            is Pen -> suspendPrediction(nowUs)
             else -> false
         }
     }
 
-    /** Host rules for one pointer message of [src] (`handlePointer`). Returns whether the Mac cursor moves. */
-    private fun pointer(src: Int, buttons: Int, hasMotion: Boolean): Boolean {
-        val left = buttons and BUTTON_LEFT != 0
-        val pressed = left && !heldLeft[src]
-        val released = !left && heldLeft[src]
-        val accept = pressed && owner == NO_OWNER
-        val moves = hasMotion && when {
-            owner == src || accept -> true
-            owner != NO_OWNER -> false
-            else -> src != SRC_TOUCH
-        }
-        if (accept) owner = src else if (released && owner == src) owner = NO_OWNER
-        heldLeft[src] = left
-        return moves
+    private fun suspendPrediction(nowUs: Long): Boolean {
+        val was = active && anchor != null && nowUs >= suspendUntilUs
+        suspendUntilUs = maxOf(suspendUntilUs, nowUs + SUSPEND_US)
+        head = 0
+        count = 0
+        shown = null
+        corrX = 0f
+        corrY = 0f
+        return was
     }
 
-    /** Host rules for one pen sample (`handlePen`). Returns whether the Mac cursor moves to it. */
-    private fun pen(s: PenSample): Boolean {
-        val inRange = s.flags and (PenSample.IN_RANGE or PenSample.CONTACT) != 0
-        val contact = s.flags and PenSample.CONTACT != 0
-        if (!inRange) { // leaving: a touching pen lifts first (the position it lifts at is not predicted)
-            endPenContact()
-            return false
-        }
-        return when {
-            contact -> { // the pen always gets the left button (OWN-2)
-                penContact = true
-                owner = SRC_PEN
-                true
-            }
-            penContact -> { // CONTACT 1 -> 0: the lift happens at this sample
-                endPenContact()
-                true
-            }
-            else -> owner == NO_OWNER // hover: the Mac ignores it while a pointer source owns the button (OWN-9)
-        }
-    }
-
-    private fun endPenContact() {
-        penContact = false
-        if (owner == SRC_PEN) owner = NO_OWNER
-    }
-
-    private fun clearOwnership() {
-        owner = NO_OWNER
-        penContact = false
-        heldLeft.fill(false)
-    }
-
-    /** The control connection ended or a new one began: the host released everything ([reset] plus the owner mirror). */
-    fun endSession(): Unit = synchronized(lock) {
-        clearOwnership()
-        reset()
-    }
-
-    private fun add(k: Int, a: Float, b: Float, nowUs: Long): Boolean = synchronized(lock) {
+    private fun add(dx: Float, dy: Float, nowUs: Long): Boolean {
         if (anchor == null) return false // no state yet: nothing is drawn, nothing to predict from
         val t = maxOf(nowUs, lastSendUs)
         lastSendUs = t
@@ -215,11 +178,10 @@ class CursorPredictor(
         if (count == CAP) { head = (head + 1) % CAP; count-- }
         val i = (head + count) % CAP
         sendUs[i] = t
-        kind[i] = k.toByte()
-        v0[i] = a
-        v1[i] = b
+        dxPt[i] = dx
+        dyPt[i] = dy
         count++
-        true
+        return true
     }
 
     private fun pruneBefore(us: Long) {
@@ -238,7 +200,7 @@ class CursorPredictor(
         val ow = oneWay()
         val sample = sampleOf(s.hostTimeUs, rxUs, ow)
         val prev = anchor
-        if (stats != null && prev != null && prev.visible && s.visible && widthPt > 0 && heightPt > 0) {
+        if (stats != null && prev != null && prev.visible && s.visible && widthPt > 0 && heightPt > 0 && rxUs >= suspendUntilUs) {
             positionAt(prev, sample - ow, ow, tmp)
             val nx = s.x / NORM * widthPt
             val ny = s.y / NORM * heightPt
@@ -252,12 +214,12 @@ class CursorPredictor(
 
     /**
      * UI thread: where to draw the cursor of the state [seq] at [nowUs], written to [out]. Returns false when there is no
-     * prediction (switched off, hidden, stream size unknown, or the anchor is not [seq]): the caller draws the state's own
-     * position, as in v1.
+     * prediction (switched off, hidden, suspended, stream size unknown, or the anchor is not [seq]): the caller draws the
+     * state's own position, as in v1.
      */
     fun advance(seq: Long, nowUs: Long, out: Result): Boolean = synchronized(lock) {
         val a = anchor
-        if (!active || a == null || a.seq != seq || !a.visible || widthPt <= 0 || heightPt <= 0) {
+        if (!active || a == null || a.seq != seq || !a.visible || widthPt <= 0 || heightPt <= 0 || nowUs < suspendUntilUs) {
             shown = null
             corrX = 0f
             corrY = 0f
@@ -294,8 +256,8 @@ class CursorPredictor(
     }
 
     /**
-     * The forecast of [a] at [evalUs] (events sent after that are not counted, events older than [SETTLE_US] before it are
-     * settled), in Mac points into [out]. Returns how many events were applied (not in the anchor yet and not settled).
+     * The forecast of [a] at [evalUs] (deltas sent after that are not counted, deltas older than [SETTLE_US] before it are
+     * settled), in Mac points into [out]. Returns how many deltas were applied (not in the anchor yet and not settled).
      * Caller holds the lock.
      */
     private fun positionAt(a: Anchor, evalUs: Long, ow: Long, out: FloatArray): Int {
@@ -310,13 +272,8 @@ class CursorPredictor(
             if (s > evalUs) break
             if (evalUs - s > SETTLE_US) continue
             if (s + ow <= a.sampleUs) continue // the state already contains it
-            if (kind[i].toInt() == KIND_REL) {
-                x = (x + v0[i]).coerceIn(0f, w)
-                y = (y + v1[i]).coerceIn(0f, h)
-            } else {
-                x = v0[i] / NORM * w
-                y = v1[i] / NORM * h
-            }
+            x = (x + dxPt[i]).coerceIn(0f, w)
+            y = (y + dyPt[i]).coerceIn(0f, h)
             applied++
         }
         out[0] = x
@@ -339,21 +296,16 @@ class CursorPredictor(
 
     companion object {
         const val CAP = 512
-        private const val NO_OWNER = -1
-        private const val SRC_PEN = 0
-        private const val SRC_REL = 1
-        private const val SRC_MOUSE = 2
-        private const val SRC_TOUCH = 3
-        private const val BUTTON_LEFT = 1
-        private const val KIND_REL = 0
-        private const val KIND_ABS = 1
         private const val NORM = 65535f
 
-        /** Events older than this are dropped from the ring. */
+        /** Deltas older than this are dropped from the ring. */
         const val KEEP_US = 500_000L
 
-        /** An event this old is considered to be in the host's position already (the prediction "settles", at most this long). */
+        /** A delta this old is considered to be in the host's position already (the prediction "settles", at most this long). */
         const val SETTLE_US = 100_000L
+
+        /** After the last pen sample or `POINTER_ABS` the prediction stays off this long (the host-reported position is drawn). */
+        const val SUSPEND_US = 300_000L
 
         /** A disagreement up to this many Mac points is eased in; larger is shown at once. */
         const val SMOOTH_PT = 4f
