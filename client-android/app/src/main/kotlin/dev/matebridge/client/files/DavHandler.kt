@@ -36,6 +36,8 @@ class DavHandler(
     private val stats: FilesStats? = null,
     private val cancelled: () -> Boolean = { false },
     private val meta: MetaStore = MetaStore(),
+    /** File operations PUT commits with (T-288); a test replaces it to inject failures. */
+    private val fs: DavFs = DavFs.Default,
 ) {
     private val random = SecureRandom()
     /** The `Allow` list of OPTIONS and every 405: the read methods only in read-only mode (T-190). */
@@ -251,6 +253,7 @@ class DavHandler(
         val existed = target.exists()
         val tmp = File(parent, TEMP_PREFIX + hex(8) + TEMP_SUFFIX)
         var committed = false
+        var keepTmp = false
         try {
             FileOutputStream(tmp).use { fos ->
                 val buf = ByteArray(config.bufferBytes)
@@ -260,15 +263,46 @@ class DavHandler(
                     fos.write(buf, 0, n)
                 }
             }
-            if (!tmp.renameTo(target)) {
-                // Some file systems refuse to replace on rename: remove the old file, then move.
-                if (!(target.delete() && tmp.renameTo(target))) throw IOException("rename failed")
-            }
+            commit(tmp, target, parent) { keepTmp = true }
             committed = true
         } finally {
-            if (!committed) tmp.delete() // an aborted or failed upload leaves nothing behind
+            // An aborted or failed upload leaves nothing behind, except when it is the only copy of the new content
+            // after a replace that failed and could not be rolled back (T-288).
+            if (!committed && !keepTmp) tmp.delete()
         }
         ex.empty(if (existed) 204 else 201)
+    }
+
+    /**
+     * Moves the finished upload [tmp] over [target] (T-288). First an atomic replace. If the file system refuses, the old
+     * file is moved aside to a hidden backup name (never deleted), the upload is moved in, and the backup is removed only
+     * after that succeeded; otherwise the backup is moved back. The old and the new content are never both gone: when the
+     * rollback fails too, both stay on disk under hidden names ([onBothKept] tells the caller to keep [tmp]) and the
+     * request fails with 500. Throws [IOException] on every failure. Logs without names.
+     */
+    private fun commit(tmp: File, target: File, parent: File, onBothKept: () -> Unit) {
+        try {
+            fs.replace(tmp, target)
+            return
+        } catch (e: IOException) {
+            // Fall through to the backup path below.
+        } catch (e: UnsupportedOperationException) {
+            // Same: an option the file system provider does not know.
+        }
+        if (!target.exists() && !DavPath.isSymlink(target)) throw IOException("rename failed") // nothing to protect
+        val backup = File(parent, TEMP_PREFIX + hex(8) + TEMP_SUFFIX)
+        if (!fs.rename(target, backup)) throw IOException("backup failed") // the old file is untouched
+        if (fs.rename(tmp, target)) {
+            fs.delete(backup)
+            return
+        }
+        if (fs.rename(backup, target) || fs.rename(backup, target)) {
+            log("put_replace_failed", "restored=1")
+            throw IOException("rename failed")
+        }
+        onBothKept()
+        log("put_replace_failed", "restored=0")
+        throw IOException("rename and rollback failed")
     }
 
     // ---- DELETE / MKCOL ----
@@ -719,5 +753,33 @@ class DavHandler(
             507 -> "Insufficient Storage"
             else -> "Status"
         }
+    }
+}
+
+/** File operations PUT commits with (T-288). The default is the real file system; tests inject failures. */
+interface DavFs {
+    /** Moves [from] over [to], atomically when the file system can. Throws [IOException] on failure. */
+    fun replace(from: File, to: File)
+
+    /** Plain rename that never replaces an existing [to] on the platforms we run on; false on failure. */
+    fun rename(from: File, to: File): Boolean
+
+    fun delete(f: File): Boolean
+
+    object Default : DavFs {
+        override fun replace(from: File, to: File) {
+            try {
+                java.nio.file.Files.move(
+                    from.toPath(), to.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(from.toPath(), to.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+
+        override fun rename(from: File, to: File) = from.renameTo(to)
+
+        override fun delete(f: File) = f.delete()
     }
 }
