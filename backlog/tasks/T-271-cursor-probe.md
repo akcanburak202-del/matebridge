@@ -1,7 +1,7 @@
 ---
 id: T-271
 title: Mac probu — yerel imleç: başka uygulamaların imleç şekli, gizli durumu ve değişim maliyeti herkese açık API ile okunabiliyor mu
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: []
@@ -26,7 +26,10 @@ Fikir: imleci videodan çıkarıp tablette ayrı katmanda çizmek (`docs/researc
 
 ## Plan
 
-(ajan doldurur)
+1. `probes/cursor-probe/` SwiftPM paketi: `CursorProbeCore` (argüman ayrıştırma, değişim izleyici, özet/karma, süre istatistiği, kayıt satırı biçimi; birim testli) + `cursor-probe` çalıştırılabilir (örnekleyiciler, `once` ve `record` modları).
+2. Adaylar yalnız herkese açık API: `NSCursor.currentSystem`, `NSCursor.current`, `CGCursorIsVisible` (dlsym), `CGEvent(source:nil).location`, `NSEvent.mouseLocation`, `CGWindowListCopyWindowInfo` ("Cursor" penceresi). Pencere yok (`.prohibited`), girdi enjeksiyonu yok.
+3. `once`: adayları dener, çağrı maliyetini ölçer. `record`: 60/120 Hz yoklama, yalnız değişimleri yazar, PNG dökümü, CPU payı.
+4. Ajan ortamında `once` ve kısa `record` çalıştırılır; kullanıcılı kayıt adımı Handoff'a yazılır.
 
 ## Handoff
 
