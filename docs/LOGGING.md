@@ -10,7 +10,7 @@ Loglar hem hata ayıklamanın hem de ajanların cihazdaki davranışı "görmesi
 
 - `mono_ms`: monoton saat (Mac: `ContinuousClock`/`mach_absolute_time`, Android: `SystemClock.elapsedRealtime`). Duvar saati ayrıca satır başına eklenebilir ama karşılaştırmalar monotonla yapılır.
 - `LEVEL`: `E` hata, `W` uyarı, `I` bilgi, `D` debug (varsayılan kapalı).
-- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`.
+- `component`: `capture`, `encoder`, `net`, `vdisplay`, `input`, `pen`, `kbd`, `decoder`, `render`, `session`, `cursor` (Mac, yerel imleç).
 - `ev`: snake_case olay adı, ör. `ev=connect_ok`, `ev=frame_drop reason=stale`.
 
 ## Nereye yazılır
@@ -629,3 +629,13 @@ Gizlilik: yol, dosya adı, jeton, nonce, HTTP içeriği ve adres **asla** yazıl
 
 - **Mac (`component=files`):** `ev=files_net` (listening/open/close/stopped, portlar, `send=open|close`), `ev=files_conn` (kabul/red nedeni: `not_open`, `peer`, `capacity`, `unproven_limit`, `hello_timeout`, `proof_timeout`, `auth_failed`; `proven`), `ev=files_stats` saniyede bir yalnız hareket varsa (bağlantı sayıları `idle/bound/unproven/closing`, `to_tablet_bytes`, `from_tablet_bytes`, `throttled_ms`, `cap_bps`), `socket_options_refused` (W, bir kez).
 - **Tablet (`MB/files`):** `files_net_recv state= port= pool= max=`, `files_net_repeat`, `files_tunnel_open pool= max=`, `files_tunnel_close reason= opened= proven= paired= failed= rejected= h2c_bytes= c2h_bytes=`, `files_conn_closed conn= reason= [h2c_bytes= c2h_bytes= ms=|idle=1]` (nedenler arasında `write_stall`, `dav_write_failed`, `scope_mismatch`), `files_conn_failed conn= reason= streak=` (W; ilk 3, sonra her 12.), `files_tunnel_no_keys` (W), `rate_cap cap_kbps= video_kbps=`, `scope root=wifi ro=`, `scope_missing root=wifi` (W); `MB/session`: `files_net_ignored reason=` (W).
+
+## Yerel imleç (Mac `cursor`, T-275, karar 0036)
+
+Gizlilik: imleç konumu, şekil görüntüsü ve uygulama adı **asla** yazılmaz; yalnız sayaçlar, boyutlar, süreler ve kodlar.
+
+- `I cursor ev=cursor_prefs enabled=0|1 [ignored=no_capability|reason=session_end]`: `CURSOR_PREFS` geldi (HELLO bit13 yoksa yok sayılır) ya da oturum bitince akış kapandı.
+- `I|W cursor ev=cursor_video shows=0|1 ok=0|1`: yakalamada imleç değişimi (`shows=0` videodan çıkar, `shows=1` videoya döner) bitti. `ok=0` (W): ScreenCaptureKit `updateConfiguration`'ı reddetti; imleç videoda kalır, `CURSOR_*` kesilir ve tablet 1,5 s sonra kendi katmanını gizleyip `CURSOR_PREFS(0)` ile döner. Aynı olayda (ve her reddedilen denemede) `W cursor ev=cursor_video_failed shows=0|1 retry_ms=<ms> error=<domain>_<kod>`: istenen durum (`VideoCursorReconciler`) reddedilmeyle değişmez, yakalama o duruma doğru sınırlı geri çekilmeyle (0,25 s, 0,5 s ... en çok 8 s) denenir; yeni istek, yeni yakalama ya da oturum sonu geri çekilmeyi keser ve yeniden başlatır. Bir istek için reddedilme `ev=cursor_video ... ok=0` olarak yalnız bir kez bildirilir; reddedilen gizleme `CURSOR_*` akışını durdurur (ikinci imleç olmasın; tablet zaman aşımıyla videoya döner) ve imleç videoya geri istenir. Yeniden başlayan her yakalama istenen duruma uyar (varsayılan: imleç videoda).
+- `I cursor ev=cursor_stats states=<n> shapes=<n> shape_bytes=<n> shapes_built=<n> shape_failed=<n> replaced=<n> samples=<n> sample_failed=<n> sample_us_p50=<µs> sample_us_p95=<µs>`: akış açıkken saniyede bir, yalnız hareket varsa. `states`/`shapes`: yazılan `CURSOR_STATE`/`CURSOR_SHAPE` (`shape_bytes` PNG baytları); `shapes_built`: bu pencerede yeni çizilip PNG'ye kodlanan şekil; `shape_failed`: okunamayan ya da 61 440 bayta sığmayan şekil; `replaced`: tıkanma yüzünden yazılmadan yenisiyle değişen birim (§5); `samples`: yoklama + enjeksiyon örneği, `sample_failed`: imleç yerleştirilemeyen (sanal ekran yok / konum okunamadı); `sample_us_*`: bir örneğin maliyeti (konum + görünürlük + şekil çizimi/karması; yeni şekilde PNG kodlaması dahil).
+- `W cursor ev=cursor_shape_failed px=<WxH>`: görüntü 61 440 bayta indirilemedi (son şekil kalır). `W cursor ev=cursor_shape_flood max_per_s=20`: bir saniyede 20'den çok yeni şekil (bir kez; görüntü kararsızsa şekil yığılmasın diye son şekil kalır).
+- Karşılaştırma için tablet tarafı `CURSOR_STATE.host_time_us` ile saat farkından gecikmeyi hesaplayabilir (T-276).

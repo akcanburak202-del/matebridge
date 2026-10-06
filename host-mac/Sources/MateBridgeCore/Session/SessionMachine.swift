@@ -863,7 +863,7 @@ public struct SessionMachine: Sendable {
         case .releaseAll(let reason):
             return isActive ? [.releaseInput(id, .clientRequest(reason))] : []
         case .pen, .key, .pointerRel, .pointerAbs, .scroll, .pinch, .penGesture, .stats, .keyframeRequest, .streamPrefs, .clipboard, .displayRate,
-             .filesInfo:
+             .filesInfo, .cursorPrefs:
             // Before ACCEPTED input is ignored and nothing is injected (PROTOCOL.md section 3).
             return isActive ? [.deliver(id, message)] : []
         case .audioPrefs:
@@ -871,7 +871,7 @@ public struct SessionMachine: Sendable {
         case .pong(let pong):
             return isActive ? hostPong(id, pong) : []  // T-171: only answers to the host's own PINGs
         case .helloAck, .streamConfig, .settingsOpen, .audioConfig, .audioFrame, .videoHello, .videoFrame,
-             .filesNet, .filesHello, .filesHelloAck, .filesData:
+             .filesNet, .cursorShape, .cursorState, .filesHello, .filesHelloAck, .filesData:
             return []  // wrong direction or connection: ignored
         }
     }

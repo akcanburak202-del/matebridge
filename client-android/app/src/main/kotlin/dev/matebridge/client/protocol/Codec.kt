@@ -193,6 +193,18 @@ object Codec {
             is SettingsOpen -> w.u32(0)
             is FilesInfo -> { w.u8(msg.state); w.u16(msg.port); w.str8(msg.token) }
             is FilesNet -> { w.u8(msg.state); w.u16(msg.port); w.u8(msg.pool); w.u8(msg.max) }
+            is CursorPrefs -> { w.u8(if (msg.enabled) 1 else 0); w.u8(0); w.u16(0) }
+            is CursorShape -> {
+                require(msg.shapeId != 0L) { "shape_id 0 is not used" }
+                require(msg.data.size in 1..CursorShape.MAX_DATA_BYTES) { "CURSOR_SHAPE data must be 1..${CursorShape.MAX_DATA_BYTES} bytes" }
+                w.u32(msg.shapeId)
+                w.u16(msg.widthPt16); w.u16(msg.heightPt16); w.u16(msg.hotXPt16); w.u16(msg.hotYPt16)
+                w.u8(msg.format); w.u8(0); w.u16(msg.data.size); w.bytes(msg.data.value)
+            }
+            is CursorState -> {
+                w.u32(msg.seq); w.u16(msg.x); w.u16(msg.y); w.u8(if (msg.visible) 1 else 0); w.u8(0)
+                w.u32(msg.shapeId); w.u64(msg.hostTimeUs)
+            }
             is FilesHello -> {
                 require(msg.clientFilesNonce.size == Limits.NONCE_BYTES) { "client_files_nonce must be 16 bytes" }
                 w.u16(msg.protocolVersion); w.u32(msg.sessionId); w.bytes(msg.clientFilesNonce.value)
@@ -340,6 +352,20 @@ object Codec {
             MsgType.SETTINGS_OPEN -> { r.skip(4); SettingsOpen }
             MsgType.FILES_INFO -> FilesInfo(r.u8(), r.u16(), r.str8()) // unknown state kept: the receiver treats it as OFF
             MsgType.FILES_NET -> FilesNet(r.u8(), r.u16(), r.u8(), r.u8()) // unknown state kept: the receiver treats it as CLOSE
+            MsgType.CURSOR_PREFS -> { val enabled = r.u8(); r.skip(3); CursorPrefs(enabled == 1) } // unknown value = 0
+            MsgType.CURSOR_SHAPE -> {
+                val id = r.u32(); val wp = r.u16(); val hp = r.u16(); val hx = r.u16(); val hy = r.u16()
+                val format = r.u8(); r.skip(1); val len = r.u16()
+                if (len == 0 || len > CursorShape.MAX_DATA_BYTES) {
+                    throw ProtocolException(ProtocolException.Kind.INVALID_VALUE, "invalid cursor data_len $len")
+                }
+                // Shorter than 16 + data_len: SHORT_PAYLOAD from the reader. Unknown format: kept (the client draws the arrow).
+                CursorShape(id, wp, hp, hx, hy, format, Bytes(r.bytes(len)))
+            }
+            MsgType.CURSOR_STATE -> {
+                val seq = r.u32(); val x = r.u16(); val y = r.u16(); val visible = r.u8(); r.skip(1)
+                CursorState(seq, x, y, visible == 1, r.u32(), r.u64()) // unknown visible value = hidden
+            }
             MsgType.FILES_HELLO -> FilesHello(r.u16(), r.u32(), Bytes(r.bytes(Limits.NONCE_BYTES)))
             MsgType.FILES_HELLO_ACK -> FilesHelloAck(r.u8(), Bytes(r.bytes(Limits.NONCE_BYTES))) // unknown status: rejected
             MsgType.FILES_DATA -> {

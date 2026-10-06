@@ -50,6 +50,7 @@ class SettingsResetTest {
         s.filesShare(), s.filesRoot(), s.filesReadOnly(), s.audioEnabled(), s.audioOut(), s.penTrail(), s.penDot(),
         s.fingerTouchDisabled(), s.transportMode(), s.gameResolution(), s.modeFps(StreamMode.DAILY), s.modeFps(StreamMode.GAME),
         s.hdrGame(), // T-238
+        s.cursorLocal(), // T-276
     )
 
     private fun setEverythingNonDefault(s: Settings) {
@@ -72,6 +73,7 @@ class SettingsResetTest {
         s.setFingerTouchDisabled(true)
         s.setTransportMode(TransportMode.USB)
         s.setHdrGame(true) // T-238
+        s.setCursorLocal(false) // T-276: Görüntüde
     }
 
     @Test fun everyGetterReturnsItsDefaultAfterTheReset() {
@@ -81,7 +83,7 @@ class SettingsResetTest {
         setEverythingNonDefault(s)
         snapshot(s).zip(fresh).forEachIndexed { i, (now, def) -> assertTrue("setting $i must start non-default", now != def) }
 
-        assertEquals(19, s.resetToDefaults())
+        assertEquals(20, s.resetToDefaults())
 
         assertEquals(fresh, snapshot(s))
         assertFalse(s.statsOverlay())
@@ -104,6 +106,7 @@ class SettingsResetTest {
         assertEquals(TransportMode.AUTO, s.transportMode())
         assertEquals(GameResolution.R1848, s.gameResolution()) // T-215: 1848×1214
         assertFalse(s.hdrGame()) // T-238: HDR off
+        assertTrue(s.cursorLocal()) // T-276: İmleç back to Tablette
     }
 
     @Test fun identityEndpointMigrationWakeDataAndPairKeysAreKeptByteForByte() {

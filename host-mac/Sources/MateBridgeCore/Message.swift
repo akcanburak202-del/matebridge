@@ -10,6 +10,9 @@ public enum Message: Equatable, Sendable {
     case settingsOpen(SettingsOpen)
     case filesInfo(FilesInfo)
     case filesNet(FilesNet)
+    case cursorPrefs(CursorPrefs)
+    case cursorShape(CursorShape)
+    case cursorState(CursorState)
     case pen(PenBatch)
     case key(KeyEvent)
     case pointerRel(PointerRel)
@@ -44,6 +47,9 @@ public enum Message: Equatable, Sendable {
         case .settingsOpen: .settingsOpen
         case .filesInfo: .filesInfo
         case .filesNet: .filesNet
+        case .cursorPrefs: .cursorPrefs
+        case .cursorShape: .cursorShape
+        case .cursorState: .cursorState
         case .pen: .pen
         case .key: .key
         case .pointerRel: .pointerRel
@@ -81,6 +87,9 @@ public enum Message: Equatable, Sendable {
         case .settingsOpen(let m): m.write(&w)
         case .filesInfo(let m): m.write(&w)
         case .filesNet(let m): m.write(&w)
+        case .cursorPrefs(let m): m.write(&w)
+        case .cursorShape(let m): m.write(&w)
+        case .cursorState(let m): m.write(&w)
         case .pen(let m): m.write(&w)
         case .key(let m): m.write(&w)
         case .pointerRel(let m): m.write(&w)
@@ -136,7 +145,8 @@ public enum Message: Equatable, Sendable {
     /// Complete frame: type byte, u32 LE length, payload.
     /// Throws instead of producing a frame the peer would reject: payload over the connection limit,
     /// PEN count outside 1...64, AUDIO_FRAME frame_count outside 1...960 or data over 65535 bytes,
-    /// a VIDEO_FRAME that is not a single whole fragment, or a FILES_DATA with 0 or more than 65 534 bytes.
+    /// a VIDEO_FRAME that is not a single whole fragment, or a FILES_DATA with 0 or more than 65 534 bytes,
+    /// or a CURSOR_SHAPE with 0 or more than 61 440 bytes of image.
     public func encode() throws -> [UInt8] {
         let payload = try checkedPayload()
         var w = ByteWriter()
@@ -171,6 +181,10 @@ public enum Message: Equatable, Sendable {
             guard (1...ProtocolConstants.filesDataMax).contains(m.data.count) else {
                 throw ProtocolError.invalidField("size")
             }
+        case .cursorShape(let m):
+            guard (1...CursorShape.maxDataBytes).contains(m.data.count) else {
+                throw ProtocolError.invalidField("data_len")
+            }
         default: break
         }
         let payload = encodePayload()
@@ -200,6 +214,9 @@ public enum Message: Equatable, Sendable {
         case .settingsOpen: return .settingsOpen(try SettingsOpen.read(&r))
         case .filesInfo: return .filesInfo(try FilesInfo.read(&r))
         case .filesNet: return .filesNet(try FilesNet.read(&r))
+        case .cursorPrefs: return .cursorPrefs(try CursorPrefs.read(&r))
+        case .cursorShape: return .cursorShape(try CursorShape.read(&r))
+        case .cursorState: return .cursorState(try CursorState.read(&r))
         case .pen: return .pen(try PenBatch.read(&r))
         case .key: return .key(try KeyEvent.read(&r))
         case .pointerRel: return .pointerRel(try PointerRel.read(&r))

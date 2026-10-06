@@ -68,6 +68,8 @@ class SettingsCatalogTest {
         override val filesReadOnly get() = v["files_ro"] ?: false
         override fun setFilesReadOnly(on: Boolean) { calls += "files_ro $on"; v["files_ro"] = on }
         override var filesStatus = "Durum: kapalı"
+        override val cursorLocal get() = v["cursor"] ?: true
+        override fun setCursorLocal(on: Boolean) { calls += "cursor $on"; v["cursor"] = on }
         override val clipboardShare get() = v["clip"] ?: true
         override fun setClipboardShare(on: Boolean) { calls += "clip $on"; v["clip"] = on }
         override val statsOverlay get() = v["stats"] ?: false
@@ -95,7 +97,7 @@ class SettingsCatalogTest {
         assertEquals(side - setOf("disconnect", "bitrate_applied", "hdr_applied", "colour_applied"), connect)
         assertEquals(
             listOf(
-                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "audio", "audio_out",
+                "transport", "disconnect", "forget_host", "stream_mode", "frame_rate", "game_resolution", "bitrate", "bitrate_applied", "hdr", "hdr_applied", "colour", "colour_note", "colour_applied", "idle_dim", "cursor", "audio", "audio_out",
                 "touchpad_speed", "mouse_speed", "finger_off", "pen_trail", "pen_dot", "files", "files_root", "files_ro", "files_status",
                 "clipboard", "stats", "reset_defaults", "reset_hint", "shortcuts", "version",
             ),
@@ -120,6 +122,29 @@ class SettingsCatalogTest {
         assertFalse(c.hidden())
         h.streamMode = StreamMode.DRAWING
         assertEquals("Boşta karart", c.titleText())
+    }
+
+    @Test fun cursorChoiceIsTabletOrVideoWithAnOyunNote() { // T-276, decision 0036
+        val c = choice(SettingsCatalog.sections(h, inStream = true), "cursor")
+        assertEquals("İmleç", c.titleText())
+        assertEquals(listOf("Tablette", "Görüntüde"), c.options.map { it.label })
+        assertEquals("tablet", c.selected()) // the default
+        c.select("video")
+        assertEquals(listOf("cursor false"), h.calls)
+        assertEquals("video", c.selected())
+        c.select("tablet")
+        assertEquals("cursor true", h.calls.last())
+        c.select("bogus") // not an option: the default, Tablette
+        assertEquals("cursor true", h.calls.last())
+        assertFalse(c.hidden())
+        assertTrue(c.enabled())
+        h.streamMode = StreamMode.GAME // the setting stays, the title says what Oyun does
+        assertEquals("İmleç (Oyun modunda görüntüde)", c.titleText())
+        assertEquals("tablet", c.selected())
+        h.streamMode = StreamMode.DRAWING
+        assertEquals("İmleç", c.titleText())
+        // both panels
+        assertTrue(SettingsCatalog.sections(h, inStream = false).flatMap { it.items }.any { it.key == "cursor" })
     }
 
     @Test fun noAudioSectionWithoutAudio() {

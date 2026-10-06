@@ -131,6 +131,9 @@ public struct Capabilities: OptionSet, Sendable {
     /// The client handles `FILES_INFO(STANDBY)`, `FILES_NET` and the file connections of Wi-Fi tablet files
     /// (decision 0035).
     public static let filesNet = Capabilities(rawValue: 1 << 12)
+    /// The client can draw the cursor itself: it sends `CURSOR_PREFS` and handles `CURSOR_SHAPE` / `CURSOR_STATE`
+    /// (decision 0036).
+    public static let localCursor = Capabilities(rawValue: 1 << 13)
 }
 
 public struct PenFlags: OptionSet, Sendable {

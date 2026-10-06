@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 
 # Message type codes (docs/PROTOCOL.md, "Mesaj tipleri").
 T = {
-    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09, "FILES_NET": 0x0A,
+    "HELLO": 0x01, "HELLO_ACK": 0x02, "STREAM_CONFIG": 0x03, "BYE": 0x04, "STREAM_PREFS": 0x05, "CLIPBOARD": 0x06, "DISPLAY_RATE": 0x07, "SETTINGS_OPEN": 0x08, "FILES_INFO": 0x09, "FILES_NET": 0x0A, "CURSOR_PREFS": 0x0B, "CURSOR_SHAPE": 0x0C, "CURSOR_STATE": 0x0D,
     "PEN": 0x10, "KEY": 0x11, "POINTER_REL": 0x12, "POINTER_ABS": 0x13,
     "SCROLL": 0x14, "PEN_GESTURE": 0x15, "RELEASE_ALL": 0x16, "PINCH": 0x17,
     "PING": 0x20, "PONG": 0x21, "STATS": 0x22, "KEYFRAME_REQUEST": 0x23,
@@ -39,6 +39,23 @@ VIDEO_NONCE = bytes.fromhex("0f0e0d0c0b0a09080706050403020100")
 # Section 9 file connection nonces (decision 0035); also inputs of crypto_vectors.swift.
 CLIENT_FILES_NONCE = bytes(range(0x70, 0x80))
 HOST_FILES_NONCE = bytes(range(0x80, 0x90))
+
+def tiny_png(w, h):
+    """A complete, valid RGBA PNG (deterministic): transparent with a 2 px black vertical bar in the middle."""
+    import zlib
+    rows = b""
+    for _y in range(h):
+        row = b"\x00"
+        for x in range(w):
+            row += b"\x00\x00\x00\xff" if x in (w // 2 - 1, w // 2) else b"\x00\x00\x00\x00"
+        rows += row
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+CURSOR_PNG = tiny_png(18, 36)
 
 FMT = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h", "u32": "<I", "u64": "<Q", "f32": "<f"}
 
@@ -489,6 +506,56 @@ FIXTURES = {
         field("u8", "state", 0, "OFF"),
         field("u16", "port", 0),
         field("str8", "token", ""),
+    ])),
+    "cursor_prefs_on": ("CURSOR_PREFS: tablet draws the cursor itself", frame("CURSOR_PREFS", [
+        field("u8", "enabled", 1),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+    ])),
+    "cursor_prefs_off": ("CURSOR_PREFS: cursor back in the video", frame("CURSOR_PREFS", [
+        field("u8", "enabled", 0),
+        field("u8", "reserved", 0),
+        field("u16", "reserved2", 0),
+    ])),
+    "cursor_shape": ("CURSOR_SHAPE: 9x18 pt shape (18x36 px, 2x), hotspot 4,9, complete PNG", frame("CURSOR_SHAPE", [
+        field("u32", "shape_id", 0x67BAAA67),
+        field("u16", "width_pt16", 9 * 16),
+        field("u16", "height_pt16", 18 * 16),
+        field("u16", "hot_x_pt16", 4 * 16),
+        field("u16", "hot_y_pt16", 9 * 16),
+        field("u8", "format", 1, "PNG"),
+        field("u8", "reserved", 0),
+        field("u16", "data_len", len(CURSOR_PNG)),
+        field("bytes", "data", CURSOR_PNG, "complete 18x36 RGBA PNG"),
+    ])),
+    "invalid_cursor_shape_short": ("MUST BE REJECTED (PROTOCOL_ERROR): CURSOR_SHAPE shorter than 16 + data_len", frame("CURSOR_SHAPE", [
+        field("u32", "shape_id", 0x67BAAA67),
+        field("u16", "width_pt16", 9 * 16),
+        field("u16", "height_pt16", 18 * 16),
+        field("u16", "hot_x_pt16", 4 * 16),
+        field("u16", "hot_y_pt16", 9 * 16),
+        field("u8", "format", 1, "PNG"),
+        field("u8", "reserved", 0),
+        field("u16", "data_len", len(CURSOR_PNG)),
+        field("bytes", "data", CURSOR_PNG[:8], "only the PNG signature"),
+    ])),
+    "cursor_state": ("CURSOR_STATE: visible I-beam at the centre of the video surface", frame("CURSOR_STATE", [
+        field("u32", "seq", 42),
+        field("u16", "x", 32768),
+        field("u16", "y", 32768),
+        field("u8", "visible", 1),
+        field("u8", "reserved", 0),
+        field("u32", "shape_id", 0x67BAAA67),
+        field("u64", "host_time_us", 123456789012),
+    ])),
+    "cursor_state_hidden": ("CURSOR_STATE: cursor hidden (typing or a game)", frame("CURSOR_STATE", [
+        field("u32", "seq", 43),
+        field("u16", "x", 32768),
+        field("u16", "y", 65535),
+        field("u8", "visible", 0),
+        field("u8", "reserved", 0),
+        field("u32", "shape_id", 0x67BAAA67),
+        field("u64", "host_time_us", 123456799012),
     ])),
     "files_info_standby": ("FILES_INFO: Wi-Fi session, sharing allowed, server waits for FILES_NET(OPEN)", frame("FILES_INFO", [
         field("u8", "state", 2, "STANDBY"),

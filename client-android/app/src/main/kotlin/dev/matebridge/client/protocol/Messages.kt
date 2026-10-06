@@ -28,6 +28,9 @@ object MsgType {
     const val SETTINGS_OPEN = 0x08
     const val FILES_INFO = 0x09
     const val FILES_NET = 0x0A
+    const val CURSOR_PREFS = 0x0B
+    const val CURSOR_SHAPE = 0x0C
+    const val CURSOR_STATE = 0x0D
     const val PEN = 0x10
     const val KEY = 0x11
     const val POINTER_REL = 0x12
@@ -93,6 +96,9 @@ object Capabilities {
 
     /** Sends `FILES_INFO` STANDBY, handles `FILES_NET` and opens encrypted file connections on Wi-Fi (decision 0035, T-269). */
     const val FILES_NET = 1 shl 12
+
+    /** Draws the cursor itself: sends `CURSOR_PREFS`, handles `CURSOR_SHAPE` and `CURSOR_STATE` (decision 0036, T-276). */
+    const val LOCAL_CURSOR = 1 shl 13
 }
 
 // ---- Session ----
@@ -255,6 +261,55 @@ data class FilesNet(val state: Int, val port: Int, val pool: Int, val max: Int) 
         const val POOL_MAX = 4
         const val MAX_MAX = 16
     }
+}
+
+/**
+ * The client asks the host to stop drawing the cursor in the video and stream it instead (C to H, PROTOCOL.md 0x0B,
+ * decision 0036). [enabled] true = the tablet draws it; false = the cursor stays in the video (the default of a session).
+ */
+data class CursorPrefs(val enabled: Boolean) : Message {
+    override val type get() = MsgType.CURSOR_PREFS
+}
+
+/**
+ * One cursor image (H to C, PROTOCOL.md 0x0C, decision 0036). Sizes and hotspot are in 1/16 Mac points. [format] 1 is PNG;
+ * any other value decodes fine and counts as "unsupported" (the client draws its built-in arrow for that id).
+ * [data] is 1..[MAX_DATA_BYTES] bytes. [toString] leaves the image out.
+ */
+data class CursorShape(
+    val shapeId: Long, // u32, never 0
+    val widthPt16: Int,
+    val heightPt16: Int,
+    val hotXPt16: Int,
+    val hotYPt16: Int,
+    val format: Int,
+    val data: Bytes,
+) : Message {
+    override val type get() = MsgType.CURSOR_SHAPE
+
+    override fun toString() = "CursorShape(id=$shapeId, ${widthPt16}x$heightPt16, format=$format, ${data.size} bytes)"
+
+    companion object {
+        const val FORMAT_PNG = 1
+        const val MAX_DATA_BYTES = 61_440
+    }
+}
+
+/**
+ * The host's cursor right now (H to C, PROTOCOL.md 0x0D, decision 0036). [x]/[y]: hotspot in normalized video-surface
+ * coordinates (PROTOCOL.md section 1). [hostTimeUs] is for measurement only. Positions are never logged.
+ */
+data class CursorState(
+    val seq: Long, // u32
+    val x: Int,
+    val y: Int,
+    val visible: Boolean,
+    val shapeId: Long, // u32
+    val hostTimeUs: Long,
+) : Message {
+    override val type get() = MsgType.CURSOR_STATE
+
+    override fun toString() = "CursorState(seq=$seq, visible=$visible)"
 }
 
 /** First message of a file connection (C to H, plain; PROTOCOL.md 0x50). A fresh [clientFilesNonce] per connection. */

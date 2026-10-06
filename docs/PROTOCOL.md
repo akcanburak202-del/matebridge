@@ -90,6 +90,9 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 | 0x08 | SETTINGS_OPEN | H→C | kontrol | `settings_open` |
 | 0x09 | FILES_INFO | C→H | kontrol | `files_info_ready`, `files_info_off`, `files_info_standby` |
 | 0x0A | FILES_NET | H→C | kontrol | `files_net_open`, `files_net_close` |
+| 0x0B | CURSOR_PREFS | C→H | kontrol | `cursor_prefs_on`, `cursor_prefs_off` |
+| 0x0C | CURSOR_SHAPE | H→C | kontrol | `cursor_shape`, `invalid_cursor_shape_short` |
+| 0x0D | CURSOR_STATE | H→C | kontrol | `cursor_state`, `cursor_state_hidden` |
 | 0x10 | PEN | C→H | kontrol | `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero` |
 | 0x11 | KEY | C→H | kontrol | `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short` |
 | 0x12 | POINTER_REL | C→H | kontrol | `pointer_rel` |
@@ -129,7 +132,7 @@ Aralıklar: `0x01–0x0F` oturum, `0x10–0x1F` girdi, `0x20–0x2F` bakım/ista
 | client_nonce | bytes[16] | Her bağlantıda yeni rastgele değer (§9) |
 | client_eph_pub | bytes[65] | Bu bağlantı için üretilen geçici P-256 açık anahtarı, sıkıştırılmamış (`0x04 ‖ X ‖ Y`) (§9) |
 
-`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035).
+`capabilities`: bit0 `PEN`, bit1 `PEN_HOVER`, bit2 `PEN_TILT`, bit3 `KEYBOARD`, bit4 `TOUCHPAD` (pointer capture ile göreli hareket + kaydırma), bit5 `TOUCH` (ekrana parmakla dokunma), bit6 `DECODE_H264`, bit7 `DECODE_HEVC`, bit8 `AUDIO_PCM` (istemci §4 ses mesajlarını işleyebilir ve PCM s16le 48 kHz stereo çalabilir), bit9 `SETTINGS_PANEL` (istemci akış sırasında ayarlar panelini açabilir ve `SETTINGS_OPEN`'ı işler, karar 0013). bit10 `FILES` (istemci tablet dosyaları için WebDAV sunucusu sunabilir ve `FILES_INFO` gönderir, karar 0015). bit11 `FULL_CHROMA` (istemci `chroma_layout = 1` akışını, yani `VIDEO_FRAME.view` ve iki akışı işleyebilir ve yetenek testini geçti, karar 0034). bit12 `FILES_NET` (istemci `FILES_INFO.state = 2` STANDBY gönderir, `FILES_NET`'i işler ve Wi-Fi'da dosya bağlantıları açar, karar 0035). bit13 `LOCAL_CURSOR` (istemci imleci kendisi çizebilir: `CURSOR_PREFS` gönderir, `CURSOR_SHAPE`/`CURSOR_STATE` işler, karar 0036).
 
 ### 0x02 HELLO_ACK (H→C)
 
@@ -289,6 +292,58 @@ Wi-Fi'da tablet dosyalarını açma/kapama (karar 0035). Host yalnızca etkin `A
 - **CLOSE:** Mac'te birim ayrılınca (çıkarma, hata) ya da kullanıcı kapatınca gider. İstemci bütün dosya bağlantılarını kapatır, sunucuyu durdurur, `FILES_INFO(STANDBY)` gönderir. Host CLOSE'dan sonra dinleyiciyi kapatır.
 - **Oturum sonu** (BYE, `HOST_SLEEP`, devralma, bağlantı kopması): iki taraf da mesajsız olarak bütün dosya bağlantılarını kapatır; host dinleyiciyi kapatır, istemci sunucuyu durdurur. Yeni oturum STANDBY ile başlar; host kullanıcının açma isteği sürüyorsa (birim çıkarılmadıysa) yeniden OPEN gönderebilir.
 - Bilinmeyen `state`: CLOSE sayılır.
+
+### 0x0B CURSOR_PREFS (C→H, kontrol)
+
+Yerel imleç açma/kapama (karar 0036). İstemci yalnız `ACCEPTED` oturumda ve `HELLO.capabilities` bit13 `LOCAL_CURSOR` ile gönderir: istediği durum değişince (mod değişimi, panel, zaman aşımı geri dönüşü).
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| enabled | u8 | `1` istemci imleci çizer: host videoda imleci çizmez ve `CURSOR_*` gönderir. `0` imleç videoda (bugünkü davranış). Bilinmeyen değer `0` sayılır. |
+| reserved | u8 | |
+| reserved2 | u16 | |
+
+- Varsayılan (oturum başında, mesaj gelmeden): `0`.
+- Host `enabled = 1`'i uygularken önce gerekli `CURSOR_SHAPE`'i ve bir `CURSOR_STATE` gönderir, **sonra** videodan imleci kaldırır (yakalama ayarı). Kontrol ve video ayrı bağlantılar olduğundan bu sıra en iyi çabadır: kontrol bağlantısı geciktiyse imleçsiz kareler ilk durumdan önce görünebilir (kısa; en kötü 1,5 s zaman aşımı geri dönüşüyle sınırlı); `enabled = 0`'da önce videoya imleci geri koyar, sonra `CURSOR_*` göndermeyi bırakır. Oturum bitince host video imlecini geri açar (bir sonraki oturum `0` ile başlar).
+- Host uygulayamazsa (ör. imleç okunamıyor) videoda imleç kalır ve `CURSOR_*` göndermez; istemci 1,5 s içinde `CURSOR_STATE` görmezse kendi katmanını gizler (aşağıda).
+
+### 0x0C CURSOR_SHAPE (H→C, kontrol)
+
+Bir imleç şekli (karar 0036). Host yalnız `CURSOR_PREFS(1)` uygulanmışken ve istemcide olduğunu varsaymadığı bir `shape_id`'yi kullanan `CURSOR_STATE`'i göndermek **üzereyken** gönderir: şekil, onu anan durumla birlikte ve hemen önünde gider; ayrı ya da önceden gönderilmez. Böylece bekleyen şekil sayısı bekleyen durum sayısıyla sınırlıdır (§5).
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| shape_id | u32 | Şeklin kimliği (görüntü + hotspot özeti); `0` hiçbir `CURSOR_SHAPE`'te kullanılmaz |
+| width_pt16 | u16 | Şeklin Mac nokta genişliği × 16 (1/16 nokta) |
+| height_pt16 | u16 | Yüksekliği × 16 |
+| hot_x_pt16 | u16 | Hotspot'un şeklin sol üstünden uzaklığı, nokta × 16 |
+| hot_y_pt16 | u16 | |
+| format | u8 | `1` PNG (RGBA, sRGB, önçarpımsız alfa). Bilinmeyen biçim: istemci şekli yok sayar (protokol hatası değil) ve o kimliği kullanan durumlarda yerleşik oku çizer. |
+| reserved | u8 | |
+| data_len | u16 | `data` uzunluğu, `1…61 440` |
+| data | bytes[data_len] | Görüntü. Piksel boyutu en çok 128 × 128 (host büyük temsili küçültür). |
+
+- İstemci şekli `width_pt16/16 × (yüzey_genişliği_px / STREAM_CONFIG.width_pt)` piksel genişlikte çizer (yükseklik aynı ölçekle); hotspot aynı ölçekle.
+- Önbellek: host, istemcide olduğunu varsaydığı kimlikleri oturum başına en çok **32** tutar (en son kullanılan; kullanım = `CURSOR_SHAPE` ya da onu anan `CURSOR_STATE`); 33. kimlikte en eskisini unutur ve gerekirse yeniden gönderir. İstemci aynı kuralla en az **64** şekil saklar (bilinmeyen biçimdekiler dahil), böylece host'un varsaydığı her kimlik istemcide bulunur. İstemci önbelleği yalnız bağlantı/oturum sınırında siler (`CURSOR_PREFS` 0↔1 geçişinde silmez); host ise `CURSOR_PREFS(0)`'da kendi varsayım kümesini boşaltabilir (yalnız fazladan gönderim olur).
+- `data_len = 0` ya da `> 61 440`, ya da payload `16 + data_len`'den kısa: protokol hatası.
+
+### 0x0D CURSOR_STATE (H→C, kontrol)
+
+İmlecin o anki durumu (karar 0036). Host `CURSOR_PREFS(1)` uygulanmışken gönderir: konum, görünürlük ya da şekil değişince (en sık ~8 ms'de bir; araya düşen değişiklikler birleşir, en yenisi kazanır) ve değişiklik olmasa da en az **500 ms'de bir**.
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| seq | u32 | Oturumda her `CURSOR_STATE`'te 1 artar |
+| x | u16 | Hotspot konumu, video yüzeyinde normalize (§1 girdi koordinatlarıyla aynı eşleme: `0` sol, `65535` sağ kenar) |
+| y | u16 | |
+| visible | u8 | `1` görünür, `0` gizli (yazarken, oyunda, uygulama gizledi). Bilinmeyen değer `0`. |
+| reserved | u8 | |
+| shape_id | u32 | Çizilecek şekil (`CURSOR_SHAPE` ile gelmiş olmalı). `0` = host şekli okuyamadı: istemci yerleşik oku çizer. İstemcide olmayan bir kimlik de yerleşik okla çizilir. |
+| host_time_us | u64 | Host monoton saatinde örnekleme anı (yalnız ölçüm; istemci saat farkıyla gecikme hesaplayabilir) |
+
+- İstemci en yeni `seq`'i çizer; daha eski `seq` gelirse yok sayar.
+- **Zaman aşımı:** istemci `CURSOR_PREFS(1)` gönderdikten sonra 1,5 s boyunca hiç `CURSOR_STATE` almazsa (ya da sonradan 1,5 s kesilirse) katmanını gizler ve `CURSOR_PREFS(0)` gönderir: imleç videoya döner, kullanıcı imleçsiz kalmaz. İstemci yeniden denemeyi en erken 10 s sonra yapar.
+- Mod değişiminde (Oyun) istemci önce `CURSOR_PREFS(0)` gönderir; host'un video imlecini geri açması bir sonraki karelerde görünür.
 
 ### 0x10 PEN (C→H)
 
@@ -653,6 +708,8 @@ Gönderen bir kayda en çok `size` bayt koyar; Wi-Fi'da öneri ≤ 16 KiB (§5, 
 - Aktarma tamponu: bağlantı ve yön başına en çok **64 KiB** aktarma tamponu + çözülmekte olan **bir kayıt** (≤ 65 553 bayt) (host vekili ve istemci tüneli). Dolunca kaynaktan okuma durur (geri basınç); bayt asla atılmaz.
 - Hız tavanı: veri iki yönde de görüntüyü korumak için sınırlanır: `files_cap = clamp((48 − video_Mbps) / 8, 0,5, 3,0)` MB/s (MB = 10⁶ bayt; `video_Mbps` = `STREAM_CONFIG.bitrate_kbps / 1000`, 0 ise 2 MB/s). C→H tabletin hız kovasında, H→C Mac vekilinin gönderiminde uygulanır. Küçük istek/yanıtlar (≤ 32 KiB) ayrı küçük şeritten (~256 KB/s) geçebilir. Tel biçimi bundan etkilenmez; değerler ölçümle değişebilir. USB yolu (`adb forward`, 20 MB/s) değişmez.
 
+**İmleç (karar 0036):** host'ta gönderilmeyi bekleyen en çok **bir** imleç birimi vardır: bir `CURSOR_STATE` ve (gerekiyorsa) onun ihtiyaç duyduğu tek `CURSOR_SHAPE` (≤ 61 456 bayt). Yeni durum bekleyeni değiştirir (en yenisi kazanır); değiştirilen birimin şekli de gönderilmez ve "istemcide var" sayılmaz. Bir birim yalnız bir öncekinin **tamamı sokete yazıldıktan sonra** (gönderim tamamlandı) yazılmaya başlar; yani gönderimde en çok bir, beklemede en çok bir birim vardır. Tıkanmada imleç trafiği büyümez; 256 KiB sınırına katkısı en çok iki birimdir (~120 KiB, yalnız iki büyük şekil üst üste gelirse).
+
 **Kontrol + girdi (istemci gönderim kuyruğu):**
 - En çok **256 KiB** veya en eski mesaj **1 sn**.
 - Tıkanma varken birleştirilebilecekler:
@@ -735,6 +792,7 @@ Swift ve Kotlin testleri:
 - Bakım: `release_all`, `ping`, `pong`, `stats`, `keyframe_request`, `keyframe_request_view`
 - Ses: `audio_prefs`, `audio_config`, `audio_config_stopped`, `audio_frame`, `invalid_audio_frame_short`
 - Video: `video_hello`, `video_frame`, `video_frame_config`, `video_frame_aux`, `video_frame_aux_config`
+- İmleç: `cursor_prefs_on`, `cursor_prefs_off`, `cursor_shape`, `invalid_cursor_shape_short`, `cursor_state`, `cursor_state_hidden`
 - Dosya: `files_info_ready`, `files_info_off`, `files_info_standby`, `files_net_open`, `files_net_close`, `files_hello`, `files_hello_ack`, `files_hello_ack_rejected`, `files_data`, `invalid_files_hello_short`, `invalid_files_data_empty`
 - Diğer: `unknown_type`
 - Şifreleme: `crypto_vectors.json` (§9)

@@ -51,6 +51,18 @@ class SessionSupportTest {
         assertFalse(Settings(st).penDot())
     }
 
+    @Test fun cursorSettingDefaultsToTabletAndPersists() { // T-276, decision 0036
+        val st = MemStore()
+        val s = Settings(st)
+        assertTrue(s.cursorLocal()) // "Tablette"
+        s.setCursorLocal(false)
+        assertFalse(Settings(st).cursorLocal()) // "Görüntüde"
+        s.setCursorLocal(true)
+        assertTrue(Settings(st).cursorLocal())
+        st.map["cursor_local"] = "garbage"
+        assertTrue(Settings(st).cursorLocal()) // only a stored "0" means Görüntüde
+    }
+
     @Test fun endpointParsing() {
         assertEquals(Endpoint("192.168.1.20", 7420), Endpoint.parse(" 192.168.1.20:7420 "))
         assertEquals(Endpoint("mac.local", 1), Endpoint.parse("mac.local:1"))

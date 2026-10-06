@@ -87,6 +87,8 @@ import dev.matebridge.client.stream.StatsLogWindow
 import dev.matebridge.client.stream.RefreshMismatch
 import dev.matebridge.client.stream.StreamMode
 import dev.matebridge.client.overlay.PenOverlayView
+import dev.matebridge.client.cursor.CursorOverlayView
+import dev.matebridge.client.cursor.CursorPrefsPolicy
 import dev.matebridge.client.stream.VideoLayout
 import dev.matebridge.client.stream.VideoViewport
 import dev.matebridge.client.video.VideoRenderer
@@ -210,6 +212,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var video: SurfaceView // MediaCodec -> SurfaceView, the only presentation path (T-184)
     private lateinit var panel: View
     private lateinit var penOverlay: PenOverlayView // T-056
+    /** T-276 (decision 0036): the Mac's cursor drawn on the tablet, above the video and the pen overlay. */
+    private lateinit var cursorOverlay: CursorOverlayView
+    /** T-276: what the host is told about the local cursor, and the 1.5 s timeout back to the video cursor. UI thread only. */
+    private val cursorPolicy = CursorPrefsPolicy()
+    private var cursorStatsMs = 0L
     private lateinit var statsView: TextView
     private val ui = Handler(Looper.getMainLooper())
     private val clock = ClockSync()
@@ -549,6 +556,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         val quickAck = devKnobs.quickAck
         val stallDiag = devKnobs.stallDiag
+        cursorPolicy.setWish(CursorPrefsPolicy.wishOf(streamMode, settings.cursorLocal()), SystemClock.elapsedRealtime()) // T-276
         MbLog.i("stall_diag", "enabled=${if (stallDiag) 1 else 0}", "diag") // T-142
         controller = SessionController(buildHello(), pairKeys, object : SessionListener {
             override fun onUi(state: SessionUi) { runOnUiThread { render(state) } }
@@ -596,11 +604,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             // T-095: audio is armed per control connection; stale readers' messages are dropped by generation.
             override fun onConnectionGen(gen: Int, transport: Transport) {
                 audio?.beginSession(gen, transport) // T-123: safety per transport
+                if (::cursorOverlay.isInitialized) cursorOverlay.link.beginSession(gen) // T-276: cursor messages of an older connection are dropped
                 // The host holds no input state for a new connection (a takeover released the old one). Model reset and
                 // the new send target change together, so nothing from the old model can reach the new connection.
                 runOnUiThread {
                     inputGen = gen
                     capture.onSessionReset()
+                    // T-276: a new connection (also a migration switch) starts without cursor state (the link was reset); the host resends it
+                    if (::cursorOverlay.isInitialized) cursorPolicy.onNewConnection(SystemClock.elapsedRealtime())
                     // T-096: a migration stays Connected; re-arm the clipboard for the new generation (render() accepts it).
                     if (::clipboard.isInitialized) clipboard.sync.onSessionAccepted(false, System.currentTimeMillis(), gen)
                     if (filesGate.onConnectionGen(gen, transport)) syncFiles() // T-153: a new connection is untrusted
@@ -613,7 +624,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
             override fun onAudio(msg: Message, gen: Int) { audio?.onAudio(msg, gen) } // control reader thread, never blocks
 
-            override fun onSessionEnd() { audio?.endSession("session_end") }
+            // T-276: cursor shape/state straight from the control reader thread (newest state wins, nothing queues); never blocks.
+            override fun onCursor(msg: Message, gen: Int) { if (::cursorOverlay.isInitialized) cursorOverlay.link.onMessage(msg, gen) }
+
+            override fun onSessionEnd() {
+                audio?.endSession("session_end")
+                if (::cursorOverlay.isInitialized) cursorOverlay.link.endSession() // T-276: layer cleared, cache dropped with the session
+            }
 
             override fun onSettingsOpen() { settingsOpenPost.request() } // T-105: at most one queued on the UI thread
 
@@ -629,6 +646,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             stallDiag = stallDiag, // T-142
             // T-259 (decision 0034): HELLO bit11 only while the full colour self-test has passed (read per connection)
             helloCapabilities = { if (fullChromaOn()) Capabilities.FULL_CHROMA.toLong() else 0L },
+            initialCursor = cursorPolicy.wire, // T-276: CURSOR_PREFS right after each session is accepted
         )
         startFullChromaSelfTest()
         files = FilesController({ info, scope -> controller.setFilesInfo(info, scope) }, { settings.filesScope() }) { ui.post { refreshSettings() } } // T-190: scope
@@ -681,6 +699,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         penOverlay.setVideoViewport(viewport)
         root.addView(penOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         capture.penInk = penOverlay
+        // T-276 (decision 0036): the cursor layer above the pen overlay, below the stats text and the panel; never touchable.
+        cursorOverlay = CursorOverlayView(this, ageUs = { hostUs -> clock.latencySignedUs(hostUs, System.nanoTime() / 1000) })
+        cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0)
+        root.addView(cursorOverlay, root.indexOfChild(statsView), FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         addVideoFaultOverlay() // T-159
         setupSettingsPanels()
         applyImmersive()
@@ -1052,6 +1074,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         override fun setFilesReadOnly(on: Boolean) { settings.setFilesReadOnly(on); files.rescope() } // T-190
         override val filesStatus get() = files.statusText
 
+        override val cursorLocal get() = settings.cursorLocal()
+        override fun setCursorLocal(on: Boolean) { // T-276 (decision 0036)
+            settings.setCursorLocal(on)
+            applyCursorWish()
+        }
+
         override val clipboardShare get() = clipboard.sync.enabled
         override fun setClipboardShare(on: Boolean) { // T-055
             clipboard.sync.enabled = on
@@ -1090,6 +1118,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // A 60<->120 change may recreate the virtual display once (decision 0016).
         streamMode = settings.streamMode()
         gameSettings.onModeChanged(streamMode)?.let { change -> applyGameLayer(change) }
+        applyCursorWish() // T-276: the "İmleç" default (Tablette) and the mode's rule, before STREAM_PREFS
         sendStreamPrefs(gameSettings.prefs(streamMode))
         // T-234: idle dim back to its default (its key lives in IdleTimeoutStore, not Settings).
         idleStore.reset()
@@ -1145,6 +1174,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val now = SystemClock.uptimeMillis()
             try {
                 syncInputActive(now)
+                cursorStep() // T-276
                 idle.tick(now) // T-234
                 if (now >= inputFaultUntilMs) capture.tick(now)
             } catch (e: RuntimeException) {
@@ -1190,6 +1220,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         settings.setStreamMode(m)
         idle.setGameMode(m.isGame, SystemClock.uptimeMillis()) // T-234: no idle stages in Oyun
         gameSettings.onModeChanged(m)?.let { change -> applyGameLayer(change) }
+        applyCursorWish() // T-276: Oyun sends CURSOR_PREFS(0) first (PROTOCOL.md 0x0D), then STREAM_PREFS
         sendStreamPrefs(gameSettings.prefs(m))
         refreshSettings()
         if (toast) Toast.makeText(this, m.toastText(gameSettings.fps(m), gameSettings.display(m)), Toast.LENGTH_SHORT).show()
@@ -1208,6 +1239,50 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         applyJitter()
         MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), e))
+    }
+
+    // ---- T-276 (decision 0036): local cursor ----
+
+    /** The mode or the "İmleç" setting changed: what the host should do now ([CursorPrefsPolicy.wishOf]). */
+    private fun applyCursorWish() {
+        if (!::cursorOverlay.isInitialized) return
+        val wish = CursorPrefsPolicy.wishOf(streamMode, settings.cursorLocal())
+        cursorPolicy.setWish(wish, SystemClock.elapsedRealtime())?.let { cursorWireChanged(it, fallback = false) }
+    }
+
+    /** The accepted session began or ended (from [render]): the layer follows; a session that ends resets the policy to the wish. */
+    private fun onCursorSession(connected: Boolean) {
+        if (!::cursorOverlay.isInitialized) return
+        cursorPolicy.onSession(connected, SystemClock.elapsedRealtime())?.let { controller.setCursorEnabled(it) }
+        syncCursorLayer()
+    }
+
+    /** The policy's wire value changed: remember/send it (the machine sends CURSOR_PREFS while accepted) and sync the layer. */
+    private fun cursorWireChanged(wire: Boolean, fallback: Boolean) {
+        controller.setCursorEnabled(wire)
+        syncCursorLayer()
+        if (fallback) {
+            MbLog.w("cursor_fallback", "reason=timeout retry_ms=${cursorPolicy.retryDelayMs} count=${cursorPolicy.fallbackCount}", "render")
+        }
+    }
+
+    private fun syncCursorLayer() {
+        val on = cursorPolicy.layerOn
+        if (cursorOverlay.link.enabled == on) return
+        cursorOverlay.link.enable(on)
+        if (!on) cursorOverlay.clear()
+    }
+
+    /** From [inputTicker]: the 1.5 s timeout and the per-second counters (idle seconds write nothing). */
+    private fun cursorStep() {
+        if (!::cursorOverlay.isInitialized) return
+        val now = SystemClock.elapsedRealtime()
+        cursorPolicy.tick(now, cursorOverlay.link.lastStateMs)?.let { cursorWireChanged(it.wire, it.fallback) }
+        if (now - cursorStatsMs >= 1000) {
+            cursorStatsMs = now
+            val s = cursorOverlay.stats.take()
+            if (!s.idle) MbLog.i("cursor_stats", s.fields(), "render")
+        }
     }
 
     private fun applyPenTrail(on: Boolean) {
@@ -1861,6 +1936,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         else VideoViewport.ofRect(v.left, v.top, v.width, v.height)
         viewport = next
         if (::penOverlay.isInitialized) penOverlay.setVideoViewport(viewport)
+        if (::cursorOverlay.isInitialized) cursorOverlay.setGeometry(viewport, streamConfig?.widthPt ?: 0) // T-276
         if (::capture.isInitialized) syncInputActive()
     }
 
@@ -2350,6 +2426,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         renderer?.flushPaceTrace()
         releaseRenderer() // video stops in the background; a fresh session re-requests a keyframe on return
         audio?.endSession("background") // T-095: silence at once and take no more audio; the BYE stops the host
+        onCursorSession(false) // T-276: the layer is cleared in the background; the next session starts from the wish
+        if (::cursorOverlay.isInitialized) cursorOverlay.link.endSession()
         syncFiles(foreground = false) // T-135: no session in the background, so no file server
         controller.stop() // sends BYE, closes both connections
         syncWifiLock("background") // started is false: always released here
@@ -2520,6 +2598,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (!was && clipboard.sync.accepted) clipboard.recheck() // T-063: copied while the session was down
         }
         val filesChanged = filesGate.onUi(state is SessionUi.Connected) // T-153: also while stopped (trust drops)
+        onCursorSession(state is SessionUi.Connected) // T-276: also while stopped (the layer clears, the policy resets)
         if (!started || isDestroyed) {
             syncWifiLock("stopped")
             return
@@ -2972,7 +3051,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             (if (audioAllowed) Capabilities.AUDIO_PCM else 0) or // T-095
             Capabilities.SETTINGS_PANEL or // T-105: handles SETTINGS_OPEN
             Capabilities.FILES or // T-135: sends FILES_INFO (OFF until the user enables the file server)
-            Capabilities.FILES_NET // T-269: STANDBY, FILES_NET and Wi-Fi file connections (decision 0035)
+            Capabilities.FILES_NET or // T-269: STANDBY, FILES_NET and Wi-Fi file connections (decision 0035)
+            Capabilities.LOCAL_CURSOR // T-276: sends CURSOR_PREFS, draws CURSOR_SHAPE/CURSOR_STATE (decision 0036)
         return Hello(
             protocolVersion = Limits.PROTOCOL_VERSION,
             deviceId = Bytes(settings.deviceId()),
