@@ -1,5 +1,6 @@
 package dev.matebridge.client.session
 
+import dev.matebridge.client.security.AeadPath
 import dev.matebridge.client.stream.HzPinVariant
 import dev.matebridge.client.video.ColorOverrides
 import dev.matebridge.client.video.DecoderLatencyKnobs
@@ -104,6 +105,11 @@ data class DevKnobs(
      * (the fixed 4/5 ms timeouts of today); `event` = wake-ups on events only (A/B on the device).
      */
     val decoderWait: DecoderWait = DecoderWait.POLL,
+    /**
+     * `--es aead_path legacy|direct` (T-292): how the video record decrypt drives AES-GCM. Absent or unknown =
+     * [AeadPath.LEGACY] (the T-285 behaviour).
+     */
+    val aeadPath: AeadPath = AeadPath.LEGACY,
     /** Keep: `--ez stats_1s true` (T-141). */
     val stats1s: Boolean = false,
     /** Keep: `--ez pace_trace true` (T-069). */
@@ -165,6 +171,7 @@ data class DevKnobs(
             Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
             Spec("dec_wait", Kind.STRING, debugOnly = true, ids = DecoderWait.IDS),
+            Spec("aead_path", Kind.STRING, debugOnly = true, ids = AeadPath.IDS),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
@@ -212,6 +219,7 @@ data class DevKnobs(
                 catchUp = x.bool("catch_up", true),
                 cursorPredict = x.bool("cursor_predict", true),
                 decoderWait = DecoderWait.parse(x.string("dec_wait")),
+                aeadPath = AeadPath.parse(x.string("aead_path")),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
                 stallDiag = x.bool("stall_diag", false),

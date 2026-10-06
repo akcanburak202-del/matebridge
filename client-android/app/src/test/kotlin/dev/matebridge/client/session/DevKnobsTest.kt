@@ -31,7 +31,7 @@ class DevKnobsTest {
         "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
         "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
         "pace_dcap_half" to 3, "pace_feedback" to false,
-        "catch_up" to false, "cursor_predict" to false, "dec_wait" to "event",
+        "catch_up" to false, "cursor_predict" to false, "dec_wait" to "event", "aead_path" to "direct",
     )
 
     private fun assertDefaults(k: DevKnobs) {
@@ -167,7 +167,7 @@ class DevKnobsTest {
                 "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
                 "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "dec_wait:event", "stats_1s:1",
+                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "dec_wait:event", "aead_path:direct", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -350,6 +350,19 @@ class DevKnobsTest {
         assertEquals(DecoderWait.POLL, odd.decoderWait)
         assertEquals(listOf("dec_wait:other"), odd.knobs)
         assertTrue("dec_wait" in DevKnobs.DEBUG_ONLY_KEYS)
+    }
+
+    @Test fun aeadPathKnobIsDebugOnlyDefaultLegacyAndProfileListed() {
+        val legacy = dev.matebridge.client.security.AeadPath.LEGACY
+        assertEquals(legacy, parse().aeadPath)
+        assertEquals(legacy, parse("aead_path" to "direct").aeadPath) // ignored without dev
+        val k = parse("dev" to true, "aead_path" to "direct")
+        assertEquals(dev.matebridge.client.security.AeadPath.DIRECT, k.aeadPath)
+        assertEquals(listOf("aead_path:direct"), k.knobs)
+        assertEquals(dev.matebridge.client.security.AeadPath.LEGACY, parse("dev" to true, "aead_path" to " Legacy ").aeadPath)
+        assertEquals(legacy, parse("dev" to true, "aead_path" to "boom").aeadPath)
+        assertEquals(listOf("aead_path:other"), parse("dev" to true, "aead_path" to "boom").knobs)
+        assertTrue("aead_path" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
     @Test fun catchUpKnobIsDebugOnlyDefaultOnAndProfileListed() {

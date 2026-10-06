@@ -4,10 +4,39 @@ import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.Message
 import dev.matebridge.client.protocol.ProtocolException
 import dev.matebridge.client.session.MbLog
+import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+
+/**
+ * T-292: how [RecordOpener] drives AES-GCM. Developer knob `--es aead_path legacy|direct` (needs `--ez dev true`).
+ * Wire format, nonce, AAD, per-record `init` and error behaviour are identical in both modes.
+ *
+ * Platform Conscrypt (Android 12, `OpenSSLAeadCipher`) facts behind [DIRECT] (source read, not yet measured on device):
+ * `doFinal(byte[]...)` copies the input into the SPI's internal buffer (`updateInternal`/`expand`), JNI-copies it again, and
+ * `reset()` reallocates that buffer whenever the record size changes. `doFinal(ByteBuffer, ByteBuffer)` with two direct
+ * buffers and nothing buffered goes straight to `EVP_AEAD_CTX_open_buf`: no internal copy, no allocation. (The per-`init`
+ * SPI re-creation stays: a `Cipher` with a fixed SPI never calls `engineInit`, so it cannot be reused safely.)
+ */
+enum class AeadPath(val id: String) {
+    /** The T-285 behaviour: `Cipher.doFinal(byte[])`. Default until the device A/B says otherwise. */
+    LEGACY("legacy"),
+
+    /** Direct-ByteBuffer `doFinal` (input staged into a reused direct buffer, plaintext copied out once). */
+    DIRECT("direct");
+
+    companion object {
+        val IDS: Set<String> = values().map { it.id }.toSet()
+
+        /** Unknown or absent = [LEGACY]. */
+        fun parse(v: String?): AeadPath {
+            val t = v?.trim()?.lowercase(java.util.Locale.ROOT)
+            return values().firstOrNull { it.id == t } ?: LEGACY
+        }
+    }
+}
 
 /*
  * Encrypted records (PROTOCOL.md section 9): u32 length (LE) || AES-256-GCM(type || payload) || 16-byte tag.
@@ -44,6 +73,9 @@ object Records {
         }
         return c
     }
+
+    /** Path new [RecordOpener]s use unless told otherwise; set once at launch from the `aead_path` dev knob (T-292). */
+    @Volatile var aeadPath: AeadPath = AeadPath.LEGACY
 
     /**
      * T-077 diagnostics: when true every [RecordOpener] open stamps [OpenStamps.current] of the calling thread (the
@@ -97,11 +129,20 @@ class RecordSealer(key: ByteArray, startCounter: Long = 0) {
 }
 
 /** Opens incoming records of one connection direction. */
-class RecordOpener(key: ByteArray, startCounter: Long = 0) {
+class RecordOpener(
+    key: ByteArray,
+    startCounter: Long = 0,
+    val path: AeadPath = Records.aeadPath,
+    /** Test hook: the cipher to use instead of the platform's. */
+    private val cipher: Cipher = Records.newCipher(),
+) {
     private val keySpec = SecretKeySpec(key, "AES")
-    private val cipher = Records.newCipher()
     private var counter = startCounter
     private var scratch = ByteArray(0)
+
+    // AeadPath.DIRECT only: staging buffers, grown on demand and reused for every record.
+    private var directIn: ByteBuffer? = null
+    private var directOut: ByteBuffer? = null
 
     /**
      * [header] is the 4 length bytes (the AAD), [body] is ciphertext plus tag. Returns `type || payload`.
@@ -134,14 +175,45 @@ class RecordOpener(key: ByteArray, startCounter: Long = 0) {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(Records.TAG_BYTES * 8, Records.nonce(counter)))
             cipher.updateAAD(hdr, hOff, Records.HEADER_BYTES)
             stamps?.initNs = System.nanoTime()
-            scratch = Records.ensureOutput(scratch, cipher, bLen)
-            val n = cipher.doFinal(src, bOff, bLen, scratch, 0)
+            val n = if (path == AeadPath.DIRECT) doFinalDirect(src, bOff, bLen) else {
+                scratch = Records.ensureOutput(scratch, cipher, bLen)
+                cipher.doFinal(src, bOff, bLen, scratch, 0)
+            }
             stamps?.finalNs = System.nanoTime()
             counter++
             return n
         } catch (e: GeneralSecurityException) {
             throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
+        } catch (e: RuntimeException) {
+            // A provider misbehaving (IllegalStateException, ReadOnlyBufferException, ...) must end the connection through
+            // the same terminal path as a bad tag, never escape the reader thread and skip session cleanup.
+            throw ProtocolException(ProtocolException.Kind.AUTH_FAILED, "record authentication failed")
         }
+    }
+
+    /**
+     * [AeadPath.DIRECT]: stage `src[bOff, bOff+bLen)` in a reused direct buffer, decrypt direct to direct (no Conscrypt
+     * staging copy or allocation), then copy the plaintext once into [scratch]. Returns the plaintext length.
+     */
+    private fun doFinalDirect(src: ByteArray, bOff: Int, bLen: Int): Int {
+        var din = directIn
+        if (din == null || din.capacity() < bLen) {
+            din = ByteBuffer.allocateDirect(maxOf(bLen, (din?.capacity() ?: 0) * 2)).also { directIn = it }
+        }
+        var dout = directOut
+        if (dout == null || dout.capacity() < bLen) { // plaintext is bLen - tag, but some providers want room for the tag
+            dout = ByteBuffer.allocateDirect(maxOf(bLen, (dout?.capacity() ?: 0) * 2)).also { directOut = it }
+        }
+        din.clear()
+        din.put(src, bOff, bLen)
+        din.flip()
+        dout.clear()
+        cipher.doFinal(din, dout)
+        dout.flip()
+        val got = dout.remaining() // plaintext length: the position the provider advanced to
+        if (scratch.size < got) scratch = ByteArray(maxOf(got, scratch.size * 2))
+        dout.get(scratch, 0, got)
+        return got
     }
 
     /** Plaintext of the last [openPlain]. */
