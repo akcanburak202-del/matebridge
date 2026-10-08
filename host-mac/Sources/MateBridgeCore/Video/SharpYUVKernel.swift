@@ -4,16 +4,18 @@ import Foundation
 /// by the host's `ChromaConverter` (no resource bundle to ship) and by XCTest, which runs it on plain textures and
 /// compares it with `SharpYUV.convert`.
 ///
-/// One fused kernel (T-311, decision 0033), one dispatch, no barrier between chroma and luma: `sharp_fused` runs one
-/// thread per 2x2 block. It reads the block's four pixels once, writes the block's chroma sample (2x2 box mean of
-/// Cb'/Cr' -> `rg8Unorm`, the Cb and Cr codes) and then the four luma codes (`r8Unorm`) from the chroma code it just
-/// computed (buffer 0 `mode`: 0 = plain Y', 1 = adjusted for nearest chroma upsampling; buffer 1 the EOTF table
-/// `SharpYUV.eotfTable`, `eotfTableSize` floats, in the `constant` address space). The result is identical, code for
-/// code, to the T-235 two-pass kernels (`LegacyTwoPassKernel` in XCTest keeps their source as the reference).
+/// Two kernels, two dispatches (T-314 reverted the T-311 fused kernel: it was slower on the device, 2.98 ms against
+/// 2.50 ms GPU, because one thread per 2x2 block cut the parallelism 4x and ran the four luma searches in series).
+/// `sharp_chroma` runs one thread per 2x2 block: the 2x2 box mean of Cb'/Cr' -> `rg8Unorm` (the Cb and Cr codes).
+/// `sharp_luma` runs one thread per pixel and reads that chroma texture: `r8Unorm` luma codes (buffer 0 `mode`:
+/// 0 = plain Y', 1 = adjusted for nearest chroma upsampling; buffer 1 the EOTF table `SharpYUV.eotfTable`,
+/// `eotfTableSize` floats, in the `constant` address space). The two run in separate encoders, so the chroma writes
+/// are visible to the luma pass. `LegacyTwoPassKernel` (test target, LUT in `device` memory) is the byte reference.
 /// The source texture is `bgra8Unorm` holding sRGB-encoded values (not `_srgb`: no conversion on read).
 /// Compile with safe math (`MTLCompileOptions.mathMode = .safe`) so division and rounding stay close to the CPU.
 public enum SharpYUVKernel {
-    public static let fusedFunction = "sharp_fused"
+    public static let chromaFunction = "sharp_chroma"
+    public static let lumaFunction = "sharp_luma"
 
     /// `sharp_luma`'s `mode` buffer value: nil upsampling = plain Y'.
     public static func lumaMode(_ adjustFor: SharpYUV.Upsample?) -> UInt32 {
@@ -93,45 +95,22 @@ public enum SharpYUVKernel {
         return lo;
     }
 
-    // Luma code of one pixel `c` whose 2x2 block has chroma codes `a` (Cb, Cr).
-    static inline int luma_code(float3 c, float2 a, uint mode, constant float *lut) {
-        int y0 = int(clamp(floor((KR * c.r + KG * c.g + KB * c.b) * 255.0f + 0.5f), 0.0f, 255.0f));
-        if (mode == 0) { return y0; }
-        // Flat: the decoder sees this pixel's own chroma; keep the plain code (skips the search).
-        float yp = KR * c.r + KG * c.g + KB * c.b;
-        float2 own = clamp(floor(float2((c.b - yp) / CB_B, (c.r - yp) / CR_R) * 255.0f + 128.0f + 0.5f),
-                           0.0f, 255.0f);
-        if (all(own == a)) { return y0; }
-        float cb = (a.x - 128.0f) / 255.0f, cr = (a.y - 128.0f) / 255.0f;
-        float target = luminance(c, lut);
-        // One secant step from the plain code gives a guess, usually within a code of the answer.
-        float l0 = rebuilt(y0, cb, cr, lut);
-        int dir = l0 < target ? 1 : -1;
-        int y1 = clamp(y0 + dir, 0, 255);
-        float slope = (rebuilt(y1, cb, cr, lut) - l0) * float(dir);
-        int guess = y0;
-        if (slope > 0.0f) { guess = int(clamp(rint(float(y0) + (target - l0) / slope), 0.0f, 255.0f)); }
-        float lc, lprev;
-        int code = reach(target, cb, cr, guess, lut, lc, lprev);
-        if (code > 0 && target - lprev <= lc - target) { code -= 1; }
-        return code;
+    static inline float2 chroma_code(texture2d<float, access::read> cbcr, int i, int j) {
+        int cw = int(cbcr.get_width()), ch = int(cbcr.get_height());
+        uint2 p = uint2(uint(clamp(i, 0, cw - 1)), uint(clamp(j, 0, ch - 1)));
+        return round(cbcr.read(p).rg * 255.0f);
     }
 
-    kernel void sharp_fused(texture2d<float, access::read> src [[texture(0)]],
-                            texture2d<float, access::write> cbcr [[texture(1)]],
-                            texture2d<float, access::write> luma [[texture(2)]],
-                            constant uint &mode [[buffer(0)]],
-                            constant float *lut [[buffer(1)]],
-                            uint2 gid [[thread_position_in_grid]]) {
+    kernel void sharp_chroma(texture2d<float, access::read> src [[texture(0)]],
+                             texture2d<float, access::write> cbcr [[texture(1)]],
+                             uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= cbcr.get_width() || gid.y >= cbcr.get_height()) return;
         uint w = src.get_width(), h = src.get_height();
-        float3 px[4];
         float cb = 0.0f, cr = 0.0f;
         for (uint dy = 0; dy < 2; dy++) {
             for (uint dx = 0; dx < 2; dx++) {
                 uint2 p = uint2(min(2 * gid.x + dx, w - 1), min(2 * gid.y + dy, h - 1));
                 float3 c = src.read(p).rgb;
-                px[dy * 2 + dx] = c;
                 float yp = KR * c.r + KG * c.g + KB * c.b;
                 cb += (c.b - yp) / CB_B;
                 cr += (c.r - yp) / CR_R;
@@ -139,15 +118,45 @@ public enum SharpYUVKernel {
         }
         float2 code = clamp(floor(float2(cb, cr) * 0.25f * 255.0f + 128.0f + 0.5f), 0.0f, 255.0f);
         cbcr.write(float4(code / 255.0f, 0.0f, 0.0f), gid);
-        for (uint dy = 0; dy < 2; dy++) {
-            for (uint dx = 0; dx < 2; dx++) {
-                uint2 p = uint2(2 * gid.x + dx, 2 * gid.y + dy);
-                // Past the edge of an odd-sized frame: the block's repeated pixel has no luma sample.
-                if (p.x >= w || p.y >= h) continue;
-                int y = luma_code(px[dy * 2 + dx], code, mode, lut);
-                luma.write(float4(float(y) / 255.0f, 0.0f, 0.0f, 0.0f), p);
+    }
+
+    kernel void sharp_luma(texture2d<float, access::read> src [[texture(0)]],
+                           texture2d<float, access::read> cbcr [[texture(1)]],
+                           texture2d<float, access::write> luma [[texture(2)]],
+                           constant uint &mode [[buffer(0)]],
+                           constant float *lut [[buffer(1)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= luma.get_width() || gid.y >= luma.get_height()) return;
+        float3 c = src.read(gid).rgb;
+        int y0 = int(clamp(floor((KR * c.r + KG * c.g + KB * c.b) * 255.0f + 0.5f), 0.0f, 255.0f));
+        int out = y0;
+        if (mode != 0) {
+            int i = int(gid.x >> 1), j = int(gid.y >> 1);
+            float2 a = chroma_code(cbcr, i, j);
+            float2 v = a;
+            // Flat: the decoder sees this pixel's own chroma; keep the plain code (skips the search).
+            float yp = KR * c.r + KG * c.g + KB * c.b;
+            float2 own = clamp(floor(float2((c.b - yp) / CB_B, (c.r - yp) / CR_R) * 255.0f + 128.0f + 0.5f),
+                               0.0f, 255.0f);
+            if (all(own == a)) {
+                luma.write(float4(float(y0) / 255.0f, 0.0f, 0.0f, 0.0f), gid);
+                return;
             }
+            float cb = (v.x - 128.0f) / 255.0f, cr = (v.y - 128.0f) / 255.0f;
+            float target = luminance(c, lut);
+            // One secant step from the plain code gives a guess, usually within a code of the answer.
+            float l0 = rebuilt(y0, cb, cr, lut);
+            int dir = l0 < target ? 1 : -1;
+            int y1 = clamp(y0 + dir, 0, 255);
+            float slope = (rebuilt(y1, cb, cr, lut) - l0) * float(dir);
+            int guess = y0;
+            if (slope > 0.0f) { guess = int(clamp(rint(float(y0) + (target - l0) / slope), 0.0f, 255.0f)); }
+            float lc, lprev;
+            int code = reach(target, cb, cr, guess, lut, lc, lprev);
+            if (code > 0 && target - lprev <= lc - target) { code -= 1; }
+            out = code;
         }
+        luma.write(float4(float(out) / 255.0f, 0.0f, 0.0f, 0.0f), gid);
     }
     """
 }
