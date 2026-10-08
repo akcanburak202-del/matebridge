@@ -1,7 +1,7 @@
 ---
 id: T-309
 title: Host — yerel imleç örnekleyicisi her girdi olayında imleç görüntüsünü kopyalayıp hash'liyor; biçim kontrolü yalnız imleç değiştiğinde
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
