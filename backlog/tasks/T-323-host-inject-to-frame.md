@@ -1,7 +1,7 @@
 ---
 id: T-323
 title: Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -46,3 +46,9 @@ Core: `InjectToFrameMatcher` (saf eşleştirme) + `InjectToFrameMeter` (kilitli,
 - Review round 2 (Codex high, 2 x P2): (1) the generation token is now taken once when `VideoPipeline` is created (`probeGeneration` property) and passed to `ScreenCapture.init`; `start()` no longer reads it, so a delayed start/retry cannot adopt a newer session's token. This touches `Video/VideoPipeline.swift` (property + one argument), outside `files:`, as the coordinator asked; (2) `InjectToFrameProbe` does session begin/end, frame validate+meter update, injection note and report-take (fields + the session ids they belong to) under one lock; end-of-session flush is taken and logged with the ending ids. No Core test added: the token rule lives in the Host-only probe. check.sh result below in the commit message/report.
 
 ## Open questions
+
+- (orkestratör, 2026-10-08) **Bilinen sınırlar, kabul edildi (tanı ölçüsü, yaklaşık):** Codex 3. tur iki P2 buldu.
+  1. Bir oturumun yeniden yapılandırması `stopKeepingDisplay` beklerken oturum değişirse, yeni pipeline sonraki oturumun belirtecini alabilir.
+  2. `noteInjection` saati kilitten önce okuduğundan yakalama geri çağrısı basmayı geçerse ilk yanıt karesi kaçabilir; örnek `timeout` ya da şişkin sayılır.
+
+  İkisi de nadir; yalnız `inject_to_frame` istatistiğini etkiler, girdiyi ve akışı etkilemez. Ölçüm karar için kullanılırsa yeniden ele alınır.
