@@ -227,6 +227,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         self.server = server
         tabletFiles.attach(link: server)  // Wi-Fi files (T-268): peer address, file keys, FILES_NET
         coordinator.onOverflow = { [server] in server.endSessions() }
+        // T-325: a stalled coordinator refuses new sessions; the last resort releases input first, then restarts.
+        coordinator.onRefuseSessions = { [server] in server.setRefusingSessions($0) }
+        coordinator.onStallRestart = { [input] in
+            StallRestart.run(.init(
+                releaseInput: { input.shutdown() },  // release-all + bounded drain of owed releases, idempotent
+                scheduleRelaunch: {
+                    // Starts the helper before the terminate; it opens a new instance only after this pid is gone.
+                    let path = Bundle.main.bundlePath
+                    guard path.hasSuffix(".app") else { return }
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+                    p.arguments = StallRestart.relaunchArguments(pid: getpid(), bundlePath: path)
+                    p.standardInput = nil
+                    p.standardOutput = nil
+                    p.standardError = nil
+                    try? p.run()
+                },
+                requestTerminate: {  // applicationWillTerminate runs the full orderly shutdown
+                    DispatchQueue.main.async { NSApp.terminate(nil) }
+                },
+                forceExit: { exit(75) },
+                log: { HostLog.log(.error, component: "net", event: "stall_restart", fields: $0) }))
+        }
         coordinator.onReconfigure = { [server] sid, config in server.reconfigureStream(sessionID: sid, config: config) }
         clipboard.send = { [server] sid, message in server.sendToSession(sessionID: sid, message) }
         audio.attach(sink: server)

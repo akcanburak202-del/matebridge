@@ -36,12 +36,14 @@ public enum BoundedWait {
     }
 
     /// Runs `operation`; returns `.completed` when it finished within `timeout` seconds, `.timedOut` otherwise.
+    /// `onLateCompletion` runs if the operation returns after a timeout (so the caller can account for abandoned work).
     public static func run(timeout: TimeInterval,
+                           onLateCompletion: (@Sendable () -> Void)? = nil,
                            _ operation: @escaping @Sendable () async -> Void) async -> Outcome {
         let gate = Gate()
         let task = Task.detached {
             await operation()
-            gate.resolve(.completed)
+            if !gate.resolve(.completed) { onLateCompletion?() }
         }
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
         timer.schedule(deadline: .now() + max(0, timeout))

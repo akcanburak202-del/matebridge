@@ -13,6 +13,7 @@ files:
   - host-mac/Sources/MateBridgeCore/Video/
   - host-mac/Sources/MateBridgeCore/Session/
   - host-mac/Tests/MateBridgeCoreTests/
+  - host-mac/Sources/MateBridgeApp/main.swift  # (orchestrator)
   - backlog/tasks/T-325-coordinator-stall.md
 ---
 
@@ -68,7 +69,16 @@ Taşma döngüsü: takılı döngü varken her oturum `sessionStarted`/`videoAtt
 - `defaultStallRestart` (open -n + exit) hiç çalıştırılmadı; paketli uygulamada eşiği düşürerek ya da `onStallRestart` tetikleyerek denenmeli. TCC kimliği aynı paket olduğundan korunmalı.
 - `endSessions` `queue.async` olduğundan `exit(75)` onu yarıda kesebilir; 10. sn'de zaten çalışmış olmalı (30. sn'deki ikinci çağrı yalnız yedek).
 
+**Review round 1 (Codex high: P1 + P2), additional commit**
+- P1(a): from the 10 s step the watchdog calls `onRefuseSessions(true)` -> `SessionServer.setRefusingSessions`; `acceptControl`/`acceptVideo` cancel new connections (`connection_refused reason=coordinator_stalled`, `sessions_refused state=on`). Lifted when the stalled event ends, never after a restart was requested.
+- P1(b): `main.swift` `onStallRestart` -> `StallRestart.run` (Core): `input.shutdown()` (release-all + bounded drain of owed releases, idempotent) on a background queue, waited at most 1.5 s, logs `E net ev=stall_restart input=done|pending`. I reused `InputController.shutdown()` (the quit path, same drain) instead of the sleep participant; both share `releaseOnQueue`/`drainOwed`.
+- P1(c): then `NSApp.terminate` via the main queue (`applicationWillTerminate` runs `input.shutdown` again, server stop, coordinator shutdown); if the process is still alive after 4 s, `exit(75)` (`terminate=timeout` logged). The old `exit(75)` default in the coordinator was removed; without a hook the coordinator only ends sessions.
+- P1(d): the relaunch helper (`/bin/sh`, started before the terminate) polls `kill -0 <old pid>` once a second and runs `open -n <bundle>` only after the old pid is gone; after 25 s of waiting it gives up and opens nothing, so there is never a second instance next to the old one. Only for `.app` bundles.
+- P2: `AbandonedStops` (Core, process-wide). `VideoPipeline.boundedStop` registers a timed-out capture/encoder stop, logs `pipeline_stop_timeout` and `pipeline_stop_abandoned step= n=`, and clears it when the stuck call returns late. The watchdog poll escalates through the same restart path at 2 open stops or one older than 60 s (`coordinator_stall_recover action=restart reason=stop_abandoned`). A restart is requested at most once per process.
+- Tests: `StallRestartTests.swift` (order release -> relaunch -> terminate -> exit, hung input still restarts with `input=pending`, relaunch waits for the old pid, abandoned-stop thresholds and late completion, session-refusal steps). check.sh: ALL OK.
+- Unverified on hardware: the whole restart path (terminate, relaunch helper, TCC identity after relaunch) and `sessions_refused` on a real tablet reconnect. A wedged input queue is covered only by the 1.5 s bound (`input=pending`).
+
 ## Open questions
 
-- `main.swift` dosya listesinde yok: `onStallRestart` bağlanmadı. Bağlanacaksa kapsam genişletilmeli.
+- (Resolved in review round 1) `main.swift` was added with the orchestrator's permission.
 - `p.start()` (sanal ekran/startCapture) beklemeleri sınırsız bırakıldı; yalnız bekçi kapsıyor.

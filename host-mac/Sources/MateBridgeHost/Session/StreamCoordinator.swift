@@ -145,9 +145,14 @@ public final class StreamCoordinator: @unchecked Sendable {
     private let watchdogLock = NSLock()
     private var watchdog = CoordinatorWatchdog()
     private var watchdogTimer: DispatchSourceTimer?
-    /// Last resort of the watchdog (stall of `CoordinatorWatchdog.restartUs`): the app should end its sessions and
-    /// relaunch or quit cleanly. Default: `defaultStallRestart`. Called on the watchdog queue.
+    /// Last resort of the watchdog (stall of `CoordinatorWatchdog.restartUs`, or abandoned stops): the app releases
+    /// input synchronously, then relaunches and quits (`StallRestart`). Called on the watchdog queue; may block.
     public var onStallRestart: (@Sendable () -> Void)?
+    /// From the 10 s step on, the session layer refuses new connections until this is called with false (the loop
+    /// recovered). Called on the watchdog queue.
+    public var onRefuseSessions: @Sendable (Bool) -> Void = { _ in }
+    private var refusingSessions = false
+    private var restartRequested = false
     /// Bound of every wait in the stop path (T-325); past it `ev=consumer_stop_timeout` / `ev=pipeline_stop_timeout`.
     static let stopTimeout: TimeInterval = 2
 
@@ -380,13 +385,15 @@ public final class StreamCoordinator: @unchecked Sendable {
         await handle(event)
         let over = watchdogLock.withLock { watchdog.end(nowUs: HostClock.nowUs()) }
         if let over {
+            refuseSessions(false)  // the loop is back: sessions may start again (unless a restart is under way)
             logger.log(.warning, "coordinator_stall_over", sessionID: 0, generation: 0,
                        fields: "event=\(over.kind) ms=\(over.ms)")
         }
     }
 
-    /// Watchdog queue, once a second. The loop may be stuck, so this touches no loop state: it logs, ends the sessions
-    /// (input released, BYE, through `onOverflow`) and as the last resort restarts the process.
+    /// Watchdog queue, once a second. The loop may be stuck, so this touches no loop state: it logs, refuses new
+    /// sessions and ends the live ones (input released, BYE, through `onOverflow`), and as the last resort restarts the
+    /// process through `onStallRestart` (input release first, see `StallRestart`).
     private func pollWatchdog() {
         let actions = watchdogLock.withLock { watchdog.poll(nowUs: HostClock.nowUs()) }
         for action in actions {
@@ -396,31 +403,41 @@ public final class StreamCoordinator: @unchecked Sendable {
             case .endSessions(let kind, let ms):
                 logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
                            fields: "action=end_sessions event=\(kind) ms=\(ms)")
+                refuseSessions(true)
                 onOverflow()
             case .restart(let kind, let ms):
-                logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
-                           fields: "action=restart event=\(kind) ms=\(ms)")
-                onOverflow()  // again: a session that started meanwhile must not outlive the process
-                if let onStallRestart { onStallRestart() } else { Self.defaultStallRestart() }
+                requestRestart(fields: "event=\(kind) ms=\(ms)")
             }
+        }
+        // T-325 review: abandoned capture/encoder stops keep blocked work alive; too many or too old escalates.
+        if let why = AbandonedStops.shared.escalation(nowUs: HostClock.nowUs()) {
+            requestRestart(fields: "reason=stop_abandoned \(why)")
         }
     }
 
-    /// No app hook: relaunch the bundle shortly after this process is gone, then exit. Without a LaunchAgent (T-202)
-    /// this is the only way back; outside a `.app` bundle (swift run, tests) the process only exits. The virtual
-    /// display belongs to the process and disappears with it, so macOS shows its placeholder display again.
-    private static func defaultStallRestart() {
-        let path = Bundle.main.bundlePath
-        if path.hasSuffix(".app") {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/bin/sh")
-            p.arguments = ["-c", "sleep 3; /usr/bin/open -n \"$1\"", "sh", path]
-            p.standardInput = nil
-            p.standardOutput = nil
-            p.standardError = nil
-            try? p.run()
+    /// From the 10 s step until the loop recovers (or the process restarts), nothing new may start: a session that
+    /// began now could press keys the restart would have to release again.
+    private func refuseSessions(_ on: Bool) {
+        let changed = watchdogLock.withLock { () -> Bool in
+            if !on && restartRequested { return false }  // a restart is under way: stay closed
+            defer { refusingSessions = on }
+            return refusingSessions != on
         }
-        exit(75)
+        if changed { onRefuseSessions(on) }
+    }
+
+    /// Once per process. Sessions are refused and ended first; then the app hook releases input synchronously and
+    /// restarts. Without a hook (tests, tools) nothing more happens.
+    private func requestRestart(fields: String) {
+        let first = watchdogLock.withLock { () -> Bool in
+            defer { restartRequested = true }
+            return !restartRequested
+        }
+        guard first else { return }
+        logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0, fields: "action=restart \(fields)")
+        refuseSessions(true)
+        onOverflow()
+        onStallRestart?()
     }
 
     // MARK: Event loop

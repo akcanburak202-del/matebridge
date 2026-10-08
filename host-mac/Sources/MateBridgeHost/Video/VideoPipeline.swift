@@ -429,6 +429,20 @@ public final class VideoPipeline: @unchecked Sendable {
     private static let stopStepTimeout: TimeInterval = 3
     private static let stopLogger = SessionLogger(component: "video")
 
+    /// One bounded step of the stop path. A timeout leaves the blocked call behind; it is counted in
+    /// `AbandonedStops` until it returns, and the coordinator watchdog restarts the host when too many pile up or one
+    /// stays stuck for a minute (T-325 review).
+    private static func boundedStop(step: String, _ operation: @escaping @Sendable () async -> Void) async {
+        let tracker = AbandonedStops.shared
+        let token = tracker.newToken()
+        let outcome = await BoundedWait.run(timeout: stopStepTimeout, onLateCompletion: { tracker.completed(token) },
+                                            operation)
+        guard outcome == .timedOut else { return }
+        let open = tracker.abandon(token, step: step, nowUs: HostClock.nowUs())
+        stopLogger.log(.error, "pipeline_stop_timeout", sessionID: 0, generation: 0, fields: "step=\(step)")
+        stopLogger.log(.error, "pipeline_stop_abandoned", sessionID: 0, generation: 0, fields: "step=\(step) n=\(open)")
+    }
+
     /// Stops capture, flushes and closes the encoder, removes the virtual display, ends the queue. Idempotent.
     public func stop() async {
         guard markStopped() else { return }
@@ -476,12 +490,8 @@ public final class VideoPipeline: @unchecked Sendable {
         // T-325: neither wait may be unbounded. A ScreenCaptureKit stop or a VideoToolbox flush that never answers
         // used to hold the stream coordinator's event loop (and with it every later session) forever. Past the bound
         // the step is abandoned (the stuck call stays behind) and the display is released as usual.
-        if let cap, await BoundedWait.run(timeout: Self.stopStepTimeout, { await cap.stop() }) == .timedOut {
-            Self.stopLogger.log(.error, "pipeline_stop_timeout", sessionID: 0, generation: 0, fields: "step=capture")
-        }
-        if let enc, await BoundedWait.run(timeout: Self.stopStepTimeout, { await enc.shutdown() }) == .timedOut {
-            Self.stopLogger.log(.error, "pipeline_stop_timeout", sessionID: 0, generation: 0, fields: "step=encoder")
-        }
+        if let cap { await Self.boundedStop(step: "capture") { await cap.stop() } }
+        if let enc { await Self.boundedStop(step: "encoder") { await enc.shutdown() } }
         box.encoder = nil
         auxBox.encoder = nil
         frames.finish()
