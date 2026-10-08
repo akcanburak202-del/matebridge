@@ -56,6 +56,12 @@ fun buildIdentity(what: String): Provider<String> = providers.of(BuildIdentity::
     parameters.dir.set(layout.projectDirectory)
 }
 
+// T-301: one provider per value, shared by every variant. Gradle memoises a ValueSource per build, so debug and daily
+// from one invocation get the same versionCode even across a minute boundary.
+val sharedMinutes = buildIdentity("minutes")
+val sharedSha = buildIdentity("sha")
+val sharedTime = buildIdentity("time")
+
 android {
     namespace = "dev.matebridge.client"
     compileSdk = 37
@@ -116,19 +122,19 @@ androidComponents {
     onVariants { variant ->
         // T-301: versionCode is build-time minutes, not the commit count: a non-debuggable app cannot be downgraded, and
         // worktree branches have fewer commits than main. The commit stays in versionName, BuildConfig.GIT_SHA and app_start.
-        val versionCode = buildIdentity("minutes").map { it.toInt() }
-        val versionName = buildIdentity("sha").map { "0.1-$it" }
+        val versionCode = sharedMinutes.map { it.toInt() }
+        val versionName = sharedSha.map { "0.1-$it" }
         variant.outputs.forEach {
             it.versionCode.set(versionCode)
             it.versionName.set(versionName)
         }
         variant.buildConfigFields?.put(
             "GIT_SHA",
-            buildIdentity("sha").map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },
+            sharedSha.map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },
         )
         variant.buildConfigFields?.put(
             "BUILD_TIME_UTC",
-            buildIdentity("time").map { BuildConfigField("String", "\"$it\"", "UTC build time, minute precision (T-146)") },
+            sharedTime.map { BuildConfigField("String", "\"$it\"", "UTC build time, minute precision (T-146)") },
         )
     }
 }

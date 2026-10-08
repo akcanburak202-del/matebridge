@@ -58,3 +58,7 @@ Yeni tür `daily` (debug'dan initWith; isDebuggable/isJniDebuggable=false, debug
 - check.sh: `assembleDaily` yalnız client-android için istenir (probe'larda `daily` yok).
 - versionCode artık derleme zamanı dakikası (2026-01-01 UTC'den beri), commit sayısı değil: debug olmayan uygulamada sürüm düşürme yapılamaz (`-d` yetmez) ve worktree dalları main'den az commit'e sahip. Böylece yeni derleme her zaman eskinin üstüne kurulur; eski bir APK'yı sonradan geri kurmak yine düşürmedir, yeniden derlemek gerekir. Commit SHA `versionName` ("0.1-<sha>"), `BuildConfig.GIT_SHA` ve `app_start`'ta kalır. T-146 kartındaki "versionCode = commit sayısı" bu kartla geçersizdir; ona bağlı test yok. Handoff'taki "iki yönlü yerinde güncelleme" iddiası bu sınırla okunmalı.
 - install-apk.sh: VERSION_DOWNGRADE için açık mesaj. `client-android/AGENTS.md` minSdk 31 (orkestratör izniyle).
+
+### Review turu 2 (Codex P2)
+
+- Derleme zamani ust duzey tek provider lardan (sharedMinutes/sharedSha/sharedTime) okunur; ayni Gradle cagrisinda debug ve daily ayni versionCode u alir (dakika siniri yarisi yok).
