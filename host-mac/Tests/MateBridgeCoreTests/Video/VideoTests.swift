@@ -119,6 +119,39 @@ final class AnnexBTests: XCTestCase {
         XCTAssertEqual(AnnexB.convert(lengthPrefixed: []), [])
     }
 
+    /// T-313 (A2): the in-place conversion is the old copy-and-convert, byte for byte, for valid and malformed input.
+    func testConvertInPlaceEqualsConvertByteForByte() {
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func next() -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int(seed >> 33)
+        }
+        var cases: [[UInt8]] = [[], [0, 0], [0, 0, 0, 0], [0, 0, 0, 9, 1, 2], [0, 0, 0, 2, 0x40, 0x01, 0, 0, 0, 3, 0x26, 0x01, 0xAA],
+                                [0, 0, 0, 1], [0, 0, 0, 1, 7, 0, 0], [0xFF, 0xFF, 0xFF, 0xFF, 1]]
+        for _ in 0..<300 {  // well-formed frames of 1...6 NAL units
+            var frame: [UInt8] = []
+            for _ in 0..<(1 + next() % 6) {
+                let len = 1 + next() % 300
+                frame += [UInt8(len >> 24 & 0xFF), UInt8(len >> 16 & 0xFF), UInt8(len >> 8 & 0xFF), UInt8(len & 0xFF)]
+                frame += (0..<len).map { _ in UInt8(truncatingIfNeeded: next()) }
+            }
+            cases.append(frame)
+            cases.append(Array(frame.dropLast(1 + next() % 3)))  // truncated
+            var corrupt = frame
+            corrupt[next() % min(4, corrupt.count)] = UInt8(truncatingIfNeeded: next())
+            cases.append(corrupt)
+        }
+        for lengthSize in [4, 2, 1, 3] {
+            for input in cases {
+                var inPlace = input
+                let ok = AnnexB.convertInPlace(&inPlace, lengthSize: lengthSize)
+                let expected = AnnexB.convert(lengthPrefixed: input, lengthSize: lengthSize)
+                XCTAssertEqual(ok, expected != nil)
+                if let expected { XCTAssertEqual(inPlace, expected) }
+            }
+        }
+    }
+
     func testTwoByteLengthPrefix() {
         XCTAssertEqual(AnnexB.convert(lengthPrefixed: [0, 2, 7, 8], lengthSize: 2), [0, 0, 0, 1, 7, 8])
     }

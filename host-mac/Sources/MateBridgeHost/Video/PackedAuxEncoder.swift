@@ -38,6 +38,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private var inFlight = 0
     private var failures = 0
     private var lastParameterSets: [UInt8] = []
+    private var formatCache = ParameterSetCache()  // guarded by `lock`
     private var closed = false
 
     /// - Parameters:
@@ -171,19 +172,15 @@ final class PackedAuxEncoder: @unchecked Sendable {
     @discardableResult
     private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, pairID: UInt64, encodeUs: UInt64) -> Bool {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return false }
-        let isKey: Bool = {
-            guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
-                  let first = arr.first else { return true }
-            return (first[kCMSampleAttachmentKey_NotSync] as? Bool) != true
-        }()
+        let isKey = HEVCEncoder.isKeyframe(sb)
         let discard: Bool = lock.withLock {
             if isKey { awaitingKeyframe = false }
             return awaitingKeyframe
         }
         if discard { return false }
-        let (sets, lengthSize) = HEVCEncoder.parameterSets(format, codec: .hevc)
-        let blob = AnnexB.parameterSets(sets)
-        let changed: Bool = lock.withLock {
+        let (params, isNewFormat) = lock.withLock { formatCache.parameters(for: format, codec: .hevc) }
+        let blob = params.blob
+        let changed: Bool = isNewFormat && lock.withLock {
             let c = !blob.isEmpty && blob != lastParameterSets
             if c { lastParameterSets = blob }
             return c
@@ -193,8 +190,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
             config.view = 1
             output(config, 0)
         }
-        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = HEVCEncoder.bytes(of: block),
-              let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return false }
+        guard let annexB = HEVCEncoder.annexBPayload(of: sb, lengthSize: params.lengthSize) else { return false }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.view = 1
         frame.pairID = pairID

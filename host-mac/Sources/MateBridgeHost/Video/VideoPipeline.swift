@@ -578,8 +578,8 @@ private final class PackedMonitorBox: @unchecked Sendable {
             let extra = max(0, queueDroppedTotal - lastQueueDropped) + max(0, senderDroppedTotal - lastSenderDropped)
             lastQueueDropped = queueDroppedTotal
             lastSenderDropped = senderDroppedTotal
-            for _ in 0..<offered { monitor.recordOffered() }
-            for _ in 0..<(lost + extra) { monitor.recordLost() }
+            monitor.recordOffered(offered)
+            monitor.recordLost(lost + extra)
             return monitor.closeWindow()
         }
     }
