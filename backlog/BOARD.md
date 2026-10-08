@@ -27,7 +27,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-295](tasks/T-295-client-remove-fallback-knobs.md) | Tablet — T-286 `dec_wait poll` ve T-292 `aead_path legacy` yedek yollarını kaldır | 6 | android-client-dev | [T-286, T-292] |
 
 ## done
 
@@ -308,3 +307,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-292](tasks/T-292-aead-decrypt-copies.md) | İstemci — video kaydı şifre çözmede Conscrypt kopyalarını ve kayıt başına SPI yeniden kurulumunu azalt | 6 | android-client-dev | [T-285] |
 | [T-293](tasks/T-293-host-pipeline-breaker.md) | Host — kalıcı medya hatasında devre kesici (video bağlanınca bütçeye sor, bekleme 10/20/30 sn, aynı cihazın oturumunda sıfırlama yok) | 6 | mac-host-dev | [T-291] |
 | [T-294](tasks/T-294-client-video-retry-backoff.md) | Tablet — kare gelmeyen video bağlantılarında yeniden açma geri çekilmesi; "manual" durumda 10 sn'de bir kendiliğinden dönüş | 6 | android-client-dev | [T-291] |
+| [T-295](tasks/T-295-client-remove-fallback-knobs.md) | Tablet — T-286 `dec_wait poll` ve T-292 `aead_path legacy` yedek yollarını kaldır | 6 | android-client-dev | [T-286, T-292] |

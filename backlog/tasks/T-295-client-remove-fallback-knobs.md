@@ -1,7 +1,7 @@
 ---
 id: T-295
 title: Tablet — T-286 `dec_wait poll` ve T-292 `aead_path legacy` yedek yollarını kaldır
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-286, T-292]
