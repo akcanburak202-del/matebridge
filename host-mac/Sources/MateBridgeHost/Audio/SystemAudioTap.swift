@@ -131,9 +131,16 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
                 // On the tap queue, in this order: whatever capture lived through the sleep is interrupted FIRST, then the
                 // gate clears and the pending start is restored, so a capture built for that start is never the one
                 // the wake interrupts.
+                // T-308: the sleep this wake belongs to. The queue may stay blocked (permission prompt) past a second
+                // sleep; the queued job must then leave that newer sleep's gate alone.
+                let sleepGeneration = lock.withLock { sleepGate.generation }
                 queue.async {
+                    guard self.lock.withLock({ self.sleepGate.generation == sleepGeneration }) else {
+                        self.logger.log(.info, "audio_wake_stale", sessionID: 0, generation: 0, fields: "")
+                        return  // a newer sleep owns the gate, its teardown and its wake
+                    }
                     if let r = self.run { self.interrupt(r, reason: "wake") }
-                    self.resumeAfterSleep(wake: true)
+                    self.resumeAfterSleep(wake: true, generation: sleepGeneration)
                 }
             }
         }
@@ -185,9 +192,9 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     /// Wake, or the window's expiry: clears the sleeping window and restores the pending start (if its session did not
     /// stop meanwhile) as `desired`, so audio starts without a toggle.
-    private func resumeAfterSleep(wake: Bool) {
+    private func resumeAfterSleep(wake: Bool, generation: UInt64? = nil) {
         let resumed: UInt16? = lock.withLock {
-            let ended = wake ? sleepGate.wake() : sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
+            let ended = wake ? sleepGate.wake(ifGeneration: generation ?? sleepGate.generation) : sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
             guard ended, let p = pending else { return nil }
             pending = nil
             desired = p

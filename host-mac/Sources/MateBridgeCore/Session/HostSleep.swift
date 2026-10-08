@@ -92,13 +92,20 @@ public struct HostSleepInputGate: Sendable, Equatable {
 
     private var closedAtNs: UInt64?
 
+    /// T-308: sleep generation. Bumped by every `set`, so a wake job queued for an earlier sleep can tell that a newer
+    /// sleep has re-set the gate since (`wake(ifGeneration:)`).
+    public private(set) var generation: UInt64 = 0
+
     public init() {}
 
     /// The gate is set (closed or not yet noticed as expired).
     public var isSet: Bool { closedAtNs != nil }
 
     /// Closes the gate at `awakeNs` (the sleep participant, before its release-all). Setting again restarts the window.
-    public mutating func set(awakeNs: UInt64) { closedAtNs = awakeNs }
+    public mutating func set(awakeNs: UInt64) {
+        closedAtNs = awakeNs
+        generation &+= 1
+    }
 
     /// True while openings must be dropped: set, and fewer than `windowNs` of awake time have passed. A session start
     /// does NOT clear it: a paired client may still connect between the release and the real sleep.
@@ -111,6 +118,13 @@ public struct HostSleepInputGate: Sendable, Equatable {
     public mutating func wake() -> Bool {
         defer { closedAtNs = nil }
         return closedAtNs != nil
+    }
+
+    /// T-308: wake that belongs to the sleep numbered `generation` (read when the wake was noticed). Does nothing when a
+    /// newer sleep has set the gate since: that sleep's gate stays closed. True when the gate was set and is now cleared.
+    public mutating func wake(ifGeneration generation: UInt64) -> Bool {
+        guard generation == self.generation else { return false }
+        return wake()
     }
 
     /// Clears a gate whose window ran out. True when it did.

@@ -1,7 +1,7 @@
 ---
 id: T-308
 title: Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: [T-299]
@@ -24,6 +24,12 @@ T-299 Codex 5. tur P2. Senaryo: tap kuyruğu izin penceresi yüzünden uyku → 
 
 ## Plan
 
+`HostSleepInputGate` gets a `generation` counter bumped by every `set`, and `wake(ifGeneration:)` that is a no-op when a newer sleep re-set the gate. The tap reads the generation under its lock when the wake notification fires, and the queued job checks it again before interrupting or clearing.
+
 ## Handoff
+
+- Files: Core `Session/HostSleep.swift` (generation, `wake(ifGeneration:)`), `Audio/SystemAudioTap.swift` (wake handler captures the generation; a stale job logs `audio_wake_stale` and returns), new test `Session/HostSleepGateGenerationTests.swift` (3 tests). check.sh: ALL OK.
+- Assumption: a stale wake also skips `interrupt(run)`; the newer sleep owns teardown. The expiry path is unchanged (evaluated fresh).
+- Not tested: the blocked-queue double sleep itself (needs a permission prompt held across two sleeps); the tap wiring is Host-only.
 
 ## Open questions
