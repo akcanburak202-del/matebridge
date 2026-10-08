@@ -425,6 +425,10 @@ public final class VideoPipeline: @unchecked Sendable {
     /// `VTSessionSetProperty` failures at encoder creation (empty when all were accepted).
     public var encoderPropertyFailures: [String] { box.encoder?.propertyFailures ?? [] }
 
+    /// Bound of one step of the stop path (T-325).
+    private static let stopStepTimeout: TimeInterval = 3
+    private static let stopLogger = SessionLogger(component: "video")
+
     /// Stops capture, flushes and closes the encoder, removes the virtual display, ends the queue. Idempotent.
     public func stop() async {
         guard markStopped() else { return }
@@ -469,8 +473,15 @@ public final class VideoPipeline: @unchecked Sendable {
     @discardableResult
     private func teardown(keepingDisplay: Bool = false) async -> VirtualDisplay? {
         let (cap, enc, disp, inh) = takeResources()
-        await cap?.stop()
-        await enc?.shutdown()
+        // T-325: neither wait may be unbounded. A ScreenCaptureKit stop or a VideoToolbox flush that never answers
+        // used to hold the stream coordinator's event loop (and with it every later session) forever. Past the bound
+        // the step is abandoned (the stuck call stays behind) and the display is released as usual.
+        if let cap, await BoundedWait.run(timeout: Self.stopStepTimeout, { await cap.stop() }) == .timedOut {
+            Self.stopLogger.log(.error, "pipeline_stop_timeout", sessionID: 0, generation: 0, fields: "step=capture")
+        }
+        if let enc, await BoundedWait.run(timeout: Self.stopStepTimeout, { await enc.shutdown() }) == .timedOut {
+            Self.stopLogger.log(.error, "pipeline_stop_timeout", sessionID: 0, generation: 0, fields: "step=encoder")
+        }
         box.encoder = nil
         auxBox.encoder = nil
         frames.finish()
