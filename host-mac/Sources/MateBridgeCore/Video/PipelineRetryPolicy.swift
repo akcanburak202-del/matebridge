@@ -116,12 +116,14 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
     /// STREAM_PREFS were applied for the current device. Only a real user change resets: the normalized prefs differ
     /// from the last ones applied (kept across session renewals). The first value after start, a device change or a
     /// reset is not a change, and neither is a replay of the same prefs whose derived settings changed in the meantime
-    /// (negotiation, fallbacks). Returns whether it reset.
+    /// (negotiation, fallbacks). The effective settings must change too (`settingsChanged`): prefs that derive the same
+    /// settings (e.g. a bitrate overridden by `MATEBRIDGE_BITRATE_KBPS`) rebuild the same pipeline. The history is
+    /// updated either way. Returns whether it reset.
     @discardableResult
-    public mutating func prefsApplied(_ prefs: StreamPrefs) -> Bool {
+    public mutating func prefsApplied(_ prefs: StreamPrefs, settingsChanged: Bool) -> Bool {
         let normalized = prefs.normalized
         defer { lastPrefs = normalized }
-        guard let last = lastPrefs, last != normalized else { return false }
+        guard let last = lastPrefs, last != normalized, settingsChanged else { return false }
         reset()
         return true
     }

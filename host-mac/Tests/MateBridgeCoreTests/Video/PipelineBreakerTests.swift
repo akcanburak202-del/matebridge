@@ -249,29 +249,42 @@ final class PipelineBreakerTests: XCTestCase {
     func testPrefsReplayAcrossRenewalsNeverResetsOnlyARealChangeDoes() {
         var p = PipelineRetryPolicy()
         p.sessionStarted(device: device(1))
-        XCTAssertFalse(p.prefsApplied(prefs()), "the first value after start is not a change")
+        XCTAssertFalse(p.prefsApplied(prefs(), settingsChanged: false), "the first value after start is not a change")
         openBreaker(&p)
         // Renewal: same device, the tablet replays the same prefs on accept (packed now granted: the derived settings
         // changed, the prefs did not).
         for _ in 0..<3 {
             p.sessionStarted(device: device(1))
-            XCTAssertFalse(p.prefsApplied(prefs()))
+            XCTAssertFalse(p.prefsApplied(prefs(), settingsChanged: true))
             XCTAssertEqual(p.breaker.state, .open)
         }
         // A different value is the user's change.
-        XCTAssertTrue(p.prefsApplied(prefs(fps: 60)))
+        XCTAssertTrue(p.prefsApplied(prefs(fps: 60), settingsChanged: true))
         XCTAssertEqual(p.breaker, .init(state: .closed, level: 0, waitUs: 0))
         XCTAssertEqual(p.admit(nowUs: 5 * s), .build)
+    }
+
+    func testPrefsDifferButSettingsEqualDoesNotResetButUpdatesHistory() {
+        var p = PipelineRetryPolicy()
+        p.sessionStarted(device: device(1))
+        _ = p.prefsApplied(prefs(), settingsChanged: false)
+        openBreaker(&p)
+        // e.g. a bitrate change that MATEBRIDGE_BITRATE_KBPS overrides: same effective settings.
+        XCTAssertFalse(p.prefsApplied(prefs(fps: 60), settingsChanged: false))
+        XCTAssertEqual(p.breaker.state, .open)
+        // The replay of the new prefs, now with changed derived settings, is still no change.
+        XCTAssertFalse(p.prefsApplied(prefs(fps: 60), settingsChanged: true))
+        XCTAssertEqual(p.breaker.state, .open)
     }
 
     func testPrefsHistoryIsForgottenOnOtherDeviceAndOnReset() {
         var p = PipelineRetryPolicy()
         p.sessionStarted(device: device(1))
-        _ = p.prefsApplied(prefs())
+        _ = p.prefsApplied(prefs(), settingsChanged: false)
         p.sessionStarted(device: device(2))
-        XCTAssertFalse(p.prefsApplied(prefs(fps: 60)), "no previous value for this device")
+        XCTAssertFalse(p.prefsApplied(prefs(fps: 60), settingsChanged: true), "no previous value for this device")
         p.reset()  // Mac wake
-        XCTAssertFalse(p.prefsApplied(prefs()), "forgotten by a reset")
+        XCTAssertFalse(p.prefsApplied(prefs(), settingsChanged: false), "forgotten by a reset")
     }
 
     func testStoppedAfterLongRunChangesTheSnapshotSoTheOwnerLogsIt() {

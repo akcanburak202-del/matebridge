@@ -500,7 +500,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         // T-293: only a real user change of the prefs (not a replay on accept) starts the breaker over.
         let breakerBefore = retryPolicy.breaker
-        if retryPolicy.prefsApplied(prefs) {
+        if retryPolicy.prefsApplied(prefs, settingsChanged: wanted != live.settings) {
             if breakerBefore.state != .closed { log(.info, "pipeline_breaker_reset", "reason=prefs_change") }
             logBreaker(from: breakerBefore)
         }
