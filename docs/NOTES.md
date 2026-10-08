@@ -1852,3 +1852,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - `skip_pct` dalgalı; pil bedeli bilinmiyor → T-320.
 - Tablet kilit ekranına düşmüştü (ölçümler arası "Boşta karart" varsayılana dönmüştü). Kurulumu kullanıcı yaptı.
 - Bitişte `main` daily APK kuruldu (`versionCode` 404154), ayarlar geri alındı.
+
+## 2026-10-08 ~19:50 — Host koordinatörü takıldı; kullanıcı Mac'i zorla kapattı (T-325)
+
+- Oyun akışında (Wi-Fi, ~62 Mbps) kontrol bağlantısında yeniden gönderimler oldu; tablet BYE gönderdi.
+- Host `onSessionEnded` civarında takıldı: saniyelik satırlar durdu, `display_parked` yok.
+- Sonraki her bağlantıda `E net ev=event_overflow` → `sessions_ended_by_host` → `shutdown` (9 kez). Kullanıcı bağlanamadı ve Mac'i güç tuşuyla kapattı.
+- Kayıp yok: `main` push'luydu. Yarıda kalan T-322/T-323/T-324 düzeltmeleri WIP commit olarak kaydedildi, yeni ajanlarla tamamlanıyor.
+- Şüpheli: `stopConsumer` önce `await sender.stop()`, sonra `link.cancel()` (bloklu ya da iptale duyarsız bekleme). Takılma anının profili yok. T-325: belirsiz beklemelere süre sınırı, koordinatör bekçisi (`coordinator_stall`), taşma döngüsünü kırma.
