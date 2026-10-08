@@ -61,6 +61,8 @@ Dört mantıksal grup, her biri ayrı commit: (1) ölü/test-yalnız kod + CPU r
 - Gerçek donanımda doğrulanacak (orkestratör): Keskin renk, Tam renk (packed444, aux CODEC_CONFIG view=1), HDR açılışı, yeniden bağlanma (VIDEO_HELLO yolu `Message.decode`), imleç ayarı (CURSOR_PREFS epoch posta kutusu), pano gelen metin, bir oturum kapat/aç (park/teardown reason log'u `ev=display_teardown reason=`), `ev=profile knobs=` satırında REFINE.
 - Öneri: LOGGING.md/KNOBS.md (kapsam dışı): KNOBS açık nokta 3 kapandı (REFINE* artık `knobs=`'ta), `ev=app` onay log'ları (`approval_shown/disconnected/dismissed`) artık `host.log` dosyasında da görünür.
 
+- Review round 1 (Codex P2): `ClipboardBridge.drainIncoming` looped, so an update arriving during `applyIncoming` also queued a redundant block. Now each scheduled block takes exactly one value (at most one running and one waiting); a coalescer test covers it. The cursor-prefs user is unchanged (it already takes once per wake).
+
 ## Open questions
 
 - E11 ayrı karta alınsın mı (test sitelerinin mekanik dönüşümü)?

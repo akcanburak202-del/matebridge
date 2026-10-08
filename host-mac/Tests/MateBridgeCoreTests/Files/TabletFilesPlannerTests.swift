@@ -1038,6 +1038,18 @@ private func deadLeftoverWithForward() -> TabletFilesPlanner {
         #expect(old && new && stale == nil && current == 2)
     }
 
+    @Test func anUpdateAfterTakeSchedulesExactlyOneMoreBlockNotOnePerUpdate() {
+        // ClipboardBridge: one block takes one value. While it applies the clip, a burst arrives.
+        var m = EpochCoalescer<Int>()
+        let first = m.offer(1, epoch: 0)
+        let taken = m.take(epoch: 0)  // block 1 is applying this clip
+        let burst = [m.offer(2, epoch: 0), m.offer(3, epoch: 0), m.offer(4, epoch: 0)]
+        #expect(first && taken == 1)
+        #expect(burst == [true, false, false])  // one extra block, which then takes the newest
+        #expect(m.take(epoch: 0) == 4)
+        #expect(m.take(epoch: 0) == nil)  // nothing is left for any further block
+    }
+
     @Test func clearDropsPendingAndTheNextValueSchedulesItsOwnWake() {
         var m = EpochCoalescer<Int>()
         _ = m.offer(1, epoch: 0)

@@ -90,11 +90,13 @@ public final class ClipboardBridge: @unchecked Sendable {
         }
     }
 
+    /// One scheduled block takes exactly one value. `take` clears the coalescer's pending slot, so an update that arrives
+    /// while this block applies a clip schedules exactly one more block (the queue is serial); a loop here would also
+    /// consume that update and leave the extra block behind. At most one block runs and one waits, however many arrive.
     private func drainIncoming() {
-        while let clip = incomingLock.withLock({ incoming.take(epoch: 0) }) {
-            guard sessionID != nil, let bytes = engine.applyIncoming(clip) else { continue }
-            logger.log(.info, "clipboard", sessionID: sessionID ?? 0, generation: 0, fields: "dir=in bytes=\(bytes)")
-        }
+        guard let clip = incomingLock.withLock({ incoming.take(epoch: 0) }) else { return }
+        guard sessionID != nil, let bytes = engine.applyIncoming(clip) else { return }
+        logger.log(.info, "clipboard", sessionID: sessionID ?? 0, generation: 0, fields: "dir=in bytes=\(bytes)")
     }
 
     private func poll() {
