@@ -360,7 +360,7 @@ final class PackedChromaFlowTests: XCTestCase {
         q.push(frame(10, key: true))
         XCTAssertNil(q.tryPop(where: { $0.captureTimeUs == 99 }))
         XCTAssertEqual(q.tryPop(where: { $0.captureTimeUs == 10 })?.captureTimeUs, 10)
-        XCTAssertFalse(q.hasFrames)
+        XCTAssertNil(q.tryPop())
     }
 
     func testBreakChainRefusesDeltasUntilAKeyframe() {

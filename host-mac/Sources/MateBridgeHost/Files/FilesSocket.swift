@@ -131,8 +131,6 @@ final class FilesSocket: @unchecked Sendable {
         if !started, phase != .closed { close(fd) }  // a started socket closes through its sources
     }
 
-    var isClosed: Bool { phase == .closed }
-
     /// Bytes queued in user space and not yet taken by the kernel.
     var pendingBytes: Int { outbound.count - outboundStart }
 

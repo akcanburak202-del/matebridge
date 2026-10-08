@@ -45,7 +45,7 @@ final class DisplayLeaseTests: XCTestCase {
         XCTAssertEqual(l.sessionStarted(device: device(1), settings: s), [.create(s)])
         XCTAssertTrue(l.tick(now: 100 * sec).isEmpty, "no grace while the session is active")
         l.sessionEnded(now: 100 * sec)
-        XCTAssertTrue(l.isInGrace)
+        XCTAssertTrue(l.isParked)
         XCTAssertTrue(l.tick(now: 109 * sec).isEmpty)
         XCTAssertEqual(l.tick(now: 110 * sec), [.teardown], "closes exactly after 10 s")
         XCTAssertFalse(l.hasDisplay)
@@ -57,7 +57,7 @@ final class DisplayLeaseTests: XCTestCase {
         _ = l.sessionStarted(device: device(1), settings: s)
         l.sessionEnded(now: 0)
         XCTAssertEqual(l.sessionStarted(device: device(1), settings: s), [.reuse])
-        XCTAssertFalse(l.isInGrace)
+        XCTAssertFalse(l.isParked)
         XCTAssertTrue(l.tick(now: 60 * sec).isEmpty, "reuse cancelled the grace timer")
     }
 

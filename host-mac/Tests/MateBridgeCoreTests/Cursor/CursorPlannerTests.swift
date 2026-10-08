@@ -511,7 +511,7 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
         s.restart(nowUs: 0, replaced: 3)
         for i in 1...100 { s.recordSample(costUs: UInt64(i), ok: i != 7) }
         for _ in 0..<40 { s.recordState() }
-        s.recordShapeBuilt()
+        s.recordShapeWork(built: 1, failures: 0, checks: 0)
         s.recordShapeSent(bytes: 300)
         s.recordShapeSent(bytes: 200)
         #expect(s.takeReport(nowUs: 999_999, replaced: 5) == nil)  // window still open

@@ -15,9 +15,9 @@ import Foundation
 /// `DisplayRecreateGap` before creating the new one. `.teardown` + `.create` is only for another device or native
 /// size.
 public struct DisplayLease: Sendable {
-    public static let defaultGraceUs: UInt64 = 10_000_000
     /// `MATEBRIDGE_DISPLAY_KEEP_S` bounds and default (T-165). The upper bound is one day.
     public static let defaultKeepSeconds = 10
+    public static let defaultGraceUs = UInt64(defaultKeepSeconds) * 1_000_000
     public static let keepSecondsRange = 10...86_400
 
     public enum Action: Equatable, Sendable {
@@ -62,8 +62,6 @@ public struct DisplayLease: Sendable {
 
     public var hasDisplay: Bool { if case .idle = state { false } else { true } }
     public var isParked: Bool { if case .parked = state { true } else { false } }
-    /// Former name of `isParked`.
-    public var isInGrace: Bool { isParked }
 
     public mutating func sessionStarted(device: DeviceID, settings: VideoSettings) -> [Action] {
         switch state {

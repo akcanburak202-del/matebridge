@@ -31,9 +31,6 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// Next frame without waiting (nil when empty).
     public func tryPop() -> EncodedVideoFrame? { lock.withLock { policy.pop() } }
 
-    /// The head frame without removing it.
-    public func peek() -> EncodedVideoFrame? { lock.withLock { policy.first } }
-
     /// Removes and returns the head frame only when `accept` says so (decided under the queue lock, so the frame
     /// judged is the frame removed). `accept` must be quick and must not call back into this queue.
     public func tryPop(where accept: (EncodedVideoFrame) -> Bool) -> EncodedVideoFrame? {
@@ -42,8 +39,6 @@ public final class VideoFrameQueue: @unchecked Sendable {
             return policy.pop()
         }
     }
-
-    public var hasFrames: Bool { lock.withLock { !policy.isEmpty } }
 
     public var isFinished: Bool { lock.withLock { finished } }
 
@@ -101,31 +96,6 @@ public final class VideoFrameQueue: @unchecked Sendable {
         w?.cont.resume(returning: nil)
     }
 
-    /// Prepares for a newly attached consumer: holds only [config], deltas refused until a keyframe arrives.
-    /// The caller then forces a keyframe from the encoder.
-    public func startNewConsumer(config: EncodedVideoFrame?) {
-        lock.lock()
-        policy.startNewConsumer(config: config)
-        lock.unlock()
-    }
-
-    /// Resyncs the attached consumer (see `BoundedFrameQueue.resync`). A waiting consumer receives `config` at once.
-    /// The caller must force a keyframe from the encoder **after** this returns, which is what guarantees the
-    /// consumer sees the config before that keyframe.
-    public func resync(config: EncodedVideoFrame) {
-        _ = resync(config: { config })
-    }
-
-    /// Same, but the config is read by `provider` **while the queue lock is held**. Encoder output goes through
-    /// `push`, which takes the same lock, so a config the encoder announces cannot slip in between the snapshot and
-    /// the reset: it is either already queued (and visible to the provider) or queued after the reset. `provider`
-    /// must be quick and must not call back into this queue. Returns false, and leaves the queue untouched, when it
-    /// returns nil (no parameter sets exist yet).
-    @discardableResult
-    public func resync(config provider: () -> EncodedVideoFrame?) -> Bool {
-        resyncCountingKeyframes(config: provider).configQueued
-    }
-
     /// Outcome of `resyncCountingKeyframes`.
     public struct ResyncResult: Equatable, Sendable {
         /// A config was queued (false: no parameter sets yet, queue untouched).
@@ -135,7 +105,14 @@ public final class VideoFrameQueue: @unchecked Sendable {
         public var keyframesPushed: UInt64
     }
 
-    /// `resync(config:)` that also returns the keyframe push count seen atomically with the reset.
+    /// Resyncs the attached consumer (see `BoundedFrameQueue.resync`), with the config read by `provider` **while the
+    /// queue lock is held**. Encoder output goes through `push`, which takes the same lock, so a config the encoder
+    /// announces cannot slip in between the snapshot and the reset: it is either already queued (and visible to the
+    /// provider) or queued after the reset. `provider` must be quick and must not call back into this queue. A waiting
+    /// consumer receives the config at once. The caller must force a keyframe from the encoder **after** this returns,
+    /// which is what guarantees the consumer sees the config before that keyframe. When `provider` returns nil (no
+    /// parameter sets yet) the queue is left untouched and `configQueued` is false.
+    /// The result also carries the keyframe push count seen atomically with the reset.
     @discardableResult
     public func resyncCountingKeyframes(config provider: () -> EncodedVideoFrame?) -> ResyncResult {
         lock.lock()
@@ -156,8 +133,8 @@ public final class VideoFrameQueue: @unchecked Sendable {
     /// has reached the queue once the count grows (T-122).
     public var keyframesPushed: UInt64 { lock.lock(); defer { lock.unlock() }; return pushedKeyframes }
 
-    /// `startNewConsumer` with the config snapshot taken under the queue lock (see `resync(config:)`). Unlike
-    /// `resync`, the queue is reset even when there is no config yet.
+    /// `startNewConsumer` with the config snapshot taken under the queue lock (see `resyncCountingKeyframes`). Unlike
+    /// a resync, the queue is reset even when there is no config yet.
     public func startNewConsumer(configProvider: () -> EncodedVideoFrame?) {
         lock.lock()
         policy.startNewConsumer(config: configProvider())

@@ -83,7 +83,7 @@ final class KeyframeResyncTests: XCTestCase {
         let q = VideoFrameQueue(keyframeNeeded: {})
         let waiting = Task { await q.next() }
         try? await Task.sleep(nanoseconds: 50_000_000)
-        q.resync(config: config())                   // no further push needed to wake the consumer
+        q.resyncCountingKeyframes(config: { config() }) // no further push needed to wake the consumer
         let first = await waiting.value
         XCTAssertEqual(first?.isCodecConfig, true)
         q.push(delta(1))                             // refused (awaiting keyframe)
@@ -95,7 +95,7 @@ final class KeyframeResyncTests: XCTestCase {
     func testAsyncResyncDropsStaleFramesAndKeepsOrder() async {
         let q = VideoFrameQueue(keyframeNeeded: {})
         q.push(delta(1)); q.push(delta(2))
-        q.resync(config: config())
+        q.resyncCountingKeyframes(config: { config() })
         q.push(key(3))
         let a = await q.next(), b = await q.next()
         XCTAssertEqual(a?.isCodecConfig, true)
@@ -153,12 +153,12 @@ final class KeyframeResyncTests: XCTestCase {
         let q = VideoFrameQueue(keyframeNeeded: {})
         let pushed = DispatchSemaphore(value: 0)
         let configA = config(1), configB = config(2)
-        let resent = q.resync(config: {
+        let resent = q.resyncCountingKeyframes(config: {
             DispatchQueue.global().async { q.push(configB); pushed.signal() }  // encoder announces B
             Thread.sleep(forTimeInterval: 0.15)      // B's push is now waiting on the queue lock
             return configA                           // stale snapshot A
         })
-        XCTAssertTrue(resent)
+        XCTAssertTrue(resent.configQueued)
         XCTAssertEqual(pushed.wait(timeout: .now() + 2), .success)
         q.push(key(3))
         let exp = expectation(description: "drained")
@@ -174,7 +174,7 @@ final class KeyframeResyncTests: XCTestCase {
     func testResyncWithoutConfigLeavesQueueUntouched() {
         let q = VideoFrameQueue(keyframeNeeded: {})
         q.push(delta(1))
-        XCTAssertFalse(q.resync(config: { nil }))
+        XCTAssertFalse(q.resyncCountingKeyframes(config: { nil }).configQueued)
         q.push(delta(2))                             // still accepted: no awaiting-keyframe state was entered
         let exp = expectation(description: "drained")
         Task {

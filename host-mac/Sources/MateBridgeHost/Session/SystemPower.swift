@@ -97,8 +97,6 @@ final class DisplaySleepAssertion: @unchecked Sendable {
         case failed(String)
     }
 
-    var isHeld: Bool { lock.withLock { id != nil } }
-
     /// Takes the assertion unless it is already held.
     func hold() -> Change {
         lock.withLock {

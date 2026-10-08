@@ -424,8 +424,6 @@ final class HEVCEncoder: @unchecked Sendable {
     static var sessionPrimaries: CFString { kCVImageBufferColorPrimaries_ITU_R_709_2 }
     static var sessionTransfer: CFString { kCVImageBufferTransferFunction_sRGB }
     static var sessionMatrix: CFString { kCVImageBufferYCbCrMatrix_ITU_R_709_2 }
-    static let sessionColorTags = ColorTags(primaries: sessionPrimaries as String, transfer: sessionTransfer as String,
-                                            matrix: sessionMatrix as String)
 
     /// The session's colour properties for a dynamic range: SDR as above; HDR10 BT.2020 / SMPTE ST 2084 (PQ) /
     /// BT.2020 (decision 0032). Their string values equal `SessionColorTags` (tested in Core).

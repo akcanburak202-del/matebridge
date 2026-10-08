@@ -204,7 +204,7 @@ final class NewConsumerTests: XCTestCase {
     func testAsyncQueueDeliversConfigThenKeyframeToNewConsumer() async {
         let q = VideoFrameQueue(keyframeNeeded: {})
         q.push(delta(1))
-        q.startNewConsumer(config: config())
+        q.startNewConsumer(configProvider: { config() })
         q.push(delta(2))
         q.push(key(3))
         let a = await q.next(), b = await q.next()

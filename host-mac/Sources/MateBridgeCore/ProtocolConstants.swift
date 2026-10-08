@@ -7,9 +7,7 @@ public enum ProtocolConstants {
     public static let deviceIDSize = 16
     /// Longest CLIPBOARD `data` (docs/PROTOCOL.md 0x06).
     public static let clipboardMaxBytes = 60_000
-    public static let penSampleSize = 16
     public static let penMaxSamples = 64
-    public static let penFixedSize = 12
     /// `client_nonce`, `host_nonce`, `video_nonce`.
     public static let nonceSize = 16
     /// Uncompressed P-256 point (`04 || X || Y`).

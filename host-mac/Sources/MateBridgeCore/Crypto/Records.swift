@@ -172,8 +172,6 @@ public struct ControlInbound: Sendable {
 
     public init() {}
 
-    public var isEncrypted: Bool { secure != nil }
-
     /// Plaintext bytes received but not yet consumed (always 0 once encrypted).
     public var bufferedPlaintextCount: Int { plain?.bufferedCount ?? 0 }
 

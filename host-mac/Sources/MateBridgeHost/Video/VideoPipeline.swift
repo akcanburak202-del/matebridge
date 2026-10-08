@@ -388,12 +388,6 @@ public final class VideoPipeline: @unchecked Sendable {
         return decision
     }
 
-    /// `handleKeyframeRequest` for callers that only need to know whether a config was re-sent.
-    @discardableResult
-    public func requestKeyframe(reason: KeyframeReason, view: KeyframeView? = nil) -> Bool {
-        handleKeyframeRequest(reason: reason, view: view).action == .configResent
-    }
-
     /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122).
     public func takeKeyframeWindow() -> KeyframeRequestCoalescer.Window { keyframes.update { $0.takeWindow() } }
 

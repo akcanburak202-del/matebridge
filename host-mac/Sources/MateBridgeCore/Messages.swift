@@ -361,7 +361,6 @@ public struct StreamConfig: Equatable, Sendable {
     }
 
     /// The stream is a packed full colour pair (`chroma_layout = 1`).
-    public var isPacked444: Bool { chromaLayout == 1 }
 
     func write(_ w: inout ByteWriter) {
         w.u16(configID)

@@ -24,11 +24,14 @@ public struct CursorStats: Sendable {
         shapes += 1
         shapeBytes += bytes
     }
-    /// A new shape was rendered and encoded (a cache miss in the tracker, not a send).
-    public mutating func recordShapeBuilt() { shapesBuilt += 1 }
-    public mutating func recordShapeFailure() { shapeFailures += 1 }
-    /// The cursor image was read to compute the shape id (rate limited, T-309).
-    public mutating func recordShapeCheck() { shapeChecks += 1 }
+    /// Shape work since the previous call, as deltas: `built` new shapes rendered and encoded (cache misses in the
+    /// tracker, not sends), `failures` renders that failed, `checks` cursor image reads to compute the shape id (rate
+    /// limited, T-309).
+    public mutating func recordShapeWork(built: Int, failures: Int, checks: Int) {
+        shapesBuilt += built
+        shapeFailures += failures
+        shapeChecks += checks
+    }
     /// One poll or injection sample took `costUs`; `ok` false when the cursor could not be read.
     public mutating func recordSample(costUs: UInt64, ok: Bool) {
         samples += 1
