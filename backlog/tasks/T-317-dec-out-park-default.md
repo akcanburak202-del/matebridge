@@ -1,7 +1,7 @@
 ---
 id: T-317
 title: Tablet — dec_out_park varsayılanı on (T-312 A/B kabul); off bir döngü geri dönüş
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-312]
@@ -30,6 +30,14 @@ Hareket sahnesinde fark yok (beklenen).
 
 ## Plan
 
+`DevKnobs.decOutPark` varsayılan true, parse `!= "off"`; `VideoRenderer.outPark` varsayılan true; testler güncellenir. Knob debug-only kalır (off yalnız dev ile).
+
 ## Handoff
+
+- Commit: bkz. `git log task/T-317-out-park-default -1`. check.sh: ALL OK.
+- Dosyalar: DevKnobs.kt, VideoRenderer.kt, OutputPark.kt (yorum), DevKnobsTest.kt, bu kart.
+- Not: bilinmeyen değer artık varsayılan olan on'a düşer. `off` yalnız `--ez dev true` ile geçerli (knob debug-only). Yorumlarda "sonra kaldırılır" yazıyor.
+- Tablette kontrol: varsayılan açılışta `ev=profile knobs=-`; `--ez dev true --es dec_out_park off` ile `knobs=dec_out_park:off` ve uyanma sayısının ~1.175/s'e dönmesi; normal akışta cap_dec p50 ~21 ms.
+- Önerilen KNOBS metni: `dec_out_park` artık varsayılan `on`; `--es dec_out_park off` (dev ile) bir döngü boyunca eski 5 ms poll'a geri dönüş, sonra kaldırılır. `ev=profile knobs=` yalnız `dec_out_park:off` iken bu girdiyi gösterir.
 
 ## Open questions

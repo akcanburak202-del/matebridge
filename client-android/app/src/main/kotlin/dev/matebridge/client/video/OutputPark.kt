@@ -17,7 +17,7 @@ import java.util.concurrent.locks.LockSupport
  * resynchronisation logic: a count that stays above 0 only means the thread keeps today's poll. While a frame is in
  * flight the caller keeps the short dequeue poll (no long dequeue: a stop or an error is still noticed in 5 ms).
  *
- * Disabled ([enabled] false, the default `dec_out_park off`): never parks, nothing is counted, i.e. exactly the
+ * Disabled ([enabled] false, `dec_out_park off`, the one-cycle fallback): never parks, nothing is counted, i.e. exactly the
  * previous behaviour.
  *
  * Threads: [onQueued] / [onQueueFailed] / [signal] from the input thread (or the retiring thread); the rest from the

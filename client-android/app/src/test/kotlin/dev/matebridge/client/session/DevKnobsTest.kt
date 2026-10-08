@@ -26,7 +26,7 @@ class DevKnobsTest {
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
         "decoder_fault_after_s" to 15, "game_display" to 0,
         "pace_dcap_half" to 3, "pace_feedback" to false,
-        "catch_up" to false, "dec_out_park" to "on", "cursor_predict" to false,
+        "catch_up" to false, "dec_out_park" to "off", "cursor_predict" to false,
         "audio_idle_pause" to "stop",
     )
 
@@ -49,7 +49,7 @@ class DevKnobsTest {
         assertEquals(PacerTuning.STANDARD, k.pacerTuning) // T-251
         assertTrue(k.catchUp) // T-252
         assertTrue(k.cursorPredict) // T-278
-        assertFalse(k.decOutPark) // T-312
+        assertTrue(k.decOutPark) // T-312, default on since T-317
         assertEquals(d.copy(dev = k.dev, ignored = k.ignored, knobs = k.knobs, stats1s = k.stats1s, paceTrace = k.paceTrace, stallDiag = k.stallDiag), k)
     }
 
@@ -137,7 +137,7 @@ class DevKnobsTest {
                 "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
                 "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
                 "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0",
-                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:on", "cursor_predict:0", "stats_1s:1",
+                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "dec_out_park:off", "cursor_predict:0", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -271,15 +271,16 @@ class DevKnobsTest {
         assertTrue("catch_up" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
-    @Test fun decOutParkKnobIsDebugOnlyDefaultOffAndProfileListed() { // T-312
-        assertFalse(parse().decOutPark)
-        assertFalse(parse("dec_out_park" to "on").decOutPark) // ignored without dev
-        assertFalse(parse("dev" to true, "dec_out_park" to "off").decOutPark)
-        assertFalse(parse("dev" to true, "dec_out_park" to "bogus").decOutPark)
-        val k = parse("dev" to true, "dec_out_park" to " ON ")
-        assertTrue(k.decOutPark)
-        assertEquals(listOf("dec_out_park:on"), k.knobs)
-        assertEquals(listOf("dec_out_park:off"), parse("dev" to true, "dec_out_park" to "off").knobs)
+    @Test fun decOutParkKnobDefaultsOnOffIsDebugOnlyFallbackAndProfileListed() { // T-312, default on since T-317
+        assertTrue(parse().decOutPark)
+        assertEquals(emptyList<String>(), parse().knobs)
+        assertTrue(parse("dec_out_park" to "off").decOutPark) // ignored without dev
+        assertTrue(parse("dev" to true, "dec_out_park" to "bogus").decOutPark)
+        val on = parse("dev" to true, "dec_out_park" to " ON ")
+        assertTrue(on.decOutPark)
+        val k = parse("dev" to true, "dec_out_park" to " OFF ")
+        assertFalse(k.decOutPark)
+        assertEquals(listOf("dec_out_park:off"), k.knobs)
         assertTrue("dec_out_park" in DevKnobs.DEBUG_ONLY_KEYS)
     }
 

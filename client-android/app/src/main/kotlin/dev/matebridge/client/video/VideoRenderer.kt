@@ -195,9 +195,10 @@ class VideoRenderer(
 
     /**
      * T-312 (CB2): the output thread parks while the codec holds nothing instead of polling every 5 ms ([OutputPark]);
-     * `--es dec_out_park on` for A/B, default off. Read when a codec starts.
+     * default on (T-317); `--es dec_out_park off` is the one-cycle fallback
+     * (removed later). Read when a codec starts.
      */
-    @Volatile var outPark: Boolean = false
+    @Volatile var outPark: Boolean = true
 
     private fun applyCatchUpDepth(fps: Int) {
         queue.catchUpDepth = if (catchUp) CatchUp.depthForFps(fps) else 0

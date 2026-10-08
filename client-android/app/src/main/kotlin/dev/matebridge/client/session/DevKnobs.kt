@@ -76,9 +76,10 @@ data class DevKnobs(
     val catchUp: Boolean = true,
     /**
      * `--es dec_out_park off|on` (T-312, CB2): the decoder output thread parks while the codec holds nothing instead of
-     * polling every 5 ms. A/B knob; default off (off = the pre-T-312 poll). Applies to codecs started afterwards.
+     * polling every 5 ms. Default on (T-317, T-312 device A/B: -28% wakeups, no cap_dec cost); `off` is the pre-T-312
+     * poll, kept as a one-cycle fallback and removed later. Applies to codecs started afterwards.
      */
-    val decOutPark: Boolean = false,
+    val decOutPark: Boolean = true,
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
     /** Keep: `--ez stats_1s true` (T-141). */
@@ -167,7 +168,7 @@ data class DevKnobs(
                     if (x.has("pace_dcap_half")) x.int("pace_dcap_half", 0) else null, x.bool("pace_feedback", true),
                 ),
                 catchUp = x.bool("catch_up", true),
-                decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) == "on",
+                decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) != "off",
                 cursorPredict = x.bool("cursor_predict", true),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),
