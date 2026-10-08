@@ -21,8 +21,8 @@ public struct DisplayLease: Sendable {
     public static let keepSecondsRange = 10...86_400
 
     public enum Action: Equatable, Sendable {
-        /// Tear down the current display and pipeline (also a parked display). Why: `lastTeardownReason`.
-        case teardown
+        /// Tear down the current display and pipeline (also a parked display), and why (log field `reason=`).
+        case teardown(TeardownReason)
         /// Create a display and pipeline with these settings.
         case create(VideoSettings)
         /// Keep the existing display. If it is parked, build a new pipeline on it with the session's settings.
@@ -35,7 +35,7 @@ public struct DisplayLease: Sendable {
         case park
     }
 
-    /// Why the last `.teardown` was returned (log field `reason=`).
+    /// Why a `.teardown` was returned (log field `reason=`).
     public enum TeardownReason: String, Equatable, Sendable {
         case keepExpired = "keep_expired"
         case deviceChanged = "device_changed"
@@ -55,8 +55,6 @@ public struct DisplayLease: Sendable {
     /// Keep time of a parked display, in microseconds (name kept from the grace period it replaces).
     public let graceUs: UInt64
     private var state = State.idle
-    /// Set whenever a call returns `.teardown`; read by the owner right after that call.
-    public private(set) var lastTeardownReason: TeardownReason?
 
     public init(graceUs: UInt64 = DisplayLease.defaultGraceUs) { self.graceUs = graceUs }
 
@@ -98,8 +96,7 @@ public struct DisplayLease: Sendable {
     public mutating func tick(now: UInt64) -> [Action] {
         guard case .parked(_, _, let deadline) = state, now >= deadline else { return [] }
         state = .idle
-        lastTeardownReason = .keepExpired
-        return [.teardown]
+        return [.teardown(.keepExpired)]
     }
 
     /// The pipeline died on its own, or there was nothing to park; nothing is left to tear down.
@@ -108,13 +105,11 @@ public struct DisplayLease: Sendable {
     public mutating func shutdown() -> [Action] {
         defer { state = .idle }
         guard hasDisplay else { return [] }
-        lastTeardownReason = .shutdown
-        return [.teardown]
+        return [.teardown(.shutdown)]
     }
 
     private mutating func teardownAndCreate(_ settings: VideoSettings, _ reason: TeardownReason) -> [Action] {
-        lastTeardownReason = reason
-        return [.teardown, .create(settings)]
+        return [.teardown(reason), .create(settings)]
     }
 
     // MARK: Keep time (T-165)

@@ -91,25 +91,7 @@ public enum NotSentLowatKnob {
     }
 
     public static func parseKB(_ env: [String: String]) -> Int { parseKB(env["MATEBRIDGE_NOTSENT_LOWAT_KB"]) }
-}
 
-/// The video socket settings, read once at start. The video and control connections are always kernel BSD sockets
-/// (`BsdTcpListener`/`BsdTcpConnection`): the Network.framework (`nw`) stack and its `MATEBRIDGE_VIDEO_SOCKET` /
-/// `MATEBRIDGE_CONTROL_SOCKET` knobs were retired in T-186 (decision 0026; `nw` capped at ~27 Mbps with retransmits
-/// on Wi-Fi, T-091). Those variables are no longer read.
-public struct VideoSocketSettings: Equatable, Sendable {
-    public var notSentLowatKB: Int
-
-    public init(notSentLowatKB: Int = NotSentLowatKnob.defaultKB) {
-        self.notSentLowatKB = notSentLowatKB
-    }
-
-    public static func parse(_ env: [String: String]) -> VideoSocketSettings {
-        VideoSocketSettings(notSentLowatKB: NotSentLowatKnob.parseKB(env))
-    }
-
-    public var notSentLowatBytes: Int { notSentLowatKB * 1024 }
-
-    /// For `ev=listening`: `video_socket=bsd notsent_lowat_kb=128` (default). `video_socket` is constant since T-186.
-    public var logFields: String { "video_socket=bsd notsent_lowat_kb=\(notSentLowatKB)" }
+    /// The setting in bytes.
+    public static func bytes(_ env: [String: String]) -> Int { parseKB(env) * 1024 }
 }

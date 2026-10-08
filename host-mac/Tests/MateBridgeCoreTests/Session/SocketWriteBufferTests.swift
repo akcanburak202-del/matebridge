@@ -167,17 +167,11 @@ final class SocketWriteBufferTests: XCTestCase {
         }
     }
 
-    func testVideoSocketSettingsLogFields() {
-        XCTAssertEqual(VideoSocketSettings.parse([:]).logFields, "video_socket=bsd notsent_lowat_kb=128")
-        XCTAssertEqual(VideoSocketSettings.parse([:]).notSentLowatBytes, 131_072)
-        // T-186: the retired `nw` stack's knob is no longer read; the video socket is always `bsd`.
-        XCTAssertEqual(VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "nw"]).logFields,
-                       "video_socket=bsd notsent_lowat_kb=128")
-        let bsd = VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd", "MATEBRIDGE_NOTSENT_LOWAT_KB": "64"])
-        XCTAssertEqual(bsd.logFields, "video_socket=bsd notsent_lowat_kb=64")
-        XCTAssertEqual(bsd.notSentLowatBytes, 65_536)
-        XCTAssertEqual(VideoSocketSettings.parse(["MATEBRIDGE_VIDEO_SOCKET": "bsd"]).logFields,
-                       "video_socket=bsd notsent_lowat_kb=128")
+    func testNotSentLowatBytes() {
+        XCTAssertEqual(NotSentLowatKnob.bytes([:]), 131_072)
+        XCTAssertEqual(NotSentLowatKnob.bytes(["MATEBRIDGE_NOTSENT_LOWAT_KB": "64"]), 65_536)
+        // T-186: the retired `nw` stack's knob is not read.
+        XCTAssertEqual(NotSentLowatKnob.bytes(["MATEBRIDGE_VIDEO_SOCKET": "nw"]), 131_072)
     }
 
     func testNetServiceTypesMatchNetworkFrameworkClasses() {

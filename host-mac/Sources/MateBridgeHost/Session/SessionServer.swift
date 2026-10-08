@@ -10,18 +10,16 @@ import Synchronization
 ///
 /// Send contract (PROTOCOL.md section 5, newest frame wins): `send` returns false and transmits nothing while the link
 /// cannot take a frame; the caller must then drop or replace the frame and request a keyframe. `canSend` and
-/// `onReady` expose the same backpressure: `onReady` fires whenever that may have changed. On the kernel socket
+/// `setReadyHandler` expose the same backpressure: the handler fires whenever that may have changed. On the kernel socket
 /// (T-091) at most one record may still be in user space and the kernel must hold fewer unsent bytes than
-/// `TCP_NOTSENT_LOWAT` (`SocketVideoGate`); `onReady` fires on the socket's write queue.
+/// `TCP_NOTSENT_LOWAT` (`SocketVideoGate`); the handler fires on the socket's write queue.
 /// `cancel()` closes just this connection.
 public final class VideoLink: @unchecked Sendable {
     public let sessionID: UInt32
     public let configID: UInt16
     /// Owns this connection's sealer: one sealer per connection key, never a copy (two would reuse nonces).
     private let transport: SocketVideoTransport
-    private let lock = NSLock()
     private let logger: SessionLogger
-    private var readyHandler: (@Sendable () -> Void)?
     /// Kernel send-queue sampling (T-088), only with `MATEBRIDGE_SENDQ_LOG=1` or `MATEBRIDGE_LAT_TRACE=1`.
     private let sendQueue: SendQueueSampler?
 
@@ -35,14 +33,6 @@ public final class VideoLink: @unchecked Sendable {
     }
 
     public var canSend: Bool { transport.canSend }
-
-    public var onReady: (@Sendable () -> Void)? {
-        get { lock.lock(); defer { lock.unlock() }; return readyHandler }
-        set {
-            lock.lock(); readyHandler = newValue; lock.unlock()
-            transport.setReadyHandler(newValue)
-        }
-    }
 
     /// Encodes and sends one frame. Returns false (nothing sent) while the link cannot take a frame (see above)
     /// or when the frame is not a valid single-fragment VIDEO_FRAME within the 16 MiB payload limit
@@ -264,7 +254,7 @@ public final class SessionServer: @unchecked Sendable {
     /// The 100 ms session tick closes an `ev=tcp` window every this many ticks (1 s).
     static let tcpInfoTickInterval = 10
     /// T-091: `MATEBRIDGE_NOTSENT_LOWAT_KB` of the video socket, read once.
-    static let videoSocket = VideoSocketSettings.parse(ProcessInfo.processInfo.environment)
+    static let videoNotSentLowatKB = NotSentLowatKnob.parseKB(ProcessInfo.processInfo.environment)
     /// `TCP_NOTSENT_LOWAT` of a control connection: 9 sealed audio packets. An AUDIO_FRAME is dropped while the
     /// kernel holds this many unsent bytes, so at most this plus the one packet written after the check, i.e.
     /// `audioBacklogBytes` (100 ms of audio, PROTOCOL.md 5), waits unsent in the kernel. It never blocks a write:
@@ -286,13 +276,13 @@ public final class SessionServer: @unchecked Sendable {
     ///     port when taken. 0 means system-assigned only.
     ///   - videoPort: same for the video listener (default 47002).
     ///   - networkProfile: listening surface at start ("USB + Wi-Fi" or "Yalnız USB", T-189).
-    ///   - makeStreamConfig: placeholder until the video pipeline (T-011) supplies the real configuration.
+    ///   - makeStreamConfig: the configuration announced to a tablet for its HELLO (`StreamCoordinator.streamConfig`).
     public init(handlers: Handlers, store: ApprovedDeviceStore = ApprovedDeviceStore(directory: ApprovedDeviceStore.defaultDirectory()),
                 pairKeys: PairKeyStore = KeychainPairKeyStore(),
                 identity: HostIdentityStore.Identity = HostIdentityStore(directory: ApprovedDeviceStore.defaultDirectory()).resolve(),
                 hostName: String = Host.current().localizedName ?? "Mac", controlPort: UInt16 = DefaultPorts.control,
                 videoPort: UInt16 = DefaultPorts.video, networkProfile: NetworkProfile = .all,
-                makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig = SessionServer.defaultStreamConfig) {
+                makeStreamConfig: @escaping @Sendable (Hello) -> StreamConfig) {
         self.handlers = handlers
         queue.setSpecific(key: queueKey, value: true)
         self.store = store
@@ -314,14 +304,6 @@ public final class SessionServer: @unchecked Sendable {
             send: { [weak self] sessionID, messages, done in
                 self?.sendCursor(sessionID: sessionID, messages, done: done) ?? false
             }))
-    }
-
-    /// Native-resolution H.264 config (HiDPI 2x points). T-011 replaces this with the real virtual display values.
-    public static let defaultStreamConfig: @Sendable (Hello) -> StreamConfig = { hello in
-        StreamConfig(configID: 1, codec: .h264, widthPx: hello.screenWidthPx, heightPx: hello.screenHeightPx,
-                     widthPt: hello.screenWidthPx / 2, heightPt: hello.screenHeightPx / 2,
-                     fps: min(hello.maxRefreshHz, 60), bitrateKbps: 40_000,
-                     colorPrimaries: 1, transfer: 1, matrix: 1, fullRange: true)
     }
 
     // MARK: Lifecycle
@@ -489,7 +471,7 @@ public final class SessionServer: @unchecked Sendable {
         guard let port = plan.nextPort() else { return listenersFailed("video_listener_create") }
         let fixed = plan.lastWasPreferred
         let nextPlan = plan
-        let options = BsdTcpOptions(notSentLowatBytes: Self.videoSocket.notSentLowatBytes,
+        let options = BsdTcpOptions(notSentLowatBytes: Self.videoNotSentLowatKB * 1024,
                                     serviceClass: Self.serviceClass.videoClass)
         let listener: BsdTcpListener
         do {
@@ -954,7 +936,10 @@ public final class SessionServer: @unchecked Sendable {
         restartAttempts = 0
         logger.log(.info, "listening", sessionID: 0, generation: 0,
                    fields: "control_port=\(port) video_port=\(videoPort) " + Self.serviceClass.logFields + " "
-                       + Self.videoSocket.logFields + " control_socket=bsd"  // socket fields constant since T-186
+                       // The connections are always kernel BSD sockets since T-186 (the `nw` stack and its
+                       // `MATEBRIDGE_VIDEO_SOCKET`/`_CONTROL_SOCKET` knobs are gone, decision 0026); the fields stay
+                       // constant so log parsers keep working.
+                       + "video_socket=bsd notsent_lowat_kb=\(Self.videoNotSentLowatKB) control_socket=bsd"
                        + " tcp_log=\(Self.tcpInfoLog.rawValue) profile=\(networkProfile.logName)")
         if case .starting = state { setState(.listening) }
     }
@@ -1129,7 +1114,7 @@ public final class SessionServer: @unchecked Sendable {
     private func receiveVideoBytes(_ id: ConnectionID, _ bytes: [UInt8]) -> Bool {
         func reject() -> Bool {
             logger.log(.warning, "video_hello_invalid", sessionID: currentSessionID, generation: currentConfigID)
-            closeVideo(id)
+            transportClosed(id, video: true)
             return false
         }
         if videoHelloSeen.contains(id) { return receiveVideoProof(id, bytes) }
@@ -1160,7 +1145,7 @@ public final class SessionServer: @unchecked Sendable {
         func reject(_ event: String) -> Bool {
             logger.log(.warning, event, sessionID: currentSessionID, generation: currentConfigID,
                        fields: "conn=\(id.raw) video=true")
-            closeVideo(id)
+            transportClosed(id, video: true)
             return false
         }
         // No decoder: the machine refused the VIDEO_HELLO, or the proof already passed. The client sends nothing more.
@@ -1194,27 +1179,24 @@ public final class SessionServer: @unchecked Sendable {
             liveLookups.remove(id)
             guard let c = controlConnections.removeValue(forKey: id) else { return }
             c.cancel()
-            tcpInfoSamplers[id] = nil
-            inflightBytes[id] = nil
-            inbounds[id] = nil
-            sealers[id] = nil
-            streamBitrates[id] = nil
+            dropControlState(id)
             apply(machine.connectionClosed(id))
         }
     }
 
-    private func closeVideo(_ id: ConnectionID) {
-        transportClosed(id, video: true)
-    }
-
-    private func closeControl(_ id: ConnectionID) {
-        liveLookups.remove(id)
-        guard let c = controlConnections.removeValue(forKey: id) else { return }
+    /// Forgets the per-connection state of a control connection (its socket is already out of `controlConnections`).
+    private func dropControlState(_ id: ConnectionID) {
         tcpInfoSamplers[id] = nil
         inflightBytes[id] = nil
         inbounds[id] = nil
         sealers[id] = nil
         streamBitrates[id] = nil
+    }
+
+    private func closeControl(_ id: ConnectionID) {
+        liveLookups.remove(id)
+        guard let c = controlConnections.removeValue(forKey: id) else { return }
+        dropControlState(id)
         // Queued sends (BYE, REJECTED) are flushed before the FIN, then the socket is cancelled. Until then the
         // connection is "lingering": a host sleep cuts it short (T-132), whenever it was closed.
         flushGroup.enter()
@@ -1329,7 +1311,7 @@ public final class SessionServer: @unchecked Sendable {
             case .close(let id):
                 closeControl(id)
             case .closeVideo(let id):
-                closeVideo(id)
+                transportClosed(id, video: true)
             case .videoProve(let id, let key):
                 videoProofDecoders[id] = RecordDecoder(key: key, connection: .video, maxPayload: 64)
             case .releaseInput(_, let cause):
@@ -1604,7 +1586,7 @@ extension SessionServer: AudioSink {
 }
 
 extension VideoLink: VideoTransport {
-    public func setReadyHandler(_ handler: (@Sendable () -> Void)?) { onReady = handler }
+    public func setReadyHandler(_ handler: (@Sendable () -> Void)?) { transport.setReadyHandler(handler) }
 }
 
 /// Small lock-protected set, readable from the Keychain queue.

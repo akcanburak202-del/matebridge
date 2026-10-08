@@ -64,23 +64,4 @@ private final class FakePasteboard: PasteboardAccess, @unchecked Sendable {
         #expect(pb.text == "from tablet")
         #expect(e.poll() == .nothing)
     }
-
-    @Test func latestValueSlotKeepsOnlyTheNewestAndOneDrain() {
-        let slot = LatestValueSlot<Int>()
-        #expect(slot.put(1) == true)
-        #expect(slot.put(2) == false)
-        #expect(slot.put(3) == false)
-        #expect(slot.take() == 3)
-        #expect(slot.put(4) == false)  // drain still in flight
-        #expect(slot.take() == 4)
-        #expect(slot.take() == nil)  // drain ends
-        #expect(slot.put(5) == true)
-    }
-
-    @Test func clearDropsPending() {
-        let slot = LatestValueSlot<Int>()
-        _ = slot.put(1)
-        slot.clear()
-        #expect(slot.take() == nil)
-    }
 }

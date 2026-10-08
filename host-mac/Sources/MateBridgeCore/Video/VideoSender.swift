@@ -194,6 +194,7 @@ public final class VideoSender: @unchecked Sendable {
         if let aux = auxFrames { return await runPacked(aux: aux) }
         let (ready, signal) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         transport.setReadyHandler { signal.yield() }
+        lock.withLock { wakeLoop = { signal.yield() } }  // `write` wakes the loop on a failed completion
         defer { signal.finish() }
         var iterator = ready.makeAsyncIterator()
         var seq: UInt32 = 0
@@ -207,25 +208,7 @@ public final class VideoSender: @unchecked Sendable {
                 if Task.isCancelled { return .cancelled }
                 return hasFailed ? .transportFailed : .queueClosed
             }
-            let frame = encoded.toVideoFrame(seq: seq)
-            let size = frame.data.count
-            var timing = encoded.trace
-            let measure = trace != nil && !encoded.isCodecConfig
-            if measure {
-                timing.writeStartUs = clock()
-                timing.frameSeq = seq  // the VIDEO_FRAME.frame_seq of this send (T-170 join key)
-                timing.isKeyframe = encoded.isKeyframe
-                timing.bytes = size
-            }
-            let accepted = transport.send(frame) { [self, timing] ok in
-                if !ok { markFailed(); signal.yield() }
-                if ok, measure, let trace {
-                    var done = timing
-                    done.writeDoneUs = clock()
-                    trace(done)
-                }
-            }
-            record(accepted: accepted, bytes: size, keyframe: encoded.isKeyframe)
+            let accepted = write(encoded, seq: seq)
             if accepted {
                 seq &+= 1
             } else if keyframeRequestAllowed() {

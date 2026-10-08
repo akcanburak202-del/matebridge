@@ -37,7 +37,9 @@ public final class ClipboardBridge: @unchecked Sendable {
     private let sendLock = NSLock()
     private var _send: @Sendable (_ sessionID: UInt32, Message) -> Void = { _, _ in }
     private var engine: ClipboardEngine
-    private let incoming = LatestValueSlot<Clipboard>()
+    /// The newest CLIPBOARD waiting for the queue (one constant epoch: a session boundary clears it).
+    private let incomingLock = NSLock()
+    private var incoming = EpochCoalescer<Clipboard>()
     private var sessionID: UInt32?
     private var timer: DispatchSourceTimer?
 
@@ -59,7 +61,7 @@ public final class ClipboardBridge: @unchecked Sendable {
     public func sessionStarted(sessionID: UInt32) {
         queue.async { [self] in
             self.sessionID = sessionID
-            incoming.clear()
+            incomingLock.withLock { incoming.clear() }
             engine.begin()
             timer?.cancel()
             let t = DispatchSource.makeTimerSource(queue: queue)
@@ -75,7 +77,7 @@ public final class ClipboardBridge: @unchecked Sendable {
             timer?.cancel()
             timer = nil
             sessionID = nil
-            incoming.clear()
+            incomingLock.withLock { incoming.clear() }
             engine.end()
         }
     }
@@ -83,13 +85,13 @@ public final class ClipboardBridge: @unchecked Sendable {
     /// A message from the active session; anything but CLIPBOARD is ignored. A newer message replaces a pending one.
     public func deliver(_ message: Message) {
         guard case .clipboard(let clip) = message else { return }
-        if incoming.put(clip) {
+        if incomingLock.withLock({ incoming.offer(clip, epoch: 0) }) {
             queue.async { [self] in drainIncoming() }
         }
     }
 
     private func drainIncoming() {
-        while let clip = incoming.take() {
+        while let clip = incomingLock.withLock({ incoming.take(epoch: 0) }) {
             guard sessionID != nil, let bytes = engine.applyIncoming(clip) else { continue }
             logger.log(.info, "clipboard", sessionID: sessionID ?? 0, generation: 0, fields: "dir=in bytes=\(bytes)")
         }
