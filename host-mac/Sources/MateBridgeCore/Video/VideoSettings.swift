@@ -47,9 +47,6 @@ public struct VideoSettings: Equatable, Sendable {
     /// `MATEBRIDGE_CHROMA` (read by `applyingExperimentKnobs`); it wins over the tablet's choice, and `packed444` still
     /// needs `fullChromaGranted`.
     public var chromaKnob = ChromaKnob.unset
-    /// T-232 developer knob `MATEBRIDGE_VD_TRANSFER` (read by `applyingExperimentKnobs`): the transfer function of an
-    /// SDR stream's virtual display. An HDR10 stream always asks for 1 (`displayTransfer`).
-    public var vdTransferKnob = VirtualDisplayTransfer.parse(nil)
     /// T-281 developer knob `MATEBRIDGE_VD_PRIMARIES` (read by `applyingExperimentKnobs`): `default` switches the
     /// Display P3 primaries of an HDR display off. Unset: P3 for HDR, none for SDR.
     public var vdPrimariesKnob = VirtualDisplayPrimaries.parse(nil)
@@ -109,17 +106,14 @@ public struct VideoSettings: Equatable, Sendable {
         }
         s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
         s.displayRefreshHz = s.fps == 120 ? 120 : 60
-        s.vdTransferKnob = VirtualDisplayTransfer.parse(env: env)
         s.vdPrimariesKnob = VirtualDisplayPrimaries.parse(env: env)
         s.chromaKnob = ChromaKnob.parse(env: env)
         return s
     }
 
-    /// What the virtual display is created with (T-232, decision 0032): transfer function 1 for an HDR10 stream (the
-    /// knob is not needed), the `MATEBRIDGE_VD_TRANSFER` knob otherwise (default 0, the legacy SDR mode).
-    public var displayTransfer: VirtualDisplayTransfer.Knob {
-        dynamicRange == .hdr10 ? VirtualDisplayTransfer.Knob(requested: 1, invalid: false) : vdTransferKnob
-    }
+    /// The transfer function the virtual display is created with (T-232, decision 0032; knob removed in T-304): 1 for
+    /// an HDR10 stream, 0 (the legacy SDR mode) otherwise.
+    public var displayTransfer: UInt32 { dynamicRange == .hdr10 ? 1 : 0 }
 
     /// Same virtual display size, point size and HiDPI (refresh rate, fps, scale and bitrate may differ).
     public func sameDisplay(as other: VideoSettings) -> Bool {
@@ -139,8 +133,8 @@ public struct VideoSettings: Equatable, Sendable {
     /// The mode the virtual display must have for these settings (`DisplayReuse`).
     public var displayMode: DisplayMode {
         DisplayMode(widthPx: widthPx, heightPx: heightPx, hidpi: displayHiDPI, refreshHz: displayRefreshHz,
-                    transfer: displayTransfer.requested,
-                    primaries: VirtualDisplayPrimaries.decide(transferRequested: displayTransfer.requested,
+                    transfer: displayTransfer,
+                    primaries: VirtualDisplayPrimaries.decide(transferRequested: displayTransfer,
                                                               knob: vdPrimariesKnob))
     }
 

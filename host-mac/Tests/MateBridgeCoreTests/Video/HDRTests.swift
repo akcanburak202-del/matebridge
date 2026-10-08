@@ -109,7 +109,7 @@ final class HDRTests: XCTestCase {
         for p in [prefs(kbps: 60000, w: 1848, h: 1214), prefs(fps: 60, scale: 1000), prefs(fps: 144, scale: 750)] {
             let s = base.applying(p)
             XCTAssertEqual(s.dynamicRange, .sdr)
-            XCTAssertEqual(s.displayTransfer, VirtualDisplayTransfer.parse(nil))
+            XCTAssertEqual(s.displayTransfer, 0)
             XCTAssertEqual(s.displayMode.transfer, 0)
             let cfg = s.streamConfig(configID: 2)
             XCTAssertEqual([cfg.colorPrimaries, cfg.transfer, cfg.matrix], [1, 13, 1])
@@ -160,19 +160,16 @@ final class HDRTests: XCTestCase {
         XCTAssertEqual(DisplayReuse.Reason.transferChange.logName, "transfer_change")
     }
 
-    func testDeveloperKnobDisplayIsKeptAcrossDynamicRangeChanges() {
-        let knob = base.applyingExperimentKnobs(["MATEBRIDGE_VD_TRANSFER": "1"])
-        XCTAssertEqual(knob.vdTransferKnob, VirtualDisplayTransfer.Knob(requested: 1, invalid: false))
-        let sdr = knob.applying(prefs(w: 1848, h: 1214))
-        let hdr = knob.applying(prefs(w: 1848, h: 1214, dr: 1))
-        XCTAssertEqual(sdr.displayTransfer.requested, 1, "SDR stream on an HDR display (T-232)")
-        XCTAssertEqual(hdr.displayTransfer.requested, 1)
-        XCTAssertEqual(DisplayReuse.decide(current: sdr.displayMode, online: true, wanted: hdr.displayMode), .reuse)
-        // HDR10 does not need the knob; without it the default stays the legacy mode.
-        XCTAssertEqual(base.applyingExperimentKnobs([:]).vdTransferKnob, VirtualDisplayTransfer.parse(nil))
-        XCTAssertEqual(base.applying(prefs(dr: 1)).displayTransfer, VirtualDisplayTransfer.Knob(requested: 1, invalid: false))
-        let invalid = base.applyingExperimentKnobs(["MATEBRIDGE_VD_TRANSFER": "7"])
-        XCTAssertEqual(invalid.applying(prefs()).displayTransfer, VirtualDisplayTransfer.Knob(requested: 0, invalid: true))
+    func testDisplayTransferFollowsTheStreamOnly() {
+        // T-304: no developer knob; the env var is ignored and only an HDR10 stream asks for tf=1.
+        let env = base.applyingExperimentKnobs(["MATEBRIDGE_VD_TRANSFER": "1"])
+        XCTAssertEqual(env.applying(prefs()).displayTransfer, 0)
+        XCTAssertEqual(base.applying(prefs()).displayTransfer, 0)
+        XCTAssertEqual(base.applying(prefs(dr: 1)).displayTransfer, 1)
+        let sdr = base.applying(prefs(w: 1848, h: 1214))
+        let hdr = base.applying(prefs(w: 1848, h: 1214, dr: 1))
+        XCTAssertEqual(DisplayReuse.decide(current: sdr.displayMode, online: true, wanted: hdr.displayMode),
+                       .recreate(.transferChange))
     }
 
     // MARK: Runtime fallback

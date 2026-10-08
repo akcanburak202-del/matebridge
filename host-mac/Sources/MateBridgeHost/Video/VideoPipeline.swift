@@ -227,8 +227,7 @@ public final class VideoPipeline: @unchecked Sendable {
         }
         let waitUs = VirtualDisplay.recreateWaitUs()
         if waitUs > 0 { try await Task.sleep(nanoseconds: waitUs * 1_000) }
-        // Transfer function: 1 for an HDR10 stream, else the `MATEBRIDGE_VD_TRANSFER` knob (read into the settings by
-        // `applyingExperimentKnobs`; default 0, the legacy mode).
+        // Transfer function: 1 for an HDR10 stream, else 0 (the legacy mode).
         return try VirtualDisplay(name: "MateBridge", pixelWidth: settings.widthPx, pixelHeight: settings.heightPx,
                                   physicalPixelWidth: settings.nativeWidthPx, physicalPixelHeight: settings.nativeHeightPx,
                                   hidpi: settings.displayHiDPI, refreshRate: Double(settings.displayRefreshHz),
