@@ -9,6 +9,7 @@ decisions: [0019]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/DevKnobs.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/MainActivity.kt (orchestrator)
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
   - backlog/tasks/T-312-client-decoder-output-park.md
@@ -48,9 +49,8 @@ T-298 CB2 (`docs/reviews/2026-10-08/agents/opt-b-client.md`) ve T-297 C10. T-296
 - Varsayımlar: sayaç codec başına; çıktılar yalnız `isFrame` (CODEC_CONFIG değil) sayılır; giriş sayımı `queueInputBuffer` ÖNCESİ (çıktı çağrı dönmeden gelebilir), unpark SONRASI. Park yalnız sayaç 0 ve tutulan tampon yokken; aksi halde bire bir eski 5 ms (uzun dequeue yok). Kaçan unpark en çok 20 ms sigorta. `dec_out_park off` = eski davranış (sayım bile yapılmaz).
 - GL (CB9): bekleyen iş yokken 25 ms yerine 250 ms (bildirim `offerMain/offerAux/shutdown` ile uyandırır). Bekleyen iş = tutulan görüntü, tamamlanmamış çizim, retire kuyruğunda görüntü veya son çizimden <500 ms (zaman damgası kuyruğu). Fence_stall bekçisi (500 ms) bekleyen çizim varken 25 ms'de kalır.
 - Aux (C10): giriş 4 ms yerine 250 ms olay beklemesi; bekçi (2 s) en geç 250 ms'de bir kontrol edilir. Aux çıkış 5 ms -> 20 ms (300 ms çıktısız sonra).
-- TABLETTE TEST EDİLMEDİ. Orkestratör: (1) MainActivity satırı eklendikten sonra `--es dec_out_park on` ile 10 fps ve hareket sahnesinde `/proc` iş parçacığı uyanmaları (`mb-decoder-out`, `MediaCodec_loop`, `CodecLooper`) ve `cap_dec` p50/p95 (±1 ms) `off` ile karşılaştır; (2) `ev=profile knobs=` içinde `dec_out_park:on` görünmeli; (3) Tam renk açıkken `mb-gl` ve `mb-aux-dec` uyanmaları statik ekranda düşmeli, late upgrade ve `gl_*` istatistikleri değişmemeli; (4) detach/yeniden bağlanma ve uyku-uyanma sonrası görüntü gelmeli.
+- TABLETTE TEST EDİLMEDİ. Orkestratör: (1) (bağlantı yapıldı: MainActivity `it.outPark = devKnobs.decOutPark`; `dec_out_park` yalnız `--ez dev true` ister, debug olmayan günlük derlemede de çalışır, karar 0037) `--es dec_out_park on` ile 10 fps ve hareket sahnesinde `/proc` iş parçacığı uyanmaları (`mb-decoder-out`, `MediaCodec_loop`, `CodecLooper`) ve `cap_dec` p50/p95 (±1 ms) `off` ile karşılaştır; (2) `ev=profile knobs=` içinde `dec_out_park:on` görünmeli; (3) Tam renk açıkken `mb-gl` ve `mb-aux-dec` uyanmaları statik ekranda düşmeli, late upgrade ve `gl_*` istatistikleri değişmemeli; (4) detach/yeniden bağlanma ve uyku-uyanma sonrası görüntü gelmeli.
 
 ## Open questions
 
-- **MainActivity bağlantısı eksik (kart `files:` dışı):** `DevKnobs.decOutPark` ve `VideoRenderer.outPark` hazır, ama MainActivity'de renderer oluşturulan yerde (`it.catchUp = devKnobs.catchUp` satırının yanında, ~1467) `it.outPark = devKnobs.decOutPark` satırı yok. Orkestratör bu tek satırı eklemeli (aksi halde bayrak etkisiz).
 - `docs/KNOBS.md` `dec_out_park` satırı orkestratörde (kart dosyaları dışında).
