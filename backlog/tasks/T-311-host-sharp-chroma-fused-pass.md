@@ -1,7 +1,7 @@
 ---
 id: T-311
 title: Host — Keskin renk Metal geçişi tek dispatch (HA2), Metal süresi ayrı iz aşaması (HA1), iki Metal geçişinin ortak kurulumu (A8)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-302]
