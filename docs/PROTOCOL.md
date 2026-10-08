@@ -7,7 +7,7 @@ Bu dosya Swift ve Kotlin tarafının tek ortak sözleşmesidir. Tasarım Aşama 
 ## 1. Genel kurallar
 
 - **Bayt sırası:** tüm sayılar **little-endian**. `f32` IEEE-754 binary32, sonlu olmalı (NaN/Inf protokol hatası).
-- **Tipler:** `u8/u16/u32/u64` işaretsiz, `i16` işaretli (ikiye tümleyen), `str8` = `u8 uzunluk` + UTF-8 bayt (en çok 64 bayt, sonlandırıcı yok, boş olabilir), `bytes` = ham bayt.
+- **Tipler:** `u8/u16/u32/u64` işaretsiz, `i16` işaretli (ikiye tümleyen), `str8` = `u8 uzunluk` + UTF-8 bayt (en çok 64 bayt, sonlandırıcı yok, boş olabilir; **geçerli UTF-8 değilse protokol hatası**, fixture `invalid_str8_utf8`, T-307), `bytes` = ham bayt.
 - **Hizalama yok:** alanlar dolgu olmadan art arda gelir. `reserved` alanları gönderen **0** yazar, alıcı değerine **bakmaz**. Tanımsız bayrak bitleri de böyledir.
 - **Yön:** C = istemci (tablet), H = host (Mac).
 - **Zaman:** `*_time_us` alanları gönderenin **monoton** saatidir, mikrosaniye. İki tarafın saatleri doğrudan karşılaştırılmaz. Fark PING/PONG ile tahmin edilir (§6). Android API 31'de olay zamanları milisaniye çözünürlüklüdür (`eventTime × 1000`).
@@ -80,7 +80,7 @@ Onaylanmamış cihaz ne görüntü alır ne girdi gönderebilir (PLAN §5.4). İ
 
 | Tip | Ad | Yön | Bağlantı | Fixture |
 |---|---|---|---|---|
-| 0x01 | HELLO | C→H | kontrol | `hello`, `hello_utf8_name` |
+| 0x01 | HELLO | C→H | kontrol | `hello`, `hello_utf8_name`, `invalid_str8_utf8` |
 | 0x02 | HELLO_ACK | H→C | kontrol | `hello_ack`, `hello_ack_pending`, `hello_ack_busy` |
 | 0x03 | STREAM_CONFIG | H→C | kontrol | `stream_config`, `stream_config_game_display` |
 | 0x04 | BYE | iki yön | kontrol | `bye`, `bye_host_sleep` |
@@ -785,7 +785,7 @@ Swift ve Kotlin testleri:
 3. `unknown_type`'ın atlandığını ve akışın devam ettiğini doğrular.
 
 **Fixture listesi:**
-- Oturum: `hello`, `hello_utf8_name`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `stream_config_packed444`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `stream_prefs_full_chroma`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
+- Oturum: `hello`, `hello_utf8_name`, `invalid_str8_utf8`, `hello_ack`, `hello_ack_pending`, `hello_ack_busy`, `stream_config`, `stream_config_game_display`, `stream_config_hdr10`, `stream_config_packed444`, `bye`, `stream_prefs`, `stream_prefs_bitrate`, `stream_prefs_game_display`, `stream_prefs_hdr`, `stream_prefs_sharp_chroma`, `stream_prefs_full_chroma`, `invalid_stream_prefs_partial`, `invalid_stream_prefs_hdr_partial`, `clipboard_text`, `clipboard_empty`, `display_rate`, `settings_open`
 - Kalem: `pen_hover_to_contact`, `pen_leave`, `pen_eraser`, `pen_extremes`, `invalid_pen_count_zero`, `pen_gesture`
 - Klavye: `key_down`, `key_up_caps`, `key_no_scan`, `invalid_key_short`
 - İşaretçi ve kaydırma: `pointer_rel`, `pointer_abs`, `scroll_began`, `scroll`, `scroll_ended`, `pinch_began`, `pinch`, `pinch_ended`

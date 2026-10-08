@@ -150,6 +150,7 @@ private let invalidFixtures: [String: ProtocolError] = [
     "invalid_cursor_shape_short": .payloadTooShort(type: 0x0c),
     "invalid_files_hello_short": .payloadTooShort(type: 0x50),
     "invalid_files_data_empty": .invalidField("size"),
+    "invalid_str8_utf8": .invalidField("str8 utf8"),
 ]
 
 private let skippedFixtures: Set<String> = ["unknown_type"]

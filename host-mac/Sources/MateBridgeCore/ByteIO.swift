@@ -81,6 +81,7 @@ struct ByteReader {
     mutating func str8() throws -> String {
         let n = Int(try u8())
         guard n <= ProtocolConstants.maxStringBytes else { throw ProtocolError.invalidField("str8 length") }
-        return String(decoding: try raw(n), as: UTF8.self)
+        guard let s = String(validating: try raw(n), as: UTF8.self) else { throw ProtocolError.invalidField("str8 utf8") }
+        return s
     }
 }

@@ -1,7 +1,7 @@
 ---
 id: T-307
 title: Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8
-status: todo
+status: review
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -10,6 +10,7 @@ files:
   - docs/PROTOCOL.md
   - protocol/fixtures/
   - host-mac/Sources/MateBridgeCore/Protocol/
+  - host-mac/Sources/MateBridgeCore/ByteIO.swift  (orchestrator; the actual Swift change)
   - host-mac/Tests/MateBridgeCoreTests/
   - client-android/app/src/test/kotlin/dev/matebridge/client/protocol/
   - backlog/tasks/T-307-str8-invalid-utf8.md
@@ -34,5 +35,13 @@ T-297 E9 (`docs/reviews/2026-10-08/agents/simp-e-protocol.md`), kullanıcı kara
 ## Plan
 
 ## Handoff
+
+Kotlin: `invalid_str8_utf8` added to the `invalid` set in FixtureTest.kt; no Codec change (INVALID_STRING already rejects). Device check: none needed (JVM tests only).
+
+Swift part (acceptance 2) done by mac-host-dev. Commit: HEAD of task/T-307-str8-utf8 ("T-307: Swift str8 read rejects invalid UTF-8").
+- Touched: `host-mac/Sources/MateBridgeCore/ByteIO.swift` (str8 read uses `String(validating:as:UTF8.self)`, invalid -> `ProtocolError.invalidField("str8 utf8")`), `host-mac/Tests/MateBridgeCoreTests/FixtureTests.swift` (`invalid_str8_utf8` expectation).
+- Note: ByteIO.swift lives in `MateBridgeCore/`, not `MateBridgeCore/Protocol/` (card `files:` path is slightly off).
+- `./scripts/check.sh --only host,protocol` passes. Full check.sh android part fails until the Kotlin step adds the fixture to its test.
+- Nothing hardware-dependent.
 
 ## Open questions
