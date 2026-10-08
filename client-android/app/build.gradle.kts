@@ -1,5 +1,6 @@
 import com.android.build.api.variant.BuildConfigField
 import java.io.ByteArrayOutputStream
+import java.time.Duration
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -17,7 +18,7 @@ plugins {
 abstract class BuildIdentity @Inject constructor(private val exec: ExecOperations) :
     ValueSource<String, BuildIdentity.Params> {
     interface Params : ValueSourceParameters {
-        /** "sha" (short SHA, "-dirty" suffix), "count" (commits up to HEAD) or "time" (UTC build time, minutes). */
+        /** "sha" (short SHA, "-dirty" suffix), "count" (commits up to HEAD), "minutes" (build time, minutes since 2026-01-01 UTC) or "time" (UTC build time, minutes). */
         val what: Property<String>
         val dir: DirectoryProperty
     }
@@ -28,6 +29,10 @@ abstract class BuildIdentity @Inject constructor(private val exec: ExecOperation
             if (status.isNullOrEmpty()) sha else "$sha-dirty"
         } ?: "unknown"
         "count" -> git("rev-list", "--count", "HEAD")?.toIntOrNull()?.takeIf { it > 0 }?.toString() ?: "1"
+        // T-301: monotonic versionCode = minutes since 2026-01-01 UTC.
+        "minutes" -> Duration.between(
+            ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC), ZonedDateTime.now(ZoneOffset.UTC),
+        ).toMinutes().toString()
         else -> ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm'Z'"))
     }
 
@@ -61,7 +66,7 @@ android {
         applicationId = "dev.matebridge.client"
         minSdk = 31
         targetSdk = 31
-        // T-146: the real versionCode is the commit count, set per variant below; 1 is the no-git fallback.
+        // T-146/T-301: the real versionCode is build-time minutes, set per variant below; 1 is the no-git fallback.
         versionCode = 1
         versionName = "0.1"
         ndk {
@@ -109,8 +114,14 @@ android {
 
 androidComponents {
     onVariants { variant ->
-        val versionCode = buildIdentity("count").map { it.toInt() }
-        variant.outputs.forEach { it.versionCode.set(versionCode) }
+        // T-301: versionCode is build-time minutes, not the commit count: a non-debuggable app cannot be downgraded, and
+        // worktree branches have fewer commits than main. The commit stays in versionName, BuildConfig.GIT_SHA and app_start.
+        val versionCode = buildIdentity("minutes").map { it.toInt() }
+        val versionName = buildIdentity("sha").map { "0.1-$it" }
+        variant.outputs.forEach {
+            it.versionCode.set(versionCode)
+            it.versionName.set(versionName)
+        }
         variant.buildConfigFields?.put(
             "GIT_SHA",
             buildIdentity("sha").map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },

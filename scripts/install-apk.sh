@@ -82,7 +82,12 @@ while kill -0 "$install_pid" 2>/dev/null; do
 done
 kill "$install_pid" 2>/dev/null || true  # done (or timed out): do not wait on the AppGallery page
 wait "$install_pid" 2>/dev/null || true
-cat "$log"; rm -f "$log"
+cat "$log"
+if grep -q INSTALL_FAILED_VERSION_DOWNGRADE "$log"; then
+  echo "VERSION_DOWNGRADE: the installed app is non-debuggable (daily) and has a higher versionCode than this APK." >&2
+  echo "versionCode is build-time minutes (T-301): rebuild the APK now (a fresh build is always newer). Do NOT uninstall: that deletes the pairing keys." >&2
+fi
+rm -f "$log"
 
 after="$("$ADB" shell dumpsys package "$PKG" | sed -n 's/.*lastUpdateTime=//p' | head -1)"
 if [ "$after" = "$before" ]; then
