@@ -27,7 +27,7 @@ class UnbufferedPenDispatch(
     private val backend: Backend,
     /** Rare-event log hook of `MB/input` (name, key=value fields). */
     private val onEvent: (String, String) -> Unit = { _, _ -> },
-    /** T-322: label of the sources the backend requests (`stylus` alone, or more with `unbuffered_src`); logged with the path. */
+    /** T-322: label of the sources the backend requests (`pointer_class` = stylus mask, or more with `unbuffered_src relative`); logged with the path. */
     private val sourcesLabel: String = "stylus",
 ) {
     enum class Path { SOURCE, FAILED }

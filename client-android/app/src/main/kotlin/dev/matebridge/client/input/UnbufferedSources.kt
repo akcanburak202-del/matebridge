@@ -14,11 +14,11 @@ import java.util.Locale
  */
 enum class UnbufferedSources(val id: String, val extraMask: Int, val label: String) {
     /** Today's mask: the stylus source, which already matches the pointer class (stylus, touchscreen, absolute mouse). */
-    OFF("off", 0, "pointer_class(stylus,touch,mouse)"),
+    OFF("off", 0, "pointer_class"),
     RELATIVE(
         "relative",
         InputDevice.SOURCE_MOUSE_RELATIVE or InputDevice.SOURCE_TOUCHPAD,
-        "pointer_class(stylus,touch,mouse)+mouse_rel+touchpad",
+        "pointer_class+mouse_rel+touchpad",
     );
 
     /** The mask for the request: stylus plus the extras of this mode. */

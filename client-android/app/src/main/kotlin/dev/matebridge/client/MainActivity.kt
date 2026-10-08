@@ -635,7 +635,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (on && !video.isAttachedToWindow) return@Backend false // no window yet; sync retries
                 // View ignores a request equal to its current value; clear first so a set always reaches the window.
                 video.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
-                // T-322: the pen's source, plus the sources `--es unbuffered_src touch|all` adds, in one mask.
+                // T-322: the pen's source, plus the sources `--es unbuffered_src relative` adds, in one mask.
                 if (on) video.requestUnbufferedDispatch(devKnobs.unbufferedSrc.requestMask)
                 true
             },

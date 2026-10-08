@@ -53,7 +53,7 @@ class UnbufferedSourcesTest {
     }
 
     @Test fun labelsNameTheSourcesInForce() {
-        assertEquals("pointer_class(stylus,touch,mouse)", UnbufferedSources.OFF.label)
-        assertEquals("pointer_class(stylus,touch,mouse)+mouse_rel+touchpad", UnbufferedSources.RELATIVE.label)
+        assertEquals("pointer_class", UnbufferedSources.OFF.label)
+        assertEquals("pointer_class+mouse_rel+touchpad", UnbufferedSources.RELATIVE.label)
     }
 }
