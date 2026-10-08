@@ -42,28 +42,20 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private var failures = 0
     private var lastParameterSets: [UInt8] = []
     private var closed = false
-    private var currentKbps: Int
-    private let rateWindowMs: Int?
-    private let logSink: HEVCEncoder.LogSink
     /// Property failures at creation ("Name=<OSStatus>"), for diagnostics.
     private(set) var propertyFailures: [String] = []
 
     /// - Parameters:
     ///   - mainKbps: the main session's target; the auxiliary one follows `AuxBitratePolicy`.
-    ///   - profile: the main session's resolved profile (the same rate control and speed settings).
-    init(width: Int, height: Int, fps: Int, mainKbps: Int, profile: EncoderProfile, rateWindowMs: Int?,
-         logSink: @escaping HEVCEncoder.LogSink, output: @escaping Output,
+    init(width: Int, height: Int, fps: Int, mainKbps: Int, rateWindowMs: Int?,
+         output: @escaping Output,
          onError: @escaping @Sendable (String) -> Void,
          onLoss: @escaping @Sendable (UInt64) -> Void = { _ in }) throws {
         self.output = output
         self.onError = onError
         self.onLoss = onLoss
-        self.rateWindowMs = rateWindowMs
-        self.logSink = logSink
         let kbps = Self.auxBitrateKbps(main: mainKbps)
-        currentKbps = kbps
-        var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
-        if profile != .fast { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
+        let spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_HEVC,
@@ -79,7 +71,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
                 Self.log.error("ev=prop_set_failed key=\(name, privacy: .public) status=\(st)")
             }
         }
-        set("RealTime", kVTCompressionPropertyKey_RealTime, profile == .fast ? kCFBooleanFalse : kCFBooleanTrue)
+        set("RealTime", kVTCompressionPropertyKey_RealTime, kCFBooleanFalse)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
         set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
@@ -139,22 +131,6 @@ final class PackedAuxEncoder: @unchecked Sendable {
             return false
         }
         return true
-    }
-
-    /// Live bitrate change (`AuxBitratePolicy` of the main target), like `HEVCEncoder.setTargetBitrate`.
-    func setBitrate(mainKbps: Int) {
-        let kbps = Self.auxBitrateKbps(main: mainKbps)
-        let apply: Bool = lock.withLock {
-            guard !closed, kbps != currentKbps else { return false }
-            currentKbps = kbps
-            return true
-        }
-        guard apply else { return }
-        let avg = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
-                                       value: (kbps * 1000) as CFNumber)
-        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
-                                          value: HEVCEncoder.dataRateLimits(kbps: kbps, shortWindowMs: rateWindowMs))
-        logSink(.info, "bitrate_set", "view=aux kbps=\(kbps) avg_status=\(avg) limits_status=\(limits)")
     }
 
     /// CODEC_CONFIG of the auxiliary stream (`view = 1`); nil before the first frame was encoded.

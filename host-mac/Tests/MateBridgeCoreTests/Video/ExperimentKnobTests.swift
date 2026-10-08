@@ -21,14 +21,15 @@ final class ExperimentKnobTests: XCTestCase {
         XCTAssertEqual(base.applyingExperimentKnobs([:]), base)
     }
 
-    func testFps120ImpliesRefresh120UnlessOverridden() {
+    func testFps120ImpliesRefresh120() {
         let base = VideoSettings.tabletDefault
         let a = base.applyingExperimentKnobs(["MATEBRIDGE_FPS": "120"])
         XCTAssertEqual(a.fps, 120)
         XCTAssertEqual(a.displayRefreshHz, 120)
         XCTAssertEqual(a.bitrateKbps, base.bitrateKbps)
+        // T-302: `MATEBRIDGE_REFRESH` is gone and inert.
         let b = base.applyingExperimentKnobs(["MATEBRIDGE_FPS": "120", "MATEBRIDGE_REFRESH": "60"])
-        XCTAssertEqual(b.displayRefreshHz, 60)
+        XCTAssertEqual(b.displayRefreshHz, 120)
         let c = base.applyingExperimentKnobs(["MATEBRIDGE_FPS": "90", "MATEBRIDGE_BITRATE_KBPS": "90000"])
         XCTAssertEqual(c.fps, 90)
         XCTAssertEqual(c.displayRefreshHz, 60)

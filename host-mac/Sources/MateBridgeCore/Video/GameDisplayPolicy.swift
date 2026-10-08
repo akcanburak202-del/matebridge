@@ -205,9 +205,9 @@ public struct GameDisplayFallback: Equatable, Sendable {
     /// re-applied without it (and with `allowHDR`, so a switched-off HDR path stays off). nil = `settings` are still
     /// valid.
     public func revalidated(_ settings: VideoSettings, base: VideoSettings, prefs: StreamPrefs?,
-                            defaultRefreshHz: Int, allowHDR: Bool = true) -> VideoSettings? {
+                            allowHDR: Bool = true) -> VideoSettings? {
         guard !settings.displayHiDPI, !allowsGameDisplay else { return nil }
         guard let prefs else { return base }
-        return base.applying(prefs, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: false, allowHDR: allowHDR)
+        return base.applying(prefs, allowGameDisplay: false, allowHDR: allowHDR)
     }
 }

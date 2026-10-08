@@ -318,14 +318,6 @@ public final class VideoPipeline: @unchecked Sendable {
         return fps
     }
 
-    /// Changes the running encoder's target bitrate in place (T-177): capture, display and the client connection keep
-    /// running, and no `STREAM_CONFIG` is sent (`settings.bitrateKbps`, and so `STREAM_CONFIG.bitrate_kbps`, keeps the
-    /// configured value). nil when no encoder runs. User changes still go through the `STREAM_PREFS` restart path.
-    @discardableResult
-    public func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision? {
-        box.encoder?.setTargetBitrate(kbps: kbps)
-    }
-
     /// Host-side keyframe (the sender's transport refused a frame): always forced, and recorded so that the client's
     /// requests caused by the same hiccup coalesce with it.
     public func requestKeyframe() {

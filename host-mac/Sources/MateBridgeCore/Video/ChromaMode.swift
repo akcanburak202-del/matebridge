@@ -5,16 +5,15 @@ import Foundation
 ///
 /// - `420` (default): today's path, bit for bit. ScreenCaptureKit delivers full-range 4:2:0 (`420f`) and VideoToolbox
 ///   encodes it as is.
-/// - `sharp_bilinear` / `sharp_nearest`: ScreenCaptureKit delivers `BGRA`. A Metal pass produces `420f` with 2x2 box
-///   chroma and a per-pixel luma adjustment (`SharpYUV`) that assumes the decoder upsamples chroma bilinearly
-///   (centred siting) or by nearest neighbour.
-/// - `444`: ScreenCaptureKit delivers `BGRA` and the HEVC session uses the undocumented `HEVC_Main444_AutoLevel`
-///   profile (VideoToolbox converts). Fast path only. A one-off probe of the tablet decoder; the client is unchanged.
+/// - `sharp_nearest`: ScreenCaptureKit delivers `BGRA`. A Metal pass produces `420f` with 2x2 box chroma and a
+///   per-pixel luma adjustment (`SharpYUV`) that assumes the decoder upsamples chroma by nearest neighbour.
+/// - `packed444`: decision 0034, see below.
+///
+/// T-302 removed `444` (the undocumented `HEVC_Main444_AutoLevel` probe, no output on the tablet) and
+/// `sharp_bilinear` (decision 0033 chose nearest).
 public enum ChromaMode: String, Equatable, Sendable, CaseIterable {
     case yuv420 = "420"
-    case sharpBilinear = "sharp_bilinear"
     case sharpNearest = "sharp_nearest"
-    case yuv444 = "444"
     /// Decision 0034 (T-258): packed full colour. `BGRA` capture, a Metal pass packs the AVC444v2 main and auxiliary
     /// `420f` pictures, a second VideoToolbox session encodes the auxiliary one. Only with the session's consent
     /// (`VideoSettings.packedChroma`); otherwise `sharp_nearest` runs.
@@ -23,9 +22,8 @@ public enum ChromaMode: String, Equatable, Sendable, CaseIterable {
     /// The decoder upsampling the luma adjustment assumes; nil when the mode has no Metal pass.
     public var sharpUpsample: SharpYUV.Upsample? {
         switch self {
-        case .sharpBilinear: return .bilinear
         case .sharpNearest: return .nearest
-        case .yuv420, .yuv444, .packed444: return nil
+        case .yuv420, .packed444: return nil
         }
     }
 
@@ -34,8 +32,8 @@ public enum ChromaMode: String, Equatable, Sendable, CaseIterable {
         self == .yuv420 ? .yuv420FullRange : .bgra
     }
 
-    /// The `chroma_format_idc` the SPS should carry (1 = 4:2:0, 3 = 4:4:4).
-    public var expectedChromaFormatIdc: Int { self == .yuv444 ? 3 : 1 }
+    /// The `chroma_format_idc` the SPS should carry (always 4:2:0: the packed full colour rides two 4:2:0 pictures).
+    public var expectedChromaFormatIdc: Int { 1 }
 }
 
 /// ScreenCaptureKit pixel format (the host maps it to the CoreVideo constant).
@@ -55,7 +53,7 @@ public struct ChromaKnob: Equatable, Sendable {
     /// (T-240, `ChromaPolicy`). The `encoder_config` `chroma=` field appears only then; `chroma_stats` also while the
     /// sharp path runs (`ChromaDecision.statsEnabled`).
     public let isSet: Bool
-    /// Set to something other than the four values (treated as `420`).
+    /// Set to something other than a known value (treated as `420`; includes the removed `444` and `sharp_bilinear`).
     public let invalid: Bool
 
     public init(requested: ChromaMode, isSet: Bool, invalid: Bool) {
@@ -79,13 +77,6 @@ public struct ChromaKnob: Equatable, Sendable {
 
 /// Why the requested mode was not applied (the host uses `420` instead).
 public enum ChromaFallbackReason: String, Equatable, Sendable {
-    /// `444` with the low-latency rate control profile: VideoToolbox's LLRC encoder silently encodes `BGRA` as
-    /// 4:2:0 (research §4), so the probe would measure nothing.
-    case llrc
-    /// `444` with H.264: only the HEVC Main 4:4:4 probe is implemented (the tablet reports no AVC High 4:4:4 either).
-    case codec
-    /// VideoToolbox refused `HEVC_Main444_AutoLevel`.
-    case profileRejected = "profile_rejected"
     /// The Metal pass could not be set up (no device, or the kernel did not compile).
     case metalUnavailable = "metal_unavailable"
     /// T-237: the stream is HDR10 (decision 0032). HDR wins: x420 PQ capture and HEVC Main10, the knob is ignored.
@@ -145,12 +136,11 @@ public enum ChromaPolicy {
     public static let sharpPreferenceMode = ChromaMode.sharpNearest
 
     /// The mode to apply before any session exists. Input priority (T-240): `MATEBRIDGE_CHROMA` (set, also invalid) >
-    /// `preference` (`STREAM_PREFS.chroma = 1` -> `sharp_nearest`) > `420`. `444` (knob only) needs HEVC and the fast
-    /// profile; the sharp modes and `420` work with every codec and profile (their encoder input stays `420f`). An
+    /// `preference` (`STREAM_PREFS.chroma = 1` -> `sharp_nearest`) > `420`. The sharp mode and `420` work with every
+    /// codec (their encoder input stays `420f`). An
     /// HDR10 stream (T-237, decision 0032) ignores every request: applied `420` (the 10-bit PQ 4:2:0 path), logged
     /// with `reason=hdr` unless nothing was requested. Without a preference SDR resolves exactly as in T-235.
-    public static func resolve(knob: ChromaKnob, preference: ChromaPreference = .normal, codec: Codec,
-                               profile: EncoderProfile, dynamicRange: DynamicRange = .sdr,
+    public static func resolve(knob: ChromaKnob, preference: ChromaPreference = .normal, dynamicRange: DynamicRange = .sdr,
                                packedChroma: Bool = false, packedFellBack: Bool = false) -> ChromaDecision {
         let source: ChromaSource = knob.isSet ? .env : (preference == .normal ? .default : .prefs)
         let requested: ChromaMode = switch source {
@@ -167,10 +157,7 @@ public enum ChromaPolicy {
         if requested == .packed444 {
             return packedChroma ? decision(.packed444, nil) : decision(sharpPreferenceMode, .fullChromaDenied)
         }
-        guard requested == .yuv444 else { return decision(requested, nil) }
-        if codec != .hevc { return decision(.yuv420, .codec) }
-        if profile == .llrc { return decision(.yuv420, .llrc) }
-        return decision(.yuv444, nil)
+        return decision(requested, nil)
     }
 }
 
@@ -265,7 +252,7 @@ public struct ChromaStatsWindow: Sendable {
     /// The line's fields once `windowUs` has passed since the window started (then a new window starts at `nowUs`);
     /// nil before that.
     /// `mode=<m> frames=<n> conv_ms_p50_95=<a>/<b>|- gpu_ms_p50_95=<a>/<b>|- cap_enc_ms_p50_95=<a>/<b>|- conv=<n>
-    /// conv_fail=<n>`; a `-` series had no samples (no Metal pass in `420` / `444`).
+    /// conv_fail=<n>`; a `-` series had no samples (no Metal pass in `420`).
     public mutating func take(nowUs: UInt64) -> String? {
         guard nowUs >= startUs, nowUs - startUs >= Self.windowUs else { return nil }
         let f = "mode=\(mode.rawValue) frames=\(encoded) conv_ms_p50_95=\(Self.pair(conversionWallUs)) "

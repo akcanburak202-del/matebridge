@@ -91,11 +91,10 @@ public struct HDRFallback: Equatable, Sendable {
     /// derived before HDR was switched off becomes SDR, with the same `prefs` re-applied without it. nil =
     /// `settings` are still valid.
     public func revalidated(_ settings: VideoSettings, base: VideoSettings, prefs: StreamPrefs?,
-                            defaultRefreshHz: Int, allowGameDisplay: Bool) -> VideoSettings? {
+                            allowGameDisplay: Bool) -> VideoSettings? {
         guard settings.dynamicRange == .hdr10, !allowsHDR else { return nil }
         guard let prefs else { return base }
-        return base.applying(prefs, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: allowGameDisplay,
-                             allowHDR: false)
+        return base.applying(prefs, allowGameDisplay: allowGameDisplay, allowHDR: false)
     }
 }
 

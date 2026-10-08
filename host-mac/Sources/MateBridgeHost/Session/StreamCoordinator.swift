@@ -220,20 +220,15 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// the device's remembered `STREAM_PREFS` on top, so a reconnect starts in the last chosen mode). Pure apart from
     /// reading the store: nothing is remembered here, so a HELLO that never becomes a session (an unproven reconnect)
     /// cannot change the settings of the live one.
-    /// `transport` is nil for `streamConfig(for:)`: the session machine asks for the first `STREAM_CONFIG` with the HELLO
-    /// only, so the transport knobs are not applied there (the tablet does not use its `bitrate_kbps`).
-    private func settings(for hello: Hello, transport: SessionTransport?)
+    private func settings(for hello: Hello)
         -> (base: VideoSettings, initial: VideoSettings, stored: StreamPrefs?) {
-        // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS, MATEBRIDGE_REFRESH=60|120,
-        // T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS;
-        // T-088: MATEBRIDGE_WIFI_BITRATE_KBPS on a Wi-Fi session (the env bitrate still wins).
+        // Experiment knobs (T-017, T-045): MATEBRIDGE_FPS=60|90|120, MATEBRIDGE_BITRATE_KBPS,
+        // T-086: MATEBRIDGE_CODEC=h264|hevc, and the env bitrate wins over STREAM_PREFS.
         let env = ProcessInfo.processInfo.environment
-        var base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
-        if let transport { base = base.applyingTransportKnobs(env, transport: transport) }
+        let base = VideoSettings.forTablet(hello).applyingExperimentKnobs(env)
         let stored = prefsStore.load(device: hello.deviceID)
         let initial = VideoSettings.initialSettings(
             defaults: base, stored: stored,
-            defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
             allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR)
         return (base, initial, stored)
     }
@@ -242,7 +237,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// display, decision 0029, replaces the display but not the native size). Side-effect free (apart from a log
     /// line); the session machine may call it for a connection that never becomes the session.
     public func streamConfig(for hello: Hello) -> StreamConfig {
-        let settings = self.settings(for: hello, transport: nil).initial
+        let settings = self.settings(for: hello).initial
         if settings.nativeWidthPx != Int(hello.screenWidthPx) || settings.nativeHeightPx != Int(hello.screenHeightPx) {
             logger.log(.warning, "display_size_differs_from_hello", sessionID: 0, generation: 0,
                        fields: "hello=\(hello.screenWidthPx)x\(hello.screenHeightPx) display=\(settings.nativeWidthPx)x\(settings.nativeHeightPx)")
@@ -258,7 +253,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// starting the pipeline.
     public func sessionStarted(sessionID: UInt32, configID: UInt16, hello: Hello, transport: SessionTransport) {
         liveSessionLock.withLock { liveSessionID = sessionID }
-        let (base, initial, stored) = settings(for: hello, transport: transport)
+        let (base, initial, stored) = settings(for: hello)
         let reannounce = announcedLock.withLock {
             announced.activationDiffers(hello: hello, activation: initial.streamConfig(configID: configID))
         }
@@ -382,10 +377,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         // meanwhile (game_display_failed) must not be tried again. The tablet holds the HELLO config (equal to the
         // derived settings unless `reannounce` is already set), so a changed result is announced too.
         var reasons: [String] = reannounce ? ["hello_mismatch"] : []
-        let refresh = VideoSettings.parseRefreshHz(ProcessInfo.processInfo.environment["MATEBRIDGE_REFRESH"])
         let allowHDR = allowsHDR, allowGame = allowsGameDisplay
         if let fixed = gameDisplayLock.withLock({
-            gameDisplay.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh, allowHDR: allowHDR)
+            gameDisplay.revalidated(settings, base: base, prefs: prefs, allowHDR: allowHDR)
         }) {
             if AnnouncedStreamConfigs.differs(settings.streamConfig(configID: configID),
                                               fixed.streamConfig(configID: configID)) {
@@ -395,7 +389,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
         // T-237: the same for HDR10 switched off by an `hdr_fallback` while this start waited.
         if let fixed = hdrLock.withLock({
-            hdrFallback.revalidated(settings, base: base, prefs: prefs, defaultRefreshHz: refresh,
+            hdrFallback.revalidated(settings, base: base, prefs: prefs,
                                     allowGameDisplay: allowGame)
         }) {
             if AnnouncedStreamConfigs.differs(settings.streamConfig(configID: configID),
@@ -486,16 +480,13 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// refresh rate and mode, so only capture and encoder restart.
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
-        let env = ProcessInfo.processInfo.environment
         live.prefsFromSession = true
-        var wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+        var wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
                                         fullChroma: live.fullChroma)
         // Decision 0034: a runtime fallback is retried at the next stream mode change.
         if live.packedFallback, !wanted.sameStreamMode(as: live.settings) {
             live.packedFallback = false
-            wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+            wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
                                         fullChroma: live.fullChroma)
         }
         // T-293: only a real user change of the prefs (not a replay on accept) starts the breaker over.
@@ -992,9 +983,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard !isShuttingDown, var live = session, live.settings.dynamicRange == .hdr10, let prefs = live.prefs else {
             return nil
         }
-        let env = ProcessInfo.processInfo.environment
-        let sdr = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                     allowGameDisplay: allowsGameDisplay, allowHDR: false, fullChroma: live.fullChroma)
+        let sdr = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: false, fullChroma: live.fullChroma)
         live.settings = sdr
         live.configID = nextConfigID(after: live.configID)
         session = live
@@ -1018,9 +1007,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func fallBackFromPackedChroma(reason: String, startFailed: Bool) async {
         guard !isShuttingDown, var live = session, live.settings.packedChroma, let prefs = live.prefs else { return }
         live.packedFallback = true
-        let env = ProcessInfo.processInfo.environment
-        let wanted = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
+        let wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
                                         fullChroma: live.fullChroma)
         live.settings = wanted
         live.configID = nextConfigID(after: live.configID)
@@ -1046,9 +1033,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard fallBack, !isShuttingDown, var live = session, !live.settings.displayHiDPI, let prefs = live.prefs else {
             return false
         }
-        let env = ProcessInfo.processInfo.environment
-        let native = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
-                                        allowGameDisplay: false, allowHDR: allowsHDR, fullChroma: live.fullChroma)
+        let native = live.base.applying(prefs, allowGameDisplay: false, allowHDR: allowsHDR, fullChroma: live.fullChroma)
         let old = live.settings
         live.settings = native
         live.configID = nextConfigID(after: live.configID)

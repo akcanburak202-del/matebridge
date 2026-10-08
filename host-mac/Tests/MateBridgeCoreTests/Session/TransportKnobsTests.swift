@@ -1,7 +1,7 @@
 import XCTest
 @testable import MateBridgeCore
 
-/// T-088: transport classification and log names, Wi-Fi bitrate precedence, service class and send-queue knobs.
+/// T-088: transport classification and log names, bitrate source, service class and send-queue knobs.
 final class TransportKnobsTests: XCTestCase {
     // MARK: Transport
 
@@ -16,60 +16,22 @@ final class TransportKnobsTests: XCTestCase {
         XCTAssertEqual(SessionTransport.network.logName, "wifi")
     }
 
-    // MARK: Wi-Fi bitrate
+    // MARK: Bitrate source
 
-    private let prefs120 = StreamPrefs(fps: 120, scalePermille: 1000)
-
-    private func base(_ env: [String: String], _ transport: SessionTransport) -> VideoSettings {
-        VideoSettings.tabletDefault.applyingExperimentKnobs(env).applyingTransportKnobs(env, transport: transport)
-    }
-
-    func testWifiBitrateAppliesOnlyToWifiSessions() {
-        let env = ["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000"]
-        let wifi = base(env, .network)
-        XCTAssertEqual(wifi.bitrateKbps, 25_000)
-        XCTAssertEqual(wifi.bitrateSource, "wifi_env")
-        // It survives STREAM_PREFS (whose default would be 60 Mbps at 120 fps) and a reconnect with stored prefs.
-        let applied = wifi.applying(prefs120)
-        XCTAssertEqual(applied.bitrateKbps, 25_000)
-        XCTAssertEqual(applied.bitrateSource, "wifi_env")
-        XCTAssertEqual(applied.streamConfig(configID: 2).bitrateKbps, 25_000)
-        let initial = VideoSettings.initialSettings(defaults: wifi, stored: StreamPrefs(fps: 60, scalePermille: 500),
-                                                    defaultRefreshHz: 60)
-        XCTAssertEqual(initial.bitrateKbps, 25_000)
-
-        // USB: unchanged, the mode default as before.
-        let usb = base(env, .usb)
-        XCTAssertEqual(usb, VideoSettings.tabletDefault.applyingExperimentKnobs([:]))
-        XCTAssertEqual(usb.applying(prefs120).bitrateKbps, 60_000)
-        XCTAssertEqual(usb.applying(prefs120).bitrateSource, "prefs")
-    }
-
-    func testEnvBitrateWinsOverWifiBitrate() {
-        let env = ["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000", "MATEBRIDGE_BITRATE_KBPS": "90000"]
-        for transport in [SessionTransport.network, .usb] {
-            let s = base(env, transport).applying(prefs120)
-            XCTAssertEqual(s.bitrateKbps, 90_000)
-            XCTAssertEqual(s.bitrateSource, "env")
-        }
-    }
-
-    func testInvalidWifiBitrateIsIgnored() {
-        for bad in ["", "abc", "4999", "150001", "-1"] {
-            let s = base(["MATEBRIDGE_WIFI_BITRATE_KBPS": bad], .network)
-            XCTAssertNil(s.bitrateOverrideKbps, bad)
-            XCTAssertEqual(s.applying(prefs120).bitrateKbps, 60_000, bad)
-            XCTAssertEqual(s.bitrateSource, "prefs", bad)
-        }
-        // Range edges are accepted.
-        XCTAssertEqual(base(["MATEBRIDGE_WIFI_BITRATE_KBPS": "5000"], .network).bitrateKbps, 5_000)
-        XCTAssertEqual(base(["MATEBRIDGE_WIFI_BITRATE_KBPS": " 150000 "], .network).bitrateKbps, 150_000)
-    }
-
-    func testNoKnobsLeavesSettingsUnchanged() {
+    func testRemovedWifiBitrateKnobIsInert() {
+        // T-302: `MATEBRIDGE_WIFI_BITRATE_KBPS` no longer changes anything.
+        let prefs120 = StreamPrefs(fps: 120, scalePermille: 1000)
         let plain = VideoSettings.tabletDefault.applyingExperimentKnobs([:])
-        XCTAssertEqual(plain.applyingTransportKnobs([:], transport: .network), plain)
-        XCTAssertEqual(plain.applyingTransportKnobs([:], transport: .usb), plain)
+        let withKnob = VideoSettings.tabletDefault.applyingExperimentKnobs(["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000"])
+        XCTAssertEqual(withKnob, plain)
+        XCTAssertEqual(withKnob.applying(prefs120).bitrateKbps, 60_000)
+        XCTAssertEqual(withKnob.applying(prefs120).bitrateSource, "prefs")
+    }
+
+    func testEnvBitrateSource() {
+        let s = VideoSettings.tabletDefault.applyingExperimentKnobs(["MATEBRIDGE_BITRATE_KBPS": "90000"])
+        XCTAssertEqual(s.applying(StreamPrefs(fps: 120, scalePermille: 1000)).bitrateKbps, 90_000)
+        XCTAssertEqual(s.bitrateSource, "env")
     }
 
     func testOverrideWithoutRecordedSourceCountsAsEnv() {
