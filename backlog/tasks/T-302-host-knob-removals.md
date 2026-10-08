@@ -1,7 +1,7 @@
 ---
 id: T-302
 title: Host — kapanmış deney anahtarlarını kaldır (BITRATE_STEP + canlı bit hızı zinciri, QUALITY, ENCODER=llrc, REFRESH, WIFI_BITRATE_KBPS, CHROMA 444/sharp_bilinear)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
