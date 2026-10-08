@@ -13,7 +13,7 @@ final class ChromaKnobTests: XCTestCase {
                        ChromaKnob(requested: .sharpNearest, isSet: true, invalid: false))
         // T-302: `444` and `sharp_bilinear` were removed: set, invalid, 4:2:0.
         for bad in ["444", "sharp_bilinear", "sharp", "422", "1", "yes", "4:4:4"] {
-            XCTAssertEqual(ChromaKnob.parse(bad), ChromaKnob(requested: .yuv420, isSet: true, invalid: true), bad)
+            XCTAssertEqual(ChromaKnob.parse(bad), ChromaKnob(requested: .yuv420, isSet: false, invalid: true), bad)
         }
         XCTAssertEqual(ChromaKnob.parse(env: ["MATEBRIDGE_CHROMA": "sharp_nearest"]).requested, .sharpNearest)
         XCTAssertEqual(ChromaKnob.parse(env: [:]), .unset)
@@ -55,7 +55,8 @@ final class ChromaKnobTests: XCTestCase {
     func testStatsOnlyWhenSetOrSharp() {
         XCTAssertFalse(ChromaPolicy.resolve(knob: .unset).statsEnabled)
         XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("420")).statsEnabled)
-        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("x")).statsEnabled)
+        // An invalid value is not a set knob (T-302): no stats window.
+        XCTAssertFalse(ChromaPolicy.resolve(knob: .parse("x")).statsEnabled)
     }
 
     func testEncoderConfigFieldOnlyWhenSet() {
@@ -66,7 +67,7 @@ final class ChromaKnobTests: XCTestCase {
         k.chroma = .parse("sharp_nearest")
         XCTAssertEqual(k.logFields, base + " chroma=sharp_nearest")
         k.chroma = .parse("nope")
-        XCTAssertEqual(k.logFields, base + " chroma=invalid")
+        XCTAssertEqual(k.logFields, base, "an invalid value is not set; RemovedKnobs/chroma_config report it")
         XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_CHROMA": "444"]).chroma.invalid)
     }
 
@@ -93,7 +94,7 @@ final class ChromaKnobTests: XCTestCase {
         let invalid = ChromaPolicy.resolve(knob: .parse("zzz"))
         l = ChromaConfigLog.line(invalid, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 100))
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value source=env chroma_format_idc=1 "
+        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value source=default chroma_format_idc=1 "
                        + "profile_idc=100 vui_full_range=unknown chroma_loc=unknown")
 
         l = ChromaConfigLog.line(sharp.fallingBack(.metalUnavailable), ChromaBitstreamInfo())

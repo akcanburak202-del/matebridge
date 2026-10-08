@@ -88,14 +88,23 @@ final class ChromaPrefsTests: XCTestCase {
         XCTAssertTrue(sharpDecision.statsEnabled, "the sharp path keeps its stats window")
         XCTAssertEqual(sharpDecision.applied.captureFormat, .bgra)
 
-        // Env wins over prefs, whatever both say (an invalid knob counts as set: 420).
-        for raw in ["420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+        // Env wins over prefs, whatever both say. An invalid or retired value is not set (T-302): see below.
+        for raw in ["420", "sharp_nearest"] {
             let knob = ChromaKnob.parse(raw)
             for pref in [ChromaPreference.normal, .sharp] {
                 let d = ChromaPolicy.resolve(knob: knob, preference: pref)
                 XCTAssertEqual(d.source, .env, "\(raw) \(pref)")
                 XCTAssertEqual(d, ChromaPolicy.resolve(knob: knob), "\(raw) \(pref)")
             }
+        }
+        // T-302: retired and invalid values do not override the tablet; its preference wins.
+        for raw in ["sharp_bilinear", "444", "bogus"] {
+            let knob = ChromaKnob.parse(raw)
+            XCTAssertFalse(knob.isSet, raw)
+            XCTAssertEqual(ChromaPolicy.resolve(knob: knob, preference: .normal).source, .default, raw)
+            let d = ChromaPolicy.resolve(knob: knob, preference: .sharp)
+            XCTAssertEqual(d.source, .prefs, raw)
+            XCTAssertEqual(d.applied, .sharpNearest, "env=\(raw) + tablet chroma=1 -> sharp_nearest")
         }
         let envOff = ChromaPolicy.resolve(knob: .parse("420"), preference: .sharp)
         XCTAssertEqual(envOff.applied, .yuv420, "MATEBRIDGE_CHROMA=420 turns the tablet's choice off")

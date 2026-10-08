@@ -49,7 +49,7 @@ public struct ChromaKnob: Equatable, Sendable {
     public static let envKey = "MATEBRIDGE_CHROMA"
 
     public let requested: ChromaMode
-    /// The variable is present and not empty (also when invalid). It then wins over the tablet's `STREAM_PREFS.chroma`
+    /// The variable is present and not empty (not when invalid). It then wins over the tablet's `STREAM_PREFS.chroma`
     /// (T-240, `ChromaPolicy`). The `encoder_config` `chroma=` field appears only then; `chroma_stats` also while the
     /// sharp path runs (`ChromaDecision.statsEnabled`).
     public let isSet: Bool
@@ -64,11 +64,11 @@ public struct ChromaKnob: Equatable, Sendable {
 
     public static let unset = ChromaKnob(requested: .yuv420, isSet: false, invalid: false)
 
-    /// Trimmed, case-insensitive; nil or empty is `unset`, an unknown value is `420` marked `invalid`.
+    /// Trimmed, case-insensitive; nil or empty is `unset`, an unknown value (also the retired `444` and `sharp_bilinear`) is treated as unset, marked `invalid`, so the tablet preference wins (T-302).
     public static func parse(_ raw: String?) -> ChromaKnob {
         let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if t.isEmpty { return .unset }
-        guard let mode = ChromaMode(rawValue: t) else { return ChromaKnob(requested: .yuv420, isSet: true, invalid: true) }
+        guard let mode = ChromaMode(rawValue: t) else { return ChromaKnob(requested: .yuv420, isSet: false, invalid: true) }
         return ChromaKnob(requested: mode, isSet: true, invalid: false)
     }
 
@@ -90,7 +90,7 @@ public enum ChromaFallbackReason: String, Equatable, Sendable {
 
 /// Where the requested chroma mode came from (`ev=chroma_config source=`, T-240).
 public enum ChromaSource: String, Equatable, Sendable {
-    /// `MATEBRIDGE_CHROMA` is set (developer knob, wins over the tablet; an invalid value counts as set: `420`).
+    /// `MATEBRIDGE_CHROMA` is set (developer knob, wins over the tablet; an invalid value does not).
     case env
     /// The tablet's `STREAM_PREFS.chroma = 1` (decision 0033): `sharp_nearest`.
     case prefs
@@ -135,7 +135,7 @@ public enum ChromaPolicy {
     /// The tablet's choice maps to T-235's best-rated mode (decision 0033).
     public static let sharpPreferenceMode = ChromaMode.sharpNearest
 
-    /// The mode to apply before any session exists. Input priority (T-240): `MATEBRIDGE_CHROMA` (set, also invalid) >
+    /// The mode to apply before any session exists. Input priority (T-240): `MATEBRIDGE_CHROMA` (set and valid) >
     /// `preference` (`STREAM_PREFS.chroma = 1` -> `sharp_nearest`) > `420`. The sharp mode and `420` work with every
     /// codec (their encoder input stays `420f`). An
     /// HDR10 stream (T-237, decision 0032) ignores every request: applied `420` (the 10-bit PQ 4:2:0 path), logged

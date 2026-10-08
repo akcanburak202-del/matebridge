@@ -344,7 +344,7 @@ final class HDRTests: XCTestCase {
     // MARK: Chroma knob (T-235) with HDR10
 
     func testHDRWinsOverTheChromaKnob() {
-        for raw in ["420", "sharp_nearest", "bogus"] {
+        for raw in ["420", "sharp_nearest"] {
             let knob = ChromaKnob.parse(raw)
             let d = ChromaPolicy.resolve(knob: knob, dynamicRange: .hdr10)
             XCTAssertEqual(d.applied, .yuv420, raw)

@@ -94,10 +94,22 @@ final class FullChromaPolicyTests: XCTestCase {
     }
 
     func testOtherKnobValuesWinOverTheTablet() {
-        for raw in ["420", "sharp_nearest", "444"] {
+        for raw in ["420", "sharp_nearest"] {
             var b = base()
             b.chromaKnob = .parse(raw)
             XCTAssertFalse(b.applying(prefs(), fullChroma: session).packedChroma, raw)
+        }
+    }
+
+    /// T-302: a retired (`444`, `sharp_bilinear`) or invalid value is not a set knob: the tablet's full colour wins.
+    func testRetiredKnobValuesDoNotBlockTheTablet() {
+        for raw in ["444", "sharp_bilinear", "bogus"] {
+            var b = base()
+            b.chromaKnob = .parse(raw)
+            XCTAssertTrue(b.applying(prefs(), fullChroma: session).packedChroma, raw)
+            let d = ChromaPolicy.resolve(knob: b.chromaKnob, preference: .full, packedChroma: true)
+            XCTAssertEqual(d.applied, .packed444, raw)
+            XCTAssertEqual(d.source, .prefs, raw)
         }
     }
 
