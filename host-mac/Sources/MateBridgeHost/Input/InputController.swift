@@ -125,6 +125,7 @@ public final class InputController: @unchecked Sendable {
     }
 
     deinit {
+        HostSleepParticipants.shared.unregister(self)
         watchdogTimer.cancel()
         pollTimer.cancel()
     }
@@ -138,6 +139,14 @@ public final class InputController: @unchecked Sendable {
             guard !started, !stopped else { return }
             started = true
             self.onStatusChange = onStatusChange
+            // T-299: on a system sleep, release everything on this queue at once, independent of the session queue.
+            HostSleepParticipants.shared.register(self, name: "input") { [weak self] done in
+                guard let self else { return done() }
+                queue.async { [self] in
+                    releaseOnQueue(.hostSleep)
+                    done()
+                }
+            }
             lastStatus = nil  // a poll that ran before start() must not swallow the first report
             _ = environment()  // reports the first status
             _ = cursor.location()  // the first query connects to WindowServer (milliseconds): not on the input path
@@ -322,11 +331,15 @@ public final class InputController: @unchecked Sendable {
     /// Release everything (`SessionServer` `releaseInput`): a RELEASE_ALL message, BYE, connection loss, protocol
     /// error, heartbeat silence, takeover or shutdown. Idempotent. Runs even after `shutdown`.
     public func releaseInput(_ cause: ReleaseCause) {
-        queue.sync {
-            let now = HostClock.nowUs()
-            flush(pipeline.release(cause, now: now, environment: environment()), now: now)
-            rearmWatchdog()
-        }
+        queue.sync { releaseOnQueue(cause) }
+    }
+
+    /// `releaseInput` body; `queue` only. Idempotent, so the host-sleep participant (T-299) and the session-end path
+    /// may both run it.
+    private func releaseOnQueue(_ cause: ReleaseCause) {
+        let now = HostClock.nowUs()
+        flush(pipeline.release(cause, now: now, environment: environment()), now: now)
+        rearmWatchdog()
     }
 
     /// Attempts and pause of the shutdown drain: a handful of retries over a few hundred milliseconds at most.

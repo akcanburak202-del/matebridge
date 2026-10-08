@@ -77,7 +77,20 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         }
     }
 
+    deinit { HostSleepParticipants.shared.unregister(self) }
+
     public init() {
+        // T-299: on a system sleep, close the capture on the tap queue at once, independent of the session queue. The
+        // streamer's later `stop` finds nothing running; a stream wanted again after wake is rebuilt by `start`.
+        HostSleepParticipants.shared.register(self, name: "audio") { [weak self] done in
+            guard let self else { return done() }
+            lock.withLock { desired = nil }
+            queue.async { [self] in
+                if let r = run { teardown(r) }
+                run = nil
+                done()
+            }
+        }
         // Wake from sleep: the HAL may have reset the devices under the aggregate; rebuild.
         Task { @MainActor [weak self] in
             _ = NSWorkspace.shared.notificationCenter.addObserver(
