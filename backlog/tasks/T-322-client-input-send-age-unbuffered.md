@@ -36,7 +36,7 @@ T-298 `docs/reviews/2026-10-08/agents/opt-c-e2e.md` EN1 ve EN3. Wi-Fi'de host `i
 
 ## Handoff
 
-- Commit: bkz. `git log task/T-322-input-age -1` (T-322: ...).
+- Commit: f7b9403758df663fe199b85272d325edf3da2f05 (branch task/T-322-input-age; bu satirin guncellenmesi sonrasi ek commit).
 - Dosyalar: `input/SendAgeStats.kt` (yeni), `input/UnbufferedSources.kt` (yeni), `input/InputCapture.kt` (sendAgeFields), `input/UnbufferedPenDispatch.kt` (sourcesLabel), `session/SendQueue.kt` (damga, takeStamped), `session/SessionController.kt` (writerLoop kaydi, `takeSendAgeFields`), `session/DevKnobs.kt` (`unbuffered_src`), `MainActivity.kt` (maske + baglanti); testler: `SendAgeStatsTest`, `UnbufferedSourcesTest`, `SendQueueStampTest`, `DevKnobsTest`, `UnbufferedPenDispatchTest` (log metni).
 - check.sh: ALL OK.
 - Varsayimlar: yas = soket `flush()` dondugu an - mesaj olay zamani (PEN icin son ornegin zamani; birlestirilen mesajda en yeni olay). Olay zamani ms cozunurluklu (`eventTime*1000`). Sinif: pen=Pen; pointer=PointerAbs/PointerRel/Pinch; key=Key; scroll=Scroll. PenGesture/ReleaseAll/diger kaydedilmez. Kova 250 us: p50/p95 kova ust siniri (en fazla +0,25 ms), max tam. Sifreleme (`sealFrame`) yazma oncesinde oldugu icin yasa dahil.
