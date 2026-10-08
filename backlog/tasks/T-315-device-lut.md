@@ -36,6 +36,8 @@ Veriye bağlı LUT indekslemesi `constant` bellekte Apple GPU'larında serileşi
 
 ## Handoff
 
+**Geri alındı (2026-10-08):** T-314 ile birlikte (bkz. T-314 Handoff). `constant` ve `device` LUT farkı aynı dakikada ölçülmedi; GPU saat durumu sonuçlara karışmıştı.
+
 - Commit: `git log task/T-315-device-lut -1`.
 - Dosyalar: `SharpYUVKernel.swift` (+ bu kart). Test dosyası değişmedi; `testProductionKernelsAreBitExactWithDeviceLUTSource` artık üretim kaynağıyla referans aynı adres uzayında.
 - `check.sh`: ALL OK.

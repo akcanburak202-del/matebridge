@@ -1,11 +1,7 @@
 ---
 id: T-314
 title: Host — T-311 birleşik sharp_nearest kernel'i cihazda daha yavaş; iki geçişli kernel'e geri dön (HA1 iz aşaması ve A8 ortak kurulum kalır)
-<<<<<<< HEAD
 status: done
-=======
-status: todo
->>>>>>> parent of cb28a5af (Merge T-314: back to two-pass sharp chroma kernel (fused was slower on device); constant LUT, HA1/A8 kept)
 phase: 7
 owner: mac-host-dev
 depends_on: [T-311]
@@ -41,5 +37,7 @@ Bench'teki (%10–15 daha hızlı) kazanç gerçek akışta tutmadı. Muhtemel n
 ## Plan
 
 ## Handoff
+
+**Geri alındı (2026-10-08 ~15:45, orkestratör):** T-314 kararı karışık bir karşılaştırmaya dayanıyordu. Mac GPU süresi, kodun değil, o anki GPU saat ve güç durumunun etkisinde: T-311 öncesi sürüm de aynı saatte 4,22 ms ölçtü. Aynı dakikalarda dönüşümlü A/B: birleşik 3,67/3,49 ms, iki geçiş 3,92/3,51 ms (`gpu_ms` p50); `conv_ms` birleşikte ~0,2 ms daha kısa. T-314 ve T-315 birleştirmeleri `git revert` ile geri alındı; kernel T-311 haline döndü.
 
 ## Open questions
