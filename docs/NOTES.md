@@ -1798,3 +1798,24 @@ Yöntem: tablete adb ile `input keyevent HOME` ve `am force-stop`, ardından her
 - **T-306:** Günlük 60 hareket sahnesinde çözme p50 15,4 ms, karelerin %31'i > 16,7 ms; geç düşme %6,7, iki vsync tutma %12. Oyun 60'ta %6. Zamanlayıcı kilitli (`locked` %99,8), yakalama düzenli → T-310.
 - **T-301 daily APK kuruldu:** `versionCode=403828`, `flags` içinde DEBUGGABLE yok, eşleşme korundu, görüntü sağlıklı.
 - **Geçici değişiklikler geri alındı:** `idle_dim` kapatılmıştı, parlaklık sabitlenmişti, `stream_mode` game olmuştu, Safari açıktı.
+
+## 2026-10-08 ~15:00–15:45 — Cihaz oturumu: T-309/T-311/T-312 ölçümü, trackpad, DDR saati (T-310)
+
+Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda daily APK geri kuruldu.
+
+- **Not:** ilk sentetik kalem kolunda Safari tam ekran değildi ve vuruşlar Terminal'de metin seçti (kullanıcı fark etti; panoya ~1.500 karakter kopyalandı). Kol yeniden yapıldı. Artık her koldan önce `AXFullScreen` zorlanıyor, Terminal gizleniyor ve ekran görüntüsüyle doğrulanıyor.
+- **T-309 (imleç), aynı sentetik kalem yükü (~980/s):** host %48,7 → **%18,2**; `dev.matebridge.cursor` 3.328 → 125 örnek/8 sn; `shape_checks` 17/s, örnekleme p50 3 µs.
+- **Trackpad (kullanıcı, ~30 sn, T-309 sonrası):** 62 olay/s; host CPU p50 %3,1, p90 %6,2; işaretçi yaşı p50 15,4 ms. Düzeltme öncesi trackpad ölçülmedi.
+- **T-312 `dec_out_park`, 10 fps, 3 çift:** uyanma 1.175 → 842/s, CPU %29,6 → %27,4; `cap_dec` p50/p95 değişmedi (21,2/33,0 → 20,7/32,0). Hareket sahnesinde fark yok → varsayılan on (T-317).
+- **T-311 / T-314 / T-315: ölçüm hatası.**
+  - Mac GPU süresi (`chroma_stats gpu_ms`) koddan çok o anki GPU saat durumuna bağlı. Aynı T-311 öncesi sürüm sabah 2,50 ms, 15:40'ta 4,22 ms.
+  - "T-311 daha yavaş" kararı farklı saatlerde alınan ölçümlere dayanıyordu.
+  - Aynı dakikalarda dönüşümlü A/B: birleşik 3,67/3,49 ms, iki geçiş 3,92/3,51 ms; birleşik en az eşit, `conv` ~0,2 ms kısa.
+  - T-314 ve T-315 `git revert` ile geri alındı.
+  - Ders: Mac tarafı GPU ölçümleri yalnız dönüşümlü A/B ile kıyaslanır.
+- **T-310, DDR saati:**
+  - Dokunmasız hareket sahnesinde DDR 749/1104 MHz, GPU 239 MHz; çözme p50 15,4 ms, `cap_dec` 33,8 ms.
+  - Sentetik dokunuşla DDR 1536 MHz, GPU 442 MHz; çözme **11,4 ms**, `cap_dec` **19,1 ms**, `skip_pct` %11,9 → %2,9.
+  - Çizim modu dokunmasızken de 16 ms.
+  - → T-316 (uygulamanın kontrol edebileceği bir kaldıraç).
+- **Gözlem:** Wi-Fi'dayken `dev.matebridge.usb` kuyruğu ~%1,5 çekirdek (adb yoklaması). Küçük ama gereksiz; not edildi.

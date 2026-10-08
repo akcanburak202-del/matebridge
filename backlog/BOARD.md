@@ -29,6 +29,8 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
+| [T-316](tasks/T-316-ddr-clock-lever.md) | Araştırma — dokunma olmadan Huawei DDR/GPU saatleri düşük kalıyor; uygulamanın kontrol edebileceği bir kaldıraç (çözme 15,4 → 11,4 ms, cap_dec −15 ms) | 7 | orchestrator | [T-310] |
+| [T-317](tasks/T-317-dec-out-park-default.md) | Tablet — dec_out_park varsayılanı on (T-312 A/B kabul); off bir döngü geri dönüş | 7 | android-client-dev | [T-312] |
 
 ## done
 
