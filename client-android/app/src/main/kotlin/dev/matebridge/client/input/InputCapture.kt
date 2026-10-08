@@ -37,6 +37,11 @@ class InputCapture(
     private val viewport: () -> VideoViewport,
     /** Rare state events for the `MB/input` log (name, key=value fields): never coordinates or key data. */
     private val onEvent: (String, String) -> Unit = { _, _ -> },
+    /**
+     * T-322: the send-age fields of the window since the last call (`pen_send_age_ms_p50=...`, "" when nothing was sent),
+     * appended to the summary line. Called once per summary interval, on the UI thread.
+     */
+    private val sendAgeFields: () -> String = { "" },
     /** Once-per-second counter summary for the `MB/input` log. */
     private val onStatsLine: (String) -> Unit = {},
 ) : PointerFollowers {
@@ -295,7 +300,11 @@ class InputCapture(
         syncIdleHeld()
         if (lastStatsMs == NEVER_MS) lastStatsMs = nowMs
         if (nowMs - lastStatsMs >= STATS_INTERVAL_MS) {
-            if (counters.any() || pen.inRange) onStatsLine(counters.fields(nowMs - lastStatsMs))
+            val age = sendAgeFields() // always taken, so a window never carries over
+            if (counters.any() || pen.inRange || age.isNotEmpty()) {
+                val base = counters.fields(nowMs - lastStatsMs)
+                onStatsLine(if (age.isEmpty()) base else "$base $age")
+            }
             counters.reset()
             lastStatsMs = nowMs
         }

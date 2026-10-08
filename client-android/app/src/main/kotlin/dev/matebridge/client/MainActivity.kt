@@ -617,6 +617,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             },
             { viewport },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
+            sendAgeFields = { controller.takeSendAgeFields() }, // T-322
         ) { line -> MbLog.i("stats", line, "input") }
         capture.setFingerPolicy(gameSettings.fingers, SystemClock.uptimeMillis()) // T-223: Çizim layer included
         idleStore = IdleTimeoutStore(prefsStore) // T-234
@@ -634,10 +635,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 if (on && !video.isAttachedToWindow) return@Backend false // no window yet; sync retries
                 // View ignores a request equal to its current value; clear first so a set always reaches the window.
                 video.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
-                if (on) video.requestUnbufferedDispatch(InputDevice.SOURCE_STYLUS)
+                // T-322: the pen's source, plus the sources `--es unbuffered_src relative` adds, in one mask.
+                if (on) video.requestUnbufferedDispatch(devKnobs.unbufferedSrc.requestMask)
                 true
             },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
+            sourcesLabel = devKnobs.unbufferedSrc.label,
         )
         // A new window (ViewRootImpl) starts without the request: request it again.
         video.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {

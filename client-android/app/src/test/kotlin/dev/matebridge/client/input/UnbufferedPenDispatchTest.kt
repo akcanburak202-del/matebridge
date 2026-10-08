@@ -25,7 +25,7 @@ class UnbufferedPenDispatchTest {
         p.sync(true)
         p.sync(true)
         assertEquals(listOf(true), calls)
-        assertEquals(listOf("unbuffered path=source"), events)
+        assertEquals(listOf("unbuffered path=source sources=stylus"), events)
     }
 
     @Test fun theRequestIsClearedWhenCaptureIsNotActiveAndNeverMadeForAnInactivePanel() {

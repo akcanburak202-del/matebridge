@@ -7,6 +7,7 @@ import dev.matebridge.client.audio.AudioArrivalMeter
 import dev.matebridge.client.diag.StallDetector
 import dev.matebridge.client.diag.StallDiag
 import dev.matebridge.client.diag.StallMeter
+import dev.matebridge.client.input.SendAgeStats
 import dev.matebridge.client.protocol.AudioConfig
 import dev.matebridge.client.protocol.AudioFrame
 import dev.matebridge.client.protocol.AudioPrefs
@@ -473,6 +474,12 @@ class SessionController(
 
     /** True while the control send queue is backed up (input layer holds mergeable hover/scroll samples then). Any thread. */
     fun isSendCongested(): Boolean = control?.link?.congested() ?: false
+
+    /** T-322 (EN1): input send-age statistics, filled by the control writer thread across connections. */
+    private val sendAge = SendAgeStats()
+
+    /** T-322: the send-age fields of the window since the last call ("" when no input was sent); the input stats line appends them. */
+    fun takeSendAgeFields(): String = sendAge.takeFields()
 
     /**
      * T-160: the renderer has installed [config] (the object [SessionListener.onStreamConfig] carried) and reset its
@@ -967,7 +974,8 @@ class SessionController(
                 val out = socket.getOutputStream()
                 var first = true
                 while (true) {
-                    val frame = queue.take() ?: break
+                    val stamped = queue.takeStamped() ?: break
+                    val frame = stamped.bytes
                     val wire = if (first) {
                         // Only HELLO goes out in plaintext, and only first; everything else is sealed in FIFO order.
                         first = false
@@ -980,6 +988,8 @@ class SessionController(
                     }
                     out.write(wire)
                     out.flush()
+                    // T-322: send age = socket write returned - event time (tablet clock); input messages only.
+                    if (stamped.cls >= 0) sendAge.record(stamped.cls, stamped.eventTimeUs, System.nanoTime() / 1000)
                 }
                 // Graceful close after a drained queue: half-close so the peer sees BYE then EOF.
                 if (!socket.isClosed) closeQuietly(socket)
