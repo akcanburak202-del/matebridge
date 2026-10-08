@@ -89,9 +89,13 @@ class AuxFrameQueue(
         return request
     }
 
-    /** Next frame for the decoder (CODEC_CONFIG first), waiting up to [timeoutNs]; null on timeout. */
-    fun awaitNext(timeoutNs: Long): VideoFrame? = lock.withLock {
-        if (pending.isEmpty() && timeoutNs > 0) {
+    /**
+     * Next frame for the decoder (CODEC_CONFIG first), waiting up to [timeoutNs]; null on timeout. T-312: [abort] is
+     * checked under the lock before the wait, so a writer that makes it true and then calls [wake] is never missed (the
+     * wait may be a long event wait, not a poll).
+     */
+    fun awaitNext(timeoutNs: Long, abort: (() -> Boolean)? = null): VideoFrame? = lock.withLock {
+        if (pending.isEmpty() && timeoutNs > 0 && abort?.invoke() != true) {
             nonEmpty.awaitNanos(timeoutNs)
         }
         pending.removeFirstOrNull()

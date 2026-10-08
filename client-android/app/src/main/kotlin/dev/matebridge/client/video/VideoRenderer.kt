@@ -193,6 +193,12 @@ class VideoRenderer(
     @Volatile var catchUp: Boolean = true
         set(v) { field = v; applyCatchUpDepth(config.fps) }
 
+    /**
+     * T-312 (CB2): the output thread parks while the codec holds nothing instead of polling every 5 ms ([OutputPark]);
+     * `--es dec_out_park on` for A/B, default off. Read when a codec starts.
+     */
+    @Volatile var outPark: Boolean = false
+
     private fun applyCatchUpDepth(fps: Int) {
         queue.catchUpDepth = if (catchUp) CatchUp.depthForFps(fps) else 0
     }
@@ -559,6 +565,7 @@ class VideoRenderer(
         var codec: DecoderCodec? = null
         var error: String? = null
         var outThread: Thread? = null
+        val park = OutputPark(outPark) // T-312
         val st = CodecState(att, PTS_MAP_MAX) // T-161: this codec's own state; `running` replaces outRunning
         val outError = java.util.concurrent.atomic.AtomicReference<String?>(null)
         try {
@@ -614,15 +621,18 @@ class VideoRenderer(
                 val outInfo = DecoderCodec.OutputInfo()
                 var loggedFormat = false
                 val formatGate = OutputFormatLogGate() // T-231: `ev=decoder_output_format`, per codec
+                park.bindOutputThread()
                 st.lastOutputNs = System.nanoTime()
                 try {
                     while (st.current) {
                         val now = System.nanoTime()
                         val untilDeadline = releaser.untilDeadlineNs(now)
+                        // T-312: nothing in the codec and nothing held: park until the input thread queues a frame.
+                        if (park.parkIfEmpty(untilDeadline != null, now - st.lastOutputNs)) continue
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
                         // how fast a stop is seen, so it grows while no output comes.
                         val waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)
-                        val changed = drainOutput(c, outInfo, adaptivePacer, sink, releaser, st, waitUs)
+                        val changed = drainOutput(c, outInfo, adaptivePacer, sink, releaser, st, park, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())
                         if (changed && !loggedFormat) {
@@ -684,7 +694,14 @@ class VideoRenderer(
                 if (!frame.isCodecConfig) { st.captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) st.catchMarks.put(frame.frameSeq, mark) // before the codec can output it
                 if (!frame.isCodecConfig) gauge.onQueued()
-                codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                if (!frame.isCodecConfig) park.onQueued() // T-312: before the call, the output can beat its return
+                try {
+                    codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
+                } catch (e: Exception) {
+                    if (!frame.isCodecConfig) park.onQueueFailed()
+                    throw e
+                }
+                park.signal()
                 if (!frame.isCodecConfig) progress.onInput(att.gen, env.elapsedRealtimeMs()) // T-159 no-output rule
                 trace?.onInput(frame.frameSeq, System.nanoTime(), takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
             }
@@ -693,6 +710,7 @@ class VideoRenderer(
             error = e.javaClass.simpleName
         } finally {
             st.stop() // waits for an output bookkeeping section in progress; none starts after it
+            park.signal() // T-312: a parked output thread sees the retirement now, not after its fuse
             val out = outThread
             try { out?.join(OUTPUT_JOIN_MS) } catch (_: InterruptedException) {}
             if (out != null && out.isAlive) {
@@ -800,7 +818,7 @@ class VideoRenderer(
      */
     private fun drainOutput(
         codec: DecoderCodec, info: DecoderCodec.OutputInfo, adaptivePacer: AdaptivePacer,
-        sink: CodecSink, releaser: SlotReleaser, st: CodecState, firstWaitUs: Long = 0,
+        sink: CodecSink, releaser: SlotReleaser, st: CodecState, park: OutputPark, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
         val gen = st.generation.gen
@@ -812,6 +830,7 @@ class VideoRenderer(
             if (idx < 0) break
             val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
             val readyNs = System.nanoTime()
+            if (isFrame) park.onOutput()
             var d: PacerDecision? = null
             var tag = -1L
             var firstOfGeneration = false

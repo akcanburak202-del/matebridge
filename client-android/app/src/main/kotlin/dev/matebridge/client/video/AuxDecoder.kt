@@ -64,7 +64,6 @@ class AuxDecoder(
         private const val TAG = "MB/decoder"
         private const val JOIN_MS = 500L
         private const val OUTPUT_WAIT_US = 5_000L
-        private const val INPUT_WAIT_NS = 4_000_000L
         private const val CAPTURE_MAP_MAX = 64
     }
 
@@ -172,18 +171,24 @@ class AuxDecoder(
             c.start()
             env.log('I', TAG, "${env.elapsedRealtimeMs()} I decoder ev=aux_codec_start name=${c.name} size=${config.widthPx}x${config.heightPx}")
             val dog = AuxWatchdog().also { it.reset(System.nanoTime()) } // this codec generation's own
+            val inputAbort = { !active || outError.get() != null } // T-312: ends the long input wait
             val t = Thread({
                 val info = DecoderCodec.OutputInfo()
+                var lastOutNs = System.nanoTime()
                 try {
                     while (running.get()) {
-                        val idx = c.dequeueOutputBuffer(info, OUTPUT_WAIT_US)
+                        // T-312: IdleWait: the poll grows to 20 ms after 300 ms without an output.
+                        val waitUs = IdleWait.waitNs(System.nanoTime() - lastOutNs, OUTPUT_WAIT_US * 1000) / 1000
+                        val idx = c.dequeueOutputBuffer(info, waitUs)
                         if (idx < 0) continue // try again / format changed
+                        lastOutNs = System.nanoTime()
                         val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
                         c.releaseOutputBuffer(idx, isFrame) // render to the ImageReader at once
                         if (isFrame) { decoded++; dog.onOutput(System.nanoTime()) }
                     }
                 } catch (e: Exception) {
                     if (running.get()) outError.set(e.javaClass.simpleName)
+                    queue.wake() // T-312: the input thread may be in a long event wait
                 }
             }, "mb-aux-out")
             outThread = t
@@ -195,7 +200,7 @@ class AuxDecoder(
                     error = "stalled"
                     break
                 }
-                val frame = held ?: queue.awaitNext(INPUT_WAIT_NS)
+                val frame = held ?: queue.awaitNext(DecoderWaits.EVENT_INPUT_WAIT_NS, inputAbort)
                 held = null
                 if (frame == null) continue
                 val idx = c.dequeueInputBuffer(4_000)

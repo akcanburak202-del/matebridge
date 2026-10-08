@@ -1,7 +1,7 @@
 ---
 id: T-312
 title: Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: [T-303]
@@ -34,6 +34,23 @@ T-298 CB2 (`docs/reviews/2026-10-08/agents/opt-b-client.md`) ve T-297 C10. T-296
 
 ## Plan
 
+1. `OutputPark` (yeni, saf, JVM testli): in-flight sayaç (CODEC_CONFIG hariç), `parkIfEmpty(holding, sinceLastOutputNs)`, `signal()`; sigorta 20 ms; 1 s çıktısız kalırsa sayaç 0'a eşitlenir (codec'in yuttuğu kare yüzünden park sonsuza dek kapanmasın).
+2. `VideoRenderer`: codec başına `OutputPark(outPark)`; giriş iş parçacığı `queueInputBuffer` ÖNCESİ sayar, SONRASI `signal()`; çıkış iş parçacığı tutulan tampon yoksa ve sayaç 0 ise park eder, kare uçuştayken 5 ms dequeue aynen; retire (`st.stop()` sonrası) `signal()`. `outPark` alanı varsayılan false.
+3. `DevKnobs`: `dec_out_park off|on` (debug-only, STRING, profile `knobs=` listesine otomatik girer).
+4. C10: `AuxDecoder` giriş beklemesi `DecoderWaits.EVENT_INPUT_WAIT_NS` (olay tabanlı; `AuxFrameQueue.awaitNext(abort)` kilit altında kontrol eder, çıkış hatası `queue.wake()`); aux çıkış `IdleWait`; `PackedPresenter` GL beklemesi `GlWait`: bekleyen iş (tutulan görüntü, çitsiz çizim, retire kuyruğu, son çizimden 500 ms) varsa 25 ms, yoksa 250 ms sigorta + bildirim.
+5. Testler: `OutputParkTest` (saf park/unpark/sigorta/resync, GL politikası, aux kuyruk, sahte codec ile renderer A/B), `DevKnobsTest`.
+
 ## Handoff
 
+- Branch `task/T-312-output-park`; commit SHA: `git log -1` (tek commit, "T-312: ...").
+- Dosyalar: `video/OutputPark.kt` (yeni: `OutputPark`, `GlWait`), `video/VideoRenderer.kt`, `video/AuxDecoder.kt`, `video/AuxFrameQueue.kt`, `video/PackedPresenter.kt`, `video/ChromaReuse.kt` (`DrawWatch.hasOutstanding`), `session/DevKnobs.kt`, testler `OutputParkTest.kt` (yeni), `DevKnobsTest.kt`.
+- `./scripts/check.sh`: ALL OK.
+- Varsayımlar: sayaç codec başına; çıktılar yalnız `isFrame` (CODEC_CONFIG değil) sayılır; giriş sayımı `queueInputBuffer` ÖNCESİ (çıktı çağrı dönmeden gelebilir), unpark SONRASI. Park yalnız sayaç 0 ve tutulan tampon yokken; aksi halde bire bir eski 5 ms (uzun dequeue yok). Kaçan unpark en çok 20 ms sigorta. `dec_out_park off` = eski davranış (sayım bile yapılmaz).
+- GL (CB9): bekleyen iş yokken 25 ms yerine 250 ms (bildirim `offerMain/offerAux/shutdown` ile uyandırır). Bekleyen iş = tutulan görüntü, tamamlanmamış çizim, retire kuyruğunda görüntü veya son çizimden <500 ms (zaman damgası kuyruğu). Fence_stall bekçisi (500 ms) bekleyen çizim varken 25 ms'de kalır.
+- Aux (C10): giriş 4 ms yerine 250 ms olay beklemesi; bekçi (2 s) en geç 250 ms'de bir kontrol edilir. Aux çıkış 5 ms -> 20 ms (300 ms çıktısız sonra).
+- TABLETTE TEST EDİLMEDİ. Orkestratör: (1) MainActivity satırı eklendikten sonra `--es dec_out_park on` ile 10 fps ve hareket sahnesinde `/proc` iş parçacığı uyanmaları (`mb-decoder-out`, `MediaCodec_loop`, `CodecLooper`) ve `cap_dec` p50/p95 (±1 ms) `off` ile karşılaştır; (2) `ev=profile knobs=` içinde `dec_out_park:on` görünmeli; (3) Tam renk açıkken `mb-gl` ve `mb-aux-dec` uyanmaları statik ekranda düşmeli, late upgrade ve `gl_*` istatistikleri değişmemeli; (4) detach/yeniden bağlanma ve uyku-uyanma sonrası görüntü gelmeli.
+
 ## Open questions
+
+- **MainActivity bağlantısı eksik (kart `files:` dışı):** `DevKnobs.decOutPark` ve `VideoRenderer.outPark` hazır, ama MainActivity'de renderer oluşturulan yerde (`it.catchUp = devKnobs.catchUp` satırının yanında, ~1467) `it.outPark = devKnobs.decOutPark` satırı yok. Orkestratör bu tek satırı eklemeli (aksi halde bayrak etkisiz).
+- `docs/KNOBS.md` `dec_out_park` satırı orkestratörde (kart dosyaları dışında).

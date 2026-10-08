@@ -114,6 +114,9 @@ class DrawWatch {
 
     fun onSubmitted(draw: Long, nowNs: Long) { times.addLast(draw to nowNs) }
 
+    /** True while a submitted draw was not seen completed by the last [stalledForNs] (the GL thread must keep polling). */
+    fun hasOutstanding(): Boolean = times.isNotEmpty()
+
     /** 0 when every submitted draw completed, else how long the oldest incomplete one has been waiting. */
     fun stalledForNs(nowNs: Long, completedDraws: Long): Long {
         while (times.isNotEmpty() && times.first().first <= completedDraws) times.removeFirst()
