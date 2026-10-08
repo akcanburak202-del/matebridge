@@ -48,7 +48,7 @@ T-297 ortak ayıklaması, kullanıcı kararları 2026-10-08 (0023, 0026, 0033 ek
 
 ## Handoff
 
-- **Branch:** `task/T-302-knob-removals`; commit SHA asagida (son commit).
+- **Branch:** `task/T-302-knob-removals`; commit `1fe10249`.
 - **check.sh:** ALL OK (swift test 1027 test, gradle, fixtures, crypto, measurement kit).
 - **Kaldirilanlar (hepsi kodu okuyarak dogrulandi):**
   - `MATEBRIDGE_BITRATE_STEP` + canli bit hizi zinciri: `BitrateStepKnob`, `VideoPipeline.setTargetBitrate`, `HEVCEncoder.setTargetBitrate/applyBitrate/bitrateStepTick/stepTimer`, `Backend.setBitrate`, `PackedAuxEncoder.setBitrate/currentKbps/logSink`, `CompressionBackend.setBitrate`, `BitrateRequest`, `PendingBitrate`/`openBitrate`/`takeBitrate`, bit hizi `Stats` alanlari, `ev=bitrate_set`. `LiveBitrateTests` ve 5 EncoderSubmitOrder bit hizi testi silindi; T-162 testleri (tek gonderim sahibi, barrier, stress) kaldi. `RateLimitWindows`/`MATEBRIDGE_RATE_WINDOW_MS` kaldi.
