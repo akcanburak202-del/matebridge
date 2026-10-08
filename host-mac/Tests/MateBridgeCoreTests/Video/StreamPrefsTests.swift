@@ -52,8 +52,8 @@ final class StreamPrefsTests: XCTestCase {
         let b = base.applying(StreamPrefs(fps: 120, scalePermille: 750))
         XCTAssertEqual([b.fps, b.displayRefreshHz], [120, 120])
         XCTAssertEqual(b.bitrateKbps, 33_750)
-        let c = base.applying(StreamPrefs(fps: 60, scalePermille: 1000), defaultRefreshHz: 120)
-        XCTAssertEqual([c.fps, c.displayRefreshHz], [60, 120], "60 fps keeps the env/default refresh rate")
+        let c = base.applying(StreamPrefs(fps: 60, scalePermille: 1000))
+        XCTAssertEqual([c.fps, c.displayRefreshHz], [60, 60], "60 fps runs the display at 60 Hz")
         XCTAssertEqual(c.bitrateKbps, 30_000)
         let d = base.applying(StreamPrefs(fps: 7, scalePermille: 10))
         XCTAssertEqual([d.fps, d.scalePermille], [60, 500])
@@ -122,19 +122,18 @@ final class StreamPrefsTests: XCTestCase {
     func testStoredPrefsAreUsedAndUnknownDeviceGetsDefaults() {
         let store = InMemoryStreamPrefsStore()
         store.save(StreamPrefs(fps: 120, scalePermille: 750), device: deviceA)
-        let a = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA), defaultRefreshHz: 60)
+        let a = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA))
         XCTAssertEqual([a.fps, a.scalePermille, a.displayRefreshHz], [120, 750, 120])
-        let b = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceB), defaultRefreshHz: 60)
+        let b = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceB))
         XCTAssertEqual(b, base, "unknown device: defaults unchanged")
     }
 
     func testEnvKnobsStillSetTheDefaultsAndStoredPrefsWinOverThem() {
         let env = ["MATEBRIDGE_FPS": "120", "MATEBRIDGE_BITRATE_KBPS": "45000"]
         let defaults = base.applyingExperimentKnobs(env)
-        let unknown = VideoSettings.initialSettings(defaults: defaults, stored: nil, defaultRefreshHz: 60)
+        let unknown = VideoSettings.initialSettings(defaults: defaults, stored: nil)
         XCTAssertEqual([unknown.fps, unknown.bitrateKbps, unknown.displayRefreshHz], [120, 45_000, 120])
-        let stored = VideoSettings.initialSettings(defaults: defaults, stored: StreamPrefs(fps: 60, scalePermille: 1000),
-                                                   defaultRefreshHz: 60)
+        let stored = VideoSettings.initialSettings(defaults: defaults, stored: StreamPrefs(fps: 60, scalePermille: 1000))
         XCTAssertEqual([stored.fps, stored.displayRefreshHz], [60, 60])
     }
 
@@ -144,7 +143,7 @@ final class StreamPrefsTests: XCTestCase {
         XCTAssertEqual(store.load(device: deviceA), StreamPrefs(fps: 60, scalePermille: 500))
         let mode = StreamPrefs(fps: 120, scalePermille: 750)
         store.save(mode, device: deviceA)
-        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA), defaultRefreshHz: 60)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: deviceA))
         var lease = DisplayLease()
         _ = lease.sessionStarted(device: deviceA, settings: initial)
         lease.sessionEnded(now: 0)

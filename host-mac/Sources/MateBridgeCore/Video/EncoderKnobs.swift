@@ -10,66 +10,12 @@ extension Codec {
     }
 }
 
-/// Debug bitrate step for the live-bitrate device check (T-177): `MATEBRIDGE_BITRATE_STEP=60000,15000,60000@5s`.
-/// Every `periodMs` the encoder's live setter is called with the next value (kbps), cycling through the list, starting
-/// one period after the encoder starts. Default off. Closed by T-196 (adopted into the adaptation controller), or
-/// removed after the T-127 Wi-Fi re-measurement if no adaptation card needs it (decision 0026 §2).
-public struct BitrateStepKnob: Equatable, Sendable {
-    public static let periodRangeMs: ClosedRange<Int> = 100...600_000
-    public static let maxValues = 16
-
-    public var valuesKbps: [Int]
-    public var periodMs: Int
-
-    public init(valuesKbps: [Int], periodMs: Int) {
-        self.valuesKbps = valuesKbps
-        self.periodMs = periodMs
-    }
-
-    /// `<kbps>[,<kbps>...]@<n>s|<n>ms`: 1...16 values, each a whole number in the user bitrate range
-    /// (`VideoSettings.userBitrateRangeKbps`), period 100 ms...600 s. Anything else (or nil) is nil: off.
-    public static func parse(_ text: String?) -> BitrateStepKnob? {
-        guard let t = text?.trimmingCharacters(in: .whitespaces).lowercased(), !t.isEmpty else { return nil }
-        let parts = t.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2 else { return nil }
-        var values: [Int] = []
-        for item in parts[0].split(separator: ",", omittingEmptySubsequences: false) {
-            guard let v = Int(item.trimmingCharacters(in: .whitespaces)),
-                  VideoSettings.userBitrateRangeKbps.contains(v) else { return nil }
-            values.append(v)
-        }
-        guard (1...maxValues).contains(values.count) else { return nil }
-        let p = parts[1].trimmingCharacters(in: .whitespaces)
-        let ms: Int?
-        if p.hasSuffix("ms") {
-            ms = Int(p.dropLast(2))
-        } else if p.hasSuffix("s") {
-            ms = Int(p.dropLast()).flatMap { $0.multipliedReportingOverflow(by: 1000).overflow ? nil : $0 * 1000 }
-        } else {
-            ms = nil
-        }
-        guard let ms, periodRangeMs.contains(ms) else { return nil }
-        return BitrateStepKnob(valuesKbps: values, periodMs: ms)
-    }
-
-    /// The value for the `n`-th tick (0-based), cycling.
-    public func value(atTick n: Int) -> Int { valuesKbps[((n % valuesKbps.count) + valuesKbps.count) % valuesKbps.count] }
-
-    /// Log value: `60000,15000,60000@5000ms`.
-    public var logValue: String { valuesKbps.map(String.init).joined(separator: ",") + "@\(periodMs)ms" }
-}
-
 /// Encoder-level experiment knobs (T-086). Every default is the behaviour before T-086.
 ///
 /// T-204 (decision 0026) retired `MATEBRIDGE_PRIO_SPEED`, `MATEBRIDGE_H264_PROFILE`, `MATEBRIDGE_IDLE_REFRESH_*` and
 /// `MATEBRIDGE_INPUT_RETAG`: speed priority, the H.264 High profile and the input retag are now constants in the
 /// encoder, and the idle quality refresh is gone.
 public struct EncoderKnobs: Equatable, Sendable {
-    /// `kVTCompressionPropertyKey_Quality` (0...1). When set, `AverageBitRate` is not set (the `DataRateLimits`
-    /// cap stays).
-    public var quality: Double?
-    /// Debug bitrate step timer (T-177, `MATEBRIDGE_BITRATE_STEP`); nil = off.
-    public var bitrateStep: BitrateStepKnob?
     /// Short `DataRateLimits` window in ms next to the 1 s pair (T-177 diagnostics, `MATEBRIDGE_RATE_WINDOW_MS`);
     /// nil = off (only the 1 s pair). Closed by T-196, or removed after T-127 (decision 0026 §2).
     public var rateWindowMs: Int?
@@ -80,41 +26,52 @@ public struct EncoderKnobs: Equatable, Sendable {
 
     public init() {}
 
-    /// `MATEBRIDGE_QUALITY=0.0..1.0` (anything else: unset), `MATEBRIDGE_BITRATE_STEP` (`BitrateStepKnob.parse`),
     /// `MATEBRIDGE_RATE_WINDOW_MS` (10...999, anything else: off), `MATEBRIDGE_CHROMA` (`ChromaKnob.parse`).
+    /// T-302 removed `MATEBRIDGE_QUALITY` and `MATEBRIDGE_BITRATE_STEP` (see `RemovedKnobs`).
     public static func parse(_ env: [String: String]) -> EncoderKnobs {
         var k = EncoderKnobs()
-        k.quality = parseQuality(env["MATEBRIDGE_QUALITY"])
-        k.bitrateStep = BitrateStepKnob.parse(env["MATEBRIDGE_BITRATE_STEP"])
         if let v = int(env["MATEBRIDGE_RATE_WINDOW_MS"]), rateWindowRangeMs.contains(v) { k.rateWindowMs = v }
         k.chroma = ChromaKnob.parse(env: env)
         return k
-    }
-
-    /// 0.0...1.0 (finite); anything else is nil.
-    public static func parseQuality(_ text: String?) -> Double? {
-        guard let t = text?.trimmingCharacters(in: .whitespaces), let v = Double(t), v.isFinite, (0...1).contains(v) else {
-            return nil
-        }
-        return v
     }
 
     static func int(_ text: String?) -> Int? {
         text.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
-    /// Fields for the `ev=encoder_config` line logged when the encoder is created. `prio_speed=1`,
-    /// `idle_refresh=off` and `input_retag=1` are constants since T-204 (their knobs were retired), kept so the line
-    /// and its parsers stay unchanged (like `video_socket=bsd` after T-186). The T-177 debug knobs add
-    /// `bitrate_step=` / `rate_window_ms=` only when set, so the default line is unchanged; so does T-235's `chroma=`
-    /// (the requested mode, `invalid` for an unknown value).
+    /// Fields for the `ev=encoder_config` line logged when the encoder is created. `prio_speed=1`, `quality=unset`,
+    /// `idle_refresh=off` and `input_retag=1` are constants (their knobs were retired: T-204, T-302), kept so the line
+    /// and its parsers stay unchanged (like `video_socket=bsd` after T-186). `rate_window_ms=` is added only when
+    /// set, so the default line is unchanged; so does T-235's `chroma=` (the requested mode, `invalid` for an
+    /// unknown value).
     public var logFields: String {
-        var f = "prio_speed=1 quality=\(quality.map { String(format: "%.2f", $0) } ?? "unset") "
-            + "idle_refresh=off input_retag=1"
-        if let s = bitrateStep { f += " bitrate_step=\(s.logValue)" }
+        var f = "prio_speed=1 quality=unset idle_refresh=off input_retag=1"
         if let w = rateWindowMs { f += " rate_window_ms=\(w)" }
         if chroma.isSet { f += " chroma=\(chroma.invalid ? "invalid" : chroma.requested.rawValue)" }
         return f
+    }
+}
+
+/// T-302: environment knobs (and knob values) that were removed and are now inert. The host logs one
+/// `knob_ignored name=` warning per entry at stream start, so a stale launch environment is visible in the log.
+public enum RemovedKnobs {
+    /// Variables with no effect any more (whatever their value).
+    public static let variables: [String] = [
+        "MATEBRIDGE_BITRATE_STEP", "MATEBRIDGE_QUALITY", "MATEBRIDGE_ENCODER", "MATEBRIDGE_REFRESH",
+        "MATEBRIDGE_WIFI_BITRATE_KBPS",
+    ]
+    /// `MATEBRIDGE_CHROMA` values that were removed (the variable itself still works for the other values).
+    public static let chromaValues: Set<String> = ["444", "sharp_bilinear"]
+
+    /// `(name, value)` of every removed knob present in `env`, values made log-safe (`StreamProfileLog.value`), in
+    /// declaration order.
+    public static func present(_ env: [String: String]) -> [(name: String, value: String)] {
+        var out = variables.compactMap { name in env[name].map { (name: name, value: StreamProfileLog.value($0)) } }
+        if let c = env[ChromaKnob.envKey],
+           chromaValues.contains(c.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
+            out.append((name: ChromaKnob.envKey, value: StreamProfileLog.value(c)))
+        }
+        return out
     }
 }
 
@@ -128,9 +85,9 @@ public enum StreamProfileLog {
     /// Host env knobs classed keep or debug-only in decision 0026 (`docs/KNOBS.md` rows 24, 25, 26, 28, 30, 31,
     /// 33, 34, 36-42, 43, 44, 45), in log order.
     public static let knobAllowList: [String] = [
-        "MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_WIFI_BITRATE_KBPS", "MATEBRIDGE_CODEC",
-        "MATEBRIDGE_REFRESH", "MATEBRIDGE_ENCODER", "MATEBRIDGE_QUALITY", "MATEBRIDGE_KEYFRAME_INTERVAL_S",
-        "MATEBRIDGE_BITRATE_STEP", "MATEBRIDGE_RATE_WINDOW_MS", "MATEBRIDGE_SERVICE_CLASS",
+        "MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_CODEC",
+        "MATEBRIDGE_KEYFRAME_INTERVAL_S",
+        "MATEBRIDGE_RATE_WINDOW_MS", "MATEBRIDGE_SERVICE_CLASS",
         "MATEBRIDGE_NOTSENT_LOWAT_KB", "MATEBRIDGE_SENDQ_LOG", "MATEBRIDGE_LAT_TRACE", "MATEBRIDGE_TCP_LOG",
         "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_VD_TRANSFER", "MATEBRIDGE_VD_PRIMARIES",
         "MATEBRIDGE_CHROMA",
@@ -149,12 +106,12 @@ public enum StreamProfileLog {
         return k.isEmpty ? "-" : k.map { "\($0.name):\($0.value)" }.joined(separator: ";")
     }
 
-    /// `fps=… bitrate_kbps=… bitrate_source=… codec=… encoder_profile=… scale_permille=… refresh_hz=… display=… sha=…
+    /// `fps=… bitrate_kbps=… bitrate_source=… codec=… encoder_profile=fast (constant since T-302) … scale_permille=… refresh_hz=… display=… sha=…
     /// knobs=…`. `display=` is the virtual display mode (`2800x1840@2x`, or a game display `1848x1214@1x`, T-214).
-    public static func fields(settings: VideoSettings, encoderProfile: EncoderProfile, build: BuildInfo,
+    public static func fields(settings: VideoSettings, build: BuildInfo,
                               env: [String: String]) -> String {
         "fps=\(settings.fps) bitrate_kbps=\(settings.bitrateKbps) bitrate_source=\(settings.bitrateSource) "
-            + "codec=\(settings.codec.logName) encoder_profile=\(encoderProfile.rawValue) "
+            + "codec=\(settings.codec.logName) encoder_profile=fast "
             + "scale_permille=\(settings.scalePermille) refresh_hz=\(settings.displayRefreshHz) "
             + "display=\(settings.displayModeText) sha=\(value(build.sha)) knobs=\(knobsField(env))"
     }
@@ -174,15 +131,13 @@ extension VideoSettings {
         text?.trimmingCharacters(in: .whitespaces).lowercased() == "h264" ? .h264 : .hevc
     }
 
-    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over everything), `wifi_env`
-    /// (`MATEBRIDGE_WIFI_BITRATE_KBPS` on a Wi-Fi session, T-088), `user` (`STREAM_PREFS.bitrate_kbps`, T-106) or
-    /// `prefs` (the default for the stream mode, `defaultBitrateKbps`). An override without a recorded source counts
-    /// as `env`.
+    /// Where the bitrate comes from: `env` (`MATEBRIDGE_BITRATE_KBPS`, wins over everything), `user`
+    /// (`STREAM_PREFS.bitrate_kbps`, T-106) or `prefs` (the default for the stream mode, `defaultBitrateKbps`).
     public var bitrateSource: String {
         guard bitrateOverrideKbps != nil else {
             return (userBitrateKbps != nil ? BitrateSource.user : BitrateSource.prefs).rawValue
         }
-        return (bitrateOverrideSource ?? .env).rawValue
+        return BitrateSource.env.rawValue
     }
 }
 

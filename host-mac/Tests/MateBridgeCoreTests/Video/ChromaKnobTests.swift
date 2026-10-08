@@ -9,72 +9,54 @@ final class ChromaKnobTests: XCTestCase {
         XCTAssertEqual(ChromaKnob.parse(""), .unset)
         XCTAssertEqual(ChromaKnob.parse("  "), .unset)
         XCTAssertEqual(ChromaKnob.parse("420"), ChromaKnob(requested: .yuv420, isSet: true, invalid: false))
-        XCTAssertEqual(ChromaKnob.parse(" SHARP_Bilinear "),
-                       ChromaKnob(requested: .sharpBilinear, isSet: true, invalid: false))
-        XCTAssertEqual(ChromaKnob.parse("sharp_nearest"), ChromaKnob(requested: .sharpNearest, isSet: true, invalid: false))
-        XCTAssertEqual(ChromaKnob.parse("444"), ChromaKnob(requested: .yuv444, isSet: true, invalid: false))
-        for bad in ["sharp", "422", "1", "yes", "4:4:4"] {
-            XCTAssertEqual(ChromaKnob.parse(bad), ChromaKnob(requested: .yuv420, isSet: true, invalid: true), bad)
+        XCTAssertEqual(ChromaKnob.parse(" SHARP_Nearest "),
+                       ChromaKnob(requested: .sharpNearest, isSet: true, invalid: false))
+        // T-302: `444` and `sharp_bilinear` were removed: set, invalid, 4:2:0.
+        for bad in ["444", "sharp_bilinear", "sharp", "422", "1", "yes", "4:4:4"] {
+            XCTAssertEqual(ChromaKnob.parse(bad), ChromaKnob(requested: .yuv420, isSet: false, invalid: true), bad)
         }
-        XCTAssertEqual(ChromaKnob.parse(env: ["MATEBRIDGE_CHROMA": "444"]).requested, .yuv444)
+        XCTAssertEqual(ChromaKnob.parse(env: ["MATEBRIDGE_CHROMA": "sharp_nearest"]).requested, .sharpNearest)
         XCTAssertEqual(ChromaKnob.parse(env: [:]), .unset)
     }
 
     func testResolve() {
-        func r(_ m: String, _ codec: Codec = .hevc, _ p: EncoderProfile = .fast) -> ChromaDecision {
-            ChromaPolicy.resolve(knob: .parse(m), codec: codec, profile: p)
-        }
-        XCTAssertEqual(ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast).applied, .yuv420)
-        XCTAssertNil(ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast).reason)
-        XCTAssertEqual(r("444").applied, .yuv444)
-        XCTAssertNil(r("444").reason)
-        // LLRC + 444 -> 420 (VideoToolbox's LLRC encoder silently drops BGRA to 4:2:0).
-        XCTAssertEqual(r("444", .hevc, .llrc).applied, .yuv420)
-        XCTAssertEqual(r("444", .hevc, .llrc).reason, .llrc)
-        XCTAssertEqual(r("444", .hevc, .llrc).requested, .yuv444)
-        XCTAssertEqual(r("444", .h264).reason, .codec)
-        XCTAssertEqual(r("444", .h264, .llrc).reason, .codec)
-        // The sharp modes keep a 420f encoder input: any codec and profile.
-        for m in ["sharp_bilinear", "sharp_nearest", "420"] {
-            for c in [Codec.hevc, .h264] {
-                for p in [EncoderProfile.fast, .llrc] {
-                    XCTAssertEqual(r(m, c, p).applied.rawValue, m)
-                    XCTAssertNil(r(m, c, p).reason)
-                }
-            }
+        func r(_ m: String) -> ChromaDecision { ChromaPolicy.resolve(knob: .parse(m)) }
+        XCTAssertEqual(ChromaPolicy.resolve(knob: .unset).applied, .yuv420)
+        XCTAssertNil(ChromaPolicy.resolve(knob: .unset).reason)
+        for m in ["sharp_nearest", "420"] {
+            XCTAssertEqual(r(m).applied.rawValue, m)
+            XCTAssertNil(r(m).reason)
         }
         XCTAssertEqual(r("bogus").applied, .yuv420)
         XCTAssertNil(r("bogus").reason)
+        XCTAssertEqual(r("444").applied, .yuv420)
+        XCTAssertTrue(r("444").knob.invalid)
     }
 
     func testFallingBackKeepsTheRequest() {
-        let d = ChromaPolicy.resolve(knob: .parse("sharp_nearest"), codec: .hevc, profile: .fast)
-            .fallingBack(.metalUnavailable)
+        let d = ChromaPolicy.resolve(knob: .parse("sharp_nearest")).fallingBack(.metalUnavailable)
         XCTAssertEqual(d.requested, .sharpNearest)
         XCTAssertEqual(d.applied, .yuv420)
         XCTAssertEqual(d.reason, .metalUnavailable)
-        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("444"), codec: .hevc, profile: .fast)
-            .fallingBack(.profileRejected).applied.captureFormat, .yuv420FullRange)
+        XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange)
     }
 
     func testCaptureFormatAndExpectations() {
         // Default path: today's 420f capture.
         XCTAssertEqual(ChromaMode.yuv420.captureFormat, .yuv420FullRange)
-        XCTAssertEqual(ChromaMode.sharpBilinear.captureFormat, .bgra)
         XCTAssertEqual(ChromaMode.sharpNearest.captureFormat, .bgra)
-        XCTAssertEqual(ChromaMode.yuv444.captureFormat, .bgra)
-        XCTAssertEqual(ChromaMode.sharpBilinear.sharpUpsample, .bilinear)
         XCTAssertEqual(ChromaMode.sharpNearest.sharpUpsample, .nearest)
         XCTAssertNil(ChromaMode.yuv420.sharpUpsample)
-        XCTAssertNil(ChromaMode.yuv444.sharpUpsample)
-        XCTAssertEqual(ChromaMode.yuv444.expectedChromaFormatIdc, 3)
+        XCTAssertNil(ChromaMode.packed444.sharpUpsample)
         XCTAssertEqual(ChromaMode.sharpNearest.expectedChromaFormatIdc, 1)
+        XCTAssertEqual(ChromaMode.packed444.expectedChromaFormatIdc, 1)
     }
 
     func testStatsOnlyWhenSetOrSharp() {
-        XCTAssertFalse(ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast).statsEnabled)
-        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("420"), codec: .hevc, profile: .fast).statsEnabled)
-        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("x"), codec: .hevc, profile: .fast).statsEnabled)
+        XCTAssertFalse(ChromaPolicy.resolve(knob: .unset).statsEnabled)
+        XCTAssertTrue(ChromaPolicy.resolve(knob: .parse("420")).statsEnabled)
+        // An invalid value is not a set knob (T-302): no stats window.
+        XCTAssertFalse(ChromaPolicy.resolve(knob: .parse("x")).statsEnabled)
     }
 
     func testEncoderConfigFieldOnlyWhenSet() {
@@ -82,11 +64,11 @@ final class ChromaKnobTests: XCTestCase {
         let base = k.logFields
         XCTAssertFalse(base.contains("chroma"))
         XCTAssertEqual(EncoderKnobs.parse([:]).logFields, base)
-        k.chroma = .parse("sharp_bilinear")
-        XCTAssertEqual(k.logFields, base + " chroma=sharp_bilinear")
+        k.chroma = .parse("sharp_nearest")
+        XCTAssertEqual(k.logFields, base + " chroma=sharp_nearest")
         k.chroma = .parse("nope")
-        XCTAssertEqual(k.logFields, base + " chroma=invalid")
-        XCTAssertEqual(EncoderKnobs.parse(["MATEBRIDGE_CHROMA": "444"]).chroma.requested, .yuv444)
+        XCTAssertEqual(k.logFields, base, "an invalid value is not set; RemovedKnobs/chroma_config report it")
+        XCTAssertTrue(EncoderKnobs.parse(["MATEBRIDGE_CHROMA": "444"]).chroma.invalid)
     }
 
     func testProfileKnobsListsChroma() {
@@ -96,69 +78,55 @@ final class ChromaKnobTests: XCTestCase {
     }
 
     func testConfigLine() {
-        let ok = ChromaPolicy.resolve(knob: .parse("444"), codec: .hevc, profile: .fast)
-        let info444 = ChromaBitstreamInfo(chromaFormatIdc: 3, profileIdc: 4, vuiFullRange: false, chromaSampleLocTop: nil,
-                                          parsed: true)
-        var l = ChromaConfigLog.line(ok, info444)
+        let sharp = ChromaPolicy.resolve(knob: .parse("sharp_nearest"))
+        var l = ChromaConfigLog.line(sharp, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
+                                                                chromaSampleLocTop: 1, parsed: true))
         XCTAssertEqual(l.level, .info)
-        XCTAssertEqual(l.fields, "requested=444 applied=444 source=env chroma_format_idc=3 profile_idc=4 vui_full_range=0 chroma_loc=unset")
+        XCTAssertEqual(l.fields, "requested=sharp_nearest applied=sharp_nearest source=env chroma_format_idc=1 "
+                       + "profile_idc=1 vui_full_range=1 chroma_loc=1")
 
-        // VideoToolbox silently encoding 4:2:0 despite the 4:4:4 profile.
-        l = ChromaConfigLog.line(ok, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 4, vuiFullRange: true,
-                                                         chromaSampleLocTop: nil, parsed: true))
+        // VideoToolbox writing a 4:4:4 SPS for a 4:2:0 mode is a mismatch.
+        l = ChromaConfigLog.line(sharp, ChromaBitstreamInfo(chromaFormatIdc: 3, profileIdc: 4, vuiFullRange: false,
+                                                            chromaSampleLocTop: nil, parsed: true))
         XCTAssertEqual(l.level, .warning)
         XCTAssertTrue(l.fields.hasSuffix(" mismatch=1"), l.fields)
 
-        let llrc = ChromaPolicy.resolve(knob: .parse("444"), codec: .hevc, profile: .llrc)
-        l = ChromaConfigLog.line(llrc, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
-                                                           chromaSampleLocTop: nil, parsed: true))
-        XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=444 applied=420 reason=llrc source=env chroma_format_idc=1 profile_idc=1 "
-                       + "vui_full_range=1 chroma_loc=unset")
-
-        let sharp = ChromaPolicy.resolve(knob: .parse("sharp_bilinear"), codec: .hevc, profile: .fast)
-        l = ChromaConfigLog.line(sharp, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
-                                                            chromaSampleLocTop: 1, parsed: true))
-        XCTAssertEqual(l.level, .info)
-        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=sharp_bilinear source=env chroma_format_idc=1 "
-                       + "profile_idc=1 vui_full_range=1 chroma_loc=1")
-
-        let invalid = ChromaPolicy.resolve(knob: .parse("zzz"), codec: .h264, profile: .fast)
+        let invalid = ChromaPolicy.resolve(knob: .parse("zzz"))
         l = ChromaConfigLog.line(invalid, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 100))
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value source=env chroma_format_idc=1 "
+        XCTAssertEqual(l.fields, "requested=420 applied=420 reason=invalid_value source=default chroma_format_idc=1 "
                        + "profile_idc=100 vui_full_range=unknown chroma_loc=unknown")
 
         l = ChromaConfigLog.line(sharp.fallingBack(.metalUnavailable), ChromaBitstreamInfo())
         XCTAssertEqual(l.level, .warning)
-        XCTAssertEqual(l.fields, "requested=sharp_bilinear applied=420 reason=metal_unavailable source=env "
+        XCTAssertEqual(l.fields, "requested=sharp_nearest applied=420 reason=metal_unavailable source=env "
                        + "chroma_format_idc=unknown profile_idc=unknown vui_full_range=unknown chroma_loc=unknown")
     }
 
     func testStatsWindow() {
-        var w = ChromaStatsWindow(mode: .sharpBilinear, startUs: 1_000_000)
+        var w = ChromaStatsWindow(mode: .sharpNearest, startUs: 1_000_000)
         for i in 1...100 { w.recordConversion(wallUs: UInt64(i * 10), gpuUs: UInt64(i * 4)) }
         for i in 1...10 { w.recordEncoded(captureToEncodeUs: UInt64(i * 1000)) }
         w.recordConversionFailure()
         XCTAssertNil(w.take(nowUs: 1_000_000 + ChromaStatsWindow.windowUs - 1))
         XCTAssertNil(w.take(nowUs: 0))  // clock before the start: never due
         let f = w.take(nowUs: 1_000_000 + ChromaStatsWindow.windowUs)
-        XCTAssertEqual(f, "mode=sharp_bilinear frames=10 conv_ms_p50_95=0.50/0.95 gpu_ms_p50_95=0.20/0.38 "
+        XCTAssertEqual(f, "mode=sharp_nearest frames=10 conv_ms_p50_95=0.50/0.95 gpu_ms_p50_95=0.20/0.38 "
                        + "cap_enc_ms_p50_95=5.00/10.00 conv=100 conv_fail=1")
         // A new window starts empty at the time of the take.
         XCTAssertNil(w.take(nowUs: 1_000_000 + ChromaStatsWindow.windowUs + 5))
         XCTAssertEqual(w.take(nowUs: 1_000_000 + 2 * ChromaStatsWindow.windowUs),
-                       "mode=sharp_bilinear frames=0 conv_ms_p50_95=- gpu_ms_p50_95=- cap_enc_ms_p50_95=- conv=0 conv_fail=0")
+                       "mode=sharp_nearest frames=0 conv_ms_p50_95=- gpu_ms_p50_95=- cap_enc_ms_p50_95=- conv=0 conv_fail=0")
     }
 
     func testStatsWindowIsBounded() {
-        var w = ChromaStatsWindow(mode: .yuv444, startUs: 0)
+        var w = ChromaStatsWindow(mode: .packed444, startUs: 0)
         for _ in 0..<(ChromaStatsWindow.maxSamples + 500) {
             w.recordEncoded(captureToEncodeUs: 7000)
             w.recordConversion(wallUs: 1, gpuUs: 1)
         }
         let f = w.take(nowUs: ChromaStatsWindow.windowUs) ?? ""
-        XCTAssertTrue(f.hasPrefix("mode=444 frames=\(ChromaStatsWindow.maxSamples + 500) "), f)
+        XCTAssertTrue(f.hasPrefix("mode=packed444 frames=\(ChromaStatsWindow.maxSamples + 500) "), f)
         XCTAssertTrue(f.contains(" cap_enc_ms_p50_95=7.00/7.00 "), f)
         XCTAssertTrue(f.contains(" conv=\(ChromaStatsWindow.maxSamples + 500) "), f)
     }

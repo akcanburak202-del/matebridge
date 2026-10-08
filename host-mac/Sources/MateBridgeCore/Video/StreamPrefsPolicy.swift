@@ -63,8 +63,7 @@ extension VideoSettings {
     /// Bitrate priority (decision 0013): `bitrateOverrideKbps` (env, T-086/T-088) > the tablet's `bitrate_kbps`
     /// (clamped, T-106) > the mode default (`effectiveScalePermille`). A change of the bitrate alone keeps the display
     /// mode and `displayRefreshHz`, so the virtual display is kept and only capture and encoder restart.
-    /// `defaultRefreshHz` is the refresh rate used for 60 fps (`MATEBRIDGE_REFRESH` or 60); 120 and 144 fps put the
-    /// virtual display at the same rate.
+    /// The virtual display runs at 60 Hz below 120 fps; 120 and 144 fps put it at the same rate.
     /// `dynamic_range` (decision 0032): HDR10 when the tablet asks for it and `HDRPolicy` allows it (`allowHDR` false
     /// after an HDR failure in this process, or a non-HEVC codec, gives SDR). A change of it changes the display's
     /// transfer function, so the display is recreated (`DisplayReuse`).
@@ -74,7 +73,7 @@ extension VideoSettings {
     /// `fullChroma.prefsFromThisSession` (a remembered request counts as `chroma = 1`), the stream mode qualifies and
     /// `fullChroma.allowed` (no runtime fallback); a qualifying request after a fallback is `.normal` (not sharp),
     /// every other one is `.sharp`.
-    public func applying(_ prefs: StreamPrefs, defaultRefreshHz: Int = 60,
+    public func applying(_ prefs: StreamPrefs,
                          allowGameDisplay: Bool = true, allowHDR: Bool = true,
                          fullChroma: FullChromaSession = FullChromaSession()) -> VideoSettings {
         let p = prefs.normalized
@@ -83,7 +82,7 @@ extension VideoSettings {
         // Decision 0033: ignored under HDR10 (re-applied without HDR after an `hdr_fallback`, so it then takes effect).
         s.chromaPreference = s.dynamicRange == .hdr10 ? .normal : p.requestedChroma
         s.fps = Int(p.fps)
-        s.displayRefreshHz = s.fps >= 120 ? s.fps : defaultRefreshHz
+        s.displayRefreshHz = s.fps >= 120 ? s.fps : 60
         if allowGameDisplay, let game = GameDisplayPolicy.size(of: p, nativeW: s.widthPx, nativeH: s.heightPx) {
             s.replacedNative = NativeDisplaySize(widthPx: s.widthPx, heightPx: s.heightPx,
                                                  widthPt: s.widthPt, heightPt: s.heightPt)

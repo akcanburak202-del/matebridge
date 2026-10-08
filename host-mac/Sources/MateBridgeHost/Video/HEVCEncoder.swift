@@ -94,9 +94,6 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastParameterSets: [UInt8] = []
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
-    /// `MATEBRIDGE_BITRATE_STEP` timer (T-177 device check); nil unless the knob is set.
-    private var stepTimer: DispatchSourceTimer?
-    private var stepTick = 0
     /// `captureTimeUs - deliveredUs` of the newest real capture (SCK stamps run ahead of delivery, ~+6.6 ms) and the
     /// newest stamp offered; re-submissions are stamped `now + lead` (T-086, see `resubmitLast`).
     private var captureLeadUs: Int64 = 0
@@ -126,12 +123,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private var lastMotionAuxBytes = 0
 
     let settings: VideoSettings
-    /// Encoder configuration in use (for diagnostics).
-    let profile: EncoderProfile
     /// Encoder-level experiment knobs (T-086).
     let knobs: EncoderKnobs
-    /// `kVTCompressionPropertyKey_Quality` was accepted (then `AverageBitRate` is not set).
-    private(set) var qualityApplied = false
     /// T-235 `MATEBRIDGE_CHROMA` / T-240 `settings.chromaPreference`: requested and applied chroma mode. Final once
     /// `init` returns.
     private(set) var chroma = ChromaDecision(knob: .unset, applied: .yuv420, reason: nil)
@@ -171,7 +164,7 @@ final class HEVCEncoder: @unchecked Sendable {
     static let hostLog: LogSink = { level, event, fields in
         HostLog.log(level, component: "encoder", event: event, fields: fields)
     }
-    /// `video ev=bitrate_set` (T-177; `docs/LOGGING.md`).
+    /// `video ev=...` lines (`docs/LOGGING.md`).
     static let videoLog: LogSink = { level, event, fields in
         HostLog.log(level, component: "video", event: event, fields: fields)
     }
@@ -199,15 +192,9 @@ final class HEVCEncoder: @unchecked Sendable {
         self.knobs = knobs
 
         // T-047/T-053 bench: at 2800x1840 the low-latency rate control + RealTime path costs ~9-13 ms per frame and
-        // tops out near 100 fps; without both the hardware encoder needs ~6 ms. Frame sizes stay even enough (p99 <=
-        // 4x mean on moving content), so `.fast` is the default at every fps; MATEBRIDGE_ENCODER=llrc|fast overrides.
-        let profile = EncoderProfile.resolve(
-            fps: settings.fps, override: EncoderProfile.parse(env["MATEBRIDGE_ENCODER"]),
-            defaultProfile: .fast)
-        self.profile = profile
-        let highRate = profile == .fast
-        var spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
-        if !highRate { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
+        // tops out near 100 fps; without both the hardware encoder needs ~6 ms with even enough frame sizes (p99 <=
+        // 4x mean on moving content). That `fast` profile is the only one (T-302 removed `MATEBRIDGE_ENCODER=llrc`).
+        let spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(settings.encodedWidthPx), height: Int32(settings.encodedHeightPx),
@@ -219,7 +206,6 @@ final class HEVCEncoder: @unchecked Sendable {
         let backend = Backend(session: s)
         order = EncoderSubmitOrder(
             backend: backend, streamFps: settings.fps, maxInFlight: HEVCEncoder.maxInFlight,
-            initialBitrateKbps: settings.bitrateKbps,
             nowUs: { HostClock.nowUs() },
             pacerCounts: { [meter] overwritten, decimated, deferred in
                 for _ in 0..<overwritten { meter?.recordOverwritten() }
@@ -243,42 +229,19 @@ final class HEVCEncoder: @unchecked Sendable {
             return st
         }
         let hdr = settings.dynamicRange == .hdr10
-        set("RealTime", kVTCompressionPropertyKey_RealTime, highRate ? kCFBooleanFalse : kCFBooleanTrue)
+        set("RealTime", kVTCompressionPropertyKey_RealTime, kCFBooleanFalse)
         set("AllowFrameReordering", kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        // T-235: `444` asks for the undocumented HEVC Main 4:4:4 profile (fast path only, `ChromaPolicy`); refused,
-        // the session stays Main and capture stays 4:2:0. Every other mode sets exactly what it set before.
         // T-237: HDR10 wins over the chroma knob (`reason=hdr`, applied `420`): Main10, x420 PQ capture.
         // T-240: without the knob the tablet's `STREAM_PREFS.chroma = 1` asks for `sharp_nearest` (decision 0033).
         var chroma = ChromaPolicy.resolve(knob: knobs.chroma, preference: settings.chromaPreference,
-                                          codec: settings.codec, profile: profile, dynamicRange: settings.dynamicRange,
+                                          dynamicRange: settings.dynamicRange,
                                           packedChroma: settings.packedChroma,
                                           packedFellBack: settings.fullChromaFellBack)
-        if chroma.applied == .yuv444 {
-            if set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.main444ProfileLevel) != noErr {
-                set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel, Self.profileLevel(settings.codec))
-                chroma = chroma.fallingBack(.profileRejected)
-            }
-        } else {
-            set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
-                Self.profileLevel(settings.codec, dynamicRange: settings.dynamicRange))
-        }
+        set("ProfileLevel", kVTCompressionPropertyKey_ProfileLevel,
+            Self.profileLevel(settings.codec, dynamicRange: settings.dynamicRange))
         set("ExpectedFrameRate", kVTCompressionPropertyKey_ExpectedFrameRate, settings.fps as CFNumber)
-        // T-086: a constant-quality target replaces the average bitrate; if VideoToolbox refuses it, fall back.
-        var qualityOK = false
-        if let q = knobs.quality {
-            let st = VTSessionSetProperty(s, key: kVTCompressionPropertyKey_Quality, value: q as CFNumber)
-            report.append("Quality=\(st == noErr ? "ok" : String(st))")
-            qualityOK = st == noErr
-            if !qualityOK {
-                failures.append("Quality=\(st)")
-                logSink(.warning, "quality_rejected", "status=\(st) fallback=bitrate")
-            }
-        }
-        qualityApplied = qualityOK
-        if !qualityOK {
-            set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
-        }
-        // Cap bursts (bytes per second) at 2x the average (also with Quality: the cap is the safety net).
+        set("AverageBitRate", kVTCompressionPropertyKey_AverageBitRate, (settings.bitrateKbps * 1000) as CFNumber)
+        // Cap bursts (bytes per second) at 2x the average.
         // `MATEBRIDGE_RATE_WINDOW_MS` adds a shorter window (T-177 diagnostics).
         set("DataRateLimits", kVTCompressionPropertyKey_DataRateLimits,
             Self.dataRateLimits(kbps: settings.bitrateKbps, shortWindowMs: knobs.rateWindowMs))
@@ -371,7 +334,7 @@ final class HEVCEncoder: @unchecked Sendable {
             do {
                 let aux = try PackedAuxEncoder(
                     width: settings.encodedWidthPx, height: settings.encodedHeightPx, fps: settings.fps,
-                    mainKbps: settings.bitrateKbps, profile: profile, rateWindowMs: knobs.rateWindowMs, logSink: logSink,
+                    mainKbps: settings.bitrateKbps, rateWindowMs: knobs.rateWindowMs,
                     output: wrapped, onError: { [weak self] reason in self?.reportPackedError(reason) },
                     onLoss: { [weak self] t in self?.auxLostAfterSubmit(captureTimeUs: t) })
                 auxEncoder = aux
@@ -403,25 +366,19 @@ final class HEVCEncoder: @unchecked Sendable {
             t.resume()
         }
 
-        // T-177 debug step (off by default): drives the live setter on a timer.
-        if let step = knobs.bitrateStep {
-            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "matebridge.encoder.bitrate_step"))
-            let every = DispatchTimeInterval.milliseconds(step.periodMs)
-            t.schedule(deadline: .now() + every, repeating: every)
-            t.setEventHandler { [weak self] in self?.bitrateStepTick(step) }
-            stepTimer = t
-            t.resume()
+        // T-302: removed knobs that are still set in the launch environment are inert; say so once.
+        for k in RemovedKnobs.present(env) {
+            logSink(.warning, "knob_ignored", "name=\(k.name) value=\(k.value)")
         }
 
         // The SDR lines are unchanged; HDR10 appends `dynamic_range=hdr10`.
         let rangeField = hdr ? " dynamic_range=\(settings.dynamicRange.logName)" : ""
         logSink(.info, "encoder_config",
-                "codec=\(settings.codec.logName) encoder_profile=\(profile.rawValue) "
+                "codec=\(settings.codec.logName) encoder_profile=fast "
                 + "bitrate_kbps=\(settings.bitrateKbps) source=\(settings.bitrateSource) "
-                + "\(knobs.logFields) quality_applied=\(qualityApplied ? 1 : 0)" + rangeField)
+                + "\(knobs.logFields) quality_applied=0" + rangeField)
         // T-204 (decision 0026 §4): one line per stream start naming the configuration this log came from.
-        logSink(.info, "profile", StreamProfileLog.fields(settings: settings, encoderProfile: profile,
-                                                          build: Self.buildInfo, env: env) + rangeField)
+        logSink(.info, "profile", StreamProfileLog.fields(settings: settings, build: Self.buildInfo, env: env) + rangeField)
     }
 
     /// The running build (T-145), for `ev=profile`'s `sha=`: the same source as `ev=app_start`.
@@ -448,10 +405,6 @@ final class HEVCEncoder: @unchecked Sendable {
         if codec == .h264 { return kVTProfileLevel_H264_High_AutoLevel }
         return dynamicRange == .hdr10 ? kVTProfileLevel_HEVC_Main10_AutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel
     }
-
-    /// T-235 `MATEBRIDGE_CHROMA=444`: HEVC Main 4:4:4. The SDK has no constant; `ave.hevc` accepts this string
-    /// (research 2026-10-05 section 1). Apple may change it, hence the `profile_rejected` fallback.
-    static var main444ProfileLevel: CFString { "HEVC_Main444_AutoLevel" as CFString }
 
     /// What ScreenCaptureKit must deliver for the applied chroma mode: `420f` (today) or `BGRA` (T-235).
     var capturePixelFormat: OSType {
@@ -515,7 +468,7 @@ final class HEVCEncoder: @unchecked Sendable {
     private var profileLogName: String {
         if settings.codec == .h264 { return Self.h264ProfileLogName }
         if settings.dynamicRange == .hdr10 { return "main10" }
-        return chroma.applied == .yuv444 ? "main444" : "main"
+        return "main"
     }
 
     /// Effective periodic keyframe interval in seconds (0 = on request only).
@@ -769,40 +722,6 @@ final class HEVCEncoder: @unchecked Sendable {
         order.setTargetFps(fps)
     }
 
-    /// Changes the live session's target bitrate without restarting anything (T-177): no new `STREAM_CONFIG`, no
-    /// video reconnect, no keyframe. Clamped to `BitrateRequest.defaultRange` and deduplicated; applied on the owner
-    /// queue between two submits, never after `stop`. Whether VideoToolbox honours it (the `.fast` profile may
-    /// accept and ignore it, cf. T-087) is a device measurement. With `MATEBRIDGE_QUALITY` accepted only
-    /// `DataRateLimits` changes (`AverageBitRate` is not in use).
-    @discardableResult
-    func setTargetBitrate(kbps: Int) -> BitrateRequest.Decision {
-        // T-258: the auxiliary session follows at half the main target, inside the same ordered owner-queue operation
-        // (`Backend.setBitrate`), so neither session is touched after teardown or out of order.
-        order.setBitrate(kbps: kbps)
-    }
-
-    /// `MATEBRIDGE_BITRATE_STEP` tick (its own timer queue).
-    private func bitrateStepTick(_ step: BitrateStepKnob) {
-        let kbps = lock.withLock { () -> Int in
-            defer { stepTick += 1 }
-            return step.value(atTick: stepTick)
-        }
-        setTargetBitrate(kbps: kbps)
-    }
-
-    /// Owner queue only (`Backend.setBitrate`, enqueued by `EncoderSubmitOrder.setBitrate`). Logs one line per
-    /// applied change (requests equal to the value in force never get here).
-    private func applyBitrate(kbps: Int, session: VTCompressionSession) {
-        var avg = "skipped"
-        if !qualityApplied {
-            avg = String(VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
-                                              value: (kbps * 1000) as CFNumber))
-        }
-        let limits = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
-                                          value: Self.dataRateLimits(kbps: kbps, shortWindowMs: knobs.rateWindowMs))
-        Self.videoLog(.info, "bitrate_set", "kbps=\(kbps) avg_status=\(avg) limits_status=\(limits)")
-    }
-
     /// `CompressionBackend` over the VideoToolbox session; called on the owner queue only. Holds the encoder weakly
     /// (the encoder owns the order, which owns this backend), so the teardown block never retains the encoder.
     final class Backend: CompressionBackend, @unchecked Sendable {
@@ -815,12 +734,6 @@ final class HEVCEncoder: @unchecked Sendable {
         /// After the encoder is gone (its `deinit` already stopped the order) a queued frame is not submitted.
         func encode(_ frame: Input, keyframe: Bool, token: EncoderSubmitToken) {
             encoder?.send(frame, key: keyframe, token: token, session: session)
-        }
-
-        /// After the encoder is gone nothing is set (its `deinit` already stopped the order).
-        func setBitrate(kbps: Int) {
-            encoder?.applyBitrate(kbps: kbps, session: session)
-            aux?.setBitrate(mainKbps: kbps)
         }
 
         /// Synchronous `CompleteFrames` runs here, on the owner queue, never on a Swift cooperative thread.
@@ -1026,13 +939,10 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.lock()
         let timer = idleTimer
         idleTimer = nil
-        let step = stepTimer
-        stepTimer = nil
         let refineT = refineTimer
         refineTimer = nil
         lock.unlock()
         timer?.cancel()
-        step?.cancel()
         refineT?.cancel()
         // `order` is nil only if `init` threw before creating it (then there is no session to close).
         if let order { order.stop(completion: completion) } else { completion?() }

@@ -6,8 +6,8 @@ import Foundation
 ///
 /// Two kernels, dispatched in order in one command buffer:
 /// - `sharp_chroma`: one thread per chroma sample: 2x2 box mean of Cb'/Cr' -> `rg8Unorm` (Cb, Cr codes).
-/// - `sharp_luma`: one thread per pixel -> `r8Unorm` Y code; buffer 0 `mode` (0 = plain Y', 1 = adjusted for bilinear
-///   chroma upsampling, 2 = adjusted for nearest), buffer 1 the EOTF table (`SharpYUV.eotfTable`, `eotfTableSize`
+/// - `sharp_luma`: one thread per pixel -> `r8Unorm` Y code; buffer 0 `mode` (0 = plain Y', 1 = adjusted for nearest
+///   chroma upsampling), buffer 1 the EOTF table (`SharpYUV.eotfTable`, `eotfTableSize`
 ///   floats).
 /// The source texture is `bgra8Unorm` holding sRGB-encoded values (not `_srgb`: no conversion on read).
 /// Compile with safe math (`MTLCompileOptions.mathMode = .safe`) so division and rounding stay close to the CPU.
@@ -19,8 +19,7 @@ public enum SharpYUVKernel {
     public static func lumaMode(_ adjustFor: SharpYUV.Upsample?) -> UInt32 {
         switch adjustFor {
         case nil: return 0
-        case .bilinear?: return 1
-        case .nearest?: return 2
+        case .nearest?: return 1
         }
     }
 
@@ -131,24 +130,13 @@ public enum SharpYUVKernel {
         int out = y0;
         if (mode != 0) {
             int i = int(gid.x >> 1), j = int(gid.y >> 1);
-            float2 v;
-            bool uniform;
             float2 a = chroma_code(cbcr, i, j);
-            if (mode == 2) {
-                v = a;
-                uniform = true;
-            } else {
-                int ni = (gid.x & 1) == 0 ? i - 1 : i + 1;
-                int nj = (gid.y & 1) == 0 ? j - 1 : j + 1;
-                float2 b = chroma_code(cbcr, ni, j), c2 = chroma_code(cbcr, i, nj), d = chroma_code(cbcr, ni, nj);
-                v = (9.0f * a + 3.0f * b + 3.0f * c2 + d) / 16.0f;
-                uniform = all(a == b) && all(a == c2) && all(a == d);
-            }
+            float2 v = a;
             // Flat: the decoder sees this pixel's own chroma; keep the plain code (skips the search).
             float yp = KR * c.r + KG * c.g + KB * c.b;
             float2 own = clamp(floor(float2((c.b - yp) / CB_B, (c.r - yp) / CR_R) * 255.0f + 128.0f + 0.5f),
                                0.0f, 255.0f);
-            if (uniform && all(own == a)) {
+            if (all(own == a)) {
                 luma.write(float4(float(y0) / 255.0f, 0.0f, 0.0f, 0.0f), gid);
                 return;
             }

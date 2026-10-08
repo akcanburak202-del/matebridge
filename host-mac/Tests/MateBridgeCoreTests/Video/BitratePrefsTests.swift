@@ -56,16 +56,12 @@ final class BitratePrefsTests: XCTestCase {
         XCTAssertEqual(s.streamConfig(configID: 2).bitrateKbps, 45_000)
     }
 
-    func testWifiEnvBitrateWinsOverUserOnWifiOnly() {
+    func testRemovedWifiEnvBitrateIsInert() {
+        // T-302: `MATEBRIDGE_WIFI_BITRATE_KBPS` was removed; the user's bitrate wins as without it.
         let knobs = ["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000"]
-        let wifi = base.applyingExperimentKnobs(knobs).applyingTransportKnobs(knobs, transport: .network)
-        let w = wifi.applying(prefs(100_000))
-        XCTAssertEqual(w.bitrateKbps, 25_000)
-        XCTAssertEqual(w.bitrateSource, "wifi_env")
-        let usb = base.applyingExperimentKnobs(knobs).applyingTransportKnobs(knobs, transport: .usb)
-        let u = usb.applying(prefs(100_000))
-        XCTAssertEqual(u.bitrateKbps, 100_000)
-        XCTAssertEqual(u.bitrateSource, "user")
+        let s = base.applyingExperimentKnobs(knobs).applying(prefs(100_000))
+        XCTAssertEqual(s.bitrateKbps, 100_000)
+        XCTAssertEqual(s.bitrateSource, "user")
     }
 
     func testBackToZeroReturnsToModeDefault() {
@@ -124,8 +120,7 @@ final class BitratePrefsTests: XCTestCase {
         let store = InMemoryStreamPrefsStore()
         store.save(prefs(60_000, fps: 120, scale: 750), device: device)
         XCTAssertEqual(store.load(device: device)?.bitrateKbps, 60_000)
-        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: device),
-                                                    defaultRefreshHz: 60)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: device))
         XCTAssertEqual(initial.bitrateKbps, 60_000)
         XCTAssertEqual(initial.bitrateSource, "user")
         XCTAssertEqual([initial.fps, initial.scalePermille], [120, 750])

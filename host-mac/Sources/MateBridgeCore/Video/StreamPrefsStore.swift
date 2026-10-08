@@ -70,11 +70,10 @@ extension VideoSettings {
     /// Settings a session starts with: `defaults` (HELLO + experiment knobs) with the device's stored prefs on top
     /// (a stored game display included, unless `allowGameDisplay` is false after `game_display_failed`).
     /// An unknown device (nil) gets `defaults` unchanged.
-    public static func initialSettings(defaults: VideoSettings, stored: StreamPrefs?, defaultRefreshHz: Int,
+    public static func initialSettings(defaults: VideoSettings, stored: StreamPrefs?,
                                        allowGameDisplay: Bool = true, allowHDR: Bool = true) -> VideoSettings {
         guard let stored else { return defaults }
-        return defaults.applying(stored, defaultRefreshHz: defaultRefreshHz, allowGameDisplay: allowGameDisplay,
-                                 allowHDR: allowHDR)
+        return defaults.applying(stored, allowGameDisplay: allowGameDisplay, allowHDR: allowHDR)
     }
 }
 

@@ -40,32 +40,14 @@ final class SharpYUVTests: XCTestCase {
         return (p, s)
     }
 
-    /// Red on grey (the Dock icon case): luma adjustment removes most of the lightness error at the edges, for both
-    /// decoder upsampling assumptions (each measured with the upsampling it was adjusted for).
+    /// Red on grey (the Dock icon case): luma adjustment removes most of the lightness error at the edges, with the
+    /// nearest-neighbour decoder upsampling it was adjusted for (T-302 removed the bilinear model).
     func testLumaAdjustmentImprovesLightnessAtRedGreyEdges() {
         for up in SharpYUV.Upsample.allCases {
             let g = gain(width: 48, height: 40, bg: (128, 128, 128), fill: (230, 30, 40), up)
             print("T-235 red/grey \(up.rawValue): plain \(String(format: "%.1f", g.plain)) dB -> sharp "
                   + "\(String(format: "%.1f", g.sharp)) dB")
             XCTAssertGreaterThan(g.sharp - g.plain, 20, "\(up)")
-        }
-    }
-
-    /// The wrong assumption (adjusted for one upsampling, displayed with the other) gains less but must not be worse
-    /// than plain 4:2:0 (research §3b: ~+9 dB).
-    func testMismatchedUpsamplingStillNoWorse() {
-        let w = 48, h = 40
-        let img = Self.iconImage(width: w, height: h, background: (128, 128, 128), fill: (230, 30, 40))
-        let plain = SharpYUV.convert(bgra: img, width: w, height: h, adjustFor: nil)
-        for (adjusted, shown) in [(SharpYUV.Upsample.bilinear, SharpYUV.Upsample.nearest), (.nearest, .bilinear)] {
-            let sharp = SharpYUV.convert(bgra: img, width: w, height: h, adjustFor: adjusted)
-            let p = SharpYUV.lightnessPSNR(source: img, width: w, height: h,
-                                           reconstructed: SharpYUV.reconstruct(plain, upsample: shown))
-            let s = SharpYUV.lightnessPSNR(source: img, width: w, height: h,
-                                           reconstructed: SharpYUV.reconstruct(sharp, upsample: shown))
-            print("T-235 adjusted \(adjusted.rawValue), shown \(shown.rawValue): plain \(String(format: "%.1f", p)) dB "
-                  + "-> \(String(format: "%.1f", s)) dB")
-            XCTAssertGreaterThan(s, p, "\(adjusted)->\(shown)")
         }
     }
 
@@ -111,7 +93,7 @@ final class SharpYUVTests: XCTestCase {
     /// Odd sizes: the last column/row repeat into the chroma block.
     func testOddSize() {
         let img = Self.iconImage(width: 13, height: 9, background: (128, 128, 128), fill: (230, 30, 40))
-        let p = SharpYUV.convert(bgra: img, width: 13, height: 9, adjustFor: .bilinear)
+        let p = SharpYUV.convert(bgra: img, width: 13, height: 9, adjustFor: .nearest)
         XCTAssertEqual(p.chromaWidth, 7)
         XCTAssertEqual(p.chromaHeight, 5)
         XCTAssertEqual(p.y.count, 13 * 9)
@@ -184,7 +166,7 @@ final class SharpYUVTests: XCTestCase {
         img.withUnsafeBytes { src.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
                                           withBytes: $0.baseAddress!, bytesPerRow: w * 4) }
 
-        for adjust in [nil, SharpYUV.Upsample.bilinear, .nearest] {
+        for adjust in [nil, SharpYUV.Upsample.nearest] {
             let yTex = try tex(.r8Unorm, w, h), cTex = try tex(.rg8Unorm, cw, ch)
             let cb = try XCTUnwrap(queue.makeCommandBuffer())
             let e1 = try XCTUnwrap(cb.makeComputeCommandEncoder())

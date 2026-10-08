@@ -18,8 +18,7 @@ import Foundation
 /// - Chroma: the mean Cb'/Cr' of the 2x2 block (pixels past the edge repeat the last column/row), i.e. centred siting.
 /// - Decoder model: R' = Y' + 1.5748 Cr', G' = Y' - 0.187324 Cb' - 0.468124 Cr', B' = Y' + 1.8556 Cb', each clamped
 ///   to 0...1, then the sRGB EOTF (`eotfTable`, interpolated); luminance = 0.2126 R + 0.7152 G + 0.0722 B (linear).
-/// - Chroma upsampling at a pixel: `nearest` = its own block; `bilinear` = centred siting, weights 3/4 and 1/4 per
-///   axis (9/3/3/1 over 16), indices clamped at the edges.
+/// - Chroma upsampling at a pixel: `nearest` = its own block (T-302 removed the bilinear model, decision 0033).
 /// - Flat pixels keep the plain Y code: every contributing chroma sample equals the pixel's own chroma code (the decoder
 ///   then sees the pixel's own chroma; most of a desktop, and it skips the search there).
 /// - Adjusted Y: the code 0...255 whose rebuilt luminance is closest to the source's (integer bisection on the
@@ -28,7 +27,6 @@ import Foundation
 public enum SharpYUV {
     /// The chroma upsampling the decoder/display is assumed to use.
     public enum Upsample: String, Equatable, Sendable, CaseIterable {
-        case bilinear
         case nearest
     }
 
@@ -137,14 +135,6 @@ public enum SharpYUV {
         case .nearest:
             let c = at(i, j)
             return ((c.0 - 128) / 255, (c.1 - 128) / 255, [c.0, c.1])
-        case .bilinear:
-            // Even x sits 1/4 chroma sample left of its block's centre (neighbour i-1), odd x 1/4 right (i+1).
-            let ni = x & 1 == 0 ? i - 1 : i + 1, nj = y & 1 == 0 ? j - 1 : j + 1
-            let a = at(i, j), b = at(ni, j), c = at(i, nj), d = at(ni, nj)
-            let cb = (9 * a.0 + 3 * b.0 + 3 * c.0 + d.0) / 16
-            let cr = (9 * a.1 + 3 * b.1 + 3 * c.1 + d.1) / 16
-            let same = a == b && a == c && a == d
-            return ((cb - 128) / 255, (cr - 128) / 255, same ? [a.0, a.1] : nil)
         }
     }
 

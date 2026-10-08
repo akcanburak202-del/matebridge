@@ -72,42 +72,47 @@ final class ChromaPrefsTests: XCTestCase {
 
     func testPriorityEnvOverPrefsOverDefault() {
         // Default: nothing set -> today's 420.
-        let none = ChromaPolicy.resolve(knob: .unset, preference: .normal, codec: .hevc, profile: .fast)
+        let none = ChromaPolicy.resolve(knob: .unset, preference: .normal)
         XCTAssertEqual(none, ChromaDecision(knob: .unset, source: .default, requested: .yuv420, applied: .yuv420,
                                             reason: nil))
         XCTAssertFalse(none.statsEnabled)
-        XCTAssertEqual(none, ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast),
+        XCTAssertEqual(none, ChromaPolicy.resolve(knob: .unset),
                        "no preference = the T-235 default")
 
-        // Prefs: sharp -> sharp_nearest, any codec and profile.
-        for codec in [Codec.hevc, .h264] {
-            for profile in [EncoderProfile.fast, .llrc] {
-                let d = ChromaPolicy.resolve(knob: .unset, preference: .sharp, codec: codec, profile: profile)
-                XCTAssertEqual(d.source, .prefs)
-                XCTAssertEqual(d.requested, .sharpNearest)
-                XCTAssertEqual(d.applied, .sharpNearest)
-                XCTAssertNil(d.reason)
-                XCTAssertTrue(d.statsEnabled, "the sharp path keeps its stats window")
-                XCTAssertEqual(d.applied.captureFormat, .bgra)
-            }
-        }
+        // Prefs: sharp -> sharp_nearest.
+        let sharpDecision = ChromaPolicy.resolve(knob: .unset, preference: .sharp)
+        XCTAssertEqual(sharpDecision.source, .prefs)
+        XCTAssertEqual(sharpDecision.requested, .sharpNearest)
+        XCTAssertEqual(sharpDecision.applied, .sharpNearest)
+        XCTAssertNil(sharpDecision.reason)
+        XCTAssertTrue(sharpDecision.statsEnabled, "the sharp path keeps its stats window")
+        XCTAssertEqual(sharpDecision.applied.captureFormat, .bgra)
 
-        // Env wins over prefs, whatever both say (an invalid knob counts as set: 420).
-        for raw in ["420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+        // Env wins over prefs, whatever both say. An invalid or retired value is not set (T-302): see below.
+        for raw in ["420", "sharp_nearest"] {
             let knob = ChromaKnob.parse(raw)
             for pref in [ChromaPreference.normal, .sharp] {
-                let d = ChromaPolicy.resolve(knob: knob, preference: pref, codec: .hevc, profile: .fast)
+                let d = ChromaPolicy.resolve(knob: knob, preference: pref)
                 XCTAssertEqual(d.source, .env, "\(raw) \(pref)")
-                XCTAssertEqual(d, ChromaPolicy.resolve(knob: knob, codec: .hevc, profile: .fast), "\(raw) \(pref)")
+                XCTAssertEqual(d, ChromaPolicy.resolve(knob: knob), "\(raw) \(pref)")
             }
         }
-        let envOff = ChromaPolicy.resolve(knob: .parse("420"), preference: .sharp, codec: .hevc, profile: .fast)
+        // T-302: retired and invalid values do not override the tablet; its preference wins.
+        for raw in ["sharp_bilinear", "444", "bogus"] {
+            let knob = ChromaKnob.parse(raw)
+            XCTAssertFalse(knob.isSet, raw)
+            XCTAssertEqual(ChromaPolicy.resolve(knob: knob, preference: .normal).source, .default, raw)
+            let d = ChromaPolicy.resolve(knob: knob, preference: .sharp)
+            XCTAssertEqual(d.source, .prefs, raw)
+            XCTAssertEqual(d.applied, .sharpNearest, "env=\(raw) + tablet chroma=1 -> sharp_nearest")
+        }
+        let envOff = ChromaPolicy.resolve(knob: .parse("420"), preference: .sharp)
         XCTAssertEqual(envOff.applied, .yuv420, "MATEBRIDGE_CHROMA=420 turns the tablet's choice off")
         XCTAssertEqual(envOff.applied.captureFormat, .yuv420FullRange)
     }
 
     func testMetalFallbackKeepsThePrefsSource() {
-        let d = ChromaPolicy.resolve(knob: .unset, preference: .sharp, codec: .hevc, profile: .fast)
+        let d = ChromaPolicy.resolve(knob: .unset, preference: .sharp)
             .fallingBack(.metalUnavailable)
         XCTAssertEqual(d.source, .prefs)
         XCTAssertEqual(d.requested, .sharpNearest)
@@ -118,14 +123,14 @@ final class ChromaPrefsTests: XCTestCase {
     // MARK: HDR10 rule
 
     func testHDRIgnoresThePreference() {
-        let d = ChromaPolicy.resolve(knob: .unset, preference: .sharp, codec: .hevc, profile: .fast,
+        let d = ChromaPolicy.resolve(knob: .unset, preference: .sharp,
                                      dynamicRange: .hdr10)
         XCTAssertEqual(d.applied, .yuv420)
         XCTAssertEqual(d.reason, .hdr)
         XCTAssertEqual(d.source, .prefs)
         XCTAssertNil(d.applied.sharpUpsample)
         XCTAssertFalse(d.statsEnabled)
-        let none = ChromaPolicy.resolve(knob: .unset, preference: .normal, codec: .hevc, profile: .fast,
+        let none = ChromaPolicy.resolve(knob: .unset, preference: .normal,
                                         dynamicRange: .hdr10)
         XCTAssertNil(none.reason, "nothing requested, nothing ignored")
         XCTAssertEqual(none.source, .default)
@@ -142,12 +147,12 @@ final class ChromaPrefsTests: XCTestCase {
         let sdr = base.applying(hdrSharp, allowHDR: false)
         XCTAssertEqual(sdr.dynamicRange, .sdr)
         XCTAssertEqual(sdr.chromaPreference, .sharp)
-        let fixed = HDRFallback().revalidated(hdr, base: base, prefs: hdrSharp, defaultRefreshHz: 60,
+        let fixed = HDRFallback().revalidated(hdr, base: base, prefs: hdrSharp,
                                               allowGameDisplay: true)
         XCTAssertNil(fixed, "HDR still allowed: nothing to revalidate")
         var failed = HDRFallback()
         XCTAssertTrue(failed.startFailed(settings: hdr, reason: .captureFailed))
-        XCTAssertEqual(failed.revalidated(hdr, base: base, prefs: hdrSharp, defaultRefreshHz: 60,
+        XCTAssertEqual(failed.revalidated(hdr, base: base, prefs: hdrSharp,
                                           allowGameDisplay: true)?.chromaPreference, .sharp)
         // H.264 never runs HDR10, so the choice applies.
         var h264 = base
@@ -178,8 +183,7 @@ final class ChromaPrefsTests: XCTestCase {
         // is T-235's default (420f capture, no Metal pass, no stats window).
         XCTAssertEqual(base.chromaPreference, .normal)
         XCTAssertEqual(base.applying(prefs()).chromaPreference, .normal)
-        let d = ChromaPolicy.resolve(knob: .unset, preference: base.applying(prefs()).chromaPreference,
-                                     codec: .hevc, profile: .fast)
+        let d = ChromaPolicy.resolve(knob: .unset, preference: base.applying(prefs()).chromaPreference)
         XCTAssertEqual(d.applied, .yuv420)
         XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange)
         XCTAssertNil(d.applied.sharpUpsample)
@@ -212,7 +216,7 @@ final class ChromaPrefsTests: XCTestCase {
         let store = InMemoryStreamPrefsStore()
         store.save(sharp, device: dev)
         XCTAssertEqual(store.load(device: dev)?.chroma, 1)
-        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev))
         XCTAssertEqual(initial.chromaPreference, .sharp, "a reconnecting tablet starts on the sharp path")
         XCTAssertEqual(initial, base.applying(sharp), "its first STREAM_PREFS then changes nothing")
     }
@@ -222,29 +226,29 @@ final class ChromaPrefsTests: XCTestCase {
     func testConfigLineSource() {
         let info = ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true, chromaSampleLocTop: 1,
                                        parsed: true)
-        let sharp = ChromaPolicy.resolve(knob: .unset, preference: .sharp, codec: .hevc, profile: .fast)
+        let sharp = ChromaPolicy.resolve(knob: .unset, preference: .sharp)
         var l = ChromaConfigLog.line(sharp, info)
         XCTAssertEqual(l.level, .info)
         XCTAssertEqual(l.fields, "requested=sharp_nearest applied=sharp_nearest source=prefs chroma_format_idc=1 "
                        + "profile_idc=1 vui_full_range=1 chroma_loc=1")
 
-        let none = ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast)
+        let none = ChromaPolicy.resolve(knob: .unset)
         l = ChromaConfigLog.line(none, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 1, vuiFullRange: true,
                                                            parsed: true))
         XCTAssertEqual(l.level, .info)
         XCTAssertEqual(l.fields, "requested=420 applied=420 source=default chroma_format_idc=1 profile_idc=1 "
                        + "vui_full_range=1 chroma_loc=unset")
 
-        let hdr = ChromaPolicy.resolve(knob: .unset, preference: .sharp, codec: .hevc, profile: .fast,
+        let hdr = ChromaPolicy.resolve(knob: .unset, preference: .sharp,
                                        dynamicRange: .hdr10)
         l = ChromaConfigLog.line(hdr, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 2, vuiFullRange: false,
                                                           parsed: true))
         XCTAssertEqual(l.level, .warning)
         XCTAssertTrue(l.fields.hasPrefix("requested=sharp_nearest applied=420 reason=hdr source=prefs "), l.fields)
 
-        let env = ChromaPolicy.resolve(knob: .parse("sharp_bilinear"), preference: .sharp, codec: .hevc, profile: .fast)
+        let env = ChromaPolicy.resolve(knob: .parse("420"), preference: .sharp)
         XCTAssertTrue(ChromaConfigLog.line(env, info).fields.hasPrefix(
-            "requested=sharp_bilinear applied=sharp_bilinear source=env "))
+            "requested=420 applied=420 source=env "))
 
         XCTAssertEqual(ChromaPreference.normal.logName, "normal")
         XCTAssertEqual(ChromaPreference.sharp.logName, "sharp")

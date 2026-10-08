@@ -138,10 +138,10 @@ final class GameDisplayTests: XCTestCase {
         let store = InMemoryStreamPrefsStore()
         let game = prefs(w: 1848, h: 1214)
         store.save(game, device: dev)
-        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev))
         XCTAssertEqual(initial.displayModeText, "1848x1214@1x")
         XCTAssertEqual(base.applying(game), initial, "the tablet's first STREAM_PREFS changes nothing")
-        let disabled = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60,
+        let disabled = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev),
                                                      allowGameDisplay: false)
         XCTAssertTrue(disabled.displayHiDPI)
     }
@@ -256,7 +256,7 @@ final class GameDisplayTests: XCTestCase {
 
     /// `StreamCoordinator.streamConfig(for:)` / `sessionStarted`: the settings derived for a HELLO now.
     private func derived(_ store: InMemoryStreamPrefsStore, _ fallback: GameDisplayFallback) -> VideoSettings {
-        VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60,
+        VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev),
                                       allowGameDisplay: fallback.allowsGameDisplay)
     }
 
@@ -332,12 +332,12 @@ final class GameDisplayTests: XCTestCase {
         announced.record(queued.streamConfig(configID: 1), for: hello(7))
         XCTAssertFalse(announced.activationDiffers(hello: hello(7), activation: queued.streamConfig(configID: 1)))
         XCTAssertFalse(queued.displayHiDPI)
-        XCTAssertNil(fallback.revalidated(queued, base: base, prefs: store.load(device: dev), defaultRefreshHz: 60),
+        XCTAssertNil(fallback.revalidated(queued, base: base, prefs: store.load(device: dev)),
                      "still valid while game displays are allowed")
 
         // The previous pipeline's game display fails before the queued start event is handled.
         XCTAssertTrue(fallback.startFailed(settings: queued, displayFailure: true))
-        guard let fixed = fallback.revalidated(queued, base: base, prefs: store.load(device: dev), defaultRefreshHz: 60)
+        guard let fixed = fallback.revalidated(queued, base: base, prefs: store.load(device: dev))
         else { return XCTFail("a game display derived before the fallback must be revalidated") }
         XCTAssertTrue(fixed.displayHiDPI, "no second game display attempt")
         XCTAssertEqual(fixed, base.applying(prefs(w: 1848, h: 1214), allowGameDisplay: false),
@@ -345,8 +345,8 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertTrue(AnnouncedStreamConfigs.differs(queued.streamConfig(configID: 1), fixed.streamConfig(configID: 1)),
                       "the tablet holds the game config: a new config_id is announced")
         // Native settings, or settings without prefs, are left alone.
-        XCTAssertNil(fallback.revalidated(fixed, base: base, prefs: store.load(device: dev), defaultRefreshHz: 60))
-        XCTAssertNil(fallback.revalidated(base, base: base, prefs: nil, defaultRefreshHz: 60))
+        XCTAssertNil(fallback.revalidated(fixed, base: base, prefs: store.load(device: dev)))
+        XCTAssertNil(fallback.revalidated(base, base: base, prefs: nil))
     }
 
     func testActivationMatchingTheHelloConfigNeedsNoNewConfigID() {
@@ -356,9 +356,10 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertFalse(announced.activationDiffers(hello: hello(1), activation: game.streamConfig(configID: 1)))
         XCTAssertTrue(announced.activationDiffers(hello: hello(1), activation: game.streamConfig(configID: 1)),
                       "consumed: what a second activation was told is unknown, so it re-announces")
-        // Only the bitrate differs (the Wi-Fi bitrate knob is applied at activation only): no new config_id.
+        // Only the bitrate differs (an activation-time bitrate): no new config_id.
         announced.record(game.streamConfig(configID: 1), for: hello(2))
-        let wifi = game.applyingTransportKnobs(["MATEBRIDGE_WIFI_BITRATE_KBPS": "25000"], transport: .network)
+        var wifi = game
+        wifi.bitrateKbps = 25_000
         XCTAssertNotEqual(wifi.bitrateKbps, game.bitrateKbps)
         XCTAssertFalse(announced.activationDiffers(hello: hello(2), activation: wifi.streamConfig(configID: 1)))
         // Other stored prefs in between (T-049): the stream size differs, so a new config_id is needed too.
@@ -403,8 +404,7 @@ final class GameDisplayTests: XCTestCase {
 
     func testProfileLineNamesTheDisplay() {
         let build = BuildInfo(version: "0.1", build: "20261004000000", sha: "abc1234")
-        let f = StreamProfileLog.fields(settings: base.applying(prefs(w: 1848, h: 1214)), encoderProfile: .fast,
-                                        build: build, env: [:])
+        let f = StreamProfileLog.fields(settings: base.applying(prefs(w: 1848, h: 1214)), build: build, env: [:])
         XCTAssertTrue(f.contains(" scale_permille=1000 refresh_hz=120 display=1848x1214@1x sha=abc1234 "), f)
     }
 }

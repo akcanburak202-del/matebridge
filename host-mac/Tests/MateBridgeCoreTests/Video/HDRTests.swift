@@ -129,7 +129,7 @@ final class HDRTests: XCTestCase {
         let b = base.applying(prefs(w: 1848, h: 1214, dr: 1), allowHDR: false)
         XCTAssertEqual(b.dynamicRange, .sdr)
         XCTAssertEqual(b, base.applying(prefs(w: 1848, h: 1214)), "exactly the SDR settings")
-        XCTAssertEqual(VideoSettings.initialSettings(defaults: base, stored: prefs(dr: 1), defaultRefreshHz: 60,
+        XCTAssertEqual(VideoSettings.initialSettings(defaults: base, stored: prefs(dr: 1),
                                                      allowHDR: false).dynamicRange, .sdr)
     }
 
@@ -213,21 +213,21 @@ final class HDRTests: XCTestCase {
         let p = prefs(w: 1848, h: 1214, dr: 1)
         let hdr = base.applying(p)
         var f = HDRFallback()
-        XCTAssertNil(f.revalidated(hdr, base: base, prefs: p, defaultRefreshHz: 60, allowGameDisplay: true))
+        XCTAssertNil(f.revalidated(hdr, base: base, prefs: p, allowGameDisplay: true))
         _ = f.startFailed(settings: hdr, reason: .captureFailed)
-        let fixed = f.revalidated(hdr, base: base, prefs: p, defaultRefreshHz: 60, allowGameDisplay: true)
+        let fixed = f.revalidated(hdr, base: base, prefs: p, allowGameDisplay: true)
         XCTAssertEqual(fixed, base.applying(p, allowHDR: false))
         XCTAssertEqual(fixed?.displayModeText, "1848x1214@1x", "the game display stays")
-        let noGame = f.revalidated(hdr, base: base, prefs: p, defaultRefreshHz: 60, allowGameDisplay: false)
+        let noGame = f.revalidated(hdr, base: base, prefs: p, allowGameDisplay: false)
         XCTAssertEqual(noGame?.displayHiDPI, true)
-        XCTAssertNil(f.revalidated(base.applying(prefs()), base: base, prefs: prefs(), defaultRefreshHz: 60,
+        XCTAssertNil(f.revalidated(base.applying(prefs()), base: base, prefs: prefs(),
                                    allowGameDisplay: true), "SDR settings are valid")
         // The game display fallback re-applies without switching a disabled HDR back on.
         var g = GameDisplayFallback()
         _ = g.startFailed(settings: hdr, displayFailure: true)
-        let afterGame = g.revalidated(hdr, base: base, prefs: p, defaultRefreshHz: 60, allowHDR: false)
+        let afterGame = g.revalidated(hdr, base: base, prefs: p, allowHDR: false)
         XCTAssertEqual(afterGame?.dynamicRange, .sdr)
-        XCTAssertEqual(g.revalidated(hdr, base: base, prefs: p, defaultRefreshHz: 60)?.dynamicRange, .hdr10)
+        XCTAssertEqual(g.revalidated(hdr, base: base, prefs: p)?.dynamicRange, .hdr10)
     }
 
     func testRefusedEncoderProperty() {
@@ -302,7 +302,7 @@ final class HDRTests: XCTestCase {
         let store = InMemoryStreamPrefsStore()
         store.save(hdrGame, device: dev)
         XCTAssertEqual(store.load(device: dev)?.dynamicRange, 1)
-        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev), defaultRefreshHz: 60)
+        let initial = VideoSettings.initialSettings(defaults: base, stored: store.load(device: dev))
         XCTAssertEqual(initial.dynamicRange, .hdr10, "a reconnecting tablet starts in HDR10")
         XCTAssertEqual(initial.displayModeText, "1848x1214@1x")
         XCTAssertEqual(initial.streamConfig(configID: 1).transfer, 16)
@@ -344,25 +344,23 @@ final class HDRTests: XCTestCase {
     // MARK: Chroma knob (T-235) with HDR10
 
     func testHDRWinsOverTheChromaKnob() {
-        for raw in ["420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+        for raw in ["420", "sharp_nearest"] {
             let knob = ChromaKnob.parse(raw)
-            for profile in [EncoderProfile.fast, .llrc] {
-                let d = ChromaPolicy.resolve(knob: knob, codec: .hevc, profile: profile, dynamicRange: .hdr10)
-                XCTAssertEqual(d.applied, .yuv420, "\(raw) \(profile)")
-                XCTAssertEqual(d.reason, .hdr, "\(raw) \(profile)")
-                XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange, "no BGRA / Metal pass")
-                XCTAssertNil(d.applied.sharpUpsample)
-                XCTAssertTrue(d.statsEnabled, "a set knob keeps its stats window")
-                let line = ChromaConfigLog.line(d, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 2,
-                                                                      vuiFullRange: false, parsed: true))
-                XCTAssertTrue(line.fields.hasPrefix("requested=\(knob.requested.rawValue) applied=420 reason=hdr "),
-                              line.fields)
-                XCTAssertFalse(line.fields.contains("mismatch"), "Main10 4:2:0 matches the applied 420")
-                XCTAssertEqual(line.level, .warning)
-            }
+            let d = ChromaPolicy.resolve(knob: knob, dynamicRange: .hdr10)
+            XCTAssertEqual(d.applied, .yuv420, raw)
+            XCTAssertEqual(d.reason, .hdr, raw)
+            XCTAssertEqual(d.applied.captureFormat, .yuv420FullRange, "no BGRA / Metal pass")
+            XCTAssertNil(d.applied.sharpUpsample)
+            XCTAssertTrue(d.statsEnabled, "a set knob keeps its stats window")
+            let line = ChromaConfigLog.line(d, ChromaBitstreamInfo(chromaFormatIdc: 1, profileIdc: 2,
+                                                                  vuiFullRange: false, parsed: true))
+            XCTAssertTrue(line.fields.hasPrefix("requested=\(knob.requested.rawValue) applied=420 reason=hdr "),
+                          line.fields)
+            XCTAssertFalse(line.fields.contains("mismatch"), "Main10 4:2:0 matches the applied 420")
+            XCTAssertEqual(line.level, .warning)
         }
         // Unset knob with HDR: nothing to report, nothing logged.
-        let unset = ChromaPolicy.resolve(knob: .unset, codec: .hevc, profile: .fast, dynamicRange: .hdr10)
+        let unset = ChromaPolicy.resolve(knob: .unset, dynamicRange: .hdr10)
         XCTAssertEqual(unset.applied, .yuv420)
         XCTAssertNil(unset.reason)
         XCTAssertFalse(unset.statsEnabled)
@@ -370,19 +368,12 @@ final class HDRTests: XCTestCase {
     }
 
     func testChromaKnobUnchangedForSDR() {
-        for raw in [nil, "420", "sharp_bilinear", "sharp_nearest", "444", "bogus"] {
+        for raw in [nil, "420", "sharp_nearest", "bogus"] {
             let knob = ChromaKnob.parse(raw)
-            for codec in [Codec.hevc, .h264] {
-                for profile in [EncoderProfile.fast, .llrc] {
-                    XCTAssertEqual(ChromaPolicy.resolve(knob: knob, codec: codec, profile: profile, dynamicRange: .sdr),
-                                   ChromaPolicy.resolve(knob: knob, codec: codec, profile: profile),
-                                   "\(raw ?? "unset") \(codec) \(profile)")
-                }
-            }
+            XCTAssertEqual(ChromaPolicy.resolve(knob: knob, dynamicRange: .sdr), ChromaPolicy.resolve(knob: knob),
+                           raw ?? "unset")
         }
-        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("444"), codec: .hevc, profile: .fast, dynamicRange: .sdr).applied,
-                       .yuv444)
-        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("sharp_nearest"), codec: .hevc, profile: .fast,
+        XCTAssertEqual(ChromaPolicy.resolve(knob: .parse("sharp_nearest"),
                                             dynamicRange: .sdr).applied, .sharpNearest)
     }
 

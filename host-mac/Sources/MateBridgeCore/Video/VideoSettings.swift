@@ -19,8 +19,6 @@ public struct VideoSettings: Equatable, Sendable {
     public var displayRefreshHz: Int = 60
     /// `MATEBRIDGE_BITRATE_KBPS` (T-086): when set it wins over the stream-mode default of `applying(_:)`.
     public var bitrateOverrideKbps: Int?
-    /// Which knob set `bitrateOverrideKbps` (T-088); nil with an override means `env`.
-    public var bitrateOverrideSource: BitrateSource?
     /// The tablet's chosen bitrate (`STREAM_PREFS.bitrate_kbps`, clamped; decision 0013, T-106). nil = the mode
     /// default. Always nil while `bitrateOverrideKbps` is set: the user's choice is not in effect then, so a change
     /// of it alone is no change of the settings.
@@ -87,12 +85,6 @@ public struct VideoSettings: Equatable, Sendable {
     }
 
     // H.273 codes: sRGB primaries = BT.709 primaries; transfer 13 = sRGB; matrix 1 = BT.709; full range.
-    /// Accepts "60" or "120"; anything else (or nil) is 60.
-    public static func parseRefreshHz(_ text: String?) -> Int {
-        guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), v == 60 || v == 120 else { return 60 }
-        return v
-    }
-
     /// `MATEBRIDGE_FPS`: "60", "90" or "120"; anything else (or nil) is 60 (T-045).
     public static func parseFps(_ text: String?) -> Int {
         guard let text, let v = Int(text.trimmingCharacters(in: .whitespaces)), [60, 90, 120].contains(v) else { return 60 }
@@ -106,20 +98,17 @@ public struct VideoSettings: Equatable, Sendable {
     }
 
     /// Applies the experiment knobs (T-017, T-045, T-086: codec and a bitrate that wins over `STREAM_PREFS`) from an
-    /// environment. With no variables set, `self` is unchanged apart from `displayRefreshHz` staying at its default. `MATEBRIDGE_FPS` overrides the
-    /// tablet-derived fps only when present and valid; `MATEBRIDGE_FPS=120` without `MATEBRIDGE_REFRESH` also puts the
-    /// virtual display at 120 Hz.
+    /// environment. With no variables set, `self` is unchanged apart from `displayRefreshHz` (60, or 120 at 120 fps). `MATEBRIDGE_FPS` overrides the
+    /// tablet-derived fps only when present and valid; `MATEBRIDGE_FPS=120` also puts the virtual display at 120 Hz.
     public func applyingExperimentKnobs(_ env: [String: String]) -> VideoSettings {
         var s = self
         if env["MATEBRIDGE_FPS"] != nil { s.fps = Self.parseFps(env["MATEBRIDGE_FPS"]) }
         if let b = Self.parseBitrateKbps(env["MATEBRIDGE_BITRATE_KBPS"]) {
             s.bitrateKbps = b
             s.bitrateOverrideKbps = b
-            s.bitrateOverrideSource = .env
         }
         s.codec = Self.parseCodec(env["MATEBRIDGE_CODEC"])
-        s.displayRefreshHz = env["MATEBRIDGE_REFRESH"] != nil
-            ? Self.parseRefreshHz(env["MATEBRIDGE_REFRESH"]) : (s.fps == 120 ? 120 : 60)
+        s.displayRefreshHz = s.fps == 120 ? 120 : 60
         s.vdTransferKnob = VirtualDisplayTransfer.parse(env: env)
         s.vdPrimariesKnob = VirtualDisplayPrimaries.parse(env: env)
         s.chromaKnob = ChromaKnob.parse(env: env)
