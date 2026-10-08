@@ -1,10 +1,13 @@
 import Foundation
+import IOKit
 import MateBridgeCore
 
 /// USB mode guard (T-039). While enabled it keeps `adb reverse tcp:47001/47002` alive: it makes sure the adb server
 /// runs (under launchd, like `scripts/usb-mode.sh`, so tunnels survive), and every ~2 s re-installs missing tunnels,
 /// which also restores them after the cable is unplugged and replugged. All work, including child processes
 /// with deadlines, runs on its own serial queue; decisions come from the pure `UsbTunnelPlanner`.
+/// With no cable it does not poll `adb devices` every 2 s (T-324): IOKit USB attach/detach notifications trigger an
+/// immediate probe (then a short burst at the base rate while adb catches up), with a slow safety-net poll.
 /// Logs only state changes (`ev=usb_tunnel state=...`); the device serial is never logged.
 public final class UsbTunnelWatcher: @unchecked Sendable {
     static let launchdLabel = "dev.matebridge.adb"
@@ -19,6 +22,8 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     private var generation = 0
     private var lastActionFailed = false
     private var lastDeviceSerial: String?
+    private var usbEvents: UsbEventMonitor?
+    private var eventCoalescer = UsbEventCoalescer()
 
     /// Called on the watcher queue whenever the state changes. Set before `setEnabled`.
     public var onStateChange: (@Sendable (UsbTunnelState?) -> Void)?
@@ -31,15 +36,41 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
             guard on != enabled else { return }
             enabled = on
             generation += 1
+            eventCoalescer.reset()  // a stale pending probe exits on the generation mismatch
             if on {
                 planner.reset()
+                // Devices already present at registration emit no attach event: seed the same probe burst (T-324 r3).
+                planner.noteUsbEvent()
+                let monitor = UsbEventMonitor(queue: queue) { [weak self] in self?.usbEventOccurred() }
+                usbEvents = monitor.start() ? monitor : nil
+                planner.usbEventsAvailable = usbEvents != nil
                 scheduleTick(after: 0)
             } else {
+                usbEvents?.stop()
+                usbEvents = nil
+                planner.usbEventsAvailable = false
                 startRemoval()
                 planner.reset()
                 lastActionFailed = false
                 onStateChange?(nil)
             }
+        }
+    }
+
+    /// On `queue`. Probe soon and restart the tick chain (the pending slow tick is cancelled by the generation bump).
+    /// A pending event probe is never postponed by later events (flapping hubs), so probes keep running.
+    private func usbEventOccurred() {
+        guard enabled else { return }
+        planner.noteUsbEvent()
+        guard let delay = eventCoalescer.noteEvent() else { return }
+        let gen = generation
+        queue.asyncAfter(deadline: .now() + delay) { [self] in
+            guard enabled, gen == generation else { return }  // stale: setEnabled already reset the coalescer
+            eventCoalescer.probeStarted()
+            generation += 1  // cancels the pending regular tick; the chain restarts below
+            tick()
+            guard enabled else { return }
+            scheduleTick(after: planner.nextDelay)
         }
     }
 
@@ -147,5 +178,61 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
         case .gaveUp:
             logger.log(.warning, "usb_tunnel", sessionID: 0, generation: 0, fields: "state=remove_failed")
         }
+    }
+}
+
+/// IOKit attach/detach notifications for any USB device (no vendor filter: the Mac's bus changes rarely, and a
+/// probe on a foreign device is one cheap `adb devices`). Callbacks arrive on `queue`. System framework only (T-324).
+final class UsbEventMonitor: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let onEvent: @Sendable () -> Void
+    private var port: IONotificationPortRef?
+    private var iterators: [io_iterator_t] = []
+
+    init(queue: DispatchQueue, onEvent: @escaping @Sendable () -> Void) {
+        self.queue = queue
+        self.onEvent = onEvent
+    }
+
+    /// False when the notifications could not be registered; the caller then polls at the fallback rate.
+    func start() -> Bool {
+        guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return false }
+        IONotificationPortSetDispatchQueue(port, queue)
+        self.port = port
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let callback: IOServiceMatchingCallback = { refcon, iterator in
+            guard let refcon else { return }
+            let monitor = Unmanaged<UsbEventMonitor>.fromOpaque(refcon).takeUnretainedValue()
+            monitor.drain(iterator, notify: true)
+        }
+        for type in [kIOFirstMatchNotification, kIOTerminatedNotification] {
+            var iterator: io_iterator_t = 0
+            // IOServiceAddMatchingNotification consumes one reference of the matching dictionary.
+            let kr = IOServiceAddMatchingNotification(port, type, IOServiceMatching("IOUSBHostDevice"),
+                                                      callback, refcon, &iterator)
+            guard kr == KERN_SUCCESS else { stop(); return false }
+            iterators.append(iterator)
+            drain(iterator, notify: false)  // arms the notification; existing devices are not events
+        }
+        return true
+    }
+
+    func stop() {
+        for iterator in iterators { IOObjectRelease(iterator) }
+        iterators = []
+        if let port {
+            IONotificationPortSetDispatchQueue(port, nil)
+            IONotificationPortDestroy(port)
+        }
+        port = nil
+    }
+
+    private func drain(_ iterator: io_iterator_t, notify: Bool) {
+        var any = false
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            IOObjectRelease(service)
+            any = true
+        }
+        if any && notify { onEvent() }
     }
 }
