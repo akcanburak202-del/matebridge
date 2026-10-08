@@ -82,7 +82,53 @@ public struct HostSleepProgress: Sendable, Equatable {
 /// it, because a sleep acknowledged with a key held cannot be undone. Closing and moving events pass. Pure; the input
 /// controller applies it to what the pipeline produced, hands `dropped` to `InputPipeline.postFailed` (the shadow state
 /// forgets them) and releases again so the machine does not believe in what was never posted.
-public enum HostSleepInputGate {
+public struct HostSleepInputGate: Sendable, Equatable {
+    // MARK: Gate state (pure; the clock is passed in)
+
+    /// Awake time (monotonic uptime that does not advance while the Mac sleeps) after which a gate that never saw its
+    /// wake expires on its own: the tablet is the Mac's only input, so a cancelled or missed sleep must not block it.
+    /// One policy for the input gate and the audio tap.
+    public static let windowNs: UInt64 = 30_000_000_000
+
+    private var closedAtNs: UInt64?
+
+    public init() {}
+
+    /// The gate is set (closed or not yet noticed as expired).
+    public var isSet: Bool { closedAtNs != nil }
+
+    /// Closes the gate at `awakeNs` (the sleep participant, before its release-all). Setting again restarts the window.
+    public mutating func set(awakeNs: UInt64) { closedAtNs = awakeNs }
+
+    /// True while openings must be dropped: set, and fewer than `windowNs` of awake time have passed. A session start
+    /// does NOT clear it: a paired client may still connect between the release and the real sleep.
+    public func isClosed(atAwakeNs now: UInt64) -> Bool {
+        guard let at = closedAtNs else { return false }
+        return now &- at < Self.windowNs
+    }
+
+    /// Confirmed wake. True when the gate was set (now cleared).
+    public mutating func wake() -> Bool {
+        defer { closedAtNs = nil }
+        return closedAtNs != nil
+    }
+
+    /// Clears a gate whose window ran out. True when it did.
+    public mutating func expireIfDue(atAwakeNs now: UInt64) -> Bool {
+        guard closedAtNs != nil, !isClosed(atAwakeNs: now) else { return false }
+        closedAtNs = nil
+        return true
+    }
+
+    /// Awake time left until expiry at `now` (0 when not set or due).
+    public func remainingNs(atAwakeNs now: UInt64) -> UInt64 {
+        guard let at = closedAtNs else { return 0 }
+        let used = now &- at
+        return used < Self.windowNs ? Self.windowNs - used : 0
+    }
+
+    // MARK: Event classification
+
     /// True for the events that start something that has to be closed later.
     public static func isOpening(_ event: MacEvent) -> Bool {
         switch event {

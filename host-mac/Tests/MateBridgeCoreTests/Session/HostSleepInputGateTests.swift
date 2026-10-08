@@ -39,6 +39,43 @@ import Testing
         #expect(btn.dropped >= 1 && !pipe.isHoldingInput && pipe.machine?.hasHeldInput != true)
     }
 
+    private let sec: UInt64 = 1_000_000_000
+
+    @Test func setStaysClosedUntilWakeAndASessionStartDoesNotClearIt() {
+        var gate = HostSleepInputGate()
+        #expect(!gate.isClosed(atAwakeNs: 5 * sec))
+        gate.set(awakeNs: 100 * sec)
+        // A session start has no effect on the gate (there is no API for it); the pre-sleep window stays closed.
+        #expect(gate.isClosed(atAwakeNs: 100 * sec) && gate.isClosed(atAwakeNs: 129 * sec))
+        let early = gate.expireIfDue(atAwakeNs: 129 * sec)
+        #expect(!early && gate.isSet)
+        let woke = gate.wake()
+        #expect(woke)
+        #expect(!gate.isSet && !gate.isClosed(atAwakeNs: 101 * sec))
+        let again = gate.wake()
+        #expect(!again)  // a second wake is a no-op
+    }
+
+    @Test func expiresAfterTheAwakeWindow() {
+        var gate = HostSleepInputGate()
+        gate.set(awakeNs: 100 * sec)
+        #expect(gate.isClosed(atAwakeNs: 110 * sec))  // 10 s awake: still closed
+        #expect(gate.remainingNs(atAwakeNs: 110 * sec) == 20 * sec)
+        #expect(!gate.isClosed(atAwakeNs: 130 * sec))  // 30 s awake
+        let due = gate.expireIfDue(atAwakeNs: 130 * sec)
+        #expect(due)
+        let twice = gate.expireIfDue(atAwakeNs: 131 * sec)
+        #expect(!gate.isSet && !twice)
+        #expect(HostSleepInputGate.windowNs == 30 * sec)
+    }
+
+    @Test func settingAgainRestartsTheWindow() {
+        var gate = HostSleepInputGate()
+        gate.set(awakeNs: 0)
+        gate.set(awakeNs: 20 * sec)
+        #expect(gate.isClosed(atAwakeNs: 40 * sec))
+    }
+
     @Test func closingAndMovingEventsPass() {
         let pos = DisplayPoint(x: 1, y: 1)
         func mouse(_ kind: MacMouse.Kind) -> MacEvent {

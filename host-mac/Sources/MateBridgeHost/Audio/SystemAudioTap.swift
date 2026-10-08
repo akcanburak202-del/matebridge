@@ -54,10 +54,11 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var desired: Request?
     private var reconcileQueued = false
-    /// T-299: set by the host-sleep participant until the wake (or `sleepWindowNs` of awake time, should the wake
+    /// T-299: set by the host-sleep participant until the wake (or `HostSleepInputGate.windowNs` of awake time, should the wake
     /// notification be lost). While set, `start` is ignored and no build begins or finishes starting a capture.
-    private var sleepingUntilNs: UInt64 = 0
-    static let sleepWindowNs: UInt64 = 30_000_000_000
+    private var sleepGate = HostSleepInputGate()
+    /// The latest `start` refused during the window (one slot, latest wins): restored when the window clears.
+    private var pending: Request?
     // Confined to `queue`.
     private var run: Run?
 
@@ -90,7 +91,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             guard let self else { return done() }
             lock.withLock {
                 desired = nil
-                sleepingUntilNs = DispatchTime.now().uptimeNanoseconds &+ Self.sleepWindowNs
+                pending = nil
+                sleepGate.set(awakeNs: DispatchTime.now().uptimeNanoseconds)
             }
             queue.async { [self] in
                 if let r = run { teardown(r) }
@@ -104,7 +106,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
-                lock.withLock { sleepingUntilNs = 0 }
+                resumeAfterSleep(wake: true)
                 queue.async { if let r = self.run { self.interrupt(r, reason: "wake") } }
             }
         }
@@ -114,22 +116,54 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     public func start(streamID: UInt16, packetizer: AudioPacketizer,
                       events: @escaping @Sendable (AudioCaptureEvent) -> Void) {
-        lock.withLock {
-            guard !isSleepingLocked() else { return }  // T-299: the streamer's retry after the sleep begins is dropped
-            desired = Request(streamID: streamID, packetizer: packetizer, events: events)
+        let request = Request(streamID: streamID, packetizer: packetizer, events: events)
+        let waitNs: UInt64? = lock.withLock {
+            _ = sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
+            guard sleepGate.isSet else {
+                desired = request
+                return nil
+            }
+            pending = request  // T-299: kept, not dropped; restored when the window clears
+            return sleepGate.remainingNs(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
+        }
+        if let waitNs {
+            // Expiry without a wake: nothing else would resume it. (DispatchTime does not run while asleep either.)
+            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(min(waitNs, 60_000_000_000)) + 1_000_000)) { [self] in
+                resumeAfterSleep(wake: false)
+            }
+            return
         }
         scheduleReconcile()
     }
 
     public func stop(streamID: UInt16) {
-        lock.withLock { if desired?.streamID == streamID { desired = nil } }
+        lock.withLock {
+            if desired?.streamID == streamID { desired = nil }
+            if pending?.streamID == streamID { pending = nil }  // the session that asked is over
+        }
+        scheduleReconcile()
+    }
+
+    /// Wake, or the window's expiry: clears the sleeping window and restores the pending start (if its session did not
+    /// stop meanwhile) as `desired`, so audio starts without a toggle.
+    private func resumeAfterSleep(wake: Bool) {
+        let resumed: UInt16? = lock.withLock {
+            let ended = wake ? sleepGate.wake() : sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
+            guard ended, let p = pending else { return nil }
+            pending = nil
+            desired = p
+            return p.streamID
+        }
+        guard let id = resumed else { return }
+        logger.log(.info, "audio_capture_resume_after_sleep", sessionID: 0, generation: 0,
+                   fields: "stream_id=\(id) reason=\(wake ? "wake" : "expired")")
         scheduleReconcile()
     }
 
     /// App shutdown: tears the capture down, waiting at most `timeoutMs` (the queue may be stuck in the permission
     /// prompt; then the capture is never started, and the mute ends with the process anyway).
     public func shutdown(timeoutMs: Int = 500) {
-        lock.withLock { desired = nil }
+        lock.withLock { desired = nil; pending = nil }
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
             if let r = run { teardown(r) }
@@ -165,12 +199,9 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     }
 
     private func isWanted(_ streamID: UInt16) -> Bool {
-        lock.withLock { !isSleepingLocked() && desired?.streamID == streamID }
-    }
-
-    /// `lock` held.
-    private func isSleepingLocked() -> Bool {
-        DispatchTime.now().uptimeNanoseconds < sleepingUntilNs
+        lock.withLock {
+            !sleepGate.isClosed(atAwakeNs: DispatchTime.now().uptimeNanoseconds) && desired?.streamID == streamID
+        }
     }
 
     // MARK: Build and teardown (queue)
