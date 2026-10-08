@@ -39,6 +39,8 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
             eventCoalescer.reset()  // a stale pending probe exits on the generation mismatch
             if on {
                 planner.reset()
+                // Devices already present at registration emit no attach event: seed the same probe burst (T-324 r3).
+                planner.noteUsbEvent()
                 let monitor = UsbEventMonitor(queue: queue) { [weak self] in self?.usbEventOccurred() }
                 usbEvents = monitor.start() ? monitor : nil
                 planner.usbEventsAvailable = usbEvents != nil

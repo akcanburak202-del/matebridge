@@ -134,6 +134,22 @@ final class UsbTunnelPlannerTests: XCTestCase {
     }
 }
 
+final class UsbTunnelPlannerStartTests: XCTestCase {
+    func testStartWithDevicePresentFirstProbeEmptyFollowsUpAtBaseRate() {
+        var p = UsbTunnelPlanner()
+        p.reset()
+        p.usbEventsAvailable = true
+        p.noteUsbEvent()  // watcher start seeds the burst
+        // The burst counts the first probe too: it is followed by burstProbes - 1 probes at the base rate.
+        for _ in 0..<(UsbTunnelPlanner.burstProbes - 1) {
+            _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true))  // adb has not enumerated the tablet yet
+            XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.baseDelay)
+        }
+        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true))
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.idleEventDrivenDelay)
+    }
+}
+
 final class UsbEventCoalescerTests: XCTestCase {
     func testEventBurstEvery100msStillProbes() {
         var c = UsbEventCoalescer()
