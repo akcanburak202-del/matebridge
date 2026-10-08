@@ -186,6 +186,7 @@ public final class InputController: @unchecked Sendable {
             guard !stopped else { return }
             self.sessionID = sessionID
             self.configID = configID
+            InjectToFrameProbe.shared.setSession(sessionID: sessionID, configID: configID)
             messages = 0
             eventsPosted = 0
             loggedDrops = pipeline.planner.counters
@@ -503,6 +504,10 @@ public final class InputController: @unchecked Sendable {
         let postStart = DispatchTime.now().uptimeNanoseconds
         let result = post(events)
         let postNs = DispatchTime.now().uptimeNanoseconds &- postStart
+        // T-323: a posted press edge starts an inject-to-frame measurement (host clock, right after the post).
+        if events.contains(where: { $0.isPressEdge && !result.failed.contains($0) }) {
+            InjectToFrameProbe.shared.noteInjection()
+        }
         eventsPosted += events.count - result.failed.count
         if !result.failed.isEmpty {
             pipeline.postFailed(result.failed, now: now, permitted: result.permitted)

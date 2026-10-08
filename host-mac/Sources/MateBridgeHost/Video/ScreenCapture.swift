@@ -136,6 +136,11 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let us = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
         let status = raw.flatMap { SCFrameStatus(rawValue: $0) }
         meter?.recordCapture(status: ScreenCapture.statusName(status), ptsUs: us, arrivalUs: arrivalUs)
+        if status == .complete {
+            // T-323: an absent dirty-rect list counts as dirty (unknown); an empty one as unchanged.
+            let rects = attachments?.first?[.dirtyRects] as? [Any]
+            InjectToFrameProbe.shared.noteFrame(dirty: rects.map { !$0.isEmpty } ?? true, arrivalUs: arrivalUs)
+        }
         guard status == .complete, let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         let displayUs = (attachments?.first?[.displayTime] as? UInt64).map(ScreenCapture.machTicksToUs) ?? 0
         handler(pb, pts, us, displayUs)
