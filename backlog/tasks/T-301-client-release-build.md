@@ -1,7 +1,7 @@
 ---
 id: T-301
 title: Tablet — günlük kullanım için debug olmayan profileable derleme (aynı imza) ve minSdk 31 (karar 0037)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []

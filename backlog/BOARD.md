@@ -28,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-299](tasks/T-299-host-sleep-participants.md) | Host — uyku katılımcıları hiç kayıt olmuyor; girdi ve ses uyku anında oturum kuyruğundan bağımsız bırakılsın (T-132 eksiği) | 7 | mac-host-dev | [] |
-| [T-301](tasks/T-301-client-release-build.md) | Tablet — günlük kullanım için debug olmayan profileable derleme (aynı imza) ve minSdk 31 (karar 0037) | 7 | android-client-dev | [] |
 | [T-302](tasks/T-302-host-knob-removals.md) | Host — kapanmış deney anahtarlarını kaldır (BITRATE_STEP + canlı bit hızı zinciri, QUALITY, ENCODER=llrc, REFRESH, WIFI_BITRATE_KBPS, CHROMA 444/sharp_bilinear) | 7 | mac-host-dev | [] |
 | [T-303](tasks/T-303-client-dead-code-jitter.md) | Tablet — ölü ve yalnız testte kullanılan kod, sabit titreşim tamponu (FramePacer), API < 31 dalları | 7 | android-client-dev | [T-300] |
 | [T-304](tasks/T-304-host-vd-transfer-removal.md) | Host — MATEBRIDGE_VD_TRANSFER anahtarını kaldır (karar 0032 eki); HDR10 aktarım ve primer kurulumu kalır | 7 | mac-host-dev | [T-302] |
@@ -320,3 +319,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-297](tasks/T-297-simplification-review.md) | Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama | 7 | orchestrator | [] |
 | [T-298](tasks/T-298-optimization-research.md) | Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ | 7 | orchestrator | [] |
 | [T-300](tasks/T-300-client-experiment-leftovers.md) | Tablet — kararı verilmiş deneylerin kodunu kaldır (tos/wifi_ll + Wi-Fi kilidi, hz_pin, renk geçersiz kılma, dec_lowlat/dec_oprate varyantları, VideoTestActivity) | 7 | android-client-dev | [] |
+| [T-301](tasks/T-301-client-release-build.md) | Tablet — günlük kullanım için debug olmayan profileable derleme (aynı imza) ve minSdk 31 (karar 0037) | 7 | android-client-dev | [] |
