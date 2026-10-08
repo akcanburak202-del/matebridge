@@ -9,7 +9,7 @@ import Foundation
 /// `sharp_chroma` runs one thread per 2x2 block: the 2x2 box mean of Cb'/Cr' -> `rg8Unorm` (the Cb and Cr codes).
 /// `sharp_luma` runs one thread per pixel and reads that chroma texture: `r8Unorm` luma codes (buffer 0 `mode`:
 /// 0 = plain Y', 1 = adjusted for nearest chroma upsampling; buffer 1 the EOTF table `SharpYUV.eotfTable`,
-/// `eotfTableSize` floats, in the `constant` address space). The two run in separate encoders, so the chroma writes
+/// `eotfTableSize` floats, in the `device` address space (T-315: `constant` was 4.18 ms GPU on the device; data-dependent indexing serializes there)). The two run in separate encoders, so the chroma writes
 /// are visible to the luma pass. `LegacyTwoPassKernel` (test target, LUT in `device` memory) is the byte reference.
 /// The source texture is `bgra8Unorm` holding sRGB-encoded values (not `_srgb`: no conversion on read).
 /// Compile with safe math (`MTLCompileOptions.mathMode = .safe`) so division and rounding stay close to the CPU.
@@ -33,18 +33,18 @@ public enum SharpYUVKernel {
     constant float CR_R = 1.5748f, CB_G = 0.187324f, CR_G = 0.468124f, CB_B = 1.8556f;
     constant int LUT_SIZE = \(SharpYUV.eotfTableSize);
 
-    static inline float to_linear(float v, constant float *lut) {
+    static inline float to_linear(float v, device const float *lut) {
         float c = clamp(v, 0.0f, 1.0f) * float(LUT_SIZE - 1);
         int i = min(int(c), LUT_SIZE - 2);
         float f = c - float(i);
         return lut[i] + f * (lut[i + 1] - lut[i]);
     }
 
-    static inline float luminance(float3 p, constant float *lut) {
+    static inline float luminance(float3 p, device const float *lut) {
         return KR * to_linear(p.r, lut) + KG * to_linear(p.g, lut) + KB * to_linear(p.b, lut);
     }
 
-    static inline float rebuilt(int y_code, float cb, float cr, constant float *lut) {
+    static inline float rebuilt(int y_code, float cb, float cr, device const float *lut) {
         float y = float(y_code) / 255.0f;
         float3 p = clamp(float3(y + CR_R * cr, y - CB_G * cb - CR_G * cr, y + CB_B * cb), 0.0f, 1.0f);
         return luminance(p, lut);
@@ -53,7 +53,7 @@ public enum SharpYUVKernel {
     // Smallest code whose rebuilt luminance reaches `target` (255 when none does), found by galloping out from `g`
     // and bisecting the bracket. The luminance is monotonic in the code, so the result does not depend on `g` and
     // equals the CPU reference's plain bisection. `lc` = L(code), `lprev` = L(code - 1) (when code > 0).
-    static inline int reach(float target, float cb, float cr, int g, constant float *lut,
+    static inline int reach(float target, float cb, float cr, int g, device const float *lut,
                             thread float &lc, thread float &lprev) {
         int lo, hi;
         float llo1 = 0.0f, lhi = 0.0f;
@@ -124,7 +124,7 @@ public enum SharpYUVKernel {
                            texture2d<float, access::read> cbcr [[texture(1)]],
                            texture2d<float, access::write> luma [[texture(2)]],
                            constant uint &mode [[buffer(0)]],
-                           constant float *lut [[buffer(1)]],
+                           device const float *lut [[buffer(1)]],
                            uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= luma.get_width() || gid.y >= luma.get_height()) return;
         float3 c = src.read(gid).rgb;
