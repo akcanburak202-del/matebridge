@@ -59,6 +59,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     private var sleepGate = HostSleepInputGate()
     /// The latest `start` refused during the window (one slot, latest wins): restored when the window clears.
     private var pending: Request?
+    /// The one outstanding expiry check (nil: none); cancelled when nothing is pending any more.
+    private var expiryItem: DispatchWorkItem?
     // Confined to `queue`.
     private var run: Run?
 
@@ -95,8 +97,14 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
                 sleepGate.set(awakeNs: DispatchTime.now().uptimeNanoseconds)
             }
             queue.async { [self] in
-                if let r = run { teardown(r) }
-                run = nil
+                // Skipped when a request that came after the wake is already wanted (this block may have waited behind
+                // a blocked queue): that capture must not be destroyed, and reconcile owns it. Still closed or nothing
+                // wanted: no capture during the sleep.
+                let keep = lock.withLock { desired != nil && !sleepGate.isSet }
+                if !keep, let r = run {
+                    teardown(r)
+                    run = nil
+                }
                 done()
             }
         }
@@ -117,20 +125,17 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     public func start(streamID: UInt16, packetizer: AudioPacketizer,
                       events: @escaping @Sendable (AudioCaptureEvent) -> Void) {
         let request = Request(streamID: streamID, packetizer: packetizer, events: events)
-        let waitNs: UInt64? = lock.withLock {
+        let sleeping: Bool = lock.withLock {
             _ = sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
             guard sleepGate.isSet else {
                 desired = request
-                return nil
+                return false
             }
             pending = request  // T-299: kept, not dropped; restored when the window clears
-            return sleepGate.remainingNs(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
+            return true
         }
-        if let waitNs {
-            // Expiry without a wake: nothing else would resume it. (DispatchTime does not run while asleep either.)
-            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(min(waitNs, 60_000_000_000)) + 1_000_000)) { [self] in
-                resumeAfterSleep(wake: false)
-            }
+        if sleeping {
+            scheduleExpiryCheck()
             return
         }
         scheduleReconcile()
@@ -141,7 +146,34 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             if desired?.streamID == streamID { desired = nil }
             if pending?.streamID == streamID { pending = nil }  // the session that asked is over
         }
+        cancelExpiryCheckIfIdle()
         scheduleReconcile()
+    }
+
+    /// Expiry without a wake: nothing else would resume the pending start. At most ONE check is outstanding however
+    /// many starts arrive (DispatchTime does not run while asleep either, so it counts awake time like the gate).
+    private func scheduleExpiryCheck() {
+        let item: DispatchWorkItem? = lock.withLock {
+            guard expiryItem == nil, sleepGate.isSet else { return nil }
+            let waitNs = sleepGate.remainingNs(atAwakeNs: DispatchTime.now().uptimeNanoseconds) &+ 1_000_000
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                lock.withLock { expiryItem = nil }
+                resumeAfterSleep(wake: false)
+                // A newer sleep restarted the window while a start is still pending: check again at its end.
+                if lock.withLock({ pending != nil && sleepGate.isSet }) { scheduleExpiryCheck() }
+            }
+            expiryItem = item
+            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(min(waitNs, 120_000_000_000))), execute: item)
+            return item
+        }
+        _ = item
+    }
+
+    private func cancelExpiryCheckIfIdle() {
+        lock.withLock {
+            if pending == nil { expiryItem?.cancel(); expiryItem = nil }
+        }
     }
 
     /// Wake, or the window's expiry: clears the sleeping window and restores the pending start (if its session did not
@@ -151,6 +183,8 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             let ended = wake ? sleepGate.wake() : sleepGate.expireIfDue(atAwakeNs: DispatchTime.now().uptimeNanoseconds)
             guard ended, let p = pending else { return nil }
             pending = nil
+            expiryItem?.cancel()
+            expiryItem = nil
             desired = p
             return p.streamID
         }
@@ -163,7 +197,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     /// App shutdown: tears the capture down, waiting at most `timeoutMs` (the queue may be stuck in the permission
     /// prompt; then the capture is never started, and the mute ends with the process anyway).
     public func shutdown(timeoutMs: Int = 500) {
-        lock.withLock { desired = nil; pending = nil }
+        lock.withLock { desired = nil; pending = nil; expiryItem?.cancel(); expiryItem = nil }
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
             if let r = run { teardown(r) }

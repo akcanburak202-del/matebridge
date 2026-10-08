@@ -58,5 +58,8 @@ InputController start() registers "input" (releaseOnQueue(.hostSleep) on its own
 - Review round 2 (Codex high, P1-P2), second follow-up commit:
   - P1: `sessionStarted` no longer clears the input gate. `HostSleepInputGate` is now a pure Core struct (set / `isClosed(atAwakeNs:)` / `wake()` / `expireIfDue(atAwakeNs:)`, shared `windowNs` = 30 s of awake time, `DispatchTime` uptime which does not advance during sleep). Cleared by `didWake` (`input_sleep_gate_end reason=wake`) or expiry (`reason=expired`, checked in `gate()` and the 1 s poll). Tests: set, session start no clear, wake; 10 s still closed; 30 s expires; re-set restarts.
   - P2: `SystemAudioTap` keeps one pending `Request` (latest wins) for a `start` refused in the window, schedules an expiry check (`asyncAfter`), and on wake or expiry restores it as `desired` and reconciles (`audio_capture_resume_after_sleep reason=wake|expired`). `stop(streamID)` and `shutdown` drop the pending request. The tap uses the same Core gate struct and window constant. Host-only wiring, no unit test; check.sh ALL OK.
+- Review round 3 (Codex high, two audio P2s), third follow-up commit, `SystemAudioTap` only:
+  - The queued sleep teardown now checks under the lock before destroying: it keeps the capture when a request is wanted and the gate has cleared (a post-wake request wins; reconcile owns it), otherwise it tears down (no capture during sleep). `done` is always called.
+  - Expiry check is one coalesced `DispatchWorkItem` (`expiryItem`), scheduled only if none is outstanding. Cancelled by `stop` (when nothing is pending), `shutdown` and when the pending start is restored; it reschedules itself if a newer sleep window still has a pending start. Host-only, no unit test; check.sh ALL OK.
 
 ## Open questions
