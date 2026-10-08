@@ -1,7 +1,7 @@
 ---
 id: T-257
 title: Protocol — packed full chroma (decision 0034): STREAM_PREFS.chroma=2, STREAM_CONFIG.chroma_layout, VIDEO_FRAME.view, KEYFRAME_REQUEST.view
-status: review
+status: done
 phase: 6
 owner: orchestrator
 depends_on: [T-254, T-255, T-256]

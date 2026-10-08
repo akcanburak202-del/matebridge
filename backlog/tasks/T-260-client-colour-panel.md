@@ -1,7 +1,7 @@
 ---
 id: T-260
 title: Client panel — "Renk: Normal / Keskin kenarlar / Tam renk" (decision 0034), migrate the 0033 setting
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-259]

@@ -1,7 +1,7 @@
 ---
 id: T-238
 title: Client — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec, capability check, Oyun-mode panel toggle, decoder setup, logs)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-231]

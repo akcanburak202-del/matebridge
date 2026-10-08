@@ -1,7 +1,7 @@
 ---
 id: T-227
 title: Client — when the stored Mac address stops answering, rediscover the host via Bonjour (Mac moved from Wi-Fi to Ethernet)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

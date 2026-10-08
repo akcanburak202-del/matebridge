@@ -1,7 +1,7 @@
 ---
 id: T-240
 title: Host — apply STREAM_PREFS.chroma (decision 0033) via the T-235 sharp_nearest path; codec field rename
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-235, T-237]

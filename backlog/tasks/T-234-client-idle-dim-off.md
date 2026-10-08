@@ -1,7 +1,7 @@
 ---
 id: T-234
 title: Client — idle dim then screen-off per decision 0031 (panel setting 2/5/10/15/off, first input only wakes, paused in game mode)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

@@ -1,7 +1,7 @@
 ---
 id: T-241
 title: Client — "Keskin renk kenarları" panel toggle and STREAM_PREFS.chroma (decision 0033)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-238]

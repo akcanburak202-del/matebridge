@@ -1,7 +1,7 @@
 ---
 id: T-247
 title: Client — verify (and fix) that the first navigation key after a touch is not swallowed by ViewRootImpl leaving touch mode
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

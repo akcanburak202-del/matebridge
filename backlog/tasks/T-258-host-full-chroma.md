@@ -1,7 +1,7 @@
 ---
 id: T-258
 title: Host — packed full chroma (decision 0034): codecs, Metal AVC444v2 packer, second VT session, pairing, fallback
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-257, T-253]

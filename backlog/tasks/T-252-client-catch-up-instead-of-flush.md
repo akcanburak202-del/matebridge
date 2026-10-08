@@ -1,7 +1,7 @@
 ---
 id: T-252
 title: Client — on queue overflow, decode the backlog fast and show only the newest frame instead of flushing + keyframe request
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-251]

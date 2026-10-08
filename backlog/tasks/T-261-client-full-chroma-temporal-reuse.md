@@ -1,7 +1,7 @@
 ---
 id: T-261
 title: Client — full chroma without flicker: keep the last full colour in unchanged blocks when the aux frame is late, upgrade late pairs
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-259]

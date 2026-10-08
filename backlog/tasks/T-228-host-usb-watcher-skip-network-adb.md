@@ -1,7 +1,7 @@
 ---
 id: T-228
 title: Host — the USB tunnel watcher must ignore network adb devices (adb over Wi-Fi is not USB)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: []

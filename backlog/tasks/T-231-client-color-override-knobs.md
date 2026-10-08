@@ -1,7 +1,7 @@
 ---
 id: T-231
 title: Black level lifted on the tablet — client dev knobs to override colour range/standard/transfer and a logged output-format report (A/B on device)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

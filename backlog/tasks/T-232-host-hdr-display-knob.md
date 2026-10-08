@@ -1,7 +1,7 @@
 ---
 id: T-232
 title: Host dev knob — create the MateBridge virtual display with an HDR transfer function (tf=1) so games can be checked for an HDR toggle; stream stays SDR
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-226]

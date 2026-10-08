@@ -1,7 +1,7 @@
 ---
 id: T-229
 title: Client — T-227 rediscovery edge cases with more than one paired Mac (candidate starvation, user pick inherits identity gate)
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-227]

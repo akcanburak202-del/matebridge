@@ -1,7 +1,7 @@
 ---
 id: T-259
 title: Client — packed full chroma (decision 0034): codecs, capability test, second decoder, ImageReader + GL merge path, pairing, prefs
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: [T-257, T-252]

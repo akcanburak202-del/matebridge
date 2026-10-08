@@ -1,7 +1,7 @@
 ---
 id: T-235
 title: Host dev knob MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444 — sharp-YUV (luma adjustment) 4:2:0 via a Metal pass, plus a native 4:4:4 probe value; colour test page
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-233]

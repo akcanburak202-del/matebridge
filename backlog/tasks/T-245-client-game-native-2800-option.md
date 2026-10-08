@@ -1,7 +1,7 @@
 ---
 id: T-245
 title: Client — experimental "2800×1840 (deneysel)" game resolution, offered only in Oyun 60
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

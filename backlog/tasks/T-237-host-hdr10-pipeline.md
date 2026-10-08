@@ -1,7 +1,7 @@
 ---
 id: T-237
 title: Host — HDR10 per decision 0032 (STREAM_PREFS dynamic_range codec + HDR display, SCK HDR capture, VT Main10 PQ, SDR fallback)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-232]

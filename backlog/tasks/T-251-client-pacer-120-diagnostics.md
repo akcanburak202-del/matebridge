@@ -1,7 +1,7 @@
 ---
 id: T-251
 title: Client — 120 Hz pacer diagnostics: log feedback level, dev knobs for D cap and feedback
-status: review
+status: done
 phase: 6
 owner: android-client-dev
 depends_on: []

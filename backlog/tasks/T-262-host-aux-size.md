@@ -1,7 +1,7 @@
 ---
 id: T-262
 title: Host — shrink the full-chroma auxiliary stream (aux bytes are 1.25–1.5× main instead of ~0.4×)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-258]
