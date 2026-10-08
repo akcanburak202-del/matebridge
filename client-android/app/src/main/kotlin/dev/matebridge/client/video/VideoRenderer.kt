@@ -91,10 +91,6 @@ class VideoRenderer(
     private val previousWaitMs: Long = PREVIOUS_WAIT_MS,
     /** T-161: backoff before the 1st / 2nd / 3rd codec restart of a [RestartPolicy] window. */
     private val restartDelaysMs: LongArray = RestartPolicy.DELAYS_MS,
-    /** T-217 dev knob (`dec_lowlat`, `dec_oprate`): decoder latency keys; [DecoderLatencyKnobs.DEFAULT] adds none. */
-    private val decoderTuning: DecoderLatencyKnobs = DecoderLatencyKnobs.DEFAULT,
-    /** T-231 dev knob (`color_range`, `color_standard`, `color_transfer`); [ColorOverrides.AUTO] = today's colour keys. */
-    private val colorOverrides: ColorOverrides = ColorOverrides.AUTO,
 ) : VideoFrameSink {
     companion object {
         const val JOIN_MS = 300L
@@ -410,35 +406,32 @@ class VideoRenderer(
     else MediaFormat.MIMETYPE_VIDEO_HEVC
 
     /**
-     * T-217: the decoder input format. With [DecoderLatencyKnobs.DEFAULT] these are exactly the pre-T-217 keys, values
-     * and order; a tuning changes the operating rate in place and appends its extra keys at the end.
+     * The decoder input format. [operatingRate] is [OperatingRate.MAX] (T-222), or the stream fps (null: unset) in the
+     * one-shot fallback format after a configure/start failure.
      */
     private fun decoderFormat(
         config: StreamConfig,
         mime: String,
         lowLatency: Boolean?,
-        tuning: DecoderLatencyKnobs,
+        operatingRate: Int?,
     ): DecoderFormat {
         val format = DecoderFormat(mime, config.widthPx, config.heightPx)
         format.setInteger(MediaFormat.KEY_PRIORITY, 0) // real-time
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, config.widthPx * config.heightPx * 3 / 2)
         if (config.fps > 0) format.setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-        tuning.operatingRate(config.fps)?.let { format.setInteger(MediaFormat.KEY_OPERATING_RATE, it) }
-        // T-231: [ColorOverrides.AUTO] puts exactly the pre-T-231 keys (ColorMapping); a knob replaces a value in place
-        // or leaves its key out. The T-217 fallback format gets the same colour keys (the knobs are independent).
+        operatingRate?.let { format.setInteger(MediaFormat.KEY_OPERATING_RATE, it) }
         for ((k, v) in colorKeys(config)) format.setInteger(k, v)
         if (lowLatency == true) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-        for ((k, v) in tuning.extraKeys) format.setInteger(k, v)
         return format
     }
 
-    /** T-231: the colour keys of the decoder format for [config], in format order (absent = left unset). */
+    /** The colour keys of the decoder format for [config], in format order (absent = left unset). */
     private fun colorKeys(config: StreamConfig): Map<String, Int> {
         val m = LinkedHashMap<String, Int>()
         if (packed != null) return m // decision 0034: raw samples, no colour tagging
-        colorOverrides.standard(config)?.let { m[MediaFormat.KEY_COLOR_STANDARD] = it }
-        colorOverrides.transfer(config)?.let { m[MediaFormat.KEY_COLOR_TRANSFER] = it }
-        colorOverrides.range(config)?.let { m[MediaFormat.KEY_COLOR_RANGE] = it }
+        ColorMapping.standard(config.matrix)?.let { m[MediaFormat.KEY_COLOR_STANDARD] = it }
+        ColorMapping.transfer(config.transfer)?.let { m[MediaFormat.KEY_COLOR_TRANSFER] = it }
+        m[MediaFormat.KEY_COLOR_RANGE] = ColorMapping.range(config.fullRange)
         return m
     }
 
@@ -466,23 +459,22 @@ class VideoRenderer(
         var codec = codecFactory.create(mime)
         val supported = codec.lowLatencySupport(mime) // null: API < 30
         val lowLatency = when (supported) { null -> "n/a"; true -> "on"; false -> "unsupported" }
-        val tuning = decoderTuning
         var rejected = false
         try {
-            configureAndStart(codec, decoderFormat(config, mime, supported, tuning), surface)
+            configureAndStart(codec, decoderFormat(config, mime, supported, OperatingRate.MAX), surface)
         } catch (e: Exception) {
-            if (tuning.isDefault) throw e
-            // T-217: the knob must never cost the stream: exactly one retry, on a fresh codec, with the default format.
-            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=dec_lowlat_rejected lowlat=${tuning.lowLat.id} " +
-                "oprate=${tuning.opRate.id} keys=${tuning.changedKeys().joinToString(",")} err=${e.javaClass.simpleName}")
+            // T-217: the operating rate must never cost the stream: exactly one retry, on a fresh codec, with the
+            // stream-fps rate (the pre-T-222 format).
+            env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=dec_lowlat_rejected lowlat=off oprate=max " +
+                "keys=operating-rate err=${e.javaClass.simpleName}")
             rejected = true
             codec = codecFactory.create(mime)
-            configureAndStart(codec, decoderFormat(config, mime, supported, DecoderLatencyKnobs.DEFAULT), surface)
+            configureAndStart(codec, decoderFormat(config, mime, supported, OperatingRate.resolve(config.fps)), surface)
         }
-        val rate = (if (rejected) DecoderLatencyKnobs.DEFAULT else tuning).operatingRate(config.fps)
-        // T-217 `codec_start`: the requested knob value, or `rejected` when it fell back to the default format.
-        val lowlat = if (rejected && tuning.lowLat != DecoderLatencyKnobs.LowLat.OFF) "rejected" else tuning.lowLat.id
-        val oprate = if (rejected && tuning.opRate != DecoderLatencyKnobs.OpRate.FPS) "rejected" else tuning.opRate.id
+        val rate = if (rejected) OperatingRate.resolve(config.fps) else OperatingRate.MAX
+        // `codec_start` keeps the constant lowlat=/oprate= fields (tools/measure parses them); oprate=rejected after the retry.
+        val lowlat = "off"
+        val oprate = if (rejected) "rejected" else "max"
         codecInfo = "${codec.name} ${config.widthPx}x${config.heightPx} lowLatency=$lowLatency"
         val accepted = try {
             val f = codec.inputFormat

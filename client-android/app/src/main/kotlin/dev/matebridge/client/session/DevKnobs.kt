@@ -1,8 +1,5 @@
 package dev.matebridge.client.session
 
-import dev.matebridge.client.stream.HzPinVariant
-import dev.matebridge.client.video.ColorOverrides
-import dev.matebridge.client.video.DecoderLatencyKnobs
 import dev.matebridge.client.video.PacerTuning
 import java.util.Locale
 
@@ -50,7 +47,7 @@ data class DevKnobs(
     val leadUs: Int? = null,
     /** `--ei deadline_us N`: null = default; -1 = the display's deadline; >= 0 = N us. */
     val deadlineUs: Int? = null,
-    /** `ping_ms`, `tos_ctl`, `tos_video`, `wifi_ll` (T-089). */
+    /** `ping_ms` (T-089). */
     val wifi: WifiKnobs = WifiKnobs(),
     /** `--ez audio false` turns audio off (T-095). */
     val audio: Boolean = true,
@@ -75,22 +72,6 @@ data class DevKnobs(
      * the native HiDPI display) for A/B; any other value or absent = the "Oyun çözünürlüğü" setting applies.
      */
     val gameDisplay: Boolean = true,
-    /**
-     * `--es dec_lowlat off|hisi|vdec|all`, `--es dec_oprate fps|max` (T-217): decoder latency keys for `VideoRenderer`.
-     * Absent or unknown = [DecoderLatencyKnobs.STANDARD] (`off`, `max`; T-222). `dec_oprate fps` = the pre-T-222 rate.
-     */
-    val decoderLatency: DecoderLatencyKnobs = DecoderLatencyKnobs.STANDARD,
-    /**
-     * `--es color_range auto|full|limited|unset`, `--es color_standard auto|bt709|bt601|unset`,
-     * `--es color_transfer auto|srgb|sdr_video|unset` (T-231): the decoder's colour keys. Absent or unknown = `auto`
-     * ([ColorOverrides.AUTO], today's STREAM_CONFIG mapping); `unset` leaves the key out.
-     */
-    val colorOverrides: ColorOverrides = ColorOverrides.AUTO,
-    /**
-     * `--es hz_pin off|lp|all` (T-243 experiment): extra 60 Hz panel hints in Oyun 60. Absent or unknown =
-     * [HzPinVariant.OFF] (today's calls only).
-     */
-    val hzPin: HzPinVariant = HzPinVariant.OFF,
     /**
      * `--ei pace_dcap_half N`, `--ez pace_feedback false` (T-251): adaptive pacer D cap (half periods) and the skip
      * feedback. Absent = [PacerTuning.STANDARD].
@@ -134,9 +115,6 @@ data class DevKnobs(
             Spec("lead_us", Kind.INT, debugOnly = true),
             Spec("deadline_us", Kind.INT, debugOnly = true),
             Spec("ping_ms", Kind.INT, debugOnly = true),
-            Spec("tos_ctl", Kind.INT, debugOnly = true),
-            Spec("tos_video", Kind.INT, debugOnly = true),
-            Spec("wifi_ll", Kind.BOOL, debugOnly = true),
             Spec("audio", Kind.BOOL, debugOnly = true),
             Spec("transport", Kind.STRING, debugOnly = true, ids = setOf("auto", "usb", "wifi")),
             Spec("audio_out", Kind.STRING, debugOnly = true, ids = setOf("auto", "aaudio", "track", "audiotrack")),
@@ -151,12 +129,6 @@ data class DevKnobs(
             Spec("decoder_fault", Kind.STRING, debugOnly = true, ids = setOf("create", "configure", "dequeue", "silent")),
             Spec("decoder_fault_after_s", Kind.INT, debugOnly = true),
             Spec("game_display", Kind.INT, debugOnly = true),
-            Spec("dec_lowlat", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.LOW_LAT_IDS),
-            Spec("dec_oprate", Kind.STRING, debugOnly = true, ids = DecoderLatencyKnobs.OP_RATE_IDS),
-            Spec("color_range", Kind.STRING, debugOnly = true, ids = ColorOverrides.RANGE_IDS),
-            Spec("color_standard", Kind.STRING, debugOnly = true, ids = ColorOverrides.STANDARD_IDS),
-            Spec("color_transfer", Kind.STRING, debugOnly = true, ids = ColorOverrides.TRANSFER_IDS),
-            Spec("hz_pin", Kind.STRING, debugOnly = true, ids = HzPinVariant.IDS),
             Spec("pace_dcap_half", Kind.INT, debugOnly = true),
             Spec("pace_feedback", Kind.BOOL, debugOnly = true),
             Spec("catch_up", Kind.BOOL, debugOnly = true),
@@ -187,7 +159,7 @@ data class DevKnobs(
                 hz = if (x.has("hz")) x.int("hz", -1) else null,
                 leadUs = if (x.has("lead_us")) x.int("lead_us", -1).takeIf { it >= 0 } else null,
                 deadlineUs = if (x.has("deadline_us")) x.int("deadline_us", -1) else null,
-                wifi = WifiKnobs.parse({ x.has(it) }, { x.int(it, 0) }, { x.bool(it, false) }),
+                wifi = WifiKnobs.parse({ x.has(it) }, { x.int(it, 0) }),
                 audio = x.bool("audio", true),
                 transport = x.string("transport"),
                 audioOut = x.string("audio_out"),
@@ -198,11 +170,6 @@ data class DevKnobs(
                 decoderFault = x.string("decoder_fault"),
                 decoderFaultAfterS = if (x.has("decoder_fault_after_s")) x.int("decoder_fault_after_s", 0) else null,
                 gameDisplay = !(x.has("game_display") && x.int("game_display", 1) == 0),
-                decoderLatency = DecoderLatencyKnobs.parse(x.string("dec_lowlat"), x.string("dec_oprate")),
-                colorOverrides = ColorOverrides.parse(
-                    x.string("color_range"), x.string("color_standard"), x.string("color_transfer"),
-                ),
-                hzPin = HzPinVariant.parse(x.string("hz_pin")),
                 pacerTuning = PacerTuning.parse(
                     if (x.has("pace_dcap_half")) x.int("pace_dcap_half", 0) else null, x.bool("pace_feedback", true),
                 ),

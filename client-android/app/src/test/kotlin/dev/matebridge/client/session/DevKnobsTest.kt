@@ -1,8 +1,5 @@
 package dev.matebridge.client.session
 
-import dev.matebridge.client.stream.HzPinVariant
-import dev.matebridge.client.video.ColorOverrides
-import dev.matebridge.client.video.DecoderLatencyKnobs
 import dev.matebridge.client.video.PacerTuning
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,12 +20,11 @@ class DevKnobsTest {
 
     /** Every debug-only key with a non-default value. */
     private val allDebugOnly: Array<Pair<String, Any>> = arrayOf(
-        "jitter" to 1, "hz" to 120, "lead_us" to 4000, "deadline_us" to -1, "ping_ms" to 100, "tos_ctl" to 0xB8,
-        "tos_video" to 0x88, "wifi_ll" to true, "audio" to false, "transport" to "wifi", "audio_out" to "track",
+        "jitter" to 1, "hz" to 120, "lead_us" to 4000, "deadline_us" to -1, "ping_ms" to 100,
+        "audio" to false, "transport" to "wifi", "audio_out" to "track",
         "audio_buf_bursts" to 3, "quickack" to false, "net_bench" to "192.168.1.20:5201", "net_bench_s" to 5,
         "net_bench_dir" to "up", "net_bench_streams" to 2, "net_bench_rcvbuf_kb" to 512, "decoder_fault" to "dequeue",
-        "decoder_fault_after_s" to 15, "game_display" to 0, "dec_lowlat" to "all", "dec_oprate" to "max",
-        "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset", "hz_pin" to "all",
+        "decoder_fault_after_s" to 15, "game_display" to 0,
         "pace_dcap_half" to 3, "pace_feedback" to false,
         "catch_up" to false, "cursor_predict" to false,
         "audio_idle_pause" to "stop",
@@ -51,9 +47,6 @@ class DevKnobsTest {
         assertNull(k.decoderFault)
         assertNull(k.decoderFaultAfterS)
         assertTrue(k.gameDisplay)
-        assertEquals(DecoderLatencyKnobs.STANDARD, k.decoderLatency) // T-222: oprate=max
-        assertEquals(ColorOverrides.AUTO, k.colorOverrides) // T-231
-        assertEquals(HzPinVariant.OFF, k.hzPin) // T-243
         assertEquals(PacerTuning.STANDARD, k.pacerTuning) // T-251
         assertTrue(k.catchUp) // T-252
         assertTrue(k.cursorPredict) // T-278
@@ -99,7 +92,7 @@ class DevKnobsTest {
         assertEquals(120, k.hz)
         assertEquals(4000, k.leadUs)
         assertEquals(-1, k.deadlineUs)
-        assertEquals(WifiKnobs(pingMs = 100, tosCtl = 0xB8, tosVideo = 0x88, wifiLowLatency = true), k.wifi)
+        assertEquals(WifiKnobs(pingMs = 100), k.wifi)
         assertFalse(k.audio)
         assertEquals("wifi", k.transport)
         assertEquals("track", k.audioOut)
@@ -110,9 +103,6 @@ class DevKnobsTest {
         assertEquals("dequeue", k.decoderFault)
         assertEquals(15, k.decoderFaultAfterS)
         assertFalse(k.gameDisplay)
-        assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.ALL, DecoderLatencyKnobs.OpRate.MAX), k.decoderLatency)
-        assertEquals(ColorOverrides.parse("limited", "bt601", "unset"), k.colorOverrides)
-        assertEquals(HzPinVariant.ALL, k.hzPin)
         assertEquals(PacerTuning(3, false), k.pacerTuning)
         assertEquals("dev=1 ignored=-", k.logFields())
     }
@@ -165,10 +155,10 @@ class DevKnobsTest {
         val k = parse("dev" to true, *allDebugOnly, "stats_1s" to true)
         assertEquals(
             listOf(
-                "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100", "tos_ctl:184", "tos_video:136",
-                "wifi_ll:1", "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
-                "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0", "dec_lowlat:all", "dec_oprate:max",
-                "color_range:limited", "color_standard:bt601", "color_transfer:unset", "hz_pin:all", "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "stats_1s:1",
+                "jitter:1", "hz:120", "lead_us:4000", "deadline_us:-1", "ping_ms:100",
+                "audio:0", "transport:wifi", "audio_out:track", "audio_buf_bursts:3", "audio_idle_pause:stop", "quickack:0",
+                "decoder_fault:dequeue", "decoder_fault_after_s:15", "game_display:0",
+                "pace_dcap_half:3", "pace_feedback:0", "catch_up:0", "cursor_predict:0", "stats_1s:1",
             ),
             k.knobs,
         )
@@ -233,23 +223,6 @@ class DevKnobsTest {
         assertTrue(parse("dev" to true, "game_display" to "0").gameDisplay) // wrong type reads as the default
     }
 
-    @Test fun decoderLatencyKnobsNeedDev() {
-        // T-217: without `--ez dev true` the keys are ignored (names only); T-222: the default is `off`, `max`.
-        val ignored = parse("dec_lowlat" to "all", "dec_oprate" to "fps")
-        assertEquals(DecoderLatencyKnobs.STANDARD, ignored.decoderLatency)
-        assertEquals("dev=0 ignored=dec_lowlat,dec_oprate", ignored.logFields())
-        assertEquals(emptyList<String>(), ignored.knobs)
-        assertEquals("dev=0 ignored=dec_lowlat", parse("dec_lowlat" to "hisi").logFields())
-
-        val on = parse("dev" to true, "dec_lowlat" to "hisi")
-        assertEquals(DecoderLatencyKnobs(DecoderLatencyKnobs.LowLat.HISI), on.decoderLatency)
-        assertEquals(listOf("dec_lowlat:hisi"), on.knobs)
-        val odd = parse("dev" to true, "dec_lowlat" to "turbo", "dec_oprate" to 1)
-        assertEquals(DecoderLatencyKnobs.STANDARD, odd.decoderLatency) // unknown or wrong type = default
-        assertEquals(DecoderLatencyKnobs.DEFAULT, parse("dev" to true, "dec_oprate" to "fps").decoderLatency) // pre-T-222
-        assertEquals(listOf("dec_lowlat:other", "dec_oprate:other"), odd.knobs)
-    }
-
     @Test fun profileShowsTheGameDisplay() {
         val base = profile(mode = "game")
         val asked = base.copy(displayWidthPx = 1848, displayHeightPx = 1214, displayApplied = true).logFields("abc1234", "unknown", parse())
@@ -281,54 +254,17 @@ class DevKnobsTest {
         assertTrue(line, line.split(' ').all { it.count { c -> c == '=' } == 1 })
     }
 
-    // --- T-231: colour overrides ---
-
-    @Test fun colorKnobsWithoutDevAreIgnoredAndKeepAuto() {
-        val k = parse("color_range" to "full", "color_standard" to "bt709", "color_transfer" to "srgb")
-        assertEquals(ColorOverrides.AUTO, k.colorOverrides)
-        assertEquals("dev=0 ignored=color_range,color_standard,color_transfer", k.logFields())
-        assertEquals(emptyList<String>(), k.knobs)
-    }
-
-    @Test fun colorKnobsWithDevApplyAndAreListedInKnobs() {
-        val k = parse("dev" to true, "color_range" to "Full", "color_standard" to " bt709 ", "color_transfer" to "srgb")
-        assertEquals(ColorOverrides.parse("full", "bt709", "srgb"), k.colorOverrides)
-        assertEquals(listOf("color_range:full", "color_standard:bt709", "color_transfer:srgb"), k.knobs)
-        assertEquals("dev=1 ignored=-", k.logFields())
-    }
-
-    @Test fun anUnknownColorValueIsAutoAndLogsAsOther() {
-        val k = parse("dev" to true, "color_range" to "10.0.0.5", "color_transfer" to "pq")
-        assertEquals(ColorOverrides.AUTO, k.colorOverrides)
-        assertEquals(listOf("color_range:other", "color_transfer:other"), k.knobs)
-        assertFalse(k.knobs.joinToString().contains("10.0.0.5"))
-    }
-
-    @Test fun everyColorIdIsLoggable() {
-        for (id in listOf("auto", "full", "limited", "unset")) {
-            assertEquals(listOf("color_range:$id"), parse("dev" to true, "color_range" to id).knobs)
-        }
-        for (id in listOf("auto", "bt709", "bt601", "unset")) {
-            assertEquals(listOf("color_standard:$id"), parse("dev" to true, "color_standard" to id).knobs)
-        }
-        for (id in listOf("auto", "srgb", "sdr_video", "unset")) {
-            assertEquals(listOf("color_transfer:$id"), parse("dev" to true, "color_transfer" to id).knobs)
-        }
-    }
-
-    @Test fun hzPinNeedsDevAndUnknownIsOff() {
-        val ignored = parse("hz_pin" to "lp")
-        assertEquals(HzPinVariant.OFF, ignored.hzPin)
-        assertEquals("dev=0 ignored=hz_pin", ignored.logFields())
-        assertEquals(emptyList<String>(), ignored.knobs)
-        val lp = parse("dev" to true, "hz_pin" to " LP ")
-        assertEquals(HzPinVariant.LP, lp.hzPin)
-        assertEquals(listOf("hz_pin:lp"), lp.knobs)
-        assertEquals(HzPinVariant.OFF, parse("dev" to true, "hz_pin" to "off").hzPin)
-        val odd = parse("dev" to true, "hz_pin" to "120")
-        assertEquals(HzPinVariant.OFF, odd.hzPin)
-        assertEquals(listOf("hz_pin:other"), odd.knobs)
-        assertTrue("hz_pin" in DevKnobs.DEBUG_ONLY_KEYS)
+    @Test fun removedExperimentKnobsAreUnknownAndNeverListed() { // T-300
+        val removed = listOf(
+            "tos_ctl" to 0xB8, "tos_video" to 0x88, "wifi_ll" to true, "hz_pin" to "all", "dec_lowlat" to "all",
+            "dec_oprate" to "fps", "color_range" to "limited", "color_standard" to "bt601", "color_transfer" to "unset",
+        )
+        val k = parse("dev" to true, *removed.toTypedArray())
+        assertEquals(parse("dev" to true).knobs, k.knobs)
+        assertEquals(parse("dev" to true), k)
+        // Without dev they are not "ignored" debug-only keys either: they are simply not known any more.
+        assertEquals("dev=0 ignored=-", parse(*removed.toTypedArray()).logFields())
+        for ((key, _) in removed) assertFalse(key, key in DevKnobs.DEBUG_ONLY_KEYS)
     }
 
     @Test fun cursorPredictKnobIsDebugOnlyDefaultOnAndProfileListed() {

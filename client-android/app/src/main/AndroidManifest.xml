@@ -3,8 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- T-089: WifiManager.WifiLock for the wifi_ll experiment knob -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- T-135 (decision 0015): the tablet-files WebDAV server serves the shared storage; "all files access" -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"

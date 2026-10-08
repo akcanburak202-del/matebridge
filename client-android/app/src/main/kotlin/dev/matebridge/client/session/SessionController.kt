@@ -828,10 +828,8 @@ class SessionController(
 
         private fun readerLoop() {
             try {
-                val tosErr = TrafficClass.trySet(knobs.tosCtl) { socket.trafficClass = it } // T-089, before connect
                 if (wake != null) connectForWake(wake) else socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
-                knobs.tosCtl?.let { MbLog.i("traffic_class", TrafficClass.logFields("control", it, tosErr) { socket.trafficClass }) }
             } catch (e: IOException) {
                 closeQuietly(socket)
                 notifyClosed(connectFailed = true)
@@ -1025,11 +1023,9 @@ class SessionController(
                 val nonce = ByteArray(Limits.NONCE_BYTES).also { random.nextBytes(it) }
                 val channel = VideoChannel(secrets.videoKeys(nonce))
                 val decoder = channel.decoder
-                val tosErr = TrafficClass.trySet(knobs.tosVideo) { socket.trafficClass = it } // T-089, before connect
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
                 VideoKeepalive.forSocket(socket) // T-218: a half-open video socket fails its read within seconds
-                knobs.tosVideo?.let { MbLog.i("traffic_class", TrafficClass.logFields("video", it, tosErr) { socket.trafficClass }) }
                 // VIDEO_HELLO in plaintext, then one sealed PING as proof of the key (the host sends no frames before it).
                 socket.getOutputStream().apply { write(channel.opening(hello, nonce, nowUs())); flush() }
                 val input = socket.getInputStream()

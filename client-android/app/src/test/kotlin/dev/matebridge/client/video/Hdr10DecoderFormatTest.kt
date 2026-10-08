@@ -20,10 +20,9 @@ class Hdr10DecoderFormatTest {
 
     @After fun tearDown() { renderer?.detachSurface() }
 
-    private fun configured(config: StreamConfig, colors: ColorOverrides = ColorOverrides.AUTO): List<Pair<String, Int>> {
+    private fun configured(config: StreamConfig): List<Pair<String, Int>> {
         val r = VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env,
-            restartDelaysMs = longArrayOf(60_000, 60_000, 60_000), decoderTuning = DecoderLatencyKnobs.STANDARD,
-            colorOverrides = colors)
+            restartDelaysMs = longArrayOf(60_000, 60_000, 60_000))
         renderer = r
         r.attachTarget(Any())
         assertTrue(env.awaitLines("codec_start"))
@@ -70,14 +69,6 @@ class Hdr10DecoderFormatTest {
     @Test fun displayP3IsStillReportedAsUntagged() {
         configured(sdr.copy(colorPrimaries = 12))
         assertEquals(1, env.lines("color_unsupported").size)
-    }
-
-    @Test fun colourKnobsStillApplyToHdr10() {
-        // T-231: the developer knobs replace values in place on an HDR10 stream too.
-        val got = configured(hdr, ColorOverrides.parse("full", null, "unset"))
-        assertTrue(got.contains("color-range" to 1))
-        assertTrue(got.contains("color-standard" to 6))
-        assertFalse(got.any { it.first == "color-transfer" })
     }
 
     @Test fun mappingCodes() {
