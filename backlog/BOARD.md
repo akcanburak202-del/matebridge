@@ -28,8 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
-| [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
-| [T-316](tasks/T-316-ddr-clock-lever.md) | Araştırma — dokunma olmadan Huawei DDR/GPU saatleri düşük kalıyor; uygulamanın kontrol edebileceği bir kaldıraç (çözme 15,4 → 11,4 ms, cap_dec −15 ms) | 7 | orchestrator | [T-310] |
 
 ## done
 
@@ -324,9 +322,12 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-306](tasks/T-306-motion-skip-pct.md) | 60 fps içerik 60 Hz panelde %15–35 skip_pct — zamanlayıcı mı, panel mi, ölçüt mü | 7 | orchestrator | [T-296] |
 | [T-307](tasks/T-307-str8-invalid-utf8.md) | Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8 | 7 | orchestrator | [] |
 | [T-309](tasks/T-309-host-cursor-sampler-cost.md) | Host — yerel imleç örnekleyicisi her girdi olayında imleç görüntüsünü kopyalayıp hash'liyor; biçim kontrolü yalnız imleç değiştiğinde | 7 | mac-host-dev | [] |
+| [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
 | [T-311](tasks/T-311-host-sharp-chroma-fused-pass.md) | Host — Keskin renk Metal geçişi tek dispatch (HA2), Metal süresi ayrı iz aşaması (HA1), iki Metal geçişinin ortak kurulumu (A8) | 7 | mac-host-dev | [T-302] |
 | [T-312](tasks/T-312-client-decoder-output-park.md) | Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9) | 7 | android-client-dev | [T-303] |
 | [T-313](tasks/T-313-host-dead-code.md) | Host — ölü ve yalnız testte kullanılan kod, küçük tekrarlar, test kopyaları (T-297 parti 4) ve REFINE anahtarları ev=profile'da | 7 | mac-host-dev | [T-302, T-304, T-309, T-311] |
 | [T-314](tasks/T-314-revert-fused-chroma-kernel.md) | Host — T-311 birleşik sharp_nearest kernel'i cihazda daha yavaş; iki geçişli kernel'e geri dön (HA1 iz aşaması ve A8 ortak kurulum kalır) | 7 | mac-host-dev | [T-311] |
 | [T-315](tasks/T-315-device-lut.md) | Host — sharp_nearest EOTF LUT'u `constant` adres uzayında cihazda daha yavaş; `device` adres uzayına geri dön | 7 | mac-host-dev | [T-314] |
+| [T-316](tasks/T-316-ddr-clock-lever.md) | Araştırma — dokunma olmadan Huawei DDR/GPU saatleri düşük kalıyor; uygulamanın kontrol edebileceği bir kaldıraç (çözme 15,4 → 11,4 ms, cap_dec −15 ms) | 7 | orchestrator | [T-310] |
 | [T-317](tasks/T-317-dec-out-park-default.md) | Tablet — dec_out_park varsayılanı on (T-312 A/B kabul); off bir döngü geri dönüş | 7 | android-client-dev | [T-312] |
+| [T-318](tasks/T-318-perf-lever-knob.md) | Tablet — perf_lever dev knobu (T-316 kaldıraç araştırması): sustained / ADPF / KEY_FRAME_RATE / game | 7 | android-client-dev | [T-316] |

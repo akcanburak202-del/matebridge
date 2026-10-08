@@ -1,7 +1,7 @@
 ---
 id: T-310
 title: Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi
-status: todo
+status: done
 phase: 7
 owner: orchestrator
 depends_on: [T-306]
@@ -32,5 +32,7 @@ Debug olmayan derleme (T-301) ve release host ile tekrarlanır. Kullanıcı gere
 ## Plan
 
 ## Handoff
+
+2026-10-08: neden dokunmasız düşük saat; dokunma yükseltmesi GPU'yu 442 MHz'e çıkarıyor ve çözme 16,5 → 11,4–12,4 ms. Devamı T-316 (sonuç: standart uygulama kaldıracı yok).
 
 ## Open questions

@@ -1,7 +1,7 @@
 ---
 id: T-316
 title: Araştırma — dokunma olmadan Huawei DDR/GPU saatleri düşük kalıyor; uygulamanın kontrol edebileceği bir kaldıraç (çözme 15,4 → 11,4 ms, cap_dec −15 ms)
-status: todo
+status: done
 phase: 7
 owner: orchestrator
 depends_on: [T-310]
@@ -42,5 +42,7 @@ Debug olmayan derlemede ve root olmadan denenecek adaylar; her biri A/B ve enerj
 ## Plan
 
 ## Handoff
+
+2026-10-08: `docs/research/2026-10-08-ddr-clock.md`. Uygulama tarafı standart kaldıraç yok; kalan yol Huawei'ye özgü bir API (yeni bağımlılık, karar ve kullanıcı onayı). T-318 birleştirilmedi.
 
 ## Open questions

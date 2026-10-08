@@ -1819,3 +1819,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
   - Çizim modu dokunmasızken de 16 ms.
   - → T-316 (uygulamanın kontrol edebileceği bir kaldıraç).
 - **Gözlem:** Wi-Fi'dayken `dev.matebridge.usb` kuyruğu ~%1,5 çekirdek (adb yoklaması). Küçük ama gereksiz; not edildi.
+
+## 2026-10-08 ~16:00–16:30 — T-316/T-318 kaldıraç denemesi
+
+- Ayrıntı: `docs/research/2026-10-08-ddr-clock.md`.
+- Dokunmasız hiçbir uygulama kaldıracı GPU, DDR ya da çözme süresini değiştirmedi: `sustained` desteklenmiyor, `adpf` oturumu `null` (Power HAL yok), `fps120`, `fpsunset`, oyun kategorisi, `gpukeep` (GPU 9 ms/kare yükte bile 239 MHz).
+- Çözme süresini iyileştiren tek şey dokunma yükseltmesi; yerel imleç etkisiz.
+- T-318 birleştirilmedi. Tablette `main` daily APK'sı kurulu (`3172856a`, T-317 dahil). `idle_dim`, parlaklık ve Safari geri alındı.
+- Test sayfasında daireler elips görünüyordu (kullanıcı fark etti): tuval pencere modunda yüklenip sonra tam ekrana gerilmişti. MateBridge'in oranı doğruydu. Sahneye `resize` işleyicisi eklendi.
