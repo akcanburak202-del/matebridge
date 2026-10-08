@@ -77,7 +77,7 @@ if want android; then
     [ -x "$proj/gradlew" ] || continue
     [ "$proj" = client-android ] || { [ -z "$only" ] && [ -n "$probes" ]; } || continue
     if [ -z "${JAVA_HOME:-}" ]; then echo "    FAIL: $proj needs a JDK (install Android Studio)"; fail=1; continue; fi
-    run "gradle ($proj)" "$proj" ./gradlew --quiet assembleDebug testDebugUnitTest
+    run "gradle ($proj)" "$proj" ./gradlew --quiet assembleDebug assembleDaily testDebugUnitTest
   done
 fi
 

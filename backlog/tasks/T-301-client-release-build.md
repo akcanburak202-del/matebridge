@@ -1,7 +1,7 @@
 ---
 id: T-301
 title: Tablet — günlük kullanım için debug olmayan profileable derleme (aynı imza) ve minSdk 31 (karar 0037)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -36,6 +36,18 @@ Karar 0037 ve T-298 CB1 (`docs/reviews/2026-10-08/agents/opt-b-client.md`). Gün
 
 ## Plan
 
+Yeni tür `daily` (debug'dan initWith; isDebuggable/isJniDebuggable=false, debug imzası), manifestte profileable, minSdk 31, check.sh assembleDaily, install-apk.sh varsayılan daily + `--debug`.
+
 ## Handoff
+
+- Commit: bkz. `git log task/T-301-release-build -1`.
+- Dosyalar: build.gradle.kts, AndroidManifest.xml, scripts/install-apk.sh, scripts/check.sh, bu kart. CMakeLists.txt ve MainActivity.kt değişmedi: `isJniDebuggable=false` yerel kodu Release derler; `FLAG_DEBUGGABLE` kontrolü (decoder_fault) aynen duruyor, daily'de kapalı kalır.
+- Tür adı `daily` (niyeti söylüyor; "release" Play/imza beklentilerini çağrıştırır).
+- APK'lar (client-android/app/build/outputs/apk/): `debug/app-debug.apk` 5270903 B; `daily/app-daily.apk` 4055377 B. İkisi de versionCode 1743, aynı applicationId, minSdk 31, targetSdk 31.
+- İmza: `apksigner verify --print-certs` iki APK için aynı sertifika, SHA-256 a8d0f914679da68aeb060954459feccb33b9c7d44dd75df3369cc291f54f734f. Bu yüzden debug → daily → debug `adb install -r -d` ile yerinde güncellenir (install-apk.sh zaten -r -d kullanır; eşleşme anahtarları korunur).
+- Ek: `lint { checkReleaseBuilds = false }` eklendi; yoksa lintVitalDaily bilinçli targetSdk 31'de ExpiredTargetSdkVersion (Play kuralı, uygulama sideload) ile derlemeyi kırar.
+- `client-android/AGENTS.md` hâlâ "minSdk 29" diyor (kapsam dışı; orkestratör güncellesin).
+- check.sh: ALL OK.
+- Tablette kontrol: `scripts/install-apk.sh` (daily) debug üstüne kurulur ve eşleşme korunur mu; `dumpsys package dev.matebridge.client | grep -i flags` içinde DEBUGGABLE yok; `run-as` başarısız olmalı; simpleperf shell'den çalışmalı (profileable); `--debug` ile geri dönüş; decoder_fault daily'de etkisiz; 60 fps akış normal.
 
 ## Open questions

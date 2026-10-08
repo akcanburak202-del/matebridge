@@ -59,7 +59,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.matebridge.client"
-        minSdk = 29
+        minSdk = 31
         targetSdk = 31
         // T-146: the real versionCode is the commit count, set per variant below; 1 is the no-git fallback.
         versionCode = 1
@@ -77,6 +77,26 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    lint {
+        // lintVital runs for every non-debuggable build and fails on the deliberate targetSdk 31 (ExpiredTargetSdkVersion,
+        // a Play Store rule; this app is sideloaded). Debug builds never ran it; the daily build keeps parity.
+        checkReleaseBuilds = false
+    }
+
+    buildTypes {
+        // T-301 / decision 0037: the everyday build. Not debuggable (ART optimises, native code is Release), signed with
+        // the debug key so it updates the installed debug app in place (pairing keys survive), profileable via the
+        // manifest. R8 stays off. applicationId and versionCode rules are shared with debug.
+        create("daily") {
+            initWith(getByName("debug"))
+            isDebuggable = false
+            isJniDebuggable = false
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "debug"
+        }
     }
 
     externalNativeBuild {

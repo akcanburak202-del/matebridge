@@ -8,11 +8,18 @@
 #   2. com.huawei.appmarket          com.huawei.appmarket:id/hidden_card_install_button_continue  (bottom "YÜKLE")
 # Nothing else on an AppGallery screen is ever tapped.
 #
-# Usage: scripts/install-apk.sh [path/to/app.apk]   (default: the debug APK from ./scripts/check.sh)
+# Usage: scripts/install-apk.sh [--debug | path/to/app.apk]
+#   default: the non-debuggable "daily" APK (T-301, decision 0037); --debug installs the debug APK (run-as, diagnostics).
+#   Both are signed with the debug key, so either updates the other in place with `adb install -r -d`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APK="${1:-$ROOT/client-android/app/build/outputs/apk/debug/app-debug.apk}"
+OUT="$ROOT/client-android/app/build/outputs/apk"
+case "${1:-}" in
+  --debug) APK="$OUT/debug/app-debug.apk" ;;
+  "") APK="$OUT/daily/app-daily.apk" ;;
+  *) APK="$1" ;;
+esac
 PKG="dev.matebridge.client"
 ADB="${ADB:-$(command -v adb || echo "${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb")}"
 TIMEOUT_S="${INSTALL_TIMEOUT_S:-180}"
