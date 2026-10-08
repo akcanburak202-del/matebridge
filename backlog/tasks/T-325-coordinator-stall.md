@@ -1,7 +1,7 @@
 ---
 id: T-325
 title: Host — StreamCoordinator oturum kapanışında takıldı; posta kutusu taştı ve her yeni oturum hemen kapandı (kullanıcı Mac'i zorla kapattı)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
