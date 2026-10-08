@@ -1768,3 +1768,22 @@ Yöntem: tablete adb ile `input keyevent HOME` ve `am force-stop`, ardından her
   - arka plandan: `activity_start` → `healthy` 0,51 sn, ekran sıfırdan kuruldu;
   - zorla kapatmadan: soğuk açılış → `healthy` 1,25 sn.
 - **Ölçülmeyen:** ağın ya da gücün aniden kesilmesi (FIN gitmez; host zaman aşımına kalır) ve Mac'in arka planda uzun süre (saatler) kalması.
+
+## 2026-10-08 ~12:11–12:42 — T-296 ölçüm tabanı (kullanıcısız, Wi-Fi) ve Wi-Fi kopma testi
+
+- Ayrıntı ve yöntem: `docs/research/2026-10-08-baseline.md`.
+- Hareket sahnesi (60 fps): tablet tek çekirdeğin %71'i, 2.870 uyanma/s, `cap_dec` p50 29 ms, `skip_pct` %15–35. Çözücü yolu ~1.900 uyanma/s.
+- Sentetik kalem stresi (~980 örnek/s):
+  - host %60 CPU;
+  - kontrol RTT 108 ms, kalem yaşı ~55 ms;
+  - `max_batch=1`;
+  - `cap_dec` p50 60 ms.
+- Pil: hareket sahnesi durağandan yalnız ~%8 fazla harcıyor, ekran baskın. Parlaklık 59/255'te ~%8–9/saat.
+- Wi-Fi 4 sn kapatıldı (kalem basılı):
+  - host kalemi +0,58 sn'de bıraktı (bekçi);
+  - +1,64 sn'de kalp atışı sessizliği;
+  - +5,14 sn'de oturum sonu;
+  - Wi-Fi gelince 5,1 sn'de yeni oturum açıldı, bekletilen ekran yeniden kullanıldı;
+  - kalem yeniden basılmadı.
+- Geçici değişiklikler geri alındı: "Boşta karart" kapalıydı, parlaklık elle sabitlenmişti, Safari kapatıldı.
+- Not: `codex exec` arka planda stdin açık kalınca "Reading additional input from stdin" deyip bekliyor; `< /dev/null` ile çalıştır. İlk astra çalıştırması bu yüzden 25 dk boşa bekledi.

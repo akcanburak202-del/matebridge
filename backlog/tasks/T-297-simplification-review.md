@@ -1,7 +1,7 @@
 ---
 id: T-297
 title: Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama
-status: in-progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -47,5 +47,7 @@ Kullanıcı onayı 2026-10-08, astra dahil (tek çalıştırma, bir yeniden dene
 ## Plan
 
 ## Handoff
+
+2026-10-08: ajan özetleri `docs/reviews/2026-10-08/agents/simp-*.md`, astra `astra-simplification.md`, triyaj ve partiler `simplification.md`. Uygulama kartları kullanıcı kararlarından sonra açılır.
 
 ## Open questions

@@ -1,0 +1,14 @@
+# T-298 (a) Host latency & throughput — summary of agent report
+Logs: 15,639 ev=latency windows 10-04..08. Busy windows: sharp_nearest SDR (87% of use) hold p50 2.96, enc 5.47, cap_to_sent 8.84 ms; 420 HDR10 hold 0.46, enc 6.71, cap_to_sent 7.53. Post-encoder host software ~0.4 ms total. 208 IDRs/4.75 h, max IDR avg 421 KB (max 889 KB); 250 queue drops.
+DO NOW
+- HA1 Metal pass own trace stage: Metal runs inside send() before submittedUs (HEVCEncoder.swift:835-858) → gate_wait (~3 ms in sharp) is really chroma conv (conv_ms p50 3.15–3.21, GPU 2.73). Add convertedUs/gpu stage to ev=latency + latency.csv; add isKeyframe/bytes to csvLine (LatencyTrace.swift:98-104). Logging only.
+- HA2 Fuse/slim sharp_nearest Metal pass (ChromaConverter.swift:138-159): two encoders + re-read of 20.6 MB BGRA, LUT in device memory (SharpYUV.swift:196), reach() bracketing 6–10 rebuilt() calls (SharpYUVKernel.swift:55), waitUntilCompleted blocks owner queue (:159). Mode 2 = per-2x2 mean → one thread per block, one dispatch; LUT to constant space; optional addCompletedHandler. Keep mathMode .safe (bit-exact tests). Est GPU 2.7→1.2–1.8 ms, cap_to_sent −1–1.5 ms. Low risk. PackedChromaPacker.swift:120 has same blocking wait.
+MEASURE FIRST
+- HA3 capture segment unmeasured (SCK stamps in future; pts_vs_deliv +7/+13..15 ms bimodal; sck_lag always 0). Add inj_to_cap probe (CGEvent inject → next complete SCK callback), optional CVDisplayLink phase on VD; T-174 optical. Decides 120 Hz VD with 60 fps stream, minimumFrameInterval=1/(2·fps) (ScreenCapture.swift:86).
+- HA4 LTR P-frame recovery instead of IDR (ForceKeyFrame at HEVCEncoder.swift:843): EnableLTR, ack tokens on socket accept, ForceLTRRefresh on drop. Recovery frames 3–10× smaller. Medium risk: HiSilicon LTR decode unverified; refine train/aux chain; check VTSessionCopySupportedPropertyDictionary. Count keyframe_request reasons first. No wire change.
+- HA5 encoder micro-knobs via EncodeBench: ReferenceBufferCount=1 (≤0.5 ms?), SpatialAdaptiveQPLevel disable (quality check). Already optimal: MaxFrameDelayCount 0, no reordering, speed priority, fast mode (LLRC 9–13 vs ~6 ms), slices 0 gain, colour retag.
+- HA6 bound IDR size with VBV keys (macOS 26+), replaces DataRateLimits (:283). Medium risk.
+- HA7 HDR Main10 cost: bench x420 vs 420f same frames.
+NOT WORTH: HA8 ~5 output copies (10–20 µs each), HA9 thread hops (queue 0.03 ms), HA10 SCK queueDepth=5 (pool not latency), HA11 encoder DVFS after idle +1 ms first frame only, HA12 socket already tuned (NODELAY, LOWAT 128K, one record in flight, WMM), HA13 aux after main (+5 ms; user declined 10-06).
+GAPS: Metal in hold; commit→SCK unmeasured; csv lacks keyframe/bytes; aux has no write trace (VideoPipeline.swift:156); write ends at kernel accept.
+PRIORITY: HA1→HA2 now; HA3; then HA4, HA5–7. No protocol changes.

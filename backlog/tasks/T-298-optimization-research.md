@@ -1,7 +1,7 @@
 ---
 id: T-298
 title: Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ
-status: in-progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -44,5 +44,7 @@ Her bulgu şunları içerir: kanıt (dosya:satır ya da kaynak bağlantısı), b
 ## Plan
 
 ## Handoff
+
+2026-10-08: `docs/research/2026-10-08-optimization.md` ve ajan özetleri `docs/reviews/2026-10-08/agents/opt-*.md`. Sıralama `simplification.md` içinde.
 
 ## Open questions

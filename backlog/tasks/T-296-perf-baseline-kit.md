@@ -1,7 +1,7 @@
 ---
 id: T-296
 title: Ölçüm tabanı — tekrarlanabilir sentetik senaryolarla iki tarafın CPU, uyanma, gecikme ve pil maliyeti (kullanıcısız)
-status: in-progress
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -39,5 +39,7 @@ Sadeleştirme (T-297) ve optimizasyon (T-298) değişikliklerini kıyaslamak iç
 ## Plan
 
 ## Handoff
+
+2026-10-08: `docs/research/2026-10-08-baseline.md` ve NOTES. USB kollar ölçülmedi (kablo şarj eder). Kalem kolu stres testi (~980 örnek/s). Kullanıcıyla yapılacaklar baseline belgesinde.
 
 ## Open questions

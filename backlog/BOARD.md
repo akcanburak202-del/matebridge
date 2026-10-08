@@ -7,9 +7,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | ID | Başlık | Aşama | Sahip | Bağımlılık |
 |---|---|---|---|---|
 | [T-147](tasks/T-147-recovery-runbook.md) | Write and rehearse the recovery runbook and known-good version pair | 6 | orchestrator | [T-145, T-146] |
-| [T-296](tasks/T-296-perf-baseline-kit.md) | Ölçüm tabanı — tekrarlanabilir sentetik senaryolarla iki tarafın CPU, uyanma, gecikme ve pil maliyeti (kullanıcısız) | 7 | orchestrator | [] |
-| [T-297](tasks/T-297-simplification-review.md) | Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama | 7 | orchestrator | [] |
-| [T-298](tasks/T-298-optimization-research.md) | Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ | 7 | orchestrator | [] |
 
 ## todo
 
@@ -311,3 +308,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-293](tasks/T-293-host-pipeline-breaker.md) | Host — kalıcı medya hatasında devre kesici (video bağlanınca bütçeye sor, bekleme 10/20/30 sn, aynı cihazın oturumunda sıfırlama yok) | 6 | mac-host-dev | [T-291] |
 | [T-294](tasks/T-294-client-video-retry-backoff.md) | Tablet — kare gelmeyen video bağlantılarında yeniden açma geri çekilmesi; "manual" durumda 10 sn'de bir kendiliğinden dönüş | 6 | android-client-dev | [T-291] |
 | [T-295](tasks/T-295-client-remove-fallback-knobs.md) | Tablet — T-286 `dec_wait poll` ve T-292 `aead_path legacy` yedek yollarını kaldır | 6 | android-client-dev | [T-286, T-292] |
+| [T-296](tasks/T-296-perf-baseline-kit.md) | Ölçüm tabanı — tekrarlanabilir sentetik senaryolarla iki tarafın CPU, uyanma, gecikme ve pil maliyeti (kullanıcısız) | 7 | orchestrator | [] |
+| [T-297](tasks/T-297-simplification-review.md) | Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama | 7 | orchestrator | [] |
+| [T-298](tasks/T-298-optimization-research.md) | Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ | 7 | orchestrator | [] |
