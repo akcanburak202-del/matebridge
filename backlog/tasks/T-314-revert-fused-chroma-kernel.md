@@ -1,7 +1,11 @@
 ---
 id: T-314
 title: Host — T-311 birleşik sharp_nearest kernel'i cihazda daha yavaş; iki geçişli kernel'e geri dön (HA1 iz aşaması ve A8 ortak kurulum kalır)
+<<<<<<< HEAD
 status: done
+=======
+status: todo
+>>>>>>> parent of cb28a5af (Merge T-314: back to two-pass sharp chroma kernel (fused was slower on device); constant LUT, HA1/A8 kept)
 phase: 7
 owner: mac-host-dev
 depends_on: [T-311]
@@ -36,18 +40,6 @@ Bench'teki (%10–15 daha hızlı) kazanç gerçek akışta tutmadı. Muhtemel n
 
 ## Plan
 
-1. `SharpYUVKernel.metalSource` := T-311-öncesi `sharp_chroma` + `sharp_luma` (LegacyTwoPassKernel kaynağından), LUT `constant float *`.
-2. `ChromaConverter`: iki pipeline, tek command buffer'da iki encoder; `MetalPassSupport.run(encodeBuffer:)` aşırı yüklemesi eklendi (tek-encoder `run` PackedChromaPacker için aynı kaldı).
-3. Testler: üretim iki geçiş (constant LUT) == LegacyTwoPassKernel (device LUT) bayt-bayt; CPU referansına <=1; birleşik bench kaldırıldı.
-
 ## Handoff
-
-- Commit: `git log task/T-314-revert-fused -1` (T-314 commit).
-- Dosyalar: `SharpYUVKernel.swift`, `ChromaConverter.swift`, `SharpYUVTests.swift` (+ bu kart).
-- `check.sh`: ALL OK (1034 test). Yeni kapı `testProductionKernelsAreBitExactWithDeviceLUTSource` gerçek Metal'de koştu (skip değil): 8 boyut x noise/mixed x plain/nearest, Y ve CbCr bayt-bayt eşit; CPU referansına <=1 ve aynı fark sayısı.
-- LUT `constant` adres uzayı iki geçişli kernelde bit-exact kaldı, tutuldu.
-- HA1 (gpu aşaması, latency.csv) ve A8 (MetalShared/MetalPassSupport) korundu; `MetalPassSupport` yalnız `run(encodeBuffer:)` kazandı.
-- `LegacyTwoPassKernel.swift` test referansı olarak duruyor. Birleşik kernel ve bench silindi.
-- Test edilmedi: cihaz (`gpu_ms` p50 ~2,5 ms'ye dönmeli; `constant` LUT'un tek başına etkisi cihazda görülür). Host çalıştırılmadı.
 
 ## Open questions

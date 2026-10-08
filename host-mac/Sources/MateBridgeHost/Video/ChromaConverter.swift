@@ -123,23 +123,13 @@ final class MetalPassSupport: @unchecked Sendable {
     /// GPU afterwards). `keepAlive` holds the texture wrappers until the wait is over. On failure the timing is nil
     /// and the reason is one of the `failed(_)` strings of the passes.
     func run(label: String, keepAlive: [Wrapped], _ encode: (MTLComputeCommandEncoder) -> Void) -> (Timing?, String?) {
-        run(label: label, keepAlive: keepAlive, encodeBuffer: { cb in
-            guard let e = cb.makeComputeCommandEncoder() else { return false }
-            e.label = label
-            encode(e)
-            e.endEncoding()
-            return true
-        })
-    }
-
-    /// Like `run`, but `encode` makes its own encoders on the command buffer (several, when a later dispatch reads
-    /// what an earlier one wrote) and returns false when it could not.
-    func run(label: String, keepAlive: [Wrapped], encodeBuffer encode: (MTLCommandBuffer) -> Bool)
-        -> (Timing?, String?) {
         let start = DispatchTime.now().uptimeNanoseconds
         guard let cb = shared.queue.makeCommandBuffer() else { return (nil, "command_buffer") }
         cb.label = label
-        guard encode(cb) else { return (nil, "encoder") }
+        guard let e = cb.makeComputeCommandEncoder() else { return (nil, "encoder") }
+        e.label = label
+        encode(e)
+        e.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
         withExtendedLifetime(keepAlive) {}
@@ -165,14 +155,13 @@ final class MetalPassSupport: @unchecked Sendable {
     }
 }
 
-/// The compiled two-pass kernels (`SharpYUVKernel`), shared by every converter: compiled once per process.
+/// The compiled T-311 fused kernel (`SharpYUVKernel`), shared by every converter: compiled once per process.
 final class ChromaKernels: @unchecked Sendable {
     typealias SetupError = MetalSetupError
 
     let shared: MetalShared
-    let chroma: MTLComputePipelineState
-    let luma: MTLComputePipelineState
-    /// `SharpYUV.eotfTable`, read by `sharp_luma` (buffer 1, `constant` address space).
+    let fused: MTLComputePipelineState
+    /// `SharpYUV.eotfTable`, read by `sharp_fused` (buffer 1, `constant` address space).
     let eotfTable: MTLBuffer
 
     /// The process-wide kernels, or why they could not be set up (the result is kept: no retry per pipeline).
@@ -183,10 +172,7 @@ final class ChromaKernels: @unchecked Sendable {
     private init() throws(MetalSetupError) {
         let base = try MetalShared.shared.get()
         shared = base
-        let pipelines = try base.pipelines(source: SharpYUVKernel.metalSource,
-                                           functions: [SharpYUVKernel.chromaFunction, SharpYUVKernel.lumaFunction])
-        chroma = pipelines[0]
-        luma = pipelines[1]
+        fused = try base.pipelines(source: SharpYUVKernel.metalSource, functions: [SharpYUVKernel.fusedFunction])[0]
         guard let table = SharpYUV.eotfTable.withUnsafeBytes({
             base.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
         }) else { throw .noTable }
@@ -241,27 +227,17 @@ final class ChromaConverter: @unchecked Sendable {
               let yTex = support.texture(out, plane: 0, .r8Unorm, width, height),
               let cTex = support.texture(out, plane: 1, .rg8Unorm, cw, ch) else { return .failed("texture") }
         var mode = lumaMode
-        // Two encoders in one command buffer: the luma pass reads the chroma the first pass wrote.
-        let (timing, failure) = support.run(label: "sharp_yuv", keepAlive: [srcTex, yTex, cTex], encodeBuffer: { cb in
-            guard let e1 = cb.makeComputeCommandEncoder() else { return false }
-            e1.setComputePipelineState(kernels.chroma)
-            e1.setTexture(srcTex.texture, index: 0)
-            e1.setTexture(cTex.texture, index: 1)
-            e1.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
-                               threadsPerThreadgroup: MetalPassSupport.threadgroup(kernels.chroma))
-            e1.endEncoding()
-            guard let e2 = cb.makeComputeCommandEncoder() else { return false }
-            e2.setComputePipelineState(kernels.luma)
-            e2.setTexture(srcTex.texture, index: 0)
-            e2.setTexture(cTex.texture, index: 1)
-            e2.setTexture(yTex.texture, index: 2)
-            e2.setBytes(&mode, length: MemoryLayout<UInt32>.size, index: 0)
-            e2.setBuffer(kernels.eotfTable, offset: 0, index: 1)
-            e2.dispatchThreads(MTLSize(width: width, height: height, depth: 1),
-                               threadsPerThreadgroup: MetalPassSupport.threadgroup(kernels.luma))
-            e2.endEncoding()
-            return true
-        })
+        // HA2: one dispatch, one thread per 2x2 block (4 pixels read once, CbCr written, 4 luma codes), no barrier.
+        let (timing, failure) = support.run(label: "sharp_fused", keepAlive: [srcTex, yTex, cTex]) { e in
+            e.setComputePipelineState(kernels.fused)
+            e.setTexture(srcTex.texture, index: 0)
+            e.setTexture(cTex.texture, index: 1)
+            e.setTexture(yTex.texture, index: 2)
+            e.setBytes(&mode, length: MemoryLayout<UInt32>.size, index: 0)
+            e.setBuffer(kernels.eotfTable, offset: 0, index: 1)
+            e.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
+                              threadsPerThreadgroup: MetalPassSupport.threadgroup(kernels.fused))
+        }
         guard let timing else { return .failed(failure ?? "gpu") }
         // The centred chroma siting the 2x2 box mean has.
         MetalPassSupport.tag(out, chromaLocation: kCVImageBufferChromaLocation_Center)

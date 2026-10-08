@@ -108,7 +108,7 @@ final class SharpYUVTests: XCTestCase {
         }
     }
 
-    // MARK: Metal kernels vs CPU reference and vs the T-235 device-LUT source
+    // MARK: Metal kernels vs CPU reference and vs the T-235 two-pass kernels
 
     /// Test image: icon blocks, a pseudo-random patch and the saturation corners (pure blue on white, yellow on
     /// black: targets the luma code range cannot reach), at any size >= 67x45.
@@ -159,16 +159,21 @@ final class SharpYUVTests: XCTestCase {
         var cbcr: [UInt8]
     }
 
-    /// Runs the two-pass kernels in `source` (chroma, then luma in a second encoder) on `img` in `mode`.
-    private func runTwoPass(source: String, chromaName: String, lumaName: String, _ img: [UInt8], w: Int, h: Int,
-                            adjust: SharpYUV.Upsample?) throws -> GPUPlanes {
+    /// Runs the production fused kernel and the T-235 two-pass kernels on `img` in `mode`.
+    private func runBoth(_ img: [UInt8], w: Int, h: Int, adjust: SharpYUV.Upsample?) throws
+        -> (fused: GPUPlanes, legacy: GPUPlanes) {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
         let options = MTLCompileOptions()
         options.mathMode = .safe
         options.mathFloatingPointFunctions = .precise
-        let lib = try device.makeLibrary(source: source, options: options)
-        let chroma = try device.makeComputePipelineState(function: try XCTUnwrap(lib.makeFunction(name: chromaName)))
-        let luma = try device.makeComputePipelineState(function: try XCTUnwrap(lib.makeFunction(name: lumaName)))
+        let fusedLib = try device.makeLibrary(source: SharpYUVKernel.metalSource, options: options)
+        let fused = try device.makeComputePipelineState(
+            function: try XCTUnwrap(fusedLib.makeFunction(name: SharpYUVKernel.fusedFunction)))
+        let legacyLib = try device.makeLibrary(source: LegacyTwoPassKernel.source, options: options)
+        let chroma = try device.makeComputePipelineState(
+            function: try XCTUnwrap(legacyLib.makeFunction(name: LegacyTwoPassKernel.chromaFunction)))
+        let luma = try device.makeComputePipelineState(
+            function: try XCTUnwrap(legacyLib.makeFunction(name: LegacyTwoPassKernel.lumaFunction)))
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let table = try XCTUnwrap(SharpYUV.eotfTable.withUnsafeBytes {
             device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
@@ -186,43 +191,55 @@ final class SharpYUVTests: XCTestCase {
                                           withBytes: $0.baseAddress!, bytesPerRow: w * 4) }
         var mode = SharpYUVKernel.lumaMode(adjust)
         let group = MTLSize(width: 8, height: 8, depth: 1)
-        let yTex = try tex(.r8Unorm, w, h), cTex = try tex(.rg8Unorm, cw, ch)
-        let cb = try XCTUnwrap(queue.makeCommandBuffer())
-        let e1 = try XCTUnwrap(cb.makeComputeCommandEncoder())
+
+        func read(_ yTex: MTLTexture, _ cTex: MTLTexture) -> GPUPlanes {
+            var gy = [UInt8](repeating: 0, count: w * h)
+            var gc = [UInt8](repeating: 0, count: cw * ch * 2)
+            gy.withUnsafeMutableBytes { yTex.getBytes($0.baseAddress!, bytesPerRow: w, from: MTLRegionMake2D(0, 0, w, h),
+                                                      mipmapLevel: 0) }
+            gc.withUnsafeMutableBytes { cTex.getBytes($0.baseAddress!, bytesPerRow: cw * 2,
+                                                      from: MTLRegionMake2D(0, 0, cw, ch), mipmapLevel: 0) }
+            return GPUPlanes(y: gy, cbcr: gc)
+        }
+
+        // Fused: one command buffer, one encoder, one dispatch over the chroma grid.
+        let fY = try tex(.r8Unorm, w, h), fC = try tex(.rg8Unorm, cw, ch)
+        let fcb = try XCTUnwrap(queue.makeCommandBuffer())
+        let fe = try XCTUnwrap(fcb.makeComputeCommandEncoder())
+        fe.setComputePipelineState(fused)
+        fe.setTexture(src, index: 0)
+        fe.setTexture(fC, index: 1)
+        fe.setTexture(fY, index: 2)
+        fe.setBytes(&mode, length: 4, index: 0)
+        fe.setBuffer(table, offset: 0, index: 1)
+        fe.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1), threadsPerThreadgroup: group)
+        fe.endEncoding()
+        fcb.commit()
+        fcb.waitUntilCompleted()
+        XCTAssertEqual(fcb.status, .completed)
+
+        // Legacy: chroma then luma.
+        let lY = try tex(.r8Unorm, w, h), lC = try tex(.rg8Unorm, cw, ch)
+        let lcb = try XCTUnwrap(queue.makeCommandBuffer())
+        let e1 = try XCTUnwrap(lcb.makeComputeCommandEncoder())
         e1.setComputePipelineState(chroma)
         e1.setTexture(src, index: 0)
-        e1.setTexture(cTex, index: 1)
+        e1.setTexture(lC, index: 1)
         e1.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1), threadsPerThreadgroup: group)
         e1.endEncoding()
-        let e2 = try XCTUnwrap(cb.makeComputeCommandEncoder())
+        let e2 = try XCTUnwrap(lcb.makeComputeCommandEncoder())
         e2.setComputePipelineState(luma)
         e2.setTexture(src, index: 0)
-        e2.setTexture(cTex, index: 1)
-        e2.setTexture(yTex, index: 2)
+        e2.setTexture(lC, index: 1)
+        e2.setTexture(lY, index: 2)
         e2.setBytes(&mode, length: 4, index: 0)
         e2.setBuffer(table, offset: 0, index: 1)
         e2.dispatchThreads(MTLSize(width: w, height: h, depth: 1), threadsPerThreadgroup: group)
         e2.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
-        XCTAssertEqual(cb.status, .completed)
-        var gy = [UInt8](repeating: 0, count: w * h)
-        var gc = [UInt8](repeating: 0, count: cw * ch * 2)
-        gy.withUnsafeMutableBytes { yTex.getBytes($0.baseAddress!, bytesPerRow: w, from: MTLRegionMake2D(0, 0, w, h),
-                                                  mipmapLevel: 0) }
-        gc.withUnsafeMutableBytes { cTex.getBytes($0.baseAddress!, bytesPerRow: cw * 2,
-                                                  from: MTLRegionMake2D(0, 0, cw, ch), mipmapLevel: 0) }
-        return GPUPlanes(y: gy, cbcr: gc)
-    }
-
-    /// The production kernels (LUT in `constant` memory) and the T-235 source (LUT in `device` memory) on `img`.
-    private func runBoth(_ img: [UInt8], w: Int, h: Int, adjust: SharpYUV.Upsample?) throws
-        -> (prod: GPUPlanes, legacy: GPUPlanes) {
-        let prod = try runTwoPass(source: SharpYUVKernel.metalSource, chromaName: SharpYUVKernel.chromaFunction,
-                                  lumaName: SharpYUVKernel.lumaFunction, img, w: w, h: h, adjust: adjust)
-        let legacy = try runTwoPass(source: LegacyTwoPassKernel.source, chromaName: LegacyTwoPassKernel.chromaFunction,
-                                    lumaName: LegacyTwoPassKernel.lumaFunction, img, w: w, h: h, adjust: adjust)
-        return (prod, legacy)
+        lcb.commit()
+        lcb.waitUntilCompleted()
+        XCTAssertEqual(lcb.status, .completed)
+        return (read(fY, fC), read(lY, lC))
     }
 
     private func maxDiff(_ a: [UInt8], _ b: [UInt8]) -> (max: Int, count: Int) {
@@ -241,19 +258,18 @@ final class SharpYUVTests: XCTestCase {
         let w = 67, h = 45   // odd size
         let img = Self.mixedImage(width: w, height: h)
         for adjust in [nil, SharpYUV.Upsample.nearest] {
-            let gpu = try runBoth(img, w: w, h: h, adjust: adjust).prod
+            let gpu = try runBoth(img, w: w, h: h, adjust: adjust).fused
             let cpu = SharpYUV.convert(bgra: img, width: w, height: h, adjustFor: adjust)
             let dy = maxDiff(gpu.y, cpu.y), dc = maxDiff(gpu.cbcr, cpu.cbcr)
-            print("T-314 vs cpu \(adjust?.rawValue ?? "plain"): max|dY|=\(dy.max) (\(dy.count) px) max|dC|=\(dc.max)")
+            print("T-311 fused vs cpu \(adjust?.rawValue ?? "plain"): max|dY|=\(dy.max) (\(dy.count) px) max|dC|=\(dc.max)")
             XCTAssertLessThanOrEqual(dy.max, 1, "\(String(describing: adjust))")
             XCTAssertLessThanOrEqual(dc.max, 1, "\(String(describing: adjust))")
         }
     }
 
-    /// T-314 hard gate: the production two-pass kernels (LUT in `constant` memory) produce exactly the bytes of the
-    /// T-235 source (LUT in `device` memory), on odd and even sizes, in both modes, on icon / saturation-corner /
-    /// full-noise content.
-    func testProductionKernelsAreBitExactWithDeviceLUTSource() throws {
+    /// T-311 hard gate: the fused single dispatch produces exactly the bytes of the T-235 two-pass kernels, on odd
+    /// and even sizes, in both modes, on icon / saturation-corner / full-noise content.
+    func testFusedKernelIsBitExactWithTwoPassKernels() throws {
         let sizes = [(67, 45), (64, 48), (1, 1), (2, 1), (1, 3), (5, 2), (130, 91), (256, 144)]
         for (w, h) in sizes {
             var images = [("noise", Self.noiseImage(width: w, height: h, seed: UInt32(w * 31 + h)))]
@@ -261,14 +277,83 @@ final class SharpYUVTests: XCTestCase {
             for (name, img) in images {
                 for adjust in [nil, SharpYUV.Upsample.nearest] {
                     let r = try runBoth(img, w: w, h: h, adjust: adjust)
-                    XCTAssertEqual(r.prod.y, r.legacy.y, "Y \(name) \(w)x\(h) \(adjust?.rawValue ?? "plain")")
-                    XCTAssertEqual(r.prod.cbcr, r.legacy.cbcr, "CbCr \(name) \(w)x\(h) \(adjust?.rawValue ?? "plain")")
+                    XCTAssertEqual(r.fused.y, r.legacy.y, "Y \(name) \(w)x\(h) \(adjust?.rawValue ?? "plain")")
+                    XCTAssertEqual(r.fused.cbcr, r.legacy.cbcr, "CbCr \(name) \(w)x\(h) \(adjust?.rawValue ?? "plain")")
                     // Same distance from the CPU reference as the two-pass kernels had (and never worse than 1).
                     let cpu = SharpYUV.convert(bgra: img, width: w, height: h, adjustFor: adjust)
-                    XCTAssertLessThanOrEqual(maxDiff(r.prod.y, cpu.y).max, 1, "\(name) \(w)x\(h)")
-                    XCTAssertEqual(maxDiff(r.prod.y, cpu.y).count, maxDiff(r.legacy.y, cpu.y).count)
+                    XCTAssertLessThanOrEqual(maxDiff(r.fused.y, cpu.y).max, 1, "\(name) \(w)x\(h)")
+                    XCTAssertEqual(maxDiff(r.fused.y, cpu.y).count, maxDiff(r.legacy.y, cpu.y).count)
                 }
             }
+        }
+    }
+
+    /// T-311 bench (no window, no virtual display): GPU time (`gpuEndTime - gpuStartTime`, median of 25) of the fused
+    /// dispatch against the T-235 two-pass kernels on a 2800x1840 frame. Informational: prints, does not assert.
+    func testBenchFusedVersusTwoPass() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let w = 2800, h = 1840, cw = w / 2, ch = h / 2
+        let options = MTLCompileOptions()
+        options.mathMode = .safe
+        options.mathFloatingPointFunctions = .precise
+        let fusedLib = try device.makeLibrary(source: SharpYUVKernel.metalSource, options: options)
+        let fused = try device.makeComputePipelineState(
+            function: try XCTUnwrap(fusedLib.makeFunction(name: SharpYUVKernel.fusedFunction)))
+        let legacyLib = try device.makeLibrary(source: LegacyTwoPassKernel.source, options: options)
+        let chroma = try device.makeComputePipelineState(
+            function: try XCTUnwrap(legacyLib.makeFunction(name: LegacyTwoPassKernel.chromaFunction)))
+        let luma = try device.makeComputePipelineState(
+            function: try XCTUnwrap(legacyLib.makeFunction(name: LegacyTwoPassKernel.lumaFunction)))
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let table = try XCTUnwrap(SharpYUV.eotfTable.withUnsafeBytes {
+            device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+        })
+        func tex(_ f: MTLPixelFormat, _ tw: Int, _ th: Int) throws -> MTLTexture {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: f, width: tw, height: th, mipmapped: false)
+            d.usage = [.shaderRead, .shaderWrite]
+            d.storageMode = .shared
+            return try XCTUnwrap(device.makeTexture(descriptor: d))
+        }
+        let yTex = try tex(.r8Unorm, w, h), cTex = try tex(.rg8Unorm, cw, ch), src = try tex(.bgra8Unorm, w, h)
+        func gpuUs(_ cb: MTLCommandBuffer) -> Double { (cb.gpuEndTime - cb.gpuStartTime) * 1e6 }
+        func median(_ v: [Double]) -> Double { v.sorted()[v.count / 2] }
+        var mode: UInt32 = 1
+        for (name, img) in [("desktop-like", Self.mixedImage(width: w, height: h)),
+                            ("noise", Self.noiseImage(width: w, height: h, seed: 7))] {
+            img.withUnsafeBytes { src.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                                              withBytes: $0.baseAddress!, bytesPerRow: w * 4) }
+            var fusedUs: [Double] = [], legacyUs: [Double] = []
+            for _ in 0..<25 {
+                let fcb = try XCTUnwrap(queue.makeCommandBuffer())
+                let fe = try XCTUnwrap(fcb.makeComputeCommandEncoder())
+                fe.setComputePipelineState(fused)
+                fe.setTexture(src, index: 0); fe.setTexture(cTex, index: 1); fe.setTexture(yTex, index: 2)
+                fe.setBytes(&mode, length: 4, index: 0); fe.setBuffer(table, offset: 0, index: 1)
+                fe.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
+                                   threadsPerThreadgroup: MTLSize(width: fused.threadExecutionWidth,
+                                                                  height: max(1, fused.maxTotalThreadsPerThreadgroup / fused.threadExecutionWidth), depth: 1))
+                fe.endEncoding(); fcb.commit(); fcb.waitUntilCompleted()
+                fusedUs.append(gpuUs(fcb))
+
+                let lcb = try XCTUnwrap(queue.makeCommandBuffer())
+                let e1 = try XCTUnwrap(lcb.makeComputeCommandEncoder())
+                e1.setComputePipelineState(chroma)
+                e1.setTexture(src, index: 0); e1.setTexture(cTex, index: 1)
+                e1.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
+                                   threadsPerThreadgroup: MTLSize(width: chroma.threadExecutionWidth,
+                                                                  height: max(1, chroma.maxTotalThreadsPerThreadgroup / chroma.threadExecutionWidth), depth: 1))
+                e1.endEncoding()
+                let e2 = try XCTUnwrap(lcb.makeComputeCommandEncoder())
+                e2.setComputePipelineState(luma)
+                e2.setTexture(src, index: 0); e2.setTexture(cTex, index: 1); e2.setTexture(yTex, index: 2)
+                e2.setBytes(&mode, length: 4, index: 0); e2.setBuffer(table, offset: 0, index: 1)
+                e2.dispatchThreads(MTLSize(width: w, height: h, depth: 1),
+                                   threadsPerThreadgroup: MTLSize(width: luma.threadExecutionWidth,
+                                                                  height: max(1, luma.maxTotalThreadsPerThreadgroup / luma.threadExecutionWidth), depth: 1))
+                e2.endEncoding(); lcb.commit(); lcb.waitUntilCompleted()
+                legacyUs.append(gpuUs(lcb))
+            }
+            print("T-311 bench \(w)x\(h) \(name): gpu median two-pass \(Int(median(legacyUs))) us, fused \(Int(median(fusedUs))) us")
         }
     }
 }
