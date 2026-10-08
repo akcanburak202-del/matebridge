@@ -28,6 +28,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         case pipelineFailed(id: Int, message: String, kind: PipelineFailureKind, wake: DisplayWakeReason?)
         /// T-128: the deadline of a deferred display wake passed (coalesced).
         case deferredWakeDue
+        /// T-293: the Mac woke up (`did_wake`, coalesced): the pipeline breaker starts over.
+        case macWoke
         case senderEnded(id: Int, VideoSender.EndReason)
         /// T-258: the auxiliary encoder failed for good (id = pipeline id).
         case packedFallback(id: Int, reason: String)
@@ -72,7 +74,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// The lifecycle mailbox overflowed: end every session (release input, BYE) so the client reconnects cleanly.
     public var onOverflow: @Sendable () -> Void = {}
 
-    private static let tickKey = 1, statsKey = 2, keyframeKey = 3, deferredWakeKey = 4
+    private static let tickKey = 1, statsKey = 2, keyframeKey = 3, deferredWakeKey = 4, macWokeKey = 5
     /// After a deferred display wake (T-128), how long the rebuild waits for the displays to power on.
     private static let retryAfterDeferredWakeUs: UInt64 = 500_000
 
@@ -351,6 +353,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             await onPipelineFailed(id: id, message: message, kind: kind, wake: wake)
         case .deferredWakeDue:
             onDeferredWakeDue()
+        case .macWoke:
+            resetRetryPolicy(reason: "mac_wake")
         case .senderEnded(let id, let reason):
             await onSenderEnded(id: id, reason: reason)
         case .packedFallback(let id, let reason):
@@ -369,8 +373,11 @@ public final class StreamCoordinator: @unchecked Sendable {
             log(.error, "session_without_config")
             return
         }
-        // Takeover safety: a previous session that never reported its end no longer owns the consumer.
-        retryPolicy.reset()
+        // T-293: the same device keeps its failure history and breaker (the tablet renews its session every ~6 s while
+        // video is dead); another device (takeover) starts fresh.
+        let breakerBefore = retryPolicy.breaker
+        retryPolicy.sessionStarted(device: device)
+        logBreaker(from: breakerBefore)
         // T-214 review: the settings were derived before this event waited in the mailbox; a game display that failed
         // meanwhile (game_display_failed) must not be tried again. The tablet holds the HELLO config (equal to the
         // derived settings unless `reannounce` is already set), so a changed result is announced too.
@@ -491,6 +498,12 @@ public final class StreamCoordinator: @unchecked Sendable {
                                         allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
                                         fullChroma: live.fullChroma)
         }
+        // T-293: only a real user change of the prefs (not a replay on accept) starts the breaker over.
+        let breakerBefore = retryPolicy.breaker
+        if retryPolicy.prefsApplied(prefs, settingsChanged: wanted != live.settings) {
+            if breakerBefore.state != .closed { log(.info, "pipeline_breaker_reset", "reason=prefs_change") }
+            logBreaker(from: breakerBefore)
+        }
         prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
         live.prefs = prefs
         session = live
@@ -533,7 +546,12 @@ public final class StreamCoordinator: @unchecked Sendable {
             link.cancel()
             return
         }
-        if pipeline == nil {  // earlier creation failed or the pipeline died: try again
+        if pipeline == nil {  // earlier creation failed or the pipeline died: try again, unless the breaker is open
+            // T-293: no display, capture or encoder while the breaker is open; the video connection closes at once.
+            guard admitBuild() else {
+                link.cancel()
+                return
+            }
             _ = lease.sessionStarted(device: s.deviceID, settings: s.settings)
             // Normally nothing is parked during a session (unparked at session start); never strand one.
             let leftover = parked?.display
@@ -674,7 +692,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard let live = session, !isShuttingDown else { return }
         var settings = live.settings
         var delayUs = PipelineRetryPolicy.baseDelayUs
-        switch retryPolicy.failed(kind: kind, hdr10: live.settings.dynamicRange == .hdr10, nowUs: failedAt) {
+        let breakerBefore = retryPolicy.breaker
+        let decision = retryPolicy.failed(kind: kind, hdr10: live.settings.dynamicRange == .hdr10, nowUs: failedAt)
+        logBreaker(from: breakerBefore)
+        switch decision {
         case .giveUp:
             log(.warning, "pipeline_retry_exhausted",
                 "kind=\(kind.rawValue) max=\(PipelineRetryPolicy.maxRetries) "
@@ -730,6 +751,13 @@ public final class StreamCoordinator: @unchecked Sendable {
                 await destroyPipeline()
                 dropParked()
             case .create(let s):
+                // T-293 review: a session start (the tablet renews its session every few seconds) must not build
+                // while the breaker is open. Nothing to cancel here; the lease forgets the display so that the
+                // video attach path (`onVideoAttached`) can start it again once `admit` allows.
+                guard admitBuild() else {
+                    lease.displayLost()
+                    break
+                }
                 await createPipeline(settings: s)
             case .reuse:
                 if parked != nil, let s = session?.settings {
@@ -757,6 +785,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let old = pipeline else { return }
         pipeline = nil
+        noteStopped()
         let display = await old.stopKeepingDisplay()
         logRecreate(display, for: settings)
         await createPipeline(settings: settings, reusing: display)
@@ -788,6 +817,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let p = pipeline else { lease.displayLost(); return }
         pipeline = nil
+        noteStopped()
         guard let display = await p.stopKeepingDisplay() else {
             lease.displayLost()
             log(.info, "display_park_skipped", "reason=no_display")
@@ -853,6 +883,7 @@ public final class StreamCoordinator: @unchecked Sendable {
                 return
             }
             pipeline = p
+            retryPolicy.built(nowUs: HostClock.nowUs())
             wakePolicy.recovered()
             gateLock.withLock { sleepGate.cancelPending() }
             if rateState.hz != 0 { applyDisplayRate(streamFps: settings.fps) }
@@ -881,8 +912,52 @@ public final class StreamCoordinator: @unchecked Sendable {
             onSummary("Video başlamadı: \(error)")
             if await fallBackFromHDR(failed: settings, error: error) { return }
             if await fallBackFromPackedSetup(failed: settings, error: error) { return }
-            await fallBackFromGameDisplay(failed: settings, error: error)
+            if await fallBackFromGameDisplay(failed: settings, error: error) { return }
+            // T-293: no fallback applies; the start failure counts toward the breaker. The client's next video
+            // connection asks `admit` (no timer here).
+            let breakerBefore = retryPolicy.breaker
+            _ = retryPolicy.failed(kind: .start, hdr10: false, nowUs: HostClock.nowUs())
+            logBreaker(from: breakerBefore)
         }
+    }
+
+    /// T-293: the pipeline was stopped on purpose; a long enough run settles the breaker (logged).
+    private func noteStopped() {
+        let before = retryPolicy.breaker
+        retryPolicy.stopped(nowUs: HostClock.nowUs())
+        logBreaker(from: before)
+    }
+
+    /// T-293: asks the breaker before a pipeline is built for a session start or a video attach. false = refused
+    /// (logged); the caller builds nothing. A probe is consumed by the first `admit` that returns true, later builds
+    /// of the same pipeline are not gated again (the pipeline exists).
+    private func admitBuild() -> Bool {
+        let before = retryPolicy.breaker
+        let admission = retryPolicy.admit(nowUs: HostClock.nowUs())
+        logBreaker(from: before)
+        guard case .refuse(let remainingUs) = admission else { return true }
+        let n = retryPolicy.refusals
+        if PipelineRetryPolicy.logsRefusal(n) {
+            log(.warning, "pipeline_rebuild_refused", "remaining_ms=\(remainingUs / 1_000) "
+                + "level=\(retryPolicy.breaker.level) n=\(n)")
+        }
+        return false
+    }
+
+    /// T-293: `ev=pipeline_breaker` whenever the breaker's state or ladder step changed since `before`.
+    private func logBreaker(from before: PipelineRetryPolicy.BreakerSnapshot) {
+        let now = retryPolicy.breaker
+        guard now.state != before.state || now.level != before.level else { return }
+        log(now.state == .open ? .warning : .info, "pipeline_breaker",
+            "state=\(now.state.rawValue) wait_ms=\(now.waitUs / 1_000) level=\(now.level)")
+    }
+
+    /// Another reason to forget the failure history: a Mac wake or a pipeline-changing prefs/mode change.
+    private func resetRetryPolicy(reason: String) {
+        let before = retryPolicy.breaker
+        retryPolicy.reset()
+        if before.state != .closed { log(.info, "pipeline_breaker_reset", "reason=\(reason)") }
+        logBreaker(from: before)
     }
 
     /// T-237: `video ev=hdr_config` for every configured pipeline: what the tablet asked for, what runs (= what
@@ -965,11 +1040,11 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// without the display, announced with a new `config_id` (`STREAM_CONFIG` + video close), and the native display
     /// is created (after `DisplayRecreateGap`, since the failed start just removed the game display). A failure of the
     /// native display does not fall back again.
-    private func fallBackFromGameDisplay(failed: VideoSettings, error: Error) async {
+    private func fallBackFromGameDisplay(failed: VideoSettings, error: Error) async -> Bool {
         let displayFailure = VideoPipeline.isDisplayFailure(error)
         let fallBack = gameDisplayLock.withLock { gameDisplay.startFailed(settings: failed, displayFailure: displayFailure) }
         guard fallBack, !isShuttingDown, var live = session, !live.settings.displayHiDPI, let prefs = live.prefs else {
-            return
+            return false
         }
         let env = ProcessInfo.processInfo.environment
         let native = live.base.applying(prefs, defaultRefreshHz: VideoSettings.parseRefreshHz(env["MATEBRIDGE_REFRESH"]),
@@ -983,6 +1058,7 @@ public final class StreamCoordinator: @unchecked Sendable {
             + "bitrate_kbps=\(native.bitrateKbps)")
         onReconfigure(live.sessionID, native.streamConfig(configID: live.configID))
         await perform(lease.sessionStarted(device: live.deviceID, settings: native))
+        return true
     }
 
     /// T-081: the display went away (or could not be created) for a reason display sleep explains. With an accepted
@@ -1072,6 +1148,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func onPower(_ event: PowerEvent) {
         let outcome = gateLock.withLock { sleepGate.power(event, now: HostClock.nowUs()) }
         let sid = liveSessionLock.withLock { liveSessionID } ?? 0
+        if event == .didWake { post(.macWoke, key: Self.macWokeKey) }
         if outcome.logState {
             logger.log(.info, "power", sessionID: sid, generation: 0,
                        fields: "state=\(event.rawValue) wall_ms=\(Self.wallMs())")
@@ -1095,6 +1172,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         let p = pipeline
         pipeline = nil
+        noteStopped()
         await p?.stop()
     }
 

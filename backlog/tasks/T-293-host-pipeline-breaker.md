@@ -1,7 +1,7 @@
 ---
 id: T-293
 title: Host — kalıcı medya hatasında devre kesici (video bağlanınca bütçeye sor, bekleme 10/20/30 sn, aynı cihazın oturumunda sıfırlama yok)
-status: todo
+status: review
 phase: 6
 owner: mac-host-dev
 depends_on: [T-291]
@@ -47,6 +47,29 @@ T-291 tasarım notu, "Host: devre kesici" bölümü (`backlog/tasks/T-291-rebuil
 
 ## Plan
 
+1. `PipelineRetryPolicy`: `PipelineFailureKind.start`; kesici durumu (`openUntilUs`, `probing`, `level`), `admit`, `built`, `stopped`, `sessionStarted(device:)`, `reset()`, `breaker` anlık görüntüsü (log için), `refusals` sayacı. Mevcut 60 sn / 3 deneme / 1-2-4 sn ve `.fallBackToSDR` aynen.
+2. `StreamCoordinator`: `onVideoAttached` `admit` sorar, `refuse` ise log + `link.cancel()`; `createPipeline` başarıda `built`, tüm geri düşüşlerden sonra hâlâ hatada `.start` kaydı; sıfırlama olayları; loglar.
+3. Saf politika testleri `PipelineBreakerTests.swift` (yeni dosya, `Tests/.../Video/` altında).
+
 ## Handoff
+
+Commit: `git log task/T-293-pipeline-breaker` (tek commit `T-293: ...`).
+
+Dosyalar: `host-mac/Sources/MateBridgeCore/Video/PipelineRetryPolicy.swift`, `host-mac/Sources/MateBridgeHost/Session/StreamCoordinator.swift`, `host-mac/Tests/MateBridgeCoreTests/Video/PipelineBreakerTests.swift` (yeni), bu kart.
+
+Davranış:
+- `.giveUp` (4. hata ya da başarısız deneme kurulumu) kesiciyi açar: 10 -> 20 -> 30 sn (tavan 30). `admit` süre dolana kadar `.refuse(remaining)`; süre dolunca ilk `admit` durumu `probe` yapar ve `.build` döner. Probe sırasında gelen her hata (çalışırken ya da `.start`) `.giveUp` döner ve bir sonraki basamağı açar (60 sn pencereye bakmadan, zamanlayıcı yok). Açılışta `failures` silinmez, böylece mevcut 3 deneme / 60 sn davranışı değişmez.
+- Tembel başarı: `failed` (`.start` hariç) ve `stopped` (park, `restartPipeline`, `destroyPipeline`) pipeline >= 10 sn ayaktaysa geçmişi, basamağı ve kesiciyi temizler. `built(now)` `createPipeline` başarısında çağrılır.
+- `.start` hatası yalnız `createPipeline`'ın HDR / packed / oyun ekranı geri düşüşlerinin hiçbiri uygulanmadığında kaydedilir (`fallBackFromGameDisplay` artık Bool döner). Dönen `Decision` yok sayılır (zamanlayıcı yok; yeniden deneme istemcinin video bağlantısıyla gelir ve `admit`'ten geçer). Yani ilk 3 başlatma hatası serbest, 4. hata kesiciyi açar.
+- Sıfırlama olayları: (a) başka cihaz: `onSessionStarted` -> `retryPolicy.sessionStarted(device:)`; aynı cihazda sıfırlama YOK (eski koşulsuz `reset()` kaldırıldı); (b) Mac uyanması: `onPower(.didWake)` yeni `.macWoke` mailbox olayı (coalesced, key 5) -> `reset()`; (c) `applyPrefs` içinde `wanted != live.settings` (pipeline'ı değiştiren her STREAM_PREFS / mod değişikliği) -> `reset()`. Host'un kendi geri düşüşleri (HDR/SDR, packed, oyun ekranı) kullanıcı değişikliği sayılmadı; SDR geri düşüşü politikayı zaten temizliyor.
+- Loglar: `pipeline_breaker state=open|probe|closed wait_ms= level=` (durum ya da basamak değişince; open `warning`), `pipeline_rebuild_refused remaining_ms= level= n=` (ilk ve her 10. ret, `warning`), ek olarak `pipeline_breaker_reset reason=mac_wake|prefs_change` (kesici kapalı değilken). `docs/LOGGING.md` kart dosya listesinde olmadığı için güncellenmedi; orkestratör eklemeli (`pipeline_retry_exhausted` satırındaki "tablet yeniden bağlanınca yine kurulur" notu da artık geçersiz).
+- Codex turu (P1, oturum yenilemesi kesiciyi atlıyordu): `perform(_:)` içindeki her `.create` artık `admitBuild()` (ortak yardımcı, `onVideoAttached` da kullanıyor) ile kapılı. Ret olursa `pipeline_rebuild_refused` loglanır, hiçbir link iptal edilmez, `lease.displayLost()` çağrılır (lease boşta kalır; `onVideoAttached` zaten `lease.sessionStarted`'ı yeniden çağırıp `admit`'e sorar). (b) Deneme kurulumu ilk `admit`'te tüketilir (durum `probe`, sonraki `admit` zaten `.build`; pipeline varken video bağlantısı `admit` sormaz). (c) Prefs/mod değişikliği `applyPrefs`'te önce `reset()` yapar, sonra `perform` çalışır, yani kabul edilir. Diğer `createPipeline` çağıranları: `onVideoAttached` (kapılı); `perform .create` (kapılı); `perform` içindeki `.reuse`/`.reconfigure` -> `unpark` (bekletilen ekran yalnız çalışan pipeline park edilince vardır; kesici ancak pipeline öldükten sonra açılır, yani bu durumda park yok, kapı gerekmez); `restartPipeline` (çalışan pipeline gerekir, `guard let old = pipeline`); `onPipelineFailed` bütçe içi zamanlayıcılı yeniden deneme (`.retry` kararı, kesici kapalı; kapısız kalması beklenen); geri düşüş yolları `fallBackFromHDR/Packed/GameDisplay` -> `perform(.create)` (kapıdan geçer ama kesici o anda kapalı ya da probe, yani `.build`). Test: `testOpenBreakerThenSameDeviceSessionRenewalBuildsNothing` (saf `PipelineRetryPolicy` + `DisplayLease` dizisi; koordinatörün kendisi birim testlenemez).
+- Codex tur 2: (P1) prefs sıfırlaması artık `wanted != live.settings` değil, saf `PipelineRetryPolicy.prefsApplied(_:)` ile: yalnız normalize STREAM_PREFS, aynı cihaz için son uygulananlardan farklıysa sıfırlar; son değer oturum yenilemelerinde kalır, başka cihazda ve `reset()` ile (Mac uyanması dahil) unutulur; süreç başındaki ilk değer değişiklik sayılmaz; aynı prefs'in yeniden oynatılması (kabulde packed verilmesi gibi türetilmiş ayar değişimi) sıfırlamaz. Çağrı `applyPrefs`'te `guard wanted != live.settings` öncesinde. (P3) Üç `stopped()` çağrısı `noteStopped()` ile sarıldı (snapshot + `logBreaker`). Testler: `testPrefsReplayAcrossRenewalsNeverResetsOnlyARealChangeDoes`, `testPrefsHistoryIsForgottenOnOtherDeviceAndOnReset`, `testStoppedAfterLongRunChangesTheSnapshotSoTheOwnerLogsIt`.
+- Codex tur 3 (P2): `prefsApplied(_:settingsChanged:)`; sıfırlama için hem normalize prefs son uygulananlardan farklı hem de `wanted != live.settings` gerekir (ör. `MATEBRIDGE_BITRATE_KBPS` ile geçersiz kılınan bitrate değişikliği sıfırlamaz). Geçmiş her iki durumda da güncellenir. Test: `testPrefsDifferButSettingsEqualDoesNotResetButUpdatesHistory`.
+- `closed` logu tembeldir: kesici ancak sonraki hata / durdurma / sıfırlamada kapanır (zamanlayıcı yok).
+
+check.sh: ALL OK. Yalnız birim testi çalıştırıldı (21 yeni saf kesici testi); host, tablet, GUI kullanılmadı.
+
+Gerçek cihazda doğrulanacak: kalıcı kodlayıcı hatasında 4 kurulum sonrası ret döngüsü (T-294 olmadan tablet her 500 ms bağlanıp kapatılır, ret ucuz); probe başarısında görüntünün kendiliğinden dönmesi (T-294 manual_resume ile); uyku/uyanma sınırında `did_wake` sıfırlaması; `onVideoAttached` ret yolunda sanal ekranın yaratılmadığı.
 
 ## Open questions
