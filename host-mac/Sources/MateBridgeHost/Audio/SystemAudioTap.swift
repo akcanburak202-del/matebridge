@@ -54,6 +54,10 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var desired: Request?
     private var reconcileQueued = false
+    /// T-299: set by the host-sleep participant until the wake (or `sleepWindowNs` of awake time, should the wake
+    /// notification be lost). While set, `start` is ignored and no build begins or finishes starting a capture.
+    private var sleepingUntilNs: UInt64 = 0
+    static let sleepWindowNs: UInt64 = 30_000_000_000
     // Confined to `queue`.
     private var run: Run?
 
@@ -84,7 +88,10 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
         // streamer's later `stop` finds nothing running; a stream wanted again after wake is rebuilt by `start`.
         HostSleepParticipants.shared.register(self, name: "audio") { [weak self] done in
             guard let self else { return done() }
-            lock.withLock { desired = nil }
+            lock.withLock {
+                desired = nil
+                sleepingUntilNs = DispatchTime.now().uptimeNanoseconds &+ Self.sleepWindowNs
+            }
             queue.async { [self] in
                 if let r = run { teardown(r) }
                 run = nil
@@ -97,6 +104,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
+                lock.withLock { sleepingUntilNs = 0 }
                 queue.async { if let r = self.run { self.interrupt(r, reason: "wake") } }
             }
         }
@@ -106,7 +114,10 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
 
     public func start(streamID: UInt16, packetizer: AudioPacketizer,
                       events: @escaping @Sendable (AudioCaptureEvent) -> Void) {
-        lock.withLock { desired = Request(streamID: streamID, packetizer: packetizer, events: events) }
+        lock.withLock {
+            guard !isSleepingLocked() else { return }  // T-299: the streamer's retry after the sleep begins is dropped
+            desired = Request(streamID: streamID, packetizer: packetizer, events: events)
+        }
         scheduleReconcile()
     }
 
@@ -150,11 +161,16 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             run = nil
             logger.log(.info, "audio_capture_stopped", sessionID: 0, generation: 0, fields: "stream_id=\(r.streamID)")
         }
-        if let want, run == nil { build(want, attempt: 1) }
+        if let want, run == nil, isWanted(want.streamID) { build(want, attempt: 1) }
     }
 
     private func isWanted(_ streamID: UInt16) -> Bool {
-        lock.withLock { desired?.streamID == streamID }
+        lock.withLock { !isSleepingLocked() && desired?.streamID == streamID }
+    }
+
+    /// `lock` held.
+    private func isSleepingLocked() -> Bool {
+        DispatchTime.now().uptimeNanoseconds < sleepingUntilNs
     }
 
     // MARK: Build and teardown (queue)
@@ -246,6 +262,7 @@ public final class SystemAudioTap: AudioCaptureBackend, @unchecked Sendable {
             logger.log(.info, "audio_setup_changed", sessionID: 0, generation: 0,
                        fields: "stream_id=\(streamID) reason=\(change) attempt=\(attempt)")
             guard attempt < Self.maxSetupAttempts else { return fail(AudioCaptureFailure.setupChanged(change), 0) }
+            guard isWanted(streamID) else { return }  // T-299: no rebuild into a sleep
             return build(request, attempt: attempt + 1)
         }
         status = AudioDeviceStart(aggregateID, procID)

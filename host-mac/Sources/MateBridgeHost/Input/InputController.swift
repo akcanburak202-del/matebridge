@@ -54,6 +54,11 @@ public final class InputController: @unchecked Sendable {
     private let cursor: CursorLocating
     private let visibility: CursorVisibilityChecking
     private let logger = SessionLogger(component: "input")
+    /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
+    /// opening event of any session. Cleared by the wake notification and by `sessionStarted` (a session after wake).
+    private var sleeping = false
+    private var sleepDropped = 0
+    private var wakeObserver: NSObjectProtocol?
     /// Control activity (`noteControlActivity(at:)`): written on the session queue, taken on `queue`, only under
     /// `activityLock`. Its gap is the machine's stall pause (`InputStateMachine.Configuration`).
     private let activityLock = NSLock()
@@ -126,6 +131,7 @@ public final class InputController: @unchecked Sendable {
 
     deinit {
         HostSleepParticipants.shared.unregister(self)
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         watchdogTimer.cancel()
         pollTimer.cancel()
     }
@@ -143,9 +149,19 @@ public final class InputController: @unchecked Sendable {
             HostSleepParticipants.shared.register(self, name: "input") { [weak self] done in
                 guard let self else { return done() }
                 queue.async { [self] in
+                    sleeping = true  // before the release: nothing opens again after it
                     releaseOnQueue(.hostSleep)
-                    done()
+                    // Closing events the poster refused are retried here, short and synchronous, not at the next
+                    // 250 ms timer. Still owed when the attempts run out: no `done`, the ack logs `input=pending`.
+                    let owed = drainOwed(attempts: Self.sleepDrainAttempts, pause: Self.sleepDrainPause)
+                    if owed == 0 { done() } else { log(.warning, "input_sleep_owed", "owed=\(owed)") }
                 }
+            }
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                guard let self else { return }
+                queue.async { [self] in endSleepGate() }
             }
             lastStatus = nil  // a poll that ran before start() must not swallow the first report
             _ = environment()  // reports the first status
@@ -167,6 +183,7 @@ public final class InputController: @unchecked Sendable {
     public func sessionStarted(sessionID: UInt32, configID: UInt16) {
         queue.sync {
             guard !stopped else { return }
+            endSleepGate()
             self.sessionID = sessionID
             self.configID = configID
             messages = 0
@@ -272,7 +289,7 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
-            let postNs = flush(pipeline.handle(message, now: now, environment: env), now: now)
+            let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -332,6 +349,43 @@ public final class InputController: @unchecked Sendable {
     /// error, heartbeat silence, takeover or shutdown. Idempotent. Runs even after `shutdown`.
     public func releaseInput(_ cause: ReleaseCause) {
         queue.sync { releaseOnQueue(cause) }
+    }
+
+    /// About 150 ms of pauses at most, well inside `HostSleep.budgetUs`.
+    static let sleepDrainAttempts = 4
+    static let sleepDrainPause: TimeInterval = 0.05
+
+    /// Retries the owed releases right now (`queue` only); returns how many are still owed.
+    private func drainOwed(attempts: Int, pause: TimeInterval) -> Int {
+        pipeline.drainOwed(
+            attempts: attempts,
+            now: { HostClock.nowUs() },
+            environment: { [self] in environment() },
+            post: { [self] batch in
+                let result = post(batch)
+                eventsPosted += batch.count - result.failed.count
+                return result
+            },
+            pause: { Thread.sleep(forTimeInterval: pause) })
+    }
+
+    /// Wake or a new session: opening events pass again (`queue` only).
+    private func endSleepGate() {
+        guard sleeping else { return }
+        sleeping = false
+        log(.info, "input_sleep_gate_end", "dropped_opens=\(sleepDropped)")
+        sleepDropped = 0
+    }
+
+    /// While sleeping, takes the opening events out of what the pipeline produced (`queue` only). What was dropped
+    /// never reached the Mac: the pipeline forgets it, and the machine is released again so it does not hold it.
+    private func gate(_ events: [MacEvent], now: UInt64) -> [MacEvent] {
+        guard sleeping else { return events }
+        let (pass, dropped) = HostSleepInputGate.split(events)
+        guard !dropped.isEmpty else { return events }
+        sleepDropped += dropped.count
+        pipeline.postFailed(dropped, now: now, permitted: true)
+        return pass + pipeline.release(.hostSleep, now: now, environment: environment())
     }
 
     /// `releaseInput` body; `queue` only. Idempotent, so the host-sleep participant (T-299) and the session-end path
@@ -559,7 +613,7 @@ public final class InputController: @unchecked Sendable {
         guard !stopped else { return }
         pushActivity()
         let now = HostClock.nowUs()
-        flush(pipeline.tick(now: now, environment: environment()), now: now)
+        flush(gate(pipeline.tick(now: now, environment: environment()), now: now), now: now)
         rearmWatchdog()
         logInputAge(now: now)
         let d = pipeline.planner.counters

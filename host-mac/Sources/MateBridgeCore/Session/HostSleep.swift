@@ -76,3 +76,30 @@ public struct HostSleepProgress: Sendable, Equatable {
             .joined(separator: " ")
     }
 }
+
+/// The input gate that is set while the Mac is going to sleep (T-299): after the sleep release-all, nothing may OPEN
+/// again (key down, mouse or pen down, pen proximity enter, scroll or pinch begin), whatever session still delivers
+/// it, because a sleep acknowledged with a key held cannot be undone. Closing and moving events pass. Pure; the input
+/// controller applies it to what the pipeline produced, hands `dropped` to `InputPipeline.postFailed` (the shadow state
+/// forgets them) and releases again so the machine does not believe in what was never posted.
+public enum HostSleepInputGate {
+    /// True for the events that start something that has to be closed later.
+    public static func isOpening(_ event: MacEvent) -> Bool {
+        switch event {
+        case .tabletProximity(_, let entering): entering
+        case .tabletPoint(let p): p.kind == .down
+        case .mouse(let m): m.kind == .down
+        case .scroll(let s): s.phase == .began
+        case .magnify(let g): g.phase == .began
+        case .key(let k): k.kind == .keyDown || k.kind == .modifierDown
+        case .capsLock: false
+        }
+    }
+
+    /// `pass` keeps the order of the events that may go on to the poster.
+    public static func split(_ events: [MacEvent]) -> (pass: [MacEvent], dropped: [MacEvent]) {
+        var pass: [MacEvent] = [], dropped: [MacEvent] = []
+        for e in events { if isOpening(e) { dropped.append(e) } else { pass.append(e) } }
+        return (pass, dropped)
+    }
+}
