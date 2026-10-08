@@ -36,14 +36,23 @@ public struct InjectToFrameMatcher: Sendable {
         pendingUs = nowUs
     }
 
-    /// A `complete` frame with a non-empty dirty rect arrived at `nowUs`.
-    public mutating func noteDirtyFrame(atUs nowUs: UInt64) {
+    /// A `complete` frame with a non-empty dirty rect arrived at `nowUs`; `captureUs` is its capture timestamp (nil or
+    /// 0: unknown, taken as the arrival). Callbacks can be delivered late, so the frame is judged by when the change
+    /// happened, not by when it arrived: a frame captured before the press that falls inside the quiet window means
+    /// the screen was not still, and the pending measurement is dropped as noisy; an older one cannot answer the press.
+    public mutating func noteDirtyFrame(atUs nowUs: UInt64, captureUs: UInt64? = nil) {
+        let captured = min(nowUs, (captureUs ?? 0) == 0 ? nowUs : captureUs!)
         expire(nowUs: nowUs)
-        if let p = pendingUs, nowUs >= p {
-            if samplesUs.count < Self.maxSamples { samplesUs.append(nowUs - p) }
-            pendingUs = nil
+        if let p = pendingUs {
+            if captured >= p {
+                if samplesUs.count < Self.maxSamples { samplesUs.append(nowUs - p) }
+                pendingUs = nil
+            } else if p - captured < Self.quietWindowUs {
+                noisy += 1
+                pendingUs = nil
+            }
         }
-        lastDirtyUs = nowUs
+        lastDirtyUs = max(lastDirtyUs ?? 0, captured)
     }
 
     /// Gives up an armed press that waited too long.
@@ -81,13 +90,26 @@ public final class InjectToFrameMeter: @unchecked Sendable {
     public init() {}
 
     public func noteInjection(atUs nowUs: UInt64) { lock.withLock { matcher.noteInjection(atUs: nowUs) } }
-    public func noteDirtyFrame(atUs nowUs: UInt64) { lock.withLock { matcher.noteDirtyFrame(atUs: nowUs) } }
+    public func noteDirtyFrame(atUs nowUs: UInt64, captureUs: UInt64? = nil) {
+        lock.withLock { matcher.noteDirtyFrame(atUs: nowUs, captureUs: captureUs) }
+    }
+
+    /// Forgets everything (pending press, noise history, unreported samples): a new session starts clean.
+    public func reset() {
+        lock.withLock {
+            matcher = InjectToFrameMatcher()
+            lastReportUs = nil
+        }
+    }
 
     /// The log fields when 10 s have passed since the last report and there are samples; nil otherwise.
-    public func takeReport(nowUs: UInt64) -> String? {
+    /// `force` (session end) reports whatever samples there are, whatever the interval.
+    public func takeReport(nowUs: UInt64, force: Bool = false) -> String? {
         lock.withLock {
-            guard let last = lastReportUs else { lastReportUs = nowUs; return nil }
-            guard nowUs >= last, nowUs - last >= Self.reportIntervalUs else { return nil }
+            if !force {
+                guard let last = lastReportUs else { lastReportUs = nowUs; return nil }
+                guard nowUs >= last, nowUs - last >= Self.reportIntervalUs else { return nil }
+            }
             matcher.expire(nowUs: nowUs)
             guard let fields = matcher.takeFields() else { return nil }
             lastReportUs = nowUs

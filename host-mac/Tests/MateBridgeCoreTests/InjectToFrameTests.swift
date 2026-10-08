@@ -52,6 +52,39 @@ final class InjectToFrameTests: XCTestCase {
         XCTAssertNotNil(m.pendingUs)
     }
 
+    func testLateDeliveredEarlierFrameInsideQuietWindowInvalidatesPending() {
+        var m = InjectToFrameMatcher()
+        m.noteInjection(atUs: 1_000_000)  // screen looked still when armed
+        // a change captured 100 ms before the press, delivered only now
+        m.noteDirtyFrame(atUs: 1_030_000, captureUs: 900_000)
+        XCTAssertEqual(m.noisy, 1)
+        XCTAssertNil(m.pendingUs)
+        XCTAssertTrue(m.samplesUs.isEmpty)
+        m.noteDirtyFrame(atUs: 1_040_000, captureUs: 1_035_000)
+        XCTAssertTrue(m.samplesUs.isEmpty)
+    }
+
+    func testOldFrameOutsideQuietWindowDoesNotAnswerPress() {
+        var m = InjectToFrameMatcher()
+        m.noteInjection(atUs: 5_000_000)
+        m.noteDirtyFrame(atUs: 5_010_000, captureUs: 4_000_000)  // captured long before the press
+        XCTAssertTrue(m.samplesUs.isEmpty)
+        XCTAssertNotNil(m.pendingUs)
+        m.noteDirtyFrame(atUs: 5_030_000, captureUs: 5_020_000)
+        XCTAssertEqual(m.samplesUs, [30_000])
+    }
+
+    func testResetAndForcedReport() {
+        let meter = InjectToFrameMeter()
+        meter.noteInjection(atUs: 2_000_000)
+        meter.noteDirtyFrame(atUs: 2_008_000)
+        XCTAssertNotNil(meter.takeReport(nowUs: 2_100_000, force: true))
+        meter.noteInjection(atUs: 5_000_000)
+        meter.noteDirtyFrame(atUs: 5_008_000)
+        meter.reset()
+        XCTAssertNil(meter.takeReport(nowUs: 5_100_000, force: true))
+    }
+
     func testReportFieldsAndReset() {
         var m = InjectToFrameMatcher()
         XCTAssertNil(m.takeFields())
