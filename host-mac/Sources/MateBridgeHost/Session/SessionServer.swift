@@ -220,6 +220,9 @@ public final class SessionServer: @unchecked Sendable {
     private var tcpInfoTicks = 0
     private let netLogger = SessionLogger(component: "net")
     private var stopped = false
+    /// T-325: the coordinator is stalled; new connections are closed on accept until it recovers (any thread).
+    private let refuseLock = NSLock()
+    private var refusingConnections = false
     private var activeTransport: SessionTransport = .network
     private var restartAttempts = 0
     private var restartScheduled = false
@@ -570,6 +573,24 @@ public final class SessionServer: @unchecked Sendable {
             queue.sync(execute: body)
             _ = flushGroup.wait(timeout: .now() + .milliseconds(200))  // completions run on `queue`, so wait outside it
         }
+    }
+
+    /// T-325: while the stream coordinator is stalled no new connection is taken (a session started now could press
+    /// keys that the restart would have to release again). Safe from any thread.
+    public func setRefusingSessions(_ on: Bool) {
+        let changed = refuseLock.withLock { () -> Bool in
+            defer { refusingConnections = on }
+            return refusingConnections != on
+        }
+        if changed { netLogger.log(.warning, "sessions_refused", sessionID: 0, generation: 0, fields: "state=\(on ? "on" : "off")") }
+    }
+
+    private func refusing(_ connection: BsdTcpConnection, video: Bool) -> Bool {
+        guard refuseLock.withLock({ refusingConnections }) else { return false }
+        logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
+                   fields: "video=\(video) reason=coordinator_stalled")
+        connection.cancel()
+        return true
     }
 
     /// Ends every session (release input, BYE SHUTTING_DOWN, close) but keeps listening, so clients reconnect.
@@ -1013,6 +1034,7 @@ public final class SessionServer: @unchecked Sendable {
     /// (VIDEO_HELLO). Reads arrive on `queue`; `onClosed` arrives on `queue` once the socket closed for any reason (end
     /// of stream, error, or our own `cancel()`).
     private func acceptVideo(_ connection: BsdTcpConnection) {
+        guard !refusing(connection, video: true) else { return }
         guard admitted(connection, video: true) else { return }
         guard machine.pendingVideoCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,
@@ -1038,6 +1060,7 @@ public final class SessionServer: @unchecked Sendable {
     /// reason (end of stream, half close, error, our own `cancel()`): `transportClosed` then tells the machine, which
     /// releases all input (PROTOCOL.md 7).
     private func acceptControl(_ connection: BsdTcpConnection) {
+        guard !refusing(connection, video: false) else { return }
         guard admitted(connection, video: false) else { return }
         guard machine.awaitingHelloCount < Self.maxUnauthenticated else {
             logger.log(.warning, "connection_refused", sessionID: currentSessionID, generation: currentConfigID,

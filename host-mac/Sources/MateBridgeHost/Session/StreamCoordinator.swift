@@ -34,6 +34,26 @@ public final class StreamCoordinator: @unchecked Sendable {
         /// T-258: the auxiliary encoder failed for good (id = pipeline id).
         case packedFallback(id: Int, reason: String)
         case shutdown(done: @Sendable () -> Void)
+
+        /// Event type for `ev=coordinator_stall` (T-325): never any content.
+        var kind: String {
+            switch self {
+            case .sessionStarted: "sessionStarted"
+            case .sessionEnded: "sessionEnded"
+            case .videoAttached: "videoAttached"
+            case .keyframeRequest: "keyframeRequest"
+            case .streamPrefs: "streamPrefs"
+            case .displayRate: "displayRate"
+            case .stats: "stats"
+            case .tick: "tick"
+            case .pipelineFailed: "pipelineFailed"
+            case .deferredWakeDue: "deferredWakeDue"
+            case .macWoke: "macWoke"
+            case .senderEnded: "senderEnded"
+            case .packedFallback: "packedFallback"
+            case .shutdown: "shutdown"
+            }
+        }
     }
 
     private enum Consumer {
@@ -104,7 +124,10 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func sleep(until deadlineUs: UInt64) async {
         let now = HostClock.nowUs()
         guard deadlineUs > now else { return }
+        // An intentional back-off, not a stall (T-325): the watchdog does not count it.
+        watchdogLock.withLock { watchdog.pause(nowUs: HostClock.nowUs()) }
         try? await Task.sleep(nanoseconds: (deadlineUs - now) * 1_000)
+        watchdogLock.withLock { watchdog.resume(nowUs: HostClock.nowUs()) }
     }
     private static func prefsKey(_ sessionID: UInt32) -> Int { (1 << 40) + Int(sessionID) }
     private static func displayRateKey(_ sessionID: UInt32) -> Int { (2 << 40) + Int(sessionID) }
@@ -116,6 +139,22 @@ public final class StreamCoordinator: @unchecked Sendable {
     private var shuttingDown = false
     private var loop: Task<Void, Never>?
     private var tickTimer: DispatchSourceTimer?
+
+    /// T-325: stall detector of the event loop. Touched from the loop (begin/end/pause) and from `watchdogTimer` (poll),
+    /// which runs on its own queue so it still fires when the loop is stuck.
+    private let watchdogLock = NSLock()
+    private var watchdog = CoordinatorWatchdog()
+    private var watchdogTimer: DispatchSourceTimer?
+    /// Last resort of the watchdog (stall of `CoordinatorWatchdog.restartUs`, or abandoned stops): the app releases
+    /// input synchronously, then relaunches and quits (`StallRestart`). Called on the watchdog queue; may block.
+    public var onStallRestart: (@Sendable () -> StallRestart.Outcome)?
+    /// Next try of a restart that was skipped because input could not be confirmed released (watchdog lock).
+    private var restartRetryAtUs: UInt64?
+    /// From the 10 s step on, the session layer refuses new connections until this is called with false (the loop
+    /// recovered). Called on the watchdog queue.
+    public var onRefuseSessions: @Sendable (Bool) -> Void = { _ in }
+    /// Bound of every wait in the stop path (T-325); past it `ev=consumer_stop_timeout` / `ev=pipeline_stop_timeout`.
+    static let stopTimeout: TimeInterval = 2
 
     // Event-loop state (only touched from `handle`).
     private var lease: DisplayLease
@@ -196,13 +235,19 @@ public final class StreamCoordinator: @unchecked Sendable {
         logger.log(.error, "event_overflow", sessionID: 0, generation: 0)
         var dropped = mailbox.removeAll()
         dropped.append(event)
+        // T-325: forced events are kept, but once each. A stuck loop used to collect one forced `sessionEnded` per
+        // session until nothing else fitted, so every later session overflowed again. One pending end covers any
+        // number of dropped ones (it is idempotent), and the dropped starts are ended by `onOverflow` below.
+        var keptEnd = false, keptShutdown = false
         for e in dropped {
             switch e {
             case .videoAttached(let link): link.cancel()
-            case .shutdown: mailbox.post(e, forced: true)  // never lose the shutdown request
+            case .shutdown:
+                if !keptShutdown { keptShutdown = true; mailbox.post(e, forced: true) }  // never lose the shutdown
             // Never lose a session end either (T-128): it releases the display-sleep assertion and ends the episode.
             // A dropped start needs nothing: `onOverflow` ends that session, which posts its end.
-            case .sessionEnded: mailbox.post(e, forced: true)
+            case .sessionEnded:
+                if !keptEnd { keptEnd = true; mailbox.post(e, forced: true) }
             default: break
             }
         }
@@ -215,9 +260,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard loop == nil else { return }
         loop = Task { [self] in
             for await _ in mailbox.wake {
-                while let event = mailbox.take() { await handle(event) }
+                while let event = mailbox.take() { await handleWatched(event) }
             }
         }
+        startWatchdog()
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.matebridge.stream.tick"))
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in self?.post(.tick, key: Self.tickKey) }
@@ -308,6 +354,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         shutdownLock.withLock { shuttingDown = true }
         tickTimer?.cancel()
         tickTimer = nil
+        watchdogTimer?.cancel()
+        watchdogTimer = nil
         guard loop != nil else { return }
         let semaphore = DispatchSemaphore(value: 0)
         post(.shutdown(done: { semaphore.signal() }), forced: true)
@@ -318,6 +366,84 @@ public final class StreamCoordinator: @unchecked Sendable {
         // without the event loop's session state, which this thread must not read).
         if displaySleep.release() == .released {
             logger.log(.info, "display_sleep_assertion", sessionID: 0, generation: 0, fields: "state=released")
+        }
+    }
+
+    // MARK: Watchdog (T-325)
+
+    private func startWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.matebridge.stream.watchdog"))
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in self?.pollWatchdog() }
+        timer.resume()
+        watchdogTimer = timer
+    }
+
+    /// Brackets one event for the watchdog. The end of the event and the lift of the refusal happen in one critical
+    /// section with the poll's transitions and their hook calls, so a poll that saw the event stalled cannot refuse
+    /// after the event finished (T-325 review round 2).
+    private func handleWatched(_ event: Event) async {
+        watchdogLock.withLock { watchdog.begin(kind: event.kind, nowUs: HostClock.nowUs()) }
+        await handle(event)
+        let over: (kind: String, ms: UInt64)? = watchdogLock.withLock {
+            let over = watchdog.end(nowUs: HostClock.nowUs())
+            if watchdog.liftRefusal() {  // any healthy completion; not while a restart is under way
+                onRefuseSessions(false)
+            }
+            return over
+        }
+        if let over {
+            logger.log(.warning, "coordinator_stall_over", sessionID: 0, generation: 0,
+                       fields: "event=\(over.kind) ms=\(over.ms)")
+        }
+    }
+
+    /// Watchdog queue, once a second. The loop may be stuck, so this touches no loop state: it logs, refuses new
+    /// sessions and ends the live ones (input released, BYE, through `onOverflow`), and as the last resort restarts the
+    /// process through `onStallRestart` (input release first, see `StallRestart`).
+    private func pollWatchdog() {
+        var restartFields: String?
+        watchdogLock.withLock {
+            let now = HostClock.nowUs()
+            for action in watchdog.poll(nowUs: now) {
+                switch action {
+                case .warn(let kind, let ms):
+                    logger.log(.error, "coordinator_stall", sessionID: 0, generation: 0,
+                               fields: "event=\(kind) ms=\(ms)")
+                case .endSessions(let kind, let ms):
+                    logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
+                               fields: "action=end_sessions event=\(kind) ms=\(ms)")
+                    onRefuseSessions(true)
+                    onOverflow()
+                case .restart(let kind, let ms):
+                    restartFields = "event=\(kind) ms=\(ms)"
+                }
+            }
+            // T-325 review: abandoned capture/encoder stops keep blocked work alive; too many or too old escalates.
+            if restartFields == nil, let why = AbandonedStops.shared.escalation(nowUs: now), watchdog.requestRestart() {
+                restartFields = "reason=stop_abandoned \(why)"
+            }
+            if restartFields != nil {
+                onRefuseSessions(true)
+                onOverflow()
+            }
+        }
+        // Outside the lock: the restart blocks (input release, terminate wait). A skipped restart (input not confirmed
+        // released) is tried again every `StallRestart.retryIntervalUs`; sessions stay refused meanwhile.
+        if let fields = restartFields {
+            logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
+                       fields: "action=restart \(fields)")
+            runRestart()
+        } else if let due = watchdogLock.withLock({ restartRetryAtUs }), HostClock.nowUs() >= due {
+            runRestart()
+        }
+    }
+
+    private func runRestart() {
+        watchdogLock.withLock { restartRetryAtUs = nil }
+        guard let onStallRestart else { return }
+        if case .skipped = onStallRestart() {
+            watchdogLock.withLock { restartRetryAtUs = HostClock.nowUs() + StallRestart.retryIntervalUs }
         }
     }
 
@@ -1176,6 +1302,9 @@ public final class StreamCoordinator: @unchecked Sendable {
         consumer = .drain(Task { while await frames.next() != nil {} }, Task { while await aux.next() != nil {} })
     }
 
+    /// Every wait is bounded (T-325): the connection is closed first (that unblocks a pending write), then the sender or
+    /// the drain tasks are awaited for at most `stopTimeout`. Past it `ev=consumer_stop_timeout` is logged and the
+    /// shutdown goes on; the stuck task is cancelled and left behind.
     private func stopConsumer() async {
         let old = consumer
         consumer = .none
@@ -1184,11 +1313,15 @@ public final class StreamCoordinator: @unchecked Sendable {
         case .drain(let task, let auxTask):
             task.cancel()
             auxTask.cancel()
-            await task.value
-            await auxTask.value
+            let outcome = await BoundedWait.run(timeout: Self.stopTimeout) {
+                await task.value
+                await auxTask.value
+            }
+            if outcome == .timedOut { log(.error, "consumer_stop_timeout", "consumer=drain ms=\(Int(Self.stopTimeout * 1_000))") }
         case .sender(_, let sender, let link):
-            await sender.stop()
             link.cancel()
+            let outcome = await BoundedWait.run(timeout: Self.stopTimeout) { await sender.stop() }
+            if outcome == .timedOut { log(.error, "consumer_stop_timeout", "consumer=sender ms=\(Int(Self.stopTimeout * 1_000))") }
         }
     }
 
