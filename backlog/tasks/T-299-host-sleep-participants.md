@@ -61,5 +61,8 @@ InputController start() registers "input" (releaseOnQueue(.hostSleep) on its own
 - Review round 3 (Codex high, two audio P2s), third follow-up commit, `SystemAudioTap` only:
   - The queued sleep teardown now checks under the lock before destroying: it keeps the capture when a request is wanted and the gate has cleared (a post-wake request wins; reconcile owns it), otherwise it tears down (no capture during sleep). `done` is always called.
   - Expiry check is one coalesced `DispatchWorkItem` (`expiryItem`), scheduled only if none is outstanding. Cancelled by `stop` (when nothing is pending), `shutdown` and when the pending start is restored; it reschedules itself if a newer sleep window still has a pending start. Host-only, no unit test; check.sh ALL OK.
+- Review round 4 (Codex high, two audio P2s), fourth follow-up commit, `SystemAudioTap` only:
+  - Wake ordering: the wake handler runs on the tap queue and first interrupts whatever capture lived through the sleep, then clears the gate and restores the pending start, so a capture built for that start is never the one the wake interrupts.
+  - Expiry: one `DispatchSourceTimer` (`expiryTimer`, created once in the tap) that is only rescheduled or parked at `.distantFuture`, replacing the per-start work items; its handler re-checks state when it fires. Host-only, no unit test; check.sh ALL OK.
 
 ## Open questions
