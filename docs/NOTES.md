@@ -1787,3 +1787,14 @@ Yöntem: tablete adb ile `input keyevent HOME` ve `am force-stop`, ardından her
   - kalem yeniden basılmadı.
 - Geçici değişiklikler geri alındı: "Boşta karart" kapalıydı, parlaklık elle sabitlenmişti, Safari kapatıldı.
 - Not: `codex exec` arka planda stdin açık kalınca "Reading additional input from stdin" deyip bekliyor; `< /dev/null` ile çalıştır. İlk astra çalıştırması bu yüzden 25 dk boşa bekledi.
+
+## 2026-10-08 ~13:16–13:31 — Gerçek kalem, host profili (T-305), kare atlama nedeni (T-306), daily APK
+
+- **Gerçek M-Pencil:**
+  - donanım 360 rapor/s (2,8 ms); tablet 360 PEN mesajı/s, her biri tek örnek;
+  - host kalem yaşı p50 6,9 ms, kontrol RTT 12,7 ms. Gerçek hızda tıkanma yok.
+- **Host CPU çizerken (debug):** p90 %75. Profil: `dev.matebridge.cursor` kuyruğu ~%57 çekirdek. Her girdi olayında `NSCursor.currentSystemCursor`, görüntü kopyası, yeniden çizim ve `pixelHash` → T-309.
+- **Mac uygulaması debug derleniyordu** (`bundle-host.sh` varsayılanı). Release ile aynı sentetik yükte host %65 → %49 → varsayılan release (0037 eki). Host şu an release paketle çalışıyor.
+- **T-306:** Günlük 60 hareket sahnesinde çözme p50 15,4 ms, karelerin %31'i > 16,7 ms; geç düşme %6,7, iki vsync tutma %12. Oyun 60'ta %6. Zamanlayıcı kilitli (`locked` %99,8), yakalama düzenli → T-310.
+- **T-301 daily APK kuruldu:** `versionCode=403828`, `flags` içinde DEBUGGABLE yok, eşleşme korundu, görüntü sağlıklı.
+- **Geçici değişiklikler geri alındı:** `idle_dim` kapatılmıştı, parlaklık sabitlenmişti, `stream_mode` game olmuştu, Safari açıktı.

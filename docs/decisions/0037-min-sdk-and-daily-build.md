@@ -29,3 +29,9 @@ Seçilen: **(b)**. Kullanıcı onayı: 2026-10-08.
 
 - **Kazanılan:** tahminen 60 fps'te tek çekirdeğin %5–10'u ve daha az titreşim. T-296 tabanına karşı ölçülür.
 - **Kaybedilen:** debug olmayan APK'da `run-as` yok. Tercih yazma, dosya çekme ve `/proc` ayrıntıları için debug APK kurulur (`install-apk.sh` seçeneği).
+
+**Ek (2026-10-08, host):**
+- Mac uygulaması da `bundle-host.sh` ile varsayılan olarak `swift build -c debug` derleniyordu.
+- T-305 profili: aynı sentetik kalem yükünde release derleme host CPU'sunu %65'ten %49'a indirdi; oturum kuyruğu 4,6×, girdi kuyruğu 2,2× daha hafif.
+- `bundle-host.sh` varsayılanı artık `release`; `--debug` isteğe bağlı.
+- Kullanıcı istemci tarafındaki kararı onaylamıştı; bu, aynı ilkenin host'a uygulanması.

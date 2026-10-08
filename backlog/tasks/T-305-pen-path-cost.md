@@ -1,7 +1,7 @@
 ---
 id: T-305
 title: Kalem yolu maliyeti — örnek başına host CPU (~0,6 ms), her örneğin ayrı kayıt olması (max_batch=1), kontrol bağlantısında kuyruk (RTT 108 ms)
-status: todo
+status: done
 phase: 7
 owner: orchestrator
 depends_on: [T-296]
@@ -46,5 +46,7 @@ Gerçek kalem hızı bilinmiyor; loglarda gerçek kalem verisi yok. Gerçek hız
 ## Plan
 
 ## Handoff
+
+2026-10-08: `docs/research/2026-10-08-pen-path.md`. Gerçek kalem 360/s; asıl maliyet yerel imleç örneklemesi (→ T-309) ve debug host derlemesi (→ `bundle-host.sh` varsayılanı release, 0037 eki). Örnek birleştirme düşük öncelikli.
 
 ## Open questions

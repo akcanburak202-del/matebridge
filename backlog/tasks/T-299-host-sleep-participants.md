@@ -1,7 +1,7 @@
 ---
 id: T-299
 title: Host — uyku katılımcıları hiç kayıt olmuyor; girdi ve ses uyku anında oturum kuyruğundan bağımsız bırakılsın (T-132 eksiği)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -66,3 +66,5 @@ InputController start() registers "input" (releaseOnQueue(.hostSleep) on its own
   - Expiry: one `DispatchSourceTimer` (`expiryTimer`, created once in the tap) that is only rescheduled or parked at `.distantFuture`, replacing the per-start work items; its handler re-checks state when it fires. Host-only, no unit test; check.sh ALL OK.
 
 ## Open questions
+
+- (orkestratör, 2026-10-08) Codex 5. tur P2, ertelendi: izin penceresi tap kuyruğunu uyku → uyanma → uyku boyunca bloklarsa, kuyrukta bekleyen eski uyanma ikinci uykunun ses kapısını temizleyebilir (`SystemAudioTap.swift` ~136/190). Çözüm: uyanma işini uyku kuşağıyla etiketlemek. Girdi tarafını etkilemiyor; olasılık çok düşük. Takip: T-308.

@@ -9,7 +9,8 @@
 #   --name NAME        app name, i.e. NAME.app             (default: MateBridge)
 #   --bundle-id ID     CFBundleIdentifier                  (default: dev.matebridge.host)
 #   --out DIR          output directory                    (default: build)
-#   --release          build with -c release               (default: debug)
+#   --debug            build with -c debug                 (default: release, decision 0037 addendum)
+#   --release          build with -c release (the default; kept for old commands)
 #
 # Signing identity: $MATEBRIDGE_SIGN_IDENTITY (SHA-1 or name) or the first valid
 # "Apple Development" identity in the keychain. It is never written into the repo.
@@ -19,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD
 
-package=host-mac product=MateBridgeApp name=MateBridge bundle_id=dev.matebridge.host out=build config=debug
+package=host-mac product=MateBridgeApp name=MateBridge bundle_id=dev.matebridge.host out=build config=release
 while [ $# -gt 0 ]; do
   case "$1" in
     --package) package=${2:?}; shift 2 ;;
@@ -28,6 +29,7 @@ while [ $# -gt 0 ]; do
     --bundle-id) bundle_id=${2:?}; shift 2 ;;
     --out) out=${2:?}; shift 2 ;;
     --release) config=release; shift ;;
+    --debug) config=debug; shift ;;
     -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
