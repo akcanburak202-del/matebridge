@@ -7,7 +7,7 @@ owner: mac-host-dev
 depends_on: []
 decisions: []
 files:
-  - host-mac/Sources/MateBridgeHost/Session/UsbTunnelWatcher.swift
+  - host-mac/Sources/MateBridgeHost/Usb/UsbTunnelWatcher.swift  # (orchestrator: corrected path)
   - host-mac/Sources/MateBridgeHost/Files/TabletFilesBridge.swift
   - host-mac/Sources/MateBridgeCore/
   - host-mac/Tests/MateBridgeCoreTests/
@@ -35,6 +35,7 @@ IOKit `IOUSBHostDevice` first-match + terminated notifications (UsbEventMonitor,
 - Commit: latest commit on `task/T-324-usb-watcher` ("T-324: ...").
 - Files: host-mac/Sources/MateBridgeCore/Usb/UsbTunnelPlanner.swift, host-mac/Sources/MateBridgeHost/Usb/UsbTunnelWatcher.swift (the card's `Session/` path does not exist; the file lives in `Usb/`), host-mac/Tests/MateBridgeCoreTests/Usb/UsbTunnelPlannerTests.swift. TabletFilesBridge untouched.
 - check.sh: ALL OK.
+- Review round 1 (Codex P2/P3): events no longer reschedule the probe; `UsbEventCoalescer` (Core) keeps the earliest pending deadline (0.3 s), so a flapping hub cannot starve probes (test: event every 100 ms for 5 s yields >= 10 probes). Regular chain is restarted after each event probe with the planner's delay (2 s max with a cable, 30/10 s idle). Card `files:` path corrected.
 - Estimate: before, idle Wi-Fi = one `adb devices` process (plus a loopback probe) every 2 s, about 30 launches/min. After: one per 30 s, 2/min (~15x fewer), plus a short burst after a USB event. Not measured on a device.
 - Assumptions: notification on every `IOUSBHostDevice` (no vendor filter; any USB attach/detach on the Mac costs one probe burst). Cable detach is noticed 0.3 s after the event (faster than the old 2 s worst case). An unauthorized/offline device keeps the 2 s rate because authorization emits no USB event. `testHealthyProbeEndsBackoff` was adjusted to use an unauthorized device, since an empty healthy probe is now idle (10/30 s).
 - Needs real hardware (orchestrator): plug/unplug the cable with the host in Wi-Fi mode and USB mode; `ev=usb_tunnel` lines should appear promptly (tunnel up within a few seconds of plug-in, `no_device` after unplug); `dev.matebridge.usb` queue samples should drop in a profile. Also note: an adb server dying while idle is now noticed within up to 30 s.

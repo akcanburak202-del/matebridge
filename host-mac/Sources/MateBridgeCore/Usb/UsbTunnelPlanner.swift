@@ -135,3 +135,24 @@ public enum SessionTransport: Equatable, Sendable {
         return .network
     }
 }
+
+/// Coalesces USB attach/detach events into one pending probe (T-324). An event never postpones a probe that is
+/// already pending, so a flapping hub cannot starve tunnel repair or detach detection.
+public struct UsbEventCoalescer: Sendable {
+    public static let settleDelay: TimeInterval = 0.3
+    private var pending = false
+
+    public init() {}
+
+    /// Returns the delay after which to probe when a new probe must be scheduled; nil when one is already pending.
+    public mutating func noteEvent() -> TimeInterval? {
+        if pending { return nil }
+        pending = true
+        return Self.settleDelay
+    }
+
+    /// The scheduled probe is running now.
+    public mutating func probeStarted() { pending = false }
+
+    public mutating func reset() { pending = false }
+}

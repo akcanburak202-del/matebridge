@@ -133,3 +133,26 @@ final class UsbTunnelPlannerTests: XCTestCase {
         XCTAssertEqual(SessionTransport.classify(peerHost: nil), .network)
     }
 }
+
+final class UsbEventCoalescerTests: XCTestCase {
+    func testEventBurstEvery100msStillProbes() {
+        var c = UsbEventCoalescer()
+        var due: TimeInterval?
+        var probes = 0
+        var t: TimeInterval = 0
+        while t < 5.0 {
+            if let d = due, d <= t + 1e-9 { c.probeStarted(); due = nil; probes += 1 }
+            if let delay = c.noteEvent() { due = t + delay }
+            t += 0.1
+        }
+        XCTAssertGreaterThanOrEqual(probes, 10)
+    }
+
+    func testSecondEventDoesNotPostponePending() {
+        var c = UsbEventCoalescer()
+        XCTAssertEqual(c.noteEvent(), UsbEventCoalescer.settleDelay)
+        XCTAssertNil(c.noteEvent())
+        c.probeStarted()
+        XCTAssertNotNil(c.noteEvent())
+    }
+}

@@ -23,6 +23,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     private var lastActionFailed = false
     private var lastDeviceSerial: String?
     private var usbEvents: UsbEventMonitor?
+    private var eventCoalescer = UsbEventCoalescer()
 
     /// Called on the watcher queue whenever the state changes. Set before `setEnabled`.
     public var onStateChange: (@Sendable (UsbTunnelState?) -> Void)?
@@ -54,11 +55,20 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     }
 
     /// On `queue`. Probe soon and restart the tick chain (the pending slow tick is cancelled by the generation bump).
+    /// A pending event probe is never postponed by later events (flapping hubs), so probes keep running.
     private func usbEventOccurred() {
         guard enabled else { return }
         planner.noteUsbEvent()
-        generation += 1
-        scheduleTick(after: 0.3)  // let a burst of interface events settle
+        guard let delay = eventCoalescer.noteEvent() else { return }
+        let gen = generation
+        queue.asyncAfter(deadline: .now() + delay) { [self] in
+            eventCoalescer.probeStarted()
+            guard enabled, gen == generation else { return }
+            generation += 1  // cancels the pending regular tick; the chain restarts below
+            tick()
+            guard enabled else { return }
+            scheduleTick(after: planner.nextDelay)
+        }
     }
 
     private func scheduleTick(after delay: TimeInterval) {
