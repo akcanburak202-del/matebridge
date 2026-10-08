@@ -1734,3 +1734,9 @@ Yöntem T-282 (iş parçacığı `/proc` farkı), her kol uygulama yeniden başl
 - Aynı APK'da `aead_path` varsayılanı `direct`: 10 fps kollarında `HeapTaskDaemon` eşiğin altında, `AUTH_FAILED` yok.
 - Son APK (`main`, varsayılan `dec_wait=event_in` ve `aead_path=direct`, anahtarsız) 10 fps'te: çözücü uyanması 728/s, istemci %32, `cap_dec` p50 23,1 ms; hata satırı yok.
 - **T-287 benimsendi** (kullanıcı kararı): varsayılan `pause`, 60 sn sessizlikten sonra. Anahtarsız APK'da `idle_pause idle_s=60 state=paused`. Ping sonrası `resume ok=1 started=1 start_ms=116`, `first_sound ms=115.7`. Kapatmak için `--es audio_idle_pause off` ya da varsayılan değişikliği.
+
+## 2026-10-08 ~11:00 — T-293/T-294 cihaza kuruldu (Wi-Fi adb)
+
+- APK `main`'den (T-294 birleşmesi sonrası `check.sh` derlemesi) kablosuz adb ile kuruldu. Host yeniden paketlendi ve başlatıldı; tek süreç çalışıyor.
+- Host yeniden başlatıldıktan sonra yeni oturumda `video_health` STARTING → HEALTHY 0,4 sn sürdü. Breaker logu yok (beklenen); tuş girişi akıyor.
+- Kalıcı hata senaryosu cihazda denenmedi. Kullanıcıya normal kullanım kontrol listesi verildi.
