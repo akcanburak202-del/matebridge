@@ -55,3 +55,5 @@ Kuşak, bir `attachSurface`/`reconfigure` çağrısıdır (yeni yapılandırma y
 - **Tekrar düşünülür:** aygıtta yanlış alarm görülürse (eşikler), ya da host da çözücü sağlığına tepki vermeli denirse (`STATS.framesDecoded`).
 
 **Uygulama notu (2026-10-03, T-159):** hata kuralları yeni kuşak STARTING'deyken de uygulanır; bağlanırken siyah kalan ekran da "Görüntü durdu" katmanını ve kurtarmayı alır. Kurtarma sırası: +1 sn decoder yeniden başlatma, +3 sn yeniden başlatma, +6 sn oturumu yeniden kurma, +15 sn "Yeniden dene" düğmesi. Bilinen boşluk: yalnız 1–2 kare alıp hiç çıktı vermeyen bir kuşak, `no_output` kuralı 3 kare istediği için STARTING'de kalır (input kapalı, katman yok).
+
+**Uygulama notu (2026-10-08, T-291):** "Yeniden dene" düğmesi ve `manual` durumu kalır. Ancak `manual`'da video bağlantısı ilk karesini getirirse, en çok 10 sn'de bir kodlayıcı yeniden başlatılır (`manual_resume`, T-294). Böylece host kalıcı hatadan çıkınca (T-293 devre kesicisinin deneme kurulumu) görüntü dokunmadan döner. Girdi kapısı değişmez: yeni kuşak ilk çözülmüş çıktıya kadar STARTING'dedir.
