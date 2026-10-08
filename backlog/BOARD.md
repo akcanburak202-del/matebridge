@@ -29,7 +29,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
-| [T-312](tasks/T-312-client-decoder-output-park.md) | Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9) | 7 | android-client-dev | [T-303] |
 
 ## done
 
@@ -325,3 +324,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-307](tasks/T-307-str8-invalid-utf8.md) | Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8 | 7 | orchestrator | [] |
 | [T-309](tasks/T-309-host-cursor-sampler-cost.md) | Host — yerel imleç örnekleyicisi her girdi olayında imleç görüntüsünü kopyalayıp hash'liyor; biçim kontrolü yalnız imleç değiştiğinde | 7 | mac-host-dev | [] |
 | [T-311](tasks/T-311-host-sharp-chroma-fused-pass.md) | Host — Keskin renk Metal geçişi tek dispatch (HA2), Metal süresi ayrı iz aşaması (HA1), iki Metal geçişinin ortak kurulumu (A8) | 7 | mac-host-dev | [T-302] |
+| [T-312](tasks/T-312-client-decoder-output-park.md) | Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9) | 7 | android-client-dev | [T-303] |

@@ -1,7 +1,7 @@
 ---
 id: T-312
 title: Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-303]
