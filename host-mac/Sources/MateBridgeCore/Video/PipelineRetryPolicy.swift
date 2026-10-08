@@ -81,6 +81,8 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
     private var level = 0
     private var builtAtUs: UInt64?
     private var device: DeviceID?
+    /// The normalized STREAM_PREFS last applied for `device`; survives session renewals (T-293 review round 2).
+    private var lastPrefs: StreamPrefs?
     /// Refusals since the breaker opened.
     public private(set) var refusals = 0
 
@@ -108,6 +110,20 @@ public struct PipelineRetryPolicy: Equatable, Sendable {
     public mutating func reset() {
         failures.removeAll()
         clearBreaker()
+        lastPrefs = nil
+    }
+
+    /// STREAM_PREFS were applied for the current device. Only a real user change resets: the normalized prefs differ
+    /// from the last ones applied (kept across session renewals). The first value after start, a device change or a
+    /// reset is not a change, and neither is a replay of the same prefs whose derived settings changed in the meantime
+    /// (negotiation, fallbacks). Returns whether it reset.
+    @discardableResult
+    public mutating func prefsApplied(_ prefs: StreamPrefs) -> Bool {
+        let normalized = prefs.normalized
+        defer { lastPrefs = normalized }
+        guard let last = lastPrefs, last != normalized else { return false }
+        reset()
+        return true
     }
 
     /// A session started. Another device than the last one (takeover) gets a fresh budget; the same device keeps the

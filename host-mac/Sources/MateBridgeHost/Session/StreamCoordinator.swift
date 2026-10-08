@@ -498,11 +498,16 @@ public final class StreamCoordinator: @unchecked Sendable {
                                         allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
                                         fullChroma: live.fullChroma)
         }
+        // T-293: only a real user change of the prefs (not a replay on accept) starts the breaker over.
+        let breakerBefore = retryPolicy.breaker
+        if retryPolicy.prefsApplied(prefs) {
+            if breakerBefore.state != .closed { log(.info, "pipeline_breaker_reset", "reason=prefs_change") }
+            logBreaker(from: breakerBefore)
+        }
         prefsStore.save(prefs, device: live.deviceID)  // the next connection of this tablet starts in this mode
         live.prefs = prefs
         session = live
         guard wanted != live.settings else { return }
-        resetRetryPolicy(reason: "prefs_change")  // the user tried something else (T-293)
         let old = live.settings
         live.settings = wanted
         live.configID = nextConfigID(after: live.configID)
@@ -780,7 +785,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let old = pipeline else { return }
         pipeline = nil
-        retryPolicy.stopped(nowUs: HostClock.nowUs())
+        noteStopped()
         let display = await old.stopKeepingDisplay()
         logRecreate(display, for: settings)
         await createPipeline(settings: settings, reusing: display)
@@ -812,7 +817,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         guard let p = pipeline else { lease.displayLost(); return }
         pipeline = nil
-        retryPolicy.stopped(nowUs: HostClock.nowUs())
+        noteStopped()
         guard let display = await p.stopKeepingDisplay() else {
             lease.displayLost()
             log(.info, "display_park_skipped", "reason=no_display")
@@ -914,6 +919,13 @@ public final class StreamCoordinator: @unchecked Sendable {
             _ = retryPolicy.failed(kind: .start, hdr10: false, nowUs: HostClock.nowUs())
             logBreaker(from: breakerBefore)
         }
+    }
+
+    /// T-293: the pipeline was stopped on purpose; a long enough run settles the breaker (logged).
+    private func noteStopped() {
+        let before = retryPolicy.breaker
+        retryPolicy.stopped(nowUs: HostClock.nowUs())
+        logBreaker(from: before)
     }
 
     /// T-293: asks the breaker before a pipeline is built for a session start or a video attach. false = refused
@@ -1160,7 +1172,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         await stopConsumer()
         let p = pipeline
         pipeline = nil
-        retryPolicy.stopped(nowUs: HostClock.nowUs())
+        noteStopped()
         await p?.stop()
     }
 

@@ -239,4 +239,48 @@ final class PipelineBreakerTests: XCTestCase {
         p.reset()
         XCTAssertEqual(p.admit(nowUs: 15 * s), .build)
     }
+
+    // MARK: Prefs reset (T-293 review round 2)
+
+    private func prefs(chroma: UInt8 = 2, fps: UInt16 = 120) -> StreamPrefs {
+        StreamPrefs(fps: fps, scalePermille: 1000, chroma: chroma)
+    }
+
+    func testPrefsReplayAcrossRenewalsNeverResetsOnlyARealChangeDoes() {
+        var p = PipelineRetryPolicy()
+        p.sessionStarted(device: device(1))
+        XCTAssertFalse(p.prefsApplied(prefs()), "the first value after start is not a change")
+        openBreaker(&p)
+        // Renewal: same device, the tablet replays the same prefs on accept (packed now granted: the derived settings
+        // changed, the prefs did not).
+        for _ in 0..<3 {
+            p.sessionStarted(device: device(1))
+            XCTAssertFalse(p.prefsApplied(prefs()))
+            XCTAssertEqual(p.breaker.state, .open)
+        }
+        // A different value is the user's change.
+        XCTAssertTrue(p.prefsApplied(prefs(fps: 60)))
+        XCTAssertEqual(p.breaker, .init(state: .closed, level: 0, waitUs: 0))
+        XCTAssertEqual(p.admit(nowUs: 5 * s), .build)
+    }
+
+    func testPrefsHistoryIsForgottenOnOtherDeviceAndOnReset() {
+        var p = PipelineRetryPolicy()
+        p.sessionStarted(device: device(1))
+        _ = p.prefsApplied(prefs())
+        p.sessionStarted(device: device(2))
+        XCTAssertFalse(p.prefsApplied(prefs(fps: 60)), "no previous value for this device")
+        p.reset()  // Mac wake
+        XCTAssertFalse(p.prefsApplied(prefs()), "forgotten by a reset")
+    }
+
+    func testStoppedAfterLongRunChangesTheSnapshotSoTheOwnerLogsIt() {
+        var p = PipelineRetryPolicy()
+        openBreaker(&p)
+        XCTAssertEqual(p.admit(nowUs: 13 * s), .build)
+        p.built(nowUs: 13 * s)
+        let before = p.breaker
+        p.stopped(nowUs: 30 * s)
+        XCTAssertNotEqual(p.breaker, before)
+    }
 }
