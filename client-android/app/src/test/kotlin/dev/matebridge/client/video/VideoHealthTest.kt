@@ -306,6 +306,7 @@ class VideoHealthTest {
         lost()
         val ladder = ArrayList<Pair<Long, Action>>()
         var resumes = 0
+        var manualResumes = 0
         var manualAt = -1L
         repeat(120) { // 60 s
             now += 500
@@ -319,7 +320,11 @@ class VideoHealthTest {
                 null -> Unit
             }
             if (health.manual && manualAt < 0) manualAt = now - t0
-            if (flowing() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1) }
+            val wasManual = health.manual
+            if (flowing() == Action.RESTART_CODEC) {
+                if (wasManual) manualResumes++ else resumes++
+                begin(health.generation + 1)
+            }
             assertFalse(health.inputAllowed)
             lost() // the connection drops before any decoded output
         }
@@ -329,7 +334,68 @@ class VideoHealthTest {
         )
         assertEquals(15_000L, manualAt)
         assertEquals(VideoHealth.MAX_RESUMES, resumes)
+        // T-294: past manual (15 s .. 60 s) one resume per 10 s at most.
+        assertTrue("manual resumes $manualResumes", manualResumes in 3..5)
         assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") })
+    }
+
+    private fun toManual() {
+        healthy(1)
+        lost()
+        repeat(40) { // 20 s: the ladder runs to manual, the video never comes back
+            now += 500
+            when (tick()) {
+                Action.RESTART_CODEC -> begin(health.generation + 1)
+                Action.RECONNECT -> { health.onEvent(Detached(health.generation)); begin(health.generation + 1) }
+                null -> Unit
+            }
+            conn++; lost()
+        }
+        assertTrue(health.manual)
+    }
+
+    /** T-294: manual state, host serves video again: the codec restarts without "Yeniden dene", then the layer lifts. */
+    @Test fun manualStateResumesWhenVideoReturnsThenTheLayerLiftsAndTheEpisodeEnds() {
+        toManual()
+        assertTrue(health.showOverlay)
+        assertEquals(Action.RESTART_CODEC, flowing())
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=manual_resume ") })
+        val gen = health.generation + 1
+        begin(gen) // the resume starts a new generation
+        assertEquals(State.STARTING, health.state)
+        assertFalse("input stays closed until the first decoded output", health.inputAllowed)
+        progress.onInput(gen, now)
+        assertTrue(progress.onOutput(gen))
+        health.onEvent(FirstOutput(gen))
+        assertEquals(State.HEALTHY, health.state)
+        assertTrue(health.inputAllowed)
+        assertFalse("the layer lifts", health.showOverlay)
+        now += 10_000
+        assertNull(tick())
+        assertFalse(health.recovering)
+        assertFalse(health.manual)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=done ") })
+    }
+
+    @Test fun manualResumeIsRateLimitedToOncePerTenSeconds() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        begin(health.generation + 1)
+        conn++; lost() // half-working connection: a frame, then it drops before any output
+        now += 9_900
+        assertNull(flowing())
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") && "manual=1" in it })
+        conn++; lost()
+        now += 200 // 10.1 s after the first manual resume
+        assertEquals(Action.RESTART_CODEC, flowing())
+        assertEquals(2, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+    }
+
+    @Test fun staleConnectionIsStillIgnoredInManual() {
+        toManual()
+        assertNull(health.videoFlowing(conn)) // not newer than the last lost connection
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_stale ") })
+        assertTrue(logs.none { it.startsWith("I video_recover step=manual_resume ") })
     }
 
     @Test fun aStaleFirstFrameNoticeOfAReplacedConnectionIsDropped() {

@@ -1,7 +1,7 @@
 ---
 id: T-294
 title: Tablet — kare gelmeyen video bağlantılarında yeniden açma geri çekilmesi; "manual" durumda 10 sn'de bir kendiliğinden dönüş
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-291]
@@ -38,6 +38,27 @@ T-291 tasarım notu, "Tablet" bölümü (`backlog/tasks/T-291-rebuild-budget-wit
 
 ## Plan
 
+1. `SessionMachine`: `videoEmptyCloses` sayacı; `VideoClosed`'da bağlantı kare almadıysa artar, aldıysa sıfırlanır. Kare gözlemi `Tick(videoFrames)` sayacından: bağlantı açılırken sayaç kaydedilir, sonraki tick'te artmışsa ilk kare gelmiştir (sayaç hemen sıfırlanır). Bekleme `videoRetryDelayUs(n)`: n<=3 → 500 ms, sonra 1/2/4 sn (tavan 4 sn). `video_retry` logu yalnız basamak değişince.
+2. `VideoHealth.videoFlowing`: `manual` durumda 10 sn hız sınırıyla `RESTART_CODEC` (`step=manual_resume`); `MAX_RESUMES` ve bayat bağlantı kuralı aynı.
+3. Birim testleri: `VideoRetryBackoffTest` (yeni), `VideoHealthTest` (manual resume, hız sınırı, bayat).
+
 ## Handoff
 
+- Commit: `git log task/T-294-video-retry-backoff` (tek T-294 commit'i).
+- Dosyalar: `SessionMachine.kt`, `VideoHealth.kt`, `session/VideoRetryBackoffTest.kt` (yeni), `session/VideoLossGateTest.kt` (eşik 10 → 8 yeniden açma: geri çekilme 20 sn'de 9 açma bırakıyor), `video/VideoHealthTest.kt`.
+- check.sh: ALL OK.
+- Varsayımlar:
+  - "İlk 3 deneme 500 ms" = ardışık 1., 2., 3. boş kapanıştan sonraki bekleme 500 ms; 4. → 1 sn, 5. → 2 sn, 6.+ → 4 sn.
+  - Kare gözlemi 500 ms'lik Tick sayacından gelir; bağlantı son tick'ten sonra kare alıp hemen kapanırsa boş sayılır (en çok 500 ms hata, yalnız 3+ ardışık durumda etki eder).
+  - Sayaç oturumlar arasında korunur (host devre kesicisinin tekrar eden oturumlarına karşı); yalnız kare ile sıfırlanır.
+- **"Yeniden dene" sıfırlaması bağlanmadı:** `MainActivity` düğmesi `VideoHealth.retry()` çağırıyor, `SessionMachine`'e hiçbir olay gitmiyor. Sıfırlama için `MainActivity`/`SessionController` değişmeli (kapsam dışı). Etki: kullanıcı basınca tablet en çok 4 sn'lik basamakta kalır; ilk kare gelince zaten sıfırlanır.
+- Girdi kapısı, `RELEASE_ALL` ve protokol değişmedi.
+- Tablette bakılacaklar:
+  1. Host video bağlantısını kalıcı reddederken (T-293) log: `video_retry backoff_ms=1000 empty=4` -> 2000 -> 4000, sonra sabit.
+  2. `manual` katmanında host düzelince en çok 10 sn içinde `step=manual_resume`, katman kalkar, girdi ilk çözülmüş çıktıdan sonra açılır.
+  3. Normal yeniden bağlanma/göç sırasında `video_retry` logu görünmemeli.
+  4. Sağlıklı oturumda davranış değişmemeli.
+
 ## Open questions
+
+- "Yeniden dene" backoff sayacını sıfırlamıyor (yukarıya bakın). İstenirse `SessionMachine`'e bir olay ve `MainActivity` bağlantısı gerekir (ayrı kart).
