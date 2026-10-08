@@ -1,7 +1,7 @@
 ---
 id: T-295
 title: Tablet — T-286 `dec_wait poll` ve T-292 `aead_path legacy` yedek yollarını kaldır
-status: todo
+status: review
 phase: 6
 owner: android-client-dev
 depends_on: [T-286, T-292]
@@ -42,6 +42,17 @@ Varsayılanlar 2026-10-07'den beri cihazda: `dec_wait=event_in` (T-286) ve `aead
 
 ## Plan
 
+Remove DecoderWait (enum, parse, decoderWait var, inputWaitNs) and AeadPath (enum, Records.aeadPath, RecordOpener.path, legacy doFinal(byte[]) branch); input loop always parks with EVENT_INPUT_WAIT_NS + inputAbort; drop both DevKnobs specs/fields and MainActivity wiring; trim tests. IdleWait stays (used by outputWaitUs).
+
 ## Handoff
+
+- Commit: latest T-295 commit on `task/T-295-remove-fallbacks` (`git log -1`). `./scripts/check.sh`: ALL OK.
+- Files touched: MainActivity.kt, security/Records.kt, session/DevKnobs.kt, video/VideoRenderer.kt, video/VsyncIdle.kt; tests AeadDecryptBenchTest, RecordAeadPathTest, DevKnobsTest, DecoderWaitTest; this card. VsyncIdleTest untouched (IdleWait remains).
+- IdleWait is kept: DecoderWaits.outputWaitUs (output thread) still uses it. The 4 ms INPUT_WAIT_NS constant is removed from VideoRenderer; InputBufferSlot.take(4_000) untouched. RecordOpener keeps its test-hook `cipher` parameter; the `path` parameter is gone (single implementation).
+- Unknown dec_wait/aead_path extras: not in Specs, so DevKnobs' generic rule ignores them and they are absent from `knobs=`; covered by new test removedDecWaitAndAeadPathKnobsAreIgnoredAndNeverListed.
+- Pure removal, default behaviour unchanged. Tests whose only subject was poll/legacy were deleted.
+- Suggested KNOBS.md text for rows 23e/23f: "T-295 (2026-10-08): dec_wait and aead_path removed; behaviour is the event_in input park and direct-ByteBuffer AEAD always. Passing the extras is ignored."
+- Tablet check (orchestrator): normal Wi-Fi/USB session plays video with no decode_error / AUTH_FAILED lines; with `--ez dev true`, `ev=profile knobs=` shows no dec_wait/aead_path; passing `--es dec_wait poll --es aead_path legacy` does not crash; after >1 s without frames a new frame appears at once; detach/sleep stops promptly.
+- Not tested: anything on the device.
 
 ## Open questions

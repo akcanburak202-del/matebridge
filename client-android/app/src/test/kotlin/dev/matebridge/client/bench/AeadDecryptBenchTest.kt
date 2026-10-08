@@ -3,7 +3,6 @@ package dev.matebridge.client.bench
 import dev.matebridge.client.protocol.Bytes
 import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.VideoFrame
-import dev.matebridge.client.security.AeadPath
 import dev.matebridge.client.security.RecordDecoder
 import dev.matebridge.client.security.RecordOpener
 import dev.matebridge.client.security.RecordSealer
@@ -14,10 +13,10 @@ import org.junit.Test
 import java.lang.management.ManagementFactory
 
 /**
- * T-292: JVM allocation and throughput of the encrypted video receive path per [AeadPath], in the style of
+ * T-292: JVM allocation and throughput of the encrypted video receive path of the direct-ByteBuffer path, in the style of
  * `RecordReceiveAllocTest`. The JVM runs SunJCE, not Android's Conscrypt, so this proves the bounds that hold for any
  * provider (no extra full-size heap array per record, same plaintext) and prints the numbers; the Conscrypt-specific gain
- * (internal buffer copy, per-init SPI construction) is measured on the device with `--es aead_path`.
+ * (internal buffer copy, per-init SPI construction) is measured on the device.
  */
 class AeadDecryptBenchTest {
     private val key = ByteArray(32) { (it + 1).toByte() }
@@ -36,8 +35,8 @@ class AeadDecryptBenchTest {
         }
     }
 
-    /** [count] records of [size] bytes through a decoder on [path], after a warm-up record. */
-    private fun run(path: AeadPath, size: Int, count: Int): Result {
+    /** [count] records of [size] bytes through a decoder after a warm-up record. */
+    private fun run(size: Int, count: Int): Result {
         val bean = ManagementFactory.getThreadMXBean() as? com.sun.management.ThreadMXBean
         assumeTrue("allocation counter unsupported", bean != null && bean.isThreadAllocatedMemorySupported)
         bean!!.isThreadAllocatedMemoryEnabled = true
@@ -45,7 +44,7 @@ class AeadDecryptBenchTest {
         // Sizes vary a little around [size], as real frames do (Conscrypt reallocates its internal buffer on a size change).
         val frames = Array(count + 1) { frame(it.toLong(), size + (it % 5) * 37, it % 200 + 1) }
         val records = Array(count + 1) { sealer.sealFrame(Codec.encode(frames[it])) }
-        val dec = RecordDecoder(1 shl 20, RecordOpener(key, 0, path))
+        val dec = RecordDecoder(1 shl 20, RecordOpener(key))
         feedAll(dec, records[0])
         dec.next() // warm-up
         val tid = Thread.currentThread().id
@@ -60,31 +59,19 @@ class AeadDecryptBenchTest {
         val perRecord = (bean.getThreadAllocatedBytes(tid) - before) / count
         assertEquals(frames[count], kept)
         val mbPerS = size.toDouble() * count / (ns / 1e9) / 1e6
-        println("aead ${path.id}: ${size / 1000} KB records, alloc/record=$perRecord B, ${"%.0f".format(mbPerS)} MB/s")
+        println("aead direct: ${size / 1000} KB records, alloc/record=$perRecord B, ${"%.0f".format(mbPerS)} MB/s")
         return Result(perRecord, mbPerS)
     }
 
-    @Test fun everyPathAllocatesAboutOneFullSizeArrayPerRecord() {
+    @Test fun allocatesAboutOneFullSizeArrayPerRecord() {
         val size = 100_000
-        for (path in AeadPath.values()) {
-            val r = run(path, size, 400)
-            assertTrue("${path.id}: allocated ${r.allocPerRecord} B per ~$size B record", r.allocPerRecord < size + size / 2)
-        }
+        val r = run(size, 400)
+        assertTrue("allocated ${r.allocPerRecord} B per ~$size B record", r.allocPerRecord < size + size / 2)
     }
 
-    /** SunJCE copies direct buffers into heap arrays itself, so the JVM bound is loose; Conscrypt is measured on the device. */
-    @Test fun directDoesNotAllocateMuchMoreThanLegacy() {
-        val size = 100_000
-        val legacy = run(AeadPath.LEGACY, size, 400).allocPerRecord
-        val direct = run(AeadPath.DIRECT, size, 400).allocPerRecord
-        assertTrue("direct $direct B vs legacy $legacy B", direct <= legacy + legacy / 20 + 8192)
-    }
-
-    /** Small control-sized records (input events, pings) must not regress either: the per-record SPI path is the hot one. */
-    @Test fun smallRecordsStayCheapOnAllPaths() {
-        for (path in AeadPath.values()) {
-            val r = run(path, 1_000, 2000)
-            assertTrue("${path.id}: ${r.allocPerRecord} B per 1 KB record", r.allocPerRecord < 8_000)
-        }
+    /** Small control-sized records (input events, pings) must stay cheap: the per-record SPI path is the hot one. */
+    @Test fun smallRecordsStayCheap() {
+        val r = run(1_000, 2000)
+        assertTrue("${r.allocPerRecord} B per 1 KB record", r.allocPerRecord < 8_000)
     }
 }

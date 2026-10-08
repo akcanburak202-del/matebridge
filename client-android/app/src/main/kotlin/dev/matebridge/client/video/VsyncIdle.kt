@@ -156,47 +156,19 @@ object IdleWait {
 }
 
 /**
- * T-286 (dev knob `dec_wait`): how the decoder's input thread waits while nothing is happening. The output thread always
- * keeps the fixed poll ([IdleWait] after 300 ms without an output): the long idle `dequeueOutputBuffer` wait of the
- * dropped `event` arm added ~1.5 ms to `cap_dec` on the device (A/B 2026-10-07) and is gone.
- *
- * [EVENT_IN] (default, adopted after the device A/B: ~958 -> ~690 decoder wake-ups/s and ~34.3% -> ~31% client CPU at
- * 10 fps, `cap_dec` within noise) = the input thread parks until a frame, a retire or an output error (see
- * [DecoderWaits]). [POLL] = the pre-T-286 fixed 4 ms input timeout ([IdleWait] after 300 ms without a frame); kept
- * selectable as a fallback for one cycle and will be removed later.
- */
-enum class DecoderWait(val id: String, val parksInput: Boolean) {
-    EVENT_IN("event_in", parksInput = true),
-
-    /** Fallback for one cycle only; will be removed (T-286 adoption). */
-    POLL("poll", parksInput = false);
-
-    companion object {
-        val IDS: Set<String> = values().map { it.id }.toSet()
-        val DEFAULT: DecoderWait = EVENT_IN
-
-        /** Absent or unknown (including the removed `event`) = [DEFAULT]. */
-        fun parse(raw: String?): DecoderWait =
-            values().firstOrNull { it.id == raw?.trim()?.lowercase(java.util.Locale.ROOT) } ?: DEFAULT
-    }
-}
-
-/**
  * T-286: the wait policy of the two decoder threads. Pure; thread-safe (no state).
  *
  * Input thread ([inputWaitNs], `FrameQueue.awaitNext`): a frame arriving ([FrameQueue.offer] unparks), a retire/revoke
  * and an output-thread error ([FrameQueue.nudge], checked through `abort`) all wake it at once, so in
- * [DecoderWait.EVENT_IN] the timeout is only a safety net against a wake-up nobody thought of ([EVENT_INPUT_WAIT_NS]).
+ * the timeout is only a safety net against a wake-up nobody thought of ([EVENT_INPUT_WAIT_NS]). (The fixed 4 ms poll and
+ * the `dec_wait` knob were removed in T-295; the output thread always keeps its short poll.)
  *
  * Output thread ([outputWaitUs], `dequeueOutputBuffer`): an output ends the wait at once, but nothing can wake a
  * blocked `dequeueOutputBuffer` for a stop, so a short timeout stays and bounds the stop latency.
  */
 object DecoderWaits {
-    /** Safety net of the input thread's park in [DecoderWait.EVENT_IN]. */
+    /** Safety net of the input thread's park. */
     const val EVENT_INPUT_WAIT_NS = 250_000_000L
-
-    fun inputWaitNs(mode: DecoderWait, sinceLastFrameNs: Long, pollNs: Long): Long =
-        if (mode.parksInput) EVENT_INPUT_WAIT_NS else IdleWait.waitNs(sinceLastFrameNs, pollNs)
 
     /**
      * Longest `dequeueOutputBuffer` wait, in microseconds: [pollUs] ([IdleWait] after 300 ms without an output), shortened
