@@ -1,5 +1,6 @@
 import com.android.build.api.variant.BuildConfigField
 import java.io.ByteArrayOutputStream
+import java.time.Duration
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -17,7 +18,7 @@ plugins {
 abstract class BuildIdentity @Inject constructor(private val exec: ExecOperations) :
     ValueSource<String, BuildIdentity.Params> {
     interface Params : ValueSourceParameters {
-        /** "sha" (short SHA, "-dirty" suffix), "count" (commits up to HEAD) or "time" (UTC build time, minutes). */
+        /** "sha" (short SHA, "-dirty" suffix), "count" (commits up to HEAD), "minutes" (build time, minutes since 2026-01-01 UTC) or "time" (UTC build time, minutes). */
         val what: Property<String>
         val dir: DirectoryProperty
     }
@@ -28,6 +29,10 @@ abstract class BuildIdentity @Inject constructor(private val exec: ExecOperation
             if (status.isNullOrEmpty()) sha else "$sha-dirty"
         } ?: "unknown"
         "count" -> git("rev-list", "--count", "HEAD")?.toIntOrNull()?.takeIf { it > 0 }?.toString() ?: "1"
+        // T-301: monotonic versionCode = minutes since 2026-01-01 UTC.
+        "minutes" -> Duration.between(
+            ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC), ZonedDateTime.now(ZoneOffset.UTC),
+        ).toMinutes().toString()
         else -> ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm'Z'"))
     }
 
@@ -51,6 +56,12 @@ fun buildIdentity(what: String): Provider<String> = providers.of(BuildIdentity::
     parameters.dir.set(layout.projectDirectory)
 }
 
+// T-301: one provider per value, shared by every variant. Gradle memoises a ValueSource per build, so debug and daily
+// from one invocation get the same versionCode even across a minute boundary.
+val sharedMinutes = buildIdentity("minutes")
+val sharedSha = buildIdentity("sha")
+val sharedTime = buildIdentity("time")
+
 android {
     namespace = "dev.matebridge.client"
     compileSdk = 37
@@ -59,9 +70,9 @@ android {
 
     defaultConfig {
         applicationId = "dev.matebridge.client"
-        minSdk = 29
+        minSdk = 31
         targetSdk = 31
-        // T-146: the real versionCode is the commit count, set per variant below; 1 is the no-git fallback.
+        // T-146/T-301: the real versionCode is build-time minutes, set per variant below; 1 is the no-git fallback.
         versionCode = 1
         versionName = "0.1"
         ndk {
@@ -79,6 +90,26 @@ android {
         buildConfig = true
     }
 
+    lint {
+        // lintVital runs for every non-debuggable build and fails on the deliberate targetSdk 31 (ExpiredTargetSdkVersion,
+        // a Play Store rule; this app is sideloaded). Debug builds never ran it; the daily build keeps parity.
+        checkReleaseBuilds = false
+    }
+
+    buildTypes {
+        // T-301 / decision 0037: the everyday build. Not debuggable (ART optimises, native code is Release), signed with
+        // the debug key so it updates the installed debug app in place (pairing keys survive), profileable via the
+        // manifest. R8 stays off. applicationId and versionCode rules are shared with debug.
+        create("daily") {
+            initWith(getByName("debug"))
+            isDebuggable = false
+            isJniDebuggable = false
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "debug"
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -89,15 +120,21 @@ android {
 
 androidComponents {
     onVariants { variant ->
-        val versionCode = buildIdentity("count").map { it.toInt() }
-        variant.outputs.forEach { it.versionCode.set(versionCode) }
+        // T-301: versionCode is build-time minutes, not the commit count: a non-debuggable app cannot be downgraded, and
+        // worktree branches have fewer commits than main. The commit stays in versionName, BuildConfig.GIT_SHA and app_start.
+        val versionCode = sharedMinutes.map { it.toInt() }
+        val versionName = sharedSha.map { "0.1-$it" }
+        variant.outputs.forEach {
+            it.versionCode.set(versionCode)
+            it.versionName.set(versionName)
+        }
         variant.buildConfigFields?.put(
             "GIT_SHA",
-            buildIdentity("sha").map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },
+            sharedSha.map { BuildConfigField("String", "\"$it\"", "Short commit SHA, -dirty suffix, or unknown (T-146)") },
         )
         variant.buildConfigFields?.put(
             "BUILD_TIME_UTC",
-            buildIdentity("time").map { BuildConfigField("String", "\"$it\"", "UTC build time, minute precision (T-146)") },
+            sharedTime.map { BuildConfigField("String", "\"$it\"", "UTC build time, minute precision (T-146)") },
         )
     }
 }
