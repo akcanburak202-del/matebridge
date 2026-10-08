@@ -67,6 +67,8 @@ public final class VideoPipeline: @unchecked Sendable {
     private var state = State.idle
     private var display: VirtualDisplay?
     private var capture: ScreenCapture?
+    /// T-323: the inject-to-frame session token, taken once when this pipeline is created and kept across capture retries.
+    private let probeGeneration = InjectToFrameProbe.shared.generation
     private var encoder: HEVCEncoder?
     private var failureNotified = false
     private let tap: (@Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void)?
@@ -177,7 +179,7 @@ public final class VideoPipeline: @unchecked Sendable {
                 throw HDRSetupError(reason: .displayRejected,
                                     detail: display.transferOutcome.fallback?.rawValue ?? "applied_0")
             }
-            let cap = ScreenCapture(meter: meter, handler: { [weak encoder] pb, pts, us, displayUs in
+            let cap = ScreenCapture(meter: meter, probeGeneration: probeGeneration, handler: { [weak encoder] pb, pts, us, displayUs in
                 encoder?.encode(pb, presentationTime: pts, captureTimeUs: us, displayTimeUs: displayUs)
             }, onStop: { [weak self] error in self?.fail(error) })
             set { $0.capture = cap }
