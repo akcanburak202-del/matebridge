@@ -542,16 +542,8 @@ public final class StreamCoordinator: @unchecked Sendable {
             return
         }
         if pipeline == nil {  // earlier creation failed or the pipeline died: try again, unless the breaker is open
-            let breakerBefore = retryPolicy.breaker
-            let admission = retryPolicy.admit(nowUs: HostClock.nowUs())
-            logBreaker(from: breakerBefore)
-            if case .refuse(let remainingUs) = admission {
-                // T-293: no display, capture or encoder; the video connection closes at once, the tablet backs off.
-                let n = retryPolicy.refusals
-                if PipelineRetryPolicy.logsRefusal(n) {
-                    log(.warning, "pipeline_rebuild_refused", "remaining_ms=\(remainingUs / 1_000) "
-                        + "level=\(retryPolicy.breaker.level) n=\(n)")
-                }
+            // T-293: no display, capture or encoder while the breaker is open; the video connection closes at once.
+            guard admitBuild() else {
                 link.cancel()
                 return
             }
@@ -754,6 +746,13 @@ public final class StreamCoordinator: @unchecked Sendable {
                 await destroyPipeline()
                 dropParked()
             case .create(let s):
+                // T-293 review: a session start (the tablet renews its session every few seconds) must not build
+                // while the breaker is open. Nothing to cancel here; the lease forgets the display so that the
+                // video attach path (`onVideoAttached`) can start it again once `admit` allows.
+                guard admitBuild() else {
+                    lease.displayLost()
+                    break
+                }
                 await createPipeline(settings: s)
             case .reuse:
                 if parked != nil, let s = session?.settings {
@@ -915,6 +914,22 @@ public final class StreamCoordinator: @unchecked Sendable {
             _ = retryPolicy.failed(kind: .start, hdr10: false, nowUs: HostClock.nowUs())
             logBreaker(from: breakerBefore)
         }
+    }
+
+    /// T-293: asks the breaker before a pipeline is built for a session start or a video attach. false = refused
+    /// (logged); the caller builds nothing. A probe is consumed by the first `admit` that returns true, later builds
+    /// of the same pipeline are not gated again (the pipeline exists).
+    private func admitBuild() -> Bool {
+        let before = retryPolicy.breaker
+        let admission = retryPolicy.admit(nowUs: HostClock.nowUs())
+        logBreaker(from: before)
+        guard case .refuse(let remainingUs) = admission else { return true }
+        let n = retryPolicy.refusals
+        if PipelineRetryPolicy.logsRefusal(n) {
+            log(.warning, "pipeline_rebuild_refused", "remaining_ms=\(remainingUs / 1_000) "
+                + "level=\(retryPolicy.breaker.level) n=\(n)")
+        }
+        return false
     }
 
     /// T-293: `ev=pipeline_breaker` whenever the breaker's state or ladder step changed since `before`.

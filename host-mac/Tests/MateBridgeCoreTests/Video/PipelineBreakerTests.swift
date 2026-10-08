@@ -211,4 +211,32 @@ final class PipelineBreakerTests: XCTestCase {
         XCTAssertEqual(p.failed(kind: .encoder, hdr10: true, nowUs: 14 * s), .giveUp)
         XCTAssertEqual(p.breaker.level, 2)
     }
+
+    /// T-293 review (Codex P1): the coordinator gates every `.create` of `perform` (session start) and the video
+    /// attach through `admit`. Mirrors that sequence on the pure types.
+    func testOpenBreakerThenSameDeviceSessionRenewalBuildsNothing() {
+        var p = PipelineRetryPolicy()
+        var lease = DisplayLease()
+        let settings = VideoSettings.tabletDefault
+        p.sessionStarted(device: device(1))
+        XCTAssertEqual(lease.sessionStarted(device: device(1), settings: settings), [.create(settings)])
+        openBreaker(&p)  // the pipeline died repeatedly; opened at 3 s, until 13 s
+        lease.displayLost()
+        // The tablet renews its session at +6 s: same device, lease idle -> `.create`, but the gate refuses.
+        p.sessionStarted(device: device(1))
+        XCTAssertEqual(lease.sessionStarted(device: device(1), settings: settings), [.create(settings)])
+        XCTAssertEqual(p.admit(nowUs: 9 * s), .refuse(remainingUs: 4 * s))
+        lease.displayLost()  // what the coordinator does on refuse
+        // And the next renewal again, then the video attach: still refused.
+        p.sessionStarted(device: device(1))
+        XCTAssertEqual(lease.sessionStarted(device: device(1), settings: settings), [.create(settings)])
+        XCTAssertEqual(p.admit(nowUs: 11 * s), .refuse(remainingUs: 2 * s))
+        lease.displayLost()
+        // Wait over: the first gate is the probe; it builds once, a later attach sees the pipeline (no second admit).
+        XCTAssertEqual(p.admit(nowUs: 14 * s), .build)
+        XCTAssertEqual(p.breaker.state, .probe)
+        // A prefs change resets and admits.
+        p.reset()
+        XCTAssertEqual(p.admit(nowUs: 15 * s), .build)
+    }
 }
