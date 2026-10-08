@@ -74,6 +74,11 @@ data class DevKnobs(
     val pacerTuning: PacerTuning = PacerTuning.STANDARD,
     /** `--ez catch_up false` (T-252): the pre-T-252 queue overflow (flush + keyframe request) for A/B. Default on. */
     val catchUp: Boolean = true,
+    /**
+     * `--es dec_out_park off|on` (T-312, CB2): the decoder output thread parks while the codec holds nothing instead of
+     * polling every 5 ms. A/B knob; default off (off = the pre-T-312 poll). Applies to codecs started afterwards.
+     */
+    val decOutPark: Boolean = false,
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
     /** Keep: `--ez stats_1s true` (T-141). */
@@ -126,6 +131,7 @@ data class DevKnobs(
             Spec("pace_dcap_half", Kind.INT, debugOnly = true),
             Spec("pace_feedback", Kind.BOOL, debugOnly = true),
             Spec("catch_up", Kind.BOOL, debugOnly = true),
+            Spec("dec_out_park", Kind.STRING, debugOnly = true, ids = setOf("off", "on")),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
@@ -161,6 +167,7 @@ data class DevKnobs(
                     if (x.has("pace_dcap_half")) x.int("pace_dcap_half", 0) else null, x.bool("pace_feedback", true),
                 ),
                 catchUp = x.bool("catch_up", true),
+                decOutPark = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) == "on",
                 cursorPredict = x.bool("cursor_predict", true),
                 stats1s = x.bool("stats_1s", false),
                 paceTrace = x.bool("pace_trace", false),

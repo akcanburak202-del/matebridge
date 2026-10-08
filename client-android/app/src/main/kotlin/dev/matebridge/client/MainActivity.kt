@@ -1465,6 +1465,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ).also {
             it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
             it.catchUp = devKnobs.catchUp // T-252 dev knob (`catch_up`)
+            it.outPark = devKnobs.decOutPark // T-312 dev knob (`dec_out_park`; `--ez dev true`, works on the non-debuggable build too)
             pacerKnobsLogged = false
             it.paceTrace = paceTrace
             it.paceTraceFile = java.io.File(cacheDir, "pace_trace.csv")

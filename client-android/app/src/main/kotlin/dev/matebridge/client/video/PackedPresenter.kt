@@ -23,6 +23,9 @@ internal class RetiredImages {
 
     fun retire(image: Image, nowNs: Long, lastDraw: Long) { q.add(Entry(image, nowNs, lastDraw)) }
 
+    /** No image waits for its draw's fence (the GL thread need not poll). */
+    fun isEmpty(): Boolean = q.isEmpty()
+
     /** Closes images whose draw completed ([completedDraws]); [force] closes everything (only after a glFinish). */
     fun closeDue(nowNs: Long, completedDraws: Long, force: Boolean = false) {
         while (true) {
@@ -75,7 +78,6 @@ class PackedPresenter(
         const val MAX_CONSECUTIVE_ERRORS = 30
         const val EXPECT_MAX = 64
         private const val EXPECT_TRIM = 32
-        private const val TICK_MS = 25L
 
         /** The native present context is a single global: never two presenters at once ([awaitPrevious]). */
         @Volatile private var previous: PackedPresenter? = null
@@ -127,6 +129,8 @@ class PackedPresenter(
     private val pairing = AuxPairing<Image>(AUX_RING) { retired.retire(it, clockNs(), submitted) }
     /** The last drawn main image while it can still be upgraded ([LateUpgrade.holdsImage]); null otherwise. GL thread only. */
     private var held: Arrived? = null
+    /** Clock of the last submitted draw; null = none yet (GL thread only). */
+    private var lastDrawNs: Long? = null
     private val upgrade = LateUpgrade()
     private val firstShown = FirstShown()
     private val drawWatch = DrawWatch()
@@ -302,6 +306,7 @@ class PackedPresenter(
         hwAux?.close()
         if (rc == 0 || rc == -5) { // a fence was created for this draw
             submitted++
+            lastDrawNs = clockNs()
             drawWatch.onSubmitted(submitted, clockNs())
         }
         if (rc != 0) {
@@ -333,11 +338,16 @@ class PackedPresenter(
     }
 
     private fun takeMain(): Arrived? = synchronized(lock) {
-        if (mainSlot == null && auxArrivals.isEmpty() && !stopFlag) lock.wait(TICK_MS)
+        if (mainSlot == null && auxArrivals.isEmpty() && !stopFlag) lock.wait(GlWait.waitMs(glPending()))
         val m = mainSlot
         mainSlot = null
         m
     }
+
+    /** T-312: the GL thread's own timers (fence polling, held image, timestamps) are due; else it waits for a notification. */
+    private fun glPending(): Boolean = GlWait.pending(
+        held != null, !retired.isEmpty(), drawWatch.hasOutstanding(), lastDrawNs?.let { clockNs() - it },
+    )
 
     private fun absorbAux() {
         while (true) {
