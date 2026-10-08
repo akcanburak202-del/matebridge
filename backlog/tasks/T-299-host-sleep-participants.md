@@ -1,7 +1,7 @@
 ---
 id: T-299
 title: Host — uyku katılımcıları hiç kayıt olmuyor; girdi ve ses uyku anında oturum kuyruğundan bağımsız bırakılsın (T-132 eksiği)
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -39,6 +39,15 @@ T-132 Handoff'u "InputController `start()`'ta `input`, SystemAudioTap `init`'te 
 
 ## Plan
 
+InputController start() registers "input" (releaseOnQueue(.hostSleep) on its own queue, then done); SystemAudioTap init registers "audio" (desired=nil, teardown on tap queue, done). Both unregister in deinit. SessionServer and HostSleep.swift were already correct (snapshot, OnceFlag, logFields); unchanged.
+
 ## Handoff
+
+- Commit: 703dfbb2 on task/T-299-sleep-participants (card update in a following commit).
+- Files: Input/InputController.swift (register in start, unregister in deinit, releaseOnQueue extracted from releaseInput), Audio/SystemAudioTap.swift (register in init, deinit unregister), this card.
+- host_sleep_ack already prints HostSleepProgress.logFields (input=done audio=done); LOGGING.md unchanged.
+- Core tests (HostSleepTests) already cover progress order and repeat/unknown idempotence; no new Core logic, so no new tests. check.sh: ALL OK.
+- Assumptions: the audio participant clears desired so no rebuild races the sleep; the streamer's later stop is a no-op. Input release is idempotent with the session path. A wedged queue means done is never called and the budget bounds it (field stays pending). The "audio" entry stays registered even with no stream running (cheap no-op).
+- Not tested: real sleep. On device: pmset sleepnow, expect host_sleep_ack ... input=done audio=done complete and input_release; no stuck input after wake.
 
 ## Open questions
