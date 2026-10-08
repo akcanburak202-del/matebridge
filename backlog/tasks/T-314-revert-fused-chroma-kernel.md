@@ -1,7 +1,7 @@
 ---
 id: T-314
 title: Host — T-311 birleşik sharp_nearest kernel'i cihazda daha yavaş; iki geçişli kernel'e geri dön (HA1 iz aşaması ve A8 ortak kurulum kalır)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-311]
