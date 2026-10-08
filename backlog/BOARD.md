@@ -30,6 +30,9 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
+| [T-322](tasks/T-322-client-input-send-age-unbuffered.md) | Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3) | 7 | android-client-dev | [] |
+| [T-323](tasks/T-323-host-inject-to-frame.md) | Host — "girdi enjekte edildi → ilk değişen kare" süresi (EN2/HA3), SCK dirty rect ile; yalnız log | 7 | mac-host-dev | [] |
+| [T-324](tasks/T-324-host-usb-watcher-idle.md) | Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap | 7 | mac-host-dev | [] |
 
 ## done
 
