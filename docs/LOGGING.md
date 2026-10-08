@@ -34,7 +34,7 @@ Her süreç başlangıcında tam olarak bir satır. Hangi build'in çalıştığ
 - Tablet (`MB/session`): `ev=app_start version=<versionName> sha=<kısa SHA>[-dirty] built=<UTC, dakika> sdk=<API> os_build=<Build.DISPLAY>`. Süreç başına bir kez; aktivite yeniden yaratılınca tekrarlanmaz.
 - Değer içindeki boşluk (Mac'te `=` de) `_` olur, böylece her alan tek `key=value` kalır; ör. `os=Version_27.0.1_(Build_26A434)`.
 - Bilinmeyen değer `unknown` (`swift run`, git olmadan derleme). Seri numarası, cihaz kimliği ya da ad yazılmaz.
-- Tablette `versionCode` commit sayısıdır; daha az commit'li bir dalın APK'sı `adb install -r -d` ister (`scripts/install-apk.sh` bunu yapar). Eşleşme anahtarları silineceği için uygulama asla kaldırılmaz.
+- Tablette `versionCode` T-301'den beri derleme dakikasıdır (2026-01-01 UTC'den beri), commit sayısı değil; commit `versionName` (`0.1-<sha>`) ve `app_start sha=` alanındadır. `scripts/install-apk.sh` varsayılan olarak debug olmayan `daily` APK'yı kurar (`--debug` debug APK), `adb install -r -d` ile. Debug olmayan uygulamada sürüm düşürme yapılamaz: eski bir APK `INSTALL_FAILED_VERSION_DOWNGRADE` alır, yeniden derlemek gerekir. Eşleşme anahtarları silineceği için uygulama asla kaldırılmaz.
 
 ## Tek kopya (Mac, `session`, T-224)
 
@@ -104,7 +104,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
 - `render ev=present ... phase_lock=0|1 rephase=<n>`: `phase_lock=1` faz kilidi açık. T-208'den beri içerik aralığı panel periyodunun tam katı olduğunda da (n ≤ 2; 120 Hz panelde 60 fps) kilitli; kilitliyken her kare n vsync tutulur. Pace trace'te bu kareler `path=locked`, `k=2`. Kilitli slotunu kaçırıp bir sonraki vsync'te gösterilen kare `slot_ns > lock_slot_ns` olur (düşürülmez). Tutma dağılımı: `tools/pacing/sim.py TRACE --holds`.
   - T-220: içerik aralığı ölçülen yakalamalardan da çıkarılır. Hızlı panelde (> 90 Hz) son 16 yakalama aralığının en az 12'si iki panel periyoduna (±1 ms) eşitse aralık 2 periyot sayılır; 8'in altına düşünce çıkarım kalkar. Örnek: Oyun 120 akışında 60 fps oyun, 120 Hz panel. Bu durumda da `phase_lock=1` ve 2:1 kilit kurulur. Aynı ızgarada n değişince (1 ↔ 2) kilit yeniden kurulur.
 - `render ev=present ... fb_level= d_jitter_us= d_extra_us= d_cap_us=` (T-251): uyarlamalı pacer'ın geri besleme seviyesi ve D'nin bileşenleri (jitter p99, ek pay, tavan); pacer yoksa `-`. `pace_trace.csv` son sütunu `level`. Geliştirici düğmeleri (`--ez dev true` ile): `--ei pace_dcap_half N` (D tavanı N yarım periyot, 1–8), `--ez pace_feedback false` (seviye 0'da sabit); etkin düğmeler her renderer'ın ilk `render ev=stats` satırında `pacer_knobs=<-|pace_dcap_half:N;pace_feedback:0>`.
-- `skip_pct` (T-220, kaynağı T-225; `render ev=stats` ve katman): **tek sunum ölçütü, her zamanlayıcıda aynı hesap** (tampon 0, sabit tampon, uyarlamalı). `AdaptivePacer` geri beslemesi (`level`) bunu kullanır.
+- `skip_pct` (T-220, kaynağı T-225; `render ev=stats` ve katman): **tek sunum ölçütü** (T-303'ten beri tek zamanlayıcı uyarlamalı; tampon 0 ve sabit tampon kalktı). `AdaptivePacer` geri beslemesi (`level`) bunu kullanır.
   - **Kaynak (T-225): MediaCodec frame-rendered geri çağrılarının zaman damgaları.** Gösterilen kare = geri çağrısı gelen kare; zamanı geri çağrının kendi `nanoTime`'ıdır. Damga bırakmadan ~31 ms sonra gelir (istenen render zamanı değil), ama yalnız aralıklar kullanıldığı için sabit fark önemsizdir.
   - Tutma, bir sonraki gösterilen karenin damgasına olan uzaklıktır (vsync cinsinden, `round(fark / panel periyodu)`).
   - Bu tutma içerik kadansı n ile karşılaştırılır. n, yakalama aralığından gelir; aralıkların ±1 ms içinde düzenli olması gerekir.
@@ -122,7 +122,7 @@ Yalnız ölçüm; davranışı değiştirmez. Etkin oturumun kontrol bağlantıs
   - `hold_long_pct`: uzun tutulanlar (`skip_pct` ile aynı tanım).
   - `hold_src`: sayıların kaynağı: `cb` geri çağrı damgaları, `latch` bırakma-anı modeli (geri çağrı yok).
   - `latch_skip_pct`: aynı pencerede bırakma-anı modelinin uzun yüzdesi (tanı).
-  - Kalan aralıklar tam tutulmuştur. Tampon 0 ile uyarlamalı zamanlayıcının karşılaştırması bu alanlarla yapılır.
+  - Kalan aralıklar tam tutulmuştur.
 - Pace trace (`--ez pace_trace true`) son iki sütunu `cb_ns` ve `cb_period_ns` (T-225): karenin frame-rendered geri çağrısının `nanoTime`'ı (0 = geri çağrı yok, `9223372036854775807` = codec kullanılabilir zaman vermedi; istemci diziyi keser) ve ölçütün o geri çağrıyı yargılarken kullandığı panel periyodu (geri çağrı teslim anındaki). `tools/pacing/sim.py TRACE --holds` varsa onları kullanır (eski izlerde `latch_period_ns`; `--latch` eski modeli zorlar).
 - Host'a giden STATS mesajı ve katman 1 s'de bir kalır. Diğer saniyelik satırlar (`session ev=net`, `audio ev=stats`, `diag ev=stall_stats`) değişmedi.
 
@@ -252,7 +252,7 @@ Yalnız ölçüm, T-142'den beri isteğe bağlı: yalnız `--ez stall_diag true`
   - Bölüm başına en çok 3 `resume` olur. `resume` merdiveni ertelemez.
   - `step=resume_skipped resumes=N manual=0|1` (I): bütçe doldu ya da merdiven el ile aşamasında.
   - `step=resume_stale conn=N lost_conn=N` (I): kaybedilen bağlantıdan yeni olmayan bir bağlantının geç gelen bildirimi düşürüldü.
-- `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--ez dev true --es decoder_fault …`), görüntü N sn `healthy` kaldıktan sonra bir kez.
+- `ev=decoder_fault mode=create|configure|dequeue|silent armed_s=N` (W): yalnız debug hata enjeksiyonu (`--ez dev true --es decoder_fault …`; `FLAG_DEBUGGABLE` ister, yani yalnız debug APK, T-301'den beri daily'de etkisiz), görüntü N sn `healthy` kaldıktan sonra bir kez.
 
 ## Encoder gönderim sırası (Mac, `encoder`, T-162)
 
@@ -269,7 +269,7 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 - `ev=display_recreate reason=refresh_change refresh_hz=<eski>-><yeni>` / `reason=mode_change mode=<eski>-><yeni> refresh_hz=<eski>-><yeni>` / `reason=transfer_change transfer=<eski>-><yeni>` (T-237, SDR ↔ HDR10) / `reason=offline`: yenileme hızı, ekran kipi (piksel boyutu, HiDPI; doğal ekran ↔ oyun ekranı, T-214) ya da aktarım işlevi değişti ya da ekran bekletilirken çevrimdışı oldu (`CGDisplayIsOnline`). Eski ekran bırakılır, son kaldırmadan 0,7 sn sonra yenisi kurulur (`display_created`). T-214'ten beri bu bekleme her yeni ekran için geçerlidir (`display_teardown` ve başarısız kurulum sonrası da). Canlı mod değişiminde de (`stream_reconfigure`) aynı satırlar çıkar.
 - `ev=display_teardown reason=keep_expired|device_changed|size_changed|shutdown`: ekran (bekletilen ya da çalışan) kaldırıldı. `keep_expired` süre doldu, `device_changed` başka tablet, `size_changed` başka doğal (HELLO) ekran boyutu (oyun ekranına geçiş değil), `shutdown` uygulama kapanıyor.
 - `ev=display_created width=… height=… encoded=… mode=<w>x<h>@2x|@1x`: yeni bir sanal ekran kuruldu. Ekran korunarak yeniden kurulan işlem hattı (mod değişimi, bekletmeden dönüş) artık `pipeline_started display=reused` yazar.
-- `ev=vd_transfer requested=0|1 applied=0|1 [reason=selector_missing|mode_nil|settings_rejected|invalid_value] edr_max=<x.xx|na> edr_potential=<x.xx|na> primaries=default|p3 [primaries_fallback=selector_missing] [primaries_reason=invalid_value] wide_gamut=0|1|na` (T-232; `primaries`/`wide_gamut` T-281): her `display_created`'tan sonra (doğal ya da oyun ekranı, karar 0029; korunan ekranda yazılmaz). `requested` geliştirici anahtarı `MATEBRIDGE_VD_TRANSFER` (docs/KNOBS.md #43) ya da HDR10 akışta 1 (T-237; HDR10'da `applied=0` olursa ekran kaldırılır ve `hdr_fallback reason=display_rejected` gelir), `applied` ekran kipinin gerçekten kurulduğu aktarım işlevi (0 = eski SDR kipi). `reason` istenen tf uygulanamadığında eski kipe dönüşün sebebi (`selector_missing` = `transferFunction:` seçicisi yok, `mode_nil` = kip nesnesi oluşmadı, `settings_rejected` = `applySettings:` reddetti) ya da `invalid_value` (anahtar 0/1 dışı, 0 sayıldı); bu durumlarda seviye `W`, aksi halde `I`. `edr_max` = `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (o anki EDR başlığı), `edr_potential` = `maximumPotentialExtendedDynamicRangeColorComponentValue` (1,00 = SDR, başlık yok); AppKit ekranı listelemiyorsa `na`. Ana iş parçacığında ayrı bir görevde okunur, işlem hattının açılışını bekletmez. **T-281:** `primaries` sanal ekran descriptor'ına verilen primerler (`p3` = Display P3, HDR ekranının varsayılanı; `default` = verilmedi, SDR ya da `MATEBRIDGE_VD_PRIMARIES=default`); `primaries_fallback=selector_missing` setter yok, ekran primersiz kuruldu (`W`); `primaries_reason=invalid_value` anahtar geçersiz, `p3` sayıldı (`W`). `wide_gamut` = `CGColorSpaceIsWideGamutRGB(CGDisplayCopyColorSpace(id))`, kurulumdan ~0,5 s sonra bir kez (Safari/YouTube HDR'nin şartı, `MTShouldPlayHDRVideo`); ekran çevrimdışıysa `na`. Ekranlar'da elle atanmış renk profili bu değeri etkiler.
+- `ev=vd_transfer requested=0|1 applied=0|1 [reason=selector_missing|mode_nil|settings_rejected] edr_max=<x.xx|na> edr_potential=<x.xx|na> primaries=default|p3 [primaries_fallback=selector_missing] [primaries_reason=invalid_value] wide_gamut=0|1|na` (T-232; `primaries`/`wide_gamut` T-281): her `display_created`'tan sonra (doğal ya da oyun ekranı, karar 0029; korunan ekranda yazılmaz). `requested` yalnız akıştan gelir: HDR10 akışta 1, SDR'de 0 (T-237; `MATEBRIDGE_VD_TRANSFER` T-304'te kaldırıldı). HDR10'da `applied=0` olursa ekran kaldırılır ve `hdr_fallback reason=display_rejected` gelir. `applied` ekran kipinin gerçekten kurulduğu aktarım işlevi (0 = eski SDR kipi). `reason` istenen tf uygulanamadığında eski kipe dönüşün sebebi: `selector_missing` = `transferFunction:` seçicisi yok, `mode_nil` = kip nesnesi oluşmadı, `settings_rejected` = `applySettings:` reddetti. Bu durumlarda seviye `W`, aksi halde `I`. `edr_max` = `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (o anki EDR başlığı), `edr_potential` = `maximumPotentialExtendedDynamicRangeColorComponentValue` (1,00 = SDR, başlık yok); AppKit ekranı listelemiyorsa `na`. Ana iş parçacığında ayrı bir görevde okunur, işlem hattının açılışını bekletmez. **T-281:** `primaries` sanal ekran descriptor'ına verilen primerler (`p3` = Display P3, HDR ekranının varsayılanı; `default` = verilmedi, SDR ya da `MATEBRIDGE_VD_PRIMARIES=default`); `primaries_fallback=selector_missing` setter yok, ekran primersiz kuruldu (`W`); `primaries_reason=invalid_value` anahtar geçersiz, `p3` sayıldı (`W`). `wide_gamut` = `CGColorSpaceIsWideGamutRGB(CGDisplayCopyColorSpace(id))`, kurulumdan ~0,5 s sonra bir kez (Safari/YouTube HDR'nin şartı, `MTShouldPlayHDRVideo`); ekran çevrimdışıysa `na`. Ekranlar'da elle atanmış renk profili bu değeri etkiler.
 
 ## Oyun ekranı (Mac, `net`, T-214, karar 0029)
 
@@ -286,7 +286,7 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 
 `STREAM_PREFS.dynamic_range = 1` (istemci yalnız Oyun modunda, kullanıcı açtıysa gönderir) uygulanabilirse sanal ekran aktarım işlevi 1 ile kurulur, SCK 10-bit BT.2100 PQ (`x420`) yakalar, VT HEVC Main10 PQ + MDCV/CLL SEI kodlar ve `STREAM_CONFIG` 9/16/9/`full_range=0` bildirir. SDR yolunun satırları değişmez (yalnız aşağıdaki yeni alanlar eklenir).
 
-- `I video ev=hdr_config requested=0|1 applied=0|1 [reason=codec_not_hevc|disabled] primaries=<n> transfer=<n> matrix=<n> full_range=0|1 display_transfer=<n> encoded=<w>x<h> fps=<n>`: her işlem hattı kurulumunda (yeni ya da korunan ekran). `requested` tabletin (normalize) `dynamic_range`'i, `applied` çalışan akış (= `STREAM_CONFIG`; H.273 kodları aynı satırda). `reason` yalnız istenip uygulanmadığında: `codec_not_hevc` = `MATEBRIDGE_CODEC=h264`, `disabled` = bu süreçte daha önce `hdr_fallback` oldu. `display_transfer` sanal ekrandan istenen aktarım işlevi (HDR10'da 1; SDR'de `MATEBRIDGE_VD_TRANSFER`).
+- `I video ev=hdr_config requested=0|1 applied=0|1 [reason=codec_not_hevc|disabled] primaries=<n> transfer=<n> matrix=<n> full_range=0|1 display_transfer=<n> encoded=<w>x<h> fps=<n>`: her işlem hattı kurulumunda (yeni ya da korunan ekran). `requested` tabletin (normalize) `dynamic_range`'i, `applied` çalışan akış (= `STREAM_CONFIG`; H.273 kodları aynı satırda). `reason` yalnız istenip uygulanmadığında: `codec_not_hevc` = `MATEBRIDGE_CODEC=h264`, `disabled` = bu süreçte daha önce `hdr_fallback` oldu. `display_transfer` sanal ekrandan istenen aktarım işlevi (HDR10'da 1, SDR'de 0).
 - `W net ev=hdr_fallback reason=display_rejected|capture_failed|encoder_rejected [detail=<kısa neden>] config_id=<n> display=<kip> encoded=<w>x<h>`: HDR10 işlem hattının bir halkası reddetti; tercih HDR'siz yeniden uygulandı ve yeni `config_id` ile SDR kodlarıyla bildirildi (protokol hatası değil). Süreç boyunca bir daha HDR kurulmaz (oyun ekranı geri dönüşüyle aynı kural). `display_rejected`: ekran tf=1 ile kurulamadı (`detail` = `selector_missing|mode_nil|settings_rejected`, ya da `applied_0`). `capture_failed`: SCK HDR yakalamayı başlatmadı (`detail` = `<hata alanı>_<kod>`; ekranın bulunamaması ve ekran uykusu sayılmaz). `encoder_rejected`: VT bir Main10/renk/meta veri özelliğini reddetti ya da oturum bu ayarlarla hazırlanamadı (`detail` = `<Özellik>_<OSStatus>` ya da `PrepareToEncodeFrames_<OSStatus>`). Önünde `display_create_failed error=…` vardır. **T-289:** çalışma anında da gelir: HDR10 işlem hattının kodlayıcısı 60 sn içinde ikinci kez düşerse `reason=encoder_rejected detail=runtime_encoder`.
 - `E … ev=pipeline_failed kind=encoder|other error=<metin>` (`kind` T-289): çalışan işlem hattı düştü. `encoder` = `VideoEncoderError` (ör. art arda 5 kodlama hatası), `other` = yakalama ve diğerleri.
 - `I … ev=pipeline_retry_scheduled attempt=<n> delay_ms=1000|2000|4000` (T-289): yeniden kurma planlandı; 60 sn'lik pencerede en çok 3 deneme, bekleme 1/2/4 sn. Ardından `pipeline_retry` gelir. Pencereden uzun çalışan işlem hattı yeni bütçe alır. **T-293:** aynı cihazın yeni oturumunda sıfırlanmaz; yalnızca başka cihaz, Mac uyanması ya da etkili bir STREAM_PREFS değişikliği sıfırlar (`pipeline_breaker_reset`).
@@ -295,7 +295,7 @@ Oturum bitince yakalama (SCK) ve encoder (VT) hemen durur; yalnız sanal ekran b
 - `W … ev=pipeline_rebuild_refused remaining_ms=<n> level=<n> n=<n>` (T-293): devre kesici açıkken bir kurulum istendi (video bağlantısı ya da oturum başlangıcı); ekran, yakalama ya da kodlayıcı kurulmadı, video bağlantısı hemen kapandı. İlk ret ve her 10. ret yazılır (`n` = toplam ret).
 - `I … ev=pipeline_breaker_reset reason=mac_wake|prefs_change` (T-293): açık ya da denemedeki devre kesici sıfırlandı. Başka cihazın oturumu da sıfırlar, ama yalnız `pipeline_breaker state=closed` yazılır.
 - `ev=stream_prefs … dynamic_range=sdr|hdr10 requested_dynamic_range=<ham değer>`: `dynamic_range` uygulanacak aralık; bilinmeyen ham değer 0 sayılır.
-- `ev=stream_reconfigure … dynamic_range=<eski>-><yeni>`: aralık değişimi ekranı yeniden kurar (`display_recreate reason=transfer_change transfer=<eski>-><yeni>`; `MATEBRIDGE_VD_TRANSFER=1` iken tf zaten 1 olduğundan ekran korunur).
+- `ev=stream_reconfigure … dynamic_range=<eski>-><yeni>`: aralık değişimi ekranı yeniden kurar (`display_recreate reason=transfer_change transfer=<eski>-><yeni>`).
 - `ev=stream_prefs … chroma=normal|sharp requested_chroma=<ham değer>` (T-240, karar 0033): `chroma` uygulanacak tablet tercihi; bilinmeyen ham değer 0 sayılır, HDR10 uygulanırken her zaman `normal` (yok sayılır).
 - `ev=stream_reconfigure … chroma=<eski>-><yeni>`: yalnız bu değişirse ekran korunur, yakalama + kodlayıcı yeni `config_id` ile yeniden kurulur (`display_recreate` yok). Uygulanan mod `encoder ev=chroma_config`'te.
 - `ev=stream_config_reannounced … reason=…,hdr_off`: sırada bekleyen oturum başlangıcı HDR10 ile türetilmişti, o arada `hdr_fallback` oldu; SDR'ye çevrildi.
@@ -315,11 +315,14 @@ Hiçbir alanda eşleşme kodu, anahtar, token, `host_id` ya da Mac adı yazılma
 
 ## Host gecikme izi ve tablet izi eşleşmesi (Mac, `video`, T-170)
 
-- **Kare başına CSV** (`MATEBRIDGE_LAT_TRACE=1` → `~/Library/Logs/MateBridge/latency.csv`, host saati µs): ilk yedi sütun aynı sırada kalır (`capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us`), sona `pts_us,display_us,frame_seq,config_id,session_id,resubmit` eklenir.
+- **Kare başına CSV** (`MATEBRIDGE_LAT_TRACE=1` → `~/Library/Logs/MateBridge/latency.csv`, host saati µs): ilk yedi sütun aynı sırada kalır (`capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us`), sona `pts_us,display_us,frame_seq,config_id,session_id,resubmit` eklenir. T-311 sona üç sütun daha ekler: `convert_us` (kodlayıcıya göndermeden önceki Metal geçişinin duvar süresi, µs; geçiş yoksa 0), `bytes` (VIDEO_FRAME yükü), `key` (1 = anahtar kare). İlk 13 sütun aynı sırada.
   - `capture_us` iz başlangıcıdır (`min(display, pts, delivered)`), teldeki damga **değildir**. `pts_us` teldeki `VIDEO_FRAME.capture_time_us` (SCK sunum damgası) değeridir.
   - Eşleşme: host `pts_us` == tablet `pace_trace.csv` `capture_us`. `frame_seq` gönderilen `VIDEO_FRAME.frame_seq`, `config_id`/`session_id` karenin gönderildiği oturum ve yapılandırmadır (bağlantıdan alınır; işlem hattı oturumlardan uzun yaşar).
   - `resubmit=1`: son tamponun yeniden gönderimi (durağan ekranda keyframe, boşta tazeleme). `pts_us` yapay `now + lead` damgasıdır; analizde bu satırlar atılır. `display_us=0`: SCK görüntü zamanı vermedi.
-- **`ev=latency`** (saniyede bir): aşamalardan (`…,cap_to_sent`) sonra işaretli `cap_to_sent_pts_ms_p50_95_99_max` gelir (`write_done − pts`, teldeki damgadan ölçülen host payı; negatif olabilir). Ardından işaretli kaymalar artık `_ms_p1_50_99=p1/p50/p99` biçimindedir: `pts_vs_display_ms_p1_50_99`, `pts_vs_deliv_ms_p1_50_99`, `display_vs_deliv_ms_p1_50_99` (eski anahtar `_ms_p50_99` kalktı). Karar 0021 (T-172) için: `pts_vs_deliv` p99 − p1 < 1 ms ise seçenek A.
+- **`ev=latency`** (saniyede bir): aşamalar sırayla `sck_lag, hold, gate_wait, gpu, slot_wait, enc, conv, queue, write, cap_to_sent` (her biri `<aşama>_ms_p50_95_99_max=`).
+  - `gpu` (T-311): kodlayıcıya göndermeden önceki Metal geçişinin (keskin renk dönüşümü ya da paketleyici) duvar süresi, `hold` ile sınırlı. `420` modunda geçiş yoktur, `gpu` 0.
+  - `hold = gate_wait + gpu + slot_wait`. `gate_wait` artık Metal süresini içermez (T-311 öncesi ~3 ms kapı beklemesi gibi görünüyordu). Anahtar sırası değişti: `ev=latency` ayrıştıran dış betikler güncellenmeli.
+  - Aşamalardan sonra işaretli `cap_to_sent_pts_ms_p50_95_99_max` gelir (`write_done − pts`, teldeki damgadan ölçülen host payı; negatif olabilir). Ardından işaretli kaymalar artık `_ms_p1_50_99=p1/p50/p99` biçimindedir: `pts_vs_display_ms_p1_50_99`, `pts_vs_deliv_ms_p1_50_99`, `display_vs_deliv_ms_p1_50_99` (eski anahtar `_ms_p50_99` kalktı). Karar 0021 (T-172) için: `pts_vs_deliv` p99 − p1 < 1 ms ise seçenek A.
 - **`net ev=stats`**: tablet sayısı yakalama damgası → decoder çıkışıdır (ekranda görünme değil). Alan `cap_dec_ms=`; eski `latency_ms=` aynı değerle bir sürüm daha yazılır, sonra kalkar. Menü "· yak→çöz N ms" gösterir.
 
 ## Girdi yaşı (Mac, `input`, T-171)
@@ -377,47 +380,35 @@ Aday (USB) bağlantı, ilk doğrulanmış kaydı gelene kadar terfi etmez; o sü
 - `migration_proved`: adayın ilk kaydı doğrulandı, aday terfi etti.
 - `transport_migrate ok=0 reason=proof_failed|proof_closed|proof_timeout`: aday kanıtlayamadı; Wi-Fi sürer (ya da eski bağlantı da gittiyse yeniden bağlanılır).
 
-## Canlı bit hızı (Mac, `video`, T-177)
+## Durağan ekran iyileştirme ve bit hızı penceresi (Mac, `video`, T-253, T-177)
 
-Çalışan VideoToolbox oturumunun bit hızı yeniden başlatma olmadan değişir:
-- Yakalama, sanal ekran ve video bağlantısı sürer.
-- Yeni `STREAM_CONFIG`, `config_id` ya da keyframe yoktur. `STREAM_CONFIG.bitrate_kbps` yapılandırılmış değer olarak kalır.
-- Kullanıcı değişikliği (`STREAM_PREFS`) yine yeniden başlatma yolundan geçer.
+**Canlı bit hızı kaldırıldı (T-302, 2026-10-08):** çalışan oturumun bit hızını yeniden başlatmadan değiştiren zincir (`MATEBRIDGE_BITRATE_STEP`, `setTargetBitrate`) silindi; `ev=bitrate_set` artık yazılmaz. Bit hızı yalnız kodlayıcı kurulurken verilir; kullanıcı değişikliği (`STREAM_PREFS`) yeniden başlatma yolundan geçer.
 
-Log satırı:
-- `I video ev=refine frames=<n> bytes=<n> first_bytes=<n> last_bytes=<n> ms=<n> reason=converged|max_frames|max_bytes|cancelled|queue_busy|timeout|failed|keyframe_pending` (T-253): durağan ekran iyileştirme treninin (aynı tamponun art arda P kareleri olarak yeniden kodlanması) sonunda tren başına bir satır.
+- `I video ev=refine frames=<n> bytes=<n> first_bytes=<n> last_bytes=<n> ms=<n> reason=converged|max_frames|max_bytes|cancelled|queue_busy|timeout|failed|keyframe_pending|keyframe_due` (T-253): durağan ekran iyileştirme treninin (aynı tamponun art arda P kareleri olarak yeniden kodlanması) sonunda tren başına bir satır.
   - Tren, 200 ms yeni gerçek kare olmayınca ve çıkış kuyruğu boşken başlar; `MATEBRIDGE_REFINE=0` kapatır, `_MS`, `_KB`, `_FRAMES` ayarlar.
   - İlk karede yakınsayan ya da hiç kare üretmeden iptal olan trenler `D` düzeyinde yazılır.
   - `max_bytes`: bayt tavanı (USB 1024 KB, ağ 256 KB) YUMUŞAK bir sınırdır: kodlanmış P karesi asla atılmaz (zincir bozulur), bu yüzden en çok bir karelik aşım kabul edilir. Denetim muhafazakârdır: bir sonraki karenin şimdiye kadarki en büyük tren karesi kadar olacağı varsayılır ve sığmıyorsa durulur. İlk karenin tahmini son gerçek (hareket) karenin boyutudur (yoksa 64 KB); sığmıyorsa tren başlamaz.
   - `keyframe_due`: oturumun periyodik keyframe'i (varsayılan 300 s, `MATEBRIDGE_KEYFRAME_INTERVAL_S`) bir trenin olası uzunluğu içinde düşüyor; refine karesi hiçbir zaman IDR olmasın diye tren başlamaz ya da sürmez. `keyframe_pending`: bekleyen keyframe isteği.
   - Önceki bir trenin gecikmiş çıktısı/hatası yeni trene sayılmaz ve onu ilerletmez (kare yine normal iletilir).
-- `I video ev=bitrate_set kbps=<n> avg_status=<OSStatus>|skipped limits_status=<OSStatus>`: gerçekten uygulanan her değişiklikte bir satır.
-  - İstek 5 000…150 000 kbps'e kırpılır. Yürürlükteki değere eşit istek (başlangıçta yapılandırılmış bit hızı) satır üretmez.
-  - Satır, sahip kuyruğunda iki submit arasında, özellik çağrılarından hemen sonra yazılır. `stop` sonrası hiç yazılmaz.
-  - Kuyruk tıkalıyken gelen istekler birleşir: iki submit arasında en çok bir uygulama bloğu bekler. Yalnız en yeni hedef uygulanır, aradakiler satır üretmez. Son gönderilen değere geri dönen hedef de satır üretmez.
-  - `avg_status`: `AverageBitRate` için `VTSessionSetProperty` sonucu (`0` = kabul). `MATEBRIDGE_QUALITY` kabul edilmişse `skipped` yazılır: o kipte `AverageBitRate` kullanılmıyor, yalnız `DataRateLimits` değişir.
-  - `limits_status`: `DataRateLimits` için sonuç.
-  - `0` yalnız VideoToolbox'ın değeri kabul ettiğini söyler. `.fast` profil kabul edip yok sayabilir (T-087 emsali). Etkisi `net ev=stats` içindeki `sent_kbps=` ile ölçülür.
 
-Tanı ayarları (varsayılan kapalı, karar 0026):
-- `MATEBRIDGE_BITRATE_STEP=<kbps>[,<kbps>…]@<n>s|<n>ms`: 1–16 değer, her biri 5 000…150 000; süre 100 ms…600 s.
-  - İlk değer encoder başladıktan bir periyot sonra verilir. Ardından her periyotta listedeki sıradaki değer canlı ayarlayıcıya gider; liste döngüyle tekrarlanır.
-  - Geçersiz değer ayarı kapatır.
+Tanı ayarı (varsayılan kapalı, karar 0026; docs/KNOBS.md #42, T-298 EN9 ölçümünü bekliyor):
 - `MATEBRIDGE_RATE_WINDOW_MS=<10…999>`: `DataRateLimits`'e 1 s çiftinin yanına kısa bir pencere ekler, aynı 2× patlama payıyla: `[2 × ort. bayt/s × w, w]`.
-  - Oluşturmada ve her canlı değişiklikte uygulanır.
-  - Oluşturmadaki sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
-- Bu ayarlar açıkken `ev=encoder_config` satırına `bitrate_step=<değerler>@<ms>ms` ve `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.
+  - Yalnız kodlayıcı kurulurken uygulanır. Sonuç `encoder_set[…DataRateLimits=ok|<OSStatus>…]` içinde görünür.
+  - Açıkken `ev=encoder_config` satırına `rate_window_ms=<n>` eklenir. Kapalıyken satır değişmez.
 
 ## Akış profili (Mac, `encoder`, T-204)
 
-- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|wifi_env|user|prefs codec=hevc|h264 encoder_profile=fast|llrc scale_permille=<n> refresh_hz=<n> display=<w>x<h>@2x|@1x sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
+- `I encoder ev=profile fps=<n> bitrate_kbps=<n> bitrate_source=env|user|prefs codec=hevc|h264 encoder_profile=fast scale_permille=<n> refresh_hz=<n> display=<w>x<h>@2x|@1x sha=<kısa SHA>[-dirty]|unknown knobs=<AD:değer>[;…]|-`
  - Kodlayıcı her oluşturulduğunda bir kez yazılır: her akış başlangıcında ve her yeniden başlatmada (ör. `STREAM_PREFS`). Hemen `ev=encoder_config`'ten sonra gelir.
  - `sha=` `ev=app_start` ile aynı kaynaktan gelir (`BuildInfo`, T-145).
- - `knobs=` ortamda tanımlı olan host ayarlarını listeler. Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, WIFI_BITRATE_KBPS, CODEC, REFRESH, ENCODER, QUALITY, KEYFRAME_INTERVAL_S, BITRATE_STEP, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S, VD_TRANSFER, CHROMA` (hepsi `MATEBRIDGE_` önekli).
+ - `bitrate_source`: `env` (`MATEBRIDGE_BITRATE_KBPS`), `user` (`STREAM_PREFS.bitrate_kbps`), `prefs` (mod varsayılanı). `wifi_env` T-302'de kalktı.
+ - `encoder_profile=fast` T-302'den beri sabittir (`MATEBRIDGE_ENCODER` ve LLRC yolu kaldırıldı).
+ - `knobs=` ortamda tanımlı olan host ayarlarını listeler (`StreamProfileLog.knobAllowList`). Yalnız karar 0026'da "kalır" ya da "yalnızca geliştirici" sınıfındakiler sayılır. Sıra: `FPS, BITRATE_KBPS, CODEC, KEYFRAME_INTERVAL_S, RATE_WINDOW_MS, SERVICE_CLASS, NOTSENT_LOWAT_KB, SENDQ_LOG, LAT_TRACE, TCP_LOG, AUDIO, DISPLAY_KEEP_S, VD_PRIMARIES, CHROMA` (hepsi `MATEBRIDGE_` önekli). `MATEBRIDGE_REFINE*` listede yok (docs/KNOBS.md açık nokta 3).
  - Değer ham yazılır: boşluk, `=` ve `;` `_` olur, en çok 64 karakter. Varsayılana eşit ya da geçersiz değer de listelenir; etkin değerler önceki alanlardadır.
- - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
-- `ev=encoder_config` satırındaki `prio_speed=1 idle_refresh=off input_retag=1` T-204'ten beri sabittir (ayarları kaldırıldı). Log ayrıştırıcıları kırılmasın diye kalır.
-- `ev=idle_refresh`, `ev=idle_refresh_copy` ve `ev=idle_refresh_qp` artık çıkmaz.
+ - Kaldırılan ya da listede olmayan anahtarlar (ör. `MATEBRIDGE_IDLE_REFRESH_MS`, `MATEBRIDGE_QUALITY`, `MATEBRIDGE_VD_TRANSFER`, soket ayarları) hiç yazılmaz. Hiçbiri yoksa `knobs=-`.
+- `W encoder ev=knob_ignored name=<AD> value=<değer>` (T-302): kaldırılmış bir değişken ortamda hâlâ tanımlı ve etkisiz. Her akış başında (kodlayıcı kurulurken, `encoder_config`'ten önce) girdi başına bir satır. Liste `RemovedKnobs`: `MATEBRIDGE_BITRATE_STEP`, `MATEBRIDGE_QUALITY`, `MATEBRIDGE_ENCODER`, `MATEBRIDGE_REFRESH`, `MATEBRIDGE_WIFI_BITRATE_KBPS`, ayrıca `MATEBRIDGE_CHROMA` yalnız `444` ya da `sharp_bilinear` değerinde. Değer `knobs=` ile aynı kuralla temizlenir. `MATEBRIDGE_VD_TRANSFER` (T-304) bu satırı yazmaz, sessizce yok sayılır.
+- `ev=encoder_config` satırındaki sabit alanlar: `encoder_profile=fast` ve `quality=unset quality_applied=0` (T-302), `prio_speed=1 idle_refresh=off input_retag=1` (T-204). Ayarları kaldırıldı; log ayrıştırıcıları kırılmasın diye kalır.
+- Artık çıkmaz: `ev=idle_refresh`, `ev=idle_refresh_copy`, `ev=idle_refresh_qp` (T-204); `ev=bitrate_set`, `ev=quality_rejected` (T-302).
 
 ## Video teslim kapısı (tablet, `MB/session`, T-160)
 
@@ -485,23 +476,31 @@ Panelin gerçek hızı yalnız istenen moda bağlı değildir: bu tablette kalem
 - **`W render ev=refresh_mismatch target_hz=<n> measured_hz=<n.n> dur_ms=<n> stream_mode=<id>`**: akış sürerken saniyelik vsync medyanından hesaplanan hız (`1e6 / p50_us`) hedeften ±%10'dan fazla saptı ve bu durum 5 sn'den uzun sürdü. Her sapma dönemi için bir satır yazılır, iki satır arasında en az 60 sn olur. Dönem 60 sn sınırı içinde başladıysa satır, sınır dolduğunda sapma hâlâ sürüyorsa yazılır. `dur_ms`, satır yazılana kadar geçen süredir. `target_hz=0`, akışsız zaman ve ölçümsüz saniyeler (vsync döngüsü uykuda) satır üretmez. Ölçümsüz boşluk 3 sn'yi geçerse ya da hedef değişirse dönem yeniden başlar.
 - Ölçüm notu: "60 Hz" ölçümü için içerik yalnız klavyeyle sürülmelidir. Kalem, dokunma ve trackpad paneli 120 Hz'e çıkarır (PF3).
 - **`hz_switches=<n>`** (T-243): `MB/render ev=stats` satırının **sonunda**, her zaman. Log penceresi (varsayılan 10 sn) içinde debounced `ev=display_rate` raporlarının kaç kez değiştiği (60→120 ve 120→60 ayrı sayılır). Bir vsync çalışmasının ilk raporu geçiş sayılmaz. Kare olmayan (yazılmayan) pencerenin sayısı sonrakine taşınmaz.
-- **`I render ev=hz_pin variant=<off|lp|all> state=<on|off> applied=<ipucu>:<ok|missing|error>,…|- [hw_fields=<ad>,…|- hw_ex=0|1]`** (T-243 deneyi, `--ez dev true --es hz_pin lp|all`): yalnız Oyun + akış 60 fps'te, ek 60 Hz ipuçları uygulandığında (`state=on`) ya da kaldırıldığında (`state=off`, `applied=-`) bir satır. Varsayılan `off`'ta hiç yazılmaz. İpuçları:
-  - `lp_rate`: `WindowManager.LayoutParams.preferredRefreshRate = 60` (`preferredDisplayModeId` ile aynı atamada).
-  - `lp_minmax`: `preferredMinDisplayRefreshRate` / `preferredMaxDisplayRefreshRate = 60` (API 34 alanları, yansıma; API 31 tablette `missing` beklenir).
-  - `hw_lp` (yalnız `all`): yalnız okuyan keşif, hiçbir şey yazılmaz. `LayoutParams`'ta AOSP dışı `refresh|framerate|fps|hz` adlı public alanlar (`hw_fields=`) ve `com.huawei.android.view.LayoutParamsEx` sınıfı (`hw_ex=`). Biri varsa `ok`.
-  - `reapply` (yalnız `all`): `Surface.setFrameRate` her `ev=display_rate` raporunda ve her dokunma başlangıcında (`ACTION_DOWN`) yeniden verilir. Bu tekrarlar `ev=set_frame_rate` satırı yazmaz.
+- `I render ev=hz_pin` (T-243 deneyi, `--es hz_pin`) **T-300'de kaldırıldı** (2026-10-08): deney olumsuzdu, anahtar yok sayılır, satır yazılmaz. `hz_switches=` kalır.
 
-## Kaldırılan istemci deney olayları (T-183, karar 0026)
+## Kaldırılan istemci deney olayları (T-183, T-300, T-303, karar 0026)
+
+**T-300 (2026-10-08):**
+- `I session ev=wifi_knobs ping_ms=<n>`: açılışta bir kez; satır artık yalnız bu alanı taşır (`tos_ctl`, `tos_video`, `wifi_ll` alanları gitti).
+- Artık yazılmaz: `ev=traffic_class` (kontrol/video soketi IP_TOS), `ev=wifi_lock` (`WifiLock` düşük gecikme kilidi), `render ev=hz_pin`. `ev=profile knobs=` ve `dev_knobs ignored=` içinde `tos_*`, `wifi_ll`, `hz_pin`, `color_*`, `dec_lowlat`, `dec_oprate` görünmez; bu anahtarlar yok sayılır.
+- `decoder ev=codec_start` `lowlat=` / `oprate=` alanları sabittir, bkz. "Decoder işletim hızı" bölümü.
+
+**T-303 (2026-10-08):**
+- `render ev=stats` satırında `buffer=` yok. `session ev=mode_layer` satırında `jitter=` ve `jitter_src=` yok. `session ev=profile` `pacer=adaptive` sabittir (`tools/measure/mblog.py` okur).
+- Artık yazılmaz: `session ev=modes_migrated`, `session ev=transport_pref_migrated` (tek seferlik geçişler silindi; eski mod kimlikleri artık `daily` sayılır).
+- `--ei jitter` yok sayılır.
+
+**T-183:**
 
 Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=render_mode` (GL yolu, T-184), `ev=perf_hint`, `perf_hint_target`, `perf_hint_error`, `rvote_config`, `rvote`, `rvote_reflect`, `rvote_reflect_failed`, `crypto_bench`. `ev=display_timing`'den `keep_jitter= recenter= pacer= cpd_q_permille= cpd_hold_us= inflight=` alanları, `ev=present`'ten `recenters=` çıktı; `present` satırındaki `inflight_limit=` hep 0. Kaldırılan açılış parametreleri (`render`, `frate`, `glpts` — T-184; `perf_hint`, `rvote`, `pacer=cpd`, `inflight`, `recenter`, `keep_jitter`, `crypto_bench`, `oprate`) yok sayılır.
 
 ## Modlar: Günlük / Çizim / Oyun (tablet, `MB/session`, T-223, karar 0030)
 
-- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> jitter=adaptive|<N> [jitter_src=extra] bitrate_kbps=<n> audio_out=auto|aaudio|track fingers=all|gestures|off [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `fingers=` ile).
+- `I session ev=mode_layer mode=daily|drawing|game action=enter|exit overrides=<liste> bitrate_kbps=<n> audio_out=auto|aaudio|track fingers=all|gestures|off [at=start]`: Oyun ya da Çizim'in geçici katmanı kuruldu (`enter`) ya da bırakıldı (`exit`). Eski `ev=game_mode` yerine geçer (aynı alanlar, artık `mode=` ve `fingers=` ile). `jitter=`/`jitter_src=` T-303'te kalktı.
   - `mode`: katmanı kurulan ya da bırakılan mod. Oyun ↔ Çizim geçişi tek bir `enter`dir (yeni katman baştan kurulur); Günlük'e dönüş `exit`tir. Aynı modda tekrar satır çıkmaz.
   - `overrides`: katmanın ezdiği ayarlar. Oyun `bitrate,audio,pen`; Çizim `bitrate,finger` (parmak politikası `gestures`: tek parmak hiçbir şey göndermez, iki parmak kaydırma ve sıkıştırma çalışır; kayıtlı "tamamen kapat" açıksa `off` kalır; Otomatik bit hızı ise 60 Mbps). Katmanın ezmediği ayarlar (Oyun: parmak; Çizim: ses, kalem izi/noktası) panelde değiştirilince normal olarak kaydedilir.
   - Değerler katmanın etkin değerleridir (kayıtlı ayarlar değil). `at=start`: uygulama açılışında kayıtlı mod Oyun/Çizim olduğu için kuruldu.
-- `I session ev=modes_migrated mode=daily|game fps=60|120`: ilk açılışta eski beş mod kimliğinden biri yeni mod ve kare hızına çevrildi (`clarity` Günlük 60, `smooth`/`performance` Günlük 120, `game` Oyun 120, `game60` Oyun 60). Bir kez yazılır; kayıtlı mod yoksa yazılmaz.
+- `session ev=modes_migrated` T-303'te kaldırıldı (eski beş mod kimliğinin tek seferlik geçişi). Kayıtlı eski kimlik artık Günlük sayılır.
 - Kare hızı seçimi ayrı bir log satırı yazmaz: sonucu yeni `ev=profile fps=` satırıdır (60↔120 değişimi Mac sanal ekranını bir kez yeniden kurar).
 
 ## Geliştirici kapısı ve akış profili (tablet, T-185, karar 0026)
@@ -509,8 +508,8 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
 - `I diag ev=dev_knobs dev=0|1 ignored=<anahtar>[,<anahtar>…]|-`: `onCreate`'te bir kez yazılır.
   - `ignored`: `--ez dev true` verilmediği için yok sayılan "yalnızca geliştirici" anahtarları, `docs/KNOBS.md` sırasıyla.
   - Yalnız anahtar adları yazılır, değerler asla (`net_bench` adresi dahil). Biçim T-127 için sabittir.
-- `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme). Oturum normal başlar.
-- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] hdr=0|1 bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive|buffer<N> sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|- chroma=0|1`
+- `W diag ev=net_bench err=not_in_build`: `--ez dev true --es net_bench …` verildi ama bench etkinliği bu derlemede yok (debug kaynak seti olmayan derleme; T-301'den beri varsayılan `daily` APK). Oturum normal başlar.
+- `I session ev=profile mode=<id> fps=<n> size=<w>x<h> scale_permille=<n> display=native|<w>x<h> [display_applied=0|1] hdr=0|1 bitrate_kbps=<n> bitrate_setting=<n>|auto transport=usb|wifi|- transport_mode=auto|usb|wifi audio=0|1 audio_out=auto|aaudio|track pacer=adaptive sha=<kısa SHA>[-dirty]|unknown built=<UTC>|unknown dev=0|1 knobs=<anahtar>:<değer>[;…]|- chroma=0|1`
   - Uygulanan her `STREAM_CONFIG`'te (`installConfig`) bir kez yazılır, `stream_config_bitrate`'ten hemen sonra: oturum başında, mod ya da bit hızı değişiminde ve yeni config getiren her yeniden bağlanmada.
   - Alanların kaynağı:
     - `fps`, `size`, `bitrate_kbps`: STREAM_CONFIG.
@@ -522,7 +521,7 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
     - `bitrate_setting`: tabletin ayarı (0 = `auto`).
     - `transport`: geçerli bağlantı. `transport_mode`: geçerli bağlantı modu ayarı ya da açılış geçersiz kılması.
     - `audio=1`: ses açık (`--ez audio false` verilmedi ve panel ayarı açık).
-    - `pacer`: geçerli renderer tamponu (T-211'den beri Oyun modlarında da `adaptive`; `--ez dev true --ei jitter 0` ile `buffer0`).
+    - `pacer`: T-303'ten beri sabit `adaptive` (sabit tampon ve `--ei jitter` kalktı); alan `tools/measure/mblog.py` için kalır.
     - `sha=`, `built=`: `ev=app_start` ile aynı kaynak (`BuildInfo`, T-146).
   - `knobs=`: dikkate alınan açılış ayarları, `docs/KNOBS.md` sırasıyla.
     - "Yalnızca geliştirici" ayarlar yalnız `dev=1` ile sayılır. "Kalır" sınıfı (`stats_1s`, `pace_trace`, `stall_diag`) her zaman sayılır.
@@ -530,17 +529,16 @@ Artık yazılmaz: `render ev=gl_stats`, `render ev=gl_fallback`, `render ev=rend
     - `net_bench*` hiç yazılmaz. Varsayılana eşit verilen değer de listelenir.
   - `is_hw` yoktur (bkz. `ev=codec_start`, T-168). Uç nokta adresi, seri numarası ve cihaz kimliği asla yazılmaz.
 
-## Decoder gecikme anahtarları (tablet, `MB/decoder`, T-217, karar 0026; varsayılan T-222)
+## Decoder işletim hızı (tablet, `MB/decoder`, T-217, T-222; anahtarlar T-300'de kaldırıldı)
 
-- **`I decoder ev=codec_start`**: `sw_only=` ile `accepted` arasına `lowlat=off|hisi|vdec|all|rejected oprate=fps|max|rejected` eklendi.
-  - Değer, istenen geliştirici ayarıdır (`--ez dev true --es dec_lowlat … --es dec_oprate …`); ayar yoksa (T-222) `lowlat=off oprate=max requested_rate=32767`. `--es dec_oprate fps` eski davranışı (akış fps'i) verir.
-  - `rejected`: istenen anahtarlar configure/start'ta reddedildi ve codec geri düşüş formatıyla (T-217 öncesi: ek anahtar yok, işletim hızı = akış fps'i) açıldı (bkz. `dec_lowlat_rejected`). Geri düşüşte değişmeyen alan kendi kimliğini yazar (`lowlat=off` ya da `oprate=fps`). Varsayılan `max` reddedilirse: `lowlat=off oprate=rejected requested_rate=<fps>`.
-  - `requested_rate=` gerçekten konan değerdir (`max` ile `32767`); codec'in kabul ettiği `accepted … operating_rate=` alanındadır.
-- **`W decoder ev=dec_lowlat_rejected lowlat=<id> oprate=<id> keys=<anahtar>[,…] err=<istisna sınıfı>`**: ayarlı format (T-222'den beri varsayılan `oprate=max` dahil: `lowlat=off oprate=max keys=operating-rate`) configure ya da start'ta hata verdi. Codec bırakılır, yeni bir codec geri düşüş formatıyla (akış fps'i, ek anahtar yok) **bir kez** denenir. `dec_oprate=fps` (ve `dec_lowlat` yok) iken geri düşülecek bir şey yoktur, yeniden denenmez. O da başarısız olursa olağan `decode_error` yolu işler. `keys=` yalnız anahtar adlarıdır (değişen işletim hızı için `operating-rate`).
+- **`I decoder ev=codec_start`**: `sw_only=` ile `accepted` arasında `lowlat=off oprate=max|rejected`. T-300'den beri sabittir: `dec_lowlat` / `dec_oprate` anahtarları kaldırıldı, alanlar `tools/measure` için kalır.
+  - Codec her zaman `KEY_OPERATING_RATE=32767` ile açılır (T-222 varsayılanı): `lowlat=off oprate=max requested_rate=32767`.
+  - `oprate=rejected`: bu format configure/start'ta reddedildi, codec akış fps'iyle yeniden açıldı (`requested_rate=<fps>`; bkz. `dec_lowlat_rejected`).
+  - `requested_rate=` gerçekten konan değerdir; codec'in kabul ettiği `accepted … operating_rate=` alanındadır.
+- **`W decoder ev=dec_lowlat_rejected lowlat=off oprate=max keys=operating-rate err=<istisna sınıfı>`**: yalnız işletim hızı yedeğini anlatır. Varsayılan format configure ya da start'ta hata verdi; codec bırakılır, yeni bir codec akış fps'iyle (T-222 öncesi format) **bir kez** denenir. O da başarısız olursa olağan `decode_error` yolu işler. Olay adı geçmiş uyumu için kaldı.
 - **`I decoder ev=vendor_params name=<codec> count=<n>|? keys=<ad>[,…]|-|unavailable [more=<k>]`**: `MediaCodec.getSupportedVendorParameters()` (API 31+), renderer başına codec adı için bir kez, ilk `codec_start`'tan hemen sonra. Ayardan bağımsız yazılır.
   - Yalnız parametre adları, değerler asla. En çok 64 ad; düz ad olmayanlar (`[A-Za-z0-9._-]` dışı) ve fazlası `more=` ile sayılır.
   - `count=? keys=unavailable`: API 31 altı ya da çağrı başarısız.
-- `ev=profile knobs=` (T-185) bu ayarları `dec_lowlat:<id>`, `dec_oprate:<id>` olarak listeler; `dev` yoksa `diag ev=dev_knobs ignored=dec_lowlat,dec_oprate`.
 
 ## Kodlayıcı donanım denetimi (Mac, `video`, T-187)
 
@@ -577,18 +575,13 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
 - `I session ev=expect_host`: bölüm başladığında eski adresi zaten yeniden deneyen oturum da aynı kapıya bağlandı. Bundan sonraki yeniden denemelerde yalnız son doğrulanmış host kabul edilir. Uyandırma denemesi bağlanmaz. `ev=session_start ... expect_host=1`: bu başlangıç kapılı. Kimlik ve adres yazılmaz.
 - `ev=endpoint_rediscover_skip new=*.<n>`: bu bölümde `foreign` çıkmış bir adres yeniden bulundu; otomatik bağlanılmadı.
 
-## Decoder renk anahtarları ve çıkış biçimi (tablet, `MB/decoder`, T-231, karar 0026)
+## Decoder çıkış biçimi (tablet, `MB/decoder`, T-231, karar 0026)
 
-- Geliştirici ayarları (`--ez dev true` ile; yoksa `diag ev=dev_knobs ignored=color_range,…` ve varsayılan): `--es color_range auto|full|limited|unset`, `--es color_standard auto|bt709|bt601|unset`, `--es color_transfer auto|srgb|sdr_video|unset`.
-  - `auto` (ya da ayar yok / bilinmeyen değer): STREAM_CONFIG'den bugünkü eşleme (`ColorMapping`), decoder formatı bayt bayt aynı.
-  - Sabit değerler: range `full=1 limited=2`; standard `bt709=1 bt601=4`; transfer `sdr_video=3`, `srgb=2` (ColorUtils `kColorTransferSRGB`, public MediaFormat sabiti değil).
-  - `unset`: anahtar decoder formatına hiç konmaz (bitstream VUI belirler).
-  - T-217 geri düşüş formatı aynı renk anahtarlarını kullanır.
-  - `ev=profile knobs=` bunları `color_range:<id>` vb. listeler; bilinmeyen değer `other`.
+- Renk geliştirici ayarları (`--es color_range`, `color_standard`, `color_transfer`) **T-300'de kaldırıldı** (2026-10-08): çözücü bu anahtarları yok sayıyordu (NOTES 2026-10-05). Decoder formatı her zaman STREAM_CONFIG'den bugünkü eşlemeyi (`ColorMapping`) alır. Anahtarlar yok sayılır, `knobs=`'ta görünmez.
 - **`I decoder ev=decoder_output_format gen=<n> range=<v>|unset|? standard=… transfer=… hdr_static_info=<hex>|unset|empty|? req_range=<v>|unset req_standard=… req_transfer=…`**: çıkış iş parçacığı `INFO_OUTPUT_FORMAT_CHANGED` gördükten sonra, codec'in çıkış formatından.
   - `range/standard/transfer`: çıkış formatındaki `color-range/standard/transfer` (`?` = okunamadı).
   - `hdr_static_info`: `hdr-static-info` varsa ham baytlar onaltılık (en çok 64 bayt, fazlası `+<n>`); yoksa `unset`.
-  - `req_*`: bu codec'in configure'da aldığı renk anahtarları (`unset` = konmadı).
+  - `req_*`: bu codec'in configure'da aldığı renk anahtarları (`ColorMapping`; `unset` = konmadı).
   - Codec başına: aynı alanlar art arda tekrarlanmaz, en çok 16 satır. Mevcut `ev=output_format` (codec başına bir kez) değişmedi.
 
 ## HDR10 (tablet, `MB/session`, T-238, karar 0032)
@@ -607,17 +600,16 @@ Adresler yalnız son IPv4 oktetiyle yazılır (`*.107`; IPv4 olmayan `*`), tam a
 
 ## Renk alt örnekleme (Mac, `encoder`/`video`, T-235, T-240, karar 0026, 0033)
 
-Mod kaynağı (T-240): geliştirici ayarı `MATEBRIDGE_CHROMA=420|sharp_bilinear|sharp_nearest|444` (docs/KNOBS.md #44; tanımlıysa, geçersiz değer dahil, kazanır) > tabletin `STREAM_PREFS.chroma = 1` ("Keskin renk kenarları", karar 0033 → `sharp_nearest`) > varsayılan `420`. `ev=chroma_config` **her oturumda** yazılır; `ev=chroma_stats` yalnız ayar tanımlıyken (T-235'teki gibi; karşılaştırma tabanı için `MATEBRIDGE_CHROMA=420`) ya da keskin yol çalışırken.
+Mod kaynağı (T-240): geliştirici ayarı `MATEBRIDGE_CHROMA=420|sharp_nearest|packed444` (docs/KNOBS.md #44; geçerli değer kazanır) > tabletin `STREAM_PREFS.chroma` (`1` "Keskin renk kenarları", karar 0033 → `sharp_nearest`; `2` tam renk → `packed444`) > varsayılan `420`. T-302'den beri geçersiz değer (kaldırılan `444` ve `sharp_bilinear` dahil) ayarlanmamış sayılır, tablet tercihi kazanır. `444` ve `sharp_bilinear` ayrıca `knob_ignored` yazar. T-311'den beri keskin yol tek Metal geçişidir (`sharp_fused`), çıktı bit bit aynı. `ev=chroma_config` **her oturumda** yazılır; `ev=chroma_stats` yalnız ayar tanımlıyken (T-235'teki gibi; karşılaştırma tabanı için `MATEBRIDGE_CHROMA=420`) ya da keskin yol çalışırken.
 
-- **`I|W encoder ev=chroma_config requested=<m> applied=<m> [reason=llrc|codec|profile_rejected|metal_unavailable|hdr|invalid_value] source=env|prefs|default chroma_format_idc=<n>|unknown profile_idc=<n>|unknown vui_full_range=0|1|unknown chroma_loc=<n>|unset|unknown [mismatch=1]`**: parametre setleri her duyurulduğunda (ilk karede ve değişince), `ev=encoder_config … level_idc=` satırının hemen ardından.
-  - `source`: `env` = `MATEBRIDGE_CHROMA` tanımlı, `prefs` = tabletin tercihi (`requested=sharp_nearest`), `default` = ikisi de yok (`requested=420 applied=420`, `I`). HDR10 uygulanırken tablet tercihi ayarlara hiç girmez (değişimi yeniden yapılandırma tetiklemez), bu yüzden orada `source=prefs reason=hdr` görülmez; tercih `ev=stream_prefs requested_chroma=1 chroma=normal` satırında görünür.
-  - `requested` istenen, `applied` gerçekten kullanılan mod. `reason`: `llrc` = `444` LLRC profilinde istendi (VT LLRC'de BGRA'yı sessizce 4:2:0 kodluyor, araştırma §4), `codec` = `444` H.264 ile istendi (yalnız HEVC Main 4:4:4 denemesi var), `profile_rejected` = VT `HEVC_Main444_AutoLevel`'i reddetti, `metal_unavailable` = Metal geçişi kurulamadı (ayrıca `W encoder ev=chroma_metal_unavailable error=<neden>`), `hdr` = akış HDR10 (T-237, karar 0032): ayar yok sayılır, HDR kazanır (yakalama `x420` PQ, profil Main10, `profile_idc=2` beklenir), `invalid_value` = dört değer dışında (420 sayıldı). Bu durumlarda (`hdr` hariç) yakalama `420f` kalır.
+- **`I|W encoder ev=chroma_config requested=<m> applied=<m> [reason=metal_unavailable|hdr|full_chroma_denied|full_chroma_fallback|invalid_value] source=env|prefs|default chroma_format_idc=<n>|unknown profile_idc=<n>|unknown vui_full_range=0|1|unknown chroma_loc=<n>|unset|unknown [mismatch=1]`**: parametre setleri her duyurulduğunda (ilk karede ve değişince), `ev=encoder_config … level_idc=` satırının hemen ardından.
+  - `source`: `env` = `MATEBRIDGE_CHROMA` geçerli bir değerle tanımlı, `prefs` = tabletin tercihi (`requested=sharp_nearest`), `default` = ikisi de yok (`requested=420 applied=420`, `I`). HDR10 uygulanırken tablet tercihi ayarlara hiç girmez (değişimi yeniden yapılandırma tetiklemez), bu yüzden orada `source=prefs reason=hdr` görülmez; tercih `ev=stream_prefs requested_chroma=1 chroma=normal` satırında görünür.
+  - `requested` istenen, `applied` gerçekten kullanılan mod. `reason`: `metal_unavailable` = Metal geçişi kurulamadı (ayrıca `W encoder ev=chroma_metal_unavailable error=<neden>`), `hdr` = akış HDR10 (T-237, karar 0032): ayar yok sayılır, HDR kazanır (yakalama `x420` PQ, profil Main10, `profile_idc=2` beklenir), `full_chroma_denied` / `full_chroma_fallback` = paketlenmiş yol, aşağıda; `invalid_value` = `MATEBRIDGE_CHROMA` üç değer dışında, yok sayıldı (kaynak tablet tercihi ya da varsayılan). `llrc`, `codec`, `profile_rejected` T-302'de kalktı. `metal_unavailable`'da yakalama `420f` kalır.
   - `chroma_format_idc` / `profile_idc` SPS'ten okunur (HEVC `general_profile_idc`: 1 = Main, 4 = RExt; chroma 1 = 4:2:0, 3 = 4:4:4). `vui_full_range` ve `chroma_loc` (`chroma_sample_loc_type_top_field`; `unset` = VUI'de `chroma_loc_info` yok, varsayılan 0 = "sol") yalnız HEVC'de; H.264'te `unknown`.
-  - `sharp_*` modlarında çıkış tamponları `ChromaLocation=Center` etiketlidir; VT bunu VUI'ye `chroma_loc=1` olarak yazıyor (M6'da sentetik denemeyle görüldü).
-  - `444`'te VT BGRA girdiyi video aralığına çevirir: `vui_full_range=0` beklenir (STREAM_CONFIG tam aralık der; istemci bunu ayrıca bilmez, yalnız çözücü denemesidir).
-  - `W`: istenen uygulanmadı, değer geçersiz ya da SPS'teki renk biçimi uygulanan modunkinden farklı (`mismatch=1`, ör. 4:4:4 profilinde 4:2:0 çıktı).
+  - `sharp_nearest` modunda çıkış tamponları `ChromaLocation=Center` etiketlidir; VT bunu VUI'ye `chroma_loc=1` olarak yazıyor (M6'da sentetik denemeyle görüldü).
+  - `W`: istenen uygulanmadı, değer geçersiz ya da SPS'teki renk biçimi uygulanan modunkinden farklı (`mismatch=1`).
 - **`I video ev=chroma_stats mode=<applied> frames=<n> conv_ms_p50_95=<a>/<b>|- gpu_ms_p50_95=<a>/<b>|- cap_enc_ms_p50_95=<a>/<b>|- conv=<n> conv_fail=<n>`**: 10 sn'lik pencere, saniyelik `ev=cadence` ile aynı döngüde (pencere dolunca).
-  - `conv_ms`: Metal geçişinin duvar süresi (komut tamponu oluşturma → tamamlanma; kodlayıcının sahip kuyruğunda, VT'ye göndermeden hemen önce). `gpu_ms`: aynı komut tamponunun GPU yürütme süresi. `420`/`444`'te geçiş yoktur, `-`.
+  - `conv_ms`: Metal geçişinin duvar süresi (komut tamponu oluşturma → tamamlanma; kodlayıcının sahip kuyruğunda, VT'ye göndermeden hemen önce). `gpu_ms`: aynı komut tamponunun GPU yürütme süresi. `420`'de geçiş yoktur, `-`. T-311: tek dispatch, tek komut tamponu.
   - `cap_enc_ms`: ScreenCaptureKit geri çağrısı → kodlayıcı çıktısı (pacer beklemesi, dönüşüm ve kodlama dahil). Modlar arasında gecikme farkı bu alandan (ve `ev=latency`'den) okunur. Yeniden gönderilen kareler sayılmaz.
   - `frames` kodlanan kare sayısı; `conv` dönüştürülen kare; `conv_fail` geçişi çalışmayan kare (havuz dolu ya da GPU hatası; o kare BGRA olarak VT'ye gider, VT kendisi 4:2:0'a çevirir). İlk hata bir kez `W encoder ev=chroma_convert_failed reason=<neden>` olarak da yazılır.
   - Örnek sayısı seri başına 4096 ile sınırlı (fazlası sayılır, tutulmaz).
@@ -626,7 +618,7 @@ Mod kaynağı (T-240): geliştirici ayarı `MATEBRIDGE_CHROMA=420|sharp_bilinear
   - **`I video ev=chroma_stats mode=packed444 frames=<ana kare> aux_frames=<n> pack_ms_p50_95=<a>/<b> pack_gpu_ms_p50_95=<a>/<b> aux_enc_ms_p50_95=<a>/<b> aux_main_bytes=<oran>|- aux_lost=<n> pack_fail=<n> main_kbps=<n> aux_kbps=<n> aux_main_key=<oran>|- aux_main_refine=<oran>|- aux_main_delta=<oran>|-`**: 10 sn'lik pencere (`ev=cadence` döngüsünde). `pack_ms`: Metal paketleyici geçişinin duvar süresi, `pack_gpu_ms` GPU süresi; `aux_enc_ms`: yardımcı VT oturumunun kare başı kodlama süresi; `aux_main_bytes`: yardımcı bayt / ana bayt (T-262 sonrası hedef: hareketli/gürültülü içerikte ~0,25-0,35); `main_kbps` / `aux_kbps`: pencerenin gerçek hızları (T-262: oran tek başına yanıltır, durağan ekranda ana ve yardımcı kare birkaç yüz bayttır ve oran ~1-1,5 çıkar ama bant ihmal edilebilir; pencerenin meşgul mü durağan mı olduğu buradan okunur); `aux_main_key` / `aux_main_refine` / `aux_main_delta`: aynı oran IDR, durağan netleştirme (T-253) ve normal delta karelerine ayrı (yardımcı IDR ile ana IDR aynı pencerede olmak zorunda değil, anahtar oranı kaba bir göstergedir); yardımcı hedef hızı ana hedefin %25'i, en az 1 Mbps (`AuxBitratePolicy`, T-262); `aux_lost`: yardımcı kodlayıcıya girmeden atılan yardımcı kareler (iki uçuş yuvası dolu); `pack_fail`: paketleyicinin çalışmadığı kare.
   - **`W video ev=chroma_fallback reason=<r> layout=packed444->420 config_id=<n>`**: yardımcı kodlama yetişemedi (`aux_loss`: pencere başına kayıp > %5, 3 ardışık saniye; yardımcı kuyruk taşması ve gönderici düşürmeleri dahil), ya da hata (`aux_encode_errors`: art arda 5 VT hatası; `pack_<neden>`: Metal geçişi; başlangıçta `metal_unavailable`, `aux_setup`, `no_aux_output`). Yeni `config_id` ile `STREAM_CONFIG.chroma_layout = 0` gönderilir (ana akış, normal 4:2:0, keskin değil); kullanıcı tercihi saklı kalır, sonraki ekran kipi değişiminde (`ev=stream_reconfigure` ile fps/ölçek/ekran/dinamik aralık değişince) yeniden denenir.
   - `ev=stream_prefs … chroma=normal|sharp|full requested_chroma=<ham>`; `ev=stream_reconfigure … chroma_layout=<eski>-><yeni>`; `ev=keyframe_request reason=<n> view=main|aux|both …` (`action=aux_only`: istek yalnız yardımcı akıştı). Yardımcı sıra/atma: `video ev=stats` `sent_*` sayaçları iki akışı birlikte sayar.
-- `ev=profile knobs=` ayarı `MATEBRIDGE_CHROMA:<değer>` olarak listeler; `ev=encoder_config` (oturum başı) satırına `chroma=<istenen>|invalid` eklenir.
+- `ev=profile knobs=` ayarı `MATEBRIDGE_CHROMA:<değer>` olarak listeler (ham değer, geçersiz olsa da). `ev=encoder_config` (oturum başı) satırına yalnız geçerli bir değer tanımlıyken `chroma=<istenen>` eklenir (T-302'den beri `chroma=invalid` yazılmaz).
 
 ## Tam renk, paketlenmiş 4:4:4 (tablet, `MB/render` ve `MB/decoder`, T-259, karar 0034)
 
@@ -660,3 +652,19 @@ Gizlilik: imleç konumu, şekil görüntüsü ve uygulama adı **asla** yazılma
 - `I cursor ev=cursor_stats states=<n> shapes=<n> shape_bytes=<n> shapes_built=<n> shape_failed=<n> shape_checks=<n> replaced=<n> samples=<n> sample_failed=<n> sample_us_p50=<µs> sample_us_p95=<µs>`: akış açıkken saniyede bir, yalnız hareket varsa. `states`/`shapes`: yazılan `CURSOR_STATE`/`CURSOR_SHAPE` (`shape_bytes` PNG baytları); `shapes_built`: bu pencerede yeni çizilip PNG'ye kodlanan şekil; `shape_failed`: okunamayan ya da 61 440 bayta sığmayan şekil; `shape_checks`: imleç görüntüsü okunup şekil kimliği hesaplanan kontrol sayısı (oran sınırlı, en çok ~17/s; `samples` ile karşılaştır); `replaced`: tıkanma yüzünden yazılmadan yenisiyle değişen birim (§5); `samples`: yoklama + enjeksiyon örneği, `sample_failed`: imleç yerleştirilemeyen (sanal ekran yok / konum okunamadı); `sample_us_*`: bir örneğin maliyeti (konum + görünürlük + şekil çizimi/karması; yeni şekilde PNG kodlaması dahil).
 - `W cursor ev=cursor_shape_failed px=<WxH>`: görüntü 61 440 bayta indirilemedi (son şekil kalır). `W cursor ev=cursor_shape_flood max_per_s=20`: bir saniyede 20'den çok yeni şekil (bir kez; görüntü kararsızsa şekil yığılmasın diye son şekil kalır).
 - Karşılaştırma için tablet tarafı `CURSOR_STATE.host_time_us` ile saat farkından gecikmeyi hesaplayabilir (T-276).
+
+## Mac uykusu (Mac, `session`/`input`/`audio`, T-132, T-299)
+
+Mac uyumadan önce (`kIOMessageSystemWillSleep`) oturumlar BYE(HOST_SLEEP) ile biter, girdi bırakılır ve ses yakalaması kapanır. Uyku onayı en çok 300 ms bekler (`HostSleep.budgetUs`), sonra her durumda verilir.
+
+- `I session ev=host_sleep control=<n> video=<n> wall_ms=<n>`: uyku dizisi başladı (açık kontrol ve video bağlantısı sayısı).
+- `I|W session ev=host_sleep_ack waited_ms=<n> queue=ran|late flushed=true|false cut=<n> input=done|pending audio=done|pending`: uyku onaylandı.
+  - `queue=late`: oturum kuyruğu kesme noktasına kadar diziyi çalıştıramadı. `flushed`: kapanan kontrol bağlantıları BYE'yi gönderip kapandı. `cut`: süre dolmadan zorla kesilen bağlantı sayısı.
+  - `input=` / `audio=` (T-299): uyku katılımcıları kayıt sırasıyla. `done` = işini bitirdi, `pending` = süre içinde bitirmedi.
+  - Biri eksikse (kuyruk geç, boşaltma bitmedi ya da katılımcı `pending`) seviye `W`.
+- `input ev=input_release cause=host_sleep …`: girdi katılımcısı, oturum kuyruğundan bağımsız olarak, tutulan her tuşu, düğmeyi ve kalem temasını bırakır.
+- `W input ev=input_sleep_owed owed=<n>`: bırakmadan sonra kısa yeniden denemeler (4 deneme, ~150 ms) bitti ve hâlâ gönderilemeyen kapanış olayı var. Katılımcı bitmez, onayda `input=pending` görünür.
+- `I input ev=input_sleep_gate_end reason=wake|expired dropped_opens=<n>`: uyku girdi kapısı kalktı. Kapı uyku bırakmasından hemen önce kurulur. Açık kaldığı sürece açan olaylar (tuş/düğme/kalem basışı, kalem yaklaşması, kaydırma/sıkıştırma başlangıcı) hangi oturumdan gelirse gelsin atılır ve `dropped_opens` ile sayılır. Kapanan ve hareket olayları geçer.
+  - `wake`: `NSWorkspace.didWakeNotification`. `expired`: uyanık geçen 30 sn (uyanma bildirimi kaybolsa ya da uyku iptal olsa da tablet girdisi kilitli kalmasın). Yeni oturum kapıyı kaldırmaz.
+- `I audio ev=audio_capture_resume_after_sleep stream_id=<n> reason=wake|expired`: uyku penceresinde reddedilen son ses başlatma isteği uyanınca (ya da 30 sn sonra) geri yüklendi; ses, kullanıcı bir şeyi açıp kapatmadan başlar. Pencerede istek yoksa yazılmaz.
+- Tuş, karakter ya da koordinat yazılmaz; yalnız sayı, süre ve neden.
