@@ -188,7 +188,7 @@ class VideoLossGateTest {
             assertFalse(health.inputAllowed)
             assertTrue(health.showOverlay)
         }
-        assertTrue("the video kept retrying ($reopens)", reopens >= 10)
+        assertTrue("the video kept retrying ($reopens)", reopens >= 8) // T-294: waits back off (0.5 s x3, 1, 2, 4 s ...)
         assertFalse(health.inputAllowed)
         assertTrue(health.showOverlay)
         assertTrue(health.manual)

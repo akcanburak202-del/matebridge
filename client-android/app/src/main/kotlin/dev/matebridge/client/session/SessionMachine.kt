@@ -167,7 +167,11 @@ class SessionMachine(
          */
         data class ForgetFilesNet(val requestId: Int) : Event
         /** Video connection closed or failed to open. */
-        data class VideoClosed(val gen: Int) : Event
+        data class VideoClosed(val gen: Int, val gotFrame: Boolean = false) : Event
+        /** T-294: video connection [gen] received its first VIDEO_FRAME (reader thread; may arrive before or with its close). */
+        data class VideoFirstFrame(val gen: Int) : Event
+        /** T-294: the user tapped "Yeniden dene": clear the empty-close streak and cap a pending video retry at 500 ms. */
+        data object ResetVideoBackoff : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
         data class Tick(val videoFrames: Long) : Event
         /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
@@ -253,6 +257,10 @@ class SessionMachine(
     private var videoGen = -1
     private var videoOpen = false
     private var videoRetryAtUs = 0L
+    /** T-294: consecutive video connections that closed without a VIDEO_FRAME; reset by the first frame. */
+    private var videoEmptyCloses = 0
+    private var videoGotFrame = false
+    private var loggedVideoBackoffUs = VIDEO_RETRY_US
 
     private var hostName = ""
     private var pairingCode: String? = null
@@ -553,11 +561,34 @@ class SessionMachine(
             is Event.VideoClosed -> if (event.gen == videoGen) {
                 videoOpen = false
                 if (phase == Phase.STREAMING) {
-                    videoRetryAtUs = nowUs + VIDEO_RETRY_US
+                    if (videoGotFrame || event.gotFrame) videoEmptyCloses = 0 else videoEmptyCloses++
+                    val wait = videoRetryDelayUs(videoEmptyCloses)
+                    videoRetryAtUs = nowUs + wait
+                    if (wait != loggedVideoBackoffUs) {
+                        loggedVideoBackoffUs = wait
+                        log('I', "video_retry", "backoff_ms=${wait / 1000} empty=$videoEmptyCloses")
+                    }
                     // T-218: every loss of the current video gates input at once, also while a migration proof is pending
                     // (the close may be the takeover's or an unrelated failure, and the proof may stall until its deadline).
                     // The flag only lets the UI hold back the overlay for a promotion that is about to reconfigure.
                     out += Action.VideoLost(event.gen, duringMigration = candAck != null)
+                }
+            }
+            Event.ResetVideoBackoff -> {
+                videoEmptyCloses = 0
+                if (!videoOpen) videoRetryAtUs = minOf(videoRetryAtUs, nowUs + VIDEO_RETRY_US)
+                if (loggedVideoBackoffUs != VIDEO_RETRY_US) {
+                    loggedVideoBackoffUs = VIDEO_RETRY_US
+                    log('I', "video_retry", "backoff_ms=${VIDEO_RETRY_US / 1000} empty=0")
+                }
+            }
+            is Event.VideoFirstFrame -> if (event.gen == videoGen && !videoGotFrame) {
+                // T-294: the first frame of the open video connection ends the empty streak (and its backoff) at once.
+                videoGotFrame = true
+                videoEmptyCloses = 0
+                if (loggedVideoBackoffUs != VIDEO_RETRY_US) {
+                    loggedVideoBackoffUs = VIDEO_RETRY_US
+                    log('I', "video_retry", "backoff_ms=${VIDEO_RETRY_US / 1000} empty=0")
                 }
             }
             is Event.SetPrefs -> {
@@ -1139,6 +1170,7 @@ class SessionMachine(
         val cfg = config ?: return
         videoGen = ++genCounter
         videoOpen = true
+        videoGotFrame = false
         out += Action.OpenVideo(
             videoGen,
             Endpoint(ep.host, videoPort),
@@ -1375,6 +1407,19 @@ class SessionMachine(
         const val BACKOFF_MAX_US = 5_000_000L
         const val BUSY_RETRY_US = 3_000_000L
         const val VIDEO_RETRY_US = 500_000L
+        /** T-294: empty video closes in a row that still retry after [VIDEO_RETRY_US]. */
+        const val VIDEO_EMPTY_FREE = 3
+        const val VIDEO_RETRY_MAX_US = 4_000_000L
+
+        /**
+         * T-294: wait before reopening the video after [emptyCloses] consecutive closes without a frame: 500 ms for the
+         * first [VIDEO_EMPTY_FREE], then 1 s, 2 s, 4 s (cap). A connection that delivered a frame resets it to 500 ms.
+         */
+        fun videoRetryDelayUs(emptyCloses: Int): Long {
+            val over = emptyCloses - VIDEO_EMPTY_FREE
+            if (over <= 0) return VIDEO_RETRY_US
+            return minOf(VIDEO_RETRY_MAX_US, VIDEO_RETRY_US shl minOf(over, 8))
+        }
         const val UI_INTERVAL_US = 250_000L
         const val MIGRATE_TIMEOUT_US = 3_000_000L
         const val RETIRE_TIMEOUT_US = 2_000_000L

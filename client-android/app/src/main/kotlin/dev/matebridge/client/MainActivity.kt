@@ -1689,7 +1689,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             minimumWidth = (160 * d).toInt()
             minimumHeight = (48 * d).toInt()
-            setOnClickListener { videoHealth.retry()?.let { runVideoRecovery(it) } }
+            setOnClickListener {
+                controller.resetVideoBackoff() // T-294
+                videoHealth.retry()?.let { runVideoRecovery(it) }
+            }
         }
         val box = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL

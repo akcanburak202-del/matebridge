@@ -92,6 +92,9 @@ class DecodeProgress {
  *   delivered its first frame) then asks for a codec restart. The restart starts a new generation, so input re-opens
  *   only at a decoded output of video sent after the loss. Resumes are bounded ([MAX_RESUMES] per episode) and never
  *   move the ladder, which runs on its own schedule while the video stays away or keeps half-reconnecting.
+ * - T-294: in the manual state [videoFlowing] still resumes, at most once per [MANUAL_RESUME_GAP_MS] (`manual_resume`),
+ *   so the picture returns without "Yeniden dene" once the host serves video again. The generation is STARTING (input
+ *   closed) until its first decoded output.
  */
 class VideoHealth(
     private val clock: () -> Long,
@@ -114,6 +117,8 @@ class VideoHealth(
         const val EPISODE_END_HEALTHY_MS = 10_000L
         /** T-218: codec restarts on fresh video ([videoFlowing]) per recovery episode, besides the ladder's steps. */
         const val MAX_RESUMES = 3
+        /** T-294: in the manual state, [videoFlowing] restarts the codec at most this often. */
+        const val MANUAL_RESUME_GAP_MS = 10_000L
         private val STEPS = arrayOf(Step.RESTART, Step.RESTART, Step.RECONNECT, Step.MANUAL)
         /** Gap before each step: restart at +1 s, restart at +3 s, reconnect at +6 s, manual at +15 s. */
         val STEP_GAPS_MS = longArrayOf(1000L, 2000L, 3000L, 9000L)
@@ -156,8 +161,16 @@ class VideoHealth(
 
     /** T-218: the newest session video connection reported lost (-1: none since the last Detached). */
     private var lostConn = -1
+    /**
+     * T-294: newest connection whose first frame arrived during the manual-resume cooldown (null: none). [tick] resumes
+     * for it when the cooldown ends, because `onVideoFlowing` fires only once per connection. Cleared by a later (or the
+     * same) connection's loss, by Detached and once used.
+     */
+    private var pendingResumeConn: Int? = null
     /** T-218: [videoFlowing] restarts used in the current episode. */
     private var resumes = 0
+    /** T-294: when [videoFlowing] last resumed in the manual state (null: never). */
+    private var lastManualResumeMs: Long? = null
 
     /** How long the current generation has been HEALTHY (0 when it is not). */
     fun healthyForMs(): Long = if (state == State.HEALTHY) clock() - healthySinceMs else 0L
@@ -178,6 +191,7 @@ class VideoHealth(
             is HealthEvent.Detached -> {
                 running = false
                 quietOverlay = false
+                pendingResumeConn = null
                 lostConn = -1 // the session's connections end with the surface; a new controller may count anew
                 nextStepAtMs = null // nothing to recover without a surface; re-armed on the next generation
                 set(State.IDLE, null)
@@ -206,6 +220,7 @@ class VideoHealth(
      */
     fun videoLost(videoConn: Int, quietOverlay: Boolean = false) {
         if (videoConn > lostConn) lostConn = videoConn
+        pendingResumeConn?.let { if (videoConn >= it) pendingResumeConn = null }
         if (state == State.IDLE) return
         if (state == State.FAULT) {
             if (!quietOverlay) showOverlayNow() // a loss outside a migration: the overlay is due now
@@ -244,12 +259,32 @@ class VideoHealth(
             return null
         }
         if (state != State.FAULT || cause != FaultCause.VIDEO_LOST) return null
-        if (manual || resumes >= MAX_RESUMES) {
-            log('I', "video_recover", "step=resume_skipped resumes=$resumes manual=${if (manual) 1 else 0} vgen=$generation")
+        if (manual) {
+            // T-294: once the host's circuit breaker lets a build through the video returns by itself. Rate limited, so a
+            // half-working connection costs at most one keyframe per MANUAL_RESUME_GAP_MS.
+            val now = clock()
+            val last = lastManualResumeMs
+            if (last != null && now - last < MANUAL_RESUME_GAP_MS) {
+                pendingResumeConn = videoConn // [tick] resumes for it when the cooldown ends
+                log('I', "video_recover", "step=resume_skipped resumes=$resumes manual=1 vgen=$generation")
+                return null
+            }
+            return manualResume(now)
+        }
+        if (resumes >= MAX_RESUMES) {
+            pendingResumeConn = videoConn // T-294: [tick] resumes for it once the episode is manual and the cooldown is over
+            log('I', "video_recover", "step=resume_skipped resumes=$resumes manual=0 vgen=$generation")
             return null
         }
         resumes++
         log('I', "video_recover", "step=resume n=$resumes vgen=$generation")
+        return Action.RESTART_CODEC
+    }
+
+    private fun manualResume(now: Long): Action {
+        lastManualResumeMs = now
+        pendingResumeConn = null
+        log('I', "video_recover", "step=manual_resume vgen=$generation")
         return Action.RESTART_CODEC
     }
 
@@ -259,6 +294,14 @@ class VideoHealth(
      */
     fun tick(progress: DecodeProgress.Snapshot?): Action? {
         val now = clock()
+        pendingResumeConn?.let { conn ->
+            if (state != State.FAULT || cause != FaultCause.VIDEO_LOST || conn <= lostConn) {
+                pendingResumeConn = null // that fault is over or moved on
+            } else if (manual) {
+                val last = lastManualResumeMs
+                if (last == null || now - last >= MANUAL_RESUME_GAP_MS) return manualResume(now)
+            }
+        }
         if (state == State.STARTING || state == State.HEALTHY) {
             if (!running && now - genStartMs >= NOT_RUNNING_MS) {
                 fault(FaultCause.NOT_RUNNING, now)

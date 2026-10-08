@@ -306,6 +306,7 @@ class VideoHealthTest {
         lost()
         val ladder = ArrayList<Pair<Long, Action>>()
         var resumes = 0
+        var manualResumes = 0
         var manualAt = -1L
         repeat(120) { // 60 s
             now += 500
@@ -319,7 +320,11 @@ class VideoHealthTest {
                 null -> Unit
             }
             if (health.manual && manualAt < 0) manualAt = now - t0
-            if (flowing() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1) }
+            val wasManual = health.manual
+            if (flowing() == Action.RESTART_CODEC) {
+                if (wasManual) manualResumes++ else resumes++
+                begin(health.generation + 1)
+            }
             assertFalse(health.inputAllowed)
             lost() // the connection drops before any decoded output
         }
@@ -329,7 +334,159 @@ class VideoHealthTest {
         )
         assertEquals(15_000L, manualAt)
         assertEquals(VideoHealth.MAX_RESUMES, resumes)
+        // T-294: past manual (15 s .. 60 s) one resume per 10 s at most.
+        assertTrue("manual resumes $manualResumes", manualResumes in 3..5)
         assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") })
+    }
+
+    private fun toManual() {
+        healthy(1)
+        lost()
+        repeat(40) { // 20 s: the ladder runs to manual, the video never comes back
+            now += 500
+            when (tick()) {
+                Action.RESTART_CODEC -> begin(health.generation + 1)
+                Action.RECONNECT -> { health.onEvent(Detached(health.generation)); begin(health.generation + 1) }
+                null -> Unit
+            }
+            conn++; lost()
+        }
+        assertTrue(health.manual)
+    }
+
+    /** T-294: manual state, host serves video again: the codec restarts without "Yeniden dene", then the layer lifts. */
+    @Test fun manualStateResumesWhenVideoReturnsThenTheLayerLiftsAndTheEpisodeEnds() {
+        toManual()
+        assertTrue(health.showOverlay)
+        assertEquals(Action.RESTART_CODEC, flowing())
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=manual_resume ") })
+        val gen = health.generation + 1
+        begin(gen) // the resume starts a new generation
+        assertEquals(State.STARTING, health.state)
+        assertFalse("input stays closed until the first decoded output", health.inputAllowed)
+        progress.onInput(gen, now)
+        assertTrue(progress.onOutput(gen))
+        health.onEvent(FirstOutput(gen))
+        assertEquals(State.HEALTHY, health.state)
+        assertTrue(health.inputAllowed)
+        assertFalse("the layer lifts", health.showOverlay)
+        now += 10_000
+        assertNull(tick())
+        assertFalse(health.recovering)
+        assertFalse(health.manual)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=done ") })
+    }
+
+    @Test fun manualResumeIsRateLimitedToOncePerTenSeconds() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        begin(health.generation + 1)
+        conn++; lost() // half-working connection: a frame, then it drops before any output
+        now += 9_900
+        assertNull(flowing())
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") && "manual=1" in it })
+        conn++; lost()
+        now += 200 // 10.1 s after the first manual resume
+        assertEquals(Action.RESTART_CODEC, flowing())
+        assertEquals(2, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+    }
+
+    /** T-294 review P1: a healthy connection's first frame inside the cooldown is not lost; tick resumes when it ends. */
+    @Test fun deferredManualResumeFiresAtCooldownExpiry() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        val t0 = now
+        begin(health.generation + 1)
+        conn++; lost() // that connection drops
+        now += 3_000
+        assertNull(flowing()) // the healthy replacement's first frame, inside the cooldown
+        assertEquals(State.FAULT, health.state) // ... after the half-working generation faulted
+        repeat(60) {
+            now += 200
+            val a = tick()
+            if (now - t0 < VideoHealth.MANUAL_RESUME_GAP_MS) assertNull("no resume before the cooldown ends", a)
+            else if (a != null) {
+                assertEquals(Action.RESTART_CODEC, a)
+                assertTrue(now - t0 >= VideoHealth.MANUAL_RESUME_GAP_MS)
+                assertEquals(2, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+                assertNull("used once", tick())
+                return
+            }
+        }
+        org.junit.Assert.fail("the deferred resume never fired: $logs")
+    }
+
+    /** T-294 review round 2: resumes used up before manual, a stable connection at +10 s; manual at +15 s resumes it. */
+    @Test fun aFlowingConnectionSkippedForExhaustedResumesResumesOnceManual() {
+        healthy(1)
+        val t0 = now
+        lost()
+        repeat(VideoHealth.MAX_RESUMES) { // partial reconnects
+            now += 100
+            assertEquals(Action.RESTART_CODEC, flowing())
+            begin(health.generation + 1)
+            conn++; lost()
+        }
+        var resumedAt = -1L
+        fun drive(untilMs: Long) {
+            while (now - t0 < untilMs && resumedAt < 0) {
+                now += 500
+                when (tick()) {
+                    Action.RESTART_CODEC -> {
+                        if (health.manual) { resumedAt = now - t0 } else begin(health.generation + 1)
+                    }
+                    Action.RECONNECT -> { health.onEvent(Detached(health.generation)); begin(health.generation + 1) }
+                    null -> Unit
+                }
+            }
+        }
+        drive(10_000)
+        assertFalse(health.manual)
+        conn++; lost() // the last generation faulted again
+        assertNull("resumes are used up", flowing()) // the stable connection's one-time notice
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_skipped ") && "manual=0" in it })
+        drive(20_000)
+        assertTrue("resumed once manual: $logs", resumedAt >= 15_000)
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=manual_resume ") })
+        // At most one per 10 s in manual: nothing is pending any more.
+        now += 1_000
+        assertNull(tick())
+    }
+
+    @Test fun aLossBeforeCooldownExpiryCancelsTheDeferredResume() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        begin(health.generation + 1)
+        conn++; lost()
+        now += 3_000
+        assertNull(flowing())
+        lost() // that same connection drops before the cooldown ends
+        repeat(40) {
+            now += 500
+            assertNull(tick())
+        }
+        assertEquals(1, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+    }
+
+    @Test fun deferredResumesStillRespectOneResumePerTenSeconds() {
+        toManual()
+        var resumes = 0
+        var fed = 0
+        val t0 = now
+        repeat(100) { // 50 s of connections that each get a frame, then the generation faults and it drops
+            now += 500
+            if (tick() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1); conn++; lost() }
+            if (it % 4 == 0) { fed++; if (flowing() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1); conn++; lost() } }
+        }
+        assertTrue("fed $fed", fed > 10)
+        assertTrue("resumes $resumes in ${now - t0} ms", resumes in 4..5)
+    }
+
+    @Test fun staleConnectionIsStillIgnoredInManual() {
+        toManual()
+        assertNull(health.videoFlowing(conn)) // not newer than the last lost connection
+        assertTrue(logs.toString(), logs.any { it.startsWith("I video_recover step=resume_stale ") })
+        assertTrue(logs.none { it.startsWith("I video_recover step=manual_resume ") })
     }
 
     @Test fun aStaleFirstFrameNoticeOfAReplacedConnectionIsDropped() {

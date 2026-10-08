@@ -38,6 +38,15 @@ class EngineMailboxesTest {
         assertNull(box.take())
     }
 
+    /** T-294 review round 3: the retry tap's reset is a mail slot, so it is never dropped and repeats coalesce. */
+    @Test fun theVideoBackoffResetIsAMailSlotThatIsNeverDropped() {
+        val box = EngineMailboxes()
+        box.videoBackoff.post(Event.ResetVideoBackoff)
+        box.videoBackoff.post(Event.ResetVideoBackoff)
+        assertEquals(Event.ResetVideoBackoff, box.take())
+        assertNull(box.take())
+    }
+
     @Test fun anEngineThatLookedBeforeThePostsSeesBothTogetherOrTheCursorFirst() {
         // The engine's check finds nothing; the UI posts afterwards; the next take gets the whole command, never prefs alone.
         val box = EngineMailboxes()
