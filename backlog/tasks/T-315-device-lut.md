@@ -1,7 +1,7 @@
 ---
 id: T-315
 title: Host — sharp_nearest EOTF LUT'u `constant` adres uzayında cihazda daha yavaş; `device` adres uzayına geri dön
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-314]

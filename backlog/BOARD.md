@@ -327,3 +327,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-312](tasks/T-312-client-decoder-output-park.md) | Tablet — codec boşken çözücü çıkış iş parçacığı park eder (CB2, A/B anahtarı); Tam renk aux çözücü ve GL beklemesi olay tabanlı (C10/CB9) | 7 | android-client-dev | [T-303] |
 | [T-313](tasks/T-313-host-dead-code.md) | Host — ölü ve yalnız testte kullanılan kod, küçük tekrarlar, test kopyaları (T-297 parti 4) ve REFINE anahtarları ev=profile'da | 7 | mac-host-dev | [T-302, T-304, T-309, T-311] |
 | [T-314](tasks/T-314-revert-fused-chroma-kernel.md) | Host — T-311 birleşik sharp_nearest kernel'i cihazda daha yavaş; iki geçişli kernel'e geri dön (HA1 iz aşaması ve A8 ortak kurulum kalır) | 7 | mac-host-dev | [T-311] |
+| [T-315](tasks/T-315-device-lut.md) | Host — sharp_nearest EOTF LUT'u `constant` adres uzayında cihazda daha yavaş; `device` adres uzayına geri dön | 7 | mac-host-dev | [T-314] |
