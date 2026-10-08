@@ -50,7 +50,8 @@ class VsyncIdleGate(
     private var idleLogged = false
     private var vsyncsSinceWake = RATE_VSYNCS_AFTER_WAKE
 
-    val isAsleep: Boolean get() = asleep.get()
+    /** Tests only. */
+    internal val isAsleep: Boolean get() = asleep.get()
 
     /** Nanoseconds since the last activity (frame or input). */
     fun sinceActivityNs(nowNs: Long): Long = nowNs - lastActivityNs
@@ -131,16 +132,11 @@ class FirstOutputBypass {
     /** Streaming (re)starts: nothing pending. */
     fun disarm() = armed.set(false)
 
-    val isArmed: Boolean get() = armed.get()
+    /** Tests only. */
+    internal val isArmed: Boolean get() = armed.get()
 
     /** Output thread, per decoded frame: true exactly once after [arm] (present this one now). */
     fun take(): Boolean = armed.getAndSet(false)
-
-    /**
-     * The presentation decision for one decoded frame: null (release now, as without a vsync sample) when this is the
-     * first output after a sleep, else [schedule]. The pacer does not see a bypassed frame.
-     */
-    inline fun schedule(schedule: () -> FramePacer.Decision?): FramePacer.Decision? = if (take()) null else schedule()
 }
 
 /**

@@ -94,55 +94,31 @@ class InFlightGaugeTest {
 
     @Test fun countsQueuedMinusDone() {
         val g = InFlightGauge()
-        g.onQueued(0); g.onQueued(0); g.onQueued(0)
+        g.onQueued(); g.onQueued(); g.onQueued()
         assertEquals(3, g.current())
-        g.onDone(1)
+        g.onDone()
         assertEquals(2, g.current())
-        g.onDone(1); g.onDone(1); g.onDone(1) // never negative
+        g.onDone(); g.onDone(); g.onDone() // never negative
         assertEquals(0, g.current())
-    }
-
-    @Test fun limitBlocksUntilAnOutputCompletes() {
-        val g = InFlightGauge()
-        g.onQueued(0); g.onQueued(0)
-        assertFalse(g.canQueue(2, 1 * ms))
-        assertTrue(g.canQueue(3, 1 * ms))
-        assertTrue(g.canQueue(0, 1 * ms)) // unlimited
-        g.onDone(2 * ms)
-        assertTrue(g.canQueue(2, 3 * ms))
-    }
-
-    @Test fun stalledDecoderDoesNotDeadlock() {
-        val g = InFlightGauge()
-        g.onQueued(0); g.onQueued(0)
-        assertFalse(g.canQueue(2, InFlightGauge.STALL_NS / 2))
-        assertTrue(g.canQueue(2, InFlightGauge.STALL_NS + 1))
     }
 
     @Test fun p95OfSampledCount() {
         val g = InFlightGauge()
-        repeat(90) { g.onQueued(0); g.onDone(0) } // sampled as 1
-        repeat(10) { g.onQueued(0) } // 1..10 -> the tail
+        repeat(90) { g.onQueued(); g.onDone() } // sampled as 1
+        repeat(10) { g.onQueued() } // 1..10 -> the tail
         val p = g.p95AndReset()!!
         assertTrue("p95 $p", p in 2..10)
         assertNull(g.p95AndReset())
     }
 
-    @Test fun heldFrameCountsAsOneMore() {
-        val g = InFlightGauge()
-        g.onQueued(0); g.onQueued(0)
-        g.onHeld()
-        assertEquals(3, g.p95AndReset())
-    }
-
     @Test fun presentFieldsFormat() {
-        val f = StatsFormat.presentFields(3, 2, 4, 4_166_666, 9_500, 0)
+        val f = StatsFormat.presentFields(3, 2, 4, 4_166_666, 9_500)
         assertEquals("slot_dups=3 late_drops=2 in_codec_p95=4 lead_ms=4.17 d_us=9500 inflight_limit=0 phase_lock=0 rephase=0 late_margin_p50_us=- late_margin_min_us=-", f)
-        val g = StatsFormat.presentFields(0, 0, 2, 6_000_000, 100, 0, true, 3)
+        val g = StatsFormat.presentFields(0, 0, 2, 6_000_000, 100, true, 3)
         assertTrue(g, g.contains("phase_lock=1 rephase=3"))
-        assertTrue(StatsFormat.presentFields(0, 0, null, 0, 0, 3).contains("in_codec_p95=-"))
+        assertTrue(StatsFormat.presentFields(0, 0, null, 0, 0).contains("in_codec_p95=-"))
         assertTrue(f, f.endsWith("late_margin_p50_us=- late_margin_min_us=-"))
-        val h = StatsFormat.presentFields(1, 1, 1, 0, 0, 0, false, 0, 2_500, -300)
+        val h = StatsFormat.presentFields(1, 1, 1, 0, 0, false, 0, 2_500, -300)
         assertTrue(h, h.endsWith("late_margin_p50_us=2500 late_margin_min_us=-300"))
     }
 

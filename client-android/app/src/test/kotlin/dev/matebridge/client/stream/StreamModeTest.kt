@@ -68,20 +68,9 @@ class StreamModeTest {
         assertEquals(StreamMode.DEFAULT, StreamMode.parse(""))
     }
 
-    @Test fun oldIdsMapToModesPerDecision0030() {
-        assertEquals(StreamMode.DAILY, StreamMode.parse("clarity"))
-        assertEquals(StreamMode.DAILY, StreamMode.parse("smooth"))
-        assertEquals(StreamMode.DAILY, StreamMode.parse("performance"))
-        assertEquals(StreamMode.DAILY, StreamMode.parse("performance144"))
-        assertEquals(StreamMode.GAME, StreamMode.parse("game"))
-        assertEquals(StreamMode.GAME, StreamMode.parse("game60"))
-        assertEquals(LegacyModes.Migrated(StreamMode.DAILY, 60), LegacyModes.migrateStored("clarity"))
-        assertEquals(LegacyModes.Migrated(StreamMode.DAILY, 120), LegacyModes.migrateStored("smooth"))
-        assertEquals(LegacyModes.Migrated(StreamMode.DAILY, 120), LegacyModes.migrateStored("performance"))
-        assertEquals(LegacyModes.Migrated(StreamMode.DAILY, 120), LegacyModes.migrateStored("performance144"))
-        assertEquals(LegacyModes.Migrated(StreamMode.GAME, 120), LegacyModes.migrateStored("game"))
-        assertEquals(LegacyModes.Migrated(StreamMode.GAME, 60), LegacyModes.migrateStored("game60"))
-        for (id in listOf("daily", "drawing", "bogus", "", null)) assertNull(id, LegacyModes.migrateStored(id))
+    @Test fun removedPreT223IdsFallBackToTheDefault() {
+        for (id in listOf("clarity", "smooth", "performance", "performance144", "game60")) assertEquals(id, StreamMode.DEFAULT, StreamMode.parse(id))
+        assertEquals(StreamMode.GAME, StreamMode.parse("game")) // still a current id
     }
 
     @Test fun texts() {
@@ -145,59 +134,6 @@ class StreamModeTest {
         store.map["fps_game"] = "garbage"
         assertEquals(120, s.modeFps(StreamMode.DAILY)) // Günlük default
         assertEquals(60, s.modeFps(StreamMode.GAME)) // Oyun default
-    }
-
-    // ---- one-time migration of the old five ids (decision 0030 §5) ----
-
-    private fun migrated(id: String?): Settings {
-        val store = MemStore()
-        if (id != null) store.map["stream_mode"] = id
-        val s = Settings(store)
-        s.migrateModesOnce()
-        return s
-    }
-
-    @Test fun storedOldModesMigrateWithTheirFrameRate() {
-        migrated("clarity").let { assertEquals(StreamMode.DAILY, it.streamMode()); assertEquals(60, it.modeFps(StreamMode.DAILY)) }
-        migrated("smooth").let { assertEquals(StreamMode.DAILY, it.streamMode()); assertEquals(120, it.modeFps(StreamMode.DAILY)) }
-        migrated("performance").let { assertEquals(StreamMode.DAILY, it.streamMode()); assertEquals(120, it.modeFps(StreamMode.DAILY)) }
-        migrated("performance144").let { assertEquals(StreamMode.DAILY, it.streamMode()); assertEquals(120, it.modeFps(StreamMode.DAILY)) }
-        migrated("game").let { assertEquals(StreamMode.GAME, it.streamMode()); assertEquals(120, it.modeFps(StreamMode.GAME)) }
-        migrated("game60").let { assertEquals(StreamMode.GAME, it.streamMode()); assertEquals(60, it.modeFps(StreamMode.GAME)) }
-    }
-
-    @Test fun unknownOrMissingValueBecomesDailyAt120() {
-        for (id in listOf("garbage", null)) {
-            val s = migrated(id)
-            assertEquals(StreamMode.DAILY, s.streamMode())
-            assertEquals(120, s.modeFps(StreamMode.DAILY))
-        }
-    }
-
-    @Test fun migrationRunsOnceAndASingleNewGameChoiceIsNeverMistakenForTheOldOne() {
-        val store = MemStore()
-        store.map["stream_mode"] = "clarity"
-        val s = Settings(store)
-        assertEquals(LegacyModes.Migrated(StreamMode.DAILY, 60), s.migrateModesOnce())
-        assertEquals("daily", store.map["stream_mode"])
-        assertNull(s.migrateModesOnce()) // second start: nothing
-        // the user now picks Oyun (default 60): a later start must not turn it into the old Oyun 120
-        s.setStreamMode(StreamMode.GAME)
-        assertNull(Settings(store).migrateModesOnce())
-        assertEquals(StreamMode.GAME, Settings(store).streamMode())
-        assertEquals(60, Settings(store).modeFps(StreamMode.GAME))
-    }
-
-    @Test fun migrationFlagSurvivesTheResetToDefaults() {
-        val store = MemStore()
-        store.map["stream_mode"] = "game"
-        val s = Settings(store)
-        s.migrateModesOnce()
-        s.resetToDefaults()
-        assertNull(store.map["stream_mode"])
-        assertNull(store.map["fps_game"])
-        assertEquals("1", store.map["modes_migrated"])
-        assertNull(s.migrateModesOnce())
     }
 
     // ---- layout ----

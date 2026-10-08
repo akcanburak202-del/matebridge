@@ -8,11 +8,6 @@ import dev.matebridge.client.protocol.VideoFrame
 import dev.matebridge.client.session.MbLog
 import dev.matebridge.client.stream.StatsFormat
 
-/** Anything that produces VIDEO_FRAMEs pushes them here (session in T-015, file player in debug). */
-fun interface VideoFrameSink {
-    fun onFrame(frame: VideoFrame)
-}
-
 /**
  * Decision 0034 (T-259): the main stream of the packed full colour path decodes into an ImageReader instead of the
  * SurfaceView; a GL pass shows it. With a [PackedOutput] set ([VideoRenderer.packed]) a frame that would be released at
@@ -63,13 +58,6 @@ class VideoRenderer(
     private val onGiveUp: (String) -> Unit = {},
     /** Vsync grid fed by the UI thread's Choreographer; without samples frames render immediately. */
     private val vsync: VsyncClock = VsyncClock(),
-    /**
-     * [BUFFER_ADAPTIVE] (adaptive pacing, T-052), or a fixed jitter buffer in content frames, 0..2.
-     * 0 = render each frame as soon as decoded (T-015 behavior).
-     */
-    bufferFrames: Int = 1,
-    /** False when the presenter (GL path) reports shown times itself; the codec callback would double count. */
-    codecReportsShown: Boolean = true,
     /** T-158: creates the decoder; tests pass a fake. */
     private val codecFactory: DecoderCodec.Factory = MediaCodecDecoder.FACTORY,
     /** T-158: clock, logcat and thread calls of the decoder threads; tests pass a JVM implementation. */
@@ -91,14 +79,13 @@ class VideoRenderer(
     private val previousWaitMs: Long = PREVIOUS_WAIT_MS,
     /** T-161: backoff before the 1st / 2nd / 3rd codec restart of a [RestartPolicy] window. */
     private val restartDelaysMs: LongArray = RestartPolicy.DELAYS_MS,
-) : VideoFrameSink {
+) {
     companion object {
         const val JOIN_MS = 300L
         /** T-161 (decision 0019): longest wait of a new generation for the previous one; then `stuck`. */
         const val PREVIOUS_WAIT_MS = 2_000L
         /** How long a stopping codec waits for its output thread before leaving it as a straggler. */
         private const val OUTPUT_JOIN_MS = 500L
-        const val BUFFER_ADAPTIVE = -1
         private const val PTS_MAP_MAX = 64
         /** Blocking wait of the output thread per dequeue; bounds shutdown latency only. */
         private const val OUTPUT_WAIT_US = 5_000L
@@ -112,9 +99,6 @@ class VideoRenderer(
     /** Current stream configuration; replaced by [reconfigure]. Read once per codec creation. */
     @Volatile private var config: StreamConfig = initialConfig
     val stats = VideoStats()
-
-    /** Read at each codec start; switch before re-attaching a surface (GL -> SurfaceView fallback). */
-    @Volatile var codecReportsShown: Boolean = codecReportsShown
 
     /**
      * Decision 0034: set (before [attachSurface] of the main ImageReader's surface) while the packed full colour path
@@ -130,10 +114,6 @@ class VideoRenderer(
      * feeds the same statistics the codec's frame-rendered callback feeds on the direct path. Any thread.
      */
     fun reportPackedShown(pts: Long, shownNs: Long) { packedShownSink?.invoke(pts, shownNs) }
-
-    /** [BUFFER_ADAPTIVE] or jitter buffer size in content frames (0..2); takes effect on the next frame. */
-    @Volatile var bufferFrames: Int = bufferFrames.coerceIn(BUFFER_ADAPTIVE, 2)
-        set(v) { field = v.coerceIn(BUFFER_ADAPTIVE, 2) }
 
     /** T-069 experiment: per-frame pace trace, dumped to [paceTraceFile] every [TRACE_DUMP_EVERY] stats windows and by [flushPaceTrace]. */
     @Volatile var paceTrace: PaceTrace? = null
@@ -195,8 +175,7 @@ class VideoRenderer(
         if (!write) return
         MbLog.i(
             "present",
-            // T-183: the inflight limit is retired; `inflight_limit=` stays in the line with a constant 0.
-            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), 0, pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs) +
+            StatsFormat.presentFields(c.slotDups, c.lateDrops, p95, vsync.leadNs(), paceDUs(), pacer?.phaseLock == true, rephaseDelta, c.lateMarginP50Us, c.lateMarginMinUs) +
                 " " + holds.logFields() + " " + (pacer?.diag()?.logFields() ?: PacerDiag.NONE),
             "render",
         )
@@ -299,8 +278,8 @@ class VideoRenderer(
     /** T-141 (review P2): armed by the activity's vsync loop when it falls asleep; see [FirstOutputBypass]. */
     val firstOutput = FirstOutputBypass()
 
-    /** True while non-keyframes are refused until a keyframe arrives (pure query). */
-    fun isWaitingKeyframe() = queue.isWaitingKeyframe()
+    /** Tests only: true while non-keyframes are refused until a keyframe arrives (pure query). */
+    internal fun isWaitingKeyframe() = queue.isWaitingKeyframe()
 
     /**
      * T-121 queue fields for the `MB/decoder ev=stats` line (`kf_req= kf_held= overflows= max_pending= limit=`);
@@ -312,7 +291,7 @@ class VideoRenderer(
             "limit=${queue.maxPending} catchups=${q.catchUps} cu_skipped=${if (reset) catchDiscards.getAndSet(0) else catchDiscards.get()} kf_avoided=${q.catchUps}"
     }
 
-    override fun onFrame(frame: VideoFrame) {
+    fun onFrame(frame: VideoFrame) {
         if (!feeding) return // T-159: FAULT; a fed dead decoder overflows and loops keyframe requests
         queue.offer(frame)?.let(onKeyframeRequest)
     }
@@ -402,8 +381,6 @@ class VideoRenderer(
         }
     }
 
-    private fun mime(config: StreamConfig) = if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC
-    else MediaFormat.MIMETYPE_VIDEO_HEVC
 
     /**
      * The decoder input format. [operatingRate] is [OperatingRate.MAX] (T-222), or the stream fps (null: unset) in the
@@ -450,7 +427,7 @@ class VideoRenderer(
     private fun createCodec(surface: Any, onColorKeys: (Map<String, Int>) -> Unit = {}): DecoderCodec {
         val config = this.config
         onColorKeys(colorKeys(config))
-        val mime = mime(config)
+        val mime = videoMime(config)
         if (!ColorMapping.primariesConveyed(config.colorPrimaries, config.matrix)) {
             // MediaFormat has no primaries key; a Display P3 stream is decoded but not tagged (BT.2020 rides on the standard).
             env.log('W', tag, "${env.elapsedRealtimeMs()} W decoder ev=color_unsupported primaries=${config.colorPrimaries}")
@@ -592,7 +569,6 @@ class VideoRenderer(
             codec = createCodec(att.surface) { requestedColors = it }
             var held: VideoFrame? = null
             val frameIntervalNs = if (config.fps > 0) 1_000_000_000L / config.fps else 0
-            val pacer = FramePacer(vsync, bufferFrames, frameIntervalNs)
             val adaptivePacer = AdaptivePacer(vsync, frameIntervalNs, pacerTuning)
             val trace = paceTrace
             val probe = if (trace != null) PaceProbe() else null
@@ -603,14 +579,12 @@ class VideoRenderer(
             val intervalOf: (Long) -> Long = { period ->
                 FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
             }
-            pacer.intervalProvider = intervalOf
             adaptivePacer.intervalProvider = intervalOf
             st.adaptive = adaptivePacer
             live = st
             val gauge = st.gauge
             val pk = packed // decision 0034: null = the direct path, exactly as before
-            val reportsShown = codecReportsShown
-            val sink = CodecSink(codec, st, expectCallback = reportsShown && pk == null, trace = trace, packedOut = pk)
+            val sink = CodecSink(codec, st, expectCallback = pk == null, trace = trace, packedOut = pk)
             val releaser = SlotReleaser(sink, st.counters)
             releaser.trace = trace
             // The shown-time handling of one frame; the direct path calls it from the codec's callback, the packed path
@@ -620,8 +594,7 @@ class VideoRenderer(
                 // shared lock (review 2: the UI thread must not wait on output bookkeeping).
                 if (st.current) {
                     val period = vsync.periodNs
-                    val fi = FrameInterval.resolve(frameIntervalNs, period, arrival.intervalNs, arrival.cadenceNs)
-                    val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+                    val cadence = cadenceNs(intervalOf(period), period)
                     stats.onShownPaced(st.readyByPts.get(pts), nanoTime, period, cadence)
                     // T-168 cap_cb; T-225: the callback times are also the presentation metric (`skip_pct`).
                     stats.onRenderCallback(pts, st.captureByPts.get(pts), nanoTime / 1000, nanoTime, period)
@@ -629,8 +602,8 @@ class VideoRenderer(
                 }
             }
             if (pk != null) {
-                if (reportsShown) packedShownSink = onShown
-            } else if (reportsShown) {
+                packedShownSink = onShown
+            } else {
                 codec.setOnFrameRenderedListener { pts, nanoTime -> onShown(pts, nanoTime) } // on the main looper (adapter)
             }
             // Outputs are drained on their own thread with a blocking dequeue, so a decoded frame is handled the
@@ -649,7 +622,7 @@ class VideoRenderer(
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
                         // how fast a stop is seen, so it grows while no output comes.
                         val waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)
-                        val changed = drainOutput(c, outInfo, pacer, adaptivePacer, sink, releaser, st, waitUs)
+                        val changed = drainOutput(c, outInfo, adaptivePacer, sink, releaser, st, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())
                         if (changed && !loggedFormat) {
@@ -710,7 +683,7 @@ class VideoRenderer(
                 stats.onInput(frame.frameSeq, nowUs(), if (frame.isCodecConfig) null else frame.captureTimeUs)
                 if (!frame.isCodecConfig) { st.captureByPts.put(frame.frameSeq, frame.captureTimeUs); arrival.onFrame(frame.captureTimeUs) }
                 if (!frame.isCodecConfig) st.catchMarks.put(frame.frameSeq, mark) // before the codec can output it
-                if (!frame.isCodecConfig) gauge.onQueued(System.nanoTime())
+                if (!frame.isCodecConfig) gauge.onQueued()
                 codec.queueInputBuffer(idx, 0, frame.data.size, frame.frameSeq, flags)
                 if (!frame.isCodecConfig) progress.onInput(att.gen, env.elapsedRealtimeMs()) // T-159 no-output rule
                 trace?.onInput(frame.frameSeq, System.nanoTime(), takenNs, inbufNs, copiedNs, inSlot.lastPrefetched)
@@ -768,7 +741,7 @@ class VideoRenderer(
             ptsOf.remove(idx)
             traceIdOf.remove(idx)
             st.ifCurrent { stats.onDiscarded() }
-            st.gauge.onDone(System.nanoTime())
+            st.gauge.onDone()
         }
         fun releaseNow(idx: Int) {
             val pk = packedOut ?: return render(idx, 0L) { codec.releaseOutputBuffer(idx, true) }
@@ -809,7 +782,7 @@ class VideoRenderer(
             val nowNs = System.nanoTime()
             st.ifCurrent { stats.onReleased(pts, captureUs, nowNs / 1000, slotNs, periodNs) }
             if (traceId >= 0) trace?.onLatch(traceId, slotNs, periodNs)
-            st.gauge.onDone(nowNs)
+            st.gauge.onDone()
         }
     }
 
@@ -821,24 +794,17 @@ class VideoRenderer(
     }
 
     /**
-     * Takes every ready output. [BUFFER_ADAPTIVE] uses [AdaptivePacer] (capture-time based playout delay);
-     * with [bufferFrames] == 0 only the newest is rendered at once and the skipped ones count as dropped
-     * (T-015 behavior). Otherwise each frame gets a vsync slot and render timestamp from its pacer and goes to
-     * [releaser]: at most one release per slot, at most one replaceable buffer held back across drains until its
-     * dispatch deadline (T-057). Returns true once an output-format change has been seen (one-time logging).
+     * Takes every ready output. Each frame gets a vsync slot and render timestamp from the [AdaptivePacer]
+     * (capture-time based playout delay) and goes to [releaser]: at most one release per slot, at most one
+     * replaceable buffer held back across drains until its dispatch deadline (T-057). Returns true once an output-format change has been seen (one-time logging).
      */
     private fun drainOutput(
-        codec: DecoderCodec, info: DecoderCodec.OutputInfo, pacer: FramePacer, adaptivePacer: AdaptivePacer,
+        codec: DecoderCodec, info: DecoderCodec.OutputInfo, adaptivePacer: AdaptivePacer,
         sink: CodecSink, releaser: SlotReleaser, st: CodecState, firstWaitUs: Long = 0,
     ): Boolean {
         var waitUs = firstWaitUs // only the first dequeue blocks; the rest of a burst is taken without waiting
-        val mode = bufferFrames
-        pacer.bufferFrames = mode
-        val useAdaptive = mode == BUFFER_ADAPTIVE
-        val paced = useAdaptive || mode > 0
         val gen = st.generation.gen
         stats.setGapThresholdUs(vsync.periodNs * 3 / 2 / 1000)
-        var prev = -1
         var formatChanged = false
         while (true) {
             val idx = codec.dequeueOutputBuffer(info, waitUs)
@@ -846,7 +812,7 @@ class VideoRenderer(
             if (idx < 0) break
             val isFrame = info.flags and DecoderCodec.BUFFER_FLAG_CODEC_CONFIG == 0
             val readyNs = System.nanoTime()
-            var d: FramePacer.Decision? = null
+            var d: PacerDecision? = null
             var tag = -1L
             var firstOfGeneration = false
             var skip = false // T-252: decoded only, a newer frame of the backlog is shown instead
@@ -871,7 +837,7 @@ class VideoRenderer(
                 if (isFrame && mark != CatchUp.SKIP) st.lastShowNs = readyNs
                 if (mark == CatchUp.SKIP) {
                     skip = true // no pacer, no first-output bypass: the backlog's delay is no stream jitter
-                } else if (paced && isFrame) {
+                } else if (isFrame) {
                     val captureUs = st.captureByPts.get(info.presentationTimeUs)
                     val trace = releaser.trace
                     val probe = adaptivePacer.probe
@@ -880,10 +846,8 @@ class VideoRenderer(
                     val tookBypass = firstOutput.take()
                     // T-252: the newest frame of a caught-up backlog is shown at once; the pacer forgets the backlog.
                     val tail = mark == CatchUp.TAIL || mark == CatchUp.SHOW
-                    if (tail) { adaptivePacer.reanchorAfterCatchUp(); pacer.reset() }
-                    val decision = if (tookBypass || tail) null
-                    else if (!useAdaptive) pacer.schedule(readyNs)
-                    else adaptivePacer.schedule(captureUs, readyNs)
+                    if (tail) adaptivePacer.reanchorAfterCatchUp()
+                    val decision = if (tookBypass || tail) null else adaptivePacer.schedule(captureUs, readyNs)
                     giveBackIfRetired(st, tookBypass)
                     if (decision == null) {
                         // T-220: the row id too, so the release-time vsync of a bypassed frame lands in the trace
@@ -891,13 +855,10 @@ class VideoRenderer(
                     } else {
                         stats.onPaceAdd(decision.addedNs / 1000)
                         if (decision.slotNs != 0L) stats.onReadySlot((decision.slotNs - readyNs) / 1000) // T-168 ready_slot
-                        if (useAdaptive) stats.onScheduled(decision.skipped)
                         if (decision.lateDrop) st.counters.onLateDrop(if (decision.ownSlotNs != 0L) (decision.ownSlotNs - readyNs) / 1000 else null)
                         tag = trace?.record(info.presentationTimeUs, captureUs ?: 0, readyNs, probe, decision.slotNs, decision.lateDrop, decision.collided, decision.ownSlotNs) ?: -1L
                     }
                     d = decision
-                } else if (isFrame) {
-                    giveBackIfRetired(st, firstOutput.take()) // unpaced: released at once anyway; must not linger
                 }
             }
             if (firstOfGeneration) onHealthEvent(HealthEvent.FirstOutput(gen)) // stale gens are dropped by VideoHealth
@@ -905,28 +866,21 @@ class VideoRenderer(
                 // T-161: the codec was stopped while this thread sat in dequeue (a straggler) or before its bookkeeping:
                 // hand the buffers back without touching stats, the first-output bypass or decode progress, which
                 // belong to the current codec.
-                if (prev >= 0) codec.releaseOutputBuffer(prev, false)
                 codec.releaseOutputBuffer(idx, false)
                 return formatChanged
             }
             waitUs = 0
             if (isFrame) sink.tag(idx, info.presentationTimeUs, tag) // T-168: which frame a later release/discard is (T-220: and its trace row)
             if (skip) { catchDiscards.incrementAndGet(); sink.discard(idx); continue }
-            if (paced) {
-                if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
-                val decision = d
-                if (decision == null) {
-                    releaser.flushAll()
-                    sink.releaseNow(idx)
-                    continue
-                }
-                releaser.submit(idx, decision.slotNs, decision.renderNs, decision.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs, tag)
+            if (!isFrame) { codec.releaseOutputBuffer(idx, false); continue }
+            val decision = d
+            if (decision == null) {
+                releaser.flushAll()
+                sink.releaseNow(idx)
                 continue
             }
-            if (prev >= 0) sink.discard(prev)
-            prev = idx
+            releaser.submit(idx, decision.slotNs, decision.renderNs, decision.slotNs - dispatchLeadNs(), readyNs, vsync.periodNs, tag)
         }
-        if (prev >= 0) sink.releaseNow(prev)
         return formatChanged
     }
 
@@ -971,3 +925,7 @@ class VideoRenderer(
 
     private fun nowUs() = env.elapsedRealtimeNanos() / 1000
 }
+
+/** The decoder MIME type of a stream configuration (H.264 or HEVC). */
+internal fun videoMime(config: StreamConfig): String =
+    if (config.codec == StreamConfig.CODEC_H264) MediaFormat.MIMETYPE_VIDEO_AVC else MediaFormat.MIMETYPE_VIDEO_HEVC

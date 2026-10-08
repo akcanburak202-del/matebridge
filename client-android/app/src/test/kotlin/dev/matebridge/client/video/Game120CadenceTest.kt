@@ -241,7 +241,7 @@ class Game120CadenceTest {
     }
 
     private companion object {
-        fun key(d: FramePacer.Decision) =
+        fun key(d: PacerDecision) =
             "${d.renderNs} ${d.collided} ${d.addedNs} ${d.skipped} ${d.slotNs} ${d.lateDrop} ${d.ownSlotNs}"
         fun f(v: Double) = String.format(java.util.Locale.ROOT, "%.2f", v)
     }

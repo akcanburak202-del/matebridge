@@ -3,7 +3,6 @@ package dev.matebridge.client.video
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
@@ -119,10 +118,9 @@ class MediaCodecDecoder private constructor(private val codec: MediaCodec) : Dec
     override val isHardwareAccelerated: Boolean? get() = try { codec.codecInfo.isHardwareAccelerated } catch (e: Exception) { null }
     override val isSoftwareOnly: Boolean? get() = try { codec.codecInfo.isSoftwareOnly } catch (e: Exception) { null }
     override val supportedVendorParameters: List<String>?
-        get() = if (Build.VERSION.SDK_INT < 31) null else try { codec.supportedVendorParameters } catch (e: Exception) { null }
+        get() = try { codec.supportedVendorParameters } catch (e: Exception) { null }
 
     override fun lowLatencySupport(mime: String): Boolean? {
-        if (Build.VERSION.SDK_INT < 30) return null
         return try {
             codec.codecInfo.getCapabilitiesForType(mime)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)

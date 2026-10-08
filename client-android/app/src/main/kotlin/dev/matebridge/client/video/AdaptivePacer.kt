@@ -1,7 +1,7 @@
 package dev.matebridge.client.video
 
 /**
- * Adaptive frame scheduling (T-052, T-057). Replaces the fixed N-period jitter buffer of [FramePacer], which
+ * Adaptive frame scheduling (T-052, T-057). Replaced the fixed N-period jitter buffer (removed in T-303), which
  * was only an integer shift of the vsync grid (ceil(t + P) = ceil(t) + P) and therefore never changed
  * which vsync a jittery frame landed on.
  *
@@ -31,7 +31,7 @@ package dev.matebridge.client.video
  *    and the slot is tracked on the jitter-free ideal time, so one late frame never moves the lock: it either
  *    fits its slot or is dropped (newest wins) and the next frames continue on the lock. Only an error above
  *    half a period (or missed slots) that lasts [REPHASE_FRAMES] frames re-phases (hysteresis).
- *  - Lone frames (T-115, [sparseEarly]): a lockable frame with no predecessor in the stream (first frame, or a capture
+ *  - Lone frames (T-115): a lockable frame with no predecessor in the stream (first frame, or a capture
  *    gap above [LOCK_GAP_PERIODS] periods: a keystroke, a cursor blink, the first frame of a motion) gets no hold: it
  *    goes to the earliest slot, no lock is formed, and its delay stays out of the jitter history (it is no stream
  *    jitter, and it would push the p99 to its one-period cap). The next continuous frame acquires the lock as usual
@@ -108,16 +108,11 @@ class AdaptivePacer(
         const val SAME_INTERVAL_FRACTION = 0.05
     }
 
-    /** T-115: lone frames go to the earliest slot without hold (true), or acquire the lock like before (false, A/B). */
-    @Volatile var sparseEarly = true
-
-    /** T-208: phase lock on integer cadences n <= [MAX_LOCK_MULTIPLE] (true), or only at one period like before (false, A/B). */
-    @Volatile var integerLock = true
-
     // Monotonic deque for the sliding-window minimum of x (values increasing from first to last).
     private val minT = ArrayDeque<Long>()
     private val minX = ArrayDeque<Long>()
     private val devs = LongArray(DEV_SAMPLES)
+    private val sortScratch = LongArray(DEV_SAMPLES)
     private var devN = 0
     private var devPos = 0
     private var lastSlot = Long.MIN_VALUE
@@ -171,13 +166,13 @@ class AdaptivePacer(
     fun diag() = PacerDiag(level, lastJitterNs / 1000, extraNs / 1000, lastCapNs / 1000)
 
     /** Null when no vsync sample or capture time is known: the caller renders at once. */
-    fun schedule(captureUs: Long?, nowNs: Long): FramePacer.Decision? {
+    fun schedule(captureUs: Long?, nowNs: Long): PacerDecision? {
         if (captureUs == null || !vsync.hasSample) return null
         return scheduleOn(vsync.grid(), captureUs, nowNs) // one snapshot: phase, period, epoch and deadline belong together
     }
 
     /** [schedule] on a given grid snapshot (also used to replay recorded traces). */
-    internal fun scheduleOn(grid: VsyncClock.Grid, captureUs: Long, nowNs: Long): FramePacer.Decision {
+    internal fun scheduleOn(grid: VsyncClock.Grid, captureUs: Long, nowNs: Long): PacerDecision {
         val period = grid.periodNs
         val fi = intervalProvider?.invoke(period) ?: if (frameIntervalNs > 0) frameIntervalNs else period
         val n = lockMultiple(fi, period) // T-208: content interval = n panel periods (0 = no lock)
@@ -223,7 +218,7 @@ class AdaptivePacer(
         val d = if (dNs == Long.MIN_VALUE) dTarget else slew(dNs, dTarget, D_SLEW_UP_NS, D_SLEW_DOWN_NS)
         dNs = d
         // T-115: a lone frame (no predecessor in the stream) is no stream jitter: its delay stays out of the history.
-        val lone = sparseEarly && lockable && (prevCaptureUs == Long.MIN_VALUE || isGap(captureUs, prevCaptureUs, n * period))
+        val lone = lockable && (prevCaptureUs == Long.MIN_VALUE || isGap(captureUs, prevCaptureUs, n * period))
         if (!lone) {
             devs[devPos] = dev
             devPos = (devPos + 1) % DEV_SAMPLES
@@ -258,12 +253,12 @@ class AdaptivePacer(
             else { slot = previous; collided = true; lateDrop = !surplus }
         }
         lastSlot = slot
-        val cadence = Math.round(fi.toDouble() / period).coerceAtLeast(1) * period
+        val cadence = cadenceNs(fi, period)
         // A skip: a vsync went by without a new frame although this one was decoded (late, not an idle source).
         // T-220: the previous frame is held at least one vsync longer than the cadence (was "> 1.5 x cadence", which
         // missed a 3-vsync hold at cadence 2; at cadence 1 both are the same).
         val skipped = late && previous != Long.MIN_VALUE && slot - previous > cadence + period / 2
-        return FramePacer.Decision(
+        return PacerDecision(
             slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), skipped,
             slotNs = slot, lateDrop = lateDrop, ownSlotNs = if (lateDrop) ownSlot else 0,
         )
@@ -276,7 +271,7 @@ class AdaptivePacer(
     private fun scheduleLocked(
         grid: VsyncClock.Grid, nowNs: Long, captureUs: Long, prevCaptureUs: Long, dev: Long, d: Long, jitter: Long,
         earliest: Long, lone: Boolean, readyGapNs: Long, n: Long,
-    ): FramePacer.Decision {
+    ): PacerDecision {
         val period = grid.periodNs
         val ideal = nowNs - dev + grid.deadlineNs // jitter-free ready time of this frame, plus the deadline
         fun acquire(): Long {
@@ -307,7 +302,7 @@ class AdaptivePacer(
             // The previous frame's slot is still ahead (it came very late): newest wins, like a fresh acquisition.
             if (prev != Long.MIN_VALUE && slot <= prev) { slot = prev; collided = true }
             lastSlot = slot
-            return FramePacer.Decision(
+            return PacerDecision(
                 slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
             )
         }
@@ -326,7 +321,7 @@ class AdaptivePacer(
             val prev = lastSlot
             if (prev != Long.MIN_VALUE && slot <= prev) { slot = prev; collided = true }
             lastSlot = slot
-            return FramePacer.Decision(
+            return PacerDecision(
                 slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
             )
         } else {
@@ -352,7 +347,7 @@ class AdaptivePacer(
         // A burst (frames handed over faster than they were captured) is a backlog, not an off lock: the latency bound
         // drops it as before.
         val burst = readyGapNs < (captureUs - prevCaptureUs) * 1000 / 2
-        if (sparseEarly && late && devN < WARMUP_SAMPLES && (missed || !burst)) {
+        if (late && devN < WARMUP_SAMPLES && (missed || !burst)) {
             // T-115 warm-up: a lock acquired on a thin jitter history (a fresh session, or motion after lone frames
             // whose delay is kept out of the history) is easily off: too tight, or anchored on a frame that came late.
             // Until the history holds [WARMUP_SAMPLES] frames, a late locked frame re-acquires the lock from its own
@@ -372,7 +367,7 @@ class AdaptivePacer(
             probe?.let { it.path = PaceProbe.PATH_WARMUP; it.acquireNs = acquired; it.lockSlotNs = lockSlot; it.badRun = 0 }
             lastSlot = slot
             // Sharing the previous slot is the same outcome as a late drop (and counted as one); only the lock moved.
-            return FramePacer.Decision(
+            return PacerDecision(
                 slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), missed, slotNs = slot,
                 lateDrop = collided, ownSlotNs = if (collided) own else 0,
             )
@@ -387,21 +382,21 @@ class AdaptivePacer(
             // next frame is on time again and lands on the same vsync, it replaces this one (newest wins).
             lastSlot = earliest
             val cadence = n * period
-            return FramePacer.Decision(
+            return PacerDecision(
                 earliest - vsync.leadNs(), false, 0, earliest - previous > cadence + period / 2, slotNs = earliest, // T-220
             )
         }
         if (late) {
             // Too late for its own slot, or a backlog that would exceed the latency bound: dropped (newest wins, it
             // shares the previous slot), the next frames stay on the lock.
-            return FramePacer.Decision(
+            return PacerDecision(
                 previous - vsync.leadNs(), true, 0, slot < earliest, slotNs = previous, lateDrop = true, ownSlotNs = slot,
             )
         }
         var collided = false
         if (previous != Long.MIN_VALUE && slot <= previous) { slot = previous; collided = true }
         lastSlot = slot
-        return FramePacer.Decision(
+        return PacerDecision(
             slot - vsync.leadNs(), collided, (slot - earliest).coerceAtLeast(0), false, slotNs = slot,
         )
     }
@@ -411,14 +406,12 @@ class AdaptivePacer(
         (captureUs - prevCaptureUs) * 1000 > LOCK_GAP_PERIODS * intervalNs
 
     /**
-     * T-208: n when the content interval [fi] is within [LOCK_TOLERANCE] of n panel periods, 1 <= n <= [MAX_LOCK_MULTIPLE]
-     * (only n = 1 with [integerLock] off); 0 = no lock. For n = 1 this is exactly the T-060 condition.
+     * T-208: n when the content interval [fi] is within [LOCK_TOLERANCE] of n panel periods, 1 <= n <= [MAX_LOCK_MULTIPLE]; 0 = no lock. For n = 1 this is exactly the T-060 condition.
      */
     private fun lockMultiple(fi: Long, period: Long): Long {
         if (period <= 0) return 0
         val n = Math.round(fi.toDouble() / period)
-        val max = if (integerLock) MAX_LOCK_MULTIPLE else 1L
-        return if (n in 1..max && Math.abs(fi - n * period) <= n * period * LOCK_TOLERANCE) n else 0
+        return if (n in 1..MAX_LOCK_MULTIPLE && Math.abs(fi - n * period) <= n * period * LOCK_TOLERANCE) n else 0
     }
 
     private fun slew(cur: Long, target: Long, up: Long, down: Long) =
@@ -426,8 +419,9 @@ class AdaptivePacer(
 
     private fun percentile(): Long {
         if (devN == 0) return 0
-        val sorted = devs.copyOf(devN).also { it.sort() }
-        return sorted[((devN * PERCENTILE + 99) / 100 - 1).coerceIn(0, devN - 1)]
+        devs.copyInto(sortScratch, 0, 0, devN)
+        java.util.Arrays.sort(sortScratch, 0, devN) // T-303: preallocated, no per-frame garbage
+        return sortScratch[((devN * PERCENTILE + 99) / 100 - 1).coerceIn(0, devN - 1)]
     }
 
     /**

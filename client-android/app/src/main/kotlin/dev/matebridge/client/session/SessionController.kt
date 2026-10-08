@@ -16,7 +16,6 @@ import dev.matebridge.client.protocol.Codec
 import dev.matebridge.client.protocol.CursorPrefs
 import dev.matebridge.client.protocol.CursorShape
 import dev.matebridge.client.protocol.CursorState
-import dev.matebridge.client.protocol.FrameDecoder
 import dev.matebridge.client.protocol.Hello
 import dev.matebridge.client.protocol.HelloAck
 import dev.matebridge.client.protocol.Message

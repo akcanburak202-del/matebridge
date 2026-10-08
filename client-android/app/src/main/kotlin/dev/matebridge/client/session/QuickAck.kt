@@ -28,9 +28,6 @@ class QuickAck(enabled: Boolean, private val rearm: () -> Unit, private val onFa
     companion object {
         const val TCP_QUICKACK = 12 // Linux, linux/tcp.h
 
-        /** `--ez quickack false` turns it off; absent means on. */
-        fun parseExtra(present: Boolean, value: Boolean): Boolean = if (present) value else true
-
         /** A connected [socket] with a dup'd fd for setsockopt. Closing the handle never closes the socket. */
         fun forSocket(socket: Socket, enabled: Boolean, component: String): Handle {
             if (!enabled) return Handle(QuickAck(false, {}), null)

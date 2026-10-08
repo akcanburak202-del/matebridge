@@ -156,7 +156,6 @@ class VsyncIdleTest {
         val clk = VsyncClock(120f).also { it.setDisplayTiming(0, 13_330_000L) }
         val gate = VsyncIdleGate()
         val adaptive = AdaptivePacer(clk, period)
-        val fixed = FramePacer(clk, 1, period)
         var vs = 0L
         gate.start(0)
         // Streaming: 60 frames, one per period, with vsyncs.
@@ -180,7 +179,6 @@ class VsyncIdleTest {
         val arrive = vs + 5_000 * ms + 3_141_592L
         assertTrue(gate.onActivity(arrive))
         assertNull("adaptive: no grid, present now", adaptive.schedule(arrive / 1000 - 20_000, arrive + 10 * ms))
-        assertNull("fixed buffer: no grid, present now", fixed.schedule(arrive + 10 * ms))
         // The woken loop's first vsync re-anchors the grid; the next frame lands on a future slot of it.
         assertNotNull(gate.wake(arrive + 1 * ms))
         val firstVsync = arrive + 4 * ms
@@ -189,9 +187,6 @@ class VsyncIdleTest {
         val d = adaptive.schedule(ready / 1000 - 20_000, ready)!!
         assertTrue("slot ${d.slotNs} not before ready $ready", d.slotNs >= ready)
         assertEquals("slot on the fresh grid", 0L, Math.floorMod(d.slotNs - firstVsync, clk.periodNs))
-        val f = fixed.schedule(ready)!!
-        assertTrue(f.slotNs >= ready)
-        assertEquals(0L, Math.floorMod(f.slotNs - firstVsync, clk.periodNs))
     }
 
     /**
@@ -205,7 +200,6 @@ class VsyncIdleTest {
         val gate = VsyncIdleGate()
         val bypass = FirstOutputBypass()
         val adaptive = AdaptivePacer(clk, period)
-        val fixed = FramePacer(clk, 1, period)
         var vs = 0L
         gate.start(0)
         for (k in 0 until 30) { vs += period; clk.onVsync(vs); gate.onActivity(vs); assertTrue(gate.onVsync(vs)) }
@@ -221,22 +215,14 @@ class VsyncIdleTest {
             assertTrue("the clock restarted first", clk.hasSample)
             val ready = t + 12 * ms
             // Without the bypass this output would be paced (the clock-only approach would hold it).
-            val unbypassed = when (case) {
-                0 -> AdaptivePacer(clk, period).schedule(ready / 1000 - 20_000, ready)
-                else -> FramePacer(clk, 1, period).schedule(ready)
-            }
+            val unbypassed = AdaptivePacer(clk, period).schedule(ready / 1000 - 20_000, ready)
             assertNotNull("case $case: paced without the bypass", unbypassed)
-            val first = bypass.schedule {
-                when (case) {
-                    0 -> adaptive.schedule(ready / 1000 - 20_000, ready)
-                    else -> fixed.schedule(ready)
-                }
-            }
+            val first = if (bypass.take()) null else adaptive.schedule(ready / 1000 - 20_000, ready)
             assertNull("case $case: first output after the sleep released at once", first)
             assertFalse(bypass.isArmed)
             // The next output is paced on the fresh grid.
             val ready2 = ready + period
-            val second = bypass.schedule { fixed.schedule(ready2) }
+            val second = if (bypass.take()) null else adaptive.schedule(ready2 / 1000 - 20_000, ready2)
             assertNotNull(second)
             assertTrue(second!!.slotNs >= ready2)
             clk.reset()
@@ -245,14 +231,13 @@ class VsyncIdleTest {
 
     @Test fun bypassIsTakenOnceAndDisarmedByAStreamStart() {
         val b = FirstOutputBypass()
-        val paced = FramePacer.Decision(1, false, 0)
-        assertNotNull("not armed: normal scheduling", b.schedule { paced })
+        assertFalse("not armed: normal scheduling", b.take())
         b.arm()
         assertTrue(b.take())
         assertFalse(b.take())
         b.arm()
         b.disarm()
-        assertNotNull(b.schedule { paced })
+        assertFalse(b.take())
         // Taken from another thread exactly once.
         b.arm()
         val hits = java.util.concurrent.atomic.AtomicInteger()

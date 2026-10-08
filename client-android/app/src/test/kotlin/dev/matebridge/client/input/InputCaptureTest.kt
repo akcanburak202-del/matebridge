@@ -53,7 +53,7 @@ class InputCaptureTest {
     private fun setActive(on: Boolean, t: Long) { sink.nowMs = t; cap.setActive(on, t) }
     private fun onDeviceRemoved(id: Int, t: Long) { sink.nowMs = t; cap.onDeviceRemoved(id, t) }
     private fun onGestureKeyDown(t: Long) { sink.nowMs = t; cap.onGestureKeyDown(t) }
-    private fun setFingersDisabled(off: Boolean, t: Long) { sink.nowMs = t; cap.setFingersDisabled(off, t) }
+    private fun setFingersDisabled(off: Boolean, t: Long) { sink.nowMs = t; cap.setFingerPolicy(if (off) FingerPolicy.OFF else FingerPolicy.ALL, t) }
 
     private fun flags() = penSamples(sink.sent).map { it.flags }
     private fun types() = sink.sent.map { it.javaClass.simpleName }

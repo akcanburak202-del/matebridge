@@ -79,8 +79,6 @@ class VideoStats {
         val holdShort: Long = 0,
         /** T-220: judged intervals held longer than the content cadence (a late frame, or a dropped successor). */
         val holdLong: Long = 0,
-        /** T-220 diagnostic: the adaptive pacer's own skip decisions ([FramePacer.Decision.skipped]), or null. */
-        val schedSkipPct: Double? = null,
         /**
          * T-225 diagnostic: the T-220 latch model's long-hold percentage ([HoldMeter] fed with the vsync each frame was
          * released for, [onReleased]); null when none was judged. It reads high when releases return within about a
@@ -121,7 +119,6 @@ class VideoStats {
         var decodeSumUs = 0L; var decodeCount = 0L
         var latencySumUs = 0L; var latencyCount = 0L
         var paceAddSumUs = 0L; var paceAddCount = 0L
-        var scheduled = 0L; var scheduleSkips = 0L
         /** [PresentMeter] counts (log window only; the live window reads the meter itself). */
         var meterIntervals = 0L; var meterSkipped = 0L
         var latNeg = 0L; var discarded = 0L; var cbMissing = 0L
@@ -136,7 +133,6 @@ class VideoStats {
             decodeSumUs += o.decodeSumUs; decodeCount += o.decodeCount
             latencySumUs += o.latencySumUs; latencyCount += o.latencyCount
             paceAddSumUs += o.paceAddSumUs; paceAddCount += o.paceAddCount
-            scheduled += o.scheduled; scheduleSkips += o.scheduleSkips
             meterIntervals += o.meterIntervals; meterSkipped += o.meterSkipped
             latNeg += o.latNeg; discarded += o.discarded; cbMissing += o.cbMissing
         }
@@ -148,7 +144,6 @@ class VideoStats {
             decodeSumUs = 0; decodeCount = 0
             latencySumUs = 0; latencyCount = 0
             paceAddSumUs = 0; paceAddCount = 0
-            scheduled = 0; scheduleSkips = 0
             meterIntervals = 0; meterSkipped = 0
             latNeg = 0; discarded = 0; cbMissing = 0
         }
@@ -215,15 +210,6 @@ class VideoStats {
     /** Delay the pacer added to one frame. */
     @Synchronized fun onPaceAdd(us: Long) { cur.paceAddSumUs += us; cur.paceAddCount++ }
 
-    /** A frame reached the screen at [nowUs] (client monotonic clock). */
-    fun onShown(nowUs: Long) = shownGaps.mark(nowUs)
-
-    /**
-     * One frame was scheduled by the adaptive pacer; [skipped] when it left a vsync without a new frame while
-     * decoded (late). This is the skip signal: the render callback's times are not display times.
-     */
-    @Synchronized fun onScheduled(skipped: Boolean) { cur.scheduled++; if (skipped) cur.scheduleSkips++ }
-
     /** Codec-reported shown time of a frame that became ready at [readyNs]; feeds the skip meter too. */
     fun onShownPaced(readyNs: Long?, shownNs: Long, periodNs: Long, cadenceNs: Long) {
         shownGaps.mark(shownNs / 1000)
@@ -236,7 +222,6 @@ class VideoStats {
         synchronized(this) { holds.reset(); latchHolds.reset() } // T-220: no presentation interval or content run spans it either
     }
     @Synchronized fun onDropped(n: Int) { cur.dropped += n }
-    @Synchronized fun onRendered() { cur.rendered++ }
 
     /**
      * T-168: a decoded frame went to `releaseOutputBuffer` for rendering at [clientUs] (`System.nanoTime() / 1000`).
@@ -389,7 +374,7 @@ class VideoStats {
             if (reset) decodeLat.summaryInto(decodeLatLog) else decodeLat.summary(),
             stage(capDec, capDecLog, reset), stage(readySlot, readySlotLog, reset),
             stage(capRel, capRelLog, reset), stage(capCb, capCbLog, reset),
-            c.latNeg, c.discarded, c.cbMissing, holdJudgedOf(c), holdShortOf(c), holdLongOf(c), schedPctOf(c), latchPctOf(c))
+            c.latNeg, c.discarded, c.cbMissing, holdJudgedOf(c), holdShortOf(c), holdLongOf(c), latchPctOf(c))
         if (reset) {
             c.meterIntervals = m.intervals.toLong(); c.meterSkipped = m.skipped.toLong()
             log.add(c)
@@ -422,7 +407,7 @@ class VideoStats {
             skipPctOf(l, meterPct),
             meterPct, decodeLatLog.summary(reset),
             capDecLog.summary(reset), readySlotLog.summary(reset), capRelLog.summary(reset), capCbLog.summary(reset),
-            l.latNeg, l.discarded, l.cbMissing, holdJudgedOf(l), holdShortOf(l), holdLongOf(l), schedPctOf(l), latchPctOf(l))
+            l.latNeg, l.discarded, l.cbMissing, holdJudgedOf(l), holdShortOf(l), holdLongOf(l), latchPctOf(l))
         if (reset) l.clear()
         return s
     }
@@ -437,11 +422,9 @@ class VideoStats {
         if (callbacksReported || presentationReported) {
             val j = holdJudgedOf(s)
             if (j > 0) holdLongOf(s) * 100.0 / j else null
-        } else schedPctOf(s) ?: meterPct
+        } else meterPct
 
     private fun latchPctOf(s: Sums): Double? = if (s.latchJudged > 0) s.latchLong * 100.0 / s.latchJudged else null
-
-    private fun schedPctOf(s: Sums): Double? = if (s.scheduled > 0) s.scheduleSkips * 100.0 / s.scheduled else null
 }
 
 /**

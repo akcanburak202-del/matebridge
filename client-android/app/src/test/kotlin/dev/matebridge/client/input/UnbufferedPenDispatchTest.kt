@@ -11,8 +11,7 @@ class UnbufferedPenDispatchTest {
     private var attached = true
     private var throwing = false
 
-    private fun policy(sdk: Int) = UnbufferedPenDispatch(
-        sdk,
+    private fun policy() = UnbufferedPenDispatch(
         UnbufferedPenDispatch.Backend { on ->
             if (throwing) throw IllegalStateException("boom")
             if (!attached) false else { calls += on; true }
@@ -20,24 +19,17 @@ class UnbufferedPenDispatchTest {
         onEvent = { ev, f -> events += "$ev $f" },
     )
 
-    @Test fun apiLevelPicksThePath() {
-        assertEquals(UnbufferedPenDispatch.Path.SOURCE, policy(31).path)
-        assertEquals(UnbufferedPenDispatch.Path.SOURCE, policy(30).path)
-        assertEquals(UnbufferedPenDispatch.Path.PER_GESTURE, policy(29).path)
-    }
-
     @Test fun theSourceRequestIsMadeOnceWhileCaptureIsActiveAndTheChosenPathIsLoggedOnce() {
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         p.sync(true)
         p.sync(true)
         assertEquals(listOf(true), calls)
         assertEquals(listOf("unbuffered path=source"), events)
-        assertFalse(p.wantsPerGestureRequest())
     }
 
     @Test fun theRequestIsClearedWhenCaptureIsNotActiveAndNeverMadeForAnInactivePanel() {
-        val p = policy(31)
+        val p = policy()
         p.sync(false)
         p.sync(false)
         assertTrue(calls.isEmpty()) // panel shown from the start: nothing to ask for, nothing to clear
@@ -52,7 +44,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun anUnattachedViewIsRetriedUntilTheRequestCanBeApplied() {
-        val p = policy(31)
+        val p = policy()
         attached = false
         p.sync(true)
         p.sync(true)
@@ -65,7 +57,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun aNewWindowOrRegainedFocusRequestsAgainOnTheNextSync() {
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         p.reapplyOnNextSync()
         p.sync(true)
@@ -77,7 +69,7 @@ class UnbufferedPenDispatchTest {
     @Test fun aRequestThatMayBeInForceIsClearedEvenWhenAnInvalidationCameFirst() {
         // Capture active, focus returns (invalidation), the session drops before the next active sync: the panel is
         // shown again and must not inherit unbuffered input.
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         p.reapplyOnNextSync()
         p.sync(false)
@@ -89,7 +81,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun afterAnInvalidationTheNextActiveSyncAssertsAgainAndTheClearStillFollows() {
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         p.reapplyOnNextSync()
         p.sync(true)
@@ -100,7 +92,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun aClearThatCouldNotBeAppliedIsRetriedAndTheRequestIsNotForgotten() {
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         attached = false
         p.sync(false)
@@ -112,7 +104,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun reapplyingWhileInactiveDoesNothing() {
-        val p = policy(31)
+        val p = policy()
         p.sync(true)
         p.sync(false)
         p.reapplyOnNextSync()
@@ -121,7 +113,7 @@ class UnbufferedPenDispatchTest {
     }
 
     @Test fun aFailingPlatformCallIsLoggedOnceAndNeverRetried() {
-        val p = policy(31)
+        val p = policy()
         throwing = true
         p.sync(true)
         p.sync(true)
@@ -131,19 +123,5 @@ class UnbufferedPenDispatchTest {
         assertEquals(UnbufferedPenDispatch.Path.FAILED, p.path)
         assertTrue(calls.isEmpty())
         assertEquals(listOf("unbuffered path=failed err=IllegalStateException"), events)
-        assertFalse(p.wantsPerGestureRequest())
-    }
-
-    @Test fun onOldApisTheRequestIsPerPenDownAndTheBackendIsNeverUsed() {
-        val p = policy(29)
-        assertFalse(p.wantsPerGestureRequest()) // capture not active
-        p.sync(true)
-        assertTrue(p.wantsPerGestureRequest())
-        p.sync(true)
-        p.sync(false)
-        assertFalse(p.wantsPerGestureRequest())
-        p.sync(true)
-        assertTrue(calls.isEmpty())
-        assertEquals(listOf("unbuffered path=per_gesture"), events)
     }
 }

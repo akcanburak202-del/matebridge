@@ -37,8 +37,8 @@ class PackedRendererTest {
 
     private fun frame(seq: Long, flags: Int = 0) = VideoFrame(seq, 5_000 + seq * 1000, flags, 0, 1, 3, Bytes(byteArrayOf(0, 0, 1)))
 
-    private fun make(hook: PackedOutput?, buffer: Int = 0): VideoRenderer =
-        VideoRenderer(config, onKeyframeRequest = {}, bufferFrames = buffer, codecFactory = factory, env = env,
+    private fun make(hook: PackedOutput?): VideoRenderer =
+        VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env,
             restartDelaysMs = longArrayOf(60_000, 60_000, 60_000)).also { it.packed = hook; renderer = it }
 
     @Test fun packedReleasesToTheReaderAtOnceAndAnnouncesTheTarget() {
@@ -55,7 +55,7 @@ class PackedRendererTest {
         val (pts, capture, renderNs) = hook.calls.first()
         assertEquals(7L, pts)
         assertEquals(5_000L + 7_000L, capture)
-        assertEquals(0L, renderNs) // buffer 0: rendered at once
+        assertEquals(0L, renderNs) // no vsync sample: rendered at once
     }
 
     @Test fun packedFormatCarriesNoColourKeys() {

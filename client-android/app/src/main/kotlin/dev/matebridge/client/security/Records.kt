@@ -33,7 +33,7 @@ object Records {
     @Volatile private var providerLogged = false
 
     /** AES-GCM cipher from [provider] (null = platform default). Throws if the provider is unavailable. */
-    fun newCipher(provider: String?): Cipher =
+    private fun newCipher(provider: String?): Cipher =
         if (provider == null) Cipher.getInstance(TRANSFORMATION) else Cipher.getInstance(TRANSFORMATION, provider)
 
     /** Fast path: the preferred provider when present, otherwise the default. The chosen provider is logged once per process. */
@@ -51,15 +51,6 @@ object Records {
      * video connection thread reads them back right after `next()` for the pace trace). Off = one volatile read.
      */
     @Volatile var stampOpens = false
-
-    /**
-     * Output buffer for a decrypt of [inLen] bytes on an initialised [cipher]: at least `getOutputSize(inLen)` and never
-     * smaller than [inLen] (some Conscrypt versions demand room for the tag too). Reuses [cur] when big enough.
-     */
-    internal fun ensureOutput(cur: ByteArray, cipher: Cipher, inLen: Int): ByteArray {
-        val need = maxOf(inLen, cipher.getOutputSize(inLen))
-        return if (cur.size >= need) cur else ByteArray(maxOf(need, cur.size * 2))
-    }
 
     internal fun nonce(counter: Long): ByteArray {
         val n = ByteArray(12)
@@ -115,16 +106,17 @@ class RecordOpener(
     /**
      * [header] is the 4 length bytes (the AAD), [body] is ciphertext plus tag. Returns `type || payload`.
      * Throws [ProtocolException] (AUTH_FAILED) when the tag does not verify or the length is illegal.
+     * Tests only: the receive path uses [openPlain] through [RecordDecoder].
      */
     @Synchronized
-    fun open(header: ByteArray, body: ByteArray): ByteArray = openAt(header, 0, body, 0, body.size)
+    internal fun open(header: ByteArray, body: ByteArray): ByteArray = openAt(header, 0, body, 0, body.size)
 
     /**
      * Same as [open] but reads the 4 AAD bytes at [hOff] of [hdr] and the ciphertext+tag at [bOff]..[bOff]+[bLen] of [src]
      * in place (no copies). Returns `type || payload` as a fresh array.
      */
     @Synchronized
-    fun openAt(hdr: ByteArray, hOff: Int, src: ByteArray, bOff: Int, bLen: Int): ByteArray {
+    internal fun openAt(hdr: ByteArray, hOff: Int, src: ByteArray, bOff: Int, bLen: Int): ByteArray {
         val n = openPlain(hdr, hOff, src, bOff, bLen) // first: it may replace the scratch buffer
         return scratch.copyOf(n)
     }
@@ -281,7 +273,8 @@ class RecordDecoder(maxPayload: Int, private val opener: RecordOpener) {
         }
     }
 
-    fun drain(): List<Message> {
+    /** Tests only. */
+    internal fun drain(): List<Message> {
         val out = ArrayList<Message>()
         while (true) out += next() ?: return out
     }

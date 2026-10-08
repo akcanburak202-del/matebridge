@@ -224,10 +224,10 @@ class SettingsPanelGateTest {
         assertEquals("settings_panel action=close via=background", log.last())
     }
 
-    @Test fun toggleOpensAndCloses() {
-        assertTrue(panel.toggle(Via.SHORTCUT, streaming = true))
+    @Test fun openThenCloseGatesInput() {
+        assertTrue(panel.open(Via.SHORTCUT, streaming = true))
         assertTrue(panel.isOpen)
-        assertTrue(panel.toggle(Via.SHORTCUT, streaming = true))
+        assertTrue(panel.close(Via.SHORTCUT))
         assertFalse(panel.isOpen)
         assertFalse(panel.inputAllowed(false))
         assertTrue(panel.inputAllowed(true))

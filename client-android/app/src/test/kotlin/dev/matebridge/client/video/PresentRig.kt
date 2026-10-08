@@ -42,7 +42,7 @@ internal class PresentRig(
     val released = ArrayList<LongArray>()
     /** T-225: frames that got a callback, in release order: capture (us) and the vsync they were shown on. */
     val shownByCallback = ArrayList<LongArray>()
-    val decisions = ArrayList<FramePacer.Decision>()
+    val decisions = ArrayList<PacerDecision>()
     val paths = HashMap<Int, Int>()
 
     private val delayRnd = Lcg(77L)
@@ -98,7 +98,7 @@ internal class PresentRig(
     }
 
     /** Frame [k] comes out of the decoder at [readyNs]. */
-    fun output(k: Int, captureNs: Long, readyNs: Long): FramePacer.Decision? {
+    fun output(k: Int, captureNs: Long, readyNs: Long): PacerDecision? {
         advanceTo(readyNs)
         stats.onOutput(k.toLong(), readyNs / 1000, readyNs / 1000)
         captureOf[k] = captureNs / 1000
@@ -107,12 +107,11 @@ internal class PresentRig(
         val d = pacer.schedule(captureNs / 1000, readyNs)!!
         paths.merge(probe.path, 1, Int::plus)
         decisions.add(d)
-        stats.onScheduled(d.skipped)
         rel.submit(k, d.slotNs, d.renderNs, d.slotNs - (clk.grid().deadlineNs + VideoRenderer.DISPATCH_MARGIN_NS), readyNs, period)
         return d
     }
 
-    fun frame(k: Int, captureNs: Long, readyNs: Long): FramePacer.Decision? { input(k, captureNs); return output(k, captureNs, readyNs) }
+    fun frame(k: Int, captureNs: Long, readyNs: Long): PacerDecision? { input(k, captureNs); return output(k, captureNs, readyNs) }
 
     fun finish(t: Long) { advanceTo(t); rel.flushAll() }
 

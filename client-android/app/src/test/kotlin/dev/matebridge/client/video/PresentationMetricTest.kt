@@ -133,18 +133,11 @@ class PresentationMetricTest {
         assertEquals(PaceTrace.CSV_COLS, lines[2].split(",").size)
     }
 
-    @Test fun onceSlotsAreReportedSchedulerAndCallbackNoLongerCount() {
-        // Legacy callers (no slot reported) keep the old definition; the renderer reports slots, so the metric is one.
-        val legacy = VideoStats()
-        legacy.onScheduled(true); legacy.onScheduled(false)
-        assertEquals(50.0, legacy.snapshot(reset = true).skipPct!!, 0.0)
-
+    @Test fun onceSlotsAreReportedTheCallbackMeterNoLongerCounts() {
         val st = play(VideoStats(), intArrayOf(2, 2, 2, 2))
-        st.onScheduled(true); st.onScheduled(true) // the pacer's own verdict: not the metric any more
         st.onShownPaced(0, 0, p120, 2 * p120); st.onShownPaced(0, 10 * p120, p120, 2 * p120) // callback diagnostic
         val s = st.snapshot(reset = true)
         assertEquals(0.0, s.skipPct!!, 0.0)
-        assertEquals(100.0, s.schedSkipPct!!, 0.0)
         assertEquals(100.0, s.cbSkipPct!!, 0.0)
         assertNull("nothing judged in an empty window", st.snapshot(reset = true).skipPct)
     }
@@ -226,7 +219,7 @@ class PresentationMetricTest {
             val s = rig.stats.snapshot(reset = true)
             val (judged, short, long) = reference(rig.shown(), p120, 2)
             println("T-220 $name: judged ${s.holdJudged} short ${s.holdShort} long ${s.holdLong} skip_pct ${s.skipPct} " +
-                "(reference $judged/$short/$long), scheduler skip_pct ${s.schedSkipPct}, released ${rig.released.size}")
+                "(reference $judged/$short/$long), released ${rig.released.size}")
             assertEquals(name, judged.toLong(), s.holdJudged)
             assertEquals(name, short.toLong(), s.holdShort)
             assertEquals(name, long.toLong(), s.holdLong)
@@ -243,7 +236,7 @@ class PresentationMetricTest {
         // AdaptivePacer's missed-slot branch at n = 2: the frame goes to the next vsync, the previous one is held 3.
         val rig = PresentRig(120, p60, adaptive = true)
         val start = 1_000_000_000L
-        var late: FramePacer.Decision? = null
+        var late: PacerDecision? = null
         for (k in 0 until 200) {
             val cap = start + k * p60
             val d = rig.frame(k, cap, cap + 21 * ms + if (k == 150) 9 * ms else 0)!!

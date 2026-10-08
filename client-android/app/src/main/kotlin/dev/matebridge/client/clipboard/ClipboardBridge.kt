@@ -3,7 +3,6 @@ package dev.matebridge.client.clipboard
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.os.Build
 import android.widget.Toast
 import dev.matebridge.client.protocol.Clipboard
 import dev.matebridge.client.session.Latest
@@ -100,7 +99,7 @@ class ClipboardBridge(
         } else {
             val desc = clip.description
             val sensitive = desc.extras?.getBoolean(EXTRA_IS_SENSITIVE, false) ?: false
-            val timestamp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) desc.timestamp else 0L
+            val timestamp = desc.timestamp
             // Sensitive content is never even converted to a String.
             Clip(if (sensitive) null else clip.getItemAt(0).coerceToText(context)?.toString(), sensitive, timestamp, "ok", clip.itemCount)
         }

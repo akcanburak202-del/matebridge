@@ -20,8 +20,11 @@ import java.security.spec.AlgorithmParameterSpec
 import javax.crypto.Cipher
 import javax.crypto.CipherSpi
 
-/** T-292: the direct-ByteBuffer record path opens records of any size, rejects forgeries and keeps the counter behaviour. */
-class RecordAeadPathTest {
+/**
+ * T-292/T-077 (merged in T-303): the record layer opens records of any size, rejects forgeries (tag, header, counter,
+ * replay, provider faults), keeps the counter behaviour and writes open stamps only when enabled.
+ */
+class RecordLayerTest {
     private val key = ByteArray(32) { (it * 5 + 1).toByte() }
 
     private fun payload(n: Int, seed: Int) = ByteArray(n) { (it * seed + seed).toByte() }
@@ -154,5 +157,23 @@ class RecordAeadPathTest {
             out += dec.next()!! // each frame must keep its bytes although the scratch is reused
         }
         assertEquals("x", frames, out)
+    }
+
+    @Test fun openStampsAreWrittenOnlyWhenEnabledAndInOrder() {
+        val k = ByteArray(32) { 4 }
+        val rec = RecordSealer(k).seal(0x41, ByteArray(100))
+        val st = OpenStamps.current()
+        st.startNs = 0; st.initNs = 0; st.finalNs = 0
+        RecordOpener(k).open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+        assertEquals(0L, st.startNs)
+        try {
+            Records.stampOpens = true
+            RecordOpener(k).open(rec.copyOf(4), rec.copyOfRange(4, rec.size))
+        } finally {
+            Records.stampOpens = false
+        }
+        assertTrue(st.startNs > 0)
+        assertTrue(st.initNs >= st.startNs)
+        assertTrue(st.finalNs >= st.initNs)
     }
 }

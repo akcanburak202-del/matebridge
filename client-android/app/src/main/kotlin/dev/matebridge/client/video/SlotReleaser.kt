@@ -82,11 +82,6 @@ class SlotReleaser(private val sink: Sink, private val counters: PresentCounters
     /** Time until the pending buffer must be released, or null when nothing is held. */
     fun untilDeadlineNs(nowNs: Long): Long? = if (pendingIdx >= 0) (pendingDeadlineNs - nowNs).coerceAtLeast(0) else null
 
-    /** Forgets all state (codec restart); the pending buffer belongs to the old codec and is not touched. */
-    fun reset() {
-        pendingIdx = -1; pendingSlot = Long.MIN_VALUE; releasedSlot = Long.MIN_VALUE
-    }
-
     private fun releasePending() {
         trace?.onRelease(pendingTag, pendingSlot, System.nanoTime(), pendingRenderNs)
         sink.release(pendingIdx, pendingRenderNs)
@@ -127,42 +122,28 @@ class PresentCounters {
 
 /**
  * Frames inside the decoder: queued as input minus released/discarded as output (a buffer held for a slot still
- * occupies the codec). Optional limit on the count ([canQueue]); 0 = unlimited. [p95AndReset] gives the window's
- * 95th percentile of the count sampled at each queue (a frame waiting for an input buffer counts as one more).
+ * occupies the codec). [p95AndReset] gives the window's 95th percentile of the count sampled at each queue.
  * Thread-safe (input thread queues, output thread completes).
  */
 class InFlightGauge {
     companion object {
         const val MAX_TRACKED = 32
-        /** With a limit set, queueing is allowed again when no output completed for this long (no deadlock). */
-        const val STALL_NS = 100_000_000L
     }
 
     private var count = 0
-    private var lastDoneNs = 0L
     private val hist = IntArray(MAX_TRACKED + 1)
     private var samples = 0
 
     @Synchronized fun current(): Int = count
 
-    @Synchronized fun onQueued(nowNs: Long) {
-        if (count == 0) lastDoneNs = nowNs
+    @Synchronized fun onQueued() {
         count++
         sample(count)
     }
 
-    @Synchronized fun onDone(nowNs: Long) {
+    @Synchronized fun onDone() {
         if (count > 0) count--
-        lastDoneNs = nowNs
     }
-
-    /** A frame is waiting for room: sample the count including it. */
-    @Synchronized fun onHeld() = sample(count + 1)
-
-    @Synchronized fun canQueue(limit: Int, nowNs: Long): Boolean =
-        limit <= 0 || count < limit || nowNs - lastDoneNs > STALL_NS
-
-    @Synchronized fun reset() { count = 0 }
 
     @Synchronized fun p95AndReset(): Int? {
         if (samples == 0) return null

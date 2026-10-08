@@ -99,7 +99,7 @@ class VideoStatsTest {
         s.onReceived(100); s.onReceived(50)
         s.onInput(1, 1000); s.onInput(2, 2000)
         s.onOutput(1, 3000); s.onOutput(2, 6000)
-        s.onRendered(); s.onDropped(2)
+        s.onReleased(null, null, 0); s.onDropped(2)
         val snap = s.snapshot(reset = true)
         assertEquals(2, snap.received); assertEquals(2, snap.decoded)
         assertEquals(1, snap.rendered); assertEquals(2, snap.dropped)

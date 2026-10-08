@@ -123,9 +123,6 @@ class KeyTracker {
             else -> null
         }
 
-        /** Ctrl+Shift+F3 toggles the stats overlay locally and never reaches the Mac. */
-        fun isStatsToggle(f: KeyFrame) = localChord(f) == LocalAction.STATS
-
         /**
          * The tablet-only chord this event belongs to, or NONE: Ctrl+Shift+F1 / F2 (pointer speed down / up), F3 (stats), or 9 / 0 / 8 by scan code,
          * 7 (display mode), 6 (settings panel), Esc (back to Android). Matched by key code or the Linux scan code, because Esc may arrive as BACK.

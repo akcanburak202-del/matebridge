@@ -54,7 +54,7 @@ class IntervalHistogramTest {
         val st = VideoStats()
         st.onReceived(10, nowUs = 0); st.onReceived(10, nowUs = 20_000); st.onReceived(5, nowUs = 25_000, isConfig = true)
         st.onOutput(1, 100_000); st.onOutput(2, 110_000)
-        st.onShown(200_000); st.onShown(217_000)
+        st.onShownPaced(null, 200_000_000L, 16_666_667L, 16_666_667L); st.onShownPaced(null, 217_000_000L, 16_666_667L, 16_666_667L)
         val s = st.snapshot(reset = true)
         assertEquals(1, s.network.count)
         assertEquals(1, s.network.overThreshold)
@@ -77,7 +77,7 @@ class PacerTest {
     }
 
     @Test fun noSamplesMeansImmediate() {
-        assertNull(FramePacer(VsyncClock(60f), 1, period60).schedule(1_000))
+        assertNull(AdaptivePacer(VsyncClock(60f), period60).schedule(0L, 1_000))
     }
 
     @Test fun reseedsFrom60To120AndBack() {
@@ -117,68 +117,6 @@ class PacerTest {
         val v = clock(60f)
         assertEquals(period60 / 2, v.slotAtOrAfter(5 * ms, 0.5))
         assertEquals(period60 / 2 + period60, v.slotAtOrAfter(period60 / 2 + 1, 0.5))
-    }
-
-    @Test fun bufferOnePresentsOneVsyncAfterTheEarliest() {
-        val pacer = FramePacer(clock(60f), 1, period60)
-        val d = pacer.schedule(1 * ms)!!
-        assertFalse(d.collided)
-        assertEquals(period60, d.addedNs) // earliest vsync is period60, V is one period later
-        assertEquals(2 * period60 - VsyncClock.DEFAULT_LEAD_NS, d.renderNs)
-    }
-
-    @Test fun addedLatencyStaysWithinOneVsyncPlusHalfAFrame() {
-        for (hz in listOf(60f, 120f)) {
-            val v = clock(hz)
-            val pacer = FramePacer(v, 1, period60)
-            var t = 0L
-            var seed = 12345L
-            repeat(500) {
-                seed = (seed * 1103515245 + 12345) and 0x7fffffff
-                t += period60 + (seed % (12 * ms)) - 6 * ms // 60 fps with +-6 ms arrival jitter
-                val d = pacer.schedule(t)!!
-                assertTrue("hz=$hz added=${d.addedNs}", d.addedNs <= v.periodNs + period60 / 2)
-            }
-        }
-    }
-
-    @Test fun cadenceKeepsTwoVsyncsAt120HzWhenDebtIsSmall() {
-        val v = clock(120f)
-        val pacer = FramePacer(v, 1, period60)
-        val a = pacer.schedule(0)!!
-        val b = pacer.schedule(4 * ms)!!
-        assertFalse(b.collided)
-        assertEquals(2 * v.periodNs, b.renderNs - a.renderNs)
-    }
-
-    @Test fun burstCollidesOnTheSameSlotAndRecovers() {
-        val pacer = FramePacer(clock(60f), 1, period60)
-        val a = pacer.schedule(0)!!
-        val b = pacer.schedule(0)!! // debt of a full frame: re-anchored onto a's slot
-        assertTrue(b.collided)
-        assertEquals(a.renderNs, b.renderNs)
-        val late = pacer.schedule(1_000 * ms)!!
-        assertFalse(late.collided)
-    }
-
-    @Test fun cadenceDebtDoesNotAccumulate() {
-        val v = clock(60f)
-        val pacer = FramePacer(v, 1, period60)
-        var t = 0L
-        var maxAdded = 0L
-        repeat(300) { // source 2% faster than the display cadence
-            t += period60 * 98 / 100
-            val d = pacer.schedule(t)!!
-            maxAdded = maxOf(maxAdded, d.addedNs)
-        }
-        assertTrue("added=$maxAdded", maxAdded <= v.periodNs + period60 / 2)
-    }
-
-    @Test fun bufferIsClampedToTwo() {
-        val v = clock(60f)
-        val a = FramePacer(v, 5, period60).schedule(0)!!
-        val b = FramePacer(v, 2, period60).schedule(0)!!
-        assertEquals(b.renderNs, a.renderNs)
     }
 
     @Test fun gapThresholdIsFollowedAndReported() {
@@ -222,8 +160,8 @@ class DisplayModeTest {
     @Test fun overlayShowsModeBufferAndPercentiles() {
         val g = IntervalSummary(60, 16_700, 24_100, 40_200, 5)
         val snap = VideoStats.Snapshot(60, 59, 58, 2, 4_500, 1_250_000, 30_000, g, g, g)
-        val text = StatsFormat.overlay(snap, 1000, 30_000, StatsFormat.pacingLine(120f, 1))
-        assertTrue(text.contains("Mod 120 Hz | Tampon 1"))
+        val text = StatsFormat.overlay(snap, 1000, 30_000, StatsFormat.pacingLine(120f))
+        assertTrue(text.contains("Mod 120 Hz | Uyarlı"))
         assertTrue(text.contains("Ağ 16.7/24.1/40.2 ms >16.7:5"))
         assertTrue(text.contains("Gösterim"))
         assertEquals("net_p50_us=16700 net_p95_us=24100 net_p99_us=40200 net_over=5", StatsFormat.gapFields("net", g))

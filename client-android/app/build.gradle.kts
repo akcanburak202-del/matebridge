@@ -59,7 +59,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.matebridge.client"
-        minSdk = 29
+        minSdk = 31
         targetSdk = 31
         // T-146: the real versionCode is the commit count, set per variant below; 1 is the no-git fallback.
         versionCode = 1

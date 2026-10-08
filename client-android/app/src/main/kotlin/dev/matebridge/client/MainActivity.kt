@@ -70,7 +70,6 @@ import dev.matebridge.client.stream.ClockSync
 import dev.matebridge.client.stream.DisplayModeInfo
 import dev.matebridge.client.stream.DisplayModePicker
 import dev.matebridge.client.stream.FrameRatePolicy
-import dev.matebridge.client.stream.GameJitter
 import dev.matebridge.client.stream.GameModeSettings
 import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
@@ -288,12 +287,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Overlay text last set; an unchanged text is not set again (no relayout/redraw once a second while idle). */
     private var lastOverlayText: String? = null
 
-    // T-016/T-052 smoothness knobs. Launch extras: `--ei jitter N` (unset = adaptive pacing on the surface path;
-    // 0|1|2 = fixed jitter buffer in content frames, 0 = render at once as in T-015; -1 = adaptive off = 0) and `--ei hz 120` (preferred refresh rate while streaming, 0 = leave alone).
-    private var bufferFrames = VideoRenderer.BUFFER_ADAPTIVE
-    /** The launch-time buffer (above) and where a fixed one came from; game mode uses 0 unless fixed (T-109). */
-    private var launchBufferFrames = VideoRenderer.BUFFER_ADAPTIVE
-    private var bufferFixedBy: GameJitter.Source? = null
+    // Launch extra `--ei hz 120`: preferred refresh rate while streaming, 0 = leave alone. Pacing is always adaptive (T-303).
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
     /** T-243: `display_rate` switches in the stats log window (`MB/render ev=stats hz_switches=`). */
@@ -422,9 +416,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // T-141: `--ez stats_1s true` brings back the per-second video stats log lines (diagnostics).
         statsLog = StatsLogWindow(if (devKnobs.stats1s) StatsLogWindow.FAST_MS else StatsLogWindow.DEFAULT_MS)
         MbLog.i("stats_log", "window_ms=${statsLog.windowMs}", "render")
-        bufferFrames = devKnobs.jitter ?: VideoRenderer.BUFFER_ADAPTIVE
-        launchBufferFrames = bufferFrames
-        bufferFixedBy = if (devKnobs.jitter != null) GameJitter.Source.EXTRA else null
         devKnobs.leadUs?.let { vsync.leadOverrideNs = it * 1000L }
         // T-071: absent = 6 ms default; -1 = the display's reported deadline; N >= 0 = N us.
         devKnobs.deadlineUs?.let { us ->
@@ -469,7 +460,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ) // T-259: the self-test result is per build
         wolStore = WolStore(prefsStore) // T-129
         wolSender = WolSender(this)
-        settings.migrateTransportToAutoOnce()?.let { old -> MbLog.i("transport_pref_migrated", "from=${TransportMode.parse(old)?.id ?: "other"} to=auto") } // T-096
         statsOn = settings.statsOverlay()
         applyStatsVisibility()
         settings.lastEndpoint()?.let { endpointField.setText(it.toString()) }
@@ -502,7 +492,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             AndroidKeystoreWrapper(),
         )
         // T-223 (decision 0030 §5): the five pre-update mode ids become mode + frame rate once, before any read.
-        settings.migrateModesOnce()?.let { MbLog.i("modes_migrated", "mode=${it.mode.id} fps=${it.fps}") }
         streamMode = settings.streamMode()
         // T-238 (decision 0032): HDR10 capability once (display + the HEVC decoder the renderer gets).
         val hdrCaps = detectHdrCapability()
@@ -517,8 +506,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         audioOutFromExtra = devKnobs.audioOut?.let { AudioOutPref.parse(it) } != null
         // T-109/T-223: stored mode Oyun or Çizim starts with its defaults (layer built before anything reads them).
         gameSettings.onModeChanged(streamMode)?.let { change ->
-            applyJitter()
-            MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), gameSettings.effective()) + " at=start")
+            MbLog.i("mode_layer", GameModeSettings.logFields(change, gameSettings.effective()) + " at=start")
         }
         if (audioAllowed) {
             audio = AudioPlayout(this, { clock.offsetUs() }, gameSettings.audioOut, devKnobs.audioOut, devKnobs.audioBufBursts, devKnobs.audioIdlePause) {
@@ -642,14 +630,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         // a focus change), so a request stored on `root` itself would be overwritten, while a leaf's request is
         // re-derived by every ancestor.
         unbufferedPen = UnbufferedPenDispatch(
-            Build.VERSION.SDK_INT,
             UnbufferedPenDispatch.Backend { on ->
                 if (on && !video.isAttachedToWindow) return@Backend false // no window yet; sync retries
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // View.requestUnbufferedDispatch(int) is API 30
-                    // View ignores a request equal to its current value; clear first so a set always reaches the window.
-                    video.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
-                    if (on) video.requestUnbufferedDispatch(InputDevice.SOURCE_STYLUS)
-                }
+                // View ignores a request equal to its current value; clear first so a set always reaches the window.
+                video.requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
+                if (on) video.requestUnbufferedDispatch(InputDevice.SOURCE_STYLUS)
                 true
             },
             onEvent = { ev, fields -> MbLog.i(ev, fields, "input") },
@@ -772,10 +757,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             if (!syncInputActive(now)) return false
             if (now < inputFaultUntilMs) return true // recovering from an input fault: consumed, nothing half-processed
             if (capture.isSuspended && hasWindowFocus()) capture.resume() // safety net for a missed focus callback
-            // Old API only: the per-gesture request has to be repeated on every pen DOWN (the source form covers all).
-            if (unbufferedPen.wantsPerGestureRequest() && ev.actionMasked == MotionEvent.ACTION_DOWN && isPenTool(ev)) {
-                video.requestUnbufferedDispatch(ev)
-            }
             // Events arrive in window coordinates; the viewport is in root coordinates.
             root.getLocationInWindow(rootLoc)
             MotionEventAdapter.handle(ev, -rootLoc[0].toFloat(), -rootLoc[1].toFloat(), now, capture)
@@ -783,11 +764,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             inputFailed(e, now)
             true // consumed: never let a capture bug crash the app or leak the event to the views
         }
-    }
-
-    private fun isPenTool(ev: MotionEvent): Boolean {
-        val tool = ev.getToolType(ev.actionIndex)
-        return tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
     }
 
     /**
@@ -1216,8 +1192,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (::capture.isInitialized && capture.fingerPolicy != e.fingers) {
             capture.setFingerPolicy(e.fingers, SystemClock.uptimeMillis())
         }
-        applyJitter()
-        MbLog.i("mode_layer", GameModeSettings.logFields(change, currentJitter(), e))
+        MbLog.i("mode_layer", GameModeSettings.logFields(change, e))
     }
 
     // ---- T-276 (decision 0036): local cursor ----
@@ -1274,15 +1249,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (penOverlay.model.dotEnabled == on) return
         penOverlay.model.dotEnabled = on
         penOverlay.postInvalidateOnAnimation()
-    }
-
-    /** Jitter buffer for the current mode (decision 0014 §2); a launch value wins. */
-    private fun currentJitter() = GameJitter.choose(launchBufferFrames, bufferFixedBy, gameSettings.gameActive)
-
-    /** Applies [currentJitter]; a running renderer takes it on its next frame. */
-    private fun applyJitter() {
-        bufferFrames = currentJitter().bufferFrames
-        renderer?.bufferFrames = bufferFrames
     }
 
     private fun applyPointerSpeeds() = capture.setPointerSpeeds(settings.touchpadSpeed(), settings.mouseSpeed())
@@ -1493,8 +1459,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             onKeyframeRequest = { reason -> controller.trySend(mainKeyframeRequest(reason)) }, // T-259: `view` only in packed mode
             onGiveUp = { why -> MbLog.e("decoder_give_up", "reason=${why.take(40)}", "decoder") },
             vsync = vsync,
-            bufferFrames = bufferFrames,
-            codecReportsShown = true, // T-184: the only path; the codec's render callback reports shown times
             codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
@@ -1546,8 +1510,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     @Suppress("DEPRECATION")
     private fun detectHdrCapability(): HdrCapability {
         val types = try {
-            val d = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
-            d?.hdrCapabilities?.supportedHdrTypes
+            display?.hdrCapabilities?.supportedHdrTypes
         } catch (e: Exception) { null }
         val codecs = try {
             android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.map { info ->
@@ -1576,7 +1539,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             transportMode = mode.id,
             audioOn = audioAllowed && settings.audioEnabled(),
             audioOut = audioOut.id,
-            bufferFrames = bufferFrames,
             displayWidthPx = gameSettings.display(streamMode)?.widthPx ?: 0,
             displayHeightPx = gameSettings.display(streamMode)?.heightPx ?: 0,
             displayApplied = gameSettings.display(streamMode)?.appliedIn(config) ?: false,
@@ -1815,20 +1777,16 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun setSurfaceFrameRate(on: Boolean) {
-        if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
+        if (!surfaceValid) return
         // T-046: always an explicit FIXED_SOURCE request at the stream fps (the `frate` override went with the GL path,
-        // T-184). On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
+        // T-184), with CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
         val rate = FrameRatePolicy.surfaceRate(-1, streamConfig?.fps ?: 0).toFloat()
         val compat = Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
         if (on && rate <= 0f) return
         try {
             val sf = video.holder.surface
-            if (Build.VERSION.SDK_INT >= 31) {
-                sf.setFrameRate(if (on) rate else 0f, compat, Surface.CHANGE_FRAME_RATE_ALWAYS)
-            } else {
-                sf.setFrameRate(if (on) rate else 0f, compat)
-            }
-            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
+            sf.setFrameRate(if (on) rate else 0f, compat, Surface.CHANGE_FRAME_RATE_ALWAYS)
+            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=true", "render")
         } catch (e: Exception) {
             MbLog.w("set_frame_rate_failed", "err=${e.javaClass.simpleName}", "render")
         }
@@ -1911,7 +1869,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         controller.trySend(StatsFormat.toMessage(s, interval, lat))
         audio?.onVideoLatency(AvSync.videoLatencyUs(lat, s.paceAddAvgUs, vsync.periodNs / 1000)) // T-095 A/V target (median-filtered)
         if (statsOn) {
-            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), r.bufferFrames, s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs()), clock.uncertaintyUs()) +
+            val base = StatsFormat.overlay(s, interval, lat, StatsFormat.pacingLine(currentHz(), s.paceAddAvgUs, s.skipPct, s.decode.p95Us.takeIf { s.decode.count > 0 }, r.paceDUs()), clock.uncertaintyUs()) +
                 (if (vg.count > 0) " | vsync " + "%.1f".format(java.util.Locale.ROOT, vg.p50Us / 1000.0) + " ms" else "")
             val tr = currentTransport()
             val text = getString(if (tr == Transport.USB) R.string.transport_usb else R.string.transport_wifi) +
@@ -1988,7 +1946,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0), currentHz(), vsync.periodNs / 1000,
                     vg.p50Us.takeIf { vg.count > 0 }, streamMode.id,
                 ) + " " +
-                "buffer=${r.bufferFrames} skip_pct=${s.skipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
+                "skip_pct=${s.skipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
                 "cb_skip_pct=${s.cbSkipPct?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "-"} " +
                 "pace_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
                 "vsync_ms=${"%.2f".format(java.util.Locale.ROOT, vsync.periodNs / 1e6)} pace_add_ms=${s.paceAddAvgUs?.let { "%.2f".format(java.util.Locale.ROOT, it / 1000.0) } ?: "-"} " +
@@ -1996,7 +1954,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 StatsFormat.gapFields("shown", s.shown) + " " + StatsFormat.gapFields("dec", s.decode) +
                 " pace_d_us=${r.paceDUs()} " +
                 // T-168: latency stages from the capture stamp; latency_us= above is the deprecated alias (clamped mean).
-                StatsFormat.latencyStageFields(s, r.codecReportsShown, clock.uncertaintyUs()) +
+                StatsFormat.latencyStageFields(s, clock.uncertaintyUs()) +
                 " hz_switches=$switches" + // T-243
                 " " + chromaStatsFields() + // T-259: chroma_layout, aux_paired_pct, aux_late, gl_ms_p50/p95 (+ packed counters)
                 pacerKnobsField(), // T-251: once per renderer

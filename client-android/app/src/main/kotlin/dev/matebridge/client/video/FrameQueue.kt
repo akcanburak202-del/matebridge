@@ -144,7 +144,7 @@ class FrameQueue(
     /** Frames handed out as SKIP whose TAIL has not been taken yet. */
     private var skippedOut = 0
     private var catchStartNs = 0L
-    private var maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
+    private val maxCatchUpNs = CatchUp.MAX_CATCH_UP_MS * 1_000_000L
     private var catchUps = 0L
 
     /** Depth limit in non-config frames; applies from the next frame on. */
@@ -162,13 +162,8 @@ class FrameQueue(
         get() = synchronized(lock) { bytesCatchUp }
         set(v) = synchronized(lock) { bytesCatchUp = v.coerceAtLeast(0) }
 
-    /** T-252 (tests): longest catch-up in milliseconds. */
-    fun setCatchUpMaxMs(maxMs: Long) = synchronized(lock) {
-        maxCatchUpNs = maxMs * 1_000_000L
-    }
-
     /** True while a backlog is being caught up (pure query). */
-    fun isCatchingUp(): Boolean = synchronized(lock) { catchingUp }
+    internal fun isCatchingUp(): Boolean = synchronized(lock) { catchingUp }
 
     /** Returns the KEYFRAME_REQUEST reason to send now, or null. */
     fun offer(frame: VideoFrame): Int? {
@@ -377,7 +372,7 @@ class FrameQueue(
     fun pending(): Int = synchronized(lock) { queue.size }
 
     /** Decoder error: drops pending frames and closes the gate; returns the request reason (always sent). */
-    fun onDecoderError(): Int = onDecoderErrorIfOwner(ANY_CONSUMER)!!
+    internal fun onDecoderError(): Int = onDecoderErrorIfOwner(ANY_CONSUMER)!!
 
     /**
      * T-219: [onDecoderError] from [consumer]'s decoder thread: only while it owns the queue. A retired consumer changes
@@ -428,7 +423,7 @@ class FrameQueue(
         return reason
     }
 
-    fun isWaitingKeyframe(): Boolean = synchronized(lock) { waitingKeyframe }
+    internal fun isWaitingKeyframe(): Boolean = synchronized(lock) { waitingKeyframe }
 
     /**
      * Periodic retry while gated (T-121): true when the gate is closed and no request went out for [HOLDOFF_MS].

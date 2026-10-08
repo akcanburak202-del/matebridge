@@ -15,7 +15,7 @@ import org.junit.Test
 import java.lang.management.ManagementFactory
 
 /** T-285: the encrypted video receive path allocates one full-size array per record (VideoFrame.data), not two. */
-class RecordReceiveAllocTest {
+class RecordAllocTest {
     private val key = ByteArray(32) { (it + 1).toByte() }
 
     private fun frame(seq: Long, size: Int, fill: Int) =

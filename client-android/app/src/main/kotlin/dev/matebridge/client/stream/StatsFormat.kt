@@ -60,13 +60,13 @@ object StatsFormat {
 
     /**
      * T-168 fields of `MB/render ev=stats`: the latency stages from the capture stamp (cap_dec, ready_slot, cap_rel,
-     * cap_cb), then `render_cb_missing= discarded= lat_neg= clock_unc_us=`. [codecCallbacks] false (GL path): cap_cb and
-     * render_cb_missing are `-`. [clockUncUs] null (no PONG yet): `-`.
+     * cap_cb), then `render_cb_missing= discarded= lat_neg= clock_unc_us=`.
+     * [clockUncUs] null (no PONG yet): `-`.
      */
-    fun latencyStageFields(s: VideoStats.Snapshot, codecCallbacks: Boolean, clockUncUs: Long?): String =
+    fun latencyStageFields(s: VideoStats.Snapshot, clockUncUs: Long?): String =
         stageFields("cap_dec", s.capDec) + " " + stageFields("ready_slot", s.readySlot, withMax = false) + " " +
-            stageFields("cap_rel", s.capRel) + " " + stageFields("cap_cb", s.capCb, available = codecCallbacks) +
-            " render_cb_missing=${if (codecCallbacks) s.renderCbMissing.toString() else "-"} discarded=${s.discarded} " +
+            stageFields("cap_rel", s.capRel) + " " + stageFields("cap_cb", s.capCb) +
+            " render_cb_missing=${s.renderCbMissing} discarded=${s.discarded} " +
             "lat_neg=${s.latNeg} clock_unc_us=${clockUncUs ?: "-"}"
 
     /** "Ağ 16.7/24.1/40.2 ms >25.0:5": p50/p95/p99 of the gap between two frames, and the count over the threshold (1.5 x vsync period). */
@@ -83,21 +83,22 @@ object StatsFormat {
      * Log fields of the presentation scheduler (T-057): second release attempts per slot, frames folded onto the
      * previous slot by the latency bound, p95 frames inside the decoder, timestamp lead, slack D.
      */
-    fun presentFields(slotDups: Long, lateDrops: Long, inCodecP95: Int?, leadNs: Long, dUs: Long, limit: Int, phaseLock: Boolean = false, rephase: Long = 0,
+    fun presentFields(slotDups: Long, lateDrops: Long, inCodecP95: Int?, leadNs: Long, dUs: Long, phaseLock: Boolean = false, rephase: Long = 0,
         lateMarginP50Us: Long? = null, lateMarginMinUs: Long? = null,
     ) =
         "slot_dups=$slotDups late_drops=$lateDrops in_codec_p95=${inCodecP95 ?: "-"} " +
-            String.format(Locale.ROOT, "lead_ms=%.2f", leadNs / 1e6) + " d_us=$dUs inflight_limit=$limit " +
+            String.format(Locale.ROOT, "lead_ms=%.2f", leadNs / 1e6) + " d_us=$dUs inflight_limit=0 " + // T-183: the limit is retired, the field stays
+
             "phase_lock=${if (phaseLock) 1 else 0} rephase=$rephase " +
             "late_margin_p50_us=${lateMarginP50Us ?: "-"} late_margin_min_us=${lateMarginMinUs ?: "-"}"
 
-    /** Overlay line for the display mode and jitter buffer ([bufferFrames] < 0 = adaptive pacing). */
+    /** Overlay line for the display mode and the adaptive pacing. */
     fun pacingLine(
-        modeHz: Float, bufferFrames: Int, paceAddUs: Long? = null, skipPct: Double? = null,
+        modeHz: Float, paceAddUs: Long? = null, skipPct: Double? = null,
         decodeP95Us: Long? = null, paceDUs: Long? = null,
     ) =
         String.format(Locale.ROOT, "Mod %.0f Hz | ", modeHz) +
-            (if (bufferFrames < 0) "Uyarlı" else "Tampon $bufferFrames") +
+            "Uyarlı" +
             (if (paceAddUs != null) String.format(Locale.ROOT, " | +%.1f ms", paceAddUs / 1000.0) else "") +
             (if (skipPct != null) String.format(Locale.ROOT, " | atlama %%%.1f", skipPct) else "") +
             (if (paceDUs != null && paceDUs > 0) String.format(Locale.ROOT, " | D %.1f ms", paceDUs / 1000.0) else "") +

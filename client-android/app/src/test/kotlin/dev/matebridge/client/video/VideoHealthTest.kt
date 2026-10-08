@@ -826,7 +826,7 @@ class VideoHealthTest {
     private val events = EventLog()
     private var codecFactory: DecoderCodec.Factory = factory
     private val renderer by lazy {
-        VideoRenderer(config, onKeyframeRequest = { kfRequests.add(it) }, bufferFrames = 0, codecFactory = codecFactory,
+        VideoRenderer(config, onKeyframeRequest = { kfRequests.add(it) }, codecFactory = codecFactory,
             env = env, onHealthEvent = { events.add(it) })
     }
     private var delivered = 0

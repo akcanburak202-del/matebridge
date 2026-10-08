@@ -21,8 +21,7 @@ class StatsLogWindowTest {
             st.onInput(pts, t, captureTimeUs = 1)
             st.onOutput(pts, t + decUs)
             st.onPaceAdd(2_000)
-            st.onScheduled(skipped = k == 0)
-            st.onRendered()
+            st.onReleased(null, null, t)
         }
         st.onDropped(1)
     }
@@ -48,7 +47,6 @@ class StatsLogWindowTest {
         assertEquals("weighted decode average", 10_000L, log.decodeTimeAvgUs)
         assertEquals("weighted latency average", 40_000L, log.latencyAvgUs)
         assertEquals(2_000L, log.paceAddAvgUs)
-        assertEquals("1 skip per 60 scheduled", 100.0 / 60, log.skipPct!!, 1e-9)
         // Percentiles over all 10 s: gaps within each second are 16.7 ms, between seconds 16.7 ms too (1 s = 60 x 16.67).
         assertEquals(599, log.network.count) // 600 frames, first gap needs a previous frame
         assertEquals(16_667L, log.network.p50Us)
