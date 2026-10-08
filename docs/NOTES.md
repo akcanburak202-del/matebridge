@@ -1827,3 +1827,19 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Çözme süresini iyileştiren tek şey dokunma yükseltmesi; yerel imleç etkisiz.
 - T-318 birleştirilmedi. Tablette `main` daily APK'sı kurulu (`3172856a`, T-317 dahil). `idle_dim`, parlaklık ve Safari geri alındı.
 - Test sayfasında daireler elips görünüyordu (kullanıcı fark etti): tuval pencere modunda yüklenip sonra tam ekrana gerilmişti. MateBridge'in oranı doğruydu. Sahneye `resize` işleyicisi eklendi.
+
+## 2026-10-08 ~16:57–17:10 — Kullanıcı: YouTube'da ses çıtırtısı ve iki takılma (Wi-Fi, daily APK `3172856a`)
+
+- **O dakikalar (16:57–16:58):**
+  - tablet `audio_arrival` ağ gecikmesi p95 58–79 ms'ye sıçradı (normalde ~15–18);
+  - `underruns` +3, `drops`, `refill_trims` / `skip_trims` birkaç kez;
+  - hedef tampon 48 → 62 ms'ye uyarlandı.
+  - Video takılmaları aynı saniyelere denk geliyor.
+  - Host normal gönderiyordu: 100 paket/s, `dropped=0`, `wire_dropped=0`.
+- **Yeniden üretme denemesi (sabit 440 Hz ton, 60 sn kollar):**
+  - durağan ekran, `dec_out_park` on/off/on: underrun ve kırpma 0;
+  - tam ekran 60 fps hareket sahnesi + ton: underrun ve kırpma 0, ağ gecikmesi p95 en çok 19,5 ms.
+
+  T-317 (çözücü parkı) ve video yükü neden değil. Kullanıcı tonda çıtırtı duymadı.
+- **Sonuç:** geçici Wi-Fi gecikme sıçraması (2026-10-06 T-279 notundaki desenle aynı). Oynatıcı kırpmaları zaten sessizlikte ya da 3 ms çapraz geçişle yapıyor (`PlayoutCore`); duyulan, sıçrama sırasındaki kısa kesintiler.
+- **Not:** ses paketleri iyi ağda da ~20–25 ms'de bir ikişer okunuyor (`per_read=2`, `since_video_ms≈0`). Wi-Fi toplu teslimi; kayıp yaratmıyor.
