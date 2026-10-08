@@ -1,7 +1,7 @@
 ---
 id: T-313
 title: Host — ölü ve yalnız testte kullanılan kod, küçük tekrarlar, test kopyaları (T-297 parti 4) ve REFINE anahtarları ev=profile'da
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-302, T-304, T-309, T-311]

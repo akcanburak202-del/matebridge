@@ -141,7 +141,7 @@ Host'ta geliştirici kapısı yok. "Yalnızca geliştirici" burada: kalır, vars
 
 1. **Jitter tamponu 1–2 dalı (0026 §7).** *Çözüldü (T-303, 2026-10-08):* `--ei jitter`, `FramePacer` ve Oyun `GameJitter` silindi; `VsyncClock` kendi dosyasında kaldı. Yalnız uyarlamalı pacer var.
 2. **`VideoTestActivity` dışa açık.** *Çözüldü (T-300, 2026-10-08):* debug kaynak setinden silindi (önce T-185 `DUMP` izniyle korumuştu).
-3. **`MATEBRIDGE_REFINE*` profil satırında yok.** `StreamProfileLog.knobAllowList` (EK) bu dört değişkeni içermiyor, bu yüzden varsayılan dışı değerleri `ev=profile knobs=`'ta görünmez (T-297 f). Kodu düzeltecek kart yok; orkestratör karar verir.
+3. **`MATEBRIDGE_REFINE*` profil satırında yok.** `StreamProfileLog.knobAllowList` (EK) bu dört değişkeni içermiyor, bu yüzden varsayılan dışı değerleri `ev=profile knobs=`'ta görünmez (T-297 f). Kodu düzeltecek kart yok; orkestratör karar verir. **Çözüldü (T-313).**
 4. **`pace_dcap_half` / `pace_feedback` (T-251).** 120-on-120 cihaz koşusu hiç yapılmadı. Ya ölçüm planlanır ya da düğmeler kaldırılır (T-297 f "emin değil").
 
 ## Planlanan ayarlar
