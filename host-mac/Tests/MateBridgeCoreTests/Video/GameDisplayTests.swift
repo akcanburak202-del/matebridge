@@ -163,7 +163,6 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertEqual(l.sessionStarted(device: dev, settings: game), [.reuse])
         l.sessionEnded(now: 0)
         XCTAssertEqual(l.sessionStarted(device: dev, settings: base), [.reconfigure(base)])
-        XCTAssertNil(l.lastTeardownReason)
     }
 
     func testOtherNativeSizeTearsDown() {
@@ -176,13 +175,11 @@ final class GameDisplayTests: XCTestCase {
         otherTablet.heightPx = 1200
         otherTablet.widthPt = 960
         otherTablet.heightPt = 600
-        XCTAssertEqual(l.sessionStarted(device: dev, settings: otherTablet), [.teardown, .create(otherTablet)])
-        XCTAssertEqual(l.lastTeardownReason, .sizeChanged)
+        XCTAssertEqual(l.sessionStarted(device: dev, settings: otherTablet), [.teardown(.sizeChanged), .create(otherTablet)])
         let otherGame = otherTablet.applying(prefs(w: 1440, h: 900))
         XCTAssertFalse(otherGame.displayHiDPI)
         XCTAssertEqual(l.reconfigure(settings: otherGame), [.reconfigure(otherGame)])
-        XCTAssertEqual(l.reconfigure(settings: game), [.teardown, .create(game)], "another native size")
-        XCTAssertEqual(l.lastTeardownReason, .sizeChanged)
+        XCTAssertEqual(l.reconfigure(settings: game), [.teardown(.sizeChanged), .create(game)], "another native size")
     }
 
     // MARK: Display reuse (VideoPipeline.obtainDisplay)

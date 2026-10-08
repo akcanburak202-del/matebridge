@@ -361,7 +361,6 @@ public struct StreamConfig: Equatable, Sendable {
     }
 
     /// The stream is a packed full colour pair (`chroma_layout = 1`).
-    public var isPacked444: Bool { chromaLayout == 1 }
 
     func write(_ w: inout ByteWriter) {
         w.u16(configID)
@@ -895,6 +894,13 @@ public struct Ping: Equatable, Sendable {
         self.seq = seq
         self.senderTimeUs = senderTimeUs
     }
+
+    func write(_ w: inout ByteWriter) {
+        w.u32(seq)
+        w.u64(senderTimeUs)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> Ping { Ping(seq: try r.u32(), senderTimeUs: try r.u64()) }
 }
 
 public struct Pong: Equatable, Sendable {
@@ -905,6 +911,16 @@ public struct Pong: Equatable, Sendable {
         self.seq = seq
         self.echoTimeUs = echoTimeUs
         self.responderTimeUs = responderTimeUs
+    }
+
+    func write(_ w: inout ByteWriter) {
+        w.u32(seq)
+        w.u64(echoTimeUs)
+        w.u64(responderTimeUs)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> Pong {
+        Pong(seq: try r.u32(), echoTimeUs: try r.u64(), responderTimeUs: try r.u64())
     }
 }
 
@@ -929,6 +945,23 @@ public struct Stats: Equatable, Sendable {
         self.latencyAvgUs = latencyAvgUs
         self.bytesReceived = bytesReceived
     }
+
+    func write(_ w: inout ByteWriter) {
+        w.u32(intervalMs)
+        w.u32(framesReceived)
+        w.u32(framesDecoded)
+        w.u32(framesRendered)
+        w.u32(framesDropped)
+        w.u32(decodeTimeAvgUs)
+        w.u32(latencyAvgUs)
+        w.u32(bytesReceived)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> Stats {
+        Stats(intervalMs: try r.u32(), framesReceived: try r.u32(), framesDecoded: try r.u32(),
+              framesRendered: try r.u32(), framesDropped: try r.u32(), decodeTimeAvgUs: try r.u32(),
+              latencyAvgUs: try r.u32(), bytesReceived: try r.u32())
+    }
 }
 
 // MARK: - Video messages
@@ -946,6 +979,18 @@ public struct VideoHello: Equatable, Sendable {
         self.protocolVersion = protocolVersion
         self.configID = configID
         self.sessionID = sessionID
+    }
+
+    func write(_ w: inout ByteWriter) {
+        w.u16(protocolVersion)
+        w.u16(configID)
+        w.u32(sessionID)
+        w.raw(videoNonce)
+    }
+
+    static func read(_ r: inout ByteReader) throws -> VideoHello {
+        VideoHello(protocolVersion: try r.u16(), configID: try r.u16(), sessionID: try r.u32(),
+                   videoNonce: try r.raw(ProtocolConstants.nonceSize))
     }
 }
 

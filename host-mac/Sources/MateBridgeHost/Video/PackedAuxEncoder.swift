@@ -5,6 +5,12 @@ import MateBridgeCore
 import os
 import VideoToolbox
 
+/// A property the auxiliary session needs for bit-exact samples was refused.
+struct AuxSetupError: Error, CustomStringConvertible {
+    let detail: String
+    var description: String { "aux property refused: \(detail)" }
+}
+
 /// The auxiliary VideoToolbox session of packed full colour (decision 0034, T-258): encodes the AVC444v2 auxiliary
 /// `420f` picture with the same fast profile as the main session, at a quarter of the main target bitrate (`AuxBitratePolicy`).
 ///
@@ -13,21 +19,12 @@ import VideoToolbox
 /// at most `maxInFlight` (2) auxiliary frames are inside VideoToolbox, and a frame that finds both busy is dropped
 /// (`encode` returns false) and the caller asks for an auxiliary keyframe, because the dropped frame broke that
 /// stream's reference chain.
-/// A property the auxiliary session needs for bit-exact samples was refused.
-struct AuxSetupError: Error, CustomStringConvertible {
-    let detail: String
-    var description: String { "aux property refused: \(detail)" }
-}
-
 final class PackedAuxEncoder: @unchecked Sendable {
     typealias Output = @Sendable (EncodedVideoFrame, _ encodeTimeUs: UInt64) -> Void
 
     static let maxInFlight = 2
     static let failureLimit = 5
     private static let log = Logger(subsystem: "dev.matebridge.host", category: "aux-encoder")
-
-    /// The auxiliary target as a fraction of the main one (`AuxBitratePolicy`, T-262).
-    static func auxBitrateKbps(main kbps: Int) -> Int { AuxBitratePolicy.kbps(main: kbps) }
 
     private let session: VTCompressionSession
     private let output: Output
@@ -41,9 +38,8 @@ final class PackedAuxEncoder: @unchecked Sendable {
     private var inFlight = 0
     private var failures = 0
     private var lastParameterSets: [UInt8] = []
+    private var formatCache = ParameterSetCache()  // guarded by `lock`
     private var closed = false
-    /// Property failures at creation ("Name=<OSStatus>"), for diagnostics.
-    private(set) var propertyFailures: [String] = []
 
     /// - Parameters:
     ///   - mainKbps: the main session's target; the auxiliary one follows `AuxBitratePolicy`.
@@ -54,7 +50,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
         self.output = output
         self.onError = onError
         self.onLoss = onLoss
-        let kbps = Self.auxBitrateKbps(main: mainKbps)
+        let kbps = AuxBitratePolicy.kbps(main: mainKbps)
         let spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
         var s: VTCompressionSession?
         let status = VTCompressionSessionCreate(
@@ -87,7 +83,6 @@ final class PackedAuxEncoder: @unchecked Sendable {
         set("YCbCrMatrix", kVTCompressionPropertyKey_YCbCrMatrix, HEVCEncoder.sessionMatrix)
         let prepared = VTCompressionSessionPrepareToEncodeFrames(s)
         if prepared != noErr { failed.append("PrepareToEncodeFrames=\(prepared)") }
-        propertyFailures = failed
         // The auxiliary samples are raw chroma: if the session does not carry exactly the session colour tags (or the
         // profile), VideoToolbox would colour-convert the buffers and corrupt the packed chroma silently. Any refused
         // required property is a setup failure (the owner falls back, `reason=aux_setup`).
@@ -101,9 +96,6 @@ final class PackedAuxEncoder: @unchecked Sendable {
             throw VideoEncoderError.sessionCreation(prepared)
         }
     }
-
-    /// Frames inside VideoToolbox right now.
-    var framesInFlight: Int { lock.withLock { inFlight } }
 
     /// Submits one auxiliary picture. false = not submitted (both slots busy, the session is closed, or VideoToolbox
     /// refused it): the caller counts a loss and requests an auxiliary keyframe. Owner queue only.
@@ -143,9 +135,6 @@ final class PackedAuxEncoder: @unchecked Sendable {
         }
     }
 
-    /// The SPS of the last parameter sets, for `ev=chroma_config`.
-    var lastSets: [[UInt8]] { lock.withLock { AnnexB.nalUnits(lastParameterSets) } }
-
     /// Flushes and closes the session. Synchronous; call from the owner queue or a dispatch queue, never from a Swift
     /// cooperative thread. Idempotent.
     func stop() {
@@ -183,19 +172,15 @@ final class PackedAuxEncoder: @unchecked Sendable {
     @discardableResult
     private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, pairID: UInt64, encodeUs: UInt64) -> Bool {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return false }
-        let isKey: Bool = {
-            guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
-                  let first = arr.first else { return true }
-            return (first[kCMSampleAttachmentKey_NotSync] as? Bool) != true
-        }()
+        let isKey = HEVCEncoder.isKeyframe(sb)
         let discard: Bool = lock.withLock {
             if isKey { awaitingKeyframe = false }
             return awaitingKeyframe
         }
         if discard { return false }
-        let (sets, lengthSize) = HEVCEncoder.parameterSets(format, codec: .hevc)
-        let blob = AnnexB.parameterSets(sets)
-        let changed: Bool = lock.withLock {
+        let (params, isNewFormat) = lock.withLock { formatCache.parameters(for: format, codec: .hevc) }
+        let blob = params.blob
+        let changed: Bool = isNewFormat && lock.withLock {
             let c = !blob.isEmpty && blob != lastParameterSets
             if c { lastParameterSets = blob }
             return c
@@ -205,8 +190,7 @@ final class PackedAuxEncoder: @unchecked Sendable {
             config.view = 1
             output(config, 0)
         }
-        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = HEVCEncoder.bytes(of: block),
-              let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return false }
+        guard let annexB = HEVCEncoder.annexBPayload(of: sb, lengthSize: params.lengthSize) else { return false }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
         frame.view = 1
         frame.pairID = pairID

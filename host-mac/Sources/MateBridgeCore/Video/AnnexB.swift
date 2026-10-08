@@ -19,6 +19,30 @@ public enum AnnexB {
         return out
     }
 
+    /// `convert(lengthPrefixed:lengthSize:)` without the second copy: with 4-byte lengths each prefix is overwritten
+    /// by the start code where it stands (both are 4 bytes), so the encoded frame is copied once, out of the block
+    /// buffer, and not again. Other length sizes go through `convert`. Returns false if the data is malformed; `data` is
+    /// then unspecified and must be discarded. On success `data` equals what `convert` returns.
+    public static func convertInPlace(_ data: inout [UInt8], lengthSize: Int = 4) -> Bool {
+        guard lengthSize == 4 else {
+            guard let converted = convert(lengthPrefixed: data, lengthSize: lengthSize) else { return false }
+            data = converted
+            return true
+        }
+        let count = data.count
+        return data.withUnsafeMutableBufferPointer { buf in
+            var i = 0
+            while i < count {
+                guard i + 4 <= count else { return false }
+                let len = Int(buf[i]) << 24 | Int(buf[i + 1]) << 16 | Int(buf[i + 2]) << 8 | Int(buf[i + 3])
+                guard len > 0, len <= count - i - 4 else { return false }
+                buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 1
+                i += 4 + len
+            }
+            return true
+        }
+    }
+
     /// Concatenates parameter sets (HEVC: VPS, SPS, PPS) with start codes.
     public static func parameterSets(_ sets: [[UInt8]]) -> [UInt8] {
         var out: [UInt8] = []

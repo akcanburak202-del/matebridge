@@ -143,10 +143,15 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
 
     /// Mach absolute time ticks (the unit of `SCStreamFrameInfo.displayTime`) to microseconds on the host clock.
     static func machTicksToUs(_ ticks: UInt64) -> UInt64 {
+        MachTime.ticksToUs(ticks, numer: timebase.numer, denom: timebase.denom)
+    }
+
+    /// The timebase is fixed for the life of the process: read once, not per frame.
+    private static let timebase: mach_timebase_info_data_t = {
         var tb = mach_timebase_info_data_t()
         mach_timebase_info(&tb)
-        return MachTime.ticksToUs(ticks, numer: tb.numer, denom: tb.denom)
-    }
+        return tb
+    }()
 
     /// Log-friendly name of an SCK frame status ("unknown" when the attachment is missing).
     static func statusName(_ status: SCFrameStatus?) -> String {

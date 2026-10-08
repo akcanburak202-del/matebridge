@@ -1,6 +1,6 @@
 import Foundation
 
-/// Metal source of the T-235 chroma pass (`SharpYUV` is its CPU reference; keep the two in step). Compiled at run time
+/// Metal source of the T-235 chroma pass (its CPU reference, `SharpYUV.convert`, is in the test target; keep the two in step). Compiled at run time
 /// by the host's `ChromaConverter` (no resource bundle to ship) and by XCTest, which runs it on plain textures and
 /// compares it with `SharpYUV.convert`.
 ///

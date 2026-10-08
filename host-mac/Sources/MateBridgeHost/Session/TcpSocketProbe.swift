@@ -2,67 +2,40 @@ import Darwin
 import Foundation
 import MateBridgeCore
 
+/// Why a sampler could take no reading: the descriptor is closed or `getsockopt` failed.
+private let tcpInfoUnavailable = "unavailable"
+
 /// Read-only view of the kernel TCP state behind a control or video connection (T-088): send-queue bytes, RTT,
 /// retransmits. A `BsdTcpConnection` (T-091) owns its descriptor, so it is read directly with
-/// `getsockopt(TCP_CONNECTION_INFO)` (`source=tcp_info`). The Network.framework variant (descriptor search plus
-/// `NWProtocolTCP.Metadata` fallback) went with the `nw` socket stack in T-186.
-///
-/// Not thread-safe; the owner serialises calls.
-final class TcpSocketProbe {
-    enum Failure: String, Error {
-        /// The descriptor is closed or `getsockopt` failed.
-        case unavailable
-    }
+/// `getsockopt(TCP_CONNECTION_INFO)` (`source=tcp_info`); the connection checks under its lock that the descriptor is
+/// still open. The Network.framework variant went with the `nw` socket stack in T-186.
 
+/// Thread-safe send-queue sampler of one video connection: a probe plus a `SendQueueMeter`.
+final class SendQueueSampler: @unchecked Sendable {
+    private let lock = NSLock()
     private let socket: BsdTcpConnection
+    private var meter = SendQueueMeter()
+    private var unavailable = false
+    private var failureReported = false
 
-    init(socket: BsdTcpConnection) {
-        self.socket = socket
+    init(socket: BsdTcpConnection) { self.socket = socket }
+
+    /// Takes one sample (call right before a frame is written: the queue this frame waits behind).
+    func sample() {
+        lock.withLock {
+            if let info = socket.connectionInfo() {
+                meter.record(Self.tcpSample(info))
+                unavailable = false
+            } else {
+                unavailable = true
+            }
+        }
     }
-
-    /// One sample, or why none could be taken.
-    func sample() -> Result<(TcpSample, SendQueueSource), Failure> {
-        connectionInfo().map { (Self.tcpSample($0), .tcpInfo) }
-    }
-
-    /// One full `getsockopt(TCP_CONNECTION_INFO)` reading (T-126).
-    func connectionInfo() -> Result<tcp_connection_info, Failure> {
-        // The connection checks under its lock that the descriptor is still open.
-        guard let info = socket.connectionInfo() else { return .failure(.unavailable) }
-        return .success(info)
-    }
-
-    /// Bytes still queued in user space.
-    var userPendingBytes: Int { socket.pendingBytes }
 
     private static func tcpSample(_ info: tcp_connection_info) -> TcpSample {
         TcpSample(sendQueueBytes: UInt64(info.tcpi_snd_sbbytes), srttMs: info.tcpi_srtt, rttVarMs: info.tcpi_rttvar,
                   retransmitPackets: info.tcpi_txretransmitpackets, congestionWindowBytes: info.tcpi_snd_cwnd,
                   sendWindowBytes: info.tcpi_snd_wnd)
-    }
-}
-
-/// Thread-safe send-queue sampler of one video connection: a probe plus a `SendQueueMeter`.
-final class SendQueueSampler: @unchecked Sendable {
-    private let lock = NSLock()
-    private let probe: TcpSocketProbe
-    private var meter = SendQueueMeter()
-    private var failure: TcpSocketProbe.Failure?
-    private var failureReported = false
-
-    init(socket: BsdTcpConnection) { probe = TcpSocketProbe(socket: socket) }
-
-    /// Takes one sample (call right before a frame is written: the queue this frame waits behind).
-    func sample() {
-        lock.withLock {
-            switch probe.sample() {
-            case .success(let (s, source)):
-                meter.record(s, source: source)
-                failure = nil
-            case .failure(let f):
-                failure = f
-            }
-        }
     }
 
     enum Report {
@@ -75,9 +48,9 @@ final class SendQueueSampler: @unchecked Sendable {
     func take() -> Report? {
         lock.withLock {
             if let w = meter.take() { return .window(w) }
-            if let failure, !failureReported {
+            if unavailable, !failureReported {
                 failureReported = true
-                return .unavailable(failure.rawValue)
+                return .unavailable(tcpInfoUnavailable)
             }
             return nil
         }
@@ -89,13 +62,13 @@ final class SendQueueSampler: @unchecked Sendable {
 /// session server uses it on its queue only.
 final class TcpInfoSampler {
     let role: TcpConnectionRole
-    private let probe: TcpSocketProbe
+    private let socket: BsdTcpConnection
     private var meter = TcpInfoMeter()
     private var failureReported = false
 
     init(role: TcpConnectionRole, socket: BsdTcpConnection) {
         self.role = role
-        probe = TcpSocketProbe(socket: socket)
+        self.socket = socket
     }
 
     enum Report {
@@ -107,14 +80,12 @@ final class TcpInfoSampler {
     /// One reading. `closeWindow`: the per-second line (moves the delta base); otherwise a snapshot between windows.
     /// nil when the reading failed and that was already reported.
     func read(closeWindow: Bool) -> Report? {
-        switch probe.connectionInfo() {
-        case .success(let info):
-            let snapshot = TcpConnectionSnapshot(info, userPendingBytes: probe.userPendingBytes)
-            return .reading(closeWindow ? meter.take(snapshot) : meter.peek(snapshot))
-        case .failure(let failure):
+        guard let info = socket.connectionInfo() else {
             guard !failureReported else { return nil }
             failureReported = true
-            return .unavailable(failure.rawValue)
+            return .unavailable(tcpInfoUnavailable)
         }
+        let snapshot = TcpConnectionSnapshot(info, userPendingBytes: socket.pendingBytes)
+        return .reading(closeWindow ? meter.take(snapshot) : meter.peek(snapshot))
     }
 }

@@ -1,7 +1,6 @@
 import AppKit
 import MateBridgeCore
 import MateBridgeHost
-import os
 
 DumpVideoCommand.runIfRequested()  // T-011: `--dump-video` CLI mode, exits before the menu bar app starts
 EncodeBenchCommand.runIfRequested()  // T-047: `--encode-bench` (synthetic frames, no display/input/network)
@@ -51,7 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var clipboard = ClipboardBridge(enabled: clipboardEnabled)
     private var signalSources: [DispatchSourceSignal] = []
     private var approvalPanel: ApprovalPanel?
-    private let logger = Logger(subsystem: "dev.matebridge.host", category: "session")
 
     /// Pid of an older live copy with our bundle identifier once `SingleInstancePolicy` gave up waiting for it, else
     /// nil. Sleeps (main thread, before any UI) while an older copy is still quitting. A `swift run` binary has no
@@ -451,9 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     private func log(_ event: String, _ fields: String) {
-        let line = LogFormat.line(monoMs: DispatchTime.now().uptimeNanoseconds / 1_000_000, level: .info,
-                                  component: "session", sessionID: 0, generation: 0, event: event, fields: fields)
-        logger.info("\(line, privacy: .public)")
+        HostLog.log(.info, component: "session", event: event, fields: fields)
     }
 }
 

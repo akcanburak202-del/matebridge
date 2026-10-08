@@ -8,8 +8,6 @@ import MateBridgeCore
 /// Logs only state changes (`ev=usb_tunnel state=...`); the device serial is never logged.
 public final class UsbTunnelWatcher: @unchecked Sendable {
     static let launchdLabel = "dev.matebridge.adb"
-    static let adbServerPort = AdbBinary.serverPort
-    static let adbTimeout = AdbBinary.timeout
 
     private let queue = DispatchQueue(label: "dev.matebridge.usb", qos: .utility)
     private let logger = SessionLogger(component: "usb")
@@ -56,18 +54,18 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     }
 
     private func tick() {
-        let adb = locateAdb()
+        let adb = AdbBinary.locate()
         var snapshot = UsbSnapshot(adbFound: adb != nil, serverUp: false)
         var serial: String?
-        if let adb, LoopbackProbe.isListening(port: Self.adbServerPort) {
+        if let adb, LoopbackProbe.isListening(port: AdbBinary.serverPort) {
             // The server is up (so this cannot auto-start a stray one); a hung answer counts as down.
-            let devices = runner.run(adb, ["devices"], timeout: Self.adbTimeout)
+            let devices = runner.run(adb, ["devices"], timeout: AdbBinary.timeout)
             if devices.succeeded {
                 snapshot.serverUp = true
                 snapshot.devices = AdbOutput.parseDevices(devices.output)
                 if let device = AdbOutput.selectDevice(snapshot.devices) {
                     serial = device.serial
-                    let list = runner.run(adb, ["-s", device.serial, "reverse", "--list"], timeout: Self.adbTimeout)
+                    let list = runner.run(adb, ["-s", device.serial, "reverse", "--list"], timeout: AdbBinary.timeout)
                     if list.succeeded { snapshot.presentTunnels = AdbOutput.parseReverseList(list.output) }
                 }
             }
@@ -98,8 +96,6 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
         lastActionFailed = !ok
     }
 
-    private func locateAdb() -> String? { AdbBinary.locate() }
-
     /// Same method as scripts/usb-mode.sh: adb under launchd, without its mDNS bridge (it aborts on some networks).
     private func startServer(adb: String) -> Bool {
         _ = runner.run("/bin/launchctl", ["remove", Self.launchdLabel], timeout: 3)  // clear a dead or hung job
@@ -107,7 +103,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
                                 + AdbServerLaunch.command(adb: adb), timeout: 5)
         guard submit.succeeded else { return false }
         for _ in 0..<15 {  // up to ~3 s for the listener
-            if LoopbackProbe.isListening(port: Self.adbServerPort) { return true }
+            if LoopbackProbe.isListening(port: AdbBinary.serverPort) { return true }
             Thread.sleep(forTimeInterval: 0.2)
         }
         return false
@@ -116,7 +112,7 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     private func installTunnels(adb: String, serial: String, ports: [UInt16]) -> Bool {
         var allOK = true
         for port in ports {
-            let r = runner.run(adb, ["-s", serial, "reverse", "tcp:\(port)", "tcp:\(port)"], timeout: Self.adbTimeout)
+            let r = runner.run(adb, ["-s", serial, "reverse", "tcp:\(port)", "tcp:\(port)"], timeout: AdbBinary.timeout)
             if !r.succeeded { allOK = false }
         }
         return allOK
@@ -132,13 +128,13 @@ public final class UsbTunnelWatcher: @unchecked Sendable {
     private func removalAttempt(serial: String, removal: TunnelRemoval, gen: Int) {
         guard !enabled, gen == generation else { return }
         // If the server is gone the tunnels went with it.
-        guard let adb = locateAdb(), LoopbackProbe.isListening(port: Self.adbServerPort) else { return }
+        guard let adb = AdbBinary.locate(), LoopbackProbe.isListening(port: AdbBinary.serverPort) else { return }
         var removal = removal
         for port in removal.pending {
-            _ = runner.run(adb, ["-s", serial, "reverse", "--remove", "tcp:\(port)"], timeout: Self.adbTimeout)
+            _ = runner.run(adb, ["-s", serial, "reverse", "--remove", "tcp:\(port)"], timeout: AdbBinary.timeout)
         }
         // Verify against the device's own list rather than trusting exit codes.
-        let list = runner.run(adb, ["-s", serial, "reverse", "--list"], timeout: Self.adbTimeout)
+        let list = runner.run(adb, ["-s", serial, "reverse", "--list"], timeout: AdbBinary.timeout)
         let present: Set<UInt16>? = list.succeeded ? AdbOutput.parseReverseList(list.output) : nil
         switch removal.finishAttempt(stillPresent: present) {
         case .done:

@@ -106,7 +106,7 @@ final class StreamPrefsTests: XCTestCase {
         // A different display size still replaces the display.
         var other = base
         other.widthPx = 1920
-        XCTAssertEqual(l.reconfigure(settings: other), [.teardown, .create(other)])
+        XCTAssertEqual(l.reconfigure(settings: other), [.teardown(.sizeChanged), .create(other)])
     }
 
     func testLeaseReconfigureWithoutSessionDoesNothing() {

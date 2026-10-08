@@ -88,9 +88,6 @@ public struct CursorShape: Equatable, Sendable {
 
 /// `CURSOR_STATE` (H->C, 0x0D): where the cursor is and which shape to draw.
 public struct CursorState: Equatable, Sendable {
-    /// Payload size (PROTOCOL.md 0x0D).
-    public static let size = 22
-
     /// +1 for every state of the session.
     public var seq: UInt32
     /// Hotspot position, normalized on the video surface (PROTOCOL.md 1).

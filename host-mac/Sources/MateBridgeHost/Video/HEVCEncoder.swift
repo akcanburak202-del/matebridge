@@ -92,6 +92,8 @@ final class HEVCEncoder: @unchecked Sendable {
     private let lock = NSLock()
     // All mutable state below is guarded by `lock`.
     private var lastParameterSets: [UInt8] = []
+    /// Parameter sets of the last `CMFormatDescription` (guarded by `lock`): one extraction per format, not per frame.
+    private var formatCache = ParameterSetCache()
     private var consecutiveFailures = 0
     private var idleTimer: DispatchSourceTimer?
     /// `captureTimeUs - deliveredUs` of the newest real capture (SCK stamps run ahead of delivery, ~+6.6 ms) and the
@@ -424,22 +426,15 @@ final class HEVCEncoder: @unchecked Sendable {
     static var sessionPrimaries: CFString { kCVImageBufferColorPrimaries_ITU_R_709_2 }
     static var sessionTransfer: CFString { kCVImageBufferTransferFunction_sRGB }
     static var sessionMatrix: CFString { kCVImageBufferYCbCrMatrix_ITU_R_709_2 }
-    static let sessionColorTags = ColorTags(primaries: sessionPrimaries as String, transfer: sessionTransfer as String,
-                                            matrix: sessionMatrix as String)
 
     /// The session's colour properties for a dynamic range: SDR as above; HDR10 BT.2020 / SMPTE ST 2084 (PQ) /
-    /// BT.2020 (decision 0032). Their string values equal `SessionColorTags` (tested in Core).
+    /// BT.2020 (decision 0032). Their string values equal `SessionColorTags`, which is what the per-frame retag comparison
+    /// uses (no CFString bridging on the hot path; tested in Core).
     static func sessionColor(_ range: DynamicRange) -> (primaries: CFString, transfer: CFString, matrix: CFString) {
         range == .hdr10
             ? (kCVImageBufferColorPrimaries_ITU_R_2020, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
                kCVImageBufferYCbCrMatrix_ITU_R_2020)
             : (sessionPrimaries, sessionTransfer, sessionMatrix)
-    }
-
-    /// `sessionColor(range)` as `ColorTags` (the retag comparison and its log line).
-    static func colorTags(for range: DynamicRange) -> ColorTags {
-        let c = sessionColor(range)
-        return ColorTags(primaries: c.primaries as String, transfer: c.transfer as String, matrix: c.matrix as String)
     }
 
     /// T-113: VideoToolbox colour-converts every input whose colour tags differ from the session's (~2.4 ms per
@@ -454,7 +449,7 @@ final class HEVCEncoder: @unchecked Sendable {
                                 transfer: tag(kCVImageBufferTransferFunctionKey),
                                 matrix: tag(kCVImageBufferYCbCrMatrixKey))
         let hasColorSpace = CVBufferCopyAttachment(buffer, kCVImageBufferCGColorSpaceKey, nil) != nil
-        guard InputRetag.needsRetag(buffer: current, hasColorSpace: hasColorSpace, session: colorTags(for: range)) else {
+        guard InputRetag.needsRetag(buffer: current, hasColorSpace: hasColorSpace, session: SessionColorTags.tags(for: range)) else {
             return nil
         }
         let c = sessionColor(range)
@@ -593,7 +588,7 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.unlock()
         if first {
             logSink(.info, "input_retag",
-                    "from=\(replaced.logValue) to=\(Self.colorTags(for: settings.dynamicRange).logValue)")
+                    "from=\(replaced.logValue) to=\(SessionColorTags.tags(for: settings.dynamicRange).logValue)")
         }
     }
 
@@ -962,19 +957,18 @@ final class HEVCEncoder: @unchecked Sendable {
     private func handle(_ sb: CMSampleBuffer, captureTimeUs: UInt64, encodeTimeUs: UInt64, trace: FrameTrace,
                         refine: Bool = false) -> Int {
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return 0 }
-        let isKey: Bool = {
-            guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
-                  let first = arr.first else { return true }
-            return (first[kCMSampleAttachmentKey_NotSync] as? Bool) != true
-        }()
+        let isKey = Self.isKeyframe(sb)
 
-        // Parameter sets are re-announced only when they change (first frame included).
-        let (sets, lengthSize) = Self.parameterSets(format, codec: settings.codec)
-        let blob = AnnexB.parameterSets(sets)
-        lock.lock()
-        let changed = !blob.isEmpty && blob != lastParameterSets
-        if changed { lastParameterSets = blob }
-        lock.unlock()
+        // Parameter sets are re-announced only when they change (first frame included). They can only change with the
+        // format description object, so the same object is not looked at again.
+        let (params, isNewFormat) = lock.withLock { formatCache.parameters(for: format, codec: settings.codec) }
+        let sets = params.sets
+        let blob = params.blob
+        let changed: Bool = isNewFormat && lock.withLock {
+            let c = !blob.isEmpty && blob != lastParameterSets
+            if c { lastParameterSets = blob }
+            return c
+        }
         if changed {
             let level = Self.levelIdc(sets, codec: settings.codec).map { String($0) } ?? "unknown"
             logSink(.info, "encoder_config", "codec=\(settings.codec.logName) profile=\(profileLogName) "
@@ -986,8 +980,7 @@ final class HEVCEncoder: @unchecked Sendable {
             output(EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: blob), 0)
         }
 
-        guard let block = CMSampleBufferGetDataBuffer(sb), let raw = Self.bytes(of: block) else { return 0 }
-        guard let annexB = AnnexB.convert(lengthPrefixed: raw, lengthSize: lengthSize) else { return 0 }
+        guard let annexB = Self.annexBPayload(of: sb, lengthSize: params.lengthSize) else { return 0 }
         if isKey { lock.withLock { lastKeyframeUs = HostClock.nowUs() } }
         lock.withLock { packedStats?.recordMain(bytes: annexB.count, kind: isKey ? .key : (refine ? .refine : .delta)) }
         var frame = EncodedVideoFrame(flags: isKey ? .keyframe : [], captureTimeUs: captureTimeUs, data: annexB)
@@ -995,6 +988,21 @@ final class HEVCEncoder: @unchecked Sendable {
         frame.trace = trace
         output(frame, encodeTimeUs)
         return annexB.count
+    }
+
+    /// Keyframe flag of an encoded sample (`NotSync` absent; no attachments counts as a keyframe).
+    static func isKeyframe(_ sb: CMSampleBuffer) -> Bool {
+        guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
+              let first = arr.first else { return true }
+        return (first[kCMSampleAttachmentKey_NotSync] as? Bool) != true
+    }
+
+    /// The encoded sample as one Annex-B access unit (length prefixes of `lengthSize` bytes become start codes); nil
+    /// when the sample has no data or is malformed. One copy out of the block buffer, then converted in place (T-313).
+    static func annexBPayload(of sb: CMSampleBuffer, lengthSize: Int) -> [UInt8]? {
+        guard let block = CMSampleBufferGetDataBuffer(sb), var data = bytes(of: block),
+              AnnexB.convertInPlace(&data, lengthSize: lengthSize) else { return nil }
+        return data
     }
 
     /// All bytes of a block buffer. The data pointer is valid for `lengthAtOffset` bytes only: a block buffer made of
@@ -1058,5 +1066,30 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return lastParameterSets.isEmpty ? nil
             : EncodedVideoFrame(flags: .codecConfig, captureTimeUs: 0, data: lastParameterSets)
+    }
+}
+
+/// The parameter sets of the last `CMFormatDescription` an encoder saw (T-313). VideoToolbox hands out the same format
+/// description object for every frame of a stable stream, so VPS/SPS/PPS are extracted and joined once per object, not
+/// per frame. A new object is extracted again (the caller compares the blob with what it announced last, so a
+/// CODEC_CONFIG still goes out on every change). Not thread-safe: the owner guards it.
+struct ParameterSetCache {
+    struct Entry {
+        var sets: [[UInt8]]
+        var blob: [UInt8]
+        var lengthSize: Int
+    }
+
+    private var format: CMFormatDescription?
+    private var entry: Entry?
+
+    /// `isNew` is true when `format` is not the object of the previous call (the sets were extracted now).
+    mutating func parameters(for format: CMFormatDescription, codec: Codec) -> (entry: Entry, isNew: Bool) {
+        if let entry, let last = self.format, last === format { return (entry, false) }
+        let (sets, lengthSize) = HEVCEncoder.parameterSets(format, codec: codec)
+        let fresh = Entry(sets: sets, blob: AnnexB.parameterSets(sets), lengthSize: lengthSize)
+        self.format = format
+        entry = fresh
+        return (fresh, true)
     }
 }

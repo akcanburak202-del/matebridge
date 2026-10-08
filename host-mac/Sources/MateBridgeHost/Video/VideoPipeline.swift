@@ -388,12 +388,6 @@ public final class VideoPipeline: @unchecked Sendable {
         return decision
     }
 
-    /// `handleKeyframeRequest` for callers that only need to know whether a config was re-sent.
-    @discardableResult
-    public func requestKeyframe(reason: KeyframeReason, view: KeyframeView? = nil) -> Bool {
-        handleKeyframeRequest(reason: reason, view: view).action == .configResent
-    }
-
     /// Keyframes written since the previous call: `idr=` / `idr_bytes_max=` of the stats line (T-122).
     public func takeKeyframeWindow() -> KeyframeRequestCoalescer.Window { keyframes.update { $0.takeWindow() } }
 
@@ -584,8 +578,8 @@ private final class PackedMonitorBox: @unchecked Sendable {
             let extra = max(0, queueDroppedTotal - lastQueueDropped) + max(0, senderDroppedTotal - lastSenderDropped)
             lastQueueDropped = queueDroppedTotal
             lastSenderDropped = senderDroppedTotal
-            for _ in 0..<offered { monitor.recordOffered() }
-            for _ in 0..<(lost + extra) { monitor.recordLost() }
+            monitor.recordOffered(offered)
+            monitor.recordLost(lost + extra)
             return monitor.closeWindow()
         }
     }

@@ -1015,6 +1015,51 @@ private func deadLeftoverWithForward() -> TabletFilesPlanner {
     }
 }
 
+/// The cursor prefs and clipboard mailboxes (T-313) are this coalescer with a session epoch; these are the rules that
+/// `CursorPrefsMailbox` and `LatestValueSlot` had.
+@Suite struct EpochCoalescerBoundaryTests {
+    @Test func theNewestWinsAndOnlyOneWakeIsScheduledPerEpoch() {
+        var m = EpochCoalescer<Int>()
+        let first = m.offer(1, epoch: 0), second = m.offer(2, epoch: 0), third = m.offer(3, epoch: 0)
+        #expect(first && !second && !third)
+        let taken = m.take(epoch: 0), again = m.take(epoch: 0)
+        #expect(taken == 3 && again == nil)
+        let afterWake = m.offer(4, epoch: 0)
+        #expect(afterWake)  // the wake was spent
+    }
+
+    @Test func aBoundaryVoidsWhatWasPostedAndOldWakesAreStale() {
+        var m = EpochCoalescer<Int>()
+        let old = m.offer(1, epoch: 0)
+        m.clear()  // the session ends and the next one starts: the epoch moves on
+        let new = m.offer(2, epoch: 1)  // the old wake does not count for the new session: it gets its own
+        let stale = m.take(epoch: 0)  // the stale wake runs first: it takes nothing and leaves the value alone
+        let current = m.take(epoch: 1)
+        #expect(old && new && stale == nil && current == 2)
+    }
+
+    @Test func anUpdateAfterTakeSchedulesExactlyOneMoreBlockNotOnePerUpdate() {
+        // ClipboardBridge: one block takes one value. While it applies the clip, a burst arrives.
+        var m = EpochCoalescer<Int>()
+        let first = m.offer(1, epoch: 0)
+        let taken = m.take(epoch: 0)  // block 1 is applying this clip
+        let burst = [m.offer(2, epoch: 0), m.offer(3, epoch: 0), m.offer(4, epoch: 0)]
+        #expect(first && taken == 1)
+        #expect(burst == [true, false, false])  // one extra block, which then takes the newest
+        #expect(m.take(epoch: 0) == 4)
+        #expect(m.take(epoch: 0) == nil)  // nothing is left for any further block
+    }
+
+    @Test func clearDropsPendingAndTheNextValueSchedulesItsOwnWake() {
+        var m = EpochCoalescer<Int>()
+        _ = m.offer(1, epoch: 0)
+        m.clear()
+        let dropped = m.take(epoch: 0)
+        let next = m.offer(2, epoch: 0)
+        #expect(dropped == nil && next)
+    }
+}
+
 @Suite struct WebDavMountTests {
     @Test func urlHasNoCredentials() {
         let url = WebDavMount.url(localPort: 47010)

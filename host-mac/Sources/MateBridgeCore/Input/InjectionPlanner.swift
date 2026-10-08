@@ -126,7 +126,6 @@ public struct InjectionPlanner: Sendable {
     public var isScrollOpen: Bool { scrollOpen }
     public var isMagnifyOpen: Bool { magnifyOpen }
     public var heldKeyCodes: [UInt16] { heldKeys }
-    public var heldModifierKeys: [ModifierKey] { heldModifiers }
 
     /// PLAN-*: plan one ordered action list. `now` is the host clock at the moment the message was received.
     public mutating func plan(_ actions: [InjectAction], environment env: InjectionEnvironment,

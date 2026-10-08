@@ -16,8 +16,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     public static let configID: UInt16 = 1
 
     private enum Event: Sendable {
-        case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?, settings: VideoSettings?,
-                          base: VideoSettings?, prefs: StreamPrefs?, reannounce: Bool, transport: SessionTransport)
+        case sessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID, settings: VideoSettings,
+                          base: VideoSettings, prefs: StreamPrefs?, reannounce: Bool, transport: SessionTransport)
         case sessionEnded
         case videoAttached(VideoLink)
         case keyframeRequest(KeyframeReason, KeyframeView?)
@@ -63,6 +63,21 @@ public final class StreamCoordinator: @unchecked Sendable {
         var fullChroma: FullChromaSession {
             FullChromaSession(prefsFromThisSession: prefsFromSession, allowed: !packedFallback)
         }
+
+        /// `prefs` applied to `base`. The permissions default to what the host allows now; the game display fallback
+        /// and the HDR fallback override one of them, a fresh `STREAM_PREFS` overrides `fullChroma`.
+        func derived(from prefs: StreamPrefs, allowGameDisplay: Bool, allowHDR: Bool,
+                     fullChroma override: FullChromaSession? = nil) -> VideoSettings {
+            base.applying(prefs, allowGameDisplay: allowGameDisplay, allowHDR: allowHDR,
+                          fullChroma: override ?? fullChroma)
+        }
+    }
+
+    /// `ActiveSession.derived` with the permissions as they are now, except where a fallback turns one off.
+    private func derive(_ live: ActiveSession, from prefs: StreamPrefs, allowGameDisplay: Bool? = nil,
+                        allowHDR: Bool? = nil, fullChroma: FullChromaSession? = nil) -> VideoSettings {
+        live.derived(from: prefs, allowGameDisplay: allowGameDisplay ?? allowsGameDisplay,
+                     allowHDR: allowHDR ?? allowsHDR, fullChroma: fullChroma)
     }
 
     /// Menu text for the video/stats line ("" = nothing to show). Called on an arbitrary queue.
@@ -361,13 +376,10 @@ public final class StreamCoordinator: @unchecked Sendable {
         }
     }
 
-    private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID?,
-                                  settings: VideoSettings?, base: VideoSettings?, prefs: StreamPrefs?,
+    private func onSessionStarted(sessionID: UInt32, configID: UInt16, device: DeviceID,
+                                  settings initial: VideoSettings, base: VideoSettings, prefs: StreamPrefs?,
                                   reannounce: Bool, transport: SessionTransport) async {
-        guard let device, var settings, let base else {
-            log(.error, "session_without_config")
-            return
-        }
+        var settings = initial
         // T-293: the same device keeps its failure history and breaker (the tablet renews its session every ~6 s while
         // video is dead); another device (takeover) starts fresh.
         let breakerBefore = retryPolicy.breaker
@@ -435,9 +447,8 @@ public final class StreamCoordinator: @unchecked Sendable {
         let userKbps = VideoSettings.clampedUserBitrateKbps(p.bitrateKbps).map(String.init) ?? "default"
         let allowed = allowsGameDisplay
         let allowHDR = allowsHDR
-        let derived = live.base.applying(p, allowGameDisplay: allowed, allowHDR: allowHDR,
-                                         fullChroma: FullChromaSession(prefsFromThisSession: true,
-                                                                       allowed: !live.packedFallback))
+        let derived = derive(live, from: p, allowGameDisplay: allowed, allowHDR: allowHDR,
+                             fullChroma: FullChromaSession(prefsFromThisSession: true, allowed: !live.packedFallback))
         let game = GameDisplayPolicy.outcome(of: p, nativeW: live.base.nativeWidthPx, nativeH: live.base.nativeHeightPx,
                                              allowed: allowed)
         log(.info, "stream_prefs", "fps=\(p.fps) scale=\(p.scalePermille) bitrate_kbps=\(userKbps) "
@@ -481,13 +492,11 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func applyPrefs(_ prefs: StreamPrefs) async {
         guard var live = session else { return }
         live.prefsFromSession = true
-        var wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
-                                        fullChroma: live.fullChroma)
+        var wanted = derive(live, from: prefs)
         // Decision 0034: a runtime fallback is retried at the next stream mode change.
         if live.packedFallback, !wanted.sameStreamMode(as: live.settings) {
             live.packedFallback = false
-            wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
-                                        fullChroma: live.fullChroma)
+            wanted = derive(live, from: prefs)
         }
         // T-293: only a real user change of the prefs (not a replay on accept) starts the breaker over.
         let breakerBefore = retryPolicy.breaker
@@ -737,8 +746,8 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func perform(_ actions: [DisplayLease.Action]) async {
         for action in actions {
             switch action {
-            case .teardown:
-                log(.info, "display_teardown", "reason=\(lease.lastTeardownReason?.logName ?? "unknown")")
+            case .teardown(let reason):
+                log(.info, "display_teardown", "reason=\(reason.logName)")
                 await destroyPipeline()
                 dropParked()
             case .create(let s):
@@ -983,7 +992,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard !isShuttingDown, var live = session, live.settings.dynamicRange == .hdr10, let prefs = live.prefs else {
             return nil
         }
-        let sdr = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: false, fullChroma: live.fullChroma)
+        let sdr = derive(live, from: prefs, allowHDR: false)
         live.settings = sdr
         live.configID = nextConfigID(after: live.configID)
         session = live
@@ -1007,8 +1016,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     private func fallBackFromPackedChroma(reason: String, startFailed: Bool) async {
         guard !isShuttingDown, var live = session, live.settings.packedChroma, let prefs = live.prefs else { return }
         live.packedFallback = true
-        let wanted = live.base.applying(prefs, allowGameDisplay: allowsGameDisplay, allowHDR: allowsHDR,
-                                        fullChroma: live.fullChroma)
+        let wanted = derive(live, from: prefs)
         live.settings = wanted
         live.configID = nextConfigID(after: live.configID)
         session = live
@@ -1033,7 +1041,7 @@ public final class StreamCoordinator: @unchecked Sendable {
         guard fallBack, !isShuttingDown, var live = session, !live.settings.displayHiDPI, let prefs = live.prefs else {
             return false
         }
-        let native = live.base.applying(prefs, allowGameDisplay: false, allowHDR: allowsHDR, fullChroma: live.fullChroma)
+        let native = derive(live, from: prefs, allowGameDisplay: false)
         let old = live.settings
         live.settings = native
         live.configID = nextConfigID(after: live.configID)

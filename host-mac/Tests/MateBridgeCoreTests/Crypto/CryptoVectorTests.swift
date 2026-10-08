@@ -422,10 +422,8 @@ private func schedule(paired: Bool) throws -> SessionKeySchedule {
         inbound.append(Fixtures.bytes("hello"))
         guard case .hello(let hello)? = try inbound.nextMessage() else { Issue.record("no hello"); return }
         #expect(hello.wirePayload == Array(Fixtures.bytes("hello").dropFirst(5)))
-        #expect(!inbound.isEncrypted)
         let s = try schedule(paired: true)
         try inbound.enableEncryption(key: s.control.c2h)
-        #expect(inbound.isEncrypted)
         var sealer = RecordSealer(key: s.control.c2h, maxPayload: 65_536)
         inbound.append(try Message.ping(Ping(seq: 3, senderTimeUs: 4)).sealed(using: &sealer))
         #expect(try inbound.nextMessage() == .ping(Ping(seq: 3, senderTimeUs: 4)))

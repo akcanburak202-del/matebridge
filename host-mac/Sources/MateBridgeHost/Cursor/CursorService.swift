@@ -63,7 +63,9 @@ final class CursorService: @unchecked Sendable {
 
     /// `CURSOR_PREFS` waiting for the cursor queue: one, newest wins, one wake-up (any thread, under `prefsLock`).
     private let prefsLock = NSLock()
-    private var prefsBox = CursorPrefsMailbox()
+    private var prefsBox = EpochCoalescer<(session: UInt32, enabled: Bool)>()
+    /// Changes at every session boundary; a wake-up belongs to the epoch it was scheduled in (guarded by `prefsLock`).
+    private var prefsEpoch: UInt64 = 0
 
     // Both queues, under `unitLock`.
     private let unitLock = NSLock()
@@ -95,7 +97,7 @@ final class CursorService: @unchecked Sendable {
         // Read now, in the caller's order of events: the previous session's `reset()` ran before this call and the next
         // one's will run after it, whenever the block below gets its turn.
         let generation = video.generation
-        prefsLock.withLock { prefsBox.clear() }
+        clearPrefs()
         queue.async { [self] in
             epoch += 1
             self.sessionID = sessionID
@@ -109,7 +111,7 @@ final class CursorService: @unchecked Sendable {
     /// forgotten. Safe to call more than once.
     func sessionEnded() {
         video.reset()  // the wish is back at once, whatever the cursor queue is doing
-        prefsLock.withLock { prefsBox.clear() }
+        clearPrefs()
         queue.async { [self] in
             epoch += 1
             let wasOn = planner.phase != .off
@@ -120,13 +122,24 @@ final class CursorService: @unchecked Sendable {
         }
     }
 
+    /// A session started or ended: what waits is void, and wake-ups scheduled so far are stale.
+    private func clearPrefs() {
+        prefsLock.withLock {
+            prefsEpoch &+= 1
+            prefsBox.clear()
+        }
+    }
+
     /// `CURSOR_PREFS` of the active session. Bounded: one message waits, the newest, and one wake-up is queued however
     /// many arrive (a repeating tablet cannot grow the cursor queue).
     func prefs(sessionID: UInt32, enabled: Bool) {
-        guard let token = prefsLock.withLock({ prefsBox.post(session: sessionID, enabled: enabled) }) else { return }
+        let (epoch, needsWake) = prefsLock.withLock {
+            (prefsEpoch, prefsBox.offer((session: sessionID, enabled: enabled), epoch: prefsEpoch))
+        }
+        guard needsWake else { return }
         queue.async { [self] in
             // A wake-up of an earlier session boundary gets nothing: the message waits for its own session's wake-up.
-            guard let message = prefsLock.withLock({ prefsBox.take(token: token) }) else { return }
+            guard let message = prefsLock.withLock({ prefsBox.take(epoch: epoch) }) else { return }
             guard message.session == self.sessionID, message.session != 0 else { return }
             guard supported else {
                 logger.log(.info, "cursor_prefs", sessionID: message.session, generation: 0,
@@ -263,10 +276,10 @@ final class CursorService: @unchecked Sendable {
         let (replaced, shapesBuilt, shapeFailures) = (unitLock.withLock { outbox.replaced }, sampler.shapesBuilt,
                                                       sampler.shapeFailures)
         // Built and failed shapes are counted by the sampler for the whole run: report them as window deltas.
-        while builtReported < shapesBuilt { stats.recordShapeBuilt(); builtReported += 1 }
-        while failuresReported < shapeFailures { stats.recordShapeFailure(); failuresReported += 1 }
         let checks = sampler.shapeChecks
-        while checksReported < checks { stats.recordShapeCheck(); checksReported += 1 }
+        stats.recordShapeWork(built: shapesBuilt - builtReported, failures: shapeFailures - failuresReported,
+                              checks: checks - checksReported)
+        (builtReported, failuresReported, checksReported) = (shapesBuilt, shapeFailures, checks)
         if let fields = stats.takeReport(nowUs: HostClock.nowUs(), replaced: replaced) {
             logger.log(.info, "cursor_stats", sessionID: sessionID, generation: 0, fields: fields)
         }

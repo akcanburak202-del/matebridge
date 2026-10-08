@@ -98,33 +98,16 @@ public enum Message: Equatable, Sendable {
         case .penGesture(let m): m.write(&w)
         case .releaseAll(let r): w.u8(r.rawValue)
         case .pinch(let m): m.write(&w)
-        case .ping(let m):
-            w.u32(m.seq)
-            w.u64(m.senderTimeUs)
-        case .pong(let m):
-            w.u32(m.seq)
-            w.u64(m.echoTimeUs)
-            w.u64(m.responderTimeUs)
-        case .stats(let m):
-            w.u32(m.intervalMs)
-            w.u32(m.framesReceived)
-            w.u32(m.framesDecoded)
-            w.u32(m.framesRendered)
-            w.u32(m.framesDropped)
-            w.u32(m.decodeTimeAvgUs)
-            w.u32(m.latencyAvgUs)
-            w.u32(m.bytesReceived)
+        case .ping(let m): m.write(&w)
+        case .pong(let m): m.write(&w)
+        case .stats(let m): m.write(&w)
         case .keyframeRequest(let r, let view):
             w.u8(r.rawValue)
             if let view { w.u8(view.rawValue) }
         case .audioPrefs(let m): m.write(&w)
         case .audioConfig(let m): m.write(&w)
         case .audioFrame(let m): m.write(&w)
-        case .videoHello(let m):
-            w.u16(m.protocolVersion)
-            w.u16(m.configID)
-            w.u32(m.sessionID)
-            w.raw(m.videoNonce)
+        case .videoHello(let m): m.write(&w)
         case .videoFrame(let m): m.write(&w)
         case .filesHello(let m): m.write(&w)
         case .filesHelloAck(let m): m.write(&w)
@@ -225,13 +208,9 @@ public enum Message: Equatable, Sendable {
         case .penGesture: return .penGesture(try PenGesture.read(&r))
         case .releaseAll: return .releaseAll(ReleaseReason(rawValue: try r.u8()))
         case .pinch: return .pinch(try Pinch.read(&r))
-        case .ping: return .ping(Ping(seq: try r.u32(), senderTimeUs: try r.u64()))
-        case .pong: return .pong(Pong(seq: try r.u32(), echoTimeUs: try r.u64(), responderTimeUs: try r.u64()))
-        case .stats:
-            return .stats(Stats(intervalMs: try r.u32(), framesReceived: try r.u32(), framesDecoded: try r.u32(),
-                                framesRendered: try r.u32(), framesDropped: try r.u32(),
-                                decodeTimeAvgUs: try r.u32(), latencyAvgUs: try r.u32(),
-                                bytesReceived: try r.u32()))
+        case .ping: return .ping(try Ping.read(&r))
+        case .pong: return .pong(try Pong.read(&r))
+        case .stats: return .stats(try Stats.read(&r))
         case .keyframeRequest:
             let reason = KeyframeReason(rawValue: try r.u8())
             // Optional trailing view (decision 0034); a longer payload's extra bytes are ignored.
@@ -239,10 +218,7 @@ public enum Message: Equatable, Sendable {
         case .audioPrefs: return .audioPrefs(try AudioPrefs.read(&r))
         case .audioConfig: return .audioConfig(try AudioConfig.read(&r))
         case .audioFrame: return .audioFrame(try AudioFrame.read(&r))
-        case .videoHello:
-            return .videoHello(VideoHello(protocolVersion: try r.u16(), configID: try r.u16(),
-                                          sessionID: try r.u32(),
-                                          videoNonce: try r.raw(ProtocolConstants.nonceSize)))
+        case .videoHello: return .videoHello(try VideoHello.read(&r))
         case .videoFrame: return .videoFrame(try VideoFrame.read(&r))
         case .filesHello: return .filesHello(try FilesHello.read(&r))
         case .filesHelloAck: return .filesHelloAck(try FilesHelloAck.read(&r))

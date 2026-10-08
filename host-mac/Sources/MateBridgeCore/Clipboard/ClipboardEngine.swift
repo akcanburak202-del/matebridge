@@ -10,39 +10,6 @@ public protocol PasteboardAccess: Sendable {
     func write(_ text: String) -> Int
 }
 
-/// Holds at most one pending value; a newer value replaces the older one. `put` says whether the caller must start a
-/// drain (none is in flight); `take` returns the value and, when empty, ends the drain. Thread-safe.
-public final class LatestValueSlot<Value: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Value?
-    private var draining = false
-
-    public init() {}
-
-    /// Returns true when the caller has to schedule a drain.
-    public func put(_ newValue: Value) -> Bool {
-        lock.withLock {
-            value = newValue
-            if draining { return false }
-            draining = true
-            return true
-        }
-    }
-
-    public func take() -> Value? {
-        lock.withLock {
-            let v = value
-            value = nil
-            if v == nil { draining = false }
-            return v
-        }
-    }
-
-    public func clear() {
-        lock.withLock { value = nil }
-    }
-}
-
 /// `ClipboardSync` plus the pasteboard: one consistent-snapshot poll step and the incoming write. Not thread-safe;
 /// the bridge confines it to one queue.
 public struct ClipboardEngine {

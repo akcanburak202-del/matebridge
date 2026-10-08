@@ -70,8 +70,8 @@ public struct PackedChromaMonitor: Sendable {
 
     public init() {}
 
-    public mutating func recordOffered() { offered += 1 }
-    public mutating func recordLost() { lost += 1 }
+    public mutating func recordOffered(_ count: Int = 1) { offered += count }
+    public mutating func recordLost(_ count: Int = 1) { lost += count }
 
     /// A hard error: fall back at once (once).
     public mutating func recordError(_ reason: String) -> Decision? {

@@ -35,7 +35,6 @@ private func shapePayload(dataLen: Int, declared: Int? = nil, format: UInt8 = 1)
         #expect(MessageType.cursorState.rawValue == 0x0D)
         #expect(Capabilities.localCursor.rawValue == 1 << 13)
         #expect(CursorShape.maxDataBytes == 61_440)
-        #expect(CursorState.size == 22)
         #expect(CursorShape.fixedSize == 16)
     }
 
@@ -68,7 +67,7 @@ private func shapePayload(dataLen: Int, declared: Int? = nil, format: UInt8 = 1)
     @Test func stateShortPayloadIsAProtocolError() {
         let p = Message.cursorState(CursorState(seq: 1, x: 2, y: 3, visible: true, shapeID: 4, hostTimeUs: 5))
             .encodePayload()
-        #expect(p.count == CursorState.size)
+        #expect(p.count == 22)
         #expect(throws: ProtocolError.payloadTooShort(type: 0x0D)) { try decodeOne(frame(0x0D, Array(p.dropLast()))) }
     }
 
