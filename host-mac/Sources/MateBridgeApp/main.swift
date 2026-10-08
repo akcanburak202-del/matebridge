@@ -247,6 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 requestTerminate: {  // applicationWillTerminate runs the full orderly shutdown
                     DispatchQueue.main.async { NSApp.terminate(nil) }
                 },
+                // The input queue did not answer: release from the held-input mirror on a thread of our own.
+                emergencyRelease: { input.emergencyRelease() },
                 forceExit: { exit(75) },
                 log: { HostLog.log(.error, component: "net", event: "stall_restart", fields: $0) }))
         }

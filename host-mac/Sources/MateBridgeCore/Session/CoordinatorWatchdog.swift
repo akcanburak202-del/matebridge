@@ -33,6 +33,13 @@ public struct CoordinatorWatchdog: Sendable {
     }
     private var current: Current?
 
+    /// New sessions are refused: set by the `endSessions` step, kept by the restart. Lives in this state machine so
+    /// that raising and clearing it are ordered by the one lock the coordinator holds around every transition (a late
+    /// poll can never refuse again after the event it saw has finished).
+    public private(set) var refusing = false
+    /// A restart was requested (by the 30 s step or by the abandoned stops): the refusal never lifts again.
+    public private(set) var restartRequested = false
+
     public init(warnAfterUs: UInt64 = warnUs, recoverAfterUs: UInt64 = recoverUs,
                 restartAfterUs: UInt64 = restartUs) {
         self.warnAfterUs = warnAfterUs
@@ -52,6 +59,19 @@ public struct CoordinatorWatchdog: Sendable {
         defer { current = nil }
         guard let c = current, c.stage > 0 else { return nil }
         return (c.kind, Self.elapsedMs(c, nowUs: nowUs))
+    }
+
+    /// A restart is wanted for another reason (abandoned stops). True only the first time, for any reason.
+    public mutating func requestRestart() -> Bool {
+        defer { restartRequested = true; refusing = true }
+        return !restartRequested
+    }
+
+    /// Any healthy event completion lifts the refusal, unless a restart is under way. True when it was lifted.
+    public mutating func liftRefusal() -> Bool {
+        guard refusing, !restartRequested else { return false }
+        refusing = false
+        return true
     }
 
     public mutating func pause(nowUs: UInt64) {
@@ -74,8 +94,16 @@ public struct CoordinatorWatchdog: Sendable {
         let ms = elapsed / 1_000
         var out: [Action] = []
         if c.stage < 1, elapsed >= warnAfterUs { c.stage = 1; out.append(.warn(kind: c.kind, ms: ms)) }
-        if c.stage < 2, elapsed >= recoverAfterUs { c.stage = 2; out.append(.endSessions(kind: c.kind, ms: ms)) }
-        if c.stage < 3, elapsed >= restartAfterUs { c.stage = 3; out.append(.restart(kind: c.kind, ms: ms)) }
+        if c.stage < 2, elapsed >= recoverAfterUs {
+            c.stage = 2
+            refusing = true
+            out.append(.endSessions(kind: c.kind, ms: ms))
+        }
+        if c.stage < 3, elapsed >= restartAfterUs {
+            c.stage = 3
+            refusing = true
+            if !restartRequested { restartRequested = true; out.append(.restart(kind: c.kind, ms: ms)) }
+        }
         current = c
         return out
     }

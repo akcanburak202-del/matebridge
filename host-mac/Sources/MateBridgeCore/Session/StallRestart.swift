@@ -44,8 +44,10 @@ public final class AbandonedStops: @unchecked Sendable {
     public func escalation(nowUs: UInt64) -> String? {
         lock.withLock {
             if open.count >= Self.maxOpen { return "count=\(open.count)" }
-            if let oldest = open.values.map(\.sinceUs).min(), nowUs &- oldest >= Self.maxAgeUs {
-                return "age_ms=\((nowUs &- oldest) / 1_000)"
+            // A stop recorded after `nowUs` was sampled is newer than `nowUs`: age 0, never a wrapped huge value.
+            if let oldest = open.values.map(\.sinceUs).min() {
+                let age = nowUs > oldest ? nowUs - oldest : 0
+                if age >= Self.maxAgeUs { return "age_ms=\(age / 1_000)" }
             }
             return nil
         }
@@ -64,13 +66,19 @@ public enum StallRestart {
         public var scheduleRelaunch: @Sendable () -> Void
         /// Asks the main thread for an orderly terminate (`NSApp.terminate`); returns at once.
         public var requestTerminate: @Sendable () -> Void
+        /// Independent of the input queue: posts the closing events of everything the held-input mirror lists. Returns
+        /// how many events it posted, or nil when posting failed. Only called when `releaseInput` did not finish.
+        public var emergencyRelease: @Sendable () -> Int?
         public var forceExit: @Sendable () -> Void
         /// Log fields only (`input=done|pending`, `terminate=...`).
         public var log: @Sendable (String) -> Void
 
         public init(releaseInput: @escaping @Sendable () -> Void, scheduleRelaunch: @escaping @Sendable () -> Void,
-                    requestTerminate: @escaping @Sendable () -> Void, forceExit: @escaping @Sendable () -> Void,
+                    requestTerminate: @escaping @Sendable () -> Void,
+                    emergencyRelease: @escaping @Sendable () -> Int? = { 0 },
+                    forceExit: @escaping @Sendable () -> Void,
                     log: @escaping @Sendable (String) -> Void) {
+            self.emergencyRelease = emergencyRelease
             self.releaseInput = releaseInput
             self.scheduleRelaunch = scheduleRelaunch
             self.requestTerminate = requestTerminate
@@ -82,23 +90,60 @@ public enum StallRestart {
     public static let inputTimeout: TimeInterval = 1.5
     public static let terminateTimeout: TimeInterval = 4
 
-    /// Blocks the calling (watchdog) thread: up to `inputTimeout`, then up to `terminateTimeout` for the process to
-    /// disappear. Never returns early on a hung input release: the restart goes on with `input=pending`.
+    public static let emergencyTimeout: TimeInterval = 1
+
+    public enum Outcome: Equatable, Sendable {
+        /// The process was asked to terminate (and force-exited if it did not).
+        case restarted
+        /// Input could not be released by any path: nothing was terminated or exited, the host stays up (and, with
+        /// sessions refused, stays harmless). A stuck input on the only display is worse than a stalled host.
+        case inputUnreleased
+    }
+
+    /// Blocks the calling (watchdog) thread: up to `inputTimeout` for the normal release, then (only if that did not
+    /// finish) the emergency release from its own thread, then up to `terminateTimeout` for the process to disappear.
+    /// Without a confirmed release the process neither terminates nor exits.
+    @discardableResult
     public static func run(_ steps: Steps, inputTimeout: TimeInterval = inputTimeout,
-                           terminateTimeout: TimeInterval = terminateTimeout) {
+                           emergencyTimeout: TimeInterval = emergencyTimeout,
+                           terminateTimeout: TimeInterval = terminateTimeout) -> Outcome {
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
             steps.releaseInput()
             done.signal()
         }
-        let released = done.wait(timeout: .now() + inputTimeout) == .success
-        steps.log("input=\(released ? "done" : "pending")")
+        if done.wait(timeout: .now() + inputTimeout) == .success {
+            steps.log("input=done")
+        } else {
+            // The input queue may be wedged: release from here, on a thread of our own.
+            let box = EmergencyBox()
+            let finished = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .userInitiated).async {
+                box.set(steps.emergencyRelease())
+                finished.signal()
+            }
+            let completed = finished.wait(timeout: .now() + emergencyTimeout) == .success
+            if completed, let n = box.value {
+                steps.log("input=emergency released=\(n)")
+            } else {
+                steps.log("input=unreleased")
+                return .inputUnreleased
+            }
+        }
         steps.scheduleRelaunch()
         steps.requestTerminate()
         // A successful terminate ends the process while we wait here.
         Thread.sleep(forTimeInterval: terminateTimeout)
         steps.log("terminate=timeout")
         steps.forceExit()
+        return .restarted
+    }
+
+    private final class EmergencyBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Int?
+        func set(_ v: Int?) { lock.withLock { result = v } }
+        var value: Int? { lock.withLock { result } }
     }
 
     /// `/bin/sh` arguments of the relaunch helper: waits until `pid` is gone (at most `waitSeconds`), then opens a new

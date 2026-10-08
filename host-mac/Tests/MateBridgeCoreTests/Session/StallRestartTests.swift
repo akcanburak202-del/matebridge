@@ -9,11 +9,13 @@ private final class Recorder: @unchecked Sendable {
     var all: [String] { lock.withLock { steps } }
 }
 
-private func steps(_ r: Recorder, release: @escaping @Sendable () -> Void) -> StallRestart.Steps {
+private func steps(_ r: Recorder, release: @escaping @Sendable () -> Void,
+                   emergency: @escaping @Sendable () -> Int? = { 3 }) -> StallRestart.Steps {
     StallRestart.Steps(
         releaseInput: { release(); r.add("release") },
         scheduleRelaunch: { r.add("relaunch") },
         requestTerminate: { r.add("terminate") },
+        emergencyRelease: { r.add("emergency"); return emergency() },
         forceExit: { r.add("exit") },
         log: { r.add("log:\($0)") })
 }
@@ -25,12 +27,35 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> Void) -> St
         #expect(r.all == ["release", "log:input=done", "relaunch", "terminate", "log:terminate=timeout", "exit"])
     }
 
-    @Test func hungInputReleaseDoesNotBlockTheRestartAndIsReportedPending() {
+    @Test func wedgedInputQueueIsReleasedByTheEmergencyPathBeforeAnyExit() {
         let r = Recorder()
         let hang = DispatchSemaphore(value: 0)
-        StallRestart.run(steps(r, release: { hang.wait() }), inputTimeout: 0.1, terminateTimeout: 0.05)
-        #expect(r.all == ["log:input=pending", "relaunch", "terminate", "log:terminate=timeout", "exit"])
+        let outcome = StallRestart.run(steps(r, release: { hang.wait() }), inputTimeout: 0.1, emergencyTimeout: 0.5,
+                                       terminateTimeout: 0.05)
+        #expect(outcome == .restarted)
+        #expect(r.all == ["emergency", "log:input=emergency released=3", "relaunch", "terminate",
+                          "log:terminate=timeout", "exit"])
         hang.signal()
+    }
+
+    @Test func failedEmergencyReleaseNeverTerminatesOrExits() {
+        let r = Recorder()
+        let hang = DispatchSemaphore(value: 0)
+        let outcome = StallRestart.run(steps(r, release: { hang.wait() }, emergency: { nil }), inputTimeout: 0.1,
+                                       emergencyTimeout: 0.5, terminateTimeout: 0.05)
+        #expect(outcome == .inputUnreleased)
+        #expect(r.all == ["emergency", "log:input=unreleased"])
+        hang.signal()
+    }
+
+    @Test func hungEmergencyReleaseIsTreatedAsUnreleased() {
+        let r = Recorder()
+        let hang = DispatchSemaphore(value: 0)
+        let outcome = StallRestart.run(steps(r, release: { hang.wait() }, emergency: { hang.wait(); return 1 }),
+                                       inputTimeout: 0.05, emergencyTimeout: 0.1, terminateTimeout: 0.05)
+        #expect(outcome == .inputUnreleased)
+        #expect(!r.all.contains("terminate") && !r.all.contains("exit"))
+        hang.signal(); hang.signal()
     }
 
     @Test func relaunchWaitsForTheOldProcess() {
@@ -115,5 +140,73 @@ private final class AsyncGate: @unchecked Sendable {
         #expect(!early.contains(.endSessions(kind: "sessionEnded", ms: 9_000)))
         #expect(w.poll(nowUs: 10_000_000).contains(.endSessions(kind: "sessionEnded", ms: 10_000)))
         #expect(w.poll(nowUs: 30_000_000) == [.restart(kind: "sessionEnded", ms: 30_000)])
+    }
+}
+
+@Suite struct AbandonedStopsAgeTests {
+    @Test func stopRecordedAfterNowWasSampledDoesNotWrapTheAge() {
+        let t = AbandonedStops()
+        let a = t.newToken()
+        t.abandon(a, step: "capture", nowUs: 10_000_000)
+        #expect(t.escalation(nowUs: 5_000_000) == nil)  // `now` sampled before the stop was recorded
+    }
+}
+
+@Suite struct WatchdogRefusalInterleavingTests {
+    private let sec: UInt64 = 1_000_000
+
+    @Test func lateStepsAfterTheEventEndedNeverRefuse() {
+        var w = CoordinatorWatchdog()
+        w.begin(kind: "a", nowUs: 0)
+        let first = w.poll(nowUs: 10 * sec)
+        #expect(first.count == 2)  // warn + endSessions
+        #expect(w.refusing)
+        w.end(nowUs: 10 * sec)
+        let lifted = w.liftRefusal()
+        #expect(lifted)
+        #expect(!w.refusing)
+        // Poll and hook calls share one lock with the end, so a poll that saw the event cannot apply afterwards; a
+        // poll after the end sees no event and refuses nothing.
+        let late = w.poll(nowUs: 11 * sec)
+        #expect(late.isEmpty)
+        #expect(!w.refusing)
+    }
+
+    @Test func healthyCompletionLiftsTheRefusalOnceAndIsIdempotent() {
+        var w = CoordinatorWatchdog()
+        w.begin(kind: "a", nowUs: 0)
+        _ = w.poll(nowUs: 10 * sec)
+        w.end(nowUs: 10 * sec)
+        w.begin(kind: "tick", nowUs: 11 * sec)
+        w.end(nowUs: 11 * sec)
+        let first = w.liftRefusal()
+        let second = w.liftRefusal()
+        #expect(first)
+        #expect(!second)
+        #expect(!w.refusing)
+    }
+
+    @Test func refusalStaysAfterARestartWasRequested() {
+        var w = CoordinatorWatchdog()
+        w.begin(kind: "a", nowUs: 0)
+        let actions = w.poll(nowUs: 30 * sec)
+        #expect(actions.contains(.restart(kind: "a", ms: 30_000)))
+        w.end(nowUs: 31 * sec)
+        let lifted = w.liftRefusal()
+        let again = w.requestRestart()
+        #expect(!lifted)
+        #expect(w.refusing && w.restartRequested)
+        #expect(!again)  // only once
+    }
+
+    @Test func externalRestartRequestRefusesAndIsOnce() {
+        var w = CoordinatorWatchdog()
+        let first = w.requestRestart()
+        #expect(first)
+        #expect(w.refusing)
+        let lifted = w.liftRefusal()
+        let second = w.requestRestart()
+        #expect(!lifted)
+        #expect(!second)
     }
 }

@@ -151,8 +151,6 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// From the 10 s step on, the session layer refuses new connections until this is called with false (the loop
     /// recovered). Called on the watchdog queue.
     public var onRefuseSessions: @Sendable (Bool) -> Void = { _ in }
-    private var refusingSessions = false
-    private var restartRequested = false
     /// Bound of every wait in the stop path (T-325); past it `ev=consumer_stop_timeout` / `ev=pipeline_stop_timeout`.
     static let stopTimeout: TimeInterval = 2
 
@@ -379,13 +377,20 @@ public final class StreamCoordinator: @unchecked Sendable {
         watchdogTimer = timer
     }
 
-    /// Brackets one event for the watchdog.
+    /// Brackets one event for the watchdog. The end of the event and the lift of the refusal happen in one critical
+    /// section with the poll's transitions and their hook calls, so a poll that saw the event stalled cannot refuse
+    /// after the event finished (T-325 review round 2).
     private func handleWatched(_ event: Event) async {
         watchdogLock.withLock { watchdog.begin(kind: event.kind, nowUs: HostClock.nowUs()) }
         await handle(event)
-        let over = watchdogLock.withLock { watchdog.end(nowUs: HostClock.nowUs()) }
+        let over: (kind: String, ms: UInt64)? = watchdogLock.withLock {
+            let over = watchdog.end(nowUs: HostClock.nowUs())
+            if watchdog.liftRefusal() {  // any healthy completion; not while a restart is under way
+                onRefuseSessions(false)
+            }
+            return over
+        }
         if let over {
-            refuseSessions(false)  // the loop is back: sessions may start again (unless a restart is under way)
             logger.log(.warning, "coordinator_stall_over", sessionID: 0, generation: 0,
                        fields: "event=\(over.kind) ms=\(over.ms)")
         }
@@ -395,49 +400,36 @@ public final class StreamCoordinator: @unchecked Sendable {
     /// sessions and ends the live ones (input released, BYE, through `onOverflow`), and as the last resort restarts the
     /// process through `onStallRestart` (input release first, see `StallRestart`).
     private func pollWatchdog() {
-        let actions = watchdogLock.withLock { watchdog.poll(nowUs: HostClock.nowUs()) }
-        for action in actions {
-            switch action {
-            case .warn(let kind, let ms):
-                logger.log(.error, "coordinator_stall", sessionID: 0, generation: 0, fields: "event=\(kind) ms=\(ms)")
-            case .endSessions(let kind, let ms):
-                logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
-                           fields: "action=end_sessions event=\(kind) ms=\(ms)")
-                refuseSessions(true)
+        var restartFields: String?
+        watchdogLock.withLock {
+            let now = HostClock.nowUs()
+            for action in watchdog.poll(nowUs: now) {
+                switch action {
+                case .warn(let kind, let ms):
+                    logger.log(.error, "coordinator_stall", sessionID: 0, generation: 0,
+                               fields: "event=\(kind) ms=\(ms)")
+                case .endSessions(let kind, let ms):
+                    logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0,
+                               fields: "action=end_sessions event=\(kind) ms=\(ms)")
+                    onRefuseSessions(true)
+                    onOverflow()
+                case .restart(let kind, let ms):
+                    restartFields = "event=\(kind) ms=\(ms)"
+                }
+            }
+            // T-325 review: abandoned capture/encoder stops keep blocked work alive; too many or too old escalates.
+            if restartFields == nil, let why = AbandonedStops.shared.escalation(nowUs: now), watchdog.requestRestart() {
+                restartFields = "reason=stop_abandoned \(why)"
+            }
+            if restartFields != nil {
+                onRefuseSessions(true)
                 onOverflow()
-            case .restart(let kind, let ms):
-                requestRestart(fields: "event=\(kind) ms=\(ms)")
             }
         }
-        // T-325 review: abandoned capture/encoder stops keep blocked work alive; too many or too old escalates.
-        if let why = AbandonedStops.shared.escalation(nowUs: HostClock.nowUs()) {
-            requestRestart(fields: "reason=stop_abandoned \(why)")
-        }
-    }
-
-    /// From the 10 s step until the loop recovers (or the process restarts), nothing new may start: a session that
-    /// began now could press keys the restart would have to release again.
-    private func refuseSessions(_ on: Bool) {
-        let changed = watchdogLock.withLock { () -> Bool in
-            if !on && restartRequested { return false }  // a restart is under way: stay closed
-            defer { refusingSessions = on }
-            return refusingSessions != on
-        }
-        if changed { onRefuseSessions(on) }
-    }
-
-    /// Once per process. Sessions are refused and ended first; then the app hook releases input synchronously and
-    /// restarts. Without a hook (tests, tools) nothing more happens.
-    private func requestRestart(fields: String) {
-        let first = watchdogLock.withLock { () -> Bool in
-            defer { restartRequested = true }
-            return !restartRequested
-        }
-        guard first else { return }
+        // Outside the lock: the restart blocks (input release, terminate wait).
+        guard let fields = restartFields else { return }
         logger.log(.error, "coordinator_stall_recover", sessionID: 0, generation: 0, fields: "action=restart \(fields)")
-        refuseSessions(true)
-        onOverflow()
-        onStallRestart?()
+        if let onStallRestart { onStallRestart() }
     }
 
     // MARK: Event loop

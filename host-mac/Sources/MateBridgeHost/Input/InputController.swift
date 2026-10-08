@@ -70,6 +70,10 @@ public final class InputController: @unchecked Sendable {
     private let timingLock = NSLock()
     private var timing = InputDeliveryTiming()
 
+    /// T-325: the mirror of what is held on the Mac. Written on `queue` after each post, read by `emergencyRelease`.
+    private let heldLock = NSLock()
+    private var held = HeldInputMirror()
+
     // Everything below is touched only on `queue`.
     private var pipeline: InputPipeline
     /// Both timers exist from `init` on, so a message that arrives before `start()` still has its watchdog.
@@ -492,7 +496,25 @@ public final class InputController: @unchecked Sendable {
             trustedCache = (false, HostClock.nowUs())
             return (events, false)
         }
-        return (poster.post(events), true)
+        // T-325: opens are recorded before the post (a post that wedges may still have landed), then the accepted
+        // prefix is replayed in order so a close in the same batch wins (the poster returns the failed suffix).
+        heldLock.withLock { for e in events where !e.isClosing { held.posted(e) } }
+        let failed = poster.post(events)
+        heldLock.withLock { held.postedBatch(events, failedCount: failed.count) }
+        return (failed, true)
+    }
+
+    /// Independent of `queue` (T-325 review round 2): the stall restart calls this from its own thread when
+    /// `shutdown()` did not finish because the input queue is wedged. Posts the closing events of everything the
+    /// mirror says is held, through a poster of its own. Returns how many events were posted, or nil when posting
+    /// failed (then the input may still be held and the host must not exit).
+    public func emergencyRelease() -> Int? {
+        let plan = heldLock.withLock { held.emergencyRelease() }
+        guard !plan.isEmpty else { return 0 }
+        let failed = CGEventPoster().post(plan)
+        guard failed.isEmpty else { return nil }
+        heldLock.withLock { held = HeldInputMirror() }
+        return plan.count
     }
 
     /// Posts what the pipeline produced, tells the pipeline what could not be posted (closing events among those are
