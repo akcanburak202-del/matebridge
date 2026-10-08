@@ -1,7 +1,7 @@
 ---
 id: T-317
 title: Tablet — dec_out_park varsayılanı on (T-312 A/B kabul); off bir döngü geri dönüş
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-312]
