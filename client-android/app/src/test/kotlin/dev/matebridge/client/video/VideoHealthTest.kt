@@ -391,6 +391,60 @@ class VideoHealthTest {
         assertEquals(2, logs.count { it.startsWith("I video_recover step=manual_resume ") })
     }
 
+    /** T-294 review P1: a healthy connection's first frame inside the cooldown is not lost; tick resumes when it ends. */
+    @Test fun deferredManualResumeFiresAtCooldownExpiry() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        val t0 = now
+        begin(health.generation + 1)
+        conn++; lost() // that connection drops
+        now += 3_000
+        assertNull(flowing()) // the healthy replacement's first frame, inside the cooldown
+        assertEquals(State.FAULT, health.state) // ... after the half-working generation faulted
+        repeat(60) {
+            now += 200
+            val a = tick()
+            if (now - t0 < VideoHealth.MANUAL_RESUME_GAP_MS) assertNull("no resume before the cooldown ends", a)
+            else if (a != null) {
+                assertEquals(Action.RESTART_CODEC, a)
+                assertTrue(now - t0 >= VideoHealth.MANUAL_RESUME_GAP_MS)
+                assertEquals(2, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+                assertNull("used once", tick())
+                return
+            }
+        }
+        org.junit.Assert.fail("the deferred resume never fired: $logs")
+    }
+
+    @Test fun aLossBeforeCooldownExpiryCancelsTheDeferredResume() {
+        toManual()
+        assertEquals(Action.RESTART_CODEC, flowing())
+        begin(health.generation + 1)
+        conn++; lost()
+        now += 3_000
+        assertNull(flowing())
+        lost() // that same connection drops before the cooldown ends
+        repeat(40) {
+            now += 500
+            assertNull(tick())
+        }
+        assertEquals(1, logs.count { it.startsWith("I video_recover step=manual_resume ") })
+    }
+
+    @Test fun deferredResumesStillRespectOneResumePerTenSeconds() {
+        toManual()
+        var resumes = 0
+        var fed = 0
+        val t0 = now
+        repeat(100) { // 50 s of connections that each get a frame, then the generation faults and it drops
+            now += 500
+            if (tick() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1); conn++; lost() }
+            if (it % 4 == 0) { fed++; if (flowing() == Action.RESTART_CODEC) { resumes++; begin(health.generation + 1); conn++; lost() } }
+        }
+        assertTrue("fed $fed", fed > 10)
+        assertTrue("resumes $resumes in ${now - t0} ms", resumes in 4..5)
+    }
+
     @Test fun staleConnectionIsStillIgnoredInManual() {
         toManual()
         assertNull(health.videoFlowing(conn)) // not newer than the last lost connection

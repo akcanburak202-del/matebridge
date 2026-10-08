@@ -9,6 +9,7 @@ decisions: [0019]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionMachine.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoHealth.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/session/SessionController.kt  # (T-294 review, orchestrator)
   - client-android/app/src/test/kotlin/dev/matebridge/client/session/
   - client-android/app/src/test/kotlin/dev/matebridge/client/video/
   - backlog/tasks/T-294-client-video-retry-backoff.md
@@ -58,6 +59,12 @@ T-291 tasarım notu, "Tablet" bölümü (`backlog/tasks/T-291-rebuild-budget-wit
   2. `manual` katmanında host düzelince en çok 10 sn içinde `step=manual_resume`, katman kalkar, girdi ilk çözülmüş çıktıdan sonra açılır.
   3. Normal yeniden bağlanma/göç sırasında `video_retry` logu görünmemeli.
   4. Sağlıklı oturumda davranış değişmemeli.
+
+- **Review turu (Codex, ikinci commit):**
+  - P1: `VideoHealth` soğuma süresinde gelen ilk kareyi `pendingResumeConn` olarak hatırlar; `tick()` süre dolunca `RESTART_CODEC` (`step=manual_resume`) döndürür. O/sonraki bağlantının `videoLost`'u, Detached ve kullanım temizler; hâlâ 10 sn'de en çok bir resume.
+  - P2: `SessionController` okuyucu iş parçacığı bağlantının ilk karesini görünce `Event.VideoFirstFrame(gen)` gönderir (`videoFirstFrame` posta kutusu, `videoClosed`'dan önce alınır) ve `VideoClosed(gen, gotFrame)` bilgisini kendisi taşır; kare almış bağlantı boş sayılmaz. Tick tabanlı çıkarım kaldırıldı.
+  - Testler: ertelenmiş resume, iptal, hız sınırı; kare-sonra-kapanış (4 sn basamaktan 500 ms'ye), bayat ilk-kare olayı.
+  - "Yeniden dene" sıfırlaması hâlâ bağlı değil (`MainActivity` gerekir), Open questions aynen.
 
 ## Open questions
 

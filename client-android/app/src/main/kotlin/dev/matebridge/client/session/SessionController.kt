@@ -223,6 +223,8 @@ class SessionController(
      */
     private val candidateTrust = PairTrust(ReadOnlyPairKeyStore(pairKeys), log = { ev, fields -> MbLog.i(ev, fields) })
     private val videoClosed = LatestGen<SessionMachine.Event.VideoClosed> { it.gen }
+    /** T-294: the first VIDEO_FRAME of a video connection (reader thread -> engine); taken before [videoClosed]. */
+    private val videoFirstFrame = LatestGen<SessionMachine.Event.VideoFirstFrame> { it.gen }
 
     private val videoFrames = AtomicLong()
     private val running = AtomicBoolean(false)
@@ -483,7 +485,7 @@ class SessionController(
         var lastTickNs = System.nanoTime()
         try {
             while (true) {
-                var e: SessionMachine.Event? = mail.take() ?: controlClosed.take() ?: videoClosed.take()
+                var e: SessionMachine.Event? = mail.take() ?: controlClosed.take() ?: videoFirstFrame.take() ?: videoClosed.take()
                 if (e == null) {
                     if (stopAfterDrain) break
                     val waitMs = tickMs - (System.nanoTime() - lastTickNs) / 1_000_000
@@ -994,6 +996,8 @@ class SessionController(
         private val closedPosted = AtomicBoolean(false)
         /** T-160: frames the gate dropped before this connection's first delivery (-1 once delivering). Reader thread. */
         private var gated = 0
+        /** T-294: this connection delivered at least one video frame (reader thread only). */
+        private var gotFrame = false
 
         fun startThread() {
             Thread({ loop() }, "mb-video-$gen").also { it.isDaemon = true; it.start() }
@@ -1039,6 +1043,7 @@ class SessionController(
                             // aux frames carry their own frame_seq: tracing them would overwrite main records in the seq-keyed ring
                             if (msg.view == VideoFrame.VIEW_MAIN) trace?.onRecv(msg.frameSeq, msg.captureTimeUs, msg.data.size, recvNs, System.nanoTime())
                             if (msg.fragmentIndex == 0) videoFrames.incrementAndGet()
+                            if (!gotFrame) { gotFrame = true; videoFirstFrame.post(SessionMachine.Event.VideoFirstFrame(gen)) }
                             // T-160: only the open connection's frames of the renderer-installed config pass
                             val first = gated >= 0
                             val delivered = deliverVideoFrame(
@@ -1065,7 +1070,7 @@ class SessionController(
             }
             qa.close()
             closeQuietly(socket)
-            if (closedPosted.compareAndSet(false, true)) videoClosed.post(SessionMachine.Event.VideoClosed(gen))
+            if (closedPosted.compareAndSet(false, true)) videoClosed.post(SessionMachine.Event.VideoClosed(gen, gotFrame))
         }
     }
 
@@ -1125,6 +1130,7 @@ class SessionController(
             is SessionMachine.Event.ForgetFilesNet -> LogLine('I', "files_net_forget")
             is SessionMachine.Event.SetFiles -> LogLine('I', "files_info_set", "state=${e.info.state} port=${e.info.port}") // never the token
             is SessionMachine.Event.Tick -> null
+            is SessionMachine.Event.VideoFirstFrame -> null
             is SessionMachine.Event.Migrate -> LogLine(
                 'I', "migrate_request",
                 "host=${e.endpoint.host} port=${e.endpoint.port} transport=${ConnectMode.transportOf(e.endpoint).logName}",

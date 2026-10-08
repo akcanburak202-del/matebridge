@@ -167,7 +167,9 @@ class SessionMachine(
          */
         data class ForgetFilesNet(val requestId: Int) : Event
         /** Video connection closed or failed to open. */
-        data class VideoClosed(val gen: Int) : Event
+        data class VideoClosed(val gen: Int, val gotFrame: Boolean = false) : Event
+        /** T-294: video connection [gen] received its first VIDEO_FRAME (reader thread; may arrive before or with its close). */
+        data class VideoFirstFrame(val gen: Int) : Event
         /** Periodic; [videoFrames] is the running count of frames received on video connections. */
         data class Tick(val videoFrames: Long) : Event
         /** T-096: move the accepted session to [endpoint] via takeover (make-before-break); see the class comment. */
@@ -255,8 +257,6 @@ class SessionMachine(
     private var videoRetryAtUs = 0L
     /** T-294: consecutive video connections that closed without a VIDEO_FRAME; reset by the first frame. */
     private var videoEmptyCloses = 0
-    /** T-294: [frames] when the current video connection was opened; a higher count means it delivered a frame. */
-    private var framesAtVideoOpen = 0L
     private var videoGotFrame = false
     private var loggedVideoBackoffUs = VIDEO_RETRY_US
 
@@ -559,7 +559,7 @@ class SessionMachine(
             is Event.VideoClosed -> if (event.gen == videoGen) {
                 videoOpen = false
                 if (phase == Phase.STREAMING) {
-                    if (videoGotFrame) videoEmptyCloses = 0 else videoEmptyCloses++
+                    if (videoGotFrame || event.gotFrame) videoEmptyCloses = 0 else videoEmptyCloses++
                     val wait = videoRetryDelayUs(videoEmptyCloses)
                     videoRetryAtUs = nowUs + wait
                     if (wait != loggedVideoBackoffUs) {
@@ -570,6 +570,15 @@ class SessionMachine(
                     // (the close may be the takeover's or an unrelated failure, and the proof may stall until its deadline).
                     // The flag only lets the UI hold back the overlay for a promotion that is about to reconfigure.
                     out += Action.VideoLost(event.gen, duringMigration = candAck != null)
+                }
+            }
+            is Event.VideoFirstFrame -> if (event.gen == videoGen && !videoGotFrame) {
+                // T-294: the first frame of the open video connection ends the empty streak (and its backoff) at once.
+                videoGotFrame = true
+                videoEmptyCloses = 0
+                if (loggedVideoBackoffUs != VIDEO_RETRY_US) {
+                    loggedVideoBackoffUs = VIDEO_RETRY_US
+                    log('I', "video_retry", "backoff_ms=${VIDEO_RETRY_US / 1000} empty=0")
                 }
             }
             is Event.SetPrefs -> {
@@ -1083,15 +1092,6 @@ class SessionMachine(
 
     private fun onTick(videoFrames: Long, nowUs: Long, out: MutableList<Action>) {
         frames = videoFrames
-        // T-294: the first frame of the open video connection ends the empty streak (and its backoff) at once.
-        if (videoOpen && !videoGotFrame && frames > framesAtVideoOpen) {
-            videoGotFrame = true
-            videoEmptyCloses = 0
-            if (loggedVideoBackoffUs != VIDEO_RETRY_US) {
-                loggedVideoBackoffUs = VIDEO_RETRY_US
-                log('I', "video_retry", "backoff_ms=${VIDEO_RETRY_US / 1000} empty=0")
-            }
-        }
         // T-156: a record authenticated by the reader (e.g. audio only) resets the count even if no event reaches onMessage.
         if (!sealedSeen && controlGen >= 0 && authFailures.isNotEmpty() && recordAuthenticated(controlGen)) {
             endpoint?.let { authFailures.remove(it) }
@@ -1161,7 +1161,6 @@ class SessionMachine(
         videoGen = ++genCounter
         videoOpen = true
         videoGotFrame = false
-        framesAtVideoOpen = frames
         out += Action.OpenVideo(
             videoGen,
             Endpoint(ep.host, videoPort),

@@ -79,14 +79,40 @@ class VideoRetryBackoffTest {
     @Test fun aFrameResetsTheBackoff() {
         streaming()
         repeat(6) { closeAndWaitReopen() }
-        // The open connection delivers a frame (seen by the next tick), then closes.
-        frames++
-        step(Event.Tick(frames), 100_000)
+        // The open connection delivers a frame, then closes.
+        step(Event.VideoFirstFrame(video))
         assertEquals("I video_retry backoff_ms=500 empty=0", logs.last())
         assertEquals(500L, closeAndWaitReopen() / 1000)
         // A streak starts anew: three empty closes stay at 500 ms, the fourth backs off.
         assertEquals(listOf(500L, 500, 500), (1..3).map { closeAndWaitReopen() / 1000 })
         assertEquals(1000L, closeAndWaitReopen() / 1000)
+    }
+
+    /** T-294 review P2: frame, then close before any tick or first-frame event is handled: not empty. */
+    @Test fun aFrameThenACloseBeforeTheFirstFrameEventDoesNotBackOff() {
+        streaming()
+        repeat(6) { closeAndWaitReopen() } // 4 s backoff reached
+        val before = video
+        step(Event.VideoClosed(video, gotFrame = true))
+        var t = 0L
+        while (video == before) {
+            step(Event.Tick(frames), 100_000)
+            step(Event.Received(ctl, Pong(0, 0, 0)))
+            t += 100_000
+            assertTrue("reopen within 5 s", t <= 5_000_000)
+        }
+        assertEquals(500_000L, t)
+        assertEquals("I video_retry backoff_ms=500 empty=0", logs.last())
+    }
+
+    /** A first-frame event of an older connection does not mark the current one. */
+    @Test fun aStaleFirstFrameEventIsIgnored() {
+        streaming()
+        val old = video
+        closeAndWaitReopen()
+        step(Event.VideoFirstFrame(old))
+        repeat(2) { closeAndWaitReopen() } // empty = 3 so far
+        assertEquals(1000L, closeAndWaitReopen() / 1000) // the 4th empty close backs off
     }
 
     @Test fun aStaleCloseOfAnOlderConnectionDoesNotCount() {
