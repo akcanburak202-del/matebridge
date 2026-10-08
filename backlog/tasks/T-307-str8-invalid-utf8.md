@@ -1,7 +1,7 @@
 ---
 id: T-307
 title: Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8
-status: review
+status: done
 phase: 7
 owner: orchestrator
 depends_on: []
@@ -34,7 +34,11 @@ T-297 E9 (`docs/reviews/2026-10-08/agents/simp-e-protocol.md`), kullanıcı kara
 
 ## Plan
 
+(orkestratör, sonradan kaydedildi) 1) PROTOCOL §1 kuralı ve `invalid_str8_utf8` fixture (`ddeea940`); 2) Swift `ByteIO.str8` doğrulamalı çözme (`74c40ede`); 3) Kotlin fixture testi negatif listeye (`a6c0bdb8`).
+
 ## Handoff
+
+- Birleştirme `259728e1`; birleşmeden sonra tam `./scripts/check.sh` ALL OK (iki taraf fixture testleri dahil). Codex high: çalışma zamanı bulgusu yok.
 
 Kotlin: `invalid_str8_utf8` added to the `invalid` set in FixtureTest.kt; no Codec change (INVALID_STRING already rejects). Device check: none needed (JVM tests only).
 
