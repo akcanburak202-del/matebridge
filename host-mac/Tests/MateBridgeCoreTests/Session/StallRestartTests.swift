@@ -48,7 +48,7 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
 @Suite struct StallRestartTests {
     @Test func confirmedReleaseThenRelaunchTerminateAndExit() {
         let r = Recorder()
-        let outcome = StallRestart.run(steps(r), attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
+        let outcome = StallRestart.run(steps(r), attempt: ReleaseAttempt(), emergencyAttempt: EmergencyAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
         #expect(outcome == .restarted)
         #expect(r.all == ["release", "log:input=done outcome=restart", "relaunch", "terminate",
                           "log:terminate=timeout", "exit"])
@@ -57,7 +57,7 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
     @Test func owedReleasesSkipTheRestart() {
         let r = Recorder()
         let outcome = StallRestart.run(steps(r, release: { InputReleaseReport(owed: 1, mirrorEmpty: true) }),
-                                       attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
+                                       attempt: ReleaseAttempt(), emergencyAttempt: EmergencyAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
         #expect(outcome == .skipped(reason: "owed"))
         #expect(r.all == ["release", "log:outcome=skipped reason=owed"])
     }
@@ -65,7 +65,7 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
     @Test func nonEmptyMirrorSkipsTheRestart() {
         let r = Recorder()
         let outcome = StallRestart.run(steps(r, release: { InputReleaseReport(owed: 0, mirrorEmpty: false) }),
-                                       attempt: ReleaseAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
+                                       attempt: ReleaseAttempt(), emergencyAttempt: EmergencyAttempt(), inputTimeout: 1, terminateTimeout: 0.05)
         #expect(outcome == .skipped(reason: "input_held"))
         #expect(!r.all.contains("terminate") && !r.all.contains("exit") && !r.all.contains("relaunch"))
     }
@@ -74,7 +74,7 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
         let r = Recorder()
         let hang = DispatchSemaphore(value: 0)
         let outcome = StallRestart.run(steps(r, release: { hang.wait(); return clean }, emergency: { 3 }),
-                                       attempt: ReleaseAttempt(), inputTimeout: 0.1, emergencyTimeout: 0.5,
+                                       attempt: ReleaseAttempt(), emergencyAttempt: EmergencyAttempt(), inputTimeout: 0.1, emergencyTimeout: 0.5,
                                        terminateTimeout: 0.05)
         #expect(outcome == .skipped(reason: "input_wedged"))
         #expect(r.all == ["emergency", "log:input=emergency released=3 confirmed=0",
@@ -86,7 +86,7 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
         let r = Recorder()
         let hang = DispatchSemaphore(value: 0)
         let outcome = StallRestart.run(steps(r, release: { hang.wait(); return clean }, emergency: { hang.wait(); return 1 }),
-                                       attempt: ReleaseAttempt(), inputTimeout: 0.05, emergencyTimeout: 0.1,
+                                       attempt: ReleaseAttempt(), emergencyAttempt: EmergencyAttempt(), inputTimeout: 0.05, emergencyTimeout: 0.1,
                                        terminateTimeout: 0.05)
         #expect(outcome == .skipped(reason: "input_wedged"))
         #expect(!r.all.contains("terminate") && !r.all.contains("exit"))
@@ -97,15 +97,21 @@ private func steps(_ r: Recorder, release: @escaping @Sendable () -> InputReleas
         let r = Recorder()
         let hang = DispatchSemaphore(value: 0)
         let attempt = ReleaseAttempt()
+        let emergencyAttempt = EmergencyAttempt()
         let started = Counter()
-        let s = steps(r, release: { started.bump(); hang.wait(); return clean }, emergency: { nil })
-        let first = StallRestart.run(s, attempt: attempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        let emergencyStarted = Counter()
+        let emergencyHang = DispatchSemaphore(value: 0)
+        let s = steps(r, release: { started.bump(); hang.wait(); return clean },
+                      emergency: { emergencyStarted.bump(); emergencyHang.wait(); return nil })
+        let first = StallRestart.run(s, attempt: attempt, emergencyAttempt: emergencyAttempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
         #expect(first == .skipped(reason: "input_wedged"))
-        let second = StallRestart.run(s, attempt: attempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        let second = StallRestart.run(s, attempt: attempt, emergencyAttempt: emergencyAttempt, inputTimeout: 0.05, emergencyTimeout: 0.05, terminateTimeout: 0.05)
         #expect(second == .skipped(reason: "input_wedged"))
         #expect(started.value == 1)  // no second blocked thread
+        #expect(emergencyStarted.value == 1)  // the hung emergency attempt is joined too
+        emergencyHang.signal()
         hang.signal()
-        let third = StallRestart.run(s, attempt: attempt, inputTimeout: 1, emergencyTimeout: 0.05, terminateTimeout: 0.05)
+        let third = StallRestart.run(s, attempt: attempt, emergencyAttempt: emergencyAttempt, inputTimeout: 1, emergencyTimeout: 0.05, terminateTimeout: 0.05)
         #expect(third == .restarted)
     }
 

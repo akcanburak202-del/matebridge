@@ -95,6 +95,10 @@ Instead of patching "exit safely while input may be held" again, the rule is now
 - Tests (Core): decision table, outcomes with owed/held mirror/wedged queue/failed emergency, retry joining a hanging release, gate split (opens dropped, closes pass), refusal step/lift. check.sh: ALL OK.
 - Unverified on hardware: the whole restart path, and the 5 s retry loop while sessions are refused. Note: once `stallRelease` ran, input stays stopped until the process restarts (no recovery of input without restart).
 
+**Review round 4 (two P2)**
+- The emergency release now runs through `EmergencyAttempt` (a `SingleFlight`, like `ReleaseAttempt`): at most one outstanding, later retries join the hung one instead of starting another worker (test: a hung emergency body is started once across retries).
+- `InputController.setStallGate` logs with neutral ids (0, 0): it runs on the watchdog thread and no longer reads the queue-confined session ids. check.sh: ALL OK.
+
 ## Open questions
 
 - (Resolved in review round 1) `main.swift` was added with the orchestrator's permission.

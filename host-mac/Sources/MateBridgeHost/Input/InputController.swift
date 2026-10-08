@@ -414,7 +414,10 @@ public final class InputController: @unchecked Sendable {
             defer { stallGateClosed = closed }
             return stallGateClosed != closed
         }
-        if changed { log(.warning, "input_stall_gate", "state=\(closed ? "on" : "off")") }
+        // Neutral ids: this runs on the watchdog thread and must not read the queue-confined session ids.
+        if changed {
+            logger.log(.warning, "input_stall_gate", sessionID: 0, generation: 0, fields: "state=\(closed ? "on" : "off")")
+        }
     }
 
     /// `releaseInput` body; `queue` only. Idempotent, so the host-sleep participant (T-299) and the session-end path

@@ -83,36 +83,58 @@ public enum StallRestartDecision: Equatable, Sendable {
     }
 }
 
-/// One input release at a time. A retry while an earlier call still hangs (wedged queue) waits for that call instead of
-/// piling up another blocked thread.
-public final class ReleaseAttempt: @unchecked Sendable {
-    public static let shared = ReleaseAttempt()
-
+/// At most one outstanding run of a blocking body. A call while an earlier one still hangs waits for that one instead of
+/// starting another, so retries never pile up blocked threads.
+public final class SingleFlight<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var inFlight = false
     private var done = DispatchSemaphore(value: 0)
-    private var report: InputReleaseReport?
+    private var result: T?
 
     public init() {}
 
     /// Runs `body` (or joins the one still running) and waits up to `timeout`; nil on a timeout.
-    public func run(timeout: TimeInterval, _ body: @escaping @Sendable () -> InputReleaseReport) -> InputReleaseReport? {
+    public func run(timeout: TimeInterval, _ body: @escaping @Sendable () -> T) -> T? {
         let (sem, start): (DispatchSemaphore, Bool) = lock.withLock {
             if inFlight { return (done, false) }
             inFlight = true
-            report = nil
+            result = nil
             done = DispatchSemaphore(value: 0)
             return (done, true)
         }
         if start {
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 let r = body()
-                lock.withLock { report = r; inFlight = false }
+                lock.withLock { result = r; inFlight = false }
                 sem.signal()
             }
         }
         guard sem.wait(timeout: .now() + timeout) == .success else { return nil }
-        return lock.withLock { report }
+        return lock.withLock { result }
+    }
+}
+
+/// One input release at a time (see `SingleFlight`).
+public final class ReleaseAttempt: @unchecked Sendable {
+    public static let shared = ReleaseAttempt()
+    private let flight = SingleFlight<InputReleaseReport>()
+    public init() {}
+
+    public func run(timeout: TimeInterval, _ body: @escaping @Sendable () -> InputReleaseReport) -> InputReleaseReport? {
+        flight.run(timeout: timeout, body)
+    }
+}
+
+/// One best-effort emergency release at a time (round 4): a hung one is joined by later retries. The inner value is the
+/// number of posted events, nil when posting was not possible.
+public final class EmergencyAttempt: @unchecked Sendable {
+    public static let shared = EmergencyAttempt()
+    private let flight = SingleFlight<Int?>()
+    public init() {}
+
+    /// nil: still running after `timeout`. `.some(nil)`: it finished but could not post.
+    public func run(timeout: TimeInterval, _ body: @escaping @Sendable () -> Int?) -> Int?? {
+        flight.run(timeout: timeout, body)
     }
 }
 
@@ -169,22 +191,15 @@ public enum StallRestart {
     /// the process to disappear.
     @discardableResult
     public static func run(_ steps: Steps, attempt: ReleaseAttempt = .shared,
+                           emergencyAttempt: EmergencyAttempt = .shared,
                            inputTimeout: TimeInterval = inputTimeout,
                            emergencyTimeout: TimeInterval = emergencyTimeout,
                            terminateTimeout: TimeInterval = terminateTimeout) -> Outcome {
         let report = attempt.run(timeout: inputTimeout, steps.releaseInput)
         if report == nil {
-            let box = EmergencyBox()
-            let finished = DispatchSemaphore(value: 0)
-            DispatchQueue.global(qos: .userInitiated).async {
-                box.set(steps.emergencyRelease())
-                finished.signal()
-            }
-            let completed = finished.wait(timeout: .now() + emergencyTimeout) == .success
-            if completed, let n = box.value {
-                steps.log("input=emergency released=\(n) confirmed=0")
-            } else {
-                steps.log("input=emergency failed=1 confirmed=0")
+            switch emergencyAttempt.run(timeout: emergencyTimeout, steps.emergencyRelease) {
+            case .some(.some(let n)): steps.log("input=emergency released=\(n) confirmed=0")
+            default: steps.log("input=emergency failed=1 confirmed=0")
             }
         }
         switch StallRestartDecision.decide(report: report) {
@@ -201,13 +216,6 @@ public enum StallRestart {
         steps.log("terminate=timeout")
         steps.forceExit()
         return .restarted
-    }
-
-    private final class EmergencyBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var result: Int?
-        func set(_ v: Int?) { lock.withLock { result = v } }
-        var value: Int? { lock.withLock { result } }
     }
 
     /// `/bin/sh` arguments of the relaunch helper: waits until `pid` is gone (at most `waitSeconds`), then opens a new
