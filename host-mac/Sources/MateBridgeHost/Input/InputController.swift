@@ -54,6 +54,12 @@ public final class InputController: @unchecked Sendable {
     private let cursor: CursorLocating
     private let visibility: CursorVisibilityChecking
     private let logger = SessionLogger(component: "input")
+    /// T-299 (queue-confined): set by the host-sleep participant before its release-all. While set, `gate` drops every
+    /// opening event of any session. Cleared by the wake notification, or by the awake-time expiry
+    /// (`HostSleepInputGate.windowNs`); a session start does NOT clear it (a client may connect before the real sleep).
+    private var sleepGate = HostSleepInputGate()
+    private var sleepDropped = 0
+    private var wakeObserver: NSObjectProtocol?
     /// Control activity (`noteControlActivity(at:)`): written on the session queue, taken on `queue`, only under
     /// `activityLock`. Its gap is the machine's stall pause (`InputStateMachine.Configuration`).
     private let activityLock = NSLock()
@@ -125,6 +131,8 @@ public final class InputController: @unchecked Sendable {
     }
 
     deinit {
+        HostSleepParticipants.shared.unregister(self)
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         watchdogTimer.cancel()
         pollTimer.cancel()
     }
@@ -138,6 +146,24 @@ public final class InputController: @unchecked Sendable {
             guard !started, !stopped else { return }
             started = true
             self.onStatusChange = onStatusChange
+            // T-299: on a system sleep, release everything on this queue at once, independent of the session queue.
+            HostSleepParticipants.shared.register(self, name: "input") { [weak self] done in
+                guard let self else { return done() }
+                queue.async { [self] in
+                    sleepGate.set(awakeNs: Self.awakeNs())  // before the release: nothing opens again after it
+                    releaseOnQueue(.hostSleep)
+                    // Closing events the poster refused are retried here, short and synchronous, not at the next
+                    // 250 ms timer. Still owed when the attempts run out: no `done`, the ack logs `input=pending`.
+                    let owed = drainOwed(attempts: Self.sleepDrainAttempts, pause: Self.sleepDrainPause)
+                    if owed == 0 { done() } else { log(.warning, "input_sleep_owed", "owed=\(owed)") }
+                }
+            }
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                guard let self else { return }
+                queue.async { [self] in endSleepGate(wake: true) }
+            }
             lastStatus = nil  // a poll that ran before start() must not swallow the first report
             _ = environment()  // reports the first status
             _ = cursor.location()  // the first query connects to WindowServer (milliseconds): not on the input path
@@ -263,7 +289,7 @@ public final class InputController: @unchecked Sendable {
                 env.cursorHidden = sampleCursorHidden()  // T-272: and do not move a hidden one
             }
             pushActivity()  // the activity from BEFORE this message (T-163)
-            let postNs = flush(pipeline.handle(message, now: now, environment: env), now: now)
+            let postNs = flush(gate(pipeline.handle(message, now: now, environment: env), now: now), now: now)
             ages.record(message, receivedUs: now)  // T-171: measured only, after the message was handled
             logInputAge(now: now)
             // Debug only, and only the numeric identity: never a character (docs/LOGGING.md).
@@ -322,11 +348,59 @@ public final class InputController: @unchecked Sendable {
     /// Release everything (`SessionServer` `releaseInput`): a RELEASE_ALL message, BYE, connection loss, protocol
     /// error, heartbeat silence, takeover or shutdown. Idempotent. Runs even after `shutdown`.
     public func releaseInput(_ cause: ReleaseCause) {
-        queue.sync {
-            let now = HostClock.nowUs()
-            flush(pipeline.release(cause, now: now, environment: environment()), now: now)
-            rearmWatchdog()
+        queue.sync { releaseOnQueue(cause) }
+    }
+
+    /// About 150 ms of pauses at most, well inside `HostSleep.budgetUs`.
+    static let sleepDrainAttempts = 4
+    static let sleepDrainPause: TimeInterval = 0.05
+
+    /// Retries the owed releases right now (`queue` only); returns how many are still owed.
+    private func drainOwed(attempts: Int, pause: TimeInterval) -> Int {
+        pipeline.drainOwed(
+            attempts: attempts,
+            now: { HostClock.nowUs() },
+            environment: { [self] in environment() },
+            post: { [self] batch in
+                let result = post(batch)
+                eventsPosted += batch.count - result.failed.count
+                return result
+            },
+            pause: { Thread.sleep(forTimeInterval: pause) })
+    }
+
+    /// Wake or a new session: opening events pass again (`queue` only).
+    private func endSleepGate(wake: Bool) {
+        let ended = wake ? sleepGate.wake() : sleepGate.expireIfDue(atAwakeNs: Self.awakeNs())
+        guard ended else { return }
+        log(.info, "input_sleep_gate_end", "reason=\(wake ? "wake" : "expired") dropped_opens=\(sleepDropped)")
+        sleepDropped = 0
+    }
+
+    /// Monotonic uptime; does not advance while the Mac sleeps, so the gate window counts awake time only.
+    static func awakeNs() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
+    /// While sleeping, takes the opening events out of what the pipeline produced (`queue` only). What was dropped
+    /// never reached the Mac: the pipeline forgets it, and the machine is released again so it does not hold it.
+    private func gate(_ events: [MacEvent], now: UInt64) -> [MacEvent] {
+        guard sleepGate.isSet else { return events }
+        guard sleepGate.isClosed(atAwakeNs: Self.awakeNs()) else {
+            endSleepGate(wake: false)
+            return events
         }
+        let (pass, dropped) = HostSleepInputGate.split(events)
+        guard !dropped.isEmpty else { return events }
+        sleepDropped += dropped.count
+        pipeline.postFailed(dropped, now: now, permitted: true)
+        return pass + pipeline.release(.hostSleep, now: now, environment: environment())
+    }
+
+    /// `releaseInput` body; `queue` only. Idempotent, so the host-sleep participant (T-299) and the session-end path
+    /// may both run it.
+    private func releaseOnQueue(_ cause: ReleaseCause) {
+        let now = HostClock.nowUs()
+        flush(pipeline.release(cause, now: now, environment: environment()), now: now)
+        rearmWatchdog()
     }
 
     /// Attempts and pause of the shutdown drain: a handful of retries over a few hundred milliseconds at most.
@@ -545,8 +619,9 @@ public final class InputController: @unchecked Sendable {
     private func poll() {
         guard !stopped else { return }
         pushActivity()
+        if sleepGate.isSet { endSleepGate(wake: false) }  // expiry when no wake was seen
         let now = HostClock.nowUs()
-        flush(pipeline.tick(now: now, environment: environment()), now: now)
+        flush(gate(pipeline.tick(now: now, environment: environment()), now: now), now: now)
         rearmWatchdog()
         logInputAge(now: now)
         let d = pipeline.planner.counters
