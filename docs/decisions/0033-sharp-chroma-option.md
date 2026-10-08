@@ -19,3 +19,7 @@ T-233 (docs/research/2026-10-05-yuv444.md): tablet çözücüsü 4:4:4 desteklem
 - Açıkken ~3 ms ek gecikme ve küçük GPU yükü; kullanıcı seçer.
 - Tekrar düşünülür: Metal geçişi 1 ms altına inerse varsayılan açık olabilir.
 - **Güncelleme 2026-10-06:** varsayılan artık Keskin kenarlar (0034 eki).
+
+**Ek (2026-10-08):** Kullanıcı kararı 2026-10-08 (T-297 ortak ayıklaması, `docs/reviews/2026-10-08/simplification.md`):
+- `MATEBRIDGE_CHROMA=444` (tablette `no_output`) ve `sharp_bilinear` (kullanıcı `sharp_nearest`'i seçti) geliştirici değerleri kaldırılır.
+- Kalanlar: `420`, `sharp_nearest`, ve 0034 paketli tam renk.

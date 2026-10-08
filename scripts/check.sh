@@ -3,22 +3,24 @@
 # Builds and tests every component that exists; components not yet created are skipped.
 # Exit code is non-zero if anything that exists fails.
 #
-# Usage: scripts/check.sh                      # everything, probes included (the pre-handoff gate)
+# Usage: scripts/check.sh                      # host, android, protocol, measurement kit (the pre-handoff gate)
+#        scripts/check.sh --probes             # also build/test the concluded probes/ (decision 0026, 2026-10-08)
 #        scripts/check.sh --only host           # host-mac swift build + test
 #        scripts/check.sh --only android        # client-android assembleDebug testDebugUnitTest
 #        scripts/check.sh --only protocol       # fixtures up to date, crypto vectors (macOS only), fixture docs
-# --only is repeatable and takes a comma list (--only host,protocol). Probes run only without --only.
+# --only is repeatable and takes a comma list (--only host,protocol). Probes run only with --probes.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 usage() { # usage [exit code]
-  sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '6,11p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit "${1:-2}"
 }
 
 # Selected components as a space-separated string; empty means "all" (today's full run).
 # A string, not an array: macOS /bin/bash 3.2 treats an empty array as unbound under `set -u`.
 only=""
+probes=""
 add_only() { # add_only <comma list>
   local item before=$only
   for item in $(echo "$1" | tr ',' ' '); do
@@ -33,6 +35,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --only) [ $# -ge 2 ] || { echo "check.sh: --only needs a component" >&2; usage; }; add_only "$2"; shift 2 ;;
     --only=*) add_only "${1#--only=}"; shift ;;
+    --probes) probes=1; shift ;;
     -h|--help) usage 0 ;;
     *) echo "check.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -55,24 +58,24 @@ missing host host-mac/Package.swift
 missing android client-android/gradlew
 missing protocol protocol/fixtures/gen.py
 
-# macOS host + Swift probes (any directory with a Package.swift); probes only in the full run
+# macOS host + Swift probes (any directory with a Package.swift); probes only with --probes
 if want host; then
   for pkg in host-mac probes/*; do
     [ -f "$pkg/Package.swift" ] || continue
-    [ -z "$only" ] || [ "$pkg" = host-mac ] || continue
+    [ "$pkg" = host-mac ] || { [ -z "$only" ] && [ -n "$probes" ]; } || continue
     run "swift build ($pkg)" "$pkg" swift build
     if [ -d "$pkg/Tests" ]; then run "swift test ($pkg)" "$pkg" swift test; fi
   done
 fi
 
-# Android client + Android probes (any directory with a Gradle wrapper); probes only in the full run
+# Android client + Android probes (any directory with a Gradle wrapper); probes only with --probes
 if want android; then
   AS_JBR="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
   if [ -z "${JAVA_HOME:-}" ] && [ -d "$AS_JBR" ]; then export JAVA_HOME="$AS_JBR"; fi
   if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk"; fi
   for proj in client-android probes/*; do
     [ -x "$proj/gradlew" ] || continue
-    [ -z "$only" ] || [ "$proj" = client-android ] || continue
+    [ "$proj" = client-android ] || { [ -z "$only" ] && [ -n "$probes" ]; } || continue
     if [ -z "${JAVA_HOME:-}" ]; then echo "    FAIL: $proj needs a JDK (install Android Studio)"; fail=1; continue; fi
     run "gradle ($proj)" "$proj" ./gradlew --quiet assembleDebug testDebugUnitTest
   done

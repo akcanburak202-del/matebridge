@@ -71,3 +71,8 @@ Kullanıcının cevapları (2026-10-03):
 - **Mevcut kararlar:** değişmez. 0013, 0014 ve 0016 profilleri aynı kalır.
 - **PROTOCOL.md:** değişmez. LOGGING.md'ye `ev=profile` satırı eklenir.
 - **Tekrar düşünülür:** bir işletim sistemi güncellemesi kaldırılan bir yolu yeniden gerekli kılarsa. Örnek: HarmonyOS GL yüzeyini 120 Hz'e açarsa ya da bir PerformanceHint oturumu verirse.
+
+**Ek (2026-10-08):** Kullanıcı kararı 2026-10-08 (T-297 ortak ayıklaması, `docs/reviews/2026-10-08/simplification.md`):
+- §7 kapandı: sabit titreşim tamponu (`--ei jitter 0..2`, `FramePacer`, `GameJitter`) kaldırılır; `VsyncClock` kalır.
+- T-300 ile `tos_ctl`, `tos_video`, `wifi_ll`, `hz_pin`, `color_*`, `dec_lowlat`, `dec_oprate` kaldırıldı.
+- Sonuçlanmış prob uygulamaları (`probes/`) `scripts/check.sh` tam çalıştırmasından çıkarılır; kaynakları depoda kalır.

@@ -66,3 +66,8 @@ Bütçeler ölçümden **önce** yazılır. Öneri:
   - PLAN.md:74 ve :126 (UDP'ye geçiş ve karşılaştırma notları) güncellenir.
   - T-127'nin eski 3. adımı bu kararla geçersiz olur.
 - **Tekrar düşünülür:** uyarlamadan sonra p99 hâlâ yeniden gönderimlerle belirleniyorsa datagram taşımaya yeniden bakılır.
+
+**Ek (2026-10-08):** Kullanıcı kararı 2026-10-08 (T-297 ortak ayıklaması, `docs/reviews/2026-10-08/simplification.md`):
+- `MATEBRIDGE_BITRATE_STEP` ve yalnız onun ulaştığı canlı bit hızı ayarlayıcı zinciri kaldırılır (`VideoPipeline.setTargetBitrate` hiç çağrılmıyordu).
+- "Gerekirse canlı bit hızı" dalı yeniden açılırsa kod git geçmişinden (T-177) geri gelir.
+- `MATEBRIDGE_RATE_WINDOW_MS` şimdilik kalır: kare boyutu tavanı ölçümü (T-298 EN9) bekleniyor.
