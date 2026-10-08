@@ -1860,3 +1860,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Sonraki her bağlantıda `E net ev=event_overflow` → `sessions_ended_by_host` → `shutdown` (9 kez). Kullanıcı bağlanamadı ve Mac'i güç tuşuyla kapattı.
 - Kayıp yok: `main` push'luydu. Yarıda kalan T-322/T-323/T-324 düzeltmeleri WIP commit olarak kaydedildi, yeni ajanlarla tamamlanıyor.
 - Şüpheli: `stopConsumer` önce `await sender.stop()`, sonra `link.cancel()` (bloklu ya da iptale duyarsız bekleme). Takılma anının profili yok. T-325: belirsiz beklemelere süre sınırı, koordinatör bekçisi (`coordinator_stall`), taşma döngüsünü kırma.
+
+## 2026-10-08 21:49–21:51 — Oyun mode disconnects: tablet Wi-Fi receive collapse (not host)
+
+- Symptom: Oyun (1400×920, 60 Mbps, HDR) dropped 3× in ~2 min; reconnects failed for up to ~40 s.
+- Tablet: system-wide `HuaweiWifiWatchdogStateMachine` rx_speed fell from ~8 MB/s to 0–600 B/s at each drop; Wi-Fi stayed associated (RSSI −34…−38, link 2401 Mbps, ch 5320 MHz), no disconnect/roam records. Client `ev=net rtt_n=0` then `connect_fail` (SYN unanswered).
+- Host: no `coordinator_stall`/overflow; control TCP retransmits with RTO growing, then `heartbeat_silence`. Mac on wired en0 with 0 interface errors. Preceding Günlük session already showed smoothed RTT 58 ms vs base 2 ms and 45 video retransmits → Wi-Fi airtime congestion before the drops.
+- Tablet at 60 Hz (not the T-321 144 Hz case). No installs or foreign adb clients (21:50:17 adbd line = the Mac adb server auto-reconnecting).
+- Not explained: what congested the WLAN (other devices, router, interference). Next time: Mac-side `ping` to the tablet and router during play; USB cable as workaround.
