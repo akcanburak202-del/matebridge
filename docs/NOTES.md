@@ -1868,3 +1868,11 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
 - Host: no `coordinator_stall`/overflow; control TCP retransmits with RTO growing, then `heartbeat_silence`. Mac on wired en0 with 0 interface errors. Preceding Günlük session already showed smoothed RTT 58 ms vs base 2 ms and 45 video retransmits → Wi-Fi airtime congestion before the drops.
 - Tablet at 60 Hz (not the T-321 144 Hz case). No installs or foreign adb clients (21:50:17 adbd line = the Mac adb server auto-reconnecting).
 - Not explained: what congested the WLAN (other devices, router, interference). Next time: Mac-side `ping` to the tablet and router during play; USB cable as workaround.
+
+## 2026-10-08 22:37–22:57 — Oyun play test with Mac-side ping (tablet + router, 2 Hz)
+
+- Router ping stayed ≤2 ms throughout (one 8 ms) → wired side and router healthy.
+- Oyun at 60 Mbps (actual 55–77 Mbps, peaks ~100): tablet ping avg 17–41 ms in busy minutes; 22:41:08–13 stall: tablet ping 150–350 ms, client fps 11–21, cap_dec 120–190 ms, no disconnect.
+- After switching to 30 Mbps at 22:45:21: tablet ping avg 3–5 ms, max ≤78 ms, no network stall, no disconnect.
+- Conclusion: today the WLAN hop to the tablet runs near capacity at Oyun's 60 Mbps (queueing delay), and earlier collapses happened under that load (one at 30 Mbps in Günlük). Before ~19:00 today the same rates were fine → capacity loss in the WLAN environment, not a code change.
+- Also seen: 22:41:17–25 host capture fell to 3–14 fps while another session ran Blender (132% CPU) + Hades II on the Mac; client frame drops 5–25/s at 22:41:28–47 and 22:56 with healthy network (tablet decode/pacing, cf. T-310/T-320).
