@@ -1,7 +1,7 @@
 ---
 id: T-293
 title: Host — kalıcı medya hatasında devre kesici (video bağlanınca bütçeye sor, bekleme 10/20/30 sn, aynı cihazın oturumunda sıfırlama yok)
-status: review
+status: done
 phase: 6
 owner: mac-host-dev
 depends_on: [T-291]
