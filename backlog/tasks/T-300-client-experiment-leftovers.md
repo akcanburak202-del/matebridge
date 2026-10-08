@@ -1,7 +1,7 @@
 ---
 id: T-300
 title: Tablet — kararı verilmiş deneylerin kodunu kaldır (tos/wifi_ll + Wi-Fi kilidi, hz_pin, renk geçersiz kılma, dec_lowlat/dec_oprate varyantları, VideoTestActivity)
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -15,7 +15,8 @@ files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/stream/
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/ColorOverrides.kt
   - client-android/app/src/main/kotlin/dev/matebridge/client/video/VideoRenderer.kt
-  - client-android/app/src/main/kotlin/dev/matebridge/client/video/DecoderLatencyKnobs.kt
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/OperatingRate.kt  # (orkestratör düzeltmesi: DecoderLatencyKnobs bu dosyadaydı)
+  - client-android/app/src/main/kotlin/dev/matebridge/client/video/OutputFormatReport.kt  # (orkestratör, Codex P3)
   - client-android/app/src/main/AndroidManifest.xml
   - client-android/app/src/debug/
   - client-android/app/src/test/

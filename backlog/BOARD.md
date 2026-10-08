@@ -28,7 +28,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-299](tasks/T-299-host-sleep-participants.md) | Host — uyku katılımcıları hiç kayıt olmuyor; girdi ve ses uyku anında oturum kuyruğundan bağımsız bırakılsın (T-132 eksiği) | 7 | mac-host-dev | [] |
-| [T-300](tasks/T-300-client-experiment-leftovers.md) | Tablet — kararı verilmiş deneylerin kodunu kaldır (tos/wifi_ll + Wi-Fi kilidi, hz_pin, renk geçersiz kılma, dec_lowlat/dec_oprate varyantları, VideoTestActivity) | 7 | android-client-dev | [] |
 
 ## done
 
@@ -313,3 +312,4 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-296](tasks/T-296-perf-baseline-kit.md) | Ölçüm tabanı — tekrarlanabilir sentetik senaryolarla iki tarafın CPU, uyanma, gecikme ve pil maliyeti (kullanıcısız) | 7 | orchestrator | [] |
 | [T-297](tasks/T-297-simplification-review.md) | Sadeleştirme incelemesi — alt sistem başına Opus ajanları + gpt-6-astra (high) mimari geçiş + gpt-6.1-sol doğrulama | 7 | orchestrator | [] |
 | [T-298](tasks/T-298-optimization-research.md) | Optimizasyon araştırması — gecikme zinciri, kodlayıcı/yakalama ayarları, tablet enerji/CPU, ağ | 7 | orchestrator | [] |
+| [T-300](tasks/T-300-client-experiment-leftovers.md) | Tablet — kararı verilmiş deneylerin kodunu kaldır (tos/wifi_ll + Wi-Fi kilidi, hz_pin, renk geçersiz kılma, dec_lowlat/dec_oprate varyantları, VideoTestActivity) | 7 | android-client-dev | [] |
