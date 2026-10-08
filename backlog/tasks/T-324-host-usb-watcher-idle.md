@@ -1,7 +1,7 @@
 ---
 id: T-324
 title: Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap
-status: todo
+status: review
 phase: 7
 owner: mac-host-dev
 depends_on: []
@@ -28,6 +28,15 @@ files:
 
 ## Plan
 
+IOKit `IOUSBHostDevice` first-match + terminated notifications (UsbEventMonitor, same file as the watcher) trigger a probe. The planner (Core) picks the delay: idle (adb healthy, no cable device; network-only adb devices ignored) = 30 s safety net when notifications work, 10 s when IOKit registration failed; after an event, 6 base-rate (2 s) probes; cable attached or an unauthorized/offline device listed = 2 s as before.
+
 ## Handoff
+
+- Commit: latest commit on `task/T-324-usb-watcher` ("T-324: ...").
+- Files: host-mac/Sources/MateBridgeCore/Usb/UsbTunnelPlanner.swift, host-mac/Sources/MateBridgeHost/Usb/UsbTunnelWatcher.swift (the card's `Session/` path does not exist; the file lives in `Usb/`), host-mac/Tests/MateBridgeCoreTests/Usb/UsbTunnelPlannerTests.swift. TabletFilesBridge untouched.
+- check.sh: ALL OK.
+- Estimate: before, idle Wi-Fi = one `adb devices` process (plus a loopback probe) every 2 s, about 30 launches/min. After: one per 30 s, 2/min (~15x fewer), plus a short burst after a USB event. Not measured on a device.
+- Assumptions: notification on every `IOUSBHostDevice` (no vendor filter; any USB attach/detach on the Mac costs one probe burst). Cable detach is noticed 0.3 s after the event (faster than the old 2 s worst case). An unauthorized/offline device keeps the 2 s rate because authorization emits no USB event. `testHealthyProbeEndsBackoff` was adjusted to use an unauthorized device, since an empty healthy probe is now idle (10/30 s).
+- Needs real hardware (orchestrator): plug/unplug the cable with the host in Wi-Fi mode and USB mode; `ev=usb_tunnel` lines should appear promptly (tunnel up within a few seconds of plug-in, `no_device` after unplug); `dev.matebridge.usb` queue samples should drop in a profile. Also note: an adb server dying while idle is now noticed within up to 30 s.
 
 ## Open questions

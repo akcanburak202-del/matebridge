@@ -75,8 +75,53 @@ final class UsbTunnelPlannerTests: XCTestCase {
         var p = UsbTunnelPlanner()
         _ = p.decide(UsbSnapshot(adbFound: true, serverUp: false))
         p.actionFinished(success: false)
-        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true))
+        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [AdbDevice(serial: "ABC", state: "unauthorized")]))
         XCTAssertEqual(p.nextDelay, 2)
+    }
+
+    func testIdleDelayDependsOnUsbEvents() {
+        var p = UsbTunnelPlanner()
+        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true))
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.idlePollingDelay)
+        p.usbEventsAvailable = true
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.idleEventDrivenDelay)
+    }
+
+    func testNetworkOnlyDeviceIsStillIdle() {
+        var p = UsbTunnelPlanner()
+        p.usbEventsAvailable = true
+        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [AdbDevice(serial: "10.0.0.2:5555", state: "device")]))
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.idleEventDrivenDelay)
+    }
+
+    func testUnauthorizedDeviceKeepsBaseRate() {
+        var p = UsbTunnelPlanner()
+        p.usbEventsAvailable = true
+        _ = p.decide(UsbSnapshot(adbFound: true, serverUp: true, devices: [AdbDevice(serial: "ABC", state: "unauthorized")]))
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.baseDelay)
+    }
+
+    func testCableAttachedKeepsBaseRate() {
+        var p = UsbTunnelPlanner()
+        p.usbEventsAvailable = true
+        let up = UsbSnapshot(adbFound: true, serverUp: true, devices: [AdbDevice(serial: "ABC", state: "device")],
+                             presentTunnels: [DefaultPorts.control, DefaultPorts.video])
+        _ = p.decide(up)
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.baseDelay)
+    }
+
+    func testUsbEventBurstThenBackToIdle() {
+        var p = UsbTunnelPlanner()
+        p.usbEventsAvailable = true
+        let idle = UsbSnapshot(adbFound: true, serverUp: true)
+        _ = p.decide(idle)
+        p.noteUsbEvent()
+        for _ in 0..<(UsbTunnelPlanner.burstProbes - 1) {
+            _ = p.decide(idle)
+            XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.baseDelay)
+        }
+        _ = p.decide(idle)
+        XCTAssertEqual(p.nextDelay, UsbTunnelPlanner.idleEventDrivenDelay)
     }
 
     func testTransportClassification() {
