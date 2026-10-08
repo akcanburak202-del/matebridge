@@ -373,7 +373,7 @@ class SessionController(
     fun resetVideoBackoff() {
         if (terminated.get()) return
         ensureEngine()
-        events.offer(SessionMachine.Event.ResetVideoBackoff) // a full queue only means the next frame resets it anyway
+        mail.videoBackoff.post(SessionMachine.Event.ResetVideoBackoff) // a mail slot: a tap is never dropped
     }
 
     /**
