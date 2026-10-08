@@ -14,6 +14,9 @@ public struct FrameTrace: Equatable, Sendable {
     public var displayUs: UInt64 = 0
     /// Part of `holdUs` spent with both encoder slots busy (the rest is the send-rate gate); see `HEVCEncoder`.
     public var slotWaitUs: UInt64 = 0
+    /// T-311: wall time of the Metal pass (chroma conversion / packing) that ran between the callback and the
+    /// submission (command buffer creation to completion); 0 = no pass ran for this frame.
+    public var convertedUs: UInt64 = 0
     /// ScreenCaptureKit sample callback ran.
     public var deliveredUs: UInt64 = 0
     /// Handed to VideoToolbox (after any hold / decimation wait).
@@ -54,8 +57,11 @@ public struct FrameTrace: Equatable, Sendable {
     public var holdUs: UInt64 { Self.d(submittedUs, deliveredUs) }
     /// Slot-full part of the hold: the frame arrived (or waited) while `maxInFlight` frames were in the encoder.
     public var slotWaitStageUs: UInt64 { min(slotWaitUs, holdUs) }
-    /// Gate part of the hold: a slot was free but the send-rate gate was closed (grid slot not yet reached).
-    public var gateWaitUs: UInt64 { holdUs - slotWaitStageUs }
+    /// Metal part of the hold (T-311): the synchronous chroma pass in front of the submission, capped by the hold.
+    public var gpuStageUs: UInt64 { min(convertedUs, holdUs - slotWaitStageUs) }
+    /// Gate part of the hold: a slot was free but the send-rate gate was closed (grid slot not yet reached). The Metal
+    /// pass is not part of it (T-311: it used to hide here and read as ~3 ms of gating).
+    public var gateWaitUs: UInt64 { holdUs - slotWaitStageUs - gpuStageUs }
     /// Submitted -> encoder output callback.
     public var encUs: UInt64 { Self.d(encodedUs, submittedUs) }
     /// Encoder callback -> in the send queue (Annex-B conversion, parameter sets).
@@ -97,11 +103,12 @@ public struct FrameTrace: Equatable, Sendable {
     /// origin; `pts_us` is the wire `capture_time_us` and equals the tablet `pace_trace.csv` `capture_us`.
     public static let csvHeader =
         "capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us,"
-        + "pts_us,display_us,frame_seq,config_id,session_id,resubmit"
+        + "pts_us,display_us,frame_seq,config_id,session_id,resubmit,convert_us,bytes,key"
 
     public var csvLine: String {
         "\(captureUs),\(deliveredUs),\(submittedUs),\(encodedUs),\(enqueuedUs),\(writeStartUs),\(writeDoneUs),"
-            + "\(ptsUs),\(displayUs),\(frameSeq),\(configID),\(sessionID),\(resubmit ? 1 : 0)"
+            + "\(ptsUs),\(displayUs),\(frameSeq),\(configID),\(sessionID),\(resubmit ? 1 : 0),"
+            + "\(convertedUs),\(bytes),\(isKeyframe ? 1 : 0)"
     }
 }
 
@@ -111,7 +118,7 @@ public struct FrameTrace: Equatable, Sendable {
 public struct LatencyWindow: Sendable {
     public static let maxSamples = 512
     public static let offsetNames = ["pts_vs_display", "pts_vs_deliv", "display_vs_deliv"]
-    public static let stageNames = ["sck_lag", "hold", "gate_wait", "slot_wait", "enc", "conv", "queue", "write", "cap_to_sent"]
+    public static let stageNames = ["sck_lag", "hold", "gate_wait", "gpu", "slot_wait", "enc", "conv", "queue", "write", "cap_to_sent"]
     /// Signed PTS-origin total (T-170), logged right after the stages.
     public static let capToSentPtsName = "cap_to_sent_pts"
 
@@ -136,12 +143,13 @@ public struct LatencyWindow: Sendable {
         stages[0].append(t.sckLagUs)
         stages[1].append(t.holdUs)
         stages[2].append(t.gateWaitUs)
-        stages[3].append(t.slotWaitStageUs)
-        stages[4].append(t.encUs)
-        stages[5].append(t.convUs)
-        stages[6].append(t.queueUs)
-        stages[7].append(t.writeUs)
-        stages[8].append(t.capToSentUs)
+        stages[3].append(t.gpuStageUs)
+        stages[4].append(t.slotWaitStageUs)
+        stages[5].append(t.encUs)
+        stages[6].append(t.convUs)
+        stages[7].append(t.queueUs)
+        stages[8].append(t.writeUs)
+        stages[9].append(t.capToSentUs)
         if let v = t.capToSentPtsUs { capToSentPts.append(v) }
         for (i, v) in [t.ptsVsDisplayUs, t.ptsVsDeliveredUs, t.displayVsDeliveredUs].enumerated() {
             if let v { offsets[i].append(v) }

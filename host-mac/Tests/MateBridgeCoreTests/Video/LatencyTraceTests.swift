@@ -144,15 +144,15 @@ final class LatencyTraceTests: XCTestCase {
     }
 
     func testCsvLine() {
-        XCTAssertEqual(trace().csvLine, "1000,1300,2300,9000,9200,10000,11000,0,0,0,0,0,0")
-        XCTAssertEqual(FrameTrace.csvHeader.split(separator: ",").count, 13)
+        XCTAssertEqual(trace().csvLine, "1000,1300,2300,9000,9200,10000,11000,0,0,0,0,0,0,0,0,0")
+        XCTAssertEqual(FrameTrace.csvHeader.split(separator: ",").count, 16)
     }
 
     /// T-170: today's seven columns stay first and in order; the join columns are appended.
     func testCsvHeaderKeepsOldColumnsAndAppendsJoinColumns() {
         XCTAssertEqual(FrameTrace.csvHeader,
                        "capture_us,delivered_us,submitted_us,encoded_us,enqueued_us,write_start_us,write_done_us,"
-                       + "pts_us,display_us,frame_seq,config_id,session_id,resubmit")
+                       + "pts_us,display_us,frame_seq,config_id,session_id,resubmit,convert_us,bytes,key")
         let columns = FrameTrace.csvHeader.split(separator: ",").map(String.init)
         XCTAssertEqual(Array(columns.prefix(7)),
                        ["capture_us", "delivered_us", "submitted_us", "encoded_us", "enqueued_us",
@@ -166,7 +166,7 @@ final class LatencyTraceTests: XCTestCase {
         t.ptsUs = wire.captureTimeUs; t.displayUs = 1_200
         t.captureUs = FrameTrace.origin(displayUs: t.displayUs, ptsUs: t.ptsUs, deliveredUs: t.deliveredUs)
         t.frameSeq = wire.frameSeq; t.configID = 3; t.sessionID = 7
-        XCTAssertEqual(t.csvLine, "1000,1000,2300,9000,9200,10000,11000,1600,1200,41,3,7,0")
+        XCTAssertEqual(t.csvLine, "1000,1000,2300,9000,9200,10000,11000,1600,1200,41,3,7,0,0,0,0")
         let cols = t.csvLine.split(separator: ",")
         let header = FrameTrace.csvHeader.split(separator: ",")
         XCTAssertEqual(cols.count, header.count)
@@ -177,7 +177,7 @@ final class LatencyTraceTests: XCTestCase {
         var r = trace(delivered: 20_000)
         r.ptsUs = 26_600; r.captureUs = FrameTrace.origin(displayUs: 0, ptsUs: r.ptsUs, deliveredUs: r.deliveredUs)
         r.frameSeq = 42; r.configID = 3; r.sessionID = 7; r.resubmit = true
-        XCTAssertTrue(r.csvLine.hasSuffix(",26600,0,42,3,7,1"), r.csvLine)
+        XCTAssertTrue(r.csvLine.hasSuffix(",26600,0,42,3,7,1,0,0,0"), r.csvLine)
     }
 
     func testCapToSentPtsIsSignedAndLogged() {
@@ -208,5 +208,47 @@ final class LatencyTraceTests: XCTestCase {
         }
         XCTAssertEqual(w.offsetSamples(1).min(), -2_000)
         XCTAssertTrue(w.logFields.contains(" pts_vs_deliv_ms_p1_50_99=-2.0/2.9/7.8 "), w.logFields)
+    }
+
+    /// T-311: the Metal pass is its own stage and no longer reads as gate wait.
+    func testMetalPassIsItsOwnStageAndLeavesGateWait() {
+        var t = trace(delivered: 1_300)       // submitted at 2_300: hold 1_000 us
+        t.slotWaitUs = 200
+        t.convertedUs = 600
+        XCTAssertEqual(t.holdUs, 1_000)
+        XCTAssertEqual(t.slotWaitStageUs, 200)
+        XCTAssertEqual(t.gpuStageUs, 600)
+        XCTAssertEqual(t.gateWaitUs, 200)
+        XCTAssertEqual(t.slotWaitStageUs + t.gpuStageUs + t.gateWaitUs, t.holdUs, "the three parts add up to the hold")
+
+        // A pass longer than the hold (clock granularity) is capped, so nothing goes negative or underflows.
+        t.convertedUs = 5_000
+        XCTAssertEqual(t.gpuStageUs, 800)
+        XCTAssertEqual(t.gateWaitUs, 0)
+
+        var w = LatencyWindow()
+        t.convertedUs = 600
+        w.record(t)
+        let i = LatencyWindow.stageNames.firstIndex(of: "gpu")!
+        XCTAssertEqual(w.samples(stage: i), [600])
+        XCTAssertEqual(w.samples(stage: LatencyWindow.stageNames.firstIndex(of: "gate_wait")!), [200])
+        XCTAssertTrue(w.logFields.contains(" gpu_ms_p50_95_99_max=0.6/0.6/0.6/0.6 "), w.logFields)
+        // No pass (420 / 444): the whole hold is still split between slot wait and gate wait.
+        var n = trace(delivered: 1_300)
+        n.slotWaitUs = 200
+        XCTAssertEqual(n.gpuStageUs, 0)
+        XCTAssertEqual(n.gateWaitUs, 800)
+    }
+
+    func testCsvLineCarriesConvertBytesAndKey() {
+        var t = trace()
+        t.convertedUs = 3_150; t.bytes = 41_234; t.isKeyframe = true
+        XCTAssertTrue(t.csvLine.hasSuffix(",0,3150,41234,1"), t.csvLine)
+        let header = FrameTrace.csvHeader.split(separator: ",")
+        let cols = t.csvLine.split(separator: ",")
+        XCTAssertEqual(cols.count, header.count)
+        XCTAssertEqual(UInt64(cols[header.firstIndex(of: "convert_us")!]), 3_150)
+        XCTAssertEqual(Int(cols[header.firstIndex(of: "bytes")!]), 41_234)
+        XCTAssertEqual(Int(cols[header.firstIndex(of: "key")!]), 1)
     }
 }
