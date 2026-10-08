@@ -1,7 +1,7 @@
 ---
 id: T-308
 title: Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı)
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: [T-299]

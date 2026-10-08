@@ -27,7 +27,6 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-199](tasks/T-199-host-stale-input-policy.md) | Apply the stale-input policy on the host | 6 | mac-host-dev | [T-171, T-175] |
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
-| [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 | [T-321](tasks/T-321-144hz-wifi-stall.md) | 144 Hz (Yüksek) ekran ayarında tabletin ağ trafiği duruyor; MateBridge ve adb kopuyor — sistem mi, MateBridge yükü mü | 7 | orchestrator | [] |
 | [T-322](tasks/T-322-client-input-send-age-unbuffered.md) | Tablet — girdi gönderim yaşı istatistiği (EN1) ve parmak/trackpad/fare için tamponsuz dağıtım anahtarı (EN3) | 7 | android-client-dev | [] |
@@ -326,6 +325,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-305](tasks/T-305-pen-path-cost.md) | Kalem yolu maliyeti — örnek başına host CPU (~0,6 ms), her örneğin ayrı kayıt olması (max_batch=1), kontrol bağlantısında kuyruk (RTT 108 ms) | 7 | orchestrator | [T-296] |
 | [T-306](tasks/T-306-motion-skip-pct.md) | 60 fps içerik 60 Hz panelde %15–35 skip_pct — zamanlayıcı mı, panel mi, ölçüt mü | 7 | orchestrator | [T-296] |
 | [T-307](tasks/T-307-str8-invalid-utf8.md) | Protokol — str8 içinde geçersiz UTF-8 iki tarafta da protokol hatası (E9); fixture invalid_str8_utf8 | 7 | orchestrator | [] |
+| [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
 | [T-309](tasks/T-309-host-cursor-sampler-cost.md) | Host — yerel imleç örnekleyicisi her girdi olayında imleç görüntüsünü kopyalayıp hash'liyor; biçim kontrolü yalnız imleç değiştiğinde | 7 | mac-host-dev | [] |
 | [T-310](tasks/T-310-decode-clock-60fps.md) | Ölçüm — 2800×1840@60'ta çözme süresi kare süresini aşıyor (Günlük'te karelerin %31'i > 16,7 ms); saat, DVFS ve girdi yükseltmesi | 7 | orchestrator | [T-306] |
 | [T-311](tasks/T-311-host-sharp-chroma-fused-pass.md) | Host — Keskin renk Metal geçişi tek dispatch (HA2), Metal süresi ayrı iz aşaması (HA1), iki Metal geçişinin ortak kurulumu (A8) | 7 | mac-host-dev | [T-302] |
