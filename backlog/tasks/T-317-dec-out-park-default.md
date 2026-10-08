@@ -40,4 +40,6 @@ Hareket sahnesinde fark yok (beklenen).
 - Tablette kontrol: varsayılan açılışta `ev=profile knobs=-`; `--ez dev true --es dec_out_park off` ile `knobs=dec_out_park:off` ve uyanma sayısının ~1.175/s'e dönmesi; normal akışta cap_dec p50 ~21 ms.
 - Önerilen KNOBS metni: `dec_out_park` artık varsayılan `on`; `--es dec_out_park off` (dev ile) bir döngü boyunca eski 5 ms poll'a geri dönüş, sonra kaldırılır. `ev=profile knobs=` yalnız `dec_out_park:off` iken bu girdiyi gösterir.
 
+- Codex P3 fix: `knobs=` lists `dec_out_park` only for an effective `off` (explicit on and unknown values are absent); tests assert this.
+
 ## Open questions

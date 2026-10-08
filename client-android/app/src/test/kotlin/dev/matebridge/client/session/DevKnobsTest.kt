@@ -278,6 +278,8 @@ class DevKnobsTest {
         assertTrue(parse("dev" to true, "dec_out_park" to "bogus").decOutPark)
         val on = parse("dev" to true, "dec_out_park" to " ON ")
         assertTrue(on.decOutPark)
+        assertEquals(emptyList<String>(), on.knobs) // effective on is not listed
+        assertEquals(emptyList<String>(), parse("dev" to true, "dec_out_park" to "bogus").knobs)
         val k = parse("dev" to true, "dec_out_park" to " OFF ")
         assertFalse(k.decOutPark)
         assertEquals(listOf("dec_out_park:off"), k.knobs)

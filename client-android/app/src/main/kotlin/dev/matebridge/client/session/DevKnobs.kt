@@ -145,7 +145,9 @@ data class DevKnobs(
             val dev = raw.bool(EXTRA_DEV, false)
             val ignored = if (dev) emptyList() else SPECS.filter { it.debugOnly && raw.has(it.key) }.map { it.key }
             val x = Gated(raw, dev)
-            val knobs = SPECS.filter { it.inProfile && x.has(it.key) }.map { "${it.key}:${value(x, it)}" }
+            // dec_out_park is listed only when effectively off (T-317: on is the default).
+            val parkOff = x.string("dec_out_park")?.trim()?.lowercase(Locale.ROOT) == "off"
+            val knobs = SPECS.filter { it.inProfile && x.has(it.key) && (it.key != "dec_out_park" || parkOff) }.map { "${it.key}:${value(x, it)}" }
             return DevKnobs(
                 dev = dev,
                 ignored = ignored,
