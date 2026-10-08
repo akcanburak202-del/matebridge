@@ -156,6 +156,7 @@ class FixtureTest {
         val invalid = setOf(
             "invalid_key_short", "invalid_pen_count_zero", "invalid_audio_frame_short", "invalid_stream_prefs_partial",
             "invalid_stream_prefs_hdr_partial", "invalid_files_hello_short", "invalid_files_data_empty", "invalid_cursor_shape_short",
+            "invalid_str8_utf8",
         )
         val skipped = setOf("unknown_type")
 
