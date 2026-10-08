@@ -1,7 +1,7 @@
 ---
 id: T-324
 title: Host — Wi-Fi'deyken USB tünel izleyicisi ~%1,5 işlemci harcıyor (adb yoklaması); kablo yokken yoklamayı seyrek ya da olay tabanlı yap
-status: review
+status: done
 phase: 7
 owner: mac-host-dev
 depends_on: []
