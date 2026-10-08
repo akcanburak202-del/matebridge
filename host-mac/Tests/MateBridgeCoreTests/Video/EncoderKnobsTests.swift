@@ -260,6 +260,15 @@ final class EncoderKnobsTests: XCTestCase {
                        "MATEBRIDGE_FPS:120;MATEBRIDGE_CODEC:h264;MATEBRIDGE_RATE_WINDOW_MS:100;MATEBRIDGE_AUDIO:off")
     }
 
+    /// T-313 (KNOBS open point 3): the still-refine knobs are listed, after the other kept knobs.
+    func testProfileListsTheRefineKnobs() {
+        let env = ["MATEBRIDGE_REFINE_FRAMES": "8", "MATEBRIDGE_REFINE": "0", "MATEBRIDGE_REFINE_KB": "512",
+                   "MATEBRIDGE_REFINE_MS": "300", "MATEBRIDGE_CHROMA": "sharp_nearest"]
+        XCTAssertEqual(StreamProfileLog.knobsField(env),
+                       "MATEBRIDGE_CHROMA:sharp_nearest;MATEBRIDGE_REFINE:0;MATEBRIDGE_REFINE_MS:300;"
+                       + "MATEBRIDGE_REFINE_KB:512;MATEBRIDGE_REFINE_FRAMES:8")
+    }
+
     func testProfileIgnoresRetiredAndUnknownKeys() {
         let env = ["MATEBRIDGE_IDLE_REFRESH_MS": "300", "MATEBRIDGE_INPUT_RETAG": "0", "MATEBRIDGE_PRIO_SPEED": "0",
                    "MATEBRIDGE_H264_PROFILE": "main", "MATEBRIDGE_FRAME_DELAY": "1", "MATEBRIDGE_VIDEO_SOCKET": "nw",

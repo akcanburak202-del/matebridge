@@ -1126,9 +1126,10 @@ public final class SessionServer: @unchecked Sendable {
             guard l <= UInt32(Self.maxVideoHandshakePayload) else { return reject() }
             let total = ProtocolConstants.headerSize + Int(l)
             if buffer.count >= total {
-                var d = FrameDecoder(connection: .video)
-                d.append(Array(buffer[..<total]))
-                guard case .videoHello(let hello)? = try? d.nextMessage() else { return reject() }
+                let payload = Array(buffer[ProtocolConstants.headerSize..<total])
+                guard case .videoHello(let hello)? = try? Message.decode(type: buffer[0], payload: payload) else {
+                    return reject()
+                }
                 let rest = Array(buffer[total...])
                 videoBuffers[id] = nil
                 videoHelloSeen.insert(id)
