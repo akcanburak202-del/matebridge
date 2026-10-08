@@ -10,6 +10,7 @@ files:
   - host-mac/Sources/MateBridgeHost/Cursor/
   - host-mac/Sources/MateBridgeCore/Cursor/
   - host-mac/Tests/MateBridgeCoreTests/Cursor/
+  - docs/LOGGING.md (orchestrator)
   - backlog/tasks/T-309-host-cursor-sampler-cost.md
 ---
 
@@ -54,3 +55,9 @@ Bu, her girdi olayında ve 120 Hz zamanlayıcıda tekrarlanıyor. Biçim nadiren
 
 - docs/LOGGING.md `cursor_stats` satırı güncellenmeli (dosya kartın `files:` listesinde değil).
 - İsteğe bağlı: seed sayacı (SkyLight) ayrı kartta denenebilir; ölçümden sonra gerek kalmayabilir.
+
+## Review round 1 (Codex P2 x2)
+
+- Aralik 66 -> 57 ms: kontrol yalniz ornekte yapildigindan en kotu gecikme aralik + 1 zamanlayici periyodu (8,33 ms) = 65,3 ms (<= 70). Test: kontrol 2 ms'de, degisim 2,1 ms'de.
+- Hiz siniri artik `hasShape` false iken de gecerli (ilk deneme zorunlu, sonraki basarisiz denemeler ayni aralikla): bozuk render/PNG 360 Hz'de sicak noktayi geri getirmez. Test eklendi. Gizli->gorunur gecis hala zorunlu kontrol.
+- docs/LOGGING.md `cursor_stats` satirina `shape_checks` eklendi (orkestratör izniyle); `~17/s`.

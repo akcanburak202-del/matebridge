@@ -34,7 +34,7 @@ final class CursorSampler: @unchecked Sendable {
     private static let geometryTtlNs: UInt64 = 250_000_000
 
     private var lastShapeID: UInt32 = 0
-    /// The shape is looked at ~15 Hz at most (T-309); position and visibility are read on every sample.
+    /// The shape is looked at ~17 Hz at most (57 ms) (T-309); position and visibility are read on every sample.
     private var shapeGate = CursorShapeCheckGate()
     /// Shape checks since the start of the run (window deltas are made by `CursorService`).
     var shapeChecks: Int { shapeGate.checks }

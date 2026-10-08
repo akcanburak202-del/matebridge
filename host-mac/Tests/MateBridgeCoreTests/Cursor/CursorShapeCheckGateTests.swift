@@ -30,8 +30,8 @@ import Testing
         for i in 0..<360 {
             if gate.shouldCheck(nowNs: UInt64(i) * 2_777_778, hidden: false, hasShape: true) { n += 1 }
         }
-        #expect(n <= 16)  // one second of 360 Hz input: about 15 checks
-        #expect(n >= 14)
+        #expect(n <= 19)  // one second of 360 Hz input at 57 ms: about 18 checks
+        #expect(n >= 16)
     }
 
     @Test func hiddenSkipsButReappearForcesCheck() {
@@ -49,6 +49,27 @@ import Testing
     @Test func hiddenWithoutShapeStillChecks() {
         var gate = CursorShapeCheckGate()
         expect(&gate, nowNs: 0, hidden: true, hasShape: false, true)
+    }
+
+    @Test func failingBuildIsRetriedAtTheRateLimitOnly() {
+        var gate = CursorShapeCheckGate()
+        var n = 0
+        // 360 Hz samples for one second, and no shape is ever built (hasShape stays false).
+        for i in 0..<360 {
+            if gate.shouldCheck(nowNs: UInt64(i) * 2_777_778, hidden: false, hasShape: false) { n += 1 }
+        }
+        #expect(n >= 16 && n <= 19)
+    }
+
+    @Test func worstCaseDetectionDelayStaysWithin70ms() {
+        // Timer ticks every 8.33 ms; the check at tick k, the shape changes just after it.
+        var gate = CursorShapeCheckGate()
+        let tick: UInt64 = 8_333_333
+        let changeNs = 2 * ms + 100_000  // 2.1 ms: 0.1 ms after the check at 2 ms
+        expect(&gate, nowNs: 2 * ms, hidden: false, hasShape: true, true)
+        var t = 2 * ms + tick
+        while !gate.shouldCheck(nowNs: t, hidden: false, hasShape: true) { t += tick }
+        #expect(t - changeNs <= 70 * ms, "detected after \((t - changeNs) / 1_000) us")
     }
 
     @Test func resetChecksNext() {
