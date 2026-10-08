@@ -4,22 +4,20 @@ import dev.matebridge.client.protocol.StreamConfig
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** T-231: the decoder colour-key overrides and the `ev=decoder_output_format` report. */
-class ColorOverridesTest {
+/** T-231: the decoder colour keys of the default format and the `ev=decoder_output_format` report. */
+class OutputFormatReportTest {
     /** HEVC 2800x1840 @ 60, BT.709 primaries, sRGB transfer (13), BT.709 matrix, full range: what the host sends. */
     private val config = StreamConfig(1, StreamConfig.CODEC_HEVC, 2800, 1840, 1400, 920, 60, 50000, 1, 13, 1, 1)
     private val factory = FakeDecoderFactory()
     private val env = TestDecoderEnv()
     private var renderer: VideoRenderer? = null
 
-    private fun start(config: StreamConfig = this.config, colors: ColorOverrides = ColorOverrides.AUTO): VideoRenderer {
+    private fun start(config: StreamConfig = this.config): VideoRenderer {
         val r = VideoRenderer(config, onKeyframeRequest = {}, codecFactory = factory, env = env,
-            restartDelaysMs = longArrayOf(60_000, 60_000, 60_000), decoderTuning = DecoderLatencyKnobs.STANDARD,
-            colorOverrides = colors)
+            restartDelaysMs = longArrayOf(60_000, 60_000, 60_000))
         renderer = r
         r.attachTarget(Any())
         return r
@@ -41,61 +39,17 @@ class ColorOverridesTest {
         "low-latency" to 1,
     )
 
-    private fun configured(colors: ColorOverrides, config: StreamConfig = this.config): List<Pair<String, Int>> {
-        start(config, colors)
+    private fun configured(config: StreamConfig = this.config): List<Pair<String, Int>> {
+        start(config)
         assertTrue(env.awaitLines("codec_start"))
         return keys()
     }
 
-    // --- parsing ---
-
-    @Test fun absentOrUnknownValuesAreAuto() {
-        assertEquals(ColorOverrides.AUTO, ColorOverrides.parse(null, null, null))
-        assertEquals(ColorOverrides.AUTO, ColorOverrides.parse("bogus", "", "pq"))
-        assertEquals(ColorOverrides.AUTO, ColorOverrides.parse("auto", "auto", "auto"))
-    }
-
-    @Test fun valuesAreTrimmedAndCaseInsensitive() {
-        val c = ColorOverrides.parse(" LIMITED ", "Bt601", "SDR_Video")
-        assertEquals("limited", c.range.id)
-        assertEquals("bt601", c.standard.id)
-        assertEquals("sdr_video", c.transfer.id)
-    }
-
-    @Test fun idSetsAreTheDocumentedValues() {
-        assertEquals(setOf("auto", "full", "limited", "unset"), ColorOverrides.RANGE_IDS)
-        assertEquals(setOf("auto", "bt709", "bt601", "unset"), ColorOverrides.STANDARD_IDS)
-        assertEquals(setOf("auto", "srgb", "sdr_video", "unset"), ColorOverrides.TRANSFER_IDS)
-    }
-
-    @Test fun eachValueResolvesToItsKeyValue() {
-        fun r(v: String) = ColorOverrides.parse(v, null, null).range(config)
-        fun s(v: String) = ColorOverrides.parse(null, v, null).standard(config)
-        fun t(v: String) = ColorOverrides.parse(null, null, v).transfer(config)
-        assertEquals(1, r("auto")); assertEquals(1, r("full")); assertEquals(2, r("limited")); assertNull(r("unset"))
-        assertEquals(1, s("auto")); assertEquals(1, s("bt709")); assertEquals(4, s("bt601")); assertNull(s("unset"))
-        assertEquals(3, t("auto")); assertEquals(2, t("srgb")); assertEquals(3, t("sdr_video")); assertNull(t("unset"))
-    }
-
-    @Test fun autoFollowsTheStreamConfig() {
-        val limited601 = config.copy(matrix = 6, transfer = 1, fullRange = 0)
-        assertEquals(2, ColorOverrides.AUTO.range(limited601))
-        assertEquals(4, ColorOverrides.AUTO.standard(limited601))
-        assertEquals(3, ColorOverrides.AUTO.transfer(limited601))
-        val unknown = config.copy(matrix = 0, transfer = 2)
-        assertNull(ColorOverrides.AUTO.standard(unknown))
-        assertNull(ColorOverrides.AUTO.transfer(unknown))
-        // a fixed knob ignores the config
-        assertEquals(1, ColorOverrides.parse("full", "bt709", "srgb").range(limited601))
-        assertEquals(1, ColorOverrides.parse("full", "bt709", "srgb").standard(unknown))
-        assertEquals(2, ColorOverrides.parse("full", "bt709", "srgb").transfer(unknown))
-    }
-
     // --- the decoder format ---
 
-    /** Acceptance: without the knobs the decoder gets the pre-T-231 keys, values and order. */
+    /** The decoder gets the ColorMapping keys of STREAM_CONFIG, values and order. */
     @Test fun withoutTheKnobsTheFormatIsTodays() {
-        assertEquals(todayHevc60, configured(ColorOverrides.AUTO))
+        assertEquals(todayHevc60, configured())
     }
 
     @Test fun withoutTheKnobsALimitedStreamIsTodays() {
@@ -108,54 +62,13 @@ class ColorOverridesTest {
                     else -> it
                 }
             },
-            configured(ColorOverrides.AUTO, c),
+            configured(c),
         )
     }
 
     @Test fun withoutTheKnobsAnUnknownMatrixAndTransferStayUnset() {
-        val got = configured(ColorOverrides.AUTO, config.copy(matrix = 0, transfer = 2))
+        val got = configured(config.copy(matrix = 0, transfer = 2))
         assertEquals(todayHevc60.filter { it.first != "color-standard" && it.first != "color-transfer" }, got)
-    }
-
-    @Test fun rangeLimitedReplacesTheValueInPlace() {
-        assertEquals(todayHevc60.map { if (it.first == "color-range") it.first to 2 else it },
-            configured(ColorOverrides.parse("limited", null, null)))
-    }
-
-    @Test fun rangeUnsetLeavesTheKeyOut() {
-        assertEquals(todayHevc60.filter { it.first != "color-range" }, configured(ColorOverrides.parse("unset", null, null)))
-    }
-
-    @Test fun standardBt601ReplacesTheValueInPlace() {
-        assertEquals(todayHevc60.map { if (it.first == "color-standard") it.first to 4 else it },
-            configured(ColorOverrides.parse(null, "bt601", null)))
-    }
-
-    @Test fun transferSrgbReplacesTheValueInPlace() {
-        assertEquals(todayHevc60.map { if (it.first == "color-transfer") it.first to 2 else it },
-            configured(ColorOverrides.parse(null, null, "srgb")))
-    }
-
-    @Test fun allUnsetLeavesEveryColourKeyOut() {
-        val got = configured(ColorOverrides.parse("unset", "unset", "unset"))
-        assertEquals(todayHevc60.filter { !it.first.startsWith("color-") }, got)
-    }
-
-    @Test fun aFixedStandardIsPutEvenWhenTheConfigHasNone() {
-        val got = configured(ColorOverrides.parse(null, "bt709", "sdr_video"), config.copy(matrix = 0, transfer = 2))
-        assertEquals(todayHevc60, got)
-    }
-
-    /** The T-217 fallback format keeps the colour knob: only the latency keys fall back. */
-    @Test fun theLatencyFallbackKeepsTheColourKnob() {
-        factory.failStarts = 1
-        start(colors = ColorOverrides.parse("limited", null, "unset"))
-        assertTrue(env.awaitLines("codec_start"))
-        assertEquals(2, factory.createCalls)
-        val fallback = factory.codecs[1].format!!.integers
-        assertEquals(2, fallback["color-range"])
-        assertFalse(fallback.containsKey("color-transfer"))
-        assertEquals(60, fallback["operating-rate"])
     }
 
     // --- ev=decoder_output_format ---
@@ -238,11 +151,11 @@ class ColorOverridesTest {
     @Test fun anOutputFormatChangeIsLoggedWithTheRequestedKeys() {
         factory.outputFormatInts = mapOf("color-range" to 1, "color-standard" to 1, "color-transfer" to 3)
         factory.outputFormatChanges = 1
-        start(colors = ColorOverrides.parse("limited", null, "unset"))
+        start()
         assertTrue(env.awaitLines("decoder_output_format"))
         val line = env.lines("decoder_output_format").single()
         assertTrue(line, line.contains(" I decoder ev=decoder_output_format gen=1 range=1 standard=1 transfer=3 " +
-            "hdr_static_info=unset req_range=2 req_standard=1 req_transfer=unset"))
+            "hdr_static_info=unset req_range=1 req_standard=1 req_transfer=3"))
         assertTrue(line, line.startsWith("MB/decoder "))
         // The pre-T-231 line is still there, once.
         assertTrue(env.awaitLines("output_format"))

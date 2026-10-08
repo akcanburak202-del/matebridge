@@ -1,14 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- T-185: exported so `adb shell am start -n …/.debug.VideoTestActivity` keeps working, but guarded by DUMP:
-             the adb shell holds it, ordinary apps cannot obtain it, so other apps on the tablet cannot start it. -->
-        <activity
-            android:name=".debug.VideoTestActivity"
-            android:exported="true"
-            android:permission="android.permission.DUMP"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|navigation" />
         <!-- T-090 raw TCP throughput bench; started only by MainActivity's net_bench extra when the dev extra is true.
              Debug source set only (T-185). -->
         <activity

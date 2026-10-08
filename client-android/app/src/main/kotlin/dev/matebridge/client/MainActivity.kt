@@ -76,9 +76,6 @@ import dev.matebridge.client.stream.GameResolution
 import dev.matebridge.client.stream.HdrCapability
 import dev.matebridge.client.stream.HdrPolicy
 import dev.matebridge.client.stream.HdrRequestLog
-import dev.matebridge.client.stream.HzPin
-import dev.matebridge.client.stream.HzPinHint
-import dev.matebridge.client.stream.HzPinResult
 import dev.matebridge.client.stream.HzSwitchCounter
 import dev.matebridge.client.protocol.StreamPrefs
 import dev.matebridge.client.video.IntervalHistogram
@@ -299,8 +296,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var bufferFixedBy: GameJitter.Source? = null
     private var targetHz = FrameRatePolicy.HZ_FOLLOW_STREAM // T-046: follow the stream fps unless `hz` is given
     private var appliedModeHz = 0
-    /** T-243: the `hz_pin` hints currently applied (empty = none; always empty without `--es hz_pin`). */
-    private var hzPinApplied: List<HzPinHint> = emptyList()
     /** T-243: `display_rate` switches in the stats log window (`MB/render ev=stats hz_switches=`). */
     private val hzSwitches = HzSwitchCounter()
     private val vsyncGaps = IntervalHistogram()
@@ -379,10 +374,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var trustButtons: List<TrustButton> = emptyList()
     private var lastUi: SessionUi = SessionUi.Searching
 
-    // T-089 Wi-Fi knobs (launch extras), RTT window for the per-second `ev=net` line, low-latency Wi-Fi lock.
+    // T-089 Wi-Fi knobs (launch extras: `ping_ms`), RTT window for the per-second `ev=net` line.
     private var knobs = dev.matebridge.client.session.WifiKnobs()
     private val rttStats = dev.matebridge.client.session.RttStats()
-    private var wifiLock: dev.matebridge.client.session.WifiLockHolder? = null
 
     /** T-185 (decision 0026): launch extras behind the developer gate; parsed once in onCreate, read nowhere else. */
     private var devKnobs = dev.matebridge.client.session.DevKnobs()
@@ -404,29 +398,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun parseWifiKnobs() {
         knobs = devKnobs.wifi
         MbLog.i("wifi_knobs", knobs.logFields())
-        if (knobs.wifiLowLatency) {
-            val lock = try {
-                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-                wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "MateBridge:low_latency")
-                    .also { it.setReferenceCounted(false) }
-            } catch (e: RuntimeException) { // includes a null/foreign service (ClassCast / NullPointer)
-                MbLog.w("wifi_lock", "held=0 reason=create err=${e.javaClass.simpleName} mode=low_latency")
-                return
-            }
-            wifiLock = dev.matebridge.client.session.WifiLockHolder(
-                object : dev.matebridge.client.session.WifiLockHolder.Backend {
-                    override fun acquire() = lock.acquire()
-                    override fun release() { if (lock.isHeld) lock.release() }
-                },
-            ) { fields -> MbLog.i("wifi_lock", "$fields mode=low_latency") }
-        }
-    }
-
-    /** Holds the low-latency Wi-Fi lock only while a Wi-Fi session is connected and the activity is started (T-089). */
-    private fun syncWifiLock(reason: String) {
-        val h = wifiLock ?: return
-        val tr = currentEndpoint?.let { ConnectMode.transportOf(it) } ?: Transport.WIFI // no endpoint: not connected
-        h.sync(dev.matebridge.client.session.WifiLockPolicy.shouldHold(knobs.wifiLowLatency, tr, started && !isDestroyed, lastUi), reason)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -837,7 +808,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         noteInputActivity()
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN && HzPin.reapplies(hzPinApplied)) setSurfaceFrameRate(true, log = false) // T-243
         try {
             return routeToCapture(ev) || super.dispatchTouchEvent(ev)
         } finally {
@@ -1528,8 +1498,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             codecFactory = decoderFault ?: dev.matebridge.client.video.MediaCodecDecoder.FACTORY, // T-159 debug extra
             onHealthEvent = { e -> runOnUiThread { onVideoHealthEvent(e) } }, // T-159; Generation runs inline
             onConfigInstalled = { c -> controller.videoConfigInstalled(c) }, // T-160: frames of c are delivered from now on
-            decoderTuning = devKnobs.decoderLatency, // T-217 dev knob (`dec_lowlat`, `dec_oprate`)
-            colorOverrides = devKnobs.colorOverrides, // T-231 dev knob (`color_range`, `color_standard`, `color_transfer`)
         ).also {
             it.pacerTuning = devKnobs.pacerTuning // T-251 dev knobs (`pace_dcap_half`, `pace_feedback`)
             it.catchUp = devKnobs.catchUp // T-252 dev knob (`catch_up`)
@@ -1752,7 +1720,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     controller.setDisplayRate(it)
                     MbLog.i("display_rate", "hz=$it", "render")
                     hzSwitches.observe(it) // T-243
-                    if (HzPin.reapplies(hzPinApplied)) setSurfaceFrameRate(true, log = false) // T-243
                 }
             }
             ui.postDelayed(this, RATE_POLL_MS)
@@ -1817,9 +1784,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     @Suppress("DEPRECATION")
     private fun applyRefreshRate() {
         val target = FrameRatePolicy.modeTargetHz(targetHz, streamConfig?.fps ?: 0)
-        val pin = HzPin.plan(devKnobs.hzPin, streamMode.isGame, streamConfig?.fps ?: 0) // T-243: empty unless `hz_pin`
-        if (target <= 0) { clearHzPin(); return }
-        if (modeApplied && appliedModeHz == target && pin == hzPinApplied) return
+        if (target <= 0) return
+        if (modeApplied && appliedModeHz == target) return
         val d = windowManager.defaultDisplay
         val cur = d.mode
         val all = d.supportedModes.map { DisplayModeInfo(it.modeId, it.physicalWidth, it.physicalHeight, it.refreshRate) }
@@ -1833,57 +1799,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 all.joinToString(",") { "${it.id}:${it.refreshHz.roundToInt()}" },
             "render",
         )
-        if (pick == null) { clearHzPin(); return }
+        if (pick == null) return
         modeApplied = true
         appliedModeHz = target
-        val was = hzPinApplied
-        val results = ArrayList<Pair<HzPinHint, HzPinResult>>()
-        window.attributes = window.attributes.also {
-            it.preferredDisplayModeId = pick.id
-            if (pin.isNotEmpty()) results += applyHzPinHints(it, pin, HzPin.PIN_HZ.toFloat())
-            else if (was.isNotEmpty()) applyHzPinHints(it, was, 0f)
-        }
-        hzPinApplied = pin
-        if (pin.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, true, results) + hzPinVendorFields(pin), "render")
-        else if (was.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
+        window.attributes = window.attributes.also { it.preferredDisplayModeId = pick.id }
         setSurfaceFrameRate(true) // vsync period follows via DisplayListener once the mode settles
-    }
-
-    /**
-     * T-243: writes the window hints of [hints] into [lp] ([rate] 0 = clear). [HzPinHint.HW_LP] only looks (nothing is
-     * written) and [HzPinHint.REAPPLY] acts on rate changes and touch starts, so both just report here.
-     */
-    private fun applyHzPinHints(lp: WindowManager.LayoutParams, hints: List<HzPinHint>, rate: Float): List<Pair<HzPinHint, HzPinResult>> =
-        hints.map { h ->
-            h to when (h) {
-                HzPinHint.LP_RATE -> HzPin.setFloatField(lp, HzPin.FIELD_PREFERRED_REFRESH_RATE, rate)
-                HzPinHint.LP_MINMAX -> HzPin.setMinMax(lp, rate)
-                HzPinHint.HW_LP -> HzPin.vendorResult(HzPin.vendorFields(WindowManager.LayoutParams::class.java), hwLayoutParamsExPresent())
-                HzPinHint.REAPPLY -> if (Build.VERSION.SDK_INT >= 30) HzPinResult.OK else HzPinResult.MISSING
-            }
-        }
-
-    /** T-243: ` hw_fields=<names>|- hw_ex=0|1` when [HzPinHint.HW_LP] is in [pin], else empty. Class metadata only. */
-    private fun hzPinVendorFields(pin: List<HzPinHint>): String {
-        if (HzPinHint.HW_LP !in pin) return ""
-        val names = HzPin.vendorFields(WindowManager.LayoutParams::class.java)
-        return " hw_fields=${HzPin.fieldList(names)} hw_ex=${if (hwLayoutParamsExPresent()) 1 else 0}"
-    }
-
-    private fun hwLayoutParamsExPresent(): Boolean = try {
-        Class.forName(HzPin.HW_LAYOUT_PARAMS_EX, false, classLoader)
-        true
-    } catch (_: Throwable) {
-        false
-    }
-
-    /** T-243: removes applied `hz_pin` window hints (no-op without them, so the default path makes no extra call). */
-    private fun clearHzPin() {
-        val was = hzPinApplied
-        if (was.isEmpty()) return
-        hzPinApplied = emptyList()
-        window.attributes = window.attributes.also { applyHzPinHints(it, was, 0f) }
-        MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
     }
 
     private fun releaseRefreshRate() {
@@ -1891,17 +1811,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         modeApplied = false
         appliedModeHz = 0
         setSurfaceFrameRate(false)
-        val was = hzPinApplied
-        hzPinApplied = emptyList()
-        window.attributes = window.attributes.also {
-            it.preferredDisplayModeId = 0
-            if (was.isNotEmpty()) applyHzPinHints(it, was, 0f) // T-243
-        }
-        if (was.isNotEmpty()) MbLog.i("hz_pin", HzPin.logFields(devKnobs.hzPin, false, emptyList()), "render")
+        window.attributes = window.attributes.also { it.preferredDisplayModeId = 0 }
     }
 
-    /** [log] false: T-243 re-issues (every touch start / rate change) do not write `ev=set_frame_rate`. */
-    private fun setSurfaceFrameRate(on: Boolean, log: Boolean = true) {
+    private fun setSurfaceFrameRate(on: Boolean) {
         if (Build.VERSION.SDK_INT < 30 || !surfaceValid) return
         // T-046: always an explicit FIXED_SOURCE request at the stream fps (the `frate` override went with the GL path,
         // T-184). On API 31+ also CHANGE_FRAME_RATE_ALWAYS so a seamless-only panel still switches.
@@ -1915,7 +1828,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             } else {
                 sf.setFrameRate(if (on) rate else 0f, compat)
             }
-            if (on && log) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
+            if (on) MbLog.i("set_frame_rate", "rate=$rate fixed_source=true strategy_always=${Build.VERSION.SDK_INT >= 31}", "render")
         } catch (e: Exception) {
             MbLog.w("set_frame_rate_failed", "err=${e.javaClass.simpleName}", "render")
         }
@@ -2343,7 +2256,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             autoPolicy.onUsbConnected()
         }
         logPick(ConnectMode.transportOf(ep).logName, "migrated")
-        syncWifiLock("migrated") // T-089 lock: held on Wi-Fi only
     }
 
     /**
@@ -2442,7 +2354,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (::cursorOverlay.isInitialized) cursorOverlay.link.endSession()
         syncFiles(foreground = false) // T-135: no session in the background, so no file server
         controller.stop() // sends BYE, closes both connections
-        syncWifiLock("background") // started is false: always released here
         super.onStop()
     }
 
@@ -2453,7 +2364,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         controller.shutdown()
         if (::files.isInitialized) files.shutdown()
         audio?.shutdown()
-        wifiLock?.sync(false, "destroy")
         probeExec?.shutdownNow()
         if (::wolSender.isInitialized) wolSender.shutdown()
         super.onDestroy()
@@ -2611,13 +2521,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         val filesChanged = filesGate.onUi(state is SessionUi.Connected) // T-153: also while stopped (trust drops)
         onCursorSession(state is SessionUi.Connected) // T-276: also while stopped (the layer clears, the policy resets)
-        if (!started || isDestroyed) {
-            syncWifiLock("stopped")
-            return
-        }
+        if (!started || isDestroyed) return
         lastUi = state
         if (filesChanged) syncFiles()
-        syncWifiLock(state.javaClass.simpleName.lowercase(java.util.Locale.ROOT))
         if (hostSleep.onUi(state)) enterHostSleep() // T-133
         wolStep() // T-129: reaching the host stops a wake episode at once
         wolRefreshStep(wolRefresh.onSession(state is SessionUi.Connected && isOnUsb(), SystemClock.elapsedRealtime()) {

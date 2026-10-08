@@ -1,7 +1,7 @@
 ---
 id: T-300
 title: Tablet — kararı verilmiş deneylerin kodunu kaldır (tos/wifi_ll + Wi-Fi kilidi, hz_pin, renk geçersiz kılma, dec_lowlat/dec_oprate varyantları, VideoTestActivity)
-status: todo
+status: review
 phase: 7
 owner: android-client-dev
 depends_on: []
@@ -57,6 +57,35 @@ Her deneyin sonucu kayıtlı:
 
 ## Plan
 
+1. Her kaldırma adayının kullanımını kodda doğrula (grep), sonra sil: WifiKnobs (tos/wifi_ll/kilit), HzPin, ColorOverrides, DecoderLatencyKnobs, VideoTestActivity.
+2. `HzSwitchCounter` ve `OutputFormatReport`/`OutputFormatLogGate` yeni dosyalara taşınır.
+3. `VideoRenderer`: `decoderTuning`/`colorOverrides` parametreleri gider; biçim `OperatingRate.MAX` + bir kerelik fps yedeği.
+4. Testler: yalnız kaldırılan yolları sınayanlar silinir, kalanlar yeniden adlandırılır.
+
 ## Handoff
 
+- **Commit:** `git log task/T-300-experiment-leftovers` (tek commit, "T-300: ...").
+- **check.sh:** ALL OK.
+- **Silinen:** `WifiLockPolicy`/`WifiLockHolder`, `tos_ctl`/`tos_video`/`wifi_ll` (+ MainActivity kilit kurulumu ve 5 `syncWifiLock` çağrısı, SessionController `trySet`/`traffic_class` log dalları, `WAKE_LOCK` izni); `HzPin.kt` (+ `hz_pin`, `hw_fields`/`hw_ex` probu, ACTION_DOWN ve `display_rate` yeniden uygulaması, `clearHzPin`/`applyHzPinHints`); `ColorOverrides` ve 3 Spec; `DecoderLatencyKnobs` + `dec_lowlat`/`dec_oprate`; `src/debug/.../VideoTestActivity.kt` ve manifest girdisi.
+- **Taşınan:** `HzSwitchCounter` -> `stream/HzSwitchCounter.kt`; `OutputFormatReport`/`OutputFormatLogGate` -> `video/OutputFormatReport.kt`. `OperatingRate` (`MAX`, `resolve`) `OperatingRate.kt`'te kaldı.
+- **Kalan:** `ping_ms`, `RttStats`, `TrafficClass.trySet` (dosya soketleri). `applyRefreshRate`/`releaseRefreshRate` düz `preferredDisplayModeId` + `setSurfaceFrameRate` (log parametresi gitti).
+- **Testler:** `DecoderLatencyKnobsTest` -> `DecoderFormatTest`, `ColorOverridesTest` -> `OutputFormatReportTest`, `HzPinTest` -> `HzSwitchCounterTest` (yeniden adlandırıldı, yalnız kalan davranış); `WifiKnobsTest`, `DevKnobsTest`, `Hdr10DecoderFormatTest`, `LatencyStageStatsTest` düzeltildi. Yeni test `removedExperimentKnobsAreUnknownAndNeverListed`: kaldırılan anahtarlar tanınmaz, `ignored` listesine girmez, çökme yok.
+- **Varsayımlar / davranış notları:**
+  - `VideoRenderer` artık her yerde üretim varsayılanını (`operating-rate=32767`, configure/start hatasında bir kerelik fps yedeği) kullanır. Eskiden constructor varsayılanı "yedek yok" idi, ama MainActivity zaten STANDARD veriyordu; üretim yolu aynı.
+  - `ev=codec_start` hâlâ `lowlat=off oprate=max` yazar (yedekte `oprate=rejected`); `ev=dec_lowlat_rejected` olayı ve alanları (`lowlat=off oprate=max keys=operating-rate`) korundu.
+  - `wifi_knobs` log satırı artık yalnız `ping_ms=N`. `tools/` ve `scripts/` kaldırılan alanları grep'te kullanmıyor.
+  - `ev=profile` `knobs=` listesinden kaldırılan anahtarlar çıktı.
+- **Tablette kontrol:**
+  1. Anahtarsız açılış, USB ve Wi-Fi: görüntü + ses akar; `ev=codec_start` satırında `lowlat=off oprate=max`, `operating_rate=32767`.
+  2. Oyun 60: `display_mode` satırı, panel 60 Hz'e iner, `ev=set_frame_rate` bir kez yazılır, `ev=stats` içinde `hz_switches=` hâlâ var.
+  3. `--ez dev true --es hz_pin all --ei tos_ctl 184 --ez wifi_ll true --es color_range limited` ile açılış çökmez, hiçbir etkisi yok.
+  4. Wi-Fi'da dosya (WebDAV) bağlantısı çalışır (`TrafficClass.trySet`).
+  5. Debug APK'da `.debug.VideoTestActivity` artık yok (beklenen).
+- **Önerilen belge metni (orkestratör):**
+  - `docs/KNOBS.md`: `tos_ctl`, `tos_video`, `wifi_ll`, `hz_pin`, `color_range`, `color_standard`, `color_transfer`, `dec_lowlat`, `dec_oprate` satırlarını "removed T-300" işaretle (tanınmaz, hata vermez). `ping_ms` kalır.
+  - `docs/LOGGING.md`: `wifi_knobs` tek alan `ping_ms=`; `traffic_class`, `wifi_lock`, `hz_pin` olayları kaldırıldı; `codec_start` `lowlat=`/`oprate=` sabit (`off`/`max`, yedekte `oprate=rejected`); `dec_lowlat_rejected` yalnız operating-rate yedeğini anlatır.
+  - Decision 0026: sınıf tablosundan bu 9 anahtar çıkar; debug kaynak setindeki VideoTestActivity kaldırıldı notu.
+
 ## Open questions
+
+- Yok. T-197 (`ctl_lowat_kb`) ileride `WifiKnobs.kt`'ye dokunacaksa dosya şimdi yalnız `pingMs` taşıyor.
