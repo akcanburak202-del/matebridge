@@ -47,9 +47,10 @@ final class InjectToFrameTests: XCTestCase {
     func testFrameBeforePressNeverMatches() {
         var m = InjectToFrameMatcher()
         m.noteInjection(atUs: 1_000_000)
-        m.noteDirtyFrame(atUs: 999_000)
+        m.noteDirtyFrame(atUs: 999_000)  // a change 1 ms before the press: never an answer, and the screen was not still
         XCTAssertTrue(m.samplesUs.isEmpty)
-        XCTAssertNotNil(m.pendingUs)
+        XCTAssertEqual(m.noisy, 1)
+        XCTAssertNil(m.pendingUs)
     }
 
     func testLateDeliveredEarlierFrameInsideQuietWindowInvalidatesPending() {
