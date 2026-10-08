@@ -35,4 +35,10 @@ T-297 E9 (`docs/reviews/2026-10-08/agents/simp-e-protocol.md`), kullanıcı kara
 
 ## Handoff
 
+Swift part (acceptance 2) done by mac-host-dev. Commit: HEAD of task/T-307-str8-utf8 ("T-307: Swift str8 read rejects invalid UTF-8").
+- Touched: `host-mac/Sources/MateBridgeCore/ByteIO.swift` (str8 read uses `String(validating:as:UTF8.self)`, invalid -> `ProtocolError.invalidField("str8 utf8")`), `host-mac/Tests/MateBridgeCoreTests/FixtureTests.swift` (`invalid_str8_utf8` expectation).
+- Note: ByteIO.swift lives in `MateBridgeCore/`, not `MateBridgeCore/Protocol/` (card `files:` path is slightly off).
+- `./scripts/check.sh --only host,protocol` passes. Full check.sh android part fails until the Kotlin step adds the fixture to its test.
+- Nothing hardware-dependent.
+
 ## Open questions
