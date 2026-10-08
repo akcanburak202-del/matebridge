@@ -50,4 +50,6 @@ T-298 `docs/reviews/2026-10-08/agents/opt-c-e2e.md` EN1 ve EN3. Wi-Fi'de host `i
   4. Kalem davranisi `off` ile onceki gibi (max_batch ~1).
   5. Pointer capture acik/kapali gecis, arka plana alma: takili tus/dugme yok.
 
+- Review round (Codex P2): (1) `SOURCE_STYLUS` 0x4002 contains the pointer-class bit 0x2 and the platform matches `(source & mask) != 0`, so touchscreen and absolute mouse were already unbuffered; knob reworked to `--es unbuffered_src off|relative`. `off` = today's mask (log `sources=pointer_class(stylus,touch,mouse)`); `relative` adds `SOURCE_MOUSE_RELATIVE` (trackball class 0x4) and `SOURCE_TOUCHPAD` (position class 0x8), the only sources the stylus mask misses (log `...+mouse_rel+touchpad`). Unit test asserts the SDK constants and which sources each mask matches. `touch`/`all` are no longer accepted (fall back to off). (2) Pinch is classed as scroll on the client, like the host's InputAge.swift. Corrected KNOBS text: "`unbuffered_src off|relative` (debug-only, default off): `relative` also requests unbuffered dispatch for the relative/captured pointer and touchpad; touchscreen/absolute mouse/pen are always covered by the stylus request." Device A/B (item 5 / checks 2-3): use `relative` instead of `all`; the `touch` finger check is dropped.
+
 ## Open questions

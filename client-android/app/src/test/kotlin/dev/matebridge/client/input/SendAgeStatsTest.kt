@@ -96,7 +96,7 @@ class SendAgeStatsTest {
         val rel = PointerRel(9_000L, 1f, 1f, 0)
         assertEquals(pointer, SendAgeStats.classOf(rel))
         assertEquals(9_000L, SendAgeStats.eventTimeUs(rel))
-        assertEquals(pointer, SendAgeStats.classOf(Pinch(1L, 0f, 0, 0, Pinch.BEGAN, 0)))
+        assertEquals(scroll, SendAgeStats.classOf(Pinch(1L, 0f, 0, 0, Pinch.BEGAN, 0))) // same as the host InputAge.swift
         val sc = Scroll(6_000L, 1f, 1f, Scroll.CHANGED)
         assertEquals(scroll, SendAgeStats.classOf(sc))
         assertEquals(6_000L, SendAgeStats.eventTimeUs(sc))

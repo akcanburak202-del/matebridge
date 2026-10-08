@@ -67,9 +67,9 @@ class SendAgeStats {
         /** The stats class ordinal of [m], or -1 for messages that are not input events (never recorded). */
         fun classOf(m: Message): Int = when (m) {
             is Pen -> Cls.PEN.ordinal
-            is PointerAbs, is PointerRel, is Pinch -> Cls.POINTER.ordinal
+            is PointerAbs, is PointerRel -> Cls.POINTER.ordinal
             is Key -> Cls.KEY.ordinal
-            is Scroll -> Cls.SCROLL.ordinal
+            is Scroll, is Pinch -> Cls.SCROLL.ordinal // as the host InputAge: pinch counts with scroll
             else -> -1
         }
 

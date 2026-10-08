@@ -84,7 +84,7 @@ data class DevKnobs(
     /** `--ez cursor_predict false` (T-278, decision 0036 v2): the local cursor draws the host's position as in v1. Default on. */
     val cursorPredict: Boolean = true,
     /**
-     * `--es unbuffered_src off|touch|all` (T-322, EN3): sources besides the pen that ask for unbuffered dispatch.
+     * `--es unbuffered_src off|relative` (T-322, EN3): `relative` adds the relative/captured pointer and the touchpad to the unbuffered request.
      * Unknown or absent = [UnbufferedSources.OFF] (the pen behaviour is unchanged either way).
      */
     val unbufferedSrc: UnbufferedSources = UnbufferedSources.OFF,
@@ -140,7 +140,7 @@ data class DevKnobs(
             Spec("catch_up", Kind.BOOL, debugOnly = true),
             Spec("dec_out_park", Kind.STRING, debugOnly = true, ids = setOf("off", "on")),
             Spec("cursor_predict", Kind.BOOL, debugOnly = true),
-            Spec("unbuffered_src", Kind.STRING, debugOnly = true, ids = setOf("off", "touch", "all")),
+            Spec("unbuffered_src", Kind.STRING, debugOnly = true, ids = setOf("off", "relative")),
             Spec("stats_1s", Kind.BOOL, debugOnly = false),
             Spec("pace_trace", Kind.BOOL, debugOnly = false),
             Spec("stall_diag", Kind.BOOL, debugOnly = false),
