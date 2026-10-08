@@ -265,6 +265,8 @@ final class CursorService: @unchecked Sendable {
         // Built and failed shapes are counted by the sampler for the whole run: report them as window deltas.
         while builtReported < shapesBuilt { stats.recordShapeBuilt(); builtReported += 1 }
         while failuresReported < shapeFailures { stats.recordShapeFailure(); failuresReported += 1 }
+        let checks = sampler.shapeChecks
+        while checksReported < checks { stats.recordShapeCheck(); checksReported += 1 }
         if let fields = stats.takeReport(nowUs: HostClock.nowUs(), replaced: replaced) {
             logger.log(.info, "cursor_stats", sessionID: sessionID, generation: 0, fields: fields)
         }
@@ -272,6 +274,7 @@ final class CursorService: @unchecked Sendable {
 
     private var builtReported = 0
     private var failuresReported = 0
+    private var checksReported = 0
 
     // MARK: Outbox (both queues)
 

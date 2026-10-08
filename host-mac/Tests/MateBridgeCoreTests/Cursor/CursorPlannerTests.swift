@@ -516,7 +516,7 @@ private func onPlanner(at t: UInt64 = 1_000_000) -> CursorStreamPlanner {
         s.recordShapeSent(bytes: 200)
         #expect(s.takeReport(nowUs: 999_999, replaced: 5) == nil)  // window still open
         let line = s.takeReport(nowUs: 1_000_000, replaced: 5)
-        #expect(line == "states=40 shapes=2 shape_bytes=500 shapes_built=1 shape_failed=0 replaced=2 samples=100 "
+        #expect(line == "states=40 shapes=2 shape_bytes=500 shapes_built=1 shape_failed=0 shape_checks=0 replaced=2 samples=100 "
             + "sample_failed=1 sample_us_p50=50 sample_us_p95=95")
         // Reset: a quiet second reports nothing.
         #expect(s.takeReport(nowUs: 2_000_000, replaced: 5) == nil)
