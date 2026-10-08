@@ -631,7 +631,8 @@ class VideoRenderer(
                         if (park.parkIfEmpty(untilDeadline != null)) continue
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
                         // how fast a stop is seen, so it grows while no output comes.
-                        val waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)
+                        var waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)
+                        if (park.probing) waitUs = minOf(waitUs, OUTPUT_WAIT_US) // T-312: the probe after a park is the short poll
                         val changed = drainOutput(c, outInfo, adaptivePacer, sink, releaser, st, park, waitUs)
                         if (!st.current) break // T-161: a stopped codec's held buffers go back with stop()
                         releaser.flushDue(System.nanoTime())

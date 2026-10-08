@@ -8,15 +8,17 @@ import java.util.concurrent.locks.LockSupport
  * `dequeueOutputBuffer` poll for 300 ms after every output, and each timed-out synchronous dequeue costs two more
  * `MediaCodec_loop` / `CodecLooper` wake-ups, so a 10 fps stream burns hundreds of wake-ups per second between frames.
  *
- * The count is inputs given to the codec (CODEC_CONFIG excluded) minus outputs taken. At 0, with no output buffer held
- * for a later release, nothing can come out: the output thread parks ([parkIfEmpty]) until the input thread queues
- * another frame ([signal] after `queueInputBuffer`) or the codec generation is retired ([signal]). While a frame is in
+ * The count is inputs given to the codec (CODEC_CONFIG excluded) minus outputs taken. It is a HINT for when parking is
+ * worth it, never a gate on dequeueing: with the count at 0 and no output buffer held, [parkIfEmpty] parks (at most
+ * [FUSE_NS]) until the input thread queues another frame ([signal] after `queueInputBuffer`) or the codec generation is
+ * retired ([signal]). Whatever ends the park (unpark or fuse), the NEXT [parkIfEmpty] returns false, so the caller does a
+ * real `dequeueOutputBuffer` (its normal 5 ms wait) before it can park again: dequeue is never skipped twice in a row,
+ * and a wrong count (a frame the codec swallowed, a late output, a lost unpark) costs at most one fuse. There is no
+ * resynchronisation logic: a count that stays above 0 only means the thread keeps today's poll. While a frame is in
  * flight the caller keeps the short dequeue poll (no long dequeue: a stop or an error is still noticed in 5 ms).
  *
- * Safety: the park is bounded by [FUSE_NS] (a lost or never-sent unpark costs at most that), the count is re-synchronised
- * to 0 after [RESYNC_NS] without an output (a frame the codec swallowed would otherwise keep the thread polling for the
- * rest of the generation), and an output beyond the count never makes it negative. Disabled ([enabled] false, the
- * default `dec_out_park off`): [parkIfEmpty] never parks and nothing is counted, i.e. exactly the previous behaviour.
+ * Disabled ([enabled] false, the default `dec_out_park off`): never parks, nothing is counted, i.e. exactly the
+ * previous behaviour.
  *
  * Threads: [onQueued] / [onQueueFailed] / [signal] from the input thread (or the retiring thread); the rest from the
  * output thread. Thread-safe.
@@ -24,46 +26,41 @@ import java.util.concurrent.locks.LockSupport
 class OutputPark(
     val enabled: Boolean,
     private val fuseNs: Long = FUSE_NS,
-    private val clockNs: () -> Long = System::nanoTime,
 ) {
     companion object {
         /** Longest single park. Same as the idle poll it replaces, so a stop is noticed as fast as before. */
         const val FUSE_NS = 20_000_000L
-
-        /** An input outstanding for this long is presumed swallowed by the codec; the count is then reset. */
-        const val RESYNC_NS = 1_000_000_000L
     }
 
-    // Count and the queue time of the OLDEST outstanding input, one lock (both are read and written together).
-    private val state = Any()
-    private var inFlight = 0
-    private var oldestNs = 0L
+    private val inFlight = AtomicInteger(0)
     @Volatile private var thread: Thread? = null
 
+    /** Output thread only: the last call parked, so the next one must let a real dequeue happen. */
+    private var probeDue = false
+
+    /** Output thread only: the current turn is the probe after a park; its dequeue wait must be the short poll. */
+    var probing = false
+        private set
+
     /** Frames given to the codec and not yet taken as outputs (tests and logs). */
-    val pending: Int get() = synchronized(state) { inFlight }
+    val pending: Int get() = inFlight.get()
 
     /** Output thread, once at its start: the thread [signal] unparks. */
     fun bindOutputThread(t: Thread = Thread.currentThread()) { thread = t }
 
     /** Input thread, BEFORE `queueInputBuffer` of a non-config frame (the output can come back before the call returns). */
-    fun onQueued() {
-        if (!enabled) return
-        synchronized(state) {
-            if (inFlight == 0) oldestNs = clockNs()
-            inFlight++
-        }
-    }
+    fun onQueued() { if (enabled) inFlight.incrementAndGet() }
 
     /** The `queueInputBuffer` that [onQueued] announced failed: no output will come for it. */
-    fun onQueueFailed() { if (enabled) synchronized(state) { if (inFlight > 0) inFlight-- } }
+    fun onQueueFailed() { if (enabled) decrement() }
 
-    /** Output thread, per non-config output taken. The next outstanding input is younger than the one that came out. */
-    fun onOutput() {
-        if (!enabled) return
-        synchronized(state) {
-            if (inFlight > 0) inFlight--
-            if (inFlight > 0) oldestNs = clockNs()
+    /** Output thread, per non-config output taken. */
+    fun onOutput() { if (enabled) decrement() }
+
+    private fun decrement() {
+        while (true) {
+            val v = inFlight.get()
+            if (v <= 0 || inFlight.compareAndSet(v, v - 1)) return
         }
     }
 
@@ -71,20 +68,15 @@ class OutputPark(
     fun signal() { if (enabled) thread?.let(LockSupport::unpark) }
 
     /**
-     * Output thread: parks (at most [FUSE_NS]) when the codec is empty and nothing is [holding]; true = it parked (the
-     * caller re-checks its loop condition), false = go on with the normal dequeue. A frame in flight never parks; one
-     * outstanding longer than [RESYNC_NS] is presumed swallowed: the count is reset, but this call still returns false so
-     * one real dequeue probe happens before the next park (a frame queued just after the reset is never skipped).
+     * Output thread, once per loop turn before its dequeue. True = it parked (at most [FUSE_NS]); the caller then loops
+     * and calls this again, which returns false (the probe), and the caller dequeues. False = dequeue now.
      */
     fun parkIfEmpty(holding: Boolean): Boolean {
-        if (!enabled || holding) return false
-        synchronized(state) {
-            if (inFlight > 0) {
-                if (clockNs() - oldestNs >= RESYNC_NS) inFlight = 0
-                return false
-            }
-        }
+        probing = false
+        if (probeDue) { probeDue = false; probing = true; return false }
+        if (!enabled || holding || inFlight.get() > 0) return false
         LockSupport.parkNanos(this, fuseNs)
+        probeDue = true
         return true
     }
 }
