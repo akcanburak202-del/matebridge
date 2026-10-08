@@ -628,7 +628,7 @@ class VideoRenderer(
                         val now = System.nanoTime()
                         val untilDeadline = releaser.untilDeadlineNs(now)
                         // T-312: nothing in the codec and nothing held: park until the input thread queues a frame.
-                        if (park.parkIfEmpty(untilDeadline != null, now - st.lastOutputNs)) continue
+                        if (park.parkIfEmpty(untilDeadline != null)) continue
                         // T-141: an output (or the held buffer's deadline) ends the wait at once; the timeout only bounds
                         // how fast a stop is seen, so it grows while no output comes.
                         val waitUs = DecoderWaits.outputWaitUs(now - st.lastOutputNs, OUTPUT_WAIT_US, untilDeadline)

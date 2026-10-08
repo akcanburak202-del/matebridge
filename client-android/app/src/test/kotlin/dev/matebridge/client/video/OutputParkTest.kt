@@ -22,16 +22,16 @@ class OutputParkTest {
 
     @Test fun parksOnlyWhenEnabledEmptyAndNothingHeld() {
         val off = OutputPark(enabled = false, fuseNs = 5 * ms)
-        assertFalse(off.parkIfEmpty(holding = false, sinceLastOutputNs = 0))
+        assertFalse(off.parkIfEmpty(holding = false))
         off.onQueued()
         assertEquals(0, off.pending) // a disabled park counts nothing
 
         val p = OutputPark(enabled = true, fuseNs = 5 * ms)
-        assertFalse("held buffer", p.parkIfEmpty(holding = true, sinceLastOutputNs = 0))
+        assertFalse("held buffer", p.parkIfEmpty(holding = true))
         p.onQueued()
-        assertFalse("frame in flight keeps the poll", p.parkIfEmpty(holding = false, sinceLastOutputNs = 10 * ms))
+        assertFalse("frame in flight keeps the poll", p.parkIfEmpty(holding = false))
         p.onOutput()
-        assertTrue("empty", p.parkIfEmpty(holding = false, sinceLastOutputNs = 10 * ms))
+        assertTrue("empty", p.parkIfEmpty(holding = false))
     }
 
     @Test fun anOutputBeyondTheCountNeverMakesItNegative() {
@@ -48,7 +48,7 @@ class OutputParkTest {
         val p = OutputPark(enabled = true, fuseNs = 30 * ms) // never bound to a thread: signal() reaches nobody
         p.signal()
         val t0 = System.nanoTime()
-        assertTrue(p.parkIfEmpty(false, 0))
+        assertTrue(p.parkIfEmpty(false))
         val tookMs = (System.nanoTime() - t0) / ms
         assertTrue("parked $tookMs ms", tookMs >= 20 && tookMs < 1_000)
     }
@@ -61,7 +61,7 @@ class OutputParkTest {
             p.bindOutputThread()
             parked.countDown()
             val t0 = System.nanoTime()
-            p.parkIfEmpty(false, 0)
+            p.parkIfEmpty(false)
             returnedMs.set((System.nanoTime() - t0) / ms)
         }
         t.start()
@@ -81,7 +81,7 @@ class OutputParkTest {
             ready.countDown()
             while (!go.get()) Thread.onSpinWait()
             val t0 = System.nanoTime()
-            p.parkIfEmpty(false, 0)
+            p.parkIfEmpty(false)
             tookMs.set((System.nanoTime() - t0) / ms)
         }
         t2.start()
@@ -94,11 +94,38 @@ class OutputParkTest {
     }
 
     @Test fun aFrameTheCodecSwallowedDoesNotKeepThePollForever() {
-        val p = OutputPark(enabled = true, fuseNs = 1 * ms)
+        var now = 1_000L
+        val p = OutputPark(enabled = true, fuseNs = 1 * ms, clockNs = { now })
         p.onQueued()
-        assertFalse(p.parkIfEmpty(false, OutputPark.RESYNC_NS - 1))
-        assertTrue(p.parkIfEmpty(false, OutputPark.RESYNC_NS))
+        now += OutputPark.RESYNC_NS - 1
+        assertFalse(p.parkIfEmpty(false)) // not yet presumed swallowed
+        now += 1
+        assertFalse("reset call still probes", p.parkIfEmpty(false))
         assertEquals(0, p.pending)
+        assertTrue("parking resumes", p.parkIfEmpty(false))
+    }
+
+    @Test fun aFirstFrameAfterALongIdleIsNeverResetOrSkipped() { // Codex P1
+        var now = 5_000_000_000L
+        val p = OutputPark(enabled = true, fuseNs = 1 * ms, clockNs = { now })
+        assertTrue(p.parkIfEmpty(false)) // idle
+        now += 5_000_000_000L // 5 s of static screen
+        p.onQueued() // fresh input: its age is 0, whatever the time since the last output
+        assertFalse(p.parkIfEmpty(false))
+        assertEquals(1, p.pending)
+        p.onOutput()
+        assertEquals(0, p.pending)
+    }
+
+    @Test fun aBurstAfterALongIdleKeepsEveryCount() {
+        var now = 0L
+        val p = OutputPark(enabled = true, fuseNs = 1 * ms, clockNs = { now })
+        now += 3_000_000_000L
+        repeat(5) { p.onQueued(); assertFalse(p.parkIfEmpty(false)) }
+        assertEquals(5, p.pending)
+        repeat(5) { p.onOutput() }
+        assertEquals(0, p.pending)
+        assertTrue(p.parkIfEmpty(false))
     }
 
     // ---- GL wait policy (pure) ----
@@ -241,5 +268,20 @@ class OutputParkTest {
         val before = factory.silentOutputPolls
         Thread.sleep(500)
         assertTrue("silent polls ${factory.silentOutputPolls - before}", factory.silentOutputPolls - before <= 3)
+    }
+
+    @Test fun withParkOnAFrameAfterTwoSecondsIdleAndThenABurstAllDecode() { // Codex P1
+        val r = make(park = true)
+        val codec = startStream(r)
+        Thread.sleep(2_200)
+        r.onFrame(frame(2))
+        assertTrue("frame 2 after long idle", factory.await { codec.renderedPts.contains(2L) })
+        Thread.sleep(1_200)
+        for (seq in 3L..8L) r.onFrame(frame(seq))
+        assertTrue("burst", factory.await { codec.renderedPts.contains(8L) })
+        // The catch-up may show only some frames of a burst (it decodes all of them); what matters is no freeze after it.
+        assertTrue(factory.await { outputsDequeued >= 8 })
+        r.onFrame(frame(9))
+        assertTrue("frame after the burst", factory.await { codec.renderedPts.contains(9L) })
     }
 }

@@ -51,6 +51,8 @@ T-298 CB2 (`docs/reviews/2026-10-08/agents/opt-b-client.md`) ve T-297 C10. T-296
 - Aux (C10): giriş 4 ms yerine 250 ms olay beklemesi; bekçi (2 s) en geç 250 ms'de bir kontrol edilir. Aux çıkış 5 ms -> 20 ms (300 ms çıktısız sonra).
 - TABLETTE TEST EDİLMEDİ. Orkestratör: (1) (bağlantı yapıldı: MainActivity `it.outPark = devKnobs.decOutPark`; `dec_out_park` yalnız `--ez dev true` ister, debug olmayan günlük derlemede de çalışır, karar 0037) `--es dec_out_park on` ile 10 fps ve hareket sahnesinde `/proc` iş parçacığı uyanmaları (`mb-decoder-out`, `MediaCodec_loop`, `CodecLooper`) ve `cap_dec` p50/p95 (±1 ms) `off` ile karşılaştır; (2) `ev=profile knobs=` içinde `dec_out_park:on` görünmeli; (3) Tam renk açıkken `mb-gl` ve `mb-aux-dec` uyanmaları statik ekranda düşmeli, late upgrade ve `gl_*` istatistikleri değişmemeli; (4) detach/yeniden bağlanma ve uyku-uyanma sonrası görüntü gelmeli.
 
+- Review turu 1 (Codex P1): `OutputPark` sayaç sıfırlaması "son çıktıdan beri" süreye bakıyordu; uzun statik ekrandan sonra ilk karenin sayacı hemen sıfırlanıp çıkış dequeue'su atlanıyor, görüntü donuyordu. Düzeltme: en eski bekleyen girişin kuyruğa girme zamanı damgalanır (sayaç ve damga tek kilit altında); 1 s'den eski bekleyen giriş yutulmuş sayılır, sayaç sıfırlanır AMA o çağrı yine gerçek dequeue yaptırır (park bir sonraki turda). Yeni sayılan giriş için dequeue asla atlanmaz. Testler: 5 s boşta sonra tek kare, boşta sonra yığın, yutulan kare sonrası park devamı, kaçan unpark sigortası, renderer ile 2 s boşta + yığın + sonraki kare.
+
 ## Open questions
 
 - `docs/KNOBS.md` `dec_out_park` satırı orkestratörde (kart dosyaları dışında).
