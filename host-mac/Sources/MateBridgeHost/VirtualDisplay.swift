@@ -52,18 +52,17 @@ final class VirtualDisplay: @unchecked Sendable {
     ///   - physicalPixelWidth/physicalPixelHeight: the panel's pixel size, for `sizeInMillimeters` (default: the
     ///     backing size). A game display passes the native size so the reported physical size stays the panel's.
     ///   - hidpi: when true, exposes a 2x mode (pixels/2 points) instead of a 1x mode.
-    ///   - transfer: T-232 developer knob `MATEBRIDGE_VD_TRANSFER`, or requested 1 for an HDR10 stream (decision
-    ///     0032, `VideoSettings.displayTransfer`). The default (requested 0) uses the legacy
-    ///     `initWithWidth:height:refreshRate:` mode initializer exactly as before. Requested 1 uses
+    ///   - transfer: the transfer function requested by the stream (decision 0032, `VideoSettings.displayTransfer`: 1 for
+    ///     HDR10, else 0). The default (0) uses the legacy
+    ///     `initWithWidth:height:refreshRate:` mode initializer exactly as before. 1 uses
     ///     `initWithWidth:height:refreshRate:transferFunction:` and falls back to the legacy modes once when that
     ///     selector is missing, returns nil or its modes are rejected (`transferOutcome`).
     ///   - primariesKnob: T-281 developer knob `MATEBRIDGE_VD_PRIMARIES` (default: read from the process environment,
-    ///     like `VideoSettings.vdPrimariesKnob`). A display created for an HDR transfer function (`transfer.requested`
-    ///     != 0) gets Display P3 primaries in its descriptor, before `initWithDescriptor:`, so macOS counts it as wide
+    ///     like `VideoSettings.vdPrimariesKnob`). A display created for an HDR transfer function (`transfer` != 0) gets Display P3 primaries in its descriptor, before `initWithDescriptor:`, so macOS counts it as wide
     ///     gamut and Safari/YouTube offer HDR (`VirtualDisplayPrimaries`). An SDR display gets none (as before).
     init(name: String, pixelWidth: Int, pixelHeight: Int, physicalPixelWidth: Int? = nil,
          physicalPixelHeight: Int? = nil, hidpi: Bool, refreshRate: Double = 60,
-         transfer: VirtualDisplayTransfer.Knob = VirtualDisplayTransfer.parse(nil),
+         transfer: UInt32 = 0,
          primariesKnob: VirtualDisplayPrimaries.Knob = VirtualDisplayPrimaries.parse(env: ProcessInfo.processInfo.environment))
         throws {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type else {
@@ -94,7 +93,7 @@ final class VirtualDisplay: @unchecked Sendable {
 
         // T-281: primaries are only honored at creation, so they go in before `initWithDescriptor:`. A missing setter
         // creates the display without them (`primaries_fallback=selector_missing`); creation never fails over this.
-        let primariesWanted = VirtualDisplayPrimaries.decide(transferRequested: transfer.requested, knob: primariesKnob)
+        let primariesWanted = VirtualDisplayPrimaries.decide(transferRequested: transfer, knob: primariesKnob)
         let primariesApplied = VirtualDisplayPrimaries.resolve(choice: primariesWanted, invalidKnob: primariesKnob.invalid) {
             descriptorClass.instancesRespond(to: NSSelectorFromString($0))
         }
@@ -148,7 +147,7 @@ final class VirtualDisplay: @unchecked Sendable {
         let tfSel = NSSelectorFromString("initWithWidth:height:refreshRate:transferFunction:")
         var applied: UInt32 = 0
         var fallback: VirtualDisplayTransfer.FallbackReason?
-        switch VirtualDisplayTransfer.decide(requested: transfer.requested,
+        switch VirtualDisplayTransfer.decide(requested: transfer,
                                              selectorAvailable: modeClass.instancesRespond(to: tfSel)) {
         case .legacy:
             break
@@ -169,8 +168,8 @@ final class VirtualDisplay: @unchecked Sendable {
         if applied == 0 {
             guard apply(legacyModes()) else { throw VirtualDisplayError.settingsRejected }
         }
-        self.transferOutcome = VirtualDisplayTransfer.Outcome(requested: transfer.requested, applied: applied,
-                                                              fallback: fallback, invalidKnob: transfer.invalid,
+        self.transferOutcome = VirtualDisplayTransfer.Outcome(requested: transfer, applied: applied,
+                                                              fallback: fallback,
                                                               primaries: primariesApplied)
         self.primariesWanted = primariesWanted
 

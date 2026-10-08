@@ -191,7 +191,7 @@ public enum HDRLog {
         var f = "requested=\(requested.rawValue) applied=\(settings.dynamicRange.rawValue)"
         if let reason, requested == .hdr10, settings.dynamicRange == .sdr { f += " reason=\(reason.rawValue)" }
         f += " primaries=\(c.colorPrimaries) transfer=\(c.transfer) matrix=\(c.matrix) full_range=\(c.fullRange ? 1 : 0)"
-        f += " display_transfer=\(settings.displayTransfer.requested)"
+        f += " display_transfer=\(settings.displayTransfer)"
         f += " encoded=\(settings.encodedWidthPx)x\(settings.encodedHeightPx) fps=\(settings.fps)"
         return f
     }

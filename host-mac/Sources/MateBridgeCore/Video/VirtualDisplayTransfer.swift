@@ -1,38 +1,10 @@
 import Foundation
 
-/// T-232 developer knob `MATEBRIDGE_VD_TRANSFER=0|1`: create the virtual display's mode with a transfer function
-/// (`CGVirtualDisplayMode initWithWidth:height:refreshRate:transferFunction:`, `1` = the value Sidecar Reference Mode
-/// uses, T-226) so macOS may offer HDR/EDR on it. The stream stays SDR. Pure; `VirtualDisplay` (the only place that
+/// Transfer function of the virtual display's mode (T-232; the `MATEBRIDGE_VD_TRANSFER` knob was removed in T-304).
+/// An HDR10 stream asks for `1` (the value Sidecar Reference Mode uses, T-226) via `VideoSettings.displayTransfer`;
+/// an SDR stream never does (legacy `initWithWidth:height:refreshRate:`). Pure; `VirtualDisplay` (the only place that
 /// touches the private API) asks these functions what to do and reports the outcome in `ev=vd_transfer`.
-///
-/// Default (unset, `0`, or any invalid value) is the legacy `initWithWidth:height:refreshRate:` call, unchanged.
 public enum VirtualDisplayTransfer {
-    public static let envKey = "MATEBRIDGE_VD_TRANSFER"
-
-    /// The parsed knob: `requested` is the transfer function to ask for (0 = legacy path). `invalid` is true when the
-    /// variable was set to something other than `0`/`1` (treated as 0).
-    public struct Knob: Equatable, Sendable {
-        public let requested: UInt32
-        public let invalid: Bool
-        public init(requested: UInt32, invalid: Bool) {
-            self.requested = requested
-            self.invalid = invalid
-        }
-    }
-
-    /// nil or empty -> 0; "0" -> 0; "1" -> 1 (surrounding whitespace ignored); anything else -> 0, `invalid`.
-    public static func parse(_ raw: String?) -> Knob {
-        let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        switch t {
-        case "": return Knob(requested: 0, invalid: false)
-        case "0": return Knob(requested: 0, invalid: false)
-        case "1": return Knob(requested: 1, invalid: false)
-        default: return Knob(requested: 0, invalid: true)
-        }
-    }
-
-    public static func parse(env: [String: String]) -> Knob { parse(env[envKey]) }
-
     /// Why a requested transfer function was not applied (the legacy mode was used instead).
     public enum FallbackReason: String, Equatable, Sendable {
         /// `CGVirtualDisplayMode` does not respond to the `transferFunction:` initializer.
@@ -72,30 +44,27 @@ public enum VirtualDisplayTransfer {
         /// The transfer function actually in the display's mode (0 = legacy).
         public let applied: UInt32
         public let fallback: FallbackReason?
-        /// The knob had an invalid value (treated as 0).
-        public let invalidKnob: Bool
         /// T-281: the primaries the descriptor was created with (`default` = none set).
         public let primaries: VirtualDisplayPrimaries.Applied
 
-        public init(requested: UInt32, applied: UInt32, fallback: FallbackReason?, invalidKnob: Bool = false,
+        public init(requested: UInt32, applied: UInt32, fallback: FallbackReason?,
                     primaries: VirtualDisplayPrimaries.Applied = .none) {
             self.requested = requested
             self.applied = applied
             self.fallback = fallback
-            self.invalidKnob = invalidKnob
             self.primaries = primaries
         }
 
         /// The default path: nothing requested, nothing applied.
         public static let legacy = Outcome(requested: 0, applied: 0, fallback: nil)
 
-        /// `W` when a knob was invalid or a requested transfer function or primaries fell back; `I` otherwise.
+        /// `W` when a requested transfer function or primaries fell back; `I` otherwise.
         public var logLevel: LogLevel {
-            fallback != nil || invalidKnob || primaries.fallback != nil || primaries.invalidKnob ? .warning : .info
+            fallback != nil || primaries.fallback != nil || primaries.invalidKnob ? .warning : .info
         }
     }
 
-    /// `requested=<n> applied=<n> [reason=<fallback>|invalid_value] edr_max=<x.xx|na> edr_potential=<x.xx|na>
+    /// `requested=<n> applied=<n> [reason=<fallback>] edr_max=<x.xx|na> edr_potential=<x.xx|na>
     /// primaries=<default|p3> [primaries_fallback=<r>] [primaries_reason=invalid_value] wide_gamut=<0|1|na>`.
     /// `edr_max` is `NSScreen.maximumExtendedDynamicRangeColorComponentValue` (current headroom), `edr_potential` the
     /// `maximumPotential…` value; `na` when the display's screen was not found. `wide_gamut` (T-281) is
@@ -105,8 +74,6 @@ public enum VirtualDisplayTransfer {
         var f = "requested=\(outcome.requested) applied=\(outcome.applied)"
         if let r = outcome.fallback {
             f += " reason=\(r.rawValue)"
-        } else if outcome.invalidKnob {
-            f += " reason=invalid_value"
         }
         f += " edr_max=\(format(edr?.current)) edr_potential=\(format(edr?.potential))"
         f += " \(VirtualDisplayPrimaries.logFields(outcome.primaries))"

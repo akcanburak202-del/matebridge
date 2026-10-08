@@ -83,13 +83,13 @@ public enum RemovedKnobs {
 /// variable is never listed. The socket knobs are left out: `ev=listening` reports the sockets.
 public enum StreamProfileLog {
     /// Host env knobs classed keep or debug-only in decision 0026 (`docs/KNOBS.md` rows 24, 25, 26, 28, 30, 31,
-    /// 33, 34, 36-42, 43, 44, 45), in log order.
+    /// 33, 34, 36-42, 44, 45), in log order.
     public static let knobAllowList: [String] = [
         "MATEBRIDGE_FPS", "MATEBRIDGE_BITRATE_KBPS", "MATEBRIDGE_CODEC",
         "MATEBRIDGE_KEYFRAME_INTERVAL_S",
         "MATEBRIDGE_RATE_WINDOW_MS", "MATEBRIDGE_SERVICE_CLASS",
         "MATEBRIDGE_NOTSENT_LOWAT_KB", "MATEBRIDGE_SENDQ_LOG", "MATEBRIDGE_LAT_TRACE", "MATEBRIDGE_TCP_LOG",
-        "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_VD_TRANSFER", "MATEBRIDGE_VD_PRIMARIES",
+        "MATEBRIDGE_AUDIO", "MATEBRIDGE_DISPLAY_KEEP_S", "MATEBRIDGE_VD_PRIMARIES",
         "MATEBRIDGE_CHROMA",
     ]
     /// A logged knob value is cut to this many characters.

@@ -48,8 +48,6 @@ public enum VideoDump {
         if let f = o.fps { settings.fps = f }
         if let b = o.bitrateKbps { settings.bitrateKbps = b }
         settings.displayRefreshHz = o.refreshHz
-        // T-232 knob, read from the environment as before T-237 moved it into the settings.
-        settings.vdTransferKnob = VirtualDisplayTransfer.parse(env: ProcessInfo.processInfo.environment)
 
         let path = (o.path as NSString).expandingTildeInPath
         guard FileManager.default.createFile(atPath: path, contents: nil),

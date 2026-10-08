@@ -1,28 +1,9 @@
 import XCTest
 @testable import MateBridgeCore
 
-/// T-232: `MATEBRIDGE_VD_TRANSFER` parsing, the mode-initializer decision and its fallback, and `ev=vd_transfer`.
+/// T-232: the mode-initializer decision and its fallback, and `ev=vd_transfer`.
 final class VirtualDisplayTransferTests: XCTestCase {
     typealias T = VirtualDisplayTransfer
-
-    func testParseUnsetAndZeroAreLegacy() {
-        for raw in [nil, "", "  ", "0", " 0 "] {
-            XCTAssertEqual(T.parse(raw), T.Knob(requested: 0, invalid: false), String(describing: raw))
-        }
-        XCTAssertEqual(T.parse(env: [:]), T.Knob(requested: 0, invalid: false))
-    }
-
-    func testParseOne() {
-        XCTAssertEqual(T.parse("1"), T.Knob(requested: 1, invalid: false))
-        XCTAssertEqual(T.parse(" 1\n"), T.Knob(requested: 1, invalid: false))
-        XCTAssertEqual(T.parse(env: ["MATEBRIDGE_VD_TRANSFER": "1"]), T.Knob(requested: 1, invalid: false))
-    }
-
-    func testParseInvalidIsLegacyAndFlagged() {
-        for raw in ["2", "-1", "01", "true", "yes", "abc", "1.0", "0x1"] {
-            XCTAssertEqual(T.parse(raw), T.Knob(requested: 0, invalid: true), raw)
-        }
-    }
 
     func testDecideDefaultIsLegacyWhateverTheSelector() {
         XCTAssertEqual(T.decide(requested: 0, selectorAvailable: true), .legacy)
@@ -67,29 +48,21 @@ final class VirtualDisplayTransferTests: XCTestCase {
         XCTAssertEqual(T.FallbackReason.settingsRejected.rawValue, "settings_rejected")
     }
 
-    func testLogFieldsInvalidKnob() {
-        let o = T.Outcome(requested: 0, applied: 0, fallback: nil, invalidKnob: true)
-        XCTAssertEqual(T.logFields(o, edr: EDRHeadroom(current: 1, potential: 1)),
-                       "requested=0 applied=0 reason=invalid_value edr_max=1.00 edr_potential=1.00 primaries=default wide_gamut=na")
-        XCTAssertEqual(o.logLevel, .warning)
-    }
-
     func testLogFieldsNonFiniteEdrIsNa() {
         XCTAssertEqual(T.logFields(.legacy, edr: EDRHeadroom(current: .nan, potential: .infinity)),
                        "requested=0 applied=0 edr_max=na edr_potential=na primaries=default wide_gamut=na")
     }
 
     func testLogFieldsAreOneTokenEach() {
-        let o = T.Outcome(requested: 1, applied: 0, fallback: .modeNil, invalidKnob: false)
+        let o = T.Outcome(requested: 1, applied: 0, fallback: .modeNil)
         for token in T.logFields(o, edr: nil).split(separator: " ") {
             XCTAssertEqual(token.filter { $0 == "=" }.count, 1, String(token))
         }
     }
 
-    func testKnobListedInProfile() {
-        XCTAssertTrue(StreamProfileLog.knobAllowList.contains(T.envKey))
-        XCTAssertEqual(StreamProfileLog.knobsField(["MATEBRIDGE_VD_TRANSFER": "1"]), "MATEBRIDGE_VD_TRANSFER:1")
+    func testRetiredKnobIsNotListedInProfile() {
+        XCTAssertFalse(StreamProfileLog.knobAllowList.contains("MATEBRIDGE_VD_TRANSFER"))
         XCTAssertEqual(StreamProfileLog.knobsField(["MATEBRIDGE_FPS": "120", "MATEBRIDGE_VD_TRANSFER": "1"]),
-                       "MATEBRIDGE_FPS:120;MATEBRIDGE_VD_TRANSFER:1")
+                       "MATEBRIDGE_FPS:120")
     }
 }

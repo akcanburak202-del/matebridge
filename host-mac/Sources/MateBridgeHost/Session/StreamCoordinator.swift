@@ -832,7 +832,7 @@ public final class StreamCoordinator: @unchecked Sendable {
     }
 
     /// T-232: `ev=vd_transfer` for a newly created display (native or game, decision 0029): the transfer function
-    /// requested (`MATEBRIDGE_VD_TRANSFER`) and applied, and the screen's EDR headroom. AppKit is read on the main
+    /// requested (from the stream) and applied, and the screen's EDR headroom. AppKit is read on the main
     /// actor in a separate task, so pipeline start does not wait for it; ids are taken now.
     private func logDisplayTransfer(_ p: VideoPipeline) {
         guard let (displayID, outcome) = p.displayTransfer else { return }

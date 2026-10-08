@@ -54,15 +54,12 @@ final class VirtualDisplayPrimariesTests: XCTestCase {
         XCTAssertEqual(hdr.displayMode.primaries, .p3)
         var sdr = VideoSettings.tabletDefault
         XCTAssertEqual(sdr.displayMode.primaries, .default)
-        // The developer transfer knob makes an SDR stream's display HDR, so it gets P3 too.
-        sdr = sdr.applyingExperimentKnobs(["MATEBRIDGE_VD_TRANSFER": "1"])
-        XCTAssertEqual(sdr.displayMode.primaries, .p3)
         // `default` switches P3 off for either.
         hdr = hdr.applyingExperimentKnobs(["MATEBRIDGE_VD_PRIMARIES": "default"])
         XCTAssertEqual(hdr.displayMode.primaries, .default)
         XCTAssertEqual(hdr.displayMode.transfer, 1)
-        sdr = sdr.applyingExperimentKnobs(["MATEBRIDGE_VD_TRANSFER": "1", "MATEBRIDGE_VD_PRIMARIES": "default"])
-        XCTAssertEqual(sdr.displayMode.primaries, .default)
+        sdr = sdr.applyingExperimentKnobs(["MATEBRIDGE_VD_PRIMARIES": "p3"])
+        XCTAssertEqual(sdr.displayMode.primaries, .default, "an SDR display never gets primaries")
     }
 
     // MARK: Descriptor values
@@ -174,7 +171,7 @@ final class VirtualDisplayPrimariesTests: XCTestCase {
 
     func testLogFieldsAreOneTokenEach() {
         let p = P.Applied(choice: .default, fallback: .selectorMissing, invalidKnob: true)
-        let o = T.Outcome(requested: 1, applied: 0, fallback: .modeNil, invalidKnob: true, primaries: p)
+        let o = T.Outcome(requested: 1, applied: 0, fallback: .modeNil, primaries: p)
         for token in T.logFields(o, edr: nil, wideGamut: false).split(separator: " ") {
             XCTAssertEqual(token.filter { $0 == "=" }.count, 1, String(token))
         }

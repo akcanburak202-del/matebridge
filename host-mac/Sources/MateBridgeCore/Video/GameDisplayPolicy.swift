@@ -47,7 +47,7 @@ public struct DisplayMode: Equatable, Sendable {
     public var hidpi: Bool
     public var refreshHz: Int
     /// The transfer function the display's mode was requested with (T-232, decision 0032): 0 = the legacy SDR mode,
-    /// 1 = HDR (an HDR10 stream, or the `MATEBRIDGE_VD_TRANSFER` developer knob).
+    /// 1 = HDR (an HDR10 stream).
     public var transfer: UInt32
     /// The primaries the display's descriptor was created with (T-281): fixed at creation like the transfer function.
     public var primaries: VirtualDisplayPrimaries.Choice
