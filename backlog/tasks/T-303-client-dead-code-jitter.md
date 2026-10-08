@@ -1,7 +1,7 @@
 ---
 id: T-303
 title: Tablet — ölü ve yalnız testte kullanılan kod, sabit titreşim tamponu (FramePacer), API < 31 dalları
-status: review
+status: done
 phase: 7
 owner: android-client-dev
 depends_on: [T-300]
@@ -9,6 +9,7 @@ decisions: [0026, 0037]
 files:
   - client-android/app/src/main/kotlin/dev/matebridge/client/
   - client-android/app/src/test/kotlin/dev/matebridge/client/
+  - client-android/app/build.gradle.kts  # (orkestratör, Codex P3: minSdk satırı)
   - backlog/tasks/T-303-client-dead-code-jitter.md
 ---
 
