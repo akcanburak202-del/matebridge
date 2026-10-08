@@ -5,34 +5,19 @@ import Metal
 
 /// The compiled packer kernel (`PackedChromaKernel`), shared by every packer: compiled once per process, on first use.
 final class PackedChromaKernels: @unchecked Sendable {
-    let device: MTLDevice
-    let queue: MTLCommandQueue
+    let shared: MetalShared
     let pack: MTLComputePipelineState
 
-    static let shared: Result<PackedChromaKernels, ChromaKernels.SetupError> = {
-        do throws(ChromaKernels.SetupError) { return .success(try PackedChromaKernels()) } catch { return .failure(error) }
+    static let shared: Result<PackedChromaKernels, MetalSetupError> = {
+        do throws(MetalSetupError) { return .success(try PackedChromaKernels()) } catch { return .failure(error) }
     }()
 
-    private init() throws(ChromaKernels.SetupError) {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw .noDevice }
-        guard let queue = device.makeCommandQueue() else { throw .noQueue }
-        let options = MTLCompileOptions()
-        // Keep division and rounding close to the CPU reference (`AVC444v2.planes444`).
-        options.mathMode = .safe
-        options.mathFloatingPointFunctions = .precise
-        do {
-            let library = try device.makeLibrary(source: PackedChromaKernel.metalSource, options: options)
-            guard let f = library.makeFunction(name: PackedChromaKernel.function) else {
-                throw ChromaKernels.SetupError.compile("function_missing")
-            }
-            pack = try device.makeComputePipelineState(function: f)
-        } catch let e as ChromaKernels.SetupError {
-            throw e
-        } catch {
-            throw .compile(String(describing: error).split(separator: "\n").first.map(String.init) ?? "unknown")
-        }
-        self.device = device
-        self.queue = queue
+    private init() throws(MetalSetupError) {
+        // Safe math (in `MetalShared.pipelines`) keeps division and rounding close to the CPU reference
+        // (`AVC444v2.planes444`).
+        let base = try MetalShared.shared.get()
+        shared = base
+        pack = try base.pipelines(source: PackedChromaKernel.metalSource, functions: [PackedChromaKernel.function])[0]
     }
 }
 
@@ -57,104 +42,50 @@ final class PackedChromaPacker: @unchecked Sendable {
     let width: Int
     let height: Int
     private let kernels: PackedChromaKernels
-    private let textureCache: CVMetalTextureCache
-    private let pool: CVPixelBufferPool
-    private let auxAttributes: CFDictionary
+    private let support: MetalPassSupport
 
     /// Throws when Metal or the kernel is unavailable, the size cannot be packed, or the cache / pool fail.
     init(width: Int, height: Int) throws {
         guard AVC444v2.isValid(width: width, height: height) else {
-            throw ChromaKernels.SetupError.compile("invalid_size_\(width)x\(height)")
+            throw MetalSetupError.compile("invalid_size_\(width)x\(height)")
         }
         let kernels = try PackedChromaKernels.shared.get()
         self.kernels = kernels
         self.width = width
         self.height = height
-        let usage = MTLTextureUsage([.shaderRead, .shaderWrite]).rawValue
-        var cache: CVMetalTextureCache?
-        let cst = CVMetalTextureCacheCreate(nil, nil, kernels.device, [kCVMetalTextureUsage: usage] as CFDictionary, &cache)
-        guard cst == kCVReturnSuccess, let cache else { throw ChromaKernels.SetupError.textureCache(cst) }
-        textureCache = cache
-        let attrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-            kCVPixelBufferWidthKey: width,
-            kCVPixelBufferHeightKey: height,
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
-            kCVPixelBufferMetalCompatibilityKey: true,
-        ]
-        var p: CVPixelBufferPool?
-        let pst = CVPixelBufferPoolCreate(nil, [kCVPixelBufferPoolMinimumBufferCountKey: 4] as CFDictionary,
-                                          attrs as CFDictionary, &p)
-        guard pst == kCVReturnSuccess, let p else { throw ChromaKernels.SetupError.pool(pst) }
-        pool = p
-        auxAttributes = [kCVPixelBufferPoolAllocationThresholdKey: Self.poolAllocationThreshold] as CFDictionary
+        support = try MetalPassSupport(shared: kernels.shared, width: width, height: height, minimumBuffers: 4,
+                                       allocationThreshold: Self.poolAllocationThreshold)
     }
 
     func pack(_ src: CVPixelBuffer) -> Result {
         guard CVPixelBufferGetPixelFormatType(src) == kCVPixelFormatType_32BGRA,
               CVPixelBufferGetWidth(src) == width, CVPixelBufferGetHeight(src) == height else { return .passThrough }
-        guard let main = output(), let aux = output() else { return .failed("pool") }
+        guard let main = support.makeOutput(), let aux = support.makeOutput() else { return .failed("pool") }
         let cw = width / 2, ch = height / 2
         // The CVMetalTexture wrappers must outlive the command buffer: they are locals until after the wait.
-        guard let srcTex = texture(src, plane: 0, .bgra8Unorm, width, height),
-              let mY = texture(main, plane: 0, .r8Unorm, width, height),
-              let mC = texture(main, plane: 1, .rg8Unorm, cw, ch),
-              let aY = texture(aux, plane: 0, .r8Unorm, width, height),
-              let aC = texture(aux, plane: 1, .rg8Unorm, cw, ch) else { return .failed("texture") }
-        let start = DispatchTime.now().uptimeNanoseconds
-        guard let cb = kernels.queue.makeCommandBuffer(), let e = cb.makeComputeCommandEncoder() else {
-            return .failed("command_buffer")
+        guard let srcTex = support.texture(src, plane: 0, .bgra8Unorm, width, height),
+              let mY = support.texture(main, plane: 0, .r8Unorm, width, height),
+              let mC = support.texture(main, plane: 1, .rg8Unorm, cw, ch),
+              let aY = support.texture(aux, plane: 0, .r8Unorm, width, height),
+              let aC = support.texture(aux, plane: 1, .rg8Unorm, cw, ch) else { return .failed("texture") }
+        let (timing, failure) = support.run(label: "pack444", keepAlive: [srcTex, mY, mC, aY, aC]) { e in
+            e.setComputePipelineState(kernels.pack)
+            e.setTexture(srcTex.texture, index: 0)
+            e.setTexture(mY.texture, index: 1)
+            e.setTexture(mC.texture, index: 2)
+            e.setTexture(aY.texture, index: 3)
+            e.setTexture(aC.texture, index: 4)
+            e.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
+                              threadsPerThreadgroup: MetalPassSupport.threadgroup(kernels.pack))
         }
-        e.setComputePipelineState(kernels.pack)
-        e.setTexture(srcTex.texture, index: 0)
-        e.setTexture(mY.texture, index: 1)
-        e.setTexture(mC.texture, index: 2)
-        e.setTexture(aY.texture, index: 3)
-        e.setTexture(aC.texture, index: 4)
-        let w = kernels.pack.threadExecutionWidth
-        e.dispatchThreads(MTLSize(width: cw, height: ch, depth: 1),
-                          threadsPerThreadgroup: MTLSize(width: w, height: max(1, kernels.pack.maxTotalThreadsPerThreadgroup / w),
-                                                         depth: 1))
-        e.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
-        withExtendedLifetime((srcTex, mY, mC, aY, aC)) {}
-        CVMetalTextureCacheFlush(textureCache, 0)
-        guard cb.status == .completed else { return .failed("gpu_status_\(cb.status.rawValue)") }
-        let wallUs = (DispatchTime.now().uptimeNanoseconds - start) / 1000
-        let gpu = cb.gpuEndTime - cb.gpuStartTime
-        let gpuUs = gpu.isFinite && gpu > 0 ? UInt64(gpu * 1_000_000) : 0
+        guard let timing else { return .failed(failure ?? "gpu") }
         Self.tag(main)
         Self.tag(aux)
-        return .packed(main: main, aux: aux, wallUs: wallUs, gpuUs: gpuUs)
+        return .packed(main: main, aux: aux, wallUs: timing.wallUs, gpuUs: timing.gpuUs)
     }
 
     /// Session colour tags (no VideoToolbox colour conversion, T-113) and top-left chroma siting (`pick`).
     static func tag(_ pb: CVPixelBuffer) {
-        CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, HEVCEncoder.sessionPrimaries, .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, HEVCEncoder.sessionTransfer, .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, HEVCEncoder.sessionMatrix, .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferChromaLocationTopFieldKey, kCVImageBufferChromaLocation_TopLeft,
-                              .shouldPropagate)
-        CVBufferSetAttachment(pb, kCVImageBufferChromaLocationBottomFieldKey, kCVImageBufferChromaLocation_TopLeft,
-                              .shouldPropagate)
-    }
-
-    private func output() -> CVPixelBuffer? {
-        var made: CVPixelBuffer?
-        let st = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool, auxAttributes, &made)
-        return st == kCVReturnSuccess ? made : nil
-    }
-
-    private struct Wrapped {
-        let cv: CVMetalTexture
-        let texture: MTLTexture
-    }
-
-    private func texture(_ pb: CVPixelBuffer, plane: Int, _ format: MTLPixelFormat, _ w: Int, _ h: Int) -> Wrapped? {
-        var cv: CVMetalTexture?
-        let st = CVMetalTextureCacheCreateTextureFromImage(nil, textureCache, pb, nil, format, w, h, plane, &cv)
-        guard st == kCVReturnSuccess, let cv, let t = CVMetalTextureGetTexture(cv) else { return nil }
-        return Wrapped(cv: cv, texture: t)
+        MetalPassSupport.tag(pb, chromaLocation: kCVImageBufferChromaLocation_TopLeft)
     }
 }

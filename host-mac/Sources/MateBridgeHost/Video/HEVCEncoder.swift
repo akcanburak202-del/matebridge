@@ -749,10 +749,11 @@ final class HEVCEncoder: @unchecked Sendable {
         // T-235: the Metal pass runs here, so only frames that are really submitted are converted (the pacer may
         // replace or decimate captures); its time falls between `deliveredUs` and `submittedUs` in the trace.
         let pairID: UInt64 = lock.withLock { nextPairID &+= 1; return nextPairID }
-        var image = chromaConverter.map { convertForEncoder(frame.buffer, $0) } ?? frame.buffer
+        var metalUs: UInt64 = 0   // wall time of the Metal pass(es) for this frame (T-311 `FrameTrace.convertedUs`)
+        var image = chromaConverter.map { convertForEncoder(frame.buffer, $0, metalUs: &metalUs) } ?? frame.buffer
         // T-258: one Metal pass makes both pictures; the auxiliary one goes to its own session right away, with this
         // frame's PTS and `capture_time_us`. The main frame is submitted below, the auxiliary one never waits for it.
-        if let packer, let auxEncoder { image = packAndSubmitAux(frame, pairID: pairID, packer: packer, aux: auxEncoder) ?? image }
+        if let packer, let auxEncoder { image = packAndSubmitAux(frame, pairID: pairID, packer: packer, aux: auxEncoder, metalUs: &metalUs) ?? image }
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let start = DispatchTime.now().uptimeNanoseconds
         let captureTimeUs = frame.captureTimeUs
@@ -766,6 +767,7 @@ final class HEVCEncoder: @unchecked Sendable {
         trace.captureUs = FrameTrace.origin(displayUs: frame.displayTimeUs, ptsUs: captureTimeUs,
                                             deliveredUs: frame.deliveredUs)
         trace.slotWaitUs = frame.slotWaitUs
+        trace.convertedUs = metalUs
         trace.resubmit = frame.resubmit
         let refineTrain = frame.refineTrain
         trace.submittedUs = HostClock.nowUs()
@@ -789,9 +791,11 @@ final class HEVCEncoder: @unchecked Sendable {
     /// T-258 (owner queue): packs `frame` and hands the auxiliary picture to the auxiliary session; returns the main
     /// picture for the main session, nil when the frame could not be packed (the main session then gets the `BGRA`
     /// frame, a normal 4:2:0 picture, and the owner falls back).
-    private func packAndSubmitAux(_ frame: Input, pairID: UInt64, packer: PackedChromaPacker, aux: PackedAuxEncoder) -> CVPixelBuffer? {
+    private func packAndSubmitAux(_ frame: Input, pairID: UInt64, packer: PackedChromaPacker, aux: PackedAuxEncoder,
+                                  metalUs: inout UInt64) -> CVPixelBuffer? {
         switch packer.pack(frame.buffer) {
         case .packed(let main, let auxBuffer, let wallUs, let gpuUs):
+            metalUs &+= wallUs
             lock.withLock { packedStats?.recordPack(wallUs: wallUs, gpuUs: gpuUs) }
             // A refinement frame never takes the auxiliary keyframe (it would end the train, like the main one).
             let wantKey = frame.refineTrain == nil && auxFlagLock.withLock {
@@ -825,9 +829,11 @@ final class HEVCEncoder: @unchecked Sendable {
 
     /// T-235: the converted `420f` buffer, or `buffer` unchanged when it is not a session-size `BGRA` frame or the
     /// pass failed (VideoToolbox then converts the `BGRA` frame itself; counted as `conv_fail`).
-    private func convertForEncoder(_ buffer: CVPixelBuffer, _ converter: ChromaConverter) -> CVPixelBuffer {
+    private func convertForEncoder(_ buffer: CVPixelBuffer, _ converter: ChromaConverter,
+                                   metalUs: inout UInt64) -> CVPixelBuffer {
         switch converter.convert(buffer) {
         case .converted(let out, let wallUs, let gpuUs):
+            metalUs &+= wallUs
             lock.withLock { chromaStats?.recordConversion(wallUs: wallUs, gpuUs: gpuUs) }
             return out
         case .passThrough:
