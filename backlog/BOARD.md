@@ -28,6 +28,7 @@ _Otomatik üretildi: `./scripts/board.sh` — elle düzenleme._
 | [T-200](tasks/T-200-host-display-keep-on-failure.md) | Keep a healthy display when capture or the encoder fails | 6 | mac-host-dev | [T-165, T-166] |
 | [T-202](tasks/T-202-host-crash-restart-agent.md) | Relaunch the host after a crash (LaunchAgent with KeepAlive) | 6 | mac-host-dev | [T-147, T-148] |
 | [T-308](tasks/T-308-audio-sleep-gate-generation.md) | Host — ses uyku kapısı; kuyrukta bekleyen eski uyanma, yeni bir uykunun kapısını temizlemesin (uyku kuşağı) | 7 | mac-host-dev | [T-299] |
+| [T-320](tasks/T-320-fling-boost-adoption.md) | Fling boost'u benimseme — pil ve ısı bedeli, skip_pct etkisi, hangi modlarda açık (karar + kullanıcı onayı) | 7 | orchestrator | [T-319] |
 
 ## done
 

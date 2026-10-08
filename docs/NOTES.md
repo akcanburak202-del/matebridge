@@ -1843,3 +1843,12 @@ Host release, `main`. Tablette ölçüm için debug APK kullanıldı; sonunda da
   T-317 (çözücü parkı) ve video yükü neden değil. Kullanıcı tonda çıtırtı duymadı.
 - **Sonuç:** geçici Wi-Fi gecikme sıçraması (2026-10-06 T-279 notundaki desenle aynı). Oynatıcı kırpmaları zaten sessizlikte ya da 3 ms çapraz geçişle yapıyor (`PlayoutCore`); duyulan, sıçrama sırasındaki kısa kesintiler.
 - **Not:** ses paketleri iyi ağda da ~20–25 ms'de bir ikişer okunuyor (`per_read=2`, `since_video_ms≈0`). Wi-Fi toplu teslimi; kayıp yaratmıyor.
+
+## 2026-10-08 ~18:00–18:55 — Dokunmasız yükseltme bulundu: OverScroller fling (T-319)
+
+- Ayrıntı ve tablo: `docs/research/2026-10-08-ddr-clock.md` eki.
+- Görünmez `OverScroller.fling` her 1 sn: DDR 1536 MHz, GPU 404 MHz. 60 fps hareket sahnesinde çözme 15,6 → 12,0 ms, `cap_dec` 34,7 → 29,4 ms, tablet işlemci süresi %77 → %31.
+- `iaware4112` aynı etkiyi verdi, `4096` / `4120` etkisiz.
+- `skip_pct` dalgalı; pil bedeli bilinmiyor → T-320.
+- Tablet kilit ekranına düşmüştü (ölçümler arası "Boşta karart" varsayılana dönmüştü). Kurulumu kullanıcı yaptı.
+- Bitişte `main` daily APK kuruldu (`versionCode` 404154), ayarlar geri alındı.
